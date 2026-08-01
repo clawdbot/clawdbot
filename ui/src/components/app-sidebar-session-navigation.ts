@@ -12,7 +12,10 @@ import {
   filterVisibleSessionRows,
   sessionMatchesArchivedFilter,
 } from "../lib/sessions/index.ts";
-import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
+import {
+  resolveSessionPreferredFace,
+  sessionNavigationTarget,
+} from "../lib/sessions/route-navigation.ts";
 import {
   areUiSessionKeysEquivalent,
   buildAgentMainSessionKey,
@@ -20,6 +23,7 @@ import {
   parseAgentSessionKey,
   resolveUiConfiguredMainKey,
   resolveUiDefaultAgentId,
+  resolveUiSessionNavigationParentKey,
 } from "../lib/sessions/session-key.ts";
 import { normalizeOptionalString } from "../lib/string-coerce.ts";
 import { AppSidebarBase } from "./app-sidebar-base.ts";
@@ -65,7 +69,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     getConnected: () => this.connected,
     getRows: () => this.visibleSessionPullRequestRows(),
     getSelectedAgentId: () => this.selectedAgentIdForSessions(),
-    getSnapshot: () => this.context?.gateway.snapshot,
+    getGateway: () => this.context?.gateway,
   });
 
   protected readonly compareSidebarSessionRows = (
@@ -282,16 +286,20 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
   }
 
   readonly selectSession = (sessionKey: string) => {
+    const face = resolveSessionPreferredFace(this.findSidebarSessionByKey(sessionKey));
     const target = sessionNavigationTarget({
-      face: "chat",
+      face,
       sessionKey,
       fallbackAgentId: this.selectedAgentIdForSessions(),
       basePath: this.basePath,
       row: this.findSidebarSessionByKey(sessionKey),
       mainKey: this.sessionMainKey(),
+      preferenceDerivedFace: true,
+      navigationKey: sessionKey,
     });
-    this.context?.gateway.setSessionKey(sessionKey);
-    this.onNavigate?.("chat", target.options);
+    this.prepareSessionNavigation(sessionKey, target.options.pathname);
+    this.onNavigate?.(face, target.options);
+    this.bindLiteralSession(sessionKey, this.selectedAgentIdForSessions(), target.options);
   };
 
   /** Collapsed zones keep full rows for true header counts and status dots. */
@@ -420,17 +428,19 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
   }
 
   readonly replaceCurrentSession = (sessionKey: string) => {
+    const face = resolveSessionPreferredFace(this.findSidebarSessionByKey(sessionKey));
     const target = sessionNavigationTarget({
-      face: "chat",
+      face,
       sessionKey,
       fallbackAgentId: this.selectedAgentIdForSessions(),
       basePath: this.basePath,
       row: this.findSidebarSessionByKey(sessionKey),
       mainKey: this.sessionMainKey(),
+      preferenceDerivedFace: true,
     });
-    this.context?.gateway.setSessionKey(sessionKey);
+    this.setApplicationSession(sessionKey, this.selectedAgentIdForSessions());
     if (isSessionRouteId(this.activeRouteId)) {
-      this.onNavigate?.("chat", target.options);
+      this.onNavigate?.(face, target.options);
     }
   };
 
@@ -463,7 +473,14 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     const roster = this.context?.agents.state.agentsList?.agents ?? [];
     const activeId = this.expandedAgentId();
     const agent = roster.find((entry) => normalizeAgentId(entry.id) === activeId);
-    return { activeId, agent, agents: listSelectableAgents(roster) };
+    const identities = new Map(
+      (this.context?.agentIdentity.entries() ?? []).map(
+        (identity) => [identity.agentId, identity] as const,
+      ),
+    );
+    const agents = listSelectableAgents(roster);
+    const identity = identities.get(activeId) ?? null;
+    return { activeId, agent, agents, identity, identities };
   }
 
   /** Newest visible session for an agent; the chip menu resumes here. */
@@ -501,7 +518,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
   /** Offline routes to Settings instead of a dead chat load. */
   private openAgentConversation(agentId: string) {
     if (!this.connected) {
-      this.onNavigate?.("config");
+      this.onNavigate?.("appearance");
       return;
     }
     this.selectSession(this.agentResumeKey(agentId));
@@ -539,7 +556,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       row: this.findSidebarSessionByKey(key),
       mainKey: this.sessionMainKey(),
     });
-    this.context?.gateway.setSessionKey(key);
+    this.setApplicationSession(key, this.selectedAgentIdForSessions());
     this.onNavigate?.("chat", {
       ...target.options,
       search: `?draft=${draft}`,
@@ -655,7 +672,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       ...rows,
       ...Object.values(this.sessionData.childSessionRowsByParent).flat(),
     ].filter((row) => {
-      const parentKey = row.spawnedBy ?? row.parentSessionKey;
+      const parentKey = resolveUiSessionNavigationParentKey(row);
       return (
         parentKey != null &&
         mainSessionKeys.has(parentKey) &&
@@ -732,7 +749,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
   /** Identity-card click: the agent's rolling main session, or Settings offline. */
   readonly openMainSession = (agentId: string) => {
     if (!this.connected) {
-      this.onNavigate?.("config");
+      this.onNavigate?.("appearance");
       return;
     }
     this.clearSessionSelection();

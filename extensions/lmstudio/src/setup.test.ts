@@ -153,14 +153,20 @@ function buildNonInteractiveContext(params?: {
   };
 }
 
-function createQueuedWizardPrompterHarness(textValues: string[]): {
+function createQueuedWizardPrompterHarness(
+  textValues: string[],
+  confirmValues: boolean[] = [],
+): {
   prompter: WizardPrompter;
   note: ReturnType<typeof vi.fn>;
   text: ReturnType<typeof vi.fn>;
+  confirm: ReturnType<typeof vi.fn>;
 } {
   const queue = [...textValues];
+  const confirmQueue = [...confirmValues];
   const note = vi.fn(async (_message: string, _title?: string) => {});
   const text = vi.fn(async () => queue.shift() ?? "");
+  const confirm = vi.fn(async () => confirmQueue.shift() ?? false);
   const prompter: WizardPrompter = {
     intro: async () => {},
     outro: async () => {},
@@ -174,13 +180,13 @@ function createQueuedWizardPrompterHarness(textValues: string[]): {
     },
     multiselect: async () => [],
     text,
-    confirm: async () => false,
+    confirm,
     progress: () => ({
       update: () => {},
       stop: () => {},
     }),
   };
-  return { prompter, note, text };
+  return { prompter, note, text, confirm };
 }
 
 function createMethodBoundWizardPrompterHarness(textValues: string[]): {
@@ -405,78 +411,54 @@ describe("lmstudio setup", () => {
     ).resolves.toBeNull();
   });
 
-  it("prefers the strongest tool-calling family among installed models", async () => {
-    fetchLmstudioModelsMock.mockResolvedValue({
-      reachable: true,
-      status: 200,
+  it.each([
+    {
+      name: "prefers the strongest tool-calling family among installed models",
       models: [
-        {
-          type: "llm",
-          key: "llama3.3-70b-instruct",
-          max_context_length: 65_536,
-          capabilities: { trained_for_tool_use: true },
-        },
-        {
-          type: "llm",
-          key: "qwen3.5-4b-instruct",
-          max_context_length: 65_536,
-          capabilities: { trained_for_tool_use: true },
-        },
-        {
-          type: "llm",
-          key: "nomic-embed-text",
-          max_context_length: 65_536,
-          capabilities: { trained_for_tool_use: true },
-        },
+        { key: "llama3.3-70b-instruct", max_context_length: 65_536 },
+        { key: "qwen3.5-4b-instruct", max_context_length: 65_536 },
+        { key: "nomic-embed-text", max_context_length: 65_536 },
       ],
-    });
-
-    const result = await prepareAppGuidedLmstudioSetup({ config: {}, env: {} });
-
-    expect(result?.defaultModel).toBe("lmstudio/qwen3.5-4b-instruct");
-  });
-
-  it("skips a preferred model loaded with less than 16k context", async () => {
-    fetchLmstudioModelsMock.mockResolvedValue({
-      reachable: true,
-      status: 200,
+      expectedModel: "lmstudio/qwen3.5-4b-instruct",
+    },
+    {
+      name: "skips a preferred model loaded with less than 16k context",
       models: [
         {
-          type: "llm",
           key: "llama3.3-70b-instruct",
           max_context_length: 65_536,
           loaded_instances: [{ id: "llama", config: { context_length: 32_768 } }],
-          capabilities: { trained_for_tool_use: true },
         },
         {
-          type: "llm",
           key: "qwen3.5-4b-instruct",
           max_context_length: 65_536,
           loaded_instances: [{ id: "qwen", config: { context_length: 8_192 } }],
-          capabilities: { trained_for_tool_use: true },
         },
       ],
-    });
-
-    const result = await prepareAppGuidedLmstudioSetup({ config: {}, env: {} });
-
-    expect(result?.defaultModel).toBe("lmstudio/llama3.3-70b-instruct");
-  });
-
-  it("does not auto-detect a model without measured or advertised context", async () => {
+      expectedModel: "lmstudio/llama3.3-70b-instruct",
+    },
+    {
+      name: "does not auto-detect a model without measured or advertised context",
+      models: [{ key: "qwen3.5-4b-instruct" }],
+      expectedModel: undefined,
+    },
+  ])("$name", async ({ models, expectedModel }) => {
     fetchLmstudioModelsMock.mockResolvedValue({
       reachable: true,
       status: 200,
-      models: [
-        {
-          type: "llm",
-          key: "qwen3.5-4b-instruct",
-          capabilities: { trained_for_tool_use: true },
-        },
-      ],
+      models: models.map((model) => ({
+        type: "llm",
+        capabilities: { trained_for_tool_use: true },
+        ...model,
+      })),
     });
 
-    await expect(prepareAppGuidedLmstudioSetup({ config: {}, env: {} })).resolves.toBeNull();
+    const result = await prepareAppGuidedLmstudioSetup({ config: {}, env: {} });
+    if (expectedModel) {
+      expect(result?.defaultModel).toBe(expectedModel);
+    } else {
+      expect(result).toBeNull();
+    }
   });
 
   it("non-interactive setup discovers catalog and writes LM Studio provider config", async () => {
@@ -633,161 +615,44 @@ describe("lmstudio setup", () => {
     });
   });
 
-  it("non-interactive setup keeps Authorization header auth without writing a synthetic key", async () => {
-    const ctx = buildNonInteractiveContext({
-      config: {
-        auth: {
-          profiles: {
-            "lmstudio:default": {
-              provider: "lmstudio",
-              mode: "api_key",
-            },
-          },
-          order: {
-            lmstudio: ["lmstudio:default"],
-          },
-        },
-        models: {
-          providers: {
-            lmstudio: {
-              baseUrl: "http://localhost:1234/v1",
-              apiKey: "stale-config-key",
-              auth: "api-key",
-              api: "openai-completions",
-              headers: {
-                Authorization: "Bearer proxy-token",
-              },
-              models: [],
-            },
-          },
-        },
-      } as OpenClawConfig,
-      customBaseUrl: "http://localhost:1234/api/v1/",
-      customApiKey: "",
-      customModelId: "qwen3-8b-instruct",
+  it.each([
+    {
+      name: "non-interactive setup keeps Authorization header auth without writing a synthetic key",
       resolvedApiKey: null,
-    });
-
-    const result = await configureLmstudioNonInteractive(ctx);
-
-    expect(removeProviderAuthProfilesWithLockMock).toHaveBeenCalledWith({
-      provider: "lmstudio",
-      agentDir: undefined,
-    });
-    expect(fetchLmstudioModelsMock).toHaveBeenCalledWith({
-      baseUrl: "http://localhost:1234/v1",
-      apiKey: undefined,
-      headers: {
-        Authorization: "Bearer proxy-token",
-      },
-      timeoutMs: 5000,
-    });
-    expect(configureSelfHostedNonInteractiveMock).not.toHaveBeenCalled();
-    expect(resolveAgentModelPrimaryValue(result?.agents?.defaults?.model)).toBe(
-      "lmstudio/qwen3-8b-instruct",
-    );
-    const provider = requireNonInteractiveLmstudioProvider(result);
-    expectRecordFields(provider, "LM Studio provider config", {
-      baseUrl: "http://localhost:1234/v1",
-      api: "openai-completions",
-      headers: {
-        Authorization: "Bearer proxy-token",
-      },
-    });
-    const models = requireProviderModels(provider);
-    expect(models).toHaveLength(1);
-    expectModelFields(models[0], {
-      id: "qwen3-8b-instruct",
-    });
-    expect(provider).not.toHaveProperty("apiKey");
-    expect(provider).not.toHaveProperty("auth");
-    expect(result?.auth).toBeUndefined();
-  });
-
-  it("non-interactive setup clears stale profile auth before switching to Authorization header auth", async () => {
-    const ctx = buildNonInteractiveContext({
-      config: {
-        auth: {
-          profiles: {
-            "lmstudio:default": {
-              provider: "lmstudio",
-              mode: "api_key",
-            },
-          },
-          order: {
-            lmstudio: ["lmstudio:default"],
-          },
-        },
-        models: {
-          providers: {
-            lmstudio: {
-              baseUrl: "http://localhost:1234/v1",
-              apiKey: "stale-config-key",
-              auth: "api-key",
-              api: "openai-completions",
-              headers: {
-                Authorization: "Bearer proxy-token",
-              },
-              models: [],
-            },
-          },
-        },
-      } as OpenClawConfig,
-      customBaseUrl: "http://localhost:1234/api/v1/",
-      customApiKey: "",
-      customModelId: "qwen3-8b-instruct",
+      withProfile: true,
+    },
+    {
+      name: "non-interactive setup clears stale profile auth before switching to Authorization header auth",
       resolvedApiKey: "stale-profile-key",
-      resolvedApiKeySource: "profile",
-    });
-
-    const result = await configureLmstudioNonInteractive(ctx);
-
-    expect(removeProviderAuthProfilesWithLockMock).toHaveBeenCalledWith({
-      provider: "lmstudio",
-      agentDir: undefined,
-    });
-    expect(fetchLmstudioModelsMock).toHaveBeenCalledWith({
-      baseUrl: "http://localhost:1234/v1",
-      apiKey: undefined,
-      headers: {
-        Authorization: "Bearer proxy-token",
-      },
-      timeoutMs: 5000,
-    });
-    expect(configureSelfHostedNonInteractiveMock).not.toHaveBeenCalled();
-    expect(resolveAgentModelPrimaryValue(result?.agents?.defaults?.model)).toBe(
-      "lmstudio/qwen3-8b-instruct",
-    );
-    const provider = requireNonInteractiveLmstudioProvider(result);
-    expectRecordFields(provider, "LM Studio provider config", {
-      baseUrl: "http://localhost:1234/v1",
-      api: "openai-completions",
-      headers: {
-        Authorization: "Bearer proxy-token",
-      },
-    });
-    const models = requireProviderModels(provider);
-    expect(models).toHaveLength(1);
-    expectModelFields(models[0], {
-      id: "qwen3-8b-instruct",
-    });
-    expect(provider).not.toHaveProperty("apiKey");
-    expect(provider).not.toHaveProperty("auth");
-    expect(result?.auth).toBeUndefined();
-  });
-
-  it("non-interactive setup clears env fallback auth before switching to Authorization header auth", async () => {
+      resolvedApiKeySource: "profile" as const,
+      withProfile: true,
+    },
+    {
+      name: "non-interactive setup clears env fallback auth before switching to Authorization header auth",
+      resolvedApiKey: "env-fallback-key",
+      resolvedApiKeySource: "env" as const,
+      withProfile: false,
+    },
+  ])("$name", async ({ resolvedApiKey, resolvedApiKeySource, withProfile }) => {
+    const headers = { Authorization: "Bearer proxy-token" };
     const ctx = buildNonInteractiveContext({
       config: {
+        ...(withProfile
+          ? {
+              auth: {
+                profiles: { "lmstudio:default": { provider: "lmstudio", mode: "api_key" } },
+                order: { lmstudio: ["lmstudio:default"] },
+              },
+            }
+          : {}),
         models: {
           providers: {
             lmstudio: {
               baseUrl: "http://localhost:1234/v1",
+              ...(withProfile ? { apiKey: "stale-config-key" } : {}),
               auth: "api-key",
               api: "openai-completions",
-              headers: {
-                Authorization: "Bearer proxy-token",
-              },
+              headers,
               models: [],
             },
           },
@@ -796,12 +661,11 @@ describe("lmstudio setup", () => {
       customBaseUrl: "http://localhost:1234/api/v1/",
       customApiKey: "",
       customModelId: "qwen3-8b-instruct",
-      resolvedApiKey: "env-fallback-key",
-      resolvedApiKeySource: "env",
+      resolvedApiKey,
+      resolvedApiKeySource,
     });
 
     const result = await configureLmstudioNonInteractive(ctx);
-
     expect(removeProviderAuthProfilesWithLockMock).toHaveBeenCalledWith({
       provider: "lmstudio",
       agentDir: undefined,
@@ -809,9 +673,7 @@ describe("lmstudio setup", () => {
     expect(fetchLmstudioModelsMock).toHaveBeenCalledWith({
       baseUrl: "http://localhost:1234/v1",
       apiKey: undefined,
-      headers: {
-        Authorization: "Bearer proxy-token",
-      },
+      headers: { Authorization: "Bearer proxy-token" },
       timeoutMs: 5000,
     });
     expect(configureSelfHostedNonInteractiveMock).not.toHaveBeenCalled();
@@ -822,15 +684,11 @@ describe("lmstudio setup", () => {
     expectRecordFields(provider, "LM Studio provider config", {
       baseUrl: "http://localhost:1234/v1",
       api: "openai-completions",
-      headers: {
-        Authorization: "Bearer proxy-token",
-      },
+      headers: { Authorization: "Bearer proxy-token" },
     });
     const models = requireProviderModels(provider);
     expect(models).toHaveLength(1);
-    expectModelFields(models[0], {
-      id: "qwen3-8b-instruct",
-    });
+    expectModelFields(models[0], { id: "qwen3-8b-instruct" });
     expect(provider).not.toHaveProperty("apiKey");
     expect(provider).not.toHaveProperty("auth");
     expect(result?.auth).toBeUndefined();
@@ -1015,6 +873,102 @@ describe("lmstudio setup", () => {
       "LM Studio could not be reached at http://localhost:1234/v1.\nStart LM Studio (or run lms server start) and re-run setup.",
       "LM Studio",
     );
+  });
+
+  it("remote interactive setup retries discovery without asking for context tuning", async () => {
+    fetchLmstudioModelsMock
+      .mockResolvedValueOnce({ reachable: false, models: [] })
+      .mockResolvedValueOnce({
+        reachable: true,
+        status: 200,
+        models: [{ type: "embedding", key: "text-embedding-nomic-embed-text-v1.5" }],
+      })
+      .mockResolvedValueOnce({ reachable: true, status: 503, models: [] })
+      .mockResolvedValueOnce({
+        reachable: true,
+        status: 200,
+        models: [{ type: "llm", key: "qwen3-8b-instruct" }],
+      });
+    const { prompter, note, text, confirm } = createQueuedWizardPrompterHarness(
+      ["http://localhost:1234/api/v1/", "lmstudio-test-key"],
+      [true, true, true],
+    );
+
+    const result = await promptAndConfigureLmstudioInteractive({
+      config: buildConfig(),
+      prompter,
+      isRemote: true,
+    });
+
+    expect(note).toHaveBeenCalledWith(
+      "LM Studio could not be reached at http://localhost:1234/v1.\nStart LM Studio (or run lms server start), then continue to retry.",
+      "LM Studio",
+    );
+    expect(confirm).toHaveBeenCalledWith({
+      message: "Retry this LM Studio connection now?",
+      initialValue: true,
+    });
+    expect(note).toHaveBeenCalledWith(
+      "LM Studio returned HTTP 503 while listing models at http://localhost:1234/v1.\nWait for LM Studio to recover, then continue to retry.",
+      "LM Studio",
+    );
+    expect(confirm).toHaveBeenCalledTimes(3);
+    expect(text).toHaveBeenCalledTimes(2);
+    expect(result.defaultModel).toBe("lmstudio/qwen3-8b-instruct");
+  });
+
+  it("remote interactive setup does not retry immutable HTTP failures", async () => {
+    fetchLmstudioModelsMock.mockResolvedValueOnce({ reachable: true, status: 401, models: [] });
+    const { prompter, note, confirm } = createQueuedWizardPrompterHarness(
+      ["http://localhost:1234/api/v1/", "lmstudio-test-key"],
+      [],
+    );
+
+    await expect(
+      promptAndConfigureLmstudioInteractive({
+        config: buildConfig(),
+        prompter,
+        isRemote: true,
+      }),
+    ).rejects.toThrow("LM Studio discovery failed (401)");
+
+    expect(note).toHaveBeenCalledWith(
+      "LM Studio returned HTTP 401 while listing models at http://localhost:1234/v1.\nCheck the base URL and API key, then re-run setup.",
+      "LM Studio",
+    );
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
+  it("remote interactive setup stops when cancelled during retry discovery", async () => {
+    const controller = new AbortController();
+    let resolveRetry:
+      | ((value: { reachable: true; status: 200; models: never[] }) => void)
+      | undefined;
+    fetchLmstudioModelsMock
+      .mockResolvedValueOnce({ reachable: false, models: [] })
+      .mockImplementationOnce(
+        () =>
+          new Promise<{ reachable: true; status: 200; models: never[] }>((resolve) => {
+            resolveRetry = resolve;
+          }),
+      );
+    const { prompter } = createQueuedWizardPrompterHarness(
+      ["http://localhost:1234/api/v1/", "lmstudio-test-key"],
+      [true],
+    );
+
+    const setup = promptAndConfigureLmstudioInteractive({
+      config: buildConfig(),
+      prompter,
+      isRemote: true,
+      signal: controller.signal,
+    });
+    await vi.waitFor(() => expect(fetchLmstudioModelsMock).toHaveBeenCalledTimes(2));
+    controller.abort();
+    resolveRetry?.({ reachable: true, status: 200, models: [] });
+
+    await expect(setup).rejects.toMatchObject({ name: "AbortError" });
+    expect(removeProviderAuthProfilesWithLockMock).not.toHaveBeenCalled();
   });
 
   it("interactive setup accepts a blank API key for unauthenticated local LM Studio", async () => {
@@ -1469,187 +1423,98 @@ describe("lmstudio setup", () => {
     expect(result?.provider.models?.map((model) => model.id)).toEqual(["qwen3-8b-instruct"]);
   });
 
-  it("discoverLmstudioProvider returns null for unresolved header refs", async () => {
-    const result = await discoverLmstudioProvider(
-      buildDiscoveryContext({
-        config: {
-          models: {
-            providers: {
-              lmstudio: {
-                baseUrl: "http://localhost:1234/v1",
-                api: "openai-completions",
-                headers: {
-                  "X-Proxy-Auth": {
-                    source: "env",
-                    provider: "default",
-                    id: "LMSTUDIO_PROXY_TOKEN",
-                  },
-                },
-                models: [],
-              },
-            },
-          },
-        } as OpenClawConfig,
-        env: {},
-      }),
-    );
-
-    expect(result).toBeNull();
-    expect(discoverLmstudioModelsMock).not.toHaveBeenCalled();
-  });
-
-  it("discoverLmstudioProvider returns null for an unresolved apiKey ref", async () => {
-    const result = await discoverLmstudioProvider(
-      buildDiscoveryContext({
-        config: {
-          models: {
-            providers: {
-              lmstudio: {
-                baseUrl: "http://localhost:1234/v1",
-                api: "openai-completions",
-                apiKey: {
-                  source: "env",
-                  provider: "default",
-                  id: "LMSTUDIO_DISCOVERY_TOKEN",
-                },
-                models: [],
-              },
-            },
-          },
-        } as OpenClawConfig,
-        env: {},
-      }),
-    );
-
-    expect(result).toBeNull();
-    expect(discoverLmstudioModelsMock).not.toHaveBeenCalled();
-  });
-
-  it("discoverLmstudioProvider uses configured direct apiKey for discovery", async () => {
-    discoverLmstudioModelsMock.mockResolvedValueOnce([
-      createModel("qwen3-8b-instruct", "Qwen3 8B"),
-    ]);
-
-    await discoverLmstudioProvider(
-      buildDiscoveryContext({
-        config: {
-          models: {
-            providers: {
-              lmstudio: {
-                baseUrl: "http://localhost:1234/v1",
-                api: "openai-completions",
-                apiKey: "configured-direct-key",
-                models: [],
-              },
-            },
-          },
-        } as OpenClawConfig,
-      }),
-    );
-
-    expect(discoverLmstudioModelsMock).toHaveBeenCalledWith({
-      baseUrl: "http://localhost:1234/v1",
-      apiKey: "configured-direct-key",
-      headers: undefined,
-      quiet: false,
-    });
-  });
-
-  it("discoverLmstudioProvider prefers resolved discoveryApiKey over configured apiKey", async () => {
-    discoverLmstudioModelsMock.mockResolvedValueOnce([
-      createModel("qwen3-8b-instruct", "Qwen3 8B"),
-    ]);
-
-    await discoverLmstudioProvider(
-      buildDiscoveryContext({
-        discoveryApiKey: "resolved-discovery-key",
-        config: {
-          models: {
-            providers: {
-              lmstudio: {
-                baseUrl: "http://localhost:1234/v1",
-                api: "openai-completions",
-                apiKey: "configured-direct-key",
-                models: [],
-              },
-            },
-          },
-        } as OpenClawConfig,
-      }),
-    );
-
-    expect(discoverLmstudioModelsMock).toHaveBeenCalledWith({
-      baseUrl: "http://localhost:1234/v1",
-      apiKey: "resolved-discovery-key",
-      headers: undefined,
-      quiet: false,
-    });
-  });
-
-  it("discoverLmstudioProvider ignores an unresolved apiKey template when discoveryApiKey is resolved", async () => {
-    discoverLmstudioModelsMock.mockResolvedValueOnce([
-      createModel("qwen3-8b-instruct", "Qwen3 8B"),
-    ]);
-
-    await discoverLmstudioProvider(
-      buildDiscoveryContext({
-        discoveryApiKey: "resolved-discovery-key",
-        config: {
-          models: {
-            providers: {
-              lmstudio: {
-                baseUrl: "http://localhost:1234/v1",
-                api: "openai-completions",
-                apiKey: "${LMSTUDIO_API_KEY}",
-                models: [],
-              },
-            },
-          },
-        } as OpenClawConfig,
-        env: {},
-      }),
-    );
-
-    expect(discoverLmstudioModelsMock).toHaveBeenCalledWith({
-      baseUrl: "http://localhost:1234/v1",
-      apiKey: "resolved-discovery-key",
-      headers: undefined,
-      quiet: false,
-    });
-  });
-
-  it("discoverLmstudioProvider suppresses stale discovery apiKey when Authorization header auth is configured", async () => {
-    discoverLmstudioModelsMock.mockResolvedValueOnce([
-      createModel("qwen3-8b-instruct", "Qwen3 8B"),
-    ]);
-
-    await discoverLmstudioProvider(
-      buildDiscoveryContext({
-        discoveryApiKey: "resolved-stale-key",
-        config: {
-          models: {
-            providers: {
-              lmstudio: {
-                baseUrl: "http://localhost:1234/v1",
-                api: "openai-completions",
-                apiKey: "configured-direct-key",
-                headers: {
-                  Authorization: "Bearer custom-token",
-                },
-                models: [],
-              },
-            },
-          },
-        } as OpenClawConfig,
-      }),
-    );
-
-    expect(discoverLmstudioModelsMock).toHaveBeenCalledWith({
-      baseUrl: "http://localhost:1234/v1",
-      apiKey: "",
-      headers: {
-        Authorization: "Bearer custom-token",
+  it.each([
+    {
+      name: "discoverLmstudioProvider returns null for unresolved header refs",
+      providerPatch: {
+        headers: {
+          "X-Proxy-Auth": { source: "env", provider: "default", id: "LMSTUDIO_PROXY_TOKEN" },
+        },
       },
+    },
+    {
+      name: "discoverLmstudioProvider returns null for an unresolved apiKey ref",
+      providerPatch: {
+        apiKey: { source: "env", provider: "default", id: "LMSTUDIO_DISCOVERY_TOKEN" },
+      },
+    },
+  ])("$name", async ({ providerPatch }) => {
+    const result = await discoverLmstudioProvider(
+      buildDiscoveryContext({
+        config: {
+          models: {
+            providers: {
+              lmstudio: {
+                baseUrl: "http://localhost:1234/v1",
+                api: "openai-completions",
+                models: [],
+                ...providerPatch,
+              },
+            },
+          },
+        } as OpenClawConfig,
+        env: {},
+      }),
+    );
+
+    expect(result).toBeNull();
+    expect(discoverLmstudioModelsMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "discoverLmstudioProvider uses configured direct apiKey for discovery",
+      configuredApiKey: "configured-direct-key",
+      expectedApiKey: "configured-direct-key",
+    },
+    {
+      name: "discoverLmstudioProvider prefers resolved discoveryApiKey over configured apiKey",
+      configuredApiKey: "configured-direct-key",
+      discoveryApiKey: "resolved-discovery-key",
+      expectedApiKey: "resolved-discovery-key",
+    },
+    {
+      name: "discoverLmstudioProvider ignores an unresolved apiKey template when discoveryApiKey is resolved",
+      configuredApiKey: "${LMSTUDIO_API_KEY}",
+      discoveryApiKey: "resolved-discovery-key",
+      expectedApiKey: "resolved-discovery-key",
+    },
+    {
+      name: "discoverLmstudioProvider suppresses stale discovery apiKey when Authorization header auth is configured",
+      configuredApiKey: "configured-direct-key",
+      discoveryApiKey: "resolved-stale-key",
+      headers: { Authorization: "Bearer custom-token" },
+      expectedApiKey: "",
+    },
+  ])("$name", async ({ configuredApiKey, discoveryApiKey, headers, expectedApiKey }) => {
+    discoverLmstudioModelsMock.mockResolvedValueOnce([
+      createModel("qwen3-8b-instruct", "Qwen3 8B"),
+    ]);
+
+    await discoverLmstudioProvider(
+      buildDiscoveryContext({
+        discoveryApiKey,
+        config: {
+          models: {
+            providers: {
+              lmstudio: {
+                baseUrl: "http://localhost:1234/v1",
+                api: "openai-completions",
+                apiKey: configuredApiKey,
+                ...(headers ? { headers } : {}),
+                models: [],
+              },
+            },
+          },
+        } as OpenClawConfig,
+        env: {},
+      }),
+    );
+
+    expect(discoverLmstudioModelsMock).toHaveBeenCalledWith({
+      baseUrl: "http://localhost:1234/v1",
+      apiKey: expectedApiKey,
+      headers,
       quiet: false,
     });
   });

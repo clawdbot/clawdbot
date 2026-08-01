@@ -752,6 +752,7 @@ describe("iMessage approval reactions", () => {
       allowedDecisions: ["allow-once", "deny"],
     });
 
+    const gatewayRuntime = { request: vi.fn() } as never;
     const handled = await maybeResolveIMessageApprovalReaction({
       cfg: { channels: { imessage: { allowFrom: ["+15551230000"] } } },
       accountId: "default",
@@ -762,6 +763,7 @@ describe("iMessage approval reactions", () => {
         reacted_to_guid: "approval-message",
       }),
       bodyText: "",
+      gatewayRuntime,
     });
 
     expect(handled).toBe(true);
@@ -770,6 +772,7 @@ describe("iMessage approval reactions", () => {
         approvalId: "exec-self",
         decision: "allow-once",
         senderId: "+15551230000",
+        gatewayRuntime,
       }),
     );
   });

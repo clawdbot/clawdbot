@@ -68,6 +68,29 @@ describe("Apple app i18n catalogs", () => {
     expect(APPLE_I18N_LOCALES).toEqual(NATIVE_I18N_LOCALES);
   });
 
+  it("derives shared discovery status coverage into the iOS catalog", async () => {
+    const inventory = JSON.parse(await readFile("apps/.i18n/native-source.json", "utf8")) as {
+      entries: Array<{
+        id: string;
+        kind: string;
+        line: number;
+        path: string;
+        source: string;
+        surface: string;
+      }>;
+      version: number;
+    };
+    const build = buildIosCatalog(
+      { sourceLanguage: "en", strings: {}, version: "1.0" },
+      inventory,
+      [],
+    );
+
+    expect(Object.keys(build.catalog.strings ?? {})).toEqual(
+      expect.arrayContaining(["Searching…", "Stopped", "Waiting"]),
+    );
+  });
+
   it("derives broad macOS catalog coverage from the native source inventory", async () => {
     const inventory = JSON.parse(await readFile("apps/.i18n/native-source.json", "utf8")) as {
       entries: Array<{
@@ -95,8 +118,11 @@ describe("Apple app i18n catalogs", () => {
         "Enable debug tools",
         "Everyday OpenClaw app behavior.",
         "General",
+        "Searching…",
         "Shelling",
+        "Stopped",
         "Voice Wake requires macOS 26 or newer",
+        "Waiting",
       ]),
     );
     expect(keys).not.toContain("OpenClaw");
@@ -605,12 +631,42 @@ describe("Apple app i18n catalogs", () => {
         "utf8",
       );
       expect(turkish).toContain('"General" = "Genel";');
+      const frenchInfoPlist = await readFile(
+        path.join(outputDir, "fr.lproj", "InfoPlist.strings"),
+        "utf8",
+      );
+      expect(frenchInfoPlist).toContain(
+        '"NSUserNotificationUsageDescription" = "OpenClaw a besoin de l’autorisation d’envoyer des notifications pour afficher des alertes concernant les actions de l’agent.";',
+      );
+      expect(frenchInfoPlist).toContain('"NSScreenCaptureDescription" = ');
+      expect(frenchInfoPlist).toContain('"NSLocationUsageDescription" = ');
+      expect(frenchInfoPlist).toContain('"NSLocationWhenInUseUsageDescription" = ');
+      expect(frenchInfoPlist).toContain('"NSLocationAlwaysAndWhenInUseUsageDescription" = ');
       await expect(
         readFile(path.join(outputDir, "zh-Hans.lproj", "Localizable.strings"), "utf8"),
       ).resolves.toContain('"Save" = ');
       await expect(
         readFile(path.join(outputDir, "ja.lproj", "Localizable.strings"), "utf8"),
       ).resolves.toContain('"Run now" = ');
+      for (const localeDir of ["ja", "zh-Hans", "zh-Hant"]) {
+        await expect(
+          readFile(path.join(outputDir, `${localeDir}.lproj`, "InfoPlist.strings"), "utf8"),
+        ).resolves.toContain('"NSCameraUsageDescription" = ');
+      }
+      const localizedDirectories = await readdir(outputDir, { withFileTypes: true });
+      const infoPlistFiles = await Promise.all(
+        localizedDirectories
+          .filter((entry) => entry.isDirectory() && entry.name.endsWith(".lproj"))
+          .map(async (entry) => {
+            try {
+              await readFile(path.join(outputDir, entry.name, "InfoPlist.strings"), "utf8");
+              return entry.name;
+            } catch {
+              return null;
+            }
+          }),
+      );
+      expect(infoPlistFiles.filter(Boolean)).toHaveLength(APPLE_I18N_LOCALES.length);
     } finally {
       await rm(outputDir, { force: true, recursive: true });
     }

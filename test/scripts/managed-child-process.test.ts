@@ -221,6 +221,56 @@ describe("managed-child-process", () => {
     }
   });
 
+  it("times out and kills managed command descendants", async () => {
+    const dir = createTempDir("openclaw-managed-timeout-");
+    const childPath = path.join(dir, "child.mjs");
+    const childPidPath = path.join(dir, "child.pid");
+    const descendantPidPath = path.join(dir, "descendant.pid");
+    fs.writeFileSync(
+      childPath,
+      `
+import { spawn } from "node:child_process";
+import fs from "node:fs";
+
+const descendant = spawn(process.execPath, [
+  "-e",
+  "process.on('SIGTERM', () => {}); setTimeout(() => process.exit(0), 5_000); setInterval(() => {}, 1000);",
+], { stdio: "ignore" });
+fs.writeFileSync(process.argv[2], String(process.pid));
+fs.writeFileSync(process.argv[3], String(descendant.pid));
+process.on("SIGTERM", () => {});
+setInterval(() => {}, 1_000);
+`,
+      "utf8",
+    );
+
+    let childPid = 0;
+    let descendantPid = 0;
+    try {
+      await expect(
+        runManagedCommand({
+          bin: process.execPath,
+          args: [childPath, childPidPath, descendantPidPath],
+          shell: false,
+          stdio: "ignore",
+          timeoutMs: 500,
+        }),
+      ).rejects.toMatchObject({ code: "ETIMEDOUT" });
+
+      childPid = Number(fs.readFileSync(childPidPath, "utf8"));
+      descendantPid = Number(fs.readFileSync(descendantPidPath, "utf8"));
+      await waitFor(() => !isProcessAlive(childPid), 1_500);
+      await waitFor(() => !isProcessAlive(descendantPid), 1_500);
+    } finally {
+      if (childPid && isProcessAlive(childPid)) {
+        process.kill(childPid, "SIGKILL");
+      }
+      if (descendantPid && isProcessAlive(descendantPid)) {
+        process.kill(descendantPid, "SIGKILL");
+      }
+    }
+  });
+
   posixIt(
     "kills managed child process group descendants when the runner is terminated",
     async () => {
@@ -325,7 +375,16 @@ async function waitForClose(child: ReturnType<typeof spawn>) {
 function isProcessAlive(pid: number) {
   try {
     process.kill(pid, 0);
+  } catch {
+    return false;
+  }
+  if (process.platform !== "linux") {
     return true;
+  }
+  try {
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+    // kill(pid, 0) also succeeds for a terminated process awaiting reaping.
+    return stat.charAt(stat.lastIndexOf(")") + 2) !== "Z";
   } catch {
     return false;
   }

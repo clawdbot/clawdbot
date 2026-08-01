@@ -1,3 +1,4 @@
+import { asNullableObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { unsupportedSecretRefSurfacePolicy } from "../secrets/unsupported-surface-policy.js";
 import { appendAllowedValuesHint, summarizeAllowedValues } from "./allowed-values.js";
 import type { ConfigValidationIssue } from "./types.js";
@@ -15,13 +16,6 @@ type JsonSchemaLike = Record<string, unknown>;
 
 const CUSTOM_EXPECTED_ONE_OF_RE = /expected one of ((?:"[^"]+"(?:\|"?[^"]+"?)*)+)/i;
 const SECRETREF_POLICY_DOC_URL = "https://docs.openclaw.ai/reference/secretref-credential-surface";
-
-function toIssueRecord(value: unknown): UnknownIssueRecord | null {
-  if (!value || typeof value !== "object") {
-    return null;
-  }
-  return value as UnknownIssueRecord;
-}
 
 function toConfigPathSegments(path: unknown): ConfigPathSegment[] {
   if (!Array.isArray(path)) {
@@ -48,15 +42,11 @@ export function withConfigIssuePath(
   return issue;
 }
 
-function asJsonSchemaLike(value: unknown): JsonSchemaLike | null {
-  return value && typeof value === "object" ? (value as JsonSchemaLike) : null;
-}
-
 function lookupJsonSchemaNode(
   schema: unknown,
   pathSegments: readonly ConfigPathSegment[],
 ): JsonSchemaLike | null {
-  let current = asJsonSchemaLike(schema);
+  let current = asNullableObjectRecord(schema);
   for (const segment of pathSegments) {
     if (!current) {
       return null;
@@ -64,23 +54,23 @@ function lookupJsonSchemaNode(
     if (typeof segment === "number") {
       const items = current.items;
       if (Array.isArray(items)) {
-        current = asJsonSchemaLike(items[segment] ?? items[0]);
+        current = asNullableObjectRecord(items[segment] ?? items[0]);
         continue;
       }
-      current = asJsonSchemaLike(items);
+      current = asNullableObjectRecord(items);
       continue;
     }
-    const properties = asJsonSchemaLike(current.properties);
+    const properties = asNullableObjectRecord(current.properties);
     const next =
-      (properties && asJsonSchemaLike(properties[segment])) ||
-      asJsonSchemaLike(current.additionalProperties);
+      (properties && asNullableObjectRecord(properties[segment])) ||
+      asNullableObjectRecord(current.additionalProperties);
     current = next;
   }
   return current;
 }
 
 function collectAllowedValuesFromJsonSchemaNode(schema: unknown): AllowedValuesCollection {
-  const node = asJsonSchemaLike(schema);
+  const node = asNullableObjectRecord(schema);
   if (!node) {
     return { values: [], incomplete: false, hasValues: false };
   }
@@ -173,7 +163,7 @@ function appendNumericBoundHint(message: string, record: UnknownIssueRecord): st
 }
 
 function collectAllowedValuesFromIssue(issue: unknown): AllowedValuesCollection {
-  const record = toIssueRecord(issue);
+  const record = asNullableObjectRecord(issue);
   if (!record) {
     return { values: [], incomplete: false, hasValues: false };
   }
@@ -266,7 +256,7 @@ function extractBindingsSpecificUnionIssue(
     if (!Array.isArray(errGroup)) {
       continue;
     }
-    const branch = errGroup.map(toIssueRecord).filter(Boolean) as UnknownIssueRecord[];
+    const branch = errGroup.map(asNullableObjectRecord).filter(Boolean) as UnknownIssueRecord[];
     if (branch.length === 0) {
       continue;
     }
@@ -319,7 +309,7 @@ function extractBindingsSpecificUnionIssue(
 }
 
 export function mapZodIssueToConfigIssue(issue: unknown): ConfigValidationIssue {
-  const record = toIssueRecord(issue);
+  const record = asNullableObjectRecord(issue);
   const pathSegments = toConfigPathSegments(record?.path);
   const path = formatConfigPath(pathSegments);
   const message = typeof record?.message === "string" ? record.message : "Invalid input";
@@ -350,9 +340,7 @@ export function mapZodIssueToConfigIssue(issue: unknown): ConfigValidationIssue 
 }
 
 function isObjectSecretRefCandidate(value: unknown): boolean {
-  return Boolean(
-    value && typeof value === "object" && !Array.isArray(value) && coerceSecretRef(value),
-  );
+  return isRecord(value) && Boolean(coerceSecretRef(value));
 }
 
 function formatUnsupportedMutableSecretRefMessage(path: string): string {

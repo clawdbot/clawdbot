@@ -1065,9 +1065,9 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
   of `crestodian/rescue-pending/*.json` or `openclaw/rescue-pending/*.json`.
   These short-lived security capabilities are never imported; doctor discards
   both retired directories so an upgrade cannot reactivate a stale write.
-- Phone Control temporary arm state now uses SQLite plugin state instead of
-  `plugins/phone-control/armed.json`. Doctor imports the legacy armed-state
-  file into the `phone-control/arm-state` namespace and removes the file.
+- The retired Phone Control lease state is no longer runtime state. Doctor
+  drops its SQLite plugin-state journal and archives the legacy
+  `plugins/phone-control/armed.json` source after canonical config cleanup.
 - Doctor no longer repairs JSONL transcripts in place or creates backup JSONL
   files. It imports the active branch into SQLite and removes the legacy source.
 - Session-memory hook transcript lookup uses `{agentId, sessionId}` scope-only

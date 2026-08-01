@@ -111,7 +111,7 @@ export async function requestCodexAppServerJson<T = JsonValue | undefined>(param
   );
 }
 
-type CodexAppServerScopedRequest = <T = JsonValue | undefined>(request: {
+export type CodexAppServerScopedRequest = <T = JsonValue | undefined>(request: {
   method: string;
   requestParams?: unknown;
 }) => Promise<T>;
@@ -200,7 +200,7 @@ async function readCodexAccountEmailBestEffort(
  * isolated child) so related reads see the same app-server session. The whole
  * callback re-runs once when the client's start selection changed underneath it.
  */
-async function withCodexAppServerJsonClient<T>(
+export async function withCodexAppServerJsonClient<T>(
   params: {
     timeoutMs?: number;
     timeoutMessage?: string;

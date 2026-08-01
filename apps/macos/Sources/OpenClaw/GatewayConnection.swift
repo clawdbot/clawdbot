@@ -47,10 +47,10 @@ actor GatewayConnection {
     struct Route: Equatable, Sendable {
         fileprivate let generation: UInt64
         fileprivate let authority: UInt64?
-        fileprivate let url: URL
+        let url: URL
         fileprivate let token: String?
         fileprivate let password: String?
-        fileprivate let tls: GatewayTLSRoute?
+        let tls: GatewayTLSRoute?
         fileprivate let deviceAuthGatewayID: String?
         let activationOwnershipFingerprint: String?
 
@@ -67,7 +67,9 @@ actor GatewayConnection {
     /// One connected Gateway server, not merely an endpoint configuration.
     /// A reconnect at the same URL creates a different lease.
     struct ServerLease: Sendable {
-        fileprivate let route: Route
+        // Managed-image HTTP reuses this captured route from its focused extension file.
+        // Carrying the snapshot forward prevents endpoint or TLS rediscovery after suspension.
+        let route: Route
         fileprivate let socketGeneration: UInt64
         fileprivate let client: GatewayChannelActor
     }

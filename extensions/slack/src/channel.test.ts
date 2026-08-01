@@ -37,19 +37,21 @@ vi.mock("./send.runtime.js", () => ({
 
 vi.mock("./client.js", async () => {
   const actual = await vi.importActual<typeof import("./client.js")>("./client.js");
+  const createClient = () => ({
+    assistant: {
+      threads: {
+        setStatus: assistantThreadsSetStatusMock,
+      },
+    },
+    conversations: {
+      info: conversationsInfoMock,
+      open: conversationsOpenMock,
+    },
+  });
   return {
     ...actual,
-    createSlackWebClient: vi.fn(() => ({
-      assistant: {
-        threads: {
-          setStatus: assistantThreadsSetStatusMock,
-        },
-      },
-      conversations: {
-        info: conversationsInfoMock,
-        open: conversationsOpenMock,
-      },
-    })),
+    createSlackReadClient: vi.fn(createClient),
+    createSlackWebClient: vi.fn(createClient),
   };
 });
 
@@ -215,7 +217,6 @@ describe("slackPlugin actions", () => {
           slack: {
             botToken: "xoxb-test",
             appToken: "xapp-test",
-            capabilities: { interactiveReplies: true },
           },
         },
       },
@@ -241,9 +242,6 @@ describe("slackPlugin actions", () => {
             memberInfo: false,
             emojiList: false,
           },
-          capabilities: {
-            interactiveReplies: false,
-          },
           accounts: {
             default: {
               botToken: "xoxb-default",
@@ -255,9 +253,6 @@ describe("slackPlugin actions", () => {
                 memberInfo: false,
                 emojiList: false,
               },
-              capabilities: {
-                interactiveReplies: false,
-              },
             },
             work: {
               botToken: "xoxb-work",
@@ -268,9 +263,6 @@ describe("slackPlugin actions", () => {
                 pins: false,
                 memberInfo: false,
                 emojiList: false,
-              },
-              capabilities: {
-                interactiveReplies: true,
               },
             },
           },
@@ -1256,40 +1248,6 @@ describe("slackPlugin outbound", () => {
     expect(result).toEqual({ channel: "slack", messageId: "m-media-local" });
   });
 
-  it("normalizes slack button directives for direct outbound delivery", () => {
-    const normalized = slackPlugin.outbound?.normalizePayload?.({
-      cfg: {
-        channels: {
-          slack: {
-            botToken: "xoxb-test",
-            appToken: "xapp-test",
-            capabilities: { interactiveReplies: true },
-          },
-        },
-      },
-      accountId: "default",
-      payload: {
-        text: "Slack interactive minimal test\n[[slack_buttons: Test:test-value]]",
-      },
-    });
-
-    expect(normalized).toEqual({
-      text: "Slack interactive minimal test",
-      interactive: {
-        blocks: [
-          {
-            type: "text",
-            text: "Slack interactive minimal test",
-          },
-          {
-            type: "buttons",
-            buttons: [{ label: "Test", value: "test-value" }],
-          },
-        ],
-      },
-    });
-  });
-
   it("sends block payload media first, then the final block message", async () => {
     const sendSlack = vi
       .fn()
@@ -1436,7 +1394,7 @@ describe("slackPlugin directory", () => {
 });
 
 describe("slackPlugin agentPrompt", () => {
-  it("tells agents interactive replies are disabled by default", () => {
+  it("teaches agents to use typed presentation", () => {
     const hints = slackPlugin.agentPrompt?.messageToolHints?.({
       cfg: {
         channels: {
@@ -1449,43 +1407,7 @@ describe("slackPlugin agentPrompt", () => {
     });
 
     expect(hints).toContain(
-      "- Slack interactive replies are disabled. If needed, ask to set `channels.slack.capabilities.interactiveReplies=true` (or the same under `channels.slack.accounts.<account>.capabilities`).",
-    );
-    expect(hints).toContain(
-      "- Slack plain text sends: write standard Markdown; OpenClaw converts it to Slack mrkdwn, including `**bold**`, headings, lists, and `[label](url)` links.",
-    );
-    expect(hints).toContain(
-      "- For row-and-column data, use an explicit `presentation` table block; Slack renders it as a native table and retains a linear text summary for accessibility. Markdown pipe tables are not auto-promoted.",
-    );
-    expect(hints).toContain(
-      "- When mentioning Slack users, use the stable `<@USER_ID>` token from Slack context instead of plain `@name` text so Slack notifies and links the user.",
-    );
-    expect(hints).toContain(
-      "- Slack Block Kit or presentation text fields are sent as Slack mrkdwn directly; use `*bold*`, `_italic_`, `~strike~`, `<url|label>` links, and avoid Markdown headings or pipe tables there.",
-    );
-  });
-
-  it("shows Slack interactive reply directives when enabled", () => {
-    const hints = slackPlugin.agentPrompt?.messageToolHints?.({
-      cfg: {
-        channels: {
-          slack: {
-            botToken: "xoxb-test",
-            appToken: "xapp-test",
-            capabilities: { interactiveReplies: true },
-          },
-        },
-      },
-    });
-
-    expect(hints).toContain(
-      "- Prefer Slack buttons/selects for 2-5 discrete choices or parameter picks instead of asking the user to type one.",
-    );
-    expect(hints).toContain(
-      "- Slack interactive replies: use `[[slack_buttons: Label:value, Other:other]]` to add action buttons that route clicks back as Slack interaction system events.",
-    );
-    expect(hints).toContain(
-      "- Slack selects: use `[[slack_select: Placeholder | Label:value, Other:other]]` to add a static select menu that routes the chosen value back as a Slack interaction system event.",
+      "- Use `presentation` buttons/selects for discrete choices or parameter picks instead of asking the user to type one.",
     );
     expect(hints).toContain(
       "- Slack plain text sends: write standard Markdown; OpenClaw converts it to Slack mrkdwn, including `**bold**`, headings, lists, and `[label](url)` links.",

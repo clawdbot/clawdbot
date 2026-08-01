@@ -20,6 +20,7 @@ import {
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
   writeUpdatePostInstallDoctorResult,
 } from "../infra/update-doctor-result.js";
+import { cleanupStaleManagedServiceUpdateHandoffs } from "../infra/update-managed-service-handoff-cleanup.js";
 import type { UpdateRunResult } from "../infra/update-runner.js";
 import { CLAWHUB_INSTALL_ERROR_CODE } from "../plugins/clawhub-error-codes.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
@@ -43,6 +44,11 @@ const resolveGlobalManager = vi.fn();
 const serviceLoaded = vi.fn();
 const serviceStop = vi.fn();
 const serviceRestart = vi.fn();
+const isDefaultInstallIdentity = vi.hoisted(() =>
+  vi.fn<(env?: NodeJS.ProcessEnv, homedir?: () => string, platform?: NodeJS.Platform) => boolean>(
+    () => true,
+  ),
+);
 const suspendScheduledTaskAutoStartForUpdate = vi.fn();
 const resumeScheduledTaskAutoStartAfterUpdate = vi.fn();
 const prepareRestartScript = vi.fn();
@@ -321,7 +327,12 @@ vi.mock("../config/backup-rotation.js", () => ({
 }));
 
 vi.mock("../daemon/service.js", () => ({
-  readGatewayServiceState: async () => {
+  readGatewayServiceState: async (
+    _service: unknown,
+    args?: {
+      validateEnvBeforeStatusRead?: (env: NodeJS.ProcessEnv) => void;
+    },
+  ) => {
     const command = await serviceReadCommand();
     const env = {
       ...process.env,
@@ -329,6 +340,7 @@ vi.mock("../daemon/service.js", () => ({
         ? (command.environment as NodeJS.ProcessEnv | undefined)
         : undefined),
     };
+    args?.validateEnvBeforeStatusRead?.(env);
     const [loaded, runtime] = await Promise.all([
       serviceLoaded({ env }).catch(() => false),
       serviceReadRuntime(env).catch(() => undefined),
@@ -362,6 +374,15 @@ vi.mock("../daemon/schtasks.js", () => ({
     suspendScheduledTaskAutoStartForUpdate(...args),
   resumeScheduledTaskAutoStartAfterUpdate: (...args: unknown[]) =>
     resumeScheduledTaskAutoStartAfterUpdate(...args),
+}));
+
+vi.mock("../config/paths.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/paths.js")>()),
+  isDefaultInstallIdentity: (
+    env?: NodeJS.ProcessEnv,
+    homedir?: () => string,
+    platform?: NodeJS.Platform,
+  ) => isDefaultInstallIdentity(env, homedir, platform),
 }));
 
 vi.mock("../infra/ports.js", () => ({
@@ -511,6 +532,36 @@ describe("update-cli", () => {
     warnings: [],
     legacyIssues: [],
   };
+
+  const clawHubRiskWarning =
+    "╭─ WARNING - ClawHub found security risks in this release ─╮\n" +
+    "│ • Security scan:     suspicious                                      │\n" +
+    "╰───────────────────────────────────────────────────────────────────────╯";
+  const clawHubSuspiciousPayloadWarning =
+    "╭─ WARNING - ClawHub found security risks in this release ─╮\n" +
+    "│ • Security scan:     suspicious                                      │\n" +
+    "│ • Finding:           suspicious payload strings                       │\n" +
+    "╰───────────────────────────────────────────────────────────────────────╯";
+  const clawHubSyncRiskError =
+    "Failed to update demo: Update cancelled; rerun with --acknowledge-clawhub-risk to continue after reviewing the warning. (ClawHub clawhub:demo@1.2.4).";
+
+  const createClawHubRiskRequest = (
+    overrides: Partial<ClawHubRiskAcknowledgementRequest> = {},
+  ): ClawHubRiskAcknowledgementRequest => ({
+    packageName: "demo",
+    version: "1.2.3",
+    trust: {
+      scanStatus: "suspicious",
+      moderationState: null,
+      blockedFromDownload: false,
+      reasons: ["payload_strings"],
+      pending: false,
+      stale: false,
+    },
+    acknowledgementKind: "confirm",
+    warning: clawHubRiskWarning,
+    ...overrides,
+  });
 
   const setTty = (value: boolean | undefined) => {
     Object.defineProperty(process.stdin, "isTTY", {
@@ -951,7 +1002,11 @@ describe("update-cli", () => {
     });
   };
 
-  const pluginSyncResult = (config: OpenClawConfig, changed = false) => ({
+  const pluginSyncResult = (
+    config: OpenClawConfig,
+    changed = false,
+    overrides: { warnings?: string[]; errors?: string[] } = {},
+  ) => ({
     changed,
     config,
     summary: {
@@ -960,6 +1015,7 @@ describe("update-cli", () => {
       switchedToNpm: [],
       warnings: [],
       errors: [],
+      ...overrides,
     },
   });
 
@@ -1036,18 +1092,43 @@ describe("update-cli", () => {
     );
   };
 
-  const setupInstalledPackageAtNodeModules = async (nodeModules: string, version = "2026.4.21") => {
-    const pkgRoot = path.join(nodeModules, "openclaw");
-    const entryPath = path.join(pkgRoot, "dist", "index.js");
-    mockPackageInstallStatus(pkgRoot);
-    await fs.mkdir(path.dirname(entryPath), { recursive: true });
+  const writeOpenClawPackageFixture = async (
+    root: string,
+    version: string,
+    options: { entrySource?: string; sidecars?: boolean; inventory?: boolean } = {},
+  ) => {
+    const entryPath = path.join(root, "dist", "index.js");
+    await fs.mkdir(options.entrySource === undefined ? root : path.dirname(entryPath), {
+      recursive: true,
+    });
     await fs.writeFile(
-      path.join(pkgRoot, "package.json"),
+      path.join(root, "package.json"),
       JSON.stringify({ name: "openclaw", version }),
       "utf-8",
     );
-    await fs.writeFile(entryPath, "export {};\n", "utf-8");
-    await writePackageDistInventory(pkgRoot);
+    if (options.entrySource !== undefined) {
+      await fs.writeFile(entryPath, options.entrySource, "utf-8");
+    }
+    if (options.sidecars) {
+      for (const relativePath of TEST_BUNDLED_RUNTIME_SIDECAR_PATHS) {
+        const absolutePath = path.join(root, relativePath);
+        await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+        await fs.writeFile(absolutePath, "export {};\n", "utf-8");
+      }
+    }
+    if (options.inventory) {
+      await writePackageDistInventory(root);
+    }
+    return entryPath;
+  };
+
+  const setupInstalledPackageAtNodeModules = async (nodeModules: string, version = "2026.4.21") => {
+    const pkgRoot = path.join(nodeModules, "openclaw");
+    mockPackageInstallStatus(pkgRoot);
+    const entryPath = await writeOpenClawPackageFixture(pkgRoot, version, {
+      entrySource: "export {};\n",
+      inventory: true,
+    });
     return { nodeModules, pkgRoot, entryPath };
   };
 
@@ -1066,6 +1147,28 @@ describe("update-cli", () => {
     });
     serviceLoaded.mockResolvedValue(true);
     serviceReadRuntime.mockResolvedValue({ status: "running", pid: 4242, state: "running" });
+  };
+
+  const mockStoppedManagedGitGateway = () => {
+    mockRunningManagedGateway([
+      "node",
+      path.join(process.cwd(), "dist", "index.js"),
+      "gateway",
+      "run",
+    ]);
+    serviceLoaded.mockResolvedValue(false);
+    serviceLoaded.mockResolvedValueOnce(true);
+    serviceReadRuntime.mockResolvedValue({ status: "stopped", pid: null, state: "stopped" });
+    serviceReadRuntime.mockResolvedValueOnce({ status: "running", pid: 4242, state: "running" });
+  };
+
+  const expectFailedManagedGitRestart = (message: string) => {
+    const logs = getLogOutput();
+    expect(serviceStop).toHaveBeenCalledTimes(1);
+    expect(runRestartScript).toHaveBeenCalledTimes(1);
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(logs).toContain(message);
+    expect(logs).not.toContain("Gateway: restarted and verified.");
   };
 
   const mockGatewayProbe = (version: string, connId: string) => {
@@ -1281,6 +1384,8 @@ describe("update-cli", () => {
     resolveGlobalManager.mockResolvedValue("npm");
     serviceStop.mockResolvedValue(undefined);
     serviceRestart.mockResolvedValue({ outcome: "completed" });
+    isDefaultInstallIdentity.mockReset();
+    isDefaultInstallIdentity.mockReturnValue(true);
     suspendScheduledTaskAutoStartForUpdate.mockResolvedValue(false);
     resumeScheduledTaskAutoStartAfterUpdate.mockResolvedValue(false);
     serviceLoaded.mockResolvedValue(false);
@@ -1305,22 +1410,8 @@ describe("update-cli", () => {
     formatPortDiagnostics.mockReturnValue(["Port 18789 is already in use."]);
     mockGatewayProbe("1.0.0", "conn-test");
     pathExists.mockResolvedValue(false);
-    syncPluginsForUpdateChannel.mockResolvedValue({
-      changed: false,
-      config: baseConfig,
-      summary: {
-        switchedToBundled: [],
-        switchedToClawHub: [],
-        switchedToNpm: [],
-        warnings: [],
-        errors: [],
-      },
-    });
-    updateNpmInstalledPlugins.mockResolvedValue({
-      changed: false,
-      config: baseConfig,
-      outcomes: [],
-    });
+    syncPluginsForUpdateChannel.mockResolvedValue(pluginSyncResult(baseConfig));
+    updateNpmInstalledPlugins.mockResolvedValue(npmPluginUpdateResult(baseConfig));
     checkShellCompletionStatus.mockResolvedValue({
       shell: "zsh",
       profileInstalled: false,
@@ -2129,15 +2220,9 @@ describe("update-cli", () => {
   });
 
   it("post-core resume mode persists the requested update channel with the updated process", async () => {
-    vi.mocked(readConfigFileSnapshot).mockResolvedValue({
-      ...baseSnapshot,
-      parsed: { update: { channel: "stable" } },
-      resolved: { update: { channel: "stable" } } as OpenClawConfig,
-      sourceConfig: { update: { channel: "stable" } } as OpenClawConfig,
-      runtimeConfig: { update: { channel: "stable" } } as OpenClawConfig,
-      config: { update: { channel: "stable" } } as OpenClawConfig,
-      hash: "stable-hash",
-    });
+    vi.mocked(readConfigFileSnapshot).mockResolvedValue(
+      configSnapshot({ update: { channel: "stable" } }, { hash: "stable-hash" }),
+    );
 
     await runPostCoreCommand(
       { restart: false },
@@ -2166,37 +2251,14 @@ describe("update-cli", () => {
   });
 
   it("post-core resume mode retries update channel persistence after config hash drift", async () => {
-    vi.mocked(readConfigFileSnapshot).mockResolvedValueOnce({
-      ...baseSnapshot,
-      parsed: { update: { channel: "stable" } },
-      resolved: { update: { channel: "stable" } } as OpenClawConfig,
-      sourceConfig: { update: { channel: "stable" } } as OpenClawConfig,
-      runtimeConfig: { update: { channel: "stable" } } as OpenClawConfig,
-      config: { update: { channel: "stable" } } as OpenClawConfig,
-      hash: "stable-hash",
-    });
+    vi.mocked(readConfigFileSnapshot).mockResolvedValueOnce(
+      configSnapshot({ update: { channel: "stable" } }, { hash: "stable-hash" }),
+    );
     const newerSnapshot = {
-      ...baseSnapshot,
-      parsed: {
+      ...configSnapshot({
         meta: { lastTouchedVersion: "2026.4.30" },
         update: { channel: "stable" },
-      },
-      resolved: {
-        meta: { lastTouchedVersion: "2026.4.30" },
-        update: { channel: "stable" },
-      } as OpenClawConfig,
-      sourceConfig: {
-        meta: { lastTouchedVersion: "2026.4.30" },
-        update: { channel: "stable" },
-      } as OpenClawConfig,
-      runtimeConfig: {
-        meta: { lastTouchedVersion: "2026.4.30" },
-        update: { channel: "stable" },
-      } as OpenClawConfig,
-      config: {
-        meta: { lastTouchedVersion: "2026.4.30" },
-        update: { channel: "stable" },
-      } as OpenClawConfig,
+      }),
       hash: "newer-hash",
     };
     vi.mocked(mutateConfigFileWithRetry).mockImplementationOnce(async (params) => {
@@ -2421,10 +2483,7 @@ describe("update-cli", () => {
     vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(
       "/tmp/openclaw-updated-entry.mjs",
     );
-    const trustWarning =
-      "╭─ WARNING - ClawHub found security risks in this release ─╮\n" +
-      "│ • Security scan:     suspicious                                      │\n" +
-      "╰───────────────────────────────────────────────────────────────────────╯";
+    const trustWarning = clawHubRiskWarning;
     const coloredTrustWarning = `\u001b[33m${trustWarning}\u001b[39m`;
     updateNpmInstalledPlugins.mockImplementationOnce(
       async (params: {
@@ -2460,24 +2519,13 @@ describe("update-cli", () => {
   });
 
   it("includes failed ClawHub sync trust warnings in json post-core plugin output", async () => {
-    const trustWarning =
-      "╭─ WARNING - ClawHub found security risks in this release ─╮\n" +
-      "│ • Security scan:     suspicious                                      │\n" +
-      "│ • Finding:           suspicious payload strings                       │\n" +
-      "╰───────────────────────────────────────────────────────────────────────╯";
-    syncPluginsForUpdateChannel.mockResolvedValueOnce({
-      changed: false,
-      config: baseConfig,
-      summary: {
-        switchedToBundled: [],
-        switchedToClawHub: [],
-        switchedToNpm: [],
+    const trustWarning = clawHubSuspiciousPayloadWarning;
+    syncPluginsForUpdateChannel.mockResolvedValueOnce(
+      pluginSyncResult(baseConfig, false, {
         warnings: [trustWarning],
-        errors: [
-          "Failed to update demo: Update cancelled; rerun with --acknowledge-clawhub-risk to continue after reviewing the warning. (ClawHub clawhub:demo@1.2.4).",
-        ],
-      },
-    });
+        errors: [clawHubSyncRiskError],
+      }),
+    );
     vi.mocked(defaultRuntime.writeJson).mockClear();
 
     await updateCommand({ json: true, restart: false });
@@ -2485,33 +2533,18 @@ describe("update-cli", () => {
     const jsonOutput = lastWriteJsonCall() as UpdateRunResult | undefined;
     expect(jsonOutput?.postUpdate?.plugins?.status).toBe("warning");
     expect(jsonOutput?.postUpdate?.plugins?.sync.warnings).toEqual([trustWarning]);
-    expect(jsonOutput?.postUpdate?.plugins?.sync.errors).toEqual([
-      "Failed to update demo: Update cancelled; rerun with --acknowledge-clawhub-risk to continue after reviewing the warning. (ClawHub clawhub:demo@1.2.4).",
-    ]);
+    expect(jsonOutput?.postUpdate?.plugins?.sync.errors).toEqual([clawHubSyncRiskError]);
   });
 
   it("does not print duplicate failed ClawHub sync trust warnings in human post-core output", async () => {
-    const trustWarning =
-      "╭─ WARNING - ClawHub found security risks in this release ─╮\n" +
-      "│ • Security scan:     suspicious                                      │\n" +
-      "│ • Finding:           suspicious payload strings                       │\n" +
-      "╰───────────────────────────────────────────────────────────────────────╯";
+    const trustWarning = clawHubSuspiciousPayloadWarning;
     syncPluginsForUpdateChannel.mockImplementationOnce(
       async (params: { config: OpenClawConfig; logger?: { warn?: (message: string) => void } }) => {
         params.logger?.warn?.(trustWarning);
-        return {
-          changed: false,
-          config: params.config,
-          summary: {
-            switchedToBundled: [],
-            switchedToClawHub: [],
-            switchedToNpm: [],
-            warnings: [trustWarning],
-            errors: [
-              "Failed to update demo: Update cancelled; rerun with --acknowledge-clawhub-risk to continue after reviewing the warning. (ClawHub clawhub:demo@1.2.4).",
-            ],
-          },
-        };
+        return pluginSyncResult(params.config, false, {
+          warnings: [trustWarning],
+          errors: [clawHubSyncRiskError],
+        });
       },
     );
 
@@ -2522,11 +2555,7 @@ describe("update-cli", () => {
   });
 
   it("does not print duplicate ClawHub update trust warnings in human post-core output", async () => {
-    const trustWarning =
-      "╭─ WARNING - ClawHub found security risks in this release ─╮\n" +
-      "│ • Security scan:     suspicious                                      │\n" +
-      "│ • Finding:           suspicious payload strings                       │\n" +
-      "╰───────────────────────────────────────────────────────────────────────╯";
+    const trustWarning = clawHubSuspiciousPayloadWarning;
     updateNpmInstalledPlugins.mockImplementationOnce(
       async (params: { config: OpenClawConfig; logger?: { warn?: (message: string) => void } }) => {
         params.logger?.warn?.(trustWarning);
@@ -2567,14 +2596,7 @@ describe("update-cli", () => {
         },
       },
     } as OpenClawConfig;
-    vi.mocked(readConfigFileSnapshot).mockResolvedValue({
-      ...baseSnapshot,
-      parsed: config,
-      resolved: config,
-      sourceConfig: config,
-      config,
-      runtimeConfig: config,
-    });
+    vi.mocked(readConfigFileSnapshot).mockResolvedValue(configSnapshot(config));
     loadInstalledPluginIndexInstallRecords.mockResolvedValueOnce({
       demo: {
         source: "npm",
@@ -2582,17 +2604,7 @@ describe("update-cli", () => {
         installPath,
       },
     });
-    syncPluginsForUpdateChannel.mockResolvedValueOnce({
-      changed: false,
-      config,
-      summary: {
-        switchedToBundled: [],
-        switchedToClawHub: [],
-        switchedToNpm: [],
-        warnings: [],
-        errors: [],
-      },
-    });
+    syncPluginsForUpdateChannel.mockResolvedValueOnce(pluginSyncResult(config));
     pathExists.mockImplementation(async (candidate: string) => candidate === installPath);
     vi.mocked(defaultRuntime.writeJson).mockClear();
 
@@ -2665,11 +2677,7 @@ describe("update-cli", () => {
   });
 
   it("marks unacknowledged ClawHub risk skips as post-update warnings", async () => {
-    const trustWarning =
-      "╭─ WARNING - ClawHub found security risks in this release ─╮\n" +
-      "│ • Security scan:     suspicious                                      │\n" +
-      "│ • Finding:           suspicious payload strings                       │\n" +
-      "╰───────────────────────────────────────────────────────────────────────╯";
+    const trustWarning = clawHubSuspiciousPayloadWarning;
     updateNpmInstalledPlugins.mockResolvedValueOnce({
       changed: false,
       config: baseConfig,
@@ -2853,6 +2861,7 @@ describe("update-cli", () => {
       },
       assert: () => {
         expectNoSideEffects(
+          cleanupStaleManagedServiceUpdateHandoffs,
           replaceConfigFile,
           runGatewayUpdate,
           runDaemonInstall,
@@ -2875,6 +2884,7 @@ describe("update-cli", () => {
       },
       assert: () => {
         expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+        expect(cleanupStaleManagedServiceUpdateHandoffs).not.toHaveBeenCalled();
         expect(runGatewayUpdate).not.toHaveBeenCalled();
         expect(
           launchdUpdateCleanupMocks.disableCurrentOpenClawUpdateLaunchdJob,
@@ -2882,6 +2892,53 @@ describe("update-cli", () => {
       },
     },
   ] as const)("updateCommand dry-run behavior: $name", runUpdateCliScenario);
+
+  it.each([
+    { name: "text", options: { dryRun: true, channel: "beta" } },
+    { name: "JSON", options: { dryRun: true, json: true, channel: "beta" } },
+  ])("reads config without recording observations during a $name dry run", async ({ options }) => {
+    await updateCommand(options);
+
+    expect(readConfigFileSnapshot).toHaveBeenCalledWith({
+      skipPluginValidation: true,
+      observe: false,
+    });
+    expect(cleanupStaleManagedServiceUpdateHandoffs).not.toHaveBeenCalled();
+  });
+
+  it("does not clean managed-service handoffs during a JSON dry run", async () => {
+    await updateCommand({ dryRun: true, json: true, channel: "beta" });
+
+    expect(cleanupStaleManagedServiceUpdateHandoffs).not.toHaveBeenCalled();
+    expectNoSideEffects(replaceConfigFile, runGatewayUpdate, runDaemonInstall);
+    expect(defaultRuntime.writeJson).toHaveBeenCalled();
+  });
+
+  it("does not clean managed-service handoffs before rejecting an invalid timeout", async () => {
+    await updateCommand({ timeout: "" });
+
+    expect(cleanupStaleManagedServiceUpdateHandoffs).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it.each([
+    { name: "update", run: async () => await updateCommand({ channel: "" }) },
+    { name: "finalization", run: async () => await updateFinalizeCommand({ channel: "" }) },
+  ])("rejects an explicitly empty $name channel before mutation", async ({ run }) => {
+    await run();
+
+    expect(defaultRuntime.error).toHaveBeenCalledWith(
+      '--channel must be "stable", "extended-stable", "beta", or "dev" (got "")',
+    );
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expectNoSideEffects(
+      cleanupStaleManagedServiceUpdateHandoffs,
+      replaceConfigFile,
+      runGatewayUpdate,
+      doctorCommand,
+      syncPluginsForUpdateChannel,
+    );
+  });
 
   it("refuses an incompatible package target before service stop or install", async () => {
     mockPackageInstallStatus(createCaseDir("openclaw-schema-refusal"));
@@ -3322,14 +3379,7 @@ describe("update-cli", () => {
     mockPackageInstallStatus(tempDir);
     readPackageVersion.mockResolvedValue("2026.6.33");
     const config = { update: { channel: "extended-stable" } } as OpenClawConfig;
-    vi.mocked(readConfigFileSnapshot).mockResolvedValue({
-      ...baseSnapshot,
-      parsed: config,
-      sourceConfig: config,
-      resolved: config,
-      runtimeConfig: config,
-      config,
-    });
+    vi.mocked(readConfigFileSnapshot).mockResolvedValue(configSnapshot(config));
 
     await updateCommand({ yes: true, restart: false });
 
@@ -3366,14 +3416,7 @@ describe("update-cli", () => {
     const tempDir = createCaseDir("openclaw-update");
     mockPackageInstallStatus(tempDir);
     const config = { update: { channel: "extended-stable" } } as OpenClawConfig;
-    vi.mocked(readConfigFileSnapshot).mockResolvedValue({
-      ...baseSnapshot,
-      parsed: config,
-      sourceConfig: config,
-      resolved: config,
-      runtimeConfig: config,
-      config,
-    });
+    vi.mocked(readConfigFileSnapshot).mockResolvedValue(configSnapshot(config));
     vi.mocked(resolveExtendedStablePackage).mockResolvedValueOnce({
       status: "failed",
       reason: "selector_query_failed",
@@ -3397,14 +3440,7 @@ describe("update-cli", () => {
     mockPackageInstallStatus(tempDir);
     if (!explicit) {
       const config = { update: { channel: "extended-stable" } } as OpenClawConfig;
-      vi.mocked(readConfigFileSnapshot).mockResolvedValue({
-        ...baseSnapshot,
-        parsed: config,
-        sourceConfig: config,
-        resolved: config,
-        runtimeConfig: config,
-        config,
-      });
+      vi.mocked(readConfigFileSnapshot).mockResolvedValue(configSnapshot(config));
     }
 
     await updateCommand({
@@ -3831,18 +3867,10 @@ describe("update-cli", () => {
     const nodeModules = path.join(tempDir, "node_modules");
     const pkgRoot = path.join(nodeModules, "openclaw");
     mockPackageInstallStatus(tempDir);
-    await fs.mkdir(pkgRoot, { recursive: true });
-    await fs.writeFile(
-      path.join(pkgRoot, "package.json"),
-      JSON.stringify({ name: "openclaw", version: "2026.3.23" }),
-      "utf-8",
-    );
-    for (const relativePath of TEST_BUNDLED_RUNTIME_SIDECAR_PATHS) {
-      const absolutePath = path.join(pkgRoot, relativePath);
-      await fs.mkdir(path.dirname(absolutePath), { recursive: true });
-      await fs.writeFile(absolutePath, "export {};\n", "utf-8");
-    }
-    await writePackageDistInventory(pkgRoot);
+    await writeOpenClawPackageFixture(pkgRoot, "2026.3.23", {
+      sidecars: true,
+      inventory: true,
+    });
     readPackageVersion.mockResolvedValue("2026.3.23");
     vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
       if (Array.isArray(argv) && argv[0] === "npm" && argv[1] === "root" && argv[2] === "-g") {
@@ -3885,14 +3913,10 @@ describe("update-cli", () => {
           throw new Error("missing stage prefix");
         }
         const stageRoot = path.join(stagePrefix, "lib", "node_modules", "openclaw");
-        await fs.mkdir(path.join(stageRoot, "dist"), { recursive: true });
-        await fs.writeFile(
-          path.join(stageRoot, "package.json"),
-          JSON.stringify({ name: "openclaw", version: "2026.4.25" }),
-          "utf-8",
-        );
-        await fs.writeFile(path.join(stageRoot, "dist", "index.js"), "export {};\n", "utf-8");
-        await writePackageDistInventory(stageRoot);
+        await writeOpenClawPackageFixture(stageRoot, "2026.4.25", {
+          entrySource: "export {};\n",
+          inventory: true,
+        });
         await fs.writeFile(
           path.join(stageRoot, "dist", "stale-runtime.js"),
           "export {};\n",
@@ -4204,6 +4228,99 @@ describe("update-cli", () => {
     processOffSpy.mockRestore();
   });
 
+  it("does not inspect or mutate a Windows host service from an isolated install", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const tempDir = await createTrackedTempDir("openclaw-update-isolated-service-");
+    const { nodeModules } = await setupInstalledPackageRoot(tempDir);
+    mockRunningManagedGateway();
+    mockFileBackedPathExists();
+    mockNpmGlobalRoot(nodeModules);
+    isDefaultInstallIdentity.mockReturnValue(false);
+
+    await withEnvAsync({ OPENCLAW_HOME: path.join(tempDir, "relocated-home") }, async () => {
+      await updateCommand({ yes: true });
+    });
+    platformSpy.mockRestore();
+
+    expect(isDefaultInstallIdentity).toHaveBeenCalled();
+    expect(serviceReadCommand).not.toHaveBeenCalled();
+    expect(suspendScheduledTaskAutoStartForUpdate).not.toHaveBeenCalled();
+    expect(serviceStop).not.toHaveBeenCalled();
+    expect(prepareRestartScript).not.toHaveBeenCalled();
+    expect(runRestartScript).not.toHaveBeenCalled();
+    expect(runDaemonRestart).not.toHaveBeenCalled();
+    expect(packageInstallCommandCall()).toBeDefined();
+  });
+
+  it.each([
+    {
+      platform: "darwin" as const,
+      envKey: "OPENCLAW_LAUNCHD_LABEL",
+      value: "ai.openclaw.gateway",
+    },
+    {
+      platform: "linux" as const,
+      envKey: "OPENCLAW_SYSTEMD_UNIT",
+      value: "openclaw-gateway.service",
+    },
+    {
+      platform: "win32" as const,
+      envKey: "OPENCLAW_WINDOWS_TASK_NAME",
+      value: "OpenClaw Gateway",
+    },
+  ])(
+    "does not reuse a conflicting $envKey selector from the managed service on $platform",
+    async ({ platform, envKey, value }) => {
+      const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue(platform);
+      const tempDir = await createTrackedTempDir(`openclaw-update-${platform}-selector-`);
+      const home = path.join(tempDir, "home");
+      const stateDir = path.join(home, ".openclaw-work");
+      const { nodeModules } = await setupInstalledPackageRoot(tempDir);
+      serviceReadCommand.mockResolvedValue({
+        programArguments: ["openclaw", "gateway", "run"],
+        environment: {
+          OPENCLAW_PROFILE: "work",
+          [envKey]: value,
+        },
+      });
+      serviceLoaded.mockResolvedValue(true);
+      serviceReadRuntime.mockResolvedValue({ status: "stopped", state: "stopped" });
+      mockFileBackedPathExists();
+      mockNpmGlobalRoot(nodeModules);
+
+      try {
+        await withEnvAsync(
+          {
+            HOME: home,
+            USERPROFILE: undefined,
+            OPENCLAW_HOME: undefined,
+            OPENCLAW_PROFILE: "work",
+            OPENCLAW_STATE_DIR: stateDir,
+            OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+            [envKey]: undefined,
+          },
+          async () => {
+            await updateCommand({ yes: true });
+          },
+        );
+      } finally {
+        platformSpy.mockRestore();
+      }
+
+      expect(isDefaultInstallIdentity).toHaveBeenCalled();
+      expect(serviceReadRuntime).not.toHaveBeenCalled();
+      expect(suspendScheduledTaskAutoStartForUpdate).not.toHaveBeenCalled();
+      expect(serviceStop).not.toHaveBeenCalled();
+      expect(serviceRestart).not.toHaveBeenCalled();
+      expect(prepareRestartScript).not.toHaveBeenCalled();
+      expect(runRestartScript).not.toHaveBeenCalled();
+      expect(runDaemonRestart).not.toHaveBeenCalled();
+      expect(packageInstallCommandCall()).toBeUndefined();
+      expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+      expect(getErrorOutput()).toContain(envKey);
+    },
+  );
+
   it("restores Windows Scheduled Task autostart when service stop fails", async () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     mockPackageInstallStatus(createCaseDir("openclaw-update-stop-failure"));
@@ -4412,26 +4529,7 @@ describe("update-cli", () => {
   });
 
   it("fails managed git restart when the gateway responds but the service stays stopped", async () => {
-    const serviceEntrypoint = path.join(process.cwd(), "dist", "index.js");
-    serviceReadCommand.mockResolvedValue({
-      programArguments: ["node", serviceEntrypoint, "gateway", "run"],
-      environment: {
-        OPENCLAW_SERVICE_MARKER: "openclaw",
-        OPENCLAW_SERVICE_KIND: "gateway",
-      },
-    });
-    serviceLoaded.mockResolvedValue(false);
-    serviceLoaded.mockResolvedValueOnce(true);
-    serviceReadRuntime.mockResolvedValue({
-      status: "stopped",
-      pid: null,
-      state: "stopped",
-    });
-    serviceReadRuntime.mockResolvedValueOnce({
-      status: "running",
-      pid: 4242,
-      state: "running",
-    });
+    mockStoppedManagedGitGateway();
     restartHealthTestControl.snapshot = {
       runtime: { status: "stopped", pid: null, state: "stopped" },
       portUsage: {
@@ -4450,48 +4548,19 @@ describe("update-cli", () => {
 
     await updateCommand({ yes: true });
 
-    const logs = getLogOutput();
-    expect(serviceStop).toHaveBeenCalledTimes(1);
-    expect(runRestartScript).toHaveBeenCalledTimes(1);
-    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
-    expect(logs).toContain(
+    expectFailedManagedGitRestart(
       "Gateway responded, but the managed service did not report running after restart.",
     );
-    expect(logs).not.toContain("Gateway: restarted and verified.");
   });
 
   it("fails managed git restart when the stopped service cannot be restarted", async () => {
-    const serviceEntrypoint = path.join(process.cwd(), "dist", "index.js");
-    serviceReadCommand.mockResolvedValue({
-      programArguments: ["node", serviceEntrypoint, "gateway", "run"],
-      environment: {
-        OPENCLAW_SERVICE_MARKER: "openclaw",
-        OPENCLAW_SERVICE_KIND: "gateway",
-      },
-    });
-    serviceLoaded.mockResolvedValue(false);
-    serviceLoaded.mockResolvedValueOnce(true);
-    serviceReadRuntime.mockResolvedValue({
-      status: "stopped",
-      pid: null,
-      state: "stopped",
-    });
-    serviceReadRuntime.mockResolvedValueOnce({
-      status: "running",
-      pid: 4242,
-      state: "running",
-    });
+    mockStoppedManagedGitGateway();
     runRestartScript.mockRejectedValueOnce(new Error("restart unavailable"));
     mockGitUpdateAfterMutation();
 
     await updateCommand({ yes: true });
 
-    const logs = getLogOutput();
-    expect(serviceStop).toHaveBeenCalledTimes(1);
-    expect(runRestartScript).toHaveBeenCalledTimes(1);
-    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
-    expect(logs).toContain("Gateway: restart failed: Error: restart unavailable");
-    expect(logs).not.toContain("Gateway: restarted and verified.");
+    expectFailedManagedGitRestart("Gateway: restart failed: Error: restart unavailable");
   });
 
   it("stops a managed gateway rooted at the git checkout when switching package installs to dev", async () => {
@@ -4681,12 +4750,10 @@ describe("update-cli", () => {
       tag: "latest",
       version: "2026.4.23",
     });
-    for (const relativePath of TEST_BUNDLED_RUNTIME_SIDECAR_PATHS) {
-      const absolutePath = path.join(pkgRoot, relativePath);
-      await fs.mkdir(path.dirname(absolutePath), { recursive: true });
-      await fs.writeFile(absolutePath, "export {};\n", "utf-8");
-    }
-    await writePackageDistInventory(pkgRoot);
+    await writeOpenClawPackageFixture(pkgRoot, "2026.4.23", {
+      sidecars: true,
+      inventory: true,
+    });
     mockFileBackedPathExists();
     mockNpmGlobalRoot(nodeModules);
 
@@ -4712,18 +4779,10 @@ describe("update-cli", () => {
     const pkgRoot = path.join(nodeModules, "openclaw");
     mockPackageInstallStatus(pkgRoot);
     mockCurrentProcessFreshDoctor();
-    await fs.mkdir(pkgRoot, { recursive: true });
-    await fs.writeFile(
-      path.join(pkgRoot, "package.json"),
-      JSON.stringify({ name: "openclaw", version: "9999.0.0" }),
-      "utf-8",
-    );
-    for (const relativePath of TEST_BUNDLED_RUNTIME_SIDECAR_PATHS) {
-      const absolutePath = path.join(pkgRoot, relativePath);
-      await fs.mkdir(path.dirname(absolutePath), { recursive: true });
-      await fs.writeFile(absolutePath, "export {};\n", "utf-8");
-    }
-    await writePackageDistInventory(pkgRoot);
+    await writeOpenClawPackageFixture(pkgRoot, "9999.0.0", {
+      sidecars: true,
+      inventory: true,
+    });
 
     vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
       if (Array.isArray(argv) && argv[0] === "npm" && argv[1] === "root" && argv[2] === "-g") {
@@ -5074,15 +5133,10 @@ describe("update-cli", () => {
         const stageRoot = stagePrefix
           ? path.join(stagePrefix, "lib", "node_modules", "openclaw")
           : serviceRoot;
-        const stageEntryPoint = path.join(stageRoot, "dist", "index.js");
-        await fs.mkdir(path.dirname(stageEntryPoint), { recursive: true });
-        await fs.writeFile(
-          path.join(stageRoot, "package.json"),
-          JSON.stringify({ name: "openclaw", version: "2026.5.20" }),
-          "utf-8",
-        );
-        await fs.writeFile(stageEntryPoint, "export {};\n", "utf-8");
-        await writePackageDistInventory(stageRoot);
+        await writeOpenClawPackageFixture(stageRoot, "2026.5.20", {
+          entrySource: "export {};\n",
+          inventory: true,
+        });
       }
       return commandResult();
     });
@@ -5181,15 +5235,10 @@ describe("update-cli", () => {
         const stageRoot = stagePrefix
           ? path.join(stagePrefix, "lib", "node_modules", "openclaw")
           : root;
-        const stageEntryPoint = path.join(stageRoot, "dist", "index.js");
-        await fs.mkdir(path.dirname(stageEntryPoint), { recursive: true });
-        await fs.writeFile(
-          path.join(stageRoot, "package.json"),
-          JSON.stringify({ name: "openclaw", version: "2026.7.1" }),
-          "utf-8",
-        );
-        await fs.writeFile(stageEntryPoint, "export {};\n", "utf-8");
-        await writePackageDistInventory(stageRoot);
+        await writeOpenClawPackageFixture(stageRoot, "2026.7.1", {
+          entrySource: "export {};\n",
+          inventory: true,
+        });
       }
       return commandResult();
     });
@@ -5252,15 +5301,10 @@ describe("update-cli", () => {
         const stageRoot = stagePrefix
           ? path.join(stagePrefix, "lib", "node_modules", "openclaw")
           : root;
-        const stageEntryPoint = path.join(stageRoot, "dist", "index.js");
-        await fs.mkdir(path.dirname(stageEntryPoint), { recursive: true });
-        await fs.writeFile(
-          path.join(stageRoot, "package.json"),
-          JSON.stringify({ name: "openclaw", version: "2026.5.20" }),
-          "utf-8",
-        );
-        await fs.writeFile(stageEntryPoint, "export {};\n", "utf-8");
-        await writePackageDistInventory(stageRoot);
+        await writeOpenClawPackageFixture(stageRoot, "2026.5.20", {
+          entrySource: "export {};\n",
+          inventory: true,
+        });
       }
       return commandResult();
     });
@@ -5515,23 +5559,18 @@ describe("update-cli", () => {
         config: postDoctorConfig,
         hash: "post-doctor-hash",
       });
-    syncPluginsForUpdateChannel.mockImplementation(async ({ config }) => ({
-      changed: true,
-      config: {
-        ...config,
-        plugins: {
-          ...config.plugins,
-          load: { paths: ["/tmp/openclaw-updated-plugin"] },
+    syncPluginsForUpdateChannel.mockImplementation(async ({ config }) =>
+      pluginSyncResult(
+        {
+          ...config,
+          plugins: {
+            ...config.plugins,
+            load: { paths: ["/tmp/openclaw-updated-plugin"] },
+          },
         },
-      },
-      summary: {
-        switchedToBundled: [],
-        switchedToClawHub: [],
-        switchedToNpm: [],
-        warnings: [],
-        errors: [],
-      },
-    }));
+        true,
+      ),
+    );
     updateNpmInstalledPlugins.mockImplementation(async ({ config }) =>
       npmPluginUpdateResult(config),
     );
@@ -5918,22 +5957,8 @@ describe("update-cli", () => {
         },
       } as OpenClawConfig,
     });
-    syncPluginsForUpdateChannel.mockResolvedValue({
-      changed: false,
-      config: sourceConfig,
-      summary: {
-        switchedToBundled: [],
-        switchedToClawHub: [],
-        switchedToNpm: [],
-        warnings: [],
-        errors: [],
-      },
-    });
-    updateNpmInstalledPlugins.mockResolvedValue({
-      changed: false,
-      config: sourceConfig,
-      outcomes: [],
-    });
+    syncPluginsForUpdateChannel.mockResolvedValue(pluginSyncResult(sourceConfig));
+    updateNpmInstalledPlugins.mockResolvedValue(npmPluginUpdateResult(sourceConfig));
 
     await updateCommand({ channel: "beta", yes: true });
 
@@ -6002,20 +6027,13 @@ describe("update-cli", () => {
 
     confirm.mockClear();
     confirm.mockResolvedValueOnce(true);
-    await syncCall.onClawHubRisk({
-      packageName: "demo\npkg",
-      version: "1.2.3\u001b[2K",
-      trust: {
-        scanStatus: "suspicious",
-        moderationState: null,
-        blockedFromDownload: false,
-        reasons: ["payload_strings"],
-        pending: false,
-        stale: false,
-      },
-      acknowledgementKind: "confirm",
-      warning: "warning",
-    });
+    await syncCall.onClawHubRisk(
+      createClawHubRiskRequest({
+        packageName: "demo\npkg",
+        version: "1.2.3\u001b[2K",
+        warning: "warning",
+      }),
+    );
 
     const message = getConfirmMessage();
     expect(message).toContain("Update ClawHub package");
@@ -6025,10 +6043,7 @@ describe("update-cli", () => {
   });
 
   it("prints ClawHub risk warnings before interactive post-update acknowledgement prompts", async () => {
-    const warning =
-      "╭─ WARNING - ClawHub found security risks in this release ─╮\n" +
-      "│ • Security scan:     suspicious                                      │\n" +
-      "╰───────────────────────────────────────────────────────────────────────╯";
+    const warning = clawHubRiskWarning;
     const syncCall = await setupInteractiveClawHubRisk();
 
     confirm.mockImplementationOnce(async () => {
@@ -6036,27 +6051,11 @@ describe("update-cli", () => {
       expect(logs.some((line) => line.includes(warning))).toBe(true);
       return true;
     });
-    await syncCall.onClawHubRisk({
-      packageName: "demo",
-      version: "1.2.3",
-      trust: {
-        scanStatus: "suspicious",
-        moderationState: null,
-        blockedFromDownload: false,
-        reasons: ["payload_strings"],
-        pending: false,
-        stale: false,
-      },
-      acknowledgementKind: "confirm",
-      warning,
-    });
+    await syncCall.onClawHubRisk(createClawHubRiskRequest({ warning }));
   });
 
   it("does not duplicate ClawHub risk warnings already printed before prompts", async () => {
-    const warning =
-      "╭─ WARNING - ClawHub found security risks in this release ─╮\n" +
-      "│ • Security scan:     suspicious                                      │\n" +
-      "╰───────────────────────────────────────────────────────────────────────╯";
+    const warning = clawHubRiskWarning;
     const syncCall = await setupInteractiveClawHubRisk();
     const logger = syncCall.logger;
     if (
@@ -6071,20 +6070,7 @@ describe("update-cli", () => {
 
     logger.warn(`\u001b[33m${warning}\u001b[39m`);
     confirm.mockResolvedValueOnce(true);
-    await syncCall.onClawHubRisk({
-      packageName: "demo",
-      version: "1.2.3",
-      trust: {
-        scanStatus: "suspicious",
-        moderationState: null,
-        blockedFromDownload: false,
-        reasons: ["payload_strings"],
-        pending: false,
-        stale: false,
-      },
-      acknowledgementKind: "confirm",
-      warning,
-    });
+    await syncCall.onClawHubRisk(createClawHubRiskRequest({ warning }));
 
     const output = getLogOutput();
     const occurrences = output.split(warning).length - 1;
@@ -6437,6 +6423,28 @@ describe("update-cli", () => {
     expect(sentinel?.payload.stats?.after?.version).toBe("2026.4.24");
   });
 
+  it("does not write a control-plane sentinel when a dry-run preflight fails", async () => {
+    const sentinel = await runControlPlaneUpdate({
+      meta: {
+        sessionKey: "agent:main:webchat:dm:user-123",
+        handoffId: "extended-stable-dry-run",
+        note: "Preview requested from the agent.",
+      },
+      options: { channel: "extended-stable", dryRun: true, yes: true, json: true },
+      beforeUpdate: () => {
+        mockPackageInstallStatus(createCaseDir("openclaw-update"));
+        vi.mocked(resolveExtendedStablePackage).mockResolvedValueOnce({
+          status: "failed",
+          reason: "selector_missing",
+        });
+      },
+    });
+
+    expect(sentinel).toBeNull();
+    expect(cleanupStaleManagedServiceUpdateHandoffs).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+  });
+
   it("writes an extended-stable selector failure to the control-plane sentinel", async () => {
     const sentinel = await runControlPlaneUpdate({
       meta: {
@@ -6762,22 +6770,14 @@ describe("update-cli", () => {
       update: { channel: "beta" },
       plugins: { entries: { post: { enabled: true } } },
     } as OpenClawConfig;
-    const preDoctorSnapshot: ConfigFileSnapshot = {
-      ...baseSnapshot,
-      sourceConfig: preDoctorConfig,
-      resolved: preDoctorConfig,
-      runtimeConfig: preDoctorConfig,
-      config: preDoctorConfig,
+    const preDoctorSnapshot = configSnapshot(preDoctorConfig, {
+      parsed: baseSnapshot.parsed,
       hash: "pre-doctor",
-    };
-    const postDoctorSnapshot: ConfigFileSnapshot = {
-      ...baseSnapshot,
-      sourceConfig: postDoctorConfig,
-      resolved: postDoctorConfig,
-      runtimeConfig: postDoctorConfig,
-      config: postDoctorConfig,
+    });
+    const postDoctorSnapshot = configSnapshot(postDoctorConfig, {
+      parsed: baseSnapshot.parsed,
       hash: "post-doctor",
-    };
+    });
     const postDoctorRecords = {
       "post-plugin": {
         source: "npm",
@@ -6790,17 +6790,8 @@ describe("update-cli", () => {
       .mockResolvedValueOnce(postDoctorSnapshot);
     loadInstalledPluginIndexInstallRecords.mockResolvedValueOnce(postDoctorRecords);
     syncPluginsForUpdateChannel.mockImplementationOnce(
-      async (params: { config?: OpenClawConfig }) => ({
-        changed: true,
-        config: params.config ?? baseConfig,
-        summary: {
-          switchedToBundled: [],
-          switchedToClawHub: [],
-          switchedToNpm: [],
-          warnings: [],
-          errors: [],
-        },
-      }),
+      async (params: { config?: OpenClawConfig }) =>
+        pluginSyncResult(params.config ?? baseConfig, true),
     );
 
     await updateFinalizeCommand({ json: true, timeout: "9", restart: false });
@@ -6859,14 +6850,10 @@ describe("update-cli", () => {
     const postDoctorConfig = {
       meta: { lastTouchedVersion: "2026.6.18" },
     } as OpenClawConfig;
-    const postDoctorSnapshot: ConfigFileSnapshot = {
-      ...baseSnapshot,
-      sourceConfig: postDoctorConfig,
-      resolved: postDoctorConfig,
-      runtimeConfig: postDoctorConfig,
-      config: postDoctorConfig,
+    const postDoctorSnapshot = configSnapshot(postDoctorConfig, {
+      parsed: baseSnapshot.parsed,
       hash: "post-doctor",
-    };
+    });
     await fs.mkdir(tempDir, { recursive: true });
     await fs.writeFile(
       sourceConfigPath,
@@ -6898,22 +6885,14 @@ describe("update-cli", () => {
   it("updateFinalizeCommand reapplies requested channel against post-doctor config", async () => {
     const preDoctorConfig = { update: { channel: "stable" } } as OpenClawConfig;
     const postDoctorConfig = { update: { channel: "beta" } } as OpenClawConfig;
-    const preDoctorSnapshot: ConfigFileSnapshot = {
-      ...baseSnapshot,
-      sourceConfig: preDoctorConfig,
-      resolved: preDoctorConfig,
-      runtimeConfig: preDoctorConfig,
-      config: preDoctorConfig,
+    const preDoctorSnapshot = configSnapshot(preDoctorConfig, {
+      parsed: baseSnapshot.parsed,
       hash: "pre-doctor",
-    };
-    const postDoctorSnapshot: ConfigFileSnapshot = {
-      ...baseSnapshot,
-      sourceConfig: postDoctorConfig,
-      resolved: postDoctorConfig,
-      runtimeConfig: postDoctorConfig,
-      config: postDoctorConfig,
+    });
+    const postDoctorSnapshot = configSnapshot(postDoctorConfig, {
+      parsed: baseSnapshot.parsed,
       hash: "post-doctor",
-    };
+    });
     vi.mocked(readConfigFileSnapshot)
       .mockResolvedValueOnce(preDoctorSnapshot)
       .mockResolvedValueOnce(preDoctorSnapshot)
@@ -6932,14 +6911,10 @@ describe("update-cli", () => {
 
   it("updateFinalizeCommand converges on the effective channel from env without persisting update.channel", async () => {
     const noChannelConfig = {} as OpenClawConfig;
-    const noChannelSnapshot: ConfigFileSnapshot = {
-      ...baseSnapshot,
-      sourceConfig: noChannelConfig,
-      resolved: noChannelConfig,
-      runtimeConfig: noChannelConfig,
-      config: noChannelConfig,
+    const noChannelSnapshot = configSnapshot(noChannelConfig, {
+      parsed: baseSnapshot.parsed,
       hash: "no-channel",
-    };
+    });
     vi.mocked(readConfigFileSnapshot).mockResolvedValue(noChannelSnapshot);
     const priorEffective = process.env.OPENCLAW_UPDATE_EFFECTIVE_CHANNEL;
     // Simulate a no-config git/source update whose effective channel is dev.
@@ -7126,6 +7101,7 @@ describe("update-cli", () => {
     expect(cloneCall?.[0]).toEqual([
       "git",
       "clone",
+      "--filter=blob:none",
       "https://github.com/openclaw/openclaw.git",
       checkoutDir,
     ]);

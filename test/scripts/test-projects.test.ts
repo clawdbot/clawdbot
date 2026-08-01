@@ -12,6 +12,7 @@ import {
   DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS,
   applyDefaultMultiSpecVitestCachePaths,
   applyDefaultVitestNoOutputTimeout,
+  applyFullExtensionsHeapBudget,
   applyParallelVitestCachePaths,
   buildFullSuiteVitestRunPlans,
   buildVitestArgs,
@@ -33,7 +34,7 @@ import {
 } from "../../scripts/test-projects.test-support.mjs";
 import { captureReaddirSyncCallsDuring } from "../../src/test-utils/fs-scan-assertions.js";
 import { toRepoPath } from "../../src/test-utils/repo-files.js";
-import { agentsCoreIsolatedTestFiles } from "../vitest/vitest.agents-paths.mjs";
+import { agentVitestProjectOwners } from "../vitest/vitest.agents-paths.mjs";
 import {
   channelConfigContractPatterns,
   channelRegistryContractPatterns,
@@ -220,6 +221,23 @@ describe("scripts/test-projects changed-target routing", () => {
       "src/utils/provider-utils.test.ts",
     ]);
   });
+
+  it.each([
+    "src/system-agent/setup-inference-persist.ts",
+    "src/agents/embedded-agent-runner/run/attempt-dispatch-preparation.ts",
+    "src/agents/embedded-agent-runner/run/run-attempt-dispatch.ts",
+  ])(
+    "routes setup inference transcript ownership changes through both regressions for %s",
+    (targetPath) => {
+      expect(resolveChangedTestTargetPlan([targetPath])).toEqual({
+        mode: "targets",
+        targets: [
+          "src/agents/embedded-agent-runner/run.overflow-compaction.loop.test.ts",
+          "src/commands/onboard-guided.inference.e2e.test.ts",
+        ],
+      });
+    },
+  );
 
   it("keeps changed mode focused by default for Vitest wiring edits", () => {
     expect(
@@ -1301,6 +1319,18 @@ describe("scripts/test-projects changed-target routing", () => {
     });
   });
 
+  it("keeps npm release workflow edits on the preflight cache guard", () => {
+    expect(resolveChangedTestTargetPlan([".github/workflows/openclaw-npm-release.yml"])).toEqual({
+      mode: "targets",
+      targets: [
+        "test/openclaw-npm-postpublish-verify.test.ts",
+        "test/scripts/openclaw-npm-extended-stable-workflow.test.ts",
+        "test/scripts/package-acceptance-workflow.test.ts",
+        "test/scripts/ci-workflow-guards.test.ts",
+      ],
+    });
+  });
+
   it("keeps generated locale publisher and inventory edits on workflow guards", () => {
     for (const actionPath of [
       ".github/actions/create-generated-pr-tokens/action.yml",
@@ -1323,6 +1353,7 @@ describe("scripts/test-projects changed-target routing", () => {
       ".github/workflows/clawsweeper-dispatch.yml",
       ".github/workflows/labeler.yml",
       ".github/workflows/real-behavior-proof.yml",
+      ".github/workflows/stale.yml",
     ]) {
       expect(resolveChangedTestTargetPlan([workflowPath])).toEqual({
         mode: "targets",
@@ -1677,6 +1708,7 @@ describe("scripts/test-projects changed-target routing", () => {
 
   it("routes script declaration edits through implementation owner tests", () => {
     const declarationMirrors = new Map([
+      ["scripts/check.d.mts", "scripts/check.mjs"],
       ["scripts/build-stamp.d.mts", "scripts/build-stamp.mjs"],
       ["scripts/ci-changed-scope.d.mts", "scripts/ci-changed-scope.mjs"],
       ["scripts/copy-bundled-plugin-metadata.d.mts", "scripts/copy-bundled-plugin-metadata.mjs"],
@@ -1686,6 +1718,7 @@ describe("scripts/test-projects changed-target routing", () => {
         "scripts/lib/bundled-plugin-build-entries.mjs",
       ],
       ["scripts/lib/config-boundary-guard.d.mts", "scripts/lib/config-boundary-guard.mjs"],
+      ["scripts/lib/arg-utils.d.mts", "scripts/lib/arg-utils.mjs"],
       [
         "scripts/lib/deprecated-config-api-guard.d.mts",
         "scripts/lib/deprecated-config-api-guard.mjs",
@@ -1713,6 +1746,25 @@ describe("scripts/test-projects changed-target routing", () => {
     }
   });
 
+  it("routes shared contract ownership and declarations through every affected lane", () => {
+    const targets = [
+      "test/scripts/test-projects.test.ts",
+      "test/vitest/vitest.contracts-channel-surface.config.ts",
+      "test/vitest/vitest.contracts-channel-config.config.ts",
+      "test/vitest/vitest.contracts-channel-registry.config.ts",
+      "test/vitest/vitest.contracts-channel-session.config.ts",
+    ];
+    for (const changedPath of [
+      "test/vitest/vitest.contracts-paths.mjs",
+      "test/vitest/vitest.contracts-paths.d.mts",
+    ]) {
+      expect(resolveChangedTestTargetPlan([changedPath]), changedPath).toEqual({
+        mode: "targets",
+        targets,
+      });
+    }
+  });
+
   it("keeps QA Lab gateway smoke script edits on QA e2e tests", () => {
     expect(resolveChangedTestTargetPlan(["scripts/dev/gateway-smoke.ts"])).toEqual({
       mode: "targets",
@@ -1726,8 +1778,13 @@ describe("scripts/test-projects changed-target routing", () => {
       ["scripts/gh-read", ["test/scripts/gh-read.test.ts"]],
       [
         "scripts/pr",
-        ["test/scripts/pr-operation-lock.test.ts", "test/scripts/pr-wrappers.test.ts"],
+        [
+          "test/scripts/pr-merge.test.ts",
+          "test/scripts/pr-operation-lock.test.ts",
+          "test/scripts/pr-wrappers.test.ts",
+        ],
       ],
+      ["scripts/pr-lib/merge.sh", ["test/scripts/pr-merge.test.ts"]],
       ["scripts/pr-lib/operation-lock.sh", ["test/scripts/pr-operation-lock.test.ts"]],
       ["scripts/pr-lib/process-group-runner.mjs", ["test/scripts/pr-operation-lock.test.ts"]],
       ["scripts/pr-merge", ["test/scripts/pr-wrappers.test.ts"]],
@@ -2611,7 +2668,7 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
-  it.each(agentsCoreIsolatedTestFiles)(
+  it.each(agentVitestProjectOwners.coreIsolated.include)(
     "routes isolated agent test %s to the isolated agents-core shard",
     (testFile) => {
       expect(buildVitestRunPlans([testFile])).toEqual([
@@ -2624,6 +2681,153 @@ describe("scripts/test-projects changed-target routing", () => {
       ]);
     },
   );
+
+  it.each([
+    ["src/agents/agent-scope.test.ts", "test/vitest/vitest.agents-core.config.ts"],
+    [
+      "src/agents/embedded-agent-runner/run.before-agent-reply-cron.test.ts",
+      "test/vitest/vitest.agents-embedded-agent.config.ts",
+    ],
+    [
+      "src/agents/embedded-agent-runner/run.incomplete-turn.test.ts",
+      "test/vitest/vitest.agents-embedded-agent-incomplete-turn.config.ts",
+    ],
+    [
+      "src/agents/embedded-agent-runner/run.overflow-compaction.test.ts",
+      "test/vitest/vitest.agents-embedded-agent-overflow-compaction.config.ts",
+    ],
+    [
+      "src/agents/embedded-agent-runner/run/attempt.abort-race.test.ts",
+      "test/vitest/vitest.agents-embedded-agent-run.config.ts",
+    ],
+    ["src/agents/runtime-plan/tools.test.ts", "test/vitest/vitest.agents-support.config.ts"],
+    ["src/agents/tools/cron-tool.pacing.test.ts", "test/vitest/vitest.agents-tools.config.ts"],
+  ])("routes focused agent test %s to its owning shard", (testFile, config) => {
+    expect(buildVitestRunPlans([testFile])).toEqual([
+      {
+        config,
+        forwardedArgs: [],
+        includePatterns: [testFile],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it.each([
+    [
+      "src/agents/embedded-agent-runner/run",
+      "test/vitest/vitest.agents-embedded-agent-run.config.ts",
+    ],
+    ["src/agents/runtime-plan", "test/vitest/vitest.agents-support.config.ts"],
+    ["src/agents/tools", "test/vitest/vitest.agents-tools.config.ts"],
+  ])("routes focused agent directory %s to its owning shard", (directory, config) => {
+    const plans = buildVitestRunPlans([directory]);
+
+    expect(plans).toEqual(
+      expect.arrayContaining([
+        {
+          config,
+          forwardedArgs: [],
+          includePatterns: [`${directory}/**/*.test.ts`],
+          watchMode: false,
+        },
+      ]),
+    );
+    expect(plans.map((plan) => plan.config)).not.toContain(
+      "test/vitest/vitest.agents-core.config.ts",
+    );
+  });
+
+  it("splits the embedded-agent parent directory across every isolated harness", () => {
+    const root = "src/agents/embedded-agent-runner";
+    const plans = buildVitestRunPlans([root]);
+
+    expect(plans).toEqual(
+      expect.arrayContaining([
+        {
+          config: "test/vitest/vitest.agents-embedded-agent.config.ts",
+          forwardedArgs: [],
+          includePatterns: [`${root}/*.test.ts`],
+          watchMode: false,
+        },
+        {
+          config: "test/vitest/vitest.agents-embedded-agent-incomplete-turn.config.ts",
+          forwardedArgs: [],
+          includePatterns: [`${root}/run.incomplete-turn.test.ts`],
+          watchMode: false,
+        },
+        {
+          config: "test/vitest/vitest.agents-embedded-agent-overflow-compaction.config.ts",
+          forwardedArgs: [],
+          includePatterns: [`${root}/run.overflow-compaction.test.ts`],
+          watchMode: false,
+        },
+        {
+          config: "test/vitest/vitest.agents-embedded-agent-run.config.ts",
+          forwardedArgs: [],
+          includePatterns: [`${root}/run/**/*.test.ts`],
+          watchMode: false,
+        },
+      ]),
+    );
+    expect(plans.map((plan) => plan.config)).not.toContain("test/vitest/vitest.agents.config.ts");
+  });
+
+  it("keeps the broad agent test glob in the all-agents shard", () => {
+    const target = "src/agents/**/*.test.ts";
+
+    expect(buildVitestRunPlans([target])).toEqual([
+      {
+        config: "test/vitest/vitest.agents.config.ts",
+        forwardedArgs: [],
+        includePatterns: [target],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it.each([
+    [
+      "src/agents/embedded-agent-runner/run/*.test.ts",
+      "test/vitest/vitest.agents-embedded-agent-run.config.ts",
+    ],
+    ["src/agents/runtime-plan/**/*.test.ts", "test/vitest/vitest.agents-support.config.ts"],
+    ["src/agents/tools/**/*.test.ts", "test/vitest/vitest.agents-tools.config.ts"],
+  ])("routes focused agent glob %s to its owning shard", (target, config) => {
+    const plans = buildVitestRunPlans([target]);
+
+    expect(plans).toEqual(
+      expect.arrayContaining([
+        {
+          config,
+          forwardedArgs: [],
+          includePatterns: [target],
+          watchMode: false,
+        },
+      ]),
+    );
+    expect(plans.map((plan) => plan.config)).not.toContain("test/vitest/vitest.agents.config.ts");
+  });
+
+  it("keeps mixed embedded-agent and cron-tool targets in their owning shards", () => {
+    const embeddedTest = "src/agents/embedded-agent-runner/run.before-agent-reply-cron.test.ts";
+    const cronToolTest = "src/agents/tools/cron-tool.pacing.test.ts";
+
+    expect(buildVitestRunPlans([embeddedTest, cronToolTest])).toEqual([
+      {
+        config: "test/vitest/vitest.agents-embedded-agent.config.ts",
+        forwardedArgs: [],
+        includePatterns: [embeddedTest],
+        watchMode: false,
+      },
+      {
+        config: "test/vitest/vitest.agents-tools.config.ts",
+        forwardedArgs: [],
+        includePatterns: [cronToolTest],
+        watchMode: false,
+      },
+    ]);
+  });
 
   it("routes Docker E2E script targets to their owner tooling tests", () => {
     const targets = [
@@ -2896,7 +3100,6 @@ describe("scripts/test-projects changed-target routing", () => {
       ["src/agents", "test/vitest/vitest.agents.config.ts"],
       ["src/auto-reply", "test/vitest/vitest.auto-reply.config.ts"],
       ["src/channels", "test/vitest/vitest.channels.config.ts"],
-      ["src/cli", "test/vitest/vitest.cli.config.ts"],
       ["src/config", "test/vitest/vitest.runtime-config.config.ts"],
       ["src/cron", "test/vitest/vitest.cron.config.ts"],
       ["src/daemon", "test/vitest/vitest.daemon.config.ts"],
@@ -2978,6 +3181,39 @@ describe("scripts/test-projects changed-target routing", () => {
         watchMode: false,
       },
     ]);
+  });
+
+  it("routes CLI process tests through their isolated project", () => {
+    expect(buildVitestRunPlans(["src/cli/help-exit.process.test.ts"])).toEqual([
+      {
+        config: "test/vitest/vitest.cli-process.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/cli/help-exit.process.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("adds the CLI process project for broad CLI targets", () => {
+    const plans = buildVitestRunPlans(["src/cli"]);
+
+    expect(plans.map((plan) => plan.config)).toEqual(
+      expect.arrayContaining([
+        "test/vitest/vitest.unit-fast.config.ts",
+        "test/vitest/vitest.cli-process.config.ts",
+        "test/vitest/vitest.cli.config.ts",
+      ]),
+    );
+    const processPlan = plans.find(
+      (plan) => plan.config === "test/vitest/vitest.cli-process.config.ts",
+    );
+    expect(processPlan?.includePatterns).toContain("src/cli/help-exit.process.test.ts");
+  });
+
+  it("rejects broad CLI watch targets that cross shared and process projects", () => {
+    expect(() => buildVitestRunPlans(["--watch", "src/cli"])).toThrow(
+      "watch mode with mixed test suites is not supported",
+    );
   });
 
   it("chunks broad shell helper globs after isolated targets", () => {
@@ -3088,12 +3324,21 @@ describe("scripts/test-projects changed-target routing", () => {
     expect(result.stderr).not.toContain("[test] starting");
   });
 
+  it("lets buffered failure diagnostics drain before the dispatcher exits", () => {
+    const source = fs.readFileSync("scripts/test-projects.mjs", "utf8");
+
+    expect(source).not.toContain("process.exit(");
+  });
+
   it("allows explicit split Vitest config targets without treating them as unmatched tests", () => {
     expect(
       findUnmatchedExplicitTestTargets(
         [
           "test/vitest/vitest.agents-core.config.ts",
           "test/vitest/vitest.agents-embedded-agent.config.ts",
+          "test/vitest/vitest.agents-embedded-agent-incomplete-turn.config.ts",
+          "test/vitest/vitest.agents-embedded-agent-overflow-compaction.config.ts",
+          "test/vitest/vitest.agents-embedded-agent-run.config.ts",
           "test/vitest/vitest.agents-support.config.ts",
           "test/vitest/vitest.agents-tools.config.ts",
         ],
@@ -3619,19 +3864,49 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
-  it("routes changed ui build helpers to their importing tests", () => {
+  it.each([
+    ["ui/config/control-ui-chunking.ts", "ui/src/app/control-ui-chunking.test.ts"],
+    ["ui/config/control-ui-locales.ts", "ui/src/app/vite-config.node.test.ts"],
+  ])("routes changed ui build helper %s to its owner test", (changedPath, testPath) => {
     const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
-      "ui/config/control-ui-chunking.ts",
+      changedPath,
     ]);
 
     expect(plans).toEqual([
       {
         config: "test/vitest/vitest.ui.config.ts",
         forwardedArgs: [],
-        includePatterns: ["ui/src/app/control-ui-chunking.test.ts"],
+        includePatterns: [testPath],
         watchMode: false,
       },
     ]);
+  });
+
+  it("routes isolated ui test targets to the isolated project", () => {
+    expect(buildVitestRunPlans(["ui/src/pages/workboard/view.test.ts"])).toEqual([
+      {
+        config: "test/vitest/vitest.ui-isolated.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["ui/src/pages/workboard/view.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("adds the isolated project for broad ui targets", () => {
+    const plans = buildVitestRunPlans(["ui/src"]);
+
+    expect(plans.map((plan) => plan.config)).toEqual([
+      "test/vitest/vitest.ui.config.ts",
+      "test/vitest/vitest.ui-isolated.config.ts",
+    ]);
+    expect(plans[1]?.includePatterns).toContain("ui/src/pages/workboard/view.test.ts");
+  });
+
+  it("rejects broad ui watch targets that cross shared and isolated projects", () => {
+    expect(() => buildVitestRunPlans(["--watch", "ui/src"])).toThrow(
+      "watch mode with mixed test suites is not supported",
+    );
   });
 
   it("keeps explicit non-renderer ui test targets scoped", () => {
@@ -4155,6 +4430,9 @@ describe("scripts/test-projects changed-target routing", () => {
   it.each([
     "test/vitest/vitest.agents-core.config.ts",
     "test/vitest/vitest.agents-embedded-agent.config.ts",
+    "test/vitest/vitest.agents-embedded-agent-incomplete-turn.config.ts",
+    "test/vitest/vitest.agents-embedded-agent-overflow-compaction.config.ts",
+    "test/vitest/vitest.agents-embedded-agent-run.config.ts",
     "test/vitest/vitest.agents-support.config.ts",
     "test/vitest/vitest.agents-tools.config.ts",
   ])("routes split agents vitest config %s to itself", (target) => {
@@ -4350,6 +4628,15 @@ describe("scripts/test-projects full-suite sharding", () => {
     ]);
   });
 
+  it.each([
+    "extensions/codex/src/app-server/run-attempt-client-prewarm.test.ts",
+    "extensions/codex/src/app-server/run-attempt-connection.test.ts",
+  ])("covers Codex attempt lifecycle test %s in full-suite routing", (file) => {
+    expect(fullSuiteMatches.get(file)).toEqual([
+      "test/vitest/vitest.extension-codex-app-server-attempt-light.config.ts",
+    ]);
+  });
+
   it("uses the global host worker budget for roomy local hosts", () => {
     expect(
       resolveParallelFullSuiteConcurrency(
@@ -4387,6 +4674,7 @@ describe("scripts/test-projects full-suite sharding", () => {
   it("keeps CI=1 full-suite runs on aggregate shard configs", () => {
     vi.stubEnv("CI", "1");
     vi.stubEnv("GITHUB_ACTIONS", "");
+    vi.stubEnv("OPENCLAW_TESTBOX_REMOTE_RUN", "");
     vi.stubEnv("OPENCLAW_TEST_PROJECTS_LEAF_SHARDS", "");
     vi.stubEnv("OPENCLAW_TEST_PROJECTS_PARALLEL", "");
     try {
@@ -4396,6 +4684,75 @@ describe("scripts/test-projects full-suite sharding", () => {
       expect(configs).toContain("test/vitest/vitest.full-extensions.config.ts");
       expect(configs).not.toContain("test/vitest/vitest.gateway-server.config.ts");
       expect(configs).not.toContain("test/vitest/vitest.extension-telegram.config.ts");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("gives only the aggregate extension shard an 8 GiB heap floor", () => {
+    const specs = applyFullExtensionsHeapBudget([
+      {
+        config: "test/vitest/vitest.full-extensions.config.ts",
+        env: { NODE_OPTIONS: "--trace-warnings --max-old-space-size=4096" },
+      },
+      {
+        config: "test/vitest/vitest.full-core-runtime.config.ts",
+        env: { NODE_OPTIONS: "--max-old-space-size=4096" },
+      },
+    ]);
+
+    expect(specs[0]?.env.NODE_OPTIONS).toBe("--trace-warnings --max-old-space-size=8192");
+    expect(specs[1]?.env.NODE_OPTIONS).toBe("--max-old-space-size=4096");
+  });
+
+  it("preserves a larger aggregate extension heap override", () => {
+    const specs = applyFullExtensionsHeapBudget([
+      {
+        config: "test/vitest/vitest.full-extensions.config.ts",
+        env: { NODE_OPTIONS: "--max_old_space_size 12288 --trace-warnings" },
+      },
+    ]);
+
+    expect(specs[0]?.env.NODE_OPTIONS).toBe("--max_old_space_size 12288 --trace-warnings");
+  });
+
+  it("preserves inherited Node options when the spec has no override", () => {
+    const specs = applyFullExtensionsHeapBudget(
+      [{ config: "test/vitest/vitest.full-extensions.config.ts", env: {} }],
+      {
+        env: {
+          NODE_OPTIONS: "--require ./test-hook.cjs --max-old-space-size=12288",
+        },
+      },
+    );
+
+    expect(specs[0]?.env.NODE_OPTIONS).toBe("--require ./test-hook.cjs --max-old-space-size=12288");
+  });
+
+  it("raises the effective last aggregate extension heap override", () => {
+    const specs = applyFullExtensionsHeapBudget([
+      {
+        config: "test/vitest/vitest.full-extensions.config.ts",
+        env: { NODE_OPTIONS: "--max-old-space-size=12288 --max_old_space_size=4096" },
+      },
+    ]);
+
+    expect(specs[0]?.env.NODE_OPTIONS).toBe("--max-old-space-size=12288 --max_old_space_size=8192");
+  });
+
+  it("splits the Testbox agentic and extension shards into bounded processes", () => {
+    vi.stubEnv("CI", "1");
+    vi.stubEnv("GITHUB_ACTIONS", "");
+    vi.stubEnv("OPENCLAW_TESTBOX_REMOTE_RUN", "1");
+    vi.stubEnv("OPENCLAW_TEST_PROJECTS_LEAF_SHARDS", "");
+    vi.stubEnv("OPENCLAW_TEST_PROJECTS_PARALLEL", "");
+    try {
+      const configs = buildFullSuiteVitestRunPlans([], process.cwd()).map((plan) => plan.config);
+
+      expect(configs).not.toContain("test/vitest/vitest.full-agentic.config.ts");
+      expect(configs).not.toContain("test/vitest/vitest.full-extensions.config.ts");
+      expect(configs).toContain("test/vitest/vitest.agents-core.config.ts");
+      expect(configs).toContain("test/vitest/vitest.extension-telegram.config.ts");
     } finally {
       vi.unstubAllEnvs();
     }
@@ -4736,12 +5093,16 @@ describe("scripts/test-projects full-suite sharding", () => {
       gatewayServerConfig,
       gatewayServerConfig,
       gatewayServerConfig,
+      "test/vitest/vitest.cli-process.config.ts",
       "test/vitest/vitest.cli.config.ts",
       "test/vitest/vitest.commands-light.config.ts",
       "test/vitest/vitest.commands.config.ts",
       "test/vitest/vitest.agents-core-isolated.config.ts",
       ...agentsCorePlans.map(() => agentsCoreConfig),
       "test/vitest/vitest.agents-embedded-agent.config.ts",
+      "test/vitest/vitest.agents-embedded-agent-incomplete-turn.config.ts",
+      "test/vitest/vitest.agents-embedded-agent-overflow-compaction.config.ts",
+      "test/vitest/vitest.agents-embedded-agent-run.config.ts",
       "test/vitest/vitest.agents-support.config.ts",
       "test/vitest/vitest.agents-tools.config.ts",
       "test/vitest/vitest.daemon.config.ts",
@@ -4861,6 +5222,9 @@ describe("scripts/test-projects full-suite sharding", () => {
     const args = [
       "test/vitest/vitest.agents-core.config.ts",
       "test/vitest/vitest.agents-embedded-agent.config.ts",
+      "test/vitest/vitest.agents-embedded-agent-incomplete-turn.config.ts",
+      "test/vitest/vitest.agents-embedded-agent-overflow-compaction.config.ts",
+      "test/vitest/vitest.agents-embedded-agent-run.config.ts",
       "test/vitest/vitest.agents-support.config.ts",
       "test/vitest/vitest.agents-tools.config.ts",
     ];

@@ -107,6 +107,10 @@ type IMessageSendResult = {
    * outbound key matches what the inbound tapback will surface.
    */
   guid?: string;
+  /** Transport confirmed by the bridge for the message that was sent. */
+  service?: Exclude<IMessageService, "auto">;
+  /** Conversation confirmed by the bridge for the message that was sent. */
+  chatGuid?: string;
   sentText: string;
   echoText?: string;
   echoMedia?: MediaPlaceholderTextFact;
@@ -450,7 +454,7 @@ function resolveOutboundEchoScope(params: {
   return `${params.accountId}:imessage:${params.target.to}`;
 }
 
-function resolveIMessageCliFailure(result: Record<string, unknown>): string | null {
+function resolveIMessageSendFailure(result: Record<string, unknown>): string | null {
   if (result.success !== false) {
     return null;
   }
@@ -482,9 +486,17 @@ function stringValue(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-function resultService(value: unknown): IMessageService | undefined {
+function resultService(value: unknown): Exclude<IMessageService, "auto"> | undefined {
   const normalized = stringValue(value)?.toLowerCase();
   return normalized === "imessage" || normalized === "sms" ? normalized : undefined;
+}
+
+function resultChatGuidService(value: unknown): Exclude<IMessageService, "auto"> | undefined {
+  const chatGuid = stringValue(value);
+  if (/^imessage;/iu.test(chatGuid ?? "")) {
+    return "imessage";
+  }
+  return /^sms;/iu.test(chatGuid ?? "") ? "sms" : undefined;
 }
 
 function resolvePendingPersistedEchoTtlMs(timeoutMs: number): number {
@@ -548,6 +560,7 @@ async function trySendAttachmentForTarget(params: {
   dbPath?: string;
   target: ReturnType<typeof parseIMessageTarget>;
   service?: IMessageService;
+  sendTransport: IMessageSendTransport;
   filePath: string;
   audioAsVoice?: boolean;
   replyToId?: string;
@@ -557,6 +570,11 @@ async function trySendAttachmentForTarget(params: {
   runCliJson: (args: readonly string[]) => Promise<Record<string, unknown>>;
   resolveMessageGuidImpl?: IMessageSendOpts["resolveMessageGuidImpl"];
 }): Promise<IMessageSendResult | null> {
+  if (params.audioAsVoice && params.sendTransport === "applescript") {
+    throw new Error(
+      "iMessage voice messages require bridge transport; AppleScript cannot send native voice notes. Set sendTransport to bridge or auto.",
+    );
+  }
   let attachmentChatTarget: string | null;
   try {
     attachmentChatTarget = await resolveAttachmentChatTarget({
@@ -565,12 +583,15 @@ async function trySendAttachmentForTarget(params: {
       runCliJson: params.runCliJson,
     });
   } catch (error) {
-    if (isAttachmentCommandFallbackError(error)) {
+    if (!params.audioAsVoice && isAttachmentCommandFallbackError(error)) {
       return null;
     }
     throw error;
   }
   if (!attachmentChatTarget) {
+    if (params.audioAsVoice) {
+      throw new Error("iMessage voice messages require an existing chat and bridge transport.");
+    }
     return null;
   }
 
@@ -599,20 +620,21 @@ async function trySendAttachmentForTarget(params: {
       ...(params.audioAsVoice ? ["--audio"] : []),
       ...(params.replyToId ? ["--reply-to", params.replyToId] : []),
       "--transport",
-      "auto",
+      // One-shot imsg names its private-API transport dylib; JSON-RPC calls it bridge.
+      params.sendTransport === "bridge" ? "dylib" : params.sendTransport,
     ]);
   } catch (error) {
     forgetPersistedIMessageEchoKey(pendingEchoKey);
-    if (isAttachmentCommandFallbackError(error)) {
+    if (!params.audioAsVoice && isAttachmentCommandFallbackError(error)) {
       return null;
     }
     throw error;
   }
-  const failure = resolveIMessageCliFailure(result);
+  const failure = resolveIMessageSendFailure(result);
   if (failure) {
     const error = new Error(failure);
     forgetPersistedIMessageEchoKey(pendingEchoKey);
-    if (isAttachmentCommandFallbackError(error)) {
+    if (!params.audioAsVoice && isAttachmentCommandFallbackError(error)) {
       return null;
     }
     throw error;
@@ -777,6 +799,7 @@ export async function sendMessageIMessage(
       dbPath: chatDbLookupPath,
       target,
       service,
+      sendTransport,
       filePath,
       audioAsVoice: opts.audioAsVoice,
       ...(resolvedReplyToId ? { replyToId: resolvedReplyToId } : {}),
@@ -856,6 +879,16 @@ export async function sendMessageIMessage(
     closedClient = true;
     await client.stop();
   };
+  const requestSuccessfulSend = async (sendParams: Record<string, unknown>) => {
+    const response = await client.request<Record<string, unknown>>("send", sendParams, {
+      timeoutMs,
+    });
+    const failure = resolveIMessageSendFailure(response);
+    if (failure) {
+      throw new Error(failure);
+    }
+    return response;
+  };
   let result: Record<string, unknown>;
   const sendStartedAtMs = Date.now();
   let pendingEchoKey: string | undefined;
@@ -870,9 +903,7 @@ export async function sendMessageIMessage(
           pending: true,
         });
       }
-      result = await client.request<Record<string, unknown>>("send", params, {
-        timeoutMs,
-      });
+      result = await requestSuccessfulSend(params);
     } catch (error) {
       if (resolvedReplyToId && isThreadedReplyUnsupportedError(error)) {
         // #99638: the transport cannot deliver a threaded reply, so resend the
@@ -881,9 +912,7 @@ export async function sendMessageIMessage(
         // reply_to stripped, keeping any file; a further failure propagates.
         const plainParams = { ...params };
         delete plainParams.reply_to;
-        result = await client.request<Record<string, unknown>>("send", plainParams, {
-          timeoutMs,
-        });
+        result = await requestSuccessfulSend(plainParams);
         effectiveReplyToId = undefined;
       } else if (filePath || !isIMessageRpcSendTimeout(error)) {
         throw error;
@@ -956,12 +985,13 @@ export async function sendMessageIMessage(
     // edit/unsend actions can verify the agent actually sent the message
     // before dispatching. Inbound recording (in monitor/inbound-processing)
     // sets isFromMe=false, so the cache distinguishes own-sent from received.
+    const providerChatGuid = stringValue(result.chat_guid) ?? stringValue(result.chatGuid);
+    const confirmedService =
+      resultService(result.service) ??
+      resultChatGuidService(providerChatGuid) ??
+      (service === "imessage" || service === "sms" ? service : undefined);
     if (resolvedId) {
-      const chatContext = chatContextFromIMessageTarget(
-        target,
-        resultService(result.service) ?? service,
-      );
-      const providerChatGuid = stringValue(result.chat_guid) ?? stringValue(result.chatGuid);
+      const chatContext = chatContextFromIMessageTarget(target, confirmedService ?? service);
       rememberIMessageReplyCache({
         accountId: account.accountId,
         messageId: resolvedId,
@@ -991,6 +1021,8 @@ export async function sendMessageIMessage(
     return {
       messageId,
       ...(approvalBindingMessageId ? { guid: approvalBindingMessageId } : {}),
+      ...(confirmedService ? { service: confirmedService } : {}),
+      ...(providerChatGuid ? { chatGuid: providerChatGuid } : {}),
       sentText: message,
       ...(echoText ? { echoText } : {}),
       ...(echoMedia ? { echoMedia } : {}),

@@ -20,3 +20,4 @@ export * from "./transports/provider-transport-stream.js";
 export * from "./transports/responses-image-payload-sanitizer.js";
 export * from "./transports/simple-completion-transport.js";
 export * from "./transports/transport-stream-shared.js";
+export { isCodeModeModelVisibleToolName } from "./transports/transport-utils.js";

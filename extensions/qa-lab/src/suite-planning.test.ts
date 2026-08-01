@@ -5,6 +5,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { defaultQaSuiteConcurrencyForTransport } from "./qa-transport-registry.js";
 import { readQaScenarioById } from "./scenario-catalog.js";
+import { requireFlowScenario } from "./scenario-catalog.test-utils.js";
 import {
   collectQaSuiteGatewayConfigPatch,
   collectQaSuiteGatewayRuntimeOptions,
@@ -543,6 +544,51 @@ describe("qa suite planning helpers", () => {
       ),
     ).toBe(true);
     expect(scenarioRequiresIsolatedQaSuiteWorker(makeQaSuiteTestScenario("plain"))).toBe(false);
+    expect(
+      scenarioRequiresIsolatedQaSuiteWorker(readQaScenarioById("matrix-dm-thread-reply-override")),
+    ).toBe(true);
+  });
+
+  it("isolates Matrix reaction flows that require a fresh native canary", () => {
+    const scenarioIds = [
+      "matrix-reaction-notification",
+      "matrix-reaction-threaded",
+      "matrix-reaction-not-a-reply",
+      "matrix-reaction-redaction-observed",
+    ];
+
+    for (const scenarioId of scenarioIds) {
+      const scenario = requireFlowScenario(readQaScenarioById(scenarioId));
+      expect(scenario.execution.suiteIsolation, scenarioId).toBe("isolated");
+      expect(scenario.execution.isolationReason, scenarioId).toContain("fresh canary reply");
+      expect(scenarioRequiresIsolatedQaSuiteWorker(scenario), scenarioId).toBe(true);
+    }
+  });
+
+  it("isolates only positive model-driven Matrix allowBots admission flows", () => {
+    const isolatedScenarioIds = [
+      "matrix-allowbots-mentions-mentioned-room",
+      "matrix-allowbots-room-override-enables-account-off",
+      "matrix-allowbots-true-unmentioned-open-room",
+    ];
+    const sharedScenarioIds = [
+      "matrix-allowbots-default-block",
+      "matrix-allowbots-self-sender-ignored",
+      "matrix-mention-metadata-spoof-block",
+    ];
+
+    for (const scenarioId of isolatedScenarioIds) {
+      expect(
+        scenarioRequiresIsolatedQaSuiteWorker(readQaScenarioById(scenarioId)),
+        scenarioId,
+      ).toBe(true);
+    }
+    for (const scenarioId of sharedScenarioIds) {
+      expect(
+        scenarioRequiresIsolatedQaSuiteWorker(readQaScenarioById(scenarioId)),
+        scenarioId,
+      ).toBe(false);
+    }
   });
 
   it("isolates and collects scenario-declared transport policy", () => {
@@ -873,14 +919,15 @@ describe("qa suite planning helpers", () => {
     ).toEqual(["live-selected"]);
   });
 
-  it("keeps implicit scenario membership identical across channel drivers", () => {
+  it("filters implicit scenarios that require another channel driver", () => {
     const scenarios = [
       makeQaSuiteTestScenario("generic"),
+      makeQaSuiteTestScenario("live-only", {
+        channel: "telegram",
+        config: { requiredChannelDriver: "live" },
+      }),
       makeQaSuiteTestScenario("telegram", {
         channel: "telegram",
-      }),
-      makeQaSuiteTestScenario("matrix", {
-        channel: "matrix",
       }),
     ];
 
@@ -894,7 +941,7 @@ describe("qa suite planning helpers", () => {
       }).map((scenario) => scenario.id);
 
     expect(selectForDriver("crabline")).toEqual(["generic", "telegram"]);
-    expect(selectForDriver("live")).toEqual(selectForDriver("crabline"));
+    expect(selectForDriver("live")).toEqual(["generic", "live-only", "telegram"]);
   });
 
   it("rejects explicitly requested scenarios that do not match the current lane", () => {

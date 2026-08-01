@@ -6,7 +6,7 @@ scenario:
   category: channels.channel-actions-commands-and-approvals
   coverage:
     primary:
-      - channels.channel-native-commands
+      - telegram.built-in-commands
   objective: Verify Telegram context help reaches native command routing.
   successCriteria:
     - The context command returns the context list shortcut.
@@ -15,13 +15,6 @@ scenario:
     - src/auto-reply/reply/commands-context.ts
     - extensions/qa-lab/src/live-transports/telegram/adapter.runtime.ts
   execution:
-    profiles:
-      {
-        "telegram:adapter": 9,
-        "telegram:all": 8,
-        "telegram:mock-release": 8,
-        "telegram:release": 8,
-      }
     kind: flow
     channel: telegram
     summary: Run Telegram context help and verify the list shortcut.
@@ -40,8 +33,8 @@ flow:
             conversation: { id: telegram-command-room, kind: channel }
             senderId: qa-command-operator
             senderName: QA Command Operator
-            text:
-              expr: "transport.id === 'telegram' ? '/context@openclaw' : '/context'"
+            text: /context
+            nativeCommand: { name: context }
         - waitForOutbound:
             conversation: { id: telegram-command-room, kind: channel }
             sinceIndex: { ref: startIndex }

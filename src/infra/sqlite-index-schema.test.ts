@@ -1,6 +1,9 @@
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
-import { repairCanonicalSqliteIndexes } from "./sqlite-index-schema.js";
+import {
+  repairCanonicalSqliteIndexes,
+  verifyAndRepairCanonicalSqliteIndexes,
+} from "./sqlite-index-schema.js";
 
 const CANONICAL_SCHEMA = `
   CREATE TABLE records (
@@ -25,13 +28,50 @@ function createDatabase(): DatabaseSync {
   return db;
 }
 
+function tracePreparedSql(database: DatabaseSync): {
+  database: DatabaseSync;
+  statements: string[];
+} {
+  const statements: string[] = [];
+  return {
+    database: new Proxy(database, {
+      get(target, property) {
+        if (property === "prepare") {
+          return (sql: string) => {
+            statements.push(sql);
+            return target.prepare(sql);
+          };
+        }
+        const value = Reflect.get(target, property, target) as unknown;
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as DatabaseSync,
+    statements,
+  };
+}
+
 describe("repairCanonicalSqliteIndexes", () => {
+  it("runs one whole-file integrity check for healthy indexes", () => {
+    const db = createDatabase();
+    try {
+      const traced = tracePreparedSql(db);
+
+      verifyAndRepairCanonicalSqliteIndexes(traced.database, "test database", CANONICAL_SCHEMA);
+
+      expect(traced.statements.filter((sql) => sql.startsWith("PRAGMA integrity_check"))).toEqual([
+        "PRAGMA integrity_check;",
+      ]);
+    } finally {
+      db.close();
+    }
+  });
+
   it("does not rewrite an already canonical index", () => {
     const db = createDatabase();
     try {
       const before = db.prepare("PRAGMA schema_version").get();
 
-      repairCanonicalSqliteIndexes(db, "test database", CANONICAL_SCHEMA);
+      verifyAndRepairCanonicalSqliteIndexes(db, "test database", CANONICAL_SCHEMA);
 
       expect(db.prepare("PRAGMA schema_version").get()).toEqual(before);
     } finally {
@@ -159,7 +199,7 @@ describe("repairCanonicalSqliteIndexes", () => {
           .all(),
       ).toEqual([]);
 
-      repairCanonicalSqliteIndexes(db, "test database", CANONICAL_SCHEMA);
+      verifyAndRepairCanonicalSqliteIndexes(db, "test database", CANONICAL_SCHEMA);
 
       expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
       expect(

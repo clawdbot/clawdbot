@@ -16,6 +16,7 @@ import {
   deliveryContextFromSession,
   sessionDeliveryChannel,
 } from "../utils/delivery-context.shared.js";
+import { runDoctorAgentDatabaseOperation } from "./doctor-agent-database-operation.js";
 import { resolveTargetSqlitePath } from "./doctor-session-sqlite-readers.js";
 
 export type SessionDeliveryStateRepairReport = {
@@ -42,15 +43,21 @@ export function repairCanonicalSessionDeliveryStates(params: {
   let found = 0;
   let repaired = 0;
   for (const target of targets) {
-    const inspected = withOpenClawAgentDatabaseReadOnly(
-      (database) => collectDeliveryRewrites(database.db),
-      { agentId: target.agentId, env: params.env, path: target.sqlitePath },
-    );
-    if (!inspected.found) {
+    const operation = runDoctorAgentDatabaseOperation({
+      agentId: target.agentId,
+      path: target.sqlitePath,
+      run: () =>
+        withOpenClawAgentDatabaseReadOnly((database) => collectDeliveryRewrites(database.db), {
+          agentId: target.agentId,
+          env: params.env,
+          path: target.sqlitePath,
+        }),
+    });
+    if (!operation.ok || !operation.value.found) {
       continue;
     }
-    found += inspected.value.length;
-    if (!params.apply || inspected.value.length === 0) {
+    found += operation.value.value.length;
+    if (!params.apply || operation.value.value.length === 0) {
       continue;
     }
     const wasOpen = isOpenClawAgentDatabaseOpen(target.sqlitePath);

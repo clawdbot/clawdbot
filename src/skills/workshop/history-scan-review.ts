@@ -1,8 +1,6 @@
 import { randomUUID } from "node:crypto";
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { resolveDefaultModelForAgent } from "../../agents/model-selection-config.js";
+import { SessionManager } from "../../agents/sessions/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { CommandLane } from "../../process/lanes.js";
 import {
@@ -58,18 +56,17 @@ export async function runSkillHistoryScanReview(params: {
         recordProgress: params.onProgress,
       }
     : undefined;
-  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-history-scan-"));
   const runId = params.runId ?? `${HISTORY_SCAN_SESSION_SEGMENT}:${randomUUID()}`;
   let runError: unknown;
   try {
     const sessionId = randomUUID();
-    const sessionKey = `agent:${params.agentId}:${HISTORY_SCAN_SESSION_SEGMENT}:${sessionId}`;
+    const sessionKey = `agent:${params.agentId}:${HISTORY_SCAN_SESSION_SEGMENT}:incognito-${sessionId}`;
     const { runEmbeddedAgent } = await import("../../agents/embedded-agent.js");
     const result = await runEmbeddedAgent({
       sessionId,
       sessionKey,
       sandboxSessionKey: sessionKey,
-      sessionFile: path.join(tempDir, "session.jsonl"),
+      sessionManager: SessionManager.inMemory(params.workspaceDir),
       agentId: params.agentId,
       trigger: "manual",
       lane: CommandLane.SkillWorkshopReview,
@@ -105,8 +102,6 @@ export async function runSkillHistoryScanReview(params: {
     runError = resolveSkillHistoryScanRunFailure(result);
   } catch (error) {
     runError = error;
-  } finally {
-    await fs.rm(tempDir, { recursive: true, force: true });
   }
   if (proposalReviewCompletion?.completed) {
     return proposalMutationBudget.completed;

@@ -1697,6 +1697,13 @@ describe("memory recall doctor integration", () => {
         config.agents?.list?.map((agent) => agent.id) ?? ["agent-default"],
     );
     resetMemoryRecallMocks();
+    resolveActiveMemoryBackendConfig.mockReturnValue({ backend: "builtin" });
+    getActiveMemorySearchManager.mockResolvedValue({
+      manager: {
+        status: () => ({ workspaceDir: "/tmp/agent-default/workspace", backend: "builtin" }),
+        close: vi.fn(async () => {}),
+      },
+    });
   });
 
   function createPrompter(overrides: Partial<DoctorPrompter> = {}): DoctorPrompter {
@@ -1751,11 +1758,12 @@ describe("memory recall doctor integration", () => {
       workspaceDir: "/tmp/agent-default/workspace",
       qmd: undefined,
     });
-    expect(note).toHaveBeenCalledTimes(1);
+    expect(note).toHaveBeenCalledTimes(2);
     const message = firstNoteMessage();
     expect(message).toContain("Memory recall artifacts need attention:");
     expect(message).toContain("doctor --fix");
     expect(message).toContain("memory status --fix");
+    expect(String(note.mock.calls[1]?.[0] ?? "")).toContain("Dreaming: enabled");
   });
 
   it("runs memory recall repair during doctor --fix", async () => {

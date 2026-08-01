@@ -4,7 +4,6 @@ import {
   DEFAULT_ACCOUNT_ID,
   hasConfiguredAccountValue,
   normalizeAccountId,
-  resolveMergedAccountConfig,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/account-resolution";
 import {
@@ -58,7 +57,12 @@ export function resolveSlackOperationToken(
   return account.config.userTokenReadOnly === false ? (botToken ?? userToken) : botToken;
 }
 
-const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("slack", {
+const {
+  listAccountIds,
+  resolveDefaultAccountId,
+  resolveAccountConfig: resolveMergedSlackAccountConfig,
+} = createAccountListHelpers<SlackAccountConfig>("slack", {
+  nestedObjectKeys: ["botLoopProtection", "relay"],
   hasImplicitDefaultAccount: (cfg) => {
     const slack = cfg.channels?.slack;
     if (slack?.postAs === "user") {
@@ -178,12 +182,7 @@ export function mergeSlackAccountConfig(
   accountId: string,
 ): SlackAccountConfig {
   const accountConfig = resolveSlackAccountConfig(cfg, accountId);
-  const merged = resolveMergedAccountConfig<SlackAccountConfig>({
-    channelConfig: cfg.channels?.slack as SlackAccountConfig,
-    accounts: cfg.channels?.slack?.accounts as Record<string, Partial<SlackAccountConfig>>,
-    accountId,
-    nestedObjectKeys: ["botLoopProtection", "relay"],
-  });
+  const merged = resolveMergedSlackAccountConfig(cfg, accountId);
   const streaming = mergeSlackStreamingConfig(
     (cfg.channels?.slack as Record<string, unknown> | undefined)?.streaming,
     (accountConfig as Record<string, unknown> | undefined)?.streaming,

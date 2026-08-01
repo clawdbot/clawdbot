@@ -276,7 +276,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
     name: "codex_threads",
     label: "Codex Threads",
     description:
-      "List and inspect native Codex threads. When supervision is enabled, raw transcript reads and every mutation require their matching supervision policy option.",
+      "Manage native Codex threads: list, read, fork, rename, archive (confirm:true), unarchive. When supervision is enabled, raw transcript reads and every mutation require their matching supervision policy option.",
     parameters: CodexThreadsParamsSchema,
     async execute(_toolCallId, rawParams) {
       const params = asRecord(rawParams);

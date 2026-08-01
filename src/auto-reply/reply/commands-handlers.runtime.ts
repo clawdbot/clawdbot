@@ -22,6 +22,7 @@ import {
 } from "./commands-info.js";
 import { handleLearnCommand } from "./commands-learn.js";
 import { handleLoginCommand } from "./commands-login.js";
+import { handleLoopCommand } from "./commands-loop.js";
 import { handleMcpCommand } from "./commands-mcp.js";
 import { handleModelsCommand } from "./commands-models.js";
 import { handleNameCommand } from "./commands-name.js";
@@ -66,6 +67,7 @@ const commandHandlersById = {
   goal: handleGoalCommand,
   help: handleHelpCommand,
   learn: handleLearnCommand,
+  loop: handleLoopCommand,
   login: handleLoginCommand,
   mcp: handleMcpCommand,
   models: handleModelsCommand,

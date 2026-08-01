@@ -270,6 +270,7 @@ type RunAgentHarnessGatewayQuestionParams = {
   questions: readonly AgentHarnessUserInputQuestion[];
   sessionKey: string;
   agentId?: string;
+  runId?: string;
   timeoutMs: number;
   gatewayCall: AgentHarnessQuestionGatewayCall;
   delivery: Pick<EmbeddedRunAttemptParams, "onBlockReply" | "onPartialReply">;
@@ -306,6 +307,7 @@ export async function runAgentHarnessGatewayQuestion(
           questions,
           sessionKey: params.sessionKey,
           ...(params.agentId ? { agentId: params.agentId } : {}),
+          ...(params.runId ? { runId: params.runId } : {}),
           timeoutMs: params.timeoutMs,
         },
         params.signal ? { signal: params.signal } : undefined,

@@ -83,6 +83,18 @@ describe("CodexAppServerEventProjector usage projection", () => {
     });
   });
 
+  it("counts unique upstream responses as model iterations", async () => {
+    const projector = await createProjector();
+
+    for (const responseId of ["response-1", "response-1", "response-2"]) {
+      await projector.handleNotification(
+        forCurrentTurn("rawResponse/completed", { responseId, usage: null }),
+      );
+    }
+
+    expect(projector.buildResult(buildEmptyToolTelemetry()).modelIterations).toBe(2);
+  });
+
   it("keeps cumulative-only thread usage unknown", async () => {
     const projector = await createProjector();
 

@@ -2,13 +2,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import {
-  definePluginEntry,
-  type ProviderAuthContext,
-  type ProviderAuthMethod,
-  type ProviderAuthMethodNonInteractiveContext,
-  type ProviderResolveDynamicModelContext,
-  type ProviderWrapStreamFnContext,
+import type {
+  ProviderAuthContext,
+  ProviderAuthMethod,
+  ProviderAuthMethodNonInteractiveContext,
+  ProviderResolveDynamicModelContext,
+  ProviderWrapStreamFnContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import {
   applyAuthProfileConfig,
@@ -20,8 +19,7 @@ import {
   upsertAuthProfileWithLock,
   validateApiKeyInput,
 } from "openclaw/plugin-sdk/provider-auth-api-key";
-import { buildOpenAICompatibleProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
-import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
+import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import {
   buildProviderReplayFamilyHooks,
   resolveFamilyForwardCompatModel,
@@ -44,13 +42,6 @@ const PROVIDER_ID = "zai";
 const GLM5_TEMPLATE_MODEL_ID = "glm-4.7";
 const PROFILE_ID = "zai:default";
 type UpsertAuthProfileParams = Parameters<typeof upsertAuthProfileWithLock>[0];
-
-function buildZaiCatalogProvider() {
-  return buildManifestModelProviderConfig({
-    providerId: PROVIDER_ID,
-    catalog: manifest.modelCatalog.providers.zai,
-  });
-}
 
 function resolveDeprecatedPiAgentAuthPath(env: NodeJS.ProcessEnv): string {
   const home = env.HOME?.trim() || env.USERPROFILE?.trim() || os.homedir();
@@ -340,101 +331,89 @@ function buildZaiApiKeyMethod(params: {
   };
 }
 
-export default definePluginEntry({
+export default defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
   name: "Z.AI Provider",
   description: "Bundled Z.AI provider plugin",
-  register(api) {
-    api.registerProvider({
-      id: PROVIDER_ID,
-      label: "Z.AI",
-      aliases: ["z-ai", "z.ai"],
-      docsPath: "/providers/models",
-      envVars: ["ZAI_API_KEY", "Z_AI_API_KEY"],
-      auth: [
-        buildZaiApiKeyMethod({
-          id: "api-key",
-          choiceId: "zai-api-key",
-          choiceLabel: "Z.AI API key",
-        }),
-        buildZaiApiKeyMethod({
-          id: "coding-global",
-          choiceId: "zai-coding-global",
-          choiceLabel: "Coding-Plan-Global",
-          choiceHint: "GLM Coding Plan Global (api.z.ai)",
-          endpoint: "coding-global",
-        }),
-        buildZaiApiKeyMethod({
-          id: "coding-cn",
-          choiceId: "zai-coding-cn",
-          choiceLabel: "Coding-Plan-CN",
-          choiceHint: "GLM Coding Plan CN (open.bigmodel.cn)",
-          endpoint: "coding-cn",
-        }),
-        buildZaiApiKeyMethod({
-          id: "global",
-          choiceId: "zai-global",
-          choiceLabel: "Global",
-          choiceHint: "Z.AI Global (api.z.ai)",
-          endpoint: "global",
-        }),
-        buildZaiApiKeyMethod({
-          id: "cn",
-          choiceId: "zai-cn",
-          choiceLabel: "CN",
-          choiceHint: "Z.AI CN (open.bigmodel.cn)",
-          endpoint: "cn",
-        }),
-      ],
-      catalog: {
-        order: "simple",
-        run: (ctx) =>
-          buildOpenAICompatibleProviderCatalog({
-            ctx,
-            providerId: PROVIDER_ID,
-            buildProvider: buildZaiCatalogProvider,
-            allowExplicitBaseUrl: true,
-          }),
-      },
-      staticCatalog: {
-        order: "simple",
-        run: async () => ({ provider: buildZaiCatalogProvider() }),
-      },
-      resolveDynamicModel: (ctx) => resolveGlm5ForwardCompatModel(ctx),
-      matchesContextOverflowError: ({ errorMessage }) =>
-        /\b(?:tokens? in request more than max tokens? allowed|prompt exceeds max(?:imum)? length)\b/i.test(
-          errorMessage,
-        ),
-      ...buildProviderReplayFamilyHooks({
-        family: "openai-compatible",
-        dropReasoningFromHistory: false,
+  manifest,
+  provider: {
+    label: "Z.AI",
+    aliases: ["z-ai", "z.ai"],
+    docsPath: "/providers/models",
+    envVars: ["ZAI_API_KEY", "Z_AI_API_KEY"],
+    auth: [],
+    extraAuth: [
+      buildZaiApiKeyMethod({
+        id: "api-key",
+        choiceId: "zai-api-key",
+        choiceLabel: "Z.AI API key",
       }),
-      prepareExtraParams: (ctx) => defaultToolStreamExtraParams(ctx.extraParams),
-      wrapStreamFn: (ctx) => wrapZaiStreamFn(ctx),
-      resolveThinkingProfile,
-      isModernModelRef: ({ modelId }) => {
-        const lower = normalizeLowercaseStringOrEmpty(modelId);
-        return (
-          lower.startsWith("glm-5") ||
-          lower.startsWith("glm-4.7") ||
-          lower.startsWith("glm-4.7-flash") ||
-          lower.startsWith("glm-4.7-flashx")
-        );
-      },
-      resolveUsageAuth: async (ctx) => {
-        const apiKey = ctx.resolveApiKeyFromConfigAndStore({
-          providerIds: [PROVIDER_ID, "z-ai"],
-          envDirect: [ctx.env.ZAI_API_KEY, ctx.env.Z_AI_API_KEY],
-        });
-        if (apiKey) {
-          return { token: apiKey };
-        }
-        const legacyToken = resolveDeprecatedPiAgentAccessToken(ctx.env, ["z-ai", PROVIDER_ID]);
-        return legacyToken ? { token: legacyToken } : null;
-      },
-      fetchUsageSnapshot: async (ctx) => await fetchZaiUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn),
-      isCacheTtlEligible: () => true,
-    });
+      buildZaiApiKeyMethod({
+        id: "coding-global",
+        choiceId: "zai-coding-global",
+        choiceLabel: "Coding-Plan-Global",
+        choiceHint: "GLM Coding Plan Global (api.z.ai)",
+        endpoint: "coding-global",
+      }),
+      buildZaiApiKeyMethod({
+        id: "coding-cn",
+        choiceId: "zai-coding-cn",
+        choiceLabel: "Coding-Plan-CN",
+        choiceHint: "GLM Coding Plan CN (open.bigmodel.cn)",
+        endpoint: "coding-cn",
+      }),
+      buildZaiApiKeyMethod({
+        id: "global",
+        choiceId: "zai-global",
+        choiceLabel: "Global",
+        choiceHint: "Z.AI Global (api.z.ai)",
+        endpoint: "global",
+      }),
+      buildZaiApiKeyMethod({
+        id: "cn",
+        choiceId: "zai-cn",
+        choiceLabel: "CN",
+        choiceHint: "Z.AI CN (open.bigmodel.cn)",
+        endpoint: "cn",
+      }),
+    ],
+    catalog: { allowExplicitBaseUrl: true, liveModelDiscovery: true },
+    resolveDynamicModel: (ctx) => resolveGlm5ForwardCompatModel(ctx),
+    matchesContextOverflowError: ({ errorMessage }) =>
+      /\b(?:tokens? in request more than max tokens? allowed|prompt exceeds max(?:imum)? length)\b/i.test(
+        errorMessage,
+      ),
+    ...buildProviderReplayFamilyHooks({
+      family: "openai-compatible",
+      dropReasoningFromHistory: false,
+    }),
+    prepareExtraParams: (ctx) => defaultToolStreamExtraParams(ctx.extraParams),
+    wrapStreamFn: (ctx) => wrapZaiStreamFn(ctx),
+    resolveThinkingProfile,
+    isModernModelRef: ({ modelId }) => {
+      const lower = normalizeLowercaseStringOrEmpty(modelId);
+      return (
+        lower.startsWith("glm-5") ||
+        lower.startsWith("glm-4.7") ||
+        lower.startsWith("glm-4.7-flash") ||
+        lower.startsWith("glm-4.7-flashx")
+      );
+    },
+    resolveUsageAuth: async (ctx) => {
+      const apiKey = ctx.resolveApiKeyFromConfigAndStore({
+        providerIds: [PROVIDER_ID, "z-ai"],
+        envDirect: [ctx.env.ZAI_API_KEY, ctx.env.Z_AI_API_KEY],
+      });
+      if (apiKey) {
+        return { token: apiKey };
+      }
+      const legacyToken = resolveDeprecatedPiAgentAccessToken(ctx.env, ["z-ai", PROVIDER_ID]);
+      return legacyToken ? { token: legacyToken } : null;
+    },
+    fetchUsageSnapshot: async (ctx) => await fetchZaiUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn),
+    isCacheTtlEligible: () => true,
+  },
+  register(api) {
     api.registerMediaUnderstandingProvider(zaiMediaUnderstandingProvider);
   },
 });

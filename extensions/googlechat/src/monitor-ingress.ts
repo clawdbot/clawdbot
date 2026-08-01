@@ -1,10 +1,12 @@
 // Googlechat plugin module owns raw webhook durable admission and draining.
 import {
+  createChannelIngressError,
   createChannelIngressMonitor,
   type ChannelIngressQueue,
   type ChannelIngressMonitorDeliveryResult,
   type ChannelIngressMonitorLifecycle,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import { collectErrorGraphCandidates, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { GoogleChatEventPayloadError, parseGoogleChatInboundPayload } from "./monitor-event.js";
 import { getGoogleChatRuntime } from "./runtime.js";
@@ -12,14 +14,7 @@ import type { GoogleChatEvent } from "./types.js";
 
 const GOOGLECHAT_INGRESS_PAYLOAD_VERSION = 1;
 const GOOGLECHAT_INGRESS_POLL_INTERVAL_MS = 500;
-const GOOGLECHAT_INGRESS_PRUNE_INTERVAL_MS = 60 * 60 * 1_000;
 const GOOGLECHAT_INGRESS_MAX_CONCURRENT_DELIVERIES = 8;
-const GOOGLECHAT_INGRESS_COMPLETED_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
-// The webhook retry horizon must fit beneath this cap; match Slack/Mattermost fleet sizing.
-// The 30-day TTL is the real horizon, while the cap only bounds disk usage.
-const GOOGLECHAT_INGRESS_COMPLETED_MAX_ENTRIES = 20_000;
-const GOOGLECHAT_INGRESS_FAILED_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
-const GOOGLECHAT_INGRESS_FAILED_MAX_ENTRIES = 20_000;
 
 type GoogleChatIngressPayload = {
   version: 1;
@@ -38,20 +33,9 @@ type GoogleChatIngressDispatch = (
   lifecycle: GoogleChatIngressLifecycle,
 ) => Promise<GoogleChatIngressDispatchResult | void> | GoogleChatIngressDispatchResult | void;
 
-class GoogleChatIngressPermanentError extends Error {
-  constructor(
-    readonly reason: "invalid-event" | "googlechat-auth",
-    message: string,
-    options?: ErrorOptions,
-  ) {
-    super(message, options);
-    this.name = "GoogleChatIngressPermanentError";
-  }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+const GoogleChatIngressPermanentError = createChannelIngressError<
+  "invalid-event" | "googlechat-auth"
+>("GoogleChatIngressPermanentError", { withReason: true });
 
 function requiredString(value: unknown, field: string): string {
   if (typeof value === "string" && value.trim()) {
@@ -211,13 +195,8 @@ export function createGoogleChatIngressMonitor(options: {
     deliver: (rawEvent, lifecycle, claim) =>
       options.dispatch(normalizeClaimedGoogleChatEvent(rawEvent, claim.id), lifecycle),
     pollIntervalMs: options.pollIntervalMs ?? GOOGLECHAT_INGRESS_POLL_INTERVAL_MS,
-    retention: {
-      pruneIntervalMs: GOOGLECHAT_INGRESS_PRUNE_INTERVAL_MS,
-      completedTtlMs: GOOGLECHAT_INGRESS_COMPLETED_TTL_MS,
-      completedMaxEntries: GOOGLECHAT_INGRESS_COMPLETED_MAX_ENTRIES,
-      failedTtlMs: GOOGLECHAT_INGRESS_FAILED_TTL_MS,
-      failedMaxEntries: GOOGLECHAT_INGRESS_FAILED_MAX_ENTRIES,
-    },
+    // The webhook retry horizon must fit beneath the standard 30-day / 20k cap.
+    retention: "standard",
     drain: {
       resolveNonRetryableFailure: resolveGoogleChatIngressNonRetryableFailure,
       startLimit: GOOGLECHAT_INGRESS_MAX_CONCURRENT_DELIVERIES,

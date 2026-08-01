@@ -124,7 +124,6 @@ const PLUGIN_ART_SLUGS: ReadonlySet<string> = new Set([
   "pdf-tools",
   "perplexity",
   "philips-hue",
-  "phone-control",
   "pixverse",
   "policy",
   "portfolio-pulse",

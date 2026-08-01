@@ -10,6 +10,22 @@ import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { recordGatewayRestartTraceDetail, recordGatewayRestartTraceSpan } from "./restart-trace.js";
 
 type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
+type Awaitable<T> = T | Promise<T>;
+
+export type GatewayStartupTrace = {
+  detail: (name: string, metrics: ReadonlyArray<readonly [string, number | string]>) => void;
+  mark: (name: string) => void;
+  measure: <T>(name: string, run: () => Awaitable<T>) => Promise<T>;
+};
+
+/** Measure a startup step when tracing is active, otherwise run it directly. */
+export async function measureStartup<T>(
+  startupTrace: GatewayStartupTrace | undefined,
+  name: string,
+  run: () => Awaitable<T>,
+): Promise<T> {
+  return startupTrace ? startupTrace.measure(name, run) : await run();
+}
 
 export function createGatewayStartupTrace(log: GatewayLogger) {
   const logEnabled = isTruthyEnvValue(process.env.OPENCLAW_GATEWAY_STARTUP_TRACE);

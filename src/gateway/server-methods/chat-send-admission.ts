@@ -48,6 +48,7 @@ export async function admitChatSend(params: {
   respond: GatewayRequestHandlerOptions["respond"];
   context: GatewayRequestHandlerOptions["context"];
   client: GatewayRequestHandlerOptions["client"];
+  onAdmissionOwned?: () => Promise<boolean>;
 }) {
   const { request, session, respond, context, client } = params;
   const { p, explicitOrigin, normalizedAttachments, turnKind } = request;
@@ -379,6 +380,21 @@ export async function admitChatSend(params: {
     });
     return { ok: false as const };
   }
+  if (params.onAdmissionOwned) {
+    let proceed: boolean;
+    try {
+      proceed = await params.onAdmissionOwned();
+    } catch (error) {
+      activeRunAbort.cleanup({ force: true });
+      gatewayWorkAdmission.release();
+      throw error;
+    }
+    if (!proceed) {
+      activeRunAbort.cleanup({ force: true });
+      gatewayWorkAdmission.release();
+      return { ok: false as const };
+    }
+  }
 
   let releaseGatewayRootContinuation: (() => void) | undefined;
   const cleanupAdmittedRun: typeof activeRunAbort.cleanup = (options) => {
@@ -396,7 +412,7 @@ export async function admitChatSend(params: {
       key: `chat:${clientRunId}`,
       entry: { ts: endedAt, ok: true, payload },
     });
-    cleanupAdmittedRun({ force: true });
+    cleanupAdmittedRun();
     clearAgentRunContext(clientRunId, lifecycleGeneration);
     respond(true, payload, undefined, { runId: clientRunId });
   };

@@ -22,6 +22,7 @@ type PromptExecutionAttempt = Pick<
   | "model"
   | "sessionFile"
   | "sessionKey"
+  | "sessionTarget"
   | "userTurnTranscriptRecorder"
 >;
 type PromptImageResult = Awaited<ReturnType<typeof detectAndLoadPromptImages>>;
@@ -54,12 +55,11 @@ export async function prepareEmbeddedAttemptPromptExecution(input: {
   const { attempt } = input;
   installPromptSubmissionLockRelease({
     session: input.session,
-    waitForSessionEvents: (sessionToDrain) =>
-      input.sessionLockController.waitForSessionEvents(sessionToDrain),
     releaseForPrompt: () => input.sessionLockController.releaseForPrompt(),
     reacquireAfterPrompt: () => input.sessionLockController.reacquireAfterPrompt(),
     sessionKey: attempt.sessionKey,
     sessionFile: attempt.sessionFile,
+    sessionTarget: attempt.sessionTarget,
     withSessionWriteLock: (run, options) =>
       input.sessionLockController.withSessionWriteLock(run, options),
     canAdvanceSessionEntryCache: (snapshot: OwnedSessionTranscriptCacheSnapshot) =>

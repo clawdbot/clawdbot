@@ -1,6 +1,4 @@
 // Imessage provider module implements model/runtime integration.
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { resolveAgentConfig, resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-runtime";
@@ -50,9 +48,14 @@ import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { resolveIMessageAccount } from "../accounts.js";
+import { iMessageApprovalControlBindings } from "../approval-control-binding-window.js";
+import { maybeResolveIMessageApprovalPollVote } from "../approval-polls.js";
 import { pollPendingIMessageApprovalReactions } from "../approval-reaction-poller.js";
 import { maybeResolveIMessageApprovalReaction } from "../approval-reactions.js";
+import type { IMessageApprovalGatewayRuntime } from "../approval-resolver.js";
+import { buildIMessageApprovalConversationKeyForInbound } from "../approval-target-keys.js";
 import { markIMessageChatRead, sendIMessageTyping } from "../chat.js";
+import { resolveIMessageHomeDir } from "../cli-path.js";
 import { createIMessageRpcClient, type IMessageRpcClient } from "../client.js";
 import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "../constants.js";
 import {
@@ -108,6 +111,7 @@ import {
   loadIMessageRecoveryCursor,
   resolveIMessageRecoveryCursorDbIdentity,
 } from "./recovery-cursor.js";
+import { detectRemoteHostFromCliPath } from "./remote-host.js";
 import { normalizeAllowList, resolveRuntime } from "./runtime.js";
 import { createSelfChatCache } from "./self-chat-cache.js";
 import type { IMessageAttachment, IMessagePayload, MonitorIMessageOpts } from "./types.js";
@@ -115,6 +119,8 @@ import { sanitizeIMessageWatchErrorPayload } from "./watch-error-log.js";
 
 const WATCH_SUBSCRIBE_MAX_ATTEMPTS = 3;
 const WATCH_SUBSCRIBE_RETRY_DELAY_MS = 1_000;
+// Host-private context installed through the generic channel runtime registry.
+const CHANNEL_APPROVAL_GATEWAY_RUNTIME_CONTEXT_CAPABILITY = "approval.gateway";
 const APPROVAL_REACTION_POLL_INTERVAL_MS = 2_000;
 const APPROVAL_REACTION_DISCOVERY_INTERVAL_MS = 60_000;
 const IMESSAGE_TYPING_KEEPALIVE_INTERVAL_MS = 8_000;
@@ -190,48 +196,11 @@ function formatIMessageInboundMediaBody(params: {
   });
 }
 
-async function detectRemoteHostFromCliPath(cliPath: string): Promise<string | undefined> {
-  try {
-    const expanded = cliPath.startsWith("~")
-      ? cliPath.replace(/^~/, process.env.HOME ?? "")
-      : cliPath;
-    const content = await fs.readFile(expanded, "utf8");
-
-    const userHostMatch = content.match(/\bssh\b[^\n]*?\s+([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+)/);
-    if (userHostMatch) {
-      return userHostMatch[1];
-    }
-
-    const hostOnlyMatch = content.match(/\bssh\b[^\n]*?\s+([a-zA-Z][a-zA-Z0-9._-]*)\s+\S*\bimsg\b/);
-    return hostOnlyMatch?.[1];
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException)?.code;
-    if (code !== "ENOENT" && code !== "ENOTDIR") {
-      logVerbose(
-        `imessage: failed to inspect cliPath ${cliPath} for remoteHost detection: ${String(err)}`,
-      );
-    }
-    return undefined;
-  }
-}
-
-function resolveLocalMessagesHomeDir(): string | undefined {
-  const home = process.env.HOME?.trim();
-  if (home) {
-    return home;
-  }
-  try {
-    return os.homedir().trim() || undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 function resolveLocalMessagesDbPath(dbPath: string): string {
   if (!dbPath.startsWith("~")) {
     return dbPath;
   }
-  const home = resolveLocalMessagesHomeDir();
+  const home = resolveIMessageHomeDir();
   return home ? path.join(home, dbPath.slice(1).replace(/^\/+/, "")) : dbPath;
 }
 
@@ -255,7 +224,7 @@ function resolveIMessageWatchSourceDbPath(params: {
   if (cliPath !== "imsg" && path.basename(cliPath) !== "imsg") {
     return undefined;
   }
-  const home = resolveLocalMessagesHomeDir();
+  const home = resolveIMessageHomeDir();
   return home ? path.join(home, "Library", "Messages", "chat.db") : undefined;
 }
 
@@ -402,6 +371,12 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     cfg,
     accountId: opts.accountId,
   });
+  const approvalGatewayRuntime =
+    opts.channelRuntime?.runtimeContexts.get<IMessageApprovalGatewayRuntime>({
+      channelId: "imessage",
+      accountId: accountInfo.accountId,
+      capability: CHANNEL_APPROVAL_GATEWAY_RUNTIME_CONTEXT_CAPABILITY,
+    });
   const imessageCfg = accountInfo.config;
   const historyLimit = Math.max(
     0,
@@ -607,51 +582,48 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         ),
       });
     },
-    onFlush: async (entries) => {
-      if (entries.length === 0) {
-        return;
-      }
-      // Dispatch one unit (a single row or merged bucket). Every raw queue
-      // claim in that unit follows the merged turn's adoption lifecycle.
-      const dispatchUnit = async (
-        unitEntries: { message: IMessagePayload; ingressLifecycle?: IMessageIngressLifecycle }[],
-        message: IMessagePayload,
-      ) => {
-        const { lifecycle, settle, abandon } = fanInChannelIngressLifecycles(
-          unitEntries.flatMap((entry) => (entry.ingressLifecycle ? [entry.ingressLifecycle] : [])),
-        );
-        try {
-          if (lifecycle?.abortSignal.aborted) {
-            await abandon();
+    onFlush: (entries, createFlush) => {
+      const { lifecycle, settle, abandon } = fanInChannelIngressLifecycles(
+        entries.flatMap((entry) => (entry.ingressLifecycle ? [entry.ingressLifecycle] : [])),
+      );
+      return createFlush({
+        lifecycle,
+        dispatch: async (admissionLifecycle) => {
+          if (entries.length === 0) {
             return;
           }
-          await handleMessageNow(message, lifecycle);
-          await settle();
-        } catch (err) {
-          await abandon();
-          runtime.error?.(`imessage: inbound dispatch failed: ${String(err)}`);
-        }
-      };
+          try {
+            if (admissionLifecycle.abortSignal.aborted) {
+              await abandon();
+              return;
+            }
+            if (entries.length === 1) {
+              await handleMessageNow(
+                expectDefined(entries[0], "single iMessage dispatch entry").message,
+                admissionLifecycle,
+              );
+              await settle();
+              return;
+            }
 
-      if (entries.length === 1) {
-        await dispatchUnit(
-          entries,
-          expectDefined(entries[0], "single iMessage dispatch entry").message,
-        );
-        return;
-      }
-
-      const messages = entries.map((e) => e.message);
-      const combined = combineIMessagePayloads(messages);
-      if (shouldLogVerbose()) {
-        const text = combined.text ?? "";
-        const preview = sliceUtf16Safe(text, 0, 50);
-        const ellipsis = text.length > 50 ? "..." : "";
-        logVerbose(
-          `[imessage] merged ${entries.length} debounced messages: "${preview}${ellipsis}"`,
-        );
-      }
-      await dispatchUnit(entries, combined);
+            const messages = entries.map((entry) => entry.message);
+            const combined = combineIMessagePayloads(messages);
+            if (shouldLogVerbose()) {
+              const text = combined.text ?? "";
+              const preview = sliceUtf16Safe(text, 0, 50);
+              const ellipsis = text.length > 50 ? "..." : "";
+              logVerbose(
+                `[imessage] merged ${entries.length} debounced messages: "${preview}${ellipsis}"`,
+              );
+            }
+            await handleMessageNow(combined, admissionLifecycle);
+            await settle();
+          } catch (err) {
+            await abandon();
+            runtime.error?.(`imessage: inbound dispatch failed: ${String(err)}`);
+          }
+        },
+      });
     },
     onError: (err) => {
       runtime.error?.(`imessage debounce flush failed: ${String(err)}`);
@@ -753,7 +725,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   function resolveIMessageInboundBodyText(message: IMessagePayload) {
     // Native poll balloons carry only a 0xFFFD placeholder in `text`; render the
     // decoded poll (question/options/votes) so the agent sees the actual poll.
-    const pollBody = message.poll ? renderIMessagePollBody(message.poll) : null;
+    const pollBody = message.poll ? renderIMessagePollBody(message.poll, message.sender) : null;
     const messageText = (pollBody ?? message.text ?? "").trim();
     const attachments = includeAttachments ? (message.attachments ?? []) : [];
     const effectiveAttachmentRoots = remoteHost ? remoteAttachmentRoots : attachmentRoots;
@@ -806,24 +778,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       rawMediaAttachments,
       effectiveAttachmentRoots,
     } = resolveIMessageInboundBodyText(message);
-
-    // Approval reaction shortcut: if the inbound tapback resolves a pending
-    // approval prompt, route it through the gateway and skip the normal
-    // dispatch pipeline. This bypasses reactionNotifications gating so
-    // approvals still work when general reaction surfacing is off, and it
-    // bypasses allowFrom/dmPolicy because the approval-reactions module
-    // enforces its own actor authorization via channels.imessage.allowFrom.
-    if (
-      await maybeResolveIMessageApprovalReaction({
-        cfg,
-        accountId: accountInfo.accountId,
-        message,
-        bodyText,
-        logVerboseMessage: logVerbose,
-      })
-    ) {
-      return;
-    }
 
     const storeAllowFrom = await readChannelAllowFromStore(
       "imessage",
@@ -1339,9 +1293,121 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     });
   }
 
+  const suppressStaleIngress = (
+    message: IMessagePayload,
+    receivedAt: number,
+    provenance?: { catchup?: boolean },
+  ): boolean => {
+    const isRecoveryReplay =
+      recoveryCursorRowid !== null &&
+      recoveryBoundaryRowid !== null &&
+      typeof message.id === "number" &&
+      message.id <= recoveryBoundaryRowid;
+    const staleThresholdMs = isRecoveryReplay
+      ? IMESSAGE_RECOVERY_MAX_AGE_MS
+      : IMESSAGE_STALE_INBOUND_THRESHOLD_MS;
+    if (provenance?.catchup || !isStaleIMessageBacklog(message, receivedAt, staleThresholdMs)) {
+      return false;
+    }
+    staleBacklogSuppressed += 1;
+    runtime.log?.(
+      warn(
+        `imessage: suppressed stale inbound backlog account=${accountInfo.accountId} ` +
+          `sent=${message.created_at ?? "unknown"} recovery=${isRecoveryReplay} ` +
+          `(${staleBacklogSuppressed} suppressed since start)`,
+      ),
+    );
+    return true;
+  };
+
+  const maybeHandleApprovalControl = async (message: IMessagePayload): Promise<boolean> => {
+    if (
+      await maybeResolveIMessageApprovalPollVote({
+        cfg,
+        accountId: accountInfo.accountId,
+        message,
+        gatewayRuntime: approvalGatewayRuntime,
+      })
+    ) {
+      return true;
+    }
+    return await maybeResolveIMessageApprovalReaction({
+      cfg,
+      accountId: accountInfo.accountId,
+      message,
+      bodyText: resolveIMessageInboundBodyText(message).bodyText,
+      gatewayRuntime: approvalGatewayRuntime,
+      logVerboseMessage: logVerbose,
+    });
+  };
+
+  const resolveApprovalControlConversation = (message: IMessagePayload) => {
+    const sender = normalizeIMessageHandle((message.sender ?? "").trim());
+    const destination = normalizeIMessageHandle((message.destination_caller_id ?? "").trim());
+    const receivedSenderIsLocalFallback =
+      message.is_from_me !== true && Boolean(sender) && sender === destination;
+    const actorHandle =
+      (receivedSenderIsLocalFallback ? "" : sender) ||
+      (message.is_from_me === true ? destination : "");
+    return actorHandle
+      ? buildIMessageApprovalConversationKeyForInbound({
+          chatGuid: message.chat_guid,
+          chatIdentifier: message.chat_identifier,
+          chatId: message.chat_id,
+          isGroup: message.is_group,
+          actorHandle,
+        })
+      : null;
+  };
+
   const ingress = createIMessageDurableIngress({
     accountId: accountInfo.accountId,
     runtime,
+    dispatchPriority: async (message, lifecycle, receivedAt, provenance) => {
+      const bodyText = (message.text ?? "").trim();
+      const isApprovalCommand = /^\/approve(?:@[^\s]+)?(?:\s|$)/i.test(bodyText);
+      const isCandidate =
+        isApprovalCommand ||
+        message.poll?.kind === "vote" ||
+        Boolean(resolveIMessageReactionContext(message, bodyText));
+      if (!isCandidate) {
+        return undefined;
+      }
+      if (suppressStaleIngress(message, receivedAt, provenance)) {
+        return { kind: "completed" };
+      }
+      const repairedMessage = await repairMessageConversationAnchor(message);
+      if (!repairedMessage) {
+        return { kind: "completed" };
+      }
+      if (isApprovalCommand) {
+        // Resolve approval commands through the ordinary authenticated command
+        // pipeline, but ahead of the chat lane containing the run they release.
+        await handleMessageNowInner(repairedMessage);
+        return { kind: "completed" };
+      }
+      const conversation = resolveApprovalControlConversation(repairedMessage);
+      while (true) {
+        if (await maybeHandleApprovalControl(repairedMessage)) {
+          return { kind: "completed" };
+        }
+        if (!conversation) {
+          return undefined;
+        }
+        const waited = await iMessageApprovalControlBindings.wait({
+          accountId: accountInfo.accountId,
+          conversation,
+          abortSignal: lifecycle.abortSignal,
+        });
+        if (!waited) {
+          // The binding may have completed between the ownership check and
+          // window lookup. Close that check-then-wait race before queueing.
+          return (await maybeHandleApprovalControl(repairedMessage))
+            ? { kind: "completed" }
+            : undefined;
+        }
+      }
+    },
     dispatch: async (message, ingressLifecycle, receivedAt, provenance) => {
       // Age fence with two windows, split on the recovery boundary:
       //  - rows at/below recoveryBoundaryRowid are the downtime-recovery replay
@@ -1351,27 +1417,11 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       //    threshold, which is where #89237's Push-flush backlog (old send date,
       //    fresh rowid) appears.
       // Logged at default level so suppressed traffic is never silent (#89237).
-      const isRecoveryReplay =
-        recoveryCursorRowid !== null &&
-        recoveryBoundaryRowid !== null &&
-        typeof message.id === "number" &&
-        message.id <= recoveryBoundaryRowid;
-      const staleThresholdMs = isRecoveryReplay
-        ? IMESSAGE_RECOVERY_MAX_AGE_MS
-        : IMESSAGE_STALE_INBOUND_THRESHOLD_MS;
       // Catchup rows are operator-requested history: the catchup query's own
       // maxAge window is their age gate. Running them through the live fence
       // would suppress AND tombstone rows older than 15 minutes — losing
       // messages the operator explicitly asked to replay.
-      if (!provenance?.catchup && isStaleIMessageBacklog(message, receivedAt, staleThresholdMs)) {
-        staleBacklogSuppressed += 1;
-        runtime.log?.(
-          warn(
-            `imessage: suppressed stale inbound backlog account=${accountInfo.accountId} ` +
-              `sent=${message.created_at ?? "unknown"} recovery=${isRecoveryReplay} ` +
-              `(${staleBacklogSuppressed} suppressed since start)`,
-          ),
-        );
+      if (suppressStaleIngress(message, receivedAt, provenance)) {
         // Returning completes the durable GUID claim. A later restart cannot
         // reinterpret this live-fence suppression under the wider replay fence.
         // Accepted overlap: a legacy-catchup redelivery of this GUID stays
@@ -1383,6 +1433,12 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       }
       const repairedMessage = await repairMessageConversationAnchor(message);
       if (!repairedMessage) {
+        return { kind: "completed" };
+      }
+      // A candidate can arrive during the narrow send-to-binding window. If it
+      // initially proved unowned and waited in the chat lane, recheck before
+      // rendering it as ordinary inbound content.
+      if (await maybeHandleApprovalControl(repairedMessage)) {
         return { kind: "completed" };
       }
       await inboundDebouncer.enqueue({
@@ -1587,6 +1643,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         cfg,
         accountId: accountInfo.accountId,
         allowRecentChatDiscovery,
+        gatewayRuntime: approvalGatewayRuntime,
         logVerboseMessage: logVerbose,
       });
     } catch (err) {

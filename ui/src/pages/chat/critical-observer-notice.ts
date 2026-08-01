@@ -5,6 +5,8 @@ import { isCriticalObserverHealth } from "../../lib/observer-digest.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import {
   areUiSessionKeysEquivalent,
+  isUiGlobalSessionKey,
+  normalizeAgentId,
   normalizeSessionKeyForUiComparison,
   uiSessionEventMatches,
   type UiSessionDefaultsHost,
@@ -20,8 +22,17 @@ export class CriticalObserverNoticeTracker {
     this.seen.clear();
   }
 
-  record(params: { sessionKey: string; health: string; revision: number }): boolean {
-    const key = normalizeSessionKeyForUiComparison(params.sessionKey);
+  record(params: {
+    sessionKey: string;
+    agentId?: string;
+    health: string;
+    revision: number;
+  }): boolean {
+    const sessionKey = normalizeSessionKeyForUiComparison(params.sessionKey);
+    const key =
+      isUiGlobalSessionKey(sessionKey) && params.agentId
+        ? `${sessionKey}:${normalizeAgentId(params.agentId)}`
+        : sessionKey;
     const previous = this.seen.get(key);
     // Gateway revision floors keep revisions session-monotonic across run
     // rollover, so a gap reliably means this connection missed digest state.
@@ -49,7 +60,7 @@ export function showCriticalSessionObserverNotice(params: {
   sessionHost: UiSessionDefaultsHost;
   sessions: readonly GatewaySessionRow[];
   tracker: CriticalObserverNoticeTracker;
-  onOpen: (sessionKey: string) => void;
+  onOpen: (sessionKey: string, agentId?: string) => void;
 }): void {
   if (!params.payload || typeof params.payload !== "object") {
     return;
@@ -70,6 +81,7 @@ export function showCriticalSessionObserverNotice(params: {
   }
   const shouldAnnounce = params.tracker.record({
     sessionKey,
+    agentId: digest.agentId,
     health: digest.health,
     revision,
   });
@@ -78,6 +90,7 @@ export function showCriticalSessionObserverNotice(params: {
     uiSessionEventMatches(
       { ...params.sessionHost, sessionKey: params.selectedSessionKey },
       sessionKey,
+      digest.agentId,
     )
   ) {
     return;
@@ -89,6 +102,7 @@ export function showCriticalSessionObserverNotice(params: {
   showToast({
     message: `${t("sessionsView.attentionRequired")}: ${label} — ${headline}`,
     actionLabel: t("sessionsView.openSession"),
-    onAction: () => params.onOpen(sessionKey),
+    onAction: () =>
+      digest.agentId ? params.onOpen(sessionKey, digest.agentId) : params.onOpen(sessionKey),
   });
 }

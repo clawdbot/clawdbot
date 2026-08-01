@@ -223,6 +223,27 @@ describe("resolveApiKeyForProfile openai refresh fallback", () => {
     expect(refreshProviderOAuthCredentialWithPluginMock).toHaveBeenCalledTimes(1);
   });
 
+  it("fails closed when provider refresh returns an unchanged expired credential", async () => {
+    const profileId = "openai:default";
+    saveAuthProfileStore(
+      createExpiredOauthStore({
+        profileId,
+        provider: "openai",
+      }),
+      agentDir,
+      { filterExternalAuthProfiles: false, syncExternalCli: false },
+    );
+    refreshProviderOAuthCredentialWithPluginMock.mockImplementationOnce(async (params) =>
+      requireOAuthContext(params?.context),
+    );
+
+    await expect(resolveOpenAICodexProfile({ profileId, agentDir })).rejects.toThrow(
+      /OAuth token refresh failed for openai/,
+    );
+    expect(refreshProviderOAuthCredentialWithPluginMock).toHaveBeenCalledTimes(1);
+    expect(getOAuthApiKeyMock).not.toHaveBeenCalled();
+  });
+
   it("surfaces refresh contention once without local lock details", async () => {
     const profileId = "openai:default";
     saveAuthProfileStore(createExpiredOauthStore({ profileId, provider: "openai" }), agentDir, {

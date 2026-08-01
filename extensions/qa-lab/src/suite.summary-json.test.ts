@@ -202,6 +202,7 @@ describe("buildQaSuiteSummaryJson", () => {
             cells: {
               openclaw: {
                 runtime: "openclaw" as const,
+                status: "pass" as const,
                 transcriptBytes: "",
                 toolCalls: [],
                 finalText: "done",
@@ -211,6 +212,7 @@ describe("buildQaSuiteSummaryJson", () => {
               },
               codex: {
                 runtime: "codex" as const,
+                status: "pass" as const,
                 transcriptBytes: "",
                 toolCalls: [],
                 finalText: "done",
@@ -227,6 +229,10 @@ describe("buildQaSuiteSummaryJson", () => {
     expect(json.scenarios[0]).toMatchObject({
       runtimeParity: {
         scenarioId: "scenario-a",
+        cells: {
+          openclaw: { status: "pass" },
+          codex: { status: "pass" },
+        },
         runtimeParityUsage: {
           expectation: "not-applicable",
           reason: "Local fixture only; no assistant turn runs.",

@@ -234,6 +234,13 @@ CLI registration:
   shapes and strips terminal control sequences from descriptions before
   rendering help. Cover every top-level command root the registrar exposes.
   `commands` alone stays on the eager compatibility path.
+- Root descriptors may define a synchronous, pure
+  `machineOutput({ argv, stdoutIsTTY })` resolver for JSON, JSONL, or other
+  machine-readable stdout modes that are not selected solely by `--json`.
+  Parse command tokens with `getRootOptionAwareCommandPath` from
+  `openclaw/plugin-sdk/cli-argv`. Keep the resolver in lightweight CLI metadata
+  and share it with full registration. Nested descriptors do not expose this
+  field.
 - Use `api.registerNodeCliFeature(...)` for paired-node feature commands so
   they land under `openclaw nodes` (equivalent to
   `registerCli(registrar, { parentPath: ["nodes"], ... })`).
@@ -272,6 +279,9 @@ Pair `defineSetupPluginEntry(...)` with the narrow setup helper families:
 | `openclaw/plugin-sdk/channel-setup`     | Optional-install setup surfaces                                                                                                                                                    |
 | `openclaw/plugin-sdk/channel-dm-policy` | Account-aware DM policy descriptors for setup flows                                                                                                                                |
 | `openclaw/plugin-sdk/setup-tools`       | Setup/install CLI, archive, and docs helpers                                                                                                                                       |
+| `openclaw/plugin-sdk/archive`           | Bounded archive extraction and single-entry reads                                                                                                                                  |
+| `openclaw/plugin-sdk/root-walk`         | Budgeted, root-bounded directory walking                                                                                                                                           |
+| `openclaw/plugin-sdk/secret-file`       | Pinned secret reads and first-writer-wins creation                                                                                                                                 |
 
 Keep heavy SDKs, CLI registration, and long-lived runtime services in the
 full entry.

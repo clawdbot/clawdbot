@@ -306,6 +306,17 @@ describe("commands registry", () => {
     );
   });
 
+  it("registers /loop as a standard tools command with an optional spec", () => {
+    const loop = requireChatCommand("loop");
+    expect(loop.nativeName).toBe("loop");
+    expect(loop.textAliases).toEqual(["/loop"]);
+    expect(loop.category).toBe("tools");
+    expect(loop.tier).toBe("standard");
+    expect(loop.acceptsArgs).toBe(true);
+    expect(requireCommandArg(loop, "spec").required).not.toBe(true);
+    expect(resolveTextCommand("/loop 5m check ci")?.args).toBe("5m check ci");
+  });
+
   it("preserves multiline payloads for direct skill slash aliases only when unregistered", () => {
     expect(normalizeCommandBody("/demo_skill first line\nsecond line")).toBe(
       "/demo_skill first line\nsecond line",
@@ -525,6 +536,7 @@ describe("commands registry", () => {
     expect(detection.exact.has("/commands")).toBe(true);
     expect(detection.exact.has("/skill")).toBe(true);
     expect(detection.exact.has("/learn")).toBe(true);
+    expect(detection.exact.has("/loop")).toBe(true);
     expect(detection.exact.has("/compact")).toBe(true);
     expect(detection.exact.has("/whoami")).toBe(true);
     expect(detection.exact.has("/id")).toBe(true);

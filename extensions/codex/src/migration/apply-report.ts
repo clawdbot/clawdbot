@@ -31,6 +31,6 @@ export function sanitizeAppsNeedingAuth(apps: readonly v2.AppSummary[]): Array<{
   return apps.map((app) => ({
     id: app.id,
     name: app.name,
-    needsAuth: app.needsAuth,
+    needsAuth: true,
   }));
 }

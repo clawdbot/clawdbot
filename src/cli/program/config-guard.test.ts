@@ -169,6 +169,16 @@ describe("ensureConfigReady", () => {
       expectedDoctorCalls: 0,
     },
     {
+      name: "skips doctor flow for logs",
+      commandPath: ["logs"],
+      expectedDoctorCalls: 0,
+    },
+    {
+      name: "skips doctor flow for remote gateway calls",
+      commandPath: ["gateway", "call"],
+      expectedDoctorCalls: 0,
+    },
+    {
       name: "skips doctor flow for agent without legacy state",
       commandPath: ["agent"],
       expectedDoctorCalls: 0,
@@ -201,6 +211,21 @@ describe("ensureConfigReady", () => {
     expect(readConfigFileSnapshotMock).toHaveBeenCalledWith({ observe: false });
   });
 
+  it("keeps logs config guard reads non-observing and independent of plugin state", async () => {
+    await runEnsureConfigReady(["logs"]);
+
+    expect(readConfigFileSnapshotMock).toHaveBeenCalledWith({
+      observe: false,
+      skipPluginValidation: true,
+    });
+  });
+
+  it("keeps remote gateway call config reads non-observing", async () => {
+    await runEnsureConfigReady(["gateway", "call"]);
+
+    expect(readConfigFileSnapshotMock).toHaveBeenCalledWith({ observe: false });
+  });
+
   it("runs doctor flow when lightweight startup detection finds legacy state", async () => {
     const root = useTempOpenClawHome();
     writeLegacyTaskSidecarMarker(root);
@@ -213,6 +238,25 @@ describe("ensureConfigReady", () => {
       invalidConfigNote: false,
       observe: false,
     });
+  });
+
+  it("keeps remote gateway calls from migrating existing local legacy state", async () => {
+    const root = useTempOpenClawHome();
+    writeLegacyTaskSidecarMarker(root);
+
+    await runEnsureConfigReady(["gateway", "call"]);
+
+    expect(loadAndMaybeMigrateDoctorConfigMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps logs from migrating existing local legacy state", async () => {
+    const root = useTempOpenClawHome();
+    writeStateMarker(root, "cron/runs/legacy-job.jsonl");
+
+    await runEnsureConfigReady(["logs"]);
+
+    expect(loadAndMaybeMigrateDoctorConfigMock).not.toHaveBeenCalled();
+    expect(fs.existsSync(path.join(root, ".openclaw", "cron/runs/legacy-job.jsonl"))).toBe(true);
   });
 
   it.each(["restart-sentinel.json", "restart-sentinel.json.doctor-importing"])(

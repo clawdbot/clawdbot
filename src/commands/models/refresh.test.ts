@@ -9,7 +9,13 @@ vi.mock("../../model-catalog/remote-refresh.js", () => ({
 import { modelsRefreshCommand } from "./refresh.js";
 
 function runtime() {
-  return { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+  return {
+    log: vi.fn(),
+    error: vi.fn(),
+    exit: vi.fn(),
+    writeStdout: vi.fn(),
+    writeJson: vi.fn(),
+  };
 }
 
 beforeEach(() => mocks.refresh.mockReset());
@@ -59,8 +65,23 @@ describe("models refresh", () => {
     const jsonRuntime = runtime();
     mocks.refresh.mockResolvedValueOnce({ status: "disabled", providers: 0, models: 0 });
     await modelsRefreshCommand({ json: true }, jsonRuntime);
-    expect(jsonRuntime.log).toHaveBeenCalledWith(
-      JSON.stringify({ status: "disabled", providers: 0, models: 0 }),
+    expect(jsonRuntime.writeJson).toHaveBeenCalledWith(
+      { status: "disabled", providers: 0, models: 0 },
+      0,
     );
+    expect(jsonRuntime.log).not.toHaveBeenCalled();
+  });
+
+  it("writes refresh errors to structured stdout before exiting in JSON mode", async () => {
+    const jsonRuntime = runtime();
+    const result = { status: "error", providers: 0, models: 0, error: "boom" };
+    mocks.refresh.mockResolvedValueOnce(result);
+
+    await modelsRefreshCommand({ json: true }, jsonRuntime);
+
+    expect(jsonRuntime.writeJson).toHaveBeenCalledWith(result, 0);
+    expect(jsonRuntime.exit).toHaveBeenCalledWith(1);
+    expect(jsonRuntime.log).not.toHaveBeenCalled();
+    expect(jsonRuntime.error).not.toHaveBeenCalled();
   });
 });

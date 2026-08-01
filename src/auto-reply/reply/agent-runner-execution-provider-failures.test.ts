@@ -10,7 +10,7 @@ import {
   PROVIDER_INTERNAL_ERROR_USER_MESSAGE,
   setupAgentRunnerExecutionTestState,
   GENERIC_RUN_FAILURE_TEXT,
-  getRunAgentTurnWithFallback,
+  getExecuteAgentTurnForTest,
   createMockTypingSignaler,
   createFollowupRun,
   createMockReplyOperation,
@@ -52,7 +52,7 @@ function createOpenAiServiceUnavailableError() {
   });
 }
 
-describe("runAgentTurnWithFallback: provider failures", () => {
+describe("executeAgentTurn: provider failures", () => {
   it.each(NON_DIRECT_FAILURE_SURFACE_CASES)(
     "keeps raw runner failure boilerplate out of $label chats",
     async (testCase) => {
@@ -60,8 +60,8 @@ describe("runAgentTurnWithFallback: provider failures", () => {
         new Error("openai/gpt-5.5 ended with an incomplete terminal response"),
       );
 
-      const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-      const result = await runAgentTurnWithFallback(
+      const executeAgentTurn = await getExecuteAgentTurnForTest();
+      const result = await executeAgentTurn(
         createMinimalRunAgentTurnParams({
           sessionCtx: createNonDirectFailureSessionCtx(testCase),
         }),
@@ -90,8 +90,8 @@ describe("runAgentTurnWithFallback: provider failures", () => {
         },
       };
 
-      const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-      const result = await runAgentTurnWithFallback(
+      const executeAgentTurn = await getExecuteAgentTurnForTest();
+      const result = await executeAgentTurn(
         createMinimalRunAgentTurnParams({
           followupRun,
           sessionCtx: {
@@ -132,8 +132,8 @@ describe("runAgentTurnWithFallback: provider failures", () => {
       },
     };
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback(
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(
       createMinimalRunAgentTurnParams({
         followupRun,
         sessionCtx: {
@@ -163,8 +163,8 @@ describe("runAgentTurnWithFallback: provider failures", () => {
       const followupRun = createFollowupRun();
       followupRun.run.config = {};
 
-      const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-      const result = await runAgentTurnWithFallback(
+      const executeAgentTurn = await getExecuteAgentTurnForTest();
+      const result = await executeAgentTurn(
         createMinimalRunAgentTurnParams({
           followupRun,
           sessionCtx: createNonDirectFailureSessionCtx(testCase),
@@ -185,8 +185,8 @@ describe("runAgentTurnWithFallback: provider failures", () => {
         new Error('No API key found for provider "openai"'),
       );
 
-      const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-      const result = await runAgentTurnWithFallback(
+      const executeAgentTurn = await getExecuteAgentTurnForTest();
+      const result = await executeAgentTurn(
         createMinimalRunAgentTurnParams({
           sessionCtx: createNonDirectFailureSessionCtx(testCase),
         }),
@@ -208,8 +208,8 @@ describe("runAgentTurnWithFallback: provider failures", () => {
         throw createOpenAiServiceUnavailableError();
       });
 
-      const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-      const result = await runAgentTurnWithFallback(
+      const executeAgentTurn = await getExecuteAgentTurnForTest();
+      const result = await executeAgentTurn(
         createMinimalRunAgentTurnParams({
           sessionCtx: {
             Provider: "discord",
@@ -245,8 +245,8 @@ describe("runAgentTurnWithFallback: provider failures", () => {
         meta: {},
       });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const resultPromise = runAgentTurnWithFallback(
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const resultPromise = executeAgentTurn(
       createMinimalRunAgentTurnParams({
         sessionCtx: createNonDirectFailureSessionCtx(NON_DIRECT_FAILURE_SURFACE_CASES[0]),
       }),
@@ -265,8 +265,8 @@ describe("runAgentTurnWithFallback: provider failures", () => {
     vi.useFakeTimers();
     state.runEmbeddedAgentMock.mockRejectedValue(createOpenAiServiceUnavailableError());
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const resultPromise = runAgentTurnWithFallback(
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const resultPromise = executeAgentTurn(
       createMinimalRunAgentTurnParams({
         sessionCtx: createNonDirectFailureSessionCtx(NON_DIRECT_FAILURE_SURFACE_CASES[1]),
       }),
@@ -298,8 +298,8 @@ describe("runAgentTurnWithFallback: provider failures", () => {
         }),
       );
 
-      const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-      const result = await runAgentTurnWithFallback(
+      const executeAgentTurn = await getExecuteAgentTurnForTest();
+      const result = await executeAgentTurn(
         createMinimalRunAgentTurnParams({
           sessionCtx: createNonDirectFailureSessionCtx(testCase),
         }),
@@ -320,8 +320,8 @@ describe("runAgentTurnWithFallback: provider failures", () => {
     async (testCase) => {
       state.runEmbeddedAgentMock.mockRejectedValueOnce(new Error("429 rate limit exceeded"));
 
-      const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-      const result = await runAgentTurnWithFallback(
+      const executeAgentTurn = await getExecuteAgentTurnForTest();
+      const result = await executeAgentTurn(
         createMinimalRunAgentTurnParams({
           sessionCtx: createNonDirectFailureSessionCtx(testCase),
         }),
@@ -351,8 +351,8 @@ describe("runAgentTurnWithFallback: provider failures", () => {
         }),
       );
 
-      const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-      const result = await runAgentTurnWithFallback(
+      const executeAgentTurn = await getExecuteAgentTurnForTest();
+      const result = await executeAgentTurn(
         createMinimalRunAgentTurnParams({
           sessionCtx: createNonDirectFailureSessionCtx(testCase),
         }),
@@ -422,11 +422,11 @@ describe("runAgentTurnWithFallback: provider failures", () => {
   it.each(NON_DIRECT_FAILURE_SURFACE_CASES)(
     "surfaces overloaded fallback copy in $label chats",
     async (testCase) => {
-      const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+      const executeAgentTurn = await getExecuteAgentTurnForTest();
       vi.useFakeTimers();
       state.runEmbeddedAgentMock.mockRejectedValue(new Error("model is overloaded"));
 
-      const resultPromise = runAgentTurnWithFallback(
+      const resultPromise = executeAgentTurn(
         createMinimalRunAgentTurnParams({
           sessionCtx: createNonDirectFailureSessionCtx(testCase),
         }),
@@ -445,7 +445,7 @@ describe("runAgentTurnWithFallback: provider failures", () => {
   );
 
   it("retries fallback-wide overloads turn-locally and sends one delayed status notice", async () => {
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
     vi.useFakeTimers();
     for (let attempt = 0; attempt < 4; attempt += 1) {
       state.runWithModelFallbackMock.mockRejectedValueOnce(createOverloadSummaryError());
@@ -456,7 +456,7 @@ describe("runAgentTurnWithFallback: provider failures", () => {
     });
     const onBlockReply = vi.fn();
 
-    const resultPromise = runAgentTurnWithFallback(
+    const resultPromise = executeAgentTurn(
       createMinimalRunAgentTurnParams({ opts: { onBlockReply } }),
     );
     await vi.advanceTimersByTimeAsync(29_999);
@@ -488,8 +488,8 @@ describe("runAgentTurnWithFallback: provider failures", () => {
         throw new Error("model is overloaded");
       });
 
-      const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-      const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+      const executeAgentTurn = await getExecuteAgentTurnForTest();
+      const result = await executeAgentTurn(createMinimalRunAgentTurnParams());
 
       expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
       expect(result.kind).toBe("final");
@@ -518,8 +518,8 @@ describe("runAgentTurnWithFallback: provider failures", () => {
         });
       });
 
-      const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-      const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+      const executeAgentTurn = await getExecuteAgentTurnForTest();
+      const result = await executeAgentTurn(createMinimalRunAgentTurnParams());
 
       expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
       expect(result.kind).toBe("final");
@@ -547,8 +547,8 @@ describe("runAgentTurnWithFallback: provider failures", () => {
       });
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(createMinimalRunAgentTurnParams());
 
     expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     expect(result.kind).toBe("final");
@@ -576,8 +576,8 @@ describe("runAgentTurnWithFallback: provider failures", () => {
         });
       const onBlockReply = vi.fn();
 
-      const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-      const resultPromise = runAgentTurnWithFallback(
+      const executeAgentTurn = await getExecuteAgentTurnForTest();
+      const resultPromise = executeAgentTurn(
         createMinimalRunAgentTurnParams({ opts: { onBlockReply } }),
       );
       await vi.advanceTimersByTimeAsync(30_000);
@@ -590,7 +590,7 @@ describe("runAgentTurnWithFallback: provider failures", () => {
   );
 
   it("sends the delayed overload notice while a retry provider call is still running", async () => {
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
     vi.useFakeTimers();
     let resolveRetry!: (value: unknown) => void;
     const retryResult = new Promise<unknown>((resolve) => {
@@ -601,7 +601,7 @@ describe("runAgentTurnWithFallback: provider failures", () => {
       .mockImplementationOnce(() => retryResult);
     const onBlockReply = vi.fn((..._args: unknown[]) => new Promise<void>(() => {}));
 
-    const resultPromise = runAgentTurnWithFallback(
+    const resultPromise = executeAgentTurn(
       createMinimalRunAgentTurnParams({ opts: { onBlockReply } }),
     );
     await vi.advanceTimersByTimeAsync(29_999);
@@ -624,7 +624,7 @@ describe("runAgentTurnWithFallback: provider failures", () => {
   });
 
   it("does not block retry when a slow first overload makes the status notice immediately due", async () => {
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
     vi.useFakeTimers();
     let rejectInitial!: (error: unknown) => void;
     const initialResult = new Promise<unknown>((_resolve, reject) => {
@@ -640,7 +640,7 @@ describe("runAgentTurnWithFallback: provider failures", () => {
       });
     const onBlockReply = vi.fn((..._args: unknown[]) => new Promise<void>(() => {}));
 
-    const resultPromise = runAgentTurnWithFallback(
+    const resultPromise = executeAgentTurn(
       createMinimalRunAgentTurnParams({ opts: { onBlockReply } }),
     );
     await vi.advanceTimersByTimeAsync(30_000);
@@ -653,14 +653,14 @@ describe("runAgentTurnWithFallback: provider failures", () => {
   });
 
   it("interrupts overload backoff on abort and cancels the pending status notice", async () => {
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
     vi.useFakeTimers();
     state.runEmbeddedAgentMock.mockRejectedValue(new Error("model is overloaded"));
     const abortController = new AbortController();
     const { replyOperation } = createMockReplyOperation({ abortSignal: abortController.signal });
     const onBlockReply = vi.fn();
 
-    const resultPromise = runAgentTurnWithFallback(
+    const resultPromise = executeAgentTurn(
       createMinimalRunAgentTurnParams({
         opts: { onBlockReply },
         replyOperation,
@@ -685,7 +685,7 @@ describe("runAgentTurnWithFallback: provider failures", () => {
   });
 
   it("interrupts the transient HTTP retry backoff on abort", async () => {
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
     vi.useFakeTimers();
     state.runEmbeddedAgentMock.mockRejectedValue(
       new FailoverError("provider request timed out", {
@@ -697,9 +697,7 @@ describe("runAgentTurnWithFallback: provider failures", () => {
     const abortController = new AbortController();
     const { replyOperation } = createMockReplyOperation({ abortSignal: abortController.signal });
 
-    const resultPromise = runAgentTurnWithFallback(
-      createMinimalRunAgentTurnParams({ replyOperation }),
-    );
+    const resultPromise = executeAgentTurn(createMinimalRunAgentTurnParams({ replyOperation }));
     await vi.advanceTimersByTimeAsync(0);
     abortController.abort();
     await expect(resultPromise).resolves.toMatchObject({
@@ -711,7 +709,7 @@ describe("runAgentTurnWithFallback: provider failures", () => {
   });
 
   it("cancels the overload notice immediately when a slow retrying turn is aborted", async () => {
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
     vi.useFakeTimers();
     let resolveRetry!: (value: unknown) => void;
     const retryResult = new Promise<unknown>((resolve) => {
@@ -723,7 +721,7 @@ describe("runAgentTurnWithFallback: provider failures", () => {
     const abortController = new AbortController();
     const onBlockReply = vi.fn();
 
-    const resultPromise = runAgentTurnWithFallback(
+    const resultPromise = executeAgentTurn(
       createMinimalRunAgentTurnParams({
         opts: { abortSignal: abortController.signal, onBlockReply },
       }),
@@ -745,7 +743,7 @@ describe("runAgentTurnWithFallback: provider failures", () => {
   });
 
   it("surfaces typed overloaded failures without rate-limit cooldown copy", async () => {
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
     vi.useFakeTimers();
     state.runEmbeddedAgentMock.mockRejectedValue(
       new FailoverError("529 Please try again", {
@@ -756,7 +754,7 @@ describe("runAgentTurnWithFallback: provider failures", () => {
       }),
     );
 
-    const resultPromise = runAgentTurnWithFallback(
+    const resultPromise = executeAgentTurn(
       createMinimalRunAgentTurnParams({
         sessionCtx: createNonDirectFailureSessionCtx(NON_DIRECT_FAILURE_SURFACE_CASES[0]),
       }),
@@ -787,8 +785,8 @@ describe("runAgentTurnWithFallback: provider failures", () => {
       },
     };
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback(
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(
       createMinimalRunAgentTurnParams({
         followupRun,
         sessionCtx: {
@@ -815,8 +813,8 @@ describe("runAgentTurnWithFallback: provider failures", () => {
       new Error("openai/gpt-5.5 ended with an incomplete terminal response"),
     );
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback(
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(
       createMinimalRunAgentTurnParams({
         sessionCtx: {
           Provider: "discord",
@@ -838,8 +836,8 @@ describe("runAgentTurnWithFallback: provider failures", () => {
       new Error("openai/gpt-5.5 ended with an incomplete terminal response"),
     );
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn({
       ...createMinimalRunAgentTurnParams({
         sessionCtx: {
           Provider: "discord",
@@ -865,8 +863,8 @@ describe("runAgentTurnWithFallback: provider failures", () => {
     Object.assign(error, { status: 429 });
     state.runEmbeddedAgentMock.mockRejectedValueOnce(error);
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback(
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(
       createMinimalRunAgentTurnParams({
         sessionCtx: {
           Provider: "discord",
@@ -897,8 +895,8 @@ describe("runAgentTurnWithFallback: provider failures", () => {
       ),
     );
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback(
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(
       createMinimalRunAgentTurnParams({
         sessionCtx: {
           Provider: "telegram",
@@ -924,8 +922,8 @@ describe("runAgentTurnWithFallback: provider failures", () => {
       ),
     );
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback(
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(
       createMinimalRunAgentTurnParams({
         sessionCtx: {
           Provider: "discord",
@@ -953,8 +951,8 @@ describe("runAgentTurnWithFallback: provider failures", () => {
       }),
     );
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(createMinimalRunAgentTurnParams());
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
@@ -981,8 +979,8 @@ describe("runAgentTurnWithFallback: provider failures", () => {
       }),
     );
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(createMinimalRunAgentTurnParams());
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
@@ -999,8 +997,8 @@ describe("runAgentTurnWithFallback: provider failures", () => {
       ),
     );
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn({
       commandBody: "hello",
       followupRun: createFollowupRun(),
       sessionCtx: {

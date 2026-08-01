@@ -117,6 +117,7 @@ async function runEmbeddedAgentViaCliBackend(
     model: params.model,
     cwd: params.cwd ?? params.workspaceDir,
     config: params.config,
+    ...(params.senderIsOwner !== undefined ? { senderIsOwner: params.senderIsOwner } : {}),
   });
   // CLI tool results arrive as agent events with transport-prefixed MCP
   // names; strip and normalize so observers and transcript records see the
@@ -152,12 +153,14 @@ async function runEmbeddedAgentViaCliBackend(
       return;
     }
     const isError = evt.data.isError === true || isToolResultError(evt.data.result);
+    const resultContentSource = evt.data.resultContentSource === "network" ? "network" : undefined;
     transcript.noteToolEvent({
       phase,
       toolName,
       toolCallId,
       result: evt.data.result,
       isError,
+      ...(resultContentSource ? { resultContentSource } : {}),
     });
     onAgentToolResult?.({
       toolName,

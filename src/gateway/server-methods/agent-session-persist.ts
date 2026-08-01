@@ -132,6 +132,7 @@ export async function persistAgentSessionPhase(params: {
           entry: params.entry,
           storePath: params.storePath,
           agentId: params.sessionAgentId,
+          sessionKey: params.canonicalSessionKey,
         }).sessionStartedAt
       : undefined;
 
@@ -466,10 +467,9 @@ export async function persistAgentSessionPhase(params: {
       sessionKey: params.canonicalSessionKey,
       sessionId: resolvedSessionId,
       storePath: params.storePath,
-      sessionFile: sessionEntry?.sessionFile,
       agentId: params.sessionAgentId,
+      workspaceDir: params.entry?.spawnedWorkspaceDir,
       previousSessionId,
-      previousSessionFile: previousSessionId ? params.entry?.sessionFile : undefined,
       previousEndReason: previousSessionId
         ? (freshness?.staleReason ??
           (usableRequestedSessionId && params.entry?.sessionId !== usableRequestedSessionId

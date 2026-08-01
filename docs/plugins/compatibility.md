@@ -109,6 +109,21 @@ cleared; the existing `--fail-on-eligible-compat` gate continues to apply only
 to dated `deprecated` records. Reader references are surface-token matches for
 triage; use the published-artifact sweep before authorizing removal.
 
+### Channel prompt-context identifier aliases
+
+New channel plugins should use `MsgContext.ChannelPromptContext`,
+`MsgContext.ChannelStructuredContext`, `ChannelStructuredContextEntry`, and
+`SupplementalContextFacts.channelStructuredContext`. The older
+`UntrustedContext`, `UntrustedStructuredContext`,
+`UntrustedStructuredContextEntry`, and supplemental `untrustedContext` names
+remain as deprecated SDK aliases until 2026-09-08 (registry record
+`sdk-untrusted-context-identifier-aliases`). Inbound finalization folds those
+deprecated fields into the channel-named fields and removes the old keys from
+runtime context.
+
+The security runtime similarly exports `buildChannelMetadata`; the deprecated
+`buildUntrustedChannelMetadata` alias remains available on the same schedule.
+
 ### WhatsApp inbound callback flat aliases
 
 WhatsApp runtime callbacks deliver `WebInboundMessage`: the canonical
@@ -126,13 +141,13 @@ names its exact nested replacement. Common examples:
 
 - `id`, `timestamp`, and `isBatched` move under `event`.
 - `body`, `mediaPath`, `mediaType`, `mediaFileName`, `mediaUrl`, `location`,
-  and `untrustedStructuredContext` move under `payload`.
+  and `channelStructuredContext` move under `payload`.
 - `to`, `chatId`, sender/self fields, `sendComposing`, `reply(...)`, and
   `sendMedia(...)` move under `platform`.
 - `replyTo*` fields move under `quote`; group subject/participant/mention
   fields move under `group`.
 
-`payload.untrustedStructuredContext` is extracted from inbound provider
+`payload.channelStructuredContext` is extracted from inbound provider
 payloads. Plugins should inspect `label`, `source`, and `type` before
 treating its `payload` as authoritative.
 

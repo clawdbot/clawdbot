@@ -723,7 +723,10 @@ const grandchild = spawn(process.execPath, [
   "-e",
   "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);",
 ], { stdio: "ignore" });
-fs.writeFileSync(process.argv[2], String(grandchild.pid));
+// Publish the pid by rename so the reader never observes a created-but-unwritten
+// or partially written file.
+fs.writeFileSync(process.argv[2] + ".tmp", String(grandchild.pid));
+fs.renameSync(process.argv[2] + ".tmp", process.argv[2]);
 process.on("SIGTERM", () => process.exit(0));
 setInterval(() => {}, 1000);
 `,

@@ -4,8 +4,6 @@ import { describe, expect, it, vi } from "vitest";
 const createQaScenarioRuntimeApi = vi.hoisted(() => vi.fn());
 const runScenarioFlow = vi.hoisted(() => vi.fn(async (params: { api: unknown }) => params.api));
 const waitForOutboundMessage = vi.hoisted(() => vi.fn());
-const waitForTransportOutboundMessage = vi.hoisted(() => vi.fn());
-const waitForChannelOutboundMessage = vi.hoisted(() => vi.fn());
 const waitForNoOutbound = vi.hoisted(() => vi.fn());
 const waitForNoTransportOutbound = vi.hoisted(() => vi.fn());
 const recentOutboundSummary = vi.hoisted(() => vi.fn());
@@ -73,8 +71,6 @@ vi.mock("./scenario-flow-runner.js", () => ({
 
 vi.mock("./suite-runtime-transport.js", () => ({
   waitForOutboundMessage,
-  waitForTransportOutboundMessage,
-  waitForChannelOutboundMessage,
   waitForNoOutbound,
   waitForNoTransportOutbound,
   recentOutboundSummary,
@@ -303,7 +299,15 @@ describe("qa suite runtime flow", () => {
     expect(call.scenario).toBe(scenario);
     expect(call.deps.runScenario).toBe(runScenario);
     expect(call.deps.waitForQaChannelReady).toBe(waitForQaChannelReady);
-    expect(call.deps.waitForOutboundMessage).toBe(waitForOutboundMessage);
+    expect(call.deps.waitForOutboundMessage).toBeTypeOf("function");
+    const outboundPredicate = vi.fn();
+    call.deps.waitForOutboundMessage(env.transport.state, outboundPredicate, 123);
+    expect(waitForOutboundMessage).toHaveBeenCalledWith(
+      env.transport.state,
+      outboundPredicate,
+      123,
+      { accountId: "qa-channel" },
+    );
     expect(call.deps.markGatewayLogCursor()).toBe(0);
     expect(() => call.deps.assertNoGatewayLogSentinels()).not.toThrow();
     expect(call.deps.readSessionTranscriptSummary).toBe(readSessionTranscriptSummary);

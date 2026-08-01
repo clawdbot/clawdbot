@@ -14,7 +14,11 @@ import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { resetWorkingProgress } from "./chat-progress.ts";
 import { buildChatItems, type BuildChatItemsProps } from "./chat-thread-build.ts";
 import { sanitizeStreamText } from "./chat-thread-items.ts";
-import { getOrCreateSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
+import {
+  getOrCreateSessionCacheValue,
+  getSessionCacheValue,
+  setSessionCacheValue,
+} from "./session-cache.ts";
 
 export { isPendingSendMessage, persistedMessageEntryId } from "./chat-thread-items.ts";
 export {
@@ -38,6 +42,7 @@ const expandedToolCardsBySession = new Map<string, Map<string, boolean>>();
 const expandedUserMessagesBySession = new Map<string, Map<string, boolean>>();
 const initializedToolCardsBySession = new Map<string, Set<string>>();
 const lastAutoExpandPrefBySession = new Map<string, boolean>();
+const lastToolCardItemsBySession = new Map<string, readonly (ChatItem | MessageGroup)[]>();
 
 export function resetChatThreadState(paneId?: string): void {
   if (paneId) {
@@ -50,6 +55,7 @@ export function resetChatThreadState(paneId?: string): void {
   expandedUserMessagesBySession.clear();
   initializedToolCardsBySession.clear();
   lastAutoExpandPrefBySession.clear();
+  lastToolCardItemsBySession.clear();
 }
 
 function sameMessageGroup(previous: MessageGroup, next: MessageGroup): boolean {
@@ -223,7 +229,6 @@ function sameChatItemsStructuralInput(
     previous.showToolCalls === next.showToolCalls &&
     previous.persistCommentary === next.persistCommentary &&
     previous.runWorking === next.runWorking &&
-    previous.waitingApproval === next.waitingApproval &&
     previous.runActive === next.runActive &&
     previous.questionPrompts === next.questionPrompts &&
     Boolean(previous.planStatus?.steps.length) === Boolean(next.planStatus?.steps.length) &&
@@ -380,12 +385,16 @@ function getInitializedToolCards(sessionKey: string): Set<string> {
 
 export function syncToolCardExpansionState(
   sessionKey: string,
-  items: Array<ChatItem | MessageGroup>,
+  items: readonly (ChatItem | MessageGroup)[],
   autoExpandToolCalls: boolean,
 ): void {
   const expanded = getExpandedToolCards(sessionKey);
   const initialized = getInitializedToolCards(sessionKey);
-  const previousAutoExpand = lastAutoExpandPrefBySession.get(sessionKey) ?? false;
+  const previousItems = getSessionCacheValue(lastToolCardItemsBySession, sessionKey);
+  const previousAutoExpand = getSessionCacheValue(lastAutoExpandPrefBySession, sessionKey) ?? false;
+  if (previousItems === items && previousAutoExpand === autoExpandToolCalls) {
+    return;
+  }
   const currentToolCardIds = new Set<string>();
   for (const item of items) {
     if (item.kind !== "group") {
@@ -419,5 +428,6 @@ export function syncToolCardExpansionState(
       expanded.set(toolCardId, true);
     }
   }
-  lastAutoExpandPrefBySession.set(sessionKey, autoExpandToolCalls);
+  setSessionCacheValue(lastToolCardItemsBySession, sessionKey, items);
+  setSessionCacheValue(lastAutoExpandPrefBySession, sessionKey, autoExpandToolCalls);
 }

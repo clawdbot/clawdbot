@@ -3,7 +3,7 @@ import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
 import {
   setupAgentRunnerExecutionTestState,
-  getRunAgentTurnWithFallback,
+  getExecuteAgentTurnForTest,
   createMockTypingSignaler,
   createFollowupRun,
 } from "./agent-runner-execution.test-support.js";
@@ -15,7 +15,7 @@ import type { InternalGetReplyOptions } from "./get-reply.types.js";
 
 const state = setupAgentRunnerExecutionTestState();
 
-describe("runAgentTurnWithFallback: message tool progress", () => {
+describe("executeAgentTurn: message tool progress", () => {
   it("suppresses progress callbacks after message-tool-only delivery completes", async () => {
     let releaseItemEvent: (() => void) | undefined;
     const itemEventGate = new Promise<void>((resolve) => {
@@ -82,10 +82,10 @@ describe("runAgentTurnWithFallback: message tool progress", () => {
       return { payloads: [{ text: "NO_REPLY" }], meta: {} };
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
     const followupRun = createFollowupRun();
     followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
-    await runAgentTurnWithFallback({
+    await executeAgentTurn({
       commandBody: "hello",
       followupRun,
       sessionCtx: {
@@ -174,10 +174,10 @@ describe("runAgentTurnWithFallback: message tool progress", () => {
       };
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
     const followupRun = createFollowupRun();
     followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
-    await runAgentTurnWithFallback({
+    await executeAgentTurn({
       commandBody: "hello",
       followupRun,
       sessionCtx: { Provider: "discord", MessageSid: "msg" } as unknown as TemplateContext,
@@ -256,10 +256,10 @@ describe("runAgentTurnWithFallback: message tool progress", () => {
       return { payloads: [{ text: "NO_REPLY" }], meta: {} };
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
     const followupRun = createFollowupRun();
     followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
-    await runAgentTurnWithFallback({
+    await executeAgentTurn({
       commandBody: "hello",
       followupRun,
       sessionCtx: {
@@ -347,10 +347,10 @@ describe("runAgentTurnWithFallback: message tool progress", () => {
       return { payloads: [{ text: "NO_REPLY" }], meta: {} };
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
     const followupRun = createFollowupRun();
     followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
-    await runAgentTurnWithFallback({
+    await executeAgentTurn({
       commandBody: "hello",
       followupRun,
       sessionCtx: {

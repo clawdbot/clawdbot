@@ -120,7 +120,7 @@ const sidebarIcons = {
     <path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5"></path>
     <path d="M19.1 4.9C23 8.8 23 15.1 19.1 19"></path>
   </svg>`,
-  audio: html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+  tts: html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
     <path d="M9 18V5l12-2v13"></path>
     <circle cx="6" cy="18" r="3"></circle>
     <circle cx="18" cy="16" r="3"></circle>
@@ -135,21 +135,9 @@ const sidebarIcons = {
     <circle cx="12" cy="12" r="10"></circle>
     <polyline points="12 6 12 12 16 14"></polyline>
   </svg>`,
-  web: html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-    <circle cx="12" cy="12" r="10"></circle>
-    <line x1="2" y1="12" x2="22" y2="12"></line>
-    <path
-      d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"
-    ></path>
-  </svg>`,
   discovery: html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
     <circle cx="11" cy="11" r="8"></circle>
     <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-  </svg>`,
-  canvasHost: html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-    <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
-    <circle cx="8.5" cy="8.5" r="1.5"></circle>
-    <polyline points="21 15 16 10 5 21"></polyline>
   </svg>`,
   talk: html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
     <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
@@ -236,23 +224,13 @@ export const SECTION_CATEGORIES: SectionCategoryDefinition[] = [
   { id: "ai", sections: ["agents", "models", "skills", "tools", "memory", "session"] },
   {
     id: "communication",
-    sections: ["channels", "messages", "broadcast", "__notifications__", "talk", "audio"],
+    sections: ["channels", "messages", "broadcast", "__notifications__", "talk", "tts"],
   },
   { id: "security", sections: ["security", "approvals"] },
   { id: "automation", sections: ["commands", "hooks", "bindings", "cron", "plugins"] },
   {
     id: "infrastructure",
-    sections: [
-      "gateway",
-      "web",
-      "browser",
-      "nodeHost",
-      "canvasHost",
-      "discovery",
-      "media",
-      "acp",
-      "mcp",
-    ],
+    sections: ["gateway", "browser", "nodeHost", "discovery", "acp", "mcp"],
   },
   { id: "appearance", sections: ["__appearance__", "ui", "wizard"] },
 ];

@@ -103,7 +103,7 @@ export async function runGatewaySessionCompaction(
       storePath: params.storePath,
     },
     allowGatewaySubagentBinding: true,
-    sessionFile: transcriptTarget.sessionFile,
+    sessionFile: transcriptTarget.sessionKey,
     workspaceDir,
     cwd: normalizeOptionalString(params.entry.spawnedCwd),
     config: params.cfg,

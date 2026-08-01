@@ -212,7 +212,8 @@ vi.mock("../infra/exec-approvals.js", async (importOriginal) => ({
   resolveExecApprovalUnavailableDecisions: resolveExecApprovalUnavailableDecisionsMock,
 }));
 
-vi.mock("../infra/exec-auto-review.js", () => ({
+vi.mock("../infra/exec-auto-review.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/exec-auto-review.js")>()),
   defaultExecAutoReviewer: defaultExecAutoReviewerMock,
 }));
 
@@ -238,7 +239,6 @@ vi.mock("./bash-tools.exec-host-shared.js", () => ({
 }));
 
 vi.mock("./bash-tools.exec-runtime.js", () => ({
-  DEFAULT_NOTIFY_TAIL_CHARS: 1000,
   createApprovalSlug: vi.fn(() => "slug"),
   normalizeNotifyOutput: vi.fn((value) => value),
   runExecProcess: runExecProcessMock,
@@ -849,16 +849,29 @@ describe("processGatewayAllowlist", () => {
     expect(JSON.stringify(captured.events)).not.toContain("allowed");
   });
 
+  it.runIf(process.platform !== "win32").each(["bash", "sh", "/bin/sh"])(
+    "keeps %s login-shell startup outside model auto-review",
+    async (shell) => {
+      const payload = "echo auto-review-startup-proof";
+      const command = `${shell} -lc "${payload}"`;
+      await configurePlanBackedCommand({ command });
+
+      const result = await runGatewayAllowlist({
+        command,
+        ask: "on-miss",
+        autoReview: true,
+      });
+
+      expect(defaultExecAutoReviewerMock).not.toHaveBeenCalled();
+      expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalledTimes(1);
+      expect(result.pendingResult?.details.status).toBe("approval-pending");
+    },
+  );
+
   it("does not execute after cancellation wins during auto-review", async () => {
     const command = "echo ok";
     await configurePlanBackedCommand({ command });
-    let resolveReview: ((decision: Awaited<ReturnType<ExecAutoReviewer>>) => void) | undefined;
-    const autoReviewer = vi.fn<ExecAutoReviewer>(
-      () =>
-        new Promise((resolve) => {
-          resolveReview = resolve;
-        }),
-    );
+    const autoReviewer = vi.fn<ExecAutoReviewer>(() => new Promise(() => {}));
     const abortController = new AbortController();
     const result = runGatewayAllowlist({
       command,
@@ -870,10 +883,46 @@ describe("processGatewayAllowlist", () => {
     await vi.waitFor(() => expect(autoReviewer).toHaveBeenCalledTimes(1));
 
     abortController.abort(new Error("cancelled during review"));
-    resolveReview?.({ decision: "allow-once", risk: "low", rationale: "allowed" });
 
     await expect(result).rejects.toThrow("cancelled during review");
     expect(createAndRegisterDefaultExecApprovalRequestMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "throws synchronously",
+      reviewer: () => {
+        throw new Error("provider\n\u001b[31mfailed\u001b[0m\u202e");
+      },
+    },
+    {
+      name: "rejects asynchronously",
+      reviewer: async () => {
+        throw new Error("provider\n\u001b[31mfailed\u001b[0m\u202e");
+      },
+    },
+  ])("requests human approval when a gateway reviewer $name", async ({ reviewer }) => {
+    const command = "echo ok";
+    await configurePlanBackedCommand({ command });
+    const autoReviewer = vi.fn<ExecAutoReviewer>(reviewer);
+    const warnings: string[] = [];
+
+    const result = await runGatewayAllowlist({
+      command,
+      ask: "on-miss",
+      autoReview: true,
+      autoReviewer,
+      warnings,
+    });
+
+    expect(autoReviewer).toHaveBeenCalledTimes(1);
+    expect(result.pendingResult?.details.status).toBe("approval-pending");
+    expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalledTimes(1);
+    expect(commitExecAuthorizationMock).not.toHaveBeenCalled();
+    expect(runExecProcessMock).not.toHaveBeenCalled();
+    expect(warnings).toEqual([
+      "Exec auto-review deferred to human approval (risk=unknown): exec reviewer failed: provider\\nfailed",
+    ]);
   });
 
   it("reviews and executes the same PATH-resolved executable", async () => {
@@ -2028,6 +2077,49 @@ EOF`,
     });
     expect(requireSentFollowupTarget(0)?.direct).toBe(false);
     expect(requireSentFollowupText(0)).toContain("done");
+  });
+
+  it("keeps multiline gateway approval follow-up output intact", async () => {
+    buildExecApprovalFollowupTargetMock.mockImplementation((value) => value);
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      hostSecurity: "allowlist",
+      hostAsk: "always",
+      askFallback: "deny",
+    });
+    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue("allow-once");
+    createExecApprovalDecisionStateMock.mockReturnValue({
+      baseDecision: { timedOut: false },
+      approvedByAsk: true,
+      deniedReason: null,
+    });
+    const aggregated = "first line\r\n\tindented\n\nlast line  \t\n";
+    runExecProcessMock.mockResolvedValue({
+      session: { id: "sess-1" },
+      promise: Promise.resolve({
+        status: "completed",
+        exitCode: 0,
+        timedOut: false,
+        aggregated,
+      }),
+    });
+
+    const result = await runGatewayAllowlist({
+      command: "openclaw sessions export-trajectory --json",
+      approvalFollowupMode: "agent",
+      sessionId: "approval-session",
+      sessionStore: "/tmp/openclaw-sessions.json",
+      turnSourceChannel: "webchat",
+    });
+
+    expect(result.pendingResult?.details.status).toBe("approval-pending");
+    await vi.waitFor(() => {
+      expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledTimes(1);
+    });
+    const text = requireSentFollowupText(0);
+    expect(text).toContain(aggregated);
+    // The compact notify formatter would have collapsed every run of whitespace.
+    expect(text).not.toContain("first line indented last line");
   });
 
   it("fails closed when detached approval metadata cannot be persisted", async () => {

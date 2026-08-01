@@ -1,5 +1,6 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { normalizeSessionKeyForUiComparison } from "../sessions/session-key.ts";
+import { isActiveWorkboardCard } from "./card-state.ts";
 import { normalizeCardsPayload } from "./normalization.ts";
 import { WORKBOARD_CHANGED_EVENT, type WorkboardCard, type WorkboardStatus } from "./types.ts";
 
@@ -191,7 +192,7 @@ class WorkboardSessionCardLookup {
 
   private async loadMatches(): Promise<WorkboardLookupSnapshot> {
     const payload = await this.client.request("workboard.cards.list", {});
-    const cards = normalizeCardsPayload(payload).cards;
+    const cards = normalizeCardsPayload(payload).cards.filter(isActiveWorkboardCard);
     const matches = indexCards(cards);
     const runCandidates = cards
       .toSorted((left, right) => right.updatedAt - left.updatedAt)

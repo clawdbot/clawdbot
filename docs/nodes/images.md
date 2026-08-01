@@ -7,6 +7,10 @@ title: "Image and media support"
 
 The WhatsApp channel runs on Baileys Web. This page covers media handling rules for send, gateway, and agent replies.
 
+For inline audio and video in the Control UI and native apps, including
+portable formats, byte limits, and lazy transcoding, see
+[Media playback](/nodes/media-playback).
+
 ## Goals
 
 - Send media with an optional caption via `openclaw message send --media`.
@@ -90,4 +94,5 @@ The 16MB audio/video and 100MB document figures above are the shared per-kind me
 
 - [Camera capture](/nodes/camera)
 - [Media understanding](/nodes/media-understanding)
+- [Media playback](/nodes/media-playback)
 - [Audio and voice notes](/nodes/audio)

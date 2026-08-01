@@ -321,7 +321,7 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
   }
 
   const envelopeOptions = resolveEnvelopeFormatOptions(cfg);
-  const skillSuggestionEnabled = !resolveSkillWorkshopConfig(cfg).autonomous.enabled;
+  const skillSuggestionEnabled = resolveSkillWorkshopConfig(cfg).autonomous.mode === "off";
   const inboundUserContextSessionCtx = isNewSession
     ? {
         ...sessionCtx,

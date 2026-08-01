@@ -92,7 +92,7 @@ describe("main session recovery state", () => {
     expect(entry).toEqual(before);
   });
 
-  it("marks without charging and preserves generation-scoped lifecycle fences", () => {
+  it("marks without charging and replaces an older lifecycle owner for the same run", () => {
     const entry = interruptedEntry({
       restartRecoveryRuns: [
         { runId: "older-run", lifecycleGeneration: "generation-old" },
@@ -123,7 +123,6 @@ describe("main session recovery state", () => {
     expect(entry.restartRecoveryRuns).toEqual([
       { runId: "new-run", lifecycleGeneration: "generation-2" },
       { runId: "older-run", lifecycleGeneration: "generation-old" },
-      { runId: "shared-run", lifecycleGeneration: "generation-1" },
       { runId: "shared-run", lifecycleGeneration: "generation-2" },
     ]);
   });
@@ -419,10 +418,10 @@ describe("main session recovery state", () => {
 
   it("moves a reservation into the lifecycle fence during Gateway admission", () => {
     const entry = interruptedEntry({
-      pendingFinalDelivery: true,
-      pendingFinalDeliveryText: " captured reply ",
+      pendingFinalDelivery: { kind: "replayable", text: " captured reply ", createdAt: 1 },
       restartRecoveryDeliveryRunId: "recovery-1",
       restartRecoveryDeliverySourceRunId: "source-1",
+      restartRecoveryRuns: [{ runId: "recovery-1", lifecycleGeneration: "generation-old" }],
       mainRestartRecovery: recoveryState({
         revision: 2,
         chargedAttempts: 1,
@@ -455,8 +454,7 @@ describe("main session recovery state", () => {
     ).toEqual({ kind: "admitted_recovery" });
     expect(entry).toMatchObject({
       abortedLastRun: false,
-      pendingFinalDeliveryAttemptCount: 1,
-      pendingFinalDeliveryLastAttemptAt: 300,
+      pendingFinalDelivery: { kind: "replayable", text: "captured reply", createdAt: 1 },
       restartRecoveryRuns: [{ runId: "recovery-1", lifecycleGeneration: "generation-1" }],
       mainRestartRecovery: {
         revision: 3,

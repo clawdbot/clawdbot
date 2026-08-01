@@ -6,7 +6,7 @@ import {
   formatDocsLink,
   hasConfiguredSecretInput,
   mergeAllowFromEntries,
-  patchTopLevelChannelConfigSection,
+  patchScopedAccountConfig,
   promptSingleChannelSecretInput,
   setSetupChannelEnabled,
   splitSetupEntries,
@@ -90,30 +90,11 @@ function patchFeishuConfig(
   accountId: string,
   patch: Record<string, unknown>,
 ): OpenClawConfig {
-  const feishuCfg = cfg.channels?.feishu as FeishuConfig | undefined;
-  if (accountId === DEFAULT_ACCOUNT_ID) {
-    return patchTopLevelChannelConfigSection({
-      cfg,
-      channel,
-      enabled: true,
-      patch,
-    });
-  }
-  const nextAccountPatch = {
-    ...(feishuCfg?.accounts?.[accountId] as Record<string, unknown> | undefined),
-    enabled: true,
-    ...patch,
-  };
-  return patchTopLevelChannelConfigSection({
+  return patchScopedAccountConfig({
     cfg,
-    channel,
-    enabled: true,
-    patch: {
-      accounts: {
-        ...feishuCfg?.accounts,
-        [accountId]: nextAccountPatch,
-      },
-    },
+    channelKey: channel,
+    accountId,
+    patch: { enabled: true, ...patch },
   });
 }
 

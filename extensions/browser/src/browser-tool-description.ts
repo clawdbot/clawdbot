@@ -4,7 +4,7 @@ export function describeBrowserTool(opts: {
   hostHint: string;
 }): string {
   return [
-    "Control the browser via OpenClaw's browser control server (status/start/stop/profiles/tabs/open/snapshot/screenshot/download/actions).",
+    "Control the browser via OpenClaw's browser control server (status/start/stop/profiles/tabs/open/snapshot/screenshot/pdf print-to-PDF/download/console logs/dialog accept-dismiss/actions incl. act:evaluate to run JS in the page).",
     "Browser choice: omit profile to use the configured default (normally the isolated OpenClaw-managed `openclaw` browser).",
     "When existing logins/cookies matter, use action=profiles to inspect available profiles, then select the appropriate profile by name. Do not assume a profile name. Use only when the task requires an existing session and the user has authorized it.",
     "Use action=importprofile on macOS to copy cookies from an authorized Chrome-family system profile into a fresh managed profile; this may show a Keychain consent prompt.",
@@ -14,6 +14,7 @@ export function describeBrowserTool(opts: {
     "For multi-step browser work, login checks, stale refs, duplicate tabs, or Google Meet flows, use the bundled browser-automation skill when it is available.",
     'For stable, self-resolving refs across calls, use snapshot with refs="aria" (Playwright aria-ref ids). Default refs="role" are role+name-based.',
     "Repeated compatible snapshots with stable document identity mark newly appeared ref-bearing elements with [new].",
+    "navigate returns the loaded page's compact snapshot inline (efficient interactive tier; use action=snapshot for a full snapshot); do not call snapshot after navigate. Batch act results that report a cross-document navigation also include fresh page state; after a single act that triggers navigation, snapshot before using refs.",
     "Use snapshot+act for UI automation. Avoid act:wait by default; use only in exceptional cases when no reliable UI state exists.",
     "To read or answer questions from page text, prefer action=extract with query (optionally selector, ignoreSelectors, or schema) over snapshot: it answers in one call without loading page content into context.",
     "For file chooser uploads, pass the trigger ref with paths in the same upload call when available; use paths-only arming only when a later trigger is intentional. Use inputRef or element to set a file input directly.",

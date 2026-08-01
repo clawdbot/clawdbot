@@ -18,7 +18,10 @@ import {
   WORKSPACE_TEMPLATE_PACK_PATHS,
   createWorkspaceBootstrapSmokeEnv,
 } from "../scripts/lib/workspace-bootstrap-smoke.mjs";
-import { collectInstalledRootDependencyManifestErrors } from "../scripts/openclaw-npm-postpublish-verify.ts";
+import {
+  collectInstalledBundledRuntimeSidecarPaths,
+  collectInstalledRootDependencyManifestErrors,
+} from "../scripts/openclaw-npm-postpublish-verify.ts";
 import {
   collectAppcastSparkleVersionErrors,
   collectBundledExtensionManifestErrors,
@@ -789,8 +792,18 @@ describe("collectMissingPackPaths", () => {
         mkdirSync(dirname(filePath), { recursive: true });
         writeFileSync(filePath, "export {};\n");
       }
-      for (const pluginId of ["image-generation-core", "media-understanding-core"]) {
-        writeFileSync(join(distDir, "extensions", pluginId, "package.json"), "{}\n");
+      for (const relativePath of requiredBundledPluginPackPaths) {
+        if (!/^dist\/extensions\/[^/]+\/package\.json$/u.test(relativePath)) {
+          continue;
+        }
+        const packageJsonPath = join(packageRoot, relativePath);
+        mkdirSync(dirname(packageJsonPath), { recursive: true });
+        writeFileSync(packageJsonPath, "{}\n");
+      }
+      for (const relativePath of collectInstalledBundledRuntimeSidecarPaths(packageRoot)) {
+        const sidecarPath = join(packageRoot, relativePath);
+        mkdirSync(dirname(sidecarPath), { recursive: true });
+        writeFileSync(sidecarPath, "export {};\n");
       }
       writeFileSync(
         join(packageRoot, "package.json"),

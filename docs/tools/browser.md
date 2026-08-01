@@ -922,6 +922,11 @@ The agent gets **one tool** for browser automation:
 How it maps:
 
 - `browser snapshot` returns a stable UI tree (AI or ARIA).
+- `browser navigate` also returns the loaded page's snapshot inline (efficient
+  interactive tier, so the payload stays compact and bounded), so the agent
+  does not need a follow-up snapshot call. Batch `act` results that report a
+  cross-document navigation include the same fresh page state. Navigations
+  that resolve to a download skip it.
 - `browser act` uses the snapshot `ref` IDs to click/type/drag/select.
 - `browser screenshot` captures pixels (full page, element, or labeled refs).
 - `browser doctor` checks Gateway, plugin, profile, browser, and tab readiness.

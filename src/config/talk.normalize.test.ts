@@ -165,18 +165,20 @@ describe("talk normalization", () => {
   });
 
   it("preserves normalized realtime instructions in talk.config payloads", () => {
-    const payload = buildTalkConfigResponse({
-      realtime: {
-        provider: "openai",
-        providers: {
-          openai: {
-            model: "gpt-realtime",
-            speakerVoice: "alloy",
+    const payload = buildTalkConfigResponse(
+      normalizeTalkSection({
+        realtime: {
+          provider: "openai",
+          providers: {
+            openai: {
+              model: "gpt-realtime",
+              speakerVoice: "alloy",
+            },
           },
+          instructions: " Speak with crisp diction. ",
         },
-        instructions: " Speak with crisp diction. ",
-      },
-    });
+      }),
+    );
 
     expect(payload?.realtime?.provider).toBe("openai");
     expect(payload?.realtime?.instructions).toBe("Speak with crisp diction.");
@@ -254,15 +256,5 @@ describe("talk normalization", () => {
         },
       },
     });
-  });
-
-  it("does not inject provider apiKey defaults during snapshot materialization", () => {
-    const payload = buildTalkConfigResponse({
-      voiceId: "voice-123",
-    });
-
-    expect(payload?.provider).toBe("elevenlabs");
-    expect(payload?.resolved?.config.voiceId).toBe("voice-123");
-    expect(payload?.resolved?.config.apiKey).toBeUndefined();
   });
 });

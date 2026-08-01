@@ -5,6 +5,7 @@
 // snapshot semantics the retired devices/*.json files had (including
 // cross-process last-writer-wins per store) while WAL + busy_timeout make
 // concurrent gateway/CLI access safe at the statement level.
+import type { DatabaseSync } from "node:sqlite";
 import type {
   DB as OpenClawStateKyselyDatabase,
   DevicePairingPaired,
@@ -40,6 +41,23 @@ type DevicePairingStoreState = {
 
 type DevicePairingStoreTarget = "pending" | "paired" | "both";
 
+type DevicePairingStoreValidityToken = {
+  dataVersion: number;
+  totalChanges: number;
+};
+
+type DevicePairingStoreCache = {
+  connection: DatabaseSync;
+  path: string;
+  state: DevicePairingStoreState;
+  validityToken: DevicePairingStoreValidityToken;
+};
+
+type DevicePairingStoreMutation<T> = {
+  mutated: boolean;
+  value: T;
+};
+
 type PairedDeviceNodeSurfaceUpdate<T> =
   | { value: T; persist: false }
   | { value: T; persist: true; nodeSurface: PairedDeviceNodeSurface };
@@ -53,9 +71,68 @@ type PairedDevicePresenceUpdate<T> =
       lastSeenReason: string;
     };
 
+// One materialized pairing snapshot avoids rescanning both tables for every node catalog read.
+// The connection token detects other-process writes, and store-owned writes clear it post-commit;
+// without both paths, Gateway and CLI pairing mutations could leave node.list serving stale rows.
+let devicePairingStoreCache: DevicePairingStoreCache | undefined;
+
 /** Route an explicit pairing base dir (tests, alternate state roots) to that dir's DB. */
 function resolveDevicePairingStateDbOptions(baseDir?: string): OpenClawStateDatabaseOptions {
   return baseDir ? { env: { ...process.env, OPENCLAW_STATE_DIR: baseDir } } : {};
+}
+
+function readDataVersion(database: DatabaseSync): number {
+  const row = database.prepare("PRAGMA data_version").get() as { data_version?: unknown };
+  if (typeof row.data_version !== "number") {
+    throw new Error("SQLite did not return a numeric PRAGMA data_version");
+  }
+  return row.data_version;
+}
+
+function readTotalChanges(database: DatabaseSync): number {
+  const row = database.prepare("SELECT total_changes() AS value").get() as { value?: unknown };
+  if (typeof row.value !== "number") {
+    throw new Error("SQLite did not return a numeric total_changes() value");
+  }
+  return row.value;
+}
+
+function readDevicePairingStoreValidityToken(
+  database: DatabaseSync,
+): DevicePairingStoreValidityToken {
+  return {
+    dataVersion: readDataVersion(database),
+    totalChanges: readTotalChanges(database),
+  };
+}
+
+function devicePairingStoreValidityTokensEqual(
+  left: DevicePairingStoreValidityToken,
+  right: DevicePairingStoreValidityToken,
+): boolean {
+  return left.dataVersion === right.dataVersion && left.totalChanges === right.totalChanges;
+}
+
+function invalidateDevicePairingStoreCache(database: OpenClawStateDatabase): void {
+  if (
+    devicePairingStoreCache?.connection === database.db &&
+    devicePairingStoreCache.path === database.path
+  ) {
+    devicePairingStoreCache = undefined;
+  }
+}
+
+function runDevicePairingStoreMutation<T>(
+  baseDir: string | undefined,
+  mutate: (database: OpenClawStateDatabase) => DevicePairingStoreMutation<T>,
+): T {
+  const databaseOptions = resolveDevicePairingStateDbOptions(baseDir);
+  const database = openOpenClawStateDatabase(databaseOptions);
+  const result = runOpenClawStateWriteTransaction(mutate, { ...databaseOptions, database });
+  if (result.mutated) {
+    invalidateDevicePairingStoreCache(database);
+  }
+  return result.value;
 }
 
 // Read-back allowlist for the approved_via column. The Record type forces
@@ -245,7 +322,16 @@ function fromBootstrapRow(row: DeviceBootstrapTokens): DeviceBootstrapTokenRecor
 
 /** Load the full pending + paired device snapshot from the shared state DB. */
 export function loadDevicePairingStoreState(baseDir?: string): DevicePairingStoreState {
-  const { db } = openOpenClawStateDatabase(resolveDevicePairingStateDbOptions(baseDir));
+  const database = openOpenClawStateDatabase(resolveDevicePairingStateDbOptions(baseDir));
+  const { db } = database;
+  const validityToken = readDevicePairingStoreValidityToken(db);
+  if (
+    devicePairingStoreCache?.connection === db &&
+    devicePairingStoreCache.path === database.path &&
+    devicePairingStoreValidityTokensEqual(devicePairingStoreCache.validityToken, validityToken)
+  ) {
+    return structuredClone(devicePairingStoreCache.state);
+  }
   const kysely = getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db);
   const pendingById: Record<string, DevicePairingPendingRecord> = {};
   for (const row of executeSqliteQuerySync(
@@ -261,7 +347,14 @@ export function loadDevicePairingStoreState(baseDir?: string): DevicePairingStor
   ).rows) {
     pairedByDeviceId[row.device_id] = fromPairedRow(row);
   }
-  return { pendingById, pairedByDeviceId };
+  const state = { pendingById, pairedByDeviceId };
+  devicePairingStoreCache = {
+    connection: db,
+    path: database.path,
+    state: structuredClone(state),
+    validityToken,
+  };
+  return state;
 }
 
 /** Load one paired-device row without materializing either pairing table. */
@@ -299,14 +392,14 @@ export function updatePairedDeviceNodeSurfaceInTransaction<T>(
   baseDir: string | undefined,
   update: (device: PairedDevice | null) => PairedDeviceNodeSurfaceUpdate<T>,
 ): T {
-  return runOpenClawStateWriteTransaction(({ db }) => {
+  return runDevicePairingStoreMutation(baseDir, ({ db }) => {
     const normalizedDeviceId = deviceId.trim();
     const device = normalizedDeviceId
       ? loadPairedDevicePairingStoreRecordFromDatabase(db, normalizedDeviceId)
       : null;
     const result = update(device);
     if (!result.persist) {
-      return result.value;
+      return { mutated: false, value: result.value };
     }
     if (!device) {
       throw new Error("cannot update a missing paired-device node surface");
@@ -319,8 +412,8 @@ export function updatePairedDeviceNodeSurfaceInTransaction<T>(
         .set({ node_surface_json: toJsonColumn(result.nodeSurface) })
         .where("device_id", "=", normalizedDeviceId),
     );
-    return result.value;
-  }, resolveDevicePairingStateDbOptions(baseDir));
+    return { mutated: true, value: result.value };
+  });
 }
 
 /** Read, validate, and update one paired-device presence row in one transaction. */
@@ -329,14 +422,14 @@ export function updatePairedDevicePresenceInTransaction<T>(
   baseDir: string | undefined,
   update: (device: PairedDevice | null) => PairedDevicePresenceUpdate<T>,
 ): T {
-  return runOpenClawStateWriteTransaction(({ db }) => {
+  return runDevicePairingStoreMutation(baseDir, ({ db }) => {
     const normalizedDeviceId = deviceId.trim();
     const device = normalizedDeviceId
       ? loadPairedDevicePairingStoreRecordFromDatabase(db, normalizedDeviceId)
       : null;
     const result = update(device);
     if (!result.persist) {
-      return result.value;
+      return { mutated: false, value: result.value };
     }
     if (!device) {
       throw new Error("cannot update presence for a missing paired device");
@@ -352,8 +445,8 @@ export function updatePairedDevicePresenceInTransaction<T>(
         })
         .where("device_id", "=", normalizedDeviceId),
     );
-    return result.value;
-  }, resolveDevicePairingStateDbOptions(baseDir));
+    return { mutated: true, value: result.value };
+  });
 }
 
 /** Replace the pending and/or paired table contents with the given snapshot. */
@@ -363,7 +456,7 @@ export function persistDevicePairingStoreState(
   target: DevicePairingStoreTarget,
   options?: { clearApnsNodeIds?: readonly string[] },
 ): void {
-  runOpenClawStateWriteTransaction(({ db }) => {
+  runDevicePairingStoreMutation(baseDir, ({ db }) => {
     const kysely = getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db);
     if (target !== "paired") {
       executeSqliteQuerySync(db, kysely.deleteFrom("device_pairing_pending"));
@@ -382,7 +475,8 @@ export function persistDevicePairingStoreState(
     for (const nodeId of new Set(options?.clearApnsNodeIds ?? [])) {
       clearApnsRegistrationFromDatabase(db, nodeId);
     }
-  }, resolveDevicePairingStateDbOptions(baseDir));
+    return { mutated: true, value: undefined };
+  });
 }
 
 /** Load all bootstrap token records keyed by token key. */

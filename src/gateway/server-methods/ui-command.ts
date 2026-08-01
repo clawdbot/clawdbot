@@ -6,24 +6,16 @@ import {
 import {
   ErrorCodes,
   errorShape,
-  formatValidationErrors,
   type UiCommandParams,
   validateUiCommandParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { GatewayRequestContextWithClientLookup } from "../server-request-context.js";
 import type { GatewayRequestHandlers } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 export const uiCommandHandlers: GatewayRequestHandlers = {
   "ui.command": ({ params, respond, context }) => {
-    if (!validateUiCommandParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid ui.command params: ${formatValidationErrors(validateUiCommandParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateUiCommandParams, "ui.command", respond)) {
       return;
     }
 

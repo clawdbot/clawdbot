@@ -278,6 +278,7 @@ describe("fetchWithSsrFGuard hardening", () => {
           autoSelectFamilyAttemptTimeout: 300,
         },
         clientFactory: expect.any(Function),
+        proxyTunnel: true,
         proxyTls: {
           autoSelectFamily: true,
           autoSelectFamilyAttemptTimeout: 300,
@@ -722,6 +723,7 @@ describe("fetchWithSsrFGuard hardening", () => {
       factory: expect.any(Function),
       uri: "http://proxy.example:7890",
       clientFactory: expect.any(Function),
+      proxyTunnel: true,
       proxyTls: {
         autoSelectFamily: true,
         autoSelectFamilyAttemptTimeout: 300,

@@ -116,4 +116,87 @@ describe("plugin board widget cells", () => {
     );
     expect(cell.querySelector('[data-test-id="board-widget-error"]')).toBeNull();
   });
+
+  it.each([
+    { name: "read-only board", canMutate: false, widgetReadOnly: false },
+    { name: "read-only widget", canMutate: true, widgetReadOnly: true },
+  ])(
+    "keeps an embedded Workboard card read-only for a $name",
+    async ({ canMutate, widgetReadOnly }) => {
+      const request = vi.fn(async (method: string) => {
+        if (method === "workboard.cards.list") {
+          return {
+            cards: [
+              {
+                id: "card-123",
+                title: "Read-only embedded card",
+                status: "ready",
+                priority: "normal",
+                labels: [],
+                position: 0,
+                createdAt: 1,
+                updatedAt: 1,
+              },
+            ],
+            statuses: ["ready", "running", "done"],
+          };
+        }
+        throw new Error(`Unexpected method: ${method}`);
+      });
+      const context = {
+        gateway: {
+          snapshot: {
+            phase: "connected",
+            client: { request },
+            hello: {
+              controlUiWidgetKinds: [
+                { pluginId: "workboard", kind: "workboard:card", label: "Workboard card" },
+              ],
+            },
+          },
+          subscribe: () => () => undefined,
+          subscribeEvents: () => () => undefined,
+        },
+      } as unknown as ApplicationContext;
+      const widget: BoardViewWidget = {
+        name: "work-item",
+        tabId: "main",
+        title: "Work item",
+        contentKind: "plugin",
+        pluginKind: "workboard:card",
+        props: { cardId: "card-123" },
+        sizeW: 6,
+        sizeH: 4,
+        position: 0,
+        grantState: "none",
+        revision: 1,
+      };
+      if (widgetReadOnly) {
+        Reflect.set(widget, "readOnly", true);
+      }
+      const provider = createApplicationContextProvider(context);
+      const cell = document.createElement("openclaw-board-widget-cell");
+      cell.widget = widget;
+      cell.rect = { name: widget.name, x: 0, y: 0, w: 6, h: 4 };
+      cell.sessionKey = "agent:main:test";
+      cell.callbacks = callbacks();
+      cell.canMutate = canMutate;
+      provider.append(cell);
+      document.body.append(provider);
+
+      await vi.waitFor(() =>
+        expect(cell.querySelector("openclaw-workboard-card-widget")?.textContent).toContain(
+          "Read-only embedded card",
+        ),
+      );
+      const select = cell.querySelector<HTMLSelectElement>("openclaw-workboard-card-widget select");
+      expect(select).not.toBeNull();
+      expect(select?.disabled).toBe(true);
+      if (select) {
+        select.value = "running";
+        select.dispatchEvent(new Event("change"));
+      }
+      expect(request).not.toHaveBeenCalledWith("workboard.cards.move", expect.anything());
+    },
+  );
 });

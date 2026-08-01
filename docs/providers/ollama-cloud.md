@@ -18,7 +18,7 @@ embeddings, and custom host details, see [Ollama](/providers/ollama).
 
 ## Setup
 
-Create an Ollama Cloud API key at [ollama.com/settings/keys](https://ollama.com/settings/keys), then run:
+Follow [Ollama's API key instructions](https://docs.ollama.com/api/authentication#api-keys), then run:
 
 ```bash
 openclaw onboard --auth-choice ollama-cloud

@@ -3,11 +3,18 @@ import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
   OPENCLAW_STATE_SCHEMA_VERSION,
+  withOpenClawStateStartupMigrationCheckpointDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "./kysely-sync.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import {
   acquireStartupMigrationLease,
@@ -22,6 +29,32 @@ afterEach(() => {
 });
 
 const startupMigrationTempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+type StartupMigrationLeaseTestDatabase = Pick<OpenClawStateKyselyDatabase, "state_leases">;
+
+/** Rewrites only the recorded owner start time so the live owner PID looks recycled. */
+function overwriteStartupMigrationLeaseOwnerStartedAt(
+  env: NodeJS.ProcessEnv,
+  startedAt: number,
+): void {
+  withOpenClawStateStartupMigrationCheckpointDatabase(
+    (db) => {
+      const kysely = getNodeSqliteKysely<StartupMigrationLeaseTestDatabase>(db);
+      const row = executeSqliteQueryTakeFirstSync(
+        db,
+        kysely.selectFrom("state_leases").select("payload_json as payloadJson"),
+      );
+      const payload = JSON.parse(row?.payloadJson ?? "{}") as { owner?: { startedAt?: number } };
+      executeSqliteQuerySync(
+        db,
+        kysely.updateTable("state_leases").set({
+          payload_json: JSON.stringify({ ...payload, owner: { ...payload.owner, startedAt } }),
+        }),
+      );
+    },
+    { env },
+  );
+}
 
 describe("startup migration checkpoint", () => {
   it("checks migration activity without creating shared state", () => {
@@ -112,7 +145,7 @@ describe("startup migration checkpoint", () => {
     expect(hasActiveStartupMigrationLease({ env, nowMs: 1001 })).toBe(true);
 
     expect(() => acquireStartupMigrationLease({ env, nowMs: 1001, owner: "second" })).toThrow(
-      "OpenClaw startup migrations are already running",
+      `OpenClaw startup migrations are already running for this state directory; retry after the other gateway finishes or after 1970-01-01T00:05:01.000Z. (held by pid ${process.pid})`,
     );
 
     lease.release();
@@ -122,6 +155,48 @@ describe("startup migration checkpoint", () => {
     const next = acquireStartupMigrationLease({ env, nowMs: 1002, owner: "second" });
     next.release();
   });
+
+  it("reclaims an active startup migration lease whose owner process is gone", () => {
+    const env = {
+      OPENCLAW_STATE_DIR: startupMigrationTempDirs.make("openclaw-startup-migration-"),
+    };
+    const deadPid = 2_147_483_647;
+    const stale = acquireStartupMigrationLease({
+      env,
+      nowMs: 1000,
+      owner: "stale",
+      ownerPid: deadPid,
+    });
+
+    expect(hasActiveStartupMigrationLease({ env, nowMs: 1001 })).toBe(false);
+
+    const replacement = acquireStartupMigrationLease({ env, nowMs: 1001, owner: "replacement" });
+    stale.release();
+    expect(hasActiveStartupMigrationLease({ env, nowMs: 1002 })).toBe(true);
+    replacement.release();
+  });
+
+  // PID numbers are recycled by the OS. Without the start-time guard a stale lease whose PID was
+  // reassigned to an unrelated live process would block startup for the full TTL.
+  it.skipIf(process.platform === "win32")(
+    "reclaims a startup migration lease whose owner PID was recycled",
+    () => {
+      const env = {
+        OPENCLAW_STATE_DIR: startupMigrationTempDirs.make("openclaw-startup-migration-"),
+      };
+      const stale = acquireStartupMigrationLease({ env, nowMs: 1000, owner: "stale" });
+
+      // The owner PID is this live test process; only the recorded start identity is stale.
+      overwriteStartupMigrationLeaseOwnerStartedAt(env, 1);
+
+      expect(hasActiveStartupMigrationLease({ env, nowMs: 1001 })).toBe(false);
+
+      const replacement = acquireStartupMigrationLease({ env, nowMs: 1001, owner: "replacement" });
+      stale.release();
+      expect(hasActiveStartupMigrationLease({ env, nowMs: 1002 })).toBe(true);
+      replacement.release();
+    },
+  );
 
   it("does not report an expired startup migration lease as active", () => {
     const env = {

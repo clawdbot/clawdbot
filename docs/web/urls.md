@@ -77,19 +77,33 @@ The following parts are stable URL contracts:
 - The key UUID short id in short-id URLs.
 - The arity and short-versus-literal parsing rules above.
 
-In short-id form, the agent segment and slug are explicitly decorative. They may
-change without notice and are not used to identify or validate the session.
-After resolution, the Control UI replaces the address bar with the current
-agent id and current display-name slug without adding a browser-history entry.
+In short-id form, the agent segment is decorative and the slug is almost
+decorative. Neither identifies the session on its own, and both may change
+without notice. The one exception is a tie: if the short id matches more than
+one session and exactly one of them still carries the slug in the link, that
+session is used, so a generated link keeps working even when two ids happen to
+share a prefix. A slug that matches none or several of the tied sessions is
+ignored and the disambiguation view is shown. After resolution, the Control UI
+replaces the address bar with the current agent id and current display-name slug
+without adding a browser-history entry.
 
 In literal-key form, the agent segment is authoritative because it is part of
 the reconstructed session key. The remaining literal segments are authoritative
 too. A slug, when present, is always decorative; literal-key forms do not
 synthesize one.
 
-If one short id matches more than one session, the UI does not guess. It shows a
-small disambiguation view with the matching display names, agents, and longer id
-prefixes. Use a longer prefix to make the URL unique. Resolution examines at
+As a best-effort convenience, an unescaped one-segment literal that does not
+resolve as an exact session key is also checked against display-name slugs. One
+exact slug match is replaced in the address bar with its full
+`/<namespace>/<agentId>/<slug>-<shortId>` reference. If several sessions share
+the slug, the UI shows the same disambiguation view used for short-id ties
+instead of guessing. Exact short-id and literal-key references always win over
+slug matching.
+
+If one short id matches more than one session and the slug does not settle it,
+the UI does not guess. It shows a small disambiguation view with the matching
+display names, agents, and longer id prefixes. Use a longer prefix to make the
+URL unique. Resolution examines at
 most five pages of search results; if more remain, the view says that the search
 was incomplete instead of guessing.
 
@@ -112,14 +126,15 @@ no route-specific URL parameters.
 | ------------------- | --------------------------- | ------------------------- | ------------------------------------------------ |
 | Chat                | `/chat`                     | -                         | Key-backed session forms above; `?draft=<text>`  |
 | Dashboard           | `/dashboard`                | -                         | Key-backed session forms above; `?draft=<text>`  |
+| Dashboards          | `/dashboards`               | -                         | -                                                |
 | Ask OpenClaw        | `/custodian`                | -                         | `?intent=new-agent`, `?onboarding=1`             |
 | New session         | `/new`                      | -                         | `?agent=<agentId>`, `?catalog=<catalogId>`       |
 | Activity            | `/activity`                 | -                         | -                                                |
 | Apps                | `/apps`                     | -                         | -                                                |
-| Agents              | `/settings/agents`          | `/agents`                 | `?agent=<agentId>`                               |
+| Agents              | `/settings/agents`          | `/agents`                 | `/settings/agents/<agentId>[/<panel>]`           |
 | Channels            | `/settings/channels`        | `/channels`               | Shared settings parameters below                 |
 | Connection          | `/settings/connection`      | -                         | Shared settings parameters below                 |
-| General settings    | `/settings/general`         | `/config`                 | Shared settings parameters below                 |
+| Legacy General      | `/settings/general`         | `/config`                 | Redirects to Appearance → Language               |
 | Profile             | `/settings/profile`         | `/profile`                | Shared settings parameters below                 |
 | Communications      | `/settings/communications`  | `/communications`         | Shared settings parameters below                 |
 | Appearance          | `/settings/appearance`      | `/appearance`             | Shared settings parameters below                 |
@@ -129,6 +144,7 @@ no route-specific URL parameters.
 | Approvals           | `/settings/approvals`       | -                         | Shared settings parameters below                 |
 | Automation settings | `/settings/automation`      | `/automation`             | Shared settings parameters below                 |
 | MCP                 | `/settings/mcp`             | `/mcp`                    | Shared settings parameters below                 |
+| Memory              | `/settings/memory`          | -                         | `/settings/memory/memories\|dreams\|settings`    |
 | Infrastructure      | `/settings/infrastructure`  | `/infrastructure`         | Shared settings parameters below                 |
 | Labs                | `/settings/labs`            | -                         | Shared settings parameters below                 |
 | About               | `/settings/about`           | -                         | Shared settings parameters below                 |
@@ -144,7 +160,7 @@ no route-specific URL parameters.
 | Logs                | `/logs`                     | -                         | -                                                |
 | Skill Workshop      | `/skills/workshop`          | -                         | -                                                |
 | Skills              | `/skills`                   | -                         | -                                                |
-| Plugins             | `/settings/plugins`         | -                         | `?tab=discover\|installed`                       |
+| Plugins             | `/settings/plugins`         | -                         | `/settings/plugins/discover`                     |
 | Automations         | `/cron`                     | -                         | -                                                |
 | Tasks               | `/tasks`                    | -                         | -                                                |
 | Devices             | `/settings/devices`         | `/nodes`                  | Shared settings parameters below                 |
@@ -153,6 +169,23 @@ no route-specific URL parameters.
 Settings routes that use schema-backed deep links accept `?section=<section>`,
 `?advanced=1`, and `#<setting-id>`. These values select content within the page;
 they do not change the route identity.
+
+The retired General route and its `/config` alias are replaced once with
+`/settings/appearance?section=__appearance__#settings-language`. The historical
+`#settings-general-model` target instead lands on the Models behavior section.
+
+Memory tabs use the paths in the table instead of `?tab=`. Older Memory links
+with `?tab=memories|dreams|settings`, `?tab=dreaming`, `?tab=search`, or
+`?section=memory` are replaced once with the corresponding path while keeping
+any setting anchor.
+
+Plugin catalog tabs also use paths instead of `?tab=`. Older links with
+`?tab=discover|installed` are replaced once with the corresponding path while
+keeping other query parameters and the fragment.
+
+Agent selection and its `overview|files|tools|skills|channels|cron|memory`
+panels use paths. Older links with `?agent=<agentId>` are replaced once with
+the agent path while keeping other query parameters and the fragment.
 
 ## Special documents and startup modes
 

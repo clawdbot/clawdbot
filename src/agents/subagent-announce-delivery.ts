@@ -5,21 +5,16 @@
  */
 import { clampTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import {
-  normalizeStringEntries,
-  uniqueStrings,
-} from "@openclaw/normalization-core/string-normalization";
+import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { completionRequiresMessageToolDelivery } from "../auto-reply/reply/completion-delivery-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isFastTestRuntimeEnv } from "../infra/env.js";
 import { isOutboundDeliveryError } from "../infra/outbound/deliver-types.js";
-import { sourceDeliveryTargetsMatch } from "../infra/outbound/source-delivery-plan.js";
 import { scheduleSessionDelivery } from "../infra/session-delivery-queue-runtime.js";
 import {
   enqueueClaimedSessionDelivery,
   releaseSessionDeliveryClaim,
 } from "../infra/session-delivery-queue.js";
-import { normalizeMediaReferenceForComparison } from "../media/media-reference-comparison.js";
 import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
 import { defaultRuntime } from "../runtime.js";
 import {
@@ -28,11 +23,7 @@ import {
   shouldPreserveUserFacingSessionStateForInputProvenance,
 } from "../sessions/input-provenance.js";
 import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
-import {
-  isCronRunSessionKey,
-  isCronSessionKey,
-  parseCronRunScopeSuffix,
-} from "../sessions/session-key-utils.js";
+import { isCronRunSessionKey, isCronSessionKey } from "../sessions/session-key-utils.js";
 import { isNonTerminalAgentRunStatus } from "../shared/agent-run-status.js";
 import { sessionDeliveryChannel } from "../utils/delivery-context.js";
 import {
@@ -42,18 +33,11 @@ import {
 } from "../utils/message-channel.js";
 import { resolveDefaultAgentId } from "./agent-scope-config.js";
 import {
-  collectAutomaticDeliveredMediaUrls,
-  collectDeliveredMediaUrls,
-  collectMessagingToolDeliveredMediaUrls,
   getAgentCommandDeliveryFailure,
   getGatewayAgentResult,
-  hasAmbiguousPayloadSendBeforeError,
   hasCommittedOutboundDeliveryEvidence,
-  hasIncompletePartialPayloadOutcomeEvidence,
   hasMessagingToolDeliveryEvidence,
-  hasPayloadDeliveryOutcomes,
   hasPayloadOutcomeSendEvidence,
-  hasSuppressedPayloadDeliveryStatus,
 } from "./embedded-agent-runner/delivery-evidence.js";
 import {
   hasIntentionalSilentAgentPayload,
@@ -62,10 +46,8 @@ import {
 import type { EmbeddedAgentQueueMessageOptions } from "./embedded-agent-runner/run-state.js";
 import type { EmbeddedAgentQueueMessageOutcome } from "./embedded-agent-runner/runs.js";
 import { mediaUrlsFromGeneratedAttachments } from "./generated-attachments.js";
-import { wakeSessionForGeneratedMediaDirectDelivery } from "./generated-media-direct-delivery-wake.js";
 import { hasGeneratedMediaCompletionEvent } from "./internal-event-contract.js";
 import { formatAgentInternalEventsForPrompt, type AgentInternalEvent } from "./internal-events.js";
-import { isSessionWriteLockAcquireError } from "./session-write-lock-error.js";
 import {
   callGateway,
   dispatchGatewayMethodInProcess,
@@ -151,42 +133,25 @@ async function resolveQueueEmbeddedAgentMessageOutcome(
 
 async function runAnnounceAgentCall(params: {
   agentParams: Record<string, unknown>;
-  cronRunContinuation?: boolean;
   expectFinal?: boolean;
   timeoutMs?: number;
 }): Promise<unknown> {
-  let accepted = false;
   const inputProvenance = normalizeInputProvenance(params.agentParams.inputProvenance);
-  try {
-    return await subagentAnnounceDeliveryDeps.dispatchGatewayMethodInProcess(
-      "agent",
-      params.agentParams,
-      {
-        allowSyntheticCronRunContinuation: params.cronRunContinuation,
-        expectFinal: params.expectFinal,
-        forceSyntheticClient:
-          params.cronRunContinuation === true ||
-          shouldPreserveUserFacingSessionStateForInputProvenance(
-            params.agentParams.inputProvenance,
-          ),
-        delegatedToolPolicyHandoff:
-          inputProvenance?.kind === "inter_session" &&
-          inputProvenance.sourceTool === "subagent_announce" &&
-          Boolean(inputProvenance.sourceSessionKey),
-        onAccepted: () => {
-          accepted = true;
-        },
-        timeoutMs: params.timeoutMs,
-      },
-    );
-  } catch (error) {
-    if (accepted) {
-      throw error;
-    }
-    const wrapped = new Error(summarizeDeliveryError(error), { cause: error });
-    Object.assign(wrapped, { announcePreDispatch: true });
-    throw wrapped;
-  }
+  return await subagentAnnounceDeliveryDeps.dispatchGatewayMethodInProcess(
+    "agent",
+    params.agentParams,
+    {
+      expectFinal: params.expectFinal,
+      forceSyntheticClient: shouldPreserveUserFacingSessionStateForInputProvenance(
+        params.agentParams.inputProvenance,
+      ),
+      delegatedToolPolicyHandoff:
+        inputProvenance?.kind === "inter_session" &&
+        inputProvenance.sourceTool === "subagent_announce" &&
+        Boolean(inputProvenance.sourceSessionKey),
+      timeoutMs: params.timeoutMs,
+    },
+  );
 }
 
 function formatQueueWakeFailureError(
@@ -476,26 +441,6 @@ function isIncompleteAnnounceAgentResultError(error: unknown): boolean {
   return /(?:incomplete terminal response|code=incomplete_result)\b/i.test(message);
 }
 
-function isSessionWriteLockAnnounceAgentError(error: unknown): boolean {
-  if (isSessionWriteLockAcquireError(error)) {
-    return true;
-  }
-  const message = summarizeDeliveryError(error);
-  return (
-    /\bSessionWriteLock(?:Timeout|Stale)Error\b/.test(message) ||
-    /\bsession file lock(?:ed| stale)\b/i.test(message)
-  );
-}
-
-function isAnnounceAgentPreDispatchError(error: unknown): boolean {
-  return hasAnnounceErrorMatch(
-    error,
-    (candidate) =>
-      Boolean(candidate && typeof candidate === "object") &&
-      (candidate as { announcePreDispatch?: unknown }).announcePreDispatch === true,
-  );
-}
-
 function hasDirectAnnounceSendEvidence(error: unknown): boolean {
   if (isOutboundDeliveryError(error) && error.sentBeforeError) {
     return true;
@@ -534,48 +479,6 @@ async function waitForAnnounceRetryDelay(ms: number, signal?: AbortSignal): Prom
       resolve();
     };
     signal.addEventListener("abort", onAbort, { once: true });
-  });
-}
-
-function readCronRunContinuation(params: {
-  sessionKey: string;
-  expectedLifecycleRevision?: string;
-}): { lifecycleRevision: string; sessionId: string } | undefined {
-  const entry = subagentAnnounceDeliveryDeps.loadRequesterSessionEntry(params.sessionKey).entry;
-  const lifecycleRevision = entry?.cronRunContinuation?.lifecycleRevision;
-  if (
-    !lifecycleRevision ||
-    (params.expectedLifecycleRevision !== undefined &&
-      lifecycleRevision !== params.expectedLifecycleRevision)
-  ) {
-    return undefined;
-  }
-  const sessionId = entry?.sessionId?.trim();
-  return sessionId ? { lifecycleRevision, sessionId } : undefined;
-}
-
-function cronRunContinuationLostError(message: string): Error & {
-  cronRunContinuationLost: true;
-} {
-  const error = new Error(message) as Error & { cronRunContinuationLost: true };
-  error.cronRunContinuationLost = true;
-  return error;
-}
-
-function isCronRunContinuationLostError(error: unknown): boolean {
-  return hasAnnounceErrorMatch(error, (candidate) => {
-    if (!candidate || typeof candidate !== "object") {
-      return false;
-    }
-    if ((candidate as { cronRunContinuationLost?: unknown }).cronRunContinuationLost === true) {
-      return true;
-    }
-    return (
-      (candidate as { gatewayCode?: unknown }).gatewayCode === "INVALID_REQUEST" &&
-      /cron run continuation (?:owner was lost|base session was not persisted)/i.test(
-        summarizeDeliveryError(candidate),
-      )
-    );
   });
 }
 
@@ -692,36 +595,15 @@ async function maybeSteerSubagentAnnounce(params: {
   return { status: currentActivity.isActive ? "dropped" : "none" };
 }
 
-function requiresAgentMediatedCompletionDelivery(params: {
-  expectsCompletionMessage: boolean;
-  sourceTool?: string;
-}): boolean {
-  return params.expectsCompletionMessage && isAgentMediatedCompletionSourceTool(params.sourceTool);
-}
-
 function collectExpectedMediaFromInternalEvents(
   events: AgentInternalEvent[] | undefined,
 ): string[] {
-  if (!events?.length) {
-    return [];
-  }
-  const mediaUrls: string[] = [];
-  const seen = new Set<string>();
-  for (const event of events) {
-    const values = [
+  return normalizeUniqueTrimmedStringList(
+    events?.flatMap((event) => [
       ...(Array.isArray(event.mediaUrls) ? event.mediaUrls : []),
       ...mediaUrlsFromGeneratedAttachments(event.attachments),
-    ];
-    for (const value of values) {
-      const normalized = typeof value === "string" ? value.trim() : "";
-      if (!normalized || seen.has(normalized)) {
-        continue;
-      }
-      seen.add(normalized);
-      mediaUrls.push(normalized);
-    }
-  }
-  return mediaUrls;
+    ]),
+  );
 }
 
 function isGatewayAgentRunPending(response: unknown): boolean {
@@ -730,141 +612,6 @@ function isGatewayAgentRunPending(response: unknown): boolean {
   }
   const status = (response as { status?: unknown }).status;
   return isNonTerminalAgentRunStatus(status);
-}
-
-function resolveGeneratedMediaCompletionLabel(params: {
-  sourceTool?: string;
-  internalEvents?: readonly AgentInternalEvent[];
-}): string {
-  const sourceTool = params.sourceTool?.trim();
-  if (sourceTool === "image_generate") {
-    return "image";
-  }
-  if (sourceTool === "music_generate") {
-    return "music";
-  }
-  if (sourceTool === "video_generate") {
-    return "video";
-  }
-  const announceType = params.internalEvents
-    ?.find((event) => event.type === "task_completion")
-    ?.announceType?.trim()
-    .toLowerCase();
-  if (announceType?.includes("image")) {
-    return "image";
-  }
-  if (announceType?.includes("music") || announceType?.includes("audio")) {
-    return "music";
-  }
-  if (announceType?.includes("video")) {
-    return "video";
-  }
-  return "media";
-}
-
-function resolveGeneratedMediaFailureNotice(params: {
-  internalEvents?: readonly AgentInternalEvent[];
-  mediaLabel: string;
-}): string | undefined {
-  const failure = params.internalEvents
-    ?.toReversed()
-    .find(
-      (event) =>
-        event.type === "task_completion" &&
-        event.source !== "subagent" &&
-        event.source !== "cron" &&
-        event.status !== "ok",
-    );
-  return failure
-    ? `${params.mediaLabel[0]?.toUpperCase() ?? "M"}${params.mediaLabel.slice(1)} generation failed: ${failure.result}`
-    : undefined;
-}
-
-async function deliverGeneratedMediaCompletionDirect(params: {
-  cfg: OpenClawConfig;
-  requesterSessionKey: string;
-  directIdempotencyKey: string;
-  deliveryTarget: {
-    deliver: boolean;
-    channel?: string;
-    to?: string;
-    accountId?: string;
-    threadId?: string;
-  };
-  mediaUrls: readonly string[];
-  internalEvents?: readonly AgentInternalEvent[];
-  sourceTool?: string;
-  wakeAfterDelivery: boolean;
-  content?: string;
-  status?: "ok" | "error";
-}): Promise<SubagentAnnounceDeliveryResult | undefined> {
-  if (
-    !params.deliveryTarget.deliver ||
-    !params.deliveryTarget.channel ||
-    !params.deliveryTarget.to ||
-    (params.mediaUrls.length === 0 && !params.content)
-  ) {
-    return undefined;
-  }
-  const mediaLabel = resolveGeneratedMediaCompletionLabel({
-    sourceTool: params.sourceTool,
-    internalEvents: params.internalEvents,
-  });
-  const agentId = resolveAgentIdFromSessionKey(
-    params.requesterSessionKey,
-    resolveDefaultAgentId(params.cfg),
-  );
-  const idempotencyKey = `${params.directIdempotencyKey}:generated-media-direct`;
-  try {
-    await subagentAnnounceDeliveryDeps.sendMessage({
-      cfg: params.cfg,
-      channel: params.deliveryTarget.channel,
-      to: params.deliveryTarget.to,
-      accountId: params.deliveryTarget.accountId,
-      threadId: params.deliveryTarget.threadId,
-      requesterSessionKey: params.requesterSessionKey,
-      agentId,
-      content: params.content ?? `The generated ${mediaLabel} is ready.`,
-      mediaUrls: Array.from(params.mediaUrls),
-      idempotencyKey,
-      mirror: {
-        sessionKey: params.requesterSessionKey,
-        agentId,
-        idempotencyKey,
-      },
-    });
-    if (params.wakeAfterDelivery) {
-      wakeSessionForGeneratedMediaDirectDelivery({
-        cfg: params.cfg,
-        sessionKey: params.requesterSessionKey,
-        mediaLabel,
-        status: params.status ?? "ok",
-        deliveryContext: {
-          channel: params.deliveryTarget.channel,
-          to: params.deliveryTarget.to,
-          accountId: params.deliveryTarget.accountId,
-          threadId: params.deliveryTarget.threadId,
-        },
-        contextKey: idempotencyKey,
-      });
-    }
-    return {
-      delivered: true,
-      path: "direct",
-    };
-  } catch (err) {
-    const terminal = hasAnnounceSendEvidence(err);
-    return {
-      delivered: false,
-      path: "direct",
-      error: `generated media direct delivery failed: ${summarizeDeliveryError(err)}`,
-      ...(terminal
-        ? { terminal: true }
-        : params.mediaUrls.length > 0
-          ? { missingMediaUrls: Array.from(params.mediaUrls) }
-          : {}),
-    };
-  }
 }
 
 function isDirectMessageDeliveryTarget(
@@ -910,7 +657,7 @@ function hasFailedSubagentNoOutputCompletion(events: readonly AgentInternalEvent
   );
 }
 
-async function deliverTextCompletionDirect(params: {
+async function deliverCompletionDirect(params: {
   cfg: OpenClawConfig;
   requesterSessionKey: string;
   directIdempotencyKey: string;
@@ -969,142 +716,6 @@ async function deliverTextCompletionDirect(params: {
   }
 }
 
-function resolveGeneratedMediaDirectFallbackUrls(params: {
-  expectedMediaUrls: readonly string[];
-  announceResult?: NonNullable<ReturnType<typeof getGatewayAgentResult>>;
-  requiresMessageToolDelivery: boolean;
-  automaticDeliveryRequested: boolean;
-  automaticDeliveryFailed?: boolean;
-  deliveryTarget: {
-    channel?: string;
-    accountId?: string;
-    to?: string;
-    threadId?: string | number;
-  };
-}): string[] {
-  const expected = uniqueStrings(normalizeStringEntries(params.expectedMediaUrls));
-  const result = params.announceResult;
-  if (!result) {
-    return expected;
-  }
-  const delivered = new Set(
-    (params.requiresMessageToolDelivery
-      ? collectMessagingToolDeliveredMediaUrlsForTarget(result, params.deliveryTarget)
-      : collectAutomaticCompletionDeliveredMediaUrls({
-          result,
-          deliveryTarget: params.deliveryTarget,
-          automaticDeliveryRequested: params.automaticDeliveryRequested,
-          automaticDeliveryFailed: params.automaticDeliveryFailed === true,
-          expectedMediaCount: expected.length,
-        })
-    ).map(normalizeMediaReferenceForComparison),
-  );
-  return expected.filter((url) => !delivered.has(normalizeMediaReferenceForComparison(url)));
-}
-
-function collectAutomaticCompletionDeliveredMediaUrls(params: {
-  result: NonNullable<ReturnType<typeof getGatewayAgentResult>>;
-  deliveryTarget: {
-    channel?: string;
-    accountId?: string;
-    to?: string;
-    threadId?: string | number;
-  };
-  automaticDeliveryRequested: boolean;
-  automaticDeliveryFailed: boolean;
-  expectedMediaCount: number;
-}): string[] {
-  const urls = new Set<string>();
-  const addUrls = (values: Iterable<string>) => {
-    for (const value of values) {
-      if (value.trim()) {
-        urls.add(value);
-      }
-    }
-  };
-  if (params.automaticDeliveryRequested) {
-    if (params.automaticDeliveryFailed || hasPayloadDeliveryOutcomes(params.result)) {
-      addUrls(
-        collectAutomaticDeliveredMediaUrls(params.result, {
-          includeAmbiguousSinglePayloadFailure:
-            params.automaticDeliveryFailed && params.expectedMediaCount === 1,
-          includeSuppressedOutcomes: false,
-        }),
-      );
-    } else if (!hasSuppressedPayloadDeliveryStatus(params.result)) {
-      addUrls(collectPayloadMediaUrls(params.result));
-    }
-  }
-  addUrls(collectMessagingToolDeliveredMediaUrlsForTarget(params.result, params.deliveryTarget));
-  return Array.from(urls);
-}
-
-function collectPayloadMediaUrls(
-  result: NonNullable<ReturnType<typeof getGatewayAgentResult>>,
-): string[] {
-  return collectDeliveredMediaUrls({
-    payloads: Array.isArray(result.payloads) ? result.payloads : [],
-  });
-}
-
-function collectMessagingToolDeliveredMediaUrlsForTarget(
-  result: NonNullable<ReturnType<typeof getGatewayAgentResult>>,
-  deliveryTarget: {
-    channel?: string;
-    accountId?: string;
-    to?: string;
-    threadId?: string | number;
-  },
-): string[] {
-  const targets = Array.isArray(result.messagingToolSentTargets)
-    ? result.messagingToolSentTargets
-    : [];
-  const urls = new Set<string>();
-  const targetedUrls = new Set<string>();
-  for (const target of targets) {
-    const targetMediaUrls = collectMessagingToolDeliveredMediaUrls({
-      messagingToolSentTargets: [target],
-    });
-    if (!target || typeof target !== "object" || Array.isArray(target)) {
-      continue;
-    }
-    const targetRecord = target as Record<string, unknown>;
-    const targetTo = typeof targetRecord.to === "string" ? targetRecord.to.trim() : "";
-    if (!targetTo) {
-      if (
-        !deliveryTarget.to ||
-        !sourceDeliveryTargetsMatch({ ...targetRecord, to: deliveryTarget.to }, deliveryTarget)
-      ) {
-        for (const url of targetMediaUrls) {
-          targetedUrls.add(url);
-        }
-        continue;
-      }
-      for (const url of targetMediaUrls) {
-        urls.add(url);
-      }
-      continue;
-    }
-    for (const url of targetMediaUrls) {
-      targetedUrls.add(url);
-    }
-    if (!sourceDeliveryTargetsMatch(targetRecord, deliveryTarget)) {
-      continue;
-    }
-    for (const url of targetMediaUrls) {
-      urls.add(url);
-    }
-  }
-  for (const url of collectMessagingToolDeliveredMediaUrls({
-    messagingToolSentMediaUrls: result.messagingToolSentMediaUrls,
-  })) {
-    if (!targetedUrls.has(url)) {
-      urls.add(url);
-    }
-  }
-  return Array.from(urls);
-}
-
 async function sendSubagentAnnounceDirectly(params: {
   requesterSessionKey: string;
   targetRequesterSessionKey: string;
@@ -1112,7 +723,6 @@ async function sendSubagentAnnounceDirectly(params: {
   internalEvents?: AgentInternalEvent[];
   expectsCompletionMessage: boolean;
   bestEffortDeliver?: boolean;
-  durableGeneratedMediaHandoff?: boolean;
   directIdempotencyKey: string;
   completionDirectOrigin?: DeliveryContext;
   directOrigin?: DeliveryContext;
@@ -1121,7 +731,6 @@ async function sendSubagentAnnounceDirectly(params: {
   sourceChannel?: string;
   sourceTool?: string;
   requesterIsSubagent: boolean;
-  allowGeneratedMediaDirectFallback: boolean;
   signal?: AbortSignal;
 }): Promise<SubagentAnnounceDeliveryResult> {
   if (params.signal?.aborted) {
@@ -1169,11 +778,8 @@ async function sendSubagentAnnounceDirectly(params: {
       normalizeOptionalLowercaseString(params.sourceTool) ??
       (params.expectsCompletionMessage ? "subagent_announce" : "");
     const isSubagentCompletion = sourceToolId === "subagent_announce";
-    const agentMediatedCompletion = requiresAgentMediatedCompletionDelivery({
-      expectsCompletionMessage: params.expectsCompletionMessage,
-      sourceTool: sourceToolId,
-    });
-    const expectedMediaUrls = collectExpectedMediaFromInternalEvents(params.internalEvents);
+    const agentMediatedCompletion =
+      params.expectsCompletionMessage && isAgentMediatedCompletionSourceTool(sourceToolId);
     const completionRouteRequiresMessageToolDelivery =
       params.expectsCompletionMessage &&
       completionRequiresMessageToolDelivery({
@@ -1207,95 +813,14 @@ async function sendSubagentAnnounceDirectly(params: {
         error: "requester session abandoned after timeout",
       };
     }
-    let activeRequesterWakeFailed = false;
-    let cronContinuation:
-      | {
-          sessionId: string;
-          lifecycleRevision: string;
-        }
-      | undefined;
-    const tryGeneratedMediaDirectDelivery = async (
-      announceResponse?: unknown,
-      knownMissingMediaUrls?: readonly string[],
-    ) => {
-      const announceResult = getGatewayAgentResult(announceResponse);
-      const commandDeliveryFailure = announceResult
-        ? getAgentCommandDeliveryFailure(announceResult)
-        : undefined;
-      const mediaLabel = resolveGeneratedMediaCompletionLabel({
-        sourceTool: params.sourceTool,
-        internalEvents: params.internalEvents,
-      });
-      const failureNotice = resolveGeneratedMediaFailureNotice({
-        internalEvents: params.internalEvents,
-        mediaLabel,
-      });
-      const completionNotice =
-        failureNotice ??
-        (params.allowGeneratedMediaDirectFallback &&
-        agentMediatedCompletion &&
-        expectedMediaUrls.length === 0
-          ? `${mediaLabel[0]?.toUpperCase() ?? "M"}${mediaLabel.slice(1)} generation completed, but the generated media could not be attached here.`
-          : undefined);
-      const agentAlreadyProducedDeliverySideEffects =
-        announceResult !== null &&
-        (hasCommittedOutboundDeliveryEvidence(announceResult) ||
-          hasPayloadOutcomeSendEvidence(announceResult) ||
-          (shouldDeliverAgentFinal &&
-            !commandDeliveryFailure &&
-            (hasVisibleAgentPayload(announceResult) ||
-              hasMessagingToolDeliveryEvidence(announceResult))));
-      // Accepted work still owns the idempotency key even before delivery
-      // evidence exists. Raw fallback here could race the eventual agent final.
-      if (isGatewayAgentRunPending(announceResponse)) {
-        return undefined;
-      }
-      // A durable handoff owns retries until the session agent has actually
-      // delivered something. Direct repair may then send only missing media.
-      if (!params.allowGeneratedMediaDirectFallback && !agentAlreadyProducedDeliverySideEffects) {
-        return undefined;
-      }
-      if (
-        params.allowGeneratedMediaDirectFallback &&
-        agentAlreadyProducedDeliverySideEffects &&
-        !knownMissingMediaUrls
-      ) {
-        return undefined;
-      }
-      if (
-        knownMissingMediaUrls &&
-        knownMissingMediaUrls.length > 1 &&
-        announceResult &&
-        hasAmbiguousPayloadSendBeforeError(announceResult)
-      ) {
-        return undefined;
-      }
-      if (requesterActivity.isActive && !activeRequesterWakeFailed) {
-        return undefined;
-      }
-      const missingMediaUrls =
-        knownMissingMediaUrls ??
-        resolveGeneratedMediaDirectFallbackUrls({
-          expectedMediaUrls,
-          announceResult: announceResult ?? undefined,
-          requiresMessageToolDelivery,
-          automaticDeliveryRequested: shouldDeliverAgentFinal,
-          automaticDeliveryFailed: !requiresMessageToolDelivery && Boolean(commandDeliveryFailure),
-          deliveryTarget,
-        });
-      return await deliverGeneratedMediaCompletionDirect({
+    const tryTextCompletionDirectDelivery = () =>
+      deliverCompletionDirect({
         cfg,
         requesterSessionKey: canonicalRequesterSessionKey,
         directIdempotencyKey: params.directIdempotencyKey,
         deliveryTarget,
-        mediaUrls: missingMediaUrls,
         internalEvents: params.internalEvents,
-        sourceTool: params.sourceTool,
-        wakeAfterDelivery: params.allowGeneratedMediaDirectFallback,
-        ...(completionNotice ? { content: completionNotice } : {}),
-        ...(failureNotice ? { status: "error" as const } : {}),
       });
-    };
     const completionSourceReplyDeliveryMode = requiresMessageToolDelivery
       ? "message_tool_only"
       : undefined;
@@ -1324,9 +849,8 @@ async function sendSubagentAnnounceDirectly(params: {
           : {}),
         waitForTranscriptCommit: true,
       };
-      // Reuse the shared active-wake retry helper so the generated-completion
-      // wake also waits through compaction (and best-effort transcript retry)
-      // instead of treating a compacting run as a terminal wake failure.
+      // Ordinary subagent and harness handoffs must wait through compaction
+      // and transcript retries before treating an active wake as failed.
       const wakeOutcome = await resolveActiveWakeWithRetries(
         requesterActivity.sessionId,
         params.triggerMessage,
@@ -1341,7 +865,6 @@ async function sendSubagentAnnounceDirectly(params: {
           path: "steered",
         };
       }
-      activeRequesterWakeFailed = true;
       defaultRuntime.log(
         `[warn] Active requester session could not be woken for subagent completion; falling back to requester-agent handoff: ${formatQueueWakeFailureError(
           "active requester session could not be woken",
@@ -1355,40 +878,16 @@ async function sendSubagentAnnounceDirectly(params: {
       !resolveRequesterSessionActivity(canonicalRequesterSessionKey).isActive &&
       !agentMediatedCompletion
     ) {
-      const generatedMediaDelivery = await tryGeneratedMediaDirectDelivery();
-      if (generatedMediaDelivery) {
-        return generatedMediaDelivery;
-      }
-      if (!agentMediatedCompletion) {
-        return {
-          delivered: true,
-          path: "none",
-        };
-      }
+      return {
+        delivered: true,
+        path: "none",
+      };
     }
     if (params.signal?.aborted) {
       return {
         delivered: false,
         path: "none",
       };
-    }
-    if (
-      params.expectsCompletionMessage &&
-      parseCronRunScopeSuffix(canonicalRequesterSessionKey).runId !== undefined &&
-      hasGeneratedMediaCompletionEvent(params.internalEvents)
-    ) {
-      const continuation = readCronRunContinuation({
-        sessionKey: canonicalRequesterSessionKey,
-      });
-      if (!continuation) {
-        return {
-          delivered: false,
-          path: "none",
-          reason: "completion_handoff_unavailable",
-          error: "cron run continuation is unavailable",
-        };
-      }
-      cronContinuation = continuation;
     }
     const directAgentThreadId = shouldDeliverAgentFinal
       ? stringifyRouteThreadId(deliveryTarget.threadId)
@@ -1431,26 +930,12 @@ async function sendSubagentAnnounceDirectly(params: {
           ? "completion direct announce agent call"
           : "direct announce agent call",
         signal: params.signal,
-        run: async () => {
-          let agentParams = directAgentParams;
-          if (cronContinuation) {
-            const continuation = readCronRunContinuation({
-              sessionKey: canonicalRequesterSessionKey,
-              expectedLifecycleRevision: cronContinuation.lifecycleRevision,
-            });
-            if (!continuation) {
-              throw cronRunContinuationLostError("cron run continuation changed before delivery");
-            }
-            cronContinuation = continuation;
-            agentParams = { ...directAgentParams, sessionId: continuation.sessionId };
-          }
-          return await runAnnounceAgentCall({
-            agentParams,
-            cronRunContinuation: cronContinuation !== undefined,
+        run: async () =>
+          await runAnnounceAgentCall({
+            agentParams: directAgentParams,
             expectFinal: true,
             timeoutMs: announceTimeoutMs,
-          });
-        },
+          }),
       });
     } catch (err) {
       if (isPermanentAnnounceDeliveryError(err) && hasAnnounceSendEvidence(err)) {
@@ -1462,25 +947,9 @@ async function sendSubagentAnnounceDirectly(params: {
         isSubagentCompletion &&
         isIncompleteAnnounceAgentResultError(err)
       ) {
-        const textDelivery = await deliverTextCompletionDirect({
-          cfg,
-          requesterSessionKey: canonicalRequesterSessionKey,
-          directIdempotencyKey: params.directIdempotencyKey,
-          deliveryTarget,
-          internalEvents: params.internalEvents,
-        });
+        const textDelivery = await tryTextCompletionDirectDelivery();
         if (textDelivery) {
           return textDelivery;
-        }
-      }
-      if (
-        params.allowGeneratedMediaDirectFallback &&
-        agentMediatedCompletion &&
-        (isSessionWriteLockAnnounceAgentError(err) || isAnnounceAgentPreDispatchError(err))
-      ) {
-        const emergencyDelivery = await tryGeneratedMediaDirectDelivery();
-        if (emergencyDelivery) {
-          return emergencyDelivery;
         }
       }
       // The requester-agent handoff is the delivery contract for background
@@ -1502,66 +971,6 @@ async function sendSubagentAnnounceDirectly(params: {
       (shouldDeliverAgentFinal || requiresMessageToolDelivery) && directAnnounceResult
         ? getAgentCommandDeliveryFailure(directAnnounceResult)
         : undefined;
-    const shouldRequireGeneratedMediaDelivery =
-      agentMediatedCompletion &&
-      expectedMediaUrls.length > 0 &&
-      (params.requesterIsSubagent || shouldDeliverAgentFinal || requiresMessageToolDelivery);
-    const missingExpectedMediaUrls = shouldRequireGeneratedMediaDelivery
-      ? resolveGeneratedMediaDirectFallbackUrls({
-          expectedMediaUrls,
-          announceResult: directAnnounceResult ?? undefined,
-          requiresMessageToolDelivery,
-          automaticDeliveryRequested: shouldDeliverAgentFinal,
-          automaticDeliveryFailed: !requiresMessageToolDelivery && Boolean(directDeliveryFailure),
-          deliveryTarget,
-        })
-      : [];
-    if (shouldRequireGeneratedMediaDelivery && missingExpectedMediaUrls.length > 0) {
-      if (
-        (directAnnounceResult && hasAmbiguousPayloadSendBeforeError(directAnnounceResult)) ||
-        (directAnnounceResult && hasIncompletePartialPayloadOutcomeEvidence(directAnnounceResult))
-      ) {
-        return {
-          delivered: false,
-          path: "direct",
-          error:
-            directDeliveryFailure ??
-            "generated media delivery may have partially completed before failing",
-          terminal: true,
-        };
-      }
-      const generatedMediaDelivery = await tryGeneratedMediaDirectDelivery(
-        directAnnounceResponse,
-        missingExpectedMediaUrls,
-      );
-      if (generatedMediaDelivery) {
-        return generatedMediaDelivery;
-      }
-      return {
-        delivered: false,
-        path: "direct",
-        reason: "generated_media_missing",
-        error: "completion agent did not deliver generated media",
-        missingMediaUrls: missingExpectedMediaUrls,
-      };
-    }
-    const generatedMediaFailureNotice = resolveGeneratedMediaFailureNotice({
-      internalEvents: params.internalEvents,
-      mediaLabel: resolveGeneratedMediaCompletionLabel({
-        sourceTool: params.sourceTool,
-        internalEvents: params.internalEvents,
-      }),
-    });
-    if (
-      params.allowGeneratedMediaDirectFallback &&
-      agentMediatedCompletion &&
-      (generatedMediaFailureNotice || expectedMediaUrls.length === 0)
-    ) {
-      const emergencyDelivery = await tryGeneratedMediaDirectDelivery(directAnnounceResponse);
-      if (emergencyDelivery) {
-        return emergencyDelivery;
-      }
-    }
     if (directDeliveryFailure) {
       return {
         delivered: false,
@@ -1589,13 +998,7 @@ async function sendSubagentAnnounceDirectly(params: {
       !hasVisibleGatewayPayload &&
       !hasMessagingToolDelivery
     ) {
-      const textDelivery = await deliverTextCompletionDirect({
-        cfg,
-        requesterSessionKey: canonicalRequesterSessionKey,
-        directIdempotencyKey: params.directIdempotencyKey,
-        deliveryTarget,
-        internalEvents: params.internalEvents,
-      });
+      const textDelivery = await tryTextCompletionDirectDelivery();
       if (textDelivery) {
         return textDelivery;
       }
@@ -1623,13 +1026,7 @@ async function sendSubagentAnnounceDirectly(params: {
         };
       }
       if (subagentDirectMessageCompletionRequiresMessageTool) {
-        const textDelivery = await deliverTextCompletionDirect({
-          cfg,
-          requesterSessionKey: canonicalRequesterSessionKey,
-          directIdempotencyKey: params.directIdempotencyKey,
-          deliveryTarget,
-          internalEvents: params.internalEvents,
-        });
+        const textDelivery = await tryTextCompletionDirectDelivery();
         if (textDelivery) {
           return textDelivery;
         }
@@ -1686,20 +1083,11 @@ async function sendSubagentAnnounceDirectly(params: {
     };
   } catch (err) {
     const terminal = isPermanentAnnounceDeliveryError(err) && hasAnnounceSendEvidence(err);
-    const continuationUnavailable = isCronRunContinuationLostError(err);
-    const continuationPending =
-      !terminal &&
-      !continuationUnavailable &&
-      params.expectsCompletionMessage &&
-      parseCronRunScopeSuffix(canonicalRequesterSessionKey).runId !== undefined &&
-      hasGeneratedMediaCompletionEvent(params.internalEvents);
     return {
       delivered: false,
       path: "direct",
       error: summarizeDeliveryError(err),
       ...(terminal ? { terminal: true } : {}),
-      ...(continuationUnavailable ? { reason: "completion_handoff_unavailable" as const } : {}),
-      ...(continuationPending ? { reason: "completion_handoff_pending" as const } : {}),
     };
   }
 }
@@ -1721,13 +1109,12 @@ export async function deliverSubagentAnnouncement(params: {
   targetRequesterSessionKey: string;
   requesterIsSubagent: boolean;
   expectsCompletionMessage: boolean;
+  requireDirectDelivery?: boolean;
   bestEffortDeliver?: boolean;
-  durableGeneratedMediaHandoff?: boolean;
   directIdempotencyKey: string;
   signal?: AbortSignal;
 }): Promise<SubagentAnnounceDeliveryResult> {
   const durableGeneratedMediaHandoff =
-    params.durableGeneratedMediaHandoff === true &&
     params.expectsCompletionMessage &&
     isAgentMediatedCompletionSourceTool(params.sourceTool) &&
     hasGeneratedMediaCompletionEvent(params.internalEvents);
@@ -1843,6 +1230,7 @@ export async function deliverSubagentAnnouncement(params: {
 
   return await runSubagentAnnounceDispatch({
     expectsCompletionMessage: params.expectsCompletionMessage,
+    requireDirectDelivery: params.requireDirectDelivery,
     signal: params.signal,
     steer: async () =>
       await maybeSteerSubagentAnnounce({
@@ -1868,7 +1256,6 @@ export async function deliverSubagentAnnouncement(params: {
         sourceTool: params.sourceTool,
         requesterIsSubagent: params.requesterIsSubagent,
         expectsCompletionMessage: params.expectsCompletionMessage,
-        allowGeneratedMediaDirectFallback: true,
         signal: params.signal,
         bestEffortDeliver: params.bestEffortDeliver,
       }),

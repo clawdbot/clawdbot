@@ -20,7 +20,7 @@ let package = Package(
         .package(url: "https://github.com/swiftlang/swift-subprocess.git", from: "0.4.0"),
         .package(url: "https://github.com/apple/swift-log.git", from: "1.12.0"),
         .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.9.0"),
-        .package(url: "https://github.com/steipete/Peekaboo.git", exact: "3.9.6"),
+        .package(url: "https://github.com/steipete/Peekaboo.git", exact: "3.9.8"),
         .package(url: "https://github.com/pointfreeco/swift-concurrency-extras", from: "1.3.1"),
         .package(path: "../shared/OpenClawKit"),
         .package(path: "../shared/OpenClawMLXTTSProtocol"),
@@ -37,6 +37,7 @@ let package = Package(
             name: "OpenClawDiscovery",
             dependencies: [
                 .product(name: "OpenClawKit", package: "OpenClawKit"),
+                .product(name: "Subprocess", package: "swift-subprocess"),
             ],
             path: "Sources/OpenClawDiscovery",
             swiftSettings: [

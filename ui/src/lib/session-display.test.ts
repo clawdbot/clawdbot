@@ -121,7 +121,16 @@ describe("resolveSessionDisplayName", () => {
           includeSubagentPrefix: false,
         },
       ),
-    ).toBe("Cron: Daily");
+    ).toBe("Automation: Daily");
+  });
+
+  it("strips persisted pre-rename Cron labels instead of double-prefixing", () => {
+    expect(
+      resolveSessionDisplayName("agent:main:cron:daily", { label: "Cron: daily-report" }),
+    ).toBe("Automation: daily-report");
+    expect(resolveSessionDisplayName("agent:main:cron:daily", { label: "Cron Job: nightly" })).toBe(
+      "Automation: nightly",
+    );
   });
 });
 

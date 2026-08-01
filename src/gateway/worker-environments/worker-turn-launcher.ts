@@ -35,6 +35,7 @@ import {
   parseRuntimeResult,
   windowInitialMessages,
 } from "./worker-turn-payload.js";
+import { resolveWorkerTurnTranscriptTarget } from "./worker-turn-transcript-target.js";
 import {
   formatWorkspaceConflictSummary,
   WORKSPACE_CONFLICT_CLEARED_TRANSCRIPT_TYPE,
@@ -236,7 +237,8 @@ async function executeWorkerTurn(params: {
   const startedAt = Date.now();
   turn.onExecutionStarted?.({ lifecycleGeneration: turn.lifecycleGeneration });
   turn.onExecutionPhase?.({ phase: "runner_entered", backend: "cloud-worker" });
-  const manager = SessionManager.open(turn.sessionFile);
+  const transcriptTarget = resolveWorkerTurnTranscriptTarget(turn);
+  const manager = SessionManager.open(transcriptTarget);
   const userMessageAlreadyPersisted =
     turn.suppressNextUserMessagePersistence === true ||
     turn.userTurnTranscriptRecorder?.hasPersisted() === true;
@@ -257,7 +259,7 @@ async function executeWorkerTurn(params: {
       turn.userTurnTranscriptRecorder?.markRuntimePersisted(persisted.message);
       turn.onUserMessagePersisted?.(persisted.message);
     } else if (turn.userTurnTranscriptRecorder?.hasPersisted()) {
-      baseLeafId = SessionManager.open(turn.sessionFile).getLeafId();
+      baseLeafId = SessionManager.open(transcriptTarget).getLeafId();
     } else if (!turn.userTurnTranscriptRecorder) {
       const message = {
         role: "user" as const,
@@ -375,13 +377,17 @@ async function executeWorkerTurn(params: {
     throw new WorkerTurnExecutionError("Cloud worker turn failed");
   }
 
-  const completed = SessionManager.open(turn.sessionFile);
+  const completed = SessionManager.open(transcriptTarget);
   const currentPlacement = params.placements.get(placement.sessionId);
   if (
     runtimeResult.transcriptLeafId !== completed.getLeafId() ||
     runtimeResult.transcriptNextSeq !== (currentPlacement?.lastTranscriptAckCursor ?? 0) + 1
   ) {
-    throw new Error("Cloud worker result does not match its committed transcript acknowledgement");
+    throw new Error(
+      `Cloud worker result does not match its committed transcript acknowledgement ` +
+        `(leaf=${runtimeResult.transcriptLeafId ?? "none"}/${completed.getLeafId() ?? "none"}, ` +
+        `nextSeq=${runtimeResult.transcriptNextSeq}/${(currentPlacement?.lastTranscriptAckCursor ?? 0) + 1})`,
+    );
   }
   if (
     (currentPlacement?.state !== "active" && currentPlacement?.state !== "draining") ||
@@ -468,7 +474,7 @@ async function executeWorkerTurn(params: {
           root: params.localWorkspaceDir,
           report: async (report) => {
             if ("cleared" in report) {
-              SessionManager.open(turn.sessionFile).appendCustomMessageEntry(
+              SessionManager.open(transcriptTarget).appendCustomMessageEntry(
                 WORKSPACE_CONFLICT_CLEARED_TRANSCRIPT_TYPE,
                 "A later cloud workspace result superseded the previous conflict.",
                 false,
@@ -483,7 +489,7 @@ async function executeWorkerTurn(params: {
                 report.totalCount,
               ),
             };
-            SessionManager.open(turn.sessionFile).appendCustomMessageEntry(
+            SessionManager.open(transcriptTarget).appendCustomMessageEntry(
               WORKSPACE_CONFLICT_TRANSCRIPT_TYPE,
               workspaceConflict.summary,
               true,

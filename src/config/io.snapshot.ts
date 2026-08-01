@@ -1,4 +1,5 @@
 import { includeContributionOwnsAgentRoster } from "./agent-roster-provenance.js";
+import { resolveManagedUnsetPathsForWrite } from "./config-path-mutation.js";
 import { ConfigIncludeError } from "./includes.js";
 import type { ConfigIoContext } from "./io.context.js";
 import { maybeRecoverSuspiciousConfigRead } from "./io.observe-recovery.js";
@@ -27,7 +28,6 @@ import type {
   ReadConfigFileSnapshotWithPluginMetadataResult,
 } from "./io.types.js";
 import { warnIfConfigFromFuture } from "./io.warnings.js";
-import { resolveManagedUnsetPathsForWrite } from "./io.write-prepare.js";
 import { migratePersistedImplicitMainRoster } from "./legacy.js";
 import { materializeRuntimeConfig } from "./materialize.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
@@ -83,6 +83,7 @@ export async function readConfigFileSnapshotInternal(
   const includeFileHashesForWrite: Record<string, string> = {};
   const includeFileTargetsForWrite: Record<string, string> = {};
   const includeFilePathsForWatch = new Set<string>();
+  const includeProvenance: NonNullable<ConfigFileSnapshot["includeProvenance"]>[number][] = [];
   let agentRosterIncludeOwned = false;
 
   try {
@@ -128,6 +129,8 @@ export async function readConfigFileSnapshotInternal(
           includeFileTargetsForWrite,
           includeFilePathsForWatch,
           (event) => {
+            const { value: _value, ...ownership } = event;
+            includeProvenance.push(ownership);
             agentRosterIncludeOwned ||= includeContributionOwnsAgentRoster(event);
           },
         ),
@@ -205,7 +208,8 @@ export async function readConfigFileSnapshotInternal(
           exists: true,
           raw: snapshotRaw,
           parsed: snapshotParsed,
-          includeProvenance: { agentRoster: agentRosterIncludeOwned },
+          includeProvenance,
+          agentRosterIncludeOwned,
           sourceConfigBeforeMigrations: coerceConfig(readResolution.resolvedConfigRaw),
           sourceConfig: coerceConfig(effectiveConfigRaw),
           valid: false,
@@ -282,7 +286,8 @@ export async function readConfigFileSnapshotInternal(
             exists: true,
             raw: snapshotRaw,
             parsed: snapshotParsed,
-            includeProvenance: { agentRoster: agentRosterIncludeOwned },
+            includeProvenance,
+            agentRosterIncludeOwned,
             sourceConfigBeforeMigrations: coerceConfig(readResolution.resolvedConfigRaw),
             sourceConfig: coerceConfig(effectiveConfigRaw),
             valid: true,

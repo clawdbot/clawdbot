@@ -5,6 +5,7 @@ import {
   applyPackageExtensionPeerMetadata,
   collectOverrideViolations,
   collectPnpmLockViolations,
+  createNpmPackageLockInstallStrategyArgs,
   createNpmLockExecOptions,
   createNpmLockCommand,
   disableDependencyShrinkwrapOverrideConflictSources,
@@ -72,6 +73,16 @@ describe("generate-npm-package-lock", () => {
       stdio: ["ignore", "pipe", "pipe"],
       timeout: 10 * 60 * 1000,
     });
+  });
+
+  it("adds explicit npm install strategies for package-lock generation", () => {
+    expect(createNpmPackageLockInstallStrategyArgs({ installStrategy: "shallow" })).toEqual([
+      "--install-strategy=shallow",
+    ]);
+    expect(createNpmPackageLockInstallStrategyArgs({})).toEqual([]);
+    expect(() =>
+      createNpmPackageLockInstallStrategyArgs({ installStrategy: "global" as never }),
+    ).toThrow("invalid npm package-lock install strategy: global");
   });
 
   it("normalizes pnpm scoped override selectors for npm package locks", () => {

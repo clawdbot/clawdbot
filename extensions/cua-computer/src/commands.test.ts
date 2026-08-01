@@ -149,6 +149,22 @@ describe("cua-computer screen.snapshot", () => {
     expect(encode).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { name: "invalid alphabet", data: "%%%not-base64!!" },
+    { name: "non-canonical pad bits", data: "ZE==" },
+  ])("rejects native PNG base64 with $name before image processing", async ({ data }) => {
+    const malformed = desktopResult();
+    malformed.content[0] = { type: "image", data, mimeType: "image/png" };
+    const { driver } = createDriver({ desktop: () => malformed });
+    const { processor, encode } = createProcessor();
+    const { snapshot } = commandSet(driver, processor);
+
+    await expect(snapshot.handle("{}")).rejects.toThrow(
+      "COMPUTER_DRIVER_ERROR: get_desktop_state returned malformed PNG base64",
+    );
+    expect(encode).not.toHaveBeenCalled();
+  });
+
   it("rejects non-primary screen indexes", async () => {
     const { driver } = createDriver();
     const { snapshot } = commandSet(driver);

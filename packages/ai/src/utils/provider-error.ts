@@ -16,8 +16,20 @@ type HttpErrorShape = Error & {
 };
 
 function stringify(value: unknown): string {
+  const seen = new WeakSet<object>();
   try {
-    return JSON.stringify(value) ?? String(value);
+    return (
+      JSON.stringify(value, (_key, candidate: unknown) => {
+        if (typeof candidate !== "object" || candidate === null) {
+          return candidate;
+        }
+        if (seen.has(candidate)) {
+          return "[Circular]";
+        }
+        seen.add(candidate);
+        return candidate;
+      }) ?? String(value)
+    );
   } catch {
     return String(value);
   }

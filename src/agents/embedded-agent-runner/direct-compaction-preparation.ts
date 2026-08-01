@@ -3,8 +3,7 @@
  * workspace, and sandbox resolution.
  */
 import fs from "node:fs/promises";
-import type { ThinkLevel } from "../../auto-reply/thinking.js";
-import { parseSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
+import type { ThinkLevel, ThinkingCatalogEntry } from "../../auto-reply/thinking.js";
 import {
   createDiagnosticTraceContext,
   freezeDiagnosticTraceContext,
@@ -15,7 +14,6 @@ import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.
 import { prepareProviderRuntimeAuth } from "../../plugins/provider-runtime.js";
 import { resolveUserPath } from "../../utils.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
-import { ensureSessionHeader } from "../embedded-agent-helpers.js";
 import { describeFailoverError } from "../failover-error.js";
 import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
 import { MissingProviderAuthError } from "../model-auth.js";
@@ -89,7 +87,6 @@ export async function prepareDirectCompactionAttempt(
     runtimePolicySessionKey,
     runtimePolicyAgentId,
     boundHarnessRuntime,
-    selectedHarnessRuntime,
     selectedHarnessRuntimeOverride,
     runtimeModelAuth: { plan: reusableRuntimeAuthPlan, authProfileId, modelAuth: initialModelAuth },
     provider,
@@ -114,15 +111,6 @@ export async function prepareDirectCompactionAttempt(
     agentHarnessId: boundHarnessRuntime,
     agentHarnessRuntimeOverride: selectedHarnessRuntimeOverride,
     workspaceDir: resolvedWorkspace,
-  });
-  const thinkLevel = resolveEmbeddedCompactionThinkingLevel({
-    config: params.config,
-    provider,
-    modelId,
-    inheritedLevel: params.thinkLevel,
-    agentId: runtimePolicyAgentId,
-    sessionKey: runtimePolicySessionKey,
-    agentRuntime: selectedHarnessRuntime,
   });
   const attemptedThinking = new Set<ThinkLevel>();
   const fail = (reason: string, err?: unknown): EmbeddedAgentCompactResult => {
@@ -152,7 +140,11 @@ export async function prepareDirectCompactionAttempt(
     };
   };
   const preparedModelRuntime = params.preparedModelRuntime;
-  const preparedStores = preparedModelRuntime.createStores();
+  const modelResolutionOptions = {
+    ...preparedModelRuntime.createStores(),
+    preparedModelRuntime,
+    workspaceDir: resolvedWorkspace,
+  };
   const { model, error, authStorage, modelRegistry } = await resolveModelAsync(
     runtimeProvider,
     modelId,
@@ -160,9 +152,7 @@ export async function prepareDirectCompactionAttempt(
     params.config,
     {
       ...initialModelAuth,
-      authStorage: preparedStores.authStorage,
-      modelRegistry: preparedStores.modelRegistry,
-      workspaceDir: resolvedWorkspace,
+      ...modelResolutionOptions,
     },
   );
   if (!model) {
@@ -171,7 +161,7 @@ export async function prepareDirectCompactionAttempt(
   }
   // Overrides stay unset when no bound/planned/explicit harness resolved so auth-aware
   // selection can pick the credential-owning harness (codex for ChatGPT OAuth); native
-  // transcript compaction stays gated on selectedHarnessRuntime.
+  // transcript compaction stays gated on the selected prepared harness.
   const {
     runtimeAuthProfileStore,
     runtimeAuthPreparation,
@@ -201,12 +191,10 @@ export async function prepareDirectCompactionAttempt(
     Parameters<typeof materializePreparedRuntimeModel<ProviderRuntimeModel>>[0]["resolveModel"]
   >[0]) =>
     resolveModelAsync(runtimeProvider, modelId, agentDir, config, {
-      authStorage,
-      modelRegistry,
+      ...modelResolutionOptions,
       skipAgentDiscovery: true,
       allowBundledStaticCatalogFallback: true,
       preferBundledStaticCatalogTransport: true,
-      workspaceDir: resolvedWorkspace,
       authProfileId: profileId,
       authProfileMode: resolvedAuthProfileMode,
     });
@@ -299,6 +287,40 @@ export async function prepareDirectCompactionAttempt(
     const reason = formatErrorMessage(err);
     return { ok: false as const, result: fail(reason, err) };
   }
+  const runtimeCompat =
+    runtimeModel.compat && typeof runtimeModel.compat === "object"
+      ? (runtimeModel.compat as Record<string, unknown>)
+      : undefined;
+  const thinkingFormat =
+    typeof runtimeCompat?.thinkingFormat === "string" ? runtimeCompat.thinkingFormat : undefined;
+  const supportedReasoningEfforts =
+    runtimeCompat?.supportedReasoningEfforts === null ||
+    (Array.isArray(runtimeCompat?.supportedReasoningEfforts) &&
+      runtimeCompat.supportedReasoningEfforts.every((effort) => typeof effort === "string"))
+      ? (runtimeCompat.supportedReasoningEfforts as readonly string[] | null)
+      : undefined;
+  const thinkingCompat =
+    thinkingFormat !== undefined || supportedReasoningEfforts !== undefined
+      ? { thinkingFormat, supportedReasoningEfforts }
+      : undefined;
+  const thinkingCatalogEntry = {
+    provider: runtimeModel.provider,
+    id: runtimeModel.id,
+    api: runtimeModel.api,
+    reasoning: runtimeModel.reasoning,
+    params: runtimeModel.params,
+    ...(thinkingCompat ? { compat: thinkingCompat } : {}),
+  } satisfies ThinkingCatalogEntry;
+  const thinkLevel = resolveEmbeddedCompactionThinkingLevel({
+    config: params.config,
+    provider: runtimeModel.provider,
+    modelId: runtimeModel.id,
+    inheritedLevel: params.thinkLevel,
+    catalog: [thinkingCatalogEntry],
+    agentId: runtimePolicyAgentId,
+    sessionKey: runtimePolicySessionKey,
+    agentRuntime: preparedHarnessRuntime,
+  });
 
   await fs.mkdir(resolvedWorkspace, { recursive: true });
   const sandboxSessionKey =
@@ -322,14 +344,7 @@ export async function prepareDirectCompactionAttempt(
   }
   const effectiveCwd = sandbox?.enabled ? effectiveWorkspace : (requestedCwd ?? effectiveWorkspace);
   await fs.mkdir(effectiveWorkspace, { recursive: true });
-  const isSqliteSessionTranscript = Boolean(parseSqliteSessionFileMarker(params.sessionFile));
-  if (!isSqliteSessionTranscript) {
-    await ensureSessionHeader({
-      sessionFile: params.sessionFile,
-      sessionId: params.sessionId,
-      cwd: effectiveCwd,
-    });
-  }
+  const isSqliteSessionTranscript = true;
   const { sessionAgentId: effectiveSkillAgentId } = earlyAgentIds;
 
   return {

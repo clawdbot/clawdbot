@@ -118,6 +118,32 @@ describe("logModelFallbackDecision", () => {
     ]);
   });
 
+  it("records the candidate route provenance", () => {
+    logModelFallbackDecision(
+      makeAuthFailure({
+        candidate: {
+          provider: "modelstudio",
+          model: "glm-5",
+          routeOrigin: "requested",
+          routeResolution: "raw",
+        },
+        nextCandidate: {
+          provider: "minimax",
+          model: "MiniMax-M2.7-highspeed",
+          routeOrigin: "configured-fallback",
+          routeResolution: "resolved",
+        },
+      }),
+    );
+
+    expect(loggedPayloads()[0]).toMatchObject({
+      candidateRouteOrigin: "requested",
+      candidateRouteResolution: "raw",
+      nextCandidateRouteOrigin: "configured-fallback",
+      nextCandidateRouteResolution: "resolved",
+    });
+  });
+
   it("keeps distinct sessions visible", () => {
     logModelFallbackDecision(makeAuthFailure({ sessionId: `${activeSessionId}-first` }));
     logModelFallbackDecision(makeAuthFailure({ sessionId: `${activeSessionId}-second` }));

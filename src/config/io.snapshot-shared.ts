@@ -7,6 +7,7 @@ export function createConfigFileSnapshot(params: {
   path: string;
   includedPaths?: readonly string[];
   includeProvenance?: ConfigFileSnapshot["includeProvenance"];
+  agentRosterIncludeOwned?: boolean;
   exists: boolean;
   raw: string | null;
   parsed: unknown;
@@ -25,7 +26,17 @@ export function createConfigFileSnapshot(params: {
   return {
     path: params.path,
     includedPaths: [...(params.includedPaths ?? [])],
-    ...(params.includeProvenance ? { includeProvenance: params.includeProvenance } : {}),
+    ...(params.includeProvenance
+      ? {
+          includeProvenance: params.includeProvenance.map((entry) => ({
+            ...entry,
+            path: [...entry.path],
+          })),
+        }
+      : {}),
+    ...(params.agentRosterIncludeOwned !== undefined
+      ? { agentRosterIncludeOwned: params.agentRosterIncludeOwned }
+      : {}),
     exists: params.exists,
     raw: params.raw,
     parsed: params.parsed,

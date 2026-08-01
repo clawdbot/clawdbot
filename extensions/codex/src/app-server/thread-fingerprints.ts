@@ -85,6 +85,37 @@ export function fingerprintJsonObject(value: JsonObject): string {
   return JSON.stringify(stabilizeJsonValue(value));
 }
 
+/** Hash every resume-visible setting without retaining config, credentials, or instructions. */
+export function fingerprintCodexThreadConfig(
+  request: JsonObject,
+  authProfileId?: string,
+  dynamicToolsFingerprint?: string,
+): string {
+  return hashCodexAppServerBindingFingerprint(
+    fingerprintJsonObject({
+      authProfileId: authProfileId ?? null,
+      dynamicToolsFingerprint: dynamicToolsFingerprint ?? null,
+      model: request.model ?? null,
+      requestedModel:
+        request.requestedModel === undefined ? (request.model ?? null) : request.requestedModel,
+      modelProvider: request.modelProvider ?? null,
+      requestedModelProvider:
+        request.requestedModelProvider === undefined
+          ? (request.modelProvider ?? null)
+          : request.requestedModelProvider,
+      approvalPolicy: request.approvalPolicy ?? null,
+      approvalsReviewer: request.approvalsReviewer ?? null,
+      sandbox: request.sandbox ?? null,
+      permissions: request.permissions ?? null,
+      personality: request.personality ?? null,
+      serviceTier: request.serviceTier === undefined ? "<omitted>" : request.serviceTier,
+      baseInstructions: request.baseInstructions ?? null,
+      developerInstructions: request.developerInstructions ?? null,
+      config: request.config ?? {},
+    }),
+  );
+}
+
 export function fingerprintEnvironmentSelection(
   environments: CodexTurnEnvironmentParams[] | undefined,
 ): string | undefined {

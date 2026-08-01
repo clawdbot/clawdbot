@@ -116,6 +116,47 @@ function readInstallStatus(agentId: string, root: string): string | undefined {
 }
 
 describe("createClawWorkspaceFiles", () => {
+  it("materializes the CLAW.md body as managed SOUL.md content", async () => {
+    const root = tempDirs.make("openclaw-claw-body-workspace-");
+    const workspace = join(root, "workspace-agent");
+    const body = Buffer.from("# Portable soul\n\nBe concise.\n");
+    const manifest = parseClawManifest({ schemaVersion: 1, agent: { id: "workspace-agent" } });
+    if (!manifest.ok) {
+      throw new Error(JSON.stringify(manifest.diagnostics));
+    }
+    const manifestPath = join(root, "CLAW.md");
+    await writeFile(
+      manifestPath,
+      Buffer.concat([
+        Buffer.from("---\nschemaVersion: 1\nagent: { id: workspace-agent }\n---\n"),
+        body,
+      ]),
+    );
+    const plan = await buildClawAddPlan({
+      manifest: manifest.manifest,
+      clawMarkdownBody: body,
+      source: {
+        kind: "package",
+        name: "@acme/workspace-agent",
+        version: "1.0.0",
+        packageRoot: root,
+        manifestPath,
+        integrityKind: "development-snapshot",
+        integrity: "sha256:manifest",
+        byteLength: 0,
+      },
+      context: { workspace },
+    });
+    await mkdir(workspace);
+
+    const records = await createClawWorkspaceFiles(plan, { env: stateEnv(root), nowMs: 10 });
+
+    await expect(readFile(join(workspace, "SOUL.md"), "utf8")).resolves.toBe(body.toString());
+    expect(records).toContainEqual(
+      expect.objectContaining({ path: "SOUL.md", sourcePath: "CLAW.md", status: "complete" }),
+    );
+  });
+
   it("creates canonical bootstrap and supporting files and records their hashes", async () => {
     const { root, workspace, plan } = await makePlan();
 

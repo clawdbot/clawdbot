@@ -51,14 +51,23 @@ async function fixture() {
 describe("installClawCronJobs", () => {
   it("pins declarations and execution to the final agent id", async () => {
     const current = await fixture();
-    const add = vi.fn().mockResolvedValue({ id: "scheduler-123" });
+    const calls: string[] = [];
+    const waitUntilAgentAvailable = vi.fn(async () => {
+      calls.push("wait");
+    });
+    const add = vi.fn(async (_input: Record<string, unknown>) => {
+      calls.push("add");
+      return { id: "scheduler-123" };
+    });
 
     const refs = await installClawCronJobs(current.plan, {
       env: current.env,
-      gateway: { add },
+      gateway: { add, waitUntilAgentAvailable },
       nowMs: 42,
     });
 
+    expect(waitUntilAgentAvailable).toHaveBeenCalledWith("worker-two");
+    expect(calls).toEqual(["wait", "add"]);
     expect(add).toHaveBeenCalledWith({
       name: "Daily report",
       declarationKey: "claw:worker-two:daily-report",
@@ -96,6 +105,25 @@ describe("installClawCronJobs", () => {
     expect(refs[0]).toMatchObject({ schedulerJobId: "existing-1", status: "complete" });
   });
 
+  it("does not require the gateway when every cron reference is already complete", async () => {
+    const current = await fixture();
+    await installClawCronJobs(current.plan, {
+      env: current.env,
+      gateway: { add: vi.fn().mockResolvedValue({ id: "scheduler-123" }) },
+    });
+    const waitUntilAgentAvailable = vi.fn().mockRejectedValue(new Error("gateway unavailable"));
+    const add = vi.fn();
+
+    await expect(
+      installClawCronJobs(current.plan, {
+        env: current.env,
+        gateway: { add, waitUntilAgentAvailable },
+      }),
+    ).resolves.toMatchObject([{ schedulerJobId: "scheduler-123", status: "complete" }]);
+    expect(waitUntilAgentAvailable).not.toHaveBeenCalled();
+    expect(add).not.toHaveBeenCalled();
+  });
+
   it("preserves an ambiguous pending reference when cron.add fails", async () => {
     const current = await fixture();
 
@@ -110,6 +138,28 @@ describe("installClawCronJobs", () => {
     });
     expect(readClawCronRefs("worker-two", { env: current.env })).toMatchObject([
       { manifestId: "daily-report", status: "pending", error: "gateway unavailable" },
+    ]);
+  });
+
+  it("preserves the pending reference when agent readiness fails", async () => {
+    const current = await fixture();
+    const add = vi.fn();
+
+    await expect(
+      installClawCronJobs(current.plan, {
+        env: current.env,
+        gateway: {
+          add,
+          waitUntilAgentAvailable: vi.fn().mockRejectedValue(new Error("reload timed out")),
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: "cron_install_failed",
+      cronJobs: [{ manifestId: "daily-report", status: "pending", error: "reload timed out" }],
+    });
+    expect(add).not.toHaveBeenCalled();
+    expect(readClawCronRefs("worker-two", { env: current.env })).toMatchObject([
+      { manifestId: "daily-report", status: "pending", error: "reload timed out" },
     ]);
   });
 

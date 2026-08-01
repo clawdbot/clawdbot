@@ -6,6 +6,7 @@ import {
 import { registerClientVoiceConsultRun } from "../talk/client-voice-session.js";
 import type { RealtimeVoiceToolResultOptions } from "../talk/provider-types.js";
 import { abortChatRunById } from "./chat-abort.js";
+import { formatError } from "./server-utils.js";
 import {
   cancelForcedConsults,
   submitForcedTalkRealtimeRelayToolResult,
@@ -40,6 +41,7 @@ import {
 import { decodeTalkRelayAudioBase64 } from "./talk-relay-audio-base64.js";
 import {
   closeExpiredTalkRelaySessions,
+  closeTalkRelaySessionsForConnection,
   requireActiveTalkRelaySession,
 } from "./talk-relay-session-lifecycle.js";
 import { forgetUnifiedTalkSession } from "./talk-session-registry.js";
@@ -93,17 +95,36 @@ export function closeRelaySession(session: RelaySession, reason: "completed" | "
   forgetUnifiedTalkSession(session.id);
   clearTimeout(session.cleanupTimer);
   abortRelayAgentRuns(session, reason === "error" ? "relay-error" : "relay-closed");
-  session.bridge.close();
-  closeRelayVoiceSession(session);
-  broadcastToOwner(session.context, session.connId, {
-    relaySessionId: session.id,
-    type: "close",
-    reason,
-    talkEvent: session.harness.talk.emit({
-      type: "session.closed",
-      payload: { reason },
-      final: true,
-    }),
+  try {
+    session.bridge.close();
+  } finally {
+    // Provider teardown may throw, but the relay must still reach its durable
+    // voice and owner-visible terminal state before that error is surfaced.
+    closeRelayVoiceSession(session);
+    broadcastToOwner(session.context, session.connId, {
+      relaySessionId: session.id,
+      type: "close",
+      reason,
+      talkEvent: session.harness.talk.emit({
+        type: "session.closed",
+        payload: { reason },
+        final: true,
+      }),
+    });
+  }
+}
+
+/** Releases every realtime relay session owned by a disconnected gateway connection. */
+export function closeTalkRealtimeRelaySessionsForConnection(connId: string): void {
+  closeTalkRelaySessionsForConnection({
+    sessions: relaySessions.values(),
+    connId,
+    closeSession: (session) => closeRelaySession(session, "completed"),
+    onCloseError: (error, session) => {
+      session.context.logGateway.warn(
+        `failed to close realtime relay session after connection disconnect: ${formatError(error)}`,
+      );
+    },
   });
 }
 

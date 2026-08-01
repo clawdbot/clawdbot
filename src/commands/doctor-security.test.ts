@@ -198,7 +198,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
     await noteSecurityWarnings(cfg);
     const message = lastMessage();
     expect(message).toContain("OPENCLAW_GATEWAY_TOKEN conflicts with gateway.auth.token");
-    expect(message).toContain("Direct local Gateway clients commonly prefer the env token");
+    expect(message).toContain("Configured local Gateway clients");
     expect(message).toContain("~/.openclaw/.env");
   });
 

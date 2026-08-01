@@ -2,13 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveMemoryRemDreamingConfig } from "openclaw/plugin-sdk/memory-core-host-status";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import {
-  emitMemorySecretResolveDiagnostics,
-  loadMemoryCommandConfig,
-  resolveAgent,
-  resolveMemoryPluginConfig,
-  withMemoryManagerForAgent,
-} from "./cli-runtime-common.js";
+import { resolveMemoryPluginConfig, withMemoryCommand } from "./cli-runtime-common.js";
 import { defaultRuntime, shortenHomePath, theme } from "./cli.host.runtime.js";
 import type { MemoryRemBackfillOptions, MemoryRemHarnessOptions } from "./cli.types.js";
 import { removeBackfillDiaryEntries, writeBackfillDiaryEntries } from "./dreaming-narrative.js";
@@ -16,25 +10,118 @@ import { seedHistoricalDailyMemorySignals } from "./dreaming-phases.js";
 import type { MemoryCoreRuntimeHost } from "./memory/runtime-host.js";
 import { previewGroundedRemMarkdown } from "./rem-evidence.js";
 import { previewRemHarness } from "./rem-harness.js";
+import { runSessionBackfill, type MemorySessionBackfillOptions } from "./session-backfill.js";
 import {
   recordGroundedShortTermCandidates,
   removeGroundedShortTermCandidates,
 } from "./short-term-promotion.js";
 const { heading, muted, warn } = theme;
+
+export async function runMemorySessionBackfill(
+  opts: MemorySessionBackfillOptions,
+  hostOptions?: MemoryCoreRuntimeHost,
+) {
+  await withMemoryCommand({
+    commandName: "memory session-backfill",
+    agent: opts.agent,
+    diagnosticsToStderr: Boolean(opts.json),
+    purpose: "status",
+    ...hostOptions,
+    run: async ({ manager, cfg, agentId }) => {
+      const workspaceDir = manager.status().workspaceDir?.trim();
+      if (!workspaceDir) {
+        defaultRuntime.error("Memory session-backfill requires a resolvable workspace directory.");
+        process.exitCode = 1;
+        return;
+      }
+      if (
+        opts.rollback &&
+        (opts.apply || opts.rem || opts.from || opts.to || opts.archiveFiles?.length)
+      ) {
+        defaultRuntime.error(
+          "Memory session-backfill --rollback cannot be combined with input, range, --rem, or --apply options.",
+        );
+        process.exitCode = 1;
+        return;
+      }
+      const remConfig = resolveMemoryRemDreamingConfig({
+        pluginConfig: resolveMemoryPluginConfig(cfg),
+        cfg,
+      });
+      let result;
+      try {
+        result = await runSessionBackfill({
+          agentId,
+          workspaceDir,
+          ...(opts.from !== undefined ? { from: opts.from } : {}),
+          ...(opts.to !== undefined ? { to: opts.to } : {}),
+          ...(opts.limitDays !== undefined ? { limitDays: opts.limitDays } : {}),
+          ...(opts.rem !== undefined ? { rem: opts.rem } : {}),
+          ...(opts.apply !== undefined ? { apply: opts.apply } : {}),
+          ...(opts.rollback !== undefined ? { rollback: opts.rollback } : {}),
+          ...(opts.archiveFiles !== undefined ? { archiveFiles: opts.archiveFiles } : {}),
+          ...(remConfig.timezone !== undefined ? { timezone: remConfig.timezone } : {}),
+        });
+      } catch (error) {
+        defaultRuntime.error(error instanceof Error ? error.message : String(error));
+        process.exitCode = 1;
+        return;
+      }
+      if (opts.json) {
+        defaultRuntime.writeJson(result);
+        return;
+      }
+      if (result.rollback) {
+        defaultRuntime.log(
+          [
+            `${heading("Session Backfill")} ${muted("(rollback)")}`,
+            muted(`workspace=${shortenHomePath(workspaceDir)}`),
+            muted(`removedDiaryEntries=${result.rollback.removedDiaryEntries}`),
+            muted(`removedStagedEntries=${result.rollback.removedStagedEntries}`),
+          ].join("\n"),
+        );
+        return;
+      }
+      const lines = [
+        `${heading("Session Backfill")} ${muted(`(${agentId})`)}`,
+        muted(`workspace=${shortenHomePath(workspaceDir)}`),
+        muted(
+          `batches=${result.batchCount ?? 1} days=${result.days.length} candidates=${result.candidateCount} staged=${result.stagedEntries}`,
+        ),
+      ];
+      for (const batch of result.batches ?? []) {
+        lines.push(
+          muted(
+            `batch=${batch.batch} days=${batch.days} candidates=${batch.candidates} staged=${batch.stagedEntries}`,
+          ),
+        );
+      }
+      for (const day of result.days) {
+        lines.push("", heading(day.day), muted(`candidates=${day.candidateCount}`));
+        lines.push(...day.topCandidates.map((candidate) => `- ${candidate}`));
+      }
+      if (result.days.length === 0) {
+        lines.push("", "No new hash-untracked trusted session candidates.");
+      }
+      if (!result.applied && !result.rem) {
+        lines.push("", muted("Dry run; use --apply to stage candidates."));
+      }
+      defaultRuntime.log(lines.join("\n"));
+    },
+  });
+}
+
 export async function runMemoryRemHarness(
   opts: MemoryRemHarnessOptions,
   hostOptions?: MemoryCoreRuntimeHost,
 ) {
-  const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory rem-harness");
-  emitMemorySecretResolveDiagnostics(diagnostics, { json: Boolean(opts.json) });
-  const agentId = resolveAgent(cfg, opts.agent);
-  await withMemoryManagerForAgent({
-    cfg,
-    agentId,
+  await withMemoryCommand({
+    commandName: "memory rem-harness",
+    agent: opts.agent,
+    diagnosticsToStderr: Boolean(opts.json),
     purpose: "status",
-    acquireLocalService: hostOptions?.acquireLocalService,
-    withLease: hostOptions?.withLease,
-    run: async (manager) => {
+    ...hostOptions,
+    run: async ({ manager, cfg, agentId }) => {
       const status = manager.status();
       const managerWorkspaceDir = status.workspaceDir?.trim();
       const pluginConfig = resolveMemoryPluginConfig(cfg);
@@ -193,16 +280,13 @@ export async function runMemoryRemBackfill(
   opts: MemoryRemBackfillOptions,
   hostOptions?: MemoryCoreRuntimeHost,
 ) {
-  const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory rem-backfill");
-  emitMemorySecretResolveDiagnostics(diagnostics, { json: Boolean(opts.json) });
-  const agentId = resolveAgent(cfg, opts.agent);
-  await withMemoryManagerForAgent({
-    cfg,
-    agentId,
+  await withMemoryCommand({
+    commandName: "memory rem-backfill",
+    agent: opts.agent,
+    diagnosticsToStderr: Boolean(opts.json),
     purpose: "status",
-    acquireLocalService: hostOptions?.acquireLocalService,
-    withLease: hostOptions?.withLease,
-    run: async (manager) => {
+    ...hostOptions,
+    run: async ({ manager, cfg, agentId }) => {
       const status = manager.status();
       const workspaceDir = status.workspaceDir?.trim();
       const pluginConfig = resolveMemoryPluginConfig(cfg);

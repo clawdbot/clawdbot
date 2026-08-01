@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveGeneratedMediaMaxBytes } from "../../media/configured-max-bytes.js";
+import { probeMediaFilesWithinBudget } from "../../media/media-probe.js";
 import {
   classifyMediaReferenceSource,
   normalizeMediaReferenceSource,
@@ -103,6 +104,9 @@ const log = createSubsystemLogger("agents/tools/video-generate");
 const MAX_INPUT_IMAGES = 9;
 const MAX_INPUT_VIDEOS = 4;
 const MAX_INPUT_AUDIOS = 3;
+const GENERATED_VIDEO_PROBE_BUDGET_MS = 3000;
+const GENERATED_VIDEO_PROBE_CONCURRENCY = 2;
+const MAX_GENERATED_VIDEO_PROBES = 8;
 
 const VideoGenerateToolProperties = {
   action: Type.Optional(
@@ -822,18 +826,34 @@ async function executeVideoGenerationJob(params: {
     ...savedVideos.map((video) => video.path),
     ...urlOnlyVideos.map((video) => video.url),
   ];
+  const savedVideoMetadata = await probeMediaFilesWithinBudget(
+    savedVideos.map((video) => ({ filePath: video.path, kind: "video" })),
+    {
+      budgetMs: GENERATED_VIDEO_PROBE_BUDGET_MS,
+      concurrency: GENERATED_VIDEO_PROBE_CONCURRENCY,
+      maxProbes: MAX_GENERATED_VIDEO_PROBES,
+    },
+  );
   const attachments: AgentGeneratedAttachment[] = [
-    ...savedVideos.map((video) => ({
+    ...savedVideos.map((video, index) => ({
       type: "video" as const,
       path: video.path,
       mimeType: video.contentType,
       name: video.id,
+      sizeBytes: video.size,
+      ...(typeof normalizedDurationSeconds === "number"
+        ? { durationMs: normalizedDurationSeconds * 1000 }
+        : {}),
+      ...savedVideoMetadata[index],
     })),
     ...urlOnlyVideos.map((video) => ({
       type: "video" as const,
       url: video.url,
       mimeType: video.mimeType,
       name: video.fileName,
+      ...(typeof normalizedDurationSeconds === "number"
+        ? { durationMs: normalizedDurationSeconds * 1000 }
+        : {}),
     })),
   ];
   const lines = [
@@ -973,7 +993,9 @@ export function createVideoGenerateTool(options?: {
     name: "video_generate",
     displaySummary: "Generate videos",
     description:
-      "Create video. Session chat background: call once/request, await, then visible reply + structured media. status checks active task. Duration may round to provider value.",
+      "Create video, incl. image-to-video: image refs take first_frame/last_frame/reference_image roles; video refs condition style" +
+      (includeAudioReferences ? "; audio refs condition sound" : "") +
+      ". resolution up to 4K; audio/watermark toggles. action=list discovers providers/models. Session chat background: call once/request, await, then visible reply + structured media. status checks active task. Duration may round to provider value.",
     parameters: createVideoGenerateToolSchema({ includeAudioReferences }),
     execute: async (_toolCallId, rawArgs) => {
       const args = rawArgs as Record<string, unknown>;

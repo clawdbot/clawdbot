@@ -30,6 +30,7 @@ function makeTask(overrides: Partial<TaskSummary> & { id: string }): TaskSummary
     runtime: "subagent",
     agentId: "main",
     title: "Map codebase",
+    sessionKey: "agent:main:current",
     createdAt: 1_000,
     updatedAt: 2_000,
     startedAt: 1_500,
@@ -73,11 +74,11 @@ afterEach(() => {
 });
 
 describe("background tasks rail state", () => {
-  it("loads agent-scoped tasks eagerly while the rail is collapsed", async () => {
+  it("loads session-scoped tasks eagerly while the rail is collapsed", async () => {
     const { host, request } = createHost({
       request: (method, params) => {
         expect(method).toBe("tasks.list");
-        expect((params as { agentId?: string }).agentId).toBe("main");
+        expect((params as { sessionKey?: string }).sessionKey).toBe("agent:main:current");
         return Promise.resolve({ tasks: [makeTask({ id: "task-1" })] });
       },
     });
@@ -141,19 +142,21 @@ describe("background tasks rail state", () => {
     expect(props.tasks?.map((task) => task.id)).toEqual(["task-1"]);
   });
 
-  it("keeps expansion across agent switches and reloads the new scope", async () => {
+  it("keeps expansion across session switches and reloads the new scope", async () => {
     const { host, request } = createHost();
     createBackgroundTasksProps(host, openSession).onToggleCollapsed();
     createBackgroundTasksProps(host, openSession);
     await flushAsync();
 
-    host.sessionKey = "agent:research:current";
+    host.sessionKey = "agent:main:another-thread";
     const props = createBackgroundTasksProps(host, openSession);
     expect(props.collapsed).toBe(false);
-    expect(props.agentId).toBe("research");
+    expect(props.sessionKey).toBe("agent:main:another-thread");
     expect(props.tasks).toBeNull();
     await flushAsync();
-    expect(request.mock.calls.at(-1)?.[1]).toMatchObject({ agentId: "research" });
+    expect(request.mock.calls.at(-1)?.[1]).toMatchObject({
+      sessionKey: "agent:main:another-thread",
+    });
   });
 
   it("surfaces cancellation refusals through the rail props", async () => {
@@ -458,27 +461,27 @@ describe("background tasks rail events", () => {
     });
   });
 
-  it("ignores upserts for other agents", async () => {
+  it("ignores upserts for other sessions, including the same agent", async () => {
     const { host } = await loadedHost([makeTask({ id: "task-1" })]);
 
     handleBackgroundTasksEvent(host, {
       action: "upserted",
-      task: makeTask({ id: "task-2", agentId: "other" }),
+      task: makeTask({ id: "task-2", sessionKey: "agent:main:another-thread" }),
     });
 
     const props = createBackgroundTasksProps(host, openSession);
     expect(props.tasks?.map((task) => task.id)).toEqual(["task-1"]);
   });
 
-  it("matches legacy tasks through their owner key like the gateway filter", async () => {
+  it("matches tasks through their owner key like the gateway filter", async () => {
     const { host } = await loadedHost([makeTask({ id: "task-1" })]);
 
     handleBackgroundTasksEvent(host, {
       action: "upserted",
       task: {
         ...makeTask({ id: "task-owner", updatedAt: 9_000 }),
-        agentId: undefined,
-        ownerKey: "agent:main:owner",
+        ownerKey: "agent:main:current",
+        sessionKey: "agent:main:child-task",
       },
     });
 
@@ -540,7 +543,7 @@ describe("background tasks rail rendering", () => {
     document.body.append(container);
     render(
       html`${renderBackgroundTasksRail({
-        agentId: "main",
+        sessionKey: "agent:main:current",
         statusRowId: "chat-tasks-status-test",
         collapsed: false,
         narrowLayout: false,
@@ -606,7 +609,7 @@ describe("background tasks rail rendering", () => {
     document.body.append(container);
     render(
       html`${renderBackgroundTasksRail({
-        agentId: "main",
+        sessionKey: "agent:main:current",
         statusRowId: "chat-tasks-status-test",
         collapsed: false,
         narrowLayout: false,
@@ -664,7 +667,7 @@ describe("background tasks rail rendering", () => {
     document.body.append(container);
     render(
       html`${renderBackgroundTasksRail({
-        agentId: "main",
+        sessionKey: "agent:main:current",
         statusRowId: "chat-tasks-status-test",
         collapsed: false,
         narrowLayout: false,
@@ -725,7 +728,7 @@ describe("background tasks rail rendering", () => {
     document.body.append(container);
     render(
       html`${renderBackgroundTasksRail({
-        agentId: "main",
+        sessionKey: "agent:main:current",
         statusRowId: "chat-tasks-status-test",
         collapsed: false,
         narrowLayout: false,
@@ -761,7 +764,7 @@ describe("background tasks rail rendering", () => {
     document.body.append(container);
     render(
       html`${renderBackgroundTasksRail({
-        agentId: "main",
+        sessionKey: "agent:main:current",
         statusRowId: "chat-tasks-status-test",
         collapsed: false,
         narrowLayout: false,
@@ -797,7 +800,7 @@ describe("background tasks rail rendering", () => {
 describe("running-tasks status row", () => {
   function makeProps(overrides: Partial<BackgroundTasksProps>): BackgroundTasksProps {
     return {
-      agentId: "main",
+      sessionKey: "agent:main:current",
       statusRowId: "chat-tasks-status-test",
       collapsed: true,
       narrowLayout: false,

@@ -101,6 +101,7 @@ export const cleanupBrowserSessionsForLifecycleEndMock = createMock();
 export const callGatewayMock = createMock();
 export const ensureRuntimePluginsLoadedMock = createMock();
 export const hasUsableWebSearchProviderMock = createMock();
+export const readSessionMessagesAsyncMock = createMock();
 export const classifyEmbeddedAgentRunResultForModelFallbackMock = createMock();
 export const mergeEmbeddedAgentRunResultForModelFallbackExhaustionMock = createMock();
 
@@ -232,6 +233,10 @@ vi.mock("../../skills/runtime/cron-snapshot.runtime.js", () => ({
 vi.mock("./run-model-selection.runtime.js", () => ({
   DEFAULT_MODEL: "gpt-5.4",
   DEFAULT_PROVIDER: "openai",
+  loadPreparedModelCatalogSnapshot: async (params: unknown) => ({
+    entries: await loadModelCatalogMock(params),
+    routeVariants: [],
+  }),
   loadResolvedPublishedModelCatalogOwner: loadModelCatalogOwnerMock,
   publishedModelCatalogOwnerMatchesAgent: (owner: { agentId: string }, agentId: string) =>
     owner.agentId === agentId.trim().toLowerCase(),
@@ -362,6 +367,10 @@ vi.mock("../../browser-lifecycle-cleanup.js", () => ({
 
 vi.mock("../../gateway/call.runtime.js", () => ({
   callGateway: callGatewayMock,
+}));
+
+vi.mock("../../gateway/session-transcript-readers.js", () => ({
+  readSessionMessagesAsync: readSessionMessagesAsyncMock,
 }));
 
 vi.mock("../../config/sessions/session-accessor.js", async () => {
@@ -847,6 +856,8 @@ export function resetRunCronIsolatedAgentTurnHarness(): void {
     (params?: { runtimeWebSearch?: { selectedProvider?: string } }) =>
       Boolean(params?.runtimeWebSearch?.selectedProvider),
   );
+  readSessionMessagesAsyncMock.mockReset();
+  readSessionMessagesAsyncMock.mockResolvedValue([]);
 }
 
 export function clearFastTestEnv(): string | undefined {

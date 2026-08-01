@@ -60,6 +60,7 @@ function createManagerMock(params: {
     score: number;
     snippet: string;
     source: "memory";
+    projectKey?: string;
   }>;
   withMemorySourceCounts?: boolean;
 }) {
@@ -71,6 +72,7 @@ function createManagerMock(params: {
       ): Promise<ManagerSearchResult> => params.searchResults ?? [],
     ),
     readFile: vi.fn(async () => ({ text: "", path: "MEMORY.md" })),
+    listCuratedProjectCandidates: vi.fn(async () => params.searchResults ?? []),
     status: vi.fn(() =>
       createManagerStatus({
         backend: params.backend,
@@ -313,6 +315,7 @@ beforeEach(async () => {
   await closeAllMemorySearchManagers();
   mockPrimary.search.mockClear();
   mockPrimary.readFile.mockClear();
+  mockPrimary.listCuratedProjectCandidates.mockClear();
   mockPrimary.status.mockClear();
   mockPrimary.sync.mockClear();
   mockPrimary.probeEmbeddingAvailability.mockClear();
@@ -320,6 +323,7 @@ beforeEach(async () => {
   mockPrimary.close.mockClear();
   fallbackSearch.mockClear();
   fallbackManager.readFile.mockClear();
+  fallbackManager.listCuratedProjectCandidates.mockClear();
   fallbackManager.status.mockClear();
   fallbackManager.sync.mockClear();
   fallbackManager.probeEmbeddingAvailability.mockClear();
@@ -1238,6 +1242,26 @@ describe("getMemorySearchManager caching", () => {
     expect(results).toHaveLength(1);
     expect(results[0]?.path).toBe("MEMORY.md");
     expect(fallbackSearch).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to builtin when curated project listing fails", async () => {
+    const agentId = "project-list-fallback";
+    const cfg = createQmdCfg(agentId);
+    mockPrimary.listCuratedProjectCandidates.mockRejectedValueOnce(
+      new Error("qmd project listing failed"),
+    );
+    const manager = requireManager(await getMemorySearchManager({ cfg, agentId }));
+
+    const results = await manager.listCuratedProjectCandidates?.({
+      activeProjectKeys: ["github.com/openclaw/openclaw"],
+      limit: 3,
+    });
+
+    expect(results).toHaveLength(1);
+    expect(fallbackManager.listCuratedProjectCandidates).toHaveBeenCalledWith({
+      activeProjectKeys: ["github.com/openclaw/openclaw"],
+      limit: 3,
+    });
   });
 
   it("does not wait for failed qmd retirement before starting builtin fallback", async () => {

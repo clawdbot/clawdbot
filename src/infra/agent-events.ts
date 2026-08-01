@@ -4,8 +4,8 @@ import { randomUUID } from "node:crypto";
 import type { VerboseLevel } from "../auto-reply/thinking.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
-import { createAbortError } from "./abort-signal.js";
 import { hasInvalidLifecycleStartTimestamp } from "./agent-event-lifecycle.js";
+import { createAgentRunStaleLifecycleError } from "./agent-lifecycle-error.js";
 import { clearAgentRunUsage, resetAgentRunUsageForTest } from "./agent-run-usage.js";
 
 /** Approval event phase for request/resolution transitions. */
@@ -72,6 +72,7 @@ export type AgentEventRuntimePayload = AgentEventPayload & {
   readonly controlUiVisible?: boolean;
   readonly contextClaimId?: string;
   readonly deliverySessionKey?: string;
+  readonly projectSessionLifecycle?: boolean;
 };
 
 /** Per-run metadata used to stamp events and gate Control UI visibility. */
@@ -88,6 +89,8 @@ type AgentRunContext = {
   /** Whether control UI clients should receive chat/agent updates for this run. */
   isControlUiVisible?: boolean;
   projectSessionActive?: boolean;
+  /** Whether lifecycle events may update the shared session row. */
+  projectSessionLifecycle?: boolean;
   /** Active cadence state by job; admission permits one invocation per job. */
   cronRunsByJobId?: Map<string, { pacingEnabled: boolean; nextCheckMs?: number }>;
   /** Timestamp when this context was first registered (for TTL-based cleanup). */
@@ -191,7 +194,7 @@ export function assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration: st
   if (isAgentEventLifecycleGenerationCurrent(lifecycleGeneration)) {
     return;
   }
-  throw createAbortError("Agent run belongs to a stale gateway lifecycle");
+  throw createAgentRunStaleLifecycleError();
 }
 
 /** Captures immutable lifecycle ownership for one admitted execution. */
@@ -270,6 +273,9 @@ export function registerAgentRunContext(runId: string, context: AgentRunContext,
   }
   if (context.projectSessionActive !== undefined) {
     existing.projectSessionActive = context.projectSessionActive;
+  }
+  if (context.projectSessionLifecycle !== undefined) {
+    existing.projectSessionLifecycle = context.projectSessionLifecycle;
   }
   if (context.cronRunsByJobId !== undefined) {
     existing.cronRunsByJobId ??= new Map();
@@ -452,24 +458,42 @@ export function listAgentRunsForSession(params: {
   );
 }
 
+export type ProjectedAgentRunIndex = {
+  sessionKeys: ReadonlySet<string>;
+  sessionIds: ReadonlySet<string>;
+};
+
+export function buildProjectedAgentRunIndex(): ProjectedAgentRunIndex {
+  const state = getAgentEventState();
+  const sessionKeys = new Set<string>();
+  const sessionIds = new Set<string>();
+  for (const context of state.runContextById.values()) {
+    if (
+      context.projectSessionActive !== true ||
+      context.lifecycleGeneration !== state.lifecycleGeneration
+    ) {
+      continue;
+    }
+    if (context.sessionKey !== undefined) {
+      sessionKeys.add(context.sessionKey);
+    }
+    if (context.sessionId !== undefined) {
+      sessionIds.add(context.sessionId);
+    }
+  }
+  return { sessionKeys, sessionIds };
+}
+
 export function hasProjectedAgentRunForSession(params: {
   sessionKeys: readonly string[];
   sessionId?: string;
+  index?: ProjectedAgentRunIndex;
 }): boolean {
-  const lifecycleGeneration = getAgentEventState().lifecycleGeneration;
-  for (const context of getAgentEventState().runContextById.values()) {
-    const matches =
-      (context.sessionKey !== undefined && params.sessionKeys.includes(context.sessionKey)) ||
-      (params.sessionId !== undefined && context.sessionId === params.sessionId);
-    if (
-      matches &&
-      context.projectSessionActive === true &&
-      context.lifecycleGeneration === lifecycleGeneration
-    ) {
-      return true;
-    }
-  }
-  return false;
+  const index = params.index ?? buildProjectedAgentRunIndex();
+  return (
+    params.sessionKeys.some((sessionKey) => index.sessionKeys.has(sessionKey)) ||
+    (params.sessionId !== undefined && index.sessionIds.has(params.sessionId))
+  );
 }
 
 /** Clears context and sequence state for a run that has ended or been discarded. */
@@ -638,6 +662,12 @@ function enrichAgentEvent(
   if (context?.isControlUiVisible !== undefined) {
     Object.defineProperty(enriched, "controlUiVisible", {
       value: context.isControlUiVisible,
+      enumerable: false,
+    });
+  }
+  if (context?.projectSessionLifecycle !== undefined) {
+    Object.defineProperty(enriched, "projectSessionLifecycle", {
+      value: context.projectSessionLifecycle,
       enumerable: false,
     });
   }

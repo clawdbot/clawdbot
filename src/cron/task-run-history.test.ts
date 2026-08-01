@@ -64,6 +64,37 @@ function futureCronDetailTask(storeKey: string): TaskRecord {
 }
 
 describe("cron task run history", () => {
+  it.each([
+    "cron: job execution timed out",
+    "cron: job execution timed out (last phase: model_call_started)",
+    "cron: isolated agent setup timed out before runner start",
+    "cron: isolated agent setup timed out before runner start (last phase: preparing)",
+    "cron: isolated agent run stalled before execution start",
+    "cron: isolated agent run stalled before execution start (last phase: preparing)",
+  ])("classifies the watchdog timeout %j as a timed-out task", (error) => {
+    expect(
+      cronRunStatusToTaskStatus({
+        ts: 100,
+        jobId: JOB_ID,
+        action: "finished",
+        status: "error",
+        error,
+      }),
+    ).toBe("timed_out");
+  });
+
+  it("does not classify unrelated errors as watchdog timeouts", () => {
+    expect(
+      cronRunStatusToTaskStatus({
+        ts: 100,
+        jobId: JOB_ID,
+        action: "finished",
+        status: "error",
+        error: "provider request timed out",
+      }),
+    ).toBe("failed");
+  });
+
   it("reads executions produced by the cron service from the ledger", async () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "openclaw-cron-task-service-history-" },

@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import type { BrowserContext, CDPSession } from "playwright-core";
 import type { expect as VitestExpect } from "vitest";
 import type { RawData } from "ws";
 
@@ -19,6 +20,12 @@ type CopilotTurnIsolationPanel = {
 
 export function textValue(value: unknown): string {
   return typeof value === "string" ? value : "";
+}
+
+export function countCopilotHistoryRequests(
+  gateway: Pick<CopilotTurnIsolationGateway, "requests">,
+): number {
+  return gateway.requests.filter((request) => request.method === "chat.history").length;
 }
 
 export function rawDataText(data: RawData): string {
@@ -63,9 +70,7 @@ export async function assertCopilotStaleRunIsolation(params: {
   expect(activeRunId).not.toBe(completedRunId);
   expect(await panel.disabled("#message-input")).toBe(true);
 
-  const historyRequestsBeforeStaleEvents = gateway.requests.filter(
-    (request) => request.method === "chat.history",
-  ).length;
+  const historyRequestsBeforeStaleEvents = countCopilotHistoryRequests(gateway);
   gateway.emitEvent("chat", {
     sessionKey,
     runId: completedRunId,
@@ -84,9 +89,7 @@ export async function assertCopilotStaleRunIsolation(params: {
   // before checking that the active run still owns the composer.
   gateway.emitEvent("session.message", { sessionKey });
   await expect
-    .poll(() => gateway.requests.filter((request) => request.method === "chat.history").length, {
-      timeout: 10_000,
-    })
+    .poll(() => countCopilotHistoryRequests(gateway), { timeout: 10_000 })
     .toBeGreaterThan(historyRequestsBeforeStaleEvents);
   expect(await panel.disabled("#message-input")).toBe(true);
   expect(await panel.allText(".message.assistant")).toEqual(originalAssistantMessages);
@@ -120,20 +123,49 @@ export function isSidePanelTarget(target: { url: string }): boolean {
   }
 }
 
-export async function resolveChromiumExecutable(): Promise<string | undefined> {
+// Distro Chromium can omit the Extensions CDP domain these tests require.
+// Honor an explicit compatible override; otherwise use Playwright's pinned build.
+export async function resolveChromiumExecutableOverride(): Promise<string | undefined> {
   const override = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH?.trim();
-  const candidates = [override, "/usr/bin/chromium-browser", "/usr/bin/chromium"].filter(
-    (candidate): candidate is string => Boolean(candidate),
-  );
-  for (const candidate of candidates) {
-    try {
-      await fs.access(candidate);
-      return candidate;
-    } catch {
-      // Continue to Playwright's managed Chromium.
-    }
+  if (!override) {
+    return undefined;
   }
-  return undefined;
+  await fs.access(override);
+  return override;
+}
+
+export async function waitForLoadedExtensionId(
+  browserCdp: CDPSession,
+  extensionPath: string,
+): Promise<string> {
+  const expectedPath = path.resolve(extensionPath);
+  const deadline = Date.now() + 10_000;
+  do {
+    const result = (await browserCdp.send("Extensions.getExtensions")) as {
+      extensions: Array<{ id: string; path: string }>;
+    };
+    const loaded = result.extensions.find(
+      (extension) => path.resolve(extension.path) === expectedPath,
+    );
+    if (loaded) {
+      return loaded.id;
+    }
+    await new Promise((resolve) => {
+      setTimeout(resolve, 50);
+    });
+  } while (Date.now() < deadline);
+  throw new Error("Chromium did not report the loaded browser copilot extension");
+}
+
+export async function waitForContextExtensionId(
+  context: BrowserContext,
+  extensionPath: string,
+): Promise<string> {
+  const browser = context.browser();
+  if (!browser) {
+    throw new Error("Chromium browser connection unavailable");
+  }
+  return await waitForLoadedExtensionId(await browser.newBrowserCDPSession(), extensionPath);
 }
 
 export async function copyCopilotSidepanelExtension(tempDirs: {

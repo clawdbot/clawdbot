@@ -1,7 +1,10 @@
 // Run main tests cover CLI main entrypoint behavior and process error handling.
 import { describe, expect, it } from "vitest";
 import type { PluginManifestCommandAliasRegistry } from "../plugins/manifest-command-aliases.js";
-import { resolveGatewayRunPreBootstrapOptions } from "./gateway-run-argv.js";
+import {
+  resolveGatewayCatalogCommandPath,
+  resolveGatewayRunPreBootstrapOptions,
+} from "./gateway-run-argv.js";
 import {
   rewriteUpdateFlagArgv,
   resolveMissingPluginCommandMessage,
@@ -71,12 +74,41 @@ describe("isGatewayRunFastPathArgv", () => {
     ).toBe(true);
     expect(isGatewayRunFastPathArgv(["node", "openclaw", "gateway", "run"])).toBe(true);
     expect(
+      isGatewayRunFastPathArgv(["node", "openclaw", "gateway", "--log-level", "debug", "run"]),
+    ).toBe(true);
+    expect(
+      isGatewayRunFastPathArgv(["node", "openclaw", "gateway", "--log-level=debug", "run"]),
+    ).toBe(true);
+    expect(
       isGatewayRunFastPathArgv(["node", "openclaw", "gateway", "run", "--raw-stream-path", "x"]),
     ).toBe(true);
     expect(isGatewayRunFastPathArgv(["node", "openclaw", "gateway", "call", "health"])).toBe(false);
     expect(isGatewayRunFastPathArgv(["node", "openclaw", "gateway", "--help"])).toBe(false);
     expect(isGatewayRunFastPathArgv(["node", "openclaw", "gateway", "--port"])).toBe(false);
     expect(isGatewayRunFastPathArgv(["node", "openclaw", "gateway", "--unknown"])).toBe(false);
+  });
+
+  it("keeps post-root log levels out of the gateway command path", () => {
+    expect(
+      resolveGatewayCatalogCommandPath([
+        "node",
+        "openclaw",
+        "gateway",
+        "--log-level",
+        "debug",
+        "run",
+      ]),
+    ).toEqual(["gateway", "run"]);
+    expect(
+      resolveGatewayCatalogCommandPath([
+        "node",
+        "openclaw",
+        "gateway",
+        "--log-level=debug",
+        "restart-handoff",
+        "capabilities",
+      ]),
+    ).toEqual(["gateway", "restart-handoff"]);
   });
 });
 
@@ -291,6 +323,15 @@ describe("shouldUseSetupOnboardConfigureHelpFastPath", () => {
     ).toBe(false);
     expect(
       shouldUseSetupOnboardConfigureHelpFastPath(["node", "openclaw", "status", "--help"]),
+    ).toBe(false);
+    expect(
+      shouldUseSetupOnboardConfigureHelpFastPath([
+        "node",
+        "openclaw",
+        "onboard",
+        "--gateway-port",
+        "--help",
+      ]),
     ).toBe(false);
   });
 });

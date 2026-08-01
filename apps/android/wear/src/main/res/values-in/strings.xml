@@ -11,10 +11,12 @@
     <string name="dictate" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Dikte"</string>
     <string name="live" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Langsung"</string>
     <string name="thread" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Utas"</string>
+    <string name="open_thread" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Buka utas"</string>
     <string name="swipe_between_voice_modes" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"← Geser →"</string>
     <string name="hold" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tahan"</string>
     <string name="tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ketuk"</string>
     <string name="double_tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ketuk dua kali"</string>
+    <string name="show_new_messages" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Tampilkan pesan baru"</string>
     <string name="no_live_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Mulai Live untuk melihat percakapan di sini."</string>
     <string name="new_messages" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Baru"</string>
     <string name="type" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ketik"</string>

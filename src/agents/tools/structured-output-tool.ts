@@ -56,6 +56,9 @@ export function createStructuredOutputTool(params: {
   return {
     label: "Structured Output",
     name: "structured_output",
+    // Per-run collector contract: must be callable without discovery, and its
+    // schema-dump description would only pollute the search index.
+    catalogMode: "direct-only",
     displaySummary: "Record the collector result.",
     description: `Call exactly once as {"result": ...}, where result matches this JSON Schema: ${requestedSchema}`,
     // Runtime argument validation must reach execute so invalid attempts consume
@@ -75,7 +78,7 @@ export function createStructuredOutputTool(params: {
         throw new ToolInputError("structured_output already recorded for this run");
       }
       if (prior && prior.invalidAttempts >= 2) {
-        return jsonResult({ status: "rejected", schemaError: prior.schemaError });
+        return jsonResult({ status: "rejected", success: false, schemaError: prior.schemaError });
       }
       let validation: ReturnType<typeof validateJsonSchemaValue>;
       try {
@@ -101,7 +104,7 @@ export function createStructuredOutputTool(params: {
           `structured_output validation failed: ${schemaError}. Retry once with a corrected final result.`,
         );
       }
-      return jsonResult({ status: "rejected", schemaError });
+      return jsonResult({ status: "rejected", success: false, schemaError });
     },
   };
 }

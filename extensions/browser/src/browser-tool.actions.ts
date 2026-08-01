@@ -10,42 +10,42 @@ import {
   readPositiveIntegerParam,
 } from "openclaw/plugin-sdk/param-readers";
 import {
-  DEFAULT_AI_SNAPSHOT_MAX_CHARS,
   browserAct,
   browserConsoleMessages,
   browserDownload,
-  browserSnapshot,
   browserTabs,
   browserWaitForDownload,
   getBrowserProfileCapabilities,
   getRuntimeConfig,
-  imageResultFromFile,
   jsonResult,
   normalizeOptionalString,
   readStringParam,
   readStringValue,
   resolveBrowserConfig,
   resolveProfile,
-  resolveRuntimeImageSanitization,
-  wrapExternalContent,
 } from "./browser-tool.runtime.js";
+import {
+  appendNavigatedPageState,
+  wrapBrowserExternalJson,
+  type BrowserProxyRequest,
+} from "./browser-tool.snapshot.js";
 import { resolveBrowserActRequestTimeoutMs } from "./browser/act-policy.js";
+import type {
+  BrowserBatchAbort,
+  BrowserBatchActionResult,
+} from "./browser/client-actions-types.js";
 import {
   DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
   DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS,
-  DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS,
 } from "./browser/constants.js";
-import { neutralizeMediaDirectives } from "./browser/vision.js";
 
 const browserToolActionDeps = {
   browserAct,
   browserConsoleMessages,
   browserDownload,
-  browserSnapshot,
   browserTabs,
   browserWaitForDownload,
   getRuntimeConfig,
-  imageResultFromFile,
 };
 
 const BROWSER_DOWNLOAD_REQUEST_TIMEOUT_SLACK_MS = 5_000;
@@ -128,15 +128,6 @@ function resolveActProxyTimeoutMs(request: BrowserActRequest): number | undefine
   return resolveBrowserActRequestTimeoutMs(request);
 }
 
-type BrowserProxyRequest = (opts: {
-  method: string;
-  path: string;
-  query?: Record<string, string | number | boolean | undefined>;
-  body?: unknown;
-  timeoutMs?: number;
-  profile?: string;
-}) => Promise<unknown>;
-
 type BrowserTabLike = {
   suggestedTargetId?: unknown;
   tabId?: unknown;
@@ -166,37 +157,6 @@ function formatAgentTab(tab: unknown): Record<string, unknown> {
     type: source.type,
     ...(targetId ? { targetId } : {}),
     ...(source.wsUrl ? { wsUrl: source.wsUrl } : {}),
-  };
-}
-
-function wrapBrowserExternalJson(params: {
-  kind: "snapshot" | "console" | "tabs";
-  payload: unknown;
-  includeWarning?: boolean;
-}): { wrappedText: string; safeDetails: Record<string, unknown> } {
-  const extractedText = JSON.stringify(
-    params.payload,
-    (_key: string, value: unknown) =>
-      typeof value === "string" ? neutralizeMediaDirectives(value) : value,
-    2,
-  );
-  // Browser tabs, snapshots, and console output are page-controlled data. Keep
-  // text wrapped even when details carry the structured fields for callers.
-  const wrappedText = wrapExternalContent(extractedText, {
-    source: "browser",
-    includeWarning: params.includeWarning ?? true,
-  });
-  return {
-    wrappedText,
-    safeDetails: {
-      ok: true,
-      externalContent: {
-        untrusted: true,
-        source: "browser",
-        kind: params.kind,
-        wrapped: true,
-      },
-    },
   };
 }
 
@@ -285,20 +245,6 @@ function canRetryChromeActAfterSoleTargetRefresh(request: BrowserActRequest): bo
   ].every((value) => !normalizeOptionalString(value));
 }
 
-function isAriaRefsUnsupportedError(err: unknown): boolean {
-  const msg = String(err).toLowerCase();
-  return msg.includes("refs=aria") && msg.includes("not support");
-}
-
-function withRoleRefsFallback<T extends { refs?: "aria" | "role" }>(
-  snapshotQuery: T,
-): T & { refs: "role" } {
-  return {
-    ...snapshotQuery,
-    refs: "role",
-  };
-}
-
 export async function executeTabsAction(params: {
   baseUrl?: string;
   profile?: string;
@@ -327,197 +273,41 @@ export async function executeTabsAction(params: {
   return formatTabsToolResult(tabs);
 }
 
-/** Execute and format browser snapshots for agent consumption. */
-export async function executeSnapshotAction(params: {
-  input: Record<string, unknown>;
-  baseUrl?: string;
-  profile?: string;
-  proxyRequest: BrowserProxyRequest | null;
-  onTabActivity?: (targetId: string | undefined) => void;
-}): Promise<AgentToolResult<unknown>> {
-  const { input, baseUrl, profile, proxyRequest } = params;
-  const snapshotDefaults = browserToolActionDeps.getRuntimeConfig().browser?.snapshotDefaults;
-  const format: "ai" | "aria" | undefined =
-    input.snapshotFormat === "ai" ? "ai" : input.snapshotFormat === "aria" ? "aria" : undefined;
-  const formatExplicit = format !== undefined;
-  const mode: "efficient" | undefined =
-    input.mode === "efficient"
-      ? "efficient"
-      : !formatExplicit && format !== "aria" && snapshotDefaults?.mode === "efficient"
-        ? "efficient"
-        : undefined;
-  const labels = typeof input.labels === "boolean" ? input.labels : undefined;
-  const urls = typeof input.urls === "boolean" ? input.urls : undefined;
-  const refs: "aria" | "role" | undefined =
-    input.refs === "aria" || input.refs === "role" ? input.refs : undefined;
-  const hasMaxChars = Object.hasOwn(input, "maxChars");
-  const targetId = normalizeOptionalString(input.targetId);
-  const limit = readPositiveIntegerParam(input, "limit", {
-    message: "limit must be a positive integer.",
-  });
-  const maxCharsRaw = readNonNegativeIntegerParam(input, "maxChars", {
-    message: "maxChars must be a non-negative integer.",
-  });
-  const maxChars = maxCharsRaw !== undefined && maxCharsRaw > 0 ? maxCharsRaw : undefined;
-  const interactive = typeof input.interactive === "boolean" ? input.interactive : undefined;
-  const compact = typeof input.compact === "boolean" ? input.compact : undefined;
-  const depth = readNonNegativeIntegerParam(input, "depth", {
-    message: "depth must be a non-negative integer.",
-  });
-  const selector = normalizeOptionalString(input.selector);
-  const frame = normalizeOptionalString(input.frame);
-  const resolvedMaxChars =
-    format === "ai"
-      ? hasMaxChars
-        ? maxChars
-        : mode === "efficient"
-          ? undefined
-          : DEFAULT_AI_SNAPSHOT_MAX_CHARS
-      : hasMaxChars
-        ? maxChars
-        : undefined;
-  // AI snapshots have a compact default cap; ARIA snapshots keep full structure
-  // unless maxChars is explicit, because agents often need complete node refs.
-  const snapshotTimeoutMs =
-    readPositiveIntegerParam(input, "timeoutMs", {
-      message: "timeoutMs must be a positive integer.",
-    }) ?? DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS;
-  const snapshotQuery = {
-    ...(format ? { format } : {}),
-    targetId,
-    limit,
-    ...(typeof resolvedMaxChars === "number" ? { maxChars: resolvedMaxChars } : {}),
-    refs,
-    interactive,
-    compact,
-    depth,
-    selector,
-    frame,
-    labels,
-    urls,
-    mode,
-    timeoutMs: snapshotTimeoutMs,
-  };
-  let refsFallback: "role" | undefined;
-  const readSnapshot = async (query: typeof snapshotQuery) =>
-    proxyRequest
-      ? ((await proxyRequest({
-          method: "GET",
-          path: "/snapshot",
-          profile,
-          query,
-          timeoutMs: snapshotTimeoutMs,
-        })) as Awaited<ReturnType<typeof browserSnapshot>>)
-      : await browserToolActionDeps.browserSnapshot(baseUrl, {
-          ...query,
-          profile,
-        });
-  let snapshot: Awaited<ReturnType<typeof browserSnapshot>>;
-  try {
-    snapshot = await readSnapshot(snapshotQuery);
-  } catch (err) {
-    if (refs !== "aria" || !isAriaRefsUnsupportedError(err)) {
-      throw err;
-    }
-    refsFallback = "role";
-    snapshot = await readSnapshot(withRoleRefsFallback(snapshotQuery));
+/** Validate the /act wire payload's abort summary once for note and page-state decisions. */
+function readBrowserBatchAbort(result: unknown): BrowserBatchAbort | null {
+  if (!result || typeof result !== "object") {
+    return null;
   }
-  params.onTabActivity?.(readStringValue(snapshot.targetId) ?? targetId);
-  if (snapshot.format === "ai") {
-    const dialogStateFields = {
-      ...(snapshot.blockedByDialog ? { blockedByDialog: true } : {}),
-      ...(snapshot.browserState !== undefined ? { browserState: snapshot.browserState } : {}),
-    };
-    if (snapshot.blockedByDialog) {
-      const wrapped = wrapBrowserExternalJson({
-        kind: "snapshot",
-        payload: {
-          format: snapshot.format,
-          targetId: snapshot.targetId,
-          url: snapshot.url,
-          ...dialogStateFields,
-        },
-      });
-      return {
-        content: [{ type: "text" as const, text: wrapped.wrappedText }],
-        details: {
-          ...wrapped.safeDetails,
-          format: snapshot.format,
-          targetId: snapshot.targetId,
-          url: snapshot.url,
-          ...dialogStateFields,
-        },
-      };
-    }
-    const extractedText = snapshot.snapshot ?? "";
-    const wrappedSnapshot = wrapExternalContent(neutralizeMediaDirectives(extractedText), {
-      source: "browser",
-      includeWarning: true,
-    });
-    const safeDetails = {
-      ok: true,
-      format: snapshot.format,
-      targetId: snapshot.targetId,
-      url: snapshot.url,
-      truncated: snapshot.truncated,
-      newElements: snapshot.newElements,
-      stats: snapshot.stats,
-      refs: snapshot.refs ? Object.keys(snapshot.refs).length : undefined,
-      labels: snapshot.labels,
-      labelsCount: snapshot.labelsCount,
-      labelsSkipped: snapshot.labelsSkipped,
-      annotations: snapshot.annotations,
-      imagePath: snapshot.imagePath,
-      imageType: snapshot.imageType,
-      refsFallback,
-      ...dialogStateFields,
-      externalContent: {
-        untrusted: true,
-        source: "browser",
-        kind: "snapshot",
-        format: "ai",
-        wrapped: true,
-      },
-    };
-    if (labels && snapshot.imagePath) {
-      return await browserToolActionDeps.imageResultFromFile({
-        label: "browser:snapshot",
-        path: snapshot.imagePath,
-        extraText: wrappedSnapshot,
-        details: safeDetails,
-        imageSanitization: resolveRuntimeImageSanitization(),
-      });
-    }
-    return {
-      content: [{ type: "text" as const, text: wrappedSnapshot }],
-      details: safeDetails,
-    };
+  const aborted = (result as { aborted?: unknown }).aborted;
+  if (!aborted || typeof aborted !== "object") {
+    return null;
   }
-  {
-    const wrapped = wrapBrowserExternalJson({
-      kind: "snapshot",
-      payload: snapshot,
-    });
-    return {
-      content: [{ type: "text" as const, text: wrapped.wrappedText }],
-      details: {
-        ...wrapped.safeDetails,
-        format: "aria",
-        targetId: snapshot.targetId,
-        url: snapshot.url,
-        nodeCount: snapshot.nodes.length,
-        ...(snapshot.blockedByDialog ? { blockedByDialog: true } : {}),
-        ...(snapshot.browserState !== undefined ? { browserState: snapshot.browserState } : {}),
-        externalContent: {
-          untrusted: true,
-          source: "browser",
-          kind: "snapshot",
-          format: "aria",
-          wrapped: true,
-        },
-      },
-    };
+  const { reason, afterAction, url, skipped } = aborted as Partial<
+    Record<keyof BrowserBatchAbort, unknown>
+  >;
+  if (
+    (reason !== "navigation" && reason !== "closed") ||
+    typeof afterAction !== "number" ||
+    typeof url !== "string" ||
+    typeof skipped !== "number"
+  ) {
+    return null;
   }
+  return { reason, afterAction, url, skipped };
+}
+
+/** True when an /act response reports a cross-document navigation. */
+function actObservedNavigation(result: unknown, aborted: BrowserBatchAbort | null): boolean {
+  if (aborted?.reason === "navigation") {
+    return true;
+  }
+  const results = (result as { results?: unknown } | null | undefined)?.results;
+  return (
+    Array.isArray(results) &&
+    results.some(
+      (entry) => (entry as Partial<BrowserBatchActionResult> | undefined)?.navigated === true,
+    )
+  );
 }
 
 /** Execute browser console retrieval and wrap page-controlled messages. */
@@ -632,6 +422,25 @@ export async function executeActAction(params: {
 }): Promise<AgentToolResult<unknown>> {
   const { request, baseUrl, profile, proxyRequest } = params;
   const effectiveRequest = withConfiguredActTimeout(request, profile);
+  // resolvedTargetId is the id the act actually ran against (retry paths swap
+  // it), so page-state capture must use it rather than the original request's.
+  const finishActResult = async (result: unknown, resolvedTargetId: string | undefined) => {
+    params.onTabActivity?.(resolvedTargetId);
+    const aborted = readBrowserBatchAbort(result);
+    const formatted = formatActToolResult(result, aborted);
+    if (!actObservedNavigation(result, aborted)) {
+      return formatted;
+    }
+    // Batch aborts snapshot at navigation commit, so a slow page can still be
+    // loading; the model may need one follow-up snapshot for late content.
+    return await appendNavigatedPageState({
+      result: formatted,
+      targetId: resolvedTargetId,
+      baseUrl,
+      profile,
+      proxyRequest,
+    });
+  };
   try {
     const result = proxyRequest
       ? await proxyRequest({
@@ -644,11 +453,11 @@ export async function executeActAction(params: {
       : await browserToolActionDeps.browserAct(baseUrl, effectiveRequest, {
           profile,
         });
-    params.onTabActivity?.(
+    return await finishActResult(
+      result,
       readStringValue((result as { targetId?: unknown }).targetId) ??
         readStringValue(effectiveRequest.targetId),
     );
-    return formatActToolResult(result);
   } catch (err) {
     if (isChromeStaleTargetError(profile, err)) {
       const tabs = proxyRequest
@@ -686,11 +495,11 @@ export async function executeActAction(params: {
           : await browserToolActionDeps.browserAct(baseUrl, retryRequest, {
               profile,
             });
-        params.onTabActivity?.(
+        return await finishActResult(
+          retryResult,
           readStringValue((retryResult as { targetId?: unknown }).targetId) ??
             readStringValue(retryRequest.targetId),
         );
-        return formatActToolResult(retryResult);
       }
       if (!tabs.length) {
         throw new Error(
@@ -707,34 +516,20 @@ export async function executeActAction(params: {
   }
 }
 
-function formatActToolResult(result: unknown): AgentToolResult<unknown> {
+function formatActToolResult(
+  result: unknown,
+  aborted: BrowserBatchAbort | null,
+): AgentToolResult<unknown> {
   const formatted = jsonResult(result);
-  if (!result || typeof result !== "object") {
+  if (!aborted) {
     return formatted;
   }
-  const aborted = (result as { aborted?: unknown }).aborted;
-  if (!aborted || typeof aborted !== "object") {
-    return formatted;
-  }
-  const summary = aborted as {
-    reason?: unknown;
-    afterAction?: unknown;
-    url?: unknown;
-    skipped?: unknown;
-  };
-  if (
-    (summary.reason !== "navigation" && summary.reason !== "closed") ||
-    typeof summary.afterAction !== "number" ||
-    typeof summary.url !== "string" ||
-    typeof summary.skipped !== "number"
-  ) {
-    return formatted;
-  }
-  const reason =
-    summary.reason === "navigation"
-      ? `the page navigated to ${summary.url}`
-      : "the page or browser context closed";
-  const note = `Batch aborted after action ${summary.afterAction} because ${reason}; ${summary.skipped} remaining action(s) skipped. Take a new snapshot before continuing.`;
+  // Navigation aborts get fresh page state (or an unavailable hint) appended by
+  // finishActResult, so only the closed case tells the model to snapshot manually.
+  const note =
+    aborted.reason === "navigation"
+      ? `Batch aborted after action ${aborted.afterAction} because the page navigated to ${aborted.url}; ${aborted.skipped} remaining action(s) skipped. Earlier refs are stale.`
+      : `Batch aborted after action ${aborted.afterAction} because the page or browser context closed; ${aborted.skipped} remaining action(s) skipped. Take a new snapshot before continuing.`;
   return {
     ...formatted,
     content: [...formatted.content, { type: "text", text: note }],

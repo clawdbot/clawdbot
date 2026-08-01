@@ -1,12 +1,14 @@
 // Imessage plugin module implements actions behavior.
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { extname, join } from "node:path";
+import { basename, parse, win32 } from "node:path";
+import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import {
   asDateTimestampMs,
   parseStrictInteger,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
-import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { sanitizeUntrustedFileName } from "openclaw/plugin-sdk/security-runtime";
+import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { normalizeDirectChatIdentifier } from "./chat-context.js";
 import { runIMessageCliJsonCommand } from "./cli-output.js";
 import { createIMessageRpcClient } from "./client.js";
@@ -30,6 +32,16 @@ type IMessageBridgeActionOptions = CliRunOptions & {
 
 type IMessageBridgeSendResult = {
   messageId: string;
+};
+
+type IMessageConversationReadOrigin = NonNullable<
+  ChannelMessageActionContext["conversationReadOrigin"]
+>;
+
+/** Option identity assigned by Messages when the poll balloon was created. */
+export type IMessagePollSentOption = {
+  id: string;
+  text: string;
 };
 
 type TempFileInput = {
@@ -177,6 +189,33 @@ async function runIMessageCliJson(
   });
 }
 
+/**
+ * Messages mints the option UUIDs, so the send response is the only place they
+ * appear before someone votes. Approval bindings key decisions off these ids
+ * rather than option text, which a vote payload could otherwise spoof.
+ */
+function readSentPollOptions(result: Record<string, unknown>): IMessagePollSentOption[] {
+  const poll = result.poll;
+  if (typeof poll !== "object" || poll === null) {
+    return [];
+  }
+  const options = (poll as { options?: unknown }).options;
+  if (!Array.isArray(options)) {
+    return [];
+  }
+  return options.flatMap((entry) => {
+    if (typeof entry !== "object" || entry === null) {
+      return [];
+    }
+    const { id, text } = entry as { id?: unknown; text?: unknown };
+    if (typeof id !== "string" || typeof text !== "string") {
+      return [];
+    }
+    const trimmedId = id.trim();
+    return trimmedId ? [{ id: trimmedId, text: text.trim() }] : [];
+  });
+}
+
 function resolveMessageId(result: Record<string, unknown>): string {
   const raw =
     (typeof result.messageGuid === "string" && result.messageGuid.trim()) ||
@@ -187,15 +226,23 @@ function resolveMessageId(result: Record<string, unknown>): string {
 }
 
 async function withTempFile<T>(input: TempFileInput, fn: (path: string) => Promise<T>): Promise<T> {
-  const dir = await mkdtemp(join(resolvePreferredOpenClawTmpDir(), "openclaw-imessage-"));
-  const safeExt = extname(input.filename).slice(0, 16) || ".bin";
-  const filePath = join(dir, `upload${safeExt}`);
-  try {
-    await writeFile(filePath, input.buffer);
-    return await fn(filePath);
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
+  return await withTempWorkspace(
+    { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "openclaw-imessage-" },
+    async (workspace) => {
+      const safeFilename = sanitizeUntrustedFileName(input.filename, "upload.bin");
+      const { name, ext: safeExtension } = parse(safeFilename);
+      const originalExtension = parse(win32.basename(basename(input.filename))).ext;
+      const extension = truncateUtf16Safe(
+        sanitizeUntrustedFileName(originalExtension, safeExtension),
+        16,
+      );
+      // Each UTF-16 unit occupies at most three UTF-8 bytes, keeping 80 units below
+      // the 255-byte filesystem component limit without dropping the attachment extension.
+      const filename = `${truncateUtf16Safe(name, 80 - extension.length)}${extension}`;
+      const filePath = await workspace.write(filename, input.buffer);
+      return await fn(filePath);
+    },
+  );
 }
 
 export const imessageActionsRuntime = {
@@ -217,7 +264,11 @@ export const imessageActionsRuntime = {
   async resolveChatGuidForTarget(params: {
     target: Extract<IMessageTarget, { kind: "chat_id" | "chat_identifier" }>;
     options: CliRunOptions;
+    conversationReadOrigin: IMessageConversationReadOrigin;
   }): Promise<string | null> {
+    // Requiring the host-normalized origin at this list-backed read seam keeps
+    // direct operator lookups distinct from delegated actions, which have
+    // already passed the core exact-current-conversation gate.
     // Each `chats.list` call spawns a fresh imsg rpc subprocess and pulls
     // every chat the account knows about. Bursts of agent actions (react
     // then reply, reply then add-participant, etc.) all paid that cost
@@ -424,8 +475,9 @@ export const imessageActionsRuntime = {
     // shadow `options` (the CLI run options) on this params bag.
     choices: readonly string[];
     replyToMessageId?: string;
+    suppressComment?: boolean;
     options: IMessageBridgeActionOptions;
-  }): Promise<IMessageBridgeSendResult> {
+  }): Promise<IMessageBridgeSendResult & { pollOptions: IMessagePollSentOption[] }> {
     const result = await runIMessageCliJson(
       [
         "poll",
@@ -436,10 +488,11 @@ export const imessageActionsRuntime = {
         params.question,
         ...params.choices.flatMap((choice) => ["--option", choice]),
         ...(params.replyToMessageId ? ["--reply-to", params.replyToMessageId] : []),
+        ...(params.suppressComment ? ["--no-comment"] : []),
       ],
       params.options,
     );
-    return { messageId: resolveMessageId(result) };
+    return { messageId: resolveMessageId(result), pollOptions: readSentPollOptions(result) };
   },
 
   async sendPollVote(params: {

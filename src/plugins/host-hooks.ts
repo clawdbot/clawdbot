@@ -5,6 +5,7 @@ import type {
   PluginHookBeforeToolCallEvent,
   PluginHookBeforeToolCallResult,
   PluginHookToolContext,
+  PluginToolMatcher,
 } from "./hook-types.js";
 import type { PluginJsonValue } from "./host-hook-json.js";
 import type {
@@ -75,6 +76,7 @@ type PluginToolPolicyDecision =
 export type PluginTrustedToolPolicyRegistration = {
   id: string;
   description: string;
+  matcher?: PluginToolMatcher;
   evaluate: (
     event: PluginHookBeforeToolCallEvent,
     ctx: PluginHookToolContext,

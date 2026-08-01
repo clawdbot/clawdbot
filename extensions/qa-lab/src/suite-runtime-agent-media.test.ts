@@ -71,6 +71,9 @@ describe("qa suite runtime agent media helpers", () => {
   });
 
   it("resolves generated image paths from mock request logs first", async () => {
+    const tempRoot = await makeTempDir("qa-generated-image-request-");
+    const mediaPath = path.join(tempRoot, "generated.png");
+    await fs.writeFile(mediaPath, "png", "utf8");
     fetchJsonMock.mockResolvedValue([
       {
         allInputText: "irrelevant",
@@ -78,7 +81,7 @@ describe("qa suite runtime agent media helpers", () => {
       },
       {
         allInputText: "prompt snippet",
-        toolOutput: JSON.stringify({ details: { media: { mediaUrls: ["/tmp/generated.png"] } } }),
+        toolOutput: JSON.stringify({ details: { media: { mediaUrls: [mediaPath] } } }),
       },
     ]);
 
@@ -86,17 +89,56 @@ describe("qa suite runtime agent media helpers", () => {
       resolveGeneratedImagePath({
         env: {
           mock: { baseUrl: "http://127.0.0.1:9999" },
-          gateway: { tempRoot: "/tmp/runtime" },
+          gateway: { tempRoot },
         } as never,
         promptSnippet: "prompt snippet",
         startedAtMs: Date.now(),
         timeoutMs: 2_000,
       }),
-    ).resolves.toBe("/tmp/generated.png");
+    ).resolves.toBe(mediaPath);
     expect(fetchJsonMock).toHaveBeenCalledOnce();
     expect(fetchJsonMock).toHaveBeenCalledWith(expect.any(String), expect.any(Number));
     expect(fetchJsonMock.mock.calls[0]?.[1]).toBeLessThanOrEqual(2_000);
   });
+
+  it.each(["missing", "stale", "empty"] as const)(
+    "ignores %s generated media paths returned by matching mock requests",
+    async (artifactState) => {
+      const tempRoot = await makeTempDir("qa-generated-image-invalid-request-");
+      const mediaDir = path.join(tempRoot, "state", "media", "tool-image-generation");
+      await fs.mkdir(mediaDir, { recursive: true });
+      const freshMediaPath = path.join(mediaDir, "fresh-generated.png");
+      await fs.writeFile(freshMediaPath, "fresh png", "utf8");
+      const invalidMediaPath = path.join(tempRoot, `invalid-${artifactState}.png`);
+      if (artifactState !== "missing") {
+        await fs.writeFile(invalidMediaPath, artifactState === "empty" ? "" : "stale png", "utf8");
+      }
+      if (artifactState === "stale") {
+        const staleTimestamp = new Date(Date.now() - 60_000);
+        await fs.utimes(invalidMediaPath, staleTimestamp, staleTimestamp);
+      }
+      fetchJsonMock.mockResolvedValue([
+        {
+          allInputText: "prompt snippet",
+          toolOutput: JSON.stringify({
+            details: { media: { mediaUrls: [invalidMediaPath] } },
+          }),
+        },
+      ]);
+
+      await expect(
+        resolveGeneratedImagePath({
+          env: {
+            mock: { baseUrl: "http://127.0.0.1:9999" },
+            gateway: { tempRoot },
+          } as never,
+          promptSnippet: "prompt snippet",
+          startedAtMs: Date.now(),
+          timeoutMs: 2_000,
+        }),
+      ).resolves.toBe(freshMediaPath);
+    },
+  );
 
   it("falls back to generated image files under the gateway temp root", async () => {
     const tempRoot = await makeTempDir("qa-generated-image-");

@@ -71,6 +71,15 @@ export async function runDatabaseBloatHealth(ctx: DoctorHealthFlowContext): Prom
   noteSqliteDatabaseBloat(ctx.cfg);
 }
 
+export async function runAgentMemorySchemaHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { noteDoctorAgentMemorySchemaHealth } =
+    await import("../commands/doctor-agent-memory-schema.js");
+  await noteDoctorAgentMemorySchemaHealth({
+    env: ctx.env ?? process.env,
+    shouldRepair: ctx.prompter.shouldRepair,
+  });
+}
+
 export async function runChannelIngressDeadLettersHealth(): Promise<void> {
   const { noteChannelIngressDeadLetters } = await import("../commands/doctor-channel-ingress.js");
   noteChannelIngressDeadLetters();
@@ -113,6 +122,30 @@ export async function runSessionLocksHealth(ctx: DoctorHealthFlowContext): Promi
 export async function runSessionTranscriptsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteSessionTranscriptHealth } = await import("../commands/doctor-session-transcripts.js");
   await noteSessionTranscriptHealth({
+    cfg: ctx.cfg,
+    env: ctx.env ?? process.env,
+    shouldRepair: ctx.prompter.shouldRepair,
+  });
+}
+
+export async function runSessionTranscriptHeadersHealth(
+  ctx: DoctorHealthFlowContext,
+): Promise<void> {
+  const { noteSessionTranscriptHeaderHealth } =
+    await import("../commands/doctor-session-transcript-headers.js");
+  await noteSessionTranscriptHeaderHealth({
+    cfg: ctx.cfg,
+    env: ctx.env ?? process.env,
+    shouldRepair: ctx.prompter.shouldRepair,
+  });
+}
+
+export async function runSessionTranscriptLabelsHealth(
+  ctx: DoctorHealthFlowContext,
+): Promise<void> {
+  const { noteSessionTranscriptLabelHealth } =
+    await import("../commands/doctor-session-transcript-labels.js");
+  await noteSessionTranscriptLabelHealth({
     cfg: ctx.cfg,
     env: ctx.env ?? process.env,
     shouldRepair: ctx.prompter.shouldRepair,

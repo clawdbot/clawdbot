@@ -26,6 +26,22 @@ describe("CustomEditor", () => {
     vi.restoreAllMocks();
   });
 
+  it.each([
+    { name: "Kitty Shift+Enter", input: "\u001b[13;2u" },
+    { name: "Ctrl+J", input: "\n" },
+  ])("inserts a newline without submitting on $name", ({ input }) => {
+    const tui = { requestRender: vi.fn() } as unknown as TUI;
+    const editor = new CustomEditor(tui, editorTheme);
+    const onSubmit = vi.fn();
+    editor.onSubmit = onSubmit;
+    editor.setText("first line");
+
+    editor.handleInput(input);
+
+    expect(editor.getText()).toBe("first line\n");
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
   it("routes alt+enter to the follow-up handler", () => {
     const tui = { requestRender: vi.fn() } as unknown as TUI;
     const editor = new CustomEditor(tui, editorTheme);

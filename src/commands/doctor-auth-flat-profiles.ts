@@ -30,6 +30,7 @@ import {
 import { coerceAuthProfileState } from "../agents/auth-profiles/state.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
+  isInheritedMainOAuthCredential,
   saveAuthProfileStore,
 } from "../agents/auth-profiles/store.js";
 import type {
@@ -1310,12 +1311,35 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
               database,
             );
             const loaded = loadMigratedStore(candidate.agentDir, { database });
+            // A non-main store drops an OAuth credential the main store already
+            // owns at the same or newer expiry. That dedup is intentional, so
+            // verifying it as missing would abort a migration that lost nothing
+            // and leave the legacy JSON in place, which blocks gateway startup.
+            const dedupedToMainProfileIds = new Set(
+              [...importedProfileIds].filter((profileId) => {
+                const credential = next.profiles[profileId];
+                return (
+                  credential !== undefined &&
+                  !loaded?.profiles[profileId] &&
+                  isInheritedMainOAuthCredential({
+                    agentDir: candidate.agentDir,
+                    profileId,
+                    credential,
+                  })
+                );
+              }),
+            );
+            const verifiableProfileIds = new Set(
+              [...importedProfileIds].filter(
+                (profileId) => !dedupedToMainProfileIds.has(profileId),
+              ),
+            );
             const verificationFailure = formatMissingAuthProfileSqliteVerification({
               expected: next,
-              importedProfileIds,
+              importedProfileIds: verifiableProfileIds,
               loaded,
             });
-            const mismatchedCredential = [...importedProfileIds].some((profileId) => {
+            const mismatchedCredential = [...verifiableProfileIds].some((profileId) => {
               if (existingProfileIds.has(profileId)) {
                 return false;
               }

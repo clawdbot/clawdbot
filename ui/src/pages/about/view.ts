@@ -6,6 +6,7 @@ import { icons } from "../../components/icons.ts";
 import {
   canonicalLobsterLook,
   LOBSTER_PET_PALETTES,
+  lobsterLookStyle,
   renderLobsterSvg,
 } from "../../components/lobster-pet.ts";
 import {
@@ -165,7 +166,7 @@ function renderHero(props: AboutProps) {
       <button
         type="button"
         class="about-hero__clawd ${props.clawdWaving ? "about-hero__clawd--wave" : ""}"
-        style=${`--lob-shell:${look.palette.shell};--lob-claw:${look.palette.claw}`}
+        style=${lobsterLookStyle(look)}
         aria-label=${t("aboutPage.waveHello")}
         @click=${props.onPokeClawd}
       >

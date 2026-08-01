@@ -29,6 +29,7 @@ const KNOWN_INTERNAL_HOOK_EVENT_KEYS = [
   "message:received",
   "message:sent",
   "message:transcribed",
+  "session:auto-reset",
   "session:compact:after",
   "session:compact:before",
   "session:patch",

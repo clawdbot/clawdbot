@@ -5,5 +5,6 @@ export type ControlUiBuildInfo = Readonly<{
   builtAt: string | null;
   branch: string | null;
   dirty: boolean | null;
+  release: boolean;
   buildId: string;
 }>;

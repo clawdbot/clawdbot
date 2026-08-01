@@ -4,6 +4,7 @@
  * Validates spawn requests, prepares child sessions, stages attachments, binds delivery context, and registers runs.
  */
 import { promises as fs } from "node:fs";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isAcpRuntimeSpawnAvailable } from "../acp/runtime/availability.js";
 import type { SubagentSpawnPreparation } from "../context-engine/types.js";
 import { isFastTestRuntimeEnv } from "../infra/env.js";
@@ -57,7 +58,6 @@ import {
   bindThreadForSubagentSpawn,
   hasRoutableDeliveryOrigin,
 } from "./subagent-spawn-thread-binding.js";
-import { sanitizeMountPathHint } from "./subagent-spawn-validation.js";
 import {
   buildSubagentSystemPrompt,
   emitSessionLifecycleEvent,
@@ -67,7 +67,29 @@ import { activateSwarmRun, removeQueuedSwarmRun } from "./swarm-scheduler.js";
 
 export { SUBAGENT_SPAWN_CONTEXT_MODES, SUBAGENT_SPAWN_MODES } from "./subagent-spawn.types.js";
 
-const SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS = 60_000;
+function sanitizeMountPathHint(value?: string): string | undefined {
+  const trimmed = normalizeOptionalString(value);
+  if (!trimmed) {
+    return undefined;
+  }
+  if (hasPromptUnsafeControlCharacter(trimmed)) {
+    return undefined;
+  }
+  if (!/^[A-Za-z0-9._\-/:]+$/.test(trimmed)) {
+    return undefined;
+  }
+  return trimmed;
+}
+
+function hasPromptUnsafeControlCharacter(value: string): boolean {
+  for (const char of value) {
+    const code = char.charCodeAt(0);
+    if (code <= 0x1f || code === 0x7f || code === 0x85 || code === 0x2028 || code === 0x2029) {
+      return true;
+    }
+  }
+  return false;
+}
 
 export async function spawnSubagentDirect(
   params: SpawnSubagentParams,
@@ -196,15 +218,10 @@ export async function spawnSubagentDirect(
         resolvedModel,
       });
       if (runtimeModelPersistError) {
-        try {
-          await callSubagentGateway({
-            method: "sessions.delete",
-            params: { key: childSessionKey, emitLifecycleHooks: false },
-            timeoutMs: SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS,
-          });
-        } catch {
-          // Best-effort cleanup only.
-        }
+        await cleanupProvisionalSession(childSessionKey, {
+          emitLifecycleHooks: false,
+          deleteTranscript: true,
+        });
         return {
           status: "error",
           error: runtimeModelPersistError,
@@ -229,15 +246,10 @@ export async function spawnSubagentDirect(
         },
       });
       if (bindResult.status === "error") {
-        try {
-          await callSubagentGateway({
-            method: "sessions.delete",
-            params: { key: childSessionKey, deleteTranscript: true, emitLifecycleHooks: false },
-            timeoutMs: SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS,
-          });
-        } catch {
-          // Best-effort cleanup only.
-        }
+        await cleanupProvisionalSession(childSessionKey, {
+          emitLifecycleHooks: false,
+          deleteTranscript: true,
+        });
         return {
           status: "error",
           error: bindResult.error,
@@ -520,6 +532,7 @@ export async function spawnSubagentDirect(
       };
     }
     childRunId = pipelineResult.runId;
+    let collectorSessionKey: string | undefined;
     if (params.collect && swarmGroupId && swarmSchedulerGroupKey) {
       let launchTerminationConfirmed = false;
       activateSwarmRun({
@@ -590,33 +603,10 @@ export async function spawnSubagentDirect(
         },
       });
       swarmReservationPending = false;
-      emitSessionLifecycleEvent({
-        sessionKey: childSessionKey,
-        reason: "create",
-        parentSessionKey: requesterInternalKey,
-        label: label || undefined,
-      });
-      const acceptedNote = resolveSubagentSpawnAcceptedNote({
-        spawnMode,
-        agentSessionKey: ctx.agentSessionKey,
-      });
-      return {
-        status: "accepted",
-        childSessionKey,
-        sessionKey: childSessionKey,
-        runId: childRunId,
-        mode: spawnMode,
-        taskName,
-        note: preparedSpawnContext.forkFallbackNote
-          ? `${acceptedNote} ${preparedSpawnContext.forkFallbackNote}`
-          : acceptedNote,
-        ...resolvedModelMetadata,
-        modelApplied: resolvedModel ? modelApplied : undefined,
-        attachments: attachmentsReceipt,
-      };
+      collectorSessionKey = childSessionKey;
+    } else {
+      await emitSpawnLifecycleHooks(childRunId);
     }
-
-    await emitSpawnLifecycleHooks(childRunId);
 
     // Emit lifecycle event so the gateway can broadcast sessions.changed to SSE subscribers.
     emitSessionLifecycleEvent({
@@ -633,6 +623,7 @@ export async function spawnSubagentDirect(
     return {
       status: "accepted",
       childSessionKey,
+      ...(collectorSessionKey ? { sessionKey: collectorSessionKey } : {}),
       runId: childRunId,
       mode: spawnMode,
       taskName,

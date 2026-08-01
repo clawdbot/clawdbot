@@ -8,6 +8,7 @@ public struct OpenClawChatSessionAgentStatus: Codable, Sendable, Hashable {
 }
 
 public struct OpenClawChatSessionObserverDigest: Codable, Sendable, Hashable {
+    public let agentId: String?
     public let runId: String?
     public let revision: Int
     public let updatedAt: Double
@@ -15,12 +16,14 @@ public struct OpenClawChatSessionObserverDigest: Codable, Sendable, Hashable {
     public let health: String
 
     public init(
+        agentId: String? = nil,
         runId: String? = nil,
         revision: Int,
         updatedAt: Double,
         headline: String,
         health: String)
     {
+        self.agentId = agentId
         self.runId = runId
         self.revision = revision
         self.updatedAt = updatedAt
@@ -30,6 +33,7 @@ public struct OpenClawChatSessionObserverDigest: Codable, Sendable, Hashable {
 
     public init(_ digest: SessionObserverDigest) {
         self.init(
+            agentId: digest.agentid,
             runId: digest.runid,
             revision: digest.revision,
             updatedAt: Double(digest.updatedat),

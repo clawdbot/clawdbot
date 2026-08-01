@@ -59,6 +59,7 @@ function manualState(state: string): boolean {
 export async function buildClawUpdatePlan(params: {
   agentId: string;
   targetManifest: ClawManifest;
+  targetClawMarkdownBody?: Buffer;
   targetOpenClawProfile?: ClawOpenClawProfile;
   targetSource: ClawSourceIdentity;
   config: OpenClawConfig;
@@ -204,6 +205,7 @@ export async function buildClawUpdatePlan(params: {
     >();
     const targetPlan = await buildClawAddPlan({
       manifest: params.targetManifest,
+      clawMarkdownBody: params.targetClawMarkdownBody,
       openClawProfile: params.targetOpenClawProfile,
       source: params.targetSource,
       diagnostics: params.diagnostics,

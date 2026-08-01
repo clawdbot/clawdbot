@@ -66,6 +66,63 @@ function approvalItems(queue: readonly ExecApprovalRequest[]) {
   }).filter((item) => item.kind === "pendingApproval");
 }
 
+function cronItems(cronJobs: readonly CronJob[], now = 0) {
+  return buildSidebarAttentionItems({
+    cronJobs,
+    modelAuthStatus: null,
+    approvalQueue: [],
+    now,
+  });
+}
+
+describe("cron attention details", () => {
+  it("lists each failed job with its preferred error", () => {
+    const primary = cronJob("primary");
+    primary.name = "Nightly backup";
+    primary.state = { lastRunStatus: "error", lastError: "  disk full  " };
+    const reason = cronJob("reason-id");
+    reason.name = "";
+    reason.state = {
+      lastRunStatus: "error",
+      lastError: "   ",
+      lastErrorReason: "timeout",
+    };
+    const unknown = cronJob("unknown-id");
+
+    const failed = cronItems([primary, reason, unknown]).find((item) => item.kind === "cronFailed");
+
+    expect(failed?.detail).toBe(
+      "Nightly backup: disk full\nreason-id: timeout\nunknown-id: Unknown error",
+    );
+  });
+
+  it("caps failure errors at 200 characters with an ellipsis", () => {
+    const job = cronJob("long-error");
+    job.state = { lastRunStatus: "error", lastError: "x".repeat(201) };
+
+    const detail = cronItems([job]).find((item) => item.kind === "cronFailed")?.detail;
+    const errorText = detail?.slice("long-error: ".length);
+
+    expect(errorText).toHaveLength(200);
+    expect(errorText).toBe(`${"x".repeat(199)}…`);
+  });
+
+  it("lists overdue job names", () => {
+    const named = cronJob("named-id");
+    named.name = "Nightly backup";
+    named.state = { lastRunStatus: "ok", nextRunAtMs: 1 };
+    const unnamed = cronJob("unnamed-id");
+    unnamed.name = "";
+    unnamed.state = { lastRunStatus: "ok", nextRunAtMs: 2 };
+
+    const overdue = cronItems([named, unnamed], 300_003).find(
+      (item) => item.kind === "cronOverdue",
+    );
+
+    expect(overdue?.detail).toBe("Nightly backup\nunnamed-id");
+  });
+});
+
 describe("pending approval attention", () => {
   it("builds a warning chip only while approvals are pending", () => {
     expect(approvalItems([])).toEqual([]);

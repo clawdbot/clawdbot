@@ -1,5 +1,6 @@
 import { resolveCronJobConfigRevision } from "../cron/config-revision.js";
 import { normalizeCronJobCreate } from "../cron/normalize.js";
+import { createTrustedCronScheduledToolPolicy } from "../cron/scheduled-tool-policy.js";
 import { applyDefaultCronToolsAllow } from "../cron/tools-allow.js";
 import type { CronJob } from "../cron/types.js";
 import {
@@ -42,6 +43,7 @@ export type ClawCronGateway = {
   get?: (schedulerJobId: string) => Promise<unknown>;
   list?: (agentId: string) => Promise<unknown>;
   remove: (schedulerJobId: string) => Promise<unknown>;
+  waitUntilAgentAvailable?: (agentId: string) => Promise<void>;
 };
 
 export class ClawCronInstallError extends Error {
@@ -256,10 +258,16 @@ export function clawCronGatewayJobMatchesRef(
   const comparableLive = { ...live, payload: { ...live.payload } } as CronJob;
   applyDefaultCronToolsAllow(expected);
   applyDefaultCronToolsAllow(comparableLive);
+  const expectedWithPolicy = {
+    ...expected,
+    ...(comparableLive.scheduledToolPolicy
+      ? { scheduledToolPolicy: createTrustedCronScheduledToolPolicy() }
+      : {}),
+  };
   try {
     return (
       resolveCronJobConfigRevision({
-        ...expected,
+        ...expectedWithPolicy,
         id: live.id,
         createdAtMs: live.createdAtMs,
         updatedAtMs: live.updatedAtMs,
@@ -274,7 +282,7 @@ export function clawCronGatewayJobMatchesRef(
 export async function installClawCronJobs(
   plan: ClawAddPlan,
   options: OpenClawStateDatabaseOptions & {
-    gateway?: Pick<ClawCronGateway, "add" | "list">;
+    gateway?: Pick<ClawCronGateway, "add" | "list" | "waitUntilAgentAvailable">;
     nowMs?: number;
   } = {},
 ): Promise<PersistedClawCronRef[]> {
@@ -285,11 +293,12 @@ export async function installClawCronJobs(
   if (!options.gateway) {
     throw new ClawCronInstallError(
       "cron_gateway_required",
-      "Claw cron jobs require the gateway-owned cron.add API.",
+      "Claw automations require the gateway-owned cron.add API.",
       [],
     );
   }
   const refs: PersistedClawCronRef[] = [];
+  let agentAvailable = false;
   for (const action of actions) {
     const details = action.details as (ClawCronJob & { agentId?: string }) | undefined;
     if (!details?.id) {
@@ -314,6 +323,10 @@ export async function installClawCronJobs(
     }
     let result: { id: string } | undefined;
     try {
+      if (!agentAvailable) {
+        await options.gateway.waitUntilAgentAvailable?.(plan.agent.finalId);
+        agentAvailable = true;
+      }
       if (options.gateway.list) {
         result = schedulerJobByDeclarationKey(
           await options.gateway.list(plan.agent.finalId),

@@ -340,6 +340,61 @@ describe("isDeliveredMessagingToolResult", () => {
 });
 
 describe("isDeliveredMessageToolOnlySourceReplyResult", () => {
+  it("accepts a confirmed adopted-thread reply outside message-tool-only mode", () => {
+    expect(
+      isDeliveredMessageToolOnlySourceReplyResult({
+        sourceReplyDeliveryMode: "automatic",
+        toolName: "message",
+        args: { action: "thread-reply", threadId: "thread-1", message: "done" },
+        result: {
+          details: {
+            ok: true,
+            sourceReplyRoute: "current-source",
+          },
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects an unconfirmed thread reply outside message-tool-only mode", () => {
+    expect(
+      isDeliveredMessageToolOnlySourceReplyResult({
+        sourceReplyDeliveryMode: "automatic",
+        toolName: "message",
+        args: { action: "thread-reply", threadId: "thread-1", message: "done" },
+        result: { details: { ok: true } },
+      }),
+    ).toBe(false);
+  });
+
+  it("accepts a confirmed current-source poll delivery", () => {
+    expect(
+      isDeliveredMessageToolOnlySourceReplyResult({
+        sourceReplyDeliveryMode: "message_tool_only",
+        toolName: "message",
+        args: { action: "poll", pollQuestion: "Preferred default?", pollOption: ["a", "b"] },
+        result: {
+          details: {
+            ok: true,
+            pollId: "poll-1",
+            sourceReplyRoute: "current-source",
+          },
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects an unconfirmed poll delivery", () => {
+    expect(
+      isDeliveredMessageToolOnlySourceReplyResult({
+        sourceReplyDeliveryMode: "message_tool_only",
+        toolName: "message",
+        args: { action: "poll", pollQuestion: "Preferred default?", pollOption: ["a", "b"] },
+        result: { details: { ok: true, pollId: "poll-1" } },
+      }),
+    ).toBe(false);
+  });
+
   it("accepts only confirmed implicit message sends", () => {
     expect(
       isDeliveredMessageToolOnlySourceReplyResult({

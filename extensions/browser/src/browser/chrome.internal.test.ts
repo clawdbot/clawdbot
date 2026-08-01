@@ -2092,7 +2092,6 @@ describe("chrome.ts internal", () => {
             `${baseUrl}/json/version`,
           );
           expect(release).toHaveBeenCalled();
-          expect(running.releaseCdpProxyBypass).toBeUndefined();
           running.proc.kill?.("SIGTERM");
         },
       });

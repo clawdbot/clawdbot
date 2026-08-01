@@ -2,19 +2,19 @@
  * Updates persisted session metadata after agent command runs.
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import {
-  resolveCompactionSessionFile,
-  setSessionRuntimeModel,
-  type SessionEntry,
-} from "../../config/sessions.js";
+import { setSessionRuntimeModel, type SessionEntry } from "../../config/sessions.js";
 import { patchSessionEntry } from "../../config/sessions/session-accessor.js";
 import { projectSessionSnapshotChanges } from "../../config/sessions/session-snapshot-merge.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveNonNegativeNumber } from "../../shared/number-coercion.js";
-import { resolveDefaultAgentId } from "../agent-scope.js";
-import { clearCliSession, setCliSessionBinding, setCliSessionId } from "../cli-session.js";
+import {
+  clearCliSession,
+  getCliSessionBinding,
+  setCliSessionBinding,
+  setCliSessionId,
+} from "../cli-session.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { clearMainSessionRecoveryAfterAgentRun } from "../main-session-recovery-clear.js";
 import { isCliProvider } from "../model-selection.js";
@@ -99,7 +99,6 @@ export async function updateSessionStoreAfterAgentRun(params: {
   const modelUsed = result.meta.agentMeta?.model ?? fallbackModel ?? defaultModel;
   const providerUsed = result.meta.agentMeta?.provider ?? fallbackProvider ?? defaultProvider;
   const agentHarnessId = normalizeOptionalString(result.meta.agentMeta?.agentHarnessId);
-  const activeSessionFile = normalizeOptionalString(result.meta.agentMeta?.sessionFile);
   const runtimeContextTokens = resolvePositiveInteger(result.meta.agentMeta?.contextTokens);
   const contextBudgetStatus = result.meta.agentMeta?.contextBudgetStatus;
   const contextTokens =
@@ -136,21 +135,11 @@ export async function updateSessionStoreAfterAgentRun(params: {
         }),
   };
   if (entry.sessionId !== sessionId) {
-    next.sessionFile =
-      activeSessionFile ??
-      resolveCompactionSessionFile({
-        entry,
-        sessionKey,
-        storePath,
-        defaultAgentId: resolveDefaultAgentId(cfg),
-        newSessionId: sessionId,
-      });
+    delete (next as { sessionFile?: unknown }).sessionFile;
     next.usageFamilyKey = entry.usageFamilyKey ?? sessionKey;
     next.usageFamilySessionIds = Array.from(
       new Set([...(entry.usageFamilySessionIds ?? []), entry.sessionId, sessionId]),
     );
-  } else if (activeSessionFile) {
-    next.sessionFile = activeSessionFile;
   }
   if (preserveRuntimeModel) {
     // Keep the pre-existing runtime model and context window so a background
@@ -330,16 +319,14 @@ export async function clearCliSessionInStore(params: {
   sessionStore: Record<string, SessionEntry>;
   storePath: string;
   expectedSessionId?: string;
+  expectedCliSessionId?: string;
 }): Promise<SessionEntry | undefined> {
-  const { provider, sessionKey, sessionStore, storePath, expectedSessionId } = params;
+  const { provider, sessionKey, sessionStore, storePath, expectedSessionId, expectedCliSessionId } =
+    params;
   const entry = sessionStore[sessionKey];
   if (!entry) {
     return undefined;
   }
-
-  const next = { ...entry };
-  clearCliSession(next, provider);
-  next.updatedAt = Date.now();
 
   const persisted = await patchSessionEntry(
     {
@@ -353,6 +340,15 @@ export async function clearCliSessionInStore(params: {
       ) {
         return null;
       }
+      if (
+        expectedCliSessionId &&
+        getCliSessionBinding(currentEntry, provider)?.sessionId !== expectedCliSessionId
+      ) {
+        return null;
+      }
+      const next = { ...currentEntry };
+      clearCliSession(next, provider);
+      next.updatedAt = Date.now();
       return next;
     },
     { fallbackEntry: entry },
@@ -400,7 +396,7 @@ export async function consumeCliSessionForkInStore(params: {
   return persisted ?? undefined;
 }
 
-/** Re-arms a claimed fork marker after a failed CLI turn. */
+/** Arms a fork marker for recovery, or re-arms one after a failed CLI turn. */
 export async function restoreCliSessionForkInStore(params: {
   provider: string;
   sessionKey: string;
@@ -491,7 +487,6 @@ export async function recordCliCompactionInStore(params: {
   storePath: string;
   tokensAfter?: number;
   newSessionId?: string;
-  newSessionFile?: string;
   expectedSessionId?: string;
 }): Promise<SessionEntry | undefined> {
   const { provider, sessionKey, sessionStore, storePath, expectedSessionId } = params;
@@ -505,27 +500,14 @@ export async function recordCliCompactionInStore(params: {
   next.compactionCount = (entry.compactionCount ?? 0) + 1;
   next.updatedAt = Date.now();
   const newSessionId = normalizeOptionalString(params.newSessionId);
-  const explicitNewSessionFile = normalizeOptionalString(params.newSessionFile);
   const sessionIdChanged = Boolean(newSessionId && newSessionId !== entry.sessionId);
-  const sessionFileChanged = Boolean(
-    explicitNewSessionFile && explicitNewSessionFile !== entry.sessionFile,
-  );
   if (sessionIdChanged && newSessionId) {
+    delete (next as { sessionFile?: unknown }).sessionFile;
     next.sessionId = newSessionId;
-    next.sessionFile =
-      explicitNewSessionFile ??
-      resolveCompactionSessionFile({
-        entry,
-        sessionKey,
-        storePath,
-        newSessionId,
-      });
     next.usageFamilyKey = entry.usageFamilyKey ?? sessionKey;
     next.usageFamilySessionIds = Array.from(
       new Set([...(entry.usageFamilySessionIds ?? []), entry.sessionId, newSessionId]),
     );
-  } else if (sessionFileChanged && explicitNewSessionFile) {
-    next.sessionFile = explicitNewSessionFile;
   }
   const tokensAfterCompaction = resolveNonNegativeNumber(params.tokensAfter);
   next.contextBudgetStatus = undefined;

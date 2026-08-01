@@ -371,6 +371,7 @@ async function createSessionEntry(
                     pluginOwnerId: cliInitial.pluginOwnerId,
                     providerOverride: cliInitial.cliBackendId,
                     modelOverride: cliInitial.model,
+                    modelOverrideRouteResolution: "resolved",
                     cliSessionBindings: {
                       [cliInitial.cliBackendId]: cliInitial.cliSessionBinding,
                     },

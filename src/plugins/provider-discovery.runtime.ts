@@ -443,12 +443,18 @@ export function resolvePluginDiscoveryProvidersRuntime(params: {
   requireCompleteDiscoveryEntryCoverage?: boolean;
   discoveryEntriesOnly?: boolean;
   includeManifestModelCatalogProviders?: boolean;
+  includeSyntheticAuthProviders?: boolean;
   pluginMetadataSnapshot?: PluginMetadataRegistryView;
 }): ProviderPlugin[] {
   const env = params.env ?? process.env;
   const bundledProviderVitestCompat = params.bundledProviderVitestCompat ?? env.VITEST === "true";
   const entryResult = resolveProviderDiscoveryEntryPlugins({ ...params, env });
-  const entryProviders = entryResult.providers.filter(hasProviderCatalogHook);
+  const entryProviders = entryResult.providers.filter(
+    (provider) =>
+      hasProviderCatalogHook(provider) ||
+      (params.includeSyntheticAuthProviders === true &&
+        typeof provider.resolveSyntheticAuth === "function"),
+  );
   const runtimeEntryProviders = resolveRuntimeEntryProviders(entryResult);
   if (params.discoveryEntriesOnly === true) {
     return entryProviders;

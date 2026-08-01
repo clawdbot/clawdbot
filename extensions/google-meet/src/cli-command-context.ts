@@ -46,10 +46,6 @@ export type GoogleMeetCliCommandContext = {
     accessToken: string;
     configuredMeeting?: string;
   }) => Promise<{ meeting: string; calendarEvent?: GoogleMeetCalendarLookupResult }>;
-  resolveCreateTokenOptions: (
-    config: GoogleMeetConfig,
-    options: CreateOptions,
-  ) => GoogleMeetOAuthTokenOptions;
   resolveArtifactTokenOptions: (
     config: GoogleMeetConfig,
     options: MeetArtifactOptions,

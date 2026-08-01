@@ -44,6 +44,7 @@ export function createCopilotUserInputBridge(params: {
           questions: [question],
           sessionKey: params.paramsForRun.sessionKey ?? params.paramsForRun.sessionId,
           agentId: params.paramsForRun.agentId,
+          runId: params.paramsForRun.runId,
           timeoutMs: params.paramsForRun.timeoutMs ?? DEFAULT_USER_INPUT_TIMEOUT_MS,
           gatewayCall,
           delivery: params.paramsForRun,

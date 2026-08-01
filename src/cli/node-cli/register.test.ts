@@ -106,6 +106,62 @@ describe("registerNodeCli", () => {
     );
   });
 
+  it.each([
+    ["host", ["--host", "10.0.0.2"]],
+    ["port", ["--port", "19001"]],
+  ])("preserves saved gateway settings when the explicit %s is unchanged", async (_name, args) => {
+    daemonMocks.loadNodeHostConfig.mockResolvedValue({
+      version: 1,
+      nodeId: "node-existing",
+      gateway: {
+        host: "10.0.0.2",
+        port: 19001,
+        tls: true,
+        tlsFingerprint: "saved-fingerprint",
+        contextPath: "/saved",
+      },
+    });
+
+    await createProgram().parseAsync(["node", "run", ...args], { from: "user" });
+
+    expect(daemonMocks.runNodeHost).toHaveBeenCalledWith(
+      expect.objectContaining({
+        gatewayHost: "10.0.0.2",
+        gatewayPort: 19001,
+        gatewayTls: true,
+        gatewayTlsFingerprint: "saved-fingerprint",
+        gatewayContextPath: "/saved",
+      }),
+    );
+  });
+
+  it.each([
+    ["host", ["--host", "10.0.0.3"]],
+    ["port", ["--port", "19002"]],
+  ])("clears saved gateway settings when the explicit %s changes", async (_name, args) => {
+    daemonMocks.loadNodeHostConfig.mockResolvedValue({
+      version: 1,
+      nodeId: "node-existing",
+      gateway: {
+        host: "10.0.0.2",
+        port: 19001,
+        tls: true,
+        tlsFingerprint: "saved-fingerprint",
+        contextPath: "/saved",
+      },
+    });
+
+    await createProgram().parseAsync(["node", "run", ...args], { from: "user" });
+
+    expect(daemonMocks.runNodeHost).toHaveBeenCalledWith(
+      expect.objectContaining({
+        gatewayTls: undefined,
+        gatewayTlsFingerprint: undefined,
+        gatewayContextPath: undefined,
+      }),
+    );
+  });
+
   it("inherits saved TLS settings only when using the saved gateway endpoint", async () => {
     daemonMocks.loadNodeHostConfig.mockResolvedValue({
       version: 1,

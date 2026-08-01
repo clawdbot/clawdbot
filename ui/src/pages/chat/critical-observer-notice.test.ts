@@ -15,21 +15,31 @@ describe("critical session observer notice", () => {
     {
       name: "configured selected-agent foreground alias",
       sessionKey: "agent:work:primary",
+      agentId: undefined,
       visible: false,
     },
     {
       name: "canonical selected-agent global foreground",
       sessionKey: "global",
+      agentId: "work",
       visible: false,
+    },
+    {
+      name: "canonical other-agent global background",
+      sessionKey: "global",
+      agentId: "other",
+      visible: true,
     },
     {
       name: "genuine selected-agent background session",
       sessionKey: "agent:work:investigation",
+      agentId: undefined,
       visible: true,
     },
     {
       name: "genuine other-agent configured-main session",
       sessionKey: "agent:other:primary",
+      agentId: undefined,
       visible: true,
     },
   ])("configured-global observer notice: $name", async (testCase) => {
@@ -39,6 +49,7 @@ describe("critical session observer notice", () => {
     showCriticalSessionObserverNotice({
       payload: {
         sessionKey: testCase.sessionKey,
+        agentId: testCase.agentId,
         headline: "Configured-global observer regression",
         health: "stuck",
         revision: 1,

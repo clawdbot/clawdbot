@@ -22,7 +22,7 @@ describe("resolveTuiChatSubmitAdmission", () => {
       activeChatRunId: null,
       pendingSubmit: null,
       message: "hello",
-      expected: "allowed",
+      expected: { status: "allowed" },
     },
     {
       name: "active run",
@@ -30,7 +30,7 @@ describe("resolveTuiChatSubmitAdmission", () => {
       activeChatRunId: "run-active",
       pendingSubmit: null,
       message: "follow up",
-      expected: "allowed",
+      expected: { status: "allowed" },
     },
     {
       name: "disconnected",
@@ -38,7 +38,7 @@ describe("resolveTuiChatSubmitAdmission", () => {
       activeChatRunId: null,
       pendingSubmit: null,
       message: "send after reconnect",
-      expected: "disconnected",
+      expected: { status: "blocked", reason: "disconnected" },
     },
     {
       name: "sending",
@@ -46,7 +46,7 @@ describe("resolveTuiChatSubmitAdmission", () => {
       activeChatRunId: null,
       pendingSubmit: { phase: "sending", runId: "run-send", draftText: "hello" },
       message: "another",
-      expected: "pending",
+      expected: { status: "blocked", reason: "pending" },
     },
     {
       name: "accepted",
@@ -54,7 +54,7 @@ describe("resolveTuiChatSubmitAdmission", () => {
       activeChatRunId: null,
       pendingSubmit: { phase: "accepted", runId: "run-pending", draftText: "hello" },
       message: "another",
-      expected: "pending",
+      expected: { status: "blocked", reason: "pending" },
     },
     {
       name: "stop active run",
@@ -62,7 +62,7 @@ describe("resolveTuiChatSubmitAdmission", () => {
       activeChatRunId: "run-active",
       pendingSubmit: null,
       message: "please stop",
-      expected: "allowed",
+      expected: { status: "allowed" },
     },
     {
       name: "stop accepted run",
@@ -70,10 +70,10 @@ describe("resolveTuiChatSubmitAdmission", () => {
       activeChatRunId: null,
       pendingSubmit: { phase: "accepted", runId: "run-pending", draftText: null },
       message: "please stop",
-      expected: "allowed",
+      expected: { status: "allowed" },
     },
-  ] as const)("returns $expected while $name", ({ expected, ...params }) => {
-    expect(resolveTuiChatSubmitAdmission(params)).toBe(expected);
+  ] as const)("resolves admission while $name", ({ expected, ...params }) => {
+    expect(resolveTuiChatSubmitAdmission(params)).toEqual(expected);
   });
 });
 

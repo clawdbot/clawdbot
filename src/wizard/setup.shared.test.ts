@@ -196,6 +196,23 @@ describe("writeWizardConfigFile pending install ownership", () => {
     );
   });
 
+  it("forwards an explicit deferred runtime follow-up to the config writer", async () => {
+    const config: OpenClawConfig = { gateway: { mode: "local", port: 19001 } };
+    const afterWrite = {
+      mode: "none" as const,
+      reason: "Gateway setup defers runtime apply until explicit restart",
+    };
+
+    await writeWizardConfigFile(config, { afterWrite });
+
+    const commit = mocks.commitConfigWriteWithPendingPluginInstalls.mock.calls[0]?.[0]?.commit;
+    expect(commit).toBeTypeOf("function");
+    await commit(config);
+    expect(mocks.replaceConfigFile).toHaveBeenCalledWith(
+      expect.objectContaining({ nextConfig: config, afterWrite }),
+    );
+  });
+
   it("preserves an absent config snapshot through the final write", async () => {
     const config: OpenClawConfig = { gateway: { port: 18789 } };
     const baseSnapshot: ConfigFileSnapshot = {

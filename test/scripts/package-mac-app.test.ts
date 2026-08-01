@@ -1,6 +1,6 @@
 // Package Mac App tests cover package mac app script behavior.
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -100,6 +100,137 @@ function getSwiftCompatibilityBlock(): string {
   expect(end).toBeGreaterThan(start);
 
   return script.slice(start, end);
+}
+
+function getSwiftPMResourceBundleBlock(): string {
+  const script = readFileSync(scriptPath, "utf8");
+  const start = script.indexOf('echo "📦 Copying SwiftPM resource bundles"');
+  const end = script.indexOf("running_packaged_app_pids()");
+
+  expect(start).toBeGreaterThanOrEqual(0);
+  expect(end).toBeGreaterThan(start);
+
+  return script.slice(start, end);
+}
+
+function getSwiftPMResourcePatchBlock(): string {
+  const script = readFileSync(scriptPath, "utf8");
+  const start = script.indexOf("PATCHED_SWIFTPM_RESOURCE_SOURCES=()");
+  const end = script.indexOf("PNPM_CMD=()");
+
+  expect(start).toBeGreaterThanOrEqual(0);
+  expect(end).toBeGreaterThan(start);
+
+  return script.slice(start, end);
+}
+
+const swiftPMResourceBundles = [
+  "GRDB_GRDB.bundle",
+  "OpenClaw_OpenClaw.bundle",
+  "OpenClawKit_OpenClawKit.bundle",
+  "KeyboardShortcuts_KeyboardShortcuts.bundle",
+  "SwiftMath_SwiftMath.bundle",
+] as const;
+
+function runSwiftPMResourceBundleHarness(missingBundle?: string) {
+  const root = tempDirs.make("openclaw-package-resources-root-");
+  const buildRoot = path.join(root, "build");
+  const appRoot = path.join(root, "OpenClaw.app");
+  const buildProducts = path.join(buildRoot, "arm64", "debug");
+
+  mkdirSync(path.join(appRoot, "Contents", "Resources"), { recursive: true });
+  for (const bundle of swiftPMResourceBundles) {
+    if (bundle === missingBundle) {
+      continue;
+    }
+    const source = path.join(buildProducts, bundle);
+    mkdirSync(source, { recursive: true });
+    writeFileSync(path.join(source, "marker"), bundle, "utf8");
+  }
+
+  const result = runHelper(`
+    set -euo pipefail
+    BUILD_ROOT=${JSON.stringify(buildRoot)}
+    APP_ROOT=${JSON.stringify(appRoot)}
+    PRIMARY_ARCH=arm64
+    BUILD_CONFIG=debug
+    build_path_for_arch() {
+      echo "$BUILD_ROOT/$1"
+    }
+    ${getSwiftPMResourceBundleBlock()}
+  `);
+
+  return { appRoot, result };
+}
+
+function runSwiftPMResourcePatchHarness() {
+  const root = tempDirs.make("openclaw-package-resource-patch-");
+  const buildPath = path.join(root, "build");
+  const checkoutRoot = path.join(buildPath, "checkouts");
+  const keyboardShortcuts = path.join(
+    checkoutRoot,
+    "KeyboardShortcuts/Sources/KeyboardShortcuts/Utilities.swift",
+  );
+  const swiftMathFont = path.join(
+    checkoutRoot,
+    "SwiftMath/Sources/SwiftMath/MathBundle/MathFont.swift",
+  );
+  const swiftMathLegacyFont = path.join(
+    checkoutRoot,
+    "SwiftMath/Sources/SwiftMath/MathRender/MTFont.swift",
+  );
+  const fixtures = new Map([
+    [
+      keyboardShortcuts,
+      [
+        "import Foundation",
+        "extension String {",
+        "  var localized: String {",
+        "    NSLocalizedString(self, bundle: .module, comment: self)",
+        "  }",
+        "}",
+        "",
+        "extension Data {",
+        "}",
+        "",
+      ].join("\n"),
+    ],
+    [
+      swiftMathFont,
+      [
+        "import Foundation",
+        "#if os(macOS)",
+        "import AppKit",
+        "#endif",
+        "",
+        "/// Now available for everyone to use",
+        'let first = Bundle.module.url(forResource: "mathFonts", withExtension: "bundle")',
+        'let second = Bundle.module.url(forResource: "mathFonts", withExtension: "bundle")',
+        "",
+      ].join("\n"),
+    ],
+    [
+      swiftMathLegacyFont,
+      'let font = Bundle.module.url(forResource: "mathFonts", withExtension: "bundle")\n',
+    ],
+  ]);
+
+  for (const [file, contents] of fixtures) {
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(file, contents, "utf8");
+  }
+
+  const result = runHelper(`
+    set -euo pipefail
+    ${getSwiftPMResourcePatchBlock()}
+    patch_swiftpm_resource_lookups ${JSON.stringify(buildPath)}
+    grep -q keyboardShortcutsPackagedResources ${JSON.stringify(keyboardShortcuts)}
+    test "$(grep -c swiftMathPackagedResources ${JSON.stringify(swiftMathFont)})" -eq 3
+    grep -q swiftMathPackagedResources ${JSON.stringify(swiftMathLegacyFont)}
+    restore_swiftpm_resource_sources
+  `);
+
+  return { fixtures, result };
 }
 
 function runStopPackagedAppHarness(killZeroStatus: 0 | 1) {
@@ -661,35 +792,64 @@ describe("package-mac-app plist stamping", () => {
     expect(macosCi).toContain("test/scripts/notarize-mac-artifact.test.ts");
   });
 
-  it("fails closed when required Swift resources are missing", () => {
+  it("copies generated SwiftPM bundles into packaged app resources", () => {
+    const { appRoot, result } = runSwiftPMResourceBundleHarness();
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    for (const bundle of swiftPMResourceBundles) {
+      expect(
+        readFileSync(path.join(appRoot, "Contents", "Resources", bundle, "marker"), "utf8"),
+      ).toBe(bundle);
+      expect(existsSync(path.join(appRoot, bundle))).toBe(false);
+    }
+  });
+
+  it("routes dependency resource lookups into signed app resources and restores sources", () => {
+    const { fixtures, result } = runSwiftPMResourcePatchHarness();
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    for (const [file, contents] of fixtures) {
+      expect(readFileSync(file, "utf8")).toBe(contents);
+      expect(existsSync(`${file}.openclaw-original`)).toBe(false);
+    }
+  });
+
+  it("fails closed when any required SwiftPM resource bundle is missing", () => {
+    for (const missingBundle of swiftPMResourceBundles) {
+      const { result } = runSwiftPMResourceBundleHarness(missingBundle);
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("ERROR: Required SwiftPM resource bundle not found at");
+      expect(result.stderr).toContain(missingBundle);
+    }
+  });
+
+  it("keeps generated SwiftPM bundles in the signed resources directory", () => {
     const script = readFileSync(scriptPath, "utf8");
-    const openClawKitBlock = script.slice(
-      script.indexOf(
-        'OPENCLAWKIT_BUNDLE="$(build_path_for_arch "$PRIMARY_ARCH")/$BUILD_CONFIG/OpenClawKit_OpenClawKit.bundle"',
-      ),
-      script.indexOf('echo "⌨️  Copying KeyboardShortcuts resources"'),
-    );
-    const keyboardShortcutsBlock = script.slice(
-      script.indexOf('echo "⌨️  Copying KeyboardShortcuts resources"'),
-      script.indexOf("running_packaged_app_pids()"),
-    );
+    const resourceBlock = getSwiftPMResourceBundleBlock();
 
     expect(script).toContain(
       'node --import tsx "$ROOT_DIR/scripts/apple-app-i18n.ts" compile-macos',
     );
     expect(script).toContain('--output "$APP_ROOT/Contents/Resources"');
-    expect(openClawKitBlock).toContain("ERROR: OpenClawKit resource bundle not found");
-    expect(openClawKitBlock).toContain("exit 1");
-    expect(openClawKitBlock).not.toContain("WARN:");
-    expect(openClawKitBlock).not.toContain("continuing");
-    expect(keyboardShortcutsBlock).toContain("KeyboardShortcuts_KeyboardShortcuts.bundle");
-    expect(keyboardShortcutsBlock).toContain(
-      'cp -R "$KEYBOARD_SHORTCUTS_BUNDLE" "$APP_ROOT/Contents/Resources/KeyboardShortcuts_KeyboardShortcuts.bundle"',
+    expect(resourceBlock).toContain(
+      'for resource_bundle_src in "$SWIFTPM_BUILD_PRODUCTS"/*.bundle',
     );
-    expect(keyboardShortcutsBlock).toContain("ERROR: KeyboardShortcuts resource bundle not found");
-    expect(keyboardShortcutsBlock).toContain("exit 1");
-    expect(keyboardShortcutsBlock).not.toContain("WARN:");
-    expect(keyboardShortcutsBlock).not.toContain("continuing");
+    expect(resourceBlock).toContain(
+      'cp -R "$resource_bundle_src" "$APP_ROOT/Contents/Resources/$resource_bundle"',
+    );
+    for (const bundle of swiftPMResourceBundles) {
+      expect(resourceBlock).toContain(`"${bundle}"`);
+    }
+    expect(resourceBlock).toContain("ERROR: Required SwiftPM resource bundle not found");
+    expect(resourceBlock).toContain("exit 1");
+    expect(resourceBlock).not.toContain(
+      'cp -R "$resource_bundle_src" "$APP_ROOT/$resource_bundle"',
+    );
+    expect(resourceBlock).not.toContain("WARN:");
+    expect(resourceBlock).not.toContain("continuing");
     expect(script).not.toContain("Textual resource bundle");
     expect(script).not.toContain("ALLOW_MISSING_TEXTUAL_BUNDLE");
   });

@@ -1,18 +1,24 @@
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "../../plugins/hook-runner-global.js";
+import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
 import { applyClawHubSkillUninstall, planClawHubSkillUninstall } from "./clawhub-uninstall.js";
 import { digestClawHubSkillTree } from "./skill-tree-digest.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => resetGlobalHookRunner());
 
 async function fixture() {
   const workspaceDir = tempDirs.make("openclaw-skill-uninstall-");
   const slug = "triage";
   const skillDir = join(workspaceDir, "skills", slug);
-  const content = "---\nname: triage\n---\n";
+  const content = "---\nname: triage\ndescription: Triage incidents\nversion: 0.9.0\n---\n";
   const sha256 = createHash("sha256").update(content).digest("hex");
   const installedAt = 123;
   const registry = "https://clawhub.ai";
@@ -53,6 +59,8 @@ async function fixture() {
 describe("ClawHub skill uninstall lifecycle", () => {
   it("plans and removes an unchanged tracked skill", async () => {
     const current = await fixture();
+    const handler = vi.fn();
+    initializeGlobalHookRunner(createMockPluginRegistry([{ hookName: "skill_changed", handler }]));
     const planned = await planClawHubSkillUninstall({
       workspaceDir: current.workspaceDir,
       slug: current.slug,
@@ -68,6 +76,23 @@ describe("ClawHub skill uninstall lifecycle", () => {
       await readFile(join(current.workspaceDir, ".clawhub", "lock.json"), "utf8"),
     );
     expect(lock.skills).toEqual({});
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler.mock.calls[0]?.[0]).toMatchObject({
+      action: "removed",
+      source: "clawhub",
+      before: {
+        name: "triage",
+        skillKey: "triage",
+        description: "Triage incidents",
+        source: "clawhub",
+        revision: {
+          declaredVersion: "0.9.0",
+          sourceVersion: "1.0.0",
+          contentSha256: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+          treeSha256: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+        },
+      },
+    });
   });
 
   it("retains a locally modified skill", async () => {
@@ -96,6 +121,8 @@ describe("ClawHub skill uninstall lifecycle", () => {
 
   it("restores the staged skill when lockfile untracking fails", async () => {
     const current = await fixture();
+    const handler = vi.fn();
+    initializeGlobalHookRunner(createMockPluginRegistry([{ hookName: "skill_changed", handler }]));
     const planned = await planClawHubSkillUninstall({
       workspaceDir: current.workspaceDir,
       slug: current.slug,
@@ -122,5 +149,6 @@ describe("ClawHub skill uninstall lifecycle", () => {
       await readFile(join(current.workspaceDir, ".clawhub", "lock.json"), "utf8"),
     );
     expect(lock.skills.triage).toBeDefined();
+    expect(handler).not.toHaveBeenCalled();
   });
 });

@@ -369,6 +369,25 @@ describe("buildInboundMediaNote", () => {
     expect(note).toBe("[media attached: /tmp/document.pdf]");
   });
 
+  it.each([".aiff", ".aif", ".aifc", ".webm", ".wma", ".alac"])(
+    "strips transcribed %s audio without an explicit MIME type",
+    (extension) => {
+      const note = buildInboundMediaNote({
+        MediaPaths: [`/tmp/voice${extension}`, "/tmp/document.pdf"],
+        MediaUnderstanding: [
+          {
+            kind: "audio.transcription",
+            attachmentIndex: 0,
+            text: "Transcribed audio content",
+            provider: "whisper",
+          },
+        ],
+      });
+
+      expect(note).toBe("[media attached: /tmp/document.pdf]");
+    },
+  );
+
   it("strips a transcribed kind-only audio fact without relying on its filename", () => {
     const projection = buildInboundMediaNoteProjection({
       media: [

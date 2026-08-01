@@ -20,7 +20,6 @@ describe("shouldAckReaction", () => {
         isDirect: true,
         isGroup: false,
         isMentionableGroup: false,
-        requireMention: false,
         canDetectMention: false,
         effectiveWasMentioned: false,
       }),
@@ -32,7 +31,6 @@ describe("shouldAckReaction", () => {
         isDirect: false,
         isGroup: true,
         isMentionableGroup: true,
-        requireMention: false,
         canDetectMention: false,
         effectiveWasMentioned: false,
       }),
@@ -46,7 +44,6 @@ describe("shouldAckReaction", () => {
         isDirect: true,
         isGroup: true,
         isMentionableGroup: true,
-        requireMention: true,
         canDetectMention: true,
         effectiveWasMentioned: true,
       }),
@@ -67,7 +64,6 @@ describe("shouldAckReaction", () => {
         isDirect: false,
         isGroup: true,
         isMentionableGroup: true,
-        requireMention: false,
         canDetectMention: true,
         effectiveWasMentioned: false,
       }),
@@ -81,7 +77,6 @@ describe("shouldAckReaction", () => {
         isDirect: false,
         isGroup: true,
         isMentionableGroup: true,
-        requireMention: true,
         canDetectMention: true,
         effectiveWasMentioned: true,
       }),
@@ -94,17 +89,13 @@ describe("shouldAckReaction", () => {
       isDirect: false,
       isGroup: true,
       isMentionableGroup: true,
-      requireMention: true,
       canDetectMention: true,
       effectiveWasMentioned: true,
     };
 
-    expect(
-      shouldAckReaction({
-        ...groupMentionsScope,
-        requireMention: false,
-      }),
-    ).toBe(false);
+    // A group that answers every message still acks the ones addressing the
+    // agent: whether the group requires a mention is a separate policy.
+    expect(shouldAckReaction(groupMentionsScope)).toBe(true);
 
     expect(
       shouldAckReaction({
@@ -137,6 +128,32 @@ describe("shouldAckReaction", () => {
 });
 
 describe("shouldAckReactionForWhatsApp", () => {
+  it("acks a mention in a group that does not require mentions", () => {
+    // Regression: the gate used to return false whenever the group did not
+    // require mentions, so an explicitly mentioned message the agent answered
+    // got no ack under the default scope.
+    expect(
+      shouldAckReaction({
+        scope: "group-mentions",
+        isDirect: false,
+        isGroup: true,
+        isMentionableGroup: true,
+        canDetectMention: true,
+        effectiveWasMentioned: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldAckReaction({
+        scope: "group-mentions",
+        isDirect: false,
+        isGroup: true,
+        isMentionableGroup: true,
+        canDetectMention: true,
+        effectiveWasMentioned: false,
+      }),
+    ).toBe(false);
+  });
+
   it("respects direct and group modes", () => {
     expect(
       shouldAckReactionForWhatsApp({

@@ -123,13 +123,20 @@ const CHANNEL_CONNECT_RE =
   /^(?:connect|link)\s+(?:channel\s+)?(?:to\s+)?(?<channel>[a-z0-9_-]+)(?:\s+channel)?$/i;
 const CHANNEL_INFO_RE =
   /^(?:channel\s+info\s+(?<channel>[a-z0-9_-]+)|about\s+(?<aboutChannel>[a-z0-9_-]+)\s+channel)$/i;
+const SKILLS_SETUP_RE = /^(?:configure|set\s*up|setup)\s+skills$/i;
+const SEARCH_SETUP_RE =
+  /^(?:(?:configure|set\s*up|setup)\s+(?:web\s+)?search|(?:web\s+)?search\s+provider\s+setup)$/i;
+const GATEWAY_CONFIG_SETUP_RE = /^(?:configure\s+gateway|set\s*up\s+gateway|gateway\s+settings)$/i;
+const MEMORY_IMPORT_RE = /^(?:import\s+memor(?:y|ies)|memory\s+import)$/i;
 const OPEN_GUIDED_SETUP_RE =
   /^(?:open\s+setup\s+wizard|setup\s+wizard|menu\s+setup|use\s+the\s+(?:setup\s+)?wizard)$/i;
 const OPEN_CLASSIC_SETUP_RE = /^(?:open\s+classic(?:\s+setup)?\s+wizard|classic\s+setup)$/i;
 const OPEN_CHANNEL_SETUP_RE = /^open\s+channel\s+wizard(?:\s+for\s+(?<channel>[a-z0-9_-]+))?$/i;
+const OPEN_SEARCH_SETUP_RE = /^open\s+(?:web\s+)?search\s+wizard$/i;
+const OPEN_GATEWAY_SETUP_RE = /^open\s+gateway\s+wizard$/i;
 
 const NO_MATCH_MESSAGE =
-  "I can run doctor/status/health, check or restart Gateway, list agents/models, configure a model provider, set default model, connect channels (`connect telegram`), show `channel info <channel>`, open the setup wizard, show audit, or switch to your agent TUI.";
+  "I can run doctor/status/health, check or restart Gateway, configure gateway settings, list agents/models, configure skills or web search, import memory, set default model, connect channels (`connect telegram`), show `channel info <channel>`, open the setup wizard, show audit, or switch to your agent TUI.";
 /**
  * Parse one user command into OpenClaw's closed operation union. Anything
  * that does not match the anchored grammar exactly returns kind "none" so the
@@ -244,6 +251,18 @@ export function parseSystemAgentOperation(input: string): SystemAgentOperation {
   if (channelConnectMatch?.groups?.channel) {
     return { kind: "channel-setup", channel: channelConnectMatch.groups.channel.toLowerCase() };
   }
+  if (SKILLS_SETUP_RE.test(trimmed)) {
+    return { kind: "skills-setup" };
+  }
+  if (SEARCH_SETUP_RE.test(trimmed)) {
+    return { kind: "search-setup" };
+  }
+  if (GATEWAY_CONFIG_SETUP_RE.test(trimmed)) {
+    return { kind: "gateway-config-setup" };
+  }
+  if (MEMORY_IMPORT_RE.test(trimmed)) {
+    return { kind: "memory-import" };
+  }
   const modelSetupMatch = trimmed.match(MODEL_SETUP_RE);
   if (modelSetupMatch) {
     const workspace = trimShellishToken(modelSetupMatch.groups?.workspace);
@@ -266,6 +285,12 @@ export function parseSystemAgentOperation(input: string): SystemAgentOperation {
       target: "channels",
       ...(channel ? { channel } : {}),
     };
+  }
+  if (OPEN_SEARCH_SETUP_RE.test(trimmed)) {
+    return { kind: "open-setup", target: "search" };
+  }
+  if (OPEN_GATEWAY_SETUP_RE.test(trimmed)) {
+    return { kind: "open-setup", target: "gateway" };
   }
   const setupMatch = trimmed.match(SETUP_RE);
   if (setupMatch) {

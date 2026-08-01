@@ -5,9 +5,16 @@ import type {
   AgentHarnessSettledTurnFinalizationResult,
 } from "../../harness/types.js";
 import { log } from "../logger.js";
-import { mergeUsageIntoAccumulator } from "../usage-accumulator.js";
+import {
+  mergeAttemptRunStatsIntoAccumulator,
+  mergeUsageIntoAccumulator,
+} from "../usage-accumulator.js";
 import { runEmbeddedSettledTurnFinalizationWithBackend } from "./backend.js";
-import { EMBEDDED_RUN_LANE_HEARTBEAT_MS } from "./lane-runtime.js";
+import { withEmbeddedRunLaneProgressHeartbeat } from "./lane-runtime.js";
+import {
+  resolveEmbeddedRunAttemptTerminalOutcome,
+  type EmbeddedRunTerminalState,
+} from "./terminal-outcome.js";
 import { prepareEmbeddedRunTerminal } from "./terminal-preparation.js";
 import { resolveSettledTurnFinalizationRequest } from "./terminal-resolution.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
@@ -21,10 +28,7 @@ type TerminalPreparationBase = Omit<
   | "sessionFileUsed"
   | "lastRunPromptUsage"
   | "lastTurnTotal"
-  | "terminalInterrupted"
-  | "terminalTimedOut"
-  | "timedOutDuringCompaction"
-  | "timedOutDuringToolExecution"
+  | "terminalState"
 >;
 
 export async function prepareTerminalWithSettledTurnFinalization(input: {
@@ -34,15 +38,8 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
     currentAttemptCompletedAssistant: EmbeddedRunAttemptResult["currentAttemptCompletedAssistant"];
     sessionIdUsed: string;
     sessionFileUsed?: string;
-    terminalAborted: boolean;
-    terminalTimedOut: boolean;
-    terminalInterrupted: boolean;
-    externalAbort: boolean;
-    signalOwnedInterruption: boolean;
-    promptError: unknown;
+    terminalState: EmbeddedRunTerminalState;
     attemptCompactionCount: number;
-    timedOutDuringCompaction: boolean;
-    timedOutDuringToolExecution: boolean;
   };
   terminalBase: TerminalPreparationBase;
   lastRunPromptUsage: TerminalPreparationInput["lastRunPromptUsage"];
@@ -70,10 +67,7 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
     sessionFileUsed: initial.sessionFileUsed,
     lastRunPromptUsage,
     lastTurnTotal,
-    terminalInterrupted: initial.terminalInterrupted,
-    terminalTimedOut: initial.terminalTimedOut,
-    timedOutDuringCompaction: initial.timedOutDuringCompaction,
-    timedOutDuringToolExecution: initial.timedOutDuringToolExecution,
+    terminalState: initial.terminalState,
   });
   const prompt = resolveSettledTurnFinalizationRequest({
     runParams: input.terminalBase.runParams,
@@ -85,9 +79,7 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
     recoveredFinalAssistantPayloadsAfterPromptTimeout:
       prepared.recoveredFinalAssistantPayloadsAfterPromptTimeout,
     hasTerminalToolPresentation: input.finalization.hasTerminalToolPresentation,
-    terminalAborted: initial.terminalAborted,
-    terminalTimedOut: initial.terminalTimedOut,
-    promptError: initial.promptError,
+    terminalState: initial.terminalState,
     settledTurnFinalizationAvailable:
       typeof input.finalization.harness.finalizeSettledTurn === "function",
   });
@@ -117,8 +109,17 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
       noteLaneTaskProgress: input.finalization.noteLaneTaskProgress,
     });
     mergeUsageIntoAccumulator(input.terminalBase.usageAccumulator, attempt.attemptUsage);
+    mergeAttemptRunStatsIntoAccumulator(input.terminalBase.usageAccumulator, attempt);
     lastRunPromptUsage = attempt.attemptUsage ?? lastRunPromptUsage;
     lastTurnTotal = attempt.attemptUsage?.total ?? lastTurnTotal;
+    // Successful isolated finalization owns a fresh terminal, never the original abort signal.
+    const terminalState: EmbeddedRunTerminalState = {
+      outcome: resolveEmbeddedRunAttemptTerminalOutcome({
+        attempt,
+        assistant: attempt.currentAttemptAssistant,
+      }),
+      signalOwnedInterruption: false,
+    };
     prepared = prepareEmbeddedRunTerminal({
       ...input.terminalBase,
       attempt,
@@ -127,24 +128,14 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
       sessionFileUsed: attempt.sessionFileUsed,
       lastRunPromptUsage,
       lastTurnTotal,
-      terminalInterrupted: false,
-      terminalTimedOut: false,
-      timedOutDuringCompaction: false,
-      timedOutDuringToolExecution: false,
+      terminalState,
     });
     return {
       attempt,
       attemptAssistant: attempt.currentAttemptAssistant,
       currentAttemptCompletedAssistant: attempt.currentAttemptCompletedAssistant,
-      terminalAborted: false,
-      terminalTimedOut: false,
-      terminalInterrupted: false,
-      externalAbort: false,
-      signalOwnedInterruption: false,
-      promptError: null,
+      terminalState,
       attemptCompactionCount: 0,
-      timedOutDuringCompaction: false,
-      timedOutDuringToolExecution: false,
       sessionIdUsed: attempt.sessionIdUsed,
       sessionFileUsed: attempt.sessionFileUsed,
       prepared,
@@ -176,10 +167,7 @@ async function runPreparedSettledTurnFinalization(input: {
   prompt: string;
   noteLaneTaskProgress: () => void;
 }): Promise<EmbeddedRunAttemptResult> {
-  input.noteLaneTaskProgress();
-  const progressInterval = setInterval(input.noteLaneTaskProgress, EMBEDDED_RUN_LANE_HEARTBEAT_MS);
-  progressInterval.unref?.();
-  try {
+  return await withEmbeddedRunLaneProgressHeartbeat(input.noteLaneTaskProgress, async () => {
     const result = await runEmbeddedSettledTurnFinalizationWithBackend(
       {
         ...input.attempt,
@@ -198,10 +186,7 @@ async function runPreparedSettledTurnFinalization(input: {
       prompt: input.prompt,
       agentHarnessId: input.attempt.agentHarnessId,
     });
-  } finally {
-    clearInterval(progressInterval);
-    input.noteLaneTaskProgress();
-  }
+  });
 }
 
 function buildSettledTurnFinalizationAttemptResult(input: {

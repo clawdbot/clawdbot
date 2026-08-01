@@ -36,6 +36,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
   bootstrapPromptWarningSignaturesSeen: string[];
   resolveRuntimeFallbackReason: () => string | null;
   observeToolOutcome: Parameters<typeof dispatchEmbeddedRunAttempt>[0]["control"]["onToolOutcome"];
+  isTurnTainted: () => boolean;
   allocateToolOutcomeOrdinal: Parameters<
     typeof dispatchEmbeddedRunAttempt
   >[0]["control"]["allocateToolOutcomeOrdinal"];
@@ -95,18 +96,26 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
   }
   const basePrompt =
     sessionPromptState.activePrompt.override ??
-    resolveEmbeddedAttemptBasePrompt({ nativeModelOwned, provider, prompt: params.prompt });
+    resolveEmbeddedAttemptBasePrompt({ provider, prompt: params.prompt });
   const prompt = terminalRetryState.compactionContinuationInstruction
     ? `${basePrompt}\n\n${terminalRetryState.compactionContinuationInstruction}`
     : basePrompt;
-  const resolvedStreamApiKey = resolveAttemptDispatchApiKey({
+  const resolvedAttemptApiKey = resolveAttemptDispatchApiKey({
     apiKeyInfo: runtime.apiKeyInfo,
     runtimeAuthState: runtime.runtimeAuthState,
+    pluginHarnessOwnsTransport: runtime.pluginHarnessOwnsTransport,
   });
   const attemptFastMode = resolveAttemptFastModeParam();
-  const trajectorySessionFile = resolvedSessionKey
-    ? (
-        await resolveSessionTranscriptRuntimeReadTarget({
+  const existingSessionTarget = sessionPromptState.sessionTarget;
+  const reusableSessionTarget =
+    existingSessionTarget?.sessionKey === resolvedSessionKey ||
+    sessionPromptState.sessionTargetAdopted
+      ? existingSessionTarget
+      : undefined;
+  const resolvedTranscriptTarget =
+    reusableSessionTarget ??
+    (resolvedSessionKey
+      ? await resolveSessionTranscriptRuntimeReadTarget({
           agentId: workspaceResolution.agentId,
           sessionId: sessionPromptState.sessionId,
           sessionKey: resolvedSessionKey,
@@ -114,8 +123,11 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
             agentId: workspaceResolution.agentId,
           }),
         })
-      ).sessionFile
-    : sessionPromptState.sessionFile;
+      : undefined);
+  const resolvedSessionTarget = resolvedTranscriptTarget
+    ? { ...sessionPromptState.sessionTarget, ...resolvedTranscriptTarget }
+    : sessionPromptState.sessionTarget;
+  const trajectorySessionFile = resolvedSessionTarget?.sessionKey ?? sessionPromptState.sessionFile;
   if (!input.startupStagesEmitted) {
     startupStages.mark(EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE.prompt);
   }
@@ -151,6 +163,19 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
           sessionId: sessionPromptState.sessionId,
           sessionKey: resolvedSessionKey,
           sessionFile: trajectorySessionFile,
+          ...(resolvedSessionTarget?.agentId &&
+          resolvedSessionTarget.sessionId &&
+          resolvedSessionTarget.sessionKey &&
+          resolvedSessionTarget.storePath
+            ? {
+                sessionTarget: {
+                  agentId: resolvedSessionTarget.agentId,
+                  sessionId: resolvedSessionTarget.sessionId,
+                  sessionKey: resolvedSessionTarget.sessionKey,
+                  storePath: resolvedSessionTarget.storePath,
+                },
+              }
+            : {}),
           provider: trajectoryAttribution.provider,
           modelId: trajectoryAttribution.modelId,
           modelApi: trajectoryAttribution.modelApi,
@@ -167,12 +192,13 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
   }
   const dispatchedAttempt = await dispatchEmbeddedRunAttempt({
     params,
+    transcriptOwnership: params.sessionManager
+      ? { kind: "caller-owned", sessionManager: params.sessionManager }
+      : { kind: "runtime-target", sessionTarget: resolvedSessionTarget },
     runtime: {
       sessionId: sessionPromptState.sessionId,
       sessionFile: sessionPromptState.sessionFile,
-      sessionTarget: sessionPromptState.sessionTarget,
       sessionKey: resolvedSessionKey,
-      trajectorySessionFile,
       trajectoryRecorder: trajectoryRecorder ?? undefined,
       workspaceDir,
       isCanonicalWorkspace,
@@ -191,7 +217,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
       expectedRuntimeArtifact: expectedHarnessArtifact?.artifact,
       runtimePlan,
       model: runtime.effectiveModel,
-      resolvedApiKey: resolvedStreamApiKey,
+      resolvedApiKey: resolvedAttemptApiKey,
       authProfileId: runtime.lastProfileId,
       authProfileIdSource: lockedProfileId ? "user" : "auto",
       initialReplayState: input.replayState,
@@ -220,6 +246,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
       laneTaskReleaseController,
       noteLaneTaskProgress,
       onToolOutcome: input.observeToolOutcome,
+      isTurnTainted: input.isTurnTainted,
       allocateToolOutcomeOrdinal: input.allocateToolOutcomeOrdinal,
       onToolStreamBoundary: maybeAnnounceFastModeAutoOff,
       onRunProgress: notifyRunProgress,

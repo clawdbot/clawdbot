@@ -5,6 +5,7 @@ import {
   loadWebMediaRaw as loadWebMediaRawImpl,
   optimizeImageToJpeg as optimizeImageToJpegImpl,
 } from "../../media/web-media.js";
+import { registerPluginMetadataProcessMemoLifecycleClear } from "../plugin-metadata-lifecycle.js";
 import {
   createPluginModuleLoaderCache,
   type PluginModuleLoaderCache,
@@ -59,7 +60,6 @@ type WebChannelHeavyRuntimeModule = {
 
 type WebChannelRuntimeModuleKind = "heavy" | "light";
 type CachedWebChannelRuntimeModule = {
-  modulePath: string;
   module: WebChannelHeavyRuntimeModule | WebChannelLightRuntimeModule;
 };
 
@@ -69,6 +69,11 @@ const webChannelRuntimeModuleCache = new Map<
 >();
 
 const moduleLoaders: PluginModuleLoaderCache = createPluginModuleLoaderCache();
+
+registerPluginMetadataProcessMemoLifecycleClear(() => {
+  webChannelRuntimeModuleCache.clear();
+  moduleLoaders.clear();
+});
 
 /** Resolves the active web-channel plugin record that provides runtime APIs. */
 function resolveWebChannelPluginRecord(): WebChannelPluginRecord {
@@ -92,46 +97,41 @@ function resolveWebChannelRuntimeModulePath(
   return modulePath;
 }
 
-function loadCurrentHeavyModuleSync(): WebChannelHeavyRuntimeModule {
-  const record = resolveWebChannelPluginRecord();
-  const modulePath = resolveWebChannelRuntimeModulePath(record, "runtime-api");
-  return loadPluginBoundaryModule<WebChannelHeavyRuntimeModule>(modulePath, moduleLoaders, {
-    origin: record.origin,
-  });
-}
-
 function getCachedWebChannelRuntimeModule<T extends CachedWebChannelRuntimeModule["module"]>(
   kind: WebChannelRuntimeModuleKind,
-  modulePath: string,
   load: () => T,
 ): T {
   const cached = webChannelRuntimeModuleCache.get(kind);
-  if (cached?.modulePath === modulePath) {
+  if (cached) {
     return cached.module as T;
   }
   const loaded = load();
-  webChannelRuntimeModuleCache.set(kind, { modulePath, module: loaded });
+  webChannelRuntimeModuleCache.set(kind, { module: loaded });
   return loaded;
 }
 
 function loadWebChannelLightModule(): WebChannelLightRuntimeModule {
-  const record = resolveWebChannelPluginRecord();
-  const modulePath = resolveWebChannelRuntimeModulePath(record, "light-runtime-api");
-  return getCachedWebChannelRuntimeModule("light", modulePath, () =>
-    loadPluginBoundaryModule<WebChannelLightRuntimeModule>(modulePath, moduleLoaders, {
+  return getCachedWebChannelRuntimeModule("light", () => {
+    const record = resolveWebChannelPluginRecord();
+    const modulePath = resolveWebChannelRuntimeModulePath(record, "light-runtime-api");
+    return loadPluginBoundaryModule<WebChannelLightRuntimeModule>(modulePath, moduleLoaders, {
       origin: record.origin,
-    }),
-  );
+    });
+  });
+}
+
+function loadWebChannelHeavyModuleSync(): WebChannelHeavyRuntimeModule {
+  return getCachedWebChannelRuntimeModule("heavy", () => {
+    const record = resolveWebChannelPluginRecord();
+    const modulePath = resolveWebChannelRuntimeModulePath(record, "runtime-api");
+    return loadPluginBoundaryModule<WebChannelHeavyRuntimeModule>(modulePath, moduleLoaders, {
+      origin: record.origin,
+    });
+  });
 }
 
 async function loadWebChannelHeavyModule(): Promise<WebChannelHeavyRuntimeModule> {
-  const record = resolveWebChannelPluginRecord();
-  const modulePath = resolveWebChannelRuntimeModulePath(record, "runtime-api");
-  return getCachedWebChannelRuntimeModule("heavy", modulePath, () =>
-    loadPluginBoundaryModule<WebChannelHeavyRuntimeModule>(modulePath, moduleLoaders, {
-      origin: record.origin,
-    }),
-  );
+  return loadWebChannelHeavyModuleSync();
 }
 
 function getLightExport<K extends keyof WebChannelLightRuntimeModule>(
@@ -287,7 +287,7 @@ export async function waitForWebLogin(
 
 /** Extracts text through the heavy runtime API. */
 export const extractText = (...args: Parameters<WebChannelHeavyRuntimeModule["extractText"]>) =>
-  loadCurrentHeavyModuleSync().extractText(...args);
+  loadWebChannelHeavyModuleSync().extractText(...args);
 
 /** Returns default local media roots through the core media helper. */
 export function getDefaultLocalRoots(

@@ -101,8 +101,9 @@ export function chunkTextByBreakResolver(
     const nextStart = Math.min(remaining.length, safeBreakIdx + (brokeOnSeparator ? 1 : 0));
     remaining = remaining.slice(nextStart).trimStart();
   }
-  if (remaining.length) {
-    chunks.push(remaining);
+  const finalChunk = remaining.trimEnd();
+  if (finalChunk.length) {
+    chunks.push(finalChunk);
   }
   return chunks;
 }

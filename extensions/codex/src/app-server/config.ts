@@ -5,7 +5,7 @@ export {
 } from "./config-contracts.js";
 export type {
   CodexAppServerApprovalPolicy,
-  CodexAppServerConnectionClass,
+  CodexAppServerHomeScope,
   CodexAppServerRuntimeOptions,
   CodexAppServerSandboxMode,
   CodexAppServerStartOptions,
@@ -36,6 +36,7 @@ export { isCodexAppServerApprovalPolicyAllowedByRequirements } from "./config-re
 export {
   codexAppServerStartOptionsKey,
   codexSandboxPolicyForTurn,
+  resolveCodexAppServerHomeScope,
   resolveCodexAppServerRuntimeOptions,
   resolveCodexAppServerStartOptionsForAgent,
   resolveCodexComputerUseConfig,

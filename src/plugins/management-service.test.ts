@@ -1,4 +1,3 @@
-// Plugin management service tests cover cold state, catalog identity, and guarded mutations.
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -53,6 +52,7 @@ vi.mock("./registry-refresh.js", () => ({
 
 vi.mock("./plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: (...args: unknown[]) => mocks.metadata(...args),
+  resolvePluginMetadataSnapshot: (...args: unknown[]) => mocks.metadata(...args),
 }));
 
 vi.mock("./clawhub.js", () => ({
@@ -1082,8 +1082,7 @@ describe("plugin management service", () => {
     await expect(uninstallManagedPlugin({ pluginId: "workboard", env: {} })).rejects.toThrow(
       "bundled plugin cannot be uninstalled",
     );
-    expect(mocks.commitRecords).not.toHaveBeenCalled();
-    expect(mocks.applyUninstall).not.toHaveBeenCalled();
+    expect([mocks.commitRecords.mock.calls, mocks.applyUninstall.mock.calls]).toEqual([[], []]);
   });
 
   it("surfaces uninstall plan failures as lifecycle errors", async () => {

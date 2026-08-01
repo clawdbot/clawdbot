@@ -33,6 +33,7 @@ type VerifySetupInferenceConfig =
   typeof import("../system-agent/setup-inference.js").verifySetupInferenceConfig;
 type ConfigureGatewayForSetup = typeof import("./setup.gateway-config.js").configureGatewayForSetup;
 type RunSetupMigrationImport = typeof import("./setup.migration-import.js").runSetupMigrationImport;
+type RunSearchSetupFlow = typeof import("../flows/search-setup.js").runSearchSetupFlow;
 
 const ensureAuthProfileStore = vi.hoisted(() => vi.fn(() => ({ profiles: {} })));
 const keepCurrentAuthChoice = vi.hoisted(() => "__keep-current" as const);
@@ -146,6 +147,9 @@ const setupChannels = vi.hoisted(() =>
   ),
 );
 const setupSkills = vi.hoisted(() => vi.fn(async (cfg) => cfg));
+const runSearchSetupFlow = vi.hoisted(() =>
+  vi.fn<RunSearchSetupFlow>(async (config) => ({ outcome: "completed", config })),
+);
 const promptRemoteGatewayConfig = vi.hoisted(() => vi.fn(async (cfg) => cfg));
 const validateGatewayWebSocketUrl = vi.hoisted(() =>
   vi.fn<(value: string) => string | undefined>(() => undefined),
@@ -328,6 +332,10 @@ vi.mock("../commands/onboard-channels.js", () => ({
 
 vi.mock("../commands/onboard-skills.js", () => ({
   setupSkills,
+}));
+
+vi.mock("../flows/search-setup.js", () => ({
+  runSearchSetupFlow,
 }));
 
 vi.mock("../commands/onboard-remote.js", () => ({
@@ -558,6 +566,11 @@ describe("runSetupWizard", () => {
     setupChannels.mockImplementation(async (cfg) => cfg);
     setupSkills.mockReset();
     setupSkills.mockImplementation(async (cfg) => cfg);
+    runSearchSetupFlow.mockReset();
+    runSearchSetupFlow.mockImplementation(async (config: OpenClawConfig) => ({
+      outcome: "completed",
+      config,
+    }));
     promptRemoteGatewayConfig.mockReset();
     promptRemoteGatewayConfig.mockImplementation(async (cfg) => cfg);
     validateGatewayWebSocketUrl.mockReset();
@@ -1779,6 +1792,38 @@ describe("runSetupWizard", () => {
         process.env.BRAVE_API_KEY = prevBraveKey;
       }
     }
+  });
+
+  it("continues onboarding when search-provider installation fails", async () => {
+    const config: OpenClawConfig = { agents: { defaults: { workspace: "/tmp/workspace" } } };
+    runSearchSetupFlow.mockResolvedValueOnce({
+      outcome: "install-failed",
+      config,
+      providerId: "brave",
+      reason: "failed",
+    });
+    readConfigFileSnapshot.mockResolvedValueOnce(configSnapshot(config));
+    const prompter = buildWizardPrompter({});
+
+    await expect(
+      runSetupWizard(
+        {
+          acceptRisk: true,
+          flow: "quickstart",
+          authChoice: "skip",
+          installDaemon: false,
+          skipChannels: true,
+          skipSkills: true,
+          skipHealth: true,
+          skipUi: true,
+        },
+        createRuntime(),
+        prompter,
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(runSearchSetupFlow).toHaveBeenCalledOnce();
+    expect(finalizeSetupWizard).toHaveBeenCalledOnce();
   });
 
   it("defers channel setup plugin loads during QuickStart until a channel is selected", async () => {

@@ -13,6 +13,7 @@ type ShellNavigationState = {
   handleNativeOpenSearch: () => void;
   handleNativeToggleSearch: (event: Event) => void;
   handleNativeNewSession: () => void;
+  handleNativeNavigate: (event: Event) => void;
   handleNativeHistoryState: (event: Event) => void;
   nativeHistoryState: { canGoBack: boolean; canGoForward: boolean };
   onboarding: boolean;
@@ -59,7 +60,7 @@ describe("OpenClaw native shell", () => {
     shell.handleDocumentKeydown(event);
 
     expect(event.defaultPrevented).toBe(true);
-    expect(navigate).toHaveBeenCalledWith("config", undefined);
+    expect(navigate).toHaveBeenCalledWith("appearance", undefined);
   });
 
   it("opens Settings with Ctrl-Shift-Comma", () => {
@@ -81,7 +82,7 @@ describe("OpenClaw native shell", () => {
     shell.handleDocumentKeydown(event);
 
     expect(event.defaultPrevented).toBe(true);
-    expect(navigate).toHaveBeenCalledWith("config", undefined);
+    expect(navigate).toHaveBeenCalledWith("appearance", undefined);
   });
 
   it("toggles the navigation sidebar when the native macOS titlebar button fires", () => {
@@ -171,6 +172,47 @@ describe("OpenClaw native shell", () => {
 
     expect(navigate).toHaveBeenCalledExactlyOnceWith("new-session", { search: "?agent=main" });
   });
+
+  it("navigates valid native Dashboard paths and acknowledges them", () => {
+    const navigate = vi.fn();
+    const shell = document.createElement("openclaw-app-shell") as unknown as ShellNavigationState;
+    shell.runtime = {
+      context: {
+        navigate,
+      } as unknown as ApplicationContext,
+    };
+    const event = new CustomEvent("openclaw:native-navigate", {
+      cancelable: true,
+      detail: { path: "/settings/channels" },
+    });
+
+    shell.handleNativeNavigate(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(navigate).toHaveBeenCalledExactlyOnceWith("channels", undefined);
+  });
+
+  it.each(["https://example.com", "//example.com", "/https://example.com", "/unknown"])(
+    "leaves invalid native Dashboard path %s unhandled",
+    (path) => {
+      const navigate = vi.fn();
+      const shell = document.createElement("openclaw-app-shell") as unknown as ShellNavigationState;
+      shell.runtime = {
+        context: {
+          navigate,
+        } as unknown as ApplicationContext,
+      };
+      const event = new CustomEvent("openclaw:native-navigate", {
+        cancelable: true,
+        detail: { path },
+      });
+
+      shell.handleNativeNavigate(event);
+
+      expect(event.defaultPrevented).toBe(false);
+      expect(navigate).not.toHaveBeenCalled();
+    },
+  );
 
   it("does not start a native session during onboarding", () => {
     const navigate = vi.fn();

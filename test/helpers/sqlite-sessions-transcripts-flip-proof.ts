@@ -13,12 +13,12 @@ import {
   readSessionArchiveContentSync,
   stripSessionArchiveCompressionSuffix,
 } from "../../src/config/sessions/archive-compression.js";
+import { formatSqliteSessionFileMarker } from "../../src/config/sessions/legacy-sqlite-marker.js";
 import {
   appendTranscriptMessage,
   type TranscriptEvent,
 } from "../../src/config/sessions/session-accessor.js";
 import { importSqliteSessionRows } from "../../src/config/sessions/session-accessor.sqlite.js";
-import { formatSqliteSessionFileMarker } from "../../src/config/sessions/sqlite-marker.js";
 import type { SessionEntry } from "../../src/config/sessions/types.js";
 import {
   connectGatewayClient,
@@ -116,7 +116,7 @@ type PluginSdkConsumerEvidence = {
   latestAssistantTextBeforeAppend: string;
   latestAssistantTextAfterAppend: string;
   listedSessionKeys: string[];
-  sessionFileMarker: string;
+  sessionIdentity: string;
   sessionId: string;
   sessionKey: string;
   storeTranscriptEvents: number;
@@ -129,7 +129,7 @@ type ManualCompactionEvidence = {
   compacted: boolean;
   rowCountAfter: number;
   rowCountBefore: number;
-  sessionFileMarker: string;
+  transcriptIdentity: string;
   sessionId: string;
   sessionKey: string;
 };
@@ -528,7 +528,8 @@ export async function runSqliteSessionsTranscriptsFlipProof(
     const finalInspectDoctor = await runDoctor(inst, "inspect", context.storePath);
     await record("after-final-doctor-inspect", finalInspectDoctor);
   } catch (error) {
-    failures.push(error instanceof Error ? error.message : String(error));
+    const message = error instanceof Error ? error.message : String(error);
+    failures.push(`${message}\nGateway diagnostics:\n${tail(inst.logs(), 6_000)}`);
     await record("failure");
   } finally {
     await stopChildProcess(mockOpenAi);
@@ -1225,12 +1226,8 @@ async function runManualCompactionProof(
   if (checkpointCount < 1) {
     throw new Error(`manual compaction did not write checkpoint metadata: ${JSON.stringify(row)}`);
   }
-  const sessionFileMarker = typeof row.entry.sessionFile === "string" ? row.entry.sessionFile : "";
-  if (!sessionFileMarker.startsWith("sqlite:")) {
-    throw new Error(`manual compaction entry did not keep a SQLite marker: ${sessionFileMarker}`);
-  }
-  if (fsSync.existsSync(sessionFileMarker)) {
-    throw new Error(`manual compaction marker unexpectedly exists as a file: ${sessionFileMarker}`);
+  if (Object.hasOwn(row.entry, "sessionFile")) {
+    throw new Error(`manual compaction entry retained file-era identity: ${JSON.stringify(row)}`);
   }
 
   return {
@@ -1238,7 +1235,7 @@ async function runManualCompactionProof(
     compacted: compacted.compacted,
     rowCountAfter: countSqliteTranscriptEvents(context.agentDbPath, row.sessionId),
     rowCountBefore,
-    sessionFileMarker,
+    transcriptIdentity: context.manualCompactionSessionKey,
     sessionId: row.sessionId,
     sessionKey: context.manualCompactionSessionKey,
   };
@@ -1265,20 +1262,8 @@ async function runPluginSdkConsumerProbe(
       `SDK session store read returned ${JSON.stringify(sessionEntry)} for ${context.pluginSdkSessionKey}`,
     );
   }
-  const expectedMarker = formatSqliteSessionFileMarker({
-    agentId: context.agentId,
-    sessionId,
-    storePath: context.storePath,
-  });
-  if (sessionEntry.sessionFile !== expectedMarker) {
-    throw new Error(
-      `SDK session store exposed unexpected transcript marker for ${context.pluginSdkSessionKey}: ${String(
-        sessionEntry.sessionFile,
-      )}`,
-    );
-  }
-  if (fsSync.existsSync(sessionEntry.sessionFile)) {
-    throw new Error(`SDK session marker unexpectedly resolves to an active file path`);
+  if (Object.hasOwn(sessionEntry, "sessionFile")) {
+    throw new Error(`SDK session store exposed retired transcript locator`);
   }
 
   const listedSessionKeys = listSdkSessionEntries({
@@ -1373,7 +1358,7 @@ async function runPluginSdkConsumerProbe(
     latestAssistantTextBeforeAppend: latestBefore.text,
     latestAssistantTextAfterAppend: latestAfter.text,
     listedSessionKeys,
-    sessionFileMarker: sessionEntry.sessionFile,
+    sessionIdentity: context.pluginSdkSessionKey,
     sessionId,
     sessionKey: context.pluginSdkSessionKey,
     storeTranscriptEvents,
@@ -2544,12 +2529,22 @@ function validateCheckpointInvariants(
     }
   }
   if (checkpoint.label === "after-shared-final-delete") {
-    requireArchiveText(checkpoint, failures, {
-      description: "final shared transcript archive",
-      includes: ["shared"],
+    const deletedArchive = findArchiveArtifact(checkpoint, {
       reason: "deleted",
       sessionId: "sqlite-shared-session",
     });
+    if (!deletedArchive) {
+      // Both legacy files claim one session id, so the importer preserves the
+      // ambiguous sources as artifacts instead of materializing duplicate rows.
+      // Final deletion must not synthesize a second archive from empty SQLite state.
+      for (const sourceName of ["sqlite-shared-a.jsonl", "sqlite-shared-b.jsonl"]) {
+        requireArchiveText(checkpoint, failures, {
+          description: `retained shared import source ${sourceName}`,
+          includes: ["shared"],
+          pathIncludes: sourceName,
+        });
+      }
+    }
   }
 }
 

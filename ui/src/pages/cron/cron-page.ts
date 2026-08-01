@@ -4,6 +4,7 @@ import { state } from "lit/decorators.js";
 import type { AgentsListResult, CronJob } from "../../api/types.ts";
 import { titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
+import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
 import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import {
@@ -38,11 +39,7 @@ import {
 } from "../../lib/sessions/route-navigation.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
-import {
-  buildCronSuggestions,
-  THINKING_SUGGESTIONS,
-  TIMEZONE_SUGGESTIONS,
-} from "./form-suggestions.ts";
+import { buildCronSuggestions, THINKING_SUGGESTIONS } from "./form-suggestions.ts";
 import { renderCron, type CronDetailTab, type CronListTab } from "./view.ts";
 
 class CronPage extends OpenClawLightDomElement {
@@ -57,6 +54,10 @@ class CronPage extends OpenClawLightDomElement {
 
   private modelSuggestionsState: CronState | null = null;
   private gatewaySource?: ApplicationContext["gateway"];
+  private get canManageCron(): boolean {
+    return readGatewayOperatorAccess(this.context.gateway.snapshot).canAdmin;
+  }
+
   private readonly subscriptions = new SubscriptionsController(this)
     .watch(
       () => this.context?.agents,
@@ -253,7 +254,19 @@ class CronPage extends OpenClawLightDomElement {
     }
   }
 
+  private runCronAdminTask<T>(task: (cronState: CronState) => Promise<T>): void {
+    // Scope can change between render and click after a reconnect. Recheck at
+    // dispatch so a stale control cannot send an admin-only Gateway request.
+    if (!this.canManageCron) {
+      return;
+    }
+    void this.runCronTask(task);
+  }
+
   private patchForm(patch: Partial<CronFormState>) {
+    if (!this.canManageCron) {
+      return;
+    }
     this.cron.cronForm = normalizeCronFormState({ ...this.cron.cronForm, ...patch });
     this.cron.cronFieldErrors = validateCronForm(this.cron.cronForm);
     this.requestCronUpdate();
@@ -274,6 +287,9 @@ class CronPage extends OpenClawLightDomElement {
   }
 
   private openCreate(patch?: Partial<CronFormState>) {
+    if (!this.canManageCron) {
+      return;
+    }
     cancelCronEdit(this.cron);
     this.cron.cronCreateOpen = true;
     if (patch) {
@@ -284,6 +300,9 @@ class CronPage extends OpenClawLightDomElement {
   }
 
   private cloneJob(job: CronJob) {
+    if (!this.canManageCron) {
+      return;
+    }
     // A clone is a prefilled create: the editor submits cron.add, not update.
     startCronClone(this.cron, job);
     this.cron.cronCreateOpen = true;
@@ -302,7 +321,7 @@ class CronPage extends OpenClawLightDomElement {
   }
 
   private submitForm(options: { runNow?: boolean } = {}) {
-    void this.runCronTask(async (cronState) => {
+    this.runCronAdminTask(async (cronState) => {
       const editingJobId = cronState.cronEditingJobId;
       const result = await addCronJob(cronState);
       if (!result.saved) {
@@ -343,6 +362,7 @@ class CronPage extends OpenClawLightDomElement {
       agentsList: this.agentsList,
       modelSuggestions: this.cronModelSuggestions,
     });
+    const canManage = this.canManageCron;
     return html`
       <section class="content-header">
         <div>
@@ -358,6 +378,7 @@ class CronPage extends OpenClawLightDomElement {
           basePath: this.context.basePath,
           agentId: fallbackAgentId,
           loading: this.cron.cronLoading,
+          canManage,
           status: this.cron.cronStatus,
           failingCount: this.cron.cronFailingCount,
           agentScoped: this.cron.cronAgentId !== null,
@@ -398,7 +419,7 @@ class CronPage extends OpenClawLightDomElement {
           agentSuggestions: suggestions.agentSuggestions,
           modelSuggestions: suggestions.modelSuggestions,
           thinkingSuggestions: THINKING_SUGGESTIONS,
-          timezoneSuggestions: TIMEZONE_SUGGESTIONS,
+          timezoneSuggestions: suggestions.timezoneSuggestions,
           deliveryToSuggestions: suggestions.deliveryToSuggestions,
           accountSuggestions: suggestions.accountTargets,
           onListTabChange: (tab) => {
@@ -416,7 +437,7 @@ class CronPage extends OpenClawLightDomElement {
           onClosePanel: () => this.closePanel(),
           onClone: (job) => this.cloneJob(job),
           onToggle: (job, enabled) =>
-            void this.runCronTask(async (cronState) => {
+            this.runCronAdminTask(async (cronState) => {
               const updated = await toggleCronJob(cronState, job, enabled);
               // Header pause/resume must not be undone by a later Save: the
               // editor form still carries the pre-toggle enabled value. Sync
@@ -427,9 +448,9 @@ class CronPage extends OpenClawLightDomElement {
               }
             }),
           onRun: (job, mode) =>
-            void this.runCronTask((cronState) => runCronJob(cronState, job.id, mode ?? "force")),
+            this.runCronAdminTask((cronState) => runCronJob(cronState, job.id, mode ?? "force")),
           onRemove: (job) =>
-            void this.runCronTask(async (cronState) => {
+            this.runCronAdminTask(async (cronState) => {
               await removeCronJob(cronState, job);
               // Removing the selected task drops the panel back to overview;
               // the runs scope must follow or recent activity stays empty.

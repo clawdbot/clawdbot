@@ -8,6 +8,7 @@ import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { createAgentPatchedSessionModelFallback } from "../config/sessions/session-model-fallback.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 
 const agentSessionModelPatch = new AsyncLocalStorage<boolean>();
 
@@ -24,6 +25,7 @@ export function shouldPreserveSessionAuthProfileOverride(params: {
   entry: SessionEntry;
   currentProvider: string;
   provider: string;
+  metadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
 }): boolean {
   const profileOverride = normalizeOptionalString(params.entry.authProfileOverride);
   const provider = normalizeOptionalLowercaseString(params.provider);
@@ -32,10 +34,14 @@ export function shouldPreserveSessionAuthProfileOverride(params: {
   }
   const resolvesToTargetProvider = (rawProvider: string | undefined): boolean => {
     const candidate = normalizeOptionalLowercaseString(rawProvider);
+    const lookupParams = {
+      config: params.cfg,
+      ...(params.metadataSnapshot ? { metadataSnapshot: params.metadataSnapshot } : {}),
+    };
     return Boolean(
       candidate &&
-      resolveProviderIdForAuth(candidate, { config: params.cfg }) ===
-        resolveProviderIdForAuth(provider, { config: params.cfg }),
+      resolveProviderIdForAuth(candidate, lookupParams) ===
+        resolveProviderIdForAuth(provider, lookupParams),
     );
   };
   const delimiterIndex = profileOverride.indexOf(":");

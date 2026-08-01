@@ -42,6 +42,7 @@ export async function prepareCompactionSessionAgent(params: {
   senderName?: string | null;
   senderUsername?: string | null;
   senderE164?: string | null;
+  webSearchEnabled?: boolean;
 }) {
   const authStorage =
     params.authStorage &&
@@ -109,6 +110,7 @@ export async function prepareCompactionSessionAgent(params: {
         // Compaction rebuilds the stream wrapper, so preserve the session policy
         // inputs that can suppress provider-native search.
         sessionKey: params.sessionKey,
+        webSearchEnabled: params.webSearchEnabled,
         sandboxToolPolicy: params.sandboxToolPolicy,
         messageProvider: params.messageProvider,
         agentAccountId: params.agentAccountId,

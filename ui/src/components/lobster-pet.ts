@@ -28,8 +28,11 @@ export {
   LOBSTER_PET_PALETTES,
   canonicalLobsterLook,
   createLobsterPetLook,
+  lobsterLookStyle,
   renderLobsterSvg,
 } from "./lobster-pet-look.ts";
+export { lobsterPaletteName } from "./lobster-pet-lore.ts";
+export { moonPhaseFraction } from "./lobster-pet-moon.ts";
 
 class LobsterPet extends LitElement {
   override createRenderRoot() {

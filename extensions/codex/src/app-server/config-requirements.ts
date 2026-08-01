@@ -315,8 +315,8 @@ function normalizeRequirementsApprovalPolicy(
   value: string,
 ): CodexAppServerApprovalPolicy | undefined {
   const normalized = value.trim().toLowerCase();
-  // Codex 0.143 keeps this deprecated requirements-file alias in its core
-  // parser, but app-server exposes only the canonical on-request value.
+  // Codex still accepts this alias in persisted requirements, while its
+  // app-server exposes only the canonical on-request value.
   if (normalized === "on-failure") {
     return "on-request";
   }

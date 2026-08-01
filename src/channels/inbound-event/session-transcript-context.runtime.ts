@@ -87,7 +87,7 @@ function mergeMessages(params: {
 }
 
 function chatWindowEntries(ctx: FinalizedMsgContext) {
-  return (ctx.UntrustedStructuredContext ?? []).filter(
+  return (ctx.ChannelStructuredContext ?? []).filter(
     (entry): entry is typeof entry & { payload: Record<string, unknown> } =>
       entry.type === "chat_window" &&
       Boolean(entry.payload) &&
@@ -156,8 +156,8 @@ export async function mergeSessionTranscriptContext(params: {
   }
   const windows = chatWindowEntries(params.ctx);
   if (windows.length === 0 && options?.chatWindow) {
-    params.ctx.UntrustedStructuredContext = [
-      ...(params.ctx.UntrustedStructuredContext ?? []),
+    params.ctx.ChannelStructuredContext = [
+      ...(params.ctx.ChannelStructuredContext ?? []),
       {
         label: "Conversation context",
         source: "session",

@@ -83,7 +83,6 @@ export async function persistAbortedPartials(params: {
       message: snapshot.text,
       sessionId,
       storePath,
-      sessionFile: entry?.sessionFile,
       ...(snapshot.agentId ? { agentId: snapshot.agentId } : {}),
       createIfMissing: true,
       idempotencyKey: `${snapshot.runId}:assistant`,
@@ -177,6 +176,7 @@ export async function abortChatRunsForSessionKeyWithPartials(params: {
   stopReason?: string;
   requester: ChatAbortRequester;
   preserveSideRuns?: boolean;
+  excludeRunIds?: ReadonlySet<string>;
   /** Internal session-wide cleanup after exact resolution and all matching owner checks. */
   onAuthorizedAfterQueuedAbort?: () => boolean;
 }): Promise<{ aborted: boolean; runIds: string[]; unauthorized: boolean }> {
@@ -203,6 +203,7 @@ export async function abortChatRunsForSessionKeyWithPartials(params: {
     defaultAgentId: params.defaultAgentId,
     requester: params.requester,
     preserveSideRuns: params.preserveSideRuns,
+    excludeRunIds: params.excludeRunIds,
   });
   const {
     authorizedRuns: authorizedPendingAgentRuns,
@@ -217,6 +218,7 @@ export async function abortChatRunsForSessionKeyWithPartials(params: {
     requester: params.requester,
     keyPrefix: "agent:",
     preserveSideRuns: params.preserveSideRuns,
+    excludeRunIds: params.excludeRunIds,
   });
   const {
     authorizedRuns: authorizedPendingChatRuns,
@@ -231,6 +233,7 @@ export async function abortChatRunsForSessionKeyWithPartials(params: {
     requester: params.requester,
     keyPrefix: PENDING_CHAT_SEND_DEDUPE_PREFIX,
     preserveSideRuns: params.preserveSideRuns,
+    excludeRunIds: params.excludeRunIds,
   });
   const hasAuthorizedGatewayRuns =
     authorizedRuns.length > 0 ||

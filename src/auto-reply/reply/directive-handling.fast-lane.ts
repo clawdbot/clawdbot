@@ -93,6 +93,7 @@ export async function applyInlineDirectivesFastLane(
     model,
     initialModelLabel: params.initialModelLabel,
     formatModelSwitchEvent,
+    canPersistStickyModelSelection: params.canPersistStickyModelSelection,
     currentThinkLevel,
     currentFastMode,
     currentVerboseLevel,

@@ -1,8 +1,8 @@
 // Resolves APNs provider credentials and owns provider-token signing/cache state.
 import { createHash, createPrivateKey, sign as signJwt } from "node:crypto";
-import fs from "node:fs/promises";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { formatErrorMessage } from "./errors.js";
+import { readSecretFile } from "./fs-safe-advanced.js";
 
 /** Direct APNs provider authentication used to mint ES256 bearer tokens. */
 export type ApnsAuthConfig = {
@@ -104,7 +104,7 @@ export async function resolveApnsAuthConfigFromEnv(
     };
   }
   try {
-    const privateKey = normalizePrivateKey(await fs.readFile(keyPath, "utf8"));
+    const privateKey = normalizePrivateKey(await readSecretFile(keyPath, "APNs private key"));
     return {
       ok: true,
       value: {

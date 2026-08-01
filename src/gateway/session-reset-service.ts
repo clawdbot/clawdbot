@@ -37,6 +37,7 @@ import {
   resetSessionEntryLifecycle,
 } from "../config/sessions.js";
 import { rebindCliSessionReseedReceiptsForReset } from "../config/sessions/cli-session-binding.js";
+import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { resolveResetPreservedSelection } from "../config/sessions/reset-preserved-selection.js";
 import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-lineage.js";
 import {
@@ -44,14 +45,15 @@ import {
   type SessionCreatedActor,
   type SessionCreatedVia,
 } from "../config/sessions/session-entry-provenance.js";
-import {
-  formatSqliteSessionFileMarker,
-  sqliteSessionFileMarkerMatchesTarget,
-} from "../config/sessions/sqlite-marker.js";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logVerbose } from "../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
+import {
+  emitSessionAutoResetHook,
+  hasSessionAutoResetListeners,
+  isSessionAutoResetReason,
+} from "../hooks/session-auto-reset.js";
 import { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { runPluginHostCleanup } from "../plugins/host-hook-cleanup.js";
@@ -86,6 +88,7 @@ import {
   noteActiveSessionForShutdown,
 } from "./active-sessions-shutdown-tracker.js";
 import { findDirectChildSessionsForParent } from "./session-child-sessions.js";
+import { resolvePluginSessionOwnershipError } from "./session-plugin-ownership.js";
 import { notifyGatewaySessionReset } from "./session-reset-notifications.js";
 import {
   archiveSessionTranscriptsDetailed,
@@ -132,6 +135,7 @@ export function emitGatewaySessionEndPluginHook(params: {
   storePath: string;
   sessionFile?: string;
   agentId?: string;
+  workspaceDir?: string;
   reason:
     | "new"
     | "reset"
@@ -154,7 +158,10 @@ export function emitGatewaySessionEndPluginHook(params: {
   // is being closed here and must not be re-finalized by a later shutdown drain.
   forgetActiveSessionForShutdown(params.sessionId);
   const hookRunner = getGlobalHookRunner();
-  if (!hookRunner?.hasHooks("session_end")) {
+  const shouldEmitAutoReset =
+    isSessionAutoResetReason(params.reason) && hasSessionAutoResetListeners();
+  const shouldEmitPluginHook = hookRunner?.hasHooks("session_end") === true;
+  if (!shouldEmitAutoReset && !shouldEmitPluginHook) {
     return;
   }
   const transcript = resolveStableSessionEndTranscript({
@@ -164,6 +171,27 @@ export function emitGatewaySessionEndPluginHook(params: {
     agentId: params.agentId,
     archivedTranscripts: params.archivedTranscripts,
   });
+  if (shouldEmitAutoReset) {
+    emitSessionAutoResetHook({
+      cfg: params.cfg,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      reason: params.reason,
+      sessionFile: transcript.sessionFile,
+      transcriptArchived: transcript.transcriptArchived,
+      nextSessionId: params.nextSessionId,
+      nextSessionKey: params.nextSessionKey,
+      agentId: params.agentId,
+      workspaceDir: params.workspaceDir,
+      storePath: params.storePath,
+    });
+  }
+  if (!shouldEmitPluginHook) {
+    return;
+  }
+  if (!hookRunner) {
+    return;
+  }
   const payload = buildSessionEndHookPayload({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
@@ -356,9 +384,10 @@ async function ensureSessionRuntimeCleanup(params: {
 }) {
   // Session lifecycle mutation owns this heavy runtime edge; read-only gateway
   // commands such as status must not load the embedded-agent barrel.
-  const [embeddedAgent, mcpTools] = await Promise.all([
+  const [embeddedAgent, mcpTools, { clearFinishedSessionsForScopes }] = await Promise.all([
     import("../agents/embedded-agent.js"),
     import("../agents/agent-bundle-mcp-tools.js"),
+    import("../agents/bash-process-registry.js"),
   ]);
   params.assertCurrent?.();
   const closeTrackedBrowserTabs = async () => {
@@ -383,6 +412,12 @@ async function ensureSessionRuntimeCleanup(params: {
   if (params.sessionId) {
     queueKeys.add(params.sessionId);
   }
+  // Process scopes may use the requested alias, canonical key, or session id.
+  // Clear only completed records so reset/delete cannot erase another scope's
+  // output or hide a background process whose owner has not confirmed exit.
+  const processScopeKeys = new Set(queueKeys);
+  processScopeKeys.add(params.key);
+  clearFinishedSessionsForScopes(processScopeKeys);
   clearSessionResetRuntimeState([...queueKeys], {
     activeReplySessionId: params.sessionId,
   });
@@ -821,7 +856,7 @@ export async function cleanupSessionBeforeMutation(params: {
       agentId: normalizeAgentId(params.target.agentId ?? resolveDefaultAgentId(params.cfg)),
       sessionId: params.entry.sessionId,
       sessionKey: params.target.canonicalKey ?? params.key,
-      sessionFile: params.entry.sessionFile,
+      sessionFile: params.target.canonicalKey ?? params.key,
       reason: params.reason === "session-reset" ? "reset" : "deleted",
     } satisfies Parameters<typeof resetRegisteredAgentHarnessSessions>[0];
     await resetRegisteredAgentHarnessSessions(resetParams);
@@ -846,8 +881,10 @@ export async function emitGatewayBeforeResetPluginHook(params: {
 
   const sessionKey = params.target.canonicalKey ?? params.key;
   const sessionId = params.entry?.sessionId;
-  const sessionFile = params.entry?.sessionFile;
   const agentId = normalizeAgentId(params.target.agentId ?? resolveDefaultAgentId(params.cfg));
+  const sessionFile = sessionId
+    ? formatSqliteSessionFileMarker({ agentId, sessionId, storePath: params.storePath })
+    : undefined;
   const workspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId);
   const messages =
     params.messages ??
@@ -929,6 +966,8 @@ export async function performGatewaySessionReset(params: {
   commandSource: string;
   /** Trusted provenance for a reset that materializes a previously missing row. */
   creation?: { via: SessionCreatedVia; actor?: SessionCreatedActor };
+  /** Exact plugin namespace authorized by the scoped plugin runtime. */
+  authorizedPluginId?: string;
   assertCurrent?: () => void;
   assertAuthorizedInstance?: () => void;
   onCommitted?: (commit: { key: string; sessionId: string }) => void;
@@ -991,6 +1030,15 @@ export async function performGatewaySessionReset(params: {
     params.key,
     resetTarget.requestedAgentId ? { agentId: resetTarget.requestedAgentId } : undefined,
   ).entry;
+  const initialOwnershipError = resolvePluginSessionOwnershipError({
+    action: "reset",
+    entry: initialResetEntry,
+    key: resetTarget.target.canonicalKey,
+    pluginOwnerId: params.authorizedPluginId,
+  });
+  if (initialOwnershipError) {
+    return { ok: false, error: initialOwnershipError };
+  }
   const missingHarnessSessionError = resolveMissingAgentHarnessSessionError(
     resetTarget.target.canonicalKey,
     initialResetEntry,
@@ -1045,6 +1093,7 @@ export async function performGatewaySessionReset(params: {
     };
   }
   let admittedWorkReleased = true;
+  let resetOwnershipError: ReturnType<typeof errorShape> | undefined;
   return await runExclusiveSessionLifecycleMutation({
     scope: resetTarget.storePath,
     identities: resetLifecycleIdentities,
@@ -1053,6 +1102,21 @@ export async function performGatewaySessionReset(params: {
     prepare: async () => {
       params.assertCurrent?.();
       params.assertAuthorizedInstance?.();
+      const currentEntry = loadSessionEntry(
+        params.key,
+        resetTarget.requestedAgentId ? { agentId: resetTarget.requestedAgentId } : undefined,
+      ).entry;
+      // Check the locked generation before interrupting any work; a replaced
+      // foreign row must not be reset or have its admitted run cancelled.
+      resetOwnershipError = resolvePluginSessionOwnershipError({
+        action: "reset",
+        entry: currentEntry,
+        key: resetTarget.target.canonicalKey,
+        pluginOwnerId: params.authorizedPluginId,
+      });
+      if (resetOwnershipError) {
+        return;
+      }
       admittedWorkReleased = await interruptSessionWorkAdmissions({
         scope: resetTarget.storePath,
         identities: resetLifecycleIdentities,
@@ -1061,6 +1125,9 @@ export async function performGatewaySessionReset(params: {
     },
     run: async () => {
       const { cfg, target, storePath, requestedAgentId } = resetTarget;
+      if (resetOwnershipError) {
+        return { ok: false, error: resetOwnershipError };
+      }
       if (!admittedWorkReleased) {
         return {
           ok: false,
@@ -1074,6 +1141,15 @@ export async function performGatewaySessionReset(params: {
         params.key,
         requestedAgentId ? { agentId: requestedAgentId } : undefined,
       );
+      const currentOwnershipError = resolvePluginSessionOwnershipError({
+        action: "reset",
+        entry,
+        key: canonicalKey,
+        pluginOwnerId: params.authorizedPluginId,
+      });
+      if (currentOwnershipError) {
+        return { ok: false, error: currentOwnershipError };
+      }
       const placementBlock = entry?.sessionId
         ? resolveSessionPlacementResetBlock(entry.sessionId)
         : undefined;
@@ -1178,7 +1254,7 @@ export async function performGatewaySessionReset(params: {
           agentId,
           sessionId: entry.sessionId,
           sessionKey: target.canonicalKey ?? params.key,
-          sessionFile: entry.sessionFile,
+          sessionFile: target.canonicalKey ?? params.key,
           reason: "reset",
         });
       }
@@ -1240,7 +1316,7 @@ export async function performGatewaySessionReset(params: {
           sessionKey: target.canonicalKey,
           sessionId: entry.sessionId,
           storePath,
-          sessionFile: entry.sessionFile,
+          sessionFile: target.canonicalKey,
           agentId: target.agentId,
           reason: params.reason,
           archivedTranscripts: [],
@@ -1268,20 +1344,6 @@ export async function performGatewaySessionReset(params: {
         params.assertCurrent?.();
         throw new Error(`Session ${params.key} changed before reset boundary append.`);
       }
-      const resetSessionFile = boundaryEntry?.sessionId
-        ? ((sqliteSessionFileMarkerMatchesTarget(boundaryEntry.sessionFile, {
-            agentId,
-            sessionId: boundaryEntry.sessionId,
-            storePath,
-          })
-            ? boundaryEntry.sessionFile
-            : undefined) ??
-          formatSqliteSessionFileMarker({
-            agentId,
-            sessionId: boundaryEntry.sessionId,
-            storePath,
-          }))
-        : undefined;
       let resetBoundaryAppended = false;
       let resetSkipped = false;
       const lifecyclePromise = resetSessionEntryLifecycle({
@@ -1321,22 +1383,11 @@ export async function performGatewaySessionReset(params: {
             return currentEntry;
           }
           resetBoundaryAppended = currentEntry !== undefined;
-          const parsed = parseAgentSessionKey(primaryKey);
-          const sessionAgentId = normalizeAgentId(
-            parsed?.agentId ?? target.agentId ?? requestedAgentId ?? resolveDefaultAgentId(cfg),
-          );
           const resetPreservedSelection = resolveResetPreservedSelection({
             entry: currentEntry,
           });
           const now = Date.now();
           const nextSessionId = currentEntry?.sessionId ?? randomUUID();
-          const sessionFile =
-            (currentEntry ? resetSessionFile : undefined) ??
-            formatSqliteSessionFileMarker({
-              agentId: sessionAgentId,
-              sessionId: nextSessionId,
-              storePath,
-            });
           const creationStamp = currentEntry
             ? {
                 createdVia: currentEntry.createdVia,
@@ -1348,7 +1399,6 @@ export async function performGatewaySessionReset(params: {
               : {};
           const nextEntry: SessionEntry = {
             sessionId: nextSessionId,
-            sessionFile,
             lifecycleRevision: randomUUID(),
             updatedAt: now,
             sessionStartedAt: now,
@@ -1356,6 +1406,7 @@ export async function performGatewaySessionReset(params: {
             abortedLastRun: false,
             thinkingLevel: currentEntry?.thinkingLevel,
             fastMode: currentEntry?.fastMode,
+            toolOverrides: currentEntry?.toolOverrides,
             verboseLevel: currentEntry?.verboseLevel,
             traceLevel: currentEntry?.traceLevel,
             reasoningLevel: currentEntry?.reasoningLevel,
@@ -1415,6 +1466,7 @@ export async function performGatewaySessionReset(params: {
             subject: currentEntry?.subject,
             groupChannel: currentEntry?.groupChannel,
             space: currentEntry?.space,
+            pluginOwnerId: currentEntry?.pluginOwnerId ?? params.authorizedPluginId,
             cliSessionBindings: currentEntry?.cliSessionBindings,
             cliSessionIds: currentEntry?.cliSessionIds,
             claudeCliSessionId: currentEntry?.claudeCliSessionId,
@@ -1552,7 +1604,7 @@ export async function performGatewaySessionReset(params: {
           sessionId: next.sessionId,
           resumedFrom: oldSessionId,
           storePath,
-          sessionFile: next.sessionFile,
+          sessionFile: target.canonicalKey ?? params.key,
           agentId: target.agentId,
         });
       }

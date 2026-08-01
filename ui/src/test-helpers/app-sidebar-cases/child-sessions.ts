@@ -77,7 +77,7 @@ describe("AppSidebar agent chip", () => {
 
     expect(harness.list).toHaveBeenCalledWith({
       spawnedBy: "agent:main:parent",
-      limit: 20,
+      limit: 100,
       includeGlobal: false,
       includeUnknown: false,
       configuredAgentsOnly: true,
@@ -236,7 +236,7 @@ describe("AppSidebar agent chip", () => {
       count: 1,
       totalCount: 2,
       hasMore,
-      nextOffset: hasMore ? 20 : null,
+      nextOffset: hasMore ? 100 : null,
       defaults: { modelProvider: null, model: null, contextTokens: null },
       sessions: [
         {
@@ -273,7 +273,7 @@ describe("AppSidebar agent chip", () => {
     await waitForFast(() => expect(harness.list).toHaveBeenCalledTimes(2));
     expect(harness.list.mock.calls[1]?.[0]).toMatchObject({
       spawnedBy: "agent:main:parent",
-      offset: 20,
+      offset: 100,
     });
     await waitForFast(() =>
       expect(sidebar.querySelectorAll(".sidebar-recent-session--child")).toHaveLength(2),
@@ -289,7 +289,7 @@ describe("AppSidebar agent chip", () => {
       count: sessions.length,
       totalCount: 2,
       hasMore,
-      nextOffset: hasMore ? 20 : null,
+      nextOffset: hasMore ? 100 : null,
       defaults: { modelProvider: null, model: null, contextTokens: null },
       sessions,
     });

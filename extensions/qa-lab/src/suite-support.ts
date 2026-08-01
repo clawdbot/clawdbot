@@ -120,35 +120,6 @@ export function remapModelRefForForcedRuntime(params: {
   return `openai/${split.model}`;
 }
 
-export function buildQaRuntimeEnvPatch(params: {
-  providerMode: QaProviderMode;
-  forcedRuntime?: RuntimeId;
-  mockBaseUrl?: string;
-}): NodeJS.ProcessEnv | undefined {
-  const patch: NodeJS.ProcessEnv = {};
-  if (params.forcedRuntime) {
-    patch.OPENCLAW_BUILD_PRIVATE_QA = "1";
-    patch.OPENCLAW_QA_FORCE_RUNTIME = params.forcedRuntime;
-  }
-  if (params.forcedRuntime !== "codex" || params.providerMode !== "mock-openai") {
-    return Object.keys(patch).length > 0 ? patch : undefined;
-  }
-  let mockBaseUrl = params.mockBaseUrl?.trim();
-  while (mockBaseUrl?.endsWith("/")) {
-    mockBaseUrl = mockBaseUrl.slice(0, -1);
-  }
-  if (!mockBaseUrl) {
-    return Object.keys(patch).length > 0 ? patch : undefined;
-  }
-  // The forced codex lane uses the Codex app-server's native OpenAI provider
-  // path, so pin the managed app-server to the QA mock endpoint instead of
-  // leaking to the maintainer's real OpenAI config.
-  patch.OPENCLAW_CODEX_APP_SERVER_ARGS = `app-server -c openai_base_url=${mockBaseUrl}/v1 --listen stdio://`;
-  patch.OPENAI_API_KEY = "qa-mock-openai-key";
-  patch.CODEX_API_KEY = "qa-mock-openai-key";
-  return patch;
-}
-
 export function appendNodeOption(raw: string | undefined, option: string) {
   const parts = (raw ?? "").split(/\s+/u).filter(Boolean);
   return parts.includes(option) ? parts.join(" ") : [...parts, option].join(" ");

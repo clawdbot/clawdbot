@@ -46,6 +46,7 @@ const unavailableCron: GatewayCronServiceContract = {
   update: async () => cronUnavailable(),
   updateWithPrecondition: async () => cronUnavailable(),
   remove: async () => cronUnavailable(),
+  removeStaleJobFamily: async () => cronUnavailable(),
   removeAgentJobsTransactional: async () => cronUnavailable(),
   run: async () => cronUnavailable(),
   enqueueRun: async () => cronUnavailable(),

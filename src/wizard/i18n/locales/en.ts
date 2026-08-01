@@ -708,8 +708,6 @@ export const en = {
       channelsLabel: "Slack channels",
       envPrompt: "SLACK_BOT_TOKEN + SLACK_APP_TOKEN detected. Use env vars?",
       examples: "Examples:",
-      interactiveRepliesPrompt:
-        "Enable Slack interactive replies (buttons/selects) for agent responses?",
       multipleEntries: "Multiple entries: comma-separated.",
       socketModeTokensTitle: "Slack socket mode tokens",
     },

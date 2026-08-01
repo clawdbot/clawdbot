@@ -16,6 +16,10 @@ const MAX_CHANGED_NODE_TEST_TARGETS = 96;
 // Each target runs in its own child process (isolation contract), so bound the
 // serial tail per job; the shard runner overlaps two children at a time.
 const CHANGED_NODE_TEST_TARGETS_PER_JOB = 12;
+// Memory Core targets perform real SQLite/indexing work. Two concurrent Vitest
+// processes starve each other on 4-vCPU runners and push otherwise healthy
+// integration tests past the global timeout.
+const SERIAL_CHANGED_TARGET_RE = /^extensions\/memory-core\//u;
 const BOUNDARY_NODE_TEST_CONFIG = "test/vitest/vitest.boundary.config.ts";
 const publicPluginSdkEntrySources = Object.values(
   buildPluginSdkEntrySources(publicPluginSdkEntrypoints),
@@ -258,7 +262,7 @@ export function createChangedNodeTestShards(changedPaths, options = {}) {
   const shards = [
     ...targetChunks.map((chunk, index) => {
       const suffix = targetChunks.length === 1 ? "" : `-${index + 1}`;
-      return {
+      const shard = {
         checkName: `checks-node-changed${suffix}`,
         configs: [],
         requiresDist: false,
@@ -266,6 +270,10 @@ export function createChangedNodeTestShards(changedPaths, options = {}) {
         shardName: `changed${suffix}`,
         targets: chunk,
       };
+      if (chunk.some((target) => SERIAL_CHANGED_TARGET_RE.test(target))) {
+        shard.planConcurrency = 1;
+      }
+      return shard;
     }),
     ...(hasBuildArtifactAffectingChange(changedPaths) ? [] : [createBoundaryShard()]),
   ];

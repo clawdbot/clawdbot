@@ -60,7 +60,14 @@ function isMessageToolSourceReplyActionName(action: unknown): boolean {
   if (isMessageToolSendActionName(action)) {
     return true;
   }
-  return typeof action === "string" && action.trim().toLowerCase() === "reply";
+  if (typeof action !== "string") {
+    return false;
+  }
+  // Polls and reply-type actions deliver the visible source answer too; they
+  // qualify only when the runner confirmed the current-source route (or the
+  // caller allows explicit routes), enforced by the caller below.
+  const normalized = action.trim().toLowerCase();
+  return normalized === "reply" || normalized === "thread-reply" || normalized === "poll";
 }
 
 function normalizeStatus(value: unknown): string | undefined {
@@ -560,7 +567,10 @@ export function isDeliveredMessageToolOnlySourceReplyResult(params: {
   isError?: boolean;
   allowExplicitSourceRoute?: boolean;
 }): boolean {
-  if (params.sourceReplyDeliveryMode !== "message_tool_only") {
+  const confirmedCurrentSourceRoute =
+    resultConfirmsCurrentSourceRoute(params.result) ||
+    resultConfirmsCurrentSourceRoute(params.hookResult);
+  if (params.sourceReplyDeliveryMode !== "message_tool_only" && !confirmedCurrentSourceRoute) {
     return false;
   }
   if (normalizeToolName(params.toolName) !== MESSAGE_TOOL_NAME) {
@@ -568,12 +578,13 @@ export function isDeliveredMessageToolOnlySourceReplyResult(params: {
   }
   const args = asRecord(params.args);
   const sourceRouteReplyAction =
-    params.allowExplicitSourceRoute === true && isMessageToolSourceReplyActionName(args.action);
+    (params.allowExplicitSourceRoute === true || confirmedCurrentSourceRoute) &&
+    isMessageToolSourceReplyActionName(args.action);
   if (!isMessageToolSendActionName(args.action) && !sourceRouteReplyAction) {
     return false;
   }
   const hasConfirmedExplicitSourceRoute =
-    params.allowExplicitSourceRoute === true || resultConfirmsCurrentSourceRoute(params.result);
+    params.allowExplicitSourceRoute === true || confirmedCurrentSourceRoute;
   if (hasExplicitMessageRoute(args) && !hasConfirmedExplicitSourceRoute) {
     return false;
   }

@@ -3,7 +3,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import {
   ErrorCodes,
   errorShape,
-  formatValidationErrors,
   validateAgentParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
@@ -40,6 +39,7 @@ import {
 } from "./agent-handler-helpers.js";
 import type { AgentRunRequest } from "./agent-request-types.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 type AgentRequestPreflight = {
   request: AgentRunRequest;
@@ -69,15 +69,7 @@ type AgentRequestPreflight = {
 export function prepareAgentRequestPreflight(
   params: Pick<GatewayRequestHandlerOptions, "params" | "respond" | "context" | "client">,
 ): AgentRequestPreflight | undefined {
-  if (!validateAgentParams(params.params)) {
-    params.respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        `invalid agent params: ${formatValidationErrors(validateAgentParams.errors)}`,
-      ),
-    );
+  if (!assertValidParams(params.params, validateAgentParams, "agent", params.respond)) {
     return undefined;
   }
   const request = params.params as AgentRunRequest;
@@ -243,6 +235,19 @@ export function prepareAgentRequestPreflight(
     return undefined;
   }
   const inputProvenance = normalizeInputProvenance(request.inputProvenance);
+  const isRestartRecoveryResumeRun =
+    canUseInternalRuntimeHandoff && isMainSessionRestartRecoveryInputProvenance(inputProvenance);
+  if (request.forceCodeModeTools === true && !isRestartRecoveryResumeRun) {
+    params.respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        "forceCodeModeTools is reserved for main-session restart recovery.",
+      ),
+    );
+    return undefined;
+  }
   const sessionEffects =
     isOneShotModelRun || requestedInternalSessionEffects ? "internal" : request.sessionEffects;
   const agentDedupeKeys = resolveAgentDedupeKeys({
@@ -301,8 +306,7 @@ export function prepareAgentRequestPreflight(
       groupSpace: request.groupSpace,
     }),
     inputProvenance,
-    isRestartRecoveryResumeRun:
-      canUseInternalRuntimeHandoff && isMainSessionRestartRecoveryInputProvenance(inputProvenance),
+    isRestartRecoveryResumeRun,
     preserveUserFacingSessionModelState:
       canUseInternalRuntimeHandoff &&
       shouldPreserveUserFacingSessionStateForInputProvenance(inputProvenance),

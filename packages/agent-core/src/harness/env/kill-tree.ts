@@ -15,7 +15,8 @@ export type KillProcessTreeOptions = {
 /**
  * Best-effort process-tree termination with graceful shutdown.
  * - Windows: use taskkill /T to include descendants. Sends SIGTERM-equivalent
- *   first (without /F), then force-kills if process survives.
+ *   first (without /F), then force-kills if taskkill refuses or the process
+ *   survives the grace period.
  * - Unix: send SIGTERM to process group first, wait grace period, then SIGKILL.
  *
  * Group kill (`process.kill(-pid, ...)`) is only used when the PID is verified
@@ -169,18 +170,19 @@ function signalProcessTreeUnix(
   }
 }
 
-function runTaskkill(args: string[]): Promise<void> {
+function runTaskkill(args: string[], onExit?: (code: number | null) => void): Promise<void> {
   return new Promise((resolve) => {
     let settled = false;
-    const finish = () => {
+    const finish = (code: number | null) => {
       if (settled) {
         return;
       }
       settled = true;
       clearTimeout(completionTimer);
+      onExit?.(code);
       resolve();
     };
-    const completionTimer = setTimeout(finish, TASKKILL_COMPLETION_TIMEOUT_MS);
+    const completionTimer = setTimeout(() => finish(null), TASKKILL_COMPLETION_TIMEOUT_MS);
     completionTimer.unref?.();
     try {
       const child = spawn("taskkill", args, {
@@ -188,35 +190,61 @@ function runTaskkill(args: string[]): Promise<void> {
         detached: true,
         windowsHide: true,
       });
-      child.once("error", finish);
-      child.once("close", finish);
+      // A failed spawn emits error before a close with a negative errno. Only
+      // taskkill's first actual outcome may authorize immediate escalation.
+      child.once("error", () => finish(null));
+      child.once("close", (code) => finish(code));
     } catch {
       // Ignore taskkill spawn failures.
-      finish();
+      finish(null);
     }
   });
 }
 
 function killProcessTreeWindows(pid: number, graceMs: number): void {
-  signalProcessTreeWindows(pid, "SIGTERM");
-
-  setTimeout(() => {
+  let forced = false;
+  let graceTimer: ReturnType<typeof setTimeout> | undefined;
+  const forceKill = () => {
+    if (forced) {
+      return;
+    }
+    // Latch before probing: a later live PID could belong to a reused,
+    // unrelated Windows process tree.
+    forced = true;
+    if (graceTimer !== undefined) {
+      clearTimeout(graceTimer);
+      graceTimer = undefined;
+    }
     if (!isProcessAlive(pid)) {
       return;
     }
     signalProcessTreeWindows(pid, "SIGKILL");
-  }, graceMs).unref();
+  };
+
+  signalProcessTreeWindows(pid, "SIGTERM", (code) => {
+    if (code !== null && code !== 0) {
+      forceKill();
+    }
+  });
+
+  graceTimer = setTimeout(forceKill, graceMs);
+  graceTimer.unref();
 }
 
-function signalProcessTreeWindows(pid: number, signal: "SIGTERM" | "SIGKILL"): void {
-  void signalProcessTreeWindowsAndWait(pid, signal);
+function signalProcessTreeWindows(
+  pid: number,
+  signal: "SIGTERM" | "SIGKILL",
+  onExit?: (code: number | null) => void,
+): void {
+  void signalProcessTreeWindowsAndWait(pid, signal, onExit);
 }
 
 function signalProcessTreeWindowsAndWait(
   pid: number,
   signal: "SIGTERM" | "SIGKILL",
+  onExit?: (code: number | null) => void,
 ): Promise<void> {
   const args =
     signal === "SIGKILL" ? ["/F", "/T", "/PID", String(pid)] : ["/T", "/PID", String(pid)];
-  return runTaskkill(args);
+  return runTaskkill(args, onExit);
 }

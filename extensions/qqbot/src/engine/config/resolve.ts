@@ -12,6 +12,7 @@ import { getPlatformAdapter } from "../adapter/index.js";
 import {
   asOptionalObjectRecord as asRecord,
   normalizeOptionalLowercaseString,
+  normalizeOptionalString,
   normalizeStringifiedEntries,
   readStringField as readString,
 } from "../utils/string-normalize.js";
@@ -51,14 +52,19 @@ interface ResolvedAccountBase {
   config: Record<string, unknown>;
 }
 
-function normalizeAppId(raw: unknown): string {
-  if (typeof raw === "string") {
-    return raw.trim();
-  }
+function normalizeOptionalAppId(raw: unknown): string | undefined {
   if (typeof raw === "number") {
     return String(raw);
   }
-  return "";
+  return normalizeOptionalString(raw);
+}
+
+function normalizeAppId(raw: unknown): string {
+  return normalizeOptionalAppId(raw) ?? "";
+}
+
+function hasAppId(raw: unknown): boolean {
+  return normalizeOptionalAppId(raw) !== undefined;
 }
 
 function normalizeAccountConfig(
@@ -87,13 +93,13 @@ export function listAccountIds(cfg: Record<string, unknown>): string[] {
   const ids = new Set<string>();
   const qqbot = readQQBotSection(cfg);
 
-  if (qqbot?.appId || process.env.QQBOT_APP_ID) {
+  if (hasAppId(qqbot?.appId) || hasAppId(process.env.QQBOT_APP_ID)) {
     ids.add(DEFAULT_ACCOUNT_ID);
   }
 
   if (qqbot?.accounts) {
     for (const accountId of Object.keys(qqbot.accounts)) {
-      if (qqbot.accounts[accountId]?.appId) {
+      if (hasAppId(qqbot.accounts[accountId]?.appId)) {
         ids.add(accountId);
       }
     }
@@ -112,16 +118,16 @@ export function resolveDefaultAccountId(cfg: Record<string, unknown>): string {
   if (
     configuredDefaultAccountId &&
     (configuredDefaultAccountId === DEFAULT_ACCOUNT_ID ||
-      Boolean(qqbot?.accounts?.[configuredDefaultAccountId]?.appId))
+      hasAppId(qqbot?.accounts?.[configuredDefaultAccountId]?.appId))
   ) {
     return configuredDefaultAccountId;
   }
-  if (qqbot?.appId || process.env.QQBOT_APP_ID) {
+  if (hasAppId(qqbot?.appId) || hasAppId(process.env.QQBOT_APP_ID)) {
     return DEFAULT_ACCOUNT_ID;
   }
   if (qqbot?.accounts) {
     const ids = Object.keys(qqbot.accounts);
-    const firstId = ids.at(0);
+    const firstId = ids.find((id) => hasAppId(qqbot.accounts?.[id]?.appId));
     if (firstId !== undefined) {
       return firstId;
     }
@@ -158,7 +164,7 @@ export function resolveAccountBase(
     appId = normalizeAppId(asRecord(account)?.appId);
   }
 
-  if (!appId && process.env.QQBOT_APP_ID && resolvedAccountId === DEFAULT_ACCOUNT_ID) {
+  if (!appId && hasAppId(process.env.QQBOT_APP_ID) && resolvedAccountId === DEFAULT_ACCOUNT_ID) {
     appId = normalizeAppId(process.env.QQBOT_APP_ID);
   }
 

@@ -226,10 +226,13 @@ describeBrowserLayout("touch-primary form controls", () => {
     const fixture = await openMobileFixture();
     const { page } = fixture;
     try {
-      const selects = await page.locator(".field select.settings-select").evaluateAll((nodes) =>
+      // Both the .field-wrapped and bare settings selects draw the themed
+      // chevron; bare ones once fell back to the misaligned native arrow.
+      const selects = await page.locator("select.settings-select").evaluateAll((nodes) =>
         nodes.map((node) => {
           const style = getComputedStyle(node as HTMLElement);
           return {
+            appearance: style.appearance,
             image: style.backgroundImage,
             paddingRight: Number.parseFloat(style.paddingRight),
             positionX: style.backgroundPositionX,
@@ -238,8 +241,9 @@ describeBrowserLayout("touch-primary form controls", () => {
         }),
       );
 
-      expect(selects).toHaveLength(1);
+      expect(selects).toHaveLength(2);
       for (const select of selects) {
+        expect(select.appearance).toBe("none");
         expect(select.image).not.toBe("none");
         expect(select.paddingRight).toBeGreaterThanOrEqual(32);
         expect(select.positionX).toBe("calc(100% - 10px)");

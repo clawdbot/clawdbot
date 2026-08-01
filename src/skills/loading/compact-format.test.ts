@@ -266,9 +266,42 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
     const skills = [makeSkill("only-one", "desc")];
     // Budget so small that even one compact skill can't fit
     const prompt = buildPrompt(skills, { maxChars: 10 });
-    expect(prompt).not.toContain("only-one");
-    const [included] = requireIncludedCounts(prompt);
-    expect(included).toBe(0);
+    expect(prompt).toBe("");
+    expect(prompt.length).toBeLessThanOrEqual(10);
+  });
+
+  it.each([0, 1, 10, 64])("never exceeds a tiny configured prompt budget of %i", (maxChars) => {
+    const prompt = buildPrompt([makeSkill("only-one", "desc")], { maxChars });
+
+    expect(prompt.length).toBeLessThanOrEqual(maxChars);
+    expect(prompt).toBe("");
+  });
+
+  it("drops an oversized optional remote note before discarding a complete fitting skill catalog", () => {
+    const skill = makeSkill("weather", "Get weather data");
+    const maxChars = formatSkillsForPrompt([skill]).length;
+    const remoteNote = `REMOTE_NOTE_${"x".repeat(maxChars + 512)}`;
+    const prompt = buildWorkspaceSkillsPrompt("/fake", {
+      entries: [makeEntry(skill)],
+      config: {
+        skills: {
+          limits: { maxSkillsPromptChars: maxChars },
+        },
+      } satisfies OpenClawConfig,
+      eligibility: {
+        remote: {
+          platforms: [],
+          hasBin: () => false,
+          hasAnyBin: () => false,
+          note: remoteNote,
+        },
+      },
+    });
+
+    expect(prompt.length).toBeLessThanOrEqual(maxChars);
+    expect(prompt).toContain("<name>weather</name>");
+    expect(prompt).toContain("</available_skills>");
+    expect(prompt).not.toContain("REMOTE_NOTE_");
   });
 
   it("budgets the final rendered prompt including versions and limit notices", () => {

@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { valid as validSemver } from "semver";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../plugins/runtime-sidecar-paths.js";
 import { pathExists } from "../utils.js";
 import {
@@ -200,16 +201,9 @@ export function resolveExpectedInstalledVersionFromSpec(
     return null;
   }
   const rawVersion = normalizedSpec.slice(normalizedPackageName.length + 1).trim();
-  if (
-    !rawVersion ||
-    rawVersion.includes("/") ||
-    rawVersion.includes(":") ||
-    rawVersion.includes("#") ||
-    /^(latest|beta|next|main)$/i.test(rawVersion)
-  ) {
-    return null;
-  }
-  return normalizePackageVersionForComparison(rawVersion);
+  // npm-package-arg classifies registry specs as exact versions with the same
+  // loose SemVer check. Everything else may resolve to a different version.
+  return validSemver(rawVersion, true);
 }
 
 /**

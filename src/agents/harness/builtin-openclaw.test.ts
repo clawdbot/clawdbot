@@ -2,8 +2,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const runEmbeddedAttempt = vi.hoisted(() => vi.fn());
+const completeWithPreparedSimpleCompletionModel = vi.hoisted(() => vi.fn());
 
 vi.mock("../embedded-agent-runner/run/attempt.js", () => ({ runEmbeddedAttempt }));
+vi.mock("../simple-completion-runtime.js", () => ({ completeWithPreparedSimpleCompletionModel }));
 
 import { createOpenClawAgentHarness } from "./builtin-openclaw.js";
 
@@ -29,6 +31,12 @@ describe("createOpenClawAgentHarness", () => {
       cloudCodeAssistFormatError: false,
       replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
       itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
+    });
+    completeWithPreparedSimpleCompletionModel.mockReset();
+    completeWithPreparedSimpleCompletionModel.mockResolvedValue({
+      role: "assistant",
+      content: [{ type: "text", text: "done" }],
+      stopReason: "stop",
     });
   });
 
@@ -72,5 +80,39 @@ describe("createOpenClawAgentHarness", () => {
     expect(finalizationAttempt).not.toHaveProperty("internalEvents");
     expect(finalizationAttempt).not.toHaveProperty("trigger");
     expect(finalizationAttempt).not.toHaveProperty("onPartialReply");
+  });
+
+  it("runs isolated completion through the prepared zero-tool transport", async () => {
+    const params = {
+      model: { provider: "openai", id: "gpt-test", api: "openai-responses" },
+      auth: { apiKey: "secret", source: "profile:test", mode: "api-key" },
+      config: {},
+      systemPrompt: "system",
+      prompt: "user",
+      timeoutMs: 1_000,
+      provider: "openai",
+      modelId: "gpt-test",
+      agentId: "main",
+      agentDir: "/tmp/agent",
+      workspaceDir: "/tmp/workspace",
+    } as unknown as Parameters<
+      NonNullable<ReturnType<typeof createOpenClawAgentHarness>["runIsolatedCompletion"]>
+    >[0];
+
+    await expect(createOpenClawAgentHarness().runIsolatedCompletion?.(params)).resolves.toEqual({
+      assistant: expect.objectContaining({ stopReason: "stop" }),
+    });
+    expect(completeWithPreparedSimpleCompletionModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: params.model,
+        auth: params.auth,
+        context: {
+          systemPrompt: "system",
+          messages: [expect.objectContaining({ role: "user", content: "user" })],
+          tools: [],
+        },
+      }),
+    );
+    expect(runEmbeddedAttempt).not.toHaveBeenCalled();
   });
 });

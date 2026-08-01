@@ -1,7 +1,5 @@
-import { createChannelDmPolicy } from "openclaw/plugin-sdk/channel-dm-policy";
 import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
 // Matrix plugin module implements setup core behavior.
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
@@ -9,15 +7,13 @@ import {
   type ChannelSetupAdapter,
   type ChannelSetupWizardAdapter,
 } from "openclaw/plugin-sdk/setup";
-import { resolveDefaultMatrixAccountId, resolveMatrixAccountConfig } from "./matrix/accounts.js";
-import { resolveMatrixConfigFieldPath, updateMatrixAccountConfig } from "./matrix/config-update.js";
 import { applyMatrixSetupAccountConfig, validateMatrixSetupInput } from "./setup-config.js";
 import {
   namedAccountPromotionKeys,
   resolveSingleAccountPromotionTarget,
   singleAccountKeysToMove,
 } from "./setup-contract.js";
-import { resolveMatrixSetupDmAllowFrom } from "./setup-dm-policy.js";
+import { createMatrixSetupDmPolicy } from "./setup-dm-policy.js";
 import type { CoreConfig } from "./types.js";
 
 const channel = "matrix" as const;
@@ -25,12 +21,6 @@ type MatrixSetupWizardModule = { matrixSetupWizard: ChannelSetupWizardAdapter };
 
 function resolveMatrixSetupAccountId(params: { accountId?: string; name?: string }): string {
   return normalizeAccountId(params.accountId?.trim() || params.name?.trim() || DEFAULT_ACCOUNT_ID);
-}
-
-function resolveMatrixSetupWizardAccountId(cfg: CoreConfig, accountId?: string): string {
-  return normalizeAccountId(
-    accountId?.trim() || resolveDefaultMatrixAccountId(cfg) || DEFAULT_ACCOUNT_ID,
-  );
 }
 
 export function createMatrixSetupWizardProxy(
@@ -58,45 +48,9 @@ export function createMatrixSetupWizardProxy(
       )(ctx);
     },
     afterConfigWritten: async (ctx) => await (await loadWizard()).afterConfigWritten?.(ctx),
-    dmPolicy: createChannelDmPolicy({
-      label: "Matrix",
-      channel,
-      policyPath: "dm.policy",
-      allowFromPath: "dm.allowFrom",
-      resolveAccount: (cfg, accountId) => {
-        const accountIdResolved = resolveMatrixSetupWizardAccountId(cfg as CoreConfig, accountId);
-        const config = resolveMatrixAccountConfig({
-          cfg: cfg as CoreConfig,
-          accountId: accountIdResolved,
-        });
-        return {
-          accountId: accountIdResolved,
-          config: { dmPolicy: config.dm?.policy, allowFrom: config.dm?.allowFrom, dm: config.dm },
-        };
-      },
-      resolveConfigKeys: ({ cfg, account }) => ({
-        policyKey: resolveMatrixConfigFieldPath(cfg as CoreConfig, account.accountId, "dm.policy"),
-        allowFromKey: resolveMatrixConfigFieldPath(
-          cfg as CoreConfig,
-          account.accountId,
-          "dm.allowFrom",
-        ),
-      }),
-      resolveAllowFrom: ({ policy, account }) =>
-        resolveMatrixSetupDmAllowFrom(policy, account.config.allowFrom),
-      buildPatch: ({ account, policy, allowFrom }) => ({
-        dm: { ...account.config.dm, policy, allowFrom },
-      }),
-      applyPatch: ({ cfg, account, patch }) =>
-        updateMatrixAccountConfig(
-          cfg as CoreConfig,
-          account.accountId,
-          patch as Parameters<typeof updateMatrixAccountConfig>[2],
-        ) as OpenClawConfig,
-      promptAllowFrom: async (params) => {
-        const promptAllowFrom = (await loadWizard()).dmPolicy?.promptAllowFrom;
-        return promptAllowFrom ? await promptAllowFrom(params) : params.cfg;
-      },
+    dmPolicy: createMatrixSetupDmPolicy(async (params) => {
+      const promptAllowFrom = (await loadWizard()).dmPolicy?.promptAllowFrom;
+      return promptAllowFrom ? await promptAllowFrom(params) : params.cfg;
     }),
     disable: (cfg) => ({
       ...(cfg as CoreConfig),

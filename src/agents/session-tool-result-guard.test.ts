@@ -313,6 +313,29 @@ describe("installSessionToolResultGuard", () => {
     expectPersistedRoles(sm, ["assistant", "toolResult"]);
   });
 
+  it("preserves opaque canonical tool-call ids while repairing result metadata", () => {
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm);
+
+    sm.appendMessage(
+      asAppendMessage({
+        role: "assistant",
+        content: [{ type: "toolCall", id: " opaque-call ", name: "read", arguments: {} }],
+      }),
+    );
+    sm.appendMessage(
+      asAppendMessage({
+        role: "toolResult",
+        toolCallId: " opaque-call ",
+        content: [{ type: "text", text: "ok" }],
+        isError: false,
+      }),
+    );
+
+    const messages = expectPersistedRoles(sm, ["assistant", "toolResult"]);
+    expect((messages[1] as { toolCallId?: string }).toolCallId).toBe(" opaque-call ");
+  });
+
   it("drops malformed tool calls missing input before persistence", () => {
     const sm = SessionManager.inMemory();
     installSessionToolResultGuard(sm);

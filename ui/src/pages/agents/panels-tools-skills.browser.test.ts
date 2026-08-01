@@ -2,14 +2,17 @@
 import { render } from "lit";
 import { describe, expect, it } from "vitest";
 import type { SkillStatusEntry } from "../../api/types.ts";
+import { installBrowserHistoryIsolation } from "../../test-helpers/browser-history.ts";
 import { renderAgentSkills, renderAgentTools } from "./panels-tools-skills.ts";
+
+installBrowserHistoryIsolation();
 
 function createBaseParams(overrides: Partial<Parameters<typeof renderAgentTools>[0]> = {}) {
   return {
     agentId: "main",
     configForm: {
       agents: {
-        list: [{ id: "main", tools: { profile: "full" } }],
+        entries: { main: { default: true, tools: { profile: "full" } } },
       },
     } as Record<string, unknown>,
     configLoading: false,
@@ -417,15 +420,21 @@ describe("agents tools panel (browser)", () => {
     expect(group.open).toBe(false);
     expect(tool.open).toBe(false);
 
-    chip.click();
-    await new Promise((resolve) => {
-      requestAnimationFrame(resolve);
-    });
+    const previousUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    try {
+      chip.click();
+      await new Promise((resolve) => {
+        requestAnimationFrame(resolve);
+      });
 
-    expect(group.open).toBe(true);
-    expect(tool.open).toBe(true);
-
-    container.remove();
+      expect(group.open).toBe(true);
+      expect(tool.open).toBe(true);
+    } finally {
+      // Hash links mutate shared jsdom history; restore the actual prior URL
+      // so a later Settings route never inherits this tool-card deep link.
+      window.history.replaceState({}, "", previousUrl);
+      container.remove();
+    }
   });
 });
 
@@ -474,7 +483,7 @@ describe("agents skills panel (browser)", () => {
         loading: false,
         error: null,
         activeAgentId: "main",
-        configForm: { agents: { list: [{ id: "main" }] } },
+        configForm: { agents: { entries: { main: { default: true } } } },
         configLoading: false,
         configSaving: false,
         configDirty: false,

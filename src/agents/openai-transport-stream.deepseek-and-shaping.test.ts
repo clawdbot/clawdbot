@@ -101,7 +101,6 @@ describe("openai transport stream", () => {
         id: "call_native_1",
         name: "read",
         arguments: { path: "/tmp/native.md" },
-        partialArgs: '{"path":"/tmp/native.md"}',
       },
     ]);
     expect(JSON.stringify(events)).not.toContain("DSML");
@@ -144,7 +143,6 @@ describe("openai transport stream", () => {
         id: "call_native_1",
         name: "read",
         arguments: { path: "/tmp/native.md" },
-        partialArgs: '{"path":"/tmp/native.md"}',
       },
     ]);
   });
@@ -184,7 +182,6 @@ describe("openai transport stream", () => {
         id: "call_native_1",
         name: "read",
         arguments: { path: "/tmp/native.md" },
-        partialArgs: '{"path":"/tmp/native.md"}',
       },
       {
         type: "text",
@@ -236,7 +233,6 @@ describe("openai transport stream", () => {
         id: "call_native_1",
         name: "read",
         arguments: { path: "/tmp/native.md" },
-        partialArgs: '{"path":"/tmp/native.md"}',
       },
       {
         type: "text",
@@ -274,7 +270,6 @@ describe("openai transport stream", () => {
         id: expect.stringMatching(/^call_[0-9a-f]{24}$/),
         name: "session_status",
         arguments: { sessionKey: "current" },
-        partialArgs: '{"sessionKey":"current"}',
       },
     ]);
     expect(JSON.stringify(events)).not.toContain("DSML");
@@ -436,7 +431,6 @@ describe("openai transport stream", () => {
           id: expect.stringMatching(/^call_[0-9a-f]{24}$/),
           name: "session_status",
           arguments: { sessionKey: "current" },
-          partialArgs: '{"sessionKey":"current"}',
         },
       ]);
     }
@@ -465,7 +459,6 @@ describe("openai transport stream", () => {
         id: expect.stringMatching(/^call_[0-9a-f]{24}$/),
         name: "read",
         arguments: { path: "/tmp/native.md" },
-        partialArgs: '{"path":"/tmp/native.md"}',
       },
     ]);
   });

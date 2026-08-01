@@ -4,13 +4,10 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { expect, vi } from "vitest";
 import type { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
-import {
-  resetSubagentRegistryForTests,
-  testing as subagentRegistryTesting,
-} from "../../agents/subagent-registry.test-helpers.js";
+import { setSubagentRegistryDepsForTest } from "../../agents/subagent-registry-deps.js";
+import { resetSubagentRegistryForTests } from "../../agents/subagent-registry.test-helpers.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { SessionTranscriptStats } from "../../config/sessions/session-accessor.js";
-import { parseSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import { resetDiagnosticEventsForTest } from "../../infra/diagnostic-events.js";
 import {
   resetDetachedTaskLifecycleRuntimeForTests,
@@ -18,6 +15,7 @@ import {
 } from "../../tasks/task-runtime.test-helpers.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { createChatRunState } from "../server-chat-state.js";
+import { agentIdentityHandlers } from "./agent-identity.js";
 import { agentHandlers } from "./agent.js";
 import { suspendHandlers } from "./suspend.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -322,7 +320,7 @@ export type AgentParams = AgentHandlerArgs["params"];
 
 export type AgentCommandCall = Record<string, unknown>;
 
-type AgentIdentityGetHandler = NonNullable<(typeof agentHandlers)["agent.identity.get"]>;
+type AgentIdentityGetHandler = NonNullable<(typeof agentIdentityHandlers)["agent.identity.get"]>;
 
 type AgentIdentityGetHandlerArgs = Parameters<AgentIdentityGetHandler>[0];
 
@@ -393,10 +391,7 @@ export function expectStringFieldContains(
 }
 
 export function expectSqliteSessionFileMarkerForEntry(entry: Record<string, unknown> | undefined) {
-  const sessionFile = entry?.sessionFile;
-  expect(sessionFile).toBeTypeOf("string");
-  const marker = parseSqliteSessionFileMarker(sessionFile as string);
-  expect(marker?.sessionId).toBe(entry?.sessionId);
+  expect(entry).not.toHaveProperty("sessionFile");
 }
 
 export function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0) {
@@ -894,8 +889,8 @@ export async function invokeAgentIdentityGet(
 ) {
   const respond = options?.respond ?? vi.fn();
   await expectDefined(
-    agentHandlers["agent.identity.get"],
-    'agentHandlers["agent.identity.get"] test invariant',
+    agentIdentityHandlers["agent.identity.get"],
+    'agentIdentityHandlers["agent.identity.get"] test invariant',
   )({
     params,
     respond: respond as never,
@@ -936,9 +931,9 @@ function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
  * between install and finalize, so the finalize spy is never called.
  */
 export function applyGatewaySubagentRegistryTestDeps(
-  overrides?: Parameters<typeof subagentRegistryTesting.setDepsForTest>[0],
+  overrides?: Parameters<typeof setSubagentRegistryDepsForTest>[0],
 ) {
-  subagentRegistryTesting.setDepsForTest({
+  setSubagentRegistryDepsForTest({
     ensureRuntimePluginsLoaded: () => {},
     ...overrides,
   });

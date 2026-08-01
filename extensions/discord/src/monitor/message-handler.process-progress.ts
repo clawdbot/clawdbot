@@ -76,7 +76,9 @@ export function createDiscordMessageProgressRuntime(params: {
   })();
   const reasoningDurableEnabled = reasoningLevel === "on";
   const reasoningWindowEnabled = reasoningLevel === "stream";
-  let shouldYieldDraftProgress: () => boolean = () => false;
+  // The durable verbose lane mirrors commentary, not tool lifecycle rows.
+  // Yield only the draft content that has a durable counterpart.
+  let shouldYieldDraftCommentary: () => boolean = () => false;
   let progressTurnStartedAt = Date.now();
   let progressReasoningSteps = 0;
   let progressToolCalls = 0;
@@ -169,11 +171,11 @@ export function createDiscordMessageProgressRuntime(params: {
       : undefined,
     reasoningPayloadsEnabled: reasoningDurableEnabled,
     onVerboseProgressVisibility: (isActive) => {
-      shouldYieldDraftProgress = isActive;
+      shouldYieldDraftCommentary = isActive;
     },
     onNarrationUpdate: draftPreview.narrationProgressEnabled
       ? async (payload) => {
-          if (isProcessAborted(abortSignal) || shouldYieldDraftProgress()) {
+          if (isProcessAborted(abortSignal) || shouldYieldDraftCommentary()) {
             return;
           }
           await draftPreview.pushNarrationProgress(payload.text);
@@ -208,9 +210,6 @@ export function createDiscordMessageProgressRuntime(params: {
       if (payload.phase === "start") {
         closePendingWindowThought();
       }
-      if (shouldYieldDraftProgress()) {
-        return;
-      }
       // Match the compositor: message/react/typing are not work-tool lines.
       if (payload.phase === "start" && isChannelProgressDraftWorkToolName(payload.name)) {
         progressToolCalls += 1;
@@ -236,13 +235,10 @@ export function createDiscordMessageProgressRuntime(params: {
         return false;
       }
       if (payload.kind === "preamble") {
-        if (shouldYieldDraftProgress()) {
+        if (shouldYieldDraftCommentary()) {
           return undefined;
         }
         return await draftPreview.pushPreambleItemEvent(payload, noteWindowCommentary);
-      }
-      if (shouldYieldDraftProgress()) {
-        return undefined;
       }
       await draftPreview.pushToolProgress(
         buildChannelProgressDraftLineForEntry(discordConfig, {
@@ -285,7 +281,7 @@ export function createDiscordMessageProgressRuntime(params: {
       if (isFailedProgress(payload)) {
         return false;
       }
-      if (payload.phase !== "end" || shouldYieldDraftProgress()) {
+      if (payload.phase !== "end") {
         return undefined;
       }
       await draftPreview.pushToolProgress(
@@ -303,7 +299,7 @@ export function createDiscordMessageProgressRuntime(params: {
       return undefined;
     },
     onPatchSummary: async (payload) => {
-      if (payload.phase !== "end" || shouldYieldDraftProgress()) {
+      if (payload.phase !== "end") {
         return;
       }
       await draftPreview.pushToolProgress(

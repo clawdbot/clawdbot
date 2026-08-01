@@ -5,6 +5,7 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { loadLocalUserIdentity, loadSettings, patchSettings } from "../../app/settings.ts";
 import { resolveSafeExternalUrl } from "../../lib/open-external-url.ts";
 import { canonicalUiSessionKeyForPersistence } from "../../lib/sessions/session-key.ts";
+import { resolveAgentIdForSession } from "./chat-avatar.ts";
 import { removeQueuedMessage } from "./chat-queue.ts";
 import { attachChatRealtimeActions, createInitialChatRealtimeState } from "./chat-realtime.ts";
 import {
@@ -64,9 +65,18 @@ async function loadPageAssistantIdentity(
   const client = state.client;
   const sessionKey = opts?.sessionKey?.trim() || state.sessionKey.trim();
   const expectedSessionKey = opts?.expectedSessionKey?.trim() || sessionKey;
+  const agentId = resolveAgentIdForSession({
+    sessionKey,
+    assistantAgentId: state.assistantAgentId,
+    agentsList: state.agentsList,
+    hello: state.hello,
+  });
+  if (!agentId) {
+    return;
+  }
   const requestVersion = ++state.assistantIdentityRequestVersion;
   try {
-    const identity = await fetchAssistantIdentity(client, sessionKey);
+    const identity = await fetchAssistantIdentity(client, agentId);
     if (
       state.client !== client ||
       !state.connected ||

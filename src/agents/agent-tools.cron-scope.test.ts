@@ -28,7 +28,7 @@ vi.mock("./openclaw-tools.js", async (importOriginal) => {
   return {
     createOpenClawTools: (options: unknown) => {
       mocks.createOpenClawToolsOptions(options);
-      return [mocks.stubTool("cron")];
+      return [mocks.stubTool(AUTOMATIONS_TOOL_NAME)];
     },
     filterToolsByClientCaps: actual.filterToolsByClientCaps,
   };
@@ -37,6 +37,7 @@ vi.mock("./openclaw-tools.js", async (importOriginal) => {
 import "./test-helpers/fast-bash-tools.js";
 import "./test-helpers/fast-coding-tools.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
+import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 
 function firstOpenClawToolsOptions(): { cronSelfRemoveOnlyJobId?: string } | undefined {
   return mocks.createOpenClawToolsOptions.mock.calls[0]?.[0] as
@@ -55,7 +56,7 @@ describe("createOpenClawCodingTools cron scope", () => {
       jobId: "job-current",
     });
 
-    expect(tools.map((tool) => tool.name)).toContain("cron");
+    expect(tools.map((tool) => tool.name)).toContain(AUTOMATIONS_TOOL_NAME);
     expect(firstOpenClawToolsOptions()?.cronSelfRemoveOnlyJobId).toBe("job-current");
   });
 

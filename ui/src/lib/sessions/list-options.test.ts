@@ -90,6 +90,47 @@ describe("session list replacement options", () => {
     sessions.dispose();
   });
 
+  it("restores derived titles after a foreground refresh omits them", async () => {
+    const key = "agent:main:untitled";
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "sessions.list") {
+        const includeDerivedTitles =
+          typeof params === "object" &&
+          params !== null &&
+          "includeDerivedTitles" in params &&
+          params.includeDerivedTitles === true;
+        return sessionsResult(
+          [
+            {
+              key,
+              kind: "direct",
+              updatedAt: 1,
+              label: key,
+              ...(includeDerivedTitles ? { derivedTitle: "Readable planning title" } : {}),
+            },
+          ],
+          1,
+        );
+      }
+      if (method === "sessions.patch") {
+        return { ok: true };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const sessions = createSessions({ request } as unknown as GatewayBrowserClient, key);
+
+    await sessions.refresh({ agentId: "main", includeDerivedTitles: true, force: true });
+    await sessions.refresh({ agentId: "main", force: true });
+    await sessions.patch(key, { pinned: true }, { agentId: "main" });
+
+    const listCalls = request.mock.calls.filter(([method]) => method === "sessions.list");
+    expect(listCalls).toHaveLength(3);
+    expect(listCalls[1]?.[1]).not.toHaveProperty("includeDerivedTitles");
+    expect(listCalls[2]?.[1]).toMatchObject({ agentId: "main", includeDerivedTitles: true });
+    expect(sessions.state.result?.sessions[0]?.derivedTitle).toBe("Readable planning title");
+    sessions.dispose();
+  });
+
   it("keeps foreground list options across background hydration and mutation refreshes", async () => {
     const key = "agent:main:filtered";
     const request = vi.fn(async (method: string, _params?: unknown) => {

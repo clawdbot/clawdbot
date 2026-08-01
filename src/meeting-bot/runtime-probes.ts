@@ -1,26 +1,21 @@
 import { sleep } from "../utils/sleep.js";
-import type { MeetingBrowserHealth } from "./session-types.js";
+import type { MeetingPluginJoinRequest, MeetingPluginProbeHealth } from "./session-types.js";
 
-type MeetingProbeHealth = MeetingBrowserHealth & {
-  audioOutputActive?: boolean;
-  captioning?: boolean;
-  captionsEnabledAttempted?: boolean;
-  lastCaptionAt?: string;
-  lastCaptionSpeaker?: string;
-  lastCaptionText?: string;
-  lastOutputBytes?: number;
-  lastOutputLoopbackAt?: string;
-  lastOutputLoopbackCorrelation?: number;
-  lastOutputLoopbackPeak?: number;
-  lastOutputLoopbackRms?: number;
-  outputGeneration?: number;
-  outputLoopbackSignalBytes?: number;
-  recentTranscript?: Array<{ at?: string; speaker?: string; text: string }>;
-  transcriptLines?: number;
-  verifiedOutputGeneration?: number;
-};
+export function resolveMeetingProbeTimeoutMs(
+  input: number | undefined,
+  fallback: number,
+  invalidRequest: (message: string) => Error = (message) => new Error(message),
+): number {
+  if (input === undefined) {
+    return Math.min(Math.max(fallback, 1), 120_000);
+  }
+  if (!Number.isFinite(input) || input <= 0) {
+    throw invalidRequest("timeoutMs must be a positive number");
+  }
+  return Math.min(Math.trunc(input), 120_000);
+}
 
-type MeetingProbeSession<Health extends MeetingProbeHealth> = {
+type MeetingProbeSession<Health extends MeetingPluginProbeHealth> = {
   id: string;
   chrome?: {
     launched: boolean;
@@ -29,14 +24,7 @@ type MeetingProbeSession<Health extends MeetingProbeHealth> = {
   };
 };
 
-type MeetingProbeRequest<Transport extends string> = {
-  agentId?: string;
-  message?: string;
-  mode?: string;
-  timeoutMs?: number;
-  transport?: Transport;
-  url: string;
-};
+type MeetingProbeRequest<Transport extends string> = MeetingPluginJoinRequest<Transport, string>;
 
 type MeetingProbeConfig<Mode extends string> = {
   defaultMode: Mode;
@@ -44,11 +32,11 @@ type MeetingProbeConfig<Mode extends string> = {
   chromeNode: { node?: string };
 };
 
-type MeetingProbeContext<
+export type MeetingProbeContext<
   Config extends MeetingProbeConfig<Mode>,
   Mode extends string,
   Transport extends string,
-  Health extends MeetingProbeHealth,
+  Health extends MeetingPluginProbeHealth,
   Session extends MeetingProbeSession<Health>,
   Request extends MeetingProbeRequest<Transport>,
 > = {
@@ -67,7 +55,7 @@ type MeetingProbeContext<
 
 type MeetingRuntimeProbeOptions<
   Mode extends string,
-  Health extends MeetingProbeHealth,
+  Health extends MeetingPluginProbeHealth,
   Session extends MeetingProbeSession<Health>,
 > = {
   defaultSpeechMessage: string;
@@ -81,7 +69,7 @@ export function createMeetingRuntimeProbes<
   Config extends MeetingProbeConfig<Mode>,
   Mode extends string,
   Transport extends string,
-  Health extends MeetingProbeHealth,
+  Health extends MeetingPluginProbeHealth,
   Session extends MeetingProbeSession<Health>,
   Request extends MeetingProbeRequest<Transport>,
 >(
@@ -145,7 +133,7 @@ export function createMeetingRuntimeProbes<
       health?.verifiedOutputGeneration === health?.outputGeneration;
     const shouldWait =
       result.spoken === true &&
-      health?.manualActionRequired !== true &&
+      health?.manualAction === undefined &&
       context.hasHealthHandle(result.session.id);
     if (shouldWait && !verified()) {
       const deadline =
@@ -162,9 +150,7 @@ export function createMeetingRuntimeProbes<
     return {
       createdSession: !before.has(result.session.id),
       inCall: health?.inCall,
-      manualActionRequired: health?.manualActionRequired,
-      manualActionReason: health?.manualActionReason,
-      manualActionMessage: health?.manualActionMessage,
+      manualAction: health?.manualAction,
       spoken: result.spoken ?? false,
       speechOutputVerified,
       speechOutputTimedOut: shouldWait && !speechOutputVerified,
@@ -218,7 +204,7 @@ export function createMeetingRuntimeProbes<
       Boolean(health?.lastCaptionAt && health.lastCaptionAt !== start.at) ||
       Boolean(health?.lastCaptionText && health.lastCaptionText !== start.text);
     const shouldWait =
-      health?.manualActionRequired !== true && options.shouldWaitForListening(result.session);
+      health?.manualAction === undefined && options.shouldWaitForListening(result.session);
     let listenVerified = advanced();
     if (shouldWait && !listenVerified) {
       const deadline =
@@ -254,7 +240,7 @@ export function createMeetingRuntimeProbes<
         if (advanced()) {
           listenVerified = true;
         }
-        if (listenVerified || health?.manualActionRequired) {
+        if (listenVerified || health?.manualAction) {
           break;
         }
         const retryDelayMs = deadline - Date.now();
@@ -267,11 +253,9 @@ export function createMeetingRuntimeProbes<
     return {
       createdSession: !before.has(result.session.id),
       inCall: health?.inCall,
-      manualActionRequired: health?.manualActionRequired,
-      manualActionReason: health?.manualActionReason,
-      manualActionMessage: health?.manualActionMessage,
+      manualAction: health?.manualAction,
       listenVerified,
-      listenTimedOut: shouldWait && !listenVerified && health?.manualActionRequired !== true,
+      listenTimedOut: shouldWait && !listenVerified && health?.manualAction === undefined,
       captioning: health?.captioning,
       captionsEnabledAttempted: health?.captionsEnabledAttempted,
       transcriptLines: health?.transcriptLines,
