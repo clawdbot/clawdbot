@@ -179,9 +179,21 @@ function processCleanupDepsWithLiveLeases(leaseStore: ReturnType<typeof makeLeas
           .map((lease) => ({
             pid: Number(lease.rootPid),
             ppid: 0,
-            command: `${CODEX_ACP_WRAPPER_COMMAND} ${OPENCLAW_ACPX_LEASE_ID_ARG} ${lease.leaseId} ${OPENCLAW_GATEWAY_INSTANCE_ID_ARG} ${lease.gatewayInstanceId}`,
+            command: `${CODEX_ACP_WRAPPER_COMMAND} ${OPENCLAW_ACPX_LEASE_ID_ARG} ${String(lease.leaseId)} ${OPENCLAW_GATEWAY_INSTANCE_ID_ARG} ${String(lease.gatewayInstanceId)}`,
           })),
       ),
+      killProcess: vi.fn(() => {}),
+      sleep: vi.fn(async () => {}),
+    },
+  };
+}
+
+function processCleanupDepsWithListingError() {
+  return {
+    openclawProcessCleanup: {
+      listProcesses: vi.fn(async () => {
+        throw new Error("process listing unavailable");
+      }),
       killProcess: vi.fn(() => {}),
       sleep: vi.fn(async () => {}),
     },
@@ -1954,7 +1966,9 @@ describe("AcpxRuntime fresh reset wrapper", () => {
         openclawGatewayInstanceId: "gateway-test",
         openclawProcessLeaseStore: makeLeaseStore().store,
       },
-      processCleanupDepsWithTable([]),
+      processCleanupDepsWithTable([
+        { pid: deadPid - 1, ppid: 1, command: "node /usr/bin/scheduler.js" },
+      ]),
     );
 
     const loaded = await wrappedStore.load("agent:codex:acp:test");
@@ -2083,7 +2097,9 @@ describe("AcpxRuntime fresh reset wrapper", () => {
         openclawGatewayInstanceId: "gateway-test",
         openclawProcessLeaseStore: leaseStore.store,
       },
-      processCleanupDepsWithTable([]),
+      processCleanupDepsWithTable([
+        { pid: deadPid - 1, ppid: 1, command: "node /usr/bin/scheduler.js" },
+      ]),
     );
 
     const loaded = await wrappedStore.load("agent:codex:acp:test");
@@ -2212,6 +2228,113 @@ describe("AcpxRuntime fresh reset wrapper", () => {
         acpxRecordId: "agent:codex:acp:test",
         agentCommand: CODEX_ACP_COMMAND,
         openclawLeaseId: "lease-live",
+        openclawGatewayInstanceId: "gateway-test",
+      }),
+    );
+  });
+
+  it("preserves a stored session when process listing is unavailable on an empty table (#109285)", async () => {
+    const unavailablePid = 999_991;
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        acpxRecordId: "agent:codex:acp:test",
+        agentCommand: CODEX_ACP_COMMAND,
+        pid: unavailablePid,
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const { wrappedStore } = makeRuntime(
+      baseStore,
+      {
+        openclawGatewayInstanceId: "gateway-test",
+        openclawProcessLeaseStore: makeLeaseStore().store,
+        openclawWrapperRoot: "/tmp/openclaw/acpx",
+      },
+      processCleanupDepsWithTable([]),
+    );
+
+    const loaded = (await wrappedStore.load("agent:codex:acp:test")) as Record<string, unknown>;
+
+    expect(loaded).toEqual(
+      expect.objectContaining({
+        acpxRecordId: "agent:codex:acp:test",
+        agentCommand: CODEX_ACP_COMMAND,
+        pid: unavailablePid,
+      }),
+    );
+  });
+
+  it("preserves a stored session when process listing fails (#109285)", async () => {
+    const unavailablePid = 999_990;
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        acpxRecordId: "agent:codex:acp:test",
+        agentCommand: CODEX_ACP_COMMAND,
+        pid: unavailablePid,
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const { wrappedStore } = makeRuntime(
+      baseStore,
+      {
+        openclawGatewayInstanceId: "gateway-test",
+        openclawProcessLeaseStore: makeLeaseStore().store,
+        openclawWrapperRoot: "/tmp/openclaw/acpx",
+      },
+      processCleanupDepsWithListingError(),
+    );
+
+    const loaded = (await wrappedStore.load("agent:codex:acp:test")) as Record<string, unknown>;
+
+    expect(loaded).toEqual(
+      expect.objectContaining({
+        acpxRecordId: "agent:codex:acp:test",
+        agentCommand: CODEX_ACP_COMMAND,
+        pid: unavailablePid,
+      }),
+    );
+  });
+
+  it("preserves a stored session and its open lease when process listing is unavailable (#109285)", async () => {
+    const unavailablePid = 999_989;
+    const leaseStore = makeLeaseStore();
+    await leaseStore.store.save({
+      leaseId: "lease-unavailable",
+      gatewayInstanceId: "gateway-test",
+      sessionKey: "agent:codex:acp:test",
+      wrapperRoot: "/tmp/openclaw/acpx",
+      wrapperPath: "codex-acp-wrapper.mjs",
+      rootPid: unavailablePid,
+      commandHash: "hash",
+      startedAt: Date.now(),
+      state: "open",
+    });
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        acpxRecordId: "agent:codex:acp:test",
+        agentCommand: CODEX_ACP_COMMAND,
+        pid: unavailablePid,
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const { wrappedStore } = makeRuntime(
+      baseStore,
+      {
+        openclawGatewayInstanceId: "gateway-test",
+        openclawProcessLeaseStore: leaseStore.store,
+        openclawWrapperRoot: "/tmp/openclaw/acpx",
+      },
+      processCleanupDepsWithListingError(),
+    );
+
+    const loaded = (await wrappedStore.load("agent:codex:acp:test")) as Record<string, unknown>;
+
+    expect(loaded).toEqual(
+      expect.objectContaining({
+        acpxRecordId: "agent:codex:acp:test",
+        agentCommand: CODEX_ACP_COMMAND,
+        pid: unavailablePid,
+        openclawLeaseId: "lease-unavailable",
         openclawGatewayInstanceId: "gateway-test",
       }),
     );
