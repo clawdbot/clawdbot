@@ -57,6 +57,7 @@ import {
 } from "../../sessions/user-turn-transcript.js";
 import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
+import { resolveConfiguredAcpSubagentTargetIds } from "../acp-spawn-target.js";
 import { listAgentIds, resolveSessionAgentId } from "../agent-scope.js";
 import { resolveActiveEmbeddedRunSessionId } from "../embedded-agent-runner/active-run-projections.js";
 import {
@@ -931,6 +932,33 @@ export function createSessionsSendTool(opts?: {
         ...(opts?.signal ? { signal: opts.signal } : {}),
         targetSessionKey: resolvedKey,
         run: async () => {
+          const targetSessionEntry = loadSessionEntryByKey(resolvedKey, targetAgentId);
+          const targetAcpMeta = readAcpSessionMeta({
+            sessionKey: resolvedKey,
+            agentId: targetAgentId,
+            cfg,
+          });
+          const acpRoute = resolveAcpSessionsSendRoute({
+            entry: targetSessionEntry,
+            acpMeta: targetAcpMeta,
+            requesterSessionKey: effectiveRequesterKey,
+            targetSessionKey: resolvedKey,
+            configuredAcpAgentIds: resolveConfiguredAcpSubagentTargetIds(cfg),
+            allowAnyAcpAgent: (cfg.acp?.allowedAgents ?? []).some(
+              (agentId) => agentId.trim() === "*",
+            ),
+            activeAcpTurn: isAcpTurnActive(resolvedKey),
+          });
+          if (acpRoute.rejection) {
+            return jsonResult({
+              runId: crypto.randomUUID(),
+              status: "error",
+              error: acpRoute.rejection,
+              sessionKey: displayKey,
+            });
+          }
+          const deferToAcpTaskCompletion = acpRoute.deferToTaskCompletion;
+
           if (visibleSession.missing) {
             const createdSession = await createConfiguredAgentMainSession({
               cfg,
@@ -976,27 +1004,6 @@ export function createSessionsSendTool(opts?: {
             timeoutSeconds === 0 && isIsolatedCronRequester
               ? resolveCronRunScopedFallbackSessionKey(displayKey)
               : undefined;
-          const targetSessionEntry = loadSessionEntryByKey(resolvedKey, targetAgentId);
-          const targetAcpMeta = readAcpSessionMeta({
-            sessionKey: resolvedKey,
-            agentId: targetAgentId,
-            cfg,
-          });
-          const acpRoute = resolveAcpSessionsSendRoute({
-            entry: targetSessionEntry,
-            acpMeta: targetAcpMeta,
-            requesterSessionKey: effectiveRequesterKey,
-            activeAcpTurn: isAcpTurnActive(resolvedKey),
-          });
-          if (acpRoute.rejection) {
-            return jsonResult({
-              runId: crypto.randomUUID(),
-              status: "error",
-              error: acpRoute.rejection,
-              sessionKey: displayKey,
-            });
-          }
-          const deferToAcpTaskCompletion = acpRoute.deferToTaskCompletion;
 
           // Capture the pre-run assistant snapshot before starting the nested run.
           // Fast in-process test doubles and short-circuit agent paths can finish

@@ -2504,6 +2504,133 @@ describe("sessions tools", () => {
     ).toBe(false);
   });
 
+  it("sessions_send explains legacy terminal ACP one-shots without resume metadata", async () => {
+    const requesterKey = "agent:main:cron:job-legacy-oneshot";
+    const targetKey = "agent:claude:acp:legacy-child";
+    loadSessionEntryByKeyMock.mockReturnValue({
+      sessionId: "legacy-acp-child-session",
+      updatedAt: 1,
+      spawnedBy: requesterKey,
+      parentSessionKey: requesterKey,
+      status: "done",
+      endedAt: 2,
+    });
+    callGatewayMock.mockImplementation(async (call: GatewayCall) => {
+      if (call.method === "agent") {
+        throw new Error('Agent "claude" no longer exists in configuration');
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: requesterKey,
+      agentChannel: "discord",
+      config: {
+        ...TEST_CONFIG,
+        acp: { enabled: true, allowedAgents: ["claude"] },
+      },
+    }).find((candidate) => candidate.name === "sessions_send");
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const result = await tool.execute("resume-legacy-acp-oneshot", {
+      sessionKey: targetKey,
+      message: "continue",
+      timeoutSeconds: 0,
+    });
+
+    const details = sessionsSendDetails(result.details);
+    expect(details.status).toBe("error");
+    expect(details.error).toContain("resume metadata is no longer available");
+    expect(details.error).toContain('mode="session"');
+    expect(
+      callGatewayMock.mock.calls.some((call) => (call[0] as GatewayCall).method === "agent"),
+    ).toBe(false);
+  });
+
+  it("sessions_send preserves deleted-agent errors for unconfigured ACP-shaped sessions", async () => {
+    const requesterKey = "agent:main:cron:job-deleted-agent";
+    const targetKey = "agent:deleted-agent:acp:legacy-child";
+    loadSessionEntryByKeyMock.mockReturnValue({
+      sessionId: "deleted-agent-session",
+      updatedAt: 1,
+      spawnedBy: requesterKey,
+      parentSessionKey: requesterKey,
+      status: "done",
+      endedAt: 2,
+    });
+    callGatewayMock.mockImplementation(async (call: GatewayCall) => {
+      if (call.method === "agent") {
+        throw new Error('Agent "deleted-agent" no longer exists in configuration');
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: requesterKey,
+      agentChannel: "discord",
+      config: {
+        ...TEST_CONFIG,
+        acp: { enabled: true, allowedAgents: ["claude"] },
+      },
+    }).find((candidate) => candidate.name === "sessions_send");
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const result = await tool.execute("send-to-deleted-agent", {
+      sessionKey: targetKey,
+      message: "continue",
+      timeoutSeconds: 0,
+    });
+
+    const details = sessionsSendDetails(result.details);
+    expect(details.status).toBe("error");
+    expect(details.error).toContain('Agent "deleted-agent" no longer exists');
+    expect(
+      callGatewayMock.mock.calls.some((call) => (call[0] as GatewayCall).method === "agent"),
+    ).toBe(true);
+  });
+
+  it("sessions_send recognizes legacy terminal ACP one-shots allowed by wildcard", async () => {
+    const requesterKey = "agent:main:cron:job-wildcard-oneshot";
+    const targetKey = "agent:custom-harness:acp:legacy-child";
+    loadSessionEntryByKeyMock.mockReturnValue({
+      sessionId: "wildcard-acp-child-session",
+      updatedAt: 1,
+      spawnedBy: requesterKey,
+      parentSessionKey: requesterKey,
+      status: "done",
+      endedAt: 2,
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: requesterKey,
+      agentChannel: "discord",
+      config: {
+        ...TEST_CONFIG,
+        acp: { enabled: true, allowedAgents: ["*"] },
+      },
+    }).find((candidate) => candidate.name === "sessions_send");
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const result = await tool.execute("resume-wildcard-acp-oneshot", {
+      sessionKey: targetKey,
+      message: "continue",
+      timeoutSeconds: 0,
+    });
+
+    const details = sessionsSendDetails(result.details);
+    expect(details.status).toBe("error");
+    expect(details.error).toContain("resume metadata is no longer available");
+    expect(
+      callGatewayMock.mock.calls.some((call) => (call[0] as GatewayCall).method === "agent"),
+    ).toBe(false);
+  });
+
   it("sessions_send rejects one-shots before resume is confirmed ready", async () => {
     const requesterKey = "agent:main:cron:job-1";
     const targetKey = "agent:codex:acp:child-unmaterialized";
