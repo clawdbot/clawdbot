@@ -266,9 +266,20 @@ function createGatewayContext(
 
 describe("ClickClack gateway thread reply resolution", () => {
   let testServer: ClickClackTestServer;
+  let abort: AbortController | undefined;
+  let run: Promise<void> | undefined;
+
+  function startGateway(): ChannelGatewayContext<ResolvedClickClackAccount> {
+    abort = new AbortController();
+    const ctx = createGatewayContext(testServer.apiBaseUrl, abort.signal);
+    run = startClickClackGatewayAccount(ctx);
+    return ctx;
+  }
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    abort = undefined;
+    run = undefined;
     mocks.resolveClickClackInboundAccess.mockResolvedValue({
       shouldDispatch: true,
       commandAuthorized: true,
@@ -277,13 +288,18 @@ describe("ClickClack gateway thread reply resolution", () => {
   });
 
   afterEach(async () => {
-    await testServer.close();
+    try {
+      abort?.abort();
+      if (run) {
+        await run;
+      }
+    } finally {
+      await testServer.close();
+    }
   });
 
   it("dispatches a thread reply past the server thread-reply window", async () => {
-    const abort = new AbortController();
-    const ctx = createGatewayContext(testServer.apiBaseUrl, abort.signal);
-    const run = startClickClackGatewayAccount(ctx);
+    const ctx = startGateway();
 
     await testServer.emitThreadReplyEvent("msg-101");
     await vi.waitFor(() => expect(mocks.handleClickClackInbound).toHaveBeenCalledTimes(1));
@@ -295,15 +311,10 @@ describe("ClickClack gateway thread reply resolution", () => {
     );
     expect(testServer.requestPaths).toContain("GET /api/messages/msg-101");
     expect(ctx.log?.warn).not.toHaveBeenCalled();
-
-    abort.abort();
-    await run;
   });
 
   it("dispatches a DM thread reply that never enters the root DM timeline", async () => {
-    const abort = new AbortController();
-    const ctx = createGatewayContext(testServer.apiBaseUrl, abort.signal);
-    const run = startClickClackGatewayAccount(ctx);
+    startGateway();
 
     await testServer.emitThreadReplyEvent("msg_dm_reply", {
       direct_conversation_id: "dmc_1",
@@ -317,16 +328,11 @@ describe("ClickClack gateway thread reply resolution", () => {
       }),
     );
     expect(testServer.requestPaths).toContain("GET /api/messages/msg_dm_reply");
-
-    abort.abort();
-    await run;
   });
 
   it("records a warning instead of silently handling an unreadable event message", async () => {
     testServer.missingMessageIds.add("msg-101");
-    const abort = new AbortController();
-    const ctx = createGatewayContext(testServer.apiBaseUrl, abort.signal);
-    const run = startClickClackGatewayAccount(ctx);
+    const ctx = startGateway();
 
     await testServer.emitThreadReplyEvent("msg-101");
     await vi.waitFor(() =>
@@ -336,8 +342,5 @@ describe("ClickClack gateway thread reply resolution", () => {
     );
 
     expect(mocks.handleClickClackInbound).not.toHaveBeenCalled();
-
-    abort.abort();
-    await run;
   });
 });
