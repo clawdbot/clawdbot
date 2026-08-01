@@ -159,13 +159,13 @@ describe("projectSafeChannelAccountSnapshotFields", () => {
     expect(withoutFlag).not.toHaveProperty("terminalDisconnect");
   });
 
-  it("projects recorded lifecycle without forwarding channel-authored healthState", () => {
+  it("projects recorded lifecycle alongside channel-authored healthState", () => {
     expect(
       projectSafeChannelAccountSnapshotFields({
         lifecycle: "blocked",
         healthState: "degraded",
       }),
-    ).toEqual({ lifecycle: "blocked" });
+    ).toEqual({ healthState: "degraded", lifecycle: "blocked" });
     expect(projectSafeChannelAccountSnapshotFields({ lifecycle: "unknown" })).toEqual({});
   });
 

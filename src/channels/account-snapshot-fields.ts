@@ -250,7 +250,9 @@ export function projectSafeChannelAccountSnapshotFields(
     "lastTransportActivityAt",
     asFiniteNumber(record.lastTransportActivityAt),
   );
-  setSnapshotField(snapshot, "statusState", normalizeOptionalString(record.statusState));
+  for (const key of ["statusState", "healthState"] as const) {
+    setSnapshotField(snapshot, key, normalizeOptionalString(record[key]));
+  }
   const lifecycle = record.lifecycle;
   if (
     lifecycle === "starting" ||

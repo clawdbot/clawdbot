@@ -336,7 +336,9 @@ export async function collectGatewayHealthSnapshot(params: {
         staleEventThresholdMs: DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
         channelConnectGraceMs: DEFAULT_CHANNEL_CONNECT_GRACE_MS,
       });
-      snapshot.healthState = health.healthy ? undefined : health.reason;
+      if (!health.healthy) {
+        snapshot.healthState = health.reason;
+      }
 
       const summary = plugin.status?.buildChannelSummary
         ? await plugin.status.buildChannelSummary({
@@ -352,7 +354,6 @@ export async function collectGatewayHealthSnapshot(params: {
           ? ({ ...snapshot, ...summary } as ChannelAccountHealthSummary)
           : ({ ...snapshot, accountId, configured } satisfies ChannelAccountHealthSummary),
       );
-      record.healthState = health.healthy ? undefined : health.reason;
       if (record.configured === undefined) {
         record.configured = configured;
       }
