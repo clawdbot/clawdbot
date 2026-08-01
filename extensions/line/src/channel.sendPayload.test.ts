@@ -417,7 +417,7 @@ describe("line outbound sendPayload", () => {
     });
   });
 
-  it("attaches quick replies when no text chunks are present", async () => {
+  it("attaches quick replies while preserving the provider's full Flex alternative-text limit", async () => {
     const { runtime, mocks } = createRuntime();
     setLineRuntime(runtime);
     const cfg = { channels: { line: {} } } as OpenClawConfig;
