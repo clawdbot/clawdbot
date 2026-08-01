@@ -4321,6 +4321,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Provider credentials
   - H3: Logging and diagnostics
   - H3: Feature and runtime toggles
+  - H2: ClawHub install telemetry
   - H2: Provider credentials and workspace .env
   - H2: Config env block
   - H2: Shell env import
