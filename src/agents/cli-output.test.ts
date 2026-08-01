@@ -2104,6 +2104,33 @@ describe("createCliJsonlStreamingParser", () => {
     expect(parser.getOutput()?.text).toBe("Visible answer.");
   });
 
+  it("streams rejected angle prefixes while valid split reasoning stays buffered", () => {
+    const visible = createClaudeTaggedReasoningHarness();
+    const tagged = createClaudeTaggedReasoningHarness();
+    const pushText = (parser: ReturnType<typeof createCliJsonlStreamingParser>, text: string) =>
+      parser.push(
+        `${JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: { type: "text_delta", text },
+          },
+        })}\n`,
+      );
+
+    pushText(visible.parser, "<div>Visible answer.</div>");
+    expect(visible.assistant.at(-1)?.text).toBe("<div>Visible answer.</div>");
+    expect(visible.parser.getOutput()?.text).toBe("<div>Visible answer.</div>");
+
+    pushText(tagged.parser, "<thi");
+    pushText(tagged.parser, "nking>Private analysis.");
+    expect(tagged.assistant).toEqual([]);
+    expect(tagged.thinking).toEqual([]);
+    pushText(tagged.parser, "</thinking>Visible answer.");
+    expect(tagged.thinking.at(-1)?.text).toBe("Private analysis.");
+    expect(tagged.assistant.at(-1)?.text).toBe("Visible answer.");
+  });
+
   it("promotes consecutive leading blocks but preserves later literal tags", () => {
     const { assistant, parser, thinking } = createClaudeTaggedReasoningHarness();
 
