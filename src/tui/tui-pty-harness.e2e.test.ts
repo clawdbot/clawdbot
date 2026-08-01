@@ -560,6 +560,21 @@ describe.sequential("TUI PTY harness", () => {
   );
 
   it(
+    "renders an attachment-only assistant reply without exposing its source",
+    async () => {
+      await fixture.run.write("attachment-only assistant proof\r");
+      await fixture.waitForLogEntry((entry) => entry.method === "attachmentOnlyComplete");
+      await fixture.run.waitForOutput("Attached image");
+
+      const rendered = fixture.run.visibleOutput();
+      expect(rendered).not.toContain("SECRET_PTY_IMAGE_BYTES");
+      expect(rendered).not.toContain("SECRET_PTY_ARTIFACT");
+      expect(rendered).not.toContain("/Users/operator/private");
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
     "preserves xAI account limit errors in terminal output",
     async () => {
       await fixture.run.write("xai limit proof\r");
