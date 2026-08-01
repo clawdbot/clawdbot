@@ -18987,7 +18987,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 86,
+      "line": 90,
       "path": "apps/ios/Sources/Design/AgentProTab+Usage.swift",
       "source": "%@ tokens",
       "surface": "apple",
