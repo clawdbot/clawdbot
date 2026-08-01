@@ -147,7 +147,9 @@ describe("classifySubagentRunLiveness orphan-reap confidence gate", () => {
   });
 
   it("treats a fresh unended run as alive", () => {
-    expect(classifySubagentRunLiveness({ createdAt: now - 60_000, execution: {} }, { now })).toBe("alive");
+    expect(classifySubagentRunLiveness({ createdAt: now - 60_000, execution: {} }, { now })).toBe(
+      "alive",
+    );
   });
 
   it("treats an unended run inside the stale window as alive (racy → quiesce)", () => {
@@ -179,7 +181,11 @@ describe("classifySubagentRunLiveness orphan-reap confidence gate", () => {
   });
 
   it("never reaps before a run's explicit timeout even with a small staleCutoffMs", () => {
-    const entry = { createdAt: now - 31 * 60 * 1_000, runTimeoutSeconds: 6 * 60 * 60, execution: {} };
+    const entry = {
+      createdAt: now - 31 * 60 * 1_000,
+      runTimeoutSeconds: 6 * 60 * 60,
+      execution: {},
+    };
     // A 6h run timeout dominates a 30m operator floor: per-run cutoff is respected.
     expect(classifySubagentRunLiveness(entry, { now, staleCutoffMs: 30 * 60 * 1_000 })).toBe(
       "alive",

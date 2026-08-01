@@ -1303,7 +1303,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     // A tool-validation error summary terminalizes the run as aborted even when the
     // provider reported no abort, so the sticky summary still reaches the transcript.
     const terminalMetadata = run.toolErrorSummary
-      ? { ...(evt.data ?? {}), aborted: true, toolErrorSummary: run.toolErrorSummary }
+      ? { ...evt.data, aborted: true, toolErrorSummary: run.toolErrorSummary }
       : evt.data;
     if (this.projectTerminalOutcome(evt.runId, run, terminalMetadata)) {
       return;
