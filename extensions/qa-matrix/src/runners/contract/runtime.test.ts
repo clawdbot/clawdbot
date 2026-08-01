@@ -4,11 +4,20 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { renderQaMarkdownReport } from "openclaw/plugin-sdk/qa-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+const { startMatrixQaFaultProxy } = vi.hoisted(() => ({
+  startMatrixQaFaultProxy: vi.fn(),
+}));
+
+vi.mock("../../substrate/fault-proxy.js", () => ({
+  startMatrixQaFaultProxy,
+}));
+
 import { testing as liveTesting } from "./runtime.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
   vi.useRealTimers();
+  startMatrixQaFaultProxy.mockReset();
 });
 
 type MatrixQaSummaryInput = Parameters<typeof liveTesting.buildMatrixQaSummary>[0];
@@ -78,6 +87,24 @@ function buildMatrixQaSummaryInput(
 }
 
 describe("matrix live qa runtime", () => {
+  it("stops the Matrix harness when fault proxy startup fails", async () => {
+    const proxyError = new Error("fault proxy bind failed");
+    const harnessStop = vi.fn().mockResolvedValue(undefined);
+    startMatrixQaFaultProxy.mockRejectedValue(proxyError);
+
+    await expect(
+      liveTesting.startMatrixQaFaultProxyForHarness({
+        harness: {
+          baseUrl: "http://127.0.0.1:28008/",
+          stop: harnessStop,
+          stopCommand: "docker compose down --volumes",
+        },
+      }),
+    ).rejects.toBe(proxyError);
+
+    expect(harnessStop).toHaveBeenCalledOnce();
+  });
+
   it("uses unique default artifact directories", () => {
     const repoRoot = "/repo";
     const firstOutputDir = liveTesting.resolveMatrixQaOutputDir({ repoRoot });
@@ -86,9 +113,9 @@ describe("matrix live qa runtime", () => {
     expect(path.dirname(firstOutputDir)).toBe(path.join(repoRoot, ".artifacts", "qa-e2e"));
     expect(path.basename(firstOutputDir)).toMatch(/^matrix-[a-z0-9]+-[a-f0-9]{8}$/u);
     expect(secondOutputDir).not.toBe(firstOutputDir);
-    expect(
-      liveTesting.resolveMatrixQaOutputDir({ outputDir: ".artifacts/custom", repoRoot }),
-    ).toBe(".artifacts/custom");
+    expect(liveTesting.resolveMatrixQaOutputDir({ outputDir: ".artifacts/custom", repoRoot })).toBe(
+      ".artifacts/custom",
+    );
   });
 
   it("prints Matrix QA progress by default for non-interactive runs", () => {
