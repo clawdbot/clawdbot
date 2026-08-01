@@ -686,8 +686,6 @@ export async function appendConfiguredRows(params: {
       }
       continue;
     }
-    // Registry and catalog sources already carry canonical ids. Provider
-    // runtime normalization is reserved for explicit models.providers rows.
     await appendVisibleRow({
       rows: params.rows,
       model: resolvedModel,
@@ -695,6 +693,7 @@ export async function appendConfiguredRows(params: {
       context: params.context,
       ...(routeIndex ? { routeIndex } : {}),
       configuredEntry: entry,
+      normalizeWithProviderPlugin: true,
       allowAuthAvailabilityOverride: !params.context.discoveredKeys.has(
         modelKey(resolvedModel.provider, resolvedModel.id),
       ),
