@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { canonicalizeBase64 } from "@openclaw/media-core/base64";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { formatErrorMessage } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
@@ -178,7 +179,13 @@ function decodeResourceHtml(content: Record<string, unknown>): string {
   if (content.blob.length > maxEncodedBytes) {
     throw new Error(`MCP App resource exceeds ${MCP_APP_RESOURCE_MAX_BYTES} bytes`);
   }
-  const decoded = Buffer.from(content.blob, "base64");
+  // Buffer.from silently drops out-of-alphabet characters, which would render
+  // corrupted HTML without any error. Canonicalize first and reject outright.
+  const canonicalBlob = canonicalizeBase64(content.blob);
+  if (!canonicalBlob) {
+    throw new Error("MCP App resource returned malformed base64 blob content");
+  }
+  const decoded = Buffer.from(canonicalBlob, "base64");
   if (decoded.byteLength > MCP_APP_RESOURCE_MAX_BYTES) {
     throw new Error(`MCP App resource exceeds ${MCP_APP_RESOURCE_MAX_BYTES} bytes`);
   }

@@ -147,6 +147,30 @@ describe("MCP App UI resources", () => {
     }
   });
 
+  it("rejects malformed base64 blob content instead of rendering corrupted HTML", async () => {
+    const valid = Buffer.from("<html>demo</html>", "utf8").toString("base64");
+    // One out-of-alphabet character mid-stream: Node would silently drop it and
+    // decode the remaining bytes into corrupted HTML.
+    const malformed = `${valid.slice(0, 4)}!${valid.slice(5)}`;
+    const result = await fetchMcpAppView({
+      runtime: runtime(async () => ({
+        contents: [
+          {
+            uri: "ui://demo/app",
+            mimeType: MCP_APP_RESOURCE_MIME_TYPE,
+            blob: malformed,
+          },
+        ],
+      })),
+      serverName: "demo",
+      toolName: "show",
+      uiResourceUri: "ui://demo/app",
+      toolInput: {},
+      toolResult: { content: [] },
+    });
+    expect(result).toBeUndefined();
+  });
+
   it("bounds concurrent app bridge requests", () => {
     const view = {
       requestWindowStartedAtMs: 0,
