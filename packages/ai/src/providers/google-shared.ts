@@ -462,7 +462,11 @@ export async function runGoogleGenerateContentLifecycle<T extends GoogleApiType>
     } else {
       output.errorMessage = formattedError;
     }
-    stream.push({ type: "error", reason: output.stopReason, error: output });
+    stream.push({
+      type: "error",
+      reason: output.stopReason === "aborted" ? "aborted" : "error",
+      error: output,
+    });
     stream.end();
   }
 }
@@ -827,12 +831,13 @@ export async function consumeGoogleGenerateContentStream<T extends GoogleApiType
     }
     if (candidate?.content?.parts) {
       for (const [partIndex, part] of candidate.content.parts.entries()) {
-        const hasText = typeof part.text === "string";
+        const text = part.text;
+        const hasText = typeof text === "string";
         const hasThoughtSignature =
           typeof part.thoughtSignature === "string" && part.thoughtSignature.length > 0;
         const signatureOnly =
           hasThoughtSignature &&
-          (!hasText || part.text.length === 0) &&
+          (!hasText || text.length === 0) &&
           Object.keys(part).every(
             (key) => key === "thought" || key === "thoughtSignature" || key === "text",
           );
@@ -896,7 +901,7 @@ export async function consumeGoogleGenerateContentStream<T extends GoogleApiType
               });
             }
           }
-          const delta = hasText ? part.text : "";
+          const delta = hasText ? text : "";
           if (currentBlock.type === "thinking") {
             currentBlock.thinking += delta;
             currentBlock.thinkingSignature = retainThoughtSignature(
