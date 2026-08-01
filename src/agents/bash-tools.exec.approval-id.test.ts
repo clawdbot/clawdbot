@@ -17,6 +17,7 @@ import { sendMessage } from "../infra/outbound/message.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { buildSystemRunPreparePayload } from "../test-utils/system-run-prepare-payload.js";
+import { EXEC_APPROVAL_FOLLOWUP_HANDOFF_MESSAGE } from "./bash-tools.exec-approval-output.js";
 import { createExecTool as createExecToolImpl } from "./bash-tools.exec-run.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
@@ -401,6 +402,20 @@ function expectRecordFields(
   }
 }
 
+function expectAuthenticatedExecFollowup(record: Record<string, unknown>, sessionKey: string) {
+  expectRecordFields(record, {
+    sessionKey,
+    message: EXEC_APPROVAL_FOLLOWUP_HANDOFF_MESSAGE,
+  });
+  expect(record.internalRuntimeHandoffId).toEqual(expect.any(String));
+  expect(String(record.idempotencyKey)).toMatch(/^exec-approval-followup:.+:nonce:/);
+  expect(record.inputProvenance).toEqual({
+    kind: "inter_session",
+    sourceSessionKey: sessionKey,
+    sourceTool: "exec_approval_followup",
+  });
+}
+
 describe("exec approvals", () => {
   let envSnapshot: ReturnType<typeof captureEnv> | undefined;
   let tempRoot = "";
@@ -495,8 +510,8 @@ describe("exec approvals", () => {
     expect(nodeInvokeParams.suppressNotifyOnExit).toBe(true);
     await expect.poll(() => agentParams !== undefined, { timeout: 2000, interval: 1 }).toBe(true);
     const agent = requireRecord(agentParams, "agent followup params");
-    expect(String(agent.message)).toContain(`id=${approvalId}`);
-    expect(agent.sessionKey).toBe("agent:main:main");
+    expectAuthenticatedExecFollowup(agent, "agent:main:main");
+    expect(String(agent.idempotencyKey)).toContain(approvalId);
   });
 
   it("skips approval when node allowlist is satisfied", async () => {
@@ -1063,15 +1078,9 @@ describe("exec approvals", () => {
 
     expect(result.details.status).toBe("approval-pending");
     await expect.poll(() => agentCalls.length, { timeout: 3000, interval: 1 }).toBe(1);
-    expectRecordFields(agentCalls[0], {
-      sessionKey: "agent:main:main",
-      deliver: false,
-    });
-    expect(String(agentCalls[0]?.idempotencyKey)).toContain("exec-approval-followup:");
-    expect(typeof agentCalls[0]?.message).toBe("string");
-    expect(agentCalls[0]?.message).toContain(
-      "An async command the user already approved has completed.",
-    );
+    const agentCall = requireRecord(agentCalls[0], "agent followup call");
+    expectAuthenticatedExecFollowup(agentCall, "agent:main:main");
+    expect(agentCall.deliver).toBe(false);
   });
 
   it("continues the original agent session after approved gateway exec completes with a non-native external route", async () => {
@@ -1102,8 +1111,9 @@ describe("exec approvals", () => {
 
     expect(result.details.status).toBe("approval-pending");
     await expect.poll(() => agentCalls.length, { timeout: 3000, interval: 1 }).toBe(1);
-    expectRecordFields(agentCalls[0], {
-      sessionKey: "agent:main:feishu:channel:123",
+    const agentCall = requireRecord(agentCalls[0], "agent followup call");
+    expectAuthenticatedExecFollowup(agentCall, "agent:main:feishu:channel:123");
+    expectRecordFields(agentCall, {
       deliver: true,
       bestEffortDeliver: true,
       channel: "feishu",
@@ -1111,11 +1121,6 @@ describe("exec approvals", () => {
       accountId: "default",
       threadId: "456",
     });
-    expect(String(agentCalls[0]?.idempotencyKey)).toContain("exec-approval-followup:");
-    expect(typeof agentCalls[0]?.message).toBe("string");
-    expect(agentCalls[0]?.message).toContain(
-      "If the task requires more steps, continue from this result before replying to the user.",
-    );
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
@@ -1228,11 +1233,9 @@ describe("exec approvals", () => {
     expect(result.details.status).toBe("approval-pending");
 
     await expect.poll(() => agentCalls.length, { timeout: 3000, interval: 1 }).toBe(1);
-    expectRecordFields(agentCalls[0], {
-      sessionKey: "agent:main:main",
-      deliver: false,
-    });
-    expect(agentCalls[0]?.message).toContain("webchat-ok");
+    const agentCall = requireRecord(agentCalls[0], "agent followup call");
+    expectAuthenticatedExecFollowup(agentCall, "agent:main:main");
+    expect(agentCall.deliver).toBe(false);
   });
 
   it("routes denied approval status through the originating session", async () => {
