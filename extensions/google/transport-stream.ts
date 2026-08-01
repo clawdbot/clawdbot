@@ -999,9 +999,11 @@ function createChildSignal(parent: AbortSignal | undefined, timeoutMs: number) {
 function iteratorToAsyncGenerator<T>(
   iterator: AsyncIterator<T>,
   cleanup?: () => void,
+  prefetched: readonly T[] = [],
 ): AsyncGenerator<T> {
   return (async function* () {
     try {
+      yield* prefetched;
       for (;;) {
         const next = await iterator.next();
         if (next.done) {
@@ -1019,10 +1021,19 @@ function iteratorToAsyncGenerator<T>(
 type GoogleSseAttempt =
   | {
       type: "ready";
-      firstChunk?: GoogleSseChunk;
       chunks: AsyncGenerator<GoogleSseChunk>;
     }
   | { type: "timeout" };
+
+function hasGoogleFirstResponseActivity(chunk: GoogleSseChunk): boolean {
+  return Boolean(
+    chunk.promptFeedback ||
+    chunk.candidates?.some(
+      (candidate) =>
+        typeof candidate.finishReason === "string" || (candidate.content?.parts?.length ?? 0) > 0,
+    ),
+  );
+}
 
 async function openGoogleSseAttempt(params: {
   guardedFetch: ReturnType<typeof buildGuardedModelFetch>;
@@ -1050,18 +1061,27 @@ async function openGoogleSseAttempt(params: {
     }
     const chunks = parseGoogleSseChunks(response, signal);
     const iterator = chunks[Symbol.asyncIterator]();
-    const first = await iterator.next();
-    attemptSignal?.clearDeadline();
-    if (first.done) {
-      return {
-        type: "ready",
-        chunks: iteratorToAsyncGenerator(iterator, attemptSignal?.cleanup),
-      };
+    const prefetched: GoogleSseChunk[] = [];
+    for (;;) {
+      const first = await iterator.next();
+      if (attemptSignal?.timedOut() && !params.parentSignal?.aborted) {
+        attemptSignal.cleanup();
+        await iterator.return?.(undefined);
+        return { type: "timeout" };
+      }
+      if (first.done) {
+        break;
+      }
+      prefetched.push(first.value);
+      // Usage and response IDs do not prove that Gemini has begun generating.
+      if (!attemptSignal || hasGoogleFirstResponseActivity(first.value)) {
+        break;
+      }
     }
+    attemptSignal?.clearDeadline();
     return {
       type: "ready",
-      firstChunk: first.value,
-      chunks: iteratorToAsyncGenerator(iterator, attemptSignal?.cleanup),
+      chunks: iteratorToAsyncGenerator(iterator, attemptSignal?.cleanup, prefetched),
     };
   } catch (error) {
     attemptSignal?.cleanup();
@@ -1085,23 +1105,9 @@ async function openGoogleSseChunks(params: {
     params.kind === "google-vertex"
       ? "Google Vertex AI API error"
       : "Google Generative AI API error";
-  if (!shouldRetryGoogleGemini3FirstResponse({ kind: params.kind, model: params.model })) {
-    const response = await params.guardedFetch(params.url, {
-      method: "POST",
-      headers: params.headers,
-      body: JSON.stringify(params.request),
-      signal: params.options?.signal,
-    });
-    if (!response.ok) {
-      throw await createProviderHttpError(response, errorPrefix);
-    }
-    return {
-      type: "ready",
-      chunks: parseGoogleSseChunks(response, params.options?.signal),
-    };
-  }
-
-  const retryMs = resolveGoogleGemini3FirstResponseRetryMs();
+  const retryMs = shouldRetryGoogleGemini3FirstResponse({ kind: params.kind, model: params.model })
+    ? resolveGoogleGemini3FirstResponseRetryMs()
+    : 0;
   const retryRequest =
     retryMs > 0
       ? buildGoogleGemini3FirstResponseRetryParams({
@@ -1109,33 +1115,21 @@ async function openGoogleSseChunks(params: {
           request: params.request,
         })
       : undefined;
-  if (!retryRequest) {
-    const response = await params.guardedFetch(params.url, {
-      method: "POST",
-      headers: params.headers,
-      body: JSON.stringify(params.request),
-      signal: params.options?.signal,
-    });
-    if (!response.ok) {
-      throw await createProviderHttpError(response, errorPrefix);
-    }
-    return {
-      type: "ready",
-      chunks: parseGoogleSseChunks(response, params.options?.signal),
-    };
-  }
-
+  // Keep the first provider frame inside API-key rotation and first-response retry ownership.
   const firstAttempt = await openGoogleSseAttempt({
     guardedFetch: params.guardedFetch,
     url: params.url,
     headers: params.headers,
     request: params.request,
     parentSignal: params.options?.signal,
-    firstResponseTimeoutMs: retryMs,
+    firstResponseTimeoutMs: retryRequest ? retryMs : 0,
     errorPrefix,
   });
   if (firstAttempt.type === "ready") {
     return firstAttempt;
+  }
+  if (!retryRequest) {
+    throw new Error("Google Gemini first response timed out without a retry request");
   }
 
   const retryAttempt = await openGoogleSseAttempt({
@@ -1170,6 +1164,63 @@ async function buildGoogleTransportHeaders(params: {
     : buildGoogleHeaders(params.model, params.apiKey, params.optionHeaders);
 }
 
+function throwGoogleProviderStreamError(chunk: unknown): void {
+  if (!isRecord(chunk) || !isRecord(chunk.error)) {
+    return;
+  }
+  const providerError = chunk.error;
+  const code = normalizeOptionalString(providerError.status) ?? "GOOGLE_STREAM_ERROR";
+  const status = typeof providerError.code === "number" ? providerError.code : undefined;
+  // Preserve the user-facing provider message while exposing authoritative retry facts.
+  const cause = { ...(status === undefined ? {} : { status }), code };
+  throw Object.assign(
+    new Error(normalizeOptionalString(providerError.message) ?? "Google stream failed", { cause }),
+    {
+      code,
+      status,
+      type: "google_stream_failed",
+    },
+  );
+}
+
+function throwUnframedGoogleProviderStreamError(buffer: string): void {
+  const candidate = buffer.trim();
+  if (!candidate.startsWith("{") || !candidate.endsWith("}")) {
+    return;
+  }
+  let chunk: unknown;
+  try {
+    chunk = JSON.parse(candidate);
+  } catch {
+    // Naked provider errors can span arbitrary HTTP body chunks.
+    return;
+  }
+  throwGoogleProviderStreamError(chunk);
+}
+
+function readGoogleSseEvent(rawEvent: string): GoogleSseChunk | "[DONE]" | undefined {
+  const data = rawEvent
+    .split(/\r\n|\n|\r/u)
+    .filter((line) => line.startsWith("data:"))
+    .map((line) => line.slice(5).trim())
+    .join("\n");
+  if (!data) {
+    throwUnframedGoogleProviderStreamError(rawEvent);
+    return undefined;
+  }
+  if (data === "[DONE]") {
+    return data;
+  }
+  let chunk: unknown;
+  try {
+    chunk = JSON.parse(data);
+  } catch {
+    throw new Error("Google SSE stream returned malformed JSON");
+  }
+  throwGoogleProviderStreamError(chunk);
+  return chunk as GoogleSseChunk;
+}
+
 async function* parseGoogleSseChunks(
   response: Response,
   signal?: AbortSignal,
@@ -1193,6 +1244,7 @@ async function* parseGoogleSseChunks(
       const { done, value } = await reader.read();
       if (done) {
         buffer += decoder.decode();
+        throwUnframedGoogleProviderStreamError(buffer);
         if (
           buffer
             .split(/\r\n|\n|\r/u)
@@ -1209,33 +1261,17 @@ async function* parseGoogleSseChunks(
         const rawEvent = buffer.slice(0, boundary.index);
         buffer = buffer.slice(boundary.index + boundary[0].length);
         boundary = GOOGLE_SSE_EVENT_BOUNDARY_RE.exec(buffer);
-        const data = rawEvent
-          .split(/\r\n|\n|\r/u)
-          .filter((line) => line.startsWith("data:"))
-          .map((line) => line.slice(5).trim())
-          .join("\n");
-        if (!data || data === "[DONE]") {
+        const chunk = readGoogleSseEvent(rawEvent);
+        if (!chunk) {
           continue;
         }
-        let chunk: unknown;
-        try {
-          chunk = JSON.parse(data);
-        } catch {
-          throw new Error("Google SSE stream returned malformed JSON");
+        if (chunk === "[DONE]") {
+          // The definitive marker ends the stream without waiting on an open provider body.
+          return;
         }
-        if (isRecord(chunk) && isRecord(chunk.error)) {
-          const providerError = chunk.error;
-          throw Object.assign(
-            new Error(normalizeOptionalString(providerError.message) ?? "Google stream failed"),
-            {
-              code: normalizeOptionalString(providerError.status) ?? "GOOGLE_STREAM_ERROR",
-              status: typeof providerError.code === "number" ? providerError.code : undefined,
-              type: "google_stream_failed",
-            },
-          );
-        }
-        yield chunk as GoogleSseChunk;
+        yield chunk;
       }
+      throwUnframedGoogleProviderStreamError(buffer);
     }
   } finally {
     signal?.removeEventListener("abort", abortHandler);
@@ -1380,14 +1416,7 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
           string,
           Extract<GoogleTransportContentBlock, { type: "toolCall" }>
         >();
-        const chunks =
-          sse.firstChunk === undefined
-            ? sse.chunks
-            : (async function* (firstChunk: GoogleSseChunk) {
-                yield firstChunk;
-                yield* sse.chunks;
-              })(sse.firstChunk);
-        for await (const chunk of chunks) {
+        for await (const chunk of sse.chunks) {
           output.responseId ||= chunk.responseId;
           updateUsage(output, model, chunk, knownUsage);
           const candidate = chunk.candidates?.[0];

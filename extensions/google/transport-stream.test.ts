@@ -666,6 +666,33 @@ describe("google transport stream", () => {
     },
   );
 
+  it("cancels an open Google response when its prefetched first event blocks the prompt", async () => {
+    let cancelCalled = false;
+    guardedFetchMock.mockResolvedValueOnce(
+      buildOpenRawSseResponse({
+        sse: 'data: {"promptFeedback":{"blockReason":"SAFETY"}}\n\n',
+        onCancel: () => {
+          cancelCalled = true;
+        },
+      }),
+    );
+    const controller = new AbortController();
+    const removeAbortListener = vi.spyOn(controller.signal, "removeEventListener");
+
+    const result = await runGeminiStreamResult({
+      model: buildGeminiModel({ id: "gemini-3.1-pro-preview", name: "Gemini 3.1 Pro Preview" }),
+      options: { apiKey: "gemini-api-key", signal: controller.signal },
+    });
+
+    expect(result).toMatchObject({
+      stopReason: "error",
+      errorCode: "SAFETY",
+      errorType: "google_prompt_blocked",
+    });
+    expect(cancelCalled).toBe(true);
+    expect(removeAbortListener).toHaveBeenCalledWith("abort", expect.any(Function));
+  });
+
   it.each(["google", "google-vertex"] as const)(
     "rejects an unfinished %s stream instead of silently completing partial output",
     async (provider) => {
@@ -785,6 +812,52 @@ describe("google transport stream", () => {
       { "x-goog-api-key": "gemini-key-2" },
     );
   });
+
+  it.each([
+    "quota exceeded",
+    "Your daily usage limit was reached",
+    "You exceeded your current quota, please check your plan and billing details.",
+    "Resource has been exhausted (e.g. check quota).",
+  ])(
+    "rotates Gemini LLM API keys when the first SSE event is rate limited: %s",
+    async (message) => {
+      vi.stubEnv("OPENCLAW_LIVE_GEMINI_KEY", "");
+      vi.stubEnv("GEMINI_API_KEYS", "gemini-key-2");
+      guardedFetchMock
+        .mockResolvedValueOnce(
+          buildSseResponse([
+            {
+              error: {
+                code: 429,
+                status: "RESOURCE_EXHAUSTED",
+                message,
+              },
+            },
+          ]),
+        )
+        .mockResolvedValueOnce(
+          buildSseResponse([
+            {
+              candidates: [{ content: { parts: [{ text: "recovered" }] }, finishReason: "STOP" }],
+            },
+          ]),
+        );
+
+      const result = await runGeminiStreamResult({ options: { apiKey: "gemini-key-1" } });
+
+      expect(result.stopReason).toBe("stop");
+      expect(result.content).toEqual([{ type: "text", text: "recovered" }]);
+      expect(guardedFetchMock).toHaveBeenCalledTimes(2);
+      expectHeaders(
+        requireRequestInit(requireMockCall(guardedFetchMock, 0, "guarded fetch"), "guarded fetch"),
+        { "x-goog-api-key": "gemini-key-1" },
+      );
+      expectHeaders(
+        requireRequestInit(requireMockCall(guardedFetchMock, 1, "guarded fetch"), "guarded fetch"),
+        { "x-goog-api-key": "gemini-key-2" },
+      );
+    },
+  );
 
   it.each([
     {
@@ -1084,6 +1157,112 @@ describe("google transport stream", () => {
     expect(result.errorMessage).toBe("Google SSE stream returned malformed JSON");
   });
 
+  it.each([
+    {
+      label: "JSON content type",
+      headers: { "content-type": "application/json" },
+      prefix: "",
+      fragmented: false,
+      terminated: false,
+    },
+    {
+      label: "delimiter-terminated JSON content type",
+      headers: { "content-type": "application/json" },
+      prefix: "",
+      fragmented: false,
+      terminated: true,
+    },
+    {
+      label: "fragmented body without content type",
+      headers: {},
+      prefix: "",
+      fragmented: true,
+      terminated: false,
+    },
+    {
+      label: "naked error after a completed SSE event",
+      headers: { "content-type": "text/event-stream" },
+      prefix: 'data: {"candidates":[{"finishReason":"STOP"}]}\n\n',
+      fragmented: false,
+      terminated: false,
+    },
+    {
+      label: "delimiter-terminated naked error after a completed SSE event",
+      headers: { "content-type": "text/event-stream" },
+      prefix: 'data: {"candidates":[{"finishReason":"STOP"}]}\n\n',
+      fragmented: false,
+      terminated: true,
+    },
+  ])(
+    "surfaces a naked Google provider error from $label",
+    async ({ headers, prefix, fragmented, terminated }) => {
+      const providerError = JSON.stringify({
+        error: { code: 429, status: "RESOURCE_EXHAUSTED", message: "quota exceeded" },
+      });
+      const segments = fragmented
+        ? [providerError.slice(0, 12), providerError.slice(12)]
+        : [`${providerError}${terminated ? "\n\n" : ""}`];
+      const encoder = new TextEncoder();
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          if (prefix) {
+            controller.enqueue(encoder.encode(prefix));
+          }
+          for (const segment of segments) {
+            controller.enqueue(encoder.encode(segment));
+          }
+          controller.close();
+        },
+      });
+      const contentType = headers["content-type"];
+      guardedFetchMock.mockResolvedValueOnce(
+        new Response(body, {
+          status: 200,
+          headers: contentType ? { "content-type": contentType } : undefined,
+        }),
+      );
+
+      const result = await runGeminiStreamResult({ options: { apiKey: "gemini-api-key" } });
+
+      expect(result).toMatchObject({
+        stopReason: "error",
+        errorCode: "RESOURCE_EXHAUSTED",
+        errorType: "google_stream_failed",
+        errorMessage: "quota exceeded",
+      });
+    },
+  );
+
+  it("parses a heavily fragmented naked Google provider error only after plausible closing braces", async () => {
+    const providerError = JSON.stringify({
+      error: { code: 429, status: "RESOURCE_EXHAUSTED", message: "quota exceeded" },
+    });
+    const encoder = new TextEncoder();
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const character of providerError) {
+          controller.enqueue(encoder.encode(character));
+        }
+        controller.close();
+      },
+    });
+    guardedFetchMock.mockResolvedValueOnce(new Response(body, { status: 200 }));
+    const parse = vi.spyOn(JSON, "parse");
+
+    const result = await runGeminiStreamResult({ options: { apiKey: "gemini-api-key" } });
+
+    expect(result).toMatchObject({
+      stopReason: "error",
+      errorCode: "RESOURCE_EXHAUSTED",
+      errorMessage: "quota exceeded",
+    });
+    expect(
+      parse.mock.calls.filter(
+        ([candidate]) => typeof candidate === "string" && candidate.startsWith('{"error":'),
+      ),
+    ).toHaveLength(2);
+  });
+
   it("rejects an incomplete SSE frame after an otherwise terminal Google response", async () => {
     guardedFetchMock.mockResolvedValueOnce(
       buildRawSseResponse(
@@ -1115,7 +1294,8 @@ describe("google transport stream", () => {
     guardedFetchMock.mockResolvedValueOnce(
       buildRawSseResponse(
         'data: {"candidates":[{"finishReason":"STOP"}]}\n\n' +
-          'data: {"error":{"code":429,"status":"RESOURCE_EXHAUSTED","message":"quota exceeded"}}\n\n',
+          'data: {"error":{"code":429,"status":"RESOURCE_EXHAUSTED","message":"quota exceeded"}}\n\n' +
+          "data: [DONE]\n\n",
       ),
     );
 
@@ -1195,6 +1375,64 @@ describe("google transport stream", () => {
     expect(result.stopReason).toBe("error");
     expect(result.errorMessage).toBe("Google SSE stream returned malformed JSON");
     expect(cancelCalled).toBe(true);
+  });
+
+  it("finishes and cancels an open Gemini response after its terminal SSE marker", async () => {
+    let cancelCalled = false;
+    guardedFetchMock.mockResolvedValueOnce(
+      buildOpenRawSseResponse({
+        sse:
+          'data: {"candidates":[{"content":{"parts":[{"text":"complete"}]},"finishReason":"STOP"}]}\n\n' +
+          "data: [DONE]\n\n",
+        onCancel: () => {
+          cancelCalled = true;
+        },
+      }),
+    );
+    const controller = new AbortController();
+    const streamFn = createGoogleGenerativeAiTransportStreamFn();
+    const stream = await Promise.resolve(
+      streamFn(
+        buildGeminiModel(),
+        { messages: [{ role: "user", content: "hello", timestamp: 0 }] } as never,
+        { apiKey: "gemini-api-key", signal: controller.signal } as never,
+      ),
+    );
+    const pendingResult = stream.result();
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const result = await Promise.race([
+      pendingResult,
+      new Promise<undefined>((resolve) => {
+        timeout = setTimeout(() => resolve(undefined), 50);
+      }),
+    ]);
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+    if (!result) {
+      controller.abort(new Error("terminal marker test cleanup"));
+      await pendingResult;
+    }
+
+    expect(result).toMatchObject({
+      stopReason: "stop",
+      content: [{ type: "text", text: "complete" }],
+    });
+    expect(cancelCalled).toBe(true);
+  });
+
+  it("treats the Google terminal SSE marker as definitive despite later provider data", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      buildRawSseResponse(
+        'data: {"candidates":[{"finishReason":"STOP"}]}\n\n' +
+          "data: [DONE]\n\n" +
+          'data: {"error":{"code":429,"status":"RESOURCE_EXHAUSTED","message":"late"}}\n\n',
+      ),
+    );
+
+    const result = await runGeminiStreamResult({ options: { apiKey: "gemini-api-key" } });
+
+    expect(result.stopReason).toBe("stop");
   });
 
   it("retries Gemini 3 requests with lean thinking when the first attempt has no first response", async () => {
@@ -1299,6 +1537,61 @@ describe("google transport stream", () => {
 
     expect(result.content).toEqual([{ type: "text", text: "first second" }]);
     expect(guardedFetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries Gemini 3 when a usage-only first SSE event never produces a response", async () => {
+    vi.stubEnv("OPENCLAW_GOOGLE_GEMINI_FIRST_RESPONSE_RETRY_MS", "10");
+    vi.useFakeTimers();
+    guardedFetchMock
+      .mockImplementationOnce((_url: string, init?: RequestInit) => {
+        const encoder = new TextEncoder();
+        const body = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(
+              encoder.encode('data: {"usageMetadata":{"promptTokenCount":100}}\n\n'),
+            );
+            init?.signal?.addEventListener(
+              "abort",
+              () => {
+                controller.error(init.signal?.reason ?? new Error("aborted"));
+              },
+              { once: true },
+            );
+          },
+        });
+        return Promise.resolve(
+          new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } }),
+        );
+      })
+      .mockResolvedValueOnce(
+        buildSseResponse([
+          {
+            candidates: [{ content: { parts: [{ text: "recovered" }] }, finishReason: "STOP" }],
+          },
+        ]),
+      );
+    const controller = new AbortController();
+    const streamFn = createGoogleGenerativeAiTransportStreamFn();
+    const stream = await Promise.resolve(
+      streamFn(
+        buildGeminiModel({ id: "gemini-3.1-pro-preview", name: "Gemini 3.1 Pro Preview" }),
+        { messages: [{ role: "user", content: "hello", timestamp: 0 }] } as never,
+        { apiKey: "gemini-api-key", reasoning: "high", signal: controller.signal } as never,
+      ),
+    );
+    const pendingResult = stream.result();
+    await vi.advanceTimersByTimeAsync(20);
+    const fetchCount = guardedFetchMock.mock.calls.length;
+    if (fetchCount !== 2) {
+      controller.abort(new Error("usage-only first response test cleanup"));
+      await pendingResult;
+    }
+
+    expect(fetchCount).toBe(2);
+    expect(await pendingResult).toMatchObject({
+      stopReason: "stop",
+      content: [{ type: "text", text: "recovered" }],
+    });
   });
 
   it("uses bearer auth when the Google api key is an OAuth JSON payload", async () => {
