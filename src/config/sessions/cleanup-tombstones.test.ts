@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import {
@@ -10,12 +10,29 @@ import {
 import { readSessionArchiveContentSync } from "./archive-compression.js";
 import { sweepTombstonedCronRunRemnants } from "./cleanup-tombstones.js";
 import { replaceSessionEntry } from "./session-accessor.js";
+import { materializeSqliteSessionStateDeletePlans } from "./session-accessor.sqlite-archive.js";
 import { deleteSqliteSessionEntryRows } from "./session-accessor.sqlite-entry-store.js";
+import { planSqliteSessionStateDeleteIfUnreferenced } from "./session-accessor.sqlite-lifecycle-state.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { replaceSqliteTranscriptEvents } from "./session-accessor.sqlite.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const materializedHook = vi.hoisted(() => ({ run: undefined as (() => void) | undefined }));
+
+vi.mock("./session-accessor.sqlite-archive.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./session-accessor.sqlite-archive.js")>();
+  return {
+    ...actual,
+    materializeSqliteSessionStateDeletePlans: (
+      plans: Parameters<typeof actual.materializeSqliteSessionStateDeletePlans>[0],
+    ) => {
+      const materialized = actual.materializeSqliteSessionStateDeletePlans(plans);
+      materializedHook.run?.();
+      return materialized;
+    },
+  };
+});
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const NOW_MS = Date.UTC(2026, 7, 1, 0, 0, 0);
@@ -33,6 +50,7 @@ describe("sweepTombstonedCronRunRemnants", () => {
   });
 
   afterEach(() => {
+    materializedHook.run = undefined;
     delete process.env.OPENCLAW_STATE_DIR;
     closeOpenClawAgentDatabasesForTest();
   });
@@ -199,6 +217,72 @@ describe("sweepTombstonedCronRunRemnants", () => {
     expect(countRows("session_windows", "session_key", CRON_RUN_KEY)).toBe(1);
     expect(countRows("transcript_events", "session_id", sessionId)).toBe(1);
     expect(archiveNames(sessionId)).toEqual([]);
+  });
+
+  it("removes a new archive when final revalidation finds a late live reference", async () => {
+    const sessionId = await seedCanonicalPlaceholder({});
+    materializedHook.run = () => {
+      const database = openDatabase();
+      const db = getSessionKysely(database.db);
+      executeSqliteQuerySync(
+        database.db,
+        db.insertInto("session_nodes").values({
+          session_key: "agent:main:direct:late-reference",
+          current_session_id: sessionId,
+          entry_json: "{}",
+          updated_at: NOW_MS,
+        }),
+      );
+    };
+
+    await expect(sweep({ dryRun: false })).resolves.toMatchObject({
+      candidates: 1,
+      removedNodes: 0,
+      sweptTranscriptStates: 0,
+    });
+    expect(countRows("session_nodes", "session_key", CRON_RUN_KEY)).toBe(1);
+    expect(countRows("session_windows", "session_key", CRON_RUN_KEY)).toBe(1);
+    expect(countRows("transcript_events", "session_id", sessionId)).toBe(1);
+    expect(archiveNames(sessionId)).toEqual([]);
+  });
+
+  it("keeps a reused archive when final revalidation finds a late live reference", async () => {
+    const sessionId = await seedCanonicalPlaceholder({});
+    const database = openDatabase();
+    const plan = planSqliteSessionStateDeleteIfUnreferenced({
+      archiveDirectory: path.dirname(storePath),
+      archiveTranscript: true,
+      database,
+      reason: "deleted",
+      referencedSessionIds: new Set(),
+      sessionId,
+    });
+    expect(plan).not.toBeNull();
+    materializeSqliteSessionStateDeletePlans(plan ? [plan] : []);
+    const existingArchives = archiveNames(sessionId);
+    expect(existingArchives).toHaveLength(1);
+    materializedHook.run = () => {
+      const currentDatabase = openDatabase();
+      const db = getSessionKysely(currentDatabase.db);
+      executeSqliteQuerySync(
+        currentDatabase.db,
+        db.insertInto("session_nodes").values({
+          session_key: "agent:main:direct:late-reference",
+          current_session_id: sessionId,
+          entry_json: "{}",
+          updated_at: NOW_MS,
+        }),
+      );
+    };
+
+    await expect(sweep({ dryRun: false })).resolves.toMatchObject({
+      candidates: 1,
+      removedNodes: 0,
+      sweptTranscriptStates: 0,
+    });
+    expect(countRows("session_nodes", "session_key", CRON_RUN_KEY)).toBe(1);
+    expect(countRows("transcript_events", "session_id", sessionId)).toBe(1);
+    expect(archiveNames(sessionId)).toEqual(existingArchives);
   });
 
   it("preserves malformed and non-cron rows instead of treating parser failure as debris", async () => {

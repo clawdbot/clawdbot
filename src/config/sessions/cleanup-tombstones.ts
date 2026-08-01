@@ -14,7 +14,10 @@ import {
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import { materializeSqliteSessionStateDeletePlans } from "./session-accessor.sqlite-archive.js";
+import {
+  discardCreatedSqliteSessionStateArchives,
+  materializeSqliteSessionStateDeletePlans,
+} from "./session-accessor.sqlite-archive.js";
 import { deleteSqliteSessionEntryRows } from "./session-accessor.sqlite-entry-store.js";
 import { emitArchivedSqliteTranscriptUpdates } from "./session-accessor.sqlite-events.js";
 import {
@@ -201,52 +204,58 @@ export async function sweepTombstonedCronRunRemnants(params: {
           let archivedTranscripts: ReturnType<typeof deleteMaterializedSqliteSessionStatePlans> =
             [];
           let removed = false;
-          runOpenClawAgentWriteTransaction(
-            (transactionDb) => {
-              const current = listCanonicalCronRunTombstones(transactionDb, cutoffMs).find(
-                (entry) => entry.sessionKey === candidate.sessionKey,
-              );
-              if (!sameCandidate(candidate, current)) {
-                return;
-              }
-              const protectedAtDelete = readProtectedSessionIds({
-                candidate,
-                database: transactionDb,
-                storePath: params.storePath,
-              });
-              if (candidate.generationIds.some((sessionId) => protectedAtDelete.has(sessionId))) {
-                return;
-              }
-              archivedTranscripts = deleteMaterializedSqliteSessionStatePlans(
-                transactionDb,
-                materialized,
-                protectedAtDelete,
-                new Set([candidate.sessionKey]),
-              );
-              const db = getSessionKysely(transactionDb.db);
-              const remainingGenerationIds = executeSqliteQuerySync(
-                transactionDb.db,
-                db
-                  .selectFrom("session_windows")
-                  .select("session_id")
-                  .where("session_key", "=", candidate.sessionKey),
-              ).rows;
-              if (remainingGenerationIds.length > 0) {
-                return;
-              }
-              deleteSqliteSessionEntryRows(transactionDb, candidate.sessionKey);
-              removed =
-                executeSqliteQuerySync(
+          try {
+            runOpenClawAgentWriteTransaction(
+              (transactionDb) => {
+                const current = listCanonicalCronRunTombstones(transactionDb, cutoffMs).find(
+                  (entry) => entry.sessionKey === candidate.sessionKey,
+                );
+                if (!sameCandidate(candidate, current)) {
+                  return;
+                }
+                const protectedAtDelete = readProtectedSessionIds({
+                  candidate,
+                  database: transactionDb,
+                  storePath: params.storePath,
+                });
+                if (candidate.generationIds.some((sessionId) => protectedAtDelete.has(sessionId))) {
+                  return;
+                }
+                archivedTranscripts = deleteMaterializedSqliteSessionStatePlans(
+                  transactionDb,
+                  materialized,
+                  protectedAtDelete,
+                  new Set([candidate.sessionKey]),
+                );
+                const db = getSessionKysely(transactionDb.db);
+                const remainingGenerationIds = executeSqliteQuerySync(
                   transactionDb.db,
                   db
-                    .selectFrom("session_nodes")
-                    .select("session_key")
+                    .selectFrom("session_windows")
+                    .select("session_id")
                     .where("session_key", "=", candidate.sessionKey),
-                ).rows.length === 0;
-            },
-            scope,
-            { operationLabel: "sessions.cleanup.tombstoned-cron-run-remnants" },
-          );
+                ).rows;
+                if (remainingGenerationIds.length > 0) {
+                  return;
+                }
+                deleteSqliteSessionEntryRows(transactionDb, candidate.sessionKey);
+                removed =
+                  executeSqliteQuerySync(
+                    transactionDb.db,
+                    db
+                      .selectFrom("session_nodes")
+                      .select("session_key")
+                      .where("session_key", "=", candidate.sessionKey),
+                  ).rows.length === 0;
+              },
+              scope,
+              { operationLabel: "sessions.cleanup.tombstoned-cron-run-remnants" },
+            );
+          } finally {
+            if (!removed) {
+              discardCreatedSqliteSessionStateArchives(materialized);
+            }
+          }
           if (!removed) {
             return null;
           }

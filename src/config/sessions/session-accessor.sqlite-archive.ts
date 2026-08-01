@@ -21,6 +21,12 @@ export type SqliteSessionStateDeletePlan = {
 
 export type MaterializedSqliteSessionStateDeletePlan = SqliteSessionStateDeletePlan & {
   archivedTranscript: SessionLifecycleArchivedTranscript | null;
+  createdArchivePath: string | null;
+};
+
+type SqliteTranscriptArchiveWrite = {
+  created: boolean;
+  path: string;
 };
 
 function resolveSqliteTranscriptArchivePath(params: {
@@ -77,17 +83,16 @@ function findMatchingSqliteTranscriptArchive(params: {
   return null;
 }
 
-/** Writes or reuses a transcript archive and returns its durable path. */
-export function writeSqliteTranscriptArchive(params: {
+function writeSqliteTranscriptArchiveWithStatus(params: {
   archiveDirectory: string;
   content: string;
   reason: SessionArchiveReason;
   sessionId: string;
-}): string {
+}): SqliteTranscriptArchiveWrite {
   fs.mkdirSync(params.archiveDirectory, { recursive: true });
   const existing = findMatchingSqliteTranscriptArchive(params);
   if (existing) {
-    return existing;
+    return { created: false, path: existing };
   }
   // Archives are the long-lived cold tier; compress when the runtime can so
   // keep-forever retention stays cheap. Plain JSONL is the Bun/older fallback.
@@ -114,7 +119,7 @@ export function writeSqliteTranscriptArchive(params: {
         fs.rmSync(archivePath, { force: true });
         throw new Error(`SQLite transcript archive verification failed for ${params.sessionId}`);
       }
-      return archivePath;
+      return { created: true, path: archivePath };
     } catch (error) {
       fs.rmSync(tempPath, { force: true });
       if ((error as { code?: unknown })?.code === "EEXIST") {
@@ -124,6 +129,16 @@ export function writeSqliteTranscriptArchive(params: {
     }
   }
   throw new Error(`Could not create SQLite transcript archive for ${params.sessionId}`);
+}
+
+/** Writes or reuses a transcript archive and returns its durable path. */
+export function writeSqliteTranscriptArchive(params: {
+  archiveDirectory: string;
+  content: string;
+  reason: SessionArchiveReason;
+  sessionId: string;
+}): string {
+  return writeSqliteTranscriptArchiveWithStatus(params).path;
 }
 
 // Windows rejects fsync on read-only handles, so keep the exclusive writable
@@ -148,20 +163,47 @@ export function materializeSqliteSessionStateDeletePlans(
     // sessions). Writing a verified-but-empty archive would fake extraction;
     // trajectory runtime events are diagnostic telemetry and are reclaimed
     // without an archive artifact.
-    const archivedTranscript =
+    const archive =
       plan.archiveTranscript && plan.content.length > 0
+        ? writeSqliteTranscriptArchiveWithStatus({
+            archiveDirectory: plan.archiveDirectory,
+            content: plan.content,
+            reason: plan.reason,
+            sessionId: plan.sessionId,
+          })
+        : null;
+    return Object.assign({}, plan, {
+      archivedTranscript: archive
         ? {
-            archivedPath: writeSqliteTranscriptArchive({
-              archiveDirectory: plan.archiveDirectory,
-              content: plan.content,
-              reason: plan.reason,
-              sessionId: plan.sessionId,
-            }),
+            archivedPath: archive.path,
             sourcePath: path.join(plan.archiveDirectory, `${plan.sessionId}.jsonl`),
           }
-        : null;
-    return Object.assign({}, plan, { archivedTranscript });
+        : null,
+      createdArchivePath: archive?.created ? archive.path : null,
+    });
   });
+}
+
+/**
+ * Removes only archives created by this materialization attempt.
+ *
+ * Callers use this when authoritative revalidation declines the matching
+ * deletion. Reused archives belong to earlier committed cleanup and stay put.
+ */
+export function discardCreatedSqliteSessionStateArchives(
+  plans: readonly MaterializedSqliteSessionStateDeletePlan[],
+): void {
+  const syncedDirectories = new Set<string>();
+  for (const plan of plans) {
+    if (!plan.createdArchivePath) {
+      continue;
+    }
+    fs.rmSync(plan.createdArchivePath, { force: true });
+    syncedDirectories.add(path.dirname(plan.createdArchivePath));
+  }
+  for (const directory of syncedDirectories) {
+    syncDirectoryBestEffortSync(directory);
+  }
 }
 
 // Multiple removed entries can point at one transcript session. If any owner
