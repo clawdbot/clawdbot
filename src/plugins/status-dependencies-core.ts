@@ -186,7 +186,7 @@ export function projectPluginDependencyHealth<T extends PluginDependencyHealthRe
       diagnostics.push({ level: "error", pluginId: plugin.id, source: plugin.source, message });
     } else {
       const existingDiagnostic = diagnostics[existingDiagnosticIndex];
-      if (!existingDiagnostic.message.includes(message)) {
+      if (existingDiagnostic && !existingDiagnostic.message.includes(message)) {
         diagnostics[existingDiagnosticIndex] = {
           ...existingDiagnostic,
           message: `${existingDiagnostic.message}\n${message}`,
