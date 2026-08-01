@@ -404,7 +404,28 @@ function requireRunParams(call: GatewayToolCall): Record<string, unknown> {
   if (!params) {
     throw new Error("expected system.run params");
   }
+
   return params;
+}
+
+function createNodeInvokeFailure(params: {
+  code: string;
+  nodeCommandDispatched?: boolean;
+  message?: string;
+}): Error {
+  return Object.assign(new Error(params.message ?? "node invoke failed"), {
+    name: "GatewayClientRequestError",
+    gatewayCode: "UNAVAILABLE",
+    details: {
+      nodeError: {
+        code: params.code,
+        message: params.message ?? "node invoke failed",
+      },
+      ...(params.nodeCommandDispatched !== undefined
+        ? { nodeCommandDispatched: params.nodeCommandDispatched }
+        : {}),
+    },
+  });
 }
 
 function requireRegisteredApprovalRequest(): Record<string, unknown> {
@@ -563,6 +584,7 @@ describe("executeNodeHostCommand", () => {
       plan: preparedPlan,
       execPolicy: { security: "full", ask: "off" },
     });
+
     commandRequiresSecurityAuditSuppressionApprovalMock.mockReset();
     commandRequiresSecurityAuditSuppressionApprovalMock.mockReturnValue(false);
     evaluateShellAllowlistMock.mockReset();
@@ -650,6 +672,111 @@ describe("executeNodeHostCommand", () => {
     detectInterpreterInlineEvalArgvMock.mockReset();
     detectInterpreterInlineEvalArgvMock.mockReturnValue(null);
     registerExecApprovalRequestForHostOrThrowMock.mockReset();
+  });
+
+  it("returns outcome-unknown for an ambiguous direct node timeout", async () => {
+    callGatewayToolMock.mockRejectedValueOnce(
+      createNodeInvokeFailure({
+        code: "TIMEOUT",
+        nodeCommandDispatched: true,
+        message: "node invoke timed out",
+      }),
+    );
+
+    const result = await executeNodeHostCommand(createNodeHostRequest());
+
+    expect(result.details).toMatchObject({
+      status: "failed",
+      failureKind: "outcome-unknown",
+      reason: "outcome-unknown",
+      nodeInvokeFailure: {
+        failureCode: "TIMEOUT",
+        message: "node invoke timed out",
+        nodeCommandDispatched: true,
+      },
+    });
+    expect(result.content).toEqual([
+      expect.objectContaining({
+        type: "text",
+        text: expect.stringContaining(
+          "The command may have executed. Do not rerun it automatically.",
+        ),
+      }),
+    ]);
+    expect(callGatewayToolMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns outcome-unknown for a malformed direct node response", async () => {
+    callGatewayToolMock.mockResolvedValueOnce({ payload: { stdout: "partial" } });
+
+    const result = await executeNodeHostCommand(createNodeHostRequest());
+
+    expect(result.details).toMatchObject({
+      status: "failed",
+      reason: "outcome-unknown",
+      nodeInvokeFailure: {
+        message: "malformed node invoke response",
+      },
+    });
+    expect(result.content).toEqual([
+      expect.objectContaining({
+        text: expect.stringContaining("The command may have executed."),
+      }),
+    ]);
+  });
+
+  it("returns outcome-unknown after an inline auto-approved node disconnect", async () => {
+    const defaultImplementation = callGatewayToolMock.getMockImplementation();
+    callGatewayToolMock.mockImplementation(
+      async (method: string, options: unknown, callParams: MockNodeInvokeParams | undefined) => {
+        if (method === "node.invoke" && callParams?.command === "system.run") {
+          throw createNodeInvokeFailure({
+            code: "DISCONNECTED",
+            nodeCommandDispatched: true,
+            message: "node disconnected",
+          });
+        }
+        if (!defaultImplementation) {
+          throw new Error("missing default gateway mock");
+        }
+        return await defaultImplementation(method, options, callParams);
+      },
+    );
+    const autoReviewer = vi.fn<ExecAutoReviewer>(async () => ({
+      decision: "allow-once",
+      risk: "low",
+      rationale: "safe read",
+    }));
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      hostSecurity: "allowlist",
+      hostAsk: "on-miss",
+      askFallback: "deny",
+    });
+    requiresExecApprovalMock.mockImplementation(
+      (value?: { allowlistSatisfied?: boolean; durableApprovalSatisfied?: boolean }) =>
+        value?.allowlistSatisfied !== true && value?.durableApprovalSatisfied !== true,
+    );
+
+    const result = await executeNodeHostCommand(
+      createNodeHostRequest({
+        security: "allowlist",
+        ask: "on-miss",
+        autoReview: true,
+        autoReviewer,
+      }),
+    );
+
+    expect(result.details).toMatchObject({
+      status: "failed",
+      reason: "outcome-unknown",
+      nodeInvokeFailure: {
+        failureCode: "DISCONNECTED",
+        nodeCommandDispatched: true,
+      },
+    });
+    expect(createAndRegisterDefaultExecApprovalRequestMock).not.toHaveBeenCalled();
+    expect(callGatewayToolMock).toHaveBeenCalledTimes(4);
   });
 
   it("denies non-interactive approval requests without creating operator events", async () => {
@@ -751,6 +878,97 @@ describe("executeNodeHostCommand", () => {
             (params as MockNodeInvokeParams | undefined)?.command === "system.run",
         ),
       ).toBe(false);
+    } finally {
+      unhandledRejections.restore();
+    }
+  });
+
+  it("reports outcome-unknown after an approved detached node timeout", async () => {
+    const defaultImplementation = callGatewayToolMock.getMockImplementation();
+    callGatewayToolMock.mockImplementation(
+      async (method: string, options: unknown, callParams: MockNodeInvokeParams | undefined) => {
+        if (method === "node.invoke" && callParams?.command === "system.run") {
+          throw createNodeInvokeFailure({
+            code: "TIMEOUT",
+            nodeCommandDispatched: true,
+            message: "node invoke timed out",
+          });
+        }
+        if (!defaultImplementation) {
+          throw new Error("missing default gateway mock");
+        }
+        return await defaultImplementation(method, options, callParams);
+      },
+    );
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      hostSecurity: "full",
+      hostAsk: "always",
+      askFallback: "deny",
+    });
+
+    const result = await executeNodeHostCommand(createNodeHostRequest({ ask: "always" }));
+
+    expect(result.details?.status).toBe("approval-pending");
+    await vi.waitFor(() => {
+      expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledWith(
+        expect.objectContaining({ approvalId: "approval-1" }),
+        expect.stringContaining(
+          "Exec outcome unknown (node=node-1 id=approval-1, outcome-unknown)",
+        ),
+      );
+    });
+    const followup = sendExecApprovalFollowupResultMock.mock.calls[0]?.[1];
+    expect(followup).toContain("The command may have executed. Do not rerun it automatically.");
+    expect(followup).not.toContain("Exec denied");
+  });
+
+  it("never replaces a detached outcome-unknown result with denial when delivery fails", async () => {
+    const unhandledRejections = captureProcessUnhandledRejections();
+    const defaultImplementation = callGatewayToolMock.getMockImplementation();
+
+    try {
+      callGatewayToolMock.mockImplementation(
+        async (method: string, options: unknown, callParams: MockNodeInvokeParams | undefined) => {
+          if (method === "node.invoke" && callParams?.command === "system.run") {
+            throw createNodeInvokeFailure({
+              code: "DISCONNECTED",
+              nodeCommandDispatched: true,
+              message: "node disconnected",
+            });
+          }
+          if (!defaultImplementation) {
+            throw new Error("missing default gateway mock");
+          }
+          return await defaultImplementation(method, options, callParams);
+        },
+      );
+      sendExecApprovalFollowupResultMock.mockRejectedValueOnce(
+        new Error("outcome-unknown follow-up unavailable"),
+      );
+      resolveExecHostApprovalContextMock.mockReturnValue({
+        approvals: { allowlist: [], file: { version: 1, agents: {} } },
+        hostSecurity: "full",
+        hostAsk: "always",
+        askFallback: "deny",
+      });
+
+      const result = await executeNodeHostCommand(createNodeHostRequest({ ask: "always" }));
+
+      expect(result.details?.status).toBe("approval-pending");
+      await vi.waitFor(() => {
+        expect(sendExecApprovalFollowupResultMock).toHaveBeenCalled();
+      });
+      await setImmediate();
+
+      expect(unhandledRejections.reasons).toEqual([]);
+      expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledOnce();
+      expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledWith(
+        expect.objectContaining({ approvalId: "approval-1" }),
+        expect.stringContaining(
+          "Exec outcome unknown (node=node-1 id=approval-1, outcome-unknown)",
+        ),
+      );
     } finally {
       unhandledRejections.restore();
     }
