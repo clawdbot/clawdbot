@@ -255,6 +255,8 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   protected headerRenameInitialValue = "";
   protected headerRenameSessionKey = "";
   protected headerCopiedTimer: number | null = null;
+  protected composerPrefillAttentionTimer: number | null = null;
+  protected composerPrefillAttentionTarget: HTMLElement | null = null;
 
   /** Checkout paths keyed by worktree id — stable for a worktree's lifetime,
    * so reused session keys can never inherit another checkout's path. */

@@ -30,6 +30,7 @@ import {
   resolveUiConfiguredMainKey,
   resolveUiGlobalAliasAgentId,
 } from "../../lib/sessions/session-key.ts";
+import { draftRouteDataFromLocation, draftSearchFromLocation } from "./route-draft.ts";
 import {
   findCachedShortSession,
   incompleteShortSessionResolution,
@@ -301,36 +302,6 @@ async function querySessionReferencePages(
     }
     offset = nextOffset;
   }
-}
-
-function draftFromLocation(location: RouteLocation): string | undefined {
-  return new URLSearchParams(location.search).get("draft") || undefined;
-}
-
-function focusComposerFromLocation(location: RouteLocation): boolean {
-  return new URLSearchParams(location.search).get(SESSION_COMPOSER_FOCUS_PARAM) === "1";
-}
-
-function draftRouteDataFromLocation(
-  location: RouteLocation,
-): Pick<Extract<ChatRouteData, { kind: "session" }>, "draft" | "focusComposer"> {
-  const draft = draftFromLocation(location);
-  return {
-    draft,
-    ...(draft && focusComposerFromLocation(location) ? { focusComposer: true } : {}),
-  };
-}
-
-function draftSearchFromLocation(location: RouteLocation): string {
-  const search = new URLSearchParams();
-  const draft = draftFromLocation(location);
-  if (draft) {
-    search.set("draft", draft);
-  }
-  if (draft && focusComposerFromLocation(location)) {
-    search.set(SESSION_COMPOSER_FOCUS_PARAM, "1");
-  }
-  return search.size > 0 ? `?${search.toString()}` : "";
 }
 
 function isPreferenceDerivedFace(location: RouteLocation): boolean {

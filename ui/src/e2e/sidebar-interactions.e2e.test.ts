@@ -45,7 +45,16 @@ suite.define(() => {
       await expect
         .poll(() => input.evaluate((element) => getComputedStyle(element).animationName))
         .toBe("chat-composer-prefill-attention");
+      const highlightedBackground = await input.evaluate(
+        (element) => getComputedStyle(element).backgroundColor,
+      );
       await captureSidebarUiProof(page, "capabilities-composer-focus.png");
+      await expect
+        .poll(() => input.getAttribute("class"))
+        .not.toContain("agent-chat__input--prefill-attention");
+      expect(await input.evaluate((element) => getComputedStyle(element).backgroundColor)).not.toBe(
+        highlightedBackground,
+      );
     } finally {
       await suite.closeBrowserContext(context);
     }
@@ -66,7 +75,16 @@ suite.define(() => {
       await expect
         .poll(() => input.evaluate((element) => getComputedStyle(element).boxShadow))
         .not.toBe("none");
+      const highlightedBackground = await input.evaluate(
+        (element) => getComputedStyle(element).backgroundColor,
+      );
       await captureSidebarUiProof(page, "capabilities-composer-reduced-motion.png");
+      await expect
+        .poll(() => input.getAttribute("class"))
+        .not.toContain("agent-chat__input--prefill-attention");
+      expect(await input.evaluate((element) => getComputedStyle(element).backgroundColor)).not.toBe(
+        highlightedBackground,
+      );
     } finally {
       await suite.closeBrowserContext(context);
     }
