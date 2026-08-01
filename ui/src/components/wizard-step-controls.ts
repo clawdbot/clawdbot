@@ -132,7 +132,7 @@ function renderOption(
   return html`<label class="wizard-step__option">
     <input
       type=${props.step.type === "select" ? "radio" : "checkbox"}
-      name=${props.step.type === "select" ? "wizard-option" : nothing}
+      name=${props.step.type === "select" ? `${props.inputId}-option` : nothing}
       .checked=${checked}
       ?disabled=${props.busy}
       @change=${(event: Event) => {

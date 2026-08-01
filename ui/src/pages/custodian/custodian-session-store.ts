@@ -4,12 +4,14 @@ import {
   type SystemAgentChatResult,
 } from "@openclaw/gateway-protocol";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { WizardStep } from "../../api/types.ts";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { pathForCustodianAgentHandoff } from "./custodian-navigation.ts";
+import { custodianWizardReply, initialCustodianWizardValue } from "./custodian-wizard-step.ts";
 import * as eventNudgeState from "./event-nudge.ts";
 import {
   custodianChatParams,
@@ -41,6 +43,8 @@ export class CustodianSessionStore {
   sending = false;
   sensitive = false;
   wizardInputPending = false;
+  wizardValue: unknown;
+  wizardSecretVisible = false;
   questionReplyUncertain = false;
   error: string | null = null;
   setupIssue: CustodianSetupIssue | null = null;
@@ -118,6 +122,16 @@ export class CustodianSessionStore {
     this.emit();
   }
 
+  setWizardValue(value: unknown): void {
+    this.wizardValue = value;
+    this.emit();
+  }
+
+  toggleWizardSecretVisibility(): void {
+    this.wizardSecretVisible = !this.wizardSecretVisible;
+    this.emit();
+  }
+
   hasRealUserTurn(): boolean {
     return this.messages.some((message) => message.role === "user");
   }
@@ -164,7 +178,14 @@ export class CustodianSessionStore {
     if (questionReply) {
       this.questionReplyUncertain = true;
     }
-    if (!message.trim() || !client || !this.chatAvailable || this.sending || this.setupRequired) {
+    const allowsEmptyWizardReply = questionReply && this.wizardInputPending;
+    if (
+      (!message.trim() && !allowsEmptyWizardReply) ||
+      !client ||
+      !this.chatAvailable ||
+      this.sending ||
+      this.setupRequired
+    ) {
       this.emit();
       return "rejected";
     }
@@ -179,6 +200,7 @@ export class CustodianSessionStore {
         text: displayText,
         at: Date.now(),
         question: null,
+        step: null,
       },
     ];
     this.input = "";
@@ -263,6 +285,17 @@ export class CustodianSessionStore {
     void this.send(option?.reply ?? label, label, true);
   }
 
+  answerWizardStep(message: CustodianMessage, value: unknown, includeValue = true): void {
+    if (!message.step || !this.wizardInputPending) {
+      return;
+    }
+    const reply = custodianWizardReply(message.step, value, includeValue);
+    if (!reply) {
+      return;
+    }
+    void this.send(reply.message, reply.display, true);
+  }
+
   exitSetup(): void {
     this.context?.navigate("chat");
   }
@@ -323,6 +356,8 @@ export class CustodianSessionStore {
     this.answeredQuestions = retireCustodianQuestions(this.messages, this.answeredQuestions);
     this.retryParams = null;
     this.input = "";
+    this.wizardValue = undefined;
+    this.wizardSecretVisible = false;
     this.sensitive = this.wizardInputPending = this.questionReplyUncertain = false;
     this.error = null;
     this.setupIssue = null;
@@ -495,11 +530,17 @@ export class CustodianSessionStore {
     this.error = null;
     this.setupIssue = null;
     this.input = "";
+    this.wizardValue = undefined;
+    this.wizardSecretVisible = false;
     this.sensitive = this.wizardInputPending = this.questionReplyUncertain = false;
     this.earlierBoundaryAfterId = null;
   }
 
-  private appendAssistant(reply: string, question: CustodianStructuredQuestion | null): void {
+  private appendAssistant(
+    reply: string,
+    question: CustodianStructuredQuestion | null,
+    step: WizardStep | null,
+  ): void {
     this.messages = [
       ...this.messages,
       {
@@ -508,6 +549,7 @@ export class CustodianSessionStore {
         text: reply,
         at: Date.now(),
         question,
+        step,
       },
     ];
   }
@@ -543,10 +585,13 @@ export class CustodianSessionStore {
       this.wizardInputPending = result.wizardInputPending === true;
       this.retryParams = null;
       this.setupIssue = null;
-      const question = parseCustodianQuestion(result.question);
+      const step = result.step ?? null;
+      const question = step ? null : parseCustodianQuestion(result.question);
+      this.wizardValue = step ? initialCustodianWizardValue(step) : undefined;
+      this.wizardSecretVisible = false;
       const silentReply = SILENT_REPLY_PATTERN.test(result.reply);
-      if (!silentReply || question) {
-        this.appendAssistant(silentReply ? "" : result.reply, question);
+      if (!silentReply || question || step) {
+        this.appendAssistant(silentReply ? "" : result.reply, question, step);
       }
       if (result.action === "open-agent") {
         let sessionKey = context.gateway.snapshot.sessionKey?.trim();
