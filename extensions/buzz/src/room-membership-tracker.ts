@@ -51,6 +51,8 @@ async function sleepWithSignal(delayMs: number, signal?: AbortSignal): Promise<v
   });
 }
 
+export type BuzzRoomHistoryCatchUpOutcome = "drained" | "incomplete";
+
 export async function createBuzzRoomMembershipTracker(params: {
   relay: Relay;
   relayPublicKey: string;
@@ -72,7 +74,7 @@ export async function createBuzzRoomMembershipTracker(params: {
   signal?: AbortSignal;
 }): Promise<{
   memberships: () => ReadonlyMap<string, BuzzRoomMembership>;
-  catchUpHistory: () => Promise<void>;
+  catchUpHistory: () => Promise<BuzzRoomHistoryCatchUpOutcome>;
 }> {
   type ExpectedMembership = "present" | "absent";
   type RefreshState = {
@@ -383,16 +385,17 @@ export async function createBuzzRoomMembershipTracker(params: {
   return {
     memberships: effectiveMemberships,
     catchUpHistory: async () => {
+      let outcome: BuzzRoomHistoryCatchUpOutcome = "drained";
       for (const channelId of params.channelIds) {
         const page = historyPages.get(channelId);
         if (params.signal?.aborted) {
-          return;
+          return "incomplete";
         }
         if (!page || page.count < params.messageLimit) {
           continue;
         }
         try {
-          const outcome = await catchUpBuzzRoomHistory({
+          const roomOutcome = await catchUpBuzzRoomHistory({
             relay: params.relay,
             channelId,
             since: params.messageSince,
@@ -402,7 +405,8 @@ export async function createBuzzRoomMembershipTracker(params: {
             onEvent: handleRoomEvent,
             signal: params.signal,
           });
-          if (outcome === "timestamp-over-limit") {
+          if (roomOutcome === "timestamp-over-limit") {
+            outcome = "incomplete";
             params.onHistoryError?.(
               new Error(
                 `Buzz room ${channelId} kept more than ${BUZZ_REPLAY_DISPATCH_MAX_PENDING} additional messages at one timestamp; older history was not recovered`,
@@ -411,16 +415,17 @@ export async function createBuzzRoomMembershipTracker(params: {
           }
         } catch (error) {
           if (params.signal?.aborted) {
-            return;
+            return "incomplete";
           }
           reportSystemEventError(
             error instanceof Error
               ? error
               : new Error(`Buzz room history recovery failed for ${channelId}`, { cause: error }),
           );
-          return;
+          return "incomplete";
         }
       }
+      return outcome;
     },
   };
 }

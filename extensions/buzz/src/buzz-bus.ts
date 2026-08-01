@@ -227,6 +227,7 @@ export async function startBuzzBus(options: {
   onFatalError?: (error: Error) => void;
   onDedupeError?: (error: Error) => void;
   onHistoryError?: (error: Error) => void;
+  onHistoryDrained?: () => void;
   onPresenceError?: (error: Error) => void;
   profileName?: string;
   onProfilePublished?: (eventId: string) => void;
@@ -429,7 +430,11 @@ export async function startBuzzBus(options: {
         : undefined;
     directory.replaceMemberships(membershipTracker?.memberships() ?? new Map());
     directoryRelay.replaceProfilePublicKeys(directory.profilePublicKeys());
-    void membershipTracker?.catchUpHistory();
+    void Promise.resolve(membershipTracker?.catchUpHistory()).then((outcome) => {
+      if (!membershipTracker || outcome === "drained") {
+        options.onHistoryDrained?.();
+      }
+    });
     stopPresenceHeartbeat = startBuzzPresenceHeartbeat({
       relay,
       secretKey,

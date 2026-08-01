@@ -53,6 +53,70 @@ export async function resolveBuzzColdStartSince(params: {
   return nowSeconds;
 }
 
+export type BuzzRecoveryFrontier = {
+  admit: (params: { createdAt: number; observedSeconds: number }) => number;
+  settle: (token: number) => number | undefined;
+  abandon: (token: number) => void;
+  markBacklogDrained: () => number | undefined;
+};
+
+export function createBuzzRecoveryFrontier(params: { sinceSeconds: number }): BuzzRecoveryFrontier {
+  const outstanding = new Map<number, number>();
+  let committed = params.sinceSeconds;
+  let settledCeiling: number | undefined;
+  let failedFloor = Number.POSITIVE_INFINITY;
+  let backlogDrained = false;
+  let nextToken = 0;
+
+  const nextCheckpoint = (): number | undefined => {
+    if (!backlogDrained || settledCeiling === undefined) {
+      return undefined;
+    }
+    let checkpoint = Math.min(settledCeiling, failedFloor);
+    for (const seconds of outstanding.values()) {
+      checkpoint = Math.min(checkpoint, seconds);
+    }
+    if (checkpoint <= committed) {
+      return undefined;
+    }
+    committed = checkpoint;
+    return committed;
+  };
+
+  return {
+    admit({ createdAt, observedSeconds }) {
+      const token = nextToken;
+      nextToken += 1;
+      outstanding.set(
+        token,
+        Number.isFinite(createdAt) ? Math.min(createdAt, observedSeconds) : observedSeconds,
+      );
+      return token;
+    },
+    settle(token) {
+      const seconds = outstanding.get(token);
+      if (seconds === undefined) {
+        return undefined;
+      }
+      outstanding.delete(token);
+      settledCeiling = settledCeiling === undefined ? seconds : Math.max(settledCeiling, seconds);
+      return nextCheckpoint();
+    },
+    abandon(token) {
+      const seconds = outstanding.get(token);
+      if (seconds === undefined) {
+        return;
+      }
+      outstanding.delete(token);
+      failedFloor = Math.min(failedFloor, seconds);
+    },
+    markBacklogDrained() {
+      backlogDrained = true;
+      return nextCheckpoint();
+    },
+  };
+}
+
 export async function advanceBuzzRecoveryWatermark(params: {
   store: BuzzRecoveryWatermarkStore | undefined;
   accountId: string;
