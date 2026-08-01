@@ -213,5 +213,7 @@ export type TuiBackend = {
   listTaskSuggestions?: () => Promise<TaskSuggestion[]>;
   acceptTaskSuggestion?: (taskId: string) => Promise<TaskSuggestionsAcceptResult>;
   dismissTaskSuggestion?: (taskId: string) => Promise<{ taskId: string; dismissed: boolean }>;
-  runGoalCommand?: (opts: TuiGoalCommandOptions) => Promise<{ text: string }>;
+  runGoalCommand?: (
+    opts: TuiGoalCommandOptions,
+  ) => Promise<{ text: string; continuationPrompt?: string }>;
 };
