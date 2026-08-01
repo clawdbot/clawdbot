@@ -89,6 +89,7 @@ export type ConfigProps = {
   onSectionChange: (section: string | null) => void;
   onSubsectionChange: (section: string | null) => void;
   onSave: () => void;
+  onApply: () => void;
   onRawDiscard: () => void;
   onOpenFile?: () => void;
   version: string;

@@ -968,6 +968,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       onSectionChange: (section) => this.setActiveSection(section),
       onSubsectionChange: (section) => this.setActiveSubsection(section),
       onSave: () => void runtimeConfig.save(),
+      onApply: () => void runtimeConfig.apply(),
       onRawDiscard: () => void runtimeConfig.discardDraft(),
       onOpenFile: () => void runtimeConfig.openFile(),
       version:
