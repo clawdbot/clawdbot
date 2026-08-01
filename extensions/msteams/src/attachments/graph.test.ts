@@ -249,6 +249,54 @@ describe("downloadMSTeamsGraphMedia hosted content $value fallback", () => {
     expect(hugeResponse.bodyUsed).toBe(true);
   });
 
+  it("cancels the unread $value body when the hosted content bytes fetch fails", async () => {
+    const fetchCalls: string[] = [];
+    const failedValueResponse = new Response("server error", { status: 500 });
+
+    mockGraphMediaFetch({
+      messageId: "msg-500",
+      hostedContents: [{ id: "hosted-500", contentType: "image/png" }],
+      valueResponses: {
+        "/hostedContents/hosted-500/$value": failedValueResponse,
+      },
+      fetchCalls,
+    });
+
+    const result = await downloadMSTeamsGraphMedia({
+      messageUrl: "https://graph.microsoft.com/v1.0/chats/c/messages/msg-500",
+      tokenProvider: { getAccessToken: vi.fn(async () => "test-token") },
+      maxBytes: 10 * 1024 * 1024,
+    });
+
+    expect(result.media).toEqual([
+      { kind: "image", contentType: "image/png", sourceId: "hosted-500" },
+    ]);
+    expect(failedValueResponse.bodyUsed).toBe(true);
+  });
+
+  it("cancels the unread message body when the Graph message fetch fails", async () => {
+    const fetchCalls: string[] = [];
+    const failedMessageResponse = new Response("server error", { status: 500 });
+
+    mockGraphMediaFetch({
+      messageId: "msg-err",
+      valueResponses: {
+        "/hostedContents": mockFetchResponse({ value: [] }),
+        "/messages/msg-err": failedMessageResponse,
+      },
+      fetchCalls,
+    });
+
+    const result = await downloadMSTeamsGraphMedia({
+      messageUrl: "https://graph.microsoft.com/v1.0/chats/c/messages/msg-err",
+      tokenProvider: { getAccessToken: vi.fn(async () => "test-token") },
+      maxBytes: 10 * 1024 * 1024,
+    });
+
+    expect(result.media).toEqual([]);
+    expect(failedMessageResponse.bodyUsed).toBe(true);
+  });
+
   it("ignores unexpected inline bytes and still fetches bounded $value", async () => {
     const fetchCalls: string[] = [];
     const base64Png = Buffer.from([0x89, 0x50, 0x4e, 0x47]).toString("base64");

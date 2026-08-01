@@ -229,6 +229,11 @@ async function downloadGraphHostedContent(params: {
           sourceId: item.id,
         });
       } finally {
+        // Guard release does not consume unread bodies. Start cancellation first;
+        // awaiting can deadlock when response capture tees the stream.
+        if (!valRes.bodyUsed) {
+          void valRes.body?.cancel().catch(() => undefined);
+        }
         await release();
       }
     } catch (err) {
@@ -338,6 +343,11 @@ export async function downloadMSTeamsGraphMedia(params: {
         });
       }
     } finally {
+      // Guard release does not consume unread bodies. Start cancellation first;
+      // awaiting can deadlock when response capture tees the stream.
+      if (!msgRes.bodyUsed) {
+        void msgRes.body?.cancel().catch(() => undefined);
+      }
       await release();
     }
   } catch (err) {
