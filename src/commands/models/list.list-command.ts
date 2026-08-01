@@ -72,7 +72,6 @@ export async function modelsListCommand(
     return;
   }
   const humanReadable = !opts.json && !opts.plain;
-  const promotionsModulePromise = humanReadable ? promotionsModuleLoader.load() : undefined;
   const [
     { loadAuthProfileStoreWithoutExternalProfiles },
     { resolveAgentWorkspaceDir, resolveDefaultAgentDir, resolveDefaultAgentId },
@@ -102,9 +101,6 @@ export async function modelsListCommand(
       })
     : undefined;
   const { entries } = resolveConfiguredEntries(cfg, metadataSnapshot);
-  const promotionsRefreshPromise = promotionsModulePromise?.then((promotionsModule) =>
-    promotionsModule.startPromotionsFeedRefresh(),
-  );
   const authIndex = createModelListAuthIndex({
     cfg,
     authStore,
@@ -188,6 +184,10 @@ export async function modelsListCommand(
     process.exitCode = 1;
     return;
   }
+  const promotionsModulePromise = humanReadable ? promotionsModuleLoader.load() : undefined;
+  const promotionsRefreshPromise = promotionsModulePromise
+    ?.then((promotionsModule) => promotionsModule.startPromotionsFeedRefresh())
+    .catch(() => undefined);
   const buildRowContext = (skipRuntimeModelSuppression: boolean) => ({
     cfg,
     agentId,
@@ -255,11 +255,14 @@ export async function modelsListCommand(
     // the configured entries, not the rendered rows — filtered and --all
     // listings show a different set.
     try {
-      await promotionsModule.printAvailablePromotionsSection({
-        configuredKeys: new Set(entries.map((entry) => entry.key)),
-        refresh: await promotionsRefreshPromise,
-        runtime,
-      });
+      const refresh = await promotionsRefreshPromise;
+      if (refresh) {
+        await promotionsModule.printAvailablePromotionsSection({
+          configuredKeys: new Set(entries.map((entry) => entry.key)),
+          refresh,
+          runtime,
+        });
+      }
     } catch {
       // Passive discovery must never fail the listing.
     }
