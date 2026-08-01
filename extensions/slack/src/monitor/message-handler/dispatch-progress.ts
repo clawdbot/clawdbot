@@ -1,5 +1,7 @@
 import type { AgentPlanStep } from "openclaw/plugin-sdk/channel-outbound";
 import {
+  buildChannelProgressDraftLine,
+  buildChannelProgressDraftLineForEntry,
   createChannelProgressDraftCompositor,
   createChannelProgressReceiptTracker,
   formatChannelProgressDraftText,
@@ -325,6 +327,10 @@ export function createSlackProgressRuntime(runtimeParams: {
     commentaryLinePrefix: "💬 ",
     reasoningGate: previewToolProgressEnabled,
     commentaryItalics: false,
+    buildProgressEventLine: (input, options) =>
+      input.event === "tool" || input.event === "item"
+        ? buildChannelProgressDraftLineForEntry(account.config, input, options)
+        : buildChannelProgressDraftLine(input, options),
     updateOnLineChange: useNativeProgressStreaming || useRichProgressDraft,
     update: async (previewText, options) => {
       if (useNativeProgressStreaming) {
