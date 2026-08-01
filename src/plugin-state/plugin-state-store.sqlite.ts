@@ -407,6 +407,16 @@ function isMissingPluginStateTableError(error: unknown): boolean {
   );
 }
 
+function hasStateTablesBeyondStartupCheckpoint(db: DatabaseSync): boolean {
+  return (
+    /* sqlite-allow-raw -- Read-only startup-checkpoint schema discriminator. */ db
+      .prepare(
+        "SELECT 1 FROM main.sqlite_schema WHERE type = 'table' AND name NOT IN ('schema_meta', 'state_leases') LIMIT 1",
+      )
+      .get() !== undefined
+  );
+}
+
 /** Read plugin state without joining the shared writable database lifecycle. */
 function withPluginStateDatabaseReadOnly<T>(
   operationName: PluginStateStoreOperation,
@@ -418,7 +428,18 @@ function withPluginStateDatabaseReadOnly<T>(
   try {
     return withExistingOpenClawStateDatabaseReadOnly(({ db, path }) => {
       operationStarted = true;
-      return operation({ db, path });
+      try {
+        return operation({ db, path });
+      } catch (error) {
+        if (isMissingPluginStateTableError(error)) {
+          // The lease bootstrap creates exactly schema_meta + state_leases before the first write;
+          // any other table means the missing plugin-state table is damage, not fresh state.
+          if (!hasStateTablesBeyondStartupCheckpoint(db)) {
+            return undefined;
+          }
+        }
+        throw error;
+      }
     }, options);
   } catch (error) {
     if (!operationStarted) {
@@ -429,11 +450,6 @@ function withPluginStateDatabaseReadOnly<T>(
         "Failed to open the plugin state database.",
         pathname,
       );
-    }
-    if (isMissingPluginStateTableError(error)) {
-      // Startup leases create the shared file before the first plugin-state write.
-      // Read-only callers cannot ensure the lazy table, so its absence means no data yet.
-      return undefined;
     }
     throw error;
   }
