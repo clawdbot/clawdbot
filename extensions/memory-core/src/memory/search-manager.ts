@@ -913,7 +913,10 @@ class FallbackMemoryManager implements MemorySearchManager {
       return;
     }
     const fallback = await this.ensureFallback();
-    await fallback?.sync?.(params);
+    if (!fallback) {
+      throw new Error(this.lastError ?? "memory sync unavailable");
+    }
+    await fallback.sync?.(params);
   }
 
   async probeEmbeddingAvailability(): Promise<MemoryEmbeddingProbeResult> {
@@ -993,7 +996,8 @@ class FallbackMemoryManager implements MemorySearchManager {
 
   private async ensureFallback(): Promise<Maybe<MemorySearchManager>> {
     this.ensureOpen();
-    if (!this.deps.fallbackFactory) {
+    const fallbackFactory = this.deps.fallbackFactory;
+    if (!fallbackFactory) {
       return null;
     }
     if (this.fallback) {
@@ -1008,7 +1012,7 @@ class FallbackMemoryManager implements MemorySearchManager {
     const initialization = (async (): Promise<Maybe<MemorySearchManager>> => {
       let fallback: Maybe<MemorySearchManager>;
       try {
-        fallback = await this.deps.fallbackFactory();
+        fallback = await fallbackFactory();
         if (!fallback) {
           log.warn("memory fallback requested but builtin index is unavailable");
           return null;

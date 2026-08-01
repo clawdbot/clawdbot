@@ -813,6 +813,38 @@ describe("getMemorySearchManager caching", () => {
     });
   });
 
+  it("replaces a cached builtin-fallback wrapper when fallback is disabled", async () => {
+    const agentId = "cached-qmd-fallback-policy-reload";
+    const firstCfg = createQmdCfg(agentId, "/tmp/workspace", { fallback: "builtin" });
+    const secondCfg = createQmdCfg(agentId, "/tmp/workspace", { fallback: "none" });
+    const firstPrimary = createManagerMock({
+      backend: "qmd",
+      provider: "qmd",
+      model: "qmd",
+      requestedProvider: "qmd",
+      withMemorySourceCounts: true,
+    });
+    const secondPrimary = createManagerMock({
+      backend: "qmd",
+      provider: "qmd",
+      model: "qmd",
+      requestedProvider: "qmd",
+      withMemorySourceCounts: true,
+    });
+    createQmdManagerMock
+      .mockImplementationOnce(async () => firstPrimary as unknown as QmdManagerInstance)
+      .mockImplementationOnce(async () => secondPrimary as unknown as QmdManagerInstance);
+
+    const firstManager = requireManager(await getMemorySearchManager({ cfg: firstCfg, agentId }));
+    const secondManager = requireManager(await getMemorySearchManager({ cfg: secondCfg, agentId }));
+
+    expect(secondManager).not.toBe(firstManager);
+    expect(createQmdManagerMock).toHaveBeenCalledTimes(2);
+    expect(firstPrimary.close).toHaveBeenCalledTimes(1);
+    expect(mockMemoryIndexGet).not.toHaveBeenCalled();
+    await expect(firstManager.search("hello")).rejects.toThrow("replaced by a newer qmd manager");
+  });
+
   it("replaces cached full qmd manager when context limits change", async () => {
     const agentId = "cached-qmd-context-limits-reload";
     const firstCfg = createQmdCfg(agentId, "/tmp/workspace");
@@ -1270,6 +1302,17 @@ describe("getMemorySearchManager caching", () => {
     await expect(manager.search("hello")).rejects.toThrow("qmd query failed");
     await expect(manager.readFile({ relPath: "MEMORY.md" })).rejects.toThrow("qmd query failed");
     expect(manager.status().backend).toBe("qmd");
+    expect(mockMemoryIndexGet).not.toHaveBeenCalled();
+  });
+
+  it("reports the qmd error when sync runs after fail-closed search", async () => {
+    const agentId = "qmd-fallback-disabled-sync";
+    const cfg = createQmdCfg(agentId, "/tmp/workspace", { fallback: "none" });
+    mockPrimary.search.mockRejectedValueOnce(new Error("qmd query failed"));
+    const manager = requireManager(await getMemorySearchManager({ cfg, agentId }));
+
+    await expect(manager.search("hello")).rejects.toThrow("qmd query failed");
+    await expect(manager.sync?.()).rejects.toThrow("qmd query failed");
     expect(mockMemoryIndexGet).not.toHaveBeenCalled();
   });
 
