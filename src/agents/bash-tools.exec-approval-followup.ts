@@ -489,11 +489,17 @@ export async function sendExecApprovalFollowup(
         });
         if (waitResult.status === "observation_ended") {
           emitDiagnosticEvent({
-            type: "exec.approval.followup_observation_ended",
-            approvalId: params.approvalId,
-            runId,
-            reason: waitResult.reason,
-            transportErrors: waitResult.transportErrors,
+            type: "log.record",
+            level: "WARN",
+            message: "Exec approval followup observation ended",
+            loggerName: "agents/exec-approval-followup",
+            attributes: {
+              approvalId: params.approvalId,
+              runId,
+              reason: waitResult.reason,
+              transportErrors: waitResult.transportErrors,
+              deliveryOwner: "accepted_agent_run",
+            },
           });
           log.warn(
             `Stopped observing accepted exec approval followup ${params.approvalId} after its bounded wait window; run ${runId} remains the sole delivery owner`,

@@ -18,6 +18,7 @@ import os from "node:os";
 import path from "node:path";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import {
+  onInternalDiagnosticEvent,
   onDiagnosticEvent,
   resetDiagnosticEventsForTest,
   waitForDiagnosticEventsDrained,
@@ -583,7 +584,7 @@ describe("exec approval followup", () => {
 
   it("ends observation after its deadline without competing direct delivery", async () => {
     const diagnostics: DiagnosticEventPayload[] = [];
-    onDiagnosticEvent((event) => {
+    onInternalDiagnosticEvent((event) => {
       diagnostics.push(event);
     });
     const startedAt = new Date("2026-08-01T00:00:00Z").getTime();
@@ -619,11 +620,17 @@ describe("exec approval followup", () => {
     expect(sendMessage).not.toHaveBeenCalled();
     expect(diagnostics).toContainEqual(
       expect.objectContaining({
-        type: "exec.approval.followup_observation_ended",
-        approvalId: "req-observer-deadline",
-        runId: "exec-approval-followup:req-observer-deadline:nonce:nonce-deadline",
-        reason: "deadline",
-        transportErrors: 1,
+        type: "log.record",
+        level: "WARN",
+        message: "Exec approval followup observation ended",
+        loggerName: "agents/exec-approval-followup",
+        attributes: {
+          approvalId: "req-observer-deadline",
+          runId: "exec-approval-followup:req-observer-deadline:nonce:nonce-deadline",
+          reason: "deadline",
+          transportErrors: 1,
+          deliveryOwner: "accepted_agent_run",
+        },
       }),
     );
   });
