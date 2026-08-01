@@ -2,7 +2,7 @@ import { resolveProviderPolicySurface } from "../../plugins/provider-public-arti
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { ListRowModel } from "./list.model-row.js";
-import type { RowBuilderContext } from "./list.rows.js";
+import type { RowBuilderContext } from "./list.row-context.js";
 
 type ProviderRuntimeModule = typeof import("../../plugins/provider-runtime.js");
 

@@ -17,50 +17,23 @@ import {
 } from "../../agents/model-suppression.js";
 import { openAIModelCatalogRoutePolicy } from "../../agents/openai-model-routes.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../../config/types.models.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ModelRegistry } from "../../llm/model-registry.js";
 import type { Model } from "../../llm/types.js";
-import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import type {
-  ModelListAuthEvaluation,
-  ModelListAuthIndex,
-  ModelListAuthRef,
-} from "./list.auth-index.js";
+import type { ModelListAuthEvaluation, ModelListAuthRef } from "./list.auth-index.js";
 import { isLocalBaseUrl } from "./list.local-url.js";
 import { normalizeConfiguredProviderListRow } from "./list.model-projection.js";
 import type { ListRowModel } from "./list.model-row.js";
 import { toModelRow } from "./list.model-row.js";
+import type { RowBuilderContext } from "./list.row-context.js";
 import type { ConfiguredEntry, ModelRow } from "./list.types.js";
 import { canonicalizeModelCatalogProviderAlias } from "./provider-aliases.js";
 
-type ConfiguredByKey = Map<string, ConfiguredEntry>;
 type ModelCatalogModule = typeof import("../../agents/prepared-model-catalog.js");
 type ModelResolverModule = typeof import("../../agents/embedded-agent-runner/model.js");
 type ScopedModelCatalogModule = typeof import("./list.scoped-catalog.js");
 
-type RowFilter = {
-  provider?: string;
-  local?: boolean;
-};
-
-/** Context shared by every model-list row source builder. */
-export type RowBuilderContext = {
-  cfg: OpenClawConfig;
-  agentId?: string;
-  agentDir: string;
-  inheritedAuthDir?: string;
-  authIndex: ModelListAuthIndex;
-  providerDiscoveryProviderIds?: readonly string[];
-  providerRuntimeDiscoveryProviderIds?: readonly string[];
-  availableKeys?: Set<string>;
-  configuredByKey: ConfiguredByKey;
-  discoveredKeys: Set<string>;
-  filter: RowFilter;
-  skipRuntimeModelSuppression?: boolean;
-  metadataSnapshot?: PluginMetadataSnapshot;
-  workspaceDir?: string;
-};
+export type { RowBuilderContext } from "./list.row-context.js";
 
 const modelCatalogModuleLoader = createLazyImportLoader<ModelCatalogModule>(
   () => import("../../agents/prepared-model-catalog.js"),
