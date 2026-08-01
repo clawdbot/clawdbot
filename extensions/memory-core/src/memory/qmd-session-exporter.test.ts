@@ -57,6 +57,7 @@ describe("QmdSessionExporter", () => {
         content: "User: hello",
         hash: "entry-hash",
         lineMap: [1],
+        lineProvenance: [{ originClass: "owner", sessionKind: "interactive", observedAt: 1 }],
         messageTimestampsMs: [1],
         mtimeMs: 1,
         path: "sessions/main/session-1.jsonl",
@@ -81,6 +82,18 @@ describe("QmdSessionExporter", () => {
         sessionKind: "interactive",
         storePath,
         updatedAtMs: 1,
+      });
+      expect(mocks.replaceArtifactMappings).toHaveBeenCalledWith({
+        collection: "sessions-main",
+        indexPath: path.join(tempDir, "index.sqlite"),
+        mappings: [
+          expect.objectContaining({
+            provenance: {
+              contentStartLine: 3,
+              lines: [{ originClass: "owner", sessionKind: "interactive", observedAt: 1 }],
+            },
+          }),
+        ],
       });
     });
   });
@@ -142,6 +155,60 @@ describe("QmdSessionExporter", () => {
       await expect(fs.readFile(path.join(exportDir, "session-1.md"), "utf8")).resolves.toContain(
         "User: second",
       );
+    });
+  });
+
+  it("re-exports provenance when only the canonical session classification changes", async () => {
+    await withTempDir("qmd-session-exporter-", async (tempDir) => {
+      const exportDir = path.join(tempDir, "exports");
+      const corpusEntry = {
+        agentId: "main",
+        artifactKind: "active-session" as const,
+        contentRevision: "sqlite:1:100:1:1",
+        sessionFile: "sqlite:main:session-1",
+        sessionId: "session-1",
+        transcriptSource: "sqlite" as const,
+        updatedAtMs: 1,
+      };
+      let sessionKind: "interactive" | "subagent" = "interactive";
+      mocks.corpusEntries.mockImplementation(async () => [{ ...corpusEntry, sessionKind }]);
+      mocks.buildSessionEntry.mockImplementation(async () => ({
+        absPath: corpusEntry.sessionFile,
+        content: "User: unchanged",
+        hash: "same-content",
+        lineMap: [1],
+        lineProvenance: [{ originClass: "owner", sessionKind, observedAt: 1 }],
+        messageTimestampsMs: [1],
+        mtimeMs: 1,
+        path: "sessions/main/session-1.jsonl",
+        size: 100,
+      }));
+      const exporter = new QmdSessionExporter(
+        { collectionName: "sessions-main", dir: exportDir },
+        "main",
+        tempDir,
+        path.join(tempDir, "index.sqlite"),
+        () => "unused",
+      );
+      const lease = createLease();
+
+      await exporter.exportSessions(lease);
+      sessionKind = "subagent";
+      await exporter.exportSessions(lease);
+
+      expect(mocks.buildSessionEntry).toHaveBeenCalledTimes(2);
+      expect(mocks.replaceArtifactMappings).toHaveBeenLastCalledWith({
+        collection: "sessions-main",
+        indexPath: path.join(tempDir, "index.sqlite"),
+        mappings: [
+          expect.objectContaining({
+            provenance: {
+              contentStartLine: 3,
+              lines: [{ originClass: "owner", sessionKind: "subagent", observedAt: 1 }],
+            },
+          }),
+        ],
+      });
     });
   });
 

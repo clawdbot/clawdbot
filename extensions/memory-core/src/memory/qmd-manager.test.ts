@@ -235,7 +235,10 @@ import { formatSessionTranscriptMemoryHitKey } from "openclaw/plugin-sdk/session
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { configureMemoryCoreDreamingState } from "../dreaming-state.js";
-import { resolveQmdSessionArtifactIdentity } from "../qmd-session-artifacts.js";
+import {
+  refreshQmdSessionArtifactDocIds,
+  resolveQmdSessionArtifactIdentity,
+} from "../qmd-session-artifacts.js";
 import {
   configureMemoryCoreDreamingStateForTests,
   resetMemoryCoreDreamingStateForTests,
@@ -268,6 +271,7 @@ async function seedQmdSessionTranscript(params: {
   sessionId: string;
   stateDir: string;
   sessionKey?: string;
+  senderIsOwner?: boolean;
   timestamp?: number | string;
 }): Promise<void> {
   const sessionsDir = path.join(params.stateDir, "agents", params.agentId, "sessions");
@@ -298,6 +302,9 @@ async function seedQmdSessionTranscript(params: {
       role: "user",
       content: params.content,
       timestamp,
+      ...(params.senderIsOwner === undefined
+        ? {}
+        : { __openclaw: { senderIsOwner: params.senderIsOwner } }),
     },
   });
 }
@@ -5091,6 +5098,96 @@ describe("QmdMemoryManager", () => {
       sessionId: "actual-session",
     });
 
+    await manager.close();
+  });
+
+  it("restores exact exported-session provenance on QMD search results", async () => {
+    configureQmd({
+      update: { interval: "0s", debounceMs: 0, onBoot: false },
+      sessions: { enabled: true },
+    });
+    const timestamp = "2026-07-01T10:00:00.000Z";
+    await seedQmdSessionTranscript({
+      agentId,
+      content: "owner provenance canary",
+      senderIsOwner: true,
+      sessionId: "provenance-session",
+      stateDir,
+      timestamp,
+    });
+
+    const { manager } = await createManager({ mode: "full" });
+    await (
+      manager as unknown as {
+        exportSessions: (lease: { signal: AbortSignal; assertOwned: () => void }) => Promise<void>;
+      }
+    ).exportSessions({ signal: new AbortController().signal, assertOwned: vi.fn() });
+    const indexPath = (manager as unknown as { indexPath: string }).indexPath;
+    const { DatabaseSync } = requireNodeSqlite();
+    const indexDb = new DatabaseSync(indexPath);
+    indexDb.exec(`
+      CREATE TABLE IF NOT EXISTS documents (
+        collection TEXT NOT NULL,
+        path TEXT NOT NULL,
+        active INTEGER NOT NULL,
+        hash TEXT NOT NULL,
+        modified_at TEXT
+      ) STRICT;
+      INSERT INTO documents (collection, path, active, hash, modified_at)
+      VALUES (
+        'sessions-main',
+        'provenance-session.md',
+        1,
+        'provenance-doc',
+        '${timestamp}'
+      );
+    `);
+    indexDb.close();
+    refreshQmdSessionArtifactDocIds({
+      assertOwned: vi.fn(),
+      collection: "sessions-main",
+      indexPath,
+    });
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "search") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(
+          child,
+          "stdout",
+          JSON.stringify([
+            {
+              docid: "provenance-doc",
+              file: "qmd://sessions-main/provenance-session.md",
+              score: 0.91,
+              snippet: "@@ -3,1\nUser: owner provenance canary",
+            },
+          ]),
+        );
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const results = await manager.search("owner provenance canary", {
+      sessionKey: "agent:main:slack:dm:u123",
+      sources: ["sessions"],
+    });
+
+    expect(results).toEqual([
+      {
+        path: "qmd/sessions-main/provenance-session.md",
+        startLine: 3,
+        endLine: 3,
+        score: 0.91,
+        snippet: "@@ -3,1\nUser: owner provenance canary",
+        source: "sessions",
+        provenance: {
+          originClass: "owner",
+          sessionKind: "interactive",
+          observedAt: Date.parse(timestamp),
+        },
+      },
+    ]);
     await manager.close();
   });
 

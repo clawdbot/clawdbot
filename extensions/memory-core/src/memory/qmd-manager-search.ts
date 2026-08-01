@@ -31,8 +31,8 @@ function resolveQmdSearchProvenance(
     normalizedPath.startsWith("memory/.dreams/");
   const isConsolidatedMemory = normalizedPath === "memory.md";
   return {
-    // QMD does not carry flush-recorded per-line provenance. Keep daily notes
-    // and extra paths untrusted until that metadata is available on results.
+    // Only exact exported-session line mappings can override this fallback.
+    // All other QMD content remains untrusted until equivalent metadata exists.
     originClass:
       source === "sessions"
         ? "untrusted"
@@ -244,6 +244,21 @@ export abstract class QmdManagerSearch extends QmdManagerSearchSupport {
       if (score < minScore) {
         continue;
       }
+      // QMD snippets are lossy presentation excerpts, not authoritative entries.
+      // Resolve only persisted artifact and line metadata; never infer identity or
+      // provenance from nearby text that may belong to an adjacent entry.
+      const artifactIdentity =
+        doc.source === "sessions"
+          ? resolveQmdSessionArtifactIdentity({
+              artifactPath: doc.collectionRelativePath,
+              collection: doc.collection,
+              docid: entry.docid?.trim() || undefined,
+              endLine: lines.endLine,
+              indexPath: this.indexPath,
+              searchPath: doc.rel,
+              startLine: lines.startLine,
+            })
+          : null;
       const result: MemorySearchResult = {
         path: doc.rel,
         startLine: lines.startLine,
@@ -251,21 +266,10 @@ export abstract class QmdManagerSearch extends QmdManagerSearchSupport {
         score,
         snippet,
         source: doc.source,
-        provenance: resolveQmdSearchProvenance(doc.rel, doc.source, doc.observedAt),
+        provenance:
+          artifactIdentity?.provenance ??
+          resolveQmdSearchProvenance(doc.rel, doc.source, doc.observedAt),
       };
-      // QMD snippets are lossy presentation excerpts, not authoritative entries.
-      // Leave project identity neutral until QMD can return real indexed metadata;
-      // inferring from nearby comment text can attribute an adjacent entry.
-      const artifactIdentity =
-        doc.source === "sessions"
-          ? resolveQmdSessionArtifactIdentity({
-              artifactPath: doc.collectionRelativePath,
-              collection: doc.collection,
-              docid: entry.docid?.trim() || undefined,
-              indexPath: this.indexPath,
-              searchPath: doc.rel,
-            })
-          : null;
       results.push(
         artifactIdentity ? attachQmdSessionArtifactHit(result, artifactIdentity) : result,
       );

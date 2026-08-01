@@ -6,9 +6,124 @@ import { describe, expect, it, vi } from "vitest";
 import {
   refreshQmdSessionArtifactDocIds,
   replaceQmdSessionArtifactMappings,
+  resolveQmdSessionArtifactIdentity,
 } from "./qmd-session-artifacts.js";
 
 describe("QMD session artifact mappings", () => {
+  it("migrates and resolves exact per-line provenance while failing closed", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-qmd-artifact-provenance-"));
+    const indexPath = path.join(tempDir, "index.sqlite");
+    const { DatabaseSync } = requireNodeSqlite();
+    try {
+      const legacy = new DatabaseSync(indexPath);
+      legacy.exec(`
+        CREATE TABLE openclaw_qmd_session_artifacts (
+          collection TEXT NOT NULL,
+          artifact_path TEXT NOT NULL,
+          search_path TEXT NOT NULL,
+          docid TEXT,
+          memory_key TEXT NOT NULL,
+          agent_id TEXT NOT NULL,
+          session_id TEXT NOT NULL,
+          archived INTEGER NOT NULL DEFAULT 0,
+          updated_at INTEGER NOT NULL,
+          PRIMARY KEY (collection, artifact_path)
+        ) STRICT;
+      `);
+      legacy.close();
+
+      replaceQmdSessionArtifactMappings({
+        collection: "sessions-main",
+        indexPath,
+        mappings: [
+          {
+            agentId: "main",
+            archived: false,
+            artifactPath: "session-1.md",
+            collection: "sessions-main",
+            memoryKey: "session/main/session-1",
+            provenance: {
+              contentStartLine: 3,
+              lines: [
+                { originClass: "owner", sessionKind: "interactive", observedAt: 10 },
+                { originClass: "agent", sessionKind: "interactive", observedAt: 20 },
+              ],
+            },
+            searchPath: "qmd/sessions-main/session-1.md",
+            sessionId: "session-1",
+          },
+        ],
+      });
+      const indexed = new DatabaseSync(indexPath);
+      indexed.exec(`
+        CREATE TABLE documents (
+          collection TEXT NOT NULL,
+          path TEXT NOT NULL,
+          active INTEGER NOT NULL,
+          hash TEXT NOT NULL
+        ) STRICT;
+        INSERT INTO documents (collection, path, active, hash)
+        VALUES ('sessions-main', 'session-1.md', 1, 'doc-1');
+      `);
+      indexed.close();
+      refreshQmdSessionArtifactDocIds({
+        assertOwned: vi.fn(),
+        collection: "sessions-main",
+        indexPath,
+      });
+
+      const lookup = {
+        artifactPath: "session-1.md",
+        collection: "sessions-main",
+        docid: "doc-1",
+        indexPath,
+        searchPath: "qmd/sessions-main/session-1.md",
+      };
+      const identity = {
+        agentId: "main",
+        archived: false,
+        memoryKey: "session/main/session-1",
+        sessionId: "session-1",
+      };
+      expect(resolveQmdSessionArtifactIdentity({ ...lookup, startLine: 3, endLine: 3 })).toEqual({
+        ...identity,
+        provenance: { originClass: "owner", sessionKind: "interactive", observedAt: 10 },
+      });
+      expect(resolveQmdSessionArtifactIdentity({ ...lookup, startLine: 3, endLine: 4 })).toEqual(
+        identity,
+      );
+      expect(resolveQmdSessionArtifactIdentity({ ...lookup, startLine: 2, endLine: 2 })).toEqual(
+        identity,
+      );
+      expect(
+        resolveQmdSessionArtifactIdentity({
+          ...lookup,
+          docid: "stale-doc",
+          startLine: 3,
+          endLine: 3,
+        }),
+      ).toEqual(identity);
+
+      const verify = new DatabaseSync(indexPath);
+      const columns = verify
+        .prepare("SELECT name FROM pragma_table_info('openclaw_qmd_session_artifacts')")
+        .all() as Array<{ name: string }>;
+      expect(columns.some((column) => column.name === "provenance_json")).toBe(true);
+      verify
+        .prepare(
+          "UPDATE openclaw_qmd_session_artifacts SET provenance_json = ? WHERE collection = ?",
+        )
+        .run("{invalid", "sessions-main");
+      verify.close();
+
+      expect(resolveQmdSessionArtifactIdentity({ ...lookup, startLine: 3, endLine: 3 })).toEqual(
+        identity,
+      );
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("rechecks lease ownership before every doc-id publication and commit", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-qmd-artifact-lease-"));
     const indexPath = path.join(tempDir, "index.sqlite");

@@ -1,7 +1,12 @@
 import fsSync from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
+import type {
+  MemoryEntryProvenance,
+  MemoryOriginClass,
+  MemorySearchResult,
+  MemorySessionKind,
+} from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { migrateSqliteSchemaToStrict } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 
@@ -16,6 +21,7 @@ const QMD_SESSION_ARTIFACT_SCHEMA = `
     agent_id TEXT NOT NULL,
     session_id TEXT NOT NULL,
     archived INTEGER NOT NULL DEFAULT 0,
+    provenance_json TEXT,
     updated_at INTEGER NOT NULL,
     PRIMARY KEY (collection, artifact_path)
   ) STRICT;
@@ -29,8 +35,14 @@ export type QmdSessionArtifactMapping = {
   artifactPath: string;
   collection: string;
   memoryKey: string;
+  provenance?: QmdSessionArtifactProvenance;
   searchPath: string;
   sessionId: string;
+};
+
+export type QmdSessionArtifactProvenance = {
+  contentStartLine: number;
+  lines: MemoryEntryProvenance[];
 };
 
 type QmdSessionArtifactLookup = {
@@ -39,12 +51,15 @@ type QmdSessionArtifactLookup = {
   docid?: string;
   indexPath: string;
   searchPath: string;
+  startLine?: number;
+  endLine?: number;
 };
 
 type QmdSessionArtifactIdentity = {
   agentId: string;
   archived: boolean;
   memoryKey: string;
+  provenance?: MemoryEntryProvenance;
   sessionId: string;
 };
 
@@ -59,9 +74,17 @@ type QmdSessionArtifactRow = {
   collection: string;
   docid: string | null;
   memoryKey: string;
+  provenanceJson: string | null;
   search_path: string;
   sessionId: string;
 };
+
+type PersistedQmdSessionArtifactProvenance = QmdSessionArtifactProvenance & {
+  version: 1;
+};
+
+const MEMORY_ORIGIN_CLASSES = ["owner", "agent", "untrusted", "system"] as const;
+const MEMORY_SESSION_KINDS = ["interactive", "cron", "heartbeat", "subagent", "unknown"] as const;
 
 function ensureQmdSessionArtifactSchema(db: DatabaseSync): void {
   db.exec(QMD_SESSION_ARTIFACT_SCHEMA);
@@ -69,6 +92,12 @@ function ensureQmdSessionArtifactSchema(db: DatabaseSync): void {
     db.exec(
       `ALTER TABLE ${QMD_SESSION_ARTIFACT_TABLE}
        ADD COLUMN archived INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch {}
+  try {
+    db.exec(
+      `ALTER TABLE ${QMD_SESSION_ARTIFACT_TABLE}
+       ADD COLUMN provenance_json TEXT`,
     );
   } catch {}
   const table = db
@@ -138,8 +167,9 @@ export function replaceQmdSessionArtifactMappings(params: {
     );
     const upsert = db.prepare(
       `INSERT INTO ${QMD_SESSION_ARTIFACT_TABLE}
-       (collection, artifact_path, search_path, docid, memory_key, agent_id, session_id, archived, updated_at)
-       VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?)
+       (collection, artifact_path, search_path, docid, memory_key, agent_id, session_id, archived,
+        provenance_json, updated_at)
+       VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(collection, artifact_path) DO UPDATE SET
          search_path=excluded.search_path,
          docid=NULL,
@@ -147,6 +177,7 @@ export function replaceQmdSessionArtifactMappings(params: {
          agent_id=excluded.agent_id,
          session_id=excluded.session_id,
          archived=excluded.archived,
+         provenance_json=excluded.provenance_json,
          updated_at=excluded.updated_at`,
     );
     db.exec("BEGIN");
@@ -162,6 +193,7 @@ export function replaceQmdSessionArtifactMappings(params: {
         mapping.agentId,
         mapping.sessionId,
         mapping.archived ? 1 : 0,
+        serializeQmdSessionArtifactProvenance(mapping.provenance),
         updatedAt,
       );
     }
@@ -242,6 +274,7 @@ export function resolveQmdSessionArtifactIdentity(
           agentId: row.agentId,
           archived: row.archived === 1,
           memoryKey: row.memoryKey,
+          ...resolveQmdSessionArtifactProvenance(row, lookup),
           sessionId: row.sessionId,
         }
       : null;
@@ -263,7 +296,7 @@ function findQmdSessionArtifactByDocId(
   const rows = db
     .prepare(
       `SELECT collection, artifact_path, search_path, docid, archived, memory_key AS memoryKey,
-              agent_id AS agentId, session_id AS sessionId
+              agent_id AS agentId, session_id AS sessionId, provenance_json AS provenanceJson
        FROM ${QMD_SESSION_ARTIFACT_TABLE}
        WHERE docid = ?`,
     )
@@ -278,7 +311,7 @@ function findQmdSessionArtifactByPath(
   const rows = db
     .prepare(
       `SELECT collection, artifact_path, search_path, docid, archived, memory_key AS memoryKey,
-              agent_id AS agentId, session_id AS sessionId
+              agent_id AS agentId, session_id AS sessionId, provenance_json AS provenanceJson
        FROM ${QMD_SESSION_ARTIFACT_TABLE}
        WHERE search_path = ?
           OR (collection = ? AND artifact_path = ?)`,
@@ -311,4 +344,134 @@ function pickQmdSessionArtifactRow(
     return exact;
   }
   return rows.length === 1 ? (rows[0] ?? null) : null;
+}
+
+function serializeQmdSessionArtifactProvenance(
+  provenance: QmdSessionArtifactProvenance | undefined,
+): string | null {
+  if (!provenance) {
+    return null;
+  }
+  return JSON.stringify({
+    version: 1,
+    contentStartLine: provenance.contentStartLine,
+    lines: provenance.lines,
+  } satisfies PersistedQmdSessionArtifactProvenance);
+}
+
+function resolveQmdSessionArtifactProvenance(
+  row: QmdSessionArtifactRow,
+  lookup: QmdSessionArtifactLookup,
+): { provenance: MemoryEntryProvenance } | Record<string, never> {
+  const docid = lookup.docid?.trim();
+  const persisted = parseQmdSessionArtifactProvenance(row.provenanceJson);
+  const startLine = lookup.startLine;
+  const endLine = lookup.endLine;
+  if (
+    !docid ||
+    row.docid !== docid ||
+    !persisted ||
+    typeof startLine !== "number" ||
+    typeof endLine !== "number" ||
+    !Number.isInteger(startLine) ||
+    !Number.isInteger(endLine)
+  ) {
+    return {};
+  }
+  const firstLine = Math.min(startLine, endLine);
+  const lastLine = Math.max(startLine, endLine);
+  const firstIndex = firstLine - persisted.contentStartLine;
+  const lastIndex = lastLine - persisted.contentStartLine;
+  if (firstIndex < 0 || lastIndex >= persisted.lines.length) {
+    return {};
+  }
+  const lines = persisted.lines.slice(firstIndex, lastIndex + 1);
+  const first = lines[0];
+  // A QMD snippet can cross turn boundaries. Promote only when every
+  // indexed line agrees on both the origin and canonical session kind.
+  if (
+    !first ||
+    lines.some(
+      (line) => line.originClass !== first.originClass || line.sessionKind !== first.sessionKind,
+    )
+  ) {
+    return {};
+  }
+  return {
+    provenance: {
+      originClass: first.originClass,
+      sessionKind: first.sessionKind,
+      observedAt: lines.reduce(
+        (oldest, line) => Math.min(oldest, line.observedAt),
+        first.observedAt,
+      ),
+    },
+  };
+}
+
+function parseQmdSessionArtifactProvenance(
+  value: string | null,
+): QmdSessionArtifactProvenance | null {
+  if (!value) {
+    return null;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object") {
+    return null;
+  }
+  const record = parsed as {
+    contentStartLine?: unknown;
+    lines?: unknown;
+    version?: unknown;
+  };
+  if (
+    record.version !== 1 ||
+    !Number.isInteger(record.contentStartLine) ||
+    Number(record.contentStartLine) < 1 ||
+    !Array.isArray(record.lines)
+  ) {
+    return null;
+  }
+  const lines: MemoryEntryProvenance[] = [];
+  for (const rawLine of record.lines) {
+    if (!rawLine || typeof rawLine !== "object") {
+      return null;
+    }
+    const line = rawLine as {
+      observedAt?: unknown;
+      originClass?: unknown;
+      sessionKind?: unknown;
+    };
+    if (
+      !isMemoryOriginClass(line.originClass) ||
+      !isMemorySessionKind(line.sessionKind) ||
+      typeof line.observedAt !== "number" ||
+      !Number.isFinite(line.observedAt) ||
+      line.observedAt < 0
+    ) {
+      return null;
+    }
+    lines.push({
+      originClass: line.originClass,
+      sessionKind: line.sessionKind,
+      observedAt: Math.floor(line.observedAt),
+    });
+  }
+  return {
+    contentStartLine: Number(record.contentStartLine),
+    lines,
+  };
+}
+
+function isMemoryOriginClass(value: unknown): value is MemoryOriginClass {
+  return MEMORY_ORIGIN_CLASSES.some((candidate) => candidate === value);
+}
+
+function isMemorySessionKind(value: unknown): value is MemorySessionKind {
+  return MEMORY_SESSION_KINDS.some((candidate) => candidate === value);
 }
