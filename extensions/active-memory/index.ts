@@ -81,6 +81,7 @@ import {
 } from "./types.js";
 
 const MEMORY_CORE_PLUGIN_ID = "memory-core";
+const TRIGGER_RECALL_TIMEOUT_HEADROOM_MS = 250;
 
 /** Plugin entry registering Active Memory hooks, tools, config schema, and doctor cleanup. */
 export default definePluginEntry({
@@ -372,7 +373,11 @@ export default definePluginEntry({
                 query: searchQuery,
                 message: event.prompt,
                 activeProjectKeys: ctx.activeProjectKeys,
-                signal: AbortSignal.timeout(HOOK_TIMEOUT_RECOVERY_GRACE_MS),
+                // Leave the outer preflight watchdog enough time to observe this
+                // fail-soft abort and continue into model recall.
+                signal: AbortSignal.timeout(
+                  Math.max(1, HOOK_TIMEOUT_RECOVERY_GRACE_MS - TRIGGER_RECALL_TIMEOUT_HEADROOM_MS),
+                ),
                 runId: ctx.runId,
               }).catch((error: unknown) => {
                 api.logger.debug?.(

@@ -2158,6 +2158,32 @@ describe("active-memory plugin", () => {
     expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
   });
 
+  it("continues model recall when lane-1 stalls until the preflight deadline", async () => {
+    const stalledLookup = () => new Promise<never>(() => {});
+    hoisted.getActiveMemorySearchManager.mockResolvedValueOnce({
+      manager: {
+        search: vi.fn(stalledLookup),
+        listTriggerCandidates: vi.fn(stalledLookup),
+      },
+    } as never);
+
+    const result = await runPromptBuild(
+      { prompt: "what did we decide? stalled lane one" },
+      {
+        sessionKey: "agent:main:telegram:direct:owner",
+        messageProvider: "telegram",
+        channelId: "owner",
+      },
+    );
+
+    expectPrependContextContains(result, "lemon pepper wings");
+    expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
+    const warnLines = vi
+      .mocked(api.logger.warn)
+      .mock.calls.map((call: unknown[]) => String(call[0]));
+    expectLinesNotToContain(warnLines, "before_prompt_build preflight timed out");
+  });
+
   it("lets active memory inherit the main QMD search mode when configured", async () => {
     api.config = {
       agents: {
