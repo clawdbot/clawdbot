@@ -1967,6 +1967,121 @@ describe("agentLoop tool termination", () => {
     expect(emittedCalls).toHaveLength(2);
     expect(emittedCalls.map((c) => c.name)).toEqual(["tool_a", "tool_b"]);
   });
+
+  it("strips orphaned tool_use from context.messages on parallel abort (#116379)", async () => {
+    const controller = new AbortController();
+    let streamCalls = 0;
+    const executed: string[] = [];
+    const streamFn: StreamFn = () => {
+      streamCalls += 1;
+      if (streamCalls > 1) {
+        throw new Error("model was called after abort");
+      }
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const message = makeAssistantMessage([
+          { type: "toolCall", id: "p-call-a", name: "p_tool_a", arguments: {} },
+          { type: "toolCall", id: "p-call-b", name: "p_tool_b", arguments: {} },
+          { type: "toolCall", id: "p-call-c", name: "p_tool_c", arguments: {} },
+        ]);
+        stream.push({ type: "done", reason: "toolUse", message });
+        stream.end();
+      });
+      return stream;
+    };
+
+    const tools: AgentTool[] = [
+      {
+        name: "p_tool_a",
+        label: "p_tool_a",
+        description: "First parallel tool",
+        parameters: Type.Object({}, { additionalProperties: false }),
+        execute: async () => {
+          executed.push("p_tool_a");
+          return {
+            content: [{ type: "text", text: "a done" }],
+            details: {},
+          };
+        },
+      },
+      {
+        name: "p_tool_b",
+        label: "p_tool_b",
+        description: "Aborts during preparation so tool_c is never dispatched",
+        parameters: Type.Object({}, { additionalProperties: false }),
+        prepareArguments: (toolCall) => {
+          controller.abort(new Error("user stopped"));
+          return toolCall;
+        },
+        execute: async () => {
+          executed.push("p_tool_b");
+          return {
+            content: [{ type: "text", text: "b done" }],
+            details: {},
+          };
+        },
+      },
+      {
+        name: "p_tool_c",
+        label: "p_tool_c",
+        description: "Should be skipped by abort",
+        parameters: Type.Object({}, { additionalProperties: false }),
+        execute: async () => {
+          throw new Error("p_tool_c should never execute");
+        },
+      },
+    ];
+
+    const events: AgentEvent[] = [];
+    const messages = await runAgentLoop(
+      [{ role: "user", content: "abort parallel", timestamp: 1 }],
+      { systemPrompt: "", messages: [], tools },
+      { ...config, toolExecution: "parallel" },
+      (event) => {
+        events.push(event);
+      },
+      controller.signal,
+      streamFn,
+    );
+
+    // When prepareArguments triggers abort, executePreparedToolCall returns
+    // "Operation aborted" before calling execute() for every dispatched call.
+    // tool_c was never dispatched, so it has no tool_result — the orphan our
+    // cleanup strips.
+    expect(executed).not.toContain("p_tool_c");
+    expect(streamCalls).toBe(1);
+
+    // The assistant message should have p_tool_c stripped
+    const assistantMsg = messages.findLast(
+      (m) => m.role === "assistant" && m.stopReason !== "aborted",
+    );
+    expect(assistantMsg).toBeDefined();
+    const remainingCalls = (assistantMsg as AssistantMessage).content.filter(
+      (c) => c.type === "toolCall",
+    );
+    expect(remainingCalls).toHaveLength(2);
+    expect(remainingCalls.map((c) => c.name).toSorted()).toEqual(["p_tool_a", "p_tool_b"]);
+
+    // The turn_end event consumer must also see only the completed calls
+    const toolUseTurnEnd = events.find(
+      (e) =>
+        e.type === "turn_end" &&
+        Array.isArray((e as { message: AgentMessage }).message?.content) &&
+        (
+          (e as { message: AgentMessage }).message as { content: Array<{ type: string }> }
+        ).content.some((c) => c.type === "toolCall"),
+    );
+    expect(toolUseTurnEnd).toBeDefined();
+    const emittedCalls = (
+      (toolUseTurnEnd as { message: AgentMessage }).message as {
+        content: Array<{ type: string; name?: string }>;
+      }
+    ).content.filter((c) => c.type === "toolCall");
+    expect(emittedCalls).toHaveLength(2);
+    expect(emittedCalls.map((c) => c.name).toSorted()).toEqual(["p_tool_a", "p_tool_b"]);
+
+    expect(messages.at(-2)).toMatchObject({ role: "assistant", stopReason: "aborted" });
+  });
 });
 
 describe("Agent next-turn preparation", () => {
