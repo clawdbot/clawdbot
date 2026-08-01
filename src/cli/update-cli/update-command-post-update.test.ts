@@ -41,7 +41,7 @@ async function finishFailedUpdate(result: UpdateRunResult): Promise<void> {
     showProgress: false,
     preManagedServiceStop: { stopped: true, serviceEnv: {} },
     controlPlaneUpdateSentinelMeta: undefined,
-  } as FinishUpdateParams);
+  } as unknown as FinishUpdateParams);
 }
 
 describe("failed Git update recovery restart", () => {
