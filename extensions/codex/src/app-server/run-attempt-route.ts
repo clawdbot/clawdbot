@@ -38,9 +38,15 @@ export async function prepareCodexAttemptRoute(
       }
       const reasonText = formatErrorMessage(route.signal.reason);
       const closedClient = reasonText.includes("turn router closed");
+      const closeCause =
+        route.signal.reason instanceof Error && route.signal.reason.cause instanceof Error
+          ? route.signal.reason.cause
+          : undefined;
       state.clientClosedPromptError = closedClient
         ? "codex app-server client closed before turn completed"
         : `codex app-server turn route closed before turn completed: ${reasonText}`;
+      state.clientClosedDiagnostic =
+        closedClient && closeCause ? formatErrorMessage(closeCause) : undefined;
       state.clientClosedAbort = closedClient;
       const activeTurnId = turnIdRef.current;
       if (activeTurnId) {
@@ -52,6 +58,7 @@ export async function prepareCodexAttemptRoute(
       embeddedAgentLog.warn(state.clientClosedPromptError, {
         threadId: resourceState.thread.threadId,
         turnId: activeTurnId,
+        ...(state.clientClosedDiagnostic ? { transportError: state.clientClosedDiagnostic } : {}),
       });
       runAbortController.abort(closedClient ? "client_closed" : "turn_route_closed");
       state.completed = true;

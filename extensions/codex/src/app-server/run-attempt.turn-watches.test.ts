@@ -3745,7 +3745,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
-    harness.close();
+    harness.close(
+      new Error('codex app-server exited: code=137 signal=SIGKILL stderr="worker exhausted"'),
+    );
 
     const result = await run;
     expect(readAttemptTerminal(result).promptError).toBe(
@@ -3759,6 +3761,10 @@ describe("runCodexAppServerAttempt turn watches", () => {
       threadId: "thread-1",
       turnId: "turn-1",
       replaySafe: true,
+      diagnostics: {
+        transportError:
+          'codex app-server exited: code=137 signal=SIGKILL stderr="worker exhausted"',
+      },
     });
   });
 

@@ -59,6 +59,7 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
     turnWatchTimeoutDetails: undefined as Record<string, unknown> | undefined,
     turnCompletionIdleTimeoutMessage: undefined as string | undefined,
     clientClosedPromptError: undefined as string | undefined,
+    clientClosedDiagnostic: undefined as string | undefined,
     clientClosedAbort: false,
     shouldDelayNativeHookRelayUnregister: false,
     lifecycleStarted: false,
