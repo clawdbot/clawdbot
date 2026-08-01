@@ -150,6 +150,13 @@ export class NodeInvokeStreamController {
     }
     if (params.signal) {
       const onAbort = () => {
+        if (
+          params.pending.deadlineAtMs !== undefined &&
+          Date.now() >= params.pending.deadlineAtMs
+        ) {
+          this.settleTimeout(params.requestId, params.pending);
+          return;
+        }
         if (!this.takePending(params.requestId, params.pending)) {
           return;
         }

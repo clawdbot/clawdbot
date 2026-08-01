@@ -1381,6 +1381,42 @@ describe("gateway/node-registry", () => {
     });
   });
 
+  it("prefers an elapsed hard deadline when abort beats the timer callback", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const registry = createNodeRegistry();
+    registerNode(registry);
+
+    const beforeDeadlineController = new AbortController();
+    const beforeDeadline = registry.invoke({
+      nodeId: "node-1",
+      command: "debug.ping",
+      timeoutMs: 100,
+      signal: beforeDeadlineController.signal,
+    });
+    vi.setSystemTime(1_099);
+    beforeDeadlineController.abort();
+    await expect(beforeDeadline).resolves.toEqual({
+      ok: false,
+      error: { code: "ABORTED", message: "node invoke cancelled" },
+    });
+
+    vi.setSystemTime(2_000);
+    const atDeadlineController = new AbortController();
+    const atDeadline = registry.invoke({
+      nodeId: "node-1",
+      command: "debug.ping",
+      timeoutMs: 100,
+      signal: atDeadlineController.signal,
+    });
+    vi.setSystemTime(2_100);
+    atDeadlineController.abort();
+    await expect(atDeadline).resolves.toEqual({
+      ok: false,
+      error: { code: "TIMEOUT", message: "node invoke timed out" },
+    });
+  });
+
   it("orders streamed invoke progress and drops state after the final result", async () => {
     const registry = new NodeRegistry();
     const frames = registerNode(registry);
