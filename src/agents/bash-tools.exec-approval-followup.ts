@@ -47,7 +47,9 @@ const DIRECT_FOLLOWUP_COMPLETION_RETENTION = {
   maxAgeMs: 24 * 60 * 60_000,
   maxEntries: 2_000,
 } as const;
-const AGENT_FOLLOWUP_AMBIGUOUS_WAIT_ATTEMPTS = 3;
+const AGENT_FOLLOWUP_RUN_TIMEOUT_SECONDS = 5 * 60;
+const AGENT_FOLLOWUP_WAIT_TIMEOUT_MS = 60_000;
+const AGENT_FOLLOWUP_WAIT_RETRY_DELAY_MS = 1_000;
 
 type ExecApprovalFollowupParams = {
   approvalId: string;
@@ -240,9 +242,9 @@ function hasTerminalFollowupEvidence(value: unknown): boolean {
 async function waitForAgentFollowupRun(params: {
   runId: string;
   timeoutMs: number;
-}): Promise<{ status: "completed" } | { status: "ownership-transferred"; error?: unknown }> {
-  let lastError: unknown;
-  for (let attempt = 0; attempt < AGENT_FOLLOWUP_AMBIGUOUS_WAIT_ATTEMPTS; attempt += 1) {
+}): Promise<{ status: "completed" }> {
+  let consecutiveTransportErrors = 0;
+  for (;;) {
     let wait: Record<string, unknown>;
     try {
       wait = await callGatewayTool(
@@ -253,10 +255,19 @@ async function waitForAgentFollowupRun(params: {
           timeoutMs: params.timeoutMs,
         },
       );
-    } catch (error) {
-      lastError = error;
+    } catch {
+      // The accepted run remains the sole delivery owner. Keep observing
+      // across gateway reconnects instead of racing it with direct delivery.
+      consecutiveTransportErrors += 1;
+      if (consecutiveTransportErrors > 1) {
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, AGENT_FOLLOWUP_WAIT_RETRY_DELAY_MS);
+          timer.unref?.();
+        });
+      }
       continue;
     }
+    consecutiveTransportErrors = 0;
     const status = readGatewayStatus(wait);
     if (isSuccessfulFollowupStatus(status)) {
       return { status: "completed" };
@@ -265,7 +276,6 @@ async function waitForAgentFollowupRun(params: {
       throw buildFollowupWaitError({ status, error: wait.error });
     }
   }
-  return { status: "ownership-transferred", ...(lastError ? { error: lastError } : {}) };
 }
 
 function shouldPrefixDirectFollowupWithSessionResumeFailure(params: {
@@ -335,6 +345,7 @@ function buildAgentFollowupArgs(params: {
     ...(params.internalRuntimeHandoffId
       ? { internalRuntimeHandoffId: params.internalRuntimeHandoffId }
       : {}),
+    timeout: AGENT_FOLLOWUP_RUN_TIMEOUT_SECONDS,
   };
 }
 
@@ -452,14 +463,10 @@ export async function sendExecApprovalFollowup(
         if (!runId) {
           throw buildFollowupWaitError({ status: "missing-run-id" });
         }
-        const waitOutcome = await waitForAgentFollowupRun({ runId, timeoutMs: 60_000 });
-        if (waitOutcome.status === "ownership-transferred") {
-          // The accepted agent run remains the delivery owner. Direct fallback
-          // without terminal evidence could race a late successful reply.
-          log.warn(
-            `exec approval followup observer released after ambiguous waits (id=${params.approvalId})`,
-          );
-        }
+        await waitForAgentFollowupRun({
+          runId,
+          timeoutMs: AGENT_FOLLOWUP_WAIT_TIMEOUT_MS,
+        });
         return true;
       }
       throw buildFollowupWaitError({ status, error: accepted.error });

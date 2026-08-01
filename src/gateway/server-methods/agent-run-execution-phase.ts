@@ -1,6 +1,11 @@
+import { randomUUID } from "node:crypto";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
-import { consumeExecApprovalFollowupRuntimeHandoff } from "../../agents/bash-tools.exec-approval-followup-state.js";
+import {
+  claimExecApprovalFollowupRuntimeHandoff,
+  finalizeExecApprovalFollowupRuntimeHandoff,
+  releaseExecApprovalFollowupRuntimeHandoff,
+} from "../../agents/bash-tools.exec-approval-followup-state.js";
 import {
   buildExecApprovalContinuationPrompt,
   EXEC_APPROVAL_FOLLOWUP_HANDOFF_MESSAGE,
@@ -122,6 +127,8 @@ export function startAgentRunExecution(params: {
   void prepared.activeGatewayWorkAdmission.run(async () => {
     await yieldAfterAgentAcceptedAck();
     let dispatched = false;
+    const execApprovalFollowupHandoffClaimId = randomUUID();
+    let claimedExecApprovalFollowupHandoffId: string | undefined;
     let pendingRecovery: MainSessionRecoveryPendingTarget | undefined;
     try {
       if (prepared.activeRunAbort.controller.signal.aborted) {
@@ -152,11 +159,12 @@ export function startAgentRunExecution(params: {
 
       let execApprovalFollowupRuntimeHandoff =
         params.canUseInternalRuntimeHandoff && params.execApprovalFollowupApprovalId
-          ? consumeExecApprovalFollowupRuntimeHandoff({
+          ? claimExecApprovalFollowupRuntimeHandoff({
               handoffId: params.request.internalRuntimeHandoffId,
               approvalId: params.execApprovalFollowupApprovalId,
               idempotencyKey: params.idempotencyKey,
               sessionKey: params.resolvedSessionKey,
+              claimId: execApprovalFollowupHandoffClaimId,
             })
           : undefined;
       if (
@@ -166,12 +174,16 @@ export function startAgentRunExecution(params: {
         params.requestedSessionKeyRaw &&
         params.requestedSessionKeyRaw !== params.resolvedSessionKey
       ) {
-        execApprovalFollowupRuntimeHandoff = consumeExecApprovalFollowupRuntimeHandoff({
+        execApprovalFollowupRuntimeHandoff = claimExecApprovalFollowupRuntimeHandoff({
           handoffId: params.request.internalRuntimeHandoffId,
           approvalId: params.execApprovalFollowupApprovalId,
           idempotencyKey: params.idempotencyKey,
           sessionKey: params.requestedSessionKeyRaw,
+          claimId: execApprovalFollowupHandoffClaimId,
         });
+      }
+      if (execApprovalFollowupRuntimeHandoff) {
+        claimedExecApprovalFollowupHandoffId = params.request.internalRuntimeHandoffId;
       }
 
       let message = params.message;
@@ -476,6 +488,10 @@ export function startAgentRunExecution(params: {
         restoreAdmittedRecovery: prepared.restoreAdmittedRestartRecoveryInterrupted,
       });
       dispatched = true;
+      finalizeExecApprovalFollowupRuntimeHandoff({
+        handoffId: claimedExecApprovalFollowupHandoffId,
+        claimId: execApprovalFollowupHandoffClaimId,
+      });
     } catch (err) {
       const error = errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err));
       const payload = {
@@ -494,6 +510,10 @@ export function startAgentRunExecution(params: {
       });
     } finally {
       if (!dispatched) {
+        releaseExecApprovalFollowupRuntimeHandoff({
+          handoffId: claimedExecApprovalFollowupHandoffId,
+          claimId: execApprovalFollowupHandoffClaimId,
+        });
         try {
           if (prepared.restoreAdmittedRestartRecoveryInterrupted) {
             try {

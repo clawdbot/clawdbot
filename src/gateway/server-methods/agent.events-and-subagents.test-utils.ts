@@ -2,7 +2,11 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
-import { registerExecApprovalFollowupRuntimeHandoff } from "../../agents/bash-tools.exec-approval-followup-state.js";
+import {
+  claimExecApprovalFollowupRuntimeHandoff,
+  finalizeExecApprovalFollowupRuntimeHandoff,
+  registerExecApprovalFollowupRuntimeHandoff,
+} from "../../agents/bash-tools.exec-approval-followup-state.js";
 import { EXEC_APPROVAL_FOLLOWUP_HANDOFF_MESSAGE } from "../../agents/bash-tools.exec-approval-output.js";
 import {
   onDiagnosticEvent,
@@ -1103,6 +1107,91 @@ describe("gateway agent handler", () => {
       sourceTool: "exec_approval_followup",
     });
     expect(callArgs.preserveUserFacingSessionModelState).toBe(true);
+    expect(
+      claimExecApprovalFollowupRuntimeHandoff({
+        handoffId: registration.handoffId,
+        approvalId: "req-output",
+        idempotencyKey: registration.idempotencyKey,
+        sessionKey,
+        claimId: "late-replay",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("releases an exec approval handoff when setup fails before dispatch", async () => {
+    const sessionKey = "agent:main:telegram:direct:123";
+    const registration = registerExecApprovalFollowupRuntimeHandoff({
+      approvalId: "req-output-setup-failure",
+      sessionKey,
+      resultText: "Exec finished (gateway id=req-output-setup-failure, code 0)\nkept output",
+    });
+    if (!registration) {
+      throw new Error("expected runtime handoff id");
+    }
+    const agentCommandCallsBefore = mocks.agentCommand.mock.calls.length;
+    mockMainSessionEntry({
+      sessionId: "existing-session-id",
+      lastChannel: "telegram",
+      lastTo: "123",
+    });
+    mocks.getLatestSubagentRunByChildSessionKey.mockReturnValueOnce({
+      runId: "previous-run",
+      childSessionKey: sessionKey,
+      controllerSessionKey: sessionKey,
+      ownerKey: sessionKey,
+      scopeKind: "session",
+      requesterDisplayKey: "main",
+      task: "old task",
+      cleanup: "keep",
+      createdAt: 1,
+      startedAt: 2,
+      endedAt: 3,
+      outcome: { status: "ok" },
+    });
+    mocks.replaceSubagentRunAfterSteer.mockRejectedValueOnce(new Error("reactivate boom"));
+
+    const respond = await invokeAgent(
+      {
+        message: EXEC_APPROVAL_FOLLOWUP_HANDOFF_MESSAGE,
+        sessionKey,
+        channel: "telegram",
+        idempotencyKey: registration.idempotencyKey,
+        internalRuntimeHandoffId: registration.handoffId,
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: sessionKey,
+          sourceTool: "exec_approval_followup",
+        },
+      },
+      {
+        reqId: "exec-followup-output-setup-failure",
+        client: backendGatewayClient(),
+      },
+    );
+
+    const errorCall = respond.mock.calls.find((call: unknown[]) => call[0] === false);
+    expectRecordFields(requireValue(errorCall, "error response missing")[1], {
+      runId: registration.idempotencyKey,
+      status: "error",
+    });
+    expect(mocks.agentCommand).toHaveBeenCalledTimes(agentCommandCallsBefore);
+    expect(
+      claimExecApprovalFollowupRuntimeHandoff({
+        handoffId: registration.handoffId,
+        approvalId: "req-output-setup-failure",
+        idempotencyKey: registration.idempotencyKey,
+        sessionKey,
+        claimId: "retry-after-setup-failure",
+      }),
+    ).toMatchObject({
+      resultText: expect.stringContaining("kept output"),
+    });
+    expect(
+      finalizeExecApprovalFollowupRuntimeHandoff({
+        handoffId: registration.handoffId,
+        claimId: "retry-after-setup-failure",
+      }),
+    ).toBe(true);
   });
 
   it("dedupes elevated exec approval followups across nonce idempotency keys", async () => {

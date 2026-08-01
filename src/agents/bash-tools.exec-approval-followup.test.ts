@@ -456,6 +456,7 @@ describe("exec approval followup", () => {
       sourceSessionKey: "agent:main:telegram:direct:123",
       sourceTool: "exec_approval_followup",
     });
+    expect(agentArgs.timeout).toBe(300);
     expectGatewayAgentWait({
       runId: "exec-approval-followup:req-wait:nonce:nonce-wait",
       timeoutMs: 60_000,
@@ -501,17 +502,41 @@ describe("exec approval followup", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("releases a persistently ambiguous accepted run without direct fallback", async () => {
+  it("keeps observing past the old ambiguity cap until terminal fallback", async () => {
     vi.mocked(callGatewayTool)
       .mockResolvedValueOnce({
         runId: "exec-approval-followup:req-ambiguous-release:nonce:nonce-release",
         status: "accepted",
       })
-      .mockResolvedValue({
+      .mockResolvedValueOnce({
         runId: "exec-approval-followup:req-ambiguous-release:nonce:nonce-release",
         status: "timeout",
         timeoutPhase: "queue",
         providerStarted: false,
+      })
+      .mockResolvedValueOnce({
+        runId: "exec-approval-followup:req-ambiguous-release:nonce:nonce-release",
+        status: "timeout",
+        timeoutPhase: "queue",
+        providerStarted: false,
+      })
+      .mockResolvedValueOnce({
+        runId: "exec-approval-followup:req-ambiguous-release:nonce:nonce-release",
+        status: "timeout",
+        timeoutPhase: "queue",
+        providerStarted: false,
+      })
+      .mockResolvedValueOnce({
+        runId: "exec-approval-followup:req-ambiguous-release:nonce:nonce-release",
+        status: "timeout",
+        timeoutPhase: "queue",
+        providerStarted: false,
+      })
+      .mockResolvedValueOnce({
+        runId: "exec-approval-followup:req-ambiguous-release:nonce:nonce-release",
+        status: "error",
+        endedAt: Date.now(),
+        error: "provider failed after prolonged execution",
       });
 
     await expect(
@@ -526,8 +551,8 @@ describe("exec approval followup", () => {
       }),
     ).resolves.toBe(true);
 
-    expect(callGatewayTool).toHaveBeenCalledTimes(4);
-    expect(sendMessage).not.toHaveBeenCalled();
+    expect(callGatewayTool).toHaveBeenCalledTimes(6);
+    expect(sendMessage).toHaveBeenCalledTimes(1);
   });
 
   it("retries an accepted run after a wait transport error without direct fallback", async () => {

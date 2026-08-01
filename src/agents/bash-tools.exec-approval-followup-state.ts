@@ -33,6 +33,7 @@ type ExecApprovalFollowupRuntimeHandoffRegistration = {
 
 type ExecApprovalFollowupRuntimeHandoffEntry = ExecApprovalFollowupRuntimeHandoff & {
   expiresAtMs: number;
+  claimId?: string;
 };
 
 const execApprovalFollowupRuntimeHandoffs = new Map<
@@ -137,18 +138,20 @@ export function registerExecApprovalFollowupRuntimeHandoff(params: {
   return { handoffId, idempotencyKey };
 }
 
-/** Consume a matching handoff once, validating approval/session/idempotency data. */
-export function consumeExecApprovalFollowupRuntimeHandoff(params: {
+/** Claim a matching handoff while fallible run setup completes. */
+export function claimExecApprovalFollowupRuntimeHandoff(params: {
   handoffId?: string;
   approvalId?: string;
   idempotencyKey?: string;
   sessionKey?: string;
+  claimId?: string;
   nowMs?: number;
 }): ExecApprovalFollowupRuntimeHandoff | undefined {
   const handoffId = normalizeOptionalString(params.handoffId);
   const approvalId = normalizeOptionalString(params.approvalId);
   const idempotencyKey = normalizeOptionalString(params.idempotencyKey);
-  if (!handoffId || !approvalId || !idempotencyKey) {
+  const claimId = normalizeOptionalString(params.claimId);
+  if (!handoffId || !approvalId || !idempotencyKey || !claimId) {
     return undefined;
   }
   const nowMs = params.nowMs ?? Date.now();
@@ -171,8 +174,47 @@ export function consumeExecApprovalFollowupRuntimeHandoff(params: {
     // must not consume or expose the stored elevated defaults.
     return undefined;
   }
-  execApprovalFollowupRuntimeHandoffs.delete(handoffId);
+  if (entry.claimId && entry.claimId !== claimId) {
+    return undefined;
+  }
+  entry.claimId = claimId;
   return cloneExecApprovalFollowupRuntimeHandoff(entry);
+}
+
+/** Finalize a claimed handoff once its run has been dispatched. */
+export function finalizeExecApprovalFollowupRuntimeHandoff(params: {
+  handoffId?: string;
+  claimId?: string;
+}): boolean {
+  const handoffId = normalizeOptionalString(params.handoffId);
+  const claimId = normalizeOptionalString(params.claimId);
+  if (!handoffId || !claimId) {
+    return false;
+  }
+  const entry = execApprovalFollowupRuntimeHandoffs.get(handoffId);
+  if (entry?.claimId !== claimId) {
+    return false;
+  }
+  execApprovalFollowupRuntimeHandoffs.delete(handoffId);
+  return true;
+}
+
+/** Release a claimed handoff when setup fails before dispatch. */
+export function releaseExecApprovalFollowupRuntimeHandoff(params: {
+  handoffId?: string;
+  claimId?: string;
+}): boolean {
+  const handoffId = normalizeOptionalString(params.handoffId);
+  const claimId = normalizeOptionalString(params.claimId);
+  if (!handoffId || !claimId) {
+    return false;
+  }
+  const entry = execApprovalFollowupRuntimeHandoffs.get(handoffId);
+  if (entry?.claimId !== claimId) {
+    return false;
+  }
+  delete entry.claimId;
+  return true;
 }
 
 /**

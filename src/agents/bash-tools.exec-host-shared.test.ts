@@ -5,7 +5,8 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  consumeExecApprovalFollowupRuntimeHandoff,
+  claimExecApprovalFollowupRuntimeHandoff,
+  finalizeExecApprovalFollowupRuntimeHandoff,
   isExecApprovalFollowupSessionRebound,
   registerExecApprovalFollowupRuntimeHandoff,
 } from "./bash-tools.exec-approval-followup-state.js";
@@ -205,19 +206,21 @@ describe("sendExecApprovalFollowupResult", () => {
     expect(call).not.toHaveProperty("bashElevated");
     expect(call).not.toHaveProperty("execApprovalFollowupToken");
     expect(
-      consumeExecApprovalFollowupRuntimeHandoff({
+      claimExecApprovalFollowupRuntimeHandoff({
         handoffId: call.internalRuntimeHandoffId ?? "",
         approvalId: "approval-elevated-75832",
         idempotencyKey: call.idempotencyKey ?? "",
         sessionKey: "agent:main:telegram:direct:wrong",
+        claimId: "wrong-session-run",
       }),
     ).toBeUndefined();
     expect(
-      consumeExecApprovalFollowupRuntimeHandoff({
+      claimExecApprovalFollowupRuntimeHandoff({
         handoffId: call.internalRuntimeHandoffId ?? "",
         approvalId: "approval-elevated-75832",
         idempotencyKey: call.idempotencyKey ?? "",
         sessionKey: "agent:main:telegram:direct:123",
+        claimId: "elevated-run",
       }),
     ).toEqual({
       kind: "exec-approval-followup",
@@ -227,6 +230,21 @@ describe("sendExecApprovalFollowupResult", () => {
       bashElevated,
       resultText: "Exec finished",
     });
+    expect(
+      claimExecApprovalFollowupRuntimeHandoff({
+        handoffId: call.internalRuntimeHandoffId ?? "",
+        approvalId: "approval-elevated-75832",
+        idempotencyKey: call.idempotencyKey ?? "",
+        sessionKey: "agent:main:telegram:direct:123",
+        claimId: "competing-run",
+      }),
+    ).toBeUndefined();
+    expect(
+      finalizeExecApprovalFollowupRuntimeHandoff({
+        handoffId: call.internalRuntimeHandoffId,
+        claimId: "elevated-run",
+      }),
+    ).toBe(true);
   });
 
   it("does not register elevated runtime handoffs when the process clock is invalid", () => {
@@ -292,11 +310,12 @@ describe("sendExecApprovalFollowupResult", () => {
     expect(call.idempotencyKey).toMatch(/^exec-approval-followup:approval-normal-75832:nonce:/);
     expect(call).not.toHaveProperty("bashElevated");
     expect(
-      consumeExecApprovalFollowupRuntimeHandoff({
+      claimExecApprovalFollowupRuntimeHandoff({
         handoffId: call.internalRuntimeHandoffId ?? "",
         approvalId: "approval-normal-75832",
         idempotencyKey: call.idempotencyKey ?? "",
         sessionKey: "agent:main:telegram:direct:123",
+        claimId: "normal-run",
       }),
     ).toEqual({
       kind: "exec-approval-followup",
@@ -305,6 +324,12 @@ describe("sendExecApprovalFollowupResult", () => {
       idempotencyKey: call.idempotencyKey,
       resultText: "Exec finished",
     });
+    expect(
+      finalizeExecApprovalFollowupRuntimeHandoff({
+        handoffId: call.internalRuntimeHandoffId,
+        claimId: "normal-run",
+      }),
+    ).toBe(true);
   });
 
   it("forwards the approval-time session id to the followup dispatch (non-elevated)", async () => {
