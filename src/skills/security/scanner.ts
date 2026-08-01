@@ -376,7 +376,9 @@ function collectAliasScanSources(
     const lastLine = spanBody.slice(lastLineStart).replace(/\r$/, "");
     const closingMarker = lastLine.match(/^( {0,3})(`{3,}|~{3,})[ \t]*$/)?.[2];
     const hasClosingFence =
-      closingMarker?.[0] === span.marker[0] && closingMarker.length >= span.marker.length;
+      closingMarker !== undefined &&
+      closingMarker[0] === span.marker[0] &&
+      closingMarker.length >= span.marker.length;
     const content = hasClosingFence ? spanBody.slice(0, lastLineStart) : spanBody;
     fencedSources.push({ source: content, file: `${filePath}.${index}${extension}` });
   }
