@@ -272,11 +272,11 @@ export function createSlackPresenceMonitor(params: {
       { length: count },
       (_, index) => candidates[(pollOffset + index) % candidates.length],
     ).filter((userId): userId is string => Boolean(userId));
-    pollOffset = (pollOffset + count) % candidates.length;
     for (const userId of selected) {
       if (stopped) {
         return;
       }
+      let consumed = false;
       try {
         const response = await withTimeout(
           params.client.getPresence({ user: userId }),
@@ -288,6 +288,7 @@ export function createSlackPresenceMonitor(params: {
         if (stopped) {
           return;
         }
+        consumed = true;
         const next =
           response.presence === "active" || response.presence === "away"
             ? response.presence
@@ -312,7 +313,12 @@ export function createSlackPresenceMonitor(params: {
           params.error?.(`slack presence polling rate limited; retrying after ${err.retryAfter}s`);
           return;
         }
+        consumed = true;
         params.error?.(`slack presence poll failed for user ${userId}: ${String(err)}`);
+      } finally {
+        if (consumed) {
+          pollOffset = (pollOffset + 1) % candidates.length;
+        }
       }
     }
   };

@@ -344,7 +344,7 @@ describe("Slack presence monitor", () => {
     }
   });
 
-  it("honors Slack Retry-After before resuming presence polling", async () => {
+  it("honors Slack Retry-After without skipping the unpolled page", async () => {
     let now = 1_000;
     const getPresence = vi
       .fn()
@@ -352,18 +352,19 @@ describe("Slack presence monitor", () => {
       .mockResolvedValue({ presence: "away" });
     const monitor = createSlackPresenceMonitor({
       accountId: "default",
-      accountConfig: { mode: "auto" },
+      accountConfig: { mode: "on" },
       client: { getPresence } as never,
       cooldownStore: createCooldownStore(),
       enqueue: vi.fn(() => true),
       wake: vi.fn(),
       nowMs: () => now,
     });
-    monitor.observe(createPrepared({ userId: "U1" }));
-    monitor.observe(createPrepared({ userId: "U2" }));
+    for (let index = 1; index <= 46; index += 1) {
+      monitor.observe(createPrepared({ userId: `U${String(index).padStart(4, "0")}` }));
+    }
 
     await monitor.pollOnce();
-    expect(getPresence).toHaveBeenCalledExactlyOnceWith({ user: "U1" });
+    expect(getPresence).toHaveBeenCalledExactlyOnceWith({ user: "U0001" });
 
     now += 119_999;
     await monitor.pollOnce();
@@ -371,8 +372,12 @@ describe("Slack presence monitor", () => {
 
     now += 1;
     await monitor.pollOnce();
-    expect(getPresence).toHaveBeenNthCalledWith(2, { user: "U1" });
-    expect(getPresence).toHaveBeenNthCalledWith(3, { user: "U2" });
+    expect(getPresence).toHaveBeenNthCalledWith(2, { user: "U0001" });
+    expect(getPresence).toHaveBeenNthCalledWith(3, { user: "U0002" });
+    expect(getPresence).toHaveBeenCalledTimes(46);
+
+    await monitor.pollOnce();
+    expect(getPresence).toHaveBeenNthCalledWith(47, { user: "U0046" });
   });
 
   it("bounds stop while a presence request is stalled", async () => {
