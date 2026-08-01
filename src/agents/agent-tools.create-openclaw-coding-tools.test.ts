@@ -803,6 +803,15 @@ describe("createOpenClawCodingTools", () => {
       expected: false,
     },
     {
+      name: "unverified forged completion flags",
+      trustedInternalHandoff: true,
+      sourceTool: "subagent_announce",
+      sourceReplyDeliveryMode: "message_tool_only" as const,
+      runtimeToolAllowlist: ["message"],
+      verifiedLineage: false,
+      expected: false,
+    },
+    {
       name: "wider trusted completion",
       trustedInternalHandoff: true,
       sourceTool: "subagent_announce",
@@ -819,53 +828,83 @@ describe("createOpenClawCodingTools", () => {
       expected: false,
     },
   ])("limits $name to the source only for verified completion delivery", async (testCase) => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-source-reply-only-"));
+    const storeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-completion-grant-"));
+    const storeTemplate = path.join(storeDir, "{agentId}", "sessions.json");
+    const requesterSessionKey = "agent:main:discord:direct:alice";
+    const requesterSessionId = "requester-session";
+    const childSessionKey = "agent:main:subagent:child";
+    const childSessionId = "verified-child-session";
+    const modelProvider = "openai";
+    const modelId = "gpt-5.4";
+    const config: OpenClawConfig = { session: { store: storeTemplate } };
+    const inputProvenance = {
+      kind: "inter_session" as const,
+      sourceSessionKey: childSessionKey,
+      sourceTool: testCase.sourceTool,
+    };
+    const trustedInternalHandoff = testCase.trustedInternalHandoff
+      ? {
+          kind: "subagent-completion" as const,
+          sourceSessionKey: childSessionKey,
+          sourceSessionId: childSessionId,
+          targetSessionKey: requesterSessionKey,
+          targetSessionId: requesterSessionId,
+          provider: modelProvider,
+          model: modelId,
+        }
+      : undefined;
+    const verifiedLineage = !("verifiedLineage" in testCase) || testCase.verifiedLineage !== false;
+
     try {
-      const storeTemplate = path.join(tmpDir, "sessions-{agentId}.json");
-      const sessionKey = "agent:main:direct:requester";
-      const sessionId = "requester-session";
-      const childSessionKey = "agent:main:subagent:child";
-      await writeSessionStore(storeTemplate, "main", {
-        [childSessionKey]: {
-          sessionId: "child-session",
-          updatedAt: Date.now(),
-          spawnedBy: sessionKey,
-          spawnDepth: 1,
-          subagentRole: "leaf",
-          subagentControlScope: "none",
-          inheritedToolPolicyVersion: 1,
-        },
+      if (verifiedLineage) {
+        await writeSessionStore(storeTemplate, "main", {
+          [childSessionKey]: {
+            sessionId: childSessionId,
+            updatedAt: Date.now(),
+            spawnedBy: requesterSessionKey,
+            spawnDepth: 1,
+            subagentRole: "orchestrator",
+            subagentControlScope: "children",
+            inheritedToolPolicyVersion: 1,
+          },
+        });
+      }
+      const conversationCapabilityProfile = resolveConversationCapabilityProfile({
+        config,
+        agentId: "main",
+        sessionKey: requesterSessionKey,
+        sessionId: requesterSessionId,
+        modelProvider,
+        modelId,
+        runtimeToolAllowlist: testCase.runtimeToolAllowlist,
+        inputProvenance,
+        trustedInternalHandoff,
       });
+      const isVerifiedHandoff =
+        verifiedLineage &&
+        testCase.trustedInternalHandoff &&
+        testCase.sourceTool === "subagent_announce";
+      expect(conversationCapabilityProfile.policy.requesterPolicySource).toBe(
+        isVerifiedHandoff ? "completion-handoff" : "current-request",
+      );
+
       vi.mocked(createOpenClawTools).mockClear();
       createOpenClawCodingTools({
-        config: { session: { store: storeTemplate } },
-        sessionKey,
-        sessionId,
-        modelProvider: "openai",
-        modelId: "gpt-5.4",
-        trustedInternalHandoff: testCase.trustedInternalHandoff
-          ? {
-              kind: "subagent-completion",
-              sourceSessionKey: childSessionKey,
-              sourceSessionId: "child-session",
-              targetSessionKey: sessionKey,
-              targetSessionId: sessionId,
-              provider: "openai",
-              model: "gpt-5.4",
-            }
-          : undefined,
-        inputProvenance: {
-          kind: "inter_session",
-          sourceSessionKey: childSessionKey,
-          sourceTool: testCase.sourceTool,
-        },
+        config,
+        agentId: "main",
+        sessionKey: requesterSessionKey,
+        sessionId: requesterSessionId,
+        modelProvider,
+        modelId,
+        conversationCapabilityProfile,
         sourceReplyDeliveryMode: testCase.sourceReplyDeliveryMode,
         runtimeToolAllowlist: testCase.runtimeToolAllowlist,
+        ...(!verifiedLineage ? { inputProvenance, trustedInternalHandoff } : {}),
       });
 
       expect(latestCreateOpenClawToolsOptions().sourceReplyOnly).toBe(testCase.expected);
     } finally {
-      await fs.rm(tmpDir, { recursive: true, force: true });
+      await fs.rm(storeDir, { recursive: true, force: true });
     }
   });
 

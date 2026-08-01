@@ -89,7 +89,7 @@ flow:
             then:
               - set: fallbackDebugRequests
                 value:
-                  expr: "[...(await fetchJson(`${env.mock.baseUrl}/debug/requests`))]"
+                  expr: "await (async () => { const cursor = Number((await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor ?? 0); return [...(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${Math.max(0, cursor - 20)}`))]; })()"
               - assert:
                   expr: "fallbackDebugRequests.some((request) => !request.toolOutput && /subagent direct fallback qa check/i.test(String(request.allInputText ?? '')) && request.plannedToolName === 'sessions_spawn' && request.plannedToolArgs?.label === config.expectedLabel)"
                   message:

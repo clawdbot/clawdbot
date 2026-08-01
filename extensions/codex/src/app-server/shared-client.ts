@@ -103,10 +103,6 @@ type CodexAppServerSpawnIdentity = Omit<
   "clientId" | "serverVersion" | "userAgent"
 >;
 
-// Clients we already force-closed for suspect retirement; a repeat retire must
-// report closed:false instead of pretending to close the corpse again.
-const suspectClosedClients = new WeakSet<CodexAppServerClient>();
-
 // Symbol.for shares one client table across duplicate module copies (dist +
 // src bundles in one process). Plugin updates restart the gateway, so every
 // copy writing this state runs the same code and the shape never migrates.
@@ -1145,23 +1141,6 @@ export function clearSharedCodexAppServerClientIfCurrent(
   return false;
 }
 
-/** Detaches the shared entry without closing the client when it still matches. */
-export function detachSharedCodexAppServerClientIfCurrent(
-  client: CodexAppServerClient | undefined,
-): boolean {
-  if (!client) {
-    return false;
-  }
-  const state = getSharedCodexAppServerClientState();
-  for (const [key, entry] of state.clients) {
-    if (entry.client === client) {
-      state.clients.delete(key);
-      return true;
-    }
-  }
-  return false;
-}
-
 /** Retains the matching shared client and returns a release callback. */
 export function retainSharedCodexAppServerClientIfCurrent(
   client: CodexAppServerClient | undefined,
@@ -1219,22 +1198,20 @@ export function retireSharedCodexAppServerClientIfCurrent(
       entry.closeWhenIdle = true;
       if (opts?.failActiveLeases) {
         entry.closeError = new Error("codex app-server client is closed");
-        const closed = closeRetiredSharedClientEntry(entry);
-        if (closed) {
-          suspectClosedClients.add(client);
-        }
-        return { activeLeases: entry.activeLeases, closed };
+        return {
+          activeLeases: entry.activeLeases,
+          closed: closeRetiredSharedClientEntry(entry),
+        };
       }
       const closed = closeRetiredSharedClientEntryIfIdle(entry);
       return { activeLeases: entry.activeLeases, closed };
     }
   }
   const detachedEntry = state.entriesByClient.get(client);
-  if (detachedEntry && (detachedEntry.client === client || suspectClosedClients.has(client))) {
+  if (detachedEntry && (detachedEntry.client === client || detachedEntry.closeError)) {
     // Explicit native-subagent retains are not listed in leasedReleases; the
-    // detached entry remains the sole authoritative owner of every lease.
-    if (opts?.failActiveLeases && !suspectClosedClients.has(client)) {
-      suspectClosedClients.add(client);
+    // detached entry owns every lease and records an already-forced closure.
+    if (opts?.failActiveLeases && !detachedEntry.closeError) {
       detachedEntry.closeError = new Error("codex app-server client is closed");
       return {
         activeLeases: detachedEntry.activeLeases,

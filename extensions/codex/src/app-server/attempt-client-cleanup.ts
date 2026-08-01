@@ -3,11 +3,7 @@
  */
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { CodexAppServerRpcError, type CodexAppServerClient } from "./client.js";
-import {
-  clearSharedCodexAppServerClientIfCurrent,
-  clearSharedCodexAppServerClientIfCurrentAndUnclaimed,
-  retireSharedCodexAppServerClientIfCurrent,
-} from "./shared-client.js";
+import { retireSharedCodexAppServerClientIfCurrent } from "./shared-client.js";
 import { getCodexAppServerTurnRouter } from "./turn-router.js";
 
 /** Timeout for best-effort app-server turn interruption during cleanup. */
@@ -72,30 +68,12 @@ export async function closeCodexStartupClientBestEffort(
   if (!client) {
     return;
   }
-  const unclaimedSharedClient = clearSharedCodexAppServerClientIfCurrentAndUnclaimed(client);
-  if (unclaimedSharedClient.closed) {
-    await closeClientAndWaitIfAvailable(client);
-    return;
-  }
-  if (unclaimedSharedClient.found) {
-    const retired = retireSharedCodexAppServerClientIfCurrent(client);
-    if (retired?.closed) {
-      await closeClientAndWaitIfAvailable(client);
-    }
-    return;
-  }
   const retiredSharedClient = retireSharedCodexAppServerClientIfCurrent(client);
-  if (retiredSharedClient) {
-    if (retiredSharedClient.closed) {
-      await closeClientAndWaitIfAvailable(client);
-    }
-    return;
-  }
-  if (clearSharedCodexAppServerClientIfCurrent(client)) {
+  // Detached entries retain every ordinary and native lease; only isolated or
+  // already-closed shared clients may be joined without aborting sibling turns.
+  if (!retiredSharedClient || retiredSharedClient.closed) {
     await closeClientAndWaitIfAvailable(client);
-    return;
   }
-  await closeClientAndWaitIfAvailable(client);
 }
 
 /** Sends a bounded turn interrupt and waits for Codex to confirm terminal abort handling. */
