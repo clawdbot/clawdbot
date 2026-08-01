@@ -44,18 +44,6 @@ export async function readInstalledPackageVersion(dir: string): Promise<string |
   return typeof manifest?.version === "string" ? manifest.version : undefined;
 }
 
-/** Read string-valued peer dependencies from an installed package. */
-export function readInstalledPackagePeerDependencies(dir: string): Record<string, string> {
-  const manifest = readInstalledPackageManifest(dir);
-  const peerDependencies = isRecord(manifest?.peerDependencies) ? manifest.peerDependencies : {};
-  return Object.fromEntries(
-    Object.entries(peerDependencies).filter((entry): entry is [string, string] => {
-      const [, value] = entry;
-      return typeof value === "string";
-    }),
-  );
-}
-
 /** Read the installed package declaration that requires the OpenClaw host link. */
 export function readInstalledPackageOpenClawLinkDependencies(dir: string): Record<string, string> {
   const manifest = readInstalledPackageManifest(dir);
