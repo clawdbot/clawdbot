@@ -80,6 +80,43 @@ struct RootTabsPresentationTests {
         #expect(unknown.isPartial)
     }
 
+    @Test func `usage list shows the latest fourteen days newest first`() {
+        let days = (1...20).map { day in
+            CostUsageDailyEntryLite(
+                date: String(format: "2026-07-%02d", day),
+                totalTokens: day,
+                totalCost: Double(day))
+        }
+
+        let displayed = AgentProTab.displayedUsageDays(days)
+
+        #expect(displayed.map(\.date) == (7...20).reversed().map {
+            String(format: "2026-07-%02d", $0)
+        })
+    }
+
+    @Test func `iOS usage requests device calendar days`() throws {
+        let cases: [(timeZoneID: String, timestamp: TimeInterval, expectedOffset: String)] = [
+            ("America/Los_Angeles", 1_769_000_000, "UTC-8"),
+            ("America/Los_Angeles", 1_785_000_000, "UTC-7"),
+            ("Asia/Kathmandu", 1_785_000_000, "UTC+5:45"),
+        ]
+
+        for testCase in cases {
+            let timeZone = try #require(TimeZone(identifier: testCase.timeZoneID))
+            let paramsJSON = CostUsageRequest.monthParamsJSON(
+                timeZone: timeZone,
+                date: Date(timeIntervalSince1970: testCase.timestamp))
+            let data = try #require(paramsJSON.data(using: .utf8))
+            let params = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+
+            #expect(params["days"] as? Int == 31)
+            #expect(params["mode"] as? String == "specific")
+            #expect(params["timeZone"] as? String == testCase.timeZoneID)
+            #expect(params["utcOffset"] as? String == testCase.expectedOffset)
+        }
+    }
+
     @Test func `failed cron attention ignores disabled jobs`() {
         #expect(RootSidebarModel.isFailedCronJob(Self.cronJob(enabled: true, status: "error")))
         #expect(!RootSidebarModel.isFailedCronJob(Self.cronJob(enabled: false, status: "error")))
