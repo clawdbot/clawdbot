@@ -8,6 +8,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithRuntimeDispatcherOrMockedGlobal } from "openclaw/plugin-sdk/runtime-fetch";
+import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveLineAccount } from "./accounts.js";
 import { messageAction, normalizeLineMessageActions } from "./actions.js";
@@ -552,21 +553,24 @@ export async function pushTextMessageWithQuickReplies(
 }
 
 export function createQuickReplyItems(labels: string[]): QuickReply {
-  const items: QuickReplyItem[] = labels.slice(0, 13).map((label) => ({
-    type: "action",
-    action: messageAction(label, label),
-  }));
+  const items: QuickReplyItem[] = normalizeStringEntries(labels)
+    .slice(0, 13)
+    .map((label) => ({
+      type: "action",
+      action: messageAction(label, label),
+    }));
   return { items };
 }
 
 export function createTextMessageWithQuickReplies(
   text: string,
   quickReplyLabels: string[],
-): TextMessage & { quickReply: QuickReply } {
+): TextMessage {
+  const quickReply = createQuickReplyItems(quickReplyLabels);
   return {
     type: "text",
     text,
-    quickReply: createQuickReplyItems(quickReplyLabels),
+    ...(quickReply.items?.length ? { quickReply } : {}),
   };
 }
 

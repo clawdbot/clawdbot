@@ -1,6 +1,5 @@
 import { HTTPFetchError } from "@line/bot-sdk";
 // Line tests cover send plugin behavior.
-import { expectDefined } from "@openclaw/normalization-core";
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -114,6 +113,28 @@ function createCredentialBearingHttpUrl(): string {
 describe("LINE send helpers", () => {
   const fixedSentAt = 1_800_000_000_000;
 
+  function expectedMediaSendResult(chatId: string, messageId: string, messageCount: number) {
+    const raw = {
+      channel: "line",
+      chatId,
+      conversationId: chatId,
+      messageId,
+      meta: { messageCount },
+    };
+    return {
+      chatId,
+      messageId,
+      receipt: {
+        parts: [{ index: 0, kind: "media", platformMessageId: messageId, raw, threadId: chatId }],
+        platformMessageIds: [messageId],
+        primaryPlatformMessageId: messageId,
+        raw: [raw],
+        sentAt: fixedSentAt,
+        threadId: chatId,
+      },
+    };
+  }
+
   beforeAll(async () => {
     sendModule = await import("./send.js");
   });
@@ -184,10 +205,19 @@ describe("LINE send helpers", () => {
   });
 
   it("limits quick reply items to 13", () => {
-    const labels = Array.from({ length: 20 }, (_, index) => `Option ${index + 1}`);
+    const labels = [
+      ...Array.from({ length: 13 }, () => " \t "),
+      ...Array.from({ length: 14 }, (_, index) => `  Option ${index + 1}  `),
+    ];
     const quickReply = sendModule.createQuickReplyItems(labels);
 
     expect(quickReply.items).toHaveLength(13);
+    expect(quickReply.items?.map((item) => item.action?.label)).toEqual(
+      Array.from({ length: 13 }, (_, index) => `Option ${index + 1}`),
+    );
+    expect(
+      sendModule.createTextMessageWithQuickReplies("Pick one", [" \t "]).quickReply,
+    ).toBeUndefined();
   });
 
   it("counts quick reply labels in grapheme clusters", () => {
@@ -200,19 +230,15 @@ describe("LINE send helpers", () => {
     expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(item?.action.label ?? "")).toBe(false);
   });
 
-  it("keeps provider-valid Flex alternative text and bounds oversized Unicode safely", () => {
+  it("keeps provider-valid Flex text across helpers and direct pushes", async () => {
     const contents = { type: "bubble" as const };
+    const altText = "a".repeat(1200);
 
-    expect(sendModule.createFlexMessage("a".repeat(1200), contents).altText).toBe("a".repeat(1200));
+    expect(sendModule.createFlexMessage(altText, contents).altText).toBe(altText);
 
     const oversized = sendModule.createFlexMessage(`${"a".repeat(1499)}😀 overflow`, contents);
     expect(oversized.altText).toBe("a".repeat(1499));
     expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(oversized.altText)).toBe(false);
-  });
-
-  it("sends the same provider-valid Flex alternative text through direct pushes", async () => {
-    const altText = "a".repeat(1200);
-
     await sendModule.pushFlexMessage("U123", altText, { type: "bubble" }, { cfg: LINE_TEST_CFG });
 
     expect(pushMessageMock).toHaveBeenCalledWith({
@@ -455,58 +481,7 @@ describe("LINE send helpers", () => {
       direction: "outbound",
     });
     expect(logVerboseMock).toHaveBeenCalledWith("line: pushed image to U123");
-    expect(result).toEqual({
-      chatId: "U123",
-      messageId: "push",
-      receipt: {
-        parts: [
-          {
-            index: 0,
-            kind: "media",
-            platformMessageId: "push",
-            raw: {
-              channel: "line",
-              chatId: "U123",
-              conversationId: "U123",
-              messageId: "push",
-              meta: { messageCount: 1 },
-            },
-            threadId: "U123",
-          },
-        ],
-        platformMessageIds: ["push"],
-        primaryPlatformMessageId: "push",
-        raw: [
-          {
-            channel: "line",
-            chatId: "U123",
-            conversationId: "U123",
-            messageId: "push",
-            meta: { messageCount: 1 },
-          },
-        ],
-        sentAt: fixedSentAt,
-        threadId: "U123",
-      },
-    });
-  });
-
-  it("preserves every provider message id returned by a LINE push", async () => {
-    pushMessageMock.mockResolvedValueOnce({
-      sentMessages: [{ id: "613452345678901234" }, { id: "613452345678901235" }],
-    });
-
-    const result = await sendModule.pushMessagesLine(
-      "line:user:U123",
-      [
-        { type: "text", text: "first" },
-        { type: "text", text: "second" },
-      ],
-      { cfg: LINE_TEST_CFG },
-    );
-
-    expect(result.messageId).toBe("613452345678901234");
-    expect(result.receipt.platformMessageIds).toEqual(["613452345678901234", "613452345678901235"]);
+    expect(result).toEqual(expectedMediaSendResult("U123", "push", 1));
   });
 
   it("replies when reply token is provided", async () => {
@@ -534,56 +509,44 @@ describe("LINE send helpers", () => {
       ],
     });
     expect(logVerboseMock).toHaveBeenCalledWith("line: replied to C1");
-    expect(result).toEqual({
-      chatId: "C1",
-      messageId: "reply",
-      receipt: {
-        parts: [
-          {
-            index: 0,
-            kind: "media",
-            platformMessageId: "reply",
-            raw: {
-              channel: "line",
-              chatId: "C1",
-              conversationId: "C1",
-              messageId: "reply",
-              meta: { messageCount: 2 },
-            },
-            threadId: "C1",
-          },
-        ],
-        platformMessageIds: ["reply"],
-        primaryPlatformMessageId: "reply",
-        raw: [
-          {
-            channel: "line",
-            chatId: "C1",
-            conversationId: "C1",
-            messageId: "reply",
-            meta: { messageCount: 2 },
-          },
-        ],
-        sentAt: fixedSentAt,
-        threadId: "C1",
-      },
-    });
+    expect(result).toEqual(expectedMediaSendResult("C1", "reply", 2));
   });
 
-  it("preserves every provider message id returned by a LINE reply", async () => {
-    replyMessageMock.mockResolvedValueOnce({
-      sentMessages: [{ id: "713452345678901234" }, { id: "713452345678901235" }],
-    });
-
-    const result = await sendModule.sendMessageLine("line:group:C1", "Hello", {
-      cfg: LINE_TEST_CFG,
-      replyToken: "reply-token",
-      mediaUrl: "https://example.com/media.jpg",
-    });
-
-    expect(result.messageId).toBe("713452345678901234");
-    expect(result.receipt.platformMessageIds).toEqual(["713452345678901234", "713452345678901235"]);
-  });
+  it.each([
+    {
+      route: "push",
+      ids: ["613452345678901234", "613452345678901235"],
+      provider: pushMessageMock,
+      send: () =>
+        sendModule.pushMessagesLine(
+          "line:user:U123",
+          [
+            { type: "text", text: "first" },
+            { type: "text", text: "second" },
+          ],
+          { cfg: LINE_TEST_CFG },
+        ),
+    },
+    {
+      route: "reply",
+      ids: ["713452345678901234", "713452345678901235"],
+      provider: replyMessageMock,
+      send: () =>
+        sendModule.sendMessageLine("line:group:C1", "Hello", {
+          cfg: LINE_TEST_CFG,
+          replyToken: "reply-token",
+          mediaUrl: "https://example.com/media.jpg",
+        }),
+    },
+  ])(
+    "preserves every provider message id returned by a LINE $route",
+    async ({ ids, provider, send }) => {
+      provider.mockResolvedValueOnce({ sentMessages: ids.map((id) => ({ id })) });
+      const result = await send();
+      expect(result.messageId).toBe(ids[0]);
+      expect(result.receipt.platformMessageIds).toEqual(ids);
+    },
+  );
 
   it.each([
     {
@@ -817,31 +780,37 @@ describe("LINE send helpers", () => {
     });
   });
 
-  it("sends video with explicit image preview URL", async () => {
-    await sendModule.sendMessageLine("line:user:U100", "Video", {
-      cfg: LINE_TEST_CFG,
-      mediaUrl: "https://example.com/video.mp4",
-      mediaKind: "video",
-      previewImageUrl: "https://example.com/preview.jpg",
-      trackingId: "track-1",
-    });
+  it.each([
+    { target: "line:user:U100", chatId: "U100", trackingId: "track-1", expected: "track-1" },
+    { target: "line:group:C100", chatId: "C100", trackingId: "track-group", expected: undefined },
+  ])(
+    "normalizes video tracking by recipient $target",
+    async ({ target, chatId, trackingId, expected }) => {
+      await sendModule.sendMessageLine(target, "Video", {
+        cfg: LINE_TEST_CFG,
+        mediaUrl: "https://example.com/video.mp4",
+        mediaKind: "video",
+        previewImageUrl: "https://example.com/preview.jpg",
+        trackingId,
+      });
 
-    expect(pushMessageMock).toHaveBeenCalledWith({
-      to: "U100",
-      messages: [
-        {
-          type: "video",
-          originalContentUrl: "https://example.com/video.mp4",
-          previewImageUrl: "https://example.com/preview.jpg",
-          trackingId: "track-1",
-        },
-        {
-          type: "text",
-          text: "Video",
-        },
-      ],
-    });
-  });
+      expect(pushMessageMock).toHaveBeenCalledWith({
+        to: chatId,
+        messages: [
+          {
+            type: "video",
+            originalContentUrl: "https://example.com/video.mp4",
+            previewImageUrl: "https://example.com/preview.jpg",
+            ...(expected ? { trackingId: expected } : {}),
+          },
+          {
+            type: "text",
+            text: "Video",
+          },
+        ],
+      });
+    },
+  );
 
   it("throws when video preview URL is missing", async () => {
     await expect(
@@ -908,31 +877,6 @@ describe("LINE send helpers", () => {
     await expect(run()).rejects.toThrow(new Error("LINE outbound media URL must use HTTPS"));
     expect(pushMessageMock).not.toHaveBeenCalled();
     expect(replyMessageMock).not.toHaveBeenCalled();
-  });
-
-  it("omits trackingId for non-user destinations", async () => {
-    await sendModule.sendMessageLine("line:group:C100", "Video", {
-      cfg: LINE_TEST_CFG,
-      mediaUrl: "https://example.com/video.mp4",
-      mediaKind: "video",
-      previewImageUrl: "https://example.com/preview.jpg",
-      trackingId: "track-group",
-    });
-
-    expect(pushMessageMock).toHaveBeenCalledWith({
-      to: "C100",
-      messages: [
-        {
-          type: "video",
-          originalContentUrl: "https://example.com/video.mp4",
-          previewImageUrl: "https://example.com/preview.jpg",
-        },
-        {
-          type: "text",
-          text: "Video",
-        },
-      ],
-    });
   });
 
   it("throws when push messages are empty", async () => {
@@ -1050,21 +994,101 @@ describe("LINE send helpers", () => {
     );
   });
 
-  it("pushes quick-reply text and caps to 13 buttons", async () => {
+  it("normalizes quick replies across push and reply provider boundaries", async () => {
+    const options = { cfg: LINE_TEST_CFG };
     await sendModule.pushTextMessageWithQuickReplies(
       "U-quick",
       "Pick one",
-      Array.from({ length: 20 }, (_, index) => `Choice ${index + 1}`),
-      { cfg: LINE_TEST_CFG },
+      [
+        ...Array.from({ length: 13 }, () => " \t "),
+        ...Array.from({ length: 14 }, (_, index) => `  Choice ${index + 1}  `),
+      ],
+      options,
     );
 
     expect(pushMessageMock).toHaveBeenCalledTimes(1);
-    const firstCall = pushMessageMock.mock.calls.at(0) as [
+    const [{ messages }] = pushMessageMock.mock.calls[0] as [
       { messages: Array<{ quickReply?: { items: unknown[] } }> },
     ];
-    const payload = expectDefined(firstCall[0], "LINE push payload");
-    expect(expectDefined(payload.messages[0], "LINE push message").quickReply?.items).toHaveLength(
-      13,
-    );
+    const items = messages[0]?.quickReply?.items;
+    expect(items).toHaveLength(13);
+    expect(items?.[0]).toMatchObject({ action: { label: "Choice 1", text: "Choice 1" } });
+
+    const validActions = Array.from({ length: 13 }, (_, index) => ({
+      type: "message" as const,
+      label: `Option ${index + 1}`,
+      text: `Option ${index + 1}`,
+    }));
+    const legacy = { type: "postback" as const, label: "Legacy", data: "old", text: "Old" };
+    const modern = { ...legacy, label: "Modern", data: "new", displayText: "New" };
+    const repaired = {
+      imageUrl: "https://example.com/icon.png",
+      action: { type: "message" as const, label: "Repaired", text: "Repaired" },
+    };
+    const emptyDataActions = [
+      { type: "postback" as const, label: "Empty callback", data: "" },
+      { type: "datetimepicker" as const, label: "Empty date", data: "", mode: "date" as const },
+    ];
+    const rawItems = [
+      { type: "action" as const },
+      ...[
+        { type: "message" as const, label: " \t ", text: "blank" },
+        ...(["message", "uri", "postback", "datetimepicker"] as const).map((type) => ({
+          type,
+          label: `Missing ${type}`,
+        })),
+      ].map((action) => ({ type: "action" as const, action })),
+      repaired,
+      { ...repaired, type: "unsupported" },
+      ...[modern, legacy, ...emptyDataActions, ...validActions].map((action) => ({
+        type: "action" as const,
+        action,
+      })),
+    ];
+    const expectedItems = [
+      { ...repaired, type: "action" },
+      { ...repaired, type: "action" },
+      ...[
+        { type: "postback", label: "Modern", data: "new", displayText: "New" },
+        { type: "postback", label: "Legacy", data: "old", displayText: "Old" },
+        ...emptyDataActions,
+        ...validActions.slice(0, 7),
+      ].map((action) => ({ type: "action", action })),
+    ];
+    for (const route of ["quick-reply push", "raw push", "reply"] as const) {
+      for (const raw of route === "quick-reply push" ? [false] : [false, true]) {
+        const provider = route === "reply" ? replyMessageMock : pushMessageMock;
+        provider.mockClear();
+        const message = {
+          type: "text" as const,
+          text: "Pick one",
+          quickReply: { items: raw ? rawItems : [] },
+        };
+        if (route === "quick-reply push") {
+          await sendModule.pushTextMessageWithQuickReplies("U-quick", message.text, [""], options);
+        } else if (route === "raw push") {
+          await sendModule.pushMessagesLine("U-quick", [message], options);
+        } else {
+          await sendModule.replyMessageLine("reply-token", [message], options);
+        }
+
+        expect(provider).toHaveBeenCalledExactlyOnceWith({
+          ...(route === "reply" ? { replyToken: "reply-token" } : { to: "U-quick" }),
+          messages: [
+            {
+              type: "text",
+              text: "Pick one",
+              ...(raw
+                ? {
+                    quickReply: {
+                      items: expectedItems,
+                    },
+                  }
+                : {}),
+            },
+          ],
+        });
+      }
+    }
   });
 });
