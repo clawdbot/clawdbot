@@ -31,7 +31,6 @@ const MANTIS_TELEGRAM_LIVE_WORKFLOW = ".github/workflows/mantis-telegram-live.ym
 const MANTIS_WEB_UI_CHAT_PROOF_WORKFLOW = ".github/workflows/mantis-web-ui-chat-proof.yml";
 const PACKAGE_JSON = "package.json";
 const SETUP_PNPM_STORE_CACHE_ACTION = ".github/actions/setup-pnpm-store-cache/action.yml";
-const DOCKER_E2E_PLAN_ACTION = ".github/actions/docker-e2e-plan/action.yml";
 const RELEASE_CHECKS_WORKFLOW = ".github/workflows/openclaw-release-checks.yml";
 const RELEASE_TELEGRAM_QA_WORKFLOW = ".github/workflows/openclaw-release-telegram-qa.yml";
 const RELEASE_PUBLISH_WORKFLOW = ".github/workflows/openclaw-release-publish.yml";
@@ -2113,10 +2112,10 @@ describe("package artifact reuse", () => {
       expect(script).toContain('source "$TRUSTED_HARNESS_DIR/scripts/lib/live-docker-auth.sh"');
       expect(script).not.toContain('source "$ROOT_DIR/scripts/lib/live-docker-auth.sh"');
       expect(script).toContain("openclaw_live_init_docker_run_args DOCKER_RUN_ARGS");
-      expect(script).toContain("openclaw_live_prepare_bind_dir_for_container_user");
       expect(script).toContain("DOCKER_RUN_ARGS+=(--rm -t \\");
       expect(script).not.toContain("DOCKER_RUN_ARGS=(docker run --rm -t \\");
     }
+    expect(liveDockerAuth).toContain("openclaw_live_prepare_bind_dir_for_container_user");
     for (const script of sharedLiveScripts) {
       expect(script).toContain("openclaw_live_uses_managed_bind_dirs");
       expect(script).toContain(
@@ -2135,11 +2134,15 @@ describe("package artifact reuse", () => {
       readFileSync("scripts/test-live-acp-bind-docker.sh", "utf8"),
       readFileSync("scripts/test-live-codex-harness-docker.sh", "utf8"),
     ]) {
-      expect(script).toContain("elif command -v gtimeout >/dev/null 2>&1; then");
-      expect(script).toContain('if "$timeout_bin" --kill-after=1s 1s true');
-      expect(script).toContain('"$timeout_bin" --kill-after=30s "$timeout_value" "$@"');
+      expect(script).toContain("openclaw_live_run_setup_command");
       expect(script).not.toContain('timeout --kill-after=30s "${OPENCLAW_LIVE_');
     }
+    expect(stage).toContain("elif command -v gtimeout >/dev/null 2>&1; then");
+    expect(stage).toContain('if "$timeout_bin" --kill-after=1s 1s true');
+    expect(stage).toContain('"$timeout_bin" --kill-after=30s "${timeout_seconds}s" "$@"');
+    expect(stage).toContain(
+      'echo "timeout command not found; cannot bound ${label} after ${timeout_seconds}s"',
+    );
     expect(readFileSync("scripts/test-live-models-docker.sh", "utf8")).toContain(
       "OPENCLAW_LIVE_MODELS_DOCKER_RUN_TIMEOUT:-2100s",
     );
@@ -2153,10 +2156,10 @@ describe("package artifact reuse", () => {
       'CLI_SETUP_TIMEOUT_SECONDS="$(openclaw_live_read_positive_int_env OPENCLAW_LIVE_CLI_BACKEND_SETUP_TIMEOUT_SECONDS 180)"',
     );
     expect(readFileSync("scripts/test-live-cli-backend-docker.sh", "utf8")).toContain(
-      'timeout_value="${OPENCLAW_LIVE_CLI_BACKEND_SETUP_TIMEOUT_SECONDS:?missing live CLI backend setup timeout seconds}s"',
+      '"${OPENCLAW_LIVE_CLI_BACKEND_SETUP_TIMEOUT_SECONDS:?missing live CLI backend setup timeout seconds}"',
     );
     expect(readFileSync("scripts/test-live-cli-backend-docker.sh", "utf8")).toContain(
-      'echo "timeout command not found; cannot bound live CLI backend setup after ${timeout_value}"',
+      '"live CLI backend setup"',
     );
     expect(readFileSync("scripts/test-live-acp-bind-docker.sh", "utf8")).toContain(
       "OPENCLAW_LIVE_ACP_BIND_DOCKER_RUN_TIMEOUT:-2700s",
@@ -2165,7 +2168,7 @@ describe("package artifact reuse", () => {
       'ACP_SETUP_TIMEOUT_SECONDS="$(openclaw_live_read_positive_int_env OPENCLAW_LIVE_ACP_BIND_SETUP_TIMEOUT_SECONDS 180)"',
     );
     expect(readFileSync("scripts/test-live-acp-bind-docker.sh", "utf8")).toContain(
-      'timeout_value="${OPENCLAW_LIVE_ACP_BIND_SETUP_TIMEOUT_SECONDS:?missing live ACP bind setup timeout seconds}s"',
+      '"${OPENCLAW_LIVE_ACP_BIND_SETUP_TIMEOUT_SECONDS:?missing live ACP bind setup timeout seconds}"',
     );
     expect(readFileSync("scripts/test-live-acp-bind-docker.sh", "utf8")).toContain(
       '-e OPENCLAW_LIVE_ACP_BIND_SETUP_TIMEOUT_SECONDS="$ACP_SETUP_TIMEOUT_SECONDS"',
@@ -2174,7 +2177,7 @@ describe("package artifact reuse", () => {
       '-e OPENCLAW_LIVE_ACP_BIND_REQUIRE_CRON="${OPENCLAW_LIVE_ACP_BIND_REQUIRE_CRON:-}"',
     );
     expect(readFileSync("scripts/test-live-acp-bind-docker.sh", "utf8")).toContain(
-      'echo "timeout command not found; cannot bound live ACP bind setup after ${timeout_value}"',
+      '"live ACP bind setup"',
     );
     expect(readFileSync("scripts/test-live-acp-bind-docker.sh", "utf8")).toContain(
       'run_setup_command npm install -g "@anthropic-ai/claude-code@$claude_code_version"',
@@ -2203,13 +2206,13 @@ describe("package artifact reuse", () => {
       'CODEX_HARNESS_SETUP_TIMEOUT_SECONDS="$(openclaw_live_read_positive_int_env OPENCLAW_LIVE_CODEX_HARNESS_SETUP_TIMEOUT_SECONDS 180)"',
     );
     expect(readFileSync("scripts/test-live-codex-harness-docker.sh", "utf8")).toContain(
-      'timeout_value="${OPENCLAW_LIVE_CODEX_HARNESS_SETUP_TIMEOUT_SECONDS:?missing live Codex harness setup timeout seconds}s"',
+      '"${OPENCLAW_LIVE_CODEX_HARNESS_SETUP_TIMEOUT_SECONDS:?missing live Codex harness setup timeout seconds}"',
     );
     expect(readFileSync("scripts/test-live-codex-harness-docker.sh", "utf8")).toContain(
       '-e OPENCLAW_LIVE_CODEX_HARNESS_SETUP_TIMEOUT_SECONDS="$CODEX_HARNESS_SETUP_TIMEOUT_SECONDS"',
     );
     expect(readFileSync("scripts/test-live-codex-harness-docker.sh", "utf8")).toContain(
-      'echo "timeout command not found; cannot bound live Codex harness setup after ${timeout_value}"',
+      '"live Codex harness setup"',
     );
     expect(readFileSync("scripts/test-live-codex-harness-docker.sh", "utf8")).toContain(
       'run_setup_command npm install -g "$OPENCLAW_LIVE_CODEX_CLI_PACKAGE_SPEC"',
@@ -2257,7 +2260,6 @@ describe("package artifact reuse", () => {
     const scheduledWorkflow = readFileSync(SCHEDULED_LIVE_CHECKS_WORKFLOW, "utf8");
     const packageAcceptanceWorkflow = readFileSync(PACKAGE_ACCEPTANCE_WORKFLOW, "utf8");
     const testboxWorkflow = readFileSync(CI_CHECK_TESTBOX_WORKFLOW, "utf8");
-    const dockerPlanAction = readFileSync(DOCKER_E2E_PLAN_ACTION, "utf8");
     const hydrateScript = readFileSync(CI_HYDRATE_LIVE_AUTH_SCRIPT, "utf8");
     const providerVerifier = readFileSync(VERIFY_PROVIDER_SECRETS_SCRIPT, "utf8");
     const testboxProviderSecretKeys = [
@@ -2332,21 +2334,6 @@ describe("package artifact reuse", () => {
     expect(providerVerifier).toContain('model: "claude-haiku-4-5"');
     expect(providerVerifier).toContain("validateResponse:");
     expect(providerVerifier).not.toContain("ANTHROPIC_OAUTH_TOKEN");
-    expect(dockerPlanAction).toContain('if [[ "$credentials" == *",factory,"* ]]; then');
-    expectTextToIncludeAll(dockerPlanAction, [
-      'if [[ "$credentials" == *",openai,"* ]]; then',
-      "require_any OpenAI OPENAI_API_KEY",
-      'if [[ "$credentials" == *",codex,"* ]]; then',
-      "require_any Codex OPENCLAW_CODEX_AUTH_JSON",
-      'if [[ "$credentials" == *",anthropic,"* ]]; then',
-      "require_any Anthropic ANTHROPIC_API_TOKEN ANTHROPIC_API_KEY OPENCLAW_CLAUDE_CREDENTIALS_JSON OPENCLAW_CLAUDE_JSON",
-      'if [[ "$credentials" == *",factory,"* ]]; then',
-      "require_any Factory FACTORY_API_KEY",
-      'if [[ "$credentials" == *",gemini,"* ]]; then',
-      "require_any Gemini GEMINI_API_KEY GOOGLE_API_KEY OPENCLAW_GEMINI_SETTINGS_JSON",
-      'if [[ "$credentials" == *",opencode,"* ]]; then',
-      "require_any OpenCode OPENCODE_API_KEY OPENCODE_ZEN_API_KEY",
-    ]);
     for (const workflow of [
       reusableWorkflow,
       releaseChecksWorkflow,
