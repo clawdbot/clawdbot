@@ -55,6 +55,10 @@ type GatewayMemoryStartupPolicy =
 const loadMainSessionRestartRecoveryModule = createLazyRuntimeModule(
   () => import("../agents/main-session-restart-recovery.js"),
 );
+// Startup only needs orphan marking; keep resume and delivery runtime out of the pre-channel path.
+const loadMainSessionRestartRecoveryMarkingModule = createLazyRuntimeModule(
+  () => import("../agents/main-session-restart-recovery-marking.js"),
+);
 
 const loadAgentDefaultsModule = createLazyRuntimeModule(() => import("../agents/defaults.js"));
 
@@ -674,7 +678,7 @@ export async function startGatewaySidecars(params: {
   await measureStartup(params.startupTrace, "sidecars.main-session-recovery", async () => {
     try {
       const { markStartupOrphanedMainSessionsForRecovery } =
-        await loadMainSessionRestartRecoveryModule();
+        await loadMainSessionRestartRecoveryMarkingModule();
       await markStartupOrphanedMainSessionsForRecovery({ cfg: params.cfg });
     } catch (err) {
       params.log.warn(
