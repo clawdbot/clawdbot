@@ -2,7 +2,7 @@ type QueuedProviderList = {
   start: () => void;
 };
 
-export class SessionCatalogListBusyError extends Error {
+class SessionCatalogListBusyError extends Error {
   readonly code = "catalog_busy";
 
   constructor(maxConcurrent: number, maxQueued: number) {
@@ -65,13 +65,3 @@ export class SessionCatalogListAdmission {
     }
   }
 }
-
-const MAX_CONCURRENT_SESSION_CATALOG_LISTS = 4;
-const MAX_QUEUED_SESSION_CATALOG_LISTS = 32;
-
-// Catalog adapters may scan local databases or invoke external CLIs. Bound the
-// expensive provider operation itself so adding providers cannot multiply the cap.
-export const sessionCatalogListAdmission = new SessionCatalogListAdmission(
-  MAX_CONCURRENT_SESSION_CATALOG_LISTS,
-  MAX_QUEUED_SESSION_CATALOG_LISTS,
-);

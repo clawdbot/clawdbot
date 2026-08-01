@@ -1,8 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  SessionCatalogListAdmission,
-  SessionCatalogListBusyError,
-} from "./session-catalog-list-admission.js";
+import { SessionCatalogListAdmission } from "./session-catalog-list-admission.js";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -59,7 +56,7 @@ describe("SessionCatalogListAdmission", () => {
     const queued = admission.run(async () => undefined);
     const overflowTask = vi.fn(async () => undefined);
 
-    await expect(admission.run(overflowTask)).rejects.toBeInstanceOf(SessionCatalogListBusyError);
+    await expect(admission.run(overflowTask)).rejects.toMatchObject({ code: "catalog_busy" });
     expect(overflowTask).not.toHaveBeenCalled();
 
     active.resolve();

@@ -29,7 +29,7 @@ import { upsertSessionUpstreamLink } from "../../sessions/session-upstream-links
 import type { GatewayBroadcastToConnIdsFn } from "../server-broadcast-types.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import { createSessionCatalogRequestEntrySnapshot } from "./session-catalog-entry-snapshot.js";
-import { sessionCatalogListAdmission } from "./session-catalog-list-admission.js";
+import { SessionCatalogListAdmission } from "./session-catalog-list-admission.js";
 import { sessionCatalogListKey } from "./session-catalog-list-key.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -37,6 +37,15 @@ import { assertValidParams } from "./validation.js";
 const SESSION_CATALOG_SEARCH_MAX_UTF16_UNITS = 500;
 const SESSION_CATALOG_SHARE_WINDOW_MS = 3_000;
 const SESSION_CATALOG_LIST_CACHE_MAX_ENTRIES = 128;
+const MAX_CONCURRENT_SESSION_CATALOG_LISTS = 4;
+const MAX_QUEUED_SESSION_CATALOG_LISTS = 32;
+
+// Catalog adapters may scan local databases or invoke external CLIs. Bound the
+// expensive provider operation itself so adding providers cannot multiply the cap.
+const sessionCatalogListAdmission = new SessionCatalogListAdmission(
+  MAX_CONCURRENT_SESSION_CATALOG_LISTS,
+  MAX_QUEUED_SESSION_CATALOG_LISTS,
+);
 
 function createSessionCatalogRequestNodeSnapshot(): NonNullable<
   SessionCatalogListProviderParams["listNodes"]
