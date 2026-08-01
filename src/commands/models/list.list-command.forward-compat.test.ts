@@ -689,6 +689,11 @@ describe("modelsListCommand forward-compat", () => {
             provider: "google",
             key: "google-fixture",
           },
+          "openai:platform": {
+            type: "api_key",
+            provider: "openai",
+            key: "openai-fixture",
+          },
         },
         order: {},
       });
