@@ -649,6 +649,7 @@ export function createOpenClawTools(
           // is the gate in ensureConfiguredAgentMainSession).
           withSessionsSendRestrictionContext({ agentSessionId: options?.sessionId }, () =>
             createSessionsSendTool({
+              agentId: sessionAgentId,
               agentSessionKey: options?.agentSessionKey,
               agentChannel: options?.agentChannel,
               sandboxed: options?.sandboxed,

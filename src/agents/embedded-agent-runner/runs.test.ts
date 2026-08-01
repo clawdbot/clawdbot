@@ -921,7 +921,7 @@ describe("embedded-agent runner run registry", () => {
     setActiveEmbeddedRun("session-replaced", firstHandle);
     const release = retainSessionsSendTargetBlockForActiveRun({
       sessionId: "session-replaced",
-      targetSessionKey: "agent:requester:main",
+      targetSessionKey: "global",
     });
 
     setActiveEmbeddedRun("session-replaced", replacementHandle);
@@ -930,6 +930,8 @@ describe("embedded-agent runner run registry", () => {
       isSessionsSendTargetBlockedForActiveRun({
         sessionId: "session-replaced",
         targetSessionKey: "agent:requester:main",
+        matchesSessionKey: (blockedSessionKey, targetSessionKey) =>
+          blockedSessionKey === "global" && targetSessionKey === "agent:requester:main",
       }),
     ).toBe(true);
     release?.();
@@ -937,6 +939,8 @@ describe("embedded-agent runner run registry", () => {
       isSessionsSendTargetBlockedForActiveRun({
         sessionId: "session-replaced",
         targetSessionKey: "agent:requester:main",
+        matchesSessionKey: (blockedSessionKey, targetSessionKey) =>
+          blockedSessionKey === "global" && targetSessionKey === "agent:requester:main",
       }),
     ).toBe(false);
   });

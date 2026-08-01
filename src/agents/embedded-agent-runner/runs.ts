@@ -134,6 +134,7 @@ export function formatEmbeddedAgentQueueFailureSummary(
 export function isSessionsSendTargetBlockedForActiveRun(params: {
   sessionId?: string;
   targetSessionKey: string;
+  matchesSessionKey?: (blockedSessionKey: string, targetSessionKey: string) => boolean;
 }): boolean {
   const sessionId = params.sessionId?.trim();
   const targetSessionKey = params.targetSessionKey.trim();
@@ -142,9 +143,19 @@ export function isSessionsSendTargetBlockedForActiveRun(params: {
   }
   const owner =
     resolveActiveReplyOperationForSessionId(sessionId) ?? ACTIVE_EMBEDDED_RUNS.get(sessionId);
-  return Boolean(
-    owner && SESSIONS_SEND_TARGET_BLOCKS_BY_ACTIVE_OWNER.get(owner)?.get(targetSessionKey),
-  );
+  const targetBlocks = owner ? SESSIONS_SEND_TARGET_BLOCKS_BY_ACTIVE_OWNER.get(owner) : undefined;
+  if (targetBlocks?.get(targetSessionKey)) {
+    return true;
+  }
+  if (!targetBlocks || !params.matchesSessionKey) {
+    return false;
+  }
+  for (const [blockedSessionKey, count] of targetBlocks) {
+    if (count > 0 && params.matchesSessionKey(blockedSessionKey, targetSessionKey)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function retainSessionsSendTargetBlockForActiveRun(params: {

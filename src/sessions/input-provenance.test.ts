@@ -154,6 +154,7 @@ describe("shouldPreserveUserFacingSessionStateForInputProvenance", () => {
     "exec_approval_followup",
     "image_generate",
     "music_generate",
+    "sessions_send_delivery_failure",
     "subagent_announce",
     "subagent_interrupted_resume",
     "video_generate",

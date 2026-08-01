@@ -858,6 +858,100 @@ describe("sessions_send gating", () => {
     ]);
   });
 
+  it("blocks a global requester through its agent-main alias", async () => {
+    const requesterAlias = "agent:requester:main";
+    const thirdPartyAlias = "agent:third-party:main";
+    loadConfigMock.mockReturnValue({
+      agents: {
+        list: [{ id: "target", default: true }, { id: "requester" }, { id: "third-party" }],
+      },
+      session: { scope: "global", mainKey: "main" },
+      tools: {
+        agentToAgent: { enabled: true },
+        sessions: { visibility: "all" },
+      },
+    });
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "sessions.list") {
+        return {
+          path: "/tmp/sessions.json",
+          sessions: [
+            { key: requesterAlias, kind: "direct" },
+            { key: thirdPartyAlias, kind: "direct" },
+          ],
+        };
+      }
+      if (request.method === "agent") {
+        return { runId: "run-global-third-party", acceptedAt: 123 };
+      }
+      return {};
+    });
+    const tool = withSessionsSendRestrictionContext({ callerSessionKey: "global" }, () =>
+      createSessionsSendTool({
+        agentSessionKey: "agent:target:telegram:direct:worker",
+        agentChannel: "telegram",
+      }),
+    );
+
+    const result = await tool.execute("call-global-reverse", {
+      sessionKey: requesterAlias,
+      message: "duplicate result",
+      timeoutSeconds: 0,
+    });
+
+    expect(requireDetails(result)).toMatchObject({
+      status: "forbidden",
+      sessionKey: requesterAlias,
+    });
+    expect(
+      callGatewayMock.mock.calls.filter(
+        ([request]) => (request as { method?: string }).method === "agent",
+      ),
+    ).toHaveLength(0);
+
+    const scopedTargetTool = withSessionsSendRestrictionContext(
+      { callerSessionKey: requesterAlias },
+      () =>
+        createSessionsSendTool({
+          agentId: "target",
+          agentSessionKey: "agent:target:telegram:direct:worker",
+          agentChannel: "telegram",
+        }),
+    );
+    const nestedResult = await scopedTargetTool.execute("call-global-nested", {
+      sessionKey: thirdPartyAlias,
+      message: "legitimate nested handoff",
+      timeoutSeconds: 0,
+    });
+    expect(requireDetails(nestedResult)).toMatchObject({
+      status: "accepted",
+      sessionKey: thirdPartyAlias,
+    });
+
+    const globalRequesterTool = createSessionsSendTool({
+      agentId: "requester",
+      agentSessionKey: "global",
+      agentChannel: "telegram",
+    });
+    await globalRequesterTool.execute("call-global-source", {
+      sessionKey: thirdPartyAlias,
+      message: "source identity proof",
+      timeoutSeconds: 0,
+    });
+    expect(callGatewayMock.mock.calls).toContainEqual([
+      expect.objectContaining({
+        method: "agent",
+        params: expect.objectContaining({
+          inputProvenance: expect.objectContaining({
+            sourceSessionKey: requesterAlias,
+            sourceTool: "sessions_send",
+          }),
+        }),
+      }),
+    ]);
+  });
+
   it.each([1.5, -1, "1sec"])("rejects invalid timeoutSeconds value %s", async (timeoutSeconds) => {
     const tool = createMainSessionsSendTool();
 
