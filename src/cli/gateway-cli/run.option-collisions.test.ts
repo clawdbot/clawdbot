@@ -81,15 +81,6 @@ const pristineStartupMigrationPlan = vi.hoisted(() => ({
   config: vi.fn(),
   state: vi.fn(),
 }));
-const execApprovalsState = vi.hoisted(() => ({
-  snapshot: {
-    path: "/tmp/openclaw-exec-approvals.json",
-    exists: false,
-    raw: null,
-    hash: "",
-    file: { version: 1, agents: {} },
-  } as Record<string, unknown>,
-}));
 const readBestEffortConfig = vi.fn(async () => configState.cfg);
 type ConfigSnapshotReadOptionsStub = {
   isolateEnv?: boolean;
@@ -295,14 +286,6 @@ vi.mock("../../infra/gateway-lock.js", () => ({
   GatewayLockError: class GatewayLockError extends Error {},
 }));
 
-vi.mock("../../infra/exec-approvals.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../infra/exec-approvals.js")>();
-  return {
-    ...actual,
-    readExecApprovalsSnapshot: () => execApprovalsState.snapshot,
-  };
-});
-
 vi.mock("../../infra/ports.js", () => ({
   formatPortDiagnostics: () => [],
   inspectPortUsage: async () => ({ status: "free" }),
@@ -417,13 +400,6 @@ describe("gateway run option collisions", () => {
       skipAllStateMigrations: false,
       skipCoreStateMigrations: false,
     });
-    execApprovalsState.snapshot = {
-      path: "/tmp/openclaw-exec-approvals.json",
-      exists: false,
-      raw: null,
-      hash: "",
-      file: { version: 1, agents: {} },
-    };
     netState.autoBindHost = "127.0.0.1";
     netState.container = false;
     readBestEffortConfig.mockClear();
@@ -1616,34 +1592,6 @@ describe("gateway run option collisions", () => {
     );
     expect(gatewayStartOptions(1).channelAutostartSuppression).toBeUndefined();
     expect(gatewayLogMessages.some((message) => message.includes("breaker recovered"))).toBe(true);
-  });
-
-  it("warns once when global exec security is clamped by host approvals", async () => {
-    configState.snapshot = {
-      exists: true,
-      valid: true,
-      config: { tools: { exec: { security: "full" } } },
-      parsed: { tools: { exec: { security: "full" } } },
-    };
-    execApprovalsState.snapshot = {
-      path: "/tmp/openclaw-exec-approvals.json",
-      exists: true,
-      raw: '{"version":1}',
-      hash: "hash",
-      file: {
-        version: 1,
-        defaults: { security: "allowlist", ask: "off" },
-        agents: {},
-      },
-    };
-
-    await runGatewayCli(["gateway", "run", "--allow-unconfigured"]);
-
-    expect(
-      gatewayLogMessages.filter((message) =>
-        message.includes("tools.exec.security=full is clamped to allowlist"),
-      ),
-    ).toHaveLength(1);
   });
 
   it("skips failure bundles but exits nonzero for unconfirmed gateway lock conflicts", async () => {

@@ -839,14 +839,6 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
     process.env[GATEWAY_SERVICE_RUNTIME_PID_ENV] = String(process.pid);
   }
   await hooks.refreshManagedProxy?.(cfg.proxy);
-  const { buildCurrentGlobalExecPolicyClampWarning } =
-    await import("./exec-policy-startup-warning.js");
-  // Startup only logs the global floor mismatch once; per-agent clamps remain visible
-  // in `openclaw exec-policy show` without adding per-turn or per-tool log noise.
-  const execPolicyClampWarning = buildCurrentGlobalExecPolicyClampWarning(cfg);
-  if (execPolicyClampWarning) {
-    gatewayLog.warn(execPolicyClampWarning);
-  }
   const portOverride = parsePort(opts.port);
   if (opts.port !== undefined && portOverride === null) {
     defaultRuntime.error(formatInvalidPortOption("--port"));

@@ -31,6 +31,7 @@ import {
   setDiagnosticsEnabledForProcess,
 } from "../infra/diagnostic-events.js";
 import { isVitestRuntimeEnv, logAcceptedEnvOption } from "../infra/env.js";
+import { buildCurrentGlobalExecPolicyClampWarning } from "../infra/exec-policy-clamp-warning.js";
 import { readGatewayRestartHandoffSync } from "../infra/restart-handoff.js";
 import { setGatewaySigusr1RestartPolicy, setPreRestartDeferralCheck } from "../infra/restart.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
@@ -299,6 +300,13 @@ export async function prepareGatewayServerBootstrap(input: {
     log.warn(
       "SECURITY WARNING: gateway.auth.trustedProxy.deviceAutoApprove.scopes includes operator.admin; every proxy-authenticated user can auto-approve a new browser device with full admin, and requests without scopes receive full admin automatically. Remove operator.admin to require manual approval until per-identity roles are available.",
     );
+  }
+  // Every start re-resolves cfgAtStart and re-reads host approvals, so an in-process
+  // SIGUSR1 restart that changes either one reports the clamp that start actually got.
+  // Only the global floor is logged; per-agent clamps stay in `openclaw exec-policy show`.
+  const execPolicyClampWarning = buildCurrentGlobalExecPolicyClampWarning(cfgAtStart);
+  if (execPolicyClampWarning) {
+    log.warn(execPolicyClampWarning);
   }
   const resolvedStartupAuthOverride = startupAuthOverride
     ? (Object.fromEntries(

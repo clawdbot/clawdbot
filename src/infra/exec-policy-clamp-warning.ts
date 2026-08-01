@@ -1,15 +1,15 @@
-// Gateway startup warning for requested exec policy clamped by host approvals.
-import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
-import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
+// Gateway start warning for requested exec policy clamped by host approvals.
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import {
   collectExecPolicyScopeSnapshots,
   isExecPolicySecurityClampedByHost,
   type ExecPolicyScopeSnapshot,
-} from "../../infra/exec-approvals-effective.js";
-import { readExecApprovalsSnapshot, type ExecApprovalsFile } from "../../infra/exec-approvals.js";
-import { resolveExecTarget } from "../../infra/exec-target-resolution.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
+} from "./exec-approvals-effective.js";
+import { readExecApprovalsSnapshot, type ExecApprovalsFile } from "./exec-approvals.js";
+import { resolveExecTarget } from "./exec-target-resolution.js";
 
 const EXEC_APPROVALS_DOCS_URL = "https://docs.openclaw.ai/tools/exec-approvals";
 

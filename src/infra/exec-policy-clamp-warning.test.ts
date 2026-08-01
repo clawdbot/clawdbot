@@ -1,23 +1,23 @@
-// Gateway exec policy startup warning tests cover read-only clamp diagnostics.
+// Gateway exec policy clamp warning tests cover read-only clamp diagnostics.
 import { describe, expect, it, vi } from "vitest";
 
 const execApprovalsMocks = vi.hoisted(() => ({
   readExecApprovalsSnapshot: vi.fn(),
 }));
 
-vi.mock("../../infra/exec-approvals.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../infra/exec-approvals.js")>();
+vi.mock("./exec-approvals.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./exec-approvals.js")>();
   return {
     ...actual,
     readExecApprovalsSnapshot: execApprovalsMocks.readExecApprovalsSnapshot,
   };
 });
 
-import { buildCurrentGlobalExecPolicyClampWarning } from "./exec-policy-startup-warning.js";
+import { buildCurrentGlobalExecPolicyClampWarning } from "./exec-policy-clamp-warning.js";
 
 /**
- * Drives the startup warning through its only production entry point, feeding
- * approvals via the same snapshot reader gateway startup uses.
+ * Drives the clamp warning through its only production entry point, feeding
+ * approvals via the same snapshot reader each gateway start uses.
  */
 function clampWarningFor(params: {
   cfg: Parameters<typeof buildCurrentGlobalExecPolicyClampWarning>[0];
@@ -297,5 +297,61 @@ describe("global exec policy clamp startup warning", () => {
     expect(
       buildCurrentGlobalExecPolicyClampWarning({ tools: { exec: { security: "full" } } }),
     ).toBeUndefined();
+  });
+
+  // Gateway starts call this per start, so an in-process SIGUSR1 restart must not
+  // reuse a first-start verdict: approvals are re-read and the config is the one
+  // that start resolved.
+  it("re-reads host approvals so a repeated start reports that start's clamp", () => {
+    execApprovalsMocks.readExecApprovalsSnapshot.mockClear();
+    const clampedApprovals = {
+      version: 1,
+      defaults: { security: "allowlist", ask: "off" },
+      agents: {},
+    };
+    const cfg = { tools: { exec: { security: "full" } } };
+
+    const firstStart = clampWarningFor({
+      cfg,
+      approvalsPath: "/tmp/openclaw-exec-approvals.json",
+      approvals: clampedApprovals,
+    });
+    const secondStart = clampWarningFor({
+      cfg,
+      approvalsPath: "/tmp/openclaw-exec-approvals.json",
+      approvals: clampedApprovals,
+    });
+    const startAfterOperatorFix = clampWarningFor({
+      cfg,
+      approvalsPath: "/tmp/openclaw-exec-approvals.json",
+      approvals: { version: 1, defaults: { security: "full", ask: "off" }, agents: {} },
+    });
+
+    expect(firstStart).toContain("tools.exec.security=full is clamped to allowlist");
+    expect(secondStart).toBe(firstStart);
+    expect(startAfterOperatorFix).toBeUndefined();
+    expect(execApprovalsMocks.readExecApprovalsSnapshot).toHaveBeenCalledTimes(3);
+  });
+
+  it("follows the configuration each start resolved rather than a first-start snapshot", () => {
+    const clampedApprovals = {
+      version: 1,
+      defaults: { security: "allowlist", ask: "off" },
+      agents: {},
+    };
+
+    const firstStart = clampWarningFor({
+      cfg: { tools: { exec: { security: "full" } } },
+      approvalsPath: "/tmp/openclaw-exec-approvals.json",
+      approvals: clampedApprovals,
+    });
+    const restartAfterConfigEdit = clampWarningFor({
+      cfg: { tools: { exec: { security: "allowlist" } } },
+      approvalsPath: "/tmp/openclaw-exec-approvals.json",
+      approvals: clampedApprovals,
+    });
+
+    expect(firstStart).toContain("tools.exec.security=full is clamped to allowlist");
+    expect(restartAfterConfigEdit).toBeUndefined();
   });
 });

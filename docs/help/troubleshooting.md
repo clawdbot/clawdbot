@@ -384,7 +384,7 @@ flowchart TD
     - Unset `tools.exec.ask` defaults to `off`.
     - If you are seeing approvals, some host-local or per-session policy
       tightened exec away from these defaults.
-    - `openclaw exec-policy show` shows the requested config, host approvals file, and effective merged policy.
+    - `openclaw exec-policy show` shows the requested config, host approvals document, and effective merged policy.
 
     Restore the current no-approval defaults:
 
