@@ -1598,9 +1598,6 @@ importers:
       '@openclaw/crabline':
         specifier: 0.1.11
         version: 0.1.11
-      '@openclaw/matrix':
-        specifier: workspace:*
-        version: link:../matrix
       p-limit:
         specifier: 7.3.1
         version: 7.3.1
@@ -1629,6 +1626,9 @@ importers:
       '@openclaw/discord':
         specifier: workspace:*
         version: link:../discord
+      '@openclaw/matrix':
+        specifier: workspace:*
+        version: link:../matrix
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
