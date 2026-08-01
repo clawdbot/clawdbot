@@ -183,6 +183,7 @@ async function createRenderedPage(
   context: ApplicationContext,
   result: SessionsListResult,
   statusFilter: "active" | "archived" | "all" = "active",
+  expandedSessionKey: string | null = null,
 ): Promise<TestSessionsPage> {
   const page = document.createElement("openclaw-sessions-page") as TestSessionsPage;
   page.context = context;
@@ -191,7 +192,7 @@ async function createRenderedPage(
     gatewaySnapshot: context.gateway.snapshot,
     result,
     error: null,
-    expandedSessionKey: null,
+    expandedSessionKey,
     statusFilter,
   };
   document.body.append(page);
@@ -367,6 +368,178 @@ describe("sessions page lifecycle", () => {
       })),
     );
   });
+
+  it("recovers a moved archived session and never deletes a repeated row twice", async () => {
+    const keys: [string, string, string] = [
+      "agent:main:first",
+      "agent:main:repeated",
+      "agent:main:moved",
+    ];
+    const archived = (key: string) => ({ key, archived: true });
+    const list = vi
+      .fn()
+      .mockResolvedValueOnce({
+        count: 2,
+        totalCount: 3,
+        sessions: [archived(keys[0]), archived(keys[1])],
+        hasMore: true,
+        nextOffset: 2,
+      })
+      .mockResolvedValueOnce({
+        count: 1,
+        totalCount: 3,
+        sessions: [archived(keys[1])],
+        hasMore: false,
+        nextOffset: null,
+      })
+      .mockResolvedValueOnce({
+        count: 3,
+        totalCount: 3,
+        sessions: keys.map(archived),
+        hasMore: false,
+        nextOffset: null,
+      });
+    const sessions = createSessions({
+      list: list as unknown as SessionCapability["list"],
+      deleteMany: vi.fn(async () => ({
+        deleted: keys,
+        errors: [],
+        preservedWorktrees: [],
+      })),
+    });
+    const { gateway } = createGateway({} as GatewayBrowserClient);
+    const page = await createRenderedPage(
+      createContext(gateway, sessions),
+      { count: 1, sessions: [archived(keys[0])] } as SessionsListResult,
+      "archived",
+    );
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    page.querySelector<HTMLButtonElement>(".settings-section__actions .danger")?.click();
+    await vi.waitFor(() => expect(sessions.deleteMany).toHaveBeenCalledOnce());
+
+    expect(list).toHaveBeenCalledTimes(3);
+    expect(confirm).toHaveBeenCalledWith("Delete 3 archived threads and their transcripts?");
+    expect(sessions.deleteMany).toHaveBeenCalledWith(
+      keys.map((key) => ({
+        key,
+        agentId: undefined,
+        deleteTranscript: true,
+        archivedOnly: true,
+      })),
+    );
+  });
+
+  it("refuses partial destructive deletion when the complete archived roster never arrives", async () => {
+    const key = "agent:main:only-visible";
+    const archived = { key, archived: true };
+    const list = vi.fn(async (options: { offset?: number }) => ({
+      count: 1,
+      totalCount: 2,
+      sessions: [archived],
+      hasMore: !options.offset,
+      nextOffset: options.offset ? null : 1,
+    }));
+    const sessions = createSessions({
+      list: list as unknown as SessionCapability["list"],
+      deleteMany: vi.fn(async () => ({ deleted: [key], errors: [], preservedWorktrees: [] })),
+    });
+    const { gateway } = createGateway({} as GatewayBrowserClient);
+    const page = await createRenderedPage(
+      createContext(gateway, sessions),
+      { count: 1, sessions: [archived] } as SessionsListResult,
+      "archived",
+    );
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    await page.deleteAllArchived();
+
+    expect(confirm).not.toHaveBeenCalled();
+    expect(sessions.deleteMany).not.toHaveBeenCalled();
+    expect(page.error).toContain("archived session enumeration");
+  });
+
+  it("refuses partial destructive deletion when a later page omits the authoritative total", async () => {
+    const key = "agent:main:only-visible";
+    const archived = { key, archived: true };
+    const list = vi.fn(async (options: { offset?: number }) => ({
+      count: 1,
+      ...(options.offset ? {} : { totalCount: 2 }),
+      sessions: [archived],
+      hasMore: !options.offset,
+      nextOffset: options.offset ? null : 1,
+    }));
+    const sessions = createSessions({
+      list: list as unknown as SessionCapability["list"],
+      deleteMany: vi.fn(async () => ({ deleted: [key], errors: [], preservedWorktrees: [] })),
+    });
+    const { gateway } = createGateway({} as GatewayBrowserClient);
+    const page = await createRenderedPage(
+      createContext(gateway, sessions),
+      { count: 1, sessions: [archived] } as SessionsListResult,
+      "archived",
+    );
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    await page.deleteAllArchived();
+
+    expect(confirm).not.toHaveBeenCalled();
+    expect(sessions.deleteMany).not.toHaveBeenCalled();
+    expect(page.error).toContain("archived session enumeration was incomplete");
+  });
+
+  it.each([
+    ["all agents", null, undefined],
+    ["the selected agent", "writer", "writer"],
+  ] as const)(
+    "enumerates all archived threads for %s instead of narrowing to a route deep link",
+    async (_label, scopeId, expectedAgentId) => {
+      const linked = { key: "agent:main:linked", archived: true };
+      const other = { key: "agent:writer:other", archived: true };
+      const list = vi.fn(async (options: { search?: string; agentId?: string }) => {
+        const sessions =
+          options.search === linked.key || options.agentId === "main" ? [linked] : [linked, other];
+        return { count: sessions.length, totalCount: sessions.length, sessions };
+      });
+      const sessions = createSessions({
+        list: list as unknown as SessionCapability["list"],
+        deleteMany: vi.fn(async () => ({
+          deleted: [linked.key, other.key],
+          errors: [],
+          preservedWorktrees: [],
+        })),
+      });
+      const { gateway } = createGateway({} as GatewayBrowserClient);
+      const context = createContext(gateway, sessions);
+      context.agentSelection.state.scopeId = scopeId;
+      const page = await createRenderedPage(
+        context,
+        { count: 1, sessions: [linked] } as SessionsListResult,
+        "archived",
+        linked.key,
+      );
+      const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+      await page.deleteAllArchived();
+
+      const options = list.mock.calls[0]?.[0];
+      expect(options).not.toHaveProperty("search");
+      if (expectedAgentId) {
+        expect(options).toHaveProperty("agentId", expectedAgentId);
+      } else {
+        expect(options).not.toHaveProperty("agentId");
+      }
+      expect(confirm).toHaveBeenCalledWith("Delete 2 archived threads and their transcripts?");
+      expect(sessions.deleteMany).toHaveBeenCalledWith(
+        [linked.key, other.key].map((key) => ({
+          key,
+          agentId: undefined,
+          deleteTranscript: true,
+          archivedOnly: true,
+        })),
+      );
+    },
+  );
 
   it("offers undo after archiving from the Sessions page", async () => {
     const key = "agent:main:pinned";
