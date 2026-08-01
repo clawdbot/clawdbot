@@ -45,6 +45,10 @@ RELEASE_IOS_SCREENSHOT_TESTS = [
   { test: "testReleaseAgentScreenshot", name: "03-agent-connected" },
   { test: "testReleaseSettingsScreenshot", name: "04-settings-connected" }
 ].freeze
+USAGE_PROOF_SCREENSHOT_TEST = {
+  test: "testUsageRecentDaysProofScreenshot",
+  name: "usage-recent-days-after"
+}.freeze
 REQUIRED_IOS_SCREENSHOT_NAMES = RELEASE_IOS_SCREENSHOT_TESTS.map { |entry| entry.fetch(:name) }.freeze
 IOS_SCREENSHOT_TEST_TIMEOUT_SECONDS = 180
 IOS_SCREENSHOT_XCARGS = [
@@ -2149,6 +2153,25 @@ platform :ios do
     verify_release_ios_screenshot_manifest!(
       output_directory: output_directory,
       devices: devices
+    )
+
+    usage_proof_directory = File.join(ios_root, "build", "UsageProof")
+    usage_result_bundle_path = File.join(
+      usage_proof_directory,
+      "test_output",
+      "en-US",
+      "OpenClawUITests.xcresult"
+    )
+    FileUtils.rm_rf(usage_proof_directory)
+    capture_release_ios_screenshot!(
+      project: project,
+      device: devices.first,
+      screenshot: USAGE_PROOF_SCREENSHOT_TEST,
+      output_directory: usage_proof_directory,
+      result_bundle_path: usage_result_bundle_path,
+      result_bundle_archive_directory: result_bundle_archive_directory,
+      derived_data_path: derived_data_path,
+      clear_previous_screenshots: true
     )
 
     # Snapshot fixes its result bundles under the screenshot root. Keep successful

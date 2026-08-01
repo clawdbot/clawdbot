@@ -3382,7 +3382,7 @@ jobs:
           retention-days: 14
 
       - name: Capture iOS release screenshots
-        if: ${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.preflight.outputs.run_macos == 'true')) && env.HISTORICAL_TARGET != 'true' }}
+        if: ${{ !cancelled() && (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.preflight.outputs.run_macos == 'true')) && env.HISTORICAL_TARGET != 'true' }}
         run: pnpm ios:screenshots
 
       - name: Upload iOS release screenshot evidence
@@ -3392,6 +3392,7 @@ jobs:
           name: ios-release-screenshots-${{ needs.preflight.outputs.checkout_revision }}
           path: |
             apps/ios/fastlane/screenshots/en-US/*.png
+            apps/ios/build/UsageProof/en-US/*.png
             apps/ios/build/SnapshotTestResults/*.xcresult
           if-no-files-found: error
           retention-days: 14

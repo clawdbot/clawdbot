@@ -292,6 +292,27 @@ describe("iOS Fastlane release upload gates", () => {
     expect(rootTabs).toContain("self.selectedSidebarDestination.rawValue");
   });
 
+  it("publishes native Usage ordering proof outside the App Store screenshot manifest", () => {
+    const fastfile = readFastfile();
+    const screenshots = laneBody(fastfile, "screenshots");
+    const snapshotUITest = readFileSync(snapshotUITestPath, "utf8");
+    const workflow = readFileSync(ciWorkflowPath, "utf8");
+    const proofTest = swiftFunctionBody(snapshotUITest, "testUsageRecentDaysProofScreenshot");
+
+    expect(screenshots).toContain(
+      'usage_proof_directory = File.join(ios_root, "build", "UsageProof")',
+    );
+    expect(screenshots).toContain("screenshot: USAGE_PROOF_SCREENSHOT_TEST");
+    expect(screenshots.indexOf("usage_proof_directory")).toBeGreaterThan(
+      screenshots.indexOf("verify_release_ios_screenshot_manifest!"),
+    );
+    expect(proofTest).toContain("(18...31).reversed().map");
+    expect(proofTest).toContain('app.staticTexts["2026-08-01"]');
+    expect(proofTest).toContain('app.staticTexts["2026-07-17"]');
+    expect(proofTest).toContain('snapshot("usage-recent-days-after"');
+    expect(workflow).toContain("apps/ios/build/UsageProof/en-US/*.png");
+  });
+
   it("requires the exact nonempty PNG manifest before Watch capture", () => {
     const fastfile = readFastfile();
     const screenshots = laneBody(fastfile, "screenshots");
