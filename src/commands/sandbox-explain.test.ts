@@ -2,16 +2,37 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+  withOpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import { sandboxExplainCommand } from "./sandbox-explain.js";
 
 const SANDBOX_EXPLAIN_TEST_TIMEOUT_MS = process.platform === "win32" ? 45_000 : 30_000;
 
 let mockCfg: unknown = {};
+let testState: OpenClawTestState;
+
+beforeEach(async () => {
+  mockCfg = {};
+  testState = await createOpenClawTestState({
+    label: "sandbox-explain",
+    applyEnv: false,
+  });
+});
+
+afterEach(async () => {
+  await testState.cleanup();
+});
+
+function testSessionStore(): string {
+  return testState.statePath("sessions", "{agentId}.json");
+}
 
 vi.mock("../config/config.js", async () => {
   const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
@@ -62,7 +83,7 @@ describe("sandbox explain command", () => {
         sandbox: { tools: { deny: ["browser"] } },
         elevated: { enabled: true, allowFrom: { quietchat: ["*"] } },
       },
-      session: { store: "/tmp/openclaw-test-sessions-{agentId}.json" },
+      session: { store: testSessionStore() },
     };
 
     const logs: string[] = [];
@@ -116,7 +137,7 @@ describe("sandbox explain command", () => {
           },
         },
       },
-      session: { store: "/tmp/openclaw-test-sessions-{agentId}.json" },
+      session: { store: testSessionStore() },
     };
 
     const logs: string[] = [];
@@ -148,7 +169,7 @@ describe("sandbox explain command", () => {
         },
         list: [{ id: "builder", workspace: "/tmp/openclaw-agent-workspace" }],
       },
-      session: { store: "/tmp/openclaw-test-sessions-{agentId}.json" },
+      session: { store: testSessionStore() },
     };
 
     const logs: string[] = [];
@@ -188,7 +209,7 @@ describe("sandbox explain command", () => {
         },
         list: [{ id: "main", default: true }, { id: "builder" }],
       },
-      session: { store: "/tmp/openclaw-test-sessions-{agentId}.json" },
+      session: { store: testSessionStore() },
     };
 
     const logs: string[] = [];
@@ -222,7 +243,7 @@ describe("sandbox explain command", () => {
         },
         list: [{ id: "builder", workspace: "/tmp/openclaw-agent-workspace" }],
       },
-      session: { store: "/tmp/openclaw-test-sessions-{agentId}.json" },
+      session: { store: testSessionStore() },
     };
 
     const logs: string[] = [];
@@ -258,7 +279,7 @@ describe("sandbox explain command", () => {
         },
         list: [{ id: "builder", workspace: "/tmp/openclaw-agent-workspace" }],
       },
-      session: { store: "/tmp/openclaw-test-sessions-{agentId}.json" },
+      session: { store: testSessionStore() },
     };
 
     const logs: string[] = [];
@@ -373,7 +394,7 @@ describe("sandbox explain command", () => {
       },
       session: {
         scope: "global",
-        store: "/tmp/openclaw-test-sessions-{agentId}.json",
+        store: testSessionStore(),
       },
     };
 

@@ -6,6 +6,10 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../../sessions/model-overrides.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 
 vi.hoisted(() => {
   vi.resetModules();
@@ -453,7 +457,13 @@ function setOpenAiRuntimeScopedUltraProvider(): void {
   ]);
 }
 
-beforeEach(() => {
+let testState: OpenClawTestState;
+
+beforeEach(async () => {
+  testState = await createOpenClawTestState({
+    label: "directive-handling",
+    applyEnv: false,
+  });
   vi.useRealTimers();
   cliBackendsTesting.setDepsForTest({
     resolvePluginSetupRegistry: () => ({
@@ -485,12 +495,17 @@ beforeEach(() => {
   clearInternalHooks();
 });
 
-afterEach(() => {
+afterEach(async () => {
   cliBackendsTesting.resetDepsForTest();
   setDirectiveTestProviders([]);
   clearRuntimeAuthProfileStoreSnapshots();
   clearInternalHooks();
+  await testState.cleanup();
 });
+
+function testSessionStore(): string {
+  return testState.statePath("sessions", "sessions.json");
+}
 
 function setAuthProfiles(profiles: Record<string, AuthProfileForTest>) {
   replaceRuntimeAuthProfileStoreSnapshots([
@@ -615,7 +630,7 @@ async function persistInternalOperatorWriteDirective(
     sessionEntry,
     sessionStore,
     sessionKey: "agent:main:main",
-    storePath: "/tmp/sessions.json",
+    storePath: testSessionStore(),
     elevatedEnabled: true,
     elevatedAllowed: true,
     defaultProvider: "anthropic",
