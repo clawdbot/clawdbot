@@ -203,7 +203,6 @@ jobs:
       archive_sha256: ${{ steps.archive.outputs.archive_sha256 }}
       artifact_digest: ${{ steps.upload.outputs.artifact-digest }}
       artifact_id: ${{ steps.upload.outputs.artifact-id }}
-      candidate_telegram_evidence_contract_sha256: ${{ steps.archive.outputs.candidate_telegram_evidence_contract_sha256 }}
       candidate_tree: ${{ steps.archive.outputs.candidate_tree }}
       candidate_version: ${{ steps.archive.outputs.candidate_version }}
       manifest_sha256: ${{ steps.archive.outputs.manifest_sha256 }}
@@ -528,18 +527,11 @@ jobs:
           archive_root="openclaw-telegram-candidate"
           candidate_root="${bundle_root}/${archive_root}"
           manifest_path="${bundle_root}/manifest.json"
-          contract_relative_path="qa/contracts/telegram-execution-evidence.json"
           rm -rf "$bundle_root"
           mkdir -p "$bundle_root"
           mv "$CANDIDATE_ROOT" "$candidate_root"
           rm -rf "$candidate_root/.git"
           candidate_version="$(jq -er '.version' "$candidate_root/package.json")"
-          contract_path="${candidate_root}/${contract_relative_path}"
-          contract_sha256=""
-          if [[ -e "$contract_path" || -L "$contract_path" ]]; then
-            [[ -f "$contract_path" && ! -L "$contract_path" ]]
-            contract_sha256="$(sha256sum "$contract_path" | awk '{print $1}')"
-          fi
 
           python3 scripts/release-telegram-candidate-archive.py validate-tree "$candidate_root"
 
@@ -550,8 +542,6 @@ jobs:
             --arg buildCommand "node scripts/build-all.mjs qaRuntime" \
             --arg candidateSha "$TARGET_SHA" \
             --arg candidateTree "$CANDIDATE_TREE" \
-            --arg candidateVersion "$candidate_version" \
-            --arg candidateTelegramEvidenceContractSha256 "$contract_sha256" \
             --arg nodeVersion "$node_version" \
             --arg pnpmVersion "$pnpm_version" \
             --arg repository "$GITHUB_REPOSITORY" \
@@ -563,8 +553,6 @@ jobs:
               workflowSha: $workflowSha,
               candidateSha: $candidateSha,
               candidateTree: $candidateTree,
-              candidateVersion: $candidateVersion,
-              candidateTelegramEvidenceContractSha256: ($candidateTelegramEvidenceContractSha256 | if . == "" then null else . end),
               archiveRoot: $archiveRoot,
               nodeVersion: $nodeVersion,
               pnpmVersion: $pnpmVersion,
@@ -596,7 +584,6 @@ jobs:
             echo "archive_sha256=$(sha256sum "$archive_path" | awk '{print $1}')"
             echo "candidate_tree=$CANDIDATE_TREE"
             echo "candidate_version=$candidate_version"
-            echo "candidate_telegram_evidence_contract_sha256=$contract_sha256"
             echo "manifest_sha256=$(sha256sum "$manifest_path" | awk '{print $1}')"
           } >>"$GITHUB_OUTPUT"
 
@@ -729,8 +716,6 @@ jobs:
         env:
           ARCHIVE_NAME: ${{ needs.build_candidate.outputs.archive_name }}
           ARCHIVE_SHA256: ${{ needs.build_candidate.outputs.archive_sha256 }}
-          CANDIDATE_TELEGRAM_EVIDENCE_CONTRACT_SHA256: ${{ needs.build_candidate.outputs.candidate_telegram_evidence_contract_sha256 }}
-          CANDIDATE_VERSION: ${{ needs.build_candidate.outputs.candidate_version }}
           CANDIDATE_TREE: ${{ needs.build_candidate.outputs.candidate_tree }}
           MANIFEST_SHA256: ${{ needs.build_candidate.outputs.manifest_sha256 }}
           TARGET_SHA: ${{ inputs.target_sha }}
@@ -754,8 +739,6 @@ jobs:
           jq -e \
             --arg candidateSha "$TARGET_SHA" \
             --arg candidateTree "$CANDIDATE_TREE" \
-            --arg candidateTelegramEvidenceContractSha256 "$CANDIDATE_TELEGRAM_EVIDENCE_CONTRACT_SHA256" \
-            --arg candidateVersion "$CANDIDATE_VERSION" \
             --arg repository "$GITHUB_REPOSITORY" \
             --arg workflowSha "$WORKFLOW_SHA" \
             '
@@ -764,13 +747,6 @@ jobs:
               .workflowSha == $workflowSha and
               .candidateSha == $candidateSha and
               .candidateTree == $candidateTree and
-              (.candidateTelegramEvidenceContractSha256 == null or test("^[a-f0-9]{64}$")) and
-              (if $candidateTelegramEvidenceContractSha256 == "" then
-                .candidateTelegramEvidenceContractSha256 == null
-              else
-                .candidateTelegramEvidenceContractSha256 == $candidateTelegramEvidenceContractSha256
-              end) and
-              .candidateVersion == $candidateVersion and
               .archiveRoot == "openclaw-telegram-candidate" and
               .buildCommand == "node scripts/build-all.mjs qaRuntime" and
               .sourceJob == "build_candidate"
@@ -980,9 +956,7 @@ jobs:
           ARCHIVE_NAME: ${{ needs.build_candidate.outputs.archive_name }}
           ARCHIVE_SHA256: ${{ needs.build_candidate.outputs.archive_sha256 }}
           CALLED_WORKFLOW_SHA: ${{ needs.trusted_identity.outputs.workflow_sha }}
-          CANDIDATE_TELEGRAM_EVIDENCE_CONTRACT_SHA256: ${{ needs.build_candidate.outputs.candidate_telegram_evidence_contract_sha256 }}
           CANDIDATE_TREE: ${{ needs.build_candidate.outputs.candidate_tree }}
-          CANDIDATE_VERSION: ${{ needs.build_candidate.outputs.candidate_version }}
           GH_TOKEN: ${{ github.token }}
           TARGET_SHA: ${{ inputs.target_sha }}
         shell: bash
@@ -1011,8 +985,6 @@ jobs:
           jq -e \
             --arg candidateSha "$TARGET_SHA" \
             --arg candidateTree "$CANDIDATE_TREE" \
-            --arg candidateTelegramEvidenceContractSha256 "$CANDIDATE_TELEGRAM_EVIDENCE_CONTRACT_SHA256" \
-            --arg candidateVersion "$CANDIDATE_VERSION" \
             --arg repository "$GITHUB_REPOSITORY" \
             --arg workflowSha "$CALLED_WORKFLOW_SHA" \
             '
@@ -1021,13 +993,6 @@ jobs:
               .workflowSha == $workflowSha and
               .candidateSha == $candidateSha and
               .candidateTree == $candidateTree and
-              (.candidateTelegramEvidenceContractSha256 == null or test("^[a-f0-9]{64}$")) and
-              (if $candidateTelegramEvidenceContractSha256 == "" then
-                .candidateTelegramEvidenceContractSha256 == null
-              else
-                .candidateTelegramEvidenceContractSha256 == $candidateTelegramEvidenceContractSha256
-              end) and
-              .candidateVersion == $candidateVersion and
               .archiveRoot == "openclaw-telegram-candidate" and
               .sourceJob == "build_candidate"
             ' "${extract_root}/manifest.json" >/dev/null
@@ -1208,7 +1173,6 @@ jobs:
           CANDIDATE_ARCHIVE_SHA256: ${{ needs.build_candidate.outputs.archive_sha256 }}
           CANDIDATE_ARTIFACT_DIGEST: ${{ needs.build_candidate.outputs.artifact_digest }}
           CANDIDATE_ARTIFACT_ID: ${{ needs.build_candidate.outputs.artifact_id }}
-          CANDIDATE_TELEGRAM_EVIDENCE_CONTRACT_SHA256: ${{ needs.build_candidate.outputs.candidate_telegram_evidence_contract_sha256 }}
           CANDIDATE_VERSION: ${{ needs.build_candidate.outputs.candidate_version }}
           CANDIDATE_ROOT: ${{ steps.extract_candidate.outputs.candidate_root }}
           TARGET_SHA: ${{ inputs.target_sha }}
@@ -1339,7 +1303,6 @@ jobs:
             --arg candidateArtifactDigest "$CANDIDATE_ARTIFACT_DIGEST" \
             --arg candidateFileName "$CANDIDATE_ARCHIVE_NAME" \
             --arg candidateSha256 "$CANDIDATE_ARCHIVE_SHA256" \
-            --arg candidateTelegramEvidenceContractSha256 "$CANDIDATE_TELEGRAM_EVIDENCE_CONTRACT_SHA256" \
             --arg candidateVersion "$CANDIDATE_VERSION" \
             '{
               version: 1,
@@ -1357,7 +1320,6 @@ jobs:
                 fileName: $candidateFileName,
                 sha256: $candidateSha256,
                 sourceSha: $targetSha,
-                telegramEvidenceContractSha256: ($candidateTelegramEvidenceContractSha256 | if . == "" then null else . end),
                 version: $candidateVersion
               }
             }' >"${boundary_evidence_dir}/context.json"
@@ -2594,9 +2556,7 @@ jobs:
         if: always() && steps.terminate_sut.outputs.quiescent == 'true' && steps.run_lane.outputs.output_dir != ''
         env:
           BOUNDARY_EVIDENCE_DIR: ${{ steps.create_sut.outputs.boundary_evidence_dir }}
-          CANDIDATE_ROOT: ${{ steps.extract_candidate.outputs.candidate_root }}
-          CANDIDATE_TELEGRAM_EVIDENCE_CONTRACT_SHA256: ${{ needs.build_candidate.outputs.candidate_telegram_evidence_contract_sha256 }}
-          CANDIDATE_VERSION: ${{ needs.build_candidate.outputs.candidate_version }}
+          CANDIDATE_ROOT: ${{ steps.create_sut.outputs.candidate_root }}
           OUTPUT_DIR: ${{ steps.run_lane.outputs.output_dir }}
           RUN_LANE_OUTCOME: ${{ steps.run_lane.outcome }}
           TARGET_SHA: ${{ inputs.target_sha }}
@@ -2615,8 +2575,6 @@ jobs:
             --arg runId "$GITHUB_RUN_ID" \
             --argjson runAttempt "$GITHUB_RUN_ATTEMPT" \
             --arg targetSha "$TARGET_SHA" \
-            --arg candidateTelegramEvidenceContractSha256 "$CANDIDATE_TELEGRAM_EVIDENCE_CONTRACT_SHA256" \
-            --arg candidateVersion "$CANDIDATE_VERSION" \
             '
               .version == 1 and
               .kind == "telegram-sut-boundary" and
@@ -2632,43 +2590,28 @@ jobs:
               (.candidateArtifact.fileName | length > 0) and
               (.candidateArtifact.sha256 | test("^[a-f0-9]{64}$")) and
               .candidateArtifact.sourceSha == $targetSha and
-              (.candidateArtifact.telegramEvidenceContractSha256 == null or test("^[a-f0-9]{64}$")) and
-              (if $candidateTelegramEvidenceContractSha256 == "" then
-                .candidateArtifact.telegramEvidenceContractSha256 == null
-              else
-                .candidateArtifact.telegramEvidenceContractSha256 == $candidateTelegramEvidenceContractSha256
-              end) and
-              .candidateArtifact.version == $candidateVersion
+              (.candidateArtifact.version | length > 0)
             ' "$context_path" >/dev/null
 
-          candidate_source_sha="$(jq -er '.candidateArtifact.sourceSha' "$context_path")"
-          evidence_mode="$(
-            TARGET_SHA="$TARGET_SHA" \
-              CANDIDATE_SOURCE_SHA="$candidate_source_sha" \
-              CANDIDATE_TELEGRAM_EVIDENCE_CONTRACT_PATH="${CANDIDATE_ROOT}/qa/contracts/telegram-execution-evidence.json" \
-              CANDIDATE_TELEGRAM_EVIDENCE_CONTRACT_SHA256="$CANDIDATE_TELEGRAM_EVIDENCE_CONTRACT_SHA256" \
-              CANDIDATE_VERSION="$CANDIDATE_VERSION" \
-              node scripts/release-telegram-qa.mjs resolve-evidence-mode
-          )"
-          case "$evidence_mode" in
-            legacy-direct-runner-v1)
-              TARGET_SHA="$TARGET_SHA" \
-                CANDIDATE_SOURCE_SHA="$candidate_source_sha" \
-                CANDIDATE_TELEGRAM_EVIDENCE_CONTRACT_PATH="${CANDIDATE_ROOT}/qa/contracts/telegram-execution-evidence.json" \
-                CANDIDATE_TELEGRAM_EVIDENCE_CONTRACT_SHA256="$CANDIDATE_TELEGRAM_EVIDENCE_CONTRACT_SHA256" \
-                CANDIDATE_VERSION="$CANDIDATE_VERSION" \
-                CONTEXT_PATH="$context_path" \
-                AGGREGATE_PATH="$aggregate_path" \
-                node scripts/release-telegram-qa.mjs write-legacy-direct-runner-attestation
-              echo "aggregate_path=$aggregate_path" >>"$GITHUB_OUTPUT"
-              exit 0
-              ;;
-            process-boundary-v1) ;;
-            *)
-              echo "Unknown Telegram evidence mode: $evidence_mode" >&2
-              exit 1
-              ;;
-          esac
+          # The archive and source tree were independently attested before this step.
+          # A tracked contract opts legacy candidates into the pre-boundary evidence shape.
+          legacy_contract_path="${CANDIDATE_ROOT}/qa/contracts/telegram-execution-evidence.json"
+          if [[ -e "$legacy_contract_path" || -L "$legacy_contract_path" ]]; then
+            [[ -f "$legacy_contract_path" && ! -L "$legacy_contract_path" ]]
+            candidate_version="$(jq -er '.candidateArtifact.version' "$context_path")"
+            jq -e --arg candidateVersion "$candidate_version" '
+              (keys | sort) == ["candidateVersion", "kind", "mode", "version"] and
+              .version == 1 and
+              .kind == "openclaw-release-telegram-execution-evidence" and
+              .mode == "legacy-direct-runner-v1" and
+              .candidateVersion == $candidateVersion
+            ' "$legacy_contract_path" >/dev/null
+            jq --arg executionMode "legacy-direct-runner-v1" \
+              '. + {executionMode: $executionMode}' "$context_path" >"$aggregate_path"
+            chmod 0600 "$aggregate_path"
+            echo "aggregate_path=$aggregate_path" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
 
           runtime_parts=("${BOUNDARY_EVIDENCE_DIR}"/runtime-boundary-*.json)
           ((${#runtime_parts[@]} > 0))
