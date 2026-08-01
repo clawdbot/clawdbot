@@ -395,6 +395,7 @@ async function resolveCodexAppServerClientStartContext(
     agentDir,
     authProfileId: usesNativeAuth || preparedAuth?.kind === "api-key" ? null : authProfileId,
     ...(resolvedPreparedAuth ? { preparedAuth: resolvedPreparedAuth } : {}),
+    authRequirement,
     config: options?.config,
     pluginConfig: options?.pluginConfig,
     ...(authProfileStore ? { authProfileStore } : {}),

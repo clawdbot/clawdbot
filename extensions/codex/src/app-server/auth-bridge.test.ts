@@ -253,25 +253,71 @@ describe("bridgeCodexAppServerStartOptions", () => {
     }
   });
 
-  it("rejects an unimported agent-scoped Codex auth file with migration guidance", async () => {
-    await withTempDir("openclaw-codex-unimported-auth-", async (agentDir) => {
-      const codexHome = resolveCodexAppServerHomeDir(agentDir);
-      await writeCodexCliAuthFile(codexHome);
+  it.each(["subscription", "api-key"] as const)(
+    "rejects an unimported agent-scoped Codex auth file for a %s route without fallback",
+    async (authRequirement) => {
+      await withTempDir("openclaw-codex-unimported-auth-", async (agentDir) => {
+        const codexHome = resolveCodexAppServerHomeDir(agentDir);
+        await writeCodexCliAuthFile(codexHome);
+        vi.stubEnv("CODEX_API_KEY", "");
+        vi.stubEnv("OPENAI_API_KEY", "");
 
-      await expect(
-        bridgeCodexAppServerStartOptions({
+        await expect(
+          bridgeCodexAppServerStartOptions({
+            startOptions: createStartOptions(),
+            agentDir,
+            agentId: "research",
+            authRequirement,
+          }),
+        ).rejects.toMatchObject({
+          name: "AgentHarnessPreflightError",
+          message: expect.stringContaining(
+            "openclaw migrate apply codex --from <codex-home> --agent research --include-secrets --item auth:openai --yes",
+          ),
+        });
+      });
+    },
+  );
+
+  it.each(["CODEX_API_KEY", "OPENAI_API_KEY"] as const)(
+    "preserves the %s fallback when a stale agent auth file remains",
+    async (envVar) => {
+      await withTempDir("openclaw-codex-stale-auth-api-key-", async (agentDir) => {
+        await writeCodexCliAuthFile(resolveCodexAppServerHomeDir(agentDir));
+        vi.stubEnv("CODEX_API_KEY", "");
+        vi.stubEnv("OPENAI_API_KEY", "");
+        vi.stubEnv(envVar, "platform-api-key");
+
+        const startOptions = await bridgeCodexAppServerStartOptions({
           startOptions: createStartOptions(),
           agentDir,
           agentId: "research",
-        }),
-      ).rejects.toMatchObject({
-        name: "AgentHarnessPreflightError",
-        message: expect.stringContaining(
-          "openclaw migrate apply codex --from <codex-home> --agent research --include-secrets --item auth:openai --yes",
-        ),
+          authRequirement: "api-key",
+        });
+        expect(startOptions).toMatchObject({
+          args: EPHEMERAL_AUTH_ARGS,
+          env: { CODEX_HOME: resolveCodexAppServerHomeDir(agentDir) },
+        });
+
+        const request = vi.fn(async (method: string) =>
+          method === "account/read"
+            ? { account: null, requiresOpenaiAuth: true }
+            : { type: "apiKey" },
+        );
+        await applyCodexAppServerAuthProfile({
+          client: { request } as never,
+          agentDir,
+          authRequirement: "api-key",
+          startOptions,
+        });
+        expect(request).toHaveBeenNthCalledWith(1, "account/read", { refreshToken: false });
+        expect(request).toHaveBeenNthCalledWith(2, "account/login/start", {
+          type: "apiKey",
+          apiKey: "platform-api-key",
+        });
       });
-    });
-  });
+    },
+  );
 
   it.each(["websocket", "unix"] as const)(
     "ignores an agent-scoped auth file for %s transports",

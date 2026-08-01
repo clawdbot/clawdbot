@@ -73,6 +73,7 @@ export async function bridgeCodexAppServerStartOptions(params: {
   authProfileId?: string | null;
   authProfileStore?: AuthProfileStore;
   preparedAuth?: CodexAppServerPreparedAuth;
+  authRequirement?: CodexAppServerAuthRequirement;
   config?: AuthProfileOrderConfig;
   pluginConfig?: unknown;
 }): Promise<CodexAppServerStartOptions> {
@@ -125,7 +126,17 @@ function assertNoUnimportedAgentCodexAuthFile(params: {
   startOptions: CodexAppServerStartOptions;
   agentId?: string;
   agentDir: string;
+  authRequirement?: CodexAppServerAuthRequirement;
 }): void {
+  // Ephemeral managed starts cannot load this stale file, and the shared-client key
+  // separates auth requirements plus fallback identities. Preserve the supported
+  // stdio API-key login instead of turning a leftover file into a hard failure.
+  if (
+    params.authRequirement === "api-key" &&
+    resolveCodexAppServerFallbackApiKeyCacheKey({ startOptions: params.startOptions })
+  ) {
+    return;
+  }
   const message = resolveUnimportedAgentCodexAuthMessage(params);
   if (message) {
     throw new AgentHarnessPreflightError(message);
