@@ -155,6 +155,10 @@ vi.mock("../agents/agent-model-discovery.js", () => {
       return modelRegistryState.available;
     }
 
+    getProviderMetadataOwners() {
+      return undefined;
+    }
+
     hasConfiguredAuth(model: { provider: string; id: string }) {
       return modelRegistryState.available.some(
         (available) => available.provider === model.provider && available.id === model.id,
@@ -530,7 +534,9 @@ describe("models list/status", () => {
     await modelsListCommand({ all: true, json: true }, runtime);
 
     const payload = parseJsonLog(runtime);
-    expect(payload.models[0]?.available).toBe(false);
+    expect(
+      payload.models.find((model: { key?: string }) => model.key === "zai/glm-4.7")?.available,
+    ).toBe(false);
   });
 
   it("models list uses trusted workspace plugin auth evidence for configured rows", async () => {
