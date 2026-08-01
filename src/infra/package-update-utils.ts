@@ -56,10 +56,21 @@ export function readInstalledPackagePeerDependencies(dir: string): Record<string
   );
 }
 
+/** Read the installed package declaration that requires the OpenClaw host link. */
+export function readInstalledPackageOpenClawLinkDependencies(dir: string): Record<string, string> {
+  const manifest = readInstalledPackageManifest(dir);
+  const peerDependencies = isRecord(manifest?.peerDependencies) ? manifest.peerDependencies : {};
+  const dependencies = isRecord(manifest?.dependencies) ? manifest.dependencies : {};
+  const peerSpec = peerDependencies.openclaw;
+  const dependencySpec = dependencies.openclaw;
+  const spec = typeof peerSpec === "string" ? peerSpec : dependencySpec;
+  return typeof spec === "string" ? { openclaw: spec } : {};
+}
+
 /** Return true when an installed package needs an openclaw peer link repair. */
 export function installedPackageNeedsOpenClawPeerLinkRepair(dir: string): boolean {
-  const peerDependencies = readInstalledPackagePeerDependencies(dir);
-  if (!Object.hasOwn(peerDependencies, "openclaw")) {
+  const linkDependencies = readInstalledPackageOpenClawLinkDependencies(dir);
+  if (!Object.hasOwn(linkDependencies, "openclaw")) {
     return false;
   }
 
