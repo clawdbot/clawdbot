@@ -61,15 +61,53 @@ function normalizeMemoryUsage(memory: NodeJS.MemoryUsage): DiagnosticMemoryUsage
 function resolveThresholds(
   thresholds?: DiagnosticMemoryThresholds,
 ): Required<DiagnosticMemoryThresholds> {
+  const rssWarningBytes = thresholds?.rssWarningBytes ?? DEFAULT_RSS_WARNING_BYTES;
+  const rssCriticalBytes = thresholds?.rssCriticalBytes ?? DEFAULT_RSS_CRITICAL_BYTES;
+  const heapUsedWarningBytes = thresholds?.heapUsedWarningBytes ?? DEFAULT_HEAP_WARNING_BYTES;
+  const heapUsedCriticalBytes = thresholds?.heapUsedCriticalBytes ?? DEFAULT_HEAP_CRITICAL_BYTES;
+  const rssGrowthWarningBytes =
+    thresholds?.rssGrowthWarningBytes ?? DEFAULT_RSS_GROWTH_WARNING_BYTES;
+  const rssGrowthCriticalBytes =
+    thresholds?.rssGrowthCriticalBytes ?? DEFAULT_RSS_GROWTH_CRITICAL_BYTES;
+  const growthWindowMs = thresholds?.growthWindowMs ?? DEFAULT_GROWTH_WINDOW_MS;
+  const pressureRepeatMs = thresholds?.pressureRepeatMs ?? DEFAULT_PRESSURE_REPEAT_MS;
+
+  // Guard against partial overrides that become invalid after defaults are applied:
+  // the sampler checks critical before warning, so warning >= critical is a no-op.
+  if (rssWarningBytes >= rssCriticalBytes) {
+    log.warn(
+      "diagnostics.memory.rssWarningBytes (%d) >= rssCriticalBytes (%d); " +
+        "clamping warning to critical - 1",
+      rssWarningBytes,
+      rssCriticalBytes,
+    );
+  }
+  if (heapUsedWarningBytes >= heapUsedCriticalBytes) {
+    log.warn(
+      "diagnostics.memory.heapUsedWarningBytes (%d) >= heapUsedCriticalBytes (%d); " +
+        "clamping warning to critical - 1",
+      heapUsedWarningBytes,
+      heapUsedCriticalBytes,
+    );
+  }
+  if (rssGrowthWarningBytes >= rssGrowthCriticalBytes) {
+    log.warn(
+      "diagnostics.memory.rssGrowthWarningBytes (%d) >= rssGrowthCriticalBytes (%d); " +
+        "clamping warning to critical - 1",
+      rssGrowthWarningBytes,
+      rssGrowthCriticalBytes,
+    );
+  }
+
   return {
-    rssWarningBytes: thresholds?.rssWarningBytes ?? DEFAULT_RSS_WARNING_BYTES,
-    rssCriticalBytes: thresholds?.rssCriticalBytes ?? DEFAULT_RSS_CRITICAL_BYTES,
-    heapUsedWarningBytes: thresholds?.heapUsedWarningBytes ?? DEFAULT_HEAP_WARNING_BYTES,
-    heapUsedCriticalBytes: thresholds?.heapUsedCriticalBytes ?? DEFAULT_HEAP_CRITICAL_BYTES,
-    rssGrowthWarningBytes: thresholds?.rssGrowthWarningBytes ?? DEFAULT_RSS_GROWTH_WARNING_BYTES,
-    rssGrowthCriticalBytes: thresholds?.rssGrowthCriticalBytes ?? DEFAULT_RSS_GROWTH_CRITICAL_BYTES,
-    growthWindowMs: thresholds?.growthWindowMs ?? DEFAULT_GROWTH_WINDOW_MS,
-    pressureRepeatMs: thresholds?.pressureRepeatMs ?? DEFAULT_PRESSURE_REPEAT_MS,
+    rssWarningBytes: Math.min(rssWarningBytes, rssCriticalBytes - 1),
+    rssCriticalBytes,
+    heapUsedWarningBytes: Math.min(heapUsedWarningBytes, heapUsedCriticalBytes - 1),
+    heapUsedCriticalBytes,
+    rssGrowthWarningBytes: Math.min(rssGrowthWarningBytes, rssGrowthCriticalBytes - 1),
+    rssGrowthCriticalBytes,
+    growthWindowMs,
+    pressureRepeatMs,
   };
 }
 
@@ -318,6 +356,10 @@ export function emitDiagnosticMemorySample(options?: {
   }
   return memory;
 }
+
+/** Resolves explicit and default diagnostic thresholds into a complete set.
+ *  Exported for schema validation tests — not part of the public API. */
+export const resolveDiagnosticMemoryThresholds = resolveThresholds;
 
 /** Clears process-local memory diagnostic state for isolated tests. */
 export function resetDiagnosticMemoryForTest(): void {

@@ -205,8 +205,11 @@ critical first, so an inverted pair makes the warning unreachable.
 ```
 
 After changing these values, restart or reload the Gateway. Omitted fields
-keep their defaults. Set lower thresholds on constrained machines to get
-earlier warnings; use the defaults on hosts with plenty of RAM.
+keep their defaults. The sampler checks critical thresholds before warnings,
+so a warning value at or above its matching critical value would never fire;
+resolveThresholds clamps such partial overrides to critical - 1 and logs a
+warning. Set lower thresholds on constrained machines to get earlier pressure
+alerts; use the defaults on hosts with plenty of RAM.
 
 ## Related
 
