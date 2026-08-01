@@ -2651,7 +2651,7 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     }
     expect(error).toMatchObject({
       name: "AgentHarnessPreflightError",
-      harnessId: "codex",
+      scope: "harness",
       message: expect.stringContaining(
         "inspect them with `openclaw approvals get --gateway` and update that same target with `openclaw approvals set --gateway --stdin`",
       ),

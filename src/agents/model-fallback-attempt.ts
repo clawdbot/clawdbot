@@ -231,6 +231,7 @@ async function runFallbackCandidate<T>(params: {
   run: ModelFallbackRunFn<T>;
   provider: string;
   model: string;
+  captureHarnessPreflight?: boolean;
   options?: ModelFallbackRunOptions;
   deferSessionSuspension?: boolean;
   onDeferredSessionSuspension?: (params: SessionSuspensionParams) => void;
@@ -247,12 +248,13 @@ async function runFallbackCandidate<T>(params: {
       : await run();
     return { ok: true, result };
   } catch (err) {
-    if (isAgentHarnessPreflightError(err)) {
+    if (params.captureHarnessPreflight && isAgentHarnessPreflightError(err)) {
       return { ok: false, error: err };
     }
     if (
       isAgentRunTerminalTimeout(err) ||
       isCommandLaneTaskTimeoutError(err) ||
+      isAgentHarnessPreflightError(err) ||
       isSandboxProvisioningError(err)
     ) {
       throw err;
@@ -282,6 +284,7 @@ export async function runFallbackAttempt<T>(params: {
   provider: string;
   model: string;
   attempts: FallbackAttempt[];
+  captureHarnessPreflight?: boolean;
   options?: ModelFallbackRunOptions;
   deferSessionSuspension?: boolean;
   onDeferredSessionSuspension?: (params: SessionSuspensionParams) => void;

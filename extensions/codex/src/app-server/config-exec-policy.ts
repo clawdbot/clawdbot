@@ -154,7 +154,7 @@ export function assertCodexAppServerAllowedForOpenClawExecMode(
     throw new AgentHarnessPreflightError(
       `Codex app-server local execution is unavailable because effective tools.exec.mode=${mode}. ` +
         "Execution-host approvals are authoritative. For gateway turns, inspect them with `openclaw approvals get --gateway` and update that same target with `openclaw approvals set --gateway --stdin`; for local `agent exec`, omit `--gateway`. Intentionally align that host policy before retrying.",
-      { harnessId: "codex" },
+      { scope: "harness" },
     );
   }
 }

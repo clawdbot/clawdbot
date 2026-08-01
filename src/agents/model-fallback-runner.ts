@@ -29,7 +29,11 @@ import {
   isFallbackCandidateSkipped,
   markFallbackCandidateSkipped,
 } from "./fallback-skip-cache.js";
-import { isAgentHarnessPreflightError, isMissingAgentHarnessError } from "./harness/errors.js";
+import {
+  isAgentHarnessPreflightError,
+  isMissingAgentHarnessError,
+  resolveAgentHarnessPreflightOwner,
+} from "./harness/errors.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 import {
   appendFailedCandidateAttempt,
@@ -441,6 +445,7 @@ async function runWithModelFallbackInternal<T>(
       run: params.run,
       ...candidate,
       attempts,
+      captureHarnessPreflight: true,
       options: {
         ...runOptions,
         isFinalFallbackAttempt: !hasRemainingCandidate,
@@ -479,7 +484,8 @@ async function runWithModelFallbackInternal<T>(
       throw err;
     }
     if (isAgentHarnessPreflightError(err)) {
-      if (!err.harnessId) {
+      const failedHarnessId = resolveAgentHarnessPreflightOwner(err);
+      if (!failedHarnessId) {
         // Pre-scope callers established that their preflight is global to the
         // fallback chain. Keep that public contract until they declare an owner.
         throw err;
@@ -499,7 +505,7 @@ async function runWithModelFallbackInternal<T>(
         }).runtime;
         // An unresolved runtime remains eligible: only suppress candidates
         // proven to repeat the exact harness-local failure.
-        if (nextRuntime !== err.harnessId) {
+        if (nextRuntime !== failedHarnessId) {
           nextEligibleIndex = index;
           break;
         }

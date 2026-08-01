@@ -29,6 +29,7 @@ import {
   AgentHarnessPreflightError,
   AgentHarnessSessionSupersededError,
   MissingAgentHarnessError,
+  recordAgentHarnessPreflightOwner,
 } from "./harness/errors.js";
 import { clearAgentHarnesses, registerAgentHarness } from "./harness/registry.js";
 import type { AgentHarness } from "./harness/types.js";
@@ -227,6 +228,14 @@ function registerFallbackHarness(id: string): void {
     },
     { ownerPluginId: `${id}-test` },
   );
+}
+
+function createHarnessScopedPreflightError(harnessId: string): AgentHarnessPreflightError {
+  const error = new AgentHarnessPreflightError("Codex approvals denied execution", {
+    scope: "harness",
+  });
+  recordAgentHarnessPreflightOwner(error, harnessId);
+  return error;
 }
 
 const runWithModelFallback: typeof runWithModelFallbackBase = (params) =>
@@ -1849,9 +1858,7 @@ describe("runWithModelFallback", () => {
 
   it("returns a scoped preflight unchanged when every remaining candidate uses that harness", async () => {
     registerFallbackHarness("codex");
-    const preflightError = new AgentHarnessPreflightError("Codex approvals denied execution", {
-      harnessId: "codex",
-    });
+    const preflightError = createHarnessScopedPreflightError("codex");
     const run = vi.fn().mockRejectedValue(preflightError);
     const onFallbackStep = vi.fn();
 
@@ -1872,9 +1879,7 @@ describe("runWithModelFallback", () => {
 
   it("skips only same-runtime candidates after a scoped preflight", async () => {
     registerFallbackHarness("codex");
-    const preflightError = new AgentHarnessPreflightError("Codex approvals denied execution", {
-      harnessId: "codex",
-    });
+    const preflightError = createHarnessScopedPreflightError("codex");
     const run = vi.fn().mockRejectedValueOnce(preflightError).mockResolvedValueOnce("openclaw-ok");
     const onFallbackStep = vi.fn();
 
@@ -1906,9 +1911,7 @@ describe("runWithModelFallback", () => {
 
   it("preserves a different runtime's host-policy denial", async () => {
     registerFallbackHarness("codex");
-    const preflightError = new AgentHarnessPreflightError("Codex approvals denied execution", {
-      harnessId: "codex",
-    });
+    const preflightError = createHarnessScopedPreflightError("codex");
     const hostPolicyError = new Error("exec denied: host=gateway security=deny");
     const run = vi
       .fn()
@@ -1933,9 +1936,7 @@ describe("runWithModelFallback", () => {
   });
 
   it("keeps an unresolved runtime eligible after a scoped preflight", async () => {
-    const preflightError = new AgentHarnessPreflightError("Codex approvals denied execution", {
-      harnessId: "codex",
-    });
+    const preflightError = createHarnessScopedPreflightError("codex");
     const run = vi.fn().mockRejectedValueOnce(preflightError).mockResolvedValueOnce("unknown-ok");
 
     const result = await runWithModelFallback({
@@ -4859,6 +4860,28 @@ describe("runWithImageModelFallback", () => {
       ["openai", "gpt-image-1"],
       ["google", "gemini-2.5-flash-image-preview"],
     ]);
+  });
+
+  it("keeps harness preflight terminal for image fallbacks", async () => {
+    const preflightError = new AgentHarnessPreflightError("image preflight failed");
+    const run = vi.fn().mockRejectedValue(preflightError);
+
+    await expect(
+      runWithImageModelFallback({
+        cfg: makeCfg({
+          agents: {
+            defaults: {
+              imageModel: {
+                primary: "openai/gpt-image-1",
+                fallbacks: ["google/gemini-2.5-flash-image-preview"],
+              },
+            },
+          },
+        }),
+        run,
+      }),
+    ).rejects.toBe(preflightError);
+    expect(run).toHaveBeenCalledOnce();
   });
 
   it("preserves caller cancellation without starting an image fallback", async () => {
