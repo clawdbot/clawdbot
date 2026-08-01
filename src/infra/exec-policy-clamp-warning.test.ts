@@ -13,14 +13,14 @@ vi.mock("./exec-approvals.js", async (importOriginal) => {
   };
 });
 
-import { buildCurrentGlobalExecPolicyClampWarning } from "./exec-policy-clamp-warning.js";
+import { buildCurrentExecPolicyClampWarning } from "./exec-policy-clamp-warning.js";
 
 /**
  * Drives the clamp warning through its only production entry point, feeding
  * approvals via the same snapshot reader each gateway start uses.
  */
 function clampWarningFor(params: {
-  cfg: Parameters<typeof buildCurrentGlobalExecPolicyClampWarning>[0];
+  cfg: Parameters<typeof buildCurrentExecPolicyClampWarning>[0];
   approvals: unknown;
   approvalsPath?: string;
 }): string | undefined {
@@ -28,7 +28,7 @@ function clampWarningFor(params: {
     file: params.approvals,
     path: params.approvalsPath,
   });
-  return buildCurrentGlobalExecPolicyClampWarning(params.cfg);
+  return buildCurrentExecPolicyClampWarning(params.cfg);
 }
 
 describe("global exec policy clamp startup warning", () => {
@@ -295,7 +295,7 @@ describe("global exec policy clamp startup warning", () => {
     });
 
     expect(
-      buildCurrentGlobalExecPolicyClampWarning({ tools: { exec: { security: "full" } } }),
+      buildCurrentExecPolicyClampWarning({ tools: { exec: { security: "full" } } }),
     ).toBeUndefined();
   });
 
@@ -353,5 +353,99 @@ describe("global exec policy clamp startup warning", () => {
 
     expect(firstStart).toContain("tools.exec.security=full is clamped to allowlist");
     expect(restartAfterConfigEdit).toBeUndefined();
+  });
+});
+
+// `agents.entries` is the serialized roster shape; `agents.list` is only an internal
+// projection. Reading `list` directly made these configs invisible to the diagnostic.
+describe("clamp warning on agents.entries rosters", () => {
+  const clampedApprovals = {
+    version: 1,
+    defaults: { security: "allowlist", ask: "off" },
+    agents: {},
+  };
+
+  it("warns when the default entry disables the sandbox that would otherwise own exec", () => {
+    expect(
+      clampWarningFor({
+        cfg: {
+          agents: {
+            defaults: { sandbox: { mode: "all" } },
+            entries: { main: { sandbox: { mode: "off" } } },
+          },
+          tools: { exec: { host: "auto", security: "full" } },
+        },
+        approvalsPath: "/tmp/openclaw-exec-approvals.json",
+        approvals: clampedApprovals,
+      }),
+    ).toContain("tools.exec.security=full is clamped to allowlist");
+  });
+
+  it("does not warn when the default entry's sandbox owns exec", () => {
+    expect(
+      clampWarningFor({
+        cfg: {
+          agents: { entries: { main: { sandbox: { mode: "all" } } } },
+          tools: { exec: { host: "auto", security: "full" } },
+        },
+        approvalsPath: "/tmp/openclaw-exec-approvals.json",
+        approvals: clampedApprovals,
+      }),
+    ).toBeUndefined();
+  });
+});
+
+// Runtime layers agents.entries.<default>.tools.exec over global tools.exec, so the
+// diagnostic must judge that layered scope rather than the global snapshot.
+describe("clamp warning follows the default agent's effective exec scope", () => {
+  const clampedApprovals = {
+    version: 1,
+    defaults: { security: "allowlist", ask: "off" },
+    agents: {},
+  };
+
+  it("does not warn when the default agent overrides exec onto the sandbox", () => {
+    expect(
+      clampWarningFor({
+        cfg: {
+          agents: {
+            defaults: { sandbox: { mode: "all" } },
+            entries: { main: { tools: { exec: { host: "sandbox" } } } },
+          },
+          tools: { exec: { host: "gateway", security: "full" } },
+        },
+        approvalsPath: "/tmp/openclaw-exec-approvals.json",
+        approvals: clampedApprovals,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("warns when only the default agent's own override is clamped", () => {
+    const warning = clampWarningFor({
+      cfg: {
+        agents: { entries: { main: { tools: { exec: { host: "gateway", security: "full" } } } } },
+        tools: { exec: { host: "gateway", security: "allowlist" } },
+      },
+      approvalsPath: "/tmp/openclaw-exec-approvals.json",
+      approvals: clampedApprovals,
+    });
+
+    expect(warning).toContain("agents.entries.main.tools.exec.security=full");
+    expect(warning).toContain("is clamped to allowlist");
+  });
+
+  it("keeps guidance diagnostic for a mode-derived default-agent override", () => {
+    const warning = clampWarningFor({
+      cfg: {
+        agents: { entries: { main: { tools: { exec: { host: "gateway", mode: "full" } } } } },
+        tools: { exec: { host: "gateway", security: "allowlist" } },
+      },
+      approvalsPath: "/tmp/openclaw-exec-approvals.json",
+      approvals: clampedApprovals,
+    });
+
+    expect(warning).toContain("agents.entries.main.tools.exec.mode requests security=full");
+    expect(warning).toContain('Run "openclaw exec-policy show" to inspect the clamping scope.');
+    expect(warning).not.toContain("openclaw exec-policy set --security");
   });
 });

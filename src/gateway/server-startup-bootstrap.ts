@@ -31,7 +31,7 @@ import {
   setDiagnosticsEnabledForProcess,
 } from "../infra/diagnostic-events.js";
 import { isVitestRuntimeEnv, logAcceptedEnvOption } from "../infra/env.js";
-import { buildCurrentGlobalExecPolicyClampWarning } from "../infra/exec-policy-clamp-warning.js";
+import { buildCurrentExecPolicyClampWarning } from "../infra/exec-policy-clamp-warning.js";
 import { readGatewayRestartHandoffSync } from "../infra/restart-handoff.js";
 import { setGatewaySigusr1RestartPolicy, setPreRestartDeferralCheck } from "../infra/restart.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
@@ -303,8 +303,9 @@ export async function prepareGatewayServerBootstrap(input: {
   }
   // Every start re-resolves cfgAtStart and re-reads host approvals, so an in-process
   // SIGUSR1 restart that changes either one reports the clamp that start actually got.
-  // Only the global floor is logged; per-agent clamps stay in `openclaw exec-policy show`.
-  const execPolicyClampWarning = buildCurrentGlobalExecPolicyClampWarning(cfgAtStart);
+  // Only the default agent's exec scope is logged; other agents' clamps stay in
+  // `openclaw exec-policy show` rather than becoming per-start log noise.
+  const execPolicyClampWarning = buildCurrentExecPolicyClampWarning(cfgAtStart);
   if (execPolicyClampWarning) {
     log.warn(execPolicyClampWarning);
   }
