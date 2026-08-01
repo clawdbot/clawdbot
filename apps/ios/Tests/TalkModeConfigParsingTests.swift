@@ -674,6 +674,8 @@ struct TalkModeManagerTests {
             defaultProvider: "elevenlabs",
             defaultRealtimeModelId: "gpt-realtime-2")
 
+        #expect(parsed.requiresGatewayRealtimeTransport)
+        #expect(parsed.openAIRequiresGatewayRealtimeTransport)
         #expect(parsed.executionMode == .realtimeRelay)
         #expect(gatewayDefaultRouting.route == .realtimeRelay)
         #expect(openAIRouting.route == .realtimeRelay)
