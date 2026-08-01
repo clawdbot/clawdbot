@@ -1032,6 +1032,9 @@ describe("Discord model picker interactions", () => {
       entry: {
         updatedAt: Date.now(),
         sessionId: "bound-session",
+        authProfileOverride: "lmstudio:work",
+        authProfileOverrideSource: "user",
+        authProfileOverrideCompactionCount: 2,
       },
     });
 
@@ -1056,6 +1059,9 @@ describe("Discord model picker interactions", () => {
     expect(entry?.providerOverride).toBe("lmstudio");
     expect(entry?.modelOverride).toBe("unsloth/gemma-4-26b-a4b-it@iq4_xs");
     expect(entry?.liveModelSwitchPending).toBe(true);
+    expect(entry?.authProfileOverride).toBe("lmstudio:work");
+    expect(entry?.authProfileOverrideSource).toBe("user");
+    expect(entry?.authProfileOverrideCompactionCount).toBe(2);
     expectDispatchedModelSelection({
       dispatchSpy,
       model: "lmstudio/unsloth/gemma-4-26b-a4b-it@iq4_xs",

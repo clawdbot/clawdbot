@@ -328,6 +328,37 @@ describe("applyModelOverrideToSessionEntry", () => {
     expect(entry.authProfileOverride).toBe("newprofile");
     expect(entry.liveModelSwitchPending).toBe(true);
   });
+
+  it.each([
+    { provider: "openai", expectedProfile: "openai:work" },
+    { provider: "anthropic", expectedProfile: undefined },
+  ])(
+    "keeps auth profile metadata only when it matches $provider",
+    ({ provider, expectedProfile }) => {
+      const entry: SessionEntry = {
+        sessionId: "sess-profile-compatibility",
+        updatedAt: Date.now() - 5_000,
+        providerOverride: "openai",
+        modelOverride: "gpt-5.4",
+        authProfileOverride: "openai:work",
+        authProfileOverrideSource: "user",
+        authProfileOverrideCompactionCount: 2,
+      };
+
+      applyModelOverrideToSessionEntry({
+        entry,
+        selection: {
+          provider,
+          model: provider === "openai" ? "gpt-4.1" : "claude-sonnet-4-6",
+        },
+        authProfileCompatibility: { cfg: {}, currentProvider: "openai" },
+      });
+
+      expect(entry.authProfileOverride).toBe(expectedProfile);
+      expect(entry.authProfileOverrideSource).toBe(expectedProfile ? "user" : undefined);
+      expect(entry.authProfileOverrideCompactionCount).toBe(expectedProfile ? 2 : undefined);
+    },
+  );
 });
 
 describe("repairProviderWrappedModelOverride", () => {

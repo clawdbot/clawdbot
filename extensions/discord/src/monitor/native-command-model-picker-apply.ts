@@ -39,6 +39,7 @@ async function persistDiscordModelPickerOverride(params: {
   provider: string;
   model: string;
   isDefault: boolean;
+  defaultProvider: string;
   runtime?: string;
 }): Promise<boolean> {
   const storePath = resolveStorePath(params.cfg.session?.store, {
@@ -54,6 +55,8 @@ async function persistDiscordModelPickerOverride(params: {
     },
     replaceEntry: true,
     update: (entry) => {
+      const currentProvider =
+        entry.providerOverride?.trim() || entry.modelProvider?.trim() || params.defaultProvider;
       persisted =
         applyModelOverrideToSessionEntry({
           entry,
@@ -62,6 +65,7 @@ async function persistDiscordModelPickerOverride(params: {
             model: params.model,
             isDefault: params.isDefault,
           },
+          authProfileCompatibility: { cfg: params.cfg, currentProvider },
           markLiveSwitchPending: true,
         }).updated || persisted;
       const runtime = params.runtime?.trim();
@@ -141,6 +145,7 @@ export async function applyDiscordModelPickerSelection(params: {
         route: fallbackRoute,
         provider: params.selectedProvider,
         model: params.selectedModel,
+        defaultProvider: params.defaultProvider,
         isDefault:
           params.selectedProvider === params.defaultProvider &&
           params.selectedModel === params.defaultModel,
@@ -163,6 +168,7 @@ export async function applyDiscordModelPickerSelection(params: {
           route: fallbackRoute,
           provider: params.selectedProvider,
           model: params.selectedModel,
+          defaultProvider: params.defaultProvider,
           isDefault:
             params.selectedProvider === params.defaultProvider &&
             params.selectedModel === params.defaultModel,

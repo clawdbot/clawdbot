@@ -26,6 +26,7 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { triggerSessionPatchHook } from "../gateway/session-patch-hooks.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
+import { shouldPreserveSessionAuthProfileOverride } from "../sessions/auth-profile-preservation.js";
 import {
   isModelSelectionLocked,
   MODEL_SELECTION_LOCKED_MESSAGE,
@@ -101,12 +102,14 @@ function applySessionModelSelectionToEntry(params: {
   request: SessionModelSelectionRequest;
   runtime: AppliedRuntimeDirective;
   markLiveSwitchPending?: boolean;
+  preserveAuthProfileOverride?: boolean;
 }): ApplySessionModelSelectionToEntryResult {
   const modelChange = applyModelOverrideToSessionEntry({
     entry: params.entry,
     selection: params.request,
     profileOverride: params.request.profileOverride,
     markLiveSwitchPending: params.markLiveSwitchPending,
+    preserveAuthProfileOverride: params.preserveAuthProfileOverride,
   });
   const runtimeChange = applyModelRuntimeDirective(params.entry, params.runtime);
   return {
@@ -211,6 +214,12 @@ export async function applySessionModelSelection(
     request,
     runtime,
     markLiveSwitchPending: params.markLiveSwitchPending,
+    preserveAuthProfileOverride: shouldPreserveSessionAuthProfileOverride({
+      cfg: params.cfg,
+      entry: startingEntry,
+      currentProvider: params.currentProvider,
+      provider: request.provider,
+    }),
   });
   const thinkingCatalog = params.thinkingCatalog ?? params.modelCatalog;
   const thinkingRuntime = resolveEffectiveAgentRuntime({

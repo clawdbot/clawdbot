@@ -277,6 +277,10 @@ export async function handleTelegramModelCallback(params: {
         fallbackEntry: { sessionId: randomUUID(), updatedAt: Date.now() },
         replaceEntry: true,
         update: (entry) => {
+          const currentProvider =
+            entry.providerOverride?.trim() ||
+            entry.modelProvider?.trim() ||
+            resolvedDefault.provider;
           applyModelOverrideToSessionEntry({
             entry,
             selection: {
@@ -284,6 +288,8 @@ export async function handleTelegramModelCallback(params: {
               model: selection.model,
               isDefault: isDefaultSelection,
             },
+            authProfileCompatibility: { cfg: runtimeCfg, currentProvider },
+            markLiveSwitchPending: true,
           });
           return entry;
         },

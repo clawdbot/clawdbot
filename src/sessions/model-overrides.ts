@@ -1,6 +1,8 @@
 // Session model override helpers normalize per-session provider model choices.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionEntry } from "../config/sessions.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { shouldPreserveSessionAuthProfileOverride } from "./auth-profile-preservation.js";
 
 /** User or automatic model/provider override selection for a session entry. */
 type ModelOverrideSelection = {
@@ -52,6 +54,10 @@ export function applyModelOverrideToSessionEntry(params: {
   profileOverride?: string;
   profileOverrideSource?: "auto" | "user";
   preserveAuthProfileOverride?: boolean;
+  authProfileCompatibility?: {
+    cfg: OpenClawConfig;
+    currentProvider: string;
+  };
   selectionSource?: "auto" | "user";
   markLiveSwitchPending?: boolean;
 }): { updated: boolean } {
@@ -151,6 +157,16 @@ export function applyModelOverrideToSessionEntry(params: {
     updated = true;
   }
 
+  const preserveAuthProfileOverride =
+    params.preserveAuthProfileOverride === true ||
+    (params.authProfileCompatibility !== undefined &&
+      shouldPreserveSessionAuthProfileOverride({
+        cfg: params.authProfileCompatibility.cfg,
+        entry,
+        currentProvider: params.authProfileCompatibility.currentProvider,
+        provider: selection.provider,
+      }));
+
   if (profileOverride) {
     if (entry.authProfileOverride !== profileOverride) {
       entry.authProfileOverride = profileOverride;
@@ -166,7 +182,7 @@ export function applyModelOverrideToSessionEntry(params: {
       delete entry.authProfileOverrideCompactionCount;
       updated = true;
     }
-  } else if (!params.preserveAuthProfileOverride) {
+  } else if (!preserveAuthProfileOverride) {
     if (entry.authProfileOverride) {
       delete entry.authProfileOverride;
       updated = true;
