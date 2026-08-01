@@ -281,6 +281,19 @@ import { exec as 运行 } from "node:child_process";
     expect(findings.map((finding) => finding.line)).toEqual([4]);
   });
 
+  it("detects aliased child_process functions invoked with new", () => {
+    const source = `
+import { exec as run } from "node:child_process";
+new run("echo unsafe");
+`;
+
+    const findings = scanSource(source, "plugin.ts").filter(
+      (candidate) => candidate.ruleId === "dangerous-exec",
+    );
+
+    expect(findings.map((finding) => finding.line)).toEqual([3]);
+  });
+
   it("bounds dense line-rule findings and reports truncation", () => {
     const source = [
       `import { spawn } from "node:child_process";`,
@@ -499,6 +512,33 @@ run();
     for (const testCase of cases) {
       runSyncNamedCase(testCase.name, () => {
         const findings = scanSource(testCase.source, "plugin.ts");
+        expectRulePresence(findings, "dangerous-exec", false);
+      });
+    }
+  });
+
+  it("does not report alias-shaped calls inside literal text", () => {
+    const cases = [
+      {
+        name: "single-quoted string",
+        literal: `const docs = 'run("example")';`,
+      },
+      {
+        name: "plain template literal",
+        literal: 'const docs = `run("example")`;',
+      },
+      {
+        name: "regular expression literal",
+        literal: `const docs = /run("example")/;`,
+      },
+    ];
+
+    for (const testCase of cases) {
+      runSyncNamedCase(testCase.name, () => {
+        const source = ['import { exec as run } from "node:child_process";', testCase.literal].join(
+          "\n",
+        );
+        const findings = scanSource(source, "plugin.ts");
         expectRulePresence(findings, "dangerous-exec", false);
       });
     }

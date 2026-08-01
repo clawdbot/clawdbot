@@ -7,7 +7,6 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { parseFenceSpans } from "../../../packages/markdown-core/src/fences.js";
 import { hasErrnoCode } from "../../infra/errors.js";
 import { isPathInside } from "../../security/scan-paths.js";
-import { escapeRegExp } from "../../shared/regexp.js";
 import { formatScanEvidence, LITERAL_SECRET_SKILL_CONTENT_RULE } from "./scan-evidence.js";
 
 // ---------------------------------------------------------------------------
@@ -349,15 +348,42 @@ const JAVASCRIPT_FENCE_EXTENSIONS: ReadonlyMap<string, string> = new Map([
   ["cts", ".cts"],
 ] as const);
 
-function collectAliasScanSources(
-  source: string,
-  filePath: string,
-): { source: string; file: string }[] {
+type AliasScanSource = {
+  source: string;
+  file: string;
+  lineOffset: number;
+};
+
+function collectLineStarts(source: string): number[] {
+  const starts = [0];
+  for (let index = source.indexOf("\n"); index !== -1;) {
+    starts.push(index + 1);
+    index = source.indexOf("\n", index + 1);
+  }
+  return starts;
+}
+
+function lineOffsetAt(lineStarts: readonly number[], offset: number): number {
+  let low = 0;
+  let high = lineStarts.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if ((lineStarts[middle] ?? 0) <= offset) {
+      low = middle + 1;
+    } else {
+      high = middle;
+    }
+  }
+  return Math.max(0, low - 1);
+}
+
+function collectAliasScanSources(source: string, filePath: string): AliasScanSource[] {
   if (path.extname(filePath).toLowerCase() !== ".md") {
-    return [{ source, file: filePath }];
+    return [{ source, file: filePath, lineOffset: 0 }];
   }
 
-  const fencedSources: { source: string; file: string }[] = [];
+  const scanSources: AliasScanSource[] = [];
+  const lineStarts = collectLineStarts(source);
   const fenceSpans = parseFenceSpans(source);
   for (const [index, span] of fenceSpans.entries()) {
     const infoString = span.openLine.slice(span.indent.length + span.marker.length).trim();
@@ -380,42 +406,47 @@ function collectAliasScanSources(
       closingMarker[0] === span.marker[0] &&
       closingMarker.length >= span.marker.length;
     const content = hasClosingFence ? spanBody.slice(0, lastLineStart) : spanBody;
-    fencedSources.push({ source: content, file: `${filePath}.${index}${extension}` });
+    scanSources.push({
+      source: content,
+      file: `${filePath}.${index}${extension}`,
+      lineOffset: lineOffsetAt(lineStarts, contentStart),
+    });
   }
 
   if (fenceSpans.length === 0) {
-    return [{ source, file: `${filePath}.ts` }];
+    return [{ source, file: `${filePath}.ts`, lineOffset: 0 }];
   }
 
   let previousEnd = 0;
-  const outsideFences = fenceSpans
-    .map((span) => {
-      const segment = source.slice(previousEnd, span.start);
-      previousEnd = span.end;
-      return segment;
-    })
-    .concat(source.slice(previousEnd))
-    .join("\n");
-  if (outsideFences.trim()) {
-    fencedSources.push({ source: outsideFences, file: `${filePath}.outside.ts` });
+  let outsideIndex = 0;
+  for (const span of fenceSpans) {
+    const segment = source.slice(previousEnd, span.start);
+    if (segment.trim()) {
+      scanSources.push({
+        source: segment,
+        file: `${filePath}.outside.${outsideIndex}.ts`,
+        lineOffset: lineOffsetAt(lineStarts, previousEnd),
+      });
+      outsideIndex += 1;
+    }
+    previousEnd = span.end;
   }
-  return fencedSources;
+  const trailingSegment = source.slice(previousEnd);
+  if (trailingSegment.trim()) {
+    scanSources.push({
+      source: trailingSegment,
+      file: `${filePath}.outside.${outsideIndex}.ts`,
+      lineOffset: lineOffsetAt(lineStarts, previousEnd),
+    });
+  }
+  return scanSources;
 }
 
 function collectAliasesFromParsedSource(
-  source: string,
-  filePath: string,
+  ts: typeof import("typescript"),
+  sourceFile: import("typescript").SourceFile,
   aliases: Set<string>,
 ): void {
-  const ts = loadTypeScriptRuntime();
-  const sourceFile = ts.createSourceFile(
-    filePath,
-    source,
-    ts.ScriptTarget.Latest,
-    false,
-    scriptKindForFile(ts, filePath),
-  );
-
   const visit = (node: import("typescript").Node): void => {
     if (
       ts.isImportDeclaration(node) &&
@@ -469,28 +500,56 @@ function collectAliasesFromParsedSource(
   visit(sourceFile);
 }
 
-function collectDangerousChildProcessAliases(source: string, filePath: string): string[] {
+function collectDangerousChildProcessAliasCalls(
+  source: string,
+  filePath: string,
+): Map<number, number> {
+  const ts = loadTypeScriptRuntime();
   const aliases = new Set<string>();
+  const parsedSources = collectAliasScanSources(source, filePath).map((candidate) => ({
+    source: candidate.source,
+    file: candidate.file,
+    lineOffset: candidate.lineOffset,
+    sourceFile: ts.createSourceFile(
+      candidate.file,
+      candidate.source,
+      ts.ScriptTarget.Latest,
+      false,
+      scriptKindForFile(ts, candidate.file),
+    ),
+  }));
 
   // AST ownership keeps declaration-shaped strings and comments from creating
   // aliases that would turn unrelated same-name calls into critical findings.
-  for (const candidate of collectAliasScanSources(source, filePath)) {
-    collectAliasesFromParsedSource(candidate.source, candidate.file, aliases);
+  for (const candidate of parsedSources) {
+    collectAliasesFromParsedSource(ts, candidate.sourceFile, aliases);
   }
 
-  return [...aliases];
-}
-
-function buildDangerousExecPattern(source: string, filePath: string): RegExp {
-  const aliases = collectDangerousChildProcessAliases(source, filePath);
-  if (aliases.length === 0) {
-    return DANGEROUS_CHILD_PROCESS_CALL_PATTERN;
+  if (aliases.size === 0) {
+    return new Map();
   }
-  const aliasAlternation = aliases.map(escapeRegExp).join("|");
-  return new RegExp(
-    `${DANGEROUS_CHILD_PROCESS_CALL_PATTERN.source}|(?<![.$\\u200C\\u200D\\p{ID_Continue}])(?:${aliasAlternation})\\s*\\(`,
-    "u",
-  );
+
+  const callCountsByLine = new Map<number, number>();
+  for (const candidate of parsedSources) {
+    const visit = (node: import("typescript").Node): void => {
+      if (
+        (ts.isCallExpression(node) || ts.isNewExpression(node)) &&
+        ts.isIdentifier(node.expression) &&
+        aliases.has(node.expression.text) &&
+        !DANGEROUS_CHILD_PROCESS_CALL_NAME_SET.has(node.expression.text)
+      ) {
+        const candidateLine =
+          candidate.sourceFile.getLineAndCharacterOfPosition(
+            node.expression.getStart(candidate.sourceFile),
+          ).line + 1;
+        const sourceLine = candidate.lineOffset + candidateLine;
+        callCountsByLine.set(sourceLine, (callCountsByLine.get(sourceLine) ?? 0) + 1);
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(candidate.sourceFile);
+  }
+  return callCountsByLine;
 }
 
 function stripCommentsForHeuristics(source: string): string {
@@ -616,15 +675,36 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
     let acceptedMatches = 0;
     let omittedMatches = 0;
     let lastOmittedLine: number | undefined;
-    const pattern =
-      rule.ruleId === "dangerous-exec" ? buildDangerousExecPattern(source, filePath) : rule.pattern;
+    const aliasCallCounts =
+      rule.ruleId === "dangerous-exec"
+        ? collectDangerousChildProcessAliasCalls(source, filePath)
+        : undefined;
+    const recordFinding = (lineIndex: number, evidence: string): void => {
+      if (acceptedMatches >= MAX_LINE_RULE_FINDINGS_PER_RULE) {
+        omittedMatches += 1;
+        lastOmittedLine = lineIndex + 1;
+        return;
+      }
+
+      // Retain distinct calls up to the cap, then aggregate every remaining match.
+      // This keeps hostile output bounded without hiding that later sites exist.
+      findings.push({
+        ruleId: rule.ruleId,
+        severity: rule.severity,
+        file: filePath,
+        line: lineIndex + 1,
+        message: rule.message,
+        evidence: formatScanEvidence(evidence),
+      });
+      acceptedMatches += 1;
+    };
     for (const [i, line] of lines.entries()) {
       // Match execution calls without comments, but retain the raw line as finding evidence.
       const scanLine = rule.ruleId === "dangerous-exec" ? (heuristicLines[i] ?? "") : line;
       const matches = scanLine.matchAll(
         new RegExp(
-          pattern.source,
-          pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`,
+          rule.pattern.source,
+          rule.pattern.flags.includes("g") ? rule.pattern.flags : `${rule.pattern.flags}g`,
         ),
       );
       for (const match of matches) {
@@ -640,23 +720,11 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
           }
         }
 
-        if (acceptedMatches >= MAX_LINE_RULE_FINDINGS_PER_RULE) {
-          omittedMatches += 1;
-          lastOmittedLine = i + 1;
-          continue;
-        }
+        recordFinding(i, line);
+      }
 
-        // Retain distinct calls up to the cap, then aggregate every remaining match.
-        // This keeps hostile output bounded without hiding that later sites exist.
-        findings.push({
-          ruleId: rule.ruleId,
-          severity: rule.severity,
-          file: filePath,
-          line: i + 1,
-          message: rule.message,
-          evidence: formatScanEvidence(line),
-        });
-        acceptedMatches += 1;
+      for (let occurrence = 0; occurrence < (aliasCallCounts?.get(i + 1) ?? 0); occurrence += 1) {
+        recordFinding(i, line);
       }
     }
     if (lastOmittedLine !== undefined) {
