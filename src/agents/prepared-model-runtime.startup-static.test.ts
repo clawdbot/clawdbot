@@ -163,7 +163,8 @@ vi.mock("../logging/subsystem.js", () => ({
 
 const { getPreparedModelRuntimeSnapshot, refreshPreparedModelRuntimeSnapshots } =
   await import("./prepared-model-runtime.js");
-const { prepareScopedReadOnlyModelCatalog } = await import("./prepared-model-runtime.facts.js");
+const { prepareScopedReadOnlyModelCatalog } =
+  await import("./prepared-model-runtime.scoped-catalog.js");
 const { resetPreparedModelRuntimeSnapshotsForTest } =
   await import("./prepared-model-runtime.test-support.js");
 
