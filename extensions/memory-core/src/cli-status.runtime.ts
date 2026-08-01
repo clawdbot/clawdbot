@@ -442,6 +442,9 @@ export async function runMemoryStatus(
       if (status.backend === "builtin") {
         const storeState = formatVectorState(status.vector.storeAvailable);
         formatVectorLine("Vector store", storeState);
+        if (status.vector.enabled && status.vector.dims) {
+          lines.push(`${label("Vector index")} ${success("ready")} ${muted("(persisted)")}`);
+        }
         if (status.vector.semanticAvailable !== undefined) {
           formatVectorLine("Semantic vectors", formatVectorState(status.vector.semanticAvailable));
         }

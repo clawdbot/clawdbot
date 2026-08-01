@@ -71,7 +71,7 @@ describe("memory manager vector status", () => {
     return manager;
   }
 
-  it("reports persisted vector readiness from a fresh status manager", async () => {
+  it("exposes persisted vector metadata without claiming live store readiness", async () => {
     const seedManager = await createStatusManager();
     (seedManager as unknown as { writeMeta(meta: MemoryIndexMeta): void }).writeMeta({
       provider: "gemini",
@@ -84,7 +84,11 @@ describe("memory manager vector status", () => {
     const statusManager = await createStatusManager();
 
     expect(Reflect.get(statusManager, "vector")).toMatchObject({ available: null, dims: 4 });
-    expect(statusManager.status().vector?.storeAvailable).toBe(true);
+    expect(statusManager.status().vector).toMatchObject({
+      enabled: true,
+      dims: 4,
+      storeAvailable: undefined,
+    });
   });
 
   it("does not infer vector readiness from chunks without vector metadata", async () => {
@@ -111,5 +115,6 @@ describe("memory manager vector status", () => {
 
     expect(status.chunks).toBeGreaterThan(0);
     expect(status.vector?.storeAvailable).toBeUndefined();
+    expect(status.vector?.dims).toBeUndefined();
   });
 });

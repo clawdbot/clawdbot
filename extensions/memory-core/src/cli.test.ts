@@ -604,6 +604,30 @@ describe("memory cli", () => {
     expect(close).toHaveBeenCalled();
   });
 
+  it("reports persisted vector indexing separately from live store readiness", async () => {
+    const close = vi.fn(async () => {});
+    const probeVectorAvailability = vi.fn(async () => {
+      throw new Error("unexpected vector probe");
+    });
+    mockManager({
+      probeVectorAvailability,
+      status: () =>
+        makeMemoryStatus({
+          vector: { enabled: true, dims: 768 },
+        }),
+      close,
+    });
+
+    const log = spyRuntimeLogs(defaultRuntime);
+    await runMemoryCli(["status"]);
+
+    expect(probeVectorAvailability).not.toHaveBeenCalled();
+    expectLogged(log, "Vector store: unknown");
+    expectLogged(log, "Vector index: ready (persisted)");
+    expectLogged(log, "Vector dims: 768");
+    expect(close).toHaveBeenCalled();
+  });
+
   it("resolves configured memory SecretRefs through gateway snapshot", async () => {
     const config = {
       memory: {
