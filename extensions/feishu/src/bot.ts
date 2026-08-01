@@ -517,10 +517,10 @@ export async function handleFeishuMessage(params: {
     !effectiveThreadId &&
     isFeishuTopicSessionScope(groupSessionScope ?? "group")
   ) {
+    // Synthetic turns keep a local dedupe ID in messageId; their explicit reply target is
+    // the real Feishu message ID that topic hydration can send back to the provider.
+    const topicHydrationMessageId = ctx.replyTargetMessageId ?? ctx.messageId;
     try {
-      // Synthetic turns keep a local dedupe ID in messageId; their explicit reply target is
-      // the real Feishu message ID that topic hydration can send back to the provider.
-      const topicHydrationMessageId = ctx.replyTargetMessageId ?? ctx.messageId;
       const messageInfo = await getMessageFeishu({
         cfg,
         accountId: account.accountId,

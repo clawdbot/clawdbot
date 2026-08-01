@@ -2837,30 +2837,28 @@ describe("handleFeishuMessage command authorization", () => {
     expectResolvedRouteCall(1, { kind: "group", id: "oc-group:topic:omt_native_topic" });
   });
 
-  it.each(
-    [
-      {
-        action: "created",
-        scope: "group_topic",
-        expectedPeerId: "oc-group:topic:omt_native_reaction",
-      },
-      {
-        action: "deleted",
-        scope: "group_topic",
-        expectedPeerId: "oc-group:topic:omt_native_reaction",
-      },
-      {
-        action: "created",
-        scope: "group_topic_sender",
-        expectedPeerId: "oc-group:topic:omt_native_reaction:sender:ou-reaction-actor",
-      },
-      {
-        action: "deleted",
-        scope: "group_topic_sender",
-        expectedPeerId: "oc-group:topic:omt_native_reaction:sender:ou-reaction-actor",
-      },
-    ] as const,
-  )(
+  it.each([
+    {
+      action: "created",
+      scope: "group_topic",
+      expectedPeerId: "oc-group:topic:omt_native_reaction",
+    },
+    {
+      action: "deleted",
+      scope: "group_topic",
+      expectedPeerId: "oc-group:topic:omt_native_reaction",
+    },
+    {
+      action: "created",
+      scope: "group_topic_sender",
+      expectedPeerId: "oc-group:topic:omt_native_reaction:sender:ou-reaction-actor",
+    },
+    {
+      action: "deleted",
+      scope: "group_topic_sender",
+      expectedPeerId: "oc-group:topic:omt_native_reaction:sender:ou-reaction-actor",
+    },
+  ] as const)(
     "hydrates topic threads from the real message ID for synthetic $action reactions in $scope sessions",
     async ({ action, scope, expectedPeerId }) => {
       mockShouldComputeCommandAuthorized.mockReturnValue(false);
