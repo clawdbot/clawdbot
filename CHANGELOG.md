@@ -55,7 +55,6 @@ Docs: https://docs.openclaw.ai
 - **Gateway TTS playback:** add an operator-scoped `tts.speak` RPC that returns configured-provider speech as inline whole-clip audio for remote clients. (#100708, #100770)
 - **Workboard dispatch cap:** add a request-scoped `--max-starts` override while preserving the default cap, sequential starts, and one-card-per-owner guard. (#100174) Thanks @souvikDevloper.
 - **Plugin install provenance warnings:** require explicit `--force` acknowledgement for arbitrary executable plugin sources in CLI and chat installs, keep trusted ClawHub, bundled, official-catalog, and tracked-update flows frictionless, and restrict Crestodian installs to trusted sources. (#102197) Thanks @jesse-merhi.
-- **Web fetch request headers:** add `tools.web.fetch.headers` for operator routing metadata on native `web_fetch` requests, with standard header normalization, invalid/reserved-entry filtering, cache isolation, guarded redirect handling, and capture redaction. (#115545) Thanks @jesse-merhi.
 
 ### Fixes
 
