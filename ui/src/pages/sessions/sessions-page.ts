@@ -37,6 +37,7 @@ import {
   scopedAgentParamsForSession,
   type SessionArchivedFilter,
 } from "../../lib/sessions/index.ts";
+import { fetchPagedSessionRows } from "../../lib/sessions/paged-session-rows.ts";
 import {
   resolveSessionPreferredFaceForKey,
   resolveSessionNavigationAgentId,
@@ -794,40 +795,36 @@ class SessionsPage extends OpenClawLightDomElement {
     // full archived set so "all archived" means all of them. Any abnormal page
     // (failure, non-advancing offset) aborts: deleting a partial enumeration
     // would silently violate the "all archived" contract.
-    const keys: string[] = [];
+    let rows: GatewaySessionRow[];
     try {
       // One options snapshot for every page: filter edits made while pages load
-      // must not mix enumeration populations.
-      const listOptions = this.sessionListOptions();
-      let offset = 0;
-      for (;;) {
-        const listed = await scope.sessions.list({ ...listOptions, limit: 1000, offset });
-        if (!this.isRequestScopeCurrent(scope)) {
-          return;
-        }
-        if (!listed) {
-          this.error = scope.sessions.state.error;
-          return;
-        }
-        for (const row of listed.sessions) {
-          if (row.archived === true) {
-            keys.push(row.key);
-          }
-        }
-        if (listed.hasMore !== true) {
-          break;
-        }
-        if (typeof listed.nextOffset !== "number" || listed.nextOffset <= offset) {
-          throw new Error("archived session enumeration did not advance");
-        }
-        offset = listed.nextOffset;
+      // must not mix populations; a deep link never narrows "all archived".
+      const {
+        search: _deepLinkSearch,
+        agentId: _linkedAgentId,
+        ...filters
+      } = this.sessionListOptions();
+      const agentId = scope.context.agentSelection.state.scopeId?.trim();
+      const listOptions = { ...filters, ...(agentId ? { agentId } : {}) };
+      const listed = await fetchPagedSessionRows({
+        list: (offset) => scope.sessions.list({ ...listOptions, limit: 1000, offset }),
+        isCurrent: () => this.isRequestScopeCurrent(scope),
+        missingResultError:
+          scope.sessions.state.error ?? "archived session enumeration returned no result",
+        stalledPaginationError: "archived session enumeration did not advance",
+        incompletePaginationError: "archived session enumeration was incomplete",
+      });
+      if (!listed) {
+        return;
       }
+      rows = listed;
     } catch (error) {
       if (this.isRequestScopeCurrent(scope)) {
         this.error = String(error);
       }
       return;
     }
+    const keys = rows.filter((row) => row.archived === true).map((row) => row.key);
     if (
       keys.length === 0 ||
       !window.confirm(t("sessionsView.deleteAllArchivedConfirm", { count: String(keys.length) }))

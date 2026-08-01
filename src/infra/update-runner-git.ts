@@ -70,7 +70,7 @@ export async function runGitUpdate(params: {
   const branch = await readBranchName(runCommand, gitRoot, timeoutMs);
   const hasDevTargetRef = channel === "dev" && Boolean(opts.devTargetRef?.trim());
   const needsCheckoutMain = channel === "dev" && !hasDevTargetRef && branch !== DEV_BRANCH;
-  const totalSteps = channel === "dev" ? (needsCheckoutMain ? 12 : 11) : 10;
+  const totalSteps = channel === "dev" ? (needsCheckoutMain ? 11 : 10) : 9;
   const steps: UpdateStepResult[] = [];
   let stepIndex = 0;
   const step = (
@@ -389,7 +389,10 @@ export async function runGitUpdate(params: {
         "build",
         managerScriptArgs(manager.manager, "build"),
         gitRoot,
-        resolveBuildEnv(manager.env),
+        resolveBuildEnv(
+          manager.env,
+          channel === "dev" ? path.join(gitRoot, ".artifacts", "build-all-cache") : undefined,
+        ),
       ),
     );
     steps.push(buildStep);
@@ -410,12 +413,20 @@ export async function runGitUpdate(params: {
     if (buildCleanCheck.stdoutTail?.trim()) {
       return await rollbackError("build-dirty");
     }
-    const uiBuildStep = await runStep(
-      step("ui:build", managerScriptArgs(manager.manager, "ui:build"), gitRoot, manager.env),
-    );
-    steps.push(uiBuildStep);
-    if (uiBuildStep.exitCode !== 0) {
-      return await rollbackError("ui-build-failed");
+    const builtUiIndexHealth = await resolveControlUiDistIndexHealth({ root: gitRoot });
+    if (!builtUiIndexHealth.exists) {
+      const uiBuildStep = await runStep(
+        step(
+          "ui:build (build fallback)",
+          managerScriptArgs(manager.manager, "ui:build"),
+          gitRoot,
+          manager.env,
+        ),
+      );
+      steps.push(uiBuildStep);
+      if (uiBuildStep.exitCode !== 0) {
+        return await rollbackError("ui-build-failed");
+      }
     }
 
     const doctorEntry = path.join(gitRoot, "openclaw.mjs");

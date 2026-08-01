@@ -14,7 +14,11 @@ import {
   ThinkingLevel,
 } from "@google/genai";
 import { calculateCost, clampThinkingLevel } from "../model-utils.js";
-import { transportAbortError } from "../transports/transport-stream-shared.js";
+import {
+  assignTransportErrorDetails,
+  coerceTransportToolCallArguments,
+  transportAbortError,
+} from "../transports/transport-stream-shared.js";
 import type {
   Api,
   AssistantMessage,
@@ -173,6 +177,9 @@ export function convertMessages<T extends GoogleApiType>(
   };
 
   const transformedMessages = transformMessages(context.messages, model, normalizeToolCallId);
+  const requiresToolCallThoughtSignature =
+    model.provider !== "google-gemini-cli" &&
+    (isGemini3ProModel(model) || isGemini3FlashModel(model));
   // Parallel calls need one immediate function-response turn. Gemini < 3 images cannot
   // live inside functionResponse, so hold them until the consecutive result run ends.
   const pendingToolResultImageTurns: Content[] = [];
@@ -215,35 +222,35 @@ export function convertMessages<T extends GoogleApiType>(
       }
     } else if (msg.role === "assistant") {
       const parts: Part[] = [];
+      let sawFunctionCall = false;
       // Check if message is from same provider and model - only then keep thinking blocks
-      const isSameProviderAndModel = msg.provider === model.provider && msg.model === model.id;
+      const isSameProviderAndModel =
+        msg.provider === model.provider && msg.api === model.api && msg.model === model.id;
 
       for (const block of msg.content) {
         if (block.type === "text") {
-          // Skip empty text blocks
-          if (!block.text || block.text.trim() === "") {
-            continue;
-          }
           const thoughtSignature = resolveThoughtSignature(
             isSameProviderAndModel,
             block.textSignature,
           );
+          if ((!block.text || block.text.trim() === "") && !thoughtSignature) {
+            continue;
+          }
           parts.push({
             text: sanitizeSurrogates(block.text),
             ...(thoughtSignature && { thoughtSignature }),
           });
         } else if (block.type === "thinking") {
-          // Skip empty thinking blocks
-          if (!block.thinking || block.thinking.trim() === "") {
+          const thoughtSignature = resolveThoughtSignature(
+            isSameProviderAndModel,
+            block.thinkingSignature,
+          );
+          if ((!block.thinking || block.thinking.trim() === "") && !thoughtSignature) {
             continue;
           }
           // Only keep as thinking block if same provider AND same model
           // Otherwise convert to plain text (no tags to avoid model mimicking them)
           if (isSameProviderAndModel) {
-            const thoughtSignature = resolveThoughtSignature(
-              isSameProviderAndModel,
-              block.thinkingSignature,
-            );
             parts.push({
               thought: true,
               text: sanitizeSurrogates(block.thinking),
@@ -255,16 +262,21 @@ export function convertMessages<T extends GoogleApiType>(
             });
           }
         } else if (block.type === "toolCall") {
+          const args = coerceTransportToolCallArguments(block.arguments);
+          const ownSignature = resolveThoughtSignature(
+            isSameProviderAndModel,
+            block.thoughtSignature,
+          );
           const thoughtSignature =
-            resolveThoughtSignature(isSameProviderAndModel, block.thoughtSignature) ??
-            (model.provider !== "google-gemini-cli" &&
-            (isGemini3ProModel(model) || isGemini3FlashModel(model))
+            ownSignature ??
+            (!sawFunctionCall && requiresToolCallThoughtSignature
               ? "skip_thought_signature_validator"
               : undefined);
+          sawFunctionCall = true;
           const part: Part = {
             functionCall: {
               name: block.name,
-              args: block.arguments ?? {},
+              args,
               ...(requiresToolCallId(model.id) ? { id: block.id } : {}),
             },
             ...(thoughtSignature && { thoughtSignature }),
@@ -438,9 +450,23 @@ export async function runGoogleGenerateContentLifecycle<T extends GoogleApiType>
         delete (block as { index?: number }).index;
       }
     }
-    output.stopReason = options?.signal?.aborted ? "aborted" : "error";
-    output.errorMessage = formatProviderError(error);
-    stream.push({ type: "error", reason: output.stopReason, error: output });
+    const failure = options?.signal?.aborted ? transportAbortError(options.signal) : error;
+    assignTransportErrorDetails(output, failure, options?.signal);
+    const formattedError = formatProviderError(failure);
+    const status = failure instanceof Error && "status" in failure ? failure.status : undefined;
+    if (typeof status === "number" && Number.isFinite(status)) {
+      output.errorCode ||= String(status);
+      output.errorMessage = formattedError.startsWith(`${status}:`)
+        ? formattedError
+        : `${status}: ${formattedError}`;
+    } else {
+      output.errorMessage = formattedError;
+    }
+    stream.push({
+      type: "error",
+      reason: output.stopReason === "aborted" ? "aborted" : "error",
+      error: output,
+    });
     stream.end();
   }
 }
@@ -804,18 +830,52 @@ export async function consumeGoogleGenerateContentStream<T extends GoogleApiType
       );
     }
     if (candidate?.content?.parts) {
-      for (const part of candidate.content.parts) {
-        if (part.text === undefined && !part.functionCall && part.thought !== true) {
-          const latestBlock = blocks.at(-1);
-          if (latestBlock?.type === "toolCall" && part.thoughtSignature) {
-            latestBlock.thoughtSignature = retainThoughtSignature(
-              latestBlock.thoughtSignature,
-              part.thoughtSignature,
-            );
-            continue;
+      for (const [partIndex, part] of candidate.content.parts.entries()) {
+        const text = part.text;
+        const hasText = typeof text === "string";
+        const hasThoughtSignature =
+          typeof part.thoughtSignature === "string" && part.thoughtSignature.length > 0;
+        const signatureOnly =
+          hasThoughtSignature &&
+          (!hasText || text.length === 0) &&
+          Object.keys(part).every(
+            (key) => key === "thought" || key === "thoughtSignature" || key === "text",
+          );
+        if (signatureOnly) {
+          if (!hasText && part.thought !== true) {
+            const latestBlock = blocks.at(-1);
+            if (
+              partIndex === 0 &&
+              latestBlock?.type === "toolCall" &&
+              !latestBlock.thoughtSignature
+            ) {
+              latestBlock.thoughtSignature = retainThoughtSignature(
+                latestBlock.thoughtSignature,
+                part.thoughtSignature,
+              );
+              continue;
+            }
           }
+          // Empty signed Parts have their own wire identity; merging moves an opaque signature.
+          endCurrentBlock();
         }
-        if (part.text !== undefined) {
+
+        if (hasText || signatureOnly) {
+          if (currentBlock && (hasThoughtSignature || partIndex > 0)) {
+            const currentSignature =
+              currentBlock.type === "thinking"
+                ? currentBlock.thinkingSignature
+                : currentBlock.textSignature;
+            const currentText =
+              currentBlock.type === "thinking" ? currentBlock.thinking : currentBlock.text;
+            if (
+              currentText.length > 0 &&
+              (currentSignature !== part.thoughtSignature ||
+                (partIndex > 0 && (currentSignature || hasThoughtSignature)))
+            ) {
+              endCurrentBlock();
+            }
+          }
           const isThinking = isThinkingPart(part);
           if (
             !currentBlock ||
@@ -841,8 +901,9 @@ export async function consumeGoogleGenerateContentStream<T extends GoogleApiType
               });
             }
           }
+          const delta = hasText ? text : "";
           if (currentBlock.type === "thinking") {
-            currentBlock.thinking += part.text;
+            currentBlock.thinking += delta;
             currentBlock.thinkingSignature = retainThoughtSignature(
               currentBlock.thinkingSignature,
               part.thoughtSignature,
@@ -850,11 +911,11 @@ export async function consumeGoogleGenerateContentStream<T extends GoogleApiType
             params.stream.push({
               type: "thinking_delta",
               contentIndex: blockIndex(),
-              delta: part.text,
+              delta,
               partial: params.output,
             });
           } else {
-            currentBlock.text += part.text;
+            currentBlock.text += delta;
             currentBlock.textSignature = retainThoughtSignature(
               currentBlock.textSignature,
               part.thoughtSignature,
@@ -862,9 +923,12 @@ export async function consumeGoogleGenerateContentStream<T extends GoogleApiType
             params.stream.push({
               type: "text_delta",
               contentIndex: blockIndex(),
-              delta: part.text,
+              delta,
               partial: params.output,
             });
+          }
+          if (signatureOnly) {
+            endCurrentBlock();
           }
         }
 

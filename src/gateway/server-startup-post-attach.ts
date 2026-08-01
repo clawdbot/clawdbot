@@ -401,18 +401,54 @@ function schedulePostReadySidecarTask(params: {
   };
 }
 
+function scheduleGatewayGenerationTimer(params: {
+  delayMs: number;
+  run: (isStopped: () => boolean) => Awaitable<void>;
+  onError: (err: unknown) => void;
+}): GatewayPostReadySidecarHandle {
+  let stopped = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const isStopped = () => stopped;
+  timer = setTimeout(() => {
+    timer = undefined;
+    if (isStopped()) {
+      return;
+    }
+    void runWithGatewayIndependentRootWorkAdmission(async () => {
+      await params.run(isStopped);
+    }).catch((err: unknown) => {
+      if (!isStopped()) {
+        params.onError(err);
+      }
+    });
+  }, params.delayMs);
+  timer.unref?.();
+  return {
+    stop: () => {
+      stopped = true;
+      if (timer) {
+        clearTimeout(timer);
+        timer = undefined;
+      }
+    },
+  };
+}
+
 function scheduleRestartSentinelWakeAfterReady(params: {
   deps: CliDeps;
   log: { warn: (msg: string) => void };
-}): void {
-  setTimeout(() => {
-    void runWithGatewayIndependentRootWorkAdmission(async () => {
+}): GatewayPostReadySidecarHandle {
+  return scheduleGatewayGenerationTimer({
+    delayMs: 750,
+    run: async (isStopped) => {
       const { scheduleRestartSentinelWake } = await loadGatewayRestartSentinelModule();
+      if (isStopped()) {
+        return;
+      }
       await scheduleRestartSentinelWake({ deps: params.deps });
-    }).catch((err: unknown) => {
-      params.log.warn(`restart sentinel wake failed to schedule: ${String(err)}`);
-    });
-  }, 750);
+    },
+    onError: (err) => params.log.warn(`restart sentinel wake failed to schedule: ${String(err)}`),
+  });
 }
 
 type CleanStaleLockFiles = typeof import("../agents/session-write-lock.js").cleanStaleLockFiles;
@@ -754,19 +790,26 @@ export async function startGatewaySidecars(params: {
     });
     // Run startup hooks after sidecar startup has yielded once so gateway bind
     // and channel startup are not delayed by hook handlers.
-    setTimeout(() => {
-      void runWithGatewayIndependentRootWorkAdmission(async () => {
-        const { createInternalHookEvent, triggerInternalHook } = await loadInternalHooksModule();
-        const hookEvent = createInternalHookEvent("gateway", "startup", "gateway:startup", {
-          cfg: params.cfg,
-          deps: params.deps,
-          workspaceDir: params.defaultWorkspaceDir,
-        });
-        await triggerInternalHook(hookEvent);
-      }).catch((err: unknown) => {
-        params.logHooks.warn(`gateway startup hook failed: ${String(err)}`);
-      });
-    }, 250);
+    // This timer belongs to the current gateway generation; registration lets
+    // close cancel it before a replacement generation starts in the same process.
+    postReadySidecars.push(
+      scheduleGatewayGenerationTimer({
+        delayMs: 250,
+        run: async (isStopped) => {
+          const { createInternalHookEvent, triggerInternalHook } = await loadInternalHooksModule();
+          if (isStopped()) {
+            return;
+          }
+          const hookEvent = createInternalHookEvent("gateway", "startup", "gateway:startup", {
+            cfg: params.cfg,
+            deps: params.deps,
+            workspaceDir: params.defaultWorkspaceDir,
+          });
+          await triggerInternalHook(hookEvent);
+        },
+        onError: (err) => params.logHooks.warn(`gateway startup hook failed: ${String(err)}`),
+      }),
+    );
   }
 
   if (params.cfg.acp?.enabled) {
@@ -807,47 +850,60 @@ export async function startGatewaySidecars(params: {
     scheduleGatewayMemoryBackend({ cfg: params.cfg, log: params.log, policy });
   });
 
-  schedulePostReadySidecarTask({
-    startupTrace: params.startupTrace,
-    name: "sidecars.session-locks",
-    log: params.log,
-    waitForPostReadyWork: params.waitForPostReadyWork,
-    run: async (isStopped) => {
-      try {
-        const [{ resolveAgentSessionDirs }, { cleanStaleLockFiles }] = await Promise.all([
-          import("../agents/session-dirs.js"),
-          import("../agents/session-write-lock.js"),
-        ]);
-        const stateDir = resolveStateDir(process.env);
-        const sessionDirs = await resolveAgentSessionDirs(stateDir);
-        await cleanupStaleSessionLocks({
-          sessionDirs,
-          cfg: params.cfg,
-          log: params.log,
-          isStopped,
-          cleanStaleLockFiles,
-        });
-      } catch (err) {
-        params.log.warn(`session lock cleanup failed on startup: ${String(err)}`);
-      }
-    },
-  });
+  // These tasks may still be waiting when close begins. Keep their handles in
+  // the generation-owned registry so they cannot run into a replacement gateway.
+  postReadySidecars.push(
+    schedulePostReadySidecarTask({
+      startupTrace: params.startupTrace,
+      name: "sidecars.session-locks",
+      log: params.log,
+      waitForPostReadyWork: params.waitForPostReadyWork,
+      run: async (isStopped) => {
+        try {
+          const [{ resolveAgentSessionDirs }, { cleanStaleLockFiles }] = await Promise.all([
+            import("../agents/session-dirs.js"),
+            import("../agents/session-write-lock.js"),
+          ]);
+          const stateDir = resolveStateDir(process.env);
+          const sessionDirs = await resolveAgentSessionDirs(stateDir);
+          await cleanupStaleSessionLocks({
+            sessionDirs,
+            cfg: params.cfg,
+            log: params.log,
+            isStopped,
+            cleanStaleLockFiles,
+          });
+        } catch (err) {
+          params.log.warn(`session lock cleanup failed on startup: ${String(err)}`);
+        }
+      },
+    }),
+  );
 
-  schedulePostReadySidecarTask({
-    startupTrace: params.startupTrace,
-    name: "sidecars.restart-sentinel",
-    log: params.log,
-    waitForPostReadyWork: params.waitForPostReadyWork,
-    run: async () => {
-      if (!shouldCheckRestartSentinel()) {
-        return;
-      }
-      if (!(await hasRestartSentinelFast())) {
-        return;
-      }
-      scheduleRestartSentinelWakeAfterReady({ deps: params.deps, log: params.log });
-    },
-  });
+  let restartSentinelWake: GatewayPostReadySidecarHandle | undefined;
+  postReadySidecars.push(
+    schedulePostReadySidecarTask({
+      startupTrace: params.startupTrace,
+      name: "sidecars.restart-sentinel",
+      log: params.log,
+      waitForPostReadyWork: params.waitForPostReadyWork,
+      run: async (isStopped) => {
+        if (!shouldCheckRestartSentinel() || isStopped()) {
+          return;
+        }
+        if (!(await hasRestartSentinelFast()) || isStopped()) {
+          return;
+        }
+        restartSentinelWake = scheduleRestartSentinelWakeAfterReady({
+          deps: params.deps,
+          log: params.log,
+        });
+      },
+      stop: async () => {
+        await restartSentinelWake?.stop();
+      },
+    }),
+  );
 
   if (params.cfg.hooks?.enabled && params.cfg.hooks.gmail?.account) {
     postReadySidecars.push(
@@ -1104,11 +1160,6 @@ export async function startGatewayPostAttachRuntime(
       delayMs?: number;
       getConfig?: () => OpenClawConfig;
     };
-    agentRuntimePluginPrewarm?: {
-      enabled?: boolean;
-      delayMs?: number;
-      getConfig?: () => OpenClawConfig;
-    };
     waitForPostReadyWork?: () => Promise<void>;
   },
   runtimeDeps: GatewayPostAttachRuntimeDeps = defaultGatewayPostAttachRuntimeDeps,
@@ -1321,21 +1372,16 @@ export async function startGatewayPostAttachRuntime(
         if (workerEnvironmentSidecar) {
           gatewayLifetimeSidecars.push(workerEnvironmentSidecar);
         }
-        if (params.agentRuntimePluginPrewarm?.enabled !== false) {
-          gatewayLifetimeSidecars.push(
-            scheduleAgentRuntimePluginPrewarm({
-              getConfig:
-                params.agentRuntimePluginPrewarm?.getConfig ??
-                params.providerAuthPrewarm?.getConfig ??
-                (() => params.gatewayPluginConfigAtStart),
-              workspaceDir: params.defaultWorkspaceDir,
-              startupTrace: params.startupTrace,
-              log: params.log,
-              delayMs: params.agentRuntimePluginPrewarm?.delayMs,
-              waitForPostReadyWork: params.waitForPostReadyWork,
-            }),
-          );
-        }
+        gatewayLifetimeSidecars.push(
+          scheduleAgentRuntimePluginPrewarm({
+            getConfig:
+              params.providerAuthPrewarm?.getConfig ?? (() => params.gatewayPluginConfigAtStart),
+            workspaceDir: params.defaultWorkspaceDir,
+            startupTrace: params.startupTrace,
+            log: params.log,
+            waitForPostReadyWork: params.waitForPostReadyWork,
+          }),
+        );
         if (params.providerAuthPrewarm && params.providerAuthPrewarm.enabled !== false) {
           gatewayLifetimeSidecars.push(
             scheduleProviderAuthStatePrewarm({

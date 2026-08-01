@@ -16,6 +16,64 @@ import {
 const suite = createSessionManagementE2eSuite();
 
 suite.define(() => {
+  it("deletes every archived thread exactly once when the paged roster reorders", async () => {
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const keys = ["agent:main:first", "agent:main:repeated", "agent:main:moved"];
+    const archived = keys.map((key, index) =>
+      sessionRow(key, key.split(":").at(-1) ?? key, 3 - index, { archived: true }),
+    );
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.delete": { ok: true, deleted: true },
+        "sessions.list": sessionsListResponse([archived[0]], { totalCount: 1 }),
+      },
+      sessionKey: "agent:main:main",
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}sessions?status=archived`);
+      const remove = page.getByRole("button", { name: /Delete all archived/ });
+      await remove.waitFor();
+      await gateway.setMethodResponse("sessions.list", {
+        sequence: [
+          sessionsListResponse([archived[0], archived[1]], {
+            hasMore: true,
+            nextOffset: 2,
+            totalCount: 3,
+          }),
+          sessionsListResponse([archived[1]], {
+            offset: 2,
+            totalCount: 3,
+          }),
+          sessionsListResponse(archived, { totalCount: 3 }),
+        ],
+      });
+      page.once("dialog", (dialog) => void dialog.accept());
+      await remove.click();
+
+      await expect
+        .poll(async () =>
+          (await gateway.getRequests("sessions.delete")).map(
+            (request) => requireRecord(request.params).key,
+          ),
+        )
+        .toEqual(keys);
+      for (const request of await gateway.getRequests("sessions.delete")) {
+        expect(requireRecord(request.params)).toMatchObject({
+          archivedOnly: true,
+          deleteTranscript: true,
+        });
+      }
+    } finally {
+      await context.close();
+    }
+  });
+
   it("never deletes a hidden thread selected before changing the roster search", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",
