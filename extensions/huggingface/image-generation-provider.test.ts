@@ -1,5 +1,5 @@
 import * as providerAuth from "openclaw/plugin-sdk/provider-auth-runtime";
-import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-env";
+import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-media-understanding";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildHuggingfaceImageGenerationProvider } from "./image-generation-provider.js";
 
