@@ -21,7 +21,6 @@ import {
   type QmdSessionArtifactMapping,
   type QmdSessionArtifactProvenance,
 } from "../qmd-session-artifacts.js";
-import { buildCorpusSessionEntryOptions } from "../session-corpus-entry-options.js";
 import { sanitizeQmdCollectionNameSegment } from "./qmd-collection-metadata.js";
 
 const log = createSubsystemLogger("memory");
@@ -137,10 +136,20 @@ export class QmdSessionExporter {
         keep.add(target);
         continue;
       }
-      const entry = await buildSessionEntry(
-        sessionFile,
-        buildCorpusSessionEntryOptions(corpusEntry),
-      );
+      const entry = await buildSessionEntry(sessionFile, {
+        generatedByDreamingNarrative: corpusEntry.generatedByDreamingNarrative === true,
+        generatedByCronRun: corpusEntry.generatedByCronRun === true,
+        ...(corpusEntry.sessionKind ? { sessionKind: corpusEntry.sessionKind } : {}),
+        ...(corpusEntry.transcriptSource === "sqlite" && corpusEntry.storePath
+          ? {
+              agentId: corpusEntry.agentId,
+              sessionId: corpusEntry.sessionId,
+              storePath: corpusEntry.storePath,
+            }
+          : {}),
+        ...(corpusEntry.sessionKey ? { sessionKey: corpusEntry.sessionKey } : {}),
+        ...(corpusEntry.updatedAtMs !== undefined ? { updatedAtMs: corpusEntry.updatedAtMs } : {}),
+      });
       if (!entry || (cutoff && entry.mtimeMs < cutoff)) {
         continue;
       }
