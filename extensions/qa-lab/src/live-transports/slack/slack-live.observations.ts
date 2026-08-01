@@ -304,6 +304,18 @@ export async function runSlackTableInvalidBlocksFallbackScenario(
 ): Promise<SlackQaDirectTransportScenarioResult> {
   const probe = buildSlackInvalidBlocksTableProbe();
   const oldestTs = ((Date.now() - 5_000) / 1_000).toFixed(6);
+  const originalPostMessage = context.sutWriteClient.chat.postMessage;
+  let rejectedNativeData = false;
+  context.sutWriteClient.chat.postMessage = (async (payload) => {
+    const payloadRecord = payload as { blocks?: unknown };
+    if (!rejectedNativeData && countSlackNativeDataBlocks(payloadRecord.blocks) > 0) {
+      rejectedNativeData = true;
+      throw Object.assign(new Error("Slack API error: invalid_blocks"), {
+        data: { error: "invalid_blocks", ok: false },
+      });
+    }
+    return originalPostMessage.call(context.sutWriteClient.chat, payload);
+  }) as typeof context.sutWriteClient.chat.postMessage;
   const instrumentation = instrumentSlackPostMessage(context.sutWriteClient);
   let sent: Awaited<ReturnType<typeof sendSlackMessage>>;
   try {
@@ -328,6 +340,7 @@ export async function runSlackTableInvalidBlocksFallbackScenario(
     }
   } finally {
     instrumentation.restore();
+    context.sutWriteClient.chat.postMessage = originalPostMessage;
   }
 
   const [nativeAttempt, fallbackAttempt] = instrumentation.attempts;
