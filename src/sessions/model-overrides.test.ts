@@ -351,7 +351,6 @@ describe("applyModelOverrideToSessionEntry", () => {
           provider,
           model: provider === "openai" ? "gpt-4.1" : "claude-sonnet-4-6",
         },
-        authProfileCompatibility: { cfg: {}, currentProvider: "openai" },
       });
 
       expect(entry.authProfileOverride).toBe(expectedProfile);

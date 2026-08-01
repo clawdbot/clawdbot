@@ -8,7 +8,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 
 export function shouldPreserveSessionAuthProfileOverride(params: {
-  cfg: OpenClawConfig;
+  cfg?: OpenClawConfig;
   entry: SessionEntry;
   currentProvider: string;
   provider: string;
@@ -22,7 +22,7 @@ export function shouldPreserveSessionAuthProfileOverride(params: {
   const resolvesToTargetProvider = (rawProvider: string | undefined): boolean => {
     const candidate = normalizeOptionalLowercaseString(rawProvider);
     const lookupParams = {
-      config: params.cfg,
+      ...(params.cfg ? { config: params.cfg } : {}),
       ...(params.metadataSnapshot ? { metadataSnapshot: params.metadataSnapshot } : {}),
     };
     return Boolean(
