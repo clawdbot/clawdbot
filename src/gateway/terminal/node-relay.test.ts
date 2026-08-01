@@ -1,8 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { withTestTimeout } from "../../../test/helpers/promise.js";
+import { NODE_DUPLEX_INVOKE_IDLE_TIMEOUT_MS } from "../../infra/node-commands.js";
 import { type NodeInvokeResult, NodeRegistry } from "../node-registry.js";
 import { createNodeRelayBackend } from "./node-relay.js";
+import { TerminalSessionManager } from "./session-manager.js";
+import { baseOpenRequest } from "./session-manager.test-helpers.js";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -10,6 +13,35 @@ function deferred<T>() {
     resolve = next;
   });
   return { promise, resolve };
+}
+
+function registerNodeRelayClient(params: {
+  registry: NodeRegistry;
+  frames: string[];
+  nodeId: string;
+  connId: string;
+  pairingGeneration: string;
+}) {
+  params.registry.register(
+    {
+      connId: params.connId,
+      usesSharedGatewayAuth: false,
+      socket: {
+        readyState: WebSocket.OPEN,
+        send(frame: unknown) {
+          if (typeof frame === "string") {
+            params.frames.push(frame);
+          }
+        },
+      },
+      connect: {
+        client: { id: "openclaw-node-host", mode: "node" },
+        device: { id: params.nodeId },
+        commands: ["codex.terminal.resume.v1"],
+      },
+    } as never,
+    { pairingIdentity: "identity-a", pairingGeneration: params.pairingGeneration },
+  );
 }
 
 describe("createNodeRelayBackend", () => {
@@ -20,26 +52,13 @@ describe("createNodeRelayBackend", () => {
     const registry = new NodeRegistry({
       resolveCurrentPairingState,
     });
-    registry.register(
-      {
-        connId: "conn-validated",
-        usesSharedGatewayAuth: false,
-        socket: {
-          readyState: WebSocket.OPEN,
-          send(frame: unknown) {
-            if (typeof frame === "string") {
-              frames.push(frame);
-            }
-          },
-        },
-        connect: {
-          client: { id: "openclaw-node-host", mode: "node" },
-          device: { id: "node-validated" },
-          commands: ["codex.terminal.resume.v1"],
-        },
-      } as never,
-      { pairingIdentity: "identity-a", pairingGeneration: "generation-a" },
-    );
+    registerNodeRelayClient({
+      registry,
+      frames,
+      nodeId: "node-validated",
+      connId: "conn-validated",
+      pairingGeneration: "generation-a",
+    });
 
     const opening = createNodeRelayBackend({
       registry,
@@ -70,6 +89,71 @@ describe("createNodeRelayBackend", () => {
     });
     backend.kill();
     registry.unregister("conn-validated");
+  });
+
+  it("times out a silent node terminal before its first progress heartbeat", async () => {
+    vi.useFakeTimers();
+    const registry = new NodeRegistry();
+    const frames: string[] = [];
+    registerNodeRelayClient({
+      registry,
+      frames,
+      nodeId: "node-silent",
+      connId: "conn-silent",
+      pairingGeneration: "generation-silent",
+    });
+
+    try {
+      const emit = vi.fn();
+      const manager = new TerminalSessionManager({ emit });
+      const opened = await manager.open(
+        baseOpenRequest({
+          owner: { kind: "conn", connId: "operator-silent" },
+          createBackend: async () =>
+            await createNodeRelayBackend({
+              registry,
+              nodeId: "node-silent",
+              expectedConnId: "conn-silent",
+              expectedPairingGeneration: "generation-silent",
+              command: "codex.terminal.resume.v1",
+              params: {},
+            }),
+        }),
+      );
+      if (!opened.ok) {
+        throw new Error(`failed to open node terminal: ${opened.message}`);
+      }
+      expect(manager.size).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(NODE_DUPLEX_INVOKE_IDLE_TIMEOUT_MS - 1);
+      expect(emit).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(emit).toHaveBeenCalledExactlyOnceWith("operator-silent", "terminal.exit", {
+        sessionId: opened.sessionId,
+        exitCode: null,
+        signal: null,
+        reason: "error",
+        error: "IDLE_TIMEOUT: node invoke produced no progress",
+      });
+      expect(manager.size).toBe(0);
+
+      const events = frames.map((frame) => JSON.parse(frame) as { event?: string });
+      expect(events.filter((event) => event.event === "node.invoke.cancel")).toHaveLength(1);
+      const request = JSON.parse(frames[0] ?? "{}") as { payload?: { id?: string } };
+      expect(
+        registry.handleInvokeProgress({
+          invokeId: request.payload?.id ?? "",
+          nodeId: "node-silent",
+          connId: "conn-silent",
+          seq: 0,
+          chunk: "late",
+        }),
+      ).toBe(false);
+    } finally {
+      registry.unregister("conn-silent");
+      vi.useRealTimers();
+    }
   });
 
   it("relays progress, input, resize, cancellation, and the node exit result", async () => {

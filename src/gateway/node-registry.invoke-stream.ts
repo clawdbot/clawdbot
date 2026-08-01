@@ -140,6 +140,10 @@ export class NodeInvokeStreamController {
       params.pending.idleTimeoutMs = params.idleTimeoutMs;
     }
     this.options.pendingInvokes.set(params.requestId, params.pending);
+    if (params.timeoutMs === 0) {
+      // Unbounded duplex invokes need a first-heartbeat deadline; bounded runs may await approval.
+      this.resetIdleTimer(params.requestId, params.pending);
+    }
     if (params.signal) {
       const onAbort = () => {
         if (this.options.pendingInvokes.get(params.requestId) !== params.pending) {
