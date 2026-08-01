@@ -442,7 +442,11 @@ export async function handleReplyAgentRunError(
       );
     }
   }
-  if (!isHeartbeat && blockReplyPipeline?.didStream() && !blockReplyPipeline.isAborted()) {
+  if (
+    !isHeartbeat &&
+    blockReplyPipeline?.didStreamTerminalReply?.() === true &&
+    !blockReplyPipeline.isAborted()
+  ) {
     replyOperation.fail("run_failed", error);
     return returnWithQueuedFollowupDrain(
       buildTerminalAgentRunFailureReplyPayload({ sessionCtx, cfg }),

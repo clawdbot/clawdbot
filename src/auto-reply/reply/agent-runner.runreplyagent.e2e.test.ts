@@ -1163,6 +1163,46 @@ describe("runReplyAgent heartbeat followup guard", () => {
       persistSpy.mockRestore();
     }
   });
+
+  it.each(["reasoning", "commentary"] as const)(
+    "rethrows after %s-only block streaming",
+    async (lane) => {
+      const accounting = await import("./session-run-accounting.js");
+      const persistSpy = vi
+        .spyOn(accounting, "persistRunSessionUsage")
+        .mockRejectedValueOnce(new Error("persist exploded"));
+      const onBlockReply = vi.fn();
+      state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+        await params.onBlockReply?.({
+          text: `internal ${lane}`,
+          ...(lane === "reasoning" ? { isReasoning: true } : { isCommentary: true }),
+        });
+        return {
+          payloads: [{ text: "final answer" }],
+          meta: { agentMeta: { usage: { input: 1, output: 1 } } },
+        };
+      });
+
+      try {
+        const { run } = createMinimalRun({
+          blockStreamingEnabled: true,
+          opts: {
+            onBlockReply,
+            reasoningPayloadsEnabled: lane === "reasoning",
+            commentaryPayloadsEnabled: lane === "commentary",
+          },
+        });
+
+        await expect(run()).rejects.toThrow("persist exploded");
+        expect(onBlockReply).toHaveBeenCalledWith(
+          expect.objectContaining({ text: `internal ${lane}` }),
+          expect.any(Object),
+        );
+      } finally {
+        persistSpy.mockRestore();
+      }
+    },
+  );
 });
 
 describe("runReplyAgent pending final delivery capture", () => {
