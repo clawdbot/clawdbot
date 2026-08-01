@@ -5,6 +5,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { buildSync } from "esbuild";
+import { parse as markedParse, use as markedUse } from "marked";
 import { copyBundledPluginMetadata } from "./copy-bundled-plugin-metadata.mjs";
 import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
 import { escapeRegExp } from "./lib/regexp.mjs";
@@ -321,6 +322,9 @@ export function listCoreRuntimePostBuildOutputs(params = {}) {
 
 /** Builds deterministic browser globals from the pinned workspace packages. */
 export function generateExportHtmlVendorAssets() {
+  if (typeof markedParse !== "function" || typeof markedUse !== "function") {
+    throw new Error("marked must export parse and use functions");
+  }
   return Object.fromEntries(
     EXPORT_HTML_VENDOR_ENTRYPOINTS.map(
       ({ fileName, packageEntry, packageName, globalName, footer, licenseFile }) => {
