@@ -51,6 +51,10 @@ import { resolveUserPath } from "../../utils.js";
 import { resolveMessageChannel } from "../../utils/message-channel.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
 import { ensureAuthProfileStore } from "../auth-profiles/store.js";
+import {
+  resizeExecApprovalContinuationPrompt,
+  type ExecApprovalContinuationPromptRange,
+} from "../bash-tools.exec-approval-output.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../bootstrap-budget.js";
 import { resolveCliBackendConfig } from "../cli-backends.js";
 import {
@@ -83,6 +87,7 @@ import {
 } from "../session-write-lock.js";
 import { buildUsageWithNoCost } from "../stream-message-shared.js";
 import { isSubagentAnnounceCompletionHandoff } from "../subagent-announce-handoff.js";
+import { DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS } from "../tool-result-limits.js";
 import {
   buildClaudeCliFallbackContextPrelude,
   claudeCliSessionTranscriptHasContent,
@@ -103,6 +108,24 @@ export {
 } from "./attempt-execution.helpers.js";
 
 const log = createSubsystemLogger("agents/agent-command");
+
+function rebaseExecApprovalContinuationPromptRange(params: {
+  body: string;
+  prompt: string;
+  range?: ExecApprovalContinuationPromptRange;
+}): ExecApprovalContinuationPromptRange | undefined {
+  if (!params.range) {
+    return undefined;
+  }
+  if (!params.prompt.endsWith(params.body)) {
+    throw new Error("exec approval continuation prompt range could not be rebased");
+  }
+  const offset = params.prompt.length - params.body.length;
+  return {
+    start: offset + params.range.start,
+    end: offset + params.range.end,
+  };
+}
 
 function normalizeTranscriptMirrorText(value: string): string {
   return value.trim().replace(/\s+/gu, " ");
@@ -574,6 +597,17 @@ export function runAgentAttempt(params: {
   const effectivePrompt = isRawModelRun
     ? resolvedPrompt
     : annotateInterSessionPromptText(resolvedPrompt, params.opts.inputProvenance);
+  const embeddedExecApprovalContinuationPromptRange = rebaseExecApprovalContinuationPromptRange({
+    body: params.body,
+    prompt: effectivePrompt,
+    range: params.opts.execApprovalContinuationPromptRange,
+  });
+  const continuationTranscriptBody = params.opts.execApprovalContinuationPromptRange
+    ? (params.transcriptBody ?? params.body)
+    : params.transcriptBody;
+  const continuationTranscriptPromptRange =
+    params.opts.execApprovalContinuationTranscriptPromptRange ??
+    params.opts.execApprovalContinuationPromptRange;
   const bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
     params.sessionEntry?.systemPromptReport,
   );
@@ -686,10 +720,39 @@ export function runAgentAttempt(params: {
   if (!isRawModelRun && isCliExecutionProvider) {
     const cliSessionBinding = getCliSessionBinding(params.sessionEntry, cliExecutionProvider);
     const cliProcessCwd = params.cwd ? resolveUserPath(params.cwd) : params.workspaceDir;
+    const cliContinuationBody = params.opts.execApprovalContinuationPromptRange
+      ? resizeExecApprovalContinuationPrompt({
+          prompt: params.body,
+          range: params.opts.execApprovalContinuationPromptRange,
+          maxOutputUtf16Units: DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
+        })
+      : params.body;
+    const cliResolvedPrompt = params.opts.execApprovalContinuationPromptRange
+      ? resolveFallbackRetryPrompt({
+          body: cliContinuationBody,
+          isFallbackRetry: params.isFallbackRetry,
+          sessionHasHistory: params.sessionHasHistory,
+          priorContextPrelude: claudeCliFallbackPrelude,
+        })
+      : resolvedPrompt;
+    const cliEffectivePrompt = params.opts.execApprovalContinuationPromptRange
+      ? annotateInterSessionPromptText(cliResolvedPrompt, params.opts.inputProvenance)
+      : effectivePrompt;
+    const cliTranscriptPrompt =
+      continuationTranscriptBody === undefined || !continuationTranscriptPromptRange
+        ? continuationTranscriptBody
+        : resizeExecApprovalContinuationPrompt({
+            prompt: continuationTranscriptBody,
+            range: continuationTranscriptPromptRange,
+            maxOutputUtf16Units: DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
+          });
+    params.userTurnTranscriptRecorder?.replaceTextBeforePersistence?.(
+      cliTranscriptPrompt ?? cliContinuationBody,
+    );
     const cliPrompt =
       params.opts.inputProvenance?.kind === "inter_session"
-        ? effectivePrompt
-        : injectTimestamp(effectivePrompt, timestampOptsFromConfig(params.cfg));
+        ? cliEffectivePrompt
+        : injectTimestamp(cliEffectivePrompt, timestampOptsFromConfig(params.cfg));
     const mutableCliSessionStore =
       params.sessionKey && params.sessionStore && params.storePath
         ? {
@@ -783,7 +846,7 @@ export function runAgentAttempt(params: {
             cwd: params.cwd,
             config: params.cfg,
             prompt: cliPrompt,
-            transcriptPrompt: params.transcriptBody,
+            transcriptPrompt: cliTranscriptPrompt,
             modelProvider: params.providerOverride,
             provider: cliExecutionProvider,
             model: params.modelOverride,
@@ -998,7 +1061,7 @@ export function runAgentAttempt(params: {
     agentHarnessRuntimeOverride: embeddedAgentHarnessOverride,
     skillsSnapshot: params.skillsSnapshot,
     prompt: effectivePrompt,
-    transcriptPrompt: params.transcriptBody,
+    transcriptPrompt: continuationTranscriptBody,
     // CLI-origin retries cannot rely on transcript replay: orphan-user repair
     // removes the persisted CLI turn before the embedded prompt is submitted.
     images: shouldForwardImagesToEmbedded ? params.opts.images : undefined,
@@ -1017,6 +1080,8 @@ export function runAgentAttempt(params: {
     isFinalFallbackAttempt: params.isFinalFallbackAttempt,
     verboseLevel: params.resolvedVerboseLevel,
     bashElevated: params.opts.bashElevated,
+    execApprovalContinuationPromptRange: embeddedExecApprovalContinuationPromptRange,
+    execApprovalContinuationTranscriptPromptRange: continuationTranscriptPromptRange,
     approvalReviewerDeviceId: params.opts.approvalReviewerDeviceId,
     timeoutMs: params.timeoutMs,
     runTimeoutOverrideMs: params.runTimeoutOverrideMs,

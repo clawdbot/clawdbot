@@ -3,6 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { registerExecApprovalFollowupRuntimeHandoff } from "../../agents/bash-tools.exec-approval-followup-state.js";
+import { EXEC_APPROVAL_FOLLOWUP_HANDOFF_MESSAGE } from "../../agents/bash-tools.exec-approval-output.js";
 import {
   onDiagnosticEvent,
   waitForDiagnosticEventsDrained,
@@ -1043,6 +1044,65 @@ describe("gateway agent handler", () => {
 
     const callArgs = await waitForAgentCommandCall<{ bashElevated?: unknown }>();
     expect(callArgs.bashElevated).toEqual(bashElevated);
+  });
+
+  it("materializes approved exec output only from an authenticated runtime handoff", async () => {
+    const sessionKey = "agent:main:telegram:direct:123";
+    const resultText = `Exec finished (gateway id=req-output, code 0)\nfirst line\n\tindented\n${"x".repeat(17_000)}`;
+    const registration = registerExecApprovalFollowupRuntimeHandoff({
+      approvalId: "req-output",
+      sessionKey,
+      resultText,
+    });
+    if (!registration) {
+      throw new Error("expected runtime handoff id");
+    }
+    mockMainSessionEntry({
+      sessionId: "existing-session-id",
+      lastChannel: "telegram",
+      lastTo: "123",
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    await invokeAgent(
+      {
+        message: EXEC_APPROVAL_FOLLOWUP_HANDOFF_MESSAGE,
+        sessionKey,
+        channel: "telegram",
+        idempotencyKey: registration.idempotencyKey,
+        internalRuntimeHandoffId: registration.handoffId,
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: sessionKey,
+          sourceTool: "exec_approval_followup",
+        },
+      },
+      { reqId: "exec-followup-output", client: backendGatewayClient() },
+    );
+
+    const callArgs = await waitForAgentCommandCall<{
+      message?: string;
+      execApprovalContinuationPromptRange?: { start: number; end: number };
+      execApprovalContinuationTranscriptPromptRange?: { start: number; end: number };
+      inputProvenance?: unknown;
+      preserveUserFacingSessionModelState?: boolean;
+    }>();
+    const message = callArgs.message ?? "";
+    const range = callArgs.execApprovalContinuationPromptRange;
+    expect(message).not.toBe(EXEC_APPROVAL_FOLLOWUP_HANDOFF_MESSAGE);
+    expect(message).toContain("<<<BEGIN_UNTRUSTED_EXEC_OUTPUT>>>");
+    expect(range).toBeDefined();
+    expect(message.slice(range?.start, range?.end)).toBe(resultText);
+    expect(callArgs.execApprovalContinuationTranscriptPromptRange).toBeDefined();
+    expect(callArgs.inputProvenance).toEqual({
+      kind: "inter_session",
+      sourceSessionKey: sessionKey,
+      sourceTool: "exec_approval_followup",
+    });
+    expect(callArgs.preserveUserFacingSessionModelState).toBe(true);
   });
 
   it("dedupes elevated exec approval followups across nonce idempotency keys", async () => {

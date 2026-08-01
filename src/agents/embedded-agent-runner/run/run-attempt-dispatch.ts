@@ -9,6 +9,7 @@ import { applyAuthHeaderOverride, applyLocalNoAuthHeaderOverride } from "../../m
 import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
 import { createToolTerminalObserver } from "../../tool-terminal-outcome.js";
 import type { SystemAgentToolOptions } from "../../tools/system-agent-tool.js";
+import { prepareExecApprovalContinuationForAttempt } from "./attempt-exec-approval-continuation.js";
 import { applyResolvedToolPromptFinalizer } from "./attempt-prompt-tool-policy.js";
 import { runEmbeddedAttemptWithBackend } from "./backend.js";
 import {
@@ -174,6 +175,16 @@ export async function dispatchEmbeddedRunAttempt(input: {
   };
 
   let cancellationRequested = false;
+  const preparedExecApprovalContinuation = prepareExecApprovalContinuationForAttempt({
+    prompt: runtime.prompt,
+    transcriptPrompt: params.transcriptPrompt,
+    promptRange: params.execApprovalContinuationPromptRange,
+    transcriptPromptRange: params.execApprovalContinuationTranscriptPromptRange,
+    contextTokenBudget: runtime.contextTokenBudget,
+    modelContextWindow: runtime.model.contextWindow,
+    modelMaxTokens: runtime.model.maxTokens,
+    userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
+  });
   const promptMedia = await preparePluginHarnessPromptImages({
     runParams: params,
     runtime,
@@ -184,7 +195,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
   const pluginHarnessPrompt =
     control.pluginHarnessOwnsTransport && params.finalizePromptForResolvedTools
       ? applyResolvedToolPromptFinalizer({
-          prompt: runtime.prompt,
+          prompt: preparedExecApprovalContinuation.prompt,
           activeToolNames: [],
           finalize: params.finalizePromptForResolvedTools,
         })
@@ -248,11 +259,11 @@ export async function dispatchEmbeddedRunAttempt(input: {
         }
       : {}),
     skillsSnapshot: params.skillsSnapshot,
-    prompt: pluginHarnessPrompt ?? runtime.prompt,
+    prompt: pluginHarnessPrompt ?? preparedExecApprovalContinuation.prompt,
     transcriptPrompt:
       pluginHarnessPrompt !== undefined && params.transcriptPrompt === undefined
-        ? runtime.prompt
-        : params.transcriptPrompt,
+        ? preparedExecApprovalContinuation.prompt
+        : preparedExecApprovalContinuation.transcriptPrompt,
     finalizePromptForResolvedTools:
       pluginHarnessPrompt === undefined ? params.finalizePromptForResolvedTools : undefined,
     userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,

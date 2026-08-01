@@ -48,7 +48,7 @@ import {
 } from "../process/gateway-work-admission.js";
 import { isNativeApprovalChannel, normalizeMessageChannel } from "../utils/message-channel.js";
 import { markBackgrounded, tail } from "./bash-process-registry.js";
-import { formatExecApprovalContinuationOutput } from "./bash-tools.exec-approval-output.js";
+import { formatExecApprovalContinuationSourceOutput } from "./bash-tools.exec-approval-output.js";
 import {
   buildExecApprovalRequesterContext,
   buildExecApprovalTurnSourceContext,
@@ -404,7 +404,7 @@ function buildGatewayExecApprovalFollowupSummary(params: {
     const body = [diagnosticsText, followupText].filter(Boolean).join("\n\n");
     summary = `Exec finished (gateway id=${params.approvalId}, session=${params.sessionId}, ${exitLabel})\n${body}`;
   } else {
-    const output = formatExecApprovalContinuationOutput([
+    const output = formatExecApprovalContinuationSourceOutput([
       { label: "output", value: params.outcome.aggregated },
     ]);
     summary = output

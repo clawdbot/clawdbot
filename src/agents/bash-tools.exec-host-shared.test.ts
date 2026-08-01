@@ -225,6 +225,7 @@ describe("sendExecApprovalFollowupResult", () => {
       sessionKey: "agent:main:telegram:direct:123",
       idempotencyKey: call.idempotencyKey,
       bashElevated,
+      resultText: "Exec finished",
     });
   });
 
@@ -268,7 +269,7 @@ describe("sendExecApprovalFollowupResult", () => {
     expect(call).not.toHaveProperty("bashElevated");
   });
 
-  it("keeps non-elevated agent followups on the deterministic idempotency path", async () => {
+  it("registers result text behind an authenticated handoff for non-elevated followups", async () => {
     sendExecApprovalFollowup.mockResolvedValue(true);
 
     await sendExecApprovalFollowupResult(
@@ -282,9 +283,28 @@ describe("sendExecApprovalFollowupResult", () => {
     );
 
     const call = firstExecApprovalFollowupCall();
-    expect(call).not.toHaveProperty("internalRuntimeHandoffId");
-    expect(call).not.toHaveProperty("idempotencyKey");
+    if (!call) {
+      throw new Error("Expected non-elevated exec approval followup call");
+    }
+    expect(call.internalRuntimeHandoffId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
+    expect(call.idempotencyKey).toMatch(/^exec-approval-followup:approval-normal-75832:nonce:/);
     expect(call).not.toHaveProperty("bashElevated");
+    expect(
+      consumeExecApprovalFollowupRuntimeHandoff({
+        handoffId: call.internalRuntimeHandoffId ?? "",
+        approvalId: "approval-normal-75832",
+        idempotencyKey: call.idempotencyKey ?? "",
+        sessionKey: "agent:main:telegram:direct:123",
+      }),
+    ).toEqual({
+      kind: "exec-approval-followup",
+      approvalId: "approval-normal-75832",
+      sessionKey: "agent:main:telegram:direct:123",
+      idempotencyKey: call.idempotencyKey,
+      resultText: "Exec finished",
+    });
   });
 
   it("forwards the approval-time session id to the followup dispatch (non-elevated)", async () => {

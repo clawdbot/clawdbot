@@ -21,7 +21,8 @@ type ExecApprovalFollowupRuntimeHandoff = {
   approvalId: string;
   sessionKey: string;
   idempotencyKey: string;
-  bashElevated: ExecElevatedDefaults;
+  bashElevated?: ExecElevatedDefaults;
+  resultText?: string;
 };
 
 /** Registration handle returned to the gateway approval callback. */
@@ -61,7 +62,8 @@ function cloneExecApprovalFollowupRuntimeHandoff(
     approvalId: value.approvalId,
     sessionKey: value.sessionKey,
     idempotencyKey: value.idempotencyKey,
-    bashElevated: cloneExecElevatedDefaults(value.bashElevated),
+    ...(value.bashElevated ? { bashElevated: cloneExecElevatedDefaults(value.bashElevated) } : {}),
+    ...(value.resultText !== undefined ? { resultText: value.resultText } : {}),
   };
 }
 
@@ -99,11 +101,12 @@ export function registerExecApprovalFollowupRuntimeHandoff(params: {
   approvalId: string;
   sessionKey: string;
   bashElevated?: ExecElevatedDefaults;
+  resultText?: string;
   nowMs?: number;
 }): ExecApprovalFollowupRuntimeHandoffRegistration | undefined {
   const approvalId = normalizeOptionalString(params.approvalId);
   const sessionKey = normalizeOptionalString(params.sessionKey);
-  if (!approvalId || !sessionKey || !params.bashElevated) {
+  if (!approvalId || !sessionKey || (!params.bashElevated && params.resultText === undefined)) {
     return undefined;
   }
   const nowMs = params.nowMs ?? Date.now();
@@ -125,7 +128,10 @@ export function registerExecApprovalFollowupRuntimeHandoff(params: {
     approvalId,
     sessionKey,
     idempotencyKey,
-    bashElevated: cloneExecElevatedDefaults(params.bashElevated),
+    ...(params.bashElevated
+      ? { bashElevated: cloneExecElevatedDefaults(params.bashElevated) }
+      : {}),
+    ...(params.resultText !== undefined ? { resultText: params.resultText } : {}),
     expiresAtMs,
   });
   return { handoffId, idempotencyKey };

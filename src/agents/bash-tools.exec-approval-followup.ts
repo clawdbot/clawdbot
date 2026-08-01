@@ -7,6 +7,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import { emitDiagnosticEvent } from "../infra/diagnostic-events.js";
@@ -15,6 +16,7 @@ import {
   type ExternalBestEffortDeliveryTarget,
 } from "../infra/outbound/best-effort-delivery.js";
 import { sendMessage } from "../infra/outbound/message.js";
+import { redactToolPayloadText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
@@ -23,7 +25,12 @@ import { isGatewayMessageChannel, normalizeMessageChannel } from "../utils/messa
 import {
   buildExecApprovalFollowupIdempotencyKey,
   isExecApprovalFollowupSessionRebound,
+  registerExecApprovalFollowupRuntimeHandoff,
 } from "./bash-tools.exec-approval-followup-state.js";
+import {
+  buildExecApprovalContinuationPrompt,
+  EXEC_APPROVAL_FOLLOWUP_HANDOFF_MESSAGE,
+} from "./bash-tools.exec-approval-output.js";
 import { sanitizeUserFacingText } from "./embedded-agent-helpers/sanitize-user-facing-text.js";
 import {
   formatExecDeniedUserMessage,
@@ -33,6 +40,14 @@ import {
 import { callGatewayTool } from "./tools/gateway.js";
 
 const log = createSubsystemLogger("agents/exec-approval-followup");
+const DIRECT_FOLLOWUP_MAX_UTF16_UNITS = 4_000;
+const DIRECT_FOLLOWUP_TRUNCATION_MARKER = "[... earlier command output omitted ...]";
+const DIRECT_FOLLOWUP_COMPLETION_RETENTION = {
+  idPrefix: "exec-approval-followup:",
+  maxAgeMs: 24 * 60 * 60_000,
+  maxEntries: 2_000,
+} as const;
+const AGENT_FOLLOWUP_AMBIGUOUS_WAIT_ATTEMPTS = 3;
 
 type ExecApprovalFollowupParams = {
   approvalId: string;
@@ -89,21 +104,7 @@ function buildExecApprovalFollowupPrompt(resultText: string): string {
   if (isExecDeniedResultText(trimmed)) {
     return buildExecDeniedFollowupPrompt(trimmed);
   }
-  return [
-    "An async command the user already approved has completed.",
-    "Do not run the command again.",
-    "If the task requires more steps, continue from this result before replying to the user.",
-    "Only ask the user for help if you are actually blocked.",
-    "",
-    "Exact completion details:",
-    // Raw, not trimmed: trailing newlines, tabs, and indentation are part of the command
-    // output the agent has to work from.
-    trimmed ? resultText : "",
-    "",
-    "Continue the task if needed, then reply to the user in a helpful way.",
-    "If it succeeded, share the relevant output.",
-    "If it failed, explain what went wrong.",
-  ].join("\n");
+  return buildExecApprovalContinuationPrompt(resultText).message;
 }
 
 function shouldSuppressExecDeniedFollowup(sessionKey: string | undefined): boolean {
@@ -163,9 +164,11 @@ function formatDirectExecApprovalFollowupText(
 
   if (parsed.kind === "finished") {
     const metadata = normalizeLowercaseStringOrEmpty(parsed.metadata);
-    const body = sanitizeUserFacingText(parsed.body, {
-      errorContext: !metadata.includes("code 0"),
-    }).trim();
+    const body = redactToolPayloadText(
+      sanitizeUserFacingText(parsed.body, {
+        errorContext: !metadata.includes("code 0"),
+      }),
+    ).trim();
 
     let prefix = "";
     if (!body) {
@@ -180,11 +183,15 @@ function formatDirectExecApprovalFollowupText(
   }
 
   if (parsed.kind === "completed") {
-    const body = sanitizeUserFacingText(parsed.body, { errorContext: true }).trim();
+    const body = redactToolPayloadText(
+      sanitizeUserFacingText(parsed.body, { errorContext: true }),
+    ).trim();
     return body || "Background command finished.";
   }
 
-  return sanitizeUserFacingText(parsed.raw, { errorContext: true }).trim() || null;
+  return (
+    redactToolPayloadText(sanitizeUserFacingText(parsed.raw, { errorContext: true })).trim() || null
+  );
 }
 
 function buildSessionResumeFallbackPrefix(): string {
@@ -217,23 +224,48 @@ function isSuccessfulFollowupStatus(status: string | undefined): boolean {
   return status === "ok";
 }
 
+function hasTerminalFollowupEvidence(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.endedAt === "number" ||
+    typeof record.error === "string" ||
+    typeof record.stopReason === "string" ||
+    record.livenessState === "terminal"
+  );
+}
+
 async function waitForAgentFollowupRun(params: {
   runId: string;
   timeoutMs: number;
-}): Promise<void> {
-  const wait = await callGatewayTool(
-    "agent.wait",
-    { timeoutMs: params.timeoutMs + 2_000 },
-    {
-      runId: params.runId,
-      timeoutMs: params.timeoutMs,
-    },
-  );
-  const status = readGatewayStatus(wait);
-  if (isSuccessfulFollowupStatus(status)) {
-    return;
+}): Promise<{ status: "completed" } | { status: "ownership-transferred"; error?: unknown }> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < AGENT_FOLLOWUP_AMBIGUOUS_WAIT_ATTEMPTS; attempt += 1) {
+    let wait: Record<string, unknown>;
+    try {
+      wait = await callGatewayTool(
+        "agent.wait",
+        { timeoutMs: params.timeoutMs + 2_000 },
+        {
+          runId: params.runId,
+          timeoutMs: params.timeoutMs,
+        },
+      );
+    } catch (error) {
+      lastError = error;
+      continue;
+    }
+    const status = readGatewayStatus(wait);
+    if (isSuccessfulFollowupStatus(status)) {
+      return { status: "completed" };
+    }
+    if (hasTerminalFollowupEvidence(wait)) {
+      throw buildFollowupWaitError({ status, error: wait.error });
+    }
   }
-  throw buildFollowupWaitError({ status, error: wait.error });
+  return { status: "ownership-transferred", ...(lastError ? { error: lastError } : {}) };
 }
 
 function shouldPrefixDirectFollowupWithSessionResumeFailure(params: {
@@ -273,9 +305,17 @@ function buildAgentFollowupArgs(params: {
   // preserve the raw turnSourceChannel so the spawned agent inherits messageProvider.
   // Without this, tools.elevated.allowFrom.<provider> checks fail with provider=null.
   const fallbackChannel = sessionOnlyOriginChannel ?? params.turnSourceChannel;
+  const isDenied = isExecDeniedResultText(params.resultText.trim());
   return {
     sessionKey: params.sessionKey,
-    message: buildExecApprovalFollowupPrompt(params.resultText),
+    message: isDenied
+      ? buildExecApprovalFollowupPrompt(params.resultText)
+      : EXEC_APPROVAL_FOLLOWUP_HANDOFF_MESSAGE,
+    inputProvenance: {
+      kind: "inter_session" as const,
+      sourceSessionKey: params.sessionKey,
+      sourceTool: "exec_approval_followup",
+    },
     deliver: deliveryTarget.deliver,
     ...(deliveryTarget.deliver ? { bestEffortDeliver: true as const } : {}),
     channel: deliveryTarget.deliver ? deliveryTarget.channel : fallbackChannel,
@@ -316,14 +356,28 @@ async function sendDirectFollowupFallback(params: {
     !params.allowDenied && shouldPrefixDirectFollowupWithSessionResumeFailure(params)
       ? buildSessionResumeFallbackPrefix()
       : "";
+  const availableBodyUnits =
+    DIRECT_FOLLOWUP_MAX_UTF16_UNITS - prefix.length - DIRECT_FOLLOWUP_TRUNCATION_MARKER.length - 1;
+  const content =
+    `${prefix}${directText}`.length <= DIRECT_FOLLOWUP_MAX_UTF16_UNITS
+      ? `${prefix}${directText}`
+      : `${prefix}${DIRECT_FOLLOWUP_TRUNCATION_MARKER}\n${sliceUtf16Safe(
+          directText,
+          Math.max(0, directText.length - Math.max(1, availableBodyUnits)),
+        )}`;
+  const deliveryIntentId = `exec-approval-followup:${params.approvalId}`;
   await sendMessage({
     channel: params.deliveryTarget.channel,
     to: params.deliveryTarget.to ?? "",
     accountId: params.deliveryTarget.accountId,
     threadId: params.deliveryTarget.threadId,
-    content: `${prefix}${directText}`,
+    content,
     agentId: undefined,
-    idempotencyKey: `exec-approval-followup:${params.approvalId}`,
+    gatewayOwnedDelivery: true,
+    idempotencyKey: deliveryIntentId,
+    deliveryIntentId,
+    reusePendingDeliveryIntent: true,
+    completionRetention: DIRECT_FOLLOWUP_COMPLETION_RETENTION,
   });
   return true;
 }
@@ -341,6 +395,17 @@ export async function sendExecApprovalFollowup(
   }
   const resultText = params.resultText;
   const isDenied = isExecDeniedResultText(trimmedResultText);
+  let internalRuntimeHandoffId = params.internalRuntimeHandoffId;
+  let idempotencyKey = params.idempotencyKey;
+  if (!isDenied && sessionKey && params.direct !== true && !internalRuntimeHandoffId) {
+    const runtimeHandoff = registerExecApprovalFollowupRuntimeHandoff({
+      approvalId: params.approvalId,
+      sessionKey,
+      resultText,
+    });
+    internalRuntimeHandoffId = runtimeHandoff?.handoffId;
+    idempotencyKey = runtimeHandoff?.idempotencyKey;
+  }
 
   const deliveryTarget = resolveExternalBestEffortDeliveryTarget({
     channel: params.turnSourceChannel,
@@ -373,8 +438,8 @@ export async function sendExecApprovalFollowup(
         turnSourceTo: params.turnSourceTo,
         turnSourceAccountId: params.turnSourceAccountId,
         turnSourceThreadId: params.turnSourceThreadId,
-        internalRuntimeHandoffId: params.internalRuntimeHandoffId,
-        idempotencyKey: params.idempotencyKey,
+        internalRuntimeHandoffId,
+        idempotencyKey,
       });
       const accepted = await callGatewayTool("agent", { timeoutMs: 60_000 }, agentArgs);
       const status = readGatewayStatus(accepted);
@@ -387,7 +452,14 @@ export async function sendExecApprovalFollowup(
         if (!runId) {
           throw buildFollowupWaitError({ status: "missing-run-id" });
         }
-        await waitForAgentFollowupRun({ runId, timeoutMs: 60_000 });
+        const waitOutcome = await waitForAgentFollowupRun({ runId, timeoutMs: 60_000 });
+        if (waitOutcome.status === "ownership-transferred") {
+          // The accepted agent run remains the delivery owner. Direct fallback
+          // without terminal evidence could race a late successful reply.
+          log.warn(
+            `exec approval followup observer released after ambiguous waits (id=${params.approvalId})`,
+          );
+        }
         return true;
       }
       throw buildFollowupWaitError({ status, error: accepted.error });

@@ -29,6 +29,7 @@ import type {
   SkillWorkshopProposalMutationBudget,
   SkillWorkshopRunOptions,
 } from "../../../skills/workshop/types.js";
+import type { ExecApprovalContinuationPromptRange } from "../../bash-tools.exec-approval-output.js";
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../../bash-tools.exec-types.js";
 import type { BootstrapContextRunKind } from "../../bootstrap-mode.js";
 import type { AgentStreamParams, ClientToolDefinition } from "../../command/shared-types.js";
@@ -264,6 +265,10 @@ export type RunEmbeddedAgentParams = {
     "host" | "security" | "ask" | "node" | "nodeCwd" | "notifyOnExit" | "notifyOnExitEmptySuccess"
   >;
   bashElevated?: ExecElevatedDefaults;
+  /** Trusted approved-exec runtime prompt span awaiting the resolved attempt cap. */
+  execApprovalContinuationPromptRange?: ExecApprovalContinuationPromptRange;
+  /** Corresponding span in the undecorated transcript prompt. */
+  execApprovalContinuationTranscriptPromptRange?: ExecApprovalContinuationPromptRange;
   timeoutMs: number;
   /**
    * Explicit per-run timeout override, in milliseconds, when the caller knows

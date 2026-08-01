@@ -18,7 +18,7 @@ import {
   defaultExecAutoReviewer,
   resolveExecAutoReviewDecision,
 } from "../infra/exec-auto-review.js";
-import { formatExecApprovalContinuationOutput } from "./bash-tools.exec-approval-output.js";
+import { formatExecApprovalContinuationSourceOutput } from "./bash-tools.exec-approval-output.js";
 import {
   buildExecApprovalRequesterContext,
   buildExecApprovalTurnSourceContext,
@@ -610,7 +610,7 @@ export async function executeNodeHostCommand(
                     timedOut?: boolean;
                   })
                 : {};
-            const output = formatExecApprovalContinuationOutput([
+            const output = formatExecApprovalContinuationSourceOutput([
               { label: "stdout", value: payload.stdout },
               { label: "stderr", value: payload.stderr },
               { label: "error", value: payload.error },
