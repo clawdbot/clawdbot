@@ -9,16 +9,24 @@ import {
 } from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import { createConfigIO, resetConfigRuntimeState } from "../config/config.js";
 import type {
   MemoryEmbeddingProviderAdapter,
   MemoryEmbeddingProviderCallOptions,
 } from "../plugins/memory-embedding-providers.js";
+import { createPluginRegistry } from "../plugins/registry.js";
+import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { createDeferred } from "../test-utils/deferred.js";
 import { startOpenAiCompatGatewayServer } from "./openai-compatible-http.test-helpers.js";
-import { getFreePort, installGatewayTestHooks, testState } from "./test-helpers.js";
+import {
+  getFreePort,
+  installGatewayTestHooks,
+  resetTestPluginRegistry,
+  setTestPluginRegistry,
+  testState,
+} from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -142,8 +150,6 @@ beforeAll(async () => {
       },
     }),
   );
-  clearMemoryEmbeddingProviders();
-  clearEmbeddingProviders();
   genericEmbeddingServer = await startGenericEmbeddingServer();
   genericEmbeddingBaseUrl = genericEmbeddingServer.baseUrl;
   openAiAdapter = {
@@ -165,7 +171,6 @@ beforeAll(async () => {
       return result;
     },
   };
-  registerMemoryEmbeddingProvider(openAiAdapter);
   ({ startGatewayServer } = await import("./server.js"));
   enabledPort = await getFreePort();
   enabledServer = await startOpenAiCompatGatewayServer({
@@ -176,11 +181,30 @@ beforeAll(async () => {
   });
 });
 
+beforeEach(() => {
+  const builder = createPluginRegistry({
+    logger: {
+      info() {},
+      warn() {},
+      error() {},
+      debug() {},
+    },
+    runtime: {} as PluginRuntime,
+    activateGlobalSideEffects: true,
+  });
+  setTestPluginRegistry(builder.registry);
+  registerMemoryEmbeddingProvider(openAiAdapter);
+});
+
+afterEach(() => {
+  clearMemoryEmbeddingProviders();
+  clearEmbeddingProviders();
+  resetTestPluginRegistry();
+});
+
 afterAll(async () => {
   await enabledServer.close({ reason: "embeddings http enabled suite done" });
   await genericEmbeddingServer.close();
-  clearMemoryEmbeddingProviders();
-  clearEmbeddingProviders();
   vi.resetModules();
 });
 
