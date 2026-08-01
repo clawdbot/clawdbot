@@ -1748,6 +1748,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Troubleshooting
   - H2: OpenClaw as an MCP client registry
   - H3: Saved MCP server definitions
+  - H3: Auth-profile bearer projection
   - H3: Common server recipes
   - H3: JSON output shapes
   - H3: Stdio transport

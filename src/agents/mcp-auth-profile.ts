@@ -31,23 +31,40 @@ function normalizeStringHeaders(value: unknown): Record<string, string> | undefi
   return entries.length > 0 ? Object.fromEntries(entries) : undefined;
 }
 
-/** Returns the refresh-capable auth profile selected for one MCP server. */
+/** Returns the bearer-capable auth profile selected for one MCP server. */
 export function resolveMcpAuthProfileId(rawServer: unknown): string | undefined {
-  if (!isRecord(rawServer) || rawServer.auth !== "oauth" || !isRecord(rawServer.oauth)) {
+  if (!isRecord(rawServer)) {
     return undefined;
   }
-  const authProfileId = rawServer.oauth.authProfileId;
-  return typeof authProfileId === "string" && authProfileId.trim().length > 0
-    ? authProfileId.trim()
-    : undefined;
+  const authProfileId =
+    typeof rawServer.authProfileId === "string" && rawServer.authProfileId.trim().length > 0
+      ? rawServer.authProfileId.trim()
+      : undefined;
+  const legacyAuthProfileId =
+    rawServer.auth === "oauth" &&
+    isRecord(rawServer.oauth) &&
+    typeof rawServer.oauth.authProfileId === "string" &&
+    rawServer.oauth.authProfileId.trim().length > 0
+      ? rawServer.oauth.authProfileId.trim()
+      : undefined;
+
+  if (authProfileId && legacyAuthProfileId && authProfileId !== legacyAuthProfileId) {
+    throw new Error(
+      `MCP server config has conflicting auth profile selectors: authProfileId "${authProfileId}" differs from legacy oauth.authProfileId "${legacyAuthProfileId}". Use one selector, or keep both values identical during migration.`,
+    );
+  }
+  return authProfileId ?? legacyAuthProfileId;
 }
 
 /** Returns whether a server needs an OpenClaw-managed bearer projected externally. */
 export function requiresMcpBearerProjection(rawServer: unknown): boolean {
-  if (!isRecord(rawServer) || rawServer.auth !== "oauth") {
+  if (!isRecord(rawServer)) {
     return false;
   }
-  return Boolean(resolveMcpAuthProfileId(rawServer) || typeof rawServer.url === "string");
+  return Boolean(
+    resolveMcpAuthProfileId(rawServer) ||
+    (rawServer.auth === "oauth" && typeof rawServer.url === "string"),
+  );
 }
 
 async function resolveMcpAuthProfileBearerToken(
@@ -66,9 +83,9 @@ async function resolveMcpAuthProfileBearerToken(
       `MCP server "${params.serverName}" references auth profile "${params.profileId}", but that profile was not found.`,
     );
   }
-  if (credential.type !== "oauth") {
+  if (credential.type !== "oauth" && credential.type !== "token") {
     throw new Error(
-      `MCP server "${params.serverName}" references auth profile "${params.profileId}", but ${credential.type} profiles are not refreshable. Use a refresh-capable OAuth profile.`,
+      `MCP server "${params.serverName}" references auth profile "${params.profileId}", but ${credential.type} profiles cannot be projected as bearer tokens. Use an OAuth or token profile.`,
     );
   }
   const resolved = await resolveApiKeyForProfile({
@@ -77,22 +94,28 @@ async function resolveMcpAuthProfileBearerToken(
     profileId: params.profileId,
     agentDir: params.agentDir,
   });
-  if (!resolved || resolved.profileType !== "oauth" || !resolved.apiKey) {
-    throw new Error(
-      `MCP server "${params.serverName}" could not resolve refreshable OAuth auth profile "${params.profileId}". Re-authenticate the profile and retry.`,
-    );
-  }
   if (
-    !resolved.credential ||
-    resolved.credential.type !== "oauth" ||
-    typeof resolved.credential.access !== "string" ||
-    resolved.credential.access.trim().length === 0
+    !resolved ||
+    (resolved.profileType !== "oauth" && resolved.profileType !== "token") ||
+    !resolved.apiKey
   ) {
     throw new Error(
-      `MCP server "${params.serverName}" resolved OAuth auth profile "${params.profileId}", but no raw access token was available for bearer projection.`,
+      `MCP server "${params.serverName}" could not resolve bearer auth profile "${params.profileId}". Re-authenticate or rotate the profile and retry.`,
     );
   }
-  return resolved.credential.access;
+  if (resolved.profileType === "token") {
+    return resolved.apiKey;
+  }
+  if (
+    resolved.credential?.type === "oauth" &&
+    typeof resolved.credential.access === "string" &&
+    resolved.credential.access.trim().length > 0
+  ) {
+    return resolved.credential.access;
+  }
+  throw new Error(
+    `MCP server "${params.serverName}" could not resolve raw OAuth access token for auth profile "${params.profileId}". Re-authenticate or rotate the profile and retry.`,
+  );
 }
 
 async function resolveMcpBearerToken(params: {
@@ -178,6 +201,7 @@ function buildTokenEnvVarName(serverName: string): string {
 
 function stripOpenClawOnlyOAuthConfig(server: BundleMcpServerConfig): BundleMcpServerConfig {
   const next = { ...server };
+  delete next.authProfileId;
   delete next.auth;
   delete next.oauth;
   return next;

@@ -448,6 +448,60 @@ openclaw mcp logout docs
 openclaw mcp unset context7
 ```
 
+### Auth-profile bearer projection
+
+HTTP and SSE MCP servers can resolve their bearer token from an auth profile instead of storing a
+literal `Authorization` header in `mcp.servers`.
+
+Use top-level `authProfileId` when an MCP server should project a stored bearer credential:
+
+```json
+{
+  "mcp": {
+    "servers": {
+      "docs": {
+        "url": "https://mcp.example.com/mcp",
+        "transport": "streamable-http",
+        "authProfileId": "docs:mcp"
+      }
+    }
+  },
+  "auth": {
+    "profiles": {
+      "docs:mcp": {
+        "provider": "docs",
+        "mode": "token"
+      }
+    }
+  }
+}
+```
+
+`authProfileId` supports two bearer-profile lifecycles:
+
+- `type: "oauth"` profiles are refresh-capable. OpenClaw refreshes them through the provider's
+  OAuth flow and projects the fresh raw access token as `Authorization: Bearer <token>`.
+- `type: "token"` profiles are static bearer tokens, such as a PAT or service-minted JWT. OpenClaw
+  does not refresh them. If the profile has an `expires` timestamp and it is expired or invalid, MCP
+  bearer projection fails instead of sending a stale token.
+
+For compatibility with earlier configs, `oauth.authProfileId` is still accepted when `auth: "oauth"`
+is set. Prefer the top-level `authProfileId` for new bearer-profile bindings, especially static
+token profiles, so the MCP contract is not named after one credential lifecycle. If both selectors
+are present, they must match; differing values fail closed instead of silently choosing one bearer
+credential.
+
+For CLI runtimes, OpenClaw resolves the profile before handing off MCP config, strips the
+OpenClaw-only `authProfileId`/`auth`/`oauth` fields, and writes only an environment placeholder such as
+`Authorization: Bearer ${OPENCLAW_MCP_AUTH_<hash>_TOKEN}` into the projected MCP config. The actual
+token value stays in the runtime environment. For embedded OpenClaw MCP clients, OpenClaw resolves
+the profile at same-origin request time and replaces any stale configured or SDK-provided
+`Authorization` header.
+
+To rotate a static token profile, update the stored auth profile token or `tokenRef` value, then
+restart or reload the runtime that owns the MCP connection. This is a rotation/reconnect lifecycle,
+not OAuth refresh.
+
 ### Common server recipes
 
 These examples save server definitions only. Run `openclaw mcp doctor --probe` afterward to prove that the server starts and exposes tools.
@@ -707,7 +761,7 @@ Until credentials are available, OpenClaw omits only that MCP server from the ag
 
 If a server rejects a token with `insufficient_scope`, OpenClaw preserves the requested scope and asks for `openclaw mcp login <name>` instead of repeating a refresh that cannot grant new scope. That login starts a new authorization request while keeping the previous token until replacement credentials are saved.
 
-When a remote MCP service is already backed by a separate OpenClaw refresh-capable auth profile, you can optionally set `oauth.authProfileId`. OpenClaw refreshes either credential source before runtime projection and passes only the current access token to the downstream MCP client.
+When a remote MCP service is already backed by a separate OpenClaw auth profile, you can optionally set top-level `authProfileId`. OpenClaw refreshes OAuth profiles before runtime projection and passes only the current bearer token to the downstream MCP client. Legacy `oauth.authProfileId` remains accepted for existing OAuth configs.
 
 <Steps>
   <Step title="Save the server">
@@ -720,7 +774,7 @@ When a remote MCP service is already backed by a separate OpenClaw refresh-capab
     For an auth-profile-backed bearer, save the profile binding:
 
     ```bash
-    openclaw mcp set docs '{"url":"https://mcp.example.com/mcp","transport":"streamable-http","auth":"oauth","oauth":{"authProfileId":"docs:mcp"}}'
+    openclaw mcp set docs '{"url":"https://mcp.example.com/mcp","transport":"streamable-http","authProfileId":"docs:mcp"}'
     ```
 
   </Step>

@@ -668,6 +668,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "mcp.servers": "MCP Servers",
   "mcp.servers.*.enabled": "MCP Server Enabled",
   "mcp.servers.*.auth": "MCP Server Auth",
+  "mcp.servers.*.authProfileId": "MCP Auth Profile",
   "mcp.servers.*.oauth": "MCP OAuth",
   "mcp.servers.*.oauth.authProfileId": "MCP OAuth Auth Profile",
   "mcp.servers.*.oauth.scope": "MCP OAuth Scope",
