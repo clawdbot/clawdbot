@@ -20,10 +20,12 @@ import {
 } from "./update-command-fresh-doctor.js";
 import { updatePluginsAfterCoreUpdate } from "./update-command-plugins.js";
 import {
+  POST_CORE_UPDATE_EXTERNALIZATION_BRIDGES_PATH_ENV,
   POST_CORE_UPDATE_INSTALL_RECORDS_PATH_ENV,
   POST_CORE_UPDATE_REQUESTED_CHANNEL_ENV,
   POST_CORE_UPDATE_RESULT_PATH_ENV,
   POST_CORE_UPDATE_STARTED_AT_ENV,
+  readPostCoreExternalizationBridgesFile,
   readPostCorePluginInstallRecordsFile,
   resolvePostCoreUpdateStartedAtMs,
   writePostCorePluginUpdateResultFile,
@@ -75,6 +77,9 @@ async function resumePostCoreUpdateUnlocked(params: ResumePostCoreUpdateParams):
     currentSnapshot: configSnapshot,
     updateStartedAtMs,
   });
+  const preUpdateExternalizedBundledPluginBridges = await readPostCoreExternalizationBridgesFile(
+    process.env[POST_CORE_UPDATE_EXTERNALIZATION_BRIDGES_PATH_ENV],
+  );
   await createUpdateConfigSnapshot();
   await runUpdateFinalizationDoctorInFreshProcess({
     root: params.root,
@@ -122,6 +127,7 @@ async function resumePostCoreUpdateUnlocked(params: ResumePostCoreUpdateParams):
     opts: params.opts,
     timeoutMs: params.timeoutMs,
     pluginInstallRecords,
+    externalizedBundledPluginBridges: preUpdateExternalizedBundledPluginBridges,
   });
   const { pluginUpdate } = await completePostCorePluginUpdate({
     root: params.root,

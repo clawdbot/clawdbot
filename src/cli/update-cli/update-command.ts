@@ -39,6 +39,7 @@ import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-
 import { defaultRuntime } from "../../runtime.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import { resolveCliName } from "../cli-name.js";
+import { listPersistedBundledPluginLocationBridges } from "../plugins-location-bridges.js";
 import { createUpdateProgress } from "./progress.js";
 import {
   DEFAULT_PACKAGE_NAME,
@@ -541,6 +542,9 @@ async function updateCommandInternal(
   const { progress, stop } = createUpdateProgress(showProgress);
   const startedAt = Date.now();
   const preUpdatePluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
+  const preUpdateExternalizedBundledPluginBridges = await listPersistedBundledPluginLocationBridges(
+    { workspaceDir: root },
+  );
 
   const execution = await executeMutableUpdate({
     root,
@@ -588,6 +592,7 @@ async function updateCommandInternal(
     preManagedServiceStop,
     controlPlaneUpdateSentinelMeta,
     preUpdatePluginInstallRecords,
+    preUpdateExternalizedBundledPluginBridges,
     startedAt,
     packageUpdateNodeRunner,
     updateStepTimeoutMs,

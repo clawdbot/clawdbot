@@ -9,6 +9,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import type { ClawHubRiskAcknowledgementRequest } from "../../infra/clawhub-install-trust.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
+import type { ExternalizedBundledPluginBridge } from "../../plugins/externalized-bundled-plugins.js";
 import { commitPluginInstallRecordsWithConfig } from "../../plugins/install-record-commit.js";
 import {
   loadInstalledPluginIndexInstallRecords,
@@ -197,6 +198,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
   opts: UpdateCommandOptions;
   timeoutMs: number;
   pluginInstallRecords?: Record<string, PluginInstallRecord>;
+  externalizedBundledPluginBridges?: readonly ExternalizedBundledPluginBridge[];
 }): Promise<PostCorePluginUpdateResult> {
   if (!params.configSnapshot.valid) {
     const invalid = buildInvalidConfigPostCoreUpdateResult();
@@ -279,9 +281,11 @@ export async function updatePluginsAfterCoreUpdate(params: {
     channel: pluginUpdateChannel,
     coreVersion: coreVersion ?? undefined,
     workspaceDir: params.root,
-    externalizedBundledPluginBridges: await listPersistedBundledPluginLocationBridges({
-      workspaceDir: params.root,
-    }),
+    externalizedBundledPluginBridges:
+      params.externalizedBundledPluginBridges ??
+      (await listPersistedBundledPluginLocationBridges({
+        workspaceDir: params.root,
+      })),
     ...clawHubRiskAcknowledgementOptions,
     logger: pluginLogger,
   });

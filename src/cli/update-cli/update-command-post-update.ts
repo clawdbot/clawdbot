@@ -10,6 +10,7 @@ import {
   readControlPlaneUpdateSentinelMeta,
 } from "../../infra/update-control-plane-sentinel.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { ExternalizedBundledPluginBridge } from "../../plugins/externalized-bundled-plugins.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -93,6 +94,7 @@ export async function finishUpdate(params: {
   preManagedServiceStop?: PreManagedServiceStop;
   controlPlaneUpdateSentinelMeta: Awaited<ReturnType<typeof readControlPlaneUpdateSentinelMeta>>;
   preUpdatePluginInstallRecords: Awaited<ReturnType<typeof loadInstalledPluginIndexInstallRecords>>;
+  preUpdateExternalizedBundledPluginBridges: readonly ExternalizedBundledPluginBridge[];
   startedAt: number;
   packageUpdateNodeRunner?: string;
   updateStepTimeoutMs: number;
@@ -195,6 +197,7 @@ export async function finishUpdate(params: {
       requestedChannel: params.requestedChannel,
       opts: params.opts,
       pluginInstallRecords: params.preUpdatePluginInstallRecords,
+      externalizedBundledPluginBridges: params.preUpdateExternalizedBundledPluginBridges,
       updateStartedAtMs: params.startedAt,
       nodeRunner: params.packageUpdateNodeRunner,
       preUpdateConfig: params.configSnapshot.valid
@@ -263,6 +266,7 @@ export async function finishUpdate(params: {
           opts: params.opts,
           timeoutMs: params.updateStepTimeoutMs,
           pluginInstallRecords: params.preUpdatePluginInstallRecords,
+          externalizedBundledPluginBridges: params.preUpdateExternalizedBundledPluginBridges,
         });
         const completedPluginUpdate = await completePostCorePluginUpdate({
           root: postUpdateRoot,

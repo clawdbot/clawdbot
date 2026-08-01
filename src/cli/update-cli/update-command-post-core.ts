@@ -41,6 +41,7 @@ import {
 } from "../../infra/update-post-core-context.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { getWindowsSystem32ExePath } from "../../infra/windows-install-roots.js";
+import type { ExternalizedBundledPluginBridge } from "../../plugins/externalized-bundled-plugins.js";
 import {
   loadInstalledPluginIndexInstallRecords,
   writePersistedInstalledPluginIndexInstallRecords,
@@ -89,6 +90,8 @@ export const POST_CORE_UPDATE_REQUESTED_CHANNEL_ENV = "OPENCLAW_UPDATE_POST_CORE
 export const POST_CORE_UPDATE_RESULT_PATH_ENV = "OPENCLAW_UPDATE_POST_CORE_RESULT_PATH";
 export const POST_CORE_UPDATE_INSTALL_RECORDS_PATH_ENV =
   "OPENCLAW_UPDATE_POST_CORE_INSTALL_RECORDS_PATH";
+export const POST_CORE_UPDATE_EXTERNALIZATION_BRIDGES_PATH_ENV =
+  "OPENCLAW_UPDATE_POST_CORE_EXTERNALIZATION_BRIDGES_PATH";
 export const POST_CORE_UPDATE_STARTED_AT_ENV = "OPENCLAW_UPDATE_POST_CORE_STARTED_AT_MS";
 const POST_CORE_UPDATE_RESULT_POLL_MS = 100;
 
@@ -139,6 +142,9 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
     return;
   }
   const requestedChannel = normalizeUpdateChannel(opts.channel);
+  const preUpdateExternalizedBundledPluginBridges = await readPostCoreExternalizationBridgesFile(
+    process.env[POST_CORE_UPDATE_EXTERNALIZATION_BRIDGES_PATH_ENV],
+  );
   if (opts.channel !== undefined && !requestedChannel) {
     defaultRuntime.error(
       `--channel must be "stable", "extended-stable", "beta", or "dev" (got "${opts.channel}")`,
@@ -242,6 +248,7 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
         },
         timeoutMs: timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
         pluginInstallRecords,
+        externalizedBundledPluginBridges: preUpdateExternalizedBundledPluginBridges,
       });
     });
     return await completePostCorePluginUpdate({
@@ -306,6 +313,100 @@ async function writePostCorePluginInstallRecordsFile(
   records: Record<string, PluginInstallRecord>,
 ): Promise<void> {
   await fs.writeFile(filePath, `${JSON.stringify(records)}\n`, "utf-8");
+}
+
+async function writePostCoreExternalizationBridgesFile(
+  filePath: string,
+  bridges: readonly ExternalizedBundledPluginBridge[],
+): Promise<void> {
+  await fs.writeFile(filePath, `${JSON.stringify(bridges)}\n`, "utf-8");
+}
+
+function normalizeStringArray(value: unknown, field: string): string[] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(value)) {
+    throw new Error(`${field} must be an array of strings`);
+  }
+  const entries = value.map((entry) => normalizeOptionalString(entry));
+  if (entries.some((entry) => !entry)) {
+    throw new Error(`${field} must contain non-empty strings`);
+  }
+  return entries as string[];
+}
+
+function normalizeExternalizationBridge(
+  value: unknown,
+  index: number,
+): ExternalizedBundledPluginBridge {
+  if (!isRecord(value)) {
+    throw new Error(`bridge ${index} must be an object`);
+  }
+  const bundledPluginId = normalizeOptionalString(value.bundledPluginId);
+  if (!bundledPluginId) {
+    throw new Error(`bridge ${index} is missing bundledPluginId`);
+  }
+  const preferredSource = value.preferredSource;
+  if (preferredSource !== undefined && preferredSource !== "npm" && preferredSource !== "clawhub") {
+    throw new Error(`bridge ${index} has an invalid preferredSource`);
+  }
+  if (value.enabledByDefault !== undefined && typeof value.enabledByDefault !== "boolean") {
+    throw new Error(`bridge ${index} has an invalid enabledByDefault`);
+  }
+  const optionalStrings = {
+    pluginId: normalizeOptionalString(value.pluginId),
+    npmSpec: normalizeOptionalString(value.npmSpec),
+    clawhubSpec: normalizeOptionalString(value.clawhubSpec),
+    clawhubUrl: normalizeOptionalString(value.clawhubUrl),
+    bundledDirName: normalizeOptionalString(value.bundledDirName),
+  };
+  const legacyPluginIds = normalizeStringArray(
+    value.legacyPluginIds,
+    `bridge ${index}.legacyPluginIds`,
+  );
+  const channelIds = normalizeStringArray(value.channelIds, `bridge ${index}.channelIds`);
+  const preferOver = normalizeStringArray(value.preferOver, `bridge ${index}.preferOver`);
+  return {
+    bundledPluginId,
+    ...(optionalStrings.pluginId ? { pluginId: optionalStrings.pluginId } : {}),
+    ...(preferredSource ? { preferredSource } : {}),
+    ...(optionalStrings.npmSpec ? { npmSpec: optionalStrings.npmSpec } : {}),
+    ...(optionalStrings.clawhubSpec ? { clawhubSpec: optionalStrings.clawhubSpec } : {}),
+    ...(optionalStrings.clawhubUrl ? { clawhubUrl: optionalStrings.clawhubUrl } : {}),
+    ...(optionalStrings.bundledDirName ? { bundledDirName: optionalStrings.bundledDirName } : {}),
+    ...(value.enabledByDefault !== undefined ? { enabledByDefault: value.enabledByDefault } : {}),
+    ...(legacyPluginIds ? { legacyPluginIds } : {}),
+    ...(channelIds ? { channelIds } : {}),
+    ...(preferOver ? { preferOver } : {}),
+  };
+}
+
+export async function readPostCoreExternalizationBridgesFile(
+  filePath: string | undefined,
+): Promise<readonly ExternalizedBundledPluginBridge[] | undefined> {
+  if (!filePath) {
+    return undefined;
+  }
+  let raw: string;
+  try {
+    raw = await fs.readFile(filePath, "utf-8");
+  } catch (err) {
+    if (hasErrnoCode(err, "ENOENT")) {
+      return undefined;
+    }
+    throw new Error(`Unable to read externalization bridges file: ${filePath}`, { cause: err });
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    throw new Error(`Malformed JSON in externalization bridges file: ${filePath}`, { cause: err });
+  }
+  if (!Array.isArray(parsed)) {
+    throw new Error(`Externalization bridges file must contain an array: ${filePath}`);
+  }
+  return parsed.map(normalizeExternalizationBridge);
 }
 
 export async function readPostCorePluginInstallRecordsFile(
@@ -474,6 +575,7 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
   requestedChannel: UpdateChannel | null;
   opts: UpdateCommandOptions;
   pluginInstallRecords: Record<string, PluginInstallRecord>;
+  externalizedBundledPluginBridges: readonly ExternalizedBundledPluginBridge[];
   preUpdateConfig?: PreUpdateConfigRestoreInput;
   updateStartedAtMs: number;
   nodeRunner?: string;
@@ -506,6 +608,7 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
   const resultDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-post-core-"));
   const resultPath = path.join(resultDir, "plugins.json");
   const installRecordsPath = path.join(resultDir, "plugin-install-records.json");
+  const externalizationBridgesPath = path.join(resultDir, "externalization-bridges.json");
   const sourceConfigPath = path.join(resultDir, "source-config.json");
   const postCoreHostVersion = await readPackageVersion(params.root);
 
@@ -519,6 +622,10 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
       await writePersistedInstalledPluginIndexInstallRecords(pluginInstallRecords);
     }
     await writePostCorePluginInstallRecordsFile(installRecordsPath, pluginInstallRecords);
+    await writePostCoreExternalizationBridgesFile(
+      externalizationBridgesPath,
+      params.externalizedBundledPluginBridges,
+    );
     await writePostCoreSourceConfigFile(sourceConfigPath, params.preUpdateConfig);
     const jsonMode = params.opts.json === true;
     const childStdio = resolvePostCoreUpdateChildStdio(process.platform, jsonMode);
@@ -534,6 +641,7 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
           : {}),
         [POST_CORE_UPDATE_RESULT_PATH_ENV]: resultPath,
         [POST_CORE_UPDATE_INSTALL_RECORDS_PATH_ENV]: installRecordsPath,
+        [POST_CORE_UPDATE_EXTERNALIZATION_BRIDGES_PATH_ENV]: externalizationBridgesPath,
         [POST_CORE_UPDATE_STARTED_AT_ENV]: String(params.updateStartedAtMs),
         ...(postCoreHostVersion === null
           ? {}

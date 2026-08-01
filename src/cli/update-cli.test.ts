@@ -23,6 +23,7 @@ import {
 import { cleanupStaleManagedServiceUpdateHandoffs } from "../infra/update-managed-service-handoff-cleanup.js";
 import type { UpdateRunResult } from "../infra/update-runner.js";
 import { CLAWHUB_INSTALL_ERROR_CODE } from "../plugins/clawhub-error-codes.js";
+import type { ExternalizedBundledPluginBridge } from "../plugins/externalized-bundled-plugins.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 import { VERSION } from "../version.js";
 import { createCliRuntimeCapture, getMockCallOutput } from "./test-runtime-capture.js";
@@ -59,6 +60,9 @@ const probeGateway = vi.fn();
 const pathExists = vi.fn();
 const syncPluginsForUpdateChannel = vi.fn();
 const updateNpmInstalledPlugins = vi.fn();
+const listPersistedBundledPluginLocationBridges = vi.fn(
+  async (): Promise<readonly ExternalizedBundledPluginBridge[]> => [],
+);
 const loadInstalledPluginIndexInstallRecords = vi.fn(
   async (params: { config?: OpenClawConfig } = {}) => params.config?.plugins?.installs ?? {},
 );
@@ -278,6 +282,14 @@ vi.mock("../plugins/update.js", async (importOriginal) => {
     ...actual,
     syncPluginsForUpdateChannel: (...args: unknown[]) => syncPluginsForUpdateChannel(...args),
     updateNpmInstalledPlugins: (...args: unknown[]) => updateNpmInstalledPlugins(...args),
+  };
+});
+
+vi.mock("./plugins-location-bridges.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./plugins-location-bridges.js")>();
+  return {
+    ...actual,
+    listPersistedBundledPluginLocationBridges,
   };
 });
 
@@ -1390,6 +1402,7 @@ describe("update-cli", () => {
     pathExists.mockResolvedValue(false);
     syncPluginsForUpdateChannel.mockResolvedValue(pluginSyncResult(baseConfig));
     updateNpmInstalledPlugins.mockResolvedValue(npmPluginUpdateResult(baseConfig));
+    listPersistedBundledPluginLocationBridges.mockResolvedValue([]);
     checkShellCompletionStatus.mockResolvedValue({
       shell: "zsh",
       profileInstalled: false,
@@ -1743,6 +1756,41 @@ describe("update-cli", () => {
       sourceConfig: preUpdateConfig,
       authoredConfig: preUpdateConfig,
     });
+    expectNoSideEffects(syncPluginsForUpdateChannel, updateNpmInstalledPlugins);
+  });
+
+  it("passes pre-update externalization bridges into the post-core update process", async () => {
+    setupUpdatedRootRefresh();
+    const bridges = [
+      {
+        bundledPluginId: "tencent",
+        pluginId: "tencent",
+        preferredSource: "npm" as const,
+        npmSpec: "openclaw-tencent-provider@2026.7.31",
+        enabledByDefault: true,
+      },
+    ];
+    listPersistedBundledPluginLocationBridges.mockResolvedValueOnce(bridges);
+    let capturedBridges: unknown;
+    spawn.mockImplementationOnce((_node, _argv, options) => {
+      const env = (options as { env?: NodeJS.ProcessEnv }).env;
+      const bridgesPath = env?.OPENCLAW_UPDATE_POST_CORE_EXTERNALIZATION_BRIDGES_PATH;
+      if (!bridgesPath) {
+        throw new Error("missing post-core externalization bridges path");
+      }
+      capturedBridges = JSON.parse(fsSync.readFileSync(bridgesPath, "utf-8"));
+      const child = new EventEmitter() as EventEmitter & {
+        once: EventEmitter["once"];
+      };
+      queueMicrotask(() => {
+        child.emit("exit", 0, null);
+      });
+      return child;
+    });
+
+    await updateCommand({ yes: true, restart: false });
+
+    expect(capturedBridges).toEqual(bridges);
     expectNoSideEffects(syncPluginsForUpdateChannel, updateNpmInstalledPlugins);
   });
 
@@ -2163,6 +2211,29 @@ describe("update-cli", () => {
     );
     const updateCall = lastNpmPluginUpdateCall() as { skipIds?: Set<string> } | undefined;
     expect(updateCall?.skipIds?.has("demo")).toBe(true);
+  });
+
+  it("post-core resume mode uses the parent externalization bridges after doctor refresh", async () => {
+    const resultDir = createCaseDir("openclaw-post-core-bridges");
+    const bridgesPath = path.join(resultDir, "externalization-bridges.json");
+    const bridges = [
+      {
+        bundledPluginId: "tencent",
+        pluginId: "tencent",
+        preferredSource: "npm",
+        npmSpec: "openclaw-tencent-provider@2026.7.31",
+        enabledByDefault: true,
+      },
+    ];
+    await fs.mkdir(resultDir, { recursive: true });
+    await fs.writeFile(bridgesPath, `${JSON.stringify(bridges)}\n`, "utf-8");
+
+    await runPostCoreCommand(
+      { json: true, restart: false },
+      { OPENCLAW_UPDATE_POST_CORE_EXTERNALIZATION_BRIDGES_PATH: bridgesPath },
+    );
+
+    expect(syncPluginCall()?.externalizedBundledPluginBridges).toEqual(bridges);
   });
 
   it("post-core resume mode prefers post-doctor disk install records over the stale parent snapshot", async () => {
