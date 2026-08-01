@@ -49,6 +49,9 @@ const COMMON_AUTH_ERROR_PATTERNS = [
   /\bfailed to (?:extract|parse|validate|decode)\b.*\btoken\b/,
 ] as const satisfies readonly ErrorPattern[];
 
+const ENOENT_OPEN_PATH_RE = /\benoent\b[\s\S]*?\bopen\s+(['"])([^'"]+)\1/i;
+const CREDENTIALS_FILE_BASENAME_RE = /^\.(?:credentials?|tokens?)(?:\.json)?$/i;
+
 const CJK_AUTH_ERROR_PATTERNS = [
   "无权访问",
   "认证失败",
@@ -356,13 +359,22 @@ export function isAuthPermanentErrorMessage(raw: string): boolean {
   return matchesErrorPatternGroups(raw, [HIGH_CONFIDENCE_AUTH_PERMANENT_PATTERNS]);
 }
 
+function isCredentialsFileEnoentErrorMessage(raw: string): boolean {
+  const openedPath = raw.match(ENOENT_OPEN_PATH_RE)?.[2];
+  const openedBasename = openedPath?.split(/[\\/]/).at(-1) ?? "";
+  return CREDENTIALS_FILE_BASENAME_RE.test(openedBasename);
+}
+
 export function isAuthErrorMessage(raw: string): boolean {
-  return matchesErrorPatternGroups(raw, [
-    AMBIGUOUS_AUTH_ERROR_PATTERNS,
-    COMMON_AUTH_ERROR_PATTERNS,
-    ZAI_AUTH_ERROR_PATTERNS,
-    CJK_AUTH_ERROR_PATTERNS,
-  ]);
+  return (
+    isCredentialsFileEnoentErrorMessage(raw) ||
+    matchesErrorPatternGroups(raw, [
+      AMBIGUOUS_AUTH_ERROR_PATTERNS,
+      COMMON_AUTH_ERROR_PATTERNS,
+      ZAI_AUTH_ERROR_PATTERNS,
+      CJK_AUTH_ERROR_PATTERNS,
+    ])
+  );
 }
 
 export function isOverloadedErrorMessage(raw: string): boolean {
