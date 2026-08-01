@@ -39,6 +39,13 @@ const GATEWAY_STARTUP_HEALTH_RUNTIME_ENV = {
 const AGENTS_EMBEDDED_AGENT_ENV = {
   OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "660000",
 };
+// TUI PTY e2e can stay silent while real PTY fixtures settle on loaded fork
+// runners. Override the compact shard job default so the wrapper does not kill
+// a healthy run before Vitest reports file-level results.
+const TUI_PTY_RUNTIME_ENV = {
+  OPENCLAW_TUI_PTY_INCLUDE_LOCAL: "1",
+  OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "660000",
+};
 const COMPACT_EMBEDDED_GROUP_NAMES = [
   "agentic-agents-embedded-base",
   "agentic-agents-embedded-incomplete-turn",
@@ -1156,9 +1163,7 @@ const SPLIT_NODE_SHARDS = new Map([
       {
         shardName: "core-runtime-tui-pty",
         configs: ["test/vitest/vitest.tui-pty.config.ts"],
-        env: {
-          OPENCLAW_TUI_PTY_INCLUDE_LOCAL: "1",
-        },
+        env: TUI_PTY_RUNTIME_ENV,
         requiresDist: false,
         runner: "blacksmith-4vcpu-ubuntu-2404",
       },

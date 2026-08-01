@@ -289,6 +289,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
         .find((group) => group.shard_name === "core-runtime-tui-pty")?.env,
     ).toEqual({
       OPENCLAW_TUI_PTY_INCLUDE_LOCAL: "1",
+      OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "660000",
       // Timing-sensitive groups pin the worker budget while the job-level
       // default scales with the runner class.
       OPENCLAW_VITEST_MAX_WORKERS: "2",
