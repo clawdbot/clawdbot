@@ -79,6 +79,7 @@ const state = vi.hoisted(() => ({
   getChannelPluginMock: vi.fn(),
   materializeMcpAppChannelPresentationMock: vi.fn(),
   queueEmbeddedAgentMessageMock: vi.fn(),
+  retainSessionsSendTargetBlockMock: vi.fn(),
   runEmbeddedAgentMock: vi.fn(),
 }));
 
@@ -186,6 +187,8 @@ vi.mock("../../channels/plugins/index.js", async (importOriginal) => ({
 
 vi.mock("../../agents/embedded-agent-runner/runs.js", () => ({
   formatEmbeddedAgentQueueFailureSummary: () => "test queue rejection",
+  retainSessionsSendTargetBlockForActiveRun: (params: unknown) =>
+    state.retainSessionsSendTargetBlockMock(params),
   queueEmbeddedAgentMessageWithOutcomeAsync: async (
     sessionId: string,
     prompt: string,
@@ -246,6 +249,7 @@ beforeEach(() => {
     meta: { agentMeta: { usage: { input: 1, output: 1 } } },
   });
   state.queueEmbeddedAgentMessageMock.mockReset();
+  state.retainSessionsSendTargetBlockMock.mockReset().mockReturnValue(undefined);
   state.beforeAgentReplyHasHooksMock.mockReset().mockReturnValue(false);
   state.beforeAgentReplyRunMock.mockReset();
   state.queueEmbeddedAgentMessageMock.mockReturnValue(false);
@@ -500,6 +504,11 @@ describe("runReplyAgent active steering", () => {
         agentId: "main",
         messageProvider: "discord",
         senderId: "sender-42",
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: "agent:requester:main",
+          sourceTool: "sessions_send",
+        },
       },
     });
 
@@ -530,6 +539,10 @@ describe("runReplyAgent active steering", () => {
       "hello",
       expect.objectContaining({ steeringMode: "all" }),
     );
+    expect(state.retainSessionsSendTargetBlockMock).toHaveBeenCalledWith({
+      sessionId: "session",
+      targetSessionKey: "agent:requester:main",
+    });
   });
 
   it("returns a claimed steer without disturbing the active run", async () => {
@@ -576,6 +589,8 @@ describe("runReplyAgent active steering", () => {
     );
     state.beforeAgentReplyRunMock.mockResolvedValue(undefined);
     state.queueEmbeddedAgentMessageMock.mockReturnValueOnce(false);
+    const releaseTargetBlock = vi.fn();
+    state.retainSessionsSendTargetBlockMock.mockReturnValueOnce(releaseTargetBlock);
     state.runEmbeddedAgentMock.mockImplementationOnce(runHookBackedEmbeddedAgent);
     const { run } = createMinimalRun({
       isActive: true,
@@ -588,13 +603,22 @@ describe("runReplyAgent active steering", () => {
         OriginatingTo: "channel:24680",
         MessageSid: "steer-fallback",
       },
-      runOverrides: { agentId: "main", messageProvider: "discord" },
+      runOverrides: {
+        agentId: "main",
+        messageProvider: "discord",
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: "agent:requester:main",
+          sourceTool: "sessions_send",
+        },
+      },
     });
 
     await expect(run()).resolves.toEqual(expect.objectContaining({ text: "model reply" }));
 
     expect(state.beforeAgentReplyRunMock).toHaveBeenCalledOnce();
     expect(state.queueEmbeddedAgentMessageMock).toHaveBeenCalledOnce();
+    expect(releaseTargetBlock).toHaveBeenCalledOnce();
     expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
   });
 

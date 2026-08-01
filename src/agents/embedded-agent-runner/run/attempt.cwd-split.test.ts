@@ -43,6 +43,11 @@ describe("runEmbeddedAttempt cwd/workspace split", () => {
       attemptOverrides: {
         cwd: taskRepo,
         disableTools: false,
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: "agent:requester:main",
+          sourceTool: "sessions_send",
+        },
       },
     });
 
@@ -53,11 +58,21 @@ describe("runEmbeddedAttempt cwd/workspace split", () => {
     expect(bootstrapCall?.agentId).toBe("main");
 
     const toolsCall = hoisted.createOpenClawCodingToolsMock.mock.calls[0]?.[0] as
-      | { cwd?: string; workspaceDir?: string; spawnWorkspaceDir?: string }
+      | {
+          cwd?: string;
+          inputProvenance?: unknown;
+          workspaceDir?: string;
+          spawnWorkspaceDir?: string;
+        }
       | undefined;
     expect(toolsCall?.cwd).toBe(taskRepo);
     expect(toolsCall?.workspaceDir).toBe(bootstrapCall?.workspaceDir);
     expect(toolsCall?.spawnWorkspaceDir).toBe(bootstrapCall?.workspaceDir);
+    expect(toolsCall?.inputProvenance).toEqual({
+      kind: "inter_session",
+      sourceSessionKey: "agent:requester:main",
+      sourceTool: "sessions_send",
+    });
 
     const resourceLoaderInit = hoisted.defaultResourceLoaderInitMock.mock.calls[0]?.[0] as
       | { cwd?: string }

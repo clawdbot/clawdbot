@@ -141,7 +141,7 @@ export function isSessionsSendTargetBlockedForActiveRun(params: {
     return false;
   }
   const owner =
-    ACTIVE_EMBEDDED_RUNS.get(sessionId) ?? resolveActiveReplyOperationForSessionId(sessionId);
+    resolveActiveReplyOperationForSessionId(sessionId) ?? ACTIVE_EMBEDDED_RUNS.get(sessionId);
   return Boolean(
     owner && SESSIONS_SEND_TARGET_BLOCKS_BY_ACTIVE_OWNER.get(owner)?.get(targetSessionKey),
   );
@@ -157,7 +157,7 @@ export function retainSessionsSendTargetBlockForActiveRun(params: {
     return undefined;
   }
   const owner =
-    ACTIVE_EMBEDDED_RUNS.get(sessionId) ?? resolveActiveReplyOperationForSessionId(sessionId);
+    resolveActiveReplyOperationForSessionId(sessionId) ?? ACTIVE_EMBEDDED_RUNS.get(sessionId);
   if (!owner) {
     return undefined;
   }
@@ -1065,6 +1065,13 @@ export function setActiveEmbeddedRun(
   const previousHandle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
   const wasActive = previousHandle !== undefined;
   if (previousHandle) {
+    const previousTargetBlocks = SESSIONS_SEND_TARGET_BLOCKS_BY_ACTIVE_OWNER.get(previousHandle);
+    if (previousTargetBlocks && previousHandle !== handle) {
+      // Runs without a ReplyOperation still replace their attempt handle during
+      // provider retry/failover. Keep committed steer restrictions attached to
+      // that lifecycle by sharing the same ref-count map with the replacement.
+      SESSIONS_SEND_TARGET_BLOCKS_BY_ACTIVE_OWNER.set(handle, previousTargetBlocks);
+    }
     clearEmbeddedRunAbortability(previousHandle, { retainFinalizing: true });
   }
   clearEmbeddedRunAbandonment({ sessionId, sessionKey, sessionFile });
