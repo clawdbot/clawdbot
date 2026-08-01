@@ -143,7 +143,7 @@ export function createClickClackClient(options: ClientOptions) {
   async function request<T>(
     path: string,
     init: RequestInit = {},
-    requestOptions: { timeoutMs?: number } = {},
+    requestOptions: { timeoutMs?: number; responseMode?: "json" | "none" } = {},
   ): Promise<T> {
     const requestHeaders = new Headers(init.headers);
     for (const [key, value] of Object.entries(headers)) {
@@ -175,6 +175,14 @@ export function createClickClackClient(options: ClientOptions) {
           redactToolPayloadText(detail),
           new Headers(response.headers),
         );
+      }
+      if (requestOptions.responseMode === "none") {
+        try {
+          await response.body?.cancel();
+        } catch {
+          // A successful write does not depend on an optional response body.
+        }
+        return undefined as T;
       }
       return await readProviderJsonResponse<T>(response, "ClickClack response", {
         maxBytes: CLICKCLACK_INBOUND_JSON_LIMIT_BYTES,
@@ -558,7 +566,7 @@ export function createClickClackClient(options: ClientOptions) {
       type: "typing.started" | "typing.stopped" | "presence.changed" | "agent.progress";
       payload?: Record<string, unknown>;
     }): Promise<void> => {
-      await request<{ event?: ClickClackEvent }>(
+      await request<void>(
         "/api/realtime/ephemeral",
         {
           method: "POST",
@@ -570,7 +578,10 @@ export function createClickClackClient(options: ClientOptions) {
             payload: params.payload ?? {},
           }),
         },
-        { timeoutMs: CLICKCLACK_EPHEMERAL_REQUEST_TIMEOUT_MS },
+        {
+          timeoutMs: CLICKCLACK_EPHEMERAL_REQUEST_TIMEOUT_MS,
+          responseMode: "none",
+        },
       );
     },
     createDirectMessage: async (

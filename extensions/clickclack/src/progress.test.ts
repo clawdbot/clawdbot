@@ -58,6 +58,38 @@ describe("ClickClack native agent progress", () => {
     });
   });
 
+  it("correlates lane-prefixed item ids with their bare tool-call ids", async () => {
+    const publishEphemeral = vi.fn().mockResolvedValue(undefined);
+    const publisher = createClickClackAgentProgressPublisher({
+      client: { publishEphemeral },
+      target: { workspaceId: "ws_1", channelId: "chn_1" },
+      turnId: "msg_1",
+    });
+
+    publisher.start();
+    publisher.onItemEvent({
+      itemId: "tool:read-1",
+      kind: "tool",
+      name: "read",
+      progressText: "Reading",
+    });
+    publisher.onItemEvent({
+      toolCallId: "read-1",
+      kind: "tool",
+      name: "read",
+      progressText: "Done",
+      phase: "end",
+      status: "completed",
+    });
+    await publisher.finalize();
+
+    expect(publishEphemeral).toHaveBeenCalledTimes(3);
+    expect(publishEphemeral.mock.calls[1]?.[0].payload).toMatchObject({
+      op: "finalize",
+      line: { id: "item:read-1", text: "📖 Read: Done", status: "completed" },
+    });
+  });
+
   it("does not let a progress transport failure interrupt finalization", async () => {
     const onError = vi.fn();
     const publishEphemeral = vi

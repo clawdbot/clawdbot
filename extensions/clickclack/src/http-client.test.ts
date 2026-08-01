@@ -950,6 +950,23 @@ describe("ClickClack HTTP client", () => {
     });
   });
 
+  it.each([200, 202, 204])("accepts an empty %i ephemeral success response", async (status) => {
+    const fetchMock = vi.fn(async () => new Response(null, { status }));
+    const client = createClickClackClient({
+      baseUrl: "https://clickclack.example",
+      token: "placeholder",
+      fetch: fetchMock,
+    });
+
+    await expect(
+      client.publishEphemeral({
+        workspaceId: "wsp_1",
+        channelId: "chn_1",
+        type: "agent.progress",
+      }),
+    ).resolves.toBeUndefined();
+  });
+
   it("aborts a stalled ephemeral request", async () => {
     vi.useFakeTimers();
     try {

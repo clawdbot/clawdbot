@@ -91,7 +91,7 @@ function createLineIdResolver(): (payload: ClickClackItemEventPayload) => string
   let anonymousSequence = 0;
 
   return (payload) => {
-    const identities = [payload.itemId, payload.toolCallId]
+    const identities = [payload.itemId?.replace(/^(tool|command):/, ""), payload.toolCallId]
       .map((value) => value?.trim())
       .filter((value): value is string => Boolean(value));
     const existingId = identities.map((identity) => lineIdsByIdentity.get(identity)).find(Boolean);
