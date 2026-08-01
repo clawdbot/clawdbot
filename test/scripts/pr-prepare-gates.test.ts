@@ -1141,3 +1141,140 @@ describe("gates.sh gate lock plumbing", () => {
     );
   });
 });
+
+describe("prep_push_ancestry_must_move and same-repo push mode", () => {
+  function runPushBash(script: string, options: { cwd?: string; env?: NodeJS.ProcessEnv } = {}) {
+    return spawnSync(
+      "bash",
+      [
+        "-c",
+        [
+          "set -euo pipefail",
+          `script_parent_dir='${repoRoot}/scripts'`,
+          `source '${repoRoot}/scripts/pr-lib/common.sh'`,
+          `source '${repoRoot}/scripts/pr-lib/push.sh'`,
+          script,
+        ].join("\n"),
+      ],
+      {
+        cwd: options.cwd ?? repoRoot,
+        encoding: "utf8",
+        env: sanitizedEnv(options.env),
+      },
+    );
+  }
+
+  function makeAncestryFixture(): {
+    repoDir: string;
+    oldTip: string;
+    rebasedTip: string;
+    leaseFf: string;
+    fastForwardTip: string;
+  } {
+    const dir = makeTempDir("openclaw-pr-push-ancestry-");
+    const repoDir = join(dir, "repo");
+    mkdirSync(repoDir);
+    const git = (...args: string[]) => {
+      const r = spawnSync("git", args, {
+        cwd: repoDir,
+        encoding: "utf8",
+        env: sanitizedEnv({
+          GIT_AUTHOR_NAME: "t",
+          GIT_AUTHOR_EMAIL: "t@example.com",
+          GIT_COMMITTER_NAME: "t",
+          GIT_COMMITTER_EMAIL: "t@example.com",
+          ALLOW_NONCANON_EMAIL: "1",
+        }),
+      });
+      if (r.status !== 0) {
+        throw new Error(`${args.join(" ")}\n${r.stderr || r.stdout}`);
+      }
+      return r;
+    };
+    git("init", "-q");
+    git("config", "user.name", "t");
+    git("config", "user.email", "t@example.com");
+    writeFileSync(join(repoDir, "a.txt"), "base\n");
+    git("add", "a.txt");
+    git("commit", "-qm", "base");
+    const base = git("rev-parse", "HEAD").stdout.trim();
+    git("checkout", "-qb", "pr");
+    writeFileSync(join(repoDir, "a.txt"), "old tip\n");
+    git("add", "a.txt");
+    git("commit", "-qm", "old tip");
+    const oldTip = git("rev-parse", "HEAD").stdout.trim();
+    git("checkout", "-q", "-B", "main", base);
+    writeFileSync(join(repoDir, "main.txt"), "main advance\n");
+    git("add", "main.txt");
+    git("commit", "-qm", "main advance");
+    const newMain = git("rev-parse", "HEAD").stdout.trim();
+    git("checkout", "-q", "pr");
+    git("rebase", newMain);
+    const rebasedTip = git("rev-parse", "HEAD").stdout.trim();
+    writeFileSync(join(repoDir, "a.txt"), "ff1\n");
+    git("add", "a.txt");
+    git("commit", "-qm", "ff1");
+    const leaseFf = git("rev-parse", "HEAD").stdout.trim();
+    writeFileSync(join(repoDir, "a.txt"), "ff2\n");
+    git("add", "a.txt");
+    git("commit", "-qm", "ff2");
+    const fastForwardTip = git("rev-parse", "HEAD").stdout.trim();
+    return { repoDir, oldTip, rebasedTip, leaseFf, fastForwardTip };
+  }
+
+  it("reports ancestry must move after rebase off the leased tip", () => {
+    const { repoDir, oldTip, rebasedTip } = makeAncestryFixture();
+    const result = runPushBash(
+      `if prep_push_ancestry_must_move ${oldTip} ${rebasedTip}; then echo MOVE; else echo NO; fi`,
+      { cwd: repoDir },
+    );
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toBe("MOVE");
+  });
+
+  it("reports ancestry may stay for pure descendant tips", () => {
+    const { repoDir, leaseFf, fastForwardTip } = makeAncestryFixture();
+    const result = runPushBash(
+      `if prep_push_ancestry_must_move ${leaseFf} ${fastForwardTip}; then echo MOVE; else echo NO; fi`,
+      { cwd: repoDir },
+    );
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toBe("NO");
+  });
+
+  it("refuses GraphQL when ancestry must move on cross-repo heads", () => {
+    const { repoDir, oldTip, rebasedTip } = makeAncestryFixture();
+    mkdirSync(join(repoDir, ".local"), { recursive: true });
+    writeFileSync(
+      join(repoDir, ".local", "pr-meta.env"),
+      ["PR_HEAD_OWNER=example", "PR_HEAD_REPO_NAME=openclaw", "PR_IS_CROSS_REPOSITORY=true"].join(
+        "\n",
+      ) + "\n",
+    );
+    const result = runPushBash(`push_prep_head_once topic ${oldTip} ${rebasedTip}; echo exit:$?`, {
+      cwd: repoDir,
+      env: { OPENCLAW_PR_PUSH_MODE: "graphql" },
+    });
+    // bash function return 2 with set -e may fail the script
+    expect(result.stdout + result.stderr).toContain("Refusing GraphQL createCommitOnBranch");
+    expect(result.stdout + result.stderr).toContain("#103358");
+  });
+
+  it("prefers git force-with-lease for same-repo rebased tips", () => {
+    const { repoDir, oldTip, rebasedTip } = makeAncestryFixture();
+    mkdirSync(join(repoDir, ".local"), { recursive: true });
+    writeFileSync(
+      join(repoDir, ".local", "pr-meta.env"),
+      ["PR_HEAD_OWNER=example", "PR_HEAD_REPO_NAME=openclaw", "PR_IS_CROSS_REPOSITORY=false"].join(
+        "\n",
+      ) + "\n",
+    );
+    // No prhead remote; force-with-lease should attempt a real push and fail on missing remote
+    const result = runPushBash(`push_prep_head_once topic ${oldTip} ${rebasedTip} || true`, {
+      cwd: repoDir,
+    });
+    const combined = `${result.stdout}${result.stderr}`;
+    expect(combined).toContain("force-with-lease");
+    expect(combined).toContain("#103358");
+  });
+});
