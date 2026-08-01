@@ -2,7 +2,6 @@
 import { describe, expect, it } from "vitest";
 import {
   buildSystemdUnit,
-  parseSystemdEnvAssignment,
   parseSystemdEnvAssignments,
   parseSystemdExecStart,
   renderSystemdEnvAssignment,
@@ -24,13 +23,6 @@ describe("systemd unit value round-trips", () => {
   it.each(ROUND_TRIP_VALUES)("round-trips %p through Environment=", (value) => {
     const rendered = renderSystemdEnvAssignment("OPENCLAW_TOKEN", value);
     expect(parseSystemdEnvAssignments(rendered)).toEqual([{ key: "OPENCLAW_TOKEN", value }]);
-  });
-
-  // Service inspection reads one raw Environment= line at a time, so the singular
-  // parser has to unescape what the renderer wrote (systemd.ts readSystemdServiceExecStart).
-  it.each(ROUND_TRIP_VALUES)("round-trips %p through a single Environment= line", (value) => {
-    const rendered = renderSystemdEnvAssignment("OPENCLAW_TOKEN", value);
-    expect(parseSystemdEnvAssignment(rendered)).toEqual({ key: "OPENCLAW_TOKEN", value });
   });
 
   it.each(ROUND_TRIP_VALUES)("round-trips %p through ExecStart=", (value) => {

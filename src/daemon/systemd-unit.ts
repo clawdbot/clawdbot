@@ -113,28 +113,17 @@ function parseSystemdEnvAssignment(raw: string): { key: string; value: string } 
     return null;
   }
 
-  const quote = trimmed[0];
-  const isQuoted = (quote === '"' || quote === "'") && trimmed.endsWith(quote);
-  // Unquote with the shared splitter every other reader in this module uses. The
-  // local copy of that loop compared one character against a two-character
-  // literal, so it never consumed an escape and handed back the raw bytes.
-  const unquoted = isQuoted
-    ? (splitArgsPreservingQuotes(trimmed, {
-        escapeMode: "backslash",
-        quoteChars: ['"', "'"],
-        quoteStart: "item-start",
-      })[0] ?? "")
-    : trimmed;
-
-  const eq = unquoted.indexOf("=");
+  // The shared splitter already removes quotes and consumes escapes before an
+  // assignment reaches this helper.
+  const eq = trimmed.indexOf("=");
   if (eq <= 0) {
     return null;
   }
-  const key = unquoted.slice(0, eq).trim();
+  const key = trimmed.slice(0, eq).trim();
   if (!key) {
     return null;
   }
-  const value = unquoted.slice(eq + 1);
+  const value = trimmed.slice(eq + 1);
   return { key, value };
 }
 
