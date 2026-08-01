@@ -239,11 +239,9 @@ export function normalizeMatrixQaObservedEvent(
       ? relatesTo.event_id
       : undefined;
   // An edit's outer m.replace relation describes wire delivery, not the
-  // logical relation of the edited message. Prefer any relation carried by
-  // m.new_content; the observer can inherit the original event's relation.
-  const logicalRelation = normalizeMatrixQaRelation(
-    replacesEventId ? messageContent["m.relates_to"] : relatesToRaw,
-  );
+  // logical relation of the edited message. Matrix ignores relations inside
+  // m.new_content, so the observer must inherit the original event's relation.
+  const logicalRelation = replacesEventId ? undefined : normalizeMatrixQaRelation(relatesToRaw);
   const normalizedMsgtype =
     typeof messageContent.msgtype === "string" ? messageContent.msgtype : msgtype;
   const normalizedFilename =

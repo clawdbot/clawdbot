@@ -85,6 +85,12 @@ describe("matrix observed event normalization", () => {
           "m.new_content": {
             body: "finalized",
             msgtype: "m.text",
+            // Matrix ignores relations inside replacement content. The
+            // observer inherits the original event's relation separately.
+            "m.relates_to": {
+              rel_type: "m.thread",
+              event_id: "$wrong-root",
+            },
           },
           "m.relates_to": {
             rel_type: "m.replace",
