@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayRecoveryRuntime } from "../gateway/server-instance-runtime.types.js";
-import { recoverInterruptedSubagentRow } from "./subagent-registry-restart-recovery.js";
+import {
+  createInterruptedRecoveryCoordinator,
+  recoverInterruptedSubagentRow,
+} from "./subagent-registry-restart-recovery.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
   createSubagentRunRecord,
@@ -113,10 +116,7 @@ describe("subagent registry restart recovery", () => {
     ]);
     const entry = run({ collect: true, outputSchema: { type: "object" } });
 
-    await expect(recover(entry)).resolves.toEqual({
-      status: "accepted",
-      sessionMarker: undefined,
-    });
+    await expect(recover(entry)).resolves.toEqual({ status: "accepted" });
 
     expect(dispatchAgent).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -138,6 +138,7 @@ describe("subagent registry restart recovery", () => {
         nextRunId: "replacement-run",
         expected: entry,
         task: "finish the restart-safe task",
+        restartRecoverySessionMarker: expect.any(String),
       }),
     );
     expect(mocks.entries[childSessionKey]).toMatchObject({
@@ -247,15 +248,59 @@ describe("subagent registry restart recovery", () => {
     const entry = run();
     const marker = `session-id:${String(mocks.entries[childSessionKey]!.updatedAt)}`;
 
-    await expect(recover(entry)).resolves.toEqual({ status: "accepted", sessionMarker: marker });
-    await expect(recover(entry, { acceptedSessionMarker: marker })).resolves.toEqual({
-      status: "handled",
-    });
+    await expect(recover(entry)).resolves.toEqual({ status: "accepted" });
+    expect(entry.execution.restartRecoverySessionMarker).toBe(marker);
+    await expect(recover(entry)).resolves.toEqual({ status: "handled" });
     expect(dispatchAgent).toHaveBeenCalledOnce();
     expect(warn).toHaveBeenCalledWith(
       expect.stringContaining("could not remap"),
       expect.any(Object),
     );
+  });
+
+  it("reuses a durable acceptance after the recovery coordinator is recreated", async () => {
+    mocks.patchSessionEntry.mockRejectedValue(new Error("store unavailable"));
+    const entry = run();
+    const marker = `session-id:${String(mocks.entries[childSessionKey]!.updatedAt)}`;
+    const firstRuns = new Map([[entry.runId, entry]]);
+    let persistedReplacement: SubagentRunRecord | undefined;
+    const replace: Parameters<typeof createInterruptedRecoveryCoordinator>[0]["replaceRun"] = (
+      params,
+    ) => {
+      const replacement = structuredClone(entry);
+      replacement.runId = params.nextRunId;
+      replacement.execution = {
+        status: "running",
+        startedAt: Date.now(),
+        restartRecoverySessionMarker: params.restartRecoverySessionMarker,
+      };
+      firstRuns.delete(params.previousRunId);
+      firstRuns.set(params.nextRunId, replacement);
+      persistedReplacement = structuredClone(replacement);
+      return true;
+    };
+    const coordinatorParams = {
+      replaceRun: replace,
+      reserveCollectorLaunch,
+      warn,
+      getGatewayRuntime: () => gatewayRuntime,
+      finalizeRun: vi.fn(async () => 1),
+      schedule: vi.fn(),
+    };
+    const first = createInterruptedRecoveryCoordinator({ ...coordinatorParams, runs: firstRuns });
+
+    await expect(first.recover(entry.runId, entry, Date.now())).resolves.toBe(true);
+    expect(persistedReplacement?.execution.restartRecoverySessionMarker).toBe(marker);
+
+    const restored = structuredClone(persistedReplacement!);
+    const restartedRuns = new Map([[restored.runId, restored]]);
+    const second = createInterruptedRecoveryCoordinator({
+      ...coordinatorParams,
+      runs: restartedRuns,
+    });
+    await expect(second.recover(restored.runId, restored, Date.now())).resolves.toBe(true);
+
+    expect(dispatchAgent).toHaveBeenCalledOnce();
   });
 
   it("tombstones a rapid third accepted recovery", async () => {

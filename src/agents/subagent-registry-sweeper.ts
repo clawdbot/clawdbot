@@ -315,7 +315,7 @@ export function createSubagentRegistrySweeper(params: {
             : 0)
         );
       });
-      recovery.prune(runEntries);
+      recovery.prune();
       const suspendedEntries = runEntries.filter(([, entry]) =>
         isSuspendedPendingFinalDelivery(entry),
       );

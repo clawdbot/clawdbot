@@ -659,6 +659,7 @@ export function createSubagentRunManager(params: {
     preserveFrozenResultFallback?: boolean;
     transcriptTarget?: AgentRunSessionTarget;
     task?: string;
+    restartRecoverySessionMarker?: string;
   }) => {
     const previousRunId = replaceParams.previousRunId.trim();
     const nextRunId = replaceParams.nextRunId.trim();
@@ -735,6 +736,7 @@ export function createSubagentRunManager(params: {
         status: "running",
         startedAt: now,
         transcriptTarget: replaceParams.transcriptTarget,
+        restartRecoverySessionMarker: replaceParams.restartRecoverySessionMarker,
       },
       swarmLaunchPending: false,
       completion: {

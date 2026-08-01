@@ -57,6 +57,8 @@ export type PendingFinalDeliveryPayload = {
 
 type SubagentExecutionState = {
   status: "queued" | "running" | "interrupted" | "terminal";
+  /** Abort snapshot whose replacement dispatch this execution already accepted. */
+  restartRecoverySessionMarker?: string;
   acceptedAt?: number;
   startedAt?: number;
   endedAt?: number;

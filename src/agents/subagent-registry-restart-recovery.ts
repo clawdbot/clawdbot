@@ -27,7 +27,7 @@ type RestartRecoveryResult =
   | { status: "ignored" }
   | { status: "handled" }
   | { status: "deferred" }
-  | { status: "accepted"; sessionMarker?: string }
+  | { status: "accepted" }
   | { status: "retry"; error: string }
   | { status: "terminal"; error: string; endedAt?: number };
 
@@ -36,7 +36,6 @@ type Params = {
   entry: SubagentRunRecord;
   now: number;
   gatewayRuntime: GatewayRecoveryRuntime | undefined;
-  acceptedSessionMarker?: string;
   isCurrent: () => boolean;
   replaceRun: ReturnType<typeof createSubagentRunManager>["replaceSubagentRunAfterSteer"];
   reserveCollectorLaunch: (runId: string, idempotencyKey: string) => boolean;
@@ -110,7 +109,7 @@ export async function recoverInterruptedSubagentRow(
       return { status: "ignored" };
     }
     const marker = `${sessionEntry.sessionId ?? ""}:${sessionEntry.updatedAt ?? ""}`;
-    if (params.acceptedSessionMarker === marker) {
+    if (params.entry.execution.restartRecoverySessionMarker === marker) {
       return { status: "handled" };
     }
 
@@ -255,6 +254,7 @@ export async function recoverInterruptedSubagentRow(
       },
       10_000,
     );
+    params.entry.execution.restartRecoverySessionMarker = marker;
     let remapped = false;
     try {
       remapped =
@@ -270,6 +270,7 @@ export async function recoverInterruptedSubagentRow(
             storePath,
           }),
           task: params.entry.task,
+          restartRecoverySessionMarker: marker,
         });
     } catch {
       // Dispatch acceptance is authoritative; retrying here could start a duplicate turn.
@@ -280,7 +281,6 @@ export async function recoverInterruptedSubagentRow(
         childSessionKey,
       });
     }
-    let sessionMarker: string | undefined;
     try {
       await patchSessionEntry(
         { storePath, sessionKey: childSessionKey },
@@ -298,21 +298,19 @@ export async function recoverInterruptedSubagentRow(
         { replaceEntry: true, skipMaintenance: true },
       );
     } catch (error) {
-      sessionMarker = marker;
       params.warn("accepted subagent restart recovery could not clear its abort marker", {
         runId: params.runId,
         childSessionKey,
         error,
       });
     }
-    return { status: "accepted", sessionMarker };
+    return { status: "accepted" };
   } catch (error) {
     return { status: "retry", error: formatErrorMessage(error) };
   }
 }
 
 export function createInterruptedRecoveryCoordinator(params: RecoveryCoordinatorParams) {
-  const acceptedMarkers = new Map<string, string>();
   const retries = new Map<string, RecoveryRetry>();
 
   function defer(runId: string, retry: Omit<RecoveryRetry, "at">, delayMs: number) {
@@ -361,7 +359,6 @@ export function createInterruptedRecoveryCoordinator(params: RecoveryCoordinator
       entry,
       now,
       gatewayRuntime: params.getGatewayRuntime(),
-      acceptedSessionMarker: acceptedMarkers.get(entry.childSessionKey),
       isCurrent: () => params.runs.get(runId) === entry,
       replaceRun: params.replaceRun,
       reserveCollectorLaunch: params.reserveCollectorLaunch,
@@ -370,12 +367,6 @@ export function createInterruptedRecoveryCoordinator(params: RecoveryCoordinator
     if (result.status === "deferred") {
       params.schedule(1_000);
       return true;
-    }
-    if (result.status === "accepted") {
-      acceptedMarkers.delete(entry.childSessionKey);
-      if (result.sessionMarker) {
-        acceptedMarkers.set(entry.childSessionKey, result.sessionMarker);
-      }
     }
     if (
       result.status === "ignored" ||
@@ -412,13 +403,7 @@ export function createInterruptedRecoveryCoordinator(params: RecoveryCoordinator
 
   return {
     recover,
-    prune(entries: readonly [string, SubagentRunRecord][]) {
-      const activeSessionKeys = new Set(entries.map(([, entry]) => entry.childSessionKey));
-      for (const childSessionKey of acceptedMarkers.keys()) {
-        if (!activeSessionKeys.has(childSessionKey)) {
-          acceptedMarkers.delete(childSessionKey);
-        }
-      }
+    prune() {
       for (const [runId, retry] of retries) {
         if (params.runs.get(runId) !== retry.entry) {
           retries.delete(runId);
@@ -426,7 +411,6 @@ export function createInterruptedRecoveryCoordinator(params: RecoveryCoordinator
       }
     },
     reset() {
-      acceptedMarkers.clear();
       retries.clear();
     },
   };
