@@ -1300,6 +1300,7 @@ describe("gateway hot reload model state", () => {
       { waitForReplacement: true },
     );
     expect(hoisted.refreshPreparedModelRuntimeSnapshots).toHaveBeenCalledWith(nextConfig, {
+      allowGatewaySubagentBinding: true,
       catalogMode: "static",
     });
     expect(hoisted.warmCurrentProviderAuthStateOffMainThread).toHaveBeenCalledWith(nextConfig);
