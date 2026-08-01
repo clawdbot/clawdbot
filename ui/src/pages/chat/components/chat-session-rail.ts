@@ -64,7 +64,7 @@ export class ChatSessionRailState {
     this.manualOpen = false;
   }
 
-  expandTransiently(): boolean {
+  tryAutoOpen(): boolean {
     if (this.displayPreference === "off") {
       return false;
     }
@@ -223,7 +223,7 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
       }
     }
     if (changedProperties.has("openRequest") && this.openRequest > 0) {
-      if (this.railState.expandTransiently()) {
+      if (this.railState.tryAutoOpen()) {
         this.onVisibilityChange?.(true);
       }
     }
