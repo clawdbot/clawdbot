@@ -118,7 +118,7 @@ describe("OpenClaw shell locale preferences", () => {
     const context = {
       gateway: { connection: { gatewayUrl: "ws://theme.test" } },
       navigation: { update: vi.fn() },
-      theme: { recordServerSelection, refresh: vi.fn(), serverSelectionRevision: 0 },
+      theme: { recordServerSelection, refresh: vi.fn(), serverSelection: null },
       runtimeConfig,
     } as unknown as ApplicationContext;
     const shell = document.createElement(
@@ -127,14 +127,14 @@ describe("OpenClaw shell locale preferences", () => {
     shell.runtime = { context };
 
     shell.reconcileServerUiPrefs(runtimeConfig);
-    expect(recordServerSelection).toHaveBeenLastCalledWith("custom");
+    expect(recordServerSelection).toHaveBeenLastCalledWith("custom", "ws://theme.test");
 
     state.configSnapshot = {
       config: { ui: { prefs: { theme: "claw" } } },
       hash: "theme-claw",
     };
     shell.reconcileServerUiPrefs(runtimeConfig);
-    expect(recordServerSelection).toHaveBeenLastCalledWith("claw");
+    expect(recordServerSelection).toHaveBeenLastCalledWith("claw", "ws://theme.test");
     expect(loadSettings().theme).toBe("claw");
   });
 });

@@ -23,10 +23,16 @@ export type {
   ApplicationGatewaySnapshot,
 } from "./gateway.ts";
 
+export type ApplicationThemeServerSelection = {
+  readonly revision: number;
+  readonly scope: string;
+  readonly theme: ThemeName | null;
+};
+
 export type ApplicationTheme = {
   readonly mode: ThemeMode;
-  readonly serverSelectionRevision: number;
-  recordServerSelection: (theme: ThemeName | null) => void;
+  readonly serverSelection: ApplicationThemeServerSelection | null;
+  recordServerSelection: (theme: ThemeName | null, scope: string) => void;
   setMode: (mode: ThemeMode, element?: HTMLElement | null) => void;
   refresh: () => void;
   subscribe: (listener: () => void) => () => void;
