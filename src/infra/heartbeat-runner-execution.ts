@@ -399,7 +399,12 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
       }
     : undefined;
   const heartbeatForDelivery = commitmentDeliveryContext
-    ? { ...heartbeat, target: "last", to: undefined, accountId: undefined }
+    ? {
+        ...heartbeat,
+        target: "last",
+        to: undefined,
+        accountId: commitmentDeliveryContext.accountId ?? heartbeat?.accountId,
+      }
     : heartbeat;
   const delivery = await resolveHeartbeatDeliveryTargetWithSessionRoute({
     cfg,
