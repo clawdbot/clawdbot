@@ -307,7 +307,8 @@ export async function runSlackTableInvalidBlocksFallbackScenario(
   const originalPostMessage = context.sutWriteClient.chat.postMessage;
   let rejectedNativeData = false;
   context.sutWriteClient.chat.postMessage = (async (payload) => {
-    if (!rejectedNativeData && countSlackNativeDataBlocks(payload.blocks) > 0) {
+    const payloadRecord = payload as { blocks?: unknown };
+    if (!rejectedNativeData && countSlackNativeDataBlocks(payloadRecord.blocks) > 0) {
       rejectedNativeData = true;
       throw Object.assign(new Error("Slack API error: invalid_blocks"), {
         data: { error: "invalid_blocks", ok: false },
