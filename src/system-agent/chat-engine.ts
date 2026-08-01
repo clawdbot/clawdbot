@@ -223,7 +223,7 @@ async function runHostedConfigWizard(params: {
   const snapshot = await readSetupConfigFileSnapshot();
   if (!snapshot.exists || !snapshot.valid || !snapshot.hash) {
     throw new Error(
-      `${params.label} requires a valid saved config snapshot. Run \`openclaw doctor --fix\`, then retry.`,
+      `${params.label} requires a valid saved config snapshot. On the machine running OpenClaw, run \`openclaw doctor --fix\` and resolve any remaining validation errors; then retry.`,
     );
   }
   const baseConfig = snapshot.sourceConfig ?? snapshot.config;
@@ -1222,7 +1222,7 @@ export class SystemAgentChatEngine {
       this.clearPendingProposals();
       if (this.opts.surface === "gateway") {
         return {
-          text: "The app owns the setup screens here — use Settings, or run `openclaw onboard` in a terminal.",
+          text: "Open Settings to change your model or connect a channel. To change providers from a shell, run `openclaw onboard` on the machine running OpenClaw.",
           action: "none",
         };
       }
@@ -1460,7 +1460,7 @@ export class SystemAgentChatEngine {
     }
     return [
       "No usable inference route is configured, so OpenClaw cannot continue.",
-      "Exit and run `openclaw onboard`; it saves only a route that passes a live test.",
+      "Run `openclaw onboard` on the machine running OpenClaw; it saves only a route that passes a live test.",
     ].join("\n");
   }
 
@@ -1585,7 +1585,7 @@ export class SystemAgentChatEngine {
     return {
       text: [
         "Changing provider credentials would replace the inference route powering this session.",
-        "Exit OpenClaw and run `openclaw onboard`; it stages credentials, live-tests the new route, and saves only a passing setup. Then start OpenClaw again.",
+        "Stop the OpenClaw host through whatever started it. Run `openclaw onboard` on the machine running OpenClaw: it stages credentials, live-tests the new route, and saves only a passing setup. Then restart the host and return to OpenClaw.",
       ].join("\n"),
       action: "none",
     };

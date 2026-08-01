@@ -1,15 +1,16 @@
-/**
- * Truncates oversized tool-result content in messages and transcripts.
- */
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { parseDurationMs } from "../../cli/parse-duration.js";
+import type { AgentContextPruningConfig } from "../../config/types.agent-defaults.js";
 import { createDedupeCache } from "../../infra/dedupe.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { TextContent } from "../../llm/types.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import { estimateStringChars } from "../../utils/cjk-chars.js";
+import { compileGlobPatterns, matchesAnyGlobPattern } from "../glob-pattern.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { SessionManager } from "../sessions/index.js";
 import { formatFullOutputFooter } from "../sessions/tools/tool-contracts.js";
@@ -21,6 +22,7 @@ import {
 import { formatContextLimitTruncationNotice } from "./context-truncation-notice.js";
 import { log } from "./logger.js";
 import type { ToolResultPromptProjectionState } from "./session-prompt-state.js";
+import { dropThinkingBlocks } from "./thinking.js";
 import {
   estimateToolResultTextChars,
   sliceToolResultTextTailToBudget,
@@ -38,17 +40,200 @@ export {
 } from "../tool-result-limits.js";
 const PROMPT_TOOL_RESULT_AGGREGATE_CAP_MULTIPLIER = 4;
 const AGGREGATE_TOOL_RESULT_CONTEXT_SHARE = 0.5;
+const CACHE_TTL_IMAGE_CHARS = 8_000;
+const CACHE_TTL_IMAGE_MARKER = "[image removed during context pruning]";
+const CACHE_TTL_DEFAULT_PLACEHOLDER = "[Old tool result content cleared]";
 
-/**
- * Minimum characters to keep when truncating.
- * We always keep at least the first portion so the model understands
- * what was in the content.
- */
+type CacheTtlPruningSettings = {
+  ttlMs: number;
+  hardClear: boolean;
+  placeholder: string;
+  isToolPrunable: (toolName: string) => boolean;
+};
+type CacheTtlToolResultMessage = Extract<AgentMessage, { role: "toolResult" }>;
+
+export function resolveCacheTtlPruningSettings(
+  config: AgentContextPruningConfig | undefined,
+): CacheTtlPruningSettings | undefined {
+  if (config?.mode !== "cache-ttl") {
+    return undefined;
+  }
+  let ttlMs = 5 * 60_000;
+  try {
+    ttlMs = config.ttl ? parseDurationMs(config.ttl, { defaultUnit: "m" }) : ttlMs;
+  } catch {
+    // Invalid durations retain the shipped five-minute default.
+  }
+  const normalize = (value: string) => normalizeLowercaseStringOrEmpty(value);
+  const deny = compileGlobPatterns({ raw: config.tools?.deny, normalize });
+  const allow = compileGlobPatterns({ raw: config.tools?.allow, normalize });
+  return {
+    ttlMs,
+    hardClear: config.hardClear?.enabled ?? true,
+    placeholder: config.hardClear?.placeholder?.trim() || CACHE_TTL_DEFAULT_PLACEHOLDER,
+    isToolPrunable: (toolName) => {
+      const normalized = normalize(toolName);
+      return (
+        !matchesAnyGlobPattern(normalized, deny) &&
+        (allow.length === 0 || matchesAnyGlobPattern(normalized, allow))
+      );
+    },
+  };
+}
+
+function cacheTtlText(block: unknown, serializeMalformed = true): string | undefined {
+  if (!isRecord(block) || block.type !== "text") {
+    return undefined;
+  }
+  if (typeof block.text === "string") {
+    return block.text;
+  }
+  if (!serializeMalformed) {
+    return undefined;
+  }
+  try {
+    return JSON.stringify(block) ?? "[malformed text block]";
+  } catch {
+    return "[malformed text block]";
+  }
+}
+
+function cacheTtlMessageChars(message: AgentMessage): number {
+  if (message.role === "user" && typeof message.content === "string") {
+    return estimateStringChars(message.content);
+  }
+  if (message.role !== "user" && message.role !== "assistant" && message.role !== "toolResult") {
+    return 256;
+  }
+  const content = Array.isArray(message.content) ? message.content : [];
+  return content.reduce((chars, block) => {
+    const text = cacheTtlText(block, message.role !== "assistant");
+    if (text !== undefined) {
+      return chars + estimateStringChars(text);
+    }
+    if (isRecord(block) && block.type === "image") {
+      return chars + CACHE_TTL_IMAGE_CHARS;
+    }
+    if (!isRecord(block) || message.role !== "assistant") {
+      return chars;
+    }
+    const record = block as Record<string, unknown>;
+    if (record.type === "thinking" || record.type === "redacted_thinking") {
+      const values = [record.thinking, record.thinkingSignature];
+      if (record.type === "redacted_thinking") {
+        values.push(record.data);
+      }
+      return values.reduce<number>(
+        (sum, value) => sum + (typeof value === "string" ? estimateStringChars(value) : 0),
+        chars,
+      );
+    }
+    if (record.type !== "toolCall") {
+      return chars;
+    }
+    try {
+      return chars + JSON.stringify(record.arguments ?? {}).length;
+    } catch {
+      return chars + 128;
+    }
+  }, 0);
+}
+
+function softPruneCacheTtlToolResult(
+  message: CacheTtlToolResultMessage,
+): CacheTtlToolResultMessage {
+  const content = Array.isArray(message.content) ? message.content : [];
+  const hasImage = content.some((block) => isRecord(block) && block.type === "image");
+  const text = content
+    .flatMap(
+      (block) =>
+        cacheTtlText(block) ??
+        (isRecord(block) && block.type === "image" ? CACHE_TTL_IMAGE_MARKER : []),
+    )
+    .join("\n");
+  if (!hasImage && text.length <= 4_000) {
+    return message;
+  }
+  const projected =
+    text.length <= 4_000
+      ? text
+      : `${sliceUtf16Safe(text, 0, 1_500)}\n...\n${sliceUtf16Safe(text, -1_500)}\n\n` +
+        `[Tool result trimmed: kept first 1500 chars and last 1500 chars of ${text.length} chars.]`;
+  return { ...message, content: [{ type: "text", text: projected }] };
+}
+
+/** Projects expired cache-TTL history without mutating the transcript. */
+export function pruneExpiredCacheTtlToolResults(params: {
+  messages: AgentMessage[];
+  settings: CacheTtlPruningSettings;
+  contextWindowTokens: number;
+  lastCacheTouchAt: number | null;
+  dropThinkingBlocksForEstimate: boolean;
+  now: number;
+}): AgentMessage[] {
+  const { messages, settings } = params;
+  if (
+    !params.lastCacheTouchAt ||
+    settings.ttlMs <= 0 ||
+    params.now - params.lastCacheTouchAt < settings.ttlMs
+  ) {
+    return messages;
+  }
+  const cutoff =
+    messages.flatMap((message, index) => (message.role === "assistant" ? [index] : [])).at(-3) ??
+    -1;
+  const start = messages.findIndex((message) => message.role === "user");
+  if (cutoff < 0 || start < 0) {
+    return messages;
+  }
+  const estimate = params.dropThinkingBlocksForEstimate ? dropThinkingBlocks(messages) : messages;
+  let totalChars = estimate.reduce((sum, message) => sum + cacheTtlMessageChars(message), 0);
+  const charWindow = params.contextWindowTokens * 4;
+  if (totalChars / charWindow < 0.3) {
+    return messages;
+  }
+  let next: AgentMessage[] | undefined;
+  const eligible: number[] = [];
+  for (let index = start; index < cutoff; index++) {
+    const message = messages[index];
+    if (
+      message?.role !== "toolResult" ||
+      !settings.isToolPrunable(typeof message.toolName === "string" ? message.toolName : "")
+    ) {
+      continue;
+    }
+    eligible.push(index);
+    const projected = softPruneCacheTtlToolResult(message);
+    if (projected !== message) {
+      totalChars += cacheTtlMessageChars(projected) - cacheTtlMessageChars(message);
+      (next ??= messages.slice())[index] = projected;
+    }
+  }
+  if (totalChars / charWindow < 0.5 || !settings.hardClear) {
+    return next ?? messages;
+  }
+  const output = next ?? messages;
+  if (eligible.reduce((sum, index) => sum + cacheTtlMessageChars(output[index]!), 0) < 50_000) {
+    return output;
+  }
+  for (const index of eligible) {
+    if (totalChars / charWindow < 0.5) {
+      break;
+    }
+    const message = (next ?? messages)[index] as AgentMessage;
+    const cleared = {
+      ...message,
+      content: [{ type: "text", text: settings.placeholder }],
+    } as AgentMessage;
+    totalChars += cacheTtlMessageChars(cleared) - cacheTtlMessageChars(message);
+    (next ??= messages.slice())[index] = cleared;
+  }
+  return next ?? messages;
+}
+
 const MIN_KEEP_CHARS = 2_000;
 const RECOVERY_MIN_KEEP_CHARS = 0;
 const TOOL_RESULT_WARNING_DEDUPE_LIMIT = 1_024;
-// Both warning paths live for the process lifetime. Keep their dedupe state
-// independently bounded so one hot path cannot evict the other's sessions.
 export const toolResultWarningDedupe = {
   promptPressure: createDedupeCache({ ttlMs: 0, maxSize: TOOL_RESULT_WARNING_DEDUPE_LIMIT }),
   sessionRecovery: createDedupeCache({ ttlMs: 0, maxSize: TOOL_RESULT_WARNING_DEDUPE_LIMIT }),
@@ -154,36 +339,19 @@ function appendBoundedTruncationSuffix(params: {
   }
 }
 
-/**
- * Marker inserted between head and tail when using head+tail truncation.
- */
 const MIDDLE_OMISSION_MARKER =
   "\n\n⚠️ [... middle content omitted — showing head and tail ...]\n\n";
 
-/**
- * Detect whether text likely contains error/diagnostic content near the end,
- * which should be preserved during truncation.
- */
 function hasImportantTail(text: string): boolean {
-  // Check last ~2000 chars for error-like patterns without splitting a surrogate pair.
   const tail = normalizeLowercaseStringOrEmpty(sliceUtf16Safe(text, -2000));
   return (
     /\b(error|exception|failed|fatal|traceback|panic|stack trace|errno|exit code)\b/.test(tail) ||
-    // JSON closing — if the output is JSON, the tail has closing structure
     /\}\s*$/.test(tail.trim()) ||
-    // Summary/result lines often appear at the end
     /\b(total|summary|result|complete|finished|done)\b/.test(tail)
   );
 }
 
-/**
- * Truncate a single text string to fit within maxChars.
- *
- * Uses a head+tail strategy when the tail contains important content
- * (errors, results, JSON structure), otherwise preserves the beginning.
- * This ensures error messages and summaries at the end of tool output
- * aren't lost during truncation.
- */
+/** Truncates text while preserving an important diagnostic tail when present. */
 export function truncateToolResultText(
   text: string,
   maxChars: number,
@@ -207,7 +375,6 @@ export function truncateToolResultText(
     maxChars - estimateToolResultTextChars(defaultSuffix, budgetOptions),
   );
 
-  // If tail looks important, split budget between head and tail
   if (
     options.preserveImportantTail !== false &&
     hasImportantTail(text) &&
@@ -218,7 +385,6 @@ export function truncateToolResultText(
       budget - tailBudget - estimateToolResultTextChars(MIDDLE_OMISSION_MARKER, budgetOptions);
 
     if (headBudget > minKeepChars) {
-      // Find clean cut points at newline boundaries
       let headText = sliceToolResultTextToBudget(text, headBudget, budgetOptions);
       const headNewline = headText.lastIndexOf("\n");
       if (headNewline > headText.length * 0.8) {
@@ -243,7 +409,6 @@ export function truncateToolResultText(
     }
   }
 
-  // Default: keep the beginning
   let keptText = sliceToolResultTextToBudget(text, budget, budgetOptions);
   const lastNewline = keptText.lastIndexOf("\n");
   if (lastNewline > keptText.length * 0.8) {
@@ -258,19 +423,11 @@ export function truncateToolResultText(
   });
 }
 
-/**
- * Calculate the maximum allowed characters for a single tool result
- * based on the model's context window tokens.
- *
- * Uses a rough 4 chars ≈ 1 token heuristic (conservative for English text;
- * actual ratio varies by tokenizer).
- */
-function calculateMaxToolResultChars(contextWindowTokens: number): number {
-  return calculateMaxToolResultCharsWithCap(
+const calculateMaxToolResultChars = (contextWindowTokens: number) =>
+  calculateMaxToolResultCharsWithCap(
     contextWindowTokens,
     resolveAutoLiveToolResultMaxChars(contextWindowTokens),
   );
-}
 
 export function resolveLiveToolResultAggregateMaxChars(params: {
   contextWindowTokens: number;
@@ -288,9 +445,7 @@ export function resolveLiveToolResultAggregateMaxChars(params: {
   const contextWindowTokens = Number.isFinite(params.contextWindowTokens)
     ? Math.max(1, Math.floor(params.contextWindowTokens))
     : 1;
-  // Aggregate truncation shares the 0.5 history-pressure invariant used by
-  // safeguard compaction and the mid-turn single-result guard. If this drifts,
-  // truncation can hide pressure that compaction routing should see.
+  // Match the 0.5 safeguard/mid-turn pressure invariant so truncation cannot hide pressure.
   const contextShareChars = Math.floor(
     contextWindowTokens * 4 * AGGREGATE_TOOL_RESULT_CONTEXT_SHARE,
   );
@@ -300,9 +455,6 @@ export function resolveLiveToolResultAggregateMaxChars(params: {
   );
 }
 
-/**
- * Get the total token-budget character estimate for text blocks in a tool result message.
- */
 function getToolResultTextBudget(msg: AgentMessage): number {
   if (!msg || msg.role !== "toolResult") {
     return 0;
@@ -317,10 +469,6 @@ function getToolResultTextBudget(msg: AgentMessage): number {
     : 0;
 }
 
-/**
- * Truncate a tool result message's text content blocks to fit within maxChars.
- * Returns a new message (does not mutate the original).
- */
 export function truncateToolResultMessage(
   msg: AgentMessage,
   maxChars: number,
@@ -337,7 +485,6 @@ export function truncateToolResultMessage(
     return msg;
   }
 
-  // Calculate total text size
   const totalTextChars = getToolResultTextBudget(msg);
   if (totalTextChars <= maxChars) {
     return msg;
@@ -359,8 +506,7 @@ export function truncateToolResultMessage(
     (sum, chars, index) => sum + (chars > minKeepChars ? (blockNoticeChars[index] ?? 0) : 0),
     0,
   );
-  // Preserve short semantic blocks (for example image-disabled notices) when
-  // larger blocks can still retain a complete truncation notice inside the cap.
+  // Preserve short semantic blocks when larger ones can retain a complete truncation notice.
   const preserveSmallBlocks = smallBlockChars + largeBlockNoticeChars <= maxChars;
   const preservedChars = preserveSmallBlocks ? smallBlockChars : 0;
   const remainingBudget = Math.max(0, maxChars - preservedChars);
@@ -382,7 +528,7 @@ export function truncateToolResultMessage(
 
   const newContent = content.map((block: unknown, index) => {
     if (!isToolResultTextBlock(block)) {
-      return block; // Keep non-text blocks (images) as-is
+      return block;
     }
     const textBlock = block;
     const textChars = blockTextChars[index] ?? 0;
@@ -463,8 +609,7 @@ function resolveAggregateElisionMarkers(
   const content = (message as { content?: unknown }).content;
   const footer = formatFullOutputFooter(spill.path);
   const escapedFooter = JSON.stringify(footer).slice(1, -1);
-  // Details alone are not model-visible. Only preserve paths that already
-  // appeared in the original footer, so elision discloses nothing new.
+  // Preserve only paths already visible in the original footer.
   if (
     !Array.isArray(content) ||
     !content.some(
@@ -475,13 +620,11 @@ function resolveAggregateElisionMarkers(
   ) {
     return undefined;
   }
-  // Aggregate elision is a rare recovery path, not a request hot path; one
-  // existence check avoids pointing the model at already-deleted spill files.
+  // Avoid pointing recovery at already-deleted spill files.
   if (!existsSync(spill.path)) {
     return undefined;
   }
-  // The path was already disclosed in the original tool footer; preserving it
-  // here adds no new disclosure and only keeps recovery possible.
+  // The original footer already disclosed this path, so preserving it adds no disclosure.
   const kind = spill.truncated ? "partial" : "full";
   const count = spill.truncated
     ? ` (${spill.chars === undefined ? "capped content" : `first ${spill.chars} chars`})`
@@ -510,13 +653,7 @@ function formatAggregateElisionText(
   return sliceToolResultTextToBudget(AGGREGATE_ELISION_MARKER, remainingTextBudget);
 }
 
-/**
- * Truncate oversized tool results in an array of messages (in-memory).
- * Returns a new array with truncated messages.
- *
- * This is used as a pre-emptive guard before sending messages to the LLM,
- * without modifying the session file.
- */
+/** Projects bounded tool-result history without mutating the transcript. */
 export function truncateOversizedToolResultsInMessages(
   messages: AgentMessage[],
   contextWindowTokens: number,
@@ -566,8 +703,7 @@ export function truncateOversizedToolResultsInMessages(
         !projectionKey ||
         !projectionState?.frozen.has(projectionKey) ||
         (projectedMessage !== undefined && mergedMessage === message),
-      // Steering and follow-up messages can follow fresh tool results before dispatch.
-      // Reduce frozen history first so message position cannot make fresh output disappear.
+      // Reduce frozen history first so steering cannot make fresh output disappear.
       deferAggregateRecovery:
         projectionKey !== undefined &&
         projectionState !== undefined &&
@@ -685,8 +821,7 @@ function getToolResultProjectionKeys(
     if (!message || message.role !== "toolResult") {
       return undefined;
     }
-    // Ambiguous/missing tool ids still need a stable frozen identity; otherwise
-    // each request rewrites their prompt-cache tail projection (#99495).
+    // Stable identities keep ambiguous tool ids from rewriting cache-tail projections (#99495).
     const messageId = (message as { id?: unknown }).id;
     const sourceIdentity =
       typeof messageId === "string" && messageId.length > 0
@@ -853,8 +988,7 @@ function buildAggregateToolResultReplacements(params: {
     .toSorted((a, b) => a.index - b.index);
   const recoveryCandidates = [
     ...aggregateRecoveryCandidates.filter((item) => item.aggregateEligible),
-    // Start from frozen projections before touching deferred fresh results. Reusing their
-    // projected text keeps this shrink-only and preserves prompt-cache stability.
+    // Reuse frozen projections first to keep reduction shrink-only and cache-stable.
     ...aggregateRecoveryCandidates.filter((item) => !item.aggregateEligible),
     ...candidates.filter(
       (item) => item.deferredByFreshProjection && !item.protectedByTrailingBatch,
@@ -948,8 +1082,7 @@ function clearToolResultText(
   let remainingTextBudget = Math.max(0, Math.floor(maxTextChars));
   const spillMarkers = resolvedSpillMarkers ?? resolveAggregateElisionMarkers(message);
   if (spillMarkers) {
-    // The pointer is what makes elision recoverable. ~130 chars per entry is
-    // negligible against the 64k+ aggregate floor, and accounting uses actual lengths.
+    // Keep recoverable pointers; their ~130 chars are negligible against the 64k+ floor.
     remainingTextBudget = Math.max(
       remainingTextBudget,
       estimateToolResultTextChars(spillMarkers.compact),
@@ -1319,7 +1452,6 @@ export function truncateOversizedToolResultsInSessionManager(params: {
   }
 }
 
-/** Truncates oversized tool results on a new active transcript branch. */
 export async function truncateOversizedToolResultsInActiveTarget(params: {
   scope: RuntimeTranscriptScope;
   contextWindowTokens: number;

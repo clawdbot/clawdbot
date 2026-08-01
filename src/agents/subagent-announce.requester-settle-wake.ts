@@ -85,7 +85,10 @@ function buildConnectedSettledWave(
     .map((entry, originalIndex) => ({
       entry,
       originalIndex,
-      endedAt: typeof entry.endedAt === "number" ? entry.endedAt : Number.MAX_SAFE_INTEGER,
+      endedAt:
+        typeof entry.execution.endedAt === "number"
+          ? entry.execution.endedAt
+          : Number.MAX_SAFE_INTEGER,
     }))
     .toSorted(
       (a, b) =>

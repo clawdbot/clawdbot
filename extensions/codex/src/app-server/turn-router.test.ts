@@ -925,11 +925,18 @@ describe("CodexAppServerTurnRouter", () => {
       threadId: "thread-close",
       onRequest: requestHandler,
     });
-    harness.client.close();
+    harness.process.stderr.write("fatal transport detail\n");
+    harness.process.emit("exit", 17, "SIGTERM");
 
     await expect(closingRoute.bindTurn("turn-close")).rejects.toThrow("turn router closed");
     expect(closingRoute.signal.aborted).toBe(true);
-    expect(closingRoute.signal.reason).toEqual(new Error("codex app-server turn router closed"));
+    expect(closingRoute.signal.reason).toEqual(
+      new Error("codex app-server turn router closed", {
+        cause: new Error(
+          'codex app-server exited: code=17 signal=SIGTERM stderr="fatal transport detail"',
+        ),
+      }),
+    );
     expect(() =>
       router.reserveThread({ threadId: "thread-late", onRequest: requestHandler }),
     ).toThrow("turn router is closed");

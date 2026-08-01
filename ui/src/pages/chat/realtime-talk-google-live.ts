@@ -21,6 +21,7 @@ import {
   submitRealtimeTalkConsult,
   type RealtimeTalkTransport,
   type RealtimeTalkTransportContext,
+  type RealtimeTalkTransportStartResult,
 } from "./realtime-talk-shared.ts";
 import {
   captureRealtimeTalkVideoFrame,
@@ -143,7 +144,7 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     });
   }
 
-  async start(): Promise<void> {
+  async start(): Promise<RealtimeTalkTransportStartResult> {
     if (!navigator.mediaDevices?.getUserMedia || typeof WebSocket === "undefined") {
       throw new Error("Realtime Talk requires browser WebSocket and microphone access");
     }
@@ -162,7 +163,7 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
       });
     } catch (error) {
       if (this.closed) {
-        return;
+        return "cancelled";
       }
       throw error;
     } finally {
@@ -172,7 +173,7 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     }
     if (this.closed) {
       media.getTracks().forEach((track) => track.stop());
-      return;
+      return "cancelled";
     }
     this.media = media;
     this.inputContext = new AudioContext({ sampleRate: this.session.audio.inputSampleRateHz });
@@ -193,16 +194,9 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     this.ws.addEventListener("message", (event) => {
       void this.handleMessage(event.data);
     });
-    this.ws.addEventListener("close", () => {
-      if (!this.closed) {
-        this.ctx.callbacks.onStatus?.("error", "Realtime connection closed");
-      }
-    });
-    this.ws.addEventListener("error", () => {
-      if (!this.closed) {
-        this.ctx.callbacks.onStatus?.("error", "Realtime connection failed");
-      }
-    });
+    this.ws.addEventListener("close", () => this.failConnection("Realtime connection closed"));
+    this.ws.addEventListener("error", () => this.failConnection("Realtime connection failed"));
+    return "ready";
   }
 
   async setVideoEnabled(enabled: boolean): Promise<void> {
@@ -213,11 +207,19 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     await this.camera.switchDevice(videoDeviceId);
   }
 
-  stop(): void {
-    if (!this.closed) {
-      this.emitTalkEvent({ type: "session.closed", final: true });
-    }
+  stop(options?: { emitClosed?: boolean }): void {
+    const emitClosed = !this.closed && options?.emitClosed !== false;
     this.closed = true;
+    try {
+      if (emitClosed) {
+        this.emitTalkEvent({ type: "session.closed", final: true });
+      }
+    } finally {
+      this.releaseResources();
+    }
+  }
+
+  private releaseResources(): void {
     this.mediaSetupController?.abort();
     this.mediaSetupController = null;
     this.setupComplete = false;
@@ -239,6 +241,18 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     this.outputContext = null;
     this.ws?.close();
     this.ws = null;
+  }
+
+  private failConnection(detail: string): void {
+    if (this.closed) {
+      return;
+    }
+    try {
+      this.ctx.callbacks.onStatus?.("error", detail);
+    } finally {
+      // Socket failure is terminal even when a consumer callback rejects the update.
+      this.stop();
+    }
   }
 
   private startMicrophonePump(): void {
@@ -303,6 +317,9 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
         text: content.inputTranscription.text,
         final: content.inputTranscription.finished ?? false,
       });
+      if (this.closed) {
+        return;
+      }
       this.emitTalkEvent({
         type: content.inputTranscription.finished ? "transcript.done" : "transcript.delta",
         final: content.inputTranscription.finished ?? false,
@@ -329,6 +346,9 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
         text: content.outputTranscription.text,
         final: content.outputTranscription.finished ?? false,
       });
+      if (this.closed) {
+        return;
+      }
       this.emitTalkEvent({
         type: content.outputTranscription.finished ? "output.text.done" : "output.text.delta",
         final: content.outputTranscription.finished ?? false,
@@ -354,6 +374,9 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
           text: part.text,
           final: content?.turnComplete ?? false,
         });
+        if (this.closed) {
+          return;
+        }
         this.emitTalkEvent({
           type: content?.turnComplete ? "output.text.done" : "output.text.delta",
           final: content?.turnComplete ?? false,

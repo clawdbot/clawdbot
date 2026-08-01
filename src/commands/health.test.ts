@@ -559,6 +559,24 @@ describe("healthCommand", () => {
     expect(lines).toStrictEqual(["WhatsApp: auth stabilizing"]);
   });
 
+  it("formats derived channel health before linked state", () => {
+    const summary = createHealthSummary({
+      channels: {
+        slack: {
+          accountId: "default",
+          configured: true,
+          linked: true,
+          lifecycle: "blocked",
+          healthState: "blocked",
+        },
+      },
+      channelOrder: ["slack"],
+      channelLabels: { slack: "Slack" },
+    });
+
+    expect(formatHealthChannelLines(summary)).toStrictEqual(["Slack: blocked"]);
+  });
+
   it("formats iMessage probe failures as failed health lines", () => {
     const summary = createHealthSummary({
       channels: {

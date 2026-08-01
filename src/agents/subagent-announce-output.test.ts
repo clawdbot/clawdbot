@@ -73,6 +73,7 @@ describe("dedupeLatestChildCompletionRows", () => {
       childSessionKey,
       task: "older",
       createdAt: 1_000,
+      execution: {},
     };
     const newer = { ...older, runId: "run-newer", generation: 2, task: "newer" };
 
@@ -376,7 +377,7 @@ describe("buildChildCompletionFindings", () => {
         task: `worker ${index}`,
         createdAt: index,
         completion: { resultText: "🚀".repeat(60_000) },
-        outcome: { status: "ok" as const },
+        execution: { outcome: { status: "ok" as const } },
       })),
     );
 
@@ -399,21 +400,23 @@ describe("buildChildCompletionFindings", () => {
         task: "first large result",
         createdAt: 1,
         completion: { resultText: "<".repeat(100_000) },
-        outcome: { status: "ok" },
+        execution: { outcome: { status: "ok" } },
       },
       {
         childSessionKey: "agent:main:subagent:second",
         task: "second large result",
         createdAt: 2,
         completion: { resultText: "<".repeat(100_000) },
-        outcome: { status: "ok" },
+        execution: { outcome: { status: "ok" } },
       },
       {
         childSessionKey: "agent:main:subagent:failure",
         task: "later actionable failure",
         createdAt: 3,
         completion: { resultText: "Permission required." },
-        outcome: { status: "error", error: "Writable session authorization required." },
+        execution: {
+          outcome: { status: "error", error: "Writable session authorization required." },
+        },
       },
     ]);
 
@@ -431,14 +434,16 @@ describe("buildChildCompletionFindings", () => {
         task: "earlier oversized success",
         createdAt: 1,
         completion: { resultText: "<".repeat(100_000) },
-        outcome: { status: "ok" },
+        execution: { outcome: { status: "ok" } },
       },
       {
         childSessionKey: "agent:main:subagent:failure",
         task: "later oversized failure",
         createdAt: 2,
         completion: { resultText: "<".repeat(100_000) },
-        outcome: { status: "error", error: "Writable session authorization required." },
+        execution: {
+          outcome: { status: "error", error: "Writable session authorization required." },
+        },
       },
     ]);
 
@@ -457,7 +462,7 @@ describe("buildChildCompletionFindings", () => {
         task: "child task",
         createdAt: 1,
         completion: { resultText: "<".repeat(100_000) },
-        outcome: { status: "error", error: "E".repeat(20_000) },
+        execution: { outcome: { status: "error", error: "E".repeat(20_000) } },
       },
     ]);
 
@@ -476,7 +481,7 @@ describe("buildChildCompletionFindings", () => {
         task: "silent task",
         createdAt: 1,
         completion: { resultText: "ANNOUNCE_SKIP" },
-        outcome: { status: "ok" },
+        execution: { outcome: { status: "ok" } },
       },
     ]);
 
@@ -490,7 +495,7 @@ describe("buildChildCompletionFindings", () => {
         task: "silent task",
         createdAt: 1,
         completion: { resultText: "ANNOUNCE_SKIP" },
-        outcome: { status: "error", error: "boom" },
+        execution: { outcome: { status: "error", error: "boom" } },
       },
     ]);
 
@@ -505,7 +510,7 @@ describe("buildChildCompletionFindings", () => {
         task: "child task",
         createdAt: 1,
         frozenResultText: "final child output",
-        outcome: { status: "ok" },
+        execution: { outcome: { status: "ok" } },
       },
     ]);
 
@@ -525,7 +530,7 @@ describe("buildChildCompletionFindings", () => {
             frozenResultText: "delivery payload output",
           },
         },
-        outcome: { status: "ok" },
+        execution: { outcome: { status: "ok" } },
       },
     ]);
 
@@ -543,7 +548,7 @@ describe("buildChildCompletionFindings", () => {
           resultText: "NO_REPLY",
           fallbackResultText: "findings captured before the wake",
         },
-        outcome: { status: "ok" },
+        execution: { outcome: { status: "ok" } },
       },
     ]);
 
@@ -563,7 +568,7 @@ describe("buildChildCompletionFindings", () => {
             resultText,
             fallbackResultText: "stale findings",
           },
-          outcome: { status: "ok" },
+          execution: { outcome: { status: "ok" } },
         },
       ]);
 
@@ -578,14 +583,14 @@ describe("buildChildCompletionFindings", () => {
         task: "silent task",
         createdAt: 1,
         completion: { resultText: "ANNOUNCE_SKIP" },
-        outcome: { status: "ok" },
+        execution: { outcome: { status: "ok" } },
       },
       {
         childSessionKey: "agent:main:subagent:visible",
         task: "visible task",
         createdAt: 2,
         completion: { resultText: "actual output" },
-        outcome: { status: "ok" },
+        execution: { outcome: { status: "ok" } },
       },
     ]);
 
@@ -598,9 +603,8 @@ describe("buildChildCompletionFindings", () => {
       childSessionKey: "agent:main:subagent:z",
       task: "Z task",
       createdAt: 1_000,
-      endedAt: 2_000,
       completion: { resultText: "Z result" },
-      outcome: { status: "ok" as const },
+      execution: { endedAt: 2_000, outcome: { status: "ok" as const } },
     };
     const earlierKey = {
       ...laterKey,

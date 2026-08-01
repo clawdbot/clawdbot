@@ -259,6 +259,60 @@ describe("createReadinessChecker", () => {
     });
   });
 
+  it("uses fresh recorded lifecycle within connect grace", () => {
+    withReadinessClock(() => {
+      const { readiness } = createLongRunningReadinessHarness({
+        discord: managedAccount({
+          connected: false,
+          lifecycle: "starting",
+          lastStartAt: Date.now() - 30_000,
+        }),
+        slack: stoppedAccount({
+          connected: false,
+          lifecycle: "recovering",
+          lastStartAt: Date.now() - 30_000,
+        }),
+      });
+      expect(readiness()).toEqual(readySnapshot(THIRTY_ONE_MIN_MS));
+    });
+  });
+
+  it("reports a recorded starting lifecycle that outlives connect grace", () => {
+    withReadinessClock(() => {
+      const { readiness } = createLongRunningReadinessHarness({
+        discord: managedAccount({ connected: false, lifecycle: "starting" }),
+      });
+      expect(readiness()).toEqual(failingSnapshot(["discord"], THIRTY_ONE_MIN_MS));
+    });
+  });
+
+  it("reports recorded blocked lifecycle as not ready", () => {
+    withReadinessClock(() => {
+      const { readiness } = createReadinessHarness({
+        accounts: {
+          slack: managedAccount({ lifecycle: "blocked" }),
+        },
+      });
+      expect(readiness()).toEqual(failingSnapshot(["slack"]));
+    });
+  });
+
+  it("does not hide a ready lifecycle disconnect behind wall-clock grace", () => {
+    withReadinessClock(() => {
+      const { readiness } = createReadinessHarness({
+        startedAgoMs: 30_000,
+        accounts: {
+          discord: managedAccount({
+            connected: false,
+            lifecycle: "ready",
+            lastStartAt: Date.now() - 30_000,
+          }),
+        },
+      });
+      expect(readiness()).toEqual(failingSnapshot(["discord"], 30_000));
+    });
+  });
+
   it("treats intentionally skipped channels as ready", () => {
     withReadinessClock(() => {
       const { manager, readiness } = createReadinessHarness({

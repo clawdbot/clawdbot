@@ -7,12 +7,12 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { canonicalSubagentRunFixtures } from "../agents/subagent-registry.persistence.test-support.js";
+import type { SubagentRunFixture } from "../agents/subagent-registry.persistence.test-support.js";
 import { saveSubagentRegistryToSqlite } from "../agents/subagent-registry.store.sqlite.js";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
 } from "../agents/subagent-registry.test-helpers.js";
-import type { SubagentRunRecord } from "../agents/subagent-registry.types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { canPrewarmCombinedSessionStoresForGateway } from "../config/sessions/combined-store-gateway.js";
@@ -870,7 +870,7 @@ describe("listSessionsFromStore subagent metadata", () => {
     try {
       const now = Date.now();
       const childSessionKey = "agent:main:subagent:disk-live";
-      const persistedRuns = new Map<string, SubagentRunRecord>([
+      const persistedRuns = new Map<string, SubagentRunFixture>([
         [
           "run-complete",
           {
@@ -955,7 +955,7 @@ describe("listSessionsFromStore subagent metadata", () => {
     const firstChildKey = expectDefined(childKeys[0], "first child session key");
     const secondChildKey = expectDefined(childKeys[1], "second child session key");
     const thirdChildKey = expectDefined(childKeys[2], "third child session key");
-    const persistedRuns = new Map<string, SubagentRunRecord>(
+    const persistedRuns = new Map<string, SubagentRunFixture>(
       childKeys.map((childSessionKey, index) => [
         `run-cache-child-${index}`,
         {

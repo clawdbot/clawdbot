@@ -200,11 +200,8 @@ export type SubagentRunRecord = {
   /** Monotonic ownership generation within one child session. */
   generation?: number;
   createdAt: number;
-  startedAt?: number;
   sessionStartedAt?: number;
   accumulatedRuntimeMs?: number;
-  endedAt?: number;
-  outcome?: SubagentRunOutcome;
   archiveAtMs?: number;
   cleanupCompletedAt?: number;
   cleanupHandled?: boolean;
@@ -219,7 +216,7 @@ export type SubagentRunRecord = {
   endedReason?: SubagentLifecycleEndedReason;
   pauseReason?: "sessions_yield";
   wakeOnDescendantSettle?: boolean;
-  execution?: SubagentExecutionState;
+  execution: SubagentExecutionState;
   completion?: SubagentCompletionState;
   /** Set after the subagent_ended hook has been emitted successfully once. */
   endedHookEmittedAt?: number;
@@ -273,13 +270,12 @@ export type SubagentRunReadRecord = Pick<
   | "model"
   | "generation"
   | "createdAt"
-  | "startedAt"
   | "sessionStartedAt"
   | "accumulatedRuntimeMs"
-  | "endedAt"
   | "runTimeoutSeconds"
   | "endedReason"
-  | "outcome"
   | "cleanupCompletedAt"
   | "delivery"
->;
+> & {
+  execution: Pick<SubagentExecutionState, "startedAt" | "endedAt" | "outcome">;
+};

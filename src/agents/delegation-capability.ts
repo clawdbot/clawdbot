@@ -1,6 +1,6 @@
 import { isCompletionReportInputProvenance } from "../sessions/input-provenance.js";
-import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
-import { normalizeToolName, readToolAllowlistIntersection } from "./tool-policy.js";
+import { isRuntimeToolAllowed } from "./tool-policy-match.js";
+import { normalizeToolName } from "./tool-policy.js";
 import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { ToolAuthorizationError } from "./tools/common.js";
@@ -43,11 +43,8 @@ export function resolveDelegationCapability(params: {
 
   // Native harness delegation is outside the dynamic-tool allowlist, so carry
   // its actual launch authority through the shared attempt capability.
-  const restrictions = readToolAllowlistIntersection(params.toolsAllow) ?? [params.toolsAllow];
   const delegationAllowed = [...NEW_DELEGATION_TOOL_NAMES].some((toolName) =>
-    restrictions.every(
-      (allow) => allow.length > 0 && isToolAllowedByPolicyName(toolName, { allow }),
-    ),
+    isRuntimeToolAllowed(toolName, params.toolsAllow),
   );
   return delegationAllowed ? "full" : "report_only";
 }

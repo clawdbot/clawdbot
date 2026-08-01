@@ -233,9 +233,11 @@ describe("qa scenario catalog", () => {
   it("loads scenario-declared gateway runtime options from YAML", () => {
     const scenario = readQaScenarioById("control-ui-qa-channel-image-roundtrip");
     const otelStdout = readQaScenarioById("otel-stdout-log-smoke");
+    const blockedSlack = readQaScenarioById("slack-blocked-lifecycle-no-restart");
 
     expect(scenario.gatewayRuntime?.forwardHostHome).toBe(true);
     expect(otelStdout.gatewayRuntime?.preserveDebugArtifacts).toBe(true);
+    expect(blockedSlack.gatewayRuntime?.allowUnhealthyStartup).toBe(true);
   });
 
   it.each([

@@ -5,6 +5,7 @@ import {
   verifyChannelMessageAdapterCapabilityProofs,
   verifyChannelMessageReceiveAckPolicyAdapterProofs,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { chunkMarkdownText as chunkMarkdownTextForLine } from "openclaw/plugin-sdk/reply-runtime";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime } from "../api.js";
 import { linePlugin } from "./channel.js";
@@ -139,6 +140,63 @@ function createRuntime(): { runtime: PluginRuntime; mocks: LineRuntimeMocks } {
 }
 
 describe("line outbound sendPayload", () => {
+  it.each([
+    { name: "without quick replies", quickReplies: [] as string[] },
+    { name: "with final quick replies", quickReplies: ["Continue"] },
+  ])("sends oversized tables in their source position $name", async ({ quickReplies }) => {
+    const { runtime, mocks } = createRuntime();
+    setLineRuntime(runtime);
+    mocks.resolveTextChunkLimit.mockReturnValue(5000);
+    mocks.chunkMarkdownText.mockImplementation((text: string) =>
+      chunkMarkdownTextForLine(text, 5000),
+    );
+    const markdown = `First\n\n| Small | Value |\n|---|---|\n| Kept | card |\n\nBetween\n\n| Name | Value |\n|---|---|\n| Large | ${"x".repeat(30_000)} |\n\nAfter\n\n\`\`\`js\nconsole.log("still a card")\n\`\`\``;
+
+    await lineOutboundAdapter.sendPayload!({
+      to: "line:user:ordered",
+      text: markdown,
+      payload: {
+        text: markdown,
+        ...(quickReplies.length > 0 ? { channelData: { line: { quickReplies } } } : {}),
+      },
+      accountId: "default",
+      cfg: { channels: { line: {} } } as OpenClawConfig,
+    });
+
+    const messages = [
+      ...mocks.pushFlexMessage.mock.calls.map((args, index) => ({
+        position: mocks.pushFlexMessage.mock.invocationCallOrder[index],
+        type: args[1] === "Code" ? "code-card" : "valid-table-card",
+      })),
+      ...mocks.pushMessageLine.mock.calls.map((args, index) => ({
+        position: mocks.pushMessageLine.mock.invocationCallOrder[index],
+        type: String(args[1]).includes("Large") ? "oversized-table-text" : "text",
+      })),
+      ...mocks.pushMessagesLine.mock.calls.flatMap((args, index) =>
+        args[1].map((message: { type: string; altText?: string }) => ({
+          position: mocks.pushMessagesLine.mock.invocationCallOrder[index],
+          type: message.altText === "Code" ? "code-card" : message.type,
+        })),
+      ),
+    ]
+      .toSorted((left, right) => left.position - right.position)
+      .map((message) => message.type)
+      .filter((type) => type !== "text");
+
+    expect(messages).toEqual(["valid-table-card", "oversized-table-text", "code-card"]);
+    expect(mocks.pushMessageLine.mock.calls.every((args) => String(args[1]).length <= 5000)).toBe(
+      true,
+    );
+    if (quickReplies.length > 0) {
+      expect(mocks.pushMessagesLine).toHaveBeenCalledExactlyOnceWith(
+        "line:user:ordered",
+        [expect.objectContaining({ altText: "Code", quickReply: { items: quickReplies } })],
+        expect.any(Object),
+      );
+      expect(mocks.pushTextMessageWithQuickReplies).not.toHaveBeenCalled();
+    }
+  });
+
   it.each([
     { name: "empty", text: "" },
     { name: "whitespace-only", text: "   " },

@@ -45,6 +45,7 @@ function collectorRun(
     task: runId,
     cleanup: "keep",
     createdAt: Date.now(),
+    execution: { status: completion ? "terminal" : "running" },
     collect: true,
     swarmRequesterSessionKey: requesterSessionKey,
     groupId: "group",
@@ -208,6 +209,7 @@ describe("agents_wait", () => {
       task: "spawn collector",
       cleanup: "delete",
       createdAt: Date.now(),
+      execution: { status: "running" },
     });
     const completed = collectorRun("nested", ownerSessionKey, { status: "done" });
     completed.swarmWaitOwnerSessionKeys = [ownerSessionKey, "agent:main:main"];

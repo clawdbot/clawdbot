@@ -7,7 +7,7 @@ import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runti
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeAllMemorySearchManagers, getMemorySearchManager } from "./index.js";
 import type { MemoryIndexManager } from "./manager.js";
-import { isolateMemoryManagerTestConfig } from "./test-manager-helpers.js";
+import { isolateMemoryManagerTestConfig } from "./test-config-helpers.js";
 import "./test-runtime-mocks.js";
 
 const createEmbeddingProviderMock = vi.hoisted(() =>

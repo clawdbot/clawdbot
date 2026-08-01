@@ -1,3 +1,5 @@
+import { expectDefined } from "@openclaw/normalization-core";
+import { chunkMarkdownText } from "openclaw/plugin-sdk/reply-runtime";
 // Line tests cover auto reply delivery plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { deliverLineAutoReply } from "./auto-reply-delivery.js";
@@ -9,10 +11,72 @@ import {
   LINE_TEST_CFG,
   type LineAutoReplyDeps,
 } from "./auto-reply-delivery.test-helpers.js";
+import { processLineMessage as processOrderedLineMessage } from "./markdown-to-line.js";
 import { buildLineMediaMessage } from "./outbound-media.js";
 import { createFlexMessage as createProviderFlexMessage } from "./send.js";
 
 describe("deliverLineAutoReply", () => {
+  it.each([
+    { name: "without quick replies", quickReplies: [] as string[] },
+    { name: "with final quick replies", quickReplies: ["Continue"] },
+  ])("keeps oversized Markdown tables in source order $name", async ({ quickReplies }) => {
+    const { deps, replyMessageLine, pushMessagesLine } = createDeps({
+      processLineMessage: processOrderedLineMessage,
+      chunkMarkdownText,
+    });
+    const markdown = `First\n\n| Small | Value |\n|---|---|\n| Kept | card |\n\nBetween\n\n| Name | Value |\n|---|---|\n| Large | ${"x".repeat(30_000)} |\n\nAfter\n\n\`\`\`js\nconsole.log("still a card")\n\`\`\``;
+
+    await deliverLineAutoReply({
+      ...baseDeliveryParams,
+      payload: { text: markdown },
+      lineData: quickReplies.length > 0 ? { quickReplies } : {},
+      deps,
+    });
+
+    const calls = [
+      ...replyMessageLine.mock.calls.map((args, index) => ({
+        position: expectDefined(
+          replyMessageLine.mock.invocationCallOrder[index],
+          "LINE reply delivery call order",
+        ),
+        messages: args[1],
+      })),
+      ...pushMessagesLine.mock.calls.map((args, index) => ({
+        position: expectDefined(
+          pushMessagesLine.mock.invocationCallOrder[index],
+          "LINE push delivery call order",
+        ),
+        messages: args[1],
+      })),
+    ].toSorted((left, right) => left.position - right.position);
+    const sequence = calls
+      .flatMap((call) => call.messages)
+      .map((message) =>
+        message.type === "flex"
+          ? message.altText === "Code"
+            ? "code-card"
+            : "valid-table-card"
+          : message.type === "text" && message.text.includes("Large")
+            ? "oversized-table-text"
+            : undefined,
+      )
+      .filter(Boolean);
+
+    expect(sequence).toEqual(["valid-table-card", "oversized-table-text", "code-card"]);
+    expect(calls.every((call) => call.messages.length <= 5)).toBe(true);
+    expect(replyMessageLine).toHaveBeenCalledOnce();
+    expect(pushMessagesLine.mock.calls.length).toBeGreaterThan(0);
+    if (quickReplies.length > 0) {
+      const messages = calls.flatMap((call) => call.messages);
+      expect(messages.at(-1)).toMatchObject({
+        type: "flex",
+        altText: "Code",
+        quickReply: { items: quickReplies },
+      });
+      expect(messages.slice(0, -1).every((message) => !("quickReply" in message))).toBe(true);
+    }
+  });
+
   it("sends text and rich messages on one reply token instead of pushing the rich bubble", async () => {
     const lineData = {
       flexMessage: { altText: "Card", contents: { type: "bubble" } },

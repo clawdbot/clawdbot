@@ -29,13 +29,13 @@ export function shouldPreservePublishedExplicitRunTimeout(params: {
     typeof params.entry.runTimeoutSeconds !== "number" ||
     !Number.isFinite(params.entry.runTimeoutSeconds) ||
     params.entry.runTimeoutSeconds <= 0 ||
-    params.entry.outcome?.status !== "timeout" ||
-    typeof params.entry.endedAt !== "number"
+    params.entry.execution.outcome?.status !== "timeout" ||
+    typeof params.entry.execution.endedAt !== "number"
   ) {
     return false;
   }
   const deadlineMs = resolveSubagentRunDeadlineMs(params.entry);
-  if (deadlineMs === undefined || params.entry.endedAt < deadlineMs) {
+  if (deadlineMs === undefined || params.entry.execution.endedAt < deadlineMs) {
     return false;
   }
   if (
@@ -69,10 +69,10 @@ export function isOlderEquivalentTerminalCallback(params: {
   outcome: SubagentRunOutcome;
   reason: SubagentLifecycleEndedReason;
 }): boolean {
-  const current = params.entry.outcome;
+  const current = params.entry.execution.outcome;
   if (
-    typeof params.entry.endedAt !== "number" ||
-    params.endedAt >= params.entry.endedAt ||
+    typeof params.entry.execution.endedAt !== "number" ||
+    params.endedAt >= params.entry.execution.endedAt ||
     params.entry.endedReason !== params.reason ||
     current?.status !== params.outcome.status
   ) {

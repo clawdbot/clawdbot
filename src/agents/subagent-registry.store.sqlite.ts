@@ -42,7 +42,7 @@ type SubagentRunReadSqliteRow = Pick<
   delivery_suspended_at: number | null;
 };
 type CanonicalSubagentRunRecord = SubagentRunRecord &
-  Required<Pick<SubagentRunRecord, "execution" | "completion" | "delivery">>;
+  Required<Pick<SubagentRunRecord, "completion" | "delivery">>;
 const EXECUTION_STATUSES = new Set("queued running interrupted terminal".split(" "));
 const DELIVERY_STATUSES = new Set(
   "not_required pending in_progress delivered failed suspended discarded".split(" "),
@@ -148,11 +148,11 @@ function subagentRunRecordToSqliteInsert(entry: SubagentRunRecord): SubagentRunS
     run_timeout_seconds: normalized.runTimeoutSeconds ?? null,
     spawn_mode: normalized.spawnMode ?? null,
     created_at: normalized.createdAt,
-    started_at: normalized.startedAt ?? null,
+    started_at: normalized.execution.startedAt ?? null,
     session_started_at: normalized.sessionStartedAt ?? null,
     accumulated_runtime_ms: normalized.accumulatedRuntimeMs ?? null,
-    ended_at: normalized.endedAt ?? null,
-    outcome_json: jsonStringify(normalized.outcome),
+    ended_at: normalized.execution.endedAt ?? null,
+    outcome_json: jsonStringify(normalized.execution.outcome),
     archive_at_ms: normalized.archiveAtMs ?? null,
     cleanup_completed_at: normalized.cleanupCompletedAt ?? null,
     cleanup_handled: boolToSqlite(normalized.cleanupHandled),
@@ -314,7 +314,7 @@ function readSubagentSessionListRows(): SubagentRunReadSqliteRow[] {
         "ended_reason",
         "cleanup_completed_at",
         subagentPayloadJsonValue<number | null>("$.generation").as("generation"),
-        subagentPayloadJsonValue<string | null>("$.outcome.status").as("outcome_status"),
+        subagentPayloadJsonValue<string | null>("$.execution.outcome.status").as("outcome_status"),
         subagentPayloadJsonValue<string | null>("$.delivery.status").as("delivery_status"),
         subagentPayloadJsonValue<number | null>("$.delivery.suspendedAt").as(
           "delivery_suspended_at",
@@ -345,6 +345,8 @@ function rowToSubagentRunReadRecord(row: SubagentRunReadSqliteRow): SubagentRunR
   const deliveryStatus = DELIVERY_STATUSES.has(row.delivery_status ?? "")
     ? (row.delivery_status as NonNullable<SubagentRunRecord["delivery"]>["status"])
     : undefined;
+  const startedAt = normalizeFiniteNumber(row.started_at);
+  const endedAt = normalizeFiniteNumber(row.ended_at);
   return Object.fromEntries(
     Object.entries({
       runId,
@@ -354,13 +356,15 @@ function rowToSubagentRunReadRecord(row: SubagentRunReadSqliteRow): SubagentRunR
       model: row.model || undefined,
       generation: normalizeFiniteNumber(row.generation),
       createdAt: row.created_at,
-      startedAt: normalizeFiniteNumber(row.started_at),
+      execution: {
+        ...(startedAt !== undefined ? { startedAt } : {}),
+        ...(endedAt !== undefined ? { endedAt } : {}),
+        ...(outcomeStatus ? { outcome: { status: outcomeStatus } } : {}),
+      },
       sessionStartedAt: normalizeFiniteNumber(row.session_started_at),
       accumulatedRuntimeMs: normalizeFiniteNumber(row.accumulated_runtime_ms),
-      endedAt: normalizeFiniteNumber(row.ended_at),
       runTimeoutSeconds: normalizeFiniteNumber(row.run_timeout_seconds),
       endedReason: row.ended_reason || undefined,
-      outcome: outcomeStatus ? { status: outcomeStatus } : undefined,
       cleanupCompletedAt: normalizeFiniteNumber(row.cleanup_completed_at),
       delivery: deliveryStatus
         ? {

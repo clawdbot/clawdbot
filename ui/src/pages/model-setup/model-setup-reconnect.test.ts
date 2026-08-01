@@ -104,6 +104,10 @@ async function mountPage(
   return page;
 }
 
+function selectedModelDetail(page: TestModelSetupPage): string | undefined {
+  return page.querySelector(".model-setup__current-copy > .muted")?.textContent?.trim();
+}
+
 describe("ModelSetupPage Gateway reconnect ownership", () => {
   beforeEach(async () => {
     await i18n.setLocale("en");
@@ -193,7 +197,7 @@ describe("ModelSetupPage Gateway reconnect ownership", () => {
 
     const page = await mountPage(context, client, staleHello);
 
-    await vi.waitFor(() => expect(page.textContent).toContain("provider/fresh-model"));
+    await vi.waitFor(() => expect(selectedModelDetail(page)).toBe("fresh-model"));
     expect(
       request.mock.calls.filter(([method]) => method === "openclaw.setup.detect"),
     ).toHaveLength(1);
@@ -252,7 +256,7 @@ describe("ModelSetupPage Gateway reconnect ownership", () => {
 
     setGatewayPhase("reconnecting");
     setGatewayPhase("connected");
-    await vi.waitFor(() => expect(page.textContent).toContain("provider/current-model"));
+    await vi.waitFor(() => expect(selectedModelDetail(page)).toBe("current-model"));
     page.routeData = {
       state: {
         phase: "ready",
@@ -267,8 +271,8 @@ describe("ModelSetupPage Gateway reconnect ownership", () => {
     };
     await page.updateComplete;
 
-    expect(page.textContent).not.toContain("provider/stale-model");
-    await vi.waitFor(() => expect(page.textContent).toContain("provider/current-model"));
+    expect(selectedModelDetail(page)).not.toBe("stale-model");
+    await vi.waitFor(() => expect(selectedModelDetail(page)).toBe("current-model"));
     expect(
       request.mock.calls.filter(([method]) => method === "openclaw.setup.detect"),
     ).toHaveLength(1);

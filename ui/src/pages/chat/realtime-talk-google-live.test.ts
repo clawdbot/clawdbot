@@ -21,6 +21,7 @@ type MockWebSocketHandler = (event?: MockWebSocketEvent) => void;
 type MockWebSocketEventType = "close" | "error" | "message" | "open";
 
 const wsInstances: MockGoogleLiveWebSocket[] = [];
+const audioContexts: MockAudioContext[] = [];
 const createdSources: MockAudioBufferSource[] = [];
 const inputProcessors: Array<{
   connect: ReturnType<typeof vi.fn>;
@@ -33,6 +34,7 @@ const inputSinks: Array<{
   gain: { value: number };
 }> = [];
 let getUserMedia: ReturnType<typeof vi.fn>;
+let stopInputTrack: ReturnType<typeof vi.fn>;
 
 async function flushMicrotasks(): Promise<void> {
   await Promise.resolve();
@@ -79,6 +81,19 @@ class MockGoogleLiveWebSocket {
       handler({ data });
     }
   }
+
+  emitClose() {
+    this.readyState = 3;
+    for (const handler of this.handlers.close) {
+      handler();
+    }
+  }
+
+  emitError() {
+    for (const handler of this.handlers.error) {
+      handler();
+    }
+  }
 }
 
 class MockAudioBufferSource {
@@ -97,6 +112,7 @@ class MockAudioContext {
 
   constructor(options?: { sampleRate?: number }) {
     this.sampleRate = options?.sampleRate ?? 24000;
+    audioContexts.push(this);
   }
 
   createMediaStreamSource() {
@@ -230,13 +246,15 @@ function requireFirstTalkEvent(onTalkEvent: ReturnType<typeof vi.fn>): Record<st
 describe("GoogleLiveRealtimeTalkTransport", () => {
   beforeEach(() => {
     wsInstances.length = 0;
+    audioContexts.length = 0;
     createdSources.length = 0;
     inputProcessors.length = 0;
     inputSinks.length = 0;
     vi.stubGlobal("WebSocket", MockGoogleLiveWebSocket);
     vi.stubGlobal("AudioContext", MockAudioContext);
+    stopInputTrack = vi.fn();
     getUserMedia = vi.fn(async () => ({
-      getTracks: () => [{ stop: vi.fn() }],
+      getTracks: () => [{ stop: stopInputTrack }],
     }));
     vi.stubGlobal("navigator", {
       mediaDevices: {
@@ -328,7 +346,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     const start = transport.start();
     transport.stop();
     resolveMedia({ getTracks: () => [{ stop: stopTrack }] } as unknown as MediaStream);
-    await start;
+    await expect(start).resolves.toBe("cancelled");
 
     expect(stopTrack).toHaveBeenCalledOnce();
     expect(inputProcessors).toHaveLength(0);
@@ -352,6 +370,87 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     expect(readyEvent.sessionId).toBe("main:google:provider-websocket");
     expect(readyEvent.transport).toBe("provider-websocket");
   });
+
+  it("releases owned media when the live socket closes", async () => {
+    const onStatus = vi.fn();
+    const onTranscript = vi.fn();
+    const transport = createTransport({ onStatus, onTranscript });
+
+    await expect(transport.start()).resolves.toBe("ready");
+    const ws = latestWebSocket();
+    ws.emitOpen();
+    pumpMicrophone(new Float32Array(4096));
+    ws.emitClose();
+
+    expect(onStatus).toHaveBeenCalledWith("error", "Realtime connection closed");
+    expect(stopInputTrack).toHaveBeenCalledOnce();
+    expect(inputProcessors.at(-1)?.disconnect).toHaveBeenCalledOnce();
+    expect(audioContexts).toHaveLength(2);
+    for (const context of audioContexts) {
+      expect(context.close).toHaveBeenCalledOnce();
+    }
+
+    ws.emitMessage(
+      encodeJsonFrame({
+        serverContent: {
+          inputTranscription: { text: "too late", finished: true },
+        },
+      }),
+    );
+    await flushMicrotasks();
+    expect(onTranscript).not.toHaveBeenCalled();
+  });
+
+  it("preserves socket error precedence and ignores the later close", async () => {
+    const onStatus = vi.fn();
+    const onTranscript = vi.fn();
+    const transport = createTransport({ onStatus, onTranscript });
+
+    await expect(transport.start()).resolves.toBe("ready");
+    const ws = latestWebSocket();
+    ws.emitOpen();
+    ws.emitError();
+    ws.emitClose();
+
+    expect(onStatus).toHaveBeenCalledTimes(1);
+    expect(onStatus).toHaveBeenCalledWith("error", "Realtime connection failed");
+    expect(stopInputTrack).toHaveBeenCalledOnce();
+    ws.emitMessage(
+      encodeJsonFrame({
+        serverContent: {
+          inputTranscription: { text: "too late", finished: true },
+        },
+      }),
+    );
+    await flushMicrotasks();
+    expect(onTranscript).not.toHaveBeenCalled();
+  });
+
+  it.each(["status", "talk event"] as const)(
+    "releases socket resources when the terminal %s callback throws",
+    async (callbackKind) => {
+      const throwingCallback = vi.fn(() => {
+        throw new Error("consumer failed");
+      });
+      const transport = createTransport(
+        callbackKind === "status"
+          ? { onStatus: throwingCallback }
+          : { onTalkEvent: throwingCallback },
+      );
+
+      await expect(transport.start()).resolves.toBe("ready");
+      const ws = latestWebSocket();
+      ws.emitOpen();
+      expect(() => ws.emitError()).toThrow("consumer failed");
+
+      expect(stopInputTrack).toHaveBeenCalledOnce();
+      expect(inputProcessors.at(-1)?.disconnect).toHaveBeenCalledOnce();
+      for (const context of audioContexts) {
+        expect(context.close).toHaveBeenCalledOnce();
+      }
+      ws.emitClose();
+    },
+  );
 
   it("reports microphone activity and resets it when stopped", async () => {
     const onInputLevel = vi.fn();
@@ -532,6 +631,39 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     expect(audioEvent?.payload).toStrictEqual({ byteLength: 4, mimeType: "audio/pcm;rate=24000" });
     expect(audioEvent?.sessionId).toBe("main:google:provider-websocket");
     expect(audioEvent?.transport).toBe("provider-websocket");
+  });
+
+  it("stops processing the current provider message when a transcript callback closes it", async () => {
+    const onTalkEvent = vi.fn();
+    const onTranscript = vi.fn(() => transport.stop());
+    const transport = createTransport({ onTalkEvent, onTranscript });
+
+    await transport.start();
+    latestWebSocket().emitMessage(
+      encodeJsonFrame({
+        serverContent: {
+          inputTranscription: { text: "overflow", finished: true },
+          outputTranscription: { text: "too late", finished: true },
+          turnComplete: true,
+        },
+      }),
+    );
+    await flushMicrotasks();
+
+    expect(onTranscript).toHaveBeenCalledOnce();
+    expect(onTalkEvent.mock.calls.map(([event]) => event.type)).toEqual(["session.closed"]);
+  });
+
+  it("silently disposes a provisional Google Live transport", async () => {
+    const onTalkEvent = vi.fn();
+    const transport = createTransport({ onTalkEvent });
+    await transport.start();
+    onTalkEvent.mockClear();
+
+    transport.stop({ emitClosed: false });
+
+    expect(onTalkEvent).not.toHaveBeenCalled();
+    expect(latestWebSocket().readyState).toBe(3);
   });
 
   it("ignores late WebSocket events after stop", async () => {

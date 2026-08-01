@@ -95,8 +95,7 @@ import {
   isSubagentAnnounceCompletionHandoff,
   isTrustedSubagentCompletionHandoffForRun,
 } from "../subagent-announce-handoff.js";
-import { isToolAllowedByPolicies } from "../tool-policy-match.js";
-import { readToolAllowlistIntersection } from "../tool-policy.js";
+import { isRuntimeToolAllowed, isToolAllowedByPolicies } from "../tool-policy-match.js";
 import { DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS } from "../tool-result-limits.js";
 import {
   buildClaudeCliFallbackContextPrelude,
@@ -628,15 +627,7 @@ export function runAgentAttempt(params: {
         sessionKey: params.sessionKey,
         sessionId: params.sessionId,
         agentId: params.sessionAgentId,
-        agentAccountId: params.runContext.accountId,
-        messageProvider: params.opts.messageProvider ?? params.messageChannel,
-        messageChannel: params.messageChannel,
-        groupId: params.runContext.groupId,
-        groupChannel: params.runContext.groupChannel,
-        groupSpace: params.runContext.groupSpace,
-        spawnedBy: params.spawnedBy,
         senderId: params.runContext.senderId,
-        senderIsOwner: params.opts.senderIsOwner,
         modelProvider: params.providerOverride,
         modelId: params.modelOverride,
         sandboxToolPolicy: completionSandboxStatus?.sandboxed
@@ -644,7 +635,6 @@ export function runAgentAttempt(params: {
           : undefined,
         inputProvenance: params.opts.inputProvenance,
         trustedInternalHandoff: params.opts.trustedInternalHandoff,
-        scheduledToolPolicy: params.opts.scheduledToolPolicy,
       })
     : undefined;
   const completionToolPolicies = completionCapabilityProfile
@@ -657,20 +647,13 @@ export function runAgentAttempt(params: {
         additionalInheritedAllow: ["message"],
       })
     : undefined;
-  const completionRuntimeRestrictions = params.opts.toolsAllow
-    ? (readToolAllowlistIntersection(params.opts.toolsAllow) ?? [params.opts.toolsAllow])
-    : undefined;
   // Forced private delivery is not authority: retain every parent/operator cap
   // and mint only the source-bound message capability from a verified envelope.
   const completionNeedsMessageDelivery =
     completionCapabilityProfile?.policy.requesterPolicySource === "completion-handoff" &&
     completionToolPolicies !== undefined &&
     isToolAllowedByPolicies("message", Object.values(completionToolPolicies)) &&
-    (params.opts.toolsAllow === undefined ||
-      (completionRuntimeRestrictions?.every(
-        (allow) => allow.length > 0 && isToolAllowedByPolicies("message", [{ allow }]),
-      ) ??
-        false));
+    isRuntimeToolAllowed("message", params.opts.toolsAllow);
   const claudeCliFallbackPrelude =
     !isRawModelRun &&
     params.isFallbackRetry &&

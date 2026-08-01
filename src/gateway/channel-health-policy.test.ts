@@ -84,6 +84,54 @@ describe("evaluateChannelHealth", () => {
     expect(evaluation).toEqual({ healthy: true, reason: "startup-connect-grace" });
   });
 
+  it("trusts a fresh recorded starting lifecycle inside connect grace", () => {
+    expect(
+      evaluateHealth(
+        runningAccount({ connected: false, lifecycle: "starting", lastStartAt: 95_000 }),
+      ),
+    ).toEqual({ healthy: true, reason: "startup-connect-grace" });
+  });
+
+  it("falls through to disconnected when recorded starting outlives connect grace", () => {
+    expect(
+      evaluateHealth(runningAccount({ connected: false, lifecycle: "starting", lastStartAt: 0 })),
+    ).toEqual({ healthy: false, reason: "disconnected" });
+  });
+
+  it("falls through to stale socket when recorded recovering outlives connect grace", () => {
+    expect(evaluateHealth(staleTransportAccount({ lifecycle: "recovering" }))).toEqual({
+      healthy: false,
+      reason: "stale-socket",
+    });
+  });
+
+  it("does not synthesize lifecycle grace without a start timestamp", () => {
+    expect(evaluateHealth(runningAccount({ connected: false, lifecycle: "starting" }))).toEqual({
+      healthy: false,
+      reason: "disconnected",
+    });
+  });
+
+  it("lets recorded ready bypass wall-clock startup grace", () => {
+    expect(
+      evaluateHealth(runningAccount({ connected: false, lifecycle: "ready", lastStartAt: 99_999 })),
+    ).toEqual({ healthy: false, reason: "disconnected" });
+  });
+
+  it("treats recorded blocked lifecycle as unhealthy", () => {
+    expect(evaluateHealth(connectedAccount({ lifecycle: "blocked" }))).toEqual({
+      healthy: false,
+      reason: "blocked",
+    });
+  });
+
+  it("maps recorded stopped lifecycle to the existing restartable verdict", () => {
+    expect(evaluateHealth(runningAccount({ lifecycle: "stopped" }))).toEqual({
+      healthy: false,
+      reason: "not-running",
+    });
+  });
+
   it("treats active runs as busy even when disconnected", () => {
     const now = 100_000;
     const evaluation = evaluateHealth(activeRunAccount(now - 30_000), { now });

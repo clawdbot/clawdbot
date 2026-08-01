@@ -188,7 +188,7 @@ export function resolveSlackBoltInterop(params: {
 
 export function publishSlackConnectedStatus(
   setStatus?: (next: Record<string, unknown>) => void,
-  identityHealth: SlackIdentityHealth = { healthState: "healthy", lastError: null },
+  identityHealth: SlackIdentityHealth = { lifecycle: "ready", lastError: null },
 ) {
   if (!setStatus) {
     return;
@@ -211,7 +211,7 @@ export function publishSlackDisconnectedStatus(
   const message = error ? formatUnknownError(error) : undefined;
   setStatus({
     connected: false,
-    healthState: "disconnected",
+    lifecycle: "recovering",
     lastDisconnect: message ? { at, error: message } : { at },
     lastError: message ?? null,
   });

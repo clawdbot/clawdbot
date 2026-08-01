@@ -1069,6 +1069,7 @@ export async function startQaGatewayChild(params: {
   claudeCliAuthMode?: QaCliBackendAuthMode;
   controlUiEnabled?: boolean;
   enabledPluginIds?: string[];
+  allowUnhealthyStartup?: boolean;
   forwardHostHome?: boolean;
   mockAuthAgentIds?: readonly string[];
   onListening?: (context: QaGatewayChildListeningContext) => Promise<void> | void;
@@ -1423,13 +1424,15 @@ export async function startQaGatewayChild(params: {
           configPath,
           runtimeEnv: env,
         });
-        await waitForGatewayReady({
-          baseUrl,
-          logs,
-          child: attemptChild,
-          getChildFailure: getAttemptChildFailure,
-          timeoutMs: 120_000,
-        });
+        if (!params.allowUnhealthyStartup) {
+          await waitForGatewayReady({
+            baseUrl,
+            logs,
+            child: attemptChild,
+            getChildFailure: getAttemptChildFailure,
+            timeoutMs: 120_000,
+          });
+        }
         const attemptRpcClient = await startQaGatewayRpcClient({
           wsUrl,
           token: gatewayToken,

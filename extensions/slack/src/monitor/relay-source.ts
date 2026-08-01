@@ -72,7 +72,7 @@ export async function monitorSlackRelaySource(params: {
       const delayMs = computeBackoff(SLACK_SOCKET_RECONNECT_POLICY, reconnectAttempts);
       params.setStatus?.({
         connected: false,
-        healthState: "disconnected",
+        lifecycle: "recovering",
         lastDisconnect: { at: Date.now(), error: formatUnknownError(err) },
         lastError: formatUnknownError(err),
       });
@@ -182,7 +182,7 @@ function runRelayWebSocket(params: {
       const closeReason = formatRelayClose(code, reason);
       params.setStatus?.({
         connected: false,
-        healthState: "disconnected",
+        lifecycle: "recovering",
         lastDisconnect: { at: Date.now(), error: closeReason },
       });
       settleReject(new Error(closeReason));

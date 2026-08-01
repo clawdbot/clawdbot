@@ -10,10 +10,7 @@ import { completionRequiresMessageToolDelivery } from "../auto-reply/reply/compl
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isFastTestRuntimeEnv } from "../infra/env.js";
 import { isOutboundDeliveryError } from "../infra/outbound/deliver-types.js";
-import {
-  createSourceDeliveryPlan,
-  resolveSourceDeliveryOutcome,
-} from "../infra/outbound/source-delivery-plan.js";
+import { sourceDeliveryTargetsMatch } from "../infra/outbound/source-delivery-plan.js";
 import { scheduleSessionDelivery } from "../infra/session-delivery-queue-runtime.js";
 import {
   enqueueClaimedSessionDelivery,
@@ -740,12 +737,7 @@ function hasMessagingToolDeliveryToSource(
     didDeliverSourceReplyViaMessageTool?: unknown;
     messagingToolSourceReplyPayloads?: unknown;
   },
-  deliveryTarget: {
-    channel?: string;
-    accountId?: string;
-    to?: string;
-    threadId?: string | number;
-  },
+  deliveryTarget: Parameters<typeof sourceDeliveryTargetsMatch>[1],
 ): boolean {
   if (
     hasCommittedSourceReplyDeliveryEvidence(result) ||
@@ -761,31 +753,21 @@ function hasMessagingToolDeliveryToSource(
     return hasMessagingToolDeliveryEvidence(result);
   }
 
-  type SourceDeliveryMessageToolTarget = NonNullable<
-    Parameters<typeof resolveSourceDeliveryOutcome>[1]["messageToolSentTargets"]
-  >[number];
-  const sourceTargets: SourceDeliveryMessageToolTarget[] = [];
-  for (const target of targets) {
-    if (!target || typeof target !== "object" || Array.isArray(target)) {
-      continue;
-    }
-    const record = target as SourceDeliveryMessageToolTarget;
-    const to = typeof record.to === "string" ? record.to.trim() : "";
-    // Older current-source receipts omit `to`; explicit off-target sends must never satisfy it.
-    sourceTargets.push(to ? record : { ...record, to: deliveryTarget.to });
-  }
-  return resolveSourceDeliveryOutcome(
-    createSourceDeliveryPlan({
-      owner: "message_tool",
-      reason: "subagent_completion",
-      target: deliveryTarget,
-      requireExplicitMessageTargetEvidence: true,
-    }),
-    {
-      didSendViaMessageTool: hasMessagingToolDeliveryEvidence(result),
-      messageToolSentTargets: sourceTargets,
-    },
-  ).verifiedMessageToolDelivery;
+  return (
+    hasMessagingToolDeliveryEvidence(result) &&
+    targets.some((target) => {
+      if (!target || typeof target !== "object" || Array.isArray(target)) {
+        return false;
+      }
+      const record = target as Parameters<typeof sourceDeliveryTargetsMatch>[0];
+      // Older current-source receipts omit `to`; explicit off-target sends must never satisfy it.
+      const sourceTarget =
+        typeof record.to === "string" && record.to.trim()
+          ? record
+          : { ...record, to: deliveryTarget.to };
+      return sourceDeliveryTargetsMatch(sourceTarget, deliveryTarget);
+    })
+  );
 }
 
 async function sendSubagentAnnounceDirectly(params: {

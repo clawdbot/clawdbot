@@ -559,13 +559,11 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     const normalized = normalizeToolName(toolName);
     return normalized === "*" || normalized === "message";
   });
-  // A verified completion may retain parent tools, but its mandatory delivery
-  // grant stays bound to the current source regardless of allowlist width.
+  // The verified requester profile owns completion authority; its delivery grant
+  // stays source-bound even when parent tools remain available to the turn.
   const sourceReplyOnly =
     capabilityProfile.policy.requesterPolicySource === "completion-handoff" &&
-    options?.inputProvenance?.kind === "inter_session" &&
-    options.inputProvenance.sourceTool === "subagent_announce" &&
-    options.sourceReplyDeliveryMode === "message_tool_only";
+    options?.sourceReplyDeliveryMode === "message_tool_only";
   const localModelLeanPreserveToolNames = resolveLocalModelLeanPreserveToolNames({
     toolNames: capabilityProfile.policy.explicitToolOverrideAllowlist,
     forceMessageTool: options?.forceMessageTool,
