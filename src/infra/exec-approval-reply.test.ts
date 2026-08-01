@@ -676,6 +676,26 @@ describe("exec approval reply helpers", () => {
       approvalId: "req-1",
       decision: "allow-always",
     });
+    expect(parseExecApprovalCommandText("/approve always req-1")).toEqual({
+      approvalId: "req-1",
+      decision: "allow-always",
+    });
+    expect(parseExecApprovalCommandText("/approve req-1 allow")).toEqual({
+      approvalId: "req-1",
+      decision: "allow-once",
+    });
+    expect(parseExecApprovalCommandText("/approve once req-1")).toEqual({
+      approvalId: "req-1",
+      decision: "allow-once",
+    });
+    expect(parseExecApprovalCommandText("/approve req-1 reject")).toEqual({
+      approvalId: "req-1",
+      decision: "deny",
+    });
+    expect(parseExecApprovalCommandText("/approve block req-1")).toEqual({
+      approvalId: "req-1",
+      decision: "deny",
+    });
     expect(parseExecApprovalCommandText("/approve req-1 maybe")).toBeNull();
   });
 

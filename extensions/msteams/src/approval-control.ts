@@ -1,37 +1,16 @@
 import { resolveApprovalOverGateway } from "openclaw/plugin-sdk/approval-gateway-runtime";
-import type { ExecApprovalReplyDecision } from "openclaw/plugin-sdk/approval-reply-runtime";
+import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
 import { msTeamsApprovalAuth } from "./approval-auth.js";
+import { stripMSTeamsMentionTags } from "./inbound.js";
 import type { MSTeamsMessageHandlerDeps } from "./monitor-handler.types.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
-
-const APPROVE_COMMAND_RE =
-  /^\/approve\s+([A-Za-z0-9][A-Za-z0-9._:-]*)\s+(allow-once|allow-always|deny)\s*$/i;
-
-function parseApprovalCommand(text: string): {
-  approvalId: string;
-  decision: ExecApprovalReplyDecision;
-} | null {
-  const match = text.trim().match(APPROVE_COMMAND_RE);
-  if (!match) {
-    return null;
-  }
-  const approvalId = match[1];
-  const decision = match[2];
-  if (!approvalId || !decision) {
-    return null;
-  }
-  return {
-    approvalId,
-    decision: decision.toLowerCase() as ExecApprovalReplyDecision,
-  };
-}
 
 export async function maybeHandleMSTeamsApprovalControl(params: {
   context: MSTeamsTurnContext;
   deps: MSTeamsMessageHandlerDeps;
   text: string;
 }): Promise<boolean> {
-  const parsed = parseApprovalCommand(params.text);
+  const parsed = parseExecApprovalCommandText(stripMSTeamsMentionTags(params.text));
   if (!parsed) {
     return false;
   }
@@ -58,7 +37,7 @@ export async function maybeHandleMSTeamsApprovalControl(params: {
     approvalId: parsed.approvalId,
     decision: parsed.decision,
     senderId,
-    allowPluginFallback: approvalKind === "exec",
+    approvalKind,
     clientDisplayName: `Microsoft Teams approval (${senderId?.trim() || "unknown"})`,
   });
   params.deps.log.info("resolved approval control", {

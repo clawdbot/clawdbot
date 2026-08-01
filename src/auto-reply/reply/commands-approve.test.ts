@@ -581,6 +581,32 @@ describe("handleApproveCommand", () => {
     expectApprovalResolverCall({ method, id });
   });
 
+  it.each([
+    ["id-first alias", "/approve abc allow", "allow-once"],
+    ["decision-first alias", "/approve always abc", "allow-always"],
+    ["deny alias", "/approve abc reject", "deny"],
+  ] as const)(
+    "submits approval with the shared command grammar: %s",
+    async (_name, commandBody, decision) => {
+      resolveApprovalOverGatewayMock.mockResolvedValue(undefined);
+      const result = await handleApproveCommand(
+        buildApproveParams(
+          commandBody,
+          {
+            commands: { text: true },
+            channels: { whatsapp: { allowFrom: ["*"] } },
+          } as OpenClawConfig,
+          { SenderId: "123" },
+        ),
+        true,
+      );
+
+      expect(result?.shouldContinue).toBe(false);
+      expect(result?.reply?.text).toContain(`Approval ${decision} submitted`);
+      expectApprovalResolverCall({ method: "exec.approval.resolve", id: "abc", decision });
+    },
+  );
+
   it("honors the configured default account for omitted-account /approve auth", async () => {
     setActivePluginRegistry(
       createTestRegistry([

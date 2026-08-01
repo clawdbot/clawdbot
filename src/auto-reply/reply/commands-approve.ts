@@ -1,6 +1,4 @@
-import { expectDefined } from "@openclaw/normalization-core";
 // Implements approval commands for pending tool and execution requests.
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   getChannelPlugin,
   resolveChannelApprovalCapability,
@@ -10,25 +8,13 @@ import { isApprovalNotFoundError } from "../../infra/approval-errors.js";
 import { resolveApprovalOverGateway } from "../../infra/approval-gateway-resolver.js";
 import { resolveApprovalCommandAuthorization } from "../../infra/channel-approval-auth.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { parseExecApprovalCommandText } from "../../infra/exec-approval-reply.js";
 import { resolveChannelAccountId } from "./channel-context.js";
 import { requireGatewayClientScope } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
 
 const COMMAND_REGEX = /^\/?approve(?:\s|$)/i;
 const FOREIGN_COMMAND_MENTION_REGEX = /^\/approve@([^\s]+)(?:\s|$)/i;
-
-const DECISION_ALIASES: Record<string, "allow-once" | "allow-always" | "deny"> = {
-  allow: "allow-once",
-  once: "allow-once",
-  "allow-once": "allow-once",
-  allowonce: "allow-once",
-  always: "allow-always",
-  "allow-always": "allow-always",
-  allowalways: "allow-always",
-  deny: "deny",
-  reject: "deny",
-  block: "deny",
-};
 
 type ParsedApproveCommand =
   | { ok: true; id: string; decision: "allow-once" | "allow-always" | "deny" }
@@ -46,31 +32,9 @@ function parseApproveCommand(raw: string): ParsedApproveCommand | null {
   if (!commandMatch) {
     return null;
   }
-  const rest = trimmed.slice(commandMatch[0].length).trim();
-  if (!rest) {
-    return { ok: false, error: APPROVE_USAGE_TEXT };
-  }
-  const tokens = rest.split(/\s+/).filter(Boolean);
-  if (tokens.length < 2) {
-    return { ok: false, error: APPROVE_USAGE_TEXT };
-  }
-
-  const first = normalizeLowercaseStringOrEmpty(tokens[0]);
-  const second = normalizeLowercaseStringOrEmpty(tokens[1]);
-
-  if (DECISION_ALIASES[first]) {
-    return {
-      ok: true,
-      decision: DECISION_ALIASES[first],
-      id: tokens.slice(1).join(" ").trim(),
-    };
-  }
-  if (DECISION_ALIASES[second]) {
-    return {
-      ok: true,
-      decision: DECISION_ALIASES[second],
-      id: expectDefined(tokens[0], "tokens entry at 0"),
-    };
+  const parsed = parseExecApprovalCommandText(trimmed);
+  if (parsed) {
+    return { ok: true, id: parsed.approvalId, decision: parsed.decision };
   }
   return { ok: false, error: APPROVE_USAGE_TEXT };
 }

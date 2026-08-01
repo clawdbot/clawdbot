@@ -26,6 +26,19 @@ import {
 } from "./exec-approvals.js";
 
 export type ExecApprovalReplyDecision = ExecApprovalDecision;
+
+const EXEC_APPROVAL_DECISION_ALIASES: Record<string, ExecApprovalReplyDecision> = {
+  allow: "allow-once",
+  once: "allow-once",
+  "allow-once": "allow-once",
+  allowonce: "allow-once",
+  always: "allow-always",
+  "allow-always": "allow-always",
+  allowalways: "allow-always",
+  deny: "deny",
+  reject: "deny",
+  block: "deny",
+};
 export type ExecApprovalUnavailableReason =
   | "initiating-platform-disabled"
   | "initiating-platform-unsupported"
@@ -319,17 +332,31 @@ export function parseExecApprovalCommandText(
   raw: string,
 ): { approvalId: string; decision: ExecApprovalReplyDecision } | null {
   const trimmed = raw.trim();
-  const match = trimmed.match(
-    /^\/?approve(?:@[^\s]+)?\s+([A-Za-z0-9][A-Za-z0-9._:-]*)\s+(allow-once|allow-always|always|deny)\b/i,
-  );
-  if (!match) {
+  const commandMatch = trimmed.match(/^\/?approve(?:@[^\s]+)?(?:\s|$)/i);
+  if (!commandMatch) {
     return null;
   }
-  const rawDecision = normalizeOptionalLowercaseString(match[2]) ?? "";
+  const tokens = trimmed.slice(commandMatch[0].length).trim().split(/\s+/).filter(Boolean);
+  if (tokens.length < 2) {
+    return null;
+  }
+
+  const first = normalizeOptionalLowercaseString(tokens[0]) ?? "";
+  const second = normalizeOptionalLowercaseString(tokens[1]) ?? "";
+  const firstDecision = EXEC_APPROVAL_DECISION_ALIASES[first];
+  if (firstDecision) {
+    return {
+      approvalId: tokens.slice(1).join(" ").trim(),
+      decision: firstDecision,
+    };
+  }
+  const secondDecision = EXEC_APPROVAL_DECISION_ALIASES[second];
+  if (!secondDecision) {
+    return null;
+  }
   return {
-    approvalId: expectDefined(match[1], "exec approval reply regex capture 1"),
-    decision:
-      rawDecision === "always" ? "allow-always" : (rawDecision as ExecApprovalReplyDecision),
+    approvalId: expectDefined(tokens[0], "exec approval reply token 0"),
+    decision: secondDecision,
   };
 }
 

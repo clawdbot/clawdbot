@@ -61,20 +61,53 @@ describe("msteams approval control", () => {
     resolveApprovalOverGateway.mockClear();
   });
 
-  it("resolves an authorized plugin approval before agent dispatch", async () => {
+  it.each([
+    ["canonical id-first", "/approve plugin:approval-123 allow-once", "allow-once"],
+    ["decision alias", "/approve plugin:approval-123 always", "allow-always"],
+    ["decision-first", "/approve always plugin:approval-123", "allow-always"],
+    ["allow alias", "/approve plugin:approval-123 allow", "allow-once"],
+    ["bot mention", "/approve@openclaw plugin:approval-123 allowonce", "allow-once"],
+    [
+      "native Teams mention",
+      "<at>OpenClaw QA</at> /approve allowonce plugin:approval-123",
+      "allow-once",
+    ],
+    ["deny alias", "/approve plugin:approval-123 reject", "deny"],
+  ] as const)(
+    "resolves an authorized plugin approval before agent dispatch: %s",
+    async (_name, text, decision) => {
+      const handled = await maybeHandleMSTeamsApprovalControl({
+        context: createContext(APPROVER_ID),
+        deps: createDeps(),
+        text,
+      });
+
+      expect(handled).toBe(true);
+      expect(resolveApprovalOverGateway).toHaveBeenCalledWith({
+        cfg: expect.any(Object),
+        approvalId: "plugin:approval-123",
+        decision,
+        senderId: APPROVER_ID,
+        approvalKind: "plugin",
+        clientDisplayName: `Microsoft Teams approval (${APPROVER_ID})`,
+      });
+    },
+  );
+
+  it("resolves exec approvals through the canonical exec owner", async () => {
     const handled = await maybeHandleMSTeamsApprovalControl({
       context: createContext(APPROVER_ID),
       deps: createDeps(),
-      text: "/approve plugin:approval-123 allow-once",
+      text: "/approve exec-approval-123 deny",
     });
 
     expect(handled).toBe(true);
     expect(resolveApprovalOverGateway).toHaveBeenCalledWith({
       cfg: expect.any(Object),
-      approvalId: "plugin:approval-123",
-      decision: "allow-once",
+      approvalId: "exec-approval-123",
+      decision: "deny",
       senderId: APPROVER_ID,
-      allowPluginFallback: false,
+      approvalKind: "exec",
       clientDisplayName: `Microsoft Teams approval (${APPROVER_ID})`,
     });
   });
