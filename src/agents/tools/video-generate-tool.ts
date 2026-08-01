@@ -556,6 +556,7 @@ async function loadReferenceAssets(params: {
   workspaceDir?: string;
   sandboxConfig: { root: string; bridge: SandboxFsBridge; workspaceOnly: boolean } | null;
   ssrfPolicy?: SsrFPolicy;
+  signal?: AbortSignal;
 }): Promise<
   Array<{
     sourceAsset: VideoGenerationSourceAsset;
@@ -570,6 +571,7 @@ async function loadReferenceAssets(params: {
   }> = [];
 
   for (const rawInput of params.inputs) {
+    params.signal?.throwIfAborted();
     const trimmed = rawInput.trim();
     const inputRaw = normalizeMediaReferenceSource(
       trimmed.startsWith("@") ? trimmed.slice(1).trim() : trimmed,
@@ -614,6 +616,7 @@ async function loadReferenceAssets(params: {
       workspaceDir: params.workspaceDir,
       sandbox: params.sandboxConfig,
     });
+    params.signal?.throwIfAborted();
     const media = isDataUrl
       ? params.expectedKind === "image"
         ? decodeDataUrl(resolvedInput)
@@ -627,12 +630,15 @@ async function loadReferenceAssets(params: {
             maxBytes: params.maxBytes,
             sandboxValidated: true,
             readFile: createSandboxBridgeReadFile({ sandbox: params.sandboxConfig }),
+            ...(params.signal ? { requestInit: { signal: params.signal } } : {}),
           })
         : await loadWebMedia(resolvedPath ?? resolvedInput, {
             maxBytes: params.maxBytes,
             localRoots,
             ssrfPolicy: params.ssrfPolicy,
+            ...(params.signal ? { requestInit: { signal: params.signal } } : {}),
           });
+    params.signal?.throwIfAborted();
     if (media.kind !== params.expectedKind) {
       throw new ToolInputError(`Unsupported media type: ${media.kind ?? "unknown"}`);
     }
@@ -997,7 +1003,7 @@ export function createVideoGenerateTool(options?: {
       (includeAudioReferences ? "; audio refs condition sound" : "") +
       ". resolution up to 4K; audio/watermark toggles. action=list discovers providers/models. Session chat background: call once/request, await, then visible reply + structured media. status checks active task. Duration may round to provider value.",
     parameters: createVideoGenerateToolSchema({ includeAudioReferences }),
-    execute: async (_toolCallId, rawArgs) => {
+    execute: async (_toolCallId, rawArgs, signal) => {
       const args = rawArgs as Record<string, unknown>;
       const action = resolveAction(args);
 
@@ -1151,6 +1157,7 @@ export function createVideoGenerateTool(options?: {
         workspaceDir: options?.workspaceDir,
         sandboxConfig,
         ssrfPolicy: remoteMediaSsrfPolicy,
+        signal,
       });
       // Attach roles to the loaded image assets (positional, by index into images[]).
       for (let i = 0; i < loadedReferenceImages.length; i++) {
@@ -1166,6 +1173,7 @@ export function createVideoGenerateTool(options?: {
         workspaceDir: options?.workspaceDir,
         sandboxConfig,
         ssrfPolicy: remoteMediaSsrfPolicy,
+        signal,
       });
       for (let i = 0; i < loadedReferenceVideos.length; i++) {
         const role = videoRoles[i];
@@ -1180,6 +1188,7 @@ export function createVideoGenerateTool(options?: {
         workspaceDir: options?.workspaceDir,
         sandboxConfig,
         ssrfPolicy: remoteMediaSsrfPolicy,
+        signal,
       });
       for (let i = 0; i < loadedReferenceAudios.length; i++) {
         const role = audioRoles[i];
@@ -1202,6 +1211,8 @@ export function createVideoGenerateTool(options?: {
         audio,
         watermark,
       });
+      // Accepted tasks own their paid work independently; cancellation applies only before admission.
+      signal?.throwIfAborted();
       const taskHandle = createVideoGenerationTaskRun({
         sessionKey: options?.agentSessionKey,
         requesterOrigin: options?.requesterOrigin,
