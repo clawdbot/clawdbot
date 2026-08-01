@@ -1,10 +1,13 @@
 // Skill security scanner inspects skill files and manifests for unsafe patterns.
 import fs from "node:fs/promises";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { parseFenceSpans } from "../../../packages/markdown-core/src/fences.js";
 import { hasErrnoCode } from "../../infra/errors.js";
 import { isPathInside } from "../../security/scan-paths.js";
+import { escapeRegExp } from "../../shared/regexp.js";
 import { formatScanEvidence, LITERAL_SECRET_SKILL_CONTENT_RULE } from "./scan-evidence.js";
 
 // ---------------------------------------------------------------------------
@@ -163,10 +166,17 @@ type SourceRule = {
   requiresContextWindowLines?: number;
 };
 
-const DANGEROUS_CHILD_PROCESS_CALL_NAMES = "exec|execSync|spawn|spawnSync|execFile|execFileSync";
-const JAVASCRIPT_IDENTIFIER_PATTERN = "[$_\\p{ID_Start}][$\\u200C\\u200D\\p{ID_Continue}]*";
+const DANGEROUS_CHILD_PROCESS_CALL_NAMES = [
+  "exec",
+  "execSync",
+  "spawn",
+  "spawnSync",
+  "execFile",
+  "execFileSync",
+] as const;
+const DANGEROUS_CHILD_PROCESS_CALL_NAME_SET = new Set<string>(DANGEROUS_CHILD_PROCESS_CALL_NAMES);
 const DANGEROUS_CHILD_PROCESS_CALL_PATTERN = new RegExp(
-  `\\b(${DANGEROUS_CHILD_PROCESS_CALL_NAMES})\\s*\\(`,
+  `\\b(${DANGEROUS_CHILD_PROCESS_CALL_NAMES.join("|")})\\s*\\(`,
 );
 
 const LINE_RULES: LineRule[] = [
@@ -296,50 +306,188 @@ function isBenignMemberExecMatch(line: string, match: RegExpExecArray): boolean 
   return !/\b(?:cp|childProcess|child_process)\s*\.\s*exec\s*\(/.test(line);
 }
 
-const CHILD_PROCESS_ALIAS_DECLARATIONS = [
-  {
-    declaration: /\bimport\s*\{([^}]*)\}\s*from\s*["'](?:node:)?child_process["']/g,
-    alias: new RegExp(
-      `\\b(?:${DANGEROUS_CHILD_PROCESS_CALL_NAMES})\\s+as\\s+(${JAVASCRIPT_IDENTIFIER_PATTERN})`,
-      "gu",
-    ),
-  },
-  {
-    declaration:
-      /\b(?:const|let|var)\s*\{([^}]*)\}\s*=\s*require\s*\(\s*["'](?:node:)?child_process["']\s*\)/g,
-    alias: new RegExp(
-      `\\b(?:${DANGEROUS_CHILD_PROCESS_CALL_NAMES})\\s*:\\s*(${JAVASCRIPT_IDENTIFIER_PATTERN})`,
-      "gu",
-    ),
-  },
-] as const;
+const nodeRequire = createRequire(import.meta.url);
+let typescriptRuntime: typeof import("typescript") | undefined;
 
-function collectDangerousChildProcessAliases(source: string): string[] {
-  const aliases = new Set<string>();
+function loadTypeScriptRuntime(): typeof import("typescript") {
+  typescriptRuntime ??= nodeRequire("typescript") as typeof import("typescript");
+  return typescriptRuntime;
+}
 
-  // Only declarations tied to child_process create aliases. Matching arbitrary
-  // same-name calls would turn this heuristic into a broad false-positive source.
-  for (const patterns of CHILD_PROCESS_ALIAS_DECLARATIONS) {
-    for (const declaration of source.matchAll(patterns.declaration)) {
-      for (const alias of (declaration[1] ?? "").matchAll(patterns.alias)) {
-        if (alias[1]) {
-          aliases.add(alias[1]);
+function isChildProcessSpecifier(value: string): boolean {
+  return value === "child_process" || value === "node:child_process";
+}
+
+function scriptKindForFile(
+  ts: typeof import("typescript"),
+  filePath: string,
+): import("typescript").ScriptKind {
+  switch (path.extname(filePath).toLowerCase()) {
+    case ".js":
+    case ".mjs":
+    case ".cjs":
+      return ts.ScriptKind.JS;
+    case ".jsx":
+      return ts.ScriptKind.JSX;
+    case ".tsx":
+      return ts.ScriptKind.TSX;
+    default:
+      return ts.ScriptKind.TS;
+  }
+}
+
+const JAVASCRIPT_FENCE_EXTENSIONS: ReadonlyMap<string, string> = new Map([
+  ["javascript", ".js"],
+  ["js", ".js"],
+  ["jsx", ".jsx"],
+  ["typescript", ".ts"],
+  ["ts", ".ts"],
+  ["tsx", ".tsx"],
+  ["mjs", ".mjs"],
+  ["cjs", ".cjs"],
+  ["mts", ".mts"],
+  ["cts", ".cts"],
+] as const);
+
+function collectAliasScanSources(
+  source: string,
+  filePath: string,
+): { source: string; file: string }[] {
+  if (path.extname(filePath).toLowerCase() !== ".md") {
+    return [{ source, file: filePath }];
+  }
+
+  const fencedSources: { source: string; file: string }[] = [];
+  const fenceSpans = parseFenceSpans(source);
+  for (const [index, span] of fenceSpans.entries()) {
+    const infoString = span.openLine.slice(span.indent.length + span.marker.length).trim();
+    const language = infoString.split(/\s+/, 1)[0]?.toLowerCase() ?? "";
+    // Fence labels are author-controlled metadata, not a security boundary. Parse
+    // unknown and misleading labels as TypeScript so they cannot suppress scanning.
+    const extension = JAVASCRIPT_FENCE_EXTENSIONS.get(language) ?? ".ts";
+
+    const openingLineEnd = source.indexOf("\n", span.start);
+    if (openingLineEnd === -1) {
+      continue;
+    }
+    const contentStart = openingLineEnd + 1;
+    const spanBody = source.slice(contentStart, span.end);
+    const lastLineStart = spanBody.lastIndexOf("\n") + 1;
+    const lastLine = spanBody.slice(lastLineStart).replace(/\r$/, "");
+    const closingMarker = lastLine.match(/^( {0,3})(`{3,}|~{3,})[ \t]*$/)?.[2];
+    const hasClosingFence =
+      closingMarker?.[0] === span.marker[0] && closingMarker.length >= span.marker.length;
+    const content = hasClosingFence ? spanBody.slice(0, lastLineStart) : spanBody;
+    fencedSources.push({ source: content, file: `${filePath}.${index}${extension}` });
+  }
+
+  if (fenceSpans.length === 0) {
+    return [{ source, file: `${filePath}.ts` }];
+  }
+
+  let previousEnd = 0;
+  const outsideFences = fenceSpans
+    .map((span) => {
+      const segment = source.slice(previousEnd, span.start);
+      previousEnd = span.end;
+      return segment;
+    })
+    .concat(source.slice(previousEnd))
+    .join("\n");
+  if (outsideFences.trim()) {
+    fencedSources.push({ source: outsideFences, file: `${filePath}.outside.ts` });
+  }
+  return fencedSources;
+}
+
+function collectAliasesFromParsedSource(
+  source: string,
+  filePath: string,
+  aliases: Set<string>,
+): void {
+  const ts = loadTypeScriptRuntime();
+  const sourceFile = ts.createSourceFile(
+    filePath,
+    source,
+    ts.ScriptTarget.Latest,
+    false,
+    scriptKindForFile(ts, filePath),
+  );
+
+  const visit = (node: import("typescript").Node): void => {
+    if (
+      ts.isImportDeclaration(node) &&
+      ts.isStringLiteralLike(node.moduleSpecifier) &&
+      isChildProcessSpecifier(node.moduleSpecifier.text)
+    ) {
+      const importClause = node.importClause;
+      const bindings = importClause?.namedBindings;
+      if (importClause && !importClause.isTypeOnly && bindings && ts.isNamedImports(bindings)) {
+        for (const element of bindings.elements) {
+          if (
+            !element.isTypeOnly &&
+            element.propertyName &&
+            DANGEROUS_CHILD_PROCESS_CALL_NAME_SET.has(element.propertyName.text)
+          ) {
+            aliases.add(element.name.text);
+          }
+        }
+      }
+    } else if (
+      ts.isVariableDeclaration(node) &&
+      ts.isObjectBindingPattern(node.name) &&
+      node.initializer &&
+      ts.isCallExpression(node.initializer) &&
+      ts.isIdentifier(node.initializer.expression) &&
+      node.initializer.expression.text === "require" &&
+      node.initializer.arguments.length === 1
+    ) {
+      const [specifier] = node.initializer.arguments;
+      if (
+        specifier &&
+        ts.isStringLiteralLike(specifier) &&
+        isChildProcessSpecifier(specifier.text)
+      ) {
+        for (const element of node.name.elements) {
+          if (
+            element.propertyName &&
+            (ts.isIdentifier(element.propertyName) ||
+              ts.isStringLiteralLike(element.propertyName)) &&
+            ts.isIdentifier(element.name) &&
+            DANGEROUS_CHILD_PROCESS_CALL_NAME_SET.has(element.propertyName.text)
+          ) {
+            aliases.add(element.name.text);
+          }
         }
       }
     }
+
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+}
+
+function collectDangerousChildProcessAliases(source: string, filePath: string): string[] {
+  const aliases = new Set<string>();
+
+  // AST ownership keeps declaration-shaped strings and comments from creating
+  // aliases that would turn unrelated same-name calls into critical findings.
+  for (const candidate of collectAliasScanSources(source, filePath)) {
+    collectAliasesFromParsedSource(candidate.source, candidate.file, aliases);
   }
 
   return [...aliases];
 }
 
-function buildDangerousExecPattern(source: string): RegExp {
-  const aliases = collectDangerousChildProcessAliases(source);
+function buildDangerousExecPattern(source: string, filePath: string): RegExp {
+  const aliases = collectDangerousChildProcessAliases(source, filePath);
   if (aliases.length === 0) {
     return DANGEROUS_CHILD_PROCESS_CALL_PATTERN;
   }
-  const aliasAlternation = aliases.map((alias) => alias.replaceAll("$", "\\$")).join("|");
+  const aliasAlternation = aliases.map(escapeRegExp).join("|");
   return new RegExp(
-    `${DANGEROUS_CHILD_PROCESS_CALL_PATTERN.source}|(?<![\\w$.])(?:${aliasAlternation})\\s*\\(`,
+    `${DANGEROUS_CHILD_PROCESS_CALL_PATTERN.source}|(?<![.$\\u200C\\u200D\\p{ID_Continue}])(?:${aliasAlternation})\\s*\\(`,
+    "u",
   );
 }
 
@@ -467,7 +615,7 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
     let omittedMatches = 0;
     let lastOmittedLine: number | undefined;
     const pattern =
-      rule.ruleId === "dangerous-exec" ? buildDangerousExecPattern(heuristicSource) : rule.pattern;
+      rule.ruleId === "dangerous-exec" ? buildDangerousExecPattern(source, filePath) : rule.pattern;
     for (const [i, line] of lines.entries()) {
       // Match execution calls without comments, but retain the raw line as finding evidence.
       const scanLine = rule.ruleId === "dangerous-exec" ? (heuristicLines[i] ?? "") : line;

@@ -199,6 +199,86 @@ import { exec as 运行 } from "node:child_process";
     }
   });
 
+  it("detects aliased child_process calls in proposal code fences", () => {
+    const source = [
+      "# Proposed implementation",
+      "",
+      '```ts title="example"',
+      'import { exec as run } from "node:child_process";',
+      'run("echo unsafe");',
+      "```",
+    ].join("\n");
+
+    const findings = scanSource(source, "PROPOSAL.md").filter(
+      (candidate) => candidate.ruleId === "dangerous-exec",
+    );
+
+    expect(findings.map((finding) => finding.line)).toEqual([5]);
+  });
+
+  it("respects longer proposal code fences containing shorter fence runs", () => {
+    const source = [
+      "````ts",
+      'const nestedFence = "```";',
+      'import { exec as run } from "node:child_process";',
+      'run("echo unsafe");',
+      "````",
+    ].join("\n");
+
+    const findings = scanSource(source, "PROPOSAL.md").filter(
+      (candidate) => candidate.ruleId === "dangerous-exec",
+    );
+
+    expect(findings.map((finding) => finding.line)).toEqual([4]);
+  });
+
+  it("does not trust proposal fence language labels", () => {
+    const source = [
+      "```python",
+      'import { exec as run } from "node:child_process";',
+      'run("echo unsafe");',
+      "```",
+    ].join("\n");
+
+    const findings = scanSource(source, "PROPOSAL.md").filter(
+      (candidate) => candidate.ruleId === "dangerous-exec",
+    );
+
+    expect(findings.map((finding) => finding.line)).toEqual([3]);
+  });
+
+  it("detects proposal aliases in indented code outside fenced blocks", () => {
+    const source = [
+      "```text",
+      "An unrelated example.",
+      "```",
+      "",
+      '    import { exec as run } from "node:child_process";',
+      '    run("echo unsafe");',
+    ].join("\n");
+
+    const findings = scanSource(source, "PROPOSAL.md").filter(
+      (candidate) => candidate.ruleId === "dangerous-exec",
+    );
+
+    expect(findings.map((finding) => finding.line)).toEqual([6]);
+  });
+
+  it("detects aliases inside executable template expressions", () => {
+    const source = `
+const value = \`${"${"}(() => {
+  const { exec: run } = require("child_process");
+  return run("echo unsafe");
+})()}\`;
+`;
+
+    const findings = scanSource(source, "plugin.ts").filter(
+      (candidate) => candidate.ruleId === "dangerous-exec",
+    );
+
+    expect(findings.map((finding) => finding.line)).toEqual([4]);
+  });
+
   it("bounds dense line-rule findings and reports truncation", () => {
     const source = [
       `import { spawn } from "node:child_process";`,
@@ -384,6 +464,53 @@ launch("node", ["unsafe.js"]);
     );
 
     expect(findings.map((finding) => finding.line)).toEqual([5, 6]);
+  });
+
+  it("does not derive child_process aliases from literal text", () => {
+    const cases = [
+      {
+        name: "single-quoted string",
+        source: `
+const example = 'import { exec as run } from "child_process"';
+function run() { return "safe"; }
+run();
+`,
+      },
+      {
+        name: "template literal",
+        source: `
+const example = \`const { spawn: launch } = require("child_process");\`;
+function launch() { return "safe"; }
+launch();
+`,
+      },
+      {
+        name: "regular expression literal",
+        source: `
+const example = /import { exec as run } from "child_process"/;
+function run() { return "safe"; }
+run();
+`,
+      },
+    ];
+
+    for (const testCase of cases) {
+      runSyncNamedCase(testCase.name, () => {
+        const findings = scanSource(testCase.source, "plugin.ts");
+        expectRulePresence(findings, "dangerous-exec", false);
+      });
+    }
+  });
+
+  it("does not treat a Unicode alias as a substring of another identifier", () => {
+    const source = `
+import { exec as 运行 } from "node:child_process";
+function 前运行() { return "safe"; }
+前运行();
+`;
+
+    const findings = scanSource(source, "plugin.ts");
+    expectRulePresence(findings, "dangerous-exec", false);
   });
 
   it("does not use full-line comments as source-rule context", () => {
