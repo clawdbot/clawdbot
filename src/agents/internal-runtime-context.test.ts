@@ -105,6 +105,43 @@ describe("internal runtime context codec", () => {
     ).toBe(false);
   });
 
+  it.each([
+    [
+      "current turn",
+      "OpenClaw runtime context for the immediately preceding user message.",
+      "Do not reply to or describe this context. Use it to answer the immediately preceding user message now. Do not wait for another message.",
+    ],
+    [
+      "previous current turn",
+      "OpenClaw runtime context for the immediately preceding user message.",
+      "This context is runtime-generated, not user-authored. Keep internal details private.",
+    ],
+    [
+      "temporary next turn",
+      "OpenClaw internal metadata for the next user-authored message.",
+      "Internal metadata only. Do not answer, summarize, or describe this block. Use it only to interpret the next user-authored message, and answer that message.",
+    ],
+    [
+      "runtime event",
+      "OpenClaw runtime event.",
+      "This context is runtime-generated, not user-authored. Keep internal details private.",
+    ],
+  ])("detects and strips the %s prompt preface", (_name, header, notice) => {
+    const input = [
+      header,
+      notice,
+      "",
+      INTERNAL_RUNTIME_CONTEXT_BEGIN,
+      "secret runtime context",
+      INTERNAL_RUNTIME_CONTEXT_END,
+      "",
+      "Visible reply",
+    ].join("\n");
+
+    expect(hasInternalRuntimeContext(input)).toBe(true);
+    expect(stripInternalRuntimeContext(input)).toBe("Visible reply");
+  });
+
   it("fuzzes delimiter injection and nested marker handling deterministically", () => {
     const rng = createDeterministicRng(0xc0ff_ee42);
     const tokenPool = [
