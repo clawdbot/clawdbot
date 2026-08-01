@@ -165,6 +165,7 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot,
 }));
 
+import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import {
   resolveProviderEndpoint,
   resolveProviderRequestCapabilities,
@@ -206,6 +207,7 @@ describe("provider attribution", () => {
     providerMetadataState.pluginIdScoped = false;
     providerMetadataState.snapshot = undefined;
     loadPluginMetadataSnapshot.mockClear();
+    clearPluginMetadataLifecycleCaches();
   });
 
   it("uses provider facts from the replacement plugin snapshot after reload", () => {
@@ -285,6 +287,20 @@ describe("provider attribution", () => {
       ).toBe("custom");
     }
     expect(loadPluginMetadataSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("scans plugin metadata once when falling back without a lifecycle snapshot", () => {
+    providerMetadataState.pluginIdScoped = true;
+    providerMetadataState.snapshot = undefined;
+
+    for (let index = 0; index < 10; index += 1) {
+      resolveProviderRequestPolicy({ provider: "fallback-provider" });
+    }
+    expect(loadPluginMetadataSnapshot).toHaveBeenCalledTimes(1);
+
+    clearPluginMetadataLifecycleCaches();
+    resolveProviderRequestPolicy({ provider: "fallback-provider" });
+    expect(loadPluginMetadataSnapshot).toHaveBeenCalledTimes(2);
   });
 
   it("uses explicitly prepared provider facts without reading process metadata", () => {
