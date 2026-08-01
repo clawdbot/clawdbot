@@ -52,6 +52,7 @@ import { CommandLane } from "../process/lanes.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { deliveryContextFromSession } from "../utils/delivery-context.shared.js";
 import { getAgentEventLifecycleGeneration } from "./agent-events.js";
 import { formatErrorMessage } from "./errors.js";
 import { isWithinActiveHours } from "./heartbeat-active-hours.js";
@@ -390,11 +391,21 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
     canHeartbeatDeliverCommitments(heartbeat) && scheduledTasks.length === 0
       ? preflight.dueCommitments[0]
       : undefined;
+  // A configured heartbeat account belongs only to its normal route. Do not
+  // carry it into an accountless commitment that owns a different channel.
+  const commitmentAccountId =
+    firstDueCommitment?.accountId ??
+    (firstDueCommitment &&
+    (heartbeat?.target === firstDueCommitment.channel ||
+      (heartbeat?.target === "last" &&
+        deliveryContextFromSession(entry)?.channel === firstDueCommitment.channel))
+      ? heartbeat?.accountId
+      : undefined);
   const commitmentDeliveryContext = firstDueCommitment
     ? {
         channel: firstDueCommitment.channel,
         to: firstDueCommitment.to,
-        accountId: firstDueCommitment.accountId,
+        accountId: commitmentAccountId,
         threadId: firstDueCommitment.threadId,
       }
     : undefined;
@@ -403,7 +414,7 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
         ...heartbeat,
         target: "last",
         to: undefined,
-        accountId: commitmentDeliveryContext.accountId ?? heartbeat?.accountId,
+        accountId: commitmentDeliveryContext.accountId,
       }
     : heartbeat;
   const delivery = await resolveHeartbeatDeliveryTargetWithSessionRoute({
