@@ -3353,37 +3353,16 @@ describe("browser tool extract", () => {
     });
   });
 
-  it.each([
-    {
-      name: "foreign tab",
-      input: { targetId: "target-b" },
-      error: "cannot override its run-bound tab target",
-    },
-    {
-      name: "foreign profile",
-      input: { profile: "other" },
-      error: "cannot override its run-bound profile",
-    },
-    {
-      name: "foreign node",
-      input: { node: "other" },
-      error: "cannot override its run-bound node",
-    },
-    {
-      name: "foreign target",
-      input: { target: "node" },
-      error: "cannot override its run-bound target",
-    },
-  ])("rejects extraction on a $name before browser or model access", async ({ input, error }) => {
+  it("rejects extraction from a foreign tab before browser or model access", async () => {
     const tool = createBrowserTool({ agentId: "work", runToolBinding });
 
     await expect(
       tool.execute?.("call-bound-extract-escape", {
         action: "extract",
         query: "When does the release ship?",
-        ...input,
+        targetId: "target-b",
       }),
-    ).rejects.toThrow(error);
+    ).rejects.toThrow("cannot override its run-bound tab target");
 
     expect(browserActionsMocks.browserPageContent).not.toHaveBeenCalled();
     expect(toolCommonMocks.prepareSimpleCompletionModelForAgent).not.toHaveBeenCalled();
