@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { createAssistantMessageEventStream } from "../../llm.js";
-import type { AssistantMessage, Model, StreamFn, Usage } from "../../llm.js";
+import type { AssistantMessage, ImageContent, Model, StreamFn, Usage } from "../../llm.js";
 import type { AgentMessage } from "../../types.js";
+import { convertToLlm } from "../messages.js";
 import type { SessionTreeEntry } from "../types.js";
 import {
   calculateContextTokens,
@@ -13,7 +14,7 @@ import {
   getLastAssistantUsage,
   prepareCompaction,
 } from "./compaction.js";
-import { createFileOps } from "./utils.js";
+import { createFileOps, serializeConversation } from "./utils.js";
 
 function createUsage(totalTokens: number): Usage {
   return {
@@ -570,5 +571,164 @@ describe("split-turn compaction", () => {
     expect(result.ok).toBe(true);
     expect(streamFn).toHaveBeenCalledTimes(2);
     expect(maxActive).toBe(1);
+  });
+});
+
+describe("compaction image payload regression (#111856)", () => {
+  const IMAGE_PAYLOAD = "a".repeat(150_000);
+  const summarySettings = { enabled: true, reserveTokens: 16_384, keepRecentTokens: 2_000 };
+
+  function imageBlock(): ImageContent {
+    return { type: "image", data: IMAGE_PAYLOAD, mimeType: "image/png" };
+  }
+
+  function toolResultImage(timestamp: number): AgentMessage {
+    return {
+      role: "toolResult",
+      toolCallId: `call-${timestamp}`,
+      toolName: "imagegen",
+      content: [imageBlock()],
+      isError: false,
+      timestamp,
+    };
+  }
+
+  function buildTranscript(turnCount: number): SessionTreeEntry[] {
+    const messages: AgentMessage[] = [
+      { role: "user", content: [{ type: "text", text: "start" }], timestamp: 1 },
+    ];
+    let timestamp = 2;
+    for (let i = 0; i < turnCount; i++) {
+      messages.push(createAssistant("ok", createUsage(0), timestamp++));
+      messages.push(toolResultImage(timestamp++));
+      messages.push({
+        role: "user",
+        content: [{ type: "text", text: `turn ${i}` }],
+        timestamp: timestamp++,
+      });
+    }
+    return messages.map((message, index) => createMessageEntry(message, index));
+  }
+
+  function countImagePayloadBytes(messages: AgentMessage[]): number {
+    return messages.reduce((sum, message) => {
+      if (!("content" in message) || !Array.isArray(message.content)) {
+        return sum;
+      }
+      return (
+        sum +
+        message.content
+          .filter(
+            (block): block is ImageContent =>
+              typeof block === "object" &&
+              block !== null &&
+              "type" in block &&
+              block.type === "image",
+          )
+          .reduce((s, block) => s + (block.data?.length ?? 0), 0)
+      );
+    }, 0);
+  }
+
+  it("strips image payloads from the serialized summarization input", () => {
+    const result = prepareCompaction(buildTranscript(5), summarySettings);
+    expect(result.ok).toBe(true);
+    if (!result.ok || !result.value) {
+      throw new Error("expected a compactable preparation");
+    }
+    const preparation = result.value;
+    expect(preparation.messagesToSummarize.length).toBeGreaterThan(0);
+
+    const input = [
+      ...(preparation.messagesToSummarize ?? []),
+      ...(preparation.turnPrefixMessages ?? []),
+    ];
+    expect(countImagePayloadBytes(input)).toBeGreaterThan(0);
+
+    const serialized = serializeConversation(convertToLlm(input));
+
+    expect(serialized).not.toContain(IMAGE_PAYLOAD.slice(0, 64));
+    expect(serialized).not.toContain("image/png");
+    expect(serialized).not.toContain("data:image");
+  });
+
+  it("never sends image payloads to the summarization model", async () => {
+    const model: Model = {
+      id: "summary-model",
+      name: "Summary Model",
+      api: "test-api",
+      provider: "test-provider",
+      baseUrl: "https://example.test",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 100_000,
+      maxTokens: 8_000,
+    };
+    const seenImagePayloads: string[] = [];
+    const seenPromptText: string[] = [];
+    const streamFn = vi.fn<StreamFn>((_model, context, _options) => {
+      for (const msg of context.messages) {
+        const content = Array.isArray(msg.content) ? msg.content : [];
+        for (const block of content) {
+          if (block.type === "image") {
+            seenImagePayloads.push((block as { data?: string }).data ?? "");
+          } else if (block.type === "text") {
+            seenPromptText.push(block.text);
+          }
+        }
+      }
+      const stream = createAssistantMessageEventStream();
+      const message: AssistantMessage = {
+        role: "assistant",
+        content: [{ type: "text", text: "summary" }],
+        api: model.api,
+        provider: model.provider,
+        model: model.id,
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "stop",
+        timestamp: 1,
+      };
+      stream.push({ type: "done", reason: "stop", message });
+      stream.end();
+      return stream;
+    });
+
+    const result = prepareCompaction(buildTranscript(5), summarySettings);
+    expect(result.ok).toBe(true);
+    if (!result.ok || !result.value) {
+      throw new Error("expected a compactable preparation");
+    }
+    const preparation = result.value;
+    expect(preparation.messagesToSummarize.length).toBeGreaterThan(0);
+    expect(
+      countImagePayloadBytes([
+        ...(preparation.messagesToSummarize ?? []),
+        ...(preparation.turnPrefixMessages ?? []),
+      ]),
+    ).toBeGreaterThan(0);
+
+    const compactResult = await compact(
+      preparation,
+      model,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      streamFn,
+    );
+
+    expect(compactResult.ok).toBe(true);
+    expect(seenImagePayloads).toHaveLength(0);
+    expect(seenPromptText.join("\n")).not.toContain(IMAGE_PAYLOAD.slice(0, 64));
+    expect(seenPromptText.join("\n")).not.toContain("data:image");
   });
 });
