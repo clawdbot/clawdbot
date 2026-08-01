@@ -774,6 +774,74 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(hoisted.registerSubagentRunMock).toHaveBeenCalledTimes(1);
   });
 
+  it("bounds retained failed-spawn deletion retries without releasing admission", async () => {
+    hoisted.configOverride = createConfigOverride({
+      agents: {
+        defaults: {
+          workspace: os.tmpdir(),
+          subagents: { allowAgents: ["worker"], maxChildrenPerAgent: 1 },
+        },
+        list: [
+          { id: "main", workspace: "/tmp/workspace-main" },
+          { id: "worker", workspace: "/tmp/workspace-worker" },
+        ],
+      },
+    });
+    installActiveCountFromRegisteredRuns();
+    hoisted.quarantineFailedSubagentSpawnMock.mockImplementation(() => {
+      throw new Error("registry persistence unavailable");
+    });
+    hoisted.hasInProcessGatewayContextMock.mockReturnValue(true);
+    let deleteCalls = 0;
+    hoisted.dispatchGatewayMethodInProcessMock.mockImplementation(async (method: string) => {
+      if (method === "sessions.delete") {
+        deleteCalls += 1;
+        throw new Error("session deletion did not settle");
+      }
+      if (method.startsWith("sessions.")) {
+        return { ok: true };
+      }
+      if (method === "agent") {
+        throw new Error("ambiguous dispatch failure");
+      }
+      return {};
+    });
+
+    const firstResult = await spawnReservedWorker("quarantine-persist-delete-outage");
+    expect(firstResult).toMatchObject({
+      status: "error",
+      reservedCleanup: { sessionDeletion: "indeterminate" },
+    });
+    expect(hoisted.quarantineFailedSubagentSpawnMock).toHaveBeenCalledTimes(1);
+    const provisionalCleanupAttempts = deleteCalls;
+
+    const blockedResult = await spawnOrdinaryWorker("while-retained-proof-missing");
+    expect(blockedResult.status).toBe("forbidden");
+    expect(blockedResult.error).toContain("max active children");
+
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      await spawnFailureQuarantine.reconcileRetainedFailedSpawnAdmissionsForTests();
+    }
+
+    expect(deleteCalls - provisionalCleanupAttempts).toBe(30);
+    expect(spawnFailureQuarantine.inspectRetainedFailedSpawnAdmissions()).toEqual([
+      expect.objectContaining({
+        childSessionKey: "agent:worker:subagent:quarantine-persist-delete-outage",
+        attempts: 30,
+        maxAttempts: 30,
+        status: "exhausted",
+        retryScheduled: false,
+      }),
+    ]);
+
+    await spawnFailureQuarantine.reconcileRetainedFailedSpawnAdmissionsForTests();
+    expect(deleteCalls - provisionalCleanupAttempts).toBe(30);
+    const stillBlockedResult = await spawnOrdinaryWorker("after-retained-retries-exhaust");
+    expect(stillBlockedResult.status).toBe("forbidden");
+    expect(stillBlockedResult.error).toContain("max active children");
+    expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
+  });
+
   it("ignores caller-supplied provisional-count fields outside the shared admission owner", async () => {
     hoisted.configOverride = createConfigOverride({
       agents: {

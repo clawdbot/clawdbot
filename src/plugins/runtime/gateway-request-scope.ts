@@ -1,5 +1,6 @@
 // Gateway request scope tracks request-local plugin runtime context across async work.
 import { AsyncLocalStorage } from "node:async_hooks";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type {
   GatewayRequestContext,
   GatewayRequestOptions,
@@ -13,6 +14,7 @@ export type ReservedSubagentRequesterOwnershipEvidence = {
   sessionId?: string;
   lifecycleRevision?: string;
   createdAt?: number;
+  resolveCurrentOwnerPluginId: (params: { entry: SessionEntry; sessionKey: string }) => string;
 };
 
 type PluginRuntimeGatewayRequestScope = {

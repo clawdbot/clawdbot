@@ -1,9 +1,13 @@
 // Gateway plugin reserved-spawn tests lock the narrow Plugin SDK to core seam.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { SessionEntry } from "../config/sessions/types.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import type { PluginRegistry } from "../plugins/registry-types.js";
 import {
   withPluginRuntimeGatewayRequestScope,
   withPluginRuntimePluginIdScope,
 } from "../plugins/runtime/gateway-request-scope.js";
+import { resolveReservedSpawnRequesterOwnerPluginId } from "../plugins/session-ownership.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 
 const spawnSubagentDirect = vi.hoisted(() => vi.fn());
@@ -39,6 +43,7 @@ type RequesterOwnershipEvidence = {
   sessionId?: string;
   lifecycleRevision?: string;
   createdAt?: number;
+  resolveCurrentOwnerPluginId: (params: { entry: SessionEntry; sessionKey: string }) => string;
 };
 
 const reservation = {
@@ -62,6 +67,45 @@ function withReservedPluginScope<T>(
     },
     () => withPluginRuntimePluginIdScope("agentic-os", run),
   );
+}
+
+function createHarnessOwnerRegistry(ownerPluginId = "agentic-os"): PluginRegistry {
+  const registry = createEmptyPluginRegistry();
+  registry.agentHarnesses.push({
+    pluginId: ownerPluginId,
+    pluginName: "Agentic OS",
+    source: "test",
+    harness: {
+      id: "codex",
+      label: "Codex",
+    } as PluginRegistry["agentHarnesses"][number]["harness"],
+  });
+  return registry;
+}
+
+function lockedHarnessRequesterOwnership(params: {
+  registry: Pick<PluginRegistry, "agentHarnesses">;
+  sessionKey: string;
+  sessionId: string;
+  lifecycleRevision: string;
+  createdAt: number;
+  pluginId?: string;
+}): RequesterOwnershipEvidence {
+  const pluginId = params.pluginId ?? "agentic-os";
+  return {
+    ownerPluginId: pluginId,
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+    lifecycleRevision: params.lifecycleRevision,
+    createdAt: params.createdAt,
+    resolveCurrentOwnerPluginId: ({ entry, sessionKey }) =>
+      resolveReservedSpawnRequesterOwnerPluginId({
+        entry,
+        pluginId,
+        registry: params.registry,
+        sessionKey,
+      }),
+  };
 }
 
 describe("createGatewaySubagentRuntime.spawnReserved", () => {
@@ -531,6 +575,7 @@ describe("createGatewaySubagentRuntime.spawnReserved", () => {
       childSessionKey: "agent:worker:subagent:locked-harness-reserved-child",
       runId: "locked-harness-reserved-run",
     };
+    const registry = createHarnessOwnerRegistry();
     loadSessionEntryReadOnly.mockReturnValue({
       cfg: {
         agents: {
@@ -557,13 +602,13 @@ describe("createGatewaySubagentRuntime.spawnReserved", () => {
       withReservedPluginScope(
         () => createGatewaySubagentRuntime().spawnReserved(lockedReservation),
         new Map(),
-        {
-          ownerPluginId: "agentic-os",
+        lockedHarnessRequesterOwnership({
+          registry,
           sessionKey: lockedReservation.requesterSessionKey,
           sessionId: "locked-harness-session",
           lifecycleRevision: "7",
           createdAt: 3,
-        },
+        }),
       ),
     ).resolves.toMatchObject({
       childSessionKey: lockedReservation.childSessionKey,
@@ -580,6 +625,7 @@ describe("createGatewaySubagentRuntime.spawnReserved", () => {
       childSessionKey: "agent:worker:subagent:locked-harness-replaced-child",
       runId: "locked-harness-replaced-run",
     };
+    const registry = createHarnessOwnerRegistry();
     const loaded = {
       cfg: {
         agents: {
@@ -607,16 +653,159 @@ describe("createGatewaySubagentRuntime.spawnReserved", () => {
       withReservedPluginScope(
         () => createGatewaySubagentRuntime().spawnReserved(lockedReservation),
         new Map(),
-        {
-          ownerPluginId: "agentic-os",
+        lockedHarnessRequesterOwnership({
+          registry,
           sessionKey: lockedReservation.requesterSessionKey,
           sessionId: "locked-harness-session",
           lifecycleRevision: "7",
           createdAt: 3,
-        },
+        }),
       ),
     ).rejects.toThrow("changed while starting reserved subagent work");
 
+    expect(spawnSubagentDirect).not.toHaveBeenCalled();
+  });
+
+  it("rejects a wrapper-validated locked-harness requester when harness ownership changes after admission", async () => {
+    const lockedReservation = {
+      ...reservation,
+      requesterSessionKey: "agent:main:harness:codex:thread-1",
+      childSessionKey: "agent:worker:subagent:locked-harness-derived-owner-changed-child",
+      runId: "locked-harness-derived-owner-changed-run",
+    };
+    const registry = createHarnessOwnerRegistry();
+    const loaded = {
+      cfg: {
+        agents: {
+          defaults: { subagents: { allowAgents: ["worker"] } },
+          entries: { main: {}, worker: {} },
+        },
+      },
+      entry: {
+        sessionId: "locked-harness-session",
+        lifecycleRevision: "7",
+        createdAt: 3,
+        agentHarnessId: "codex",
+        modelSelectionLocked: true,
+      },
+    };
+    loadSessionEntryReadOnly.mockReturnValueOnce(loaded).mockImplementationOnce(() => {
+      registry.agentHarnesses[0]!.pluginId = "foreign-plugin";
+      return loaded;
+    });
+
+    await expect(
+      withReservedPluginScope(
+        () => createGatewaySubagentRuntime().spawnReserved(lockedReservation),
+        new Map(),
+        lockedHarnessRequesterOwnership({
+          registry,
+          sessionKey: lockedReservation.requesterSessionKey,
+          sessionId: "locked-harness-session",
+          lifecycleRevision: "7",
+          createdAt: 3,
+        }),
+      ),
+    ).rejects.toThrow('is owned by plugin "foreign-plugin", not "agentic-os"');
+
+    expect(loadSessionEntryReadOnly).toHaveBeenCalledTimes(2);
+    expect(spawnSubagentDirect).not.toHaveBeenCalled();
+  });
+
+  it("rejects a wrapper-validated locked-harness requester when harness ownership changes even with unchanged explicit owner", async () => {
+    const lockedReservation = {
+      ...reservation,
+      requesterSessionKey: "agent:main:harness:codex:thread-1",
+      childSessionKey: "agent:worker:subagent:locked-harness-explicit-owner-stale-child",
+      runId: "locked-harness-explicit-owner-stale-run",
+    };
+    const registry = createHarnessOwnerRegistry();
+    const loaded = {
+      cfg: {
+        agents: {
+          defaults: { subagents: { allowAgents: ["worker"] } },
+          entries: { main: {}, worker: {} },
+        },
+      },
+      entry: {
+        pluginOwnerId: "agentic-os",
+        sessionId: "locked-harness-session",
+        lifecycleRevision: "7",
+        createdAt: 3,
+        agentHarnessId: "codex",
+        modelSelectionLocked: true,
+      },
+    };
+    loadSessionEntryReadOnly.mockReturnValueOnce(loaded).mockImplementationOnce(() => {
+      registry.agentHarnesses[0]!.pluginId = "foreign-plugin";
+      return loaded;
+    });
+
+    await expect(
+      withReservedPluginScope(
+        () => createGatewaySubagentRuntime().spawnReserved(lockedReservation),
+        new Map(),
+        lockedHarnessRequesterOwnership({
+          registry,
+          sessionKey: lockedReservation.requesterSessionKey,
+          sessionId: "locked-harness-session",
+          lifecycleRevision: "7",
+          createdAt: 3,
+        }),
+      ),
+    ).rejects.toThrow('is owned by plugin "foreign-plugin", not "agentic-os"');
+
+    expect(loadSessionEntryReadOnly).toHaveBeenCalledTimes(2);
+    expect(spawnSubagentDirect).not.toHaveBeenCalled();
+  });
+
+  it("rejects a wrapper-validated requester when current plugin ownership changes after admission", async () => {
+    const lockedReservation = {
+      ...reservation,
+      requesterSessionKey: "agent:main:harness:codex:thread-1",
+      childSessionKey: "agent:worker:subagent:locked-harness-owner-changed-child",
+      runId: "locked-harness-owner-changed-run",
+    };
+    const registry = createHarnessOwnerRegistry();
+    const loaded = {
+      cfg: {
+        agents: {
+          defaults: { subagents: { allowAgents: ["worker"] } },
+          entries: { main: {}, worker: {} },
+        },
+      },
+      entry: {
+        pluginOwnerId: "agentic-os",
+        sessionId: "locked-harness-session",
+        lifecycleRevision: "7",
+        createdAt: 3,
+        agentHarnessId: "codex",
+        modelSelectionLocked: true,
+      },
+    };
+    loadSessionEntryReadOnly.mockReturnValueOnce(loaded).mockReturnValueOnce({
+      ...loaded,
+      entry: {
+        ...loaded.entry,
+        pluginOwnerId: "foreign-plugin",
+      },
+    });
+
+    await expect(
+      withReservedPluginScope(
+        () => createGatewaySubagentRuntime().spawnReserved(lockedReservation),
+        new Map(),
+        lockedHarnessRequesterOwnership({
+          registry,
+          sessionKey: lockedReservation.requesterSessionKey,
+          sessionId: "locked-harness-session",
+          lifecycleRevision: "7",
+          createdAt: 3,
+        }),
+      ),
+    ).rejects.toThrow('is owned by plugin "foreign-plugin", not "agentic-os"');
+
+    expect(loadSessionEntryReadOnly).toHaveBeenCalledTimes(2);
     expect(spawnSubagentDirect).not.toHaveBeenCalled();
   });
 });

@@ -14,16 +14,32 @@ const RETAINED_FAILED_SPAWN_ADMISSION_KEY: unique symbol = Symbol.for(
   "openclaw.retainedFailedSpawnAdmissionSlots",
 );
 const RETAINED_FAILED_SPAWN_ADMISSION_RETRY_MS = 1_000;
+const RETAINED_FAILED_SPAWN_ADMISSION_MAX_ATTEMPTS = 30;
+
+type RetainedFailedSpawnAdmissionStatus = "retrying" | "exhausted";
 
 type RetainedFailedSpawnAdmission = {
   slot: SubagentSpawnAdmissionSlot;
   childSessionKey: string;
   retryTimer?: ReturnType<typeof setTimeout>;
   inFlight: boolean;
+  attempts: number;
+  maxAttempts: number;
+  status: RetainedFailedSpawnAdmissionStatus;
 };
 
 type RetainedFailedSpawnAdmissionState = {
   holders: Map<string, RetainedFailedSpawnAdmission>;
+};
+
+export type RetainedFailedSpawnAdmissionInspection = {
+  slotId: string;
+  childSessionKey: string;
+  attempts: number;
+  maxAttempts: number;
+  status: RetainedFailedSpawnAdmissionStatus;
+  inFlight: boolean;
+  retryScheduled: boolean;
 };
 
 function getRetainedFailedSpawnAdmissionState(): RetainedFailedSpawnAdmissionState {
@@ -33,8 +49,16 @@ function getRetainedFailedSpawnAdmissionState(): RetainedFailedSpawnAdmissionSta
   );
 }
 
+function clearRetainedFailedSpawnAdmissionTimer(holder: RetainedFailedSpawnAdmission): void {
+  if (!holder.retryTimer) {
+    return;
+  }
+  clearTimeout(holder.retryTimer);
+  holder.retryTimer = undefined;
+}
+
 function scheduleRetainedFailedSpawnAdmission(holder: RetainedFailedSpawnAdmission): void {
-  if (holder.retryTimer) {
+  if (holder.retryTimer || holder.status === "exhausted") {
     return;
   }
   holder.retryTimer = setTimeout(() => {
@@ -48,20 +72,22 @@ async function reconcileRetainedFailedSpawnAdmission(
   holder: RetainedFailedSpawnAdmission,
 ): Promise<void> {
   const state = getRetainedFailedSpawnAdmissionState();
-  if (state.holders.get(holder.slot.id) !== holder || holder.inFlight) {
+  if (
+    state.holders.get(holder.slot.id) !== holder ||
+    holder.inFlight ||
+    holder.status === "exhausted"
+  ) {
     return;
   }
   holder.inFlight = true;
+  holder.attempts += 1;
   try {
     if (
       await cleanupProvisionalSession(holder.childSessionKey, {
         deleteTranscript: true,
       })
     ) {
-      if (holder.retryTimer) {
-        clearTimeout(holder.retryTimer);
-        holder.retryTimer = undefined;
-      }
+      clearRetainedFailedSpawnAdmissionTimer(holder);
       state.holders.delete(holder.slot.id);
       holder.slot.release();
       return;
@@ -70,6 +96,11 @@ async function reconcileRetainedFailedSpawnAdmission(
     holder.inFlight = false;
   }
   if (state.holders.get(holder.slot.id) === holder) {
+    if (holder.attempts >= holder.maxAttempts) {
+      holder.status = "exhausted";
+      clearRetainedFailedSpawnAdmissionTimer(holder);
+      return;
+    }
     scheduleRetainedFailedSpawnAdmission(holder);
   }
 }
@@ -87,6 +118,9 @@ export function retainFailedSpawnAdmissionSlotUntilDeletion(params: {
     slot: params.slot,
     childSessionKey: params.childSessionKey,
     inFlight: false,
+    attempts: 0,
+    maxAttempts: RETAINED_FAILED_SPAWN_ADMISSION_MAX_ATTEMPTS,
+    status: "retrying",
   };
   state.holders.set(params.slot.id, holder);
   scheduleRetainedFailedSpawnAdmission(holder);
@@ -97,12 +131,27 @@ export async function reconcileRetainedFailedSpawnAdmissionsForTests(): Promise<
   await Promise.all([...state.holders.values()].map(reconcileRetainedFailedSpawnAdmission));
 }
 
+export function inspectRetainedFailedSpawnAdmissions(): RetainedFailedSpawnAdmissionInspection[] {
+  const state = getRetainedFailedSpawnAdmissionState();
+  return [...state.holders.values()].map((holder) => ({
+    slotId: holder.slot.id,
+    childSessionKey: holder.childSessionKey,
+    attempts: holder.attempts,
+    maxAttempts: holder.maxAttempts,
+    status: holder.status,
+    inFlight: holder.inFlight,
+    retryScheduled: Boolean(holder.retryTimer),
+  }));
+}
+
+export function snapshotRetainedFailedSpawnAdmissionsForTests(): RetainedFailedSpawnAdmissionInspection[] {
+  return inspectRetainedFailedSpawnAdmissions();
+}
+
 export function resetRetainedFailedSpawnAdmissionsForTests(): void {
   const state = getRetainedFailedSpawnAdmissionState();
   for (const holder of state.holders.values()) {
-    if (holder.retryTimer) {
-      clearTimeout(holder.retryTimer);
-    }
+    clearRetainedFailedSpawnAdmissionTimer(holder);
     holder.slot.release();
   }
   state.holders.clear();

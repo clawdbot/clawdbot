@@ -244,6 +244,17 @@ function assertReservedSubagentRequesterOwned(params: {
         `Plugin "${params.pluginId}" cannot spawn a reserved child from unvalidated requester session "${params.requesterSessionKey}".`,
       );
     }
+    const currentOwnerPluginId = requesterOwnership.resolveCurrentOwnerPluginId({
+      entry,
+      sessionKey: params.requesterSessionKey,
+    });
+    if (currentOwnerPluginId !== params.pluginId) {
+      throw new Error(
+        `Requester session "${params.requesterSessionKey}" is owned by plugin "${
+          currentOwnerPluginId ?? "<none>"
+        }", not "${params.pluginId}".`,
+      );
+    }
     const identityChanged =
       (requesterOwnership.sessionId !== undefined &&
         entry.sessionId !== requesterOwnership.sessionId) ||
