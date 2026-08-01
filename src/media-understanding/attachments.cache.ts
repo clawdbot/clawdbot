@@ -20,7 +20,10 @@ import {
   MediaFetchError,
 } from "../media/fetch.js";
 import { getDefaultMediaLocalRoots } from "../media/local-roots.js";
-import { resolveInboundMediaReference } from "../media/media-reference.js";
+import {
+  classifyMediaReferenceSource,
+  resolveInboundMediaReference,
+} from "../media/media-reference.js";
 import { buildRandomTempFilePath } from "../plugin-sdk/temp-path.js";
 import { normalizeAttachmentPath } from "./attachments.normalize.js";
 import type { MediaAttachment } from "./types.js";
@@ -61,6 +64,21 @@ type AttachmentCacheEntry = {
 };
 
 let defaultLocalPathRoots: readonly string[] | undefined;
+
+// Channels save inbound media locally and deliver the store reference as the
+// attachment `url` (same carrier the image path reads in images.media-refs.ts).
+// It is a local store identity, and the guarded fetch rejects any non-HTTP
+// scheme, so routing it to the remote fetcher loses the already-downloaded file.
+function inboundStoreRef(url: string | undefined): string | undefined {
+  const value = url?.trim();
+  return value && classifyMediaReferenceSource(value).isMediaStoreUrl ? value : undefined;
+}
+
+/** Returns the attachment URL only when it is actually remotely fetchable. */
+function remoteFetchUrl(url: string | undefined): string | undefined {
+  const value = url?.trim();
+  return value && !inboundStoreRef(value) ? value : undefined;
+}
 
 function concreteMime(mime: string | undefined): string | undefined {
   const normalized = mime?.trim();
@@ -144,7 +162,7 @@ export class MediaAttachmentCache {
     timeoutMs: number;
   }): Promise<MediaBufferResult> {
     const entry = await this.ensureEntry(params.attachmentIndex);
-    const url = entry.attachment.url?.trim();
+    const url = remoteFetchUrl(entry.attachment.url);
     if (entry.buffer) {
       if (entry.buffer.length > params.maxBytes) {
         throw new MediaUnderstandingSkipError(
@@ -345,7 +363,12 @@ export class MediaAttachmentCache {
   private async resolveLocalPath(attachment: MediaAttachment): Promise<string | undefined> {
     const rawPath = normalizeAttachmentPath(attachment.path);
     if (!rawPath) {
-      return undefined;
+      // Workspace/cwd/state fallbacks below are for filesystem paths; a store
+      // reference either resolves through the media store or has no local file.
+      const storeRef = inboundStoreRef(attachment.url);
+      return storeRef
+        ? (await resolveInboundMediaReference(storeRef).catch(() => null))?.physicalPath
+        : undefined;
     }
     const inboundReference = await resolveInboundMediaReference(rawPath).catch(() => null);
     if (inboundReference) {
