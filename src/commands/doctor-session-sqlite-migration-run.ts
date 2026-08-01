@@ -293,7 +293,10 @@ export function restoreSessionSqliteMigrationRuns(params: {
   trustedTargets: readonly SessionSqliteMigrationTargetInput[];
 }): DoctorSessionSqliteRestoreReport {
   const restoreReport: DoctorSessionSqliteRestoreReport = emptyRestoreReport();
-  for (const manifestPath of listSessionSqliteMigrationManifestPaths(params.env)) {
+  // Oldest run first, so the winner lookup prefers the earliest surviving archive.
+  const manifestPaths = listSessionSqliteMigrationManifestPaths(params.env).toReversed();
+  const winningArchives = resolveWinningRestoreArchives(manifestPaths, params.trustedTargets);
+  for (const manifestPath of manifestPaths) {
     const manifest = readSessionSqliteMigrationManifest(manifestPath);
     if (!manifest) {
       continue;
@@ -307,13 +310,51 @@ export function restoreSessionSqliteMigrationRuns(params: {
       manifestPaths: [manifestPath],
     };
     restoreReport.manifestPaths.push(manifestPath);
-    restoreSessionSqliteMigrationManifest(manifest, targetManifests, manifestRestoreReport);
+    restoreSessionSqliteMigrationManifest(
+      manifest,
+      targetManifests,
+      manifestRestoreReport,
+      winningArchives,
+    );
     restoreReport.conflicts.push(...manifestRestoreReport.conflicts);
     restoreReport.restoredFiles.push(...manifestRestoreReport.restoredFiles);
     restoreReport.skippedFiles.push(...manifestRestoreReport.skippedFiles);
     writeSessionSqliteMigrationManifest({ manifest, manifestPath });
   }
   return restoreReport;
+}
+
+/**
+ * Pick the one archive that may reclaim each destination, keyed by source path.
+ * Several runs can archive the same path once a legacy writer recreates it, and restore refuses to
+ * overwrite an existing source. Without this the iteration order alone decided the winner, so a
+ * recreated empty index could beat the only pre-migration copy. Runs arrive oldest-first, and a
+ * later run can only have archived content created after the earlier run moved the original away.
+ */
+function resolveWinningRestoreArchives(
+  manifestPaths: readonly string[],
+  trustedTargets: readonly SessionSqliteMigrationTargetInput[],
+): Map<string, string> {
+  const winners = new Map<string, string>();
+  for (const manifestPath of manifestPaths) {
+    const manifest = readSessionSqliteMigrationManifest(manifestPath);
+    if (!manifest) {
+      continue;
+    }
+    for (const target of filterRestoreManifestTargets(manifest, trustedTargets)) {
+      for (const move of uniqueRestoreMoves(target)) {
+        // Match what restoreMigrationMove will accept, so an unusable archive cannot claim a
+        // destination and block a later run that still holds a restorable copy.
+        if (
+          !winners.has(move.sourcePath) &&
+          isRegularFileWithoutFollowingSymlinks(move.archivePath)
+        ) {
+          winners.set(move.sourcePath, move.archivePath);
+        }
+      }
+    }
+  }
+  return winners;
 }
 
 export function restoreSessionSqliteMigrationRun(params: {
@@ -342,7 +383,12 @@ export function restoreSessionSqliteMigrationRun(params: {
     });
     return restoreReport;
   }
-  restoreSessionSqliteMigrationManifest(manifest, targetManifests, restoreReport);
+  restoreSessionSqliteMigrationManifest(
+    manifest,
+    targetManifests,
+    restoreReport,
+    resolveWinningRestoreArchives([params.manifestPath], params.trustedTargets),
+  );
   writeSessionSqliteMigrationManifest({ manifest, manifestPath: params.manifestPath });
   return restoreReport;
 }
@@ -499,10 +545,11 @@ function restoreSessionSqliteMigrationManifest(
   manifest: SessionSqliteMigrationManifest,
   targets: readonly SessionSqliteMigrationTargetManifest[],
   restoreReport: DoctorSessionSqliteRestoreReport,
+  winningArchives: ReadonlyMap<string, string>,
 ): void {
   for (const target of targets) {
     for (const move of uniqueRestoreMoves(target)) {
-      restoreMigrationMove(move, restoreReport);
+      restoreMigrationMove(move, restoreReport, winningArchives);
     }
   }
   manifest.restore = {
@@ -527,7 +574,19 @@ function uniqueRestoreMoves(
 function restoreMigrationMove(
   move: SessionSqliteMigrationMove,
   restoreReport: DoctorSessionSqliteRestoreReport,
+  winningArchives: ReadonlyMap<string, string>,
 ): void {
+  const winningArchive = winningArchives.get(move.sourcePath);
+  if (
+    winningArchive !== undefined &&
+    winningArchive !== move.archivePath &&
+    !fs.existsSync(move.archivePath)
+  ) {
+    // Another run's archive owns this destination and this move's archive was already consumed by
+    // an earlier restore, so there is nothing left to recover or to warn about here.
+    restoreReport.skippedFiles.push(move.sourcePath);
+    return;
+  }
   const sourceExists = fs.existsSync(move.sourcePath);
   const archiveExists = fs.existsSync(move.archivePath);
   if (!sourceExists && archiveExists) {
