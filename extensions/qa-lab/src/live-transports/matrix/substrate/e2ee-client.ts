@@ -25,16 +25,12 @@ import type {
 import { buildMatrixQaMessageContent } from "./client-message-content.js";
 import {
   MATRIX_QA_E2EE_SYNC_FILTER,
+  createMatrixQaE2eeObservedEventRecorder,
   prepareMatrixQaE2eeStorage,
   runMatrixQaE2eeClientOperation,
-  shouldRecordMatrixQaObservedEventUpdate,
   type MatrixQaE2eeActorId,
 } from "./e2ee-client-internals.js";
-import {
-  findMatrixQaObservedEventMatch,
-  inheritMatrixQaReplacementRelation,
-  normalizeMatrixQaObservedEvent,
-} from "./events.js";
+import { findMatrixQaObservedEventMatch, normalizeMatrixQaObservedEvent } from "./events.js";
 import type { MatrixQaObservedEvent } from "./events.js";
 import type { MatrixQaRoomEventWaitResult } from "./sync.js";
 
@@ -320,32 +316,18 @@ export async function createMatrixQaE2eeScenarioClient(
   const client: MatrixClient = await createMatrixQaE2eeMatrixClient(params);
   const localEvents: MatrixQaObservedEvent[] = [];
   const verificationSummaries: MatrixVerificationSummary[] = [];
-  const observedEventsById = new Map<string, MatrixQaObservedEvent>();
   let primeCursorIndex = 0;
   const cursorIndexByRoom = new Map<string, number>();
 
+  const observedEventRecorder = createMatrixQaE2eeObservedEventRecorder({
+    append(event) {
+      localEvents.push(event);
+      params.observedEvents.push(event);
+    },
+  });
+
   const recordEvent = (roomId: string, event: MatrixRawEvent) => {
-    const normalized = normalizeMatrixQaObservedEvent(roomId, event);
-    const observed = normalized
-      ? inheritMatrixQaReplacementRelation({
-          event: normalized,
-          replacedEvent: normalized.replacesEventId
-            ? observedEventsById.get(normalized.replacesEventId)
-            : undefined,
-        })
-      : null;
-    if (
-      !observed ||
-      !shouldRecordMatrixQaObservedEventUpdate({
-        next: observed,
-        previous: observedEventsById.get(observed.eventId),
-      })
-    ) {
-      return;
-    }
-    observedEventsById.set(observed.eventId, observed);
-    localEvents.push(observed);
-    params.observedEvents.push(observed);
+    observedEventRecorder.record(normalizeMatrixQaObservedEvent(roomId, event));
   };
   client.on("room.message", recordEvent);
   const recordVerificationSummary = (summary: MatrixVerificationSummary) => {

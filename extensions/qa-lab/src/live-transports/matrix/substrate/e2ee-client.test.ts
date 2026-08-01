@@ -5,14 +5,16 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   MATRIX_QA_E2EE_SYNC_FILTER,
+  createMatrixQaE2eeObservedEventRecorder,
   prepareMatrixQaE2eeStorage,
   runMatrixQaE2eeClientOperation,
   shouldRecordMatrixQaObservedEventUpdate,
 } from "./e2ee-client-internals.js";
-import { findMatrixQaObservedEventMatch } from "./events.js";
+import { findMatrixQaObservedEventMatch, type MatrixQaObservedEvent } from "./events.js";
 
 const testing = {
   MATRIX_QA_E2EE_SYNC_FILTER,
+  createMatrixQaE2eeObservedEventRecorder,
   findMatrixQaObservedEventMatch,
   prepareMatrixQaE2eeStorage,
   runMatrixQaE2eeClientOperation,
@@ -130,5 +132,46 @@ describe("matrix qa e2ee client storage", () => {
         },
       }),
     ).toBe(false);
+  });
+
+  it("rehydrates a replacement when its threaded target decrypts later", () => {
+    const observed: MatrixQaObservedEvent[] = [];
+    const recorder = testing.createMatrixQaE2eeObservedEventRecorder({
+      append: (event) => observed.push(event),
+    });
+    const replacement = {
+      eventId: "$final",
+      kind: "message" as const,
+      roomId: "!room:matrix-qa.test",
+      sender: "@bot:matrix-qa.test",
+      type: "m.room.message",
+      body: "final",
+      msgtype: "m.text",
+      replacesEventId: "$preview",
+    };
+    const relation = {
+      eventId: "$root",
+      inReplyToId: "$driver",
+      isFallingBack: true,
+      relType: "m.thread",
+    };
+
+    recorder.record(replacement);
+    recorder.record({
+      eventId: "$preview",
+      kind: "notice",
+      roomId: "!room:matrix-qa.test",
+      sender: "@bot:matrix-qa.test",
+      type: "m.room.message",
+      body: "preview",
+      msgtype: "m.notice",
+      relatesTo: relation,
+    });
+
+    expect(observed).toEqual([
+      replacement,
+      expect.objectContaining({ eventId: "$preview", relatesTo: relation }),
+      { ...replacement, relatesTo: relation },
+    ]);
   });
 });
