@@ -421,6 +421,65 @@ describe("runCapability auto audio entries", () => {
     expect(seenModel).toBe("whisper-1");
   });
 
+  it("does not let auto-eligible NVIDIA override an explicit audio provider", async () => {
+    await withAudioFixture(
+      "openclaw-auto-audio-explicit-before-nvidia",
+      async ({ ctx, media, cache }) => {
+        const openAiTranscribe = vi.fn(async (req: AudioTranscriptionRequest) => ({
+          text: "explicit OpenAI transcript",
+          model: req.model ?? "unknown",
+        }));
+        const nvidiaTranscribe = vi.fn(async (req: AudioTranscriptionRequest) => ({
+          text: "automatic NVIDIA transcript",
+          model: req.model ?? "unknown",
+        }));
+        const result = await runCapability({
+          capability: "audio",
+          cfg: {
+            models: {
+              providers: {
+                openai: { apiKey: "openai-test-key", models: [] },
+                nvidia: { apiKey: "nvidia-test-key", models: [] },
+              },
+            },
+            tools: {
+              media: {
+                models: [{ provider: "openai", model: "whisper-1", capabilities: ["audio"] }],
+              },
+            },
+          } as unknown as OpenClawConfig,
+          ctx,
+          attachments: cache,
+          media,
+          providerRegistry: createProviderRegistry({
+            openai: {
+              id: "openai",
+              capabilities: ["audio"],
+              transcribeAudio: openAiTranscribe,
+            },
+            nvidia: {
+              id: "nvidia",
+              capabilities: ["audio"],
+              defaultModels: { audio: "nvidia/parakeet-ctc-1.1b-asr" },
+              autoPriority: { audio: 55 },
+              transcribeAudio: nvidiaTranscribe,
+            },
+          }),
+        });
+
+        expect(requireCapabilityOutput(result, 0)).toEqual({
+          kind: "audio.transcription",
+          attachmentIndex: 0,
+          provider: "openai",
+          model: "whisper-1",
+          text: "explicit OpenAI transcript",
+        });
+        expect(openAiTranscribe).toHaveBeenCalledOnce();
+        expect(nvidiaTranscribe).not.toHaveBeenCalled();
+      },
+    );
+  });
+
   it("lets per-request transcription hints override configured model-entry hints", async () => {
     let seenLanguage: string | undefined;
     let seenPrompt: string | undefined;

@@ -86,7 +86,6 @@ function okJson(text: string) {
 describe("NVIDIA speech HTTP runtime", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    delete process.env.NVIDIA_ASR_BASE_URL;
   });
 
   it("uses hosted Parakeet CTC by default and forwards ASR customizations", async () => {
@@ -178,36 +177,8 @@ describe("NVIDIA speech HTTP runtime", () => {
     expect(mocks.postTranscriptionRequest).not.toHaveBeenCalled();
   });
 
-  it("uses a nonblank ASR environment endpoint and ignores a blank one", async () => {
-    mocks.postTranscriptionRequest.mockImplementation(async () => okJson("environment transcript"));
-    process.env.NVIDIA_ASR_BASE_URL = " https://speech.example/v1/ ";
-
-    await transcribeNvidiaAudio(
-      transcriptionRequest({
-        baseUrl: "https://integrate.api.nvidia.com/v1",
-        model: "nvidia/parakeet-tdt-0.6b-v2",
-      }),
-    );
-
-    expect(mocks.postTranscriptionRequest.mock.calls[0]?.[0]?.url).toBe(
-      "https://speech.example/v1/audio/transcriptions",
-    );
-
-    mocks.postTranscriptionRequest.mockClear();
-    process.env.NVIDIA_ASR_BASE_URL = "   ";
-    await transcribeNvidiaAudio(transcriptionRequest());
-    expect(mocks.postTranscriptionRequest.mock.calls[0]?.[0]?.url).toContain(
-      "1598d209-5e27-4d3c-8079-4751568b1081.invocation.api.nvcf.nvidia.com",
-    );
-
-    mocks.postTranscriptionRequest.mockClear();
-    process.env.NVIDIA_ASR_BASE_URL =
-      "https://1598d209-5e27-4d3c-8079-4751568b1081.invocation.api.nvcf.nvidia.com/";
-    await transcribeNvidiaAudio(transcriptionRequest());
-    const headers = mocks.postTranscriptionRequest.mock.calls[0]?.[0]?.headers as Headers;
-    expect(headers.get("authorization")).toBe("Bearer nvapi-test");
-
-    mocks.postTranscriptionRequest.mockClear();
+  it("recognizes the versioned hosted ASR URL", async () => {
+    mocks.postTranscriptionRequest.mockResolvedValue(okJson("hosted transcript"));
     await transcribeNvidiaAudio(
       transcriptionRequest({
         baseUrl: "https://1598d209-5e27-4d3c-8079-4751568b1081.invocation.api.nvcf.nvidia.com/v1",
@@ -334,6 +305,70 @@ describe("NVIDIA speech HTTP runtime", () => {
     expect(form.get("custom_dictionary")).toBe("tomato  pronunciation");
     expect(form.get("custom_configuration")).toBe("key:value");
     expect(form.get("encoding")).toBe("LINEAR_PCM");
+  });
+
+  it("keeps separate local ASR and TTS origins keyless in one configuration", async () => {
+    const config = {
+      tools: {
+        media: {
+          models: [
+            {
+              provider: "nvidia",
+              model: "nvidia/parakeet-ctc-1.1b-asr",
+              capabilities: ["audio"],
+              baseUrl: "http://127.0.0.1:9000",
+            },
+          ],
+        },
+      },
+      tts: {
+        providers: {
+          nvidia: { baseUrl: "http://127.0.0.1:9001" },
+        },
+      },
+    };
+    mocks.postTranscriptionRequest.mockResolvedValue(okJson("local transcript"));
+    mocks.postMultipartRequest.mockResolvedValue({
+      response: new Response(Buffer.from("RIFF-local-wav"), {
+        status: 200,
+        headers: { "content-type": "audio/wav" },
+      }),
+      release: vi.fn(),
+    });
+
+    const asrConfig = config.tools.media.models[0];
+    if (!asrConfig) {
+      throw new Error("expected local ASR configuration");
+    }
+    await transcribeNvidiaAudio(
+      transcriptionRequest({
+        baseUrl: asrConfig.baseUrl,
+        model: asrConfig.model,
+        apiKey: "hosted-nvidia-secret",
+        auth: { kind: "none", source: "nvidia-self-hosted" },
+      }),
+    );
+    await magpieSynthesize({
+      text: "hello",
+      baseUrl: config.tts.providers.nvidia.baseUrl,
+      voice: "Magpie-Multilingual.EN-US.Aria",
+      language: "en-US",
+      sampleRateHz: 44_100,
+      timeoutMs: 30_000,
+    });
+
+    const asrRequest = mocks.postTranscriptionRequest.mock.calls[0]?.[0];
+    if (!asrRequest) {
+      throw new Error("expected local ASR request");
+    }
+    expect(asrRequest.url).toBe("http://127.0.0.1:9000/v1/audio/transcriptions");
+    expect((asrRequest.headers as Headers).has("authorization")).toBe(false);
+    const ttsRequest = mocks.postMultipartRequest.mock.calls[0]?.[0];
+    if (!ttsRequest) {
+      throw new Error("expected local TTS request");
+    }
+    expect(ttsRequest.url).toBe("http://127.0.0.1:9001/v1/audio/synthesize");
+    expect((ttsRequest.headers as Headers).has("authorization")).toBe(false);
   });
 
   it("rejects a successful non-audio Magpie response", async () => {

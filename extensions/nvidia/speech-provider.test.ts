@@ -36,7 +36,6 @@ describe("NVIDIA Magpie speech provider", () => {
   });
 
   it("defaults to Magpie multilingual over HTTP", () => {
-    delete process.env.NVIDIA_TTS_BASE_URL;
     const config = provider.resolveConfig!({
       rawConfig: {},
       cfg: {} as never,

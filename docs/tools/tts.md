@@ -269,19 +269,17 @@ fields shown below are canonical; each provider's own `voice`/`voiceId`/
   <Tab title="NVIDIA Magpie">
 ```json5
 {
-  messages: {
-    tts: {
-      auto: "always",
-      provider: "nvidia",
-      providers: {
-        nvidia: {
-          model: "magpie-tts-multilingual",
-          voice: "Magpie-Multilingual.EN-US.Aria",
-          language: "en-US",
-          sampleRateHz: 44100,
-          customDictionary: "OpenClaw  pronunciation",
-          customConfiguration: "key:value",
-        },
+  tts: {
+    auto: "always",
+    provider: "nvidia",
+    providers: {
+      nvidia: {
+        model: "magpie-tts-multilingual",
+        voice: "Magpie-Multilingual.EN-US.Aria",
+        language: "en-US",
+        sampleRateHz: 44100,
+        customDictionary: "OpenClaw  pronunciation",
+        customConfiguration: "key:value",
       },
     },
   },

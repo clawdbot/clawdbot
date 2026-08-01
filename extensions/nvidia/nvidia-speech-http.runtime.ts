@@ -179,14 +179,8 @@ function resolveTtsSynthesisUrl(baseUrl: string): string {
 
 function resolveAsrEndpoint(req: AudioTranscriptionRequest): AsrEndpoint {
   const requestBaseUrl = req.baseUrl ? normalizeNvidiaBaseUrl(req.baseUrl) : undefined;
-  const rawEnvBaseUrl = process.env.NVIDIA_ASR_BASE_URL?.trim() || undefined;
-  const envBaseUrl = rawEnvBaseUrl ? normalizeNvidiaBaseUrl(rawEnvBaseUrl) : undefined;
   const customBaseUrl =
-    requestBaseUrl && !isNvidiaHostedAsrBaseUrl(requestBaseUrl)
-      ? requestBaseUrl
-      : envBaseUrl && !isNvidiaHostedAsrBaseUrl(envBaseUrl)
-        ? envBaseUrl
-        : undefined;
+    requestBaseUrl && !isNvidiaHostedAsrBaseUrl(requestBaseUrl) ? requestBaseUrl : undefined;
   if (customBaseUrl) {
     const model = req.model?.trim() || NVIDIA_DEFAULT_ASR_MODEL;
     return {

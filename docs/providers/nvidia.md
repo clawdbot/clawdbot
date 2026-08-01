@@ -135,34 +135,64 @@ fields.
 
 ```json5
 {
-  messages: {
-    tts: {
-      auto: "always",
-      provider: "nvidia",
-      providers: {
-        nvidia: {
-          model: "magpie-tts-multilingual",
-          voice: "Magpie-Multilingual.EN-US.Aria",
-          language: "en-US",
-          sampleRateHz: 44100,
-          customDictionary: "OpenClaw  pronunciation",
-          customConfiguration: "key:value",
-        },
+  tts: {
+    auto: "always",
+    provider: "nvidia",
+    providers: {
+      nvidia: {
+        model: "magpie-tts-multilingual",
+        voice: "Magpie-Multilingual.EN-US.Aria",
+        language: "en-US",
+        sampleRateHz: 44100,
+        customDictionary: "OpenClaw  pronunciation",
+        customConfiguration: "key:value",
       },
     },
   },
 }
 ```
 
-For a keyless self-hosted ASR NIM, set `NVIDIA_ASR_BASE_URL` or
-`models.providers.nvidia.baseUrl` to its HTTP origin. This makes the custom
-origin visible to authentication resolution and never forwards hosted NVIDIA
-credentials to it. Set `NVIDIA_TTS_BASE_URL` for a keyless self-hosted Magpie
-NIM. A custom TTS origin receives a key only when `apiKey` is explicitly set in
-its TTS provider configuration; `NVIDIA_API_KEY` and saved NVIDIA profiles stay
-hosted-only. Hosted NVIDIA endpoints require credentials. These endpoints must
-expose the matching HTTP
-`/v1/audio/transcriptions` or `/v1/audio/synthesize` route.
+For separate keyless self-hosted ASR and TTS NIMs, configure each service at
+its owning surface. Do not use `models.providers.nvidia.baseUrl` for speech: it
+owns NVIDIA chat routing and cannot represent independent Parakeet and Magpie
+origins.
+
+```json5
+{
+  tools: {
+    media: {
+      models: [
+        {
+          provider: "nvidia",
+          model: "nvidia/parakeet-ctc-1.1b-asr",
+          capabilities: ["audio"],
+          baseUrl: "http://127.0.0.1:9000",
+        },
+      ],
+      audio: { enabled: true },
+    },
+  },
+  tts: {
+    auto: "always",
+    provider: "nvidia",
+    providers: {
+      nvidia: {
+        baseUrl: "http://127.0.0.1:9001",
+        model: "magpie-tts-multilingual",
+        voice: "Magpie-Multilingual.EN-US.Aria",
+        language: "en-US",
+      },
+    },
+  },
+}
+```
+
+Both NIM containers listen on HTTP port `9000` internally, so expose one on a
+different host port, such as `9001:9000`. OpenClaw then calls
+`http://127.0.0.1:9000/v1/audio/transcriptions` for ASR and
+`http://127.0.0.1:9001/v1/audio/synthesize` for TTS. Custom origins are keyless
+unless `tts.providers.nvidia.apiKey` is set explicitly; `NVIDIA_API_KEY` and
+saved NVIDIA profiles are only sent to NVIDIA-hosted speech endpoints.
 
 ## Featured catalog
 

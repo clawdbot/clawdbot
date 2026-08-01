@@ -1,20 +1,8 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { nvidiaMediaUnderstandingProvider } from "./audio-transcription-provider.js";
 
 describe("NVIDIA audio transcription provider", () => {
-  const savedEnv = process.env.NVIDIA_ASR_BASE_URL;
-
-  afterEach(() => {
-    if (savedEnv === undefined) {
-      delete process.env.NVIDIA_ASR_BASE_URL;
-    } else {
-      process.env.NVIDIA_ASR_BASE_URL = savedEnv;
-    }
-  });
-
   it("uses normal credential resolution for hosted ASR", () => {
-    delete process.env.NVIDIA_ASR_BASE_URL;
-
     expect(
       nvidiaMediaUnderstandingProvider.resolveAuth?.({
         provider: "nvidia",
@@ -47,18 +35,11 @@ describe("NVIDIA audio transcription provider", () => {
       }),
     ).toEqual({ kind: "none", source: "nvidia-self-hosted" });
 
-    process.env.NVIDIA_ASR_BASE_URL = "https://speech.example/v1";
-    expect(
-      nvidiaMediaUnderstandingProvider.resolveAuth?.({
-        provider: "nvidia",
-      }),
-    ).toEqual({ kind: "none", source: "nvidia-self-hosted" });
-
     expect(
       nvidiaMediaUnderstandingProvider.resolveAuth?.({
         provider: "nvidia",
         providerConfig: { baseUrl: "https://integrate.api.nvidia.com/v1", models: [] },
       }),
-    ).toEqual({ kind: "none", source: "nvidia-self-hosted" });
+    ).toBeUndefined();
   });
 });

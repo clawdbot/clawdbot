@@ -11,18 +11,13 @@ export const nvidiaMediaUnderstandingProvider: MediaUnderstandingProvider = {
   autoPriority: { audio: 55 },
   resolveAuth: ({ effectiveBaseUrl, providerConfig }) => {
     const configuredBaseUrl = effectiveBaseUrl ?? providerConfig?.baseUrl;
-    const envBaseUrl = process.env.NVIDIA_ASR_BASE_URL?.trim();
     const customConfiguredBaseUrl =
       typeof configuredBaseUrl === "string" &&
       configuredBaseUrl.trim() &&
       !isNvidiaHostedAsrBaseUrl(configuredBaseUrl)
         ? configuredBaseUrl
         : undefined;
-    const customEnvBaseUrl =
-      envBaseUrl && !isNvidiaHostedAsrBaseUrl(envBaseUrl) ? envBaseUrl : undefined;
-    return customConfiguredBaseUrl || customEnvBaseUrl
-      ? { kind: "none", source: "nvidia-self-hosted" }
-      : undefined;
+    return customConfiguredBaseUrl ? { kind: "none", source: "nvidia-self-hosted" } : undefined;
   },
   transcribeAudio: async (req) => {
     const { transcribeNvidiaAudio } = await import("./nvidia-speech-http.runtime.js");

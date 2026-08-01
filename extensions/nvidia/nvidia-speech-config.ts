@@ -37,13 +37,9 @@ export function normalizeNvidiaTtsConfig(rawConfig: Record<string, unknown>): Nv
   return {
     apiKey: normalizeResolvedSecretInputString({
       value: raw.apiKey,
-      path: "messages.tts.providers.nvidia.apiKey",
+      path: "tts.providers.nvidia.apiKey",
     }),
-    baseUrl: normalizeNvidiaBaseUrl(
-      trimToUndefined(raw.baseUrl) ??
-        trimToUndefined(process.env.NVIDIA_TTS_BASE_URL) ??
-        NVIDIA_TTS_BASE_URL,
-    ),
+    baseUrl: normalizeNvidiaBaseUrl(trimToUndefined(raw.baseUrl) ?? NVIDIA_TTS_BASE_URL),
     model: trimToUndefined(raw.model) ?? NVIDIA_DEFAULT_TTS_MODEL,
     voice,
     language:
