@@ -121,6 +121,8 @@ function resolveSlackRuntimeIdentity(params: {
   if (params.isEnterpriseInstall === true) {
     return undefined;
   }
+  // User identity has no bot_id; its human id is both the mention target and self-send dedupe
+  // source. Bot identity stays bot_id-gated so token mismatches fail closed.
   const botUserId = normalizeOptionalString(params.botUserId);
   const botId = normalizeOptionalString(params.botId);
   if (!botUserId || (params.identity === "bot" && !botId)) {
