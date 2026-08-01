@@ -58,6 +58,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Model fallback for unclassified silent provider errors:** after bounded same-model retries, route replay-safe invisible assistant failures to the next configured model without cooling down auth profiles, so transient credential-file races no longer end as silent failures. Fixes #112226. Thanks @wenrizc.
 - **Microsoft Teams message-tool replies:** keep automatic live previews from duplicating a message already delivered to the current Teams conversation, while preserving distinct follow-up text and cross-conversation sends. Fixes #116397. (#116398) Thanks @a-tokyo.
 - **Buzz plugin packaging:** keep the live QA runner on the shipped QA runner SDK surface and remove the obsolete package shrinkwrap so standalone npm and ClawHub package builds use current host exports and dependency resolutions. Thanks @shakkernerd.
 - **Control UI sharing connection isolation:** discard stale visibility and membership mutation results after switching gateways or accounts so previous-connection refreshes and errors cannot update the replacement connection. Fixes #116800. Thanks @shakkernerd.

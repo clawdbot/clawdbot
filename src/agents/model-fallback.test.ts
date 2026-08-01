@@ -874,6 +874,66 @@ describe("runWithModelFallback", () => {
     }
   });
 
+  it("does not cache unknown fallback candidate failures across turns", async () => {
+    const previous = process.env.OPENCLAW_FALLBACK_SKIP_TTL_MS;
+    process.env.OPENCLAW_FALLBACK_SKIP_TTL_MS = "60000";
+    try {
+      const cfg = makeCfg({
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai/gpt-5.4",
+              fallbacks: ["anthropic/claude-opus-4-7", "google/gemini-3.1-pro-preview"],
+            },
+          },
+        },
+      });
+      const run = vi.fn(async (provider: string, model: string) => {
+        if (provider === "openai") {
+          throw new FailoverError("primary rate limited", {
+            provider,
+            model,
+            reason: "rate_limit",
+          });
+        }
+        if (provider === "anthropic") {
+          throw new FailoverError("fallback failed without classification", {
+            provider,
+            model,
+            reason: "unknown",
+          });
+        }
+        return "ok";
+      });
+
+      for (let turn = 0; turn < 2; turn += 1) {
+        const result = await runWithModelFallback({
+          cfg,
+          provider: "openai",
+          model: "gpt-5.4",
+          sessionId: "session:unknown-no-skip",
+          run,
+        });
+        expect(result.result).toBe("ok");
+      }
+
+      expect(run.mock.calls.map(([provider, model]) => `${provider}/${model}`)).toEqual([
+        "openai/gpt-5.4",
+        "anthropic/claude-opus-4-7",
+        "google/gemini-3.1-pro-preview",
+        "openai/gpt-5.4",
+        "anthropic/claude-opus-4-7",
+        "google/gemini-3.1-pro-preview",
+      ]);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_FALLBACK_SKIP_TTL_MS;
+      } else {
+        process.env.OPENCLAW_FALLBACK_SKIP_TTL_MS = previous;
+      }
+    }
+  });
+
   it("skips auth store bootstrap when no auth profile sources exist", async () => {
     authSourceCheckMock.hasAnyAuthProfileStoreSource.mockReturnValue(false);
     const run = vi.fn().mockResolvedValueOnce("ok");
