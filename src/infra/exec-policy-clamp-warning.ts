@@ -13,6 +13,7 @@ import { resolveExecTarget } from "./exec-target-resolution.js";
 
 const EXEC_APPROVALS_DOCS_URL = "https://docs.openclaw.ai/tools/exec-approvals";
 const GLOBAL_EXEC_SCOPE_CONFIG_PATH = "tools.exec";
+const GLOBAL_REQUESTED_SECURITY_SOURCE = "tools.exec.security";
 
 function sandboxModeOwnsAutoExec(mode: string | undefined): boolean {
   return mode === "all";
@@ -47,7 +48,9 @@ function resolveDefaultAgentExecScope(params: {
   });
   const defaultAgentScope = snapshots.find(
     (snapshot) =>
-      snapshot.agentId === params.defaultAgentId &&
+      // Snapshots carry the raw roster key while resolveDefaultAgentId normalizes, so a
+      // mixed-case entry like `agents.entries.Ops` needs normalizing on both sides.
+      normalizeAgentId(snapshot.agentId) === params.defaultAgentId &&
       snapshot.configPath !== GLOBAL_EXEC_SCOPE_CONFIG_PATH,
   );
   return defaultAgentScope ?? snapshots[0];
@@ -64,10 +67,14 @@ function requestedSecurityIsModeDerived(source: string): boolean {
   return source.endsWith(".mode");
 }
 
+// `exec-policy set --security` rewrites global `tools.exec` AND host approvals defaults,
+// so it is only safe to suggest when the clamped request came from global config. For an
+// agent-scoped request it would raise the policy every other agent inherits, and for a
+// mode-derived request it would clobber the mode; both get diagnostic guidance instead.
 function buildSecurityClampRemediation(scope: ExecPolicyScopeSnapshot): string {
   if (
     hostSecuritySourceIsDefaults(scope.security.hostSource) &&
-    !requestedSecurityIsModeDerived(scope.security.requestedSource)
+    scope.security.requestedSource === GLOBAL_REQUESTED_SECURITY_SOURCE
   ) {
     return `Run "openclaw exec-policy set --security ${scope.security.requested}" to synchronize host approvals, or "openclaw exec-policy show" for details.`;
   }

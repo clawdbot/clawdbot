@@ -309,7 +309,11 @@ describe("global exec policy clamp startup warning", () => {
       defaults: { security: "allowlist", ask: "off" },
       agents: {},
     };
-    const cfg = { tools: { exec: { security: "full" } } };
+    // Annotated so the shared fixture keeps its literal types; a bare object literal
+    // widens `security` to `string` and fails `pnpm check:test-types`.
+    const cfg: Parameters<typeof buildCurrentExecPolicyClampWarning>[0] = {
+      tools: { exec: { security: "full" } },
+    };
 
     const firstStart = clampWarningFor({
       cfg,
@@ -431,6 +435,28 @@ describe("clamp warning follows the default agent's effective exec scope", () =>
     });
 
     expect(warning).toContain("agents.entries.main.tools.exec.security=full");
+    expect(warning).toContain("is clamped to allowlist");
+    // `exec-policy set --security` also rewrites global tools.exec, which every other
+    // agent inherits, so an agent-scoped clamp must not be offered that shortcut.
+    expect(warning).not.toContain("openclaw exec-policy set --security");
+    expect(warning).toContain('Run "openclaw exec-policy show" to inspect the clamping scope.');
+  });
+
+  it("matches a mixed-case roster key when selecting the default agent scope", () => {
+    const warning = clampWarningFor({
+      cfg: {
+        agents: {
+          entries: {
+            Ops: { default: true, tools: { exec: { host: "gateway", security: "full" } } },
+          },
+        },
+        tools: { exec: { host: "gateway", security: "allowlist" } },
+      },
+      approvalsPath: "/tmp/openclaw-exec-approvals.json",
+      approvals: clampedApprovals,
+    });
+
+    expect(warning).toContain("agents.entries.Ops.tools.exec.security=full");
     expect(warning).toContain("is clamped to allowlist");
   });
 
