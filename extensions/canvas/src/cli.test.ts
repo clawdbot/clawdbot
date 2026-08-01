@@ -19,11 +19,11 @@ function createCanvasCliDeps() {
   };
   const deps: CanvasCliDependencies = {
     defaultRuntime: runtime,
-    nodesCallOpts: (cmd) =>
+    nodesCallOpts: (cmd, defaults) =>
       cmd
         .option("--url <url>", "Gateway WebSocket URL")
         .option("--token <token>", "Gateway token")
-        .option("--timeout <ms>", "Timeout in ms", "10000")
+        .option("--timeout <ms>", "Timeout in ms", String(defaults?.timeoutMs ?? 10_000))
         .option("--json", "Output JSON", false),
     runNodesCommand: async (_label, action) => {
       await action();
@@ -99,6 +99,12 @@ const canvasAcknowledgementCommands = [
   },
 ] as const;
 
+const canvasInvocationCommands = [
+  ...canvasAcknowledgementCommands,
+  { args: ["snapshot"], command: "canvas.snapshot" },
+  { args: ["eval", "1 + 1"], command: "canvas.eval" },
+] as const;
+
 describe("canvas CLI", () => {
   it("registers under nodes and captures a snapshot media path", async () => {
     const program = new Command();
@@ -117,7 +123,7 @@ describe("canvas CLI", () => {
       {
         node: "ios-node",
         format: "jpg",
-        timeout: "10000",
+        timeout: "60000",
         json: false,
         invokeTimeout: "20000",
       },
@@ -131,6 +137,7 @@ describe("canvas CLI", () => {
         },
         timeoutMs: 20000,
       },
+      { transportTimeoutMs: 60_000 },
     );
     expect(writtenFiles).toHaveLength(1);
     const [writtenFile] = writtenFiles;
@@ -220,6 +227,149 @@ describe("canvas CLI", () => {
 
     expect(runtime.log).toHaveBeenCalledWith("");
     expect(runtime.log).not.toHaveBeenCalledWith("canvas eval ok");
+  });
+
+  it.each(canvasInvocationCommands)(
+    "keeps the default $command Gateway deadline longer than the node deadline",
+    async ({ args, command }) => {
+      const program = new Command();
+      program.exitOverride();
+      const { deps } = createCanvasCliDeps();
+
+      registerNodesCanvasCommands(program.command("nodes"), deps);
+      await program.parseAsync(["nodes", "canvas", ...args, "--node", "ios-node"], {
+        from: "user",
+      });
+
+      const invokeTimeoutMs = command === "canvas.snapshot" ? 20_000 : 30_000;
+      const transportTimeoutMs = command === "canvas.snapshot" ? 60_000 : 40_000;
+      expect(deps.callGatewayCli).toHaveBeenCalledWith(
+        "node.invoke",
+        expect.any(Object),
+        expect.objectContaining({ command, timeoutMs: invokeTimeoutMs }),
+        { transportTimeoutMs },
+      );
+    },
+  );
+
+  it.each(canvasInvocationCommands)(
+    "keeps an explicit $command Gateway deadline longer than the node deadline",
+    async ({ args, command }) => {
+      const program = new Command();
+      program.exitOverride();
+      const { deps } = createCanvasCliDeps();
+
+      registerNodesCanvasCommands(program.command("nodes"), deps);
+      await program.parseAsync(
+        ["nodes", "canvas", ...args, "--node", "ios-node", "--invoke-timeout", "35000"],
+        { from: "user" },
+      );
+
+      expect(deps.callGatewayCli).toHaveBeenCalledWith(
+        "node.invoke",
+        expect.any(Object),
+        expect.objectContaining({ command, timeoutMs: 35_000 }),
+        { transportTimeoutMs: command === "canvas.snapshot" ? 60_000 : 45_000 },
+      );
+    },
+  );
+
+  it("preserves an explicit Gateway timeout longer than the node deadline and grace", async () => {
+    const program = new Command();
+    program.exitOverride();
+    const { deps } = createCanvasCliDeps();
+
+    registerNodesCanvasCommands(program.command("nodes"), deps);
+    await program.parseAsync(
+      [
+        "nodes",
+        "canvas",
+        "present",
+        "--node",
+        "ios-node",
+        "--invoke-timeout",
+        "35000",
+        "--timeout",
+        "120000",
+      ],
+      { from: "user" },
+    );
+
+    expect(deps.callGatewayCli).toHaveBeenCalledWith(
+      "node.invoke",
+      expect.objectContaining({ timeout: "120000" }),
+      expect.objectContaining({ timeoutMs: 35_000 }),
+      { transportTimeoutMs: 120_000 },
+    );
+  });
+
+  it("preserves the snapshot command's existing longer Gateway timeout", async () => {
+    const program = new Command();
+    program.exitOverride();
+    const { deps } = createCanvasCliDeps();
+    deps.nodesCallOpts = createDefaultCanvasCliDependencies().nodesCallOpts;
+
+    registerNodesCanvasCommands(program.command("nodes"), deps);
+    await program.parseAsync(["nodes", "canvas", "snapshot", "--node", "ios-node"], {
+      from: "user",
+    });
+
+    expect(deps.callGatewayCli).toHaveBeenCalledWith(
+      "node.invoke",
+      expect.objectContaining({ timeout: "60000" }),
+      expect.objectContaining({ timeoutMs: 20_000 }),
+      { transportTimeoutMs: 60_000 },
+    );
+  });
+
+  it("preserves an invalid explicit Gateway timeout for its existing validation", async () => {
+    const program = new Command();
+    program.exitOverride();
+    const { deps } = createCanvasCliDepsWithDefaultParsers();
+    deps.callGatewayCli = vi.fn(async (_method, _opts, _params, callOpts) => {
+      if (callOpts?.transportTimeoutMs !== undefined) {
+        throw new Error("invalid Gateway timeout was replaced");
+      }
+      throw new Error('Invalid --timeout. Received: "20ms".');
+    });
+
+    registerNodesCanvasCommands(program.command("nodes"), deps);
+
+    await expect(
+      program.parseAsync(
+        ["nodes", "canvas", "present", "--node", "ios-node", "--timeout", "20ms"],
+        {
+          from: "user",
+        },
+      ),
+    ).rejects.toThrow('Invalid --timeout. Received: "20ms".');
+  });
+
+  it("caps oversized node and Gateway deadlines to the timer-safe maximum", async () => {
+    const program = new Command();
+    program.exitOverride();
+    const { deps } = createCanvasCliDepsWithDefaultParsers();
+
+    registerNodesCanvasCommands(program.command("nodes"), deps);
+    await program.parseAsync(
+      [
+        "nodes",
+        "canvas",
+        "present",
+        "--node",
+        "ios-node",
+        "--invoke-timeout",
+        String(Number.MAX_SAFE_INTEGER),
+      ],
+      { from: "user" },
+    );
+
+    expect(deps.callGatewayCli).toHaveBeenCalledWith(
+      "node.invoke",
+      expect.any(Object),
+      expect.objectContaining({ timeoutMs: 2_147_000_000 }),
+      { transportTimeoutMs: 2_147_000_000 },
+    );
   });
 
   it.each(canvasAcknowledgementCommands)(
@@ -328,6 +478,7 @@ describe("canvas CLI", () => {
           quality: Number(quality),
         }),
       }),
+      { transportTimeoutMs: 60_000 },
     );
   });
 
