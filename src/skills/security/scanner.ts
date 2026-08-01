@@ -164,6 +164,7 @@ type SourceRule = {
 };
 
 const DANGEROUS_CHILD_PROCESS_CALL_NAMES = "exec|execSync|spawn|spawnSync|execFile|execFileSync";
+const JAVASCRIPT_IDENTIFIER_PATTERN = "[$_\\p{ID_Start}][$\\u200C\\u200D\\p{ID_Continue}]*";
 const DANGEROUS_CHILD_PROCESS_CALL_PATTERN = new RegExp(
   `\\b(${DANGEROUS_CHILD_PROCESS_CALL_NAMES})\\s*\\(`,
 );
@@ -299,16 +300,16 @@ const CHILD_PROCESS_ALIAS_DECLARATIONS = [
   {
     declaration: /\bimport\s*\{([^}]*)\}\s*from\s*["'](?:node:)?child_process["']/g,
     alias: new RegExp(
-      `\\b(?:${DANGEROUS_CHILD_PROCESS_CALL_NAMES})\\s+as\\s+([A-Za-z_$][\\w$]*)`,
-      "g",
+      `\\b(?:${DANGEROUS_CHILD_PROCESS_CALL_NAMES})\\s+as\\s+(${JAVASCRIPT_IDENTIFIER_PATTERN})`,
+      "gu",
     ),
   },
   {
     declaration:
       /\b(?:const|let|var)\s*\{([^}]*)\}\s*=\s*require\s*\(\s*["'](?:node:)?child_process["']\s*\)/g,
     alias: new RegExp(
-      `\\b(?:${DANGEROUS_CHILD_PROCESS_CALL_NAMES})\\s*:\\s*([A-Za-z_$][\\w$]*)`,
-      "g",
+      `\\b(?:${DANGEROUS_CHILD_PROCESS_CALL_NAMES})\\s*:\\s*(${JAVASCRIPT_IDENTIFIER_PATTERN})`,
+      "gu",
     ),
   },
 ] as const;
@@ -468,14 +469,16 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
     const pattern =
       rule.ruleId === "dangerous-exec" ? buildDangerousExecPattern(heuristicSource) : rule.pattern;
     for (const [i, line] of lines.entries()) {
-      const matches = line.matchAll(
+      // Match execution calls without comments, but retain the raw line as finding evidence.
+      const scanLine = rule.ruleId === "dangerous-exec" ? (heuristicLines[i] ?? "") : line;
+      const matches = scanLine.matchAll(
         new RegExp(
           pattern.source,
           pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`,
         ),
       );
       for (const match of matches) {
-        if (rule.ruleId === "dangerous-exec" && isBenignMemberExecMatch(line, match)) {
+        if (rule.ruleId === "dangerous-exec" && isBenignMemberExecMatch(scanLine, match)) {
           continue;
         }
 

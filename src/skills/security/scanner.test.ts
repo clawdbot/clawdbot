@@ -179,6 +179,13 @@ const { spawn: launch } = require("child_process");
 launch("node", ["unsafe.js"]);
 `,
       },
+      {
+        name: "Unicode import alias",
+        source: `
+import { exec as 运行 } from "node:child_process";
+运行("echo unsafe");
+`,
+      },
     ];
 
     for (const testCase of cases) {
@@ -350,6 +357,33 @@ worker.run();
 `;
     const findings = scanSource(source, "plugin.ts");
     expectRulePresence(findings, "dangerous-exec", false);
+  });
+
+  it("does not treat commented child_process calls as executable", () => {
+    const source = `
+import { exec, spawn as launch } from "node:child_process";
+// exec("echo unsafe");
+/*
+launch("node", ["unsafe.js"]);
+*/
+`;
+    const findings = scanSource(source, "plugin.ts");
+    expectRulePresence(findings, "dangerous-exec", false);
+  });
+
+  it("keeps alias calls after comment markers inside string literals", () => {
+    const source = `
+import { exec as run, spawn as launch } from "node:child_process";
+const url = "https://example.com";
+const marker = "/* retained */";
+run("echo unsafe");
+launch("node", ["unsafe.js"]);
+`;
+    const findings = scanSource(source, "plugin.ts").filter(
+      (candidate) => candidate.ruleId === "dangerous-exec",
+    );
+
+    expect(findings.map((finding) => finding.line)).toEqual([5, 6]);
   });
 
   it("does not use full-line comments as source-rule context", () => {
