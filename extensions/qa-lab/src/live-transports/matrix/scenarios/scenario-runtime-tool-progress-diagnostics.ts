@@ -20,7 +20,10 @@ export function findMatrixQaUnexpectedWorkingEvents(params: {
     if (event.eventId === params.previewEventId || event.eventId === params.finalEventId) {
       return false;
     }
-    return event.relatesTo?.eventId !== params.previewEventId;
+    return (
+      event.replacesEventId !== params.previewEventId &&
+      event.relatesTo?.eventId !== params.previewEventId
+    );
   });
 }
 
@@ -66,6 +69,7 @@ function describeMatrixQaToolProgressCandidate(event: MatrixQaObservedEvent) {
     : "<none>";
   return [
     `${event.eventId} kind=${event.kind}`,
+    `replaces=${event.replacesEventId ?? "<none>"}`,
     `relation=${relation}`,
     `body=${JSON.stringify(truncateMatrixQaToolProgressBody(event.body))}`,
   ].join(" ");
@@ -93,6 +97,7 @@ export function buildMatrixQaToolProgressTimeoutMessage(params: {
       }
       return (
         event.eventId === params.previewEventId ||
+        event.replacesEventId === params.previewEventId ||
         event.relatesTo?.eventId === params.previewEventId ||
         event.body !== undefined
       );
@@ -152,7 +157,10 @@ export function buildMatrixQaToolProgressFinalTimeoutMessage(params: {
       ) {
         return false;
       }
-      return event.relatesTo?.eventId === params.previewEventId;
+      return (
+        event.replacesEventId === params.previewEventId ||
+        event.relatesTo?.eventId === params.previewEventId
+      );
     })
     .slice(-8);
   const candidateDetails =

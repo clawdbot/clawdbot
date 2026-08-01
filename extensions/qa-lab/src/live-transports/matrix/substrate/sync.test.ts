@@ -196,7 +196,16 @@ describe("matrix sync helpers", () => {
                       event_id: "$preview",
                       sender: "@sut:matrix-qa.test",
                       type: "m.room.message",
-                      content: { body: "preview", msgtype: "m.notice" },
+                      content: {
+                        body: "preview",
+                        msgtype: "m.notice",
+                        "m.relates_to": {
+                          rel_type: "m.thread",
+                          event_id: "$root",
+                          is_falling_back: true,
+                          "m.in_reply_to": { event_id: "$driver" },
+                        },
+                      },
                     },
                     {
                       event_id: "$final",
@@ -205,10 +214,10 @@ describe("matrix sync helpers", () => {
                       content: {
                         body: "final",
                         msgtype: "m.text",
+                        "m.new_content": { body: "final", msgtype: "m.text" },
                         "m.relates_to": {
                           rel_type: "m.replace",
                           event_id: "$preview",
-                          "m.new_content": { body: "final", msgtype: "m.text" },
                         },
                       },
                     },
@@ -242,7 +251,17 @@ describe("matrix sync helpers", () => {
     });
 
     expect(preview.event.eventId).toBe("$preview");
-    expect(finalized.event.eventId).toBe("$final");
+    expect(finalized.event).toMatchObject({
+      body: "final",
+      eventId: "$final",
+      replacesEventId: "$preview",
+      relatesTo: {
+        eventId: "$root",
+        inReplyToId: "$driver",
+        isFallingBack: true,
+        relType: "m.thread",
+      },
+    });
     expect(calls).toBe(1);
   });
 

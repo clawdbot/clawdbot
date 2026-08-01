@@ -104,12 +104,7 @@ describe("matrix observed event normalization", () => {
       formattedBody: undefined,
       msgtype: "m.text",
       membership: undefined,
-      relatesTo: {
-        eventId: "$draft",
-        inReplyToId: undefined,
-        isFallingBack: undefined,
-        relType: "m.replace",
-      },
+      replacesEventId: "$draft",
     });
   });
 
