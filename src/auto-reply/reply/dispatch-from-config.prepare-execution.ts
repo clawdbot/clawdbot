@@ -18,7 +18,10 @@ import type { ReplyPayload } from "../reply-payload.js";
 import type { ChooseDispatchRouteReadyState } from "./dispatch-from-config.choose-route.js";
 import { extendPreparedDispatchState } from "./dispatch-from-config.phase-state.js";
 import { loadGetReplyFromConfigRuntime } from "./dispatch-from-config.runtime-loaders.js";
-import { withFullRuntimeReplyConfig } from "./get-reply-fast-path.js";
+import {
+  withFullRuntimeReplyConfig,
+  withPublishedRuntimeReplyConfig,
+} from "./get-reply-fast-path.js";
 import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 
@@ -26,37 +29,21 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
   const {
     cfg,
     ctx,
-    deliveryChannel,
-    deliverySuppressionReason,
     dispatcher,
-    getDispatchAbortOperation,
-    getDispatchReplyOperation,
-    hasAskUserPayload,
     isDispatchOperationAborted,
     markInboundDedupeReplayUnsafe,
     markProgress,
     noteCommentaryProgress,
     params,
-    recordAgentDispatchStarted,
-    replyRoute,
-    routeReplyChannel,
     sendPayloadAsync,
     sendPolicyDenied,
-    sessionAgentId,
     sessionKey,
-    sessionStoreEntry,
-    sessionTtsAuto,
-    shouldDeliverVerboseProgressDespiteSourceSuppression,
-    shouldEmitFullVerboseProgress,
     shouldEmitVerboseProgress,
     shouldRouteToOriginating,
-    shouldSendToolStartStatuses,
     shouldSendToolSummaries,
     shouldSendVerboseProgressMessages,
-    sourceReplyPolicy,
     suppressAutomaticSourceDelivery,
     suppressDelivery,
-    traceReplyPhase,
     turnLedger,
   } = state;
   // When automatic source delivery is suppressed, still let the agent process
@@ -64,7 +51,7 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
   // outbound source delivery.
   if (suppressDelivery) {
     logVerbose(
-      `Delivery suppressed by ${deliverySuppressionReason} for session ${sessionStoreEntry.sessionKey ?? sessionKey ?? "unknown"} — agent will still process the message`,
+      `Delivery suppressed by ${state.deliverySuppressionReason} for session ${state.sessionStoreEntry.sessionKey ?? sessionKey ?? "unknown"} — agent will still process the message`,
     );
   }
 
@@ -98,7 +85,7 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     const normalizedLabel = normalizeWorkingLabel(label);
     if (
       !shouldEmitVerboseProgress() ||
-      !shouldSendToolStartStatuses ||
+      !state.shouldSendToolStartStatuses ||
       !normalizedLabel ||
       toolStartStatusCount >= 2 ||
       toolStartStatusesSent.has(normalizedLabel)
@@ -175,15 +162,19 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
   // Track accumulated block text for TTS generation after streaming completes.
   // When block streaming succeeds, there's no final reply, so we need to generate
   // TTS audio separately from the accumulated block content.
-  let accumulatedBlockText = "";
-  let accumulatedBlockTtsText = "";
-  let blockCount = 0;
+  const progressState = {
+    accumulatedBlockText: "",
+    accumulatedBlockTtsText: "",
+    blockCount: 0,
+    hasPendingDirectBlockReplyDelivery: false,
+    progressCallbackStartTail: Promise.resolve(),
+  };
   const cleanBlockTtsDirectiveText = shouldCleanTtsDirectiveText({
     cfg,
-    ttsAuto: sessionTtsAuto,
-    agentId: sessionAgentId,
-    channelId: deliveryChannel,
-    accountId: replyRoute.accountId,
+    ttsAuto: state.sessionTtsAuto,
+    agentId: state.sessionAgentId,
+    channelId: state.deliveryChannel,
+    accountId: state.replyRoute.accountId,
   })
     ? createTtsDirectiveTextStreamCleaner()
     : undefined;
@@ -211,7 +202,7 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     if (execApproval && typeof execApproval === "object" && !Array.isArray(execApproval)) {
       return payload;
     }
-    if (hasAskUserPayload(payload)) {
+    if (state.hasAskUserPayload(payload)) {
       return payload;
     }
     if (isFastModeAutoProgressPayload(payload)) {
@@ -227,16 +218,16 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
   };
   const typing = resolveRunTypingPolicy({
     requestedPolicy: params.replyOptions?.typingPolicy,
-    suppressTyping: sourceReplyPolicy.suppressTyping,
-    originatingChannel: routeReplyChannel,
+    suppressTyping: state.sourceReplyPolicy.suppressTyping,
+    originatingChannel: state.routeReplyChannel,
     systemEvent: shouldRouteToOriginating,
   });
   const shouldSuppressProgressDelivery = () =>
     sendPolicyDenied ||
-    (suppressDelivery && !shouldDeliverVerboseProgressDespiteSourceSuppression());
+    (suppressDelivery && !state.shouldDeliverVerboseProgressDespiteSourceSuppression());
   const hasVisibleRegularVerboseToolProgress = () =>
     shouldEmitVerboseProgress() &&
-    !shouldEmitFullVerboseProgress() &&
+    !state.shouldEmitFullVerboseProgress() &&
     shouldSendVerboseProgressMessages() &&
     ctx.InboundEventKind !== "room_event" &&
     !shouldSuppressProgressDelivery();
@@ -299,15 +290,14 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     options?.requiresToolSummaryVisibility === true &&
     (params.replyOptions?.suppressDefaultToolProgressMessages === true ||
       options.allowWhenToolSummariesHidden === true);
-  let hasPendingDirectBlockReplyDelivery = false;
   const waitForPendingDirectBlockReplyDelivery = async (abortSignal?: AbortSignal) => {
-    if (!hasPendingDirectBlockReplyDelivery) {
+    if (!progressState.hasPendingDirectBlockReplyDelivery) {
       return;
     }
     // Direct block replies are queued asynchronously so lightweight replies do
     // not wait for dispatcher idle. Flush only before later tool/progress
     // callbacks and final completion where external ordering is visible.
-    hasPendingDirectBlockReplyDelivery = false;
+    progressState.hasPendingDirectBlockReplyDelivery = false;
     await waitForReplyDispatcherIdle(dispatcher, abortSignal);
   };
   const shouldForwardProgressCallback = (options?: {
@@ -331,11 +321,10 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
   };
   const preserveProgressCallbackStartOrder =
     params.replyOptions?.preserveProgressCallbackStartOrder === true;
-  let progressCallbackStartTail = Promise.resolve();
   const reserveProgressCallbackStart = () => {
-    const previousStart = progressCallbackStartTail;
+    const previousStart = progressState.progressCallbackStartTail;
     let releaseStart: (() => void) | undefined;
-    progressCallbackStartTail = new Promise<void>((resolve) => {
+    progressState.progressCallbackStartTail = new Promise<void>((resolve) => {
       releaseStart = resolve;
     });
     return {
@@ -365,10 +354,12 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
         if (isDispatchOperationAborted()) {
           return undefined;
         }
-        getDispatchReplyOperation()?.recordActivity();
+        state.getDispatchReplyOperation()?.recordActivity();
         markProgress();
         if (options?.waitForDirectBlockReplyDelivery) {
-          await waitForPendingDirectBlockReplyDelivery(getDispatchAbortOperation()?.abortSignal);
+          await waitForPendingDirectBlockReplyDelivery(
+            state.getDispatchAbortOperation()?.abortSignal,
+          );
           if (isDispatchOperationAborted()) {
             return undefined;
           }
@@ -475,80 +466,52 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
 
   const replyResolver =
     params.replyResolver ??
-    (await traceReplyPhase("reply.load_reply_resolver", () => loadGetReplyFromConfigRuntime()))
-      .getReplyFromConfig;
-  // Channel runtimes can outlive a config reload. Resolve one live snapshot
-  // per turn so reply setup and dispatch callbacks share the same authority.
-  const runtimeReplyConfig = getRuntimeConfigSnapshot() ?? cfg;
-  const replyConfig = withFullRuntimeReplyConfig(
-    params.configOverride
-      ? (applyMergePatch(runtimeReplyConfig, params.configOverride) as OpenClawConfig)
-      : runtimeReplyConfig,
-  );
-  recordAgentDispatchStarted();
-  const nextState = extendPreparedDispatchState(
-    state,
-    {
-      maybeSendWorkingStatus,
-      sendPlanUpdate,
-      summarizeApprovalLabel,
-      summarizePatchLabel,
-      cleanBlockTtsDirectiveText,
-      resolveToolDeliveryPayload,
-      typing,
-      shouldSuppressProgressDelivery,
-      markVisibleToolErrorProgress,
-      hasFailedProgressStatus,
-      shouldSuppressToolErrorWarnings,
-      suppressToolErrorWarnings,
-      onToolResultFromReplyOptions,
-      onPlanUpdateFromReplyOptions,
-      onApprovalEventFromReplyOptions,
-      onPatchSummaryFromReplyOptions,
-      shouldForwardToolResultProgressCallback,
-      waitForPendingDirectBlockReplyDelivery,
-      shouldForwardProgressCallback,
-      preserveProgressCallbackStartOrder,
-      wrapProgressCallback,
-      deliverStandaloneCommentaryProgress,
-      canForwardSuppressedSourceItemEvents,
-      onItemEvent,
-      replyResolver,
-      replyConfig,
-    },
-    {
-      accumulatedBlockText: {
-        get: () => accumulatedBlockText,
-        set: (value: string) => {
-          accumulatedBlockText = value;
-        },
-      },
-      accumulatedBlockTtsText: {
-        get: () => accumulatedBlockTtsText,
-        set: (value: string) => {
-          accumulatedBlockTtsText = value;
-        },
-      },
-      blockCount: {
-        get: () => blockCount,
-        set: (value: number) => {
-          blockCount = value;
-        },
-      },
-      hasPendingDirectBlockReplyDelivery: {
-        get: () => hasPendingDirectBlockReplyDelivery,
-        set: (value: boolean) => {
-          hasPendingDirectBlockReplyDelivery = value;
-        },
-      },
-      progressCallbackStartTail: {
-        get: () => progressCallbackStartTail,
-        set: (value: typeof progressCallbackStartTail) => {
-          progressCallbackStartTail = value;
-        },
-      },
-    },
-  );
+    (
+      await state.traceReplyPhase("reply.load_reply_resolver", () =>
+        loadGetReplyFromConfigRuntime(),
+      )
+    ).getReplyFromConfig;
+  // Channel runtimes can outlive a config reload. Ordinary Gateway turns rebind to the
+  // committed model owner; an explicit per-turn projection stays exact to its caller config.
+  const publishedRuntimeReplyConfig = getRuntimeConfigSnapshot();
+  const runtimeReplyConfig = publishedRuntimeReplyConfig ?? cfg;
+  const replyConfig = params.configOverride
+    ? withFullRuntimeReplyConfig(
+        applyMergePatch(runtimeReplyConfig, params.configOverride) as OpenClawConfig,
+      )
+    : params.usePublishedModelRuntime || publishedRuntimeReplyConfig
+      ? withPublishedRuntimeReplyConfig(runtimeReplyConfig)
+      : withFullRuntimeReplyConfig(cfg);
+  state.recordAgentDispatchStarted();
+  const nextState = extendPreparedDispatchState(state, {
+    maybeSendWorkingStatus,
+    sendPlanUpdate,
+    summarizeApprovalLabel,
+    summarizePatchLabel,
+    cleanBlockTtsDirectiveText,
+    resolveToolDeliveryPayload,
+    typing,
+    shouldSuppressProgressDelivery,
+    markVisibleToolErrorProgress,
+    hasFailedProgressStatus,
+    shouldSuppressToolErrorWarnings,
+    suppressToolErrorWarnings,
+    onToolResultFromReplyOptions,
+    onPlanUpdateFromReplyOptions,
+    onApprovalEventFromReplyOptions,
+    onPatchSummaryFromReplyOptions,
+    shouldForwardToolResultProgressCallback,
+    waitForPendingDirectBlockReplyDelivery,
+    shouldForwardProgressCallback,
+    preserveProgressCallbackStartOrder,
+    wrapProgressCallback,
+    deliverStandaloneCommentaryProgress,
+    canForwardSuppressedSourceItemEvents,
+    onItemEvent,
+    replyResolver,
+    replyConfig,
+    progressState,
+  });
   return { status: "ready" as const, state: nextState };
 }
 

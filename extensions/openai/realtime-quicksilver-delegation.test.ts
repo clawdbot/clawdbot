@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  boundOpenAIQuicksilverDelegationResult,
   chunkOpenAIQuicksilverAppendText,
   parseOpenAIQuicksilverEvent,
 } from "./realtime-quicksilver-wire.js";
@@ -125,6 +126,22 @@ describe("GPT-Live sideband protocol", () => {
     }
   });
 
+  it("bounds total speakable text before chunking", () => {
+    expect(boundOpenAIQuicksilverDelegationResult("  short result  ")).toBe("  short result  ");
+    const limited = boundOpenAIQuicksilverDelegationResult(
+      `${"a".repeat(1_783)}😀${"b".repeat(1_000)}`,
+    );
+    const chunks = chunkOpenAIQuicksilverAppendText(limited);
+
+    expect(limited).toMatch(/ \[truncated\]$/);
+    expect(limited.length).toBeLessThanOrEqual(1_800);
+    expect(limited).not.toContain("\uFFFD");
+    expect(chunks.length).toBeLessThanOrEqual(11);
+    for (const chunk of chunks) {
+      expect(Buffer.byteLength(chunk, "utf8")).toBeLessThanOrEqual(500);
+    }
+  });
+
   it("wraps delegated input and appends the raw speakable result", async () => {
     const runAgentConsult = vi.fn(async ({ prompt }: { prompt: string }) => ({
       text: `Result for ${prompt}`,
@@ -189,6 +206,53 @@ describe("GPT-Live sideband protocol", () => {
       await realtime.cleanup();
       expect(parseSent(socket).at(-1)).toEqual({ type: "session.close" });
       expect(socket.closed).toBe(true);
+    } finally {
+      await realtime.cleanup();
+    }
+  });
+
+  it("bounds browser delegation output before sideband sends", async () => {
+    const runAgentConsult = vi.fn(async () => ({ text: "x".repeat(10_000) }));
+    const { realtime, sockets } = createBroker({ runAgentConsult });
+    try {
+      const reservation = await realtime.broker.createBrowserSession(
+        { providerConfig: {}, model: "gpt-live-1", runAgentConsult },
+        { type: "api-key", token: "platform-key" },
+      );
+      if (reservation.transport !== "webrtc") {
+        throw new Error("Expected WebRTC reservation");
+      }
+      await realtime.handler(
+        createRequest({ token: reservation.clientSecret }),
+        createResponseHarness().res,
+      );
+      const socket = sockets[0];
+      if (!socket) {
+        throw new Error("Expected sideband socket");
+      }
+
+      emitSideband(socket, {
+        type: "delegation.created",
+        item: {
+          type: "delegation",
+          target: "client",
+          id: "delegation-large",
+          content: [{ type: "input_text", text: "summarize everything" }],
+        },
+      });
+
+      await vi.waitFor(() => {
+        const appends = parseSent(socket).filter(
+          (event) => event.type === "delegation.context.append",
+        );
+        expect(appends.length).toBeGreaterThan(0);
+        expect(appends.length).toBeLessThanOrEqual(11);
+        expect(
+          appends
+            .map((event) => (event.content as Array<{ text: string }>)[0]?.text ?? "")
+            .join(""),
+        ).toMatch(/^x+ \[truncated\]$/);
+      });
     } finally {
       await realtime.cleanup();
     }
@@ -301,14 +365,16 @@ describe("GPT-Live sideband protocol", () => {
             content: [{ type: "input_text", text }],
           },
         });
-        await vi.waitFor(() =>
-          expect(runAgentConsult).toHaveBeenCalledTimes(id.endsWith("1") ? 1 : 2),
-        );
+        if (id.endsWith("1")) {
+          await vi.waitFor(() => expect(runAgentConsult).toHaveBeenCalledTimes(1));
+        }
       }
 
       expect(signals[0]?.aborted).toBe(true);
-      expect(signals[1]?.aborted).toBe(false);
+      expect(runAgentConsult).toHaveBeenCalledTimes(1);
       resolutions[0]?.({ text: "stale" });
+      await vi.waitFor(() => expect(runAgentConsult).toHaveBeenCalledTimes(2));
+      expect(signals[1]?.aborted).toBe(false);
       resolutions[1]?.({ text: "fresh" });
       await vi.waitFor(() =>
         expect(parseSent(socket)).toContainEqual(

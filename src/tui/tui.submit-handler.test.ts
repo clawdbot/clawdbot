@@ -54,7 +54,7 @@ describe("createEditorSubmitHandler", () => {
   it("preserves normal message drafts when chat is busy", () => {
     const { editor, sendMessage, handleCommand, handleBangLine, onBlockedMessageSubmit, onSubmit } =
       createSubmitHarness({
-        admitMessage: () => "pending",
+        admitMessage: () => ({ status: "blocked", reason: "pending" }),
       });
 
     onSubmit("  wait, use c++ instead  ");
@@ -64,12 +64,17 @@ describe("createEditorSubmitHandler", () => {
     expect(sendMessage).not.toHaveBeenCalled();
     expect(handleCommand).not.toHaveBeenCalled();
     expect(handleBangLine).not.toHaveBeenCalled();
-    expect(onBlockedMessageSubmit).toHaveBeenCalledWith("wait, use c++ instead", "pending");
+    expect(onBlockedMessageSubmit).toHaveBeenCalledWith("wait, use c++ instead", {
+      status: "blocked",
+      reason: "pending",
+    });
   });
 
   it("passes the submitted text to the busy gate", () => {
     const admitMessage = vi.fn((value: string) =>
-      value === "please stop" ? ("allowed" as const) : ("pending" as const),
+      value === "please stop"
+        ? ({ status: "allowed" } as const)
+        : ({ status: "blocked", reason: "pending" } as const),
     );
     const { sendMessage, onSubmit } = createSubmitHarness({ admitMessage });
 
@@ -91,7 +96,7 @@ describe("createEditorSubmitHandler", () => {
       sendMessage,
       handleBangLine: vi.fn(),
       onSubmitError: vi.fn(),
-      admitMessage: () => "pending",
+      admitMessage: () => ({ status: "blocked", reason: "pending" }),
       onBlockedMessageSubmit,
     });
 
@@ -99,13 +104,16 @@ describe("createEditorSubmitHandler", () => {
 
     expect(editor.getText()).toBe("wait, use c++ instead");
     expect(sendMessage).not.toHaveBeenCalled();
-    expect(onBlockedMessageSubmit).toHaveBeenCalledWith("wait, use c++ instead", "pending");
+    expect(onBlockedMessageSubmit).toHaveBeenCalledWith("wait, use c++ instead", {
+      status: "blocked",
+      reason: "pending",
+    });
   });
 
   it("continues to route slash commands while chat is busy", () => {
     const { editor, handleCommand, sendMessage, onBlockedMessageSubmit, onSubmit } =
       createSubmitHarness({
-        admitMessage: () => "pending",
+        admitMessage: () => ({ status: "blocked", reason: "pending" }),
       });
 
     onSubmit("/abort");
@@ -221,6 +229,37 @@ describe("createSubmitBurstCoalescer", () => {
 
     expect(sendMessage).toHaveBeenCalledExactlyOnceWith("submitted message");
     expect(editor.getText()).toBe("new draft");
+    vi.useRealTimers();
+  });
+
+  it("preserves text typed after a buffered submit is blocked", () => {
+    vi.useFakeTimers();
+    const tui = { requestRender: vi.fn() } as unknown as TUI;
+    const editor = new CustomEditor(tui, editorTheme);
+    const sendMessage = vi.fn();
+    const submit = createEditorSubmitHandler({
+      editor,
+      handleCommand: vi.fn(),
+      sendMessage,
+      handleBangLine: vi.fn(),
+      onSubmitError: vi.fn(),
+      admitMessage: () => ({ status: "blocked", reason: "pending" }),
+    });
+    editor.onSubmit = createSubmitBurstCoalescer({
+      submit,
+      enabled: true,
+      burstWindowMs: 50,
+    });
+    editor.setText("blocked message");
+
+    editor.handleInput("\r");
+    for (const character of "plus newer text") {
+      editor.handleInput(character);
+    }
+    vi.advanceTimersByTime(50);
+
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(editor.getText()).toBe("blocked message\nplus newer text");
     vi.useRealTimers();
   });
 

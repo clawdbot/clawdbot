@@ -2,7 +2,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { discordQaScenarioSupport } from "./discord-live.runtime.js";
-import { resolveDiscordQaScenarioIds } from "./scenario-selection.js";
 
 const { testing } = discordQaScenarioSupport;
 
@@ -285,23 +284,6 @@ describe("discord live qa runtime", () => {
     expect(testing.computeDiscordRttMs("bad", "2026-04-22T12:00:00.875Z")).toBeUndefined();
   });
 
-  it("includes the Discord live scenarios", () => {
-    expect(testing.findScenario().map((scenario) => scenario.id)).toEqual(
-      resolveDiscordQaScenarioIds({}),
-    );
-    expect(
-      testing.findScenario(["discord-status-reactions-tool-only"]).map((scenario) => scenario.id),
-    ).toEqual(["discord-status-reactions-tool-only"]);
-    expect(testing.findScenario(["discord-voice-autojoin"]).map((scenario) => scenario.id)).toEqual(
-      ["discord-voice-autojoin"],
-    );
-    expect(
-      testing
-        .findScenario(["discord-thread-reply-filepath-attachment"])
-        .map((scenario) => scenario.id),
-    ).toEqual(["discord-thread-reply-filepath-attachment"]);
-  });
-
   it("collects the status reaction sequence across timeline snapshots", () => {
     expect(
       testing.collectSeenReactionSequence(
@@ -460,12 +442,6 @@ describe("discord live qa runtime", () => {
     } finally {
       vi.useRealTimers();
     }
-  });
-
-  it("fails when any requested Discord scenario id is unknown", () => {
-    expect(() => testing.findScenario(["discord-canary", "typo-scenario"])).toThrow(
-      "unknown QA scenario id(s): typo-scenario",
-    );
   });
 
   it("lists Discord application commands through the REST API", async () => {

@@ -159,8 +159,10 @@ async function runDelivery(params: {
       ...(params.withTypingMessage
         ? {
             typingMessage: {
+              placement: "thread",
               name: "spaces/AAA/messages/typing",
-              thread: "spaces/AAA/threads/root",
+              requestedThreadName: "spaces/AAA/threads/root",
+              deliveredThreadName: "spaces/AAA/threads/root",
             },
           }
         : {}),

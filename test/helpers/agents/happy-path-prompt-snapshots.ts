@@ -59,7 +59,7 @@ const CODEX_YOLO_PERMISSION_INSTRUCTIONS = [
 ].join("\n");
 const HAPPY_PATH_TOOL_NAMES = new Set([
   "nodes",
-  "cron",
+  "automations",
   "message",
   "heartbeat_respond",
   "tts",

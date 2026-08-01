@@ -282,6 +282,13 @@ describe("createVoiceCallRuntime lifecycle", () => {
 
   it("returns an idempotent stop handler", async () => {
     const tunnelStop = vi.fn().mockResolvedValue(undefined);
+    let releaseWebhookStop: (() => void) | undefined;
+    mocks.webhookStop.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseWebhookStop = resolve;
+        }),
+    );
     mocks.startTunnel.mockResolvedValue({
       publicUrl: "https://public.example/voice/webhook",
       provider: "ngrok",
@@ -294,8 +301,22 @@ describe("createVoiceCallRuntime lifecycle", () => {
       agentRuntime: {} as never,
     });
 
-    await runtime.stop();
-    await runtime.stop();
+    const firstStop = runtime.stop();
+    const secondStop = runtime.stop();
+    let stopped = false;
+    void secondStop.then(() => {
+      stopped = true;
+    });
+
+    expect(secondStop).toBe(firstStop);
+    await vi.waitFor(() => {
+      expect(mocks.webhookStop).toHaveBeenCalledTimes(1);
+    });
+    expect(stopped).toBe(false);
+
+    releaseWebhookStop?.();
+    await firstStop;
+    expect(stopped).toBe(true);
 
     expect(tunnelStop).toHaveBeenCalledTimes(1);
     expect(mocks.cleanupTailscaleExposure).toHaveBeenCalledTimes(1);

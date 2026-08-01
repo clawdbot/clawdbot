@@ -105,6 +105,38 @@ describe("prepared model catalog access", () => {
     expect(mocks.releaseSnapshot).not.toHaveBeenCalled();
   });
 
+  it("keeps read-only catalog reads on configured facts and materializes full reads once", async () => {
+    const configuredCatalog = {
+      entries: [{ provider: "test", id: "configured", name: "Configured" }],
+      routeVariants: [],
+    };
+    const discoveredCatalog = {
+      entries: [{ provider: "test", id: "discovered", name: "Discovered" }],
+      routeVariants: [],
+    };
+    const loadFullModelCatalog = vi.fn(async () => discoveredCatalog);
+    const snapshot = {
+      ...fullSnapshot,
+      modelCatalog: configuredCatalog,
+      loadFullModelCatalog,
+    };
+    mocks.prepareSnapshot.mockResolvedValue(snapshot);
+
+    await expect(loadPreparedModelCatalogSnapshot({ readOnly: true })).resolves.toBe(
+      configuredCatalog,
+    );
+    expect(loadFullModelCatalog).not.toHaveBeenCalled();
+
+    await expect(loadPreparedModelCatalogSnapshot({ readOnly: false })).resolves.toBe(
+      discoveredCatalog,
+    );
+    expect(loadFullModelCatalog).toHaveBeenCalledOnce();
+
+    mocks.getSnapshot.mockReturnValue(snapshot);
+    expect(getPreparedModelCatalogSnapshot({ readOnly: true })).toBe(configuredCatalog);
+    expect(getPreparedModelCatalogSnapshot()).toBe(configuredCatalog);
+  });
+
   it("carries an explicit dynamic workspace into the read-only loader", async () => {
     mocks.prepareSnapshot.mockRejectedValue(new PreparedModelRuntimeOwnerNotPublishedError());
     mocks.loadSnapshot.mockResolvedValue(readOnlySnapshot);

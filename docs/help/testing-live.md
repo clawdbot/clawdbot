@@ -220,7 +220,7 @@ Notes:
 - It resolves CLI smoke metadata from the owning plugin, then installs the matching Linux CLI package (`@anthropic-ai/claude-code` or `@google/gemini-cli`) into a cached writable prefix at `OPENCLAW_DOCKER_CLI_TOOLS_DIR` (default: `~/.cache/openclaw/docker-cli-tools`).
 - `codex-cli` is no longer a bundled CLI backend; use `openai/*` with the Codex app-server runtime instead (see [Live: Codex app-server harness smoke](#live-codex-app-server-harness-smoke)).
 - `pnpm test:docker:live-cli-backend:claude-subscription` requires portable Claude Code subscription OAuth through either `~/.claude/.credentials.json` with `claudeAiOauth.subscriptionType` or `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token`. It first proves direct `claude -p` in Docker, then runs two Gateway CLI-backend turns without preserving Anthropic API-key env vars. This subscription lane disables the Claude MCP/tool and image probes by default because it consumes the signed-in subscription's usage limits and Anthropic can change Claude Agent SDK / `claude -p` billing and rate-limit behavior without an OpenClaw release.
-- Claude and Gemini support the same probe set (text turn, image classification, MCP `cron` tool call, model-switch continuity) through the flags above, but none of those probes run by default - opt in per flag as needed.
+- Claude and Gemini support the same probe set (text turn, image classification, MCP `automations` tool call, model-switch continuity) through the flags above, but none of those probes run by default - opt in per flag as needed.
 
 ## Live: APNs HTTP/2 proxy reachability
 
@@ -612,7 +612,7 @@ If you have keys enabled, you can also test via:
 
 More providers you can include in the live matrix (if you have creds/config):
 
-- Built-in: `anthropic`, `cerebras`, `github-copilot`, `google`, `google-antigravity`, `google-gemini-cli`, `google-vertex`, `groq`, `mistral`, `openai`, `openrouter`, `opencode`, `opencode-go`, `xai`, `zai`
+- First-party provider plugins: `anthropic`, `cerebras`, `github-copilot`, `google`, `google-antigravity`, `google-gemini-cli`, `google-vertex`, `groq`, `mistral`, `openai`, `openrouter`, `opencode`, `opencode-go`, `xai`, `zai`
 - Via `models.providers` (custom endpoints): `minimax` (cloud/API), plus any OpenAI/Anthropic-compatible proxy (LM Studio, vLLM, LiteLLM, etc.)
 
 <Tip>
@@ -650,7 +650,7 @@ Docker runners below with an explicit `OPENCLAW_PROFILE_FILE`.
 - Test: `extensions/comfy/comfy.live.test.ts`
 - Enable: `OPENCLAW_LIVE_TEST=1 COMFY_LIVE_TEST=1 pnpm test:live -- extensions/comfy/comfy.live.test.ts`
 - Scope:
-  - Exercises the bundled comfy image, video, and `music_generate` paths
+  - Exercises the comfy image, video, and `music_generate` paths
   - Skips each capability unless `plugins.entries.comfy.config.<capability>` is configured
   - Useful after changing comfy workflow submission, polling, downloads, or plugin registration
 

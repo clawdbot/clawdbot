@@ -38,7 +38,7 @@ The wizard also asks for the API domain (Feishu vs Lark) and the group policy. I
 
 ## Inbound durability
 
-OpenClaw durably queues authenticated `im.message.receive_v1` and `drive.notice.comment_add_v1` envelopes before agent dispatch. Pending or retryable events survive a Gateway restart, remain serialized per chat or document, and use Feishu's event ID to suppress duplicate queue entries while the active or retained completion record exists.
+OpenClaw durably queues authenticated `im.message.receive_v1` and `drive.notice.comment_add_v1` envelopes before agent dispatch. In webhook mode, the durable `200` carries `x-openclaw-delivery-accepted: durable`; verification challenges, non-durable event types, and error responses omit the marker, so reverse proxies can require it to distinguish durable acceptance from a generic `200`. Pending or retryable events survive a Gateway restart, remain serialized per chat or document, and use Feishu's event ID to suppress duplicate queue entries while the active or retained completion record exists.
 
 If a WebSocket event cannot be persisted after bounded retries, OpenClaw closes that socket and forces a fresh authenticated connection instead of continuing past an uncommitted turn. Other Feishu event types, including reactions and VC meeting invitations, use their normal event paths and do not receive this durable-queue guarantee.
 

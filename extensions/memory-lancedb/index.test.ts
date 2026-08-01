@@ -1305,7 +1305,7 @@ describe("memory plugin e2e", () => {
     });
   });
 
-  test("bounds auto-recall latency during prompt build", async () => {
+  test("shares only embedding timeout cooldown across recall paths", async () => {
     vi.useFakeTimers();
     const post = vi.fn(
       () =>
@@ -1320,14 +1320,14 @@ describe("memory plugin e2e", () => {
         }),
     );
     const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
+    const toArray = vi.fn(() => new Promise(() => {}));
+    const limit = vi.fn(() => ({ toArray }));
     const loadLanceDbModule = vi.fn(async () => ({
       connect: vi.fn(async () => ({
         tableNames: vi.fn(async () => ["memories"]),
         openTable: vi.fn(async () => ({
           schema: createAgentScopedSchemaMock(),
-          vectorSearch: vi.fn(() =>
-            createAgentScopedVectorQuery(vi.fn(() => ({ toArray: vi.fn(async () => []) }))),
-          ),
+          vectorSearch: vi.fn(() => createAgentScopedVectorQuery(limit)),
           countRows: vi.fn(async () => 0),
           add: vi.fn(async () => undefined),
           delete: vi.fn(async () => undefined),
@@ -1342,6 +1342,7 @@ describe("memory plugin e2e", () => {
         loadLanceDbModule,
         run: async (dynamicMemoryPlugin) => {
           const on = vi.fn();
+          const registeredTools: any[] = [];
           const logger = {
             info: vi.fn(),
             warn: vi.fn(),
@@ -1364,7 +1365,9 @@ describe("memory plugin e2e", () => {
             },
             runtime: {},
             logger,
-            registerTool: vi.fn(),
+            registerTool: (tool: any, opts: any) => {
+              registeredTools.push({ tool, opts });
+            },
             registerCli: vi.fn(),
             registerService: vi.fn(),
             on,
@@ -1378,10 +1381,8 @@ describe("memory plugin e2e", () => {
           )?.[1];
           expect(beforePromptBuild).toBeTypeOf("function");
 
-          const resultPromise = beforePromptBuild?.(
-            { prompt: "what editor should i use?", messages: [] },
-            { agentId: "main" },
-          );
+          const hookEvent = { prompt: "what editor should i use?", messages: [] };
+          const resultPromise = beforePromptBuild?.(hookEvent, { agentId: "main" });
           await vi.advanceTimersByTimeAsync(15_000);
 
           await expect(resultPromise).resolves.toBeUndefined();
@@ -1394,6 +1395,110 @@ describe("memory plugin e2e", () => {
           expect(logger.warn).toHaveBeenCalledWith(
             "memory-lancedb: auto-recall timed out after 15000ms; skipping memory injection to avoid stalling agent startup",
           );
+
+          expect(await beforePromptBuild?.(hookEvent, { agentId: "main" })).toBeUndefined();
+          expect(post).toHaveBeenCalledTimes(1);
+          expect(logger.debug).toHaveBeenCalledWith(
+            "memory-lancedb: auto-recall skipped during recall cooldown: auto-recall timed out after 15s",
+          );
+
+          const recallTool = materializeRegisteredTool(
+            registeredTools.find((tool) => tool.opts?.name === "memory_recall")?.tool,
+          );
+          if (!recallTool) {
+            throw new Error("memory_recall tool was not registered");
+          }
+          const toolResult = await recallTool.execute("cooldown-call", { query: "editor" });
+          expect(toolResult.details).toMatchObject({
+            count: 0,
+            disabled: true,
+            unavailable: true,
+            error: "auto-recall timed out after 15s",
+          });
+          expect(post).toHaveBeenCalledTimes(1);
+
+          await vi.advanceTimersByTimeAsync(60_000);
+          const sdkTimeoutError = Object.assign(new Error("Request timed out."), {
+            name: "APIConnectionTimeoutError",
+          });
+          post.mockRejectedValueOnce(sdkTimeoutError);
+          await expect(
+            beforePromptBuild?.(hookEvent, { agentId: "main" }),
+          ).resolves.toBeUndefined();
+          expect(post).toHaveBeenCalledTimes(2);
+
+          const sdkTimeoutToolResult = await recallTool.execute("sdk-timeout-cooldown-call", {
+            query: "editor",
+          });
+          expect(sdkTimeoutToolResult.details).toMatchObject({
+            count: 0,
+            disabled: true,
+            unavailable: true,
+            error: "Request timed out.",
+          });
+          expect(post).toHaveBeenCalledTimes(2);
+
+          await vi.advanceTimersByTimeAsync(60_000);
+          post.mockResolvedValueOnce({ data: [{ embedding: [0.1, 0.2, 0.3] }] });
+          const probeResult = beforePromptBuild?.(hookEvent, { agentId: "main" });
+          await vi.advanceTimersByTimeAsync(0);
+          expect(loadLanceDbModule).toHaveBeenCalledTimes(1);
+          await vi.advanceTimersByTimeAsync(15_000);
+          await expect(probeResult).resolves.toBeUndefined();
+          expect(post).toHaveBeenCalledTimes(3);
+
+          post.mockRejectedValueOnce(Object.assign(new Error("bad auto query"), { status: 400 }));
+          const retryResult = beforePromptBuild?.(hookEvent, { agentId: "main" });
+          await vi.advanceTimersByTimeAsync(0);
+          expect(post).toHaveBeenCalledTimes(4);
+          await expect(retryResult).resolves.toBeUndefined();
+
+          post.mockRejectedValueOnce(Object.assign(new Error("bad tool query"), { status: 400 }));
+          const toolErrorResult = await recallTool.execute("error-call", { query: "editor" });
+          expect(toolErrorResult.details).toMatchObject({
+            count: 0,
+            disabled: true,
+            unavailable: true,
+            error: "bad tool query",
+          });
+          expect(post).toHaveBeenCalledTimes(5);
+
+          post.mockRejectedValueOnce(sdkTimeoutError);
+          const toolSdkTimeoutResult = await recallTool.execute("sdk-timeout-call", {
+            query: "editor",
+          });
+          expect(toolSdkTimeoutResult.details).toMatchObject({
+            count: 0,
+            disabled: true,
+            unavailable: true,
+            error: "Request timed out.",
+          });
+          expect(post).toHaveBeenCalledTimes(6);
+
+          expect(await beforePromptBuild?.(hookEvent, { agentId: "main" })).toBeUndefined();
+          expect(post).toHaveBeenCalledTimes(6);
+
+          await vi.advanceTimersByTimeAsync(60_000);
+
+          post.mockResolvedValueOnce({ data: [{ embedding: [0.1, 0.2, 0.3] }] });
+          const toolSearchResult = recallTool.execute("search-timeout-call", { query: "editor" });
+          await vi.advanceTimersByTimeAsync(0);
+          expect(post).toHaveBeenCalledTimes(7);
+          await vi.advanceTimersByTimeAsync(15_000);
+          await expect(toolSearchResult).resolves.toMatchObject({
+            details: {
+              count: 0,
+              disabled: true,
+              unavailable: true,
+              error: "memory_recall timed out after 15s",
+            },
+          });
+
+          const finalResult = beforePromptBuild?.(hookEvent, { agentId: "main" });
+          await vi.advanceTimersByTimeAsync(0);
+          expect(post).toHaveBeenCalledTimes(8);
+          await vi.advanceTimersByTimeAsync(15_000);
+          await expect(finalResult).resolves.toBeUndefined();
           await vi.advanceTimersByTimeAsync(15_000);
         },
       });
@@ -3330,6 +3435,38 @@ describe("memory plugin e2e", () => {
         param: "dimensions",
         code: "unknown_parameter",
       }),
+    ).toBe(false);
+  });
+
+  test("recognizes embedding timeout errors without classifying fast request failures", () => {
+    expect(
+      testing.isMemoryRecallTimeoutError(
+        Object.assign(new Error("Request timed out."), {
+          name: "APIConnectionTimeoutError",
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      testing.isMemoryRecallTimeoutError(
+        Object.assign(new Error("socket deadline"), { code: "ETIMEDOUT" }),
+      ),
+    ).toBe(true);
+    expect(
+      testing.isMemoryRecallTimeoutError(
+        Object.assign(new Error("provider aborted"), {
+          cause: new Error("memory-lancedb embedding timed out"),
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      testing.isMemoryRecallTimeoutError(
+        Object.assign(new Error("headers deadline"), { code: "UND_ERR_HEADERS_TIMEOUT" }),
+      ),
+    ).toBe(true);
+    expect(
+      testing.isMemoryRecallTimeoutError(
+        Object.assign(new Error("bad request"), { status: 400, code: "invalid_request_error" }),
+      ),
     ).toBe(false);
   });
 

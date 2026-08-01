@@ -26,9 +26,7 @@ import {
 
 type AdapterFactory = NonNullable<QaRunnerCliRegistration["adapterFactory"]>;
 type FactoryContext = Parameters<AdapterFactory["create"]>[0];
-type AdapterDefinition = Awaited<ReturnType<AdapterFactory["create"]>> & {
-  cleanupAfterGatewayStop?: () => Promise<void>;
-};
+type AdapterDefinition = Awaited<ReturnType<AdapterFactory["create"]>>;
 
 function renderTelegramQaInboundText(
   input: { text: string; nativeCommand?: { name: string } },

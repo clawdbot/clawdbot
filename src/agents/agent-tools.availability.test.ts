@@ -28,7 +28,7 @@ describe("tool availability", () => {
     const tools = createOpenClawCodingTools();
     const toolNames = tools.map((tool) => tool.name);
     expect(toolNames).toContain("plugin_login");
-    expect(toolNames).toContain("cron");
+    expect(toolNames).toContain("automations");
     expect(toolNames).toContain("gateway");
     expect(toolNames).toContain("nodes");
     expect(toolNames).toContain("openclaw");

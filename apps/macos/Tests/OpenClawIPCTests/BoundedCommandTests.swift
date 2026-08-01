@@ -24,7 +24,7 @@ struct BoundedCommandTests {
         let startedAt = clock.now
         let output = await BoundedCommand.run(
             path: "/bin/sh",
-            arguments: ["-c", "echo $$ > \"$PID_FILE\"; trap '' TERM; while :; do :; done"],
+            arguments: ["-c", "echo $$ > \"$PID_FILE\"; trap '' TERM; exec /bin/sleep 30"],
             environment: ["PID_FILE": pidFile.path],
             timeout: 0.1)
 

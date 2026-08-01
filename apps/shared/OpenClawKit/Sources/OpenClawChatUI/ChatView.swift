@@ -551,12 +551,13 @@ public struct OpenClawChatView: View {
             },
             mediaArtifactResolverReady: self.viewModel.healthOK,
             mediaPlaybackAllowed: self.mediaPlaybackAllowed,
-            loadMediaArtifact: { [weak viewModel] artifactId, kind in
+            loadMediaArtifact: { [weak viewModel] artifactId, kind, playback in
                 guard let viewModel else { return nil }
                 return try await viewModel.transport.loadMediaArtifact(
                     sessionKey: viewModel.sessionKey,
                     artifactId: artifactId,
-                    kind: kind)
+                    kind: kind,
+                    playback: playback)
             })
             .frame(
                 maxWidth: .infinity,

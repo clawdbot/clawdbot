@@ -16,7 +16,6 @@ export { deriveSessionTotalTokens, hasNonzeroUsage } from "../../agents/usage.js
 export { ensureAgentWorkspace } from "../../agents/workspace.js";
 export {
   isThinkingLevelSupported,
-  normalizeThinkLevel,
   resolveSupportedThinkingLevel,
 } from "../../auto-reply/thinking.js";
 export { setSessionRuntimeModel } from "../../config/sessions/types.js";

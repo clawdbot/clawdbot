@@ -35,6 +35,19 @@ export type LoadPreparedModelCatalogParams = {
 
 type PreparedModelCatalogConfigPolicy = "exact" | "published";
 
+async function materializeRequestedModelCatalog(
+  snapshot: PreparedModelRuntimeSnapshot,
+  readOnly: boolean | undefined,
+): Promise<PreparedModelRuntimeSnapshot> {
+  if (readOnly === true || !snapshot.loadFullModelCatalog) {
+    return snapshot;
+  }
+  const modelCatalog = await snapshot.loadFullModelCatalog();
+  return modelCatalog === snapshot.modelCatalog
+    ? snapshot
+    : Object.freeze({ ...snapshot, modelCatalog });
+}
+
 function acceptsPreparedSnapshotConfig(
   snapshot: PreparedModelRuntimeSnapshot,
   input: PreparedModelRuntimeInput,
@@ -93,7 +106,7 @@ function resolveInputs(params: LoadPreparedModelCatalogParams = {}): {
   };
 }
 
-/** Returns the current published catalog without waiting or starting discovery. */
+/** Returns the configured catalog for the current generation without starting discovery. */
 export function getPreparedModelCatalogSnapshot(
   params: LoadPreparedModelCatalogParams = {},
 ): ModelCatalogSnapshot | undefined {
@@ -124,7 +137,7 @@ export function getPreparedModelCatalogSnapshot(
     : undefined;
 }
 
-async function loadPreparedModelCatalogOwnerSnapshotWithPolicy(
+async function resolvePreparedModelCatalogOwnerSnapshotWithPolicy(
   params: LoadPreparedModelCatalogParams,
   configPolicy: PreparedModelCatalogConfigPolicy,
 ): Promise<PreparedModelRuntimeSnapshot> {
@@ -206,6 +219,16 @@ async function loadPreparedModelCatalogOwnerSnapshotWithPolicy(
   } finally {
     lease.release();
   }
+}
+
+async function loadPreparedModelCatalogOwnerSnapshotWithPolicy(
+  params: LoadPreparedModelCatalogParams,
+  configPolicy: PreparedModelCatalogConfigPolicy,
+): Promise<PreparedModelRuntimeSnapshot> {
+  return await materializeRequestedModelCatalog(
+    await resolvePreparedModelCatalogOwnerSnapshotWithPolicy(params, configPolicy),
+    params.readOnly,
+  );
 }
 
 /** Resolves the lifecycle owner for an exact caller-supplied config. */

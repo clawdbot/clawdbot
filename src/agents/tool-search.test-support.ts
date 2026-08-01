@@ -2,6 +2,7 @@ import type { ToolSearchConfig, ToolSearchRuntime } from "./tool-search.js";
 import "./tool-search.js";
 
 type ToolSearchTestApi = {
+  getReusableCatalogSnapshotCountForTest(): number;
   maxToolSchemaDirectoryPromptChars: number;
   setToolSearchCodeModeSupportedForTest(value: boolean | undefined): void;
   setToolSearchMinCodeTimeoutMsForTest(value: number | undefined): void;
@@ -23,6 +24,8 @@ function getTestApi(): ToolSearchTestApi {
 }
 
 export const testing: ToolSearchTestApi = {
+  getReusableCatalogSnapshotCountForTest: () =>
+    getTestApi().getReusableCatalogSnapshotCountForTest(),
   get maxToolSchemaDirectoryPromptChars() {
     return getTestApi().maxToolSchemaDirectoryPromptChars;
   },

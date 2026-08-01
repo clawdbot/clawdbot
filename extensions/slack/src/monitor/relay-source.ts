@@ -11,6 +11,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import WebSocket, { type ClientOptions, type RawData } from "ws";
 import type { SlackSendIdentity } from "../send.js";
 import type { SlackMessageEvent } from "../types.js";
+import type { SlackIdentityHealth } from "./enterprise-install.js";
 import { formatUnknownError, SLACK_SOCKET_RECONNECT_POLICY } from "./reconnect-policy.js";
 
 export type SlackRelaySourceConfig = {
@@ -39,6 +40,7 @@ export async function monitorSlackRelaySource(params: {
   acceptRelayEvent: SlackRelayEventAcceptor;
   runtime: RuntimeEnv;
   abortSignal?: AbortSignal;
+  identityHealth: SlackIdentityHealth;
   setStatus?: (next: Record<string, unknown>) => void;
   setIdentity?: (identity: SlackRelayIdentity | undefined) => void;
 }): Promise<void> {
@@ -51,8 +53,7 @@ export async function monitorSlackRelaySource(params: {
       params.setStatus?.({
         connected: true,
         lastConnectedAt: Date.now(),
-        healthState: "healthy",
-        lastError: null,
+        ...params.identityHealth,
       });
       params.runtime.log?.(`slack relay mode connected gateway_id:${params.config.gatewayId}`);
       await runRelayWebSocket({

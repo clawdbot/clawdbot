@@ -1901,7 +1901,7 @@ describe("ollama plugin", () => {
     expect(rows).toHaveLength(8);
   });
 
-  it("keeps unknown requested Ollama models unresolved when show has no metadata", async () => {
+  it("keeps unknown requested Ollama models unresolved when show inspection fails", async () => {
     const provider = registerProvider();
     const previous = process.env.OLLAMA_API_KEY;
     process.env.OLLAMA_API_KEY = "ollama-local";
@@ -1910,7 +1910,7 @@ describe("ollama plugin", () => {
       api: "ollama",
       models: [],
     });
-    queryOllamaModelShowInfoMock.mockResolvedValueOnce({});
+    queryOllamaModelShowInfoMock.mockResolvedValueOnce({ showInspectionFailed: true });
 
     try {
       await provider.prepareDynamicModel?.({

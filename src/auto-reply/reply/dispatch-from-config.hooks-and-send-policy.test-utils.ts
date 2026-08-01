@@ -2,6 +2,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
+import type { PluginSubagentRequesterContext } from "../../plugins/runtime/subagent-requester-context.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
@@ -30,6 +31,7 @@ import {
   describe1BeforeEach0,
   describe2BeforeEach0,
 } from "./dispatch-from-config.test-harness.js";
+import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE } from "./provider-request-error-classifier.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
@@ -144,10 +146,51 @@ describe("before_dispatch hook", () => {
     expect(result.queuedFinal).toBe(true);
   });
 
+  it("passes canonical requester lineage to the before_dispatch runner", async () => {
+    sessionStoreMocks.currentEntry = {
+      sessionId: "canonical-session-id",
+      sessionKey: "agent:main:telegram:direct:canonical",
+      updatedAt: 0,
+    };
+    hookMocks.runner.runBeforeDispatch.mockImplementation(async (event, context) => {
+      (event as { sessionKey?: string }).sessionKey = "agent:plugin:forged";
+      (context as { sessionKey?: string }).sessionKey = "agent:plugin:forged";
+      return { handled: true };
+    });
+
+    await dispatchReplyFromConfig({
+      ctx: createHookCtx({
+        SessionKey: "agent:main:telegram:direct:fallback",
+        OriginatingChannel: " Telegram ",
+        OriginatingTo: " telegram:999 ",
+        AccountId: " Work ",
+        MessageThreadId: 42,
+      }),
+      cfg: emptyConfig,
+      dispatcher: createDispatcher(),
+    });
+
+    const requester = firstMockCall(
+      hookMocks.runner.runBeforeDispatch,
+      "before dispatch hook",
+    )[2] as PluginSubagentRequesterContext | undefined;
+    expect(requester).toEqual({
+      sessionKey: "agent:main:telegram:direct:fallback",
+      origin: {
+        channel: "telegram",
+        to: "telegram:999",
+        accountId: "work",
+        threadId: 42,
+      },
+    });
+  });
+
   it("passes inbound reply metadata to before_dispatch event and context", async () => {
     hookMocks.runner.runBeforeDispatch.mockResolvedValue({ handled: true });
     const dispatcher = createDispatcher();
     const ctx = createHookCtx({
+      MessageSid: "discord-message-456",
+      MessageSidFull: "  ",
       ReplyToId: "discord-reply-123",
       ReplyToIdFull: "discord:channel-1:discord-reply-123",
       ReplyToBody: "the quoted parent message",
@@ -163,6 +206,7 @@ describe("before_dispatch hook", () => {
     ) as
       | [
           {
+            messageId?: unknown;
             replyToId?: unknown;
             replyToIdFull?: unknown;
             replyToBody?: unknown;
@@ -170,6 +214,7 @@ describe("before_dispatch hook", () => {
             replyToIsQuote?: unknown;
           },
           {
+            messageId?: unknown;
             replyToId?: unknown;
             replyToIdFull?: unknown;
             replyToBody?: unknown;
@@ -179,6 +224,7 @@ describe("before_dispatch hook", () => {
         ]
       | undefined;
     expect(beforeDispatchCall?.[0]).toMatchObject({
+      messageId: "discord-message-456",
       replyToId: "discord-reply-123",
       replyToIdFull: "discord:channel-1:discord-reply-123",
       replyToBody: "the quoted parent message",
@@ -186,6 +232,7 @@ describe("before_dispatch hook", () => {
       replyToIsQuote: true,
     });
     expect(beforeDispatchCall?.[1]).toMatchObject({
+      messageId: "discord-message-456",
       replyToId: "discord-reply-123",
       replyToIdFull: "discord:channel-1:discord-reply-123",
       replyToBody: "the quoted parent message",
@@ -388,6 +435,83 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     });
 
     expect(result).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
+  });
+
+  it.each([
+    {
+      name: "direct turns",
+      ctx: buildTestCtx({
+        ChatType: "direct",
+        Surface: "feishu",
+        Provider: "feishu",
+        SessionKey: "agent:main:feishu:direct:ou_user",
+      }),
+      cfg: emptyConfig,
+    },
+    {
+      name: "mentioned group turns",
+      ctx: buildTestCtx({
+        ChatType: "group",
+        Surface: "feishu",
+        Provider: "feishu",
+        SessionKey: "agent:main:feishu:group:oc_group",
+        WasMentioned: true,
+      }),
+      cfg: {
+        agents: {
+          defaults: {
+            silentReply: {
+              group: "disallow",
+            },
+          },
+        },
+      } as OpenClawConfig,
+    },
+  ])("treats explicit NO_REPLY as intentional silence in $name", async ({ ctx, cfg }) => {
+    setNoAbort();
+    const deliver = vi.fn(async () => {});
+    const dispatcher = createReplyDispatcher({ deliver });
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      (opts as InternalGetReplyOptions | undefined)?.onDeliberateSilentTerminalReply?.();
+      return undefined;
+    });
+
+    const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+
+    expect(deliver).not.toHaveBeenCalled();
+    expect(result).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
+    expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
+    expect(result.noVisibleReplyFallbackEligible).toBeUndefined();
+  });
+
+  it("does not infer terminal silence from a sibling NO_REPLY payload", async () => {
+    setNoAbort();
+    const deliveredTexts: string[] = [];
+    const dispatcher = createReplyDispatcher({
+      deliver: vi.fn(async (payload) => {
+        deliveredTexts.push(payload.text ?? "");
+      }),
+      beforeDeliver: async (payload) =>
+        payload.text === NO_VISIBLE_REPLY_FALLBACK_TEXT ? payload : null,
+    });
+    const replyResolver = vi.fn(
+      async () => [{ text: "visible reply" }, { text: "NO_REPLY" }] satisfies ReplyPayload[],
+    );
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ ChatType: "direct" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+
+    expect(deliveredTexts).not.toContain("visible reply");
+    expect(deliveredTexts).toContain(NO_VISIBLE_REPLY_FALLBACK_TEXT);
+    expect(result.noVisibleReplyFallbackDelivered).toBe(true);
   });
 
   it("delivers core no-visible-reply fallback for disallowed empty mentioned group turns", async () => {

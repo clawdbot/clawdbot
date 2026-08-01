@@ -2183,7 +2183,7 @@ private func waitForActiveGateway(stableID: String, appModel: NodeAppModel) asyn
         }
     }
 
-    @Test @MainActor func `forget connected gateway disconnects and repeats device auth cleanup`() async throws {
+    @Test @MainActor func `forget connected gateway waits for disconnect before device auth cleanup`() async throws {
         let registryIsolation = GatewayRegistryTestIsolation()
         defer { registryIsolation.restore() }
         let service = GatewaySettingsStore._testGatewayService
@@ -2200,30 +2200,52 @@ private func waitForActiveGateway(stableID: String, appModel: NodeAppModel) asyn
         let connectedID = "manual|connected.example.com|443"
         let selectedID = "manual|selected.example.com|443"
         saveActiveManualGateway(host: "selected.example.com", port: 443, useTLS: true, stableID: selectedID)
+        #expect(GatewaySettingsStore.upsertGatewayRegistryEntry(.init(
+            stableID: connectedID,
+            kind: .manual,
+            name: "connected.example.com:443",
+            host: "connected.example.com",
+            port: 443,
+            useTLS: true,
+            lastConnectedAtMs: nil)))
         let appModel = NodeAppModel()
         try appModel.applyGatewayConnectConfig(Self.makeGatewayConnectConfig(
             url: #require(URL(string: "wss://connected.example.com")),
             stableID: connectedID))
+        defer { appModel.disconnectGateway() }
         let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
         let identity = DeviceIdentityStore.loadOrCreate()
-        defer { DeviceAuthStore.clearToken(deviceId: identity.deviceId, role: "node", gatewayID: connectedID) }
+        let resetRelease = AsyncStream<Void>.makeStream()
+        let existingReset = Task {
+            for await _ in resetRelease.stream {
+                return
+            }
+        }
+        appModel._test_setGatewaySessionResetTask(existingReset)
+        defer {
+            resetRelease.continuation.finish()
+            appModel._test_setGatewaySessionResetTask(nil)
+            DeviceAuthStore.clearToken(deviceId: identity.deviceId, role: "node", gatewayID: connectedID)
+        }
 
-        await controller.forgetGateway(stableID: connectedID)
+        let forgetTask = Task { @MainActor in
+            await controller.forgetGateway(stableID: connectedID)
+        }
+        let deadline = ContinuousClock().now.advanced(by: .seconds(3))
+        while appModel.activeGatewayConnectConfig != nil, ContinuousClock().now < deadline {
+            await Task.yield()
+        }
+        #expect(appModel.activeGatewayConnectConfig == nil)
+
         _ = DeviceAuthStore.storeToken(
             deviceId: identity.deviceId,
             role: "node",
             token: "late-handshake-token",
             gatewayID: connectedID)
-        let deadline = ContinuousClock().now.advanced(by: .seconds(3))
-        while DeviceAuthStore.loadToken(
-            deviceId: identity.deviceId,
-            role: "node",
-            gatewayID: connectedID) != nil,
-            ContinuousClock().now < deadline
-        {
-            try await Task.sleep(for: .milliseconds(10))
-        }
+        resetRelease.continuation.yield()
+        resetRelease.continuation.finish()
 
+        #expect(await forgetTask.value)
         #expect(appModel.activeGatewayConnectConfig == nil)
         #expect(GatewaySettingsStore.activeGatewayEntry()?.stableID == selectedID)
         #expect(DeviceAuthStore.loadToken(

@@ -109,6 +109,11 @@ public struct OpenClawChatUsage: Codable, Hashable, Sendable {
     }
 }
 
+public enum OpenClawChatPlaybackMode: String, Codable, Hashable, Sendable {
+    case native
+    case transcode
+}
+
 public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
     public let type: String?
     public let text: String?
@@ -124,6 +129,7 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
     public let height: Int?
     public let sizeBytes: Int?
     public let durationSeconds: Double?
+    public let playback: OpenClawChatPlaybackMode?
     public let content: AnyCodable?
     public let preview: OpenClawChatCanvasPreview?
 
@@ -174,6 +180,7 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         height: Int? = nil,
         sizeBytes: Int? = nil,
         durationSeconds: Double? = nil,
+        playback: OpenClawChatPlaybackMode? = nil,
         content: AnyCodable?,
         preview: OpenClawChatCanvasPreview? = nil,
         id: String? = nil,
@@ -196,6 +203,7 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         self.height = height
         self.sizeBytes = sizeBytes
         self.durationSeconds = durationSeconds
+        self.playback = playback
         self.content = content
         self.preview = preview
         self.id = id
@@ -221,6 +229,7 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         case sizeBytes
         case durationSeconds
         case durationMs
+        case playback
         case content
         case preview
         case id
@@ -253,6 +262,7 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         self.sizeBytes = try container.decodeIfPresent(Int.self, forKey: .sizeBytes)
         self.durationSeconds = try container.decodeIfPresent(Double.self, forKey: .durationSeconds)
             ?? container.decodeIfPresent(Double.self, forKey: .durationMs).map { $0 / 1000 }
+        self.playback = try container.decodeIfPresent(OpenClawChatPlaybackMode.self, forKey: .playback)
         self.id = try container.decodeIfPresent(String.self, forKey: .id)
         self.name = try container.decodeIfPresent(String.self, forKey: .name)
         self.arguments = try container.decodeIfPresent(AnyCodable.self, forKey: .arguments)
@@ -286,6 +296,7 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         try container.encodeIfPresent(self.height, forKey: .height)
         try container.encodeIfPresent(self.sizeBytes, forKey: .sizeBytes)
         try container.encodeIfPresent(self.durationSeconds, forKey: .durationSeconds)
+        try container.encodeIfPresent(self.playback, forKey: .playback)
         try container.encodeIfPresent(self.content, forKey: .content)
         try container.encodeIfPresent(self.preview, forKey: .preview)
         try container.encodeIfPresent(self.id, forKey: .id)

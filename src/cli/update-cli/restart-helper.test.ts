@@ -139,9 +139,21 @@ case "$1" in
 esac
 exit 0
 `,
+    systemOwnership: "absent" | "loaded" = "absent",
   ) {
     const launchctlPath = path.join(fakeBinDir, "launchctl");
-    await fs.writeFile(launchctlPath, content, { mode: 0o755 });
+    const body = content.replace(/^#!\/bin\/sh\r?\n/, "");
+    await fs.writeFile(
+      launchctlPath,
+      `#!/bin/sh
+if [ "$1" = "print" ]; then
+  case "$2" in
+    system/*) ${systemOwnership === "loaded" ? "exit 0" : "printf 'Could not find service\\n' >&2; exit 113"} ;;
+  esac
+fi
+${body}`,
+      { mode: 0o755 },
+    );
   }
 
   async function writeFakeSleep(fakeBinDir: string) {
@@ -634,30 +646,13 @@ exit 0
       await expect(fs.readFile(markerPath, "utf-8")).resolves.toBe("ran");
     });
 
-    it("logs custom macOS launchd labels without shell expansion", async () => {
+    it("rejects custom macOS launchd labels with shell metacharacters", async () => {
       Object.defineProperty(process, "platform", { value: "darwin" });
       process.getuid = () => 501;
-      const tmpDir = await makeTempDir("openclaw-restart-helper-");
-      const fakeBinDir = path.join(tmpDir, "bin");
-      const stateDir = path.join(tmpDir, "state");
-      await fs.mkdir(fakeBinDir, { recursive: true });
-      await writeFakeSleep(fakeBinDir);
-      await writeFakeLaunchctl(fakeBinDir);
 
-      const { scriptPath } = await prepareAndReadScript({
-        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.$(echo injected)",
-        HOME: path.join(tmpDir, "home"),
-        OPENCLAW_STATE_DIR: stateDir,
-      });
-
-      const result = await executeScript(scriptPath, {
-        PATH: `${fakeBinDir}:${process.env.PATH ?? ""}`,
-      });
-      const log = await fs.readFile(path.join(stateDir, "logs", "gateway-restart.log"), "utf-8");
-
-      expect(result.code).toBeNull();
-      expect(log).toContain("target=ai.openclaw.$(echo injected)");
-      expect(log).not.toContain("target=ai.openclaw.injected");
+      await expect(
+        prepareRestartScript({ OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.$(echo injected)" }),
+      ).resolves.toBeNull();
     });
 
     it("uses OPENCLAW_LAUNCHD_LABEL override on macOS", async () => {
@@ -1029,17 +1024,16 @@ Write-Output "OPENCLAW_RESTART_POLICY_OK"
       await cleanupScript(scriptPath);
     });
 
-    it("shell-escapes the label in the plist path on macOS", async () => {
+    it("rejects a launchd label that the lifecycle path cannot use", async () => {
       Object.defineProperty(process, "platform", { value: "darwin" });
       process.getuid = () => 501;
 
-      const { scriptPath, content } = await prepareAndReadScript({
-        HOME: "/Users/testuser",
-        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.it's-a-test",
-      });
-      // The plist path must also shell-escape the label to prevent injection
-      expect(content).toContain("ai.openclaw.it'\\''s-a-test.plist");
-      await cleanupScript(scriptPath);
+      await expect(
+        prepareRestartScript({
+          HOME: "/Users/testuser",
+          OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.it's-a-test",
+        }),
+      ).resolves.toBeNull();
     });
 
     it("rejects unsafe batch profile names on Windows", async () => {

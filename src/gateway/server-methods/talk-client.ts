@@ -243,6 +243,7 @@ export const talkClientHandlers: GatewayRequestHandlers = {
       }
       const realtimeContext = await resolveTalkRealtimeProviderInstructions({
         config: runtimeConfig,
+        agentId: requestedAgentId,
         configuredInstructions: realtimeConfig.instructions,
         sessionKey: typedParams.sessionKey,
         // Legacy creates can drift to another agent's session at toolCall time, so

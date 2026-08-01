@@ -1,4 +1,3 @@
-import path from "node:path";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
 /**
  * CLI turn compaction lifecycle.
@@ -34,6 +33,7 @@ import {
   compactWithSafetyTimeout,
   resolveCompactionTimeoutMs,
 } from "../embedded-agent-runner/compaction-safety-timeout.js";
+import { resolveContextEngineCompactionSuccessor } from "../embedded-agent-runner/compaction-successor.js";
 import { runContextEngineMaintenance as runContextEngineMaintenanceImpl } from "../embedded-agent-runner/context-engine-maintenance.js";
 import { shouldPreemptivelyCompactBeforePrompt as shouldPreemptivelyCompactBeforePromptImpl } from "../embedded-agent-runner/run/preemptive-compaction.js";
 import { resolveLiveToolResultMaxChars as resolveLiveToolResultMaxCharsImpl } from "../embedded-agent-runner/tool-result-truncation.js";
@@ -41,7 +41,6 @@ import type { EmbeddedAgentCompactResult } from "../embedded-agent-runner/types.
 import { isRecoverableNativeHarnessBindingFailure } from "../harness/compaction-recovery.js";
 import { maybeCompactAgentHarnessSession as maybeCompactAgentHarnessSessionImpl } from "../harness/compaction.js";
 import { ensureSelectedAgentHarnessPlugin as ensureSelectedAgentHarnessPluginImpl } from "../harness/runtime-plugin.js";
-import { resolveAgentRunSessionTarget } from "../run-session-target.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import {
@@ -253,65 +252,6 @@ function buildCliCompactionRuntimeContext(params: CliCompactionRuntimeContextPar
   };
 }
 
-async function resolveCliContextCompactionSuccess(params: {
-  agentId: string;
-  cfg: OpenClawConfig;
-  compactResult: Awaited<ReturnType<ContextEngine["compact"]>>;
-  sessionFile: string;
-  sessionId: string;
-  sessionKey: string;
-  storePath?: string;
-}): Promise<{
-  maintenanceSessionFile: string;
-  maintenanceSessionId: string;
-  successorSessionFile?: string;
-  successorSessionId?: string;
-  tokensAfter?: number;
-}> {
-  const result = params.compactResult.result;
-  const resultTarget = result?.sessionTarget;
-  const explicitResultSessionId = result?.sessionId ?? resultTarget?.sessionId;
-  const resultSessionId = explicitResultSessionId ?? params.sessionId;
-  const resultSessionTarget =
-    resultTarget && resultSessionId
-      ? { ...resultTarget, sessionId: resultTarget.sessionId ?? resultSessionId }
-      : resultTarget;
-  if (!resultSessionTarget && !explicitResultSessionId) {
-    return {
-      maintenanceSessionFile: params.sessionFile,
-      maintenanceSessionId: params.sessionId,
-      ...(result?.tokensAfter !== undefined ? { tokensAfter: result.tokensAfter } : {}),
-    };
-  }
-  const resolvedTarget = await resolveAgentRunSessionTarget({
-    agentId: resultSessionTarget?.agentId ?? readAgentIdFromSessionKey(params.sessionKey),
-    config: params.cfg,
-    sessionId: resultSessionId,
-    sessionKey: resultSessionTarget?.sessionKey ?? params.sessionKey,
-    sessionTarget: Object.assign(
-      {},
-      resultSessionTarget,
-      params.storePath && !resultSessionTarget?.storePath ? { storePath: params.storePath } : {},
-    ),
-  });
-  if (
-    resolvedTarget.agentId !== params.agentId ||
-    resolvedTarget.sessionKey !== params.sessionKey ||
-    (params.storePath && path.resolve(resolvedTarget.storePath) !== path.resolve(params.storePath))
-  ) {
-    throw new Error(
-      "CLI context compaction cannot adopt a successor outside the active session binding",
-    );
-  }
-  return {
-    maintenanceSessionFile: resolvedTarget.sessionKey,
-    maintenanceSessionId: resolvedTarget.sessionId,
-    successorSessionFile: resolvedTarget.sessionKey,
-    successorSessionId: resolvedTarget.sessionId,
-    ...(result?.tokensAfter !== undefined ? { tokensAfter: result.tokensAfter } : {}),
-  };
-}
-
 async function compactCliTranscript(params: {
   agentId: string;
   contextEngine: ContextEngine;
@@ -319,7 +259,7 @@ async function compactCliTranscript(params: {
   sessionKey: string;
   sessionFile: string;
   sessionManager: SessionManagerLike;
-  storePath?: string;
+  storePath: string;
   cfg: OpenClawConfig;
   workspaceDir: string;
   cwd?: string;
@@ -426,21 +366,26 @@ async function compactCliTranscript(params: {
     };
   }
 
-  const successor = await resolveCliContextCompactionSuccess({
-    agentId: params.agentId,
-    cfg: params.cfg,
-    compactResult,
-    sessionFile: params.sessionFile,
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    storePath: params.storePath,
+  const result = compactResult.result;
+  const hasSuccessor = Boolean(result?.sessionTarget || result?.sessionId || result?.sessionFile);
+  const successor = await resolveContextEngineCompactionSuccessor({
+    config: params.cfg,
+    currentSessionFile: params.sessionFile,
+    currentTarget: {
+      agentId: params.agentId,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+    },
+    result: compactResult,
   });
   try {
     await cliCompactionDeps.runContextEngineMaintenance({
       contextEngine: params.contextEngine,
-      sessionId: successor.maintenanceSessionId,
+      sessionId: successor.sessionId,
       sessionKey: params.sessionKey,
-      sessionFile: successor.maintenanceSessionFile,
+      sessionFile: successor.sessionFile,
+      sessionTarget: hasSuccessor ? successor.sessionTarget : undefined,
       reason: "compaction",
       sessionManager: params.sessionManager,
       runtimeContext,
@@ -455,7 +400,13 @@ async function compactCliTranscript(params: {
       `CLI transcript compaction maintenance failed after fallback for ${params.provider}/${params.model}: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
-  return { compacted: true, ...successor };
+  return {
+    compacted: true,
+    ...(hasSuccessor
+      ? { successorSessionFile: successor.sessionFile, successorSessionId: successor.sessionId }
+      : {}),
+    ...(result?.tokensAfter !== undefined ? { tokensAfter: result.tokensAfter } : {}),
+  };
 }
 
 async function compactNativeHarnessCliTranscript(params: {

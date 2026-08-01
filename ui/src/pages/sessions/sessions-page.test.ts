@@ -12,56 +12,13 @@ import type {
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { getWorkboardState } from "../../lib/workboard/index.ts";
-import type { SessionsRouteData } from "./sessions-page.ts";
-import type { TranscriptSearchState } from "./view.ts";
-import "./sessions-page.ts";
-
-type TestSessionsPage = HTMLElement & {
-  context: ApplicationContext;
-  render: () => unknown;
-  requestUpdate: () => void;
-  readonly updateComplete: Promise<boolean>;
-  routeData?: SessionsRouteData;
-  result: SessionsListResult | null;
-  error: string | null;
-  loading: boolean;
-  statusFilter: "active" | "archived" | "all";
-  selectedKeys: Set<string>;
-  sessionMenu: { key: string; x: number; y: number } | null;
-  sessionMenuTrigger: HTMLElement | null;
-  checkpointItemsByKey: Record<string, SessionCompactionCheckpoint[]>;
-  checkpointLoadingKey: string | null;
-  checkpointBusyKey: string | null;
-  sessionMutationPending: boolean;
-  transcriptSearchQuery: string;
-  transcriptSearch: TranscriptSearchState;
-  loadSessions: () => Promise<void>;
-  updateTranscriptSearchQuery: (query: string) => void;
-  runTranscriptSearch: () => Promise<void>;
-  loadCheckpoint: (sessionKey: string) => Promise<void>;
-  deleteSelected: () => Promise<void>;
-  deleteSessionFromMenu: (row: GatewaySessionRow) => Promise<void>;
-  deleteAllArchived: () => Promise<void>;
-  stopCloudWorker: (row: GatewaySessionRow) => Promise<void>;
-  rememberCustomGroup: (name: string) => Promise<void>;
-  openSessionMenu: (
-    row: GatewaySessionRow,
-    position: { x: number; y: number },
-    trigger: HTMLElement | null,
-  ) => void;
-  patchSession: (key: string, patch: { archived?: boolean; pinned?: boolean }) => Promise<unknown>;
-  archiveSessionWithUndo: (row: GatewaySessionRow) => Promise<void>;
-  forkSession: (key: string) => Promise<void>;
-  branchCheckpoint: (sessionKey: string, checkpointId: string) => Promise<void>;
-  restoreCheckpoint: (sessionKey: string, checkpointId: string) => Promise<void>;
-  addToWorkboard: (session: GatewaySessionRow) => Promise<void>;
-};
-
-type MutableGateway = {
-  gateway: ApplicationContext["gateway"];
-  emit: (patch: Partial<ApplicationGatewaySnapshot>) => void;
-  setSessionKey: ReturnType<typeof vi.fn>;
-};
+import {
+  createContext,
+  createGateway,
+  createRenderedPage,
+  createSessions,
+  type TestSessionsPage,
+} from "./sessions-page.test-support.ts";
 
 type TestSessionMenu = HTMLElement & {
   forkDisabled: boolean;
@@ -79,121 +36,10 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-function createGateway(client: GatewayBrowserClient): MutableGateway {
-  let snapshot: ApplicationGatewaySnapshot = {
-    client,
-    phase: "connected",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
-    hello: null,
-    assistantAgentId: null,
-    sessionKey: "main",
-    lastError: null,
-    lastErrorCode: null,
-  };
-  const listeners = new Set<(next: ApplicationGatewaySnapshot) => void>();
-  const setSessionKey = vi.fn();
-  const gateway = {
-    get snapshot() {
-      return snapshot;
-    },
-    eventLog: [],
-    setSessionKey,
-    subscribe(listener: (next: ApplicationGatewaySnapshot) => void) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-    subscribeEvents: () => () => undefined,
-    subscribeEventLog: () => () => undefined,
-  } as unknown as ApplicationContext["gateway"];
-  return {
-    gateway,
-    setSessionKey,
-    emit(patch) {
-      snapshot = { ...snapshot, ...patch };
-      for (const listener of listeners) {
-        listener(snapshot);
-      }
-    },
-  };
-}
-
-function createSessions(overrides: Partial<SessionCapability> = {}): SessionCapability {
-  const subscribe = () => () => undefined;
-  return {
-    state: {
-      result: null,
-      agentId: null,
-      modelOverrides: {},
-      loading: false,
-      error: null,
-      deletedSessions: [],
-    },
-    list: vi.fn(async () => null),
-    listCheckpoints: vi.fn(async () => []),
-    deleteMany: vi.fn(async () => ({ deleted: [], errors: [], preservedWorktrees: [] })),
-    patch: vi.fn(async () => null),
-    create: vi.fn(async () => null),
-    branchCheckpoint: vi.fn(async () => ({ key: "branch" })),
-    restoreCheckpoint: vi.fn(async () => ({ ok: true })),
-    subscribe,
-    ...overrides,
-  } as unknown as SessionCapability;
-}
-
-function createContext(
-  gateway: ApplicationContext["gateway"],
-  sessions: SessionCapability,
-): ApplicationContext {
-  const subscribe = () => () => undefined;
-  return {
-    basePath: "",
-    gateway,
-    sessions,
-    agents: { state: { agentsList: null }, subscribe },
-    agentIdentity: { get: () => undefined, ensure: vi.fn(), subscribe },
-    agentSelection: {
-      state: { selectedId: "main", scopeId: "main" },
-      set: () => undefined,
-      setScope: () => undefined,
-      subscribe,
-    },
-    channels: { subscribe },
-    runtimeConfig: { state: { configSnapshot: null }, subscribe },
-    workboard: {
-      state: { cards: [], capturingSessionKeys: new Set() },
-      notify: vi.fn(),
-      subscribe,
-    },
-    navigate: vi.fn(),
-    preload: vi.fn(),
-  } as unknown as ApplicationContext;
-}
-
 async function createPage(context: ApplicationContext): Promise<TestSessionsPage> {
   const page = document.createElement("openclaw-sessions-page") as TestSessionsPage;
   page.context = context;
   page.render = () => nothing;
-  document.body.append(page);
-  await page.updateComplete;
-  return page;
-}
-
-async function createRenderedPage(
-  context: ApplicationContext,
-  result: SessionsListResult,
-  statusFilter: "active" | "archived" | "all" = "active",
-): Promise<TestSessionsPage> {
-  const page = document.createElement("openclaw-sessions-page") as TestSessionsPage;
-  page.context = context;
-  page.routeData = {
-    gateway: context.gateway,
-    gatewaySnapshot: context.gateway.snapshot,
-    result,
-    error: null,
-    expandedSessionKey: null,
-    statusFilter,
-  };
   document.body.append(page);
   await page.updateComplete;
   return page;
@@ -239,133 +85,6 @@ describe("sessions page lifecycle", () => {
         (radio) => radio.textContent?.trim() === "Archived",
       )?.checked,
     ).toBe(true);
-  });
-
-  it("re-enumerates all archived sessions before bulk deletion", async () => {
-    // The rendered result holds one archived row; enumeration must find both.
-    const archivedKeys = ["agent:main:old-1", "agent:main:old-2"];
-    const sessions = createSessions({
-      list: vi.fn(async () => ({
-        count: 2,
-        sessions: archivedKeys.map((key) => ({ key, archived: true })),
-      })) as unknown as SessionCapability["list"],
-      deleteMany: vi.fn(async () => ({
-        deleted: archivedKeys,
-        errors: [],
-        preservedWorktrees: [],
-      })),
-    });
-    const { gateway } = createGateway({} as GatewayBrowserClient);
-    const page = await createRenderedPage(
-      createContext(gateway, sessions),
-      {
-        count: 2,
-        sessions: [
-          { key: archivedKeys[0], archived: true },
-          { key: "agent:main:active", archived: false },
-        ],
-      } as SessionsListResult,
-      "archived",
-    );
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
-
-    page.querySelector<HTMLButtonElement>(".settings-section__actions .danger")?.click();
-    await vi.waitFor(() => expect(sessions.deleteMany).toHaveBeenCalledOnce());
-
-    expect(sessions.list).toHaveBeenCalledWith(
-      expect.objectContaining({ archivedFilter: "archived", limit: 1000 }),
-    );
-    expect(confirm).toHaveBeenCalledWith("Delete 2 archived threads and their transcripts?");
-    expect(sessions.deleteMany).toHaveBeenCalledWith([
-      {
-        key: archivedKeys[0],
-        agentId: undefined,
-        deleteTranscript: true,
-        archivedOnly: true,
-      },
-      {
-        key: archivedKeys[1],
-        agentId: undefined,
-        deleteTranscript: true,
-        archivedOnly: true,
-      },
-    ]);
-  });
-
-  it("aborts delete-all when an enumeration page fails", async () => {
-    const sessions = createSessions({
-      list: vi.fn(async () => null) as unknown as SessionCapability["list"],
-      deleteMany: vi.fn(async () => ({ deleted: [], errors: [], preservedWorktrees: [] })),
-    });
-    sessions.state.error = "list failed";
-    const { gateway } = createGateway({} as GatewayBrowserClient);
-    const page = await createRenderedPage(
-      createContext(gateway, sessions),
-      {
-        count: 1,
-        sessions: [{ key: "agent:main:old-1", archived: true }],
-      } as SessionsListResult,
-      "archived",
-    );
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
-
-    page.querySelector<HTMLButtonElement>(".settings-section__actions .danger")?.click();
-    await vi.waitFor(() => expect(sessions.list).toHaveBeenCalledOnce());
-
-    expect(confirm).not.toHaveBeenCalled();
-    expect(sessions.deleteMany).not.toHaveBeenCalled();
-  });
-
-  it("paginates the archived enumeration until the listing is exhausted", async () => {
-    const pageOne = ["agent:main:old-1", "agent:main:old-2"];
-    const pageTwo = ["agent:main:old-3"];
-    const list = vi
-      .fn()
-      .mockResolvedValueOnce({
-        count: 3,
-        sessions: pageOne.map((key) => ({ key, archived: true })),
-        hasMore: true,
-        nextOffset: 2,
-      })
-      .mockResolvedValueOnce({
-        count: 3,
-        sessions: pageTwo.map((key) => ({ key, archived: true })),
-        hasMore: false,
-        nextOffset: null,
-      });
-    const sessions = createSessions({
-      list: list as unknown as SessionCapability["list"],
-      deleteMany: vi.fn(async () => ({
-        deleted: [...pageOne, ...pageTwo],
-        errors: [],
-        preservedWorktrees: [],
-      })),
-    });
-    const { gateway } = createGateway({} as GatewayBrowserClient);
-    const page = await createRenderedPage(
-      createContext(gateway, sessions),
-      {
-        count: 1,
-        sessions: [{ key: pageOne[0], archived: true }],
-      } as SessionsListResult,
-      "archived",
-    );
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
-
-    page.querySelector<HTMLButtonElement>(".settings-section__actions .danger")?.click();
-    await vi.waitFor(() => expect(sessions.deleteMany).toHaveBeenCalledOnce());
-
-    expect(list).toHaveBeenCalledTimes(2);
-    expect(list).toHaveBeenNthCalledWith(2, expect.objectContaining({ offset: 2 }));
-    expect(confirm).toHaveBeenCalledWith("Delete 3 archived threads and their transcripts?");
-    expect(sessions.deleteMany).toHaveBeenCalledWith(
-      [...pageOne, ...pageTwo].map((key) => ({
-        key,
-        agentId: undefined,
-        deleteTranscript: true,
-        archivedOnly: true,
-      })),
-    );
   });
 
   it("offers undo after archiving from the Sessions page", async () => {

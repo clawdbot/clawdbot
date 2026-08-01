@@ -10,6 +10,7 @@ import {
   parseAgentSessionKey,
 } from "../routing/session-key.js";
 import type { ChatLog } from "./components/chat-log.js";
+import { refreshTuiAgentList } from "./tui-agent-list-refresh.js";
 import type { TuiAgentsList, TuiBackend, TuiSessionMutationResult } from "./tui-backend.js";
 import {
   asString,
@@ -172,14 +173,12 @@ export function createSessionActions(context: SessionActionContext) {
     updateFooter();
   };
 
-  const refreshAgents = async () => {
-    try {
-      const result = await client.listAgents();
-      applyAgentsResult(result);
-    } catch (err) {
-      chatLog.addSystem(`agents list failed: ${formatTuiErrorMessage(err)}`);
-    }
-  };
+  const refreshAgents = () =>
+    refreshTuiAgentList({
+      load: () => client.listAgents(),
+      apply: applyAgentsResult,
+      reportError: (message) => chatLog.addSystem(`agents list failed: ${message}`),
+    });
 
   const updateAgentFromSessionKey = (key: string) => {
     const parsed = parseAgentSessionKey(key);
@@ -432,6 +431,9 @@ export function createSessionActions(context: SessionActionContext) {
     if (!result?.entry || !isCurrentSessionSelection(requestSelection)) {
       return false;
     }
+    // Invalidate same-key history/session-info readers before adopting the replacement epoch.
+    historyLoadGeneration += 1;
+    state.sessionGeneration = (state.sessionGeneration ?? 0) + 1;
     reduceTuiSessionProjection(state, {
       type: "sessionReset",
       scope: readTuiSessionProjectionScope(state),

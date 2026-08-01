@@ -610,6 +610,7 @@ public struct OpenClawChatMediaStream: Sendable {
 public enum OpenClawChatLoadedMedia: Sendable {
     case data(OpenClawChatMediaData)
     case stream(OpenClawChatMediaStream)
+    case preparing
 }
 
 /// One physical Gateway route for Swarm capability discovery and child paging.
@@ -738,7 +739,8 @@ public protocol OpenClawChatTransport: Sendable {
     func loadMediaArtifact(
         sessionKey: String,
         artifactId: String,
-        kind: OpenClawChatMediaKind) async throws -> OpenClawChatLoadedMedia?
+        kind: OpenClawChatMediaKind,
+        playback: OpenClawChatPlaybackMode?) async throws -> OpenClawChatLoadedMedia?
 
     func setActiveSessionKey(_ sessionKey: String) async throws
     func resetSession(sessionKey: String) async throws
@@ -749,7 +751,8 @@ extension OpenClawChatTransport {
     public func loadMediaArtifact(
         sessionKey _: String,
         artifactId _: String,
-        kind _: OpenClawChatMediaKind) async throws -> OpenClawChatLoadedMedia?
+        kind _: OpenClawChatMediaKind,
+        playback _: OpenClawChatPlaybackMode?) async throws -> OpenClawChatLoadedMedia?
     {
         nil
     }

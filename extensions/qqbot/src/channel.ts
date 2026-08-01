@@ -14,12 +14,7 @@ import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import "./bridge/bootstrap.js";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import { getQQBotApprovalCapability } from "./bridge/approval/capability.js";
-import {
-  qqbotConfigAdapter,
-  qqbotMeta,
-  qqbotSetupAdapterShared,
-  qqbotSetupContract,
-} from "./bridge/config-shared.js";
+import { qqbotConfigAdapter, qqbotMeta, qqbotSetupContract } from "./bridge/config-shared.js";
 import {
   applyQQBotAccountConfig,
   DEFAULT_ACCOUNT_ID,
@@ -286,9 +281,6 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
       const backup = loadCredentialBackup(account.accountId);
       return Boolean(backup?.appId && backup?.clientSecret);
     },
-  },
-  setup: {
-    ...qqbotSetupAdapterShared,
   },
   setupContract: qqbotSetupContract,
   approvalCapability: getQQBotApprovalCapability(),

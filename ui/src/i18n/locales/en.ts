@@ -380,6 +380,8 @@ export const en: TranslationMap = {
       "Update installed but running version did not change — restart may have been blocked. Expected v{expectedVersion}, running v{actualVersion}.",
     handoffTimeout:
       "Update handoff started, but completion was not reported after reconnect. Run `openclaw update status` for the final result.",
+    outcomeUnknown:
+      "The update request may have been accepted, but the Gateway did not report a final result after reconnect. Run `openclaw update status` before retrying.",
     failureReasons: {
       dirty: "Commit or stash changes, then retry.",
       noUpstream: "Set an upstream branch, then retry.",
@@ -661,6 +663,8 @@ export const en: TranslationMap = {
     loadError: "Could not load dashboards: {error}",
   },
   sessionsView: {
+    subagentPrefix: "Subagent:",
+    automationPrefix: "Automation:",
     deletePreservedWorktrees:
       "{count} thread worktree(s) with uncommitted or unpushed work were kept ({branches}). Manage them under Settings -> Worktrees.",
     deletePreservedWorktreeConfirm:
@@ -739,6 +743,7 @@ export const en: TranslationMap = {
     noArchivedSessions: "No archived sessions.",
     noSessionsMatchFilters: "No threads match your filters.",
     pagination: "{start}-{end} of {total} rows",
+    pageSize: "Rows per page",
     rowsPerPage: "{count} per page",
     showAll: "Show all",
     inherit: "inherit",
@@ -837,7 +842,7 @@ export const en: TranslationMap = {
     groupBy: "Group by",
     groupByNone: "None",
     groupByCategory: "Custom groups",
-    showCronSessions: "Show cron sessions",
+    showCronSessions: "Show automation sessions",
     groupByChannel: "Channel",
     groupByKind: "Kind",
     groupByAgent: "Agent",
@@ -997,10 +1002,10 @@ export const en: TranslationMap = {
     },
     cronPanel: {
       schedulerTitle: "Scheduler",
-      schedulerSubtitle: "Gateway cron status.",
+      schedulerSubtitle: "Gateway automations status.",
       jobs: "Jobs",
       nextWake: "Next wake",
-      agentJobsTitle: "Agent Cron Jobs",
+      agentJobsTitle: "Agent Automations",
       agentJobsSubtitle: "Scheduled jobs targeting this agent.",
       noJobs: "No jobs assigned.",
       runNow: "Run Now",
@@ -1079,9 +1084,15 @@ export const en: TranslationMap = {
     structuredSecretRaw: "Structured value (SecretRef) - use Raw mode to edit",
     structuredSecretFile: "Structured value (SecretRef) - edit the config file directly",
     defaultValue: "Default: {value}",
+    usingDefault: "Using default: {value}",
     resetToDefault: "Reset to default",
     select: "Select...",
+    nullValue: "null",
     jsonValue: "JSON value",
+    invalidJson: "Enter valid JSON before leaving this field.",
+    invalidString: "Enter a value that matches this setting's constraints.",
+    invalidNumber: "Enter a value within the allowed range and step.",
+    draftRejected: "This setting could not be saved. Your draft is still here.",
     unsupportedArray: "Unsupported array schema. Use Raw mode.",
     itemCountOne: "{count} item",
     itemCount: "{count} items",
@@ -1184,7 +1195,7 @@ export const en: TranslationMap = {
         description: "Session management and persistence",
       },
       cron: {
-        label: "Cron",
+        label: "Automations",
         description: "Scheduled tasks and automation",
       },
       discovery: {
@@ -1231,6 +1242,8 @@ export const en: TranslationMap = {
       model: "Model",
       thinking: "Thinking",
       fastMode: "Fast mode",
+      default: "Default",
+      modelPolicy: "Model policy",
       thinkingLevels: {
         off: "Off",
         low: "Low",
@@ -1363,7 +1376,7 @@ export const en: TranslationMap = {
       commands: "Commands",
       hooks: "Hooks",
       bindings: "Bindings",
-      cron: "Cron",
+      cron: "Automations",
       approvals: "Approvals",
       security: "Security Policy",
       plugins: "Plugins",
@@ -1399,6 +1412,7 @@ export const en: TranslationMap = {
       xxl: "XXL",
     },
     syncedHint: "Synced across your devices through the gateway.",
+    syncPendingHint: "Waiting to sync through the gateway.",
     notifications: {
       title: "Push notifications",
       nativeTitle: "Notifications",
@@ -1926,7 +1940,7 @@ export const en: TranslationMap = {
     sessions: "Active threads and defaults.",
     usage: "API usage and costs.",
     cron: "Scheduled tasks and recurring agent runs.",
-    tasks: "Background tasks: subagents, cron runs, CLI.",
+    tasks: "Background tasks: subagents, automation runs, CLI.",
     skills: "Skills and API keys.",
     plugins: "Install and manage optional capabilities.",
     skillWorkshop: "Review, refine, and apply proposals before they become live skills.",
@@ -1939,7 +1953,7 @@ export const en: TranslationMap = {
     communications: "Messages and text-to-speech settings.",
     appearance: "Theme, UI, and setup wizard settings.",
     lobsterdex: "Every lobster palette that has visited this browser.",
-    automation: "Commands, hooks, cron, and plugins.",
+    automation: "Commands, hooks, automations, and plugins.",
     mcp: "MCP servers, auth, tools, and diagnostics.",
     memory: "Memory engine, backend, search, and dreaming.",
     talk: "Realtime voice: provider, model, and speaker voice.",
@@ -1958,18 +1972,18 @@ export const en: TranslationMap = {
     plugin: "Plugin-provided panel.",
   },
   modelSetup: {
-    heading: "Connect your AI",
+    heading: "Connect a verified AI model",
     intro:
-      "OpenClaw reuses AI access you already have — a CLI login, an API key, or a provider sign-in.",
+      "OpenClaw checks the AI access available on this Gateway and verifies the exact model before it enables conversations.",
     required: {
       title: "No AI provider configured",
-      body: "OpenClaw couldn't find a provider and model configured for this agent. Add one before starting a conversation.",
-      action: "Configure a provider",
+      body: "We couldn't find a provider and model configured for this agent. Choose a supported connection; OpenClaw will test it before enabling chat.",
+      action: "Connect an AI provider",
     },
     connectionFailure: {
-      title: "OpenClaw couldn't use your configured AI",
-      body: "This agent has a provider and model selected, but the connection failed. Check the provider login or API key, model access, and service status, then try again.",
-      action: "Check provider settings",
+      title: "Configured AI needs attention",
+      body: "OpenClaw found the provider and model selected for this agent, but the live check failed. Your configuration is still intact. Review the credential, model access, or provider status, then verify again.",
+      action: "Review connection",
     },
     loading: "Checking this Gateway for available AI access…",
     retry: "Retry",
@@ -2011,27 +2025,37 @@ export const en: TranslationMap = {
       more: "More sign-in options",
     },
     prepare: {
-      title: "Set up a local model",
-      intro: "Download or prepare a local model on this Gateway.",
-      button: "Set up / Download model",
+      title: "Run a model locally",
+      intro: "Use a local model service, or run a private GGUF model directly inside this Gateway.",
+      ollamaButton: "Check & set up",
       ollamaLabel: "Ollama",
-      ollamaHint: "Download a tools-capable model from your Ollama server",
-      llamaCppLabel: "Local model (llama.cpp)",
-      llamaCppHint: "Download an approximately 5.0 GB local model; requires 16 GB RAM",
+      ollamaHint: "Connect to the Ollama service on this Gateway and prepare a tools-capable model",
+      llamaCppLabel: "llama.cpp",
+      providerNotReady:
+        "{provider} did not expose a usable local model. Review the setup result, then retry.",
     },
     manual: {
       title: "Connect with an API key or token",
-      provider: "Provider",
+      provider: "Provider and access method",
       selectProvider: "Select a provider",
+      selectProviderHint: "Choose where this credential comes from",
       accessValue: "API key or token",
+      accessValueFor: "{provider} API key or token",
       accessValuePlaceholder: "Paste an API key or token",
       connect: "Connect",
+      connectAndVerify: "Connect & verify",
+      verifyHint: "OpenClaw verifies a real model reply before marking the connection ready.",
       required: "Choose a provider and enter an API key or token.",
     },
     success: {
-      title: "Your AI is ready",
+      title: "Connection verified",
+      body: "OpenClaw received a real reply from {modelRef}. You can start chatting now.",
+      activeModel: "Active model",
+      latency: "Verified in {latencyMs} ms",
       detail: "{modelRef} · {latencyMs} ms",
-      openChat: "Open Chat",
+      openChat: "Start chatting",
+      continueSetup: "Continue setup",
+      stayHere: "Stay in settings",
       configuredModel: "Configured model",
     },
     failure: {
@@ -2217,6 +2241,11 @@ export const en: TranslationMap = {
       channelDegraded: "{channel} is degraded — ask me what happened",
       channelFallback: "A channel",
       dismiss: "Dismiss this update",
+      channelSetupTitle: "Reach OpenClaw outside this app",
+      channelSetupBody:
+        "The web app already works. Add a channel only if you want to message OpenClaw from another service.",
+      channelSetupAction: "Set up a channel",
+      channelSetupDismiss: "Keep using the web app",
     },
   },
   mcpServers: {
@@ -2400,7 +2429,9 @@ export const en: TranslationMap = {
       description:
         "Exactly one memory plugin owns the memory slot. Selecting an engine enables it and disables the others.",
       rowTitle: "Memory engine",
+      openClawMemory: "OpenClaw Memory",
       off: "Off",
+      unavailable: "Unavailable",
       autoHint: "No engine is pinned in config, so the slot falls back to its default owner.",
       explicitHint: "This engine is pinned in config under plugins.slots.memory.",
       offHint: "Memory is switched off in config: plugins.slots.memory is set to none.",
@@ -2417,8 +2448,11 @@ export const en: TranslationMap = {
       rowTitle: "Retrieval backend",
       builtin: "Built-in",
       qmd: "QMD",
+      invalid: "Invalid configured value",
       builtinHint: "Memory files are indexed and searched by OpenClaw itself.",
       qmdHint: "Retrieval is delegated to QMD. Its settings appear below.",
+      invalidHint:
+        "The configured memory.backend value is invalid. Choose a backend or reset it to use the default.",
     },
     addons: {
       title: "Add-ons",
@@ -2446,7 +2480,7 @@ export const en: TranslationMap = {
     },
     dreaming: {
       intro:
-        "Dreaming runs as one managed cron job across every agent workspace, so these settings are global. They are owned by the {plugin} plugin.",
+        "Dreaming runs as one managed automation across every agent workspace, so these settings are global. They are owned by the {plugin} plugin.",
       schedule: {
         title: "Schedule",
         description: "When the full sweep runs and which model narrates it.",
@@ -2460,11 +2494,13 @@ export const en: TranslationMap = {
         label: "Timezone",
         help: "IANA timezone used to interpret the cron cadence.",
         placeholder: "Europe/Vienna",
+        default: "Gateway local timezone",
       },
       model: {
         label: "Dreaming model",
         help: "Provider/model override for dream diary narration. Requires subagent model overrides to be allowed.",
         placeholder: "anthropic/claude-sonnet-4-6",
+        default: "Agent model",
       },
       verboseLogging: {
         label: "Verbose logging",
@@ -2695,6 +2731,11 @@ export const en: TranslationMap = {
       description:
         "Keep a bounded tool directory visible and defer the rest behind search, so large MCP and plugin catalogs stop crowding the prompt.",
     },
+    loopDetection: {
+      title: "Tool-loop detection",
+      description:
+        "Enable rolling-history guards that warn or block repeated tool calls when an agent stops making progress.",
+    },
     localModelLean: {
       title: "Lean tools for local models",
       description:
@@ -2860,7 +2901,7 @@ export const en: TranslationMap = {
     },
     runtime: {
       subagent: "Subagent",
-      cron: "Cron",
+      cron: "Automation",
       acp: "ACP",
       cli: "CLI",
       unknown: "Task",
@@ -3506,8 +3547,8 @@ export const en: TranslationMap = {
   },
   attention: {
     cronErrorUnknown: "Unknown error",
-    cronFailed: "{count} cron job(s) failed",
-    cronOverdue: "{count} cron job(s) overdue",
+    cronFailed: "{count} automation(s) failed",
+    cronOverdue: "{count} automation(s) overdue",
     modelAuthExpired: "Model auth expired: {providers}",
     pendingApproval: "{count} pending approval",
     pendingApprovals: "{count} pending approvals",
@@ -3570,7 +3611,7 @@ export const en: TranslationMap = {
     items: {
       apps: "Apps",
       sessions: "Threads",
-      scheduled: "Scheduled",
+      scheduled: "Automations",
       skills: "Skills",
       plugins: "Plugins",
       settings: "Settings",
@@ -3600,6 +3641,7 @@ export const en: TranslationMap = {
       refreshing: "Refreshing…",
       on: "Dreaming On",
       off: "Dreaming Off",
+      engineOff: "Memory engine is Off. Choose an engine in Settings to enable dreaming.",
     },
     toggleConfirmation: {
       subtitle: "Dreaming is a global setting; it is not scoped to this agent.",
@@ -3718,12 +3760,12 @@ export const en: TranslationMap = {
       loadingPage: "Loading wiki page…",
       dreamsTab: "Dreams",
       insightsTab: "Imported Insights",
-      palaceTab: "Memory Palace",
+      wikiTab: "Memory Wiki",
       dreamsExplainer:
         "This is the raw dream diary the system writes while replaying and consolidating memory; use it to inspect what the memory system is noticing, and where it still looks noisy or thin.",
       insightsExplainer:
         "These are imported insights clustered from external history; use them to review what imports surfaced before any of it graduates into durable memory.",
-      palaceExplainer:
+      wikiExplainer:
         "This is the compiled memory wiki surface the system can search and reason over; use it to inspect actual memory pages, claims, open questions, and contradictions rather than raw imported source chats.",
       copyArchivePath: "Copy archive path",
       loadingInsights: "Loading imported insights…",
@@ -3739,9 +3781,9 @@ export const en: TranslationMap = {
       riskReasons: "Risk reasons:",
       labels: "Labels:",
       openSourcePage: "Open source page",
-      loadingPalace: "Loading memory palace…",
-      emptyPalace: "Memory palace is not populated yet",
-      emptyPalaceHint:
+      loadingWiki: "Loading memory wiki…",
+      emptyWiki: "Memory wiki is not populated yet",
+      emptyWikiHint:
         "Right now the wiki mostly has raw source imports and operational reports. This tab becomes useful once syntheses, entities, or concepts start getting written.",
       claims: "Claims",
       openQuestions: "Open questions",
@@ -3751,7 +3793,7 @@ export const en: TranslationMap = {
       id: "Id:",
       openWikiPage: "Open wiki page",
       unavailable: "Memory Wiki is not enabled",
-      unavailablePluginPrefix: "Imported Insights and Memory Palace are provided by the bundled",
+      unavailablePluginPrefix: "Imported Insights and Memory Wiki are provided by the bundled",
       unavailablePluginSuffix: "plugin.",
       enablePrefix: "Enable",
       enableSuffix: ", then reload this tab.",
@@ -3817,7 +3859,7 @@ export const en: TranslationMap = {
       tidyingKnowledgeGraph: "tidying the knowledge graph…",
       replayingConversations: "replaying today's conversations…",
       weavingShortTerm: "weaving short-term into long-term…",
-      defragmentingMindPalace: "defragmenting the mind palace…",
+      defragmentingMemoryLane: "defragmenting memory lane…",
       filingLooseThoughts: "filing away loose thoughts…",
       connectingDots: "connecting distant dots…",
       compostingContext: "composting old context windows…",
@@ -3841,7 +3883,8 @@ export const en: TranslationMap = {
     emptyTitle: "No model providers configured",
     emptySubtitle: "Sign in to a provider or add an API key, then refresh.",
     status: {
-      ok: "Connected",
+      ok: "Signed in",
+      ready: "Ready",
       expiring: "Expiring",
       expired: "Expired",
       missing: "Not signed in",
@@ -3892,8 +3935,18 @@ export const en: TranslationMap = {
         timeout: "Timed out",
         format: "Invalid response",
         unknown: "Connection failed",
-        no_model: "No model available",
+        no_model: "No models available",
       },
+    },
+    readiness: {
+      title: "AI setup",
+      heading: "Connect a verified AI model",
+      signedInNoModels:
+        "You're signed in, but this account exposes no usable models. Choose another provider or account to continue.",
+      notConfigured: "Choose a provider and verify the model OpenClaw will use.",
+      noModels: "No models available",
+      modelRequired: "Model required",
+      chooseProvider: "Choose another provider",
     },
     logout: {
       action: "Log out",
@@ -4688,6 +4741,11 @@ export const en: TranslationMap = {
         tools: "Tools",
       },
     },
+    skills: {
+      menu: "Skill references",
+      label: "Skills",
+      loading: "Loading skills…",
+    },
     splitView: {
       open: "Open split view",
       splitRight: "Split right",
@@ -4837,6 +4895,7 @@ export const en: TranslationMap = {
       pause: "Pause",
       seek: "Seek media",
       download: "Download {filename}",
+      preparing: "Preparing playback…",
       videoUnavailable: "Can't play this format — download instead.",
     },
     modelControls: {
@@ -4853,6 +4912,9 @@ export const en: TranslationMap = {
       fastHelp: "Fast responses finish sooner and can use more of your usage limits.",
       speedUnsupported: "Speed control is not supported for this model.",
       contextWindow: "{count} context",
+      chatOnly: "Chat only",
+      chatOnlyHelp:
+        "This model can chat, but it cannot use tools. Choose another model for files, commands, web, or media tasks.",
       providerModels: "{provider} models",
       resetReasoning: "Reset to default ({level})",
       useDefaultReasoning: "Use default reasoning ({level})",
@@ -5507,7 +5569,8 @@ export const en: TranslationMap = {
       summaryCronTz: "Cron schedule {expr} ({tz})",
       timezoneOptional: "Timezone",
       timezonePlaceholder: "America/Los_Angeles",
-      timezoneHelp: "Optional. Any valid IANA timezone.",
+      timezoneHelp:
+        "Optional. Leave blank to use the Gateway host timezone, or enter any valid IANA timezone.",
       runsIn: "Runs in",
       mainSession: "Main session",
       isolatedSession: "Isolated session",

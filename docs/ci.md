@@ -344,6 +344,12 @@ intentionally want the broad advisory provider/media matrix. Stable and full
 release checks always run the exhaustive live/E2E and Docker release-path soak;
 the beta profile can opt in with `run_release_soak=true`.
 
+`fail_fast` defaults to `false`: the umbrella waits for each dispatched child
+workflow and reports its independent failures together. Set `fail_fast=true`
+only when cancelling a child after its first failed job is more useful than the
+complete failure inventory. In Release Checks, this also enables the Matrix QA
+CLI's own first-scenario cancellation.
+
 - `beta` keeps the fastest OpenAI/core release-critical lanes.
 - `stable` adds the stable provider/backend set.
 - `full` runs the broad advisory provider/media matrix.

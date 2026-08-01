@@ -226,6 +226,56 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(state.activeChatRunId).toBeNull();
   });
 
+  it("invalidates old global-agent run ownership before accepting new-agent events", () => {
+    const { state, chatLog, handleAgentEvent, dispose } = createHandlersHarness({
+      state: {
+        currentSessionKey: "global",
+        currentAgentId: "work",
+        activeChatRunId: "run-work",
+      },
+    });
+    handleAgentEvent({
+      runId: "run-work",
+      sessionKey: "global",
+      agentId: "work",
+      stream: "lifecycle",
+      data: { phase: "start" },
+    });
+
+    state.currentAgentId = "main";
+    dispose();
+    state.activeChatRunId = null;
+    handleAgentEvent({
+      runId: "run-work",
+      sessionKey: "global",
+      agentId: "work",
+      stream: "tool",
+      data: { phase: "start", toolCallId: "stale-tool", name: "exec", args: {} },
+    });
+
+    expect(state.activeChatRunId).toBeNull();
+    expect(chatLog.startTool).not.toHaveBeenCalled();
+  });
+
+  it("retires a reconnect run immediately when history proves it is absent", () => {
+    const { state, reconnectStreamingWatchdog, handleChatEvent, chatLog, setActivityStatus } =
+      createHandlersHarness({
+        state: { activeChatRunId: "run-stale", activityStatus: "streaming" },
+      });
+
+    reconnectStreamingWatchdog(null);
+    handleChatEvent({
+      runId: "run-stale",
+      sessionKey: "agent:main:main",
+      state: "delta",
+      message: { role: "assistant", content: "late stale output" },
+    });
+
+    expect(state.activeChatRunId).toBeNull();
+    expect(setActivityStatus).toHaveBeenCalledWith("idle");
+    expect(chatLog.updateAssistant).not.toHaveBeenCalled();
+  });
+
   it("processes tool events when runId matches activeChatRunId (even if sessionId differs)", () => {
     const { chatLog, tui, handleAgentEvent } = createHandlersHarness({
       state: { currentSessionId: "session-xyz", activeChatRunId: "run-123" },

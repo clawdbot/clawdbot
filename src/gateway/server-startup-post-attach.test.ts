@@ -62,7 +62,9 @@ const hoisted = vi.hoisted(() => {
     inCatalog: true,
   }));
   const prepareModelRuntimeSnapshot = vi.fn(async () => ({}));
-  const refreshPreparedModelRuntimeSnapshots = vi.fn(async (_cfg?: unknown) => {});
+  const refreshPreparedModelRuntimeSnapshots = vi.fn(
+    async (_cfg?: unknown, _options?: unknown) => {},
+  );
   const ensureRuntimePluginsLoaded = vi.fn();
   const ensureContextWindowCacheLoaded = vi.fn(async () => {});
   const scheduleGatewayHandlerPrewarm = vi.fn(() => ({ stop: vi.fn() }));
@@ -422,11 +424,99 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(log.info).toHaveBeenCalledWith("gateway ready");
     expect(hoisted.scheduleRestartAbortedMainSessionRecovery).toHaveBeenCalledWith({
       cfg: { hooks: { internal: { enabled: false } } },
+      delayMs: 0,
+      shouldContinue: expect.any(Function),
+      waitForStart: undefined,
       gatewayRuntime: expect.any(Object),
     });
     expect(hoisted.scheduleSubagentOrphanRecovery).toHaveBeenCalledWith();
     expect(methodsAtRecoveryRegistration).toStrictEqual([["chat.history", "models.list"]]);
     expect(hoisted.startGatewayMemoryBackend).not.toHaveBeenCalled();
+  });
+
+  it("fences startup recovery as soon as its gateway close prelude begins", async () => {
+    let closing = false;
+    const recoverySidecar = { stop: vi.fn(async () => {}) };
+    const onGatewayLifetimeSidecars = vi.fn();
+    hoisted.scheduleRestartAbortedMainSessionRecovery.mockImplementationOnce(
+      (params: { shouldContinue?: () => boolean }) => {
+        expect(params.shouldContinue?.()).toBe(true);
+        closing = true;
+        expect(params.shouldContinue?.()).toBe(false);
+        return recoverySidecar;
+      },
+    );
+
+    await startGatewayPostAttachRuntime({
+      ...createPostAttachParams(),
+      isClosing: () => closing,
+      onGatewayLifetimeSidecars,
+    });
+
+    await waitForGatewayTestState(() => {
+      expect(onGatewayLifetimeSidecars).toHaveBeenCalledOnce();
+    });
+    expect(hoisted.scheduleRestartAbortedMainSessionRecovery).toHaveBeenCalledOnce();
+    expect(onGatewayLifetimeSidecars).toHaveBeenCalledWith(
+      expect.arrayContaining([recoverySidecar]),
+    );
+  });
+
+  it("gates main-session recovery behind post-ready work", async () => {
+    let releasePostReadyWork!: () => void;
+    const postReadyWork = new Promise<void>((resolve) => {
+      releasePostReadyWork = resolve;
+    });
+    let waitForStart: (() => Promise<void>) | undefined;
+    hoisted.scheduleRestartAbortedMainSessionRecovery.mockImplementationOnce(
+      (params: { waitForStart?: () => Promise<void> }) => {
+        waitForStart = params.waitForStart;
+        return { stop: vi.fn(async () => {}) };
+      },
+    );
+
+    await startGatewayPostAttachRuntime({
+      ...createPostAttachParams(),
+      waitForPostReadyWork: () => postReadyWork,
+    });
+
+    await waitForGatewayTestState(() => {
+      expect(waitForStart).toEqual(expect.any(Function));
+    });
+    let released = false;
+    const waiting = waitForStart?.().then(() => {
+      released = true;
+    });
+    await Promise.resolve();
+    expect(released).toBe(false);
+
+    releasePostReadyWork();
+    await waiting;
+    expect(released).toBe(true);
+  });
+
+  it("stops restart recovery with gateway-lifetime sidecars", async () => {
+    const recoverySidecar = { stop: vi.fn() };
+    hoisted.scheduleRestartAbortedMainSessionRecovery.mockReturnValueOnce(recoverySidecar);
+    const onGatewayLifetimeSidecars = vi.fn();
+
+    await startGatewayPostAttachRuntime({
+      ...createPostAttachParams(),
+      onGatewayLifetimeSidecars,
+    });
+
+    await waitForGatewayTestState(() => {
+      expect(onGatewayLifetimeSidecars).toHaveBeenCalledOnce();
+    });
+    const lifetimeSidecars = onGatewayLifetimeSidecars.mock.calls[0]?.[0] as
+      | Array<{ stop: () => Promise<void> | void }>
+      | undefined;
+    expect(lifetimeSidecars).toContain(recoverySidecar);
+
+    for (const sidecar of lifetimeSidecars ?? []) {
+      await sidecar.stop();
+    }
+    expect(recoverySidecar.stop).toHaveBeenCalledOnce();
   });
 
   it("logs one startup outcome summary after sidecar registration and before readiness", async () => {
@@ -447,7 +537,6 @@ describe("startGatewayPostAttachRuntime", () => {
     await startGatewayPostAttachRuntime({
       ...createPostAttachParams(),
       log,
-      agentRuntimePluginPrewarm: { enabled: false },
       onPostReadySidecars: () => {
         events.push("post-ready-registered");
       },
@@ -532,7 +621,7 @@ describe("startGatewayPostAttachRuntime", () => {
     });
     hoisted.scheduleRestartSentinelWake.mockReturnValueOnce(wake);
 
-    testing.scheduleRestartSentinelWakeAfterReady({
+    const sidecar = testing.scheduleRestartSentinelWakeAfterReady({
       deps: {} as never,
       log: { warn: vi.fn() },
     });
@@ -545,6 +634,20 @@ describe("startGatewayPostAttachRuntime", () => {
     await waitForGatewayTestState(() => {
       expect(getActiveGatewayRootWorkCount()).toBe(0);
     });
+    await sidecar.stop();
+  });
+
+  it("cancels delayed restart sentinel recovery when the gateway closes", async () => {
+    vi.useFakeTimers();
+    const sidecar = testing.scheduleRestartSentinelWakeAfterReady({
+      deps: {} as never,
+      log: { warn: vi.fn() },
+    });
+
+    await sidecar.stop();
+    await vi.advanceTimersByTimeAsync(750);
+
+    expect(hoisted.scheduleRestartSentinelWake).not.toHaveBeenCalled();
   });
 
   it("starts sidecars while startup logging is still pending", async () => {
@@ -1082,7 +1185,7 @@ describe("startGatewayPostAttachRuntime", () => {
       await vi.advanceTimersToNextTimerAsync();
       await vi.advanceTimersToNextTimerAsync();
       expect(postReadyRequestTurn).toHaveBeenCalledTimes(1);
-      expect(onPostReadySidecars.mock.calls[0]?.[0]).toHaveLength(0);
+      expect(onPostReadySidecars.mock.calls[0]?.[0]).toHaveLength(2);
       expect(onGatewayLifetimeSidecars.mock.calls[0]?.[0]).toHaveLength(4);
       await vi.dynamicImportSettled();
       await waitForGatewayTestState(() => {
@@ -1136,19 +1239,28 @@ describe("startGatewayPostAttachRuntime", () => {
   it("uses current config when agent runtime plugin prewarm runs", async () => {
     const startupConfig = { marker: "startup" } as never;
     const currentConfig = { marker: "current" } as never;
+    let releaseGatewayReady!: () => void;
+    const gatewayReady = new Promise<void>((resolve) => {
+      releaseGatewayReady = resolve;
+    });
 
     await startGatewayPostAttachRuntime({
       ...createPostAttachParams({
         gatewayPluginConfigAtStart: startupConfig,
       }),
-      providerAuthPrewarm: { enabled: false },
-      agentRuntimePluginPrewarm: {
-        enabled: true,
-        delayMs: 0,
+      waitForPostReadyWork: () => gatewayReady,
+      providerAuthPrewarm: {
+        enabled: false,
         getConfig: () => currentConfig,
       },
     });
 
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(hoisted.ensureRuntimePluginsLoaded).not.toHaveBeenCalled();
+
+    releaseGatewayReady();
     await waitForGatewayTestState(() => {
       expect(hoisted.ensureRuntimePluginsLoaded).toHaveBeenCalledWith({
         config: currentConfig,
@@ -1173,15 +1285,20 @@ describe("startGatewayPostAttachRuntime", () => {
       log: { warn: vi.fn() },
     });
 
-    expect(hoisted.ensureContextWindowCacheLoaded).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(4_999);
-    expect(hoisted.ensureContextWindowCacheLoaded).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1);
-    await vi.dynamicImportSettled();
-    await waitForGatewayTestState(() => {
-      expect(hoisted.ensureContextWindowCacheLoaded).toHaveBeenCalledWith(cfg);
-    });
-    await sidecar.stop();
+    try {
+      // Earlier gateway lifetimes may finish during the fake-clock window;
+      // this sidecar's captured config identifies its own prewarm precisely.
+      expect(hoisted.ensureContextWindowCacheLoaded).not.toHaveBeenCalledWith(cfg);
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(hoisted.ensureContextWindowCacheLoaded).not.toHaveBeenCalledWith(cfg);
+      await vi.advanceTimersByTimeAsync(1);
+      await vi.dynamicImportSettled();
+      await waitForGatewayTestState(() => {
+        expect(hoisted.ensureContextWindowCacheLoaded).toHaveBeenCalledWith(cfg);
+      });
+    } finally {
+      await sidecar.stop();
+    }
   });
 
   it("cancels context-window cache prewarm when the gateway stops first", async () => {
@@ -1238,7 +1355,7 @@ describe("startGatewayPostAttachRuntime", () => {
       const lifetimeSidecars = onGatewayLifetimeSidecars.mock.calls[0]?.[0] as
         | { stop: () => void }[]
         | undefined;
-      expect(gmailSidecars).toHaveLength(1);
+      expect(gmailSidecars).toHaveLength(3);
       expect(lifetimeSidecars).toHaveLength(4);
 
       for (const sidecar of gmailSidecars ?? []) {
@@ -1300,7 +1417,7 @@ describe("startGatewayPostAttachRuntime", () => {
     const lifetimeSidecars = onGatewayLifetimeSidecars.mock.calls[0]?.[0] as
       | Array<{ stop: () => Promise<void> | void }>
       | undefined;
-    expect(gmailSidecars).toHaveLength(1);
+    expect(gmailSidecars).toHaveLength(3);
     expect(lifetimeSidecars).toHaveLength(4);
 
     await waitForGatewayTestState(() => {
@@ -1694,9 +1811,110 @@ describe("startGatewayPostAttachRuntime", () => {
     });
     expect(trace.measures).toContain("sidecars.channels");
     expect(trace.measures).toContain("sidecars.channel-skip");
+    expect(prewarmPrimaryModel).toHaveBeenCalledWith(
+      expect.objectContaining({ startupTrace: trace.startupTrace }),
+    );
     expect(logChannels.info).toHaveBeenCalledWith(
       "skipping channel start (OPENCLAW_SKIP_CHANNELS=1 or OPENCLAW_SKIP_PROVIDERS=1)",
     );
+  });
+
+  it("records prepared runtime build grouping in the startup trace", async () => {
+    const trace = createStartupTraceRecorder();
+
+    await startGatewaySidecars({
+      cfg: { hooks: { internal: { enabled: false } } } as never,
+      pluginRegistry: createPostAttachParams().pluginRegistry,
+      defaultWorkspaceDir: "/tmp/openclaw-workspace",
+      deps: {} as never,
+      startChannels: vi.fn(async () => {}),
+      log: { warn: vi.fn() },
+      logHooks: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      },
+      logChannels: { info: vi.fn(), error: vi.fn() },
+      startupTrace: trace.startupTrace,
+    });
+
+    const options = hoisted.refreshPreparedModelRuntimeSnapshots.mock.calls[0]?.[1] as
+      | {
+          onBuildStats?: (stats: {
+            agentCount: number;
+            workspaceGroupCount: number;
+            configuredFactsGroupCount: number;
+            catalogSourceCount: number;
+            credentialGroupCount: number;
+            catalogGroupCount: number;
+            runtimeRegistryCount: number;
+            configuredRuntimeModelCount: number;
+            generatedCatalogPluginCount: number;
+            generatedCatalogReadCount: number;
+            workspaceFactsMs: number;
+            runtimePluginMs: number;
+            pluginMetadataMs: number;
+            staticProviderCatalogMs: number;
+            ambientCredentialsMs: number;
+            agentFactsMs: number;
+            configuredProjectionMs: number;
+            catalogSourceMs: number;
+            registryMs: number;
+            sourceConcurrencyLimit: number;
+            fullCatalogConcurrencyLimit: number;
+          }) => void;
+        }
+      | undefined;
+    options?.onBuildStats?.({
+      agentCount: 12,
+      workspaceGroupCount: 2,
+      configuredFactsGroupCount: 2,
+      catalogSourceCount: 0,
+      credentialGroupCount: 1,
+      catalogGroupCount: 0,
+      runtimeRegistryCount: 12,
+      configuredRuntimeModelCount: 2,
+      generatedCatalogPluginCount: 0,
+      generatedCatalogReadCount: 0,
+      workspaceFactsMs: 120,
+      runtimePluginMs: 0,
+      pluginMetadataMs: 40,
+      staticProviderCatalogMs: 50,
+      ambientCredentialsMs: 10,
+      agentFactsMs: 5,
+      configuredProjectionMs: 15,
+      catalogSourceMs: 0,
+      registryMs: 30,
+      sourceConcurrencyLimit: 2,
+      fullCatalogConcurrencyLimit: 1,
+    });
+
+    expect(trace.details).toContainEqual({
+      name: "sidecars.model-runtime-build",
+      metrics: [
+        ["agentCount", 12],
+        ["workspaceGroupCount", 2],
+        ["configuredFactsGroupCount", 2],
+        ["catalogSourceCount", 0],
+        ["credentialGroupCount", 1],
+        ["catalogGroupCount", 0],
+        ["runtimeRegistryCount", 12],
+        ["configuredRuntimeModelCount", 2],
+        ["generatedCatalogPluginCount", 0],
+        ["generatedCatalogReadCount", 0],
+        ["workspaceFactsMs", 120],
+        ["runtimePluginMs", 0],
+        ["pluginMetadataMs", 40],
+        ["staticProviderCatalogMs", 50],
+        ["ambientCredentialsMs", 10],
+        ["agentFactsMs", 5],
+        ["configuredProjectionMs", 15],
+        ["catalogSourceMs", 0],
+        ["registryMs", 30],
+        ["sourceConcurrencyLimitCount", 2],
+        ["fullCatalogConcurrencyLimitCount", 1],
+      ],
+    });
   });
 
   it("marks startup main-session orphans before channel startup", async () => {
@@ -1796,7 +2014,7 @@ describe("startGatewayPostAttachRuntime", () => {
       name: "sidecars.ready",
       metrics: [
         ["loadedPluginCount", 2],
-        ["postReadySidecarCount", 3],
+        ["postReadySidecarCount", 5],
       ],
     });
   });
@@ -1857,7 +2075,7 @@ describe("startGatewayPostAttachRuntime", () => {
       },
     });
 
-    expect(result.postReadySidecars).toHaveLength(1);
+    expect(result.postReadySidecars).toHaveLength(3);
     expect(hoisted.startGmailWatcherWithLogs).not.toHaveBeenCalled();
     onPostReadySidecars(result.postReadySidecars);
     expect(onPostReadySidecars).toHaveBeenCalledWith(result.postReadySidecars);
@@ -1871,7 +2089,9 @@ describe("startGatewayPostAttachRuntime", () => {
     if (!resolveWatcher) {
       throw new Error("Expected gmail watcher resolver to be initialized");
     }
-    await result.postReadySidecars[0]?.stop();
+    for (const sidecar of result.postReadySidecars) {
+      await sidecar.stop();
+    }
     expect(watcherSignal?.aborted).toBe(true);
     resolveWatcher();
   });
@@ -1900,7 +2120,7 @@ describe("startGatewayPostAttachRuntime", () => {
       },
     });
 
-    expect(result.postReadySidecars).toHaveLength(1);
+    expect(result.postReadySidecars).toHaveLength(3);
     await waitForGatewayTestState(() => {
       expect(log.warn).toHaveBeenCalledWith(
         "sidecars.gmail-watch failed after gateway ready: Error: boom",
@@ -1929,8 +2149,10 @@ describe("startGatewayPostAttachRuntime", () => {
       },
     });
 
-    expect(result.postReadySidecars).toHaveLength(1);
-    await result.postReadySidecars[0]?.stop();
+    expect(result.postReadySidecars).toHaveLength(3);
+    for (const sidecar of result.postReadySidecars) {
+      await sidecar.stop();
+    }
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
@@ -1976,7 +2198,9 @@ describe("startGatewayPostAttachRuntime", () => {
       await waitForGatewayTestState(() => {
         expect(releaseImport).toBeDefined();
       });
-      await result.postReadySidecars[0]?.stop();
+      for (const sidecar of result.postReadySidecars) {
+        await sidecar.stop();
+      }
       releaseImport?.();
       await new Promise<void>((resolve) => {
         setImmediate(resolve);
@@ -2056,7 +2280,7 @@ describe("startGatewayPostAttachRuntime", () => {
       },
     });
 
-    expect(result.postReadySidecars).toHaveLength(1);
+    expect(result.postReadySidecars).toHaveLength(3);
     expect(hoisted.loadModelCatalog).not.toHaveBeenCalled();
 
     await waitForGatewayTestState(() => {
@@ -2316,6 +2540,49 @@ describe("startGatewayPostAttachRuntime", () => {
       releaseHook();
       vi.useRealTimers();
     }
+  });
+
+  it("cancels registered gateway startup hooks when close starts", async () => {
+    vi.useFakeTimers();
+    hoisted.hasInternalHookListeners.mockReturnValue(true);
+    const trace = createStartupTraceRecorder();
+    let releasePostReadyWork!: () => void;
+    const postReadyWork = new Promise<void>((resolve) => {
+      releasePostReadyWork = resolve;
+    });
+
+    const result = await startGatewaySidecars({
+      cfg: {} as never,
+      pluginRegistry: createPostAttachParams().pluginRegistry,
+      defaultWorkspaceDir: "/tmp/openclaw-workspace",
+      deps: {} as never,
+      startChannels: vi.fn(async () => {}),
+      log: { warn: vi.fn() },
+      logHooks: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      },
+      logChannels: {
+        info: vi.fn(),
+        error: vi.fn(),
+      },
+      startupTrace: trace.startupTrace,
+      waitForPostReadyWork: () => postReadyWork,
+    });
+
+    expect(result.postReadySidecars).toHaveLength(3);
+    testing.stopPostReadySidecarsAfterCloseStarted({
+      postReadySidecars: result.postReadySidecars,
+      closeStarted: true,
+    });
+    releasePostReadyWork();
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(hoisted.createInternalHookEvent).not.toHaveBeenCalled();
+    expect(hoisted.triggerInternalHook).not.toHaveBeenCalled();
+    expect(trace.measures).not.toContain("sidecars.session-locks");
+    expect(trace.measures).not.toContain("sidecars.restart-sentinel");
   });
 
   it("waits for a healthy ACP runtime backend before startup identity reconcile", async () => {

@@ -754,7 +754,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       }),
     );
     expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
-      "A scheduled cron job delivered this message to this channel:\nThreaded cron update.",
+      "A scheduled automation delivered this message to this channel:\nThreaded cron update.",
       {
         sessionKey: "agent:main:telegram:direct:123456:thread:42",
         contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:42",
@@ -788,7 +788,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     });
 
     expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
-      "A scheduled cron job delivered this message to this channel:\nMain-scoped cron update.",
+      "A scheduled automation delivered this message to this channel:\nMain-scoped cron update.",
       {
         sessionKey: "agent:main",
         contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
@@ -849,14 +849,14 @@ describe("dispatchCronDelivery — double-announce guard", () => {
 
     expect(enqueueSystemEvent).toHaveBeenCalledTimes(2);
     expect(enqueueSystemEvent).toHaveBeenCalledWith(
-      "A scheduled cron job delivered this message to this channel:\nShared cron update.",
+      "A scheduled automation delivered this message to this channel:\nShared cron update.",
       {
         sessionKey: "agent:main:telegram:direct:123456",
         contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
       },
     );
     expect(enqueueSystemEvent).toHaveBeenCalledWith(
-      "A scheduled cron job delivered this message to this channel:\nShared cron update.",
+      "A scheduled automation delivered this message to this channel:\nShared cron update.",
       {
         sessionKey: "agent:main:openclaw-weixin:direct:123456",
         contextKey: "cron-direct-delivery:v1:cron:test-job:1000:openclaw-weixin::123456:",
@@ -902,7 +902,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       }),
     );
     expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
-      "A scheduled cron job delivered this message to this channel:\nSession-targeted off-plan update.",
+      "A scheduled automation delivered this message to this channel:\nSession-targeted off-plan update.",
       {
         sessionKey: "agent:main:telegram:direct:123456",
         contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
@@ -936,7 +936,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     });
 
     expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
-      "A scheduled cron job delivered this message to this channel:\nweather-map.png",
+      "A scheduled automation delivered this message to this channel:\nweather-map.png",
       {
         sessionKey: "agent:main:telegram:direct:123456",
         contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
@@ -987,7 +987,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       }),
     );
     expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
-      "A scheduled cron job delivered this message to this channel:\n386502",
+      "A scheduled automation delivered this message to this channel:\n386502",
       {
         sessionKey: "agent:main:openclaw-weixin:direct:user-123",
         contextKey: "cron-direct-delivery:v1:cron:test-job:1000:openclaw-weixin::user-123:",
@@ -1265,7 +1265,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
     });
     expect(enqueueSystemEvent).toHaveBeenCalledWith(
-      "A scheduled cron job delivered this message to this channel:\nRedacted cron update.",
+      "A scheduled automation delivered this message to this channel:\nRedacted cron update.",
       {
         sessionKey: "agent:main:telegram:direct:123456",
         contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
@@ -1307,7 +1307,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
     });
     expect(enqueueSystemEvent).toHaveBeenCalledWith(
-      "A scheduled cron job delivered this message to this channel:\nMorning briefing complete.",
+      "A scheduled automation delivered this message to this channel:\nMorning briefing complete.",
       {
         sessionKey: "agent:main",
         contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
@@ -1580,7 +1580,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(state.deliveryAttempted).toBe(true);
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
     expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
-      "A scheduled cron job delivered this message to this channel:\nSession-bound cron update.",
+      "A scheduled automation delivered this message to this channel:\nSession-bound cron update.",
       {
         sessionKey: "agent:main",
         contextKey: expect.stringMatching(
@@ -2145,7 +2145,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     });
     expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
       [
-        "A scheduled cron job attempted to deliver to this channel, but delivery failed.",
+        "A scheduled automation attempted to deliver to this channel, but delivery failed.",
         "Job: Test Job",
         "Target: telegram:123456",
         "Delivery error: second payload stopped before final dispatch | connect ECONNREFUSED | ECONNREFUSED",
@@ -2520,7 +2520,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     });
     expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
       [
-        "A scheduled cron job attempted to deliver to this channel, but delivery failed.",
+        "A scheduled automation attempted to deliver to this channel, but delivery failed.",
         "Job: Test Job",
         "Target: telegram:123456 thread 42",
         "Delivery error: Call to 'sendMessage' failed! (400: Bad Request: message thread not found)",
@@ -2567,7 +2567,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     });
     expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
       [
-        "A scheduled cron job attempted to deliver to this channel, but delivery failed.",
+        "A scheduled automation attempted to deliver to this channel, but delivery failed.",
         "Job: Test Job",
         "Target: telegram:123456",
         "Delivery error: second payload failed",

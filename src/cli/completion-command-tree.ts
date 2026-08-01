@@ -1,10 +1,17 @@
 import type { Command, Option } from "commander";
 
+type ShellCompletionValueChoice = {
+  flags: string[];
+  choices: string[];
+  requiresValue: boolean;
+};
+
 export type ShellCompletionContext = {
   command: Command;
   pathVariants: string[][];
   completions: string[];
   valueOptions: string[];
+  valueChoices: ShellCompletionValueChoice[];
 };
 
 type ShellCompletionCommandTree = {
@@ -27,7 +34,9 @@ export function collectShellCompletionCommandTree(program: Command): ShellComple
     command: Command,
     pathVariants: string[][],
     inheritedValueOptions: readonly string[],
+    inheritedValueChoices: readonly ShellCompletionValueChoice[],
   ): ShellCompletionContext => {
+    const ownOptionFlags = new Set(command.options.flatMap(completionFlags));
     const context: ShellCompletionContext = {
       command,
       pathVariants,
@@ -43,6 +52,23 @@ export function collectShellCompletionCommandTree(program: Command): ShellComple
           ),
         ]),
       ],
+      valueChoices: [
+        ...inheritedValueChoices.flatMap(({ flags, ...choice }) => {
+          const inheritedFlags = flags.filter((flag) => !ownOptionFlags.has(flag));
+          return inheritedFlags.length > 0 ? [{ flags: inheritedFlags, ...choice }] : [];
+        }),
+        ...command.options.flatMap((option) =>
+          option.argChoices?.length
+            ? [
+                {
+                  flags: completionFlags(option),
+                  choices: [...option.argChoices],
+                  requiresValue: option.required,
+                },
+              ]
+            : [],
+        ),
+      ],
     };
 
     if (pathVariants[0]?.length) {
@@ -56,11 +82,12 @@ export function collectShellCompletionCommandTree(program: Command): ShellComple
           commandNameVariants(child).map((name) => parents.concat(name)),
         ),
         context.valueOptions,
+        context.valueChoices,
       );
     }
 
     return context;
   };
 
-  return { root: visit(program, [[]], []), descendants };
+  return { root: visit(program, [[]], [], []), descendants };
 }

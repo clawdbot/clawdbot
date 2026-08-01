@@ -20,6 +20,16 @@ import {
 } from "./approval-renderers.js";
 export { shouldSuppressLocalNativeExecApprovalPrompt } from "./approval-native-helpers.js";
 import type { ReplyPayload } from "./reply-payload.js";
+export {
+  approvalReactionDecisionSetsMatch,
+  extractApprovalReactionPromptBinding,
+  normalizeApprovalReactionDecision,
+  readApprovalReactionDecisionList,
+  readApprovalReactionDeliveredBinding,
+  readApprovalReactionDeliveryMetadata,
+  readApprovalReactionPresentationBinding,
+  type ApprovalReactionDeliveryBinding,
+} from "./approval-reaction-binding.js";
 
 type ApprovalKind = "exec" | "plugin";
 type KeyedStore<TValue> = {
@@ -497,6 +507,23 @@ export function buildApprovalReactionPendingContent(params: {
           } satisfies ExecApprovalPendingReplyParams),
         );
   return { reactionPayload, manualFallbackPayload };
+}
+
+/**
+ * Prompt copy for channels whose native controls (Apple Messages polls, inline
+ * buttons) own the decision surface. Same bold headers and labels as the
+ * reaction prompt (#85954) minus the tapback hint, which would advertise a
+ * second, redundant control path next to the native one.
+ */
+export function buildApprovalNativeControlsPromptText(params: {
+  view: PendingApprovalView;
+  nowMs: number;
+}): string {
+  return buildApprovalReactionPromptText({
+    view: params.view,
+    nowMs: params.nowMs,
+    reactionHint: null,
+  });
 }
 
 /** Build reaction and manual-fallback pending approval content directly from a request. */

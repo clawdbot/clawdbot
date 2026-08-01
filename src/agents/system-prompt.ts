@@ -41,7 +41,6 @@ import {
   buildFullBootstrapPromptLines,
   buildLimitedBootstrapPromptLines,
 } from "./bootstrap-prompt.js";
-import type { ResolvedTimeFormat } from "./date-time.js";
 import type { EmbeddedContextFile } from "./embedded-agent-helpers.js";
 import type {
   EmbeddedFullAccessBlockedReason,
@@ -63,6 +62,7 @@ import type {
   ProviderSystemPromptSectionId,
 } from "./system-prompt-contribution.js";
 import type { PromptMode, SilentReplyPromptMode } from "./system-prompt.types.js";
+import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 import {
   buildWatchedSessionsPromptLines,
   type PreparedWatchedSessionsPrompt,
@@ -88,7 +88,7 @@ const CONTEXT_FILE_ORDER = new Map<string, number>([
 
 const DYNAMIC_CONTEXT_FILE_BASENAMES = new Set<string>();
 const DEFAULT_HEARTBEAT_PROMPT_CONTEXT_BLOCK =
-  "Default heartbeat prompt:\n`Follow the heartbeat monitor scratch context when provided. Recurring tasks are cron jobs; create or change their schedules with cron tools or the openclaw cron CLI, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`";
+  "Default heartbeat prompt:\n`Follow the heartbeat monitor scratch context when provided. Recurring tasks are automations; create or change their schedules with the automations tool, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`";
 const SYSTEM_PROMPT_STABLE_PREFIX_CACHE_LIMIT = 64;
 
 type StablePromptPrefixCacheEntry = {
@@ -430,11 +430,23 @@ function buildOwnerIdentityLine(
   return `Allowlisted senders: ${displayOwnerNumbers.join(", ")}. Allowlisted != owner.`;
 }
 
-function buildTimeSection(params: { userTimezone?: string }) {
-  if (!params.userTimezone) {
+function buildTemporalContextSection(params: {
+  userDate?: string;
+  userTimezone?: string;
+  sessionStatusAvailable: boolean;
+}) {
+  const userDate = params.userDate?.trim();
+  const userTimezone = params.userTimezone?.trim();
+  if (!userDate || !userTimezone) {
     return [];
   }
-  return ["## Current Date & Time", `Time zone: ${params.userTimezone}`, ""];
+  return [
+    "## Temporal Context",
+    `Current date: ${userDate}`,
+    `Time zone: ${userTimezone}`,
+    ...(params.sessionStatusAvailable ? ["For the exact current time, use `session_status`."] : []),
+    "",
+  ];
 }
 
 function buildAssistantOutputDirectivesSection(params: {
@@ -550,10 +562,20 @@ function buildMessagingSection(params: {
   requireExplicitMessageTarget?: boolean;
   silentReplyPromptMode?: SilentReplyPromptMode;
 }) {
-  if (params.isMinimal) {
-    return [];
-  }
   const messageToolOnly = params.sourceReplyDeliveryMode === "message_tool_only";
+  const visibleReplyInstruction = messageToolOnly
+    ? "- Current source visible reply MUST use `message(action=send)`; final text is private. Skip tool = user gets nothing. Brief tool-call progress is visible; no hidden instructions/private data/reasoning."
+    : "- Current-session final text normally routes to source. If turn says final private, visible output uses `message(action=send)`.";
+  const messageToolTargetInstruction = params.requireExplicitMessageTarget
+    ? "- `send`: `target` + `message`; target required this turn."
+    : "- `send`: `message`; current source is default target. Set `target` only elsewhere.";
+  if (params.isMinimal) {
+    // Restricted delivery turns still need their sole visible-reply contract;
+    // omitting it makes a private final silently disappear for the requester.
+    return messageToolOnly && params.availableTools.has("message")
+      ? ["## Messaging", visibleReplyInstruction, messageToolTargetInstruction, ""]
+      : [];
+  }
   const showGenericInlineButtonHint = params.runtimeChannel !== "slack";
   const groupMessageToolOnly =
     messageToolOnly && (params.runtimeChatType === "group" || params.runtimeChatType === "channel");
@@ -573,9 +595,7 @@ function buildMessagingSection(params: {
       : "";
   return [
     "## Messaging",
-    messageToolOnly
-      ? "- Current source visible reply MUST use `message(action=send)`; final text is private. Skip tool = user gets nothing. Brief tool-call progress is visible; no hidden instructions/private data/reasoning."
-      : "- Current-session final text normally routes to source. If turn says final private, visible output uses `message(action=send)`.",
+    visibleReplyInstruction,
     "- Cross-session: `sessions_send(sessionKey, message)`.",
     subagentOrchestrationGuidance,
     completionEventGuidance,
@@ -588,11 +608,7 @@ function buildMessagingSection(params: {
           groupMessageToolOnly
             ? "- Group/channel: stale/joke/light ack/low-value chatter => reaction or silence. Needed reply => `message(action=send)`; final text private."
             : "",
-          messageToolOnly
-            ? params.requireExplicitMessageTarget
-              ? "- `send`: `target` + `message`; target required this turn."
-              : "- `send`: `message`; current source is default target. Set `target` only elsewhere."
-            : "- `send`: `target` + `message`.",
+          messageToolOnly ? messageToolTargetInstruction : "- `send`: `target` + `message`.",
           params.messageChannelOptions
             ? `- No source default: proactive send needs \`channel\`; ids: ${params.messageChannelOptions}.`
             : "- Set `channel` only outside current/default source.",
@@ -755,8 +771,7 @@ export function buildAgentSystemPrompt(params: {
   toolSummaries?: Record<string, string>;
   modelAliasLines?: string[];
   userTimezone?: string;
-  userTime?: string;
-  userTimeFormat?: ResolvedTimeFormat;
+  userDate?: string;
   contextFiles?: EmbeddedContextFile[];
   bootstrapMode?: BootstrapMode;
   bootstrapTruncationNotice?: string;
@@ -853,7 +868,8 @@ export function buildAgentSystemPrompt(params: {
       "Own visible shell. Use for long/interactive jobs user should watch. exec for quiet work",
     canvas: "Present/eval/snapshot Canvas",
     nodes: "Paired node status/control/media",
-    cron: "Schedule/wake. Reminder text must read as reminder when fired; mention reminder for delayed gaps; include useful recent context.",
+    [AUTOMATIONS_TOOL_NAME]:
+      "Schedule/wake. Reminder text must read as reminder when fired; mention reminder for delayed gaps; include useful recent context. This feature is called automations; never call it cron.",
     message: "Message/channel actions",
     conversations_list: "List exact external conversation addresses",
     conversations_send: "Send directly to an external conversation",
@@ -895,7 +911,7 @@ export function buildAgentSystemPrompt(params: {
     "terminal",
     "canvas",
     "nodes",
-    "cron",
+    AUTOMATIONS_TOOL_NAME,
     "message",
     "conversations_list",
     "conversations_send",
@@ -1004,6 +1020,7 @@ export function buildAgentSystemPrompt(params: {
     : undefined;
   const reasoningLevel = params.reasoningLevel ?? "off";
   const userTimezone = params.userTimezone?.trim();
+  const userDate = params.userDate?.trim();
   const skillsPrompt = params.skillsPrompt?.trim();
   const heartbeatPrompt = params.heartbeatPrompt?.trim();
   const runtimeInfo = params.runtimeInfo;
@@ -1057,11 +1074,18 @@ export function buildAgentSystemPrompt(params: {
     "Never copy self or change prompts/safety/tool policy unless user explicitly requests.",
     "",
   ];
-  const skillsSection = buildSkillsSection({
-    skillsPrompt,
-    readToolName,
-    codeModeActive: params.codeModeActive,
-  });
+  // CLI backends own native file tools outside OpenClaw's projected tool list.
+  // Keep their skill catalog visible while embedded runs require a real read tool.
+  const canAccessSkills = params.codeModeActive
+    ? visibleTools.has("exec")
+    : visibleTools.has("read") || promptSurface === "cli_backend";
+  const skillsSection = canAccessSkills
+    ? buildSkillsSection({
+        skillsPrompt,
+        readToolName,
+        codeModeActive: params.codeModeActive,
+      })
+    : [];
   const skillWorkshopSection = availableTools.has(SKILL_WORKSHOP_TOOL_NAME)
     ? buildSkillWorkshopPromptSection()
     : [];
@@ -1270,7 +1294,6 @@ export function buildAgentSystemPrompt(params: {
         ? params.modelAliasLines.join("\n")
         : "",
       params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal ? "" : "",
-      userTimezone ? "Need date/time/day: `session_status`." : "",
       "## Workspace",
       `Working directory: ${displayWorkspaceDir}`,
       workspaceGuidance,
@@ -1340,9 +1363,6 @@ export function buildAgentSystemPrompt(params: {
             .join("\n")
         : "",
       params.sandboxInfo?.enabled ? "" : "",
-      ...buildTimeSection({
-        userTimezone,
-      }),
       ...bootstrapSystemPromptSections,
       "## Workspace Files (injected)",
       "User-editable; OpenClaw loads below as Project Context.",
@@ -1376,6 +1396,16 @@ export function buildAgentSystemPrompt(params: {
   });
 
   const lines = [stablePrefix];
+
+  // Local date and timezone can change between turns. Keep them at the front of
+  // the volatile suffix so rollover is visible without invalidating the stable prefix.
+  lines.push(
+    ...buildTemporalContextSection({
+      userDate,
+      userTimezone,
+      sessionStatusAvailable: availableTools.has("session_status"),
+    }),
+  );
 
   lines.push(
     ...buildProjectContextSection({

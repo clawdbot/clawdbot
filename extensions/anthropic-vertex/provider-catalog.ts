@@ -238,7 +238,9 @@ export function buildAnthropicVertexProvider(params?: {
   const baseUrl =
     normalizeLowercaseStringOrEmpty(region) === "global"
       ? "https://aiplatform.googleapis.com"
-      : `https://${region}-aiplatform.googleapis.com`;
+      : region === "us" || region === "eu"
+        ? `https://aiplatform.${region}.rep.googleapis.com`
+        : `https://${region}-aiplatform.googleapis.com`;
 
   return {
     baseUrl,

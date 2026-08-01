@@ -11,6 +11,10 @@ import type {
   SessionEntryPatchContext,
   SessionEntryPatchOptions,
 } from "../config/sessions/session-accessor.js";
+import {
+  runWithOwnedSessionTranscriptWriteLock,
+  withOwnedSessionTranscriptWrites,
+} from "../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
 import {
@@ -477,6 +481,200 @@ describe("subagent registry seam flow", () => {
     expect(
       mocks.callGateway.mock.calls.filter(([request]) => request.method === "sessions.delete"),
     ).toHaveLength(2);
+  });
+
+  it("keeps collector archive groups scoped to their requester", async () => {
+    const now = Date.now();
+    for (const [requesterSessionKey, archiveAtMs] of [
+      ["agent:main:requester-one", now - 1],
+      ["agent:main:requester-two", now + 1_000],
+    ] as const) {
+      mod.addSubagentRunForTests({
+        runId: `run-${requesterSessionKey}`,
+        childSessionKey: `${requesterSessionKey}:subagent:collector`,
+        requesterSessionKey,
+        task: "retain requester-scoped collector groups",
+        cleanup: "delete",
+        createdAt: now - 10_000,
+        endedAt: now - 5_000,
+        cleanupCompletedAt: now - 4_000,
+        archiveAtMs,
+        collect: true,
+        groupId: "swarm:shared-group-id",
+        collectorCompletion: { status: "done" },
+      });
+    }
+
+    await mod.testing.sweepOnceForTests();
+
+    expect(mod.getSubagentRunByRunId("run-agent:main:requester-one")).toBeUndefined();
+    expect(mod.getSubagentRunByRunId("run-agent:main:requester-two")).toBeDefined();
+  });
+
+  it("keeps completed collectors while any group member is incomplete", async () => {
+    const now = Date.now();
+    mod.addSubagentRunForTests({
+      runId: "run-collector-complete",
+      childSessionKey: "agent:main:subagent:collector-complete",
+      task: "completed collector",
+      createdAt: now - 10_000,
+      endedAt: now - 5_000,
+      archiveAtMs: now - 1,
+      collect: true,
+      groupId: "swarm:incomplete-member",
+      collectorCompletion: { status: "done" },
+    });
+    mod.addSubagentRunForTests({
+      runId: "run-collector-incomplete",
+      childSessionKey: "agent:main:subagent:collector-incomplete",
+      task: "incomplete collector",
+      createdAt: now - 9_000,
+      endedAt: now - 4_000,
+      archiveAtMs: now + 1_000,
+      collect: true,
+      groupId: "swarm:incomplete-member",
+    });
+
+    await mod.testing.sweepOnceForTests();
+
+    expect(mod.getSubagentRunByRunId("run-collector-complete")).toBeDefined();
+    expect(mod.getSubagentRunByRunId("run-collector-incomplete")).toBeDefined();
+  });
+
+  it("refreshes collector membership after awaited sweep work", async () => {
+    const now = Date.now();
+    let releaseFirstDelete: (() => void) | undefined;
+    let shouldBlockDelete = true;
+    mocks.callGateway.mockImplementation((request: { method?: string }) => {
+      if (request.method !== "sessions.delete" || !shouldBlockDelete) {
+        return Promise.resolve({});
+      }
+      shouldBlockDelete = false;
+      return new Promise<Record<string, unknown>>((resolve) => {
+        releaseFirstDelete = () => resolve({});
+      });
+    });
+    mod.addSubagentRunForTests({
+      runId: "run-archive-blocker",
+      childSessionKey: "agent:main:subagent:archive-blocker",
+      task: "hold the sweep before collector archival",
+      cleanup: "delete",
+      createdAt: now - 10_000,
+      endedAt: now - 5_000,
+      cleanupCompletedAt: now - 4_000,
+      archiveAtMs: now - 1,
+    });
+    mod.addSubagentRunForTests({
+      runId: "run-collector-before-await",
+      childSessionKey: "agent:main:subagent:collector-before-await",
+      task: "completed collector present at sweep start",
+      createdAt: now - 10_000,
+      endedAt: now - 5_000,
+      archiveAtMs: now - 1,
+      collect: true,
+      groupId: "swarm:late-member",
+      collectorCompletion: { status: "done" },
+    });
+
+    const sweep = mod.testing.runSweeperTickForTests();
+    await waitForFast(() => expect(releaseFirstDelete).toBeTypeOf("function"));
+    mod.addSubagentRunForTests({
+      runId: "run-collector-after-await",
+      childSessionKey: "agent:main:subagent:collector-after-await",
+      task: "incomplete collector registered during sweep",
+      createdAt: now,
+      collect: true,
+      groupId: "swarm:late-member",
+    });
+    releaseFirstDelete?.();
+    await sweep;
+
+    expect(mod.getSubagentRunByRunId("run-collector-before-await")).toBeDefined();
+    expect(mod.getSubagentRunByRunId("run-collector-after-await")).toBeDefined();
+  });
+
+  it("revalidates collector membership after collector cleanup awaits", async () => {
+    const now = Date.now();
+    let releaseCollectorDelete: (() => void) | undefined;
+    mocks.callGateway.mockImplementation((request: { method?: string }) => {
+      if (request.method !== "sessions.delete" || releaseCollectorDelete) {
+        return Promise.resolve({});
+      }
+      return new Promise<Record<string, unknown>>((resolve) => {
+        releaseCollectorDelete = () => resolve({});
+      });
+    });
+    mod.addSubagentRunForTests({
+      runId: "run-collector-cleanup-snapshot",
+      childSessionKey: "agent:main:subagent:collector-cleanup-snapshot",
+      task: "completed collector present before cleanup",
+      createdAt: now - 10_000,
+      endedAt: now - 5_000,
+      archiveAtMs: now - 1,
+      collect: true,
+      groupId: "swarm:cleanup-race",
+      collectorCompletion: { status: "done" },
+    });
+
+    const sweep = mod.testing.runSweeperTickForTests();
+    await waitForFast(() => expect(releaseCollectorDelete).toBeTypeOf("function"));
+    mod.addSubagentRunForTests({
+      runId: "run-collector-added-during-cleanup",
+      childSessionKey: "agent:main:subagent:collector-added-during-cleanup",
+      task: "incomplete collector registered during cleanup",
+      createdAt: now,
+      collect: true,
+      groupId: "swarm:cleanup-race",
+    });
+    releaseCollectorDelete?.();
+    await sweep;
+
+    expect(mod.getSubagentRunByRunId("run-collector-cleanup-snapshot")).toBeDefined();
+    expect(mod.getSubagentRunByRunId("run-collector-added-during-cleanup")).toBeDefined();
+  });
+
+  it("keeps a collector replaced during collector cleanup awaits", async () => {
+    const now = Date.now();
+    let releaseCollectorDelete: (() => void) | undefined;
+    mocks.callGateway.mockImplementation((request: { method?: string }) => {
+      if (request.method !== "sessions.delete" || releaseCollectorDelete) {
+        return Promise.resolve({});
+      }
+      return new Promise<Record<string, unknown>>((resolve) => {
+        releaseCollectorDelete = () => resolve({});
+      });
+    });
+    mod.addSubagentRunForTests({
+      runId: "run-collector-replaced-during-cleanup",
+      childSessionKey: "agent:main:subagent:collector-before-replacement",
+      task: "collector before replacement",
+      createdAt: now - 10_000,
+      endedAt: now - 5_000,
+      archiveAtMs: now - 1,
+      collect: true,
+      groupId: "swarm:replacement-race",
+      collectorCompletion: { status: "done" },
+    });
+
+    const sweep = mod.testing.runSweeperTickForTests();
+    await waitForFast(() => expect(releaseCollectorDelete).toBeTypeOf("function"));
+    mod.addSubagentRunForTests({
+      runId: "run-collector-replaced-during-cleanup",
+      childSessionKey: "agent:main:subagent:collector-after-replacement",
+      task: "collector after replacement",
+      createdAt: now,
+      endedAt: now,
+      archiveAtMs: now - 1,
+      collect: true,
+      groupId: "swarm:replacement-race",
+      collectorCompletion: { status: "done" },
+    });
+    releaseCollectorDelete?.();
+    await sweep;
+
+    expect(
+      mod.getSubagentRunByRunId("run-collector-replaced-during-cleanup")?.childSessionKey,
+    ).toBe("agent:main:subagent:collector-after-replacement");
   });
 
   it("keeps collector groups while any member owes failed-launch cleanup", async () => {
@@ -1446,6 +1644,63 @@ describe("subagent registry seam flow", () => {
     const run = findRequesterRun("run-interrupted-wait");
     expect(run?.endedAt).toBeUndefined();
     expect(run?.outcome).toBeUndefined();
+  });
+
+  it("detaches subagent completion from a disposed requester transcript owner", async () => {
+    const sessionKey = "agent:main:main";
+    let disposed = false;
+    let resolveWait: (value: Record<string, unknown>) => void = () => {};
+    const pendingWait = new Promise<Record<string, unknown>>((resolve) => {
+      resolveWait = resolve;
+    });
+    const staleWriteLock = vi.fn();
+    const withStaleWriteLock = async <T>(operation: () => Promise<T> | T): Promise<T> => {
+      staleWriteLock();
+      if (disposed) {
+        throw new Error("attempt disposed before transcript write");
+      }
+      return await operation();
+    };
+    const freshTranscriptWrite = vi.fn(async () => {});
+    const freshCompletionWrite = vi.fn(async () => {});
+
+    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
+      if (request.method !== "agent.wait") {
+        return {};
+      }
+      const result = await pendingWait;
+      await runWithOwnedSessionTranscriptWriteLock({ sessionKey }, freshCompletionWrite);
+      return result;
+    });
+    mocks.runSubagentAnnounceFlow.mockImplementation(async () => {
+      await runWithOwnedSessionTranscriptWriteLock({ sessionKey }, freshTranscriptWrite);
+      return true;
+    });
+
+    await withOwnedSessionTranscriptWrites(
+      { sessionKey, withSessionWriteLock: withStaleWriteLock },
+      async () => {
+        mod.registerSubagentRun({
+          runId: "run-detached-requester-owner",
+          requesterSessionKey: sessionKey,
+          task: "finish after the requester attempt exits",
+          expectsCompletionMessage: true,
+        });
+        await waitForFast(() =>
+          expect(mocks.callGateway).toHaveBeenCalledWith(
+            expect.objectContaining({ method: "agent.wait" }),
+          ),
+        );
+      },
+    );
+
+    disposed = true;
+    resolveWait({ status: "ok", startedAt: 111, endedAt: 222 });
+
+    await waitForFast(() => expect(freshTranscriptWrite).toHaveBeenCalledOnce());
+    expect(freshCompletionWrite).toHaveBeenCalledOnce();
+    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledOnce();
+    expect(staleWriteLock).not.toHaveBeenCalled();
   });
 
   it("does not fall back to network recovery without an instance-bound runtime", async () => {
@@ -4398,13 +4653,15 @@ describe("subagent registry seam flow", () => {
       "agent.wait": { status: "pending" },
     });
 
+    const runId = `run-single-persist-${queued ? "queued" : "running"}`;
     mod.registerSubagentRun({
-      runId: `run-single-persist-${queued ? "queued" : "running"}`,
+      runId,
       task: "persist one registry snapshot",
       queued,
     });
 
     expect(mocks.persistSubagentRunsToDiskOrThrow).toHaveBeenCalledOnce();
+    expect(mocks.persistSubagentRunsToDiskOrThrow).toHaveBeenCalledWith(expect.any(Map), [runId]);
     expect(mocks.persistSubagentRunsToDisk).not.toHaveBeenCalled();
   });
 

@@ -34,6 +34,7 @@ import {
   installPlugin,
   pluginInstallNeedsRiskAcknowledgement,
   readPluginInstallTrustError,
+  runPluginConfigMutation,
   setPluginEnabled,
   uninstallPlugin,
   type PluginCatalogItem,
@@ -70,6 +71,18 @@ export type PluginsRouteData = {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function committedMutationMessage(success: string, refreshError: string | null): PluginRowMessage {
+  return {
+    kind: "success",
+    text: [
+      success,
+      refreshError ? t("pluginsPage.configRefreshFailed", { error: refreshError }) : null,
+    ]
+      .filter(Boolean)
+      .join("\n"),
+  };
 }
 
 function withPlugin(
@@ -701,12 +714,9 @@ class PluginsPage extends OpenClawLightDomElement {
   }
 
   /** Plugin changes can affect both catalog state and route visibility (for example Workboard). */
-  private async refreshAfterMutation(client: GatewayBrowserClient): Promise<void> {
+  private async refreshCatalogAfterMutation(client: GatewayBrowserClient): Promise<void> {
     this.error = null;
-    await Promise.all([
-      this.catalogTask.run([client]),
-      this.configTask.run([client, this.context.runtimeConfig]),
-    ]);
+    await this.catalogTask.run([client]);
   }
 
   private pageError(): string | null {
@@ -721,6 +731,7 @@ class PluginsPage extends OpenClawLightDomElement {
     mutate: (client: GatewayBrowserClient) => Promise<Result>,
     onSuccess: (
       result: Result,
+      refreshError: string | null,
       client: GatewayBrowserClient,
       isCurrent: () => boolean,
     ) => Promise<void>,
@@ -741,11 +752,11 @@ class PluginsPage extends OpenClawLightDomElement {
     this.setBusy(rowKey, true);
     this.setMessage(rowKey, null);
     try {
-      const result = await mutate(client);
+      const mutation = await runPluginConfigMutation(this.context.runtimeConfig, client, mutate);
       if (!isCurrent()) {
         return;
       }
-      await onSuccess(result, client, isCurrent);
+      await onSuccess(mutation.value, mutation.refreshError, client, isCurrent);
     } catch (error) {
       if (isCurrent()) {
         onError(error);
@@ -762,13 +773,13 @@ class PluginsPage extends OpenClawLightDomElement {
     await this.runPluginMutation(
       rowKey,
       (client) => installPlugin(client, request),
-      async (result, client) => {
+      async (result, refreshError, client) => {
         this.applyMutationResult(result);
-        this.setMessage(rowKey, {
-          kind: "success",
-          text: mutationSuccessMessage("installed", result),
-        });
-        await this.refreshAfterMutation(client);
+        this.setMessage(
+          rowKey,
+          committedMutationMessage(mutationSuccessMessage("installed", result), refreshError),
+        );
+        await this.refreshCatalogAfterMutation(client);
       },
       (error) => {
         const trust = readPluginInstallTrustError(error);
@@ -797,16 +808,19 @@ class PluginsPage extends OpenClawLightDomElement {
     await this.runPluginMutation(
       key,
       (client) => setPluginEnabled(client, pluginId, enabled),
-      async (result, client, isCurrent) => {
+      async (result, refreshError, client, isCurrent) => {
         this.applyMutationResult(result);
-        this.setMessage(key, {
-          kind: "success",
-          text: mutationSuccessMessage(enabled ? "enabled" : "disabled", result),
-        });
+        this.setMessage(
+          key,
+          committedMutationMessage(
+            mutationSuccessMessage(enabled ? "enabled" : "disabled", result),
+            refreshError,
+          ),
+        );
         if (enabled) {
           this.pinEnabledPluginRoute(pluginId);
         }
-        await this.refreshAfterMutation(client);
+        await this.refreshCatalogAfterMutation(client);
         if (isCurrent() && !result.restartRequired) {
           // Plugin tabs come from hello; reconnect after the registry refresh.
           this.context.gateway.connect();
@@ -819,7 +833,7 @@ class PluginsPage extends OpenClawLightDomElement {
     await this.runPluginMutation(
       rowKey,
       (client) => uninstallPlugin(client, pluginId),
-      async (result, client) => {
+      async (result, refreshError, client) => {
         this.setPendingRemoval(rowKey, false);
         // Removal hides its row, so keep the restart reminder on the page.
         this.pageNotice = {
@@ -827,11 +841,12 @@ class PluginsPage extends OpenClawLightDomElement {
           text: [
             t("pluginsPage.removedRestart", { name: result.pluginId }),
             ...(result.warnings ?? []),
+            refreshError ? t("pluginsPage.configRefreshFailed", { error: refreshError }) : null,
           ]
             .filter(Boolean)
             .join("\n"),
         };
-        await this.refreshAfterMutation(client);
+        await this.refreshCatalogAfterMutation(client);
       },
     );
   }

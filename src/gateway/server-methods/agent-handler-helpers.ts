@@ -181,6 +181,7 @@ export function emitAgentSendSessionLifecycleTransition(
         storePath: string;
         sessionFile?: string;
         agentId?: string;
+        workspaceDir?: string;
         previousSessionId?: string;
         previousSessionFile?: string;
         previousEndReason?: PluginHookSessionEndReason;
@@ -198,6 +199,7 @@ export function emitAgentSendSessionLifecycleTransition(
       storePath: transition.storePath,
       sessionFile: transition.previousSessionFile,
       agentId: transition.agentId,
+      workspaceDir: transition.workspaceDir,
       reason: transition.previousEndReason ?? "unknown",
       nextSessionId: transition.sessionId,
       nextSessionKey: transition.sessionKey,

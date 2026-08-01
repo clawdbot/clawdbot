@@ -249,6 +249,7 @@ export async function runCopilotExecution(context: {
     frameToolCallId?: string;
     frameImageIdentity?: string;
   } = { value: 0 };
+  let codeModeEngaged: boolean | undefined;
   try {
     let sdkTools: SdkTool[] = [];
     let resultContentSourceByToolName = new Map<
@@ -292,6 +293,7 @@ export async function runCopilotExecution(context: {
             }),
         });
         cleanupToolBridge = toolBridge.cleanup;
+        codeModeEngaged = toolBridge.codeModeEngaged;
         sdkTools = toolBridge.sdkTools;
         resultContentSourceByToolName = new Map(
           toolBridge.sourceTools.flatMap((tool) =>
@@ -620,6 +622,7 @@ export async function runCopilotExecution(context: {
     aborted,
     attemptStartedAt,
     bridge,
+    codeModeEngaged,
     downgradedFromResume,
     externalAbort,
     hookContext,

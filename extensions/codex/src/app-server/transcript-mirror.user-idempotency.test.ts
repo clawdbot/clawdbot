@@ -2,16 +2,14 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { CodexSessionTranscriptMirrorWriteLockContext } from "openclaw/plugin-sdk/codex-session-transcript-runtime";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import {
-  readSessionTranscriptEvents,
-  type SessionTranscriptWriteLockContext,
-} from "openclaw/plugin-sdk/session-transcript-runtime";
+import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
 import {
   castAgentMessage,
   makeAgentAssistantMessage,
@@ -37,27 +35,37 @@ vi.mock("openclaw/plugin-sdk/session-transcript-runtime", async (importOriginal)
   return {
     ...actual,
     publishSessionTranscriptUpdateByIdentity: transcriptRace.publish,
-    withSessionTranscriptWriteLock: async (
-      params: Parameters<typeof actual.withSessionTranscriptWriteLock>[0],
-      run: Parameters<typeof actual.withSessionTranscriptWriteLock>[1],
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/codex-session-transcript-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/codex-session-transcript-runtime")>();
+  return {
+    ...actual,
+    withCodexSessionTranscriptMirrorWriteLock: async (
+      params: Parameters<typeof actual.withCodexSessionTranscriptMirrorWriteLock>[0],
+      run: Parameters<typeof actual.withCodexSessionTranscriptMirrorWriteLock>[1],
     ) =>
-      await actual.withSessionTranscriptWriteLock(params, async (locked) => {
+      await actual.withCodexSessionTranscriptMirrorWriteLock(params, async (locked) => {
         const competingMessage = transcriptRace.competingMessage;
         if (!competingMessage) {
           return await run(locked);
         }
         transcriptRace.competingMessage = undefined;
-        const staleEvents = await locked.readEvents();
-        await locked.appendMessage({
-          message: competingMessage as AgentMessage,
-          idempotencyLookup: "scan",
-        });
-        const intercepted: SessionTranscriptWriteLockContext = {
+        const intercepted: CodexSessionTranscriptMirrorWriteLockContext = {
           ...locked,
-          readEvents: async () => staleEvents,
-          appendMessage: async (options) => {
+          readMessageFacts: async (factParams) => {
+            const staleFacts = await locked.readMessageFacts(factParams);
+            await locked.appendMessage({
+              message: competingMessage as AgentMessage,
+              idempotencyLookup: "scan",
+            });
+            return staleFacts;
+          },
+          appendMessageWithMessageSequence: async (options) => {
             transcriptRace.lookups.push(options.idempotencyLookup);
-            return await locked.appendMessage(options);
+            return await locked.appendMessageWithMessageSequence(options);
           },
         };
         return await run(intercepted);
@@ -164,7 +172,7 @@ it("adopts a competing indexed user without duplicating writes or slowing assist
       }),
     ]);
     expect(result.assistantMirrorIdentitiesOwned).toEqual(["turn-1:assistant"]);
-    expect(transcriptRace.lookups).toEqual(["scan", "caller-checked"]);
+    expect(transcriptRace.lookups).toEqual(["scan", "scan"]);
     expect(transcriptRace.publish).toHaveBeenCalledTimes(1);
     expect(transcriptRace.publish).toHaveBeenCalledWith(
       expect.objectContaining({

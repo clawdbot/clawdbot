@@ -380,7 +380,11 @@ export async function handleSendChat(
             ).previousDraft;
           } else {
             host.chatMessage = "";
-            host.chatAttachments = [];
+            // Export leaves the composer in its current session; /new must clear
+            // attachments before its handoff can capture them under both routes.
+            if (parsed.command.key !== "export-session") {
+              host.chatAttachments = [];
+            }
             resetChatInputHistoryNavigation(host);
           }
         }

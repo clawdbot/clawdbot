@@ -15,6 +15,7 @@ enum DebugActions {
             defer: false)
         window.title = "Agent Events"
         window.isReleasedWhenClosed = false
+        window.isRestorable = false
         window.contentView = NSHostingView(rootView: AgentEventsWindow())
         window.center()
         window.makeKeyAndOrderFront(nil)

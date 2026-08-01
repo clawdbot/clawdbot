@@ -126,7 +126,7 @@ describe("buildAgentSystemPrompt", () => {
       skillsPrompt:
         "<available_skills>\n  <skill>\n    <name>demo</name>\n  </skill>\n</available_skills>",
       heartbeatPrompt: "ping",
-      toolNames: ["message", "memory_search"],
+      toolNames: ["message", "memory_search", "read"],
       docsPath: "/tmp/openclaw/docs",
       extraSystemPrompt: "Subagent details",
       ttsHint: "Voice (TTS) is enabled.",
@@ -157,6 +157,37 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("## Subagent Context");
     expect(prompt).not.toContain("## Group Chat Context");
     expect(prompt).toContain("Subagent details");
+  });
+
+  it("preserves required visible-source message-tool guidance in minimal prompts", () => {
+    const requiredMessageGuidance = "Current source visible reply MUST use `message(action=send)`";
+
+    const requiredMessagePrompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      promptMode: "minimal",
+      toolNames: ["message"],
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+    expect(requiredMessagePrompt).toContain(requiredMessageGuidance);
+    expect(requiredMessagePrompt).toContain("final text is private");
+
+    const unavailableMessagePrompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      promptMode: "minimal",
+      toolNames: ["read"],
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+    expect(unavailableMessagePrompt).not.toContain("message(action=send)");
+    expect(unavailableMessagePrompt).not.toContain("## Messaging");
+
+    const automaticMessagePrompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      promptMode: "minimal",
+      toolNames: ["message"],
+      sourceReplyDeliveryMode: "automatic",
+    });
+    expect(automaticMessagePrompt).not.toContain("message(action=send)");
+    expect(automaticMessagePrompt).not.toContain("## Messaging");
   });
 
   it("keeps promised asynchronous work open in full and minimal prompts", () => {
@@ -215,6 +246,7 @@ describe("buildAgentSystemPrompt", () => {
       workspaceDir: "/tmp/openclaw",
       promptMode: "minimal",
       skillsPrompt,
+      toolNames: ["read"],
     });
 
     expect(prompt).toContain("## Skills");
@@ -715,76 +747,72 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("bootstrapMaxChars");
   });
 
-  it("shows timezone section for 12h, 24h, and timezone-only modes", () => {
-    const cases = [
-      {
-        name: "12-hour",
-        params: {
-          workspaceDir: "/tmp/openclaw",
-          userTimezone: "America/Chicago",
-          userTime: "Monday, January 5th, 2026 — 3:26 PM",
-          userTimeFormat: "12" as const,
-        },
-      },
-      {
-        name: "24-hour",
-        params: {
-          workspaceDir: "/tmp/openclaw",
-          userTimezone: "America/Chicago",
-          userTime: "Monday, January 5th, 2026 — 15:26",
-          userTimeFormat: "24" as const,
-        },
-      },
-      {
-        name: "timezone-only",
-        params: {
-          workspaceDir: "/tmp/openclaw",
-          userTimezone: "America/Chicago",
-          userTimeFormat: "24" as const,
-        },
-      },
-    ] as const;
-
-    for (const testCase of cases) {
-      const prompt = buildAgentSystemPrompt(testCase.params);
-      expect(prompt, testCase.name).toContain("## Current Date & Time");
-      expect(prompt, testCase.name).toContain("Time zone: America/Chicago");
-    }
-  });
-
-  it("hints to use session_status for current date/time", () => {
+  it("shows the current local date and timezone", () => {
     const prompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/clawd",
+      workspaceDir: "/tmp/openclaw",
+      userDate: "2026-01-05",
       userTimezone: "America/Chicago",
     });
 
-    expect(prompt).toContain("session_status");
-    expect(prompt).toContain("Need date/time/day");
-  });
-
-  // The system prompt intentionally does NOT include the current date/time.
-  // Only the timezone is included, to keep the prompt stable for caching.
-  // See: https://github.com/moltbot/moltbot/commit/66eec295b894bce8333886cfbca3b960c57c4946
-  // Agents should use session_status or message timestamps to determine the date/time.
-  // Related: https://github.com/moltbot/moltbot/issues/1897
-  //          https://github.com/moltbot/moltbot/issues/3658
-  it("does NOT include a date or time in the system prompt (cache stability)", () => {
-    const prompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/clawd",
-      userTimezone: "America/Chicago",
-      userTime: "Monday, January 5th, 2026 — 3:26 PM",
-      userTimeFormat: "12",
-    });
-
-    // The prompt should contain the timezone but NOT the formatted date/time string.
-    // This is intentional for prompt cache stability — the date/time was removed in
-    // commit 66eec295b. If you're here because you want to add it back, please see
-    // https://github.com/moltbot/moltbot/issues/3658 for the preferred approach:
-    // gateway-level timestamp injection into messages, not the system prompt.
+    expect(prompt).toContain("## Temporal Context");
+    expect(prompt).toContain("Current date: 2026-01-05");
     expect(prompt).toContain("Time zone: America/Chicago");
-    expect(prompt).not.toContain("Monday, January 5th, 2026");
+  });
+
+  it("points to session_status for exact time only when the tool is available", () => {
+    const withStatus = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/clawd",
+      toolNames: ["session_status"],
+      userDate: "2026-01-05",
+      userTimezone: "America/Chicago",
+    });
+    const withoutStatus = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/clawd",
+      toolNames: ["exec"],
+      userDate: "2026-01-05",
+      userTimezone: "America/Chicago",
+    });
+
+    expect(withStatus).toContain("For the exact current time, use `session_status`.");
+    expect(withoutStatus).not.toContain("session_status");
+  });
+
+  it("does not inject a live clock into temporal context", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/clawd",
+      userDate: "2026-01-05",
+      userTimezone: "America/Chicago",
+    });
+
+    expect(prompt).toContain("Current date: 2026-01-05");
+    expect(prompt).toContain("Time zone: America/Chicago");
     expect(prompt).not.toContain("3:26 PM");
     expect(prompt).not.toContain("15:26");
+  });
+
+  it("keeps date rollover and timezone changes below the prompt-cache boundary", () => {
+    const buildPrompt = (userDate: string, userTimezone: string) =>
+      buildAgentSystemPrompt({
+        workspaceDir: "/tmp/clawd",
+        toolNames: ["session_status"],
+        userDate,
+        userTimezone,
+      });
+    const first = buildPrompt("2026-01-05", "America/Chicago");
+    const nextDay = buildPrompt("2026-01-06", "America/Chicago");
+    const nextZone = buildPrompt("2026-01-06", "Asia/Tokyo");
+    const stablePrefix = (prompt: string) =>
+      prompt.slice(0, prompt.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY));
+    const volatileSuffix = (prompt: string) =>
+      prompt.slice(prompt.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY));
+
+    expect(stablePrefix(first)).toBe(stablePrefix(nextDay));
+    expect(stablePrefix(first)).toBe(stablePrefix(nextZone));
+    expect(stablePrefix(first)).not.toContain("2026-01-05");
+    expect(stablePrefix(first)).not.toContain("America/Chicago");
+    expect(volatileSuffix(first)).toContain("Current date: 2026-01-05");
+    expect(volatileSuffix(nextDay)).toContain("Current date: 2026-01-06");
+    expect(volatileSuffix(nextZone)).toContain("Time zone: Asia/Tokyo");
   });
 
   it("includes model alias guidance when aliases are provided", () => {
@@ -843,6 +871,7 @@ describe("buildAgentSystemPrompt", () => {
   it("includes skills guidance when skills prompt is present", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
+      toolNames: ["read"],
       skillsPrompt:
         "<available_skills>\n  <skill>\n    <name>demo</name>\n  </skill>\n</available_skills>",
     });
@@ -856,10 +885,43 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("Several: most specific");
   });
 
+  it("omits skills guidance when the actual visible tools cannot read skill instructions", () => {
+    const skillsPrompt =
+      "<available_skills>\n  <skill>\n    <name>demo</name>\n  </skill>\n</available_skills>";
+
+    for (const toolNames of [[], ["message"], ["tool_search"]]) {
+      const prompt = buildAgentSystemPrompt({
+        workspaceDir: "/tmp/openclaw",
+        toolNames,
+        capabilityToolNames: ["read"],
+        skillsPrompt,
+      });
+
+      expect(prompt).not.toContain("## Skills");
+      expect(prompt).not.toContain("<available_skills>");
+      expect(prompt).not.toContain("read exact <location>");
+    }
+  });
+
+  it("keeps CLI-backend skill guidance when file tools are owned by the external harness", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      promptSurface: "cli_backend",
+      toolNames: [],
+      skillsPrompt:
+        "<available_skills>\n  <skill>\n    <name>demo</name>\n  </skill>\n</available_skills>",
+    });
+
+    expect(prompt).toContain("## Skills");
+    expect(prompt).toContain("<name>demo</name>");
+    expect(prompt).toContain("read exact <location>");
+  });
+
   it("switches skills access guidance under code mode", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       codeModeActive: true,
+      toolNames: ["exec"],
       skillsPrompt:
         "<available_skills>\n  <skill>\n    <name>demo</name>\n  </skill>\n</available_skills>",
     });
@@ -868,6 +930,19 @@ describe("buildAgentSystemPrompt", () => {
       'Scan <available_skills>. Clear match: use `skills.read("<name>")` inside `exec`; obey.',
     );
     expect(prompt).not.toContain("read exact <location> with `read`");
+  });
+
+  it("omits code-mode skill guidance when the actual exec tool is unavailable", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      codeModeActive: true,
+      toolNames: ["message"],
+      skillsPrompt:
+        "<available_skills>\n  <skill>\n    <name>demo</name>\n  </skill>\n</available_skills>",
+    });
+
+    expect(prompt).not.toContain("## Skills");
+    expect(prompt).not.toContain("skills.read");
   });
 
   it("instructs models to use skill_workshop only when the tool is available", () => {
@@ -900,6 +975,7 @@ describe("buildAgentSystemPrompt", () => {
   it("appends available skills when provided", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
+      toolNames: ["read"],
       skillsPrompt:
         "<available_skills>\n  <skill>\n    <name>demo</name>\n  </skill>\n</available_skills>",
     });

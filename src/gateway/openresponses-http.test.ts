@@ -10,7 +10,7 @@ import { FailoverError } from "../agents/failover-error.js";
 import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
 import { resetConfigRuntimeState } from "../config/config.js";
-import { emitAgentEvent } from "../infra/agent-events.js";
+import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { enqueueCommandInLane } from "../process/command-queue.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { createDeferred } from "../test-utils/deferred.js";
@@ -1281,6 +1281,203 @@ describe("OpenResponses HTTP API (e2e)", () => {
     }
   });
 
+  it("flushes same-turn assistant microtasks before completing an official SDK stream", async () => {
+    agentCommand.mockClear();
+    agentCommand.mockImplementationOnce(((opts: unknown) => {
+      const runId = (opts as { runId?: string }).runId;
+      if (!runId) {
+        throw new Error("expected a streaming response run ID");
+      }
+      emitAgentEvent({ runId, stream: "assistant", data: { delta: "start " } });
+      const result = Promise.resolve({ payloads: [{ text: "start finish!" }] });
+      void result.then(() => {
+        emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
+        void Promise.resolve().then(() => {
+          emitAgentEvent({ runId, stream: "assistant", data: { delta: "finish" } });
+          void Promise.resolve().then(() => {
+            emitAgentEvent({ runId, stream: "assistant", data: { delta: "!" } });
+          });
+        });
+      });
+      return result;
+    }) as never);
+
+    const client = new OpenAI({
+      apiKey: "test",
+      baseURL: `http://127.0.0.1:${enabledPort}/v1`,
+      defaultHeaders: { "x-openclaw-scopes": "operator.write" },
+      maxRetries: 0,
+    });
+    const stream = client.responses.stream({
+      model: "openclaw",
+      input: "Finish the streamed response.",
+    });
+    const deltas: string[] = [];
+    stream.on("response.output_text.delta", (event) => {
+      deltas.push(event.delta);
+    });
+
+    const response = await stream.finalResponse();
+    expect(deltas.join("")).toBe("start finish!");
+    expect(response.status).toBe("completed");
+    expect(response.output_text).toBe("start finish!");
+    expect(agentCommand).toHaveBeenCalledTimes(1);
+  });
+
+  it("flushes post-lifecycle assistant microtasks after usage is already available", async () => {
+    let unsubscribe = () => {};
+    agentCommand.mockClear();
+    agentCommand.mockImplementationOnce(((opts: unknown) => {
+      const runId = (opts as { runId?: string }).runId;
+      if (!runId) {
+        throw new Error("expected a streaming response run ID");
+      }
+      emitAgentEvent({ runId, stream: "assistant", data: { delta: "start " } });
+      unsubscribe = onAgentEvent((event) => {
+        if (event.runId !== runId || event.stream !== "lifecycle" || event.data?.phase !== "end") {
+          return;
+        }
+        unsubscribe();
+        void Promise.resolve().then(() => {
+          emitAgentEvent({ runId, stream: "assistant", data: { delta: "finish" } });
+        });
+      });
+      return Promise.resolve({ payloads: [{ text: "start finish" }] });
+    }) as never);
+
+    try {
+      const client = new OpenAI({
+        apiKey: "test",
+        baseURL: `http://127.0.0.1:${enabledPort}/v1`,
+        defaultHeaders: { "x-openclaw-scopes": "operator.write" },
+        maxRetries: 0,
+      });
+      const response = await client.responses
+        .stream({ model: "openclaw", input: "Flush the final assistant microtask." })
+        .finalResponse();
+
+      expect(response.output_text).toBe("start finish");
+      expect(agentCommand).toHaveBeenCalledTimes(1);
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it("fails conflicting assistant replacements queued after lifecycle completion", async () => {
+    let unsubscribe = () => {};
+    agentCommand.mockClear();
+    agentCommand.mockImplementationOnce(((opts: unknown) => {
+      const runId = (opts as { runId?: string }).runId;
+      if (!runId) {
+        throw new Error("expected a streaming response run ID");
+      }
+      emitAgentEvent({ runId, stream: "assistant", data: { delta: "draft answer" } });
+      unsubscribe = onAgentEvent((event) => {
+        if (event.runId !== runId || event.stream !== "lifecycle" || event.data?.phase !== "end") {
+          return;
+        }
+        unsubscribe();
+        void Promise.resolve().then(() => {
+          emitAgentEvent({
+            runId,
+            stream: "assistant",
+            data: { text: "rewritten answer", replace: true, phase: "commentary" },
+          });
+        });
+      });
+      return Promise.resolve({ payloads: [{ text: "rewritten answer" }] });
+    }) as never);
+
+    try {
+      const client = new OpenAI({
+        apiKey: "test",
+        baseURL: `http://127.0.0.1:${enabledPort}/v1`,
+        defaultHeaders: { "x-openclaw-scopes": "operator.write" },
+        maxRetries: 0,
+      });
+      const stream = client.responses.stream({
+        model: "openclaw",
+        input: "Reject a late incompatible assistant replacement.",
+      });
+      let completedEvents = 0;
+      let failedEvents = 0;
+      stream.on("response.completed", () => {
+        completedEvents += 1;
+      });
+      stream.on("response.failed", () => {
+        failedEvents += 1;
+      });
+
+      const response = await stream.finalResponse();
+      expect(completedEvents).toBe(0);
+      expect(failedEvents).toBe(1);
+      expect(response.status).toBe("failed");
+      expect(response.error?.code).toBe("server_error");
+      expect(response.error?.message).toContain("append-only response stream");
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it("fails an official SDK stream when an error lifecycle precedes a resolved run", async () => {
+    agentCommand.mockClear();
+    agentCommand.mockImplementationOnce((async (opts: unknown) => {
+      const runId = (opts as { runId?: string }).runId;
+      if (!runId) {
+        throw new Error("expected a streaming response run ID");
+      }
+      emitAgentEvent({ runId, stream: "assistant", data: { delta: "partial answer" } });
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "error", error: "All model fallback candidates failed" },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "error", error: "A later lifecycle event must not replace the failure" },
+      });
+      return {
+        payloads: [{ text: "partial answer" }],
+        meta: { agentMeta: { usage: { input: 11, output: 7, total: 18 } } },
+      };
+    }) as never);
+
+    const client = new OpenAI({
+      apiKey: "test",
+      baseURL: `http://127.0.0.1:${enabledPort}/v1`,
+      defaultHeaders: { "x-openclaw-scopes": "operator.write" },
+      maxRetries: 0,
+    });
+    const stream = client.responses.stream({
+      model: "openclaw",
+      input: "Report the provider failure.",
+    });
+    let completedEvents = 0;
+    let failedEvents = 0;
+    stream.on("response.completed", () => {
+      completedEvents += 1;
+    });
+    stream.on("response.failed", () => {
+      failedEvents += 1;
+    });
+
+    const response = await stream.finalResponse();
+    expect(completedEvents).toBe(0);
+    expect(failedEvents).toBe(1);
+    expect(response.status).toBe("failed");
+    expect(response.error).toEqual({
+      code: "server_error",
+      message: "All model fallback candidates failed",
+    });
+    expect(response.usage).toMatchObject({
+      input_tokens: 11,
+      output_tokens: 7,
+      total_tokens: 18,
+    });
+    expect(agentCommand).toHaveBeenCalledTimes(1);
+  });
+
   it("maps provider format failures to OpenResponses 400 failed responses", async () => {
     const port = enabledPort;
 
@@ -1585,7 +1782,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       status?: string;
       output?: Array<Record<string, unknown>>;
     };
-    expect(json.status).toBe("incomplete");
+    expect(json.status).toBe("completed");
     expect(json.output?.map((item) => item.type)).toEqual(["message", "function_call"]);
     expect(json.output?.[0]?.phase).toBe("commentary");
     expect(
@@ -1647,7 +1844,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       status?: string;
       output?: Array<Record<string, unknown>>;
     };
-    expect(json.status).toBe("incomplete");
+    expect(json.status).toBe("completed");
     expect(json.output?.map((item) => item.type)).toEqual(["message", "function_call"]);
     expect(json.output?.[1]?.name).toBe("get_weather");
     const opts = firstAgentOpts();
@@ -1845,7 +2042,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         response?: { status?: string; output?: Array<Record<string, unknown>> };
       }
     ).response;
-    expect(response?.status).toBe("incomplete");
+    expect(response?.status).toBe("completed");
     expect(response?.output?.map((item) => item.type)).toEqual(["message", "function_call"]);
     expect(response?.output?.[1]?.name).toBe("get_weather");
   });
@@ -1916,7 +2113,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
           output?: Array<{ type?: string; content?: Array<{ text?: string }> }>;
         };
       };
-      expect(completed.response?.status).toBe("incomplete");
+      expect(completed.response?.status).toBe("completed");
       expect(completed.response?.output?.map((item) => item.type)).toEqual([
         "message",
         "function_call",
@@ -2038,7 +2235,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         response?: { status?: string; output?: Array<Record<string, unknown>> };
       }
     ).response;
-    expect(response?.status).toBe("incomplete");
+    expect(response?.status).toBe("completed");
     expect(response?.output?.map((item) => item.type)).toEqual(["message", "function_call"]);
     expect(response?.output?.[0]?.phase).toBe("commentary");
     expect(
@@ -2086,7 +2283,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       status?: string;
       output?: Array<Record<string, unknown>>;
     };
-    expect(json.status).toBe("incomplete");
+    expect(json.status).toBe("completed");
     expect(json.output?.map((item) => item.type)).toEqual([
       "message",
       "function_call",
@@ -2179,7 +2376,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         response?: { status?: string; output?: Array<Record<string, unknown>> };
       }
     ).response;
-    expect(response?.status).toBe("incomplete");
+    expect(response?.status).toBe("completed");
     expect(response?.output?.map((item) => item.type)).toEqual([
       "message",
       "function_call",

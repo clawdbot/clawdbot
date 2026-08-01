@@ -7,6 +7,7 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
+import androidx.media3.common.Player
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertSame
@@ -37,6 +38,10 @@ class ChatMediaPlayerTest {
     fun release() {
       released = true
     }
+  }
+
+  private class FakeSession {
+    var released = false
   }
 
   @get:Rule
@@ -76,6 +81,47 @@ class ChatMediaPlayerTest {
   }
 
   @Test
+  fun playbackClaimsCreateAndReleaseOnlyOneMediaSession() {
+    val first = FakePlayer()
+    val second = FakePlayer()
+    val sessions = ChatMediaSessionLifecycle<FakePlayer, FakeSession> { it.released = true }
+    val claims =
+      ChatMediaPlaybackClaims<FakePlayer>(
+        pause = { player -> sessions.release(player) },
+        release = { player -> sessions.release(player) },
+      )
+
+    claims.claim(first)
+    val firstSession = sessions.activate(first) { FakeSession() }
+    assertSame(firstSession, sessions.activate(first) { error("duplicate session") })
+
+    claims.claim(second)
+    val secondSession = sessions.activate(second) { FakeSession() }
+    assertTrue(firstSession.released)
+    assertFalse(secondSession.released)
+
+    claims.pauseIf { it === second }
+    assertTrue(secondSession.released)
+  }
+
+  @Test
+  fun mediaSessionControllersCannotReplaceInlineMediaItem() {
+    val commands =
+      inlineMediaSessionPlayerCommands(
+        Player.Commands
+          .Builder()
+          .addAllCommands()
+          .build(),
+      )
+
+    assertTrue(commands.contains(Player.COMMAND_PLAY_PAUSE))
+    assertTrue(commands.contains(Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM))
+    assertFalse(commands.contains(Player.COMMAND_SET_MEDIA_ITEM))
+    assertFalse(commands.contains(Player.COMMAND_CHANGE_MEDIA_ITEMS))
+    assertFalse(commands.contains(Player.COMMAND_STOP))
+  }
+
+  @Test
   fun legacyMediaPartsRenderLabelsWithoutPlayControlsOrClaims() {
     val audio =
       ChatMessageContent(
@@ -102,7 +148,7 @@ class ChatMediaPlayerTest {
             content = listOf(audio, video),
             timestampMs = 1,
           ),
-        loadMediaArtifact = { _, _ ->
+        loadMediaArtifact = { _, _, _ ->
           loadCount += 1
           null
         },

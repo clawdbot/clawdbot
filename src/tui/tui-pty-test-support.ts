@@ -4,6 +4,7 @@ import * as nodePty from "@lydell/node-pty";
 import type { IPty } from "@lydell/node-pty";
 import { AnsiSequenceStripper } from "../../packages/terminal-core/src/ansi-sequences.js";
 import { toErrorObject } from "../infra/errors.js";
+import { signalProcessTree } from "../process/kill-tree.js";
 
 // Shared PTY harness utilities for fake-backend and local TUI smoke tests.
 type PtyExitEvent = Parameters<Parameters<IPty["onExit"]>[0]>[0];
@@ -15,6 +16,8 @@ export type PtyRun = {
   write: (data: string, opts?: { delay?: boolean }) => Promise<void>;
   waitForOutput: (needle: string, timeoutMs?: number) => Promise<string>;
   waitForExit: (timeoutMs?: number) => Promise<PtyExitEvent>;
+  /** Ends behavior-complete PTY scenarios without exercising graceful TUI shutdown. */
+  forceKill: () => Promise<void>;
   dispose: () => Promise<void>;
 };
 
@@ -146,6 +149,7 @@ export function startPty(
       onTimeout: () => new Error(`timed out waiting for PTY exit\n${output}`),
     });
 
+  let forceKillPromise: Promise<void> | undefined;
   let disposePromise: Promise<void> | undefined;
 
   const run: PtyRun = {
@@ -169,7 +173,29 @@ export function startPty(
         onTimeout: () => new Error(`timed out waiting for ${JSON.stringify(needle)}\n${output}`),
       }),
     waitForExit,
+    forceKill: () => {
+      forceKillPromise ??= (async () => {
+        try {
+          if (!exitEvent) {
+            // The PTY owns a process group; killing only its shell can leave the TUI child alive.
+            await new Promise<void>((resolve) => {
+              signalProcessTree(pty.pid, "SIGKILL", { onComplete: resolve });
+            });
+            // Native PTY backends do not consistently emit onExit after a forced tree kill.
+            await sleep(PTY_EXIT_SETTLE_MS);
+            exitEvent ??= { exitCode: 137, signal: 9 };
+          }
+        } finally {
+          dataSubscription.dispose();
+          exitSubscription.dispose();
+        }
+      })();
+      return forceKillPromise;
+    },
     dispose: () => {
+      if (forceKillPromise) {
+        return forceKillPromise;
+      }
       disposePromise ??= (async () => {
         dataSubscription.dispose();
         try {

@@ -305,6 +305,153 @@ describe("plugin npm package manifest staging", () => {
     expect(readFileSync(join(packageDir, "package.json"), "utf8")).toBe(originalText);
   });
 
+  it.each(
+    [
+      {
+        label: "ESM configured-state",
+        metadataKey: "configuredState",
+        runtimeFormat: "esm",
+        sourceName: "configured-state",
+        exportName: "hasConfiguredChannelState",
+      },
+      {
+        label: "CommonJS configured-state",
+        metadataKey: "configuredState",
+        runtimeFormat: "cjs",
+        sourceName: "configured-state",
+        exportName: "hasConfiguredChannelState",
+      },
+      {
+        label: "ESM persisted-auth state",
+        metadataKey: "persistedAuthState",
+        runtimeFormat: "esm",
+        sourceName: "auth-presence",
+        exportName: "hasPersistedChannelAuth",
+      },
+      {
+        label: "CommonJS persisted-auth state",
+        metadataKey: "persistedAuthState",
+        runtimeFormat: "cjs",
+        sourceName: "auth-presence",
+        exportName: "hasPersistedChannelAuth",
+      },
+    ].flatMap((testCase) => [
+      { ...testCase, label: `${testCase.label} from source`, specifierKind: "source" },
+      { ...testCase, label: `${testCase.label} from built runtime`, specifierKind: "runtime" },
+    ]),
+  )(
+    "packs and loads $label from the actual installed plugin runtime",
+    ({ metadataKey, runtimeFormat, sourceName, exportName, specifierKind }) => {
+      const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-package-state-runtime-");
+      const packageDir = writePublishablePluginPackage(repoDir);
+      const extension = runtimeFormat === "cjs" ? ".cjs" : ".js";
+      const sourceSpecifier = `./${sourceName}`;
+      const runtimeSpecifier = `./dist/${sourceName}${extension}`;
+      const sourcePackageJson = JSON.parse(readFileSync(join(packageDir, "package.json"), "utf8"));
+      sourcePackageJson.openclaw.channel = {
+        id: "diffs",
+        [metadataKey]: {
+          specifier: specifierKind === "runtime" ? runtimeSpecifier : sourceSpecifier,
+          exportName,
+        },
+      };
+      if (runtimeFormat === "cjs") {
+        sourcePackageJson.openclaw.build = { runtimeFormat: "cjs" };
+      }
+      writeJsonFile(join(packageDir, "package.json"), sourcePackageJson);
+      writeFileText(join(packageDir, `${sourceName}.ts`), `export function ${exportName}() {}\n`);
+      writeFileText(join(packageDir, "dist", `index${extension}`), "export {};\n");
+      writeFileText(join(packageDir, "dist", `setup-entry${extension}`), "export {};\n");
+      writeFileText(
+        join(packageDir, "dist", `${sourceName}${extension}`),
+        runtimeFormat === "cjs"
+          ? `exports.${exportName} = () => true;\n`
+          : `export function ${exportName}() { return true; }\n`,
+      );
+
+      const originalText = readFileSync(join(packageDir, "package.json"), "utf8");
+      withAugmentedPluginNpmManifestForPackage({ repoRoot: repoDir, packageDir }, () => {
+        const stagedPackageJson = JSON.parse(
+          readFileSync(join(packageDir, "package.json"), "utf8"),
+        );
+        expect(stagedPackageJson.openclaw.channel[metadataKey]).toEqual({
+          specifier: runtimeSpecifier,
+          exportName,
+        });
+
+        const packedFiles = listNpmPackDryRunFiles(packageDir);
+        expect(packedFiles).toContain(runtimeSpecifier.slice(2));
+        expect(packedFiles).not.toContain(`${sourceName}.ts`);
+
+        const consumerDir = join(repoDir, "external-consumer");
+        mkdirSync(consumerDir, { recursive: true });
+        writeJsonFile(join(consumerDir, "package.json"), { private: true, type: "module" });
+
+        const packInvocation = resolvePluginNpmCommand([
+          "pack",
+          "--json",
+          "--ignore-scripts",
+          "--pack-destination",
+          consumerDir,
+        ]);
+        const pack = spawnSync(packInvocation.command, packInvocation.args, {
+          cwd: packageDir,
+          encoding: "utf8",
+          ...(packInvocation.env ? { env: packInvocation.env } : {}),
+          ...(packInvocation.shell !== undefined ? { shell: packInvocation.shell } : {}),
+          stdio: ["ignore", "pipe", "pipe"],
+          ...(packInvocation.windowsVerbatimArguments !== undefined
+            ? { windowsVerbatimArguments: packInvocation.windowsVerbatimArguments }
+            : {}),
+        });
+        expect(pack.status, pack.stderr).toBe(0);
+        const [packedPackage] = JSON.parse(pack.stdout) as [{ filename: string }];
+
+        const installInvocation = resolvePluginNpmCommand([
+          "install",
+          "--ignore-scripts",
+          "--omit=peer",
+          "--no-audit",
+          "--no-fund",
+          "--package-lock=false",
+          join(consumerDir, packedPackage.filename),
+        ]);
+        const install = spawnSync(installInvocation.command, installInvocation.args, {
+          cwd: consumerDir,
+          encoding: "utf8",
+          ...(installInvocation.env ? { env: installInvocation.env } : {}),
+          ...(installInvocation.shell !== undefined ? { shell: installInvocation.shell } : {}),
+          stdio: ["ignore", "pipe", "pipe"],
+          ...(installInvocation.windowsVerbatimArguments !== undefined
+            ? { windowsVerbatimArguments: installInvocation.windowsVerbatimArguments }
+            : {}),
+        });
+        expect(install.status, install.stderr).toBe(0);
+
+        const installedRoot = join(consumerDir, "node_modules", "@openclaw", "diffs");
+        const load = spawnSync(
+          process.execPath,
+          [
+            "--input-type=module",
+            "--eval",
+            `import fs from "node:fs";\n` +
+              `import { pathToFileURL } from "node:url";\n` +
+              `const root = ${JSON.stringify(installedRoot)};\n` +
+              `const pkg = JSON.parse(fs.readFileSync(root + "/package.json", "utf8"));\n` +
+              `const state = pkg.openclaw.channel[${JSON.stringify(metadataKey)}];\n` +
+              `const loaded = await import(new URL(state.specifier, pathToFileURL(root + "/")));\n` +
+              `if (loaded[state.exportName]?.() !== true) throw new Error("installed state checker failed");\n` +
+              `process.stdout.write("INSTALLED_PLUGIN_CHANNEL_STATE_OK\\n");\n`,
+          ],
+          { cwd: consumerDir, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+        );
+        expect(load.status, load.stderr).toBe(0);
+        expect(load.stdout).toBe("INSTALLED_PLUGIN_CHANNEL_STATE_OK\n");
+      });
+      expect(readFileSync(join(packageDir, "package.json"), "utf8")).toBe(originalText);
+    },
+  );
+
   it("installs and cleans package-local bundled dependencies while packing", () => {
     const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-package-bundled-deps-");
     const packageDir = writePublishablePluginPackage(repoDir);

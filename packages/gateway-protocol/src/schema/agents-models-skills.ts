@@ -37,6 +37,7 @@ export const ModelChoiceSchema = closedObject({
   available: Type.Optional(Type.Boolean()),
   contextWindow: Type.Optional(Type.Integer({ minimum: 1 })),
   reasoning: Type.Optional(Type.Boolean()),
+  supportsTools: Type.Optional(Type.Boolean()),
   agentRuntime: Type.Optional(GatewayAgentRuntimeSchema),
   apiKeySupported: Type.Optional(Type.Boolean()),
   input: Type.Optional(
@@ -1042,6 +1043,7 @@ export const ToolsEffectiveNoticeSchema = closedObject({
   id: NonEmptyString,
   severity: Type.Union([Type.Literal("info"), Type.Literal("warning")]),
   message: Type.String(),
+  servers: Type.Optional(Type.Array(NonEmptyString)),
 });
 
 /** Effective tool set for a session, including profile and filtering notices. */

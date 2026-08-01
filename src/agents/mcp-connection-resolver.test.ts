@@ -207,6 +207,22 @@ describe("mcp connection resolver helpers", () => {
     expect(requesterScopedServerNames).toEqual(["user-mail"]);
   });
 
+  it("preserves own __proto__ server entries while keeping deterministic order", () => {
+    const servers = JSON.parse(
+      '{"zebra":{"command":"z"},"__proto__":{"command":"proto"}}',
+    ) as Record<string, { command: string }>;
+
+    const { staticServers, requesterScopedServerNames } =
+      partitionMcpServersByConnectionScope(servers);
+
+    expect(Object.keys(staticServers)).toEqual(
+      Object.keys(servers).toSorted((a, b) => a.localeCompare(b)),
+    );
+    expect(staticServers).toStrictEqual(servers);
+    expect(Object.hasOwn(staticServers, "__proto__")).toBe(true);
+    expect(requesterScopedServerNames).toEqual([]);
+  });
+
   it("keeps connection resolvers from pinned live registries", async () => {
     const pinnedRegistry = createEmptyPluginRegistry();
     pinnedRegistry.mcpServerConnectionResolvers.push({

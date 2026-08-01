@@ -16,7 +16,11 @@ import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { danger, warn } from "openclaw/plugin-sdk/runtime-env";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { firstDefined, type NormalizedAllowFrom } from "./bot-access.js";
-import { hasInboundMedia, isRecoverableMediaGroupError } from "./bot-handlers.media.js";
+import {
+  hasInboundMedia,
+  isDurablyRetryableInboundMediaError,
+  isRecoverableMediaGroupError,
+} from "./bot-handlers.media.js";
 import type { TelegramHandlerMessageRuntime } from "./bot-handlers.message.runtime.js";
 import type { TelegramMediaRef } from "./bot-message-context.js";
 import type { TelegramAmbientTranscriptWatermark } from "./bot-message-context.types.js";
@@ -24,7 +28,13 @@ import type { RegisterTelegramHandlerParams } from "./bot-native-commands.js";
 import type { TelegramSpooledReplayDeferredParticipant } from "./bot-processing-outcome.js";
 import { MEDIA_GROUP_TIMEOUT_MS, type MediaGroupEntry } from "./bot-updates.js";
 import { resolveMedia } from "./bot/delivery.resolve-media.js";
-import { getTelegramTextParts, hasBotMention, resolveTelegramPrimaryMedia } from "./bot/helpers.js";
+import {
+  buildTelegramThreadParams,
+  getTelegramTextParts,
+  hasBotMention,
+  resolveTelegramPrimaryMedia,
+  resolveTelegramThreadSpec,
+} from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
 import { isTelegramForumServiceMessage } from "./forum-service-message.js";
 import { resolveTelegramCommandIngressAuthorization } from "./ingress.js";
@@ -214,12 +224,56 @@ export function createTelegramInboundMediaGroupRuntime(
   const processMediaGroup = async (entry: BufferedMediaGroupEntry) => {
     try {
       entry.messages.sort((a, b) => a.msg.message_id - b.msg.message_id);
-      const primary =
+      let primary =
         entry.messages.find((item) => item.msg.caption || item.msg.text) ?? entry.messages[0];
       if (!primary) {
         releaseDispatchDedupeClaims(entry.dispatchDedupeClaims);
         settleSpooledReplayParticipants(entry.spooledReplayParticipants, { kind: "skipped" });
         return;
+      }
+      const captionParts = entry.messages
+        .map(({ msg }) => getTelegramTextParts(msg))
+        .filter(({ text }) => text.trim());
+      if (captionParts.length > 1) {
+        const botUsername = primary.ctx.me?.username;
+        const commandCaptionIndex = captionParts.findIndex(({ text }) =>
+          hasControlCommand(text, entry.authorizationCfg, {
+            botUsername,
+          }),
+        );
+        if (commandCaptionIndex > 0) {
+          // Command detection is prefix-based in both ingress and canonical message processing.
+          const [commandCaption] = captionParts.splice(commandCaptionIndex, 1);
+          if (commandCaption) {
+            captionParts.unshift(commandCaption);
+          }
+        }
+        let caption = "";
+        const captionEntities: NonNullable<Message["caption_entities"]> = [];
+        for (const { text, entities } of captionParts) {
+          if (caption) {
+            caption += "\n";
+          }
+          const offset = caption.length;
+          caption += text;
+          for (const entity of entities) {
+            captionEntities.push({ ...entity, offset: entity.offset + offset });
+          }
+        }
+        const combinedMessage = {
+          ...primary.msg,
+          text: undefined,
+          entities: undefined,
+          caption,
+          caption_entities: captionEntities.length ? captionEntities : undefined,
+        } as Message;
+        // Keep grammY context methods/getters while exposing the complete album to every owner.
+        const combinedContext = Object.create(primary.ctx) as TelegramContext;
+        Object.defineProperty(combinedContext, "message", {
+          value: combinedMessage,
+          enumerable: true,
+        });
+        primary = { ctx: combinedContext, msg: combinedMessage };
       }
       if (await shouldSkipMediaDownloadForUnaddressedMentionGroup({ ...entry, ...primary })) {
         releaseDispatchDedupeClaims(entry.dispatchDedupeClaims);
@@ -238,14 +292,16 @@ export function createTelegramInboundMediaGroupRuntime(
           media = await resolveMedia({ ctx, maxBytes: mediaMaxBytes, ...mediaRuntimeWithAbort });
         } catch (error) {
           if (
-            mediaRuntimeWithAbort.abortSignal?.aborted &&
-            entry.spooledReplayParticipants.length
+            entry.spooledReplayParticipants.length > 0 &&
+            (mediaRuntimeWithAbort.abortSignal?.aborted ||
+              isDurablyRetryableInboundMediaError(error))
           ) {
             throw error;
           }
           if (!isRecoverableMediaGroupError(error)) {
             throw error;
           }
+          // Classic polling cannot replay a failed album; retain its existing partial-delivery path.
           runtime.log?.(warn(`media group: skipping photo that failed to fetch: ${String(error)}`));
           allMedia.push({ kind: nativeKind, sourceMessageId });
           selection.set(sourceMessageId, "exclude");
@@ -278,6 +334,13 @@ export function createTelegramInboundMediaGroupRuntime(
               primary.msg.chat.id,
               `⚠️ Received ${materializedCount} of ${entry.messages.length} images — ${skippedCount} could not be fetched and ${verb} skipped.`,
               {
+                ...buildTelegramThreadParams(
+                  resolveTelegramThreadSpec({
+                    isGroup: entry.isGroup,
+                    isForum: entry.isForum,
+                    messageThreadId: entry.resolvedThreadId ?? entry.dmThreadId,
+                  }),
+                ),
                 reply_parameters: {
                   message_id: primary.msg.message_id,
                   allow_sending_without_reply: true,

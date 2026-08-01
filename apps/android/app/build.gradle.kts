@@ -318,6 +318,7 @@ dependencies {
   implementation(libs.androidx.compose.ui)
   implementation(libs.androidx.compose.ui.tooling.preview)
   implementation(libs.androidx.compose.material3)
+  implementation(libs.androidx.compose.material3.adaptive.navigation.suite)
   // material-icons-extended pulled in full icon set (~20 MB DEX). Only ~18 icons used.
   // R8 will tree-shake unused icons when minify is enabled on release builds.
   implementation(libs.androidx.compose.material.icons.extended)
@@ -338,6 +339,7 @@ dependencies {
   implementation(libs.okhttp)
   implementation(libs.media3.datasource.okhttp)
   implementation(libs.media3.exoplayer)
+  implementation(libs.media3.session)
   implementation(libs.media3.ui)
   implementation(libs.bcprov)
   implementation(libs.coil.compose)

@@ -2607,6 +2607,44 @@ describe("Tool Search", () => {
     );
   });
 
+  it("does not retain hook-bound catalogs, including prewrapped tools", () => {
+    const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
+    const config = { tools: { toolSearch: true } } as never;
+    const snapshotsBefore = testing.getReusableCatalogSnapshotCountForTest();
+
+    for (const mode of ["context", "prewrapped"] as const) {
+      const sessionId = `session-hook-bound-${mode}`;
+      const runId = `run-hook-bound-${mode}`;
+      const catalogRef = createToolSearchCatalogRef();
+      const hookContext = {
+        agentId: "agent-main",
+        sessionId,
+        sessionKey: "agent:main:main",
+        runId,
+        onToolOutcome: vi.fn(),
+      };
+      const target = pluginTool(`fake_hook_bound_${mode}`, "Hook-bound probe tool");
+      const catalogTarget =
+        mode === "prewrapped"
+          ? wrapToolWithAbortSignal(
+              wrapToolWithBeforeToolCallHook(target, hookContext),
+              new AbortController().signal,
+            )
+          : target;
+      applyToolSearchCatalog({
+        tools: [codeTool, catalogTarget],
+        config,
+        sessionId,
+        runId,
+        catalogRef,
+        ...(mode === "context" ? { toolHookContext: hookContext } : {}),
+      });
+      clearToolSearchCatalog({ sessionId, runId, catalogRef });
+    }
+
+    expect(testing.getReusableCatalogSnapshotCountForTest()).toBe(snapshotsBefore);
+  });
+
   it("does not reuse when a same-named tool uses a different executable", () => {
     const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
     const original = pluginTool("fake_exec_swap", "Stable description");

@@ -681,7 +681,7 @@ openclaw-settings-save-indicator {
   }
 }
 
-.settings-sidebar__footer-version {
+.settings-sidebar__footer .sidebar-footer-build {
   margin-left: auto;
   flex-shrink: 0;
   font-variant-numeric: tabular-nums;
@@ -1412,6 +1412,12 @@ html.openclaw-native-macos
   stroke: currentColor;
   fill: none;
   stroke-width: 1.8px;
+}
+
+.sidebar-session-catalog-provider-icon {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 12px;
 }
 
 .sidebar-session-group-count {

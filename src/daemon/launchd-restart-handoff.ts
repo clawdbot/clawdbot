@@ -4,11 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { sanitizeHostExecEnv } from "../infra/host-env-security.js";
-import { resolveGatewayLaunchAgentLabel } from "./constants.js";
+import { resolveLaunchAgentLabel } from "./launchd-label.js";
 import { LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS } from "./launchd-plist.js";
+import { renderSystemLaunchDaemonOwnershipShellProbe } from "./launchd-system.js";
 import { renderPosixRestartLogSetup } from "./restart-logs.js";
 
 type LaunchdRestartHandoffMode = "kickstart" | "reload" | "start-after-exit";
@@ -18,6 +18,7 @@ type LaunchdRestartHandoffResult = Result<Promise<boolean>, string>;
 
 type LaunchdRestartTarget = {
   domain: string;
+  label: string;
   plistPath: string;
   serviceTarget: string;
 };
@@ -36,14 +37,6 @@ type LaunchdRestartLogEnv = {
   OPENCLAW_STATE_DIR?: string;
   OPENCLAW_PROFILE?: string;
 };
-
-function assertValidLaunchAgentLabel(label: string): string {
-  const trimmed = label.trim();
-  if (!/^[A-Za-z0-9._-]+$/.test(trimmed)) {
-    throw new Error(`Invalid launchd label: ${sanitizeForLog(trimmed)}`);
-  }
-  return trimmed;
-}
 
 function resolveGuiDomain(): string {
   if (typeof process.getuid !== "function") {
@@ -73,14 +66,6 @@ function collectRestartLogEnv(env?: Record<string, string | undefined>): Launchd
   };
 }
 
-function resolveLaunchAgentLabel(env?: Record<string, string | undefined>): string {
-  const envLabel = normalizeOptionalString(env?.OPENCLAW_LAUNCHD_LABEL);
-  if (envLabel) {
-    return assertValidLaunchAgentLabel(envLabel);
-  }
-  return assertValidLaunchAgentLabel(resolveGatewayLaunchAgentLabel(env?.OPENCLAW_PROFILE));
-}
-
 function resolveLaunchdRestartTarget(
   env: Record<string, string | undefined> = process.env,
 ): LaunchdRestartTarget {
@@ -90,6 +75,7 @@ function resolveLaunchdRestartTarget(
   const plistPath = path.join(home, "Library", "LaunchAgents", `${label}.plist`);
   return {
     domain,
+    label,
     plistPath,
     serviceTarget: `${domain}/${label}`,
   };
@@ -98,6 +84,7 @@ function resolveLaunchdRestartTarget(
 function buildLaunchdRestartScript(
   mode: LaunchdHandoffMode,
   restartLogEnv: LaunchdRestartLogEnv,
+  label: string,
 ): string {
   // The detached shell waits for the caller before touching launchd so the
   // current gateway process can exit cleanly after scheduling the handoff.
@@ -108,6 +95,13 @@ if [ -n "$wait_pid" ] && [ "$wait_pid" -gt 1 ] 2>/dev/null; then
   while kill -0 "$wait_pid" >/dev/null 2>&1; do
     sleep 0.1
   done
+fi
+`;
+
+  const systemOwnershipGuard = `${renderSystemLaunchDaemonOwnershipShellProbe(label)}
+if [ -n "$openclaw_system_launchd_conflict" ]; then
+  printf '[%s] openclaw restart blocked source=handoff mode=${mode} reason=%s interactive=0\n' "$(date -u +%FT%TZ)" "$openclaw_system_launchd_detail" >&2
+  exit 78
 fi
 `;
 
@@ -137,6 +131,7 @@ exit "$status"
 domain="$2"
 plist_path="$3"
 ${waitForCallerPid}
+${systemOwnershipGuard}
 status=0
 launchctl enable "$service_target"
 if launchctl kickstart -k "$service_target"; then
@@ -209,6 +204,7 @@ done
 domain="$2"
 plist_path="$3"
 ${waitForCallerPid}
+${systemOwnershipGuard}
 status=0
 launchctl enable "$service_target"
 launchctl bootout "$service_target" >/dev/null 2>&1 || true
@@ -230,6 +226,7 @@ exit "$status"
 domain="$2"
 plist_path="$3"
 ${waitForCallerPid}
+${systemOwnershipGuard}
 status=0
 launchctl enable "$service_target"
 if launchctl kickstart "$service_target"; then
@@ -272,7 +269,7 @@ function scheduleDetachedLaunchdHandoff(params: {
       "/bin/sh",
       [
         "-c",
-        buildLaunchdRestartScript(params.mode, restartLogEnv),
+        buildLaunchdRestartScript(params.mode, restartLogEnv, target.label),
         "openclaw-launchd-restart-handoff",
         target.serviceTarget,
         target.domain,

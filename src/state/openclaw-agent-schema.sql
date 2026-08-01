@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS session_nodes (
   session_key TEXT NOT NULL PRIMARY KEY,
   current_session_id TEXT NOT NULL,
   entry_json TEXT NOT NULL,
+  entry_valid INTEGER NOT NULL DEFAULT 0 CHECK (entry_valid IN (-1, 0, 1)),
   updated_at INTEGER NOT NULL,
   status TEXT CHECK (status IS NULL OR status IN ('running', 'done', 'failed', 'killed', 'timeout')),
   created_at INTEGER,
@@ -79,6 +80,36 @@ CREATE INDEX IF NOT EXISTS idx_agent_session_nodes_archived_at
 
 CREATE INDEX IF NOT EXISTS idx_agent_session_nodes_current_session_id
   ON session_nodes(current_session_id);
+
+CREATE INDEX IF NOT EXISTS idx_agent_session_nodes_entry_valid_pending
+  ON session_nodes(session_key)
+  WHERE entry_valid = 0;
+
+CREATE TABLE IF NOT EXISTS session_key_contract (
+  id INTEGER NOT NULL PRIMARY KEY CHECK (id = 1),
+  main_key TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+) STRICT;
+
+INSERT OR IGNORE INTO session_key_contract (id, main_key, updated_at) VALUES (1, 'main', 0);
+
+CREATE TRIGGER IF NOT EXISTS session_nodes_entry_valid_after_insert
+AFTER INSERT ON session_nodes
+BEGIN
+  UPDATE session_nodes SET entry_valid = 0 WHERE session_key = NEW.session_key;
+END;
+
+CREATE TRIGGER IF NOT EXISTS session_nodes_entry_valid_after_entry_update
+AFTER UPDATE OF entry_json ON session_nodes
+BEGIN
+  UPDATE session_nodes SET entry_valid = 0 WHERE session_key = NEW.session_key;
+END;
+
+CREATE TRIGGER IF NOT EXISTS session_nodes_entry_valid_after_identity_update
+AFTER UPDATE OF current_session_id, updated_at ON session_nodes
+BEGIN
+  UPDATE session_nodes SET entry_valid = 0 WHERE session_key = NEW.session_key;
+END;
 
 CREATE TABLE IF NOT EXISTS session_windows (
   session_id TEXT NOT NULL PRIMARY KEY,
@@ -422,10 +453,15 @@ CREATE TABLE IF NOT EXISTS memory_index_chunks (
   model TEXT NOT NULL,
   text TEXT NOT NULL,
   embedding TEXT NOT NULL,
-  updated_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS memory_index_chunk_recall_metadata (
+  chunk_id TEXT PRIMARY KEY,
   importance INTEGER CHECK (importance IS NULL OR importance BETWEEN 1 AND 10),
   triggers TEXT,
-  project_key TEXT
+  project_key TEXT,
+  FOREIGN KEY (chunk_id) REFERENCES memory_index_chunks(id) ON DELETE CASCADE
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS memory_index_chunk_provenance (
@@ -580,22 +616,6 @@ CREATE TRIGGER IF NOT EXISTS memory_index_chunks_revision_after_delete
 AFTER DELETE ON memory_index_chunks
 BEGIN
   UPDATE memory_index_state SET revision = revision + 1 WHERE id = 1;
-END;
-
-CREATE TRIGGER IF NOT EXISTS memory_index_chunk_provenance_after_insert
-AFTER INSERT ON memory_index_chunks
-BEGIN
-  -- Workspace memory files are owner-controlled and default to 'agent' so they
-  -- stay eligible for dreaming promotion; session-transcript chunks default to
-  -- 'untrusted' until ingestion classifies each message by sender.
-  INSERT OR IGNORE INTO memory_index_chunk_provenance (
-    chunk_id, origin_class, session_kind, observed_at
-  ) VALUES (
-    NEW.id,
-    CASE WHEN NEW.source = 'memory' THEN 'agent' ELSE 'untrusted' END,
-    'unknown',
-    NEW.updated_at
-  );
 END;
 
 CREATE INDEX IF NOT EXISTS idx_memory_embedding_cache_updated_at

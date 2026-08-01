@@ -616,7 +616,13 @@ export async function runGatewayLoop(params: {
               };
               let activeRestartSessionKeysAtDrainStart = new Set<string>();
               let activeRestartSessionIdsAtDrainStart = new Set<string>();
+              let hasMarkedActiveMainSessionsForRestart = false;
               const markActiveMainSessionsForRestart = async (reason: string) => {
+                // A second successful mark races recovery claims; failed or empty
+                // attempts must remain retryable at the forced-restart boundary.
+                if (hasMarkedActiveMainSessionsForRestart) {
+                  return;
+                }
                 const sessionKeys = new Set<string>([
                   ...activeRestartSessionKeysAtDrainStart,
                   ...collectActiveRestartSessionKeys(),
@@ -629,12 +635,15 @@ export async function runGatewayLoop(params: {
                   return;
                 }
                 try {
-                  await markRestartAbortedMainSessions({
+                  const result = await markRestartAbortedMainSessions({
                     cfg: getRuntimeConfig(),
                     sessionKeys,
                     sessionIds,
                     reason,
                   });
+                  if (result.marked > 0) {
+                    hasMarkedActiveMainSessionsForRestart = true;
+                  }
                 } catch (err) {
                   gatewayLog.warn(
                     `failed to mark interrupted main sessions for restart recovery: ${String(err)}`,

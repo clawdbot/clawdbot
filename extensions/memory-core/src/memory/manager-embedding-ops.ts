@@ -27,6 +27,7 @@ import {
   type MemorySource,
   type MemoryEntryProvenance,
   MEMORY_INDEX_CHUNK_PROVENANCE_TABLE,
+  MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { MAX_TIMER_TIMEOUT_MS, resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
@@ -983,17 +984,14 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         );
         this.db
           .prepare(
-            `INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at, importance, triggers, project_key)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(id) DO UPDATE SET
                hash=excluded.hash,
                model=excluded.model,
                text=excluded.text,
                embedding=excluded.embedding,
-               updated_at=excluded.updated_at,
-               importance=excluded.importance,
-               triggers=excluded.triggers,
-               project_key=excluded.project_key`,
+               updated_at=excluded.updated_at`,
           )
           .run(
             id,
@@ -1006,10 +1004,18 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
             chunk.text,
             JSON.stringify(embedding),
             now,
-            chunk.importance,
-            chunk.triggers,
-            chunk.projectKey,
           );
+        this.db
+          .prepare(
+            `INSERT INTO ${MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE} (
+               chunk_id, importance, triggers, project_key
+             ) VALUES (?, ?, ?, ?)
+             ON CONFLICT(chunk_id) DO UPDATE SET
+               importance=excluded.importance,
+               triggers=excluded.triggers,
+               project_key=excluded.project_key`,
+          )
+          .run(id, chunk.importance, chunk.triggers, chunk.projectKey);
         const provenance = chunk.provenance ?? {
           originClass: "untrusted" as const,
           sessionKind: "unknown" as const,

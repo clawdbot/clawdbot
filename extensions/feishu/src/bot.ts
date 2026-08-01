@@ -1143,7 +1143,7 @@ export async function handleFeishuMessage(params: {
     const body = formatAgentEnvelope({
       channel: "Feishu",
       from: envelopeFrom,
-      timestamp: new Date(),
+      timestamp: messageCreateTimeMs,
       envelope: envelopeOptions,
       body: messageBody,
     });

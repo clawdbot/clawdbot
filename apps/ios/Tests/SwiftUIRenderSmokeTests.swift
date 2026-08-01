@@ -272,7 +272,7 @@ struct SwiftUIRenderSmokeTests {
                 inlineWidgetResourceResolver: { _, _ in nil },
                 mediaArtifactResolverReady: false,
                 mediaPlaybackAllowed: { true },
-                loadMediaArtifact: { _, _ in nil })
+                loadMediaArtifact: { _, _, _ in nil })
                 .environment(\.dynamicTypeSize, typeSize)
 
             _ = Self.host(root, size: CGSize(width: 320, height: 420))
@@ -312,7 +312,7 @@ struct SwiftUIRenderSmokeTests {
             inlineWidgetResourceResolver: { _, _ in nil },
             mediaArtifactResolverReady: true,
             mediaPlaybackAllowed: { true },
-            loadMediaArtifact: { requested, kind in
+            loadMediaArtifact: { requested, kind, _ in
                 requestedArtifactId = requested
                 #expect(kind == .image)
                 return OpenClawChatLoadedMedia.data(OpenClawChatMediaData(
@@ -394,7 +394,7 @@ struct SwiftUIRenderSmokeTests {
                     inlineWidgetResourceResolver: { _, _ in nil },
                     mediaArtifactResolverReady: false,
                     mediaPlaybackAllowed: { true },
-                    loadMediaArtifact: { _, _ in nil })
+                    loadMediaArtifact: { _, _, _ in nil })
                 ChatStreamingAssistantBubble(
                     text: text,
                     markdownVariant: .standard,
@@ -451,7 +451,7 @@ struct SwiftUIRenderSmokeTests {
                 inlineWidgetResourceResolver: { _, _ in nil },
                 mediaArtifactResolverReady: false,
                 mediaPlaybackAllowed: { true },
-                loadMediaArtifact: { _, _ in nil })
+                loadMediaArtifact: { _, _, _ in nil })
                 .environment(\.dynamicTypeSize, typeSize)
 
             _ = Self.host(root, size: CGSize(width: 320, height: 280))

@@ -22,12 +22,12 @@ import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.j
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withStateDirEnv as withRawStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
+import type { GatewayModelCatalogSnapshot } from "./server-model-catalog.types.js";
 import { registerSessionAutomationSource } from "./session-automation-index.js";
 import { buildGatewaySessionEventFields } from "./session-event-payload.js";
 import { capArrayByJsonBytes } from "./session-transcript-readers.js";
 import { buildSingleRowStoreChildSessionsByKey } from "./session-utils-projection.js";
 import {
-  canonicalizeSpawnedByForAgent,
   buildGatewaySessionRow,
   deriveSessionTitle,
   getSessionDefaults,
@@ -36,7 +36,7 @@ import {
   listSessionsFromStoreAsync,
   loadSessionEntry,
   loadSessionEntryReadOnly,
-  migrateAndPruneGatewaySessionStoreKey,
+  resolveCanonicalGatewaySessionStoreKey,
   resolveDeletedAgentIdFromSessionKey,
   resolveGatewayModelSupportsImages,
   resolveGatewaySessionStoreTarget,
@@ -1719,20 +1719,6 @@ describe("gateway session utils", () => {
     ).toBe(`agent:alpha:signal:group:${mixedGroupId}`);
   });
 
-  test("canonicalizeSpawnedByForAgent preserves Signal group ids", () => {
-    const cfg = {
-      session: { mainKey: "main" },
-    } as OpenClawConfig;
-    const mixedGroupId = "VWATodkf2hc8zdOS76q9Tb0+5Bi522E03qLdaQ/9ypg=";
-
-    expect(canonicalizeSpawnedByForAgent(cfg, "ops", `Signal:Group:${mixedGroupId}`)).toBe(
-      `agent:ops:signal:group:${mixedGroupId}`,
-    );
-    expect(
-      canonicalizeSpawnedByForAgent(cfg, "ops", `Agent:Main:Signal:Group:${mixedGroupId}`),
-    ).toBe(`agent:main:signal:group:${mixedGroupId}`);
-  });
-
   test("resolveSessionStoreKey honors global scope", () => {
     const cfg = {
       session: { scope: "global", mainKey: "work" },
@@ -2067,7 +2053,7 @@ describe("gateway session utils", () => {
     expect(spawnedByReads).toBe(1);
   });
 
-  test("loadSessionEntryReadOnly keeps children linked through a main alias", async () => {
+  test("loadSessionEntryReadOnly rejects a persisted main alias", async () => {
     resetConfigRuntimeState();
     try {
       await withStateDirEnv("session-utils-exact-alias-children-", async ({ stateDir }) => {
@@ -2089,14 +2075,12 @@ describe("gateway session utils", () => {
         });
         setRuntimeConfigSnapshot(cfg, cfg);
 
-        const loaded = loadSessionEntryReadOnly("main", {
-          clone: false,
-          includeStoreChildEntries: true,
-        });
-
-        expect(loaded.canonicalKey).toBe("agent:main:work");
-        expect(loaded.entry?.sessionId).toBe("parent");
-        expect(loaded.store[childKey]?.spawnedBy).toBe(legacyParentKey);
+        expect(() =>
+          loadSessionEntryReadOnly("main", {
+            clone: false,
+            includeStoreChildEntries: true,
+          }),
+        ).toThrow("openclaw doctor --fix");
       });
     } finally {
       resetConfigRuntimeState();
@@ -2176,7 +2160,7 @@ describe("gateway session utils", () => {
     }
   });
 
-  test("loadSessionEntry resolves deleted main aliases when mainKey is customized", async () => {
+  test("loadSessionEntry rejects deleted main aliases when mainKey is customized", async () => {
     resetConfigRuntimeState();
     try {
       await withStateDirEnv("session-utils-load-deleted-main-alias-", async ({ stateDir }) => {
@@ -2204,18 +2188,14 @@ describe("gateway session utils", () => {
         } as OpenClawConfig;
         setRuntimeConfigSnapshot(cfg, cfg);
 
-        const loaded = loadSessionEntry("agent:main:work");
-
-        expect(loaded.canonicalKey).toBe("agent:main:work");
-        expect(loaded.storePath).toBe(path.resolve(deletedStorePath));
-        expect(loaded.entry?.sessionId).toBe("sess-deleted-main");
+        expect(() => loadSessionEntry("agent:main:work")).toThrow("openclaw doctor --fix");
       });
     } finally {
       resetConfigRuntimeState();
     }
   });
 
-  test("loadSessionEntry prefers the freshest duplicate row across discovered stores", async () => {
+  test("loadSessionEntry keeps the configured canonical store authoritative", async () => {
     resetConfigRuntimeState();
     try {
       await withStateDirEnv("session-utils-load-entry-cross-store-", async ({ stateDir }) => {
@@ -2249,7 +2229,7 @@ describe("gateway session utils", () => {
     }
   });
 
-  test("migrateAndPruneGatewaySessionStoreKey promotes the freshest alias row to canonical", () => {
+  test("resolveCanonicalGatewaySessionStoreKey rejects legacy aliases", () => {
     const cfg = {
       session: { mainKey: "work" },
       agents: { list: [{ id: "ops", default: true }] },
@@ -2265,16 +2245,13 @@ describe("gateway session utils", () => {
       } as SessionEntry,
     };
 
-    const result = migrateAndPruneGatewaySessionStoreKey({
-      cfg,
-      key: "agent:ops:main",
-      store,
-    });
-
-    expect(result.primaryKey).toBe("agent:ops:work");
-    expect(result.entry?.sessionId).toBe("sess-fresh");
-    expect(store["agent:ops:work"]?.sessionId).toBe("sess-fresh");
-    expect(store["agent:ops:main"]).toBeUndefined();
+    expect(() =>
+      resolveCanonicalGatewaySessionStoreKey({
+        cfg,
+        key: "agent:ops:main",
+        store,
+      }),
+    ).toThrow("openclaw doctor --fix");
   });
 
   test("listAgentsForGateway rejects avatar symlink escapes outside workspace", () => {
@@ -3344,6 +3321,422 @@ describe("deriveSessionTitle", () => {
 });
 
 describe("resolveGatewayModelSupportsImages", () => {
+  const createModelCatalogSnapshot = (params: {
+    agentId?: string;
+    config?: OpenClawConfig;
+    entries?: GatewayModelCatalogSnapshot["entries"];
+    staticEntries?: GatewayModelCatalogSnapshot["staticEntries"];
+  }): GatewayModelCatalogSnapshot => ({
+    agentId: params.agentId ?? "main",
+    agentDir: "/tmp/gateway-model-capability-agent",
+    workspaceDir: "/tmp/gateway-model-capability-workspace",
+    config: params.config ?? {},
+    entries: params.entries ?? [],
+    routeVariants: [],
+    ...(params.staticEntries ? { staticEntries: params.staticEntries } : {}),
+  });
+
+  test("uses same-agent provider-static image capabilities missing from the visible catalog", async () => {
+    const loadGatewayModelCatalog = vi.fn(async () => []);
+    const loadGatewayModelCatalogSnapshot = vi.fn(async () =>
+      createModelCatalogSnapshot({
+        agentId: "qa",
+        staticEntries: [
+          {
+            id: "gpt-5.4",
+            name: "GPT-5.4",
+            provider: "openai",
+            input: ["text", "image"],
+          },
+        ],
+      }),
+    );
+
+    await expect(
+      resolveGatewayModelSupportsImages({
+        agentId: "qa",
+        model: "gpt-5.4",
+        provider: "openai",
+        loadGatewayModelCatalog,
+        loadGatewayModelCatalogSnapshot,
+      }),
+    ).resolves.toBe(true);
+    expect(loadGatewayModelCatalogSnapshot).toHaveBeenCalledWith({
+      agentId: "qa",
+      readOnly: false,
+    });
+    expect(loadGatewayModelCatalog).not.toHaveBeenCalled();
+  });
+
+  test("repairs a stale visible text-only row with same-agent provider-static vision", async () => {
+    await expect(
+      resolveGatewayModelSupportsImages({
+        agentId: "qa",
+        model: "gpt-5.4",
+        provider: "openai",
+        loadGatewayModelCatalog: async () => [],
+        loadGatewayModelCatalogSnapshot: async () =>
+          createModelCatalogSnapshot({
+            agentId: "qa",
+            entries: [{ id: "gpt-5.4", name: "Text only", provider: "openai", input: ["text"] }],
+            staticEntries: [
+              {
+                id: "gpt-5.4",
+                name: "GPT-5.4",
+                provider: "openai",
+                input: ["text", "image"],
+              },
+            ],
+          }),
+      }),
+    ).resolves.toBe(true);
+  });
+
+  test("repairs missing visible input metadata with same-agent provider-static vision", async () => {
+    await expect(
+      resolveGatewayModelSupportsImages({
+        agentId: "qa",
+        model: "gpt-5.4",
+        provider: "openai",
+        loadGatewayModelCatalog: async () => [],
+        loadGatewayModelCatalogSnapshot: async () =>
+          createModelCatalogSnapshot({
+            agentId: "qa",
+            entries: [{ id: "gpt-5.4", name: "Stale model", provider: "openai" }],
+            staticEntries: [
+              {
+                id: "gpt-5.4",
+                name: "GPT-5.4",
+                provider: "openai",
+                input: ["text", "image"],
+              },
+            ],
+          }),
+      }),
+    ).resolves.toBe(true);
+  });
+
+  test("does not borrow another agent's provider-static image capabilities", async () => {
+    await expect(
+      resolveGatewayModelSupportsImages({
+        agentId: "qa",
+        model: "gpt-5.4",
+        provider: "openai",
+        loadGatewayModelCatalog: async () => [],
+        loadGatewayModelCatalogSnapshot: async () =>
+          createModelCatalogSnapshot({
+            agentId: "other",
+            staticEntries: [
+              {
+                id: "gpt-5.4",
+                name: "GPT-5.4",
+                provider: "openai",
+                input: ["text", "image"],
+              },
+            ],
+          }),
+      }),
+    ).resolves.toBe(false);
+  });
+
+  test("does not override an explicitly configured text-only model with provider-static vision", async () => {
+    await expect(
+      resolveGatewayModelSupportsImages({
+        agentId: "qa",
+        model: "gpt-5.4",
+        provider: "openai",
+        loadGatewayModelCatalog: async () => [],
+        loadGatewayModelCatalogSnapshot: async () =>
+          createModelCatalogSnapshot({
+            agentId: "qa",
+            config: {
+              models: {
+                providers: {
+                  openai: {
+                    baseUrl: "https://api.openai.com/v1",
+                    models: [
+                      {
+                        id: "gpt-5.4",
+                        name: "Text only",
+                        reasoning: false,
+                        input: ["text"],
+                        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                        contextWindow: 128_000,
+                        maxTokens: 4_096,
+                      },
+                    ],
+                  },
+                },
+              },
+            },
+            entries: [
+              {
+                id: "gpt-5.4",
+                name: "Configured text only",
+                provider: "openai",
+                baseUrl: "https://api.openai.com/v1",
+                input: ["text"],
+              },
+            ],
+            staticEntries: [
+              {
+                id: "gpt-5.4",
+                name: "GPT-5.4",
+                provider: "openai",
+                baseUrl: "https://api.openai.com/v1",
+                input: ["text", "image"],
+              },
+            ],
+          }),
+      }),
+    ).resolves.toBe(false);
+  });
+
+  test("does not borrow provider-static image capabilities across configured routes", async () => {
+    await expect(
+      resolveGatewayModelSupportsImages({
+        agentId: "qa",
+        model: "gpt-5.4",
+        provider: "openai",
+        loadGatewayModelCatalog: async () => [],
+        loadGatewayModelCatalogSnapshot: async () =>
+          createModelCatalogSnapshot({
+            agentId: "qa",
+            config: {
+              models: {
+                providers: {
+                  openai: {
+                    baseUrl: "https://custom.example.test/v1",
+                    models: [],
+                  },
+                },
+              },
+            },
+            staticEntries: [
+              {
+                id: "gpt-5.4",
+                name: "GPT-5.4",
+                provider: "openai",
+                baseUrl: "https://api.openai.com/v1",
+                input: ["text", "image"],
+              },
+            ],
+          }),
+      }),
+    ).resolves.toBe(false);
+  });
+
+  test.each([
+    {
+      route: "API",
+      api: "openai-completions",
+      baseUrl: "https://api.openai.com/v1",
+    },
+    {
+      route: "base URL",
+      api: "openai-responses",
+      baseUrl: "https://custom.example.test/v1",
+    },
+  ] as const)(
+    "does not borrow provider-static vision across a mismatched visible $route",
+    async ({ api, baseUrl }) => {
+      await expect(
+        resolveGatewayModelSupportsImages({
+          agentId: "qa",
+          model: "gpt-5.4",
+          provider: "openai",
+          loadGatewayModelCatalog: async () => [],
+          loadGatewayModelCatalogSnapshot: async () =>
+            createModelCatalogSnapshot({
+              agentId: "qa",
+              entries: [
+                {
+                  id: "gpt-5.4",
+                  name: "Custom route",
+                  provider: "openai",
+                  api,
+                  baseUrl,
+                  input: ["text"],
+                },
+              ],
+              staticEntries: [
+                {
+                  id: "gpt-5.4",
+                  name: "GPT-5.4",
+                  provider: "openai",
+                  api: "openai-responses",
+                  baseUrl: "https://api.openai.com/v1",
+                  input: ["text", "image"],
+                },
+              ],
+            }),
+        }),
+      ).resolves.toBe(false);
+    },
+  );
+
+  test.each([
+    {
+      route: "visible API",
+      visibleRoute: {
+        api: "openai-completions" as const,
+        baseUrl: "https://api.openai.com/v1",
+      },
+      configuredRoute: undefined,
+      staticRoute: { baseUrl: "https://api.openai.com/v1" },
+    },
+    {
+      route: "visible base URL",
+      visibleRoute: {
+        api: "openai-responses" as const,
+        baseUrl: "https://custom.example.test/v1",
+      },
+      configuredRoute: undefined,
+      staticRoute: { api: "openai-responses" as const },
+    },
+    {
+      route: "configured API",
+      visibleRoute: undefined,
+      configuredRoute: {
+        api: "openai-completions" as const,
+        baseUrl: "https://api.openai.com/v1",
+      },
+      staticRoute: { baseUrl: "https://api.openai.com/v1" },
+    },
+    {
+      route: "configured base URL",
+      visibleRoute: undefined,
+      configuredRoute: { baseUrl: "https://custom.example.test/v1" },
+      staticRoute: { api: "openai-responses" as const },
+    },
+  ])(
+    "does not borrow provider-static vision when its $route provenance is missing",
+    async ({ visibleRoute, configuredRoute, staticRoute }) => {
+      await expect(
+        resolveGatewayModelSupportsImages({
+          agentId: "qa",
+          model: "gpt-5.4",
+          provider: "openai",
+          loadGatewayModelCatalog: async () => [],
+          loadGatewayModelCatalogSnapshot: async () =>
+            createModelCatalogSnapshot({
+              ...(configuredRoute
+                ? {
+                    config: {
+                      models: {
+                        providers: {
+                          openai: {
+                            baseUrl: configuredRoute.baseUrl,
+                            ...("api" in configuredRoute ? { api: configuredRoute.api } : {}),
+                            models: [],
+                          },
+                        },
+                      },
+                    },
+                  }
+                : {}),
+              agentId: "qa",
+              entries: visibleRoute
+                ? [
+                    {
+                      id: "gpt-5.4",
+                      name: "Text only",
+                      provider: "openai",
+                      input: ["text"],
+                      ...visibleRoute,
+                    },
+                  ]
+                : [],
+              staticEntries: [
+                {
+                  id: "gpt-5.4",
+                  name: "GPT-5.4",
+                  provider: "openai",
+                  input: ["text", "image"],
+                  ...staticRoute,
+                },
+              ],
+            }),
+        }),
+      ).resolves.toBe(false);
+    },
+  );
+
+  test("does not borrow provider-static image capabilities from another provider", async () => {
+    await expect(
+      resolveGatewayModelSupportsImages({
+        agentId: "qa",
+        model: "gpt-5.4",
+        provider: "openai",
+        loadGatewayModelCatalog: async () => [],
+        loadGatewayModelCatalogSnapshot: async () =>
+          createModelCatalogSnapshot({
+            agentId: "qa",
+            staticEntries: [
+              {
+                id: "gpt-5.4",
+                name: "Other provider vision",
+                provider: "other",
+                input: ["text", "image"],
+              },
+            ],
+          }),
+      }),
+    ).resolves.toBe(false);
+  });
+
+  test("fails closed on providerless provider-static image capabilities", async () => {
+    await expect(
+      resolveGatewayModelSupportsImages({
+        agentId: "qa",
+        model: "shared-vision",
+        loadGatewayModelCatalog: async () => [],
+        loadGatewayModelCatalogSnapshot: async () =>
+          createModelCatalogSnapshot({
+            agentId: "qa",
+            staticEntries: [
+              {
+                id: "shared-vision",
+                name: "First provider vision",
+                provider: "first",
+                input: ["text", "image"],
+              },
+              {
+                id: "shared-vision",
+                name: "Second provider vision",
+                provider: "second",
+                input: ["text", "image"],
+              },
+            ],
+          }),
+      }),
+    ).resolves.toBe(false);
+  });
+
+  test("fails closed without using a stale catalog when the prepared snapshot fails", async () => {
+    const loadGatewayModelCatalog = vi.fn(async () => [
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        provider: "openai",
+        input: ["text", "image"] as ("text" | "image")[],
+      },
+    ]);
+
+    await expect(
+      resolveGatewayModelSupportsImages({
+        agentId: "qa",
+        model: "gpt-5.4",
+        provider: "openai",
+        loadGatewayModelCatalog,
+        loadGatewayModelCatalogSnapshot: async () => {
+          throw new Error("prepared catalog unavailable");
+        },
+      }),
+    ).resolves.toBe(false);
+    expect(loadGatewayModelCatalog).not.toHaveBeenCalled();
+  });
+
   test("keeps Foundry GPT deployments image-capable even when stale catalog metadata says text-only", async () => {
     await expect(
       resolveGatewayModelSupportsImages({

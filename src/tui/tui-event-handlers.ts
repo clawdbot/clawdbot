@@ -471,6 +471,7 @@ export function createEventHandlers(context: EventHandlerContext) {
       finalizedRunIds,
       displayedRunIds,
     } = collectTrackedSessionRunIds();
+    state.sessionGeneration = (state.sessionGeneration ?? 0) + 1;
     // Reduce the old epoch before adopting its replacement ID; otherwise the
     // canonical reducer correctly rejects the reset as a foreign session.
     reduceTuiSessionProjection(state, {

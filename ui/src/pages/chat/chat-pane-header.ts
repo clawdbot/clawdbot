@@ -10,7 +10,6 @@ import type {
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { hasOperatorWriteAccess, hasOperatorAdminAccess } from "../../app/operator-access.ts";
-import { readPresenceEntries, resolveActorIdentityUsers } from "../../app/user-profile.ts";
 import { icons } from "../../components/icons.ts";
 import { listSessionCreators } from "../../components/session-owner-chip.ts";
 import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
@@ -22,6 +21,7 @@ import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import { renderBoardDockMenu, renderBoardFaceToggle } from "./board-session-surface.ts";
 import { ChatPaneContext } from "./chat-pane-context.ts";
 import { headerPlatformByClient } from "./chat-pane-shared.ts";
+import { patchChatSessionLabel } from "./chat-state-route.ts";
 import { renderCatalogTerminalButton } from "./components/catalog-terminal-button.ts";
 import {
   renderBackgroundTasksToggle,
@@ -100,14 +100,6 @@ export abstract class ChatPaneHeader extends ChatPaneContext {
       : branchSwitchWorking
         ? t("chat.sessionHeader.branchSwitchUnavailable")
         : null;
-    const ownerActorId = row?.createdActor?.id?.trim();
-    const ownerUser = ownerActorId
-      ? resolveActorIdentityUsers({
-          snapshotUser: this.context.gateway.snapshot.selfUser,
-          presenceEntries: readPresenceEntries(this.presencePayload),
-          presenceInstanceId: this.context.gateway.snapshot.client?.instanceId,
-        }).get(ownerActorId)
-      : undefined;
     return renderChatPaneHeader({
       paneId: this.paneId,
       narrow: this.narrow,
@@ -120,7 +112,6 @@ export abstract class ChatPaneHeader extends ChatPaneContext {
           this.state?.sessionsResult?.creators ??
           listSessionCreators(this.state?.sessionsResult?.sessions ?? [])
         ).length >= 2,
-      ownerUser,
       catalog,
       editing: this.headerEditing && this.headerRenameSessionKey === row?.key,
       renameValue: this.headerRenameValue,
@@ -147,12 +138,14 @@ export abstract class ChatPaneHeader extends ChatPaneContext {
         !catalog &&
         hasSessionPresenceViewers(
           this.presencePayload,
+          this.context.gateway.snapshot.selfUser?.id,
           this.context.gateway.snapshot.client?.instanceId,
           this.state?.sessionKey ?? "",
         )
           ? html`<openclaw-viewer-facepile
               class="chat-pane__presence"
               .presencePayload=${this.presencePayload}
+              .selfUserId=${this.context.gateway.snapshot.selfUser?.id}
               .selfInstanceId=${this.context.gateway.snapshot.client?.instanceId}
               .sessionKey=${this.state?.sessionKey}
               .maxVisible=${4}
@@ -266,13 +259,13 @@ export abstract class ChatPaneHeader extends ChatPaneContext {
     const unchangedLabel = label === this.headerRenameInitialLabel;
     this.headerEditing = false;
     this.headerRenameSessionKey = "";
-    if (!key || unchangedDerivedTitle || unchangedLabel) {
+    const state = this.state;
+    if (!key || !state || unchangedDerivedTitle || unchangedLabel) {
       return;
     }
-    const agentId = parseAgentSessionKey(key)?.agentId;
-    void this.context.sessions
-      .patch(key, { label }, agentId ? { agentId } : undefined)
-      .catch((error: unknown) => this.publishHeaderError(error));
+    void patchChatSessionLabel(state, this.context.sessions, key, label).catch((error: unknown) =>
+      this.publishHeaderError(error),
+    );
   }
 
   protected async loadHeaderMenuData(

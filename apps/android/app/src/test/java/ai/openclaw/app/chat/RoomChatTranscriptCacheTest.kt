@@ -95,6 +95,7 @@ class RoomChatTranscriptCacheTest {
           fileName = "demo.mp4",
           artifactId = "artifact_managed_media_44444444-4444-4444-8444-444444444444",
           durationMs = 5_300,
+          playback = "transcode",
           width = 1920,
           height = 1080,
         )

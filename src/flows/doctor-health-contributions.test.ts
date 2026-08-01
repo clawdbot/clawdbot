@@ -53,6 +53,7 @@ const mocks = vi.hoisted(() => ({
   getSkippedExecRefStaticError: vi.fn(() => undefined),
   maybeRepairGatewayServiceConfig: vi.fn().mockResolvedValue(undefined),
   maybeScanExtraGatewayServices: vi.fn().mockResolvedValue(undefined),
+  maybeResolveDuelingSystemdGatewayScopes: vi.fn().mockResolvedValue(undefined),
   noteMacLaunchAgentOverrides: vi.fn(),
   noteMacLaunchctlGatewayEnvOverrides: vi.fn(),
   noteMacStaleOpenClawUpdateLaunchdJobs: vi.fn(),
@@ -214,6 +215,7 @@ vi.mock("../secrets/exec-resolution-policy.js", () => ({
 vi.mock("../commands/doctor-gateway-services.js", () => ({
   maybeRepairGatewayServiceConfig: mocks.maybeRepairGatewayServiceConfig,
   maybeScanExtraGatewayServices: mocks.maybeScanExtraGatewayServices,
+  maybeResolveDuelingSystemdGatewayScopes: mocks.maybeResolveDuelingSystemdGatewayScopes,
 }));
 
 vi.mock("../commands/doctor-auth-flat-profiles.js", () => ({
@@ -504,6 +506,7 @@ vi.mock("../cli/command-format.js", () => ({
 vi.mock("../commands/doctor-gateway-services.js", () => ({
   maybeRepairGatewayServiceConfig: mocks.maybeRepairGatewayServiceConfig,
   maybeScanExtraGatewayServices: mocks.maybeScanExtraGatewayServices,
+  maybeResolveDuelingSystemdGatewayScopes: mocks.maybeResolveDuelingSystemdGatewayScopes,
 }));
 
 vi.mock("../commands/doctor-platform-notes.js", () => ({
@@ -840,6 +843,20 @@ describe("doctor health contributions", () => {
       ids.indexOf("doctor:plugin-registry"),
     );
     expect(ids.indexOf("doctor:plugin-registry")).toBeLessThan(ids.indexOf("doctor:write-config"));
+  });
+
+  it("repairs canonical session rows before downstream agent-state checks", () => {
+    const ids = resolveDoctorHealthContributions().map((entry) => entry.id);
+
+    expect(ids.indexOf("doctor:legacy-state")).toBeLessThan(
+      ids.indexOf("doctor:session-transcripts"),
+    );
+    expect(ids.indexOf("doctor:session-transcripts")).toBeLessThan(
+      ids.indexOf("doctor:agent-memory-schema"),
+    );
+    expect(ids.indexOf("doctor:session-transcripts")).toBeLessThan(
+      ids.indexOf("doctor:plugin-registry"),
+    );
   });
 
   it("orders the config-flow commit before runtime-backed diagnostics", () => {
@@ -3624,6 +3641,35 @@ describe("doctor health contributions", () => {
         expect.objectContaining({
           writeOptions: expect.objectContaining({
             skipPluginValidation: false,
+          }),
+        }),
+      );
+    });
+
+    it("forwards explicit paths only for the pending doctor migration write", async () => {
+      const ctx = buildWriteConfigCtx({});
+      ctx.configResult.explicitSetPaths = [["agents", "entries"]];
+
+      await writeConfigContribution.run(ctx);
+
+      expect(mocks.replaceConfigFile).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({
+          writeOptions: expect.objectContaining({
+            explicitSetPaths: [["agents", "entries"]],
+          }),
+        }),
+      );
+
+      ctx.cfg = { gateway: { mode: "remote" } };
+      await writeConfigContribution.run(ctx);
+
+      expect(mocks.replaceConfigFile).toHaveBeenCalledTimes(2);
+      expect(mocks.replaceConfigFile).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          writeOptions: expect.not.objectContaining({
+            explicitSetPaths: expect.anything(),
           }),
         }),
       );

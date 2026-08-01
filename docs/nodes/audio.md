@@ -5,6 +5,10 @@ read_when:
 title: "Audio and voice notes"
 ---
 
+This page covers inbound transcription and voice-note handling. For inline
+audio and video players in OpenClaw chat clients, see
+[Media playback](/nodes/media-playback).
+
 ## What it does
 
 When audio understanding is enabled (or auto-detected), OpenClaw:
@@ -33,7 +37,8 @@ If you have not configured models and `tools.media.audio.enabled` is not `false`
 Install/link provenance is capability evidence, not execution evidence. It never moves a candidate ahead of CPU sherpa by itself. OpenClaw does not load a model during setup or status checks just to probe a backend.
 Auto-detected whisper.cpp keeps its normal model-run logs enabled so OpenClaw can record the upstream `using … backend` line. Explicit CLI entries keep their configured output flags.
 
-Gemini CLI auto-detect for media understanding was replaced by a sandboxed Antigravity CLI (`agy`) fallback for image/video; audio does not use a CLI fallback beyond the local binaries above.
+Gemini CLI and Antigravity are not auto-detected for media understanding. Audio
+does not use a CLI fallback beyond the local binaries above.
 
 To disable auto-detection, set `tools.media.audio.enabled: false`. To customize, add capability-tagged entries to `tools.media.models`.
 
@@ -198,6 +203,7 @@ On channels that support audio preflight, OpenClaw transcribes audio **before** 
 
 ## Related
 
+- [Media playback](/nodes/media-playback)
 - [Media understanding](/nodes/media-understanding)
 - [Talk mode](/nodes/talk)
 - [Voice wake](/nodes/voicewake)

@@ -2354,6 +2354,7 @@ const server = await createServer({
       commit: "0123456789abcdef0123456789abcdef01234567",
       commitAt: "2026-07-10T11:22:33.000Z",
       builtAt: "2026-07-10T12:34:56.000Z",
+      release: false,
       buildId: "mock",
     }),
   },

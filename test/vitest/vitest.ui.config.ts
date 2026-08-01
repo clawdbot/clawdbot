@@ -1,4 +1,5 @@
 // Vitest ui config wires the ui test shard.
+import { controlUiLocaleModulesPlugin } from "../../ui/config/control-ui-locales.ts";
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 import { jsdomOptimizedDeps } from "./vitest.shared.config.ts";
 import { uiIsolatedTestFiles } from "./vitest.ui-isolated-paths.mjs";
@@ -10,7 +11,7 @@ export function createUiVitestConfig(
   const includePatterns = options?.includePatterns ?? ["ui/src/**/*.test.ts"];
   // Isolated files must never enter the shared module graph, including scoped runs.
   const exclude = ["ui/src/**/*.e2e.test.ts", ...uiIsolatedTestFiles];
-  return createScopedVitestConfig(includePatterns, {
+  const config = createScopedVitestConfig(includePatterns, {
     deps: jsdomOptimizedDeps,
     environment: "jsdom",
     env,
@@ -22,6 +23,7 @@ export function createUiVitestConfig(
     setupFiles: ["ui/src/test-helpers/lit-warnings.setup.ts"],
     useNonIsolatedRunner: true,
   });
+  return { ...config, plugins: [...(config.plugins ?? []), controlUiLocaleModulesPlugin()] };
 }
 
 export default createUiVitestConfig();

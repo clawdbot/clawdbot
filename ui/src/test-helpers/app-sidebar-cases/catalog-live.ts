@@ -225,6 +225,11 @@ describe("AppSidebar session catalog pagination", () => {
     await sidebar.updateComplete;
 
     const section = sidebar.querySelector(`[data-session-section="catalog:${id}"]`);
+    expect(
+      section
+        ?.querySelector(".sidebar-session-catalog-provider-icon")
+        ?.getAttribute("data-provider-icon"),
+    ).toBe(id);
     const hostGroups = section?.querySelectorAll<HTMLElement>("[data-session-catalog-host]");
     expect(Array.from(hostGroups ?? []).map((host) => host.dataset.sessionCatalogHost)).toEqual([
       "gateway:local",

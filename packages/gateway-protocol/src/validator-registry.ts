@@ -132,6 +132,7 @@ import {
   SessionsReclaimParamsSchema,
   SessionsMessagesSubscribeParamsSchema,
   SessionsMessagesUnsubscribeParamsSchema,
+  SessionsViewerPresenceSetParamsSchema,
   SessionsAbortParamsSchema,
   SessionsPatchParamsSchema,
   SessionsPluginPatchParamsSchema,
@@ -501,6 +502,9 @@ export const validateSessionsMessagesSubscribeParams = lazyCompile(
 );
 export const validateSessionsMessagesUnsubscribeParams = lazyCompile(
   SessionsMessagesUnsubscribeParamsSchema,
+);
+export const validateSessionsViewerPresenceSetParams = lazyCompile(
+  SessionsViewerPresenceSetParamsSchema,
 );
 export const validateSessionsAbortParams = lazyCompile(SessionsAbortParamsSchema);
 export const validateSessionsPatchParams = lazyCompile(SessionsPatchParamsSchema);

@@ -55,7 +55,7 @@ export type PendingFinalDeliveryPayload = {
   wakeOnDescendantSettle?: boolean;
 };
 
-export type SubagentExecutionState = {
+type SubagentExecutionState = {
   status: "queued" | "running" | "interrupted" | "terminal";
   acceptedAt?: number;
   startedAt?: number;
@@ -262,3 +262,24 @@ export type SubagentRunRecord = {
   contextEngineCleanupCompletedAt?: number;
   collectorCompletion?: SwarmCollectorCompletion;
 };
+
+/** Minimal registry shape needed by session-list topology and display reads. */
+export type SubagentRunReadRecord = Pick<
+  SubagentRunRecord,
+  | "runId"
+  | "childSessionKey"
+  | "controllerSessionKey"
+  | "requesterSessionKey"
+  | "model"
+  | "generation"
+  | "createdAt"
+  | "startedAt"
+  | "sessionStartedAt"
+  | "accumulatedRuntimeMs"
+  | "endedAt"
+  | "runTimeoutSeconds"
+  | "endedReason"
+  | "outcome"
+  | "cleanupCompletedAt"
+  | "delivery"
+>;

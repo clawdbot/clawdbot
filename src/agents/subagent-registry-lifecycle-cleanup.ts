@@ -232,7 +232,7 @@ export function createSubagentRegistryLifecycleCleanup(
         delivery.announcedAt = delivery.announcedAt ?? deliveredAt;
         if (!options?.skipAnnounce) {
           delivery.announcedAt = deliveredAt;
-          params.persist();
+          params.persist(runId);
         }
       }
       clearPendingFinalDelivery(entry);
@@ -294,7 +294,7 @@ export function createSubagentRegistryLifecycleCleanup(
       entry.wakeOnDescendantSettle = true;
       entry.cleanupHandled = false;
       params.resumedRuns.delete(runId);
-      params.persist();
+      params.persist(runId);
       scheduleResumeSubagentRun(runId, entry, deferredDecision.delayMs);
       return;
     }
@@ -361,7 +361,7 @@ export function createSubagentRegistryLifecycleCleanup(
     });
     entry.cleanupHandled = false;
     params.resumedRuns.delete(runId);
-    params.persist();
+    params.persist(runId);
     if (deferredDecision.resumeDelayMs == null) {
       return;
     }
@@ -414,7 +414,7 @@ export function createSubagentRegistryLifecycleCleanup(
             // This durable boundary prevents a late yield from reviving a run
             // after deletion may already have reached the gateway.
             entry.deleteCleanupDispatchedAt ??= Date.now();
-            params.persist();
+            params.persist(runId);
             await deleteSubagentSessionForCleanup({
               callGateway: params.callGateway,
               childSessionKey: entry.childSessionKey,
@@ -496,7 +496,7 @@ export function createSubagentRegistryLifecycleCleanup(
               // Announce owns delete submission; fence late yields at the
               // exact handoff instead of when cleanup merely starts.
               entry.deleteCleanupDispatchedAt ??= Date.now();
-              params.persist();
+              params.persist(runId);
               return true;
             }
           : undefined,
@@ -508,10 +508,15 @@ export function createSubagentRegistryLifecycleCleanup(
         recordAnnounceDeliveryResult(entry, delivery);
         if (delivery.delivered) {
           const deliveryState = ensureDeliveryState(entry);
-          if (deliveryState.lastError !== undefined) {
-            deliveryState.lastError = undefined;
-            params.persist();
-          }
+          deliveryState.status = "delivered";
+          deliveryState.announcedAt = deliveryState.deliveredAt ?? Date.now();
+          deliveryState.lastError = undefined;
+          deliveryState.suspendedAt = undefined;
+          deliveryState.suspendedReason = undefined;
+          // Identified platform delivery precedes best-effort transcript
+          // mirroring; task ownership must become durable at that same edge.
+          params.persist(runId);
+          safeSetSubagentTaskDeliveryStatus({ entry, deliveryStatus: "delivered" });
           latestDeliveryError = undefined;
           return;
         }
@@ -521,7 +526,7 @@ export function createSubagentRegistryLifecycleCleanup(
         latestDeliveryError = formatAnnounceDeliveryError(delivery);
         if (ensureDeliveryState(entry).lastError !== latestDeliveryError) {
           ensureDeliveryState(entry).lastError = latestDeliveryError;
-          params.persist();
+          params.persist(runId);
         }
       },
     };

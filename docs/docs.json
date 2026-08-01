@@ -70,7 +70,7 @@
     },
     {
       "source": "/concepts/qa-matrix",
-      "destination": "/concepts/qa-e2e-automation#matrix-smoke-lanes"
+      "destination": "/concepts/qa-e2e-automation#matrix-live-lane"
     },
     {
       "source": "/plugins/reference/qa-matrix",
@@ -1747,6 +1747,7 @@
                     "group": "Media capabilities",
                     "pages": [
                       "nodes/media-understanding",
+                      "nodes/media-playback",
                       "nodes/images",
                       "nodes/audio",
                       "nodes/camera",

@@ -739,6 +739,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "sessions.cleanup",
       "sessions.subscribe",
       "sessions.unsubscribe",
+      "sessions.viewers.set",
       "sessions.messages.subscribe",
       "sessions.messages.unsubscribe",
       "sessions.preview",

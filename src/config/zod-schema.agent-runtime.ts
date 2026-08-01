@@ -92,17 +92,16 @@ export const HeartbeatSchema = z
   })
   .strict()
   .superRefine((val, ctx) => {
-    if (!val.every) {
-      return;
-    }
-    try {
-      parseDurationMs(val.every, { defaultUnit: "m" });
-    } catch {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["every"],
-        message: "invalid duration (use ms, s, m, h)",
-      });
+    if (val.every) {
+      try {
+        parseDurationMs(val.every, { defaultUnit: "m" });
+      } catch {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["every"],
+          message: "invalid duration (use ms, s, m, h)",
+        });
+      }
     }
 
     const active = val.activeHours;

@@ -872,6 +872,7 @@ describe("TUI PTY real backends", () => {
       },
       waitForOutput: async () => output,
       waitForExit: async () => ({ exitCode: 0, signal: 0 }),
+      forceKill: async () => {},
       dispose: async () => {},
     } satisfies PtyRun;
 
@@ -1177,6 +1178,11 @@ describe("TUI PTY real backends", () => {
         await fixture.gateway.startGateway();
         gatewayStopped = false;
         await waitForOutputAfter(fixture.run, "gateway reconnected", reconnectOffset);
+        await waitForOutputAfter(
+          fixture.run,
+          "gateway reconnected after transport loss",
+          reconnectOffset,
+        );
         await fixture.run.write("\r", { delay: false });
         await waitFor({
           timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,

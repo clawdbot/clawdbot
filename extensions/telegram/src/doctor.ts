@@ -234,7 +234,14 @@ function scanTelegramSelectedQuoteToolProgressWarnings(
     const blockStreamingEnabled =
       resolveChannelStreamingBlockEnabled(account) ??
       cfg.agents?.defaults?.blockStreamingDefault === "on";
-    if (blockStreamingEnabled || !resolveChannelStreamingPreviewToolProgress(account)) {
+    if (
+      blockStreamingEnabled ||
+      !resolveChannelStreamingPreviewToolProgress(
+        account,
+        true,
+        resolveTelegramPreviewStreamMode(account),
+      )
+    ) {
       return [];
     }
     return [

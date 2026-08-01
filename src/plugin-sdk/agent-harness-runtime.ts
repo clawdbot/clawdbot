@@ -336,6 +336,7 @@ export async function loadCodexBundleMcpThreadConfig(
 }
 
 export type { McpToolCatalog, SessionMcpRuntime } from "../agents/agent-bundle-mcp-types.js";
+export { assignSafeServerNames as assignMcpCatalogSafeServerNames } from "../agents/agent-bundle-mcp-names.js";
 
 /**
  * Materialize an MCP App view for a tool executed by a harness-native MCP client.

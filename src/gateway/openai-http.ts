@@ -3,6 +3,7 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
+import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -519,11 +520,13 @@ function resolveImageUrlPart(part: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-function extractImageUrls(content: unknown): string[] {
-  if (!Array.isArray(content)) {
-    return [];
-  }
+type ExtractedImageUrls = { kind: "valid"; urls: string[] } | { kind: "invalid" };
+
+function extractImageUrls(content: unknown): ExtractedImageUrls {
   const urls: string[] = [];
+  if (!Array.isArray(content)) {
+    return { kind: "valid", urls };
+  }
   for (const part of content) {
     if (!part || typeof part !== "object") {
       continue;
@@ -532,17 +535,18 @@ function extractImageUrls(content: unknown): string[] {
       continue;
     }
     const url = resolveImageUrlPart(part);
-    if (url) {
-      urls.push(url);
+    if (!url) {
+      return { kind: "invalid" };
     }
+    urls.push(url);
   }
-  return urls;
+  return { kind: "valid", urls };
 }
 
 type ActiveTurnContext = {
   activeTurnIndex: number;
   activeUserMessageIndex: number;
-  urls: string[];
+  imageUrls: ExtractedImageUrls;
 };
 
 function parseImageUrlToSource(url: string): InputImageSource {
@@ -585,20 +589,29 @@ function resolveActiveTurnContext(messagesUnknown: unknown): ActiveTurnContext {
     if (normalizedRole !== "user" && normalizedRole !== "tool") {
       continue;
     }
+    const imageUrls: ExtractedImageUrls =
+      normalizedRole === "user" ? extractImageUrls(msg.content) : { kind: "valid", urls: [] };
     return {
       activeTurnIndex: i,
       activeUserMessageIndex: normalizedRole === "user" ? i : -1,
-      urls: normalizedRole === "user" ? extractImageUrls(msg.content) : [],
+      imageUrls,
     };
   }
-  return { activeTurnIndex: -1, activeUserMessageIndex: -1, urls: [] };
+  return {
+    activeTurnIndex: -1,
+    activeUserMessageIndex: -1,
+    imageUrls: { kind: "valid", urls: [] },
+  };
 }
 
 async function resolveImagesForRequest(
-  activeTurnContext: Pick<ActiveTurnContext, "urls">,
+  activeTurnContext: Pick<ActiveTurnContext, "imageUrls">,
   limits: ResolvedOpenAiChatCompletionsLimits,
 ): Promise<ImageContent[]> {
-  const urls = activeTurnContext.urls;
+  if (activeTurnContext.imageUrls.kind === "invalid") {
+    throw new Error("image_url part is missing a valid URL");
+  }
+  const urls = activeTurnContext.imageUrls.urls;
   if (urls.length === 0) {
     return [];
   }
@@ -639,12 +652,14 @@ export const testOnlyOpenAiHttp = {
 
 function buildAgentPrompt(
   messagesUnknown: unknown,
-  activeUserMessageIndex: number,
+  activeTurnContext: Pick<ActiveTurnContext, "activeUserMessageIndex" | "imageUrls">,
 ): {
   message: string;
   extraSystemPrompt?: string;
 } {
   const messages = asMessages(messagesUnknown);
+  const hasActiveTurnImage =
+    activeTurnContext.imageUrls.kind === "valid" && activeTurnContext.imageUrls.urls.length > 0;
 
   const systemParts: string[] = [];
   const conversationEntries: ConversationEntry[] = [];
@@ -655,7 +670,6 @@ function buildAgentPrompt(
     }
     const role = normalizeOptionalString(msg.role) ?? "";
     const content = extractTextContent(msg.content).trim();
-    const hasImage = extractImageUrls(msg.content).length > 0;
     if (!role) {
       continue;
     }
@@ -678,7 +692,10 @@ function buildAgentPrompt(
     // Keep the image-only placeholder scoped to the active user turn so we don't
     // mention historical image-only turns whose bytes are intentionally not replayed.
     const baseMessageContent =
-      normalizedRole === "user" && !content && hasImage && i === activeUserMessageIndex
+      normalizedRole === "user" &&
+      !content &&
+      hasActiveTurnImage &&
+      i === activeTurnContext.activeUserMessageIndex
         ? IMAGE_ONLY_USER_MESSAGE
         : content;
     const messageContent = [baseMessageContent, assistantToolCallsSummary]
@@ -868,6 +885,17 @@ function resolveStopSequences(value: unknown): string[] | undefined {
   return sequences.length > 0 ? sequences : undefined;
 }
 
+function resolveChatCompletionTokenCap(value: unknown, field: string): number | undefined {
+  if (value == null) {
+    return undefined;
+  }
+  const maxTokens = asPositiveSafeInteger(value);
+  if (maxTokens === undefined) {
+    throw new Error(`${field} must be a positive safe integer`);
+  }
+  return maxTokens;
+}
+
 function resolveErrorMessage(err: unknown): string {
   if (err instanceof Error) {
     const message = err.message.trim();
@@ -913,12 +941,20 @@ export async function handleOpenAiHttpRequest(
   const streamIncludeUsage = stream && resolveIncludeUsageForStreaming(payload);
   const model = typeof payload.model === "string" ? payload.model : "openclaw";
   const user = typeof payload.user === "string" ? payload.user : undefined;
-  const maxTokens =
-    typeof payload.max_completion_tokens === "number"
-      ? payload.max_completion_tokens
-      : typeof payload.max_tokens === "number"
-        ? payload.max_tokens
-        : undefined;
+  let maxTokens: number | undefined;
+  try {
+    const maxCompletionTokens = resolveChatCompletionTokenCap(
+      payload.max_completion_tokens,
+      "max_completion_tokens",
+    );
+    const legacyMaxTokens = resolveChatCompletionTokenCap(payload.max_tokens, "max_tokens");
+    maxTokens = maxCompletionTokens ?? legacyMaxTokens;
+  } catch (err) {
+    sendJson(res, 400, {
+      error: { message: resolveErrorMessage(err), type: "invalid_request_error" },
+    });
+    return true;
+  }
   const temperature = typeof payload.temperature === "number" ? payload.temperature : undefined;
   const topP = typeof payload.top_p === "number" ? payload.top_p : undefined;
   const frequencyPenalty =
@@ -1017,7 +1053,7 @@ export async function handleOpenAiHttpRequest(
     return true;
   }
   const activeTurnContext = resolveActiveTurnContext(payload.messages);
-  const prompt = buildAgentPrompt(payload.messages, activeTurnContext.activeUserMessageIndex);
+  const prompt = buildAgentPrompt(payload.messages, activeTurnContext);
   let resolvedClientTools: ClientToolDefinition[];
   let toolChoicePrompt: string | undefined;
   let toolChoiceConstraint: ToolChoiceConstraint | undefined;

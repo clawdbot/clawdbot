@@ -863,7 +863,7 @@ export default definePluginEntry({
         {
           id: "local",
           label: "Ollama",
-          hint: "Cloud and local open models",
+          hint: "Connect to an Ollama server and select a cloud or local model",
           kind: "custom",
           appGuidedSetup: {
             detect: async (ctx) => {
@@ -966,7 +966,7 @@ export default definePluginEntry({
         setup: {
           choiceId: "ollama",
           choiceLabel: "Ollama",
-          choiceHint: "Cloud and local open models",
+          choiceHint: "Connect to an Ollama server and select a cloud or local model",
           groupId: "ollama",
           groupLabel: "Ollama",
           groupHint: "Cloud and local open models",

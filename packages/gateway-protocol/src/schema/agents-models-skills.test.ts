@@ -266,6 +266,22 @@ describe("ToolsEffectiveResultSchema", () => {
     expect(Value.Check(ToolsEffectiveResultSchema, result)).toBe(true);
   });
 
+  it("accepts server-scoped inventory notices", () => {
+    const result = {
+      ...toolsEffectiveResult(),
+      notices: [
+        {
+          id: "mcp-not-yet-connected",
+          severity: "info",
+          message: "MCP tools are not available yet.",
+          servers: ["github", "notion"],
+        },
+      ],
+    };
+
+    expect(Value.Check(ToolsEffectiveResultSchema, result)).toBe(true);
+  });
+
   it("keeps tool quarantine notices strict", () => {
     const result = {
       ...toolsEffectiveResult(),

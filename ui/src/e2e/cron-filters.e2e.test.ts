@@ -139,7 +139,7 @@ describeControlUiE2e("Control UI cron mocked Gateway E2E", () => {
     await server?.close();
   });
 
-  it("suggests Asia/Shanghai in the rendered cron timezone selector", async () => {
+  it("suggests browser-supported timezones without restricting free-form input", async () => {
     const context = await browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -163,11 +163,18 @@ describeControlUiE2e("Control UI cron mocked Gateway E2E", () => {
       const timezone = page.locator("#cron-cron-tz");
       await timezone.waitFor({ state: "visible" });
       expect(await timezone.getAttribute("list")).toBe("cron-tz-suggestions");
-      expect(
-        await page
-          .locator("#cron-tz-suggestions option")
-          .evaluateAll((options) => options.map((option) => option.getAttribute("value"))),
-      ).toContain("Asia/Shanghai");
+      const browserTimezone = await page.evaluate(
+        () => Intl.DateTimeFormat().resolvedOptions().timeZone,
+      );
+      const timezoneOptions = await page
+        .locator("#cron-tz-suggestions option")
+        .evaluateAll((options) => options.map((option) => option.getAttribute("value")));
+      expect(timezoneOptions).toContain(browserTimezone);
+      expect(timezoneOptions).toContain("UTC");
+      expect(timezoneOptions.length).toBeGreaterThan(100);
+
+      await timezone.fill("Etc/GMT+3");
+      expect(await timezone.inputValue()).toBe("Etc/GMT+3");
     } finally {
       await context.close();
     }

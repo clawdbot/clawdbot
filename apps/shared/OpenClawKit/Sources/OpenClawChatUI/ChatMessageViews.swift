@@ -223,7 +223,8 @@ struct ChatMessageBubble: View {
     let mediaPlaybackAllowed: @MainActor @Sendable () -> Bool
     let loadMediaArtifact: @MainActor @Sendable (
         String,
-        OpenClawChatMediaKind) async throws -> OpenClawChatLoadedMedia?
+        OpenClawChatMediaKind,
+        OpenClawChatPlaybackMode?) async throws -> OpenClawChatLoadedMedia?
 
     var body: some View {
         if self.isUser {
@@ -326,7 +327,8 @@ private struct ChatMessageBody: View {
     let mediaPlaybackAllowed: @MainActor @Sendable () -> Bool
     let loadMediaArtifact: @MainActor @Sendable (
         String,
-        OpenClawChatMediaKind) async throws -> OpenClawChatLoadedMedia?
+        OpenClawChatMediaKind,
+        OpenClawChatPlaybackMode?) async throws -> OpenClawChatLoadedMedia?
 
     var body: some View {
         let text = self.primaryText
@@ -663,7 +665,8 @@ private struct AttachmentRow: View {
     let playbackAllowed: @MainActor @Sendable () -> Bool
     let loadMedia: @MainActor @Sendable (
         String,
-        OpenClawChatMediaKind) async throws -> OpenClawChatLoadedMedia?
+        OpenClawChatMediaKind,
+        OpenClawChatPlaybackMode?) async throws -> OpenClawChatLoadedMedia?
 
     var body: some View {
         if let artifactId = self.fetchableArtifactId, let kind = self.att.mediaKind {
@@ -673,24 +676,26 @@ private struct AttachmentRow: View {
                     artifactId: artifactId,
                     label: self.attachmentLabel,
                     resolverReady: self.resolverReady,
-                    load: { try await self.loadMedia($0, .image) })
+                    load: { try await self.loadMedia($0, .image, nil) })
             case .audio:
                 ChatMediaAudioAttachment(
                     artifactId: artifactId,
                     label: self.attachmentLabel,
                     durationSeconds: self.att.durationSeconds,
+                    playback: self.att.playback,
                     resolverReady: self.resolverReady,
                     playbackAllowed: self.playbackAllowed,
-                    load: { try await self.loadMedia($0, .audio) })
+                    load: { try await self.loadMedia($0, .audio, self.att.playback) })
             case .video:
                 ChatMediaVideoAttachment(
                     artifactId: artifactId,
                     label: self.attachmentLabel,
                     width: self.att.width,
                     height: self.att.height,
+                    playback: self.att.playback,
                     resolverReady: self.resolverReady,
                     playbackAllowed: self.playbackAllowed,
-                    load: { try await self.loadMedia($0, .video) })
+                    load: { try await self.loadMedia($0, .video, self.att.playback) })
             }
         } else {
             self.fallbackRow

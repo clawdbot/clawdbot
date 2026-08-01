@@ -194,6 +194,50 @@ describe("renderSkills", () => {
     );
   });
 
+  it.each([
+    { editValue: "", disabled: true },
+    { editValue: "   ", disabled: true },
+    { editValue: "  sk-test  ", disabled: false },
+  ])(
+    "only enables credential replacement for nonblank input: $editValue",
+    async ({ editValue, disabled }) => {
+      const container = document.createElement("div");
+      document.body.append(container);
+      dialogRestores.push(() => container.remove());
+      installDialogMethod("showModal", function (this: HTMLDialogElement) {
+        this.setAttribute("open", "");
+      });
+      const onSaveKey = vi.fn();
+
+      render(
+        renderSkills(
+          createProps({
+            detailKey: "repo-skill",
+            edits: { "repo-skill": editValue },
+            onSaveKey,
+          }),
+        ),
+        container,
+      );
+      await Promise.resolve();
+
+      const input = container.querySelector<HTMLInputElement>('input[type="password"]');
+      const save = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
+        (button) => normalizeText(button) === "Save key",
+      );
+      expect(input?.required).toBe(true);
+      expect(save?.disabled).toBe(disabled);
+
+      save?.click();
+
+      if (disabled) {
+        expect(onSaveKey).not.toHaveBeenCalled();
+      } else {
+        expect(onSaveKey).toHaveBeenCalledWith("repo-skill");
+      }
+    },
+  );
+
   it("renders skill groups as open collapsible sections with heading summaries", async () => {
     const container = document.createElement("div");
     document.body.append(container);

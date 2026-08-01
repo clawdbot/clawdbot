@@ -7,7 +7,7 @@ export { sendDurableMessageBatch } from "../channels/message/runtime.js";
 export { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
 export { agentCommandFromIngress } from "../commands/agent.js";
 export { getRuntimeConfig } from "../config/io.js";
-export { canonicalizeSessionEntryAliases } from "../config/sessions.js";
+export { upsertSessionEntry } from "../config/sessions/session-accessor.js";
 export { loadOrCreateProcessDeviceIdentity } from "../infra/device-identity.js";
 export { requestHeartbeat } from "../infra/heartbeat-wake.js";
 export { buildOutboundSessionContext } from "../infra/outbound/session-context.js";

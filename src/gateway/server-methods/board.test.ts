@@ -1008,19 +1008,27 @@ describe("board gateway methods", () => {
     expect(triggerCronJob).toHaveBeenCalledWith("job-1", expect.any(Object));
   });
 
-  it("caps board.event payloads at 8KB and notices at 500 characters", async () => {
+  it("caps board.event payloads and preserves Unicode at the notice boundary", async () => {
     const { invoke } = createHarness();
     await invoke("board.widget.put", {
       sessionKey: "session",
       name: "counter",
       content: { kind: "html", html: "ok" },
     });
+    const clippedCodeUnits = 500 - "[dashboard] ".length - " on widget counter".length - 1;
+    // JSON's opening quote places the emoji across the legacy slice boundary.
+    const payload = `${"x".repeat(clippedCodeUnits - 2)}😀tail`;
+    await invoke("board.event", { sessionKey: "session", widget: "counter", payload });
+    const unicodeNotice = peekSystemEvents("session")[0] ?? "";
+    expect(unicodeNotice.length).toBeLessThanOrEqual(500);
+    expect(unicodeNotice).not.toContain(String.fromCharCode(0xd83d));
+    expect(unicodeNotice).toMatch(/… on widget counter$/u);
     await invoke("board.event", {
       sessionKey: "session",
       widget: "counter",
       payload: "x".repeat(1_000),
     });
-    expect(peekSystemEvents("session")[0]).toHaveLength(500);
+    expect(peekSystemEvents("session")[1]).toHaveLength(500);
     const oversized = await invoke("board.event", {
       sessionKey: "session",
       widget: "counter",

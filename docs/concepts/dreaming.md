@@ -283,6 +283,19 @@ When enabled, the Gateway **Dreams** tab shows:
 - a distinct grounded Scene lane for staged historical replay entries
 - an expandable Dream Diary reader backed by `doctor.memory.dreamDiary`
 
+When the bundled [`memory-wiki`](/plugins/memory-wiki) plugin is enabled, the
+Diary view gains two more sub-tabs next to Dreams:
+
+- **Imported Insights**: clustered insights surfaced by external-history
+  imports (for example `openclaw wiki chatgpt import`), for review before any
+  of it graduates into durable memory
+- **Memory Wiki**: the compiled wiki the memory system can search and reason
+  over — synthesis, entity, and concept pages (plus sources and reports that
+  carry claims, open questions, or contradictions) with per-page counts, a
+  full-vault breakdown, and inline page previews
+
+Both sub-tabs show an enable hint instead when `memory-wiki` is off.
+
 ## Related
 
 - [Memory](/concepts/memory)

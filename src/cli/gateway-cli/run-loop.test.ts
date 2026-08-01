@@ -945,6 +945,13 @@ describe("runGatewayLoop", () => {
         sessionKeys: new Set(["agent:main:deferral-timeout"]),
         reason: "gateway restart drain",
       });
+      expect(markRestartAbortedMainSessions).toHaveBeenCalledTimes(2);
+      expect(markRestartAbortedMainSessions).toHaveBeenLastCalledWith({
+        cfg: {},
+        sessionIds: new Set(["session-deferral-timeout"]),
+        sessionKeys: new Set(["agent:main:deferral-timeout"]),
+        reason: "config reload forced restart",
+      });
       expect(gatewayLog.warn).toHaveBeenCalledWith(
         "failed to mark interrupted main sessions for restart recovery: Error: store read-only",
       );
@@ -1003,6 +1010,7 @@ describe("runGatewayLoop", () => {
         sessionKeys: new Set(["agent:main:forced-task"]),
         reason: "gateway restart drain",
       });
+      expect(markRestartAbortedMainSessions).toHaveBeenCalledTimes(1);
       expect(gatewayLog.warn).toHaveBeenCalledWith(
         "restart blocked by active background task run(s): taskId=task-force runId=run-force status=running runtime=cron label=forced",
       );
@@ -1772,6 +1780,7 @@ describe("runGatewayLoop", () => {
         sessionKeys: new Set(["agent:main:file-intent"]),
         reason: "gateway restart drain",
       });
+      expect(markRestartAbortedMainSessions).toHaveBeenCalledTimes(1);
       expect(start).toHaveBeenCalledTimes(2);
 
       sigint();

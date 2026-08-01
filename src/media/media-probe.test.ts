@@ -2,11 +2,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  probeMediaFilesWithinBudget,
-  probePlaybackMediaFileDescriptor,
-  probeVideoDimensions,
-} from "./media-probe.js";
 import type { MediaProbeKind, MediaProbeResult } from "./media-probe.js";
 
 const { runFfprobe } = vi.hoisted(() => ({
@@ -21,8 +16,14 @@ let testDir = "";
 let songPath = "";
 let clipPath = "";
 let voicePath = "";
+let probeMediaFilesWithinBudget: typeof import("./media-probe.js").probeMediaFilesWithinBudget;
+let probePlaybackMediaFileDescriptor: typeof import("./media-probe.js").probePlaybackMediaFileDescriptor;
+let probeVideoDimensions: typeof import("./media-probe.js").probeVideoDimensions;
 
 beforeAll(async () => {
+  vi.resetModules();
+  ({ probeMediaFilesWithinBudget, probePlaybackMediaFileDescriptor, probeVideoDimensions } =
+    await import("./media-probe.js"));
   testDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-probe-"));
   songPath = path.join(testDir, "song.mp3");
   clipPath = path.join(testDir, "clip.mp4");
@@ -35,7 +36,12 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await fs.rm(testDir, { recursive: true, force: true });
+  try {
+    await fs.rm(testDir, { recursive: true, force: true });
+  } finally {
+    vi.doUnmock("./ffmpeg-exec.js");
+    vi.resetModules();
+  }
 });
 
 beforeEach(() => {

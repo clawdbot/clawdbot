@@ -59,6 +59,7 @@ type SharedCodexAppServerClientStartup = {
 
 type SharedCodexAppServerClientState = {
   clients: Map<string, SharedCodexAppServerClientEntry>;
+  entriesByClient: WeakMap<CodexAppServerClient, SharedCodexAppServerClientEntry>;
   leasedReleases: WeakMap<CodexAppServerClient, Array<() => void>>;
   warmClientsByConfig?: WeakMap<
     object,
@@ -121,6 +122,7 @@ function getSharedCodexAppServerClientState(): SharedCodexAppServerClientState {
   };
   globalState[SHARED_CODEX_APP_SERVER_CLIENT_STATE] ??= {
     clients: new Map(),
+    entriesByClient: new WeakMap(),
     leasedReleases: new WeakMap(),
   };
   return globalState[SHARED_CODEX_APP_SERVER_CLIENT_STATE];
@@ -843,6 +845,7 @@ function createSharedCodexAppServerClientStartup(params: {
     config: params.config,
     onStartedClient: (startedClient) => {
       params.entry.client = startedClient;
+      getSharedCodexAppServerClientState().entriesByClient.set(startedClient, params.entry);
       for (const callback of params.entry.onStartedClientCallbacks) {
         callback(startedClient);
       }
@@ -1105,6 +1108,7 @@ export function resetSharedCodexAppServerClientForTests(): void {
   const state = getSharedCodexAppServerClientState();
   const clients = collectSharedClients(state);
   state.clients.clear();
+  state.entriesByClient = new WeakMap();
   state.leasedReleases = new WeakMap();
   state.warmClientsByConfig = new WeakMap();
   for (const client of clients) {
@@ -1174,6 +1178,24 @@ export function retainSharedCodexAppServerClientIfCurrent(
   return undefined;
 }
 
+/** Retains the live shared client whose initialized instance id matches a thread binding. */
+export function retainSharedCodexAppServerClientByInstanceId(
+  clientId: string | undefined,
+): { client: CodexAppServerClient; release: () => void } | undefined {
+  const normalizedClientId = clientId?.trim();
+  if (!normalizedClientId) {
+    return undefined;
+  }
+  for (const entry of getSharedCodexAppServerClientState().clients.values()) {
+    const client = entry.client;
+    if (client?.getInstanceId() !== normalizedClientId || entry.closeWhenIdle || entry.closeError) {
+      continue;
+    }
+    return { client, release: retainSharedClientEntry(entry) };
+  }
+  return undefined;
+}
+
 /**
  * Retires a matching shared client. Default is graceful: detach from the map
  * (future acquisitions get a fresh client) and close once leases drain.
@@ -1207,17 +1229,19 @@ export function retireSharedCodexAppServerClientIfCurrent(
       return { activeLeases: entry.activeLeases, closed };
     }
   }
-  const activeLeases = state.leasedReleases.get(client)?.length ?? 0;
-  if (activeLeases > 0) {
-    // A gracefully detached client (e.g. one-shot cleanup) can still be leased
-    // when a later terminal-idle kill declares it suspect; the map miss must
-    // not let the poisoned process keep serving those co-leases.
+  const detachedEntry = state.entriesByClient.get(client);
+  if (detachedEntry && (detachedEntry.client === client || suspectClosedClients.has(client))) {
+    // Explicit native-subagent retains are not listed in leasedReleases; the
+    // detached entry remains the sole authoritative owner of every lease.
     if (opts?.failActiveLeases && !suspectClosedClients.has(client)) {
       suspectClosedClients.add(client);
-      client.close();
-      return { activeLeases, closed: true };
+      detachedEntry.closeError = new Error("codex app-server client is closed");
+      return {
+        activeLeases: detachedEntry.activeLeases,
+        closed: closeRetiredSharedClientEntry(detachedEntry),
+      };
     }
-    return { activeLeases, closed: false };
+    return { activeLeases: detachedEntry.activeLeases, closed: false };
   }
   return undefined;
 }

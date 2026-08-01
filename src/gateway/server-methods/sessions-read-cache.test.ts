@@ -214,25 +214,27 @@ describe("sessions.list single-flight", () => {
       const catalog = new Promise<[]>((resolve) => {
         releaseCatalog = () => resolve([]);
       });
+      const loadGatewayModelCatalog = vi.fn(async () => await catalog);
       const context = {
         ...requestContext(config),
-        loadGatewayModelCatalog: async () => await catalog,
+        loadGatewayModelCatalog,
       } as GatewayRequestContext;
       const client = identifiedClient("owner@example.com");
       const request = { archived: "all" as const, limit: 100 };
 
       const beforeMutation = listSessions({ client, context, request });
-      await vi.waitFor(() => expect(loader.calls).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() => expect(loadGatewayModelCatalog).toHaveBeenCalledTimes(1));
       await upsertSessionEntry(
         { agentId: "main", sessionKey: "agent:main:created-mid-list" },
         { sessionId: "created-mid-list", updatedAt: 500, visibility: "shared" },
       );
       const afterMutation = listSessions({ client, context, request });
-      await vi.waitFor(() => expect(loader.calls).toHaveBeenCalledTimes(2));
+      await vi.waitFor(() => expect(loadGatewayModelCatalog).toHaveBeenCalledTimes(2));
       releaseCatalog();
 
       const [, fresh] = await Promise.all([beforeMutation, afterMutation]);
       expect(fresh.sessions.map((session) => session.key)).toContain("agent:main:created-mid-list");
+      expect(loader.calls).toHaveBeenCalledTimes(2);
     });
   });
 });

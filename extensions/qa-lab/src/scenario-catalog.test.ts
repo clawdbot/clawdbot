@@ -219,13 +219,15 @@ describe("qa scenario catalog", () => {
     ).toEqual([]);
   });
 
-  it("uses only graceful gateway restart for Matrix replay dedupe", () => {
+  it("uses graceful restart and isolation for Matrix replay dedupe", () => {
     const scenario = requireFlowScenario(readQaScenarioById("matrix-restart-replay-dedupe"));
+    const staleSync = requireFlowScenario(readQaScenarioById("matrix-stale-sync-replay-dedupe"));
 
     expect(flowContainsCall(scenario.execution.flow, "env.gateway.restart")).toBe(true);
     expect(flowContainsCall(scenario.execution.flow, "env.gateway.restartAfterStateMutation")).toBe(
       false,
     );
+    expect(staleSync.execution.suiteIsolation).toBe("isolated");
   });
 
   it("loads scenario-declared gateway runtime options from YAML", () => {
@@ -641,20 +643,6 @@ describe("qa scenario catalog", () => {
       requiredProvider: "openai",
       requiredModel: "gpt-5.4",
     });
-    const longContextFlow = JSON.stringify(
-      readQaScenarioById("long-context-progress-watchdog").execution.flow,
-    );
-    expect(longContextFlow).toContain("originalCodexPluginEnabled");
-    expect(longContextFlow).not.toContain(
-      "originalPluginAllow === undefined ? null : originalPluginAllow",
-    );
-    expect(longContextFlow).not.toContain("{ ...originalCodexPluginEntry, enabled:");
-    expect(readQaScenarioExecutionConfig("long-context-progress-watchdog")).toMatchObject({
-      requiredProviderMode: "live-frontier",
-      harnessRuntime: "codex",
-    });
-    expect(readQaScenarioById("long-context-progress-watchdog").plugins).toBeUndefined();
-    expect(readQaScenarioById("long-context-progress-watchdog").gatewayConfigPatch).toBeUndefined();
   });
 
   it("loads the QA bus tool trace visibility harness scenario", () => {

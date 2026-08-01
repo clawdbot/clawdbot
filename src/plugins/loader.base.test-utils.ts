@@ -23,6 +23,7 @@ import {
   clearPluginInteractiveHandlers,
   resolvePluginInteractiveNamespaceMatch,
 } from "./interactive-registry.js";
+import { resolvePluginRegistryLoadCacheKey } from "./loader-cache.js";
 import { loadOpenClawPlugins, resolveRuntimePluginRegistry } from "./loader.js";
 import {
   EMPTY_PLUGIN_SCHEMA,
@@ -1384,9 +1385,10 @@ describe("loadOpenClawPlugins", () => {
       },
     },
     {
-      label: "fails loudly when a plugin reenters the same snapshot load during register",
+      label: "does not expose plugin config in cache keys or reentry diagnostics",
       run: () => {
         useNoBundledPlugins();
+        const pluginConfigSentinel = "hunter2-sentinel";
         const marker = "__openclaw_loader_reentry_error";
         const reenterFnMarker = "__openclaw_loader_reentry_fn";
         Reflect.deleteProperty(globalThis, marker);
@@ -1405,6 +1407,9 @@ describe("loadOpenClawPlugins", () => {
             plugins: {
               load: { paths: [pluginFile] },
               allow: ["reentrant-snapshot"],
+              entries: {
+                "reentrant-snapshot": { config: { token: pluginConfigSentinel } },
+              },
             },
           },
         } satisfies Parameters<typeof loadOpenClawPlugins>[0];
@@ -1412,6 +1417,11 @@ describe("loadOpenClawPlugins", () => {
           id: "reentrant-snapshot",
           dir: pluginDir,
           filename: "reentrant-snapshot.cjs",
+          configSchema: {
+            type: "object",
+            additionalProperties: false,
+            properties: { token: { type: "string" } },
+          },
           body: `module.exports = {
     id: "reentrant-snapshot",
     register() {
@@ -1428,6 +1438,9 @@ describe("loadOpenClawPlugins", () => {
   };`,
         });
 
+        const cacheKey = resolvePluginRegistryLoadCacheKey(nestedOptions);
+        expect(cacheKey).toMatch(/^[a-f0-9]{64}$/);
+        expect(cacheKey).not.toContain(pluginConfigSentinel);
         const registry = loadOpenClawPlugins(nestedOptions);
 
         try {
@@ -1435,10 +1448,14 @@ describe("loadOpenClawPlugins", () => {
             | { name?: unknown; message?: unknown }
             | undefined;
           expect(reentryError?.name).toBe("PluginLoadReentryError");
-          expect(String(reentryError?.message)).toContain("plugin load reentry detected");
+          expect(reentryError?.message).toBe(
+            `plugin load reentry detected for cache key: ${cacheKey}`,
+          );
+          expect(String(reentryError?.message)).not.toContain(pluginConfigSentinel);
           const record = registry.plugins.find((entry) => entry.id === "reentrant-snapshot");
           expect(record?.status).toBe("error");
-          expect(record?.error).toContain("plugin load reentry detected");
+          expect(record?.error).toContain(cacheKey);
+          expect(record?.error).not.toContain(pluginConfigSentinel);
           expect(record?.failurePhase).toBe("register");
         } finally {
           Reflect.deleteProperty(globalThis, marker);

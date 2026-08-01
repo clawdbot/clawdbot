@@ -80,6 +80,7 @@ const buildGatewayProbeConnectionDetailsMock = vi.fn(() => ({
   tlsFingerprint: TEST_TLS_FINGERPRINT,
   url: TEST_GATEWAY_URL,
 }));
+const formatGatewayAuthErrorJsonMock = vi.fn();
 const formatGatewayTransportErrorJsonMock = vi.fn();
 const probeGatewayStatusMock = vi.fn();
 vi.mock("../gateway/call.js", () => ({
@@ -88,6 +89,7 @@ vi.mock("../gateway/call.js", () => ({
     Reflect.apply(buildGatewayConnectionDetailsMock, undefined, args),
   buildGatewayProbeConnectionDetails: (...args: [unknown, ...unknown[]]) =>
     Reflect.apply(buildGatewayProbeConnectionDetailsMock, undefined, args),
+  formatGatewayAuthErrorJson: (...args: unknown[]) => formatGatewayAuthErrorJsonMock(...args),
   formatGatewayTransportErrorJson: (...args: unknown[]) =>
     formatGatewayTransportErrorJsonMock(...args),
   isGatewayCredentialsRequiredError: (value: unknown) =>
@@ -144,6 +146,8 @@ describe("healthCommand", () => {
       tlsFingerprint: TEST_TLS_FINGERPRINT,
       url: TEST_GATEWAY_URL,
     });
+    formatGatewayAuthErrorJsonMock.mockReset();
+    formatGatewayAuthErrorJsonMock.mockReturnValue(null);
     formatGatewayTransportErrorJsonMock.mockReturnValue(null);
     isGatewayCredentialsRequiredErrorMock.mockReturnValue(false);
     isGatewaySecretRefUnavailableErrorMock.mockReturnValue(false);
@@ -423,6 +427,53 @@ describe("healthCommand", () => {
       }
     },
   );
+
+  it("keeps credential failures machine-readable when the gateway is unreachable", async () => {
+    const error = new Error("gateway health requires credentials");
+    const payload = {
+      ok: false,
+      error: {
+        type: "gateway_credentials_required",
+        message: "gateway health requires credentials",
+      },
+    };
+    callGatewayMock.mockRejectedValueOnce(error);
+    isGatewayCredentialsRequiredErrorMock.mockReturnValue(true);
+    probeGatewayStatusMock.mockResolvedValueOnce({
+      ok: false,
+      kind: "connect",
+      error: "connect ECONNREFUSED 127.0.0.1:18789",
+    });
+    formatGatewayAuthErrorJsonMock.mockReturnValueOnce(payload);
+
+    await healthCommand({ json: true, timeoutMs: 5000, config: {} }, runtime as never);
+
+    expect(formatGatewayAuthErrorJsonMock).toHaveBeenCalledWith(error);
+    expect(formatGatewayTransportErrorJsonMock).not.toHaveBeenCalled();
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(JSON.parse(requireFirstRuntimeLog())).toEqual(payload);
+  });
+
+  it("keeps explicit URL auth failures machine-readable", async () => {
+    const error = new Error("gateway url override requires explicit credentials");
+    const payload = {
+      ok: false,
+      error: {
+        type: "gateway_credentials_required",
+        message: "gateway url override requires explicit credentials",
+      },
+    };
+    callGatewayMock.mockRejectedValueOnce(error);
+    formatGatewayAuthErrorJsonMock.mockReturnValueOnce(payload);
+
+    await healthCommand({ json: true, timeoutMs: 5000, config: {} }, runtime as never);
+
+    expect(probeGatewayStatusMock).not.toHaveBeenCalled();
+    expect(formatGatewayAuthErrorJsonMock).toHaveBeenCalledWith(error);
+    expect(formatGatewayTransportErrorJsonMock).not.toHaveBeenCalled();
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(JSON.parse(requireFirstRuntimeLog())).toEqual(payload);
+  });
 
   it("reports reachable gateway diagnostics when configured auth SecretRefs are unavailable", async () => {
     const error = new Error("gateway.auth.password is unavailable");

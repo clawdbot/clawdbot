@@ -22,9 +22,11 @@ import {
   formatSidebarTimestamp,
   type CatalogBackingSessionDisplay,
   type CatalogSessionMenuRequest,
+  visibleCatalogHosts,
 } from "./app-sidebar-session-catalogs.ts";
 import { renderSidebarSessionSectionHeader } from "./app-sidebar-session-section-header.ts";
 import { icons } from "./icons.ts";
+import { hasProviderBrandIcon, renderProviderBrandIcon } from "./provider-icon.ts";
 import { renderSessionRowBadges } from "./session-row-badges.ts";
 
 type SessionCatalogGroupsParams = {
@@ -118,15 +120,8 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
     const sectionId = `catalog:${catalog.id}`;
     const collapsed = params.collapsedSections.has(sectionId);
     const hosts = catalog.hosts;
-    const visibleHosts: SessionCatalogHost[] = [];
-    for (const host of hosts) {
-      const sessions = host.sessions.filter(
-        (session) => !params.creatorId || session.createdActor?.id === params.creatorId,
-      );
-      if (sessions.length > 0) {
-        visibleHosts.push(sessions.length === host.sessions.length ? host : { ...host, sessions });
-      }
-    }
+    // Catalog providers own host identity; the sidebar only removes hosts with no visible rows.
+    const visibleHosts = visibleCatalogHosts(hosts, params.creatorId);
     const rows = visibleHosts.flatMap((host) =>
       host.sessions.map((session) => ({ host, session })),
     );
@@ -180,6 +175,11 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
               title=${hasError ? errorHelp : nothing}
               @click=${() => params.onToggleSection(sectionId)}
             >
+              ${hasProviderBrandIcon(catalog.id)
+                ? renderProviderBrandIcon(catalog.id, {
+                    className: "sidebar-session-catalog-provider-icon",
+                  })
+                : nothing}
               <span class="sidebar-recent-sessions__label-text">${catalog.label}</span>
               <span class="sidebar-session-group-toggle__icon" aria-hidden="true"
                 >${collapsed ? icons.chevronRight : icons.chevronDown}</span

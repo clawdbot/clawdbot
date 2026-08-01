@@ -29,6 +29,7 @@ import type {
   SkillWorkshopProposalMutationBudget,
   SkillWorkshopRunOptions,
 } from "../../../skills/workshop/types.js";
+import type { ExecApprovalContinuationPromptRange } from "../../bash-tools.exec-approval-output.js";
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../../bash-tools.exec-types.js";
 import type { BootstrapContextRunKind } from "../../bootstrap-mode.js";
 import type { AgentStreamParams, ClientToolDefinition } from "../../command/shared-types.js";
@@ -54,6 +55,11 @@ import type { AuthProfileFailurePolicy } from "./auth-profile-failure-policy.typ
 export type { ClientToolDefinition } from "../../command/shared-types.js";
 
 export type EmbeddedRunTrigger = "cron" | "heartbeat" | "manual" | "memory" | "overflow" | "user";
+
+export type ResolvedToolPromptFinalizer = (params: {
+  prompt: string;
+  messageToolAvailable: boolean;
+}) => string;
 
 type ReasoningStreamPayload = Pick<
   ReplyPayload,
@@ -150,6 +156,8 @@ export type RunEmbeddedAgentParams = {
   swarmOutputSchema?: Record<string, unknown>;
   /** Restrict this reconstructed run to restart-safe tools. */
   forceRestartSafeTools?: boolean;
+  /** Preserve Code Mode controls for a replay-safe restart recovery turn. */
+  forceCodeModeTools?: boolean;
   /** Internal one-shot model probe mode: no tools, no workspace/chat prompt policy. */
   modelRun?: boolean;
   /** Disable trajectory persistence for auxiliary runs with no durable session owner. */
@@ -194,6 +202,8 @@ export type RunEmbeddedAgentParams = {
   prompt: string;
   /** User-visible prompt body to submit and persist; runtime context travels separately. */
   transcriptPrompt?: string;
+  /** Finalizes caller-owned guidance after the submitted tool surface is known. */
+  finalizePromptForResolvedTools?: ResolvedToolPromptFinalizer;
   currentInboundEventKind?: InboundEventKind;
   currentInboundContext?: CurrentInboundPromptContext;
   images?: ImageContent[];
@@ -255,6 +265,10 @@ export type RunEmbeddedAgentParams = {
     "host" | "security" | "ask" | "node" | "nodeCwd" | "notifyOnExit" | "notifyOnExitEmptySuccess"
   >;
   bashElevated?: ExecElevatedDefaults;
+  /** Trusted approved-exec runtime prompt span awaiting the resolved attempt cap. */
+  execApprovalContinuationPromptRange?: ExecApprovalContinuationPromptRange;
+  /** Corresponding span in the undecorated transcript prompt. */
+  execApprovalContinuationTranscriptPromptRange?: ExecApprovalContinuationPromptRange;
   timeoutMs: number;
   /**
    * Explicit per-run timeout override, in milliseconds, when the caller knows

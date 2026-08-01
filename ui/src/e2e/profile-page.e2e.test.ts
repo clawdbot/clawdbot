@@ -365,4 +365,59 @@ describeControlUiE2e("Control UI profile page mocked Gateway E2E", () => {
       await context.close();
     }
   });
+
+  it("keeps identity refresh single-flight and retries after a failed request", async () => {
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      deferredMethods: ["users.self"],
+      presenceUsers: testPresenceUsers,
+      methodResponses: {
+        "users.self": { profile: testProfile },
+      },
+    });
+
+    try {
+      const response = await page.goto(`${server.baseUrl}settings/profile`);
+      expect(response?.status()).toBe(200);
+
+      const refresh = page.locator(".profile-refresh");
+      await gateway.waitForRequest("users.self");
+      await expect.poll(async () => (await gateway.getRequests("users.self")).length).toBe(1);
+      await expect.poll(() => refresh.isDisabled()).toBe(true);
+      expect(await refresh.ariaSnapshot()).toContain('button "Refreshing…" [disabled]');
+
+      await refresh.evaluate((element) => {
+        const button = element as HTMLButtonElement;
+        button.click();
+        button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      });
+      await expect.poll(async () => (await gateway.getRequests("users.self")).length).toBe(1);
+
+      await gateway.rejectDeferred("users.self", { message: "identity unavailable" });
+      await page.getByText("identity unavailable", { exact: true }).waitFor({ timeout: 10_000 });
+      await expect.poll(() => refresh.isEnabled()).toBe(true);
+      expect(await refresh.ariaSnapshot()).toContain('button "Refresh"');
+
+      await gateway.deferNext("users.self");
+      await refresh.click();
+      await expect.poll(async () => (await gateway.getRequests("users.self")).length).toBe(2);
+      await expect.poll(() => refresh.isDisabled()).toBe(true);
+      expect(await refresh.ariaSnapshot()).toContain('button "Refreshing…" [disabled]');
+
+      await refresh.evaluate((element) => {
+        (element as HTMLButtonElement).dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      });
+      await expect.poll(async () => (await gateway.getRequests("users.self")).length).toBe(2);
+
+      await gateway.resolveDeferred("users.self", { profile: testProfile });
+      const displayName = page.locator('.identity-name-control input[type="text"]');
+      await displayName.waitFor({ timeout: 10_000 });
+      await expect(displayName.inputValue()).resolves.toBe(testProfile.displayName);
+      await expect.poll(() => refresh.isEnabled()).toBe(true);
+      expect(await refresh.ariaSnapshot()).toContain('button "Refresh"');
+    } finally {
+      await context.close();
+    }
+  });
 });

@@ -569,7 +569,8 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
     func loadMediaArtifact(
         sessionKey: String,
         artifactId: String,
-        kind: OpenClawChatMediaKind) async throws -> OpenClawChatLoadedMedia?
+        kind: OpenClawChatMediaKind,
+        playback: OpenClawChatPlaybackMode?) async throws -> OpenClawChatLoadedMedia?
     {
         guard let serverLease = await connection.captureServerLease() else {
             throw OpenClawChatTransportSendError.notDispatched
@@ -580,6 +581,7 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
             agentID: target.agentID,
             artifactId: artifactId,
             kind: kind,
+            playback: playback,
             ifCurrentServerLease: serverLease)
     }
 
@@ -1408,6 +1410,7 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
             (contentViewController as? NSHostingController<MacChatSurface>)?
                 .sceneBridgingOptions = [.toolbars]
             window.isReleasedWhenClosed = false
+            window.isRestorable = false
             // Keep the SwiftUI toolbar controls, but merge their unified row
             // with the traffic lights instead of stacking it below a title band.
             window.titleVisibility = .hidden

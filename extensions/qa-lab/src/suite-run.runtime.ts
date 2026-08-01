@@ -46,6 +46,11 @@ export async function runQaFlowSuiteFromRuntime(params?: QaSuiteRunParams): Prom
     channel: params?.channelId ?? params?.channelDriverSelection?.channel,
     claudeCliAuthMode: params?.claudeCliAuthMode,
   });
+  if (selectedScenarios.length === 0) {
+    throw new Error(
+      "QA suite selected no runnable scenarios; check the scenario catalog and provider, model, or channel filters.",
+    );
+  }
   const { alternateModel, fastMode, primaryModel, providerMode } = resolveSelectedQaSuiteModels({
     alternateModelExplicit: params?.alternateModel !== undefined,
     fastMode: params?.fastMode,

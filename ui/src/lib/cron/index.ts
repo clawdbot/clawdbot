@@ -466,9 +466,9 @@ export function resolveConfiguredCronModelSuggestions(
       }
     }
   }
-  const list = (agents as { list?: unknown }).list;
-  if (list && typeof list === "object") {
-    for (const entry of Object.values(list as Record<string, unknown>)) {
+  const entries = (agents as { entries?: unknown }).entries;
+  if (entries && typeof entries === "object" && !Array.isArray(entries)) {
+    for (const entry of Object.values(entries as Record<string, unknown>)) {
       if (entry && typeof entry === "object") {
         addModelConfigIds(out, (entry as Record<string, unknown>).model);
       }

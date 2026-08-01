@@ -271,6 +271,7 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
       snapshot: index,
       source: "provided",
       diagnostics: [],
+      manifestRegistry: snapshot.manifestRegistry,
     });
   });
 
@@ -742,7 +743,9 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     writePackagePlugin(firstRoot, { pluginId: "duplicate" });
     writePackagePlugin(secondRoot, { pluginId: "duplicate" });
     const originalIndex = loadInstalledPluginIndex({ config: originalConfig, env });
-    expect(originalIndex.plugins.map((plugin) => plugin.rootDir)).toEqual([firstRoot]);
+    expect(originalIndex.plugins.map((plugin) => plugin.rootDir)).toEqual([
+      fs.realpathSync(firstRoot),
+    ]);
     writePersistedInstalledPluginIndexSync(originalIndex, { stateDir });
 
     const unchanged = loadPluginRegistrySnapshotWithMetadata({
@@ -759,7 +762,9 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     });
     expect(reordered.source).toBe("derived");
     expectDiagnosticsContainCode(reordered.diagnostics, "persisted-registry-stale-source");
-    expect(reordered.snapshot.plugins.map((plugin) => plugin.rootDir)).toEqual([secondRoot]);
+    expect(reordered.snapshot.plugins.map((plugin) => plugin.rootDir)).toEqual([
+      fs.realpathSync(secondRoot),
+    ]);
   });
 
   it("rebuilds legacy config-path persisted registries before startup scoping", () => {

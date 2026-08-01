@@ -50,7 +50,16 @@ const TRAJECTORY_RUNTIME_DATA_ARRAY_MAX_ITEMS = 64;
 const TRAJECTORY_RUNTIME_DATA_OBJECT_MAX_KEYS = 64;
 const TRAJECTORY_RUNTIME_DATA_MAX_DEPTH = 6;
 const TRAJECTORY_RUNTIME_FINAL_PROMPT_MAX_BYTES = 4 * 1024;
-const TRAJECTORY_RUNTIME_OVERSIZE_PRESERVED_DATA_KEYS = ["usage", "promptCache"] as const;
+// Oversized events first shed repeated conversation state while keeping the
+// rest of their schema-v1 payload. The compact fallback then preserves keys
+// that remain useful even when every nonessential field must be dropped.
+// sanitizeTrajectoryPayload bounds prompt strings before this limiter runs.
+const TRAJECTORY_RUNTIME_OVERSIZE_DROP_FIRST_DATA_KEYS = [
+  "messagesSnapshot",
+  "messages",
+  "systemPrompt",
+] as const;
+const TRAJECTORY_RUNTIME_OVERSIZE_PRESERVED_DATA_KEYS = ["usage", "promptCache", "prompt"] as const;
 
 type TrajectoryRuntimeWriterDiagnostics = QueuedFileWriterDiagnostics;
 
@@ -84,6 +93,27 @@ function truncateOversizedTrajectoryEvent(
     limitBytes: TRAJECTORY_RUNTIME_EVENT_MAX_BYTES,
     reason: "trajectory-event-size-limit",
   };
+  const reducedData = { ...originalData };
+  const reducedDroppedFields: string[] = [];
+  for (const key of TRAJECTORY_RUNTIME_OVERSIZE_DROP_FIRST_DATA_KEYS) {
+    if (!Object.hasOwn(reducedData, key)) {
+      continue;
+    }
+    delete reducedData[key];
+    reducedDroppedFields.push(key);
+    const reduced = safeJsonStringify({
+      ...event,
+      data: {
+        ...reducedData,
+        ...baseData,
+        droppedFields: reducedDroppedFields,
+      },
+    });
+    if (reduced && Buffer.byteLength(reduced, "utf8") <= TRAJECTORY_RUNTIME_EVENT_MAX_BYTES) {
+      return reduced;
+    }
+  }
+
   const buildTruncatedEventLine = (includeDroppedFields: boolean): string | undefined => {
     const data: Record<string, unknown> = { ...baseData };
     for (const key of TRAJECTORY_RUNTIME_OVERSIZE_PRESERVED_DATA_KEYS) {

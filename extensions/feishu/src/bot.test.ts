@@ -303,6 +303,7 @@ const {
   mockTranscribeFirstAudio,
   mockMaybeCreateDynamicAgent,
   mockBuildChannelInboundEventContext,
+  mockFormatAgentEnvelope,
   mockDispatchInboundMessage,
   mockResolveFeishuBotName,
 } = vi.hoisted(() => ({
@@ -343,6 +344,7 @@ const {
   mockTranscribeFirstAudio: vi.fn(),
   mockMaybeCreateDynamicAgent: vi.fn(),
   mockBuildChannelInboundEventContext: vi.fn(),
+  mockFormatAgentEnvelope: vi.fn(({ body }: { body: string }) => body),
   mockDispatchInboundMessage: vi
     .fn()
     .mockResolvedValue({ queuedFinal: false, counts: { final: 1 } }),
@@ -357,7 +359,7 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
   );
   return {
     ...actual,
-    formatAgentEnvelope: ({ body }: { body: string }) => body,
+    formatAgentEnvelope: mockFormatAgentEnvelope,
     resolveEnvelopeFormatOptions: () => ({}),
     buildChannelInboundEventContext: (
       params: Parameters<typeof actual.buildChannelInboundEventContext>[0],
@@ -1427,7 +1429,7 @@ describe("handleFeishuMessage command authorization", () => {
     expect(context.SupplementalContext?.quote?.body).toBe("quoted content");
   });
 
-  it("uses message create_time as Timestamp instead of Date.now()", async () => {
+  it("uses message create_time for the inbound context and model envelope", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
     await dispatchMessage({
       cfg: createFeishuTestConfig({ dmPolicy: "open" }),
@@ -1440,6 +1442,8 @@ describe("handleFeishuMessage command authorization", () => {
 
     const context = mockCallArg<{ Timestamp?: number }>(mockFinalizeInboundContext, 0, 0);
     expect(context.Timestamp).toBe(1700000000000);
+    const envelope = mockCallArg<{ timestamp?: number | Date }>(mockFormatAgentEnvelope, 0, 0);
+    expect(envelope.timestamp).toBe(1700000000000);
   });
 
   it.each([

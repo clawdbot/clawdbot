@@ -11,6 +11,12 @@ type ClickClackDiscussionsConfig = {
   section?: string;
 };
 
+/** Per-channel group policy for a ClickClack group/channel. */
+export type ClickClackGroupConfig = {
+  requireMention?: boolean;
+  mentionPatterns?: string[];
+};
+
 /** User-configurable settings for one ClickClack account. */
 export type ClickClackAccountConfig = {
   name?: string;
@@ -35,6 +41,12 @@ export type ClickClackAccountConfig = {
   commandMenu?: boolean;
   /** Create and synchronize one managed ClickClack channel per OpenClaw session. */
   discussions?: ClickClackDiscussionsConfig;
+  /** Require a direct mention before dispatching group messages (default false). */
+  requireMention?: boolean;
+  /** Mention patterns for this account in group channels. */
+  mentionPatterns?: string[];
+  /** Per-channel group policy overrides keyed by ClickClack channel ID. */
+  groups?: Record<string, ClickClackGroupConfig>;
 };
 
 /** Root ClickClack channel config with optional named accounts. */
@@ -61,6 +73,7 @@ export type ResolvedClickClackAccount = {
   token: string;
   workspace: string;
   botUserId?: string;
+  botHandle?: string;
   agentId?: string;
   replyMode: "agent" | "model";
   model?: string;
@@ -78,6 +91,9 @@ export type ResolvedClickClackAccount = {
     section: string;
   };
   config: ClickClackAccountConfig;
+  requireMention: boolean;
+  mentionPatterns: string[];
+  groups: Record<string, ClickClackGroupConfig>;
 };
 
 /** User object returned by the ClickClack API. */

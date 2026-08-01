@@ -568,7 +568,8 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
     func loadMediaArtifact(
         sessionKey: String,
         artifactId: String,
-        kind: OpenClawChatMediaKind) async throws -> OpenClawChatLoadedMedia?
+        kind: OpenClawChatMediaKind,
+        playback: OpenClawChatPlaybackMode?) async throws -> OpenClawChatLoadedMedia?
     {
         guard kind.acceptsManagedArtifactID(artifactId),
               let mediaArtifactLoader,
@@ -586,6 +587,7 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
         let loaded = try await mediaArtifactLoader.load(
             response: response,
             kind: kind,
+            playback: playback,
             expectedGatewayID: gatewayID)
         guard await self.gateway.currentRoute() == route else { throw CancellationError() }
         return loaded

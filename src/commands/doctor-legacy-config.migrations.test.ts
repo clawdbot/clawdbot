@@ -179,6 +179,40 @@ describe("normalizeCompatibilityConfigValues", () => {
     fs.rmSync(tempOauthDir, { recursive: true, force: true });
   });
 
+  it("drops reserved MCP server names without touching sibling servers", () => {
+    const raw = JSON.parse(
+      '{"mcp":{"servers":{"__proto__":{"command":"bad"},"docs":{"command":"docs"}}},"nodeHost":{"mcp":{"servers":{"__proto__":{"command":"bad-node"},"local":{"command":"local"}}}}}',
+    ) as OpenClawConfig;
+
+    const normalized = {
+      mcp: { servers: { docs: { command: "docs" } } },
+      nodeHost: { mcp: { servers: { local: { command: "local" } } } },
+    } as OpenClawConfig;
+    const migrated = normalizeCompatibilityConfigValues(normalized, { sourceRaw: raw });
+
+    expect(migrated.config.mcp?.servers).toStrictEqual({ docs: { command: "docs" } });
+    expect(migrated.config.nodeHost?.mcp?.servers).toStrictEqual({
+      local: { command: "local" },
+    });
+    expect(Object.hasOwn(migrated.config.mcp?.servers ?? {}, "__proto__")).toBe(false);
+    expect(Object.hasOwn(migrated.config.nodeHost?.mcp?.servers ?? {}, "__proto__")).toBe(false);
+    expect(migrated.changes).toStrictEqual([
+      'Dropped MCP server "__proto__" from mcp.servers because the name is reserved; re-add it under a different name.',
+      'Dropped MCP server "__proto__" from nodeHost.mcp.servers because the name is reserved; re-add it under a different name.',
+    ]);
+
+    const secondPass = normalizeCompatibilityConfigValues(migrated.config);
+    expect(secondPass.config).toStrictEqual(migrated.config);
+    expect(secondPass.changes).toStrictEqual([]);
+
+    const candidateOnly = normalizeCompatibilityConfigValues(raw, { sourceRaw: {} });
+    expect(Object.hasOwn(candidateOnly.config.mcp?.servers ?? {}, "__proto__")).toBe(false);
+    expect(Object.hasOwn(candidateOnly.config.nodeHost?.mcp?.servers ?? {}, "__proto__")).toBe(
+      false,
+    );
+    expect(candidateOnly.changes).toStrictEqual(migrated.changes);
+  });
+
   it("does not materialize a group visible reply default for configured channels", () => {
     const res = normalizeCompatibilityConfigValues({
       channels: {
@@ -227,6 +261,56 @@ describe("normalizeCompatibilityConfigValues", () => {
 
     expect(res.config.agents?.list).toEqual([{ id: "main", workspace: "/main" }, { id: "beta" }]);
     expect(res.changes.some((change) => change.includes("workspace"))).toBe(false);
+  });
+
+  it("removes invalid heartbeat active-hours windows so saved config can load", () => {
+    const res = normalizeCompatibilityConfigValues(
+      legacyConfig({
+        agents: {
+          defaults: {
+            heartbeat: {
+              every: "30m",
+              activeHours: { start: "99:99", end: "17:00" },
+            },
+          },
+          list: [
+            {
+              id: "ops",
+              heartbeat: {
+                prompt: "Check alerts",
+                activeHours: { start: "09:00", end: "not-a-time" },
+              },
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(res.config.agents?.defaults?.heartbeat).toEqual({ every: "30m" });
+    expect(res.config.agents?.list?.[0]?.heartbeat).toEqual({ prompt: "Check alerts" });
+    expect(res.changes).toContain(
+      "Removed invalid agents.defaults.heartbeat.activeHours; heartbeats will use unrestricted hours until it is reconfigured.",
+    );
+    expect(res.changes).toContain(
+      "Removed invalid agents.list[0].heartbeat.activeHours; heartbeats will use unrestricted hours until it is reconfigured.",
+    );
+    expect(validateConfigObject(res.config).ok).toBe(true);
+  });
+
+  it("preserves valid heartbeat active-hours windows", () => {
+    const config = legacyConfig({
+      agents: {
+        defaults: {
+          heartbeat: {
+            activeHours: { start: "09:00", end: "24:00", timezone: "user" },
+          },
+        },
+      },
+    });
+    const res = normalizeCompatibilityConfigValues(config);
+
+    expect(res.config).toEqual(config);
+    expect(res.changes.some((change) => change.includes("activeHours"))).toBe(false);
   });
 
   it("removes bindings for missing configured agents", () => {
@@ -886,6 +970,31 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(result.config.agents?.defaults?.model).toBe("my-cli/model");
     expect(result.config.agents?.list?.[0]?.model).toBe("agent-local/model");
     expect(result.config.agents?.list?.[1]?.model).toBe("anthropic/claude-sonnet-4-6");
+  });
+
+  it("preserves model refs backed by a configured installable provider", () => {
+    const result = repairStaleAgentModelRefs(
+      {
+        plugins: {
+          allow: ["mistral"],
+          entries: { mistral: { enabled: true } },
+        },
+        agents: {
+          defaults: {
+            model: { primary: "mistral/mistral-large-latest" },
+          },
+        },
+      } as OpenClawConfig,
+      {
+        pluginProviderIds: new Set(),
+        persistedProviderIdsByAgentId: new Map(),
+      },
+    );
+
+    expect(result.changes).toEqual([]);
+    expect(result.config.agents?.defaults?.model).toEqual({
+      primary: "mistral/mistral-large-latest",
+    });
   });
 
   it("does not treat one agent-local provider as globally available", () => {

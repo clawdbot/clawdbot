@@ -50,6 +50,7 @@ export class CustodianSessionStore {
   chatAvailable = false;
   eventNudge: eventNudgeState.CustodianEventNudge | null = null;
   eventNudgePending: eventNudgeState.CustodianEventNudge | null = null;
+  channelOnboardingNudgeClosed = false;
   earlierBoundaryAfterId: number | null = null;
   abandonedTurnOutcomeUnknown = false;
 
@@ -217,6 +218,18 @@ export class CustodianSessionStore {
   dismissEventNudge(): void {
     [this.eventNudge, this.eventNudgeClosed] = [null, true];
     this.emit();
+  }
+
+  dismissChannelOnboardingNudge(): void {
+    this.channelOnboardingNudgeClosed = true;
+    this.emit();
+    this.context?.replace("custodian");
+  }
+
+  openChannelsFromOnboarding(): void {
+    this.channelOnboardingNudgeClosed = true;
+    this.emit();
+    this.context?.navigate("channels");
   }
 
   async dismissQuestion(message: CustodianMessage): Promise<void> {

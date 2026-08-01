@@ -29,9 +29,21 @@ const uiProofArtifactDir = path.join(
   "native-session-discovery",
 );
 
-async function expandCodingSection(page: Page) {
+async function expandCodingSection(page: Page, required = false) {
   const toggle = page.locator('[data-session-section="work"] .sidebar-session-group-toggle');
-  await toggle.waitFor({ state: "visible" });
+  if (required) {
+    await toggle.waitFor({ state: "visible" });
+  } else {
+    await page.waitForFunction(() =>
+      Boolean(
+        document.querySelector('[data-session-section="work"]') ??
+        document.querySelector('[data-session-section^="catalog:"]'),
+      ),
+    );
+    if ((await toggle.count()) === 0) {
+      return;
+    }
+  }
   if ((await toggle.getAttribute("aria-expanded")) === "false") {
     await toggle.click();
   }
@@ -166,6 +178,30 @@ suite("Codex native session catalog", () => {
                 },
               ],
             },
+            {
+              id: "claude",
+              label: "Claude Code",
+              capabilities: { continueSession: true, archive: false },
+              hosts: [
+                {
+                  hostId: "gateway:claude",
+                  label: "Local Claude",
+                  kind: "gateway",
+                  connected: true,
+                  sessions: [
+                    {
+                      threadId: "thread-claude",
+                      name: "Review the provider catalog UI",
+                      cwd: "/workspace/openclaw",
+                      status: "idle",
+                      archived: false,
+                      canContinue: true,
+                      canArchive: false,
+                    },
+                  ],
+                },
+              ],
+            },
           ],
         },
       },
@@ -174,12 +210,30 @@ suite("Codex native session catalog", () => {
     try {
       await page.goto(`${server.baseUrl}chat`);
       await page.evaluate(() => document.documentElement.setAttribute("data-theme-mode", "dark"));
-      await expandCodingSection(page);
+      await expandCodingSection(page, true);
       const sessionGroups = page.locator(".sidebar-recent-sessions");
       const workSection = sessionGroups.locator(':scope > [data-session-section="work"]');
       const liveRows = workSection.locator(":scope > .sidebar-recent-sessions__list");
       const catalog = sessionGroups.locator(':scope > [data-session-section="catalog:codex"]');
+      const claudeCatalog = sessionGroups.locator(
+        ':scope > [data-session-section="catalog:claude"]',
+      );
       await catalog.waitFor({ state: "visible" });
+      await claudeCatalog.waitFor({ state: "visible" });
+      await expect
+        .poll(() =>
+          catalog
+            .locator(".sidebar-session-catalog-provider-icon")
+            .getAttribute("data-provider-icon"),
+        )
+        .toBe("codex");
+      await expect
+        .poll(() =>
+          claudeCatalog
+            .locator(".sidebar-session-catalog-provider-icon")
+            .getAttribute("data-provider-icon"),
+        )
+        .toBe("claude");
       const [liveRowsBox, catalogBox] = await Promise.all([
         liveRows.boundingBox(),
         catalog.boundingBox(),

@@ -19,6 +19,8 @@ scenario:
   execution:
     kind: flow
     channel: matrix
+    suiteIsolation: isolated
+    isolationReason: Requires pristine per-user DM session routing across two rooms.
     summary: Send consecutive DMs from one Matrix user in two rooms and require the shared-session notice.
     config:
       primaryConversationId: driver-dm

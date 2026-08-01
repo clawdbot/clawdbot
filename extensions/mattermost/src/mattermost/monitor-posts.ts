@@ -2,6 +2,7 @@
 import {
   formatInboundEnvelope,
   implicitMentionKindWhen,
+  resolveInboundSessionEnvelopeContext,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
   resolveChannelContextVisibilityMode,
@@ -111,6 +112,11 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
     const rawPostText = typeof post.message === "string" ? post.message : "";
     const rawText = normalizeOptionalString(rawPostText) ?? "";
     const { effectiveReplyToId, sessionKey } = thread;
+    const { envelopeOptions, previousTimestamp } = resolveInboundSessionEnvelopeContext({
+      cfg,
+      agentId: route.agentId,
+      sessionKey,
+    });
     const historyKey = resolveMattermostPendingHistoryKey({ kind, sessionKey });
     const fileIds = uniqueStrings(normalizeTrimmedStringList(post.file_ids ?? []));
     const nativeMedia = fileIds.map(() => ({}));
@@ -353,6 +359,8 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
       body: textWithId,
       chatType: kind,
       sender: { name: senderName, id: senderId },
+      previousTimestamp,
+      envelope: envelopeOptions,
     });
     let combinedBody = body;
     if (historyKey) {
@@ -371,6 +379,7 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
             }`,
             chatType: kind,
             senderLabel: entry.sender,
+            envelope: envelopeOptions,
           }),
       });
     }

@@ -3409,6 +3409,32 @@ describe("capability cli", () => {
     expect(webSearchRuntime.runWebSearch).not.toHaveBeenCalled();
   });
 
+  it("reports structured web search failures in the envelope and exits nonzero", async () => {
+    const webSearchRuntime = await import("../web-search/runtime.js");
+    vi.mocked(webSearchRuntime.runWebSearch).mockResolvedValueOnce({
+      provider: "kitchen-sink-search",
+      result: {
+        ok: false,
+        statusCode: 429,
+        error: { code: "rate_limited", message: "Kitchen Sink rate limit." },
+        results: [],
+      },
+    });
+
+    await expect(
+      runCap("capability", "web", "search", "--query", "rate limit", "--json"),
+    ).rejects.toThrow("exit 1");
+
+    expect(firstJsonOutput()).toEqual(
+      expect.objectContaining({
+        ok: false,
+        capability: "web.search",
+        provider: "kitchen-sink-search",
+        error: "Kitchen Sink rate limit.",
+      }),
+    );
+  });
+
   it("uses the infer web search provider override when resolving SecretRefs", async () => {
     const unresolvedConfig = {
       tools: { web: { search: { provider: "exa", enabled: true } } },
@@ -3619,6 +3645,33 @@ describe("capability cli", () => {
       expect.objectContaining({
         config: resolvedConfig,
         providerId: "firecrawl",
+      }),
+    );
+  });
+
+  it("reports structured web fetch failures in the envelope and exits nonzero", async () => {
+    const webFetchRuntime = await import("../web-fetch/runtime.js");
+    vi.mocked(webFetchRuntime.resolveWebFetchDefinition).mockReturnValueOnce({
+      provider: { id: "kitchen-sink-fetch" },
+      definition: {
+        execute: vi.fn(async () => ({
+          ok: false,
+          statusCode: 504,
+          error: { code: "timeout", message: "Kitchen Sink fetch timed out." },
+        })),
+      },
+    } as never);
+
+    await expect(
+      runCap("capability", "web", "fetch", "--url", "kitchen://fixture/timeout", "--json"),
+    ).rejects.toThrow("exit 1");
+
+    expect(firstJsonOutput()).toEqual(
+      expect.objectContaining({
+        ok: false,
+        capability: "web.fetch",
+        provider: "kitchen-sink-fetch",
+        error: "Kitchen Sink fetch timed out.",
       }),
     );
   });

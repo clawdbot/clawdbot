@@ -2,14 +2,14 @@
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import { createMattermostInteractionHandler } from "./interactions.js";
 import { authorizeMattermostCommandInvocation } from "./monitor-auth.js";
-import { resolveMattermostReplyRootId } from "./monitor-context.js";
+import {
+  buildMattermostButtonInteractionMessageSid,
+  resolveMattermostInteractionReplyRootId,
+} from "./monitor-context.js";
 import { buildMattermostEventPlan } from "./monitor-event-plan.js";
 import type { MattermostModelPickerInteractionHandler } from "./monitor-model-picker.js";
 import type { MattermostMonitorContext } from "./monitor-types.js";
-import {
-  deliverMattermostReplyPayload,
-  toMattermostChannelDeliveryResult,
-} from "./reply-delivery.js";
+import { deliverMattermostReplyPayload } from "./reply-delivery.js";
 import type { ReplyPayload } from "./runtime-api.js";
 import { registerPluginHttpRoute } from "./runtime-api.js";
 import { sendMessageMattermost } from "./send.js";
@@ -80,10 +80,15 @@ export function registerMattermostInteractions(params: {
         return eventPlan.thread.sessionKey;
       },
       dispatchButtonClick: async (button) => {
+        const sourcePostId = button.post.id || button.postId;
+        const interactionMessageSid = buildMattermostButtonInteractionMessageSid({
+          postId: button.postId,
+          actionId: button.actionId,
+        });
         const eventPlan = await buildMattermostEventPlan(monitor, {
           channelId: button.channelId,
           senderId: button.userId,
-          postId: button.post.id || button.postId,
+          postId: sourcePostId,
           threadRootId: button.post.root_id,
           dropLabel: "interaction dispatch",
         });
@@ -100,7 +105,7 @@ export function registerMattermostInteractions(params: {
           ConversationLabel: `mattermost:${button.userName}`,
           GroupSubject: kind !== "direct" ? channelDisplay || button.channelId : undefined,
           SenderName: button.userName,
-          MessageSid: `interaction:${button.postId}:${button.actionId}`,
+          MessageSid: interactionMessageSid,
           WasMentioned: true,
           CommandAuthorized: false,
         });
@@ -117,26 +122,27 @@ export function registerMattermostInteractions(params: {
           },
           ctxPayload,
           delivery: {
+            observeMessageSent: true,
             deliver: async (payload: ReplyPayload) => {
-              const result = toMattermostChannelDeliveryResult(
-                await deliverMattermostReplyPayload({
-                  core,
-                  cfg,
-                  payload,
-                  to,
-                  accountId: account.accountId,
-                  agentId: route.agentId,
-                  replyToId: resolveMattermostReplyRootId({
-                    kind,
-                    threadRootId: thread.effectiveReplyToId,
-                    replyToId: payload.replyToId,
-                  }),
-                  textLimit,
-                  tableMode,
-                  sendMessage: sendMessageMattermost,
-                  onDmChannelResolution: deliveryBarrier.trackDmChannelResolution,
+              const result = await deliverMattermostReplyPayload({
+                core,
+                cfg,
+                payload,
+                to,
+                accountId: account.accountId,
+                agentId: route.agentId,
+                replyToId: resolveMattermostInteractionReplyRootId({
+                  kind,
+                  threadRootId: thread.effectiveReplyToId,
+                  replyToId: payload.replyToId,
+                  interactionMessageSid,
+                  sourcePostId,
                 }),
-              );
+                textLimit,
+                tableMode,
+                sendMessage: sendMessageMattermost,
+                onDmChannelResolution: deliveryBarrier.trackDmChannelResolution,
+              });
               if (result.visibleReplySent) {
                 runtime.log?.(`delivered button-click reply to ${to}`);
               }

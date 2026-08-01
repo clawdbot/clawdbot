@@ -140,6 +140,22 @@ function effectiveToolsResponse(serverName = "github") {
   };
 }
 
+function undiscoveredMcpToolsResponse(serverName = "github", scoped = true) {
+  return {
+    agentId: "main",
+    profile: "full",
+    groups: [],
+    notices: [
+      {
+        id: "mcp-not-yet-connected",
+        severity: "info",
+        message: `MCP servers "${serverName}" are configured but not connected for this session yet. MCP tools will appear here after an agent run discovers them.`,
+        ...(scoped ? { servers: [serverName] } : {}),
+      },
+    ],
+  };
+}
+
 async function latestToolOverrides(gateway: MockGatewayControls) {
   const requests = await gateway.getRequests("sessions.patch");
   return (requests.at(-1)?.params as { toolOverrides?: unknown } | undefined)?.toolOverrides;
@@ -447,6 +463,94 @@ describeControlUiE2e("Control UI composer capability menu", () => {
       await expect.poll(() => menu.getAttribute("data-view")).toBe("tools:constructor");
       await expect.poll(() => menu.getByText("3 of 3 tools on").isVisible()).toBe(true);
       await expect.poll(() => menu.locator('wa-dropdown-item[value^="mcp-tool:"]').count()).toBe(3);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("scopes effective-tools discovery notices to their connector", async () => {
+    const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      featureMethods: ["chat.metadata", "chat.startup", "tools.effective"],
+      methodResponses: {
+        "config.get": configResponse({
+          github: { url: "https://mcp.example.test", enabled: true },
+          notion: { command: "notion-mcp", enabled: true },
+        }),
+        "sessions.list": sessionsList(),
+        "tools.effective": undiscoveredMcpToolsResponse(),
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      const composer = await openMenu(page);
+      const menu = composer.locator("wa-dropdown.agent-chat__capability-menu");
+      await menu.getByRole("menuitem", { name: /^Connectors/ }).click();
+      await menu.getByRole("menuitem", { name: "Tool access" }).first().click();
+
+      await expect.poll(() => menu.getAttribute("data-view")).toBe("tools:github");
+      await expect
+        .poll(() =>
+          menu
+            .getByText("MCP tools will appear here after an agent run discovers them.")
+            .isVisible(),
+        )
+        .toBe(true);
+      await expect
+        .poll(() => menu.getByText("No tools available for this connector.").count())
+        .toBe(0);
+      await expect.poll(() => menu.getByText("0 of 0 tools on").count()).toBe(0);
+
+      await menu.getByRole("menuitem", { name: "Back" }).click();
+      await menu.getByRole("menuitem", { name: "Tool access" }).nth(1).click();
+      await expect.poll(() => menu.getAttribute("data-view")).toBe("tools:notion");
+      await expect
+        .poll(() =>
+          menu.getByText("MCP tools will appear here after an agent run discovers them.").count(),
+        )
+        .toBe(0);
+      await expect
+        .poll(() => menu.getByText("No tools available for this connector.").isVisible())
+        .toBe(true);
+      await expect.poll(() => menu.getByText("0 of 0 tools on").count()).toBe(0);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("uses the generic empty state for an unscoped discovery notice", async () => {
+    const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      featureMethods: ["chat.metadata", "chat.startup", "tools.effective"],
+      methodResponses: {
+        "config.get": configResponse({
+          github: { url: "https://mcp.example.test", enabled: true },
+        }),
+        "sessions.list": sessionsList(),
+        "tools.effective": undiscoveredMcpToolsResponse("github", false),
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      const composer = await openMenu(page);
+      const menu = composer.locator("wa-dropdown.agent-chat__capability-menu");
+      await menu.getByRole("menuitem", { name: /^Connectors/ }).click();
+      await menu.getByRole("menuitem", { name: "Tool access" }).click();
+
+      await expect.poll(() => menu.getAttribute("data-view")).toBe("tools:github");
+      await expect
+        .poll(() => menu.getByText("No tools available for this connector.").isVisible())
+        .toBe(true);
+      await expect
+        .poll(() =>
+          menu.getByText("MCP tools will appear here after an agent run discovers them.").count(),
+        )
+        .toBe(0);
+      await expect.poll(() => menu.getByText("0 of 0 tools on").count()).toBe(0);
     } finally {
       await context.close();
     }

@@ -66,7 +66,7 @@ import {
   resolveMSTeamsUserAllowlist,
 } from "./resolve-allowlist.js";
 import { resolveMSTeamsOutboundSessionRoute } from "./session-route.js";
-import { msteamsSetupAdapter, msteamsSetupContract } from "./setup-core.js";
+import { msteamsSetupContract } from "./setup-core.js";
 import { msteamsSetupWizard } from "./setup-surface.js";
 import { resolveMSTeamsCredentials } from "./token.js";
 
@@ -446,6 +446,8 @@ const msteamsChannelOutbound: ChannelOutboundAdapter = {
   chunker: chunkTextForOutbound,
   chunkerMode: "markdown",
   textChunkLimit: 4000,
+  resolveEffectiveTextChunkLimit: ({ fallbackLimit }) =>
+    typeof fallbackLimit === "number" && fallbackLimit > 0 ? Math.min(fallbackLimit, 4000) : 4000,
   pollMaxOptions: 12,
   deliveryCapabilities: {
     durableFinal: {
@@ -532,7 +534,6 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
         warnOnEmptyGroupSenderAllowlist: true,
         collectMutableAllowlistWarnings: collectMSTeamsMutableAllowlistWarnings,
       },
-      setup: msteamsSetupAdapter,
       setupContract: msteamsSetupContract,
       messaging: {
         targetPrefixes: ["msteams", "teams"],

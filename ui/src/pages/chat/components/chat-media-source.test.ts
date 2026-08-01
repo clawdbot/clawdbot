@@ -105,6 +105,36 @@ describe("ChatMediaSourceController", () => {
     expect(media.getAttribute("src")).toBe("/media?mediaTicket=fresh");
   });
 
+  it("applies a queued Blob before a paused player resumes", () => {
+    const media = document.createElement("audio");
+    const state = { currentTime: 18, duration: 80, paused: false };
+    mockMediaState(media, state);
+    const controller = new ChatMediaSourceController();
+    controller.updateSource(media, "/media?mediaTicket=old", "/tmp/audio.mp3");
+    controller.updateSource(media, "blob:waveform", "/tmp/audio.mp3");
+    state.paused = true;
+
+    expect(controller.applyPendingSource(media)).toBe(true);
+    expect(media.getAttribute("src")).toBe("blob:waveform");
+    expect(controller.currentIdentity).toBe("/tmp/audio.mp3");
+  });
+
+  it("resets an applied source across an authentication boundary", () => {
+    const media = document.createElement("audio");
+    const state = { currentTime: 18, duration: 80, paused: true };
+    mockMediaState(media, state);
+    const load = vi.spyOn(media, "load").mockImplementation(() => undefined);
+    const controller = new ChatMediaSourceController();
+    controller.updateSource(media, "blob:protected-audio", "/tmp/audio.mp3");
+
+    controller.reset(media);
+
+    expect(media.hasAttribute("src")).toBe(false);
+    expect(load).toHaveBeenCalledOnce();
+    expect(controller.currentSource).toBe("");
+    expect(controller.currentIdentity).toBe("");
+  });
+
   it("applies a fresh ticket that arrives after the old source has already failed", () => {
     const media = document.createElement("audio");
     const state = { currentTime: 0, duration: 80, paused: true, error: null as MediaError | null };

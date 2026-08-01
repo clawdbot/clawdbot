@@ -7,6 +7,7 @@ import {
 } from "../../app/question-prompt.ts";
 import { loadSettings } from "../../app/settings.ts";
 import { readPresenceEntries } from "../../app/user-profile.ts";
+import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { resolveSessionKey } from "../../lib/sessions/index.ts";
@@ -23,6 +24,7 @@ import { ChatPaneLifecycle } from "./chat-pane-lifecycle.ts";
 import { applySelectedSessionProjection } from "./chat-pane-state.ts";
 import { resolveAssistantAttachmentAuthToken } from "./chat-pane-state.ts";
 import { markQueuedChatSendsWaitingForReconnect } from "./chat-queue.ts";
+import { stopChatRealtimeTalk } from "./chat-realtime.ts";
 import { retryReconnectableQueuedChatSends } from "./chat-send-actions.ts";
 import {
   invalidateChatMetadataCache,
@@ -40,6 +42,14 @@ import { normalizeSidebarLayout } from "./sidebar-layout.ts";
 import { reconcileWaitingApprovalsFromSnapshot } from "./tool-stream.ts";
 
 export abstract class ChatPaneContext extends ChatPaneLifecycle {
+  private gatewayConnectionLifecycle?: ReturnType<typeof createGatewayConnectionLifecycle>;
+
+  override disconnectedCallback() {
+    this.gatewayConnectionLifecycle?.dispose();
+    this.gatewayConnectionLifecycle = undefined;
+    super.disconnectedCallback();
+  }
+
   protected applySessionsState(stateValue: ApplicationContext["sessions"]["state"]) {
     const state = this.state;
     if (!state) {
@@ -159,8 +169,12 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     const previousMediaAuthToken = resolveAssistantAttachmentAuthToken(state);
     const wasConnected = state.connected;
     const previousSidebarSessionKey = canonicalUiSessionKeyForPersistence(state, state.sessionKey);
-    const sourceChanged =
-      state.client !== snapshot.client || wasConnected !== (snapshot.phase === "connected");
+    const connectionLifecycle = (this.gatewayConnectionLifecycle ??=
+      createGatewayConnectionLifecycle({
+        client: state.client,
+        phase: state.connected ? "connected" : "stopped",
+      }));
+    const sourceChanged = connectionLifecycle.transition(snapshot);
     const clientChanged = this.connectedClient !== snapshot.client;
     if (snapshot.phase !== "connected") {
       this.presencePayload = undefined;
@@ -278,16 +292,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       }
       this.connectedClient = null;
       setQuestionPromptClient(this.questionPromptState, null);
-      state.realtimeTalkSession?.stop();
-      state.realtimeTalkSession = null;
-      state.realtimeTalkActive = false;
-      state.realtimeTalkVideoStream = null;
-      state.realtimeTalkCameraDevices = [];
-      state.realtimeTalkVideoCapable = false;
-      state.realtimeTalkVideoPending = false;
-      state.realtimeTalkCameraError = false;
-      state.realtimeTalkStatus = "idle";
-      state.realtimeTalkInputLevel.set(0);
+      stopChatRealtimeTalk(state);
       state.resetToolStream();
       state.requestUpdate?.();
       return;

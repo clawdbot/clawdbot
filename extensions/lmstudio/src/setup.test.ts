@@ -153,14 +153,20 @@ function buildNonInteractiveContext(params?: {
   };
 }
 
-function createQueuedWizardPrompterHarness(textValues: string[]): {
+function createQueuedWizardPrompterHarness(
+  textValues: string[],
+  confirmValues: boolean[] = [],
+): {
   prompter: WizardPrompter;
   note: ReturnType<typeof vi.fn>;
   text: ReturnType<typeof vi.fn>;
+  confirm: ReturnType<typeof vi.fn>;
 } {
   const queue = [...textValues];
+  const confirmQueue = [...confirmValues];
   const note = vi.fn(async (_message: string, _title?: string) => {});
   const text = vi.fn(async () => queue.shift() ?? "");
+  const confirm = vi.fn(async () => confirmQueue.shift() ?? false);
   const prompter: WizardPrompter = {
     intro: async () => {},
     outro: async () => {},
@@ -174,13 +180,13 @@ function createQueuedWizardPrompterHarness(textValues: string[]): {
     },
     multiselect: async () => [],
     text,
-    confirm: async () => false,
+    confirm,
     progress: () => ({
       update: () => {},
       stop: () => {},
     }),
   };
-  return { prompter, note, text };
+  return { prompter, note, text, confirm };
 }
 
 function createMethodBoundWizardPrompterHarness(textValues: string[]): {
@@ -867,6 +873,102 @@ describe("lmstudio setup", () => {
       "LM Studio could not be reached at http://localhost:1234/v1.\nStart LM Studio (or run lms server start) and re-run setup.",
       "LM Studio",
     );
+  });
+
+  it("remote interactive setup retries discovery without asking for context tuning", async () => {
+    fetchLmstudioModelsMock
+      .mockResolvedValueOnce({ reachable: false, models: [] })
+      .mockResolvedValueOnce({
+        reachable: true,
+        status: 200,
+        models: [{ type: "embedding", key: "text-embedding-nomic-embed-text-v1.5" }],
+      })
+      .mockResolvedValueOnce({ reachable: true, status: 503, models: [] })
+      .mockResolvedValueOnce({
+        reachable: true,
+        status: 200,
+        models: [{ type: "llm", key: "qwen3-8b-instruct" }],
+      });
+    const { prompter, note, text, confirm } = createQueuedWizardPrompterHarness(
+      ["http://localhost:1234/api/v1/", "lmstudio-test-key"],
+      [true, true, true],
+    );
+
+    const result = await promptAndConfigureLmstudioInteractive({
+      config: buildConfig(),
+      prompter,
+      isRemote: true,
+    });
+
+    expect(note).toHaveBeenCalledWith(
+      "LM Studio could not be reached at http://localhost:1234/v1.\nStart LM Studio (or run lms server start), then continue to retry.",
+      "LM Studio",
+    );
+    expect(confirm).toHaveBeenCalledWith({
+      message: "Retry this LM Studio connection now?",
+      initialValue: true,
+    });
+    expect(note).toHaveBeenCalledWith(
+      "LM Studio returned HTTP 503 while listing models at http://localhost:1234/v1.\nWait for LM Studio to recover, then continue to retry.",
+      "LM Studio",
+    );
+    expect(confirm).toHaveBeenCalledTimes(3);
+    expect(text).toHaveBeenCalledTimes(2);
+    expect(result.defaultModel).toBe("lmstudio/qwen3-8b-instruct");
+  });
+
+  it("remote interactive setup does not retry immutable HTTP failures", async () => {
+    fetchLmstudioModelsMock.mockResolvedValueOnce({ reachable: true, status: 401, models: [] });
+    const { prompter, note, confirm } = createQueuedWizardPrompterHarness(
+      ["http://localhost:1234/api/v1/", "lmstudio-test-key"],
+      [],
+    );
+
+    await expect(
+      promptAndConfigureLmstudioInteractive({
+        config: buildConfig(),
+        prompter,
+        isRemote: true,
+      }),
+    ).rejects.toThrow("LM Studio discovery failed (401)");
+
+    expect(note).toHaveBeenCalledWith(
+      "LM Studio returned HTTP 401 while listing models at http://localhost:1234/v1.\nCheck the base URL and API key, then re-run setup.",
+      "LM Studio",
+    );
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
+  it("remote interactive setup stops when cancelled during retry discovery", async () => {
+    const controller = new AbortController();
+    let resolveRetry:
+      | ((value: { reachable: true; status: 200; models: never[] }) => void)
+      | undefined;
+    fetchLmstudioModelsMock
+      .mockResolvedValueOnce({ reachable: false, models: [] })
+      .mockImplementationOnce(
+        () =>
+          new Promise<{ reachable: true; status: 200; models: never[] }>((resolve) => {
+            resolveRetry = resolve;
+          }),
+      );
+    const { prompter } = createQueuedWizardPrompterHarness(
+      ["http://localhost:1234/api/v1/", "lmstudio-test-key"],
+      [true],
+    );
+
+    const setup = promptAndConfigureLmstudioInteractive({
+      config: buildConfig(),
+      prompter,
+      isRemote: true,
+      signal: controller.signal,
+    });
+    await vi.waitFor(() => expect(fetchLmstudioModelsMock).toHaveBeenCalledTimes(2));
+    controller.abort();
+    resolveRetry?.({ reachable: true, status: 200, models: [] });
+
+    await expect(setup).rejects.toMatchObject({ name: "AbortError" });
+    expect(removeProviderAuthProfilesWithLockMock).not.toHaveBeenCalled();
   });
 
   it("interactive setup accepts a blank API key for unauthenticated local LM Studio", async () => {

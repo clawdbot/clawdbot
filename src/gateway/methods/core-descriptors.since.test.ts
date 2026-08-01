@@ -46,6 +46,7 @@ const CURRENT_TRAIN_METHODS = [
   "environments.destroy",
   "sessions.dispatch",
   "sessions.reclaim",
+  "sessions.viewers.set",
   "sessions.catalog.list",
   "sessions.catalog.read",
   "sessions.catalog.continue",

@@ -291,9 +291,7 @@ vi.mock("./bash-tools.exec-host-shared.js", () => ({
 }));
 
 vi.mock("./bash-tools.exec-runtime.js", () => ({
-  DEFAULT_NOTIFY_TAIL_CHARS: 1000,
   createApprovalSlug: vi.fn(() => "slug"),
-  normalizeNotifyOutput: vi.fn((value: string) => value),
 }));
 
 vi.mock("./tools/gateway.js", () => ({
@@ -1495,7 +1493,56 @@ describe("executeNodeHostCommand", () => {
     const loneSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u;
     expect(message).not.toMatch(loneSurrogate);
     expect(message).not.toContain("�");
-    expect(message).toContain(`Exec finished (node=node-1 id=approval-1, code 0)\n${tailHead}`);
+    // Under the continuation budget the payload survives whole, so the leading `prefix`
+    // is no longer dropped by the old compact tail.
+    expect(message).toContain(`Exec finished (node=node-1 id=approval-1, code 0)\n${stdout}`);
+    expect(message).toContain(prefix);
+    expect(message).toContain(tailHead);
+  });
+
+  it("keeps multiline async node approval follow-up output intact", async () => {
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      hostSecurity: "full",
+      hostAsk: "always",
+      askFallback: "deny",
+    });
+    const stdout = "first line\r\n\tindented\n\nlast line  \t\n";
+    const stderr = "warning: something\n";
+    callGatewayToolMock.mockImplementation(
+      async (method: string, _options: unknown, params: MockNodeInvokeParams | undefined) => {
+        if (method === "exec.approvals.node.get") {
+          return { file: { version: 1, agents: {} } };
+        }
+        if (method !== "node.invoke") {
+          throw new Error(`unexpected gateway method: ${method}`);
+        }
+        if (params?.command === "system.run.prepare") {
+          return { payload: { plan: preparedPlan } };
+        }
+        if (params?.command === "system.run") {
+          return {
+            payload: { success: true, stdout, stderr, exitCode: 0, timedOut: false },
+          };
+        }
+        throw new Error(`unexpected node invoke command: ${String(params?.command)}`);
+      },
+    );
+
+    const result = await executeNodeHostCommand(createNodeHostRequest({}));
+
+    expect(result.details?.status).toBe("approval-pending");
+    await vi.waitFor(() => {
+      expect(sendExecApprovalFollowupResultMock).toHaveBeenCalled();
+    });
+    const message = sendExecApprovalFollowupResultMock.mock.calls[0]?.[1];
+    if (typeof message !== "string") {
+      throw new Error("expected follow-up message");
+    }
+    expect(message).toContain(`[stdout]\n${stdout}`);
+    expect(message).toContain(`[stderr]\n${stderr}`);
+    // The compact notify formatter would have collapsed every run of whitespace.
+    expect(message).not.toContain("first line indented last line");
   });
 
   it("does not build a human approval prompt for node auto-review allows", async () => {

@@ -18,7 +18,7 @@ import type {
 export type Conversation = {
   accountId: string;
   id: string;
-  kind: "direct" | "channel";
+  kind: "direct" | "channel" | "group";
   title?: string;
 };
 
@@ -371,7 +371,7 @@ export type UiState = {
   runnerDraftDirty: boolean;
   runnerPlanOverride: RunnerResolvedPlan | null;
   composer: {
-    conversationKind: "direct" | "channel";
+    conversationKind: "direct" | "channel" | "group";
     conversationId: string;
     senderId: string;
     senderName: string;

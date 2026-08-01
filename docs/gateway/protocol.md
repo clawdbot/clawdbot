@@ -92,6 +92,12 @@ Gateway sends a pre-connect challenge:
 }
 ```
 
+Device-auth clients use the challenge `ts` as `connect.params.device.signedAt`.
+For WebSocket challenges, `ts` must be a non-negative integer. Clients that
+explicitly support Gateways from before `connect.challenge` existed may use local
+time only when no challenge arrives; a received challenge with an absent or
+malformed `ts` is invalid.
+
 Client replies with `connect`:
 
 ```json
@@ -1165,6 +1171,7 @@ Common migration failures:
 Migration target:
 
 - Always wait for `connect.challenge`.
+- Use `connect.challenge.payload.ts` as `connect.params.device.signedAt`.
 - Sign the v2 payload that includes the server nonce.
 - Send the same nonce in `connect.params.device.nonce`.
 - Preferred signature payload is `v3`

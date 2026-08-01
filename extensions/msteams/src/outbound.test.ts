@@ -21,6 +21,7 @@ vi.mock("./polls.js", () => ({
   }),
 }));
 
+import { msteamsPlugin } from "./channel.js";
 import { msteamsOutbound } from "./outbound.js";
 
 const cfg = {
@@ -124,6 +125,27 @@ describe("msteamsOutbound cfg threading", () => {
       messageSendingHooks: true,
     });
   });
+
+  it.each([
+    { configuredLimit: 6000, expectedLimit: 4000 },
+    { configuredLimit: 1000, expectedLimit: 1000 },
+  ])(
+    "resolves the same capped $configuredLimit-character limit for lightweight and runtime outbound",
+    ({ configuredLimit, expectedLimit }) => {
+      const configuredCfg = {
+        channels: {
+          msteams: {
+            appId: "resolved-app-id",
+            textChunkLimit: configuredLimit,
+          },
+        },
+      } as OpenClawConfig;
+      const params = { cfg: configuredCfg, fallbackLimit: configuredLimit };
+
+      expect(msteamsPlugin.outbound?.resolveEffectiveTextChunkLimit?.(params)).toBe(expectedLimit);
+      expect(msteamsOutbound.resolveEffectiveTextChunkLimit?.(params)).toBe(expectedLimit);
+    },
+  );
 
   it("passes resolved cfg to sendMessageMSTeams for text sends", async () => {
     const cfgResult = {
@@ -352,6 +374,43 @@ describe("msteamsOutbound cfg threading", () => {
       conversationId: "conv-text",
     });
   });
+
+  it.each([
+    { configuredLimit: 6000, textLength: 5000, expectedChunkLengths: [4000, 1000] },
+    { configuredLimit: 1000, textLength: 1500, expectedChunkLengths: [1000, 500] },
+  ])(
+    "uses the capped $configuredLimit-character configured limit for fallback payloads",
+    async ({ configuredLimit, textLength, expectedChunkLengths }) => {
+      const configuredCfg = {
+        channels: {
+          msteams: {
+            appId: "resolved-app-id",
+            textChunkLimit: configuredLimit,
+          },
+        },
+      } as OpenClawConfig;
+      const text = "x".repeat(textLength);
+
+      await requireSendPayload()({
+        cfg: configuredCfg,
+        to: "conversation:abc",
+        text,
+        payload: {
+          text,
+          channelData: { msteams: { traceId: "trace-1" } },
+        },
+      });
+
+      expect(mocks.sendMessageMSTeams).toHaveBeenCalledTimes(expectedChunkLengths.length);
+      for (const [index, chunkLength] of expectedChunkLengths.entries()) {
+        expect(mocks.sendMessageMSTeams).toHaveBeenNthCalledWith(index + 1, {
+          cfg: configuredCfg,
+          to: "conversation:abc",
+          text: "x".repeat(chunkLength),
+        });
+      }
+    },
+  );
 
   it("keeps multi-media payloads on the media fallback path", async () => {
     mocks.sendMessageMSTeams

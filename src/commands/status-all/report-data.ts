@@ -4,6 +4,7 @@
 import { resolveNodeExecEligibility } from "../../agents/exec-defaults.js";
 import { readConfigFileSnapshot, resolveGatewayPort } from "../../config/config.js";
 import { readLastGatewayErrorLine } from "../../daemon/diagnostics.js";
+import { resolveGatewayBindHost, resolveGatewayRequiredListenHosts } from "../../gateway/net.js";
 import { inspectPortUsage } from "../../infra/ports.js";
 import { readRestartSentinel } from "../../infra/restart-sentinel.js";
 import { buildPluginCompatibilityNotices } from "../../plugins/status.js";
@@ -106,7 +107,13 @@ async function resolveStatusAllLocalDiagnosis(params: {
   const sentinel = await readRestartSentinel().catch(() => null);
   const lastErr = await readLastGatewayErrorLine(process.env).catch(() => null);
   const port = resolveGatewayPort(overview.cfg);
-  const portUsage = await inspectPortUsage(port).catch(() => null);
+  const bindHost = await resolveGatewayBindHost(
+    overview.cfg.gateway?.bind ?? "loopback",
+    overview.cfg.gateway?.customBindHost,
+  );
+  const portUsage = await inspectPortUsage(port, {
+    probeHosts: resolveGatewayRequiredListenHosts(bindHost),
+  }).catch(() => null);
   params.progress.tick();
 
   const defaultWorkspace =

@@ -219,10 +219,12 @@ export type CronServiceDeps = {
   sendCronFailureAlert?: (params: {
     job: CronJob;
     text: string;
+    runAtMs?: number;
     channel: CronMessageChannel;
     to?: string;
     mode?: "announce" | "webhook";
     accountId?: string;
+    threadId?: string | number;
   }) => Promise<void>;
   onEvent?: (evt: CronEvent) => void;
 };

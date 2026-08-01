@@ -13,6 +13,40 @@ import {
 import type { CronServiceState } from "./state.js";
 import { isScheduledTerminalOneShotRetry } from "./timer-trigger.js";
 
+/**
+ * Reports whether a cron job's last completed run is older than its previous
+ * effective slot, which is how restart catch-up detects a missed run once
+ * nextRunAtMs has already advanced past it.
+ */
+export function hasMissedCronSlotSinceLastRun(job: CronJob, nowMs: number): boolean {
+  const lastRunAtMs = job.state.lastRunAtMs;
+  // Only replay a "missed slot" when there is concrete run history.
+  if (typeof lastRunAtMs !== "number" || !Number.isFinite(lastRunAtMs)) {
+    return false;
+  }
+  let previousRunAtMs: number | undefined;
+  try {
+    previousRunAtMs = computeJobPreviousRunAtMs(job, nowMs);
+  } catch {
+    return false;
+  }
+  if (
+    typeof previousRunAtMs !== "number" ||
+    !Number.isFinite(previousRunAtMs) ||
+    previousRunAtMs <= lastRunAtMs
+  ) {
+    return false;
+  }
+  // Slots computed from freshly edited scheduling inputs never existed before
+  // those inputs took effect, so they are not missed runs. lastRunAtMs belongs
+  // to the retired schedule and would otherwise stay stale forever (#91944).
+  const activatedAtMs = job.state.scheduleActivatedAtMs;
+  if (typeof activatedAtMs !== "number" || !Number.isFinite(activatedAtMs)) {
+    return true;
+  }
+  return previousRunAtMs > activatedAtMs;
+}
+
 export function isRunnableJob(params: {
   state: CronServiceState;
   job: CronJob;
@@ -86,21 +120,7 @@ export function isRunnableJob(params: {
   if (!params.allowCronMissedRunByLastRun || job.schedule.kind !== "cron") {
     return false;
   }
-  let previousRunAtMs: number | undefined;
-  try {
-    previousRunAtMs = computeJobPreviousRunAtMs(job, nowMs);
-  } catch {
-    return false;
-  }
-  if (typeof previousRunAtMs !== "number" || !Number.isFinite(previousRunAtMs)) {
-    return false;
-  }
-  const lastRunAtMs = job.state.lastRunAtMs;
-  if (typeof lastRunAtMs !== "number" || !Number.isFinite(lastRunAtMs)) {
-    // Only replay a "missed slot" when there is concrete run history.
-    return false;
-  }
-  return previousRunAtMs > lastRunAtMs;
+  return hasMissedCronSlotSinceLastRun(job, nowMs);
 }
 
 function isErrorBackoffPending(_state: CronServiceState, job: CronJob, nowMs: number): boolean {

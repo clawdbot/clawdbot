@@ -1,11 +1,7 @@
 // Doctor-only import for the retired exec approvals JSON store.
-import { createHash } from "node:crypto";
-import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { root, type Root } from "@openclaw/fs-safe";
-import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
-import { formatErrorMessage } from "./errors.js";
 import {
   resolveExecApprovalsPath,
   tryParsePersistedExecApprovals,
@@ -16,13 +12,14 @@ import {
   serializeExecApprovals,
   writeExecApprovalsConfigRow,
 } from "./exec-approvals-sqlite.js";
-import { acquireGatewayLock, GatewayLockError } from "./gateway-lock.js";
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "./kysely-sync.js";
 import type { LegacyExecApprovalsDetection } from "./state-migrations.exec-approvals.types.js";
+import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
+import {
+  markLegacyMigrationSourceRemoved,
+  readLegacyMigrationReceiptFromDatabase,
+  recordLegacyMigrationReceipt,
+  resolveLegacyMigrationSourceKey,
+} from "./state-migrations.receipts.js";
 import {
   legacyMigrationSourceOrClaimMayExist,
   legacyMigrationSourceSnapshotsMatch as snapshotsMatch,
@@ -36,14 +33,7 @@ const DOCTOR_CLAIM_SUFFIX = ".doctor-importing";
 const MAX_LEGACY_EXEC_APPROVALS_BYTES = 4 * 1024 * 1024;
 const MIGRATION_KIND = "legacy-exec-approvals-json";
 const TARGET_TABLE = "exec_approvals_config";
-const MIGRATION_LOCK_TIMEOUT_MS = 250;
-const MIGRATION_LOCK_POLL_INTERVAL_MS = 25;
 const utf8Decoder = new TextDecoder("utf-8", { fatal: true });
-
-type ExecApprovalsMigrationDatabase = Pick<
-  OpenClawStateKyselyDatabase,
-  "exec_approvals_config" | "migration_runs" | "migration_sources"
->;
 
 type LegacySourceSnapshot = Omit<LegacyMigrationSourceSnapshot, "raw"> & { raw: string | null };
 
@@ -93,16 +83,12 @@ async function readLegacySourceSnapshot(
   return { ...snapshot, raw };
 }
 
-function receiptSourceKey(sourcePath: string): string {
-  return `exec-approvals-json:${createHash("sha256").update(path.resolve(sourcePath)).digest("hex")}`;
-}
-
 function decideAndRecordMigration(params: {
   env: NodeJS.ProcessEnv;
   sourcePath: string;
   snapshot: LegacySourceSnapshot;
 }): { decision: MigrationDecision; removeSource: boolean; sourceKey: string } {
-  const sourceKey = receiptSourceKey(params.sourcePath);
+  const sourceKey = resolveLegacyMigrationSourceKey("exec-approvals-json", params.sourcePath);
   const runId = `${sourceKey}:${params.snapshot.sha256.slice(0, 16)}`;
   const now = Date.now();
   const legacyFile =
@@ -110,21 +96,14 @@ function decideAndRecordMigration(params: {
 
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
-      const stateDb = getNodeSqliteKysely<ExecApprovalsMigrationDatabase>(db);
       const canonical = readExecApprovalsConfigRow(db);
       const canonicalFile = canonical ? tryParsePersistedExecApprovals(canonical.raw_json) : null;
       const importedRaw = legacyFile ? serializeExecApprovals(legacyFile) : null;
-      const receipt = executeSqliteQueryTakeFirstSync(
-        db,
-        stateDb
-          .selectFrom("migration_sources")
-          .select(["source_sha256", "report_json"])
-          .where("source_key", "=", sourceKey),
-      );
+      const receipt = readLegacyMigrationReceiptFromDatabase(db, sourceKey);
       let receiptImportedSameSource = false;
-      if (receipt?.source_sha256 === params.snapshot.sha256) {
+      if (receipt?.sourceSha256 === params.snapshot.sha256) {
         try {
-          const report = JSON.parse(receipt.report_json) as { decision?: unknown };
+          const report = JSON.parse(receipt.reportJson) as { decision?: unknown };
           receiptImportedSameSource =
             report.decision === "legacy-imported" ||
             report.decision === "invalid-canonical-repaired" ||
@@ -195,76 +174,23 @@ function decideAndRecordMigration(params: {
           decision === "canonical-preserved" || decision === "receipt-authoritative" ? 1 : 0,
         removesSource: removeSource,
       });
-      executeSqliteQuerySync(
-        db,
-        stateDb
-          .insertInto("migration_runs")
-          .values({
-            id: runId,
-            started_at: now,
-            finished_at: now,
-            status: "completed",
-            report_json: reportJson,
-          })
-          .onConflict((conflict) =>
-            conflict.column("id").doUpdateSet({
-              finished_at: now,
-              status: "completed",
-              report_json: reportJson,
-            }),
-          ),
-      );
-      executeSqliteQuerySync(
-        db,
-        stateDb
-          .insertInto("migration_sources")
-          .values({
-            source_key: sourceKey,
-            migration_kind: MIGRATION_KIND,
-            source_path: params.sourcePath,
-            target_table: TARGET_TABLE,
-            source_sha256: params.snapshot.sha256,
-            source_size_bytes: params.snapshot.size,
-            source_record_count: legacyFile ? 1 : 0,
-            last_run_id: runId,
-            status: "completed",
-            imported_at: now,
-            removed_source: 0,
-            report_json: reportJson,
-          })
-          .onConflict((conflict) =>
-            conflict.column("source_key").doUpdateSet({
-              source_sha256: params.snapshot.sha256,
-              source_size_bytes: params.snapshot.size,
-              source_record_count: legacyFile ? 1 : 0,
-              last_run_id: runId,
-              status: "completed",
-              imported_at: now,
-              removed_source: 0,
-              report_json: reportJson,
-            }),
-          ),
-      );
+      recordLegacyMigrationReceipt(db, {
+        sourceKey,
+        migrationKind: MIGRATION_KIND,
+        sourcePath: params.sourcePath,
+        targetTable: TARGET_TABLE,
+        sourceSha256: params.snapshot.sha256,
+        sourceSizeBytes: params.snapshot.size,
+        sourceRecordCount: legacyFile ? 1 : 0,
+        runId,
+        now,
+        reportJson,
+        upsert: true,
+      });
       return { decision, removeSource, sourceKey };
     },
     { env: params.env },
     { operationLabel: "state-migration.exec-approvals" },
-  );
-}
-
-function markSourceRemoved(sourceKey: string, env: NodeJS.ProcessEnv): void {
-  runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      executeSqliteQuerySync(
-        db,
-        getNodeSqliteKysely<ExecApprovalsMigrationDatabase>(db)
-          .updateTable("migration_sources")
-          .set({ removed_source: 1 })
-          .where("source_key", "=", sourceKey),
-      );
-    },
-    { env },
-    { operationLabel: "state-migration.exec-approvals.receipt" },
   );
 }
 
@@ -441,7 +367,11 @@ async function migrateWithExclusiveStateOwnership(params: {
 
   const warnings: string[] = [];
   try {
-    markSourceRemoved(result.sourceKey, params.env);
+    markLegacyMigrationSourceRemoved(
+      result.sourceKey,
+      params.env,
+      "state-migration.exec-approvals.receipt",
+    );
   } catch (error) {
     warnings.push(
       `Legacy exec approvals were removed, but their receipt could not be finalized: ${String(error)}`,
@@ -468,64 +398,25 @@ export async function migrateLegacyExecApprovals(params: {
   if (!detected?.hasLegacy) {
     return { changes: [], warnings: [] };
   }
-  const env = { ...(params.env ?? process.env), OPENCLAW_STATE_DIR: params.stateDir };
-  let lock: Awaited<ReturnType<typeof acquireGatewayLock>>;
-  try {
-    lock = await acquireGatewayLock({
-      allowInTests: true,
-      env,
-      pollIntervalMs: MIGRATION_LOCK_POLL_INTERVAL_MS,
-      role: "sqlite-maintenance",
-      timeoutMs: MIGRATION_LOCK_TIMEOUT_MS,
-    });
-  } catch (error) {
-    const detail =
-      error instanceof GatewayLockError
-        ? "the Gateway or another SQLite maintenance command owns this state directory"
-        : String(error);
-    return {
-      changes: [],
-      warnings: [
-        `Failed migrating legacy exec approvals: ${detail}. Stop the Gateway, then run \`openclaw doctor --fix\` again.`,
-      ],
-    };
-  }
-  if (!lock) {
-    return {
-      changes: [],
-      warnings: ["Failed migrating legacy exec approvals: exclusive state ownership unavailable."],
-    };
-  }
-
-  let result: MigrationMessages = { changes: [], warnings: [] };
-  let releaseError: unknown;
-  try {
-    try {
+  return await withLegacyMigrationStateLock({
+    stateDir: params.stateDir,
+    env: params.env,
+    label: "legacy exec approvals",
+    releaseLabel: "Exec approvals",
+    errorLabel: "Failed reading legacy exec approvals",
+    retryGuidance: "Stop the Gateway, then run `openclaw doctor --fix` again.",
+    run: async (env) => {
       const stateRoot = await root(params.stateDir, {
         hardlinks: "reject",
         maxBytes: MAX_LEGACY_EXEC_APPROVALS_BYTES,
         symlinks: "reject",
       });
-      result = await migrateWithExclusiveStateOwnership({
+      return await migrateWithExclusiveStateOwnership({
         ...params,
         detected,
         env,
         stateRoot,
       });
-    } catch (error) {
-      result.warnings.push(`Failed reading legacy exec approvals: ${String(error)}`);
-    }
-  } finally {
-    try {
-      await lock.release();
-    } catch (error) {
-      releaseError = error;
-    }
-  }
-  if (releaseError) {
-    result.warnings.push(
-      `Exec approvals migration lock release failed: ${formatErrorMessage(releaseError)}`,
-    );
-  }
-  return result;
+    },
+  });
 }

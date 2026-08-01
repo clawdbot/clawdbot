@@ -289,6 +289,7 @@ export function handleAgentEnd(
     const result = ctx.params.onBeforeTerminalDelivery?.({
       messages: evt?.messages ?? [],
       willRetry: evt?.willRetry === true,
+      ...(evt?.assistantEntryId ? { assistantEntryId: evt.assistantEntryId } : {}),
       ...(lastAssistant ? { lastAssistant } : {}),
       assistantTexts: ctx.state.assistantTexts,
       hasAssistantVisibleText,

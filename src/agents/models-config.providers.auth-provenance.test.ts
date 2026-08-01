@@ -352,4 +352,31 @@ describe("models-config provider auth provenance", () => {
       source: "none",
     });
   });
+
+  it("keeps non-env SecretRef markers discovery-key-free when unresolved", () => {
+    const auth = createProviderApiKeyResolver(
+      {} as NodeJS.ProcessEnv,
+      {
+        version: 1,
+        profiles: {},
+      },
+      {
+        models: {
+          providers: {
+            vllm: {
+              baseUrl: "http://127.0.0.1:8000/v1",
+              apiKey: { source: "file", provider: "mounted-json", id: "/providers/vllm/apiKey" },
+              api: "openai-completions",
+              models: [],
+            },
+          },
+        },
+      },
+    );
+
+    expect(auth("vllm")).toEqual({
+      apiKey: NON_ENV_SECRETREF_MARKER,
+      discoveryApiKey: undefined,
+    });
+  });
 });

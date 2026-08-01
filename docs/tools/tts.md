@@ -421,8 +421,8 @@ is required by OpenClaw's provider configuration but is not validated by the
 loopback server.
 </Tab>
 <Tab title="macOS CLI">
-The Homebrew `speech` executable can write directly to OpenClaw's temporary
-output path:
+The Homebrew `speech` executable can write directly to OpenClaw's
+per-invocation output path:
 
 ```json5
 {
@@ -812,6 +812,13 @@ whether voice-style TTS should ask providers for a native `voice-note` target or
 keep normal `audio-file` synthesis, and whether the channel transcodes
 non-native output before sending.
 
+After synthesis, OpenClaw persists batch TTS output in the media store under
+`tool-speech-synthesis`. The reply uses that stable media path instead of a
+provider temporary file, and normal media maintenance prunes expired output.
+Local CLI providers may still use `{{OutputPath}}` as scratch space before
+OpenClaw imports the completed bytes. See [Media playback](/nodes/media-playback)
+for inline-player formats and limits.
+
 | Target                                | Format                                                                                                                                |
 | ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
 | Feishu / Matrix / Telegram / WhatsApp | Voice-note replies prefer **Opus** (`opus_48000_64` from ElevenLabs, `opus` from OpenAI). 48 kHz / 64 kbps balances clarity and size. |
@@ -1112,6 +1119,7 @@ provider default.
 ## Related
 
 - [Media overview](/tools/media-overview)
+- [Media playback](/nodes/media-playback)
 - [Music generation](/tools/music-generation)
 - [Video generation](/tools/video-generation)
 - [Slash commands](/tools/slash-commands)

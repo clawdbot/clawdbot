@@ -235,6 +235,19 @@ export function prepareAgentRequestPreflight(
     return undefined;
   }
   const inputProvenance = normalizeInputProvenance(request.inputProvenance);
+  const isRestartRecoveryResumeRun =
+    canUseInternalRuntimeHandoff && isMainSessionRestartRecoveryInputProvenance(inputProvenance);
+  if (request.forceCodeModeTools === true && !isRestartRecoveryResumeRun) {
+    params.respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        "forceCodeModeTools is reserved for main-session restart recovery.",
+      ),
+    );
+    return undefined;
+  }
   const sessionEffects =
     isOneShotModelRun || requestedInternalSessionEffects ? "internal" : request.sessionEffects;
   const agentDedupeKeys = resolveAgentDedupeKeys({
@@ -293,8 +306,7 @@ export function prepareAgentRequestPreflight(
       groupSpace: request.groupSpace,
     }),
     inputProvenance,
-    isRestartRecoveryResumeRun:
-      canUseInternalRuntimeHandoff && isMainSessionRestartRecoveryInputProvenance(inputProvenance),
+    isRestartRecoveryResumeRun,
     preserveUserFacingSessionModelState:
       canUseInternalRuntimeHandoff &&
       shouldPreserveUserFacingSessionStateForInputProvenance(inputProvenance),

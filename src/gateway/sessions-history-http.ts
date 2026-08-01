@@ -3,10 +3,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfig } from "../config/io.js";
 import { isSessionTranscriptProjectionUnavailableError } from "../config/sessions/session-accessor.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -20,7 +17,9 @@ import {
   sendJson,
   sendMethodNotAllowed,
   setSseHeaders,
+  SSE_CONTENT_TYPE,
 } from "./http-common.js";
+import { hasExplicitAcceptableMediaRange } from "./http-media-range.js";
 import {
   authorizeScopedGatewayHttpRequestOrReply,
   checkGatewayHttpRequestAuth,
@@ -39,7 +38,7 @@ import {
   readSessionMessagesWithSourceAsync,
 } from "./session-transcript-readers.js";
 import {
-  resolveFreshestSessionEntryFromStoreKeys,
+  resolveCanonicalSessionEntryFromStoreKeys,
   resolveGatewaySessionStoreTargetWithStore,
   resolveSessionTranscriptCandidates,
 } from "./session-utils.js";
@@ -62,8 +61,7 @@ function resolveSessionHistoryPath(req: IncomingMessage): string | null {
 }
 
 function shouldStreamSse(req: IncomingMessage): boolean {
-  const accept = normalizeLowercaseStringOrEmpty(getHeader(req, "accept"));
-  return accept.includes("text/event-stream");
+  return hasExplicitAcceptableMediaRange(getHeader(req, "accept"), SSE_CONTENT_TYPE);
 }
 
 function getRequestUrl(req: IncomingMessage): URL {
@@ -135,7 +133,7 @@ export async function handleSessionHistoryHttpRequest(
   const { cfg } = authResult;
 
   const target = resolveGatewaySessionStoreTargetWithStore({ cfg, key: sessionKey });
-  const entry = resolveFreshestSessionEntryFromStoreKeys(target.store, target.storeKeys);
+  const entry = resolveCanonicalSessionEntryFromStoreKeys(target.store, target.storeKeys);
   if (!entry?.sessionId) {
     sendJson(res, 404, {
       ok: false,

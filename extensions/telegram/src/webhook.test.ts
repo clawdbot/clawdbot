@@ -920,6 +920,28 @@ describe("startTelegramWebhook", () => {
     }
   });
 
+  it("continues webhook shutdown after bot stop fails", async () => {
+    const runtimeError = vi.fn();
+    const setStatus = vi.fn();
+    stopSpy.mockRejectedValueOnce(new Error("bot stop failed"));
+
+    const started = await startTelegramWebhook({
+      token: TELEGRAM_TOKEN,
+      port: 0,
+      secret: TELEGRAM_SECRET,
+      path: TELEGRAM_WEBHOOK_PATH,
+      spoolDir: requireWebhookSpoolDir(),
+      setStatus,
+      runtime: { log: vi.fn(), error: runtimeError, exit: vi.fn() },
+    });
+
+    await expect(started.stop()).resolves.toBeUndefined();
+
+    expect(transportCloseSpies[0]).toHaveBeenCalledOnce();
+    expect(setStatus).toHaveBeenLastCalledWith({ mode: "webhook", connected: false });
+    expectMockMessageContains(runtimeError, "telegram webhook bot stop failed");
+  });
+
   it("marks delivery accepted only after the durable enqueue commits", async () => {
     let releaseEnqueue: (() => void) | undefined;
     let markEnqueueStarted: (() => void) | undefined;

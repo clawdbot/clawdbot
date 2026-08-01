@@ -318,6 +318,19 @@ function toolsForServer(
     );
 }
 
+const MCP_DISCOVERY_NOTICE_IDS = new Set([
+  "mcp-not-yet-connected",
+  "mcp-not-yet-listed",
+  "mcp-stale-catalog",
+]);
+
+function mcpDiscoveryNotice(result: ToolsEffectiveResult | null, serverName: string) {
+  return result?.notices?.find(
+    (notice) =>
+      MCP_DISCOVERY_NOTICE_IDS.has(notice.id) && notice.servers?.includes(serverName) === true,
+  );
+}
+
 function isToolDenied(props: ChatComposerPlusMenuProps, tool: ToolsEffectiveEntry): boolean {
   const serverName = tool.mcpServer;
   const rawToolName = tool.mcpToolName;
@@ -334,6 +347,8 @@ function isToolDenied(props: ChatComposerPlusMenuProps, tool: ToolsEffectiveEntr
 
 function renderToolAccessView(props: ChatComposerPlusMenuProps, serverName: string) {
   const tools = toolsForServer(props.toolsEffectiveResult, serverName);
+  const discoveryNotice =
+    tools.length === 0 ? mcpDiscoveryNotice(props.toolsEffectiveResult, serverName) : null;
   const enabledCount = tools.filter((tool) => !isToolDenied(props, tool)).length;
   const summary = t(
     tools.length === 1
@@ -349,45 +364,51 @@ function renderToolAccessView(props: ChatComposerPlusMenuProps, serverName: stri
       ? html`<div class="agent-chat__capability-menu-state" role="alert">
           ${t("chat.composer.menu.toolAccess.loadFailed")}
         </div>`
-      : tools.length === 0
-        ? html`<div class="agent-chat__capability-menu-state">
-            ${t("chat.composer.menu.toolAccess.noTools")}
+      : discoveryNotice
+        ? html`<div class="agent-chat__capability-menu-state" role="status">
+            ${discoveryNotice.message}
           </div>`
-        : tools.map((tool, index) => {
-            const rawToolName = tool.mcpToolName;
-            const label = tool.label?.trim();
-            const denied = isToolDenied(props, tool);
-            return html`
-              <wa-dropdown-item
-                class="agent-chat__capability-menu-item agent-chat__capability-menu-toggle"
-                value=${`mcp-tool:${index}`}
-                ?disabled=${props.toolAccessMutationBlockedReason !== null}
-                title=${props.toolAccessMutationBlockedReason ?? ""}
-              >
-                <span class="agent-chat__capability-menu-label">
-                  <span>${rawToolName}</span>
-                  ${label && label !== rawToolName
-                    ? html`<span class="agent-chat__capability-menu-note">${label}</span>`
-                    : nothing}
-                </span>
-                <wa-switch
-                  slot="details"
-                  class="agent-chat__capability-menu-switch"
-                  size="s"
-                  tabindex="-1"
-                  .checked=${!denied}
+        : tools.length === 0
+          ? html`<div class="agent-chat__capability-menu-state">
+              ${t("chat.composer.menu.toolAccess.noTools")}
+            </div>`
+          : tools.map((tool, index) => {
+              const rawToolName = tool.mcpToolName;
+              const label = tool.label?.trim();
+              const denied = isToolDenied(props, tool);
+              return html`
+                <wa-dropdown-item
+                  class="agent-chat__capability-menu-item agent-chat__capability-menu-toggle"
+                  value=${`mcp-tool:${index}`}
                   ?disabled=${props.toolAccessMutationBlockedReason !== null}
-                  aria-label=${rawToolName}
-                ></wa-switch>
-              </wa-dropdown-item>
-            `;
-          });
+                  title=${props.toolAccessMutationBlockedReason ?? ""}
+                >
+                  <span class="agent-chat__capability-menu-label">
+                    <span>${rawToolName}</span>
+                    ${label && label !== rawToolName
+                      ? html`<span class="agent-chat__capability-menu-note">${label}</span>`
+                      : nothing}
+                  </span>
+                  <wa-switch
+                    slot="details"
+                    class="agent-chat__capability-menu-switch"
+                    size="s"
+                    tabindex="-1"
+                    .checked=${!denied}
+                    ?disabled=${props.toolAccessMutationBlockedReason !== null}
+                    aria-label=${rawToolName}
+                  ></wa-switch>
+                </wa-dropdown-item>
+              `;
+            });
   return html`
     ${renderBackRow()}
     <div class="agent-chat__capability-menu-state">
       <span class="agent-chat__capability-menu-label">
         <strong translate="no">${serverName}</strong>
-        <span class="agent-chat__capability-menu-note">${summary}</span>
+        ${tools.length > 0
+          ? html`<span class="agent-chat__capability-menu-note">${summary}</span>`
+          : nothing}
       </span>
     </div>
     ${rows}

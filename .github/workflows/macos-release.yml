@@ -59,6 +59,8 @@ jobs:
         run: pnpm build
 
       - name: Build Control UI
+        env:
+          OPENCLAW_CONTROL_UI_RELEASE_BUILD: "1"
         run: pnpm ui:build
 
       - name: Validate release tag and package metadata

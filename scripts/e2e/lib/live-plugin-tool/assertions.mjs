@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { isRecord } from "../../../lib/record-shared.mjs";
 import { extractAgentReplyTexts } from "../agent-turn-output.mjs";
 import { readPluginInstallRecords } from "../plugin-index-sqlite.mjs";
 import { readTextFileTail, tailText } from "../text-file-utils.mjs";
@@ -62,10 +63,6 @@ function agentOutputPath() {
 
 function agentErrorPath() {
   return process.env.OPENCLAW_LIVE_PLUGIN_TOOL_AGENT_ERROR_PATH || "/tmp/openclaw-agent.err";
-}
-
-function isRecord(value) {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function readNonEmptyString(value) {

@@ -622,6 +622,147 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
+  it("group metadata cache reuses hydrated participant identities without querying WhatsApp again", async () => {
+    const participantLid = "277038292303944@lid";
+    const participantPhone = "15551234567@s.whatsapp.net";
+    const sock = getSock();
+    sock.groupFetchAllParticipating.mockResolvedValueOnce({
+      "123@g.us": {
+        id: "123@g.us",
+        subject: "Hydrated Group",
+        owner: undefined,
+        participants: [{ id: participantLid, phoneNumber: participantPhone }],
+      },
+    });
+    sock.signalRepository.lidMapping.getPNForLID.mockResolvedValue(participantPhone);
+
+    const { listener, baileysCache } = await startInboxMonitorWithBaileysCache();
+    try {
+      await vi.waitFor(() => {
+        expect(baileysCache.baileysGroupMetaCache.has("123@g.us")).toBe(true);
+      });
+      sock.groupMetadata.mockRejectedValue(new Error("408 timed out"));
+
+      await listener.sendMessage("123@g.us", "ping @+15551234567");
+
+      expect(sock.groupMetadata).not.toHaveBeenCalled();
+      expect(sock.sendMessage).toHaveBeenCalledWith("123@g.us", {
+        text: "ping @277038292303944",
+        mentions: [participantLid],
+      });
+    } finally {
+      await listener.close();
+    }
+  });
+
+  it("group metadata cache refreshes provider snapshots that omit participant identities", async () => {
+    const sock = getSock();
+    sock.groupFetchAllParticipating.mockResolvedValueOnce({
+      "123@g.us": groupMetadata({ subject: "Incomplete Group", participants: [] }),
+    });
+    sock.groupMetadata.mockResolvedValueOnce(
+      groupMetadata({
+        subject: "Complete Group",
+        participants: ["15551234567@s.whatsapp.net"],
+      }),
+    );
+
+    const { listener, baileysCache } = await startInboxMonitorWithBaileysCache();
+    try {
+      await vi.waitFor(() => {
+        expect(baileysCache.baileysGroupMetaCache.get("123@g.us")?.value.participants).toEqual([]);
+      });
+
+      await listener.sendMessage("123@g.us", "recovered @15551234567");
+
+      expect(sock.groupMetadata).toHaveBeenCalledOnce();
+      expect(sock.sendMessage).toHaveBeenCalledWith("123@g.us", {
+        text: "recovered @15551234567",
+        mentions: ["15551234567@s.whatsapp.net"],
+      });
+      await expectCachedGroupMetadata(baileysCache, {
+        id: "123@g.us",
+        subject: "Complete Group",
+        participants: [{ id: "15551234567@s.whatsapp.net" }],
+      });
+    } finally {
+      await listener.close();
+    }
+  });
+
+  it("group metadata cache never extends hydrated participant identities beyond their provider expiry", async () => {
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+    const sock = getSock();
+    sock.groupFetchAllParticipating.mockResolvedValueOnce({
+      "123@g.us": groupMetadata({
+        subject: "Expiring Group",
+        participants: ["15551234567@s.whatsapp.net"],
+      }),
+    });
+    sock.groupMetadata.mockRejectedValue(new Error("408 timed out"));
+
+    const { listener, baileysCache } = await startInboxMonitorWithBaileysCache();
+    try {
+      await vi.waitFor(() => {
+        expect(baileysCache.baileysGroupMetaCache.get("123@g.us")?.expiresAt).toBe(
+          1_700_000_300_000,
+        );
+      });
+
+      dateNow.mockReturnValue(1_700_000_299_000);
+      await listener.sendMessage("123@g.us", "fresh @15551234567");
+
+      dateNow.mockReturnValue(1_700_000_300_001);
+      await listener.sendMessage("123@g.us", "expired @15551234567");
+
+      expect(sock.sendMessage).toHaveBeenNthCalledWith(1, "123@g.us", {
+        text: "fresh @15551234567",
+        mentions: ["15551234567@s.whatsapp.net"],
+      });
+      expect(sock.sendMessage).toHaveBeenNthCalledWith(2, "123@g.us", {
+        text: "expired @15551234567",
+      });
+      expect(sock.groupMetadata).toHaveBeenCalledTimes(1);
+      expect(baileysCache.baileysGroupMetaCache.has("123@g.us")).toBe(false);
+    } finally {
+      dateNow.mockRestore();
+      await listener.close();
+    }
+  });
+
+  it("group metadata cache drops hydrated local participants when membership changes", async () => {
+    const sock = getSock();
+    sock.groupFetchAllParticipating.mockResolvedValueOnce({
+      "123@g.us": groupMetadata({
+        subject: "Changing Group",
+        participants: ["15551234567@s.whatsapp.net"],
+      }),
+    });
+    const { listener, baileysCache } = await startInboxMonitorWithBaileysCache();
+    try {
+      await vi.waitFor(() => {
+        expect(baileysCache.baileysGroupMetaCache.has("123@g.us")).toBe(true);
+      });
+      await listener.sendMessage("123@g.us", "before @15551234567");
+      sock.groupMetadata.mockRejectedValue(new Error("408 timed out"));
+
+      sock.ev.emit("group-participants.update", { id: "123@g.us" });
+      await listener.sendMessage("123@g.us", "after @15551234567");
+
+      expect(sock.sendMessage).toHaveBeenNthCalledWith(1, "123@g.us", {
+        text: "before @15551234567",
+        mentions: ["15551234567@s.whatsapp.net"],
+      });
+      expect(sock.sendMessage).toHaveBeenNthCalledWith(2, "123@g.us", {
+        text: "after @15551234567",
+      });
+      expect(sock.groupMetadata).toHaveBeenCalledTimes(1);
+      expect(baileysCache.baileysGroupMetaCache.has("123@g.us")).toBe(false);
+    } finally {
+      await listener.close();
+    }
+  });
+
   it("group metadata cache invalidates partial group and participant updates", async () => {
     const groupMetadataCache: NonNullable<InboxMonitorOptions["groupMetadataCache"]> = new Map();
     const { listener, sock, baileysCache } = await startInboxMonitorWithBaileysCache({

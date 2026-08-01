@@ -152,8 +152,8 @@ function normalizeWhatsAppLoadedMedia(
   const normalizedContentType = normalizeMimeType(media.contentType);
   const resolvedContentType =
     !normalizedContentType || normalizedContentType === "application/octet-stream"
-      ? (filenameMimeType ?? media.contentType)
-      : media.contentType;
+      ? (filenameMimeType ?? normalizedContentType)
+      : normalizedContentType;
   const kind = inferWhatsAppMediaKind(media, resolvedContentType);
   // Match the existing URL/filename voice rule used by the transcode decision;
   // otherwise native .ogg/.opus uploads carry an inconsistent payload MIME.

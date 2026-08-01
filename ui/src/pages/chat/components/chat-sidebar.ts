@@ -5,7 +5,10 @@ import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { icons } from "../../../components/icons.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
 import { handleMarkdownCodeBlockCopy } from "../../../components/markdown-code-blocks.ts";
-import { markdownFileLinkFromEvent } from "../../../components/markdown-file-links.ts";
+import {
+  markdownFileLinkFromEvent,
+  markdownFileLinkFromKeyboardEvent,
+} from "../../../components/markdown-file-links.ts";
 import "../../../components/web-awesome.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { t } from "../../../i18n/index.ts";
@@ -1281,6 +1284,13 @@ class ChatDetailPanel extends OpenClawLightDomElement {
     }
   };
 
+  private readonly handlePanelKeyDown = (event: KeyboardEvent) => {
+    const target = markdownFileLinkFromKeyboardEvent(event);
+    if (target) {
+      this.onOpenWorkspaceFile?.(target);
+    }
+  };
+
   override render() {
     const matches = this.fileSearchMatches();
     const currentMatchIndex = matches.length
@@ -1291,7 +1301,11 @@ class ChatDetailPanel extends OpenClawLightDomElement {
     const fillHost =
       this.visibleContent?.kind === "file" || this.visibleContent?.kind === "markdown";
     return html`
-      <div class=${fillHost ? "sidebar-panel-host--fill" : ""} @click=${this.handlePanelClick}>
+      <div
+        class=${fillHost ? "sidebar-panel-host--fill" : ""}
+        @click=${this.handlePanelClick}
+        @keydown=${this.handlePanelKeyDown}
+      >
         ${renderMarkdownSidebar({
           content: this.visibleContent,
           error: this.error,

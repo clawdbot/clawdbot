@@ -775,6 +775,80 @@ describe("chat pane presentation teardown", () => {
 });
 
 describe("chat pane connection lifecycle", () => {
+  it("fully tears down realtime Talk when the gateway disconnects", () => {
+    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const stop = vi.fn(() => {
+      expect(state.realtimeTalkSession).toBeNull();
+    });
+    state.realtimeTalkSession = { stop } as unknown as ChatPageHost["realtimeTalkSession"];
+    state.realtimeTalkActive = true;
+    state.realtimeTalkStatus = "listening";
+    state.realtimeTalkDetail = "live";
+    state.realtimeTalkInputLevel.set(0.7);
+    state.realtimeTalkConversation = [
+      { id: "utterance", role: "user", text: "stale", isStreaming: true },
+    ];
+    state.realtimeTalkVideoStream = {} as MediaStream;
+    state.realtimeTalkCameraDevices = [{ deviceId: "camera", label: "Camera" }];
+    state.realtimeTalkVideoCapable = true;
+    state.realtimeTalkVideoPending = true;
+    state.realtimeTalkCameraError = true;
+
+    pane.applyGatewaySnapshot({
+      ...pane.context.gateway.snapshot,
+      phase: "reconnecting",
+      hello: null,
+    });
+
+    expect(stop).toHaveBeenCalledOnce();
+    expect(state.realtimeTalkActive).toBe(false);
+    expect(state.realtimeTalkStatus).toBe("idle");
+    expect(state.realtimeTalkDetail).toBeNull();
+    expect(state.realtimeTalkInputLevel.value).toBe(0);
+    expect(state.realtimeTalkConversation).toEqual([]);
+    expect(state.realtimeTalkVideoStream).toBeNull();
+    expect(state.realtimeTalkCameraDevices).toEqual([]);
+    expect(state.realtimeTalkVideoCapable).toBe(false);
+    expect(state.realtimeTalkVideoPending).toBe(false);
+    expect(state.realtimeTalkCameraError).toBe(false);
+  });
+
+  it("advances session ownership once per same-client connection transition", () => {
+    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const initialGeneration = pane.connectionGeneration;
+    const snapshot = { ...pane.context.gateway.snapshot, client };
+
+    state.chatLoading = true;
+    pane.applyGatewaySnapshot({ ...snapshot, phase: "reconnecting", hello: null });
+
+    expect(pane.connectionGeneration).toBe(initialGeneration + 1);
+    expect(state.connectionEpoch).toBe(initialGeneration + 1);
+    expect(state.chatLoading).toBe(false);
+
+    state.chatLoading = true;
+    pane.applyGatewaySnapshot({ ...snapshot, phase: "reconnecting", hello: null });
+
+    expect(pane.connectionGeneration).toBe(initialGeneration + 1);
+    expect(state.connectionEpoch).toBe(initialGeneration + 1);
+    expect(state.chatLoading).toBe(true);
+
+    pane.connectedClient = client;
+    pane.applyGatewaySnapshot({ ...snapshot, phase: "connected" });
+
+    expect(pane.connectionGeneration).toBe(initialGeneration + 2);
+    expect(state.connectionEpoch).toBe(initialGeneration + 2);
+    expect(state.chatLoading).toBe(false);
+
+    state.chatLoading = true;
+    pane.applyGatewaySnapshot({ ...snapshot, phase: "connected" });
+
+    expect(pane.connectionGeneration).toBe(initialGeneration + 2);
+    expect(state.connectionEpoch).toBe(initialGeneration + 2);
+    expect(state.chatLoading).toBe(true);
+  });
+
   it("rehydrates secondary session state after a same-client logical reconnect", () => {
     const client = {
       request: vi.fn(() => new Promise<never>(() => {})),

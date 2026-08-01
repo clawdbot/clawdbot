@@ -12,12 +12,23 @@ export type JsonSchema = {
   properties?: Record<string, JsonSchema>;
   required?: string[];
   items?: JsonSchema | JsonSchema[];
+  additionalItems?: JsonSchema | boolean;
   additionalProperties?: JsonSchema | boolean;
   enum?: unknown[];
+  enumIncludesNull?: boolean;
   const?: unknown;
   default?: unknown;
+  minimum?: number;
+  maximum?: number;
+  exclusiveMinimum?: number;
+  exclusiveMaximum?: number;
+  multipleOf?: number;
   minLength?: number;
   maxLength?: number;
+  pattern?: string;
+  minItems?: number;
+  maxItems?: number;
+  uniqueItems?: boolean;
   anyOf?: JsonSchema[];
   oneOf?: JsonSchema[];
   allOf?: JsonSchema[];
@@ -34,29 +45,22 @@ export function schemaType(schema: JsonSchema): string | undefined {
   return schema.type;
 }
 
-export function defaultValue(schema?: JsonSchema): unknown {
-  if (!schema) {
-    return "";
-  }
-  if (schema.default !== undefined) {
-    return schema.default;
-  }
-  const type = schemaType(schema);
-  switch (type) {
-    case "object":
-      return {};
-    case "array":
-      return [];
-    case "boolean":
-      return false;
-    case "number":
-    case "integer":
-      return 0;
-    case "string":
-      return "";
-    default:
-      return "";
-  }
+export function configFieldId(path: Array<string | number>, suffix: string): string {
+  const key =
+    path.length === 0
+      ? "root"
+      : path
+          .map((segment) => {
+            const value = String(segment);
+            let encoded = "";
+            for (let index = 0; index < value.length; index += 1) {
+              encoded += value.charCodeAt(index).toString(16).padStart(4, "0");
+            }
+            const type = typeof segment === "number" ? "n" : "s";
+            return `${type}${value.length}-${encoded}`;
+          })
+          .join("_");
+  return `config-field-${key}-${suffix}`;
 }
 
 export function pathKey(path: Array<string | number>): string {
