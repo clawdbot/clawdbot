@@ -41,7 +41,9 @@ describe("sandbox workspace Doctor migration", () => {
   });
 
   function setup() {
-    const homeDir = tempDirs.make("openclaw-sandbox-workspace-migration-home-");
+    // macOS os.tmpdir() is a /var -> /private/var symlink; prod resolvers return
+    // canonical paths, so expectations must build from the realpathed root.
+    const homeDir = fs.realpathSync(tempDirs.make("openclaw-sandbox-workspace-migration-home-"));
     const stateDir = path.join(homeDir, ".openclaw");
     const workspaceDir = path.join(homeDir, "workspace");
     fs.mkdirSync(workspaceDir, { recursive: true });
