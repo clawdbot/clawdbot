@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Trusted helpers for the release Telegram workflow. Keep policy here so it can
 // be exercised directly rather than inferred from a workflow shell snippet.
-import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { appendFileSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 
 const SHA = /^[a-f0-9]{40}$/u;
 const DIGEST = /^[a-f0-9]{64}$/u;
@@ -28,21 +29,69 @@ function requireExactCandidateSource() {
   return targetSha;
 }
 
+function readCandidateTelegramEvidenceContract() {
+  const expectedDigest = process.env.CANDIDATE_TELEGRAM_EVIDENCE_CONTRACT_SHA256 ?? "";
+  const contractPath = process.env.CANDIDATE_TELEGRAM_EVIDENCE_CONTRACT_PATH;
+  if (!expectedDigest) {
+    if (contractPath) {
+      try {
+        lstatSync(contractPath);
+      } catch (error) {
+        if (error && typeof error === "object" && error.code === "ENOENT") {
+          return undefined;
+        }
+        throw error;
+      }
+      throw new Error(
+        "Candidate evidence contract is present but the archive manifest does not attest it.",
+      );
+    }
+    return undefined;
+  }
+  if (!DIGEST.test(expectedDigest) || !contractPath) {
+    throw new Error("Candidate evidence contract digest or path is malformed.");
+  }
+
+  const contractStat = lstatSync(contractPath);
+  if (!contractStat.isFile() || contractStat.isSymbolicLink()) {
+    throw new Error("Candidate evidence contract must be a regular file.");
+  }
+  const source = readFileSync(contractPath);
+  const actualDigest = createHash("sha256").update(source).digest("hex");
+  if (actualDigest !== expectedDigest) {
+    throw new Error("Candidate evidence contract does not match the attested archive digest.");
+  }
+
+  const contract = JSON.parse(source.toString("utf8"));
+  if (!contract || typeof contract !== "object" || Array.isArray(contract)) {
+    throw new Error("Candidate evidence contract must be an object.");
+  }
+  const expectedKeys = ["candidateVersion", "kind", "mode", "version"];
+  if (
+    JSON.stringify(Object.keys(contract).sort()) !== JSON.stringify(expectedKeys) ||
+    contract.version !== 1 ||
+    contract.kind !== "openclaw-release-telegram-execution-evidence" ||
+    contract.mode !== "legacy-direct-runner-v1" ||
+    contract.candidateVersion !== required("CANDIDATE_VERSION")
+  ) {
+    throw new Error(
+      "Candidate evidence contract is not a supported Telegram evidence declaration.",
+    );
+  }
+  return contract;
+}
+
 function resolveEvidenceMode() {
   requireExactCandidateSource();
-  const candidateVersion = required("CANDIDATE_VERSION");
-  const evidenceMode =
-    candidateVersion === "2026.6.34" ? "legacy-direct-runner-v1" : "process-boundary-v1";
-  process.stdout.write(`${evidenceMode}\n`);
+  const contract = readCandidateTelegramEvidenceContract();
+  process.stdout.write(`${contract?.mode ?? "process-boundary-v1"}\n`);
 }
 
 function writeLegacyDirectRunnerAttestation() {
   const targetSha = requireExactCandidateSource();
   const candidateVersion = required("CANDIDATE_VERSION");
-  if (candidateVersion !== "2026.6.34") {
-    throw new Error(
-      "Legacy direct-runner evidence is only defined for candidate version 2026.6.34.",
-    );
+  if (readCandidateTelegramEvidenceContract()?.mode !== "legacy-direct-runner-v1") {
+    throw new Error("Candidate does not attest the legacy Telegram evidence contract.");
   }
 
   const contextPath = required("CONTEXT_PATH");
