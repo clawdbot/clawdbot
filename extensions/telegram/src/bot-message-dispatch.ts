@@ -338,6 +338,8 @@ export const dispatchTelegramMessage = async (
         sessionKey: dispatchContext.ctxPayload.SessionKey,
         messageProvider: "telegram",
         accountId: dispatchContext.route.accountId,
+        groupId: dispatchContext.isGroup ? String(dispatchContext.chatId) : undefined,
+        requesterSenderId: dispatchContext.ctxPayload.SenderId,
       }).localRoots ?? [],
     replyQuoteByMessageId: quote.replyQuoteByMessageId,
     replyQuoteEntities: quote.replyQuoteEntities,

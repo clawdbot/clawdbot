@@ -17,6 +17,7 @@ import {
   readLatestAssistantTextByIdentity,
   recordOutboundMessageForPromptContext,
   resolveHumanDelayConfig,
+  resolveAgentScopedOutboundMediaAccess,
   setupDraftStreams,
   telegramDepsForTest,
 } from "./bot-message-dispatch.test-harness.js";
@@ -70,6 +71,43 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-basics", () => {
     });
 
     expectDeliverRepliesParams({ cfg });
+  });
+
+  it("forwards Telegram group sender identity into outbound media policy", async () => {
+    deliverInboundReplyWithMessageSendContext.mockResolvedValue({
+      status: "handled_visible",
+      delivery: {
+        messageIds: ["1001"],
+        visibleReplySent: true,
+      },
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "media policy" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        isGroup: true,
+        chatId: -100123,
+        ctxPayload: {
+          SessionKey: "agent:main:telegram:group:ops",
+          ChatType: "group",
+          SenderId: "attacker",
+        } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+      streamMode: "off",
+      telegramDeps: telegramDepsForTest,
+    });
+
+    expect(resolveAgentScopedOutboundMediaAccess).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageProvider: "telegram",
+        sessionKey: "agent:main:telegram:group:ops",
+        groupId: "-100123",
+        requesterSenderId: "attacker",
+      }),
+    );
   });
 
   it("queues final Telegram replies through outbound delivery when available", async () => {

@@ -487,22 +487,35 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
     expect(allowed.localRoots).toContain(extraRoot);
     expect(allowed.readFile).toBeTypeOf("function");
 
-    const denied = resolveAgentScopedOutboundMediaAccess({
-      cfg: {
-        ...cfg,
-        channels: {
-          telegram: {
-            groups: {
-              ops: {
-                toolsBySender: {
-                  "id:attacker": { deny: ["read"] },
-                },
+    const groupCfg = {
+      ...cfg,
+      channels: {
+        telegram: {
+          groups: {
+            "-100123": {
+              toolsBySender: {
+                "id:attacker": { deny: ["read"] },
               },
             },
           },
         },
-      } as OpenClawConfig,
-      sessionKey: "agent:main:telegram:group:ops",
+      },
+    } as OpenClawConfig;
+
+    // Without inbound sender identity, toolsBySender denials cannot apply.
+    const bypassedWithoutSender = resolveAgentScopedOutboundMediaAccess({
+      cfg: groupCfg,
+      messageProvider: "telegram",
+      sessionKey: "agent:main:telegram:group:-100123",
+      groupId: "-100123",
+    });
+    expect(bypassedWithoutSender.localRoots).toContain(extraRoot);
+
+    const denied = resolveAgentScopedOutboundMediaAccess({
+      cfg: groupCfg,
+      messageProvider: "telegram",
+      sessionKey: "agent:main:telegram:group:-100123",
+      groupId: "-100123",
       requesterSenderId: "attacker",
     });
     expect(denied.readFile).toBeUndefined();
