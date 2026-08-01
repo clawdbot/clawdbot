@@ -433,23 +433,62 @@ describe("config validation ambient heartbeat ownership", () => {
 });
 
 describe("config validation gateway.auth.rateLimit policy", () => {
-  it("rejects non-positive-integer maxAttempts/windowMs/lockoutMs", () => {
-    for (const field of ["maxAttempts", "windowMs", "lockoutMs"] as const) {
-      // 0 previously slipped through and silently disabled auth throttling.
+  it("rejects a non-positive-integer maxAttempts", () => {
+    // 0 previously slipped through and silently disabled auth throttling.
+    const zero = validateConfigObjectRaw({ gateway: { auth: { rateLimit: { maxAttempts: 0 } } } });
+    expect(zero.ok).toBe(false);
+    if (!zero.ok) {
+      const issue = requireIssue(zero.issues, "gateway.auth.rateLimit.maxAttempts");
+      expect(issue.message).toContain("expected number to be >0");
+    }
+
+    // NaN/fractional values previously bypassed the maxAttempts comparison entirely.
+    const fractional = validateConfigObjectRaw({
+      gateway: { auth: { rateLimit: { maxAttempts: 1.5 } } },
+    });
+    expect(fractional.ok).toBe(false);
+
+    const valid = validateConfigObjectRaw({
+      gateway: { auth: { rateLimit: { maxAttempts: 5 } } },
+    });
+    expect(valid.ok).toBe(true);
+  });
+
+  it("rejects windowMs/lockoutMs below the 1000ms runtime floor", () => {
+    // The runtime clamps both fields to a 1000ms minimum (see auth-rate-limit.ts);
+    // the schema must reject anything the runtime would otherwise silently
+    // lengthen, so a persisted sub-second value never survives unmigrated.
+    for (const field of ["windowMs", "lockoutMs"] as const) {
       const zero = validateConfigObjectRaw({ gateway: { auth: { rateLimit: { [field]: 0 } } } });
       expect(zero.ok).toBe(false);
       if (!zero.ok) {
         const issue = requireIssue(zero.issues, `gateway.auth.rateLimit.${field}`);
-        expect(issue.message).toContain("expected number to be >0");
+        expect(issue.message).toContain("expected number to be >=1000");
       }
 
-      // NaN/fractional values previously bypassed the maxAttempts comparison entirely.
       const fractional = validateConfigObjectRaw({
         gateway: { auth: { rateLimit: { [field]: 1.5 } } },
       });
       expect(fractional.ok).toBe(false);
 
-      const valid = validateConfigObjectRaw({ gateway: { auth: { rateLimit: { [field]: 5 } } } });
+      // 999 is the exact boundary the runtime floor would otherwise silently rewrite.
+      const belowFloor = validateConfigObjectRaw({
+        gateway: { auth: { rateLimit: { [field]: 999 } } },
+      });
+      expect(belowFloor.ok).toBe(false);
+      if (!belowFloor.ok) {
+        const issue = requireIssue(belowFloor.issues, `gateway.auth.rateLimit.${field}`);
+        expect(issue.message).toContain("expected number to be >=1000");
+      }
+
+      const atFloor = validateConfigObjectRaw({
+        gateway: { auth: { rateLimit: { [field]: 1_000 } } },
+      });
+      expect(atFloor.ok).toBe(true);
+
+      const valid = validateConfigObjectRaw({
+        gateway: { auth: { rateLimit: { [field]: 30_000 } } },
+      });
       expect(valid.ok).toBe(true);
     }
   });
