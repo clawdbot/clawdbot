@@ -6,6 +6,7 @@ import {
   readXaiRealtimeErrorDetail,
   type XaiRealtimeEvent,
 } from "./realtime-voice-config.js";
+import type { XaiRealtimeVoiceConnection } from "./realtime-voice-lifecycle.js";
 import { XaiRealtimeVoiceProtocol } from "./realtime-voice-protocol.js";
 
 export class XaiRealtimeMalformedAudioError extends Error {}
@@ -15,9 +16,10 @@ export abstract class XaiRealtimeVoiceEvents extends XaiRealtimeVoiceProtocol {
   private assistantTranscriptFinalized = false;
   private inputTranscriptReplacements = new Map<string, string>();
 
-  protected abstract onSessionUpdated(): void;
+  protected abstract acceptsEvent(connection: XaiRealtimeVoiceConnection): boolean;
+  protected abstract onSessionUpdated(connection: XaiRealtimeVoiceConnection): void;
 
-  protected handleEvent(event: XaiRealtimeEvent): void {
+  protected handleEvent(event: XaiRealtimeEvent, connection: XaiRealtimeVoiceConnection): void {
     this.config.onEvent?.({
       direction: "server",
       type: event.type,
@@ -27,6 +29,9 @@ export abstract class XaiRealtimeVoiceEvents extends XaiRealtimeVoiceProtocol {
         ? { responseId: event.response_id ?? event.response?.id }
         : {}),
     });
+    if (!this.acceptsEvent(connection)) {
+      return;
+    }
     switch (event.type) {
       case "session.created":
         return;
@@ -58,7 +63,7 @@ export abstract class XaiRealtimeVoiceEvents extends XaiRealtimeVoiceProtocol {
         return;
       }
       case "session.updated":
-        this.onSessionUpdated();
+        this.onSessionUpdated(connection);
         return;
       case "response.created":
         this.responseActive = true;

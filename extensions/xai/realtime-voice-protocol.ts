@@ -15,6 +15,7 @@ import {
   type XaiRealtimeSessionUpdate,
   type XaiRealtimeVoiceBridgeConfig,
 } from "./realtime-voice-config.js";
+import type { XaiRealtimeVoiceConnection } from "./realtime-voice-lifecycle.js";
 
 export abstract class XaiRealtimeVoiceProtocol {
   protected readonly audioFormat: RealtimeVoiceAudioFormat;
@@ -287,5 +288,8 @@ export abstract class XaiRealtimeVoiceProtocol {
   }
 
   protected abstract resetInputTranscripts(): void;
-  protected abstract handleEvent(event: XaiRealtimeEvent): void;
+  protected abstract handleEvent(
+    event: XaiRealtimeEvent,
+    connection: XaiRealtimeVoiceConnection,
+  ): void;
 }

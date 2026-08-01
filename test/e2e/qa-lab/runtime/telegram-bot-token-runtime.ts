@@ -234,6 +234,7 @@ export async function runTelegramBotTokenRuntime(
       env: {
         OPENCLAW_SKIP_CHANNELS: undefined,
         OPENCLAW_SKIP_PROVIDERS: undefined,
+        OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
         TELEGRAM_BOT_TOKEN: "qa-invalid-precedence-decoy",
       },
       startTimeoutMs: options.startupTimeoutMs,
