@@ -38,7 +38,9 @@ scenario:
       conversationId: "-1001234567890"
       senderId: "100001"
       finalMarker: QA-CHANNEL-STREAMING-PREVIEW-FINAL-OK-1234567890
-      prompt: "Final-only marker streaming QA check. Reply exactly: QA-CHANNEL-STREAMING-PREVIEW-FINAL-OK-1234567890"
+      telegramThrottleMs: 1000
+      telegramFinalFlushMaxMs: 2000
+      prompt: "@openclaw Final-only marker streaming QA check. Reply exactly: QA-CHANNEL-STREAMING-PREVIEW-FINAL-OK-1234567890"
 
 flow:
   steps:
@@ -72,7 +74,8 @@ flow:
             finalTextIncludes:
               ref: config.finalMarker
             finalSettleMs: 500
-            minimumPreviewEvents: 1
+            minimumPreviewEvents:
+              expr: "env.providerMode === 'mock-openai' && transport.id === 'telegram' ? 2 : 1"
             timeoutMs:
               expr: liveTurnTimeoutMs(env, 45000)
           saveAs: sequence
@@ -80,4 +83,18 @@ flow:
             expr: sequence.events.length >= 2
             message:
               expr: "`expected a preview followed by the final marker; events=${JSON.stringify(sequence.events)}`"
-      detailsExpr: "`${sequence.events.map((event) => event.kind).join(' -> ')}: ${sequence.final.text}`"
+        - set: eventTimes
+          value:
+            expr: "sequence.events.map((event) => event.kind === 'sent' ? event.message.timestamp : (event.message.editedAt ?? event.message.timestamp))"
+        - set: eventIntervals
+          value:
+            expr: "eventTimes.slice(1).map((timestamp, index) => timestamp - eventTimes[index])"
+        - assert:
+            expr: "env.providerMode !== 'mock-openai' || transport.id !== 'telegram' || eventIntervals.slice(0, -1).every((interval) => interval >= config.telegramThrottleMs)"
+            message:
+              expr: "`background Telegram draft edits bypassed the ${config.telegramThrottleMs}ms throttle: ${JSON.stringify({ eventTimes, eventIntervals, events: sequence.events })}`"
+        - assert:
+            expr: "env.providerMode !== 'mock-openai' || transport.id !== 'telegram' || eventIntervals.at(-1) <= config.telegramFinalFlushMaxMs"
+            message:
+              expr: "`final Telegram flush exceeded ${config.telegramFinalFlushMaxMs}ms: ${JSON.stringify({ eventTimes, eventIntervals, events: sequence.events })}`"
+      detailsExpr: "`${sequence.events.map((event) => event.kind).join(' -> ')}; intervals=${eventIntervals.join(',')}; final=${sequence.final.text}`"

@@ -174,6 +174,7 @@ describe("Telegram QA transport adapter", () => {
         edited_message: {
           message_id: 11,
           date: 101,
+          edit_date: 105,
           chat: { id: -100123 },
           from: { id: 2, is_bot: true, username: "openclaw_qa_bot" },
           text: "final",
@@ -182,7 +183,7 @@ describe("Telegram QA transport adapter", () => {
     ]);
     await vi.waitFor(() => expect(editMessage).toHaveBeenCalledOnce());
     expect(editMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ messageId: "out-1", text: "final", timestamp: 101_000 }),
+      expect.objectContaining({ messageId: "out-1", text: "final", timestamp: 105_000 }),
     );
 
     await vi.waitFor(() => expect(pollResolvers).toHaveLength(3));

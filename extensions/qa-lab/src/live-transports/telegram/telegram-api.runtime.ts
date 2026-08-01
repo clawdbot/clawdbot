@@ -46,6 +46,7 @@ type TelegramMessage = Pick<TelegramBotMessage, "date" | "message_id"> &
     audio?: unknown;
     chat: { id: number };
     document?: unknown;
+    edit_date?: number;
     from?: Pick<NonNullable<TelegramBotMessage["from"]>, "id" | "is_bot" | "username">;
     photo?: unknown[];
     rich_message?: TelegramRichMessage;
@@ -244,7 +245,7 @@ export function normalizeTelegramObservedMessage(
     text: selectTelegramObservedText(message),
     caption: message.caption,
     replyToMessageId: message.reply_to_message?.message_id,
-    timestamp: message.date * 1_000,
+    timestamp: (update.edited_message?.edit_date ?? message.date) * 1_000,
     inlineButtons: flattenInlineButtons(message.reply_markup),
     mediaKinds: detectMediaKinds(message),
   };

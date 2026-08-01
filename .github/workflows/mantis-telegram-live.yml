@@ -19,6 +19,14 @@ on:
         required: false
         default: telegram-status-command
         type: string
+      provider_mode:
+        description: QA provider mode
+        required: false
+        default: live-frontier
+        type: choice
+        options:
+          - live-frontier
+          - mock-openai
       crabbox_provider:
         description: Crabbox provider for the desktop transcript capture
         required: false
@@ -391,6 +399,7 @@ jobs:
           CRABBOX_PROVIDER: ${{ needs.resolve_request.outputs.crabbox_provider }}
           SCENARIO_INPUT: ${{ needs.resolve_request.outputs.scenario }}
           CANDIDATE_SHA: ${{ needs.validate_ref.outputs.candidate_revision }}
+          PROVIDER_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.provider_mode || 'live-frontier' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -416,7 +425,20 @@ jobs:
           output_rel=".artifacts/qa-e2e/mantis/telegram-live"
           root="$candidate_repo/$output_rel"
           echo "output_dir=${root}" >> "$GITHUB_OUTPUT"
-          model="${OPENCLAW_CI_OPENAI_MODEL:-openai/gpt-5.6-luna}"
+          case "$PROVIDER_MODE" in
+            mock-openai)
+              model="mock-openai/gpt-5.6-luna"
+              alt_model="mock-openai/gpt-5.6-luna-alt"
+              ;;
+            live-frontier)
+              model="${OPENCLAW_CI_OPENAI_MODEL:-openai/gpt-5.6-luna}"
+              alt_model="$model"
+              ;;
+            *)
+              echo "Unsupported Telegram provider mode: $PROVIDER_MODE" >&2
+              exit 1
+              ;;
+          esac
 
           scenario_args=()
           if [[ -n "${SCENARIO_INPUT// }" ]]; then
@@ -433,9 +455,9 @@ jobs:
           pnpm --dir "$candidate_repo" openclaw qa telegram \
             --repo-root "$candidate_repo" \
             --output-dir "$output_rel" \
-            --provider-mode live-frontier \
+            --provider-mode "$PROVIDER_MODE" \
             --model "$model" \
-            --alt-model "$model" \
+            --alt-model "$alt_model" \
             --fast \
             --credential-source convex \
             --credential-role ci \

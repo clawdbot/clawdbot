@@ -48,6 +48,7 @@ describe("Telegram QA API boundary", () => {
         edited_message: {
           message_id: 42,
           date: 123,
+          edit_date: 125,
           chat: { id: -100123 },
           from: { id: 2, is_bot: true, username: "sut_bot" },
           rich_message: {
@@ -64,7 +65,7 @@ describe("Telegram QA API boundary", () => {
       senderIsBot: true,
       text: "final \nreply",
       replyToMessageId: 41,
-      timestamp: 123_000,
+      timestamp: 125_000,
     });
   });
 

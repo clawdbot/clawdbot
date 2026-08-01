@@ -21,6 +21,8 @@ type CreatedDraftStreamLoop = DraftStreamLoop & {
   takePending: () => string;
 };
 
+type DraftFlushMode = "background" | "explicit";
+
 /** Creates a single-flight draft stream loop that preserves the newest pending text. */
 export function createDraftStreamLoop(params: {
   throttleMs: number;
@@ -34,7 +36,7 @@ export function createDraftStreamLoop(params: {
   let inFlightPromise: Promise<void | boolean> | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
 
-  const flush = async () => {
+  const flush = async (mode: DraftFlushMode = "explicit") => {
     if (timer) {
       clearTimeout(timer);
       timer = undefined;
@@ -42,11 +44,19 @@ export function createDraftStreamLoop(params: {
     while (!params.isStopped()) {
       if (inFlightPromise) {
         await inFlightPromise;
+        if (mode === "explicit" && timer) {
+          clearTimeout(timer);
+          timer = undefined;
+        }
         continue;
       }
       const text = pendingText;
       if (!text.trim()) {
         pendingText = "";
+        return;
+      }
+      if (mode === "background" && Date.now() - lastSentAt < throttleMs) {
+        schedule();
         return;
       }
       pendingText = "";
@@ -77,11 +87,17 @@ export function createDraftStreamLoop(params: {
       if (!pendingText) {
         return;
       }
+      if (mode === "background") {
+        // Updates that arrived during the transport await re-enter the one
+        // scheduler instead of bypassing the configured write interval.
+        schedule();
+        return;
+      }
     }
   };
 
   const startBackgroundFlush = () => {
-    void flush().catch((err: unknown) => {
+    void flush("background").catch((err: unknown) => {
       try {
         params.onBackgroundFlushError?.(err);
       } catch {
