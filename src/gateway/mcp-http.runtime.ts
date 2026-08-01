@@ -22,6 +22,10 @@ const NATIVE_TOOL_EXCLUDE = new Set(["read", "write", "edit", "apply_patch", "ex
 
 type CachedScopedTools = {
   agentId: string | undefined;
+  // Tool policy resolves the workspace root (grant value, else the agent's
+  // configured workspace). Hook context must carry the same one the tools were
+  // built with, or before-tool-call policy resolves state against a different root.
+  workspaceDir: string | undefined;
   tools: McpLoopbackTool[];
   toolSchema: McpToolSchemaEntry[];
   configRef: OpenClawConfig;
@@ -67,6 +71,7 @@ function resolveMcpLoopbackTools(
   mode: LoopbackToolsAllowMode,
 ): {
   agentId: string | undefined;
+  workspaceDir?: string;
   tools: McpLoopbackTool[];
 } {
   const excludeToolNames = new Set(NATIVE_TOOL_EXCLUDE);
@@ -91,6 +96,7 @@ function resolveMcpLoopbackTools(
   });
   return {
     agentId: scoped.agentId,
+    workspaceDir: scoped.workspaceDir,
     tools:
       mode === "exact"
         ? applyGrantToolsAllow(scoped.tools, params.toolsAllow)
@@ -101,6 +107,7 @@ function resolveMcpLoopbackTools(
 /** Resolves loopback-visible tools from the exact names carried by a minted grant. */
 export function resolveMcpLoopbackScopedTools(params: McpLoopbackScopeParams): {
   agentId: string | undefined;
+  workspaceDir?: string;
   tools: McpLoopbackTool[];
 } {
   return resolveMcpLoopbackTools(params, "exact");
@@ -238,6 +245,7 @@ export class McpLoopbackToolCache {
     const next = resolveMcpLoopbackScopedTools(params);
     const nextEntry: CachedScopedTools = {
       agentId: next.agentId,
+      workspaceDir: next.workspaceDir,
       tools: next.tools,
       toolSchema: buildMcpToolSchema(next.tools),
       configRef: params.cfg,
