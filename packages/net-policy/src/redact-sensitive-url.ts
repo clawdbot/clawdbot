@@ -36,8 +36,7 @@ const SENSITIVE_URL_QUERY_PARAM_NAMES = new Set([
   "private_key",
   "credential",
   "authorization",
-  // Mirror logging/redact.ts BODY_SECRET_KEYS and extensions/copilot provider-bridge.ts
-  // CREDENTIAL_QUERY_PARAM_NAMES so `sig` and `x-*` auth params redact on query surfaces too.
+  // Common signed/API gateway aliases that do not contain an existing secret-name marker.
   "sig",
   "x_api_key",
   "x_access_token",
