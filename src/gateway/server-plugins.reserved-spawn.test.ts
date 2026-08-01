@@ -9,6 +9,7 @@ import {
 } from "../plugins/runtime/gateway-request-scope.js";
 import { resolveReservedSpawnRequesterOwnerPluginId } from "../plugins/session-ownership.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
+import { RESERVED_SUBAGENT_TASK_MAX_BYTES } from "./server-plugins-reserved-spawn.js";
 
 const spawnSubagentDirect = vi.hoisted(() => vi.fn());
 const cleanupProvisionalSession = vi.hoisted(() => vi.fn());
@@ -20,7 +21,8 @@ const loadSessionEntryReadOnly = vi.hoisted(() => vi.fn());
 vi.mock("../agents/subagent-spawn.js", () => ({
   spawnSubagentDirect,
 }));
-vi.mock("../agents/subagent-spawn-cleanup.js", () => ({
+vi.mock("../agents/subagent-spawn-cleanup.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/subagent-spawn-cleanup.js")>()),
   cleanupProvisionalSession,
 }));
 vi.mock("../agents/subagent-registry.js", () => ({
@@ -202,6 +204,25 @@ describe("createGatewaySubagentRuntime.spawnReserved", () => {
     await expect(
       withReservedPluginScope(() => createGatewaySubagentRuntime().spawnReserved(params)),
     ).rejects.toThrow(expected);
+    expect(spawnSubagentDirect).not.toHaveBeenCalled();
+  });
+
+  it("rejects oversized tasks before reserved identity checks or child creation", async () => {
+    const oversizedTask = `${" ".repeat(RESERVED_SUBAGENT_TASK_MAX_BYTES + 1)}trimmed-small`;
+
+    await expect(
+      withReservedPluginScope(() =>
+        createGatewaySubagentRuntime().spawnReserved({
+          ...reservation,
+          task: oversizedTask,
+        }),
+      ),
+    ).rejects.toThrow(`${RESERVED_SUBAGENT_TASK_MAX_BYTES} byte limit`);
+
+    expect(loadSessionEntryReadOnly).not.toHaveBeenCalled();
+    expect(getAgentRunContext).not.toHaveBeenCalled();
+    expect(hasSubagentRunIdentity).not.toHaveBeenCalled();
+    expect(getLatestSubagentRunByChildSessionKey).not.toHaveBeenCalled();
     expect(spawnSubagentDirect).not.toHaveBeenCalled();
   });
 
@@ -417,12 +438,16 @@ describe("createGatewaySubagentRuntime.spawnReserved", () => {
     vi.useFakeTimers();
     const runtime = createGatewaySubagentRuntime();
     const dedupe: GatewayRequestContext["dedupe"] = new Map();
+    const sessionIdentity = {
+      expectedSessionId: "child-session-original",
+      expectedLifecycleRevision: "child-lifecycle-original",
+    };
     spawnSubagentDirect.mockResolvedValueOnce({
       status: "error",
       error: "gateway request timeout for agent",
       childSessionKey: reservation.childSessionKey,
       runId: reservation.runId,
-      reservedCleanup: { sessionDeletion: "indeterminate" },
+      reservedCleanup: { sessionDeletion: "indeterminate", sessionIdentity },
     });
 
     await expect(
@@ -440,6 +465,7 @@ describe("createGatewaySubagentRuntime.spawnReserved", () => {
     expect(cleanupProvisionalSession).toHaveBeenCalledWith(reservation.childSessionKey, {
       emitLifecycleHooks: false,
       deleteTranscript: true,
+      expectedIdentity: sessionIdentity,
     });
     expect(dedupe.has(`agent:${reservation.runId}`)).toBe(false);
 
@@ -482,6 +508,146 @@ describe("createGatewaySubagentRuntime.spawnReserved", () => {
       withReservedPluginScope(() => runtime.spawnReserved(boundedReservation), dedupe),
     ).rejects.toThrow("already claimed");
     expect(spawnSubagentDirect).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps reserved claims when replacement inspection throws", async () => {
+    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+    vi.useFakeTimers();
+    const runtime = createGatewaySubagentRuntime();
+    const dedupe: GatewayRequestContext["dedupe"] = new Map();
+    const guardedReservation = {
+      ...reservation,
+      childSessionKey: "agent:worker:subagent:plugin-reserved-inspection-throws-child",
+      runId: "plugin-reserved-inspection-throws-run",
+    };
+    const sessionIdentity = {
+      expectedSessionId: "plugin-child-inspection-original",
+      expectedLifecycleRevision: "plugin-child-inspection-lifecycle",
+    };
+    const requesterEntry = {
+      cfg: {
+        agents: {
+          defaults: { subagents: { allowAgents: ["worker"] } },
+          entries: { main: {}, worker: {} },
+        },
+      },
+      entry: {
+        pluginOwnerId: "agentic-os",
+        sessionId: "requester-session",
+        lifecycleRevision: "1",
+        createdAt: 1,
+      },
+    };
+    loadSessionEntryReadOnly.mockImplementation((sessionKey: string) => {
+      if (sessionKey === guardedReservation.childSessionKey) {
+        throw new Error("session store unavailable");
+      }
+      return requesterEntry;
+    });
+    spawnSubagentDirect.mockResolvedValueOnce({
+      status: "error",
+      error: "gateway request timeout for agent",
+      childSessionKey: guardedReservation.childSessionKey,
+      runId: guardedReservation.runId,
+      reservedCleanup: { sessionDeletion: "indeterminate", sessionIdentity },
+    });
+
+    await expect(
+      withReservedPluginScope(() => runtime.spawnReserved(guardedReservation), dedupe),
+    ).rejects.toThrow("gateway request timeout for agent");
+    expect(dedupe.has(`agent:${guardedReservation.runId}`)).toBe(true);
+
+    cleanupProvisionalSession.mockResolvedValueOnce(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(cleanupProvisionalSession).toHaveBeenCalledWith(guardedReservation.childSessionKey, {
+      emitLifecycleHooks: false,
+      deleteTranscript: true,
+      expectedIdentity: sessionIdentity,
+    });
+    expect(dedupe.has(`agent:${guardedReservation.runId}`)).toBe(true);
+
+    await expect(
+      withReservedPluginScope(() => runtime.spawnReserved(guardedReservation), dedupe),
+    ).rejects.toThrow("already claimed");
+    expect(spawnSubagentDirect).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases reserved claims when a replacement child identity proves the original is gone", async () => {
+    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+    vi.useFakeTimers();
+    const runtime = createGatewaySubagentRuntime();
+    const dedupe: GatewayRequestContext["dedupe"] = new Map();
+    const replacedReservation = {
+      ...reservation,
+      childSessionKey: "agent:worker:subagent:plugin-reserved-replaced-child",
+      runId: "plugin-reserved-replaced-run",
+    };
+    const sessionIdentity = {
+      expectedSessionId: "plugin-child-original",
+      expectedLifecycleRevision: "plugin-child-original-lifecycle",
+    };
+    const requesterEntry = {
+      cfg: {
+        agents: {
+          defaults: { subagents: { allowAgents: ["worker"] } },
+          entries: { main: {}, worker: {} },
+        },
+      },
+      entry: {
+        pluginOwnerId: "agentic-os",
+        sessionId: "requester-session",
+        lifecycleRevision: "1",
+        createdAt: 1,
+      },
+    };
+    loadSessionEntryReadOnly.mockImplementation((sessionKey: string) =>
+      sessionKey === replacedReservation.childSessionKey
+        ? {
+            cfg: requesterEntry.cfg,
+            entry: {
+              sessionId: "plugin-child-replacement",
+              lifecycleRevision: "plugin-child-replacement-lifecycle",
+              updatedAt: 2,
+            },
+          }
+        : requesterEntry,
+    );
+    spawnSubagentDirect
+      .mockResolvedValueOnce({
+        status: "error",
+        error: "gateway request timeout for agent",
+        childSessionKey: replacedReservation.childSessionKey,
+        runId: replacedReservation.runId,
+        reservedCleanup: { sessionDeletion: "indeterminate", sessionIdentity },
+      })
+      .mockResolvedValueOnce({
+        status: "accepted",
+        childSessionKey: replacedReservation.childSessionKey,
+        runId: replacedReservation.runId,
+        mode: "run",
+      });
+
+    await expect(
+      withReservedPluginScope(() => runtime.spawnReserved(replacedReservation), dedupe),
+    ).rejects.toThrow("gateway request timeout for agent");
+    expect(dedupe.has(`agent:${replacedReservation.runId}`)).toBe(true);
+
+    cleanupProvisionalSession.mockResolvedValueOnce(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(cleanupProvisionalSession).toHaveBeenCalledWith(replacedReservation.childSessionKey, {
+      emitLifecycleHooks: false,
+      deleteTranscript: true,
+      expectedIdentity: sessionIdentity,
+    });
+    expect(dedupe.has(`agent:${replacedReservation.runId}`)).toBe(false);
+
+    await expect(
+      withReservedPluginScope(() => runtime.spawnReserved(replacedReservation), dedupe),
+    ).resolves.toMatchObject({
+      childSessionKey: replacedReservation.childSessionKey,
+      runId: replacedReservation.runId,
+    });
+    expect(spawnSubagentDirect).toHaveBeenCalledTimes(2);
   });
 
   it("rechecks requester ownership inside the admitted reserved spawn", async () => {

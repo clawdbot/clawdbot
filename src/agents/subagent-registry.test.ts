@@ -480,6 +480,115 @@ describe("subagent registry seam flow", () => {
     );
   });
 
+  it("guards failed-spawn quarantine deletion with the original provisional identity", async () => {
+    const childSessionKey = "agent:worker:subagent:failed-spawn-guarded-delete-child";
+    const runId = "failed-spawn-guarded-delete-run";
+    const sessionIdentity = {
+      expectedSessionId: "original-provisional-session",
+      expectedLifecycleRevision: "original-provisional-lifecycle",
+    };
+    mocks.loadSessionStore.mockReturnValue(
+      createSessionStore(
+        {
+          sessionId: sessionIdentity.expectedSessionId,
+          lifecycleRevision: sessionIdentity.expectedLifecycleRevision,
+          updatedAt: Date.now(),
+          status: "running",
+        },
+        childSessionKey,
+      ),
+    );
+    mockGatewayMethods(mocks.callGateway, {
+      "sessions.delete": { ok: true },
+    });
+
+    expect(
+      mod.quarantineFailedSubagentSpawn({
+        runId,
+        childSessionKey,
+        controllerSessionKey: "agent:main:main",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        requesterAgentId: "main",
+        task: "guarded failed spawn",
+        cleanup: "delete",
+        agentId: "worker",
+        reason: "ambiguous dispatch failure",
+        sessionIdentity,
+      }),
+    ).toBe("recorded");
+
+    await mod.testing.sweepOnceForTests();
+
+    expect(mocks.callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "sessions.delete",
+        params: expect.objectContaining({
+          key: childSessionKey,
+          expectedSessionId: sessionIdentity.expectedSessionId,
+          expectedLifecycleRevision: sessionIdentity.expectedLifecycleRevision,
+        }),
+      }),
+    );
+    expect(mod.getSubagentRunByRunId(runId)).toMatchObject({
+      spawnFailureCleanup: { status: "deleted", sessionIdentity },
+      cleanupHandled: true,
+    });
+  });
+
+  it("releases identity-bound failed-spawn quarantine when the original session is absent", async () => {
+    const childSessionKey = "agent:worker:subagent:failed-spawn-missing-child";
+    const runId = "failed-spawn-missing-run";
+    const sessionIdentity = {
+      expectedSessionId: "missing-provisional-session",
+      expectedLifecycleRevision: "missing-provisional-lifecycle",
+    };
+    mocks.loadSessionStore.mockReturnValue({});
+    mockGatewayMethods(mocks.callGateway, {
+      "sessions.delete": new Error("must not delete after absence proof"),
+    });
+
+    expect(
+      mod.quarantineFailedSubagentSpawn({
+        runId,
+        childSessionKey,
+        controllerSessionKey: "agent:main:main",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        requesterAgentId: "main",
+        task: "failed spawn with absent original",
+        cleanup: "delete",
+        agentId: "worker",
+        reason: "ambiguous dispatch failure",
+        sessionIdentity,
+      }),
+    ).toBe("recorded");
+
+    await mod.testing.sweepOnceForTests();
+
+    const entry = expectDefined(mod.getSubagentRunByRunId(runId), "missing quarantine run");
+    expect(entry.spawnFailureCleanup).toMatchObject({
+      status: "missing",
+      sessionDeletion: "indeterminate",
+      sessionIdentity,
+      attempts: 0,
+      lastError: null,
+    });
+    expect(entry.endedAt).toBeTypeOf("number");
+    expect(entry.cleanupCompletedAt).toBe(entry.endedAt);
+    expect(entry.cleanupHandled).toBe(true);
+    expect(mod.countActiveRunsForSession("agent:main:main", { collect: false })).toBe(0);
+    expect(
+      mocks.callGateway.mock.calls.filter(([request]) => request.method === "sessions.delete"),
+    ).toHaveLength(0);
+    expect(mocks.emitSessionLifecycleEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: childSessionKey,
+        reason: "delete",
+      }),
+    );
+  });
+
   it("preserves failed-spawn quarantine when session inspection throws before true absence", async () => {
     const childSessionKey = "agent:worker:subagent:failed-spawn-inspection-throws-child";
     const runId = "failed-spawn-inspection-throws-run";
@@ -530,6 +639,71 @@ describe("subagent registry seam flow", () => {
       },
       cleanupHandled: true,
     });
+  });
+
+  it("does not delete or complete a replacement session that reuses a failed-spawn key", async () => {
+    const childSessionKey = "agent:worker:subagent:failed-spawn-reused-child";
+    const runId = "failed-spawn-reused-run";
+    const sessionIdentity = {
+      expectedSessionId: "original-provisional-session",
+      expectedLifecycleRevision: "original-provisional-lifecycle",
+    };
+    mocks.loadSessionStore.mockReturnValue(
+      createSessionStore(
+        {
+          sessionId: "replacement-session",
+          lifecycleRevision: "replacement-lifecycle",
+          updatedAt: Date.now(),
+          status: "running",
+        },
+        childSessionKey,
+      ),
+    );
+    mockGatewayMethods(mocks.callGateway, {
+      "sessions.delete": new Error("must not delete replacement"),
+    });
+
+    expect(
+      mod.quarantineFailedSubagentSpawn({
+        runId,
+        childSessionKey,
+        controllerSessionKey: "agent:main:main",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        requesterAgentId: "main",
+        task: "failed spawn with reused key",
+        cleanup: "delete",
+        agentId: "worker",
+        reason: "ambiguous dispatch failure",
+        sessionIdentity,
+      }),
+    ).toBe("recorded");
+
+    await mod.testing.sweepOnceForTests();
+
+    const entry = expectDefined(mod.getSubagentRunByRunId(runId), "reused-key quarantine run");
+    expect(entry.spawnFailureCleanup).toMatchObject({
+      status: "replaced",
+      sessionDeletion: "indeterminate",
+      sessionIdentity,
+      lastError: null,
+    });
+    expect(entry.spawnFailureCleanup?.attempts).toBe(0);
+    expect(entry.endedAt).toBeTypeOf("number");
+    expect(entry.cleanupCompletedAt).toBe(entry.endedAt);
+    expect(entry.cleanupHandled).toBe(true);
+    expect(mod.countActiveRunsForSession("agent:main:main", { collect: false })).toBe(0);
+    expect(
+      mocks.callGateway.mock.calls.filter(([request]) => request.method === "sessions.delete"),
+    ).toHaveLength(0);
+    expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
+    expect(mocks.captureSubagentCompletionReply).not.toHaveBeenCalled();
+    expect(mocks.emitSessionLifecycleEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: childSessionKey,
+        reason: "delete",
+      }),
+    );
   });
 
   it("keeps a sweeper archive mutation root-admitted until deletion settles", async () => {

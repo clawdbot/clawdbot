@@ -14,7 +14,11 @@ import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   SUBAGENT_ENDED_REASON_ERROR,
 } from "./subagent-lifecycle-events.js";
-import { reconcileOrphanedRun, safeRemoveAttachmentsDir } from "./subagent-registry-helpers.js";
+import {
+  markSpawnFailureCleanupTerminalState,
+  reconcileOrphanedRun,
+  safeRemoveAttachmentsDir,
+} from "./subagent-registry-helpers.js";
 import type { createSubagentRegistryLifecycleController } from "./subagent-registry-lifecycle.js";
 import { reconcileProvisionalSubagentKill } from "./subagent-registry-sweep-kill.js";
 import type {
@@ -28,6 +32,10 @@ import {
   resolveSubagentRunOrphanReason,
   type SubagentSessionStoreCache,
 } from "./subagent-session-reconciliation.js";
+import {
+  resolveProvisionalSessionCleanupProof,
+  type ProvisionalSessionCleanupIdentity,
+} from "./subagent-spawn-cleanup.js";
 
 const SESSION_RUN_TTL_MS = 5 * 60_000;
 const STALE_ACTIVE_SUBAGENT_GRACE_MS = isFastTestRuntimeEnv() ? 1_000 : 60_000;
@@ -129,10 +137,27 @@ export function createSubagentRegistrySweeper(params: {
     });
   }
 
-  function deleteSession(childSessionKey: string) {
+  function buildSessionDeleteIdentityParams(identity?: ProvisionalSessionCleanupIdentity) {
+    return {
+      ...(identity?.expectedSessionId ? { expectedSessionId: identity.expectedSessionId } : {}),
+      ...(identity?.expectedLifecycleRevision
+        ? { expectedLifecycleRevision: identity.expectedLifecycleRevision }
+        : {}),
+      ...(typeof identity?.expectedSessionUpdatedAt === "number"
+        ? { expectedSessionUpdatedAt: identity.expectedSessionUpdatedAt }
+        : {}),
+    };
+  }
+
+  function deleteSession(childSessionKey: string, identity?: ProvisionalSessionCleanupIdentity) {
     return params.callGateway({
       method: "sessions.delete",
-      params: { key: childSessionKey, deleteTranscript: true, emitLifecycleHooks: false },
+      params: {
+        key: childSessionKey,
+        deleteTranscript: true,
+        emitLifecycleHooks: false,
+        ...buildSessionDeleteIdentityParams(identity),
+      },
       timeoutMs: 10_000,
     });
   }
@@ -153,35 +178,39 @@ export function createSubagentRegistrySweeper(params: {
     entry: SubagentRunRecord,
     now: number,
   ): void {
-    if (entry.spawnFailureCleanup) {
-      entry.spawnFailureCleanup.status = "deleted";
-      entry.spawnFailureCleanup.lastAttemptAt = now;
-      entry.spawnFailureCleanup.nextAttemptAt = undefined;
-      entry.spawnFailureCleanup.lastError = null;
-    }
-    entry.endedAt = now;
-    entry.outcome = {
-      status: "error",
+    markSpawnFailureCleanupTerminalState(entry, {
+      now,
+      status: "deleted",
       error: "subagent spawn failed before startup and cleanup deleted the provisional session",
-    };
-    entry.endedReason = SUBAGENT_ENDED_REASON_ERROR;
-    entry.cleanupHandled = true;
-    entry.cleanupCompletedAt = now;
-    entry.deleteCleanupDispatchedAt ??= now;
-    entry.execution = {
-      ...(entry.execution ?? { status: "interrupted" as const }),
-      status: "terminal",
-      endedAt: now,
-      outcome: entry.outcome,
-    };
+    });
     resumedRuns.delete(runId);
     params.clearPendingLifecycleError(runId);
     params.clearPendingLifecycleTimeout(runId);
+    entry.deleteCleanupDispatchedAt ??= now;
     emitSessionLifecycleEvent({
       sessionKey: entry.childSessionKey,
       reason: "delete",
       parentSessionKey: entry.controllerSessionKey ?? entry.requesterSessionKey,
     });
+  }
+
+  function markSpawnFailureCleanupGone(
+    runId: string,
+    entry: SubagentRunRecord,
+    now: number,
+    status: "missing" | "replaced",
+  ): void {
+    markSpawnFailureCleanupTerminalState(entry, {
+      now,
+      status,
+      error:
+        status === "missing"
+          ? "subagent spawn failed before startup and the provisional session was already absent"
+          : "subagent spawn failed before startup and a replacement session proved the provisional session is gone",
+    });
+    resumedRuns.delete(runId);
+    params.clearPendingLifecycleError(runId);
+    params.clearPendingLifecycleTimeout(runId);
   }
 
   async function reconcileSpawnFailureCleanup(
@@ -209,6 +238,29 @@ export function createSubagentRegistrySweeper(params: {
         error,
       });
       return true;
+    }
+    const cleanupWarnMeta = { runId, childSessionKey: entry.childSessionKey };
+    if (cleanup.sessionIdentity) {
+      const cleanupProof = resolveProvisionalSessionCleanupProof(
+        sessionEntry,
+        cleanup.sessionIdentity,
+      );
+      if (cleanupProof === "missing") {
+        markSpawnFailureCleanupGone(runId, entry, now, "missing");
+        params.warn(
+          "failed-spawn cleanup found missing child session; released stale quarantine",
+          cleanupWarnMeta,
+        );
+        return true;
+      }
+      if (cleanupProof === "replacement") {
+        markSpawnFailureCleanupGone(runId, entry, now, "replaced");
+        params.warn(
+          "failed-spawn cleanup found reused child session key; released stale quarantine",
+          cleanupWarnMeta,
+        );
+        return true;
+      }
     }
     const completion = resolveCompletionFromSessionEntry(sessionEntry, now, {
       notBeforeMs: entry.createdAt,
@@ -246,7 +298,7 @@ export function createSubagentRegistrySweeper(params: {
     cleanup.attempts += 1;
     cleanup.lastAttemptAt = now;
     try {
-      await deleteSession(entry.childSessionKey);
+      await deleteSession(entry.childSessionKey, cleanup.sessionIdentity);
       markSpawnFailureCleanupDeleted(runId, entry, now);
       return true;
     } catch (error) {

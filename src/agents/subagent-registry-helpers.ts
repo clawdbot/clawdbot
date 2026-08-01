@@ -91,6 +91,29 @@ export function logAnnounceGiveUp(entry: SubagentRunRecord, reason: "retry-limit
   );
 }
 
+export function markSpawnFailureCleanupTerminalState(
+  entry: SubagentRunRecord,
+  params: { now: number; status: "deleted" | "missing" | "replaced"; error: string },
+) {
+  if (entry.spawnFailureCleanup) {
+    entry.spawnFailureCleanup.status = params.status;
+    entry.spawnFailureCleanup.lastAttemptAt = params.now;
+    entry.spawnFailureCleanup.nextAttemptAt = undefined;
+    entry.spawnFailureCleanup.lastError = null;
+  }
+  entry.endedAt = params.now;
+  entry.outcome = { status: "error", error: params.error };
+  entry.endedReason = SUBAGENT_ENDED_REASON_ERROR;
+  entry.cleanupHandled = true;
+  entry.cleanupCompletedAt = params.now;
+  entry.execution = {
+    ...(entry.execution ?? { status: "interrupted" as const }),
+    status: "terminal",
+    endedAt: params.now,
+    outcome: entry.outcome,
+  };
+}
+
 /** Persists child session timing/status derived from the subagent registry row. */
 export async function persistSubagentSessionTiming(
   entry: SubagentRunRecord,

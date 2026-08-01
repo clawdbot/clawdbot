@@ -52,6 +52,7 @@ import {
   resolveSubagentSessionCompletion,
   resolveSubagentSessionStartedAt,
 } from "./subagent-session-reconciliation.js";
+import type { ProvisionalSessionCleanupIdentity } from "./subagent-spawn-cleanup.js";
 
 export type { SubagentRunRecord } from "./subagent-registry.types.js";
 const log = createSubsystemLogger("agents/subagent-registry");
@@ -523,6 +524,7 @@ export function quarantineFailedSubagentSpawn(params: {
   runTimeoutSeconds?: number;
   spawnMode?: SubagentRunRecord["spawnMode"];
   reason: string;
+  sessionIdentity?: ProvisionalSessionCleanupIdentity;
 }): "recorded" | "existing" {
   const runId = params.runId.trim();
   const childSessionKey = params.childSessionKey.trim();
@@ -579,6 +581,7 @@ export function quarantineFailedSubagentSpawn(params: {
       maxAttempts,
       nextAttemptAt: now,
       sessionDeletion: "indeterminate",
+      ...(params.sessionIdentity ? { sessionIdentity: params.sessionIdentity } : {}),
     },
   };
   subagentRuns.set(runId, entry);

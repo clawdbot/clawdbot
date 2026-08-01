@@ -49,15 +49,30 @@ export function isStaleUnendedSubagentRun(
   return now - startedAt > resolveStaleCutoffMs(entry);
 }
 
+function hasUnresolvedSpawnFailureCleanup(
+  entry: Pick<SubagentRunRecord, "spawnFailureCleanup">,
+): boolean {
+  const status = entry.spawnFailureCleanup?.status;
+  return status === "pending" || status === "exhausted";
+}
+
 /** Return whether a subagent run is still live and unended. */
 export function isLiveUnendedSubagentRun(
   entry: Pick<
     SubagentRunRecord,
-    "createdAt" | "startedAt" | "sessionStartedAt" | "endedAt" | "runTimeoutSeconds"
+    | "createdAt"
+    | "startedAt"
+    | "sessionStartedAt"
+    | "endedAt"
+    | "runTimeoutSeconds"
+    | "spawnFailureCleanup"
   >,
   now = Date.now(),
 ): boolean {
-  return !hasSubagentRunEnded(entry) && !isStaleUnendedSubagentRun(entry, now);
+  return (
+    !hasSubagentRunEnded(entry) &&
+    (hasUnresolvedSpawnFailureCleanup(entry) || !isStaleUnendedSubagentRun(entry, now))
+  );
 }
 
 function isRecentlyEndedSubagentRun(
@@ -75,7 +90,12 @@ function isRecentlyEndedSubagentRun(
 export function shouldKeepSubagentRunChildLink(
   entry: Pick<
     SubagentRunRecord,
-    "createdAt" | "startedAt" | "sessionStartedAt" | "endedAt" | "runTimeoutSeconds"
+    | "createdAt"
+    | "startedAt"
+    | "sessionStartedAt"
+    | "endedAt"
+    | "runTimeoutSeconds"
+    | "spawnFailureCleanup"
   >,
   options?: {
     activeDescendants?: number;

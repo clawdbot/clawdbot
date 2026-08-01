@@ -1,4 +1,5 @@
 import { promises as fs } from "node:fs";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { isFastTestRuntimeEnv } from "../infra/env.js";
 import { callSubagentGateway } from "./subagent-spawn-gateway.js";
 
@@ -8,6 +9,14 @@ const RESERVED_SESSION_DELETE_MAX_ELAPSED_MS = 30_000;
 
 export type ProvisionalSessionDeletionOutcome = "deleted" | "not_deleted" | "indeterminate";
 
+export type ProvisionalSessionCleanupIdentity = {
+  expectedSessionId?: string;
+  expectedLifecycleRevision?: string;
+  expectedSessionUpdatedAt?: number;
+};
+
+export type ProvisionalSessionCleanupProof = "missing" | "original" | "replacement";
+
 type WaitForSessionDeletionOptions =
   | boolean
   | {
@@ -16,14 +25,96 @@ type WaitForSessionDeletionOptions =
       retryDelayMs?: number;
     };
 
+function normalizeProvisionalSessionCleanupIdentity(
+  identity?: ProvisionalSessionCleanupIdentity,
+): ProvisionalSessionCleanupIdentity | undefined {
+  const expectedSessionId = identity?.expectedSessionId?.trim();
+  const expectedLifecycleRevision = identity?.expectedLifecycleRevision?.trim();
+  const expectedSessionUpdatedAt = identity?.expectedSessionUpdatedAt;
+  const normalized: ProvisionalSessionCleanupIdentity = {
+    ...(expectedSessionId ? { expectedSessionId } : {}),
+    ...(expectedLifecycleRevision ? { expectedLifecycleRevision } : {}),
+    ...(typeof expectedSessionUpdatedAt === "number" && Number.isFinite(expectedSessionUpdatedAt)
+      ? { expectedSessionUpdatedAt }
+      : {}),
+  };
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+export function captureProvisionalSessionCleanupIdentity(
+  entry?: Pick<SessionEntry, "sessionId" | "lifecycleRevision">,
+): ProvisionalSessionCleanupIdentity | undefined {
+  return normalizeProvisionalSessionCleanupIdentity({
+    expectedSessionId: entry?.sessionId,
+    expectedLifecycleRevision: entry?.lifecycleRevision,
+  });
+}
+
+export function provisionalSessionCleanupIdentityMatches(
+  entry: Pick<SessionEntry, "sessionId" | "lifecycleRevision" | "updatedAt"> | undefined,
+  identity?: ProvisionalSessionCleanupIdentity,
+): boolean {
+  const expected = normalizeProvisionalSessionCleanupIdentity(identity);
+  if (!expected) {
+    return true;
+  }
+  if (!entry) {
+    return false;
+  }
+  return (
+    (expected.expectedSessionId === undefined || entry.sessionId === expected.expectedSessionId) &&
+    (expected.expectedLifecycleRevision === undefined ||
+      entry.lifecycleRevision === expected.expectedLifecycleRevision) &&
+    (expected.expectedSessionUpdatedAt === undefined ||
+      entry.updatedAt === expected.expectedSessionUpdatedAt)
+  );
+}
+
+export function resolveProvisionalSessionCleanupProof(
+  entry: Pick<SessionEntry, "sessionId" | "lifecycleRevision" | "updatedAt"> | undefined,
+  identity?: ProvisionalSessionCleanupIdentity,
+): ProvisionalSessionCleanupProof {
+  if (!entry) {
+    return "missing";
+  }
+  return provisionalSessionCleanupIdentityMatches(entry, identity) ? "original" : "replacement";
+}
+
+export function cleanupIdentityOption(identity?: ProvisionalSessionCleanupIdentity): {
+  expectedIdentity?: ProvisionalSessionCleanupIdentity;
+} {
+  return identity ? { expectedIdentity: identity } : {};
+}
+
+export function reservedCleanupState(
+  sessionDeletion: ProvisionalSessionDeletionOutcome,
+  identity?: ProvisionalSessionCleanupIdentity,
+): {
+  sessionDeletion: ProvisionalSessionDeletionOutcome;
+  sessionIdentity?: ProvisionalSessionCleanupIdentity;
+} {
+  return {
+    sessionDeletion,
+    ...(identity ? { sessionIdentity: identity } : {}),
+  };
+}
+
+export function failedSpawnCleanupIdentity(identity?: ProvisionalSessionCleanupIdentity): {
+  sessionIdentity?: ProvisionalSessionCleanupIdentity;
+} {
+  return identity ? { sessionIdentity: identity } : {};
+}
+
 export async function cleanupProvisionalSession(
   childSessionKey: string,
   options?: {
     emitLifecycleHooks?: boolean;
     deleteTranscript?: boolean;
     timeoutMs?: number;
+    expectedIdentity?: ProvisionalSessionCleanupIdentity;
   },
 ): Promise<boolean> {
+  const expectedIdentity = normalizeProvisionalSessionCleanupIdentity(options?.expectedIdentity);
   try {
     await callSubagentGateway({
       method: "sessions.delete",
@@ -31,6 +122,7 @@ export async function cleanupProvisionalSession(
         key: childSessionKey,
         emitLifecycleHooks: options?.emitLifecycleHooks === true,
         deleteTranscript: options?.deleteTranscript === true,
+        ...expectedIdentity,
       },
       timeoutMs: options?.timeoutMs ?? SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS,
     });
@@ -70,6 +162,7 @@ async function deleteProvisionalSessionWithBound(params: {
   cleanupOptions?: {
     emitLifecycleHooks?: boolean;
     deleteTranscript?: boolean;
+    expectedIdentity?: ProvisionalSessionCleanupIdentity;
   };
   waitOptions: ReturnType<typeof normalizeSessionDeletionWaitOptions>;
 }): Promise<ProvisionalSessionDeletionOutcome> {
@@ -111,6 +204,7 @@ export async function cleanupFailedSpawnBeforeAgentStart(params: {
   attachmentAbsDir?: string;
   emitLifecycleHooks?: boolean;
   deleteTranscript?: boolean;
+  expectedIdentity?: ProvisionalSessionCleanupIdentity;
   waitForSessionDeletion?: WaitForSessionDeletionOptions;
 }): Promise<{
   attachmentsRemoved: boolean;
@@ -128,6 +222,7 @@ export async function cleanupFailedSpawnBeforeAgentStart(params: {
   const sessionCleanupOptions = {
     emitLifecycleHooks: params.emitLifecycleHooks,
     deleteTranscript: params.deleteTranscript,
+    expectedIdentity: params.expectedIdentity,
   };
   const waitOptions = normalizeSessionDeletionWaitOptions(params.waitForSessionDeletion);
   if (waitOptions.enabled) {

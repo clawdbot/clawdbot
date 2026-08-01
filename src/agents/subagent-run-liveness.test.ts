@@ -29,6 +29,22 @@ describe("subagent run liveness", () => {
     expect(isLiveUnendedSubagentRun(entry, now)).toBe(false);
   });
 
+  it("keeps unresolved failed-spawn cleanup live past the generic stale cutoff", () => {
+    const entry = {
+      createdAt: now - STALE_UNENDED_SUBAGENT_RUN_MS - 1,
+      spawnFailureCleanup: {
+        status: "exhausted" as const,
+        reason: "ambiguous dispatch failure",
+        recordedAt: now - STALE_UNENDED_SUBAGENT_RUN_MS - 1,
+        attempts: 3,
+        maxAttempts: 3,
+        sessionDeletion: "indeterminate" as const,
+      },
+    };
+    expect(isStaleUnendedSubagentRun(entry, now)).toBe(true);
+    expect(isLiveUnendedSubagentRun(entry, now)).toBe(true);
+  });
+
   it("does not mark ended runs stale", () => {
     const entry = {
       createdAt: now - STALE_UNENDED_SUBAGENT_RUN_MS - 1,

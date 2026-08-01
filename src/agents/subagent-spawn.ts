@@ -23,7 +23,11 @@ import { startQueuedSubagentRun } from "./subagent-registry.js";
 import { resolveSubagentSpawnAcceptedNote } from "./subagent-spawn-accepted-note.js";
 import { resolveSubagentChildPlan } from "./subagent-spawn-child-plan.js";
 import {
+  captureProvisionalSessionCleanupIdentity as captureCleanupIdentity,
   cleanupFailedSpawnBeforeAgentStart,
+  cleanupIdentityOption,
+  failedSpawnCleanupIdentity,
+  reservedCleanupState,
   type ProvisionalSessionDeletionOutcome,
   terminateAcceptedCollectorRun,
 } from "./subagent-spawn-cleanup.js";
@@ -185,34 +189,6 @@ export async function spawnSubagentDirect(
         reservedFailureCleanupOutcome = outcome;
       }
     };
-    const cleanupProvisionedSessionForFailedSpawn = async (options?: {
-      attachmentAbsDir?: string;
-      emitLifecycleHooks?: boolean;
-      deleteTranscript?: boolean;
-    }) => {
-      const cleanupResult = await cleanupFailedSpawnBeforeAgentStart({
-        childSessionKey,
-        ...(options?.attachmentAbsDir ? { attachmentAbsDir: options.attachmentAbsDir } : {}),
-        emitLifecycleHooks: options?.emitLifecycleHooks,
-        deleteTranscript: options?.deleteTranscript,
-        waitForSessionDeletion: Boolean(admissionSlot),
-      });
-      recordReservedCleanupOutcome(cleanupResult.sessionDeletion);
-      return cleanupResult;
-    };
-    const withReservedCleanupResult = (result: SpawnSubagentResult): SpawnSubagentResult => {
-      if (
-        !ctx.preallocatedRunId ||
-        !reservedFailureCleanupOutcome ||
-        result.status === "accepted"
-      ) {
-        return result;
-      }
-      return {
-        ...result,
-        reservedCleanup: { sessionDeletion: reservedFailureCleanupOutcome },
-      };
-    };
     const initialSession = await createInitialSubagentSession({
       cfg,
       targetAgentId,
@@ -240,12 +216,33 @@ export async function spawnSubagentDirect(
       outputSchema: params.outputSchema,
     });
     if (initialSession.status === "error") {
-      return {
-        status: "error",
-        error: initialSession.error,
-        childSessionKey,
-      };
+      return { status: "error", error: initialSession.error, childSessionKey };
     }
+    const provisionalSessionCleanupIdentity = captureCleanupIdentity(initialSession.entry);
+    const cleanupProvisionedSessionForFailedSpawn = async (
+      options?: Partial<Parameters<typeof cleanupFailedSpawnBeforeAgentStart>[0]>,
+    ) => {
+      const cleanupResult = await cleanupFailedSpawnBeforeAgentStart({
+        childSessionKey,
+        ...(options?.attachmentAbsDir ? { attachmentAbsDir: options.attachmentAbsDir } : {}),
+        emitLifecycleHooks: options?.emitLifecycleHooks,
+        deleteTranscript: options?.deleteTranscript,
+        ...cleanupIdentityOption(provisionalSessionCleanupIdentity),
+        waitForSessionDeletion: Boolean(admissionSlot),
+      });
+      recordReservedCleanupOutcome(cleanupResult.sessionDeletion);
+      return cleanupResult;
+    };
+    const withReservedCleanupResult = (result: SpawnSubagentResult): SpawnSubagentResult =>
+      reservedFailureCleanupOutcome && result.status !== "accepted"
+        ? {
+            ...result,
+            reservedCleanup: reservedCleanupState(
+              reservedFailureCleanupOutcome,
+              provisionalSessionCleanupIdentity,
+            ),
+          }
+        : result;
     const preparedSpawnContext = await prepareSubagentSessionContext({
       cfg,
       contextMode,
@@ -523,6 +520,7 @@ export async function spawnSubagentDirect(
           childSessionKey,
           emitLifecycleHooks,
           deleteTranscript: true,
+          ...cleanupIdentityOption(provisionalSessionCleanupIdentity),
           // A timed-out in-process dispatch keeps running. Reserved identities
           // cannot be released until deletion proves no accepted child survives.
           waitForSessionDeletion: Boolean(admissionSlot),
@@ -613,6 +611,7 @@ export async function spawnSubagentDirect(
           runTimeoutSeconds,
           spawnMode,
           reason: summarizeSpawnError(pipelineResult.error),
+          ...failedSpawnCleanupIdentity(provisionalSessionCleanupIdentity),
         });
       return withReservedCleanupResult({
         status: spawnStatus === "forbidden" ? "forbidden" : "error",

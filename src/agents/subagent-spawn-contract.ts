@@ -1,4 +1,5 @@
 import type { FastMode } from "../shared/fast-mode.js";
+import type { ProvisionalSessionCleanupIdentity } from "./subagent-spawn-cleanup.js";
 import type {
   SpawnSubagentContextMode,
   SpawnSubagentMode,
@@ -90,6 +91,7 @@ export type SpawnSubagentResult = {
   error?: string;
   reservedCleanup?: {
     sessionDeletion: "deleted" | "not_deleted" | "indeterminate";
+    sessionIdentity?: ProvisionalSessionCleanupIdentity;
   };
   attachments?: {
     count: number;

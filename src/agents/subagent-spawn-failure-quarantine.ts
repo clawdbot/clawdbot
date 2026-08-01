@@ -7,7 +7,16 @@ import {
 } from "./subagent-registry.js";
 import type { SubagentProgressOrigin } from "./subagent-registry.types.js";
 import type { SubagentSpawnAdmissionSlot } from "./subagent-spawn-admission.js";
-import { cleanupProvisionalSession } from "./subagent-spawn-cleanup.js";
+import {
+  cleanupProvisionalSession,
+  resolveProvisionalSessionCleanupProof,
+} from "./subagent-spawn-cleanup.js";
+import type { ProvisionalSessionCleanupIdentity } from "./subagent-spawn-cleanup.js";
+import {
+  getRuntimeConfig,
+  loadSessionEntry,
+  resolveGatewaySessionStoreTarget,
+} from "./subagent-spawn.runtime.js";
 import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
 
 const RETAINED_FAILED_SPAWN_ADMISSION_KEY: unique symbol = Symbol.for(
@@ -26,6 +35,7 @@ type RetainedFailedSpawnAdmission = {
   attempts: number;
   maxAttempts: number;
   status: RetainedFailedSpawnAdmissionStatus;
+  sessionIdentity?: ProvisionalSessionCleanupIdentity;
 };
 
 type RetainedFailedSpawnAdmissionState = {
@@ -68,6 +78,25 @@ function scheduleRetainedFailedSpawnAdmission(holder: RetainedFailedSpawnAdmissi
   holder.retryTimer.unref?.();
 }
 
+function retainedFailedSpawnAdmissionOriginalGone(holder: RetainedFailedSpawnAdmission): boolean {
+  try {
+    const target = resolveGatewaySessionStoreTarget({
+      cfg: getRuntimeConfig(),
+      key: holder.childSessionKey,
+      clone: false,
+    });
+    const sessionEntry = loadSessionEntry({
+      storePath: target.storePath,
+      sessionKey: target.canonicalKey,
+      clone: false,
+    });
+    const proof = resolveProvisionalSessionCleanupProof(sessionEntry, holder.sessionIdentity);
+    return proof === "missing" || proof === "replacement";
+  } catch {
+    return false;
+  }
+}
+
 async function reconcileRetainedFailedSpawnAdmission(
   holder: RetainedFailedSpawnAdmission,
 ): Promise<void> {
@@ -85,8 +114,15 @@ async function reconcileRetainedFailedSpawnAdmission(
     if (
       await cleanupProvisionalSession(holder.childSessionKey, {
         deleteTranscript: true,
+        ...(holder.sessionIdentity ? { expectedIdentity: holder.sessionIdentity } : {}),
       })
     ) {
+      clearRetainedFailedSpawnAdmissionTimer(holder);
+      state.holders.delete(holder.slot.id);
+      holder.slot.release();
+      return;
+    }
+    if (retainedFailedSpawnAdmissionOriginalGone(holder)) {
       clearRetainedFailedSpawnAdmissionTimer(holder);
       state.holders.delete(holder.slot.id);
       holder.slot.release();
@@ -108,6 +144,7 @@ async function reconcileRetainedFailedSpawnAdmission(
 export function retainFailedSpawnAdmissionSlotUntilDeletion(params: {
   slot: SubagentSpawnAdmissionSlot;
   childSessionKey: string;
+  sessionIdentity?: ProvisionalSessionCleanupIdentity;
 }): void {
   const state = getRetainedFailedSpawnAdmissionState();
   const existing = state.holders.get(params.slot.id);
@@ -121,6 +158,7 @@ export function retainFailedSpawnAdmissionSlotUntilDeletion(params: {
     attempts: 0,
     maxAttempts: RETAINED_FAILED_SPAWN_ADMISSION_MAX_ATTEMPTS,
     status: "retrying",
+    ...(params.sessionIdentity ? { sessionIdentity: params.sessionIdentity } : {}),
   };
   state.holders.set(params.slot.id, holder);
   scheduleRetainedFailedSpawnAdmission(holder);
@@ -189,6 +227,7 @@ export function recordIndeterminateFailedSubagentSpawn(
     runTimeoutSeconds: number;
     spawnMode: SpawnSubagentMode;
     reason: string;
+    sessionIdentity?: ProvisionalSessionCleanupIdentity;
   },
 ): boolean {
   try {
@@ -199,6 +238,7 @@ export function recordIndeterminateFailedSubagentSpawn(
       retainFailedSpawnAdmissionSlotUntilDeletion({
         slot: admissionSlot,
         childSessionKey: params.childSessionKey,
+        ...(params.sessionIdentity ? { sessionIdentity: params.sessionIdentity } : {}),
       });
     }
     return false;

@@ -6,7 +6,11 @@ import {
   getLatestSubagentRunByChildSessionKey,
   hasSubagentRunIdentity,
 } from "../agents/subagent-registry.js";
-import { cleanupProvisionalSession } from "../agents/subagent-spawn-cleanup.js";
+import {
+  cleanupProvisionalSession,
+  resolveProvisionalSessionCleanupProof,
+} from "../agents/subagent-spawn-cleanup.js";
+import type { ProvisionalSessionCleanupIdentity } from "../agents/subagent-spawn-cleanup.js";
 import type { SpawnSubagentResult } from "../agents/subagent-spawn-contract.js";
 import { resolveSubagentTargetPolicy } from "../agents/subagent-target-policy.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
@@ -37,6 +41,8 @@ type ReservedSubagentCleanupHolder = {
   release: () => void;
 };
 
+export const RESERVED_SUBAGENT_TASK_MAX_BYTES = 256 * 1024;
+
 const RESERVED_SUBAGENT_IDENTITY_CLAIMS_KEY: unique symbol = Symbol.for(
   "openclaw.pluginRuntime.reservedSubagentIdentityClaims",
 );
@@ -54,6 +60,7 @@ function reservedSubagentCleanupHolderKey(params: {
 function retainReservedSubagentCleanupHolder(params: {
   runId: string;
   childSessionKey: string;
+  sessionIdentity?: ProvisionalSessionCleanupIdentity;
   releaseGatewayDedupeReservation: () => void;
   releaseIdentityClaim: () => void;
 }): void {
@@ -91,10 +98,21 @@ function retainReservedSubagentCleanupHolder(params: {
     const deleted = await cleanupProvisionalSession(params.childSessionKey, {
       emitLifecycleHooks: false,
       deleteTranscript: true,
+      ...(params.sessionIdentity ? { expectedIdentity: params.sessionIdentity } : {}),
     });
     if (deleted) {
       holder.release();
       return;
+    }
+    try {
+      const current = loadSessionEntryReadOnly(params.childSessionKey, { clone: false }).entry;
+      const proof = resolveProvisionalSessionCleanupProof(current, params.sessionIdentity);
+      if (proof === "missing" || proof === "replacement") {
+        holder.release();
+        return;
+      }
+    } catch {
+      // Fail closed: unresolved inspection cannot release reserved identities.
     }
     if (holder.attempts >= maxAttempts) {
       holder.timer = undefined;
@@ -114,6 +132,15 @@ function retainReservedSubagentCleanupHolder(params: {
 
 function hasIndeterminateReservedCleanup(result: SpawnSubagentResult): boolean {
   return result.reservedCleanup?.sessionDeletion === "indeterminate";
+}
+
+function assertReservedSubagentTaskWithinLimit(task: string): void {
+  const taskBytes = Buffer.byteLength(task, "utf8");
+  if (taskBytes > RESERVED_SUBAGENT_TASK_MAX_BYTES) {
+    throw new Error(
+      `spawnReserved task exceeds the ${RESERVED_SUBAGENT_TASK_MAX_BYTES} byte limit.`,
+    );
+  }
 }
 
 function buildReservedSubagentClaimToken(params: {
@@ -336,6 +363,7 @@ export const spawnReservedSubagent: PluginRuntime["subagent"]["spawnReserved"] =
   if (parseExecApprovalFollowupApprovalId(runId)) {
     throw new Error("spawnReserved runId uses a backend-reserved namespace.");
   }
+  assertReservedSubagentTaskWithinLimit(params.task);
   if (!task) {
     throw new Error("spawnReserved task must be non-empty.");
   }
@@ -450,6 +478,9 @@ async function spawnReservedSubagentWithRequesterAdmission(params: {
         retainReservedSubagentCleanupHolder({
           runId: params.runId,
           childSessionKey: params.childSessionKey,
+          ...(result.reservedCleanup?.sessionIdentity
+            ? { sessionIdentity: result.reservedCleanup.sessionIdentity }
+            : {}),
           releaseGatewayDedupeReservation,
           releaseIdentityClaim: identityClaim.release,
         });
