@@ -30,6 +30,7 @@ export class AgentHarnessSessionSupersededError extends Error {
 
 /** A harness preflight failed before an attempt could start. */
 export class AgentHarnessPreflightError extends Error {
+  /** Harness whose preflight failed; unset means the failure is not harness-scoped. */
   readonly harnessId?: string;
 
   constructor(message: string, options?: ErrorOptions & { harnessId?: string }) {
