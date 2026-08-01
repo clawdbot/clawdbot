@@ -1,6 +1,7 @@
 /**
  * Provider-entry configuration and stored-profile binding for model auth.
  */
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   getRuntimeConfigSnapshot,
   getRuntimeConfigSourceSnapshot,
@@ -32,7 +33,6 @@ import {
 } from "./model-auth-markers.js";
 import type { ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
 import { isLocalProviderBaseUrl } from "./model-provider-local.js";
-import { normalizeProviderId } from "./model-selection.js";
 
 const MODEL_AUTH_LOCAL_HOST_ALIASES = new Set([
   "docker.orb.internal",

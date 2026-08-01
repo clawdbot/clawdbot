@@ -1,6 +1,7 @@
 /**
  * Snapshot-aware and synthetic provider-auth availability.
  */
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   getRuntimeConfigSnapshot,
@@ -21,7 +22,6 @@ import { CUSTOM_LOCAL_AUTH_MARKER, isNonSecretApiKeyMarker } from "./model-auth-
 import { isAuthModeAllowedForModel } from "./model-auth-openai.js";
 import * as authConfig from "./model-auth-provider-config.js";
 import type { ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
-import { normalizeProviderId } from "./model-selection.js";
 
 /** Precomputed provider-auth lookup tables reused during one runtime turn. */
 export type RuntimeProviderAuthLookup = {
