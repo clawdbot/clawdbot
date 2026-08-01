@@ -341,6 +341,69 @@ describe("cron+hook capacity group", () => {
     expect(getCommandLaneSnapshot(CommandLane.CronNested).group).toBeUndefined();
   });
 
+  it("reinstalls the group before suspended lanes resume after hooks are re-enabled", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    publish(HOOKS_ON);
+
+    const { seedClearedLaneResumeForTest } =
+      await import("../agents/session-suspension.test-support.js");
+    for (const lane of [CommandLane.CronNested, CommandLane.HookDispatch]) {
+      seedClearedLaneResumeForTest(lane, {
+        resumeConcurrency: DEFAULT_CRON_MAX_CONCURRENT_RUNS,
+        resumeAtMs: 1_100,
+      });
+    }
+
+    applyGatewayLaneConcurrency(resolveGatewayLaneConcurrency(HOOKS_OFF), { gatewayStart: true });
+    expect(getCommandLaneSnapshot(CommandLane.CronNested).group).toBeUndefined();
+
+    // Both lanes remain at zero while their timers are active. Re-enabling
+    // hooks must still restore membership now; the per-lane resume setters
+    // deliberately cannot infer or install a missing capacity group later.
+    publish(HOOKS_ON);
+    expect(getCommandLaneSnapshot(CommandLane.CronNested)).toMatchObject({
+      maxConcurrent: 0,
+      group: "cron-hooks",
+    });
+    expect(getCommandLaneSnapshot(CommandLane.HookDispatch)).toMatchObject({
+      maxConcurrent: 0,
+      group: "cron-hooks",
+      reservedForLane: 1,
+    });
+
+    const cronGates = Array.from({ length: DEFAULT_CRON_MAX_CONCURRENT_RUNS }, () => gate());
+    const hookGates = Array.from({ length: DEFAULT_CRON_MAX_CONCURRENT_RUNS }, () => gate());
+    const cronRuns = cronGates.map((g) =>
+      enqueueCommandInLane(CommandLane.CronNested, async () => await g.promise, {
+        warnAfterMs: 10_000,
+      }),
+    );
+    const hookRuns = hookGates.map((g) =>
+      enqueueCommandInLane(CommandLane.HookDispatch, async () => await g.promise, {
+        warnAfterMs: 10_000,
+      }),
+    );
+
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(getCommandLaneSnapshot(CommandLane.CronNested).groupActive).toBe(
+      DEFAULT_CRON_MAX_CONCURRENT_RUNS,
+    );
+    expect(getCommandLaneSnapshot(CommandLane.HookDispatch).groupActive).toBe(
+      DEFAULT_CRON_MAX_CONCURRENT_RUNS,
+    );
+    expect(
+      getCommandLaneSnapshot(CommandLane.CronNested).activeCount +
+        getCommandLaneSnapshot(CommandLane.HookDispatch).activeCount,
+    ).toBe(DEFAULT_CRON_MAX_CONCURRENT_RUNS);
+
+    for (const g of [...cronGates, ...hookGates]) {
+      g.release();
+    }
+    await Promise.all([...cronRuns, ...hookRuns]);
+  });
+
   it("removes the group when hooks are turned off by a config reload", async () => {
     publish(HOOKS_ON);
     expect(getCommandLaneSnapshot(CommandLane.CronNested).group).toBe("cron-hooks");

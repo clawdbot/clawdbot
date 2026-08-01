@@ -89,34 +89,32 @@ export function applyGatewayLaneConcurrency(
     grouped[CommandLane.HookDispatch] = concurrency.hookDispatch;
   }
   // Publish even when `grouped` is empty. Both lanes can be suspended during
-  // teardown, but the group still needs its reservation removed or its
-  // membership cleared.
-  if (Object.keys(grouped).length > 0 || !hooksEnabled) {
-    publishLaneConfiguration({
-      lanes: grouped,
-      // Opt-in. A clean hooks-off publication installs no group and
-      // `cron-nested` keeps the entire cron budget. During an enabled-to-disabled
-      // transition, a zero-reservation group may remain while in-flight hooks
-      // finish so aggregate work stays bounded without withholding idle capacity.
-      groups:
-        hooksEnabled || retainInFlightHookBudget
-          ? {
-              // Budget equals the existing cron cap, so the hook lane costs
-              // nothing in AGGREGATE concurrency; it reserves one slot inside
-              // that cap rather than adding one outside it. Cron inner work
-              // trades one slot for the guarantee that hooks cannot be starved.
-              [CRON_HOOK_LANE_GROUP]: {
-                budget: concurrency.cron,
-                members: [CommandLane.CronNested, CommandLane.HookDispatch],
-                reservations: hooksEnabled
-                  ? { [CommandLane.HookDispatch]: HOOK_DISPATCH_LANE_RESERVATION }
-                  : undefined,
-              },
-            }
-          : undefined,
-      clearGroups: hooksEnabled || retainInFlightHookBudget ? undefined : [CRON_HOOK_LANE_GROUP],
-    });
-  }
+  // config reload, but the group still needs its reservation updated or its
+  // membership cleared before their independent resume timers reopen them.
+  publishLaneConfiguration({
+    lanes: grouped,
+    // Opt-in. A clean hooks-off publication installs no group and
+    // `cron-nested` keeps the entire cron budget. During an enabled-to-disabled
+    // transition, a zero-reservation group may remain while in-flight hooks
+    // finish so aggregate work stays bounded without withholding idle capacity.
+    groups:
+      hooksEnabled || retainInFlightHookBudget
+        ? {
+            // Budget equals the existing cron cap, so the hook lane costs
+            // nothing in AGGREGATE concurrency; it reserves one slot inside
+            // that cap rather than adding one outside it. Cron inner work
+            // trades one slot for the guarantee that hooks cannot be starved.
+            [CRON_HOOK_LANE_GROUP]: {
+              budget: concurrency.cron,
+              members: [CommandLane.CronNested, CommandLane.HookDispatch],
+              reservations: hooksEnabled
+                ? { [CommandLane.HookDispatch]: HOOK_DISPATCH_LANE_RESERVATION }
+                : undefined,
+            },
+          }
+        : undefined,
+    clearGroups: hooksEnabled || retainInFlightHookBudget ? undefined : [CRON_HOOK_LANE_GROUP],
+  });
   if (!suspendedLaneIds.has(CommandLane.Main)) {
     setCommandLaneConcurrency(CommandLane.Main, concurrency.main);
   }
