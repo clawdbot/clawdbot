@@ -28,8 +28,8 @@ import {
   registerExecApprovalFollowupRuntimeHandoff,
 } from "./bash-tools.exec-approval-followup-state.js";
 import {
+  buildExecApprovalContinuationFallbackPrompt,
   buildExecApprovalContinuationPrompt,
-  EXEC_APPROVAL_FOLLOWUP_HANDOFF_MESSAGE,
 } from "./bash-tools.exec-approval-output.js";
 import { sanitizeUserFacingText } from "./embedded-agent-helpers/sanitize-user-facing-text.js";
 import {
@@ -320,7 +320,7 @@ function buildAgentFollowupArgs(params: {
     sessionKey: params.sessionKey,
     message: isDenied
       ? buildExecApprovalFollowupPrompt(params.resultText)
-      : EXEC_APPROVAL_FOLLOWUP_HANDOFF_MESSAGE,
+      : buildExecApprovalContinuationFallbackPrompt(params.resultText),
     inputProvenance: {
       kind: "inter_session" as const,
       sourceSessionKey: params.sessionKey,

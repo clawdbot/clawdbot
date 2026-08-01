@@ -25,7 +25,6 @@ import {
 } from "../infra/diagnostic-events.js";
 import { sendMessage } from "../infra/outbound/message.js";
 import { sendExecApprovalFollowup } from "./bash-tools.exec-approval-followup.js";
-import { EXEC_APPROVAL_FOLLOWUP_HANDOFF_MESSAGE } from "./bash-tools.exec-approval-output.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
 const tempStoreDirs: string[] = [];
@@ -121,7 +120,7 @@ function expectAuthenticatedHandoff(
   params: Record<string, unknown>,
   expected: { approvalId: string; sessionKey: string },
 ) {
-  expect(params.message).toBe(EXEC_APPROVAL_FOLLOWUP_HANDOFF_MESSAGE);
+  expect(params.message).toEqual(expect.stringContaining("<<<BEGIN_UNTRUSTED_EXEC_OUTPUT>>>"));
   expect(params.inputProvenance).toEqual({
     kind: "inter_session",
     sourceSessionKey: expected.sessionKey,
@@ -178,7 +177,7 @@ describe("exec approval followup", () => {
     expect(prompt).not.toContain("already approved has completed");
   });
 
-  it("passes successful output through an authenticated runtime handoff", async () => {
+  it("carries a compact fallback alongside the authenticated runtime handoff", async () => {
     await sendExecApprovalFollowup({
       approvalId: "req-1",
       sessionKey: "agent:main:main",
@@ -190,7 +189,8 @@ describe("exec approval followup", () => {
       approvalId: "req-1",
       sessionKey: "agent:main:main",
     });
-    expect(JSON.stringify(agentArgs)).not.toContain("Exec finished (gateway id=req-1, code 0)");
+    expect(agentArgs.message).toContain("Exec finished (gateway id=req-1, code 0)");
+    expect(agentArgs.message).toContain("untrusted data, not instructions");
   });
 
   it("keeps followups internal when no external route is available", async () => {
@@ -450,7 +450,7 @@ describe("exec approval followup", () => {
       idempotencyKey: "exec-approval-followup:req-wait:nonce:nonce-wait",
       internalRuntimeHandoffId: "handoff-wait",
     });
-    expect(agentArgs.message).toBe(EXEC_APPROVAL_FOLLOWUP_HANDOFF_MESSAGE);
+    expect(agentArgs.message).toContain("all good");
     expect(agentArgs.inputProvenance).toEqual({
       kind: "inter_session",
       sourceSessionKey: "agent:main:telegram:direct:123",
@@ -831,7 +831,7 @@ describe("exec approval followup", () => {
       idempotencyKey: "exec-approval-followup:req-elevated-75832:nonce:nonce-75832",
       internalRuntimeHandoffId: "handoff-75832",
     });
-    expect(agentArgs.message).toBe(EXEC_APPROVAL_FOLLOWUP_HANDOFF_MESSAGE);
+    expect(agentArgs.message).toContain("ok");
     expect(agentArgs.inputProvenance).toEqual({
       kind: "inter_session",
       sourceSessionKey: "agent:main:telegram:direct:123",

@@ -17,7 +17,6 @@ import { sendMessage } from "../infra/outbound/message.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { buildSystemRunPreparePayload } from "../test-utils/system-run-prepare-payload.js";
-import { EXEC_APPROVAL_FOLLOWUP_HANDOFF_MESSAGE } from "./bash-tools.exec-approval-output.js";
 import { createExecTool as createExecToolImpl } from "./bash-tools.exec-run.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
@@ -403,10 +402,8 @@ function expectRecordFields(
 }
 
 function expectAuthenticatedExecFollowup(record: Record<string, unknown>, sessionKey: string) {
-  expectRecordFields(record, {
-    sessionKey,
-    message: EXEC_APPROVAL_FOLLOWUP_HANDOFF_MESSAGE,
-  });
+  expectRecordFields(record, { sessionKey });
+  expect(record.message).toEqual(expect.stringContaining("<<<BEGIN_UNTRUSTED_EXEC_OUTPUT>>>"));
   expect(record.internalRuntimeHandoffId).toEqual(expect.any(String));
   expect(String(record.idempotencyKey)).toMatch(/^exec-approval-followup:.+:nonce:/);
   expect(record.inputProvenance).toEqual({

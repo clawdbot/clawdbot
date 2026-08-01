@@ -106,6 +106,20 @@ export function buildExecApprovalContinuationPrompt(resultText: string): {
   };
 }
 
+/**
+ * Builds the self-contained request fallback retained across admission delays
+ * and gateway restarts. A live authenticated handoff may replace this with the
+ * resumed model's larger or smaller context-specific allowance.
+ */
+export function buildExecApprovalContinuationFallbackPrompt(resultText: string): string {
+  const built = buildExecApprovalContinuationPrompt(resultText);
+  return resizeExecApprovalContinuationPrompt({
+    prompt: built.message,
+    range: built.resultRange,
+    maxOutputUtf16Units: DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
+  });
+}
+
 /** Applies the resolved attempt's allowance to only the authenticated output span. */
 export function resizeExecApprovalContinuationPrompt(params: {
   prompt: string;
