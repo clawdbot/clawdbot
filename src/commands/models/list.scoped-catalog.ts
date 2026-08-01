@@ -57,6 +57,27 @@ function routeKey(entry: ModelCatalogEntry): string {
   return `${entryKey(entry)}\0${entry.api ?? ""}\0${entry.baseUrl ?? ""}`;
 }
 
+function resolveConfiguredProviderCoverage(
+  cfg: OpenClawConfig,
+  providerIds: ReadonlySet<string>,
+): ReadonlySet<string> {
+  const coveredProviders = new Set<string>();
+  for (const [provider, providerConfig] of Object.entries(cfg.models?.providers ?? {})) {
+    const normalizedProvider = normalizeProviderId(provider);
+    if (
+      providerIds.has(normalizedProvider) &&
+      (providerConfig.models ?? []).some(
+        (model) => providerConfig.api !== undefined || model.api !== undefined,
+      )
+    ) {
+      // Explicit provider rows are emitted by appendConfiguredProviderRows.
+      // Runtime discovery here would duplicate that source and load the full provider runtime.
+      coveredProviders.add(normalizedProvider);
+    }
+  }
+  return coveredProviders;
+}
+
 function enrichPersistedEntry(
   entry: ModelCatalogEntry,
   manifestEntry: ModelCatalogEntry | undefined,
@@ -173,9 +194,10 @@ export async function loadScopedListModelCatalogSnapshot(params: {
     routeVariants,
     staticEntries,
   };
-  const coveredProviders = new Set(
-    lightweightSnapshot.entries.map((entry) => normalizeProviderId(entry.provider)),
-  );
+  const coveredProviders = new Set([
+    ...lightweightSnapshot.entries.map((entry) => normalizeProviderId(entry.provider)),
+    ...resolveConfiguredProviderCoverage(params.cfg, providerIds),
+  ]);
   const uncoveredProviders = [...providerIds].filter((provider) => !coveredProviders.has(provider));
   if (uncoveredProviders.length === 0) {
     return mergeSnapshotEntries([lightweightSnapshot]);

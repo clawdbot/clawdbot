@@ -152,6 +152,81 @@ describe("loadScopedListModelCatalogSnapshot", () => {
     expect(mocks.prepareScopedReadOnlyModelCatalog).not.toHaveBeenCalled();
   });
 
+  it("does not discover providers whose explicit models are emitted by the configured row source", async () => {
+    mocks.loadManifestCatalogRowsForList.mockReturnValueOnce([]);
+    mocks.loadStaticManifestCatalogRowsForList.mockReturnValueOnce([]);
+
+    const snapshot = await loadScopedListModelCatalogSnapshot({
+      cfg: {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "http://127.0.0.1:3000/v1",
+              api: "openai-responses",
+              models: [
+                {
+                  id: "gpt-5.5",
+                  name: "GPT-5.5",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 128_000,
+                  maxTokens: 4_096,
+                },
+              ],
+            },
+          },
+        },
+      },
+      agentDir: "/tmp/openclaw-agent",
+      providerIds: ["openai"],
+      configuredKeys: ["openai/gpt-5.5"],
+    });
+
+    expect(snapshot).toEqual({
+      entries: [],
+      routeVariants: [],
+      staticEntries: [],
+    });
+    expect(mocks.prepareScopedReadOnlyModelCatalog).not.toHaveBeenCalled();
+  });
+
+  it("still discovers configured providers without a listable API route", async () => {
+    mocks.loadManifestCatalogRowsForList.mockReturnValueOnce([]);
+    mocks.loadStaticManifestCatalogRowsForList.mockReturnValueOnce([]);
+
+    await loadScopedListModelCatalogSnapshot({
+      cfg: {
+        models: {
+          providers: {
+            custom: {
+              baseUrl: "http://127.0.0.1:3000/v1",
+              models: [
+                {
+                  id: "custom-model",
+                  name: "Custom Model",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 128_000,
+                  maxTokens: 4_096,
+                },
+              ],
+            },
+          },
+        },
+      },
+      agentDir: "/tmp/openclaw-agent",
+      providerIds: ["custom"],
+      configuredKeys: ["custom/custom-model"],
+    });
+
+    expect(mocks.prepareScopedReadOnlyModelCatalog).toHaveBeenCalledWith(
+      expect.objectContaining({ readOnly: true }),
+      ["custom"],
+    );
+  });
+
   it("falls back to scoped provider discovery only for providers with no lightweight rows", async () => {
     const discovered = {
       provider: "google",
