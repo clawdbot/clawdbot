@@ -646,7 +646,11 @@ describe("projectBoundedCodexThreadHistory", () => {
   });
 
   it("accepts terminal boundaries", () => {
-    for (const status of ["completed", "interrupted", "failed"]) {
+    for (const [status, stopReason] of [
+      ["completed", "stop"],
+      ["interrupted", "aborted"],
+      ["failed", "error"],
+    ] as const) {
       const terminalThread = {
         ...thread,
         turns: [
@@ -654,7 +658,13 @@ describe("projectBoundedCodexThreadHistory", () => {
           {
             id: `turn-${status}`,
             status,
+            ...(status === "failed" ? { error: { message: "provider disconnected" } } : {}),
             items: [
+              {
+                id: `user-${status}`,
+                type: "userMessage",
+                content: [{ type: "text", text: `${status} question` }],
+              },
               {
                 id: `assistant-${status}`,
                 type: "agentMessage",
@@ -669,9 +679,29 @@ describe("projectBoundedCodexThreadHistory", () => {
         throughTurnId: `turn-${status}`,
         importedAt: 1_800_000_000_000,
       });
-      expect(messageContent(projection.transcriptMessages.at(-1))).toEqual([
-        { type: "text", text: `${status} answer` },
-      ]);
+      expect(messageContent(projection.transcriptMessages.at(-2))).toBe(`${status} question`);
+      const assistant = projection.transcriptMessages.at(-1);
+      expect(messageContent(assistant)).toEqual([{ type: "text", text: `${status} answer` }]);
+      expect(assistant).toMatchObject({ role: "assistant", stopReason });
+      expect(projection.responseItems).toHaveLength(status === "completed" ? 6 : 5);
+      expect(projection.responseItems.at(-1)).toEqual(
+        status === "completed"
+          ? {
+              type: "message",
+              role: "assistant",
+              content: [{ type: "output_text", text: "completed answer" }],
+            }
+          : {
+              type: "message",
+              role: "user",
+              content: [{ type: "input_text", text: `${status} question` }],
+            },
+      );
+      if (status === "failed") {
+        expect(assistant).toMatchObject({ errorMessage: "provider disconnected" });
+      } else {
+        expect(assistant).not.toHaveProperty("errorMessage");
+      }
     }
   });
 

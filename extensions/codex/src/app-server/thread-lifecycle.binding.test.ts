@@ -20,7 +20,10 @@ import {
   testCodexAppServerBindingStore,
   writeCodexAppServerBinding as writeRawCodexAppServerBinding,
 } from "./session-binding.test-helpers.js";
-import { startOrResumeThread as startOrResumeThreadImpl } from "./thread-lifecycle.js";
+import {
+  buildThreadResumeParams,
+  startOrResumeThread as startOrResumeThreadImpl,
+} from "./thread-lifecycle.js";
 
 function startOrResumeThread(
   params: Omit<Parameters<typeof startOrResumeThreadImpl>[0], "bindingStore">,
@@ -978,6 +981,169 @@ describe("Codex app-server thread lifecycle bindings", () => {
     expect(binding?.threadId).toBe("thread-ring-zero-1");
     expect(binding?.ringZeroConfigFingerprint).toEqual(expect.any(String));
     expect(binding?.ringZeroClientInstanceId).toEqual(expect.any(String));
+  });
+
+  it("isolates transient message-only completion threads without replacing the parent binding", async () => {
+    const sessionFile = path.join(tempDir, "message-only-session.jsonl");
+    const workspaceDir = path.join(tempDir, "message-only-workspace");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-parent",
+      cwd: workspaceDir,
+      model: "gpt-5.4-codex",
+      modelProvider: "openai",
+      dynamicToolsFingerprint: "[]",
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    params.toolsAllow = ["message"];
+    params.sourceReplyDeliveryMode = "message_tool_only";
+    params.delegationCapability = "report_only";
+    params.inputProvenance = {
+      kind: "inter_session",
+      sourceSessionKey: "agent:main:subagent:child",
+      sourceChannel: "internal",
+      sourceTool: "subagent_announce",
+    };
+    let nextThread = 1;
+    const request = vi.fn(async (method: string, _requestParams?: unknown) => {
+      if (method === "config/read") {
+        return {
+          layers: [],
+          config: {
+            mcp_servers: {
+              "arbitrary.server": { command: "inherited-mcp" },
+              "local helper": { url: "https://mcp.example.test" },
+            },
+          },
+        };
+      }
+      if (method === "configRequirements/read") {
+        return { requirements: null };
+      }
+      if (method === "thread/start") {
+        return threadStartResult(`thread-message-only-${nextThread++}`);
+      }
+      if (method === "mcpServerStatus/list") {
+        return { data: [], nextCursor: null };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const messageTool = createMessageDynamicTool("Send the source conversation reply");
+    const common = {
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [messageTool],
+      config: {
+        "features.apps": true,
+        "features.current_time_reminder": true,
+        "features.deferred_executor": true,
+        "features.hooks": true,
+        "features.image_generation": true,
+        "features.multi_agent": true,
+        "features.multi_agent_v2": true,
+        "features.plugins": true,
+        "features.standalone_web_search": true,
+        "features.token_budget": true,
+        "orchestrator.mcp.enabled": true,
+        "tools.experimental_request_user_input.enabled": true,
+        "tools.update_plan.enabled": true,
+        mcp_servers: {
+          "request-only": { command: "request-mcp" },
+        },
+        web_search: "live",
+      },
+      appServer: createThreadLifecycleAppServerOptions(),
+      nativeCodeModeEnabled: false,
+      userMcpServersEnabled: false,
+      hostSystemAgentActive: false,
+    };
+
+    const first = await startOrResumeThread(common);
+    const second = await startOrResumeThread(common);
+
+    expect(first.lifecycle.action).toBe("started");
+    expect(second.lifecycle.action).toBe("started");
+    expect(first.threadId).toBe("thread-message-only-1");
+    expect(second.threadId).toBe("thread-message-only-2");
+    expect(first).not.toHaveProperty("liveThreadConfigFingerprint");
+    expect(second).not.toHaveProperty("liveThreadConfigFingerprint");
+    expect((await readCodexAppServerBinding(sessionFile))?.threadId).toBe("thread-parent");
+    const threadRequests = request.mock.calls.filter(([method]) => method === "thread/start");
+    expect(threadRequests).toHaveLength(2);
+    const resumeRequest = buildThreadResumeParams(params, {
+      threadId: first.threadId,
+      appServer: common.appServer,
+      dynamicTools: common.dynamicTools,
+      config: common.config,
+      nativeCodeModeEnabled: false,
+      hostSystemAgentActive: false,
+      ringZeroInheritedMcpServerNames: ["arbitrary.server", "local helper"],
+    });
+    const threadPayloads = [
+      ...threadRequests.map(([, threadRequest]) => threadRequest),
+      resumeRequest,
+    ];
+    for (const threadRequest of threadPayloads) {
+      expect(threadRequest).toEqual(
+        expect.objectContaining({
+          config: expect.objectContaining({
+            mcp_servers: {
+              "arbitrary.server": { enabled: false },
+              "local helper": { enabled: false },
+              "request-only": { enabled: false },
+            },
+            web_search: "disabled",
+          }),
+          developerInstructions: expect.stringContaining("`message(action=send)`"),
+        }),
+      );
+      const typedThreadRequest = threadRequest as {
+        config?: Record<string, unknown>;
+        developerInstructions?: string;
+      };
+      const threadConfig = typedThreadRequest.config;
+      for (const disabledFeature of [
+        "features.apps",
+        "features.current_time_reminder",
+        "features.deferred_executor",
+        "features.hooks",
+        "features.image_generation",
+        "features.multi_agent",
+        "features.multi_agent_v2",
+        "features.plugins",
+        "features.standalone_web_search",
+        "features.token_budget",
+        "orchestrator.mcp.enabled",
+        "tools.experimental_request_user_input.enabled",
+        "tools.update_plan.enabled",
+      ]) {
+        expect(threadConfig?.[disabledFeature]).toBe(false);
+      }
+      expect(typedThreadRequest.developerInstructions).not.toContain("`spawn_agent`");
+      expect(typedThreadRequest.developerInstructions).not.toContain("`tool_search`");
+    }
+    for (const [, startRequest] of threadRequests) {
+      expect(startRequest).toEqual(
+        expect.objectContaining({ dynamicTools: [messageTool], environments: [] }),
+      );
+    }
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "config/read",
+      "configRequirements/read",
+      "thread/start",
+      "mcpServerStatus/list",
+      "config/read",
+      "configRequirements/read",
+      "thread/start",
+      "mcpServerStatus/list",
+    ]);
+    for (const threadId of ["thread-message-only-1", "thread-message-only-2"]) {
+      expect(request).toHaveBeenCalledWith(
+        "mcpServerStatus/list",
+        { threadId, limit: 1, detail: "toolsAndAuthOnly" },
+        expect.anything(),
+      );
+    }
   });
 
   it("starts a fresh restricted OpenClaw thread for a new app-server client", async () => {

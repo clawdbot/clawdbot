@@ -18,6 +18,7 @@ import {
   setChannelSourceTurnId,
   setChannelSourceTurnSameThreadRequired,
 } from "../../auto-reply/reply/source-turn-id.js";
+import { messageToolOwnsVisibleReply } from "../../auto-reply/source-reply-delivery-mode.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import { persistSessionTranscriptTurn } from "../../config/sessions/session-accessor.js";
 import { acquireOwnedSessionTranscriptWriteLock } from "../../config/sessions/transcript-write-context.js";
@@ -69,6 +70,8 @@ import {
   resolveCliSessionClearReason,
   shouldClearFailedCliSessionBinding,
 } from "../cli-session.js";
+import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
+import { resolveConversationToolPolicies } from "../conversation-tool-policy-pipeline.js";
 import { runEmbeddedAgent, type EmbeddedAgentRunResult } from "../embedded-agent.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../harness/hook-helpers.js";
 import { resolveAvailableAgentHarnessPolicy } from "../harness/selection.js";
@@ -79,6 +82,7 @@ import { resolveAgentRunSessionTarget, type AgentRunSessionTarget } from "../run
 import { resolveAgentRunAbortLifecycleFields } from "../run-termination.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import type { AgentMessage } from "../runtime/index.js";
+import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
 import { withLocalSessionPlacementTurnAdmission } from "../session-placement-admission.js";
 import {
   acquireSessionWriteLock,
@@ -87,6 +91,8 @@ import {
 } from "../session-write-lock.js";
 import { buildUsageWithNoCost } from "../stream-message-shared.js";
 import { isSubagentAnnounceCompletionHandoff } from "../subagent-announce-handoff.js";
+import { isToolAllowedByPolicies } from "../tool-policy-match.js";
+import { readToolAllowlistIntersection } from "../tool-policy.js";
 import { DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS } from "../tool-result-limits.js";
 import {
   buildClaudeCliFallbackContextPrelude,
@@ -578,7 +584,72 @@ export function runAgentAttempt(params: {
     inputProvenance: params.opts.inputProvenance,
     internalEvents: params.opts.internalEvents,
   });
-  const disableTools = params.opts.modelRun === true || isSubagentAnnounceHandoff;
+  const completionRequestsMessageDelivery =
+    isSubagentAnnounceHandoff &&
+    !isRawModelRun &&
+    params.opts.disableMessageTool !== true &&
+    params.opts.trustedInternalHandoff === true &&
+    messageToolOwnsVisibleReply(params.opts);
+  const completionSandboxStatus = completionRequestsMessageDelivery
+    ? resolveSandboxRuntimeStatus({
+        cfg: params.cfg,
+        sessionKey: params.sessionKey,
+        agentId: params.sessionAgentId,
+      })
+    : undefined;
+  const completionCapabilityProfile = completionRequestsMessageDelivery
+    ? resolveConversationCapabilityProfile({
+        config: params.cfg,
+        sessionKey: params.sessionKey,
+        agentId: params.sessionAgentId,
+        agentAccountId: params.runContext.accountId,
+        messageProvider: params.opts.messageProvider ?? params.messageChannel,
+        messageChannel: params.messageChannel,
+        groupId: params.runContext.groupId,
+        groupChannel: params.runContext.groupChannel,
+        groupSpace: params.runContext.groupSpace,
+        spawnedBy: params.spawnedBy,
+        senderId: params.runContext.senderId,
+        senderIsOwner: params.opts.senderIsOwner,
+        modelProvider: params.providerOverride,
+        modelId: params.modelOverride,
+        sandboxToolPolicy: completionSandboxStatus?.sandboxed
+          ? completionSandboxStatus.toolPolicy
+          : undefined,
+        inputProvenance: params.opts.inputProvenance,
+        trustedInternalHandoff: params.opts.trustedInternalHandoff,
+        scheduledToolPolicy: params.opts.scheduledToolPolicy,
+      })
+    : undefined;
+  const completionToolPolicies = completionCapabilityProfile
+    ? resolveConversationToolPolicies({
+        capabilityProfile: completionCapabilityProfile,
+        additionalProfileAllow: ["message"],
+      })
+    : undefined;
+  const completionRuntimeRestrictions = params.opts.toolsAllow
+    ? (readToolAllowlistIntersection(params.opts.toolsAllow) ?? [params.opts.toolsAllow])
+    : undefined;
+  // Forced private delivery is not authority: retain every parent/operator cap
+  // and mint only the source-bound message capability from a verified envelope.
+  const completionNeedsMessageDelivery =
+    completionCapabilityProfile?.policy.requesterPolicySource === "completion-handoff" &&
+    completionToolPolicies !== undefined &&
+    isToolAllowedByPolicies("message", Object.values(completionToolPolicies)) &&
+    (params.opts.toolsAllow === undefined ||
+      (completionRuntimeRestrictions?.every(
+        (allow) => allow.length > 0 && isToolAllowedByPolicies("message", [{ allow }]),
+      ) ??
+        false));
+  // An explicit cap is enforced even when tools are disabled; clear it so a
+  // denied completion can finish tool-free and its owner can relay frozen text.
+  const runtimeToolsAllow = isSubagentAnnounceHandoff
+    ? completionNeedsMessageDelivery
+      ? ["message"]
+      : undefined
+    : params.opts.toolsAllow;
+  const disableTools =
+    params.opts.modelRun === true || (isSubagentAnnounceHandoff && !completionNeedsMessageDelivery);
   const claudeCliFallbackPrelude =
     !isRawModelRun &&
     params.isFallbackRetry &&
@@ -909,7 +980,13 @@ export function runAgentAttempt(params: {
             messageChannel: params.messageChannel,
             streamParams: params.opts.streamParams,
             messageProvider: params.opts.messageProvider ?? params.messageChannel,
-            currentChannelId: params.runContext.currentChannelId,
+            // Completion relays can carry the trusted source only in their
+            // delivery target; the restricted CLI grant must retain that owner.
+            currentChannelId:
+              params.runContext.currentChannelId ??
+              (completionNeedsMessageDelivery
+                ? (params.opts.replyTo ?? params.opts.to)
+                : undefined),
             chatId: params.runContext.chatId,
             channelContext: params.runContext.channelContext,
             currentThreadTs: params.runContext.currentThreadTs,
@@ -924,7 +1001,7 @@ export function runAgentAttempt(params: {
             groupSpace: params.runContext.groupSpace,
             spawnedBy: params.spawnedBy,
             toolsAllow: resolveCliRuntimeToolsAllow(
-              params.opts.toolsAllow,
+              runtimeToolsAllow,
               params.opts.toolsAllowIsDefault,
             ),
             scheduledToolPolicy: params.opts.scheduledToolPolicy,
@@ -1094,13 +1171,14 @@ export function runAgentAttempt(params: {
     extraSystemPrompt: params.opts.extraSystemPrompt,
     bootstrapContextMode: params.opts.bootstrapContextMode,
     bootstrapContextRunKind: params.opts.bootstrapContextRunKind,
-    toolsAllow: params.opts.toolsAllow,
+    toolsAllow: runtimeToolsAllow,
     runtimePluginToolGrant: params.opts.runtimePluginToolGrant,
     trustedInternalHandoff: params.opts.trustedInternalHandoff,
     scheduledToolPolicy: params.opts.scheduledToolPolicy,
     internalEvents: params.opts.internalEvents,
     inputProvenance: params.opts.inputProvenance,
     sourceReplyDeliveryMode: params.opts.sourceReplyDeliveryMode,
+    requireExplicitMessageTarget: params.opts.requireExplicitMessageTarget,
     disableMessageTool: params.opts.disableMessageTool,
     swarmCollector: params.opts.swarmCollector,
     swarmOutputSchema: params.opts.swarmOutputSchema,

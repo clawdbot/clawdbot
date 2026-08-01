@@ -832,7 +832,7 @@ export async function handleOpenResponsesHttpRequest(
         const response = createResponseResource({
           id: responseId,
           model,
-          status: "incomplete",
+          status: "completed",
           output,
           usage,
         });
@@ -1347,10 +1347,10 @@ export async function handleOpenResponsesHttpRequest(
           nextStreamOutputIndex += 1;
         }
 
-        const incompleteResponse = createResponseResource({
+        const completedResponse = createResponseResource({
           id: responseId,
           model,
-          status: "incomplete",
+          status: "completed",
           output: [completedItem, ...functionCallItems],
           usage,
         });
@@ -1358,7 +1358,7 @@ export async function handleOpenResponsesHttpRequest(
         stopWatchingDisconnect();
         unsubscribe();
         rememberResponseSession();
-        writeSseEvent(res, { type: "response.completed", response: incompleteResponse });
+        writeSseEvent(res, { type: "response.completed", response: completedResponse });
         writeDone(res);
         res.end();
         return;

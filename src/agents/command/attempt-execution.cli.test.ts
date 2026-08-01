@@ -26,6 +26,7 @@ import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { saveAuthProfileStore } from "../auth-profiles/store.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent.js";
 import { FailoverError } from "../failover-error.js";
+import { attachToolAllowlistIntersection } from "../tool-policy.js";
 import {
   persistAcpTurnTranscript,
   persistCliTurnTranscript,
@@ -34,6 +35,199 @@ import {
 import { resolveClaudeCliProjectDirForWorkspace } from "./claude-cli-project-dir.js";
 
 type RunAgentAttemptParams = Parameters<typeof runAgentAttemptImpl>[0];
+const SUBAGENT_ANNOUNCE_CHILD_SESSION_KEY = "agent:main:subagent:child";
+const SUBAGENT_ANNOUNCE_REQUESTER_TOOLS = ["read", "exec", "sessions_spawn", "message"];
+
+function createSubagentAnnounceHandoffOptions(params: {
+  sourceReplyDeliveryMode: "automatic" | "message_tool_only";
+  disableMessageTool?: boolean;
+  requireExplicitMessageTarget?: boolean;
+  modelRun?: boolean;
+  promptMode?: "none";
+  runtimeToolsAllow?: string[];
+  trustedInternalHandoff?: boolean;
+}): Partial<RunAgentAttemptParams["opts"]> {
+  return {
+    sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+    ...(params.disableMessageTool ? { disableMessageTool: true } : {}),
+    ...(params.requireExplicitMessageTarget ? { requireExplicitMessageTarget: true } : {}),
+    ...(params.modelRun ? { modelRun: true } : {}),
+    ...(params.promptMode ? { promptMode: params.promptMode } : {}),
+    toolsAllow: params.runtimeToolsAllow ?? [...SUBAGENT_ANNOUNCE_REQUESTER_TOOLS],
+    trustedInternalHandoff: params.trustedInternalHandoff ?? true,
+    inputProvenance: {
+      kind: "inter_session",
+      sourceSessionKey: SUBAGENT_ANNOUNCE_CHILD_SESSION_KEY,
+      sourceChannel: "internal",
+      sourceTool: "subagent_announce",
+    },
+    internalEvents: [
+      {
+        type: "task_completion",
+        source: "subagent",
+        childSessionKey: SUBAGENT_ANNOUNCE_CHILD_SESSION_KEY,
+        announceType: "subagent task",
+        taskLabel: "review",
+        status: "ok",
+        statusLabel: "completed",
+        result: "child output",
+        replyInstruction: "Relay this completion.",
+      },
+    ],
+  };
+}
+
+type SubagentAnnounceDeliveryCase = {
+  name: string;
+  sourceReplyDeliveryMode: "automatic" | "message_tool_only";
+  disableMessageTool: boolean;
+  requireExplicitMessageTarget?: boolean;
+  modelRun?: boolean;
+  promptMode?: "none";
+  inheritedToolAllow?: readonly string[];
+  inheritedToolDeny?: readonly string[];
+  runtimeToolsAllow?: string[];
+  operatorTools?: OpenClawConfig["tools"];
+  sandboxMode?: "off" | "non-main" | "all";
+  trustedInternalHandoff?: boolean;
+  expectedDisableTools: boolean;
+  expectedToolsAllow?: readonly string[];
+};
+
+const SUBAGENT_ANNOUNCE_DELIVERY_CASES: readonly SubagentAnnounceDeliveryCase[] = [
+  {
+    name: "automatic source replies",
+    sourceReplyDeliveryMode: "automatic" as const,
+    disableMessageTool: false,
+    expectedDisableTools: true,
+  },
+  {
+    name: "message-tool-only source replies",
+    sourceReplyDeliveryMode: "message_tool_only" as const,
+    disableMessageTool: false,
+    expectedDisableTools: false,
+    expectedToolsAllow: ["message"],
+  },
+  {
+    name: "message-tool-only source replies requiring an explicit target",
+    sourceReplyDeliveryMode: "message_tool_only" as const,
+    disableMessageTool: false,
+    requireExplicitMessageTarget: true,
+    expectedDisableTools: false,
+    expectedToolsAllow: ["message"],
+  },
+  {
+    name: "an explicitly disabled message tool",
+    sourceReplyDeliveryMode: "message_tool_only" as const,
+    disableMessageTool: true,
+    expectedDisableTools: true,
+  },
+  {
+    name: "a coding-only parent allowlist",
+    sourceReplyDeliveryMode: "message_tool_only",
+    disableMessageTool: false,
+    inheritedToolAllow: ["read", "exec", "sessions_spawn"],
+    operatorTools: { profile: "coding" },
+    expectedDisableTools: true,
+  },
+  {
+    name: "an inherited explicit message deny",
+    sourceReplyDeliveryMode: "message_tool_only",
+    disableMessageTool: false,
+    inheritedToolAllow: ["*"],
+    inheritedToolDeny: ["message"],
+    expectedDisableTools: true,
+  },
+  {
+    name: "a current operator message deny",
+    sourceReplyDeliveryMode: "message_tool_only",
+    disableMessageTool: false,
+    operatorTools: { deny: ["message"] },
+    expectedDisableTools: true,
+  },
+  {
+    name: "an active sandbox message deny",
+    sourceReplyDeliveryMode: "message_tool_only",
+    disableMessageTool: false,
+    operatorTools: { sandbox: { tools: { deny: ["message"] } } },
+    sandboxMode: "all",
+    expectedDisableTools: true,
+  },
+  {
+    name: "a non-main sandbox message deny",
+    sourceReplyDeliveryMode: "message_tool_only",
+    disableMessageTool: false,
+    operatorTools: { sandbox: { tools: { deny: ["message"] } } },
+    sandboxMode: "non-main",
+    expectedDisableTools: true,
+  },
+  {
+    name: "an inactive sandbox message deny",
+    sourceReplyDeliveryMode: "message_tool_only",
+    disableMessageTool: false,
+    operatorTools: { sandbox: { tools: { deny: ["message"] } } },
+    sandboxMode: "off",
+    expectedDisableTools: false,
+    expectedToolsAllow: ["message"],
+  },
+  {
+    name: "a runtime allowlist excluding message",
+    sourceReplyDeliveryMode: "message_tool_only",
+    disableMessageTool: false,
+    runtimeToolsAllow: ["read", "exec"],
+    expectedDisableTools: true,
+  },
+  {
+    name: "an empty runtime allowlist",
+    sourceReplyDeliveryMode: "message_tool_only",
+    disableMessageTool: false,
+    runtimeToolsAllow: [],
+    expectedDisableTools: true,
+  },
+  {
+    name: "an intersected runtime allowlist excluding message",
+    sourceReplyDeliveryMode: "message_tool_only",
+    disableMessageTool: false,
+    runtimeToolsAllow: attachToolAllowlistIntersection(["*", "message"], [["*"], ["read"]]),
+    expectedDisableTools: true,
+  },
+  {
+    name: "an authorized messaging tool group",
+    sourceReplyDeliveryMode: "message_tool_only",
+    disableMessageTool: false,
+    inheritedToolAllow: ["group:messaging"],
+    runtimeToolsAllow: ["group:messaging"],
+    operatorTools: { profile: "coding" },
+    expectedDisableTools: false,
+    expectedToolsAllow: ["message"],
+  },
+  {
+    name: "an untrusted completion handoff",
+    sourceReplyDeliveryMode: "message_tool_only",
+    disableMessageTool: false,
+    trustedInternalHandoff: false,
+    expectedDisableTools: true,
+  },
+];
+
+const SUBAGENT_ANNOUNCE_EMBEDDED_DELIVERY_CASES: readonly SubagentAnnounceDeliveryCase[] = [
+  ...SUBAGENT_ANNOUNCE_DELIVERY_CASES,
+  {
+    name: "a raw model run despite message-tool-only delivery",
+    sourceReplyDeliveryMode: "message_tool_only",
+    disableMessageTool: false,
+    modelRun: true,
+    expectedDisableTools: true,
+  },
+  {
+    name: "prompt mode none despite message-tool-only delivery",
+    sourceReplyDeliveryMode: "message_tool_only",
+    disableMessageTool: false,
+    promptMode: "none",
+    expectedDisableTools: true,
+  },
+];
+
 const runAgentAttempt = (
   params: Omit<RunAgentAttemptParams, "lifecycleGeneration"> &
     Partial<Pick<RunAgentAttemptParams, "lifecycleGeneration">>,
@@ -271,6 +465,11 @@ describe("CLI attempt execution", () => {
 
   async function runOpenClawEmbeddedAttemptForTest(overrides?: {
     opts?: Partial<RunAgentAttemptParams["opts"]>;
+    config?: OpenClawConfig;
+    subagentAnnounceEnvelope?: Pick<
+      SubagentAnnounceDeliveryCase,
+      "inheritedToolAllow" | "inheritedToolDeny"
+    >;
     runId?: string;
     body?: string;
     transcriptBody?: string;
@@ -291,7 +490,13 @@ describe("CLI attempt execution", () => {
       updatedAt: Date.now(),
       ...overrides?.sessionEntry,
     };
-    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    const sessionStore = overrides?.subagentAnnounceEnvelope
+      ? createSubagentAnnounceSessionStore(
+          sessionKey,
+          sessionEntry,
+          overrides.subagentAnnounceEnvelope,
+        )
+      : { [sessionKey]: sessionEntry };
     await writeSessionStoreSeed(sessionStore);
     runEmbeddedAgentMock.mockResolvedValueOnce({
       meta: { durationMs: 1 },
@@ -303,7 +508,7 @@ describe("CLI attempt execution", () => {
       originalProvider: "openai",
       modelOverride: overrides?.modelOverride ?? "gpt-5.4",
       configuredAuthProfileId: overrides?.configuredAuthProfileId,
-      cfg: {} as OpenClawConfig,
+      cfg: overrides?.config ?? ({} as OpenClawConfig),
       sessionEntry,
       sessionId: sessionEntry.sessionId,
       sessionKey,
@@ -358,6 +563,29 @@ describe("CLI attempt execution", () => {
       await replaceSessionEntry({ sessionKey, storePath }, entry);
     }
     closeOpenClawAgentDatabasesForTest();
+  }
+
+  function createSubagentAnnounceSessionStore(
+    requesterSessionKey: string,
+    requesterSessionEntry: SessionEntry,
+    envelope: Pick<SubagentAnnounceDeliveryCase, "inheritedToolAllow" | "inheritedToolDeny">,
+  ): Record<string, SessionEntry> {
+    return {
+      [requesterSessionKey]: requesterSessionEntry,
+      [SUBAGENT_ANNOUNCE_CHILD_SESSION_KEY]: {
+        sessionId: "subagent-announce-child",
+        updatedAt: Date.now(),
+        spawnedBy: requesterSessionKey,
+        spawnDepth: 1,
+        subagentRole: "leaf",
+        subagentControlScope: "none",
+        inheritedToolPolicyVersion: 1,
+        inheritedToolAllow: [...(envelope.inheritedToolAllow ?? SUBAGENT_ANNOUNCE_REQUESTER_TOOLS)],
+        ...(envelope.inheritedToolDeny
+          ? { inheritedToolDeny: [...envelope.inheritedToolDeny] }
+          : {}),
+      },
+    };
   }
 
   function readSessionStore(): Record<string, SessionEntry> {
@@ -2571,73 +2799,136 @@ describe("CLI attempt execution", () => {
     });
   });
 
-  it("disables CLI tools for a subagent completion announce handoff", async () => {
-    const sessionKey = "agent:main:direct:claude-announce";
-    const sessionEntry: SessionEntry = {
-      sessionId: "openclaw-session-cli-announce",
-      updatedAt: Date.now(),
-    };
-    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
-    await writeSessionStoreSeed(sessionStore);
-    runCliAgentMock.mockResolvedValueOnce(makeCliResult("tool-free announce"));
+  it.each(SUBAGENT_ANNOUNCE_DELIVERY_CASES)(
+    "bounds CLI subagent completion handoff tools for $name",
+    async ({
+      sourceReplyDeliveryMode,
+      disableMessageTool,
+      requireExplicitMessageTarget,
+      inheritedToolAllow,
+      inheritedToolDeny,
+      runtimeToolsAllow,
+      operatorTools,
+      sandboxMode,
+      trustedInternalHandoff,
+      expectedDisableTools,
+      expectedToolsAllow,
+    }) => {
+      const sessionKey = "agent:main:direct:claude-announce";
+      const sessionEntry: SessionEntry = {
+        sessionId: "openclaw-session-cli-announce",
+        updatedAt: Date.now(),
+      };
+      const sessionStore = createSubagentAnnounceSessionStore(sessionKey, sessionEntry, {
+        inheritedToolAllow,
+        inheritedToolDeny,
+      });
+      await writeSessionStoreSeed(sessionStore);
+      runCliAgentMock.mockResolvedValueOnce(makeCliResult("completion announce"));
 
-    await runAgentAttempt({
-      providerOverride: "claude-cli",
-      originalProvider: "claude-cli",
-      modelOverride: "opus",
-      cfg: {} as OpenClawConfig,
-      sessionEntry,
-      sessionId: sessionEntry.sessionId,
-      sessionKey,
-      sessionAgentId: "main",
-      sessionFile: path.join(tmpDir, "session.jsonl"),
-      workspaceDir: tmpDir,
-      body: "A background task finished. Process the completion update now.",
-      isFallbackRetry: false,
-      resolvedThinkLevel: "medium",
-      timeoutMs: 1_000,
-      runId: "run-cli-announce",
-      opts: {
-        inputProvenance: {
-          kind: "inter_session",
-          sourceSessionKey: "agent:openclaw:subagent:child",
-          sourceChannel: "internal",
-          sourceTool: "subagent_announce",
+      await runAgentAttempt({
+        providerOverride: "claude-cli",
+        originalProvider: "claude-cli",
+        modelOverride: "opus",
+        cfg: {
+          session: { store: storePath },
+          ...(operatorTools ? { tools: operatorTools } : {}),
+          ...(sandboxMode ? { agents: { defaults: { sandbox: { mode: sandboxMode } } } } : {}),
         },
-        internalEvents: [
-          {
-            type: "task_completion",
-            source: "subagent",
-            childSessionKey: "agent:openclaw:subagent:child",
-            announceType: "subagent task",
-            taskLabel: "review",
-            status: "ok",
-            statusLabel: "completed",
-            result: "child output",
-            replyInstruction: "Relay this completion.",
-          },
-        ],
-      } as Parameters<typeof runAgentAttempt>[0]["opts"],
-      runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
-      spawnedBy: undefined,
-      messageChannel: "telegram",
-      skillsSnapshot: undefined,
-      resolvedVerboseLevel: undefined,
-      agentDir: tmpDir,
-      onAgentEvent: vi.fn(),
-      authProfileProvider: "claude-cli",
-      sessionStore,
-      storePath,
-      sessionHasHistory: false,
-    });
+        sessionEntry,
+        sessionId: sessionEntry.sessionId,
+        sessionKey,
+        sessionAgentId: "main",
+        sessionFile: path.join(tmpDir, "session.jsonl"),
+        workspaceDir: tmpDir,
+        body: "A background task finished. Process the completion update now.",
+        isFallbackRetry: false,
+        resolvedThinkLevel: "medium",
+        timeoutMs: 1_000,
+        runId: "run-cli-announce",
+        opts: createSubagentAnnounceHandoffOptions({
+          sourceReplyDeliveryMode,
+          disableMessageTool,
+          requireExplicitMessageTarget,
+          runtimeToolsAllow,
+          trustedInternalHandoff,
+        }) as Parameters<typeof runAgentAttempt>[0]["opts"],
+        runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
+        spawnedBy: undefined,
+        messageChannel: "telegram",
+        skillsSnapshot: undefined,
+        resolvedVerboseLevel: undefined,
+        agentDir: tmpDir,
+        onAgentEvent: vi.fn(),
+        authProfileProvider: "claude-cli",
+        sessionStore,
+        storePath,
+        sessionHasHistory: false,
+      });
 
-    expectMockArgFields(runCliAgentMock, {
-      provider: "claude-cli",
-      disableTools: true,
-      allowEmptyAssistantReplyAsSilent: true,
-    });
-    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
-  });
+      expectMockArgFields(runCliAgentMock, {
+        provider: "claude-cli",
+        sourceReplyDeliveryMode,
+        requireExplicitMessageTarget: requireExplicitMessageTarget === true,
+        toolsAllow: expectedToolsAllow,
+        disableTools: expectedDisableTools,
+        allowEmptyAssistantReplyAsSilent: true,
+      });
+      expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(SUBAGENT_ANNOUNCE_EMBEDDED_DELIVERY_CASES)(
+    "bounds embedded subagent completion handoff tools for $name",
+    async ({
+      sourceReplyDeliveryMode,
+      disableMessageTool,
+      requireExplicitMessageTarget,
+      modelRun,
+      promptMode,
+      inheritedToolAllow,
+      inheritedToolDeny,
+      runtimeToolsAllow,
+      operatorTools,
+      sandboxMode,
+      trustedInternalHandoff,
+      expectedDisableTools,
+      expectedToolsAllow,
+    }) => {
+      const embeddedArg = await runOpenClawEmbeddedAttemptForTest({
+        runId: `embedded-announce-${sourceReplyDeliveryMode}-${disableMessageTool}`,
+        body: "A background task finished. Process the completion update now.",
+        config: {
+          session: { store: storePath },
+          ...(operatorTools ? { tools: operatorTools } : {}),
+          ...(sandboxMode ? { agents: { defaults: { sandbox: { mode: sandboxMode } } } } : {}),
+        },
+        subagentAnnounceEnvelope: { inheritedToolAllow, inheritedToolDeny },
+        opts: createSubagentAnnounceHandoffOptions({
+          sourceReplyDeliveryMode,
+          disableMessageTool,
+          requireExplicitMessageTarget,
+          modelRun,
+          promptMode,
+          runtimeToolsAllow,
+          trustedInternalHandoff,
+        }),
+      });
+
+      expectRecordFields(embeddedArg, {
+        provider: "openai",
+        sourceReplyDeliveryMode,
+        requireExplicitMessageTarget,
+        toolsAllow: expectedToolsAllow,
+        disableTools: expectedDisableTools,
+        disableMessageTool: disableMessageTool || undefined,
+        modelRun: modelRun || undefined,
+        promptMode,
+        allowEmptyAssistantReplyAsSilent: true,
+      });
+      expect(runCliAgentMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("stamps CLI prompts with current timestamp context", async () => {
     vi.useFakeTimers();

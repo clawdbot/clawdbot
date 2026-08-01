@@ -365,6 +365,65 @@ describe("Codex app-server main thread cleanup", () => {
     await expect(readCodexAppServerBinding(sessionFile)).resolves.toBeUndefined();
   });
 
+  it("keeps an interrupted shared turn subscribed until its exact terminal arrives", async () => {
+    const sessionFile = path.join(tempDir, "cancelled-session.jsonl");
+    const workspaceDir = path.join(tempDir, "cancelled-workspace");
+    const sessionKey = "agent:main:dashboard:incognito-cancelled-turn";
+    const harness = createClientHarness();
+    const abort = new AbortController();
+    vi.spyOn(CodexAppServerClient, "start").mockReturnValueOnce(harness.client);
+
+    const params = createParams(sessionFile, workspaceDir, sessionKey);
+    params.abortSignal = abort.signal;
+    let settled = false;
+    const run = runCodexAppServerAttempt(params, {
+      bindingStore: testCodexAppServerBindingStore,
+    }).finally(() => {
+      settled = true;
+    });
+    const initialize = await waitForHarnessRequest(harness, "initialize");
+    harness.send({
+      id: initialize.id,
+      result: { userAgent: `openclaw/${CODEX_APP_SERVER_VERSION} (macOS; test)` },
+    });
+    const threadStart = await waitForHarnessRequest(harness, "thread/start");
+    harness.send({ id: threadStart.id, result: threadStartResult() });
+    const turnStart = await waitForHarnessRequest(harness, "turn/start");
+    harness.send({ id: turnStart.id, result: turnStartResult() });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    abort.abort("cancelled");
+    const interrupt = await waitForHarnessRequest(harness, "turn/interrupt");
+    harness.send({ id: interrupt.id, result: {} });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(settled).toBe(false);
+    expect(harness.writes.map((entry) => JSON.parse(entry).method)).not.toContain(
+      "thread/unsubscribe",
+    );
+
+    harness.send({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: { id: "turn-unrelated", status: "interrupted" },
+      },
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(settled).toBe(false);
+
+    harness.send({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: { id: "turn-1", status: "interrupted" },
+      },
+    });
+    const unsubscribe = await waitForHarnessRequest(harness, "thread/unsubscribe");
+    harness.send({ id: unsubscribe.id, result: {} });
+
+    expect(readAttemptTerminal(await run)).toMatchObject({ aborted: true, timedOut: false });
+  });
+
   it("gracefully retires a shared Codex client when a failed turn cannot unsubscribe", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");

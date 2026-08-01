@@ -208,6 +208,73 @@ describe("OpenAI ChatGPT Responses inference streaming", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it.each(["sse", "websocket"] as const)(
+    "preserves failed response identity and provider error details over %s",
+    async (transport) => {
+      const failedResponse = {
+        type: "response.failed",
+        response: {
+          id: "resp_failed",
+          status: "failed",
+          error: { code: "invalid_prompt", message: "rejected" },
+        },
+      };
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+
+      if (transport === "sse") {
+        fetchMock.mockResolvedValue(
+          new Response(`data: ${JSON.stringify(failedResponse)}\n\n`, {
+            status: 200,
+            headers: { "content-type": "text/event-stream" },
+          }),
+        );
+      } else {
+        class FailedResponseWebSocket extends EventTarget {
+          constructor() {
+            super();
+            queueMicrotask(() => this.dispatchEvent(new Event("open")));
+          }
+
+          send(): void {
+            queueMicrotask(() => {
+              this.dispatchEvent(
+                Object.assign(new Event("message"), { data: JSON.stringify(failedResponse) }),
+              );
+            });
+          }
+
+          close(): void {}
+        }
+        vi.stubGlobal("WebSocket", FailedResponseWebSocket);
+      }
+
+      const stream = streamOpenAICodexResponses(model, context, {
+        apiKey: createJwt({
+          "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" },
+        }),
+        transport,
+      });
+      const events = [];
+      for await (const event of stream) {
+        events.push(event);
+      }
+
+      expect(events.map((event) => event.type)).toEqual(["start", "error"]);
+      expect(events.at(-1)).toMatchObject({
+        type: "error",
+        error: {
+          responseId: "resp_failed",
+          stopReason: "error",
+          errorMessage: "invalid_prompt: rejected",
+        },
+      });
+      if (transport === "websocket") {
+        expect(fetchMock).not.toHaveBeenCalled();
+      }
+    },
+  );
+
   it("consumes CRLF-delimited responses through the provider SSE stream", async () => {
     const terminal = {
       type: "response.completed",

@@ -58,6 +58,7 @@ type ScopedToolsCall = {
   currentInboundAudio?: boolean;
   inboundEventKind?: string;
   sourceReplyDeliveryMode?: string;
+  sourceReplyOnly?: boolean;
   taskSuggestionDeliveryMode?: string;
   requireExplicitMessageTarget?: boolean;
   senderIsOwner?: boolean;
@@ -1252,6 +1253,7 @@ describe("mcp loopback server", () => {
         "x-openclaw-current-channel-id": "telegram:victim-chat",
         "x-openclaw-current-thread-ts": "999",
         "x-openclaw-source-reply-delivery-mode": "automatic",
+        "x-openclaw-source-reply-only": "true",
         "x-openclaw-inbound-event-kind": "room_event",
       }),
       body: mcpToolsListBody(),
@@ -1268,6 +1270,7 @@ describe("mcp loopback server", () => {
     expect(call.currentChannelId).toBeUndefined();
     expect(call.currentThreadTs).toBeUndefined();
     expect(call.sourceReplyDeliveryMode).toBeUndefined();
+    expect(call.sourceReplyOnly).toBeUndefined();
     expect(call.inboundEventKind).toBeUndefined();
     expect(call.conversationReadOrigin).toBe("delegated");
     expect(call.includeNodeExecTool).toBe(false);
@@ -1294,6 +1297,8 @@ describe("mcp loopback server", () => {
         accountId: "bound-account",
         inboundEventKind: "user_request",
         sourceReplyDeliveryMode: "message_tool_only",
+        sourceReplyOnly: true,
+        toolsAllow: ["message"],
         taskSuggestionDeliveryMode: "gateway",
         requireExplicitMessageTarget: true,
         senderIsOwner: false,
@@ -1347,6 +1352,7 @@ describe("mcp loopback server", () => {
           "x-openclaw-current-inbound-audio": "false",
           "x-openclaw-inbound-event-kind": "room_event",
           "x-openclaw-source-reply-delivery-mode": "automatic",
+          "x-openclaw-source-reply-only": "false",
           "x-openclaw-task-suggestion-delivery-mode": "direct",
           "x-openclaw-require-explicit-message-target": "false",
         }),
@@ -1375,6 +1381,7 @@ describe("mcp loopback server", () => {
       accountId: "bound-account",
       inboundEventKind: "user_request",
       sourceReplyDeliveryMode: "message_tool_only",
+      sourceReplyOnly: true,
       taskSuggestionDeliveryMode: "gateway",
       requireExplicitMessageTarget: true,
       senderIsOwner: false,

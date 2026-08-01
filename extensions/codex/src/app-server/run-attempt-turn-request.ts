@@ -1,7 +1,8 @@
 import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS,
-  interruptCodexTurnBestEffort,
+  closeCodexStartupClientBestEffort,
+  interruptCodexTurnAndWaitBestEffort,
 } from "./attempt-client-cleanup.js";
 import {
   createCodexModelCallDiagnosticEmitter,
@@ -141,11 +142,14 @@ export async function prepareCodexAttemptTurnRequest(
       return startedTurn;
     } catch (error) {
       if (acceptedTurnId) {
-        interruptCodexTurnBestEffort(resourceState.client, {
+        const completed = await interruptCodexTurnAndWaitBestEffort(resourceState.client, {
           threadId: resourceState.thread.threadId,
           turnId: acceptedTurnId,
           timeoutMs: CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS,
         });
+        if (!completed) {
+          await closeCodexStartupClientBestEffort(resourceState.client);
+        }
         releaseCurrentRoute();
       } else {
         await activeTurnRoute.cancelTurn();

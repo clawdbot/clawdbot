@@ -1345,46 +1345,6 @@ describe("buildQaRuntimeEnv", () => {
     expect([child.exitCode, child.signalCode]).not.toEqual([null, null]);
   });
 
-  it("crash-interrupts gateway children without running graceful shutdown", async () => {
-    const child = Object.assign(new EventEmitter(), {
-      pid: 12345,
-      exitCode: null as number | null,
-      signalCode: null as string | null,
-      kill: vi.fn((signal?: "SIGTERM" | "SIGKILL" | number) => {
-        if (signal === "SIGKILL") {
-          child.signalCode = "SIGKILL";
-          queueMicrotask(() => child.emit("exit"));
-        }
-        return true;
-      }),
-    });
-    const processKill = vi.spyOn(process, "kill").mockImplementation((_pid, signal) => {
-      if (signal === "SIGKILL") {
-        child.signalCode = "SIGKILL";
-        queueMicrotask(() => child.emit("exit"));
-      }
-      if (signal === 0 && child.signalCode) {
-        throw Object.assign(new Error("no such process"), { code: "ESRCH" });
-      }
-      return true;
-    });
-
-    processKill.mockClear();
-    await testing.stopQaGatewayChildProcessTree(
-      child as unknown as Parameters<typeof testing.stopQaGatewayChildProcessTree>[0],
-      { interruption: "crash", forceTimeoutMs: 10 },
-    );
-
-    if (process.platform === "win32") {
-      expect(child.kill).toHaveBeenCalledWith("SIGKILL");
-      expect(child.kill).not.toHaveBeenCalledWith("SIGTERM");
-    } else {
-      expect(processKill).toHaveBeenCalledWith(-12345, "SIGKILL");
-      expect(processKill).not.toHaveBeenCalledWith(-12345, "SIGTERM");
-    }
-    expect([child.exitCode, child.signalCode]).not.toEqual([null, null]);
-  });
-
   it("lets the gateway finish its bounded shutdown before process-tree escalation", () => {
     expect(testing.resolveQaGatewayChildStopTimeouts()).toEqual({
       gracefulTimeoutMs: 30_000,

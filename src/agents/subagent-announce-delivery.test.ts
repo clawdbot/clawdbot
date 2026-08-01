@@ -294,6 +294,7 @@ async function deliverDiscordDirectMessageCompletion(params: {
   queueEmbeddedAgentMessageWithOutcome?: QueueEmbeddedAgentMessageWithOutcome;
   sourceTool?: string;
   signal?: AbortSignal;
+  onDeliveryResult?: Parameters<typeof deliverSubagentAnnouncement>[0]["onDeliveryResult"];
 }) {
   const origin = {
     channel: "discord",
@@ -329,6 +330,7 @@ async function deliverDiscordDirectMessageCompletion(params: {
     internalEvents: params.internalEvents,
     sourceTool: params.sourceTool,
     signal: params.signal,
+    onDeliveryResult: params.onDeliveryResult,
   });
 }
 
@@ -1111,6 +1113,68 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         sourceReplyDeliveryMode: "message_tool_only",
       });
     }
+  });
+
+  it("reports direct completion delivery before post-send transcript mirroring settles", async () => {
+    const callGateway = createPayloadGatewayMock();
+    let releaseMirror!: () => void;
+    const mirrorPending = new Promise<void>((resolve) => {
+      releaseMirror = resolve;
+    });
+    let resolvePlatformCommit!: () => void;
+    const platformCommitted = new Promise<void>((resolve) => {
+      resolvePlatformCommit = resolve;
+    });
+    const onDeliveryResult = vi.fn(() => resolvePlatformCommit());
+    const sendMessage = vi.fn(async (params: Parameters<typeof runtimeSendMessage>[0]) => {
+      const platformResult = { channel: "discord", messageId: "msg-1" };
+      await params.onDeliveryResult?.(platformResult);
+      await params.onDeliveryResult?.(platformResult);
+      await mirrorPending;
+      return {
+        channel: "discord",
+        to: "dm:U123",
+        via: "direct" as const,
+        mediaUrl: null,
+        result: platformResult,
+      };
+    }) as unknown as typeof runtimeSendMessage;
+
+    const delivery = deliverDiscordDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      internalEvents: taskCompletionEvents({ childSessionId: "child-session-id" }),
+      onDeliveryResult,
+    });
+    await platformCommitted;
+
+    expect(onDeliveryResult).toHaveBeenCalledTimes(1);
+    expect(onDeliveryResult).toHaveBeenCalledWith(
+      expect.objectContaining({ delivered: true, path: "direct", deliveredAt: expect.any(Number) }),
+    );
+    releaseMirror();
+    await expect(delivery).resolves.toMatchObject({ delivered: true, path: "direct" });
+    expect(onDeliveryResult).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves an identified direct completion when later send bookkeeping fails", async () => {
+    const callGateway = createPayloadGatewayMock();
+    const onDeliveryResult = vi.fn();
+    const sendMessage = vi.fn(async (params: Parameters<typeof runtimeSendMessage>[0]) => {
+      await params.onDeliveryResult?.({ channel: "discord", messageId: "msg-1" });
+      throw new Error("post-send bookkeeping failed");
+    }) as unknown as typeof runtimeSendMessage;
+
+    const delivery = await deliverDiscordDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      internalEvents: taskCompletionEvents({ childSessionId: "child-session-id" }),
+      onDeliveryResult,
+    });
+
+    expect(delivery).toMatchObject({ delivered: true, path: "direct" });
+    expect(onDeliveryResult).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledTimes(1);
   });
 
   it("does not directly deliver failed subagent placeholder output", async () => {
@@ -2526,6 +2590,40 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     });
   });
 
+  it("does not count a different channel target as the requester completion delivery", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [],
+        didSendViaMessagingTool: true,
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "slack",
+            accountId: "acct-1",
+            to: "channel:OTHER",
+            text: "An unrelated channel update.",
+          },
+        ],
+      },
+    });
+    const sendMessage = createSendMessageMock();
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      sendMessage,
+      directIdempotencyKey: "announce-channel-subagent-off-target",
+      sourceTool: "subagent_announce",
+      runtimeConfig: { messages: { groupChat: { visibleReplies: "message_tool" } } },
+      internalEvents: taskCompletionEvents({ childSessionId: "child-session-id" }),
+    });
+
+    expectRecordFields(result, {
+      delivered: false,
+      path: "direct",
+      reason: "message_tool_delivery_missing",
+    });
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
   it("delivers Telegram forum-topic subagent completions through the normal parent handoff", async () => {
     const callGateway = createPayloadGatewayMock({ text: "The delegated task is complete." });
 
@@ -2587,6 +2685,103 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     });
     expect(sendMessage).not.toHaveBeenCalled();
   });
+
+  it.each([
+    {
+      name: "accepts message delivery to the requester",
+      target: { provider: "discord", accountId: "acct-1", to: "dm:U123" },
+      fallsBack: false,
+    },
+    {
+      name: "accepts legacy targetless delivery on the requester provider",
+      target: { provider: "message" },
+      fallsBack: false,
+    },
+    {
+      name: "repairs a completion sent to another recipient",
+      target: { provider: "discord", accountId: "acct-1", to: "dm:OTHER" },
+      fallsBack: true,
+    },
+    {
+      name: "repairs a targetless completion sent through another provider",
+      target: { provider: "slack" },
+      fallsBack: true,
+    },
+    {
+      name: "repairs a completion sent through another requester account",
+      target: { provider: "discord", accountId: "acct-other", to: "dm:U123" },
+      fallsBack: true,
+    },
+    {
+      name: "preserves authoritative source delivery alongside an unrelated send",
+      target: { provider: "discord", accountId: "acct-1", to: "dm:OTHER" },
+      didDeliverSourceReplyViaMessageTool: true,
+      fallsBack: false,
+    },
+    {
+      name: "preserves targetless source media alongside an unrelated targeted send",
+      target: {
+        provider: "discord",
+        accountId: "acct-1",
+        to: "dm:OTHER",
+        mediaUrls: ["/tmp/unrelated.mp3"],
+      },
+      messagingToolSentMediaUrls: ["/tmp/current-source.mp3"],
+      fallsBack: false,
+    },
+    {
+      name: "does not mistake an off-target attachment for targetless source media",
+      target: {
+        provider: "discord",
+        accountId: "acct-1",
+        to: "dm:OTHER",
+        mediaUrls: ["/tmp/off-target.mp3"],
+      },
+      messagingToolSentMediaUrls: ["/tmp/off-target.mp3"],
+      fallsBack: true,
+    },
+  ])(
+    "$name",
+    async ({
+      target,
+      didDeliverSourceReplyViaMessageTool,
+      messagingToolSentMediaUrls,
+      fallsBack,
+    }) => {
+      const callGateway = createGatewayMock({
+        result: {
+          payloads: [],
+          didSendViaMessagingTool: true,
+          ...(didDeliverSourceReplyViaMessageTool ? { didDeliverSourceReplyViaMessageTool } : {}),
+          ...(messagingToolSentMediaUrls ? { messagingToolSentMediaUrls } : {}),
+          messagingToolSentTargets: [
+            { tool: "message", ...target, text: "The subagent is done: child completion output" },
+          ],
+        },
+      });
+      const sendMessage = createSendMessageMock();
+      const result = await deliverDiscordDirectMessageCompletion({
+        callGateway,
+        sendMessage,
+        sourceTool: "subagent_announce",
+        internalEvents: taskCompletionEvents({ childSessionId: "child-session-id" }),
+      });
+
+      expectDeliveryPath(result, "direct");
+      if (fallsBack) {
+        expect(sendMessage).toHaveBeenCalledWith(
+          expect.objectContaining({
+            channel: "discord",
+            accountId: "acct-1",
+            to: "dm:U123",
+            content: "child completion output",
+          }),
+        );
+      } else {
+        expect(sendMessage).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("retries active direct subagent completion wake without forced message-tool mode", async () => {
     const callGateway = createGatewayMock({
