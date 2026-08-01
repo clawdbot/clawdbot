@@ -1,7 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
-import { archiveCopilotSession } from "./copilot-background-shared.js";
+import { describe, expect, it } from "vitest";
 import { CopilotPanelBindingRegistry, CopilotSessionRegistry } from "./copilot-session-registry.js";
-import { createCopilotSessionController } from "./copilot-session.js";
 
 const GATEWAY_SCOPE = "ws://127.0.0.1:18789/";
 
@@ -66,102 +64,6 @@ describe("CopilotSessionRegistry", () => {
       "session-old",
       "session-closed",
     ]);
-  });
-
-  it("creates a uniquely labeled session after archiving a prior browser instance", async () => {
-    const oldSessionKey =
-      "agent:main:main:thread:browser-copilot-11111111-1111-4111-8111-111111111111";
-    const oldSessionLabel = "Browser copilot";
-    const newSessionUuid = "22222222-2222-4222-8222-222222222222";
-    const newSessionKey = `agent:main:main:thread:browser-copilot-${newSessionUuid}`;
-    const mock = storage(
-      {
-        copilotSessionRegistryV1: {
-          sessions: {
-            7: {
-              tabId: 7,
-              browserInstanceId: "old",
-              gatewayScope: GATEWAY_SCOPE,
-              sessionKey: oldSessionKey,
-              sessionId: "id-old",
-            },
-          },
-          pendingArchives: [],
-        },
-      },
-      { copilotBrowserInstanceV1: "new" },
-    );
-    const labels = new Map([[oldSessionLabel, oldSessionKey]]);
-    const request = vi.fn(async (method: string, params: Record<string, unknown>) => {
-      if (method !== "sessions.create") {
-        return { ok: true };
-      }
-      const key = String(params.key);
-      const label = String(params.label);
-      const existingKey = labels.get(label);
-      if (existingKey && existingKey !== key) {
-        throw new Error(`label already in use: ${label}`);
-      }
-      labels.set(label, key);
-      return { sessionId: "id-new" };
-    });
-    const gateway = {
-      ready: true,
-      hello: { snapshot: { sessionDefaults: { mainSessionKey: "agent:main:main" } } },
-      request,
-    };
-    const registry = new CopilotSessionRegistry(mock as never);
-    await registry.initialize(new Set([7]));
-    const [archive] = registry.pendingArchives(GATEWAY_SCOPE);
-    if (!archive) {
-      throw new Error("expected the prior browser session to be pending archival");
-    }
-    expect(archive.sessionKey).toBe(oldSessionKey);
-    await archiveCopilotSession(gateway, archive);
-    await registry.resolveArchive(GATEWAY_SCOPE, oldSessionKey);
-
-    vi.spyOn(crypto, "randomUUID").mockReturnValue(newSessionUuid);
-    const controller = createCopilotSessionController({
-      chromeApi: { tabs: { get: vi.fn(async () => ({ id: 7 })) } },
-      gateway,
-      registry,
-      ensureByTab: new Map(),
-      tabRevisions: new Map(),
-      portsByTab: new Map([[7, new Set([{}])]]),
-      portRevisions: new Map(),
-      sendsByTab: new Set(),
-      currentGatewayScope: () => GATEWAY_SCOPE,
-      getGatewayRevision: () => 0,
-      getCurrentConfig: () => ({
-        relayUrl: "ws://127.0.0.1:18792/browser/extension",
-        gatewayUrl: GATEWAY_SCOPE,
-      }),
-      isConfigTransitioning: () => false,
-      currentReadyEpoch: () => ({ gatewayScope: GATEWAY_SCOPE, configRevision: 0 }),
-      readyEpochIsCurrent: () => true,
-      isTabShared: vi.fn(async () => true),
-      attachDebugger: vi.fn(async () => ({ targetId: "target-7" })),
-      revokeDebugger: vi.fn(),
-      restoreDebuggerIfReleased: vi.fn(),
-      subscribe: vi.fn(async () => undefined),
-      unsubscribeTab: vi.fn(),
-      suspendTab: vi.fn(),
-      hydrate: vi.fn(),
-      refreshPanelState: vi.fn(),
-      drainArchives: vi.fn(),
-      scheduleAbortRetry: vi.fn(),
-    } as never);
-
-    await expect(controller.ensureSession(7, { hydrateHistory: false })).resolves.toMatchObject({
-      sessionKey: newSessionKey,
-      sessionId: "id-new",
-    });
-    expect(labels).toEqual(
-      new Map([
-        [oldSessionLabel, oldSessionKey],
-        [`Browser copilot ${newSessionUuid}`, newSessionKey],
-      ]),
-    );
   });
 
   it("moves a closed tab to the durable archive queue exactly once", async () => {

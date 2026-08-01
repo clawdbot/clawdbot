@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { chromium, type CDPSession, type Page, type Worker } from "playwright-core";
+import { chromium, type CDPSession, type Worker } from "playwright-core";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocketServer, type WebSocket } from "ws";
 import {
@@ -15,10 +15,11 @@ import {
   assertCopilotStaleRunIsolation,
   countCopilotHistoryRequests,
   copyCopilotSidepanelExtension,
-  isSidePanelTarget,
+  openTabPanel,
   rawDataText,
   resolveChromiumExecutableOverride,
   textValue,
+  type PanelTarget,
   waitForContextExtensionId,
   waitForLoadedExtensionId,
 } from "./sidepanel.e2e-support.js";
@@ -83,26 +84,6 @@ type RelayHarness = {
   port: number;
   close: () => Promise<void>;
   setAvailable: (available: boolean) => void;
-};
-
-type TargetInfo = { targetId: string; type: string; url: string };
-
-type PanelTarget = {
-  allText: (selector: string) => Promise<string[]>;
-  click: (selector: string) => Promise<void>;
-  disabled: (selector: string) => Promise<boolean>;
-  fill: (selector: string, value: string) => Promise<void>;
-  hidden: (selector: string) => Promise<boolean>;
-  pressEnter: (
-    selector: string,
-    isComposing: boolean,
-  ) => Promise<{
-    defaultPrevented: boolean;
-    value: string;
-  }>;
-  screenshot: (targetPath: string) => Promise<void>;
-  text: (selector: string) => Promise<string>;
-  wakeBackground: () => Promise<void>;
 };
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -399,7 +380,7 @@ async function restartServiceWorker(
   panel: PanelTarget,
 ): Promise<void> {
   const targets = (await browserCdp.send("Target.getTargets")) as {
-    targetInfos: TargetInfo[];
+    targetInfos: Array<{ targetId: string; type: string; url: string }>;
   };
   const target = targets.targetInfos.find(
     (candidate) => candidate.type === "service_worker" && candidate.url === worker.url(),
@@ -416,164 +397,6 @@ async function restartServiceWorker(
   // A real extension message wakes the terminated worker. The panel must then
   // reconnect its long-lived port before it can become ready again.
   await panel.wakeBackground();
-}
-
-function createPanelTarget(root: CDPSession, sessionId: string): PanelTarget {
-  let commandId = 0;
-  const pending = new Map<
-    number,
-    { reject: (error: Error) => void; resolve: (result: Record<string, unknown>) => void }
-  >();
-  root.on("Target.receivedMessageFromTarget", (event: { message: string; sessionId: string }) => {
-    if (event.sessionId !== sessionId) {
-      return;
-    }
-    const message = JSON.parse(event.message) as {
-      error?: { message?: string };
-      id?: number;
-      result?: Record<string, unknown>;
-    };
-    if (typeof message.id !== "number") {
-      return;
-    }
-    const waiter = pending.get(message.id);
-    if (!waiter) {
-      return;
-    }
-    pending.delete(message.id);
-    if (message.error) {
-      waiter.reject(new Error(message.error.message ?? "CDP panel command failed"));
-    } else {
-      waiter.resolve(message.result ?? {});
-    }
-  });
-
-  async function send(method: string, params: Record<string, unknown> = {}) {
-    const id = ++commandId;
-    const result = new Promise<Record<string, unknown>>((resolve, reject) => {
-      pending.set(id, { resolve, reject });
-    });
-    await root.send("Target.sendMessageToTarget", {
-      sessionId,
-      message: JSON.stringify({ id, method, params }),
-    });
-    return await result;
-  }
-
-  async function evaluate<T>(expression: string): Promise<T> {
-    const result = await send("Runtime.evaluate", {
-      expression,
-      awaitPromise: true,
-      returnByValue: true,
-    });
-    const exception = result.exceptionDetails as { text?: string } | undefined;
-    if (exception) {
-      throw new Error(exception.text ?? "side-panel evaluation failed");
-    }
-    return (result.result as { value?: T } | undefined)?.value as T;
-  }
-
-  const selectorExpression = (selector: string) => JSON.stringify(selector);
-  return {
-    allText: async (selector) =>
-      await evaluate<string[]>(
-        `[...document.querySelectorAll(${selectorExpression(selector)})].map((node) => node.textContent ?? "")`,
-      ),
-    click: async (selector) => {
-      await evaluate(`document.querySelector(${selectorExpression(selector)})?.click()`);
-    },
-    disabled: async (selector) =>
-      await evaluate<boolean>(
-        `Boolean(document.querySelector(${selectorExpression(selector)})?.disabled)`,
-      ),
-    fill: async (selector, value) => {
-      await evaluate(`(() => {
-        const input = document.querySelector(${selectorExpression(selector)});
-        input.value = ${JSON.stringify(value)};
-        input.dispatchEvent(new Event("input", { bubbles: true }));
-      })()`);
-    },
-    hidden: async (selector) =>
-      await evaluate<boolean>(
-        `document.querySelector(${selectorExpression(selector)})?.classList.contains("hidden") === true`,
-      ),
-    pressEnter: async (selector, isComposing) =>
-      await evaluate<{ defaultPrevented: boolean; value: string }>(`(() => {
-        const input = document.querySelector(${selectorExpression(selector)});
-        const event = new KeyboardEvent("keydown", {
-          key: "Enter", bubbles: true, cancelable: true, isComposing: ${isComposing},
-        });
-        input.dispatchEvent(event);
-        return { defaultPrevented: event.defaultPrevented, value: input.value };
-      })()`),
-    screenshot: async (targetPath) => {
-      await send("Page.enable");
-      const result = await send("Page.captureScreenshot", { format: "png", fromSurface: true });
-      await fs.writeFile(targetPath, Buffer.from(String(result.data), "base64"));
-    },
-    text: async (selector) =>
-      await evaluate<string>(
-        `document.querySelector(${selectorExpression(selector)})?.textContent ?? ""`,
-      ),
-    wakeBackground: async () => {
-      await evaluate(
-        `chrome.runtime.sendMessage({ type: "copilot.e2e.wake" }).catch(() => undefined)`,
-      );
-    },
-  };
-}
-
-async function openTabPanel(params: {
-  browserCdp: CDPSession;
-  extensionId: string;
-  page: Page;
-}): Promise<PanelTarget> {
-  const prior = (await params.browserCdp.send("Target.getTargets")) as {
-    targetInfos: TargetInfo[];
-  };
-  const priorTargetIds = new Set(prior.targetInfos.map((target) => target.targetId));
-  await params.page.goto(`chrome-extension://${params.extensionId}/e2e-launcher.html`);
-  await expect
-    .poll(async () => await params.page.locator("body").getAttribute("data-ready"))
-    .toBe("true");
-  await params.page.locator("#open").click();
-  await expect
-    .poll(
-      async () =>
-        await params.page.locator("body").evaluate((body) => ({
-          error: body.dataset.error,
-          opened: body.dataset.opened,
-        })),
-      { timeout: 5_000 },
-    )
-    .toEqual({ error: undefined, opened: "true" });
-  await expect
-    .poll(
-      async () => {
-        const targets = (await params.browserCdp.send("Target.getTargets")) as {
-          targetInfos: TargetInfo[];
-        };
-        return targets.targetInfos.find(
-          (target) => !priorTargetIds.has(target.targetId) && isSidePanelTarget(target),
-        );
-      },
-      { timeout: 15_000 },
-    )
-    .toBeTruthy();
-  const targets = (await params.browserCdp.send("Target.getTargets")) as {
-    targetInfos: TargetInfo[];
-  };
-  const target = targets.targetInfos.find(
-    (candidate) => !priorTargetIds.has(candidate.targetId) && isSidePanelTarget(candidate),
-  );
-  if (!target) {
-    throw new Error("Chrome did not expose the tab-specific side-panel target");
-  }
-  const attached = (await params.browserCdp.send("Target.attachToTarget", {
-    targetId: target.targetId,
-    flatten: false,
-  })) as { sessionId: string };
-  return createPanelTarget(params.browserCdp, attached.sessionId);
 }
 
 async function disableTabPanel(worker: Worker, tabId: number): Promise<void> {
@@ -612,6 +435,8 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
     const launchOptions: Parameters<typeof chromium.launchPersistentContext>[1] = {
       ...(executablePath ? { executablePath } : { channel: "chromium" }),
       headless: true,
+      // Playwright disables extensions by default, which overrides the unpacked fixture below.
+      ignoreDefaultArgs: ["--disable-extensions"],
       args: [
         "--enable-unsafe-extension-debugging",
         `--disable-extensions-except=${unpackedExtension}`,
@@ -648,15 +473,15 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
     gateway.labels.set("Browser copilot", oldSessionKey);
     gateway.histories.set(oldSessionKey, []);
     await launcher.evaluate(
-      async ({ gatewayScope, oldSessionKey, tabId }) => {
+      async ({ gatewayScope, archivedSessionKey, currentTabId }) => {
         await chrome.storage.local.set({
           copilotSessionRegistryV1: {
             sessions: {
-              [tabId]: {
-                tabId,
+              [currentTabId]: {
+                tabId: currentTabId,
                 browserInstanceId: "beta-5-browser-instance",
                 gatewayScope,
-                sessionKey: oldSessionKey,
+                sessionKey: archivedSessionKey,
                 sessionId: "beta-5-session",
               },
             },
@@ -668,9 +493,9 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
         });
       },
       {
+        archivedSessionKey: oldSessionKey,
+        currentTabId: tabId,
         gatewayScope: `ws://127.0.0.1:${gateway.port}/`,
-        oldSessionKey,
-        tabId,
       },
     );
 
@@ -731,6 +556,8 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
     const context = await chromium.launchPersistentContext(userDataDir, {
       ...(executablePath ? { executablePath } : { channel: "chromium" }),
       headless: true,
+      // Playwright disables extensions by default, which overrides the unpacked fixture below.
+      ignoreDefaultArgs: ["--disable-extensions"],
       args: [
         "--enable-unsafe-extension-debugging",
         `--disable-extensions-except=${unpackedExtension}`,
@@ -792,6 +619,8 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
     const context = await chromium.launchPersistentContext(userDataDir, {
       ...(executablePath ? { executablePath } : { channel: "chromium" }),
       headless: true,
+      // Playwright disables extensions by default, which overrides the unpacked fixture below.
+      ignoreDefaultArgs: ["--disable-extensions"],
       args: [
         "--enable-unsafe-extension-debugging",
         `--disable-extensions-except=${unpackedExtension}`,
