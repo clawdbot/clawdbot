@@ -98,7 +98,7 @@ describe("subagent registry archive behavior", () => {
     mod.testing.setDepsForTest({
       callGateway,
       getRuntimeConfig: loadConfigMock as typeof import("../config/config.js").getRuntimeConfig,
-      ensureRuntimePluginsLoaded: vi.fn(),
+      loadAgentRuntimePluginRegistryHandle: vi.fn(),
       maybeWakeRequesterAfterAllChildrenSettled: vi.fn(async (params) => {
         params.completeBatch([params.settledEntry.runId]);
         return false;
@@ -230,7 +230,6 @@ describe("subagent registry archive behavior", () => {
     });
     setRegistryTestDeps({
       ensureContextEnginesInitialized: vi.fn(),
-      ensureRuntimePluginsLoaded: vi.fn(),
       resolveContextEngine: vi.fn(async () => ({ onSubagentEnded }) as never),
     });
 
@@ -668,7 +667,7 @@ describe("subagent registry archive behavior", () => {
   it("continues killed cleanup when ended hook loading fails", async () => {
     const now = Date.now();
     setRegistryTestDeps({
-      ensureRuntimePluginsLoaded: vi.fn(() => {
+      loadAgentRuntimePluginRegistryHandle: vi.fn(() => {
         throw new Error("plugin load failed");
       }),
     });

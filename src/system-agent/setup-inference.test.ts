@@ -59,7 +59,7 @@ import {
 
 const mocks = vi.hoisted(() => ({
   appendAudit: vi.fn(),
-  ensureSelectedAgentHarnessPlugin: vi.fn(),
+  loadAgentRuntimePluginRegistryHandle: vi.fn(),
   refreshPluginRegistryAfterConfigMutation: vi.fn(),
 }));
 
@@ -67,9 +67,8 @@ vi.mock("./audit.js", () => ({
   appendSystemAgentAuditEntry: mocks.appendAudit,
 }));
 
-vi.mock("../agents/harness/runtime-plugin.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../agents/harness/runtime-plugin.js")>()),
-  ensureSelectedAgentHarnessPlugin: mocks.ensureSelectedAgentHarnessPlugin,
+vi.mock("../agents/runtime-plugins.js", () => ({
+  loadAgentRuntimePluginRegistryHandle: mocks.loadAgentRuntimePluginRegistryHandle,
 }));
 
 vi.mock("../plugins/registry-refresh.js", () => ({
@@ -1123,7 +1122,9 @@ describe("activateSetupInference", () => {
 
   beforeEach(() => {
     mocks.appendAudit.mockReset();
-    mocks.ensureSelectedAgentHarnessPlugin.mockReset().mockResolvedValue(undefined);
+    mocks.loadAgentRuntimePluginRegistryHandle
+      .mockReset()
+      .mockReturnValue(createEmptyPluginRegistry());
     mocks.refreshPluginRegistryAfterConfigMutation.mockReset().mockResolvedValue(undefined);
   });
 
@@ -4264,11 +4265,15 @@ describe("activateSetupInference", () => {
         agentId: "ops",
       }),
     );
-    expect(mocks.ensureSelectedAgentHarnessPlugin).toHaveBeenCalledWith(
+    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledWith(
       expect.objectContaining({
-        provider: "openai",
-        modelId: "gpt-5.6-sol",
-        agentHarnessRuntimeOverride: "codex",
+        selections: [
+          expect.objectContaining({
+            provider: "openai",
+            modelId: "gpt-5.6-sol",
+            runtime: "codex",
+          }),
+        ],
       }),
     );
     expect(refreshPluginRegistry).toHaveBeenCalledWith(
@@ -4427,7 +4432,6 @@ describe("activateSetupInference", () => {
       installed: true,
       status: "installed" as const,
     }));
-    const ensureSelectedAgentHarnessPlugin = vi.fn(async () => {});
     const refreshPluginRegistryAfterConfigMutation = vi.fn(
       async (params: { logger?: { warn?: (message: string) => void } }) => {
         params.logger?.warn?.("best-effort refresh warning");
@@ -4435,7 +4439,7 @@ describe("activateSetupInference", () => {
     );
     const runEmbeddedAgent = vi.fn(async (params: SuccessfulRunParams) => {
       expect(refreshPluginRegistryAfterConfigMutation).toHaveBeenCalledOnce();
-      expect(ensureSelectedAgentHarnessPlugin).toHaveBeenCalledOnce();
+      expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledOnce();
       return successfulRun("openai", "gpt-5.4", params);
     });
     const result = await activateSetupInference({
@@ -4455,7 +4459,6 @@ describe("activateSetupInference", () => {
           runtimeConfig: initialConfig,
         })) as never,
         ensureCodexRuntimePlugin: ensureCodex as never,
-        ensureSelectedAgentHarnessPlugin: ensureSelectedAgentHarnessPlugin as never,
         refreshPluginRegistryAfterConfigMutation: refreshPluginRegistryAfterConfigMutation as never,
         runEmbeddedAgent: runEmbeddedAgent as never,
         transformConfigWithPendingPluginInstalls: configHarness.transform as never,
@@ -4465,11 +4468,11 @@ describe("activateSetupInference", () => {
 
     expect(result).toMatchObject({ ok: true, modelRef: "openai/gpt-5.4" });
     expect(ensureCodex).toHaveBeenCalledWith(expect.objectContaining({ model: "openai/gpt-5.4" }));
-    expect(ensureSelectedAgentHarnessPlugin).toHaveBeenCalledWith(
+    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledWith(
       expect.objectContaining({
-        provider: "openai",
-        modelId: "gpt-5.4",
-        agentHarnessRuntimeOverride: "codex",
+        selections: [
+          expect.objectContaining({ provider: "openai", modelId: "gpt-5.4", runtime: "codex" }),
+        ],
       }),
     );
     expect(refreshPluginRegistryAfterConfigMutation).toHaveBeenCalledWith(

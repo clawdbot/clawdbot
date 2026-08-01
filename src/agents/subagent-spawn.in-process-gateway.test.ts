@@ -106,7 +106,6 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
       persistSubagentRunsToDisk: () => {},
       persistSubagentRunsToDiskOrThrow: () => {},
       restoreSubagentRunsFromDisk: () => 0,
-      ensureRuntimePluginsLoaded: () => {},
     });
 
     stateDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-swarm-gateway-"));

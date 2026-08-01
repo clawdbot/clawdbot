@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginRegistry } from "./registry-types.js";
 import { createEmptyPluginRegistry } from "./registry.js";
+import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
 
 type MockManifestRegistry = {
   plugins: Array<Record<string, unknown>>;
@@ -42,11 +43,12 @@ const mocks = vi.hoisted(() => ({
     snapshot: params?.index ?? createMockPluginIndex([]),
     diagnostics: [],
   })),
-  ensureStandaloneRuntimePluginRegistryLoaded: vi.fn(),
+  loadRuntimePluginRegistryHandle: vi.fn(),
   listBundledPluginMetadata: vi.fn(() => []),
 }));
 
-vi.mock("./loader.js", () => ({
+vi.mock("./loader.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./loader.js")>()),
   resolveRuntimePluginRegistry: mocks.resolveRuntimePluginRegistry,
 }));
 
@@ -72,7 +74,7 @@ vi.mock("./manifest-registry-installed.js", () => ({
 }));
 
 vi.mock("./runtime/standalone-runtime-registry-loader.js", () => ({
-  ensureStandaloneRuntimePluginRegistryLoaded: mocks.ensureStandaloneRuntimePluginRegistryLoaded,
+  loadRuntimePluginRegistryHandle: mocks.loadRuntimePluginRegistryHandle,
 }));
 
 vi.mock("./bundled-plugin-metadata.js", () => ({
@@ -106,10 +108,12 @@ function requireMockCallArg(
 
 describe("migration provider runtime", () => {
   beforeEach(async () => {
+    vi.resetModules();
     vi.clearAllMocks();
     mocks.resolveRuntimePluginRegistry.mockReturnValue(createEmptyPluginRegistry());
     mocks.loadPluginManifestRegistry.mockReturnValue(createEmptyMockManifestRegistry());
     mocks.loadPluginRegistrySnapshot.mockReturnValue(createMockPluginIndex([]));
+    mocks.loadRuntimePluginRegistryHandle.mockReturnValue(createEmptyPluginRegistry());
     mocks.listBundledPluginMetadata.mockReturnValue([]);
     mocks.loadPluginRegistrySnapshotWithMetadata.mockImplementation(
       (params?: { index?: MockPluginIndex }) => ({
@@ -151,8 +155,8 @@ describe("migration provider runtime", () => {
     });
 
     const standaloneParams = requireMockCallArg(
-      mocks.ensureStandaloneRuntimePluginRegistryLoaded,
-      "ensureStandaloneRuntimePluginRegistryLoaded",
+      mocks.loadRuntimePluginRegistryHandle,
+      "loadRuntimePluginRegistryHandle",
     ) as {
       surface?: unknown;
       requiredPluginIds?: unknown;
@@ -164,7 +168,6 @@ describe("migration provider runtime", () => {
     };
     expect(standaloneParams.surface).toBe("active");
     expect(standaloneParams.requiredPluginIds).toEqual(["migrate-hermes"]);
-    expect(standaloneParams.loadOptions?.activate).toBe(false);
     expect(standaloneParams.loadOptions?.onlyPluginIds).toEqual(["migrate-hermes"]);
     expect(standaloneParams.loadOptions?.config?.plugins?.enabled).toBe(true);
     expect(standaloneParams.loadOptions?.config?.plugins?.entries).toEqual({
@@ -185,8 +188,8 @@ describe("migration provider runtime", () => {
     ensureStandaloneMigrationProviderRegistryLoaded({ providerId: "hermes" });
 
     const standaloneParams = requireMockCallArg(
-      mocks.ensureStandaloneRuntimePluginRegistryLoaded,
-      "ensureStandaloneRuntimePluginRegistryLoaded",
+      mocks.loadRuntimePluginRegistryHandle,
+      "loadRuntimePluginRegistryHandle",
     );
     expect(standaloneParams.requiredPluginIds).toEqual(["migrate-hermes"]);
     expect(
@@ -194,7 +197,7 @@ describe("migration provider runtime", () => {
     ).toEqual(["migrate-hermes"]);
   });
 
-  it("loads configured external migration-provider plugins from manifest contracts", () => {
+  it("loads configured external migration-provider plugins from manifest contracts", async () => {
     const cfg = {
       plugins: { entries: { "external-migration": { enabled: true } } },
     } as OpenClawConfig;
@@ -250,7 +253,12 @@ describe("migration provider runtime", () => {
 
     const resolved = resolvePluginMigrationProvider({ providerId: "external-import", cfg });
 
-    expect(resolved).toBe(provider);
+    expect(resolved).not.toBe(provider);
+    provider.plan.mockImplementationOnce(() => {
+      expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(loaded);
+      return {} as never;
+    });
+    await resolved?.plan({} as never);
     expect(mocks.loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledWith({
       config: cfg,
       env: process.env,
@@ -301,13 +309,52 @@ describe("migration provider runtime", () => {
 
     const resolved = resolvePluginMigrationProvider({ providerId: "hermes" });
 
-    expect(resolved).toBe(provider);
+    expect(resolved).not.toBe(provider);
     expect(mocks.listBundledPluginMetadata).toHaveBeenCalledWith({
       includeChannelConfigs: false,
     });
     expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith({
       onlyPluginIds: ["migrate-hermes"],
     });
+  });
+
+  it("does not reuse a standalone handle after the migration owner or config changes", () => {
+    const cfgA = { plugins: { allow: ["migration-a"] } } as OpenClawConfig;
+    const cfgB = { plugins: { allow: ["migration-b"] } } as OpenClawConfig;
+    const provider = createMigrationProvider("shared-import");
+    const loadedA = createEmptyPluginRegistry();
+    loadedA.migrationProviders.push({
+      pluginId: "migration-a",
+      pluginName: "Migration A",
+      source: "test",
+      provider,
+    } as never);
+    mocks.loadRuntimePluginRegistryHandle.mockReturnValue(loadedA);
+    mocks.listBundledPluginMetadata.mockReturnValue([
+      {
+        manifest: {
+          id: "migration-a",
+          contracts: { migrationProviders: ["shared-import"] },
+        },
+      },
+    ] as never);
+
+    ensureStandaloneMigrationProviderRegistryLoaded({
+      cfg: cfgA,
+      providerId: "shared-import",
+    });
+    mocks.listBundledPluginMetadata.mockReturnValue([
+      {
+        manifest: {
+          id: "migration-b",
+          contracts: { migrationProviders: ["shared-import"] },
+        },
+      },
+    ] as never);
+
+    expect(
+      resolvePluginMigrationProvider({ providerId: "shared-import", cfg: cfgB }),
+    ).toBeUndefined();
   });
 
   it("lists configured external migration providers alongside active providers", () => {

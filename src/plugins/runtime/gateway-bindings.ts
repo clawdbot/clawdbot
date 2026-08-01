@@ -19,6 +19,9 @@ export const gatewaySubagentState = resolveGlobalSingleton<GatewaySubagentState>
   }),
 );
 
+// PHASE2C: Remove this singleton after session-catalog owns its nodes runtime and prepared/request
+// registry handles carry concrete gateway bindings across reload instead of using late proxies.
+
 /**
  * Set the process-global gateway subagent runtime.
  * Called during gateway startup so that gateway-bindable plugin runtimes can
