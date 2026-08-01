@@ -11,6 +11,7 @@ import {
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { OpenClawConfig } from "../api.js";
 import { applyMemoryWikiMutation } from "./apply.js";
+import { registerMemoryWikiBatchCli } from "./batch-cli.js";
 import {
   importChatGptConversations,
   rollbackChatGptImportRun,
@@ -65,13 +66,9 @@ const ANSI_ESCAPE_SEQUENCE_PATTERN = new RegExp(
 const TERMINAL_CONTROL_CHARACTER_PATTERN = new RegExp(String.raw`[\x00-\x1F\x7F-\x9F]+`, "g");
 const UNICODE_FORMAT_CONTROL_PATTERN = /[\u061C\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]/g;
 
-type WikiStatusCommandOptions = {
-  json?: boolean;
-};
+type WikiStatusCommandOptions = { json?: boolean };
 
-type WikiDoctorCommandOptions = {
-  json?: boolean;
-};
+type WikiDoctorCommandOptions = { json?: boolean };
 
 type WikiInitCommandOptions = {
   json?: boolean;
@@ -391,7 +388,10 @@ function formatMemoryWikiMutationSummary(result: MemoryWikiMutationResult, json?
   if (json) {
     return JSON.stringify(result, null, 2);
   }
-  return `${result.changed ? "Updated" : "No changes for"} ${result.pagePath} via ${result.operation}. ${result.compile.updatedFiles.length > 0 ? `Refreshed ${result.compile.updatedFiles.length} index file${result.compile.updatedFiles.length === 1 ? "" : "s"}.` : "Indexes unchanged."}`;
+  if (!result.compile) {
+    return `No changes for ${result.pagePath} via ${result.operation}. Index compilation skipped.`;
+  }
+  return `Updated ${result.pagePath} via ${result.operation}. ${result.compile.updatedFiles.length > 0 ? `Refreshed ${result.compile.updatedFiles.length} index file${result.compile.updatedFiles.length === 1 ? "" : "s"}.` : "Indexes unchanged."}`;
 }
 
 function formatJsonOrText<T>(
@@ -1053,6 +1053,7 @@ export function registerWikiCli(program: Command, registration: MemoryWikiCliReg
       await runWikiIngest({ config, inputPath, title: opts.title, json: opts.json });
     });
 
+  registerMemoryWikiBatchCli(wiki, () => requireCommandContext().config);
   const okf = wiki.command("okf").description("Import Open Knowledge Format bundles");
   okf
     .command("import")

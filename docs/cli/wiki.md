@@ -1,5 +1,5 @@
 ---
-summary: "CLI reference for `openclaw wiki` (memory-wiki vault status, search, compile, lint, apply, bridge, ChatGPT import, and Obsidian helpers)"
+summary: "CLI reference for `openclaw wiki` (memory-wiki vault status, search, compile, lint, apply, batch automation, bridge, ChatGPT import, and Obsidian helpers)"
 read_when:
   - You want to use the memory-wiki CLI
   - You are documenting or changing `openclaw wiki`
@@ -39,6 +39,9 @@ openclaw wiki apply metadata entity.alpha \
   --source-id source.alpha \
   --status review \
   --question "Still active?"
+
+openclaw wiki apply-batch --input ./wiki-apply-batch.json --dry-run --json
+openclaw wiki search-batch --input ./wiki-search-batch.json --json
 
 openclaw wiki bridge import
 openclaw wiki unsafe-local import
@@ -102,7 +105,7 @@ Create the wiki vault layout and starter pages, including top-level indexes and 
 
 Import a local markdown or text file into the wiki `sources/` folder as a source page. `<path>` must be a local file path; there is no URL ingest today. Rejects binary files.
 
-Imported source pages carry provenance frontmatter (`sourceType: local-file`, `sourcePath`, `ingestedAt`). Ingest always recompiles the vault afterward.
+Imported source pages carry provenance frontmatter (`sourceType: local-file`, `sourcePath`, `ingestedAt`). Regular ingest always recompiles the vault so it can repair stale derived state, but an unchanged generated source page is not rewritten. Batch ingest defers compilation to the enclosing batch and skips it when every operation is unchanged.
 
 Flags: `--title <title>` overrides the source title (default: derived from the filename).
 
@@ -188,6 +191,33 @@ Apply narrow mutations without freeform page surgery:
 
 Both accept `--source-id`, `--contradiction`, `--question` (each repeatable), `--confidence <n>` (0-1), and `--status <status>`. `apply metadata` also accepts `--clear-confidence` to remove a stored confidence value. This is the supported way to evolve wiki pages so managed generated blocks stay intact.
 
+A semantic no-op preserves the page, audit log, and compiled snapshot and skips compilation. A changed mutation invalidates the previous compiled snapshot before rebuilding it, so a failed rebuild cannot leave old derived state looking current.
+
+### `wiki apply-batch`
+
+Apply bounded machine-oriented source and synthesis operations from a version 1 JSON file:
+
+```bash
+openclaw wiki apply-batch --input ./wiki-apply-batch.json --dry-run --json
+openclaw wiki apply-batch --input ./wiki-apply-batch.json --json
+```
+
+The input accepts at most 16 ordered operations. Supported operation kinds are `ingest-source` and `upsert-synthesis`; a synthesis can refer to an earlier source operation with `sourceRefs`. The command validates the complete input before mutation, applies operations under one vault lease, preserves existing timestamps on semantic no-ops, invalidates the prior compiled snapshot on the first write, and compiles at most once after all changed operations. `--dry-run` performs validation and change detection without writes.
+
+Inputs are capped at 256 KiB, referenced source files at 8 MiB, and synthesis bodies at 1 MiB. JSON output contains bounded operation results and compile counts; it does not include the full compiled page inventory.
+
+### `wiki search-batch`
+
+Verify up to six wiki-only queries from one prepared digest and bounded target-page snapshot:
+
+```bash
+openclaw wiki search-batch --input ./wiki-search-batch.json --json
+```
+
+Each version 1 query declares an `id`, `query`, and at least one `expectedPaths` or `expectedIds` value. `expectedPageTypes`, `mode`, `maxResults`, and `required` are optional. Expected paths must stay under a wiki page directory. The command exits non-zero if any required query fails to retrieve its exact path/id with the expected page type. Results contain the candidate-page count and at most five bounded hits per query.
+
+Batch search deliberately avoids shared-memory lookup and imported-source synchronization. Use regular `wiki search` when those freshness semantics are required.
+
 ### `wiki bridge import`
 
 Import public memory artifacts from the active memory plugin into bridge-backed source pages. Use this in `bridge` mode to pull the latest exported memory artifacts into the wiki vault.
@@ -231,6 +261,7 @@ available.
 
 - Use `wiki search` + `wiki get` when provenance and page identity matter.
 - Use `wiki apply` instead of hand-editing managed generated sections.
+- Use `wiki apply-batch` and `wiki search-batch` for bounded automation that must avoid repeated plugin startup, compile, and page loading.
 - Use `wiki lint` before trusting contradictory or low-confidence content.
 - Use `wiki compile` after bulk imports or source changes when you want fresh dashboards and compiled digests immediately.
 - Use `wiki okf import` when a data catalog, documentation export, or agent enrichment pipeline already emits OKF markdown bundles.

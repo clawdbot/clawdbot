@@ -3,6 +3,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { applyMemoryWikiMutation, normalizeMemoryWikiMutationInput } from "./apply.js";
+import { compileMemoryWikiVault } from "./compile.js";
+import { loadMemoryWikiCompiledCache } from "./compiled-cache.js";
+import { loadMemoryWikiVaultIdentity } from "./log.js";
 import { parseWikiMarkdown, renderWikiMarkdown } from "./markdown.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
@@ -98,7 +101,7 @@ describe("applyMemoryWikiMutation", () => {
     expect(result.changed).toBe(true);
     expect(result.pagePath).toBe("syntheses/alpha-synthesis.md");
     expect(result.pageId).toBe("synthesis.alpha-synthesis");
-    expect(result.compile.pageCounts.synthesis).toBe(1);
+    expect(result.compile?.pageCounts.synthesis).toBe(1);
 
     const page = await fs.readFile(path.join(rootDir, result.pagePath), "utf8");
     const parsed = parseWikiMarkdown(page);
@@ -172,9 +175,9 @@ describe("applyMemoryWikiMutation", () => {
     });
 
     expect(result.changed).toBe(true);
-    expect(result.compile.pageCounts.source).toBe(0);
-    expect(result.compile.pageCounts.synthesis).toBe(1);
-    expect(result.compile.frontmatterErrors).toEqual([
+    expect(result.compile?.pageCounts.source).toBe(0);
+    expect(result.compile?.pageCounts.synthesis).toBe(1);
+    expect(result.compile?.frontmatterErrors).toEqual([
       expect.objectContaining({ relativePath: "sources/broken.md" }),
     ]);
     await expect(fs.readFile(brokenPath, "utf8")).resolves.toBe(brokenPage);
@@ -281,7 +284,7 @@ keep this note
 
     expect(result.changed).toBe(true);
     expect(result.pagePath).toBe("entities/alpha.md");
-    expect(result.compile.pageCounts.entity).toBe(1);
+    expect(result.compile?.pageCounts.entity).toBe(1);
 
     const updated = await fs.readFile(targetPath, "utf8");
     const parsed = parseWikiMarkdown(updated);
@@ -376,5 +379,65 @@ keep this note
       confidence: 0.9,
       status: "review",
     });
+  });
+
+  it("preserves page, log, and compiled-cache identity for a semantic no-op", async () => {
+    const { rootDir, config } = await createVault({ prefix: "memory-wiki-apply-no-op-" });
+    const mutation = {
+      op: "create_synthesis" as const,
+      title: "Stable Synthesis",
+      body: "Stable summary body.",
+      sourceIds: ["source.stable"],
+    };
+    const first = await applyMemoryWikiMutation({ config, mutation });
+    const pagePath = path.join(rootDir, first.pagePath);
+    const logPath = path.join(rootDir, ".openclaw-wiki", "log.jsonl");
+    const pageBefore = await fs.readFile(pagePath, "utf8");
+    const pageStatBefore = await fs.stat(pagePath);
+    const logBefore = await fs.readFile(logPath, "utf8");
+    const identityBefore = await loadMemoryWikiVaultIdentity(rootDir);
+    const cacheBefore = await loadMemoryWikiCompiledCache(config);
+
+    const repeated = await applyMemoryWikiMutation({ config, mutation });
+
+    expect(repeated.changed).toBe(false);
+    expect(repeated.compile).toBeUndefined();
+    await expect(fs.readFile(pagePath, "utf8")).resolves.toBe(pageBefore);
+    expect((await fs.stat(pagePath)).mtimeMs).toBe(pageStatBefore.mtimeMs);
+    await expect(fs.readFile(logPath, "utf8")).resolves.toBe(logBefore);
+    await expect(loadMemoryWikiVaultIdentity(rootDir)).resolves.toEqual(identityBefore);
+    await expect(loadMemoryWikiCompiledCache(config)).resolves.toEqual(cacheBefore);
+  });
+
+  it("invalidates the compiled snapshot before returning a changed deferred apply", async () => {
+    const { config } = await createVault({ prefix: "memory-wiki-apply-deferred-" });
+    await applyMemoryWikiMutation({
+      config,
+      mutation: {
+        op: "create_synthesis",
+        title: "Deferred Synthesis",
+        body: "Original summary.",
+        sourceIds: ["source.deferred"],
+      },
+    });
+    expect(await loadMemoryWikiCompiledCache(config)).not.toBeNull();
+
+    const changed = await applyMemoryWikiMutation({
+      config,
+      mutation: {
+        op: "create_synthesis",
+        title: "Deferred Synthesis",
+        body: "Updated summary.",
+        sourceIds: ["source.deferred"],
+      },
+      compile: false,
+    });
+
+    expect(changed.changed).toBe(true);
+    expect(changed.compile).toBeUndefined();
+    await expect(loadMemoryWikiCompiledCache(config)).resolves.toBeNull();
+
+    await compileMemoryWikiVault(config);
+    await expect(loadMemoryWikiCompiledCache(config)).resolves.not.toBeNull();
   });
 });

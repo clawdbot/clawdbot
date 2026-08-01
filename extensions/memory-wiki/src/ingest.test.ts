@@ -3,7 +3,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { describe, expect, it, vi } from "vitest";
-import { ingestMemoryWikiSource } from "./ingest.js";
+import { loadMemoryWikiCompiledCache } from "./compiled-cache.js";
+import { ingestMemoryWikiSource, ingestMemoryWikiSourceBatchOperation } from "./ingest.js";
 import { withMemoryWikiVaultMutation } from "./mutation-coordinator.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
@@ -126,5 +127,94 @@ hello from source
       enqueueSpy.mockRestore();
       await Promise.allSettled([holder, ...(ingest ? [ingest] : [])]);
     }
+  });
+
+  it("recompiles an unchanged source and repairs stale derived state", async () => {
+    const rootDir = await createTempDir("memory-wiki-ingest-recompile-");
+    const inputPath = path.join(rootDir, "stable.txt");
+    await fs.writeFile(inputPath, "stable source\n", "utf8");
+    const { config } = await createVault({ rootDir: path.join(rootDir, "vault") });
+
+    const first = await ingestMemoryWikiSource({
+      config,
+      inputPath,
+      title: "Stable Reference",
+      nowMs: Date.UTC(2026, 3, 5, 12, 0, 0),
+    });
+    const pagePath = path.join(config.vault.path, first.pagePath);
+    const before = await fs.readFile(pagePath, "utf8");
+    const indexPath = path.join(config.vault.path, "index.md");
+    await fs.writeFile(indexPath, "# Stale index\n", "utf8");
+    const second = await ingestMemoryWikiSource({
+      config,
+      inputPath,
+      title: "Stable Reference",
+      nowMs: Date.UTC(2026, 3, 6, 12, 0, 0),
+    });
+
+    expect(first.changed).toBe(true);
+    expect(second.changed).toBe(false);
+    expect(second.indexUpdatedFiles).toContain(indexPath);
+    await expect(fs.readFile(pagePath, "utf8")).resolves.toBe(before);
+    await expect(fs.readFile(pagePath, "utf8")).resolves.toContain(
+      "ingestedAt: 2026-04-05T12:00:00.000Z",
+    );
+    await expect(fs.readFile(pagePath, "utf8")).resolves.toContain(
+      "updatedAt: 2026-04-05T12:00:00.000Z",
+    );
+    await expect(fs.readFile(indexPath, "utf8")).resolves.toContain(
+      "[Stable Reference](sources/stable-reference.md)",
+    );
+  });
+
+  it("clears stale evidence fields when regular ingest replaces an evidenced source", async () => {
+    const rootDir = await createTempDir("memory-wiki-ingest-evidence-");
+    const inputPath = path.join(rootDir, "source.txt");
+    await fs.writeFile(inputPath, "source body\n", "utf8");
+    const { config } = await createVault({
+      rootDir: path.join(rootDir, "vault"),
+      initialize: true,
+    });
+
+    await ingestMemoryWikiSourceBatchOperation({
+      config,
+      inputPath,
+      sourceBuffer: await fs.readFile(inputPath),
+      title: "Source",
+      evidence: {
+        sourceType: "evidence-primary-document",
+        type: "primary_document",
+        kind: "primary_document",
+        origin: "test-fixture",
+        directness: "primary",
+        weight: 1,
+      },
+    });
+    const replaced = await ingestMemoryWikiSource({ config, inputPath, title: "Source" });
+    const page = await fs.readFile(path.join(config.vault.path, replaced.pagePath), "utf8");
+
+    expect(page).toContain("sourceType: local-file");
+    expect(page).not.toContain("evidenceType:");
+    expect(page).not.toContain("evidenceOrigin:");
+  });
+
+  it("invalidates the compiled snapshot after a deferred batch ingest write", async () => {
+    const rootDir = await createTempDir("memory-wiki-ingest-deferred-");
+    const inputPath = path.join(rootDir, "source.txt");
+    await fs.writeFile(inputPath, "original source\n", "utf8");
+    const { config } = await createVault({ rootDir: path.join(rootDir, "vault") });
+    await ingestMemoryWikiSource({ config, inputPath, title: "Deferred Source" });
+    expect(await loadMemoryWikiCompiledCache(config)).not.toBeNull();
+
+    await fs.writeFile(inputPath, "updated source\n", "utf8");
+    const changed = await ingestMemoryWikiSourceBatchOperation({
+      config,
+      inputPath,
+      sourceBuffer: await fs.readFile(inputPath),
+      title: "Deferred Source",
+    });
+
+    expect(changed.changed).toBe(true);
+    await expect(loadMemoryWikiCompiledCache(config)).resolves.toBeNull();
   });
 });

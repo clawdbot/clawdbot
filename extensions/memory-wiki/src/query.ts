@@ -91,7 +91,7 @@ const ROUTE_QUESTION_STOP_WORDS = new Set([
   "would",
 ]);
 
-function normalizePositiveInteger(value: number | undefined, fallback: number): number {
+export function normalizePositiveInteger(value: number | undefined, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value)
     ? Math.max(1, Math.floor(value))
     : fallback;
@@ -115,7 +115,7 @@ type QueryDigestBundle = {
   claims: QueryDigestClaim[];
 };
 
-type WikiSearchResult = {
+export type WikiSearchResult = {
   corpus: "wiki" | "memory";
   path: string;
   title: string;
@@ -171,7 +171,7 @@ type QuerySearchOverrides = {
   searchCorpus?: WikiSearchCorpus;
 };
 
-function sortWikiSearchResults(results: WikiSearchResult[]): WikiSearchResult[] {
+export function sortWikiSearchResults(results: WikiSearchResult[]): WikiSearchResult[] {
   return results.toSorted((left, right) => {
     if (left.score !== right.score) {
       return right.score - left.score;
@@ -232,7 +232,7 @@ export async function readQueryableWikiPages(rootDir: string): Promise<Queryable
   return readQueryableWikiPagesByPaths(rootDir, files);
 }
 
-async function readQueryableWikiPagesByPaths(
+export async function readQueryableWikiPagesByPaths(
   rootDir: string,
   files: string[],
 ): Promise<QueryableWikiPage[]> {
@@ -248,7 +248,7 @@ async function readQueryableWikiPagesByPaths(
   );
 }
 
-async function readQueryDigestBundle(
+export async function readQueryDigestBundle(
   config: ResolvedMemoryWikiConfig,
 ): Promise<QueryDigestBundle | null> {
   const snapshot = await loadMemoryWikiCompiledCache(config);
@@ -712,7 +712,7 @@ function scoreDigestSearchModeBoost(params: {
   return 0;
 }
 
-function buildDigestCandidatePaths(params: {
+export function buildDigestCandidatePaths(params: {
   digest: QueryDigestBundle;
   query: string;
   maxResults: number;
@@ -1155,7 +1155,7 @@ function buildClaimResultMetadata(claim: WikiClaim | undefined): Partial<WikiSea
   };
 }
 
-function toWikiSearchResult(
+export function toWikiSearchResult(
   page: QueryableWikiPage,
   query: string,
   mode: WikiSearchMode,

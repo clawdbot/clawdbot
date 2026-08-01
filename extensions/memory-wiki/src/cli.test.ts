@@ -218,6 +218,21 @@ describe("memory-wiki cli", () => {
     await expect(fs.readFile(path.join(rootDir, "index.md"), "utf8")).resolves.toContain(
       "[CLI Alpha](syntheses/cli-alpha.md)",
     );
+
+    const repeated = await runRegisteredWikiCommand(config, [
+      "apply",
+      "synthesis",
+      "CLI Alpha",
+      "--body",
+      "Alpha from CLI.",
+      "--source-id",
+      "source.alpha",
+      "--source-id",
+      "source.beta",
+    ]);
+    expect(repeated).toContain(
+      "No changes for syntheses/cli-alpha.md via create_synthesis. Index compilation skipped.",
+    );
   });
 
   it("resolves --agent for local commands and requires it with multiple agent vaults", async () => {
@@ -245,6 +260,69 @@ describe("memory-wiki cli", () => {
     await expect(
       missingAgentProgram.parseAsync(["wiki", "status", "--json"], { from: "user" }),
     ).rejects.toThrow("agentId is required for memory-wiki when vault.scope=agent.");
+  });
+
+  it("uses the selected agent vault for batch apply and search", async () => {
+    const { rootDir, config } = await createCliVault({
+      config: { vault: { scope: "agent" } },
+    });
+    const appConfig = {
+      agents: { list: [{ id: "support", default: true }, { id: "marketing" }] },
+    };
+    const inputPath = path.join(rootDir, "source.txt");
+    const applyPath = path.join(rootDir, "apply.json");
+    const searchPath = path.join(rootDir, "search.json");
+    await fs.mkdir(rootDir, { recursive: true });
+    await fs.writeFile(inputPath, "Marketing source evidence.\n", "utf8");
+    await fs.writeFile(
+      applyPath,
+      JSON.stringify({
+        version: 1,
+        operations: [
+          {
+            id: "source",
+            kind: "ingest-source",
+            inputPath,
+            title: "Marketing Reference",
+          },
+        ],
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
+      searchPath,
+      JSON.stringify({
+        version: 1,
+        queries: [
+          {
+            id: "source",
+            query: "Marketing source evidence",
+            expectedPaths: ["sources/marketing-reference.md"],
+          },
+        ],
+      }),
+      "utf8",
+    );
+    const program = new Command();
+    program.name("test");
+    registerWikiCli(program, { config, getAppConfig: () => appConfig });
+
+    await program.parseAsync(
+      ["wiki", "--agent", "marketing", "apply-batch", "--input", applyPath, "--json"],
+      { from: "user" },
+    );
+    await expect(
+      fs.stat(path.join(rootDir, "marketing", "sources", "marketing-reference.md")),
+    ).resolves.toBeDefined();
+    await program.parseAsync(
+      ["wiki", "--agent", "marketing", "search-batch", "--input", searchPath, "--json"],
+      { from: "user" },
+    );
+
+    const searchResult = JSON.parse(String(stdoutWriteMock.mock.calls.at(-1)?.[0] ?? "")) as {
+      ok: boolean;
+    };
+    expect(searchResult.ok).toBe(true);
   });
 
   it("forwards --agent through every bridge Gateway call", async () => {
