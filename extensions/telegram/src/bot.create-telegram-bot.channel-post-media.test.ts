@@ -1,13 +1,32 @@
 // Telegram tests cover bot.create telegram bot.channel post media plugin behavior.
 import { setTimeout as delay } from "node:timers/promises";
+import {
+  createPluginStateKeyedStoreForTests,
+  createPluginStateSyncKeyedStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
+import { setTelegramRuntime } from "./runtime.js";
+import type { TelegramRuntime } from "./runtime.types.js";
 
 const saveRemoteMedia = vi.fn();
 const saveMediaBuffer = vi.fn();
 const readRemoteMediaBuffer = vi.fn();
 const rootRead = vi.fn();
+const { triggerInternalHookMock } = vi.hoisted(() => ({
+  triggerInternalHookMock: vi.fn<(event: unknown) => Promise<void>>(async () => undefined),
+}));
+
+vi.mock("openclaw/plugin-sdk/hook-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/hook-runtime")>(
+    "openclaw/plugin-sdk/hook-runtime",
+  );
+  return {
+    ...actual,
+    triggerInternalHook: triggerInternalHookMock,
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/file-access-runtime", () => ({
   root: async (rootDir: string) => ({
@@ -252,12 +271,33 @@ describe("createTelegramBot channel_post media", () => {
     createTelegramBot = (opts) =>
       createTelegramBotBase({
         botInfo: telegramBotInfoForTest,
+        telegramTransport: {
+          fetch: globalThis.fetch,
+          sourceFetch: globalThis.fetch,
+          close: async () => {},
+        },
         ...opts,
         telegramDeps: telegramBotDepsForTest,
       });
   });
 
   beforeEach(() => {
+    setTelegramRuntime({
+      state: {
+        openKeyedStore: ((options) =>
+          createPluginStateKeyedStoreForTests(
+            "telegram",
+            options,
+          )) as TelegramRuntime["state"]["openKeyedStore"],
+        openSyncKeyedStore: ((options) =>
+          createPluginStateSyncKeyedStoreForTests(
+            "telegram",
+            options,
+          )) as TelegramRuntime["state"]["openSyncKeyedStore"],
+      },
+      channel: {},
+    } as TelegramRuntime);
+    triggerInternalHookMock.mockClear();
     saveRemoteMedia.mockReset();
     saveRemoteMedia.mockImplementation(
       async (params: { fetchImpl: typeof fetch; maxBytes: number; url: string }) => {
@@ -658,19 +698,61 @@ describe("createTelegramBot channel_post media", () => {
     }
   });
 
-  it("notifies mentioned requireMention groups when media download fails", async () => {
-    loadConfig.mockReturnValue({
-      channels: {
-        telegram: {
-          groupPolicy: "open",
-          groups: { "*": { requireMention: true } },
+  it.each([
+    {
+      name: "an explicitly ingest-enabled group",
+      groups: { "-100456": { requireMention: true, ingest: true } },
+      shouldIngest: true,
+    },
+    {
+      name: "wildcard ingest inherited by a specific group",
+      groups: {
+        "*": { requireMention: true, ingest: true },
+        "-100456": { requireMention: true },
+      },
+      shouldIngest: true,
+    },
+    {
+      name: "a group that explicitly disables inherited ingest",
+      groups: {
+        "*": { requireMention: true, ingest: true },
+        "-100456": { requireMention: true, ingest: false },
+      },
+      shouldIngest: false,
+    },
+    {
+      name: "a topic that enables ingest over its disabled group",
+      groups: {
+        "-100456": {
+          requireMention: true,
+          ingest: false,
+          topics: { "42": { ingest: true } },
         },
       },
+      topicId: 42,
+      shouldIngest: true,
+    },
+    {
+      name: "a topic that disables ingest over its enabled group",
+      groups: {
+        "-100456": {
+          requireMention: true,
+          ingest: true,
+          topics: { "42": { ingest: false } },
+        },
+      },
+      topicId: 42,
+      shouldIngest: false,
+    },
+  ])("honors $name before skipping unmentioned group media (#92067)", async (testCase) => {
+    const topicId = "topicId" in testCase ? testCase.topicId : undefined;
+    loadConfig.mockReturnValue({
+      channels: { telegram: { groupPolicy: "open", groups: testCase.groups } },
     });
-    saveRemoteMedia.mockRejectedValueOnce(new Error("MediaFetchError: ECONNRESET"));
-    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
-      throw new Error("MediaFetchError: ECONNRESET");
-    });
+    sendMessageSpy.mockClear();
+    replySpy.mockClear();
+    const getFile = vi.fn(async () => ({ file_path: "photos/ingested.jpg" }));
+    const fetchSpy = createImageFetchSpy();
 
     try {
       createTelegramBot({ token: "tok" });
@@ -678,34 +760,415 @@ describe("createTelegramBot channel_post media", () => {
 
       await handler({
         message: {
-          chat: { id: -100456, type: "supergroup", title: "Ops Chat" },
-          message_id: 81182,
+          chat: {
+            id: -100456,
+            type: "supergroup",
+            title: "Ops Chat",
+            ...(topicId ? { is_forum: true } : {}),
+          },
+          message_id: 92067,
           date: 1736380800,
-          caption: "@openclaw_bot check this",
-          photo: [{ file_id: "p1" }],
+          ...(topicId ? { message_thread_id: topicId, is_topic_message: true } : {}),
+          photo: [{ file_id: "ingested-photo" }],
           from: { id: 55, is_bot: false, first_name: "u" },
         },
         me: { id: 999, username: "openclaw_bot" },
-        getFile: async () => ({ file_path: "photos/p1.jpg" }),
+        getFile,
       });
-      await waitForMockCalls(sendMessageSpy, 1);
 
-      expect(sendMessageSpy).toHaveBeenCalledWith(
-        -100456,
-        "⚠️ Failed to download media. Please try again.",
-        {
-          reply_parameters: {
-            message_id: 81182,
-            allow_sending_without_reply: true,
-          },
-        },
-      );
-      expect(replySpy).toHaveBeenCalledOnce();
-      expectTypeOnlyMediaPayload("image", "@openclaw_bot check this");
+      if (testCase.shouldIngest) {
+        expect(getFile).toHaveBeenCalledOnce();
+        expect(fetchSpy).toHaveBeenCalledOnce();
+        expect(triggerInternalHookMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            type: "message",
+            action: "received",
+            context: expect.objectContaining({
+              content: expect.stringMatching(/\S/u),
+              media: [
+                expect.objectContaining({
+                  path: "/tmp/telegram-media.bin",
+                  contentType: "image/png",
+                  kind: "image",
+                  messageId: "92067",
+                }),
+              ],
+            }),
+          }),
+        );
+      } else {
+        expect(getFile).not.toHaveBeenCalled();
+        expect(fetchSpy).not.toHaveBeenCalled();
+        expect(triggerInternalHookMock).not.toHaveBeenCalled();
+      }
+      expect(sendMessageSpy).not.toHaveBeenCalled();
+      expect(replySpy).not.toHaveBeenCalled();
     } finally {
       fetchSpy.mockRestore();
     }
   });
+
+  it("ingests an unmentioned group media album exactly once (#92067)", async () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+          groups: { "-100456": { requireMention: true, ingest: true } },
+        },
+      },
+    });
+    sendMessageSpy.mockClear();
+    replySpy.mockClear();
+    const fetchSpy = createImageFetchSpy();
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const getFile = vi.fn(async () => ({ file_path: "photos/album.jpg" }));
+
+    try {
+      createTelegramBot({ token: "tok", testTimings: TELEGRAM_TEST_TIMINGS });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+      for (const messageId of [92068, 92069]) {
+        await handler({
+          message: {
+            chat: { id: -100456, type: "supergroup", title: "Ops Chat" },
+            message_id: messageId,
+            date: 1736380800,
+            media_group_id: "ingested-album",
+            photo: [{ file_id: `photo-${messageId}` }],
+            from: { id: 55, is_bot: false, first_name: "u" },
+          },
+          me: { id: 999, username: "openclaw_bot" },
+          getFile,
+        });
+      }
+
+      expect(getFile).not.toHaveBeenCalled();
+      await flushChannelPostMediaGroup(setTimeoutSpy);
+
+      expect(getFile).toHaveBeenCalledTimes(2);
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+      expect(triggerInternalHookMock).toHaveBeenCalledOnce();
+      expect(triggerInternalHookMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "message",
+          action: "received",
+          context: expect.objectContaining({
+            content: expect.stringMatching(/\S/u),
+            media: [
+              expect.objectContaining({
+                path: "/tmp/telegram-media.bin",
+                contentType: "image/png",
+                kind: "image",
+                messageId: "92068",
+              }),
+              expect.objectContaining({
+                path: "/tmp/telegram-media.bin",
+                contentType: "image/png",
+                kind: "image",
+                messageId: "92069",
+              }),
+            ],
+          }),
+        }),
+      );
+      expect(sendMessageSpy).not.toHaveBeenCalled();
+      expect(replySpy).not.toHaveBeenCalled();
+    } finally {
+      setTimeoutSpy.mockRestore();
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it.each([
+    { failure: "a download error", error: "Network request for 'getFile' failed!" },
+    { failure: "an oversized file", error: "Bad Request: file is too big" },
+  ])("silently ingests unmentioned group media after $failure (#92067)", async ({ error }) => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+          groups: { "-100456": { requireMention: true, ingest: true } },
+        },
+      },
+    });
+    sendMessageSpy.mockClear();
+    replySpy.mockClear();
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+    await handler({
+      message: {
+        chat: { id: -100456, type: "supergroup", title: "Ops Chat" },
+        message_id: 92070,
+        date: 1736380800,
+        photo: [{ file_id: "failed-ingested-photo" }],
+        from: { id: 55, is_bot: false, first_name: "u" },
+      },
+      me: { id: 999, username: "openclaw_bot" },
+      getFile: async () => {
+        throw new Error(error);
+      },
+    });
+
+    expect(sendMessageSpy).not.toHaveBeenCalled();
+    expect(replySpy).not.toHaveBeenCalled();
+    expect(saveRemoteMedia).not.toHaveBeenCalled();
+    expect(triggerInternalHookMock).toHaveBeenCalledOnce();
+    expect(triggerInternalHookMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "message",
+        action: "received",
+        context: expect.objectContaining({ content: expect.stringMatching(/\S/u) }),
+      }),
+    );
+    const event = triggerInternalHookMock.mock.calls[0]?.[0] as {
+      context?: { media?: unknown[] };
+    };
+    expect(event.context?.media).toBeUndefined();
+  });
+
+  it.each([
+    { name: "without a custom mention", caption: undefined, denyCustomMentions: false },
+    {
+      name: "with a denied custom mention",
+      caption: "bert, see attachment",
+      denyCustomMentions: true,
+    },
+  ])("silently ingests recoverable partial group albums $name (#92067)", async (testCase) => {
+    loadConfig.mockReturnValue({
+      messages: { groupChat: { mentionPatterns: ["\\bbert\\b"] } },
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+          ...(testCase.denyCustomMentions
+            ? { mentionPatterns: { mode: "deny" as const } }
+            : {}),
+          groups: { "-100456": { requireMention: true, ingest: true } },
+        },
+      },
+    });
+    sendMessageSpy.mockClear();
+    replySpy.mockClear();
+    saveRemoteMedia.mockRejectedValueOnce(new Error("MediaFetchError: Failed to fetch media"));
+    const fetchSpy = createImageFetchSpy();
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const getFile = vi.fn(async () => ({ file_path: "photos/partial-ingested.jpg" }));
+
+    try {
+      createTelegramBot({ token: "tok", testTimings: TELEGRAM_TEST_TIMINGS });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+      for (const messageId of [92071, 92072]) {
+        await handler({
+          message: {
+            chat: { id: -100456, type: "supergroup", title: "Ops Chat" },
+            message_id: messageId,
+            date: 1736380800,
+            media_group_id: "partial-ingested-album",
+            photo: [{ file_id: `photo-${messageId}` }],
+            ...(testCase.caption && messageId === 92071 ? { caption: testCase.caption } : {}),
+            from: { id: 55, is_bot: false, first_name: "u" },
+          },
+          me: { id: 999, username: "openclaw_bot" },
+          getFile,
+        });
+      }
+
+      await flushChannelPostMediaGroup(setTimeoutSpy);
+
+      expect(getFile).toHaveBeenCalledTimes(2);
+      expect(triggerInternalHookMock).toHaveBeenCalledOnce();
+      expect(triggerInternalHookMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "message",
+          action: "received",
+          context: expect.objectContaining({
+            content: expect.stringMatching(/\S/u),
+            media: [
+              expect.objectContaining({
+                path: "/tmp/telegram-media.bin",
+                contentType: "image/png",
+                kind: "image",
+                messageId: "92072",
+              }),
+            ],
+          }),
+        }),
+      );
+      expect(sendMessageSpy).not.toHaveBeenCalled();
+      expect(replySpy).not.toHaveBeenCalled();
+    } finally {
+      setTimeoutSpy.mockRestore();
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it.each([
+    {
+      name: "provider-wide disabled patterns",
+      providerPolicy: { mode: "deny" as const },
+      accountPolicy: undefined,
+      accountId: undefined,
+      topicId: undefined,
+      shouldWarn: false,
+    },
+    {
+      name: "a disabled conversation",
+      providerPolicy: { mode: "allow" as const, denyIn: ["-100456"] },
+      accountPolicy: undefined,
+      accountId: undefined,
+      topicId: undefined,
+      shouldWarn: false,
+    },
+    {
+      name: "a disabled forum topic",
+      providerPolicy: { mode: "allow" as const, denyIn: ["-100456:topic:42"] },
+      accountPolicy: undefined,
+      accountId: undefined,
+      topicId: 42,
+      shouldWarn: false,
+    },
+    {
+      name: "an explicitly allowed forum topic",
+      providerPolicy: { mode: "deny" as const, allowIn: ["-100456:topic:42"] },
+      accountPolicy: undefined,
+      accountId: undefined,
+      topicId: 42,
+      shouldWarn: true,
+    },
+    {
+      name: "an account override that disables provider patterns",
+      providerPolicy: { mode: "allow" as const },
+      accountPolicy: { mode: "deny" as const },
+      accountId: "work",
+      topicId: undefined,
+      shouldWarn: false,
+    },
+    {
+      name: "an account override that explicitly allows its forum topic",
+      providerPolicy: { mode: "deny" as const },
+      accountPolicy: { mode: "deny" as const, allowIn: ["-100456:topic:42"] },
+      accountId: "work",
+      topicId: 42,
+      shouldWarn: true,
+    },
+  ])("applies $name before classifying group media mentions (#92067)", async (testCase) => {
+    loadConfig.mockReturnValue({
+      messages: { groupChat: { mentionPatterns: ["\\bbert\\b"] } },
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+          mentionPatterns: testCase.providerPolicy,
+          groups: { "-100456": { requireMention: true, ingest: true } },
+          ...(testCase.accountPolicy
+            ? { accounts: { work: { mentionPatterns: testCase.accountPolicy } } }
+            : {}),
+        },
+      },
+    });
+    sendMessageSpy.mockClear();
+    replySpy.mockClear();
+
+    createTelegramBot({ token: "tok", ...(testCase.accountId ? { accountId: "work" } : {}) });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+    await handler({
+      message: {
+        chat: {
+          id: -100456,
+          type: "supergroup",
+          title: "Ops Chat",
+          ...(testCase.topicId ? { is_forum: true } : {}),
+        },
+        message_id: 92073,
+        date: 1736380800,
+        caption: "bert, see attachment",
+        ...(testCase.topicId
+          ? { message_thread_id: testCase.topicId, is_topic_message: true }
+          : {}),
+        photo: [{ file_id: "custom-mentioned-photo" }],
+        from: { id: 55, is_bot: false, first_name: "u" },
+      },
+      me: { id: 999, username: "openclaw_bot" },
+      getFile: async () => {
+        throw new Error("Network request for 'getFile' failed!");
+      },
+    });
+
+    if (testCase.shouldWarn) {
+      await waitForMockCalls(sendMessageSpy, 1);
+      expect(sendMessageSpy).toHaveBeenCalledWith(
+        -100456,
+        "⚠️ Failed to download media. Please try again.",
+        expect.anything(),
+      );
+      expect(replySpy).toHaveBeenCalledOnce();
+    } else {
+      expect(sendMessageSpy).not.toHaveBeenCalled();
+      expect(replySpy).not.toHaveBeenCalled();
+      expect(triggerInternalHookMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "message",
+          action: "received",
+          context: expect.objectContaining({ content: "bert, see attachment" }),
+        }),
+      );
+    }
+  });
+
+  it.each([false, true])(
+    "notifies mentioned requireMention groups when media download fails (ingest: %s)",
+    async (ingest) => {
+      loadConfig.mockReturnValue({
+        channels: {
+          telegram: {
+            groupPolicy: "open",
+            groups: { "*": { requireMention: true, ...(ingest ? { ingest: true } : {}) } },
+          },
+        },
+      });
+      sendMessageSpy.mockClear();
+      saveRemoteMedia.mockRejectedValueOnce(new Error("MediaFetchError: ECONNRESET"));
+      const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+        throw new Error("MediaFetchError: ECONNRESET");
+      });
+
+      try {
+        createTelegramBot({ token: "tok" });
+        const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+        await handler({
+          message: {
+            chat: { id: -100456, type: "supergroup", title: "Ops Chat" },
+            message_id: 81182,
+            date: 1736380800,
+            caption: "@openclaw_bot check this",
+            photo: [{ file_id: "p1" }],
+            from: { id: 55, is_bot: false, first_name: "u" },
+          },
+          me: { id: 999, username: "openclaw_bot" },
+          getFile: async () => ({ file_path: "photos/p1.jpg" }),
+        });
+        await waitForMockCalls(sendMessageSpy, 1);
+
+        expect(sendMessageSpy).toHaveBeenCalledWith(
+          -100456,
+          "⚠️ Failed to download media. Please try again.",
+          {
+            reply_parameters: {
+              message_id: 81182,
+              allow_sending_without_reply: true,
+            },
+          },
+        );
+        expect(replySpy).toHaveBeenCalledOnce();
+        expectTypeOnlyMediaPayload("image", "@openclaw_bot check this");
+      } finally {
+        fetchSpy.mockRestore();
+      }
+    },
+  );
 
   it("treats targeted bot command captions as mentions before media download", async () => {
     loadConfig.mockReturnValue({
