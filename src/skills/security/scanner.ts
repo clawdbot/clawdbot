@@ -442,11 +442,11 @@ function collectAliasScanSources(source: string, filePath: string): AliasScanSou
   return scanSources;
 }
 
-function collectAliasesFromParsedSource(
+function collectAliasBindingIdentifiers(
   ts: typeof import("typescript"),
   sourceFile: import("typescript").SourceFile,
-  aliases: Set<string>,
-): void {
+): import("typescript").Identifier[] {
+  const bindings: import("typescript").Identifier[] = [];
   const visit = (node: import("typescript").Node): void => {
     if (
       ts.isImportDeclaration(node) &&
@@ -454,15 +454,20 @@ function collectAliasesFromParsedSource(
       isChildProcessSpecifier(node.moduleSpecifier.text)
     ) {
       const importClause = node.importClause;
-      const bindings = importClause?.namedBindings;
-      if (importClause && !importClause.isTypeOnly && bindings && ts.isNamedImports(bindings)) {
-        for (const element of bindings.elements) {
+      const namedBindings = importClause?.namedBindings;
+      if (
+        importClause &&
+        !importClause.isTypeOnly &&
+        namedBindings &&
+        ts.isNamedImports(namedBindings)
+      ) {
+        for (const element of namedBindings.elements) {
           if (
             !element.isTypeOnly &&
             element.propertyName &&
             DANGEROUS_CHILD_PROCESS_CALL_NAME_SET.has(element.propertyName.text)
           ) {
-            aliases.add(element.name.text);
+            bindings.push(element.name);
           }
         }
       }
@@ -489,7 +494,7 @@ function collectAliasesFromParsedSource(
             ts.isIdentifier(element.name) &&
             DANGEROUS_CHILD_PROCESS_CALL_NAME_SET.has(element.propertyName.text)
           ) {
-            aliases.add(element.name.text);
+            bindings.push(element.name);
           }
         }
       }
@@ -498,6 +503,33 @@ function collectAliasesFromParsedSource(
     ts.forEachChild(node, visit);
   };
   visit(sourceFile);
+  return bindings;
+}
+
+function createAliasTypeChecker(
+  ts: typeof import("typescript"),
+  sourceFile: import("typescript").SourceFile,
+): import("typescript").TypeChecker {
+  const options: import("typescript").CompilerOptions = {
+    allowJs: true,
+    jsx: ts.JsxEmit.Preserve,
+    noLib: true,
+    noResolve: true,
+    target: ts.ScriptTarget.Latest,
+    types: [],
+  };
+  const host: import("typescript").CompilerHost = {
+    fileExists: (fileName) => fileName === sourceFile.fileName,
+    getCanonicalFileName: (fileName) => fileName,
+    getCurrentDirectory: () => "",
+    getDefaultLibFileName: () => "lib.d.ts",
+    getNewLine: () => "\n",
+    getSourceFile: (fileName) => (fileName === sourceFile.fileName ? sourceFile : undefined),
+    readFile: (fileName) => (fileName === sourceFile.fileName ? sourceFile.text : undefined),
+    useCaseSensitiveFileNames: () => true,
+    writeFile: () => {},
+  };
+  return ts.createProgram([sourceFile.fileName], options, host).getTypeChecker();
 }
 
 function collectDangerousChildProcessAliasCalls(
@@ -522,25 +554,37 @@ function collectDangerousChildProcessAliasCalls(
   for (const candidate of parsedSources) {
     // Markdown fragments are independent parse scopes. Keeping aliases local
     // prevents one example from tainting same-named calls in another fragment.
-    const aliases = new Set<string>();
-    collectAliasesFromParsedSource(ts, candidate.sourceFile, aliases);
-    if (aliases.size === 0) {
+    const aliasBindings = collectAliasBindingIdentifiers(ts, candidate.sourceFile);
+    if (aliasBindings.length === 0) {
       continue;
+    }
+    const checker = createAliasTypeChecker(ts, candidate.sourceFile);
+    const aliasSymbols = new Set<import("typescript").Symbol>();
+    for (const binding of aliasBindings) {
+      const symbol = checker.getSymbolAtLocation(binding);
+      if (symbol) {
+        aliasSymbols.add(symbol);
+      }
     }
 
     const visit = (node: import("typescript").Node): void => {
       if (
         (ts.isCallExpression(node) || ts.isNewExpression(node)) &&
-        ts.isIdentifier(node.expression) &&
-        aliases.has(node.expression.text) &&
-        !DANGEROUS_CHILD_PROCESS_CALL_NAME_SET.has(node.expression.text)
+        ts.isIdentifier(node.expression)
       ) {
-        const candidateLine =
-          candidate.sourceFile.getLineAndCharacterOfPosition(
-            node.expression.getStart(candidate.sourceFile),
-          ).line + 1;
-        const sourceLine = candidate.lineOffset + candidateLine;
-        callCountsByLine.set(sourceLine, (callCountsByLine.get(sourceLine) ?? 0) + 1);
+        const symbol = checker.getSymbolAtLocation(node.expression);
+        if (
+          symbol &&
+          aliasSymbols.has(symbol) &&
+          !DANGEROUS_CHILD_PROCESS_CALL_NAME_SET.has(node.expression.text)
+        ) {
+          const candidateLine =
+            candidate.sourceFile.getLineAndCharacterOfPosition(
+              node.expression.getStart(candidate.sourceFile),
+            ).line + 1;
+          const sourceLine = candidate.lineOffset + candidateLine;
+          callCountsByLine.set(sourceLine, (callCountsByLine.get(sourceLine) ?? 0) + 1);
+        }
       }
       ts.forEachChild(node, visit);
     };

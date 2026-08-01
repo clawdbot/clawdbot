@@ -280,6 +280,19 @@ import { exec as 运行 } from "node:child_process";
     expectRulePresence(findings, "dangerous-exec", false);
   });
 
+  it("does not report calls to a lexically shadowed alias", () => {
+    const source = `
+import { exec as run } from "node:child_process";
+{
+  const run = () => "safe";
+  run();
+}
+`;
+
+    const findings = scanSource(source, "plugin.ts");
+    expectRulePresence(findings, "dangerous-exec", false);
+  });
+
   it("detects aliases inside executable template expressions", () => {
     const source = [
       "",
