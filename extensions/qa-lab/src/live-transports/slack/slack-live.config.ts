@@ -62,7 +62,6 @@ type SlackQaPostMessageAttempt = {
   formattingDisabled: boolean;
   nativeDataBlockCount: number;
   status: "failed" | "sent";
-  text: string;
 };
 
 export function countSlackNativeDataBlocks(value: unknown) {
@@ -86,11 +85,10 @@ export function instrumentSlackPostMessage(client: WebClient) {
   const originalPostMessage = client.chat.postMessage;
   const attempts: SlackQaPostMessageAttempt[] = [];
   client.chat.postMessage = (async (payload) => {
-    const payloadRecord = payload as { blocks?: unknown; mrkdwn?: boolean; text?: unknown };
+    const payloadRecord = payload as { blocks?: unknown; mrkdwn?: boolean };
     const attempt = {
       formattingDisabled: payloadRecord.mrkdwn === false,
       nativeDataBlockCount: countSlackNativeDataBlocks(payloadRecord.blocks),
-      text: typeof payloadRecord.text === "string" ? payloadRecord.text : "",
     };
     try {
       const response = await originalPostMessage.call(client.chat, payload);
