@@ -291,10 +291,21 @@ export function createClickClackAgentProgressPublisher(params: {
       }
       const id = resolveLineId(payload);
       const final = isFinal(payload);
+      const kind = normalizedKind(payload);
+      const retractsExistingCommentary =
+        kind === "commentary" &&
+        seenLines.has(id) &&
+        payload.progressText !== undefined &&
+        payload.progressText.trim() === "";
+      if (retractsExistingCommentary && queuedLines.get(id)?.payload.op === "append") {
+        queuedLines.delete(id);
+        seenLines.delete(id);
+        return;
+      }
       const line: Record<string, unknown> = {
         id,
-        kind: normalizedKind(payload),
-        text: progressText(payload),
+        kind,
+        text: retractsExistingCommentary ? "" : progressText(payload),
         status: payload.status?.trim() || (final ? "completed" : "running"),
       };
       if (payload.name?.trim()) {
