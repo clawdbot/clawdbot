@@ -1,6 +1,5 @@
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import { setTimeout as sleep } from "node:timers/promises";
-import pMap from "p-map";
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -45,7 +44,6 @@ const PROVIDER_AUTH_PREWARM_START_DELAY_MS = 5_000;
 const PROVIDER_AUTH_REWARM_DELAY_MS = 1_000;
 const AGENT_RUNTIME_PLUGIN_PREWARM_START_DELAY_MS = 0;
 const DEFERRED_SIDECAR_START_DELAY_MS = 100;
-const SESSION_LOCK_CLEANUP_CONCURRENCY = 4;
 const SKIP_STARTUP_MODEL_PREWARM_ENV = "OPENCLAW_SKIP_STARTUP_MODEL_PREWARM";
 type Awaitable<T> = T | Promise<T>;
 
@@ -451,58 +449,6 @@ function scheduleRestartSentinelWakeAfterReady(params: {
   });
 }
 
-type CleanStaleLockFiles = typeof import("../agents/session-write-lock.js").cleanStaleLockFiles;
-type MarkRestartAbortedMainSessionsFromLocks =
-  typeof import("../agents/main-session-restart-recovery.js").markRestartAbortedMainSessionsFromLocks;
-
-async function cleanupStaleSessionLocks(params: {
-  sessionDirs: readonly string[];
-  cfg: OpenClawConfig;
-  log: { warn: (msg: string) => void };
-  isStopped: () => boolean;
-  cleanStaleLockFiles: CleanStaleLockFiles;
-  markRestartAbortedMainSessionsFromLocks?: MarkRestartAbortedMainSessionsFromLocks;
-  concurrency?: number;
-}): Promise<void> {
-  const concurrency = Math.max(
-    1,
-    Math.min(
-      params.sessionDirs.length,
-      Math.floor(params.concurrency ?? SESSION_LOCK_CLEANUP_CONCURRENCY),
-    ),
-  );
-  let markRestartAbortedMainSessionsFromLocks =
-    params.markRestartAbortedMainSessionsFromLocks ?? null;
-  const getMarker = async () => {
-    markRestartAbortedMainSessionsFromLocks ??= (await loadMainSessionRestartRecoveryModule())
-      .markRestartAbortedMainSessionsFromLocks;
-    return markRestartAbortedMainSessionsFromLocks;
-  };
-  await pMap(
-    params.sessionDirs,
-    async (sessionsDir) => {
-      if (params.isStopped()) {
-        return;
-      }
-      const result = await params.cleanStaleLockFiles({
-        sessionsDir,
-        config: params.cfg,
-        removeStale: true,
-        log: { warn: (message) => params.log.warn(message) },
-      });
-      if (result.cleaned.length === 0) {
-        return;
-      }
-      const markRestartAbortedMainSessionsFromLocksLocal = await getMarker();
-      await markRestartAbortedMainSessionsFromLocksLocal({
-        sessionsDir,
-        cleanedLocks: result.cleaned,
-      });
-    },
-    { concurrency, stopOnError: true },
-  );
-}
-
 function scheduleTranscriptsAutoStartSidecar(params: {
   cfg: OpenClawConfig;
   startupTrace?: GatewayStartupTrace;
@@ -849,36 +795,6 @@ export async function startGatewaySidecars(params: {
     }
     scheduleGatewayMemoryBackend({ cfg: params.cfg, log: params.log, policy });
   });
-
-  // These tasks may still be waiting when close begins. Keep their handles in
-  // the generation-owned registry so they cannot run into a replacement gateway.
-  postReadySidecars.push(
-    schedulePostReadySidecarTask({
-      startupTrace: params.startupTrace,
-      name: "sidecars.session-locks",
-      log: params.log,
-      waitForPostReadyWork: params.waitForPostReadyWork,
-      run: async (isStopped) => {
-        try {
-          const [{ resolveAgentSessionDirs }, { cleanStaleLockFiles }] = await Promise.all([
-            import("../agents/session-dirs.js"),
-            import("../agents/session-write-lock.js"),
-          ]);
-          const stateDir = resolveStateDir(process.env);
-          const sessionDirs = await resolveAgentSessionDirs(stateDir);
-          await cleanupStaleSessionLocks({
-            sessionDirs,
-            cfg: params.cfg,
-            log: params.log,
-            isStopped,
-            cleanStaleLockFiles,
-          });
-        } catch (err) {
-          params.log.warn(`session lock cleanup failed on startup: ${String(err)}`);
-        }
-      },
-    }),
-  );
 
   let restartSentinelWake: GatewayPostReadySidecarHandle | undefined;
   postReadySidecars.push(
@@ -1503,7 +1419,6 @@ export const testing = {
   publishStartupModelRuntime,
   refreshLatestUpdateRestartSentinelIfPresent,
   resolveGatewayMemoryStartupPolicy,
-  cleanupStaleSessionLocks,
   scheduleProviderAuthStatePrewarm,
   scheduleRestartSentinelWakeAfterReady,
   shouldSkipStartupModelPrewarm,

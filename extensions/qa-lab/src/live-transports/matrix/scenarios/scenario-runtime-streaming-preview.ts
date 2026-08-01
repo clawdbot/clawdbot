@@ -102,8 +102,7 @@ async function runMatrixStreamingPreviewScenario(
       event.roomId === context.roomId &&
       event.sender === context.sutUserId &&
       isMatrixQaMessageLikeKind(event.kind) &&
-      event.relatesTo?.relType === "m.replace" &&
-      event.relatesTo.eventId === preview.event.eventId &&
+      event.replacesEventId === preview.event.eventId &&
       event.body === params.finalText,
     roomId: context.roomId,
     since: preview.since,
@@ -133,8 +132,7 @@ async function runMatrixStreamingPreviewScenario(
       `preview event: ${preview.event.eventId}`,
       `preview kind: ${preview.event.kind}`,
       `preview body: ${preview.event.body ?? "<none>"}`,
-      `final reply relation: ${finalized.event.relatesTo?.relType ?? "<none>"}`,
-      `final reply target: ${finalized.event.relatesTo?.eventId ?? "<none>"}`,
+      `final replacement target: ${finalized.event.replacesEventId ?? "<none>"}`,
       ...buildMatrixReplyDetails("final reply", finalReply),
     ].join("\n"),
   } satisfies MatrixQaScenarioExecution;

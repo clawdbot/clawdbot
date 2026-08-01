@@ -9,12 +9,13 @@ import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "../plugins/installed-plugin-index-install-records.js";
-import { clearActivatedPluginRuntimeState, loadOpenClawPlugins } from "../plugins/loader.js";
+import { activatePluginRegistry } from "../plugins/loader-shared.js";
+import { loadOpenClawPlugins } from "../plugins/loader.js";
 import { loadPluginLookUpTable, type PluginLookUpTable } from "../plugins/plugin-lookup-table.js";
 import { getPluginModuleLoaderStats } from "../plugins/plugin-module-loader-cache.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginRegistryParams } from "../plugins/registry-types.js";
-import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
+import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createPluginRuntimeLoaderLogger } from "../plugins/runtime/load-context.js";
 import {
@@ -633,9 +634,8 @@ export function loadGatewayPlugins(params: {
   ];
   const pluginIdsMs = performance.now() - started;
   if (pluginIds.length === 0) {
-    clearActivatedPluginRuntimeState();
     const pluginRegistry = createEmptyPluginRegistry();
-    setActivePluginRegistry(pluginRegistry, undefined, "gateway-bindable", params.workspaceDir);
+    activatePluginRegistry(pluginRegistry, null, "gateway-bindable", params.workspaceDir);
     params.startupTrace?.detail("plugins.gateway-load", [
       ["autoEnableMs", autoEnableMs],
       ["resolvedConfigMs", resolvedConfigMs],
