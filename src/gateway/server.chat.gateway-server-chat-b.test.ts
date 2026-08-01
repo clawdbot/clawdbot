@@ -21,6 +21,7 @@ import {
   patchSessionEntry,
   replaceTranscriptEvents,
   replaceSessionEntry,
+  switchSessionBranch,
   withTranscriptWriteLock,
 } from "../config/sessions/session-accessor.js";
 import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
@@ -2354,6 +2355,113 @@ describe("gateway server chat", () => {
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
     } finally {
       releaseMutation.resolve();
+      resetDirectChatSession();
+    }
+  });
+
+  test("chat.send rejects a stale rendered generation after branch switch while admission waits", async () => {
+    const { sessionDir, storePath } = openDirectChatSession();
+    const performBranchSwitch = createDeferred();
+    const sourceSessionId = "sess-before-branch-switch";
+    let mutation: Promise<void> | undefined;
+    let switchedSessionId: string | undefined;
+    try {
+      await writeStoredMainSession({ sessionId: sourceSessionId });
+      const transcriptScope = {
+        agentId: "main",
+        sessionId: sourceSessionId,
+        sessionKey: "agent:main:main",
+        storePath,
+      };
+      await appendTranscriptMessage(transcriptScope, {
+        eventId: "displayed-leaf",
+        message: { role: "assistant", content: "displayed" },
+        now: 1,
+        parentId: null,
+      });
+      await appendTranscriptMessage(transcriptScope, {
+        eventId: "inactive-leaf",
+        message: { role: "assistant", content: "inactive" },
+        now: 2,
+        parentId: "displayed-leaf",
+      });
+      await appendTranscriptMessage(transcriptScope, {
+        eventId: "background-leaf",
+        message: { role: "assistant", content: "NO_REPLY" },
+        now: 3,
+        parentId: "displayed-leaf",
+      });
+      await waitForSessionTranscriptIndexReconcile({
+        agentId: "main",
+        path: path.join(sessionDir, "openclaw-agent.sqlite"),
+      });
+
+      const mutationStarted = createDeferred();
+      mutation = runExclusiveSessionLifecycleMutation({
+        scope: storePath,
+        identities: ["agent:main:main", sourceSessionId],
+        run: async () => {
+          mutationStarted.resolve();
+          await performBranchSwitch.promise;
+          const switched = await switchSessionBranch({
+            agentId: "main",
+            leafEntryId: "inactive-leaf",
+            sessionKey: "agent:main:main",
+            storePath,
+          });
+          if (switched.status !== "created") {
+            throw new Error(`expected branch switch, got ${switched.status}`);
+          }
+          switchedSessionId = switched.entry.sessionId;
+        },
+      });
+      await mutationStarted.promise;
+
+      const sendResponses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+      const context = createDirectChatContext();
+      const runId = "idem-branch-switch-during-admission";
+      const send = Promise.resolve(
+        callDirectChat("chat.send", {
+          id: "send",
+          params: {
+            sessionKey: "main",
+            sessionId: sourceSessionId,
+            expectedLeafEntryId: "displayed-leaf",
+            message: "do not enter the switched branch",
+            idempotencyKey: runId,
+          },
+          respond: ((ok, payload, error) => {
+            sendResponses.push({ ok, payload, error });
+          }) as RespondFn,
+          context,
+        }),
+      );
+      await waitForFast(() => {
+        expect(context.dedupe.has(pendingChatSendDedupeKey(runId))).toBe(true);
+      }, FAST_WAIT_OPTS);
+
+      performBranchSwitch.resolve();
+      await mutation;
+      await send;
+
+      expect(switchedSessionId).toBeDefined();
+      expect(switchedSessionId).not.toBe(sourceSessionId);
+      expect(sendResponses).toEqual([
+        {
+          ok: false,
+          payload: undefined,
+          error: expect.objectContaining({
+            code: "INVALID_REQUEST",
+            details: expect.objectContaining({ reason: "active-leaf-changed" }),
+          }),
+        },
+      ]);
+      expect(context.addChatRun).not.toHaveBeenCalled();
+      expect(context.chatAbortControllers.has(runId)).toBe(false);
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+    } finally {
+      performBranchSwitch.resolve();
+      await Promise.allSettled(mutation ? [mutation] : []);
       resetDirectChatSession();
     }
   });

@@ -1,5 +1,5 @@
 import { normalizeAgentId } from "../sessions/session-key.ts";
-import type { ChatAttachment, ChatQueueItem } from "./chat-types.ts";
+import type { ChatAttachment, ChatQueueItem, ChatTranscriptRevision } from "./chat-types.ts";
 import { normalizeSenderIdentity } from "./sender-label.ts";
 
 export const MAX_STORED_SESSIONS = 20;
@@ -51,6 +51,22 @@ function normalizeChatAttachment(value: unknown): ChatAttachment | null {
   return restored;
 }
 
+function normalizeTranscriptRevision(value: unknown): ChatTranscriptRevision | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const entry = value as Record<string, unknown>;
+  const expectedLeafEntryId =
+    entry.expectedLeafEntryId === null ? null : normalizeOptionalString(entry.expectedLeafEntryId);
+  if (expectedLeafEntryId === undefined) {
+    return undefined;
+  }
+  const sessionId = normalizeOptionalString(entry.sessionId);
+  return {
+    expectedLeafEntryId,
+    ...(sessionId ? { sessionId } : {}),
+  };
+}
 export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
@@ -133,6 +149,10 @@ export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
   const agentId = normalizeOptionalString(entry.agentId);
   if (agentId) {
     item.agentId = normalizeAgentId(agentId);
+  }
+  const transcriptRevision = normalizeTranscriptRevision(entry.transcriptRevision);
+  if (transcriptRevision) {
+    item.transcriptRevision = transcriptRevision;
   }
   return item;
 }

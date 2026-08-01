@@ -375,6 +375,41 @@ describe("chat composer persistence", () => {
     });
   });
 
+  it("treats the transcript revision as part of the durable item version", () => {
+    const state = createState();
+    const original = {
+      ...reconnectItem("revision-versioned", 1),
+      transcriptRevision: {
+        expectedLeafEntryId: "leaf-before-review",
+        sessionId: "session-before-review",
+      },
+    };
+    const reviewed = {
+      ...original,
+      transcriptRevision: {
+        expectedLeafEntryId: "leaf-after-review",
+        sessionId: "session-after-review",
+      },
+    };
+    expect(admitStoredChatComposerQueueItem(state, state.sessionKey, original)).toBe(true);
+    expect(updateStoredChatComposerQueueItem(state, state.sessionKey, original, reviewed)).toBe(
+      true,
+    );
+
+    expect(
+      updateStoredChatComposerQueueItem(state, state.sessionKey, original, {
+        ...original,
+        sendState: "failed",
+      }),
+    ).toBe(false);
+    expect(removeStoredChatComposerQueueItem(state, state.sessionKey, original.id, original)).toBe(
+      false,
+    );
+    expect(removeStoredChatComposerQueueItem(state, state.sessionKey, reviewed.id, reviewed)).toBe(
+      true,
+    );
+  });
+
   it("keeps unresolved bare main and raw global independent until their owners resolve", () => {
     const offlineMain = createState({ agentsList: null, hello: null, sessionKey: "main" });
     const offlineGlobal = createState({ agentsList: null, hello: null, sessionKey: "global" });

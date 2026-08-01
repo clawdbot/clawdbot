@@ -263,7 +263,17 @@ describe("stored outbox summaries", () => {
             updatedAt: 2,
           },
           "global\u0000agent:work": {
-            queue: [{ id: "shared", text: "newer", createdAt: 3 }],
+            queue: [
+              {
+                id: "shared",
+                text: "newer",
+                createdAt: 3,
+                transcriptRevision: {
+                  expectedLeafEntryId: "leaf-before-reconnect",
+                  sessionId: "session-before-reconnect",
+                },
+              },
+            ],
             updatedAt: 3,
           },
         },
@@ -287,6 +297,10 @@ describe("stored outbox summaries", () => {
         createdAt: 3,
         sessionKey: "global",
         agentId: "work",
+        transcriptRevision: {
+          expectedLeafEntryId: "leaf-before-reconnect",
+          sessionId: "session-before-reconnect",
+        },
       },
     ]);
     expect(sessionStorage.getItem(legacyKey)).toBeNull();

@@ -1,6 +1,6 @@
 import type { QueueMode } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
-import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import type { ChatAttachment, ChatTranscriptRevision } from "../../lib/chat/chat-types.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import {
   isUiGlobalSessionKey,
@@ -21,27 +21,35 @@ export async function requestChatSend(
     agentId?: string;
     queueMode?: QueueMode;
     replyToId?: string;
-    expectedLeafEntryId?: string | null;
+    transcriptRevision?: ChatTranscriptRevision;
     expectedRunId?: string;
   },
 ): Promise<ChatSendAck> {
   const routing = resolveChatSendRouting(state, params);
+  // A leaf precondition and its session generation are one rendered snapshot.
+  // Never pair a captured leaf, or an exact run with no matching leaf, with
+  // mutable routing state after an async wait.
+  const sessionId = params.transcriptRevision
+    ? params.transcriptRevision.sessionId
+    : params.expectedRunId
+      ? undefined
+      : routing.sessionId;
   const controlUiReconnectResume = Boolean(
-    routing.sessionId && state.reconnectResumeSessionId === routing.sessionId,
+    sessionId && state.reconnectResumeSessionId === sessionId,
   );
   const payload = await state.client!.request("chat.send", {
     sessionKey: routing.sessionKey,
     ...(isUiGlobalSessionKey(routing.sessionKey) && routing.selectedAgentId
       ? { agentId: routing.selectedAgentId }
       : {}),
-    ...(routing.sessionId ? { sessionId: routing.sessionId } : {}),
+    ...(sessionId ? { sessionId } : {}),
     ...(controlUiReconnectResume ? { __controlUiReconnectResume: true } : {}),
     message: params.message,
     deliver: false,
     ...(params.replyToId ? { replyToId: params.replyToId } : {}),
     ...(params.queueMode ? { queueMode: params.queueMode } : {}),
-    ...(params.expectedLeafEntryId !== undefined
-      ? { expectedLeafEntryId: params.expectedLeafEntryId }
+    ...(params.transcriptRevision
+      ? { expectedLeafEntryId: params.transcriptRevision.expectedLeafEntryId }
       : {}),
     ...(params.expectedRunId ? { expectedRunId: params.expectedRunId } : {}),
     idempotencyKey: params.runId,
@@ -53,7 +61,7 @@ export async function requestChatSend(
   return normalizeChatSendAck(payload, params.runId);
 }
 
-export function resolveDisplayedLeafEntryId(
+function resolveDisplayedLeafEntryId(
   state: Pick<ChatState, "chatDisplayedLeafEntryId">,
 ): string | null | undefined {
   if (state.chatDisplayedLeafEntryId === null) {
@@ -61,6 +69,23 @@ export function resolveDisplayedLeafEntryId(
   }
   const leafEntryId = state.chatDisplayedLeafEntryId?.trim();
   return leafEntryId || undefined;
+}
+
+export function resolveDisplayedTranscriptRevision(
+  state: Pick<ChatState, "chatDisplayedLeafEntryId" | "currentSessionId">,
+): ChatTranscriptRevision | undefined {
+  const expectedLeafEntryId = resolveDisplayedLeafEntryId(state);
+  if (expectedLeafEntryId === undefined) {
+    return undefined;
+  }
+  const sessionId =
+    typeof state.currentSessionId === "string" && state.currentSessionId.trim()
+      ? state.currentSessionId.trim()
+      : undefined;
+  return {
+    expectedLeafEntryId,
+    ...(sessionId ? { sessionId } : {}),
+  };
 }
 
 const ACTIVE_LEAF_CHANGED_ERROR_REASON = "active-leaf-changed";

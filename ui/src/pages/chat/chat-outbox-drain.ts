@@ -37,8 +37,6 @@ import {
 export type QueuedChatSendResult = "sent" | "pending" | "failed";
 export type QueuedChatStorageMode = "durable" | "memory";
 export type QueuedChatSendOptions = {
-  /** Exact submit-time leaf; restored drains omit it so intervening advances park the draft. */
-  expectedLeafEntryId?: string | null;
   pendingSettings?: Promise<boolean>;
   previousAttachments?: ChatAttachment[];
   previousDraft?: string;
@@ -153,7 +151,9 @@ function sameQueuedDeliveryVersion(left: ChatQueueItem, right: ChatQueueItem): b
     left.sendAttempts === right.sendAttempts &&
     left.sendState === right.sendState &&
     left.agentId === right.agentId &&
-    left.sessionKey === right.sessionKey
+    left.sessionKey === right.sessionKey &&
+    left.transcriptRevision?.sessionId === right.transcriptRevision?.sessionId &&
+    left.transcriptRevision?.expectedLeafEntryId === right.transcriptRevision?.expectedLeafEntryId
   );
 }
 

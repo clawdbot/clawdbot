@@ -308,8 +308,8 @@ async function sendQueuedChatMessage(
           runId,
           sessionKey,
           agentId: prepared.agentId,
-          ...(options?.expectedLeafEntryId !== undefined
-            ? { expectedLeafEntryId: options.expectedLeafEntryId }
+          ...(prepared.transcriptRevision
+            ? { transcriptRevision: prepared.transcriptRevision }
             : {}),
           ...(prepared.replyToId ? { replyToId: prepared.replyToId } : {}),
         });

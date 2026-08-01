@@ -1,7 +1,11 @@
 import type { QueueMode } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { SessionsListResult } from "../../api/types.ts";
 import { setLastActiveSessionKey } from "../../app/settings.ts";
-import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import type {
+  ChatAttachment,
+  ChatQueueItem,
+  ChatTranscriptRevision,
+} from "../../lib/chat/chat-types.ts";
 import { visibleSessionMatches } from "../../lib/sessions/index.ts";
 import { uiSessionRowMatchesSelectedChat } from "../../lib/sessions/session-key.ts";
 import { generateUUID } from "../../lib/uuid.ts";
@@ -25,6 +29,7 @@ import {
   type ChatSendAck,
   type TerminalFailureChatSendAck,
 } from "./chat-send-ack.ts";
+import { resolveDisplayedTranscriptRevision } from "./chat-send-request.ts";
 import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";
 import { hasAbortableSessionRun } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
@@ -60,13 +65,32 @@ export type SteerSendDependencies = {
       queueMode?: QueueMode;
       runId: string;
       expectedRunId?: string;
-      expectedLeafEntryId?: string | null;
       replyToId?: string;
+      transcriptRevision?: ChatTranscriptRevision;
     },
   ) => Promise<SteerChatSendResult>;
 };
 
-type SteerTarget = { runId: string; leafEntryId?: string | null };
+type SteerTarget = { runId: string; transcriptRevision?: ChatTranscriptRevision };
+
+function resolveSessionRowTranscriptRevision(
+  row: SessionsListResult["sessions"][number] | undefined,
+): ChatTranscriptRevision | undefined {
+  const activeLeafEntryId = row?.activeLeafEntryId;
+  if (activeLeafEntryId === undefined) {
+    return undefined;
+  }
+  const expectedLeafEntryId =
+    activeLeafEntryId === null ? null : activeLeafEntryId.trim() || undefined;
+  if (expectedLeafEntryId === undefined) {
+    return undefined;
+  }
+  const sessionId = row?.sessionId?.trim();
+  return {
+    expectedLeafEntryId,
+    ...(sessionId ? { sessionId } : {}),
+  };
+}
 
 function resolveSteerTarget(host: SteerLifecycleHost, item: ChatQueueItem): SteerTarget | null {
   const matchingRows =
@@ -88,17 +112,13 @@ function resolveSteerTarget(host: SteerLifecycleHost, item: ChatQueueItem): Stee
     return null;
   }
   const activeRow = matchingRows.find((row) => row.activeRunIds?.includes(runId));
-  const displayedLeaf =
-    host.chatRunId?.trim() === runId ? host.chatDisplayedLeafEntryId : undefined;
-  const leafEntryId =
-    displayedLeaf === null ? null : displayedLeaf?.trim() || activeRow?.activeLeafEntryId;
+  const displayedRevision =
+    host.chatRunId?.trim() === runId ? resolveDisplayedTranscriptRevision(host) : undefined;
+  const transcriptRevision =
+    displayedRevision ?? resolveSessionRowTranscriptRevision(activeRow);
   return {
     runId,
-    ...(leafEntryId === null
-      ? { leafEntryId: null }
-      : typeof leafEntryId === "string" && leafEntryId.trim()
-        ? { leafEntryId: leafEntryId.trim() }
-        : {}),
+    ...(transcriptRevision ? { transcriptRevision } : {}),
   };
 }
 
@@ -320,7 +340,7 @@ export async function sendQueuedChatMessageWithQueueMode(
   // replay the original queued turn after active-run admission may have succeeded.
   const claimed = updateQueuedMessage(host, id, (entry) => ({
     ...entry,
-    ...(isSteer ? { kind: "steered" as const } : {}),
+    ...(isSteer ? { kind: "steered" as const, transcriptRevision: undefined } : {}),
     ...(steerTarget
       ? {
           steerTargetRunId: steerTarget.runId,
@@ -343,6 +363,7 @@ export async function sendQueuedChatMessageWithQueueMode(
     sendRunId: claimed.sendRunId,
     sessionKey: claimed.sessionKey,
     agentId: claimed.agentId,
+    transcriptRevision: claimed.transcriptRevision,
   };
   const steeringChip = buildInflightSteerChip(pendingItem, claimed.sendRunId, activeRunId);
   const pendingIndicator = isSteer
@@ -376,11 +397,13 @@ export async function sendQueuedChatMessageWithQueueMode(
       ...(steerTarget
         ? {
             expectedRunId: steerTarget.runId,
-            ...(steerTarget.leafEntryId !== undefined
-              ? { expectedLeafEntryId: steerTarget.leafEntryId }
+            ...(steerTarget.transcriptRevision
+              ? { transcriptRevision: steerTarget.transcriptRevision }
               : {}),
           }
-        : {}),
+        : claimed.transcriptRevision
+          ? { transcriptRevision: claimed.transcriptRevision }
+          : {}),
       runId: claimed.sendRunId,
     },
   );

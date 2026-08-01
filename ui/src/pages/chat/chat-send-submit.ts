@@ -46,7 +46,7 @@ import {
   setChatError,
   waitForPendingChatSettings,
 } from "./chat-send-queue-state.ts";
-import { resolveDisplayedLeafEntryId } from "./chat-send-request.ts";
+import { resolveDisplayedTranscriptRevision } from "./chat-send-request.ts";
 import { recordChatSendTiming } from "./chat-send-timing.ts";
 import { getPendingChatPickerPatch } from "./chat-session.ts";
 import { withChatSubmitGuard } from "./chat-submit-guard.ts";
@@ -207,7 +207,7 @@ export async function handleSendChat(
   const userMessage = (messageOverride ?? host.chatMessage).trim();
   const submittedAtMs = controlUiNowMs();
   const submittedSessionKey = host.sessionKey;
-  const expectedLeafEntryId = resolveDisplayedLeafEntryId(host as unknown as ChatState);
+  const transcriptRevision = resolveDisplayedTranscriptRevision(host as unknown as ChatState);
   const attachmentsToSend =
     messageOverride == null ? snapshotChatAttachments(host.chatAttachments) : [];
   const hasAttachments = attachmentsToSend.length > 0;
@@ -444,8 +444,11 @@ export async function handleSendChat(
       refreshSessions,
       submittedAtMs,
       waitingForSettings ? "waiting-model" : reconnectSafeQueuedSendState(host),
-      skillWorkshopRevision,
-      replyToId,
+      {
+        ...(skillWorkshopRevision ? { skillWorkshopRevision } : {}),
+        ...(replyToId ? { replyToId } : {}),
+        ...(transcriptRevision ? { transcriptRevision } : {}),
+      },
     );
     if (!queued) {
       return;
@@ -467,7 +470,6 @@ export async function handleSendChat(
     const sendResult = await deliverChatQueueItem(host, queued, {
       previousDraft: cleared.previousDraft,
       previousAttachments: cleared.previousAttachments,
-      ...(expectedLeafEntryId !== undefined ? { expectedLeafEntryId } : {}),
       ...(pendingSettings ? { pendingSettings } : {}),
       restoreAttachments: Boolean(messageOverride && opts?.restoreDraft),
       restoreDraft: Boolean(messageOverride && opts?.restoreDraft),

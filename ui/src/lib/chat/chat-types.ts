@@ -32,6 +32,11 @@ export type ChatQueueSkillWorkshopRevision = {
   connectionEpoch?: number;
 };
 
+export type ChatTranscriptRevision = {
+  expectedLeafEntryId: string | null;
+  sessionId?: string;
+};
+
 export type ChatQueueItem = {
   id: string;
   text: string;
@@ -64,6 +69,8 @@ export type ChatQueueItem = {
   agentId?: string;
   sender?: SenderIdentity;
   skillWorkshopRevision?: ChatQueueSkillWorkshopRevision;
+  /** Rendered transcript generation and leaf captured together at submit time. */
+  transcriptRevision?: ChatTranscriptRevision;
 };
 
 /** Union type for items in the chat thread */

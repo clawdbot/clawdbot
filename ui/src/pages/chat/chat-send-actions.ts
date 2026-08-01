@@ -1,6 +1,11 @@
 import { GatewayRequestError } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
-import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import type {
+  ChatAttachment,
+  ChatQueueItem,
+  ChatTranscriptRevision,
+} from "../../lib/chat/chat-types.ts";
+import { visibleSessionMatches } from "../../lib/sessions/index.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { loadChatBranches, loadChatHistory, type ChatState } from "./chat-history.ts";
 import {
@@ -24,7 +29,7 @@ import {
 import {
   isActiveLeafChangedError,
   requestChatSend,
-  resolveDisplayedLeafEntryId,
+  resolveDisplayedTranscriptRevision,
 } from "./chat-send-request.ts";
 import { listStoredChatOutboxes, storedChatOutboxScopeKey } from "./composer-persistence.ts";
 import { formatConnectError } from "./connect-error.ts";
@@ -64,18 +69,17 @@ export async function sendChatMessageWithGeneratedRunId(
     setChatError(state, null);
   }
   const runId = options.runId ?? generateUUID();
-  // Direct sends fail closed on the authoritative leaf; restored drains omit it.
-  const expectedLeafEntryId = resolveDisplayedLeafEntryId(state);
+  // Direct sends capture the rendered generation and leaf in one synchronous read.
+  // Queued sends pass their durable submit-time revision through this helper.
+  const transcriptRevision =
+    options.transcriptRevision ??
+    (options.expectedRunId ? undefined : resolveDisplayedTranscriptRevision(state));
   try {
     return await requestChatSend(state, {
       message: msg,
       attachments,
       runId,
-      ...(options.expectedLeafEntryId !== undefined
-        ? { expectedLeafEntryId: options.expectedLeafEntryId }
-        : expectedLeafEntryId !== undefined
-          ? { expectedLeafEntryId }
-          : {}),
+      ...(transcriptRevision ? { transcriptRevision } : {}),
       ...(options.expectedRunId ? { expectedRunId: options.expectedRunId } : {}),
       ...(options.queueMode ? { queueMode: options.queueMode } : {}),
       ...(options.replyToId ? { replyToId: options.replyToId } : {}),
@@ -93,6 +97,7 @@ function findStoredOutbox(host: ChatHost, id: string) {
 const resetRetryState = (
   entry: ChatQueueItem,
   sendState: ChatQueueItem["sendState"],
+  transcriptRevision?: ChatTranscriptRevision,
 ): ChatQueueItem => ({
   ...entry,
   sendAttempts: 0,
@@ -100,6 +105,7 @@ const resetRetryState = (
   sendRequestStartedAtMs: undefined,
   sendRunId: entry.sendState === "failed" ? generateUUID() : entry.sendRunId,
   sendState,
+  ...(transcriptRevision ? { transcriptRevision } : {}),
 });
 
 export const steerSendDependencies: SteerSendDependencies = {
@@ -160,6 +166,11 @@ export async function retryQueuedChatMessage(host: ChatHost, id: string) {
     await steerQueuedChatMessageLifecycle(host, id, steerSendDependencies);
     return;
   }
+  const transcriptRevision =
+    !item.localCommandName &&
+    visibleSessionMatches(host, item.sessionKey ?? host.sessionKey, item.agentId)
+      ? resolveDisplayedTranscriptRevision(host as unknown as ChatState)
+      : undefined;
   let outbox = findStoredOutbox(host, item.id);
   if (!outbox) {
     const wasVolatile = isVolatileQueuedMessage(host, item.id);
@@ -172,7 +183,7 @@ export async function retryQueuedChatMessage(host: ChatHost, id: string) {
         canSendVolatileQueueItem(host, item)
       ) {
         const retry = updateVolatileQueuedMessage(host, id, (entry) =>
-          resetRetryState(entry, undefined),
+          resetRetryState(entry, undefined, transcriptRevision),
         );
         if (!retry) {
           setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
@@ -189,7 +200,7 @@ export async function retryQueuedChatMessage(host: ChatHost, id: string) {
     }
   }
   const retry = updateQueuedMessage(host, id, (entry) =>
-    resetRetryState(entry, reconnectSafeQueuedSendState(host)),
+    resetRetryState(entry, reconnectSafeQueuedSendState(host), transcriptRevision),
   );
   if (!retry) {
     setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
