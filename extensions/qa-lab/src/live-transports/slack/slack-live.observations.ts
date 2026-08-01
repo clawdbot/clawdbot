@@ -220,6 +220,15 @@ function normalizeSlackAccessibleText(value: string) {
   return value.trim().replace(/\s+/gu, " ");
 }
 
+const SLACK_QA_TEXT_DIAGNOSTIC_MAX_CHARS = 500;
+
+function describeSlackObservedText(value: string) {
+  const preview = value.slice(0, SLACK_QA_TEXT_DIAGNOSTIC_MAX_CHARS);
+  return `${value.length} characters; actual=${JSON.stringify(preview)}${
+    preview.length < value.length ? "…" : ""
+  }`;
+}
+
 export function isExpectedSlackNativeChartMessage(
   message: SlackMessage,
   expectedAccessibleText: string,
@@ -365,6 +374,11 @@ export async function runSlackTableInvalidBlocksFallbackScenario(
   ) {
     throw new Error("Slack fallback did not use one formatting-disabled blockless API request");
   }
+  if (fallbackAttempt.text !== probe.fallbackText) {
+    throw new Error(
+      `Slack fallback API request was incomplete: expected ${probe.fallbackText.length} characters, observed ${describeSlackObservedText(fallbackAttempt.text)}`,
+    );
+  }
 
   const message = await waitForSlackStoredMessage({
     channelId: context.channelId,
@@ -379,16 +393,20 @@ export async function runSlackTableInvalidBlocksFallbackScenario(
   if (countSlackNativeDataBlocks(message.blocks) !== 0) {
     throw new Error("stored Slack fallback retained a native data block");
   }
-  const storedLines = storedText.split("\n");
-  if (!storedLines.includes(probe.firstRowText)) {
-    throw new Error("stored Slack fallback omitted the exact first data row");
-  }
-  if (!storedLines.includes(probe.finalRowText)) {
-    throw new Error("stored Slack fallback omitted the exact final data row");
-  }
-  if (storedText !== probe.fallbackText) {
+  const normalizedStoredText = normalizeSlackAccessibleText(storedText);
+  if (!normalizedStoredText.includes(normalizeSlackAccessibleText(probe.firstRowText))) {
     throw new Error(
-      `stored Slack fallback was incomplete: expected ${probe.fallbackText.length} characters, observed ${storedText.length}`,
+      `stored Slack fallback omitted the first data row: ${describeSlackObservedText(storedText)}`,
+    );
+  }
+  if (!normalizedStoredText.includes(normalizeSlackAccessibleText(probe.finalRowText))) {
+    throw new Error(
+      `stored Slack fallback omitted the final data row: ${describeSlackObservedText(storedText)}`,
+    );
+  }
+  if (normalizedStoredText !== normalizeSlackAccessibleText(probe.fallbackText)) {
+    throw new Error(
+      `stored Slack fallback was incomplete: expected ${probe.fallbackText.length} characters, observed ${describeSlackObservedText(storedText)}`,
     );
   }
   return {
