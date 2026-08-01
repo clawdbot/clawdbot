@@ -10,7 +10,6 @@ import {
   triggerInternalHook,
 } from "../hooks/internal-hooks.js";
 import {
-  clearDetachedTaskLifecycleRuntimeRegistration,
   getDetachedTaskLifecycleRuntimeRegistration,
   registerDetachedTaskLifecycleRuntime,
 } from "../tasks/detached-task-runtime-state.js";
@@ -55,7 +54,6 @@ import {
 } from "./memory-embedding-providers.js";
 import {
   buildMemoryPromptSection,
-  clearMemoryPluginState,
   getMemoryCapabilityRegistration,
   getMemoryRuntime,
   listActiveMemoryPublicArtifacts,

@@ -199,7 +199,11 @@ export function createProviderRegistrars(state: PluginRegistryState) {
       coreEntry ?? registry.embeddingProviders.find((entry) => entry.provider.id === id);
     if (existing) {
       const ownerPluginId =
-        "ownerPluginId" in existing ? existing.ownerPluginId : existing.pluginId;
+        "ownerPluginId" in existing
+          ? existing.ownerPluginId
+          : "pluginId" in existing
+            ? existing.pluginId
+            : undefined;
       const ownerDetail = ownerPluginId ? ` (owner: ${ownerPluginId})` : "";
       pushDiagnostic({
         level: "error",
