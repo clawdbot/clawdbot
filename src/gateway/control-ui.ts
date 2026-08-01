@@ -731,9 +731,7 @@ export async function handleControlUiAssistantMediaRequest(
     const byteResponse = resolveByteResponse({
       file: opened.stat,
       method: req.method,
-      rangeHeader: req.headers.range,
-      ifRangeHeader: req.headers["if-range"],
-      ifNoneMatchHeader: req.headers["if-none-match"],
+      request: req,
     });
     writeByteHeaders(res, byteResponse);
     await byteStream.pipe(byteResponse, req.method);
