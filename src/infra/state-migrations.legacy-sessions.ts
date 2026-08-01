@@ -26,6 +26,28 @@ import {
 } from "./state-migrations.session-store.js";
 import type { LegacyStateDetection } from "./state-migrations.types.js";
 
+function normalizeMergedSessionStore(
+  merged: Record<string, SessionEntryLike>,
+  protectedKeys: ReadonlySet<string>,
+): {
+  store: Record<string, SessionEntry>;
+  rejectedProtectedKeyCount: number;
+} {
+  const store = Object.create(null) as Record<string, SessionEntry>;
+  let rejectedProtectedKeyCount = 0;
+  for (const [key, entry] of Object.entries(merged)) {
+    const normalizedEntry = normalizeSessionEntry(entry, key);
+    if (!normalizedEntry) {
+      if (protectedKeys.has(key)) {
+        rejectedProtectedKeyCount++;
+      }
+      continue;
+    }
+    store[key] = normalizedEntry;
+  }
+  return { store, rejectedProtectedKeyCount };
+}
+
 export async function migrateLegacySessions(
   detected: LegacyStateDetection,
   now: () => number,
@@ -107,6 +129,7 @@ export async function migrateLegacySessions(
     preserveCanonicalAgentOwner: true,
     preserveForeignMainAliases: detected.sessions.preserveForeignMainAliases,
   });
+  const targetKeys = new Set(Object.keys(canonicalizedTarget.store));
   const preservedLegacyForeignMainAliasCount = detected.sessions.preserveForeignMainAliases
     ? Object.keys(legacyStore).filter((key) =>
         isLegacyDefaultMainAliasKey(key, detected.targetMainKey),
@@ -183,15 +206,14 @@ export async function migrateLegacySessions(
     (legacyParsed.ok || targetParsed.ok) &&
     (Object.keys(legacyStore).length > 0 || Object.keys(targetStore).length > 0)
   ) {
-    const normalized = Object.create(null) as Record<string, SessionEntry>;
-    for (const [key, entry] of Object.entries(merged)) {
-      const normalizedEntry = normalizeSessionEntry(entry, key);
-      if (!normalizedEntry) {
-        continue;
-      }
-      normalized[key] = normalizedEntry;
+    const normalized = normalizeMergedSessionStore(merged, targetKeys);
+    if (normalized.rejectedProtectedKeyCount > 0) {
+      warnings.push(
+        `Refused legacy session migration because normalization rejected ${normalized.rejectedProtectedKeyCount} existing target session ${normalized.rejectedProtectedKeyCount === 1 ? "key" : "keys"}; left ${detected.sessions.targetStorePath} and ${detected.sessions.legacyStorePath} in place. Repair the conflicting rows, then rerun openclaw doctor --fix.`,
+      );
+      return { changes, warnings };
     }
-    await saveSessionStoreStrict(detected.sessions.targetStorePath, normalized);
+    await saveSessionStoreStrict(detected.sessions.targetStorePath, normalized.store);
     if (migratedDirectChatKey) {
       changes.push(`Migrated latest direct-chat session → ${migratedDirectChatKey}`);
     }
@@ -257,14 +279,10 @@ export async function migrateLegacySessions(
       rewroteSessionFiles = true;
     }
     if (rewroteSessionFiles) {
-      const normalized = Object.create(null) as Record<string, SessionEntry>;
-      for (const [key, entry] of Object.entries(merged)) {
-        const normalizedEntry = normalizeSessionEntry(entry, key);
-        if (normalizedEntry) {
-          normalized[key] = normalizedEntry;
-        }
-      }
-      await saveSessionStoreStrict(detected.sessions.targetStorePath, normalized);
+      // The first pass already validated protected rows. Adding retired
+      // sessionFile metadata cannot change their normalization outcome.
+      const normalized = normalizeMergedSessionStore(merged, targetKeys);
+      await saveSessionStoreStrict(detected.sessions.targetStorePath, normalized.store);
       changes.push("Rewrote migrated session transcript paths");
     }
   }
