@@ -1401,8 +1401,8 @@ describe("runDoctorSessionSqlite", () => {
       restore.targets.find((target) => target.restore)?.restore,
       "aggregate restore report",
     );
-    const storeConflicts = restoreReport.conflicts.filter(
-      (conflict) => conflict.sourcePath === canonicalTestPath(store.storePath),
+    const storeConflicts = restoreReport.conflicts.filter((conflict) =>
+      [firstArchive, secondArchive].includes(conflict.archivePath),
     );
     expect(storeConflicts).toHaveLength(2);
     expect(new Set(storeConflicts.map((conflict) => conflict.reason))).toEqual(
@@ -1456,8 +1456,8 @@ describe("runDoctorSessionSqlite", () => {
       restore.targets.find((target) => target.restore)?.restore,
       "aggregate restore report",
     );
-    const storeConflicts = restoreReport.conflicts.filter(
-      (conflict) => conflict.sourcePath === canonicalTestPath(store.storePath),
+    const storeConflicts = restoreReport.conflicts.filter((conflict) =>
+      [firstArchive, secondArchive].includes(conflict.archivePath),
     );
     expect(storeConflicts).toHaveLength(2);
     expect(storeConflicts.map((conflict) => conflict.reason)).toEqual(
@@ -1512,8 +1512,8 @@ describe("runDoctorSessionSqlite", () => {
       restore.targets.find((target) => target.restore)?.restore,
       "aggregate restore report",
     );
-    const storeConflicts = restoreReport.conflicts.filter(
-      (conflict) => conflict.sourcePath === canonicalTestPath(store.storePath),
+    const storeConflicts = restoreReport.conflicts.filter((conflict) =>
+      [firstArchive, secondArchive].includes(conflict.archivePath),
     );
     expect(storeConflicts).toHaveLength(2);
     expect(storeConflicts.map((conflict) => conflict.reason)).toEqual(
