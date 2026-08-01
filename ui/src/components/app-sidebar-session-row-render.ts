@@ -229,9 +229,9 @@ export function renderRecentSession(params: {
         ? nothing
         : (event: MouseEvent) => {
             event.preventDefault();
-            const row = event.currentTarget as HTMLElement;
+            const rowElement = event.currentTarget as HTMLElement;
             const trigger =
-              row.querySelector<HTMLElement>("[data-session-menu]") ??
+              rowElement.querySelector<HTMLElement>("[data-session-menu]") ??
               (event.target instanceof Element
                 ? event.target.closest<HTMLElement>("a, button, [tabindex]")
                 : null);

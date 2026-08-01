@@ -95,7 +95,9 @@ describe("renderSessionsHubTabs", () => {
     const outside = document.createElement("button");
     document.body.append(outside);
     outside.focus();
-    await new Promise((resolve) => window.setTimeout(resolve, 0));
+    await new Promise<void>((resolve) => {
+      window.setTimeout(resolve, 0);
+    });
 
     expect(document.activeElement).toBe(outside);
   });
@@ -113,7 +115,9 @@ describe("renderSessionsHubTabs", () => {
     document.body.append(outside);
     outside.focus();
     await mount({ active: "worktrees", onSelect: () => undefined });
-    await new Promise((resolve) => window.setTimeout(resolve, 0));
+    await new Promise<void>((resolve) => {
+      window.setTimeout(resolve, 0);
+    });
 
     expect(document.activeElement).toBe(outside);
   });
