@@ -43,6 +43,8 @@ function quotePosixArgument(value: string): string {
 /**
  * Renders the package-independent ownership probe used by detached restart helpers.
  * The caller must refuse activation when `openclaw_system_launchd_conflict` is non-empty.
+ * Plist inspection failures fail closed only for still-existing plists whose basename
+ * contains the label, mirroring findInstalledSystemLaunchDaemon's missing/unverifiable split.
  */
 export function renderSystemLaunchDaemonOwnershipShellProbe(label: string): string {
   const serviceTarget = `system/${label}`;
@@ -81,9 +83,11 @@ if [ -z "$openclaw_system_launchd_conflict" ]; then
           else
             case "\${openclaw_system_launchd_plist##*/}" in
             *"$openclaw_system_launchd_label"*)
-              openclaw_system_launchd_conflict="$openclaw_system_launchd_plist"
-              openclaw_system_launchd_detail="could not inspect system LaunchDaemon plist $openclaw_system_launchd_plist: $openclaw_system_launchd_plist_label"
-              break
+              if [ -e "$openclaw_system_launchd_plist" ]; then
+                openclaw_system_launchd_conflict="$openclaw_system_launchd_plist"
+                openclaw_system_launchd_detail="could not inspect system LaunchDaemon plist $openclaw_system_launchd_plist: $openclaw_system_launchd_plist_label"
+                break
+              fi
               ;;
             esac
           fi
