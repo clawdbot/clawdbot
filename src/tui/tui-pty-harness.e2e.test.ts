@@ -309,6 +309,40 @@ describe.sequential("TUI PTY harness", () => {
     STARTUP_TEST_TIMEOUT_MS,
   );
 
+  it(
+    "cancels a buffered submit before Ctrl+D shutdown",
+    async () => {
+      const bufferedFixture = await startTuiFixture({
+        env: { OPENCLAW_TUI_PTY_SUBMIT_BURST_WINDOW_MS: "500" },
+      });
+      try {
+        const message = "buffered shutdown proof";
+        await bufferedFixture.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
+        await bufferedFixture.run.write(`${message}\r`, { delay: false });
+        await bufferedFixture.waitForLogEntry(
+          (entry) =>
+            entry.method === "submitBurstCaptured" && objectFieldEquals(entry, "value", message),
+        );
+
+        await bufferedFixture.run.write("\u0004", { delay: false });
+        expect((await bufferedFixture.run.waitForExit()).exitCode).toBe(0);
+
+        const entries = await readFixtureLog(bufferedFixture.logPath);
+        expect(entries).toEqual(
+          expect.arrayContaining([expect.objectContaining({ method: "stop" })]),
+        );
+        expect(
+          entries.some(
+            (entry) => entry.method === "sendChat" && objectFieldEquals(entry, "message", message),
+          ),
+        ).toBe(false);
+      } finally {
+        await bufferedFixture.cleanup();
+      }
+    },
+    STARTUP_TEST_TIMEOUT_MS,
+  );
+
   it.each([
     { name: "Ctrl+D", input: "\u0004" },
     { name: "/exit", input: "/exit\r" },
