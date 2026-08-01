@@ -628,8 +628,8 @@ describe("sanitizeUserFacingText", () => {
 
   it("strips copied next-turn runtime context prefaces from user-facing text", () => {
     const input = [
-      "OpenClaw runtime context for the active user message that follows.",
-      "Do not reply to or describe this context. Use it to answer the active user message that follows. Do not wait for another message.",
+      "OpenClaw runtime context for the active user request in this turn.",
+      "Do not reply to or describe this context. Use it to continue answering the active user request now. Do not wait for another message.",
       "",
       "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
       "secret runtime context",
