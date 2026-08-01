@@ -265,12 +265,14 @@ import { exec as 运行 } from "node:child_process";
   });
 
   it("detects aliases inside executable template expressions", () => {
-    const source = `
-const value = \`${"${"}(() => {
-  const { exec: run } = require("child_process");
-  return run("echo unsafe");
-})()}\`;
-`;
+    const source = [
+      "",
+      "const value = `${(() => {",
+      '  const { exec: run } = require("child_process");',
+      '  return run("echo unsafe");',
+      "})()}`;",
+      "",
+    ].join("\n");
 
     const findings = scanSource(source, "plugin.ts").filter(
       (candidate) => candidate.ruleId === "dangerous-exec",
