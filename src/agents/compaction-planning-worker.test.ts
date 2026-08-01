@@ -57,11 +57,23 @@ describe("compaction planning worker", () => {
     ).toBe("/repo/dist/agents/compaction-planning.worker.js");
   });
 
-  it("rejects invalid worker input", () => {
-    expect(runCompactionPlanningWorkerInput({ kind: "summaryChunks" })).toEqual({
-      status: "failed",
-      error: "invalid compaction planning worker input",
-    });
+  it("rejects invalid and retired worker input", () => {
+    for (const input of [
+      { kind: "summaryChunks" },
+      {
+        kind: "historyPrune",
+        messagesToSummarize: [],
+        turnPrefixMessages: [],
+        tokensBefore: 0,
+        contextWindowTokens: 1,
+        maxHistoryShare: 0.5,
+      },
+    ]) {
+      expect(runCompactionPlanningWorkerInput(input)).toEqual({
+        status: "failed",
+        error: "invalid compaction planning worker input",
+      });
+    }
   });
 
   it("plans summary chunks in the packaged worker", () => {
@@ -165,6 +177,17 @@ describe("compaction planning worker", () => {
     }
     expect(value.chunkIndexes.flat()).toEqual([0, 1, 2]);
     expect(value.chunkIndexes.length).toBeGreaterThan(1);
+  });
+
+  it.each([
+    { kind: "oversizedFallback", messages: [makeMessage(1)], contextWindow: 1200 },
+    { kind: "stageSplit", messages: [makeMessage(1)], maxChunkTokens: 1200 },
+    { kind: "adaptiveChunkRatio", messages: [makeMessage(1)], contextWindow: 1200 },
+  ])("plans $kind for worker input", (input) => {
+    expect(runCompactionPlanningWorkerInput(input)).toMatchObject({
+      status: "ok",
+      value: { kind: input.kind },
+    });
   });
 
   it("preserves original user identity while worker fallback omits an oversized tool batch", async () => {

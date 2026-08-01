@@ -94,7 +94,7 @@ export function createApplicationGateway(
   let canvasSurfaceLeaseClient: GatewayBrowserClient | null = null;
   let canvasSurfaceLeaseStarted = false;
   let canvasSurfaceLeaseGeneration = 0;
-  // Session lineage for this page lifetime: once a hello succeeded, later
+  // Session lineage belongs to the selected Gateway: once its hello succeeds,
   // transport drops render as "reconnecting" (shell + banner) instead of
   // kicking the operator back to the login gate.
   let everConnected = false;
@@ -273,6 +273,10 @@ export function createApplicationGateway(
     const gatewayUrlChanged =
       connectionOverrides.gatewayUrl !== undefined &&
       connectionOverrides.gatewayUrl !== connection.gatewayUrl;
+    // A different Gateway has no established session to keep mounted on failure.
+    if (gatewayUrlChanged) {
+      everConnected = false;
+    }
     connection = nextConnection;
     // Trust the connected gateway's origin for avatar route resolution so
     // split-origin Control UI deployments load uploaded/proxied avatars.

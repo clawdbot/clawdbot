@@ -32,7 +32,10 @@ import {
   resolvePluginRuntimeLoadContext,
 } from "./runtime/load-context.js";
 import { loadPluginMetadataRegistrySnapshot } from "./runtime/metadata-registry-loader.js";
-import { buildPluginDependencyStatus } from "./status-dependencies-core.js";
+import {
+  buildPluginDependencyStatus,
+  projectPluginDependencyHealth,
+} from "./status-dependencies-core.js";
 import type { PluginHookName, PluginLogger } from "./types.js";
 
 export type PluginStatusReport = PluginRegistry & {
@@ -234,6 +237,9 @@ function buildPluginReport(
           ...baseContext,
           workspaceDir,
         };
+  const manifestByPluginId =
+    metadataSnapshot?.byPluginId ??
+    new Map(context.manifestRegistry?.plugins.map((manifest) => [manifest.id, manifest]) ?? []);
   const config = context.config;
 
   // Apply bundled-provider allowlist compat so that `plugins list` and `doctor`
@@ -303,7 +309,7 @@ function buildPluginReport(
     ...listImportedBundledPluginFacadeIds(),
   ]);
 
-  return {
+  return projectPluginDependencyHealth({
     workspaceDir,
     ...registry,
     plugins: registry.plugins.map((plugin) =>
@@ -314,13 +320,12 @@ function buildPluginReport(
           plugin.dependencyStatus ??
           buildPluginDependencyStatus({
             rootDir: plugin.rootDir,
-            dependencies: metadataSnapshot?.byPluginId.get(plugin.id)?.packageDependencies,
-            optionalDependencies: metadataSnapshot?.byPluginId.get(plugin.id)
-              ?.packageOptionalDependencies,
+            dependencies: manifestByPluginId.get(plugin.id)?.packageDependencies,
+            optionalDependencies: manifestByPluginId.get(plugin.id)?.packageOptionalDependencies,
           }),
       }),
     ),
-  };
+  });
 }
 
 export function buildPluginSnapshotReport(params?: PluginReportParams): PluginStatusReport {

@@ -276,6 +276,7 @@
     "!dist/extensions/gradium/**",
     "!dist/extensions/groq/**",
     "!dist/extensions/inworld/**",
+    "!dist/extensions/imessage/**",
     "!dist/extensions/irc/**",
     "!dist/extensions/kilocode/**",
     "!dist/extensions/kimi-coding/**",

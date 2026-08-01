@@ -32,7 +32,7 @@ Dedicated deep references:
 
 ## Channels
 
-Per-channel config keys live in [Configuration - channels](/gateway/config-channels): `channels.*` for Slack, Discord, Telegram, WhatsApp, Matrix, iMessage, and other bundled channels (auth, access control, multi-account, mention gating).
+Per-channel config keys live in [Configuration - channels](/gateway/config-channels): `channels.*` for Slack, Discord, Telegram, WhatsApp, Matrix, iMessage, and other channel plugins (auth, access control, multi-account, mention gating).
 
 ## Agent defaults, multi-agent, sessions, and messages
 

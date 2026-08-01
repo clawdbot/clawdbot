@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import http, { type ServerResponse } from "node:http";
+import http, { type IncomingMessage, type ServerResponse } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -11,11 +11,36 @@ import {
 
 const FILE = { size: 10, mtimeMs: 1_752_000_000_123.5 };
 const LAST_MODIFIED = new Date(FILE.mtimeMs).toUTCString();
+const HTTP_DATE_VARIANTS = [
+  { label: "IMF-fixdate", value: LAST_MODIFIED },
+  { label: "obsolete RFC 850", value: "Tuesday, 08-Jul-25 18:40:00 GMT" },
+  { label: "ANSI C asctime", value: "Tue Jul  8 18:40:00 2025" },
+] as const;
+
+function createByteRequest(
+  headers: Record<string, string | string[] | undefined>,
+): Pick<IncomingMessage, "headers" | "headersDistinct"> {
+  const entries = Object.entries(headers).flatMap(([name, value]) =>
+    value === undefined ? [] : [[name, value] as const],
+  );
+  return {
+    headers: Object.fromEntries(
+      entries.map(([name, value]) => [name, Array.isArray(value) ? value.join(", ") : value]),
+    ),
+    headersDistinct: Object.fromEntries(
+      entries.map(([name, value]) => [name, Array.isArray(value) ? value : [value]]),
+    ),
+  };
+}
 
 describe("resolveByteResponse", () => {
   it("resolves an open-ended range", () => {
     expect(
-      resolveByteResponse({ file: FILE, method: "GET", rangeHeader: "bytes=4-" }),
+      resolveByteResponse({
+        file: FILE,
+        method: "GET",
+        request: createByteRequest({ range: "bytes=4-" }),
+      }),
     ).toMatchObject({
       kind: "partial",
       statusCode: 206,
@@ -26,7 +51,11 @@ describe("resolveByteResponse", () => {
 
   it("resolves a suffix range", () => {
     expect(
-      resolveByteResponse({ file: FILE, method: "GET", rangeHeader: "bytes=-3" }),
+      resolveByteResponse({
+        file: FILE,
+        method: "GET",
+        request: createByteRequest({ range: "bytes=-3" }),
+      }),
     ).toMatchObject({
       kind: "partial",
       statusCode: 206,
@@ -37,7 +66,11 @@ describe("resolveByteResponse", () => {
 
   it("resolves an exact range", () => {
     expect(
-      resolveByteResponse({ file: FILE, method: "GET", rangeHeader: "bytes=2-5" }),
+      resolveByteResponse({
+        file: FILE,
+        method: "GET",
+        request: createByteRequest({ range: "bytes=2-5" }),
+      }),
     ).toMatchObject({
       kind: "partial",
       statusCode: 206,
@@ -47,7 +80,11 @@ describe("resolveByteResponse", () => {
   });
 
   it("returns 416 with the complete file size for an out-of-bounds range", () => {
-    const plan = resolveByteResponse({ file: FILE, method: "GET", rangeHeader: "bytes=10-20" });
+    const plan = resolveByteResponse({
+      file: FILE,
+      method: "GET",
+      request: createByteRequest({ range: "bytes=10-20" }),
+    });
     expect(plan).toMatchObject({
       kind: "unsatisfiable",
       statusCode: 416,
@@ -65,7 +102,13 @@ describe("resolveByteResponse", () => {
   it.each(["items=0-1", "bytes=broken", "bytes=0-1,4-5"])(
     "falls back to a full response for malformed or multipart range %s",
     (rangeHeader) => {
-      expect(resolveByteResponse({ file: FILE, method: "GET", rangeHeader })).toMatchObject({
+      expect(
+        resolveByteResponse({
+          file: FILE,
+          method: "GET",
+          request: createByteRequest({ range: rangeHeader }),
+        }),
+      ).toMatchObject({
         kind: "full",
         statusCode: 200,
         contentLength: 10,
@@ -79,8 +122,7 @@ describe("resolveByteResponse", () => {
       resolveByteResponse({
         file: FILE,
         method: "GET",
-        rangeHeader: "bytes=1-2",
-        ifRangeHeader: etag,
+        request: createByteRequest({ range: "bytes=1-2", "if-range": etag }),
       }),
     ).toMatchObject({ kind: "partial", statusCode: 206, range: { start: 1, end: 2 } });
   });
@@ -90,8 +132,7 @@ describe("resolveByteResponse", () => {
       resolveByteResponse({
         file: FILE,
         method: "GET",
-        rangeHeader: "bytes=1-2",
-        ifRangeHeader: LAST_MODIFIED,
+        request: createByteRequest({ range: "bytes=1-2", "if-range": LAST_MODIFIED }),
       }),
     ).toMatchObject({
       kind: "partial",
@@ -108,7 +149,13 @@ describe("resolveByteResponse", () => {
     { label: "unsatisfiable", method: "GET", rangeHeader: "bytes=10-11", statusCode: 416 },
   ])("bounds a future file timestamp to the $label response origin", (params) => {
     const nowMs = FILE.mtimeMs - 60_000;
-    const plan = resolveByteResponse({ file: FILE, nowMs, ...params });
+    const { rangeHeader, ...rest } = params;
+    const plan = resolveByteResponse({
+      file: FILE,
+      nowMs,
+      ...rest,
+      request: createByteRequest({ range: rangeHeader }),
+    });
 
     expect(plan.statusCode).toBe(params.statusCode);
     expect(plan.lastModified).toBe(new Date(nowMs).toUTCString());
@@ -137,8 +184,7 @@ describe("resolveByteResponse", () => {
         file: FILE,
         nowMs,
         method: "GET",
-        rangeHeader: "bytes=1-2",
-        ifRangeHeader: emittedLastModified,
+        request: createByteRequest({ range: "bytes=1-2", "if-range": emittedLastModified }),
       }),
     ).toMatchObject({ kind: "partial", statusCode: 206, lastModified: emittedLastModified });
     expect(
@@ -146,8 +192,7 @@ describe("resolveByteResponse", () => {
         file: FILE,
         nowMs,
         method: "GET",
-        rangeHeader: "bytes=1-2",
-        ifRangeHeader: LAST_MODIFIED,
+        request: createByteRequest({ range: "bytes=1-2", "if-range": LAST_MODIFIED }),
       }),
     ).toMatchObject({ kind: "full", statusCode: 200, lastModified: emittedLastModified });
   });
@@ -158,7 +203,14 @@ describe("resolveByteResponse", () => {
       const nowMs = FILE.mtimeMs - 60_000;
       const etag = resolveByteResponse({ file: FILE, nowMs }).etag;
 
-      expect(resolveByteResponse({ file: FILE, method, nowMs, ifNoneMatchHeader: etag })).toEqual({
+      expect(
+        resolveByteResponse({
+          file: FILE,
+          method,
+          nowMs,
+          request: createByteRequest({ "if-none-match": etag }),
+        }),
+      ).toEqual({
         kind: "not-modified",
         statusCode: 304,
         etag,
@@ -166,6 +218,157 @@ describe("resolveByteResponse", () => {
       });
     },
   );
+
+  it.each(
+    HTTP_DATE_VARIANTS.flatMap(({ label, value }) =>
+      (["GET", "HEAD"] as const).map((method) => ({ label, value, method })),
+    ),
+  )("revalidates $method using a $label If-Modified-Since date", ({ value, method }) => {
+    expect(
+      resolveByteResponse({
+        file: FILE,
+        method,
+        request: createByteRequest({ "if-modified-since": value }),
+      }),
+    ).toMatchObject({ kind: "not-modified", statusCode: 304, lastModified: LAST_MODIFIED });
+  });
+
+  it.each(["GET", "HEAD"] as const)(
+    "honors a later If-Modified-Since date before ranges for %s",
+    (method) => {
+      expect(
+        resolveByteResponse({
+          file: FILE,
+          method,
+          request: createByteRequest({
+            "if-modified-since": new Date(Date.parse(LAST_MODIFIED) + 1_000).toUTCString(),
+            range: "bytes=1-2",
+            "if-range": '"stale"',
+          }),
+        }),
+      ).toMatchObject({ kind: "not-modified", statusCode: 304, lastModified: LAST_MODIFIED });
+    },
+  );
+
+  it.each(["GET", "HEAD"] as const)(
+    "compares If-Modified-Since against the future-clamped %s validator",
+    (method) => {
+      const nowMs = FILE.mtimeMs - 60_000;
+      const emittedLastModified = new Date(nowMs).toUTCString();
+
+      expect(
+        resolveByteResponse({
+          file: FILE,
+          nowMs,
+          method,
+          request: createByteRequest({ "if-modified-since": emittedLastModified }),
+        }),
+      ).toMatchObject({ kind: "not-modified", statusCode: 304, lastModified: emittedLastModified });
+    },
+  );
+
+  it("interprets an obsolete RFC 850 year within the RFC's rolling 50-year window", () => {
+    expect(
+      resolveByteResponse({
+        file: FILE,
+        nowMs: Date.UTC(2026, 0, 1),
+        method: "GET",
+        request: createByteRequest({ "if-modified-since": "Sunday, 06-Nov-50 00:00:00 GMT" }),
+      }),
+    ).toMatchObject({ kind: "not-modified", statusCode: 304 });
+  });
+
+  it("includes a leap second when applying the RFC 850 rolling-year boundary", () => {
+    expect(
+      resolveByteResponse({
+        file: { size: 10, mtimeMs: Date.UTC(1977, 0, 1) },
+        nowMs: Date.UTC(2026, 11, 31, 23, 59, 59),
+        method: "GET",
+        request: createByteRequest({ "if-modified-since": "Friday, 31-Dec-76 23:59:60 GMT" }),
+      }),
+    ).toMatchObject({ kind: "not-modified", statusCode: 304 });
+  });
+
+  it("accepts a valid HTTP-date leap second without JavaScript date normalization", () => {
+    expect(
+      resolveByteResponse({
+        file: { size: 10, mtimeMs: Date.UTC(2017, 0, 1) },
+        method: "GET",
+        request: createByteRequest({ "if-modified-since": "Sat, 31 Dec 2016 23:59:60 GMT" }),
+      }),
+    ).toMatchObject({ kind: "not-modified", statusCode: 304 });
+  });
+
+  it.each([
+    { label: "an ISO timestamp", value: new Date(FILE.mtimeMs).toISOString() },
+    { label: "the wrong timezone", value: LAST_MODIFIED.replace("GMT", "UTC") },
+    { label: "a lowercase weekday", value: LAST_MODIFIED.replace("Tue", "tue") },
+    { label: "the wrong calendar weekday", value: LAST_MODIFIED.replace("Tue", "Wed") },
+    { label: "a four-digit IMF year before 1900", value: "Tue, 08 Jul 0025 18:40:00 GMT" },
+    { label: "a four-digit asctime year before 1900", value: "Tue Jul  8 18:40:00 0025" },
+    { label: "a four-digit IMF year zero", value: "Tue, 08 Jul 0000 18:40:00 GMT" },
+    { label: "a four-digit asctime year zero", value: "Tue Jul  8 18:40:00 0000" },
+    { label: "a four-digit IMF year 0099", value: "Tue, 08 Jul 0099 18:40:00 GMT" },
+    { label: "a four-digit asctime year 0099", value: "Tue Jul  8 18:40:00 0099" },
+    { label: "a normalized invalid calendar day", value: "Tue, 32 Jul 2025 18:40:00 GMT" },
+    { label: "trailing content", value: `${LAST_MODIFIED} trailing` },
+    { label: "multiple date members", value: `${LAST_MODIFIED}, ${LAST_MODIFIED}` },
+    { label: "multiple header fields", value: [LAST_MODIFIED, LAST_MODIFIED] },
+  ])("ignores $label in If-Modified-Since", ({ value }) => {
+    expect(
+      resolveByteResponse({
+        file: FILE,
+        method: "GET",
+        request: createByteRequest({ "if-modified-since": value }),
+      }),
+    ).toMatchObject({ kind: "full", statusCode: 200 });
+  });
+
+  it.each(["", '"different"', ['"different"']] as Array<string | string[]>)(
+    "ignores If-Modified-Since whenever any If-None-Match field is present (%j)",
+    (ifNoneMatch) => {
+      expect(
+        resolveByteResponse({
+          file: FILE,
+          method: "GET",
+          request: createByteRequest({
+            "if-none-match": ifNoneMatch,
+            "if-modified-since": LAST_MODIFIED,
+          }),
+        }),
+      ).toMatchObject({ kind: "full", statusCode: 200 });
+    },
+  );
+
+  it("ignores duplicate singleton dates hidden by Node's normalized headers", () => {
+    const headers = { "if-modified-since": LAST_MODIFIED };
+
+    expect(
+      resolveByteResponse({
+        file: FILE,
+        method: "GET",
+        request: {
+          headers,
+          headersDistinct: {
+            "if-modified-since": [
+              LAST_MODIFIED,
+              new Date(Date.parse(LAST_MODIFIED) - 1_000).toUTCString(),
+            ],
+          },
+        },
+      }),
+    ).toMatchObject({ kind: "full", statusCode: 200 });
+  });
+
+  it("interprets asctime dates as UTC rather than the host's local timezone", () => {
+    expect(
+      resolveByteResponse({
+        file: { size: 10, mtimeMs: Date.UTC(1994, 10, 6, 12) },
+        method: "GET",
+        request: createByteRequest({ "if-modified-since": "Sun Nov  6 08:49:37 1994" }),
+      }),
+    ).toMatchObject({ kind: "full", statusCode: 200 });
+  });
 
   it.each([
     {
@@ -196,8 +399,7 @@ describe("resolveByteResponse", () => {
       resolveByteResponse({
         file: FILE,
         method: "GET",
-        rangeHeader: "bytes=1-2",
-        ifRangeHeader: header,
+        request: createByteRequest({ range: "bytes=1-2", "if-range": header }),
       }),
     ).toMatchObject({ kind: "full", statusCode: 200, contentLength: 10 });
   });
@@ -207,8 +409,7 @@ describe("resolveByteResponse", () => {
       resolveByteResponse({
         file: FILE,
         method: "GET",
-        rangeHeader: "bytes=1-2",
-        ifRangeHeader: '"different"',
+        request: createByteRequest({ range: "bytes=1-2", "if-range": '"different"' }),
       }),
     ).toMatchObject({ kind: "full", statusCode: 200, contentLength: 10 });
   });
@@ -224,7 +425,7 @@ describe("resolveByteResponse", () => {
     const plan = resolveByteResponse({
       file: FILE,
       method: "GET",
-      ifNoneMatchHeader: header(etag),
+      request: createByteRequest({ "if-none-match": header(etag) }),
     });
 
     expect(plan).toEqual({
@@ -251,9 +452,11 @@ describe("resolveByteResponse", () => {
         resolveByteResponse({
           file: FILE,
           method,
-          rangeHeader: "bytes=1-2",
-          ifRangeHeader: '"stale"',
-          ifNoneMatchHeader: etag,
+          request: createByteRequest({
+            range: "bytes=1-2",
+            "if-range": '"stale"',
+            "if-none-match": etag,
+          }),
         }),
       ).toEqual({ kind: "not-modified", statusCode: 304, etag, lastModified: LAST_MODIFIED });
     },
@@ -266,9 +469,11 @@ describe("resolveByteResponse", () => {
       resolveByteResponse({
         file: FILE,
         method: "GET",
-        rangeHeader: "bytes=1-2",
-        ifRangeHeader: etag,
-        ifNoneMatchHeader: '"stale"',
+        request: createByteRequest({
+          range: "bytes=1-2",
+          "if-range": etag,
+          "if-none-match": '"stale"',
+        }),
       }),
     ).toMatchObject({ kind: "partial", statusCode: 206, range: { start: 1, end: 2 } });
   });
@@ -280,7 +485,11 @@ describe("resolveByteResponse", () => {
   ])(
     "emits the same Last-Modified validator on $label responses",
     ({ rangeHeader, statusCode }) => {
-      const plan = resolveByteResponse({ file: FILE, method: "GET", rangeHeader });
+      const plan = resolveByteResponse({
+        file: FILE,
+        method: "GET",
+        request: createByteRequest({ range: rangeHeader }),
+      });
       const setHeader = vi.fn();
       const res = { statusCode: 0, setHeader } as unknown as ServerResponse;
 

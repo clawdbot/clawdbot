@@ -83,10 +83,7 @@ export function projectSessionTree(params: {
     });
     const projected = toSidebarSession(row, isChild);
     const projectedRunningChildCount = children.reduce(
-      (count, child) =>
-        count +
-        (child.hasActiveRun || child.status === "running" ? 1 : 0) +
-        child.runningChildCount,
+      (count, child) => count + (child.hasActiveRun ? 1 : 0) + child.runningChildCount,
       0,
     );
     const runningChildCount = Math.max(

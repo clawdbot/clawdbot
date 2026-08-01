@@ -247,6 +247,29 @@ describe("buildOfficialChannelCatalog", () => {
     expect(installSource.warnings).toEqual(["npm-spec-floating", "npm-spec-missing-integrity"]);
   });
 
+  it("keeps iMessage available for cold install after core package externalization", () => {
+    const repoRoot = makeRepoRoot("openclaw-official-channel-catalog-imessage-");
+    const imessage = buildOfficialChannelCatalog({ repoRoot }).entries.find(
+      (entry) => entry.openclaw?.channel?.id === "imessage",
+    );
+
+    expect({
+      name: imessage?.name,
+      aliases: imessage?.openclaw?.channel?.aliases,
+      install: imessage?.openclaw?.install,
+    }).toEqual({
+      name: "@openclaw/imessage",
+      aliases: ["imsg"],
+      install: {
+        clawhubSpec: "clawhub:@openclaw/imessage",
+        npmSpec: "@openclaw/imessage",
+        defaultChoice: "npm",
+        minHostVersion: ">=2026.7.2",
+        allowInvalidConfigRecovery: true,
+      },
+    });
+  });
+
   it("preserves ClawHub specs when generating publishable channel catalog entries", () => {
     const repoRoot = makeRepoRoot("openclaw-official-channel-catalog-clawhub-");
     writeJson(path.join(repoRoot, "extensions", "storepack-chat", "package.json"), {

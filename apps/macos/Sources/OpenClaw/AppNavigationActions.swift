@@ -3,20 +3,7 @@ import AppKit
 @MainActor
 enum AppNavigationActions {
     static func openDashboard() {
-        NSApp.activate(ignoringOtherApps: true)
-        if DashboardManager.shared.showConfiguredWindowIfPossible() {
-            return
-        }
-        Task { @MainActor in
-            if DashboardManager.shared.showConfiguredWindowIfPossible() {
-                return
-            }
-            do {
-                try await DashboardManager.shared.show()
-            } catch {
-                DashboardManager.shared.showFailure(error)
-            }
-        }
+        DashboardManager.shared.presentDashboard()
     }
 
     static func openChat(sessionKey: String? = nil, agentID: String? = nil, draft: String? = nil) {

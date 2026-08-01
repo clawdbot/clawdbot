@@ -218,7 +218,7 @@ async function requestManagedImage(params: {
   scopes?: string[];
   denyAuth?: boolean;
   authResponse?: Record<string, unknown>;
-  headers?: Record<string, string>;
+  headers?: http.ClientRequestArgs["headers"];
   transcriptMessages?: Record<string, unknown>[];
   sessionEntry?: { sessionId: string; sessionFile?: string };
   resolvedTranscriptPath?: string | null;
@@ -530,6 +530,61 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
       expect(result.headers["content-length"]).toBeUndefined();
       expect(result.headers["content-range"]).toBeUndefined();
       expect(result.body).toHaveLength(0);
+    },
+  );
+
+  it.each(["GET", "HEAD"] as const)(
+    "revalidates managed media with If-Modified-Since before ranges for %s",
+    async (method) => {
+      const { attachmentId, sessionKey } = await createFixture(stateDir);
+      const pathName = `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`;
+      const request = { stateDir, pathName, authResponse: { authMethod: "token" } };
+      const initial = await requestManagedImage({ ...request, method: "HEAD" });
+      const lastModified = initial.result.headers["last-modified"];
+      expect(lastModified).toEqual(expect.any(String));
+
+      const unchanged = await requestManagedImage({
+        ...request,
+        method,
+        headers: {
+          "if-modified-since": String(lastModified),
+          range: "bytes=0-3",
+          "if-range": '"stale"',
+        },
+      });
+
+      expect(unchanged.result.statusCode).toBe(304);
+      expect(unchanged.result.headers["last-modified"]).toBe(lastModified);
+      expect(unchanged.result.headers["content-length"]).toBeUndefined();
+      expect(unchanged.result.headers["content-range"]).toBeUndefined();
+      expect(unchanged.result.body).toHaveLength(0);
+    },
+  );
+
+  it.each(["GET", "HEAD"] as const)(
+    "ignores duplicate managed-media dates discarded by normalized Node headers for %s",
+    async (method) => {
+      const { attachmentId, sessionKey } = await createFixture(stateDir);
+      const pathName = `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`;
+      const request = { stateDir, pathName, authResponse: { authMethod: "token" } };
+      const initial = await requestManagedImage({ ...request, method: "HEAD" });
+      const lastModified = String(initial.result.headers["last-modified"]);
+
+      const duplicate = await requestManagedImage({
+        ...request,
+        method,
+        headers: [
+          "Host",
+          "127.0.0.1",
+          "If-Modified-Since",
+          lastModified,
+          "iF-mOdIfIeD-sInCe",
+          "not-an-http-date",
+        ],
+      });
+
+      expect(duplicate.result.statusCode).toBe(200);
+      expect(duplicate.result.headers["last-modified"]).toBe(lastModified);
     },
   );
 

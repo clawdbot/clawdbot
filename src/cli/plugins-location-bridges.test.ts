@@ -245,6 +245,39 @@ describe("listPersistedBundledPluginLocationBridges", () => {
     ]);
   });
 
+  it("externalizes the shipped bundled iMessage channel while preserving default enablement", async () => {
+    readPersistedInstalledPluginIndexMock.mockResolvedValue(
+      makeIndex({
+        pluginId: "imessage",
+        manifestPath: "/app/dist/extensions/imessage/openclaw.plugin.json",
+        manifestHash: "hash",
+        source: "/app/dist/extensions/imessage/index.js",
+        rootDir: "/app/dist/extensions/imessage",
+        origin: "bundled",
+        enabled: true,
+        enabledByDefault: true,
+        startup: startupInfo,
+        compat: [],
+        packageInstall: {
+          warnings: [],
+        },
+      }),
+    );
+    loadPluginManifestRegistryForInstalledIndexMock.mockReturnValue(makeRegistry("imessage"));
+
+    await expect(listPersistedBundledPluginLocationBridges({})).resolves.toEqual([
+      {
+        bundledPluginId: "imessage",
+        pluginId: "imessage",
+        preferredSource: "npm",
+        npmSpec: "@openclaw/imessage",
+        clawhubSpec: "clawhub:@openclaw/imessage",
+        enabledByDefault: true,
+        channelIds: ["imessage"],
+      },
+    ]);
+  });
+
   it("does not create a relocation bridge without persisted or official install metadata", async () => {
     readPersistedInstalledPluginIndexMock.mockResolvedValue(
       makeIndex({

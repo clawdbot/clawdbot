@@ -25,6 +25,7 @@ export function addGatewayClientOptions(cmd: Command, defaults?: { timeoutMs?: n
   return cmd
     .option("--url <url>", "Gateway WebSocket URL (defaults to gateway.remote.url when configured)")
     .option("--token <token>", "Gateway token (if required)")
+    .option("--password <password>", "Gateway password (if required)")
     .option("--timeout <ms>", "Timeout in ms", String(defaults?.timeoutMs ?? 30_000))
     .option("--expect-final", "Wait for final response (agent)", false);
 }

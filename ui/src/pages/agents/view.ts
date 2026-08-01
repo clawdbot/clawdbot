@@ -41,6 +41,7 @@ type ConfigState = {
   loading: boolean;
   saving: boolean;
   dirty: boolean;
+  error: string | null;
 };
 
 type ChannelsState = {
@@ -266,6 +267,9 @@ export function renderAgents(props: AgentsProps) {
                 role="tabpanel"
                 aria-labelledby=${`agents-tab-${props.activePanel}`}
               >
+                ${props.config.error
+                  ? html`<div class="callout danger" role="alert">${props.config.error}</div>`
+                  : nothing}
                 ${props.activePanel === "overview"
                   ? keyed(
                       selectedAgent.id,

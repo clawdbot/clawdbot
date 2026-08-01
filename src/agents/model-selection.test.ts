@@ -4,12 +4,17 @@ import type { OpenClawConfig } from "../config/types.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
+import {
+  getModelRefStatus as getNarrowModelRefStatus,
+  resolveAllowedModelRef as resolveNarrowAllowedModelRef,
+} from "./model-selection-resolve.js";
 import { isModelKeyAllowedBySet } from "./model-selection-shared.js";
 import {
   buildAllowedModelSet,
   buildConfiguredAllowlistKeys,
   buildConfiguredModelCatalog,
   inferUniqueProviderFromConfiguredModels,
+  getModelRefStatus,
   parseModelRef,
   buildModelAliasIndex,
   normalizeModelSelection,
@@ -326,6 +331,17 @@ function resolveConfiguredRefForTest(cfg: Partial<OpenClawConfig>) {
 }
 
 describe("model-selection", () => {
+  it("shares the lightweight runtime resolver with the public selection facade", () => {
+    expect(getModelRefStatus).toBe(getNarrowModelRefStatus);
+    const params = {
+      cfg: {} as OpenClawConfig,
+      catalog: [],
+      raw: "anthropic/claude-sonnet-4-6",
+      defaultProvider: "anthropic",
+    };
+    expect(resolveAllowedModelRef(params)).toEqual(resolveNarrowAllowedModelRef(params));
+  });
+
   describe("normalizeProviderId", () => {
     it("should normalize provider names", () => {
       expect(normalizeProviderId("Anthropic")).toBe("anthropic");

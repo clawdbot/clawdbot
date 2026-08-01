@@ -874,6 +874,19 @@ describe("sanitizeAssistantVisibleText", () => {
     expect(sanitizeAssistantVisibleText(input)).toBe(input);
   });
 
+  it("preserves fenced serialized tool-call examples through delivery", () => {
+    const input = [
+      "Example:",
+      "```json",
+      "[read]",
+      '{"path":"example.txt"}',
+      "[/read]",
+      "```",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe(input);
+  });
+
   it("strips minimax, tool XML, downgraded tool markers, and think tags in one pass", () => {
     const input = [
       '<invoke name="read">payload</invoke></minimax:tool_call>',

@@ -23,6 +23,7 @@ export function createAgentViewTestProps(
       loading: false,
       saving: false,
       dirty: false,
+      error: null,
     },
     channels: {
       snapshot: null,

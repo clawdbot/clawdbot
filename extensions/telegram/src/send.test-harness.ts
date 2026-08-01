@@ -2,8 +2,6 @@
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import {
   buildOutboundMediaLoadOptions,
-  isGifMedia,
-  kindFromMime,
   normalizePollInput,
 } from "openclaw/plugin-sdk/media-runtime";
 import type { MockFn } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -193,8 +191,6 @@ vi.mock("openclaw/plugin-sdk/plugin-config-runtime", async () => {
 vi.mock("./send.runtime.js", () => ({
   buildOutboundMediaLoadOptions,
   getImageMetadata: vi.fn(async () => ({ ...imageMetadata })),
-  isGifMedia,
-  kindFromMime,
   loadConfig,
   loadWebMedia,
   normalizePollInput,

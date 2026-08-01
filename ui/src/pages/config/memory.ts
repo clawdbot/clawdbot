@@ -14,6 +14,7 @@ import {
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import type { PluginCatalogItem } from "../../lib/plugins/index.ts";
 import {
   selectedEngineId,
   DEFAULT_MEMORY_ENGINE_ID,
@@ -25,7 +26,7 @@ import {
 } from "./memory-schema.ts";
 
 /** One installed plugin that can claim the exclusive `plugins.slots.memory` slot. */
-export type MemoryEngineOption = {
+type MemoryEngineOption = {
   id: string;
   label: string;
   /** False when config names an engine absent from the current plugin catalog. */
@@ -39,8 +40,76 @@ export type MemoryEngineOption = {
  */
 export type MemoryPluginState = "enabled" | "disabled" | "loading" | "unknown";
 
+export type MemoryCatalogState =
+  | { kind: "loading" }
+  | { kind: "unavailable" }
+  | { kind: "ready"; plugins: readonly PluginCatalogItem[]; mutationAllowed: boolean };
+
+export function buildMemoryEngineOptions(
+  catalog: MemoryCatalogState,
+  selection: MemoryEngineSelection,
+): MemoryEngineOption[] {
+  if (catalog.kind !== "ready") {
+    return [];
+  }
+  const options = catalog.plugins
+    .filter((plugin) => plugin.installed && plugin.kind?.includes("memory") === true)
+    .map((plugin) => ({
+      id: plugin.id,
+      label:
+        plugin.id === DEFAULT_MEMORY_ENGINE_ID
+          ? t("memoryPage.engine.openClawMemory")
+          : plugin.name,
+      available: true,
+    }))
+    .toSorted((left, right) => {
+      const leftIsDefault = left.id === DEFAULT_MEMORY_ENGINE_ID;
+      const rightIsDefault = right.id === DEFAULT_MEMORY_ENGINE_ID;
+      return leftIsDefault === rightIsDefault
+        ? left.label.localeCompare(right.label)
+        : leftIsDefault
+          ? -1
+          : 1;
+    });
+  const selected = selectedEngineId(selection);
+  if (selected && !options.some((option) => option.id === selected)) {
+    const unavailable = {
+      id: selected,
+      label:
+        selected === DEFAULT_MEMORY_ENGINE_ID ? t("memoryPage.engine.openClawMemory") : selected,
+      available: false,
+    };
+    if (selected === DEFAULT_MEMORY_ENGINE_ID) {
+      options.unshift(unavailable);
+    } else {
+      options.push(unavailable);
+    }
+  }
+  return options;
+}
+
+export function resolveMemoryPluginState(
+  catalog: MemoryCatalogState,
+  entry: PluginCatalogItem | undefined,
+): MemoryPluginState {
+  if (catalog.kind !== "ready") {
+    return catalog.kind === "loading" ? "loading" : "unknown";
+  }
+  return !entry?.installed || entry.state === "not-installed" || entry.state === "error"
+    ? "unknown"
+    : entry.enabled
+      ? "enabled"
+      : "disabled";
+}
+
+export function findMemoryCatalogPlugin(catalog: MemoryCatalogState, pluginId: string | null) {
+  return catalog.kind === "ready" && pluginId
+    ? catalog.plugins.find((plugin) => plugin.id === pluginId)
+    : undefined;
+}
+
 /** Additive memory plugin: no `kind`, so it layers on top of whichever engine wins the slot. */
-export type MemoryAddonRow = {
+type MemoryAddonRow = {
   id: string;
   label: string;
   description: string;
@@ -49,6 +118,39 @@ export type MemoryAddonRow = {
   error: string | null;
   notice: string | null;
 };
+
+const MEMORY_ADDON_PLUGINS = [
+  { id: "active-memory", labelKey: "memoryPage.addons.activeMemory.title" },
+  { id: "memory-wiki", labelKey: "memoryPage.addons.memoryWiki.title" },
+] as const;
+
+export function buildMemoryAddonRows(
+  catalog: MemoryCatalogState,
+  state: {
+    busy: ReadonlySet<string>;
+    errors: ReadonlyMap<string, string>;
+    notices: ReadonlyMap<string, { message: string }>;
+    refreshWarnings: ReadonlyMap<string, string>;
+  },
+): MemoryAddonRow[] {
+  return MEMORY_ADDON_PLUGINS.map((addon) => {
+    const entry = findMemoryCatalogPlugin(catalog, addon.id);
+    return {
+      id: addon.id,
+      label: t(addon.labelKey),
+      description: entry?.description ?? addon.id,
+      state: resolveMemoryPluginState(catalog, entry),
+      busy: state.busy.has(addon.id),
+      error: state.errors.get(addon.id) ?? null,
+      notice:
+        [state.notices.get(addon.id)?.message, state.refreshWarnings.get(addon.id)]
+          .filter(Boolean)
+          .join(" ") || null,
+    };
+  });
+}
+
+export type MemoryEngineOutcome = { kind: "error" | "warning"; message: string };
 
 type MemoryViewProps = {
   activeTab: MemoryTab;
@@ -62,8 +164,8 @@ type MemoryViewProps = {
    */
   engineState: MemoryPluginState;
   engineBusy: boolean;
-  /** Last failed engine write, so a rejected change is not just a snap-back. */
-  engineError: string | null;
+  /** Distinguishes a rejected write from a committed write with a failed refresh. */
+  engineOutcome: MemoryEngineOutcome | null;
   onEngineChange: (engineId: string | null) => void;
   onEngineReset: () => void;
   /** null when the slot owner runs its own retrieval, so this row does not apply. */
@@ -167,12 +269,23 @@ function renderEngineSection(props: MemoryViewProps) {
         `,
       })}
       ${renderDisabledEngineRow(props, engineId)}
-      ${props.engineError === null
+      ${props.engineOutcome === null
         ? nothing
         : renderSettingsRow({
-            title: t("memoryPage.engine.changeFailed"),
-            description: props.engineError,
-            control: renderSettingsStatus({ kind: "danger", label: t("common.failed") }),
+            title: t(
+              props.engineOutcome.kind === "error"
+                ? "memoryPage.engine.changeFailed"
+                : "pluginsPage.needsAttention",
+            ),
+            description: props.engineOutcome.message,
+            control: renderSettingsStatus({
+              kind: props.engineOutcome.kind === "error" ? "danger" : "warn",
+              label: t(
+                props.engineOutcome.kind === "error"
+                  ? "common.failed"
+                  : "pluginsPage.needsAttention",
+              ),
+            }),
           })}
     `,
   );

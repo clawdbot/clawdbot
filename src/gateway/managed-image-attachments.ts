@@ -1518,9 +1518,7 @@ export async function handleManagedOutgoingMediaHttpRequest(
   const byteResponse = resolveByteResponse({
     file: opened.stat,
     method: req.method,
-    rangeHeader: req.headers.range,
-    ifRangeHeader: req.headers["if-range"],
-    ifNoneMatchHeader: req.headers["if-none-match"],
+    request: req,
   });
   writeByteHeaders(res, byteResponse);
   // Stream from the verified descriptor so a path swap cannot bypass fs-safe after validation.

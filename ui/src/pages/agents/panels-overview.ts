@@ -23,7 +23,7 @@ import {
   resolveModelPrimary,
 } from "../../lib/agents/display.ts";
 import type { AgentsPanel } from "../../lib/agents/index.ts";
-import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
+import { deriveAvatarInitial, resolveAgentAvatarUrl } from "../../lib/avatar.ts";
 
 export type AgentIdentityDraft = {
   name: string | null;
@@ -113,7 +113,7 @@ export function renderAgentOverview(params: {
   const identityAvatarUrl =
     identityDraft.avatar ?? resolveAgentAvatarUrl(agent, params.agentIdentity);
   const identityAvatarText =
-    resolveAgentTextAvatar(agent) ?? (identityName || agent.id).slice(0, 1).toUpperCase();
+    resolveAgentTextAvatar(agent) ?? (deriveAvatarInitial(identityName || agent.id) || "?");
   const identityDirty =
     identityDraft.name !== null || identityDraft.emoji !== null || identityDraft.avatar !== null;
   const identityInvalid =

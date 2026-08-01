@@ -13,7 +13,7 @@ import {
 } from "../../config/sessions.js";
 import { loadSessionEntry as getSessionEntry } from "../../config/sessions/session-accessor.js";
 import { applyCommandTextToParams } from "./command-context-rewrite.js";
-import { rejectUnauthorizedCommand } from "./command-gates.js";
+import { commandReply as goalReply, defineAuthorizedTextCommand } from "./command-gates.js";
 import { markCommandSessionMetadataChanged } from "./command-session-metadata.js";
 import type {
   CommandHandler,
@@ -76,13 +76,6 @@ function syncGoalSessionEntry(params: HandleCommandsParams): void {
   params.sessionEntry = entry;
 }
 
-function goalReply(text: string): CommandHandlerResult {
-  return {
-    shouldContinue: false,
-    reply: { text },
-  };
-}
-
 function hasCommandLikeGoalText(trimmed: string): boolean {
   return /(?:^|\s)\//.test(trimmed) || trimmed.startsWith("!");
 }
@@ -129,144 +122,136 @@ function goalErrorReply(error: unknown): CommandHandlerResult {
 }
 
 /** Command handler for /goal lifecycle commands. */
-export const handleGoalCommand: CommandHandler = async (params, allowTextCommands) => {
-  if (!allowTextCommands) {
-    return null;
-  }
-  const parsed = parseGoalCommand(params.command.commandBodyNormalized);
-  if (!parsed) {
-    return null;
-  }
-  const unauthorized = rejectUnauthorizedCommand(params, "/goal");
-  if (unauthorized) {
-    return unauthorized;
-  }
-  const actor = { type: "human" as const };
-  const goalAgentId = params.agentId;
+export const handleGoalCommand: CommandHandler = defineAuthorizedTextCommand(
+  { label: "/goal", match: parseGoalCommand },
+  async (params, parsed) => {
+    const actor = { type: "human" as const };
+    const goalAgentId = params.agentId;
 
-  try {
-    switch (parsed.action) {
-      case "status": {
-        const snapshot = await getSessionGoal({
-          sessionKey: params.sessionKey,
-          storePath: params.storePath,
-          fallbackEntry: params.sessionEntry,
-          persist: false,
-        });
-        syncGoalSessionEntry(params);
-        return goalReply(formatSessionGoalStatus(snapshot.goal));
-      }
-      case "start":
-      case "set":
-      case "create": {
-        const objective = normalizeOptionalString(parsed.text);
-        if (!objective) {
-          return goalReply("Usage: /goal start <objective>");
+    try {
+      switch (parsed.action) {
+        case "status": {
+          const snapshot = await getSessionGoal({
+            sessionKey: params.sessionKey,
+            storePath: params.storePath,
+            fallbackEntry: params.sessionEntry,
+            persist: false,
+          });
+          syncGoalSessionEntry(params);
+          return goalReply(formatSessionGoalStatus(snapshot.goal));
         }
-        const goal = await createSessionGoal({
-          sessionKey: params.sessionKey,
-          storePath: params.storePath,
-          objective,
-          fallbackEntry: params.sessionEntry,
-          actor,
-          agentId: goalAgentId,
-        });
-        syncGoalSessionEntry(params);
-        markCommandSessionMetadataChanged(params);
-        applyCommandTextToParams(params, formatGoalContinuationPrompt(goal.objective));
-        return goalContinuation();
-      }
-      case "edit": {
-        const objective = normalizeOptionalString(parsed.text);
-        if (!objective) {
-          return goalReply("Usage: /goal edit <objective>");
-        }
-        const goal = await updateSessionGoalObjective({
-          sessionKey: params.sessionKey,
-          storePath: params.storePath,
-          objective,
-          actor,
-          agentId: goalAgentId,
-        });
-        syncGoalSessionEntry(params);
-        markCommandSessionMetadataChanged(params);
-        return goalReply(`Goal updated: ${goal.objective}`);
-      }
-      case "pause": {
-        const goal = await updateSessionGoalStatus({
-          sessionKey: params.sessionKey,
-          storePath: params.storePath,
-          status: "paused",
-          actor,
-          agentId: goalAgentId,
-          ...(parsed.text ? { note: parsed.text } : {}),
-        });
-        syncGoalSessionEntry(params);
-        markCommandSessionMetadataChanged(params);
-        return goalReply(`Goal paused: ${goal.objective}`);
-      }
-      case "resume": {
-        await updateSessionGoalStatus({
-          sessionKey: params.sessionKey,
-          storePath: params.storePath,
-          status: "active",
-          actor,
-          agentId: goalAgentId,
-          ...(parsed.text ? { note: parsed.text } : {}),
-        });
-        syncGoalSessionEntry(params);
-        markCommandSessionMetadataChanged(params);
-        const message = formatGoalResumeContinuationPrompt(parsed.text);
-        applyCommandTextToParams(params, message);
-        return goalContinuation();
-      }
-      case "complete":
-      case "done": {
-        const goal = await updateSessionGoalStatus({
-          sessionKey: params.sessionKey,
-          storePath: params.storePath,
-          status: "complete",
-          actor,
-          agentId: goalAgentId,
-          ...(parsed.text ? { note: parsed.text } : {}),
-        });
-        syncGoalSessionEntry(params);
-        markCommandSessionMetadataChanged(params);
-        return goalReply(`Goal complete: ${goal.objective}\nTokens used: ${goal.tokensUsed}`);
-      }
-      case "block":
-      case "blocked": {
-        const goal = await updateSessionGoalStatus({
-          sessionKey: params.sessionKey,
-          storePath: params.storePath,
-          status: "blocked",
-          actor,
-          agentId: goalAgentId,
-          ...(parsed.text ? { note: parsed.text } : {}),
-        });
-        syncGoalSessionEntry(params);
-        markCommandSessionMetadataChanged(params);
-        return goalReply(`Goal blocked: ${goal.objective}`);
-      }
-      case "clear": {
-        const removed = await clearSessionGoal({
-          sessionKey: params.sessionKey,
-          storePath: params.storePath,
-          actor,
-          agentId: goalAgentId,
-        });
-        syncGoalSessionEntry(params);
-        if (removed) {
+        case "start":
+        case "set":
+        case "create": {
+          const objective = normalizeOptionalString(parsed.text);
+          if (!objective) {
+            return goalReply("Usage: /goal start <objective>");
+          }
+          const goal = await createSessionGoal({
+            sessionKey: params.sessionKey,
+            storePath: params.storePath,
+            objective,
+            fallbackEntry: params.sessionEntry,
+            actor,
+            agentId: goalAgentId,
+          });
+          syncGoalSessionEntry(params);
           markCommandSessionMetadataChanged(params);
+          applyCommandTextToParams(params, formatGoalContinuationPrompt(goal.objective));
+          return goalContinuation();
         }
-        return goalReply(removed ? "Goal cleared." : "No goal to clear.");
+        case "edit": {
+          const objective = normalizeOptionalString(parsed.text);
+          if (!objective) {
+            return goalReply("Usage: /goal edit <objective>");
+          }
+          const goal = await updateSessionGoalObjective({
+            sessionKey: params.sessionKey,
+            storePath: params.storePath,
+            objective,
+            actor,
+            agentId: goalAgentId,
+          });
+          syncGoalSessionEntry(params);
+          markCommandSessionMetadataChanged(params);
+          return goalReply(`Goal updated: ${goal.objective}`);
+        }
+        case "pause": {
+          const goal = await updateSessionGoalStatus({
+            sessionKey: params.sessionKey,
+            storePath: params.storePath,
+            status: "paused",
+            actor,
+            agentId: goalAgentId,
+            ...(parsed.text ? { note: parsed.text } : {}),
+          });
+          syncGoalSessionEntry(params);
+          markCommandSessionMetadataChanged(params);
+          return goalReply(`Goal paused: ${goal.objective}`);
+        }
+        case "resume": {
+          await updateSessionGoalStatus({
+            sessionKey: params.sessionKey,
+            storePath: params.storePath,
+            status: "active",
+            actor,
+            agentId: goalAgentId,
+            ...(parsed.text ? { note: parsed.text } : {}),
+          });
+          syncGoalSessionEntry(params);
+          markCommandSessionMetadataChanged(params);
+          const message = formatGoalResumeContinuationPrompt(parsed.text);
+          applyCommandTextToParams(params, message);
+          return goalContinuation();
+        }
+        case "complete":
+        case "done": {
+          const goal = await updateSessionGoalStatus({
+            sessionKey: params.sessionKey,
+            storePath: params.storePath,
+            status: "complete",
+            actor,
+            agentId: goalAgentId,
+            ...(parsed.text ? { note: parsed.text } : {}),
+          });
+          syncGoalSessionEntry(params);
+          markCommandSessionMetadataChanged(params);
+          return goalReply(`Goal complete: ${goal.objective}\nTokens used: ${goal.tokensUsed}`);
+        }
+        case "block":
+        case "blocked": {
+          const goal = await updateSessionGoalStatus({
+            sessionKey: params.sessionKey,
+            storePath: params.storePath,
+            status: "blocked",
+            actor,
+            agentId: goalAgentId,
+            ...(parsed.text ? { note: parsed.text } : {}),
+          });
+          syncGoalSessionEntry(params);
+          markCommandSessionMetadataChanged(params);
+          return goalReply(`Goal blocked: ${goal.objective}`);
+        }
+        case "clear": {
+          const removed = await clearSessionGoal({
+            sessionKey: params.sessionKey,
+            storePath: params.storePath,
+            actor,
+            agentId: goalAgentId,
+          });
+          syncGoalSessionEntry(params);
+          if (removed) {
+            markCommandSessionMetadataChanged(params);
+          }
+          return goalReply(removed ? "Goal cleared." : "No goal to clear.");
+        }
+        default:
+          return goalReply(
+            "Usage: /goal <objective> | /goal [status] | /goal start <objective> | /goal edit <objective> | /goal pause|resume|complete|block|clear",
+          );
       }
-      default:
-        return goalReply(
-          "Usage: /goal <objective> | /goal [status] | /goal start <objective> | /goal edit <objective> | /goal pause|resume|complete|block|clear",
-        );
+    } catch (error) {
+      return goalErrorReply(error);
     }
-  } catch (error) {
-    return goalErrorReply(error);
-  }
-};
+  },
+);
