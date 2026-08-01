@@ -420,7 +420,7 @@ describe("buildInboundUserContextPrefix", () => {
     );
 
     expect(text).toBe(
-      "Active goal: Publish the release evidence — advance it or update its status (get_goal/update_goal).",
+      "Active goal: Publish the release evidence — advance it; keep it active across unfinished steps; complete only when fully achieved; block only after the same blocker on 3 consecutive turns (get_goal/update_goal).",
     );
   });
 
@@ -445,7 +445,7 @@ describe("buildInboundUserContextPrefix", () => {
     );
 
     expect(text).toBe(
-      `Active goal: ${"x".repeat(199)}… — advance it or update its status (get_goal/update_goal).`,
+      `Active goal: ${"x".repeat(199)}… — advance it; keep it active across unfinished steps; complete only when fully achieved; block only after the same blocker on 3 consecutive turns (get_goal/update_goal).`,
     );
     expect(text).not.toContain("\n");
   });
@@ -462,7 +462,7 @@ describe("buildInboundUserContextPrefix", () => {
 
   it("removes a captured goal line when a queued turn is admitted after completion", () => {
     const goalContext =
-      "Active goal: Publish the release evidence — advance it or update its status (get_goal/update_goal).";
+      "Active goal: Publish the release evidence — advance it; keep it active across unfinished steps; complete only when fully achieved; block only after the same blocker on 3 consecutive turns (get_goal/update_goal).";
     const context = {
       text: ["Conversation info:", goalContext, "Current message:\nmessage_id=next-turn"].join(
         "\n\n",
@@ -484,13 +484,13 @@ describe("buildInboundUserContextPrefix", () => {
     );
 
     expect(refreshed?.text).toBe(
-      "Active goal: Publish the release evidence — advance it or update its status (get_goal/update_goal).\n\nCurrent message:\nmessage_id=queued-turn",
+      "Active goal: Publish the release evidence — advance it; keep it active across unfinished steps; complete only when fully achieved; block only after the same blocker on 3 consecutive turns (get_goal/update_goal).\n\nCurrent message:\nmessage_id=queued-turn",
     );
   });
 
   it("keeps the current-message anchor last when refreshing a queued goal", () => {
     const goalContext =
-      "Active goal: Publish the release evidence — advance it or update its status (get_goal/update_goal).";
+      "Active goal: Publish the release evidence — advance it; keep it active across unfinished steps; complete only when fully achieved; block only after the same blocker on 3 consecutive turns (get_goal/update_goal).";
     const refreshed = refreshActiveGoalContext(
       {
         text: `${goalContext}\n\nCurrent message:\n#34975 obviyus:`,
@@ -506,7 +506,7 @@ describe("buildInboundUserContextPrefix", () => {
 
   it("does not remove a user event that matches the generated goal wording", () => {
     const goalContext =
-      "Active goal: Publish the release evidence — advance it or update its status (get_goal/update_goal).";
+      "Active goal: Publish the release evidence — advance it; keep it active across unfinished steps; complete only when fully achieved; block only after the same blocker on 3 consecutive turns (get_goal/update_goal).";
     const refreshed = refreshActiveGoalContext(
       {
         text: `${goalContext}\n\nCurrent event:\n${goalContext}`,

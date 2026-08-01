@@ -16,7 +16,16 @@ describe("QA inference scenario catalog", () => {
         doneMarker: "GOAL-CONTINUANCE-DONE",
       },
     });
-    expect(JSON.stringify(scenario.execution.flow)).toContain('"text":"continue"');
+    const flow = scenario.execution.flow;
+    expect(flow?.steps.map((step) => step.name)).toEqual([
+      "starts the staged goal without completing its objective",
+      "verifies the durable goal stays active before continuation",
+      "advances the active goal on bare continue",
+    ]);
+    const serializedFlow = JSON.stringify(flow);
+    expect(serializedFlow).toContain("sessions.list");
+    expect(serializedFlow).toContain("goalSession?.goal?.status === 'active'");
+    expect(serializedFlow).toContain('"text":"continue"');
   });
 
   it("runs the long-context watchdog through the declared Codex runtime", () => {

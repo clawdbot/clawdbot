@@ -154,7 +154,7 @@ ordinary difficulty or missing polish.
 Every user/chat turn with an active goal includes this user-role context line:
 
 ```text
-Active goal: <objective> — advance it or update its status (get_goal/update_goal).
+Active goal: <objective> — advance it; keep it active across unfinished steps; complete only when fully achieved; block only after the same blocker on 3 consecutive turns (get_goal/update_goal).
 ```
 
 OpenClaw keeps the line compact by truncating long objectives. Paused,

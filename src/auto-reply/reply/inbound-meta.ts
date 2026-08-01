@@ -26,7 +26,8 @@ const MAX_UNTRUSTED_TRANSCRIPT_FIELD_CHARS = 500;
 const MAX_ACTIVE_GOAL_OBJECTIVE_CHARS = 200;
 const MAX_SKILL_SUGGESTION_NAME_CHARS = 120;
 const ACTIVE_GOAL_CONTEXT_PREFIX = "Active goal: ";
-const ACTIVE_GOAL_CONTEXT_SUFFIX = " — advance it or update its status (get_goal/update_goal).";
+const ACTIVE_GOAL_CONTEXT_SUFFIX =
+  " — advance it; keep it active across unfinished steps; complete only when fully achieved; block only after the same blocker on 3 consecutive turns (get_goal/update_goal).";
 const INBOUND_SOURCE_MODALITIES = new Set(["text", "voice", "audio", "image", "video", "document"]);
 
 export function formatActiveGoalContext(sessionEntry?: SessionEntry): string | undefined {

@@ -13,6 +13,7 @@ scenario:
   objective: Verify a live model advances the next concrete step of an active multi-step goal on a later bare continue turn.
   successCriteria:
     - The first goal turn acknowledges the staged first step without creating the second-step artifact early.
+    - The durable goal remains active after the first step instead of closing before its objective is achieved.
     - A later inbound message contains only `continue`.
     - The continue turn creates the required artifact in the workspace instead of returning another plan.
     - The continue turn does not ask for permission or approval before the feasible write.
@@ -48,7 +49,7 @@ scenario:
 
 flow:
   steps:
-    - name: advances the staged artifact step on bare continue
+    - name: starts the staged goal without completing its objective
       actions:
         - call: waitForGatewayHealthy
           args:
@@ -96,6 +97,8 @@ flow:
             timeoutMs:
               expr: liveTurnTimeoutMs(env, 90000)
           saveAs: readyReply
+    - name: verifies the durable goal stays active before continuation
+      actions:
         - set: artifactBeforeContinue
           value:
             expr: "await fs.readFile(artifactPath, 'utf8').catch(() => undefined)"
@@ -103,6 +106,15 @@ flow:
             expr: "artifactBeforeContinue === undefined"
             message:
               expr: "`goal created the second-step artifact before continue: ${String(artifactBeforeContinue)}`"
+        - set: goalSession
+          value:
+            expr: "(await env.gateway.call('sessions.list', {}, { timeoutMs: 30000 })).sessions?.find((session) => String(session.goal?.objective ?? '').includes(artifactFile))"
+        - assert:
+            expr: "goalSession?.goal?.status === 'active'"
+            message:
+              expr: "`goal closed before continue: ${JSON.stringify(goalSession?.goal ?? null)}`"
+    - name: advances the active goal on bare continue
+      actions:
         - set: continueOutboundIndex
           value:
             expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
@@ -115,14 +127,6 @@ flow:
               ref: config.senderId
             senderName: QA Goal Operator
             text: continue
-        - call: waitForCondition
-          saveAs: artifact
-          args:
-            - lambda:
-                async: true
-                expr: "fs.readFile(artifactPath, 'utf8').then((value) => value.trim() === config.artifactText ? value : undefined).catch(() => undefined)"
-            - expr: liveTurnTimeoutMs(env, 90000)
-            - 250
         - waitForOutbound:
             conversation:
               id:
@@ -135,6 +139,17 @@ flow:
             timeoutMs:
               expr: liveTurnTimeoutMs(env, 90000)
           saveAs: doneReply
+        - set: artifact
+          value:
+            expr: "await fs.readFile(artifactPath, 'utf8').catch(() => undefined)"
+        - assert:
+            expr: "artifact?.trim() === config.artifactText"
+            message:
+              expr: "`goal continuation did not create the requested artifact before replying: ${doneReply.text}`"
+        - assert:
+            expr: "String(doneReply.text ?? '').includes(config.doneMarker)"
+            message:
+              expr: "`goal continuation omitted its completion marker: ${doneReply.text}`"
         - assert:
             expr: "!config.forbiddenNeedles.some((needle) => normalizeLowercaseStringOrEmpty(doneReply.text).includes(needle))"
             message:
