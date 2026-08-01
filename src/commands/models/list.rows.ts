@@ -416,6 +416,7 @@ export async function loadListModelCatalogSnapshot(
       ...(workspaceDir ? { workspaceDir } : {}),
       providerIds: context.providerDiscoveryProviderIds,
       runtimeProviderIds: context.providerRuntimeDiscoveryProviderIds,
+      manifestFallbackProviderIds: context.providerManifestFallbackProviderIds,
       configuredKeys: [...context.configuredByKey.keys()],
       ...(context.metadataSnapshot ? { metadataSnapshot: context.metadataSnapshot } : {}),
     });

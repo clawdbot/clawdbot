@@ -17,6 +17,7 @@ export type RowBuilderContext = {
   authIndex: ModelListAuthIndex;
   providerDiscoveryProviderIds?: readonly string[];
   providerRuntimeDiscoveryProviderIds?: readonly string[];
+  providerManifestFallbackProviderIds?: readonly string[];
   availableKeys?: Set<string>;
   configuredByKey: Map<string, ConfiguredEntry>;
   discoveredKeys: Set<string>;

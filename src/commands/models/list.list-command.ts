@@ -139,7 +139,11 @@ export async function modelsListCommand(
     ? [providerFilter]
     : opts.all
       ? undefined
-      : authIndex.providerDiscoveryProviderIds;
+      : [];
+  // Default lists use authenticated providers' authored fallback rows. Live
+  // account discovery remains explicit because it imports full provider runtimes.
+  const providerManifestFallbackProviderIds =
+    !providerFilter && !opts.all ? authIndex.providerDiscoveryProviderIds : undefined;
   const loadRegistryState = async (optsLocal?: {
     normalizeModels?: boolean;
     loadAvailability?: boolean;
@@ -187,6 +191,7 @@ export async function modelsListCommand(
     authIndex,
     providerDiscoveryProviderIds,
     providerRuntimeDiscoveryProviderIds,
+    providerManifestFallbackProviderIds,
     availableKeys,
     configuredByKey,
     discoveredKeys,

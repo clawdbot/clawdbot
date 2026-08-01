@@ -150,6 +150,7 @@ export async function loadScopedListModelCatalogSnapshot(params: {
   workspaceDir?: string;
   providerIds: readonly string[];
   runtimeProviderIds?: readonly string[];
+  manifestFallbackProviderIds?: readonly string[];
   configuredKeys: readonly string[];
   metadataSnapshot?: PluginMetadataSnapshot;
 }): Promise<ModelCatalogSnapshot> {
@@ -167,6 +168,11 @@ export async function loadScopedListModelCatalogSnapshot(params: {
   ).map(toCatalogEntry);
   const manifestByKey = new Map(manifestEntries.map((entry) => [entryKey(entry), entry]));
   const configuredKeys = new Set(params.configuredKeys.map((key) => key.trim().toLowerCase()));
+  const manifestFallbackProviderIds = new Set(
+    (params.manifestFallbackProviderIds ?? [])
+      .map(normalizeProviderId)
+      .filter((provider) => providerIds.has(provider)),
+  );
   const staticEntries = selectProviderRows(
     loadStaticManifestCatalogRowsForList(loaderParams),
     providerIds,
@@ -187,7 +193,11 @@ export async function loadScopedListModelCatalogSnapshot(params: {
     admittedEntries.set(entryKey(entry), entry);
   }
   for (const entry of manifestEntries) {
-    if (configuredKeys.has(entryKey(entry)) && !admittedEntries.has(entryKey(entry))) {
+    if (
+      (configuredKeys.has(entryKey(entry)) ||
+        manifestFallbackProviderIds.has(normalizeProviderId(entry.provider))) &&
+      !admittedEntries.has(entryKey(entry))
+    ) {
       admittedEntries.set(entryKey(entry), entry);
     }
   }

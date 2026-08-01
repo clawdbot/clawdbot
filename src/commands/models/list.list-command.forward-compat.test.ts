@@ -277,12 +277,16 @@ function installModelsListCommandForwardCompatMocks() {
   }));
 
   vi.doMock("./list.scoped-catalog.js", () => ({
-    loadScopedListModelCatalogSnapshot: async ({
-      providerIds,
-    }: {
+    loadScopedListModelCatalogSnapshot: async (params: {
       providerIds: readonly string[];
+      runtimeProviderIds?: readonly string[];
+      manifestFallbackProviderIds?: readonly string[];
     }) => {
-      const entries = await mocks.loadModelCatalog({ providerDiscoveryProviderIds: providerIds });
+      const entries = await mocks.loadModelCatalog({
+        providerDiscoveryProviderIds: params.providerIds,
+        providerRuntimeDiscoveryProviderIds: params.runtimeProviderIds,
+        providerManifestFallbackProviderIds: params.manifestFallbackProviderIds,
+      });
       return { entries, routeVariants: entries };
     },
   }));
@@ -712,6 +716,13 @@ describe("modelsListCommand forward-compat", () => {
       await modelsListCommand({ json: true }, runtime as never);
 
       expect(mocks.loadModelRegistry).not.toHaveBeenCalled();
+      expect(mocks.loadModelCatalog).toHaveBeenCalledWith(
+        expect.objectContaining({
+          providerDiscoveryProviderIds: ["google", "openai", "xiaomi"],
+          providerRuntimeDiscoveryProviderIds: [],
+          providerManifestFallbackProviderIds: ["google", "openai"],
+        }),
+      );
       const rows = lastPrintedRows<{ key: string; name: string; available: boolean }>();
       expectRowKeys(rows, [
         "xiaomi/mimo-v2.5-pro",

@@ -110,6 +110,29 @@ describe("loadScopedListModelCatalogSnapshot", () => {
     );
   });
 
+  it("uses authenticated manifest fallback rows without loading provider runtime", async () => {
+    const snapshot = await loadScopedListModelCatalogSnapshot({
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+      providerIds: ["openai"],
+      runtimeProviderIds: [],
+      manifestFallbackProviderIds: ["openai"],
+      configuredKeys: [],
+    });
+
+    expect(snapshot.entries).toEqual([
+      expect.objectContaining({
+        provider: "openai",
+        id: "gpt-5.6",
+        api: "openai-responses",
+        contextWindow: 1_050_000,
+      }),
+    ]);
+    expect(snapshot.routeVariants).toEqual(snapshot.entries);
+    expect(snapshot.staticEntries).toEqual([]);
+    expect(mocks.prepareScopedReadOnlyLiveModelCatalog).not.toHaveBeenCalled();
+  });
+
   it("keeps static rows in the scoped snapshot", async () => {
     mocks.resolveManifestCatalogCoverageForList.mockReturnValueOnce({
       ownedProviderIds: new Set(["moonshot"]),

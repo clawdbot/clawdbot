@@ -261,6 +261,7 @@ describe("appendPreparedModelCatalogRows", () => {
         workspaceDir: "/tmp/openclaw-workspace",
         providerDiscoveryProviderIds: ["anthropic"],
         providerRuntimeDiscoveryProviderIds: ["anthropic"],
+        providerManifestFallbackProviderIds: ["anthropic"],
         authIndex: {
           evaluateModelAuth: () => authEvaluation(true),
         },
@@ -280,6 +281,7 @@ describe("appendPreparedModelCatalogRows", () => {
       workspaceDir: "/tmp/openclaw-workspace",
       providerIds: ["anthropic"],
       runtimeProviderIds: ["anthropic"],
+      manifestFallbackProviderIds: ["anthropic"],
       configuredKeys: [],
     });
     expect(mocks.loadModelCatalogSnapshot).not.toHaveBeenCalled();
