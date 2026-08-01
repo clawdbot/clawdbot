@@ -535,8 +535,9 @@ function collectRecordedConsumedArchives(manifest: SessionSqliteMigrationManifes
   // source identifies exactly one archive, then persist the explicit archive path on this run.
   for (const sourcePath of restoredSources) {
     const moves = movesBySource.get(sourcePath);
-    if (moves?.length === 1) {
-      consumed.add(moves[0].archivePath);
+    const move = moves?.length === 1 ? moves[0] : undefined;
+    if (move) {
+      consumed.add(move.archivePath);
     }
   }
   return consumed;
