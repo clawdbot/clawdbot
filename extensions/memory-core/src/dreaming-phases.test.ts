@@ -639,6 +639,58 @@ describe("memory-core dreaming phases", () => {
     });
   });
 
+  it("does not feed managed REM blocks back into recall or REM previews", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    const dailyPath = path.join(workspaceDir, "memory", `${DREAMING_TEST_DAY}.md`);
+    await fs.writeFile(
+      dailyPath,
+      [
+        `# ${DREAMING_TEST_DAY}`,
+        "",
+        "- The theme for gateway routing remains important.",
+        "",
+        "## REM Sleep",
+        "<!-- openclaw:dreaming:rem:start -->",
+        "- Theme: `kept` kept surfacing across 1 memories.",
+        "  - confidence: 1.00",
+        "  - evidence: memory/2026-04-05.md:6-6",
+        "  - note: reflection",
+        "<!-- openclaw:dreaming:rem:end -->",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    await seedHistoricalDailyMemorySignals({
+      workspaceDir,
+      filePaths: [dailyPath],
+      limit: 5,
+      nowMs: Date.parse("2026-04-05T10:00:00.000Z"),
+      timezone: "UTC",
+    });
+
+    const entries = await rankShortTermPromotionCandidates({
+      workspaceDir,
+      minScore: 0,
+      minRecallCount: 0,
+      minUniqueQueries: 0,
+      nowMs: Date.parse("2026-04-05T10:00:00.000Z"),
+    });
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.snippet).toContain("The theme for gateway routing remains important.");
+    expect(entries[0]?.conceptTags).toEqual(expect.arrayContaining(["theme", "gateway"]));
+    expect(entries[0]?.snippet).not.toContain("kept surfacing");
+
+    const preview = previewRemDreaming({
+      entries,
+      limit: 5,
+      minPatternStrength: 0,
+    });
+    const reflectionText = preview.reflections.join("\n");
+    expect(reflectionText).toContain("`theme`");
+    expect(reflectionText).toContain("`gateway`");
+    expect(reflectionText).not.toContain("`kept`");
+  });
+
   it("does not restage unchanged light candidates in later cycles", async () => {
     const workspaceDir = await createDreamingWorkspace();
     await withDreamingTestClock(async () => {

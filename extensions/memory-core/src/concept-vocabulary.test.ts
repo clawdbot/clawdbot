@@ -86,15 +86,15 @@ describe("concept vocabulary", () => {
     expect(tags).not.toContain("your");
   });
 
-  it("drops structural and numeric compound noise from derived concept tags", () => {
+  it("drops numeric compound noise while preserving ordinary vocabulary", () => {
     const tags = deriveConceptTags({
       path: "memory/2026-04-04.md",
       snippet: "kept theme 1.00 51-54 gateway",
     });
 
     expect(tags).toContain("gateway");
-    expect(tags).not.toContain("kept");
-    expect(tags).not.toContain("theme");
+    expect(tags).toContain("kept");
+    expect(tags).toContain("theme");
     expect(tags).not.toContain("1.00");
     expect(tags).not.toContain("51-54");
   });
