@@ -1,5 +1,4 @@
 import { listAgentIds } from "../agents/agent-scope-config.js";
-import { countSessionEntryRowsReadOnly } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 
@@ -46,24 +45,30 @@ async function prewarmGatewaySessionListData(cfg: OpenClawConfig, agentId: strin
   });
 }
 
-function dashboardDataPrewarmItems(cfg: OpenClawConfig): GatewayHandlerPrewarmItem[] {
+function dashboardDataPrewarmItems(
+  cfg: OpenClawConfig,
+  log: { info?: (msg: string) => void },
+): GatewayHandlerPrewarmItem[] {
   const agentIds = listAgentIds(cfg);
   let sessionDataPrewarmChecked = false;
   let sessionDataPrewarmAllowed = false;
-  const shouldPrewarmSessionData = () => {
+  const shouldPrewarmSessionData = async () => {
     if (sessionDataPrewarmChecked) {
       return sessionDataPrewarmAllowed;
     }
     sessionDataPrewarmChecked = true;
-    let totalSessionEntries = 0;
-    for (const agentId of agentIds) {
-      totalSessionEntries += countSessionEntryRowsReadOnly({ agentId });
-      if (totalSessionEntries > SIDEBAR_PREWARM_MAX_SESSION_ENTRIES) {
-        return false;
-      }
+    const { canPrewarmCombinedSessionStoresForGateway } =
+      await import("../config/sessions/combined-store-gateway.js");
+    sessionDataPrewarmAllowed = canPrewarmCombinedSessionStoresForGateway(cfg, {
+      agentIds,
+      maxRows: SIDEBAR_PREWARM_MAX_SESSION_ENTRIES,
+    });
+    if (!sessionDataPrewarmAllowed) {
+      log.info?.(
+        `skipping optional dashboard session prewarm: combined stores exceed ${SIDEBAR_PREWARM_MAX_SESSION_ENTRIES} rows`,
+      );
     }
-    sessionDataPrewarmAllowed = true;
-    return true;
+    return sessionDataPrewarmAllowed;
   };
   return [
     ...agentIds.map((agentId) => ({
@@ -71,7 +76,7 @@ function dashboardDataPrewarmItems(cfg: OpenClawConfig): GatewayHandlerPrewarmIt
       load: async () => {
         // A count-only query keeps unusually large stores off the synchronous JSON projection
         // path. Request-time session and catalog handlers remain authoritative when skipped.
-        if (!shouldPrewarmSessionData()) {
+        if (!(await shouldPrewarmSessionData())) {
           return;
         }
         await prewarmGatewaySessionListData(cfg, agentId);
@@ -87,7 +92,7 @@ function dashboardDataPrewarmItems(cfg: OpenClawConfig): GatewayHandlerPrewarmIt
     ...agentIds.map((agentId) => ({
       name: `session-catalog.${agentId}`,
       load: async () => {
-        if (!shouldPrewarmSessionData()) {
+        if (!(await shouldPrewarmSessionData())) {
           return;
         }
         const { prewarmSessionCatalogList } = await import("./server-methods/session-catalog.js");
@@ -104,12 +109,12 @@ function dashboardDataPrewarmItems(cfg: OpenClawConfig): GatewayHandlerPrewarmIt
 export function scheduleGatewayHandlerPrewarm(params: {
   cfgAtStart: OpenClawConfig;
   startupTrace?: StartupTrace;
-  log: { warn: (msg: string) => void };
+  log: { info?: (msg: string) => void; warn: (msg: string) => void };
   items?: readonly GatewayHandlerPrewarmItem[];
 }): GatewayHandlerPrewarmHandle {
   // Frequent updater restarts make cold dashboard data the remaining slow tier.
   // Keep cheap session reads first, process-stable plugin data second, and provider catalogs last.
-  const items = params.items ?? dashboardDataPrewarmItems(params.cfgAtStart);
+  const items = params.items ?? dashboardDataPrewarmItems(params.cfgAtStart, params.log);
   let stopped = false;
   let nextIndex = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;

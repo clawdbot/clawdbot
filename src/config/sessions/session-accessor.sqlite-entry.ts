@@ -285,7 +285,6 @@ export function listSqliteSessionEntriesReadOnly(
 export function countSqliteSessionEntryRowsReadOnly(scope: SessionEntryListScope = {}): number {
   const resolved = resolveSqliteScope({ ...scope, sessionKey: "" });
   const result = withOpenClawAgentDatabaseReadOnly((database) => {
-    assertCanonicalSqliteSessionKeysCurrent(database);
     const db = getSessionKysely(database.db);
     const row = executeSqliteQueryTakeFirstSync(
       database.db,
