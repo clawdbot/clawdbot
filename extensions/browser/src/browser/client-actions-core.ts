@@ -17,6 +17,8 @@ import type {
   BrowserActionOk,
   BrowserActionPathResult,
   BrowserActionTabResult,
+  BrowserBatchAbort,
+  BrowserBatchActionResult,
 } from "./client-actions-types.js";
 import { buildProfileQuery, withBaseUrl } from "./client-actions-url.js";
 import type { BrowserActRequest } from "./client-actions.types.js";
@@ -34,7 +36,8 @@ type BrowserActResponse = {
   targetId: string;
   url?: string;
   result?: unknown;
-  results?: Array<{ ok: boolean; error?: string }>;
+  results?: BrowserBatchActionResult[];
+  aborted?: BrowserBatchAbort;
   blockedByDialog?: boolean;
   browserState?: unknown;
   /** Download info when a click/batch/evaluate action triggers a browser download. */

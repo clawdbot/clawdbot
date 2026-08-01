@@ -1,6 +1,8 @@
 // Gateway live agent probe helpers.
 // Builds prompts and verification helpers for live image and cron probe tests.
 import { randomBytes } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 import {
   resolveExpiresAtMsFromDurationSeconds,
   resolveTimestampMsToIsoString,
@@ -32,6 +34,14 @@ type LiveCronProbeSpec = {
   at: string;
   argsJson: string;
 };
+
+/** Selects the packaged launcher when built, otherwise the canonical source runner. */
+export function resolveOpenClawCliProcessArgs(
+  args: readonly string[],
+  hasBuildOutput: boolean,
+): string[] {
+  return [hasBuildOutput ? "openclaw.mjs" : "scripts/run-node.mjs", ...args];
+}
 
 /** Return true for live agents that expose Claude-style MCP tool names. */
 export function isClaudeLikeLiveAgent(raw: string): boolean {
@@ -83,6 +93,8 @@ export function createLiveCronProbeSpec(
       name,
       schedule: { kind: "at", at },
       payload: { kind: "agentTurn", message },
+      // Live harnesses use synthetic channels that must not become announce targets.
+      delivery: { mode: "none" },
       sessionTarget: params.sessionKey ? `session:${params.sessionKey}` : "current",
       ...(params.agentId ? { agentId: params.agentId } : {}),
       ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
@@ -101,9 +113,9 @@ export function buildLiveCronProbeMessage(params: {
   const claudeLike = isClaudeLikeLiveAgent(params.agent);
   if (params.attempt === 0) {
     return (
-      "Use the OpenClaw MCP cron tool from server `openclaw`. " +
-      "If it is not already visible, search/load MCP tools for `openclaw cron` or `cron`, " +
-      "then call the matching OpenClaw MCP tool; Claude-style names may appear as `mcp__openclaw__cron`. " +
+      "Use the OpenClaw MCP automations tool from server `openclaw`. " +
+      "If it is not already visible, search/load MCP tools for `openclaw automations` or `automations`, " +
+      "then call the matching OpenClaw MCP tool; Claude-style names may appear as `mcp__openclaw__automations`. " +
       "Do not use Claude native `CronCreate`, `CronList`, or `CronDelete`; those are not OpenClaw proof. " +
       `Call it with JSON arguments ${params.argsJson}. ` +
       "Preserve the JSON exactly, including job.sessionTarget and job.sessionKey; do not omit, rename, or flatten those fields. " +
@@ -113,9 +125,9 @@ export function buildLiveCronProbeMessage(params: {
   }
   if (claudeLike) {
     return (
-      "Retry the OpenClaw MCP cron tool from server `openclaw` now. " +
-      "If it is not already visible, search/load MCP tools for `openclaw cron` or `cron`, " +
-      "then call the matching OpenClaw MCP tool; Claude-style names may appear as `mcp__openclaw__cron`. " +
+      "Retry the OpenClaw MCP automations tool from server `openclaw` now. " +
+      "If it is not already visible, search/load MCP tools for `openclaw automations` or `automations`, " +
+      "then call the matching OpenClaw MCP tool; Claude-style names may appear as `mcp__openclaw__automations`. " +
       "Do not use Claude native `CronCreate`, `CronList`, or `CronDelete`; those are not OpenClaw proof. " +
       `Use these exact JSON arguments: ${params.argsJson}. ` +
       "Preserve job.sessionTarget and job.sessionKey exactly as provided. " +
@@ -126,9 +138,9 @@ export function buildLiveCronProbeMessage(params: {
     );
   }
   return (
-    "Your previous OpenClaw cron MCP tool call was cancelled before the job was created. " +
-    "Retry the OpenClaw MCP cron tool from server `openclaw` now. " +
-    "If the harness shows Claude-style MCP names, use `mcp__openclaw__cron`. " +
+    "Your previous OpenClaw automations MCP tool call was cancelled before the job was created. " +
+    "Retry the OpenClaw MCP automations tool from server `openclaw` now. " +
+    "If the harness shows Claude-style MCP names, use `mcp__openclaw__automations`. " +
     `Use these exact JSON arguments: ${params.argsJson}. ` +
     "Preserve job.sessionTarget and job.sessionKey exactly as provided. " +
     `If the cron job is created, reply exactly: ${params.exactReply}. ` +
@@ -147,13 +159,20 @@ export async function runOpenClawCliJson<T>(args: string[], env: NodeJS.ProcessE
   const cliArgs = args.includes("--timeout")
     ? args
     : [...args, "--timeout", String(OPENCLAW_CLI_GATEWAY_TIMEOUT_MS)];
-  const { stdout, stderr } = await runExec(process.execPath, ["openclaw.mjs", ...cliArgs], {
-    baseEnv: childEnv,
-    cwd: process.cwd(),
-    logOutput: false,
-    maxBuffer: 1024 * 1024,
-    timeoutMs: OPENCLAW_CLI_CHILD_TIMEOUT_MS,
-  });
+  const hasBuildOutput = ["entry.js", "entry.mjs"].some((entry) =>
+    fs.existsSync(path.join(process.cwd(), "dist", entry)),
+  );
+  const { stdout, stderr } = await runExec(
+    process.execPath,
+    resolveOpenClawCliProcessArgs(cliArgs, hasBuildOutput),
+    {
+      baseEnv: childEnv,
+      cwd: process.cwd(),
+      logOutput: false,
+      maxBuffer: 1024 * 1024,
+      timeoutMs: OPENCLAW_CLI_CHILD_TIMEOUT_MS,
+    },
+  );
   const trimmed = stdout.trim();
   if (!trimmed) {
     throw new Error(

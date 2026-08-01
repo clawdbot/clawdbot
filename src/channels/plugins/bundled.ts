@@ -329,7 +329,6 @@ function loadGeneratedBundledChannelModule(params: {
     return loadChannelPluginModule({
       modulePath,
       rootDir: boundaryRoot,
-      boundaryRootDir: boundaryRoot,
     });
   } catch (error) {
     const canRetryWithCachedLoader =

@@ -1,6 +1,12 @@
 // Line plugin module implements template messages behavior.
 import type { messagingApi } from "@line/bot-sdk";
-import { messageAction, postbackAction, uriAction, type Action } from "./actions.js";
+import {
+  messageAction,
+  normalizeLineAction,
+  postbackAction,
+  uriAction,
+  type Action,
+} from "./actions.js";
 import type { LineTemplateMessagePayload } from "./types.js";
 
 type TemplateMessage = messagingApi.TemplateMessage;
@@ -12,6 +18,7 @@ type ImageCarouselTemplate = messagingApi.ImageCarouselTemplate;
 type ImageCarouselColumn = messagingApi.ImageCarouselColumn;
 
 const COMPACT_TEMPLATE_TEXT_LIMIT = 60;
+const TEMPLATE_ALT_TEXT_LIMIT = 1500;
 const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 type TemplatePayloadAction = {
@@ -70,6 +77,10 @@ function truncateOptionalTemplateText(
   return value === undefined ? undefined : truncateTemplateText(value, limit);
 }
 
+function resolveTemplateAltText(value: string | undefined, fallback: string): string {
+  return truncateTemplateText(value ?? fallback, TEMPLATE_ALT_TEXT_LIMIT);
+}
+
 function formatProductCarouselText(description: string, price?: string): string {
   if (!price) {
     return description;
@@ -78,6 +89,22 @@ function formatProductCarouselText(description: string, price?: string): string 
   const descriptionLimit = Math.max(0, COMPACT_TEMPLATE_TEXT_LIMIT - priceText.length - 1);
   const descriptionText = truncateTemplateText(description, descriptionLimit);
   return descriptionText ? `${descriptionText}\n${priceText}` : priceText;
+}
+
+function normalizeCarouselColumnActions(column: CarouselColumn): CarouselColumn {
+  return {
+    ...column,
+    actions: column.actions.map((action) => normalizeLineAction(action)),
+    defaultAction:
+      column.defaultAction === undefined ? undefined : normalizeLineAction(column.defaultAction),
+  };
+}
+
+function normalizeImageCarouselColumnAction(column: ImageCarouselColumn): ImageCarouselColumn {
+  return {
+    ...column,
+    action: normalizeLineAction(column.action, 12),
+  };
 }
 
 /**
@@ -92,12 +119,12 @@ export function createConfirmTemplate(
   const template: ConfirmTemplate = {
     type: "confirm",
     text: truncateTemplateText(text, 240), // LINE limit
-    actions: [confirmAction, cancelAction],
+    actions: [normalizeLineAction(confirmAction), normalizeLineAction(cancelAction)],
   };
 
   return {
     type: "template",
-    altText: truncateOptionalTemplateText(altText, 400) ?? truncateTemplateText(text, 400),
+    altText: resolveTemplateAltText(altText, text),
     template,
   };
 }
@@ -128,19 +155,21 @@ export function createButtonTemplate(
     type: "buttons",
     ...(normalizedTitle ? { title: truncateTemplateText(normalizedTitle, 40) } : {}), // LINE limit
     text: truncateTemplateText(text, textLimit),
-    actions: actions.slice(0, 4), // LINE limit: max 4 actions
+    actions: actions.slice(0, 4).map((action) => normalizeLineAction(action)), // LINE limit: max 4 actions
     thumbnailImageUrl: options?.thumbnailImageUrl,
     imageAspectRatio: options?.imageAspectRatio ?? "rectangle",
     imageSize: options?.imageSize ?? "cover",
     imageBackgroundColor: options?.imageBackgroundColor,
-    defaultAction: options?.defaultAction,
+    defaultAction:
+      options?.defaultAction === undefined ? undefined : normalizeLineAction(options.defaultAction),
   };
 
   return {
     type: "template",
-    altText:
-      truncateOptionalTemplateText(options?.altText, 400) ??
-      truncateTemplateText(normalizedTitle ? `${normalizedTitle}: ${text}` : text, 400),
+    altText: resolveTemplateAltText(
+      options?.altText,
+      normalizedTitle ? `${normalizedTitle}: ${text}` : text,
+    ),
     template,
   };
 }
@@ -158,14 +187,14 @@ export function createTemplateCarousel(
 ): TemplateMessage {
   const template: CarouselTemplate = {
     type: "carousel",
-    columns: columns.slice(0, 10), // LINE limit: max 10 columns
+    columns: columns.slice(0, 10).map(normalizeCarouselColumnActions), // LINE limit: max 10 columns
     imageAspectRatio: options?.imageAspectRatio ?? "rectangle",
     imageSize: options?.imageSize ?? "cover",
   };
 
   return {
     type: "template",
-    altText: truncateOptionalTemplateText(options?.altText, 400) ?? "View carousel",
+    altText: resolveTemplateAltText(options?.altText, "View carousel"),
     template,
   };
 }
@@ -189,10 +218,11 @@ export function createCarouselColumn(params: {
   return {
     title: truncateOptionalTemplateText(params.title, 40),
     text: truncateTemplateText(params.text, textLimit),
-    actions: params.actions.slice(0, 3), // LINE limit: max 3 actions per column
+    actions: params.actions.slice(0, 3).map((action) => normalizeLineAction(action)), // LINE limit: max 3 actions per column
     thumbnailImageUrl: params.thumbnailImageUrl,
     imageBackgroundColor: params.imageBackgroundColor,
-    defaultAction: params.defaultAction,
+    defaultAction:
+      params.defaultAction === undefined ? undefined : normalizeLineAction(params.defaultAction),
   };
 }
 
@@ -205,12 +235,12 @@ export function createImageCarousel(
 ): TemplateMessage {
   const template: ImageCarouselTemplate = {
     type: "image_carousel",
-    columns: columns.slice(0, 10), // LINE limit: max 10 columns
+    columns: columns.slice(0, 10).map(normalizeImageCarouselColumnAction), // LINE limit: max 10 columns
   };
 
   return {
     type: "template",
-    altText: truncateOptionalTemplateText(altText, 400) ?? "View images",
+    altText: resolveTemplateAltText(altText, "View images"),
     template,
   };
 }
@@ -221,7 +251,7 @@ export function createImageCarousel(
 export function createImageCarouselColumn(imageUrl: string, action: Action): ImageCarouselColumn {
   return {
     imageUrl,
-    action,
+    action: normalizeLineAction(action, 12),
   };
 }
 

@@ -1,5 +1,7 @@
+import { randomUUID } from "node:crypto";
 import {
   createPlacementFailureActions,
+  isUnavailableEnvironment,
   type WorkerActivationBarrier,
   type WorkerActiveDispatchPlacement,
   type WorkerDispatchEnvironmentService,
@@ -13,9 +15,23 @@ import type {
   WorkerPlacementReclaimRequest,
 } from "./service-contract.js";
 import { type WorkerEnvironmentService, workerEnvironmentIdForIdempotencyKey } from "./service.js";
-import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
+import { WorkerTunnelOwnerDisconnectedError } from "./tunnel-contract.js";
+import type { WorkerWorkspaceResultConflict } from "./workspace-conflicts.js";
+import {
+  verifyReconciledWorkspaceFinal,
+  WorkerWorkspaceFinalFenceError,
+} from "./workspace-finalize.js";
 import type { WorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 import { recoverWorkerWorkspaceReconciliation } from "./workspace-reconcile.js";
+import {
+  finalizeWorkspaceResultConflicts,
+  settleStagedWorkspaceResult,
+} from "./workspace-result-finalize.js";
+import {
+  hasWorkerWorkspaceResultRef,
+  preparedWorkerWorkspaceResultRef,
+  workerWorkspaceResultRef,
+} from "./workspace-result-staging.js";
 
 type WorkerLocalDispatchBarrier = (params: {
   sessionId: string;
@@ -43,6 +59,17 @@ type WorkerPlacementDispatchOptions = {
     sessionKey: string;
     agentId: string;
   }) => Promise<string>;
+  reportWorkspaceResultConflict: (
+    params: { sessionId: string; sessionKey: string; agentId: string } & (
+      | { paths: string[]; stagedResultRef: string; totalCount: number }
+      | { cleared: true }
+    ),
+  ) => Promise<void>;
+  resolveWorkspaceResultConflict: (params: {
+    sessionId: string;
+    sessionKey: string;
+    agentId: string;
+  }) => Promise<WorkerWorkspaceResultConflict | undefined>;
 };
 
 function requireProvisionedEnvironment(
@@ -72,6 +99,8 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     placements,
     runActivationBarrier: options.runActivationBarrier,
     resolveWorkspacePath: options.resolveWorkspacePath,
+    reportWorkspaceResultConflict: options.reportWorkspaceResultConflict,
+    resolveWorkspaceResultConflict: options.resolveWorkspaceResultConflict,
     workspaceOperations: options.workspaceOperations,
   });
 
@@ -212,88 +241,196 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
           ownerEpoch: current.activeOwnerEpoch,
           placementGeneration: current.generation,
         };
-        let accepted: Extract<WorkerDispatchPlacement, { state: "active" }> | undefined;
+        const reclaimClaimId = `reclaim-${randomUUID()}`;
+        const reclaimClaim = placements.claimReclaimWorkspaceResult({
+          sessionId: current.sessionId,
+          sessionKey: current.sessionKey,
+          agentId: current.agentId,
+          claimId: reclaimClaimId,
+          runId: reclaimClaimId,
+          owner: {
+            kind: "worker",
+            environmentId: current.environmentId,
+            ownerEpoch: current.activeOwnerEpoch,
+          },
+        });
+        const reclaimResultRef = workerWorkspaceResultRef(reclaimClaim.claimId);
+        let manifestAccepted = false;
         const journal = {
           load: () => placements.loadWorkspaceReconciliation(journalOwner),
           begin: (next: Parameters<typeof placements.beginWorkspaceReconciliation>[1]) =>
             placements.beginWorkspaceReconciliation(journalOwner, next),
           commit: (manifestRef: string) => {
-            const next = placements.acceptIdleWorkspaceReconciliation({
-              sessionId: current.sessionId,
-              environmentId: current.environmentId,
-              ownerEpoch: current.activeOwnerEpoch,
-              expectedGeneration: current.generation,
+            placements.updateWorkspaceBaseManifest({
+              claim: reclaimClaim,
               manifestRef,
             });
-            if (next.state !== "active") {
-              throw new Error("Cloud worker stop did not accept its reconciled workspace");
-            }
-            accepted = next;
+            manifestAccepted = true;
           },
           abort: () => placements.abortWorkspaceReconciliation(journalOwner),
         };
-        const pending = journal.load();
-        if (pending) {
-          await recoverWorkerWorkspaceReconciliation({ root: localPath, journal: pending });
-          journal.abort();
-        }
-        const tunnel = await environments.startTunnel({
-          environmentId: current.environmentId,
-          ownerEpoch: current.activeOwnerEpoch,
-        });
-        const acceptedPlacement = await options.workspaceOperations.run(
-          current.environmentId,
-          async () => {
-            const owned = placements.get(current.sessionId);
-            if (
-              owned?.state !== "active" ||
-              owned.generation !== current.generation ||
-              owned.environmentId !== current.environmentId ||
-              owned.activeOwnerEpoch !== current.activeOwnerEpoch ||
-              owned.turnClaim
-            ) {
-              throw new Error("Cloud worker stop lost its placement owner before reconciliation");
+        const cancelUnstagedFailedReclaim = async (allowCommitted: boolean): Promise<void> => {
+          await options.workspaceOperations.run(current.environmentId, async () => {
+            const stillOwnsEmptyResult = (): boolean => {
+              const owned = placements.get(current.sessionId);
+              const currentEnvironment = environments.get(current.environmentId);
+              const pendingResult = placements
+                .listPendingWorkspaceResults()
+                .find(
+                  (pending) =>
+                    pending.sessionId === reclaimClaim.sessionId &&
+                    pending.claimId === reclaimClaim.claimId &&
+                    pending.runId === reclaimClaim.runId,
+                );
+              return (
+                (allowCommitted || !manifestAccepted) &&
+                owned?.state === "active" &&
+                owned.turnClaim?.claimId === reclaimClaim.claimId &&
+                reclaimClaim.owner.kind === "worker" &&
+                currentEnvironment?.state === "attached" &&
+                currentEnvironment.ownerEpoch === reclaimClaim.owner.ownerEpoch &&
+                currentEnvironment.attachedSessionIds.length === 1 &&
+                currentEnvironment.attachedSessionIds[0] === owned.sessionId &&
+                pendingResult?.workspaceAcceptedAtMs === null &&
+                pendingResult.stagedResultRef === null
+              );
+            };
+            if (!stillOwnsEmptyResult()) {
+              return;
             }
-            const quiescence = await tunnel.quiesceWorkspace(current.remoteWorkspaceDir);
-            let destroyed = false;
-            try {
-              const reconciliation = await tunnel.reconcileWorkspace({
-                localPath,
-                remoteWorkspaceDir: current.remoteWorkspaceDir,
-                baseManifestRef: current.workspaceBaseManifestRef,
-                journal,
-              });
-              if (!accepted) {
-                throw new Error("Cloud worker stop did not commit its reconciled workspace");
-              }
-              await verifyReconciledWorkspaceFinal(reconciliation, quiescence);
-              await environments.destroy(current.environmentId);
-              destroyed = true;
-              return accepted;
-            } finally {
-              if (!destroyed) {
-                await quiescence.resume();
-              }
+            const [canonicalExists, preparedExists] = await Promise.all([
+              hasWorkerWorkspaceResultRef({ root: localPath, stagedResultRef: reclaimResultRef }),
+              hasWorkerWorkspaceResultRef({
+                root: localPath,
+                stagedResultRef: preparedWorkerWorkspaceResultRef(reclaimResultRef),
+              }),
+            ]);
+            // Recheck after filesystem I/O while the session barrier and workspace
+            // owner lock are still held. A committed manifest or durable ref keeps
+            // recovery authoritative.
+            if (!canonicalExists && !preparedExists && stillOwnsEmptyResult()) {
+              placements.cancelWorkspaceResultAndReleaseTurn(reclaimClaim);
             }
-          },
-        );
+          });
+        };
+        const finishReclaim = async (): Promise<WorkerReclaimedPlacement> => {
+          const pending = journal.load();
+          if (pending) {
+            await recoverWorkerWorkspaceReconciliation({ root: localPath, journal: pending });
+            journal.abort();
+          }
+          const tunnel = await environments.startTunnel({
+            environmentId: current.environmentId,
+            ownerEpoch: current.activeOwnerEpoch,
+          });
+          const reclaimed = await options.workspaceOperations.run(
+            current.environmentId,
+            async () => {
+              const owned = placements.get(current.sessionId);
+              if (
+                owned?.state !== "active" ||
+                owned.generation !== current.generation ||
+                owned.environmentId !== current.environmentId ||
+                owned.activeOwnerEpoch !== current.activeOwnerEpoch ||
+                owned.turnClaim?.claimId !== reclaimClaim.claimId
+              ) {
+                throw new Error("Cloud worker stop lost its placement owner before reconciliation");
+              }
+              const quiescence = await tunnel.quiesceWorkspace(current.remoteWorkspaceDir);
+              let destroyed = false;
+              try {
+                const reconciliation = await tunnel.reconcileWorkspace({
+                  localPath,
+                  remoteWorkspaceDir: current.remoteWorkspaceDir,
+                  baseManifestRef: current.workspaceBaseManifestRef,
+                  journal,
+                  stagedResult: {
+                    ref: reclaimResultRef,
+                    record: (ref) => placements.recordStagedWorkspaceResult(reclaimClaim, ref),
+                  },
+                });
+                const applied = await verifyReconciledWorkspaceFinal(reconciliation, quiescence);
+                if (reconciliation.changed && !manifestAccepted) {
+                  throw new Error("Cloud worker stop did not commit its reconciled workspace");
+                }
+                placements.acceptWorkspaceResult(reclaimClaim);
+                const recordedStagedResultRef = placements
+                  .listPendingWorkspaceResults()
+                  .find(
+                    (result) =>
+                      result.sessionId === reclaimClaim.sessionId &&
+                      result.claimId === reclaimClaim.claimId &&
+                      result.runId === reclaimClaim.runId,
+                  )?.stagedResultRef;
+                const conflictPaths = applied?.conflictPaths ?? [];
+                if (conflictPaths.length > 0 && !recordedStagedResultRef) {
+                  throw new Error("Cloud worker stop conflict has no staged result reference");
+                }
+                const priorWorkspaceResultConflict =
+                  current.workspaceResultConflict ??
+                  (await options.resolveWorkspaceResultConflict({
+                    sessionId: current.sessionId,
+                    sessionKey: current.sessionKey,
+                    agentId: current.agentId,
+                  }));
+                const finalized = await finalizeWorkspaceResultConflicts({
+                  placements,
+                  turnClaim: reclaimClaim,
+                  conflictPaths,
+                  priorConflict: priorWorkspaceResultConflict,
+                  stagedResultRef: recordedStagedResultRef,
+                  // An unchanged stop is not a later cloud result; keep its prior fence inspectable.
+                  retainPriorConflict: !reconciliation.changed,
+                  root: localPath,
+                  report: async (report) =>
+                    await options.reportWorkspaceResultConflict({
+                      sessionId: current.sessionId,
+                      sessionKey: current.sessionKey,
+                      agentId: current.agentId,
+                      ...report,
+                    }),
+                });
+                return await settleStagedWorkspaceResult({
+                  placements,
+                  turnClaim: reclaimClaim,
+                  root: localPath,
+                  stagedResultRef: recordedStagedResultRef,
+                  conflictRetained: finalized.conflictRetained,
+                  reclaim: true,
+                  beforeComplete: async () => {
+                    await environments.destroy(current.environmentId);
+                    destroyed = true;
+                  },
+                  validateCompleted: (completed) => {
+                    if (completed.state !== "reclaimed") {
+                      throw new Error("Cloud worker stop did not produce a reclaimed placement");
+                    }
+                  },
+                });
+              } finally {
+                if (!destroyed) {
+                  await quiescence.resume();
+                }
+              }
+            },
+          );
+          try {
+            await environments.stopTunnel(current.environmentId, current.activeOwnerEpoch);
+          } catch {
+            // Provider teardown is authoritative; local tunnel cleanup is best effort.
+          }
+          return reclaimed;
+        };
         try {
-          await environments.stopTunnel(current.environmentId, current.activeOwnerEpoch);
-        } catch {
-          // Provider teardown is authoritative; local tunnel cleanup is best effort.
+          return await finishReclaim();
+        } catch (error) {
+          // An unstaged final-fence failure is retryable even after an unchanged
+          // manifest commit; the journal remains authoritative for the next attempt.
+          await cancelUnstagedFailedReclaim(
+            error instanceof WorkerWorkspaceFinalFenceError && error.reclaimDisposition === "retry",
+          ).catch(() => undefined);
+          throw error;
         }
-        // Provider teardown is proven. Persist the terminal placement state in
-        // one CAS so restart recovery never strands a successful stop mid-transition.
-        const reclaimed = placements.finishReclaim({
-          sessionId: acceptedPlacement.sessionId,
-          environmentId: acceptedPlacement.environmentId,
-          ownerEpoch: acceptedPlacement.activeOwnerEpoch,
-          expectedGeneration: acceptedPlacement.generation,
-        });
-        if (reclaimed.state !== "reclaimed") {
-          throw new Error("Cloud worker stop did not produce a reclaimed placement");
-        }
-        return reclaimed;
       },
     });
 
@@ -309,7 +446,15 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     if (inFlight) {
       return await inFlight;
     }
-    const operation = reclaimOnce(request);
+    const operation = reclaimOnce(request).catch((error: unknown) => {
+      // Another teardown path can win after this call has crossed its durable completion fence.
+      // Report the committed terminal state instead of leaking a stale tunnel error to callers.
+      const completed = placements.get(request.sessionId);
+      if (error instanceof WorkerTunnelOwnerDisconnectedError && completed?.state === "reclaimed") {
+        return completed;
+      }
+      throw error;
+    });
     reclaimInFlight.set(request.sessionId, operation);
     try {
       return await operation;
@@ -322,14 +467,28 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
 
   return {
     dispatch,
-    forceDestroyEnvironment: (environmentId: string) =>
+    forceDestroyEnvironment: (environmentId: string, onCleanupError?: (error: unknown) => void) =>
       options.workspaceOperations.run(environmentId, async () => {
         await forceAbandonWorkerEnvironment({
           placements,
           environmentId,
           resolveWorkspacePath: options.resolveWorkspacePath,
+          onCleanupError,
         });
-        return await environments.destroy(environmentId);
+        try {
+          return await environments.destroy(environmentId);
+        } catch (error) {
+          const current = environments.get(environmentId);
+          if (!current || !isUnavailableEnvironment(current)) {
+            throw error;
+          }
+          try {
+            onCleanupError?.(error);
+          } catch {
+            // Reporting cannot overturn the durable placement/environment fences.
+          }
+          return current;
+        }
       }),
     reclaim,
     reconcile: recovery.reconcile,

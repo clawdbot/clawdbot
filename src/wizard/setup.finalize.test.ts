@@ -172,7 +172,7 @@ vi.mock("../commands/health.js", () => ({
   healthCommand,
 }));
 
-vi.mock("../commands/onboard-search.js", () => ({
+vi.mock("../flows/search-setup.js", () => ({
   listSearchProviderOptions: () => [],
   resolveSearchProviderOptions: () => [],
   hasExistingKey,
@@ -245,8 +245,8 @@ vi.mock("../commands/auth-choice.js", () => ({
   warnIfModelConfigLooksOff: vi.fn(),
 }));
 
-vi.mock("../agents/model-catalog.js", () => ({
-  loadModelCatalogSnapshot: async (...args: unknown[]) => {
+vi.mock("../agents/prepared-model-catalog.js", () => ({
+  loadPreparedModelCatalogSnapshot: async (...args: unknown[]) => {
     const entries = await loadModelCatalog(...args);
     return { entries, routeVariants: entries };
   },
@@ -536,13 +536,6 @@ describe("finalizeSetupWizard", () => {
                 source: "env",
                 provider: "default",
                 id: "OPENCLAW_GATEWAY_PASSWORD",
-              },
-            },
-          },
-          tools: {
-            web: {
-              search: {
-                apiKey: "",
               },
             },
           },

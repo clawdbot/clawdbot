@@ -6,7 +6,7 @@ read_when:
 title: "Migrating from Claude"
 ---
 
-OpenClaw imports local Claude state through the bundled Claude migration provider. The provider previews every item before changing state, redacts secrets in plans and reports, and creates a verified backup before apply.
+OpenClaw imports local Claude state through the bundled Claude migration provider. The provider previews every item before changing state and redacts secrets in plans and reports. Standalone `openclaw migrate` creates a verified backup; the fresh onboarding path stages the import and publishes it only after verification succeeds.
 
 <Note>
 Onboarding imports require a fresh OpenClaw setup. If you already have local OpenClaw state, reset config, credentials, sessions, and the workspace first, or use `openclaw migrate` directly with `--overwrite` after reviewing the plan.

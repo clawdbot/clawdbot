@@ -63,6 +63,39 @@ describe("sanitizeOutboundText", () => {
     expect(sanitizeOutboundText(text)).toBe("Hello\n\nWorld");
   });
 
+  it.each([
+    {
+      name: "backtick fence preserves user while stripping prose user",
+      input: "user:\n```yaml\nuser:\n  name: alice\n```",
+      expected: "```yaml\nuser:\n  name: alice\n```",
+    },
+    {
+      name: "tilde fence preserves system while stripping prose system",
+      input: "system:\n~~~yaml\nsystem:\n  enabled: true\n~~~",
+      expected: "~~~yaml\nsystem:\n  enabled: true\n~~~",
+    },
+    {
+      name: "indented code preserves assistant while stripping prose assistant",
+      input: "keep\n\nassistant:\n\n    assistant:\n    enabled: true",
+      expected: "keep\n\n    assistant:\n    enabled: true",
+    },
+    {
+      name: "unterminated fence preserves every marker family after offset shifts",
+      input: [
+        "#+#+#",
+        "assistant to=final",
+        "user:",
+        "```text",
+        "#+#+#",
+        "assistant to=tool",
+        "user:",
+      ].join("\n"),
+      expected: ["```text", "#+#+#", "assistant to=tool", "user:"].join("\n"),
+    },
+  ] as const)("$name", ({ input, expected }) => {
+    expect(sanitizeOutboundText(input)).toBe(expected);
+  });
+
   it("handles combined internal markers in one message", () => {
     const text = "<thinking>step 1</thinking>NO_REPLY +#+#+#+# assistant to=final\n\nActual reply";
     const result = sanitizeOutboundText(text);

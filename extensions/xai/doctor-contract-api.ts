@@ -54,10 +54,7 @@ const PLUGIN_MODEL_MIGRATIONS: PluginModelMigration[] = [
     ["plugins", "entries", "xai", "config", "xSearch"],
   ].map((path) => ({ path, retiredModels: RETIRED_CODE_MODELS, targetModel: "grok-build-0.1" })),
 ];
-const XAI_STT_MODEL_LIST_PATHS = [
-  ["tools", "media", "models"],
-  ["tools", "media", "audio", "models"],
-] as const;
+const XAI_STT_MODEL_LIST_PATHS = [["tools", "media", "models"]] as const;
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)

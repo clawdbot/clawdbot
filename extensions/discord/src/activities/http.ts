@@ -2,6 +2,10 @@ import fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { logError } from "openclaw/plugin-sdk/logging-core";
 import { resolveRequestClientIp } from "openclaw/plugin-sdk/webhook-ingress";
+import {
+  readJsonBodyWithLimit,
+  WEBHOOK_BODY_READ_DEFAULTS,
+} from "openclaw/plugin-sdk/webhook-request-guards";
 import { parseDiscordActivityCustomId } from "../component-custom-id.js";
 import {
   DISCORD_TOKEN_URL,
@@ -39,6 +43,7 @@ type DiscordActivityHttpDeps = {
   now?: () => number;
   readVendorAsset?: (assetPath: string) => Promise<Buffer>;
   logError?: (message: string) => void;
+  bodyTimeoutMs?: number;
 };
 
 function setCommonHeaders(res: ServerResponse): void {
@@ -77,27 +82,6 @@ function notFound(res: ServerResponse, widgetDocument = false): true {
     "text/plain; charset=utf-8",
     widgetDocument ? { "Content-Security-Policy": DISCORD_ACTIVITY_WIDGET_CSP } : undefined,
   );
-}
-
-async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown> | null> {
-  const chunks: Buffer[] = [];
-  let total = 0;
-  for await (const chunk of req) {
-    const data = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    total += data.byteLength;
-    if (total > BODY_MAX_BYTES) {
-      return null;
-    }
-    chunks.push(data);
-  }
-  try {
-    const parsed = JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : null;
-  } catch {
-    return null;
-  }
 }
 
 function readHeader(req: IncomingMessage, name: string): string | undefined {
@@ -140,6 +124,9 @@ export function createDiscordActivityHttpHandler(deps: DiscordActivityHttpDeps):
   const limiter = new TokenRateLimiter(deps.now ?? Date.now);
   const readVendorAsset = deps.readVendorAsset ?? ((assetPath: string) => fs.readFile(assetPath));
   const reportError = deps.logError ?? logError;
+  // The OAuth code body is unauthenticated and tiny. Reuse the pre-auth webhook budget so a
+  // stalled upload cannot retain a Gateway handler indefinitely.
+  const bodyTimeoutMs = deps.bodyTimeoutMs ?? WEBHOOK_BODY_READ_DEFAULTS.preAuth.timeoutMs;
   let vendorAsset: Promise<Buffer> | undefined;
   let pendingLaunchFailureLogged = false;
 
@@ -167,7 +154,21 @@ export function createDiscordActivityHttpHandler(deps: DiscordActivityHttpDeps):
     if (!account) {
       return respondJson(res, 503, { error: "Discord Activities is not fully configured" });
     }
-    const body = await readJsonBody(req);
+    const bodyResult = await readJsonBodyWithLimit(req, {
+      maxBytes: BODY_MAX_BYTES,
+      timeoutMs: bodyTimeoutMs,
+      emptyObjectOnEmpty: true,
+    });
+    if (!bodyResult.ok && bodyResult.code === "REQUEST_BODY_TIMEOUT") {
+      return respondJson(res, 408, { error: "request body timeout" });
+    }
+    const body =
+      bodyResult.ok &&
+      bodyResult.value &&
+      typeof bodyResult.value === "object" &&
+      !Array.isArray(bodyResult.value)
+        ? (bodyResult.value as Record<string, unknown>)
+        : null;
     const code = typeof body?.code === "string" ? body.code.trim() : "";
     if (!code) {
       return respondJson(res, 401, { error: "invalid authorization code" });

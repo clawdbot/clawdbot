@@ -64,7 +64,7 @@ async function readPlanFile(pathname: string): Promise<SecretsApplyPlan> {
   // Apply consumes a generated plan shape, not arbitrary JSON.
   const [fsModule, { readFileDescriptorBounded }, { isSecretsApplyPlan }] = await Promise.all([
     fsModuleLoader.load(),
-    import("../infra/file-descriptor-read.js"),
+    import("../infra/boundary-file-read.js"),
     import("../secrets/plan.js"),
   ]);
   const fsConstants = fsModule.constants as typeof fsModule.constants & { O_NONBLOCK?: number };

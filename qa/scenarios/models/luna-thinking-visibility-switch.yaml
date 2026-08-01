@@ -5,9 +5,9 @@ scenario:
   surface: models
   coverage:
     primary:
-      - models.thinking
+      - agent-runtime.thinking
     secondary:
-      - runtime.reasoning-visibility
+      - agent-runtime.progress-visibility-reasoning-visibility
   objective: Verify GPT-5.6 Luna can switch from disabled thinking to medium thinking while reasoning display stays enabled.
   successCriteria:
     - Live runs target openai/gpt-5.6-luna.
@@ -96,6 +96,9 @@ flow:
         - set: offCursor
           value:
             expr: state.getSnapshot().messages.length
+        - set: offRequestCursor
+          value:
+            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor : 0"
         - sendInbound:
             conversation:
               id:
@@ -127,7 +130,7 @@ flow:
             then:
               - set: requests
                 value:
-                  expr: "await fetchJson(`${env.mock.baseUrl}/debug/requests`)"
+                  expr: "await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${offRequestCursor}`)"
               - set: offRequest
                 value:
                   expr: "requests.find((request) => String(request.allInputText ?? '').includes(config.offPrompt))"
@@ -166,6 +169,9 @@ flow:
         - set: maxCursor
           value:
             expr: state.getSnapshot().messages.length
+        - set: maxRequestCursor
+          value:
+            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor : 0"
         - sendInbound:
             conversation:
               id:
@@ -190,7 +196,7 @@ flow:
             then:
               - set: requests
                 value:
-                  expr: "await fetchJson(`${env.mock.baseUrl}/debug/requests`)"
+                  expr: "await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${maxRequestCursor}`)"
               - set: maxRequest
                 value:
                   expr: "requests.find((request) => String(request.allInputText ?? '').includes(config.maxPrompt))"

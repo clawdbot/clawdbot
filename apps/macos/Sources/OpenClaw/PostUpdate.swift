@@ -308,6 +308,7 @@ final class PostUpdateController: NSObject, NSWindowDelegate {
         }
         let hosting = NSHostingController(rootView: PostUpdateView(model: model))
         let window = NSWindow(contentViewController: hosting)
+        window.isRestorable = false
         window.title = String(localized: "OpenClaw updated")
         window.setContentSize(NSSize(width: 560, height: 600))
         window.styleMask = OnboardingController.windowStyleMask

@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import UniformTypeIdentifiers
 @testable import OpenClawChatUI
 
 private final class ComposerParityTransport: @unchecked Sendable, OpenClawChatTransport {
@@ -80,6 +81,39 @@ struct ChatReplyQuoteTests {
 
 @MainActor
 struct ChatComposerStateTests {
+    @Test func `file picker allows images and movie containers only`() {
+        #expect(OpenClawChatPickerAttachmentMetadata.allowedFileContentTypes == [
+            .image,
+            .movie,
+            .mpeg4Movie,
+            .quickTimeMovie,
+        ])
+        #expect(!OpenClawChatPickerAttachmentMetadata.allowedFileContentTypes.contains(.audiovisualContent))
+        #expect(!OpenClawChatPickerAttachmentMetadata.allowedFileContentTypes.contains(.audio))
+    }
+
+    @Test func `tagless movie metadata stages as video`() async throws {
+        let metadata = OpenClawChatPickerAttachmentMetadata.resolve(contentType: .movie)
+        #expect(metadata.fileExtension == "mov")
+        #expect(metadata.mimeType == "video/quicktime")
+
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tagless-movie-\(UUID().uuidString)")
+            .appendingPathExtension(metadata.fileExtension)
+        try Data("tagless-movie".utf8).write(to: fileURL)
+        defer { try? FileManager.default.removeItem(at: fileURL) }
+        let vm = OpenClawChatViewModel(sessionKey: "main", transport: ComposerParityTransport())
+
+        await vm.addVideoAttachment(
+            url: fileURL,
+            fileName: "video.\(metadata.fileExtension)",
+            mimeType: metadata.mimeType)
+
+        let attachment = try #require(vm.attachments.first)
+        #expect(attachment.fileName.hasSuffix(".mov"))
+        #expect(attachment.mimeType.hasPrefix("video/"))
+    }
+
     @Test func `late send does not consume newer reply selection for same message`() {
         let vm = OpenClawChatViewModel(sessionKey: "main", transport: ComposerParityTransport())
         let messageID = UUID()
@@ -173,6 +207,24 @@ struct ChatComposerStateTests {
         vm.switchSession(to: "other")
         vm.switchSession(to: "main")
         #expect(vm.input.isEmpty)
+    }
+
+    @Test func `attachment staging blocks UI and programmatic sends`() async throws {
+        let transport = ComposerParityTransport()
+        let vm = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        vm.healthOK = true
+        vm.input = "send with selected image"
+        vm.beginAttachmentStaging()
+
+        #expect(!vm.canSend)
+        vm.send()
+        await Task.yield()
+        #expect(transport.sentMessages.isEmpty)
+
+        vm.endAttachmentStaging()
+        #expect(vm.canSend)
+        vm.send()
+        try await waitUntil("post-staging send accepted") { transport.sentMessages.count == 1 }
     }
 
     @Test func `slash send ignores and preserves reply target`() async throws {

@@ -36,7 +36,6 @@ export {
   createMoonshotThinkingWrapper,
   createPlainTextToolCallCompatWrapper,
   createToolStreamWrapper,
-  createZaiToolStreamWrapper,
   defaultToolStreamExtraParams,
   isOpenAICompatibleThinkingEnabled,
   type ProviderStreamWrapperFactory,

@@ -1,6 +1,7 @@
 // Hermes MCP config mapping and manual follow-up planning.
 import { createMigrationManualItem } from "openclaw/plugin-sdk/migration";
 import type { MigrationItem } from "openclaw/plugin-sdk/plugin-entry";
+import { parseBooleanValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { mcpValueHasEnvReferences, resolveMcpEnvReferences } from "./config-env.js";
 import { readPositiveNumber } from "./config-provider-contract.js";
 import { isRecord, readString, sanitizeName } from "./helpers.js";
@@ -10,20 +11,6 @@ const MCP_PROMPT_UTILITY_TOOLS = ["prompts_list", "prompts_get"] as const;
 
 function readBoolean(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
-}
-
-function readBooleanish(value: unknown): boolean | undefined {
-  if (typeof value === "boolean") {
-    return value;
-  }
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const normalized = value.trim().toLowerCase();
-  if (["true", "1", "yes", "on"].includes(normalized)) {
-    return true;
-  }
-  return ["false", "0", "no", "off"].includes(normalized) ? false : undefined;
 }
 
 function readPositiveNumeric(value: unknown): number | undefined {
@@ -68,8 +55,8 @@ function mapHermesToolFilter(value: Record<string, unknown>): Record<string, unk
   }
   const include = readToolFilterList(tools.include);
   const exclude = readToolFilterList(tools.exclude);
-  const resourcesEnabled = readBooleanish(tools.resources) !== false;
-  const promptsEnabled = readBooleanish(tools.prompts) !== false;
+  const resourcesEnabled = parseBooleanValue(tools.resources) !== false;
+  const promptsEnabled = parseBooleanValue(tools.prompts) !== false;
 
   // Hermes tests set truthiness here: `include: []` means no whitelist, so native tools remain.
   if (include && include.length > 0) {
@@ -113,7 +100,6 @@ const MCP_CONNECTION_FIELDS = [
   "url",
   "connectionTimeoutMs",
   "requestTimeoutMs",
-  "timeout",
 ] as const;
 
 export function importsMcpSensitiveValues(
@@ -173,7 +159,26 @@ export function mapMcpServer(
   } else if (!transport && readString(next.url)) {
     next.transport = "streamable-http";
   }
-  next.connectTimeout = value.connectTimeout ?? value.connect_timeout;
+  // Canonical timeout fields are finite().positive(); drop non-positive or
+  // overflowing source values instead of importing config that fails validation.
+  const connectionTimeoutSeconds = value.connectTimeout ?? value.connect_timeout;
+  if (
+    next.connectionTimeoutMs === undefined &&
+    typeof connectionTimeoutSeconds === "number" &&
+    connectionTimeoutSeconds > 0 &&
+    Number.isFinite(connectionTimeoutSeconds * 1_000)
+  ) {
+    next.connectionTimeoutMs = connectionTimeoutSeconds * 1_000;
+  }
+  const requestTimeoutSeconds = value.timeout;
+  if (
+    next.requestTimeoutMs === undefined &&
+    typeof requestTimeoutSeconds === "number" &&
+    requestTimeoutSeconds > 0 &&
+    Number.isFinite(requestTimeoutSeconds * 1_000)
+  ) {
+    next.requestTimeoutMs = requestTimeoutSeconds * 1_000;
+  }
   next.supportsParallelToolCalls = readBoolean(
     value.supportsParallelToolCalls ?? value.supports_parallel_tool_calls,
   );
@@ -326,8 +331,8 @@ export function mcpManualItems(params: {
     ) ||
       (tools.include !== undefined && !readToolFilterList(tools.include)) ||
       (tools.exclude !== undefined && !readToolFilterList(tools.exclude)) ||
-      (tools.resources !== undefined && readBooleanish(tools.resources) === undefined) ||
-      (tools.prompts !== undefined && readBooleanish(tools.prompts) === undefined))
+      (tools.resources !== undefined && parseBooleanValue(tools.resources) === undefined) ||
+      (tools.prompts !== undefined && parseBooleanValue(tools.prompts) === undefined))
   ) {
     add(
       "tool-policy",

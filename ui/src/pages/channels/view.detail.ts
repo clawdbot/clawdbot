@@ -5,12 +5,13 @@ import type { ChannelAccountSnapshot, NostrProfile } from "../../api/types.ts";
 import { renderSettingsSection } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import "../../components/modal-dialog.ts";
-import { renderChannelArt } from "./hub-meta.ts";
+import { channelDocsUrl, renderChannelArt } from "./hub-meta.ts";
 import { renderChannelConfigSection } from "./view.config.ts";
 import { renderDiscordCard } from "./view.discord.ts";
 import { renderGoogleChatCard } from "./view.googlechat.ts";
 import { renderIMessageCard } from "./view.imessage.ts";
 import { renderNostrCard } from "./view.nostr.ts";
+import { renderChannelPairingDetail } from "./view.pairing.ts";
 import {
   boolStatusKind,
   formatNullableBoolean,
@@ -178,6 +179,14 @@ export function renderChannelDetail(params: {
         <div class="channels-detail__header">
           ${renderChannelArt(params.channelId, params.label, "cover")}
           <div class="channels-detail__header-actions">
+            <a
+              class="btn btn--sm"
+              href=${channelDocsUrl(params.channelId)}
+              target="_blank"
+              rel="noreferrer"
+            >
+              ${t("common.docs")}
+            </a>
             <button type="button" class="btn btn--sm" @click=${() => params.onSetup()}>
               ${t("channels.hub.runSetup")}
             </button>
@@ -195,7 +204,7 @@ export function renderChannelDetail(params: {
           ${params.props.setupBlockedByDirtyConfig && params.props.configFormDirty
             ? html`<div class="callout warn">${t("channels.hub.saveBeforeSetup")}</div>`
             : nothing}
-          ${body}
+          ${renderChannelPairingDetail(params.channelId, params.props)} ${body}
         </div>
       </div>
     </openclaw-modal-dialog>

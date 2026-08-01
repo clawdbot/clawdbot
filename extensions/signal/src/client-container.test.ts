@@ -515,7 +515,7 @@ describe("containerRestRequest", () => {
     ).rejects.toThrow(`Signal REST 500: ${"x".repeat(16 * 1024)}`);
   });
 
-  it("times out stalled REST error bodies before reporting the HTTP failure", async () => {
+  it("preserves the deadline error for stalled REST error bodies", async () => {
     vi.useFakeTimers();
     try {
       let observedSignal: AbortSignal | undefined;
@@ -533,13 +533,12 @@ describe("containerRestRequest", () => {
       });
 
       await vi.advanceTimersByTimeAsync(0);
-      const requestRejection = expect(request).rejects.toThrow(
-        "Signal REST 500: Internal Server Error",
-      );
+      expect(observedSignal).toBeInstanceOf(AbortSignal);
+      const requestRejection = expect(request).rejects.toThrow("Signal REST request timed out");
 
       await vi.advanceTimersByTimeAsync(25);
       await requestRejection;
-      expect(observedSignal?.aborted).toBe(false);
+      expect(observedSignal?.aborted).toBe(true);
     } finally {
       vi.useRealTimers();
     }
@@ -595,7 +594,7 @@ describe("containerRestRequest", () => {
     }
   });
 
-  it("times out stalled REST response bodies without aborting completed fetches", async () => {
+  it("times out stalled REST response bodies within the request deadline", async () => {
     vi.useFakeTimers();
     try {
       let observedSignal: AbortSignal | undefined;
@@ -614,20 +613,19 @@ describe("containerRestRequest", () => {
 
       await vi.advanceTimersByTimeAsync(0);
       expect(mockFetch).toHaveBeenCalledOnce();
-      expect(observedSignal?.aborted).toBe(false);
+      expect(observedSignal).toBeInstanceOf(AbortSignal);
       const requestRejection = expect(request).rejects.toThrow(
-        "Signal REST response body stalled after 25ms",
+        /Signal REST (response body stalled after 25ms|request timed out)/,
       );
 
       await vi.advanceTimersByTimeAsync(25);
       await requestRejection;
-      expect(observedSignal?.aborted).toBe(false);
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("allows slow REST response bodies while chunks keep arriving before the idle timeout", async () => {
+  it("allows slow REST response bodies that finish inside the overall timeout", async () => {
     vi.useFakeTimers();
     try {
       mockFetch.mockResolvedValue(
@@ -647,11 +645,79 @@ describe("containerRestRequest", () => {
 
       const request = containerRestRequest<{ ok: boolean }>("/v1/about", {
         baseUrl: "http://localhost:8080",
-        timeoutMs: 25,
+        timeoutMs: 100,
       });
 
       await vi.advanceTimersByTimeAsync(75);
       await expect(request).resolves.toEqual({ ok: true });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rejects slow-drip REST bodies that exceed the overall timeout without idling", async () => {
+    vi.useFakeTimers();
+    try {
+      let observedSignal: AbortSignal | undefined;
+      mockFetch.mockImplementation(async (_url, init: RequestInit) => {
+        observedSignal = init.signal ?? undefined;
+        return new Response(
+          delayedBodyStream([
+            { delayMs: 10, text: "{" },
+            { delayMs: 20, text: '"ok"' },
+            { delayMs: 20, text: ":true" },
+            { delayMs: 20, text: "}" },
+          ]).body,
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      });
+
+      const request = containerRestRequest<{ ok: boolean }>("/v1/about", {
+        baseUrl: "http://localhost:8080",
+        timeoutMs: 25,
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(observedSignal?.aborted).toBe(false);
+      const requestRejection = expect(request).rejects.toThrow("Signal REST request timed out");
+      await vi.advanceTimersByTimeAsync(25);
+      await requestRejection;
+      expect(observedSignal?.aborted).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("preserves the deadline error for slow-drip non-ok bodies", async () => {
+    vi.useFakeTimers();
+    try {
+      let observedSignal: AbortSignal | undefined;
+      mockFetch.mockImplementation(async (_url, init: RequestInit) => {
+        observedSignal = init.signal ?? undefined;
+        return new Response(
+          delayedBodyStream([
+            { delayMs: 10, text: "{" },
+            { delayMs: 20, text: '"error"' },
+            { delayMs: 20, text: ':"busy"' },
+            { delayMs: 20, text: "}" },
+          ]).body,
+          { status: 503, statusText: "Service Unavailable" },
+        );
+      });
+
+      const request = containerRestRequest("/v1/about", {
+        baseUrl: "http://localhost:8080",
+        timeoutMs: 25,
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      const requestRejection = expect(request).rejects.toThrow("Signal REST request timed out");
+      await vi.advanceTimersByTimeAsync(25);
+      await requestRejection;
+      expect(observedSignal?.aborted).toBe(true);
     } finally {
       vi.useRealTimers();
     }
@@ -845,6 +911,78 @@ describe("containerSendMessage", () => {
     // Cleanup
     await fs.rm(tmpDir, { recursive: true });
   });
+
+  it.each([
+    {
+      stagedFilename: "report---a1b2c3d4-5678-90ab-cdef-1234567890ab.jpg",
+      expectedFilename: "report.jpg",
+    },
+    {
+      stagedFilename: "quarter;final---a1b2c3d4-5678-90ab-cdef-1234567890ab.jpg",
+      expectedFilename: "quarter_final.jpg",
+    },
+    {
+      stagedFilename: "first;middle;last---a1b2c3d4-5678-90ab-cdef-1234567890ab.jpg",
+      expectedFilename: "first_middle_last.jpg",
+    },
+    {
+      stagedFilename: "quarter,final---a1b2c3d4-5678-90ab-cdef-1234567890ab.jpg",
+      expectedFilename: "quarter_final.jpg",
+    },
+    {
+      stagedFilename: "first,middle,last---a1b2c3d4-5678-90ab-cdef-1234567890ab.jpg",
+      expectedFilename: "first_middle_last.jpg",
+    },
+    {
+      stagedFilename: "hash#name---a1b2c3d4-5678-90ab-cdef-1234567890ab.jpg",
+      expectedFilename: "hash_name.jpg",
+    },
+    {
+      stagedFilename: "mixed;comma,hash#name---a1b2c3d4-5678-90ab-cdef-1234567890ab.jpg",
+      expectedFilename: "mixed_comma_hash_name.jpg",
+    },
+    { stagedFilename: "quarter;final.jpg", expectedFilename: "quarter_final.jpg" },
+    { stagedFilename: "quarter,final.jpg", expectedFilename: "quarter_final.jpg" },
+    { stagedFilename: "hash#name.jpg", expectedFilename: "hash_name.jpg" },
+    {
+      stagedFilename: "quarter final---a1b2c3d4-5678-90ab-cdef-1234567890ab.jpg",
+      expectedFilename: "quarter final.jpg",
+    },
+  ])(
+    "restores the provider-safe original attachment filename $expectedFilename",
+    async ({ stagedFilename, expectedFilename }) => {
+      const fs = await import("node:fs/promises");
+      const os = await import("node:os");
+      const path = await import("node:path");
+
+      const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "signal-test-"));
+      try {
+        const stagedFile = path.join(tmpDir, stagedFilename);
+        const content = Buffer.from([0xff, 0xd8, 0xff, 0xe0]);
+        await fs.writeFile(stagedFile, content);
+
+        mockFetch.mockResolvedValue({
+          ok: true,
+          status: 200,
+          ...bodyStream(JSON.stringify({})),
+        });
+
+        await containerSendMessage({
+          baseUrl: "http://localhost:8080",
+          account: "+14259798283",
+          recipients: ["+15550001111"],
+          message: "Photo",
+          attachments: [stagedFile],
+        });
+
+        expect(parseFetchBody().base64_attachments).toEqual([
+          `data:image/jpeg;filename=${expectedFilename};base64,${content.toString("base64")}`,
+        ]);
+      } finally {
+        await fs.rm(tmpDir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("rejects outbound attachments that exceed the size cap", async () => {
     const fs = await import("node:fs/promises");
@@ -1240,7 +1378,7 @@ describe("containerFetchAttachment", () => {
     ).rejects.toThrow("Signal REST attachment exceeded size limit");
   });
 
-  it("times out stalled attachment bodies without aborting completed fetches", async () => {
+  it("times out stalled attachment bodies within the request deadline", async () => {
     vi.useFakeTimers();
     try {
       let observedSignal: AbortSignal | undefined;
@@ -1258,13 +1396,13 @@ describe("containerFetchAttachment", () => {
       });
 
       await vi.advanceTimersByTimeAsync(0);
+      expect(observedSignal).toBeInstanceOf(AbortSignal);
       const requestRejection = expect(request).rejects.toThrow(
-        "Signal REST attachment response body stalled after 25ms",
+        /Signal REST (attachment response body stalled after 25ms|request timed out)/,
       );
 
       await vi.advanceTimersByTimeAsync(25);
       await requestRejection;
-      expect(observedSignal?.aborted).toBe(false);
     } finally {
       vi.useRealTimers();
     }

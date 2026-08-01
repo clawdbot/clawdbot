@@ -105,6 +105,25 @@ describe("docsSearchCommand", () => {
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
+  it("reports docs search responses with invalid UTF-8 bytes as malformed", async () => {
+    const body = new Uint8Array([
+      ...new TextEncoder().encode('{"results":[{"title":"Plugin allow'),
+      0xff,
+      ...new TextEncoder().encode('list","link":"https://docs.openclaw.ai/plugins/allowlist"}]}'),
+    ]);
+    fetchMock.mockResolvedValueOnce(
+      new Response(body, { headers: { "Content-Type": "application/json" } }),
+    );
+    const runtime = makeRuntime();
+
+    await docsSearchCommand(["plugin"], runtime);
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Docs search failed: Docs search response is malformed JSON",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
   it("renders successful results from the Cloudflare docs search API", async () => {
     fetchMock.mockResolvedValueOnce(
       new Response(

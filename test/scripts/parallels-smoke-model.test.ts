@@ -28,6 +28,7 @@ import {
   modelProviderConfigBatchJson,
   parseProvider,
   parseMacosDsclUserHomeLine,
+  readGitCommitEnv,
   readPositiveIntEnv,
   resolveLatestVersion,
   resolveParallelsModelTimeoutSeconds,
@@ -48,6 +49,7 @@ import {
 import {
   LinuxGuest,
   MacosGuest,
+  runPosixBackgroundShell,
   runWindowsBackgroundPowerShell,
 } from "../../scripts/e2e/parallels/guest-transports.ts";
 import { resolveHostCommandInvocation } from "../../scripts/e2e/parallels/host-command.ts";
@@ -115,13 +117,13 @@ function countNonEmptyLines(value: string): number {
   return count;
 }
 
-function expectFatalError(run: () => unknown, message: string): void {
+function expectFatalError(runTest: () => unknown, message: string): void {
   const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
   const exit = vi.spyOn(process, "exit").mockImplementation((code) => {
     throw new Error(`process.exit(${code})`);
   });
   try {
-    expect(run).toThrow("process.exit(1)");
+    expect(runTest).toThrow("process.exit(1)");
     expect(stderr).toHaveBeenLastCalledWith(`error: ${message}\n`);
   } finally {
     exit.mockRestore();
@@ -281,8 +283,44 @@ describe("Parallels smoke model selection", () => {
     expect(controller).toContain('prlctl stop "$VM_NAME" --acpi');
     expect(controller).toContain("HypervisorPresent");
     expect(controller).toContain("git --version && node --version && npm --version");
+    expect(controller).toContain("wait_for_check WSL 'wsl.exe --version'");
+    expect(controller).toContain("ensure_wsl_default_version");
+    expect(controller).toContain("WSL default version did not become 2 within 120 seconds");
+    expect(controller).toContain("1641 { exit 105 }");
+    expect(controller).toContain("3010 { exit 194 }");
+    expect(controller).toContain('run_bounded 1800 prlctl exec "$VM_NAME" powershell.exe');
+    expect(controller).not.toContain('run_windows_installer prlctl exec "$VM_NAME"');
+    expect(controller).toContain(
+      "if (Test-Path -LiteralPath '${GUEST_PROFILE_PS}/Downloads/OpenClawPrereqs')",
+    );
+    expect(controller).toContain("winget.exe download --source winget");
     expect(controller).toContain("OPENCLAW_PARALLELS_WINDOWS_LIBRARY_ONLY");
     expect(controller).not.toContain("openclaw-windows-node");
+  });
+
+  it("resets Linux product state before both install lanes", () => {
+    const linux = readFileSync(TS_PATHS.linux, "utf8");
+    for (const lane of ["fresh", "upgrade"]) {
+      const restoreIndex = linux.indexOf(`this.phase("${lane}.restore-snapshot"`);
+      const resetIndex = linux.indexOf(`this.phase("${lane}.reset-state"`);
+      const installIndex = linux.indexOf(
+        `this.phase("${lane}.${lane === "fresh" ? "install-latest-bootstrap" : "install-latest"}"`,
+      );
+      expect(restoreIndex).toBeGreaterThanOrEqual(0);
+      expect(resetIndex).toBeGreaterThan(restoreIndex);
+      expect(installIndex).toBeGreaterThan(resetIndex);
+    }
+    expect(linux).toContain("npm uninstall -g openclaw");
+    expect(linux).toContain("rm -rf /root/.openclaw /root/.npm/_cacache");
+  });
+
+  it("uses a forced Windows gateway stop only when the installed CLI supports it", () => {
+    const windows = readFileSync(TS_PATHS.windows, "utf8");
+    expect(windows).toContain("Invoke-OpenClaw gateway stop --help");
+    expect(windows).toContain("$stopHelp -match");
+    expect(windows).toContain("$gatewayArgs += '--force'");
+    expect(windows).toContain("Invoke-OpenClaw @gatewayArgs");
+    expect(windows).not.toContain('const forceFlag = action === "stop"');
   });
 
   it("preserves caller arguments when loaded as the Windows controller library", () => {
@@ -367,6 +405,7 @@ fetch_host_metadata "https://example.test/metadata"`,
     expect(parseMacosSmokeArgs(["--host-port", "65535"]).hostPort).toBe(65535);
     expect(parseLinuxSmokeArgs(["--host-port", "65535"]).hostPort).toBe(65535);
     expect(parseWindowsSmokeArgs(["--host-port", "65535"]).hostPort).toBe(65535);
+    expect(parseWindowsSmokeArgs([]).snapshotHint).toBe("pre-openclaw-native-e2e-");
     for (const parseArgs of [parseMacosSmokeArgs, parseLinuxSmokeArgs, parseWindowsSmokeArgs]) {
       expect(parseArgs(["--npm-registry", "http://192.0.2.2:48123"]).npmRegistry).toBe(
         "http://192.0.2.2:48123",
@@ -412,9 +451,10 @@ fetch_host_metadata "https://example.test/metadata"`,
     expect(providerAuth).toContain("OPENCLAW_PARALLELS_OPENAI_MODEL");
     expect(providerAuth).toContain("OPENCLAW_PARALLELS_WINDOWS_OPENAI_MODEL");
     expect(providerAuth).toContain("openai/gpt-5.6-luna");
-    expect(providerAuth).toContain('authChoice: "openai-api-key"');
     expect(providerAuth).toContain('authChoice: "apiKey"');
     expect(providerAuth).toContain('authChoice: "minimax-global-api"');
+    expect(providerAuth).toContain('tokenProvider: "openai"');
+    expect(providerAuth).toContain('tokenProvider: "anthropic"');
 
     for (const scriptPath of [...OS_TS_PATHS, TS_PATHS.npmUpdate]) {
       const script = readFileSync(scriptPath, "utf8");
@@ -423,6 +463,13 @@ fetch_host_metadata "https://example.test/metadata"`,
       expect(script, scriptPath).toContain("--model <provider/model>");
       expect(script, scriptPath).toContain("modelId");
     }
+
+    for (const scriptPath of [TS_PATHS.linux, TS_PATHS.macos]) {
+      expect(readFileSync(scriptPath, "utf8")).toContain(
+        '...(this.auth.tokenProvider ? ["--token-provider", this.auth.tokenProvider] : [])',
+      );
+    }
+    expect(readFileSync(TS_PATHS.windows, "utf8")).toContain("tokenProviderArg");
   });
 
   it("repairs only the exact missing Codex platform package failure with a fresh npm cache", () => {
@@ -507,6 +554,7 @@ fetch_host_metadata "https://example.test/metadata"`,
     expect(parallelsVm).toContain("export function waitForVmStatus");
     expect(hostServer).toContain("export async function startHostServer");
     expect(hostServer).toContain("export async function startNpmRegistryServer");
+    expect(hostServer).toContain("hostUrl: `http://127.0.0.1:${port}`");
     expect(hostServer).toContain('OPENCLAW_NPM_REGISTRY_UPSTREAM: "https://registry.npmjs.org"');
     expect(hostServer).toContain("http.server");
     expect(snapshots).toContain("export function resolveSnapshot");
@@ -759,6 +807,10 @@ if [[ "$1" == "snapshot-list" ]]; then
 {
   "{older}": {"name": "fresh", "state": "running"},
   "{wanted}": {"name": "fresh-poweroff-2026-04-01", "state": "poweroff"},
+  "{old-e2e}": {"name": "pre-openclaw-native-e2e-2026-03-12", "state": "poweroff", "date": "2026-03-12 22:32:24"},
+  "{new-e2e}": {"name": "pre-openclaw-native-e2e-2026-07-26", "state": "poweroff", "date": "2026-07-26 11:52:02"},
+  "{undated-first}": {"name": "undated-family-1", "state": "poweroff"},
+  "{dated-later}": {"name": "undated-family-2", "state": "poweroff", "date": "2026-07-26 11:52:02"},
   "{other}": {"name": "unrelated", "state": "poweroff"}
 }
 JSON
@@ -775,6 +827,10 @@ if (isPrlctl) {
     console.log(JSON.stringify({
       "{older}": { name: "fresh", state: "running" },
       "{wanted}": { name: "fresh-poweroff-2026-04-01", state: "poweroff" },
+      "{old-e2e}": { name: "pre-openclaw-native-e2e-2026-03-12", state: "poweroff", date: "2026-03-12 22:32:24" },
+      "{new-e2e}": { name: "pre-openclaw-native-e2e-2026-07-26", state: "poweroff", date: "2026-07-26 11:52:02" },
+      "{undated-first}": { name: "undated-family-1", state: "poweroff" },
+      "{dated-later}": { name: "undated-family-2", state: "poweroff", date: "2026-07-26 11:52:02" },
       "{other}": { name: "unrelated", state: "poweroff" },
     }));
     process.exit(0);
@@ -787,11 +843,20 @@ if (isPrlctl) {
     try {
       const output = withEnv(fakePrlctlEnv(tempDir), () => {
         const snapshot = resolveSnapshot("vm", "fresh");
-        return `${shellQuote("it's ok")}\n${[snapshot.id, snapshot.state, snapshot.name].join("\t")}`;
+        const latestE2e = resolveSnapshot("vm", "pre-openclaw-native-e2e-");
+        const missingDate = resolveSnapshot("vm", "undated-family-");
+        return [
+          shellQuote("it's ok"),
+          [snapshot.id, snapshot.state, snapshot.name].join("\t"),
+          [latestE2e.id, latestE2e.state, latestE2e.name].join("\t"),
+          [missingDate.id, missingDate.state, missingDate.name].join("\t"),
+        ].join("\n");
       });
 
       expect(output.split("\n")[0]).toBe("'it'\"'\"'s ok'");
       expect(output).toContain("{wanted}\tpoweroff\tfresh-poweroff-2026-04-01");
+      expect(output).toContain("{new-e2e}\tpoweroff\tpre-openclaw-native-e2e-2026-07-26");
+      expect(output).toContain("{undated-first}\tpoweroff\tundated-family-1");
     } finally {
       rmSync(tempDir, { force: true, recursive: true });
     }
@@ -1114,9 +1179,10 @@ if (isPrlctl) {
     ).toEqual({
       apiKeyEnv: "OPENAI_API_KEY",
       apiKeyValue: "sk-openai",
-      authChoice: "openai-api-key",
+      authChoice: "apiKey",
       authKeyFlag: "openai-api-key",
       modelId: "openai/gpt-5.6-luna",
+      tokenProvider: "openai",
     });
 
     expect(
@@ -1133,6 +1199,7 @@ if (isPrlctl) {
       authChoice: "apiKey",
       authKeyFlag: "anthropic-api-key",
       modelId: "anthropic/custom",
+      tokenProvider: "anthropic",
     });
   });
 
@@ -1144,9 +1211,10 @@ if (isPrlctl) {
     ).toEqual({
       apiKeyEnv: "OPENAI_API_KEY",
       apiKeyValue: "sk-openai",
-      authChoice: "openai-api-key",
+      authChoice: "apiKey",
       authKeyFlag: "openai-api-key",
       modelId: "openai/gpt-5.6-luna",
+      tokenProvider: "openai",
     });
 
     expect(
@@ -1160,9 +1228,10 @@ if (isPrlctl) {
     ).toEqual({
       apiKeyEnv: "OPENAI_API_KEY",
       apiKeyValue: "sk-openai",
-      authChoice: "openai-api-key",
+      authChoice: "apiKey",
       authKeyFlag: "openai-api-key",
       modelId: "openai/custom-windows",
+      tokenProvider: "openai",
     });
   });
 
@@ -1455,8 +1524,8 @@ exit 0
     expect(combined).toContain("MinGit-");
     expect(combined).toContain("portable-git");
     expect(combined).toContain("where.exe git.exe");
-    expect(windowsGit.indexOf('"MinGit-2.53.0.2-64-bit.zip"')).toBeLessThan(
-      windowsGit.indexOf('"MinGit-2.53.0.2-arm64.zip"'),
+    expect(windowsGit.indexOf('"MinGit-2.55.0.3-64-bit.zip"')).toBeLessThan(
+      windowsGit.indexOf('"MinGit-2.55.0.3-arm64.zip"'),
     );
     expect(
       combined.match(/curl\.exe -fsSL --connect-timeout 10 --max-time 120 --retry 2/g),
@@ -1489,7 +1558,7 @@ exit 0
     const script = readFileSync(TS_PATHS.npmUpdate, "utf8");
 
     expect(script).toContain("scripts/e2e/parallels-${platform}-smoke.sh");
-    expect(script).toContain('this.formatRerun("bash", args, env)');
+    expect(script).toContain('this.formatRerun("bash", args, commandEnv)');
     expect(script).toContain('"--model"');
     expect(script).toContain("auth.modelId");
     expect(script).toContain("authForPlatform");
@@ -1586,8 +1655,199 @@ exit 0
 
     expect(script).toContain('guestPowerShellBackground(\n      "install-latest"');
     expect(script).toContain("guestPowerShellBackground(\n      `install-main-${");
+    expect(script).toContain('guestPowerShellBackground(\n      "update-dev"');
     expect(script).not.toMatch(/private installMain\(tempName: string\): void/u);
     expect(script).not.toMatch(/private installLatestRelease\(\): void/u);
+    expect(script).not.toMatch(/private runDevChannelUpdate\(\): void/u);
+    expect(script).toContain("if (Test-Path $configPath)");
+    expect(script).toContain(
+      "New-Item -ItemType Directory -Path (Split-Path $configPath -Parent) -Force",
+    );
+  });
+
+  it("runs the macOS dev update through a detached done-file runner", () => {
+    const script = readFileSync(TS_PATHS.macos, "utf8");
+    const transports = readFileSync(TS_PATHS.guestTransports, "utf8");
+
+    expect(script).toContain('this.guest.shBackground(\n      "macos-update-dev"');
+    expect(transports).toContain('spawn("/bin/bash"');
+    expect(transports).toContain("detached: true");
+    expect(transports).toContain("child.unref()");
+    expect(transports).toContain("POSIX_BACKGROUND_LOG_MAX_BYTES");
+    expect(transports).toContain('runGuest(["/bin/test", "-f", donePath]');
+    expect(transports).toContain('runGuest(["/bin/cat", exitPath]');
+    expect(transports).toContain('["/bin/mkdir", "-m", "700", "-p", runDir]');
+    expect(transports).toContain('command=$(/bin/ps -p "$background_pid" -o command=');
+    expect(transports).toContain("*${posixSingleQuote(runnerPath)}*)");
+    expect(transports).not.toContain('transport(["/bin/bash", "-c"');
+    expect(script).toContain(
+      'fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, "utf8")) : {}',
+    );
+    expect(script).toContain("fs.mkdirSync(path.dirname(configPath), { recursive: true })");
+  });
+
+  it("accepts an ambiguous POSIX background launch after its run materializes", async () => {
+    const output: string[] = [];
+    let exitReads = 0;
+    const runCommand = vi.fn((_command: string, args: string[]) => {
+      if (args[0] === "node" && args[1]?.endsWith("/launcher.mjs")) {
+        return { status: 124, stderr: "", stdout: "" };
+      }
+      if (args[0] === "/bin/test" && args.at(-1)?.endsWith("/pid")) {
+        return { status: 0, stderr: "", stdout: "" };
+      }
+      if (args[0] === "/bin/test" && args.at(-1)?.endsWith("/done")) {
+        return { status: 0, stderr: "", stdout: "" };
+      }
+      if (args[0] === "/usr/bin/tail") {
+        return { status: 0, stderr: "", stdout: "update complete\n" };
+      }
+      if (args[0] === "/bin/cat" && args.at(-1)?.endsWith("/exit")) {
+        exitReads++;
+        if (exitReads === 1) {
+          return { status: 124, stderr: "", stdout: "" };
+        }
+        return { status: 0, stderr: "", stdout: "0\n" };
+      }
+      return { status: 0, stderr: "", stdout: "" };
+    });
+
+    await runPosixBackgroundShell({
+      append: (chunk) => output.push(String(chunk)),
+      label: "macos update",
+      pollIntervalMs: 1,
+      runCommand: runCommand as unknown as typeof run,
+      script: "echo update",
+      timeoutMs: 5_000,
+      transportArgs: (args) => args,
+    });
+
+    expect(output.join("")).toContain("update complete");
+  });
+
+  it("propagates a detached POSIX background exit failure", async () => {
+    const runCommand = vi.fn((_command: string, args: string[]) => {
+      if (args[0] === "node" && args[1]?.endsWith("/launcher.mjs")) {
+        return { status: 0, stderr: "", stdout: "started\n" };
+      }
+      if (args[0] === "/bin/test" && args.at(-1)?.endsWith("/done")) {
+        return { status: 0, stderr: "", stdout: "" };
+      }
+      if (args[0] === "/usr/bin/tail") {
+        return { status: 0, stderr: "", stdout: "update failed\n" };
+      }
+      if (args[0] === "/bin/cat" && args.at(-1)?.endsWith("/exit")) {
+        return { status: 0, stderr: "", stdout: "7\n" };
+      }
+      return { status: 0, stderr: "", stdout: "" };
+    });
+
+    await expect(
+      runPosixBackgroundShell({
+        label: "macos update",
+        pollIntervalMs: 1,
+        runCommand: runCommand as unknown as typeof run,
+        script: "exit 7",
+        timeoutMs: 5_000,
+        transportArgs: (args) => args,
+      }),
+    ).rejects.toThrow("macos update failed");
+  });
+
+  it("reads the POSIX background exit after log drain consumes the deadline", async () => {
+    let exitRead = false;
+    const runCommand = vi.fn((_command: string, args: string[]) => {
+      if (args[0] === "node" && args[1]?.endsWith("/launcher.mjs")) {
+        return { status: 0, stderr: "", stdout: "started\n" };
+      }
+      if (args[0] === "/bin/test" && args.at(-1)?.endsWith("/done")) {
+        return { status: 0, stderr: "", stdout: "" };
+      }
+      if (args[0] === "/usr/bin/tail") {
+        const until = Date.now() + 30;
+        while (Date.now() < until) {
+          // Simulate a completed log drain that exhausts the phase deadline.
+        }
+        return { status: 0, stderr: "", stdout: "update complete\n" };
+      }
+      if (args[0] === "/bin/cat" && args.at(-1)?.endsWith("/exit")) {
+        exitRead = true;
+        return { status: 0, stderr: "", stdout: "0\n" };
+      }
+      return { status: 0, stderr: "", stdout: "" };
+    });
+
+    await runPosixBackgroundShell({
+      label: "macos update",
+      pollIntervalMs: 1,
+      runCommand: runCommand as unknown as typeof run,
+      script: "echo update",
+      timeoutMs: 25,
+      transportArgs: (args) => args,
+    });
+
+    expect(exitRead).toBe(true);
+  });
+
+  it("cleans up an ambiguous POSIX launch when PID materialization is missed", async () => {
+    let cleanupRun = false;
+    const runCommand = vi.fn((_command: string, args: string[]) => {
+      if (args[0] === "node" && args[1]?.endsWith("/launcher.mjs")) {
+        return { status: 124, stderr: "", stdout: "" };
+      }
+      if (args[0] === "/bin/test" && args.at(-1)?.endsWith("/pid")) {
+        return { status: 1, stderr: "", stdout: "" };
+      }
+      if (args[0] === "/bin/bash" && args[1]?.endsWith("/cleanup.sh")) {
+        cleanupRun = true;
+      }
+      return { status: 0, stderr: "", stdout: "" };
+    });
+
+    await expect(
+      runPosixBackgroundShell({
+        label: "macos update",
+        pollIntervalMs: 1,
+        runCommand: runCommand as unknown as typeof run,
+        script: "sleep 60",
+        timeoutMs: 25,
+        transportArgs: (args) => args,
+      }),
+    ).rejects.toThrow("macos update background launch failed");
+
+    expect(cleanupRun).toBe(true);
+  });
+
+  it("force-stops the verified POSIX background process tree on timeout", async () => {
+    let cleanupPayload = "";
+    const runCommand = vi.fn((_command: string, args: string[], options?: { input?: string }) => {
+      if (args[0] === "/bin/dd" && args[1]?.includes("/cleanup.sh")) {
+        cleanupPayload = options?.input ?? "";
+      }
+      if (args[0] === "node" && args[1]?.endsWith("/launcher.mjs")) {
+        return { status: 0, stderr: "", stdout: "started\n" };
+      }
+      if (args[0] === "/bin/test" && args.at(-1)?.endsWith("/done")) {
+        return { status: 1, stderr: "", stdout: "" };
+      }
+      return { status: 0, stderr: "", stdout: "started\n" };
+    });
+
+    await expect(
+      runPosixBackgroundShell({
+        label: "macos update",
+        pollIntervalMs: 1,
+        runCommand: runCommand as unknown as typeof run,
+        script: "sleep 60",
+        timeoutMs: 25,
+        transportArgs: (args) => args,
+      }),
+    ).rejects.toThrow("macos update timed out");
+
+    expect(cleanupPayload).toContain('command=$(/bin/ps -p "$background_pid" -o command=');
+    expect(cleanupPayload).toContain('for child in $(/usr/bin/pgrep -P "$1"');
+    expect(cleanupPayload).toContain('/bin/kill -TERM "$1"');
+    expect(cleanupPayload).toContain('/bin/kill -KILL "$1"');
   });
 
   it("paces ambiguous Windows background launch materialization probes", async () => {
@@ -2194,6 +2454,16 @@ setInterval(() => {}, 1000);
         readPositiveIntEnv("OPENCLAW_PARALLELS_NUMERIC_TEST", 7),
       ),
     ).toBe(42);
+    expect(
+      withEnv({ OPENCLAW_PARALLELS_DEV_TARGET_REF: ` ${"A".repeat(40)} ` }, () =>
+        readGitCommitEnv("OPENCLAW_PARALLELS_DEV_TARGET_REF"),
+      ),
+    ).toBe("a".repeat(40));
+    expect(
+      withEnv({ OPENCLAW_PARALLELS_DEV_TARGET_REF: " " }, () =>
+        readGitCommitEnv("OPENCLAW_PARALLELS_DEV_TARGET_REF"),
+      ),
+    ).toBeUndefined();
 
     expectFatalError(
       () =>
@@ -2236,6 +2506,13 @@ setInterval(() => {}, 1000);
       "invalid OPENCLAW_PARALLELS_WINDOWS_UPDATE_TIMEOUT_S: 12.5",
     );
     expectFatalError(
+      () =>
+        withEnv({ OPENCLAW_PARALLELS_DEV_TARGET_REF: "main" }, () =>
+          readGitCommitEnv("OPENCLAW_PARALLELS_DEV_TARGET_REF"),
+        ),
+      "invalid OPENCLAW_PARALLELS_DEV_TARGET_REF: expected a full 40-character commit SHA",
+    );
+    expectFatalError(
       () => parseNpmUpdateSmokeArgs(["--platform", "macos,macos"]),
       "duplicate --platform entry: macos",
     );
@@ -2253,7 +2530,7 @@ setInterval(() => {}, 1000);
       'readPositiveIntEnv("OPENCLAW_PARALLELS_PACKAGE_LOCK_TIMEOUT_MS", 30 * 60_000)',
     );
     expect(readFileSync(TS_PATHS.npmUpdate, "utf8")).toContain(
-      'readPositiveIntEnv("OPENCLAW_PARALLELS_NPM_UPDATE_TIMEOUT_S", 1200)',
+      'readPositiveIntEnv("OPENCLAW_PARALLELS_NPM_UPDATE_TIMEOUT_S", 2700)',
     );
   });
 
@@ -2268,6 +2545,7 @@ setInterval(() => {}, 1000);
 
   it("keeps Windows update-only env flags scoped before verification", () => {
     const windows = readFileSync(TS_PATHS.windows, "utf8");
+    const macos = readFileSync(TS_PATHS.macos, "utf8");
     const powershell = readFileSync(TS_PATHS.powershell, "utf8");
 
     expect(powershell).toContain("windowsScopedEnvFunction");
@@ -2276,6 +2554,30 @@ setInterval(() => {}, 1000);
     );
     expect(windows).toContain("$script:OpenClawUpdateExit = $LASTEXITCODE");
     expect(windows).not.toContain("$env:OPENCLAW_DISABLE_BUNDLED_PLUGINS = '1'");
+    for (const script of [macos, windows]) {
+      expect(script).toContain('readGitCommitEnv("OPENCLAW_PARALLELS_DEV_TARGET_REF")');
+      expect(script).toContain("OPENCLAW_UPDATE_DEV_TARGET_REF");
+      expect(script).toContain('const expectedBranch = this.devTargetCommit ? "HEAD" : "main"');
+      expect(script).toContain("dev update checkout head");
+    }
+    expect(macos).toContain("OPENCLAW_UPDATE_DEV_TARGET_REF=${shellQuote(this.devTargetCommit)}");
+    expect(windows).toContain(
+      "OPENCLAW_UPDATE_DEV_TARGET_REF = ${psSingleQuote(this.devTargetCommit)}",
+    );
+  });
+
+  it("keeps Parallels dev updates on the test-owned gateway lifecycle", () => {
+    const macos = readFileSync(TS_PATHS.macos, "utf8");
+    const windows = readFileSync(TS_PATHS.windows, "utf8");
+
+    expect(macos).toContain(
+      "update --channel dev --yes --json --no-restart --timeout ${this.updateDevTimeoutSeconds}",
+    );
+    expect(windows).toContain(
+      "update --channel dev --yes --json --no-restart --timeout ${this.updateTimeoutSeconds}",
+    );
+    expect(macos).toContain("--install-daemon");
+    expect(windows).toContain("--install-daemon");
   });
 
   it("writes Parallels phase timing artifacts", () => {

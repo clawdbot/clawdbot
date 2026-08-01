@@ -185,7 +185,7 @@ describe("buildLineMessageContext", () => {
     );
   });
 
-  it("replaces a failed media placeholder with an unavailable notice", async () => {
+  it("keeps failed media-only command text empty and preserves its native media fact", async () => {
     const event = createMessageEvent({ type: "user", userId: "user-image" }, {
       message: {
         id: "image-1",
@@ -203,10 +203,40 @@ describe("buildLineMessageContext", () => {
       commandAuthorized: true,
     });
 
-    expect(context?.ctxPayload.RawBody).toBe("<media:image>");
-    expect(context?.ctxPayload.CommandBody).toBe("<media:image>");
+    expect(context?.ctxPayload.RawBody).toBe("");
+    expect(context?.ctxPayload.CommandBody).toBe("");
     expect(context?.ctxPayload.BodyForAgent).toBe("[line attachment unavailable]");
-    expect(context?.ctxPayload.MediaPath).toBeUndefined();
+    expect(context?.ctxPayload.media?.[0]).toMatchObject({
+      path: undefined,
+      kind: "image",
+    });
+  });
+
+  it("keeps materialized media-only text empty and projects structured media facts", async () => {
+    const event = createMessageEvent({ type: "user", userId: "user-image" }, {
+      message: {
+        id: "image-2",
+        type: "image",
+        contentProvider: { type: "line" },
+      },
+    } as Partial<MessageEvent>);
+
+    const context = await buildLineMessageContext({
+      event,
+      allMedia: [{ path: "/tmp/line-image.png", contentType: "image/png" }],
+      cfg,
+      account,
+      commandAuthorized: false,
+    });
+
+    expect(context?.ctxPayload.RawBody).toBe("");
+    expect(context?.ctxPayload.CommandBody).toBe("");
+    expect(context?.ctxPayload.BodyForAgent).toBe("");
+    expect(context?.ctxPayload.media?.[0]).toMatchObject({
+      path: "/tmp/line-image.png",
+      contentType: "image/png",
+      kind: "image",
+    });
   });
 
   it("routes group postback replies to the group id", async () => {

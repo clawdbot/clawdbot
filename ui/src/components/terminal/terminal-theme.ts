@@ -29,6 +29,10 @@ const ANSI = {
   brightWhite: "#ffffff",
 } as const;
 
+// Dark mirrors the claw tokens in styles/base.css (`--bg` #0e1015,
+// `--accent` #ff5c5c) — keep them in sync when the tokens change. Light is a
+// deliberate neutral cool white: the light theme families diverge (ivory,
+// cool white, parchment) and the canvas gets only a binary mode.
 const DYNAMIC_COLORS = {
   dark: { background: "#0e1015", cursor: "#ff5c5c", foreground: "#d7dae0" },
   light: { background: "#f7f8fa", cursor: "#1b1e26", foreground: "#1b1e26" },

@@ -12,6 +12,10 @@ import {
 } from "./subagent-registry-queries.js";
 import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import {
+  createSubagentRunRecord,
+  type SubagentRunRecordOverrides,
+} from "./subagent-test-fixtures.test-helpers.js";
 export {
   getSubagentSessionRuntimeMs,
   getSubagentSessionStartedAt,
@@ -28,6 +32,7 @@ type RegistryTestApi = {
   releaseSubagentRun(runId: string): void;
   resetSubagentRegistryForTests(opts?: { persist?: boolean }): void;
   testing: {
+    failQueuedSubagentRun(runId: string, error: string): boolean;
     sweepOnceForTests(): Promise<void>;
     runSweeperTickForTests(): Promise<void>;
     setDepsForTest(overrides?: Partial<RegistryDeps>): void;
@@ -65,8 +70,14 @@ export function resetSubagentRegistryForTests(opts?: { persist?: boolean }) {
   getRegistryTestApi().resetSubagentRegistryForTests(opts);
 }
 
-export function addSubagentRunForTests(entry: SubagentRunRecord) {
-  getRegistryTestApi().addSubagentRunForTests(entry);
+export function addSubagentRunForTests(entry: SubagentRunRecordOverrides) {
+  const canonical = createSubagentRunRecord(entry);
+  const target = entry as Record<string, unknown>;
+  for (const key of Object.keys(target)) {
+    delete target[key];
+  }
+  Object.assign(target, canonical);
+  getRegistryTestApi().addSubagentRunForTests(entry as SubagentRunRecord);
 }
 
 export function releaseSubagentRun(runId: string) {
@@ -82,6 +93,8 @@ export async function finalizeInterruptedSubagentRun(params: {
 }
 
 export const testing = {
+  failQueuedSubagentRun: (runId: string, error: string) =>
+    getRegistryTestApi().testing.failQueuedSubagentRun(runId, error),
   sweepOnceForTests: () => getRegistryTestApi().testing.sweepOnceForTests(),
   runSweeperTickForTests: () => getRegistryTestApi().testing.runSweeperTickForTests(),
   setDepsForTest: (overrides?: Partial<RegistryDeps>) =>

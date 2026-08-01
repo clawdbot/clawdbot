@@ -13,6 +13,11 @@ struct OpenClawActivityAttributes: ActivityAttributes {
             case approvalNeeded
             case actionRequired
             case attention
+            case toolRunning
+            case voiceListening
+            case voiceSpeaking
+            case voiceActive
+            case paused
             case idle
             case disconnected
         }
@@ -20,11 +25,19 @@ struct OpenClawActivityAttributes: ActivityAttributes {
         var status: Status
         var verbatimDetail: String?
         var startedAt: Date
+        var agentBadge: String?
+        var toolName: String?
+        /// Recent playback-envelope samples, oldest first, quantized from 0...1.
+        /// Live Activity updates carry the real audible signal across the app/widget boundary.
+        var voiceSamples: [UInt8]?
 
         private enum CodingKeys: String, CodingKey {
             case status
             case verbatimDetail
             case startedAt
+            case agentBadge
+            case toolName
+            case voiceSamples
         }
 
         private enum LegacyCodingKeys: String, CodingKey {
@@ -34,10 +47,20 @@ struct OpenClawActivityAttributes: ActivityAttributes {
             case isConnecting
         }
 
-        init(status: Status, verbatimDetail: String?, startedAt: Date) {
+        init(
+            status: Status,
+            verbatimDetail: String?,
+            startedAt: Date,
+            agentBadge: String? = nil,
+            toolName: String? = nil,
+            voiceSamples: [UInt8]? = nil)
+        {
             self.status = status
             self.verbatimDetail = verbatimDetail
             self.startedAt = startedAt
+            self.agentBadge = agentBadge
+            self.toolName = toolName
+            self.voiceSamples = voiceSamples
         }
 
         init(from decoder: Decoder) throws {
@@ -47,6 +70,9 @@ struct OpenClawActivityAttributes: ActivityAttributes {
             if let status = try container.decodeIfPresent(Status.self, forKey: .status) {
                 self.status = status
                 self.verbatimDetail = try container.decodeIfPresent(String.self, forKey: .verbatimDetail)
+                self.agentBadge = try container.decodeIfPresent(String.self, forKey: .agentBadge)
+                self.toolName = try container.decodeIfPresent(String.self, forKey: .toolName)
+                self.voiceSamples = try container.decodeIfPresent([UInt8].self, forKey: .voiceSamples)
                 return
             }
 
@@ -59,8 +85,11 @@ struct OpenClawActivityAttributes: ActivityAttributes {
                 isIdle: legacy.decodeIfPresent(Bool.self, forKey: .isIdle) ?? false,
                 isDisconnected: legacy.decodeIfPresent(Bool.self, forKey: .isDisconnected) ?? false,
                 isConnecting: legacy.decodeIfPresent(Bool.self, forKey: .isConnecting) ?? false)
-            self.status = presentation.status
+            status = presentation.status
             self.verbatimDetail = presentation.verbatimDetail
+            self.agentBadge = nil
+            self.toolName = nil
+            self.voiceSamples = nil
         }
 
         func encode(to encoder: Encoder) throws {
@@ -68,6 +97,9 @@ struct OpenClawActivityAttributes: ActivityAttributes {
             try container.encode(self.status, forKey: .status)
             try container.encodeIfPresent(self.verbatimDetail, forKey: .verbatimDetail)
             try container.encode(self.startedAt, forKey: .startedAt)
+            try container.encodeIfPresent(self.agentBadge, forKey: .agentBadge)
+            try container.encodeIfPresent(self.toolName, forKey: .toolName)
+            try container.encodeIfPresent(self.voiceSamples, forKey: .voiceSamples)
         }
 
         private static func legacyPresentation(

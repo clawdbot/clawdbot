@@ -10,7 +10,7 @@ import { buildWorkerConnectParams, parseWorkerLaunchDescriptor } from "./launch-
 
 function launchDescriptor(): WorkerLaunchDescriptor {
   return {
-    version: 1,
+    version: 2,
     socketPath: "/tmp/openclaw-worker/gateway.sock",
     admission: {
       environmentId: "environment-1",
@@ -41,6 +41,7 @@ function launchDescriptor(): WorkerLaunchDescriptor {
       ],
       transcript: { baseLeafId: "leaf-7", nextSeq: 8 },
       liveEvents: { ackedSeq: 12, nextSeq: 13 },
+      toolAuthority: { allowedToolNames: ["read", "exec"] },
     },
   };
 }
@@ -97,6 +98,13 @@ describe("worker launch descriptor", () => {
           liveEvents: { ...descriptor.assignment.liveEvents, unexpected: true },
         },
       },
+      {
+        ...descriptor,
+        assignment: {
+          ...descriptor.assignment,
+          toolAuthority: { ...descriptor.assignment.toolAuthority, unexpected: true },
+        },
+      },
     ];
 
     for (const candidate of cases) {
@@ -104,6 +112,38 @@ describe("worker launch descriptor", () => {
         "invalid worker launch descriptor",
       );
     }
+  });
+
+  it("requires a unique closed worker tool authority", () => {
+    const descriptor = launchDescriptor();
+    const { toolAuthority: _missing, ...assignmentWithoutAuthority } = descriptor.assignment;
+    const cases: unknown[] = [
+      { ...descriptor, version: 1 },
+      { ...descriptor, assignment: assignmentWithoutAuthority },
+      {
+        ...descriptor,
+        assignment: {
+          ...descriptor.assignment,
+          toolAuthority: { allowedToolNames: ["read", "read"] },
+        },
+      },
+      {
+        ...descriptor,
+        assignment: {
+          ...descriptor.assignment,
+          toolAuthority: { allowedToolNames: ["read", "gateway"] },
+        },
+      },
+    ];
+
+    for (const candidate of cases) {
+      expect(() => parseWorkerLaunchDescriptor(candidate)).toThrow(
+        "invalid worker launch descriptor",
+      );
+    }
+
+    descriptor.assignment.toolAuthority.allowedToolNames = [];
+    expect(parseWorkerLaunchDescriptor(structuredClone(descriptor))).toEqual(descriptor);
   });
 
   it("rejects non-absolute paths, unattached sessions, and discontinuous event sequences", () => {

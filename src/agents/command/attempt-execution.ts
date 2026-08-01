@@ -18,8 +18,10 @@ import {
   setChannelSourceTurnId,
   setChannelSourceTurnSameThreadRequired,
 } from "../../auto-reply/reply/source-turn-id.js";
+import { messageToolOwnsVisibleReply } from "../../auto-reply/source-reply-delivery-mode.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import { persistSessionTranscriptTurn } from "../../config/sessions/session-accessor.js";
+import { acquireOwnedSessionTranscriptWriteLock } from "../../config/sessions/transcript-write-context.js";
 import { readTailAssistantTextFromSessionTranscript } from "../../config/sessions/transcript.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -29,7 +31,6 @@ import {
 } from "../../gateway/server-methods/agent-timestamp.js";
 import { emitAgentAuditEvent, emitAgentEvent } from "../../infra/agent-events.js";
 import { emitTrustedDiagnosticEvent } from "../../infra/diagnostic-events.js";
-import { readErrorName } from "../../infra/errors.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
@@ -51,6 +52,10 @@ import { resolveUserPath } from "../../utils.js";
 import { resolveMessageChannel } from "../../utils/message-channel.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
 import { ensureAuthProfileStore } from "../auth-profiles/store.js";
+import {
+  resizeExecApprovalContinuationPrompt,
+  type ExecApprovalContinuationPromptRange,
+} from "../bash-tools.exec-approval-output.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../bootstrap-budget.js";
 import { resolveCliBackendConfig } from "../cli-backends.js";
 import {
@@ -60,20 +65,38 @@ import {
 import { runCliAgent } from "../cli-runner.js";
 import { hasClaudeLiveSessionForOwner } from "../cli-runner/claude-live-session.js";
 import { resolveCliRuntimeToolsAllow } from "../cli-runner/tool-policy.js";
-import { getCliSessionBinding } from "../cli-session.js";
+import {
+  getCliSessionBinding,
+  resolveCliSessionClearReason,
+  shouldClearFailedCliSessionBinding,
+} from "../cli-session.js";
+import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
+import { resolveConversationToolPolicies } from "../conversation-tool-policy-pipeline.js";
 import { runEmbeddedAgent, type EmbeddedAgentRunResult } from "../embedded-agent.js";
-import { FailoverError } from "../failover-error.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../harness/hook-helpers.js";
 import { resolveAvailableAgentHarnessPolicy } from "../harness/selection.js";
 import { resolveCliRuntimeExecutionProvider } from "../model-runtime-aliases.js";
 import { isCliProvider } from "../model-selection.js";
 import { resolveOpenAIRuntimeProvider } from "../openai-routing.js";
-import type { AgentRunSessionTarget } from "../run-session-target.js";
+import { hasVerifiedRequesterCompletionHandoff } from "../requester-tool-policy.js";
+import { resolveAgentRunSessionTarget, type AgentRunSessionTarget } from "../run-session-target.js";
 import { resolveAgentRunAbortLifecycleFields } from "../run-termination.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import type { AgentMessage } from "../runtime/index.js";
+import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
 import { withLocalSessionPlacementTurnAdmission } from "../session-placement-admission.js";
+import {
+  acquireSessionWriteLock,
+  resolveSessionWriteLockOptions,
+  resolveSessionWriteLockTargetKey,
+} from "../session-write-lock.js";
 import { buildUsageWithNoCost } from "../stream-message-shared.js";
+import {
+  isSubagentAnnounceCompletionHandoff,
+  isTrustedSubagentCompletionHandoffForRun,
+} from "../subagent-announce-handoff.js";
+import { isRuntimeToolAllowed, isToolAllowedByPolicies } from "../tool-policy-match.js";
+import { DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS } from "../tool-result-limits.js";
 import {
   buildClaudeCliFallbackContextPrelude,
   claudeCliSessionTranscriptHasContent,
@@ -95,18 +118,22 @@ export {
 
 const log = createSubsystemLogger("agents/agent-command");
 
-function shouldClearReusedCliSessionAfterError(err: unknown): boolean {
-  if (readErrorName(err) === "AbortError") {
-    return true;
+function rebaseExecApprovalContinuationPromptRange(params: {
+  body: string;
+  prompt: string;
+  range?: ExecApprovalContinuationPromptRange;
+}): ExecApprovalContinuationPromptRange | undefined {
+  if (!params.range) {
+    return undefined;
   }
-  return err instanceof FailoverError;
-}
-
-function resolveClearedCliSessionReason(err: unknown): string {
-  if (err instanceof FailoverError) {
-    return err.reason;
+  if (!params.prompt.endsWith(params.body)) {
+    throw new Error("exec approval continuation prompt range could not be rebased");
   }
-  return readErrorName(err) || "error";
+  const offset = params.prompt.length - params.body.length;
+  return {
+    start: offset + params.range.start,
+    end: offset + params.range.end,
+  };
 }
 
 function normalizeTranscriptMirrorText(value: string): string {
@@ -155,6 +182,7 @@ type PersistTextTurnTranscriptParams = {
   sessionCwd: string;
   config: OpenClawConfig;
   embeddedAssistantGapFill?: boolean;
+  skipAssistantTurn?: boolean;
   assistant: {
     api: string;
     provider: string;
@@ -273,7 +301,7 @@ async function persistTextTurnTranscript(
   params: PersistTextTurnTranscriptParams,
 ): Promise<PersistTextTurnTranscriptResult> {
   const promptText = params.transcriptBody ?? params.body;
-  const replyText = params.finalText;
+  const replyText = params.skipAssistantTurn === true ? "" : params.finalText;
   const userMessage =
     params.userMessage ??
     (promptText
@@ -313,11 +341,13 @@ async function persistTextTurnTranscript(
         stopReason: "stop",
         timestamp: Date.now(),
       },
-      shouldAppend: async ({ sessionFile }: { sessionFile: string }) => {
+      shouldAppend: async (
+        context: import("../../config/sessions/session-accessor.js").SessionTranscriptTurnWriteContext,
+      ) => {
         if (!params.embeddedAssistantGapFill) {
           return true;
         }
-        const latest = await readTailAssistantTextFromSessionTranscript(sessionFile, {
+        const latest = await readTailAssistantTextFromSessionTranscript(context, {
           excludeTranscriptOnlyOpenClawAssistant: true,
         });
         const normalizedReply = normalizeTranscriptMirrorText(replyText);
@@ -415,6 +445,7 @@ export async function persistCliTurnTranscript(params: {
   config: OpenClawConfig;
   embeddedAssistantGapFill?: boolean;
   skipUserTurn?: boolean;
+  skipAssistantTurn?: boolean;
 }): Promise<PersistTextTurnTranscriptResult> {
   const replyText = resolveCliTranscriptReplyText(params.result);
   const provider = params.result.meta.agentMeta?.provider?.trim() ?? "cli";
@@ -422,29 +453,65 @@ export async function persistCliTurnTranscript(params: {
   const gapFill = params.embeddedAssistantGapFill ?? false;
   const skipUserTurn = gapFill || params.skipUserTurn === true;
 
-  return await persistTextTurnTranscript({
-    body: skipUserTurn ? "" : params.body,
-    transcriptBody: skipUserTurn ? undefined : params.transcriptBody,
-    ...(!skipUserTurn && params.userMessage ? { userMessage: params.userMessage } : {}),
-    finalText: replyText,
+  const persist = async () =>
+    await persistTextTurnTranscript({
+      body: skipUserTurn ? "" : params.body,
+      transcriptBody: skipUserTurn ? undefined : params.transcriptBody,
+      ...(!skipUserTurn && params.userMessage ? { userMessage: params.userMessage } : {}),
+      finalText: replyText,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      sessionFile: params.sessionFile,
+      sessionEntry: params.sessionEntry,
+      sessionStore: params.sessionStore,
+      storePath: params.storePath,
+      sessionAgentId: params.sessionAgentId,
+      threadId: params.threadId,
+      sessionCwd: params.sessionCwd,
+      config: params.config,
+      embeddedAssistantGapFill: gapFill,
+      assistant: {
+        api: "cli",
+        provider,
+        model,
+        usage: params.result.meta.agentMeta?.usage,
+      },
+      skipAssistantTurn: params.skipAssistantTurn,
+    });
+  if (!gapFill) {
+    return await persist();
+  }
+
+  const sessionTarget = await resolveAgentRunSessionTarget({
+    agentId: params.sessionAgentId,
+    config: params.config,
+    sessionFile: params.sessionFile,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
-    sessionFile: params.sessionFile,
-    sessionEntry: params.sessionEntry,
-    sessionStore: params.sessionStore,
-    storePath: params.storePath,
-    sessionAgentId: params.sessionAgentId,
-    threadId: params.threadId,
-    sessionCwd: params.sessionCwd,
-    config: params.config,
-    embeddedAssistantGapFill: gapFill,
-    assistant: {
-      api: "cli",
-      provider,
-      model,
-      usage: params.result.meta.agentMeta?.usage,
+    sessionTarget: {
+      agentId: params.sessionAgentId,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      ...(params.storePath ? { storePath: params.storePath } : {}),
+      ...(params.threadId !== undefined ? { threadId: params.threadId } : {}),
     },
   });
+  const sessionLock =
+    (await acquireOwnedSessionTranscriptWriteLock({
+      sessionFile: params.sessionFile,
+      sessionKey: params.sessionKey,
+      sessionTarget,
+    })) ??
+    (await acquireSessionWriteLock({
+      sessionFile: resolveSessionWriteLockTargetKey(sessionTarget),
+      targetKind: "session-key",
+      ...resolveSessionWriteLockOptions(params.config),
+    }));
+  try {
+    return await persist();
+  } finally {
+    await sessionLock.release();
+  }
 }
 
 export function runAgentAttempt(params: {
@@ -514,6 +581,79 @@ export function runAgentAttempt(params: {
           ? { id: sessionAuthProfileId, source: sessionAuthProfileSource }
           : undefined;
   const isRawModelRun = params.opts.modelRun === true || params.opts.promptMode === "none";
+  // A completion handoff relays frozen child output, so only a verified private
+  // capability plus persisted requester lineage may restore its tool surface.
+  const isSubagentAnnounceHandoff = isSubagentAnnounceCompletionHandoff({
+    inputProvenance: params.opts.inputProvenance,
+    internalEvents: params.opts.internalEvents,
+  });
+  const exactSubagentAnnounceHandoff =
+    isSubagentAnnounceHandoff &&
+    isTrustedSubagentCompletionHandoffForRun({
+      handoff: params.opts.trustedInternalHandoff,
+      inputProvenance: params.opts.inputProvenance,
+      internalEvents: params.opts.internalEvents,
+      sessionKey: params.sessionKey,
+      sessionId: params.sessionId,
+      provider: params.providerOverride,
+      model: params.modelOverride,
+    });
+  const trustedSubagentAnnounceHandoff =
+    exactSubagentAnnounceHandoff &&
+    hasVerifiedRequesterCompletionHandoff({
+      config: params.cfg,
+      sessionKey: params.sessionKey,
+      inputProvenance: params.opts.inputProvenance,
+      trustedInternalHandoff: params.opts.trustedInternalHandoff,
+      sessionId: params.sessionId,
+      modelProvider: params.providerOverride,
+      modelId: params.modelOverride,
+    });
+  const completionRequestsMessageDelivery =
+    trustedSubagentAnnounceHandoff &&
+    !isRawModelRun &&
+    params.opts.disableMessageTool !== true &&
+    messageToolOwnsVisibleReply(params.opts);
+  const completionSandboxStatus = completionRequestsMessageDelivery
+    ? resolveSandboxRuntimeStatus({
+        cfg: params.cfg,
+        sessionKey: params.sessionKey,
+        agentId: params.sessionAgentId,
+      })
+    : undefined;
+  const completionCapabilityProfile = completionRequestsMessageDelivery
+    ? resolveConversationCapabilityProfile({
+        config: params.cfg,
+        sessionKey: params.sessionKey,
+        sessionId: params.sessionId,
+        agentId: params.sessionAgentId,
+        senderId: params.runContext.senderId,
+        modelProvider: params.providerOverride,
+        modelId: params.modelOverride,
+        sandboxToolPolicy: completionSandboxStatus?.sandboxed
+          ? completionSandboxStatus.toolPolicy
+          : undefined,
+        inputProvenance: params.opts.inputProvenance,
+        trustedInternalHandoff: params.opts.trustedInternalHandoff,
+      })
+    : undefined;
+  const completionToolPolicies = completionCapabilityProfile
+    ? resolveConversationToolPolicies({
+        capabilityProfile: completionCapabilityProfile,
+        additionalProfileAllow: ["message"],
+        // The source-bound delivery grant extends restrictive allowlists only;
+        // explicit denies still win at every policy layer.
+        additionalPolicyAllow: ["message"],
+        additionalInheritedAllow: ["message"],
+      })
+    : undefined;
+  // Forced private delivery is not authority: retain every parent/operator cap
+  // and mint only the source-bound message capability from a verified envelope.
+  const completionNeedsMessageDelivery =
+    completionCapabilityProfile?.policy.requesterPolicySource === "completion-handoff" &&
+    completionToolPolicies !== undefined &&
+    isToolAllowedByPolicies("message", Object.values(completionToolPolicies)) &&
+    isRuntimeToolAllowed("message", params.opts.toolsAllow);
   const claudeCliFallbackPrelude =
     !isRawModelRun &&
     params.isFallbackRetry &&
@@ -532,6 +672,17 @@ export function runAgentAttempt(params: {
   const effectivePrompt = isRawModelRun
     ? resolvedPrompt
     : annotateInterSessionPromptText(resolvedPrompt, params.opts.inputProvenance);
+  const embeddedExecApprovalContinuationPromptRange = rebaseExecApprovalContinuationPromptRange({
+    body: params.body,
+    prompt: effectivePrompt,
+    range: params.opts.execApprovalContinuationPromptRange,
+  });
+  const continuationTranscriptBody = params.opts.execApprovalContinuationPromptRange
+    ? (params.transcriptBody ?? params.body)
+    : params.transcriptBody;
+  const continuationTranscriptPromptRange =
+    params.opts.execApprovalContinuationTranscriptPromptRange ??
+    params.opts.execApprovalContinuationPromptRange;
   const bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
     params.sessionEntry?.systemPromptReport,
   );
@@ -563,6 +714,28 @@ export function runAgentAttempt(params: {
   const isCliExecutionProvider = sessionRuntimeOverride
     ? sessionCliRuntime !== undefined
     : isCliProvider(cliExecutionProvider, params.cfg);
+  const completionRetainsRequesterTools =
+    trustedSubagentAnnounceHandoff &&
+    !isRawModelRun &&
+    !isCliExecutionProvider &&
+    (!messageToolOwnsVisibleReply(params.opts) || completionNeedsMessageDelivery);
+  // Message-tool-only delivery constrains the visible reply, not the parent
+  // continuation's verified authority. Keep the inherited cap while requiring
+  // message to survive every applicable policy before enabling any tools.
+  // An explicit cap is enforced even when tools are disabled; clear it so a
+  // denied completion can finish tool-free and its owner can relay frozen text.
+  const runtimeToolsAllow = isSubagentAnnounceHandoff
+    ? completionRetainsRequesterTools
+      ? params.opts.toolsAllow
+      : completionNeedsMessageDelivery
+        ? ["message"]
+        : undefined
+    : params.opts.toolsAllow;
+  const disableTools =
+    params.opts.modelRun === true ||
+    (isSubagentAnnounceHandoff &&
+      !completionRetainsRequesterTools &&
+      !completionNeedsMessageDelivery);
   if (params.fallbackRuntimeState && params.fallbackRuntimeState.originRuntime === undefined) {
     params.fallbackRuntimeState.originRuntime =
       !isRawModelRun && isCliExecutionProvider ? "cli" : "embedded";
@@ -644,10 +817,39 @@ export function runAgentAttempt(params: {
   if (!isRawModelRun && isCliExecutionProvider) {
     const cliSessionBinding = getCliSessionBinding(params.sessionEntry, cliExecutionProvider);
     const cliProcessCwd = params.cwd ? resolveUserPath(params.cwd) : params.workspaceDir;
+    const cliContinuationBody = params.opts.execApprovalContinuationPromptRange
+      ? resizeExecApprovalContinuationPrompt({
+          prompt: params.body,
+          range: params.opts.execApprovalContinuationPromptRange,
+          maxOutputUtf16Units: DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
+        })
+      : params.body;
+    const cliResolvedPrompt = params.opts.execApprovalContinuationPromptRange
+      ? resolveFallbackRetryPrompt({
+          body: cliContinuationBody,
+          isFallbackRetry: params.isFallbackRetry,
+          sessionHasHistory: params.sessionHasHistory,
+          priorContextPrelude: claudeCliFallbackPrelude,
+        })
+      : resolvedPrompt;
+    const cliEffectivePrompt = params.opts.execApprovalContinuationPromptRange
+      ? annotateInterSessionPromptText(cliResolvedPrompt, params.opts.inputProvenance)
+      : effectivePrompt;
+    const cliTranscriptPrompt =
+      continuationTranscriptBody === undefined || !continuationTranscriptPromptRange
+        ? continuationTranscriptBody
+        : resizeExecApprovalContinuationPrompt({
+            prompt: continuationTranscriptBody,
+            range: continuationTranscriptPromptRange,
+            maxOutputUtf16Units: DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
+          });
+    params.userTurnTranscriptRecorder?.replaceTextBeforePersistence?.(
+      cliTranscriptPrompt ?? cliContinuationBody,
+    );
     const cliPrompt =
       params.opts.inputProvenance?.kind === "inter_session"
-        ? effectivePrompt
-        : injectTimestamp(effectivePrompt, timestampOptsFromConfig(params.cfg));
+        ? cliEffectivePrompt
+        : injectTimestamp(cliEffectivePrompt, timestampOptsFromConfig(params.cfg));
     const mutableCliSessionStore =
       params.sessionKey && params.sessionStore && params.storePath
         ? {
@@ -706,16 +908,15 @@ export function runAgentAttempt(params: {
       activeCliSessionBinding = cliSessionBinding,
     ) => {
       const forkCliSessionOnResume = activeCliSessionBinding?.forkNextResume === true;
-      if (
-        forkCliSessionOnResume &&
-        !resolveCliBackendConfig(cliExecutionProvider, params.cfg, {
-          agentId: params.sessionAgentId,
-        })?.config.forkArg
-      ) {
+      const resolvedCliBackend = resolveCliBackendConfig(cliExecutionProvider, params.cfg, {
+        agentId: params.sessionAgentId,
+      });
+      const supportsCliSessionFork = Boolean(resolvedCliBackend?.config.forkArg);
+      if (forkCliSessionOnResume && !supportsCliSessionFork) {
         throw new Error(`CLI backend "${cliExecutionProvider}" does not support session forks`);
       }
       const forkStoreParams =
-        forkCliSessionOnResume && nextCliSessionId && mutableCliSessionStore
+        supportsCliSessionFork && nextCliSessionId && mutableCliSessionStore
           ? {
               provider: cliExecutionProvider,
               expectedCliSessionId: nextCliSessionId,
@@ -742,7 +943,7 @@ export function runAgentAttempt(params: {
             cwd: params.cwd,
             config: params.cfg,
             prompt: cliPrompt,
-            transcriptPrompt: params.transcriptBody,
+            transcriptPrompt: cliTranscriptPrompt,
             modelProvider: params.providerOverride,
             provider: cliExecutionProvider,
             model: params.modelOverride,
@@ -800,11 +1001,18 @@ export function runAgentAttempt(params: {
             // accompany every CLI process. Native dedupe requires a runtime receipt.
             images: params.opts.images,
             imageOrder: params.opts.imageOrder,
+            media: params.opts.media,
             skillsSnapshot: params.skillsSnapshot,
             messageChannel: params.messageChannel,
             streamParams: params.opts.streamParams,
             messageProvider: params.opts.messageProvider ?? params.messageChannel,
-            currentChannelId: params.runContext.currentChannelId,
+            // Completion relays can carry the trusted source only in their
+            // delivery target; the restricted CLI grant must retain that owner.
+            currentChannelId:
+              params.runContext.currentChannelId ??
+              (completionNeedsMessageDelivery
+                ? (params.opts.replyTo ?? params.opts.to)
+                : undefined),
             chatId: params.runContext.chatId,
             channelContext: params.runContext.channelContext,
             currentThreadTs: params.runContext.currentThreadTs,
@@ -819,17 +1027,20 @@ export function runAgentAttempt(params: {
             groupSpace: params.runContext.groupSpace,
             spawnedBy: params.spawnedBy,
             toolsAllow: resolveCliRuntimeToolsAllow(
-              params.opts.toolsAllow,
+              runtimeToolsAllow,
               params.opts.toolsAllowIsDefault,
             ),
+            scheduledToolPolicy: params.opts.scheduledToolPolicy,
             cleanupBundleMcpOnRunEnd: params.opts.cleanupBundleMcpOnRunEnd,
             cleanupCliLiveSessionOnRunEnd: params.opts.cleanupCliLiveSessionOnRunEnd,
             oneShotCliRun: params.opts.oneShotCliRun,
             userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
             suppressNextUserMessagePersistence: params.suppressPromptPersistenceOnRetry === true,
-            ...(mutableCliSessionStore && !forkCliSessionOnResume
+            disableTools,
+            allowEmptyAssistantReplyAsSilent: isSubagentAnnounceHandoff,
+            ...(forkStoreParams && !forkCliSessionOnResume
               ? {
-                  onBeforeFreshCliSessionRetry: async (retry) => {
+                  onBeforeForkedCliSessionRetry: async (retry) => {
                     if (
                       hasNewGeneratedMediaTaskForSessionKey(
                         params.sessionKey,
@@ -841,14 +1052,39 @@ export function runAgentAttempt(params: {
                     }
 
                     log.warn(
+                      `CLI session stalled, arming forked recovery: provider=${sanitizeForLog(cliExecutionProvider)} sessionKey=${forkStoreParams.sessionKey}`,
+                    );
+
+                    const armed = await restoreCliSessionForkInStore(forkStoreParams);
+                    if (armed) {
+                      params.sessionEntry = armed;
+                    }
+                    return Boolean(armed);
+                  },
+                }
+              : {}),
+            ...(mutableCliSessionStore
+              ? {
+                  onBeforeFreshCliSessionRetry: async (retry) => {
+                    if (
+                      hasNewGeneratedMediaTaskForSessionKey(params.sessionKey, mediaTaskIdsBefore)
+                    ) {
+                      return false;
+                    }
+
+                    log.warn(
                       `CLI session failed, clearing before fresh retry: provider=${sanitizeForLog(cliExecutionProvider)} sessionKey=${mutableCliSessionStore.sessionKey} reason=${sanitizeForLog(retry.reason)}`,
                     );
 
-                    params.sessionEntry =
-                      (await clearCliSessionInStore({
-                        provider: cliExecutionProvider,
-                        ...mutableCliSessionStore,
-                      })) ?? params.sessionEntry;
+                    const cleared = await clearCliSessionInStore({
+                      provider: cliExecutionProvider,
+                      expectedCliSessionId: retry.sessionId,
+                      ...mutableCliSessionStore,
+                    });
+                    if (!cleared) {
+                      return false;
+                    }
+                    params.sessionEntry = cleared;
                     return true;
                   },
                 }
@@ -860,21 +1096,32 @@ export function runAgentAttempt(params: {
       try {
         return await runCliWithSession(activeCliSessionBinding?.sessionId, activeCliSessionBinding);
       } catch (err) {
+        const failedCliSessionBinding = getCliSessionBinding(
+          params.sessionEntry,
+          cliExecutionProvider,
+        );
+        const failedCliSessionId = failedCliSessionBinding?.sessionId;
         if (
           isClaudeCliProvider(cliExecutionProvider) &&
-          !activeCliSessionBinding?.forkNextResume &&
-          shouldClearReusedCliSessionAfterError(err) &&
-          !hasNewGeneratedMediaTaskForSessionKey(params.sessionKey, mediaTaskIdsBefore) &&
-          activeCliSessionBinding?.sessionId &&
+          shouldClearFailedCliSessionBinding({
+            error: err,
+            binding: failedCliSessionBinding,
+            hasNewGeneratedMediaTask: hasNewGeneratedMediaTaskForSessionKey(
+              params.sessionKey,
+              mediaTaskIdsBefore,
+            ),
+          }) &&
+          failedCliSessionId &&
           mutableCliSessionStore
         ) {
           log.warn(
-            `CLI session cleared after failed reused turn: provider=${sanitizeForLog(cliExecutionProvider)} sessionKey=${mutableCliSessionStore.sessionKey} reason=${sanitizeForLog(resolveClearedCliSessionReason(err))}`,
+            `CLI session cleared after failed reused turn: provider=${sanitizeForLog(cliExecutionProvider)} sessionKey=${mutableCliSessionStore.sessionKey} reason=${sanitizeForLog(resolveCliSessionClearReason(err))}`,
           );
 
           params.sessionEntry =
             (await clearCliSessionInStore({
               provider: cliExecutionProvider,
+              expectedCliSessionId: failedCliSessionId,
               ...mutableCliSessionStore,
             })) ?? params.sessionEntry;
         }
@@ -917,11 +1164,12 @@ export function runAgentAttempt(params: {
     agentHarnessRuntimeOverride: embeddedAgentHarnessOverride,
     skillsSnapshot: params.skillsSnapshot,
     prompt: effectivePrompt,
-    transcriptPrompt: params.transcriptBody,
+    transcriptPrompt: continuationTranscriptBody,
     // CLI-origin retries cannot rely on transcript replay: orphan-user repair
     // removes the persisted CLI turn before the embedded prompt is submitted.
     images: shouldForwardImagesToEmbedded ? params.opts.images : undefined,
     imageOrder: shouldForwardImagesToEmbedded ? params.opts.imageOrder : undefined,
+    media: params.opts.media,
     clientTools: params.opts.clientTools,
     provider: embeddedAgentProvider,
     model: params.modelOverride,
@@ -935,8 +1183,11 @@ export function runAgentAttempt(params: {
     isFinalFallbackAttempt: params.isFinalFallbackAttempt,
     verboseLevel: params.resolvedVerboseLevel,
     bashElevated: params.opts.bashElevated,
+    execApprovalContinuationPromptRange: embeddedExecApprovalContinuationPromptRange,
+    execApprovalContinuationTranscriptPromptRange: continuationTranscriptPromptRange,
     approvalReviewerDeviceId: params.opts.approvalReviewerDeviceId,
     timeoutMs: params.timeoutMs,
+    runTimeoutOverrideMs: params.runTimeoutOverrideMs,
     runId: params.runId,
     lifecycleGeneration: params.lifecycleGeneration,
     lane: params.opts.lane,
@@ -946,13 +1197,21 @@ export function runAgentAttempt(params: {
     extraSystemPrompt: params.opts.extraSystemPrompt,
     bootstrapContextMode: params.opts.bootstrapContextMode,
     bootstrapContextRunKind: params.opts.bootstrapContextRunKind,
-    toolsAllow: params.opts.toolsAllow,
+    toolsAllow: runtimeToolsAllow,
     runtimePluginToolGrant: params.opts.runtimePluginToolGrant,
+    trustedInternalHandoff: trustedSubagentAnnounceHandoff
+      ? params.opts.trustedInternalHandoff
+      : undefined,
+    scheduledToolPolicy: params.opts.scheduledToolPolicy,
     internalEvents: params.opts.internalEvents,
     inputProvenance: params.opts.inputProvenance,
     sourceReplyDeliveryMode: params.opts.sourceReplyDeliveryMode,
+    requireExplicitMessageTarget: params.opts.requireExplicitMessageTarget,
     disableMessageTool: params.opts.disableMessageTool,
+    swarmCollector: params.opts.swarmCollector,
+    swarmOutputSchema: params.opts.swarmOutputSchema,
     forceRestartSafeTools: params.opts.forceRestartSafeTools,
+    forceCodeModeTools: params.opts.forceCodeModeTools,
     streamParams: params.opts.streamParams,
     agentDir: params.agentDir,
     allowGatewaySubagentBinding: params.opts.allowGatewaySubagentBinding,
@@ -961,7 +1220,8 @@ export function runAgentAttempt(params: {
     oneShotCliRun: params.opts.oneShotCliRun,
     modelRun: params.opts.modelRun,
     promptMode: params.opts.promptMode,
-    disableTools: params.opts.modelRun === true,
+    disableTools,
+    allowEmptyAssistantReplyAsSilent: isSubagentAnnounceHandoff,
     onAgentEvent: params.onAgentEvent,
     deferTerminalLifecycle: params.deferTerminalLifecycle,
     suppressNextUserMessagePersistence: params.suppressPromptPersistenceOnRetry === true,

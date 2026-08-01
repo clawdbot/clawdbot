@@ -1,9 +1,10 @@
 // Whatsapp tests cover deliver reply plugin behavior.
-import fsSync from "node:fs";
+import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import {
   createMessageReceiptFromOutboundResults,
   listMessageReceiptPlatformIds,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS } from "openclaw/plugin-sdk/media-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { createAcceptedWhatsAppSendResult } from "../inbound/send-result.test-helper.js";
@@ -14,7 +15,7 @@ import { cacheInboundMessageMeta } from "../quoted-message.js";
 import { withWhatsAppSocketOperationTimeout } from "../socket-timing.js";
 
 const hoisted = vi.hoisted(() => ({
-  runFfmpeg: vi.fn(),
+  transcodeAudioBufferToOpus: vi.fn(),
 }));
 
 vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
@@ -23,7 +24,7 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
   );
   return {
     ...actual,
-    runFfmpeg: hoisted.runFfmpeg,
+    transcodeAudioBufferToOpus: hoisted.transcodeAudioBufferToOpus,
   };
 });
 
@@ -43,6 +44,7 @@ vi.mock("../media.js", () => ({
 }));
 
 let deliverWebReply: typeof import("./deliver-reply.js").deliverWebReply;
+let createWhatsAppReplyTransportContext: typeof import("./deliver-reply.js").createWhatsAppReplyTransportContext;
 let whatsappOutbound: typeof import("../outbound-adapter.js").whatsappOutbound;
 
 function unacceptedSendResult(kind: "media" | "text") {
@@ -217,7 +219,7 @@ async function expectReplySuppressed(replyResult: { text: string; isReasoning?: 
   const msg = makeMsg();
   await deliverWebReply({
     replyResult,
-    msg,
+    transport: createWhatsAppReplyTransportContext(msg),
     maxMediaBytes: 1024 * 1024,
     textLimit: 200,
     replyLogger,
@@ -229,8 +231,31 @@ async function expectReplySuppressed(replyResult: { text: string; isReasoning?: 
 
 describe("deliverWebReply", () => {
   beforeAll(async () => {
-    ({ deliverWebReply } = await import("./deliver-reply.js"));
+    ({ createWhatsAppReplyTransportContext, deliverWebReply } = await import("./deliver-reply.js"));
     ({ whatsappOutbound } = await import("../outbound-adapter.js"));
+  });
+
+  it("does not resend an accepted reply when its transport reports a disconnect afterward", async () => {
+    const msg = makeMsg();
+    const acceptedFailure = createChannelPartialDeliveryError(new Error("connection closed"), {
+      messageIds: ["reply-already-accepted"],
+      visibleReplySent: true,
+    });
+    vi.mocked(msg.platform.reply).mockRejectedValue(acceptedFailure);
+
+    const failure = await runWithFakeTimers(() =>
+      deliverWebReply({
+        replyResult: { text: "already delivered" },
+        transport: createWhatsAppReplyTransportContext(msg),
+        maxMediaBytes: 1024 * 1024,
+        textLimit: 200,
+        replyLogger,
+        skipLog: true,
+      }).catch((caught: unknown) => caught),
+    );
+
+    expect(failure).toBe(acceptedFailure);
+    expect(msg.platform.reply).toHaveBeenCalledOnce();
   });
 
   it("suppresses payloads flagged as reasoning", async () => {
@@ -250,7 +275,7 @@ describe("deliverWebReply", () => {
 
     await deliverWebReply({
       replyResult: { text: "Intro line\nReasoning: appears in content but is not a prefix" },
-      msg,
+      transport: createWhatsAppReplyTransportContext(msg),
       maxMediaBytes: 1024 * 1024,
       textLimit: 200,
       replyLogger,
@@ -269,7 +294,7 @@ describe("deliverWebReply", () => {
 
     const delivery = await deliverWebReply({
       replyResult: { text: "aaaaaa" },
-      msg,
+      transport: createWhatsAppReplyTransportContext(msg),
       maxMediaBytes: 1024 * 1024,
       textLimit: 3,
       replyLogger,
@@ -295,7 +320,7 @@ describe("deliverWebReply", () => {
 
     const delivery = await deliverWebReply({
       replyResult: { text: "hello" },
-      msg,
+      transport: createWhatsAppReplyTransportContext(msg),
       maxMediaBytes: 1024 * 1024,
       textLimit: 200,
       replyLogger,
@@ -319,7 +344,7 @@ describe("deliverWebReply", () => {
       replyResult: {
         text: 'Before\n<function_calls><invoke name="web_search"><parameter name="query">x</parameter></invoke></function_calls>\nAfter',
       },
-      msg,
+      transport: createWhatsAppReplyTransportContext(msg),
       maxMediaBytes: 1024 * 1024,
       textLimit: 4000,
       replyLogger,
@@ -349,7 +374,7 @@ describe("deliverWebReply", () => {
           "<div>After</div>",
         ].join("\n"),
       },
-      msg,
+      transport: createWhatsAppReplyTransportContext(msg),
       maxMediaBytes: 1024 * 1024,
       textLimit: 4000,
       replyLogger,
@@ -371,7 +396,7 @@ describe("deliverWebReply", () => {
           "After",
         ].join("\n"),
       },
-      msg,
+      transport: createWhatsAppReplyTransportContext(msg),
       maxMediaBytes: 1024 * 1024,
       textLimit: 4000,
       replyLogger,
@@ -392,7 +417,7 @@ describe("deliverWebReply", () => {
 
     await deliverWebReply({
       replyResult: { text: "aaaaaa", replyToId: "reply-1" },
-      msg,
+      transport: createWhatsAppReplyTransportContext(msg),
       maxMediaBytes: 1024 * 1024,
       textLimit: 3,
       replyLogger,
@@ -426,7 +451,7 @@ describe("deliverWebReply", () => {
       await runWithFakeTimers(() =>
         deliverWebReply({
           replyResult: { text: "hi" },
-          msg,
+          transport: createWhatsAppReplyTransportContext(msg),
           maxMediaBytes: 1024 * 1024,
           textLimit: 200,
           replyLogger,
@@ -446,7 +471,7 @@ describe("deliverWebReply", () => {
     await runWithFakeTimers(() =>
       deliverWebReply({
         replyResult: { text: "hi" },
-        msg,
+        transport: createWhatsAppReplyTransportContext(msg),
         maxMediaBytes: 1024 * 1024,
         textLimit: 200,
         replyLogger,
@@ -467,7 +492,7 @@ describe("deliverWebReply", () => {
     await expect(
       deliverWebReply({
         replyResult: { text: "hi" },
-        msg,
+        transport: createWhatsAppReplyTransportContext(msg),
         maxMediaBytes: 1024 * 1024,
         textLimit: 200,
         replyLogger,
@@ -485,7 +510,7 @@ describe("deliverWebReply", () => {
 
     await deliverWebReply({
       replyResult: { text: "aaaaaa", mediaUrl: "http://example.com/img.jpg" },
-      msg,
+      transport: createWhatsAppReplyTransportContext(msg),
       mediaLocalRoots,
       maxMediaBytes: 1024 * 1024,
       textLimit: 3,
@@ -520,7 +545,7 @@ describe("deliverWebReply", () => {
     await expect(
       deliverWebReply({
         replyResult: { text: "captiontail", mediaUrl: "http://example.com/img.jpg" },
-        msg,
+        transport: createWhatsAppReplyTransportContext(msg),
         maxMediaBytes: 1024 * 1024,
         textLimit: 7,
         replyLogger,
@@ -540,7 +565,7 @@ describe("deliverWebReply", () => {
 
     await deliverWebReply({
       replyResult: { text: "\n \n    indented block" },
-      msg,
+      transport: createWhatsAppReplyTransportContext(msg),
       maxMediaBytes: 1024 * 1024,
       textLimit: 200,
       replyLogger,
@@ -566,7 +591,7 @@ describe("deliverWebReply", () => {
         mediaUrl: "http://example.com/img.jpg",
         replyToId: "reply-2",
       },
-      msg,
+      transport: createWhatsAppReplyTransportContext(msg),
       maxMediaBytes: 1024 * 1024,
       textLimit: 7,
       replyLogger,
@@ -606,7 +631,7 @@ describe("deliverWebReply", () => {
     await runWithFakeTimers(() =>
       deliverWebReply({
         replyResult: { text: "caption", mediaUrl: "http://example.com/img.jpg" },
-        msg,
+        transport: createWhatsAppReplyTransportContext(msg),
         maxMediaBytes: 1024 * 1024,
         textLimit: 200,
         replyLogger,
@@ -624,7 +649,7 @@ describe("deliverWebReply", () => {
 
     await deliverWebReply({
       replyResult: { text: "caption", mediaUrl: "http://example.com/img.jpg" },
-      msg,
+      transport: createWhatsAppReplyTransportContext(msg),
       maxMediaBytes: 1024 * 1024,
       textLimit: 20,
       replyLogger,
@@ -649,7 +674,7 @@ describe("deliverWebReply", () => {
 
     await deliverWebReply({
       replyResult: { text: "ALPHALINEBRAVOLINE", mediaUrl: "http://example.com/img.jpg" },
-      msg,
+      transport: createWhatsAppReplyTransportContext(msg),
       maxMediaBytes: 1024 * 1024,
       textLimit: 9,
       replyLogger,
@@ -696,7 +721,7 @@ describe("deliverWebReply", () => {
         text: "caption",
         mediaUrls: ["http://example.com/bad.jpg", "http://example.com/good.pdf"],
       },
-      msg,
+      transport: createWhatsAppReplyTransportContext(msg),
       maxMediaBytes: 1024 * 1024,
       textLimit: 200,
       replyLogger,
@@ -746,7 +771,7 @@ describe("deliverWebReply", () => {
 
     await deliverWebReply({
       replyResult: { text: "caption", mediaUrl, mediaUrls },
-      msg,
+      transport: createWhatsAppReplyTransportContext(msg),
       maxMediaBytes: 1024 * 1024,
       textLimit: 200,
       replyLogger,
@@ -792,7 +817,7 @@ describe("deliverWebReply", () => {
         text: "caption",
         mediaUrls: ["http://example.com/img1.jpg", "http://example.com/img2.jpg"],
       },
-      msg,
+      transport: createWhatsAppReplyTransportContext(msg),
       maxMediaBytes: 1024 * 1024,
       textLimit: 200,
       replyLogger,
@@ -856,7 +881,7 @@ describe("deliverWebReply", () => {
 
     await deliverWebReply({
       replyResult: payload,
-      msg,
+      transport: createWhatsAppReplyTransportContext(msg),
       maxMediaBytes: 1024 * 1024,
       textLimit: 200,
       replyLogger,
@@ -906,7 +931,7 @@ describe("deliverWebReply", () => {
 
     await deliverWebReply({
       replyResult: { text: "cap", mediaUrl: "http://example.com/a.ogg" },
-      msg,
+      transport: createWhatsAppReplyTransportContext(msg),
       maxMediaBytes: 1024 * 1024,
       textLimit: 200,
       replyLogger,
@@ -927,10 +952,7 @@ describe("deliverWebReply", () => {
 
   it("transcodes mp3 audio media before sending a ptt voice note", async () => {
     vi.clearAllMocks();
-    hoisted.runFfmpeg.mockImplementation(async (args: string[]) => {
-      fsSync.writeFileSync(args.at(-1) ?? "", Buffer.from("opus-output"));
-      return "";
-    });
+    hoisted.transcodeAudioBufferToOpus.mockResolvedValue(Buffer.from("opus-output"));
     const msg = makeMsg();
     (
       loadWebMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }
@@ -943,23 +965,23 @@ describe("deliverWebReply", () => {
 
     await deliverWebReply({
       replyResult: { text: "cap", mediaUrl: "http://example.com/a.mp3" },
-      msg,
+      transport: createWhatsAppReplyTransportContext(msg),
       maxMediaBytes: 1024 * 1024,
       textLimit: 200,
       replyLogger,
       skipLog: true,
     });
 
-    const ffmpegArgs = mockCallArg(hoisted.runFfmpeg, 0, 0, "runFfmpeg");
-    expect(Array.isArray(ffmpegArgs)).toBe(true);
-    const ffmpegArgList = ffmpegArgs as unknown[];
-    expect(ffmpegArgList).toContain("-c:a");
-    expect(ffmpegArgList).toContain("libopus");
-    expect(ffmpegArgList).toContain("-ar");
-    expect(ffmpegArgList).toContain("48000");
-    expect(ffmpegArgList).toContain("-b:a");
-    expect(ffmpegArgList).toContain("64k");
-    expect(ffmpegArgList.slice(-3, -1)).toEqual(["-f", "ogg"]);
+    expect(hoisted.transcodeAudioBufferToOpus).toHaveBeenCalledWith({
+      audioBuffer: Buffer.from("mp3"),
+      inputFileName: "voice.mp3",
+      tempPrefix: "whatsapp-voice-",
+      outputFileName: "voice.ogg",
+      maxDurationSeconds: MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS,
+      sampleRateHz: 48000,
+      channels: 1,
+      bitrate: "64k",
+    });
     const mediaPayload = requireRecord(
       mockCallArg(msg.platform.sendMedia, 0, 0, "sendMedia"),
       "sendMedia payload",
@@ -984,7 +1006,7 @@ describe("deliverWebReply", () => {
 
     await deliverWebReply({
       replyResult: { text: "cap", mediaUrl: "http://example.com/v.mp4" },
-      msg,
+      transport: createWhatsAppReplyTransportContext(msg),
       maxMediaBytes: 1024 * 1024,
       textLimit: 200,
       replyLogger,
@@ -1014,7 +1036,7 @@ describe("deliverWebReply", () => {
 
     await deliverWebReply({
       replyResult: { text: "cap", mediaUrl: "http://example.com/x.bin" },
-      msg,
+      transport: createWhatsAppReplyTransportContext(msg),
       maxMediaBytes: 1024 * 1024,
       textLimit: 200,
       replyLogger,
@@ -1047,7 +1069,7 @@ describe("deliverWebReply", () => {
         text: "cap",
         mediaUrl: "https://example.com/report.pdf?X-Amz-Signature=secret#frag",
       },
-      msg,
+      transport: createWhatsAppReplyTransportContext(msg),
       maxMediaBytes: 1024 * 1024,
       textLimit: 200,
       replyLogger,

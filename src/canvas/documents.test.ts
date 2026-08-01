@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   createCanvasDocument,
+  readCanvasDocumentHtmlSource,
   resolveCanvasDocumentsDir,
   resolveCanvasHttpPathToLocalPath,
 } from "./documents.js";
@@ -68,6 +69,26 @@ describe("canvas documents", () => {
     expect(indexHtml).toContain("<style>.demo{color:red}</style>");
     expect(document.title).toBe("Preview");
     expect(document.entryUrl).toBe(`/__openclaw__/canvas/documents/${document.id}/index.html`);
+    await expect(readCanvasDocumentHtmlSource(document.id, { stateDir })).resolves.toEqual({
+      html: indexHtml,
+    });
+  });
+
+  it("reports the document sandbox policy alongside board source bytes", async () => {
+    const stateDir = await createTempDir();
+    const document = await createCanvasDocument(
+      {
+        kind: "html_bundle",
+        entrypoint: { type: "html", value: "<script>ready()</script>" },
+        cspSandbox: "scripts",
+      },
+      { stateDir },
+    );
+
+    await expect(readCanvasDocumentHtmlSource(document.id, { stateDir })).resolves.toEqual({
+      html: "<script>ready()</script>",
+      cspSandbox: "scripts",
+    });
   });
 
   it("reuses a supplied stable id by replacing the prior materialized view", async () => {

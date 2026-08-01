@@ -30,7 +30,6 @@ describe("googlechatPlugin config adapter", () => {
       channels: {
         googlechat: {
           serviceAccount: { client_email: "bot@example.com" },
-          actions: { reactions: true },
         },
       },
     } as OpenClawConfig;
@@ -64,9 +63,7 @@ describe("googlechatPlugin config adapter", () => {
             provider: "google_chat_service_account",
             id: "value",
           },
-          dm: {
-            allowFrom: ["users/123"],
-          },
+          allowFrom: ["users/123"],
           defaultTo: "spaces/AAA",
         },
       },
@@ -93,7 +90,7 @@ describe("googlechatPlugin config adapter", () => {
           },
           audienceType: "app-url",
           audience: "https://chat-app.example.test/googlechat",
-          dm: { allowFrom: ["users/123"] },
+          allowFrom: ["users/123"],
         },
       },
     } as OpenClawConfig;

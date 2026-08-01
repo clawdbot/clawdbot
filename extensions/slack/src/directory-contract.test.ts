@@ -56,7 +56,7 @@ describe("Slack directory contract", () => {
         slack: {
           botToken: "xoxb-test",
           appToken: "xapp-test",
-          dm: { allowFrom: ["U123", "user:U999"] },
+          allowFrom: ["U123", "user:U999"],
           dms: { U234: {} },
           channels: { C111: { users: ["U777"] } },
         },
@@ -83,7 +83,7 @@ describe("Slack directory contract", () => {
         slack: {
           botToken: envSecret,
           appToken: envSecret,
-          dm: { allowFrom: ["U123"] },
+          allowFrom: ["U123"],
           channels: { C111: {} },
         },
       },
@@ -99,7 +99,7 @@ describe("Slack directory contract", () => {
         slack: {
           botToken: "xoxb-test",
           appToken: "xapp-test",
-          dm: { allowFrom: ["U100", "U200"] },
+          allowFrom: ["U100", "U200"],
           dms: { U300: {} },
         },
       },

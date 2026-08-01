@@ -130,6 +130,28 @@ describe("terminal PTY invocation", () => {
     );
   });
 
+  it("canonicalizes a case-insensitive Windows TERM key", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    mocks.spawn.mockReturnValueOnce(fakePty());
+
+    await spawnTerminalPty({
+      file: "powershell.exe",
+      args: [],
+      env: { Term: "screen-256color" },
+      cols: 80,
+      rows: 24,
+    });
+
+    expect(mocks.spawn).toHaveBeenCalledWith(
+      "powershell.exe",
+      [],
+      expect.objectContaining({
+        name: "screen-256color",
+        env: { TERM: "screen-256color" },
+      }),
+    );
+  });
+
   it.each([".cmd", ".bat"])("wraps Windows %s shims through ComSpec", async (extension) => {
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     mocks.spawn.mockReturnValueOnce(fakePty());

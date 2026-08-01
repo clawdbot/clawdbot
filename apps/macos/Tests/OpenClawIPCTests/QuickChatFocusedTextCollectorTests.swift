@@ -118,6 +118,19 @@ struct QuickChatFocusedTextCollectorTests {
         #expect(result.text.hasSuffix(QuickChatFocusedTextCollector.truncationMarker))
         #expect(result.wasTruncated)
     }
+
+    @Test func `collector reports no text when every node is structure-only`() {
+        // Mirrors a canvas/image window: nodes expose no textual attributes (the AX
+        // adapter now returns nil instead of a role name). textEntryCount must stay 0
+        // so the caller surfaces "No readable text" rather than a chip of role words.
+        let child = FakeTextNode(id: 2)
+        let root = FakeTextNode(id: 1, children: [child])
+
+        let result = QuickChatFocusedTextCollector.collect(root: root)
+
+        #expect(result.text.isEmpty)
+        #expect(result.textEntryCount == 0)
+    }
 }
 
 private final class FakeTextNode: QuickChatTextTreeNode, Sendable {

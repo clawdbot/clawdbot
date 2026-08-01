@@ -29,28 +29,21 @@ export function buildLitellmModelDefinition(): ModelDefinitionConfig {
   };
 }
 
-const litellmPresetAppliers = createDefaultModelPresetAppliers({
-  primaryModelRef: LITELLM_DEFAULT_MODEL_REF,
-  resolveParams: (cfg: OpenClawConfig) => {
-    const existingProvider = cfg.models?.providers?.litellm as { baseUrl?: unknown } | undefined;
-    const resolvedBaseUrl =
-      typeof existingProvider?.baseUrl === "string" ? existingProvider.baseUrl.trim() : "";
+export const { applyConfig: applyLitellmConfig, applyProviderConfig: applyLitellmProviderConfig } =
+  createDefaultModelPresetAppliers<[]>({
+    primaryModelRef: LITELLM_DEFAULT_MODEL_REF,
+    resolveParams: (cfg: OpenClawConfig) => {
+      const existingProvider = cfg.models?.providers?.litellm as { baseUrl?: unknown } | undefined;
+      const resolvedBaseUrl =
+        typeof existingProvider?.baseUrl === "string" ? existingProvider.baseUrl.trim() : "";
 
-    return {
-      providerId: "litellm",
-      api: "openai-completions" as const,
-      baseUrl: resolvedBaseUrl || LITELLM_BASE_URL,
-      defaultModel: buildLitellmModelDefinition(),
-      defaultModelId: LITELLM_DEFAULT_MODEL_ID,
-      aliases: [{ modelRef: LITELLM_DEFAULT_MODEL_REF, alias: "LiteLLM" }],
-    };
-  },
-});
-
-export function applyLitellmProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
-  return litellmPresetAppliers.applyProviderConfig(cfg);
-}
-
-export function applyLitellmConfig(cfg: OpenClawConfig): OpenClawConfig {
-  return litellmPresetAppliers.applyConfig(cfg);
-}
+      return {
+        providerId: "litellm",
+        api: "openai-completions" as const,
+        baseUrl: resolvedBaseUrl || LITELLM_BASE_URL,
+        defaultModel: buildLitellmModelDefinition(),
+        defaultModelId: LITELLM_DEFAULT_MODEL_ID,
+        aliases: [{ modelRef: LITELLM_DEFAULT_MODEL_REF, alias: "LiteLLM" }],
+      };
+    },
+  });

@@ -52,7 +52,7 @@ describe("linux-node node-host integration", () => {
     const config: OpenClawConfig = {
       gateway: {
         nodes: {
-          allowCommands: ["camera.snap", "camera.clip"],
+          commands: { allow: ["camera.snap", "camera.clip"] },
         },
       },
       nodeHost: { skills: { enabled: false } },

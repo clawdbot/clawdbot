@@ -43,6 +43,16 @@ function normalizeOutputFileName(value?: string): string {
   return DEFAULT_OUTPUT_FILE_NAME;
 }
 
+function resolveMaxDurationSeconds(value?: number): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error("maxDurationSeconds must be a positive finite number");
+  }
+  return value;
+}
+
 /** Transcodes arbitrary audio input into mono Opus using a scoped temp workspace. */
 export async function transcodeAudioBufferToOpus(params: {
   audioBuffer: Buffer;
@@ -54,7 +64,10 @@ export async function transcodeAudioBufferToOpus(params: {
   sampleRateHz?: number;
   bitrate?: string;
   channels?: number;
+  /** Maximum output duration passed to ffmpeg's `-t` option. */
+  maxDurationSeconds?: number;
 }): Promise<Buffer> {
+  const maxDurationSeconds = resolveMaxDurationSeconds(params.maxDurationSeconds);
   return await withTempWorkspace(
     {
       rootDir: resolvePreferredOpenClawTmpDir(),
@@ -81,6 +94,7 @@ export async function transcodeAudioBufferToOpus(params: {
               "-vn",
               "-sn",
               "-dn",
+              ...(maxDurationSeconds === undefined ? [] : ["-t", String(maxDurationSeconds)]),
               "-c:a",
               "libopus",
               "-b:a",

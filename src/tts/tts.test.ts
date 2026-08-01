@@ -42,7 +42,7 @@ describe("tts runtime facade", () => {
         ownerKind: "capability",
         ownerId: "tts",
         state: "unavailable",
-        paths: ["messages.tts.providers.elevenlabs.apiKey"],
+        paths: ["tts.providers.elevenlabs.apiKey"],
         refKeys: ["env:default:MISSING_TTS_KEY"],
         reason: "secret reference was not found",
       },

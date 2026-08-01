@@ -295,7 +295,7 @@ describe("telegram bot message processor", () => {
     const processMessage = createTelegramMessageProcessor(baseDeps);
     await expect(
       processSampleMessage(processMessage, undefined, {}, {}, [
-        { path: "/tmp/photo.jpg", contentType: "image/jpeg" },
+        { path: "/tmp/photo.jpg", contentType: "image/jpeg", kind: "image" },
       ]),
     ).resolves.toEqual({ kind: "completed" });
 

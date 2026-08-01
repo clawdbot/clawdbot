@@ -44,6 +44,7 @@ type DiagnosticsTimelineEvent = {
   provider?: string;
   operation?: string;
   ok?: boolean;
+  status?: number;
   command?: string;
   exitCode?: number | null;
   signal?: string | null;
@@ -160,6 +161,7 @@ function serializeTimelineEvent(event: DiagnosticsTimelineEvent, env: NodeJS.Pro
     ...(event.provider ? { provider: event.provider } : {}),
     ...(event.operation ? { operation: event.operation } : {}),
     ...(typeof event.ok === "boolean" ? { ok: event.ok } : {}),
+    ...(typeof event.status === "number" ? { status: normalizeNumber(event.status) } : {}),
     ...(event.command ? { command: event.command } : {}),
     ...(event.exitCode !== undefined ? { exitCode: event.exitCode } : {}),
     ...(event.signal !== undefined ? { signal: event.signal } : {}),
@@ -195,7 +197,7 @@ export function emitDiagnosticsTimelineEvent(
     if (!warnedAboutTimelineWrite) {
       warnedAboutTimelineWrite = true;
       // Diagnostics output is best-effort; one warning avoids recursive stderr spam.
-      process.stderr.write(`[diagnostics] failed to write timeline event: ${String(error)}\n`);
+      console.warn(`[diagnostics] failed to write timeline event: ${String(error)}`);
     }
   }
 }

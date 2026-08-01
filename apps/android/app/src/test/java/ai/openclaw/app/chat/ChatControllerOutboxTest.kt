@@ -107,7 +107,7 @@ class ChatControllerOutboxTest {
       enqueueGate?.await()
       if (gatewayIds.values.count { it == gatewayId } >= capacity) return ChatOutboxEnqueueResult.QueueFull
       val commandBytes = attachments.sumOf { it.bytes.size.toLong() }
-      if (commandBytes > OUTBOX_MAX_COMMAND_ATTACHMENT_BYTES) return ChatOutboxEnqueueResult.AttachmentsTooLarge
+      if (!outboxCommandAttachmentsWithinByteLimits(attachments)) return ChatOutboxEnqueueResult.AttachmentsTooLarge
       val queuedBytes = attachmentBytes.values.sumOf { list -> list.sumOf { it.size.toLong() } }
       if (commandBytes > 0 && queuedBytes + commandBytes > OUTBOX_MAX_GATEWAY_ATTACHMENT_BYTES) {
         return ChatOutboxEnqueueResult.StorageFull
@@ -1418,6 +1418,32 @@ class ChatControllerOutboxTest {
 
       assertTrue(chat.outboxItems.value.isEmpty())
       assertTrue(outbox.rows.isEmpty())
+    }
+
+  @Test
+  fun flushBuildsTheRequestIdentityFromTheCurrentReplacementRowId() =
+    runTest {
+      val gateway = FakeGateway()
+      val outbox = FakeCommandOutbox()
+      outbox.seed(
+        ChatOutboxItem(
+          id = "replacement-client-id",
+          sessionKey = "main",
+          text = "retry on the selected branch",
+          thinkingLevel = "off",
+          createdAtMs = System.currentTimeMillis(),
+          status = ChatOutboxStatus.Queued,
+          retryCount = 0,
+          lastError = null,
+          ownerAgentId = "main",
+        ),
+      )
+      val chat = controller(this, gateway, outbox)
+      gateway.online = true
+      chat.handleGatewayEvent("health", null)
+      advanceUntilIdle()
+
+      assertEquals(listOf("replacement-client-id"), gateway.sentIdempotencyKeys)
     }
 
   @Test

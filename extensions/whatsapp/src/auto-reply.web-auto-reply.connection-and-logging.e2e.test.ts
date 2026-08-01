@@ -23,7 +23,6 @@ import {
   resetLoadConfigMock,
   sendWebDirectInboundMessage,
   setLoadConfigMock,
-  setRuntimeConfigSourceSnapshotMock,
   startWebAutoReplyMonitor,
 } from "./auto-reply.test-harness.js";
 import {
@@ -106,8 +105,9 @@ async function startWatchdogScenario(params: {
 }
 
 function expectErrorContaining(errorFn: unknown, text: string): void {
-  const messages = ((errorFn as { mock?: { calls?: unknown[][] } }).mock?.calls ?? []).map((call) =>
-    typeof call[0] === "string" ? call[0] : call[0] instanceof Error ? call[0].message : "",
+  const messages = ((errorFn as { mock?: { calls?: unknown[][] } }).mock?.calls ?? []).map(
+    (call) =>
+      typeof call[0] === "string" ? call[0] : call[0] instanceof Error ? call[0].message : "",
   );
   expect(messages.join("\n")).toContain(text);
 }
@@ -312,6 +312,39 @@ describe("web auto-reply connection", () => {
     expect(sleep).toHaveBeenCalled();
     expectErrorContaining(runtime.error, "status 408");
     expectErrorContaining(runtime.error, "Retry 1/2");
+  });
+
+  it("marks an opening-phase remote logout as a terminal disconnect", async () => {
+    vi.mocked(waitForWaConnection).mockRejectedValueOnce({
+      output: { statusCode: 401 },
+    });
+    const listenerFactory = vi.fn(async () => createMockWebListener());
+    const sleep = vi.fn(async () => {});
+    const statuses: Array<{
+      running?: boolean;
+      connected?: boolean;
+      healthState?: string;
+      terminalDisconnect?: boolean;
+    }> = [];
+    const { runtime, run } = startWebAutoReplyMonitor({
+      monitorWebChannelFn: monitorWebChannel as never,
+      listenerFactory,
+      sleep,
+      statusSink: (next) => statuses.push({ ...next }),
+    });
+
+    await expect(run).resolves.toBeUndefined();
+
+    expect(waitForWaConnection).toHaveBeenCalledOnce();
+    expect(listenerFactory).not.toHaveBeenCalled();
+    expect(sleep).not.toHaveBeenCalled();
+    expect(statuses.at(-1)).toMatchObject({
+      running: false,
+      connected: false,
+      healthState: "logged-out",
+      terminalDisconnect: true,
+    });
+    expectErrorContaining(runtime.error, "openclaw channels login --channel whatsapp");
   });
 
   it("keeps post-open Baileys 428 on the reconnect path", async () => {
@@ -924,73 +957,7 @@ describe("web auto-reply connection", () => {
     }
   });
 
-  it("passes accounts.default debounceMs into the live listener for named accounts", async () => {
-    const capture = createWebListenerFactoryCapture();
-
-    setLoadConfigMock({
-      channels: {
-        whatsapp: {
-          accounts: {
-            default: {
-              debounceMs: 250,
-            },
-            work: {
-              authDir: "/tmp/work",
-            },
-          },
-        },
-      },
-    } as OpenClawConfig);
-
-    await monitorWebChannel(
-      false,
-      capture.listenerFactory as never,
-      false,
-      async () => ({ text: "ok" }),
-      undefined,
-      undefined,
-      {
-        accountId: "work",
-      },
-    );
-
-    resetLoadConfigMock();
-    expect(capture.getLastOptions()?.debounceMs).toBe(250);
-  });
-
-  it("matches per-account debounce overrides case-insensitively", async () => {
-    const capture = createWebListenerFactoryCapture();
-
-    setLoadConfigMock({
-      channels: {
-        whatsapp: {
-          accounts: {
-            work: {
-              authDir: "/tmp/work",
-              debounceMs: 250,
-            },
-          },
-        },
-      },
-    } as OpenClawConfig);
-
-    await monitorWebChannel(
-      false,
-      capture.listenerFactory as never,
-      false,
-      async () => ({ text: "ok" }),
-      undefined,
-      undefined,
-      {
-        accountId: "Work",
-      },
-    );
-
-    resetLoadConfigMock();
-    expect(capture.getLastOptions()?.debounceMs).toBe(250);
-  });
-
-  it("keeps the global inbound debounce fallback when WhatsApp debounceMs is only the schema default", async () => {
+  it("passes the global inbound debounce into the live listener", async () => {
     const capture = createWebListenerFactoryCapture();
 
     setLoadConfigMock({
@@ -1009,8 +976,6 @@ describe("web auto-reply connection", () => {
         },
       },
     } as OpenClawConfig);
-    setRuntimeConfigSourceSnapshotMock(null);
-
     await monitorWebChannel(
       false,
       capture.listenerFactory as never,

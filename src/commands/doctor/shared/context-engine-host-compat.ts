@@ -2,7 +2,10 @@
 import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { normalizeEmbeddedAgentRuntime } from "../../../agents/agent-runtime-id.js";
-import { resolveDefaultAgentDir } from "../../../agents/agent-scope-config.js";
+import {
+  listAgentEntriesWithSource,
+  resolveDefaultAgentDir,
+} from "../../../agents/agent-scope-config.js";
 import { resolveCliBackendConfig } from "../../../agents/cli-backends.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../../agents/defaults.js";
 import { resolveAgentHarnessPolicy } from "../../../agents/harness/policy.js";
@@ -102,15 +105,13 @@ function collectExplicitRuntimeRefs(
     push(modelConfig?.agentRuntime?.id, `agents.defaults.models.${modelRef}.agentRuntime.id`);
   }
 
-  cfg.agents?.list?.forEach((agent, index) => {
-    const agentId = typeof agent.id === "string" && agent.id.trim() ? agent.id.trim() : `${index}`;
+  for (const { entry: agent, source } of listAgentEntriesWithSource(cfg)) {
+    const path =
+      source.kind === "entries" ? `agents.entries.${source.key}` : `agents.list.${source.index}`;
     for (const [modelRef, modelConfig] of Object.entries(agent.models ?? {})) {
-      push(
-        modelConfig?.agentRuntime?.id,
-        `agents.list.${agentId}.models.${modelRef}.agentRuntime.id`,
-      );
+      push(modelConfig?.agentRuntime?.id, `${path}.models.${modelRef}.agentRuntime.id`);
     }
-  });
+  }
 
   return refs;
 }
@@ -143,12 +144,13 @@ function collectSelectedModelRefs(
   }
   pushModelMap(cfg.agents?.defaults?.models, "agents.defaults.models");
 
-  cfg.agents?.list?.forEach((agent, index) => {
-    const agentId = typeof agent.id === "string" && agent.id.trim() ? agent.id.trim() : undefined;
-    const label = agentId ?? `${index}`;
-    pushModel(agent.model ?? cfg.agents?.defaults?.model, `agents.list.${label}.model`, agentId);
-    pushModelMap(agent.models, `agents.list.${label}.models`, agentId);
-  });
+  for (const { entry: agent, source } of listAgentEntriesWithSource(cfg)) {
+    const agentId = agent.id;
+    const path =
+      source.kind === "entries" ? `agents.entries.${source.key}` : `agents.list.${source.index}`;
+    pushModel(agent.model ?? cfg.agents?.defaults?.model, `${path}.model`, agentId);
+    pushModelMap(agent.models, `${path}.models`, agentId);
+  }
 
   return refs;
 }

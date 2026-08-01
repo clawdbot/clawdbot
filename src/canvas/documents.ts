@@ -116,6 +116,33 @@ export function resolveCanvasDocumentsDir(stateDir = resolveStateDir()): string 
   return path.resolve(stateDir, "canvas", "documents");
 }
 
+/** Reads the managed HTML entrypoint for a core Canvas document. */
+export async function readCanvasDocumentHtmlSource(
+  documentId: string,
+  options?: { stateDir?: string },
+): Promise<{ html: string; cspSandbox?: "scripts" }> {
+  const id = normalizeCanvasDocumentId(documentId);
+  const documentDir = resolveCanvasDocumentDir(id, options);
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(documentDir, "manifest.json"), "utf8"),
+  ) as Partial<CanvasDocumentManifest>;
+  if (manifest.id !== id || typeof manifest.localEntrypoint !== "string") {
+    throw new Error(`canvas document has no local entrypoint: ${id}`);
+  }
+  const entrypoint = normalizeLogicalPath(manifest.localEntrypoint);
+  if (!entrypoint.toLowerCase().endsWith(".html")) {
+    throw new Error(`canvas document entrypoint is not HTML: ${id}`);
+  }
+  const localPath = path.resolve(documentDir, entrypoint);
+  if (!localPath.startsWith(`${documentDir}${path.sep}`)) {
+    throw new Error(`canvas document entrypoint escapes its document: ${id}`);
+  }
+  return {
+    html: await fs.readFile(localPath, "utf8"),
+    ...(manifest.cspSandbox === "scripts" ? { cspSandbox: "scripts" as const } : {}),
+  };
+}
+
 async function pruneCanvasDocumentsForScope(params: {
   documentsDir: string;
   retentionScope: string;

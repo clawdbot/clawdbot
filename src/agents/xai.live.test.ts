@@ -224,12 +224,20 @@ describeLive("xai live", () => {
     await runXaiLiveCase("web-search", async () => {
       const tool = createWebSearchTool({
         config: {
+          plugins: {
+            entries: {
+              xai: {
+                config: {
+                  webSearch: { model: "grok-4.3" },
+                },
+              },
+            },
+          },
           tools: {
             web: {
               search: {
                 provider: "grok",
                 timeoutSeconds: XAI_WEB_SEARCH_LIVE_TIMEOUT_SECONDS,
-                grok: { model: "grok-4.3" },
               },
             },
           },

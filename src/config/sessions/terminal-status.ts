@@ -15,6 +15,7 @@ export function recoverTerminalSessionEntryForVisibleTurn(entry: SessionEntry): 
     startedAt: undefined,
     endedAt: undefined,
     runtimeMs: undefined,
+    lastRunError: undefined,
     abortedLastRun: undefined,
     restartRecoveryForceSafeTools: undefined,
     restartRecoveryDeliveryContext: undefined,

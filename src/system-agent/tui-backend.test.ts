@@ -1,5 +1,6 @@
 // OpenClaw TUI backend tests cover rescue status integration with the TUI backend.
 import { describe, expect, it, vi } from "vitest";
+import * as preparedModelCatalog from "../agents/prepared-model-catalog.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
@@ -8,10 +9,16 @@ import type { SystemAgentOverview } from "./overview.js";
 import { createSystemAgentVerifiedInferenceTestFixture } from "./system-agent.test-helpers.js";
 import { runSystemAgentTui, type SystemAgentTuiOptions } from "./tui-backend.js";
 
-vi.mock("../plugins/providers.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../plugins/providers.js")>()),
+vi.mock("../plugins/providers.js", () => ({
   resolveOwningPluginIdsForModelRefs: vi.fn(() => []),
   resolveOwningPluginIdsForProviderRef: vi.fn(() => []),
+}));
+
+vi.mock("../agents/prepared-model-catalog.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/prepared-model-catalog.js")>()),
+  // These tests exercise the TUI boundary, not filesystem-backed catalog discovery.
+  getPreparedModelCatalogSnapshot: vi.fn(() => undefined),
+  loadPreparedModelCatalog: vi.fn(async () => []),
 }));
 
 const overview: SystemAgentOverview = {
@@ -149,6 +156,39 @@ describe("runSystemAgentTui", () => {
     if (!options.backend || typeof options.backend !== "object") {
       throw new Error("expected openclaw TUI backend");
     }
+  }, 240_000);
+
+  it("opens the verified setup shell without preparing an unpublished model catalog", async () => {
+    const verified = await createVerifiedTuiOptions({ loadOverview: async () => overview });
+    const catalogPreparation = vi.mocked(preparedModelCatalog.loadPreparedModelCatalog);
+    const publishedSnapshot = vi
+      .spyOn(preparedModelCatalog, "getPreparedModelCatalogSnapshot")
+      .mockReturnValue(undefined);
+    const runTui = vi.fn(async () => ({ exitReason: "exit" as const }));
+
+    catalogPreparation.mockClear();
+    catalogPreparation.mockRejectedValueOnce(new Error("catalog preparation must not block setup"));
+
+    try {
+      await runSystemAgentTui({ ...verified, runTui }, createRuntime());
+
+      expect(publishedSnapshot).toHaveBeenCalledWith(
+        expect.objectContaining({ config: verifiedConfig, readOnly: true }),
+      );
+      expect(catalogPreparation).not.toHaveBeenCalled();
+      expect(runTui).toHaveBeenCalledOnce();
+      expect(runTui).toHaveBeenCalledWith(
+        expect.objectContaining({
+          local: true,
+          session: "agent:openclaw:main",
+          title: "openclaw setup",
+        }),
+      );
+    } finally {
+      publishedSnapshot.mockRestore();
+      catalogPreparation.mockReset();
+      catalogPreparation.mockResolvedValue([]);
+    }
   });
 
   it("reports the verified model without its auth profile and the effective thinking level", async () => {
@@ -229,6 +269,36 @@ describe("runSystemAgentTui", () => {
 
           await expect(backend.listSessions()).resolves.toMatchObject({
             sessions: [{ model: "gpt-5.6-sol", thinkingLevel: "medium" }],
+          });
+          return { exitReason: "exit" };
+        },
+      },
+      createRuntime(),
+    );
+  });
+
+  it("reports that /model cannot replace the active verified inference route", async () => {
+    const verified = await createVerifiedTuiOptions({ loadOverview: async () => overview });
+
+    await runSystemAgentTui(
+      {
+        ...verified,
+        runTui: async (opts) => {
+          const backend = opts.backend as unknown as {
+            patchSession: (opts: { key: string; model: string }) => Promise<unknown>;
+            listSessions: () => Promise<{
+              sessions: Array<{ model?: string; modelProvider?: string }>;
+            }>;
+          };
+
+          await expect(
+            backend.patchSession({
+              key: "agent:openclaw:main",
+              model: "anthropic/claude-opus-4-8",
+            }),
+          ).rejects.toThrow("cannot change the model inside its active verified session");
+          await expect(backend.listSessions()).resolves.toMatchObject({
+            sessions: [{ model: "gpt-5.5", modelProvider: "openai" }],
           });
           return { exitReason: "exit" };
         },
@@ -404,10 +474,20 @@ describe("runSystemAgentTui", () => {
         handoff: { kind: "open-setup", target: "channels", channel: "slack" },
         expected: "channels:slack:false:function",
       },
+      {
+        handoff: { kind: "open-setup", target: "search" },
+        expected: "search:function",
+      },
+      {
+        handoff: { kind: "open-setup", target: "gateway" },
+        expected: "gateway:guarded",
+      },
     ];
 
     for (const { handoff, expected } of cases) {
       const events: string[] = [];
+      const runtime = createRuntime();
+      runtime.log = (...args) => events.push(`log:${args.join(" ")}`);
       const verified = await createVerifiedTuiOptions({ loadOverview: async () => overview });
       await runSystemAgentTui(
         {
@@ -446,11 +526,24 @@ describe("runSystemAgentTui", () => {
               `channels:${opts.channel ?? "all"}:${String(params?.hasFlags)}:${typeof params?.beforePersistentEffect}`,
             );
           },
+          runSearchSetupHandoff: async (_runtime, beforePersistentEffect) => {
+            events.push(`search:${typeof beforePersistentEffect}`);
+          },
+          runGatewaySetupHandoff: async (_runtime, beforePersistentEffect) => {
+            await beforePersistentEffect();
+            events.push("gateway:guarded");
+          },
         },
-        createRuntime(),
+        runtime,
       );
 
-      expect(events).toEqual(["disposed", expected]);
+      expect(events).toEqual([
+        "disposed",
+        expected,
+        ...(handoff.target === "gateway"
+          ? ["log:Done — gateway settings saved. Run `openclaw gateway restart` to apply them."]
+          : []),
+      ]);
     }
   });
 });

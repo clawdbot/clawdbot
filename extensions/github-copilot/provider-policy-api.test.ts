@@ -7,13 +7,20 @@ describe("github-copilot provider-policy-api", () => {
     expect(
       resolveThinkingProfile({
         provider: "github-copilot",
-        modelId: "claude-opus-4.6",
+        modelId: "claude-haiku-4.5",
       })?.levels.map((level) => level.id),
     ).toEqual(["off", "minimal", "low", "medium", "high"]);
   });
 
   it("appends xhigh for current static GPT Copilot xhigh ids", () => {
-    for (const modelId of ["gpt-5.4", "gpt-5.3-codex"]) {
+    for (const modelId of [
+      "gpt-5.6-sol",
+      "gpt-5.6-terra",
+      "gpt-5.6-luna",
+      "gpt-5.5",
+      "gpt-5.4",
+      "gpt-5.3-codex",
+    ]) {
       expect(
         resolveThinkingProfile({
           provider: "github-copilot",

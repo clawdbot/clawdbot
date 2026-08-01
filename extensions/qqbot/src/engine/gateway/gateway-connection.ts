@@ -20,6 +20,7 @@ import type { InteractionEvent } from "../types.js";
 import { decodeGatewayMessageData } from "./codec.js";
 import { FULL_INTENTS, RATE_LIMIT_DELAY, GatewayOp } from "./constants.js";
 import { dispatchEvent } from "./event-dispatcher.js";
+import { createQQBotIngressEffectOnce } from "./ingress-effects.js";
 import { isQQBotTurnEventType } from "./ingress-envelope.js";
 import {
   createQQBotIngressMonitor,
@@ -70,6 +71,7 @@ export class GatewayConnection {
 
   private readonly reconnect: ReconnectState;
   private readonly msgQueue;
+  private readonly ingressEffectOnce;
   private readonly ctx: GatewayConnectionContext;
 
   constructor(ctx: GatewayConnectionContext) {
@@ -79,6 +81,10 @@ export class GatewayConnection {
       accountId: ctx.account.accountId,
       log: ctx.log,
       isAborted: () => this.isAborted,
+    });
+    this.ingressEffectOnce = createQQBotIngressEffectOnce({
+      accountId: ctx.account.accountId,
+      log: ctx.log,
     });
   }
 
@@ -91,7 +97,8 @@ export class GatewayConnection {
       accountId: this.ctx.account.accountId,
       runtime: this.ctx.runtime,
       log: this.ctx.log,
-      dispatch: (message, lifecycle) => this.dispatchIngressMessage(message, lifecycle, slashCtx),
+      dispatch: (message, lifecycle, eventId) =>
+        this.dispatchIngressMessage(message, lifecycle, eventId, slashCtx),
     });
     const stopped = new Promise<void>((resolve, reject) => {
       const stop = () => void this.shutdown().then(resolve, reject);
@@ -198,6 +205,7 @@ export class GatewayConnection {
   private async dispatchIngressMessage(
     msg: QueuedMessage,
     lifecycle: QQBotIngressLifecycle,
+    eventId: string,
     slashCtx: SlashCommandHandlerContext,
   ): Promise<QQBotIngressDispatchResult> {
     if (this.isAborted || lifecycle.abortSignal.aborted) {
@@ -208,9 +216,12 @@ export class GatewayConnection {
       };
     }
     msg.turnAdoptionLifecycle = lifecycle;
-    // Fleet at-least-once contract: a crash after slash-command side effects but before the
-    // completion tombstone can replay the command, matching complete-at-adoption behavior.
-    const result = await trySlashCommand(msg, slashCtx);
+    // Fleet at-least-once contract: a pre-tombstone crash can replay slash commands.
+    // Non-idempotent handlers opt into createIngressEffectOnce through this dispatch context.
+    const result = await trySlashCommand(msg, slashCtx, {
+      eventId,
+      effectOnce: this.ingressEffectOnce,
+    });
     if (result === "handled") {
       return { kind: "completed" };
     }

@@ -5,9 +5,9 @@ scenario:
   surface: cron
   coverage:
     primary:
-      - scheduling.cron
+      - automation.isolated-cron-execution
     secondary:
-      - scheduling.cron-rpcs
+      - automation.cron-rpcs
   objective: Verify quiet condition-watcher ticks persist state without run rows, then one natural fired tick runs the payload and disarms a once trigger.
   successCriteria:
     - At least two quiet trigger evaluations persist replacement state without creating run history.
@@ -24,11 +24,11 @@ scenario:
     cron:
       triggers:
         enabled: true
-        minIntervalMs: 250
   execution:
     kind: flow
     summary: Poll a stateful headless condition, prove quiet ticks stay artifact-free, then observe one natural fired command payload and once disarm.
     channel: qa-channel
+    timeoutMs: 180000
 
 flow:
   steps:
@@ -50,9 +50,9 @@ flow:
               enabled: true
               schedule:
                 kind: every
-                everyMs: 250
+                everyMs: 30000
               trigger:
-                script: "const count = (trigger.state?.count ?? 0) + 1; return { fire: count >= 6, state: { count } };"
+                script: "const count = (trigger.state?.count ?? 0) + 1; return { fire: count >= 3, state: { count } };"
                 once: true
               sessionTarget: isolated
               wakeMode: now
@@ -76,11 +76,11 @@ flow:
           args:
             - lambda:
                 async: true
-                expr: "(async () => { const job = await env.gateway.call('cron.get', { id: jobId }, { timeoutMs: 30000 }); const runs = await env.gateway.call('cron.runs', { id: jobId, limit: 10 }, { timeoutMs: 30000 }); return job.state?.triggerEvalCount >= 2 && runs.entries.length === 0 ? { job, runs } : undefined; })()"
-            - 15000
-            - 100
+                expr: "(async () => { const job = await env.gateway.call('cron.get', { id: jobId }, { timeoutMs: 30000 }); const runs = await env.gateway.call('cron.runs', { id: jobId, limit: 10 }, { timeoutMs: 30000 }); return job.state?.triggerEvalCount === 2 && job.state?.triggerState?.count === 2 && runs.entries.length === 0 ? { job, runs } : undefined; })()"
+            - 90000
+            - 250
         - assert:
-            expr: "quiet.job.state.triggerState?.count >= 2 && quiet.runs.entries.length === 0"
+            expr: "quiet.job.state.triggerEvalCount === 2 && quiet.job.state.triggerState?.count === 2 && quiet.runs.entries.length === 0"
             message:
               expr: "`expected quiet state with no runs, got ${JSON.stringify(quiet)}`"
       detailsExpr: "`job=${jobId} quietEvals=${quiet.job.state.triggerEvalCount} runRows=${quiet.runs.entries.length}`"
@@ -96,7 +96,7 @@ flow:
                 ref: jobId
               afterTs:
                 ref: startedAt
-              timeoutMs: 30000
+              timeoutMs: 60000
         - call: env.gateway.call
           saveAs: finalJob
           args:
@@ -117,7 +117,7 @@ flow:
             message:
               expr: "`expected fired command run, got ${JSON.stringify(completedRun)}`"
         - assert:
-            expr: "finalJob.enabled === false && finalJob.state?.triggerEvalCount >= 6 && finalJob.state?.triggerState?.count >= 6"
+            expr: "finalJob.enabled === false && finalJob.state?.triggerEvalCount === 3 && finalJob.state?.triggerState?.count === 3"
             message:
               expr: "`expected once disarm with persisted state, got ${JSON.stringify(finalJob)}`"
         - assert:

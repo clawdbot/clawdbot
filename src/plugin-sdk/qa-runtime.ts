@@ -4,16 +4,42 @@ import { createServer } from "node:net";
 import path from "node:path";
 // QA runtime helpers register and execute plugin QA scenarios from local files.
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
-import type { Command } from "commander";
 import { formatErrorMessage } from "./error-runtime.js";
 import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-runtime.js";
 import { resolvePrivateQaBundledPluginsEnv } from "./private-qa-bundled-env.js";
 import { runExec } from "./process-runtime.js";
-import type { QaRunnerCliRegistration } from "./qa-runner-runtime.js";
 import { fetchWithSsrFGuard } from "./ssrf-runtime.js";
 import { normalizeStringEntries } from "./string-coerce-runtime.js";
 
+export { writeGatewayRestartIntentSync } from "../infra/restart-intent.js";
+export {
+  createLazyCliRuntimeLoader,
+  createLiveTransportQaCliRegistration,
+  runLiveTransportQaSuiteCommand,
+} from "./qa-runner-runtime.js";
+export type {
+  LiveTransportQaCliRegistration,
+  LiveTransportQaCliRegistrationOptions,
+  LiveTransportQaCommandOptions,
+  LiveTransportQaCredentialCliOptions,
+  LiveTransportQaSuiteCommandOptions,
+} from "./qa-runner-runtime.js";
+
 type QaRuntimeSurface = {
+  acquireQaCredentialLease: <TPayload>(options: {
+    env?: NodeJS.ProcessEnv;
+    kind: string;
+    parsePayload: (payload: unknown) => TPayload;
+    resolveEnvPayload: () => TPayload;
+    source?: string;
+  }) => Promise<{
+    heartbeat(): Promise<void>;
+    heartbeatIntervalMs: number;
+    kind: string;
+    payload: TPayload;
+    release(): Promise<void>;
+    source: "convex" | "env";
+  }>;
   defaultQaRuntimeModelForMode: (
     mode: string,
     options?: {
@@ -22,6 +48,15 @@ type QaRuntimeSurface = {
     },
   ) => string;
   startQaLiveLaneGateway: (...args: unknown[]) => Promise<unknown>;
+  startQaCredentialLeaseHeartbeat: (lease: {
+    heartbeat(): Promise<void>;
+    heartbeatIntervalMs: number;
+    kind: string;
+    source: "convex" | "env";
+  }) => {
+    stop(): Promise<void>;
+    throwIfFailed(): void;
+  };
 };
 
 function isMissingQaRuntimeError(error: unknown) {
@@ -55,185 +90,6 @@ export function isQaRuntimeAvailable(): boolean {
   }
 }
 
-/** Normalized options passed from live-transport QA CLIs into lane runners. */
-export type LiveTransportQaCommandOptions = {
-  repoRoot?: string;
-  outputDir?: string;
-  providerMode?: string;
-  primaryModel?: string;
-  alternateModel?: string;
-  fastMode?: boolean;
-  allowFailures?: boolean;
-  failFast?: boolean;
-  profile?: string;
-  scenarioIds?: string[];
-  listScenarios?: boolean;
-  sutAccountId?: string;
-  credentialSource?: string;
-  credentialRole?: string;
-};
-
-type LiveTransportQaCommanderOptions = {
-  repoRoot?: string;
-  outputDir?: string;
-  providerMode?: string;
-  model?: string;
-  altModel?: string;
-  scenario?: string[];
-  listScenarios?: boolean;
-  fast?: boolean;
-  allowFailures?: boolean;
-  failFast?: boolean;
-  profile?: string;
-  sutAccount?: string;
-  credentialSource?: string;
-  credentialRole?: string;
-};
-
-/** Commander registration hook for one live-transport QA subcommand. */
-export type LiveTransportQaCliRegistration = QaRunnerCliRegistration;
-
-/** Help text customizations for live credential source and role flags. */
-export type LiveTransportQaCredentialCliOptions = {
-  sourceDescription?: string;
-  roleDescription?: string;
-};
-
-/** Declarative command metadata and runner used to install a live-transport QA CLI. */
-export type LiveTransportQaCliRegistrationOptions = {
-  commandName: string;
-  credentialOptions?: LiveTransportQaCredentialCliOptions;
-  defaultProviderMode: string;
-  description: string;
-  providerModeHelp: string;
-  listScenariosHelp?: string;
-  outputDirHelp: string;
-  profileHelp?: string;
-  failFastHelp?: string;
-  allowFailuresHelp?: string;
-  scenarioHelp: string;
-  sutAccountHelp: string;
-  adapterFactory?: QaRunnerCliRegistration["adapterFactory"];
-  run: (opts: LiveTransportQaCommandOptions) => Promise<void>;
-};
-
-/** Memoize a lazy CLI runtime import so repeated command paths share one loaded module. */
-export function createLazyCliRuntimeLoader<T>(load: () => Promise<T>) {
-  let promise: Promise<T> | null = null;
-  return async () => {
-    promise ??= load();
-    return await promise;
-  };
-}
-
-function collectLiveTransportQaStringOption(value: string, previous: string[]) {
-  const trimmed = value.trim();
-  return trimmed ? [...previous, trimmed] : previous;
-}
-
-function mapLiveTransportQaCommanderOptions(
-  opts: LiveTransportQaCommanderOptions,
-): LiveTransportQaCommandOptions {
-  return {
-    repoRoot: opts.repoRoot,
-    outputDir: opts.outputDir,
-    providerMode: opts.providerMode,
-    primaryModel: opts.model,
-    alternateModel: opts.altModel,
-    fastMode: opts.fast,
-    allowFailures: opts.allowFailures,
-    failFast: opts.failFast,
-    profile: opts.profile,
-    scenarioIds: opts.scenario,
-    listScenarios: opts.listScenarios,
-    sutAccountId: opts.sutAccount,
-    credentialSource: opts.credentialSource,
-    credentialRole: opts.credentialRole,
-  };
-}
-
-function registerLiveTransportQaCli(
-  params: LiveTransportQaCliRegistrationOptions & {
-    qa: Command;
-    run: (opts: LiveTransportQaCommandOptions) => Promise<void>;
-  },
-) {
-  const command = params.qa
-    .command(params.commandName)
-    .description(params.description)
-    .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
-    .option("--output-dir <path>", params.outputDirHelp)
-    .option("--provider-mode <mode>", params.providerModeHelp, params.defaultProviderMode)
-    .option("--model <ref>", "Primary provider/model ref")
-    .option("--alt-model <ref>", "Alternate provider/model ref")
-    .option("--scenario <id>", params.scenarioHelp, collectLiveTransportQaStringOption, [])
-    .option("--fast", "Enable provider fast mode where supported", false);
-
-  if (params.allowFailuresHelp) {
-    command.option("--allow-failures", params.allowFailuresHelp, false);
-  }
-
-  command.option("--sut-account <id>", params.sutAccountHelp, "sut");
-
-  if (params.listScenariosHelp) {
-    command.option("--list-scenarios", params.listScenariosHelp, false);
-  }
-
-  if (params.profileHelp) {
-    command.option("--profile <profile>", params.profileHelp);
-  }
-
-  if (params.failFastHelp) {
-    command.option("--fail-fast", params.failFastHelp, false);
-  }
-
-  if (params.credentialOptions) {
-    command.option(
-      "--credential-source <source>",
-      params.credentialOptions.sourceDescription ??
-        "Credential source for live lanes: env or convex (default: env)",
-    );
-    if (params.credentialOptions.roleDescription) {
-      command.option("--credential-role <role>", params.credentialOptions.roleDescription);
-    }
-  }
-
-  command.action(async (opts: LiveTransportQaCommanderOptions) => {
-    await params.run(mapLiveTransportQaCommanderOptions(opts));
-  });
-}
-
-/** Build a Commander registration object for one live-transport QA command. */
-export function createLiveTransportQaCliRegistration(
-  params: LiveTransportQaCliRegistrationOptions,
-): LiveTransportQaCliRegistration {
-  return {
-    commandName: params.commandName,
-    adapterFactory: params.adapterFactory,
-    register(qa: Command) {
-      registerLiveTransportQaCli({
-        ...params,
-        qa,
-      });
-    },
-  };
-}
-
-/** One top-level check row in a rendered QA markdown report. */
-export type QaReportCheck = {
-  name: string;
-  status: "pass" | "fail" | "skip";
-  details?: string;
-};
-
-/** One scenario section in a rendered QA markdown report. */
-export type QaReportScenario = {
-  name: string;
-  status: "pass" | "fail" | "skip";
-  details?: string;
-  steps?: QaReportCheck[];
-};
-
 /** Docker command runner abstraction used by QA Docker helpers and tests. */
 export type QaDockerRunCommand = (
   command: string,
@@ -253,95 +109,6 @@ export type QaDockerFetchLike = (
 
 const DEFAULT_QA_DOCKER_COMMAND_TIMEOUT_MS = 120_000;
 const DEFAULT_QA_DOCKER_HEALTH_REQUEST_TIMEOUT_MS = 2_000;
-
-function pushQaReportDetailsBlock(lines: string[], label: string, details: string, indent = "") {
-  if (!details.includes("\n")) {
-    lines.push(`${indent}- ${label}: ${details}`);
-    return;
-  }
-  lines.push(`${indent}- ${label}:`);
-  lines.push("", "```text", details, "```");
-}
-
-/** Render checks, scenarios, timeline, and notes into the standard QA markdown report format. */
-export function renderQaMarkdownReport(params: {
-  title: string;
-  startedAt: Date;
-  finishedAt: Date;
-  checks?: QaReportCheck[];
-  scenarios?: QaReportScenario[];
-  timeline?: string[];
-  notes?: string[];
-}) {
-  const checks = params.checks ?? [];
-  const scenarios = params.scenarios ?? [];
-  const passCount =
-    checks.filter((check) => check.status === "pass").length +
-    scenarios.filter((scenario) => scenario.status === "pass").length;
-  const failCount =
-    checks.filter((check) => check.status === "fail").length +
-    scenarios.filter((scenario) => scenario.status === "fail").length;
-
-  const lines = [
-    `# ${params.title}`,
-    "",
-    `- Started: ${params.startedAt.toISOString()}`,
-    `- Finished: ${params.finishedAt.toISOString()}`,
-    `- Duration ms: ${params.finishedAt.getTime() - params.startedAt.getTime()}`,
-    `- Passed: ${passCount}`,
-    `- Failed: ${failCount}`,
-    "",
-  ];
-
-  if (checks.length > 0) {
-    lines.push("## Checks", "");
-    for (const check of checks) {
-      lines.push(`- [${check.status === "pass" ? "x" : " "}] ${check.name}`);
-      if (check.details) {
-        pushQaReportDetailsBlock(lines, "Details", check.details, "  ");
-      }
-    }
-  }
-
-  if (scenarios.length > 0) {
-    lines.push("", "## Scenarios", "");
-    for (const scenario of scenarios) {
-      lines.push(`### ${scenario.name}`);
-      lines.push("");
-      lines.push(`- Status: ${scenario.status}`);
-      if (scenario.details) {
-        pushQaReportDetailsBlock(lines, "Details", scenario.details);
-      }
-      if (scenario.steps?.length) {
-        lines.push("- Steps:");
-        for (const step of scenario.steps) {
-          lines.push(`  - [${step.status === "pass" ? "x" : " "}] ${step.name}`);
-          if (step.details) {
-            pushQaReportDetailsBlock(lines, "Details", step.details, "    ");
-          }
-        }
-      }
-      lines.push("");
-    }
-  }
-
-  if (params.timeline && params.timeline.length > 0) {
-    lines.push("## Timeline", "");
-    for (const item of params.timeline) {
-      lines.push(`- ${item}`);
-    }
-  }
-
-  if (params.notes && params.notes.length > 0) {
-    lines.push("", "## Notes", "");
-    for (const note of params.notes) {
-      lines.push(`- ${note}`);
-    }
-  }
-
-  lines.push("");
-  return lines.join("\n");
-}
 
 /** Append a formatted live-lane issue while preserving the caller-owned issue list. */
 export function appendQaLiveLaneIssue(issues: string[], label: string, error: unknown) {

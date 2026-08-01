@@ -58,6 +58,12 @@ Or edit config directly:
 Restart the gateway after editing config directly. Then DM the bot or @ mention it in a group
 channel.
 
+## Inbound durability
+
+OpenClaw persists accepted Tlon DM and group-chat events before agent dispatch. Pending or retryable turns survive a Gateway restart, and work remains serialized per group channel or direct peer. Stable Urbit message IDs also suppress a redelivered event while its queue record or retained completion record exists.
+
+Delivery is at least once across the queue-to-agent boundary: a crash during handoff can replay a turn. Agent actions that produce external side effects should therefore remain idempotent where practical.
+
 ## Private/LAN ships
 
 OpenClaw blocks private/internal hostnames and IP ranges for SSRF protection by default. If your

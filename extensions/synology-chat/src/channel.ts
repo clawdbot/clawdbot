@@ -31,10 +31,15 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringEntriesLower,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
+import {
+  chunkTextForOutbound,
+  findCodeRegions,
+  isInsideCode,
+  sanitizeAssistantVisibleText,
+} from "openclaw/plugin-sdk/text-chunking";
 import { listAccountIds, resolveAccount } from "./accounts.js";
 import { synologyChatApprovalAuth } from "./approval-auth.js";
-import { sendMessage, sendFileUrl } from "./client.js";
+import { SYNOLOGY_CHAT_TEXT_CHUNK_LIMIT, sendFileUrl, sendMessage } from "./client.js";
 import { SynologyChatChannelConfigSchema } from "./config-schema.js";
 import {
   collectSynologyGatewayRoutingWarnings,
@@ -43,10 +48,12 @@ import {
 } from "./gateway-runtime.js";
 import { collectSynologyChatSecurityAuditFindings } from "./security-audit.js";
 import { buildSynologyChatOutboundSessionKey } from "./session-key.js";
-import { synologyChatSetupAdapter, synologyChatSetupWizard } from "./setup-surface.js";
+import { synologyChatSetupContract, synologyChatSetupWizard } from "./setup-surface.js";
 import type { ResolvedSynologyChatAccount } from "./types.js";
 
 const CHANNEL_ID = "synology-chat";
+const SYNOLOGY_MARKDOWN_LINK_RE =
+  /(?<!!)\[((?:\\[^\n]|[^\\\]\n])+)\]\((https?:\/\/(?:\\[^\n]|[^()\s<>\\])+(?:\((?:\\[^\n]|[^()\s<>\\])*\)(?:\\[^\n]|[^()\s<>\\])*)*)(?:\s+(?:"[^"\n]*"|'[^'\n]*'|\([^()\n]*\)))?\)/g;
 
 const resolveSynologyChatDmPolicy = createScopedDmSecurityResolver<ResolvedSynologyChatAccount>({
   channelKey: CHANNEL_ID,
@@ -181,6 +188,8 @@ type SynologyChatPlugin = Omit<
   };
   outbound: {
     deliveryMode: "gateway";
+    chunker: NonNullable<ChannelOutboundAdapter["chunker"]>;
+    chunkerMode: NonNullable<ChannelOutboundAdapter["chunkerMode"]>;
     textChunkLimit: number;
     sanitizeText: NonNullable<ChannelOutboundAdapter["sanitizeText"]>;
     sendText: (ctx: SynologyChannelSendTextContext) => Promise<SynologyChatOutboundResult>;
@@ -230,23 +239,17 @@ function normalizeSynologyChatTarget(target: string): string | undefined {
 }
 
 function createSynologyChatSendResult(params: {
-  messageId: string;
   chatId: string;
   kind: MessageReceiptPartKind;
 }): SynologyChatOutboundResult {
   return {
     channel: CHANNEL_ID,
-    messageId: params.messageId,
+    // The webhook acknowledges delivery without returning a platform message id.
+    // Keep the empty receipt so a chat id cannot become a fabricated message id.
+    messageId: "",
     chatId: params.chatId,
     receipt: createMessageReceiptFromOutboundResults({
-      results: [
-        {
-          channel: CHANNEL_ID,
-          messageId: params.messageId,
-          chatId: params.chatId,
-          conversationId: params.chatId,
-        },
-      ],
+      results: [],
       threadId: params.chatId,
       kind: params.kind,
     }),
@@ -258,12 +261,19 @@ async function sendSynologyChatText(
 ): Promise<SynologyChatOutboundResult> {
   const account = resolveOutboundAccount(ctx.cfg ?? {}, ctx.accountId);
   const incomingUrl = requireIncomingUrl(account);
-  const ok = await sendMessage(incomingUrl, ctx.text, ctx.to, account.allowInsecureSsl);
+  const codeRegions = findCodeRegions(ctx.text);
+  const text = ctx.text.replace(SYNOLOGY_MARKDOWN_LINK_RE, (match, label, url, offset) => {
+    const slashCount = ctx.text.slice(0, offset).match(/\\+$/)?.[0].length ?? 0;
+    if (slashCount % 2 === 1 || isInsideCode(offset, codeRegions) || /[<>|]/.test(label + url)) {
+      return match;
+    }
+    return `<${url.replace(/\\([()])/g, "$1")}|${label.replace(/\\([[\]])/g, "$1")}>`;
+  });
+  const ok = await sendMessage(incomingUrl, text, ctx.to, account.allowInsecureSsl);
   if (!ok) {
     throw new Error("Failed to send message to Synology Chat");
   }
   return createSynologyChatSendResult({
-    messageId: `sc-${Date.now()}`,
     chatId: ctx.to,
     kind: "text",
   });
@@ -279,7 +289,6 @@ async function sendSynologyChatMedia(
     throw new Error("Failed to send media to Synology Chat");
   }
   return createSynologyChatSendResult({
-    messageId: `sc-${Date.now()}`,
     chatId: ctx.to,
     kind: "media",
   });
@@ -326,7 +335,7 @@ function createSynologyChatPlugin(): SynologyChatPlugin {
       },
       reload: { configPrefixes: [`channels.${CHANNEL_ID}`] },
       configSchema: SynologyChatChannelConfigSchema,
-      setup: synologyChatSetupAdapter,
+      setupContract: synologyChatSetupContract,
       setupWizard: synologyChatSetupWizard,
       config: {
         ...synologyChatConfigAdapter,
@@ -373,16 +382,22 @@ function createSynologyChatPlugin(): SynologyChatPlugin {
           log?.info?.(
             `Starting Synology Chat channel (account: ${accountId}, path: ${account.webhookPath})`,
           );
-          const unregister = registerSynologyWebhookRoute({ cfg, account, accountId, log });
+          const cleanup = await registerSynologyWebhookRoute({
+            cfg,
+            account,
+            accountId,
+            log,
+            abortSignal,
+          });
 
           log?.info?.(`Registered HTTP route: ${account.webhookPath} for Synology Chat`);
 
           // Keep alive until abort signal fires.
           // The gateway expects a Promise that stays pending while the channel is running.
           // Resolving immediately triggers a restart loop.
-          return waitUntilAbort(abortSignal, () => {
+          return waitUntilAbort(abortSignal, async () => {
             log?.info?.(`Stopping Synology Chat channel (account: ${accountId})`);
-            unregister();
+            await cleanup();
           });
         },
 
@@ -443,7 +458,9 @@ function createSynologyChatPlugin(): SynologyChatPlugin {
     },
     outbound: {
       deliveryMode: "gateway" as const,
-      textChunkLimit: 2000,
+      chunker: chunkTextForOutbound,
+      chunkerMode: "markdown" as const,
+      textChunkLimit: SYNOLOGY_CHAT_TEXT_CHUNK_LIMIT,
       sanitizeText: ({ text }) => sanitizeAssistantVisibleText(text),
       sendText: sendSynologyChatText,
       sendMedia: async (ctx) => {

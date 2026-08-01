@@ -134,14 +134,14 @@ describe("ReefTrustStore", () => {
     openReefTrustStore(runtime(), config()).recordOutboundDelivery("clawd", id, binding);
 
     const reopened = openReefTrustStore(runtime(), config());
-    expect(reopened.outboundDelivery("clawd", id)).toEqual(binding);
+    expect(reopened.outboundDelivery("clawd", id)).toMatchObject(binding);
     expect(
       reopened.consumeOutboundDelivery("clawd", id, { ...binding, bodyHash: "b".repeat(64) }),
     ).toBe(false);
     expect(
       reopened.consumeOutboundDelivery("clawd", id, { ...binding, textHash: "c".repeat(64) }),
     ).toBe(false);
-    expect(reopened.outboundDelivery("clawd", id)).toEqual(binding);
+    expect(reopened.outboundDelivery("clawd", id)).toMatchObject(binding);
     expect(reopened.consumeOutboundDelivery("clawd", id, binding)).toBe(true);
     expect(reopened.outboundDelivery("clawd", id)).toBeUndefined();
     expect(reopened.consumeOutboundDelivery("clawd", id, binding)).toBe(false);
@@ -359,5 +359,58 @@ describe("ReefTrustStore", () => {
 
     molty.remove("clawd");
     expect(molty.matchesPairingApproval(token, friend)).toBe(false);
+  });
+});
+
+describe("ReefTrustStore overdue outbound deliveries", () => {
+  const OVERDUE_MS = 10 * 60 * 1_000;
+
+  it("reports an unacknowledged delivery overdue exactly once", () => {
+    const id = "01JZ0000000000000000000140";
+    const store = openReefTrustStore(runtime(), config());
+    const trustedPeer = peerTrust();
+    store.set("clawd", trustedPeer);
+    const binding = {
+      bodyHash: "a".repeat(64),
+      textHash: "b".repeat(64),
+      recipient: reefPeerIdentity(trustedPeer),
+    };
+    store.recordOutboundDelivery("clawd", id, binding);
+
+    expect(store.overdueOutboundDeliveries(OVERDUE_MS)).toEqual([]);
+    const later = Date.now() + OVERDUE_MS + 1_000;
+    expect(store.overdueOutboundDeliveries(OVERDUE_MS, later)).toMatchObject([
+      { peer: "clawd", id },
+    ]);
+
+    expect(store.markOutboundDeliveryOverdueNotified("clawd", id)).toBe(true);
+    expect(store.markOutboundDeliveryOverdueNotified("clawd", id)).toBe(false);
+    expect(store.overdueOutboundDeliveries(OVERDUE_MS, later)).toEqual([]);
+  });
+
+  it("excludes rejected and unpinned deliveries from the overdue sweep", () => {
+    const store = openReefTrustStore(runtime(), config());
+    const trustedPeer = peerTrust();
+    store.set("clawd", trustedPeer);
+    const later = Date.now() + OVERDUE_MS + 1_000;
+
+    const rejectedId = "01JZ0000000000000000000141";
+    const rejectedBinding = {
+      bodyHash: "c".repeat(64),
+      recipient: reefPeerIdentity(trustedPeer),
+    };
+    store.recordOutboundDelivery("clawd", rejectedId, rejectedBinding);
+    expect(store.recordOutboundRejection("clawd", rejectedId, rejectedBinding, "guard_deny")).toBe(
+      true,
+    );
+
+    const unpinnedId = "01JZ0000000000000000000142";
+    store.recordOutboundDelivery("stranger", unpinnedId, {
+      bodyHash: "d".repeat(64),
+      recipient: reefPeerIdentity(peerTrust()),
+    });
+
+    expect(store.overdueOutboundDeliveries(OVERDUE_MS, later)).toEqual([]);
+    expect(store.markOutboundDeliveryOverdueNotified("clawd", rejectedId)).toBe(false);
   });
 });

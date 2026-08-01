@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   artifactDownloadArgs,
   expectedChildDispatches,
@@ -17,6 +17,7 @@ import {
   releaseCiWatchFingerprint,
   requiredChildKeysForRerunGroup,
   resolveManifestChildOriginAttempt,
+  runReleaseCiGh,
   selectExactChildRun,
   selectExactChildRunFromPages,
   selectManifestArtifact,
@@ -48,6 +49,39 @@ describe("GitHub API commands", () => {
       "api",
       "repos/owner/repo/actions/artifacts/456/zip",
     ]);
+  });
+});
+
+describe("runReleaseCiGh", () => {
+  it("bounds each GitHub lookup with a timeout and SIGKILL", () => {
+    const execFileSyncImpl = vi.fn(() => "result");
+
+    expect(
+      runReleaseCiGh(["api", "repos/openclaw/openclaw/actions/runs/1"], { execFileSyncImpl }),
+    ).toBe("result");
+    expect(execFileSyncImpl).toHaveBeenCalledOnce();
+    expect(execFileSyncImpl).toHaveBeenCalledWith(
+      expect.any(String),
+      ["api", "repos/openclaw/openclaw/actions/runs/1"],
+      expect.objectContaining({
+        encoding: "utf8",
+        killSignal: "SIGKILL",
+        timeout: 60_000,
+      }),
+    );
+  });
+
+  it("propagates GitHub lookup timeouts", () => {
+    const timeoutError = Object.assign(new Error("spawnSync gh ETIMEDOUT"), {
+      code: "ETIMEDOUT",
+    });
+    expect(() =>
+      runReleaseCiGh(["api", "rate_limit"], {
+        execFileSyncImpl: () => {
+          throw timeoutError;
+        },
+      }),
+    ).toThrow(timeoutError);
   });
 });
 

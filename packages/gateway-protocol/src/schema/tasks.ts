@@ -11,7 +11,7 @@ import { NonEmptyString } from "./primitives.js";
  * these schemas keep list/get/cancel payloads bounded and status values closed.
  */
 /** Closed task lifecycle statuses visible in the gateway task ledger. */
-export const TaskLedgerStatusSchema = Type.Union([
+const TaskLedgerStatusSchema = Type.Union([
   Type.Literal("queued"),
   Type.Literal("running"),
   Type.Literal("completed"),

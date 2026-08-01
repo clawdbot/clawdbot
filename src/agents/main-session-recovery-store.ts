@@ -113,6 +113,7 @@ export async function commitMainSessionRecovery(params: {
   expectedSessionId?: string;
   requireWriteSuccess?: boolean;
   scanAliases?: boolean;
+  shouldContinue?: () => boolean;
   target: MainSessionRecoveryStoreTarget;
 }): Promise<MainSessionRecoveryStoreResult> {
   const cancellation =
@@ -141,6 +142,15 @@ export async function commitMainSessionRecovery(params: {
     ...(scansAliases ? {} : { sessionKeys: [params.target.sessionKey] }),
     storePath: params.target.storePath,
     update: (entries) => {
+      // Recheck inside the synchronous commit: shutdown can begin while this
+      // recovery owner is waiting to acquire the session-store transaction.
+      if (params.shouldContinue?.() === false) {
+        return {
+          result: {
+            transition: { kind: "rejected", reason: "stale_generation" },
+          },
+        };
+      }
       const expectedGeneration = currentGenerationRequiredBy(params.command);
       if (expectedGeneration && expectedGeneration !== getAgentEventLifecycleGeneration()) {
         return {

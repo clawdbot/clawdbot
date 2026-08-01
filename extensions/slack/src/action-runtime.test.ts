@@ -1639,7 +1639,7 @@ describe("handleSlackAction", () => {
     const token = await resolveSendToken({
       channels: {
         slack: {
-          identity: "user",
+          postAs: "user",
           userToken: "test-user-token",
         },
       },
@@ -1653,7 +1653,7 @@ describe("handleSlackAction", () => {
       resolveSendToken({
         channels: {
           slack: {
-            identity: "user",
+            postAs: "user",
             botToken: "test-bot-token",
           },
         },

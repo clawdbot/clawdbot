@@ -52,7 +52,7 @@ const cfg: OpenClawConfig = {
       audienceType: "app-url",
       audience: "https://chat-app.example.test/googlechat",
       appPrincipal: "123456789012345678901",
-      dm: { allowFrom: ["users/123"] },
+      allowFrom: ["users/123"],
     },
   },
 };
@@ -431,7 +431,7 @@ describe("googleChatApprovalNativeRuntime", () => {
             },
             audienceType: "app-url",
             audience: "https://chat-app.example.test/googlechat",
-            dm: { allowFrom: ["users/123"] },
+            allowFrom: ["users/123"],
           },
         },
       },

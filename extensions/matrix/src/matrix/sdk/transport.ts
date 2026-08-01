@@ -250,7 +250,7 @@ async function fetchWithMatrixGuardedRedirects(params: {
         headers.delete("content-length");
       }
 
-      void response.body?.cancel();
+      void response.body?.cancel().catch(() => undefined);
       await closeDispatcher(dispatcher);
       currentUrl = nextUrl;
     } catch (error) {
@@ -328,7 +328,7 @@ export async function performMatrixRequest(params: {
 
   const baseUrl = isAbsoluteEndpoint
     ? new URL(params.endpoint)
-    : new URL(normalizeEndpoint(params.endpoint), params.homeserver);
+    : new URL(`${params.homeserver.replace(/\/+$/u, "")}${normalizeEndpoint(params.endpoint)}`);
   applyQuery(baseUrl, params.qs);
 
   const headers = new Headers();

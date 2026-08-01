@@ -25,8 +25,9 @@ import type {
 import { buildMatrixQaMessageContent } from "./client-message-content.js";
 import {
   MATRIX_QA_E2EE_SYNC_FILTER,
+  createMatrixQaE2eeObservedEventRecorder,
   prepareMatrixQaE2eeStorage,
-  shouldRecordMatrixQaObservedEventUpdate,
+  runMatrixQaE2eeClientOperation,
   type MatrixQaE2eeActorId,
 } from "./e2ee-client-internals.js";
 import { findMatrixQaObservedEventMatch, normalizeMatrixQaObservedEvent } from "./events.js";
@@ -315,24 +316,18 @@ export async function createMatrixQaE2eeScenarioClient(
   const client: MatrixClient = await createMatrixQaE2eeMatrixClient(params);
   const localEvents: MatrixQaObservedEvent[] = [];
   const verificationSummaries: MatrixVerificationSummary[] = [];
-  const observedEventsById = new Map<string, MatrixQaObservedEvent>();
   let primeCursorIndex = 0;
   const cursorIndexByRoom = new Map<string, number>();
 
+  const observedEventRecorder = createMatrixQaE2eeObservedEventRecorder({
+    append(event) {
+      localEvents.push(event);
+      params.observedEvents.push(event);
+    },
+  });
+
   const recordEvent = (roomId: string, event: MatrixRawEvent) => {
-    const normalized = normalizeMatrixQaObservedEvent(roomId, event);
-    if (
-      !normalized ||
-      !shouldRecordMatrixQaObservedEventUpdate({
-        next: normalized,
-        previous: observedEventsById.get(normalized.eventId),
-      })
-    ) {
-      return;
-    }
-    observedEventsById.set(normalized.eventId, normalized);
-    localEvents.push(normalized);
-    params.observedEvents.push(normalized);
+    observedEventRecorder.record(normalizeMatrixQaObservedEvent(roomId, event));
   };
   client.on("room.message", recordEvent);
   const recordVerificationSummary = (summary: MatrixVerificationSummary) => {
@@ -391,6 +386,13 @@ export async function createMatrixQaE2eeScenarioClient(
     }
     return client.crypto;
   };
+  const runClientOperation = <T>(label: string, run: () => Promise<T>) =>
+    runMatrixQaE2eeClientOperation({
+      label,
+      run,
+      stop: () => client.stopWithoutPersist(),
+      timeoutMs: params.timeoutMs,
+    });
 
   return {
     async acceptVerification(id) {
@@ -452,16 +454,17 @@ export async function createMatrixQaE2eeScenarioClient(
       return await requireCrypto().scanVerificationQr(id, qrDataBase64);
     },
     async sendTextMessage(opts) {
-      return await client.sendMessage(
-        opts.roomId,
-        buildMatrixQaMessageContent(opts) as MessageEventContent,
+      return await runClientOperation("Matrix E2EE text send", () =>
+        client.sendMessage(opts.roomId, buildMatrixQaMessageContent(opts) as MessageEventContent),
       );
     },
     async sendNoticeMessage(opts) {
-      return await client.sendMessage(opts.roomId, {
-        ...buildMatrixQaMessageContent(opts),
-        msgtype: "m.notice",
-      } as MessageEventContent);
+      return await runClientOperation("Matrix E2EE notice send", () =>
+        client.sendMessage(opts.roomId, {
+          ...buildMatrixQaMessageContent(opts),
+          msgtype: "m.notice",
+        } as MessageEventContent),
+      );
     },
     async sendImageMessage(opts) {
       const encrypted = await requireCrypto().encryptMedia(opts.buffer);
@@ -471,19 +474,21 @@ export async function createMatrixQaE2eeScenarioClient(
         opts.fileName,
       );
       const file: EncryptedFile = { url: contentUri, ...encrypted.file };
-      return await client.sendMessage(opts.roomId, {
-        ...buildMatrixQaMessageContent({
-          body: opts.body,
-          mentionUserIds: opts.mentionUserIds,
-        }),
-        file,
-        filename: opts.fileName,
-        info: {
-          mimetype: opts.contentType,
-          size: opts.buffer.byteLength,
-        },
-        msgtype: "m.image",
-      } as MessageEventContent);
+      return await runClientOperation("Matrix E2EE image send", () =>
+        client.sendMessage(opts.roomId, {
+          ...buildMatrixQaMessageContent({
+            body: opts.body,
+            mentionUserIds: opts.mentionUserIds,
+          }),
+          file,
+          filename: opts.fileName,
+          info: {
+            mimetype: opts.contentType,
+            size: opts.buffer.byteLength,
+          },
+          msgtype: "m.image",
+        } as MessageEventContent),
+      );
     },
     async startVerification(id, method) {
       return await requireCrypto().startVerification(id, method);

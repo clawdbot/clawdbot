@@ -2,10 +2,9 @@
 import { createHash } from "node:crypto";
 import type { WAMessage } from "baileys";
 import {
-  createChannelIngressDrain,
-  DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
-  DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
-  type ChannelIngressDrain,
+  createChannelIngressMonitor,
+  type ChannelIngressMonitorDeliveryResult,
+  type ChannelIngressMonitorLifecycle,
   type ChannelIngressQueue,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { getWhatsAppRuntime } from "../runtime.js";
@@ -16,10 +15,7 @@ import {
   type SerializedWhatsAppDurableInboundMessage,
 } from "./durable-payload.js";
 
-const WHATSAPP_DURABLE_INBOUND_PENDING_MAX_ENTRIES = 450;
-const WHATSAPP_DURABLE_INBOUND_COMPLETED_MAX_ENTRIES = 5000;
-const WHATSAPP_DURABLE_INBOUND_PENDING_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-const WHATSAPP_DURABLE_INBOUND_COMPLETED_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const WHATSAPP_DURABLE_INBOUND_PAYLOAD_VERSION = 1;
 
 export type WhatsAppReadReceiptTarget = {
   remoteJid: string;
@@ -27,7 +23,7 @@ export type WhatsAppReadReceiptTarget = {
   participant?: string;
 };
 
-export type WhatsAppDurableInboundPayload = {
+type WhatsAppDurableInboundPayload = {
   message: SerializedWhatsAppDurableInboundMessage;
   upsertType?: string;
   skipStaleAppend?: boolean;
@@ -36,18 +32,13 @@ export type WhatsAppDurableInboundPayload = {
   receiveOrder?: number;
 };
 
-export type WhatsAppIngressLifecycle = {
-  abortSignal: AbortSignal;
-  onAdopted: () => void | Promise<void>;
-  onDeferred: () => void;
-  onAdoptionFinalizing: () => void;
-  onAbandoned: () => void | Promise<void>;
+export type WhatsAppIngressAdmission = Omit<WhatsAppDurableInboundPayload, "message"> & {
+  message: WAMessage;
 };
 
-type WhatsAppIngressDispatchResult =
-  | { kind: "completed" }
-  | { kind: "deferred" }
-  | { kind: "failed-retryable"; error: unknown };
+export type WhatsAppIngressLifecycle = Omit<ChannelIngressMonitorLifecycle, "admission">;
+
+type WhatsAppIngressDispatchResult = ChannelIngressMonitorDeliveryResult;
 
 type WhatsAppIngressFacts = {
   eventId: string;
@@ -58,10 +49,7 @@ function hashNamespacePart(value: string): string {
   return createHash("sha256").update(value).digest("hex").slice(0, 24);
 }
 
-export function createWhatsAppDurableInboundMessageId(params: {
-  remoteJid: string;
-  id: string;
-}): string {
+function createWhatsAppDurableInboundMessageId(params: { remoteJid: string; id: string }): string {
   return createHash("sha256").update(`${params.remoteJid}\n${params.id}`).digest("hex");
 }
 
@@ -90,88 +78,81 @@ export function createWhatsAppDurableInboundQueue(accountId: string): WhatsAppDu
   });
 }
 
-/** Raw receive chokepoint: append first, then let the drain normalize and dispatch. */
-export async function enqueueWhatsAppDurableInbound(params: {
-  queue: WhatsAppDurableInboundQueue;
-  message: WAMessage;
-  upsertType?: string;
-  skipStaleAppend?: boolean;
-  skipRecentOutboundEcho?: boolean;
-  receivedAt?: number;
-  receiveOrder?: number;
-}) {
-  const facts = inspectWhatsAppIngressMessage(params.message);
-  const receivedAt = params.receivedAt ?? Date.now();
-  await params.queue.prune({
-    pendingTtlMs: WHATSAPP_DURABLE_INBOUND_PENDING_TTL_MS,
-    completedTtlMs: WHATSAPP_DURABLE_INBOUND_COMPLETED_TTL_MS,
-    failedTtlMs: WHATSAPP_DURABLE_INBOUND_PENDING_TTL_MS,
-    pendingMaxEntries: WHATSAPP_DURABLE_INBOUND_PENDING_MAX_ENTRIES,
-    completedMaxEntries: WHATSAPP_DURABLE_INBOUND_COMPLETED_MAX_ENTRIES,
-    failedMaxEntries: WHATSAPP_DURABLE_INBOUND_PENDING_MAX_ENTRIES,
-  });
-  return await params.queue.enqueue(
-    facts.eventId,
-    {
-      message: serializeWhatsAppDurableInboundMessage(params.message),
-      upsertType: params.upsertType,
-      ...(params.skipStaleAppend === undefined ? {} : { skipStaleAppend: params.skipStaleAppend }),
-      ...(params.skipRecentOutboundEcho === undefined
-        ? {}
-        : { skipRecentOutboundEcho: params.skipRecentOutboundEcho }),
-      receivedAt,
-      ...(params.receiveOrder === undefined ? {} : { receiveOrder: params.receiveOrder }),
-    },
-    { receivedAt, laneKey: facts.laneKey },
-  );
-}
-
 function resolveWhatsAppIngressNonRetryableFailure(error: unknown) {
   return error instanceof WhatsAppIngressPermanentError
     ? { reason: error.reason, message: error.message }
     : null;
 }
 
-/** Core drain with per-conversation lanes and completion at reply-lane adoption. */
-export function createWhatsAppIngressDrain(params: {
+/** Shared monitor with per-conversation lanes and completion at reply-lane adoption. */
+export function createWhatsAppIngressMonitor(params: {
   queue: WhatsAppDurableInboundQueue;
   dispatch: (
-    message: WAMessage,
-    payload: WhatsAppDurableInboundPayload,
+    admission: WhatsAppIngressAdmission,
     lifecycle: WhatsAppIngressLifecycle,
-  ) => Promise<WhatsAppIngressDispatchResult | void> | WhatsAppIngressDispatchResult | void;
+  ) => Promise<WhatsAppIngressDispatchResult> | WhatsAppIngressDispatchResult;
   onLog?: (message: string) => void;
+  onError?: (error: unknown) => void;
+  onActivityChange?: (active: boolean) => void;
+  pollIntervalMs: number;
   abortSignal?: AbortSignal;
-}): ChannelIngressDrain {
-  return createChannelIngressDrain<WhatsAppDurableInboundPayload>({
+}) {
+  return createChannelIngressMonitor<
+    WhatsAppIngressAdmission,
+    WhatsAppDurableInboundPayload,
+    WhatsAppDurableInboundPayload
+  >({
     queue: params.queue,
-    retryPolicy: {
-      maxAttempts: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
-      deadLetterMinAgeMs: DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
+    inspect: (admission) => inspectWhatsAppIngressMessage(admission.message),
+    payload: {
+      version: WHATSAPP_DURABLE_INBOUND_PAYLOAD_VERSION,
+      serialize: (admission, { receivedAt }) => ({
+        ...admission,
+        message: serializeWhatsAppDurableInboundMessage(admission.message),
+        receivedAt,
+      }),
+      deserialize: (payload) => ({
+        ...payload,
+        message: deserializeWhatsAppDurableInboundMessage(payload.message),
+      }),
+      encode: ({ body }) => body,
+      // This shipped queue shape predates the shared envelope. Treat it as v1
+      // without rewriting or rejecting durable rows accepted by the beta.
+      decode: (payload) => ({ version: WHATSAPP_DURABLE_INBOUND_PAYLOAD_VERSION, body: payload }),
+      createClaimError: (kind) =>
+        new WhatsAppIngressPermanentError(
+          kind === "invalid-version" ? "invalid-payload" : "event-id-mismatch",
+          kind === "invalid-version"
+            ? "WhatsApp ingress row has an invalid payload version"
+            : "WhatsApp ingress row identity does not match its transport message key",
+        ),
     },
-    resolveNonRetryableFailure: resolveWhatsAppIngressNonRetryableFailure,
-    deriveLaneKey: (record) => {
-      try {
-        return inspectWhatsAppIngressMessage(
-          deserializeWhatsAppDurableInboundMessage(record.payload.message),
-        ).laneKey;
-      } catch {
-        return record.id;
-      }
+    // WhatsApp can retain adoption for its debounce/reply lane. Require an explicit
+    // outcome so a retained callback cannot fall through to the monitor's terminal default.
+    deliver: (admission, lifecycle) => params.dispatch(admission, lifecycle),
+    pollIntervalMs: params.pollIntervalMs,
+    retention: {
+      completedTtlMs: 7 * 24 * 60 * 60 * 1_000,
+      completedMaxEntries: 5_000,
+      failedMaxEntries: 450,
     },
-    ...(params.onLog ? { onLog: params.onLog } : {}),
+    drain: {
+      resolveNonRetryableFailure: resolveWhatsAppIngressNonRetryableFailure,
+      deriveLaneKey: (record) => {
+        try {
+          return inspectWhatsAppIngressMessage(
+            deserializeWhatsAppDurableInboundMessage(record.payload.message),
+          ).laneKey;
+        } catch {
+          return record.id;
+        }
+      },
+      ...(params.onLog ? { onLog: params.onLog } : {}),
+    },
     ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
-    // No supersede: every WhatsApp transport event remains independently deliverable.
-    dispatchClaimedEvent: async (record, lifecycle) => {
-      const message = deserializeWhatsAppDurableInboundMessage(record.payload.message);
-      const facts = inspectWhatsAppIngressMessage(message);
-      if (facts.eventId !== record.id) {
-        throw new WhatsAppIngressPermanentError(
-          "event-id-mismatch",
-          "WhatsApp ingress row id does not match its transport message key",
-        );
-      }
-      return await params.dispatch(message, record.payload, lifecycle);
-    },
+    admissionMode: "while-running",
+    createStoppedError: () => new Error("WhatsApp ingress monitor is stopped."),
+    ...(params.onError ? { onError: params.onError } : {}),
+    ...(params.onActivityChange ? { onActivityChange: params.onActivityChange } : {}),
   });
 }

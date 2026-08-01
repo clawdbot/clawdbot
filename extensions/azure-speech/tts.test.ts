@@ -163,4 +163,67 @@ describe("azure speech tts", () => {
       },
     ]);
   });
+
+  it("returns an empty catalog for a malformed top-level voice payload", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response("null", {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+
+    await expect(
+      listAzureSpeechVoices({
+        apiKey: "speech-key",
+        baseUrl: "https://custom.example.com",
+      }),
+    ).resolves.toEqual([]);
+  });
+
+  it("skips malformed voice rows without discarding valid entries", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify([
+            null,
+            "unexpected",
+            [],
+            { ShortName: 42 },
+            {
+              ShortName: "en-US-JennyNeural",
+              DisplayName: "Jenny",
+              Locale: "en-US",
+              Gender: "Female",
+              Status: "GA",
+              VoiceTag: {
+                TailoredScenarios: [null, "Conversational"],
+                VoicePersonalities: [false, "Warm", "  "],
+              },
+            },
+          ]),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      ),
+    );
+
+    await expect(
+      listAzureSpeechVoices({
+        apiKey: "speech-key",
+        baseUrl: "https://custom.example.com",
+      }),
+    ).resolves.toEqual([
+      {
+        id: "en-US-JennyNeural",
+        name: "Jenny",
+        description: "Conversational, Warm",
+        locale: "en-US",
+        gender: "Female",
+        personalities: ["Warm"],
+      },
+    ]);
+  });
 });

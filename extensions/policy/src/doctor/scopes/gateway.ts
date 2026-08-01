@@ -1,4 +1,5 @@
 // Policy doctor checks and findings for gateway exposure policy.
+import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import type { HealthCheck, HealthFinding } from "openclaw/plugin-sdk/health";
 import type { PolicyEvidence } from "../../policy-state.js";
 import { repairPolicyAutomaticNarrower } from "../automatic-repairs.js";
@@ -400,10 +401,10 @@ function gatewayNodeCommandFindings(
         message: `Gateway node command '${command}' is denied by policy but not denied by OpenClaw config.`,
         source: "policy",
         path: "openclaw config",
-        ocPath: "oc://openclaw.config/gateway/nodes/denyCommands",
-        target: "oc://openclaw.config/gateway/nodes/denyCommands",
+        ocPath: "oc://openclaw.config/gateway/nodes/commands/deny",
+        target: "oc://openclaw.config/gateway/nodes/commands/deny",
         requirement: `oc://${policyDocName}/gateway/nodes/denyCommands`,
-        fixHint: `Add '${command}' to gateway.nodes.denyCommands or update policy after review.`,
+        fixHint: `Add '${command}' to gateway.nodes.commands.deny or update policy after review.`,
       };
     });
 }
@@ -421,8 +422,4 @@ function hasValidOptionalStringList(policy: unknown, path: readonly string[]): b
     (Array.isArray(current) &&
       current.every((entry) => typeof entry === "string" && entry.trim() !== ""))
   );
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

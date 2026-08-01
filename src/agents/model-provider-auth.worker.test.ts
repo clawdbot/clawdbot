@@ -2,7 +2,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "./auth-profiles.js";
@@ -10,6 +10,27 @@ import { clearCurrentProviderAuthState } from "./model-provider-auth.js";
 import { runProviderAuthWarmWorkerInput } from "./model-provider-auth.worker.js";
 
 const tempDirs: string[] = [];
+
+vi.mock("./prepared-model-catalog.js", () => ({
+  loadPreparedModelCatalogOwnerSnapshot: vi.fn(
+    async (params: { agentDir: string; agentId?: string; config: OpenClawConfig }) => ({
+      agentDir: params.agentDir,
+      agentId: params.agentId,
+      config: params.config,
+      modelCatalog: {
+        entries: Object.entries(params.config.models?.providers ?? {}).flatMap(
+          ([provider, providerConfig]) =>
+            (providerConfig.models ?? []).map((model) => ({
+              id: model.id,
+              name: model.name ?? model.id,
+              provider,
+            })),
+        ),
+        routeVariants: [],
+      },
+    }),
+  ),
+}));
 
 describe("provider auth warm worker", () => {
   afterEach(() => {
@@ -28,7 +49,6 @@ describe("provider auth warm worker", () => {
 
     await withEnvAsync(
       {
-        OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY: "1",
         OPENCLAW_STATE_DIR: path.join(root, "state"),
       },
       async () => {

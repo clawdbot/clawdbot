@@ -1,13 +1,31 @@
 // Hook update tests cover updating installed hook records and config.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { HookInstallRecord } from "../config/types.hooks.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HookNpmIntegrityDriftParams } from "./install.js";
 
 const installHooksFromNpmSpecMock = vi.fn();
+let hookInstalls: Record<string, HookInstallRecord> = {};
 
 vi.mock("./install.js", () => ({
   installHooksFromNpmSpec: (...args: unknown[]) => installHooksFromNpmSpecMock(...args),
   resolveHookInstallDir: (hookId: string) => `/tmp/hooks/${hookId}`,
+}));
+
+vi.mock("./installs.js", () => ({
+  readHookInstalls: () => hookInstalls,
+  recordHookInstall: (cfg: OpenClawConfig, update: HookInstallRecord & { hookId: string }) => {
+    const { hookId, ...record } = update;
+    hookInstalls = {
+      ...hookInstalls,
+      [hookId]: {
+        ...hookInstalls[hookId],
+        ...record,
+        installedAt: record.installedAt ?? "2026-05-11T20:00:00.000Z",
+      },
+    };
+    return cfg;
+  },
 }));
 
 const { updateNpmInstalledHookPacks } = await import("./update.js");
@@ -17,25 +35,21 @@ function createHookInstallConfig(params: {
   spec: string;
   integrity?: string;
 }): OpenClawConfig {
-  return {
-    hooks: {
-      internal: {
-        installs: {
-          [params.hookId]: {
-            source: "npm",
-            spec: params.spec,
-            installPath: `/tmp/hooks/${params.hookId}`,
-            ...(params.integrity ? { integrity: params.integrity } : {}),
-          },
-        },
-      },
+  hookInstalls = {
+    [params.hookId]: {
+      source: "npm",
+      spec: params.spec,
+      installPath: `/tmp/hooks/${params.hookId}`,
+      ...(params.integrity ? { integrity: params.integrity } : {}),
     },
-  } as OpenClawConfig;
+  };
+  return {};
 }
 
 describe("updateNpmInstalledHookPacks", () => {
   beforeEach(() => {
     installHooksFromNpmSpecMock.mockReset();
+    hookInstalls = {};
   });
 
   it("aborts exact pinned hook pack updates on integrity drift by default", async () => {
@@ -131,7 +145,7 @@ describe("updateNpmInstalledHookPacks", () => {
       }),
     );
     expect(result.changed).toBe(true);
-    expect(result.config.hooks?.internal?.installs?.["demo-hooks"]).toEqual({
+    expect(hookInstalls["demo-hooks"]).toEqual({
       source: "npm",
       spec: "@openclaw/demo-hooks",
       installPath: "/tmp/hooks/demo-hooks",
@@ -143,7 +157,7 @@ describe("updateNpmInstalledHookPacks", () => {
       shasum: "abc123",
       resolvedAt: "2026-05-11T20:00:00.000Z",
       hooks: ["demo"],
-      installedAt: expect.any(String),
+      installedAt: "2026-05-11T20:00:00.000Z",
     });
   });
 });

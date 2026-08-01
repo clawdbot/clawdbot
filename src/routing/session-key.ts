@@ -29,8 +29,12 @@ export {
 } from "./account-id.js";
 export { isValidAgentId, normalizeAgentId };
 
-export const DEFAULT_AGENT_ID = "main";
+/** Legacy on-disk identity used only by doctor/migration and their fixtures. */
+export const LEGACY_IMPLICIT_AGENT_ID = "main";
+/** @deprecated legacy implicit agent id; use roster default resolution. Removal: next major SDK cut. */
+export const DEFAULT_AGENT_ID = LEGACY_IMPLICIT_AGENT_ID;
 export const DEFAULT_MAIN_KEY = "main";
+const INCOGNITO_SESSION_RE = /^(?:dashboard|subagent|internal-session-effects):incognito-[^:]+$/u;
 type SessionKeyShape = "missing" | "agent" | "legacy_or_alias" | "malformed_agent";
 
 function normalizeToken(value: string | undefined | null): string {
@@ -127,9 +131,24 @@ export function toAgentStoreSessionKey(params: {
   return `agent:${normalizeAgentId(params.agentId)}:${normalized}`;
 }
 
-export function resolveAgentIdFromSessionKey(sessionKey: string | undefined | null): string {
+export function resolveAgentIdFromSessionKey(
+  sessionKey: string | undefined | null,
+  configuredDefaultAgentId?: string,
+): string {
   const parsed = parseAgentSessionKey(sessionKey);
-  return normalizeAgentId(parsed?.agentId ?? DEFAULT_AGENT_ID);
+  if (parsed?.agentId) {
+    return normalizeAgentId(parsed.agentId);
+  }
+  if (classifySessionKeyShape(sessionKey) === "malformed_agent") {
+    throw new Error("Malformed agent session key; refusing default-agent resolution.");
+  }
+  const configuredDefault = configuredDefaultAgentId?.trim();
+  if (configuredDefault) {
+    return normalizeAgentId(configuredDefault);
+  }
+  throw new Error(
+    "Session key does not contain an agent id; resolve it with the configured default agent.",
+  );
 }
 
 export function classifySessionKeyShape(sessionKey: string | undefined | null): SessionKeyShape {
@@ -148,6 +167,12 @@ export function classifySessionKeyShape(sessionKey: string | undefined | null): 
 export function isUnscopedSessionKeySentinel(sessionKey: string | undefined | null): boolean {
   const lowered = normalizeLowercaseStringOrEmpty(sessionKey);
   return lowered === "global" || lowered === "unknown";
+}
+
+/** Classifies process-only session keys without consulting runtime registry state. */
+export function isIncognitoSessionKey(sessionKey: string | undefined | null): boolean {
+  const rest = parseAgentSessionKey(sessionKey)?.rest;
+  return typeof rest === "string" && INCOGNITO_SESSION_RE.test(rest);
 }
 
 export function scopeLegacySessionKeyToAgent(params: {

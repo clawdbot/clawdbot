@@ -1,4 +1,5 @@
 /** Builds plugin lookup tables keyed by manifest ids, channels, providers, and commands. */
+import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   createGatewayStartupMetadataPluginIdScope,
@@ -34,6 +35,7 @@ type LoadPluginLookUpTableParams = {
   index?: PluginRegistrySnapshot;
   metadataSnapshot?: PluginMetadataSnapshot;
   workerProviderIds?: readonly string[];
+  ambientEnvTriggers?: AmbientEnvTriggerPolicy;
 };
 
 const lookupTableMemoBySnapshot = new WeakMap<
@@ -50,6 +52,7 @@ export function loadPluginLookUpTable(params: LoadPluginLookUpTableParams): Plug
       : {}),
     env: params.env,
     workerProviderIds,
+    ambientEnvTriggers: params.ambientEnvTriggers,
   });
   const metadataSnapshot =
     params.metadataSnapshot &&
@@ -90,6 +93,7 @@ export function loadPluginLookUpTable(params: LoadPluginLookUpTableParams): Plug
     index,
     manifestRegistry,
     workerProviderIds,
+    ambientEnvTriggers: params.ambientEnvTriggers,
   });
   const startupPlanMs = performance.now() - startupPlanStartedAt;
 

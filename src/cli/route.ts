@@ -53,10 +53,11 @@ async function prepareRoutedCommand(params: {
   argv: string[];
   commandPath: string[];
   loadPlugins?: boolean | ((argv: string[]) => boolean);
+  machineOutput?: boolean;
 }) {
   const { startupPolicy } = resolveCliExecutionStartupContext({
     argv: params.argv,
-    jsonOutputMode: hasFlag(params.argv, "--json"),
+    jsonOutputMode: params.machineOutput === true || hasFlag(params.argv, "--json"),
     env: process.env,
     routeMode: true,
   });
@@ -79,7 +80,10 @@ async function prepareRoutedCommand(params: {
 }
 
 /** Try a lightweight route-first command before falling back to the full CLI program. */
-export async function tryRouteCli(argv: string[]): Promise<boolean> {
+export async function tryRouteCli(
+  argv: string[],
+  options: { machineOutput?: boolean } = {},
+): Promise<boolean> {
   if (isTruthyEnvValue(process.env.OPENCLAW_DISABLE_ROUTE_FIRST)) {
     return false;
   }
@@ -110,6 +114,7 @@ export async function tryRouteCli(argv: string[]): Promise<boolean> {
     argv,
     commandPath: invocation.commandPath,
     loadPlugins: route.loadPlugins,
+    machineOutput: options.machineOutput,
   });
   return route.run(argv);
 }

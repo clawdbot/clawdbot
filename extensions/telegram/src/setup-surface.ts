@@ -18,6 +18,7 @@ import {
   getTelegramTokenHelpLines,
   getTelegramUserIdHelpLines,
   parseTelegramAllowFromId,
+  telegramSetupAdapter,
 } from "./setup-core.js";
 import {
   buildTelegramDmAccessWarningLines,
@@ -94,6 +95,7 @@ export const telegramSetupWizard: ChannelSetupWizard = {
         channel,
         accountId,
         patch: { dmPolicy: "allowlist", allowFrom },
+        setupSurface: telegramSetupAdapter,
       }),
   }),
   finalize: async ({ cfg, accountId, prompter }) => {

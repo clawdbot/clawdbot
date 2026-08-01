@@ -118,7 +118,7 @@ export function registerWorktreesCli(program: Command): void {
     .option("--json", "Output JSON", false)
     .action(async (opts: JsonOption) => {
       const cfg = getRuntimeConfig();
-      const limits = resolveWorktreeCleanupLimits(cfg.worktrees);
+      const limits = resolveWorktreeCleanupLimits();
       const result = await managedWorktrees.gc({
         limits,
         shouldProtectOwner: createManagedWorktreeOwnerProtection(cfg),

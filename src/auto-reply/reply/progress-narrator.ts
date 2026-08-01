@@ -1,11 +1,16 @@
 // Utility-model narration for channel progress drafts.
-import { formatToolSummary, resolveToolDisplay } from "../../agents/tool-display.js";
+import {
+  createSessionActivityNoteState,
+  flushSessionActivityAssistantNote,
+  noteSessionActivityEvent,
+} from "../../agents/session-activity-notes.js";
 import { resolveUtilityModelRefForAgent } from "../../agents/utility-model.js";
 import { PROGRESS_STATUS_PREAMBLE_FRESH_MS } from "../../channels/progress-draft-compositor.js";
 import { sanitizeProgressStatusText } from "../../channels/progress-draft-status-text.js";
 import { isChannelProgressDraftWorkToolName, isCommandToolName } from "../../channels/streaming.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
+import type { AgentEventPayload, AgentEventStream } from "../../infra/agent-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import {
@@ -21,37 +26,15 @@ const MIN_EVENTS_PER_NARRATION = 4;
 const MIN_INTERVAL_MS = 12_000;
 const NARRATION_MAX_CHARS = 280;
 const NARRATION_NOTE_MAX_CHARS = 160;
-const MAX_ACTIVITY_NOTES = 40;
 const VISIBILITY_RETRY_MS = 1_000;
 // Keep hidden-draft polling bounded even when a channel never exposes the draft.
 const MAX_VISIBILITY_RETRIES = 30;
 const PREAMBLE_RETRY_EPSILON_MS = 1;
 const MAX_NARRATIONS_PER_TURN = 30;
 const MAX_CONSECUTIVE_FAILURES = 2;
-
-type ProgressNarrator = {
-  beginTurn: () => void;
-  stopTurn: () => void;
-  noteToolStart: (payload: {
-    name?: string;
-    phase?: string;
-    args?: Record<string, unknown>;
-  }) => void;
-  noteCommandOutput: (payload: {
-    name?: string;
-    title?: string;
-    phase?: string;
-    status?: string;
-    exitCode?: number | null;
-  }) => void;
-  noteItemEvent: (payload: {
-    kind?: string;
-    name?: string;
-    title?: string;
-    status?: string;
-    progressText?: string;
-  }) => void;
-};
+type ToolStartPayload = Parameters<NonNullable<InternalGetReplyOptions["onToolStart"]>>[0];
+type CommandOutputPayload = Parameters<NonNullable<InternalGetReplyOptions["onCommandOutput"]>>[0];
+type ItemEventPayload = Parameters<NonNullable<InternalGetReplyOptions["onItemEvent"]>>[0];
 
 function normalizeNarrationText(raw: string): string {
   const collapsed = raw
@@ -79,15 +62,15 @@ function createProgressNarrator(params: {
   now?: () => number;
   setTimeoutFn?: typeof setTimeout;
   clearTimeoutFn?: typeof clearTimeout;
-}): ProgressNarrator {
+}) {
   const now = params.now ?? Date.now;
   const setTimeoutFn = params.setTimeoutFn ?? setTimeout;
   const clearTimeoutFn = params.clearTimeoutFn ?? clearTimeout;
-  const notes: string[] = [];
+  let activity = createSessionActivityNoteState();
   let disabled = false;
   let inFlight = false;
   let pendingImmediate = false;
-  let notesAtLastRun = -1;
+  let noteSequenceAtLastRun = -1;
   let lastRunAt = 0;
   let narrationCount = 0;
   let consecutiveFailures = 0;
@@ -117,11 +100,11 @@ function createProgressNarrator(params: {
     // Queued turns reuse the narrator lifecycle but not the primary request.
     // Empty context is safer than describing follow-up work with stale intent.
     userMessage = "";
-    notes.splice(0);
+    activity = createSessionActivityNoteState();
     disabled = false;
     inFlight = false;
     pendingImmediate = false;
-    notesAtLastRun = -1;
+    noteSequenceAtLastRun = -1;
     lastRunAt = 0;
     narrationCount = 0;
     consecutiveFailures = 0;
@@ -181,24 +164,39 @@ function createProgressNarrator(params: {
       return outcome.text;
     });
 
-  const addNote = (note: string, options?: { immediate?: boolean }) => {
+  const recordEvent = (
+    stream: AgentEventStream,
+    data: Record<string, unknown>,
+    options?: { immediate?: boolean; flushAssistant?: boolean },
+  ): void => {
     if (!turnActive || disabled || params.abortSignal?.aborted) {
       return;
     }
     visibilityRetryCount = 0;
-    notes.push(truncateAtWordBoundary(note.replace(/\s+/g, " ").trim(), NARRATION_NOTE_MAX_CHARS));
-    if (notes.length > MAX_ACTIVITY_NOTES) {
-      notes.splice(0, notes.length - MAX_ACTIVITY_NOTES);
+    const sequenceBefore = activity.noteSequence;
+    const event: AgentEventPayload = {
+      runId: "progress-narrator",
+      seq: sequenceBefore + 1,
+      stream,
+      ts: now(),
+      data,
+    };
+    noteSessionActivityEvent(activity, event, NARRATION_NOTE_MAX_CHARS);
+    if (options?.flushAssistant) {
+      flushSessionActivityAssistantNote(activity, NARRATION_NOTE_MAX_CHARS);
     }
-    maybeRun(options?.immediate === true);
+    const added = activity.noteSequence > sequenceBefore;
+    if (added) {
+      maybeRun(options?.immediate === true);
+    }
   };
 
   const shouldRunNow = (immediate: boolean): boolean => {
-    const newNotes = notes.length - Math.max(0, notesAtLastRun);
+    const newNotes = activity.noteSequence - Math.max(0, noteSequenceAtLastRun);
     if (newNotes <= 0) {
       return false;
     }
-    if (immediate || notesAtLastRun < 0) {
+    if (immediate || noteSequenceAtLastRun < 0) {
       return true;
     }
     if (newNotes >= MIN_EVENTS_PER_NARRATION) {
@@ -265,11 +263,11 @@ function createProgressNarrator(params: {
     inFlight = true;
     const runGeneration = turnGeneration;
     narrationCount += 1;
-    notesAtLastRun = notes.length;
+    noteSequenceAtLastRun = activity.noteSequence;
     lastRunAt = now();
     const input: ProgressNarrationInput = {
       userMessage,
-      activityNotes: [...notes],
+      activityNotes: activity.notes.map((note) => note.text),
       previousText: lastText,
     };
     void (async () => {
@@ -322,16 +320,19 @@ function createProgressNarrator(params: {
       resetTurnState();
     },
     stopTurn,
-    noteToolStart(payload) {
+    noteToolStart(payload: ToolStartPayload) {
       if (payload.phase !== "start" || !isChannelProgressDraftWorkToolName(payload.name)) {
         return;
       }
-      const display = resolveToolDisplay({ name: payload.name, args: payload.args });
       // Same command-tool set the draft formatter uses for commandText policy.
-      const hideDetail = params.hideCommandText === true && isCommandToolName(display.name);
-      addNote(formatToolSummary(hideDetail ? { ...display, detail: undefined } : display));
+      const hideDetail = params.hideCommandText === true && isCommandToolName(payload.name);
+      recordEvent("tool", {
+        phase: "start",
+        name: payload.name,
+        ...(hideDetail ? {} : { args: payload.args }),
+      });
     },
-    noteCommandOutput(payload) {
+    noteCommandOutput(payload: CommandOutputPayload) {
       if (payload.phase !== "end") {
         return;
       }
@@ -343,13 +344,22 @@ function createProgressNarrator(params: {
       }
       // Command-output titles usually carry the raw command text; honor the
       // channel's commandText: "status" policy for the failure note too.
-      const subject = params.hideCommandText
+      const title = params.hideCommandText
         ? payload.name || "command"
         : payload.title || payload.name || "command";
-      const exit = typeof payload.exitCode === "number" ? ` (exit ${payload.exitCode})` : "";
-      addNote(`${subject} failed${exit}`, { immediate: true });
+      recordEvent(
+        "command_output",
+        {
+          phase: "end",
+          title,
+          name: payload.name,
+          status: "failed",
+          exitCode: payload.exitCode,
+        },
+        { immediate: true },
+      );
     },
-    noteItemEvent(payload) {
+    noteItemEvent(payload: ItemEventPayload) {
       if (payload.kind === "preamble") {
         const preambleText = sanitizeProgressStatusText(payload.progressText ?? "")
           .replace(/\s+/g, " ")
@@ -358,13 +368,22 @@ function createProgressNarrator(params: {
           return;
         }
         lastPreambleAt = now();
-        addNote(`model: ${preambleText}`);
+        recordEvent("assistant", { text: preambleText }, { flushAssistant: true });
         return;
       }
       if (payload.status !== "failed") {
         return;
       }
-      addNote(`${payload.title || payload.name || "step"} failed`, { immediate: true });
+      const title = payload.title || payload.name || "step";
+      recordEvent(
+        "item",
+        {
+          itemId: payload.itemId || title,
+          title,
+          status: "failed",
+        },
+        { immediate: true },
+      );
     },
   };
 }
@@ -403,8 +422,8 @@ export function attachProgressNarratorToReplyOptions(params: {
     hideCommandText: opts.narrationHideCommandText === true,
   });
   opts.onProgressNarratorLifecycle?.({
-    beginTurn: narrator.beginTurn,
-    stopTurn: narrator.stopTurn,
+    beginTurn: () => narrator.beginTurn(),
+    stopTurn: () => narrator.stopTurn(),
   });
   return {
     ...opts,

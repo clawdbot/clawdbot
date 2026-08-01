@@ -5,6 +5,8 @@ import path from "node:path";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 
 const SHARED_LOCATION_PREFIX = "../shared/OpenClawKit/Sources/";
+const SHARED_SOURCE_ROOT = "apps/shared/OpenClawKit/Sources";
+const BARE_PERIPHERY_IGNORE_COMMENT = /\/\/\/?\s*periphery:ignore(?![:\w])/;
 
 function requireValue(args, index, option) {
   const value = args[index + 1];
@@ -107,6 +109,39 @@ export function parseRepoLocation(location) {
   };
 }
 
+export function filterIgnoredFindings(findings, repoRoot = process.cwd()) {
+  const sourceRoot = path.resolve(repoRoot, SHARED_SOURCE_ROOT);
+  const sourceLines = new Map();
+
+  return findings.filter((finding) => {
+    const location = parseRepoLocation(finding.location);
+    const sourceFile = path.resolve(repoRoot, location.file);
+    const relativeSource = path.relative(sourceRoot, sourceFile);
+    if (
+      !relativeSource ||
+      path.isAbsolute(relativeSource) ||
+      relativeSource === ".." ||
+      relativeSource.startsWith(`..${path.sep}`)
+    ) {
+      throw new Error(`invalid shared Periphery source path: ${location.file}`);
+    }
+    let lines = sourceLines.get(sourceFile);
+    if (!lines) {
+      lines = fs.readFileSync(sourceFile, "utf8").split(/\r?\n/);
+      sourceLines.set(sourceFile, lines);
+    }
+
+    const declarationIndex = Number(location.line) - 1;
+    if (declarationIndex < 0 || declarationIndex >= lines.length) {
+      throw new Error(`invalid shared Periphery source line: ${finding.location}`);
+    }
+
+    return ![lines[declarationIndex - 1], lines[declarationIndex]].some(
+      (line) => typeof line === "string" && BARE_PERIPHERY_IGNORE_COMMENT.test(line),
+    );
+  });
+}
+
 export function escapeCommandData(value) {
   return String(value ?? "")
     .replaceAll("%", "%25")
@@ -166,9 +201,11 @@ export function run(args, env = process.env) {
   const options = parseArgs(args);
   readStatus(options.iosStatus, "iOS");
   readStatus(options.macosStatus, "macOS");
-  const findings = intersectFindings(
-    readFindings(options.iosResults, "iOS"),
-    readFindings(options.macosResults, "macOS"),
+  const findings = filterIgnoredFindings(
+    intersectFindings(
+      readFindings(options.iosResults, "iOS"),
+      readFindings(options.macosResults, "macOS"),
+    ),
   );
 
   fs.mkdirSync(path.dirname(options.output), { recursive: true });

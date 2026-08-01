@@ -982,33 +982,6 @@ describe("monitorTelegramProvider (grammY)", () => {
     vi.useRealTimers();
   });
 
-  it("uses configured Telegram polling stall threshold", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    const abort = new AbortController();
-    const firstCycle = mockRunOnceWithStalledPollingRunner();
-    const secondCycle = mockRunOnceAndAbort(abort);
-
-    const monitor = monitorTelegramProvider(
-      withLegacyPolling({
-        token: "tok",
-        abortSignal: abort.signal,
-        config: {
-          agents: { defaults: { maxConcurrent: 2 } },
-          channels: { telegram: { pollingStallThresholdMs: 30_000 } },
-        },
-      }),
-    );
-    await firstCycle.waitForRunStart();
-
-    vi.advanceTimersByTime(60_000);
-    await secondCycle.waitForRunStart();
-    await monitor;
-
-    expect(firstCycle.stop.mock.calls.length).toBeGreaterThanOrEqual(1);
-    expectRecoverableRetryState(2);
-    vi.useRealTimers();
-  });
-
   it("does not call getUpdates for offset confirmation (avoids 409 conflicts)", async () => {
     const { order } = await runMonitorAndCaptureStartupOrder({
       persistedOffset: 549076203,

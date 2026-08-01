@@ -2,13 +2,13 @@ title: Browser realtime Talk start-stop evidence
 
 scenario:
   id: browser-talk-start-stop
-  surface: browser-control-ui-and-webchat
-  category: browser-control-ui-and-webchat.browser-realtime-talk
+  surface: control-ui
+  category: control-ui.browser-realtime-talk
   coverage:
     primary:
       - voice.browser-talk-start-stop-ui
     secondary:
-      - ui.browser-talk-start-stop
+      - control-ui.browser-talk-start-stop
   objective: Link deterministic browser realtime Talk transport start/stop coverage to UI maturity accounting.
   successCriteria:
     - Browser Talk starts the Google Live WebSocket transport and reaches listening state.

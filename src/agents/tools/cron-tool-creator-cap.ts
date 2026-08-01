@@ -64,6 +64,7 @@ function capCronJobToolsAllow(params: {
   const writesToolsAllow = Object.hasOwn(params.payload, "toolsAllow");
   if (
     params.payload.kind !== "agentTurn" &&
+    params.payload.kind !== "script" &&
     !hasCronTriggerScript(params.trigger) &&
     !writesToolsAllow
   ) {
@@ -135,6 +136,11 @@ export function planCronJobUpdatePatch(params: {
 }): CronJobUpdatePatchPlan {
   const patch = structuredClone(params.patch);
   const payload = isRecord(patch.payload) ? patch.payload : undefined;
+  if (payload === undefined && !Object.hasOwn(patch, "trigger")) {
+    // Schedule, delivery, naming, and enabled-state edits do not reauthorize
+    // legacy jobs. Only tool-runtime changes may synthesize durable authority.
+    return { kind: "ready", patch };
+  }
   const explicitPayloadKind = readCronPayloadKind(payload);
   if (
     params.creatorToolAllowlist &&
@@ -170,7 +176,12 @@ export function planCronJobUpdatePatch(params: {
 
   const trigger = Object.hasOwn(patch, "trigger") ? patch.trigger : params.currentJob.trigger;
   const writesToolsAllow = payload !== undefined && Object.hasOwn(payload, "toolsAllow");
-  if (payloadKind !== "agentTurn" && !hasCronTriggerScript(trigger) && !writesToolsAllow) {
+  if (
+    payloadKind !== "agentTurn" &&
+    payloadKind !== "script" &&
+    !hasCronTriggerScript(trigger) &&
+    !writesToolsAllow
+  ) {
     return { kind: "ready", patch };
   }
 

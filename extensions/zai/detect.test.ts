@@ -100,21 +100,21 @@ describe("detectZaiEndpoint", () => {
     }> = [
       {
         responses: {
-          "https://api.z.ai/api/paas/v4/chat/completions::glm-5.1": { status: 200 },
+          "https://api.z.ai/api/paas/v4/chat/completions::glm-5.2": { status: 200 },
         },
-        expected: { endpoint: "global", modelId: "glm-5.1" },
+        expected: { endpoint: "global", modelId: "glm-5.2" },
       },
       {
         responses: {
-          "https://api.z.ai/api/paas/v4/chat/completions::glm-5.1": { status: 404 },
-          "https://open.bigmodel.cn/api/paas/v4/chat/completions::glm-5.1": { status: 200 },
+          "https://api.z.ai/api/paas/v4/chat/completions::glm-5.2": { status: 404 },
+          "https://open.bigmodel.cn/api/paas/v4/chat/completions::glm-5.2": { status: 200 },
         },
-        expected: { endpoint: "cn", modelId: "glm-5.1" },
+        expected: { endpoint: "cn", modelId: "glm-5.2" },
       },
       {
         responses: {
-          "https://api.z.ai/api/paas/v4/chat/completions::glm-5.1": { status: 404 },
-          "https://open.bigmodel.cn/api/paas/v4/chat/completions::glm-5.1": { status: 404 },
+          "https://api.z.ai/api/paas/v4/chat/completions::glm-5.2": { status: 404 },
+          "https://open.bigmodel.cn/api/paas/v4/chat/completions::glm-5.2": { status: 404 },
           "https://api.z.ai/api/coding/paas/v4/chat/completions::glm-5.2": { status: 200 },
         },
         expected: { endpoint: "coding-global", modelId: "glm-5.2" },
@@ -199,8 +199,8 @@ describe("detectZaiEndpoint", () => {
       },
       {
         responses: {
-          "https://api.z.ai/api/paas/v4/chat/completions::glm-5.1": { status: 401 },
-          "https://open.bigmodel.cn/api/paas/v4/chat/completions::glm-5.1": { status: 401 },
+          "https://api.z.ai/api/paas/v4/chat/completions::glm-5.2": { status: 401 },
+          "https://open.bigmodel.cn/api/paas/v4/chat/completions::glm-5.2": { status: 401 },
           "https://api.z.ai/api/coding/paas/v4/chat/completions::glm-5.2": { status: 401 },
           "https://api.z.ai/api/coding/paas/v4/chat/completions::glm-5.1": { status: 401 },
           "https://api.z.ai/api/coding/paas/v4/chat/completions::glm-4.7": { status: 401 },
@@ -240,7 +240,7 @@ describe("detectZaiEndpoint", () => {
       .mockReturnValue(1 as unknown as ReturnType<typeof setTimeout>);
     vi.spyOn(globalThis, "clearTimeout").mockImplementation(() => undefined);
     const fetchFn = makeFetch({
-      "https://api.z.ai/api/paas/v4/chat/completions::glm-5.1": { status: 200 },
+      "https://api.z.ai/api/paas/v4/chat/completions::glm-5.2": { status: 200 },
     });
 
     await detectZaiEndpoint({
@@ -334,5 +334,74 @@ describe("detectZaiEndpoint", () => {
           new Error(`Z.AI probe error body exceeded size limit (${maxBytes} bytes)`),
       }),
     ).rejects.toThrow(/exceeded size limit/);
+  });
+
+  it("fails closed when a probe error body stalls without chunks", async () => {
+    // Headers return 400, but the error body never enqueues. Without
+    // the whole-body deadline the probe would hang indefinitely.
+    const fetchFn = (async (url: string) => {
+      if (url !== "https://api.z.ai/api/paas/v4/chat/completions") {
+        throw new Error(`unexpected url: ${url}`);
+      }
+      const body = new ReadableStream<Uint8Array>({
+        start() {
+          // Intentionally never enqueue or close — idle timeout must fire.
+        },
+      });
+      return new Response(body, {
+        status: 400,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    const timeoutMs = 80;
+    const startedAt = Date.now();
+    const detected = await detectZaiEndpoint({
+      apiKey: "sk-test", // pragma: allowlist secret
+      endpoint: "global",
+      timeoutMs,
+      fetchFn,
+    });
+    const elapsedMs = Date.now() - startedAt;
+
+    expect(detected).toBeNull();
+    // The probe must fail within the deadline budget, not hang indefinitely.
+    // Allow 2× the timeout for scheduling overhead; a hang would take seconds.
+    expect(elapsedMs).toBeLessThan(2 * timeoutMs);
+  });
+
+  it("keeps one probe deadline through a slow-drip error body", async () => {
+    const state = { cancelled: false };
+    let interval: ReturnType<typeof setInterval> | undefined;
+    const fetchFn = (async () => {
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          interval = setInterval(() => controller.enqueue(new Uint8Array([123])), 10);
+        },
+        cancel() {
+          state.cancelled = true;
+          if (interval) {
+            clearInterval(interval);
+          }
+        },
+      });
+      return new Response(body, {
+        status: 400,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    const timeoutMs = 80;
+    const startedAt = Date.now();
+    const detected = await detectZaiEndpoint({
+      apiKey: "sk-test", // pragma: allowlist secret
+      endpoint: "global",
+      timeoutMs,
+      fetchFn,
+    });
+
+    expect(detected).toBeNull();
+    expect(Date.now() - startedAt).toBeLessThan(3 * timeoutMs);
+    expect(state.cancelled).toBe(true);
   });
 });

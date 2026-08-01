@@ -94,6 +94,20 @@ describe("channel registry helpers", () => {
     expect(normalizeAnyChannelId("qq")).toBe("qqbot");
   });
 
+  it("prefers an exact channel id over an earlier plugin alias", () => {
+    const aliasOwner = createRegistryWithRegisteredChannel("alias-owner", ["exact-id"]).channels[0];
+    const exactOwner = createRegistryWithRegisteredChannel("exact-id").channels[0];
+    setActivePluginRegistry(
+      createTestRegistry([
+        expectDefined(aliasOwner, "alias owner test channel"),
+        expectDefined(exactOwner, "exact owner test channel"),
+      ]),
+    );
+
+    expect(normalizeAnyChannelId("exact-id")).toBe("exact-id");
+    expect(normalizeAnyChannelIdLight("exact-id")).toBe("exact-id");
+  });
+
   it("rebuilds registered channel lookups when pinned-empty fallback active registry changes", () => {
     const startupRegistry = createEmptyPluginRegistry();
     setActivePluginRegistry(startupRegistry);

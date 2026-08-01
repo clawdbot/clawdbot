@@ -87,9 +87,6 @@ export type GoogleMeetChromeHealth = MeetingBrowserHealth<
     timestamp: string;
     final?: boolean;
   }>;
-  manualActionRequired?: boolean;
-  manualActionReason?: GoogleMeetManualActionReason;
-  manualActionMessage?: string;
   speechReady?: boolean;
   speechBlockedReason?: GoogleMeetSpeechBlockedReason;
   speechBlockedMessage?: string;

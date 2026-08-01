@@ -43,23 +43,15 @@ function normalizeGatewayReadyTimeoutMs(value: unknown): number | undefined {
   return Math.min(numeric, MAX_DISCORD_GATEWAY_READY_TIMEOUT_MS);
 }
 
-function resolveDiscordGatewayReadyTimeoutMs(params?: {
-  configuredTimeoutMs?: number;
-  env?: NodeJS.ProcessEnv;
-}): number {
+function resolveDiscordGatewayReadyTimeoutMs(params?: { env?: NodeJS.ProcessEnv }): number {
   return (
-    normalizeGatewayReadyTimeoutMs(params?.configuredTimeoutMs) ??
     normalizeGatewayReadyTimeoutMs(params?.env?.[DISCORD_GATEWAY_READY_TIMEOUT_ENV]) ??
     DEFAULT_DISCORD_GATEWAY_READY_TIMEOUT_MS
   );
 }
 
-function resolveDiscordGatewayRuntimeReadyTimeoutMs(params?: {
-  configuredTimeoutMs?: number;
-  env?: NodeJS.ProcessEnv;
-}): number {
+function resolveDiscordGatewayRuntimeReadyTimeoutMs(params?: { env?: NodeJS.ProcessEnv }): number {
   return (
-    normalizeGatewayReadyTimeoutMs(params?.configuredTimeoutMs) ??
     normalizeGatewayReadyTimeoutMs(params?.env?.[DISCORD_GATEWAY_RUNTIME_READY_TIMEOUT_ENV]) ??
     DEFAULT_DISCORD_GATEWAY_RUNTIME_READY_TIMEOUT_MS
   );
@@ -421,8 +413,6 @@ export async function runDiscordGatewayLifecycle(params: {
   threadBindings: { stop: () => void };
   gatewaySupervisor: DiscordGatewaySupervisor;
   statusSink?: DiscordMonitorStatusSink;
-  gatewayReadyTimeoutMs?: number;
-  gatewayRuntimeReadyTimeoutMs?: number;
 }) {
   const gateway = params.gateway;
   const gatewayReadyAtLifecycleStart = gateway?.isConnected === true;
@@ -440,11 +430,9 @@ export async function runDiscordGatewayLifecycle(params: {
     params.statusSink?.(patch);
   };
   const gatewayReadyTimeoutMs = resolveDiscordGatewayReadyTimeoutMs({
-    configuredTimeoutMs: params.gatewayReadyTimeoutMs,
     env: process.env,
   });
   const gatewayRuntimeReadyTimeoutMs = resolveDiscordGatewayRuntimeReadyTimeoutMs({
-    configuredTimeoutMs: params.gatewayRuntimeReadyTimeoutMs,
     env: process.env,
   });
   const statusObserver = createGatewayStatusObserver({

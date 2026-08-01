@@ -1,7 +1,7 @@
 // Diagnostic session context tests cover session context capture for diagnostics.
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { saveCronStore } from "../cron/store.js";
 import {
   createOpenClawTestState,
@@ -98,11 +98,29 @@ describe("diagnostic session context", () => {
       { message: { role: "assistant", content: "newer" } },
     ]);
 
-    expect(
-      resolveCronSessionDiagnosticContext({
-        sessionKey: "agent:clawblocker:cron:job-123:run:run-456",
-      }).lastAssistant,
-    ).toBe("newer");
+    const realReadSync = fs.readSync.bind(fs);
+    let shortReadCalls = 0;
+    const readSpy = vi.spyOn(fs, "readSync").mockImplementation(((
+      fd: number,
+      buffer: NodeJS.ArrayBufferView,
+      offset: number,
+      length: number,
+      position: fs.ReadPosition | null,
+    ) => {
+      shortReadCalls += 1;
+      return realReadSync(fd, buffer, offset, Math.min(length, 16), position);
+    }) as typeof fs.readSync);
+
+    try {
+      expect(
+        resolveCronSessionDiagnosticContext({
+          sessionKey: "agent:clawblocker:cron:job-123:run:run-456",
+        }).lastAssistant,
+      ).toBe("newer");
+      expect(shortReadCalls).toBeGreaterThan(1);
+    } finally {
+      readSpy.mockRestore();
+    }
   });
 
   it("keeps bounded quoted fields UTF-16 safe", () => {

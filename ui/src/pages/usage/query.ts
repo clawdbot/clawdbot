@@ -14,11 +14,16 @@ function downloadTextFile(filename: string, content: string, type = "text/plain"
   URL.revokeObjectURL(url);
 }
 
-function csvEscape(value: string): string {
-  if (/[",\n]/.test(value)) {
-    return `"${value.replaceAll('"', '""')}"`;
+function neutralizeSpreadsheetFormulaCell(value: string): string {
+  return /^[ \t\r\n]*[=+\-@\uFF0B\uFF0D\uFF1D\uFF20]/u.test(value) ? `'${value}` : value;
+}
+
+function csvEscape(value: string, neutralizeFormulas = true): string {
+  const safeValue = neutralizeFormulas ? neutralizeSpreadsheetFormulaCell(value) : value;
+  if (/[",\r\n]/.test(safeValue)) {
+    return `"${safeValue.replaceAll('"', '""')}"`;
   }
-  return value;
+  return safeValue;
 }
 
 function toCsvRow(values: Array<string | number | undefined | null>): string {
@@ -27,7 +32,7 @@ function toCsvRow(values: Array<string | number | undefined | null>): string {
       if (value === undefined || value === null) {
         return "";
       }
-      return csvEscape(String(value));
+      return csvEscape(String(value), typeof value === "string");
     })
     .join(",");
 }

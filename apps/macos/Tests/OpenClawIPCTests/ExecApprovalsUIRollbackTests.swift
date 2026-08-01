@@ -1,4 +1,6 @@
 import Foundation
+import OpenClawKit
+import SQLite3
 import Testing
 @testable import OpenClaw
 
@@ -6,15 +8,51 @@ import Testing
 @MainActor
 struct ExecApprovalsUIRollbackTests {
     @Test
+    func `migration requirement surfaces without automatic retry`() async throws {
+        try await self.withTempStateDir { stateDirectoryURL in
+            let migrationError = ExecApprovalsLegacyMigrationRequiredError(
+                stateDirectoryURL: stateDirectoryURL,
+                legacyFileURL: stateDirectoryURL.appendingPathComponent("exec-approvals.json"))
+            var quickModeReadCount = 0
+            let state = AppState(
+                preview: true,
+                execApprovalsDefaultsAsyncResolver: {
+                    quickModeReadCount += 1
+                    return .failure(.migrationRequired(migrationError))
+                },
+                execApprovalsReadRetryDelay: .zero)
+
+            await state.recoverExecApprovalModeRead(maxAttempts: 5)
+
+            #expect(quickModeReadCount == 1)
+            #expect(state.execApprovalLoadError == ExecApprovalsReadError.migrationRequired(migrationError).message)
+
+            var settingsReadCount = 0
+            let model = ExecApprovalsSettingsModel(
+                resolveApprovalsAsync: { _ in
+                    settingsReadCount += 1
+                    return .failure(.migrationRequired(migrationError))
+                },
+                readRetryDelay: .zero,
+                automaticReadRetryAttempts: 5)
+
+            await model.loadSettings(for: "main")
+
+            #expect(settingsReadCount == 1)
+            #expect(model.readErrorMessage == ExecApprovalsReadError.migrationRequired(migrationError).message)
+        }
+    }
+
+    @Test
     func `quick mode recovers after initial approvals read is unavailable`() async throws {
         try await self.withTempStateDir { stateDir in
             _ = try ExecApprovalsStore.updateDefaults { defaults in
                 defaults.security = .full
                 defaults.ask = .off
             }.get()
-            let lockURL = stateDir.appendingPathComponent("exec-approvals.json.lock")
-            try Data("held".utf8).write(to: lockURL)
-            defer { try? FileManager().removeItem(at: lockURL) }
+            let record = try ExecApprovalsSQLiteStore.read(stateDirectoryURL: stateDir)
+            let rawJSON = try #require(record?.rawJSON)
+            try Self.replaceRawJSON("{", stateDirectoryURL: stateDir)
 
             let state = AppState(
                 preview: true,
@@ -26,7 +64,7 @@ struct ExecApprovalsUIRollbackTests {
             #expect(!state.execApprovalPolicyAvailable)
             #expect(state.execApprovalLoadError != nil)
 
-            try FileManager().removeItem(at: lockURL)
+            try Self.replaceRawJSON(rawJSON, stateDirectoryURL: stateDir)
             await state.recoverExecApprovalModeRead(maxAttempts: 1)
 
             #expect(state.execApprovalPolicyAvailable)
@@ -45,9 +83,9 @@ struct ExecApprovalsUIRollbackTests {
             _ = try ExecApprovalsStore.addAllowlistEntry(
                 agentId: "main",
                 pattern: "/usr/bin/printf").get()
-            let lockURL = stateDir.appendingPathComponent("exec-approvals.json.lock")
-            try Data("held".utf8).write(to: lockURL)
-            defer { try? FileManager().removeItem(at: lockURL) }
+            let record = try ExecApprovalsSQLiteStore.read(stateDirectoryURL: stateDir)
+            let rawJSON = try #require(record?.rawJSON)
+            try Self.replaceRawJSON("{", stateDirectoryURL: stateDir)
             let model = ExecApprovalsSettingsModel(
                 readRetryDelay: .zero,
                 automaticReadRetryAttempts: 0)
@@ -62,7 +100,7 @@ struct ExecApprovalsUIRollbackTests {
             #expect(!model.policyAvailable)
             #expect(model.readErrorMessage != nil)
 
-            try FileManager().removeItem(at: lockURL)
+            try Self.replaceRawJSON(rawJSON, stateDirectoryURL: stateDir)
             await model.retryUnavailableSettings(maxAttempts: 1)
 
             #expect(model.policyAvailable)
@@ -187,7 +225,11 @@ struct ExecApprovalsUIRollbackTests {
             }.get()
             let model = ExecApprovalsSettingsModel()
             await model.loadSettings(for: "main")
-            try Data("{".utf8).write(to: ExecApprovalsStore.fileURL(), options: [.atomic])
+            try Self.replaceRawJSON(
+                "{",
+                stateDirectoryURL: ExecApprovalsStore.databaseURL()
+                    .deletingLastPathComponent()
+                    .deletingLastPathComponent())
 
             model.setSecurity(.full)
 
@@ -213,7 +255,11 @@ struct ExecApprovalsUIRollbackTests {
             #expect(normalized == "/bin/echo")
             #expect(model.entry(for: entry.id)?.pattern == "/bin/echo")
 
-            try Data("{".utf8).write(to: ExecApprovalsStore.fileURL(), options: [.atomic])
+            try Self.replaceRawJSON(
+                "{",
+                stateDirectoryURL: ExecApprovalsStore.databaseURL()
+                    .deletingLastPathComponent()
+                    .deletingLastPathComponent())
             let rolledBack = model.updateEntry(pattern: "/bin/cat", id: entry.id)
 
             #expect(rolledBack == "/bin/echo")
@@ -256,6 +302,43 @@ struct ExecApprovalsUIRollbackTests {
         ]) {
             try await body(stateDir)
         }
+    }
+
+    private static func replaceRawJSON(
+        _ rawJSON: String,
+        stateDirectoryURL: URL) throws
+    {
+        let databaseURL = ExecApprovalsSQLiteStore.databaseURL(
+            stateDirectoryURL: stateDirectoryURL)
+        var database: OpaquePointer?
+        guard sqlite3_open(databaseURL.path, &database) == SQLITE_OK, let database else {
+            throw SQLiteTestError.open
+        }
+        defer { sqlite3_close(database) }
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(
+            database,
+            "UPDATE exec_approvals_config SET raw_json = ? WHERE config_key = 'current'",
+            -1,
+            &statement,
+            nil) == SQLITE_OK,
+            let statement
+        else {
+            throw SQLiteTestError.prepare
+        }
+        defer { sqlite3_finalize(statement) }
+        let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+        guard sqlite3_bind_text(statement, 1, rawJSON, -1, transient) == SQLITE_OK,
+              sqlite3_step(statement) == SQLITE_DONE
+        else {
+            throw SQLiteTestError.update
+        }
+    }
+
+    private enum SQLiteTestError: Error {
+        case open
+        case prepare
+        case update
     }
 }
 

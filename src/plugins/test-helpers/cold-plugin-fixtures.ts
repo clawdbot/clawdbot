@@ -111,14 +111,12 @@ export function createColdPluginConfig(pluginDir: string, pluginId: string): Ope
 
 export function createColdPluginHermeticEnv(
   homeDir: string,
-  options: { bundledPluginsDir?: string; disablePersistedRegistry?: boolean } = {},
+  options: { bundledPluginsDir?: string } = {},
 ): NodeJS.ProcessEnv {
   return {
     ...process.env,
     OPENCLAW_HOME: path.join(homeDir, "home"),
     OPENCLAW_BUNDLED_PLUGINS_DIR: options.bundledPluginsDir,
-    OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY:
-      options.disablePersistedRegistry === false ? undefined : "1",
     OPENCLAW_VERSION: "2026.4.25",
     VITEST: "true",
   };

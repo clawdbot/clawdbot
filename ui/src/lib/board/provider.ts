@@ -1,78 +1,34 @@
+import type {
+  BoardCommand,
+  BoardCommandEvent,
+  BoardOp,
+  BoardSnapshot,
+} from "@openclaw/gateway-protocol";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import {
   buildAgentMainSessionKey,
   normalizeSessionKeyForUiComparison,
 } from "../sessions/session-key.ts";
-import type { BoardOp, BoardSnapshot, BoardTab } from "./types.ts";
+import { GatewayBoardProvider } from "./gateway-provider.ts";
+import { applyMockBoardOp, normalizeMockBoardSnapshot } from "./mock-ops.ts";
+import { emptyBoardSnapshot, normalizeBoardWidgetTitle } from "./provider-helpers.ts";
+import {
+  EventStream,
+  ValueSignal,
+  type BoardEventStream,
+  type BoardSnapshotSignal,
+} from "./provider-signals.ts";
+import type { BoardPinMcpAppInput, BoardPinWidgetInput, BoardProvider } from "./provider-types.ts";
+import type { BoardWidgetAppViewState } from "./view-types.ts";
+import { canvasWidgetNameForDocument, mcpAppWidgetNameForViewId } from "./widget-names.ts";
+export type { BoardCommandEvent };
+export type { BoardProvider } from "./provider-types.ts";
+export type { BoardViewCallbacks, BoardWidgetAppViewState } from "./view-types.ts";
+export { canvasWidgetNameForDocument, mcpAppWidgetNameForViewId } from "./widget-names.ts";
+export { GatewayBoardProvider } from "./gateway-provider.ts";
 
-type BoardCommand =
-  | { kind: "focus_tab"; tabId: string }
-  | { kind: "set_chat_dock"; dock: BoardTab["chatDock"] };
-
-export type BoardCommandEvent = {
-  sessionKey: string;
-  command: BoardCommand;
-};
-
-type BoardSnapshotSignal = {
-  readonly value: BoardSnapshot;
-  subscribe(listener: () => void): () => void;
-};
-
-type BoardEventStream = {
-  subscribe(listener: (event: BoardCommandEvent) => void): () => void;
-};
-
-export type BoardProvider = {
-  readonly snapshot$: BoardSnapshotSignal;
-  applyOps(ops: BoardOp[]): Promise<void>;
-  grant(name: string, decision: "granted" | "rejected"): Promise<void>;
-  readonly events: BoardEventStream;
-};
-
-export type BoardViewCallbacks = {
-  applyOps(ops: BoardOp[]): Promise<void>;
-  grant(name: string, decision: "granted" | "rejected"): Promise<void>;
-  selectTab(tabId: string): void;
-  pinRequest?: never;
-};
-
-class ValueSignal<T> {
-  private readonly listeners = new Set<() => void>();
-
-  constructor(public value: T) {}
-
-  subscribe(listener: () => void): () => void {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
-  }
-
-  set(value: T): void {
-    this.value = value;
-    for (const listener of this.listeners) {
-      listener();
-    }
-  }
-}
-
-class EventStream<T> {
-  private readonly listeners = new Set<(event: T) => void>();
-
-  subscribe(listener: (event: T) => void): () => void {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
-  }
-
-  emit(event: T): void {
-    for (const listener of this.listeners) {
-      listener(event);
-    }
-  }
-}
-
-function emptySnapshot(sessionKey: string): BoardSnapshot {
-  return { sessionKey, revision: 0, tabs: [], widgets: [] };
-}
+type BoardGatewayClient = Pick<GatewayBrowserClient, "request" | "addEventListener">;
 
 function mockSnapshot(sessionKey: string): BoardSnapshot {
   return {
@@ -130,21 +86,51 @@ export function boardExists(snapshot: BoardSnapshot): boolean {
 }
 
 class NullProvider implements BoardProvider {
-  readonly snapshot$: BoardSnapshotSignal;
-  readonly events: BoardEventStream = new EventStream<BoardCommandEvent>();
+  readonly canMutate = false;
+  readonly canGrant = false;
+  readonly canPinWidgets = false;
+  readonly canPinMcpApps = false;
+  readonly snapshot$: BoardSnapshotSignal<BoardSnapshot>;
+  readonly events: BoardEventStream<BoardCommandEvent> = new EventStream<BoardCommandEvent>();
 
-  constructor(sessionKey = "") {
-    this.snapshot$ = new ValueSignal(emptySnapshot(sessionKey));
+  constructor(readonly sessionKey = "") {
+    this.snapshot$ = new ValueSignal(emptyBoardSnapshot(sessionKey));
   }
 
   async applyOps(_ops: BoardOp[]): Promise<void> {}
 
   async grant(_name: string, _decision: "granted" | "rejected"): Promise<void> {}
+
+  async pinWidget(_input: BoardPinWidgetInput): Promise<void> {
+    throw new Error("Session dashboard unavailable");
+  }
+
+  async pinMcpApp(_input: BoardPinMcpAppInput): Promise<void> {
+    throw new Error("Session dashboard unavailable");
+  }
+
+  widgetFrameUrl(_name: string, _revision: number): string {
+    return "";
+  }
+
+  async refreshWidgetFrame(_name: string): Promise<void> {}
+
+  async widgetAppView(_name: string, _revision: number): Promise<BoardWidgetAppViewState> {
+    return { status: "stale", error: "Session dashboard unavailable" };
+  }
+
+  async refreshWidgetAppView(_name: string, _revision: number): Promise<BoardWidgetAppViewState> {
+    return { status: "stale", error: "Session dashboard unavailable" };
+  }
 }
 
 class MockBoardProvider implements BoardProvider {
-  readonly snapshot$: BoardSnapshotSignal;
-  readonly events: BoardEventStream;
+  readonly canMutate = true;
+  readonly canGrant = true;
+  readonly canPinWidgets = true;
+  readonly canPinMcpApps = true;
+  readonly snapshot$: BoardSnapshotSignal<BoardSnapshot>;
+  readonly events: BoardEventStream<BoardCommandEvent>;
   private readonly snapshotSignal: ValueSignal<BoardSnapshot>;
   private readonly eventStream = new EventStream<BoardCommandEvent>();
 
@@ -157,7 +143,7 @@ class MockBoardProvider implements BoardProvider {
   async applyOps(ops: BoardOp[]): Promise<void> {
     let snapshot = this.snapshotSignal.value;
     for (const op of ops) {
-      snapshot = normalizeMockSnapshot(applyMockOp(snapshot, op));
+      snapshot = normalizeMockBoardSnapshot(applyMockBoardOp(snapshot, op));
     }
     this.snapshotSignal.set({ ...snapshot, revision: snapshot.revision + 1 });
   }
@@ -177,170 +163,181 @@ class MockBoardProvider implements BoardProvider {
     });
   }
 
+  async pinWidget(input: BoardPinWidgetInput): Promise<void> {
+    const name = input.name ?? canvasWidgetNameForDocument(input.docId);
+    this.pinMockBoardWidget(input, name, "html");
+  }
+
+  async pinMcpApp(input: BoardPinMcpAppInput): Promise<void> {
+    const name = input.name ?? mcpAppWidgetNameForViewId(input.viewId);
+    this.pinMockBoardWidget(input, name, "mcp-app");
+  }
+
+  private pinMockBoardWidget(
+    input: BoardPinWidgetInput | BoardPinMcpAppInput,
+    name: string,
+    contentKind: "html" | "mcp-app",
+  ): void {
+    const snapshot = this.snapshotSignal.value;
+    const title = normalizeBoardWidgetTitle(input.title);
+    const tabId = input.tabId ?? snapshot.tabs[0]?.tabId ?? "main";
+    const tabs = snapshot.tabs.length
+      ? snapshot.tabs
+      : [
+          {
+            tabId: "main",
+            title: t("chat.board.defaultTab"),
+            position: 0,
+            chatDock: "right" as const,
+          },
+        ];
+    const existing = snapshot.widgets.find((widget) => widget.name === name);
+    const widgets = snapshot.widgets.filter((widget) => widget.name !== name);
+    widgets.push({
+      name,
+      tabId,
+      ...(title ? { title } : {}),
+      contentKind,
+      sizeW: existing?.sizeW ?? 6,
+      sizeH: existing?.sizeH ?? 4,
+      position: existing?.position ?? widgets.filter((widget) => widget.tabId === tabId).length,
+      grantState: "none",
+      revision: (existing?.revision ?? 0) + 1,
+      ...(contentKind === "html"
+        ? { frameUrl: `about:blank#board-widget=${encodeURIComponent(name)}` }
+        : {}),
+    });
+    this.snapshotSignal.set(
+      normalizeMockBoardSnapshot({ ...snapshot, revision: snapshot.revision + 1, tabs, widgets }),
+    );
+  }
+
+  widgetFrameUrl(name: string, revision: number): string {
+    return (
+      this.snapshotSignal.value.widgets.find(
+        (widget) => widget.name === name && widget.revision === revision,
+      )?.frameUrl ?? `about:blank#board-widget=${encodeURIComponent(name)}&revision=${revision}`
+    );
+  }
+
+  async refreshWidgetFrame(_name: string): Promise<void> {}
+
+  async widgetAppView(_name: string, _revision: number): Promise<BoardWidgetAppViewState> {
+    return { status: "stale", error: "MCP App mock view unavailable" };
+  }
+
+  async refreshWidgetAppView(name: string, revision: number): Promise<BoardWidgetAppViewState> {
+    return await this.widgetAppView(name, revision);
+  }
+
   emitCommand(command: BoardCommand): void {
     this.eventStream.emit({ sessionKey: this.sessionKey, command });
   }
 }
 
-function normalizeMockSnapshot(snapshot: BoardSnapshot): BoardSnapshot {
-  const tabs = snapshot.tabs
-    .toSorted((left, right) => left.position - right.position)
-    .map((tab, position) => Object.assign({}, tab, { position }));
-  const tabPositions = new Map(tabs.map((tab) => [tab.tabId, tab.position]));
-  const nextWidgetPosition = new Map<string, number>();
-  const widgets = snapshot.widgets
-    .toSorted((left, right) => {
-      const tabDelta =
-        (tabPositions.get(left.tabId) ?? Number.MAX_SAFE_INTEGER) -
-        (tabPositions.get(right.tabId) ?? Number.MAX_SAFE_INTEGER);
-      return tabDelta || left.position - right.position;
-    })
-    .map((widget) => {
-      const position = nextWidgetPosition.get(widget.tabId) ?? 0;
-      nextWidgetPosition.set(widget.tabId, position + 1);
-      return Object.assign({}, widget, { position });
-    });
-  return { ...snapshot, tabs, widgets };
-}
+type BoardProviderCapabilities = Pick<
+  BoardProvider,
+  "canPinWidgets" | "canPinMcpApps" | "canMutate" | "canGrant"
+>;
 
-function applyMockOp(snapshot: BoardSnapshot, op: BoardOp): BoardSnapshot {
-  switch (op.kind) {
-    case "tab_create":
-      if (snapshot.tabs.some((tab) => tab.tabId === op.tabId)) {
-        return snapshot;
-      }
-      return {
-        ...snapshot,
-        tabs: [
-          ...snapshot.tabs,
-          {
-            tabId: op.tabId,
-            title: op.title,
-            position: snapshot.tabs.length,
-            chatDock: op.chatDock ?? "right",
-          },
-        ],
-      };
-    case "tab_update": {
-      const orderedTabs = snapshot.tabs.toSorted((left, right) => left.position - right.position);
-      const tabIndex = orderedTabs.findIndex((tab) => tab.tabId === op.tabId);
-      if (tabIndex < 0) {
-        return snapshot;
-      }
-      const [tab] = orderedTabs.splice(tabIndex, 1);
-      const updated = {
-        ...tab!,
-        ...(op.title !== undefined ? { title: op.title } : {}),
-        ...(op.chatDock !== undefined ? { chatDock: op.chatDock } : {}),
-      };
-      const position = Math.max(
-        0,
-        Math.min(
-          op.position === undefined ? tabIndex : Math.trunc(op.position),
-          orderedTabs.length,
-        ),
-      );
-      orderedTabs.splice(position, 0, updated);
-      return {
-        ...snapshot,
-        tabs: orderedTabs.map((candidate, nextPosition) =>
-          Object.assign({}, candidate, { position: nextPosition }),
-        ),
-      };
-    }
-    case "tab_delete": {
-      const remainingTabs = snapshot.tabs.filter((tab) => tab.tabId !== op.tabId);
-      if (remainingTabs.length === 0 && snapshot.widgets.length > 0) {
-        return snapshot;
-      }
-      const firstTabId = remainingTabs[0]?.tabId;
-      return {
-        ...snapshot,
-        tabs: remainingTabs,
-        widgets: snapshot.widgets.map((widget) =>
-          widget.tabId === op.tabId && firstTabId
-            ? { ...widget, tabId: firstTabId, position: Number.MAX_SAFE_INTEGER }
-            : widget,
-        ),
-      };
-    }
-    case "tabs_reorder": {
-      const requestedTabIds = new Set(op.tabIds);
-      if (
-        op.tabIds.length !== snapshot.tabs.length ||
-        requestedTabIds.size !== snapshot.tabs.length ||
-        snapshot.tabs.some((tab) => !requestedTabIds.has(tab.tabId))
-      ) {
-        return snapshot;
-      }
-      return {
-        ...snapshot,
-        tabs: op.tabIds.flatMap((tabId, position) => {
-          const tab = snapshot.tabs.find((candidate) => candidate.tabId === tabId);
-          return tab ? [{ ...tab, position }] : [];
-        }),
-      };
-    }
-    case "widget_move": {
-      const moving = snapshot.widgets.find((widget) => widget.name === op.name);
-      const anchor = op.after
-        ? snapshot.widgets.find((widget) => widget.name === op.after)
-        : undefined;
-      if (!moving || (op.after && (!anchor || anchor.name === moving.name))) {
-        return snapshot;
-      }
-      const targetTabId = op.tabId ?? moving.tabId;
-      if (
-        (op.position !== undefined && op.after !== undefined) ||
-        !snapshot.tabs.some((tab) => tab.tabId === targetTabId) ||
-        (anchor && anchor.tabId !== targetTabId)
-      ) {
-        return snapshot;
-      }
-      const remaining = snapshot.widgets.filter((widget) => widget.name !== moving.name);
-      const targetWidgets = remaining
-        .filter((widget) => widget.tabId === targetTabId)
-        .toSorted((left, right) => left.position - right.position);
-      const anchorIndex = anchor
-        ? targetWidgets.findIndex((widget) => widget.name === anchor.name)
-        : -1;
-      const insertionIndex = anchor
-        ? anchorIndex + 1
-        : Math.max(0, Math.min(op.position ?? targetWidgets.length, targetWidgets.length));
-      targetWidgets.splice(insertionIndex, 0, { ...moving, tabId: targetTabId });
-      return {
-        ...snapshot,
-        widgets: snapshot.tabs.flatMap((tab) =>
-          (tab.tabId === targetTabId
-            ? targetWidgets
-            : remaining
-                .filter((widget) => widget.tabId === tab.tabId)
-                .toSorted((left, right) => left.position - right.position)
-          ).map((widget, position) => Object.assign({}, widget, { position })),
-        ),
-      };
-    }
-    case "widget_resize":
-      return {
-        ...snapshot,
-        widgets: snapshot.widgets.map((widget) =>
-          widget.name === op.name
-            ? {
-                ...widget,
-                sizeW: Math.min(12, Math.max(1, Math.trunc(op.sizeW))),
-                sizeH: Math.min(20, Math.max(1, Math.trunc(op.sizeH))),
-              }
-            : widget,
-        ),
-      };
-    case "widget_remove":
-      return { ...snapshot, widgets: snapshot.widgets.filter((widget) => widget.name !== op.name) };
+// Snapshots and gateway subscriptions are session-owned, but authority belongs
+// to each live consumer; sharing it would let another dashboard widen an action.
+class ScopedGatewayBoardProvider implements BoardProvider {
+  readonly snapshot$: BoardSnapshotSignal<BoardSnapshot>;
+  readonly events: BoardEventStream<BoardCommandEvent>;
+  private active = true;
+
+  constructor(
+    private readonly transport: GatewayBoardProvider,
+    private capabilities: BoardProviderCapabilities,
+  ) {
+    this.snapshot$ = transport.snapshot$;
+    this.events = transport.events;
   }
-  return snapshot;
+
+  get sessionKey(): string {
+    return this.transport.sessionKey;
+  }
+
+  get canPinWidgets(): boolean {
+    return this.active && this.capabilities.canPinWidgets;
+  }
+
+  get canPinMcpApps(): boolean {
+    return this.active && this.capabilities.canPinMcpApps;
+  }
+
+  get canMutate(): boolean {
+    return this.active && this.capabilities.canMutate;
+  }
+
+  get canGrant(): boolean {
+    return this.active && this.capabilities.canGrant;
+  }
+
+  get hasLoadedSnapshot(): boolean {
+    return this.transport.hasLoadedSnapshot;
+  }
+
+  updateCapabilities(capabilities: BoardProviderCapabilities): void {
+    if (this.active) {
+      this.capabilities = capabilities;
+    }
+  }
+
+  deactivate(): void {
+    this.active = false;
+  }
+
+  async applyOps(ops: BoardOp[]): Promise<void> {
+    if (!this.canMutate) {
+      throw new Error("Session dashboard mutation unavailable");
+    }
+    await this.transport.applyOps(ops);
+  }
+
+  async grant(name: string, decision: "granted" | "rejected"): Promise<void> {
+    if (!this.canGrant) {
+      throw new Error("Session dashboard approval unavailable");
+    }
+    await this.transport.grant(name, decision);
+  }
+
+  async pinWidget(input: BoardPinWidgetInput): Promise<void> {
+    if (!this.canMutate || !this.canPinWidgets) {
+      throw new Error("Session dashboard widget pinning unavailable");
+    }
+    await this.transport.pinWidget(input);
+  }
+
+  async pinMcpApp(input: BoardPinMcpAppInput): Promise<void> {
+    if (!this.canMutate || !this.canPinMcpApps) {
+      throw new Error("Session dashboard MCP App pinning unavailable");
+    }
+    await this.transport.pinMcpApp(input);
+  }
+
+  widgetFrameUrl(name: string, revision: number): string {
+    return this.transport.widgetFrameUrl(name, revision);
+  }
+
+  refreshWidgetFrame(name: string): Promise<void> {
+    return this.transport.refreshWidgetFrame(name);
+  }
+
+  widgetAppView(name: string, revision: number): Promise<BoardWidgetAppViewState> {
+    return this.transport.widgetAppView(name, revision);
+  }
+
+  refreshWidgetAppView(name: string, revision: number): Promise<BoardWidgetAppViewState> {
+    return this.transport.refreshWidgetAppView(name, revision);
+  }
 }
 
 const nullProviders = new Map<string, NullProvider>();
 const mockProviders = new Map<string, MockBoardProvider>();
+const gatewayProviders = new Map<string, { provider: GatewayBoardProvider; consumers: number }>();
+const boardAvailability = new Map<string, boolean>();
 let mockProviderScope: object | null = null;
 
 function resolveMockBoardScope(): object | null {
@@ -348,11 +345,7 @@ function resolveMockBoardScope(): object | null {
   if (new URLSearchParams(location?.search ?? "").get("mockBoard") === "1") {
     return location;
   }
-  return (
-    (typeof document !== "undefined" &&
-      document.querySelector("script[data-openclaw-control-ui-mock-gateway]")) ||
-    null
-  );
+  return null;
 }
 
 export function isMockBoardEnabled(): boolean {
@@ -363,12 +356,14 @@ function isMockBoardSession(sessionKey: string): boolean {
   return /^agent:[^:]+:[^:]+$/u.test(sessionKey);
 }
 
-function boardProviderCacheKey(sessionKey: string): string {
+export function boardProviderCacheKey(sessionKey: string): string {
   const normalized = normalizeSessionKeyForUiComparison(sessionKey);
   return normalized === "main" ? buildAgentMainSessionKey({ agentId: "main" }) : normalized;
 }
 
-export function boardProviderForSession(sessionKey: string): BoardProvider {
+// Session lookups are read-only: only a lifecycle-owned lease may create and
+// subscribe a gateway transport, so hidden panes cannot orphan subscriptions.
+export function boardProviderForSession(sessionKey: string, available = true): BoardProvider {
   const key = boardProviderCacheKey(sessionKey);
   const mockScope = resolveMockBoardScope();
   if (mockScope && isMockBoardSession(key)) {
@@ -383,6 +378,10 @@ export function boardProviderForSession(sessionKey: string): BoardProvider {
     }
     return provider;
   }
+  const gatewayProvider = available ? gatewayProviders.get(key)?.provider : undefined;
+  if (gatewayProvider) {
+    return gatewayProvider;
+  }
   let provider = nullProviders.get(key);
   if (!provider) {
     provider = new NullProvider(key);
@@ -391,6 +390,103 @@ export function boardProviderForSession(sessionKey: string): BoardProvider {
   return provider;
 }
 
+export type BoardProviderLease = {
+  provider: BoardProvider;
+  update: (
+    client: BoardGatewayClient,
+    connected: boolean,
+    capabilities: BoardProviderCapabilities,
+  ) => void;
+  release: () => void;
+};
+
+export function acquireBoardProviderForSession(
+  sessionKey: string,
+  client: BoardGatewayClient,
+  connected = true,
+  canPinWidgets = true,
+  canPinMcpApps = false,
+  canMutate = true,
+  canGrant = true,
+): BoardProviderLease {
+  const key = boardProviderCacheKey(sessionKey);
+  const provider = boardProviderForSession(key);
+  if (provider instanceof MockBoardProvider) {
+    return { provider, update: () => undefined, release: () => undefined };
+  }
+  let entry = gatewayProviders.get(key);
+  if (!entry) {
+    entry = { provider: new GatewayBoardProvider(key, client, connected), consumers: 0 };
+    gatewayProviders.set(key, entry);
+  } else {
+    entry.provider.attachClient(client, connected);
+  }
+  const scopedProvider = new ScopedGatewayBoardProvider(entry.provider, {
+    canPinWidgets,
+    canPinMcpApps,
+    canMutate,
+    canGrant,
+  });
+  entry.consumers += 1;
+  let released = false;
+  return {
+    provider: scopedProvider,
+    update: (nextClient, nextConnected, capabilities) => {
+      if (released || gatewayProviders.get(key)?.provider !== entry.provider) {
+        return;
+      }
+      scopedProvider.updateCapabilities(capabilities);
+      entry.provider.attachClient(nextClient, nextConnected);
+    },
+    release: () => {
+      if (released) {
+        return;
+      }
+      released = true;
+      scopedProvider.deactivate();
+      const current = gatewayProviders.get(key);
+      if (!current || current.provider !== entry.provider) {
+        return;
+      }
+      current.consumers -= 1;
+      if (current.consumers > 0) {
+        return;
+      }
+      if (current.provider.hasLoadedSnapshot) {
+        boardAvailability.set(key, boardExists(current.provider.snapshot$.value));
+      }
+      gatewayProviders.delete(key);
+      current.provider.dispose();
+    },
+  };
+}
+
+export function hasLoadedBoardSnapshot(provider: BoardProvider): boolean {
+  if (provider instanceof GatewayBoardProvider || provider instanceof ScopedGatewayBoardProvider) {
+    return provider.hasLoadedSnapshot;
+  }
+  return true;
+}
+
+export function recordSessionBoardAvailability(sessionKey: string, available: boolean): boolean {
+  const key = boardProviderCacheKey(sessionKey);
+  const previous = boardAvailability.get(key);
+  boardAvailability.set(key, available);
+  return previous !== available;
+}
+
+export function clearSessionBoardAvailability(): boolean {
+  const changed = boardAvailability.size > 0;
+  boardAvailability.clear();
+  return changed;
+}
+
 export function sessionHasBoard(sessionKey: string): boolean {
-  return boardExists(boardProviderForSession(sessionKey).snapshot$.value);
+  const key = boardProviderCacheKey(sessionKey);
+  const provider = gatewayProviders.get(key)?.provider ?? mockProviders.get(key);
+  // An unloaded gateway provider holds a placeholder, not an authoritative empty board.
+  if (provider instanceof GatewayBoardProvider && !provider.hasLoadedSnapshot) {
+    return boardAvailability.get(key) ?? false;
+  }
+  return provider ? boardExists(provider.snapshot$.value) : (boardAvailability.get(key) ?? false);
 }

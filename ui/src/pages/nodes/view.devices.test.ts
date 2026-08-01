@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { InventoryRemovalRequest } from "../../lib/nodes/index.ts";
 import { getRenderedModalDialog } from "../../test-helpers/modal-dialog.ts";
 import { renderNodes } from "./view.ts";
@@ -630,6 +630,46 @@ describe("nodes inventory rendering", () => {
 });
 
 describe("nodes exec approvals rendering", () => {
+  it("renders defaults, configured agents, and approval-only agents in the avatar picker", async () => {
+    const onExecApprovalsSelectAgent = vi.fn();
+    const container = renderNodesContainer({
+      configForm: {
+        agents: {
+          entries: {
+            main: { name: "Main", default: true },
+            research: { name: "Research" },
+          },
+        },
+      },
+      execApprovalsForm: {
+        version: 1,
+        defaults: { security: "deny" },
+        agents: { retired: { security: "full" } },
+      },
+      execApprovalsSelectedAgent: "research",
+      onExecApprovalsSelectAgent,
+    });
+    const section = getSection(container, "Exec approvals");
+    const picker = section.querySelector<
+      HTMLElement & {
+        options: Array<{ value: string; badge?: string }>;
+        onSelect: (value: string) => void;
+        updateComplete: Promise<boolean>;
+      }
+    >("openclaw-agent-select");
+    await picker?.updateComplete;
+
+    expect(picker?.options.map((option) => option.value)).toEqual([
+      "__defaults__",
+      "main",
+      "research",
+      "retired",
+    ]);
+    expect(picker?.options.find((option) => option.value === "main")?.badge).toBe("Default");
+    picker?.onSelect("retired");
+    expect(onExecApprovalsSelectAgent).toHaveBeenCalledWith("retired");
+  });
+
   it("renders host-native Windows policies as read-only", () => {
     const container = renderNodesContainer({
       nodes: [
@@ -655,5 +695,36 @@ describe("nodes exec approvals rendering", () => {
     expect(section.textContent).toContain("hostname");
     expect(section.textContent).toContain("deny");
     expect(section.querySelector("button")?.hasAttribute("disabled")).toBe(true);
+  });
+});
+
+describe("nodes agent bindings", () => {
+  it("reports the keyed agent id when a binding changes", () => {
+    const onBindAgent = vi.fn();
+    const container = renderNodesContainer({
+      nodes: [
+        {
+          nodeId: "worker-node",
+          displayName: "Worker node",
+          commands: ["system.run"],
+        },
+      ],
+      configForm: {
+        agents: {
+          entries: {
+            MAIN: { default: true },
+            research: {},
+          },
+        },
+      },
+      onBindAgent,
+    });
+    const bindingSection = getSection(container, "Exec node binding");
+    const selects = bindingSection.querySelectorAll<HTMLSelectElement>("select.settings-select");
+
+    selects[1]!.value = "worker-node";
+    selects[1]!.dispatchEvent(new Event("change"));
+
+    expect(onBindAgent).toHaveBeenCalledWith("MAIN", "worker-node");
   });
 });

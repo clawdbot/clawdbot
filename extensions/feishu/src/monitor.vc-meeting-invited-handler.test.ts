@@ -14,7 +14,6 @@ const createFeishuThreadBindingManagerMock = vi.hoisted(() => vi.fn(() => ({ sto
 const dedupMocks = vi.hoisted(() => ({
   warmupDedupFromPluginState: vi.fn(async () => 0),
   hasProcessedFeishuMessage: vi.fn(async () => false),
-  recordProcessedFeishuMessage: vi.fn(async () => true),
 }));
 
 let handlers: Record<string, (data: unknown) => Promise<void>> = {};
@@ -46,7 +45,6 @@ vi.mock("./dedup.js", async () => {
     ...actual,
     warmupDedupFromPluginState: dedupMocks.warmupDedupFromPluginState,
     hasProcessedFeishuMessage: dedupMocks.hasProcessedFeishuMessage,
-    recordProcessedFeishuMessage: dedupMocks.recordProcessedFeishuMessage,
   };
 });
 
@@ -126,7 +124,6 @@ describe("createFeishuVcMeetingInvitedHandler", () => {
     handleFeishuMessageMock.mockResolvedValue(undefined);
     dedupMocks.warmupDedupFromPluginState.mockResolvedValue(0);
     dedupMocks.hasProcessedFeishuMessage.mockResolvedValue(false);
-    dedupMocks.recordProcessedFeishuMessage.mockResolvedValue(true);
   });
 
   it("ignores invitations unless VC auto-join is enabled", async () => {

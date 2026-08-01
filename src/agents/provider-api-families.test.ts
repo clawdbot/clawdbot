@@ -1,6 +1,6 @@
 // Verifies provider API family helpers gate GPT parallel tool-call payloads.
 import { describe, expect, it } from "vitest";
-import { supportsGptParallelToolCallsPayload } from "./provider-api-families.js";
+import { testing as extraParamsTesting } from "./embedded-agent-runner/extra-params.test-support.js";
 
 describe("provider api families", () => {
   it.each([
@@ -9,11 +9,13 @@ describe("provider api families", () => {
     "openai-chatgpt-responses",
     "azure-openai-responses",
   ])("classifies %s as supporting the GPT parallel_tool_calls payload patch", (api) => {
-    expect(supportsGptParallelToolCallsPayload(api)).toBe(true);
+    expect(extraParamsTesting.supportsGptParallelToolCallsPayload(api)).toBe(true);
   });
 
   it("rejects unrelated APIs", () => {
-    expect(supportsGptParallelToolCallsPayload("anthropic-messages")).toBe(false);
-    expect(supportsGptParallelToolCallsPayload(undefined)).toBe(false);
+    expect(extraParamsTesting.supportsGptParallelToolCallsPayload("anthropic-messages")).toBe(
+      false,
+    );
+    expect(extraParamsTesting.supportsGptParallelToolCallsPayload(undefined)).toBe(false);
   });
 });

@@ -58,6 +58,7 @@ type ScopedToolsCall = {
   currentInboundAudio?: boolean;
   inboundEventKind?: string;
   sourceReplyDeliveryMode?: string;
+  sourceReplyOnly?: boolean;
   taskSuggestionDeliveryMode?: string;
   requireExplicitMessageTarget?: boolean;
   senderIsOwner?: boolean;
@@ -863,7 +864,7 @@ describe("buildMcpToolSchema", () => {
       },
     });
     expect(logWarnMock.mock.calls.map(([message]) => message)).toEqual([
-      'mcp loopback: conflicting schema definitions for "codex_threads_constrained_literals.action", keeping the first variant',
+      'mcp-loopback: conflicting schema definitions for "codex_threads_constrained_literals.action", keeping the first variant',
     ]);
   });
 
@@ -930,9 +931,51 @@ describe("buildMcpToolSchema", () => {
     }
 
     expect(logWarnMock.mock.calls.map(([message]) => message)).toEqual([
-      'mcp loopback: conflicting schema definitions for "mcp_message_send_rebuild.action", keeping the first variant',
-      'mcp loopback: conflicting schema definitions for "mcp_message_send_rebuild.callId", keeping the first variant',
+      'mcp-loopback: conflicting schema definitions for "mcp_message_send_rebuild.action", keeping the first variant',
+      'mcp-loopback: conflicting schema definitions for "mcp_message_send_rebuild.callId", keeping the first variant',
     ]);
+  });
+
+  it("does not warn for structurally identical union property schemas", () => {
+    const tool = makeMockTool({
+      name: "lark_doc_read",
+      parameters: {
+        anyOf: [
+          {
+            type: "object",
+            properties: {
+              doc_token: {
+                type: "string",
+                description: "Lark document token",
+                minLength: 1,
+              },
+            },
+          },
+          {
+            type: "object",
+            properties: {
+              doc_token: {
+                minLength: 1,
+                description: "Lark document token",
+                type: "string",
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    expect(buildMockMcpToolSchema([tool])[0]?.inputSchema).toMatchObject({
+      type: "object",
+      properties: {
+        doc_token: {
+          type: "string",
+          description: "Lark document token",
+          minLength: 1,
+        },
+      },
+    });
+    expect(logWarnMock).not.toHaveBeenCalled();
   });
 
   it("warns per tool for the same conflicting field name across different tools", () => {
@@ -956,8 +999,8 @@ describe("buildMcpToolSchema", () => {
     buildMockMcpToolSchema([messageTool, calendarTool]);
 
     expect(logWarnMock.mock.calls.map(([message]) => message)).toEqual([
-      'mcp loopback: conflicting schema definitions for "mcp_message_send_per_tool.action", keeping the first variant',
-      'mcp loopback: conflicting schema definitions for "mcp_calendar_create_per_tool.action", keeping the first variant',
+      'mcp-loopback: conflicting schema definitions for "mcp_message_send_per_tool.action", keeping the first variant',
+      'mcp-loopback: conflicting schema definitions for "mcp_calendar_create_per_tool.action", keeping the first variant',
     ]);
   });
 
@@ -976,12 +1019,57 @@ describe("buildMcpToolSchema", () => {
     buildMockMcpToolSchema([tool]);
 
     expect(logWarnMock.mock.calls.map(([message]) => message)).toEqual([
-      'mcp loopback: malformed schema definition for "mcp_message_send_malformed.action", ignoring that variant',
+      'mcp-loopback: malformed schema definition for "mcp_message_send_malformed.action", ignoring that variant',
     ]);
   });
 });
 
 describe("mcp loopback server", () => {
+  it("keeps equal schemas quiet and dedupes genuine conflicts across HTTP cache misses", async () => {
+    mockScopedTools([
+      makeMockTool({
+        name: "lark_doc_read",
+        parameters: {
+          anyOf: [
+            {
+              type: "object",
+              properties: {
+                doc_token: { type: "string", description: "Lark document token" },
+                action: { type: "string" },
+              },
+            },
+            {
+              type: "object",
+              properties: {
+                doc_token: { description: "Lark document token", type: "string" },
+                action: { type: "number" },
+              },
+            },
+          ],
+        },
+      }),
+    ]);
+    const { runtime } = await startLoopbackServerForTest();
+
+    for (let index = 0; index < 3; index += 1) {
+      const payload = await readOkMcpPayload(
+        await sendLoopbackToolsList({
+          token: runtime.ownerToken,
+          headers: {
+            ...MAIN_SESSION_HEADER,
+            "x-openclaw-current-message-id": `message-${index}`,
+          },
+        }),
+      );
+      expectMcpToolNames(payload, ["lark_doc_read"]);
+    }
+
+    expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(3);
+    expect(logWarnMock.mock.calls.map(([message]) => message)).toEqual([
+      'mcp-loopback: conflicting schema definitions for "lark_doc_read.action", keeping the first variant',
+    ]);
+  });
+
   it("rejects reserved harness contexts before tool resolution", async () => {
     const { runtime } = await startLoopbackServerForTest();
     const response = await sendLoopbackToolsList({
@@ -1165,6 +1253,7 @@ describe("mcp loopback server", () => {
         "x-openclaw-current-channel-id": "telegram:victim-chat",
         "x-openclaw-current-thread-ts": "999",
         "x-openclaw-source-reply-delivery-mode": "automatic",
+        "x-openclaw-source-reply-only": "true",
         "x-openclaw-inbound-event-kind": "room_event",
       }),
       body: mcpToolsListBody(),
@@ -1181,6 +1270,7 @@ describe("mcp loopback server", () => {
     expect(call.currentChannelId).toBeUndefined();
     expect(call.currentThreadTs).toBeUndefined();
     expect(call.sourceReplyDeliveryMode).toBeUndefined();
+    expect(call.sourceReplyOnly).toBeUndefined();
     expect(call.inboundEventKind).toBeUndefined();
     expect(call.conversationReadOrigin).toBe("delegated");
     expect(call.includeNodeExecTool).toBe(false);
@@ -1207,6 +1297,8 @@ describe("mcp loopback server", () => {
         accountId: "bound-account",
         inboundEventKind: "user_request",
         sourceReplyDeliveryMode: "message_tool_only",
+        sourceReplyOnly: true,
+        toolsAllow: ["message"],
         taskSuggestionDeliveryMode: "gateway",
         requireExplicitMessageTarget: true,
         senderIsOwner: false,
@@ -1260,6 +1352,7 @@ describe("mcp loopback server", () => {
           "x-openclaw-current-inbound-audio": "false",
           "x-openclaw-inbound-event-kind": "room_event",
           "x-openclaw-source-reply-delivery-mode": "automatic",
+          "x-openclaw-source-reply-only": "false",
           "x-openclaw-task-suggestion-delivery-mode": "direct",
           "x-openclaw-require-explicit-message-target": "false",
         }),
@@ -1288,6 +1381,7 @@ describe("mcp loopback server", () => {
       accountId: "bound-account",
       inboundEventKind: "user_request",
       sourceReplyDeliveryMode: "message_tool_only",
+      sourceReplyOnly: true,
       taskSuggestionDeliveryMode: "gateway",
       requireExplicitMessageTarget: true,
       senderIsOwner: false,
@@ -2747,6 +2841,44 @@ describe("mcp loopback server", () => {
     expect(signal).toBeInstanceOf(AbortSignal);
   });
 
+  it("resolves legacy cron tools/call names to the renamed automations tool", async () => {
+    const execute = vi.fn<MockGatewayTool["execute"]>(async () => ({
+      content: [{ type: "text", text: "SCHEDULED" }],
+    }));
+    const tool = makeMockTool({ name: "automations", description: "manage schedules", execute });
+
+    const payload = await handleMcpJsonRpc({
+      message: {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "cron", arguments: {} },
+      },
+      tools: [tool as unknown as AnyAgentTool],
+      toolSchema: buildMockMcpToolSchema([tool]),
+    });
+
+    expectMcpResultText(payload as McpToolResultPayload, "SCHEDULED", false);
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("still rejects legacy cron calls when the automations tool is not exposed", async () => {
+    const tool = makeMessageTool();
+
+    const payload = await handleMcpJsonRpc({
+      message: {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "cron", arguments: {} },
+      },
+      tools: [tool as unknown as AnyAgentTool],
+      toolSchema: buildMockMcpToolSchema([tool]),
+    });
+
+    expectMcpResultText(payload as McpToolResultPayload, "Tool not available: cron", true);
+  });
+
   it("preserves request-disconnect evidence without classifying a tool failure", async () => {
     const controller = new AbortController();
     controller.abort();
@@ -3281,13 +3413,22 @@ describe("createMcpLoopbackServerConfig", () => {
     if (!oldRuntime) {
       throw new Error("expected old MCP loopback runtime");
     }
-    let stalledRequest: ReturnType<typeof request> | undefined;
-    let resolveSocketReady: () => void = () => {};
-    let rejectSocketReady: (error: Error) => void = () => {};
-    const socketReady = new Promise<void>((resolve, reject) => {
-      resolveSocketReady = resolve;
-      rejectSocketReady = reject;
+    // Node only exempts a connection from close()'s idle sweep once its parser has
+    // begun a message, so the drain is pinned by the server-side request start, not
+    // by the client-side connect. Capture admission is that server-side signal.
+    const captureKey = "capture-stalled-drain";
+    let resolveRequestStarted: () => void = () => {};
+    let rejectRequestStarted: (error: Error) => void = () => {};
+    const requestStarted = new Promise<void>((resolve, reject) => {
+      resolveRequestStarted = resolve;
+      rejectRequestStarted = reject;
     });
+    beginMcpLoopbackToolCallCapture({
+      captureKey,
+      onRequestStart: () => resolveRequestStarted(),
+      onToolCallResult: vi.fn(),
+    });
+    let stalledRequest: ReturnType<typeof request> | undefined;
     const responsePromise = new Promise<void>((resolve, reject) => {
       const req = request(
         {
@@ -3299,6 +3440,7 @@ describe("createMcpLoopbackServerConfig", () => {
             authorization: `Bearer ${oldRuntime.ownerToken}`,
             connection: "close",
             "content-type": "application/json",
+            "x-openclaw-cli-capture-key": captureKey,
           },
         },
         (res) => {
@@ -3306,15 +3448,8 @@ describe("createMcpLoopbackServerConfig", () => {
           res.once("end", resolve);
         },
       );
-      req.once("socket", (socket) => {
-        if (!socket.connecting) {
-          resolveSocketReady();
-          return;
-        }
-        socket.once("connect", resolveSocketReady);
-      });
       req.once("error", (error) => {
-        rejectSocketReady(error);
+        rejectRequestStarted(error);
         reject(error);
       });
       req.write("{");
@@ -3330,20 +3465,13 @@ describe("createMcpLoopbackServerConfig", () => {
     };
     let oldClose: Promise<void> | undefined;
     try {
-      await socketReady;
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await requestStarted;
 
       let closeSettled = false;
       oldClose = closeMcpLoopbackServer().finally(() => {
         closeSettled = true;
       });
       expect(getActiveMcpLoopbackRuntime()).toBeUndefined();
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 20);
-      });
-      expect(closeSettled).toBe(false);
 
       const successor = await startLoopbackServerForTest();
       const successorGrant = mintMcpLoopbackClientGrant({
@@ -3355,6 +3483,9 @@ describe("createMcpLoopbackServerConfig", () => {
         runtimeOwnerToken: successor.runtime.ownerToken,
         captureKey: "capture-successor",
       });
+      // The unfinished body still holds the old connection, so the successor was
+      // minted mid-drain: exactly the window where a late close could fence it.
+      expect(closeSettled).toBe(false);
 
       finishStalledRequest();
       await responsePromise;
@@ -3371,6 +3502,7 @@ describe("createMcpLoopbackServerConfig", () => {
         ).status,
       ).toBe(200);
     } finally {
+      clearMcpLoopbackToolCallCapture(captureKey);
       finishStalledRequest();
       await responsePromise.catch(() => undefined);
       await (oldClose ?? oldServer.close()).catch(() => undefined);

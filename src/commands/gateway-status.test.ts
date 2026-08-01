@@ -458,60 +458,6 @@ describe("gateway-status command", () => {
     );
   });
 
-  it("surfaces degraded model-pricing health as a warning", async () => {
-    const { runtime, runtimeLogs, runtimeErrors } = createRuntimeCapture();
-    const defaultProbeGateway = probeGateway.getMockImplementation();
-    try {
-      probeGateway.mockImplementation(async (opts: { url: string }) => {
-        const result = defaultProbeGateway
-          ? await defaultProbeGateway(opts)
-          : await mocks.probeGateway(opts);
-        return {
-          ...result,
-          health: {
-            ok: true,
-            modelPricing: {
-              state: "degraded",
-              detail: "OpenRouter pricing fetch failed: TypeError: fetch failed",
-              sources: [
-                {
-                  source: "openrouter",
-                  state: "degraded",
-                  detail: "OpenRouter pricing fetch failed: TypeError: fetch failed",
-                },
-              ],
-            },
-          },
-        };
-      });
-
-      await runGatewayStatus(runtime, { timeout: "1000", json: true });
-    } finally {
-      probeGateway.mockReset();
-      if (defaultProbeGateway) {
-        probeGateway.mockImplementation(defaultProbeGateway);
-      }
-    }
-
-    expect(runtimeErrors).toHaveLength(0);
-    const parsed = JSON.parse(runtimeLogs.join("\n")) as {
-      degraded?: boolean;
-      warnings?: Array<{ code?: string; message?: string; targetIds?: string[] }>;
-    };
-    expect(parsed.degraded).toBe(false);
-    const pricingWarnings =
-      parsed.warnings?.filter((warning) => warning.code === "model_pricing_degraded") ?? [];
-    expect(pricingWarnings).toHaveLength(2);
-    expect(pricingWarnings.map((warning) => warning.message)).toEqual([
-      "Model pricing warning: optional pricing refresh degraded: OpenRouter pricing fetch failed: TypeError: fetch failed",
-      "Model pricing warning: optional pricing refresh degraded: OpenRouter pricing fetch failed: TypeError: fetch failed",
-    ]);
-    expect(pricingWarnings.map((warning) => warning.targetIds)).toEqual([
-      ["sshTunnel"],
-      ["configRemote"],
-    ]);
-  });
-
   it("includes diagnostic next steps when no gateway is reachable or discoverable", async () => {
     const { runtime, runtimeLogs, runtimeErrors } = createRuntimeCapture();
     const defaultProbeGateway = probeGateway.getMockImplementation();
@@ -1072,24 +1018,6 @@ describe("gateway-status command", () => {
     await runGatewayStatus(runtime, { timeout: "15000", json: true });
 
     expect(requireProbeCall("wss://remote.example:18789").timeoutMs).toBe(15_000);
-  });
-
-  it("uses configured handshake timeout as the default local probe budget", async () => {
-    const { runtime } = createRuntimeCapture();
-    probeGateway.mockClear();
-    readBestEffortConfig.mockResolvedValueOnce({
-      gateway: {
-        mode: "local",
-        handshakeTimeoutMs: 30_000,
-        auth: { mode: "token", token: "ltok" },
-      },
-    } as never);
-
-    await gatewayStatusCommand({ json: true }, asRuntimeEnv(runtime));
-
-    const localProbeCall = requireProbeCall("ws://127.0.0.1:18789");
-    expect(localProbeCall.preauthHandshakeTimeoutMs).toBe(30_000);
-    expect(localProbeCall.timeoutMs).toBe(30_000);
   });
 
   it("keeps inactive local loopback probes on the short timeout in remote mode", async () => {

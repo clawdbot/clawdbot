@@ -70,7 +70,7 @@ describe("system-agent config write parity", () => {
     expect(classifyInferenceRouteConfigPath(["agents", "defaults", "models"])).toBe("blocked");
     expect(classifyInferenceRouteConfigPath(["agents", "list"])).toBe("blocked");
     expect(classifyInferenceRouteConfigPath(["agents", "list", "0"])).toBe("blocked");
-    for (const field of ["model", "models", "params", "agentRuntime", "cliBackends"]) {
+    for (const field of ["model", "models", "params", "agentRuntime"]) {
       expect(classifyInferenceRouteConfigPath(["agents", "list", "1", field])).toBe("agent-route");
     }
     for (const field of ["id", "default", "agentDir"]) {

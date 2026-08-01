@@ -48,6 +48,13 @@ describe("timeout-policy", () => {
     expect(timeout).toBe(1_900);
   });
 
+  it("uses a script payload timeout as the outer cron watchdog", () => {
+    const timeout = resolveCronJobTimeoutMs(
+      makeJob({ kind: "script", script: "return {}", timeoutSeconds: 300 }),
+    );
+    expect(timeout).toBe(300_000);
+  });
+
   it("caps oversized explicit timeoutSeconds at the timer-safe ceiling", () => {
     const timeout = resolveCronJobTimeoutMs(
       makeJob({ kind: "agentTurn", message: "hi", timeoutSeconds: Number.MAX_SAFE_INTEGER }),

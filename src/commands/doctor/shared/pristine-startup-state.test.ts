@@ -22,7 +22,6 @@ function createFixture(config: Record<string, unknown>, stateEntries: string[] =
   }
   return {
     HOME: root,
-    OPENCLAW_CONFIG: configPath,
     OPENCLAW_CONFIG_PATH: configPath,
     OPENCLAW_STATE_DIR: stateDir,
   };
@@ -51,6 +50,55 @@ function addBundledPlugin(
   };
 }
 
+function addConfiguredPlugin(
+  env: ReturnType<typeof createFixture>,
+  pluginId: string,
+  options: {
+    additionalLoadPaths?: readonly string[];
+    doctorContract?: boolean;
+    minHostVersion?: string;
+  } = {},
+) {
+  const pluginsDir = path.join(env.HOME, "configured-plugins");
+  const pluginDir = path.join(pluginsDir, pluginId);
+  fs.mkdirSync(pluginDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(pluginDir, "openclaw.plugin.json"),
+    `${JSON.stringify({ id: pluginId, configSchema: { type: "object" } })}\n`,
+  );
+  fs.writeFileSync(
+    path.join(pluginDir, "index.cjs"),
+    `module.exports = { id: ${JSON.stringify(pluginId)}, register() {} };\n`,
+  );
+  if (options.minHostVersion) {
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      `${JSON.stringify({
+        name: `fixture-${pluginId}`,
+        version: "1.0.0",
+        openclaw: {
+          extensions: ["./index.cjs"],
+          install: { minHostVersion: options.minHostVersion },
+        },
+      })}\n`,
+    );
+  }
+  if (options.doctorContract) {
+    fs.writeFileSync(path.join(pluginDir, "doctor-contract-api.js"), "export {};\n");
+  }
+
+  const config = JSON.parse(fs.readFileSync(env.OPENCLAW_CONFIG_PATH, "utf8")) as {
+    plugins?: Record<string, unknown>;
+  };
+  config.plugins = {
+    ...config.plugins,
+    allow: [pluginId],
+    load: { paths: [pluginsDir, ...(options.additionalLoadPaths ?? [])] },
+  };
+  fs.writeFileSync(env.OPENCLAW_CONFIG_PATH, `${JSON.stringify(config)}\n`);
+  return env;
+}
+
 afterEach(() => {
   for (const root of roots.splice(0)) {
     fs.rmSync(root, { force: true, recursive: true });
@@ -72,7 +120,10 @@ describe("pristine startup state", () => {
     expect(canSkipPristineStartupStateMigrations(createFixture({}, ["agents"]))).toBe(false);
     expect(
       canSkipPristineStartupStateMigrations(
-        createFixture({ agents: { defaults: { memorySearch: { provider: "local" } } } }),
+        createFixture({
+          memory: { search: { provider: "local" } },
+          agents: { defaults: {} },
+        }),
       ),
     ).toBe(false);
   });
@@ -105,6 +156,57 @@ describe("pristine startup state", () => {
     );
 
     expect(canSkipPristineStartupStateMigrations(env)).toBe(false);
+  });
+
+  it("skips migration discovery for manifest-owned stateless configured plugin paths", () => {
+    const env = addConfiguredPlugin(
+      createFixture({ gateway: { mode: "local" }, plugins: { enabled: true } }),
+      "stateless-plugin",
+    );
+
+    expect(planPristineStartupStateMigrations(env)).toEqual({
+      skipAllStateMigrations: true,
+      skipCoreStateMigrations: true,
+    });
+  });
+
+  it("retains migration discovery for configured plugin doctor contracts", () => {
+    const env = addConfiguredPlugin(
+      createFixture({ gateway: { mode: "local" }, plugins: { enabled: true } }),
+      "stateful-plugin",
+      { doctorContract: true },
+    );
+
+    expect(planPristineStartupStateMigrations(env)).toEqual({
+      skipAllStateMigrations: false,
+      skipCoreStateMigrations: true,
+    });
+  });
+
+  it("retains bundled doctor migrations when a configured plugin is incompatible", () => {
+    const fixture = addConfiguredPlugin(
+      createFixture({ gateway: { mode: "local" }, plugins: { enabled: true } }),
+      "future-plugin",
+      { minHostVersion: ">=9999.0.0" },
+    );
+    const env = addBundledPlugin(fixture, "future-plugin", { doctorContract: true });
+
+    expect(planPristineStartupStateMigrations(env)).toEqual({
+      skipAllStateMigrations: false,
+      skipCoreStateMigrations: true,
+    });
+  });
+
+  it("retains migration discovery when another configured plugin path is missing", () => {
+    const fixture = createFixture({ gateway: { mode: "local" }, plugins: { enabled: true } });
+    const env = addConfiguredPlugin(fixture, "stateless-plugin", {
+      additionalLoadPaths: [path.join(fixture.HOME, "missing-plugin")],
+    });
+
+    expect(planPristineStartupStateMigrations(env)).toEqual({
+      skipAllStateMigrations: false,
+      skipCoreStateMigrations: true,
+    });
   });
 
   it("retains plugin migrations while skipping absent core state for load paths", () => {

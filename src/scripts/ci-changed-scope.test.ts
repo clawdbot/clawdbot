@@ -103,6 +103,7 @@ describe("detectChangedScope", () => {
     for (const changedPath of [
       "apps/.i18n/native-source.json",
       "apps/android/app/src/main/java/ai/openclaw/app/MainActivity.kt",
+      "apps/android/wear/src/main/java/ai/openclaw/wear/WearScreens.kt",
       "apps/ios/Sources/RootTabs.swift",
       "apps/macos/Sources/OpenClaw/Settings.swift",
       "apps/shared/OpenClawKit/Sources/OpenClawKit/Client.swift",
@@ -263,7 +264,7 @@ describe("detectChangedScope", () => {
       "scripts/ios-write-swift-filelist.mjs",
       "scripts/ios-version.ts",
       "scripts/lib/ios-version.ts",
-      "scripts/lib/npm-publish-plan.mjs",
+      "scripts/lib/release-version.mjs",
       "scripts/lib/version-script-args.ts",
     ]) {
       expect(detectChangedScope([helperPath])).toEqual({
@@ -364,7 +365,7 @@ describe("detectChangedScope", () => {
     });
   });
 
-  it("keeps native platform lanes scoped when the CI workflow changes", () => {
+  it("runs CI-owned platform lanes when the CI workflow changes", () => {
     expect(detectChangedScope([".github/workflows/ci.yml"])).toEqual({
       runNode: true,
       runMacos: false,
@@ -374,7 +375,7 @@ describe("detectChangedScope", () => {
       runSkillsPython: false,
       runChangedSmoke: false,
       runControlUiI18n: false,
-      runUiTests: false,
+      runUiTests: true,
     });
   });
 
@@ -837,7 +838,7 @@ describe("detectChangedScope", () => {
   });
 
   it("runs control-ui locale check only for control-ui i18n surfaces", () => {
-    expect(detectChangedScope(["ui/src/i18n/locales/en.ts"])).toEqual({
+    const expected = {
       runNode: true,
       runMacos: false,
       runIosBuild: false,
@@ -847,24 +848,17 @@ describe("detectChangedScope", () => {
       runChangedSmoke: false,
       runControlUiI18n: true,
       runUiTests: true,
-    });
+    };
+    expect(detectChangedScope(["ui/src/i18n/locales/en.ts"])).toEqual(expected);
 
     for (const scriptPath of [
       "scripts/control-ui-i18n.ts",
       "scripts/control-ui-i18n-verify.ts",
+      "scripts/lib/control-ui-i18n-catalog.ts",
       "scripts/lib/control-ui-i18n-raw-copy.ts",
+      "scripts/lib/control-ui-i18n-sync-plan.ts",
     ]) {
-      expect(detectChangedScope([scriptPath])).toEqual({
-        runNode: true,
-        runMacos: false,
-        runIosBuild: false,
-        runAndroid: false,
-        runWindows: false,
-        runSkillsPython: false,
-        runChangedSmoke: false,
-        runControlUiI18n: true,
-        runUiTests: false,
-      });
+      expect(detectChangedScope([scriptPath])).toEqual({ ...expected, runUiTests: false });
     }
   });
 
@@ -1049,6 +1043,7 @@ describe("detectChangedScope", () => {
       strict_control_ui_i18n: "false",
       run_ui_tests: "false",
       run_native_i18n: "false",
+      strict_native_i18n: "false",
       changed_paths_json: "[]",
     });
   });

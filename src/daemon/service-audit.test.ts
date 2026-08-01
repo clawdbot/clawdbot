@@ -715,6 +715,23 @@ describe("auditGatewayServiceConfig", () => {
 
     expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayProxyEnvEmbedded)).toBe(true);
   });
+
+  it("matches managed and proxy source metadata keys case-insensitively", async () => {
+    const audit = await createGatewayAudit({
+      expectedManagedServiceEnvKeys: ["TAVILY_API_KEY"],
+      extraEnvironment: {
+        TAVILY_API_KEY: "tvly-test",
+        HTTPS_PROXY: "https://proxy.local:7890",
+      },
+      environmentValueSources: {
+        tavily_api_key: "file",
+        https_proxy: "file",
+      },
+    });
+
+    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayManagedEnvEmbedded)).toBe(false);
+    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayProxyEnvEmbedded)).toBe(false);
+  });
 });
 
 describe("checkTokenDrift", () => {

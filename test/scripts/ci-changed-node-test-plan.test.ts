@@ -160,7 +160,7 @@ describe("CI changed Node test plan", () => {
   });
 
   it("fails safe when public SDK changes affect extension imports", () => {
-    expect(createChangedNodeTestShards(["src/plugin-sdk/index.ts"])).toBeNull();
+    expect(createChangedNodeTestShards(["src/plugin-sdk/core.ts"])).toBeNull();
   });
 
   it("fails safe when a core change reaches package consumers through the public SDK", () => {
@@ -227,5 +227,22 @@ describe("CI changed Node test plan", () => {
     expect(targetShards.every((shard) => (shard.targets?.length ?? 0) <= 12)).toBe(true);
     const targets = targetShards.flatMap((shard) => shard.targets ?? []);
     expect(new Set(targets).size).toBe(targets.length);
+  });
+
+  it("serializes changed-test chunks that contain Memory Core integration tests", () => {
+    const shards = createChangedNodeTestShards([
+      "extensions/memory-core/src/memory/mmr.ts",
+      "extensions/memory-core/src/memory/mmr.test.ts",
+    ]);
+    expect(shards).not.toBeNull();
+    const targetShards = shards?.filter((shard) => shard.targets) ?? [];
+    expect(targetShards.length).toBeGreaterThan(0);
+    expect(
+      targetShards
+        .filter((shard) =>
+          shard.targets?.some((target) => target.startsWith("extensions/memory-core/")),
+        )
+        .every((shard) => shard.planConcurrency === 1),
+    ).toBe(true);
   });
 });

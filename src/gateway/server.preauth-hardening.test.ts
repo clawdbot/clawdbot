@@ -1,7 +1,6 @@
 /**
  * Gateway pre-auth hardening tests.
  */
-import { writeFile } from "node:fs/promises";
 import http from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
@@ -217,31 +216,6 @@ describe("gateway pre-auth hardening", () => {
     setEnvForTest("OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS", "200");
 
     await expectIdlePreauthSocketClose();
-  });
-
-  it("uses gateway.handshakeTimeoutMs for idle unauthenticated sockets", async () => {
-    const configPath = process.env.OPENCLAW_CONFIG_PATH;
-    if (!configPath) {
-      throw new Error("OPENCLAW_CONFIG_PATH missing in gateway preauth test");
-    }
-    await writeFile(
-      configPath,
-      JSON.stringify(
-        {
-          gateway: {
-            handshakeTimeoutMs: 250,
-          },
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
-    try {
-      await expectIdlePreauthSocketClose();
-    } finally {
-      await writeFile(configPath, "{}\n", "utf-8");
-    }
   });
 
   it("rejects oversized pre-auth connect frames before application-level auth responses", async () => {

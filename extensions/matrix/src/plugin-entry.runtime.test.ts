@@ -40,7 +40,7 @@ function writeOpenClawPackageFixture(fixtureRoot: string) {
         name: "openclaw",
         type: "module",
         exports: {
-          "./plugin-sdk": "./dist/plugin-sdk/index.js",
+          "./plugin-sdk/core": "./dist/plugin-sdk/core.js",
         },
       },
       null,
@@ -48,7 +48,7 @@ function writeOpenClawPackageFixture(fixtureRoot: string) {
     ) + "\n",
   );
   writeFixtureFile(fixtureRoot, "openclaw.mjs", "export {};\n");
-  writeFixtureFile(fixtureRoot, "dist/plugin-sdk/index.js", "export {};\n");
+  writeFixtureFile(fixtureRoot, "dist/plugin-sdk/core.js", "export {};\n");
 }
 
 function writeSourceRuntimeWrapperFixture(

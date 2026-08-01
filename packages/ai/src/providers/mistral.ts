@@ -8,10 +8,12 @@ import type {
   ContentChunk,
   FunctionTool,
 } from "@mistralai/mistralai/models/components";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost } from "../host.js";
 import { calculateCost, clampThinkingLevel } from "../model-utils.js";
+import { transportAbortError } from "../transports/transport-stream-shared.js";
 import type {
   AssistantMessage,
   Context,
@@ -180,7 +182,7 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
       await consumeChatStream(model, output, stream, mistralStream);
 
       if (options?.signal?.aborted) {
-        throw new Error("Request was aborted");
+        throw transportAbortError(options.signal);
       }
 
       if (output.stopReason === "aborted" || output.stopReason === "error") {
@@ -190,10 +192,8 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
       stream.push({ type: "done", reason: output.stopReason, message: output });
       stream.end();
     } catch (error) {
-      for (const block of output.content) {
-        // partialArgs is only a streaming scratch buffer; never persist it.
-        delete (block as { partialArgs?: string }).partialArgs;
-      }
+      // Failed or canceled generations must never retain partially repaired tool calls.
+      output.content = output.content.filter((block) => block.type !== "toolCall");
       output.stopReason = options?.signal?.aborted ? "aborted" : "error";
       output.errorMessage = formatMistralError(error);
       stream.push({ type: "error", reason: output.stopReason, error: output });
@@ -414,6 +414,7 @@ async function consumeChatStream(
   mistralStream: AsyncIterable<CompletionEvent>,
 ): Promise<void> {
   let currentBlock: TextContent | ThinkingContent | null = null;
+  let terminalFinishReason: string | undefined;
   const blocks = output.content;
   const blockIndex = () => blocks.length - 1;
   type ToolBlockIdentity = {
@@ -620,6 +621,7 @@ async function consumeChatStream(
     }
 
     if (choice.finishReason) {
+      terminalFinishReason = choice.finishReason;
       output.stopReason = mapChatStopReason(choice.finishReason);
     }
 
@@ -779,6 +781,24 @@ async function consumeChatStream(
   }
 
   finishCurrentBlock(currentBlock);
+  // Only an authoritative tool terminal can make strictly parsed arguments executable.
+  if (!terminalFinishReason || output.stopReason !== "toolUse") {
+    blocks.splice(0, blocks.length, ...blocks.filter((block) => block.type !== "toolCall"));
+    if (!terminalFinishReason) {
+      throw new Error("Mistral stream ended without a terminal finish reason");
+    }
+    return;
+  }
+  try {
+    for (const index of toolBlockIdentities.keys()) {
+      const rawArguments = (blocks[index] as ToolCall & { partialArgs?: string }).partialArgs ?? "";
+      if (!isRecord(JSON.parse(rawArguments))) {
+        throw new Error("Mistral tool-call arguments must be a JSON object");
+      }
+    }
+  } catch {
+    throw new Error("Mistral completed tool call has invalid JSON arguments");
+  }
   for (const index of toolBlockIdentities.keys()) {
     const block = output.content.at(index);
     if (block?.type !== "toolCall") {

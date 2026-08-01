@@ -5,58 +5,15 @@ import {
   baseCfg,
   createRuntime,
   expectRecordFields,
-  expectRejectedRecord,
   extractRuntimeOptionsFromUpserts,
   hoisted,
   installAcpSessionManagerTestLifecycle,
   mockCallArg,
   readySessionMeta,
-  type OpenClawConfig,
 } from "./manager.test-helpers.js";
 
 describe("AcpSessionManager initializeSession", () => {
   installAcpSessionManagerTestLifecycle();
-
-  it("enforces acp.maxConcurrentSessions during initializeSession", async () => {
-    const runtimeState = createRuntime();
-    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-      id: "acpx",
-      runtime: runtimeState.runtime,
-    });
-    hoisted.upsertAcpSessionMetaMock.mockResolvedValue({
-      sessionKey: "agent:codex:acp:session-a",
-      storeSessionKey: "agent:codex:acp:session-a",
-      acp: readySessionMeta(),
-    });
-    const limitedCfg = {
-      acp: {
-        ...baseCfg.acp,
-        maxConcurrentSessions: 1,
-      },
-    } as OpenClawConfig;
-
-    const manager = new AcpSessionManager();
-    await manager.initializeSession({
-      cfg: limitedCfg,
-      sessionKey: "agent:codex:acp:session-a",
-      agent: "codex",
-      mode: "persistent",
-    });
-
-    await expectRejectedRecord(
-      manager.initializeSession({
-        cfg: limitedCfg,
-        sessionKey: "agent:codex:acp:session-b",
-        agent: "codex",
-        mode: "persistent",
-      }),
-      {
-        code: "ACP_SESSION_INIT_FAILED",
-        message: "ACP max concurrent sessions reached (1/1).",
-      },
-    );
-    expect(runtimeState.ensureSession).toHaveBeenCalledTimes(1);
-  });
 
   it("persists runtime options provided during initializeSession", async () => {
     const runtimeState = createRuntime();

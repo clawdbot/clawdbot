@@ -3,11 +3,15 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { createSqliteAuditRecordStore } from "../infra/sqlite-audit-record-store.js";
 import { redactSecrets } from "../logging/redact.js";
+import { resolveConfigAuditStoreEnv } from "./config-journal-snapshot.js";
+import type { ConfigWriteAuditOrigin } from "./io.types.js";
 import { resolveStateDir } from "./paths.js";
 import { redactSensitiveArgv } from "./redact-argv.js";
 import { isSensitiveConfigPath } from "./sensitive-paths.js";
 
 const CONFIG_AUDIT_ARGV_CAP = 8;
+const CONFIG_AUDIT_PATH_CAP = 64;
+const CONFIG_AUDIT_ISSUE_CAP = 64;
 const CONFIG_SET_VALUE_OPTIONS = new Set([
   "--batch-file",
   "--batch-json",
@@ -181,6 +185,8 @@ type ConfigWriteAuditRecord = {
   previousGid: number | null;
   nextGid: number | null;
   changedPathCount: number | null;
+  changedPaths?: string[];
+  origin?: ConfigWriteAuditOrigin;
   hasMetaBefore: boolean;
   hasMetaAfter: boolean;
   gatewayModeBefore: string | null;
@@ -188,6 +194,21 @@ type ConfigWriteAuditRecord = {
   suspicious: string[];
   errorCode?: string;
   errorMessage?: string;
+};
+
+export type ConfigExternalChangeAuditRecord = {
+  ts: string;
+  source: "config-io";
+  event: "config.external";
+  detectedBy: "watch" | "startup" | "write";
+  configPath: string;
+  previousHash: string | null;
+  nextHash: string | null;
+  valid: boolean;
+  issues?: string[];
+  changedPaths?: string[];
+  /** Raw bytes changed but authored paths did not (comments or formatting only). */
+  opaqueChange?: boolean;
 };
 
 export type ConfigObserveAuditRecord = {
@@ -245,7 +266,10 @@ export type ConfigObserveAuditRecord = {
   restoreErrorMessage: string | null;
 };
 
-export type ConfigAuditRecord = ConfigWriteAuditRecord | ConfigObserveAuditRecord;
+export type ConfigAuditRecord =
+  | ConfigWriteAuditRecord
+  | ConfigObserveAuditRecord
+  | ConfigExternalChangeAuditRecord;
 
 type ConfigAuditStatMetadata = {
   dev: string | null;
@@ -329,6 +353,8 @@ export function createConfigWriteAuditRecordBase(params: {
   nextBytes: number;
   previousMetadata: ConfigAuditStatMetadata;
   changedPathCount: number | null | undefined;
+  changedPaths?: readonly string[];
+  origin?: ConfigWriteAuditOrigin;
   hasMetaBefore: boolean;
   hasMetaAfter: boolean;
   gatewayModeBefore: string | null;
@@ -363,12 +389,30 @@ export function createConfigWriteAuditRecordBase(params: {
     previousUid: params.previousMetadata.uid,
     previousGid: params.previousMetadata.gid,
     changedPathCount: typeof params.changedPathCount === "number" ? params.changedPathCount : null,
+    ...(params.changedPaths ? { changedPaths: capConfigAuditPaths(params.changedPaths) } : {}),
+    ...(params.origin ? { origin: params.origin } : {}),
     hasMetaBefore: params.hasMetaBefore,
     hasMetaAfter: params.hasMetaAfter,
     gatewayModeBefore: params.gatewayModeBefore,
     gatewayModeAfter: params.gatewayModeAfter,
     suspicious: params.suspicious,
   };
+}
+
+function capConfigAuditEntries(values: readonly string[], cap: number): string[] {
+  if (values.length <= cap) {
+    return [...values];
+  }
+  const visibleCount = Math.max(0, cap - 1);
+  return [...values.slice(0, visibleCount), `…+${values.length - visibleCount} more`];
+}
+
+export function capConfigAuditPaths(paths: readonly string[]): string[] {
+  return capConfigAuditEntries([...new Set(paths)].toSorted(), CONFIG_AUDIT_PATH_CAP);
+}
+
+export function capConfigAuditIssues(issues: readonly string[]): string[] {
+  return capConfigAuditEntries(issues, CONFIG_AUDIT_ISSUE_CAP);
 }
 
 export function finalizeConfigWriteAuditRecord(params: {
@@ -606,16 +650,6 @@ export async function scrubConfigAuditLog(params: {
   return { scanned, rewritten, skipped, aborted: false };
 }
 
-function resolveConfigAuditStoreEnv(params: {
-  env: NodeJS.ProcessEnv;
-  homedir: () => string;
-}): NodeJS.ProcessEnv {
-  return {
-    ...params.env,
-    OPENCLAW_STATE_DIR: resolveStateDir(params.env, params.homedir),
-  };
-}
-
 function openConfigAuditStore(env: NodeJS.ProcessEnv) {
   return createSqliteAuditRecordStore<ConfigAuditRecord>({
     scope: CONFIG_AUDIT_SCOPE,
@@ -630,8 +664,10 @@ function configAuditEntryKey(record: ConfigAuditRecord): string {
 
 export function sanitizeConfigAuditRecord(record: ConfigAuditRecord): ConfigAuditRecord {
   const sanitized = structuredClone(record);
-  sanitized.argv = redactConfigAuditArgv(capArgv(sanitized.argv));
-  sanitized.execArgv = redactConfigAuditArgv(capArgv(sanitized.execArgv));
+  if (sanitized.event !== "config.external") {
+    sanitized.argv = redactConfigAuditArgv(capArgv(sanitized.argv));
+    sanitized.execArgv = redactConfigAuditArgv(capArgv(sanitized.execArgv));
+  }
   return redactSecrets(sanitized);
 }
 

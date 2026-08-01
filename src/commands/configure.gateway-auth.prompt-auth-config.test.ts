@@ -27,7 +27,7 @@ const mocks = vi.hoisted(() => ({
       const scopeKeys = opts.scopeKeys ? normalizeTestModelKeys(opts.scopeKeys) : [];
       const scopeKeySet = scopeKeys.length > 0 ? new Set(scopeKeys) : null;
       if (normalized.length === 0) {
-        if (!defaults?.models) {
+        if (!defaults?.models && !defaults?.modelPolicy?.allow) {
           return cfg;
         }
         if (scopeKeySet) {
@@ -36,18 +36,23 @@ const mocks = vi.hoisted(() => ({
             delete nextModels[key];
           }
           const { models: _ignored, ...restDefaults } = defaults;
+          const allow = Object.keys(nextModels);
           return {
             ...cfg,
             agents: {
               ...cfg.agents,
               defaults:
-                Object.keys(nextModels).length > 0
-                  ? { ...defaults, models: nextModels }
-                  : restDefaults,
+                allow.length > 0
+                  ? {
+                      ...defaults,
+                      models: nextModels,
+                      modelPolicy: { ...defaults.modelPolicy, allow },
+                    }
+                  : (({ modelPolicy: _modelPolicy, ...rest }) => rest)(restDefaults),
             },
           };
         }
-        const { models: _ignored, ...restDefaults } = defaults;
+        const { models: _ignored, modelPolicy: _modelPolicy, ...restDefaults } = defaults;
         return { ...cfg, agents: { ...cfg.agents, defaults: restDefaults } };
       }
       const existingModels = defaults?.models ?? {};
@@ -64,7 +69,11 @@ const mocks = vi.hoisted(() => ({
         ...cfg,
         agents: {
           ...cfg.agents,
-          defaults: { ...defaults, models: nextModels },
+          defaults: {
+            ...defaults,
+            models: nextModels,
+            modelPolicy: { ...defaults?.modelPolicy, allow: Object.keys(nextModels) },
+          },
         },
       };
     },
@@ -307,6 +316,7 @@ describe("promptAuthConfig", () => {
     expect(Object.keys(result.agents?.defaults?.models ?? {})).toEqual([
       "kilocode/kilo-auto/balanced",
     ]);
+    expect(result.agents?.defaults?.modelPolicy?.allow).toEqual(["kilocode/kilo-auto/balanced"]);
   });
 
   it("does not mutate provider model catalogs when allowlist is set", async () => {
@@ -393,6 +403,10 @@ describe("promptAuthConfig", () => {
       "openai/gpt-5.5": { alias: "GPT" },
       "anthropic/claude-sonnet-4-6": {},
     });
+    expect(result.agents?.defaults?.modelPolicy?.allow).toEqual([
+      "openai/gpt-5.5",
+      "anthropic/claude-sonnet-4-6",
+    ]);
   });
 
   it("resolves fallback aliases before scoped allowlist pruning", async () => {
@@ -714,6 +728,7 @@ describe("promptAuthConfig", () => {
     expect(promptModelAllowlistOptions()?.preferredProvider).toBe("openai");
     expect(result.agents?.defaults?.model).toEqual({ primary: "openai/gpt-5.5" });
     expect(Object.keys(result.agents?.defaults?.models ?? {})).toEqual(["openai/gpt-5.5"]);
+    expect(result.agents?.defaults?.modelPolicy?.allow).toEqual(["openai/gpt-5.5"]);
   });
 
   it("returns to auth selection when plugin install onboarding asks for a retry", async () => {

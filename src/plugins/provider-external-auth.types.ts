@@ -35,16 +35,9 @@ export type ProviderResolveExternalAuthProfilesContext = {
   store: AuthProfileStore;
 };
 
-/** OAuth-specific external auth profile resolution context. */
-export type ProviderResolveExternalOAuthProfilesContext =
-  ProviderResolveExternalAuthProfilesContext;
-
 /** External auth profile credential resolved for a provider. */
 export type ProviderExternalAuthProfile = {
   profileId: string;
   credential: OAuthCredential;
   persistence?: "runtime-only" | "persisted";
 };
-
-/** OAuth-specific provider external auth profile alias. */
-export type ProviderExternalOAuthProfile = ProviderExternalAuthProfile;

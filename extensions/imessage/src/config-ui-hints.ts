@@ -12,6 +12,12 @@ export const iMessageChannelConfigUiHints = {
     dmPolicy: { channelKey: "imessage" },
     configWrites: true,
   }),
+  allowFrom: { presentation: "phone-number" },
+  defaultTo: { presentation: "phone-number" },
+  groupAllowFrom: { presentation: "phone-number" },
+  "accounts.*.allowFrom.*": { presentation: "phone-number" },
+  "accounts.*.defaultTo": { presentation: "phone-number" },
+  "accounts.*.groupAllowFrom.*": { presentation: "phone-number" },
   cliPath: {
     label: "iMessage CLI Path",
     help: "Filesystem path to the iMessage bridge CLI binary used for send/receive operations. Set explicitly when the binary is not on PATH in service runtime environments.",

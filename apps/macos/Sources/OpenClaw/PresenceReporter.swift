@@ -10,14 +10,15 @@ final class PresenceReporter {
     private var task: Task<Void, Never>?
     private let interval: TimeInterval = 180 // a few minutes
     private let instanceId: String = InstanceIdentity.instanceId
+    private static let clearLastInputTag = "system-presence-clear-last-input"
+    private static let legacyClearedLastInputSeconds = 30 * 24 * 60 * 60
 
     func start() {
         guard self.task == nil else { return }
         self.task = Task.detached { [weak self] in
             guard let self else { return }
             await self.push(reason: "launch")
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: UInt64(self.interval * 1_000_000_000))
+            while await SimpleTaskSupport.waitForNextOperation(interval: self.interval) {
                 await self.push(reason: "periodic")
             }
         }
@@ -35,7 +36,6 @@ final class PresenceReporter {
         let ip = SystemPresenceInfo.primaryIPv4Address() ?? "ip-unknown"
         let version = Self.appVersionString()
         let platform = Self.platformString()
-        let lastInput = SystemPresenceInfo.lastInputSeconds()
         let text = Self.composePresenceSummary(mode: mode, reason: reason)
         var params: [String: AnyHashable] = [
             "instanceId": AnyHashable(self.instanceId),
@@ -45,10 +45,13 @@ final class PresenceReporter {
             "version": AnyHashable(version),
             "platform": AnyHashable(platform),
             "deviceFamily": AnyHashable("Mac"),
+            // Older Gateways ignore the tag but overwrite exact recency with this
+            // fixed sentinel. Current Gateways let the tag win and delete the field.
+            "lastInputSeconds": AnyHashable(Self.legacyClearedLastInputSeconds),
+            "tags": AnyHashable([Self.clearLastInputTag]),
             "reason": AnyHashable(reason),
         ]
         if let model = InstanceIdentity.modelIdentifier { params["modelIdentifier"] = AnyHashable(model) }
-        if let lastInput { params["lastInputSeconds"] = AnyHashable(lastInput) }
         do {
             try await ControlChannel.shared.sendSystemEvent(text, params: params)
         } catch {
@@ -65,9 +68,7 @@ final class PresenceReporter {
         let host = InstanceIdentity.displayName
         let ip = SystemPresenceInfo.primaryIPv4Address() ?? "ip-unknown"
         let version = Self.appVersionString()
-        let lastInput = SystemPresenceInfo.lastInputSeconds()
-        let lastLabel = lastInput.map { "last input \($0)s ago" } ?? "last input unknown"
-        return "Node: \(host) (\(ip)) · app \(version) · \(lastLabel) · mode \(mode) · reason \(reason)"
+        return "Node: \(host) (\(ip)) · app \(version) · mode \(mode) · reason \(reason)"
     }
 
     private static func appVersionString() -> String {
@@ -86,7 +87,7 @@ final class PresenceReporter {
         return "macos \(v.majorVersion).\(v.minorVersion).\(v.patchVersion)"
     }
 
-    // (SystemPresenceInfo) last input + primary IPv4.
+    // SystemPresenceInfo supplies the best-effort primary IPv4 address.
 }
 
 #if DEBUG
@@ -103,12 +104,15 @@ extension PresenceReporter {
         self.platformString()
     }
 
-    static func _testLastInputSeconds() -> Int? {
-        SystemPresenceInfo.lastInputSeconds()
-    }
-
     static func _testPrimaryIPv4Address() -> String? {
         SystemPresenceInfo.primaryIPv4Address()
+    }
+
+    static func _testActivityPrivacyParameters() -> [String: AnyHashable] {
+        [
+            "lastInputSeconds": AnyHashable(self.legacyClearedLastInputSeconds),
+            "tags": AnyHashable([self.clearLastInputTag]),
+        ]
     }
 }
 #endif

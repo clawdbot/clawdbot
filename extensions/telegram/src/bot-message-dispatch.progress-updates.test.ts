@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import {
+  type DispatchReplyWithBufferedBlockDispatcherArgs,
   describeTelegramDispatch,
   createContext,
   createReasoningStreamContext,
@@ -9,6 +10,7 @@ import {
   dispatchReplyWithBufferedBlockDispatcher,
   dispatchWithContext,
   editMessageTelegram,
+  emitTelegramMessageSentHooks,
   expectDeliveredReply,
   expectDeliverRepliesParams,
   expectRecordFields,
@@ -186,6 +188,11 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
     expect(answerDraftStream.update).toHaveBeenCalledWith("Photo");
     expectDeliverRepliesParams({ mediaMaxBytes });
     expectDeliveredReply(0, { text: undefined, mediaUrl: "https://example.com/a.png" });
+    expect(emitTelegramMessageSentHooks).toHaveBeenCalledTimes(1);
+    expectRecordFields(mockCallArg(emitTelegramMessageSentHooks), {
+      content: "Photo",
+      messageId: 2001,
+    });
   });
 
   it("sends standalone MEDIA directive final replies as media", async () => {
@@ -253,6 +260,38 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
       telegramProgressPreview("Shelling\n\n🛠️ Exec", "<b>Shelling</b>\n<b>🛠️ Exec</b>"),
     );
     expect(draftStream.flush).toHaveBeenCalled();
+  });
+
+  it("reopens progress drafts for queued followups after the source dispatch settles", async () => {
+    const draftStream = createSequencedDraftStream(2001);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    let queuedReplyOptions: DispatchReplyWithBufferedBlockDispatcherArgs["replyOptions"];
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      queuedReplyOptions = replyOptions;
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
+    });
+
+    expect(draftStream.clear).toHaveBeenCalledTimes(1);
+    await queuedReplyOptions?.onQueuedFollowupAdmitted?.();
+    await queuedReplyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+    await queuedReplyOptions?.onToolResult?.({ text: "📄 Web Fetch: working" });
+
+    expect(draftStream.forceNewMessage).toHaveBeenCalledTimes(1);
+    expect(draftStream.updatePreview).toHaveBeenCalledWith(
+      telegramProgressPreview(
+        "Shelling\n\n🛠️ Exec\n📄 Web Fetch: working",
+        "<b>Shelling</b>\n<b>🛠️ Exec</b>\n📄 Web Fetch: working",
+      ),
+    );
+
+    await queuedReplyOptions?.onQueuedFollowupSettled?.();
+    expect(draftStream.clear).toHaveBeenCalledTimes(2);
   });
 
   it("keeps eight rolling tool rows beneath a preamble with verbose off", async () => {

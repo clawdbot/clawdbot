@@ -54,6 +54,7 @@ import androidx.compose.material.icons.automirrored.filled.VolumeOff
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.FlipCameraAndroid
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Mic
@@ -85,6 +86,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.CancellationException
 
 /** Voice home screen that routes between talk mode, dictation, and idle setup. */
 @Composable
@@ -100,6 +102,7 @@ fun VoiceScreen(
   val micEnabled by viewModel.micEnabled.collectAsState()
   val micCooldown by viewModel.micCooldown.collectAsState()
   val speakerEnabled by viewModel.speakerEnabled.collectAsState()
+  val preferredCameraFacing by viewModel.preferredCameraFacing.collectAsState()
   val micStatusText by viewModel.micStatusText.collectAsState()
   val micLiveTranscript by viewModel.micLiveTranscript.collectAsState()
   val micQueuedMessages by viewModel.micQueuedMessages.collectAsState()
@@ -116,6 +119,22 @@ fun VoiceScreen(
   val talkOutputLevel by viewModel.talkOutputLevel.collectAsState()
   val talkSpeechActive by viewModel.talkSpeechActive.collectAsState()
   val talkAwaitingAgent by viewModel.talkAwaitingAgent.collectAsState()
+  var hasFrontAndBackCameras by remember { mutableStateOf(false) }
+
+  LaunchedEffect(talkModeEnabled) {
+    hasFrontAndBackCameras =
+      if (talkModeEnabled) {
+        try {
+          viewModel.hasFrontAndBackCameras()
+        } catch (err: CancellationException) {
+          throw err
+        } catch (_: Exception) {
+          false
+        }
+      } else {
+        false
+      }
+  }
 
   var pendingAction by remember { mutableStateOf<VoiceAction?>(null) }
   var hasMicPermission by remember { mutableStateOf(context.hasRecordAudioPermission()) }
@@ -183,7 +202,12 @@ fun VoiceScreen(
       outputLevel = talkOutputLevel,
       speechActive = talkSpeechActive,
       speakerEnabled = speakerEnabled,
+      preferredCameraFacing = preferredCameraFacing,
+      showCameraFlip = hasFrontAndBackCameras,
       onToggleSpeaker = { viewModel.setSpeakerEnabled(!speakerEnabled) },
+      onFlipCamera = {
+        viewModel.setPreferredCameraFacing(if (preferredCameraFacing == "front") "back" else "front")
+      },
       onEndTalk = { viewModel.setTalkModeEnabled(false) },
       onOpenVoiceSettings = onOpenVoiceSettings,
     )
@@ -445,7 +469,10 @@ internal fun TalkSessionScreen(
   outputLevel: Float?,
   speechActive: Boolean,
   speakerEnabled: Boolean,
+  preferredCameraFacing: String,
+  showCameraFlip: Boolean,
   onToggleSpeaker: () -> Unit,
+  onFlipCamera: () -> Unit,
   onEndTalk: () -> Unit,
   onOpenVoiceSettings: () -> Unit,
   embeddedInChat: Boolean = false,
@@ -519,6 +546,14 @@ internal fun TalkSessionScreen(
         modifier = Modifier.weight(1f),
         onClick = onToggleSpeaker,
       )
+      if (showCameraFlip) {
+        TalkControl(
+          icon = Icons.Default.FlipCameraAndroid,
+          label = if (preferredCameraFacing == "front") nativeString("Back camera") else nativeString("Front camera"),
+          modifier = Modifier.weight(1f),
+          onClick = onFlipCamera,
+        )
+      }
       TalkControl(
         icon = Icons.Default.PhoneDisabled,
         label = nativeString("End"),

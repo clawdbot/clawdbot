@@ -210,7 +210,7 @@ export function modelCallSpanName(evt: {
 }
 
 export function modelCallSpanKind(): SpanKind | undefined {
-  return emitLatestGenAiSemconv() ? SpanKind.CLIENT : undefined;
+  return SpanKind.CLIENT;
 }
 
 export function addUpstreamRequestIdSpanEvent(

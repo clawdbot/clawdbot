@@ -1,5 +1,6 @@
 // Elevenlabs tests cover tts plugin behavior.
 import { MAX_AUDIO_BYTES } from "openclaw/plugin-sdk/media-runtime";
+import { synthesizeElevenLabsLiveSpeech } from "openclaw/plugin-sdk/provider-test-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createStreamingErrorResponse } from "../test-support/streaming-error-response.js";
 import { elevenLabsTTS, elevenLabsTTSStream } from "./tts.js";
@@ -324,5 +325,39 @@ describe("elevenlabs tts diagnostics", () => {
     await expect(elevenLabsTTSStream(createDefaultTtsRequest())).rejects.toThrow(
       "ElevenLabs API error: malformed audio response",
     );
+  });
+});
+
+describe("elevenlabs live audio helper error-path body release", () => {
+  const originalFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it("cancels an unread streaming error body when ElevenLabs returns non-2xx", async () => {
+    const cancel = vi.fn();
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new Uint8Array([1, 2, 3]));
+        },
+        cancel,
+      }),
+      { status: 401 },
+    );
+    globalThis.fetch = vi.fn(async () => response) as typeof fetch;
+
+    await expect(
+      synthesizeElevenLabsLiveSpeech({
+        text: "OpenClaw leak check.",
+        apiKey: "x",
+        outputFormat: "mp3_44100_128",
+        timeoutMs: 1_000,
+      }),
+    ).rejects.toThrow("ElevenLabs live TTS failed (401)");
+
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(response.bodyUsed).toBe(true);
   });
 });

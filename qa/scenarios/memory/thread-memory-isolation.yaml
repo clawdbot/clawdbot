@@ -2,12 +2,13 @@ title: Thread memory isolation
 
 scenario:
   id: thread-memory-isolation
-  surface: memory
+  surface: session-memory
+  runtimePairLane: core
   coverage:
     primary:
-      - memory.thread-isolation
+      - session-memory.cross-client-history-thread-isolation
     secondary:
-      - channels.threads
+      - channels.native-threads
   objective: Verify a memory-backed answer requested inside a thread stays in-thread and does not leak into the root channel.
   successCriteria:
     - Agent uses memory tools inside the thread.

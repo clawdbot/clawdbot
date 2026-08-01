@@ -37,7 +37,7 @@ function createGatewayStub() {
     }
     if (method === "question.resolve") {
       const resolveParams = params as {
-        answers?: { answers: Record<string, { answers: string[] }> };
+        answers?: { answers: Record<string, string[]> };
         cancel?: boolean;
       };
       const result = resolveParams.cancel
@@ -95,7 +95,7 @@ describe("Codex app-server user input bridge", () => {
       sessionKey: "agent:main:session-1",
       agentId: "main",
       timeoutMs: 90_000,
-      questions: requestParams().questions,
+      questions: [expect.objectContaining({ questionId: "choice" })],
     });
     const payload = vi.mocked(params.onBlockReply!).mock.calls[0]![0];
     expect(payload.channelData).toEqual({
@@ -247,7 +247,7 @@ describe("Codex app-server user input bridge", () => {
     await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledOnce());
     expect(gateway.calls[0]?.params).toMatchObject({
       timeoutMs: 60_000,
-      questions: [expect.objectContaining({ id: "notes", options: [] })],
+      questions: [expect.objectContaining({ questionId: "notes", options: [] })],
     });
     await claimPendingAgentQuestionAnswer({ sessionKey: params.sessionKey, text: "Refactor it" });
     await expect(response).resolves.toEqual({

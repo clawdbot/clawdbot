@@ -23,7 +23,6 @@ export {
 export {
   INTERNAL_MESSAGE_CHANNEL,
   isInternalNonDeliveryChannel,
-  isNativeApprovalChannel,
 } from "./message-channel-constants.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "./message-channel-constants.js";
 import { normalizeMessageChannel } from "./message-channel-normalize.js";
@@ -90,6 +89,19 @@ export function isInternalMessageChannel(
   raw?: string | null,
 ): raw is typeof INTERNAL_MESSAGE_CHANNEL {
   return normalizeMessageChannel(raw) === INTERNAL_MESSAGE_CHANNEL;
+}
+
+/** Return whether a channel can resolve exec approvals in the originating chat. */
+export function isNativeApprovalChannel(value?: string | null): boolean {
+  if (!value) {
+    return false;
+  }
+  if (value === INTERNAL_MESSAGE_CHANNEL) {
+    return true;
+  }
+  return listBundledChannelCatalogEntries().some(
+    (entry) => entry.id === value && entry.channel.approvalFlags?.includes("native"),
+  );
 }
 
 /** Return whether a Gateway client is the public webchat surface. */

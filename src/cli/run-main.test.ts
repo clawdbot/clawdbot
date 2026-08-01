@@ -1,7 +1,10 @@
 // Run main tests cover CLI main entrypoint behavior and process error handling.
 import { describe, expect, it } from "vitest";
 import type { PluginManifestCommandAliasRegistry } from "../plugins/manifest-command-aliases.js";
-import { resolveGatewayRunPreBootstrapOptions } from "./gateway-run-argv.js";
+import {
+  resolveGatewayCatalogCommandPath,
+  resolveGatewayRunPreBootstrapOptions,
+} from "./gateway-run-argv.js";
 import {
   rewriteUpdateFlagArgv,
   resolveMissingPluginCommandMessage,
@@ -51,6 +54,15 @@ const browserCommandAliasRegistry: PluginManifestCommandAliasRegistry = {
   ],
 };
 
+const workboardCommandAliasRegistry: PluginManifestCommandAliasRegistry = {
+  plugins: [
+    {
+      id: "workboard",
+      commandAliases: [{ name: "workboard" }],
+    },
+  ],
+};
+
 describe("isGatewayRunFastPathArgv", () => {
   it("matches only plain gateway foreground starts without root options or help", () => {
     expect(isGatewayRunFastPathArgv(["node", "openclaw", "gateway"])).toBe(true);
@@ -62,12 +74,41 @@ describe("isGatewayRunFastPathArgv", () => {
     ).toBe(true);
     expect(isGatewayRunFastPathArgv(["node", "openclaw", "gateway", "run"])).toBe(true);
     expect(
+      isGatewayRunFastPathArgv(["node", "openclaw", "gateway", "--log-level", "debug", "run"]),
+    ).toBe(true);
+    expect(
+      isGatewayRunFastPathArgv(["node", "openclaw", "gateway", "--log-level=debug", "run"]),
+    ).toBe(true);
+    expect(
       isGatewayRunFastPathArgv(["node", "openclaw", "gateway", "run", "--raw-stream-path", "x"]),
     ).toBe(true);
     expect(isGatewayRunFastPathArgv(["node", "openclaw", "gateway", "call", "health"])).toBe(false);
     expect(isGatewayRunFastPathArgv(["node", "openclaw", "gateway", "--help"])).toBe(false);
     expect(isGatewayRunFastPathArgv(["node", "openclaw", "gateway", "--port"])).toBe(false);
     expect(isGatewayRunFastPathArgv(["node", "openclaw", "gateway", "--unknown"])).toBe(false);
+  });
+
+  it("keeps post-root log levels out of the gateway command path", () => {
+    expect(
+      resolveGatewayCatalogCommandPath([
+        "node",
+        "openclaw",
+        "gateway",
+        "--log-level",
+        "debug",
+        "run",
+      ]),
+    ).toEqual(["gateway", "run"]);
+    expect(
+      resolveGatewayCatalogCommandPath([
+        "node",
+        "openclaw",
+        "gateway",
+        "--log-level=debug",
+        "restart-handoff",
+        "capabilities",
+      ]),
+    ).toEqual(["gateway", "restart-handoff"]);
   });
 });
 
@@ -222,6 +263,7 @@ describe("shouldStartProxyForCli", () => {
   });
 
   it("skips managed proxy routing for bare parent default help", () => {
+    expect(shouldStartProxyForCli(["node", "openclaw", "qa", "suite"])).toBe(false);
     expect(shouldStartProxyForCli(["node", "openclaw", "plugins"])).toBe(false);
     expect(shouldStartProxyForCli(["node", "openclaw", "channels"])).toBe(false);
     expect(shouldStartProxyForCli(["node", "openclaw", "cron"])).toBe(false);
@@ -281,6 +323,15 @@ describe("shouldUseSetupOnboardConfigureHelpFastPath", () => {
     ).toBe(false);
     expect(
       shouldUseSetupOnboardConfigureHelpFastPath(["node", "openclaw", "status", "--help"]),
+    ).toBe(false);
+    expect(
+      shouldUseSetupOnboardConfigureHelpFastPath([
+        "node",
+        "openclaw",
+        "onboard",
+        "--gateway-port",
+        "--help",
+      ]),
     ).toBe(false);
   });
 });
@@ -401,6 +452,19 @@ describe("resolveMissingPluginCommandMessage", () => {
     expect(message).toContain('"voice-call" plugin');
     expect(message).toContain("disabled by default");
     expect(message).toContain("openclaw plugins enable voice-call");
+  });
+
+  it("prefers CLI ownership for plugins that also register a slash command", () => {
+    const message = resolveMissingPluginCommandMessage(
+      "workboard",
+      {},
+      { registry: workboardCommandAliasRegistry },
+    );
+
+    expect(message).toContain('"workboard" plugin');
+    expect(message).toContain("disabled by default");
+    expect(message).toContain("openclaw plugins enable workboard");
+    expect(message).not.toContain("runtime slash command");
   });
 
   it("returns null for CLI command aliases when disabled-by-default parent plugins are enabled", () => {

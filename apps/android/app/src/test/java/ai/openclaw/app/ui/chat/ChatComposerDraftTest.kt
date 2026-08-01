@@ -3,6 +3,8 @@ package ai.openclaw.app.ui.chat
 import ai.openclaw.app.ChatDraft
 import ai.openclaw.app.ChatDraftPlacement
 import ai.openclaw.app.ChatShareDraft
+import ai.openclaw.app.SharedAttachment
+import ai.openclaw.app.SharedAttachmentKind
 import ai.openclaw.app.chat.ChatComposerOwner
 import ai.openclaw.app.chat.GatewayDefaultAgentOwner
 import ai.openclaw.app.chat.VoiceNoteRecorderState
@@ -70,6 +72,19 @@ class ChatComposerDraftTest {
     assertEquals("  edited text  ", request.inputSnapshot)
     assertEquals("edited text", request.message)
     assertEquals(listOf(retained), request.attachments)
+  }
+
+  @Test
+  fun restoredAttachmentsReplaceTheCurrentComposerSet() {
+    val owner = ChatComposerOwner(gatewayStableId = "gateway-a", agentId = "main", sessionKey = "agent:main:first")
+    val state = ChatComposerStateStore()
+    val existing = PendingAttachment("existing", "existing.jpg", "image/jpeg", "YQ==")
+    val restored = PendingAttachment("restored", "image-1", "image/png", "Yg==")
+    state.addAttachments(owner, listOf(existing))
+
+    state.replaceAttachments(owner, listOf(restored))
+
+    assertEquals(listOf(restored), state.attachments.value[owner])
   }
 
   @Test
@@ -480,6 +495,32 @@ class ChatComposerDraftTest {
   }
 
   @Test
+  fun guardedReplacementPreservesComposerEditsMadeWhileActionWasInFlight() {
+    val draft =
+      ChatDraft(
+        text = "rewound text",
+        placement = ChatDraftPlacement.Replace,
+        expectedExistingText = "before",
+      )
+
+    assertEquals(null, mergeChatDraft(draft, "typed while waiting"))
+    assertEquals("rewound text", mergeChatDraft(draft, "before"))
+  }
+
+  @Test
+  fun rewindReplacementCanIntentionallyClearTheComposer() {
+    val draft =
+      ChatDraft(
+        text = "",
+        placement = ChatDraftPlacement.Replace,
+        expectedExistingText = "before",
+        acceptsEmptyText = true,
+      )
+
+    assertEquals("", mergeChatDraft(draft, "before"))
+  }
+
+  @Test
   fun replyDraftCanOnlyMergeIntoItsOriginatingOwner() {
     val owner = ChatComposerOwner(gatewayStableId = "gateway-a", agentId = "agent-a", sessionKey = "session-a")
     val draft = ChatDraft(text = "> quoted\n\n", placement = ChatDraftPlacement.BeforeExisting, owner = owner)
@@ -527,8 +568,8 @@ class ChatComposerDraftTest {
       StagedChatShare(
         text = "shared link",
         attachments = listOf(shared),
-        failedImageCount = 0,
-        droppedImageCount = 2,
+        failedAttachmentCount = 0,
+        droppedAttachmentCount = 2,
       )
 
     store.add(owner, listOf(existing))
@@ -536,7 +577,7 @@ class ChatComposerDraftTest {
 
     assertEquals("existing draft\n\nshared link", mergeSharedChatText(staged.text, "existing draft"))
     assertEquals(listOf(existing, shared), store.get(owner))
-    assertEquals(2, staged.failedImageCount + staged.droppedImageCount + omitted)
+    assertEquals(2, staged.failedAttachmentCount + staged.droppedAttachmentCount + omitted)
   }
 
   @Test
@@ -548,20 +589,20 @@ class ChatComposerDraftTest {
         ChatShareDraft(
           id = 1,
           text = "caption",
-          imageUris = listOf(readable, unreadable),
-          droppedImageCount = 0,
+          attachments = listOf(sharedAttachment(readable), sharedAttachment(unreadable)),
+          droppedAttachmentCount = 0,
         )
 
       val staged =
-        stageChatShareDraft(draft) { uri ->
-          if (uri == unreadable) error("provider read failed")
-          pendingAttachment(uri.toString())
+        stageChatShareDraft(draft) { attachment ->
+          if (attachment.uri == unreadable) error("provider read failed")
+          pendingAttachment(attachment.uri.toString())
         }
 
       assertEquals("caption", staged.text)
       assertEquals(listOf(readable.toString()), staged.attachments.map { it.id })
-      assertEquals(1, staged.failedImageCount)
-      assertEquals(0, staged.droppedImageCount)
+      assertEquals(1, staged.failedAttachmentCount)
+      assertEquals(0, staged.droppedAttachmentCount)
     }
 
   @Test
@@ -570,8 +611,8 @@ class ChatComposerDraftTest {
       ChatShareDraft(
         id = 1,
         text = null,
-        imageUris = listOf(Uri.parse("content://photos/slow")),
-        droppedImageCount = 0,
+        attachments = listOf(sharedAttachment(Uri.parse("content://photos/slow"))),
+        droppedAttachmentCount = 0,
       )
 
     assertThrows(CancellationException::class.java) {
@@ -588,19 +629,25 @@ class ChatComposerDraftTest {
       val store = ChatComposerAttachmentStore()
       val current = (1..7).map { pendingAttachment("existing-$it") }
       val uris = (1..3).map { Uri.parse("content://photos/shared/$it") }
-      val draft = ChatShareDraft(id = 1, text = null, imageUris = uris, droppedImageCount = 0)
+      val draft =
+        ChatShareDraft(
+          id = 1,
+          text = null,
+          attachments = uris.map(::sharedAttachment),
+          droppedAttachmentCount = 0,
+        )
 
       val staged =
-        stageChatShareDraft(draft) { uri ->
-          pendingAttachment(uri.toString())
+        stageChatShareDraft(draft) { attachment ->
+          pendingAttachment(attachment.uri.toString())
         }
 
       assertEquals(uris.map(Uri::toString), staged.attachments.map { it.id })
-      assertEquals(0, staged.droppedImageCount)
+      assertEquals(0, staged.droppedAttachmentCount)
       store.add(owner, current)
       val omitted = store.add(owner, staged.attachments)
       assertEquals(CHAT_COMPOSER_MAX_ATTACHMENTS, store.get(owner).size)
-      assertEquals(2, staged.droppedImageCount + omitted)
+      assertEquals(2, staged.droppedAttachmentCount + omitted)
     }
 
   @Test
@@ -611,8 +658,8 @@ class ChatComposerDraftTest {
       StagedChatShare(
         text = null,
         attachments = listOf(pendingAttachment("one"), pendingAttachment("two")),
-        failedImageCount = 0,
-        droppedImageCount = 0,
+        failedAttachmentCount = 0,
+        droppedAttachmentCount = 0,
       )
     val current = (1..7).map { pendingAttachment("existing-$it") }
 
@@ -620,7 +667,7 @@ class ChatComposerDraftTest {
     val omitted = store.add(owner, staged.attachments)
 
     assertEquals(CHAT_COMPOSER_MAX_ATTACHMENTS, store.get(owner).size)
-    assertEquals(1, staged.droppedImageCount + omitted)
+    assertEquals(1, staged.droppedAttachmentCount + omitted)
   }
 
   @Test
@@ -666,9 +713,38 @@ class ChatComposerDraftTest {
   }
 
   @Test
+  fun attachmentAdmissionUsesPerKindDecodedBudgets() {
+    assertEquals(CHAT_COMPOSER_MAX_IMAGE_DECODED_BYTES, chatComposerAttachmentDecodedByteLimit("image/png"))
+    assertEquals(CHAT_COMPOSER_MAX_AUDIO_DECODED_BYTES, chatComposerAttachmentDecodedByteLimit("audio/mpeg"))
+    assertEquals(CHAT_COMPOSER_MAX_VIDEO_DECODED_BYTES, chatComposerAttachmentDecodedByteLimit("video/mp4"))
+    assertEquals(CHAT_COMPOSER_MAX_DOCUMENT_DECODED_BYTES, chatComposerAttachmentDecodedByteLimit("application/pdf"))
+    assertEquals(20L * 1024L * 1024L, CHAT_COMPOSER_MAX_VIDEO_DECODED_BYTES)
+  }
+
+  @Test
+  fun videoPositionDoesNotRelaxNonVideoAdmissionBudget() {
+    val video = PendingAttachment("video", "clip.mp4", "video/mp4", "AAAA")
+    val document = PendingAttachment("document", "report.pdf", "application/pdf", "AAAAAAAA")
+
+    fun admit(candidates: List<PendingAttachment>) =
+      admitChatAttachments(
+        currentAttachments = emptyList(),
+        candidates = candidates,
+        maxAttachmentCount = 8,
+        maxBase64Chars = 100,
+        maxDecodedBytes = 9,
+        maxNonVideoBase64Chars = 100,
+        maxNonVideoDecodedBytes = 3,
+      )
+
+    assertEquals(listOf(video), admit(listOf(video, document)).accepted)
+    assertEquals(listOf(video), admit(listOf(document, video)).accepted)
+  }
+
+  @Test
   fun stagedShareCommitsOnlyForMatchingQueueHead() {
-    val current = ChatShareDraft(id = 7, text = "current", imageUris = emptyList(), droppedImageCount = 0)
-    val replacement = ChatShareDraft(id = 8, text = "replacement", imageUris = emptyList(), droppedImageCount = 0)
+    val current = ChatShareDraft(id = 7, text = "current", attachments = emptyList(), droppedAttachmentCount = 0)
+    val replacement = ChatShareDraft(id = 8, text = "replacement", attachments = emptyList(), droppedAttachmentCount = 0)
     val owner = ChatComposerOwner(gatewayStableId = "gateway-a", agentId = "agent-a", sessionKey = "session-a")
 
     assertTrue(canCommitStagedChatShare(current.id, current, owner, owner))
@@ -885,7 +961,7 @@ class ChatComposerDraftTest {
 
   @Test
   fun stagedShareRejectsAReplacementComposerOwner() {
-    val share = ChatShareDraft(id = 7, text = "share", imageUris = emptyList(), droppedImageCount = 0)
+    val share = ChatShareDraft(id = 7, text = "share", attachments = emptyList(), droppedAttachmentCount = 0)
     val owner = ChatComposerOwner(gatewayStableId = "gateway-a", agentId = "agent-a", sessionKey = "session-a")
 
     assertFalse(
@@ -951,5 +1027,12 @@ class ChatComposerDraftTest {
       fileName = "$id.jpg",
       mimeType = "image/jpeg",
       base64 = base64,
+    )
+
+  private fun sharedAttachment(uri: Uri): SharedAttachment =
+    SharedAttachment(
+      uri = uri,
+      kind = SharedAttachmentKind.Image,
+      mimeType = "image/jpeg",
     )
 }

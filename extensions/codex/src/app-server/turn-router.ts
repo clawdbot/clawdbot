@@ -26,6 +26,7 @@ export type CodexThreadRouteScope = {
 type CodexThreadRequestHandler = (
   request: CodexAppServerServerRequest,
   scope: CodexThreadRouteScope,
+  signal: AbortSignal,
 ) => Promise<JsonValue | undefined> | JsonValue | undefined;
 type CodexThreadNotificationHandler = (
   notification: CodexServerNotification,
@@ -99,7 +100,6 @@ type Route = {
 type NativeTurnCompletionWatcher = {
   turnId: string;
   finish: (completed: boolean) => void;
-  touch: () => void;
 };
 
 const routers = new WeakMap<CodexAppServerClient, ClientTurnRouter>();
@@ -127,8 +127,10 @@ class ClientTurnRouter implements CodexAppServerTurnRouter {
 
   constructor(client: CodexAppServerClient) {
     client.addNotificationHandler((notification) => this.routeNotification(notification));
-    client.addRequestHandler((request) => this.routeRequest(request));
-    client.addCloseHandler(() => this.dispose());
+    client.addRequestHandler((request, signal) => this.routeRequest(request, signal));
+    client.addCloseHandler((closedClient) => {
+      this.dispose(closedClient.getCloseError());
+    });
   }
 
   reserveThread(options: RouteOptions): CodexThreadRouteReservation {
@@ -202,23 +204,23 @@ class ClientTurnRouter implements CodexAppServerTurnRouter {
       clearTimeout(timeout);
       settle(completed);
     };
-    const touch = () => {
-      timeout.refresh();
-    };
-    const watcher = { turnId, finish, touch };
+    const watcher = { turnId, finish };
     watchers.add(watcher);
     const timeout = setTimeout(() => finish(false), Math.max(1, options.timeoutMs));
     timeout.unref?.();
     return { completion, cancel: () => finish(false) };
   }
 
-  private dispose(): void {
+  private dispose(cause?: Error): void {
     if (this.disposed) {
       return;
     }
     this.disposed = true;
+    const closeError = cause
+      ? new Error("codex app-server turn router closed", { cause })
+      : new Error("codex app-server turn router closed");
     for (const route of this.routes.values()) {
-      this.release(route, new Error("codex app-server turn router closed"));
+      this.release(route, closeError);
     }
     for (const watchers of this.nativeTurnCompletionWatchers.values()) {
       for (const watcher of watchers) {
@@ -308,12 +310,8 @@ class ClientTurnRouter implements CodexAppServerTurnRouter {
     const terminal = isCodexTerminalTurnNotification(notification);
     if (scope.turnId && watchers) {
       for (const watcher of watchers) {
-        if (watcher.turnId === scope.turnId) {
-          if (terminal) {
-            watcher.finish(true);
-          } else {
-            watcher.touch();
-          }
+        if (watcher.turnId === scope.turnId && notification.method === "turn/completed") {
+          watcher.finish(true);
         }
       }
     }
@@ -353,8 +351,11 @@ class ClientTurnRouter implements CodexAppServerTurnRouter {
     return route.notificationTail;
   }
 
-  private async routeRequest(request: CodexAppServerServerRequest): Promise<JsonValue | undefined> {
-    if (this.disposed) {
+  private async routeRequest(
+    request: CodexAppServerServerRequest,
+    signal: AbortSignal = new AbortController().signal,
+  ): Promise<JsonValue | undefined> {
+    if (this.disposed || signal.aborted) {
       return undefined;
     }
     const scope = readScope(request.params);
@@ -365,10 +366,10 @@ class ClientTurnRouter implements CodexAppServerTurnRouter {
     if (!route || route.released) {
       return undefined;
     }
-    if (!route.handlers) {
-      await route.activated.promise;
+    if (!route.handlers && !(await waitForPromiseOrAbort(route.activated.promise, signal))) {
+      return undefined;
     }
-    if (route.released || !route.handlers) {
+    if (signal.aborted || route.released || !route.handlers) {
       return undefined;
     }
     const handler = route.handlers.onRequest;
@@ -378,8 +379,11 @@ class ClientTurnRouter implements CodexAppServerTurnRouter {
     // Open routes service a resumed native turn. Arming starts the handoff to a
     // new OpenClaw turn, whose requests must wait for its accepted turn id.
     while (route.gate === "armed") {
-      await route.binding?.promise;
-      if (route.released) {
+      const binding = route.binding?.promise;
+      if (!binding || !(await waitForPromiseOrAbort(binding, signal))) {
+        return undefined;
+      }
+      if (signal.aborted || route.released) {
         return undefined;
       }
     }
@@ -391,18 +395,24 @@ class ClientTurnRouter implements CodexAppServerTurnRouter {
         return undefined;
       }
     }
-    await this.waitForNotifications(route);
-    if (route.released) {
+    if (!(await waitForPromiseOrAbort(this.waitForNotifications(route), signal))) {
+      return undefined;
+    }
+    if (signal.aborted || route.released) {
       return undefined;
     }
     try {
-      const result = await handler(request, {
-        threadId: scope.threadId,
-        ...(scope.turnId ? { turnId: scope.turnId } : {}),
-      });
-      return route.released ? undefined : result;
+      const result = await handler(
+        request,
+        {
+          threadId: scope.threadId,
+          ...(scope.turnId ? { turnId: scope.turnId } : {}),
+        },
+        signal,
+      );
+      return signal.aborted || route.released ? undefined : result;
     } catch (error) {
-      if (route.released) {
+      if (signal.aborted || route.released) {
         return undefined;
       }
       throw error;
@@ -589,6 +599,31 @@ function isCodexTerminalTurnNotification(notification: CodexServerNotification):
     isJsonObject(notification.params) &&
     notification.params.willRetry === false
   );
+}
+
+async function waitForPromiseOrAbort(
+  promise: Promise<unknown>,
+  signal: AbortSignal,
+): Promise<boolean> {
+  if (signal.aborted) {
+    return false;
+  }
+  let removeAbort: (() => void) | undefined;
+  try {
+    return await Promise.race([
+      promise.then(() => true),
+      new Promise<boolean>((resolve) => {
+        const onAbort = () => resolve(false);
+        signal.addEventListener("abort", onAbort, { once: true });
+        removeAbort = () => signal.removeEventListener("abort", onAbort);
+        if (signal.aborted) {
+          onAbort();
+        }
+      }),
+    ]);
+  } finally {
+    removeAbort?.();
+  }
 }
 
 function deferred(): Deferred {

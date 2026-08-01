@@ -169,6 +169,15 @@ describe("command-path-policy", () => {
       }),
     ).toBe("default");
 
+    expectResolvedPolicy(["agent", "exec"], {
+      bypassConfigGuard: true,
+      loadPlugins: "never",
+      pluginRegistry: { scope: "all" },
+      ownsProtocolStdout: true,
+      hideBanner: true,
+      networkProxy: "default",
+    });
+
     for (const commandPath of [
       ["agents"],
       ["agents", "list"],
@@ -186,6 +195,11 @@ describe("command-path-policy", () => {
   });
 
   it("resolves mixed startup-only rules", () => {
+    expectResolvedPolicy(["qa", "suite"], {
+      bypassConfigGuard: true,
+      loadPlugins: "never",
+      networkProxy: "bypass",
+    });
     expectResolvedPolicy(["worker"], {
       bypassConfigGuard: true,
       loadPlugins: "never",
@@ -200,6 +214,13 @@ describe("command-path-policy", () => {
     expectResolvedPolicy(["config"], {
       bypassConfigGuard: true,
       loadPlugins: "never",
+      networkProxy: "bypass",
+    });
+    expectResolvedPolicy(["config", "file"], {
+      bypassConfigGuard: true,
+      ensureCliPath: false,
+      loadPlugins: "never",
+      ownsProtocolStdout: true,
       networkProxy: "bypass",
     });
     expectResolvedPolicy(["config", "set"], {
@@ -240,6 +261,11 @@ describe("command-path-policy", () => {
       loadPlugins: "never",
       networkProxy: "bypass",
     });
+    expectResolvedPolicy(["gateway", "health"], {
+      routeConfigGuard: "always",
+      loadPlugins: "never",
+      networkProxy: "bypass",
+    });
     expectResolvedPolicy(["plugins", "update"], {
       loadPlugins: "never",
       hideBanner: true,
@@ -268,6 +294,16 @@ describe("command-path-policy", () => {
     }
     expectResolvedPolicy(["cron", "list"], {
       bypassConfigGuard: true,
+      loadPlugins: "never",
+      networkProxy: "bypass",
+    });
+  });
+
+  it("keeps routed and Commander config reads ahead of observing startup guards", () => {
+    expectResolvedPolicy(["config", "get"], {
+      bypassConfigGuard: true,
+      routeConfigGuard: "always",
+      ensureCliPath: false,
       loadPlugins: "never",
       networkProxy: "bypass",
     });
@@ -315,6 +351,12 @@ describe("command-path-policy", () => {
     expect(resolveCliNetworkProxyPolicy(["node", "openclaw", "skills", "search", "browser"])).toBe(
       "default",
     );
+  });
+
+  it("routes ClawHub skill verification through the network proxy", () => {
+    expect(
+      resolveCliNetworkProxyPolicy(["node", "openclaw", "skills", "verify", "@demo-owner/weather"]),
+    ).toBe("default");
   });
 
   it("uses the longest catalog command path for deep network proxy overrides", async () => {

@@ -189,7 +189,7 @@ openclaw agents add work \
   --json
 ```
 
-Config keys it writes (`agents.list[]` entry for the new agent id):
+Config keys it writes (`agents.entries.*` entry for the new agent id):
 
 - `name`
 - `workspace`

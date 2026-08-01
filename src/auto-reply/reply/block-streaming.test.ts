@@ -49,7 +49,7 @@ describe("resolveEffectiveBlockStreamingConfig", () => {
     const cfg = {
       channels: {
         imessage: {
-          chunkMode: "newline",
+          streaming: { chunkMode: "newline" },
         },
       },
       agents: {
@@ -117,32 +117,6 @@ describe("resolveEffectiveBlockStreamingConfig", () => {
       resolveEffectiveBlockStreamingConfig({
         cfg,
         provider: "imessage",
-        accountId: "personal",
-      }).coalescing,
-    ).toMatchObject({ minChars: 25, maxChars: 80, idleMs: 2 });
-  });
-
-  it("merges flat account block coalescing over channel nested config for SDK-plugin configs", () => {
-    // No bundled schema accepts flat blockStreamingCoalesce anymore, but the
-    // resolver keeps the account-level flat read for external SDK plugin
-    // configs until the deprecation window closes.
-    const cfg = {
-      channels: {
-        mattermost: {
-          streaming: { block: { coalesce: { minChars: 25, maxChars: 80, idleMs: 5 } } },
-          accounts: {
-            personal: {
-              blockStreamingCoalesce: { idleMs: 2 },
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    expect(
-      resolveEffectiveBlockStreamingConfig({
-        cfg,
-        provider: "mattermost",
         accountId: "personal",
       }).coalescing,
     ).toMatchObject({ minChars: 25, maxChars: 80, idleMs: 2 });

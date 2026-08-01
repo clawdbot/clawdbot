@@ -3,10 +3,11 @@ package ai.openclaw.app.ui.chat
 import ai.openclaw.app.ChatDraft
 import ai.openclaw.app.ChatDraftPlacement
 import ai.openclaw.app.ChatShareDraft
+import ai.openclaw.app.SharedAttachment
 import ai.openclaw.app.chat.ChatComposerOwner
 import ai.openclaw.app.chat.OUTBOX_MAX_COMMAND_ATTACHMENT_BYTES
+import ai.openclaw.app.chat.OUTBOX_MAX_VIDEO_COMMAND_ATTACHMENT_BYTES
 import ai.openclaw.app.chat.VoiceNoteRecorderState
-import android.net.Uri
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.saveable.listSaver
 import kotlinx.coroutines.CancellationException
@@ -362,7 +363,8 @@ internal fun mergeChatDraft(
   currentOwner: ChatComposerOwner? = null,
 ): String? {
   if (draft?.owner != null && draft.owner != currentOwner) return null
-  val text = draft?.text?.takeIf { it.isNotBlank() } ?: return null
+  if (draft?.expectedExistingText != null && draft.expectedExistingText != currentInput) return null
+  val text = draft?.text?.takeIf { draft.acceptsEmptyText || it.isNotBlank() } ?: return null
   return when (draft.placement) {
     ChatDraftPlacement.Replace -> text
     ChatDraftPlacement.BeforeExisting -> text + currentInput
@@ -381,12 +383,18 @@ internal fun mergeSharedChatText(
 internal data class StagedChatShare(
   val text: String?,
   val attachments: List<PendingAttachment>,
-  val failedImageCount: Int,
-  val droppedImageCount: Int,
+  val failedAttachmentCount: Int,
+  val droppedAttachmentCount: Int,
 )
 
 internal const val CHAT_COMPOSER_MAX_ATTACHMENTS = 8
-internal const val CHAT_COMPOSER_MAX_DECODED_ATTACHMENT_BYTES = OUTBOX_MAX_COMMAND_ATTACHMENT_BYTES
+
+// Gateway chat attachments default to 20 MiB (images: 6 MiB); Android's outbox further caps audio/documents at 8 MiB.
+internal const val CHAT_COMPOSER_MAX_IMAGE_DECODED_BYTES = 6L * 1024L * 1024L
+internal const val CHAT_COMPOSER_MAX_AUDIO_DECODED_BYTES = OUTBOX_MAX_COMMAND_ATTACHMENT_BYTES
+internal const val CHAT_COMPOSER_MAX_VIDEO_DECODED_BYTES = OUTBOX_MAX_VIDEO_COMMAND_ATTACHMENT_BYTES
+internal const val CHAT_COMPOSER_MAX_DOCUMENT_DECODED_BYTES = OUTBOX_MAX_COMMAND_ATTACHMENT_BYTES
+internal const val CHAT_COMPOSER_MAX_DECODED_ATTACHMENT_BYTES = CHAT_COMPOSER_MAX_VIDEO_DECODED_BYTES
 internal const val CHAT_COMPOSER_MAX_BASE64_CHARS = ((CHAT_COMPOSER_MAX_DECODED_ATTACHMENT_BYTES + 2) / 3) * 4
 internal const val CHAT_COMPOSER_MAX_TOTAL_ATTACHMENTS = 24
 internal const val CHAT_COMPOSER_MAX_TOTAL_DECODED_ATTACHMENT_BYTES = CHAT_COMPOSER_MAX_DECODED_ATTACHMENT_BYTES * 3
@@ -403,28 +411,58 @@ internal fun admitChatAttachments(
   maxAttachmentCount: Int = CHAT_COMPOSER_MAX_ATTACHMENTS,
   maxBase64Chars: Long = CHAT_COMPOSER_MAX_BASE64_CHARS,
   maxDecodedBytes: Long = CHAT_COMPOSER_MAX_DECODED_ATTACHMENT_BYTES,
+  maxNonVideoBase64Chars: Long = ((OUTBOX_MAX_COMMAND_ATTACHMENT_BYTES + 2) / 3) * 4,
+  maxNonVideoDecodedBytes: Long = OUTBOX_MAX_COMMAND_ATTACHMENT_BYTES,
 ): ChatAttachmentAdmission {
-  require(maxAttachmentCount >= 0 && maxBase64Chars >= 0 && maxDecodedBytes >= 0)
+  require(
+    maxAttachmentCount >= 0 &&
+      maxBase64Chars >= 0 &&
+      maxDecodedBytes >= 0 &&
+      maxNonVideoBase64Chars >= 0 &&
+      maxNonVideoDecodedBytes >= 0,
+  )
   val accepted = mutableListOf<PendingAttachment>()
   var base64Chars = currentAttachments.sumOf { it.base64.length.toLong() }
   var decodedBytes = currentAttachments.sumOf { decodedBase64ByteCount(it.base64) }
+  var nonVideoBase64Chars =
+    currentAttachments.filterNot { it.mimeType.startsWith("video/", ignoreCase = true) }.sumOf { it.base64.length.toLong() }
+  var nonVideoDecodedBytes =
+    currentAttachments
+      .filterNot { it.mimeType.startsWith("video/", ignoreCase = true) }
+      .sumOf { decodedBase64ByteCount(it.base64) }
   var omittedCount = 0
   for (candidate in candidates) {
     val candidateBase64Chars = candidate.base64.length.toLong()
     val candidateDecodedBytes = decodedBase64ByteCount(candidate.base64)
+    val candidateIsVideo = candidate.mimeType.startsWith("video/", ignoreCase = true)
+    val withinKind = candidateDecodedBytes <= chatComposerAttachmentDecodedByteLimit(candidate.mimeType)
     val withinCount = currentAttachments.size + accepted.size < maxAttachmentCount
     val withinBase64 = candidateBase64Chars <= maxBase64Chars - base64Chars
     val withinDecoded = candidateDecodedBytes <= maxDecodedBytes - decodedBytes
-    if (withinCount && withinBase64 && withinDecoded) {
+    val withinNonVideoBase64 = candidateIsVideo || candidateBase64Chars <= maxNonVideoBase64Chars - nonVideoBase64Chars
+    val withinNonVideoDecoded = candidateIsVideo || candidateDecodedBytes <= maxNonVideoDecodedBytes - nonVideoDecodedBytes
+    if (withinKind && withinCount && withinBase64 && withinDecoded && withinNonVideoBase64 && withinNonVideoDecoded) {
       accepted += candidate
       base64Chars += candidateBase64Chars
       decodedBytes += candidateDecodedBytes
+      if (!candidateIsVideo) {
+        nonVideoBase64Chars += candidateBase64Chars
+        nonVideoDecodedBytes += candidateDecodedBytes
+      }
     } else {
       omittedCount += 1
     }
   }
   return ChatAttachmentAdmission(accepted = accepted, omittedCount = omittedCount)
 }
+
+internal fun chatComposerAttachmentDecodedByteLimit(mimeType: String): Long =
+  when {
+    mimeType.startsWith("image/", ignoreCase = true) -> CHAT_COMPOSER_MAX_IMAGE_DECODED_BYTES
+    mimeType.startsWith("audio/", ignoreCase = true) -> CHAT_COMPOSER_MAX_AUDIO_DECODED_BYTES
+    mimeType.startsWith("video/", ignoreCase = true) -> CHAT_COMPOSER_MAX_VIDEO_DECODED_BYTES
+    else -> CHAT_COMPOSER_MAX_DOCUMENT_DECODED_BYTES
+  }
 
 internal fun decodedBase64ByteCount(base64: String): Long {
   val padding =
@@ -439,29 +477,29 @@ internal fun decodedBase64ByteCount(base64: String): Long {
 /** Loads a complete queue head before any part of it becomes visible in the composer. */
 internal suspend fun stageChatShareDraft(
   draft: ChatShareDraft,
-  loadImage: suspend (Uri) -> PendingAttachment,
+  loadAttachment: suspend (SharedAttachment) -> PendingAttachment,
 ): StagedChatShare {
   val attachments = mutableListOf<PendingAttachment>()
-  var failedImageCount = 0
-  var droppedImageCount = draft.droppedImageCount
-  for (uri in draft.imageUris) {
+  var failedAttachmentCount = 0
+  var droppedAttachmentCount = draft.droppedAttachmentCount
+  for (sharedAttachment in draft.attachments) {
     try {
-      val candidate = loadImage(uri)
+      val candidate = loadAttachment(sharedAttachment)
       val admission = admitChatAttachments(attachments, listOf(candidate))
       attachments += admission.accepted
-      droppedImageCount += admission.omittedCount
+      droppedAttachmentCount += admission.omittedCount
     } catch (error: CancellationException) {
       // Screen disposal must leave the queue head unacknowledged for the next ChatScreen.
       throw error
     } catch (_: Exception) {
-      failedImageCount += 1
+      failedAttachmentCount += 1
     }
   }
   return StagedChatShare(
     text = draft.text,
     attachments = attachments,
-    failedImageCount = failedImageCount,
-    droppedImageCount = droppedImageCount,
+    failedAttachmentCount = failedAttachmentCount,
+    droppedAttachmentCount = droppedAttachmentCount,
   )
 }
 

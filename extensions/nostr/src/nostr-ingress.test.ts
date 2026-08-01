@@ -379,4 +379,39 @@ describe("Nostr durable ingress", () => {
       }
     });
   });
+
+  it("quiesces delivery before waiting for an in-flight admission", async () => {
+    await withQueue(async (queue) => {
+      let releaseEnqueue!: () => void;
+      const enqueueGate = new Promise<void>((resolve) => {
+        releaseEnqueue = resolve;
+      });
+      let notifyEnqueueStarted!: () => void;
+      const enqueueStarted = new Promise<void>((resolve) => {
+        notifyEnqueueStarted = resolve;
+      });
+      const blockingQueue = {
+        ...queue,
+        enqueue: vi.fn(async (...args: Parameters<NostrIngressQueue["enqueue"]>) => {
+          notifyEnqueueStarted();
+          await enqueueGate;
+          return queue.enqueue(...args);
+        }),
+      } satisfies NostrIngressQueue;
+      const deliver = vi.fn();
+      const ingress = startIngress({ queue: blockingQueue, deliver });
+      const admission = ingress.receive(createEvent({ id: "b".repeat(64) }));
+      await enqueueStarted;
+
+      const stop = ingress.stop();
+      releaseEnqueue();
+
+      await expect(admission).resolves.toBe("accepted");
+      await stop;
+      expect(deliver).not.toHaveBeenCalled();
+      await expect(ingress.receive(createEvent({ id: "c".repeat(64) }))).rejects.toThrow(
+        "Nostr ingress stopped",
+      );
+    });
+  });
 });

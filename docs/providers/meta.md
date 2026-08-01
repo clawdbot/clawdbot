@@ -7,13 +7,13 @@ read_when:
 ---
 
 The **Meta API** uses the OpenAI-compatible **Responses API** (`POST /v1/responses`)
-for the `muse-spark-1.1` reasoning model. The provider ships as a bundled OpenClaw
-plugin.
+for the `muse-spark-1.1` reasoning model. OpenClaw provides Meta as an official
+external plugin.
 
 | Property          | Value                              |
 | ----------------- | ---------------------------------- |
 | Provider id       | `meta`                             |
-| Plugin            | bundled provider                   |
+| Plugin            | `@openclaw/meta-provider`          |
 | Auth env var      | `MODEL_API_KEY`                    |
 | Onboarding flag   | `--auth-choice meta-api-key`       |
 | Direct CLI flag   | `--meta-api-key <key>`             |
@@ -25,6 +25,12 @@ plugin.
 ## Getting started
 
 <Steps>
+  <Step title="Install the plugin">
+    ```bash
+    openclaw plugins install @openclaw/meta-provider
+    openclaw gateway restart
+    ```
+  </Step>
   <Step title="Set the API key">
     <CodeGroup>
 
@@ -68,13 +74,13 @@ openclaw onboard --non-interactive --accept-risk \
 
 ## Built-in catalog
 
-| Model ref             | Name           | Reasoning | Context window | Max output |
-| --------------------- | -------------- | --------- | -------------- | ---------- |
-| `meta/muse-spark-1.1` | Muse Spark 1.1 | yes       | 1,048,576      | 131,072    |
+| Model ref             | Name           | Input       | Reasoning | Context window | Max output | Input / cached input / output per 1M tokens |
+| --------------------- | -------------- | ----------- | --------- | -------------- | ---------- | ------------------------------------------- |
+| `meta/muse-spark-1.1` | Muse Spark 1.1 | text, image | yes       | 1,048,576      | 131,072    | $1.25 / $0.15 / $4.25                       |
 
 Capabilities:
 
-- Text + image input
+- Text and image input
 - Tool calling and streaming
 - Reasoning effort: `minimal`, `low`, `medium`, `high`, `xhigh` (default: `high`)
 - Stateless encrypted reasoning replay (`store: false`, `include: ["reasoning.encrypted_content"]`)

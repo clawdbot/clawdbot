@@ -83,6 +83,9 @@ export function createTelegramProgressController(params: {
     commentaryLinePrefix: "💬 ",
     commentaryItalics: false,
     updateOnLineChange: true,
+    // renderTelegramProgressDraftPreview draws the work lines from `lines` in
+    // headline/checklist mode, so they must not also arrive inside the text.
+    rendersRollingLinesNatively: true,
     update: async (streamText, options) => {
       draftEverRendered = true;
       await params.draft.prepareAnswerLaneForToolProgress();
@@ -205,7 +208,7 @@ export function createTelegramProgressController(params: {
     if (payload.phase === "start") {
       const windowRendersTool =
         canPushToolProgress() &&
-        resolveChannelStreamingPreviewToolProgress(params.telegramCfg) &&
+        resolveChannelStreamingPreviewToolProgress(params.telegramCfg, true, params.streamMode) &&
         isChannelProgressDraftWorkToolName(toolName);
       if (windowRendersTool) {
         summary.noteToolCall();
@@ -326,6 +329,12 @@ export function createTelegramProgressController(params: {
 
   return {
     applyCollapseSummary,
+    beginQueuedFollowup: () => {
+      finalAnswerDeliveryStarted = false;
+      finalAnswerDelivered = false;
+      sawProgressFinal = false;
+      compositor.beginNewTurn({ force: true });
+    },
     canPushToolProgress,
     cancel: () => compositor.cancel(),
     closeReasoningBurst: () => summary.closeReasoningBurst(),

@@ -1,4 +1,5 @@
 // Shared execution helpers keep the public dispatcher small and reviewable.
+import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
 import type { ConfigSetOptions } from "../cli/config-set-input.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { isSensitiveConfigPath } from "../config/sensitive-paths.js";
@@ -26,6 +27,7 @@ import type {
 import { formatSystemAgentPersistentPlan } from "./operations-parse.js";
 import type { SystemAgentOverview } from "./overview.js";
 import { validateSystemAgentPluginInstallSpec } from "./plugin-install.js";
+import type { SystemAgentVerifiedInferenceBinding } from "./verified-inference.js";
 
 type ConfigModule = typeof import("../config/config.js");
 type ConfigFileSnapshot = Awaited<ReturnType<ConfigModule["readConfigFileSnapshot"]>>;
@@ -219,6 +221,8 @@ export type ExecuteOptions = {
    * immediately followed by the persistent effect it authorizes.
    */
   beforePersistentApply?: () => Promise<void>;
+  /** Adopt the exact final binding after a verified model-route write commits. */
+  onVerifiedInferenceChanged?: (binding: SystemAgentVerifiedInferenceBinding) => void;
 };
 
 /**
@@ -237,6 +241,7 @@ type PersistentApplyContext = {
 type PersistentApplyOutcome = {
   summary: string;
   bootstrapPending?: boolean;
+  agentId?: string;
   details?: Record<string, unknown>;
   /** Overrides the after-snapshot config path in the audit record. */
   configPath?: string;
@@ -286,6 +291,7 @@ export async function applyPersistentOperation(params: {
     ...(outcome.bootstrapPending === undefined
       ? {}
       : { bootstrapPending: outcome.bootstrapPending }),
+    ...(outcome.agentId ? { agentId: outcome.agentId } : {}),
   };
 }
 
@@ -342,7 +348,8 @@ async function isDefaultAgentListPath(segments: readonly string[]): Promise<bool
     return true;
   }
   const config = snapshot.sourceConfig ?? snapshot.config;
-  const entry = config?.agents?.list?.[Number(listIndexSegment)];
+  const authoredList = snapshot.sourceConfigBeforeMigrations?.agents?.list;
+  const entry = Array.isArray(authoredList) ? authoredList[Number(listIndexSegment)] : undefined;
   if (!entry?.id) {
     // Unknown or id-less entry: cannot prove it is off the default route.
     return true;
@@ -374,7 +381,7 @@ export async function assertConfigWriteDoesNotBypassInferenceVerification(
       return;
     }
     throw new Error(
-      `Direct config writes cannot change plugin "${pluginId}" because it may back OpenClaw's own active inference route. Exit OpenClaw and edit it from a terminal.`,
+      `Direct config writes cannot change plugin "${pluginId}" because it may back OpenClaw's own active inference route. Editing it is a human-only change, made with OpenClaw stopped from a trusted shell on the machine running it.`,
     );
   }
   const deniedRoot = segments[0]?.trim().toLowerCase() ?? "";
@@ -382,7 +389,7 @@ export async function assertConfigWriteDoesNotBypassInferenceVerification(
   throw new Error(
     denialReason
       ? `Direct config writes cannot change \`${deniedRoot}\` (${denialReason}).`
-      : "Direct config writes cannot change the default inference route or include alternate config. Use `set_default_model` (optionally with agentId) for an already configured route, or exit OpenClaw and run `openclaw onboard` to change provider/auth access.",
+      : "Direct config writes cannot change the default inference route or include alternate config. Use `set_default_model` (optionally with agentId) for an already configured route; changing provider or auth access is `openclaw onboard` on the machine running OpenClaw.",
   );
 }
 
@@ -398,14 +405,14 @@ async function verifyCurrentSetupInference(
   const before = await readConfigFileSnapshot();
   if (!before.exists || !before.valid) {
     throw new Error(
-      "OpenClaw setup requires a valid configured inference route. Exit OpenClaw and run `openclaw onboard`, then retry.",
+      "OpenClaw setup requires a valid configured inference route. Run `openclaw onboard` on the machine running OpenClaw, then retry.",
     );
   }
   const beforeConfig = before.runtimeConfig ?? before.config;
   const beforeRoute = await projectDefaultInferenceRoute(beforeConfig);
   if (!beforeRoute.route) {
     throw new Error(
-      "OpenClaw setup requires working inference first. Exit OpenClaw and run `openclaw onboard`, then retry.",
+      "OpenClaw setup requires working inference first. Run `openclaw onboard` on the machine running OpenClaw, then retry.",
     );
   }
   const verifyInferenceConfig =
@@ -414,7 +421,7 @@ async function verifyCurrentSetupInference(
   const verification = await verifyInferenceConfig({ config: beforeConfig, runtime });
   if (!verification.ok) {
     throw new Error(
-      `OpenClaw setup requires working inference first. The configured route failed a live check: ${verification.error} Exit OpenClaw and run \`openclaw onboard\`, then retry.`,
+      `OpenClaw setup requires working inference first. The configured route failed a live check: ${verification.error} Run \`openclaw onboard\` on the machine running OpenClaw, then retry.`,
     );
   }
 
@@ -450,13 +457,13 @@ export async function executeSetup(
   const defaultModel = overview.defaultModel?.trim();
   if (!defaultModel) {
     throw new Error(
-      "OpenClaw setup requires working inference first. Run `openclaw onboard` to configure and verify a default model, then start OpenClaw again.",
+      "OpenClaw setup requires working inference first. Run `openclaw onboard` on the machine running OpenClaw to configure and verify a default model, then start OpenClaw again.",
     );
   }
   const requestedModel = operation.model?.trim();
   if (requestedModel && requestedModel !== defaultModel) {
     throw new Error(
-      `OpenClaw setup will preserve the verified default model ${defaultModel}. Exit OpenClaw and run \`openclaw onboard\` to stage, live-test, and save a different inference route.`,
+      `OpenClaw setup will preserve the verified default model ${defaultModel}. Staging, live-testing, and saving a different inference route is \`openclaw onboard\` on the machine running OpenClaw.`,
     );
   }
   if (!opts.approved) {
@@ -470,7 +477,7 @@ export async function executeSetup(
   const verified = await verifyCurrentSetupInference(runtime, opts.deps);
   if (requestedModel && requestedModel !== verified.modelRef) {
     throw new Error(
-      `The verified default model is now ${verified.modelRef}, not ${requestedModel}. Review the current route or exit OpenClaw and run \`openclaw onboard\` before retrying setup.`,
+      `The verified default model is now ${verified.modelRef}, not ${requestedModel}. Review the current route, or run \`openclaw onboard\` on the machine running OpenClaw, before retrying setup.`,
     );
   }
   const workspace = resolveUserPath(operation.workspace ?? process.cwd());
@@ -483,6 +490,8 @@ export async function executeSetup(
       const applySetup =
         ctx.deps?.applySetup ?? (await import("./setup-apply.js")).applySystemAgentSetup;
       const surface = ctx.deps?.setupSurface ?? "cli";
+      // The guarded setup transaction publishes the load-time injected main
+      // roster before any workspace provisioning or other follow-up effect.
       // The outer boundary covers injected implementations. The production
       // setup helper also uses this same seam for each of its internal writes.
       const applied = await ctx.commit(
@@ -566,6 +575,7 @@ export async function executeSetDefaultModel(
         );
       }
       let persistedVerification = initialVerification;
+      let persistedBinding: SystemAgentVerifiedInferenceBinding | undefined;
       let selectedRouteForCommit = verifiedRoute;
       const selectModel = await createSystemAgentModelSelectionUpdater({
         model: operation.model,
@@ -574,6 +584,7 @@ export async function executeSetDefaultModel(
       const result = await mutateConfigFile({
         base: "source",
         writeOptions: {
+          auditOrigin: "system-agent",
           preCommitRuntimePreflight: async (sourceConfig) => {
             const commitRoute = await projectRoute(sourceConfig);
             if (!sameDefaultInferenceRoute(commitRoute, selectedRouteForCommit)) {
@@ -582,11 +593,22 @@ export async function executeSetDefaultModel(
               );
             }
             await opts.beforePersistentApply?.();
+            let latestBinding: SystemAgentVerifiedInferenceBinding | undefined;
             const latestVerification = await verifyInferenceConfig({
               config: sourceConfig,
               runtime: ctx.runtime,
               requireExecutionOwner: true,
               ...(targetAgentId ? { agentId: targetAgentId } : {}),
+              ...(opts.onVerifiedInferenceChanged
+                ? {
+                    onVerifiedExecution: (
+                      _auth: AgentExecutionAuthBinding,
+                      binding: SystemAgentVerifiedInferenceBinding,
+                    ) => {
+                      latestBinding = binding;
+                    },
+                  }
+                : {}),
             });
             if (!latestVerification.ok) {
               throw new Error(
@@ -598,10 +620,16 @@ export async function executeSetDefaultModel(
                 "The final live inference test did not verify the exact model route at the config commit boundary, so the requested model was not saved. Review model aliases and runtime routing, then retry.",
               );
             }
+            if (opts.onVerifiedInferenceChanged && !latestBinding) {
+              throw new Error(
+                "The final live inference test did not return a reusable session binding, so the requested model was not saved. Retry the model change.",
+              );
+            }
             // The live probe can outlive the original OpenClaw authority.
             // Re-check it last, immediately before the writer crosses to disk.
             await opts.beforePersistentApply?.();
             persistedVerification = latestVerification;
+            persistedBinding = latestBinding;
           },
         },
         mutate: async (cfg) => {
@@ -627,6 +655,9 @@ export async function executeSetDefaultModel(
           cfg.agents = selected.agents;
         },
       });
+      if (persistedBinding) {
+        opts.onVerifiedInferenceChanged?.(persistedBinding);
+      }
       ctx.runtime.log(`Updated ${result.path}`);
       ctx.runtime.log(
         targetAgentId

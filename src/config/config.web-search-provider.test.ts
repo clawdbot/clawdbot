@@ -8,13 +8,6 @@ vi.mock("../runtime.js", () => ({
   defaultRuntime: { log: vi.fn(), error: vi.fn() },
 }));
 
-vi.mock("../plugin-sdk/telegram-command-config.js", () => ({
-  TELEGRAM_COMMAND_NAME_PATTERN: /^[a-z0-9_]+$/,
-  normalizeTelegramCommandName: (value: string) => value.trim().toLowerCase(),
-  normalizeTelegramCommandDescription: (value: string) => value.trim(),
-  resolveTelegramCustomCommands: () => ({ commands: [], issues: [] }),
-}));
-
 const mockWebSearchProviders = vi.hoisted(() => {
   const getScopedWebSearchCredential = (key: string) => (search?: Record<string, unknown>) =>
     (search?.[key] as { apiKey?: unknown } | undefined)?.apiKey;

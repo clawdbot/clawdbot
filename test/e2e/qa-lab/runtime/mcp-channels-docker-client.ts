@@ -103,7 +103,11 @@ async function main() {
   assert(gatewayUrl, "missing GW_URL");
   assert(gatewayToken, "missing GW_TOKEN");
 
-  const gateway = await connectGateway({ url: gatewayUrl, token: gatewayToken });
+  const gateway = await connectGateway({
+    url: gatewayUrl,
+    token: gatewayToken,
+    bindFreshDevice: true,
+  });
   assertGatewayScopes(gateway, {
     include: ["operator.admin", "operator.pairing", "operator.write"],
     label: "owner gateway",
@@ -239,7 +243,7 @@ async function main() {
         arguments: {
           session_key: "agent:main:main",
           after_cursor: 0,
-          timeout_ms: 10_000,
+          timeout_ms: 120_000,
         },
       }),
       gateway.request<{ runId?: string; status?: string }>("chat.send", {
@@ -280,11 +284,15 @@ async function main() {
     );
 
     const channelMessage = `hello from docker ${randomUUID()}`;
-    await gateway.request("chat.send", {
+    const channelRun = await gateway.request<{ runId?: string; status?: string }>("chat.send", {
       sessionKey: "agent:main:main",
       message: channelMessage,
       idempotencyKey: randomUUID(),
     });
+    assert(
+      channelRun.status === "started" && typeof channelRun.runId === "string",
+      `channel chat.send did not start: ${JSON.stringify(channelRun)}`,
+    );
     const rawGatewayUserMessage = await waitFor(
       "raw gateway user session.message",
       () =>
@@ -366,6 +374,15 @@ async function main() {
       );
     }
     assert(helpNotification.content === channelMessage, "expected Claude channel content");
+    const channelRunResult = await gateway.request<{ status?: string }>(
+      "agent.wait",
+      { runId: channelRun.runId, timeoutMs: 240_000 },
+      { timeoutMs: 245_000 },
+    );
+    assert(
+      channelRunResult.status === "ok",
+      `agent.wait failed for ${channelRun.runId}: ${JSON.stringify(channelRunResult)}`,
+    );
 
     await mcp.notification({
       method: "notifications/claude/channel/permission_request",

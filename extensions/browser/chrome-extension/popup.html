@@ -50,6 +50,9 @@
         min-height: 52px;
         resize: vertical;
       }
+      #pageNote {
+        font-family: system-ui, sans-serif;
+      }
       button {
         margin-top: 8px;
         width: 100%;
@@ -75,6 +78,14 @@
       #error {
         color: #ff453a;
       }
+      .send-page {
+        border-top: 1px solid #3a3a3c;
+        margin-top: 12px;
+        padding-top: 10px;
+      }
+      .error {
+        color: #ff453a;
+      }
     </style>
   </head>
   <body>
@@ -92,6 +103,16 @@
       <p id="statusLine"></p>
       <button id="copilotButton" disabled>Open tab copilot</button>
       <button id="shareButton"></button>
+      <div class="send-page">
+        <textarea
+          id="pageNote"
+          rows="2"
+          maxlength="2000"
+          placeholder="Optional note for the agent…"
+        ></textarea>
+        <button id="sendPageButton" disabled>Send page to OpenClaw</button>
+        <p id="pageShareStatus" class="hidden"></p>
+      </div>
       <button id="unpairButton" class="secondary">Unpair</button>
     </div>
     <script src="popup.js" type="module"></script>

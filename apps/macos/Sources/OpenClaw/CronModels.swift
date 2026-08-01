@@ -167,15 +167,42 @@ enum CronPayload: Codable, Equatable {
         channel: String?,
         to: String?,
         bestEffortDeliver: Bool?)
+    case command(
+        argv: [String],
+        cwd: String?,
+        env: [String: String]?,
+        input: String?,
+        timeoutSeconds: Int?,
+        noOutputTimeoutSeconds: Int?,
+        outputMaxBytes: Int?,
+        toolsAllow: [String]?,
+        toolsAllowIsDefault: Bool?)
+    case script(
+        script: String,
+        timeoutSeconds: Int?,
+        toolBudget: Int?,
+        toolsAllow: [String]?,
+        toolsAllowIsDefault: Bool?)
 
     enum CodingKeys: String, CodingKey {
         case kind, text, message, thinking, timeoutSeconds, deliver, channel, provider, to, bestEffortDeliver
+        case argv, cwd, env, input, noOutputTimeoutSeconds, outputMaxBytes
+        case script, toolBudget, toolsAllow, toolsAllowIsDefault
     }
 
     var kind: String {
         switch self {
         case .systemEvent: "systemEvent"
         case .agentTurn: "agentTurn"
+        case .command: "command"
+        case .script: "script"
+        }
+    }
+
+    var isEditableInMacApp: Bool {
+        switch self {
+        case .systemEvent, .agentTurn: true
+        case .command, .script: false
         }
     }
 
@@ -195,6 +222,24 @@ enum CronPayload: Codable, Equatable {
                     ?? container.decodeIfPresent(String.self, forKey: .provider),
                 to: container.decodeIfPresent(String.self, forKey: .to),
                 bestEffortDeliver: container.decodeIfPresent(Bool.self, forKey: .bestEffortDeliver))
+        case "command":
+            self = try .command(
+                argv: container.decode([String].self, forKey: .argv),
+                cwd: container.decodeIfPresent(String.self, forKey: .cwd),
+                env: container.decodeIfPresent([String: String].self, forKey: .env),
+                input: container.decodeIfPresent(String.self, forKey: .input),
+                timeoutSeconds: container.decodeIfPresent(Int.self, forKey: .timeoutSeconds),
+                noOutputTimeoutSeconds: container.decodeIfPresent(Int.self, forKey: .noOutputTimeoutSeconds),
+                outputMaxBytes: container.decodeIfPresent(Int.self, forKey: .outputMaxBytes),
+                toolsAllow: container.decodeIfPresent([String].self, forKey: .toolsAllow),
+                toolsAllowIsDefault: container.decodeIfPresent(Bool.self, forKey: .toolsAllowIsDefault))
+        case "script":
+            self = try .script(
+                script: container.decode(String.self, forKey: .script),
+                timeoutSeconds: container.decodeIfPresent(Int.self, forKey: .timeoutSeconds),
+                toolBudget: container.decodeIfPresent(Int.self, forKey: .toolBudget),
+                toolsAllow: container.decodeIfPresent([String].self, forKey: .toolsAllow),
+                toolsAllowIsDefault: container.decodeIfPresent(Bool.self, forKey: .toolsAllowIsDefault))
         default:
             throw DecodingError.dataCorruptedError(
                 forKey: .kind,
@@ -217,6 +262,31 @@ enum CronPayload: Codable, Equatable {
             try container.encodeIfPresent(channel, forKey: .channel)
             try container.encodeIfPresent(to, forKey: .to)
             try container.encodeIfPresent(bestEffortDeliver, forKey: .bestEffortDeliver)
+        case let .command(
+            argv,
+            cwd,
+            env,
+            input,
+            timeoutSeconds,
+            noOutputTimeoutSeconds,
+            outputMaxBytes,
+            toolsAllow,
+            toolsAllowIsDefault):
+            try container.encode(argv, forKey: .argv)
+            try container.encodeIfPresent(cwd, forKey: .cwd)
+            try container.encodeIfPresent(env, forKey: .env)
+            try container.encodeIfPresent(input, forKey: .input)
+            try container.encodeIfPresent(timeoutSeconds, forKey: .timeoutSeconds)
+            try container.encodeIfPresent(noOutputTimeoutSeconds, forKey: .noOutputTimeoutSeconds)
+            try container.encodeIfPresent(outputMaxBytes, forKey: .outputMaxBytes)
+            try container.encodeIfPresent(toolsAllow, forKey: .toolsAllow)
+            try container.encodeIfPresent(toolsAllowIsDefault, forKey: .toolsAllowIsDefault)
+        case let .script(script, timeoutSeconds, toolBudget, toolsAllow, toolsAllowIsDefault):
+            try container.encode(script, forKey: .script)
+            try container.encodeIfPresent(timeoutSeconds, forKey: .timeoutSeconds)
+            try container.encodeIfPresent(toolBudget, forKey: .toolBudget)
+            try container.encodeIfPresent(toolsAllow, forKey: .toolsAllow)
+            try container.encodeIfPresent(toolsAllowIsDefault, forKey: .toolsAllowIsDefault)
         }
     }
 }

@@ -30,7 +30,25 @@ const runtimeDeps: ImageGenerationRuntimeDeps = {
 };
 
 function runGenerateImage(params: GenerateImageParams) {
-  return generateImage(params, runtimeDeps);
+  const defaults = params.cfg.agents?.defaults as
+    | (NonNullable<OpenClawConfig["agents"]>["defaults"] & {
+        imageGenerationModel?: unknown;
+      })
+    | undefined;
+  const cfg =
+    defaults?.imageGenerationModel !== undefined && defaults.mediaModels?.image === undefined
+      ? {
+          ...params.cfg,
+          agents: {
+            ...params.cfg.agents,
+            defaults: {
+              ...defaults,
+              mediaModels: { ...defaults.mediaModels, image: defaults.imageGenerationModel },
+            },
+          },
+        }
+      : params.cfg;
+  return generateImage({ ...params, cfg }, runtimeDeps);
 }
 
 describe("image-generation runtime", () => {
@@ -874,7 +892,7 @@ describe("image-generation runtime", () => {
     await expect(
       runGenerateImage({ cfg: {} as OpenClawConfig, prompt: "draw a cat" }),
     ).rejects.toThrow(
-      'No image-generation model configured. Set agents.defaults.imageGenerationModel.primary to a provider/model like "vision-one/paint-v1". If you want a specific provider, also configure that provider\'s auth/API key first (vision-one: VISION_ONE_API_KEY; vision-two: VISION_TWO_API_KEY).',
+      'No image-generation model configured. Set agents.defaults.mediaModels.image.primary to a provider/model like "vision-one/paint-v1". If you want a specific provider, also configure that provider\'s auth/API key first (vision-one: VISION_ONE_API_KEY; vision-two: VISION_TWO_API_KEY).',
     );
   });
 });

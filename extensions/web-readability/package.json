@@ -6,7 +6,7 @@
   "type": "module",
   "dependencies": {
     "@mozilla/readability": "0.6.0",
-    "linkedom": "0.18.12"
+    "linkedom": "0.18.13"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

@@ -1,4 +1,5 @@
 // Covers plugin tool descriptor cache lifecycle and invalidation.
+import fs from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => ({
@@ -15,10 +16,15 @@ vi.mock("../config/runtime-snapshot.js", () => ({
   resolveRuntimeConfigCacheKey: hoisted.resolveRuntimeConfigCacheKey,
 }));
 
+import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
 import {
   buildPluginToolDescriptorCacheKey,
   capturePluginToolDescriptor,
   createPluginToolDescriptorConfigCacheKeyMemo,
+  pluginToolDescriptorCacheState,
+  readCachedPluginToolDescriptors,
+  writeCachedPluginToolDescriptors,
 } from "./tool-descriptor-cache.js";
 import { resetPluginToolDescriptorCacheForTest } from "./tools.test-fixtures.js";
 
@@ -59,6 +65,67 @@ describe("plugin tool descriptor cache keys", () => {
     }
 
     expect(hoisted.resolveRuntimeConfigCacheKey).toHaveBeenCalledTimes(1);
+  });
+
+  it("builds stable descriptor cache keys without polling plugin source files", () => {
+    const sourceStat = vi.spyOn(fs, "statSync");
+
+    try {
+      const params = {
+        pluginId: "demo",
+        source: "/tmp/demo.js",
+        rootDir: "/tmp/demo",
+        contractToolNames: ["demo_tool"],
+        ctx: { workspaceDir: "/tmp/workspace" },
+      };
+
+      expect(buildPluginToolDescriptorCacheKey(params)).toBe(
+        buildPluginToolDescriptorCacheKey(params),
+      );
+      expect(sourceStat).not.toHaveBeenCalled();
+    } finally {
+      sourceStat.mockRestore();
+    }
+  });
+
+  it("retires cached descriptors and retained registries with plugin metadata", () => {
+    const params = {
+      pluginId: "demo",
+      source: "/tmp/demo.js",
+      rootDir: "/tmp/demo",
+      contractToolNames: ["demo_tool"],
+      ctx: { workspaceDir: "/tmp/workspace" },
+    };
+    const cacheKey = buildPluginToolDescriptorCacheKey(params);
+    const descriptor = capturePluginToolDescriptor({
+      pluginId: "demo",
+      optional: false,
+      tool: {
+        name: "demo_tool",
+        label: "Demo tool",
+        description: "Demo tool",
+        parameters: { type: "object", properties: {} },
+        execute: async () => ({ content: [], details: {} }),
+      },
+    });
+    const retainedRegistry = createEmptyPluginRegistry();
+    const contextIdentity = {};
+
+    writeCachedPluginToolDescriptors({ cacheKey, descriptors: [descriptor] });
+    pluginToolDescriptorCacheState.objectIds.set(contextIdentity, 1);
+    pluginToolDescriptorCacheState.nextObjectId = 2;
+    pluginToolDescriptorCacheState.runtimeRegistries.set(descriptor, retainedRegistry);
+
+    expect(readCachedPluginToolDescriptors(cacheKey)).toEqual([descriptor]);
+    expect(pluginToolDescriptorCacheState.runtimeRegistries.get(descriptor)).toBe(retainedRegistry);
+
+    clearPluginMetadataLifecycleCaches();
+
+    expect(buildPluginToolDescriptorCacheKey(params)).toBe(cacheKey);
+    expect(readCachedPluginToolDescriptors(cacheKey)).toBeUndefined();
+    expect(pluginToolDescriptorCacheState.objectIds.get(contextIdentity)).toBeUndefined();
+    expect(pluginToolDescriptorCacheState.nextObjectId).toBe(1);
+    expect(pluginToolDescriptorCacheState.runtimeRegistries.get(descriptor)).toBeUndefined();
   });
 
   it("preserves required gateway client capabilities in cached descriptors", () => {

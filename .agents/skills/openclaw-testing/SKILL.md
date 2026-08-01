@@ -215,11 +215,12 @@ official trust.
   must depend on packages declared in the plugin package `dependencies` or
   `optionalDependencies`; do not make a final proof depend on manually running
   `npm install` inside `~/.openclaw/npm/projects/...`.
-- If the plugin ships `npm-shrinkwrap.json`, regenerate or check it after
-  moving dependencies between dev and runtime sections.
+- After moving dependencies between dev and runtime sections, run the transient
+  npm package-lock check and inspect the bundled runtime payload when enabled.
 - Inspect the packed tarball when dependency ownership or generated `dist/`
-  matters: verify `package/package.json`, the expected runtime files, and any
-  package-local shrinkwrap before installing it on a live host.
+  matters: verify `package/package.json`, the expected runtime files, the
+  bundled `node_modules` payload when enabled, and the absence of npm lockfiles
+  before installing it on a live host.
 - After installing the package, restart the Gateway when the touched surface is
   plugin registration, runtime dependency loading, privileged helpers, provider
   routing, or generated dist.
@@ -308,6 +309,12 @@ node scripts/full-release-validation-at-sha.mjs \
   --sha <code-sha> \
   --target-ref release/YYYY.M.PATCH
 ```
+
+That helper is for regular releases. Extended-stable dispatches Full Release
+Validation directly from and against `extended-stable/YYYY.M.33` with
+`release_profile=stable`; its exact branch-tip evidence is fresh and cannot be
+replaced by a `release-ci/*` run. Use `$release-openclaw-ci` for its failure
+classification and run-identity rules.
 
 The helper pins the trusted workflow revision on current `main` while targeting
 the historical release SHA and recording the canonical release branch as
@@ -444,20 +451,6 @@ jobs, followed by a report job that downloads both artifacts and runs
 `pnpm openclaw qa parity-report`. For parity failures, inspect the failed lane
 first; inspect the report job when both lane summaries exist but the comparison
 fails.
-
-### QA Lab Matrix Profiles
-
-`pnpm openclaw qa matrix` defaults to `--profile all`. Do not assume the CLI
-default is the fast release path. Use explicit profiles:
-
-- `--profile fast|release`: focused release-critical scenarios
-- `--profile transport|all`: broad Matrix proof
-- repeated `--scenario <id>` flags: explicit scenario selection
-
-`QA-Lab - All Lanes` and `OpenClaw Release Checks` use the same QA Lab selector
-and standard artifacts. Manual dispatch keeps `matrix_profile=all` as the
-default and fans it across the transport, media, and E2EE profiles; focused
-dispatches select `fast`, `release`, or `transport`.
 
 ### Reusable Live/E2E Checks
 
@@ -654,9 +647,10 @@ Npm candidate selection:
 - For stable package proof, use `package_spec=openclaw@latest` only when the
   question is explicitly the current stable dist-tag; otherwise pin the exact
   version.
-- `source=npm` only accepts registry specs for `openclaw@beta`,
-  `openclaw@latest`, or exact OpenClaw release versions. Do not pass semver
-  ranges, git refs, file paths, tarball URLs, or plugin package names there.
+- `source=npm` only accepts registry specs for `openclaw@extended-stable`,
+  `openclaw@beta`, `openclaw@latest`, or exact OpenClaw release versions. Do
+  not pass semver ranges, git refs, file paths, tarball URLs, or plugin package
+  names there.
 - If the candidate is a tarball URL, use `source=url` with `package_sha256`. If
   it is an Actions tarball artifact, use `source=artifact`. If it is an
   unpublished source candidate, use `source=ref` with a trusted ref or SHA.
@@ -680,7 +674,8 @@ Profiles:
 
 Candidate sources:
 
-- `source=npm`: `openclaw@beta`, `openclaw@latest`, or an exact release version.
+- `source=npm`: `openclaw@extended-stable`, `openclaw@beta`,
+  `openclaw@latest`, or an exact release version.
 - `source=ref`: pack `package_ref` using the trusted `workflow_ref` harness.
   This intentionally separates old package commits from new workflow/test code.
 - `source=url`: HTTPS `.tgz` plus required `package_sha256`.

@@ -7,7 +7,6 @@ import type {
   TelegramGroupConfig,
   TelegramTopicConfig,
 } from "openclaw/plugin-sdk/config-contracts";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import type { NormalizedAllowFrom } from "./bot-access.js";
 import {
@@ -33,7 +32,12 @@ import {
   recordTelegramMessageProcessingResult,
 } from "./bot-processing-outcome.js";
 import { resolveMedia } from "./bot/delivery.resolve-media.js";
-import { getTelegramTextParts } from "./bot/helpers.js";
+import {
+  buildTelegramThreadParams,
+  getTelegramTextParts,
+  resolveTelegramPrimaryMedia,
+  resolveTelegramThreadSpec,
+} from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
 import { resolveTelegramCommandIngressAuthorization } from "./ingress.js";
 import type { TelegramMessageDispatchReplayClaim } from "./message-dispatch-dedupe.js";
@@ -46,7 +50,6 @@ export function createTelegramHandlerInboundRuntime(
     opts,
     runtime,
     mediaMaxBytes,
-    telegramCfg,
     logger,
     resolveGroupActivation,
     resolveGroupRequireMention,
@@ -74,7 +77,6 @@ export function createTelegramHandlerInboundRuntime(
         opts,
         runtime,
         mediaMaxBytes,
-        telegramCfg,
         logger,
         resolveGroupActivation,
         resolveGroupRequireMention,
@@ -223,7 +225,8 @@ export function createTelegramHandlerInboundRuntime(
       return;
     }
 
-    let media: Awaited<ReturnType<typeof resolveMedia>>;
+    const nativeMedia = resolveTelegramPrimaryMedia(msg);
+    let media: Awaited<ReturnType<typeof resolveMedia>> = null;
     try {
       media = await resolveMedia({
         ctx,
@@ -231,6 +234,25 @@ export function createTelegramHandlerInboundRuntime(
         ...mediaRuntimeWithAbort,
       });
     } catch (mediaErr) {
+      const replayingSpooledUpdate = isTelegramSpooledReplayUpdate(ctx.update);
+      const warningThreadParams = buildTelegramThreadParams(
+        resolveTelegramThreadSpec({
+          isGroup,
+          isForum,
+          messageThreadId: resolvedThreadId ?? dmThreadId,
+        }),
+      );
+      if (
+        mediaRuntimeWithAbort.abortSignal?.aborted &&
+        isDurablyRetryableInboundMediaError(mediaErr)
+      ) {
+        // Abort mid-media-resolution must stay retryable for live updates too;
+        // a clean claim release would settle the update as handled and silently
+        // drop the message during shutdown or deadline cancellation.
+        recordTelegramMessageProcessingResult({ kind: "failed-retryable", error: mediaErr });
+        releaseDispatchDedupeClaims(dispatchDedupeClaims, mediaErr);
+        return;
+      }
       if (isMediaSizeLimitError(mediaErr)) {
         if (sendOversizeWarning) {
           const limitMb =
@@ -242,6 +264,7 @@ export function createTelegramHandlerInboundRuntime(
             runtime,
             fn: () =>
               bot.api.sendMessage(chatId, `⚠️ File too large. Maximum size is ${limitMb}MB.`, {
+                ...warningThreadParams,
                 reply_parameters: {
                   message_id: msg.message_id,
                   allow_sending_without_reply: true,
@@ -250,20 +273,20 @@ export function createTelegramHandlerInboundRuntime(
           }).catch(() => {});
         }
         logger.warn({ chatId, error: String(mediaErr) }, oversizeLogMessage);
-        releaseDispatchDedupeClaims(dispatchDedupeClaims);
-        return;
-      }
-      logger.warn({ chatId, error: String(mediaErr) }, "media fetch failed");
-      const retryable = isDurablyRetryableInboundMediaError(mediaErr);
-      if (retryable) {
-        recordTelegramMessageProcessingResult({ kind: "failed-retryable", error: mediaErr });
-      }
-      if (!(retryable && isTelegramSpooledReplayUpdate(ctx.update))) {
+      } else {
+        logger.warn({ chatId, error: String(mediaErr) }, "media fetch failed");
+        const retryable = isDurablyRetryableInboundMediaError(mediaErr);
+        if (retryable && replayingSpooledUpdate) {
+          recordTelegramMessageProcessingResult({ kind: "failed-retryable", error: mediaErr });
+          releaseDispatchDedupeClaims(dispatchDedupeClaims, mediaErr);
+          return;
+        }
         await withTelegramApiErrorLogging({
           operation: "sendMessage",
           runtime,
           fn: () =>
             bot.api.sendMessage(chatId, "⚠️ Failed to download media. Please try again.", {
+              ...warningThreadParams,
               reply_parameters: {
                 message_id: msg.message_id,
                 allow_sending_without_reply: true,
@@ -271,26 +294,18 @@ export function createTelegramHandlerInboundRuntime(
             }),
         }).catch(() => {});
       }
-      releaseDispatchDedupeClaims(dispatchDedupeClaims, retryable ? mediaErr : undefined);
-      return;
     }
 
-    // Skip sticker-only messages where the sticker was skipped (animated/video)
-    // These have no media and no text content to process.
-    const hasText = Boolean(getTelegramTextParts(msg).text.trim());
-    if (msg.sticker && !media && !hasText) {
-      logVerbose("telegram: skipping sticker-only message (unsupported sticker type)");
-      releaseDispatchDedupeClaims(dispatchDedupeClaims);
-      return;
-    }
-
-    const allMedia = media
+    const allMedia = nativeMedia
       ? [
-          {
-            path: media.path,
-            contentType: media.contentType,
-            stickerMetadata: media.stickerMetadata,
-          },
+          media
+            ? {
+                path: media.path,
+                contentType: media.contentType,
+                kind: media.kind,
+                stickerMetadata: media.stickerMetadata,
+              }
+            : { kind: nativeMedia.kind },
         ]
       : [];
     const conversationKey = buildTelegramInboundDebounceConversationKey({

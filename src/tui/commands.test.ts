@@ -1,6 +1,11 @@
 // Verifies TUI command definitions and parser metadata.
 import { beforeAll, describe, expect, it } from "vitest";
-import { getSlashCommands, helpText, parseCommand } from "./commands.js";
+import {
+  getSlashCommands,
+  helpText,
+  parseCommand,
+  shouldSubmitExactArgumentCompletion,
+} from "./commands.js";
 
 describe("parseCommand", () => {
   it("normalizes aliases and keeps command args", () => {
@@ -50,6 +55,21 @@ describe("getSlashCommands", () => {
       { value: "always", label: "always" },
     ]);
   });
+
+  it.each([
+    { commandName: "verbose", level: "full", description: "Set verbose on/off/full" },
+    { commandName: "reasoning", level: "stream", description: "Set reasoning on/off/stream" },
+  ])(
+    "exposes and submits the canonical /$commandName $level completion",
+    ({ commandName, level, description }) => {
+      const commands = getSlashCommands();
+      const command = commands.find((candidate) => candidate.name === commandName);
+
+      expect(command?.description).toBe(description);
+      expect(command?.getArgumentCompletions?.(level)).toEqual([{ value: level, label: level }]);
+      expect(shouldSubmitExactArgumentCompletion(`/${commandName} ${level}`, commands)).toBe(true);
+    },
+  );
 
   it("keeps session status on the shared command path and exposes gateway status separately", () => {
     const commands = getSlashCommands();
@@ -158,6 +178,20 @@ describe("getSlashCommands", () => {
 });
 
 describe("helpText", () => {
+  it.each([{}, { local: true }])("documents multiline input shortcuts", (options) => {
+    const output = helpText(options);
+
+    expect(output).toContain("Enter: send message");
+    expect(output).toContain("Shift+Enter or Ctrl+J: insert a newline");
+  });
+
+  it.each(["/verbose <on|off|full>", "/reasoning <on|off|stream>"])(
+    "includes the full canonical directive levels for %s",
+    (usage) => {
+      expect(helpText()).toContain(usage);
+    },
+  );
+
   it("includes slash command help for aliases", () => {
     const output = helpText();
     expect(output).toContain("/elevated <on|off|ask|full>");

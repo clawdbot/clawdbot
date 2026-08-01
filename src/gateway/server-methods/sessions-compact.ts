@@ -24,7 +24,7 @@ import {
 } from "../../sessions/session-lifecycle-admission.js";
 import { recordSessionCompacted } from "../../sessions/session-state-events.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-create-service.js";
-import { migrateAndPruneGatewaySessionStoreKey } from "../session-utils.js";
+import { resolveCanonicalGatewaySessionStoreKey } from "../session-utils.js";
 import { asWorkerInferenceControl } from "../worker-environments/inference-control.js";
 import { hasVisibleActiveSessionRun } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
@@ -35,7 +35,6 @@ import {
 import {
   emitSessionOperation,
   loadAccessorSessionEntryForGatewayTarget,
-  rejectWebchatSessionMutation,
   requireSessionKey,
   resolveGatewaySessionTargetFromKey,
 } from "./sessions-shared.js";
@@ -43,7 +42,7 @@ import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 export const sessionCompactHandlers: GatewayRequestHandlers = {
-  "sessions.compact": async ({ params, respond, context, client, isWebchatConnect }) => {
+  "sessions.compact": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateSessionsCompactParams, "sessions.compact", respond)) {
       return;
     }
@@ -52,10 +51,6 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
     if (!key) {
       return;
     }
-    if (rejectWebchatSessionMutation({ action: "compact", client, isWebchatConnect, respond })) {
-      return;
-    }
-
     const maxLines =
       typeof p.maxLines === "number" && Number.isFinite(p.maxLines)
         ? Math.max(1, Math.floor(p.maxLines))
@@ -82,7 +77,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
         const snapshot = Object.fromEntries(
           entries.map(({ sessionKey, entry }) => [sessionKey, entry]),
         );
-        const { target: migratedTarget, primaryKey } = migrateAndPruneGatewaySessionStoreKey({
+        const { target: migratedTarget, primaryKey } = resolveCanonicalGatewaySessionStoreKey({
           cfg,
           key,
           store: snapshot,
@@ -124,7 +119,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
           sessionKey: compactTarget.primaryKey,
           agentId: target.agentId,
         },
-        { maxLines, sessionFile: entry.sessionFile },
+        { maxLines },
       );
       if (!trimPreflight.compacted) {
         respond(
@@ -301,7 +296,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
                 sessionKey: compactTarget.primaryKey,
                 agentId: target.agentId,
               },
-              { maxLines, sessionFile: latestEntry.sessionFile },
+              { maxLines },
             );
             respond(
               true,

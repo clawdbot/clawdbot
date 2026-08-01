@@ -13,7 +13,7 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 type PromptErrorAttempt = Pick<EmbeddedRunAttemptParams, "runId" | "sessionId">;
 type PromptErrorSessionLockController = Pick<
   EmbeddedAttemptSessionLockController,
-  "releaseHeldLockForAbort" | "waitForSessionEvents"
+  "releaseHeldLockForAbort"
 >;
 type WithOwnedSessionWriteLock = <T>(operation: () => Promise<T> | T) => Promise<T>;
 
@@ -47,8 +47,7 @@ export async function handleEmbeddedAttemptPromptError(input: {
       runId: input.attempt.runId,
       sessionId: input.attempt.sessionId,
     });
-    await input.sessionLockController.releaseHeldLockForAbort();
-    await input.sessionLockController.waitForSessionEvents(input.activeSession);
+    await input.sessionLockController.releaseHeldLockForAbort({ terminal: false });
     await input.withOwnedSessionWriteLock(async () => {
       stripSessionsYieldArtifacts(input.activeSession);
       if (input.yieldMessage) {
@@ -60,7 +59,6 @@ export async function handleEmbeddedAttemptPromptError(input: {
 
   if (isMidTurnPrecheckSignal(input.error)) {
     const request = input.error.request;
-    await input.sessionLockController.waitForSessionEvents(input.activeSession);
     await input.withOwnedSessionWriteLock(() => {
       input.handleMidTurnPrecheckRequest(request);
     });

@@ -28,23 +28,12 @@ export type TtsProviderConfigMap = Record<string, Record<string, unknown>>;
 
 export type TtsPersonaFallbackPolicy = "preserve-persona" | "provider-defaults" | "fail";
 
-export type TtsPersonaPromptConfig = {
-  profile?: string;
-  scene?: string;
-  sampleContext?: string;
-  style?: string;
-  accent?: string;
-  pacing?: string;
-  constraints?: string[];
-};
-
 export type TtsPersonaConfig = {
   label?: string;
   description?: string;
   /** Preferred provider for this persona. Explicit provider prefs still win. */
   provider?: TtsProvider;
   fallbackPolicy?: TtsPersonaFallbackPolicy;
-  prompt?: TtsPersonaPromptConfig;
   /** Provider-specific persona bindings keyed by speech provider id. */
   providers?: TtsProviderConfigMap;
 };
@@ -73,7 +62,6 @@ export type TtsConfig = {
   /** Provider-specific TTS settings keyed by speech provider id. */
   providers?: TtsProviderConfigMap;
   /** Optional path for local TTS user preferences JSON. */
-  prefsPath?: string;
   /** Hard cap for text sent to TTS (chars). */
   maxTextLength?: number;
   /** API request timeout (ms). */

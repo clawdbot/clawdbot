@@ -3,43 +3,6 @@ import { describe, expect, it } from "vitest";
 import { SessionSchema } from "./zod-schema.session.js";
 
 describe("SessionSchema maintenance extensions", () => {
-  it("accepts session write-lock acquire timeout", () => {
-    const result = SessionSchema.safeParse({
-      writeLock: {
-        acquireTimeoutMs: 60_000,
-        staleMs: 1_800_000,
-        maxHoldMs: 300_000,
-      },
-    });
-    expect(result.success).toBe(true);
-  });
-
-  it("rejects invalid session write-lock timeout values", () => {
-    expect(() =>
-      SessionSchema.parse({
-        writeLock: {
-          acquireTimeoutMs: 0,
-        },
-      }),
-    ).toThrow(/acquireTimeoutMs|number/i);
-
-    expect(() =>
-      SessionSchema.parse({
-        writeLock: {
-          staleMs: 0,
-        },
-      }),
-    ).toThrow(/staleMs|number/i);
-
-    expect(() =>
-      SessionSchema.parse({
-        writeLock: {
-          maxHoldMs: 0,
-        },
-      }),
-    ).toThrow(/maxHoldMs|number/i);
-  });
-
   it("accepts valid maintenance extensions", () => {
     const result = SessionSchema.safeParse({
       maintenance: {

@@ -4,6 +4,8 @@
 import { stripInboundMetadata } from "../../../auto-reply/reply/strip-inbound-meta.js";
 import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-timestamp.js";
 import { INTER_SESSION_PROMPT_PREFIX_BASE } from "../../../sessions/input-provenance.js";
+import { hasPersistedMedia, MEDIA_ONLY_USER_TEXT } from "../../../sessions/user-turn-media.js";
+import { buildLateMediaAttachedProjection } from "../../../sessions/user-turn-transcript.js";
 import { stripHistoricalRuntimeContextCustomMessages } from "../../internal-runtime-context.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { stripToolResultDetails } from "../../session-transcript-repair.js";
@@ -11,6 +13,7 @@ import { normalizeAssistantReplayContent } from "../replay-history.js";
 import { markTranscriptPromptText } from "../tool-result-context-guard.js";
 import {
   findActiveUserMessageIndex,
+  hasNonBlankUserText,
   projectPersistedSenderContext,
   readFirstUserText,
   resolveUserTranscriptMessages,
@@ -465,6 +468,9 @@ function stripHistoricalInboundMetadataFromUserMessages(
       return message;
     }
     const content = (message as { content?: unknown }).content;
+    const injectMediaText = hasPersistedMedia(message) && !hasNonBlankUserText(content);
+    // #111204: restore marked path lines here, never in UI-visible transcript storage.
+    const mediaOnlyText = buildLateMediaAttachedProjection(message).text ?? MEDIA_ONLY_USER_TEXT;
     const isActive = index === activeUserMessageIndex;
     const override = options?.currentUserTimestampOverride;
     const runtimeTimestamp = (message as { timestamp?: unknown }).timestamp;
@@ -479,8 +485,8 @@ function stripHistoricalInboundMetadataFromUserMessages(
 
     // Historical turns strip inbound metadata blocks (Conversation info, Sender
     // info, etc.); the active turn keeps its metadata for the current request.
-    // BOTH then get form-canonicalized and stamped from their own timestamp, so
-    // the SAME message serializes identically whether current or historical.
+    // BOTH then get media-only text if needed, form-canonicalize, and stamp from
+    // their own timestamp, so current and historical bytes stay identical.
     //
     // Channel-envelope preservation: a message that already carries its OWN
     // leading `[DOW YYYY-MM-DD HH:MM ...] ` envelope (Discord/Telegram, or a
@@ -489,15 +495,16 @@ function stripHistoricalInboundMetadataFromUserMessages(
     // keeps such messages byte-stable across current↔historical (the envelope is
     // present in both forms) and avoids double-stamping.
     const transformText = (raw: string): string => {
-      const { body, envelope } = splitLeadingTimestampEnvelope(raw);
-      if (envelope || raw.includes(BOUNDARY_CRON_TIME_MARKER)) {
+      const sourceText = injectMediaText && !raw.trim() ? mediaOnlyText : raw;
+      const { body, envelope } = splitLeadingTimestampEnvelope(sourceText);
+      if (envelope || sourceText.includes(BOUNDARY_CRON_TIME_MARKER)) {
         if (isActive) {
-          return raw;
+          return sourceText;
         }
         // Strip metadata from the body but re-attach the original envelope.
         return `${envelope}${stripInboundMetadata(body)}`;
       }
-      const stripped = isActive ? raw : stripInboundMetadata(raw);
+      const stripped = isActive ? sourceText : stripInboundMetadata(sourceText);
       return stampUserTextWithMessageTimestamp(
         stripped,
         messageTimestamp,
@@ -558,6 +565,10 @@ function stripHistoricalInboundMetadataFromUserMessages(
       contentChanged = true;
       return Object.assign({}, block, { text: nextText });
     });
+    if (!processedFirstText && injectMediaText) {
+      nextContent.unshift({ type: "text", text: transformText("") });
+      contentChanged = true;
+    }
     if (!contentChanged) {
       return message;
     }

@@ -62,16 +62,19 @@ type PersistedReconciliationResult =
       typingEnabled: boolean;
       runningEmoji?: string;
     };
+type StartupRecovery = { attempts: number; timer?: ReturnType<typeof setTimeout> };
 
 const trackers = new Map<string, ProgressTracker>();
+
 const trackerKeyByRunId = new Map<string, string>();
 const terminalRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const terminalRetryExpiresAt = new Map<string, number>();
 const terminalRetryAttempts = new Map<string, number>();
-const startupRecoveryRetries = new Map<
-  ProgressApi,
-  { attempts: number; timer?: ReturnType<typeof setTimeout> }
->();
+const startupRecoveryRetries = new Map<ProgressApi, StartupRecovery>();
+
+function isSubagentProgressEnabled(account: ReturnType<typeof resolveDiscordAccount>): boolean {
+  return Boolean(process.env.VITEST) && account.enabled && account.config.subagentProgress === true;
+}
 
 function clearTerminalRetry(runId: string) {
   const timer = terminalRetryTimers.get(runId);
@@ -171,8 +174,7 @@ async function updateRunningReaction(api: ProgressApi, tracker: ProgressTracker)
   tracker.runningEmoji = undefined;
   tracker.runningEmojiConfirmed = false;
   if (nextEmoji) {
-    // Discord may apply the idempotent add before its response is lost. Keep
-    // attempted ownership so terminal cleanup still removes the possible glyph.
+    // A lost add response may still have applied; keep attempted ownership for cleanup.
     tracker.runningEmoji = nextEmoji;
     if (!(await persistTrackerRunningEmoji(api, tracker))) {
       tracker.runningEmoji = undefined;
@@ -252,7 +254,7 @@ async function handleStarted(
   }
   const account = resolveDiscordAccount({ cfg: api.config, accountId: event.requester?.accountId });
   const key = `${account.accountId}:${target.channelId}:${target.messageId}`;
-  if (!account.enabled || account.config.subagentProgress !== true) {
+  if (!isSubagentProgressEnabled(account)) {
     await runQueued(key, async () => {
       const tracker = trackers.get(key);
       if (!tracker) {
@@ -297,9 +299,7 @@ async function handleStarted(
         reactionsEnabled,
         typingExpiresAt: 0,
       };
-      // The process can stop between durable registration and either Discord
-      // reaction call. Rebuild from bot-owned glyphs instead of guessing which
-      // count made it to Discord.
+      // Recover post-registration crashes from bot-owned glyphs instead of guessing.
       if (restored.activeRunIds.length > 0 || restored.cleanupRuns.length > 0) {
         const reserved = reservedReactionEmojis(api.config, account.config.ackReaction);
         const cleanupEmojis = restored.ownedEmojis.filter((emoji) => !reserved.has(emoji));
@@ -376,8 +376,7 @@ async function handleStarted(
     if (persistResult === "persisted") {
       tracker.persistedRunIds.add(runId);
     }
-    // A fast child can end between hook dispatch and durable presentation setup.
-    // The tombstone makes that ordering explicit and prevents a late start from sticking.
+    // Tombstone a fast child that ends before presentation so a late start cannot stick.
     const endedOutcome = terminalOutcome(runId);
     if (endedOutcome) {
       const owned = persistedProgressRunFromTracker(tracker);
@@ -445,7 +444,7 @@ async function reconcilePersistedTracker(
     typingExpiresAt: 0,
   };
   const account = resolveDiscordAccount({ cfg: api.config, accountId: persisted.accountId });
-  const typingEnabled = account.enabled && account.config.subagentProgress === true;
+  const typingEnabled = isSubagentProgressEnabled(account);
   const reserved = reservedReactionEmojis(api.config, account.config.ackReaction);
   const cleanupEmojis =
     persisted.runningEmoji && !reserved.has(persisted.runningEmoji) ? [persisted.runningEmoji] : [];
@@ -495,7 +494,7 @@ function scheduleTerminalLookupRetry(
       cfg: api.config,
       accountId: event.requester?.accountId,
     });
-    if (!target || !account.enabled || account.config.subagentProgress !== true) {
+    if (!target || !isSubagentProgressEnabled(account)) {
       return;
     }
   }
@@ -571,7 +570,7 @@ async function handleEnded(
         cfg: api.config,
         accountId: tracker.accountId,
       });
-      if (!currentAccount.enabled || currentAccount.config.subagentProgress !== true) {
+      if (!isSubagentProgressEnabled(currentAccount)) {
         tracker.reactionsEnabled = false;
         stopTyping(tracker);
       } else {

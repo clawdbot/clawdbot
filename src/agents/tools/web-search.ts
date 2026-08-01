@@ -80,19 +80,22 @@ function isWebSearchDisabled(config?: OpenClawConfig): boolean {
 /** Creates the `web_search` tool, or `null` when web search is disabled by config. */
 export function createWebSearchTool(options?: {
   config?: OpenClawConfig;
+  enabled?: boolean;
   agentDir?: string;
   sandboxed?: boolean;
   runtimeWebSearch?: RuntimeWebSearchMetadata;
   lateBindRuntimeConfig?: boolean;
 }): AnyAgentTool | null {
-  if (isWebSearchDisabled(options?.config)) {
+  if (options?.enabled === false || isWebSearchDisabled(options?.config)) {
     return null;
   }
 
   return {
     label: "Web Search",
     name: "web_search",
-    description: "Search current web; normalized provider results.",
+    resultContentSource: "network",
+    description:
+      "Search current web; normalized provider results. Supports freshness and date-range filters (freshness, date_after/date_before) and domain filtering (domain_filter).",
     parameters: WebSearchSchema,
     outputSchema: WebSearchOutputSchema,
     execute: async (_toolCallId, args, signal) => {

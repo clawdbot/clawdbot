@@ -37,6 +37,14 @@ xAI Responses.
     This stores the provider and any needed credential. For API-backed
     providers you can instead set the provider's env var (for example
     `BRAVE_API_KEY`) and skip this step.
+
+    You can also configure search by talking to
+    [OpenClaw](/cli/openclaw): say `configure web search` in `openclaw setup`
+    or in the Control UI's **Settings → Ask OpenClaw** chat. The hosted flow
+    owns provider choice and credential entry — API keys are masked in the
+    browser, and the terminal chat hands off to the masked wizard via
+    `open search wizard`.
+
   </Step>
   <Step title="Use it">
     ```javascript
@@ -545,8 +553,7 @@ every provider. xAI credentials are always required.
 `x_search` posts to `<baseUrl>/responses` when
 `plugins.entries.xai.config.xSearch.baseUrl` is set. If that field is omitted,
 it falls back to `plugins.entries.xai.config.webSearch.baseUrl`, then the
-legacy `tools.web.search.grok.baseUrl`, and finally the public xAI endpoint
-(`https://api.x.ai/v1`).
+public xAI endpoint (`https://api.x.ai/v1`).
 
 ### x_search parameters
 

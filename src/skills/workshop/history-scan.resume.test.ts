@@ -25,7 +25,7 @@ vi.mock("../../agents/agent-scope.js", () => ({
 }));
 
 vi.mock("../../agents/embedded-agent-runner/model.js", () => ({
-  resolveModel: vi.fn(() => ({
+  resolveModelAsync: vi.fn(async () => ({
     model: { contextTokens: 8_192, contextWindow: 8_192 },
   })),
 }));

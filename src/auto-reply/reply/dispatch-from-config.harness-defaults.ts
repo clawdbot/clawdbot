@@ -13,6 +13,10 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import {
+  sessionDeliveryChannel,
+  sessionDeliveryOrigin,
+} from "../../utils/delivery-context.shared.js";
 import { isNativeCommandTurn, resolveCommandTurnContext } from "../command-turn-context.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import { normalizeVerboseLevel } from "../thinking.js";
@@ -72,8 +76,7 @@ function resolveHarnessDefaultChannel(params: {
     typeof params.ctx.OriginatingChannel === "string" ? params.ctx.OriginatingChannel : undefined;
 
   return (
-    params.entry?.channel ??
-    params.entry?.origin?.provider ??
+    sessionDeliveryChannel(params.entry) ??
     originatingChannel ??
     params.ctx.Provider ??
     params.ctx.Surface
@@ -125,9 +128,9 @@ function resolveChannelModelCandidate(params: {
     groupSubject: params.entry?.subject ?? params.ctx.GroupSubject,
     parentSessionKey: params.parentSessionKey,
     directUserIds: [
-      params.entry?.origin?.nativeDirectUserId,
-      params.entry?.origin?.from,
-      params.entry?.origin?.to,
+      sessionDeliveryOrigin(params.entry)?.nativeDirectUserId,
+      sessionDeliveryOrigin(params.entry)?.from,
+      sessionDeliveryOrigin(params.entry)?.to,
       params.ctx.OriginatingTo,
       params.ctx.From,
       params.ctx.SenderId,
@@ -269,7 +272,7 @@ export function resolveHarnessSourceVisibleRepliesDefault(params: {
       return resolveCandidateDefault(selectedModelCandidate);
     }
     const sourceProvider = normalizeOptionalString(
-      params.entry?.origin?.provider ?? params.ctx.Provider ?? params.ctx.Surface,
+      sessionDeliveryOrigin(params.entry)?.provider ?? params.ctx.Provider ?? params.ctx.Surface,
     );
     if (sourceProvider) {
       const sourceDefault = resolveCandidateDefault({ provider: sourceProvider });

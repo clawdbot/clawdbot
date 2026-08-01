@@ -1,6 +1,6 @@
 package ai.openclaw.app
 
-import ai.openclaw.app.gateway.GatewayConnectErrorDetails
+import ai.openclaw.app.gateway.GatewayErrorDetails
 import ai.openclaw.app.gateway.GatewaySession
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.boolean
@@ -102,7 +102,7 @@ class SkillManagementTest {
           code = "UNAVAILABLE",
           message = "review required",
           details =
-            GatewayConnectErrorDetails(
+            GatewayErrorDetails(
               code = null,
               canRetryWithDeviceToken = false,
               recommendedNextStep = null,
@@ -127,7 +127,7 @@ class SkillManagementTest {
           code = "UNAVAILABLE",
           message = "review required",
           details =
-            GatewayConnectErrorDetails(
+            GatewayErrorDetails(
               code = null,
               canRetryWithDeviceToken = false,
               recommendedNextStep = null,
@@ -152,7 +152,7 @@ class SkillManagementTest {
           code = "UNAVAILABLE",
           message = "download blocked",
           details =
-            GatewayConnectErrorDetails(
+            GatewayErrorDetails(
               code = null,
               canRetryWithDeviceToken = false,
               recommendedNextStep = null,

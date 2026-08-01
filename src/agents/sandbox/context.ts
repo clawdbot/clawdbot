@@ -21,7 +21,8 @@ import { ensureSandboxBrowser } from "./browser.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
 import { resolveSandboxDockerUser } from "./docker-user.js";
 import { createSandboxFsBridge } from "./fs-bridge.js";
-import { updateRegistry } from "./registry.js";
+import { toSandboxProvisioningError } from "./provisioning-error.js";
+import { readRegisteredSandboxRuntimeIds, updateRegistry } from "./registry.js";
 import { resolveSandboxRuntimeStatus } from "./runtime-status.js";
 import { assertSshSandboxSecretOwnerAvailable } from "./secret-owner.js";
 import { resolveSandboxWorkspaceLayoutPaths } from "./shared.js";
@@ -186,18 +187,21 @@ function resolveSandboxWorkspaceInfoWorkdir(params: {
   });
 }
 
-export async function resolveSandboxContext(params: {
+type ResolveSandboxContextParams = {
   config?: OpenClawConfig;
   agentId?: string;
   execOverrides?: ExecPolicyOverrides;
   requireCurrentConfig?: boolean;
   sessionKey?: string;
   workspaceDir?: string;
-}): Promise<SandboxContext | null> {
-  const resolved = resolveSandboxSession(params);
-  if (!resolved) {
-    return null;
-  }
+};
+
+type ResolvedSandboxSession = NonNullable<ReturnType<typeof resolveSandboxSession>>;
+
+async function resolveProvisionedSandboxContext(
+  params: ResolveSandboxContextParams,
+  resolved: ResolvedSandboxSession,
+): Promise<SandboxContext> {
   const { rawSessionKey, cfg, runtime } = resolved;
 
   if (cfg.prune.idleHours !== 0 || cfg.prune.maxAgeDays !== 0) {
@@ -221,15 +225,21 @@ export async function resolveSandboxContext(params: {
   });
 
   const docker = await resolveSandboxDockerUser({
+    backend: cfg.backend,
     docker: cfg.docker,
     workspaceDir,
   });
   const resolvedCfg = docker === cfg.docker ? cfg : { ...cfg, docker };
 
   const backendFactory = requireSandboxBackendFactory(resolvedCfg.backend);
+  const registeredRuntimeIds = await readRegisteredSandboxRuntimeIds({
+    backendId: resolvedCfg.backend,
+    scopeKey,
+  });
   const backend = await backendFactory({
     sessionKey: rawSessionKey,
     scopeKey,
+    ...(registeredRuntimeIds.length > 0 ? { registeredRuntimeIds } : {}),
     workspaceDir,
     agentWorkspaceDir,
     skillsWorkspaceDir,
@@ -273,9 +283,7 @@ export async function resolveSandboxContext(params: {
       })()
     : undefined;
   if (resolvedCfg.browser.enabled && backend.capabilities?.browser !== true) {
-    throw new Error(
-      `Sandbox backend "${resolvedCfg.backend}" does not support browser sandboxes yet.`,
-    );
+    throw new Error(`Sandbox backend "${backend.id}" does not support browser sandboxes yet.`);
   }
   const browser =
     resolvedCfg.browser.enabled && backend.capabilities?.browser === true
@@ -317,6 +325,28 @@ export async function resolveSandboxContext(params: {
     createSandboxFsBridge({ sandbox: sandboxContext });
 
   return sandboxContext;
+}
+
+export async function resolveSandboxContext(params: {
+  config?: OpenClawConfig;
+  agentId?: string;
+  execOverrides?: ExecPolicyOverrides;
+  requireCurrentConfig?: boolean;
+  sessionKey?: string;
+  workspaceDir?: string;
+}): Promise<SandboxContext | null> {
+  const resolved = resolveSandboxSession(params);
+  if (!resolved) {
+    return null;
+  }
+  // Once a sandbox session is selected, every remaining step is local
+  // provisioning. Preserve that owner boundary across backend, browser,
+  // registry, and filesystem-bridge setup so model fallback never retries it.
+  try {
+    return await resolveProvisionedSandboxContext(params, resolved);
+  } catch (error) {
+    throw toSandboxProvisioningError(error, resolved.cfg.backend);
+  }
 }
 
 export async function ensureSandboxWorkspaceForSession(params: {

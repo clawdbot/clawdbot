@@ -1,6 +1,6 @@
 // Memory Host SDK helper module supports fs utils behavior.
-import { configureFsSafePython } from "@openclaw/fs-safe/config";
-// fs-safe facade with Python validation disabled by default for this package's
+import { configureFsSafeNative } from "@openclaw/fs-safe/config";
+// fs-safe facade with native acceleration disabled by default for this package's
 // host-side memory file operations.
 export { root } from "@openclaw/fs-safe/root";
 export { isPathInside, isPathInsideWithRealpath } from "@openclaw/fs-safe/path";
@@ -11,11 +11,14 @@ export {
 } from "@openclaw/fs-safe/advanced";
 export { walkDirectory, type WalkDirectoryEntry } from "@openclaw/fs-safe/walk";
 
-const hasPythonModeOverride =
-  process.env.FS_SAFE_PYTHON_MODE != null || process.env.OPENCLAW_FS_SAFE_PYTHON_MODE != null;
+const hasModeOverride = Object.keys(process.env).some((key) =>
+  /^(?:OPENCLAW_)?FS_SAFE_(?:NATIVE|PYTHON)_MODE$/u.test(
+    process.platform === "win32" ? key.toUpperCase() : key,
+  ),
+);
 
-if (!hasPythonModeOverride) {
-  configureFsSafePython({ mode: "off" });
+if (!hasModeOverride) {
+  configureFsSafeNative({ mode: "off" });
 }
 
 /** True for missing-file errors emitted by Node or fs-safe. */

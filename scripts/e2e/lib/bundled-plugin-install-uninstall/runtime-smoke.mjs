@@ -6,6 +6,7 @@ import path from "node:path";
 import process from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import { isRecord } from "../../../lib/record-shared.mjs";
 import { resolveWindowsTaskkillPath } from "../../../lib/windows-taskkill.mjs";
 import { readBoundedResponseText } from "../bounded-response-text.mjs";
 
@@ -993,10 +994,6 @@ function hasOwnPayloadField(raw, field) {
   );
 }
 
-function isRecord(value) {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
 export function unwrapRpcPayload(raw) {
   if (raw?.ok === false) {
     throw new Error(`gateway RPC failed: ${JSON.stringify(raw.error ?? raw)}`);
@@ -1062,16 +1059,13 @@ async function smokePlugin(pluginId, pluginDir, requiresConfig, pluginIndex, plu
   const env = withManifestChannelActivationEnv(process.env, plan.channels);
   if (plan.speechProviders[0]) {
     const provider = plan.speechProviders[0];
-    config.messages = {
-      ...config.messages,
-      tts: {
-        ...config.messages?.tts,
-        provider,
-        providers: {
-          ...config.messages?.tts?.providers,
-          [provider]: {
-            ...config.messages?.tts?.providers?.[provider],
-          },
+    config.tts = {
+      ...config.tts,
+      provider,
+      providers: {
+        ...config.tts?.providers,
+        [provider]: {
+          ...config.tts?.providers?.[provider],
         },
       },
     };
@@ -1394,10 +1388,8 @@ async function smokeTtsGlobalDisable(pluginId, pluginDir, provider, pluginIndex,
         plugins: {
           enabled: false,
         },
-        messages: {
-          tts: {
-            provider: selectedProvider,
-          },
+        tts: {
+          provider: selectedProvider,
         },
       },
       port,
@@ -1450,13 +1442,11 @@ async function smokeOpenAiTts(pluginIndex) {
             openai: { enabled: true },
           },
         },
-        messages: {
-          tts: {
-            provider: "openai",
-            providers: {
-              openai: {
-                apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-              },
+        tts: {
+          provider: "openai",
+          providers: {
+            openai: {
+              apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
             },
           },
         },

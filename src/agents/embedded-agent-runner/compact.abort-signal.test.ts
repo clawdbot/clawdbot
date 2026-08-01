@@ -1,22 +1,48 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
-vi.mock("../model-fallback.js", () => ({
+vi.mock("../model-fallback-candidates.js", () => ({
   resolveModelCandidateChain: (params: { provider: string; model: string }) => [
     { provider: params.provider, model: params.model },
   ],
+}));
+
+vi.mock("../model-fallback-runner.js", () => ({
   runWithModelFallback: vi.fn(async (params: Record<string, unknown>) => ({
     result: { ok: true, compacted: false, reason: "no-op" },
     provider: params.provider,
     model: params.model,
     attempts: [],
   })),
+}));
+
+vi.mock("../model-fallback-attempt.js", () => ({
   isFallbackSummaryError: () => false,
 }));
 
 vi.mock("./compact.queued.js", () => ({ compactEmbeddedAgentSession: vi.fn() }));
 
-import { runWithModelFallback } from "../model-fallback.js";
+vi.mock("../prepared-model-runtime.js", () => ({
+  acquireAgentRunPreparedModelRuntime: vi.fn(
+    async (input: {
+      config: OpenClawConfig;
+      agentId?: string;
+      agentDir: string;
+      workspaceDir?: string;
+    }) => ({
+      snapshot: {
+        config: input.config,
+        agentId: input.agentId,
+        agentDir: input.agentDir,
+        workspaceDir: input.workspaceDir,
+        createStores: () => ({}),
+      },
+      release: vi.fn(),
+    }),
+  ),
+}));
+
+import { runWithModelFallback } from "../model-fallback-runner.js";
 import { compactEmbeddedAgentSessionDirect } from "./compact.js";
 
 const runMock = vi.mocked(runWithModelFallback);
@@ -24,7 +50,13 @@ const runMock = vi.mocked(runWithModelFallback);
 const baseParams = {
   sessionId: "test-session",
   sessionKey: "agent:main:test-session",
-  sessionFile: "/tmp/test-session.jsonl",
+  sessionFile: "agent:main:test-session",
+  sessionTarget: {
+    agentId: "main",
+    sessionId: "test-session",
+    sessionKey: "agent:main:test-session",
+    storePath: "/tmp/sessions.json",
+  },
   workspaceDir: "/tmp",
 };
 

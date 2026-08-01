@@ -37,7 +37,7 @@ OpenAI-SDK-style examples, but new config should use `baseUrl`.
     Public remote hosts and `https://ollama.com` require a real credential: `OLLAMA_API_KEY`, an auth profile, or the provider's `apiKey`. For direct hosted use, prefer the `ollama-cloud` provider.
   </Accordion>
   <Accordion title="Custom provider ids">
-    A custom provider with `api: "ollama"` follows the same rules. For example, an `ollama-remote` provider pointed at a private LAN host can use `apiKey: "ollama-local"`; sub-agents resolve that marker through the Ollama provider hook instead of treating it as a missing credential. `agents.defaults.memorySearch.provider` can also point at a custom provider id so embeddings use that Ollama endpoint.
+    A custom provider with `api: "ollama"` follows the same rules. For example, an `ollama-remote` provider pointed at a private LAN host can use `apiKey: "ollama-local"`; sub-agents resolve that marker through the Ollama provider hook instead of treating it as a missing credential. `memory.search.provider` can also point at a custom provider id so embeddings use that Ollama endpoint.
   </Accordion>
   <Accordion title="Auth profiles">
     `auth-profiles.json` stores the credential for a provider id; put endpoint settings (`baseUrl`, `api`, models, headers, timeouts) in `models.providers.<id>`. Older flat files such as `{ "ollama-windows": { "apiKey": "ollama-local" } }` are not a runtime format; `openclaw doctor --fix` rewrites them into a canonical `ollama-windows:default` API-key profile with a backup. A `baseUrl` value in that legacy file is noise and should move to provider config.
@@ -46,7 +46,7 @@ OpenAI-SDK-style examples, but new config should use `baseUrl`.
     Bearer auth for Ollama memory embeddings is scoped to the host it was declared for:
 
     - A provider-level key is sent only to that provider's host.
-    - `agents.*.memorySearch.remote.apiKey` is sent only to its remote embedding host.
+    - `memory.search.remote.apiKey` and per-agent overrides are sent only to their remote embedding host.
     - A pure `OLLAMA_API_KEY` env value is treated as the Ollama Cloud convention and is not sent to local/self-hosted hosts by default.
 
   </Accordion>
@@ -65,10 +65,13 @@ OpenAI-SDK-style examples, but new config should use `baseUrl`.
         Select **Ollama**, then pick a mode: **Cloud + Local**, **Cloud only**, or **Local only**.
 
         On a fresh guided setup, OpenClaw first checks the default or configured
-        Ollama host. If an installed model advertises tool support, the shared
-        CLI/macOS setup ladder offers it immediately and verifies it with a real
-        completion. This automatic check never pulls a model; if no suitable
-        installed model exists, onboarding continues to the normal Ollama picker.
+        Ollama host. An installed model is offered automatically only when
+        `/api/show` confirms tool support and a context window of at least 16K;
+        missing or smaller context metadata stays on the manual setup path. The
+        shared CLI/macOS setup ladder still verifies the selected route with a
+        real completion before saving it. This automatic check never pulls a
+        model; if no suitable installed model exists, onboarding continues to the
+        normal Ollama picker.
       </Step>
       <Step title="Select a model">
         `Cloud only` prompts for `OLLAMA_API_KEY` and suggests hosted cloud defaults. `Cloud + Local` and `Local only` prompt for an Ollama base URL, discover available models, and auto-pull the selected local model if missing. An installed `:latest` tag such as `gemma4:latest` is shown once instead of duplicating `gemma4`. `Cloud + Local` also checks whether the host is signed in for cloud access.
@@ -1083,14 +1086,12 @@ For full setup and behavior, see [Ollama Web Search](/tools/ollama-search).
 
     ```json5
     {
-      agents: {
-        defaults: {
-          memorySearch: {
-            provider: "ollama",
-            remote: {
-              // Default for Ollama. Raise on larger hosts if reindexing is too slow.
-              nonBatchConcurrency: 1,
-            },
+      memory: {
+        search: {
+          provider: "ollama",
+          remote: {
+            // Default for Ollama. Raise on larger hosts if reindexing is too slow.
+            nonBatchConcurrency: 1,
           },
         },
       },
@@ -1101,16 +1102,14 @@ For full setup and behavior, see [Ollama Web Search](/tools/ollama-search).
 
     ```json5
     {
-      agents: {
-        defaults: {
-          memorySearch: {
-            provider: "ollama",
-            model: "nomic-embed-text",
-            remote: {
-              baseUrl: "http://gpu-box.local:11434",
-              apiKey: "ollama-local",
-              nonBatchConcurrency: 2,
-            },
+      memory: {
+        search: {
+          provider: "ollama",
+          model: "nomic-embed-text",
+          remote: {
+            baseUrl: "http://gpu-box.local:11434",
+            apiKey: "ollama-local",
+            nonBatchConcurrency: 2,
           },
         },
       },

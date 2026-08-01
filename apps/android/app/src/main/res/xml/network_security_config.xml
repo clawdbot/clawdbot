@@ -1,5 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config xmlns:tools="http://schemas.android.com/tools">
-  <!-- This app is primarily used on a trusted tailnet; allow cleartext for every endpoint. -->
+  <!--
+    Private LAN gateway addresses are user-selected and cannot be expressed as NSC domain rules.
+    OkHttp enforces NSC for ws://, so a false base-config would break arbitrary RFC1918 gateways.
+    GatewayHostSecurity is therefore the enforcement point for cleartext gateway scope.
+  -->
   <base-config cleartextTrafficPermitted="true" tools:ignore="InsecureBaseConfiguration" />
 </network-security-config>

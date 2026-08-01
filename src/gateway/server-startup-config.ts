@@ -1,6 +1,7 @@
 // Gateway startup config loads, repairs, validates, and activates runtime config
 // plus secrets snapshots before the server exposes user-facing surfaces.
 import { isDeepStrictEqual } from "node:util";
+import { hasLegacyAuthProfileSourcesForStartup } from "../agents/auth-profiles/legacy-source-diagnostic.js";
 import { applyConfigOverrides } from "../config/runtime-overrides.js";
 import type { GatewayAuthConfig, GatewayTailscaleConfig } from "../config/types.gateway.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
@@ -11,11 +12,11 @@ import {
   classifySecretResolutionErrorDegradations,
   isRetryableSecretDegradationReason,
   listSecretResolutionErrorOwners,
-  redactSecretDegradationReason,
-  SECRET_DEGRADATION_RETRY_HINT,
-  type SecretDegradation,
 } from "../secrets/runtime-degraded-state.js";
-import { prepareSecretsRuntimeFastPathSnapshot } from "../secrets/runtime-fast-path.js";
+import {
+  collectCandidateAgentDirs,
+  prepareSecretsRuntimeFastPathSnapshot,
+} from "../secrets/runtime-fast-path.js";
 import { registerProviderAuthRuntimeSnapshotActivationOwner } from "../secrets/runtime-provider-auth-activation.js";
 import {
   listProviderAuthDegradedOwners,
@@ -44,6 +45,10 @@ import {
   type GatewayStartupConfigMeasure,
   type GatewayStartupLog,
 } from "./server-startup-config-helpers.js";
+import {
+  logPreparedSecretDegradations,
+  logThrownSecretDegradations,
+} from "./server-startup-secret-diagnostics.js";
 export {
   loadGatewayStartupConfigSnapshot,
   type GatewayStartupConfigSnapshotLoadResult,
@@ -116,22 +121,6 @@ export function publishRuntimeSecretsStateTransition(
   options?: { sourceOnly?: boolean; expectedRevision?: number },
 ): void {
   runtimeSecretsStatePublishers.get(activateRuntimeSecrets)?.(snapshot, options);
-}
-
-function logSecretDegradation(log: GatewayStartupLog, degradation: SecretDegradation): void {
-  const reason = redactSecretDegradationReason(degradation.reason);
-  log.warn(
-    `[SECRETS_DEGRADED] ${degradation.state} ${degradation.kind}:${degradation.id}: ` +
-      `${reason}. Retry: ${degradation.retryHint}.`,
-    {
-      event: "secrets.degraded",
-      ownerKind: degradation.kind,
-      ownerId: degradation.id,
-      reason,
-      state: degradation.state,
-      retryHint: degradation.retryHint,
-    },
-  );
 }
 
 /** Create the serialized secrets activation function used by startup and reload paths. */
@@ -212,15 +201,7 @@ export function createRuntimeSecretsActivator(params: {
     scope: SecretsStateScope = "full",
     activationScope: SecretsStateScope = "full",
   ) => {
-    for (const owner of prepared.degradedOwners ?? []) {
-      logSecretDegradation(params.logSecrets, {
-        kind: owner.ownerKind,
-        id: owner.ownerId,
-        reason: owner.reason,
-        state: owner.degradationState ?? "cold",
-        retryHint: SECRET_DEGRADATION_RETRY_HINT,
-      });
-    }
+    logPreparedSecretDegradations(params.logSecrets, prepared.degradedOwners ?? []);
     if (reason === "startup") {
       return;
     }
@@ -332,9 +313,7 @@ export function createRuntimeSecretsActivator(params: {
       retryableDegradations.length > 0 &&
       (activationParams.reason === "startup" || mayPublishReloadDegradation)
     ) {
-      for (const degradation of retryableDegradations) {
-        logSecretDegradation(params.logSecrets, degradation);
-      }
+      logThrownSecretDegradations(params.logSecrets, err, retryableDegradations);
       if (activationParams.reason !== "startup") {
         if (!secretsDegraded) {
           params.emitStateEvent(
@@ -391,10 +370,16 @@ export function createRuntimeSecretsActivator(params: {
           !params.activateRuntimeSecretsSnapshot &&
           assignmentConfig === undefined
         ) {
-          const fastPath = prepareSecretsRuntimeFastPathSnapshot({
-            config: sourceConfig,
-            ...(startupManifestRegistry ? { manifestRegistry: startupManifestRegistry } : {}),
-          });
+          const startupEnv = activationParams.env ?? process.env;
+          const fastPath = hasLegacyAuthProfileSourcesForStartup({
+            agentDirs: collectCandidateAgentDirs(sourceConfig, startupEnv),
+            env: startupEnv,
+          })
+            ? null
+            : prepareSecretsRuntimeFastPathSnapshot({
+                config: sourceConfig,
+                ...(startupManifestRegistry ? { manifestRegistry: startupManifestRegistry } : {}),
+              });
           if (fastPath) {
             // The startup fast path avoids importing the full secrets runtime
             // until refresh/preflight needs dynamic provider or auth-store work.

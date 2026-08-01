@@ -187,6 +187,12 @@ function cloneDegradedSecretOwner(owner: DegradedSecretOwner): DegradedSecretOwn
   if (owner.degradationState) {
     cloned.degradationState = owner.degradationState;
   }
+  if (owner.providerFailures) {
+    cloned.providerFailures = owner.providerFailures.map((failure) => ({ ...failure }));
+  }
+  if (owner.refFailureReason) {
+    cloned.refFailureReason = owner.refFailureReason;
+  }
   return cloned;
 }
 

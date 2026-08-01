@@ -7,6 +7,7 @@ import {
   createChannelNativeOriginTargetResolver,
   createNativeApprovalChannelRouteGates,
   createNativeApprovalForwardingFallbackSuppressor,
+  createNativeApprovalMessagingTargetResolvers,
   shouldSuppressLocalNativeExecApprovalPrompt,
 } from "openclaw/plugin-sdk/approval-native-runtime";
 import { buildApprovalReactionPendingContentForRequest } from "openclaw/plugin-sdk/approval-reaction-runtime";
@@ -37,66 +38,27 @@ type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
 type ApprovalKind = "exec" | "plugin";
 type ApprovalForwardingConfig = NonNullable<NonNullable<OpenClawConfig["approvals"]>["exec"]>;
 type ApprovalForwardingMode = NonNullable<ApprovalForwardingConfig["mode"]>;
-type ChannelApprovalForwardTarget = Parameters<
-  NonNullable<
-    NonNullable<ChannelApprovalCapability["delivery"]>["shouldSuppressForwardingFallback"]
-  >
->[0]["target"];
-type SignalApprovalTarget = {
-  to: string;
-  accountId?: string | null;
-  threadId?: string | number | null;
-};
 
 const DEFAULT_APPROVAL_FORWARDING_MODE: ApprovalForwardingMode = "session";
+const signalApprovalTargetResolvers = createNativeApprovalMessagingTargetResolvers({
+  channel: "signal",
+  normalizeTo: normalizeSignalMessagingTarget,
+});
+type SignalApprovalTarget = NonNullable<
+  ReturnType<typeof signalApprovalTargetResolvers.normalizeForwardTarget>
+>;
+const {
+  normalizeForwardTarget: normalizeSignalForwardTarget,
+  normalizeTarget: normalizeSignalApprovalTarget,
+  resolveSessionTarget: resolveSessionSignalOriginTarget,
+  resolveTurnSourceTarget: resolveTurnSourceSignalOriginTarget,
+} = signalApprovalTargetResolvers;
 
 function isSignalApprovalTransportEnabled(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): boolean {
   return resolveSignalAccount({ cfg: params.cfg, accountId: params.accountId }).enabled;
-}
-
-function normalizeSignalForwardTarget(
-  target: Pick<ChannelApprovalForwardTarget, "channel" | "to" | "accountId" | "threadId">,
-): SignalApprovalTarget | null {
-  if (normalizeLowercaseStringOrEmpty(target.channel) !== "signal") {
-    return null;
-  }
-  const to = normalizeSignalMessagingTarget(target.to);
-  if (!to) {
-    return null;
-  }
-  return {
-    to,
-    accountId: normalizeOptionalString(target.accountId),
-    threadId: target.threadId ?? null,
-  };
-}
-
-function resolveTurnSourceSignalOriginTarget(
-  request: ApprovalRequest,
-): SignalApprovalTarget | null {
-  const turnSourceChannel = normalizeLowercaseStringOrEmpty(request.request.turnSourceChannel);
-  if (turnSourceChannel !== "signal") {
-    return null;
-  }
-  const to = normalizeSignalMessagingTarget(request.request.turnSourceTo ?? "");
-  if (!to) {
-    return null;
-  }
-  return {
-    to,
-    accountId: normalizeOptionalString(request.request.turnSourceAccountId),
-  };
-}
-
-function resolveSessionSignalOriginTarget(sessionTarget: {
-  to: string;
-  accountId?: string | null;
-}): SignalApprovalTarget | null {
-  const to = normalizeSignalMessagingTarget(sessionTarget.to);
-  return to ? { to, accountId: normalizeOptionalString(sessionTarget.accountId) } : null;
 }
 
 const signalApprovalRouteGates = createNativeApprovalChannelRouteGates({
@@ -157,10 +119,7 @@ const resolveSignalOriginTargetBase = createChannelNativeOriginTargetResolver({
   shouldHandleRequest: shouldHandleSignalApprovalRequest,
   resolveTurnSourceTarget: resolveTurnSourceSignalOriginTarget,
   resolveSessionTarget: resolveSessionSignalOriginTarget,
-  normalizeTarget: (target) => {
-    const to = normalizeSignalMessagingTarget(target.to);
-    return to ? { ...target, to } : null;
-  },
+  normalizeTarget: normalizeSignalApprovalTarget,
 });
 
 function isSignalGroupTarget(to: string): boolean {

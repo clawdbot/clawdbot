@@ -195,6 +195,12 @@ describe("buildOfficialChannelCatalog", () => {
         docsPath: "/channels/whatsapp",
         blurb: "works with your own number; recommend a separate phone + eSIM.",
         systemImage: "message",
+        cliAddOptions: [
+          {
+            flags: "--auth-dir <path>",
+            description: "WhatsApp auth directory override",
+          },
+        ],
       },
       install: {
         clawhubSpec: "clawhub:@openclaw/whatsapp",
@@ -239,6 +245,29 @@ describe("buildOfficialChannelCatalog", () => {
     const installSource = describePluginInstallSource(requireInstall(twitch));
     expect(requireNpmInstallSource(installSource).pinState).toBe("floating-without-integrity");
     expect(installSource.warnings).toEqual(["npm-spec-floating", "npm-spec-missing-integrity"]);
+  });
+
+  it("keeps iMessage available for cold install after core package externalization", () => {
+    const repoRoot = makeRepoRoot("openclaw-official-channel-catalog-imessage-");
+    const imessage = buildOfficialChannelCatalog({ repoRoot }).entries.find(
+      (entry) => entry.openclaw?.channel?.id === "imessage",
+    );
+
+    expect({
+      name: imessage?.name,
+      aliases: imessage?.openclaw?.channel?.aliases,
+      install: imessage?.openclaw?.install,
+    }).toEqual({
+      name: "@openclaw/imessage",
+      aliases: ["imsg"],
+      install: {
+        clawhubSpec: "clawhub:@openclaw/imessage",
+        npmSpec: "@openclaw/imessage",
+        defaultChoice: "npm",
+        minHostVersion: ">=2026.7.2",
+        allowInvalidConfigRecovery: true,
+      },
+    });
   });
 
   it("preserves ClawHub specs when generating publishable channel catalog entries", () => {
@@ -326,6 +355,12 @@ describe("buildOfficialChannelCatalog", () => {
         docsPath: "/channels/whatsapp",
         blurb: "works with your own number; recommend a separate phone + eSIM.",
         systemImage: "message",
+        cliAddOptions: [
+          {
+            flags: "--auth-dir <path>",
+            description: "WhatsApp auth directory override",
+          },
+        ],
       },
       install: {
         clawhubSpec: "clawhub:@openclaw/whatsapp",

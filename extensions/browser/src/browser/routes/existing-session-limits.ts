@@ -50,4 +50,5 @@ export const EXISTING_SESSION_LIMITS = {
       "selector/frame snapshots are not supported for existing-session profiles; snapshot the whole page and use refs.",
   },
   responseBody: "response body is not supported for existing-session profiles yet.",
+  extract: "extract is not supported for existing-session profiles; use snapshot instead.",
 } as const;

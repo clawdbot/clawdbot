@@ -34,8 +34,24 @@ function readCommittedFrameUrl(
     return unreachableUrl;
   }
   const url = typeof frame?.url === "string" ? frame.url.trim() : "";
+  // Chrome reports ":" for the initial empty document before navigation commits.
+  if (url === ":") {
+    return undefined;
+  }
   const fragment = typeof frame?.urlFragment === "string" ? frame.urlFragment.trim() : "";
   return url ? `${url}${fragment}` : undefined;
+}
+
+/** Read the browser-owned loader identity for the committed main-frame document. */
+export async function readCdpMainFrameDocumentIdentity(
+  send: CdpSendFn,
+  sessionId?: string,
+): Promise<string | undefined> {
+  const frameTree = (await send("Page.getFrameTree", undefined, sessionId).catch(
+    () => null,
+  )) as CdpFrameTreeResult | null;
+  const loaderId = frameTree?.frameTree?.frame?.loaderId;
+  return typeof loaderId === "string" && loaderId.trim() ? `cdp:${loaderId.trim()}` : undefined;
 }
 
 async function waitForCdpNavigationResult(

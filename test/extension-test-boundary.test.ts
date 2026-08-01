@@ -376,12 +376,8 @@ describe("non-extension test boundaries", () => {
       "openclaw/plugin-sdk/channel-config-primitives",
     ];
     const bundledProviderSchemaNames = new Set([
-      "DiscordConfigSchema",
       "GoogleChatConfigSchema",
       "IMessageConfigSchema",
-      "MSTeamsConfigSchema",
-      "SignalConfigSchema",
-      "SlackConfigSchema",
       "TelegramConfigSchema",
       "WhatsAppConfigSchema",
     ]);

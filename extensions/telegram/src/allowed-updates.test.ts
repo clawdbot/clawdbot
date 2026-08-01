@@ -25,6 +25,7 @@ const EXPECTED_DEFAULT_UPDATE_TYPES = [
   "chat_join_request",
   "chat_boost",
   "removed_chat_boost",
+  "subscription",
 ] as const;
 
 beforeAll(async () => {

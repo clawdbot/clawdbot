@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CostDailyEntry, UsageAggregates, UsageSessionEntry, UsageTotals } from "./types.ts";
+import { renderUsageHeatmap } from "./view-heatmap.ts";
 import {
   renderDailyChartCompact,
   renderCostWindowComparison,
@@ -126,7 +127,7 @@ describe("renderUsageInsights", () => {
     );
 
     const buttons = [...container.querySelectorAll<HTMLButtonElement>("button.usage-summary-hint")];
-    const tooltips = [...container.querySelectorAll("wa-tooltip.usage-summary-tooltip")];
+    const tooltips = [...container.querySelectorAll("openclaw-tooltip")];
     expect(buttons).toHaveLength(9);
     expect(tooltips).toHaveLength(9);
     expect(
@@ -138,11 +139,16 @@ describe("renderUsageInsights", () => {
       ),
     ).toBe(true);
     expect(
-      tooltips.every(
-        (tooltip) =>
-          tooltip.getAttribute("trigger") === "hover focus" &&
-          buttons.some((button) => button.id === tooltip.getAttribute("for")),
-      ),
+      tooltips.every((tooltip) => {
+        const button = tooltip.querySelector<HTMLButtonElement>("button.usage-summary-hint");
+        const content = tooltip.querySelector('[slot="content"]');
+        return Boolean(
+          button &&
+          buttons.includes(button) &&
+          content &&
+          button.getAttribute("aria-label") !== content.textContent,
+        );
+      }),
     ).toBe(true);
 
     buttons[0]?.click();
@@ -253,6 +259,42 @@ describe("renderUsageInsights", () => {
     );
 
     expect(container.textContent).not.toContain("1000.0% of cost");
+  });
+});
+
+describe("renderUsageHeatmap", () => {
+  it("renders the selected activity range from usage cost data", () => {
+    const container = document.createElement("div");
+    render(
+      renderUsageHeatmap(
+        [dailyEntry("2026-07-08", 10), dailyEntry("2026-07-09", 20)],
+        "2025-07-11",
+        "2026-07-09",
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".settings-section__heading")?.textContent?.trim()).toBe(
+      "Token Activity",
+    );
+    expect(container.querySelectorAll(".usage-heatmap__cell")).toHaveLength(52 * 7);
+    expect(container.querySelector(".usage-heatmap__cell--l4 title")?.textContent).toContain(
+      "20 tokens",
+    );
+  });
+
+  it("keeps short ranges at their natural cell width", () => {
+    const container = document.createElement("div");
+    render(
+      renderUsageHeatmap([dailyEntry("2026-08-01", 20)], "2026-08-01", "2026-08-01"),
+      container,
+    );
+
+    expect(
+      container
+        .querySelector<SVGElement>(".usage-heatmap__svg")
+        ?.style.getPropertyValue("--usage-heatmap-width"),
+    ).toBe("44px");
   });
 });
 
@@ -444,6 +486,67 @@ describe("renderCostWindowComparison", () => {
 
 describe("renderSessionsCard", () => {
   const noop = () => {};
+
+  it("renders named native session toggles while preserving shift selection and separate copy", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const onSelectSession = vi.fn<(key: string, shiftKey: boolean) => void>();
+    const sessions = [
+      {
+        key: "agent:main:selected",
+        label: "Selected thread",
+        updatedAt: 2,
+        usage: { ...totals, totalTokens: 200 },
+      },
+      {
+        key: "agent:main:next",
+        label: "Next thread",
+        updatedAt: 1,
+        usage: { ...totals, totalTokens: 100 },
+      },
+    ] as UsageSessionEntry[];
+
+    render(
+      renderSessionsCard(
+        sessions,
+        ["agent:main:selected"],
+        [],
+        true,
+        "tokens",
+        "desc",
+        [],
+        "all",
+        onSelectSession,
+        noop,
+        noop,
+        noop,
+        [],
+        sessions.length,
+        noop,
+      ),
+      container,
+    );
+
+    const rows = [...container.querySelectorAll<HTMLElement>(".session-bar-row")];
+    const selected = rows[0]?.querySelector<HTMLButtonElement>(".session-bar-selection");
+    const next = rows[1]?.querySelector<HTMLButtonElement>(".session-bar-selection");
+    expect(selected).toBeInstanceOf(HTMLButtonElement);
+    expect(selected?.type).toBe("button");
+    expect(selected?.getAttribute("aria-label")).toBe("Selected thread");
+    expect(selected?.getAttribute("aria-pressed")).toBe("true");
+    expect(next?.getAttribute("aria-label")).toBe("Next thread");
+    expect(next?.getAttribute("aria-pressed")).toBe("false");
+    next?.focus();
+    expect(document.activeElement).toBe(next);
+    next?.dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: true }));
+    expect(onSelectSession).toHaveBeenCalledOnce();
+    expect(onSelectSession).toHaveBeenCalledWith("agent:main:next", true);
+
+    rows[0]?.querySelector<HTMLButtonElement>(".session-bar-actions button")?.click();
+    expect(onSelectSession).toHaveBeenCalledOnce();
+    rows[0]?.querySelector<HTMLElement>(".session-bar-value")?.click();
+    expect(onSelectSession).toHaveBeenCalledWith("agent:main:selected", false);
+  });
 
   it("sorts cost by the selected day values when day filters are active", () => {
     const container = document.createElement("div");

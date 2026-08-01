@@ -124,7 +124,12 @@ describe("OpenClaw configured-model planner", () => {
     const binding = await createSystemAgentVerifiedInferenceBinding({
       configuredRoute,
       executionRoute: { ...configuredRoute, authProfileId: "openai:p2" },
-      auth: { authProfileId: "openai:p2", authFingerprint },
+      auth: {
+        authProfileId: "openai:p2",
+        authFingerprint,
+        modelId: configuredRoute.model,
+        modelApi: "openai-responses",
+      },
       deps: authDeps,
     });
     const runEmbeddedAgent = vi.fn(async () => ({
@@ -150,6 +155,17 @@ describe("OpenClaw configured-model planner", () => {
         authProfileId: "openai:p2",
         authProfileIdSource: "user",
         config: binding.execution.runConfig,
+        streamParams: {
+          responseFormat: {
+            type: "object",
+            properties: {
+              reply: { type: "string" },
+              command: { type: "string" },
+            },
+            required: ["reply"],
+            additionalProperties: false,
+          },
+        },
       }),
     );
   });
@@ -220,7 +236,7 @@ describe("OpenClaw configured-model planner", () => {
   it("plans through the configured default agent CLI route with native tools disabled", async () => {
     const config: OpenClawConfig = {
       agents: {
-        defaults: { cliBackends: { "claude-cli": { command: "claude" } } },
+        defaults: {},
         list: [
           {
             id: "ops",
@@ -261,6 +277,7 @@ describe("OpenClaw configured-model planner", () => {
     });
     expect(runCliAgent).toHaveBeenCalledWith(
       expect.objectContaining({
+        agentId: "ops",
         provider: "claude-cli",
         model: "claude-opus-4-8",
         agentDir: "/tmp/ops-agent",

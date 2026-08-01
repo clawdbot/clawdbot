@@ -6,6 +6,7 @@ type SqliteNumberPragma =
   | "auto_vacuum"
   | "busy_timeout"
   | "foreign_keys"
+  | "journal_size_limit"
   | "schema_version"
   | "synchronous"
   | "user_version"

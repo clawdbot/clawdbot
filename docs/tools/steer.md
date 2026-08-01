@@ -40,6 +40,11 @@ supported runtime boundary, regardless of the stored `/queue` setting. When
 that injection is not available, the command prefix is stripped and `<message>`
 continues as a normal prompt.
 
+The explicit `/steer` (and `/tell`) command is Gateway-backed. In
+`openclaw chat` or `openclaw tui --local`, select `/queue steer` and send the
+guidance as a normal message; the embedded runtime applies the same steering
+policy without forwarding a Gateway command.
+
 Use:
 
 - `/steer <message>` when you want to guide the active run right now.

@@ -477,7 +477,10 @@ describe("worker inference proxy client", () => {
     const onStreamGap = vi.fn();
     const terminal = doneOutcome();
 
-    const request = structuredClone(INFERENCE_REQUEST);
+    const request = {
+      ...structuredClone(INFERENCE_REQUEST),
+      modelRef: { ...INFERENCE_REQUEST.modelRef },
+    };
     const outcome = client.start(request, { onEvent, onStreamGap });
     request.modelRef.model = "caller-mutation";
     await vi.waitFor(() => expect(harness.requestInferenceStart).toHaveBeenCalledOnce());

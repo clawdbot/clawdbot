@@ -82,6 +82,8 @@ export type MatrixSendResult = {
   roomId: string;
   primaryMessageId?: string;
   receipt: MessageReceipt;
+  /** Provider-accepted visible bodies in event order for this send operation. */
+  content: string;
 };
 
 export type MatrixSendOpts = {
@@ -98,6 +100,14 @@ export type MatrixSendOpts = {
   replyToId?: string;
   threadId?: string | number | null;
   timeoutMs?: number;
+  /** Opaque durable queue id used to derive Matrix transaction ids. */
+  deliveryQueueId?: string;
+  /** Stable provider-send index within one durable payload. */
+  deliveryPartIndex?: number;
+  /** Exact provider-send count within one durable payload. */
+  deliveryPartCount?: number;
+  /** Marks recipient-visible timeline dispatch after the recovery plan is durable. */
+  onPlatformSendDispatch?: () => Promise<void>;
   /** Additional Matrix event content fields to merge into the first sent event. */
   extraContent?: MatrixExtraContentFields;
   /** Send audio as voice message instead of audio file. Defaults to false. */
@@ -113,8 +123,6 @@ export type MatrixMediaMsgType =
   | typeof MsgType.File;
 
 export type MatrixTextMsgType = typeof MsgType.Text | typeof MsgType.Notice;
-
-export type MediaKind = "image" | "audio" | "video" | "document" | "unknown";
 
 export type MatrixFormattedContent = MessageEventContent & {
   format?: string;

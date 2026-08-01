@@ -30,9 +30,9 @@ describe("renderApps", () => {
     await i18n.setLocale("en");
   });
 
-  function renderIntoContainer(onNavigate = vi.fn()) {
+  function renderIntoContainer(onNavigate = vi.fn(), onPairDevice?: () => void) {
     const container = document.createElement("div");
-    render(renderApps({ onNavigate }), container);
+    render(renderApps({ onNavigate, onPairDevice }), container);
     return container;
   }
 
@@ -77,6 +77,18 @@ describe("renderApps", () => {
     expect(buttons[0]?.textContent).toContain("Open Plugins");
     buttons[0]?.click();
     expect(onNavigate).toHaveBeenCalledExactlyOnceWith("plugins");
+  });
+
+  it("offers device pairing from the phone section only when permitted", () => {
+    const withoutPair = renderIntoContainer();
+    expect(withoutPair.querySelector(".apps-pair-hint")).toBeNull();
+
+    const onPairDevice = vi.fn();
+    const container = renderIntoContainer(vi.fn(), onPairDevice);
+    const hint = container.querySelector(".apps-pair-hint");
+    expect(hint?.textContent).toContain("Already have the app?");
+    hint?.querySelector("button")?.click();
+    expect(onPairDevice).toHaveBeenCalledOnce();
   });
 
   it("badges the watch apps as bundled with their phone apps", () => {

@@ -4,7 +4,7 @@ import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
-import { readFileDescriptorBoundedSync } from "../infra/file-descriptor-read.js";
+import { readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
 import { isRenderableAvatarImageDataUrl } from "../shared/avatar-limits.js";
 import {
   AVATAR_MAX_BYTES,
@@ -29,6 +29,13 @@ type LocalAgentAvatarFailureReason =
 export type OpenedLocalAgentAvatarFile = {
   path: string;
   fd: number;
+  stat: {
+    ctimeMs: number;
+    dev: number;
+    ino: number;
+    mtimeMs: number;
+    size: number;
+  };
 };
 
 type LocalAgentAvatarPath = {
@@ -97,7 +104,17 @@ function openResolvedLocalAgentAvatarFile(
       fs.closeSync(opened.fd);
       return null;
     }
-    return { path: opened.path, fd: opened.fd };
+    return {
+      path: opened.path,
+      fd: opened.fd,
+      stat: {
+        ctimeMs: opened.stat.ctimeMs,
+        dev: opened.stat.dev,
+        ino: opened.stat.ino,
+        mtimeMs: opened.stat.mtimeMs,
+        size: opened.stat.size,
+      },
+    };
   } catch {
     return null;
   }

@@ -106,6 +106,68 @@ describe("zalo send", () => {
     expect(successful.receipt.parts[0]?.kind).toBe("media");
   });
 
+  it("sends text through the message API when the media URL is whitespace", async () => {
+    sendMessageMock.mockResolvedValueOnce({
+      ok: true,
+      result: { message_id: "z-msg-with-blank-media" },
+    });
+
+    const result = await sendMessageZalo("dm-chat-blank-media", "hello there", {
+      token: "zalo-token",
+      mediaUrl: "   ",
+    });
+
+    expect(sendMessageMock).toHaveBeenCalledWith(
+      "zalo-token",
+      {
+        chat_id: "dm-chat-blank-media",
+        text: "hello there",
+      },
+      undefined,
+    );
+    expect(sendPhotoMock).not.toHaveBeenCalled();
+    expect(requireSuccessfulSend(result, "z-msg-with-blank-media").receipt.parts[0]?.kind).toBe(
+      "text",
+    );
+  });
+
+  it("normalizes provider and target-kind prefixes before calling the Bot API", async () => {
+    sendMessageMock.mockResolvedValueOnce({
+      ok: true,
+      result: { message_id: "z-msg-prefixed" },
+    });
+    sendPhotoMock.mockResolvedValueOnce({
+      ok: true,
+      result: { message_id: "z-photo-prefixed" },
+    });
+
+    await sendMessageZalo("zalo:group:dm-chat-prefixed-text", "hello", {
+      token: "zalo-token",
+    });
+    await sendMessageZalo("zl:user:dm-chat-prefixed-photo", "", {
+      token: "zalo-token",
+      mediaUrl: "https://example.com/photo.jpg",
+    });
+
+    expect(sendMessageMock).toHaveBeenCalledWith(
+      "zalo-token",
+      {
+        chat_id: "dm-chat-prefixed-text",
+        text: "hello",
+      },
+      undefined,
+    );
+    expect(sendPhotoMock).toHaveBeenCalledWith(
+      "zalo-token",
+      {
+        chat_id: "dm-chat-prefixed-photo",
+        photo: "https://example.com/photo.jpg",
+        caption: undefined,
+      },
+      undefined,
+    );
+  });
+
   it("fails fast for missing token or blank photo URLs", async () => {
     const missingToken = await sendMessageZalo("dm-chat-3", "hello", {});
     expectFailedSend(missingToken, "No Zalo bot token configured");

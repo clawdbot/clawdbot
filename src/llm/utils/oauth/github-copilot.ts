@@ -2,7 +2,10 @@
  * GitHub Copilot OAuth flow
  */
 
-import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import {
+  MAX_DATE_TIMESTAMP_MS,
+  resolveTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
 import {
   assertOkOrThrowProviderError,
   readProviderJsonResponse,
@@ -45,6 +48,7 @@ const INITIAL_POLL_INTERVAL_MULTIPLIER = 1.2;
 const SLOW_DOWN_POLL_INTERVAL_MULTIPLIER = 1.4;
 const COPILOT_ROUTER_ID_PREFIX = "accounts/";
 const COPILOT_REQUEST_TIMEOUT_MS = 30_000;
+const COPILOT_SOURCE_CREDENTIAL_EXPIRES_AT_MS = MAX_DATE_TIMESTAMP_MS;
 
 function resolveExpiresAtFromDurationSeconds(value: unknown): number | undefined {
   return resolveExpiresAtMsFromDurationSeconds(value);
@@ -342,10 +346,8 @@ async function pollForGitHubAccessToken(
   throw new Error("Device flow timed out");
 }
 
-/**
- * Refresh GitHub Copilot token
- */
-async function refreshGitHubCopilotToken(
+/** Exchange a GitHub credential for the legacy Copilot access token used during login setup. */
+async function exchangeGitHubTokenForCopilotAccess(
   refreshToken: string,
   enterpriseDomain?: string,
   options: CopilotRequestOptions = {},
@@ -543,7 +545,7 @@ async function loginGitHubCopilot(options: {
     device.expiresAt,
     options.signal,
   );
-  const credentials = await refreshGitHubCopilotToken(
+  const credentials = await exchangeGitHubTokenForCopilotAccess(
     githubAccessToken,
     enterpriseDomain ?? undefined,
   );
@@ -568,12 +570,20 @@ export const githubCopilotOAuthProvider: OAuthProviderInterface = {
   },
 
   async refreshToken(credentials: OAuthCredentials): Promise<OAuthCredentials> {
-    const creds = credentials as CopilotCredentials;
-    return refreshGitHubCopilotToken(creds.refresh, creds.enterpriseUrl);
+    // Legacy profiles expire the retired exchanged token, not the durable
+    // GitHub credential. Normalize once so generic OAuth persistence records
+    // the source token as active and never infers a successful no-op refresh.
+    return {
+      ...credentials,
+      access: credentials.refresh,
+      expires: COPILOT_SOURCE_CREDENTIAL_EXPIRES_AT_MS,
+    };
   },
 
   getApiKey(credentials: OAuthCredentials): string {
-    return credentials.access;
+    // The provider runtime now authenticates directly with the durable GitHub
+    // credential; the short-lived Copilot access token is legacy profile state.
+    return credentials.refresh;
   },
 
   modifyModels(models: Model[], credentials: OAuthCredentials): Model[] {

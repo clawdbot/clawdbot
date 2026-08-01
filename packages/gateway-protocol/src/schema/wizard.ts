@@ -16,6 +16,7 @@ const WizardRunStatusSchema = Type.Union([
 export const WizardStartParamsSchema = closedObject({
   mode: Type.Optional(Type.Union([Type.Literal("local"), Type.Literal("remote")])),
   workspace: Type.Optional(Type.String()),
+  installDaemon: Type.Optional(Type.Boolean()),
   // "setup" (default) runs full onboarding; "channels" runs the guided
   // channel-setup flow (openclaw channels add) over the same step protocol.
   flow: Type.Optional(Type.Union([Type.Literal("setup"), Type.Literal("channels")])),
@@ -24,7 +25,7 @@ export const WizardStartParamsSchema = closedObject({
 });
 
 /** Client answer payload for the current wizard step. */
-export const WizardAnswerSchema = closedObject({
+const WizardAnswerSchema = closedObject({
   stepId: NonEmptyString,
   value: Type.Optional(Type.Unknown()),
 });
@@ -47,7 +48,7 @@ export const WizardCancelParamsSchema = WizardSessionIdParamsSchema;
 export const WizardStatusParamsSchema = WizardSessionIdParamsSchema;
 
 /** Selectable value shown in a choice-based wizard step. */
-export const WizardStepOptionSchema = closedObject({
+const WizardStepOptionSchema = closedObject({
   value: Type.Unknown(),
   label: NonEmptyString,
   hint: Type.Optional(Type.String()),

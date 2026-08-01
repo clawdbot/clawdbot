@@ -54,6 +54,7 @@ export type GatewayWsMessageHandlerParams = {
   browserRateLimiter?: AuthRateLimiter;
   nodeReapprovalCoordinator?: NodeReapprovalCoordinator;
   isStartupPending?: () => boolean;
+  isControlUiDeviceAuthMigrationPending?: () => boolean;
   gatewayMethods: string[];
   events: string[];
   extraHandlers: GatewayRequestHandlers;
@@ -119,6 +120,7 @@ export type AuthenticatedGatewayConnect = {
   usesLegacyNodeProtocol: boolean;
   role: GatewayRole;
   scopes: string[];
+  hasRequestedScopes: boolean;
   isControlUi: boolean;
   isBrowserOperatorUi: boolean;
   isWebchat: boolean;
@@ -141,6 +143,7 @@ export type AuthenticatedGatewayConnect = {
   issuedBootstrapProfile: DeviceBootstrapProfile | null;
   handoffBootstrapProfile: DeviceBootstrapProfile | null;
   trustedProxyAuthOk: boolean;
+  allowControlUiDeviceAuthMigration: boolean;
   skipControlUiPairingForDevice: boolean;
   skipLocalBackendSelfPairing: boolean;
   rejectUnauthorized: (failedAuth: GatewayAuthResult) => void;
@@ -148,6 +151,7 @@ export type AuthenticatedGatewayConnect = {
 
 export type DeviceAuthorizedGatewayConnect = AuthenticatedGatewayConnect & {
   deviceToken: DeviceAuthToken | null;
+  controlUiDeviceAuthMigrationPending: boolean;
   bootstrapDeviceTokens: Array<{
     deviceToken: string;
     role: string;

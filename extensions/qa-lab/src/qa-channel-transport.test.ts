@@ -84,6 +84,19 @@ describe("qa channel transport", () => {
     expect(call).toHaveBeenCalledTimes(2);
   });
 
+  it("does not report another running account as the default account", async () => {
+    const transport = createQaChannelTransport(createQaBusState());
+    const call = vi.fn().mockResolvedValue({
+      channelAccounts: {
+        "qa-channel": [{ accountId: "other", running: true, restartPending: false }],
+      },
+    });
+
+    await expect(
+      transport.waitReady({ gateway: { call }, timeoutMs: 5, pollIntervalMs: 1 }),
+    ).rejects.toThrow('qa-channel account "default" not reported; available accounts: other');
+  });
+
   it("surfaces the last reported qa-channel account status on timeout", async () => {
     const transport = createQaChannelTransport(createQaBusState());
     const call = vi.fn().mockResolvedValue({
@@ -156,6 +169,70 @@ describe("qa channel transport", () => {
     ).resolves.toMatchObject({ text: "QA-PORTABLE-OK" });
     await transport.reset();
     expect(transport.state.getSnapshot().messages).toEqual([]);
+  });
+
+  it("keeps outbound verdicts bound to the selected account", async () => {
+    const state = createQaBusState();
+    const transport = createQaChannelTransport(state);
+    const conversation = { id: "alice", kind: "direct" as const };
+
+    state.addOutboundMessage({
+      accountId: "other",
+      to: "dm:alice",
+      text: "QA-ACCOUNT-OK",
+    });
+    state.addOutboundMessage({
+      accountId: "other",
+      to: "dm:alice",
+      text: "⚠️ agent failed before reply: foreign account failure",
+    });
+    const expected = state.addOutboundMessage({
+      accountId: "default",
+      to: "dm:alice",
+      text: "QA-ACCOUNT-OK",
+    });
+
+    await expect(
+      transport.waitForOutbound({ conversation, textIncludes: "QA-ACCOUNT-OK", timeoutMs: 50 }),
+    ).resolves.toMatchObject({ accountId: "default", id: expected.id });
+  });
+
+  it("does not accept deleted previews as visible outbound replies", async () => {
+    const state = createQaBusState();
+    const transport = createQaChannelTransport(state);
+    const preview = state.addOutboundMessage({
+      to: "dm:alice",
+      text: "QA-VISIBLE-FINAL-OK",
+    });
+    state.deleteMessage({ messageId: preview.id });
+    const final = state.addOutboundMessage({
+      to: "dm:alice",
+      text: "QA-VISIBLE-FINAL-OK",
+    });
+
+    await expect(
+      transport.waitForOutbound({
+        conversation: { id: "alice", kind: "direct" },
+        textIncludes: "QA-VISIBLE-FINAL-OK",
+        timeoutMs: 50,
+      }),
+    ).resolves.toMatchObject({ id: final.id });
+  });
+
+  it("ignores another account's failure while waiting for a condition", async () => {
+    const state = createQaBusState();
+    const transport = createQaChannelTransport(state);
+
+    await expect(
+      transport.waitForCondition(async () => {
+        state.addOutboundMessage({
+          accountId: "other",
+          to: "dm:alice",
+          text: "⚠️ agent failed before reply: foreign account failure",
+        });
+        return "owned condition completed";
+      }, 50),
+    ).resolves.toBe("owned condition completed");
   });
 
   it("injects native commands with transport metadata", async () => {

@@ -33,6 +33,7 @@ type LaneResult = {
   providerInputSnippet: string;
   providerToolOutputSnippet: string;
   providerDeclaredToolCount: number;
+  providerDirectoryContainsTarget: boolean;
   providerPlannedTools: string[];
   gatewayOutputToolNames: string[];
   gatewayOutputText: string;
@@ -42,6 +43,7 @@ type LaneResult = {
 type LaneResultSummary = Pick<
   LaneResult,
   | "providerDeclaredToolCount"
+  | "providerDirectoryContainsTarget"
   | "providerPlannedTools"
   | "providerRawBytes"
   | "gatewayOutputText"
@@ -252,32 +254,17 @@ function applyLaneConfig(
     },
   };
 
-  const agents = (cfg.agents && typeof cfg.agents === "object" ? cfg.agents : {}) as Record<
-    string,
-    unknown
-  >;
-  const defaults =
-    agents.defaults && typeof agents.defaults === "object"
-      ? (agents.defaults as Record<string, unknown>)
-      : {};
+  const memory =
+    cfg.memory && typeof cfg.memory === "object" ? (cfg.memory as Record<string, unknown>) : {};
   const memorySearch =
-    defaults.memorySearch && typeof defaults.memorySearch === "object"
-      ? (defaults.memorySearch as Record<string, unknown>)
+    memory.search && typeof memory.search === "object"
+      ? (memory.search as Record<string, unknown>)
       : {};
-  cfg.agents = {
-    ...agents,
-    defaults: {
-      ...defaults,
-      memorySearch: {
-        ...memorySearch,
-        enabled: false,
-        sync: {
-          ...(memorySearch.sync && typeof memorySearch.sync === "object" ? memorySearch.sync : {}),
-          onSearch: false,
-          onSessionStart: false,
-          watch: false,
-        },
-      },
+  cfg.memory = {
+    ...memory,
+    search: {
+      ...memorySearch,
+      enabled: false,
     },
   };
 
@@ -422,6 +409,11 @@ export async function runToolSearchGatewayLane(params: {
     plannedToolName?: string;
   }>;
   const lastRequest = laneRequests.at(-1) ?? {};
+  // Responses providers may carry system text in instructions or input items;
+  // inspect the full recorded prompt so late directory entries are not lost.
+  const providerPromptText = [lastRequest.instructions, lastRequest.allInputText]
+    .filter((value): value is string => typeof value === "string")
+    .join("\n");
   const responseStatus = (response as { status?: unknown }).status;
   const mentionCountsAfter = await countToolSearchSessionLogMentions({
     stateDir,
@@ -441,6 +433,9 @@ export async function runToolSearchGatewayLane(params: {
     providerDeclaredToolCount: Array.isArray(lastRequest.body?.tools)
       ? lastRequest.body.tools.length
       : 0,
+    providerDirectoryContainsTarget:
+      providerPromptText.includes("### Deferred Tool Schemas") &&
+      providerPromptText.includes(`- ${params.fixture.targetTool}`),
     providerPlannedTools: laneRequests
       .map((request) => request.plannedToolName)
       .filter((name): name is string => typeof name === "string"),
@@ -462,6 +457,7 @@ export function assertToolSearchLaneResults(params: {
         normal: {
           plannedTools: normal.providerPlannedTools,
           declaredToolCount: normal.providerDeclaredToolCount,
+          directoryContainsTarget: normal.providerDirectoryContainsTarget,
           input: normal.providerInputSnippet,
           toolOutput: normal.providerToolOutputSnippet,
           output: truncateUtf16Safe(normal.gatewayOutputText, 300),
@@ -470,6 +466,7 @@ export function assertToolSearchLaneResults(params: {
         code: {
           plannedTools: code.providerPlannedTools,
           declaredToolCount: code.providerDeclaredToolCount,
+          directoryContainsTarget: code.providerDirectoryContainsTarget,
           input: code.providerInputSnippet,
           toolOutput: code.providerToolOutputSnippet,
           output: truncateUtf16Safe(code.gatewayOutputText, 300),
@@ -492,6 +489,14 @@ export function assertToolSearchLaneResults(params: {
       code.gatewayOutputText.includes(targetTool) &&
       (code.sessionLogToolMentions[targetTool] ?? 0) > 0,
     `code lane did not bridge-call ${targetTool}: ${laneDebug()}`,
+  );
+  assert(
+    code.providerDirectoryContainsTarget,
+    `code lane did not advertise ${targetTool} in the capability directory: ${laneDebug()}`,
+  );
+  assert(
+    !normal.providerDirectoryContainsTarget,
+    `normal lane unexpectedly advertised a Tool Search capability directory: ${laneDebug()}`,
   );
   assert(
     !code.providerPlannedTools.includes(targetTool),

@@ -135,9 +135,10 @@ URL fetch defaults:
 - Optional hostname allowlists are supported per input type (`files.urlAllowlist`, `images.urlAllowlist`): exact host (`"cdn.example.com"`) or wildcard subdomains (`"*.assets.example.com"`, does not match the apex). Empty or omitted allowlists mean no hostname allowlist restriction.
 - To disable URL-based fetches entirely, set `files.allowUrl: false` and/or `images.allowUrl: false`.
 
-## File + image limits (config)
+## File + image limits
 
-Defaults can be tuned under `gateway.http.endpoints.responses`:
+The endpoint uses a built-in 20 MB request-body limit. File and image source
+policy remains configurable under `gateway.http.endpoints.responses`:
 
 ```json5
 {
@@ -146,7 +147,6 @@ Defaults can be tuned under `gateway.http.endpoints.responses`:
       endpoints: {
         responses: {
           enabled: true,
-          maxBodyBytes: 20000000,
           maxUrlParts: 8,
           files: {
             allowUrl: true,
@@ -195,7 +195,6 @@ Defaults when omitted:
 
 | Key                      | Default   |
 | ------------------------ | --------- |
-| `maxBodyBytes`           | 20MB      |
 | `maxUrlParts`            | 8         |
 | `files.maxBytes`         | 5MB       |
 | `files.maxChars`         | 60k       |

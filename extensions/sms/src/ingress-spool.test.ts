@@ -30,7 +30,7 @@ const account: ResolvedSmsAccount = {
 };
 
 const stateDirs: string[] = [];
-const disposers: Array<() => void> = [];
+const disposers: Array<() => void | Promise<void>> = [];
 type SmsIngressDeliver = NonNullable<Parameters<typeof createSmsIngressSpool>[0]["deliver"]>;
 type SmsIngressSpool = ReturnType<typeof createSmsIngressSpool>;
 
@@ -60,13 +60,13 @@ function form(messageSid: string): Record<string, string> {
 }
 
 async function drainSpool(spool: SmsIngressSpool): Promise<void> {
-  await spool.drainOnce();
+  spool.start();
   await spool.waitForIdle();
 }
 
 afterEach(async () => {
   for (const dispose of disposers.splice(0).toReversed()) {
-    dispose();
+    await dispose();
   }
   for (const stateDir of stateDirs.splice(0).toReversed()) {
     await rm(stateDir, { recursive: true, force: true });
@@ -83,9 +83,9 @@ describe("createSmsIngressSpool", () => {
       queue: createQueue(stateDir),
       deliver: vi.fn<SmsIngressDeliver>(async () => undefined),
     });
-    disposers.push(first.dispose);
+    disposers.push(first.stop);
     await first.enqueue(form("SM-restart"));
-    first.dispose();
+    await first.stop();
 
     const deliver = vi.fn<SmsIngressDeliver>(async (_message, lifecycle) => {
       await lifecycle.onAdopted();
@@ -97,10 +97,71 @@ describe("createSmsIngressSpool", () => {
       queue: createQueue(stateDir),
       deliver,
     });
-    disposers.push(recovered.dispose);
+    disposers.push(recovered.stop);
     await drainSpool(recovered);
 
     expect(deliver).toHaveBeenCalledOnce();
+  });
+
+  it("durably admits a handler selected before route shutdown after the pump stops", async () => {
+    const stateDir = await createStateDir();
+    const retired = createSmsIngressSpool({
+      cfg: {},
+      account,
+      channelRuntime: {} as SmsChannelRuntime,
+      queue: createQueue(stateDir),
+      deliver: vi.fn<SmsIngressDeliver>(async () => undefined),
+    });
+    disposers.push(retired.stop);
+    retired.start();
+    await retired.stop();
+
+    await expect(retired.enqueue(form("SM-late-handler"))).resolves.toMatchObject({
+      kind: "accepted",
+    });
+
+    const deliver = vi.fn<SmsIngressDeliver>(async (_message, lifecycle) => {
+      await lifecycle.onAdopted();
+    });
+    const recovered = createSmsIngressSpool({
+      cfg: {},
+      account,
+      channelRuntime: {} as SmsChannelRuntime,
+      queue: createQueue(stateDir),
+      deliver,
+    });
+    disposers.push(recovered.stop);
+    await drainSpool(recovered);
+
+    expect(deliver).toHaveBeenCalledOnce();
+  });
+
+  it("does not let a non-cooperative delivery block route replacement shutdown", async () => {
+    const stateDir = await createStateDir();
+    let markDeliveryStarted!: () => void;
+    const deliveryStarted = new Promise<void>((resolve) => {
+      markDeliveryStarted = resolve;
+    });
+    let deliverySignal: AbortSignal | undefined;
+    const spool = createSmsIngressSpool({
+      cfg: {},
+      account,
+      channelRuntime: {} as SmsChannelRuntime,
+      queue: createQueue(stateDir),
+      deliver: vi.fn<SmsIngressDeliver>(async (_message, lifecycle) => {
+        deliverySignal = lifecycle.abortSignal;
+        markDeliveryStarted();
+        await new Promise<void>(() => {});
+      }),
+    });
+    disposers.push(spool.stop);
+    spool.start();
+    await spool.enqueue(form("SM-non-cooperative-stop"));
+    await deliveryStarted;
+
+    await spool.stop();
+
+    expect(deliverySignal?.aborted).toBe(true);
   });
 
   it("keeps a completed MessageSid tombstone from dispatching twice", async () => {
@@ -115,7 +176,7 @@ describe("createSmsIngressSpool", () => {
       queue: createQueue(stateDir),
       deliver,
     });
-    disposers.push(spool.dispose);
+    disposers.push(spool.stop);
 
     expect(await spool.enqueue(form("SM-completed"))).toMatchObject({
       kind: "accepted",
@@ -143,7 +204,7 @@ describe("createSmsIngressSpool", () => {
       queue: createQueue(stateDir),
       deliver,
     });
-    disposers.push(spool.dispose);
+    disposers.push(spool.stop);
     const rawForm = form("SM-alias");
     delete rawForm.MessageSid;
     rawForm[key] = "SM-alias";
@@ -168,7 +229,7 @@ describe("createSmsIngressSpool", () => {
       queue,
       deliver: vi.fn<SmsIngressDeliver>(async () => undefined),
     });
-    disposers.push(spool.dispose);
+    disposers.push(spool.stop);
 
     await spool.enqueue({ ...form("SM-canonical-lane"), From: "RcS:+1 (555) 123-4567" });
 
@@ -191,9 +252,9 @@ describe("createSmsIngressSpool", () => {
       queue: createQueue(stateDir),
       deliver: vi.fn<SmsIngressDeliver>(async () => undefined),
     });
-    disposers.push(first.dispose);
+    disposers.push(first.stop);
     await first.enqueue(form("SM-received-at"));
-    first.dispose();
+    await first.stop();
     now.mockRestore();
 
     const deliver = vi.fn<SmsIngressDeliver>(async (_message, lifecycle) => {
@@ -206,7 +267,7 @@ describe("createSmsIngressSpool", () => {
       queue: createQueue(stateDir),
       deliver,
     });
-    disposers.push(recovered.dispose);
+    disposers.push(recovered.stop);
     await drainSpool(recovered);
 
     expect(deliver).toHaveBeenCalledWith(expect.any(Object), expect.any(Object), receivedAt);
@@ -224,10 +285,10 @@ describe("createSmsIngressSpool", () => {
       queue: createQueue(stateDir),
       deliver: firstDeliver,
     });
-    disposers.push(first.dispose);
+    disposers.push(first.stop);
     await first.enqueue(form("SM-handler-reload"));
     await drainSpool(first);
-    first.dispose();
+    await first.stop();
 
     const reloadedDeliver = vi.fn<SmsIngressDeliver>(async () => undefined);
     const reloaded = createSmsIngressSpool({
@@ -237,7 +298,7 @@ describe("createSmsIngressSpool", () => {
       queue: createQueue(stateDir),
       deliver: reloadedDeliver,
     });
-    disposers.push(reloaded.dispose);
+    disposers.push(reloaded.stop);
     expect(await reloaded.enqueue(form("SM-handler-reload"))).toMatchObject({
       kind: "completed",
       duplicate: true,
@@ -261,7 +322,7 @@ describe("createSmsIngressSpool", () => {
       queue: createQueue(stateDir),
       deliver,
     });
-    disposers.push(spool.dispose);
+    disposers.push(spool.stop);
 
     await spool.enqueue(rawForm);
     await drainSpool(spool);

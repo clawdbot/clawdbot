@@ -27,7 +27,6 @@ export {
   createAccountScopedAllowFromSection,
   createAccountScopedGroupAccessSection,
   createTopLevelChannelDmPolicy,
-  createLegacyCompatChannelDmPolicy,
   createStandardChannelSetupStatus,
   mergeAllowFromEntries,
   noteChannelLookupFailure,
@@ -36,7 +35,6 @@ export {
   parseMentionOrPrefixedId,
   patchChannelConfigForAccount,
   promptResolvedAllowFrom,
-  promptLegacyChannelAllowFromForAccount,
   promptParsedAllowFromForAccount,
   resolveEntriesWithOptionalToken,
   resolveSetupAccountId,
@@ -45,6 +43,10 @@ export {
   splitSetupEntries,
 } from "../channels/plugins/setup-wizard-helpers.js";
 
+export {
+  createLegacyCompatChannelDmPolicy,
+  promptLegacyChannelAllowFromForAccount,
+} from "../channels/plugins/setup-wizard-legacy-compat.js";
 export { createAllowlistSetupWizardProxy } from "../channels/plugins/setup-wizard-proxy.js";
 export {
   createCliPathTextInput,

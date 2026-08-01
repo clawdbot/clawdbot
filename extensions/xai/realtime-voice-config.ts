@@ -117,7 +117,7 @@ export const XAI_REALTIME_ACTIVE_RESPONSE_ERROR_PREFIX =
 export const XAI_REALTIME_NO_ACTIVE_RESPONSE_CANCEL_ERROR =
   "Cancellation failed: no active response found";
 
-const XAI_REALTIME_VOICES = [
+export const XAI_REALTIME_VOICES = [
   "eve",
   "ara",
   "rex",

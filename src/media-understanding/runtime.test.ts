@@ -175,6 +175,30 @@ describe("media-understanding runtime", () => {
     expect(mocks.cleanup).toHaveBeenCalledTimes(1);
   });
 
+  it("resolves the agent directory for agent-scoped file media", async () => {
+    mocks.normalizeMediaAttachments.mockReturnValue([
+      { index: 0, path: "/tmp/sample.ogg", mime: "audio/ogg" },
+    ]);
+    mocks.runCapability.mockResolvedValue({
+      outputs: [],
+      decision: { capability: "audio", outcome: "skipped", attachments: [] },
+    });
+
+    await runMediaUnderstandingFile({
+      capability: "audio",
+      filePath: "/tmp/sample.ogg",
+      mime: "audio/ogg",
+      cfg: {
+        agents: { list: [{ id: "worker", agentDir: "/tmp/worker-agent" }] },
+      } as OpenClawConfig,
+      agentId: "worker",
+    });
+
+    expect(mocks.runCapability).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "worker", agentDir: "/tmp/worker-agent" }),
+    );
+  });
+
   it("returns the matching capability output", async () => {
     const output: MediaUnderstandingOutput = {
       kind: "image.description",
@@ -237,13 +261,11 @@ describe("media-understanding runtime", () => {
     });
 
     expect(mocks.normalizeMediaAttachments).toHaveBeenCalledWith({
-      MediaUrl: "https://httpbin.org/image/png",
-      MediaType: "image/*",
+      media: [{ url: "https://httpbin.org/image/png", contentType: "image/*" }],
     });
     expect(requireRunCapabilityRequest()).toMatchObject({
       ctx: {
-        MediaUrl: "https://httpbin.org/image/png",
-        MediaType: "image/*",
+        media: [{ url: "https://httpbin.org/image/png", contentType: "image/*" }],
       },
     });
   });
@@ -269,12 +291,11 @@ describe("media-understanding runtime", () => {
     });
 
     expect(mocks.normalizeMediaAttachments).toHaveBeenCalledWith({
-      MediaUrl: mediaUrl,
-      MediaType: "video/mp4",
+      media: [{ url: mediaUrl, contentType: "video/mp4" }],
     });
     expect(requireRunCapabilityRequest()).toMatchObject({
       capability: "image",
-      ctx: { MediaUrl: mediaUrl, MediaType: "video/mp4" },
+      ctx: { media: [{ url: mediaUrl, contentType: "video/mp4" }] },
       media,
     });
   });
@@ -335,8 +356,7 @@ describe("media-understanding runtime", () => {
     });
 
     expect(mocks.normalizeMediaAttachments).toHaveBeenCalledWith({
-      MediaPath: "/tmp/sample.jpg",
-      MediaType: "image/jpeg",
+      media: [{ path: "/tmp/sample.jpg", contentType: "image/jpeg" }],
       SessionKey: "agent:main:telegram:dm:123",
       Provider: "telegram",
       Surface: "telegram",
@@ -372,11 +392,12 @@ describe("media-understanding runtime", () => {
     });
 
     expect(mocks.normalizeMediaAttachments).toHaveBeenCalledWith({
-      MediaUrl: "https://example.com/photo.png",
-      MediaType: "image/png",
+      media: [{ url: "https://example.com/photo.png", contentType: "image/png" }],
     });
     expect(requireRunCapabilityRequest()).toMatchObject({
-      ctx: { MediaUrl: "https://example.com/photo.png", MediaType: "image/png" },
+      ctx: {
+        media: [{ url: "https://example.com/photo.png", contentType: "image/png" }],
+      },
       media,
     });
   });
@@ -480,8 +501,7 @@ describe("media-understanding runtime", () => {
         },
       },
       ctx: {
-        MediaPath: "/tmp/sample.jpg",
-        MediaType: "image/jpeg",
+        media: [{ path: "/tmp/sample.jpg", contentType: "image/jpeg" }],
       },
       attachments: cache,
       media,
@@ -650,8 +670,7 @@ describe("media-understanding runtime", () => {
 
     expect(mocks.readLocalFileSafely).not.toHaveBeenCalled();
     expect(mocks.normalizeMediaAttachments).toHaveBeenCalledWith({
-      MediaUrl: "https://httpbin.org/image/png",
-      MediaType: "image/*",
+      media: [{ url: "https://httpbin.org/image/png", contentType: "image/*" }],
     });
     expect(mocks.createMediaAttachmentCache).toHaveBeenCalledWith(
       [{ index: 0, url: "https://httpbin.org/image/png", mime: "image/png" }],
@@ -749,6 +768,26 @@ describe("media-understanding runtime", () => {
     expect(describeImageOptions?.model).toBe("vision-v1");
     expect(describeImageOptions?.prompt).toBe("Describe the sample.");
     expect(describeImageOptions?.agentDir).toBe("/tmp/agent");
+  });
+
+  it("resolves the agent directory when direct image description only names an agent", async () => {
+    mocks.readLocalFileSafely.mockResolvedValue({ buffer: Buffer.from("image-bytes") });
+
+    await describeImageFileWithModel({
+      filePath: "/tmp/sample.jpg",
+      mime: "image/jpeg",
+      provider: "gemini",
+      model: "vision-v1",
+      prompt: "Describe the sample.",
+      cfg: {
+        agents: { list: [{ id: "worker", agentDir: "/tmp/worker-agent" }] },
+      } as OpenClawConfig,
+      agentId: "worker",
+    });
+
+    expect(mocks.describeImageWithModel).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "worker", agentDir: "/tmp/worker-agent" }),
+    );
   });
 
   it("routes structured extraction to a provider by id and model", async () => {

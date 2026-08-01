@@ -6,8 +6,11 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { basename, delimiter, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "../src/infra/errors.ts";
+import { readPositiveEnvInt } from "./lib/numeric-options.mjs";
 import { writePackageDistInventoryForPublish } from "./lib/package-dist-inventory.ts";
+import { restorePrepackArtifacts } from "./openclaw-postpack.mjs";
 import { preparePackageChangelog } from "./package-changelog.mjs";
+import { preparePackageDocsMap } from "./package-docs-map.mjs";
 import { createPnpmRunnerSpawnSpec } from "./pnpm-runner.mjs";
 const FULL_GIT_COMMIT_RE = /^[0-9a-f]{40}$/iu;
 const requiredPreparedPathGroups = [
@@ -175,23 +178,8 @@ function ensurePreparedArtifacts(): void {
   process.exit(1);
 }
 
-function positiveEnvInt(name: string, env: NodeJS.ProcessEnv, fallback: number): number {
-  const raw = env[name]?.trim();
-  if (raw === undefined || raw === "") {
-    return fallback;
-  }
-  if (!/^[1-9]\d*$/u.test(raw)) {
-    throw new Error(`invalid ${name}: ${raw}`);
-  }
-  const value = Number(raw);
-  if (!Number.isSafeInteger(value)) {
-    throw new Error(`invalid ${name}: ${raw}`);
-  }
-  return value;
-}
-
 export function resolvePrepackCommandTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
-  return positiveEnvInt(
+  return readPositiveEnvInt(
     "OPENCLAW_PREPACK_COMMAND_TIMEOUT_MS",
     env,
     DEFAULT_PREPACK_COMMAND_TIMEOUT_MS,
@@ -299,9 +287,29 @@ export async function preparePrepackArtifacts(env: NodeJS.ProcessEnv = process.e
   ensurePreparedArtifacts();
   await writeDistInventory();
   runBuildSmoke();
-  await preparePackageChangelog(process.cwd(), {
-    allowUnreleased: resolvePrepackAllowUnreleasedChangelog(env),
-  });
+  // The docs-map receipt serializes source-mutating pack lifecycles before the
+  // changelog is touched, so concurrent packs cannot restore each other's files.
+  await preparePackageDocsMap(process.cwd());
+  try {
+    await preparePackageChangelog(process.cwd(), {
+      allowUnreleased: resolvePrepackAllowUnreleasedChangelog(env),
+    });
+  } catch (error) {
+    try {
+      await restorePrepackArtifacts(process.cwd());
+    } catch (restoreError) {
+      throw prepackPreparationRestoreError(error, restoreError);
+    }
+    throw error;
+  }
+}
+
+function prepackPreparationRestoreError(error: unknown, restoreError: unknown): AggregateError {
+  return new AggregateError(
+    [error, restoreError],
+    "Prepack preparation failed and source artifacts could not be restored.",
+    { cause: error },
+  );
 }
 
 async function main(): Promise<void> {

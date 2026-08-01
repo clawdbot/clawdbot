@@ -1,23 +1,52 @@
 // QA Lab tests cover Matrix E2EE client behavior.
-import { mkdtemp, rm, stat } from "node:fs/promises";
+import { access, mkdtemp, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   MATRIX_QA_E2EE_SYNC_FILTER,
+  createMatrixQaE2eeObservedEventRecorder,
   prepareMatrixQaE2eeStorage,
-  shouldRecordMatrixQaObservedEventUpdate,
+  runMatrixQaE2eeClientOperation,
 } from "./e2ee-client-internals.js";
-import { findMatrixQaObservedEventMatch } from "./events.js";
+import { findMatrixQaObservedEventMatch, type MatrixQaObservedEvent } from "./events.js";
 
 const testing = {
   MATRIX_QA_E2EE_SYNC_FILTER,
+  createMatrixQaE2eeObservedEventRecorder,
   findMatrixQaObservedEventMatch,
   prepareMatrixQaE2eeStorage,
-  shouldRecordMatrixQaObservedEventUpdate,
+  runMatrixQaE2eeClientOperation,
 };
 
 describe("matrix qa e2ee client storage", () => {
+  it("stops a disposable client when an E2EE operation exceeds its scenario timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const stop = vi.fn();
+      const operation = testing.runMatrixQaE2eeClientOperation({
+        label: "Matrix E2EE text send",
+        run: () =>
+          new Promise<string>(() => {
+            // Intentionally pending so the timeout owns settlement.
+          }),
+        stop,
+        timeoutMs: 150_000,
+      });
+      const rejection = expect(operation).rejects.toThrow(
+        "Matrix E2EE text send timed out after 150000ms",
+      );
+
+      await vi.advanceTimersByTimeAsync(150_000);
+
+      await rejection;
+      expect(stop).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("filters receipt noise without suppressing room state or timeline events", () => {
     expect(testing.MATRIX_QA_E2EE_SYNC_FILTER).toEqual({
       room: {
@@ -52,7 +81,7 @@ describe("matrix qa e2ee client storage", () => {
     }
   });
 
-  it("keeps persisted crypto state private", async () => {
+  it("uses plugin state without creating a legacy IndexedDB snapshot", async () => {
     const outputDir = await mkdtemp(path.join(os.tmpdir(), "matrix-qa-e2ee-storage-"));
     try {
       const storage = await testing.prepareMatrixQaE2eeStorage({
@@ -62,7 +91,7 @@ describe("matrix qa e2ee client storage", () => {
       });
 
       expect((await stat(storage.accountDir)).mode & 0o777).toBe(0o700);
-      expect((await stat(storage.idbSnapshotPath)).mode & 0o777).toBe(0o600);
+      await expect(access(storage.idbSnapshotPath)).rejects.toMatchObject({ code: "ENOENT" });
     } finally {
       await rm(outputDir, { force: true, recursive: true });
     }
@@ -76,30 +105,61 @@ describe("matrix qa e2ee client storage", () => {
       sender: "@bot:matrix-qa.test",
       type: "m.room.message",
     };
+    const observed: MatrixQaObservedEvent[] = [];
+    const recorder = testing.createMatrixQaE2eeObservedEventRecorder({
+      append: (event) => observed.push(event),
+    });
+    const decrypted = {
+      ...previous,
+      body: "MATRIX_QA_E2EE_CLI_GATEWAY_OK",
+      msgtype: "m.text",
+    };
 
-    expect(
-      testing.shouldRecordMatrixQaObservedEventUpdate({
-        previous,
-        next: {
-          ...previous,
-          body: "MATRIX_QA_E2EE_CLI_GATEWAY_OK",
-          msgtype: "m.text",
-        },
-      }),
-    ).toBe(true);
-    expect(
-      testing.shouldRecordMatrixQaObservedEventUpdate({
-        previous: {
-          ...previous,
-          body: "MATRIX_QA_E2EE_CLI_GATEWAY_OK",
-          msgtype: "m.text",
-        },
-        next: {
-          ...previous,
-          body: "MATRIX_QA_E2EE_CLI_GATEWAY_OK",
-          msgtype: "m.text",
-        },
-      }),
-    ).toBe(false);
+    recorder.record(previous);
+    recorder.record(decrypted);
+    recorder.record(decrypted);
+
+    expect(observed).toEqual([previous, decrypted]);
+  });
+
+  it("rehydrates a replacement when its threaded target decrypts later", () => {
+    const observed: MatrixQaObservedEvent[] = [];
+    const recorder = testing.createMatrixQaE2eeObservedEventRecorder({
+      append: (event) => observed.push(event),
+    });
+    const replacement = {
+      eventId: "$final",
+      kind: "message" as const,
+      roomId: "!room:matrix-qa.test",
+      sender: "@bot:matrix-qa.test",
+      type: "m.room.message",
+      body: "final",
+      msgtype: "m.text",
+      replacesEventId: "$preview",
+    };
+    const relation = {
+      eventId: "$root",
+      inReplyToId: "$driver",
+      isFallingBack: true,
+      relType: "m.thread",
+    };
+
+    recorder.record(replacement);
+    recorder.record({
+      eventId: "$preview",
+      kind: "notice",
+      roomId: "!room:matrix-qa.test",
+      sender: "@bot:matrix-qa.test",
+      type: "m.room.message",
+      body: "preview",
+      msgtype: "m.notice",
+      relatesTo: relation,
+    });
+
+    expect(observed).toEqual([
+      replacement,
+      expect.objectContaining({ eventId: "$preview", relatesTo: relation }),
+      { ...replacement, relatesTo: relation },
+    ]);
   });
 });

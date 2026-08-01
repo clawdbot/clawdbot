@@ -1,8 +1,14 @@
 /** Targeted system-event routing and wake behavior. */
 
+import { randomUUID } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  SYSTEM_PRESENCE_CLEAR_LAST_INPUT_TAG,
+  SYSTEM_PRESENCE_LEGACY_CLEAR_LAST_INPUT_SECONDS,
+} from "../../../packages/gateway-protocol/src/schema.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-events.js";
+import { listSystemPresence } from "../../infra/system-presence.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -164,5 +170,46 @@ describe("system-event routing", () => {
       undefined,
       expect.objectContaining({ message: "wake is not supported for node presence events" }),
     );
+  });
+
+  it("passes explicit input activity clearing into system presence", async () => {
+    const instanceId = `presence-clear-${randomUUID()}`;
+    const handler = expectDefined(
+      systemHandlers["system-event"],
+      'systemHandlers["system-event"] test invariant',
+    );
+    const context = {
+      broadcast: vi.fn(),
+      incrementPresenceVersion: vi.fn(() => 1),
+      getHealthVersion: vi.fn(() => 1),
+      getRuntimeConfig: vi.fn(() => ({ agents: { list: [{ id: "main" }] } })),
+    };
+
+    await handler({
+      params: {
+        text: "Node: Operator Mac",
+        instanceId,
+        host: "Operator Mac",
+        mode: "ui",
+        lastInputSeconds: 5,
+      },
+      respond: vi.fn(),
+      context,
+    } as unknown as GatewayRequestHandlerOptions);
+    await handler({
+      params: {
+        text: "Node: Operator Mac",
+        instanceId,
+        host: "Operator Mac",
+        mode: "ui",
+        lastInputSeconds: SYSTEM_PRESENCE_LEGACY_CLEAR_LAST_INPUT_SECONDS,
+        tags: [SYSTEM_PRESENCE_CLEAR_LAST_INPUT_TAG],
+      },
+      respond: vi.fn(),
+      context,
+    } as unknown as GatewayRequestHandlerOptions);
+
+    const entry = listSystemPresence().find((candidate) => candidate.instanceId === instanceId);
+    expect(entry?.lastInputSeconds).toBeUndefined();
   });
 });

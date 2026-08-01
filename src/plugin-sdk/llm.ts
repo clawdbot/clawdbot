@@ -1,5 +1,5 @@
 /**
- * Public SDK subpath for LLM provider registration, streaming, model utils, and validation.
+ * Public SDK subpath for LLM streaming, model utils, and validation.
  */
 export type { ApiProvider } from "@openclaw/ai";
 export {
@@ -9,9 +9,7 @@ export {
   getApiProviders,
   getEnvApiKey,
   parseStreamingJson,
-  registerApiProvider,
   sanitizeSurrogates,
-  unregisterApiProviders,
 } from "@openclaw/ai/internal/runtime";
 export {
   adjustMaxTokensForThinking,

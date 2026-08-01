@@ -3,7 +3,6 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
   getContextEngineRegistration,
-  registerContextEngine,
   registerContextEngineForOwner,
 } from "../../../context-engine/registry.js";
 import type { ContextEngine, ContextEngineHostCapability } from "../../../context-engine/types.js";
@@ -12,7 +11,8 @@ import {
   maybeRepairContextEngineHostCompatibility,
 } from "./context-engine-host-compat.js";
 
-vi.mock("../../../agents/agent-scope-config.js", () => ({
+vi.mock("../../../agents/agent-scope-config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../agents/agent-scope-config.js")>()),
   resolveDefaultAgentDir: vi.fn(() => "/tmp/openclaw-doctor-host-compat"),
 }));
 
@@ -49,6 +49,15 @@ function uniqueEngineId(): string {
   return `doctor-host-compat-${engineCounter}`;
 }
 
+function registerTestContextEngine(
+  id: string,
+  factory: Parameters<typeof registerContextEngineForOwner>[1],
+) {
+  return registerContextEngineForOwner(id, factory, `doctor-test-owner-${id}`, {
+    allowSameOwnerRefresh: true,
+  });
+}
+
 function registerEngine(requiredCapabilities: ContextEngineHostCapability[]): string {
   const id = uniqueEngineId();
   const engine: ContextEngine = {
@@ -75,7 +84,7 @@ function registerEngine(requiredCapabilities: ContextEngineHostCapability[]): st
       return { ok: true, compacted: false };
     },
   };
-  registerContextEngine(id, () => engine);
+  registerTestContextEngine(id, () => engine);
   return id;
 }
 

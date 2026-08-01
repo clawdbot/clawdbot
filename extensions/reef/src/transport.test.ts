@@ -10,6 +10,7 @@ import {
   ReefRelayError,
   ReefTransportClient,
   createReefWebSocket,
+  isRetryableReefRelayFailure,
   type WebSocketLike,
 } from "./transport.js";
 import type { InboxEntry, ReefKeys, RelayFriend } from "./types.js";
@@ -32,6 +33,62 @@ const keys: ReefKeys = {
 
 afterEach(() => {
   vi.useRealTimers();
+});
+
+describe("isRetryableReefRelayFailure", () => {
+  it("accepts transient relay responses and timeouts", () => {
+    expect(isRetryableReefRelayFailure(new ReefRelayError(408, "timeout"))).toBe(true);
+    expect(isRetryableReefRelayFailure(new ReefRelayError(429, "rate_limited"))).toBe(true);
+    expect(isRetryableReefRelayFailure(new ReefRelayError(503, "unavailable"))).toBe(true);
+    expect(
+      isRetryableReefRelayFailure(Object.assign(new Error("timed out"), { name: "TimeoutError" })),
+    ).toBe(true);
+  });
+
+  it("rejects definitive relay and local failures", () => {
+    expect(isRetryableReefRelayFailure(new ReefRelayError(401, "unauthorized"))).toBe(false);
+    expect(isRetryableReefRelayFailure(new Error("approval store unavailable"))).toBe(false);
+  });
+});
+
+describe("ReefTransportClient network failures", () => {
+  it("normalizes fetch failures without swallowing the cause", async () => {
+    const cause = new TypeError("fetch failed");
+    const client = new ReefTransportClient("https://relay.example", "alice", keys, async () => {
+      throw cause;
+    });
+
+    const error = await client.listFriends().catch((failure: unknown) => failure);
+    expect(error).toMatchObject({
+      name: "ReefRelayUnavailableError",
+      message: "fetch failed",
+      cause,
+    });
+    expect(isRetryableReefRelayFailure(error)).toBe(true);
+  });
+
+  it("normalizes connection loss while reading a successful response body", async () => {
+    const cause = new TypeError("terminated");
+    const response = new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.error(cause);
+        },
+      }),
+    );
+    const client = new ReefTransportClient(
+      "https://relay.example",
+      "alice",
+      keys,
+      async () => response,
+    );
+
+    await expect(client.listFriends()).rejects.toMatchObject({
+      name: "ReefRelayUnavailableError",
+      message: "terminated",
+      cause,
+    });
+  });
 });
 
 function verifyRelaySignature(
@@ -879,41 +936,6 @@ async function deliverInboxFrame(frame: string): Promise<{
   }
   return { entries, states };
 }
-
-describe("createReefWebSocket handshake deadline", () => {
-  it("errors when the relay accepts TCP but never completes the upgrade", async () => {
-    const peers = new Set<import("node:net").Socket>();
-    const server = http.createServer();
-    server.on("connection", (socket) => {
-      peers.add(socket);
-      socket.once("close", () => peers.delete(socket));
-    });
-    server.on("upgrade", () => {
-      // Leave the HTTP upgrade pending until the client deadline aborts it.
-    });
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", () => resolve());
-    });
-
-    try {
-      const { port } = server.address() as AddressInfo;
-      const socket = createReefWebSocket(`ws://127.0.0.1:${port}`, {
-        handshakeTimeoutMs: 50,
-      }) as WebSocket;
-      const [error] = await once(socket, "error");
-
-      expect(error).toMatchObject({ message: "Opening handshake has timed out" });
-    } finally {
-      for (const peer of peers) {
-        peer.destroy();
-      }
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
-    }
-  });
-});
 
 describe("ReefInboxConnection response frame bounds", () => {
   it("accepts a relay frame exactly at the payload limit", async () => {

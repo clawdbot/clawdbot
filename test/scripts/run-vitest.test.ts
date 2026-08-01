@@ -279,7 +279,7 @@ describe("scripts/run-vitest", () => {
     ]);
   });
 
-  it("delegates bare explicit directories and globs to the project router", () => {
+  it("delegates bare explicit directories, globs, and extensionless prefixes", () => {
     expect(resolveTestProjectsDelegationArgs(["test/scripts"])).toEqual(["test/scripts"]);
     expect(
       resolveTestProjectsDelegationArgs(["run", "test/scripts", "--reporter=verbose"]),
@@ -290,6 +290,8 @@ describe("scripts/run-vitest", () => {
     expect(resolveTestProjectsDelegationArgs(["src/agents/**/*.ts"])).toBeNull();
     expect(resolveTestProjectsDelegationArgs(["src/**/*.test.ts"])).toBeNull();
     expect(resolveTestProjectsDelegationArgs(["./src"])).toBeNull();
+    const prefix = "extensions/telegram/src/format";
+    expect(resolveTestProjectsDelegationArgs([prefix])).toEqual([prefix]);
   });
 
   it("delegates mixed filters when an explicit file target is present", () => {
@@ -522,6 +524,7 @@ describe("scripts/run-vitest", () => {
 
     for (const configArg of [
       "--config=test/vitest/vitest.e2e.config.ts",
+      "--config=test/vitest/vitest.tui-pty.config.ts",
       "--config=test/vitest/vitest.gateway.config.ts",
       "--config=./test/vitest/vitest.ui-e2e.config.ts",
       "--config=test/vitest/vitest.full-agentic.config.ts",

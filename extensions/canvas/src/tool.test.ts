@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createCanvasTool } from "./tool.js";
+import { CANVAS_JSONL_MAX_BYTES, createCanvasTool } from "./tool.js";
 
 const VALID_A2UI_V08_JSONL = [
   JSON.stringify({
@@ -19,6 +19,16 @@ const VALID_A2UI_V08_JSONL = [
   }),
   JSON.stringify({ beginRendering: { surfaceId: "main", root: "root" } }),
 ].join("\n");
+
+const canvasToolInvocationActions = [
+  { args: { action: "present" }, command: "canvas.present" },
+  { args: { action: "hide" }, command: "canvas.hide" },
+  { args: { action: "navigate", url: "https://example.com" }, command: "canvas.navigate" },
+  { args: { action: "eval", javaScript: "1 + 1" }, command: "canvas.eval" },
+  { args: { action: "snapshot" }, command: "canvas.snapshot" },
+  { args: { action: "a2ui_push", jsonl: VALID_A2UI_V08_JSONL }, command: "canvas.a2ui.pushJSONL" },
+  { args: { action: "a2ui_reset" }, command: "canvas.a2ui.reset" },
+] as const;
 
 const mocks = vi.hoisted(() => ({
   callGatewayTool: vi.fn(),
@@ -57,6 +67,58 @@ describe("Canvas tool", () => {
     }
   });
 
+  it.each(canvasToolInvocationActions)(
+    "forwards the default $command node deadline with Gateway transport grace",
+    async ({ args, command }) => {
+      mocks.callGatewayTool.mockResolvedValue({
+        payload: { format: "png", base64: "aGk=" },
+      });
+
+      await createCanvasTool().execute("tool-call", args);
+
+      expect(mocks.callGatewayTool).toHaveBeenCalledWith(
+        "node.invoke",
+        { timeoutMs: 40_000 },
+        expect.objectContaining({ command, timeoutMs: 30_000 }),
+      );
+      expect(mocks.listNodes).toHaveBeenCalledWith({ timeoutMs: undefined });
+    },
+  );
+
+  it.each(canvasToolInvocationActions)(
+    "forwards an explicit $command node deadline with Gateway transport grace",
+    async ({ args, command }) => {
+      mocks.callGatewayTool.mockResolvedValue({
+        payload: { format: "png", base64: "aGk=" },
+      });
+
+      await createCanvasTool().execute("tool-call", { ...args, timeoutMs: 120_000 });
+
+      expect(mocks.callGatewayTool).toHaveBeenCalledWith(
+        "node.invoke",
+        { timeoutMs: 130_000 },
+        expect.objectContaining({ command, timeoutMs: 120_000 }),
+      );
+      expect(mocks.listNodes).toHaveBeenCalledWith({ timeoutMs: 120_000 });
+    },
+  );
+
+  it("caps oversized tool invocation and transport deadlines to the timer-safe maximum", async () => {
+    mocks.callGatewayTool.mockResolvedValue({});
+
+    await createCanvasTool().execute("tool-call", {
+      action: "hide",
+      timeoutMs: Number.MAX_SAFE_INTEGER,
+    });
+
+    expect(mocks.callGatewayTool).toHaveBeenCalledWith(
+      "node.invoke",
+      { timeoutMs: 2_147_000_000 },
+      expect.objectContaining({ command: "canvas.hide", timeoutMs: 2_147_000_000 }),
+    );
+    expect(mocks.listNodes).toHaveBeenCalledWith({ timeoutMs: Number.MAX_SAFE_INTEGER });
+  });
+
   it.skipIf(process.platform === "win32")(
     "rejects jsonlPath symlinks that resolve outside the workspace",
     async () => {
@@ -79,6 +141,25 @@ describe("Canvas tool", () => {
       expect(mocks.callGatewayTool).not.toHaveBeenCalled();
     },
   );
+
+  it("rejects jsonlPath files above the shared bounded-read limit", async () => {
+    tempRoot = await mkdtemp(path.join(os.tmpdir(), "openclaw-canvas-tool-"));
+    const workspaceDir = path.join(tempRoot, "workspace");
+    await mkdir(workspaceDir);
+    await writeFile(
+      path.join(workspaceDir, "events.jsonl"),
+      Buffer.alloc(CANVAS_JSONL_MAX_BYTES + 1),
+    );
+    const tool = createCanvasTool({ workspaceDir });
+
+    await expect(
+      tool.execute("tool-call-1", {
+        action: "a2ui_push",
+        jsonlPath: "events.jsonl",
+      }),
+    ).rejects.toThrow(`exceeds ${CANVAS_JSONL_MAX_BYTES} bytes`);
+    expect(mocks.callGatewayTool).not.toHaveBeenCalled();
+  });
 
   it("applies configured image limits to canvas snapshots", async () => {
     mocks.callGatewayTool.mockResolvedValue({
@@ -114,6 +195,21 @@ describe("Canvas tool", () => {
     expect(imageResultParams?.imageSanitization).toEqual({ maxDimensionPx: 1600 });
   });
 
+  it("rejects malformed snapshot base64 before creating an image result", async () => {
+    mocks.callGatewayTool.mockResolvedValue({
+      payload: {
+        format: "png",
+        base64: "Zm9=",
+      },
+    });
+    const tool = createCanvasTool();
+
+    await expect(tool.execute("tool-call-1", { action: "snapshot" })).rejects.toThrow(
+      /invalid canvas\.snapshot payload/i,
+    );
+    expect(mocks.imageResultFromFile).not.toHaveBeenCalled();
+  });
+
   it("normalizes numeric string params before invoking node canvas commands", async () => {
     mocks.callGatewayTool.mockResolvedValue({
       payload: {
@@ -134,9 +230,10 @@ describe("Canvas tool", () => {
 
     expect(mocks.callGatewayTool).toHaveBeenLastCalledWith(
       "node.invoke",
-      { timeoutMs: 1500 },
+      { timeoutMs: 11_500 },
       expect.objectContaining({
         command: "canvas.present",
+        timeoutMs: 1500,
         params: {
           placement: {
             x: 10.5,
@@ -156,9 +253,10 @@ describe("Canvas tool", () => {
 
     expect(mocks.callGatewayTool).toHaveBeenLastCalledWith(
       "node.invoke",
-      {},
+      { timeoutMs: 40_000 },
       expect.objectContaining({
         command: "canvas.snapshot",
+        timeoutMs: 30_000,
         params: {
           format: "png",
           maxWidth: 800,
@@ -194,11 +292,12 @@ describe("Canvas tool", () => {
     expect(mocks.callGatewayTool).toHaveBeenCalledTimes(1);
     expect(mocks.callGatewayTool).toHaveBeenCalledWith(
       "node.invoke",
-      {},
+      { timeoutMs: 40_000 },
       {
         nodeId: "node-1",
         command: "canvas.a2ui.pushJSONL",
         params: { jsonl: VALID_A2UI_V08_JSONL },
+        timeoutMs: 30_000,
         idempotencyKey: expect.any(String),
         sessionKey: "agent:main:canvas",
       },
@@ -277,5 +376,19 @@ describe("Canvas tool", () => {
       /invalid canvas\.snapshot payload/i,
     );
     expect(mocks.imageResultFromFile).not.toHaveBeenCalled();
+  });
+
+  it("advertises only snapshot controls supported by Canvas nodes", () => {
+    const schema = createCanvasTool().parameters as {
+      properties?: Record<string, unknown>;
+    };
+
+    expect(schema.properties?.outputFormat).toMatchObject({
+      type: "string",
+      enum: ["png", "jpg", "jpeg"],
+    });
+    expect(schema.properties?.maxWidth).toMatchObject({ type: "integer", minimum: 1 });
+    expect(schema.properties?.quality).toMatchObject({ type: "number", minimum: 0, maximum: 1 });
+    expect(schema.properties).not.toHaveProperty("delayMs");
   });
 });

@@ -12,7 +12,7 @@ describe("xai tool auth helpers", () => {
     vi.unstubAllEnvs();
   });
 
-  it("prefers plugin web search keys over legacy grok keys", () => {
+  it("uses plugin web search keys", () => {
     expect(
       resolveFallbackXaiAuth({
         plugins: {
@@ -22,15 +22,6 @@ describe("xai tool auth helpers", () => {
                 webSearch: {
                   apiKey: "plugin-key", // pragma: allowlist secret
                 },
-              },
-            },
-          },
-        },
-        tools: {
-          web: {
-            search: {
-              grok: {
-                apiKey: "legacy-key", // pragma: allowlist secret
               },
             },
           },
@@ -60,23 +51,6 @@ describe("xai tool auth helpers", () => {
     ).toEqual({
       apiKey: NON_ENV_SECRETREF_MARKER,
       source: "plugins.entries.xai.config.webSearch.apiKey",
-    });
-
-    expect(
-      resolveFallbackXaiAuth({
-        tools: {
-          web: {
-            search: {
-              grok: {
-                apiKey: "legacy-key", // pragma: allowlist secret
-              },
-            },
-          },
-        },
-      }),
-    ).toEqual({
-      apiKey: "legacy-key",
-      source: "tools.web.search.grok.apiKey",
     });
   });
 

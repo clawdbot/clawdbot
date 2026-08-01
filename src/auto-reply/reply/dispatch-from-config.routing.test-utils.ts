@@ -1,9 +1,11 @@
 // Imported by dispatch-from-config.test.ts to keep its mocked suite in one Vitest module graph.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
+  askUserMocks,
   createDispatcher,
   emptyConfig,
   hookMocks,
@@ -37,14 +39,9 @@ describe("dispatchReplyFromConfig", () => {
     mocks.routeReply.mockClear();
     installThreadingTestPlugin({ id: "telegram" });
     sessionStoreMocks.currentEntry = {
-      deliveryContext: {
-        channel: "telegram",
-        to: "telegram:999",
-        accountId: "acc-1",
-      },
-      lastChannel: "telegram",
-      lastTo: "telegram:999",
-      lastAccountId: "acc-1",
+      delivery: normalizeSessionDeliveryState({
+        context: { channel: "telegram", to: "telegram:999", accountId: "acc-1" },
+      }),
     };
     const cfg = {
       session: {
@@ -400,6 +397,60 @@ describe("dispatchReplyFromConfig", () => {
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
     expect(dispatcher.sendToolResult).toHaveBeenCalledWith({ text: "tool output" });
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("delivers ask_user prompts when verbose tool progress is disabled", async () => {
+    setNoAbort();
+    const payload = {
+      text: "Question for you: Where should this deploy?",
+      channelData: { askUser: { questionId: "question-owned-by-agent-runtime" } },
+    } satisfies ReplyPayload;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "telegram", ChatType: "direct" });
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      await requireToolResultHandler(opts?.onToolResult)(payload);
+      return undefined;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+    expect(dispatcher.sendToolResult).toHaveBeenCalledWith(payload);
+    const toolDeliveryOrder =
+      vi.mocked(dispatcher.sendToolResult).mock.invocationCallOrder[0] ?? Number.NEGATIVE_INFINITY;
+    expect(
+      vi
+        .mocked(dispatcher.waitForIdle)
+        .mock.invocationCallOrder.some((order) => order > toolDeliveryOrder),
+    ).toBe(true);
+  });
+
+  it("drops ask_user prompts that terminalize before dispatcher delivery", async () => {
+    setNoAbort();
+    askUserMocks.isAskUserPromptPending.mockResolvedValue(false);
+    const payload = {
+      text: "Question for you: Where should this deploy?",
+      channelData: { askUser: { questionId: "question-terminal-before-delivery" } },
+    } satisfies ReplyPayload;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "telegram", ChatType: "direct" });
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      await requireToolResultHandler(opts?.onToolResult)(payload);
+      return undefined;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+
+    expect(askUserMocks.isAskUserPromptPending).toHaveBeenCalledWith(
+      "question-terminal-before-delivery",
+    );
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
   });
 
   it("does not synthesize hidden text-only tool summaries into TTS media", async () => {
@@ -1068,6 +1119,49 @@ describe("dispatchReplyFromConfig", () => {
     expect(sendToolResult).toHaveBeenCalledTimes(1);
     expect((sendToolResult.mock.calls[0]?.[0] as ReplyPayload | undefined)?.text).toBe(
       "💬 drafting a refined plan",
+    );
+  });
+
+  it("deduplicates identical commentary when producer item ids change", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      verboseLevel: "on",
+    };
+    const cfg = automaticGroupReplyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      ChatType: "direct",
+      From: "discord:user:123",
+      SessionKey: "agent:main:main",
+    });
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      await opts?.onItemEvent?.({
+        itemId: "commentary-stream",
+        kind: "preamble",
+        progressText: "Checking the current state.",
+      });
+      await opts?.onItemEvent?.({
+        itemId: "commentary-snapshot",
+        kind: "preamble",
+        progressText: "Checking the current state.",
+      });
+      await opts?.onToolStart?.({ name: "exec", phase: "start" });
+      return { text: "done" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    const sendToolResult = dispatcher.sendToolResult as ReturnType<typeof vi.fn>;
+    expect(sendToolResult).toHaveBeenCalledTimes(1);
+    expect((sendToolResult.mock.calls[0]?.[0] as ReplyPayload | undefined)?.text).toBe(
+      "💬 Checking the current state.",
     );
   });
 

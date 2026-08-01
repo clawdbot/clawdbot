@@ -20,11 +20,7 @@ import {
   resetLoadConfigMock as _resetLoadConfigMock,
 } from "./test-helpers.js";
 
-export {
-  resetLoadConfigMock,
-  setLoadConfigMock,
-  setRuntimeConfigSourceSnapshotMock,
-} from "./test-helpers.js";
+export { resetLoadConfigMock, setLoadConfigMock } from "./test-helpers.js";
 
 // Avoid exporting inferred vitest mock types (TS2742 under pnpm + d.ts emit).
 type AnyExport = any;
@@ -139,8 +135,8 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
     )?.identity,
   resolveIdentityNamePrefix: (cfg: { messages?: { responsePrefix?: string } }, _agentId: string) =>
     cfg.messages?.responsePrefix,
-  resolveMessagePrefix: (cfg: { messages?: { messagePrefix?: string } }) =>
-    cfg.messages?.messagePrefix,
+  resolveMessagePrefix: (_cfg: unknown, _agentId: string, opts?: { configured?: string }) =>
+    opts?.configured,
   runEmbeddedAgent: vi.fn(),
 }));
 

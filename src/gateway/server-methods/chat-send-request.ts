@@ -41,6 +41,7 @@ type ChatSendRequestParams = {
   originatingTo?: string;
   originatingAccountId?: string;
   originatingThreadId?: string;
+  replyToId?: string;
   attachments?: Array<{
     type?: string;
     mimeType?: string;
@@ -52,6 +53,7 @@ type ChatSendRequestParams = {
   systemInputProvenance?: InputProvenance;
   systemProvenanceReceipt?: string;
   suppressCommandInterpretation?: boolean;
+  expectedLeafEntryId?: string | null;
   expectedSessionRoutingContract?: string;
   idempotencyKey: string;
 };

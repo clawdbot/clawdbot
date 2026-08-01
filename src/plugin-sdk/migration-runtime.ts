@@ -8,11 +8,6 @@ import { resolveAgentConfig } from "../agents/agent-scope-config.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { ensureAbsoluteDirectory, pathExists, root as openFsSafeRoot } from "../infra/fs-safe.js";
 import { resolveHomeRelativePath } from "../infra/home-dir.js";
-import type {
-  MigrationApplyResult,
-  MigrationItem,
-  MigrationProviderContext,
-} from "../plugins/types.js";
 import {
   assertMemoryMigrationSourceRevision,
   MAX_MEMORY_MIGRATION_FILE_BYTES,
@@ -24,8 +19,13 @@ import {
   markMigrationItemError,
   redactMigrationPlan,
 } from "./migration.js";
+import type {
+  MigrationApplyResult,
+  MigrationItem,
+  MigrationProviderContext,
+} from "./plugin-entry.js";
 
-export type { MigrationApplyResult, MigrationItem } from "../plugins/types.js";
+export type { MigrationApplyResult, MigrationItem } from "./plugin-entry.js";
 
 /** Directories a migration provider writes imported agent data into. */
 export type PlannedMigrationTargets = {

@@ -7,12 +7,15 @@ import type { MsgContext } from "../../auto-reply/templating.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveConversationLabel } from "../../channels/conversation-label.js";
 import { getLoadedChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
+import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import {
   deliveryContextFromChannelRoute,
   deliveryContextFromSession,
   mergeDeliveryContext,
   normalizeDeliveryContext,
-  normalizeSessionDeliveryFields,
+  normalizeSessionDeliveryState,
+  sessionDeliveryOrigin,
+  sessionDeliveryRoute,
 } from "../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import {
@@ -28,7 +31,7 @@ function isSystemEventProvider(provider?: string): boolean {
 }
 
 // Origin updates merge sparse channel metadata without deleting previously known fields.
-const mergeOrigin = (
+const mergeSessionOrigin = (
   existing: SessionOrigin | undefined,
   next: SessionOrigin | undefined,
 ): SessionOrigin | undefined => {
@@ -153,13 +156,6 @@ export function deriveSessionOrigin(
   return Object.keys(origin).length > 0 ? origin : undefined;
 }
 
-export function snapshotSessionOrigin(entry?: SessionEntry): SessionOrigin | undefined {
-  if (!entry?.origin) {
-    return undefined;
-  }
-  return { ...entry.origin };
-}
-
 function deriveGroupSessionPatch(params: {
   ctx: MsgContext;
   sessionKey: string;
@@ -193,7 +189,6 @@ function deriveGroupSessionPatch(params: {
 
   const patch: Partial<SessionEntry> = {
     chatType: resolution.chatType ?? "group",
-    channel,
     groupId: resolution.id,
   };
   if (nextSubject) {
@@ -226,6 +221,7 @@ export function deriveSessionMetaPatch(params: {
   sessionKey: string;
   existing?: SessionEntry;
   groupResolution?: GroupKeyResolution | null;
+  preserveExistingDeliveryRoute?: boolean;
   skipSystemEventOrigin?: boolean;
 }): Partial<SessionEntry> | null {
   const groupPatch = deriveGroupSessionPatch(params);
@@ -237,9 +233,50 @@ export function deriveSessionMetaPatch(params: {
   }
 
   const patch: Partial<SessionEntry> = groupPatch ? { ...groupPatch } : {};
-  const mergedOrigin = mergeOrigin(params.existing?.origin, origin);
+  const existingOrigin = sessionDeliveryOrigin(params.existing);
+  const mergedOrigin = mergeSessionOrigin(existingOrigin, origin);
   if (mergedOrigin) {
-    patch.origin = mergedOrigin;
+    if (!patch.chatType && mergedOrigin.chatType) {
+      patch.chatType = mergedOrigin.chatType;
+    }
+    const nextProvider = origin?.provider;
+    const nextOwnsExternalRoute = Boolean(
+      nextProvider &&
+      nextProvider !== INTERNAL_MESSAGE_CHANNEL &&
+      !isInternalNonDeliveryChannel(nextProvider) &&
+      !isSystemEventProvider(nextProvider),
+    );
+    const existingRoute = sessionDeliveryRoute(params.existing);
+    const existingRouteAccountId =
+      existingRoute?.accountId ?? deliveryContextFromSession(params.existing)?.accountId;
+    const freshRouteOwnsNextProvider =
+      params.preserveExistingDeliveryRoute === true &&
+      nextProvider != null &&
+      existingRoute?.channel === nextProvider &&
+      (origin?.accountId == null || existingRouteAccountId === origin.accountId);
+    const deliveryIdentityChanged =
+      nextOwnsExternalRoute &&
+      !freshRouteOwnsNextProvider &&
+      (!existingOrigin ||
+        (existingOrigin.provider != null && nextProvider !== existingOrigin.provider) ||
+        (existingOrigin.surface != null &&
+          origin?.surface != null &&
+          origin.surface !== existingOrigin.surface) ||
+        (existingOrigin.accountId != null &&
+          origin?.accountId != null &&
+          origin.accountId !== existingOrigin.accountId));
+    patch.delivery = normalizeSessionDeliveryState({
+      route: deliveryIdentityChanged ? undefined : sessionDeliveryRoute(params.existing),
+      context: deliveryIdentityChanged
+        ? {
+            channel: mergedOrigin.provider,
+            to: mergedOrigin.to,
+            accountId: mergedOrigin.accountId,
+            threadId: mergedOrigin.threadId,
+          }
+        : deliveryContextFromSession(params.existing),
+      origin: mergedOrigin,
+    });
   }
 
   return Object.keys(patch).length > 0 ? patch : null;
@@ -261,11 +298,11 @@ function removeThreadFromDeliveryContext(context?: DeliveryContext): DeliveryCon
  * store and the SQLite accessor so both backends apply one routing policy.
  */
 export function deriveLastRoutePatch(params: {
-  channel?: SessionEntry["lastChannel"];
+  channel?: string;
   to?: string;
   accountId?: string;
   threadId?: string | number;
-  route?: SessionEntry["route"];
+  route?: ChannelRouteRef;
   deliveryContext?: DeliveryContext;
   ctx?: MsgContext;
   groupResolution?: GroupKeyResolution | null;
@@ -306,30 +343,26 @@ export function deriveLastRoutePatch(params: {
     ? removeThreadFromDeliveryContext(deliveryContextFromSession(existing))
     : deliveryContextFromSession(existing);
   const merged = mergeDeliveryContext(mergedInput, fallbackContext);
-  const normalized = normalizeSessionDeliveryFields({
+  const delivery = normalizeSessionDeliveryState({
     route: params.route,
-    deliveryContext: {
+    context: {
       channel: merged?.channel,
       to: merged?.to,
       accountId: merged?.accountId,
       threadId: merged?.threadId,
     },
+    origin: sessionDeliveryOrigin(existing),
   });
+  const nextEntry = existing ? { ...existing, delivery } : ({ delivery } as SessionEntry);
   const metaPatch = ctx
     ? deriveSessionMetaPatch({
         ctx,
         sessionKey: params.sessionKey,
-        existing,
+        existing: nextEntry,
         groupResolution: params.groupResolution,
+        preserveExistingDeliveryRoute: routeContext != null,
       })
     : null;
-  const basePatch: Partial<SessionEntry> = {
-    route: normalized.route,
-    deliveryContext: normalized.deliveryContext,
-    lastChannel: normalized.lastChannel,
-    lastTo: normalized.lastTo,
-    lastAccountId: normalized.lastAccountId,
-    lastThreadId: normalized.lastThreadId,
-  };
+  const basePatch: Partial<SessionEntry> = { delivery };
   return metaPatch ? { ...basePatch, ...metaPatch } : basePatch;
 }

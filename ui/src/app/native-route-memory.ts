@@ -9,6 +9,7 @@ const NATIVE_LAST_ROUTE_KEY = "openclaw.native.lastRoute";
 
 type StoredNativeRoute = {
   routeId: RouteId;
+  pathname: string;
   search: string;
 };
 
@@ -40,9 +41,10 @@ function readStoredRoute(
     if (
       typeof value.routeId === "string" &&
       isRouteId(value.routeId) &&
+      typeof value.pathname === "string" &&
       typeof value.search === "string"
     ) {
-      return { routeId: value.routeId, search: value.search };
+      return { routeId: value.routeId, pathname: value.pathname, search: value.search };
     }
     store.removeItem(NATIVE_LAST_ROUTE_KEY);
   } catch {
@@ -56,7 +58,7 @@ function readStoredRoute(
 }
 
 // One-shot action params (palette slash-command drafts) must not replay on a
-// later launch; navigation state like ?session= is exactly what memory keeps.
+// later launch; the pathname now owns session identity.
 const TRANSIENT_SEARCH_PARAMS = ["draft"];
 
 function restorableSearch(search: string): string {
@@ -70,6 +72,7 @@ function restorableSearch(search: string): string {
 
 export function persistRoute(
   routeId: RouteId,
+  pathname: string,
   search: string,
   storage?: Storage,
   nativeHost = isNativeWebChromeHost(),
@@ -81,15 +84,20 @@ export function persistRoute(
   try {
     store.setItem(
       NATIVE_LAST_ROUTE_KEY,
-      JSON.stringify({ routeId, search: restorableSearch(search) }),
+      JSON.stringify({ routeId, pathname, search: restorableSearch(search) }),
     );
   } catch {
     // Storage may be unavailable for this origin; navigation must still work.
   }
 }
 
-function shouldRestore(routeId: RouteId, search: string, nativeHost: boolean): boolean {
-  return nativeHost && routeId === "chat" && search === "";
+function shouldRestore(
+  routeId: RouteId,
+  pathname: string,
+  search: string,
+  nativeHost: boolean,
+): boolean {
+  return nativeHost && routeId === "chat" && pathname.endsWith("/chat") && search === "";
 }
 
 /**
@@ -98,15 +106,19 @@ function shouldRestore(routeId: RouteId, search: string, nativeHost: boolean): b
  */
 export function considerRouteRestore(
   routeId: RouteId,
+  pathname: string,
   search: string,
   storage?: Storage,
   nativeHost = isNativeWebChromeHost(),
 ): StoredNativeRoute | null {
-  if (!shouldRestore(routeId, search, nativeHost)) {
+  if (!shouldRestore(routeId, pathname, search, nativeHost)) {
     return null;
   }
   const stored = readStoredRoute(storage, nativeHost);
-  if (!stored || (stored.routeId === routeId && stored.search === search)) {
+  if (
+    !stored ||
+    (stored.routeId === routeId && stored.pathname === pathname && stored.search === search)
+  ) {
     return null;
   }
   return stored;

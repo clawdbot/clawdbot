@@ -2,7 +2,7 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { afterEach, beforeEach, vi } from "vitest";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles.js";
-import { clearSessionStoreCacheForTest } from "../config/sessions.js";
+import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import { resetSystemEventsForTest } from "../infra/system-events.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginRegistry } from "../plugins/registry.js";
@@ -67,8 +67,17 @@ function createThinkingPolicyProvider(
     id: providerId,
     label: providerId,
     auth: [],
-    supportsXHighThinking: ({ modelId }) =>
-      xhighModelIds.includes(normalizeLowercaseStringOrEmpty(modelId)),
+    resolveThinkingProfile: ({ modelId }) => ({
+      levels: [
+        { id: "off" },
+        { id: "low" },
+        { id: "medium" },
+        { id: "high" },
+        ...(xhighModelIds.includes(normalizeLowercaseStringOrEmpty(modelId))
+          ? [{ id: "xhigh" as const }]
+          : []),
+      ],
+    }),
   };
 }
 

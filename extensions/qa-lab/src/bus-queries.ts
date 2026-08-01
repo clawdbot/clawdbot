@@ -115,7 +115,7 @@ export function searchQaBusMessages(params: {
   const limit = Math.max(1, Math.min(params.input.limit ?? 20, 100));
   const query = normalizeOptionalLowercaseString(params.input.query);
   return Array.from(params.messages.values())
-    .filter((message) => message.accountId === accountId)
+    .filter((message) => message.accountId === accountId && !message.deleted)
     .filter((message) =>
       params.input.conversationId !== undefined
         ? message.conversation.id === params.input.conversationId
@@ -176,12 +176,15 @@ export function pollQaBusEvents(params: {
     requestedCursor: params.input?.cursor,
   });
   const limit = Math.max(1, Math.min(params.input?.limit ?? 100, 500));
-  const matches = params.events
-    .filter((event) => event.accountId === accountId && event.cursor > effectiveStartCursor)
-    .slice(0, limit)
-    .map((event) => cloneEvent(event));
+  const matchingEvents = params.events.filter(
+    (event) => event.accountId === accountId && event.cursor > effectiveStartCursor,
+  );
+  const page = matchingEvents.slice(0, limit);
+  // A limited page may advance only through events it returns. Jumping to the
+  // bus-wide cursor would make every remaining account event unreachable.
+  const nextCursor = matchingEvents.length > page.length ? page.at(-1)?.cursor : params.cursor;
   return {
-    cursor: params.cursor,
-    events: matches,
+    cursor: nextCursor ?? params.cursor,
+    events: page.map((event) => cloneEvent(event)),
   };
 }

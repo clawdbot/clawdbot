@@ -24,9 +24,9 @@ function compilePattern(pathPattern: string, refPathPattern?: string) {
 
 describe("target registry pattern helpers", () => {
   it("matches wildcard and array tokens with stable capture ordering", () => {
-    const tokens = compilePattern("agents.list[].memorySearch.providers.*.apiKey").pathTokens;
+    const tokens = compilePattern("agents.list[].memory.search.providers.*.apiKey").pathTokens;
     const match = matchPathTokens(
-      ["agents", "list", "2", "memorySearch", "providers", "openai", "apiKey"],
+      ["agents", "list", "2", "memory", "search", "providers", "openai", "apiKey"],
       tokens,
     );
 
@@ -35,25 +35,25 @@ describe("target registry pattern helpers", () => {
     });
     expect(
       matchPathTokens(
-        ["agents", "list", "x", "memorySearch", "providers", "openai", "apiKey"],
+        ["agents", "list", "x", "memory", "search", "providers", "openai", "apiKey"],
         tokens,
       ),
     ).toBeNull();
     expect(
       matchPathTokens(
-        ["agents", "list", "02", "memorySearch", "providers", "openai", "apiKey"],
+        ["agents", "list", "02", "memory", "search", "providers", "openai", "apiKey"],
         tokens,
       ),
     ).toBeNull();
     expect(
       matchPathTokens(
-        ["agents", "list", "+2", "memorySearch", "providers", "openai", "apiKey"],
+        ["agents", "list", "+2", "memory", "search", "providers", "openai", "apiKey"],
         tokens,
       ),
     ).toBeNull();
     expect(
       matchPathTokens(
-        ["agents", "list", "4294967294", "memorySearch", "providers", "openai", "apiKey"],
+        ["agents", "list", "4294967294", "memory", "search", "providers", "openai", "apiKey"],
         tokens,
       ),
     ).toBeNull();
@@ -61,15 +61,16 @@ describe("target registry pattern helpers", () => {
 
   it("materializes sibling ref paths from wildcard and array captures", () => {
     const refTokens = compilePattern(
-      "agents.list[].memorySearch.providers.*.apiKey",
-      "agents.list[].memorySearch.providers.*.apiKeyRef",
+      "agents.list[].memory.search.providers.*.apiKey",
+      "agents.list[].memory.search.providers.*.apiKeyRef",
     ).refPathTokens;
     expect(refTokens).toBeDefined();
     expect(materializePathTokens(refTokens ?? [], ["1", "anthropic"])).toEqual([
       "agents",
       "list",
       "1",
-      "memorySearch",
+      "memory",
+      "search",
       "providers",
       "anthropic",
       "apiKeyRef",
@@ -94,10 +95,10 @@ describe("target registry pattern helpers", () => {
   it("expands wildcard and array patterns over config objects", () => {
     const root = {
       agents: {
-        list: [
-          { memorySearch: { remote: { apiKey: "a" } } },
-          { memorySearch: { remote: { apiKey: "b" } } },
-        ],
+        entries: {
+          main: { memory: { search: { remote: { apiKey: "a" } } } },
+          ops: { memory: { search: { remote: { apiKey: "b" } } } },
+        },
       },
       talk: {
         providers: {
@@ -109,7 +110,7 @@ describe("target registry pattern helpers", () => {
 
     const arrayMatches = expandPathTokens(
       root,
-      compilePattern("agents.list[].memorySearch.remote.apiKey").pathTokens,
+      compilePattern("agents.entries.*.memory.search.remote.apiKey").pathTokens,
     );
     expect(
       arrayMatches.map((entry) => ({
@@ -119,13 +120,13 @@ describe("target registry pattern helpers", () => {
       })),
     ).toEqual([
       {
-        segments: "agents.list.0.memorySearch.remote.apiKey",
-        captures: ["0"],
+        segments: "agents.entries.main.memory.search.remote.apiKey",
+        captures: ["main"],
         value: "a",
       },
       {
-        segments: "agents.list.1.memorySearch.remote.apiKey",
-        captures: ["1"],
+        segments: "agents.entries.ops.memory.search.remote.apiKey",
+        captures: ["ops"],
         value: "b",
       },
     ]);

@@ -5,9 +5,9 @@ scenario:
   surface: config
   coverage:
     secondary:
-      - config.system-agent-setup
-      - channels.discord-config
-      - agents.create
+      - channels.setup-onboarding-flows-system-agent-setup
+      - discord.token-and-application-id-configuration
+      - channels.setup-onboarding-flows-create
   objective: Verify the package-installed OpenClaw inference gate and supporting one-shot setup operations, without claiming the interactive agent/tool/approval flow.
   successCriteria:
     - OpenClaw fails closed in an empty state dir and directs the user to inference onboarding.

@@ -6,9 +6,11 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/config.js";
 
 const getRuntimeConfig = vi.hoisted(() => vi.fn(() => ({}) as OpenClawConfig));
+const listAgentIds = vi.hoisted(() => vi.fn(() => ["main", "research-analyst", "alpha"]));
 const resolveDefaultAgentId = vi.hoisted(() => vi.fn(() => "main"));
 const resolveAgentWorkspaceDir = vi.hoisted(() =>
   vi.fn((_cfg: OpenClawConfig, _agentId: string) => "/tmp/openclaw"),
@@ -33,6 +35,17 @@ vi.mock("../../config/config.js", () => ({
 }));
 
 vi.mock("../../agents/agent-scope.js", () => ({
+  listAgentIds,
+  listAgentEntries: (cfg: OpenClawConfig) =>
+    cfg.agents?.entries
+      ? Object.entries(cfg.agents.entries).map(([id, entry]) => {
+          const copy = structuredClone(entry) as Record<string, unknown>;
+          copy.id = id;
+          return copy;
+        })
+      : cfg.agents?.list
+        ? cfg.agents.list
+        : [{ id: "main", default: true }],
   resolveDefaultAgentId,
   resolveAgentWorkspaceDir,
 }));
@@ -191,6 +204,37 @@ const invokeDoctorMemoryRemHarness = async (
   });
 };
 
+const DOCTOR_MEMORY_TARGET_METHODS = [
+  "doctor.memory.status",
+  "doctor.memory.dreamDiary",
+  "doctor.memory.backfillDreamDiary",
+  "doctor.memory.resetDreamDiary",
+  "doctor.memory.resetGroundedShortTerm",
+  "doctor.memory.repairDreamingArtifacts",
+  "doctor.memory.dedupeDreamDiary",
+] as const;
+
+const invokeDoctorMemoryTargetMethod = async (
+  method: (typeof DOCTOR_MEMORY_TARGET_METHODS)[number],
+  respond: ReturnType<typeof vi.fn>,
+  params: Record<string, unknown>,
+) => {
+  await expectDefined(
+    doctorHandlers[method],
+    `doctorHandlers[${method}] test invariant`,
+  )({
+    req: {} as never,
+    params: params as never,
+    respond: respond as never,
+    context: {
+      ...makeRuntimeContext(),
+      cron: { list: vi.fn(async () => []) },
+    } as never,
+    client: null,
+    isWebchatConnect: () => false,
+  });
+};
+
 function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
   if (!record || typeof record !== "object") {
     throw new Error("Expected record");
@@ -257,6 +301,61 @@ const expectEmbeddingErrorResponse = (respond: ReturnType<typeof vi.fn>, error: 
   });
 };
 
+describe("doctor.memory agent targeting", () => {
+  beforeEach(() => {
+    listAgentIds.mockClear();
+    resolveAgentWorkspaceDir.mockReset().mockReturnValue("/tmp/openclaw");
+    getMemorySearchManager.mockReset().mockResolvedValue({
+      manager: null,
+      error: "memory search unavailable",
+    });
+    removeBackfillDiaryEntries.mockReset().mockResolvedValue({ removed: 0 });
+    removeGroundedShortTermCandidates.mockReset().mockResolvedValue({ removed: 0 });
+    repairDreamingArtifacts.mockReset().mockResolvedValue({
+      changed: false,
+      archivedDreamsDiary: false,
+      archivedSessionCorpus: false,
+      archivedSessionIngestion: false,
+      warnings: [],
+    });
+    dedupeDreamDiaryEntries.mockReset().mockResolvedValue({ removed: 0, kept: 0 });
+  });
+
+  it.each(DOCTOR_MEMORY_TARGET_METHODS)(
+    "%s rejects an unknown agent before resolving agent state",
+    async (method) => {
+      const respond = vi.fn();
+
+      await invokeDoctorMemoryTargetMethod(method, respond, { agentId: "invented" });
+
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, 'unknown agent id "invented"'),
+      );
+      expect(getMemorySearchManager).not.toHaveBeenCalled();
+      expect(resolveAgentWorkspaceDir).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(DOCTOR_MEMORY_TARGET_METHODS)(
+    "%s rejects a non-string agentId before resolving the default agent",
+    async (method) => {
+      const respond = vi.fn();
+
+      await invokeDoctorMemoryTargetMethod(method, respond, { agentId: 42 });
+
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "agentId must be a string"),
+      );
+      expect(getMemorySearchManager).not.toHaveBeenCalled();
+      expect(resolveAgentWorkspaceDir).not.toHaveBeenCalled();
+    },
+  );
+});
+
 describe("doctor.memory.status", () => {
   beforeEach(() => {
     getRuntimeConfig.mockClear();
@@ -303,7 +402,7 @@ describe("doctor.memory.status", () => {
       embedding: { ok: true },
     });
     const dreaming = expectRecordFields(payload.dreaming, {
-      enabled: false,
+      enabled: true,
       shortTermCount: 0,
       totalSignalCount: 0,
       phaseSignalCount: 0,
@@ -624,12 +723,15 @@ describe("doctor.memory.status", () => {
     );
 
     getRuntimeConfig.mockReturnValue({
+      memory: {
+        search: {
+          enabled: true,
+        },
+      },
+
       agents: {
         defaults: {
           userTimezone: "America/Los_Angeles",
-          memorySearch: {
-            enabled: true,
-          },
         },
         list: [{ id: "alpha", workspace: alphaWorkspaceDir }],
       },
@@ -1113,12 +1215,14 @@ describe("doctor.memory.status", () => {
     await fs.mkdir(path.join(mainWorkspaceDir, "memory", ".dreams"), { recursive: true });
 
     getRuntimeConfig.mockReturnValue({
-      agents: {
-        defaults: {
-          memorySearch: {
-            enabled: true,
-          },
+      memory: {
+        search: {
+          enabled: true,
         },
+      },
+
+      agents: {
+        defaults: {},
         list: [
           { id: "main", workspace: mainWorkspaceDir },
           { id: "alpha", workspace: alphaWorkspaceDir },

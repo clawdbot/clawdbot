@@ -1,6 +1,7 @@
 // Cron service store tests cover persisted service state loading and writes.
 import fs from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { setupCronServiceSuite } from "../service.test-harness.js";
 import * as cronStoreModule from "../store.js";
 import { loadCronStore, saveCronStore } from "../store.js";
@@ -113,6 +114,33 @@ describe("cron service store seam coverage", () => {
     await expectPathMissing(storePath);
 
     await persist(state);
+  });
+
+  it("quarantines malformed SQLite rows atomically without creating JSON state", async () => {
+    const { storePath } = await makeStorePath();
+    const malformed = createReloadCronJob({ id: "malformed-sqlite-row" });
+    const surviving = createReloadCronJob({
+      id: "surviving-sqlite-row",
+      state: { nextRunAtMs: STORE_TEST_NOW + 60_000 },
+    });
+    await saveCronStore(storePath, { version: 1, jobs: [malformed, surviving] });
+    openOpenClawStateDatabase()
+      .db.prepare("UPDATE cron_jobs SET schedule_kind = ? WHERE job_id = ?")
+      .run("unsupported", malformed.id);
+    const state = createStoreTestState(storePath);
+
+    await ensureLoaded(state, { skipRecompute: true });
+
+    expect(state.store?.jobs.map((job) => job.id)).toEqual([surviving.id]);
+    expect((await loadCronStore(storePath)).jobs.map((job) => job.id)).toEqual([surviving.id]);
+    expect(cronStoreModule.loadCronQuarantinedJobs(storePath)).toEqual([
+      expect.objectContaining({
+        sourceIndex: 0,
+        reason: "invalid-schedule",
+        job: expect.objectContaining({ id: malformed.id }),
+      }),
+    ]);
+    await expectPathMissing(storePath.replace(/\.json$/, "-quarantine.json"));
   });
 
   it("publishes durable wake changes only after save and exactly once after retry", async () => {
@@ -324,21 +352,33 @@ describe("cron service store seam coverage", () => {
     state.pendingQuarantineConfigJobs = [
       { sourceIndex: 0, reason: "invalid-schedule", job: { id: "quarantined-job" } },
     ];
-    vi.spyOn(cronStoreModule, "saveCronQuarantineFile").mockRejectedValueOnce(
-      new Error("quarantine unavailable"),
-    );
-    const saveStore = vi.spyOn(cronStoreModule, "saveCronJobsStore");
+    const saveStore = vi
+      .spyOn(cronStoreModule, "saveCronJobsStore")
+      .mockRejectedValueOnce(new Error("quarantine unavailable"));
 
     await persist(state, { stateOnly: true });
 
-    expect(saveStore).not.toHaveBeenCalled();
+    expect(saveStore).toHaveBeenCalledTimes(1);
     expect(onEvent).not.toHaveBeenCalled();
+    expect(state.pendingQuarantineConfigJobs).toHaveLength(1);
     expect(state.durableNextRunAtMsByJobId.get(job.id)).toBe(initialNextRunAtMs);
     expect((await loadCronStore(storePath)).jobs[0]?.state.nextRunAtMs).toBe(initialNextRunAtMs);
 
     await persist(state, { stateOnly: true });
 
-    expect(saveStore).toHaveBeenCalledWith(storePath, state.store, undefined);
+    expect(saveStore).toHaveBeenLastCalledWith(
+      storePath,
+      state.store,
+      expect.objectContaining({
+        quarantine: expect.objectContaining({
+          entries: [expect.objectContaining({ reason: "invalid-schedule" })],
+        }),
+      }),
+    );
+    expect(state.pendingQuarantineConfigJobs).toEqual([]);
+    expect(cronStoreModule.loadCronQuarantinedJobs(storePath)).toEqual([
+      expect.objectContaining({ reason: "invalid-schedule" }),
+    ]);
     expect(onEvent).toHaveBeenCalledTimes(1);
     expect(onEvent).toHaveBeenLastCalledWith(
       expect.objectContaining({
@@ -482,6 +522,46 @@ describe("cron service store seam coverage", () => {
         nextRunAtMs: undefined,
       }),
     );
+  });
+
+  it("clears a paced slot and its provenance after force reload changes pacing", async () => {
+    const { storePath } = await makeStorePath();
+    const staleNextRunAtMs = STORE_TEST_NOW + 3_600_000;
+
+    await saveCronStore(storePath, {
+      version: 1,
+      jobs: [
+        createReloadCronJob({
+          pacing: { max: "4h" },
+          state: {
+            nextRunAtMs: staleNextRunAtMs,
+            pacedNextRunAtMs: staleNextRunAtMs,
+          },
+        }),
+      ],
+    });
+
+    const state = createStoreTestState(storePath);
+    await ensureLoaded(state, { skipRecompute: true });
+    await saveCronStore(storePath, {
+      version: 1,
+      jobs: [
+        createReloadCronJob({
+          pacing: { max: "2h" },
+          updatedAtMs: STORE_TEST_NOW,
+          state: {
+            nextRunAtMs: staleNextRunAtMs,
+            pacedNextRunAtMs: staleNextRunAtMs,
+          },
+        }),
+      ],
+    });
+
+    await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+
+    const reloadedJob = findJobOrThrow(state, "reload-cron-expr-job");
+    expect(reloadedJob.state.nextRunAtMs).toBeUndefined();
+    expect(reloadedJob.state.pacedNextRunAtMs).toBeUndefined();
   });
 
   it("preserves nextRunAtMs after force reload when cron schedule key order changes only", async () => {

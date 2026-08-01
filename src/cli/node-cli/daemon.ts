@@ -1,5 +1,4 @@
 // Node-host daemon lifecycle commands for install, status, start, stop, and restart.
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { colorize } from "../../../packages/terminal-core/src/theme.js";
 import {
   DEFAULT_GATEWAY_DAEMON_RUNTIME,
@@ -33,10 +32,10 @@ import {
   failIfNixDaemonInstallMode,
   filterDaemonEnv,
   formatRuntimeStatus,
-  parsePort,
   resolveRuntimeStatusColor,
 } from "../daemon-cli/shared.js";
 import { formatInvalidConfigPort, formatInvalidPortOption } from "../error-format.js";
+import { resolveNodeGatewayOptions } from "./gateway-options.js";
 
 type NodeDaemonInstallOptions = {
   host?: string;
@@ -78,30 +77,6 @@ function buildNodeRuntimeHints(env: NodeJS.ProcessEnv = process.env): string[] {
   });
 }
 
-function resolveNodeDefaults(
-  opts: NodeDaemonInstallOptions,
-  config: Awaited<ReturnType<typeof loadNodeHostConfig>>,
-) {
-  // CLI flags override node-host config; missing values fall back to loopback Gateway defaults.
-  const savedHost = config?.gateway?.host || "127.0.0.1";
-  const host = normalizeOptionalString(opts.host) || savedHost;
-  const retargeted = opts.host !== undefined || opts.port !== undefined;
-  const portOverride = parsePort(opts.port);
-  if (opts.port !== undefined && portOverride === null) {
-    return { host, port: null, retargeted, endpointChanged: false };
-  }
-  const savedPort = config?.gateway?.port ?? 18789;
-  const port = portOverride ?? savedPort;
-  const endpointChanged =
-    (opts.host !== undefined && host !== savedHost) ||
-    (opts.port !== undefined && port !== savedPort);
-  const explicitContextPath = opts.contextPath !== undefined;
-  const contextPath =
-    normalizeOptionalString(opts.contextPath) ||
-    (explicitContextPath || retargeted ? undefined : config?.gateway?.contextPath);
-  return { host, port, contextPath, retargeted, endpointChanged };
-}
-
 export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
   const { json, stdout, warnings, emit, fail } = createDaemonInstallActionContext(opts.json);
   if (failIfNixDaemonInstallMode(fail)) {
@@ -109,13 +84,17 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
   }
 
   const config = await loadNodeHostConfig();
-  const { host, port, contextPath, endpointChanged } = resolveNodeDefaults(opts, config);
+  const { host, port, contextPath, tls, tlsFingerprint } = resolveNodeGatewayOptions(opts, config);
   if (!Number.isFinite(port ?? Number.NaN) || (port ?? 0) <= 0 || (port ?? 0) > 65_535) {
     fail(
       opts.port !== undefined
         ? formatInvalidPortOption("--port")
         : formatInvalidConfigPort("node.gateway.port"),
     );
+    return;
+  }
+  if (opts.tls === false && opts.tlsFingerprint !== undefined) {
+    fail("--no-tls cannot be combined with --tls-fingerprint");
     return;
   }
 
@@ -148,19 +127,14 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
     return;
   }
 
-  const tlsFingerprint =
-    normalizeOptionalString(opts.tlsFingerprint) ||
-    (endpointChanged ? undefined : config?.gateway?.tlsFingerprint);
-  const inheritedTls = endpointChanged ? undefined : config?.gateway?.tls;
-  const tls = Boolean(opts.tls) || Boolean(tlsFingerprint) || Boolean(inheritedTls);
   const { programArguments, workingDirectory, environment, environmentValueSources, description } =
     await buildNodeInstallPlan({
       env: process.env,
       host,
       port: port ?? 18789,
       contextPath,
-      tls,
-      tlsFingerprint: tlsFingerprint || undefined,
+      tls: Boolean(tls),
+      tlsFingerprint,
       nodeId: opts.nodeId,
       displayName: opts.displayName,
       installedAppsSharing: opts.shareInstalledApps,
@@ -241,8 +215,20 @@ export async function runNodeDaemonStop(opts: NodeDaemonLifecycleOptions = {}) {
 export async function runNodeDaemonStatus(opts: NodeDaemonStatusOptions = {}) {
   const json = Boolean(opts.json);
   const service = resolveNodeService();
-  const [loaded, command, runtime] = await Promise.all([
-    service.isLoaded({ env: process.env }).catch(() => false),
+  let loaded: boolean;
+  try {
+    loaded = await service.isLoaded({ env: process.env });
+  } catch (error) {
+    const message = `Node service check failed: ${String(error)}`;
+    if (json) {
+      defaultRuntime.writeJson({ error: message });
+    } else {
+      defaultRuntime.error(message);
+    }
+    defaultRuntime.exit(1);
+    return;
+  }
+  const [command, runtime] = await Promise.all([
     service.readCommand(process.env).catch(() => null),
     service
       .readRuntime(process.env)

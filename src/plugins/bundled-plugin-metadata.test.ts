@@ -38,6 +38,7 @@ const EXPECTED_BUNDLED_STARTUP_PLUGIN_IDS = [
   "bonjour",
   "browser",
   "canvas",
+  "cua-computer",
   "device-pair",
   "diagnostics-otel",
   "diagnostics-prometheus",
@@ -54,7 +55,6 @@ const EXPECTED_BUNDLED_STARTUP_PLUGIN_IDS = [
   "ollama",
   "opencode",
   "openshell",
-  "phone-control",
   "policy",
   "reef",
   "talk-voice",
@@ -63,6 +63,7 @@ const EXPECTED_BUNDLED_STARTUP_PLUGIN_IDS = [
   "voice-call",
   "webhooks",
   "workboard",
+  "zoom-meetings",
 ] as const;
 const EXPECTED_EMPTY_CONFIG_GATEWAY_STARTUP_PLUGIN_IDS = [
   "acpx",
@@ -71,13 +72,15 @@ const EXPECTED_EMPTY_CONFIG_GATEWAY_STARTUP_PLUGIN_IDS = [
   "canvas",
   "device-pair",
   "file-transfer",
+  "google-meet",
   "linux-canvas",
   "linux-node",
   "memory-core",
   "ollama",
   "opencode",
-  "phone-control",
   "talk-voice",
+  "teams-meetings",
+  "zoom-meetings",
 ] as const;
 
 installGeneratedPluginTempRootCleanup();
@@ -468,6 +471,22 @@ describe("bundled plugin metadata", () => {
     });
   });
 
+  it("keeps QA runner discovery on narrow bundled runtime sidecars", () => {
+    const runnerPlugins = listRepoBundledPluginMetadata().filter(
+      (entry) => (entry.manifest.qaRunners?.length ?? 0) > 0,
+    );
+    expect(runnerPlugins.length).toBeGreaterThan(0);
+
+    for (const plugin of runnerPlugins) {
+      expectArtifactPresence(plugin?.publicSurfaceArtifacts, {
+        contains: ["qa-runner-api.js"],
+      });
+      expectArtifactPresence(plugin?.runtimeSidecarArtifacts, {
+        contains: ["qa-runner-api.js"],
+      });
+    }
+  });
+
   it("loads tlon channel config metadata from the lightweight schema surface", () => {
     const tlonChannelConfig = collectRepoBundledChannelConfigsForTest("tlon")?.tlon as
       | { schema?: { type?: unknown } }
@@ -508,7 +527,7 @@ describe("bundled plugin metadata", () => {
         dir: "discord",
         configuredState: {
           env: {
-            allOf: ["DISCORD_BOT_TOKEN"],
+            anyOf: ["DISCORD_BOT_TOKEN"],
           },
         },
       },
@@ -524,7 +543,7 @@ describe("bundled plugin metadata", () => {
         dir: "slack",
         configuredState: {
           env: {
-            anyOf: ["SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "SLACK_USER_TOKEN"],
+            anyOf: ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "SLACK_USER_TOKEN"],
           },
         },
       },
@@ -532,7 +551,7 @@ describe("bundled plugin metadata", () => {
         dir: "telegram",
         configuredState: {
           env: {
-            allOf: ["TELEGRAM_BOT_TOKEN"],
+            anyOf: ["TELEGRAM_BOT_TOKEN"],
           },
         },
       },
@@ -578,6 +597,15 @@ describe("bundled plugin metadata", () => {
 
     expect(entry?.manifest.commandAliases).toStrictEqual([{ name: "voicecall" }]);
     expect(entry?.manifest.activation?.onCommands).toStrictEqual(["voicecall"]);
+  });
+
+  it("keeps Workboard CLI ownership separate from its slash command", () => {
+    const entry = listRepoBundledPluginManifests().find(
+      ({ manifest }) => manifest.id === "workboard",
+    );
+
+    expect(entry?.manifest.commandAliases).toStrictEqual([{ name: "workboard" }]);
+    expect(entry?.manifest.activation?.onCommands).toStrictEqual(["workboard"]);
   });
 
   it("scopes Codex CLI activation to the codex command", () => {

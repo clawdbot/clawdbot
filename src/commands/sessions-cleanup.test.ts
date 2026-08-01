@@ -227,7 +227,7 @@ describe("sessionsCleanupCommand", () => {
     expect(logs).toHaveLength(1);
     expect(JSON.parse(logs[0] ?? "{}")).toEqual({
       agentId: "main",
-      storePath: "/resolved/sessions.json",
+      storePath: "/resolved/openclaw-agent.sqlite",
       mode: "enforce",
       dryRun: false,
       beforeCount: 3,
@@ -262,9 +262,10 @@ describe("sessionsCleanupCommand", () => {
   });
 
   it("delegates non-store enforcing cleanup through the Gateway writer when reachable", async () => {
+    const remoteStorePath = "C:\\Users\\gateway\\.openclaw\\agents\\main\\sessions\\sessions.json";
     mocks.callGateway.mockResolvedValue({
       agentId: "main",
-      storePath: "/resolved/sessions.json",
+      storePath: remoteStorePath,
       mode: "enforce",
       dryRun: false,
       beforeCount: 3,
@@ -298,7 +299,7 @@ describe("sessionsCleanupCommand", () => {
     expect(logs).toHaveLength(1);
     expect(JSON.parse(logs[0] ?? "{}")).toEqual({
       agentId: "main",
-      storePath: "/resolved/sessions.json",
+      storePath: remoteStorePath,
       mode: "enforce",
       dryRun: false,
       beforeCount: 3,
@@ -313,6 +314,32 @@ describe("sessionsCleanupCommand", () => {
       applied: true,
       appliedCount: 1,
     });
+  });
+
+  it("preserves a Gateway-owned store path in human output", async () => {
+    const remoteStorePath = "C:\\Users\\gateway\\.openclaw\\openclaw-agent.sqlite";
+    mocks.callGateway.mockResolvedValue({
+      agentId: "main",
+      storePath: remoteStorePath,
+      mode: "enforce",
+      dryRun: false,
+      beforeCount: 3,
+      afterCount: 1,
+      missing: 0,
+      dmScopeRetired: 0,
+      modelRunPruned: 0,
+      pruned: 2,
+      capped: 0,
+      diskBudget: null,
+      wouldMutate: true,
+      applied: true,
+      appliedCount: 1,
+    });
+
+    const { runtime, logs } = makeRuntime();
+    await sessionsCleanupCommand({ enforce: true }, runtime);
+
+    expectLogsToInclude(logs, `Session store: ${remoteStorePath}`);
   });
 
   it("returns dry-run JSON without mutating the store", async () => {
@@ -368,7 +395,7 @@ describe("sessionsCleanupCommand", () => {
     expect(logs).toHaveLength(1);
     expect(JSON.parse(logs[0] ?? "{}")).toEqual({
       agentId: "main",
-      storePath: "/resolved/sessions.json",
+      storePath: "/resolved/openclaw-agent.sqlite",
       mode: "warn",
       dryRun: true,
       beforeCount: 2,
@@ -440,7 +467,7 @@ describe("sessionsCleanupCommand", () => {
     expect(logs).toHaveLength(1);
     expect(JSON.parse(logs[0] ?? "{}")).toEqual({
       agentId: "main",
-      storePath: "/resolved/sessions.json",
+      storePath: "/resolved/openclaw-agent.sqlite",
       mode: "warn",
       dryRun: true,
       beforeCount: 1,
@@ -505,6 +532,7 @@ describe("sessionsCleanupCommand", () => {
       runtime,
     );
 
+    expectLogsToInclude(logs, "Session store: /resolved/openclaw-agent.sqlite");
     expectLogsToInclude(logs, "Planned session actions:");
     expectLogsToInclude(logs, "Would prune unreferenced artifacts: 2");
     const tableHeaderLines = logs.filter((line) => line.includes("Action") && line.includes("Key"));
@@ -694,7 +722,7 @@ describe("sessionsCleanupCommand", () => {
       stores: [
         {
           agentId: "main",
-          storePath: "/resolved/main-sessions.json",
+          storePath: "/resolved/main-sessions.sqlite",
           mode: "warn",
           dryRun: true,
           beforeCount: 1,
@@ -709,7 +737,7 @@ describe("sessionsCleanupCommand", () => {
         },
         {
           agentId: "work",
-          storePath: "/resolved/work-sessions.json",
+          storePath: "/resolved/work-sessions.work.sqlite",
           mode: "warn",
           dryRun: true,
           beforeCount: 1,

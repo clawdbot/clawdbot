@@ -13,8 +13,8 @@ import {
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { resolveWebhookPath } from "openclaw/plugin-sdk/webhook-ingress";
 import { getZaloRuntime } from "./runtime.js";
+import { ZALO_OUTBOUND_MEDIA_TTL_MS } from "./timeouts.js";
 
-const ZALO_OUTBOUND_MEDIA_TTL_MS = 2 * 60_000;
 const ZALO_OUTBOUND_MEDIA_SEGMENT = "media";
 const ZALO_OUTBOUND_MEDIA_PREFIX = `/${ZALO_OUTBOUND_MEDIA_SEGMENT}/`;
 const ZALO_OUTBOUND_MEDIA_ID_RE = /^[a-f0-9]{24}$/;

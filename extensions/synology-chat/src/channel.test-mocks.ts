@@ -78,6 +78,33 @@ export function setSynologyRuntimeConfigForTest(cfg: unknown): void {
   mockRuntimeConfig = cfg;
 }
 
+export const channelInboundRunMock = vi.fn(async (params) => {
+  const input = await params.adapter.ingest(params.raw);
+  if (!input) {
+    return { admission: { kind: "drop", reason: "ingest-null" }, dispatched: false };
+  }
+  const resolved = await params.adapter.resolveTurn(input, {
+    kind: "message",
+    canStartAgentTurn: true,
+  });
+  const dispatchResult = await dispatchReplyWithBufferedBlockDispatcher({
+    ctx: resolved.ctxPayload,
+    cfg: mockRuntimeConfig,
+    dispatcherOptions: {
+      ...resolved.dispatcherOptions,
+      deliver: resolved.delivery.deliver,
+      onError: resolved.delivery.onError,
+    },
+  });
+  return {
+    admission: { kind: "dispatch" },
+    dispatched: true,
+    dispatchResult,
+    ctxPayload: resolved.ctxPayload,
+    routeSessionKey: resolved.route.sessionKey,
+  };
+});
+
 async function readRequestBodyWithLimitForTest(req: IncomingMessage): Promise<string> {
   return await new Promise<string>((resolve, reject) => {
     const chunks: Buffer[] = [];
@@ -122,10 +149,37 @@ vi.mock("openclaw/plugin-sdk/webhook-ingress", async () => {
 });
 
 vi.mock("./client.js", () => ({
+  SYNOLOGY_CHAT_TEXT_CHUNK_LIMIT: 2_000,
   sendMessage: vi.fn().mockResolvedValue(true),
   sendFileUrl: vi.fn().mockResolvedValue(true),
   resolveLegacyWebhookNameToChatUserId: vi.fn().mockResolvedValue(undefined),
 }));
+
+vi.mock("./webhook-ingress.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("./webhook-ingress.js")>("./webhook-ingress.js");
+  return {
+    ...actual,
+    createSynologyIngressMonitor: vi.fn(
+      (options: Parameters<typeof actual.createSynologyIngressMonitor>[0]) => ({
+        start: vi.fn(),
+        stop: vi.fn(async () => undefined),
+        waitForIdle: vi.fn(async () => undefined),
+        receive: vi.fn(async (rawEvent: import("./webhook-ingress.js").SynologyWebhookRawEvent) => {
+          const lifecycle: import("./webhook-ingress.js").SynologyIngressLifecycle = {
+            admission: "exclusive",
+            abortSignal: options.abortSignal ?? new AbortController().signal,
+            onAdopted: vi.fn(async () => undefined),
+            onDeferred: vi.fn(),
+            onAbandoned: vi.fn(async () => undefined),
+          };
+          await options.dispatch(rawEvent, lifecycle);
+          return { kind: "durable" as const };
+        }),
+      }),
+    ),
+  };
+});
 
 vi.mock("./runtime.js", () => ({
   getSynologyRuntime: vi.fn(() => ({
@@ -143,32 +197,7 @@ vi.mock("./runtime.js", () => ({
         recordInboundSession: vi.fn(async () => undefined),
       },
       inbound: {
-        run: vi.fn(async (params) => {
-          const input = await params.adapter.ingest(params.raw);
-          if (!input) {
-            return { admission: { kind: "drop", reason: "ingest-null" }, dispatched: false };
-          }
-          const resolved = await params.adapter.resolveTurn(input, {
-            kind: "message",
-            canStartAgentTurn: true,
-          });
-          const dispatchResult = await dispatchReplyWithBufferedBlockDispatcher({
-            ctx: resolved.ctxPayload,
-            cfg: mockRuntimeConfig,
-            dispatcherOptions: {
-              ...resolved.dispatcherOptions,
-              deliver: resolved.delivery.deliver,
-              onError: resolved.delivery.onError,
-            },
-          });
-          return {
-            admission: { kind: "dispatch" },
-            dispatched: true,
-            dispatchResult,
-            ctxPayload: resolved.ctxPayload,
-            routeSessionKey: resolved.route.sessionKey,
-          };
-        }),
+        run: channelInboundRunMock,
         buildContext: buildChannelInboundEventContextMock,
       },
     },

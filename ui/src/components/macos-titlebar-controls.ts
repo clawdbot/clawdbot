@@ -51,15 +51,16 @@ class MacosTitlebarControls extends OpenClawLightDomContentsElement {
                 onClick: this.onOpenPalette,
                 className: "macos-titlebar-controls__search",
               })}
-              ${this.renderButton({
-                // Deliberately not connection-gated: it mirrors the native
-                // ⌘N menu item (handleNativeNewSession), and the new-session
-                // route is offline-tolerant. Window chrome stays state-free.
-                label: t("chat.runControls.newSession"),
-                icon: icons.plus,
-                onClick: this.onOpenNewSession,
-                className: "macos-titlebar-controls__new-session",
-              })}
+              ${this.navCollapsed
+                ? this.renderButton({
+                    // While the sidebar rail is collapsed, this mirrors the native
+                    // ⌘N item and stays deliberately free of connection state.
+                    label: t("chat.runControls.newSession"),
+                    icon: icons.plus,
+                    onClick: this.onOpenNewSession,
+                    className: "macos-titlebar-controls__new-session",
+                  })
+                : nothing}
             `
           : nothing}
       </nav>

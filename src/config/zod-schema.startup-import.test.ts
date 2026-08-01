@@ -3,16 +3,10 @@ import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const providersWhatsappImportMock = vi.hoisted(() => vi.fn());
-const providersCoreImportMock = vi.hoisted(() => vi.fn());
 
 describe("OpenClawSchema startup imports", () => {
   beforeEach(() => {
     providersWhatsappImportMock.mockClear();
-    providersCoreImportMock.mockClear();
-    vi.doMock("./zod-schema.providers-core.js", () => {
-      providersCoreImportMock();
-      return {};
-    });
     vi.doMock("./zod-schema.providers-whatsapp.js", () => {
       providersWhatsappImportMock();
       return {};
@@ -40,7 +34,6 @@ describe("OpenClawSchema startup imports", () => {
     });
 
     expect(parsed.success).toBe(true);
-    expect(providersCoreImportMock).not.toHaveBeenCalled();
     expect(providersWhatsappImportMock).not.toHaveBeenCalled();
   });
 });

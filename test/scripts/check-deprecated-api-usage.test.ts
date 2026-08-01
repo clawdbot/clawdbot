@@ -44,14 +44,15 @@ describe("scripts/check-deprecated-api-usage", () => {
     }
   });
 
-  it("keeps root and private compatibility aliases explicit", () => {
-    expect(buildDeprecatedPluginSdkModuleSpecifiers()).toEqual(
-      expect.arrayContaining([
-        "openclaw/plugin-sdk",
-        "openclaw/plugin-sdk/agent-dir-compat",
-        "openclaw/plugin-sdk/test-utils",
-      ]),
-    );
+  it("keeps removed root and private compatibility aliases out of the inventory", () => {
+    const specifiers = buildDeprecatedPluginSdkModuleSpecifiers();
+    for (const removedSpecifier of [
+      "openclaw/plugin-sdk",
+      "openclaw/plugin-sdk/agent-dir-compat",
+      "openclaw/plugin-sdk/test-utils",
+    ]) {
+      expect(specifiers).not.toContain(removedSpecifier);
+    }
   });
 
   it("bans the scoped @openclaw/plugin-sdk spelling of every deprecated specifier", () => {
@@ -70,9 +71,7 @@ describe("scripts/check-deprecated-api-usage", () => {
     );
 
     for (const facade of [
-      "src/plugin-sdk/channel-envelope",
       "src/plugin-sdk/channel-message",
-      "src/plugin-sdk/channel-message-runtime",
       "src/plugin-sdk/channel-reply-pipeline",
       "src/plugin-sdk/inbound-reply-dispatch",
       "src/channels/message/inbound-reply-dispatch",
@@ -95,11 +94,9 @@ describe("scripts/check-deprecated-api-usage", () => {
     const result = runFacadeImportRule({
       "src/channels/probe.ts": [
         'import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";',
-        'export { runInboundReplyTurn } from "./message/inbound-reply-dispatch.js";',
+        'export { runChannelInboundEvent } from "./message/inbound-reply-dispatch.js";',
         'const facade = await import ("../plugin-sdk/channel-message.js", { with: {} });',
-        'import { formatInboundEnvelope } from "@openclaw/plugin-sdk/channel-envelope";',
       ].join("\n"),
-      "src/plugin-sdk/channel-message-runtime.ts": 'export * from "./channel-message.js";',
     });
 
     expect(result.status).toBe(1);
@@ -108,17 +105,10 @@ describe("scripts/check-deprecated-api-usage", () => {
     );
     expect(result.stderr).toContain("src/channels/probe.ts:2: ./message/inbound-reply-dispatch.js");
     expect(result.stderr).toContain("src/channels/probe.ts:3: ../plugin-sdk/channel-message.js");
-    expect(result.stderr).toContain(
-      "src/channels/probe.ts:4: @openclaw/plugin-sdk/channel-envelope",
-    );
-    expect(result.stderr).toContain(
-      "src/plugin-sdk/channel-message-runtime.ts:1: ./channel-message.js",
-    );
   });
 
   it("allows canonical compat re-exports and test files", () => {
     const result = runFacadeImportRule({
-      "src/plugin-sdk/channel-message-runtime.ts": 'export * from "./channel-outbound.js";',
       "src/plugin-sdk/channel-inbound.ts":
         'export { runChannelInboundEvent } from "../channels/message/inbound-reply-dispatch.js";',
       "src/plugin-sdk/channel-message.test.ts":

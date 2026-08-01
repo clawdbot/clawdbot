@@ -67,13 +67,13 @@ function createTarget(): WebhookTarget {
       enabled: true,
       credentialSource: "inline",
       config: {
-        dm: { allowFrom: ["users/123"] },
+        allowFrom: ["users/123"],
       },
     },
     config: {
       channels: {
         googlechat: {
-          dm: { allowFrom: ["users/123"] },
+          allowFrom: ["users/123"],
         },
       },
     },

@@ -1,4 +1,6 @@
 // Deepinfra provider module implements model/runtime integration.
+
+import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import {
   getCachedLiveProviderModelRows,
@@ -8,6 +10,7 @@ import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-c
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { asPositiveSafeInteger } from "openclaw/plugin-sdk/string-coerce-runtime";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
@@ -331,12 +334,26 @@ export function getDeepInfraSurfaceFallbackCatalog(): DeepInfraDiscoveredCatalog
   return manifestFallbackCatalog();
 }
 
+// DeepInfra serves every model family over one OpenAI-compatible endpoint, so
+// core's endpoint-based attribution resolves all of them to thinkingFormat
+// "openai". DeepSeek models emit DSML tool-call markup (`<|DSML|tool_calls>`)
+// and reasoning_content that core only strips/recovers when thinkingFormat is
+// "deepseek"; without this tag the markup leaks into user channels and the tool
+// calls are lost. Declare the dialect per family like opencode-go does for Qwen
+// (extensions/opencode-go/provider-catalog.ts).
+function resolveDeepInfraThinkingFormat(modelId: string | undefined): "deepseek" | undefined {
+  const vendor = (modelId ?? "").toLowerCase().split("/")[0];
+  return vendor === "deepseek-ai" ? "deepseek" : undefined;
+}
+
 export function buildDeepInfraModelDefinition(model: ModelDefinitionConfig): ModelDefinitionConfig {
+  const thinkingFormat = model.compat?.thinkingFormat ?? resolveDeepInfraThinkingFormat(model.id);
   return {
     ...model,
     compat: {
       ...model.compat,
       supportsUsageInStreaming: model.compat?.supportsUsageInStreaming ?? true,
+      ...(thinkingFormat ? { thinkingFormat } : {}),
     },
   };
 }
@@ -394,11 +411,11 @@ export async function discoverDeepInfraSurfaces(options?: {
   env?: NodeJS.ProcessEnv;
   agentDir?: string;
 }): Promise<DeepInfraDiscoveredCatalog> {
-  if (process.env.NODE_ENV === "test" || process.env.VITEST) {
+  const env = options?.env ?? process.env;
+  if (env.NODE_ENV === "test" || env.VITEST) {
     return manifestFallbackCatalog();
   }
 
-  const env = options?.env ?? process.env;
   const hasKey = options?.hasApiKey ?? hasDeepInfraApiKey({ env, agentDir: options?.agentDir });
   if (!hasKey) {
     return manifestFallbackCatalog();
@@ -413,6 +430,7 @@ export async function discoverDeepInfraSurfaces(options?: {
       buildRequestHeaders: () => ({ Accept: "application/json" }),
       auditContext: "deepinfra-model-discovery",
       shouldCacheRows: hasDeepInfraSurfaceModelRows,
+      fetchGuard: (params) => fetchWithSsrFGuard(withTrustedEnvProxyGuardedFetchMode(params)),
     });
     if (data.length === 0) {
       log.warn("No models found from DeepInfra agent-projection endpoint, using static catalog");
@@ -450,6 +468,11 @@ export async function discoverDeepInfraModels(options?: {
   agentDir?: string;
 }): Promise<ModelDefinitionConfig[]> {
   const catalog = await discoverDeepInfraSurfaces(options);
+  if (!catalog.live) {
+    // Keep manifest-owned chat compatibility metadata intact. The generic
+    // surface projection intentionally carries only cross-surface fields.
+    return DEEPINFRA_MODEL_CATALOG.map(buildDeepInfraModelDefinition);
+  }
   const chatModels = catalog.chat.length > 0 ? catalog.chat : [...catalog.chat, ...catalog.vlm];
   if (chatModels.length === 0) {
     // True empty (no manifest entries either) — keep behavior stable.

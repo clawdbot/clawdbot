@@ -281,6 +281,28 @@ describe("xai tts", () => {
       await result.release();
     });
 
+    it("errors and releases the stream for malformed audio base64", async () => {
+      const resultPromise = xaiTTSStream({
+        text: "hello",
+        apiKey: "dummy",
+        baseUrl: XAI_BASE_URL,
+        voiceId: "eve",
+        timeoutMs: 5_000,
+      });
+      const ws = FakeWebSocket.instances.at(0);
+      ws?.emit("open");
+      const result = await resultPromise;
+      const reader = result.audioStream.getReader();
+
+      ws?.emit("message", JSON.stringify({ type: "audio.delta", delta: "not-base64!" }));
+
+      await expect(reader.read()).rejects.toThrow(
+        "xAI TTS stream returned malformed base64 audio data",
+      );
+      expect(ws?.readyState).toBe(FakeWebSocket.CLOSED);
+      await result.release();
+    });
+
     it("splits text above xAI's 15,000-character limit into ordered delta frames", async () => {
       const text = `${"a".repeat(15_000)}${"b".repeat(15_000)}c`;
       const resultPromise = xaiTTSStream({

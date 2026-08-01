@@ -5,8 +5,10 @@ import {
   resolveTargetPrefixedChannel,
   validateTargetProviderPrefix,
 } from "../infra/outbound/channel-target-prefix.js";
+import { normalizeAccountId } from "../routing/account-id.js";
+import { resolveNormalizedAccountEntry } from "../routing/account-lookup.js";
 import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
-import type { CronDelivery, CronJobCreate } from "./types.js";
+import type { CronDelivery, CronFailureAlert, CronJobCreate } from "./types.js";
 
 function hasExplicitChannelConfigEntry(cfg: OpenClawConfig): boolean {
   const channels = cfg.channels;
@@ -26,7 +28,7 @@ function hasExplicitChannelConfigEntry(cfg: OpenClawConfig): boolean {
 async function assertConfiguredAnnounceChannel(params: {
   cfg: OpenClawConfig;
   channel?: string;
-  field: "delivery.channel" | "delivery.failureDestination.channel";
+  field: "delivery.channel" | "delivery.failureDestination.channel" | "failureAlert.channel";
 }) {
   if (params.channel === "last") {
     return;
@@ -55,6 +57,48 @@ async function assertConfiguredAnnounceChannel(params: {
   }
 }
 
+/**
+ * Rejects an announce account the operator has turned off in config, so a job is
+ * not scheduled against a route its owner already disabled - the same late failure
+ * this file prevents for `channel` (see `assertValidCronFailureAlert`).
+ *
+ * Scoped to a matching `accounts.<id>.enabled: false` entry, and nothing else.
+ * Cron delivery ids are not always operator-typed (`delivery-context.ts` copies
+ * the current context account into inferred jobs); channel `isEnabled` adapters
+ * report unlisted or credential-suppressed accounts as not enabled; and a
+ * top-level `channels.<id>.enabled: false` is not uniformly channel-wide - twitch
+ * resolves named accounts from `accounts` alone. Only the account entry itself is
+ * an unambiguous statement about this route.
+ */
+function assertEnabledAnnounceAccount(params: {
+  cfg: OpenClawConfig;
+  channel?: string;
+  accountId?: string;
+  field: "delivery.accountId";
+}) {
+  if (!params.accountId || !params.channel || params.channel === "last") {
+    return;
+  }
+  // Aliases are valid delivery channels (`urbit` -> `tlon`) but config lives under
+  // the canonical id, so normalize before reading it.
+  const channel = normalizeMessageChannel(params.channel) ?? params.channel;
+  const channelConfig = (params.cfg.channels as Record<string, unknown> | undefined)?.[channel];
+  if (!channelConfig || typeof channelConfig !== "object" || Array.isArray(channelConfig)) {
+    return;
+  }
+  const accounts = (channelConfig as { accounts?: Record<string, { enabled?: unknown }> }).accounts;
+  // Channels resolve account keys canonically (matrix `"Team Ops"` answers to
+  // `team-ops`), so match the same way or a disabled entry is missed.
+  if (
+    resolveNormalizedAccountEntry(accounts, params.accountId, normalizeAccountId)?.enabled !== false
+  ) {
+    return;
+  }
+  throw new Error(
+    `${params.field}: account "${params.accountId}" is disabled for channel ${channel}`,
+  );
+}
+
 function resolveAnnounceValidationChannel(params: {
   channel?: string;
   to?: string;
@@ -67,7 +111,7 @@ function resolveAnnounceValidationChannel(params: {
 function assertCompatibleAnnounceTarget(params: {
   channel?: string;
   to?: string;
-  field: "delivery.channel" | "delivery.failureDestination.channel";
+  field: "delivery.channel" | "delivery.failureDestination.channel" | "failureAlert.channel";
 }) {
   if (!params.channel || params.channel === "last") {
     return;
@@ -92,6 +136,12 @@ export async function assertValidCronAnnounceDelivery(params: {
       cfg: params.cfg,
       channel: resolveAnnounceValidationChannel(params.delivery),
       field: "delivery.channel",
+    });
+    assertEnabledAnnounceAccount({
+      cfg: params.cfg,
+      channel: resolveAnnounceValidationChannel(params.delivery),
+      accountId: params.delivery.accountId,
+      field: "delivery.accountId",
     });
   }
 
@@ -118,6 +168,66 @@ export async function assertValidCronAnnounceDelivery(params: {
   }
 }
 
+/**
+ * Validates the per-job `failureAlert` channel the same way announce delivery is
+ * validated. `failureAlert` is a distinct field from `delivery.failureDestination`
+ * (its own store columns and delivery path), so it needs its own check - otherwise
+ * an explicit unknown channel (e.g. a Slack `C0...` id passed to
+ * `--failure-alert-channel`) is stored and only fails later as `channel_not_found`.
+ */
+export async function assertValidCronFailureAlert(params: {
+  cfg: OpenClawConfig;
+  failureAlert?: CronFailureAlert | false;
+  delivery?: CronDelivery;
+}) {
+  const failureAlert = params.failureAlert;
+  const globalFailureAlert = params.cfg.cron?.failureAlert;
+  // `false` disables alerts. An unset job alert still inherits an enabled global
+  // alert, so validate its effective route rather than allowing it to bypass the
+  // same channel checks as an explicit per-job alert.
+  if (failureAlert === false || (!failureAlert && globalFailureAlert?.enabled !== true)) {
+    return;
+  }
+  // Only announce alerts route through a channel type; webhook alerts POST to
+  // `to`. Resolve the effective mode exactly as runtime does in
+  // resolveFailureAlert(): a job that omits `mode` inherits the global cron
+  // failure-alert mode, so validating with a hard "announce" default would
+  // wrongly reject a channel that a globally webhook-mode alert never uses.
+  const effectiveMode = failureAlert?.mode ?? globalFailureAlert?.mode;
+  if (effectiveMode === "webhook") {
+    return;
+  }
+  // Mirror resolveFailureAlert(): the alert inherits the job delivery channel and
+  // `to`, then the final send channel is resolved from that effective (channel,
+  // to) pair - a provider prefix in `to` only wins when the effective channel is
+  // unset/"last". Inheriting even when the alert names no route of its own means a
+  // routing-changing edit (e.g. flipping mode to announce) that activates a
+  // legacy-invalid inherited delivery channel is rejected up front rather than
+  // only when the alert fires.
+  const effectiveChannel = failureAlert?.channel ?? params.delivery?.channel;
+  const effectiveTo = failureAlert?.to ?? params.delivery?.to;
+  const resolvedChannel =
+    resolveAnnounceValidationChannel({
+      channel: effectiveChannel,
+      to: effectiveTo,
+    }) ?? "last";
+  assertCompatibleAnnounceTarget({
+    channel: effectiveChannel,
+    to: effectiveTo,
+    field: "failureAlert.channel",
+  });
+  await assertConfiguredAnnounceChannel({
+    cfg: params.cfg,
+    channel: resolvedChannel,
+    field: "failureAlert.channel",
+  });
+}
+
 export async function assertValidCronCreateDelivery(cfg: OpenClawConfig, job: CronJobCreate) {
   await assertValidCronAnnounceDelivery({ cfg, delivery: job.delivery });
+  await assertValidCronFailureAlert({
+    cfg,
+    failureAlert: job.failureAlert,
+    delivery: job.delivery,
+  });
 }

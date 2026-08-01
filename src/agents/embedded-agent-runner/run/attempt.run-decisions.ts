@@ -46,10 +46,7 @@ export function resolveAttemptStreamAuthProfileId(
  * guard. The guard remains active even when generic loop detection is disabled
  * because an unregistered tool call is an objective dead end for this run.
  */
-export function resolveUnknownToolGuardThreshold(loopDetection?: {
-  enabled?: boolean;
-  unknownToolThreshold?: number;
-}): number {
+export function resolveUnknownToolGuardThreshold(loopDetection?: { enabled?: boolean }): number {
   // The unknown-tool guard is a safety net against the model hallucinating a
   // tool name or calling a tool that has since been removed from the allowlist
   // (for example after a `skills.allowBundled` config change). After `threshold`
@@ -59,10 +56,7 @@ export function resolveUnknownToolGuardThreshold(loopDetection?: {
   // pingPong / pollNoProgress detectors this guard has no false-positive
   // surface because the tool is objectively not registered in this run, so it
   // stays on regardless of `tools.loopDetection.enabled`.
-  const raw = loopDetection?.unknownToolThreshold;
-  if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
-    return Math.floor(raw);
-  }
+  void loopDetection;
   return UNKNOWN_TOOL_THRESHOLD;
 }
 

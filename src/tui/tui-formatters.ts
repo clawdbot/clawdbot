@@ -1,9 +1,11 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 // Formats terminal-safe strings for TUI messages and status surfaces.
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { stripLeadingInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import type { SessionGoal } from "../config/sessions/types.js";
-import { isLoopbackHost } from "../gateway/net.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { isImageMediaFact, readPersistedMediaFacts } from "../media/media-facts.js";
 import { formatRawAssistantErrorForUi } from "../shared/assistant-error-format.js";
 import { extractAssistantVisibleText } from "../shared/chat-message-content.js";
 import { chunkTextByBreakResolver } from "../shared/text-chunking.js";
@@ -14,6 +16,7 @@ const MAX_TOKEN_CHARS = 32;
 const LONG_TOKEN_RE = /\S{33,}/g;
 const LONG_TOKEN_TEST_RE = /\S{33,}/;
 const BINARY_LINE_REPLACEMENT_THRESHOLD = 12;
+const MAX_TUI_ABORT_DIAGNOSTIC_LENGTH = 160;
 const URL_PREFIX_RE = /^(https?:\/\/|file:\/\/)/i;
 const WINDOWS_DRIVE_RE = /^[a-zA-Z]:[\\/]/;
 const FILE_LIKE_RE = /^[a-zA-Z0-9._-]+$/;
@@ -221,10 +224,27 @@ export function sanitizeRenderableText(text: string): string {
   return applyRtlIsolation(tokenSafe);
 }
 
+/** Render error causes without exposing secrets or terminal control sequences. */
+export function formatTuiErrorMessage(error: unknown): string {
+  return sanitizeRenderableText(formatErrorMessage(error));
+}
+
+export function formatTuiAbortDiagnostic(value: string | undefined): string | undefined {
+  const diagnostic = sanitizeRenderableText(value ?? "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return diagnostic
+    ? diagnostic.length > MAX_TUI_ABORT_DIAGNOSTIC_LENGTH
+      ? `${truncateUtf16Safe(diagnostic, MAX_TUI_ABORT_DIAGNOSTIC_LENGTH - 1)}…`
+      : diagnostic
+    : undefined;
+}
+
 export function resolveFinalAssistantText(params: {
   finalText?: string | null;
   streamedText?: string | null;
   errorMessage?: string | null;
+  attachmentText?: string | null;
 }) {
   const finalText = params.finalText ?? "";
   if (finalText.trim()) {
@@ -237,6 +257,10 @@ export function resolveFinalAssistantText(params: {
   const errorMessage = params.errorMessage ?? "";
   if (errorMessage.trim()) {
     return formatRawAssistantErrorForUi(errorMessage);
+  }
+  const attachmentText = params.attachmentText ?? "";
+  if (attachmentText.trim()) {
+    return attachmentText;
   }
   return "(no output)";
 }
@@ -265,6 +289,91 @@ function asMessageRecord(message: unknown): Record<string, unknown> | undefined 
     return undefined;
   }
   return message as Record<string, unknown>;
+}
+
+type TuiAttachmentKind = "image" | "audio" | "video" | "file" | "media";
+
+const TUI_ATTACHMENT_BLOCK_KINDS: Readonly<Record<string, TuiAttachmentKind>> = {
+  image: "image",
+  input_image: "image",
+  image_url: "image",
+  audio: "audio",
+  video: "video",
+  file: "file",
+  document: "file",
+};
+
+function resolveTuiAttachmentBlockKind(block: Record<string, unknown>): TuiAttachmentKind | null {
+  const type = typeof block.type === "string" ? block.type : "";
+  const directKind = TUI_ATTACHMENT_BLOCK_KINDS[type];
+  if (directKind) {
+    return directKind;
+  }
+  if (type !== "attachment") {
+    return null;
+  }
+  const attachment = asMessageRecord(block.attachment);
+  const declaredKind = attachment?.kind;
+  if (declaredKind === "image" || declaredKind === "sticker") {
+    return "image";
+  }
+  if (declaredKind === "audio" || declaredKind === "video") {
+    return declaredKind;
+  }
+  const mimeKind =
+    typeof attachment?.mimeType === "string" ? attachment.mimeType.split("/", 1)[0] : "";
+  return mimeKind === "image" || mimeKind === "audio" || mimeKind === "video" ? mimeKind : "file";
+}
+
+/** Keep optimistic session projection aligned with the terminal's attachment renderer. */
+export function isTuiAssistantAttachmentBlock(block: unknown): boolean {
+  const entry = asMessageRecord(block);
+  return entry ? resolveTuiAttachmentBlockKind(entry) !== null : false;
+}
+
+function resolvePersistedTuiAttachmentKind(
+  fact: NonNullable<ReturnType<typeof readPersistedMediaFacts>>[number],
+): TuiAttachmentKind {
+  if (isImageMediaFact(fact)) {
+    return "image";
+  }
+  if (fact.kind === "audio" || fact.kind === "video") {
+    return fact.kind;
+  }
+  return "file";
+}
+
+/** Render assistant attachments without exposing their sources or capability URLs. */
+export function extractAssistantAttachmentText(message: unknown): string {
+  const record = asMessageRecord(message);
+  if (!record) {
+    return "";
+  }
+  const contentAttachments = Array.isArray(record.content)
+    ? record.content.flatMap((block) => {
+        const entry = asMessageRecord(block);
+        const kind = entry ? resolveTuiAttachmentBlockKind(entry) : null;
+        return kind ? [`Attached ${kind}`] : [];
+      })
+    : [];
+  if (contentAttachments.length > 0) {
+    return contentAttachments.join("\n");
+  }
+
+  const persistedAttachments = (readPersistedMediaFacts(record) ?? [])
+    .filter((fact) => fact.path || fact.url || fact.contentType || fact.kind)
+    .map((fact) => `Attached ${resolvePersistedTuiAttachmentKind(fact)}`);
+  if (persistedAttachments.length > 0) {
+    return persistedAttachments.join("\n");
+  }
+
+  const legacyMedia = [
+    ...(typeof record.mediaUrl === "string" && record.mediaUrl.trim() ? [record.mediaUrl] : []),
+    ...(Array.isArray(record.mediaUrls)
+      ? record.mediaUrls.filter((value) => typeof value === "string" && value.trim())
+      : []),
+  ];
+  return legacyMedia.map(() => "Attached media").join("\n");
 }
 
 function resolveMessageRecord(
@@ -426,18 +535,52 @@ function extractTextBlocks(content: unknown, opts?: { includeThinking?: boolean 
   });
 }
 
+function extractUserAttachmentText(record: Record<string, unknown>): string {
+  const attachments: string[] = [];
+  if (Array.isArray(record.content)) {
+    for (const block of record.content) {
+      const entry = asMessageRecord(block);
+      if (entry?.type === "image") {
+        attachments.push("Attached image");
+      } else if (entry?.type === "attachment") {
+        const attachment = asMessageRecord(entry.attachment);
+        const label =
+          typeof attachment?.label === "string"
+            ? sanitizeRenderableText(attachment.label).trim()
+            : "";
+        attachments.push(
+          label && label !== "Attached file" ? `Attached file: ${label}` : "Attached file",
+        );
+      }
+    }
+  }
+  if (attachments.length > 0) {
+    return attachments.join("\n");
+  }
+
+  // Gateway-persisted attachment-only turns keep blank content and carry
+  // their authoritative attachments in __openclaw.media instead.
+  return (readPersistedMediaFacts(record) ?? [])
+    .filter((fact) => fact.path || fact.url || fact.contentType || fact.kind)
+    .map((fact) => (isImageMediaFact(fact) ? "Attached image" : "Attached file"))
+    .join("\n");
+}
+
 export function extractTextFromMessage(
   message: unknown,
-  opts?: { includeThinking?: boolean },
+  opts?: { includeThinking?: boolean; includeAttachments?: boolean },
 ): string {
   const record = asMessageRecord(message);
   if (!record) {
     return "";
   }
   if (record.role === "assistant") {
+    const contentText = extractAssistantRenderableContent(record);
     return composeThinkingAndContent({
       thinkingText: extractThinkingFromMessage(record),
-      contentText: extractAssistantRenderableContent(record),
+      contentText:
+        contentText ||
+        (opts?.includeAttachments !== false ? extractAssistantAttachmentText(record) : ""),
       showThinking: opts?.includeThinking ?? false,
     });
   }
@@ -449,11 +592,20 @@ export function extractTextFromMessage(
     return text;
   }
 
+  if (record.role === "user") {
+    return extractUserAttachmentText(record);
+  }
+
   const errorText = formatAssistantErrorFromRecord(record);
   if (!errorText) {
     return "";
   }
   return errorText;
+}
+
+/** Extract abort-visible text while keeping attachment-only aborts diagnostic-only. */
+export function extractTuiAbortedText(message: unknown, includeThinking: boolean): string {
+  return extractTextFromMessage(message, { includeThinking, includeAttachments: false });
 }
 
 export function isCommandMessage(message: unknown): boolean {
@@ -476,15 +628,6 @@ export function formatTokens(total?: number | null, context?: number | null) {
       ? Math.min(999, Math.round((total / context) * 100))
       : null;
   return `tokens ${totalLabel}/${formatTokenCount(context)}${pct !== null ? ` (${pct}%)` : ""}`;
-}
-
-export function formatRemoteConnectionHostFooter(connectionUrl: string): string | null {
-  try {
-    const hostname = new URL(connectionUrl.trim()).hostname.trim();
-    return hostname && !isLoopbackHost(hostname) ? `host ${hostname}` : null;
-  } catch {
-    return null;
-  }
 }
 
 function formatGoalUsage(goal: SessionGoal): string | null {

@@ -15,6 +15,9 @@ export function projectWorkerSessionPlacement(
     updatedAtMs: record.updatedAtMs,
     stateChangedAtMs: record.stateChangedAtMs,
   };
+  const conflict = record.workspaceResultConflict
+    ? { workspaceResultConflict: record.workspaceResultConflict }
+    : {};
   switch (record.state) {
     case "local":
       return { state: "local", ...timing };
@@ -57,6 +60,7 @@ export function projectWorkerSessionPlacement(
         ...(record.lastLiveEventAckCursor !== null
           ? { lastLiveEventAckCursor: record.lastLiveEventAckCursor }
           : {}),
+        ...conflict,
       };
     case "draining":
       return {
@@ -73,6 +77,7 @@ export function projectWorkerSessionPlacement(
         ...(record.lastLiveEventAckCursor !== null
           ? { lastLiveEventAckCursor: record.lastLiveEventAckCursor }
           : {}),
+        ...conflict,
       };
     case "reconciling":
       return {
@@ -89,6 +94,7 @@ export function projectWorkerSessionPlacement(
         ...(record.lastLiveEventAckCursor !== null
           ? { lastLiveEventAckCursor: record.lastLiveEventAckCursor }
           : {}),
+        ...conflict,
       };
     case "reclaimed":
       return {
@@ -107,6 +113,7 @@ export function projectWorkerSessionPlacement(
         ...(record.lastLiveEventAckCursor !== null
           ? { lastLiveEventAckCursor: record.lastLiveEventAckCursor }
           : {}),
+        ...conflict,
       };
     case "failed":
       return {
@@ -125,6 +132,7 @@ export function projectWorkerSessionPlacement(
         ...(record.lastLiveEventAckCursor !== null
           ? { lastLiveEventAckCursor: record.lastLiveEventAckCursor }
           : {}),
+        ...conflict,
         recoveryError: record.recoveryError,
       };
   }

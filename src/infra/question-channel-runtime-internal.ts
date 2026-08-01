@@ -42,7 +42,7 @@ function collectAnsweredLabels(
       return [];
     }
     const optionLabels = new Set(question.options.map((option) => option.label));
-    return (answers[question.id]?.answers ?? []).filter((answer) => optionLabels.has(answer));
+    return (answers[question.questionId] ?? []).filter((answer) => optionLabels.has(answer));
   });
 }
 

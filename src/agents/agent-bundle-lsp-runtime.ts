@@ -166,6 +166,7 @@ function encodeLspMessage(body: unknown): string {
 const LSP_HEADER_SEPARATOR = Buffer.from("\r\n\r\n", "ascii");
 const MAX_LSP_HEADER_BYTES = 8 * 1024;
 const MAX_LSP_BODY_BYTES = 64 * 1024 * 1024;
+const LSP_BODY_DECODER = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
 class LspFramingError extends Error {
   override readonly name = "LspFramingError";
@@ -241,7 +242,12 @@ function parseLspMessages(buffer: Buffer): LspParseResult {
       return { ok: true, messages, remaining };
     }
 
-    const body = remaining.subarray(bodyStart, bodyEnd).toString("utf8");
+    let body: string;
+    try {
+      body = LSP_BODY_DECODER.decode(remaining.subarray(bodyStart, bodyEnd));
+    } catch {
+      return framingError(messages, "body is not valid UTF-8");
+    }
     try {
       messages.push(JSON.parse(body));
     } catch (error) {

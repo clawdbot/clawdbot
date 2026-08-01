@@ -19,6 +19,7 @@ import {
   setMemorySearchImpl,
   setMemorySearchManagerImpl,
 } from "./memory-tool-manager.test-mocks.js";
+import { applyProjectRanking } from "./memory/project-ranking.js";
 import {
   MEMORY_SEARCH_DEADLINE_CONTROL,
   type MemorySearchDeadlineAction,
@@ -245,6 +246,30 @@ describe("memory_search unavailable payloads", () => {
       "memory/semantic.md",
     ]);
     expect(details.results.map((entry) => entry.score)).toEqual([1, 1, 1, 2]);
+  });
+
+  it("excludes annotation carriers from surfaced search snippets", async () => {
+    setMemorySearchImpl(async () => [
+      {
+        path: "MEMORY.md",
+        startLine: 1,
+        endLine: 1,
+        score: 1,
+        snippet:
+          "Keep the gateway local. <!-- trigger: gateway setup --> <!-- importance: 9 --> <!-- project: alpha-key -->",
+        source: "memory" as const,
+      },
+    ]);
+    const tool = createMemorySearchToolOrThrow({
+      config: {
+        agents: { list: [{ id: "main", default: true }] },
+        memory: { citations: "off" },
+      },
+    });
+
+    const result = await tool.execute("clean-snippet", { query: "gateway", corpus: "memory" });
+    const details = result.details as { results: Array<{ snippet: string }> };
+    expect(details.results[0]?.snippet).toBe("Keep the gateway local.");
   });
 
   it("passes the host local-service hook to tool memory managers", async () => {
@@ -1062,6 +1087,47 @@ describe("memory_search unavailable payloads", () => {
     });
   });
 
+  it("surfaces embedding bootstrap degradation when keyword search has no hits", async () => {
+    let searchCalls = 0;
+    setMemorySearchImpl(async (opts) => {
+      searchCalls += 1;
+      opts?.onDebug?.({
+        backend: "builtin",
+        embeddingBootstrap: {
+          ok: false,
+          provider: "openai",
+          reason:
+            'MissingProviderAuthError: No API key resolved for provider "openai" (auth mode: api-key, checked: OPENAI_API_KEY).',
+          degradedTo: "keyword-only",
+        },
+      });
+      return [];
+    });
+    const tool = createMemorySearchToolOrThrow({
+      config: {
+        agents: { list: [{ id: "main", default: true }] },
+        memory: { citations: "off" },
+      },
+    });
+
+    const result = await tool.execute("bootstrap-debug", { query: "unknown memory" });
+    const details = result.details as {
+      results?: unknown[];
+      debug?: { embeddingBootstrap?: MemorySearchRuntimeDebug["embeddingBootstrap"] };
+    };
+
+    expect(details.results).toEqual([]);
+    expect(details.debug?.embeddingBootstrap).toEqual({
+      ok: false,
+      provider: "openai",
+      reason:
+        'MissingProviderAuthError: No API key resolved for provider "openai" (auth mode: api-key, checked: OPENAI_API_KEY).',
+      degradedTo: "keyword-only",
+    });
+    expect(searchCalls).toBe(1);
+    expect(getMemorySyncMockCalls()).toBe(0);
+  });
+
   it("returns unavailable metadata when the index identity is paused", async () => {
     let searchCalls = 0;
     setMemorySearchImpl(async () => {
@@ -1278,8 +1344,8 @@ describe("memory_search corpus labels", () => {
       config: asOpenClawConfig({
         agents: {
           list: [
-            { id: "main", default: true, memorySearch: { enabled: false } },
-            { id: "recall", memorySearch: { enabled: true } },
+            { id: "main", default: true, memory: { search: { enabled: false } } },
+            { id: "recall", memory: { search: { enabled: true } } },
           ],
         },
       }),
@@ -1295,30 +1361,30 @@ describe("memory_search corpus labels", () => {
   it("re-resolves config when executing a previously created tool", async () => {
     const startupConfig = asOpenClawConfig({
       agents: {
-        defaults: {
-          memorySearch: {
-            provider: "ollama",
-            model: "nomic-embed-text",
-          },
-        },
+        defaults: {},
         list: [{ id: "main", default: true }],
       },
       memory: {
         backend: "builtin",
+
+        search: {
+          provider: "ollama",
+          model: "nomic-embed-text",
+        },
       },
     });
     const patchedConfig = asOpenClawConfig({
       agents: {
-        defaults: {
-          memorySearch: {
-            provider: "openai",
-            model: "text-embedding-3-small",
-          },
-        },
+        defaults: {},
         list: [{ id: "main", default: true }],
       },
       memory: {
         backend: "builtin",
+
+        search: {
+          provider: "openai",
+          model: "text-embedding-3-small",
+        },
       },
     });
     let liveConfig = startupConfig;
@@ -1345,10 +1411,13 @@ describe("memory_search corpus labels", () => {
     const tool = createMemorySearchToolOrThrow({
       config: {
         agents: {
-          defaults: { memorySearch: { rememberAcrossConversations: true } },
+          defaults: {},
           list: [{ id: "main", default: true }],
         },
-        memory: { citations: "off" },
+        memory: {
+          citations: "off",
+          search: { rememberAcrossConversations: true },
+        },
         tools: { sessions: { visibility: "all" } },
       },
       agentSessionKey: "agent:main:main",
@@ -1357,6 +1426,62 @@ describe("memory_search corpus labels", () => {
     await tool.execute("ordinary-search", { query: "favorite food" });
 
     expect(seenSources).toEqual(["memory"]);
+  });
+
+  it("applies active-project ranking through the production memory_search tool", async () => {
+    let activeProjectKeys: string[] | undefined;
+    setMemorySearchImpl(async (opts) => {
+      activeProjectKeys = opts?.activeProjectKeys;
+      return applyProjectRanking(
+        [
+          {
+            path: "MEMORY.md",
+            startLine: 2,
+            endLine: 2,
+            score: 0.9,
+            snippet: "second active fact",
+            source: "memory" as const,
+            projectKey: "github.com/acme/Beta",
+          },
+          {
+            path: "MEMORY.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.8,
+            snippet: "active fact",
+            source: "memory" as const,
+            projectKey: "github.com/acme/Alpha",
+          },
+          {
+            path: "MEMORY.md",
+            startLine: 3,
+            endLine: 3,
+            score: 0.85,
+            snippet: "foreign fact",
+            source: "memory" as const,
+            projectKey: "github.com/acme/Gamma",
+          },
+        ],
+        opts?.activeProjectKeys,
+      );
+    });
+    const tool = createMemorySearchToolOrThrow({
+      config: { memory: { citations: "off" } },
+      activeProjectKeys: ["github.com/acme/Beta", "github.com/acme/Alpha"],
+    });
+
+    const result = await tool.execute("project-ranked-search", { query: "fact" });
+    const details = result.details as { results: Array<{ snippet: string; score: number }> };
+
+    expect(details.results.map((entry) => entry.snippet)).toEqual([
+      "second active fact",
+      "active fact",
+      "foreign fact",
+    ]);
+    expect(activeProjectKeys).toEqual(["github.com/acme/Beta", "github.com/acme/Alpha"]);
+    expect(details.results[0]?.score).toBeCloseTo(1.035);
+    expect(details.results[1]?.score).toBeCloseTo(0.92);
+    expect(details.results[2]?.score).toBeCloseTo(0.765);
   });
 
   it.each(["sessions", "all"] as const)(
@@ -1379,10 +1504,13 @@ describe("memory_search corpus labels", () => {
       const tool = createMemorySearchToolOrThrow({
         config: {
           agents: {
-            defaults: { memorySearch: { rememberAcrossConversations: true } },
+            defaults: {},
             list: [{ id: "main", default: true }],
           },
-          memory: { citations: "off" },
+          memory: {
+            citations: "off",
+            search: { rememberAcrossConversations: true },
+          },
           tools: { sessions: { visibility: "all" } },
         },
         agentSessionKey: "agent:main:main",
@@ -1407,15 +1535,16 @@ describe("memory_search corpus labels", () => {
       const tool = createMemorySearchToolOrThrow({
         config: {
           agents: {
-            defaults: {
-              memorySearch: {
-                rememberAcrossConversations: true,
-                sources: ["sessions"],
-              },
-            },
+            defaults: {},
             list: [{ id: "main", default: true }],
           },
-          memory: { citations: "off" },
+          memory: {
+            citations: "off",
+            search: {
+              rememberAcrossConversations: true,
+              sources: ["sessions"],
+            },
+          },
           tools: { sessions: { visibility: "all" } },
         },
         agentSessionKey: "agent:main:main",
@@ -1488,10 +1617,13 @@ describe("memory_search corpus labels", () => {
     const tool = createMemorySearchToolOrThrow({
       config: {
         agents: {
-          defaults: { memorySearch: { rememberAcrossConversations: true } },
+          defaults: {},
           list: [{ id: "main", default: true }],
         },
-        memory: { citations: "off" },
+        memory: {
+          citations: "off",
+          search: { rememberAcrossConversations: true },
+        },
         tools: { sessions: { visibility: "self" } },
       },
       agentSessionKey: "agent:main:main",
@@ -1579,15 +1711,16 @@ describe("memory_search corpus labels", () => {
     const tool = createMemorySearchToolOrThrow({
       config: {
         agents: {
-          defaults: {
-            memorySearch: {
-              sources: ["memory", "sessions"],
-              experimental: { sessionMemory: true },
-            },
-          },
+          defaults: {},
           list: [{ id: "main", default: true }],
         },
-        memory: { citations: "off" },
+        memory: {
+          citations: "off",
+          search: {
+            sources: ["memory", "sessions"],
+            rememberAcrossConversations: true,
+          },
+        },
         tools: { sessions: { visibility: "all" } },
       },
       agentSessionKey: "agent:main:main",

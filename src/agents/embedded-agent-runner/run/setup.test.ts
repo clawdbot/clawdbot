@@ -138,7 +138,6 @@ describe("resolveHookModelSelection", () => {
     const hookRunner = {
       hasHooks: vi.fn(() => true),
       runBeforeModelResolve: vi.fn(),
-      runBeforeAgentStart: vi.fn(),
     };
 
     await expect(
@@ -153,11 +152,9 @@ describe("resolveHookModelSelection", () => {
     ).resolves.toEqual({
       provider: "foreground-provider",
       modelId: "foreground-model",
-      beforeAgentStartResult: undefined,
     });
     expect(hookRunner.hasHooks).not.toHaveBeenCalled();
     expect(hookRunner.runBeforeModelResolve).not.toHaveBeenCalled();
-    expect(hookRunner.runBeforeAgentStart).not.toHaveBeenCalled();
   });
 
   it("passes attachment metadata to before_model_resolve hooks", async () => {
@@ -168,7 +165,6 @@ describe("resolveHookModelSelection", () => {
         providerOverride: "vision-provider",
         modelOverride: "vision-model",
       })),
-      runBeforeAgentStart: vi.fn(),
     };
 
     const result = await resolveHookModelSelection({
@@ -184,7 +180,6 @@ describe("resolveHookModelSelection", () => {
       { prompt: "describe this image", attachments },
       hookContext,
     );
-    expect(hookRunner.runBeforeAgentStart).not.toHaveBeenCalled();
     expect(result.provider).toBe("vision-provider");
     expect(result.modelId).toBe("vision-model");
   });
@@ -193,7 +188,6 @@ describe("resolveHookModelSelection", () => {
     const hookRunner = {
       hasHooks: vi.fn((hookName: string) => hookName === "before_model_resolve"),
       runBeforeModelResolve: vi.fn(async () => undefined),
-      runBeforeAgentStart: vi.fn(),
     };
 
     await resolveHookModelSelection({

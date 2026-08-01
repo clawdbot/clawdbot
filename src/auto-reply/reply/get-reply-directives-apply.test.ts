@@ -35,23 +35,43 @@ describe("applyInlineDirectiveOverrides", () => {
     {
       rejectedRef: "ollama/Gemma4-26b-a4-it-gguf",
       reason: "disallowed" as const,
+      modelPolicyConfigPath: undefined,
+      modelPolicyRepairConfigPath: undefined,
       expected:
-        "Model override ollama/Gemma4-26b-a4-it-gguf is not allowed for this agent; reverted to openai/gpt-5.5. Add ollama/Gemma4-26b-a4-it-gguf to agents.defaults.models or pick an allowed model with /model list.",
+        "Model override ollama/Gemma4-26b-a4-it-gguf is not allowed for this agent by modelPolicy.allow; reverted to openai/gpt-5.5. Add ollama/Gemma4-26b-a4-it-gguf to modelPolicy.allow or pick an allowed model with /model list.",
     },
     {
       rejectedRef: undefined,
       reason: "disallowed" as const,
+      modelPolicyConfigPath: undefined,
+      modelPolicyRepairConfigPath: undefined,
       expected: "Model override not allowed for this agent; reverted to openai/gpt-5.5.",
     },
     {
       rejectedRef: "openai/gpt-4o",
       reason: "stale" as const,
+      modelPolicyConfigPath: undefined,
+      modelPolicyRepairConfigPath: undefined,
       expected:
         "Stored model override openai/gpt-4o is stale for this session; reverted to openai/gpt-5.5. Pick a model again with /model if you still want to override the default.",
     },
+    {
+      rejectedRef: "external/sensitive",
+      reason: "disallowed" as const,
+      modelPolicyConfigPath: "agents.defaults.models",
+      modelPolicyRepairConfigPath: "agents.defaults.modelPolicy.allow",
+      expected:
+        "Model override external/sensitive is not allowed for this agent by agents.defaults.models; reverted to openai/gpt-5.5. Add external/sensitive to agents.defaults.modelPolicy.allow or pick an allowed model with /model list.",
+    },
   ])(
     "emits the $reason reset event before rejecting a locked mixed directive",
-    async ({ rejectedRef, reason, expected }) => {
+    async ({
+      rejectedRef,
+      reason,
+      modelPolicyConfigPath,
+      modelPolicyRepairConfigPath,
+      expected,
+    }) => {
       const directives = parseInlineDirectives("hello /model openai/gpt-5.4 --runtime openclaw");
       const typing = {
         onReplyStart: async () => {},
@@ -81,6 +101,8 @@ describe("applyInlineDirectiveOverrides", () => {
         resetModelOverride: true,
         resetModelOverrideRef: rejectedRef,
         resetModelOverrideReason: reason,
+        modelPolicyConfigPath,
+        modelPolicyRepairConfigPath,
       });
 
       const result = await applyInlineDirectiveOverrides({

@@ -67,6 +67,12 @@ function mirroredTarget(sessionFile: string) {
 async function writeSqliteSession(params: { storedSessionFile?: string } = {}): Promise<{
   marker: string;
   sessionKey: string;
+  sessionTarget: {
+    agentId: string;
+    sessionId: string;
+    sessionKey: string;
+    storePath: string;
+  };
 }> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-session-history-sqlite-"));
   tempDirs.push(dir);
@@ -96,7 +102,7 @@ async function writeSqliteSession(params: { storedSessionFile?: string } = {}): 
     ...scope,
     message: { role: "assistant", content: "sqlite answer", timestamp: 2 },
   });
-  return { marker, sessionKey };
+  return { marker, sessionKey, sessionTarget: scope };
 }
 
 describe("readCodexMirroredSessionHistoryMessages", () => {
@@ -108,6 +114,23 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
     await expect(
       readCodexMirroredSessionHistoryMessages(mirroredTarget(sessionFile)),
     ).resolves.toEqual([]);
+  });
+
+  it("does not create a database for a missing explicit SQLite session key", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-session-history-missing-"));
+    tempDirs.push(dir);
+    const sessionId = "missing-codex-session";
+    const storePath = path.join(dir, "openclaw-agent.sqlite");
+
+    await expect(
+      readCodexMirroredSessionHistoryMessages({
+        agentId: "main",
+        sessionFile: `sqlite:main:${sessionId}:${storePath}`,
+        sessionId,
+        sessionKey: "agent:main:missing-codex",
+      }),
+    ).resolves.toEqual([]);
+    expect(await fs.readdir(dir)).toEqual([]);
   });
 
   it("returns [] for transcripts that do not open with a Codex session marker", async () => {
@@ -152,6 +175,57 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
     ]);
   });
 
+  it("replays SQLite history from the canonical typed session target", async () => {
+    const { sessionKey, sessionTarget } = await writeSqliteSession({
+      storedSessionFile: "agent:main:codex-sqlite",
+    });
+
+    await expect(
+      readCodexMirroredSessionHistoryMessages({
+        agentId: "main",
+        sessionFile: sessionKey,
+        sessionId: "codex-sqlite-session",
+        sessionKey,
+        sessionTarget,
+      }),
+    ).resolves.toMatchObject([
+      { role: "user", content: "sqlite prompt" },
+      { role: "assistant", content: "sqlite answer" },
+    ]);
+  });
+
+  it.each([
+    ["agent id", { agentId: "other" }],
+    ["session id", { sessionId: "another-session" }],
+    ["session key", { sessionKey: "agent:main:another-session" }],
+  ])("fails closed when the typed target has a mismatched %s", async (_label, targetPatch) => {
+    const { marker, sessionKey, sessionTarget } = await writeSqliteSession();
+
+    await expect(
+      readCodexMirroredSessionHistoryMessages({
+        agentId: "main",
+        sessionFile: marker,
+        sessionId: "codex-sqlite-session",
+        sessionKey,
+        sessionTarget: { ...sessionTarget, ...targetPatch },
+      }),
+    ).resolves.toEqual([]);
+  });
+
+  it("fails closed when the typed session target is incomplete", async () => {
+    const { sessionKey, sessionTarget } = await writeSqliteSession();
+
+    await expect(
+      readCodexMirroredSessionHistoryMessages({
+        agentId: "main",
+        sessionFile: sessionKey,
+        sessionId: "codex-sqlite-session",
+        sessionKey,
+        sessionTarget: { ...sessionTarget, storePath: undefined },
+      }),
+    ).resolves.toEqual([]);
+  });
+
   it("resolves SQLite marker history when the caller has no session key", async () => {
     const { marker } = await writeSqliteSession();
 
@@ -160,6 +234,23 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
         agentId: "main",
         sessionFile: marker,
         sessionId: "codex-sqlite-session",
+      }),
+    ).resolves.toMatchObject([
+      { role: "user", content: "sqlite prompt" },
+      { role: "assistant", content: "sqlite answer" },
+    ]);
+  });
+
+  it("falls back from an unregistered requested key to the marker's verified session key", async () => {
+    const { marker } = await writeSqliteSession();
+    const staleSessionKey = "agent:main:stale-codex-session";
+
+    await expect(
+      readCodexMirroredSessionHistoryMessages({
+        agentId: "main",
+        sessionFile: marker,
+        sessionId: "codex-sqlite-session",
+        sessionKey: staleSessionKey,
       }),
     ).resolves.toMatchObject([
       { role: "user", content: "sqlite prompt" },

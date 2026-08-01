@@ -11,10 +11,10 @@ import type {
   SessionsListResult,
 } from "../../api/types.ts";
 import "../../styles/sessions.css";
-import { pathForRoute } from "../../app-route-paths.ts";
 import { icons } from "../../components/icons.ts";
 import {
   renderSettingsPage,
+  renderSettingsSegmented,
   renderSettingsSection,
   renderSettingsStatus,
 } from "../../components/settings-ui.ts";
@@ -34,6 +34,7 @@ import {
   parseSessionKeyParts,
 } from "../../lib/format.ts";
 import { formatSessionTokens } from "../../lib/presenter.ts";
+import { isCronSessionKey } from "../../lib/session-display.ts";
 import { formatGoalDetail, formatGoalSummary } from "../../lib/session-goal.ts";
 import { sessionModelMatchesDefaults } from "../../lib/session-model-defaults.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
@@ -45,7 +46,11 @@ import {
   type SessionsGroupBy,
   UNGROUPED_ID,
 } from "../../lib/sessions/grouping.ts";
-import { searchForSession } from "../../lib/sessions/index.ts";
+import type { SessionArchivedFilter } from "../../lib/sessions/index.ts";
+import {
+  resolveSessionPreferredFace,
+  sessionNavigationTarget,
+} from "../../lib/sessions/route-navigation.ts";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -71,8 +76,10 @@ export type SessionsProps = {
   limit: string;
   includeGlobal: boolean;
   includeUnknown: boolean;
-  showArchived: boolean;
+  statusFilter: SessionArchivedFilter;
   basePath: string;
+  agentId: string;
+  mainKey: string;
   searchQuery: string;
   transcriptSearchAvailable: boolean;
   transcriptSearchQuery: string;
@@ -96,7 +103,6 @@ export type SessionsProps = {
     limit: string;
     includeGlobal: boolean;
     includeUnknown: boolean;
-    showArchived: boolean;
   }) => void;
   onClearFilters: () => void;
   onSearchChange: (query: string) => void;
@@ -110,7 +116,7 @@ export type SessionsProps = {
   onPageChange: (page: number) => void;
   onPageSizeChange: (size: number) => void;
   onRefresh: () => void;
-  onArchivedViewChange: (showArchived: boolean) => void;
+  onStatusFilterChange: (statusFilter: SessionArchivedFilter) => void;
   onDeleteAllArchived: () => void;
   onPatch: (
     key: string,
@@ -187,98 +193,60 @@ function resolveThinkLevelOptions(
 }
 
 function withCurrentOption(options: readonly string[], current: string): string[] {
-  if (!current) {
-    return [...options];
-  }
-  if (options.includes(current)) {
-    return [...options];
-  }
-  return [...options, current];
+  return !current || options.includes(current) ? [...options] : [...options, current];
 }
 
 function withCurrentLabeledOption(
   options: readonly { value: string; label: string }[],
   current: string,
 ): Array<{ value: string; label: string }> {
-  if (!current) {
-    return [...options];
-  }
-  if (options.some((option) => option.value === current)) {
-    return [...options];
-  }
-  return [...options, { value: current, label: formatThinkingOverrideLabel(current) }];
+  return !current || options.some((option) => option.value === current)
+    ? [...options]
+    : [...options, { value: current, label: formatThinkingOverrideLabel(current) }];
 }
 
-function buildVerboseLevelOptions(): Array<{ value: string; label: string }> {
-  return VERBOSE_LEVEL_VALUES.map((value) => ({
+function buildSessionLevelOptions(
+  values: readonly string[],
+  explicitOff = false,
+): Array<{ value: string; label: string }> {
+  return values.map((value) => ({
     value,
     label:
       value === ""
         ? t("sessionsView.inherit")
-        : value === "off"
+        : explicitOff && value === "off"
           ? t("sessionsView.offExplicit")
           : t(`sessionsView.${value}`),
   }));
 }
 
-function buildFastLevelOptions(): Array<{ value: string; label: string }> {
-  return FAST_LEVEL_VALUES.map((value) => ({
-    value,
-    label: value === "" ? t("sessionsView.inherit") : t(`sessionsView.${value}`),
-  }));
-}
+const SESSION_RUN_STATUS_LABELS = {
+  running: "sessionsView.statusRunning",
+  done: "sessionsView.statusDone",
+  failed: "sessionsView.statusFailed",
+  killed: "sessionsView.statusKilled",
+  timeout: "sessionsView.statusTimeout",
+} as const satisfies Record<SessionRunStatus, string>;
 
 function formatSessionRunStatus(status: SessionRunStatus): string {
-  switch (status) {
-    case "running":
-      return t("sessionsView.statusRunning");
-    case "done":
-      return t("sessionsView.statusDone");
-    case "failed":
-      return t("sessionsView.statusFailed");
-    case "killed":
-      return t("sessionsView.statusKilled");
-    case "timeout":
-      return t("sessionsView.statusTimeout");
-    default:
-      return t("sessionsView.statusUnknown");
-  }
+  return t(SESSION_RUN_STATUS_LABELS[status] ?? "sessionsView.statusUnknown");
 }
-
-function resolveSessionStatusBadge(row: GatewaySessionRow): {
-  label: string;
-  tone: "live" | "idle" | "done" | "failed" | "muted";
-} {
-  if (isSessionRunActive(row)) {
-    return { label: t("sessionsView.statusLive"), tone: "live" };
-  }
-  if (row.status === "running" && row.hasActiveRun === false) {
-    return { label: t("sessionsView.statusIdle"), tone: "idle" };
-  }
-  if (row.status) {
-    const tone = row.status === "done" ? "done" : ("failed" as const);
-    return { label: formatSessionRunStatus(row.status), tone };
-  }
-  if (row.hasActiveRun === false) {
-    return { label: t("sessionsView.statusIdle"), tone: "idle" };
-  }
-  return { label: t("sessionsView.statusUnknown"), tone: "muted" };
-}
-
-const SESSION_STATUS_TONE_KIND = {
-  live: "ok",
-  idle: "muted",
-  done: "ok",
-  failed: "danger",
-  muted: "muted",
-} as const;
 
 function renderSessionStatusBadge(row: GatewaySessionRow) {
-  const badge = resolveSessionStatusBadge(row);
-  const title = `${t("sessionsView.status")}: ${badge.label}`;
+  const active = isSessionRunActive(row);
+  const idle = row.hasActiveRun === false && (!row.status || row.status === "running");
+  const label = active
+    ? t("sessionsView.statusLive")
+    : idle
+      ? t("sessionsView.statusIdle")
+      : row.status
+        ? formatSessionRunStatus(row.status)
+        : t("sessionsView.statusUnknown");
+  const kind = active || row.status === "done" ? "ok" : idle || !row.status ? "muted" : "danger";
+  const title = `${t("sessionsView.status")}: ${label}`;
   return html`
     <openclaw-tooltip .content=${title}>
-      ${renderSettingsStatus({ kind: SESSION_STATUS_TONE_KIND[badge.tone], label: badge.label })}
+      ${renderSettingsStatus({ kind, label })}
     </openclaw-tooltip>
   `;
 }
@@ -289,14 +257,21 @@ const SESSION_KIND_ICONS = {
   group: icons.users,
   global: icons.globe,
   unknown: icons.circle,
-} satisfies Record<GatewaySessionRow["kind"], unknown>;
+} satisfies Record<GatewaySessionRow["kind"] | "cron", unknown>;
+
+// The server row kind never carries "cron" — cron is a key-shape fact, so the
+// display kind derives it from the key for the avatar, badge class, and label.
+function resolveSessionDisplayKind(row: GatewaySessionRow): GatewaySessionRow["kind"] | "cron" {
+  return isCronSessionKey(row.key) ? "cron" : row.kind;
+}
 
 // Kind glyph anchors each row; the dot mirrors isSessionRunActive so run
 // state also reads at the identity anchor while scanning the key column.
 function renderSessionAvatar(row: GatewaySessionRow) {
+  const displayKind = resolveSessionDisplayKind(row);
   return html`
-    <span class="session-avatar session-avatar--${row.kind}" aria-hidden="true">
-      ${SESSION_KIND_ICONS[row.kind] ?? icons.circle}
+    <span class="session-avatar session-avatar--${displayKind}" aria-hidden="true">
+      ${SESSION_KIND_ICONS[displayKind] ?? icons.circle}
       ${isSessionRunActive(row) ? html`<span class="session-avatar__status"></span>` : nothing}
     </span>
   `;
@@ -353,8 +328,13 @@ function renderTokensCell(row: GatewaySessionRow) {
   `;
 }
 
-function renderSessionsOverview(rows: GatewaySessionRow[], liveCount: number) {
-  const unreadCount = rows.filter((row) => row.unread === true).length;
+function renderSessionsOverview(
+  rows: GatewaySessionRow[],
+  liveCount: number,
+  statusFilter: SessionArchivedFilter,
+) {
+  const unreadCount = rows.filter((row) => row.unread === true && row.archived !== true).length;
+  const archivedCount = rows.filter((row) => row.archived === true).length;
   // Sum only known token totals; "~" marks the sum as partial/approximate when
   // rows lack a snapshot or carry a stale one, and no snapshot at all is n/a
   // rather than a fabricated 0.
@@ -367,52 +347,39 @@ function renderSessionsOverview(rows: GatewaySessionRow[], liveCount: number) {
     rowsWithTokens.length === 0
       ? t("common.na")
       : `${tokensApproximate ? "~" : ""}${formatTokens(totalTokens)}`;
-  const tiles = [
-    {
-      id: "sessions",
-      icon: icons.messageSquare,
-      label: t("sessionsView.title"),
-      value: String(rows.length),
-      active: false,
-    },
-    {
-      id: "live",
-      icon: icons.zap,
-      label: t("sessionsView.statusLive"),
-      value: String(liveCount),
-      active: liveCount > 0,
-    },
-    {
-      id: "unread",
-      icon: icons.eye,
-      label: t("sessionsView.unread"),
-      value: String(unreadCount),
-      active: unreadCount > 0,
-    },
-    {
-      id: "tokens",
-      icon: icons.barChart,
-      label: t("sessionsView.tokens"),
-      value: tokensValue,
-      active: false,
-    },
+  const tiles: Array<
+    readonly [string, (typeof icons)[keyof typeof icons], string, string, boolean]
+  > = [
+    ["sessions", icons.messageSquare, t("sessionsView.title"), String(rows.length), false],
+    ["live", icons.zap, t("sessionsView.statusLive"), String(liveCount), liveCount > 0],
+    ["unread", icons.eye, t("sessionsView.unread"), String(unreadCount), unreadCount > 0],
+    ["tokens", icons.barChart, t("sessionsView.tokens"), tokensValue, false],
   ];
+  if (statusFilter !== "active") {
+    tiles.push([
+      "archived",
+      icons.archive,
+      t("sessionsView.archived"),
+      String(archivedCount),
+      false,
+    ]);
+  }
   return html`
     <div class="sessions-overview">
-      ${tiles.map((tile) => {
+      ${tiles.map(([id, icon, label, value, active]) => {
         const tileClass = [
           "sessions-overview__tile",
-          `sessions-overview__tile--${tile.id}`,
-          tile.active ? "sessions-overview__tile--active" : "",
+          `sessions-overview__tile--${id}`,
+          active ? "sessions-overview__tile--active" : "",
         ]
           .filter(Boolean)
           .join(" ");
         return html`
           <div class=${tileClass}>
-            <span class="sessions-overview__icon" aria-hidden="true">${tile.icon}</span>
+            <span class="sessions-overview__icon" aria-hidden="true">${icon}</span>
             <span class="sessions-overview__meta">
-              <span class="sessions-overview__value">${tile.value}</span>
-              <span class="sessions-overview__label">${tile.label}</span>
+              <span class="sessions-overview__value">${value}</span>
+              <span class="sessions-overview__label">${label}</span>
             </span>
           </div>
         `;
@@ -597,13 +564,6 @@ function renderSkeletonRows(columnCount: number) {
   );
 }
 
-function resolveThinkLevelPatchValue(value: string): string | null {
-  if (!value) {
-    return null;
-  }
-  return value;
-}
-
 function filterRows(
   rows: GatewaySessionRow[],
   query: string,
@@ -614,36 +574,22 @@ function filterRows(
     return rows;
   }
   return rows.filter((row) => {
-    const key = normalizeLowercaseStringOrEmpty(row.key);
-    const label = normalizeLowercaseStringOrEmpty(row.label);
-    const category = normalizeLowercaseStringOrEmpty(row.category);
-    const kind = normalizeLowercaseStringOrEmpty(row.kind);
-    const displayName = normalizeLowercaseStringOrEmpty(row.displayName);
-    const runtime = normalizeLowercaseStringOrEmpty(resolveAgentRuntimeLabel(row.agentRuntime));
-    const status = normalizeLowercaseStringOrEmpty(row.status);
-    const goal = row.goal
-      ? normalizeLowercaseStringOrEmpty(
-          `${row.goal.objective} ${row.goal.status} ${formatGoalSummary(row.goal)} ${
+    const fields = [
+      row.key,
+      row.label,
+      row.category,
+      row.kind,
+      row.displayName,
+      resolveAgentRuntimeLabel(row.agentRuntime),
+      row.status,
+      row.goal
+        ? `${row.goal.objective} ${row.goal.status} ${formatGoalSummary(row.goal)} ${
             row.goal.lastStatusNote ?? ""
-          }`,
-        )
-      : "";
-    const liveState = isSessionRunActive(row)
-      ? "live running"
-      : row.hasActiveRun === false
-        ? "idle"
-        : "";
-    if (
-      key.includes(q) ||
-      label.includes(q) ||
-      category.includes(q) ||
-      kind.includes(q) ||
-      displayName.includes(q) ||
-      runtime.includes(q) ||
-      status.includes(q) ||
-      goal.includes(q) ||
-      liveState.includes(q)
-    ) {
+          }`
+        : "",
+      isSessionRunActive(row) ? "live running" : row.hasActiveRun === false ? "idle" : "",
+    ];
+    if (fields.some((value) => normalizeLowercaseStringOrEmpty(value).includes(q))) {
       return true;
     }
     const keyParts = parseSessionKeyParts(row.key);
@@ -665,27 +611,13 @@ function sortRows(
     if (pinnedDiff !== 0) {
       return pinnedDiff;
     }
-    let diff = 0;
-    switch (column) {
-      case "key":
-        diff = (a.key ?? "").localeCompare(b.key ?? "");
-        break;
-      case "kind":
-        diff = (a.kind ?? "").localeCompare(b.kind ?? "");
-        break;
-      case "updated": {
-        const au = a.updatedAt ?? 0;
-        const bu = b.updatedAt ?? 0;
-        diff = au - bu;
-        break;
-      }
-      case "tokens": {
-        const at = a.totalTokens ?? a.inputTokens ?? a.outputTokens ?? 0;
-        const bt = b.totalTokens ?? b.inputTokens ?? b.outputTokens ?? 0;
-        diff = at - bt;
-        break;
-      }
-    }
+    const diff =
+      column === "key" || column === "kind"
+        ? (a[column] ?? "").localeCompare(b[column] ?? "")
+        : column === "updated"
+          ? (a.updatedAt ?? 0) - (b.updatedAt ?? 0)
+          : (a.totalTokens ?? a.inputTokens ?? a.outputTokens ?? 0) -
+            (b.totalTokens ?? b.inputTokens ?? b.outputTokens ?? 0);
     return diff * cmp;
   });
 }
@@ -695,34 +627,24 @@ function paginateRows<T>(rows: T[], page: number, pageSize: number): T[] {
   return rows.slice(start, start + pageSize);
 }
 
-function hasPositiveNumberFilter(value: string): boolean {
-  return parseFilterInteger(value) !== undefined;
-}
-
 function hasActiveFilters(props: SessionsProps): boolean {
   return (
     normalizeLowercaseStringOrEmpty(props.searchQuery).length > 0 ||
-    hasPositiveNumberFilter(props.activeMinutes) ||
-    hasPositiveNumberFilter(props.limit) ||
-    !props.includeGlobal ||
-    !props.includeUnknown ||
-    !props.showArchived
+    parseFilterInteger(props.activeMinutes) !== undefined ||
+    !props.includeGlobal
   );
 }
 
+const CHECKPOINT_REASON_LABELS = {
+  manual: "sessionsView.manual",
+  "auto-threshold": "sessionsView.autoThreshold",
+  "overflow-retry": "sessionsView.overflowRetry",
+  "timeout-retry": "sessionsView.timeoutRetry",
+} as const satisfies Record<SessionCompactionCheckpoint["reason"], string>;
+
 function formatCheckpointReason(reason: SessionCompactionCheckpoint["reason"]): string {
-  switch (reason) {
-    case "manual":
-      return t("sessionsView.manual");
-    case "auto-threshold":
-      return t("sessionsView.autoThreshold");
-    case "overflow-retry":
-      return t("sessionsView.overflowRetry");
-    case "timeout-retry":
-      return t("sessionsView.timeoutRetry");
-    default:
-      return reason;
-  }
+  const label = CHECKPOINT_REASON_LABELS[reason];
+  return label ? t(label) : reason;
 }
 
 function formatCheckpointCount(count: number): string {
@@ -819,23 +741,14 @@ function sessionDetailItems(params: {
   add(t("sessionsView.room"), row.room);
   add(t("sessionsView.space"), row.space);
   add(t("sessionsView.sessionId"), row.sessionId);
-  if (typeof row.hasActiveRun === "boolean") {
-    details.push({
-      label: t("sessionsView.activeRun"),
-      value: row.hasActiveRun ? t("common.yes") : t("common.no"),
-    });
-  }
-  if (typeof row.archived === "boolean") {
-    details.push({
-      label: t("sessionsView.archived"),
-      value: row.archived ? t("common.yes") : t("common.no"),
-    });
-  }
-  if (typeof row.pinned === "boolean") {
-    details.push({
-      label: t("sessionsView.pinned"),
-      value: row.pinned ? t("common.yes") : t("common.no"),
-    });
+  for (const [label, value] of [
+    [t("sessionsView.activeRun"), row.hasActiveRun],
+    [t("sessionsView.archived"), row.archived],
+    [t("sessionsView.pinned"), row.pinned],
+  ] as const) {
+    if (typeof value === "boolean") {
+      details.push({ label, value: value ? t("common.yes") : t("common.no") });
+    }
   }
   return details;
 }
@@ -846,37 +759,28 @@ function sessionsTableColumnCount(props: SessionsProps): number {
   return props.groupBy === "category" ? 8 : 7;
 }
 
+const SESSION_GROUP_MODE_LABELS = {
+  none: "sessionsView.groupByNone",
+  category: "sessionsView.groupByCategory",
+  channel: "sessionsView.groupByChannel",
+  kind: "sessionsView.groupByKind",
+  agent: "sessionsView.groupByAgent",
+  date: "sessionsView.groupByDate",
+} as const satisfies Record<SessionsGroupBy, string>;
+
 function groupModeLabel(mode: SessionsGroupBy): string {
-  switch (mode) {
-    case "category":
-      return t("sessionsView.groupByCategory");
-    case "channel":
-      return t("sessionsView.groupByChannel");
-    case "kind":
-      return t("sessionsView.groupByKind");
-    case "agent":
-      return t("sessionsView.groupByAgent");
-    case "date":
-      return t("sessionsView.groupByDate");
-    default:
-      return t("sessionsView.groupByNone");
-  }
+  return t(SESSION_GROUP_MODE_LABELS[mode] ?? SESSION_GROUP_MODE_LABELS.none);
 }
 
 function sessionGroupLabel(id: string, props: SessionsProps): string {
   if (props.groupBy === "date") {
-    switch (id) {
-      case "today":
-        return t("sessionsView.dateToday");
-      case "yesterday":
-        return t("sessionsView.dateYesterday");
-      case "week":
-        return t("sessionsView.dateThisWeek");
-      case "older":
-        return t("sessionsView.dateOlder");
-      default:
-        return t("sessionsView.dateNoActivity");
-    }
+    const labels: Record<string, string> = {
+      today: "sessionsView.dateToday",
+      yesterday: "sessionsView.dateYesterday",
+      week: "sessionsView.dateThisWeek",
+      older: "sessionsView.dateOlder",
+    };
+    return t(labels[id] ?? "sessionsView.dateNoActivity");
   }
   if (id === UNGROUPED_ID) {
     return t("sessionsView.ungrouped");
@@ -1078,6 +982,12 @@ export function renderSessions(props: SessionsProps) {
     rawRows.length === 0 ? hasActiveFilters(props) : filtered.length === 0;
   const liveCount = rawRows.filter((row) => isSessionRunActive(row)).length;
   const archivedCount = rawRows.filter((row) => row.archived === true).length;
+  const emptyMessage =
+    props.statusFilter === "archived"
+      ? t("sessionsView.noArchivedSessions")
+      : props.statusFilter === "active"
+        ? t("sessionsView.noActiveSessions")
+        : t("sessionsView.noSessions");
 
   const sortHeader = (
     col: "key" | "kind" | "updated" | "tokens",
@@ -1091,10 +1001,13 @@ export function renderSessions(props: SessionsProps) {
         class=${extraClass}
         data-sortable
         data-sort-dir=${isActive ? props.sortDir : ""}
+        aria-sort=${isActive ? (props.sortDir === "asc" ? "ascending" : "descending") : nothing}
         @click=${() => props.onSortChange(col, isActive ? nextDir : "desc")}
       >
-        ${label}
-        <span class="data-table-sort-icon">${icons.arrowUpDown}</span>
+        <button class="data-table-sort-button" type="button">
+          ${label}
+          <span class="data-table-sort-icon" aria-hidden="true">${icons.arrowUpDown}</span>
+        </button>
       </th>
     `;
   };
@@ -1110,7 +1023,7 @@ export function renderSessions(props: SessionsProps) {
       : nothing}
   `;
   const refreshAction = html`
-    ${props.showArchived
+    ${props.statusFilter === "archived"
       ? html`
           <button
             class="btn danger"
@@ -1126,8 +1039,10 @@ export function renderSessions(props: SessionsProps) {
     </button>
   `;
   const children = [
-    props.error ? html`<div class="sessions-error">${props.error}</div>` : nothing,
-    props.result ? renderSettingsSection({}, renderSessionsOverview(rawRows, liveCount)) : nothing,
+    props.error ? html`<div class="sessions-error" role="alert">${props.error}</div>` : nothing,
+    props.result
+      ? renderSettingsSection({}, renderSessionsOverview(rawRows, liveCount, props.statusFilter))
+      : nothing,
     // When the gateway lacks sessions.search the section still renders: the
     // form disables itself and shows the unavailable notice (shipped behavior).
     renderSettingsSection(
@@ -1148,6 +1063,7 @@ export function renderSessions(props: SessionsProps) {
         groups,
         groupingActive,
         emptyBecauseFiltered,
+        emptyMessage,
         totalRows,
         totalPages,
         page,
@@ -1163,6 +1079,7 @@ type SessionsTableContext = {
   groups: SessionRowGroup[] | null;
   groupingActive: boolean;
   emptyBecauseFiltered: boolean;
+  emptyMessage: string;
   totalRows: number;
   totalPages: number;
   page: number;
@@ -1174,13 +1091,41 @@ type SessionsTableContext = {
 };
 
 function renderSessionsTable(props: SessionsProps, ctx: SessionsTableContext) {
-  const { paginated, groups, groupingActive, emptyBecauseFiltered, totalRows, totalPages, page } =
-    ctx;
+  const {
+    paginated,
+    groups,
+    groupingActive,
+    emptyBecauseFiltered,
+    emptyMessage,
+    totalRows,
+    totalPages,
+    page,
+  } = ctx;
   const sortHeader = ctx.sortHeader;
-  const activeTooltip = t("sessionsView.activeTooltip", { count: props.activeMinutes.trim() });
-  const limitTooltip = t("sessionsView.limitTooltip");
-  const globalTooltip = t("sessionsView.globalTooltip");
-  const unknownTooltip = t("sessionsView.unknownTooltip");
+  const emptyStateMessage = emptyBecauseFiltered
+    ? t("sessionsView.noSessionsMatchFilters")
+    : emptyMessage;
+  // Archived timestamps are intentionally stale, so recency only applies to the active view.
+  const filterInputs = [
+    [
+      "activeMinutes",
+      "minutes",
+      t("sessionsView.active"),
+      t("sessionsView.activeTooltip", { count: props.activeMinutes.trim() }),
+      t("sessionsView.minutesPlaceholder"),
+      props.statusFilter !== "active",
+    ],
+    ["limit", "limit", t("sessionsView.limit"), t("sessionsView.limitTooltip"), nothing, false],
+  ] as const;
+  const sourceFilters = [
+    ["includeGlobal", t("sessionsView.global"), t("sessionsView.globalTooltip")],
+    ["includeUnknown", t("sessionsView.unknown"), t("sessionsView.unknownTooltip")],
+  ] as const;
+  const { activeMinutes, limit, includeGlobal, includeUnknown } = props;
+  const updateFilter = (
+    key: keyof Parameters<SessionsProps["onFiltersChange"]>[0],
+    value: string | boolean,
+  ) => props.onFiltersChange({ activeMinutes, limit, includeGlobal, includeUnknown, [key]: value });
   return html`
     <div
       class="sessions-toolbar sessions-filter-bar"
@@ -1196,103 +1141,53 @@ function renderSessionsTable(props: SessionsProps, ctx: SessionsTableContext) {
         />
       </div>
       <div class="session-filter-primary-row">
-        <openclaw-tooltip .content=${activeTooltip}>
-          <label class="session-filter-field">
-            <span class="session-filter-label">${t("sessionsView.active")}</span>
-            <input
-              class="session-filter-input session-filter-input--minutes"
-              placeholder=${t("sessionsView.minutesPlaceholder")}
-              .value=${props.activeMinutes}
-              ?disabled=${props.showArchived}
-              @input=${(e: Event) =>
-                props.onFiltersChange({
-                  activeMinutes: (e.target as HTMLInputElement).value,
-                  limit: props.limit,
-                  includeGlobal: props.includeGlobal,
-                  includeUnknown: props.includeUnknown,
-                  showArchived: props.showArchived,
-                })}
-            />
-          </label>
-        </openclaw-tooltip>
-        <openclaw-tooltip .content=${limitTooltip}>
-          <label class="session-filter-field">
-            <span class="session-filter-label">${t("sessionsView.limit")}</span>
-            <input
-              class="session-filter-input session-filter-input--limit"
-              .value=${props.limit}
-              @input=${(e: Event) =>
-                props.onFiltersChange({
-                  activeMinutes: props.activeMinutes,
-                  limit: (e.target as HTMLInputElement).value,
-                  includeGlobal: props.includeGlobal,
-                  includeUnknown: props.includeUnknown,
-                  showArchived: props.showArchived,
-                })}
-            />
-          </label>
-        </openclaw-tooltip>
+        ${filterInputs.map(
+          ([key, suffix, label, tooltip, placeholder, disabled]) => html`
+            <openclaw-tooltip .content=${tooltip}>
+              <label class="session-filter-field">
+                <span class="session-filter-label">${label}</span>
+                <input
+                  class="session-filter-input session-filter-input--${suffix}"
+                  placeholder=${placeholder}
+                  .value=${props[key]}
+                  ?disabled=${disabled}
+                  @input=${(event: Event) =>
+                    updateFilter(key, (event.target as HTMLInputElement).value)}
+                />
+              </label>
+            </openclaw-tooltip>
+          `,
+        )}
       </div>
       <div
         class="session-filter-toggle-group"
         role="group"
         aria-label=${t("sessionsView.sourceFilters")}
       >
-        ${renderFilterToggle({
-          name: "includeGlobal",
-          checked: props.includeGlobal,
-          label: t("sessionsView.global"),
-          title: globalTooltip,
-          onChange: (checked) =>
-            props.onFiltersChange({
-              activeMinutes: props.activeMinutes,
-              limit: props.limit,
-              includeGlobal: checked,
-              includeUnknown: props.includeUnknown,
-              showArchived: props.showArchived,
-            }),
+        ${sourceFilters.map(([key, label, tooltip]) =>
+          renderFilterToggle({
+            name: key,
+            checked: props[key],
+            label,
+            title: tooltip,
+            onChange: (checked) => updateFilter(key, checked),
+          }),
+        )}
+        ${renderSettingsSegmented<SessionArchivedFilter>({
+          value: props.statusFilter,
+          ariaLabel: t("sessionsView.sessionState"),
+          className: "sessions-view-segment",
+          options: [
+            { value: "active", label: t("common.active") },
+            {
+              value: "archived",
+              label: t("sessionsView.archived"),
+              title: t("sessionsView.archivedOnlyTooltip"),
+            },
+            { value: "all", label: t("sessionsView.all") },
+          ],
+          onChange: (value) => props.onStatusFilterChange(value),
         })}
-        ${renderFilterToggle({
-          name: "includeUnknown",
-          checked: props.includeUnknown,
-          label: t("sessionsView.unknown"),
-          title: unknownTooltip,
-          onChange: (checked) =>
-            props.onFiltersChange({
-              activeMinutes: props.activeMinutes,
-              limit: props.limit,
-              includeGlobal: props.includeGlobal,
-              includeUnknown: checked,
-              showArchived: props.showArchived,
-            }),
-        })}
-        <div
-          class="settings-segmented sessions-view-segment"
-          role="group"
-          aria-label=${t("sessionsView.sessionState")}
-        >
-          <button
-            type="button"
-            class="settings-segmented__btn ${props.showArchived
-              ? ""
-              : "settings-segmented__btn--active"}"
-            aria-pressed=${String(!props.showArchived)}
-            @click=${() => props.onArchivedViewChange(false)}
-          >
-            ${t("common.active")}
-          </button>
-          <button
-            type="button"
-            class="settings-segmented__btn ${props.showArchived
-              ? "settings-segmented__btn--active"
-              : ""}"
-            aria-pressed=${String(props.showArchived)}
-            title=${t("sessionsView.archivedOnlyTooltip")}
-            @click=${() => props.onArchivedViewChange(true)}
-          >
-            ${t("sessionsView.archived")}
-          </button>
-        </div>
       </div>
       <span class="sessions-toolbar__divider" aria-hidden="true"></span>
       <label class="session-groupby">
@@ -1379,26 +1274,19 @@ function renderSessionsTable(props: SessionsProps, ctx: SessionsTableContext) {
               ? html`
                   <tr>
                     <td colspan=${sessionsTableColumnCount(props)} class="data-table-empty-cell">
-                      ${emptyBecauseFiltered
-                        ? html`
-                            <div class="data-table-empty-state" role="status" aria-live="polite">
-                              <div class="data-table-empty-state__message">
-                                ${icons.search}
-                                <span>${t("sessionsView.noSessionsMatchFilters")}</span>
-                              </div>
+                      <div class="data-table-empty-state" role="status" aria-live="polite">
+                        <div class="data-table-empty-state__message">
+                          ${emptyBecauseFiltered ? icons.search : icons.messageSquare}
+                          <span>${emptyStateMessage}</span>
+                        </div>
+                        ${emptyBecauseFiltered
+                          ? html`
                               <button class="btn btn--sm" @click=${props.onClearFilters}>
                                 ${t("sessionsView.showAll")}
                               </button>
-                            </div>
-                          `
-                        : html`
-                            <div class="data-table-empty-state" role="status" aria-live="polite">
-                              <div class="data-table-empty-state__message">
-                                ${icons.messageSquare}
-                                <span>${t("sessionsView.noSessions")}</span>
-                              </div>
-                            </div>
-                          `}
+                            `
+                          : nothing}
+                      </div>
                     </td>
                   </tr>
                 `
@@ -1426,13 +1314,16 @@ function renderSessionsTable(props: SessionsProps, ctx: SessionsTableContext) {
             <div class="data-table-pagination__controls">
               <select
                 class="data-table-pagination__size"
+                aria-label=${t("sessionsView.pageSize")}
                 .value=${String(props.pageSize)}
                 @change=${(e: Event) =>
                   props.onPageSizeChange(Number((e.target as HTMLSelectElement).value))}
               >
                 ${PAGE_SIZES.map(
+                  // The matching option owns initial selection because the select's value
+                  // property binds before these dynamic children exist on first render.
                   (s) =>
-                    html`<option value=${s}>
+                    html`<option value=${s} ?selected=${s === props.pageSize}>
                       ${t("sessionsView.rowsPerPage", { count: String(s) })}
                     </option>`,
                 )}
@@ -1479,12 +1370,22 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
   const keyCellTitle = friendlyKeyLabel ?? row.key;
   const canLink = row.kind !== "global";
   const chatUrl = canLink
-    ? `${pathForRoute("chat", props.basePath)}${searchForSession(row.key)}`
+    ? sessionNavigationTarget({
+        face: resolveSessionPreferredFace(row),
+        sessionKey: row.key,
+        fallbackAgentId: props.agentId,
+        basePath: props.basePath,
+        row,
+        mainKey: props.mainKey,
+        preferenceDerivedFace: true,
+      }).href
     : null;
-  const kindClass = `session-kind session-kind--${row.kind}`;
+  const displayKind = resolveSessionDisplayKind(row);
+  const kindClass = `session-kind session-kind--${displayKind}`;
   const rowClass = [
     "session-data-row",
     "session-data-row--expandable",
+    props.statusFilter === "all" && row.archived === true ? "session-data-row--archived" : "",
     isExpanded ? "session-data-row--expanded" : "",
     props.sessionMenu?.key === row.key ? "session-data-row--menu-open" : "",
   ]
@@ -1542,7 +1443,7 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
           type="checkbox"
           .checked=${props.selectedKeys.has(row.key)}
           @change=${() => props.onToggleSelect(row.key)}
-          aria-label=${t("sessionsView.selectSession")}
+          aria-label=${`${t("sessionsView.selectSession")}: ${row.key}`}
         />
       </td>
       <td class="data-table-key-col">
@@ -1596,11 +1497,14 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
       </td>
       ${categoryMode ? renderCategoryCell(row, props) : nothing}
       <td>
-        <span class=${kindClass}>${row.kind}</span>
+        <span class=${kindClass}>${resolveSessionDisplayKind(row)}</span>
       </td>
       <td class="session-status-col">
         <div class="session-status-stack">
           ${renderSessionStatusBadge(row)} ${renderSessionGoalStatus(row.goal)}
+          ${props.statusFilter === "all" && row.archived === true
+            ? renderSettingsStatus({ kind: "muted", label: t("sessionsView.archived") })
+            : nothing}
         </div>
       </td>
       <td>${updated}</td>
@@ -1651,7 +1555,6 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
             props,
             detailsId,
             friendlyKeyLabel,
-            keyCellTitle,
             displayName,
             showDisplayName,
             kindClass,
@@ -1669,7 +1572,6 @@ function renderSessionDetailsRow(params: {
   props: SessionsProps;
   detailsId: string;
   friendlyKeyLabel: string | null;
-  keyCellTitle: string;
   displayName: string | null;
   showDisplayName: boolean;
   kindClass: string;
@@ -1703,9 +1605,15 @@ function renderSessionDetailsRow(params: {
         : row.fastMode === false
           ? "off"
           : "";
-  const fastLevels = withCurrentLabeledOption(buildFastLevelOptions(), fastMode);
+  const fastLevels = withCurrentLabeledOption(
+    buildSessionLevelOptions(FAST_LEVEL_VALUES),
+    fastMode,
+  );
   const verbose = row.verboseLevel ?? "";
-  const verboseLevels = withCurrentLabeledOption(buildVerboseLevelOptions(), verbose);
+  const verboseLevels = withCurrentLabeledOption(
+    buildSessionLevelOptions(VERBOSE_LEVEL_VALUES, true),
+    verbose,
+  );
   const reasoning = row.reasoningLevel ?? "";
   const reasoningLevels = withCurrentOption(REASONING_LEVELS, reasoning);
   const checkpointItems = props.checkpointItemsByKey[row.key] ?? [];
@@ -1730,7 +1638,7 @@ function renderSessionDetailsRow(params: {
           </div>
           <div class="session-details-panel__badges">
             ${renderSessionStatusBadge(row)} ${renderSessionGoalStatus(row.goal)}
-            <span class=${kindClass}>${row.kind}</span>
+            <span class=${kindClass}>${resolveSessionDisplayKind(row)}</span>
           </div>
         </div>
 
@@ -1756,8 +1664,7 @@ function renderSessionDetailsRow(params: {
               disabled: props.loading,
               options: thinkLevels,
               current: thinking,
-              onChange: (value) =>
-                props.onPatch(row.key, { thinkingLevel: resolveThinkLevelPatchValue(value) }),
+              onChange: (value) => props.onPatch(row.key, { thinkingLevel: value || null }),
             })}
             ${renderOverrideSelect({
               label: t("sessionsView.fast"),
@@ -1816,7 +1723,7 @@ function renderSessionDetailsRow(params: {
                 ${t("sessionsView.loadingCheckpoints")}
               </div>`
             : checkpointError
-              ? html`<div class="callout danger">${checkpointError}</div>`
+              ? html`<div class="callout danger" role="alert">${checkpointError}</div>`
               : !hasCheckpoints || checkpointItems.length === 0
                 ? html`<div class="muted session-details-empty">
                     ${t("sessionsView.noCheckpoints")}

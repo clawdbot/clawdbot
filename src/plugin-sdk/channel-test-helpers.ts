@@ -4,6 +4,7 @@ export { expectDirectoryIds, type DirectoryListFn } from "./test-helpers/directo
 export {
   expectChannelPluginContract,
   installChannelActionsContractSuite,
+  installChannelDmPolicyContractSuite,
   installChannelPluginContractSuite,
   installChannelSetupContractSuite,
   installChannelStatusContractSuite,
@@ -20,6 +21,7 @@ export {
   type PluginHookRegistration,
 } from "./test-helpers/outbound-delivery.js";
 export {
+  createTestInboundDebounceFlush,
   createPluginRuntimeMediaMock,
   createPluginRuntimeMock,
   type PluginRuntimeMediaMock,

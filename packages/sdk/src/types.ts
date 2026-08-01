@@ -373,7 +373,7 @@ export type RunCreateParams = AgentRunParams;
 
 export type AgentsCreateParams = {
   name: string;
-  workspace: string;
+  workspace?: string;
   model?: string;
   emoji?: string;
   avatar?: string;

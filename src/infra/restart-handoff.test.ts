@@ -284,6 +284,46 @@ describe("gateway restart handoff", () => {
     });
   });
 
+  it("canonicalizes fractional restart trace timing before persistence", () => {
+    const env = createHandoffEnv();
+
+    const handoff = expectWrittenHandoff({
+      env,
+      pid: 12_345,
+      restartKind: "update-process",
+      supervisorMode: "systemd",
+      createdAt: 1_000,
+      restartTrace: {
+        startedAt: 10_000.9,
+        lastAt: 10_250.4,
+      },
+    });
+
+    expect(handoff.restartTrace).toStrictEqual({
+      startedAt: 10_000,
+      lastAt: 10_250,
+    });
+    const { db } = openOpenClawStateDatabase({ env });
+    expect(
+      db
+        .prepare(
+          `SELECT
+             typeof(restart_trace_started_at) AS started_type,
+             restart_trace_started_at,
+             typeof(restart_trace_last_at) AS last_type,
+             restart_trace_last_at
+           FROM gateway_restart_handoff
+           WHERE handoff_key = 'current'`,
+        )
+        .get(),
+    ).toEqual({
+      started_type: "integer",
+      restart_trace_started_at: 10_000,
+      last_type: "integer",
+      restart_trace_last_at: 10_250,
+    });
+  });
+
   it("keeps restart trace timing for slow but valid drains", () => {
     const env = createHandoffEnv();
 

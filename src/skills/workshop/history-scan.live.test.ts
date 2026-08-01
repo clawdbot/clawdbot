@@ -56,7 +56,7 @@ function liveConfig(): OpenClawConfig {
         },
       },
     },
-    skills: { workshop: { autonomous: { enabled: false } } },
+    skills: { workshop: { autonomous: { mode: "off" } } },
   };
 }
 

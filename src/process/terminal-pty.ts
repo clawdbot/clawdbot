@@ -1,6 +1,11 @@
 import type { IPty } from "@lydell/node-pty";
 import { signalProcessTree } from "./kill-tree.js";
 import {
+  readPtyTerminalName,
+  resolvePtyTerminalName,
+  setPtyTerminalName,
+} from "./pty-terminal-name.js";
+import {
   buildWindowsCmdExeCommandLine,
   isWindowsBatchCommand,
   resolveTrustedWindowsCmdExe,
@@ -46,9 +51,8 @@ export async function spawnTerminalPty(params: {
   const env = { ...params.env };
   // Ambient TERM=dumb describes the gateway/node host, not this real PTY.
   // Passing it through makes interactive CLIs refuse to start in the web terminal.
-  const inheritedTerm = env.TERM?.trim();
-  env.TERM =
-    !inheritedTerm || inheritedTerm.toLowerCase() === "dumb" ? "xterm-256color" : inheritedTerm;
+  const terminalName = resolvePtyTerminalName(readPtyTerminalName(env, process.platform));
+  setPtyTerminalName({ env, name: terminalName, platform: process.platform });
   const comSpec = env.ComSpec ?? env.COMSPEC;
   const invocation = resolveTerminalPtyInvocation({
     file: params.file,
@@ -56,7 +60,7 @@ export async function spawnTerminalPty(params: {
     ...(comSpec ? { comSpec } : {}),
   });
   const pty = spawn(invocation.file, invocation.args, {
-    name: env.TERM,
+    name: terminalName,
     cols: params.cols,
     rows: params.rows,
     cwd: params.cwd,

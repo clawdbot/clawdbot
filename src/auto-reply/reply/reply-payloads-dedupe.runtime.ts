@@ -3,6 +3,7 @@ export {
   filterMessagingToolDuplicates,
   filterMessagingToolMediaDuplicates,
   hasEnabledDeliveryOperation,
+  hasSourceRoutedMessagingToolDelivery,
   resolveMessagingToolPayloadDedupe,
   shouldDedupeMessagingToolRepliesForRoute,
   type MessagingToolPayloadDedupeDecision,

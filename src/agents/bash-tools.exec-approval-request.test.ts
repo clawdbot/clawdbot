@@ -39,6 +39,8 @@ vi.mock("./tools/gateway.js", () => ({
 
 let callGatewayTool: typeof import("./tools/gateway.js").callGatewayTool;
 let registerExecApprovalRequestForHostOrThrow: typeof import("./bash-tools.exec-approval-request.js").registerExecApprovalRequestForHostOrThrow;
+let resolveRegisteredExecApprovalDecision: typeof import("./bash-tools.exec-approval-request.js").resolveRegisteredExecApprovalDecision;
+let isExecApprovalRunAbortedError: typeof import("./bash-tools.exec-approval-request.js").isExecApprovalRunAbortedError;
 
 const initialProcessPlatform = Object.getOwnPropertyDescriptor(process, "platform");
 
@@ -59,6 +61,9 @@ function restoreProcessPlatformForTest(): void {
 type ApprovalRequestPayload = {
   approvalReviewerDeviceIds?: string[];
   commandSpans?: Array<{ startIndex: number; endIndex: number }>;
+  sessionId?: string;
+  runId?: string;
+  toolCallId?: string;
 };
 
 function requireApprovalRequestPayload(callIndex: number): ApprovalRequestPayload {
@@ -74,8 +79,11 @@ function requireApprovalRequestPayload(callIndex: number): ApprovalRequestPayloa
 describe("exec approval requests", () => {
   beforeAll(async () => {
     ({ callGatewayTool } = await import("./tools/gateway.js"));
-    ({ registerExecApprovalRequestForHostOrThrow } =
-      await import("./bash-tools.exec-approval-request.js"));
+    ({
+      registerExecApprovalRequestForHostOrThrow,
+      resolveRegisteredExecApprovalDecision,
+      isExecApprovalRunAbortedError,
+    } = await import("./bash-tools.exec-approval-request.js"));
   });
 
   beforeEach(() => {
@@ -91,6 +99,47 @@ describe("exec approval requests", () => {
 
   it("does not load the command explainer when importing approval requests", () => {
     expect(commandExplainerMock.importCount).toBe(0);
+  });
+
+  it("binds approval registrations to their run and tool call", async () => {
+    vi.mocked(callGatewayTool).mockResolvedValue({ id: "approval-id" });
+
+    await registerExecApprovalRequestForHostOrThrow({
+      approvalId: "approval-id",
+      command: "echo hi",
+      workdir: "/tmp",
+      host: "gateway",
+      security: "allowlist",
+      ask: "on-miss",
+      sessionId: "session-1",
+      runId: "run-1",
+      toolCallId: "tool-1",
+    });
+
+    expect(requireApprovalRequestPayload(0)).toMatchObject({
+      sessionId: "session-1",
+      runId: "run-1",
+      toolCallId: "tool-1",
+    });
+  });
+
+  it("distinguishes run abort cancellation from unchanged timeout fallback", async () => {
+    vi.mocked(callGatewayTool)
+      .mockResolvedValueOnce({ decision: null, terminalReason: "timeout" })
+      .mockResolvedValueOnce({ decision: null, terminalReason: "run-aborted" });
+
+    await expect(
+      resolveRegisteredExecApprovalDecision({
+        approvalId: "timeout-approval",
+        preResolvedDecision: undefined,
+      }),
+    ).resolves.toBeNull();
+    await expect(
+      resolveRegisteredExecApprovalDecision({
+        approvalId: "aborted-approval",
+        preResolvedDecision: undefined,
+      }),
+    ).rejects.toSatisfy(isExecApprovalRunAbortedError);
   });
 
   it("bounds missing registration expiries when the process clock is invalid", async () => {

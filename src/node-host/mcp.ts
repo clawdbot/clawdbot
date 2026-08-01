@@ -3,12 +3,15 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { ErrorCode, type CallToolResult, type Tool } from "@modelcontextprotocol/sdk/types.js";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
+import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { NodePluginToolDescriptor } from "../../packages/gateway-protocol/src/schema/nodes.js";
 import { matchesMcpToolFilterPattern } from "../agents/agent-bundle-mcp-filter.js";
 import { createMcpJsonSchemaValidator } from "../agents/mcp-json-schema-validator.js";
 import { sanitizeMcpMetadataText } from "../agents/mcp-metadata.js";
+import { collectMcpPaginatedItems } from "../agents/mcp-pagination.js";
+import { resolveMcpRequestTimeoutMs } from "../agents/mcp-transport-config.js";
 import { resolveMcpTransport } from "../agents/mcp-transport.js";
 import { normalizeConfiguredMcpServers } from "../config/mcp-config-normalize.js";
 import type { McpServerConfig } from "../config/types.mcp.js";
@@ -27,18 +30,21 @@ const NODE_MCP_ERROR_MAX_CHARS = 1_024;
 const NODE_MCP_MAX_DESCRIPTORS = 128;
 const NODE_MCP_MAX_DESCRIPTOR_BYTES = 1024 * 1024;
 const NODE_MCP_MAX_CATALOG_BYTES = 10 * 1024 * 1024;
+const NODE_MCP_MAX_LIST_PAGES = NODE_MCP_MAX_DESCRIPTORS;
+// The byte cap charges every response; this separately bounds retained tiny-tool object overhead.
+const NODE_MCP_MAX_LISTED_TOOLS = NODE_MCP_MAX_DESCRIPTORS * NODE_MCP_MAX_LIST_PAGES;
 
 type NodeHostMcpClient = {
   onclose?: () => void;
   connect(transport: Transport): Promise<void>;
   listTools(
     params?: { cursor?: string },
-    options?: { timeout?: number },
+    options?: { timeout?: number; maxTotalTimeout?: number; signal?: AbortSignal },
   ): Promise<{ tools: Tool[]; nextCursor?: string }>;
   callTool(
     params: { name: string; arguments?: Record<string, unknown> },
     resultSchema?: undefined,
-    options?: { timeout?: number },
+    options?: { timeout?: number; signal?: AbortSignal },
   ): Promise<CallToolResult>;
   close(): Promise<void>;
 };
@@ -82,6 +88,7 @@ export type NodeHostMcpManager = {
     tool: string;
     arguments?: Record<string, unknown>;
     timeoutMs?: number;
+    signal?: AbortSignal;
   }): Promise<CallToolResult>;
   close(): Promise<void>;
 };
@@ -99,7 +106,7 @@ type ListedNodeMcpTool = {
 };
 
 function defaultWarn(message: string): void {
-  process.stderr.write(`${message}\n`);
+  console.warn(message);
 }
 
 function formatMcpError(error: unknown): string {
@@ -257,39 +264,37 @@ async function withAbort<T>(promise: Promise<T>, signal: AbortSignal | undefined
 async function listAllTools(
   client: NodeHostMcpClient,
   timeoutMs: number,
+  shouldInclude: (toolName: string) => boolean,
   signal?: AbortSignal,
 ): Promise<Tool[]> {
-  const tools: Tool[] = [];
-  let cursor: string | undefined;
-  do {
-    const page = await withAbort(
-      client.listTools(cursor ? { cursor } : undefined, { timeout: timeoutMs }),
-      signal,
-    );
-    tools.push(...page.tools);
-    cursor = page.nextCursor;
-  } while (cursor);
-  return tools;
+  return await collectMcpPaginatedItems({
+    label: "MCP tool listing",
+    itemLabel: "tools",
+    timeoutMs,
+    maxPages: NODE_MCP_MAX_LIST_PAGES,
+    maxItems: NODE_MCP_MAX_LISTED_TOOLS,
+    maxBytes: NODE_MCP_MAX_CATALOG_BYTES,
+    signal,
+    loadPage: async ({ cursor, requestTimeoutMs, signal: requestSignal }) => {
+      const page = await client.listTools(cursor === undefined ? undefined : { cursor }, {
+        timeout: requestTimeoutMs,
+        maxTotalTimeout: requestTimeoutMs,
+        signal: requestSignal,
+      });
+      return { items: page.tools, nextCursor: page.nextCursor, serializedValue: page };
+    },
+    mapItem: (tool) => {
+      const toolName = tool.name.trim();
+      if (!toolName || !shouldInclude(toolName)) {
+        return undefined;
+      }
+      return { ...tool, name: toolName };
+    },
+  });
 }
 
 function resolveCallTimeoutMs(value: number | undefined): number {
-  return typeof value === "number" && Number.isFinite(value) && value > 0
-    ? Math.floor(value)
-    : NODE_MCP_TOOL_CALL_TIMEOUT_MS;
-}
-
-function resolveServerToolCallTimeoutMs(config: McpServerConfig): number {
-  if (
-    typeof config.requestTimeoutMs === "number" &&
-    Number.isFinite(config.requestTimeoutMs) &&
-    config.requestTimeoutMs > 0
-  ) {
-    return Math.floor(config.requestTimeoutMs);
-  }
-  if (typeof config.timeout === "number" && Number.isFinite(config.timeout) && config.timeout > 0) {
-    return Math.floor(config.timeout * 1_000);
-  }
-  return NODE_MCP_TOOL_CALL_TIMEOUT_MS;
+  return clampPositiveTimerTimeoutMs(value) ?? NODE_MCP_TOOL_CALL_TIMEOUT_MS;
 }
 
 function isMcpTimeoutError(error: unknown): boolean {
@@ -339,7 +344,7 @@ export async function startNodeHostMcpManager(
           client,
           connected: false,
           tools: new Set<string>(),
-          toolCallTimeoutMs: resolveServerToolCallTimeoutMs(config),
+          toolCallTimeoutMs: resolveMcpRequestTimeoutMs(config, NODE_MCP_TOOL_CALL_TIMEOUT_MS),
           detachStderr: resolved.detachStderr,
         };
         // MCP Client exposes callback properties rather than an EventTarget surface.
@@ -354,16 +359,15 @@ export async function startNodeHostMcpManager(
           deps.signal,
         );
         session.connected = true;
-        const tools = (await listAllTools(client, resolved.requestTimeoutMs, deps.signal)).filter(
-          (tool) => {
-            const toolName = tool.name.trim();
-            return Boolean(toolName) && shouldExposeTool(config, toolName);
-          },
+        const tools = await listAllTools(
+          client,
+          resolved.requestTimeoutMs,
+          (toolName) => shouldExposeTool(config, toolName),
+          deps.signal,
         );
         for (const tool of tools) {
-          const toolName = tool.name.trim();
-          session.tools.add(toolName);
-          listedTools.push({ serverName, tool: { ...tool, name: toolName } });
+          session.tools.add(tool.name);
+          listedTools.push({ serverName, tool });
         }
         sessions.set(serverName, session);
       } catch (error) {
@@ -411,6 +415,7 @@ export async function startNodeHostMcpManager(
           undefined,
           {
             timeout: Math.min(resolveCallTimeoutMs(params.timeoutMs), session.toolCallTimeoutMs),
+            ...(params.signal ? { signal: params.signal } : {}),
           },
         );
       } catch (error) {

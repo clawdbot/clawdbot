@@ -43,6 +43,88 @@ struct TalkMLXSpeechSynthesizerTests {
     }
 
     @Test
+    func `streams pcm and forwards Fish reference inputs`() async throws {
+        let transport = TestMLXTransport(mode: .stream)
+        let factory = TestMLXTransportFactory([transport])
+        let synthesizer = TalkMLXSpeechSynthesizer(
+            transportFactory: { try await factory.make() },
+            idleDuration: .seconds(60))
+
+        let playback = try await synthesizer.synthesizeStream(
+            text: "[whisper] keep this quiet",
+            modelRepo: "mlx-community/fish-audio-s2-pro-8bit",
+            language: nil,
+            voicePreset: nil,
+            referenceAudioPath: "/tmp/reference.wav",
+            referenceText: "reference transcript")
+        var received = Data()
+        for try await chunk in playback.chunks {
+            received.append(chunk)
+        }
+
+        #expect(playback.sampleRate == 32000)
+        #expect(received == Data([0x00, 0x00, 0xFF, 0x7F]))
+        let requests = await transport.sent
+        guard let firstRequest = requests.first,
+              case let .synthesize(request) = firstRequest
+        else {
+            Issue.record("expected synthesis request")
+            return
+        }
+        #expect(request.stream)
+        #expect(request.referenceAudioPath == "/tmp/reference.wav")
+        #expect(request.referenceText == "reference transcript")
+        #expect(request.text == "[whisper] keep this quiet")
+    }
+
+    @Test
+    func `ending stream consumption cancels the helper request`() async throws {
+        let transport = TestMLXTransport(mode: .streamWaitForCancel)
+        let factory = TestMLXTransportFactory([transport])
+        let synthesizer = TalkMLXSpeechSynthesizer(
+            transportFactory: { try await factory.make() },
+            idleDuration: .seconds(60))
+
+        var playback: MLXTTSPlaybackStream? = try await synthesizer.synthesizeStream(
+            text: "stop streaming",
+            modelRepo: nil,
+            language: nil,
+            voicePreset: nil,
+            referenceAudioPath: nil,
+            referenceText: nil)
+        #expect(playback?.sampleRate == 32000)
+        playback = nil
+        await transport.waitForCancelRequest()
+
+        #expect(await transport.closeCount == 0)
+    }
+
+    @Test
+    func `stream stall terminates the helper`() async throws {
+        let transport = TestMLXTransport(mode: .streamWaitForCancel)
+        let factory = TestMLXTransportFactory([transport])
+        let synthesizer = TalkMLXSpeechSynthesizer(
+            transportFactory: { try await factory.make() },
+            idleDuration: .seconds(60))
+
+        let playback = try await synthesizer.synthesizeStream(
+            text: "stall after first chunk boundary",
+            modelRepo: nil,
+            language: nil,
+            voicePreset: nil,
+            referenceAudioPath: nil,
+            referenceText: nil,
+            stallTimeoutSeconds: 0.01)
+
+        do {
+            for try await _ in playback.chunks {}
+            Issue.record("expected stream timeout")
+        } catch TalkMLXSpeechSynthesizer.SynthesizeError.timedOut {
+            #expect(await transport.closeCount == 1)
+        }
+    }
+
+    @Test
     func `retries once after helper crash`() async throws {
         let crashed = TestMLXTransport(mode: .crash)
         let restarted = TestMLXTransport(mode: .audio)
@@ -87,7 +169,9 @@ struct TalkMLXSpeechSynthesizerTests {
         } catch TalkMLXSpeechSynthesizer.SynthesizeError.canceled {
             #expect(await transport.closeCount == 0)
             #expect(await transport.sent.contains { request in
-                if case .cancel = request { return true }
+                if case .cancel = request {
+                    return true
+                }
                 return false
             })
         }
@@ -272,6 +356,8 @@ private actor TestMLXTransport: MLXTTSTransport {
         case crash
         case ignoreCancel
         case startupHang
+        case stream
+        case streamWaitForCancel
         case waitForCancel
     }
 
@@ -298,6 +384,18 @@ private actor TestMLXTransport: MLXTTSTransport {
                     id: synthesize.id,
                     sampleRate: 32000,
                     pcm: Data([0x00, 0x00, 0xFF, 0x7F]))))
+            case .stream:
+                self.events.append(.streamStarted(MLXTTSStreamStart(
+                    id: synthesize.id,
+                    sampleRate: 32000)))
+                self.events.append(.audioChunk(MLXTTSAudioChunk(
+                    id: synthesize.id,
+                    pcm: Data([0x00, 0x00, 0xFF, 0x7F]))))
+                self.events.append(.completed(id: synthesize.id))
+            case .streamWaitForCancel:
+                self.events.append(.streamStarted(MLXTTSStreamStart(
+                    id: synthesize.id,
+                    sampleRate: 32000)))
             case .crash:
                 self.closed = true
             case .audioAfterCancel, .ignoreCancel, .startupHang, .waitForCancel:
@@ -334,7 +432,9 @@ private actor TestMLXTransport: MLXTTSTransport {
 
     func waitForSynthesisRequest() async {
         while !self.sent.contains(where: {
-            if case .synthesize = $0 { return true }
+            if case .synthesize = $0 {
+                return true
+            }
             return false
         }) {
             await Task.yield()
@@ -343,6 +443,17 @@ private actor TestMLXTransport: MLXTTSTransport {
 
     func waitForShutdown() async {
         while !self.sent.contains(.shutdown) || self.closeCount == 0 {
+            await Task.yield()
+        }
+    }
+
+    func waitForCancelRequest() async {
+        while !self.sent.contains(where: {
+            if case .cancel = $0 {
+                return true
+            }
+            return false
+        }) {
             await Task.yield()
         }
     }

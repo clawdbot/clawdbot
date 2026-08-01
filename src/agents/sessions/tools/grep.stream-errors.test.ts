@@ -20,7 +20,11 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-type MockChild = ChildProcessWithoutNullStreams & { stdout: PassThrough; stderr: PassThrough };
+type MockChild = ChildProcessWithoutNullStreams & {
+  nodeChildProcess: ChildProcessWithoutNullStreams;
+  stdout: PassThrough;
+  stderr: PassThrough;
+};
 
 function createChild(): MockChild {
   let killed = false;
@@ -34,6 +38,7 @@ function createChild(): MockChild {
     killed = true;
     return true;
   });
+  child.nodeChildProcess = child;
   return child;
 }
 
@@ -222,5 +227,23 @@ describe("grep tool stream errors", () => {
       child.stdout.emit("error", new Error("stdout later"));
     }).not.toThrow();
     await expect(result).rejects.toThrow("stderr first");
+  });
+
+  it("keeps multibyte stderr intact when pipe chunks split a character", async () => {
+    const child = createChild();
+    vi.mocked(spawnCommand).mockReturnValue(child as never);
+    vi.mocked(ensureTool).mockResolvedValue("rg");
+
+    const tool = createGrepToolDefinition(process.cwd());
+    const result = tool.execute("call-1", { pattern: "foo" }, undefined, undefined, {} as never);
+    await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledOnce());
+    const stderrBytes = Buffer.from("rg 错误：权限被拒绝\n");
+    child.stdout.end();
+    // Split inside the first multibyte character to mimic a pipe chunk boundary.
+    child.stderr.write(stderrBytes.subarray(0, 4));
+    child.stderr.end(stderrBytes.subarray(4));
+    child.emit("close", 2);
+
+    await expect(result).rejects.toThrow("rg 错误：权限被拒绝");
   });
 });

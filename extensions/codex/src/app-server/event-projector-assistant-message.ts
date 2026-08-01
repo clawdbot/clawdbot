@@ -72,6 +72,32 @@ export function createAssistantMessage(
   };
 }
 
+export function createAssistantCommentaryMessage(
+  params: EmbeddedRunAttemptParams,
+  text: string,
+  itemId: string,
+  timestamp: number,
+): AssistantMessage {
+  const attribution = resolveCodexLocalRuntimeAttribution(params);
+  return {
+    role: "assistant",
+    content: [{ type: "text", text }],
+    api: attribution.api ?? "openai-chatgpt-responses",
+    provider: attribution.provider,
+    model: params.modelId,
+    usage: ZERO_USAGE,
+    stopReason: "stop",
+    timestamp,
+    // Keep this unphased: gateway history hides commentary-phase assistant rows.
+    // The keyed fallback persists Control UI narration without channel delivery.
+    openclawStreamFallback: {
+      replacementText: text,
+      source: "segment",
+      itemId,
+    },
+  } as unknown as AssistantMessage;
+}
+
 export function createAssistantMirrorMessage(
   params: EmbeddedRunAttemptParams,
   title: string,

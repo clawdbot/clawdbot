@@ -7,8 +7,7 @@ describe("isSlackApprovalAuthorizedSender", () => {
     const cfg = {
       channels: {
         slack: {
-          allowFrom: ["slack:U123OWNER"],
-          dm: { allowFrom: ["<@U234DM>"] },
+          allowFrom: ["slack:U123OWNER", "<@U234DM>"],
           defaultTo: "user:U345DEFAULT",
           execApprovals: { enabled: true, approvers: ["user:U999EXEC"] },
         },

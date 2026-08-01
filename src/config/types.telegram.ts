@@ -2,23 +2,17 @@
 import type {
   ChannelPreviewStreamingConfig,
   ChannelStreamingPreviewConfig,
-  ContextVisibilityMode,
   DmPolicy,
   GroupPolicy,
-  MarkdownConfig,
-  OutboundRetryConfig,
-  ReplyToMode,
   SessionThreadBindingsConfig,
 } from "./types.base.js";
 import type {
-  ChannelHealthMonitorConfig,
-  ChannelHeartbeatVisibilityConfig,
-} from "./types.channel-health.js";
-import type {
-  DmConfig,
-  MentionPatternsPolicyConfig,
-  ProviderCommandsConfig,
-} from "./types.messages.js";
+  ChannelExecApprovalConfig,
+  ChannelExecApprovalTarget,
+  ChannelReactionConfig,
+  CommonChannelMessagingConfig,
+} from "./types.channel-messaging-common.js";
+import type { ProviderCommandsConfig } from "./types.messages.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
 export type TelegramActionConfig = {
@@ -36,16 +30,7 @@ export type TelegramActionConfig = {
   editForumTopic?: boolean;
 };
 
-export type TelegramThreadBindingsConfig = SessionThreadBindingsConfig & {
-  /**
-   * @deprecated Use spawnSessions instead.
-   */
-  spawnSubagentSessions?: boolean;
-  /**
-   * @deprecated Use spawnSessions instead.
-   */
-  spawnAcpSessions?: boolean;
-};
+export type TelegramThreadBindingsConfig = SessionThreadBindingsConfig;
 
 export type TelegramNetworkConfig = {
   /** Override Node's autoSelectFamily behavior (true = enable, false = disable). */
@@ -66,24 +51,13 @@ export type TelegramNetworkConfig = {
 
 export type TelegramInlineButtonsScope = "off" | "dm" | "group" | "all" | "allowlist";
 export type TelegramStreamingMode = "off" | "partial" | "block" | "progress";
-export type TelegramExecApprovalTarget = "dm" | "channel" | "both";
+export type TelegramExecApprovalTarget = ChannelExecApprovalTarget;
 
 export type TelegramPreviewStreamingConfig = Omit<ChannelPreviewStreamingConfig, "preview"> & {
   preview?: ChannelStreamingPreviewConfig;
 };
 
-export type TelegramExecApprovalConfig = {
-  /** Enable mode for Telegram exec approvals on this account. Default: auto when approvers can be resolved; false disables. */
-  enabled?: import("./types.approvals.js").NativeExecApprovalEnableMode;
-  /** Telegram user IDs allowed to approve exec requests. Optional: falls back to numeric owner IDs inferred from commands.ownerAllowFrom when possible. */
-  approvers?: Array<string | number>;
-  /** Only forward approvals for these agent IDs. Omit = all agents. */
-  agentFilter?: string[];
-  /** Only forward approvals matching these session key patterns (substring or regex). */
-  sessionFilter?: string[];
-  /** Where to send approval prompts. Default: "dm". */
-  target?: TelegramExecApprovalTarget;
-};
+export type TelegramExecApprovalConfig = ChannelExecApprovalConfig;
 
 export type TelegramCapabilitiesConfig =
   | string[]
@@ -99,167 +73,87 @@ export type TelegramCustomCommand = {
   description: string;
 };
 
-export type TelegramAccountConfig = {
-  /** Optional display name for this account (used in CLI/UI lists). */
-  name?: string;
-  /** Optional provider capability tags used for agent/runtime guidance. */
-  capabilities?: TelegramCapabilitiesConfig;
-  /** Telegram-native exec approval delivery + approver authorization. */
-  execApprovals?: TelegramExecApprovalConfig;
-  /** Markdown formatting overrides (tables). */
-  markdown?: MarkdownConfig;
-  /** Override native command registration for Telegram (bool or "auto"). */
-  commands?: ProviderCommandsConfig;
-  /** Custom commands to register in Telegram's command menu (merged with native). */
-  customCommands?: TelegramCustomCommand[];
-  /** Allow channel-initiated config writes (default: true). */
-  configWrites?: boolean;
-  /**
-   * Controls how Telegram direct chats (DMs) are handled:
-   * - "pairing" (default): unknown senders get a pairing code; owner must approve
-   * - "allowlist": only allow senders in allowFrom (or paired allow store)
-   * - "open": allow all inbound DMs (requires allowFrom to include "*")
-   * - "disabled": ignore all inbound DMs
-   */
-  dmPolicy?: DmPolicy;
-  /** If false, do not start this Telegram account. Default: true. */
-  enabled?: boolean;
-  botToken?: string;
-  /** Path to a regular file containing the bot token; symlinks are rejected. */
-  tokenFile?: string;
-  /** Control reply threading when reply tags are present (off|first|all|batched). */
-  replyToMode?: ReplyToMode;
-  /**
-   * @deprecated Telegram DM topic session detection is automatic from bot
-   * getMe.has_topics_enabled. This legacy config is removed by doctor --fix.
-   */
-  dm?: TelegramDmConfig;
-  groups?: Record<string, TelegramGroupConfig>;
-  /** Per-DM configuration for Telegram DM topics (key is chat ID). */
-  direct?: Record<string, TelegramDirectConfig>;
-  /** DM allowlist (numeric Telegram user IDs). Onboarding can resolve @username to IDs. */
-  allowFrom?: Array<string | number>;
-  /** Default delivery target for CLI `--deliver` when no explicit `--reply-to` is provided. */
-  defaultTo?: string | number;
-  /** Optional allowlist for Telegram group senders (numeric Telegram user IDs). */
-  groupAllowFrom?: Array<string | number>;
-  /**
-   * Controls how group messages are handled:
-   * - "open": groups bypass allowFrom, only mention-gating applies
-   * - "disabled": block all group messages entirely
-   * - "allowlist": only allow group messages from senders in groupAllowFrom/allowFrom
-   */
-  groupPolicy?: GroupPolicy;
-  /** Scope configured groupChat mentionPatterns to selected Telegram chat/thread IDs. */
-  mentionPatterns?: MentionPatternsPolicyConfig;
-  /** Supplemental context visibility policy (all|allowlist|allowlist_quote). */
-  contextVisibility?: ContextVisibilityMode;
-  /** Max group messages to keep as history context (0 disables). */
-  historyLimit?: number;
-  /** Max DM turns to keep as history context. */
-  dmHistoryLimit?: number;
-  /** Per-DM config overrides keyed by user ID. */
-  dms?: Record<string, DmConfig>;
-  /** Outbound text chunk size (chars). Default: 4000. */
-  textChunkLimit?: number;
-  /**
-   * Use Telegram Bot API 10.1 rich messages for text sends and edits.
-   * When false (default), falls back to HTML/plain text formatting via sendMessage.
-   * Set to true to enable native tables, details, and rich media via sendRichMessage.
-   * Note: Some Telegram clients (Web, Desktop, older mobile) do NOT support
-   * sendRichMessage and will show "This message is not supported" errors.
-   * Default: false.
-   */
-  richMessages?: boolean;
-  /** Streaming + chunking settings. Prefer this nested shape over legacy flat keys. */
-  streaming?: TelegramPreviewStreamingConfig;
-  mediaMaxMb?: number;
-  /** Telegram API client timeout in seconds (grammY ApiClientOptions). */
-  timeoutSeconds?: number;
-  /** Buffer window for Telegram media groups/albums before dispatching them as one inbound message. Default: 500ms. */
-  mediaGroupFlushMs?: number;
-  /** Telegram polling watchdog threshold in milliseconds. Default: 120000. */
-  pollingStallThresholdMs?: number;
-  /** Retry policy for outbound Telegram API calls. */
-  retry?: OutboundRetryConfig;
-  /** Network transport overrides for Telegram. */
-  network?: TelegramNetworkConfig;
-  proxy?: string;
-  webhookUrl?: string;
-  webhookSecret?: string;
-  webhookPath?: string;
-  /** Local webhook listener bind host (default: 127.0.0.1). */
-  webhookHost?: string;
-  /** Local webhook listener bind port (default: 8787). */
-  webhookPort?: number;
-  /** Path to the self-signed certificate (PEM) to upload to Telegram during webhook registration. */
-  webhookCertPath?: string;
-  /** Per-action tool gating (default: true for all). */
-  actions?: TelegramActionConfig;
-  /** Telegram thread/conversation binding overrides. */
-  threadBindings?: TelegramThreadBindingsConfig;
-  /**
-   * Controls which user reactions trigger notifications:
-   * - "off" (default): ignore all reactions
-   * - "own": notify when users react to bot messages
-   * - "all": notify agent of all reactions
-   */
-  reactionNotifications?: "off" | "own" | "all";
-  /**
-   * Controls agent's reaction capability:
-   * - "off": agent cannot react
-   * - "ack" (default): bot sends acknowledgment reactions (👀 while processing)
-   * - "minimal": agent can react sparingly (guideline: 1 per 5-10 exchanges)
-   * - "extensive": agent can react liberally when appropriate
-   */
-  reactionLevel?: "off" | "ack" | "minimal" | "extensive";
-  /** Heartbeat visibility settings for this channel. */
-  heartbeat?: ChannelHeartbeatVisibilityConfig;
-  /** Channel health monitor overrides for this channel/account. */
-  healthMonitor?: ChannelHealthMonitorConfig;
-  /** Controls whether link previews are shown in outbound messages. Default: true. */
-  linkPreview?: boolean;
-  /** Send Telegram bot error replies silently (no notification sound). Default: false. */
-  silentErrorReplies?: boolean;
-  /** Controls outbound error reporting: always, once per cooldown window, or silent. */
-  errorPolicy?: "always" | "once" | "silent";
-  /** Cooldown window for `errorPolicy: "once"` in milliseconds. */
-  errorCooldownMs?: number;
-  /**
-   * Per-channel outbound response prefix override.
-   *
-   * When set, this takes precedence over the global `messages.responsePrefix`.
-   * Use `""` to explicitly disable a global prefix for this channel.
-   * Use `"auto"` to derive `[{identity.name}]` from the routed agent.
-   */
-  responsePrefix?: string;
-  /**
-   * Per-channel ack reaction override.
-   * Telegram expects unicode emoji (e.g., "👀") rather than shortcodes.
-   */
-  ackReaction?: string;
-  /** Custom Telegram Bot API root URL (e.g. "https://my-proxy.example.com" or a local Bot API server), not a /bot<TOKEN> endpoint. */
-  apiRoot?: string;
-  /** Trusted local filesystem roots for self-hosted Telegram Bot API absolute file_path values. */
-  trustedLocalFileRoots?: string[];
-  /** Auto-rename DM forum topics on first message using LLM. Default: true. */
-  autoTopicLabel?: AutoTopicLabelConfig;
-};
-
-/**
- * @deprecated Telegram DM topic session detection is automatic from bot
- * getMe.has_topics_enabled. This legacy type remains for plugin SDK
- * compatibility only.
- */
-export type TelegramDmThreadReplies = "off" | "inbound" | "always";
-
-/**
- * @deprecated Legacy config removed by doctor --fix.
- */
-export type TelegramDmConfig = {
-  /** @deprecated Use bot getMe.has_topics_enabled; doctor removes this key. */
-  threadReplies?: TelegramDmThreadReplies;
-};
+export type TelegramAccountConfig = CommonChannelMessagingConfig<
+  TelegramCapabilitiesConfig,
+  string | number,
+  string | number,
+  TelegramPreviewStreamingConfig
+> &
+  ChannelReactionConfig<"off" | "own" | "all", "off" | "ack" | "minimal" | "extensive", string> & {
+    /** Telegram-native exec approval delivery + approver authorization. */
+    execApprovals?: TelegramExecApprovalConfig;
+    /** Override native command registration for Telegram (bool or "auto"). */
+    commands?: ProviderCommandsConfig;
+    /** Custom commands to register in Telegram's command menu (merged with native). */
+    customCommands?: TelegramCustomCommand[];
+    botToken?: string;
+    /** Path to a regular file containing the bot token; symlinks are rejected. */
+    tokenFile?: string;
+    groups?: Record<string, TelegramGroupConfig>;
+    /** Per-DM configuration for Telegram DM topics (key is chat ID). */
+    direct?: Record<string, TelegramDirectConfig>;
+    /**
+     * Use Telegram Bot API 10.1 rich messages for text sends and edits.
+     * When false (default), falls back to HTML/plain text formatting via sendMessage.
+     * Set to true to enable native tables, details, and rich media via sendRichMessage.
+     * Note: Some Telegram clients (Web, Desktop, older mobile) do NOT support
+     * sendRichMessage and will show "This message is not supported" errors.
+     * Default: false.
+     */
+    richMessages?: boolean;
+    /** Network transport overrides for Telegram. */
+    network?: TelegramNetworkConfig;
+    proxy?: string;
+    webhookUrl?: string;
+    webhookSecret?: string;
+    webhookPath?: string;
+    /** Local webhook listener bind host (default: 127.0.0.1). */
+    webhookHost?: string;
+    /** Local webhook listener bind port (default: 8787). */
+    webhookPort?: number;
+    /** Path to the self-signed certificate (PEM) to upload to Telegram during webhook registration. */
+    webhookCertPath?: string;
+    /** Per-action tool gating (default: true for all). */
+    actions?: TelegramActionConfig;
+    /** Telegram thread/conversation binding overrides. */
+    threadBindings?: TelegramThreadBindingsConfig;
+    /**
+     * Controls which user reactions trigger notifications:
+     * - "off" (default): ignore all reactions
+     * - "own": notify when users react to bot messages
+     * - "all": notify agent of all reactions
+     */
+    /**
+     * Controls agent's reaction capability:
+     * - "off": agent cannot react
+     * - "ack" (default): bot sends acknowledgment reactions (👀 while processing)
+     * - "minimal": agent can react sparingly (guideline: 1 per 5-10 exchanges)
+     * - "extensive": agent can react liberally when appropriate
+     */
+    /** Controls whether link previews are shown in outbound messages. Default: true. */
+    linkPreview?: boolean;
+    /** Send Telegram bot error replies silently (no notification sound). Default: false. */
+    silentErrorReplies?: boolean;
+    /** Controls outbound error reporting: always, once per cooldown window, or silent. */
+    errorPolicy?: "always" | "once" | "silent";
+    /**
+     * Per-channel outbound response prefix override.
+     *
+     * Account values take precedence over the channel-level value.
+     * Use `""` to explicitly disable a global prefix for this channel.
+     * Use `"auto"` to derive `[{identity.name}]` from the routed agent.
+     */
+    /**
+     * Per-channel ack reaction override.
+     * Telegram expects unicode emoji (e.g., "👀") rather than shortcodes.
+     */
+    /** Custom Telegram Bot API root URL (e.g. "https://my-proxy.example.com" or a local Bot API server), not a /bot<TOKEN> endpoint. */
+    apiRoot?: string;
+    /** Trusted local filesystem roots for self-hosted Telegram Bot API absolute file_path values. */
+    trustedLocalFileRoots?: string[];
+    /** Auto-rename DM forum topics on first message using LLM. Default: true. */
+    autoTopicLabel?: AutoTopicLabelConfig;
+  };
 
 export type TelegramTopicConfig = {
   requireMention?: boolean;
@@ -281,8 +175,6 @@ export type TelegramTopicConfig = {
   agentId?: string;
   /** Controls outbound error reporting for this topic. */
   errorPolicy?: "always" | "once" | "silent";
-  /** Cooldown window for `errorPolicy: "once"` in milliseconds. */
-  errorCooldownMs?: number;
 };
 
 export type TelegramGroupConfig = {
@@ -308,8 +200,6 @@ export type TelegramGroupConfig = {
   disableAudioPreflight?: boolean;
   /** Controls outbound error reporting for this group. */
   errorPolicy?: "always" | "once" | "silent";
-  /** Cooldown window for `errorPolicy: "once"` in milliseconds. */
-  errorCooldownMs?: number;
 };
 
 /** Config for LLM-based auto-topic labeling. */
@@ -324,8 +214,6 @@ export type AutoTopicLabelConfig =
 export type TelegramDirectConfig = {
   /** Per-DM override for DM message policy (open|disabled|allowlist). */
   dmPolicy?: DmPolicy;
-  /** @deprecated Use bot getMe.has_topics_enabled; doctor removes this key. */
-  threadReplies?: TelegramDmThreadReplies;
   /** Optional tool policy overrides for this DM. */
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;
@@ -343,8 +231,6 @@ export type TelegramDirectConfig = {
   systemPrompt?: string;
   /** Controls outbound error reporting for this DM. */
   errorPolicy?: "always" | "once" | "silent";
-  /** Cooldown window for `errorPolicy: "once"` in milliseconds. */
-  errorCooldownMs?: number;
   /** Auto-rename DM forum topics on first message using LLM. Default: true. */
   autoTopicLabel?: AutoTopicLabelConfig;
 };

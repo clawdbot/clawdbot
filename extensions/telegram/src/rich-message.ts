@@ -2,6 +2,7 @@ import type { Bot } from "grammy";
 import type {
   ForceReply,
   InlineKeyboardMarkup,
+  LinkPreviewOptions,
   Message,
   ReplyKeyboardMarkup,
   ReplyKeyboardRemove,
@@ -82,6 +83,7 @@ export type TelegramEditRichMessageTextParams = {
   message_id?: number;
   inline_message_id?: string;
   rich_message: TelegramInputRichMessage;
+  link_preview_options?: LinkPreviewOptions;
   reply_markup?: InlineKeyboardMarkup;
 };
 

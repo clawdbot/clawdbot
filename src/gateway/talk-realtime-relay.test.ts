@@ -1,18 +1,36 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 /**
  * Tests talk realtime relay event forwarding and connection cleanup.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { setActiveEmbeddedRun } from "../agents/embedded-agent-runner/runs.js";
 import { testing as embeddedRunTesting } from "../agents/embedded-agent-runner/runs.test-support.js";
+import {
+  readSessionTranscriptMessageEvents,
+  replaceSessionEntry,
+} from "../config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../config/types.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { clientVoiceSessionTesting } from "../talk/client-voice-session.test-support.js";
 import type {
   RealtimeVoiceBridge,
   RealtimeVoiceBridgeCreateRequest,
 } from "../talk/provider-types.js";
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { createChatRunState } from "./server-chat-state.js";
+import { drainingRelaySessions, relaySessions } from "./talk-realtime-relay-state.js";
 import {
   acknowledgeTalkRealtimeRelayMark,
   cancelTalkRealtimeRelayTurn,
+  closeTalkRealtimeRelaySessionsForConnection,
   createTalkRealtimeRelaySession as createTalkRealtimeRelaySessionRaw,
+  ensureTalkRealtimeRelayVoiceSession,
+  flushTalkRealtimeRelayVoiceWrites,
   registerTalkRealtimeRelayAgentRun,
   sendTalkRealtimeRelayAudio,
   steerTalkRealtimeRelayAgentRun,
@@ -21,11 +39,15 @@ import {
 } from "./talk-realtime-relay.js";
 
 const activeRelaySessions = new Map<string, string>();
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function createTalkRealtimeRelaySession(
   params: Parameters<typeof createTalkRealtimeRelaySessionRaw>[0],
 ): ReturnType<typeof createTalkRealtimeRelaySessionRaw> {
-  const session = createTalkRealtimeRelaySessionRaw(params);
+  const session = createTalkRealtimeRelaySessionRaw({
+    cfg: { agents: { entries: { main: { default: true } } } },
+    ...params,
+  });
   activeRelaySessions.set(session.relaySessionId, params.connId);
   return session;
 }
@@ -38,7 +60,7 @@ function stopTalkRealtimeRelaySession(
 }
 
 describe("talk realtime gateway relay", () => {
-  afterEach(() => {
+  afterEach(async () => {
     for (const [relaySessionId, connId] of activeRelaySessions) {
       try {
         stopTalkRealtimeRelaySessionRaw({ relaySessionId, connId });
@@ -52,6 +74,9 @@ describe("talk realtime gateway relay", () => {
       }
     }
     activeRelaySessions.clear();
+    await Promise.all(
+      [...drainingRelaySessions].map((session) => session.voiceSessionClose ?? Promise.resolve()),
+    );
     vi.useRealTimers();
     embeddedRunTesting.resetActiveEmbeddedRuns();
   });
@@ -73,6 +98,673 @@ describe("talk realtime gateway relay", () => {
       }),
     };
   }
+
+  it("closes only realtime relays owned by the disconnected connection", async () => {
+    const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+    const tempDir = await fs.realpath(tempDirs.make("openclaw-relay-disconnect-"));
+    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
+    const bridgeCloses: Array<ReturnType<typeof vi.fn>> = [];
+    const bridgeAudioSends: Array<ReturnType<typeof vi.fn>> = [];
+    const bridgeRequests: RealtimeVoiceBridgeCreateRequest[] = [];
+    const bridgeToolResults: Array<ReturnType<typeof vi.fn>> = [];
+    const provider = createIdleRelayProvider();
+    provider.createBridge = (request) => {
+      const bridgeIndex = bridgeCloses.length;
+      const close = vi.fn();
+      const sendAudio = vi.fn();
+      const submitToolResult = vi.fn();
+      bridgeRequests.push(request);
+      bridgeCloses.push(close);
+      bridgeAudioSends.push(sendAudio);
+      bridgeToolResults.push(submitToolResult);
+      return {
+        connect: vi.fn(async () => {
+          if (bridgeIndex === 1) {
+            throw new Error("late connect failure");
+          }
+        }),
+        sendAudio,
+        setMediaTimestamp: vi.fn(),
+        handleBargeIn: vi.fn(),
+        submitToolResult,
+        acknowledgeMark: vi.fn(),
+        close,
+        isConnected: vi.fn(() => true),
+      };
+    };
+    try {
+      const logGateway = { warn: vi.fn() };
+      const broadcastToConnIds = vi.fn();
+      const context = {
+        broadcastToConnIds,
+        chatAbortControllers: new Map(),
+        getRuntimeConfig: () => ({}),
+        logGateway,
+      } as never;
+      const createSession = (connId: string) =>
+        createTalkRealtimeRelaySession({
+          context,
+          connId,
+          provider,
+          providerConfig: {},
+          instructions: "brief",
+          tools: [],
+        });
+      const firstOwned = createSession("conn-owner");
+      const secondOwned = createSession("conn-owner");
+      const unrelated = createSession("conn-other");
+      ensureTalkRealtimeRelayVoiceSession({
+        relaySessionId: firstOwned.relaySessionId,
+        connId: "conn-owner",
+        sessionKey: "agent:main:main",
+      });
+      expect(clientVoiceSessionTesting.readRecord("main", firstOwned.relaySessionId)).toMatchObject(
+        {
+          status: "open",
+        },
+      );
+      bridgeCloses[0]?.mockImplementationOnce(() => {
+        throw new Error("provider close failed");
+      });
+
+      expect(() => closeTalkRealtimeRelaySessionsForConnection("conn-owner")).not.toThrow();
+      closeTalkRealtimeRelaySessionsForConnection("conn-owner");
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(bridgeCloses[0]).toHaveBeenCalledOnce();
+      expect(bridgeCloses[1]).toHaveBeenCalledOnce();
+      expect(bridgeCloses[2]).not.toHaveBeenCalled();
+      expect(logGateway.warn).toHaveBeenCalledWith(
+        "failed to close realtime relay session after connection disconnect: provider close failed",
+      );
+      await vi.waitFor(() =>
+        expect(
+          clientVoiceSessionTesting.readRecord("main", firstOwned.relaySessionId)?.status,
+        ).toBe("closed"),
+      );
+      expect(
+        broadcastToConnIds.mock.calls.some(
+          ([event, payload]) =>
+            event === "talk.event" &&
+            payload.relaySessionId === firstOwned.relaySessionId &&
+            payload.type === "close" &&
+            payload.talkEvent?.type === "session.closed" &&
+            payload.talkEvent.final === true,
+        ),
+      ).toBe(true);
+      expect(
+        broadcastToConnIds.mock.calls.some(
+          ([event, payload]) =>
+            event === "talk.event" &&
+            payload.relaySessionId === secondOwned.relaySessionId &&
+            payload.type === "error",
+        ),
+      ).toBe(false);
+      const eventCountAfterClose = broadcastToConnIds.mock.calls.length;
+      const lateRequest = bridgeRequests[0];
+      if (!lateRequest?.runAgentConsult) {
+        throw new Error("expected relay provider request to include the agent consult runner");
+      }
+      lateRequest.onReady?.();
+      lateRequest.onError?.(new Error("late provider error"));
+      lateRequest.onEvent?.({ direction: "server", type: "response.done" });
+      lateRequest.onAudio(Buffer.from("late audio"));
+      lateRequest.onClearAudio("barge-in");
+      lateRequest.onMark?.("late-mark");
+      lateRequest.onTranscript?.("user", "late transcript", true);
+      lateRequest.onToolCall?.({
+        itemId: "late-item",
+        callId: "late-call",
+        name: "openclaw_agent_consult",
+        args: { question: "late consult" },
+      });
+      lateRequest.onClose?.("error");
+      await expect(lateRequest.runAgentConsult({ prompt: "late direct consult" })).rejects.toThrow(
+        "Realtime gateway-relay session is closed",
+      );
+      await Promise.resolve();
+      expect(broadcastToConnIds).toHaveBeenCalledTimes(eventCountAfterClose);
+      expect(bridgeToolResults[0]).not.toHaveBeenCalled();
+      expect(() =>
+        sendTalkRealtimeRelayAudio({
+          relaySessionId: firstOwned.relaySessionId,
+          connId: "conn-owner",
+          audioBase64: "AQI=",
+        }),
+      ).toThrow("Unknown realtime relay session");
+      expect(() =>
+        sendTalkRealtimeRelayAudio({
+          relaySessionId: secondOwned.relaySessionId,
+          connId: "conn-owner",
+          audioBase64: "AQI=",
+        }),
+      ).toThrow("Unknown realtime relay session");
+
+      sendTalkRealtimeRelayAudio({
+        relaySessionId: unrelated.relaySessionId,
+        connId: "conn-other",
+        audioBase64: "AQI=",
+      });
+      expect(bridgeAudioSends[2]).toHaveBeenCalledOnce();
+      stopTalkRealtimeRelaySession({
+        relaySessionId: unrelated.relaySessionId,
+        connId: "conn-other",
+      });
+      closeTalkRealtimeRelaySessionsForConnection("conn-other");
+      expect(bridgeCloses[2]).toHaveBeenCalledOnce();
+    } finally {
+      clientVoiceSessionTesting.reset();
+      closeOpenClawAgentDatabasesForTest();
+      closeOpenClawStateDatabaseForTest();
+      envSnapshot.restore();
+    }
+  });
+
+  it("injects the host agent runner only into gateway-relay bridge creation", () => {
+    let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
+    const provider = createIdleRelayProvider();
+    provider.createBridge = (request) => {
+      bridgeRequest = request;
+      return createIdleRelayProvider().createBridge(request);
+    };
+    const session = createTalkRealtimeRelaySession({
+      context: {
+        broadcastToConnIds: vi.fn(),
+        chatAbortControllers: new Map(),
+        getRuntimeConfig: () => ({}),
+        logGateway: { warn: vi.fn() },
+      } as never,
+      connId: "conn-runner",
+      provider,
+      providerConfig: {},
+      instructions: "brief",
+      tools: [],
+      sessionKey: "agent:main:main",
+    });
+
+    expect(bridgeRequest?.runAgentConsult).toEqual(expect.any(Function));
+    expect(bridgeRequest?.agentId).toBe("main");
+    stopTalkRealtimeRelaySession({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-runner",
+    });
+  });
+
+  it.each([
+    {
+      name: "error before close",
+      terminate: (request: RealtimeVoiceBridgeCreateRequest) => {
+        request.onError?.(new Error("provider rejected session"));
+        request.onClose?.("error");
+      },
+      expectedError: "provider rejected session",
+    },
+    {
+      name: "close before error",
+      terminate: (request: RealtimeVoiceBridgeCreateRequest) => {
+        request.onClose?.("completed");
+        request.onError?.(new Error("late provider error"));
+      },
+      expectedError: "Realtime provider closed during session creation: completed",
+    },
+  ])(
+    "rejects a synchronous provider $name during bridge creation",
+    ({ terminate, expectedError }) => {
+      const connect = vi.fn(async () => undefined);
+      const sendAudio = vi.fn();
+      const close = vi.fn();
+      const bridge = {
+        ...createIdleRelayProvider().createBridge({} as never),
+        connect,
+        sendAudio,
+        close,
+      };
+      const provider = createIdleRelayProvider();
+      provider.createBridge = (request) => {
+        terminate(request);
+        return bridge;
+      };
+      const broadcastToConnIds = vi.fn();
+
+      expect(() =>
+        createTalkRealtimeRelaySession({
+          context: {
+            broadcastToConnIds,
+            chatAbortControllers: new Map(),
+            getRuntimeConfig: () => ({}),
+            logGateway: { warn: vi.fn() },
+          } as never,
+          connId: "conn-early-terminal",
+          provider,
+          providerConfig: {},
+          instructions: "brief",
+          tools: [],
+        }),
+      ).toThrow(expectedError);
+
+      expect(connect).not.toHaveBeenCalled();
+      expect(sendAudio).not.toHaveBeenCalled();
+      expect(close).toHaveBeenCalledOnce();
+      expect(broadcastToConnIds).not.toHaveBeenCalled();
+    },
+  );
+
+  it("appends finalized relay transcripts to the canonical agent session", async () => {
+    const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+    const tempDir = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-relay-voice-")),
+    );
+    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
+    let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
+    try {
+      await replaceSessionEntry(
+        { agentId: "main", sessionKey: "agent:main:main" },
+        { sessionId: "relay-voice-session", updatedAt: Date.now() },
+      );
+      const provider = createIdleRelayProvider();
+      provider.createBridge = (request) => {
+        bridgeRequest = request;
+        return createIdleRelayProvider().createBridge?.(request) as RealtimeVoiceBridge;
+      };
+      const session = createTalkRealtimeRelaySession({
+        context: {
+          broadcastToConnIds: vi.fn(),
+          chatAbortControllers: new Map(),
+          getRuntimeConfig: () => ({}),
+          logGateway: { warn: vi.fn() },
+        } as never,
+        connId: "conn-voice",
+        cfg: {},
+        provider,
+        providerConfig: {},
+        instructions: "brief",
+        tools: [],
+        sessionKey: "agent:main:main",
+      });
+      bridgeRequest?.onTranscript?.("user", "relay hello", true);
+      bridgeRequest?.onTranscript?.("assistant", "relay response", true);
+      await flushTalkRealtimeRelayVoiceWrites({
+        relaySessionId: session.relaySessionId,
+        connId: "conn-voice",
+      });
+
+      const events = readSessionTranscriptMessageEvents({
+        agentId: "main",
+        sessionId: "relay-voice-session",
+      });
+      expect(events).toHaveLength(2);
+      expect(events[0]?.event).toMatchObject({
+        id: `voice:${session.relaySessionId}:1`,
+        message: { role: "user", content: [{ type: "text", text: "relay hello" }] },
+      });
+      expect(events[1]?.event).toMatchObject({
+        id: `voice:${session.relaySessionId}:2`,
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "relay response" }],
+          api: "realtime",
+          provider: "relay-test",
+          model: "realtime-voice",
+        },
+      });
+      stopTalkRealtimeRelaySession({
+        relaySessionId: session.relaySessionId,
+        connId: "conn-voice",
+      });
+      await vi.waitFor(() =>
+        expect(clientVoiceSessionTesting.readRecord("main", session.relaySessionId)?.status).toBe(
+          "closed",
+        ),
+      );
+    } finally {
+      closeOpenClawAgentDatabasesForTest();
+      closeOpenClawStateDatabaseForTest();
+      envSnapshot.restore();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("emits one terminal error and close when transcript persistence overflows", async () => {
+    const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+    const tempDir = await fs.realpath(tempDirs.make("openclaw-relay-voice-overflow-"));
+    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
+    let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
+    const bridgeClose = vi.fn();
+    const events: Array<{ event: string; payload: unknown; connIds: string[] }> = [];
+    let releaseQueue!: () => void;
+    const queueBlocked = new Promise<void>((resolve) => {
+      releaseQueue = resolve;
+    });
+    try {
+      await replaceSessionEntry(
+        { agentId: "main", sessionKey: "agent:main:main" },
+        { sessionId: "relay-voice-overflow-session", updatedAt: Date.now() },
+      );
+      const provider = createIdleRelayProvider();
+      provider.createBridge = (request) => {
+        bridgeRequest = request;
+        return {
+          ...createIdleRelayProvider().createBridge(request),
+          close: bridgeClose,
+        } as RealtimeVoiceBridge;
+      };
+      const session = createTalkRealtimeRelaySession({
+        context: {
+          broadcastToConnIds: (event: string, payload: unknown, connIds: ReadonlySet<string>) => {
+            events.push({ event, payload, connIds: [...connIds] });
+          },
+          chatAbortControllers: new Map(),
+          getRuntimeConfig: () => ({}),
+          logGateway: { warn: vi.fn() },
+        } as never,
+        connId: "conn-voice-overflow",
+        provider,
+        providerConfig: {},
+        instructions: "brief",
+        tools: [],
+        sessionKey: "agent:main:main",
+      });
+      const relay = relaySessions.get(session.relaySessionId);
+      if (!relay) {
+        throw new Error("expected active relay");
+      }
+      relay.voiceTranscriptQueue.enqueue(async () => await queueBlocked);
+
+      for (let index = 0; index < 10_000; index += 1) {
+        bridgeRequest?.onTranscript?.("user", `message ${index}`, true);
+      }
+
+      const errorPayloads = events
+        .map((entry) => entry.payload)
+        .filter(
+          (payload): payload is Record<string, unknown> =>
+            typeof payload === "object" &&
+            payload !== null &&
+            (payload as Record<string, unknown>).type === "error",
+        );
+      const closePayloads = events
+        .map((entry) => entry.payload)
+        .filter(
+          (payload): payload is Record<string, unknown> =>
+            typeof payload === "object" &&
+            payload !== null &&
+            (payload as Record<string, unknown>).type === "close",
+        );
+      expect(errorPayloads).toHaveLength(1);
+      expect(errorPayloads[0]).toMatchObject({
+        relaySessionId: session.relaySessionId,
+        type: "error",
+        message: expect.stringContaining("persistence could not keep up"),
+      });
+      expect(errorPayloads[0]).not.toHaveProperty("code");
+      expect(closePayloads).toEqual([
+        expect.objectContaining({
+          relaySessionId: session.relaySessionId,
+          type: "close",
+          reason: "error",
+        }),
+      ]);
+      expect(bridgeClose).toHaveBeenCalledOnce();
+      expect(relaySessions.has(session.relaySessionId)).toBe(false);
+      expect(drainingRelaySessions.has(relay)).toBe(true);
+
+      createTalkRealtimeRelaySession({
+        context: {
+          broadcastToConnIds: vi.fn(),
+          getRuntimeConfig: () => ({}),
+          logGateway: { warn: vi.fn() },
+        } as never,
+        connId: "conn-voice-overflow",
+        provider,
+        providerConfig: {},
+        instructions: "brief",
+        tools: [],
+      });
+      expect(() =>
+        createTalkRealtimeRelaySession({
+          context: {
+            broadcastToConnIds: vi.fn(),
+            getRuntimeConfig: () => ({}),
+            logGateway: { warn: vi.fn() },
+          } as never,
+          connId: "conn-voice-overflow",
+          provider,
+          providerConfig: {},
+          instructions: "brief",
+          tools: [],
+        }),
+      ).toThrow("Too many active realtime relay sessions for this connection");
+
+      releaseQueue();
+      await relay.voiceSessionClose;
+      expect(drainingRelaySessions.has(relay)).toBe(false);
+      expect(clientVoiceSessionTesting.readRecord("main", session.relaySessionId)?.status).toBe(
+        "closed",
+      );
+    } finally {
+      releaseQueue();
+      closeOpenClawAgentDatabasesForTest();
+      closeOpenClawStateDatabaseForTest();
+      envSnapshot.restore();
+    }
+  });
+
+  it("creates the relay voice record before binding a transcript-free consult", async () => {
+    const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+    const tempDir = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-relay-voice-consult-")),
+    );
+    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
+    try {
+      const session = createTalkRealtimeRelaySession({
+        context: {
+          broadcastToConnIds: vi.fn(),
+          chatAbortControllers: new Map(),
+          getRuntimeConfig: () => ({}),
+          logGateway: { warn: vi.fn() },
+        } as never,
+        connId: "conn-consult",
+        cfg: {},
+        provider: createIdleRelayProvider(),
+        providerConfig: {},
+        instructions: "brief",
+        tools: [],
+        sessionKey: "agent:main:main",
+      });
+      expect(clientVoiceSessionTesting.readRecord("main", session.relaySessionId)).toBeUndefined();
+
+      registerTalkRealtimeRelayAgentRun({
+        relaySessionId: session.relaySessionId,
+        connId: "conn-consult",
+        sessionKey: "agent:main:main",
+        runId: "run-before-transcript",
+      });
+      registerTalkRealtimeRelayAgentRun({
+        relaySessionId: session.relaySessionId,
+        connId: "conn-consult",
+        sessionKey: "agent:main:other",
+        runId: "run-other-session",
+      });
+
+      expect(clientVoiceSessionTesting.readRecord("main", session.relaySessionId)).toMatchObject({
+        status: "open",
+        consultRunIds: ["run-before-transcript", "run-other-session"],
+      });
+      stopTalkRealtimeRelaySession({
+        relaySessionId: session.relaySessionId,
+        connId: "conn-consult",
+      });
+      await vi.waitFor(() =>
+        expect(clientVoiceSessionTesting.readRecord("main", session.relaySessionId)?.status).toBe(
+          "closed",
+        ),
+      );
+    } finally {
+      clientVoiceSessionTesting.reset();
+      closeOpenClawAgentDatabasesForTest();
+      closeOpenClawStateDatabaseForTest();
+      envSnapshot.restore();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("pins an unscoped relay owner before the configured default changes", async () => {
+    const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+    const tempDir = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-relay-owner-pin-")),
+    );
+    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
+    let runtimeConfig: OpenClawConfig = {
+      agents: { entries: { main: { default: true }, ops: {} } },
+    };
+    try {
+      const session = createTalkRealtimeRelaySessionRaw({
+        context: {
+          broadcastToConnIds: vi.fn(),
+          chatAbortControllers: new Map(),
+          getRuntimeConfig: () => runtimeConfig,
+          logGateway: { warn: vi.fn() },
+        } as never,
+        connId: "conn-owner-pin",
+        provider: createIdleRelayProvider(),
+        providerConfig: {},
+        instructions: "brief",
+        tools: [],
+        sessionKey: "main",
+      });
+      activeRelaySessions.set(session.relaySessionId, "conn-owner-pin");
+      runtimeConfig = {
+        agents: { entries: { main: {}, ops: { default: true } } },
+      };
+
+      ensureTalkRealtimeRelayVoiceSession({
+        relaySessionId: session.relaySessionId,
+        connId: "conn-owner-pin",
+        sessionKey: "main",
+      });
+      stopTalkRealtimeRelaySession({
+        relaySessionId: session.relaySessionId,
+        connId: "conn-owner-pin",
+      });
+      await vi.waitFor(() =>
+        expect(clientVoiceSessionTesting.readRecord("main", session.relaySessionId)?.status).toBe(
+          "closed",
+        ),
+      );
+      expect(clientVoiceSessionTesting.readRecord("ops", session.relaySessionId)).toBeUndefined();
+    } finally {
+      closeOpenClawAgentDatabasesForTest();
+      closeOpenClawStateDatabaseForTest();
+      envSnapshot.restore();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("pins a scoped relay owner from the trimmed session key", async () => {
+    const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+    const tempDir = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-relay-trimmed-owner-")),
+    );
+    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
+    try {
+      const session = createTalkRealtimeRelaySessionRaw({
+        context: {
+          broadcastToConnIds: vi.fn(),
+          chatAbortControllers: new Map(),
+          getRuntimeConfig: () => ({
+            agents: { entries: { main: {}, ops: { default: true } } },
+          }),
+          logGateway: { warn: vi.fn() },
+        } as never,
+        connId: "conn-trimmed-owner",
+        provider: createIdleRelayProvider(),
+        providerConfig: {},
+        instructions: "brief",
+        tools: [],
+        sessionKey: " agent:main:main ",
+      });
+      activeRelaySessions.set(session.relaySessionId, "conn-trimmed-owner");
+
+      ensureTalkRealtimeRelayVoiceSession({
+        relaySessionId: session.relaySessionId,
+        connId: "conn-trimmed-owner",
+        sessionKey: "agent:main:main",
+      });
+
+      expect(clientVoiceSessionTesting.readRecord("main", session.relaySessionId)).toMatchObject({
+        status: "open",
+      });
+      expect(clientVoiceSessionTesting.readRecord("ops", session.relaySessionId)).toBeUndefined();
+    } finally {
+      closeOpenClawAgentDatabasesForTest();
+      closeOpenClawStateDatabaseForTest();
+      envSnapshot.restore();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("logs relay transcript append failures", async () => {
+    const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+    const tempDir = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-relay-voice-failure-")),
+    );
+    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
+    let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
+    const warn = vi.fn();
+    try {
+      vi.useFakeTimers();
+      const provider = createIdleRelayProvider();
+      provider.createBridge = (request) => {
+        bridgeRequest = request;
+        return createIdleRelayProvider().createBridge?.(request) as RealtimeVoiceBridge;
+      };
+      const session = createTalkRealtimeRelaySession({
+        context: {
+          broadcastToConnIds: vi.fn(),
+          getRuntimeConfig: () => ({}),
+          logGateway: { warn },
+        } as never,
+        connId: "conn-voice-failure",
+        cfg: {},
+        provider,
+        providerConfig: {},
+        instructions: "brief",
+        tools: [],
+        sessionKey: "agent:main:missing",
+      });
+      bridgeRequest?.onTranscript?.("user", "cannot persist", true);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(warn).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(500);
+      expect(warn).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1_999);
+      expect(warn).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      await flushTalkRealtimeRelayVoiceWrites({
+        relaySessionId: session.relaySessionId,
+        connId: "conn-voice-failure",
+      });
+
+      expect(warn).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining("realtime relay transcript append failed"),
+      );
+      stopTalkRealtimeRelaySession({
+        relaySessionId: session.relaySessionId,
+        connId: "conn-voice-failure",
+      });
+      await vi.waitFor(() =>
+        expect(clientVoiceSessionTesting.readRecord("main", session.relaySessionId)?.status).toBe(
+          "closed",
+        ),
+      );
+    } finally {
+      closeOpenClawAgentDatabasesForTest();
+      closeOpenClawStateDatabaseForTest();
+      envSnapshot.restore();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
 
   function createDeferredVoid(): { promise: Promise<void>; resolve: () => void } {
     let resolve!: () => void;
@@ -179,25 +871,24 @@ describe("talk realtime gateway relay", () => {
     const broadcast = vi.fn();
     const nodeSendToSession = vi.fn();
     const removeChatRun = vi.fn(() => ({ sessionKey: "main", clientRunId: "run-1" }));
-    const chatRunBuffers = new Map([["run-1", "partial answer"]]);
-    const chatDeltaSentAt = new Map<string, number>();
-    const chatDeltaLastBroadcastLen = new Map<string, number>();
-    const chatDeltaLastBroadcastText = new Map<string, string>();
-    const agentDeltaSentAt = new Map([["run-1:assistant", Date.now()]]);
-    const bufferedAgentEvents = new Map([
-      [
-        "run-1:assistant",
-        {
-          payload: {
-            runId: "run-1",
-            seq: 1,
-            stream: "assistant",
-            ts: Date.now(),
-            data: { text: "pending", delta: "pending" },
+    const chatRunState = createChatRunState();
+    Object.assign(chatRunState.getOrCreate("run-1"), {
+      buffer: "partial answer",
+      agentText: {
+        assistant: {
+          lastSentAt: Date.now(),
+          bufferedEvent: {
+            payload: {
+              runId: "run-1",
+              seq: 1,
+              stream: "assistant",
+              ts: Date.now(),
+              data: { text: "pending", delta: "pending" },
+            },
           },
         },
-      ],
-    ]);
+      },
+    });
     const context = {
       broadcastToConnIds,
       broadcast,
@@ -214,23 +905,7 @@ describe("talk realtime gateway relay", () => {
           },
         ],
       ]),
-      chatRunBuffers,
-      chatDeltaSentAt,
-      chatDeltaLastBroadcastLen,
-      chatDeltaLastBroadcastText,
-      agentDeltaSentAt,
-      bufferedAgentEvents,
-      chatAbortedRuns: new Map(),
-      clearChatRunState: (runId: string) => {
-        chatRunBuffers.delete(runId);
-        chatDeltaSentAt.delete(runId);
-        chatDeltaLastBroadcastLen.delete(runId);
-        chatDeltaLastBroadcastText.delete(runId);
-        for (const key of [runId, `${runId}:assistant`, `${runId}:thinking`]) {
-          agentDeltaSentAt.delete(key);
-          bufferedAgentEvents.delete(key);
-        }
-      },
+      chatRunState,
       removeChatRun,
       agentRunSeq: new Map(),
     } as never;
@@ -255,8 +930,7 @@ describe("talk realtime gateway relay", () => {
       broadcast,
       nodeSendToSession,
       removeChatRun,
-      agentDeltaSentAt,
-      bufferedAgentEvents,
+      chatRunState,
       broadcastToConnIds,
       session,
     };
@@ -1587,15 +2261,8 @@ describe("talk realtime gateway relay", () => {
   });
 
   it("aborts linked agent consult runs when the relay turn is cancelled", () => {
-    const {
-      abortController,
-      broadcast,
-      nodeSendToSession,
-      removeChatRun,
-      agentDeltaSentAt,
-      bufferedAgentEvents,
-      session,
-    } = createAbortableRelayRunFixture();
+    const { abortController, broadcast, nodeSendToSession, removeChatRun, chatRunState, session } =
+      createAbortableRelayRunFixture();
     cancelTalkRealtimeRelayTurn({
       relaySessionId: session.relaySessionId,
       connId: "conn-1",
@@ -1604,8 +2271,7 @@ describe("talk realtime gateway relay", () => {
 
     expect(abortController.signal.aborted).toBe(true);
     expect(removeChatRun).toHaveBeenCalledWith("run-1", "run-1", "main");
-    expect(agentDeltaSentAt.has("run-1:assistant")).toBe(false);
-    expect(bufferedAgentEvents.has("run-1:assistant")).toBe(false);
+    expect(chatRunState.runs.get("run-1")?.agentText).toBeUndefined();
     expectChatAbortPayload(broadcast, "barge-in");
     expectNodeAbortPayload(nodeSendToSession);
   });
@@ -2888,19 +3554,12 @@ describe("talk realtime gateway relay", () => {
   });
 
   it("aborts linked agent consult runs when the relay session closes", () => {
-    const {
-      abortController,
-      broadcast,
-      nodeSendToSession,
-      agentDeltaSentAt,
-      bufferedAgentEvents,
-      session,
-    } = createAbortableRelayRunFixture();
+    const { abortController, broadcast, nodeSendToSession, chatRunState, session } =
+      createAbortableRelayRunFixture();
     stopTalkRealtimeRelaySession({ relaySessionId: session.relaySessionId, connId: "conn-1" });
 
     expect(abortController.signal.aborted).toBe(true);
-    expect(agentDeltaSentAt.has("run-1:assistant")).toBe(false);
-    expect(bufferedAgentEvents.has("run-1:assistant")).toBe(false);
+    expect(chatRunState.runs.get("run-1")?.agentText).toBeUndefined();
     expectChatAbortPayload(broadcast, "relay-closed");
     expectNodeAbortPayload(nodeSendToSession);
   });
@@ -2911,25 +3570,24 @@ describe("talk realtime gateway relay", () => {
     const broadcast = vi.fn();
     const nodeSendToSession = vi.fn();
     const removeChatRun = vi.fn(() => ({ sessionKey: "main", clientRunId: "run-1" }));
-    const chatRunBuffers = new Map([["run-1", "partial answer"]]);
-    const chatDeltaSentAt = new Map<string, number>();
-    const chatDeltaLastBroadcastLen = new Map<string, number>();
-    const chatDeltaLastBroadcastText = new Map<string, string>();
-    const agentDeltaSentAt = new Map([["run-1:assistant", Date.now()]]);
-    const bufferedAgentEvents = new Map([
-      [
-        "run-1:assistant",
-        {
-          payload: {
-            runId: "run-1",
-            seq: 1,
-            stream: "assistant",
-            ts: Date.now(),
-            data: { text: "pending", delta: "pending" },
+    const chatRunState = createChatRunState();
+    Object.assign(chatRunState.getOrCreate("run-1"), {
+      buffer: "partial answer",
+      agentText: {
+        assistant: {
+          lastSentAt: Date.now(),
+          bufferedEvent: {
+            payload: {
+              runId: "run-1",
+              seq: 1,
+              stream: "assistant",
+              ts: Date.now(),
+              data: { text: "pending", delta: "pending" },
+            },
           },
         },
-      ],
-    ]);
+      },
+    });
     const provider: RealtimeVoiceProviderPlugin = {
       id: "relay-test",
       label: "Relay Test",
@@ -2964,23 +3622,7 @@ describe("talk realtime gateway relay", () => {
           },
         ],
       ]),
-      chatRunBuffers,
-      chatDeltaSentAt,
-      chatDeltaLastBroadcastLen,
-      chatDeltaLastBroadcastText,
-      agentDeltaSentAt,
-      bufferedAgentEvents,
-      chatAbortedRuns: new Map(),
-      clearChatRunState: (runId: string) => {
-        chatRunBuffers.delete(runId);
-        chatDeltaSentAt.delete(runId);
-        chatDeltaLastBroadcastLen.delete(runId);
-        chatDeltaLastBroadcastText.delete(runId);
-        for (const key of [runId, `${runId}:assistant`, `${runId}:thinking`]) {
-          agentDeltaSentAt.delete(key);
-          bufferedAgentEvents.delete(key);
-        }
-      },
+      chatRunState,
       removeChatRun,
       agentRunSeq: new Map(),
     } as never;
@@ -3002,8 +3644,7 @@ describe("talk realtime gateway relay", () => {
     bridgeRequest?.onClose?.("error");
 
     expect(abortController.signal.aborted).toBe(true);
-    expect(agentDeltaSentAt.has("run-1:assistant")).toBe(false);
-    expect(bufferedAgentEvents.has("run-1:assistant")).toBe(false);
+    expect(chatRunState.runs.get("run-1")?.agentText).toBeUndefined();
     expectChatAbortPayload(broadcast, "relay-closed");
     expectNodeAbortPayload(nodeSendToSession);
   });

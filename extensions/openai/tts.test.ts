@@ -1,13 +1,11 @@
 // Openai tests cover tts plugin behavior.
-import { mkdtempSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import {
   finalizeDebugProxyCapture,
   getDebugProxyCaptureStore,
   initializeDebugProxyCapture,
 } from "openclaw/plugin-sdk/proxy-capture";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installDebugProxyTestResetHooks } from "../test-support/debug-proxy-env-test-helpers.js";
 import { createStreamingErrorResponse } from "../test-support/streaming-error-response.js";
 import {
@@ -60,14 +58,26 @@ function firstFetchInit(fetchMock: ReturnType<typeof vi.fn>): RequestInit {
 }
 
 describe("openai tts", () => {
-  const proxyReset = installDebugProxyTestResetHooks();
   const originalFetch = globalThis.fetch;
+  let openClawState: OpenClawTestState;
 
-  afterEach(() => {
+  beforeEach(async () => {
+    openClawState = await createOpenClawTestState({
+      layout: "state-only",
+      prefix: "openai-tts-capture-",
+    });
+  });
+
+  afterEach(async () => {
     globalThis.fetch = originalFetch;
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
+    await openClawState.cleanup();
   });
+
+  // Install after local teardown so the proxy snapshot is restored before the
+  // state helper removes its directory and restores the outer environment.
+  const proxyReset = installDebugProxyTestResetHooks();
 
   describe("isValidOpenAIVoice", () => {
     it("accepts all valid OpenAI voices including newer additions", () => {
@@ -348,10 +358,8 @@ describe("openai tts", () => {
     });
 
     it("records TTS exchanges in debug proxy capture mode", async () => {
-      const tempDir = mkdtempSync(path.join(os.tmpdir(), "openai-tts-capture-"));
       proxyReset.captureProxyEnv();
       process.env.OPENCLAW_DEBUG_PROXY_ENABLED = "1";
-      process.env.OPENCLAW_STATE_DIR = tempDir;
       process.env.OPENCLAW_DEBUG_PROXY_SESSION_ID = "tts-session";
 
       globalThis.fetch = vi
@@ -391,10 +399,8 @@ describe("openai tts", () => {
     });
 
     it("does not double-capture TTS exchanges when the global fetch patch is installed", async () => {
-      const tempDir = mkdtempSync(path.join(os.tmpdir(), "openai-tts-patched-capture-"));
       proxyReset.captureProxyEnv();
       process.env.OPENCLAW_DEBUG_PROXY_ENABLED = "1";
-      process.env.OPENCLAW_STATE_DIR = tempDir;
       process.env.OPENCLAW_DEBUG_PROXY_SESSION_ID = "tts-patched-session";
 
       globalThis.fetch = vi

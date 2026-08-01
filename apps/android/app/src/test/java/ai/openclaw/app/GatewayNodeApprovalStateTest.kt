@@ -1,6 +1,6 @@
 package ai.openclaw.app
 
-import ai.openclaw.app.gateway.GatewayConnectErrorDetails
+import ai.openclaw.app.gateway.GatewayErrorDetails
 import ai.openclaw.app.gateway.GatewaySession
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
@@ -29,7 +29,7 @@ class GatewayNodeApprovalStateTest {
           code = "NOT_PAIRED",
           message = "pairing required",
           details =
-            GatewayConnectErrorDetails(
+            GatewayErrorDetails(
               code = "PAIRING_REQUIRED",
               canRetryWithDeviceToken = false,
               recommendedNextStep = "wait_then_retry",
@@ -45,7 +45,7 @@ class GatewayNodeApprovalStateTest {
           code = "UNAUTHORIZED",
           message = "token mismatch",
           details =
-            GatewayConnectErrorDetails(
+            GatewayErrorDetails(
               code = "AUTH_TOKEN_MISMATCH",
               canRetryWithDeviceToken = false,
               recommendedNextStep = null,

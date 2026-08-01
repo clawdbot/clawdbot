@@ -45,6 +45,7 @@ export function createCodexAttemptNotificationController(
     finalizationHookBatchStatuses,
     pendingOpenClawDynamicToolCompletionIds,
     postToolRawAssistantCompletionIdleTimeoutMs,
+    completeTurn,
   } = turnRuntime;
   const {
     scheduleTerminalDynamicToolReleaseCheck,
@@ -69,6 +70,16 @@ export function createCodexAttemptNotificationController(
       if (notification.method === "error") {
         state.latestStartupErrorNotification = notification;
       }
+      return;
+    }
+    if (
+      (state.timedOut || state.localCompletionRequested) &&
+      notification.method === "turn/completed" &&
+      readCodexTurnCompletedNotification(notification.params)?.turn.status === "interrupted"
+    ) {
+      // Our cleanup interrupt proves the native turn ended; it must not replace
+      // an already-owned final answer, yield result, or recorded response usage.
+      completeTurn();
       return;
     }
     const notificationState = applyCodexTurnNotificationState({
@@ -199,11 +210,7 @@ export function createCodexAttemptNotificationController(
         if (!state.timedOut && !runAbortController.signal.aborted) {
           await steeringQueue?.flushPending();
         }
-        state.completed = true;
-        turnWatches.clearCompletionIdleTimer();
-        turnWatches.clearAssistantCompletionIdleTimer();
-        turnWatches.clearTerminalIdleTimer();
-        state.resolveCompletion?.();
+        completeTurn();
       }
     }
   };

@@ -1,6 +1,6 @@
 // Route resolution helpers map user targets to configured channel routes.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { listAgentEntries, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { ChatType } from "../channels/chat-type.js";
 import { normalizeChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -17,6 +17,7 @@ import {
   buildAgentMainSessionKey,
   buildAgentPeerSessionKey,
   DEFAULT_ACCOUNT_ID,
+  DEFAULT_AGENT_ID,
   DEFAULT_MAIN_KEY,
   normalizeAccountId,
   normalizeAgentId,
@@ -117,8 +118,7 @@ export function buildAgentSessionKey(params: {
 }
 
 function listAgents(cfg: OpenClawConfig) {
-  const agents = cfg.agents?.list;
-  return Array.isArray(agents) ? agents : [];
+  return listAgentEntries(cfg);
 }
 
 type AgentLookupCache = {
@@ -160,12 +160,15 @@ export function pickFirstExistingAgentId(cfg: OpenClawConfig, agentId: string): 
     return lookup.fallbackDefaultAgentId;
   }
   const normalized = normalizeAgentId(trimmed);
-  if (lookup.byNormalizedId.size === 0) {
-    return sanitizeAgentId(trimmed);
-  }
   const resolved = lookup.byNormalizedId.get(normalized);
   if (resolved) {
     return resolved;
+  }
+  if (trimmed === DEFAULT_AGENT_ID) {
+    return DEFAULT_AGENT_ID;
+  }
+  if (lookup.byNormalizedId.size === 0) {
+    return sanitizeAgentId(trimmed);
   }
   return lookup.fallbackDefaultAgentId;
 }
@@ -548,22 +551,6 @@ function formatRouteCachePeer(peer: RoutePeer | null): string {
   return `${peer.kind}:${peer.id}`;
 }
 
-function formatRoleIdsCacheKey(roleIds: string[]): string {
-  const count = roleIds.length;
-  if (count === 0) {
-    return "-";
-  }
-  if (count === 1) {
-    return roleIds[0] ?? "-";
-  }
-  if (count === 2) {
-    const first = roleIds[0] ?? "";
-    const second = roleIds[1] ?? "";
-    return first <= second ? `${first},${second}` : `${second},${first}`;
-  }
-  return roleIds.toSorted().join(",");
-}
-
 function buildResolvedRouteCacheKey(params: {
   channel: string;
   accountId: string;
@@ -574,7 +561,16 @@ function buildResolvedRouteCacheKey(params: {
   memberRoleIds: string[];
   dmScope: string;
 }): string {
-  return `${params.channel}\t${params.accountId}\t${formatRouteCachePeer(params.peer)}\t${formatRouteCachePeer(params.parentPeer)}\t${params.guildId || "-"}\t${params.teamId || "-"}\t${formatRoleIdsCacheKey(params.memberRoleIds)}\t${params.dmScope}`;
+  return JSON.stringify([
+    params.channel,
+    params.accountId,
+    formatRouteCachePeer(params.peer),
+    formatRouteCachePeer(params.parentPeer),
+    params.guildId ?? null,
+    params.teamId ?? null,
+    params.memberRoleIds.toSorted(),
+    params.dmScope,
+  ]);
 }
 
 function hasGuildConstraint(match: NormalizedBindingMatch): boolean {

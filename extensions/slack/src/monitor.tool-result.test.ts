@@ -62,7 +62,9 @@ describe("monitorSlackProvider tool results", () => {
       },
       channels: {
         slack: {
-          dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+          dm: { enabled: true },
+          dmPolicy: "open",
+          allowFrom: ["*"],
           replyToMode,
         },
       },
@@ -109,7 +111,9 @@ describe("monitorSlackProvider tool results", () => {
         : {}),
       channels: {
         slack: {
-          dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+          dm: { enabled: true },
+          dmPolicy: "open",
+          allowFrom: ["*"],
           channels: { C1: { allow: true, requireMention: true } },
         },
       },
@@ -152,7 +156,9 @@ describe("monitorSlackProvider tool results", () => {
       channels: {
         slack: {
           historyLimit: 5,
-          dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+          dm: { enabled: true },
+          dmPolicy: "open",
+          allowFrom: ["*"],
           channels,
         },
       },
@@ -187,7 +193,9 @@ describe("monitorSlackProvider tool results", () => {
         ...currentConfig.channels,
         slack: {
           ...currentConfig.channels?.slack,
-          dm: { enabled: true, policy: "pairing", allowFrom: [] },
+          dm: { enabled: true },
+          dmPolicy: "pairing",
+          allowFrom: [],
         },
       },
     };
@@ -202,7 +210,9 @@ describe("monitorSlackProvider tool results", () => {
     visibleReplies?: "automatic" | "message_tool";
   }) {
     const slackChannelConfig: Record<string, unknown> = {
-      dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+      dm: { enabled: true },
+      dmPolicy: "open",
+      allowFrom: ["*"],
       channels: { C1: { allow: true, requireMention: false } },
       ...(params?.groupPolicy ? { groupPolicy: params.groupPolicy } : {}),
       ...(params?.replyToMode ? { replyToMode: params.replyToMode } : {}),
@@ -255,14 +265,15 @@ describe("monitorSlackProvider tool results", () => {
         ackReaction: "👀",
         ackReactionScope: "group-mentions",
         groupChat: { visibleReplies: "automatic" },
-        removeAckAfterReply: true,
         statusReactions: statusReactionsEnabled
           ? { enabled: true, timing: { debounceMs: 0, doneHoldMs: 0, errorHoldMs: 0 } }
           : { enabled: false },
       },
       channels: {
         slack: {
-          dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+          dm: { enabled: true },
+          dmPolicy: "open",
+          allowFrom: ["*"],
           groupPolicy: "open",
         },
       },
@@ -504,7 +515,9 @@ describe("monitorSlackProvider tool results", () => {
       },
       channels: {
         slack: {
-          dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+          dm: { enabled: true },
+          dmPolicy: "open",
+          allowFrom: ["*"],
           groupPolicy: "open",
           requireMention: false,
         },
@@ -536,7 +549,9 @@ describe("monitorSlackProvider tool results", () => {
       },
       channels: {
         slack: {
-          dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+          dm: { enabled: true },
+          dmPolicy: "open",
+          allowFrom: ["*"],
           groupPolicy: "open",
           requireMention: false,
         },
@@ -628,7 +643,9 @@ describe("monitorSlackProvider tool results", () => {
       },
       channels: {
         slack: {
-          dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+          dm: { enabled: true },
+          dmPolicy: "open",
+          allowFrom: ["*"],
           groupPolicy: "open",
         },
       },
@@ -669,34 +686,46 @@ describe("monitorSlackProvider tool results", () => {
     );
   });
 
-  it("keeps ack reaction when no reply is delivered and status reactions are disabled", async () => {
+  it("keeps ack reaction after sending the missing-reply fallback when status reactions are disabled", async () => {
     replyMock.mockResolvedValue(undefined);
     setMentionGatedAckConfig(false);
     mockGeneralChannelInfo();
     await runMentionGatedChannelMessage();
 
-    expect(sendMock).not.toHaveBeenCalled();
-    await vi.waitFor(() => expect(reactMock).toHaveBeenCalledTimes(1), { timeout: 5_000 });
-    expect(reactMock).toHaveBeenCalledWith({
-      channel: "C1",
-      timestamp: "456",
-      name: "eyes",
-    });
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(firstMockArg(sendMock, "send", 1)).toBe(
+      "PFX No reply was generated for this message. This is usually a temporary model failure - please try again.",
+    );
+    await vi.waitFor(
+      () =>
+        expect(reactMock).toHaveBeenCalledWith({
+          channel: "C1",
+          timestamp: "456",
+          name: "eyes",
+        }),
+      { timeout: 5_000 },
+    );
   });
 
-  it("keeps ack reaction when no reply is delivered and status reactions are enabled", async () => {
+  it("keeps ack reaction after sending the missing-reply fallback when status reactions are enabled", async () => {
     replyMock.mockResolvedValue(undefined);
     setMentionGatedAckConfig(true);
     mockGeneralChannelInfo();
     await runMentionGatedChannelMessage();
 
-    expect(sendMock).not.toHaveBeenCalled();
-    await vi.waitFor(() => expect(reactMock).toHaveBeenCalledTimes(1), { timeout: 5_000 });
-    expect(reactMock).toHaveBeenCalledWith({
-      channel: "C1",
-      timestamp: "456",
-      name: "eyes",
-    });
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(firstMockArg(sendMock, "send", 1)).toBe(
+      "PFX No reply was generated for this message. This is usually a temporary model failure - please try again.",
+    );
+    await vi.waitFor(
+      () =>
+        expect(reactMock).toHaveBeenCalledWith({
+          channel: "C1",
+          timestamp: "456",
+          name: "eyes",
+        }),
+      { timeout: 5_000 },
+    );
   });
 
   it("keeps status reactions for mentioned message-tool-only channel turns", async () => {
@@ -714,7 +743,9 @@ describe("monitorSlackProvider tool results", () => {
       },
       channels: {
         slack: {
-          dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+          dm: { enabled: true },
+          dmPolicy: "open",
+          allowFrom: ["*"],
           groupPolicy: "open",
         },
       },

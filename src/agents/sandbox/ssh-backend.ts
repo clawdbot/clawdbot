@@ -16,6 +16,7 @@ import type {
   SandboxBackendManager,
 } from "./backend.types.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
+import { hashTextSha256 } from "./hash.js";
 import {
   createRemoteShellSandboxFsBridge,
   type RemoteShellSandboxHandle,
@@ -459,6 +460,9 @@ export function resolveSshRuntimePaths(
 
 function buildSshSandboxRuntimeId(scopeKey: string): string {
   const trimmed = scopeKey.trim() || "session";
+  if (/:workspace:[a-f0-9]{32}$/i.test(trimmed)) {
+    return `openclaw-ssh-workspace-${hashTextSha256(trimmed).slice(0, 32)}`;
+  }
   // Keep the path human-readable while hashing the original scope to avoid
   // collisions after normalization and truncation.
   const safe = normalizeLowercaseStringOrEmpty(trimmed)

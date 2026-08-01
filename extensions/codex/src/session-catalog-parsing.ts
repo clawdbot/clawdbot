@@ -1,4 +1,5 @@
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { CodexThread, CodexThreadTurnsListResponse } from "./app-server/protocol.js";
 import {
@@ -29,6 +30,7 @@ const MAX_HOST_ID_LENGTH = 256;
 const MAX_CWD_LENGTH = 4096;
 export const MAX_SESSION_ID_LENGTH = 256;
 const MAX_SESSION_NAME_LENGTH = 500;
+const MAX_SESSION_PREVIEW_LENGTH = 500;
 const MAX_SESSION_KEY_LENGTH = 1024;
 const MAX_METADATA_LENGTH = 500;
 const MAX_ACTIVE_FLAGS = 16;
@@ -66,6 +68,14 @@ export function boundedCatalogString(
     return normalized;
   }
   return overflow === "truncate" ? truncateUtf16Safe(normalized, maxLength) : undefined;
+}
+
+function catalogPreview(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const singleLine = sanitizeTerminalText(value.replace(/\s+/g, " "));
+  return boundedCatalogString(singleLine, MAX_SESSION_PREVIEW_LENGTH, "truncate");
 }
 
 type CodexInteractiveThreadSource =
@@ -121,6 +131,7 @@ export function toCatalogSession(
   const gitInfo = isRecord(record.gitInfo) ? record.gitInfo : undefined;
   const sessionId = boundedCatalogString(thread.sessionId, MAX_SESSION_ID_LENGTH);
   const name = boundedCatalogString(thread.name, MAX_SESSION_NAME_LENGTH, "truncate");
+  const fallbackName = name ? undefined : catalogPreview(thread.preview);
   const cwd = boundedCatalogString(thread.cwd, MAX_CWD_LENGTH);
   const modelProvider = boundedCatalogString(record.modelProvider, MAX_METADATA_LENGTH, "truncate");
   const cliVersion = boundedCatalogString(record.cliVersion, MAX_METADATA_LENGTH, "truncate");
@@ -131,6 +142,7 @@ export function toCatalogSession(
     archived,
     ...(sessionId ? { sessionId } : {}),
     ...(thread.name === null ? { name: null } : name ? { name } : {}),
+    ...(fallbackName ? { fallbackName } : {}),
     ...(cwd ? { cwd } : {}),
     ...(activeFlags?.length ? { activeFlags } : {}),
     ...(typeof thread.createdAt === "number" && Number.isFinite(thread.createdAt)
@@ -313,7 +325,7 @@ function parseOptionalCatalogString(
 
 function parseCatalogSession(
   value: unknown,
-  options: { allowOpenClawSessionKey?: boolean } = {},
+  options: { allowSessionKey?: boolean } = {},
 ): CodexSessionCatalogSession {
   if (
     !isRecord(value) ||
@@ -352,6 +364,11 @@ function parseCatalogSession(
     value.name === null
       ? null
       : parseOptionalCatalogString(value.name, "session name", MAX_SESSION_NAME_LENGTH);
+  const fallbackName = parseOptionalCatalogString(
+    value.fallbackName,
+    "session fallback name",
+    MAX_SESSION_PREVIEW_LENGTH,
+  );
   const cwd = parseOptionalCatalogString(value.cwd, "cwd", MAX_CWD_LENGTH);
   const source = parseOptionalCatalogString(value.source, "source", MAX_METADATA_LENGTH);
   const modelProvider = parseOptionalCatalogString(
@@ -365,12 +382,8 @@ function parseCatalogSession(
     MAX_METADATA_LENGTH,
   );
   const gitBranch = parseOptionalCatalogString(value.gitBranch, "Git branch", MAX_METADATA_LENGTH);
-  const openClawSessionKey = options.allowOpenClawSessionKey
-    ? parseOptionalCatalogString(
-        value.openClawSessionKey,
-        "OpenClaw session key",
-        MAX_SESSION_KEY_LENGTH,
-      )
+  const sessionKey = options.allowSessionKey
+    ? parseOptionalCatalogString(value.sessionKey, "OpenClaw session key", MAX_SESSION_KEY_LENGTH)
     : undefined;
   const createdAt = readFiniteNumber(value.createdAt);
   const updatedAt = readFiniteNumber(value.updatedAt);
@@ -381,6 +394,7 @@ function parseCatalogSession(
     archived: value.archived,
     ...(sessionId !== undefined ? { sessionId } : {}),
     ...(name !== undefined ? { name } : {}),
+    ...(fallbackName !== undefined ? { fallbackName } : {}),
     ...(cwd !== undefined ? { cwd } : {}),
     ...(activeFlags && activeFlags.length > 0 ? { activeFlags } : {}),
     ...(createdAt !== undefined ? { createdAt } : {}),
@@ -390,13 +404,13 @@ function parseCatalogSession(
     ...(modelProvider !== undefined ? { modelProvider } : {}),
     ...(cliVersion !== undefined ? { cliVersion } : {}),
     ...(gitBranch !== undefined ? { gitBranch } : {}),
-    ...(openClawSessionKey !== undefined ? { openClawSessionKey } : {}),
+    ...(sessionKey !== undefined ? { sessionKey } : {}),
   };
 }
 
 export function parseCatalogPage(
   value: unknown,
-  options: { allowOpenClawSessionKey?: boolean } = {},
+  options: { allowSessionKey?: boolean } = {},
 ): CodexSessionCatalogPage {
   if (
     !isRecord(value) ||

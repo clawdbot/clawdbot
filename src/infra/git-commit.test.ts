@@ -1,4 +1,5 @@
 // Covers git commit helper behavior in fake repositories.
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
@@ -54,6 +55,23 @@ async function makeFakeGitRepo(
 async function makeFakeOpenClawPackage(root: string) {
   await fs.mkdir(path.join(root, "src"), { recursive: true });
   await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
+}
+
+function limitPositionalReads(maxBytes: number) {
+  const realReadSync = fsSync.readSync.bind(fsSync);
+  let totalBytesRead = 0;
+  vi.spyOn(fsSync, "readSync").mockImplementation(((
+    fd: number,
+    buffer: NodeJS.ArrayBufferView,
+    offset: number,
+    length: number,
+    position: number | null,
+  ) => {
+    const bytesRead = realReadSync(fd, buffer, offset, Math.min(length, maxBytes), position);
+    totalBytesRead += bytesRead;
+    return bytesRead;
+  }) as typeof fsSync.readSync);
+  return () => totalBytesRead;
 }
 
 describe("git commit resolution", () => {
@@ -210,7 +228,7 @@ describe("git commit resolution", () => {
     expect(resolveCommitHash({ cwd: repoA, env: {} })).toBe("0123456");
   });
 
-  it("reads packed refs from the common git dir for worktree-style checkouts", async () => {
+  it("reads packed refs after short commondir reads in worktree-style checkouts", async () => {
     const temp = await makeTempDir("git-commit-packed-refs");
     const checkoutRoot = path.join(temp, "checkout");
     const commonGitDir = path.join(temp, "git-common");
@@ -224,6 +242,7 @@ describe("git commit resolution", () => {
         "refs/heads/main": "0123456789abcdef0123456789abcdef01234567",
       },
     });
+    limitPositionalReads(4);
 
     expect(resolveCommitHash({ cwd: checkoutRoot, env: {} })).toBe("0123456");
   });
@@ -379,6 +398,57 @@ describe("git commit resolution", () => {
     });
 
     expect(resolveCommitHash({ cwd: repoRootValue, env: {} })).toBe("bbbbbbb");
+  });
+
+  it("fills short positional reads for loose refs", async () => {
+    const temp = await makeTempDir("git-commit-short-ref");
+    const repoRoot = path.join(temp, "repo");
+    await makeFakeGitRepo(repoRoot, {
+      head: "ref: refs/heads/main\n",
+      refs: {
+        "refs/heads/main": "abcdef0123456789abcdef0123456789abcdef01",
+      },
+    });
+    limitPositionalReads(4);
+
+    expect(resolveCommitHash({ cwd: repoRoot, env: {} })).toBe("abcdef0");
+  });
+
+  it("keeps short-read retries within the bounded metadata window", async () => {
+    const temp = await makeTempDir("git-commit-bounded-ref");
+    const repoRoot = path.join(temp, "repo");
+    await makeFakeGitRepo(repoRoot, {
+      head: "ref: refs/heads/main\n",
+      refs: {
+        "refs/heads/main": `${"x".repeat(256)}abcdef0123456789`,
+      },
+    });
+    const totalBytesRead = limitPositionalReads(4);
+
+    expect(resolveCommitHash({ cwd: repoRoot, env: {} })).toBeNull();
+    expect(totalBytesRead()).toBe(256);
+  });
+
+  it("falls back to baked metadata when a bounded Git metadata read errors", async () => {
+    const temp = await makeTempDir("git-commit-read-error");
+    const repoRoot = path.join(temp, "repo");
+    await makeFakeGitRepo(repoRoot, {
+      head: "ref: refs/heads/main\n",
+      refs: {
+        "refs/heads/main": "abcdef0123456789abcdef0123456789abcdef01",
+      },
+    });
+    vi.spyOn(fsSync, "readSync").mockImplementationOnce((() => {
+      throw Object.assign(new Error("EIO: forced read failure"), { code: "EIO" });
+    }) as typeof fsSync.readSync);
+
+    expect(
+      resolveCommitHash({
+        cwd: repoRoot,
+        env: {},
+        readers: { readBuildInfoCommit: () => "deadbee" },
+      }),
+    ).toBe("deadbee");
   });
 
   it("reads full HEAD refs before parsing long branch names", async () => {

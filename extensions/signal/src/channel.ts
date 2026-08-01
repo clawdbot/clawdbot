@@ -39,13 +39,14 @@ import {
   signalApprovalCapability,
 } from "./approval-native.js";
 import { markdownToSignalTextChunks } from "./format.js";
+import { formatSignalMediaText } from "./media-text.js";
 import { signalMessageActions } from "./message-actions.js";
 import { looksLikeSignalTargetId, normalizeSignalMessagingTarget } from "./normalize.js";
 import { resolveSignalOutboundTarget } from "./outbound-session.js";
 import { materializeSignalPresentationFallback } from "./presentation-fallback.js";
 import { resolveSignalReactionLevel } from "./reaction-level.js";
 import { resolveSignalReplyContextWithPersistence } from "./reply-authors.js";
-import { signalSetupAdapter } from "./setup-core.js";
+import { signalSetupContract } from "./setup-core.js";
 import {
   createSignalPluginBase,
   signalConfigAdapter,
@@ -150,10 +151,16 @@ function resolveSignalReplyOptions(params: {
   }).then((persistedContext) => {
     const replyToAuthor =
       persistedContext?.ambiguous === true ? undefined : persistedContext?.author;
+    const replyToBody =
+      persistedContext?.ambiguous === true
+        ? ""
+        : [persistedContext?.body, formatSignalMediaText(persistedContext?.media ?? [])]
+            .filter(Boolean)
+            .join("\n");
     return {
       replyToId,
       ...(replyToAuthor ? { replyToAuthor } : {}),
-      ...(persistedContext?.body ? { replyToBody: persistedContext.body } : {}),
+      ...(replyToBody ? { replyToBody } : {}),
     };
   });
 }
@@ -475,7 +482,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
     base: {
       ...createSignalPluginBase({
         setupWizard: signalSetupWizard,
-        setup: signalSetupAdapter,
+        setupContract: signalSetupContract,
       }),
       actions: signalMessageActions,
       approvalCapability: signalApprovalCapability,
@@ -572,10 +579,12 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
             lastProbeAt: snapshot.lastProbeAt ?? null,
           }),
         probeAccount: async ({ account, timeoutMs }) => {
-          const baseUrl = account.baseUrl;
-          const { probeSignal } = await loadSignalProbeModule();
-          return await probeSignal(baseUrl, timeoutMs, {
-            apiMode: account.config?.apiMode ?? "auto",
+          const { probeSignalAccount } = await loadSignalProbeModule();
+          return await probeSignalAccount({
+            baseUrl: account.baseUrl,
+            timeoutMs,
+            transportKind: account.transport.kind,
+            account: account.config.account,
           });
         },
         formatCapabilitiesProbe: ({ probe }) =>

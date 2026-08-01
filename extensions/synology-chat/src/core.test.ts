@@ -170,6 +170,13 @@ describe("synology-chat account resolution", () => {
     expect(listAccountIds({ channels: {} })).toStrictEqual([]);
   });
 
+  it("does not discover an env account when the channel is not installed", () => {
+    process.env.SYNOLOGY_CHAT_TOKEN = "env-token";
+
+    expect(listAccountIds({})).toStrictEqual([]);
+    expect(listAccountIds({ channels: {} })).toStrictEqual([]);
+  });
+
   it("lists the default account when base config has a token", () => {
     const cfg = { channels: { "synology-chat": { token: "abc" } } };
     expect(listAccountIds(cfg)).toEqual(["default"]);
@@ -223,17 +230,35 @@ describe("synology-chat account resolution", () => {
   });
 
   it("uses env var fallbacks", () => {
-    process.env.SYNOLOGY_CHAT_TOKEN = "env-tok";
-    process.env.SYNOLOGY_CHAT_INCOMING_URL = "https://nas/incoming";
-    process.env.SYNOLOGY_NAS_HOST = "192.0.2.1";
-    process.env.OPENCLAW_BOT_NAME = "TestBot";
+    const padded = "test-auth-token".padStart(16).padEnd(17);
+    vi.stubEnv("SYNOLOGY_CHAT_TOKEN", padded);
+    vi.stubEnv("SYNOLOGY_CHAT_INCOMING_URL", " https://nas/incoming ");
+    vi.stubEnv("SYNOLOGY_NAS_HOST", " 192.0.2.1 ");
+    vi.stubEnv("OPENCLAW_BOT_NAME", " TestBot ");
 
     const cfg = { channels: { "synology-chat": {} } };
     const account = resolveAccount(cfg);
-    expect(account.token).toBe("env-tok");
+    expect(account.token).toBe("test-auth-token");
     expect(account.incomingUrl).toBe("https://nas/incoming");
     expect(account.nasHost).toBe("192.0.2.1");
     expect(account.botName).toBe("TestBot");
+  });
+
+  it("ignores blank env var fallbacks when resolving the default account", () => {
+    const whitespace = "   ";
+    vi.stubEnv("SYNOLOGY_CHAT_TOKEN", whitespace);
+    vi.stubEnv("SYNOLOGY_CHAT_INCOMING_URL", whitespace);
+    vi.stubEnv("SYNOLOGY_NAS_HOST", whitespace);
+    vi.stubEnv("SYNOLOGY_ALLOWED_USER_IDS", whitespace);
+    vi.stubEnv("OPENCLAW_BOT_NAME", whitespace);
+
+    const account = resolveAccount({ channels: { "synology-chat": {} } });
+
+    expect(account.token).toBe("");
+    expect(account.incomingUrl).toBe("");
+    expect(account.nasHost).toBe("localhost");
+    expect(account.allowedUserIds).toEqual([]);
+    expect(account.botName).toBe("OpenClaw");
   });
 
   it("lets config and account overrides win over env/base config", () => {

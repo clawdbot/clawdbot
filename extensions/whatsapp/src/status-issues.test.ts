@@ -1,4 +1,5 @@
 // Whatsapp tests cover status issues plugin behavior.
+import { buildRuntimeAccountStatusSnapshot } from "openclaw/plugin-sdk/status-helpers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { collectWhatsAppStatusIssues } from "./status-issues.js";
 
@@ -30,6 +31,54 @@ describe("collectWhatsAppStatusIssues", () => {
         fix: "Run: openclaw channels login (scan QR on the gateway host).",
       },
     ]);
+  });
+
+  it.each([
+    {
+      name: "logged-out",
+      runtime: {
+        running: false,
+        connected: false,
+        linked: false,
+        healthState: "logged-out",
+        lastError: "status=401",
+      },
+      expected: {
+        channel: "whatsapp",
+        accountId: "default",
+        kind: "auth",
+        message: "Session logged out: status=401",
+        fix: "Run: openclaw channels login (scan QR on the gateway host).",
+      },
+    },
+    {
+      name: "conflict",
+      runtime: {
+        running: false,
+        connected: false,
+        linked: true,
+        reconnectAttempts: 2,
+        healthState: "conflict",
+        lastError: "status=440",
+      },
+      expected: {
+        channel: "whatsapp",
+        accountId: "default",
+        kind: "runtime",
+        message: "Linked but session conflict (reconnectAttempts=2): status=440",
+        fix: "Run: openclaw doctor (or restart the gateway). If it persists, relink via channels login and check logs.",
+      },
+    },
+  ])("preserves projected $name guidance", ({ runtime, expected }) => {
+    const issues = collectWhatsAppStatusIssues([
+      {
+        enabled: true,
+        ...buildRuntimeAccountStatusSnapshot({ runtime }),
+        accountId: "default",
+      },
+    ]);
+
+    expect(issues).toEqual([expected]);
   });
 
   it("reports auth reads that are still stabilizing", () => {

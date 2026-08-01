@@ -463,6 +463,38 @@ describe("CronService", () => {
     await stopCronAndCleanup(cron, store);
   });
 
+  it("removes a queued main-session event when an immediate heartbeat fails", async () => {
+    const runHeartbeatOnce = vi.fn(async () => {
+      throw new Error("heartbeat failed");
+    });
+    const { store, cron, enqueueSystemEvent, requestHeartbeat } = await createCronHarness({
+      runHeartbeatOnce,
+      useRemovableSystemEventQueue: true,
+      withEvents: false,
+    });
+
+    try {
+      const job = await addWakeModeNowMainSystemEventJob(cron, {
+        name: "failed immediate heartbeat",
+      });
+
+      await cron.run(job.id, "force");
+
+      expect(runHeartbeatOnce).toHaveBeenCalledOnce();
+      expect(requestHeartbeat).not.toHaveBeenCalled();
+      const sessionKeys = getPostedSystemEventSessionKeys(enqueueSystemEvent);
+      expect(sessionKeys).toHaveLength(1);
+      expectNoQueuedEvents(sessionKeys);
+      const updated = (await cron.list({ includeDisabled: true })).find(
+        (candidate) => candidate.id === job.id,
+      );
+      expect(updated?.state.lastRunStatus).toBe("error");
+      expect(updated?.state.lastError).toContain("heartbeat failed");
+    } finally {
+      await stopCronAndCleanup(cron, store);
+    }
+  });
+
   it("rejects sessionTarget main for non-default agents at creation time", async () => {
     const runHeartbeatOnce = vi.fn(async () => ({ status: "ran" as const, durationMs: 1 }));
 
@@ -592,41 +624,6 @@ describe("CronService", () => {
     expect(runHeartbeatOnce).toHaveBeenCalledTimes(3);
     expect(requestHeartbeat).not.toHaveBeenCalled();
     expect(consumedTexts).toEqual(["hello"]);
-    expectNoQueuedEvents(getPostedSystemEventSessionKeys(enqueueSystemEvent));
-
-    await stopCronAndCleanup(cron, store);
-  });
-
-  it("disables exhausted disabled-heartbeat one-shots without leaving queued events", async () => {
-    resetSystemEventsForTest();
-    const atMs = Date.parse("2025-12-13T00:00:02.000Z");
-    const runHeartbeatOnce = vi.fn(async () => ({
-      status: "skipped" as const,
-      reason: "disabled",
-    }));
-    const { store, cron, enqueueSystemEvent, requestHeartbeat } = await createCronHarness({
-      runHeartbeatOnce,
-      nowMs: () => atMs,
-      cronConfig: { retry: { maxAttempts: 0, backoffMs: [30_000] } },
-      useRemovableSystemEventQueue: true,
-      withEvents: false,
-    });
-    const job = await addMainOneShotHelloJob(cron, {
-      atMs,
-      name: "one-shot disabled heartbeat exhausted",
-    });
-
-    await cron.run(job.id, "due");
-
-    const jobs = await cron.list({ includeDisabled: true });
-    const updated = jobs.find((j) => j.id === job.id);
-    expect(updated?.enabled).toBe(false);
-    expect(updated?.state.lastStatus).toBe("skipped");
-    expect(updated?.state.lastError).toBe("disabled");
-    expect(updated?.state.consecutiveSkipped).toBe(1);
-    expect(updated?.state.nextRunAtMs).toBeUndefined();
-    expect(runHeartbeatOnce).toHaveBeenCalledTimes(1);
-    expect(requestHeartbeat).not.toHaveBeenCalled();
     expectNoQueuedEvents(getPostedSystemEventSessionKeys(enqueueSystemEvent));
 
     await stopCronAndCleanup(cron, store);

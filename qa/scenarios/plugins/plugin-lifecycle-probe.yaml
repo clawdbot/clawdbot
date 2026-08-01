@@ -5,9 +5,9 @@ scenario:
   surface: plugins
   coverage:
     secondary:
-      - plugins.lifecycle
-      - cli.plugin-validation-repair
-      - plugins.setup-flows
+      - cli.plugin-validation-and-repair
+      - plugins.plugin-setup
+      - plugins.smoke-tests-lifecycle
   objective: Exercise packaged plugin install, inspect, disable, enable, update, downgrade, and uninstall behavior in a clean Docker runtime.
   successCriteria:
     - A clean container installs the candidate OpenClaw package and fixture plugin package.

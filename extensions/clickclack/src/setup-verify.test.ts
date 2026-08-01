@@ -35,6 +35,7 @@ const configuredAccount = {
   channels: {
     clickclack: {
       baseUrl: "https://clickclack.example",
+      apiBaseUrl: "http://127.0.0.1:8484",
       token: "ccb_test",
       workspace: "default",
     },
@@ -73,6 +74,12 @@ describe("ClickClack post-write setup verification", () => {
 
   it("prints the resolved bot and workspace without blocking setup", async () => {
     const runtime = await verify();
+
+    expect(mocks.createClient).toHaveBeenCalledWith(
+      expect.objectContaining({
+        baseUrl: "http://127.0.0.1:8484",
+      }),
+    );
 
     expect(runtime.log).toHaveBeenNthCalledWith(
       1,

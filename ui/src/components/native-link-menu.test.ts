@@ -104,7 +104,12 @@ describe("native link menu", () => {
     expect(hints).toEqual(["S", "B", "C"]);
 
     document.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "c", bubbles: true, cancelable: true }),
+      new KeyboardEvent("keydown", {
+        key: "с",
+        code: "KeyC",
+        bubbles: true,
+        cancelable: true,
+      }),
     );
     expect(calls).toEqual(["close", "copy"]);
   });
@@ -130,6 +135,26 @@ describe("native link menu", () => {
     expect(escaped).not.toHaveBeenCalled();
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(document.activeElement).toBe(trigger);
+  });
+
+  it("returns focus to its durable trigger before a Tab leaves the menu", async () => {
+    const trigger = document.createElement("a");
+    trigger.href = "https://example.com";
+    document.body.append(trigger);
+    containers.push(trigger);
+    const menu = await mountMenu({ trigger });
+    const item = menuItems(menu)[0];
+    item?.focus();
+
+    const keydown = new KeyboardEvent("keydown", {
+      key: "Tab",
+      bubbles: true,
+      cancelable: true,
+    });
+    item?.dispatchEvent(keydown);
+
+    expect(document.activeElement).toBe(trigger);
+    expect(keydown.defaultPrevented).toBe(false);
   });
 
   it("closes after Web Awesome hides without stealing focus", async () => {

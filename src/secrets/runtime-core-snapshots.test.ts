@@ -159,14 +159,16 @@ describe("secrets runtime snapshot core lanes", () => {
   it("resolves env refs for memory, talk, and gateway surfaces", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({
-        agents: {
-          defaults: {
-            memorySearch: {
-              remote: {
-                apiKey: { source: "env", provider: "default", id: "MEMORY_REMOTE_API_KEY" },
-              },
+        memory: {
+          search: {
+            remote: {
+              apiKey: { source: "env", provider: "default", id: "MEMORY_REMOTE_API_KEY" },
             },
           },
+        },
+
+        agents: {
+          defaults: {},
         },
         talk: {
           providers: {
@@ -194,7 +196,7 @@ describe("secrets runtime snapshot core lanes", () => {
       loadablePluginOrigins: new Map(),
     });
 
-    expect(snapshot.config.agents?.defaults?.memorySearch?.remote?.apiKey).toBe("mem-ref-key");
+    expect(snapshot.config.memory?.search?.remote?.apiKey).toBe("mem-ref-key");
     expect((snapshot.config.talk as { apiKey?: unknown } | undefined)?.apiKey).toBeUndefined();
     expect(snapshot.config.talk?.providers?.["acme-speech"]?.apiKey).toBe("talk-provider-ref-key");
     expect(snapshot.config.gateway?.remote?.token).toBe("remote-token-ref");

@@ -3,8 +3,15 @@ import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { PluginJsonValueSchema } from "./plugins.js";
 import { NonEmptyString } from "./primitives.js";
+import { SessionCreatedActorSchema } from "./sessions-row.js";
 
 const SessionCatalogErrorSchema = closedObject({ code: NonEmptyString, message: NonEmptyString });
+
+export const SessionCatalogLocatorSchema = closedObject({
+  catalogId: NonEmptyString,
+  hostId: NonEmptyString,
+  threadId: NonEmptyString,
+});
 
 export const SessionCatalogCapabilitiesSchema = closedObject({
   continueSession: Type.Boolean(),
@@ -19,6 +26,20 @@ export const SessionCatalogDescriptorSchema = closedObject({
   capabilities: SessionCatalogCapabilitiesSchema,
 });
 
+export const SessionCatalogPullRequestSummarySchema = closedObject({
+  numbers: Type.Array(Type.Integer({ minimum: 1 }), {
+    minItems: 1,
+    maxItems: 20,
+    uniqueItems: true,
+  }),
+  state: Type.Union([
+    Type.Literal("open"),
+    Type.Literal("draft"),
+    Type.Literal("merged"),
+    Type.Literal("closed"),
+  ]),
+});
+
 export const SessionCatalogSessionSchema = closedObject({
   threadId: NonEmptyString,
   name: Type.Optional(Type.String()),
@@ -31,8 +52,11 @@ export const SessionCatalogSessionSchema = closedObject({
   modelProvider: Type.Optional(Type.String()),
   cliVersion: Type.Optional(Type.String()),
   gitBranch: Type.Optional(Type.String()),
+  customGroup: Type.Optional(Type.String()),
+  pullRequest: Type.Optional(SessionCatalogPullRequestSummarySchema),
   archived: Type.Boolean(),
-  openClawSessionKey: Type.Optional(NonEmptyString),
+  sessionKey: Type.Optional(NonEmptyString),
+  createdActor: Type.Optional(SessionCreatedActorSchema),
   canContinue: Type.Boolean(),
   canArchive: Type.Boolean(),
   canOpenTerminal: Type.Optional(Type.Boolean()),
@@ -65,17 +89,11 @@ const SessionsCatalogListCommonProperties = {
   hostIds: Type.Optional(Type.Array(NonEmptyString)),
 };
 
-export const SessionsCatalogListParamsSchema = Type.Union([
-  closedObject({
-    catalogId: Type.Optional(NonEmptyString),
-    ...SessionsCatalogListCommonProperties,
-  }),
-  closedObject({
-    catalogId: NonEmptyString,
-    cursors: Type.Record(NonEmptyString, Type.String()),
-    ...SessionsCatalogListCommonProperties,
-  }),
-]);
+export const SessionsCatalogListParamsSchema = closedObject({
+  catalogId: Type.Optional(NonEmptyString),
+  cursors: Type.Optional(Type.Record(NonEmptyString, Type.String())),
+  ...SessionsCatalogListCommonProperties,
+});
 
 export const SessionsCatalogListResultSchema = closedObject({
   catalogs: Type.Array(SessionCatalogSchema),
@@ -110,9 +128,7 @@ export const SessionCatalogTranscriptItemSchema = closedObject({
 });
 
 export const SessionsCatalogReadParamsSchema = closedObject({
-  catalogId: NonEmptyString,
-  hostId: NonEmptyString,
-  threadId: NonEmptyString,
+  ...SessionCatalogLocatorSchema.properties,
   limit: Type.Optional(Type.Integer({ minimum: 1 })),
   cursor: Type.Optional(Type.String()),
 });
@@ -126,24 +142,24 @@ export const SessionsCatalogReadResultSchema = closedObject({
 });
 
 export const SessionsCatalogContinueParamsSchema = closedObject({
-  catalogId: NonEmptyString,
-  hostId: NonEmptyString,
-  threadId: NonEmptyString,
+  ...SessionCatalogLocatorSchema.properties,
 });
 
 export const SessionsCatalogContinueResultSchema = closedObject({ sessionKey: NonEmptyString });
 
 export const SessionsCatalogArchiveParamsSchema = closedObject({
-  catalogId: NonEmptyString,
-  hostId: NonEmptyString,
-  threadId: NonEmptyString,
+  ...SessionCatalogLocatorSchema.properties,
   confirmNoOtherRunner: Type.Literal(true),
 });
 
 export const SessionsCatalogArchiveResultSchema = closedObject({ ok: Type.Literal(true) });
 
 export type SessionCatalogCapabilities = Static<typeof SessionCatalogCapabilitiesSchema>;
+export type SessionCatalogLocator = Static<typeof SessionCatalogLocatorSchema>;
 export type SessionCatalogDescriptor = Static<typeof SessionCatalogDescriptorSchema>;
+export type SessionCatalogPullRequestSummary = Static<
+  typeof SessionCatalogPullRequestSummarySchema
+>;
 export type SessionCatalogSession = Static<typeof SessionCatalogSessionSchema>;
 export type SessionCatalogHost = Static<typeof SessionCatalogHostSchema>;
 export type SessionCatalog = Static<typeof SessionCatalogSchema>;

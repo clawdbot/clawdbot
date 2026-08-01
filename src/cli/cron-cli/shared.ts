@@ -23,7 +23,7 @@ import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { callGatewayFromCli } from "../gateway-rpc.js";
 import { parseDurationMs as parseSharedDurationMs } from "../parse-duration.js";
 
-export function parseCronCommandArgv(value: unknown): string[] | undefined {
+function parseCronArgv(value: unknown, flag: string): string[] | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
@@ -31,16 +31,24 @@ export function parseCronCommandArgv(value: unknown): string[] | undefined {
   try {
     parsed = JSON.parse(value);
   } catch {
-    throw new Error("--command-argv must be a JSON array of strings");
+    throw new Error(`${flag} must be a JSON array of strings`);
   }
   if (
     !Array.isArray(parsed) ||
     parsed.length === 0 ||
     parsed.some((entry) => typeof entry !== "string" || entry.length === 0)
   ) {
-    throw new Error("--command-argv must be a non-empty JSON array of non-empty strings");
+    throw new Error(`${flag} must be a non-empty JSON array of non-empty strings`);
   }
   return parsed;
+}
+
+export function parseCronCommandArgv(value: unknown): string[] | undefined {
+  return parseCronArgv(value, "--command-argv");
+}
+
+export function parseCronStreamCommandArgv(value: unknown): string[] | undefined {
+  return parseCronArgv(value, "--stream-command");
 }
 
 export function parseCronCommandEnv(values: unknown): Record<string, string> | undefined {
@@ -197,7 +205,7 @@ export async function warnIfCronSchedulerDisabled(opts: GatewayRpcOpts) {
       storage?: string;
       sqlitePath?: string;
     };
-    if (res?.enabled === true) {
+    if (res?.enabled !== false) {
       return;
     }
     const store =
@@ -208,7 +216,7 @@ export async function warnIfCronSchedulerDisabled(opts: GatewayRpcOpts) {
           : "";
     defaultRuntime.error(
       [
-        "warning: cron scheduler is disabled in the Gateway; jobs are saved but will not run automatically.",
+        "warning: the automations scheduler is disabled in the Gateway; jobs are saved but will not run automatically.",
         "Re-enable with `cron.enabled: true` (or remove `cron.enabled: false`) and restart the Gateway.",
         store ? `store: ${store}` : "",
       ]
@@ -389,6 +397,10 @@ const formatSchedule = (schedule: CronSchedule | undefined, hasTrigger = false) 
     const cwd = schedule.cwd ? ` @ ${schedule.cwd}` : "";
     return `on-exit ${schedule.command}${cwd}`;
   }
+  if (schedule?.kind === "stream") {
+    const cwd = schedule.cwd ? ` @ ${schedule.cwd}` : "";
+    return `stream ${schedule.command.join(" ")}${cwd}`;
+  }
   if (schedule?.kind !== "cron") {
     return "-";
   }
@@ -430,7 +442,7 @@ export function printCronList(
   opts?: { deliveryPreviews?: Map<string, CronDeliveryPreview> },
 ) {
   if (jobs.length === 0) {
-    runtime.log("No cron jobs.");
+    runtime.log("No automations.");
     return;
   }
 

@@ -5,6 +5,7 @@
  */
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { formatCliCommand } from "../cli/command-format.js";
+import { isAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-error.js";
 import { readErrorName } from "../infra/errors.js";
 import {
   classifyFailoverSignal,
@@ -16,6 +17,7 @@ import {
 } from "./embedded-agent-helpers/errors.js";
 import { isTimeoutErrorMessage } from "./embedded-agent-helpers/errors.js";
 import type { FailoverReason } from "./embedded-agent-helpers/types.js";
+import { AgentHarnessSessionSupersededError } from "./harness/errors.js";
 import { isSessionWriteLockAcquireError } from "./session-write-lock-error.js";
 
 const ABORT_TIMEOUT_RE = /request was aborted|request aborted/i;
@@ -190,6 +192,8 @@ export function resolveFailoverStatus(reason: FailoverReason): number | undefine
       return 403;
     case "timeout":
       return 408;
+    case "tls_certificate":
+      return 502;
     case "context_overflow":
       return 413;
     case "format":
@@ -491,6 +495,22 @@ function readMissingToolResultMarker(err: unknown): true | undefined {
 
 function hasMissingToolResultFailure(err: unknown): boolean {
   return findErrorProperty(err, readMissingToolResultMarker) === true;
+}
+
+function hasStaleAgentRunLifecycleFailure(err: unknown): boolean {
+  return (
+    findErrorProperty(err, (candidate) =>
+      isAgentRunStaleLifecycleError(candidate) ? true : undefined,
+    ) === true
+  );
+}
+
+function hasDirectProviderFailureIdentity(err: unknown): boolean {
+  if (isFailoverError(err)) {
+    return true;
+  }
+  const signal = normalizeDirectErrorSignal(err);
+  return Boolean(signal.status || signal.code || signal.errorType || signal.provider);
 }
 
 /**
@@ -893,6 +913,16 @@ export function resolveModelFallbackError(
   err: unknown,
   context?: FailoverErrorContext,
 ): ModelFallbackErrorResolution {
+  if (err instanceof AgentHarnessSessionSupersededError) {
+    return { kind: "coordination", error: err };
+  }
+  const staleLifecycleFailure = hasStaleAgentRunLifecycleFailure(err);
+  if (
+    staleLifecycleFailure &&
+    (isAgentRunStaleLifecycleError(err) || !hasDirectProviderFailureIdentity(err))
+  ) {
+    return { kind: "coordination", error: err };
+  }
   // A direct takeover remains a coordination failure unless the dedicated
   // cleanup wrapper owns a preserved prompt error. Its message alone must not
   // reclassify session-state loss as a provider failure.
@@ -906,7 +936,8 @@ export function resolveModelFallbackError(
   if (
     hasSessionWriteLockContention(err) ||
     hasEmbeddedAttemptSessionTakeover(err) ||
-    hasMissingToolResultFailure(err)
+    hasMissingToolResultFailure(err) ||
+    staleLifecycleFailure
   ) {
     return { kind: "coordination", error: err };
   }

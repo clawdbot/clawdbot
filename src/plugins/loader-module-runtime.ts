@@ -9,6 +9,8 @@ import {
   type PluginModuleLoaderCache,
 } from "./plugin-module-loader-cache.js";
 import { installOpenClawPluginSdkNativeResolver } from "./plugin-sdk-native-resolver.js";
+import type { PluginRegistry } from "./registry-types.js";
+import { withPluginRegistrationContext } from "./runtime.js";
 import type { CreatePluginRuntimeOptions, PluginRuntime } from "./runtime/types.js";
 import {
   buildPluginLoaderAliasMap,
@@ -28,7 +30,6 @@ const LAZY_RUNTIME_REFLECTION_KEYS = [
   "media",
   "mediaUnderstanding",
   "tts",
-  "stt",
   "channel",
   "events",
   "logging",
@@ -94,6 +95,15 @@ export function runPluginRegisterSync(
   } finally {
     guarded.close();
   }
+}
+
+export function runPluginRegisterSyncInRegistry(
+  register: NonNullable<OpenClawPluginDefinition["register"]>,
+  api: Parameters<NonNullable<OpenClawPluginDefinition["register"]>>[0],
+  registry: PluginRegistry,
+  pluginId: string,
+): void {
+  withPluginRegistrationContext(registry, pluginId, () => runPluginRegisterSync(register, api));
 }
 
 export function createPluginModuleLoader(options: {
@@ -256,7 +266,7 @@ export function resolvePluginModuleExport(moduleExport: unknown): {
     }
     if (resolved && typeof resolved === "object") {
       const definition = resolved as OpenClawPluginDefinition;
-      const register = definition.register ?? definition.activate;
+      const register = definition.register;
       if (typeof register === "function") {
         return { definition, register };
       }
@@ -273,7 +283,7 @@ export function resolvePluginModuleExport(moduleExport: unknown): {
   }
   if (resolved && typeof resolved === "object") {
     const definition = resolved as OpenClawPluginDefinition;
-    return { definition, register: definition.register ?? definition.activate };
+    return { definition, register: definition.register };
   }
   return {};
 }

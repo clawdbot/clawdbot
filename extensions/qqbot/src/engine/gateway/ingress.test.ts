@@ -189,12 +189,13 @@ describe("QQBot durable ingress", () => {
 
   it("stores the exact raw envelope in the user conversation lane", async () => {
     await withQQBotIngressQueue(async (queue) => {
-      const dispatch = vi.fn(async () => ({ kind: "deferred" as const }));
+      const dispatch = vi.fn<QQBotIngressDispatch>(async () => ({ kind: "deferred" as const }));
       const monitor = startMonitor(queue, dispatch);
       const rawEnvelope = qqC2CEnvelope({ messageId: "raw", userId: "user-raw" });
       try {
         await monitor.receive(rawEnvelope);
         await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(1));
+        expect(dispatch.mock.calls[0]?.[2]).toBe("message:raw");
         expect(await queue.listClaims()).toEqual([
           expect.objectContaining({
             id: "message:raw",

@@ -13,13 +13,8 @@ import { patchSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { defaultRuntime } from "../runtime.js";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
-import { withSubagentOutcomeTiming } from "./subagent-announce-output.js";
 import { getDeliveryAttemptCount, getDeliveryLastError } from "./subagent-delivery-state.js";
-import {
-  SUBAGENT_ENDED_REASON_ERROR,
-  SUBAGENT_ENDED_REASON_KILLED,
-} from "./subagent-lifecycle-events.js";
-import { shouldUpdateRunOutcome } from "./subagent-registry-completion.js";
+import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
   getSubagentSessionRuntimeMs,
@@ -79,8 +74,8 @@ function formatAnnounceGiveUpLogField(value: string): string {
 /** Logs a sanitized final give-up line for failed subagent announce delivery. */
 export function logAnnounceGiveUp(entry: SubagentRunRecord, reason: "retry-limit" | "expiry") {
   const retryCount = getDeliveryAttemptCount(entry);
-  const endedAgoMs =
-    typeof entry.endedAt === "number" ? Math.max(0, Date.now() - entry.endedAt) : undefined;
+  const endedAt = entry.execution.endedAt;
+  const endedAgoMs = typeof endedAt === "number" ? Math.max(0, Date.now() - endedAt) : undefined;
   const endedAgoLabel = endedAgoMs != null ? `${Math.round(endedAgoMs / 1000)}s` : "n/a";
   const lastDeliveryError = getDeliveryLastError(entry);
   const deliveryError = lastDeliveryError
@@ -106,7 +101,9 @@ export async function persistSubagentSessionTiming(
   const storePath = resolveStorePath(cfg.session?.store, { agentId });
   const startedAt = getSubagentSessionStartedAt(entry);
   const endedAt =
-    typeof entry.endedAt === "number" && Number.isFinite(entry.endedAt) ? entry.endedAt : undefined;
+    typeof entry.execution.endedAt === "number" && Number.isFinite(entry.execution.endedAt)
+      ? entry.execution.endedAt
+      : undefined;
   const runtimeMs =
     endedAt !== undefined
       ? getSubagentSessionRuntimeMs(entry, endedAt)
@@ -123,7 +120,7 @@ export async function persistSubagentSessionTiming(
       }
       if (status === "killed") {
         const existingCompletion = resolveCompletionFromSessionEntry(sessionEntry, Date.now(), {
-          notBeforeMs: entry.startedAt ?? entry.createdAt,
+          notBeforeMs: entry.execution.startedAt ?? entry.createdAt,
         });
         if (existingCompletion && existingCompletion.reason !== SUBAGENT_ENDED_REASON_KILLED) {
           // A provider result already reached durable session state. The kill
@@ -181,9 +178,9 @@ function isResolvedChildPath(params: { childPath: string; rootPath: string }) {
 }
 
 /** Best-effort async removal for a subagent attachment directory. */
-export async function safeRemoveAttachmentsDir(entry: SubagentRunRecord): Promise<void> {
+export async function safeRemoveAttachmentsDir(entry: SubagentRunRecord): Promise<boolean> {
   if (!entry.attachmentsDir || !entry.attachmentsRootDir) {
-    return;
+    return true;
   }
 
   const resolveReal = async (targetPath: string): Promise<string | null> => {
@@ -203,17 +200,18 @@ export async function safeRemoveAttachmentsDir(entry: SubagentRunRecord): Promis
       resolveReal(entry.attachmentsDir),
     ]);
     if (!dirReal) {
-      return;
+      return true;
     }
 
     const rootBase = rootReal ?? path.resolve(entry.attachmentsRootDir);
     const dirBase = dirReal;
     if (!isResolvedChildPath({ childPath: dirBase, rootPath: rootBase })) {
-      return;
+      return false;
     }
     await fs.rm(dirBase, { recursive: true, force: true });
+    return true;
   } catch {
-    // best effort
+    return false;
   }
 }
 
@@ -259,38 +257,6 @@ export function reconcileOrphanedRun(params: {
   runs: Map<string, SubagentRunRecord>;
   resumedRuns: Set<string>;
 }) {
-  const now = Date.now();
-  let changed = false;
-  if (typeof params.entry.endedAt !== "number") {
-    params.entry.endedAt = now;
-    changed = true;
-  }
-  const orphanOutcome = withSubagentOutcomeTiming(
-    {
-      status: "error",
-      error: `orphaned subagent run (${params.reason})`,
-    },
-    {
-      startedAt: params.entry.startedAt,
-      endedAt: params.entry.endedAt,
-    },
-  );
-  if (shouldUpdateRunOutcome(params.entry.outcome, orphanOutcome)) {
-    params.entry.outcome = orphanOutcome;
-    changed = true;
-  }
-  if (params.entry.endedReason !== SUBAGENT_ENDED_REASON_ERROR) {
-    params.entry.endedReason = SUBAGENT_ENDED_REASON_ERROR;
-    changed = true;
-  }
-  if (params.entry.cleanupHandled !== true) {
-    params.entry.cleanupHandled = true;
-    changed = true;
-  }
-  if (typeof params.entry.cleanupCompletedAt !== "number") {
-    params.entry.cleanupCompletedAt = now;
-    changed = true;
-  }
   const shouldDeleteAttachments =
     params.entry.cleanup === "delete" || !params.entry.retainAttachmentsOnKeep;
   if (shouldDeleteAttachments) {
@@ -298,7 +264,7 @@ export function reconcileOrphanedRun(params: {
   }
   const removed = params.runs.delete(params.runId);
   params.resumedRuns.delete(params.runId);
-  if (!removed && !changed) {
+  if (!removed) {
     return false;
   }
   defaultRuntime.log(
@@ -315,6 +281,10 @@ export function reconcileOrphanedRestoredRuns(params: {
   const now = Date.now();
   let changed = false;
   for (const [runId, entry] of params.runs.entries()) {
+    if (entry.collect && entry.collectorCompletion) {
+      // Waitable collector tombstones intentionally outlive delete-mode sessions.
+      continue;
+    }
     if (entry.requesterSettleWake) {
       // Requester-settle outbox rows can intentionally outlive delete-mode
       // child sessions. Restore replays the obligation before retiring them.
@@ -350,7 +320,7 @@ export function reconcileOrphanedRestoredRuns(params: {
 }
 
 /** Resolves the completed subagent archive delay from config. */
-export function resolveArchiveAfterMs(cfg?: OpenClawConfig) {
+function resolveArchiveAfterMs(cfg?: OpenClawConfig) {
   const config = cfg ?? getRuntimeConfig();
   const minutes =
     config.agents?.defaults?.subagents?.archiveAfterMinutes ??
@@ -362,4 +332,54 @@ export function resolveArchiveAfterMs(cfg?: OpenClawConfig) {
     return undefined;
   }
   return Math.max(1, Math.floor(minutes)) * 60_000;
+}
+
+/** Resolves the archive deadline for one newly registered run. */
+export function resolveSubagentArchiveAtMs(params: {
+  cfg?: OpenClawConfig;
+  now: number;
+  spawnMode: "run" | "session";
+  cleanup: "keep" | "delete";
+  collect?: boolean;
+}): number | undefined {
+  if (params.spawnMode === "session" || params.collect || params.cleanup === "keep") {
+    return undefined;
+  }
+  const archiveAfterMs = resolveArchiveAfterMs(params.cfg);
+  return archiveAfterMs ? params.now + archiveAfterMs : undefined;
+}
+
+/** Backfills the retention deadline added after collector groups first shipped. */
+export function backfillCollectorArchiveAtMs(
+  entry: SubagentRunRecord,
+  cfg?: OpenClawConfig,
+): boolean {
+  if (!entry.collect) {
+    return false;
+  }
+  const endedAt =
+    typeof entry.execution.endedAt === "number" && Number.isFinite(entry.execution.endedAt)
+      ? entry.execution.endedAt
+      : undefined;
+  const capturedAt =
+    endedAt === undefined && !entry.collectorCompletion
+      ? undefined
+      : typeof entry.completion?.capturedAt === "number" &&
+          Number.isFinite(entry.completion.capturedAt)
+        ? entry.completion.capturedAt
+        : endedAt;
+  const archiveAfterMs = entry.spawnMode === "session" ? undefined : resolveArchiveAfterMs(cfg);
+  const expectedArchiveAt =
+    capturedAt !== undefined && archiveAfterMs !== undefined
+      ? capturedAt + archiveAfterMs
+      : undefined;
+  if (entry.archiveAtMs === expectedArchiveAt) {
+    return false;
+  }
+  if (expectedArchiveAt === undefined) {
+    delete entry.archiveAtMs;
+  } else {
+    entry.archiveAtMs = expectedArchiveAt;
+  }
+  return true;
 }

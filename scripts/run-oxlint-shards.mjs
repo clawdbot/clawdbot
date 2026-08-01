@@ -3,10 +3,11 @@ import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import pMap from "p-map";
 import {
   acquireLocalHeavyCheckLockSync,
+  ensureRepoToolNodeModulesLink,
   resolveLocalHeavyCheckEnv,
+  resolveRepoToolBinPath,
   shouldAcquireLocalHeavyCheckLockForOxlint,
 } from "./lib/local-heavy-check-runtime.mjs";
 
@@ -258,6 +259,7 @@ export async function main(extraArgs = process.argv.slice(2), runtimeEnv = proce
   const selectedShards = filterOxlintShards(shards, shardArgs.only);
 
   try {
+    ensureRepoToolNodeModulesLink(resolveRepoToolBinPath("oxlint"));
     const prepareResult = spawnSync(
       process.execPath,
       [path.resolve("scripts", "prepare-extension-package-boundary-artifacts.mjs")],
@@ -390,6 +392,9 @@ export function resolveOxlintShardConcurrency({
 }
 
 async function runShards({ concurrency, entries, env, extraArgs, runner }) {
+  // Dependency-less worktrees establish their primary-checkout toolchain link
+  // before this lazy import, avoiding a top-level package-resolution failure.
+  const { default: pMap } = await import("p-map");
   const results = await pMap(
     entries,
     async (shard) => {

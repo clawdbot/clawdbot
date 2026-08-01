@@ -1,4 +1,5 @@
 /** Process-local registry for SecretRef owners isolated during cold startup. */
+import type { SecretRefSource } from "../config/types.secrets.js";
 import {
   describeSecretResolutionError,
   isSecretResolutionError,
@@ -7,6 +8,7 @@ import {
 
 export type SecretDegradationReason =
   | SecretResolutionFailureReason
+  | "secret provider is not configured"
   | "resolved secret value was invalid"
   | "secret reference is not allowed for this provider"
   | "secret reference was not materialized by the active runtime"
@@ -31,6 +33,13 @@ export type DegradedSecretOwner = {
   paths: string[];
   refKeys: string[];
   reason: string;
+  /** Shared provider failure that made this owner unavailable. Runtime-internal diagnostic data. */
+  providerFailures?: Array<{
+    source: SecretRefSource;
+    provider: string;
+  }>;
+  /** Ref-scoped failure retained when this owner also has a provider-scoped outage. */
+  refFailureReason?: string;
 };
 
 /** SecretRef identities resolved for one owner in an active runtime snapshot. */
@@ -100,6 +109,7 @@ export function classifySecretResolutionErrorDegradations(error: unknown): Secre
 export function redactSecretDegradationReason(reason: string): SecretDegradationReason {
   switch (reason) {
     case "secret provider failed":
+    case "secret provider is not configured":
     case "secret provider policy denied resolution":
     case "secret provider response violated its contract":
     case "secret reference is not allowed for this provider":

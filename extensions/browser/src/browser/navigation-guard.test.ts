@@ -162,7 +162,7 @@ describe("browser navigation guard", () => {
         lookupFn,
         ssrfPolicy: {
           dangerouslyAllowPrivateNetwork: false,
-          hostnameAllowlist: ["*.example.com"],
+          allowedHostnames: ["*.example.com"],
         },
       }),
     ).resolves.toBeUndefined();
@@ -176,7 +176,7 @@ describe("browser navigation guard", () => {
         lookupFn,
         ssrfPolicy: {
           dangerouslyAllowPrivateNetwork: false,
-          hostnameAllowlist: ["*.example.com"],
+          allowedHostnames: ["*.example.com"],
         },
       }),
     ).rejects.toThrow(/dns rebinding protections are unavailable/i);
@@ -191,7 +191,7 @@ describe("browser navigation guard", () => {
         lookupFn,
         ssrfPolicy: {
           dangerouslyAllowPrivateNetwork: false,
-          hostnameAllowlist: ["*.example.com"],
+          allowedHostnames: ["*.example.com"],
         },
       }),
     ).rejects.toThrow(/dns rebinding protections are unavailable/i);

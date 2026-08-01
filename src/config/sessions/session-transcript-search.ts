@@ -4,6 +4,7 @@
 // when doctor imports or out-of-band writes leave derived rows behind.
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { truncateUtf16Safe } from "../../utils.js";
+import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { listSessionsNeedingTranscriptIndexReconcile } from "./session-transcript-index.js";
 import {
   isSessionTranscriptIndexReconcileRunning,
@@ -45,6 +46,7 @@ export function searchSessionTranscripts(params: {
   limit?: number;
   query: string;
   sessionKeys?: string[];
+  storePath?: string;
 }): SessionTranscriptSearchResult {
   const query = params.query.trim();
   if (!query) {
@@ -53,14 +55,20 @@ export function searchSessionTranscripts(params: {
   if (query.length > SEARCH_QUERY_MAX_CHARS) {
     throw new Error(`query must not exceed ${SEARCH_QUERY_MAX_CHARS} characters`);
   }
+  const databasePath = params.storePath
+    ? resolveSqliteTargetFromSessionStorePath(params.storePath, {
+        agentId: params.agentId,
+      }).path
+    : undefined;
   const databaseOptions = {
     agentId: params.agentId,
     ...(params.env ? { env: params.env } : {}),
+    ...(databasePath ? { path: databasePath } : {}),
   };
   const database = openOpenClawAgentDatabase(databaseOptions);
   const dirtySessions = listSessionsNeedingTranscriptIndexReconcile(database.db);
   if (dirtySessions.length > 0) {
-    startSessionTranscriptIndexReconcile(params);
+    startSessionTranscriptIndexReconcile(databaseOptions);
   }
   const indexing =
     dirtySessions.length > 0 || isSessionTranscriptIndexReconcileRunning(databaseOptions);
@@ -68,21 +76,21 @@ export function searchSessionTranscripts(params: {
   const sessionKeys = params.sessionKeys ?? [];
   const whereSession =
     sessionKeys.length > 0
-      ? ` AND sessions.session_key IN (${sessionKeys.map(() => "?").join(", ")})`
+      ? ` AND session_windows.session_key IN (${sessionKeys.map(() => "?").join(", ")})`
       : "";
   // MATCH, snippet(), and bm25() are FTS5 primitives without a Kysely
-  // representation. session_key lives on the sessions row so key renames
+  // representation. session_key lives on the window row so key renames
   // never leave stale keys inside the index. Sessions flagged needs_rebuild
   // are excluded: their rows may still hold rewound-away branch text that
   // sessions_history no longer exposes, so they stay hidden until reconcile
   // rebuilds them (indexing=true tells the caller to retry).
   const statement = database.db.prepare(/* sqlite-allow-raw: FTS5 MATCH/snippet/bm25 */ `
-    SELECT sessions.session_key AS session_key, session_transcript_fts.session_id AS session_id,
+    SELECT session_windows.session_key AS session_key, session_transcript_fts.session_id AS session_id,
       message_id, role, timestamp,
       snippet(session_transcript_fts, 0, '', '', ' … ', 48) AS snippet,
       bm25(session_transcript_fts) AS rank
     FROM session_transcript_fts
-    JOIN sessions ON sessions.session_id = session_transcript_fts.session_id
+    JOIN session_windows ON session_windows.session_id = session_transcript_fts.session_id
     WHERE session_transcript_fts MATCH ?${whereSession}
       AND session_transcript_fts.session_id NOT IN (
         SELECT session_id FROM session_transcript_index_state WHERE needs_rebuild != 0

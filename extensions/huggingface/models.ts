@@ -1,4 +1,5 @@
 // Huggingface plugin module implements models behavior.
+import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-types";
@@ -139,19 +140,21 @@ export async function discoverHuggingfaceModels(
 
   try {
     const requestTimeoutMs = resolveTimerTimeoutMs(timeoutMs, HUGGINGFACE_DISCOVERY_TIMEOUT_MS);
-    const { response, release } = await fetchWithSsrFGuard({
-      url: `${HUGGINGFACE_BASE_URL}/models`,
-      init: {
-        signal: AbortSignal.timeout(requestTimeoutMs),
-        headers: {
-          Authorization: `Bearer ${trimmedKey}`,
-          "Content-Type": "application/json",
+    const { response, release } = await fetchWithSsrFGuard(
+      withTrustedEnvProxyGuardedFetchMode({
+        url: `${HUGGINGFACE_BASE_URL}/models`,
+        init: {
+          signal: AbortSignal.timeout(requestTimeoutMs),
+          headers: {
+            Authorization: `Bearer ${trimmedKey}`,
+            "Content-Type": "application/json",
+          },
         },
-      },
-      timeoutMs: requestTimeoutMs,
-      policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(HUGGINGFACE_BASE_URL),
-      auditContext: "huggingface-model-discovery",
-    });
+        timeoutMs: requestTimeoutMs,
+        policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(HUGGINGFACE_BASE_URL),
+        auditContext: "huggingface-model-discovery",
+      }),
+    );
     try {
       if (!response.ok) {
         await response.body?.cancel().catch(() => undefined);

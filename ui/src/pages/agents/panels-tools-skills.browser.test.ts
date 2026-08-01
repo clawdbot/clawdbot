@@ -1,14 +1,18 @@
 // Control UI tests cover agents panels tools skills behavior.
 import { render } from "lit";
-import { describe, expect, it } from "vitest";
-import { renderAgentTools } from "./panels-tools-skills.ts";
+import { describe, expect, it, vi } from "vitest";
+import type { SkillStatusEntry } from "../../api/types.ts";
+import { installBrowserHistoryIsolation } from "../../test-helpers/browser-history.ts";
+import { renderAgentSkills, renderAgentTools } from "./panels-tools-skills.ts";
+
+installBrowserHistoryIsolation();
 
 function createBaseParams(overrides: Partial<Parameters<typeof renderAgentTools>[0]> = {}) {
   return {
     agentId: "main",
     configForm: {
       agents: {
-        list: [{ id: "main", tools: { profile: "full" } }],
+        entries: { main: { default: true, tools: { profile: "full" } } },
       },
     } as Record<string, unknown>,
     configLoading: false,
@@ -340,7 +344,7 @@ describe("agents tools panel (browser)", () => {
       { label: "Access", value: "Enabled by the current profile." },
       { label: "Source", value: "Plugin: voice-call" },
       { label: "Default Presets", value: "full" },
-      { label: "Current Session", value: "Not available in this chat session right now." },
+      { label: "Current Thread", value: "Not available in this chat thread right now." },
     ]);
   });
 
@@ -416,14 +420,94 @@ describe("agents tools panel (browser)", () => {
     expect(group.open).toBe(false);
     expect(tool.open).toBe(false);
 
-    chip.click();
-    await new Promise((resolve) => {
-      requestAnimationFrame(resolve);
-    });
+    const previousUrl = window.location.href;
+    // Shared jsdom workers can observe URL changes before finally/afterEach,
+    // so inspect the intended deep link without mutating browser history.
+    const replaceState = vi.spyOn(window.history, "replaceState").mockImplementation(() => {});
+    try {
+      chip.click();
+      await new Promise((resolve) => {
+        requestAnimationFrame(resolve);
+      });
 
-    expect(group.open).toBe(true);
-    expect(tool.open).toBe(true);
+      expect(group.open).toBe(true);
+      expect(tool.open).toBe(true);
+      expect(replaceState).toHaveBeenCalledOnce();
+      const requestedUrl = replaceState.mock.calls[0]?.[2];
+      expect(requestedUrl).toBeInstanceOf(URL);
+      expect((requestedUrl as URL).hash).toBe("#agent-tool-read");
+      expect(window.location.href).toBe(previousUrl);
+    } finally {
+      replaceState.mockRestore();
+      container.remove();
+    }
+  });
+});
 
-    container.remove();
+describe("agents skills panel (browser)", () => {
+  it("explains an unsatisfied one-of binary requirement", async () => {
+    const container = document.createElement("div");
+    const skill: SkillStatusEntry = {
+      name: "Coding Agent",
+      description: "Delegate coding work to an available coding CLI.",
+      source: "openclaw-bundled",
+      bundled: true,
+      filePath: "/tmp/skills/coding-agent/SKILL.md",
+      baseDir: "/tmp/skills/coding-agent",
+      skillKey: "coding-agent",
+      always: false,
+      disabled: false,
+      blockedByAllowlist: false,
+      blockedByAgentFilter: false,
+      eligible: false,
+      requirements: {
+        bins: [],
+        anyBins: ["claude", "codex", "opencode"],
+        env: [],
+        config: [],
+        os: [],
+      },
+      missing: {
+        bins: [],
+        anyBins: ["claude", "codex", "opencode"],
+        env: [],
+        config: [],
+        os: [],
+      },
+      configChecks: [],
+      install: [{ id: "node-codex", kind: "node", label: "Install Codex CLI", bins: ["codex"] }],
+    };
+
+    render(
+      renderAgentSkills({
+        agentId: "main",
+        report: {
+          workspaceDir: "/tmp/workspace",
+          managedSkillsDir: "/tmp/skills",
+          skills: [skill],
+        },
+        loading: false,
+        error: null,
+        activeAgentId: "main",
+        configForm: { agents: { entries: { main: { default: true } } } },
+        configLoading: false,
+        configSaving: false,
+        configDirty: false,
+        filter: "",
+        onFilterChange: () => undefined,
+        onRefresh: () => undefined,
+        onToggle: () => undefined,
+        onClear: () => undefined,
+        onDisableAll: () => undefined,
+        onConfigReload: () => undefined,
+        onConfigSave: () => undefined,
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    expect(container.querySelector(".agent-skill-row")?.textContent).toContain(
+      "bin:any of (claude, codex, opencode)",
+    );
   });
 });

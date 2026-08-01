@@ -1,4 +1,3 @@
-import type { registerInternalHook } from "../hooks/internal-hooks.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import { createModelCatalogRegistrationHandlers } from "./model-catalog-registration.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
@@ -79,16 +78,6 @@ export function createPluginRegistryState(registryParams: PluginRegistryParams) 
     registryParams,
     coreGatewayMethods: new Set(coreGatewayMethodNames),
     getHostCronService: () => registryParams.hostServices?.cron,
-    pluginHookRollback: new Map<
-      string,
-      Array<{
-        name: string;
-        previousRegistrations: Array<{
-          event: string;
-          handler: Parameters<typeof registerInternalHook>[1];
-        }>;
-      }>
-    >(),
     pluginsWithChannelRegistrationConflict: new Set<string>(),
     pluginSideEffectGuards: new Map<string, Set<PluginSideEffectGuard>>(),
     pushDiagnostic,

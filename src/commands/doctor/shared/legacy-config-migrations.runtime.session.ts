@@ -70,8 +70,48 @@ const SESSION_MAINTENANCE_RESET_ARCHIVE_RETENTION_ZERO_RULE: LegacyConfigRule = 
   match: (raw) => hasZeroDuration(raw, "resetArchiveRetention"),
 };
 
+const SESSION_ALIAS_RULES: LegacyConfigRule[] = [
+  {
+    path: ["session", "maintenance", "pruneDays"],
+    message:
+      'session.maintenance.pruneDays was renamed to pruneAfter. Run "openclaw doctor --fix".',
+  },
+  {
+    path: ["session", "resetByType", "dm"],
+    message: 'session.resetByType.dm was renamed to direct. Run "openclaw doctor --fix".',
+  },
+];
+
 /** Legacy config migration specs for session runtime config compatibility. */
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_SESSION: LegacyConfigMigrationSpec[] = [
+  defineLegacyConfigMigration({
+    id: "session.canonical-aliases",
+    describe: "Move session aliases to canonical keys",
+    legacyRules: SESSION_ALIAS_RULES,
+    apply: (raw, changes) => {
+      const session = getRecord(raw.session);
+      const maintenance = getRecord(session?.maintenance);
+      if (maintenance && Object.hasOwn(maintenance, "pruneDays")) {
+        if (maintenance.pruneAfter === undefined) {
+          maintenance.pruneAfter = maintenance.pruneDays;
+          changes.push("Moved session.maintenance.pruneDays → session.maintenance.pruneAfter.");
+        } else {
+          changes.push("Removed session.maintenance.pruneDays (pruneAfter already set).");
+        }
+        delete maintenance.pruneDays;
+      }
+      const resetByType = getRecord(session?.resetByType);
+      if (resetByType && Object.hasOwn(resetByType, "dm")) {
+        if (resetByType.direct === undefined) {
+          resetByType.direct = resetByType.dm;
+          changes.push("Moved session.resetByType.dm → session.resetByType.direct.");
+        } else {
+          changes.push("Removed session.resetByType.dm (direct already set).");
+        }
+        delete resetByType.dm;
+      }
+    },
+  }),
   defineLegacyConfigMigration({
     id: "session.maintenance.rotateBytes",
     describe: "Remove deprecated session.maintenance.rotateBytes",

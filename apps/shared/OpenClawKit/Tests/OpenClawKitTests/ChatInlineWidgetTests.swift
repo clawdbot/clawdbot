@@ -4,10 +4,34 @@ import Testing
 @testable import OpenClawChatUI
 
 struct ChatInlineWidgetTests {
+    @Test func `sanitizes widget export filenames`() {
+        #expect(ChatInlineWidgetExport.filename(title: "  Sales / Q3\\Summary\u{0007}  ") ==
+            "Sales  Q3Summary.png")
+        #expect(ChatInlineWidgetExport.filename(title: "\n\t") == "widget.png")
+        #expect(ChatInlineWidgetExport.filename(title: nil) == "widget.png")
+    }
+
     @Test func `decodes projected canvas widget block`() throws {
-        let data = Data(
-            #"{"role":"assistant","content":[{"type":"text","text":"Done"},{"type":"canvas","preview":{"kind":"canvas","surface":"assistant_message","render":"url","title":"Status","preferredHeight":240,"url":"/__openclaw__/canvas/documents/widget-1/index.html","sandbox":"scripts"}}]}"#
-                .utf8)
+        let data = Data(#"""
+        {
+          "role": "assistant",
+          "content": [
+            {"type": "text", "text": "Done"},
+            {
+              "type": "canvas",
+              "preview": {
+                "kind": "canvas",
+                "surface": "assistant_message",
+                "render": "url",
+                "title": "Status",
+                "preferredHeight": 240,
+                "url": "/__openclaw__/canvas/documents/widget-1/index.html",
+                "sandbox": "scripts"
+              }
+            }
+          ]
+        }
+        """#.utf8)
 
         let message = try JSONDecoder().decode(OpenClawChatMessage.self, from: data)
         let preview = try #require(message.content.last?.preview)

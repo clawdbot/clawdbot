@@ -1,8 +1,8 @@
 import { mkdir, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { MAX_TERMINAL_UPLOAD_BYTES } from "../../packages/gateway-protocol/src/terminal-upload-constants.js";
-import { isCanonicalTerminalUploadBase64 } from "../../packages/gateway-protocol/src/terminal-upload-constants.js";
+import { MAX_TERMINAL_UPLOAD_BYTES } from "../../packages/gateway-protocol/src/schema/terminal-constants.js";
+import { isCanonicalTerminalUploadBase64 } from "../../packages/gateway-protocol/src/schema/terminal-constants.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { ensureTerminalUploadCleanup, stageTerminalUpload } from "./terminal-file-upload.js";
 

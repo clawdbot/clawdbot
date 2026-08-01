@@ -3,7 +3,7 @@ summary: "Run local GGUF text inference and memory embeddings in OpenClaw with l
 read_when:
   - You want local text inference without an API key or model server
   - You want memory search embeddings from a local GGUF model
-  - You are configuring memorySearch.provider = "local"
+  - You are configuring memory.search.provider = "local"
   - You need the OpenClaw plugin that owns the node-llama-cpp runtime
 title: "llama.cpp Provider"
 sidebarTitle: "llama.cpp Provider"
@@ -25,22 +25,23 @@ deleting a manually installed runtime inside the OpenClaw package directory.
 
 ## Local text inference
 
-Choose **Local model (llama.cpp)** during interactive onboarding. OpenClaw asks
-before downloading the default model:
+Choose **llama.cpp** during interactive onboarding. OpenClaw installs the
+official provider plugin, then asks before downloading the default model:
 
-`hf:bartowski/Qwen_Qwen3-4B-Instruct-2507-GGUF/Qwen_Qwen3-4B-Instruct-2507-Q4_K_M.gguf`
+`hf:unsloth/gemma-4-E4B-it-GGUF/gemma-4-E4B-it-Q4_K_M.gguf`
 
-The Qwen3 4B Instruct 2507 Q4_K_M file is about 2.5 GB. Budget roughly 3 GB of
-RAM for model weights, plus context and OpenClaw runtime overhead. The default
-context is automatically sized with an 8,192-token cap so it remains practical
-on 8 GB machines. Configure a larger context only when the machine has enough
+The Gemma 4 E4B IT Q4_K_M file is about 5.0 GB. OpenClaw offers this default
+only on machines with at least 16 GiB of RAM, leaving room for model weights,
+context, and Gateway overhead. The default context is automatically sized with
+an 8,192-token cap. Configure a larger context only when the machine has enough
 memory.
 
 The onboarding discovery check is read-only. It offers llama.cpp automatically
 only when the default or configured GGUF file is already in the model cache; it
 never downloads during discovery. Ollama and LM Studio remain separate local
 service choices and keep their own discovery flows. Manually choosing llama.cpp
-is the path that prompts for the default model download.
+is the path that installs the runtime, prompts for the default model download,
+and verifies a real model reply before marking setup complete.
 
 The provider uses the GGUF model's embedded chat template and native
 node-llama-cpp function calling. Text streams token by token. Tool calls return
@@ -95,17 +96,15 @@ own read-only cache resolver, including repository, branch, and split-file namin
 
 ## Memory embedding configuration
 
-Set `memorySearch.provider` to `local`:
+Set `memory.search.provider` to `local`:
 
 ```json5
 {
-  agents: {
-    defaults: {
-      memorySearch: {
-        provider: "local",
-        local: {
-          modelPath: "hf:ggml-org/embeddinggemma-300m-qat-q8_0-GGUF/embeddinggemma-300m-qat-Q8_0.gguf",
-        },
+  memory: {
+    search: {
+      provider: "local",
+      local: {
+        modelPath: "hf:ggml-org/embeddinggemma-300m-qat-q8_0-GGUF/embeddinggemma-300m-qat-Q8_0.gguf",
       },
     },
   },
@@ -156,5 +155,5 @@ with:
 
 For local inference without an in-process native dependency, use the Ollama or
 LM Studio provider instead. For lower-friction local embeddings, set
-`memorySearch.provider` to a remote embedding provider such as `lmstudio`,
+`memory.search.provider` to a remote embedding provider such as `lmstudio`,
 `ollama`, `openai`, or `voyage` instead.

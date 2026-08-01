@@ -183,14 +183,11 @@ function createClient(
   apiKeyInput: string,
   options?: AzureOpenAIResponsesOptions,
 ) {
-  let apiKey = apiKeyInput;
+  const apiKey = apiKeyInput.trim();
   if (!apiKey) {
-    if (!process.env.AZURE_OPENAI_API_KEY) {
-      throw new Error(
-        "Azure OpenAI API key is required. Set AZURE_OPENAI_API_KEY environment variable or pass it as an argument.",
-      );
-    }
-    apiKey = process.env.AZURE_OPENAI_API_KEY;
+    throw new Error(
+      "Azure OpenAI API key is required. Set AZURE_OPENAI_API_KEY environment variable or pass it as an argument.",
+    );
   }
 
   const headers = { ...model.headers };

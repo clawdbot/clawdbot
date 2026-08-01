@@ -492,7 +492,19 @@ describe("secret ref resolver", () => {
     },
   );
 
-  itPosix("rejects symlink command paths unless allowSymlinkCommand is enabled", async () => {
+  it("enforces the built-in per-provider reference limit", async () => {
+    const refs = Array.from({ length: 513 }, (_, index) => ({
+      source: "env" as const,
+      provider: "default",
+      id: `SECRET_${index}`,
+    }));
+
+    await expect(resolveSecretRefValues(refs, { config: {} })).rejects.toThrow(
+      'Secret provider "default" exceeded maxRefsPerProvider (512).',
+    );
+  });
+
+  itPosix("rejects symlink command paths", async () => {
     const root = await createCaseDir("exec-link-reject");
     const symlinkPath = path.join(root, "resolver-link.mjs");
     await fs.symlink(execPlainScriptPath, symlinkPath);
@@ -502,22 +514,20 @@ describe("secret ref resolver", () => {
     );
   });
 
-  itPosix("allows symlink command paths when allowSymlinkCommand is enabled", async () => {
+  itPosix("stays fail-closed when the retired symlink opt-out is present", async () => {
     const root = await createCaseDir("exec-link-allow");
     const symlinkPath = path.join(root, "resolver-link.mjs");
     await fs.symlink(execPlainScriptPath, symlinkPath);
-    const trustedRoot = await fs.realpath(fixtureRoot);
-
-    const value = await resolveExecSecret(symlinkPath, {
-      jsonOnly: false,
-      allowSymlinkCommand: true,
-      trustedDirs: [trustedRoot],
-    });
-    expect(value).toBe("plain-secret");
+    await expect(
+      resolveExecSecret(symlinkPath, {
+        jsonOnly: false,
+        allowSymlinkCommand: true,
+      }),
+    ).rejects.toThrow("must not be a symlink");
   });
 
   itPosix(
-    "handles Homebrew-style symlinked exec commands with args only when explicitly allowed",
+    "rejects Homebrew-style symlinked exec commands even with the retired opt-out",
     async () => {
       const root = await createCaseDir("homebrew");
       const binDir = path.join(root, "opt", "homebrew", "bin");
@@ -537,22 +547,16 @@ describe("secret ref resolver", () => {
         0o700,
       );
       await fs.symlink(targetCommand, symlinkCommand);
-      const trustedRoot = await fs.realpath(root);
-
-      await expect(resolveExecSecret(symlinkCommand, { args: ["brew"] })).rejects.toThrow(
-        "must not be a symlink",
-      );
-
-      const value = await resolveExecSecret(symlinkCommand, {
-        args: ["brew"],
-        allowSymlinkCommand: true,
-        trustedDirs: [trustedRoot],
-      });
-      expect(value).toBe("brew:openai/api-key");
+      await expect(
+        resolveExecSecret(symlinkCommand, {
+          args: ["brew"],
+          allowSymlinkCommand: true,
+        }),
+      ).rejects.toThrow("must not be a symlink");
     },
   );
 
-  itPosix("checks trustedDirs against resolved symlink target", async () => {
+  itPosix("rejects symlinks before trusted-directory evaluation", async () => {
     const root = await createCaseDir("exec-link-trusted");
     const symlinkPath = path.join(root, "resolver-link.mjs");
     await fs.symlink(execPlainScriptPath, symlinkPath);
@@ -563,7 +567,7 @@ describe("secret ref resolver", () => {
         allowSymlinkCommand: true,
         trustedDirs: [root],
       }),
-    ).rejects.toThrow("outside trustedDirs");
+    ).rejects.toThrow("must not be a symlink");
   });
 
   itPosix("rejects exec refs when protocolVersion is not 1", async () => {
@@ -656,12 +660,12 @@ describe("secret ref resolver", () => {
 
     const sampleHandle = await fs.open(filePath, "r");
     const fileHandlePrototype = Object.getPrototypeOf(sampleHandle) as {
-      readFile: typeof sampleHandle.readFile;
+      read: typeof sampleHandle.read;
     };
     await sampleHandle.close();
-    const readFileSpy = vi
-      .spyOn(fileHandlePrototype, "readFile")
-      .mockImplementation(() => new Promise<Buffer>(() => {}) as never);
+    const readSpy = vi
+      .spyOn(fileHandlePrototype, "read")
+      .mockImplementation(() => new Promise(() => {}) as never);
 
     try {
       await expect(
@@ -681,7 +685,7 @@ describe("secret ref resolver", () => {
         ),
       ).rejects.toThrow('File provider "filemain" timed out');
     } finally {
-      readFileSpy.mockRestore();
+      readSpy.mockRestore();
     }
   });
 
@@ -812,25 +816,26 @@ describe("secret ref resolver", () => {
     });
   });
 
-  it("allows trusted file provider opt-out when Windows ACL source is unknown", async () => {
+  it("stays fail-closed when the retired Windows ACL opt-out is present", async () => {
     await withMockedWindowsPlatform(async () => {
       const dir = await createCaseDir("win-acl-opt-out");
       const filePath = path.join(dir, "secrets.json");
       await writeSecureFile(filePath, '{"token":"abc123"}');
 
-      const value = await resolveSecretRefString(
-        { source: "file", provider: "filemain", id: "/token" },
-        {
-          config: {
-            secrets: {
-              providers: {
-                filemain: createFileProviderConfig(filePath, { allowInsecurePath: true }),
+      await expect(
+        resolveSecretRefString(
+          { source: "file", provider: "filemain", id: "/token" },
+          {
+            config: {
+              secrets: {
+                providers: {
+                  filemain: createFileProviderConfig(filePath, { allowInsecurePath: true }),
+                },
               },
             },
           },
-        },
-      );
-      expect(value).toBe("abc123");
+        ),
+      ).rejects.toThrow(/ACL verification unavailable on Windows/);
     });
   });
 

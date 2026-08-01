@@ -8,9 +8,11 @@ import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import { rawDataToString } from "../infra/ws.js";
 import "../test-support/browser-security.mock.js";
 import {
+  closeTrackedCdpTarget,
   isDirectCdpWebSocketEndpoint,
   isWebSocketUrl,
   parseBrowserHttpUrl as parseHttpUrl,
+  resolveCdpTabOwnership,
 } from "./cdp.helpers.js";
 import {
   createTargetViaCdp,
@@ -115,6 +117,7 @@ describe("cdp", () => {
 
   it("creates a target via the browser websocket", async () => {
     const methods: string[] = [];
+    let createTargetParams: Record<string, unknown> | undefined;
     const wsPort = await startWsServerWithMessages((msg, socket) => {
       if (msg.method) {
         methods.push(msg.method);
@@ -122,6 +125,7 @@ describe("cdp", () => {
       if (msg.method !== "Target.createTarget") {
         return;
       }
+      createTargetParams = msg.params;
       socket.send(
         JSON.stringify({
           id: msg.id,
@@ -140,6 +144,7 @@ describe("cdp", () => {
     });
 
     expect(created.targetId).toBe("TARGET_123");
+    expect(createTargetParams).toEqual({ url: "https://example.com", background: true });
     expect(methods).toEqual([
       "Target.createTarget",
       "Target.attachToTarget",
@@ -151,6 +156,127 @@ describe("cdp", () => {
       "Runtime.runIfWaitingForDebugger",
       "Target.detachFromTarget",
     ]);
+  });
+
+  it("verifies ownership and closes a tracked target on one browser connection", async () => {
+    const methods: string[] = [];
+    const wsPort = await startWsServerWithMessages((msg, socket) => {
+      if (msg.method) {
+        methods.push(msg.method);
+      }
+      if (msg.method === "Target.getTargets") {
+        socket.send(
+          JSON.stringify({
+            id: msg.id,
+            result: {
+              targetInfos: [
+                { targetId: "OWNED", type: "page" },
+                { targetId: "USER", type: "page" },
+              ],
+            },
+          }),
+        );
+      } else if (msg.method === "Target.closeTarget") {
+        socket.send(JSON.stringify({ id: msg.id, result: { success: true } }));
+      }
+    });
+    const browserWebSocketUrl = `ws://127.0.0.1:${wsPort}/devtools/browser/TEST`;
+    const httpPort = await startVersionHttpServer({ webSocketDebuggerUrl: browserWebSocketUrl });
+    const cdpUrl = `http://127.0.0.1:${httpPort}`;
+    const resolvedOwnership = await resolveCdpTabOwnership({
+      profileName: "remote",
+      cdpUrl,
+      nativeTargetId: "OWNED",
+    });
+    expect(resolvedOwnership.status).toBe("durable");
+    if (resolvedOwnership.status !== "durable") {
+      throw new Error("expected durable ownership");
+    }
+
+    await expect(
+      closeTrackedCdpTarget({
+        profileName: "remote",
+        cdpUrl,
+        nativeTargetId: "OWNED",
+        expectedProfileFingerprint: resolvedOwnership.profileFingerprint,
+        expectedBrowserInstanceFingerprint: resolvedOwnership.browserInstanceFingerprint,
+      }),
+    ).resolves.toEqual({ status: "closed" });
+    expect(methods).toEqual(["Target.getTargets", "Target.closeTarget"]);
+    methods.length = 0;
+    await expect(
+      closeTrackedCdpTarget({
+        profileName: "remote",
+        cdpUrl,
+        nativeTargetId: "OWNED",
+        expectedProfileFingerprint: resolvedOwnership.profileFingerprint,
+        expectedBrowserInstanceFingerprint: resolvedOwnership.browserInstanceFingerprint,
+        shouldClose: () => false,
+      }),
+    ).resolves.toEqual({ status: "cancelled" });
+    expect(methods).toEqual(["Target.getTargets"]);
+  });
+
+  it("retires an absent target without issuing a close command", async () => {
+    const methods: string[] = [];
+    const wsPort = await startWsServerWithMessages((msg, socket) => {
+      if (msg.method) {
+        methods.push(msg.method);
+      }
+      if (msg.method === "Target.getTargets") {
+        socket.send(
+          JSON.stringify({
+            id: msg.id,
+            result: { targetInfos: [{ targetId: "USER", type: "page" }] },
+          }),
+        );
+      }
+    });
+    const browserWebSocketUrl = `ws://127.0.0.1:${wsPort}/devtools/browser/TEST`;
+    const httpPort = await startVersionHttpServer({ webSocketDebuggerUrl: browserWebSocketUrl });
+    const cdpUrl = `http://127.0.0.1:${httpPort}`;
+    const resolvedOwnership = await resolveCdpTabOwnership({
+      profileName: "remote",
+      cdpUrl,
+      nativeTargetId: "MISSING",
+    });
+    expect(resolvedOwnership.status).toBe("durable");
+    if (resolvedOwnership.status !== "durable") {
+      throw new Error("expected durable ownership");
+    }
+
+    await expect(
+      closeTrackedCdpTarget({
+        profileName: "remote",
+        cdpUrl,
+        nativeTargetId: "MISSING",
+        expectedProfileFingerprint: resolvedOwnership.profileFingerprint,
+        expectedBrowserInstanceFingerprint: resolvedOwnership.browserInstanceFingerprint,
+      }),
+    ).resolves.toEqual({ status: "missing" });
+    expect(methods).toEqual(["Target.getTargets"]);
+  });
+
+  it("does not inspect or close targets after browser ownership changes", async () => {
+    const methods: string[] = [];
+    const wsPort = await startWsServerWithMessages((msg) => {
+      if (msg.method) {
+        methods.push(msg.method);
+      }
+    });
+    const browserWebSocketUrl = `ws://127.0.0.1:${wsPort}/devtools/browser/NEW`;
+    const httpPort = await startVersionHttpServer({ webSocketDebuggerUrl: browserWebSocketUrl });
+
+    await expect(
+      closeTrackedCdpTarget({
+        profileName: "remote",
+        cdpUrl: `http://127.0.0.1:${httpPort}`,
+        nativeTargetId: "REUSED",
+        expectedProfileFingerprint: "sha256:old-profile",
+        expectedBrowserInstanceFingerprint: "sha256:old-browser",
+      }),
+    ).resolves.toEqual({ status: "ownership-mismatch" });
+    expect(methods).toEqual([]);
   });
 
   it("returns the stable browser-owned frame URL when requested", async () => {

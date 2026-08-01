@@ -82,9 +82,49 @@ describe("checkGatewayHealth", () => {
       method: "channels.status",
       params: { probe: true, timeoutMs: 5000 },
       timeoutMs: 6000,
+      config: cfg,
     });
     expect(runtime.error).not.toHaveBeenCalled();
     expect(note.mock.calls.map(([, title]) => title)).not.toContain("OpenClaw version mismatch");
+  });
+
+  it("reports failed channel diagnostics without marking a reachable gateway unhealthy", async () => {
+    callGateway
+      .mockResolvedValueOnce({ ok: true })
+      .mockRejectedValueOnce(new Error("channel probe timed out"));
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+    await expect(
+      checkGatewayHealth({ runtime: runtime as never, cfg, timeoutMs: 3000 }),
+    ).resolves.toEqual({ authenticated: true, healthOk: true, status: { ok: true } });
+
+    expect(note).toHaveBeenCalledWith(
+      [
+        "Channel status probe failed: channel probe timed out",
+        "Retry: openclaw channels status --probe",
+      ].join("\n"),
+      "Channel warnings",
+    );
+    expect(runtime.error).not.toHaveBeenCalled();
+  });
+
+  it("redacts credentials and terminal controls in channel probe failures", async () => {
+    const token = "sk-abcdefghijklmnopqrstuv";
+    callGateway
+      .mockResolvedValueOnce({ ok: true })
+      .mockRejectedValueOnce(
+        new Error(`\u001B[31mchannel probe failed\nAuthorization: Bearer ${token}`),
+      );
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+    await checkGatewayHealth({ runtime: runtime as never, cfg });
+
+    const [message, title] = note.mock.calls.at(-1) ?? [];
+    expect(title).toBe("Channel warnings");
+    expect(message).toContain("channel probe failed\\nAuthorization: Bearer");
+    expect(message).not.toContain(token);
+    expect(message).not.toContain("\u001B");
+    expect(message.split("\n")).toHaveLength(2);
   });
 
   it("notes CLI and gateway version mismatch when the gateway reports another runtime version", async () => {
@@ -127,7 +167,7 @@ describe("checkGatewayHealth", () => {
             ownerId: "tts",
             state: "unavailable",
             degradationState: "stale",
-            paths: ["messages.tts.providers.elevenlabs.apiKey"],
+            paths: ["tts.providers.elevenlabs.apiKey"],
             reason: "secret provider policy denied resolution",
           },
           {
@@ -148,7 +188,7 @@ describe("checkGatewayHealth", () => {
       [
         "- cold account:discord:ops (channels.discord.accounts.ops.token): secret resolution failed",
         "  Retry: openclaw secrets reload",
-        "- stale capability:tts (messages.tts.providers.elevenlabs.apiKey): secret provider policy denied resolution",
+        "- stale capability:tts (tts.providers.elevenlabs.apiKey): secret provider policy denied resolution",
         "  Retry: openclaw secrets reload",
         "- cold capability:web-fetch:firecrawl (plugins.entries.firecrawl.config.webFetch.apiKey): resolved secret value was invalid",
         "  Retry: openclaw secrets reload",

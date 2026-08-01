@@ -79,12 +79,12 @@ const WORKFLOW_CALL_ONLY_INPUTS = new Set([
 const PROFILE_EXPECTATIONS = [
   {
     profile: "minimum",
-    dockerE2eChunks: ["package-update-openai", "package-update-anthropic", "package-update-core"],
+    dockerE2eChunks: ["package-update-openai", "package-update-core"],
     liveModelProviders: ["openai"],
   },
   {
     profile: "beta",
-    dockerE2eChunks: ["package-update-openai", "package-update-anthropic", "package-update-core"],
+    dockerE2eChunks: ["package-update-openai", "package-update-core"],
     liveModelProviders: ["openai"],
   },
   {
@@ -92,7 +92,6 @@ const PROFILE_EXPECTATIONS = [
     dockerE2eChunks: [
       "core",
       "package-update-openai",
-      "package-update-anthropic",
       "package-update-core",
       "plugins-runtime-plugins",
       "plugins-runtime-services",
@@ -112,7 +111,6 @@ const PROFILE_EXPECTATIONS = [
     dockerE2eChunks: [
       "core",
       "package-update-openai",
-      "package-update-anthropic",
       "package-update-core",
       "plugins-runtime-plugins",
       "plugins-runtime-services",
@@ -134,6 +132,7 @@ const PROFILE_EXPECTATIONS = [
       "opencode-go",
       "openrouter",
       "xai",
+      "zai",
       "fireworks",
     ],
   },
@@ -237,7 +236,7 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
       releaseProfile: "stable",
     });
 
-    expect(plan.dockerE2e.count).toBe(14);
+    expect(plan.dockerE2e.count).toBe(13);
     expect(plan.liveModels.matrix.include.map((entry: MatrixEntry) => entry.providers)).toEqual([
       "anthropic",
       "google",
@@ -249,6 +248,7 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
       "opencode-go",
       "openrouter",
       "xai",
+      "zai",
       "fireworks",
     ]);
   });
@@ -315,7 +315,7 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
     });
 
     expect(plan.liveModels.count).toBe(0);
-    expect(plan.liveModels.omitted).toHaveLength(9);
+    expect(plan.liveModels.omitted).toHaveLength(10);
     expect(plan.liveModels.omitted[0]?.reason).toBe(
       "Docker live model matrix disabled by input selection",
     );

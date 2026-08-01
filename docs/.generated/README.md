@@ -6,6 +6,7 @@ remain local inspection artifacts.
 **Tracked (committed to git):**
 
 - `config-baseline.sha256` — hashes of config baseline JSON artifacts.
+- `config-baseline.counts.json` — maximum entry counts for each config baseline kind.
 - `plugin-sdk-api-baseline.sha256` — one hash per Plugin SDK entrypoint.
 - `sqlite-session-transcript-schema-baseline.sha256` — hash of the sessions/transcripts SQLite schema baseline.
 

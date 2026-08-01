@@ -204,16 +204,61 @@ function runRestartArgParser(...args: string[]) {
       "SIGN=0",
       "AUTO_DETECT_SIGNING=1",
       "ATTACH_ONLY=1",
+      "BACKGROUND_ONLY=0",
       "TARGET_ONLY=0",
       'log() { printf "%s\\n" "$*"; }',
       'fail() { printf "ERROR: %s\\n" "$*" >&2; exit 1; }',
       parserBlock,
-      'printf "wait=%s no_sign=%s sign=%s attach_only=%s target_only=%s\\n" "$WAIT_FOR_LOCK" "$NO_SIGN" "$SIGN" "$ATTACH_ONLY" "$TARGET_ONLY"',
+      'printf "wait=%s no_sign=%s sign=%s attach_only=%s background_only=%s target_only=%s\\n" "$WAIT_FOR_LOCK" "$NO_SIGN" "$SIGN" "$ATTACH_ONLY" "$BACKGROUND_ONLY" "$TARGET_ONLY"',
     ].join("\n"),
   );
   chmodSync(harnessPath, 0o755);
 
   return spawnSync("bash", [harnessPath, ...args], { encoding: "utf8" });
+}
+
+function runLaunchArgBuilder(...args: string[]) {
+  const root = mkdtempSync(join(tmpdir(), "openclaw-restart-mac-test-"));
+  tempRoots.push(root);
+
+  const script = readFileSync(restartScriptPath, "utf8");
+  const parserBlock = script.slice(
+    script.indexOf('for arg in "$@"; do'),
+    script.indexOf('if [[ "$NO_SIGN" -eq 1 && "$SIGN" -eq 1 ]]'),
+  );
+  const appLaunchArgBlock = script.slice(
+    script.indexOf("APP_LAUNCH_ARGS=()"),
+    script.indexOf('if [[ "$TARGET_ONLY" -eq 1 ]]; then', script.indexOf("APP_LAUNCH_ARGS=()")),
+  );
+  const openArgBlock = script.slice(
+    script.indexOf('OPEN_ARGS=(-n "${APP_BUNDLE}")'),
+    script.indexOf("# 4) Launch"),
+  );
+  const harnessPath = join(root, "launch-arg-harness.sh");
+  writeFileSync(
+    harnessPath,
+    [
+      "#!/bin/bash",
+      "set -euo pipefail",
+      "WAIT_FOR_LOCK=0",
+      "NO_SIGN=0",
+      "SIGN=0",
+      "AUTO_DETECT_SIGNING=1",
+      "ATTACH_ONLY=1",
+      "BACKGROUND_ONLY=0",
+      "TARGET_ONLY=0",
+      'APP_BUNDLE="/tmp/OpenClaw.app"',
+      'log() { printf "%s\\n" "$*"; }',
+      'fail() { printf "ERROR: %s\\n" "$*" >&2; exit 1; }',
+      parserBlock,
+      appLaunchArgBlock,
+      openArgBlock,
+      'printf "<%s>\\n" "${OPEN_ARGS[@]}"',
+    ].join("\n"),
+  );
+  chmodSync(harnessPath, 0o755);
+
+  return spawnSync("/bin/bash", [harnessPath, ...args], { encoding: "utf8" });
 }
 
 function runRestartLockHarness(lockDir: string) {
@@ -295,10 +340,12 @@ describe("scripts/restart-mac.sh", () => {
   });
 
   it("parses restart mode flags before side effects", () => {
-    const result = runRestartArgParser("--wait", "--no-sign", "--target-only");
+    const result = runRestartArgParser("--wait", "--no-sign", "--background-only", "--target-only");
 
     expect(result.status).toBe(0);
-    expect(result.stdout.trim()).toBe("wait=1 no_sign=1 sign=0 attach_only=1 target_only=1");
+    expect(result.stdout.trim()).toBe(
+      "wait=1 no_sign=1 sign=0 attach_only=1 background_only=1 target_only=1",
+    );
     expect(result.stderr).toBe("");
   });
 
@@ -443,7 +490,7 @@ describe("scripts/restart-mac.sh", () => {
       script.indexOf("else", script.indexOf("# 1)")),
     );
     const switchTargetBlock = script.slice(
-      script.indexOf('if [[ "$TARGET_ONLY" -eq 1 ]]; then', script.indexOf("ATTACH_ONLY_ARGS")),
+      script.indexOf('if [[ "$TARGET_ONLY" -eq 1 ]]; then', script.indexOf("APP_LAUNCH_ARGS")),
       script.indexOf("# 4) Launch"),
     );
 
@@ -456,6 +503,22 @@ describe("scripts/restart-mac.sh", () => {
     expect(script).toContain('[[ "${executable}" == "${TARGET_EXECUTABLE}" ]] && continue');
     expect(script).toContain('process_pids_for_executable "${TARGET_EXECUTABLE}"');
     expect(script).toContain("target-only restart deferred");
+  });
+
+  it("passes background-only through to the launched app", () => {
+    const script = readFileSync(restartScriptPath, "utf8");
+
+    expect(script).toContain("APP_LAUNCH_ARGS+=(--background-only)");
+    expect(script).toContain('OPEN_ARGS+=(--args "${APP_LAUNCH_ARGS[@]}")');
+    expect(script).toContain('/usr/bin/open "${OPEN_ARGS[@]}"');
+  });
+
+  it("keeps no-attach-only launches nounset-safe on the macOS system Bash", () => {
+    const result = runLaunchArgBuilder("--no-attach-only");
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout.trim()).toBe("<-n>\n</tmp/OpenClaw.app>");
   });
 
   it("finds persistent launchd supervisors across explicit domains", () => {
@@ -589,8 +652,11 @@ describe("scripts/restart-mac.sh", () => {
   it("forces LaunchServices to start the selected app bundle", () => {
     const script = readFileSync(restartScriptPath, "utf8");
 
-    expect(script).toContain('/usr/bin/open -n "${APP_BUNDLE}"');
-    expect(script).not.toContain('/usr/bin/open "${APP_BUNDLE}"');
+    expect(script).toContain('OPEN_ARGS=(-n "${APP_BUNDLE}")');
+    expect(script).toContain('/usr/bin/open "${OPEN_ARGS[@]}"');
+    expect(script.indexOf("\nchoose_app_bundle\n")).toBeLessThan(
+      script.indexOf('OPEN_ARGS=(-n "${APP_BUNDLE}")'),
+    );
   });
 
   it("normalizes custom app bundle paths before process matching", () => {
@@ -615,26 +681,43 @@ describe("scripts/restart-mac.sh", () => {
     );
 
     expect(result.status).toBe(1);
-    expect(killCalls).toContain("321\n");
+    expect(killCalls.trim().split(/\r?\n/u)).toHaveLength(20);
     expect(result.stdout).toBe("");
     expect(result.stderr).toBe("");
   });
 
-  it("passes restart cleanup when the final kill attempt clears the process", () => {
+  it("waits beyond the app signal failsafe for scoped processes to exit", () => {
     const { killCalls, result } = runCleanupFunction(
       [
         "#!/usr/bin/env bash",
         'kill_count="$(wc -l < "$OPENCLAW_TEST_KILL_CALLS" 2>/dev/null || echo 0)"',
-        'if [[ "$kill_count" -lt 10 ]]; then',
+        'if [[ "$kill_count" -lt 11 ]]; then',
         "  printf '%s\\n' '  321 /worktree/dist/OpenClaw.app/Contents/MacOS/OpenClaw --attach-only'",
         "fi",
       ].join("\n"),
     );
 
     expect(result.status).toBe(0);
-    expect(killCalls.trim().split(/\r?\n/u)).toHaveLength(10);
+    expect(killCalls.trim().split(/\r?\n/u)).toHaveLength(11);
     expect(result.stdout).toBe("");
     expect(result.stderr).toBe("");
+  });
+
+  it("keeps the restart grace period longer than the app signal failsafe", () => {
+    const script = readFileSync(restartScriptPath, "utf8");
+    const cleanupBlock = script.slice(
+      script.indexOf("kill_all_openclaw()"),
+      script.indexOf("stop_launch_agent()"),
+    );
+    const watcher = readFileSync(
+      "apps/macos/Sources/OpenClaw/TerminationSignalWatcher.swift",
+      "utf8",
+    );
+    const maxAttempts = Number(cleanupBlock.match(/local max_attempts=(\d+)/u)?.[1]);
+    const pollSeconds = Number(cleanupBlock.match(/local poll_seconds=([\d.]+)/u)?.[1]);
+    const failsafeSeconds = Number(watcher.match(/signalExitFailsafeSeconds = ([\d.]+)/u)?.[1]);
+
+    expect(maxAttempts * pollSeconds).toBeGreaterThan(failsafeSeconds);
   });
 
   it("passes restart cleanup when scoped processes are gone", () => {

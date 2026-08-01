@@ -1,4 +1,8 @@
-import { expectDefined, parseStrictInteger } from "@openclaw/normalization-core";
+import {
+  asSafeIntegerInRange,
+  expectDefined,
+  parseStrictInteger,
+} from "@openclaw/normalization-core";
 export type UsageBarTemplate = Record<string, unknown>;
 export type UsageContract = Record<string, unknown>;
 type Vocab = Record<string, unknown>;
@@ -117,9 +121,12 @@ function meter(value: unknown, width: number, scale: unknown): string {
 
 const VERB_NAMES = new Set(["num", "fixed", "dur", "pct", "inv", "alias", "meter"]);
 
-function parseFixedDigits(raw: string | undefined): number | undefined {
-  const digits = raw === undefined ? 2 : parseStrictInteger(raw);
-  return digits !== undefined && digits >= 0 && digits <= 100 ? digits : undefined;
+function parseBoundedIntegerArg(
+  raw: string | undefined,
+  options: { defaultValue: number; min: number; max: number },
+): number | undefined {
+  const value = raw === undefined ? options.defaultValue : parseStrictInteger(raw);
+  return asSafeIntegerInRange(value, options);
 }
 
 function applyVerb(name: string, args: string[], value: unknown, vocab: Vocab): unknown {
@@ -127,7 +134,7 @@ function applyVerb(name: string, args: string[], value: unknown, vocab: Vocab): 
     case "num":
       return num(value);
     case "fixed": {
-      const digits = parseFixedDigits(args[0]);
+      const digits = parseBoundedIntegerArg(args[0], { defaultValue: 2, min: 0, max: 100 });
       return digits === undefined ? "" : fixed(value, digits);
     }
     case "dur":
@@ -148,9 +155,10 @@ function applyVerb(name: string, args: string[], value: unknown, vocab: Vocab): 
       return Object.hasOwn(table, lower) ? table[lower] : value;
     }
     case "meter": {
-      const width = args[0] ? Number.parseInt(args[0], 10) || 5 : 5;
+      const rawWidth = args[0]?.trim() ? args[0] : undefined;
+      const width = parseBoundedIntegerArg(rawWidth, { defaultValue: 5, min: 1, max: 100 });
       const scale = args.length > 1 ? vocab[expectDefined(args[1], "args entry at 1")] : undefined;
-      return meter(value, width, scale);
+      return width === undefined ? "" : meter(value, width, scale);
     }
     default:
       return String(value);

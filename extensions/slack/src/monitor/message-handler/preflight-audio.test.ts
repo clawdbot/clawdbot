@@ -113,8 +113,7 @@ describe("Slack captionless audio preflight", () => {
     expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
     expect(transcribeFirstAudioMock).toHaveBeenCalledWith({
       ctx: expect.objectContaining({
-        MediaPaths: ["/tmp/image.png", "/tmp/voice.mp4"],
-        MediaTypes: ["image/png", "audio/mp4"],
+        media,
         OriginatingChannel: "slack",
         OriginatingTo: "channel:C1",
         AccountId: "work",

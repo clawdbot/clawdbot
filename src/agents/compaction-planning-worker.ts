@@ -13,6 +13,7 @@ import {
   buildStageSplitPlan,
   buildSummaryChunks,
   computeAdaptiveChunkRatio,
+  projectCompactionMessagesForPlanning,
   sanitizeCompactionMessages,
   type HistoryPrunePlan,
   type OversizedFallbackPlan,
@@ -162,35 +163,54 @@ function runCompactionPlanningWorker(params: {
   });
 }
 
-function shouldFallbackToMainThread(error: unknown): boolean {
-  return error instanceof CompactionPlanningWorkerError && error.code === "unavailable";
+function restoreIndexedMessages(source: AgentMessage[], indexes: number[]): AgentMessage[] {
+  return indexes.map((index) => {
+    const message = source.at(index);
+    if (!Number.isInteger(index) || index < 0 || !message) {
+      throw new CompactionPlanningWorkerError(
+        "compaction planning result contains an invalid message index",
+        "failed",
+      );
+    }
+    return message;
+  });
 }
 
-function shouldUsePlanningWorker(messageCount: number): boolean {
-  return messageCount >= COMPACTION_PLANNING_WORKER_MIN_MESSAGES;
-}
-
-async function runWithUnavailableFallback<T extends CompactionPlanningWorkerValue>(params: {
-  input: CompactionPlanningWorkerInput;
+async function runCompactionPlan<TInput extends CompactionPlanningWorkerInput, TResult>(params: {
+  input: TInput;
   signal?: AbortSignal;
-  fallback: () => T;
-  isExpected: (value: CompactionPlanningWorkerValue) => value is T;
-}): Promise<T> {
+  fallback: (messages: AgentMessage[]) => TResult;
+  restore: (
+    value: Extract<CompactionPlanningWorkerValue, { kind: TInput["kind"] }>,
+    messages: AgentMessage[],
+  ) => TResult;
+}): Promise<TResult> {
+  const messages = sanitizeCompactionMessages(params.input.messages);
+  if (messages.length < COMPACTION_PLANNING_WORKER_MIN_MESSAGES) {
+    return params.fallback(params.input.messages);
+  }
+
   try {
     const value = await runCompactionPlanningWorker({
-      input: params.input,
+      input: {
+        ...params.input,
+        messages: projectCompactionMessagesForPlanning(messages),
+      },
       signal: params.signal,
     });
-    if (params.isExpected(value)) {
-      return value;
+    if (value.kind !== params.input.kind) {
+      throw new CompactionPlanningWorkerError(
+        "unexpected compaction planning worker result",
+        "failed",
+      );
     }
-    throw new CompactionPlanningWorkerError(
-      "unexpected compaction planning worker result",
-      "failed",
+    return params.restore(
+      value as Extract<CompactionPlanningWorkerValue, { kind: TInput["kind"] }>,
+      messages,
     );
   } catch (error) {
-    if (shouldFallbackToMainThread(error)) {
-      return params.fallback();
+    if (error instanceof CompactionPlanningWorkerError && error.code === "unavailable") {
+      return params.fallback(messages);
     }
     throw error;
   }
@@ -202,27 +222,17 @@ export async function buildSummaryChunksWithWorker(params: {
   maxChunkTokens: number;
   signal?: AbortSignal;
 }): Promise<AgentMessage[][]> {
-  const messages = sanitizeCompactionMessages(params.messages);
-  if (!shouldUsePlanningWorker(messages.length)) {
-    return buildSummaryChunks(params);
-  }
-  const value = await runWithUnavailableFallback({
+  return runCompactionPlan({
     input: {
       kind: "summaryChunks",
-      messages,
+      messages: params.messages,
       maxChunkTokens: params.maxChunkTokens,
     },
     signal: params.signal,
-    fallback: () => ({
-      kind: "summaryChunks" as const,
-      chunks: buildSummaryChunks(params),
-    }),
-    isExpected: (
-      valueCandidate,
-    ): valueCandidate is Extract<CompactionPlanningWorkerValue, { kind: "summaryChunks" }> =>
-      valueCandidate.kind === "summaryChunks",
+    fallback: (messages) => buildSummaryChunks({ messages, maxChunkTokens: params.maxChunkTokens }),
+    restore: (value, messages) =>
+      value.chunkIndexes.map((indexes) => restoreIndexedMessages(messages, indexes)),
   });
-  return value.chunks;
 }
 
 /** Builds an oversized-message fallback plan, using the worker when worthwhile. */
@@ -231,30 +241,20 @@ export async function buildOversizedFallbackPlanWithWorker(params: {
   contextWindow: number;
   signal?: AbortSignal;
 }): Promise<OversizedFallbackPlan> {
-  const messages = sanitizeCompactionMessages(params.messages);
-  if (!shouldUsePlanningWorker(messages.length)) {
-    return buildOversizedFallbackPlan(params);
-  }
-  const value = await runWithUnavailableFallback({
+  return runCompactionPlan({
     input: {
       kind: "oversizedFallback",
-      messages,
+      messages: params.messages,
       contextWindow: params.contextWindow,
     },
     signal: params.signal,
-    fallback: () => ({
-      kind: "oversizedFallback" as const,
-      ...buildOversizedFallbackPlan(params),
+    fallback: (messages) =>
+      buildOversizedFallbackPlan({ messages, contextWindow: params.contextWindow }),
+    restore: (value, messages) => ({
+      smallMessages: restoreIndexedMessages(messages, value.smallMessageIndexes),
+      oversizedNotes: value.oversizedNotes,
     }),
-    isExpected: (
-      valueEntry,
-    ): valueEntry is Extract<CompactionPlanningWorkerValue, { kind: "oversizedFallback" }> =>
-      valueEntry.kind === "oversizedFallback",
   });
-  return {
-    smallMessages: value.smallMessages,
-    oversizedNotes: value.oversizedNotes,
-  };
 }
 
 /** Builds a staged summarization split plan with worker fallback. */
@@ -265,32 +265,38 @@ export async function buildStageSplitPlanWithWorker(params: {
   minMessagesForSplit?: number;
   signal?: AbortSignal;
 }): Promise<StageSplitPlan> {
-  const messages = sanitizeCompactionMessages(params.messages);
-  if (!shouldUsePlanningWorker(messages.length)) {
-    return buildStageSplitPlan(params);
-  }
-  const value = await runWithUnavailableFallback({
+  return runCompactionPlan({
     input: {
       kind: "stageSplit",
-      messages,
+      messages: params.messages,
       maxChunkTokens: params.maxChunkTokens,
       parts: params.parts,
       minMessagesForSplit: params.minMessagesForSplit,
     },
     signal: params.signal,
-    fallback: () => ({
-      kind: "stageSplit" as const,
-      ...buildStageSplitPlan(params),
-    }),
-    isExpected: (
-      valueResult,
-    ): valueResult is Extract<CompactionPlanningWorkerValue, { kind: "stageSplit" }> =>
-      valueResult.kind === "stageSplit",
+    fallback: (messages) =>
+      buildStageSplitPlan({
+        messages,
+        maxChunkTokens: params.maxChunkTokens,
+        parts: params.parts,
+        minMessagesForSplit: params.minMessagesForSplit,
+      }),
+    restore: (value, messages) =>
+      value.mode === "split"
+        ? {
+            mode: "split",
+            chunks: value.chunkIndexes.map((indexes) => restoreIndexedMessages(messages, indexes)),
+          }
+        : { mode: "single" },
   });
-  return value.mode === "split" ? { mode: "split", chunks: value.chunks } : { mode: "single" };
 }
 
-/** Builds a history-pruning plan with worker fallback for large transcripts. */
+/**
+ * Builds a history-pruning plan on the owner thread.
+ *
+ * Pruning repairs tool-result pairs and returns exact retained/dropped messages,
+ * so a bounded selection projection cannot reconstruct every result faithfully.
+ */
 export async function buildHistoryPrunePlanWithWorker(params: {
   messagesToSummarize: AgentMessage[];
   turnPrefixMessages: AgentMessage[];
@@ -300,37 +306,7 @@ export async function buildHistoryPrunePlanWithWorker(params: {
   parts?: number;
   signal?: AbortSignal;
 }): Promise<HistoryPrunePlan> {
-  const messagesToSummarize = sanitizeCompactionMessages(params.messagesToSummarize);
-  const turnPrefixMessages = sanitizeCompactionMessages(params.turnPrefixMessages);
-  if (!shouldUsePlanningWorker(messagesToSummarize.length + turnPrefixMessages.length)) {
-    return buildHistoryPrunePlan(params);
-  }
-  const value = await runWithUnavailableFallback({
-    input: {
-      kind: "historyPrune",
-      messagesToSummarize,
-      turnPrefixMessages,
-      tokensBefore: params.tokensBefore,
-      contextWindowTokens: params.contextWindowTokens,
-      maxHistoryShare: params.maxHistoryShare,
-      parts: params.parts,
-    },
-    signal: params.signal,
-    fallback: () => ({
-      kind: "historyPrune" as const,
-      ...buildHistoryPrunePlan(params),
-    }),
-    isExpected: (
-      valueValue,
-    ): valueValue is Extract<CompactionPlanningWorkerValue, { kind: "historyPrune" }> =>
-      valueValue.kind === "historyPrune",
-  });
-  return {
-    summarizableTokens: value.summarizableTokens,
-    newContentTokens: value.newContentTokens,
-    maxHistoryTokens: value.maxHistoryTokens,
-    pruned: value.pruned,
-  };
+  return buildHistoryPrunePlan(params);
 }
 
 /** Computes the adaptive compaction chunk ratio with worker fallback. */
@@ -339,33 +315,22 @@ export async function computeAdaptiveChunkRatioWithWorker(params: {
   contextWindow: number;
   signal?: AbortSignal;
 }): Promise<number> {
-  const messages = sanitizeCompactionMessages(params.messages);
-  if (!shouldUsePlanningWorker(messages.length)) {
-    return computeAdaptiveChunkRatio(params.messages, params.contextWindow);
-  }
-  const value = await runWithUnavailableFallback({
+  return runCompactionPlan({
     input: {
       kind: "adaptiveChunkRatio",
-      messages,
+      messages: params.messages,
       contextWindow: params.contextWindow,
     },
     signal: params.signal,
-    fallback: () => ({
-      kind: "adaptiveChunkRatio" as const,
-      ratio: computeAdaptiveChunkRatio(params.messages, params.contextWindow),
-    }),
-    isExpected: (
-      valueLocal,
-    ): valueLocal is Extract<CompactionPlanningWorkerValue, { kind: "adaptiveChunkRatio" }> =>
-      valueLocal.kind === "adaptiveChunkRatio",
+    fallback: () => computeAdaptiveChunkRatio(params.messages, params.contextWindow),
+    restore: (value) => value.ratio,
   });
-  return value.ratio;
 }
 
-/** Test-only worker internals for URL resolution and error-path coverage. */
 const compactionPlanningWorkerTesting = {
   resolveCompactionPlanningWorkerUrl,
   runCompactionPlanningWorker,
+  CompactionPlanningWorkerError,
 };
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {

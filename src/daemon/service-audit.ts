@@ -27,6 +27,7 @@ import {
   collectInlineManagedServiceEnvKeys,
   hasInlineEnvironmentSource,
   isEnvironmentFileOnlySource,
+  readEnvironmentValueSource,
 } from "./service-managed-env.js";
 import { isNonMinimalServicePathEntry, normalizeServicePathEntry } from "./service-path-policy.js";
 import type { GatewayServiceEnvironmentValueSource } from "./service-types.js";
@@ -393,18 +394,6 @@ function normalizeServiceEnvKey(key: string): string | null {
   return normalizeEnvVarKey(key, { portable: true })?.toUpperCase() ?? null;
 }
 
-function readEnvironmentValueSource(
-  command: GatewayServiceCommand,
-  normalizedKey: string,
-): GatewayServiceEnvironmentValueSource | undefined {
-  for (const [rawKey, source] of Object.entries(command?.environmentValueSources ?? {})) {
-    if (normalizeServiceEnvKey(rawKey) === normalizedKey) {
-      return source;
-    }
-  }
-  return undefined;
-}
-
 const SERVICE_PROXY_ENV_KEY_SET = new Set(
   SERVICE_PROXY_ENV_KEYS.flatMap((key) => {
     const normalized = normalizeServiceEnvKey(key);
@@ -425,7 +414,11 @@ function collectInlineProxyEnvKeys(command: GatewayServiceCommand): string[] {
     if (!normalized || !SERVICE_PROXY_ENV_KEY_SET.has(normalized)) {
       continue;
     }
-    if (!hasInlineEnvironmentSource(readEnvironmentValueSource(command, normalized))) {
+    if (
+      !hasInlineEnvironmentSource(
+        readEnvironmentValueSource(command.environmentValueSources, normalized),
+      )
+    ) {
       continue;
     }
     inlineKeys.push(normalized);

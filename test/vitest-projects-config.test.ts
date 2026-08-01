@@ -3,7 +3,15 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createPatternFileHelper } from "./helpers/pattern-file.js";
 import { normalizeConfigPath, normalizeConfigPaths } from "./helpers/vitest-config-paths.js";
 import { createAgentsCoreVitestConfig } from "./vitest/vitest.agents-core.config.ts";
+import { createAgentsEmbeddedIncompleteTurnVitestConfig } from "./vitest/vitest.agents-embedded-agent-incomplete-turn.config.ts";
+import { createAgentsEmbeddedOverflowCompactionVitestConfig } from "./vitest/vitest.agents-embedded-agent-overflow-compaction.config.ts";
+import { createAgentsEmbeddedRunVitestConfig } from "./vitest/vitest.agents-embedded-agent-run.config.ts";
 import { createAgentsEmbeddedVitestConfig } from "./vitest/vitest.agents-embedded-agent.config.ts";
+import {
+  agentVitestProjectConfigs,
+  agentVitestProjectOwners,
+  embeddedAgentVitestProjectOwners,
+} from "./vitest/vitest.agents-paths.mjs";
 import { createAgentsSupportVitestConfig } from "./vitest/vitest.agents-support.config.ts";
 import { createAgentsToolsVitestConfig } from "./vitest/vitest.agents-tools.config.ts";
 import { createAgentsVitestConfig } from "./vitest/vitest.agents.config.ts";
@@ -60,6 +68,28 @@ describe("projects vitest config", () => {
     expect(requireTestConfig(baseConfig).projects).toEqual([...rootVitestProjects]);
   });
 
+  it("keeps root and full-suite agent projects aligned with canonical owners", () => {
+    const agenticShard = fullSuiteVitestShards.find((shard) => shard.name === "agentic");
+    const agentConfigs = new Set(agentVitestProjectConfigs);
+
+    expect(rootVitestProjects.filter((config) => agentConfigs.has(config))).toEqual(
+      agentVitestProjectConfigs,
+    );
+    expect(agenticShard?.projects.filter((config) => agentConfigs.has(config))).toEqual(
+      agentVitestProjectConfigs,
+    );
+    expect(agentConfigs.size).toBe(agentVitestProjectConfigs.length);
+  });
+
+  it("keeps all embedded harnesses under their canonical embedded owner", () => {
+    expect(embeddedAgentVitestProjectOwners).toEqual([
+      agentVitestProjectOwners.embedded,
+      agentVitestProjectOwners.embeddedIncompleteTurn,
+      agentVitestProjectOwners.embeddedOverflowCompaction,
+      agentVitestProjectOwners.embeddedRun,
+    ]);
+  });
+
   it("keeps root watch projects aligned with dedicated extension shard lanes", () => {
     const extensionShard = fullSuiteVitestShards.find(
       (shard) => shard.config === "test/vitest/vitest.full-extensions.config.ts",
@@ -112,6 +142,13 @@ describe("projects vitest config", () => {
     expect(requireTestConfig(createAgentsVitestConfig()).pool).toBe("threads");
     expect(requireTestConfig(createAgentsCoreVitestConfig()).pool).toBe("threads");
     expect(requireTestConfig(createAgentsEmbeddedVitestConfig()).pool).toBe("threads");
+    expect(requireTestConfig(createAgentsEmbeddedIncompleteTurnVitestConfig()).pool).toBe(
+      "threads",
+    );
+    expect(requireTestConfig(createAgentsEmbeddedOverflowCompactionVitestConfig()).pool).toBe(
+      "threads",
+    );
+    expect(requireTestConfig(createAgentsEmbeddedRunVitestConfig()).pool).toBe("threads");
     expect(requireTestConfig(createAgentsSupportVitestConfig()).pool).toBe("threads");
     expect(requireTestConfig(createAgentsToolsVitestConfig()).pool).toBe("threads");
     expect(requireTestConfig(createCommandsLightVitestConfig()).pool).toBe("threads");
@@ -121,6 +158,10 @@ describe("projects vitest config", () => {
     expect(requireTestConfig(createContractsVitestConfig(pluginContractPatterns)).pool).toBe(
       "threads",
     );
+  });
+
+  it("keeps the embedded-agent cold-hook budget explicit", () => {
+    expect(requireTestConfig(createAgentsEmbeddedVitestConfig()).hookTimeout).toBe(600_000);
   });
 
   it("honors explicit worker caps in CI vitest lanes", () => {
@@ -212,7 +253,7 @@ describe("projects vitest config", () => {
     ]);
   });
 
-  it("keeps the root ui lane aligned with the shared jsdom setup", () => {
+  it("keeps the root ui lane on the shared non-isolated runner", () => {
     const config = createUiVitestConfig();
     const testConfig = requireTestConfig(config);
     expect(testConfig.environment).toBe("jsdom");

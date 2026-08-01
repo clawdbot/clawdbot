@@ -129,7 +129,8 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         return;
       }
 
-      const protocol = otel.protocol ?? process.env.OTEL_EXPORTER_OTLP_PROTOCOL ?? "http/protobuf";
+      const envProtocol = process.env.OTEL_EXPORTER_OTLP_PROTOCOL;
+      const protocol = otel.protocol ?? (envProtocol?.trim() ? envProtocol : "http/protobuf");
       if (otlpSignals.length > 0 && protocol !== "http/protobuf") {
         emitForSignals(otlpSignals, {
           exporter: "diagnostics-otel",

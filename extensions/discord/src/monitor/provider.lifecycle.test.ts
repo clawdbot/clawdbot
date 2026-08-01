@@ -272,35 +272,6 @@ describe("runDiscordGatewayLifecycle", () => {
     );
   });
 
-  it("does not treat a missing gateway handle as ready", async () => {
-    vi.useFakeTimers();
-    try {
-      const { lifecycleParams, threadStop, statusSink, gatewaySupervisor } = createLifecycleHarness(
-        {
-          gateway: null,
-        },
-      );
-      lifecycleParams.gatewayReadyTimeoutMs = 5_000;
-
-      const lifecyclePromise = runDiscordGatewayLifecycle(lifecycleParams);
-      lifecyclePromise.catch(() => {});
-      await vi.advanceTimersByTimeAsync(0);
-      await vi.advanceTimersByTimeAsync(5_500);
-
-      await expect(lifecyclePromise).rejects.toThrow(
-        "discord gateway did not reach READY within 5000ms",
-      );
-      expect(statusPatches(statusSink).every((patch) => patch.connected !== true)).toBe(true);
-      expectLifecycleCleanup({
-        threadStop,
-        waitCalls: 0,
-        gatewaySupervisor,
-      });
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it("records throttled gateway socket activity as transport liveness", async () => {
     const { emitter, gateway } = createGatewayHarness();
     gateway.isConnected = true;
@@ -700,45 +671,6 @@ describe("runDiscordGatewayLifecycle", () => {
       vi.useRealTimers();
     }
   });
-
-  it("force-stops when a runtime reconnect opens but never becomes ready", async () => {
-    vi.useFakeTimers();
-    try {
-      const { emitter, gateway } = createGatewayHarness();
-      gateway.isConnected = true;
-      getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
-      waitForDiscordGatewayStopMock.mockImplementationOnce(
-        (params: WaitForDiscordGatewayStopParams) =>
-          new Promise<void>((_resolve, reject) => {
-            params.registerForceStop?.((err) =>
-              reject(toLintErrorObject(err, "Non-Error rejection")),
-            );
-            gateway.isConnected = false;
-            emitter.emit("debug", "Gateway websocket opened");
-          }),
-      );
-
-      const { lifecycleParams, runtimeError, statusSink } = createLifecycleHarness({ gateway });
-      lifecycleParams.gatewayRuntimeReadyTimeoutMs = 5_000;
-      const lifecyclePromise = runDiscordGatewayLifecycle(lifecycleParams);
-      lifecyclePromise.catch(() => {});
-
-      await vi.advanceTimersByTimeAsync(5_500);
-      await expect(lifecyclePromise).rejects.toThrow(
-        "discord gateway opened but did not reach READY within 5000ms",
-      );
-      expectMockMessageContains(runtimeError, "did not reach READY within 5000ms");
-      expectStatusPatch(
-        statusSink,
-        (patch) =>
-          patch.connected === false &&
-          patch.lastDisconnect !== null &&
-          patch.lastDisconnect?.error === "runtime-not-ready",
-      );
-    } finally {
-      vi.useRealTimers();
-    }
-  });
 });
 
 describe("waitForGatewayReady", () => {
@@ -786,17 +718,3 @@ describe("waitForGatewayReady", () => {
     }
   });
 });
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}

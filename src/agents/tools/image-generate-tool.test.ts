@@ -21,19 +21,40 @@ const taskRuntimeMocks = vi.hoisted(() => ({
   completeTaskRunByRunId: vi.fn(),
   failTaskRunByRunId: vi.fn(),
 }));
+const sessionAccessorMocks = vi.hoisted(() => ({
+  loadSessionEntryReadOnly: vi.fn(),
+}));
 
 vi.mock("../../tasks/runtime-internal.js", () => taskRuntimeInternalMocks);
 vi.mock("../../tasks/detached-task-runtime.js", () => taskRuntimeMocks);
+vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/sessions/session-accessor.js")>()),
+  loadSessionEntryReadOnly: sessionAccessorMocks.loadSessionEntryReadOnly,
+}));
 
-let sessionAccessor: typeof import("../../config/sessions/session-accessor.js");
 let imageGenerationRuntime: typeof import("../../image-generation/runtime.js");
 let imageOps: typeof import("../../media/media-services.js");
 let splitMediaFromOutput: typeof import("../../media/parse.js").splitMediaFromOutput;
 let mediaStore: typeof import("../../media/store.js");
 let webMedia: typeof import("../../media/web-media.js");
 let resetRecentMediaGenerationDuplicateGuardsForTests: typeof import("../media-generation-task-status-shared.test-support.js").resetRecentMediaGenerationDuplicateGuardsForTests;
-let createImageGenerateTool: typeof import("./image-generate-tool.js").createImageGenerateTool;
+let createImageGenerateToolImpl: typeof import("./image-generate-tool.js").createImageGenerateTool;
 let resolveImageGenerationModelConfigForTool: typeof import("./image-generate-tool.test-support.js").resolveImageGenerationModelConfigForTool;
+import { canonicalizeMediaGenerationTestConfig } from "./media-generation-config.test-support.js";
+
+function createImageGenerateTool(
+  params: Parameters<typeof createImageGenerateToolImpl>[0],
+): ReturnType<typeof createImageGenerateToolImpl> {
+  const options = params ?? {};
+  return createImageGenerateToolImpl({
+    ...options,
+    config: canonicalizeMediaGenerationTestConfig(
+      options.config ?? {},
+      "image",
+      "imageGenerationModel",
+    ),
+  });
+}
 
 const GENERATION_PROVIDER_ENV_VARS = [
   "BYTEPLUS_API_KEY",
@@ -331,13 +352,13 @@ describe("createImageGenerateTool", () => {
     });
     imageGenerationRuntime = await import("../../image-generation/runtime.js");
     imageOps = await import("../../media/media-services.js");
-    sessionAccessor = await import("../../config/sessions/session-accessor.js");
     ({ splitMediaFromOutput } = await import("../../media/parse.js"));
     mediaStore = await import("../../media/store.js");
     webMedia = await import("../../media/web-media.js");
     ({ resetRecentMediaGenerationDuplicateGuardsForTests } =
       await import("../media-generation-task-status-shared.test-support.js"));
-    ({ createImageGenerateTool } = await import("./image-generate-tool.js"));
+    ({ createImageGenerateTool: createImageGenerateToolImpl } =
+      await import("./image-generate-tool.js"));
     ({ resolveImageGenerationModelConfigForTool } =
       await import("./image-generate-tool.test-support.js"));
   });
@@ -350,6 +371,7 @@ describe("createImageGenerateTool", () => {
     taskRuntimeMocks.recordTaskRunProgressByRunId.mockReset();
     taskRuntimeMocks.completeTaskRunByRunId.mockReset();
     taskRuntimeMocks.failTaskRunByRunId.mockReset();
+    sessionAccessorMocks.loadSessionEntryReadOnly.mockReset();
     taskRuntimeInternalMocks.listTasksForOwnerKey.mockReset();
     taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([]);
     taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockReset();
@@ -395,8 +417,10 @@ describe("createImageGenerateTool", () => {
         config: {
           agents: {
             defaults: {
-              imageGenerationModel: {
-                primary: "openai/gpt-image-1",
+              mediaModels: {
+                image: {
+                  primary: "openai/gpt-image-1",
+                },
               },
             },
           },
@@ -466,8 +490,10 @@ describe("createImageGenerateTool", () => {
         cfg: {
           agents: {
             defaults: {
-              imageGenerationModel: {
-                primary: "openai/gpt-image-1",
+              mediaModels: {
+                image: {
+                  primary: "openai/gpt-image-1",
+                },
               },
             },
           },
@@ -658,8 +684,10 @@ describe("createImageGenerateTool", () => {
           agents: {
             defaults: {
               mediaMaxMb: 8,
-              imageGenerationModel: {
-                primary: "openai/gpt-image-1",
+              mediaModels: {
+                image: {
+                  primary: "openai/gpt-image-1",
+                },
               },
             },
           },
@@ -681,8 +709,10 @@ describe("createImageGenerateTool", () => {
       agents: {
         defaults: {
           mediaMaxMb: 8,
-          imageGenerationModel: {
-            primary: "openai/gpt-image-1",
+          mediaModels: {
+            image: {
+              primary: "openai/gpt-image-1",
+            },
           },
         },
       },
@@ -769,14 +799,16 @@ describe("createImageGenerateTool", () => {
     const config: OpenClawConfig = {
       agents: {
         defaults: {
-          imageGenerationModel: {
-            primary: "bootstrap/unused",
+          mediaModels: {
+            image: {
+              primary: "bootstrap/unused",
+            },
           },
         },
       },
     };
     const tool = requireImageGenerateTool(createImageGenerateTool({ config }));
-    config.agents!.defaults!.imageGenerationModel = { timeoutMs: 180_000 };
+    config.agents!.defaults!.mediaModels!.image = { timeoutMs: 180_000 };
 
     const result = await tool.execute("call-explicit-foundry", {
       prompt: "A product render",
@@ -789,7 +821,7 @@ describe("createImageGenerateTool", () => {
     const cfg = requireRecord(generateArgs.cfg, "generateImage config");
     const agents = requireRecord(cfg.agents, "generateImage agents config");
     const defaults = requireRecord(agents.defaults, "generateImage defaults config");
-    expect(defaults.imageGenerationModel).toEqual({
+    expect(requireRecord(defaults.mediaModels, "mediaModels").image).toEqual({
       primary: "microsoft-foundry/prod-image",
       timeoutMs: 180_000,
     });
@@ -883,10 +915,144 @@ describe("createImageGenerateTool", () => {
     expect(resultDetails(duplicateResult).duplicateGuard).toBe(true);
   });
 
+  it.each([
+    { mode: "inline", agentSessionKey: undefined },
+    { mode: "detached", agentSessionKey: "agent:main:discord:direct:123" },
+  ])(
+    "does not start $mode image generation when its caller aborts during preparation",
+    async ({ agentSessionKey }) => {
+      stubImageGenerationProviders();
+      vi.stubEnv("OPENAI_API_KEY", "openai-test");
+      const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage");
+      taskRuntimeMocks.createRunningTaskRun.mockReturnValue({ taskId: "task-image-aborted" });
+      const scheduleBackgroundWork = vi.fn();
+      const tool = requireImageGenerateTool(
+        createImageGenerateTool({
+          config: {
+            agents: { defaults: { imageGenerationModel: { primary: "openai/gpt-image-1" } } },
+          },
+          agentSessionKey,
+          requesterOrigin: { channel: "discord", to: "dm:123" },
+          scheduleBackgroundWork,
+        }),
+      );
+      const controller = new AbortController();
+      const abortReason = new Error("image requester cancelled");
+
+      const pending = tool.execute("call-image-aborted", { prompt: "an image" }, controller.signal);
+      controller.abort(abortReason);
+
+      await expect(pending).rejects.toBe(abortReason);
+      expect(taskRuntimeMocks.createRunningTaskRun).not.toHaveBeenCalled();
+      expect(scheduleBackgroundWork).not.toHaveBeenCalled();
+      expect(generateImage).not.toHaveBeenCalled();
+    },
+  );
+
+  it("stops loading later image references when the caller aborts a pending reference", async () => {
+    stubImageGenerationProviders();
+    vi.stubEnv("GEMINI_API_KEY", "google-test");
+    const generateImage = stubEditedImageFlow();
+    let releaseReference!: (value: Awaited<ReturnType<typeof webMedia.loadWebMedia>>) => void;
+    const firstReference = new Promise<Awaited<ReturnType<typeof webMedia.loadWebMedia>>>(
+      (resolve) => {
+        releaseReference = resolve;
+      },
+    );
+    vi.mocked(webMedia.loadWebMedia).mockImplementationOnce(() => firstReference);
+    taskRuntimeMocks.createRunningTaskRun.mockReturnValue({ taskId: "task-image-references" });
+    const scheduleBackgroundWork = vi.fn();
+    const tool = requireImageGenerateTool(
+      createImageGenerateTool({
+        config: {
+          agents: {
+            defaults: { imageGenerationModel: { primary: "google/gemini-3-pro-image-preview" } },
+          },
+        },
+        workspaceDir: process.cwd(),
+        agentSessionKey: "agent:main:discord:direct:123",
+        requesterOrigin: { channel: "discord", to: "dm:123" },
+        scheduleBackgroundWork,
+      }),
+    );
+    const controller = new AbortController();
+    const abortReason = new Error("image requester cancelled while loading a reference");
+
+    const pending = tool.execute(
+      "call-image-references-aborted",
+      {
+        prompt: "an image with references",
+        images: ["https://example.test/first.png", "https://example.test/second.png"],
+      },
+      controller.signal,
+    );
+    await vi.waitFor(() => expect(webMedia.loadWebMedia).toHaveBeenCalledOnce());
+    controller.abort(abortReason);
+    releaseReference({
+      kind: "image",
+      buffer: Buffer.from("first-image"),
+      contentType: "image/png",
+    });
+
+    await expect(pending).rejects.toBe(abortReason);
+    expect(webMedia.loadWebMedia).toHaveBeenCalledOnce();
+    expect(taskRuntimeMocks.createRunningTaskRun).not.toHaveBeenCalled();
+    expect(scheduleBackgroundWork).not.toHaveBeenCalled();
+    expect(generateImage).not.toHaveBeenCalled();
+    const loadOptions = vi.mocked(webMedia.loadWebMedia).mock.calls[0]?.[1] as
+      | { requestInit?: { signal?: AbortSignal } }
+      | undefined;
+    expect(loadOptions?.requestInit?.signal).toBe(controller.signal);
+  });
+
+  it("keeps an accepted detached image task running after its requester aborts", async () => {
+    stubImageGenerationProviders();
+    vi.stubEnv("OPENAI_API_KEY", "openai-test");
+    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
+      provider: "openai",
+      model: "gpt-image-1",
+      attempts: [],
+      ignoredOverrides: [],
+      images: [{ buffer: Buffer.from("image"), mimeType: "image/png", fileName: "image.png" }],
+    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
+      path: "/tmp/accepted-image.png",
+      id: "accepted-image.png",
+      size: 5,
+      contentType: "image/png",
+    });
+    taskRuntimeMocks.createRunningTaskRun.mockReturnValue({ taskId: "task-image-accepted" });
+    const controller = new AbortController();
+    const scheduled: Array<() => Promise<void>> = [];
+    const tool = requireImageGenerateTool(
+      createImageGenerateTool({
+        config: {
+          agents: { defaults: { imageGenerationModel: { primary: "openai/gpt-image-1" } } },
+        },
+        agentSessionKey: "agent:main:discord:direct:123",
+        requesterOrigin: { channel: "discord", to: "dm:123" },
+        scheduleBackgroundWork: (work) => scheduled.push(work),
+        onAsyncTaskStarted: () => controller.abort(new Error("requester ended after acceptance")),
+      }),
+    );
+
+    const result = await tool.execute(
+      "call-image-accepted",
+      { prompt: "an accepted image" },
+      controller.signal,
+    );
+
+    expect(resultDetails(result).status).toBe("started");
+    expect(scheduled).toHaveLength(1);
+    await scheduled[0]?.();
+    expect(generateImage).toHaveBeenCalledOnce();
+    expect(taskRuntimeMocks.completeTaskRunByRunId).toHaveBeenCalledOnce();
+  });
+
   it("starts run-scoped cron image generation as a tracked async task", async () => {
     stubImageGenerationProviders();
     vi.stubEnv("OPENAI_API_KEY", "openai-test");
-    vi.spyOn(sessionAccessor, "loadSessionEntry").mockReturnValue({
+    sessionAccessorMocks.loadSessionEntryReadOnly.mockReturnValue({
       sessionId: "run-123",
       updatedAt: 1,
       cronRunContinuation: {

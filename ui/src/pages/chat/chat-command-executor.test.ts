@@ -2,6 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import { t } from "../../i18n/index.ts";
 import type { SessionCapability, SessionPatch } from "../../lib/sessions/index.ts";
 import {
   createResolvedModelPatch,
@@ -106,7 +107,13 @@ describe("executeSlashCommand directives", () => {
     );
 
     expect(result.content).toBe(
-      "**Current model:** `gpt-4.1-mini`\n**Available:** `gpt-4.1-mini`, `gpt-4.1`",
+      [
+        t("chat.commandResults.model.current", { model: "`gpt-4.1-mini`" }),
+        t("chat.commandResults.model.available", {
+          models: "`gpt-4.1-mini`, `gpt-4.1`",
+          remaining: "",
+        }),
+      ].join("\n"),
     );
     expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {});
     expect(request).toHaveBeenNthCalledWith(2, "models.list", { view: "configured" });
@@ -146,7 +153,12 @@ describe("executeSlashCommand directives", () => {
       },
     );
 
-    expect(result.content).toBe("**Current model:** `gpt-5.5`\n**Available:** `gpt-5.5`");
+    expect(result.content).toBe(
+      [
+        t("chat.commandResults.model.current", { model: "`gpt-5.5`" }),
+        t("chat.commandResults.model.available", { models: "`gpt-5.5`", remaining: "" }),
+      ].join("\n"),
+    );
     expectNoRequestCall(request, "models.list");
   });
 
@@ -179,7 +191,9 @@ describe("executeSlashCommand directives", () => {
       },
     );
 
-    expect(result.content).toContain("**Current model:** `work-model`");
+    expect(result.content).toContain(
+      t("chat.commandResults.model.current", { model: "`work-model`" }),
+    );
     expect(request).toHaveBeenCalledWith("sessions.list", { agentId: "work" });
   });
 
@@ -207,7 +221,12 @@ describe("executeSlashCommand directives", () => {
       },
     );
 
-    expect(result.content).toBe("**Current model:** `default`\n**Available:** `work-model`");
+    expect(result.content).toBe(
+      [
+        t("chat.commandResults.model.current", { model: "`default`" }),
+        t("chat.commandResults.model.available", { models: "`work-model`", remaining: "" }),
+      ].join("\n"),
+    );
   });
 
   it("reports global model defaults for a configured default agent", async () => {
@@ -235,7 +254,15 @@ describe("executeSlashCommand directives", () => {
       },
     );
 
-    expect(result.content).toBe("**Current model:** `work-default`\n**Available:** `work-default`");
+    expect(result.content).toBe(
+      [
+        t("chat.commandResults.model.current", { model: "`work-default`" }),
+        t("chat.commandResults.model.available", {
+          models: "`work-default`",
+          remaining: "",
+        }),
+      ].join("\n"),
+    );
   });
 
   it("uses a matching cached agent row when the scoped model list is temporarily empty", async () => {
@@ -280,7 +307,9 @@ describe("executeSlashCommand directives", () => {
       },
     );
 
-    expect(result.content).toContain("**Current model:** `work-model`");
+    expect(result.content).toContain(
+      t("chat.commandResults.model.current", { model: "`work-model`" }),
+    );
   });
 
   it("mirrors resolved provider-qualified model refs after /model changes", async () => {
@@ -385,7 +414,9 @@ describe("executeSlashCommand directives", () => {
     );
 
     expect(result).toEqual({
-      content: "Compaction failed: codex app-server compaction timed out",
+      content: t("chat.commandResults.compaction.failedWithReason", {
+        reason: "codex app-server compaction timed out",
+      }),
       failed: true,
     });
   });
@@ -572,7 +603,14 @@ describe("executeSlashCommand directives", () => {
     );
 
     expect(result.content).toBe(
-      "**Session Usage**\nInput: **1.2k** tokens\nOutput: **300** tokens\nTotal: **1.5k** tokens\nContext: **38%** of 4k\nModel: `gpt-4.1-mini`",
+      [
+        `**${t("chat.commandResults.usage.title")}**`,
+        t("chat.commandResults.usage.inputTokens", { count: "**1.2k**" }),
+        t("chat.commandResults.usage.outputTokens", { count: "**300**" }),
+        t("chat.commandResults.usage.totalTokens", { count: "**1.5k**" }),
+        t("chat.commandResults.usage.context", { percent: "**38%**", total: "4k" }),
+        t("chat.commandResults.usage.model", { model: "`gpt-4.1-mini`" }),
+      ].join("\n"),
     );
     expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {});
   });
@@ -604,7 +642,13 @@ describe("executeSlashCommand directives", () => {
     );
 
     expect(result.content).toBe(
-      "**Session Usage**\nInput: **1.2k** tokens\nOutput: **300** tokens\nTotal: **~1.5k** tokens\nModel: `gpt-4.1-mini`",
+      [
+        `**${t("chat.commandResults.usage.title")}**`,
+        t("chat.commandResults.usage.inputTokens", { count: "**1.2k**" }),
+        t("chat.commandResults.usage.outputTokens", { count: "**300**" }),
+        t("chat.commandResults.usage.totalTokens", { count: "**~1.5k**" }),
+        t("chat.commandResults.usage.model", { model: "`gpt-4.1-mini`" }),
+      ].join("\n"),
     );
     expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {});
   });
@@ -635,7 +679,14 @@ describe("executeSlashCommand directives", () => {
     );
 
     expect(result.content).toBe(
-      "**Session Usage**\nInput: **1.2k** tokens\nOutput: **300** tokens\nTotal: **1.5k** tokens\nContext: **31%** of 4k\nModel: `gpt-4.1-mini`",
+      [
+        `**${t("chat.commandResults.usage.title")}**`,
+        t("chat.commandResults.usage.inputTokens", { count: "**1.2k**" }),
+        t("chat.commandResults.usage.outputTokens", { count: "**300**" }),
+        t("chat.commandResults.usage.totalTokens", { count: "**1.5k**" }),
+        t("chat.commandResults.usage.context", { percent: "**31%**", total: "4k" }),
+        t("chat.commandResults.usage.model", { model: "`gpt-4.1-mini`" }),
+      ].join("\n"),
     );
     expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {});
   });
@@ -673,7 +724,12 @@ describe("executeSlashCommand directives", () => {
     );
 
     expect(result.content).toBe(
-      "Current thinking level: low.\nOptions: default, off, minimal, low, medium, high.",
+      [
+        t("chat.commandResults.thinking.current", { level: "low" }),
+        t("chat.commandResults.options", {
+          options: "default, off, minimal, low, medium, high",
+        }),
+      ].join("\n"),
     );
     expect(request).toHaveBeenNthCalledWith(1, "sessions.list", { agentId: "main" });
     expectNoRequestCall(request, "models.list");
@@ -745,7 +801,12 @@ describe("executeSlashCommand directives", () => {
     );
 
     expect(result.content).toBe(
-      "Current thinking level: off.\nOptions: default, off, minimal, low, medium, high.",
+      [
+        t("chat.commandResults.thinking.current", { level: "off" }),
+        t("chat.commandResults.options", {
+          options: "default, off, minimal, low, medium, high",
+        }),
+      ].join("\n"),
     );
   });
 
@@ -779,7 +840,12 @@ describe("executeSlashCommand directives", () => {
       },
     );
 
-    expect(result.content).toBe("Current thinking level: high.\nOptions: default, off, low, high.");
+    expect(result.content).toBe(
+      [
+        t("chat.commandResults.thinking.current", { level: "high" }),
+        t("chat.commandResults.options", { options: "default, off, low, high" }),
+      ].join("\n"),
+    );
   });
 
   it("accepts minimal and xhigh thinking levels", async () => {
@@ -812,8 +878,8 @@ describe("executeSlashCommand directives", () => {
       "xhigh",
     );
 
-    expect(minimal.content).toBe("Thinking level set to **minimal**.");
-    expect(xhigh.content).toBe("Thinking level set to **xhigh**.");
+    expect(minimal.content).toBe(t("chat.commandResults.thinking.set", { level: "**minimal**" }));
+    expect(xhigh.content).toBe(t("chat.commandResults.thinking.set", { level: "**xhigh**" }));
     expect(request).toHaveBeenNthCalledWith(1, "sessions.list", { agentId: "main" });
     expect(request).toHaveBeenNthCalledWith(2, "sessions.patch", {
       key: "agent:main:main",
@@ -841,7 +907,7 @@ describe("executeSlashCommand directives", () => {
       "default",
     );
 
-    expect(result.content).toBe("Thinking level reset to default.");
+    expect(result.content).toBe(t("chat.commandResults.thinking.reset"));
     expect(result.action).toBe("refresh");
     expect(request).toHaveBeenCalledWith("sessions.patch", {
       key: "agent:main:main",
@@ -924,12 +990,19 @@ describe("executeSlashCommand directives", () => {
     );
 
     expect(status.content).toBe(
-      "Current thinking level: adaptive.\nOptions: default, off, minimal, low, medium, adaptive, high, xhigh, maximum.",
+      [
+        t("chat.commandResults.thinking.current", { level: "adaptive" }),
+        t("chat.commandResults.options", {
+          options: "default, off, minimal, low, medium, adaptive, high, xhigh, maximum",
+        }),
+      ].join("\n"),
     );
-    expect(setXhigh.content).toBe("Thinking level set to **xhigh**.");
-    expect(setMax.content).toBe("Thinking level set to **max**.");
-    expect(setMaximum.content).toBe("Thinking level set to **max**.");
-    expect(setAdaptive.content).toBe("Thinking level set to **adaptive**.");
+    expect(setXhigh.content).toBe(t("chat.commandResults.thinking.set", { level: "**xhigh**" }));
+    expect(setMax.content).toBe(t("chat.commandResults.thinking.set", { level: "**max**" }));
+    expect(setMaximum.content).toBe(t("chat.commandResults.thinking.set", { level: "**max**" }));
+    expect(setAdaptive.content).toBe(
+      t("chat.commandResults.thinking.set", { level: "**adaptive**" }),
+    );
     expect(request).toHaveBeenCalledWith("sessions.patch", {
       key: "agent:main:main",
       thinkingLevel: "xhigh",
@@ -1003,9 +1076,14 @@ describe("executeSlashCommand directives", () => {
     );
 
     expect(status.content).toBe(
-      "Current thinking level: low.\nOptions: default, off, minimal, low, medium, high, xhigh, max.",
+      [
+        t("chat.commandResults.thinking.current", { level: "low" }),
+        t("chat.commandResults.options", {
+          options: "default, off, minimal, low, medium, high, xhigh, max",
+        }),
+      ].join("\n"),
     );
-    expect(setMax.content).toBe("Thinking level set to **max**.");
+    expect(setMax.content).toBe(t("chat.commandResults.thinking.set", { level: "**max**" }));
   });
 
   it("does not use extended defaults for session with different model when thinkingLevels is empty (#76482)", async () => {
@@ -1055,7 +1133,12 @@ describe("executeSlashCommand directives", () => {
     );
 
     expect(status.content).toBe(
-      "Current thinking level: low.\nOptions: default, off, minimal, low, medium, high.",
+      [
+        t("chat.commandResults.thinking.current", { level: "low" }),
+        t("chat.commandResults.options", {
+          options: "default, off, minimal, low, medium, high",
+        }),
+      ].join("\n"),
     );
   });
 
@@ -1092,7 +1175,12 @@ describe("executeSlashCommand directives", () => {
     );
 
     expect(status.content).toBe(
-      "Current thinking level: low.\nOptions: default, off, minimal, low, medium, high.",
+      [
+        t("chat.commandResults.thinking.current", { level: "low" }),
+        t("chat.commandResults.options", {
+          options: "default, off, minimal, low, medium, high",
+        }),
+      ].join("\n"),
     );
   });
 
@@ -1113,7 +1201,12 @@ describe("executeSlashCommand directives", () => {
       "",
     );
 
-    expect(result.content).toBe("Current verbose level: full.\nOptions: on, full, off.");
+    expect(result.content).toBe(
+      [
+        t("chat.commandResults.verbose.current", { level: "full" }),
+        t("chat.commandResults.options", { options: "on, full, off" }),
+      ].join("\n"),
+    );
     expect(request).toHaveBeenNthCalledWith(1, "sessions.list", { agentId: "main" });
   });
 
@@ -1135,7 +1228,14 @@ describe("executeSlashCommand directives", () => {
     );
 
     expect(result.content).toBe(
-      "Current fast mode: on.\nOptions: on, off, auto (60 sec), default, status.",
+      [
+        `${t("chat.commandResults.fast.current", {
+          value: t("chat.commandResults.fast.on"),
+        })}.`,
+        t("chat.commandResults.options", {
+          options: t("chat.commandResults.fast.options", { seconds: "60" }),
+        }),
+      ].join("\n"),
     );
     expect(request).toHaveBeenNthCalledWith(1, "sessions.list", { agentId: "main" });
   });
@@ -1158,7 +1258,14 @@ describe("executeSlashCommand directives", () => {
     );
 
     expect(result.content).toBe(
-      "Current fast mode: auto (60 sec).\nOptions: on, off, auto (60 sec), default, status.",
+      [
+        `${t("chat.commandResults.fast.current", {
+          value: t("chat.commandResults.fast.autoValue", { seconds: "60" }),
+        })}.`,
+        t("chat.commandResults.options", {
+          options: t("chat.commandResults.fast.options", { seconds: "60" }),
+        }),
+      ].join("\n"),
     );
   });
 
@@ -1186,7 +1293,14 @@ describe("executeSlashCommand directives", () => {
     );
 
     expect(result.content).toBe(
-      "Current fast mode: auto (30 sec) (default: model).\nOptions: on, off, auto (30 sec), default, status.",
+      [
+        `${t("chat.commandResults.fast.current", {
+          value: t("chat.commandResults.fast.autoValue", { seconds: "30" }),
+        })}${t("chat.commandResults.fast.sourceModel")}.`,
+        t("chat.commandResults.options", {
+          options: t("chat.commandResults.fast.options", { seconds: "30" }),
+        }),
+      ].join("\n"),
     );
   });
 
@@ -1200,7 +1314,7 @@ describe("executeSlashCommand directives", () => {
       "on",
     );
 
-    expect(result.content).toBe("Fast mode enabled.");
+    expect(result.content).toBe(t("chat.commandResults.fast.enabled"));
     expect(request).toHaveBeenCalledWith("sessions.patch", {
       key: "agent:main:main",
       fastMode: true,
@@ -1217,7 +1331,7 @@ describe("executeSlashCommand directives", () => {
       "auto",
     );
 
-    expect(result.content).toBe("Fast mode set to auto.");
+    expect(result.content).toBe(t("chat.commandResults.fast.setAuto"));
     expect(request).toHaveBeenCalledWith("sessions.patch", {
       key: "agent:main:main",
       fastMode: "auto",
@@ -1239,7 +1353,7 @@ describe("executeSlashCommand directives", () => {
       "default",
     );
 
-    expect(result.content).toBe("Fast mode reset to default.");
+    expect(result.content).toBe(t("chat.commandResults.fast.reset"));
     expect(result.action).toBe("refresh");
     expect(request).toHaveBeenCalledWith("sessions.patch", {
       key: "agent:main:main",
@@ -1267,7 +1381,7 @@ describe("executeSlashCommand /steer (soft inject)", () => {
       "try a different approach",
     );
 
-    expect(result.content).toBe("Steered.");
+    expect(result.content).toBe(t("chat.commandResults.steer.succeeded"));
     expect(result.pendingCurrentRun).toBe(true);
     const chatSend = requireRequestCall(request, "chat.send");
     expect(chatSend.payload.sessionKey).toBe("agent:main:main");
@@ -1294,7 +1408,7 @@ describe("executeSlashCommand /steer (soft inject)", () => {
       "continue with the smaller fix",
     );
 
-    expect(result.content).toBe("Steered.");
+    expect(result.content).toBe(t("chat.commandResults.steer.succeeded"));
     expect(result.pendingCurrentRun).toBe(true);
     const chatSend = requireRequestCall(request, "chat.send");
     expect(chatSend.payload).toMatchObject({
@@ -1322,18 +1436,18 @@ describe("executeSlashCommand /steer (soft inject)", () => {
       "try a different approach",
     );
 
-    expect(result.content).toBe("Steered.");
+    expect(result.content).toBe(t("chat.commandResults.steer.succeeded"));
     expect(result.pendingCurrentRun).toBeUndefined();
     const chatSend = requireRequestCall(request, "chat.send");
     expect(chatSend.payload.deliver).toBe(false);
   });
 
   it.each([
-    ["timeout", "The active run ended before the steer message was accepted."],
-    ["error", "Steer failed before it reached the run; try again."],
+    ["timeout", "chat.commandResults.steer.timeout"],
+    ["error", "chat.commandResults.steer.failed"],
   ] as const)(
     "reports terminal %s ACK without marking the current run pending",
-    async (status, expectedContent) => {
+    async (status, expectedKey) => {
       const request = vi.fn(async (method: string, _payload?: unknown) => {
         if (method === "sessions.list") {
           return { sessions: [row("agent:main:main", { status: "running" })] };
@@ -1351,8 +1465,8 @@ describe("executeSlashCommand /steer (soft inject)", () => {
         "try a different approach",
       );
 
-      expect(result.content).toBe(expectedContent);
-      expect(result.content).not.toBe("Steered.");
+      expect(result.content).toBe(t(expectedKey));
+      expect(result.content).not.toBe(t("chat.commandResults.steer.succeeded"));
       expect(result.pendingCurrentRun).toBeUndefined();
       const chatSend = requireRequestCall(request, "chat.send");
       expect(chatSend.payload.deliver).toBe(false);
@@ -1378,7 +1492,7 @@ describe("executeSlashCommand /steer (soft inject)", () => {
       { agentId: "work" },
     );
 
-    expect(result.content).toBe("Steered.");
+    expect(result.content).toBe(t("chat.commandResults.steer.succeeded"));
     expect(request).toHaveBeenCalledWith("sessions.list", { agentId: "work" });
     const chatSend = requireRequestCall(request, "chat.send");
     expect(chatSend.payload).toMatchObject({
@@ -1407,7 +1521,7 @@ describe("executeSlashCommand /steer (soft inject)", () => {
       "try the alias",
     );
 
-    expect(result.content).toBe("Steered.");
+    expect(result.content).toBe(t("chat.commandResults.steer.succeeded"));
     expect(request).toHaveBeenCalledWith("sessions.list", { agentId: "work" });
     const chatSend = requireRequestCall(request, "chat.send");
     expect(chatSend.payload).toMatchObject({
@@ -1444,7 +1558,7 @@ describe("executeSlashCommand /steer (soft inject)", () => {
       },
     );
 
-    expect(result.content).toBe("Steered.");
+    expect(result.content).toBe(t("chat.commandResults.steer.succeeded"));
     expect(request).toHaveBeenCalledTimes(1);
     const chatSend = requireRequestCall(request, "chat.send");
     expect(chatSend.payload.sessionKey).toBe("agent:main:main");
@@ -1470,7 +1584,7 @@ describe("executeSlashCommand /steer (soft inject)", () => {
       "all good now",
     );
 
-    expect(result.content).toBe("Steered.");
+    expect(result.content).toBe(t("chat.commandResults.steer.succeeded"));
     const chatSend = requireRequestCall(request, "chat.send");
     expect(chatSend.payload.sessionKey).toBe("agent:main:main");
     expect(chatSend.payload.message).toBe("all good now");
@@ -1500,7 +1614,7 @@ describe("executeSlashCommand /steer (soft inject)", () => {
       "main refine the plan",
     );
 
-    expect(result.content).toBe("Steered.");
+    expect(result.content).toBe(t("chat.commandResults.steer.succeeded"));
     const chatSend = requireRequestCall(request, "chat.send");
     expect(chatSend.payload.sessionKey).toBe("agent:main:main");
     expect(chatSend.payload.message).toBe("main refine the plan");
@@ -1533,7 +1647,7 @@ describe("executeSlashCommand /steer (soft inject)", () => {
       "researcher try again",
     );
 
-    expect(result.content).toBe("Steered.");
+    expect(result.content).toBe(t("chat.commandResults.steer.succeeded"));
     const chatSend = requireRequestCall(request, "chat.send");
     expect(chatSend.payload.sessionKey).toBe("agent:main:main");
     expect(chatSend.payload.message).toBe("researcher try again");
@@ -1555,7 +1669,7 @@ describe("executeSlashCommand /steer (soft inject)", () => {
       "try again",
     );
 
-    expect(result.content).toBe("No active run. Use the chat input or `/redirect` instead.");
+    expect(result.content).toBe(t("chat.commandResults.steer.noActiveRun"));
     expect(request).toHaveBeenCalledWith("sessions.list", {});
     expectNoRequestCall(request, "chat.send");
   });
@@ -1570,7 +1684,7 @@ describe("executeSlashCommand /steer (soft inject)", () => {
       "",
     );
 
-    expect(result.content).toBe("Usage: `/steer <message>`");
+    expect(result.content).toBe(t("chat.commandResults.steer.usage"));
     expect(request).not.toHaveBeenCalled();
   });
 
@@ -1589,7 +1703,9 @@ describe("executeSlashCommand /steer (soft inject)", () => {
       "try again",
     );
 
-    expect(result.content).toBe("Failed to steer: Error: connection lost");
+    expect(result.content).toBe(
+      t("chat.commandResults.steer.requestFailed", { error: "Error: connection lost" }),
+    );
   });
 });
 
@@ -1612,7 +1728,7 @@ describe("executeSlashCommand /redirect (hard kill-and-restart)", () => {
       "start over with a new plan",
     );
 
-    expect(result.content).toBe("Redirected.");
+    expect(result.content).toBe(t("chat.commandResults.redirect.succeeded"));
     expect(result.trackRunId).toBe("run-1");
     expect(request).toHaveBeenCalledWith("sessions.steer", {
       key: "agent:main:main",
@@ -1635,14 +1751,14 @@ describe("executeSlashCommand /redirect (hard kill-and-restart)", () => {
       "start over with a new plan",
     );
 
-    expect(result.content).toBe("Redirected.");
+    expect(result.content).toBe(t("chat.commandResults.redirect.succeeded"));
     expect(result.trackRunId).toBeUndefined();
   });
 
   it.each([
-    ["timeout", "The active run ended before the redirect message was accepted."],
-    ["error", "Redirect failed before it reached the run; try again."],
-  ] as const)("reports terminal %s ACK from sessions.steer", async (status, expectedContent) => {
+    ["timeout", "chat.commandResults.redirect.timeout"],
+    ["error", "chat.commandResults.redirect.failed"],
+  ] as const)("reports terminal %s ACK from sessions.steer", async (status, expectedKey) => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "sessions.steer") {
         return { status, runId: `run-${status}`, summary: "aborted" };
@@ -1657,7 +1773,7 @@ describe("executeSlashCommand /redirect (hard kill-and-restart)", () => {
       "start over with a new plan",
     );
 
-    expect(result.content).toBe(expectedContent);
+    expect(result.content).toBe(t(expectedKey));
     expect(result.trackRunId).toBeUndefined();
   });
 
@@ -1677,7 +1793,7 @@ describe("executeSlashCommand /redirect (hard kill-and-restart)", () => {
       { agentId: "work" },
     );
 
-    expect(result.content).toBe("Redirected.");
+    expect(result.content).toBe(t("chat.commandResults.redirect.succeeded"));
     expect(result.trackRunId).toBe("run-global");
     expect(request).toHaveBeenCalledWith("sessions.steer", {
       key: "global",
@@ -1701,7 +1817,7 @@ describe("executeSlashCommand /redirect (hard kill-and-restart)", () => {
       "researcher start over completely",
     );
 
-    expect(result.content).toBe("Redirected.");
+    expect(result.content).toBe(t("chat.commandResults.redirect.succeeded"));
     expect(result.trackRunId).toBe("run-3");
     expect(request).toHaveBeenCalledWith("sessions.steer", {
       key: "agent:main:main",
@@ -1719,7 +1835,7 @@ describe("executeSlashCommand /redirect (hard kill-and-restart)", () => {
       "",
     );
 
-    expect(result.content).toBe("Usage: `/redirect <message>`");
+    expect(result.content).toBe(t("chat.commandResults.redirect.usage"));
     expect(request).not.toHaveBeenCalled();
   });
 
@@ -1738,7 +1854,9 @@ describe("executeSlashCommand /redirect (hard kill-and-restart)", () => {
       "try again",
     );
 
-    expect(result.content).toBe("Failed to redirect: Error: connection lost");
+    expect(result.content).toBe(
+      t("chat.commandResults.redirect.requestFailed", { error: "Error: connection lost" }),
+    );
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

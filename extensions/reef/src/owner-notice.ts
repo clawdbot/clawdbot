@@ -398,6 +398,57 @@ export async function processReefInboxEntriesInOrder(params: {
   }
 }
 
+// Long enough to ride out transport reconnects and peer gateway restarts;
+// short enough that a human waiting on a cross-claw errand hears about a dead
+// peer in minutes instead of never.
+const REEF_DELIVERY_OVERDUE_NOTICE_MS = 10 * 60 * 1_000;
+
+interface ReefOverdueDeliveryStore {
+  overdueOutboundDeliveries(
+    olderThanMs: number,
+    now?: number,
+  ): Array<{ peer: string; id: string; sentAt: number }>;
+  markOutboundDeliveryOverdueNotified(peer: string, id: string): boolean;
+}
+
+/**
+ * Follow-up for sends that produced no receipt at all (peer offline, peer
+ * inbox dead). Every other outcome already reports back: replies and
+ * rejection receipts dispatch turns, and local send failures reject the
+ * message tool call. Without this sweep an unacknowledged send is silent
+ * until its record ages out.
+ */
+export async function notifyOverdueReefDeliveries(params: {
+  trust: ReefOverdueDeliveryStore;
+  ownerNotice: (notice: ReefOwnerNotice) => Promise<void>;
+  thresholdMs?: number;
+  now?: number;
+}): Promise<void> {
+  const thresholdMs = params.thresholdMs ?? REEF_DELIVERY_OVERDUE_NOTICE_MS;
+  for (const overdue of params.trust.overdueOutboundDeliveries(thresholdMs, params.now)) {
+    const elapsedMs = (params.now ?? Date.now()) - overdue.sentAt;
+    const minutes = Math.max(1, Math.round(elapsedMs / 60_000));
+    // Dispatch before marking: a crash in between re-sends one deduped notice
+    // on the next tick, whereas marking first could silence it permanently —
+    // the exact failure this sweep exists to report. The context key keeps
+    // redispatch idempotent while the event is still queued, and a receipt
+    // only sees overdueNotifiedAt after the notice really went out.
+    await params.ownerNotice({
+      text: `Reef message ${overdue.id} to @${overdue.peer} has not been confirmed delivered after ${minutes} minute${minutes === 1 ? "" : "s"}; the peer's claw looks offline or unreachable. The relay keeps it queued and you will get a follow-up if it is delivered or rejected. If your owner was waiting on this, let them know now.`,
+      peer: overdue.peer,
+      contextKey: `reef:delivery-overdue:${overdue.peer}:${overdue.id}`,
+      wakeAgent: true,
+    });
+    // A failed mark means the record vanished mid-dispatch (receipt consumed
+    // it, keys changed, or it aged out). None of that is positive delivery
+    // evidence, so claim nothing here: only the accepted-receipt path may say
+    // "delivered after all", and a reply that races this notice corrects it
+    // naturally. Accepted tradeoff: in that sliver the delay notice stands
+    // uncorrected rather than risking a false delivery claim.
+    params.trust.markOutboundDeliveryOverdueNotified(overdue.peer, overdue.id);
+  }
+}
+
 export function createReefOwnerNoticeHandler(params: {
   runtime: PluginRuntime;
   cfg: ResolveAgentRouteParams["cfg"];

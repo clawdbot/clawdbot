@@ -158,7 +158,6 @@ const RELEASE_SMOKE_PLUGIN_ALLOWLIST_BASE = [
   "bonjour",
   "browser",
   "device-pair",
-  "phone-control",
   "talk-voice",
 ];
 

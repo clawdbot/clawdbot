@@ -7,7 +7,11 @@ import {
   type BackoffPolicy,
   type RuntimeEnv,
 } from "openclaw/plugin-sdk/runtime-env";
-import { type SignalApiMode, type SignalSseEvent, streamSignalEvents } from "./client-adapter.js";
+import {
+  type SignalSseEvent,
+  type SignalTransportKind,
+  streamSignalEvents,
+} from "./client-adapter.js";
 
 const DEFAULT_RECONNECT_POLICY: BackoffPolicy = {
   initialMs: 1_000,
@@ -23,7 +27,7 @@ type RunSignalSseLoopParams = {
   runtime: RuntimeEnv;
   onEvent: (event: SignalSseEvent) => unknown;
   timeoutMs?: number;
-  apiMode?: SignalApiMode;
+  transportKind?: SignalTransportKind;
   policy?: Partial<BackoffPolicy>;
 };
 
@@ -34,7 +38,7 @@ export async function runSignalSseLoop({
   runtime,
   onEvent,
   timeoutMs,
-  apiMode,
+  transportKind,
   policy,
 }: RunSignalSseLoopParams) {
   const reconnectPolicy = {
@@ -60,7 +64,7 @@ export async function runSignalSseLoop({
         account,
         abortSignal,
         timeoutMs,
-        apiMode,
+        transportKind,
         onEvent: async (event: SignalSseEvent) => {
           reconnectAttempts = 0;
           await onEvent(event);

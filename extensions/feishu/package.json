@@ -8,11 +8,11 @@
   },
   "type": "module",
   "dependencies": {
-    "@larksuiteoapi/node-sdk": "1.68.0",
+    "@larksuiteoapi/node-sdk": "1.71.1",
     "mdast-util-from-markdown": "2.0.3",
     "mdast-util-gfm-table": "2.0.0",
     "micromark-extension-gfm-table": "2.1.1",
-    "typebox": "1.3.3",
+    "typebox": "1.3.6",
     "zod": "4.4.3"
   },
   "devDependencies": {
@@ -34,6 +34,16 @@
     "setupEntry": "./setup-entry.ts",
     "channel": {
       "id": "feishu",
+      "configuredState": {
+        "env": {
+          "anyOf": [
+            "FEISHU_APP_ID",
+            "FEISHU_APP_SECRET",
+            "FEISHU_VERIFICATION_TOKEN",
+            "FEISHU_ENCRYPT_KEY"
+          ]
+        }
+      },
       "label": "Feishu",
       "selectionLabel": "Feishu/Lark (飞书)",
       "docsPath": "/channels/feishu",
@@ -43,7 +53,8 @@
         "lark"
       ],
       "order": 35,
-      "quickstartAllowFrom": true
+      "quickstartAllowFrom": true,
+      "setup": { "fields": [] }
     },
     "install": {
       "npmSpec": "@openclaw/feishu",

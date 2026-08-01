@@ -409,16 +409,28 @@ describe("workboard tools", () => {
       await tools.get("workboard_claim")?.execute("call-3", { id: parent.id }),
     );
     const token = claimed.token as string;
+    const pendingProof = readPayload(
+      await tools.get("workboard_proof")?.execute("call-proof", {
+        id: parent.id,
+        token,
+        command: "pnpm test extensions/workboard",
+      }),
+    );
+    expect(pendingProof.proofId).toEqual(expect.any(String));
     const completed = readPayload(
       await tools.get("workboard_complete")?.execute("call-4", {
         id: parent.id,
         token,
         summary: "Done.",
         createdCardIds: [child.id],
+        proofId: pendingProof.proofId,
         proof: { status: "passed", command: "pnpm test extensions/workboard" },
       }),
     );
-    expect(completed.card).toMatchObject({ status: "done" });
+    expect(completed.card).toMatchObject({
+      status: "done",
+      metadata: { proof: [{ id: pendingProof.proofId, status: "passed" }] },
+    });
 
     const dispatch = readPayload(await tools.get("workboard_dispatch")?.execute("call-5", {}));
     expect(dispatch.promoted).toEqual([expect.objectContaining({ id: child.id, status: "ready" })]);

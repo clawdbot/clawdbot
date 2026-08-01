@@ -9,10 +9,8 @@ import type {
   ErrorShape,
   RequestFrame,
 } from "../../../packages/gateway-protocol/src/schema/frames.js";
-import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import type { CliDeps } from "../../cli/deps.types.js";
-import type { HealthSummary } from "../../commands/health.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
   PluginApprovalRequest,
@@ -20,6 +18,7 @@ import type {
 } from "../../infra/plugin-approvals.js";
 import type { SystemAgentApprovalRequestPayload } from "../../infra/system-agent-approvals.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { PluginSubagentRequesterContext } from "../../plugins/runtime/subagent-requester-context.js";
 import type { RuntimePluginToolGrant } from "../../plugins/runtime/tool-grant.js";
 import type { SystemAgentOperation } from "../../system-agent/operation-types.js";
 import type { WizardSession } from "../../wizard/session.js";
@@ -27,6 +26,7 @@ import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import type { GatewayHotReloadStatus } from "../config-reload-status.types.js";
 import type { ExecApprovalManager, ExecApprovalRecord } from "../exec-approval-manager.js";
+import type { HealthSummary } from "../health/types.js";
 import type { GatewayMethodRegistryView } from "../methods/descriptor.js";
 import type { NodeRegistry } from "../node-registry.js";
 import type { PluginNodeCapabilitySurface } from "../plugin-node-capability.js";
@@ -35,20 +35,16 @@ import type {
   ChannelRuntimeSnapshot,
   StartChannelOptions,
 } from "../server-channel-runtime.types.js";
-import type {
-  BufferedAgentEvent,
-  ChatAbortMarker,
-  ChatRunEntry,
-  ChatRunPlanSnapshot,
-  ChatRunRegistration,
-} from "../server-chat-state.js";
+import type { ChatRunEntry, ChatRunRegistration, ChatRunState } from "../server-chat-state.js";
 import type { GatewayCronServiceContract } from "../server-cron-contract.js";
 import type {
   GatewayApprovalEventPublisher,
   GatewayRecoveryRuntime,
 } from "../server-instance-runtime.types.js";
+import type { GatewayModelCatalogSnapshot } from "../server-model-catalog.types.js";
 import type { DedupeEntry } from "../server-shared.js";
 import type { GatewayEventLoopHealth } from "../server/event-loop-health.js";
+import type { SessionObserverService } from "../session-observer-contract.js";
 import type { TerminalLaunchResolution } from "../terminal/launch.js";
 import type { TerminalSessionManager } from "../terminal/session-manager.js";
 import type { WorkerSessionPlacementReader } from "../worker-environments/placement-projector.js";
@@ -56,6 +52,7 @@ import type {
   WorkerEnvironmentServiceContract,
   WorkerPlacementDispatchContract,
 } from "../worker-environments/service-contract.js";
+import type { TrustedSessionCreation } from "./session-creation-provenance.js";
 
 /**
  * Shared gateway request types used by every server-method module.
@@ -69,22 +66,43 @@ export type GatewayClient = {
   clientIp?: string;
   /** Client id verified against the server-approved device pairing record. */
   pairedClientId?: string;
+  authenticatedUserId?: string;
+  authenticatedUserProfile?: {
+    profileId: string;
+    displayName: string | null;
+    hasAvatar: boolean;
+    updatedAt: number;
+  };
   pluginSurfaceUrls?: Record<string, string>;
   pluginNodeCapabilitySurfaces?: Record<string, PluginNodeCapabilitySurface>;
   pluginNodeCapabilities?: Record<string, { capability: string; expiresAtMs: number }>;
   isDeviceTokenAuth?: boolean;
+  /** Temporary legacy migration session closed when normal enforcement resumes. */
+  isControlUiDeviceAuthMigrationSession?: boolean;
+  /** Signed shared-auth session admitted only to approve its own upgrade pairing. */
+  isControlUiDeviceAuthMigration?: boolean;
   internal?: {
+    /** Marks the server-constructed client used by trusted in-process dispatch. */
+    syntheticClient?: true;
+    /** Overrides persisted sender attribution without changing the authorizing client identity. */
+    senderAttribution?: { id: string; name?: string };
+    /** Trusted session creation provenance; never accepted from Gateway wire params. */
+    sessionCreation?: TrustedSessionCreation;
     allowModelOverride?: boolean;
     approvalRuntime?: boolean;
     cronRunContinuation?: boolean;
     agentRuntimeIdentity?: AgentRuntimeIdentity;
     pluginRuntimeOwnerId?: string;
     agentRunTracking?: "plugin_subagent";
+    /** Host-captured requester lineage for opt-in plugin subagent completion delivery. */
+    pluginSubagentRequester?: PluginSubagentRequesterContext;
     /** Host-owned exact media set for a scoped automatic recovery delivery. */
     internalDeliveryMediaUrls?: string[];
     internalDeliverySuppressText?: boolean;
     /** Plugin-owned tools authorized for this internal subagent run. */
     runtimePluginToolGrant?: RuntimePluginToolGrant;
+    /** Opaque in-process subagent-completion capability; never accepted from wire params. */
+    delegatedToolPolicyHandoffId?: string;
   };
 };
 
@@ -97,14 +115,30 @@ export type RespondFn = (
 ) => void;
 
 /** Minimal hosted OpenClaw contract retained by the gateway request router. */
+/**
+ * Structural mirror of the engine's SystemAgentAssistantTurn. Kept local as a
+ * leaf contract: importing the assistant module here closes a madge cycle
+ * through the agents/config cluster.
+ */
+type SystemAgentHistoryTurn = {
+  role: "user" | "assistant";
+  text: string;
+};
+
 type GatewaySystemAgentSession = {
   engine: {
-    handle: (message: string) => Promise<{
+    handle: (
+      message: string,
+      options?: { uiContext?: { page: string } },
+    ) => Promise<{
       text: string;
       action: "none" | "exit" | "open-tui" | "open-setup";
       sensitive?: boolean;
       question?: SystemAgentChatQuestion;
     }>;
+    seedHistory: (turns: readonly SystemAgentHistoryTurn[]) => void;
+    historyLength: () => number;
+    historySince: (index: number) => SystemAgentHistoryTurn[];
     getPendingOperatorProposal: () => { operation: SystemAgentOperation; hash: string } | null;
     resolveOperatorApproval: (
       decision: "allow-once" | "allow-always" | "deny" | null,
@@ -114,8 +148,10 @@ type GatewaySystemAgentSession = {
   };
   welcome: string;
   welcomeQuestion?: SystemAgentChatQuestion;
+  /** Audit cursor captured with the pending caretaker welcome; cleared after delivery. */
+  welcomeAuditSequence?: number;
   lastUsedAt: number;
-  delegationKey?: string;
+  ownerKey: string;
   pendingApproval?: { id: string; proposalHash: string };
 };
 
@@ -125,11 +161,22 @@ export type GatewayRequestContext = {
   cron: GatewayCronServiceContract;
   cronStorePath: string;
   getRuntimeConfig: () => OpenClawConfig;
+  controlUiSessionPullRequests?: ReturnType<
+    typeof import("../control-ui-session-pr-subscriptions.js").createControlUiSessionPullRequestSubscriptions
+  >;
+  sessionViewerPresence?: ReturnType<
+    typeof import("../session-viewer-presence.js").createSessionViewerPresenceDeclarations
+  >;
+  sessionCompanion?: import("../session-companion.js").SessionCompanionService;
+  sessionObserver?: SessionObserverService;
   notifyPluginMetadataChanged: () => void;
   getMcpAppSandboxPort?: () => number | undefined;
+  ensureSandboxHostPort?: () => Promise<number>;
   resolveTerminalLaunchPolicy: (agentId?: string) => TerminalLaunchResolution;
   isTerminalEnabled: () => boolean;
   execApprovalManager?: ExecApprovalManager;
+  /** Cancels durable approvals owned by one actively aborted run. */
+  cancelRunBoundApprovals?: (runId: string) => number;
   pluginApprovalManager?: ExecApprovalManager<PluginApprovalRequestPayload>;
   systemAgentApprovalManager?: ExecApprovalManager<SystemAgentApprovalRequestPayload>;
   forwardPluginApprovalRequest?: (request: PluginApprovalRequest) => Promise<boolean>;
@@ -146,10 +193,18 @@ export type GatewayRequestContext = {
     sessionKey: string,
     client: GatewayClient | null,
   ) => SessionApprovalReplay;
-  loadGatewayModelCatalog: (params?: { readOnly?: boolean }) => Promise<ModelCatalogEntry[]>;
-  loadGatewayModelCatalogSnapshot: (params?: {
+  loadGatewayModelCatalog: (params?: {
+    agentId?: string;
+    agentDir?: string;
     readOnly?: boolean;
-  }) => Promise<ModelCatalogSnapshot>;
+    workspaceDir?: string;
+  }) => Promise<ModelCatalogEntry[]>;
+  loadGatewayModelCatalogSnapshot: (params?: {
+    agentId?: string;
+    agentDir?: string;
+    readOnly?: boolean;
+    workspaceDir?: string;
+  }) => Promise<GatewayModelCatalogSnapshot>;
   getHealthCache: () => HealthSummary | null;
   refreshHealthSnapshot: (opts?: {
     probe?: boolean;
@@ -163,10 +218,10 @@ export type GatewayRequestContext = {
   broadcastToConnIds: GatewayBroadcastToConnIdsFn;
   nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
   nodeSendToAllSubscribed: (event: string, payload: unknown) => void;
-  nodeSubscribe: (nodeId: string, sessionKey: string) => void;
-  nodeUnsubscribe: (nodeId: string, sessionKey: string) => void;
+  nodeSubscribe: (nodeId: string, sessionKey: string, connId?: string) => void;
+  nodeUnsubscribe: (nodeId: string, sessionKey: string, connId?: string) => void;
   nodeUnsubscribeAll: (nodeId: string) => void;
-  hasConnectedTalkNode: () => boolean;
+  hasConnectedTalkNode: () => Promise<boolean>;
   isConnectionActive?: (connId: string) => boolean;
   hasExecApprovalClients?: (excludeConnId?: string) => boolean;
   /** Instance-local native approval subscribers; never derived from a network client. */
@@ -186,6 +241,13 @@ export type GatewayRequestContext = {
   hasConnectedClientsForDevice?: (deviceId: string) => boolean;
   disconnectClientsUsingSharedGatewayAuth?: () => void;
   enforceSharedGatewayAuthGenerationForConfigWrite?: (nextConfig: OpenClawConfig) => void;
+  claimControlUiDeviceAuthMigration?: (deviceId: string) => boolean;
+  releaseControlUiDeviceAuthMigrationClaim?: (deviceId: string) => void;
+  completeControlUiDeviceAuthMigration?: (device: {
+    deviceId: string;
+    publicKey: string;
+    scopes: string[];
+  }) => void;
   nodeRegistry: NodeRegistry;
   /** Durable cloud-worker lifecycle; absent from lightweight in-process contexts. */
   workerEnvironmentService?: WorkerEnvironmentServiceContract;
@@ -200,15 +262,7 @@ export type GatewayRequestContext = {
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   /** Cancel identities for turns waiting in the followup/collect queue. */
   chatQueuedTurns: Map<string, import("../chat-queued-turns.js").QueuedChatTurnEntry>;
-  chatAbortedRuns: Map<string, ChatAbortMarker>;
-  chatRunBuffers: Map<string, string>;
-  chatRunPlanSnapshots?: Map<string, ChatRunPlanSnapshot>;
-  chatDeltaSentAt: Map<string, number>;
-  chatDeltaLastBroadcastLen: Map<string, number>;
-  chatDeltaLastBroadcastText: Map<string, string>;
-  agentDeltaSentAt: Map<string, number>;
-  bufferedAgentEvents: Map<string, BufferedAgentEvent>;
-  clearChatRunState: (runId: string) => void;
+  chatRunState: ChatRunState;
   addChatRun: (sessionId: string, entry: ChatRunRegistration) => void;
   removeChatRun: (
     sessionId: string,
@@ -220,8 +274,8 @@ export type GatewayRequestContext = {
   subscribeSessionMessageEvents: (
     connId: string,
     sessionKey: string,
-    opts?: { includeApprovals?: boolean },
-  ) => (() => void) | undefined;
+    opts?: { includeApprovals?: boolean; provisional?: boolean },
+  ) => ((() => void) & { commit: () => void }) | undefined;
   unsubscribeSessionMessageEvents: (connId: string, sessionKey: string) => void;
   unsubscribeAllSessionEvents: (connId: string) => void;
   getSessionEventSubscriberConnIds: () => ReadonlySet<string>;
@@ -269,6 +323,14 @@ export type GatewayRequestOptions = {
   respond: RespondFn;
   context: GatewayRequestContext;
   methodRegistry?: GatewayMethodRegistryView;
+  /** In-process caller lifetime; never serialized into a Gateway request frame. */
+  signal?: AbortSignal;
+};
+
+/** Commit-time guard captured by the pre-dispatch session participation check. */
+export type SessionMutationAuthorization = {
+  assertCurrent: () => void;
+  assertTargetCurrent: (target: { sessionKey: string; agentId?: string }) => void;
 };
 
 /** Normalized method invocation options passed to registered handlers. */
@@ -279,6 +341,9 @@ export type GatewayRequestHandlerOptions = {
   isWebchatConnect: (params: ConnectParams | null | undefined) => boolean;
   respond: RespondFn;
   context: GatewayRequestContext;
+  sessionMutationAuthorization?: SessionMutationAuthorization;
+  /** In-process caller lifetime; absent for ordinary transport requests. */
+  signal?: AbortSignal;
 };
 
 /** Single gateway method implementation. */

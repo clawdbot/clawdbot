@@ -100,27 +100,4 @@ describe("parseIMessageNotification", () => {
       uti: "com.apple.messages.pluginPayloadAttachment",
     });
   });
-
-  it("preserves imsg balloon bundle metadata when present", () => {
-    const parsed = parseIMessageNotification({
-      message: {
-        id: 1,
-        guid: "link-preview-guid",
-        chat_id: 2,
-        sender: "+10000000000",
-        destination_caller_id: null,
-        balloon_bundle_id: "com.apple.messages.URLBalloonProvider",
-        is_from_me: false,
-        text: "https://example.com/article",
-        attachments: null,
-        chat_identifier: null,
-        chat_guid: null,
-        chat_name: null,
-        participants: null,
-        is_group: false,
-      },
-    });
-
-    expect(parsed?.balloon_bundle_id).toBe("com.apple.messages.URLBalloonProvider");
-  });
 });

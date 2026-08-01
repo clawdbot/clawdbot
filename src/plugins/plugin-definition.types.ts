@@ -25,7 +25,6 @@ export type OpenClawPluginDefinition = {
   nodeHostCommands?: OpenClawPluginNodeHostCommand[];
   securityAuditCollectors?: OpenClawPluginSecurityAuditCollector[];
   register?: (api: OpenClawPluginApi) => void;
-  activate?: (api: OpenClawPluginApi) => void;
 };
 
 export type OpenClawPluginModule = OpenClawPluginDefinition | ((api: OpenClawPluginApi) => void);

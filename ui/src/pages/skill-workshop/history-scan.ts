@@ -38,7 +38,7 @@ export async function loadSkillWorkshopHistoryScanStatus(
   }
   if (
     !client ||
-    !params.gateway.snapshot.connected ||
+    params.gateway.snapshot.phase !== "connected" ||
     params.state.running ||
     (params.state.loaded && !params.force)
   ) {
@@ -57,7 +57,11 @@ export async function loadSkillWorkshopHistoryScanStatus(
         const pendingBeforeRequest = queue.pending;
         queue.pending = null;
         const currentClient = current.gateway.snapshot.client;
-        if (currentClient && current.gateway.snapshot.connected && !current.state.running) {
+        if (
+          currentClient &&
+          current.gateway.snapshot.phase === "connected" &&
+          !current.state.running
+        ) {
           current.state.error = null;
           try {
             current.state.result = await currentClient.request<SkillWorkshopHistoryScanResult>(
@@ -95,7 +99,7 @@ export async function runSkillWorkshopHistoryScan(params: {
   let client = params.gateway.snapshot.client;
   if (
     !client ||
-    !params.gateway.snapshot.connected ||
+    params.gateway.snapshot.phase !== "connected" ||
     params.state.running ||
     params.state.loading
   ) {
@@ -107,7 +111,7 @@ export async function runSkillWorkshopHistoryScan(params: {
       return false;
     }
     client = params.gateway.snapshot.client;
-    if (!client || !params.gateway.snapshot.connected) {
+    if (!client || params.gateway.snapshot.phase !== "connected") {
       return false;
     }
   }
