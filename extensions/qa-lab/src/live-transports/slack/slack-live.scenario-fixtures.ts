@@ -129,10 +129,18 @@ export function buildSlackProgressCommentaryRun(
         observedSlackText(message).includes(commentaryMarker),
       );
       const commentaryTimestamps = new Set(commentaryMessages.map((message) => message.ts));
+      const nativeCommentaryTaskObserved = nativeTaskUpdates.some(
+        (update) => update.title.trim() === `💬 ${commentaryMarker}`,
+      );
+      const commentaryHistoryOptional =
+        expectation.commentary === "lane" && nativeCommentaryTaskObserved;
       const [commentaryTs] = commentaryTimestamps;
-      if (commentaryTimestamps.size !== 1 || commentaryTs === undefined) {
+      if (
+        commentaryTimestamps.size > 1 ||
+        (!commentaryHistoryOptional && commentaryTs === undefined)
+      ) {
         throw new Error(
-          `expected exactly one Slack message identity containing commentary; got ${commentaryTimestamps.size}`,
+          `expected ${commentaryHistoryOptional ? "at most" : "exactly"} one Slack message identity containing commentary; got ${commentaryTimestamps.size}`,
         );
       }
       if (commentaryTs === finalMessage.ts) {
@@ -142,9 +150,6 @@ export function buildSlackProgressCommentaryRun(
         commentaryMessages
           .filter((message) => hasSlackCommentaryLaneMarker(message, commentaryMarker))
           .map((message) => message.ts),
-      );
-      const nativeCommentaryTaskObserved = nativeTaskUpdates.some(
-        (update) => update.title.trim() === commentaryMarker,
       );
       if (
         expectation.commentary === "lane" &&
@@ -172,7 +177,10 @@ export function buildSlackProgressCommentaryRun(
         if (toolTimestamps.size !== 1 || toolTimestamps.has(finalMessage.ts)) {
           throw new Error("expected tool progress on the draft separate from the fresh final");
         }
-        if (expectation.commentary !== "standalone" && !toolTimestamps.has(commentaryTs)) {
+        if (
+          expectation.commentary !== "standalone" &&
+          (!commentaryTs || !toolTimestamps.has(commentaryTs))
+        ) {
           throw new Error("expected commentary and tool progress on one Slack draft identity");
         }
       } else if (expectation.toolProgress === "standalone") {

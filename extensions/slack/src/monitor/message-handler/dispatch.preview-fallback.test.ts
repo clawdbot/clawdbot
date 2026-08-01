@@ -397,6 +397,7 @@ async function dispatchNativeProgressScenario(params: {
   events: typeof mockedReplyOptionEvents;
   finalPayload?: { text: string; isError?: boolean };
   progress?: {
+    commentary?: boolean;
     label?: string | false;
     maxLineChars?: number;
     nativeTaskCards?: true;
@@ -3747,6 +3748,33 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       progressText: "Delivered by the verbose lane",
     });
     expect(draftStream.update).toHaveBeenCalledTimes(updateCount);
+  });
+
+  it("renders Slack commentary as a native task update", async () => {
+    const commentaryMarker = "SLACK-QA-COMMENTARY-FIXTURE";
+
+    await dispatchNativeProgressScenario({
+      events: [
+        {
+          kind: "item",
+          itemKind: "preamble",
+          itemId: "preamble-1",
+          progressText: commentaryMarker,
+        },
+      ],
+      finalPayload: { text: FINAL_REPLY_TEXT },
+      progress: {
+        commentary: true,
+        label: false,
+        nativeTaskCards: true,
+        render: "rich",
+        toolProgress: false,
+      },
+    });
+
+    expect(collectNativeTaskUpdates()).toContainEqual(
+      expect.objectContaining({ title: `💬 ${commentaryMarker}` }),
+    );
   });
 
   it("uses the enterprise event client for Slack commentary drafts", async () => {

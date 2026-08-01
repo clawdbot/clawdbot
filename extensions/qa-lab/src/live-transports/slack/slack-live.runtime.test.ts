@@ -621,11 +621,11 @@ describe("Slack live QA runtime helpers", () => {
     );
   });
 
-  it("verifies progress commentary by Slack message identity", () => {
+  it("verifies progress commentary by Slack history or successful native task update", () => {
     const cases = [
       {
         id: "slack-progress-commentary-true",
-        commentaryTs: "1.500000",
+        commentaryTs: undefined,
         commentaryStyle: "lane",
         toolProgress: "absent",
       },
@@ -696,7 +696,7 @@ describe("Slack live QA runtime helpers", () => {
                     id: "item_fixture",
                     method: "chat.startStream",
                     status: "in_progress",
-                    title: commentaryMarker,
+                    title: `💬 ${commentaryMarker}`,
                   },
                 ]
               : [],
@@ -763,6 +763,17 @@ describe("Slack live QA runtime helpers", () => {
             text,
             ts: text.includes(completeMarkers[2]) ? "2.000000" : "1.500000",
           })),
+          nativeTaskUpdates:
+            scenarioId === "slack-progress-commentary-true"
+              ? [
+                  {
+                    id: "item_fixture",
+                    method: "chat.startStream",
+                    status: "in_progress",
+                    title: `💬 ${completeMarkers[0]}`,
+                  },
+                ]
+              : [],
         });
     };
 
