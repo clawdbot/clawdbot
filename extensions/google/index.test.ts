@@ -123,7 +123,7 @@ describe("google provider plugin hooks", () => {
     ).toBe("tagged");
   });
 
-  it("keeps the Gemini CLI runtime without offering new OAuth setup", async () => {
+  it("keeps the Gemini CLI runtime without OpenClaw-owned OAuth surfaces", async () => {
     const { providers } = await registerProviderPlugin({
       plugin: googleProviderPlugin,
       id: "google",
@@ -136,6 +136,8 @@ describe("google provider plugin hooks", () => {
     expect(cliProvider.envVars).toEqual([]);
     expect(cliProvider.wizard).toBeUndefined();
     expect(cliProvider.refreshOAuth).toBeUndefined();
+    expect(cliProvider.resolveUsageAuth).toBeUndefined();
+    expect(cliProvider.fetchUsageSnapshot).toBeUndefined();
   });
 
   it("keeps google-antigravity hook aliases on tagged reasoning mode", async () => {
