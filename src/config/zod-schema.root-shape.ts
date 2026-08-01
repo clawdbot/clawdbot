@@ -104,6 +104,36 @@ export const OpenClawSchemaShape = {
           rssGrowthWarningBytes: z.number().int().positive().optional(),
           rssGrowthCriticalBytes: z.number().int().positive().optional(),
         })
+        .refine(
+          (v) =>
+            v.rssWarningBytes == null ||
+            v.rssCriticalBytes == null ||
+            v.rssWarningBytes < v.rssCriticalBytes,
+          {
+            message:
+              "rssWarningBytes must be less than rssCriticalBytes (critical is checked first)",
+          },
+        )
+        .refine(
+          (v) =>
+            v.heapUsedWarningBytes == null ||
+            v.heapUsedCriticalBytes == null ||
+            v.heapUsedWarningBytes < v.heapUsedCriticalBytes,
+          {
+            message:
+              "heapUsedWarningBytes must be less than heapUsedCriticalBytes (critical is checked first)",
+          },
+        )
+        .refine(
+          (v) =>
+            v.rssGrowthWarningBytes == null ||
+            v.rssGrowthCriticalBytes == null ||
+            v.rssGrowthWarningBytes < v.rssGrowthCriticalBytes,
+          {
+            message:
+              "rssGrowthWarningBytes must be less than rssGrowthCriticalBytes (critical is checked first)",
+          },
+        )
         .optional(),
     })
     .optional(),

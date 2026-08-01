@@ -179,6 +179,35 @@ Memory pressure events record RSS, heap, threshold, and growth facts
 (`rss_threshold`, `heap_threshold`, `rss_growth`) without performing a
 file-system scan or writing a pre-OOM snapshot.
 
+## Memory pressure thresholds
+
+You can override the default memory pressure thresholds through
+`diagnostics.memory`. All values are in bytes. Warning thresholds must be
+strictly less than their matching critical threshold; the sampler checks
+critical first, so an inverted pair makes the warning unreachable.
+
+```json5
+{
+  diagnostics: {
+    memory: {
+      // RSS (resident set size) thresholds
+      rssWarningBytes: 1610612736, // default: 1536 MiB
+      rssCriticalBytes: 3221225472, // default: 3072 MiB
+      // V8 heap-used thresholds
+      heapUsedWarningBytes: 1073741824, // default: 1024 MiB
+      heapUsedCriticalBytes: 2147483648, // default: 2048 MiB
+      // RSS growth thresholds (10-minute window)
+      rssGrowthWarningBytes: 536870912, // default: 512 MiB
+      rssGrowthCriticalBytes: 1073741824, // default: 1024 MiB
+    },
+  },
+}
+```
+
+After changing these values, restart or reload the Gateway. Omitted fields
+keep their defaults. Set lower thresholds on constrained machines to get
+earlier warnings; use the defaults on hosts with plenty of RAM.
+
 ## Related
 
 - [Health checks](/gateway/health)
