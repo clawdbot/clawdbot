@@ -71,6 +71,7 @@ export type ActiveSessionSqliteMigrationRun = {
 
 const SESSION_SQLITE_MIGRATION_RUNS_DIR = "session-sqlite-migration-runs";
 const COMPLETED_MIGRATION_RUN_RETENTION = 50;
+const RESTORE_ARCHIVE_HASH_CHUNK_BYTES = 64 * 1024;
 const AbsolutePathSchema = z
   .string()
   .min(1)
@@ -548,6 +549,21 @@ type RestoreArchiveInspection =
   | { state: "invalid"; reason: string }
   | { state: "missing" };
 
+function hashRestoreArchive(fd: number, size: number): string {
+  const hash = createHash("sha256");
+  const buffer = Buffer.allocUnsafe(RESTORE_ARCHIVE_HASH_CHUNK_BYTES);
+  let offset = 0;
+  while (offset < size) {
+    const read = fs.readSync(fd, buffer, 0, Math.min(buffer.length, size - offset), offset);
+    if (read === 0) {
+      throw new Error("archive changed while it was inspected");
+    }
+    hash.update(buffer.subarray(0, read));
+    offset += read;
+  }
+  return hash.digest("hex");
+}
+
 function inspectRestoreArchive(move: SessionSqliteMigrationMove): RestoreArchiveInspection {
   if (hasSymbolicLinkInDirectoryPath(path.dirname(move.archivePath))) {
     return { state: "invalid", reason: "archive parent is a symbolic link; refusing restore" };
@@ -583,20 +599,11 @@ function inspectRestoreArchive(move: SessionSqliteMigrationMove): RestoreArchive
         reason: "archive changed while it was inspected; refusing restore",
       };
     }
-    const content = readFileDescriptorBoundedSync(fd, descriptorStat.size);
-    const finalPathStat = fs.lstatSync(move.archivePath);
-    if (
-      finalPathStat.dev !== descriptorStat.dev ||
-      finalPathStat.ino !== descriptorStat.ino ||
-      finalPathStat.size !== descriptorStat.size
-    ) {
-      return {
-        state: "invalid",
-        reason: "archive changed while it was inspected; refusing restore",
-      };
-    }
+    let digest: string;
     let legacyEntryCount: number | undefined;
     if (move.kind === "legacy-store") {
+      const content = readFileDescriptorBoundedSync(fd, descriptorStat.size);
+      digest = createHash("sha256").update(content).digest("hex");
       let parsed: unknown;
       try {
         parsed = JSON.parse(content.toString("utf-8"));
@@ -613,11 +620,26 @@ function inspectRestoreArchive(move: SessionSqliteMigrationMove): RestoreArchive
         };
       }
       legacyEntryCount = Object.keys(parsed).length;
+    } else {
+      // Transcript-like archives can be arbitrarily large. Hash them incrementally so duplicate
+      // planning cannot turn a Doctor restore into a synchronous whole-file allocation.
+      digest = hashRestoreArchive(fd, descriptorStat.size);
+    }
+    const finalPathStat = fs.lstatSync(move.archivePath);
+    if (
+      finalPathStat.dev !== descriptorStat.dev ||
+      finalPathStat.ino !== descriptorStat.ino ||
+      finalPathStat.size !== descriptorStat.size
+    ) {
+      return {
+        state: "invalid",
+        reason: "archive changed while it was inspected; refusing restore",
+      };
     }
     return {
       state: "available",
       snapshot: {
-        digest: createHash("sha256").update(content).digest("hex"),
+        digest,
         ...(legacyEntryCount === undefined ? {} : { legacyEntryCount }),
         size: descriptorStat.size,
       },

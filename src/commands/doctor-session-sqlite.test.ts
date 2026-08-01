@@ -1357,6 +1357,64 @@ describe("runDoctorSessionSqlite", () => {
     }
   });
 
+  it("streams duplicate large transcript archives while selecting an identical restore", async () => {
+    const store = createLegacyStore();
+    const importReport = await runDoctorSessionSqlite({
+      env: store.env,
+      mode: "import",
+      store: store.storePath,
+    });
+    const firstManifestPath = requireMigrationManifestPath(importReport.migrationRun?.manifestPath);
+    const firstManifest = readMigrationManifest(firstManifestPath);
+    const firstTarget = expectDefined(firstManifest.targets[0], "first migration target");
+    const transcriptMove = expectDefined(
+      firstTarget.plannedMoves.find((move) => move.kind === "transcript"),
+      "transcript archive move",
+    );
+    const largeTranscript = `${JSON.stringify({
+      payload: "x".repeat(4 * 1024 * 1024),
+      type: "event",
+    })}\n`;
+    fs.writeFileSync(transcriptMove.archivePath, largeTranscript, { mode: 0o600 });
+
+    const secondArchivePath = `${transcriptMove.archivePath}.duplicate`;
+    fs.copyFileSync(transcriptMove.archivePath, secondArchivePath);
+    const duplicateManifest = structuredClone(firstManifest);
+    duplicateManifest.runId = `${firstManifest.runId}-duplicate`;
+    duplicateManifest.startedAt = new Date(Date.parse(firstManifest.startedAt) + 1).toISOString();
+    duplicateManifest.targets = [
+      {
+        ...firstTarget,
+        completedMoves: [{ ...transcriptMove, archivePath: secondArchivePath }],
+        plannedMoves: [{ ...transcriptMove, archivePath: secondArchivePath }],
+      },
+    ];
+    const duplicateManifestPath = path.join(
+      path.dirname(firstManifestPath),
+      `${duplicateManifest.runId}.json`,
+    );
+    fs.writeFileSync(duplicateManifestPath, `${JSON.stringify(duplicateManifest, null, 2)}\n`, {
+      mode: 0o600,
+    });
+
+    const restore = await runDoctorSessionSqlite({
+      allAgents: true,
+      cfg: {},
+      env: store.env,
+      mode: "restore",
+    });
+
+    const restoreReport = expectDefined(
+      restore.targets.find((target) => target.restore)?.restore,
+      "aggregate restore report",
+    );
+    expect(restoreReport.conflicts).toEqual([]);
+    expect(restore.totals.issues).toBe(0);
+    expect(fs.statSync(store.transcriptPath).size).toBe(Buffer.byteLength(largeTranscript));
+    expect(fs.readFileSync(store.transcriptPath, "utf-8")).toBe(largeTranscript);
+    expect([transcriptMove.archivePath, secondArchivePath].filter(fs.existsSync)).toHaveLength(1);
+  });
+
   it("fails closed when several manifests contain distinct nonempty session indexes", async () => {
     const store = createLegacyStore();
     const preMigrationIndex = fs.readFileSync(store.storePath, "utf-8");
