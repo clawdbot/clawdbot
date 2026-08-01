@@ -31,7 +31,6 @@ type QaRuntimeSurface = {
     kind: string;
     parsePayload: (payload: unknown) => TPayload;
     resolveEnvPayload: () => TPayload;
-    role?: string;
     source?: string;
   }) => Promise<{
     heartbeat(): Promise<void>;
