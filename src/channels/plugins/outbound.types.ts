@@ -22,6 +22,7 @@ export type ChannelOutboundContext = {
   cfg: OpenClawConfig;
   to: string;
   text: string;
+  sessionKey?: string;
   mediaUrl?: string;
   audioAsVoice?: boolean;
   mediaAccess?: OutboundMediaAccess;

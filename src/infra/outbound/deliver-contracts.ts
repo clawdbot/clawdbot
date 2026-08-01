@@ -133,6 +133,7 @@ export type ChannelHandlerParams = {
   mediaAccess?: OutboundMediaAccess;
   gatewayClientScopes?: readonly string[];
   conversationReadOrigin?: "delegated" | "direct-operator";
+  session?: OutboundSessionContext;
   deliveryQueueId?: string;
   preparedMessageId?: string;
   requiredUnknownSendReconciliation?: boolean;
