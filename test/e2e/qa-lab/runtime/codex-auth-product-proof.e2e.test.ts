@@ -1,6 +1,7 @@
 // QA Lab Codex auth product proof exercises doctor, SQLite, Gateway, and app-server together.
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { CODEX_APP_SERVER_VERSION } from "../../../../extensions/codex/test-api.js";
 import { createJsonlRequestTailer } from "../../../../scripts/e2e/lib/codex-media-path/jsonl-request-tail.mjs";
 import { closeOpenClawAgentDatabasesForTest } from "../../../../src/state/openclaw-agent-db.js";
 import { connectGatewayStatusClient, postJson } from "../../../helpers/gateway-e2e-harness.js";
@@ -116,6 +117,7 @@ describe("Codex auth product proof", () => {
         name: "qa-codex-auth-product-proof",
         env: {
           OPENCLAW_AGENT_HARNESS_FALLBACK: "none",
+          OPENCLAW_QA_CODEX_APP_SERVER_VERSION: CODEX_APP_SERVER_VERSION,
           OPENCLAW_SKIP_PROVIDERS: undefined,
         },
         config: {
