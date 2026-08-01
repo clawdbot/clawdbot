@@ -1,3 +1,4 @@
+import { kindFromMime, normalizeMimeType } from "@openclaw/media-core/mime";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 // DashScope-compatible video provider adapts DashScope-style generation APIs.
@@ -232,6 +233,16 @@ export async function pollDashscopeVideoTaskUntilComplete(params: {
     if (status === "SUCCEEDED") {
       return payload;
     }
+    // DashScope reports missing or expired task IDs as UNKNOWN, not PENDING;
+    // waiting cannot recover them and hides the actionable provider outcome.
+    if (status === "UNKNOWN") {
+      const reason = payload.output?.message?.trim() || payload.message?.trim();
+      throw new Error(
+        `${params.providerLabel} video generation task ${params.taskId} is unknown or expired${
+          reason ? `: ${reason}` : ""
+        }`,
+      );
+    }
     // Terminal failure statuses carry provider messages; nonterminal statuses
     // continue until the shared operation deadline or max poll attempts wins.
     if (status === "FAILED" || status === "CANCELED") {
@@ -292,55 +303,55 @@ export async function runDashscopeVideoGenerationTask(params: {
     dispatcherPolicy: params.dispatcherPolicy,
   });
 
+  let submitted: DashscopeVideoGenerationResponse;
   try {
     await assertOkOrThrowHttpError(response, `${params.providerLabel} video generation failed`);
-    const submitted = await readProviderJsonResponse<DashscopeVideoGenerationResponse>(
+    submitted = await readProviderJsonResponse<DashscopeVideoGenerationResponse>(
       response,
       `${params.providerLabel} video generation`,
     );
-    const taskId = submitted.output?.task_id?.trim();
-    if (!taskId) {
-      throw new Error(`${params.providerLabel} video generation response missing task_id`);
-    }
-    const completed = await pollDashscopeVideoTaskUntilComplete({
-      providerLabel: params.providerLabel,
-      taskId,
-      headers: params.headers,
-      timeoutMs: resolveProviderOperationTimeoutMs({ deadline, defaultTimeoutMs }),
-      fetchFn: params.fetchFn,
-      baseUrl: params.baseUrl,
-      allowPrivateNetwork: params.allowPrivateNetwork,
-      dispatcherPolicy: params.dispatcherPolicy,
-      defaultTimeoutMs,
-    });
-    const urls = extractDashscopeVideoUrls(completed);
-    if (urls.length === 0) {
-      throw new Error(
-        `${params.providerLabel} video generation completed without output video URLs`,
-      );
-    }
-    const videos = await downloadDashscopeGeneratedVideos({
-      providerLabel: params.providerLabel,
-      urls,
-      timeoutMs: createProviderOperationTimeoutResolver({ deadline, defaultTimeoutMs }),
-      fetchFn: params.fetchFn,
-      allowPrivateNetwork: params.allowPrivateNetwork,
-      dispatcherPolicy: params.dispatcherPolicy,
-      defaultTimeoutMs,
-      maxBytes: resolveGeneratedMediaMaxBytes(params.req.cfg, "video"),
-    });
-    return {
-      videos,
-      model: params.model,
-      metadata: {
-        requestId: submitted.request_id,
-        taskId,
-        taskStatus: completed.output?.task_status,
-      },
-    };
   } finally {
     await release();
   }
+
+  const taskId = submitted.output?.task_id?.trim();
+  if (!taskId) {
+    throw new Error(`${params.providerLabel} video generation response missing task_id`);
+  }
+  const completed = await pollDashscopeVideoTaskUntilComplete({
+    providerLabel: params.providerLabel,
+    taskId,
+    headers: params.headers,
+    timeoutMs: resolveProviderOperationTimeoutMs({ deadline, defaultTimeoutMs }),
+    fetchFn: params.fetchFn,
+    baseUrl: params.baseUrl,
+    allowPrivateNetwork: params.allowPrivateNetwork,
+    dispatcherPolicy: params.dispatcherPolicy,
+    defaultTimeoutMs,
+  });
+  const urls = extractDashscopeVideoUrls(completed);
+  if (urls.length === 0) {
+    throw new Error(`${params.providerLabel} video generation completed without output video URLs`);
+  }
+  const videos = await downloadDashscopeGeneratedVideos({
+    providerLabel: params.providerLabel,
+    urls,
+    timeoutMs: createProviderOperationTimeoutResolver({ deadline, defaultTimeoutMs }),
+    fetchFn: params.fetchFn,
+    allowPrivateNetwork: params.allowPrivateNetwork,
+    dispatcherPolicy: params.dispatcherPolicy,
+    defaultTimeoutMs,
+    maxBytes: resolveGeneratedMediaMaxBytes(params.req.cfg, "video"),
+  });
+  return {
+    videos,
+    model: params.model,
+    metadata: {
+      requestId: submitted.request_id,
+      taskId,
+      taskStatus: completed.output?.task_status,
+    },
+  };
 }
 
 function resolveDashscopeVideoDownloadTimeoutMs(
@@ -374,6 +385,7 @@ export async function downloadDashscopeGeneratedVideos(params: {
   maxBytes: number;
 }): Promise<GeneratedVideoAsset[]> {
   const videos: GeneratedVideoAsset[] = [];
+  const downloadLabel = `${params.providerLabel} generated video download`;
   for (const [index, url] of params.urls.entries()) {
     const result = await executeProviderOperationWithRetry({
       provider: params.providerLabel,
@@ -409,6 +421,22 @@ export async function downloadDashscopeGeneratedVideos(params: {
     let buffer: Buffer;
     let mimeType: string;
     try {
+      try {
+        const contentType = normalizeMimeType(result.response.headers.get("content-type"));
+        if (
+          contentType &&
+          contentType !== "application/octet-stream" &&
+          kindFromMime(contentType) !== "video"
+        ) {
+          throw new Error(`${downloadLabel}: malformed video response`);
+        }
+      } catch (error) {
+        // Header rejection happens before the body reader, so explicitly cancel
+        // unread streams before their guarded dispatcher and timeout release.
+        await result.response.body?.cancel(error).catch(() => undefined);
+        throw error;
+      }
+
       // Re-resolve after headers so the body uses the remaining operation budget.
       let downloadTimeoutMs: number;
       try {
@@ -432,6 +460,9 @@ export async function downloadDashscopeGeneratedVideos(params: {
             `${params.providerLabel} generated video download stalled: no data received for ${chunkTimeoutMs}ms`,
           ),
       });
+      if (buffer.byteLength === 0) {
+        throw new Error(`${downloadLabel}: malformed video response`);
+      }
       mimeType = result.response.headers.get("content-type")?.trim() || "video/mp4";
     } finally {
       await result.release();
