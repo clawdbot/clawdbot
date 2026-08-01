@@ -18,7 +18,7 @@ import {
   unpinChannelMessage,
 } from "./internal/discord.js";
 import { parseDiscordRetryAfterBodySeconds } from "./retry-after.js";
-import { resolveDiscordRest } from "./send.shared.js";
+import { buildDiscordTextChunks, resolveDiscordRest } from "./send.shared.js";
 import type {
   DiscordMessageEdit,
   DiscordMessageQuery,
@@ -183,8 +183,16 @@ export async function createThreadDiscord(
   }
   const isForumLike =
     channel?.type === ChannelType.GuildForum || channel?.type === ChannelType.GuildMedia;
+  const initialMessageContent = isForumLike
+    ? payload.content?.trim()
+      ? payload.content
+      : payload.name
+    : payload.content?.trim()
+      ? payload.content
+      : "";
+  const initialMessageChunks = buildDiscordTextChunks(initialMessageContent);
   if (isForumLike) {
-    const starterContent = payload.content?.trim() ? payload.content : payload.name;
+    const starterContent = initialMessageChunks[0] ?? payload.name;
     body.message = { content: starterContent };
     if (payload.appliedTags?.length) {
       body.applied_tags = payload.appliedTags;
@@ -198,13 +206,16 @@ export async function createThreadDiscord(
   }
   const thread = await createThread(rest, channelId, { body }, payload.messageId);
 
-  // For non-forum channels, send the initial message separately after thread creation.
-  // Forum channels handle this via the `message` field in the request body.
-  if (!isForumLike && payload.content?.trim() && "id" in thread) {
+  // Forum creation accepts exactly one starter message, so keep the first chunk in the
+  // create request and deliver any remainder after Discord returns the new thread.
+  const followupChunks = isForumLike ? initialMessageChunks.slice(1) : initialMessageChunks;
+  if (followupChunks.length && "id" in thread) {
     try {
-      await createChannelMessage(rest, thread.id, {
-        body: { content: payload.content },
-      });
+      for (const content of followupChunks) {
+        await createChannelMessage(rest, thread.id, {
+          body: { content },
+        });
+      }
     } catch (error) {
       throw new DiscordThreadInitialMessageError(thread, error);
     }

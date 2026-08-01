@@ -156,6 +156,25 @@ describe("sendMessageDiscord", () => {
     });
   });
 
+  it("keeps forum starter messages within Discord's content limit", async () => {
+    const { rest, getMock, postMock } = makeDiscordRest();
+    getMock.mockResolvedValue({ type: ChannelType.GuildForum });
+    postMock.mockResolvedValue({ id: "t1" });
+    const content = "a".repeat(2001);
+
+    await createThreadDiscord("chan1", { name: "thread", content }, discordClientOpts(rest));
+
+    expect(postMock).toHaveBeenCalledTimes(2);
+    expect(requestBody(postMock as unknown as MockCallSource, 0)).toEqual({
+      name: "thread",
+      message: { content: "a".repeat(2000) },
+    });
+    expect(requestPath(postMock as unknown as MockCallSource, 1)).toBe(
+      Routes.channelMessages("t1"),
+    );
+    expect(requestBody(postMock as unknown as MockCallSource, 1)).toEqual({ content: "a" });
+  });
+
   it("inherits default_auto_archive_duration for forum threads", async () => {
     const { rest, getMock, postMock } = makeDiscordRest();
     getMock.mockResolvedValue({
@@ -314,6 +333,27 @@ describe("sendMessageDiscord", () => {
     expect(requestBody(postMock as unknown as MockCallSource, 1)).toEqual({
       content: "Hello thread!",
     });
+  });
+
+  it("chunks long initial messages for non-forum threads", async () => {
+    const { rest, getMock, postMock } = makeDiscordRest();
+    getMock.mockResolvedValue({ type: ChannelType.GuildText });
+    postMock.mockResolvedValue({ id: "t1" });
+    const content = "a".repeat(2001);
+
+    await createThreadDiscord("chan1", { name: "thread", content }, discordClientOpts(rest));
+
+    expect(postMock).toHaveBeenCalledTimes(3);
+    expect(requestPath(postMock as unknown as MockCallSource, 1)).toBe(
+      Routes.channelMessages("t1"),
+    );
+    expect(requestBody(postMock as unknown as MockCallSource, 1)).toEqual({
+      content: "a".repeat(2000),
+    });
+    expect(requestPath(postMock as unknown as MockCallSource, 2)).toBe(
+      Routes.channelMessages("t1"),
+    );
+    expect(requestBody(postMock as unknown as MockCallSource, 2)).toEqual({ content: "a" });
   });
 
   it("keeps created non-forum thread details when initial message send fails", async () => {
