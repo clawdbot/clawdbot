@@ -414,13 +414,13 @@ function scheduleGatewayGenerationTimer(params: {
     if (isStopped()) {
       return;
     }
-    void runWithGatewayIndependentRootWorkAdmission(() => params.run(isStopped)).catch(
-      (err: unknown) => {
-        if (!isStopped()) {
-          params.onError(err);
-        }
-      },
-    );
+    void runWithGatewayIndependentRootWorkAdmission(async () => {
+      await params.run(isStopped);
+    }).catch((err: unknown) => {
+      if (!isStopped()) {
+        params.onError(err);
+      }
+    });
   }, params.delayMs);
   timer.unref?.();
   return {
