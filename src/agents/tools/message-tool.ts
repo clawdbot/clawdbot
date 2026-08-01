@@ -1231,30 +1231,31 @@ function enforceSourceReplyOnlyMessageAction(params: {
   );
   for (const requestedTarget of explicitTargets) {
     if (
-      !sourceTargets.some((sourceTarget) =>
-        resolveSourceDeliveryOutcome(
-          createSourceDeliveryPlan({
-            owner: "message_tool",
-            reason: "subagent_completion",
-            target: {
-              channel: sourceChannel,
-              accountId: sourceAccountId,
-              to: sourceTarget,
-              threadId: sourceThreadId,
-            },
-          }),
-          {
-            didSendViaMessageTool: true,
-            messageToolSentTargets: [
-              {
-                provider: sourceChannel,
+      !sourceTargets.some(
+        (sourceTarget) =>
+          resolveSourceDeliveryOutcome(
+            createSourceDeliveryPlan({
+              owner: "message_tool",
+              reason: "subagent_completion",
+              target: {
+                channel: sourceChannel,
                 accountId: sourceAccountId,
-                to: requestedTarget,
-                threadImplicit: true,
+                to: sourceTarget,
+                threadId: sourceThreadId,
               },
-            ],
-          },
-        ).verifiedMessageToolDelivery,
+            }),
+            {
+              didSendViaMessageTool: true,
+              messageToolSentTargets: [
+                {
+                  provider: sourceChannel,
+                  accountId: sourceAccountId,
+                  to: requestedTarget,
+                  threadImplicit: true,
+                },
+              ],
+            },
+          ).verifiedMessageToolDelivery,
       )
     ) {
       throw new Error("Completion source replies cannot target another conversation or thread.");
