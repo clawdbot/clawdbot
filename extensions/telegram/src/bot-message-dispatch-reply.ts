@@ -72,17 +72,19 @@ export function createTelegramReplyDelivery(params: {
     noteDelivered: () => reasoningStepState.noteReasoningDelivered(),
   });
 
-  const flushBufferedFinalAnswer = async () => {
+  const flushBufferedFinalAnswer = async (): Promise<boolean> => {
     const buffered = reasoningStepState.takeBufferedFinalAnswer(params.fence.generation());
     if (!buffered) {
-      return;
+      return false;
     }
-    await params.delivery.deliverFinalAnswerText(
+    params.state.attemptedVisibleFinalDelivery = true;
+    const result = await params.delivery.deliverFinalAnswerText(
       buffered.payload,
       buffered.text,
       resolvePayloadTelegramInlineButtons(buffered.payload),
     );
     reasoningStepState.resetForNextStep();
+    return result.kind !== "skipped";
   };
   const trackBlockMedia = (delivered: boolean, kind: string, payload: ReplyPayload) => {
     if (delivered && kind === "block" && payload.mediaUrls?.length) {
@@ -94,18 +96,18 @@ export function createTelegramReplyDelivery(params: {
 
   const deliver: Deliver = async (payload, info) => {
     if (params.fence.isSuperseded()) {
-      return;
+      return false;
     }
     const normalizedPayload = params.delivery.normalizeDeliveryPayload(payload);
     if (!normalizedPayload) {
-      return;
+      return false;
     }
     const deduped =
       info.kind === "final"
         ? deduplicateBlockSentMedia(normalizedPayload, sentBlockMediaUrls)
         : normalizedPayload;
     if (!deduped) {
-      return;
+      return false;
     }
     const effectivePayload = deduped;
     if (
@@ -116,7 +118,7 @@ export function createTelegramReplyDelivery(params: {
       })
     ) {
       params.state.queuedFinal = true;
-      return;
+      return false;
     }
     const telegramButtons = resolvePayloadTelegramInlineButtons(effectivePayload);
     const lanePayload =
@@ -151,7 +153,7 @@ export function createTelegramReplyDelivery(params: {
       !reply.hasMedia &&
       !hasExecApprovalPayload(effectivePayload)
     ) {
-      return;
+      return false;
     }
     if (payload.isError === true) {
       params.state.hadErrorReplyFailureOrSkip = true;
@@ -264,11 +266,14 @@ export function createTelegramReplyDelivery(params: {
       }
       const result =
         segment.lane === "answer" && info.kind === "final"
-          ? await params.delivery.deliverFinalAnswerText(
-              effectivePayload,
-              segment.update.text,
-              telegramButtons,
-            )
+          ? await (async () => {
+              params.state.attemptedVisibleFinalDelivery = true;
+              return await params.delivery.deliverFinalAnswerText(
+                effectivePayload,
+                segment.update.text,
+                telegramButtons,
+              );
+            })()
           : await params.delivery.deliverLaneText({
               laneName: segment.lane,
               text: segment.update.text,
@@ -294,7 +299,7 @@ export function createTelegramReplyDelivery(params: {
       if (segment.lane === "reasoning") {
         if (result.kind !== "skipped") {
           reasoningStepState.noteReasoningDelivered();
-          await flushBufferedFinalAnswer();
+          blockDelivered = (await flushBufferedFinalAnswer()) || blockDelivered;
         }
       } else if (info.kind === "final") {
         reasoningStepState.resetForNextStep();
@@ -302,13 +307,14 @@ export function createTelegramReplyDelivery(params: {
     }
     if (segments.length > 0) {
       trackBlockMedia(blockDelivered, info.kind, effectivePayload);
-      return;
+      return blockDelivered;
     }
 
     if (split.suppressedReasoningOnly) {
       let delivered = false;
       if (reply.hasMedia) {
         if (info.kind === "final") {
+          params.state.attemptedVisibleFinalDelivery = true;
           await params.draft.rotateAnswerLaneAfterToolProgress();
           await params.draft.answerLane.stream?.stop();
           await params.draft.reasoningLane.stream?.stop();
@@ -329,7 +335,7 @@ export function createTelegramReplyDelivery(params: {
         await flushBufferedFinalAnswer();
       }
       trackBlockMedia(delivered, info.kind, effectivePayload);
-      return;
+      return delivered;
     }
 
     if (info.kind === "final") {
@@ -342,7 +348,10 @@ export function createTelegramReplyDelivery(params: {
       if (info.kind === "final") {
         await flushBufferedFinalAnswer();
       }
-      return;
+      return false;
+    }
+    if (info.kind === "final") {
+      params.state.attemptedVisibleFinalDelivery = true;
     }
     const delivered = await params.delivery.sendPayload(effectivePayload, {
       durable: info.kind === "final",
@@ -354,6 +363,7 @@ export function createTelegramReplyDelivery(params: {
       await flushBufferedFinalAnswer();
     }
     trackBlockMedia(delivered, info.kind, effectivePayload);
+    return delivered;
   };
 
   const onSkip: Skip = (payload, info) => {

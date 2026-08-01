@@ -36,6 +36,7 @@ export type ReplyDispatcher = {
   ) => void;
   waitForIdle: () => Promise<void>;
   getQueuedCounts: () => Record<ReplyDispatchKind, number>;
+  getDeliveredCounts?: () => Record<ReplyDispatchKind, number>;
   getCancelledCounts?: () => Record<ReplyDispatchKind, number>;
   getFailedCounts: () => Record<ReplyDispatchKind, number>;
   markComplete: () => void;
@@ -53,6 +54,7 @@ export type ReplyDispatcher = {
  * type-correct without weakening the SDK-visible ReplyDispatcher type.
  */
 export type DispatcherOutcomeCountsView = {
+  getDeliveredCounts?: () => Record<ReplyDispatchKind, number>;
   getCancelledCounts?: () => Record<ReplyDispatchKind, number>;
   getFailedCounts?: () => Record<ReplyDispatchKind, number>;
 };

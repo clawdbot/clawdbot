@@ -369,6 +369,11 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     block: 0,
     final: 0,
   };
+  const deliveredCounts: Record<ReplyDispatchKind, number> = {
+    tool: 0,
+    block: 0,
+    final: 0,
+  };
 
   // Register this dispatcher globally for gateway restart coordination.
   const { unregister } = registerDispatcher({
@@ -473,7 +478,12 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
           deliverPayload = copyReplyPayloadMetadata(normalized, deliverPayload);
         }
         deliveryStarted = true;
-        await options.deliver(deliverPayload, dispatchInfo);
+        const deliveryResult = await options.deliver(deliverPayload, dispatchInfo);
+        // Delivery owners opt in to confirmation with an explicit boolean.
+        // Opaque return objects remain unconfirmed instead of being guessed at here.
+        if (deliveryResult === true) {
+          deliveredCounts[kind] += 1;
+        }
         deliveryOutcome = "delivered";
       })
       .catch(async (err: unknown) => {
@@ -543,6 +553,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     },
     waitForIdle: () => sendChain,
     getQueuedCounts: () => ({ ...queuedCounts }),
+    getDeliveredCounts: () => ({ ...deliveredCounts }),
     getCancelledCounts: () => ({ ...cancelledCounts }),
     getFailedCounts: () => ({ ...failedCounts }),
     markComplete,

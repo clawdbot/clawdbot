@@ -596,4 +596,104 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-basics", () => {
       }
     },
   );
+
+  it("sends a fallback when Telegram does not confirm final delivery", async () => {
+    deliverReplies.mockResolvedValueOnce({ delivered: false }).mockResolvedValueOnce({
+      delivered: true,
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Final answer" }, { kind: "final" });
+      return { queuedFinal: false, counts: { block: 0, final: 1, tool: 0 } };
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "agent:default:telegram:direct:123",
+          ChatType: "direct",
+        } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+      streamMode: "off",
+      telegramDeps: telegramDepsForTest,
+    });
+
+    expect(deliverReplies).toHaveBeenCalledTimes(2);
+    const attemptedFinal = expectRecordFields(mockCallArg(deliverReplies, 0), {});
+    expectRecordFields((attemptedFinal.replies as Array<Record<string, unknown>>)[0], {
+      text: "Final answer",
+    });
+    const fallback = expectRecordFields(mockCallArg(deliverReplies, 1), {});
+    expectRecordFields((fallback.replies as Array<Record<string, unknown>>)[0], {
+      text: "I generated a reply, but Telegram did not confirm delivery. Please try again.",
+    });
+  });
+
+  it("sends a fallback when routed dispatch reports unconfirmed visible final delivery", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
+      queuedFinal: false,
+      counts: { block: 0, final: 0, tool: 0 },
+      attemptedVisibleFinalDelivery: true,
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "agent:default:telegram:direct:123",
+          ChatType: "direct",
+        } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+      streamMode: "off",
+      telegramDeps: telegramDepsForTest,
+    });
+
+    expect(deliverReplies).toHaveBeenCalledTimes(1);
+    const fallback = expectRecordFields(mockCallArg(deliverReplies), {});
+    expectRecordFields((fallback.replies as Array<Record<string, unknown>>)[0], {
+      text: "I generated a reply, but Telegram did not confirm delivery. Please try again.",
+    });
+  });
+
+  it("keeps silent direct turns silent when no visible final delivery was attempted", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
+      queuedFinal: false,
+      counts: { block: 0, final: 0, tool: 0 },
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "agent:default:telegram:direct:123",
+          ChatType: "direct",
+        } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+      streamMode: "off",
+      telegramDeps: telegramDepsForTest,
+    });
+
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("returns retryable when unconfirmed final delivery fallback is suppressed", async () => {
+    deliverReplies.mockResolvedValueOnce({ delivered: false });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Final answer" }, { kind: "final" });
+      return { queuedFinal: false, counts: { block: 0, final: 1, tool: 0 } };
+    });
+
+    const result = await dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "agent:default:telegram:direct:123",
+          ChatType: "direct",
+        } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+      streamMode: "off",
+      telegramDeps: telegramDepsForTest,
+      retryDispatchErrors: true,
+      suppressFailureFallback: true,
+    });
+
+    expect(result.kind).toBe("failed-retryable");
+    expect(deliverReplies).toHaveBeenCalledTimes(1);
+  });
 });

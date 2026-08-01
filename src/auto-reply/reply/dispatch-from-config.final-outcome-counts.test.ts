@@ -14,7 +14,11 @@ describe("getDispatcherFinalOutcomeCounts (#89116)", () => {
     } as unknown as ReplyDispatcher;
 
     expect(() => getDispatcherFinalOutcomeCounts(dispatcher)).not.toThrow();
-    expect(getDispatcherFinalOutcomeCounts(dispatcher)).toEqual({ cancelled: 2, failed: 0 });
+    expect(getDispatcherFinalOutcomeCounts(dispatcher)).toEqual({
+      delivered: 0,
+      cancelled: 2,
+      failed: 0,
+    });
   });
 
   it("returns cancelled: 0 when getCancelledCounts is absent (existing behavior preserved)", () => {
@@ -22,15 +26,24 @@ describe("getDispatcherFinalOutcomeCounts (#89116)", () => {
       getFailedCounts: () => ({ tool: 0, block: 1, final: 3 }),
     } as unknown as ReplyDispatcher;
 
-    expect(getDispatcherFinalOutcomeCounts(dispatcher)).toEqual({ cancelled: 0, failed: 3 });
+    expect(getDispatcherFinalOutcomeCounts(dispatcher)).toEqual({
+      delivered: 0,
+      cancelled: 0,
+      failed: 3,
+    });
   });
 
   it("uses the real final counts when both methods are present", () => {
     const dispatcher = {
       getCancelledCounts: () => ({ tool: 0, block: 0, final: 1 }),
+      getDeliveredCounts: () => ({ tool: 0, block: 0, final: 2 }),
       getFailedCounts: () => ({ tool: 0, block: 0, final: 5 }),
     } as unknown as ReplyDispatcher;
 
-    expect(getDispatcherFinalOutcomeCounts(dispatcher)).toEqual({ cancelled: 1, failed: 5 });
+    expect(getDispatcherFinalOutcomeCounts(dispatcher)).toEqual({
+      delivered: 2,
+      cancelled: 1,
+      failed: 5,
+    });
   });
 });

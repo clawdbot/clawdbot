@@ -83,6 +83,9 @@ export function createAbortAwareDispatcher(params: {
       }
     },
   };
+  if (params.dispatcher.getDeliveredCounts) {
+    dispatcher.getDeliveredCounts = () => params.dispatcher.getDeliveredCounts!();
+  }
   if (params.dispatcher.getCancelledCounts) {
     dispatcher.getCancelledCounts = () => params.dispatcher.getCancelledCounts!();
   }

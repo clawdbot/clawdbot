@@ -267,6 +267,9 @@ export async function runTelegramDispatchTurn(params: {
       return false;
     }
     params.state.queuedFinal = turnResult.dispatchResult.queuedFinal;
+    if (turnResult.dispatchResult.attemptedVisibleFinalDelivery === true) {
+      params.state.attemptedVisibleFinalDelivery = true;
+    }
     if ((turnResult.dispatchResult.counts?.final ?? 0) > 0) {
       params.progress.markSawFinal();
     }

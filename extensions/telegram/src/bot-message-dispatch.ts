@@ -471,17 +471,25 @@ export const dispatchTelegramMessage = async ({
 
   const deliverySummary = delivery.snapshot();
   let sentFallback = false;
+  const visibleFinalDeliveryWithoutConfirmation =
+    state.attemptedVisibleFinalDelivery === true &&
+    !deliverySummary.delivered &&
+    !progress.finalAnswerDelivered() &&
+    !state.suppressSilentReplyFallback;
   const shouldSendFailureFallback =
     !isRoomEvent &&
     !suppressFailureFallback &&
     !progress.finalAnswerDelivered() &&
     (state.dispatchError ||
+      visibleFinalDeliveryWithoutConfirmation ||
       deliverySummary.skippedNonSilent > 0 ||
       deliverySummary.failedNonSilent > 0);
   if (shouldSendFailureFallback) {
     const fallbackText = state.dispatchError
       ? "Something went wrong while processing your request. Please try again."
-      : EMPTY_RESPONSE_FALLBACK;
+      : visibleFinalDeliveryWithoutConfirmation
+        ? "I generated a reply, but Telegram did not confirm delivery. Please try again."
+        : EMPTY_RESPONSE_FALLBACK;
     const result = await delivery.deliverFallback(
       [{ text: fallbackText }],
       telegramCfg.silentErrorReplies === true &&
@@ -533,7 +541,9 @@ export const dispatchTelegramMessage = async ({
     state.queuedFinal;
   const deliveryFailureWithoutFinalResponse =
     !progress.finalAnswerDelivered() &&
-    (deliverySummary.skippedNonSilent > 0 || deliverySummary.failedNonSilent > 0);
+    (visibleFinalDeliveryWithoutConfirmation ||
+      deliverySummary.skippedNonSilent > 0 ||
+      deliverySummary.failedNonSilent > 0);
   const retryableDispatchFailure =
     state.dispatchError ??
     (deliveryFailureWithoutFinalResponse

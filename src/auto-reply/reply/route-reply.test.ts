@@ -576,6 +576,7 @@ describe("routeReply", () => {
       suppressed: true,
       reason: "cancelled_by_reply_payload_sending_hook",
     });
+    expect(res).not.toHaveProperty("attemptedDelivery");
     expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(1);
     expect(lastDelivery().replyPayloadSendingHook).toMatchObject({
       kind: "final",
@@ -615,6 +616,7 @@ describe("routeReply", () => {
       suppressed: true,
       reason: "cancelled_by_reply_payload_sending_hook",
     });
+    expect(res).not.toHaveProperty("attemptedDelivery");
     expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(1);
   });
 
@@ -646,6 +648,7 @@ describe("routeReply", () => {
       suppressed: true,
       reason: "empty_after_reply_payload_sending_hook",
     });
+    expect(res).not.toHaveProperty("attemptedDelivery");
     expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(1);
   });
 

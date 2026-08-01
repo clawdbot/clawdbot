@@ -59,10 +59,12 @@ export async function mirrorDeliveredReplyToTranscript(params: {
 
 /** Reads final outcome counters from dispatchers that expose them. */
 export function getDispatcherFinalOutcomeCounts(dispatcher: DispatcherOutcomeCountsView): {
+  delivered: number;
   cancelled: number;
   failed: number;
 } {
   return {
+    delivered: dispatcher.getDeliveredCounts?.().final ?? 0,
     cancelled: dispatcher.getCancelledCounts?.().final ?? 0,
     failed: readDispatcherFailedCounts(dispatcher).final,
   };
@@ -192,9 +194,10 @@ export function captureDeliveredTranscriptMirror(params: {
 
 export async function mirrorTranscriptAfterDispatcherSettled(params: {
   dispatcher: ReplyDispatcher;
-  before: { cancelled: number; failed: number };
+  before: { delivered: number; cancelled: number; failed: number };
   metadata: () => TranscriptMirror | undefined;
   cfg: OpenClawConfig;
+  requireDeliveredCount?: boolean;
 }): Promise<void> {
   const after = getDispatcherFinalOutcomeCounts(params.dispatcher);
   const metadata = params.metadata();
@@ -202,9 +205,12 @@ export async function mirrorTranscriptAfterDispatcherSettled(params: {
     return;
   }
   const suppressedFinal = metadata.deliveryMirror?.kind === "channel-final-suppressed";
+  const delivered = after.delivered > params.before.delivered;
   if (
     !suppressedFinal &&
-    (after.cancelled > params.before.cancelled || after.failed > params.before.failed)
+    ((params.requireDeliveredCount === true && !delivered) ||
+      after.cancelled > params.before.cancelled ||
+      after.failed > params.before.failed)
   ) {
     return;
   }

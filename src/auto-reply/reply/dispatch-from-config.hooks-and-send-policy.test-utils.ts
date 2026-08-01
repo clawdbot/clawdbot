@@ -86,6 +86,11 @@ describe("before_dispatch hook", () => {
   it("uses canonical hook metadata and shared routed final delivery", async () => {
     ttsMocks.state.synthesizeFinalAudio = true;
     hookMocks.runner.runBeforeDispatch.mockResolvedValue({ handled: true, text: "Blocked" });
+    mocks.routeReply.mockResolvedValueOnce({
+      ok: true,
+      attemptedDelivery: true,
+      messageId: "m1",
+    } as never);
     installThreadingTestPlugin({ id: "telegram" });
     const dispatcher = createDispatcher();
     const ctx = createHookCtx({
@@ -139,6 +144,31 @@ describe("before_dispatch hook", () => {
     expect(routeCall?.payload?.mediaUrl).toBe("https://example.com/tts-synth.opus");
     expect(routeCall?.payload?.audioAsVoice).toBe(true);
     expect(result.queuedFinal).toBe(true);
+  });
+
+  it("does not mark routed hook-suppressed finals as attempted visible delivery", async () => {
+    hookMocks.runner.runBeforeDispatch.mockResolvedValue({ handled: true, text: "Blocked" });
+    mocks.routeReply.mockResolvedValueOnce({
+      ok: true,
+      suppressed: true,
+      reason: "cancelled_by_reply_payload_sending_hook",
+    } as never);
+    installThreadingTestPlugin({ id: "telegram" });
+    const dispatcher = createDispatcher();
+    const ctx = createHookCtx({
+      Provider: "slack",
+      Surface: "slack",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:999",
+      ChatType: "direct",
+    });
+
+    const result = await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher });
+
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(mocks.routeReply).toHaveBeenCalledTimes(1);
+    expect(result.queuedFinal).toBe(false);
+    expect(result.attemptedVisibleFinalDelivery).toBeUndefined();
   });
 
   it("passes inbound reply metadata to before_dispatch event and context", async () => {
