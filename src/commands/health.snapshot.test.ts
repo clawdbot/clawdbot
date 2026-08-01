@@ -704,22 +704,15 @@ describe("collectGatewayHealthSnapshot", () => {
         channelAccounts: {},
       },
     });
-    const telegram = snap.channels.telegram as {
+    type RuntimeStateFields = {
       running?: boolean;
       connected?: boolean;
       lastConnectedAt?: number;
       healthState?: string;
       probe?: { ok?: boolean; bot?: { username?: string } };
-      accounts?: Record<
-        string,
-        {
-          running?: boolean;
-          connected?: boolean;
-          lastConnectedAt?: number;
-          healthState?: string;
-          probe?: { ok?: boolean; bot?: { username?: string } };
-        }
-      >;
+    };
+    const telegram = snap.channels.telegram as RuntimeStateFields & {
+      accounts?: Record<string, RuntimeStateFields>;
     };
 
     expect(telegram.running).toBe(true);

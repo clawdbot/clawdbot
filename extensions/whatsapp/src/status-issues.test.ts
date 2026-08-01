@@ -72,9 +72,9 @@ describe("collectWhatsAppStatusIssues", () => {
   ])("preserves projected $name guidance", ({ runtime, expected }) => {
     const issues = collectWhatsAppStatusIssues([
       {
-        accountId: "default",
         enabled: true,
         ...buildRuntimeAccountStatusSnapshot({ runtime }),
+        accountId: "default",
       },
     ]);
 
