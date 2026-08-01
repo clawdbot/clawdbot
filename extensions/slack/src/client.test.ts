@@ -138,10 +138,14 @@ describe("slack web client config", () => {
     try {
       createSlackReadClient("xoxb-read");
 
-      expect(WebClient).toHaveBeenCalledWith("xoxb-read", {
-        retryConfig: SLACK_DEFAULT_RETRY_OPTIONS,
-        timeout: 30_000,
-      });
+      expect(WebClient).toHaveBeenCalledWith(
+        "xoxb-read",
+        expect.objectContaining({
+          fetch: expect.any(Function),
+          retryConfig: SLACK_DEFAULT_RETRY_OPTIONS,
+          timeout: 30_000,
+        }),
+      );
     } finally {
       restoreProxyEnvForTest();
     }
@@ -152,10 +156,14 @@ describe("slack web client config", () => {
     try {
       createSlackReadClient("xoxb-read", { timeout: 60_000 });
 
-      expect(WebClient).toHaveBeenCalledWith("xoxb-read", {
-        retryConfig: SLACK_DEFAULT_RETRY_OPTIONS,
-        timeout: 60_000,
-      });
+      expect(WebClient).toHaveBeenCalledWith(
+        "xoxb-read",
+        expect.objectContaining({
+          fetch: expect.any(Function),
+          retryConfig: SLACK_DEFAULT_RETRY_OPTIONS,
+          timeout: 60_000,
+        }),
+      );
     } finally {
       restoreProxyEnvForTest();
     }
@@ -250,10 +258,14 @@ describe("slack web client config", () => {
     try {
       createSlackWebClient("xoxb-test", { timeout: 1234 });
 
-      expect(WebClient).toHaveBeenCalledWith("xoxb-test", {
-        retryConfig: SLACK_DEFAULT_RETRY_OPTIONS,
-        timeout: 1234,
-      });
+      expect(WebClient).toHaveBeenCalledWith(
+        "xoxb-test",
+        expect.objectContaining({
+          fetch: expect.any(Function),
+          retryConfig: SLACK_DEFAULT_RETRY_OPTIONS,
+          timeout: 1234,
+        }),
+      );
     } finally {
       restoreProxyEnvForTest();
     }
@@ -413,9 +425,9 @@ describe("slack proxy dispatcher", () => {
     await dispatcher?.close();
   });
 
-  it("does not attach a fetch when no proxy env var is configured", () => {
+  it("attaches the shared fetch when no proxy env var is configured", () => {
     expect(resolveSlackProxyDispatcher()).toBeUndefined();
-    expect(resolveSlackWebClientOptions().fetch).toBeUndefined();
+    expect(requireFetch(resolveSlackWebClientOptions())).toBeTypeOf("function");
   });
 
   it("preserves an explicitly provided fetch", async () => {
@@ -464,6 +476,6 @@ describe("slack proxy dispatcher", () => {
     process.env.HTTPS_PROXY = "not-a-valid-url://:::bad";
 
     expect(resolveSlackProxyDispatcher()).toBeUndefined();
-    expect(resolveSlackWebClientOptions().fetch).toBeUndefined();
+    expect(requireFetch(resolveSlackWebClientOptions())).toBeTypeOf("function");
   });
 });

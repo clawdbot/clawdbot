@@ -40,10 +40,10 @@ export function createSlackReadClient(token: string, options: WebClientOptions =
   return new WebClient(token, resolveSlackReadClientOptions(options));
 }
 
-function createSlackStartupAuthFetch(fetch: SlackFetch): SlackFetch {
+function createSlackStartupAuthFetch(baseFetch: SlackFetch): SlackFetch {
   const deadline = Date.now() + SLACK_STARTUP_AUTH_RETRY_BUDGET_MS;
   return async (input, init) => {
-    const response = await fetch(input, init);
+    const response = await baseFetch(input, init);
     if (response.status !== 429) {
       return response;
     }
@@ -62,12 +62,14 @@ function createSlackStartupAuthFetch(fetch: SlackFetch): SlackFetch {
 }
 
 export function createSlackStartupAuthClient(token: string, options: WebClientOptions = {}) {
-  const fetch = createSlackStartupAuthFetch(
-    options.fetch ?? (globalThis.fetch as NonNullable<WebClientOptions["fetch"]>),
-  );
-  return createSlackWebClient(token, {
-    ...options,
-    fetch,
+  const resolvedOptions = resolveSlackWebClientOptions(options);
+  const baseFetch = resolvedOptions.fetch;
+  if (!baseFetch) {
+    throw new Error("Slack startup auth fetch is unavailable");
+  }
+  return new WebClient(token, {
+    ...resolvedOptions,
+    fetch: createSlackStartupAuthFetch(baseFetch),
     retryConfig: {
       ...SLACK_DEFAULT_RETRY_OPTIONS,
       maxRetryTime: SLACK_STARTUP_AUTH_RETRY_BUDGET_MS,

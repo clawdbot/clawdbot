@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import type { RetryOptions, WebClientOptions } from "@slack/web-api";
 import {
   addActiveManagedProxyTlsOptions,
+  resolveFetch,
   resolveEnvHttpProxyAgentOptions,
 } from "openclaw/plugin-sdk/fetch-runtime";
 import type { EnvHttpProxyAgent } from "undici";
@@ -53,9 +54,12 @@ export function resolveSlackProxyDispatcher(): SlackProxyDispatcher | undefined 
   }
 }
 
-function createSlackDispatcherFetch(
-  dispatcher: SlackProxyDispatcher,
-): NonNullable<WebClientOptions["fetch"]> {
+function buildSlackFetch(
+  dispatcher?: SlackProxyDispatcher,
+): NonNullable<WebClientOptions["fetch"]> | undefined {
+  if (!dispatcher) {
+    return resolveFetch() as NonNullable<WebClientOptions["fetch"]> | undefined;
+  }
   const { fetch: slackFetch } = loadSlackUndiciRuntime();
   return ((input: RequestInfo | URL, init?: RequestInit) => {
     // Slack Web API invokes this hook with URL/string inputs. The cast only bridges
@@ -76,7 +80,7 @@ function applySlackApiUrlAndProxyOptions(
 ): void {
   const slackApiUrl = options.slackApiUrl ?? resolveSlackApiUrlFromEnv();
   if (dispatcher && !options.fetch) {
-    options.fetch = createSlackDispatcherFetch(dispatcher);
+    options.fetch = buildSlackFetch(dispatcher);
   }
   if (slackApiUrl !== undefined) {
     options.slackApiUrl = slackApiUrl;
@@ -91,6 +95,7 @@ export function resolveSlackWebClientOptions(
 ): WebClientOptions {
   const resolved: WebClientOptions = Object.assign({}, options);
   applySlackApiUrlAndProxyOptions(resolved, dispatcher);
+  resolved.fetch ??= buildSlackFetch(dispatcher);
   resolved.retryConfig ??= SLACK_DEFAULT_RETRY_OPTIONS;
   return resolved;
 }
