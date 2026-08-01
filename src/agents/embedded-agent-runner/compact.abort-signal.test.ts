@@ -1,5 +1,9 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 
 vi.mock("../model-fallback-candidates.js", () => ({
   resolveModelCandidateChain: (params: { provider: string; model: string }) => [
@@ -47,18 +51,22 @@ import { compactEmbeddedAgentSessionDirect } from "./compact.js";
 
 const runMock = vi.mocked(runWithModelFallback);
 
-const baseParams = {
-  sessionId: "test-session",
-  sessionKey: "agent:main:test-session",
-  sessionFile: "agent:main:test-session",
-  sessionTarget: {
-    agentId: "main",
+let testState: OpenClawTestState;
+
+function baseParams() {
+  return {
     sessionId: "test-session",
     sessionKey: "agent:main:test-session",
-    storePath: "/tmp/sessions.json",
-  },
-  workspaceDir: "/tmp",
-};
+    sessionFile: "agent:main:test-session",
+    sessionTarget: {
+      agentId: "main",
+      sessionId: "test-session",
+      sessionKey: "agent:main:test-session",
+      storePath: testState.statePath("sessions.json"),
+    },
+    workspaceDir: testState.workspaceDir,
+  };
+}
 
 function configWithFallbacks(fallbacks: string[]): OpenClawConfig {
   return {
@@ -74,15 +82,23 @@ function configWithFallbacks(fallbacks: string[]): OpenClawConfig {
 }
 
 describe("compactEmbeddedAgentSessionDirect abortSignal threading", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    testState = await createOpenClawTestState({
+      label: "compact-abort-signal",
+      applyEnv: false,
+    });
     runMock.mockClear();
+  });
+
+  afterEach(async () => {
+    await testState.cleanup();
   });
 
   it("forwards params.abortSignal to runWithModelFallback so terminal aborts during compaction short-circuit", async () => {
     const controller = new AbortController();
 
     await compactEmbeddedAgentSessionDirect({
-      ...baseParams,
+      ...baseParams(),
       config: configWithFallbacks(["anthropic/claude-haiku-4-5", "openai/gpt-4.1-mini"]),
       provider: "anthropic",
       model: "claude-sonnet-4-6",
@@ -96,7 +112,7 @@ describe("compactEmbeddedAgentSessionDirect abortSignal threading", () => {
 
   it("passes undefined when no abortSignal is set (back-compat)", async () => {
     await compactEmbeddedAgentSessionDirect({
-      ...baseParams,
+      ...baseParams(),
       config: configWithFallbacks(["anthropic/claude-haiku-4-5"]),
       provider: "anthropic",
       model: "claude-sonnet-4-6",
