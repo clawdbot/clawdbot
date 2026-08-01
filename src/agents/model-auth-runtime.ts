@@ -16,11 +16,6 @@ import * as authConfig from "./model-auth-provider-config.js";
 import { resolveManagedSecretRefRuntimeProviderAuth } from "./model-auth-runtime-config.js";
 import type { ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
 
-export {
-  assertRuntimeProviderSecretOwnerAvailable,
-  resolveManagedSecretRefRuntimeProviderAuth,
-} from "./model-auth-runtime-config.js";
-
 /** Precomputed provider-auth lookup tables reused during one runtime turn. */
 export type RuntimeProviderAuthLookup = {
   envApiKey: Pick<

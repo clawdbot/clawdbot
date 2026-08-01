@@ -511,18 +511,18 @@ export function resolveConfiguredAwsSdkProfileAuth(params: {
   };
 }
 
-export function isLocalAuthProviderBaseUrl(baseUrl: string): boolean {
+function isLocalAuthProviderBaseUrl(baseUrl: string): boolean {
   return isLocalProviderBaseUrl(baseUrl, MODEL_AUTH_LOCAL_HOST_ALIASES);
 }
 
-export function hasExplicitProviderApiKeyConfig(providerConfig: ModelProviderConfig): boolean {
+function hasExplicitProviderApiKeyConfig(providerConfig: ModelProviderConfig): boolean {
   return (
     normalizeOptionalSecretInput(providerConfig.apiKey) !== undefined ||
     coerceSecretRef(providerConfig.apiKey) !== null
   );
 }
 
-export function isCustomLocalProviderConfig(providerConfig: ModelProviderConfig): boolean {
+function isCustomLocalProviderConfig(providerConfig: ModelProviderConfig): boolean {
   return (
     typeof providerConfig.baseUrl === "string" &&
     providerConfig.baseUrl.trim().length > 0 &&
