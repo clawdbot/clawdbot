@@ -153,7 +153,7 @@ describe("local media roots", () => {
     expectNormalizedRootsContain(roots, [path.join(homeDir, "captures")]);
   });
 
-    it("skips filesystem-root mediaLocalRoots instead of authorizing the volume", () => {
+  it("skips filesystem-root mediaLocalRoots instead of authorizing the volume", () => {
     const stateDir = path.join("/tmp", "openclaw-configured-media-roots-fsroot");
     const roots = withStateDir(stateDir, () =>
       getAgentScopedMediaLocalRoots(
