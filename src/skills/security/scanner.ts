@@ -505,7 +505,6 @@ function collectDangerousChildProcessAliasCalls(
   filePath: string,
 ): Map<number, number> {
   const ts = loadTypeScriptRuntime();
-  const aliases = new Set<string>();
   const parsedSources = collectAliasScanSources(source, filePath).map((candidate) => ({
     source: candidate.source,
     file: candidate.file,
@@ -519,18 +518,16 @@ function collectDangerousChildProcessAliasCalls(
     ),
   }));
 
-  // AST ownership keeps declaration-shaped strings and comments from creating
-  // aliases that would turn unrelated same-name calls into critical findings.
-  for (const candidate of parsedSources) {
-    collectAliasesFromParsedSource(ts, candidate.sourceFile, aliases);
-  }
-
-  if (aliases.size === 0) {
-    return new Map();
-  }
-
   const callCountsByLine = new Map<number, number>();
   for (const candidate of parsedSources) {
+    // Markdown fragments are independent parse scopes. Keeping aliases local
+    // prevents one example from tainting same-named calls in another fragment.
+    const aliases = new Set<string>();
+    collectAliasesFromParsedSource(ts, candidate.sourceFile, aliases);
+    if (aliases.size === 0) {
+      continue;
+    }
+
     const visit = (node: import("typescript").Node): void => {
       if (
         (ts.isCallExpression(node) || ts.isNewExpression(node)) &&

@@ -264,6 +264,22 @@ import { exec as 运行 } from "node:child_process";
     expect(findings.map((finding) => finding.line)).toEqual([6]);
   });
 
+  it("does not share child_process aliases across proposal fragments", () => {
+    const source = [
+      "```ts",
+      'import { exec as run } from "node:child_process";',
+      "```",
+      "",
+      "```ts",
+      'function run() { return "safe"; }',
+      "run();",
+      "```",
+    ].join("\n");
+
+    const findings = scanSource(source, "PROPOSAL.md");
+    expectRulePresence(findings, "dangerous-exec", false);
+  });
+
   it("detects aliases inside executable template expressions", () => {
     const source = [
       "",
