@@ -235,6 +235,7 @@ export function createApplicationGateway(
     settings = patchSettings(patch, { selectGateway });
   };
   const recordGatewayEvent = (event: Parameters<GatewayEventListener>[0]) => {
+    const eventClient = client;
     if (event.event === "presence") {
       const entries = readPresenceEntries(event.payload);
       if (entries) {
@@ -242,7 +243,6 @@ export function createApplicationGateway(
         // A live connection owns its authenticated identity until onClose. Older
         // gateways can omit still-connected clients after presence TTL pruning.
         if (selfUser && !sameSelfUser(snapshot.selfUser, selfUser)) {
-          const eventClient = client;
           setSnapshot({ ...snapshot, selfUser });
           // A presence observer can replace its client before this event reaches the log.
           if (!isCurrentClient(eventClient)) {
@@ -255,7 +255,9 @@ export function createApplicationGateway(
       0,
       250,
     );
-    notifyGatewayObservers(eventLogListeners, eventLog, "event");
+    const ownsEventLog = (current: readonly EventLogEntry[]) =>
+      current === eventLog && isCurrentClient(eventClient);
+    notifyGatewayObservers(eventLogListeners, eventLog, "event", ownsEventLog);
   };
 
   const connect = (overrides: ApplicationGatewayConnectOptions = {}) => {

@@ -1,6 +1,6 @@
 // Determines CI scope from changed paths.
 import { execFileSync } from "node:child_process";
-import { appendFileSync } from "node:fs";
+import { appendFileSync, readFileSync, readdirSync } from "node:fs";
 import { getChangedPathFacts } from "./lib/changed-path-facts.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { resolveMergeHeadDiffBase } from "./lib/merge-head-diff-base.mjs";
@@ -56,10 +56,10 @@ const WINDOWS_TEST_SCOPE_RE =
 const WINDOWS_DAEMON_SCOPE_RE =
   /^src\/daemon\/(?:schtasks(?:[-.][^/]+)?|runtime-hints\.windows-paths(?:\.test)?|test-helpers\/schtasks-(?:base-mocks|fixtures))\.ts$/;
 const CONTROL_UI_I18N_SCOPE_RE =
-  /^(ui\/src\/i18n\/|scripts\/(?:control-ui-i18n(?:-verify)?\.ts|lib\/control-ui-i18n-(?:config|raw-copy)\.ts)$|\.github\/workflows\/control-ui-locale-refresh\.yml$)/;
+  /^(ui\/src\/i18n\/|ui\/config\/control-ui-locales\.ts$|scripts\/(?:control-ui-i18n(?:-verify)?\.ts|lib\/control-ui-i18n-(?:catalog|config|raw-copy|sync-plan)\.ts)$|\.github\/workflows\/control-ui-locale-refresh\.yml$)/;
 const CONTROL_UI_RAW_COPY_SOURCE_RE = /^ui\/src\/(?:app|components|lib|pages)\/.*\.tsx?$/;
 const CONTROL_UI_HARD_GENERATED_I18N_RE =
-  /^(?:ui\/src\/i18n\/locales\/(?!en(?:-agents)?\.ts$)[^/]+\.ts|ui\/src\/i18n\/\.i18n\/(?:catalog-fallbacks\.json|[^/]+\.(?:meta\.json|tm\.jsonl)))$/;
+  /^ui\/src\/i18n\/\.i18n\/(?:catalog-fallbacks\.json|[^/]+\.(?:meta\.json|tm\.jsonl))$/;
 const RELEASE_BRANCH_RE = /^release\/\d{4}\.\d+\.\d+$/;
 
 export class ControlUiGeneratedArtifactsMixedError extends Error {}
@@ -222,14 +222,70 @@ export function assertControlUiGeneratedArtifactsIsolated(changedPaths, branchNa
   if (sourcePaths.length === 0) {
     return;
   }
+  if (isControlUiCanonicalMemoryMigration(changedPaths, generatedPaths)) {
+    return;
+  }
   throw new ControlUiGeneratedArtifactsMixedError(
     [
       "Control UI generated locale artifacts must be isolated from source changes.",
-      "Commit English/source changes only; the locale refresh workflow owns generated bundles and metadata.",
+      "Commit English/source changes only; the locale refresh workflow owns generated translation memory and metadata.",
       ...generatedPaths.map((filePath) => `- generated: ${filePath}`),
       ...sourcePaths.map((filePath) => `- source: ${filePath}`),
     ].join("\n"),
   );
+}
+
+function isControlUiCanonicalMemoryMigration(changedPaths, generatedPaths) {
+  const requiredOwners = [
+    ".gitattributes",
+    "scripts/ci-changed-scope.mjs",
+    "scripts/control-ui-i18n.ts",
+    "scripts/control-ui-i18n-verify.ts",
+    "scripts/lib/control-ui-i18n-catalog.ts",
+    "scripts/lib/control-ui-i18n-sync-plan.ts",
+    "ui/AGENTS.md",
+    "ui/config/control-ui-locales.ts",
+    "ui/vite.config.ts",
+  ];
+  if (!requiredOwners.every((owner) => changedPaths.includes(owner))) {
+    return false;
+  }
+
+  const assetsDir = new URL("../ui/src/i18n/.i18n/", import.meta.url);
+  const locales = readdirSync(assetsDir)
+    .filter((fileName) => fileName.endsWith(".tm.jsonl"))
+    .map((fileName) => fileName.slice(0, -".tm.jsonl".length));
+  const requiredGeneratedPaths = [
+    "ui/src/i18n/.i18n/catalog-fallbacks.json",
+    ...locales.flatMap((locale) => [
+      `ui/src/i18n/.i18n/${locale}.tm.jsonl`,
+      `ui/src/i18n/.i18n/${locale}.meta.json`,
+    ]),
+  ];
+  if (
+    generatedPaths.length !== requiredGeneratedPaths.length ||
+    !requiredGeneratedPaths.every((filePath) => generatedPaths.includes(filePath))
+  ) {
+    return false;
+  }
+
+  return locales.every((locale) => {
+    const adapterPath = `ui/src/i18n/locales/${locale}.ts`;
+    if (!changedPaths.includes(adapterPath)) {
+      return false;
+    }
+    let source;
+    try {
+      source = readFileSync(new URL(`../${adapterPath}`, import.meta.url), "utf8").trim();
+    } catch {
+      return false;
+    }
+    const exportName = locale.replaceAll("-", "_");
+    return (
+      source ===
+      `export { default as ${exportName} } from "virtual:openclaw-control-ui-locale/${locale}";`
+    );
+  });
 }
 
 export function shouldStrictControlUiI18n(changedPaths) {

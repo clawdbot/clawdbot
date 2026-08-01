@@ -1214,11 +1214,29 @@ describe("ci workflow guards", () => {
     expect(controlUiArtifactStep.run).toContain(
       ":(exclude)ui/src/i18n/.i18n/catalog-fallbacks.json",
     );
+    expect(controlUiArtifactStep.run).toContain("ui/src/i18n/.i18n/${LOCALE}.tm.jsonl");
+    expect(controlUiArtifactStep.run).toContain("ui/src/i18n/.i18n/${LOCALE}.meta.json");
+    expect(controlUiArtifactStep.run).not.toContain("git add -A ui/src/i18n");
     expect(controlUiAggregateStep.run).toBe(
       "node --import tsx scripts/control-ui-i18n.ts sync --write",
     );
     const controlUiPublishStep = controlUiFinalize.steps.find(
       (step: { name?: string }) => step.name === "Open or update generated locale PR",
+    );
+    expect(controlUiPublishStep.with["generated-paths"].trim().split("\n")).toEqual([
+      "ui/src/i18n/.i18n/*.tm.jsonl",
+      "ui/src/i18n/.i18n/*.meta.json",
+      "ui/src/i18n/.i18n/catalog-fallbacks.json",
+    ]);
+    expect(controlUiPublishStep.with["invalidation-paths"]).toContain(
+      "scripts/lib/control-ui-i18n-catalog.ts",
+    );
+    expect(controlUiPublishStep.with["invalidation-paths"]).toContain(
+      "scripts/lib/control-ui-i18n-sync-plan.ts",
+    );
+    expect(controlUiPublishStep.with["invalidation-paths"]).toContain("ui/src/i18n/locales/*.ts");
+    expect(controlUiPublishStep.with["invalidation-paths"]).toContain(
+      "ui/src/i18n/locales/en-agents.ts",
     );
     expect(controlUiPublishStep.with["invalidation-paths"]).toContain(
       "scripts/control-ui-i18n-verify.ts",
