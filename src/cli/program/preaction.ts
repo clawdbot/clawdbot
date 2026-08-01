@@ -121,7 +121,7 @@ export function registerPreActionHooks(program: Command, programVersion: string)
     applyResolvedCommandOutputMode(jsonOutputMode);
     const { commandPath, startupPolicy } = resolveCliExecutionStartupContext({
       argv,
-      protocolCommandPath: getCommanderCommandPath(actionCommand),
+      commandPath: getCommanderCommandPath(actionCommand),
       jsonOutputMode,
       env: process.env,
     });
