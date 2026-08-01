@@ -2300,6 +2300,40 @@ describe("tui session actions", () => {
     expect(result).toEqual({ loaded: true, inFlightRunId: null });
   });
 
+  it("restores attachment-only assistant rows from history without exposing references", async () => {
+    const loadHistory = vi.fn().mockResolvedValue({
+      sessionId: "session-main",
+      messages: [
+        { role: "assistant", content: [{ type: "image", data: "secret-image" }] },
+        {
+          role: "assistant",
+          content: [{ type: "audio", source: { type: "url", url: "file:///private/audio.mp3" } }],
+        },
+        { role: "assistant", content: [{ type: "video", url: "file:///private/video.mp4" }] },
+        { role: "assistant", content: [{ type: "file", url: "file:///etc/passwd" }] },
+      ],
+    });
+    const chatLog = {
+      addSystem: vi.fn(),
+      finalizeAssistant: vi.fn(),
+      clearAll: vi.fn(),
+    };
+
+    const { loadHistory: runLoadHistory } = createTestSessionActions({
+      client: { listSessions: vi.fn(), loadHistory } as unknown as TuiBackend,
+      chatLog: chatLog as unknown as import("./components/chat-log.js").ChatLog,
+    });
+
+    await runLoadHistory();
+
+    expect(chatLog.finalizeAssistant.mock.calls.map(([text]) => text)).toEqual([
+      "Attached image",
+      "Attached audio",
+      "Attached video",
+      "Attached file",
+    ]);
+  });
+
   it("releases a pending submit when reconnect history proves it was accepted", async () => {
     const loadHistory = vi.fn().mockResolvedValue({
       sessionId: "session-main",

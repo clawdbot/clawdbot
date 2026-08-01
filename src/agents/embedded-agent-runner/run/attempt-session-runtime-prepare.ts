@@ -133,6 +133,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     sessionManager,
   });
   const { activeSession, setActiveSessionSystemPrompt, settingsManager } = preparedAgentSession;
+  await attempt.userTurnTranscriptRecorder?.waitForRuntimePersistence();
   const boundary = prepareEmbeddedAttemptSessionBoundary({
     activeSession,
     attempt,

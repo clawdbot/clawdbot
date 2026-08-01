@@ -2014,13 +2014,6 @@ describe("scripts/test-projects changed-target routing", () => {
         ["test/scripts/ci-workflow-guards.test.ts"],
       ],
       [
-        ".github/actions/docker-e2e-plan/action.yml",
-        [
-          "test/scripts/package-acceptance-workflow.test.ts",
-          "test/scripts/ci-workflow-guards.test.ts",
-        ],
-      ],
-      [
         ".github/actions/ensure-base-commit/action.yml",
         ["test/scripts/ci-workflow-guards.test.ts"],
       ],

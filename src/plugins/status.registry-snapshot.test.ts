@@ -83,6 +83,28 @@ function expectFields(actual: Record<string, unknown>, expected: Record<string, 
 }
 
 describe("buildPluginRegistrySnapshotReport", () => {
+  it("does not project package-local dependency health onto bundled plugins", () => {
+    const tempRoot = makeTempDir();
+    const bundledRoot = path.join(tempRoot, "bundled");
+    const pluginRoot = path.join(bundledRoot, "bundled-demo");
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    createColdPluginFixture({
+      rootDir: pluginRoot,
+      pluginId: "bundled-demo",
+      packageJson: { dependencies: { "missing-build-time-dependency": "1.0.0" } },
+    });
+
+    const report = buildPluginRegistrySnapshotReport({
+      config: { plugins: { entries: { "bundled-demo": { enabled: true } } } },
+      env: createColdPluginHermeticEnv(tempRoot, { bundledPluginsDir: bundledRoot }),
+    });
+    const plugin = requirePlugin(report.plugins, "bundled-demo");
+
+    expectFields(plugin, { origin: "bundled", status: "loaded" });
+    expect(plugin.dependencyStatus).toBeUndefined();
+    expect(report.diagnostics).toEqual([]);
+  });
+
   it("keeps recovered managed npm plugins visible when the persisted registry is stale", () => {
     const tempRoot = makeTempDir();
     const stateDir = path.join(tempRoot, "state");
@@ -151,6 +173,7 @@ describe("buildPluginRegistrySnapshotReport", () => {
           speechProviders: ["indexed-speech-provider"],
           realtimeTranscriptionProviders: ["indexed-transcription-provider"],
           realtimeVoiceProviders: ["indexed-voice-provider"],
+          tools: ["indexed_echo", "indexed_search", "indexed_echo"],
           trustedToolPolicies: ["workflow-budget"],
         },
         commandAliases: [{ name: "indexed-demo" }],
@@ -180,12 +203,14 @@ describe("buildPluginRegistrySnapshotReport", () => {
       speechProviderIds: ["indexed-speech-provider"],
       realtimeTranscriptionProviderIds: ["indexed-transcription-provider"],
       realtimeVoiceProviderIds: ["indexed-voice-provider"],
+      toolNames: ["indexed_echo", "indexed_search"],
       configSchema: true,
       contracts: {
         agentToolResultMiddleware: ["openclaw", "codex"],
         speechProviders: ["indexed-speech-provider"],
         realtimeTranscriptionProviders: ["indexed-transcription-provider"],
         realtimeVoiceProviders: ["indexed-voice-provider"],
+        tools: ["indexed_echo", "indexed_search", "indexed_echo"],
         trustedToolPolicies: ["workflow-budget"],
       },
       commands: ["indexed-demo"],
@@ -480,6 +505,7 @@ describe("buildPluginRegistrySnapshotReport", () => {
       rootDir: makeTempDir(),
       pluginId: "disabled-dependency-demo",
       packageJson: { dependencies: { "missing-required": "1.0.0" } },
+      manifest: { contracts: { tools: ["disabled_demo_tool"] } },
     });
 
     const report = buildPluginRegistrySnapshotReport({
@@ -492,7 +518,11 @@ describe("buildPluginRegistrySnapshotReport", () => {
     });
     const plugin = requirePlugin(report.plugins, fixture.pluginId);
 
-    expectFields(plugin, { enabled: false, status: "disabled" });
+    expectFields(plugin, {
+      enabled: false,
+      status: "disabled",
+      toolNames: ["disabled_demo_tool"],
+    });
     expect(plugin.error).toBeUndefined();
     expect(requireRecord(plugin.dependencyStatus).missing).toEqual(["missing-required"]);
     expect(report.diagnostics).not.toContainEqual(

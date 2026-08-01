@@ -1,6 +1,8 @@
 // Exercises agent harness registration, ownership metadata, and selection handoff.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { withPluginRegistrationContext } from "../../plugins/runtime.js";
 import {
   clearAgentHarnesses,
   disposeRegisteredAgentHarnesses,
@@ -8,7 +10,6 @@ import {
   listRegisteredAgentHarnesses,
   registerAgentHarness,
   resetRegisteredAgentHarnessSessions,
-  restoreRegisteredAgentHarnesses,
 } from "./registry.js";
 import { selectAgentHarness } from "./selection.js";
 import type { AgentHarness } from "./types.js";
@@ -77,14 +78,39 @@ describe("agent harness registry", () => {
     expect(listRegisteredAgentHarnesses().map((entry) => entry.harness.id)).toEqual(["custom"]);
   });
 
-  it("restores a registry snapshot", () => {
-    registerAgentHarness(makeHarness("a"));
-    const snapshot = listRegisteredAgentHarnesses();
-    registerAgentHarness(makeHarness("b"));
+  it("keeps explicit ownership distinct from harness metadata", () => {
+    const harness = { ...makeHarness("custom"), pluginId: "harness-declared" };
+    registerAgentHarness(harness, { ownerPluginId: "registry-owner" });
 
-    restoreRegisteredAgentHarnesses(snapshot);
+    expect(getRegisteredAgentHarness("custom")).toEqual({
+      harness,
+      ownerPluginId: "registry-owner",
+    });
+    expect(listRegisteredAgentHarnesses()).toEqual([{ harness, ownerPluginId: "registry-owner" }]);
+  });
 
-    expect(listRegisteredAgentHarnesses().map((entry) => entry.harness.id)).toEqual(["a"]);
+  it("uses builder ownership and preserves a harness registered by another plugin", () => {
+    const building = createEmptyPluginRegistry();
+    const original = makeHarness("shared");
+    building.agentHarnesses.push({
+      pluginId: "first-plugin",
+      source: "runtime",
+      harness: original,
+    });
+
+    expect(() =>
+      withPluginRegistrationContext(building, "failing-plugin", () => {
+        registerAgentHarness(makeHarness("shared"));
+      }),
+    ).toThrow("agent harness shared already registered by first-plugin");
+    expect(building.agentHarnesses).toEqual([
+      { pluginId: "first-plugin", source: "runtime", harness: original },
+    ]);
+
+    withPluginRegistrationContext(building, "builder-plugin", () => {
+      registerAgentHarness(makeHarness("owned"));
+    });
+    expect(building.agentHarnesses[1]?.pluginId).toBe("builder-plugin");
   });
 
   it("dispatches generic session reset to registered harnesses", async () => {

@@ -387,6 +387,14 @@ describe("resolveBuildAllSteps", () => {
       );
     }
     expect(unified.cache?.env).toContain("OPENCLAW_BUILD_PRIVATE_QA");
+    expect(unified.cache?.inputs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: "src",
+          extensions: expect.arrayContaining([".sql"]),
+        }),
+      ]),
+    );
     expect(resolveBuildAllStepOnCacheHit(getBuildAllStep("copy-export-html-templates"))).toBeNull();
   });
 

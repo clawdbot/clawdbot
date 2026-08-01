@@ -88,6 +88,8 @@ type SessionsPageRequestScope = {
 
 type SessionsPageMutationResult = "completed" | "failed" | "stale";
 
+type SessionDeleteRow = Pick<GatewaySessionRow, "key" | "archived">;
+
 class SessionsPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   private context?: ApplicationContext;
@@ -693,14 +695,17 @@ class SessionsPage extends OpenClawLightDomElement {
     ) {
       return;
     }
-    await this.deleteSessions(keys);
+    const rowsByKey = new Map(this.result?.sessions.map((row) => [row.key, row]) ?? []);
+    // Only current row state may opt into write-scoped archive deletion.
+    // Unknown selections stay unflagged and therefore admin-only.
+    await this.deleteSessions(keys.map((key) => rowsByKey.get(key) ?? { key }));
   }
 
   private async deleteSessions(
-    keys: string[],
-    options: { deleteTranscript?: boolean; archivedOnly?: boolean } = {},
+    rows: SessionDeleteRow[],
+    options: { deleteTranscript?: boolean } = {},
   ) {
-    if (keys.length === 0 || this.loading || this.sessionMutationPending) {
+    if (rows.length === 0 || this.loading || this.sessionMutationPending) {
       return;
     }
     const scope = this.captureRequestScope();
@@ -710,10 +715,11 @@ class SessionsPage extends OpenClawLightDomElement {
     this.sessionMutationPending = true;
     try {
       const result = await scope.sessions.deleteMany(
-        keys.map((key) => ({
-          key,
-          agentId: this.sessionAgentId(key, scope.context),
+        rows.map((row) => ({
+          key: row.key,
+          agentId: this.sessionAgentId(row.key, scope.context),
           ...options,
+          ...(row.archived === true ? { archivedOnly: true } : {}),
         })),
       );
       if (!this.isRequestScopeCurrent(scope)) {
@@ -824,14 +830,16 @@ class SessionsPage extends OpenClawLightDomElement {
       }
       return;
     }
-    const keys = rows.filter((row) => row.archived === true).map((row) => row.key);
+    const archivedRows = rows.filter((row) => row.archived === true);
     if (
-      keys.length === 0 ||
-      !window.confirm(t("sessionsView.deleteAllArchivedConfirm", { count: String(keys.length) }))
+      archivedRows.length === 0 ||
+      !window.confirm(
+        t("sessionsView.deleteAllArchivedConfirm", { count: String(archivedRows.length) }),
+      )
     ) {
       return;
     }
-    await this.deleteSessions(keys, { deleteTranscript: true, archivedOnly: true });
+    await this.deleteSessions(archivedRows, { deleteTranscript: true });
   }
 
   private async deleteSessionFromMenu(row: GatewaySessionRow) {
@@ -839,7 +847,7 @@ class SessionsPage extends OpenClawLightDomElement {
     if (!window.confirm(t("sessionsView.deleteSessionConfirm", { session: label }))) {
       return;
     }
-    await this.deleteSessions([row.key]);
+    await this.deleteSessions([row]);
   }
 
   private async stopCloudWorker(row: GatewaySessionRow) {

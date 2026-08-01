@@ -27,19 +27,12 @@ fi
 # Each target starts an isolated 15-minute Vitest suite. Preserve the old
 # 35-minute single-target budget while scaling matrix runs linearly.
 CODEX_HARNESS_DOCKER_RUN_TIMEOUT="${OPENCLAW_LIVE_CODEX_HARNESS_DOCKER_RUN_TIMEOUT:-$((2100 * CODEX_HARNESS_TARGET_COUNT))s}"
-TEMP_DIRS=()
-DOCKER_USER="${OPENCLAW_DOCKER_USER:-node}"
-DOCKER_HOME_MOUNT=()
 DOCKER_TRUSTED_HARNESS_MOUNT=()
 DOCKER_TRUSTED_HARNESS_CONTAINER_DIR=""
 DOCKER_CACHE_CONTAINER_DIR="/tmp/openclaw-cache"
 DOCKER_CLI_TOOLS_CONTAINER_DIR="/tmp/openclaw-npm-global"
 DOCKER_EXTRA_ENV_FILES=()
 DOCKER_AUTH_PRESTAGED=0
-
-openclaw_live_codex_harness_is_ci() {
-  openclaw_live_is_ci
-}
 
 openclaw_live_codex_harness_append_build_extension() {
   local extension="${1:?extension required}"
@@ -91,39 +84,10 @@ if [[ -z "$CODEX_CLI_PACKAGE_SPEC" ]]; then
   )"
 fi
 
-cleanup_temp_dirs() {
-  if ((${#TEMP_DIRS[@]} > 0)); then
-    rm -rf "${TEMP_DIRS[@]}"
-  fi
-}
-trap cleanup_temp_dirs EXIT
-
-if [[ -n "${OPENCLAW_DOCKER_CLI_TOOLS_DIR:-}" ]]; then
-  CLI_TOOLS_DIR="${OPENCLAW_DOCKER_CLI_TOOLS_DIR}"
-elif openclaw_live_codex_harness_is_ci; then
-  CLI_TOOLS_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/openclaw-docker-cli-tools.XXXXXX")"
-  TEMP_DIRS+=("$CLI_TOOLS_DIR")
-else
-  CLI_TOOLS_DIR="$HOME/.cache/openclaw/docker-cli-tools"
-fi
-if [[ -n "${OPENCLAW_DOCKER_CACHE_HOME_DIR:-}" ]]; then
-  CACHE_HOME_DIR="${OPENCLAW_DOCKER_CACHE_HOME_DIR}"
-elif openclaw_live_codex_harness_is_ci; then
-  CACHE_HOME_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/openclaw-docker-cache.XXXXXX")"
-  TEMP_DIRS+=("$CACHE_HOME_DIR")
-else
-  CACHE_HOME_DIR="$HOME/.cache/openclaw/docker-cache"
-fi
-
-openclaw_live_prepare_bind_dir_for_container_user "$CLI_TOOLS_DIR"
-openclaw_live_prepare_bind_dir_for_container_user "$CACHE_HOME_DIR"
-if openclaw_live_uses_managed_bind_dirs; then
-  DOCKER_USER="$(id -u):$(id -g)"
-  DOCKER_HOME_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/openclaw-docker-home.XXXXXX")"
-  TEMP_DIRS+=("$DOCKER_HOME_DIR")
-  openclaw_live_prepare_bind_dir_for_container_user "$DOCKER_HOME_DIR"
-  DOCKER_HOME_MOUNT=(-v "$DOCKER_HOME_DIR":/home/node)
-fi
+openclaw_live_init_temp_dirs
+openclaw_live_init_cli_tools_dir
+openclaw_live_init_cache_home_dir
+openclaw_live_init_managed_home
 if [[ "$CODEX_HARNESS_AUTH_MODE" == "api-key" ]]; then
   if [[ -z "${DOCKER_HOME_DIR:-}" ]]; then
     DOCKER_HOME_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/openclaw-docker-home.XXXXXX")"
@@ -139,17 +103,11 @@ if [[ "$CODEX_HARNESS_AUTH_MODE" == "api-key" ]]; then
   DOCKER_CLI_TOOLS_CONTAINER_DIR="/home/node/.npm-global"
 fi
 
-PROFILE_MOUNT=()
-PROFILE_STATUS="none"
-if [[ "$CODEX_HARNESS_AUTH_MODE" != "api-key" && -f "$PROFILE_FILE" && -r "$PROFILE_FILE" ]]; then
-  if [[ -n "${DOCKER_HOME_DIR:-}" ]]; then
-    openclaw_live_stage_profile_into_home "$DOCKER_HOME_DIR" "$PROFILE_FILE"
-  else
-    PROFILE_MOUNT=(-v "$PROFILE_FILE":/home/node/.profile:ro)
-  fi
-  PROFILE_STATUS="$PROFILE_FILE"
-elif [[ "$CODEX_HARNESS_AUTH_MODE" == "api-key" ]]; then
+if [[ "$CODEX_HARNESS_AUTH_MODE" == "api-key" ]]; then
+  PROFILE_MOUNT=()
   PROFILE_STATUS="api-key-env"
+else
+  openclaw_live_init_profile_mount
 fi
 
 DOCKER_TRUSTED_HARNESS_CONTAINER_DIR="/trusted-harness"
@@ -163,26 +121,8 @@ if [[ "$CODEX_HARNESS_AUTH_MODE" != "api-key" ]]; then
   done < <(openclaw_live_collect_auth_files_from_csv "openai")
 fi
 
-AUTH_FILES_CSV=""
-if ((${#AUTH_FILES[@]} > 0)); then
-  AUTH_FILES_CSV="$(openclaw_live_join_csv "${AUTH_FILES[@]}")"
-fi
-
-if [[ -n "${DOCKER_HOME_DIR:-}" ]]; then
-  openclaw_live_stage_auth_into_home "$DOCKER_HOME_DIR" --files "${AUTH_FILES[@]}"
-  DOCKER_AUTH_PRESTAGED=1
-fi
-
-EXTERNAL_AUTH_MOUNTS=()
-if ((${#AUTH_FILES[@]} > 0)); then
-  for auth_file in "${AUTH_FILES[@]}"; do
-    auth_file="$(openclaw_live_validate_relative_home_path "$auth_file")"
-    host_path="$HOME/$auth_file"
-    if [[ -f "$host_path" ]]; then
-      EXTERNAL_AUTH_MOUNTS+=(-v "$host_path":/host-auth-files/"$auth_file":ro)
-    fi
-  done
-fi
+AUTH_DIRS=()
+openclaw_live_finalize_auth_mounts
 
 DOCKER_AUTH_ENV=()
 if [[ "$CODEX_HARNESS_AUTH_MODE" == "api-key" ]]; then
@@ -226,41 +166,19 @@ fi
 mkdir -p "$NPM_CONFIG_PREFIX" "$XDG_CACHE_HOME" "$COREPACK_HOME" "$NPM_CONFIG_CACHE"
 chmod 700 "$XDG_CACHE_HOME" "$COREPACK_HOME" "$NPM_CONFIG_CACHE" || true
 export PATH="$NPM_CONFIG_PREFIX/bin:$PATH"
+trusted_scripts_dir="${OPENCLAW_LIVE_DOCKER_SCRIPTS_DIR:-/src/scripts}"
+source "$trusted_scripts_dir/lib/live-docker-stage.sh"
+openclaw_live_stage_mounted_auth
 run_setup_command() {
-  local timeout_value="${OPENCLAW_LIVE_CODEX_HARNESS_SETUP_TIMEOUT_SECONDS:?missing live Codex harness setup timeout seconds}s"
-  local timeout_bin=""
-  if command -v timeout >/dev/null 2>&1; then
-    timeout_bin="timeout"
-  elif command -v gtimeout >/dev/null 2>&1; then
-    timeout_bin="gtimeout"
-  else
-    echo "timeout command not found; cannot bound live Codex harness setup after ${timeout_value}" >&2
-    return 127
-  fi
-  if "$timeout_bin" --kill-after=1s 1s true >/dev/null 2>&1; then
-    "$timeout_bin" --kill-after=30s "$timeout_value" "$@"
-  else
-    "$timeout_bin" "$timeout_value" "$@"
-  fi
+  openclaw_live_run_setup_command \
+    "${OPENCLAW_LIVE_CODEX_HARNESS_SETUP_TIMEOUT_SECONDS:?missing live Codex harness setup timeout seconds}" \
+    "live Codex harness setup" \
+    "$@"
 }
-if [ "${OPENCLAW_DOCKER_AUTH_PRESTAGED:-0}" != "1" ]; then
-  IFS=',' read -r -a auth_files <<<"${OPENCLAW_DOCKER_AUTH_FILES_RESOLVED:-}"
-  if ((${#auth_files[@]} > 0)); then
-    for auth_file in "${auth_files[@]}"; do
-      [ -n "$auth_file" ] || continue
-      if [ -f "/host-auth-files/$auth_file" ]; then
-        mkdir -p "$(dirname "$HOME/$auth_file")"
-        cp "/host-auth-files/$auth_file" "$HOME/$auth_file"
-        chmod u+rw "$HOME/$auth_file" || true
-      fi
-    done
-  fi
-fi
 if [ "${OPENCLAW_LIVE_CODEX_HARNESS_AUTH:-codex-auth}" != "api-key" ] && [ ! -s "$HOME/.codex/auth.json" ]; then
   echo "ERROR: missing ~/.codex/auth.json for Codex harness live test." >&2
   exit 1
 fi
-trusted_scripts_dir="${OPENCLAW_LIVE_DOCKER_SCRIPTS_DIR:-/src/scripts}"
 if [ "${OPENCLAW_LIVE_CODEX_HARNESS_AUTH:-codex-auth}" != "api-key" ]; then
   node --import tsx "$trusted_scripts_dir/prepare-codex-ci-auth.ts" "$HOME/.codex/auth.json"
 fi
@@ -270,7 +188,6 @@ if [ "${OPENCLAW_LIVE_CODEX_HARNESS_AUTH:-codex-auth}" = "api-key" ]; then
   printf '%s\n' "$OPENAI_API_KEY" | "$NPM_CONFIG_PREFIX/bin/codex" login --with-api-key >/dev/null
 fi
 tmp_dir="$(mktemp -d)"
-source "$trusted_scripts_dir/lib/live-docker-stage.sh"
 openclaw_live_stage_source_tree "$tmp_dir"
 openclaw_live_stage_node_modules "$tmp_dir"
 openclaw_live_link_runtime_tree "$tmp_dir"

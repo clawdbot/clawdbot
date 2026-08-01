@@ -143,7 +143,8 @@ vi.mock("../plugins/registry.js", () => ({
   createEmptyPluginRegistry: () => ({ diagnostics: [], gatewayHandlers: {}, plugins: [] }),
 }));
 
-vi.mock("../plugins/runtime.js", () => ({
+vi.mock("../plugins/runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/runtime.js")>()),
   getActivePluginRegistry: () => undefined,
   setActivePluginRegistry: vi.fn(),
 }));

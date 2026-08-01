@@ -44,6 +44,7 @@ type DiagnosticsTimelineEvent = {
   provider?: string;
   operation?: string;
   ok?: boolean;
+  status?: number;
   command?: string;
   exitCode?: number | null;
   signal?: string | null;
@@ -160,6 +161,7 @@ function serializeTimelineEvent(event: DiagnosticsTimelineEvent, env: NodeJS.Pro
     ...(event.provider ? { provider: event.provider } : {}),
     ...(event.operation ? { operation: event.operation } : {}),
     ...(typeof event.ok === "boolean" ? { ok: event.ok } : {}),
+    ...(typeof event.status === "number" ? { status: normalizeNumber(event.status) } : {}),
     ...(event.command ? { command: event.command } : {}),
     ...(event.exitCode !== undefined ? { exitCode: event.exitCode } : {}),
     ...(event.signal !== undefined ? { signal: event.signal } : {}),

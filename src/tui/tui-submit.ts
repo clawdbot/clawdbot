@@ -143,6 +143,7 @@ export function createSubmitBurstCoalescer(params: {
   let pending: { value: string; snapshot?: TuiChatSubmitSnapshot } | null = null;
   let pendingAt = 0;
   let flushTimer: ReturnType<typeof setTimeout> | null = null;
+  let disposed = false;
 
   const clearFlushTimer = () => {
     if (!flushTimer) {
@@ -161,7 +162,7 @@ export function createSubmitBurstCoalescer(params: {
   };
 
   const flushPending = () => {
-    if (!pending) {
+    if (disposed || !pending) {
       return;
     }
     const { value, snapshot } = pending;
@@ -178,7 +179,10 @@ export function createSubmitBurstCoalescer(params: {
     }, windowMs);
   };
 
-  return (value: string) => {
+  const submitBurst = (value: string) => {
+    if (disposed) {
+      return;
+    }
     if (!params.enabled) {
       submit(value, params.captureSnapshot?.());
       return;
@@ -211,4 +215,12 @@ export function createSubmitBurstCoalescer(params: {
     pendingAt = ts;
     scheduleFlush();
   };
+
+  const dispose = () => {
+    disposed = true;
+    pending = null;
+    clearFlushTimer();
+  };
+
+  return Object.assign(submitBurst, { dispose });
 }

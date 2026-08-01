@@ -129,6 +129,7 @@ function firstMockArg(mock: unknown, label: string): unknown {
 function bridgeStartOptionsCall() {
   return firstMockArg(mocks.bridgeCodexAppServerStartOptions, "bridge start options") as {
     agentDir?: string;
+    agentId?: string;
     authProfileId?: string;
     authProfileStore?: unknown;
     preparedAuth?:
@@ -1282,6 +1283,7 @@ describe("shared Codex app-server client", () => {
       timeoutMs: 1000,
       authProfileId: null,
       agentDir: "/tmp/openclaw-target-agent",
+      agentId: "research",
       config,
     });
     await sendInitializeResult(harness, "openclaw/0.146.0 (macOS; test)");
@@ -1290,6 +1292,7 @@ describe("shared Codex app-server client", () => {
     expect(mocks.resolveCodexAppServerAuthProfileIdForAgent).not.toHaveBeenCalled();
     const bridgeCall = bridgeStartOptionsCall();
     expect(bridgeCall.agentDir).toBe("/tmp/openclaw-target-agent");
+    expect(bridgeCall.agentId).toBe("research");
     expect(bridgeCall.authProfileId).toBeNull();
     expect(bridgeCall.config).toBe(config);
     const applyCall = applyAuthProfileCall();

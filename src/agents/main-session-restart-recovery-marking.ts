@@ -1,13 +1,10 @@
 import { randomUUID } from "node:crypto";
-import fs from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import {
   type InternalSessionEntry as SessionEntry,
   type RestartRecoveryRun,
   resolveAllAgentSessionStoreTargetsSync,
-  resolveSessionFilePath,
-  resolveSessionTranscriptPathInDir,
 } from "../config/sessions.js";
 import { applySessionEntryReplacements } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -33,41 +30,6 @@ import {
   shouldSkipMainRecovery,
 } from "./main-session-restart-recovery-shared.js";
 import { resolveAgentSessionDirs } from "./session-dirs.js";
-import type { SessionLockInspection } from "./session-write-lock.js";
-
-function normalizeTranscriptLockPath(lockPath: string): string | undefined {
-  const trimmed = lockPath.trim();
-  if (!path.basename(trimmed).endsWith(".jsonl.lock")) {
-    return undefined;
-  }
-  const resolved = path.resolve(trimmed);
-  try {
-    return path.join(fs.realpathSync(path.dirname(resolved)), path.basename(resolved));
-  } catch {
-    return resolved;
-  }
-}
-
-function resolveEntryTranscriptLockPaths(params: {
-  entry: SessionEntry;
-  sessionsDir: string;
-}): string[] {
-  const paths = new Set<string>();
-  const push = (resolvePath: () => string) => {
-    try {
-      paths.add(path.resolve(`${resolvePath()}.lock`));
-    } catch {
-      // Keep restart recovery best-effort when session metadata is stale.
-    }
-  };
-  push(() =>
-    resolveSessionFilePath(params.entry.sessionId, params.entry, {
-      sessionsDir: params.sessionsDir,
-    }),
-  );
-  push(() => resolveSessionTranscriptPathInDir(params.entry.sessionId, params.sessionsDir));
-  return [...paths];
-}
 
 export async function markRestartAbortedMainSessions(params: {
   cfg?: OpenClawConfig;
@@ -302,60 +264,6 @@ export async function markStartupOrphanedMainSessionsForRecovery(params: {
 
   if (result.marked > 0) {
     log.warn(`marked ${result.marked} startup-orphaned main session(s) for restart recovery`);
-  }
-  return result;
-}
-
-export async function markRestartAbortedMainSessionsFromLocks(params: {
-  sessionsDir: string;
-  cleanedLocks: SessionLockInspection[];
-}): Promise<{ marked: number; skipped: number }> {
-  const result = { marked: 0, skipped: 0 };
-  const sessionsDir = path.resolve(params.sessionsDir);
-  const interruptedLockPaths = new Set(
-    params.cleanedLocks
-      .map((lock) => normalizeTranscriptLockPath(lock.lockPath))
-      .filter((lockPath): lockPath is string => Boolean(lockPath)),
-  );
-  if (interruptedLockPaths.size === 0) {
-    return result;
-  }
-
-  const storePath = path.join(sessionsDir, "sessions.json");
-  const storeResult = await applySessionEntryReplacements({
-    storePath,
-    statuses: ["running"],
-    update: (entries) => {
-      const replacements: Array<{ sessionKey: string; entry: SessionEntry }> = [];
-      const counts = { marked: 0, skipped: 0 };
-      for (const { sessionKey, entry } of entries) {
-        if (entry.status !== "running") {
-          continue;
-        }
-        if (shouldSkipMainRecovery(entry, sessionKey)) {
-          counts.skipped++;
-          continue;
-        }
-        const entryLockPaths = resolveEntryTranscriptLockPaths({ entry, sessionsDir });
-        if (!entryLockPaths.some((lockPath) => interruptedLockPaths.has(lockPath))) {
-          continue;
-        }
-        transitionMainSessionRecovery(entry, {
-          kind: "mark_interrupted",
-          cycleId: randomUUID(),
-          now: Date.now(),
-        });
-        replacements.push({ sessionKey, entry });
-        counts.marked++;
-      }
-      return { result: counts, replacements };
-    },
-  });
-  result.marked += storeResult.marked;
-  result.skipped += storeResult.skipped;
-
-  if (result.marked > 0) {
-    log.warn(`marked ${result.marked} interrupted main session(s) from stale transcript locks`);
   }
   return result;
 }

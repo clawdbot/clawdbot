@@ -591,6 +591,9 @@ docker_e2e_docker_cmd() {
       ;;
   esac
 }
+docker_e2e_docker_run_cmd() {
+  docker_e2e_docker_cmd "$@"
+}
 mv() {
   if [[ "$FAIL_AI_SWAP" == "1" && "$1" == */ai-dist && "$2" == */packages/ai/dist ]]; then
     return 1
