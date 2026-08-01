@@ -1055,7 +1055,7 @@ describe("tool-loop-detection", () => {
       }
     });
 
-    it("blocks changing exec failures at the critical no-progress threshold", () => {
+    it("blocks changing normal non-zero exec exits at the critical no-progress threshold", () => {
       const state = createState();
       const params = { command: "openclaw flaky-helper" };
 
@@ -1065,12 +1065,12 @@ describe("tool-loop-detection", () => {
           "exec",
           params,
           {
-            content: [{ type: "text", text: `Runtime failed before spawn: attempt ${index}` }],
+            content: [{ type: "text", text: `Command failed: attempt ${index}` }],
             details: {
-              status: "failed",
-              exitCode: null,
+              status: "completed",
+              exitCode: 1,
               durationMs: 100 + index,
-              aggregated: "",
+              aggregated: `Command failed: attempt ${index}`,
             },
           },
           index,
@@ -1085,7 +1085,7 @@ describe("tool-loop-detection", () => {
       }
     });
 
-    it("blocks changing exec failures at the global no-progress threshold", () => {
+    it("blocks changing normal non-zero exec exits at the global no-progress threshold", () => {
       const state = createState();
       const params = { command: "openclaw flaky-helper" };
 
@@ -1095,12 +1095,12 @@ describe("tool-loop-detection", () => {
           "exec",
           params,
           {
-            content: [{ type: "text", text: `Runtime failed before spawn: attempt ${index}` }],
+            content: [{ type: "text", text: `Command failed: attempt ${index}` }],
             details: {
-              status: "failed",
-              exitCode: null,
+              status: "completed",
+              exitCode: 1,
               durationMs: 100 + index,
-              aggregated: "",
+              aggregated: `Command failed: attempt ${index}`,
             },
           },
           index,

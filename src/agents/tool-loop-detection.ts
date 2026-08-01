@@ -171,11 +171,21 @@ function hashExecToolOutcome(details: Record<string, unknown>, text: string): st
     });
   }
 
+  const exitCode = typeof details.exitCode === "number" ? details.exitCode : null;
+  const stableOutcome = {
+    status,
+    exitCode,
+    timedOut: details.timedOut === true,
+  };
+
   if (status === "completed") {
+    // Normal non-zero exits are completed outcomes, but their diagnostics are
+    // failure noise and must not reset the no-progress streak.
+    if (exitCode !== null && exitCode !== 0) {
+      return digestStable(stableOutcome);
+    }
     return digestStable({
-      status,
-      exitCode: typeof details.exitCode === "number" ? details.exitCode : null,
-      timedOut: details.timedOut === true,
+      ...stableOutcome,
       output: nonEmptyStringField(details.aggregated) ?? text,
     });
   }
@@ -183,11 +193,7 @@ function hashExecToolOutcome(details: Record<string, unknown>, text: string): st
   // Failed exec diagnostics vary between attempts without proving progress; hash only stable
   // execution facts so repeated failures can reach the loop guards.
   if (status === "failed") {
-    return digestStable({
-      status,
-      exitCode: typeof details.exitCode === "number" ? details.exitCode : null,
-      timedOut: details.timedOut === true,
-    });
+    return digestStable(stableOutcome);
   }
 
   if (status === "approval-pending" || status === "approval-unavailable") {
