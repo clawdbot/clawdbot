@@ -1604,7 +1604,7 @@ function isBundledPluginDistModulePath(modulePath: string): boolean {
   return modulePath.replace(/\\/g, "/").includes("/dist/extensions/");
 }
 
-export function shouldPreferNativeModuleLoad(modulePath: string): boolean {
+function shouldPreferNativeModuleLoad(modulePath: string): boolean {
   if (!supportsNativeModuleRuntime()) {
     return false;
   }

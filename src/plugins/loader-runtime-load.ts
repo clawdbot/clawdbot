@@ -30,8 +30,33 @@ import { createPluginIdScopeSet, normalizePluginIdScope } from "./plugin-scope.j
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { createPluginRegistry, type PluginRegistry } from "./registry.js";
 import { getActivePluginRegistry } from "./runtime.js";
+import type { PluginRuntime } from "./runtime/types.js";
+
+type PluginModuleLoaderOverrides = Pick<
+  Parameters<typeof createPluginModuleLoader>[0],
+  "aliasOverrides" | "tryNative" | "loaderFilename" | "installNativeSdkResolver"
+>;
+type InternalPluginLoadOverrides = {
+  moduleLoader: PluginModuleLoaderOverrides;
+  runtime: Pick<PluginRuntime, "config">;
+};
 
 export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegistry {
+  return loadOpenClawPluginsInternal(options);
+}
+
+/** Internal entry for host-owned snapshots that need a narrow registration runtime. */
+export function loadOpenClawPluginsWithInternalOverrides(
+  options: PluginLoadOptions & { cache: false },
+  overrides: InternalPluginLoadOverrides,
+): PluginRegistry {
+  return loadOpenClawPluginsInternal(options, overrides);
+}
+
+function loadOpenClawPluginsInternal(
+  options: PluginLoadOptions,
+  overrides?: InternalPluginLoadOverrides,
+): PluginRegistry {
   const requestedOnlyPluginIds = normalizePluginIdScope(options.onlyPluginIds);
   const requestedOnlyPluginIdSet = createPluginIdScopeSet(requestedOnlyPluginIds);
   if (requestedOnlyPluginIdSet && requestedOnlyPluginIdSet.size === 0) {
@@ -80,13 +105,17 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     const loadPluginModule = createPluginModuleLoader({
       devSourceRoot: context.devSourceRoot,
       pluginSdkResolution: options.pluginSdkResolution,
+      ...overrides?.moduleLoader,
     });
-    const runtime = createLazyPluginRuntime({
-      devSourceRoot: context.devSourceRoot,
-      pluginSdkResolution: options.pluginSdkResolution,
-      runtimeOptions: options.runtimeOptions,
-      loadPluginModule,
-    });
+    const runtime = overrides?.runtime
+      ? // The registry wraps this discovery-only base with scoped lazy capabilities.
+        (overrides.runtime as unknown as PluginRuntime)
+      : createLazyPluginRuntime({
+          devSourceRoot: context.devSourceRoot,
+          pluginSdkResolution: options.pluginSdkResolution,
+          runtimeOptions: options.runtimeOptions,
+          loadPluginModule,
+        });
     registryBuilder = createPluginRegistry({
       logger,
       runtime,

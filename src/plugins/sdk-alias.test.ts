@@ -17,7 +17,6 @@ import {
   resolvePluginLoaderModuleConfig,
   resolvePluginLoaderTryNative,
   resolvePluginRuntimeModulePathWithDiagnostics,
-  shouldPreferNativeModuleLoad,
   type PluginSdkResolutionPreference,
 } from "./sdk-alias.js";
 import {
@@ -1788,9 +1787,9 @@ describe("plugin sdk alias helpers", () => {
   });
 
   it("uses transpiled module loads for source TypeScript plugin entries", () => {
-    expect(shouldPreferNativeModuleLoad("/repo/dist/plugins/runtime/index.js")).toBe(true);
+    expect(resolvePluginLoaderTryNative("/repo/dist/plugins/runtime/index.js")).toBe(true);
     expect(
-      shouldPreferNativeModuleLoad(
+      resolvePluginLoaderTryNative(
         `/repo/${bundledPluginFile("discord", "src/channel.runtime.ts")}`,
       ),
     ).toBe(false);
@@ -1807,9 +1806,9 @@ describe("plugin sdk alias helpers", () => {
     });
 
     try {
-      expect(shouldPreferNativeModuleLoad("/repo/dist/plugins/runtime/index.js")).toBe(false);
+      expect(resolvePluginLoaderTryNative("/repo/dist/plugins/runtime/index.js")).toBe(false);
       expect(
-        shouldPreferNativeModuleLoad(`/repo/${bundledDistPluginFile("browser", "index.js")}`),
+        resolvePluginLoaderTryNative(`/repo/${bundledDistPluginFile("browser", "index.js")}`),
       ).toBe(false);
     } finally {
       Object.defineProperty(process, "versions", {
@@ -1827,9 +1826,9 @@ describe("plugin sdk alias helpers", () => {
     });
 
     try {
-      expect(shouldPreferNativeModuleLoad("/repo/dist/plugins/runtime/index.js")).toBe(true);
+      expect(resolvePluginLoaderTryNative("/repo/dist/plugins/runtime/index.js")).toBe(true);
       expect(
-        shouldPreferNativeModuleLoad(`/repo/${bundledDistPluginFile("browser", "index.js")}`),
+        resolvePluginLoaderTryNative(`/repo/${bundledDistPluginFile("browser", "index.js")}`),
       ).toBe(true);
     } finally {
       Object.defineProperty(process, "platform", {
@@ -1867,8 +1866,7 @@ describe("plugin sdk alias helpers", () => {
 
   it("prefers native module loading for bundled plugin dist .js modules, keeps .ts on aliased path", () => {
     // Built .js/.mjs/.cjs files under dist/extensions/ should now delegate
-    // to shouldPreferNativeModuleLoad() — which returns true on Node for
-    // compiled artifacts, avoiding the slow jiti transform path.
+    // to native loading on Node for compiled artifacts, avoiding the slow jiti transform path.
     expect(
       resolvePluginLoaderTryNative(`/repo/${bundledDistPluginFile("browser", "index.js")}`, {
         preferBuiltDist: true,
