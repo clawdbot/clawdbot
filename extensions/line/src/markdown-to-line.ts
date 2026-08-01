@@ -209,6 +209,31 @@ function formatOversizedTableAsBullets(table: MarkdownTableMeta): string {
   return projectPlainText(parseLineMarkdown(markdown, "bullets").ir);
 }
 
+const GENERIC_TABLE_MAX_ROWS = 10;
+const RECEIPT_CARD_MAX_ROWS = 12;
+
+function tableHasInlineMarkup(table: MarkdownTable): boolean {
+  const headerCells = (table.headerCells ?? table.headers.map(plainTableCell)).map((cell) =>
+    renderTableCell(cell, "-"),
+  );
+  const rowCells = (table.rowCells ?? table.rows.map((row) => row.map(plainTableCell))).map((row) =>
+    row.map((cell) => renderTableCell(cell, "-")),
+  );
+  return (
+    headerCells.some((cell) => cell.hasMarkup) ||
+    rowCells.some((row) => row.some((cell) => cell.hasMarkup))
+  );
+}
+
+function tableRowCap(table: MarkdownTableMeta): number {
+  if (table.headers.length !== 2) {
+    return GENERIC_TABLE_MAX_ROWS;
+  }
+  return tableHasInlineMarkup(toMarkdownTable(table))
+    ? GENERIC_TABLE_MAX_ROWS
+    : RECEIPT_CARD_MAX_ROWS;
+}
+
 type RenderedCell = {
   text: string;
   contents?: FlexSpan[];
@@ -325,11 +350,8 @@ export function convertTableToFlexBubble(table: MarkdownTable): FlexBubble {
   const rowCells = (table.rowCells ?? table.rows.map((row) => row.map(plainTableCell))).map((row) =>
     row.map((cell) => renderTableCell(cell, "-")),
   );
-  const hasInlineMarkup =
-    headerCells.some((cell) => cell.hasMarkup) ||
-    rowCells.some((row) => row.some((cell) => cell.hasMarkup));
 
-  if (table.headers.length === 2 && !hasInlineMarkup) {
+  if (table.headers.length === 2 && !tableHasInlineMarkup(table)) {
     return createReceiptCard({
       title: headerCells.map((cell) => cell.text).join(" / "),
       items: rowCells.map((row) => ({
@@ -435,6 +457,14 @@ export function processLineMessage(text: string): ProcessedLineMessage {
   let hasOversizedTable = false;
 
   for (const table of tables) {
+    if (table.rowCells.length > tableRowCap(table)) {
+      hasOversizedTable = true;
+      plainTextInsertions.push({
+        position: table.placeholderOffset,
+        text: `\n\n${formatOversizedTableAsBullets(table)}\n\n`,
+      });
+      continue;
+    }
     const bubble = convertTableToFlexBubble(toMarkdownTable(table));
     // LINE rejects the whole push/reply when any bubble exceeds its 30 KB UTF-8 JSON limit.
     if (Buffer.byteLength(JSON.stringify(bubble), "utf8") > LINE_FLEX_BUBBLE_MAX_BYTES) {
