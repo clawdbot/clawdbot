@@ -17,6 +17,7 @@ import {
 } from "../talk/provider-types.js";
 import { createRealtimeVoiceSessionHarness } from "../talk/realtime-session-harness.js";
 import type { TalkEventInput } from "../talk/talk-session-controller.js";
+import { VOICE_TRANSCRIPT_QUEUE_POLICY } from "../talk/voice-transcript.js";
 import { registerChatAbortController } from "./chat-abort.js";
 import {
   buildAlreadyDeliveredToolResult,
@@ -105,6 +106,7 @@ export function createTalkRealtimeRelaySession(
   let currentOutputResponseId: string | undefined;
   let ready = false;
   let failureEmitted = false;
+  let transcriptPersistenceFailed = false;
   const constructionTerminal: {
     current?: { kind: "error"; error: Error } | { kind: "close"; reason: RealtimeVoiceCloseReason };
   } = {};
@@ -292,10 +294,10 @@ export function createTalkRealtimeRelaySession(
       if (!relay) {
         return;
       }
-      const turnId = ensureRelayTurn(relay);
-      if (final) {
-        enqueueRelayVoiceTranscript(relay, role, text);
+      if (final && !enqueueRelayVoiceTranscript(relay, role, text)) {
+        return;
       }
+      const turnId = ensureRelayTurn(relay);
       const eventType =
         role === "assistant"
           ? final
@@ -453,7 +455,7 @@ export function createTalkRealtimeRelaySession(
       forgetUnifiedTalkSession(relaySessionId);
       clearTimeout(active.cleanupTimer);
       abortRelayAgentRuns(active, "relay-closed");
-      closeRelayVoiceSession(active);
+      void closeRelayVoiceSession(active);
       if (!ready && !failureEmitted) {
         const issue = realtimeRelayIssue({
           message: "Realtime provider closed before the session became ready.",
@@ -489,6 +491,25 @@ export function createTalkRealtimeRelaySession(
     throw new Error(`Realtime provider closed during session creation: ${earlyTerminal.reason}`);
   }
   const initialSessionKey = params.sessionKey?.trim() || undefined;
+  const failVoiceTranscriptPersistence = (message: string) => {
+    const active = relaySessions.get(relaySessionId);
+    if (!active || transcriptPersistenceFailed) {
+      return;
+    }
+    transcriptPersistenceFailed = true;
+    if (!failureEmitted) {
+      failureEmitted = true;
+      emit(
+        { relaySessionId, type: "error", message },
+        {
+          type: "session.error",
+          payload: { message },
+          final: true,
+        },
+      );
+    }
+    closeRelaySession(active, "error");
+  };
   const relay: RelaySession = {
     id: relaySessionId,
     connId: params.connId,
@@ -525,7 +546,8 @@ export function createTalkRealtimeRelaySession(
     ...(params.cfg ? { voiceConfig: params.cfg } : {}),
     voiceSessionCreated: false,
     voiceTranscriptSeq: 0,
-    voiceTranscriptWrites: Promise.resolve(),
+    voiceTranscriptQueue: VOICE_TRANSCRIPT_QUEUE_POLICY.createQueue(),
+    failVoiceTranscriptPersistence,
     pendingVoiceTranscripts: [],
   };
   relayRef.current = relay;
