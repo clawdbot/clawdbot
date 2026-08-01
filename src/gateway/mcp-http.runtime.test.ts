@@ -198,16 +198,16 @@ describe("McpLoopbackToolCache", () => {
     expect(resolveGatewayScopedTools.mock.calls[1]?.[0]).toMatchObject({ sourceReplyOnly: true });
   });
 
-  it("does not share cache rows across ordinary and sessions_send target turns", () => {
+  it("does not share cache rows across sessions_send requester restrictions", () => {
     const cache = new McpLoopbackToolCache();
     const cfg = {} as OpenClawConfig;
 
-    cache.resolve(scopeParams({ cfg }));
-    cache.resolve(scopeParams({ cfg, interAgentSendTurn: true }));
+    cache.resolve(scopeParams({ cfg, sessionsSendCallerSessionKey: "agent:requester-a:main" }));
+    cache.resolve(scopeParams({ cfg, sessionsSendCallerSessionKey: "agent:requester-b:main" }));
 
     expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(2);
     expect(resolveGatewayScopedTools).toHaveBeenLastCalledWith(
-      expect.objectContaining({ interAgentSendTurn: true }),
+      expect.objectContaining({ sessionsSendCallerSessionKey: "agent:requester-b:main" }),
     );
   });
 });

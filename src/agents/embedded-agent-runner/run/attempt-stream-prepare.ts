@@ -93,6 +93,7 @@ export function prepareEmbeddedAttemptStream(input: {
   let beforeAgentFinalizeRevisionEntryId: string | undefined;
   let acceptingSteerMessages = true;
   let activeQueueAdmissions = 0;
+  const blockedSessionsSendTargetSessionKeys = new Set<string>();
   const shouldRunBeforeAgentFinalize =
     attempt.operation !== "settled-tool-finalization" &&
     hookRunner?.hasHooks("before_agent_finalize");
@@ -392,6 +393,12 @@ export function prepareEmbeddedAttemptStream(input: {
       }
       activeQueueAdmissions++;
       try {
+        const sessionsSendCallerSessionKey = normalizeOptionalString(
+          options?.sessionsSendCallerSessionKey,
+        );
+        if (sessionsSendCallerSessionKey) {
+          blockedSessionsSendTargetSessionKeys.add(sessionsSendCallerSessionKey);
+        }
         if (options?.steeringMode) {
           input.activeSession.agent.steeringMode = options.steeringMode;
         }
@@ -416,6 +423,7 @@ export function prepareEmbeddedAttemptStream(input: {
     supportsQueueMessageImages: true,
     sourceReplyDeliveryMode: attempt.sourceReplyDeliveryMode,
     taskSuggestionDeliveryMode: attempt.taskSuggestionDeliveryMode,
+    blockedSessionsSendTargetSessionKeys,
     cancel: abortActiveRunExternally,
     abort: (reason) => abortActiveRunExternally(reason),
   };

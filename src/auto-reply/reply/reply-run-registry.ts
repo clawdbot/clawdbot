@@ -37,6 +37,8 @@ type ReplyBackendCancelReason = "user_abort" | "restart" | "superseded";
 
 export type ReplyBackendQueueMessageOptions = {
   steeringMode?: "all";
+  /** Trusted A2A source whose reverse sessions_send target must stay blocked. */
+  sessionsSendCallerSessionKey?: string;
   /** True when this queue item came from the channel's current user turn. */
   isInboundUserMessage?: boolean;
   debounceMs?: number;

@@ -70,16 +70,16 @@ describe("resolveGatewayScopedTools", () => {
     expect(result.tools.some((tool) => tool.name === "message")).toBe(false);
   });
 
-  it("omits sessions_send from CLI loopback scopes for sessions_send target turns", () => {
+  it("keeps sessions_send in CLI loopback scopes for destination-aware handoffs", () => {
     const result = resolveGatewayScopedTools({
       cfg: {} as OpenClawConfig,
       sessionKey: "agent:worker:discord:group:dev",
       surface: "loopback",
-      interAgentSendTurn: true,
+      sessionsSendCallerSessionKey: "agent:requester:main",
     });
 
     const toolNames = result.tools.map((tool) => tool.name);
-    expect(toolNames).not.toContain("sessions_send");
+    expect(toolNames).toContain("sessions_send");
     expect(toolNames).toContain("sessions_list");
     expect(toolNames).toContain("sessions_history");
   });

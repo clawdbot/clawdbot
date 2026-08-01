@@ -1,5 +1,4 @@
-// Verifies createOpenClawTools drops sessions_send on a sessions_send A2A turn so
-// the target cannot reverse-call the requester and duplicate content (issue #39476).
+// Verifies destination-aware sessions_send guards keep nested handoffs available.
 import { beforeEach, describe, expect, it } from "vitest";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
@@ -26,11 +25,12 @@ describe("createOpenClawTools sessions_send A2A gate", () => {
     expect(toolNames(BASE_OPTIONS)).toContain("sessions_send");
   });
 
-  it("omits sessions_send when the turn is itself a sessions_send A2A turn", () => {
-    const names = toolNames({ ...BASE_OPTIONS, interAgentSendTurn: true });
-    expect(names).not.toContain("sessions_send");
-    // Only the reverse-call vector is removed; other session/conversation tools
-    // remain available during the routed turn.
+  it("keeps sessions_send available on an A2A target turn", () => {
+    const names = toolNames({
+      ...BASE_OPTIONS,
+      sessionsSendCallerSessionKey: "agent:requester:discord:channel:source-room",
+    });
+    expect(names).toContain("sessions_send");
     expect(names).toContain("sessions_list");
     expect(names).toContain("sessions_history");
     expect(names).toContain("sessions_search");

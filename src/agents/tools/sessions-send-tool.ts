@@ -45,6 +45,7 @@ import {
   type EmbeddedAgentQueueMessageOptions,
   type EmbeddedAgentQueueMessageOutcome,
   formatEmbeddedAgentQueueFailureSummary,
+  isSessionsSendTargetBlockedForActiveRun,
   queueEmbeddedAgentMessageWithOutcomeAsync,
   resolveActiveEmbeddedRunSessionId,
 } from "../embedded-agent-runner/runs.js";
@@ -339,6 +340,7 @@ async function startAgentRun(params: {
   sessionKey: string;
   deliveryTimeoutMs?: number;
   allowActiveRunQueueDelivery?: boolean;
+  sessionsSendCallerSessionKey?: string;
 }): Promise<
   | {
       ok: true;
@@ -367,6 +369,9 @@ async function startAgentRun(params: {
         debounceMs: 0,
         deliveryTimeoutMs: params.deliveryTimeoutMs,
         waitForTranscriptCommit: true,
+        ...(params.sessionsSendCallerSessionKey
+          ? { sessionsSendCallerSessionKey: params.sessionsSendCallerSessionKey }
+          : {}),
         ...(sourceReplyDeliveryMode ? { sourceReplyDeliveryMode } : {}),
       };
       let queueOutcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
@@ -435,10 +440,12 @@ async function startAgentRun(params: {
 
 export function createSessionsSendTool(opts?: {
   agentSessionKey?: string;
+  agentSessionId?: string;
   agentChannel?: GatewayMessageChannel;
   sandboxed?: boolean;
   config?: OpenClawConfig;
   callGateway?: GatewayCaller;
+  sessionsSendCallerSessionKey?: string;
 }): AnyAgentTool {
   return {
     label: "Session Send",
@@ -603,6 +610,24 @@ export function createSessionsSendTool(opts?: {
       // Normalize sessionKey/sessionId input into a canonical session key.
       const resolvedKey = visibleSession.key;
       const displayKey = visibleSession.displayKey;
+      const sessionsSendCallerSessionKey = normalizeOptionalString(
+        opts?.sessionsSendCallerSessionKey,
+      );
+      if (
+        resolvedKey === sessionsSendCallerSessionKey ||
+        isSessionsSendTargetBlockedForActiveRun({
+          sessionId: opts?.agentSessionId,
+          targetSessionKey: resolvedKey,
+        })
+      ) {
+        return jsonResult({
+          runId: crypto.randomUUID(),
+          status: "forbidden",
+          error:
+            "sessions_send cannot send back to the requester of the current A2A handoff; return the result in this turn instead",
+          sessionKey: unresolvedDisplayKey,
+        });
+      }
       const rawRequesterSessionKey = opts?.agentSessionKey ? effectiveRequesterKey : undefined;
       const parsedRequesterSessionKey = parseAgentSessionKey(rawRequesterSessionKey);
       const requesterRouteBindings = cfg.bindings?.filter(
@@ -929,6 +954,7 @@ export function createSessionsSendTool(opts?: {
               sessionKey: displayKey,
               deliveryTimeoutMs: announceTimeoutMs,
               allowActiveRunQueueDelivery: true,
+              sessionsSendCallerSessionKey: replyRequesterSessionKey,
             });
             if (!start.ok) {
               return start.result;

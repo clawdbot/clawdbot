@@ -78,7 +78,7 @@ export function resolveGatewayScopedTools(params: {
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   sourceReplyOnly?: boolean;
   taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
-  interAgentSendTurn?: boolean;
+  sessionsSendCallerSessionKey?: string;
   requireExplicitMessageTarget?: boolean;
   agentTo?: string;
   agentThreadId?: string;
@@ -257,7 +257,7 @@ export function resolveGatewayScopedTools(params: {
     sourceReplyDeliveryMode,
     sourceReplyOnly: params.sourceReplyOnly,
     taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
-    interAgentSendTurn: params.interAgentSendTurn,
+    sessionsSendCallerSessionKey: params.sessionsSendCallerSessionKey,
     agentTo: params.agentTo,
     agentThreadId: params.agentThreadId,
     currentChannelId: params.currentChannelId ?? params.agentTo,
@@ -354,7 +354,7 @@ export function resolveGatewayScopedTools(params: {
           approvalReviewerDeviceId: params.approvalReviewerDeviceId,
           sourceReplyDeliveryMode,
           taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
-          interAgentSendTurn: params.interAgentSendTurn,
+          sessionsSendCallerSessionKey: params.sessionsSendCallerSessionKey,
           inboundEventKind: params.inboundEventKind,
           requireExplicitMessageTarget: params.requireExplicitMessageTarget,
           runtimeToolAllowlist: [...mediatedToolNames],

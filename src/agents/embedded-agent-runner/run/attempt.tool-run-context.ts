@@ -7,7 +7,7 @@ import {
 } from "../../../infra/diagnostic-trace-context.js";
 import {
   type InputProvenance,
-  isAgentToAgentSendInputProvenance,
+  resolveAgentToAgentSendSourceSessionKey,
 } from "../../../sessions/input-provenance.js";
 import type { EmbeddedRunTrigger } from "./params.js";
 
@@ -26,20 +26,20 @@ export function buildEmbeddedAttemptToolRunContext(params: {
   jobId?: string;
   memoryFlushWritePath?: string;
   runtimeToolAllowlist?: string[];
-  interAgentSendTurn?: boolean;
+  sessionsSendCallerSessionKey?: string;
   trace?: DiagnosticTraceContext;
 } {
+  const sessionsSendCallerSessionKey = resolveAgentToAgentSendSourceSessionKey(
+    params.inputProvenance,
+  );
   return {
     trigger: params.trigger,
     jobId: params.jobId,
     memoryFlushWritePath: params.memoryFlushWritePath,
     ...(params.toolsAllow ? { runtimeToolAllowlist: params.toolsAllow } : {}),
-    // A sessions_send A2A turn already returns its reply through the tool result.
-    // Flag it so tool construction drops sessions_send and the target cannot
-    // reverse-call the requester (issue #39476).
-    ...(isAgentToAgentSendInputProvenance(params.inputProvenance)
-      ? { interAgentSendTurn: true }
-      : {}),
+    // Keep sessions_send available for nested handoffs, but bind the exact
+    // requester destination that this A2A target turn must not call back.
+    ...(sessionsSendCallerSessionKey ? { sessionsSendCallerSessionKey } : {}),
     // Freeze trace metadata at the attempt boundary so later mutable diagnostic updates do not
     // rewrite the facts attached to tool calls already in flight.
     ...(params.trace ? { trace: freezeDiagnosticTraceContext(params.trace) } : {}),

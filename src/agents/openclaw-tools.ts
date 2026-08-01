@@ -177,7 +177,8 @@ export function createOpenClawTools(
     /** Action sink available for model-proposed follow-up tasks. */
     taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
     inboundEventKind?: InboundEventKind;
-    interAgentSendTurn?: boolean;
+    /** Requester session that a sessions_send target turn may not call back. */
+    sessionsSendCallerSessionKey?: string;
     /** If true, omit the message tool from the tool list. */
     disableMessageTool?: boolean;
     swarmCollector?: boolean;
@@ -649,9 +650,11 @@ export function createOpenClawTools(
           // is the gate in ensureConfiguredAgentMainSession).
           createSessionsSendTool({
             agentSessionKey: options?.agentSessionKey,
+            agentSessionId: options?.sessionId,
             agentChannel: options?.agentChannel,
             sandboxed: options?.sandboxed,
             config: resolvedConfig,
+            sessionsSendCallerSessionKey: options?.sessionsSendCallerSessionKey,
           }),
         ]),
     ...(includeSubagentSpawnTool
@@ -734,7 +737,6 @@ export function createOpenClawTools(
     options?.recordToolPrepStage?.("openclaw-tools:plugin-tools");
   }
 
-  allTools = allTools.filter((t) => !options?.interAgentSendTurn || t.name !== "sessions_send");
   allTools = filterToolsByClientCaps(allTools, options?.clientCaps);
   options?.recordToolPrepStage?.("openclaw-tools:client-capabilities");
 

@@ -793,6 +793,69 @@ describe("sessions_send gating", () => {
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
+  it("blocks only the requester destination during a sessions_send A2A turn", async () => {
+    const requesterKey = "agent:requester:main";
+    const thirdPartyKey = "agent:third-party:main";
+    loadConfigMock.mockReturnValue({
+      agents: {
+        list: [{ id: "target", default: true }, { id: "requester" }, { id: "third-party" }],
+      },
+      session: { scope: "per-sender", mainKey: "main" },
+      tools: {
+        agentToAgent: { enabled: true },
+        sessions: { visibility: "all" },
+      },
+    });
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "sessions.list") {
+        return {
+          path: "/tmp/sessions.json",
+          sessions: [
+            { key: requesterKey, kind: "direct" },
+            { key: thirdPartyKey, kind: "direct" },
+          ],
+        };
+      }
+      if (request.method === "agent") {
+        return { runId: "run-third-party", acceptedAt: 123 };
+      }
+      return {};
+    });
+    const tool = createSessionsSendTool({
+      agentSessionKey: "agent:target:main",
+      agentChannel: "telegram",
+      sessionsSendCallerSessionKey: requesterKey,
+    });
+
+    const reverseResult = await tool.execute("call-reverse", {
+      sessionKey: requesterKey,
+      message: "duplicate result",
+      timeoutSeconds: 0,
+    });
+    expect(requireDetails(reverseResult)).toMatchObject({
+      status: "forbidden",
+      sessionKey: requesterKey,
+    });
+    expect(requireDetails(reverseResult).error).toContain("cannot send back to the requester");
+
+    const nestedResult = await tool.execute("call-nested", {
+      sessionKey: thirdPartyKey,
+      message: "legitimate nested handoff",
+      timeoutSeconds: 0,
+    });
+    expect(requireDetails(nestedResult)).toMatchObject({
+      status: "accepted",
+      sessionKey: thirdPartyKey,
+    });
+    expect(callGatewayMock.mock.calls).toContainEqual([
+      expect.objectContaining({
+        method: "agent",
+        params: expect.objectContaining({ sessionKey: thirdPartyKey }),
+      }),
+    ]);
+  });
+
   it.each([1.5, -1, "1sec"])("rejects invalid timeoutSeconds value %s", async (timeoutSeconds) => {
     const tool = createMainSessionsSendTool();
 

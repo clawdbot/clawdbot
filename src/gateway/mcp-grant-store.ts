@@ -32,8 +32,8 @@ export type McpLoopbackRequestContext = {
   /** Immutable completion-only authority; never sourced from MCP request headers. */
   sourceReplyOnly?: boolean;
   taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
-  /** Omit sessions_send while the CLI processes a sessions_send target turn. */
-  interAgentSendTurn?: boolean;
+  /** Requester session that a sessions_send target turn may not call back. */
+  sessionsSendCallerSessionKey?: string;
   requireExplicitMessageTarget?: boolean;
   /**
    * Per-run allowlist of gateway tool names for this grant. When set, the

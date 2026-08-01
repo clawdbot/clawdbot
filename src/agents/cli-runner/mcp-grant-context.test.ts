@@ -69,7 +69,7 @@ describe("buildCliMcpGrantContext source-reply authority", () => {
 });
 
 describe("buildCliMcpGrantContext sessions_send A2A guard", () => {
-  it("marks sessions_send target turns for loopback tool filtering", () => {
+  it("binds sessions_send target turns to their exact requester", () => {
     expect(
       buildGrant({
         inputProvenance: {
@@ -77,8 +77,8 @@ describe("buildCliMcpGrantContext sessions_send A2A guard", () => {
           sourceSessionKey: "agent:main:main",
           sourceTool: "sessions_send",
         },
-      }).interAgentSendTurn,
-    ).toBe(true);
+      }).sessionsSendCallerSessionKey,
+    ).toBe("agent:main:main");
   });
 
   it("does not mark requester delivery-failure recovery turns", () => {
@@ -89,7 +89,7 @@ describe("buildCliMcpGrantContext sessions_send A2A guard", () => {
           sourceSessionKey: "agent:worker:main",
           sourceTool: "sessions_send_delivery_failure",
         },
-      }).interAgentSendTurn,
+      }).sessionsSendCallerSessionKey,
     ).toBeUndefined();
   });
 });

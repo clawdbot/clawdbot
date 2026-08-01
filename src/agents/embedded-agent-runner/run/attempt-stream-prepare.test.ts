@@ -214,7 +214,9 @@ describe("prepareEmbeddedAttemptStream", () => {
       builtinToolNames: new Set(),
       replaySafeToolNames: new Set(),
     });
-    const queued = prepared.queueHandle.queueMessage("new user input");
+    const queued = prepared.queueHandle.queueMessage("new user input", {
+      sessionsSendCallerSessionKey: "agent:requester:main",
+    });
     const subscriptionInput = mocks.buildSubscriptionParams.mock.calls.at(-1)?.[0] as {
       onBeforeTerminalDelivery?: (event: unknown) => Promise<unknown>;
     };
@@ -239,6 +241,9 @@ describe("prepareEmbeddedAttemptStream", () => {
 
     expect(mocks.runBeforeFinalizeHook).not.toHaveBeenCalled();
     expect(prepared.queueHandle.isStopped?.()).toBe(false);
+    expect(prepared.queueHandle.blockedSessionsSendTargetSessionKeys).toContain(
+      "agent:requester:main",
+    );
     resolveSteer?.();
     await queued;
   });

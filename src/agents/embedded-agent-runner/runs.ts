@@ -129,6 +129,22 @@ export function formatEmbeddedAgentQueueFailureSummary(
   const errorPart = outcome.errorMessage ? ` error=${outcome.errorMessage}` : "";
   return `queue_message_failed reason=${outcome.reason} sessionId=${outcome.sessionId} gatewayHealth=${outcome.gatewayHealth}${errorPart}`;
 }
+
+export function isSessionsSendTargetBlockedForActiveRun(params: {
+  sessionId?: string;
+  targetSessionKey: string;
+}): boolean {
+  const sessionId = params.sessionId?.trim();
+  const targetSessionKey = params.targetSessionKey.trim();
+  if (!sessionId || !targetSessionKey) {
+    return false;
+  }
+  return (
+    ACTIVE_EMBEDDED_RUNS.get(sessionId)?.blockedSessionsSendTargetSessionKeys?.has(
+      targetSessionKey,
+    ) === true
+  );
+}
 function setActiveRunSessionKey(sessionKey: string | undefined, sessionId: string): void {
   const normalizedSessionKey = sessionKey?.trim();
   if (!normalizedSessionKey) {

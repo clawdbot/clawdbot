@@ -4,6 +4,8 @@ import {
   annotateInterSessionPromptText,
   isAgentMediatedCompletionSourceTool,
   isAgentToAgentSendInputProvenance,
+  isSessionsSendHandoffInputProvenance,
+  resolveAgentToAgentSendSourceSessionKey,
   shouldPreserveUserFacingSessionStateForInputProvenance,
   stripInterSessionPromptPrefixForDisplay,
 } from "./input-provenance.js";
@@ -124,6 +126,27 @@ describe("isAgentToAgentSendInputProvenance", () => {
     ).toBe(false);
     expect(isAgentToAgentSendInputProvenance(undefined)).toBe(false);
   });
+});
+
+describe("sessions_send provenance routing", () => {
+  it("returns the exact requester session for destination-aware blocking", () => {
+    expect(
+      resolveAgentToAgentSendSourceSessionKey({
+        kind: "inter_session",
+        sourceSessionKey: " agent:requester:main ",
+        sourceTool: "SESSIONS_SEND",
+      }),
+    ).toBe("agent:requester:main");
+  });
+
+  it.each(["sessions_send", "sessions_send_delivery_failure"])(
+    "classifies %s as a sessions_send route-inheriting handoff",
+    (sourceTool) => {
+      expect(isSessionsSendHandoffInputProvenance({ kind: "inter_session", sourceTool })).toBe(
+        true,
+      );
+    },
+  );
 });
 
 describe("shouldPreserveUserFacingSessionStateForInputProvenance", () => {

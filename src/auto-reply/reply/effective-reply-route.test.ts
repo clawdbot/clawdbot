@@ -75,40 +75,43 @@ describe("resolveEffectiveReplyRoute", () => {
     });
   });
 
-  it("uses established external route for sessions_send internal webchat handoffs", () => {
-    expect(
-      resolveEffectiveReplyRoute({
-        ctx: ctx({
-          Provider: "webchat",
-          Surface: "webchat",
-          OriginatingChannel: "webchat",
-          OriginatingTo: "session:dashboard",
-          AccountId: "webchat-account",
-          InputProvenance: {
-            kind: "inter_session",
-            sourceTool: "sessions_send",
-            sourceChannel: "webchat",
-          },
+  it.each(["sessions_send", "sessions_send_delivery_failure"])(
+    "uses established external route for %s internal webchat handoffs",
+    (sourceTool) => {
+      expect(
+        resolveEffectiveReplyRoute({
+          ctx: ctx({
+            Provider: "webchat",
+            Surface: "webchat",
+            OriginatingChannel: "webchat",
+            OriginatingTo: "session:dashboard",
+            AccountId: "webchat-account",
+            InputProvenance: {
+              kind: "inter_session",
+              sourceTool,
+              sourceChannel: "webchat",
+            },
+          }),
+          entry: entry({
+            deliveryContext: {
+              channel: "feishu",
+              to: "user:ou_123",
+              accountId: "work",
+              threadId: "thread:om_123",
+            },
+            lastChannel: "webchat",
+            lastTo: "session:dashboard",
+            lastAccountId: "webchat-account",
+          }),
         }),
-        entry: entry({
-          deliveryContext: {
-            channel: "feishu",
-            to: "user:ou_123",
-            accountId: "work",
-            threadId: "thread:om_123",
-          },
-          lastChannel: "webchat",
-          lastTo: "session:dashboard",
-          lastAccountId: "webchat-account",
-        }),
-      }),
-    ).toEqual({
-      channel: "feishu",
-      to: "user:ou_123",
-      accountId: "work",
-      inheritedExternalRoute: true,
-    });
-  });
+      ).toEqual({
+        channel: "feishu",
+        to: "user:ou_123",
+        accountId: "work",
+        inheritedExternalRoute: true,
+      });
+    },
+  );
 
   it("keeps trusted inherited thread ids from explicit route metadata", () => {
     expect(

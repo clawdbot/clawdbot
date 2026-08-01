@@ -1638,9 +1638,62 @@ describe("sessions tools", () => {
       debounceMs: 0,
       deliveryTimeoutMs: 30_000,
       waitForTranscriptCommit: true,
+      sessionsSendCallerSessionKey: requesterKey,
       sourceReplyDeliveryMode: "message_tool_only",
     });
     expect(calls.some((call) => call.method === "agent")).toBe(false);
+  });
+
+  it("blocks reverse sessions_send after an A2A handoff is steered into an active run", async () => {
+    const targetKey = "agent:worker:cron:active:run:target-run";
+    const requesterKey = "agent:requester:main";
+    setActiveEmbeddedRun(
+      "target-active-session",
+      {
+        queueMessage: async () => {},
+        isStreaming: () => true,
+        isCompacting: () => false,
+        blockedSessionsSendTargetSessionKeys: new Set([requesterKey]),
+        abort: () => {},
+      },
+      targetKey,
+    );
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "sessions.list") {
+        return {
+          path: "/tmp/sessions.json",
+          sessions: [{ key: requesterKey, kind: "direct" }],
+        };
+      }
+      if (request.method === "agent") {
+        throw new Error("reverse dispatch must stay blocked");
+      }
+      return {};
+    });
+    const tool = createSessionsSendTool({
+      agentSessionKey: targetKey,
+      agentSessionId: "target-active-session",
+      agentChannel: "telegram",
+      config: TEST_CONFIG,
+      callGateway: (opts) => callGatewayMock(opts),
+    });
+
+    const result = await tool.execute("call-reverse-after-steer", {
+      sessionKey: requesterKey,
+      message: "duplicate result",
+      timeoutSeconds: 0,
+    });
+
+    expect(sessionsSendDetails(result.details)).toMatchObject({
+      status: "forbidden",
+      sessionKey: requesterKey,
+    });
+    expect(
+      callGatewayMock.mock.calls.filter(
+        ([request]) => (request as { method?: string }).method === "agent",
+      ),
+    ).toHaveLength(0);
   });
 
   it("sessions_send reports source reply delivery mode mismatch without durable-session fallback", async () => {

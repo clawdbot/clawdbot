@@ -41,6 +41,8 @@ export type EmbeddedAgentQueueHandle = {
   abort: (reason?: "restart") => void;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
+  /** A2A sources steered into this run that sessions_send may not call back. */
+  blockedSessionsSendTargetSessionKeys?: ReadonlySet<string>;
 };
 
 export type EmbeddedAgentQueueMessageOptions = ReplyBackendQueueMessageOptions;
