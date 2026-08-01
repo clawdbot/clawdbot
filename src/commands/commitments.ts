@@ -1,7 +1,7 @@
 // Implements commitment listing and dismissal commands for scheduled follow-up records.
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
@@ -41,7 +41,7 @@ function parseStatus(raw: string | undefined, runtime: RuntimeEnv): CommitmentSt
     return status as CommitmentStatus;
   }
   runtime.error(
-    `Unknown commitment status: ${status}. Use one of: ${Array.from(STATUS_VALUES).join(", ")}.`,
+    `Unknown commitment status: ${safe(status)}. Use one of: ${Array.from(STATUS_VALUES).join(", ")}.`,
   );
   runtime.exit(1);
   return undefined;
@@ -120,12 +120,12 @@ export async function commitmentsListCommand(
   }
 
   runtime.log(info(`Commitments: ${commitments.length}`));
-  runtime.log(info(`Store: ${resolveCommitmentDatabasePath()}`));
+  runtime.log(info(`Store: ${safe(resolveCommitmentDatabasePath())}`));
   if (status) {
     runtime.log(info(`Status filter: ${status}`));
   }
   if (opts.agent) {
-    runtime.log(info(`Agent filter: ${opts.agent}`));
+    runtime.log(info(`Agent filter: ${safe(opts.agent)}`));
   }
   if (commitments.length === 0) {
     runtime.log(
@@ -143,7 +143,7 @@ export async function commitmentsDismissCommand(
   opts: { ids: string[]; json?: boolean },
   runtime: RuntimeEnv,
 ): Promise<void> {
-  const ids = normalizeStringEntries(opts.ids);
+  const ids = normalizeUniqueStringEntries(opts.ids);
   if (ids.length === 0) {
     runtime.error(
       `At least one commitment id is required. Run ${formatCliCommand("openclaw commitments list")} to choose one.`,
@@ -152,15 +152,31 @@ export async function commitmentsDismissCommand(
     return;
   }
   const cfg = getRuntimeConfig();
-  await markCommitmentsStatus({
+  const dismissed = await markCommitmentsStatus({
     cfg,
     ids,
     status: "dismissed",
     nowMs: Date.now(),
   });
+  const dismissedIds = new Set(dismissed);
+  const notDismissed = ids.filter((id) => !dismissedIds.has(id));
   if (opts.json) {
-    writeRuntimeJson(runtime, { dismissed: ids });
+    writeRuntimeJson(runtime, {
+      dismissed,
+      ...(notDismissed.length > 0 ? { notDismissed } : {}),
+    });
+    if (notDismissed.length > 0) {
+      runtime.exit(1);
+    }
     return;
   }
-  runtime.log(info(`Dismissed commitments: ${ids.join(", ")}`));
+  if (dismissed.length > 0) {
+    runtime.log(info(`Dismissed commitments: ${dismissed.map(safe).join(", ")}`));
+  }
+  if (notDismissed.length > 0) {
+    runtime.error(
+      `Commitments not found or no longer active: ${notDismissed.map(safe).join(", ")}. Run ${formatCliCommand("openclaw commitments --all")} to inspect current state.`,
+    );
+    runtime.exit(1);
+  }
 }
