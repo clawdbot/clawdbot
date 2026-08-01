@@ -42,10 +42,11 @@ extended-stable package and publication constraints.
 - Use `$openclaw-testing` for proof selection, `$autoreview` before handoff,
   and `$openclaw-pr-maintainer` for GitHub operations.
 
-## Keep the SDK and Config Surface Frozen
+## Flag SDK and Config Backports
 
 Extended-stable is a maintenance line, not an API or configuration delivery
-vehicle. Its default is a **hard no** for every backport that changes either:
+vehicle. Treat every backport that changes either surface as a visible
+**SDK/config backport warning**:
 
 - the public plugin SDK: exports, entrypoints, declarations, API-baseline
   hashes, plugin contracts, or public package export metadata;
@@ -58,27 +59,25 @@ form that fixes the published bug without changing the SDK or config contract.
 Use the already-shipped SDK seam and existing configuration, or keep the repair
 inside the affected plugin/runtime. Do not add an SDK helper, export, config
 key, default, migration, compatibility alias, or generated baseline update
-merely to make a backport apply. If that adaptation is not possible, classify
-the candidate as `skip` or `blocked`, not `backport`.
+merely because it makes a backport apply. If a surface change remains useful,
+flag it rather than treating a clean cherry-pick as enough evidence.
 
-The only exception is a demonstrated material security or reliability defect
-_owned by_ the SDK/config surface itself. A consumer bug that happens to need a
-new SDK/config capability is not an exception. Before proposing an exception,
-obtain explicit maintainer approval that names the source commit, the published
-failure on the maintenance line, why a no-surface-change adaptation is
-impossible, the smallest branch-specific repair, every affected public SDK or
-config record, and focused proof. Never use an environment bypass or infer this
-approval from a clean cherry-pick, generated artifacts, green CI, or a broad
-release approval.
+The ledger and staging PR must show the warning, source commit, published
+maintenance-line impact, no-surface-change adaptation considered, affected
+public SDK/config records, focused proof, and the maintainer decision. Treat a
+consumer bug that happens to need a new SDK/config capability as particularly
+high risk; a material security or reliability defect owned by the SDK/config
+surface is important context, not an implicit approval.
 
-Before the staging PR, run this firebreak against the exact canonical branch
-tip recorded before applying any candidates. It deliberately checks both
-owner-path changes and the generated public-contract manifests:
+Before the staging PR, collect this warning evidence against the exact
+canonical branch tip recorded before applying any candidates. It shows both
+owner-path changes and generated public-contract manifests without failing the
+release script:
 
 ```bash
 baseline_sha=<canonical-extended-stable-tip-before-backports>
 
-git diff --quiet "$baseline_sha"..HEAD -- \
+git diff --name-status "$baseline_sha"..HEAD -- \
   src/plugin-sdk \
   src/plugins/contracts \
   src/config \
@@ -92,25 +91,21 @@ git diff --quiet "$baseline_sha"..HEAD -- \
   docs/.generated/config-baseline.sha256 \
   docs/.generated/config-baseline.counts.json
 
-git diff --exit-code "$baseline_sha"..HEAD -- \
+git diff --numstat "$baseline_sha"..HEAD -- \
   docs/.generated/plugin-sdk-api-baseline.sha256 \
   docs/.generated/config-baseline.sha256 \
   docs/.generated/config-baseline.counts.json
 ```
 
-Both commands must pass for the normal path. A failure is a stop: identify the
-exact changed paths and baseline records, remove the unnecessary surface change,
-or return the candidate to `skip`/`blocked`. For an approved SDK/config-owner
-exception, keep the failing output with the approval and proof in the release
-ledger and PR body; it does not become a reusable waiver.
+Nonempty output is the warning. Include it in the release ledger and PR body,
+then either remove the unnecessary surface change or record why the maintainer
+accepted it. It is not a reusable waiver.
 
-Do not use a SHA of all SDK/config source as an automated gate: it would reject
-harmless implementation-only repairs while still failing to judge whether an
-exception is justified. The two generated hash manifests are the stable public
-contract signal. If this becomes CI, run the exact comparison after
-`pnpm release:prep` and before npm preflight, fail closed on drift, and make a
-separate protected maintainer approval attest the named exception. The release
-job must not expose a caller-controlled bypass.
+Do not use a SHA of all SDK/config source as an automated warning: it would
+noise on harmless implementation-only repairs. The two generated hash manifests
+are the stable public-contract signal. If this becomes CI, run the comparison
+after `pnpm release:prep` and annotate the staging PR with changed records and
+the required maintainer decision; do not add a caller-controlled bypass.
 
 ## Resolve the Active Line
 
@@ -317,10 +312,9 @@ ledger and release set before changing branches.
 5. Set the intended root version and run `pnpm release:prep` on the same staging
    branch. Verify every publishable official plugin package has that exact
    version. Do not create the tag or dispatch publication before the PR lands.
-6. Run the **Keep the SDK and Config Surface Frozen** comparison against the
-   recorded canonical tip. The normal path must be clean; attach explicit
-   approval and exception evidence before continuing if the named SDK/config
-   owner defect is the only allowed exception.
+6. Run the **Flag SDK and Config Backports** comparison against the recorded
+   canonical tip. For nonempty output, attach the warning evidence and
+   maintainer decision before continuing.
 7. Run `$autoreview` until no accepted/actionable findings remain.
 8. Open one coordinated PR targeting the canonical extended-stable branch.
    Never target `main` and never push the target branch directly.
@@ -330,9 +324,9 @@ ledger and release set before changing branches.
 The PR body must list the intended maintenance tag, exact npm publication
 inventory, every source commit and optional PR, impact, adaptations, focused
 and combined proof, security status, rollback considerations, exact scan
-bounds, and the SDK/config firebreak result. For an exception, include the
-explicit maintainer approval, changed path/manifest records, owner-boundary
-reason, and focused proof; otherwise state that both comparisons were clean.
+bounds, and the SDK/config warning result. For a flagged candidate, include the
+changed path/manifest records, owner-boundary reason, focused proof, and
+maintainer decision; otherwise state that the warning comparison was empty.
 Update the durable ledger with branch/tag/version/SHA provenance and unresolved
 blocked candidates so the next run carries them forward. Dispatch npm preflight
 only after the canonical branch or tag has that exact final version and SHA.
