@@ -575,8 +575,8 @@ OpenClaw auth store before starting a native Codex turn. Replace `<agent-id>`
 with the configured agent that owns this Codex home:
 
 ```bash
-openclaw migrate plan codex --from <codex-home> --agent <agent-id> --include-secrets
-openclaw migrate apply codex --from <codex-home> --agent <agent-id> --include-secrets --yes
+openclaw migrate plan codex --from <codex-home> --agent <agent-id> --include-secrets --item auth:openai
+openclaw migrate apply codex --from <codex-home> --agent <agent-id> --include-secrets --item auth:openai --yes
 ```
 
 A local ChatGPT/Codex subscription sign-in is not replaced just because the

@@ -58,14 +58,6 @@ profile or its native credentials before issuing model requests, keep secrets
 scoped to the attempt, and surface actionable authentication failures. Do not
 set this capability on a harness that only sometimes owns authentication.
 
-Core can reject a turn before `runAttempt(...)` when no route-compatible
-credential source exists. A harness with owner-specific recovery guidance may
-implement `resolveMissingAuthError(params)`. Core calls this hook only on that
-failure path. Return an actionable `Error` to replace the generic failure, or
-`undefined` to preserve it. Keep the hook side-effect free: it may inspect the
-owning harness's configuration or credential metadata, but it must not import,
-copy, or mutate credentials.
-
 ### Verified setup runtime artifacts
 
 A local harness that can supply inference for first-run setup must attest the

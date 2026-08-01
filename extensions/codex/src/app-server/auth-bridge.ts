@@ -126,21 +126,25 @@ function assertNoUnimportedAgentCodexAuthFile(params: {
   agentId?: string;
   agentDir: string;
 }): void {
-  const error = resolveUnimportedAgentCodexAuthError(params);
-  if (error) {
-    throw error;
+  const message = resolveUnimportedAgentCodexAuthMessage(params);
+  if (message) {
+    throw new AgentHarnessPreflightError(message);
   }
 }
 
-export function resolveUnimportedAgentCodexAuthError(params: {
+function resolveUnimportedAgentCodexAuthMessage(params: {
   startOptions: CodexAppServerStartOptions;
   agentId?: string;
   agentDir: string;
-}): AgentHarnessPreflightError | undefined {
+}): string | undefined {
   const managedCodexCli =
     params.startOptions.commandSource === "managed" ||
     params.startOptions.commandSource === "resolved-managed";
-  if (!managedCodexCli || params.startOptions.homeScope === "user") {
+  if (
+    params.startOptions.transport !== "stdio" ||
+    !managedCodexCli ||
+    params.startOptions.homeScope === "user"
+  ) {
     return undefined;
   }
   const codexHome = resolveCodexAppServerHomeDir(params.agentDir);
@@ -151,9 +155,7 @@ export function resolveUnimportedAgentCodexAuthError(params: {
     return undefined;
   }
   const targetAgentId = params.agentId?.trim() || "<agent-id>";
-  return new AgentHarnessPreflightError(
-    `A Codex auth file exists at ${authPath}, but agent-scoped Codex runs use OpenClaw's auth store and do not read that file. Preview the import with \`openclaw migrate plan codex --from <codex-home> --agent ${targetAgentId} --include-secrets\`, then run \`openclaw migrate apply codex --from <codex-home> --agent ${targetAgentId} --include-secrets --yes\`. If the plan finds no credentials, remove the stale auth file.`,
-  );
+  return `A Codex auth file exists at ${authPath}, but agent-scoped Codex runs use OpenClaw's auth store and do not read that file. Preview only that credential import with \`openclaw migrate plan codex --from <codex-home> --agent ${targetAgentId} --include-secrets --item auth:openai\`, then run \`openclaw migrate apply codex --from <codex-home> --agent ${targetAgentId} --include-secrets --item auth:openai --yes\`. If the plan finds no credentials, remove the stale auth file.`;
 }
 
 export function resolveCodexAppServerAuthProfileId(params: {

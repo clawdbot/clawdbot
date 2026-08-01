@@ -42,22 +42,31 @@ describe("registerMigrateCommand", () => {
   });
 
   it("forwards --agent through default, plan, and apply flows", async () => {
-    await runCli(["migrate", "codex", "--agent", "research", "--dry-run"]);
+    await runCli(["migrate", "codex", "--agent", "research", "--item", "auth:openai", "--dry-run"]);
     expect(mocks.migrateDefaultCommand).toHaveBeenCalledWith(
       mocks.runtime,
-      expect.objectContaining({ targetAgentId: "research" }),
+      expect.objectContaining({ targetAgentId: "research", itemIds: ["auth:openai"] }),
     );
 
-    await runCli(["migrate", "plan", "codex", "--agent", "research"]);
+    await runCli(["migrate", "plan", "codex", "--agent", "research", "--item", "auth:openai"]);
     expect(mocks.migratePlanCommand).toHaveBeenCalledWith(
       mocks.runtime,
-      expect.objectContaining({ targetAgentId: "research" }),
+      expect.objectContaining({ targetAgentId: "research", itemIds: ["auth:openai"] }),
     );
 
-    await runCli(["migrate", "apply", "codex", "--agent", "research", "--yes"]);
+    await runCli([
+      "migrate",
+      "apply",
+      "codex",
+      "--agent",
+      "research",
+      "--item",
+      "auth:openai",
+      "--yes",
+    ]);
     expect(mocks.migrateApplyCommand).toHaveBeenCalledWith(
       mocks.runtime,
-      expect.objectContaining({ targetAgentId: "research" }),
+      expect.objectContaining({ targetAgentId: "research", itemIds: ["auth:openai"] }),
     );
   });
 });

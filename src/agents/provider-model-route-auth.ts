@@ -70,12 +70,7 @@ type ProviderModelRouteAuthDecision =
     }
   | {
       kind: "rejected";
-      reason:
-        | "all-cooldown"
-        | "configured-auth"
-        | "explicit-order"
-        | "missing-auth"
-        | "required-profile";
+      reason: "all-cooldown" | "configured-auth" | "explicit-order" | "required-profile";
       message: string;
       source?: ProviderModelAuthProfileSource;
       route?: ProviderModelRouteCandidate;
@@ -400,13 +395,8 @@ export function selectProviderModelRouteAuth(params: {
     if (params.resolution.routes.length > 1 && runtimeAuthOwnerIsCompatible && !configuredRoute) {
       return { kind: "deferred", reason: "runtime-auth-owner", routeSupport };
     }
-    const missingAuth =
-      !configuredRoute &&
-      !rejectedProfile &&
-      !directSource &&
-      (!params.runtimeAuthOwner || runtimeAuthOwnerIsCompatible);
     return reject(
-      missingAuth ? "missing-auth" : "configured-auth",
+      "configured-auth",
       configuredRoute
         ? `Configured ${params.provider} authentication has no compatible credential source for the selected model route.`
         : `No route-compatible authentication source is configured for ${params.provider}.`,
@@ -417,7 +407,7 @@ export function selectProviderModelRouteAuth(params: {
   const selectedRoute = winner?.route ?? directRoute;
   if (!selectedRoute) {
     return reject(
-      "missing-auth",
+      "configured-auth",
       `No route-compatible authentication source is configured for ${params.provider}.`,
     );
   }

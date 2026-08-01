@@ -101,23 +101,6 @@ export function createCodexAppServerAgentHarness(options: {
         return fingerprintCodexAppServerAuthBinding(params);
       },
     },
-    resolveMissingAuthError: async (params) => {
-      const [{ resolveUnimportedAgentCodexAuthError }, { resolveCodexAppServerRuntimeOptions }] =
-        await Promise.all([
-          import("./src/app-server/auth-bridge.js"),
-          import("./src/app-server/config.js"),
-        ]);
-      const appServer = resolveCodexAppServerRuntimeOptions({
-        pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
-        config: options?.resolveConfig?.(),
-        agentDir: params.agentDir,
-      });
-      return resolveUnimportedAgentCodexAuthError({
-        startOptions: appServer.start,
-        agentId: params.agentId,
-        agentDir: params.agentDir,
-      });
-    },
     runtimeArtifact: {
       validate: async (binding) => {
         const { validateCodexAppServerRuntimeArtifact } =

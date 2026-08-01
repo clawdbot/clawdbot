@@ -13,7 +13,6 @@ import {
   providerUsesCredentialScopedModelMetadata,
 } from "../../runtime-plan/credential-scoped-model.js";
 import {
-  MissingRouteCompatibleAuthError,
   prepareAgentRuntimeAuth,
   type PreparedAgentRuntimeAuthAttempt,
 } from "../../runtime-plan/prepare-auth.js";
@@ -137,50 +136,35 @@ export async function prepareEmbeddedRunAuthPlan(params: {
     externalCliAuthScope.ignoreAutoPreferredProfile && !lockedProfileId
       ? undefined
       : requestedProfileId;
-  const createAuthPreparation = async () => {
+  const createAuthPreparation = () => {
     const harness = params.getAgentHarness();
-    try {
-      return prepareAgentRuntimeAuth({
-        provider: params.provider,
-        modelId: params.modelId,
-        modelApi: params.model.api,
-        modelBaseUrl: params.model.baseUrl,
-        requestTransportOverrides: params.requestStreamTransportOverrides,
-        config: runParams.config,
-        env: process.env,
-        agentDir: params.agentDir,
-        workspaceDir: params.workspaceDir,
-        authProfileStore: attemptAuthProfileStore,
-        sessionAuthProfileId: preferredProfileId,
-        sessionAuthProfileSource: runParams.authProfileIdSource,
-        harnessId: harness.id,
-        harnessRuntime: harness.id,
-        harnessAuthBootstrap: harness.authBootstrap,
-        allowHarnessAuthProfileForwarding: true,
-        allowTransientCooldownProbe: runParams.allowTransientCooldownProbe === true,
-        resolveProviderPreferredProfileId: (context) =>
-          resolveProviderAuthProfileId({
-            provider: params.provider,
-            config: runParams.config,
-            workspaceDir: params.workspaceDir,
-            env: process.env,
-            context,
-          }),
-      });
-    } catch (error) {
-      if (error instanceof MissingRouteCompatibleAuthError) {
-        const replacement = await harness.resolveMissingAuthError?.({
-          agentId: runParams.agentId,
-          agentDir: params.agentDir,
+    return prepareAgentRuntimeAuth({
+      provider: params.provider,
+      modelId: params.modelId,
+      modelApi: params.model.api,
+      modelBaseUrl: params.model.baseUrl,
+      requestTransportOverrides: params.requestStreamTransportOverrides,
+      config: runParams.config,
+      env: process.env,
+      agentDir: params.agentDir,
+      workspaceDir: params.workspaceDir,
+      authProfileStore: attemptAuthProfileStore,
+      sessionAuthProfileId: preferredProfileId,
+      sessionAuthProfileSource: runParams.authProfileIdSource,
+      harnessId: harness.id,
+      harnessRuntime: harness.id,
+      harnessAuthBootstrap: harness.authBootstrap,
+      allowHarnessAuthProfileForwarding: true,
+      allowTransientCooldownProbe: runParams.allowTransientCooldownProbe === true,
+      resolveProviderPreferredProfileId: (context) =>
+        resolveProviderAuthProfileId({
           provider: params.provider,
-          modelId: params.modelId,
-        });
-        if (replacement) {
-          throw replacement;
-        }
-      }
-      throw error;
-    }
+          config: runParams.config,
+          workspaceDir: params.workspaceDir,
+          env: process.env,
+          context,
+        }),
+    });
   };
   const providerUsesProfileScopedModelMetadata = providerUsesCredentialScopedModelMetadata({
     provider: params.provider,
@@ -212,7 +196,7 @@ export async function prepareEmbeddedRunAuthPlan(params: {
         }),
     });
 
-  let resolvedAuthPreparation = await createAuthPreparation();
+  let resolvedAuthPreparation = createAuthPreparation();
   let preparedAuthAttempts = resolvedAuthPreparation.attempts;
   let activePreparedAuthPlan = resolvedAuthPreparation.plan;
   params.applyResolvedRuntimeModel(await materializeAuthPlan(activePreparedAuthPlan));
@@ -224,7 +208,7 @@ export async function prepareEmbeddedRunAuthPlan(params: {
   );
   if (finalizedHarness.id !== params.getAgentHarness().id) {
     params.setAgentHarness(finalizedHarness);
-    resolvedAuthPreparation = await createAuthPreparation();
+    resolvedAuthPreparation = createAuthPreparation();
     preparedAuthAttempts = resolvedAuthPreparation.attempts;
     activePreparedAuthPlan = resolvedAuthPreparation.plan;
     params.applyResolvedRuntimeModel(await materializeAuthPlan(activePreparedAuthPlan));

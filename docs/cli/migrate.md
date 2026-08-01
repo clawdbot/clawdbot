@@ -68,6 +68,9 @@ Running `openclaw migrate <provider>` with no other flags plans, previews, and (
 <ParamField path="--plugin <name>" type="string">
   Select one Codex plugin install item by plugin name or item id. Repeat the flag to migrate multiple Codex plugins. When omitted, interactive Codex migrations show a native Codex plugin checkbox selector and non-interactive migrations keep all planned plugins. Applies only to source-installed `openai-curated` Codex plugins discovered by the Codex app-server inventory.
 </ParamField>
+<ParamField path="--item <id>" type="string">
+  Select one exact migration item by its plan ID. Repeat the flag to migrate multiple items. For example, `--item auth:openai` limits a Codex migration to the detected OpenAI credential item.
+</ParamField>
 <ParamField path="--verify-plugin-apps" type="boolean">
   Codex only. Forces a fresh source Codex app-server `app/installed` snapshot read before planning native plugin activation. Off by default to keep migration planning fast.
 </ParamField>
@@ -141,8 +144,8 @@ import those credentials into the owning agent's OpenClaw auth store explicitly.
 Replace `<agent-id>` with that configured agent's ID:
 
 ```bash
-openclaw migrate plan codex --from <codex-home> --agent <agent-id> --include-secrets
-openclaw migrate apply codex --from <codex-home> --agent <agent-id> --include-secrets --yes
+openclaw migrate plan codex --from <codex-home> --agent <agent-id> --include-secrets --item auth:openai
+openclaw migrate apply codex --from <codex-home> --agent <agent-id> --include-secrets --item auth:openai --yes
 ```
 
 Running `openclaw migrate codex` in an interactive terminal previews the full plan, then opens checkbox selectors before the final apply confirmation. Skill copy items are prompted first. Use `Toggle all on` or `Toggle all off` for bulk selection. Press Space to toggle rows, or Enter to activate the highlighted row and continue. Planned skills start checked, conflict skills start unchecked, and `Skip for now` skips skill copies for this run while still continuing to plugin selection. When source-installed curated Codex plugins are migratable and `--plugin` was not supplied, migration then prompts for native Codex plugin activation by plugin name. Plugin items start checked unless the target OpenClaw Codex plugin config already has that plugin. Existing target plugins start unchecked and show a conflict hint such as `conflict: plugin exists`; choose `Toggle all off` to migrate no native Codex plugins in that run, or `Skip for now` to stop before applying.

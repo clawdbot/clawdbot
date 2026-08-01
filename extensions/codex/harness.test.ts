@@ -280,50 +280,6 @@ describe("Codex agent harness supports()", () => {
       }),
     ).resolves.toBe(false);
   });
-
-  it("replaces missing auth with named-agent migration guidance", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-missing-auth-"));
-    const codexHome = path.join(root, "codex-home");
-    fs.mkdirSync(codexHome, { recursive: true });
-    fs.writeFileSync(path.join(codexHome, "auth.json"), "{}", { mode: 0o600 });
-    try {
-      const error = await harness.resolveMissingAuthError?.({
-        agentId: "research",
-        agentDir: root,
-        provider: "openai",
-        modelId: "gpt-5.5",
-      });
-
-      expect(error?.message).toContain("--agent research");
-      expect(error?.message).toContain("migrate plan codex");
-      expect(error?.message).toContain("migrate apply codex");
-    } finally {
-      fs.rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it("does not replace missing auth for a user-scoped Codex home", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-user-auth-"));
-    const codexHome = path.join(root, "codex-home");
-    fs.mkdirSync(codexHome, { recursive: true });
-    fs.writeFileSync(path.join(codexHome, "auth.json"), "{}", { mode: 0o600 });
-    const userHomeHarness = createCodexAppServerAgentHarness({
-      bindingStore: testCodexAppServerBindingStore,
-      pluginConfig: { appServer: { homeScope: "user" } },
-    });
-    try {
-      await expect(
-        userHomeHarness.resolveMissingAuthError?.({
-          agentId: "research",
-          agentDir: root,
-          provider: "openai",
-          modelId: "gpt-5.5",
-        }),
-      ).resolves.toBeUndefined();
-    } finally {
-      fs.rmSync(root, { recursive: true, force: true });
-    }
-  });
 });
 
 describe("Codex agent harness reset()", () => {

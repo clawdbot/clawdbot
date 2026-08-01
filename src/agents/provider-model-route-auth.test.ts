@@ -331,21 +331,6 @@ describe("provider model route auth", () => {
     });
   });
 
-  it("classifies a concrete route without credentials as missing auth", () => {
-    expect(
-      selectProviderModelRouteAuth({
-        provider: "openai",
-        resolution: { ...routes, routes: [routes.routes[1]] },
-        runtimeAuthOwner: { id: "codex" },
-        sourcePlan: buildProviderModelAuthSourcePlan({ profiles: [] }),
-      }),
-    ).toMatchObject({
-      kind: "rejected",
-      reason: "missing-auth",
-      message: "No route-compatible authentication source is configured for openai.",
-    });
-  });
-
   it.each([
     ["Platform", routes.routes[0], profile("openai:chatgpt", "oauth", "ready")],
     ["subscription", routes.routes[1], profile("openai:platform", "api_key", "ready")],
