@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { IMessageRpcClient } from "./client.js";
@@ -93,6 +94,12 @@ describe("sendMessageIMessage receipts", () => {
     vi.useRealTimers();
     await openClawState.cleanup();
   });
+
+  function createOutboundMediaFile(filename: string, contents: Buffer): string {
+    const sourcePath = openClawState.path(filename);
+    fs.writeFileSync(sourcePath, contents);
+    return sourcePath;
+  }
 
   it("attaches a text receipt for native send ids", async () => {
     const client = createClient({ guid: "p:0/imsg-1" });
@@ -560,6 +567,71 @@ describe("sendMessageIMessage receipts", () => {
     expect(result.receipt.sentAt).toBeGreaterThan(0);
   });
 
+  it.each([
+    { kind: "document", filename: "quarterly-report.pdf", audioAsVoice: false },
+    { kind: "voice", filename: "spoken-reply.mp3", audioAsVoice: true },
+  ] as const)(
+    "preserves the original $kind filename through the real media store and native CLI provider",
+    async ({ filename, audioAsVoice }) => {
+      const attachmentBytes = Buffer.from(`actual-provider-attachment-${filename}`);
+      const sourcePath = createOutboundMediaFile(filename, attachmentBytes);
+      const deliveredPaths: string[] = [];
+      const runCliJson = vi.fn(async (args: readonly string[]) => {
+        const attachmentPath = args[args.indexOf("--file") + 1];
+        expect(attachmentPath).toBeDefined();
+        deliveredPaths.push(attachmentPath!);
+        expect(fs.readFileSync(attachmentPath!)).toEqual(attachmentBytes);
+        return { messageId: "p:0/provider-accepted-media" };
+      });
+
+      await sendMessageIMessage("chat_guid:chat-1", "", {
+        config: IMESSAGE_TEST_CFG,
+        mediaUrl: sourcePath,
+        mediaLocalRoots: [openClawState.root],
+        audioAsVoice,
+        runCliJson,
+      });
+
+      expect(deliveredPaths.map((attachmentPath) => path.basename(attachmentPath))).toEqual([
+        filename,
+      ]);
+      expect(fs.existsSync(deliveredPaths[0]!)).toBe(false);
+      const storedFilenames = fs.readdirSync(openClawState.statePath("media", "outbound"));
+      expect(storedFilenames).toHaveLength(1);
+      expect(storedFilenames[0]).toMatch(/---[a-f\d-]{36}\./iu);
+      expect(
+        fs.readFileSync(openClawState.statePath("media", "outbound", storedFilenames[0]!)),
+      ).toEqual(attachmentBytes);
+      expect(fs.existsSync(sourcePath)).toBe(true);
+    },
+  );
+
+  it("cleans an original-name CLI attachment workspace when the native provider rejects it", async () => {
+    const filename = "rejected-report.pdf";
+    const sourcePath = createOutboundMediaFile(filename, Buffer.from("provider rejection bytes"));
+    let deliveredPath: string | undefined;
+    const providerError = new Error("native attachment rejected");
+    const runCliJson = vi.fn(async (args: readonly string[]) => {
+      deliveredPath = args[args.indexOf("--file") + 1];
+      expect(path.basename(deliveredPath!)).toBe(filename);
+      expect(fs.existsSync(deliveredPath!)).toBe(true);
+      throw providerError;
+    });
+
+    await expect(
+      sendMessageIMessage("chat_guid:chat-1", "", {
+        config: IMESSAGE_TEST_CFG,
+        mediaUrl: sourcePath,
+        mediaLocalRoots: [openClawState.root],
+        runCliJson,
+      }),
+    ).rejects.toBe(providerError);
+
+    expect(deliveredPath).toBeDefined();
+    expect(fs.existsSync(deliveredPath!)).toBe(false);
+    expect(fs.readdirSync(openClawState.statePath("media", "outbound"))).toHaveLength(1);
+  });
+
   it("sends audioAsVoice media through send-attachment audio transport", async () => {
     const client = createClient({ message_id: 12345 });
     const runCliJson = vi.fn().mockResolvedValueOnce({ messageId: "p:0/voice-guid" });
@@ -1009,6 +1081,44 @@ describe("sendMessageIMessage receipts", () => {
     );
   });
 
+  it("preserves staged filenames across native RPC sends and their unthreaded retry", async () => {
+    const filename = "threaded-review.pdf";
+    const attachmentBytes = Buffer.from("actual native rpc provider bytes");
+    const sourcePath = createOutboundMediaFile(filename, attachmentBytes);
+    const deliveredPaths: string[] = [];
+    const client = {
+      request: vi.fn(async (_method: string, params: Record<string, unknown>) => {
+        const attachmentPath = params.file as string;
+        deliveredPaths.push(attachmentPath);
+        expect(fs.readFileSync(attachmentPath)).toEqual(attachmentBytes);
+        if (params.reply_to) {
+          throw new Error(
+            "reply_to requires bridge transport; AppleScript fallback cannot send threaded replies",
+          );
+        }
+        return { guid: "p:0/provider-accepted-rpc" };
+      }),
+      stop: vi.fn(async () => {}),
+    } as unknown as IMessageRpcClient;
+
+    const result = await sendMessageIMessage("chat_id:42", "caption", {
+      config: IMESSAGE_TEST_CFG,
+      client,
+      conversationReadOrigin: "direct-operator",
+      replyToId: "p:0/thread-root",
+      mediaUrl: sourcePath,
+      mediaLocalRoots: [openClawState.root],
+    });
+
+    expect(result.messageId).toBe("p:0/provider-accepted-rpc");
+    expect(deliveredPaths.map((attachmentPath) => path.basename(attachmentPath))).toEqual([
+      filename,
+      filename,
+    ]);
+    expect(deliveredPaths.every((attachmentPath) => !fs.existsSync(attachmentPath))).toBe(true);
+    expect(fs.readdirSync(openClawState.statePath("media", "outbound"))).toHaveLength(1);
+  });
+
   it("sends DM handle media captions as attachment plus follow-up text", async () => {
     const client = createClient({ guid: "p:0/caption-guid" });
     const runCliJson = vi.fn().mockResolvedValueOnce({ messageId: "p:0/dm-media-guid" });
@@ -1046,8 +1156,68 @@ describe("sendMessageIMessage receipts", () => {
   });
 
   it("does not persist caption text when the caption follow-up send fails", async () => {
-    const client = createRejectingClient(new Error("caption failed"));
+    const captionError = new Error("caption failed");
+    const client = createRejectingClient(captionError);
     const runCliJson = vi.fn().mockResolvedValueOnce({ messageId: "p:0/dm-media-guid" });
+    const onDeliveryResult = vi.fn();
+
+    let observedError: unknown;
+    try {
+      await sendMessageIMessage("imessage:+15550004567", "caption", {
+        config: IMESSAGE_TEST_CFG,
+        client,
+        mediaUrl: "/tmp/image.png",
+        resolveAttachmentImpl: async () => ({ path: "/tmp/image.png", contentType: "image/png" }),
+        runCliJson,
+        onDeliveryResult,
+      });
+    } catch (error) {
+      observedError = error;
+    }
+
+    expect(isChannelPartialDeliveryError(observedError)).toBe(true);
+    expect(observedError).toMatchObject({
+      code: "CHANNEL_PARTIAL_DELIVERY",
+      cause: captionError,
+      sentBeforeError: true,
+      visibleReplySent: true,
+      deliveryResult: {
+        content: "",
+        messageIds: ["p:0/dm-media-guid"],
+        receipt: {
+          primaryPlatformMessageId: "p:0/dm-media-guid",
+          platformMessageIds: ["p:0/dm-media-guid"],
+          parts: [expect.objectContaining({ kind: "media" })],
+        },
+        visibleReplySent: true,
+      },
+    });
+    expect(onDeliveryResult).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        content: "",
+        messageId: "p:0/dm-media-guid",
+        messageIds: ["p:0/dm-media-guid"],
+        visibleReplySent: true,
+        receipt: expect.objectContaining({
+          platformMessageIds: ["p:0/dm-media-guid"],
+        }),
+      }),
+    );
+    const scope = "default:imessage:+15550004567";
+    expect(hasPersistedIMessageEcho({ scope, text: "caption" })).toBe(false);
+    expect(
+      hasPersistedIMessageEcho({ scope, media: { contentType: "image/png", kind: "image" } }),
+    ).toBe(true);
+    expect(hasPersistedIMessageEcho({ scope, messageId: "p:0/dm-media-guid" })).toBe(true);
+  });
+
+  it("stops before a caption when accepted attachment custody cannot be recorded", async () => {
+    const custodyError = new Error("accepted attachment custody failed");
+    const client = createClient({ guid: "p:0/caption-guid" });
+    const runCliJson = vi.fn().mockResolvedValueOnce({ messageId: "p:0/dm-media-guid" });
+    const onDeliveryResult = vi.fn(async () => {
+      throw custodyError;
+    });
 
     await expect(
       sendMessageIMessage("imessage:+15550004567", "caption", {
@@ -1056,14 +1226,24 @@ describe("sendMessageIMessage receipts", () => {
         mediaUrl: "/tmp/image.png",
         resolveAttachmentImpl: async () => ({ path: "/tmp/image.png", contentType: "image/png" }),
         runCliJson,
+        onDeliveryResult,
       }),
-    ).rejects.toThrow("caption failed");
-    const scope = "default:imessage:+15550004567";
-    expect(hasPersistedIMessageEcho({ scope, text: "caption" })).toBe(false);
-    expect(
-      hasPersistedIMessageEcho({ scope, media: { contentType: "image/png", kind: "image" } }),
-    ).toBe(true);
-    expect(hasPersistedIMessageEcho({ scope, messageId: "p:0/dm-media-guid" })).toBe(true);
+    ).rejects.toBe(custodyError);
+
+    expect(isChannelPartialDeliveryError(custodyError)).toBe(false);
+    expect(runCliJson).toHaveBeenCalledOnce();
+    expect(getClientMocks(client).request).not.toHaveBeenCalled();
+    expect(onDeliveryResult).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        content: "",
+        messageId: "p:0/dm-media-guid",
+        messageIds: ["p:0/dm-media-guid"],
+        receipt: expect.objectContaining({
+          platformMessageIds: ["p:0/dm-media-guid"],
+        }),
+        visibleReplySent: true,
+      }),
+    );
   });
 
   it("returns the caption message id when captioned attachment only has a placeholder id", async () => {

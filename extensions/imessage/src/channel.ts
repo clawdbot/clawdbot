@@ -173,6 +173,19 @@ const imessageMessageAdapter = defineChannelMessageAdapter({
         replyToId: ctx.replyToId ?? undefined,
         conversationReadOrigin: (ctx as typeof ctx & IMessageMessageContextExtras)
           .conversationReadOrigin,
+        ...(ctx.onDeliveryResult
+          ? {
+              onDeliveryResult: async (acceptedResult) => {
+                await ctx.onDeliveryResult?.(
+                  toIMessageMessageSendResult(
+                    acceptedResult,
+                    ctx.audioAsVoice ? "voice" : "media",
+                    ctx.replyToId,
+                  ),
+                );
+              },
+            }
+          : {}),
       });
       return toIMessageMessageSendResult(
         result,
@@ -457,6 +470,7 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
           accountId,
           deps,
           replyToId,
+          onDeliveryResult,
         }) =>
           await (
             await loadIMessageChannelRuntime()
@@ -470,6 +484,21 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
             accountId: accountId ?? undefined,
             deps,
             replyToId: replyToId ?? undefined,
+            ...(onDeliveryResult
+              ? {
+                  onDeliveryResult: async (result) => {
+                    await onDeliveryResult({
+                      channel: "imessage",
+                      ...toIMessageMessageSendResult(
+                        result,
+                        audioAsVoice ? "voice" : "media",
+                        replyToId,
+                      ),
+                      messageId: result.messageId,
+                    });
+                  },
+                }
+              : {}),
           }),
       },
     },
