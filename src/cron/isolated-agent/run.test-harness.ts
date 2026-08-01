@@ -233,6 +233,10 @@ vi.mock("../../skills/runtime/cron-snapshot.runtime.js", () => ({
 vi.mock("./run-model-selection.runtime.js", () => ({
   DEFAULT_MODEL: "gpt-5.4",
   DEFAULT_PROVIDER: "openai",
+  loadPreparedModelCatalogSnapshot: async (params: unknown) => ({
+    entries: await loadModelCatalogMock(params),
+    routeVariants: [],
+  }),
   loadResolvedPublishedModelCatalogOwner: loadModelCatalogOwnerMock,
   publishedModelCatalogOwnerMatchesAgent: (owner: { agentId: string }, agentId: string) =>
     owner.agentId === agentId.trim().toLowerCase(),

@@ -21999,14 +21999,14 @@
       "translated": "Thiết lập mô hình cục bộ"
     },
     {
-      "id": "native.apple.506a932536c642c2",
-      "source": "Download or prepare a local model on this Gateway.",
-      "translated": "Tải xuống hoặc chuẩn bị một mô hình cục bộ trên Gateway này."
+      "id": "native.apple.780c1aa1c8868cc4",
+      "source": "Connect a local model service, or prepare a model on this Gateway.",
+      "translated": "Kết nối dịch vụ mô hình cục bộ, hoặc chuẩn bị một mô hình trên Gateway này."
     },
     {
-      "id": "native.apple.d31411a9f3c68c33",
-      "source": "Set up / Download model",
-      "translated": "Thiết lập / Tải xuống mô hình"
+      "id": "native.apple.c218bd844ba8a0ac",
+      "source": "Connect / Set up",
+      "translated": "Kết nối / Thiết lập"
     },
     {
       "id": "native.apple.7fc409b6aaa6d3b9",
@@ -22039,9 +22039,9 @@
       "translated": "Đăng nhập"
     },
     {
-      "id": "native.apple.b62dfd708d5cfb14",
-      "source": "The model is downloaded and prepared on this Gateway.",
-      "translated": "Mô hình đã được tải xuống và chuẩn bị trên Gateway này."
+      "id": "native.apple.97b24c854f768998",
+      "source": "OpenClaw will detect and verify the prepared model before using it.",
+      "translated": "OpenClaw sẽ phát hiện và xác minh mô hình đã chuẩn bị trước khi sử dụng."
     },
     {
       "id": "native.apple.869fe436119bb8a6",

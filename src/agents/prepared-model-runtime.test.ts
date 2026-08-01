@@ -626,6 +626,7 @@ describe("prepared model runtime snapshots", () => {
     );
     expect(mocks.discoverModels).toHaveBeenCalledOnce();
     expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
+    expect(mocks.planOpenClawModelsJsonSource).not.toHaveBeenCalled();
     expect(mocks.ensureRuntimePluginsLoaded).not.toHaveBeenCalled();
   });
 

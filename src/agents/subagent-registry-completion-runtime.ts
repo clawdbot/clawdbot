@@ -62,7 +62,7 @@ export function createSubagentRegistryCompletionRuntime(config: {
     }
 
     const latest = runs.get(params.runId);
-    if (latest && typeof latest.endedAt !== "number") {
+    if (latest && typeof latest.execution.endedAt !== "number") {
       // The durable write rolled the in-memory entry back. Preserve the original
       // completion through the normal persisted-session recovery path.
       scheduleOrphanRecovery({ delayMs: 1_000 });
@@ -70,7 +70,7 @@ export function createSubagentRegistryCompletionRuntime(config: {
     }
     if (
       !latest ||
-      typeof latest.endedAt !== "number" ||
+      typeof latest.execution.endedAt !== "number" ||
       typeof latest.cleanupCompletedAt === "number" ||
       latest.pauseReason === "sessions_yield"
     ) {
@@ -142,11 +142,11 @@ export function createSubagentRegistryCompletionRuntime(config: {
   function hasCompleteSubagentTerminalState(entry: SubagentRunRecord | undefined): boolean {
     return (
       entry !== undefined &&
-      typeof entry.endedAt === "number" &&
-      Number.isFinite(entry.endedAt) &&
-      entry.outcome !== undefined &&
+      typeof entry.execution.endedAt === "number" &&
+      Number.isFinite(entry.execution.endedAt) &&
+      entry.execution.outcome !== undefined &&
       entry.endedReason !== undefined &&
-      entry.execution?.status === "terminal"
+      entry.execution.status === "terminal"
     );
   }
 

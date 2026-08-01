@@ -79,16 +79,16 @@ async function withOllamaServer<T>(
       return;
     }
     if (request.url === "/api/show") {
-      const body = (await readBody(request)) as { name?: string };
-      if (body.name) {
-        showRequests.push(body.name);
+      const body = (await readBody(request)) as { model?: string };
+      if (body.model) {
+        showRequests.push(body.model);
       }
-      if (body.name === "unknown:latest") {
+      if (body.model === "unknown:latest") {
         response.statusCode = 500;
         response.end(JSON.stringify({ error: "show failed" }));
         return;
       }
-      const embedding = body.name?.startsWith("embedding") === true;
+      const embedding = body.model?.startsWith("embedding") === true;
       response.end(
         JSON.stringify({
           capabilities: embedding ? ["embedding"] : ["completion", "tools"],

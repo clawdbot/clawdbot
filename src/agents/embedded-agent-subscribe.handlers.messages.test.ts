@@ -15,6 +15,7 @@ import {
 import {
   buildAssistantStreamData,
   recordPendingAssistantReplyDirectives,
+  resolveCurrentSourceMessagingToolPartial,
   resolveSilentReplyFallbackText,
 } from "./embedded-agent-subscribe.handlers.messages.test-support.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
@@ -51,6 +52,7 @@ function createMessageUpdateContext(
     resetAssistantMessageState?: ReturnType<typeof vi.fn>;
     debug?: ReturnType<typeof vi.fn>;
     shouldEmitPartialReplies?: boolean;
+    sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
     consumePartialReplyDirectives?: ReturnType<typeof vi.fn>;
     stripBlockTags?: ReturnType<typeof vi.fn>;
     state?: Record<string, unknown>;
@@ -65,12 +67,17 @@ function createMessageUpdateContext(
     params: {
       runId: "run-1",
       session: { id: "session-1" },
+      ...(params.sourceReplyDeliveryMode
+        ? { sourceReplyDeliveryMode: params.sourceReplyDeliveryMode }
+        : {}),
       ...(params.onAgentEvent ? { onAgentEvent: params.onAgentEvent } : {}),
       ...(params.onPartialReply ? { onPartialReply: params.onPartialReply } : {}),
     },
     state: {
       deterministicApprovalPromptPending: false,
       deterministicApprovalPromptSent: false,
+      currentSourceMessagingToolSentTextsNormalized: [],
+      currentSourceMessagingToolHeldPartial: undefined,
       reasoningStreamOpen: false,
       streamReasoning: false,
       deltaBuffer: "",
@@ -158,6 +165,8 @@ function createMessageEndContext(
       deterministicApprovalPromptSent: false,
       messagingToolSentTexts: [],
       messagingToolSentTextsNormalized: [],
+      currentSourceMessagingToolSentTextsNormalized: [],
+      currentSourceMessagingToolHeldPartial: undefined,
       includeReasoning: false,
       streamReasoning: false,
       blockReplyBreak: "message_end",
@@ -349,6 +358,130 @@ describe("pending assistant reply directives", () => {
   });
 });
 
+describe("handleMessageUpdate current-source message-tool previews", () => {
+  it("holds delta-only continuation fragments and releases one full divergent snapshot", () => {
+    const state = {
+      currentSourceMessagingToolHeldPartial: undefined as string | undefined,
+      currentSourceMessagingToolSentTextsNormalized: ["qa-msteams-dm-ok"],
+    };
+
+    expect(
+      resolveCurrentSourceMessagingToolPartial(state, {
+        evtType: "text_delta",
+        text: "QA-MSTEAMS",
+        visibleDelta: "QA-MSTEAMS",
+      }),
+    ).toEqual({ hold: true, text: "QA-MSTEAMS" });
+    expect(
+      resolveCurrentSourceMessagingToolPartial(state, {
+        evtType: "text_delta",
+        text: "-DM-OK",
+        visibleDelta: "-DM-OK",
+      }),
+    ).toEqual({ hold: true, text: "QA-MSTEAMS-DM-OK" });
+    expect(
+      resolveCurrentSourceMessagingToolPartial(state, {
+        evtType: "text_delta",
+        text: " with more detail",
+        visibleDelta: " with more detail",
+      }),
+    ).toEqual({ hold: false, text: "QA-MSTEAMS-DM-OK with more detail" });
+    expect(state.currentSourceMessagingToolHeldPartial).toBeUndefined();
+  });
+
+  it("holds automatic partial prefixes and exact duplicates after source delivery", () => {
+    const onAgentEvent = vi.fn();
+    const onPartialReply = vi.fn();
+    const sentText = "QA-MSTEAMS-DM-OK";
+    const context = createMessageUpdateContext({
+      onAgentEvent,
+      onPartialReply,
+      sourceReplyDeliveryMode: "automatic",
+      state: {
+        currentSourceMessagingToolSentTextsNormalized: [sentText.toLowerCase()],
+      },
+    });
+
+    updateMessage(
+      context,
+      createTextUpdateEvent({
+        type: "text_delta",
+        text: "QA-MSTEAMS",
+        id: "msg_source_duplicate",
+      }),
+    );
+    updateMessage(
+      context,
+      createTextUpdateEvent({
+        type: "text_end",
+        text: sentText,
+        id: "msg_source_duplicate",
+      }),
+    );
+
+    expect(onAgentEvent).toHaveBeenCalledTimes(1);
+    expect(onPartialReply).not.toHaveBeenCalled();
+  });
+
+  it("releases the full cumulative snapshot when automatic text diverges", () => {
+    const onPartialReply = vi.fn();
+    const sentText = "QA-MSTEAMS-DM-OK";
+    const context = createMessageUpdateContext({
+      onPartialReply,
+      sourceReplyDeliveryMode: "automatic",
+      state: {
+        currentSourceMessagingToolSentTextsNormalized: [sentText.toLowerCase()],
+      },
+    });
+
+    updateMessage(
+      context,
+      createTextUpdateEvent({
+        type: "text_delta",
+        text: "QA-MSTEAMS",
+        id: "msg_source_diverges",
+      }),
+    );
+    updateMessage(
+      context,
+      createTextUpdateEvent({
+        type: "text_end",
+        text: `${sentText} with more detail`,
+        id: "msg_source_diverges",
+      }),
+    );
+
+    expect(onPartialReply).toHaveBeenCalledTimes(1);
+    expect(onPartialReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: `${sentText} with more detail` }),
+    );
+  });
+
+  it("keeps unrelated automatic partial text visible", () => {
+    const onPartialReply = vi.fn();
+    const context = createMessageUpdateContext({
+      onPartialReply,
+      sourceReplyDeliveryMode: "automatic",
+      state: {
+        currentSourceMessagingToolSentTextsNormalized: ["qa-msteams-dm-ok"],
+      },
+    });
+
+    updateMessage(
+      context,
+      createTextUpdateEvent({
+        type: "text_end",
+        text: "A genuinely different answer",
+        id: "msg_source_different",
+      }),
+    );
+
+    expect(onPartialReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "A genuinely different answer" }),
+    );
+  });
+});
+
 describe("handleMessageUpdate text signatures", () => {
   it("uses incremental text deltas for unphased OpenAI Responses streams", () => {
     const onAgentEvent = vi.fn();
@@ -468,6 +601,41 @@ describe("handleMessageUpdate text signatures", () => {
       data: { text: "Hello", delta: "Hello" },
     });
     expect(context.state.lastStreamedAssistantCleaned).toBe("Hello");
+  });
+
+  it.each([
+    {
+      name: "the directive accumulator has no parsed result",
+      text: "answer part A msg [[E1008]timeout] answer part B",
+      hasParsedDirectives: false,
+    },
+    {
+      name: "the directive accumulator flushes a buffered tail",
+      text: "answer part A msg [[E1008]timeout] answer part B",
+      hasParsedDirectives: true,
+    },
+    {
+      name: "the final text ends with one bracket",
+      text: "answer part A [",
+      hasParsedDirectives: true,
+    },
+  ])("keeps literal final text when $name", ({ text, hasParsedDirectives }) => {
+    const onAgentEvent = vi.fn();
+    const context = createMessageUpdateContext({
+      onAgentEvent,
+      ...(hasParsedDirectives ? {} : { consumePartialReplyDirectives: vi.fn(() => null) }),
+    });
+
+    updateMessage(context, {
+      message: { role: "assistant", content: [] },
+      assistantMessageEvent: { type: "text_end", content: text },
+    });
+
+    expect(context.state.lastStreamedAssistantCleaned).toBe(text);
+    expect(firstMockArg(onAgentEvent, "final assistant event")).toMatchObject({
+      stream: "assistant",
+      data: { text },
+    });
   });
 
   it("keeps stripped reply directives out of later plain deltas", () => {
@@ -1476,6 +1644,46 @@ describe("handleMessageUpdate commentary phase", () => {
 });
 
 describe("handleMessageEnd", () => {
+  it.each(["answer part A msg [[E1008]timeout] answer part B", "answer ending ["])(
+    "keeps malformed directive-looking final text identical across delivery paths: %s",
+    (text) => {
+      const onAgentEvent = vi.fn();
+      const emitBlockReply = vi.fn();
+      const flushBlockReplyBuffer = vi.fn();
+      const accumulator = createStreamingDirectiveAccumulator();
+      const streamed = accumulator.consume(text)?.text ?? "";
+      const ctx = createMessageEndContext({
+        onAgentEvent,
+        emitBlockReply,
+        flushBlockReplyBuffer,
+        consumeReplyDirectives: vi.fn((chunk: string, options?: { final?: boolean }) =>
+          accumulator.consume(chunk, options),
+        ),
+        blockChunker: {
+          hasBuffered: () => true,
+          reset: vi.fn(),
+        },
+        state: {
+          blockBuffer: streamed,
+          deltaBuffer: streamed,
+        },
+      });
+
+      void endMessage(ctx, {
+        message: { role: "assistant", content: [{ type: "text", text }] },
+      });
+
+      expect(firstMockArg(onAgentEvent, "agent event")).toMatchObject({
+        stream: "assistant",
+        data: { text, delta: text },
+      });
+      const finalBlockText = (firstMockArg(emitBlockReply, "block reply") as { text?: string })
+        .text;
+      expect(`${streamed}${finalBlockText ?? ""}`).toBe(text);
+      expect(ctx.finalizeAssistantTexts).toHaveBeenCalledWith(expect.objectContaining({ text }));
+    },
+  );
+
   it.each([
     {
       name: "counts a completed provider assistant message",
@@ -1893,10 +2101,15 @@ describe("handleMessageEnd", () => {
     expect(emitBlockReply).not.toHaveBeenCalled();
   });
 
-  it("emits final media after flushing buffered message_end text", () => {
+  it("emits final media and malformed pending text after flushing buffered message_end text", () => {
     const emitBlockReply = vi.fn();
     const flushBlockReplyBuffer = vi.fn();
-    const consumeReplyDirectives = vi.fn((text: string) => (text ? { text } : null));
+    const accumulator = createStreamingDirectiveAccumulator();
+    const text = "Caption [[oops\nMEDIA:/tmp/final.png";
+    const streamed = accumulator.consume(text)?.text ?? "";
+    const consumeReplyDirectives = vi.fn((chunk: string, options?: { final?: boolean }) =>
+      accumulator.consume(chunk, options),
+    );
     const ctx = createMessageEndContext({
       emitBlockReply,
       flushBlockReplyBuffer,
@@ -1907,17 +2120,17 @@ describe("handleMessageEnd", () => {
       },
       state: {
         emittedAssistantUpdate: true,
-        lastStreamedAssistantCleaned: "Caption",
+        lastStreamedAssistantCleaned: "Caption [[oops",
         blockReplyBreak: "message_end",
-        deltaBuffer: "Caption",
-        blockBuffer: "Caption",
+        deltaBuffer: streamed,
+        blockBuffer: streamed,
       },
     });
 
     void endMessage(ctx, {
       message: {
         role: "assistant",
-        content: [{ type: "text", text: "Caption\nMEDIA:/tmp/final.png" }],
+        content: [{ type: "text", text }],
         usage: { input: 10, output: 5, total: 15 },
       },
     });
@@ -1926,11 +2139,16 @@ describe("handleMessageEnd", () => {
       assistantMessageIndex: undefined,
       final: true,
     });
-    expect(consumeReplyDirectives).not.toHaveBeenCalled();
-    expect(firstMockArg(emitBlockReply, "block reply")).toMatchObject({
-      text: "",
+    expect(consumeReplyDirectives).toHaveBeenCalledWith("", { final: true });
+    const finalReply = firstMockArg(emitBlockReply, "block reply") as {
+      text?: string;
+      mediaUrls?: string[];
+    };
+    expect(finalReply).toMatchObject({
+      text: " [[oops",
       mediaUrls: ["/tmp/final.png"],
     });
+    expect(`${streamed}${finalReply.text ?? ""}`).toBe("Caption [[oops");
   });
 
   it("preserves literal reasoning-looking tags in unphased final visible text", () => {

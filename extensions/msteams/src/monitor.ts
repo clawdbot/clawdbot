@@ -30,6 +30,7 @@ import {
   extractMSTeamsPollVote,
   type MSTeamsPollStore,
 } from "./polls.js";
+import { resolveMSTeamsPrivateQaRuntime } from "./qa/private-runtime.js";
 import {
   looksLikeMSTeamsConversationId,
   projectStableMSTeamsGroupAllowlist,
@@ -576,8 +577,14 @@ export async function monitorMSTeamsProvider(
   ingress.start();
 
   // Start listening and fail fast if bind/listen fails.
+  // skipAuth is private-QA-only and must never expose an unauthenticated
+  // webhook beyond loopback. Production keeps Express' existing bind behavior.
+  const privateQaRuntime = resolveMSTeamsPrivateQaRuntime();
   const httpServer = await new Promise<Server>((resolve, reject) => {
-    const server = expressApp.listen(port, (err) => (err ? reject(err) : resolve(server)));
+    const onListen = (err?: Error) => (err ? reject(err) : resolve(server));
+    const server = privateQaRuntime
+      ? expressApp.listen(port, privateQaRuntime.listenHost, onListen)
+      : expressApp.listen(port, onListen);
   }).catch(async (err: unknown) => {
     log.error("msteams server error", { error: formatUnknownError(err) });
     await ingress.stop();

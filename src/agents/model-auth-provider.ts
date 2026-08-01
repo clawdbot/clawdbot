@@ -27,12 +27,12 @@ import { OAuthRefreshFailureError } from "./auth-profiles/oauth-refresh-failure.
 import { isNonSecretApiKeyMarker } from "./model-auth-markers.js";
 import { assertAuthModeAllowedForModel, isAuthModeAllowedForModel } from "./model-auth-openai.js";
 import * as authConfig from "./model-auth-provider-config.js";
-import { ProviderAuthError, type ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
 import {
   assertRuntimeProviderSecretOwnerAvailable,
   resolveManagedSecretRefRuntimeProviderAuth,
-  resolveSyntheticLocalProviderAuth,
-} from "./model-auth-runtime.js";
+} from "./model-auth-runtime-config.js";
+import { ProviderAuthError, type ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
+import { resolveSyntheticLocalProviderAuth } from "./model-auth-runtime.js";
 
 export type ProviderCredentialPrecedence = "profile-first" | "env-first";
 

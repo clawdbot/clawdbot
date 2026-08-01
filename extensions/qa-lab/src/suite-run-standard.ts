@@ -128,6 +128,7 @@ export async function runQaFlowSuiteStandard(
       claudeCliAuthMode: params?.claudeCliAuthMode,
       controlUiEnabled: params?.controlUiEnabled ?? true,
       enabledPluginIds,
+      allowUnhealthyStartup: gatewayRuntimeOptions?.allowUnhealthyStartup,
       forwardHostHome: gatewayRuntimeOptions?.forwardHostHome,
       mutateConfig: gatewayConfigPatch
         ? (cfg) => applyQaMergePatch(cfg, gatewayConfigPatch) as OpenClawConfig

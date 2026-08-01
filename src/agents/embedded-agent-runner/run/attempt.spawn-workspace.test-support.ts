@@ -744,7 +744,8 @@ vi.mock("../../model-auth.js", () => ({
   resolveModelAuthMode: () => undefined,
 }));
 
-vi.mock("../../model-tool-support.js", () => ({
+vi.mock("../../model-tool-support.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../model-tool-support.js")>()),
   supportsModelTools: (...args: unknown[]) => hoisted.supportsModelToolsMock(...args),
 }));
 

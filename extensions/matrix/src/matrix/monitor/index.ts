@@ -317,7 +317,8 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     // Cold starts should ignore old room history, but once we have a persisted
     // /sync cursor we want restart backlogs to replay just like other channels.
     const dropPreStartupMessages = !client.hasPersistedSyncState();
-    const { getRoomInfo, getMemberDisplayName } = createMatrixRoomInfoResolver(client);
+    const { getRoomInfo, getMemberDisplayName, invalidateMemberDisplayName } =
+      createMatrixRoomInfoResolver(client);
     const isExplicitlyConfiguredRoom = async (roomId: string): Promise<boolean> => {
       const roomInfoForConfig = needsRoomAliasesForConfig
         ? await getRoomInfo(roomId, { includeAliases: true })
@@ -440,6 +441,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
           })
           .catch(() => []),
       directTracker,
+      invalidateMemberDisplayName,
       logVerboseMessage,
       warnedEncryptedRooms,
       warnedCryptoMissingRooms,

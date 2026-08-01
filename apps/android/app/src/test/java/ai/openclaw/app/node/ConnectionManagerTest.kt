@@ -635,6 +635,21 @@ class ConnectionManagerTest {
     assertFalse(options.caps.contains(OpenClawCapability.Motion.rawValue))
   }
 
+  @Test
+  fun buildNodeConnectOptions_advertisesCurrentPermissionSnapshot() {
+    val permissionSnapshot =
+      emptyPermissionSnapshot().copy(
+        camera = true,
+        location = true,
+        locationPrecise = false,
+        smsSend = true,
+      )
+
+    val options = newManager(permissionSnapshot = permissionSnapshot).buildNodeConnectOptions()
+
+    assertEquals(permissionSnapshot.gatewayPermissions(), options.permissions)
+  }
+
   private fun newManager(
     cameraEnabled: Boolean = false,
     locationMode: LocationMode = LocationMode.Off,
@@ -650,6 +665,7 @@ class ConnectionManagerTest {
     voiceWakeAvailable: Boolean = true,
     mobileUiAvailable: Boolean = false,
     inlineWidgetsAvailable: Boolean = true,
+    permissionSnapshot: AndroidPermissionSnapshot = emptyPermissionSnapshot(),
   ): ConnectionManager {
     val context = RuntimeEnvironment.getApplication()
     context
@@ -679,7 +695,28 @@ class ConnectionManagerTest {
       voiceWakeAvailable = { voiceWakeAvailable },
       mobileUiAvailable = { mobileUiAvailable },
       inlineWidgetsAvailable = { inlineWidgetsAvailable },
+      permissionSnapshot = { permissionSnapshot },
       manualTls = { false },
     )
   }
+
+  private fun emptyPermissionSnapshot(): AndroidPermissionSnapshot =
+    AndroidPermissionSnapshot(
+      camera = false,
+      microphone = false,
+      location = false,
+      locationPrecise = false,
+      locationBackground = false,
+      smsSend = false,
+      smsRead = false,
+      notificationListener = false,
+      notifications = false,
+      photos = false,
+      contactsRead = false,
+      contactsWrite = false,
+      calendarRead = false,
+      calendarWrite = false,
+      callLog = false,
+      motion = false,
+    )
 }

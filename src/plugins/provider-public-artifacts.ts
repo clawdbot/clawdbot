@@ -7,6 +7,7 @@ import {
   resolveDirectBundledProviderPolicySurface,
   resolveTrustedExternalProviderPolicySurface,
   type BundledProviderPolicySurface,
+  type ProviderPolicySurface,
 } from "./provider-policy-surface.js";
 
 function resolveBundledProviderPolicyPlugin(
@@ -93,7 +94,7 @@ export function resolveBundledProviderPolicySurface(
 export function resolveProviderPolicySurface(
   providerId: string,
   options: { manifestRegistry?: Pick<PluginManifestRegistry, "plugins"> } = {},
-): BundledProviderPolicySurface | null {
+): ProviderPolicySurface | null {
   const bundledSurface = resolveBundledProviderPolicySurface(providerId, options);
   if (bundledSurface) {
     return bundledSurface;

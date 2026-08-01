@@ -295,7 +295,10 @@ function isCurrentSourceConversation(
     resolveChannelThreadAddressing(params.channel),
   ),
 ): params is MirrorableSourceReplyTranscriptParams {
-  if (params.action !== "send") {
+  // Polls share the send target contract: `to` addresses a conversation, so the
+  // same current-source matching applies. Transcript mirroring stays send-only
+  // because poll params carry no message text to mirror.
+  if (params.action !== "send" && params.action !== "poll") {
     return false;
   }
   if (!params.sessionKey?.trim()) {
@@ -370,6 +373,84 @@ export function isDeliveredCurrentSourceReply(params: SourceReplyTranscriptMirro
   return (
     !hasExplicitDeliveryFailure(params.deliveredPayload) && isExactCurrentSourceConversation(params)
   );
+}
+
+// `thread-reply` addresses a thread target and only optionally carries a
+// replied-to message id, so the message-id contract below cannot verify it;
+// its current-source marking needs thread-placement validation as follow-up.
+const CURRENT_SOURCE_REPLY_ACTION_NAMES = new Set(["reply"]);
+
+/** Reply-type message actions address a message id rather than a conversation target. */
+export function isCurrentSourceReplyActionName(action: string): boolean {
+  return CURRENT_SOURCE_REPLY_ACTION_NAMES.has(action.trim().toLowerCase());
+}
+
+function normalizeMessageIdValue(value: unknown): string | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(value);
+  }
+  return normalizeOptionalString(value);
+}
+
+/**
+ * Confirms a successful reply-type action addressed the message that triggered the
+ * current run. Reply actions resolve their conversation from the replied-to message,
+ * so target matching cannot apply; replying to the run's own inbound message is the
+ * one implicit route that provably lands in the current source conversation.
+ */
+export function isDeliveredCurrentSourceReplyAction(
+  params: SourceReplyTranscriptMirrorParams,
+): boolean {
+  if (!isCurrentSourceReplyActionName(params.action)) {
+    return false;
+  }
+  if (hasExplicitDeliveryFailure(params.deliveredPayload)) {
+    return false;
+  }
+  if (!params.sessionKey?.trim()) {
+    return false;
+  }
+  const toolContext = params.toolContext;
+  if (!toolContext) {
+    return false;
+  }
+  const accountId = normalizeOptionalString(params.accountId);
+  if (accountId) {
+    const currentAccountId = normalizeOptionalString(params.currentAccountId);
+    if (
+      !currentAccountId ||
+      normalizeAccountId(accountId) !== normalizeAccountId(currentAccountId)
+    ) {
+      return false;
+    }
+  }
+  const currentChannel = normalizeOptionalLowercaseString(toolContext.currentChannelProvider);
+  if (!currentChannel || currentChannel !== normalizeOptionalLowercaseString(params.channel)) {
+    return false;
+  }
+  // Target params on reply actions are either agent-explicit or runner-resolved
+  // from the tool context; both must still address the current conversation.
+  // Delegate equivalence to the channel plugin first so provider-normalized
+  // forms (for example `C123` vs `channel:C123`) are recognized like sends.
+  const requestedTarget = resolveSourceReplyTarget(params.actionParams);
+  if (requestedTarget) {
+    const matchesToolContextTarget = getChannelPlugin(params.channel as ChannelId)?.threading
+      ?.matchesToolContextTarget;
+    if (!matchesToolContextTarget?.({ target: requestedTarget, toolContext })) {
+      const currentTargets = [
+        normalizeOptionalString(toolContext.currentMessagingTarget),
+        normalizeOptionalString(toolContext.currentChannelId),
+      ].filter((target): target is string => Boolean(target));
+      if (!currentTargets.some((target) => target === requestedTarget)) {
+        return false;
+      }
+    }
+  }
+  const repliedToMessageId = normalizeMessageIdValue(
+    params.actionParams.messageId ?? params.actionParams.replyTo,
+  );
+  const currentMessageId = normalizeMessageIdValue(toolContext.currentMessageId);
+  return Boolean(repliedToMessageId && currentMessageId && repliedToMessageId === currentMessageId);
 }
 
 /** Mirrors successful outbound source replies into the owning session transcript. */

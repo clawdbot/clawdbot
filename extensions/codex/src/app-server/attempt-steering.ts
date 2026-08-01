@@ -26,6 +26,7 @@ export function createCodexSteeringQueue(params: {
   client: CodexAppServerClient;
   threadId: string;
   turnId: string;
+  requestTimeoutMs: number;
   claimPendingUserInput: () =>
     | {
         answer: (text: string) => boolean;
@@ -117,12 +118,20 @@ export function createCodexSteeringQueue(params: {
     // Keep the batch unsettled until Codex echoes this id on userMessage completion.
     dispatchedBatches.set(clientUserMessageId, batch);
     try {
-      await params.client.request("turn/steer", {
-        threadId: params.threadId,
-        expectedTurnId: params.turnId,
-        input: liveItems.flatMap((item) => buildCodexUserInput(item.text, item.images)),
-        clientUserMessageId,
-      });
+      // turn/steer is an ack, but nothing guarantees the app-server answers it.
+      // Without a deadline and the run signal the caller only unblocks when the
+      // app-server client closes, which strands whichever channel handler is
+      // awaiting delivery and wedges every later steer behind sendChain.
+      await params.client.request(
+        "turn/steer",
+        {
+          threadId: params.threadId,
+          expectedTurnId: params.turnId,
+          input: liveItems.flatMap((item) => buildCodexUserInput(item.text, item.images)),
+          clientUserMessageId,
+        },
+        { timeoutMs: params.requestTimeoutMs, signal: params.signal },
+      );
     } catch (error) {
       dispatchedBatches.delete(clientUserMessageId);
       for (const item of liveItems) {

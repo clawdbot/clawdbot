@@ -361,10 +361,13 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
 
   close(): void {
     const connection = this.connection;
-    if (!connection || !this.lifecycle.cancel()) {
+    if (!this.lifecycle.cancel()) {
       return;
     }
     this.resetTerminalState();
+    if (!connection) {
+      return;
+    }
     if (this.socket?.readyState === WEBSOCKET_OPEN) {
       this.sendEvent({ type: "session.close" });
     }

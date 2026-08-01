@@ -19,12 +19,7 @@ import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
 import { resolveGatewayProbeTarget } from "../gateway/probe-target.js";
 import type { GatewayProbeResult, probeGateway as probeGatewayFn } from "../gateway/probe.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import {
-  MEMORY_INDEX_CHUNKS_TABLE,
-  MEMORY_INDEX_META_TABLE,
-  MEMORY_INDEX_SOURCES_TABLE,
-  type MemoryProviderStatus,
-} from "../memory-host-sdk/engine-storage.js";
+import type { MemoryProviderStatus } from "../memory-host-sdk/engine-storage.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
@@ -35,6 +30,9 @@ import { isProbeReachable } from "./gateway-status/helpers.js";
 const gatewayProbeModuleLoader = createLazyImportLoader(() => import("./status.gateway-probe.js"));
 const probeGatewayModuleLoader = createLazyImportLoader(() => import("../gateway/probe.js"));
 const gatewayCallModuleLoader = createLazyImportLoader(() => import("../gateway/call.js"));
+const memoryEngineStorageModuleLoader = createLazyImportLoader(
+  () => import("../memory-host-sdk/engine-storage.js"),
+);
 const MEMORY_INDEX_META_KEY = "memory_index_meta_v1";
 
 function loadGatewayProbeModule() {
@@ -49,10 +47,12 @@ function loadGatewayCallModule() {
   return gatewayCallModuleLoader.load();
 }
 
-function hasBuiltInMemoryState(databasePath: string): boolean {
+async function hasBuiltInMemoryState(databasePath: string): Promise<boolean> {
   if (!existsSync(databasePath)) {
     return false;
   }
+  const { MEMORY_INDEX_CHUNKS_TABLE, MEMORY_INDEX_META_TABLE, MEMORY_INDEX_SOURCES_TABLE } =
+    await memoryEngineStorageModuleLoader.load();
   let db: DatabaseSync | undefined;
   try {
     db = openNodeSqliteDatabase(databasePath, { readOnly: true });
@@ -401,7 +401,11 @@ export async function resolveSharedMemoryStatusSnapshot(params: {
 
   const hasExplicitConfig = hasExplicitMemorySearchConfig(cfg, agentId);
   const defaultDatabasePath = params.requireDefaultDatabasePath?.(agentId);
-  if (defaultDatabasePath && !hasExplicitConfig && !hasBuiltInMemoryState(defaultDatabasePath)) {
+  if (
+    defaultDatabasePath &&
+    !hasExplicitConfig &&
+    !(await hasBuiltInMemoryState(defaultDatabasePath))
+  ) {
     // Avoid instantiating built-in memory for users who never created the default store.
     return null;
   }
@@ -410,7 +414,7 @@ export async function resolveSharedMemoryStatusSnapshot(params: {
     return null;
   }
   const shouldInspectStore =
-    hasExplicitConfig || hasBuiltInMemoryState(resolvedMemory.store.databasePath);
+    hasExplicitConfig || (await hasBuiltInMemoryState(resolvedMemory.store.databasePath));
   if (!shouldInspectStore) {
     return null;
   }

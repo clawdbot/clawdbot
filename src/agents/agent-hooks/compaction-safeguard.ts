@@ -124,16 +124,8 @@ type SessionBranchEntry = {
 };
 
 function coerceTimestamp(value: unknown): number {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  if (typeof value === "string") {
-    const parsed = Date.parse(value);
-    if (Number.isFinite(parsed)) {
-      return parsed;
-    }
-  }
-  return 0;
+  const timestamp = typeof value === "string" ? Date.parse(value) : value;
+  return typeof timestamp === "number" && Number.isFinite(timestamp) ? timestamp : 0;
 }
 
 function sessionBranchEntryToMessage(entry: SessionBranchEntry): unknown {
@@ -166,22 +158,20 @@ function collectSessionBranchMessages(sessionManager: unknown): AgentMessage[] {
   if (typeof getBranch !== "function") {
     return [];
   }
-  let entries: unknown;
   try {
-    entries = getBranch.call(sessionManager);
+    const entries: unknown = getBranch.call(sessionManager);
+    return Array.isArray(entries)
+      ? entries.flatMap((entry) => {
+          const message =
+            entry && typeof entry === "object"
+              ? sessionBranchEntryToMessage(entry as SessionBranchEntry)
+              : undefined;
+          return message ? [message as AgentMessage] : [];
+        })
+      : [];
   } catch {
     return [];
   }
-  if (!Array.isArray(entries)) {
-    return [];
-  }
-  return entries
-    .map((entry) =>
-      entry && typeof entry === "object"
-        ? sessionBranchEntryToMessage(entry as SessionBranchEntry)
-        : undefined,
-    )
-    .filter((message): message is AgentMessage => Boolean(message));
 }
 
 function isReplayUnsafeInterSessionInput(message: AgentMessage): boolean {
@@ -206,26 +196,16 @@ function isSessionsSendToolName(value: unknown): boolean {
 
 function sanitizeSourceSessionSends(messages: AgentMessage[]): AgentMessage[] {
   const sendCallIds = new Set<string>();
-  const resolvedCallIds = new Set<string>();
   const resultTextByCallId = new Map<string, string>();
 
   for (const message of messages) {
-    if (message.role !== "assistant" || !Array.isArray(message.content)) {
+    if (message.role !== "assistant") {
       continue;
     }
-    for (const block of message.content) {
-      if (!block || typeof block !== "object") {
-        continue;
-      }
-      const record = block as { type?: unknown; id?: unknown; name?: unknown };
-      if (
-        typeof record.type === "string" &&
-        TOOL_CALL_BLOCK_TYPES.has(record.type) &&
-        isSessionsSendToolName(record.name) &&
-        typeof record.id === "string" &&
-        record.id.trim()
-      ) {
-        sendCallIds.add(record.id.trim());
+    for (const call of extractToolCallsFromAssistant(message)) {
+      const callId = call.id.trim();
+      if (callId && isSessionsSendToolName(call.name)) {
+        sendCallIds.add(callId);
       }
     }
   }
@@ -238,11 +218,10 @@ function sanitizeSourceSessionSends(messages: AgentMessage[]): AgentMessage[] {
     if (!callId || !sendCallIds.has(callId)) {
       continue;
     }
-    resolvedCallIds.add(callId);
-    const resultText = extractMessageText(message) || formatNonTextPlaceholder(message.content);
-    if (resultText) {
-      resultTextByCallId.set(callId, resultText);
-    }
+    resultTextByCallId.set(
+      callId,
+      extractMessageText(message) || formatNonTextPlaceholder(message.content) || "",
+    );
   }
 
   return messages.flatMap((message) => {
@@ -268,7 +247,7 @@ function sanitizeSourceSessionSends(messages: AgentMessage[]): AgentMessage[] {
         replaced = true;
         const callId = typeof record.id === "string" ? record.id.trim() : "";
         const resultText = callId ? resultTextByCallId.get(callId) : undefined;
-        const resolved = Boolean(callId && resolvedCallIds.has(callId));
+        const resolved = Boolean(callId && resultTextByCallId.has(callId));
         const requestText = JSON.stringify({ callId: callId || undefined, args: record.arguments });
         return {
           type: "text",
@@ -339,84 +318,14 @@ function containsRealConversation(messages: AgentMessage[]): boolean {
 }
 
 /**
- * Attempt provider-based summarization. Returns the summary string on success,
- * or `undefined` when the caller should fall back to built-in LLM summarization.
- * Rethrows abort/timeout errors so cancellation is always respected.
- */
-async function tryProviderSummarize(
-  provider: CompactionProvider,
-  params: {
-    messages: unknown[];
-    signal?: AbortSignal;
-    customInstructions?: string;
-    summarizationInstructions?: {
-      identifierPolicy?: "strict" | "off" | "custom";
-      identifierInstructions?: string;
-    };
-    previousSummary?: string;
-  },
-): Promise<string | undefined> {
-  try {
-    const result = await provider.summarize(params);
-    if (typeof result === "string" && result.trim()) {
-      return result;
-    }
-    log.warn(`Compaction provider "${provider.id}" returned empty result, falling back to LLM.`);
-    return undefined;
-  } catch (err) {
-    // Propagate only when the caller explicitly cancelled. Provider-side
-    // AbortErrors (signal not aborted) fall through to LLM summarization.
-    if (params.signal?.aborted) {
-      throw err;
-    }
-    // Real non-abort transport timeouts (e.g. ETIMEDOUT) still propagate.
-    if (!isAbortError(err) && isTimeoutError(err)) {
-      throw err;
-    }
-    log.warn(
-      `Compaction provider "${provider.id}" failed, falling back to LLM: ${err instanceof Error ? err.message : String(err)}`,
-    );
-    return undefined;
-  }
-}
-
-/**
  * Summarize via the built-in LLM pipeline (summarizeInStages).
  * Only called when no compaction provider is available or the provider failed.
  */
-async function summarizeViaLLM(params: {
-  messages: AgentMessage[];
-  model: NonNullable<Parameters<typeof summarizeInStages>[0]["model"]>;
-  apiKey: string;
-  headers?: Record<string, string>;
-  signal: AbortSignal;
-  reserveTokens: number;
-  maxChunkTokens: number;
-  contextWindow: number;
-  customInstructions?: string;
-  summarizationInstructions?: Parameters<typeof summarizeInStages>[0]["summarizationInstructions"];
-  previousSummary?: string;
-  thinkingLevel?: Parameters<typeof summarizeInStages>[0]["thinkingLevel"];
-  streamFn?: Parameters<typeof summarizeInStages>[0]["streamFn"];
-}): Promise<string> {
-  const messages = prependPreviousSummaryForRedistill({
-    messages: params.messages,
-    previousSummary: params.previousSummary,
-  });
+async function summarizeViaLLM(params: Parameters<typeof summarizeInStages>[0]): Promise<string> {
   const result = await compactionSafeguardDeps.summarizeInStages({
-    messages,
-    model: params.model,
-    apiKey: params.apiKey,
-    headers: params.headers,
-    signal: params.signal,
-    reserveTokens: params.reserveTokens,
-    maxChunkTokens: params.maxChunkTokens,
-    contextWindow: params.contextWindow,
-    customInstructions: params.customInstructions,
-    summarizationInstructions: params.summarizationInstructions,
+    ...params,
+    messages: prependPreviousSummaryForRedistill(params),
     previousSummary: undefined,
-    thinkingLevel: params.thinkingLevel,
-    streamFn: params.streamFn,
   });
   if (result.kind === "summary") {
     return result.text;
@@ -439,12 +348,10 @@ function assembleSuffix(parts: {
   fileOpsSummary?: string;
   workspaceContext?: string;
 }): string {
-  let suffix = "";
-  suffix = appendSummarySection(suffix, parts.splitTurnSection ?? "");
-  suffix = appendSummarySection(suffix, parts.preservedTurnsSection ?? "");
-  suffix = appendSummarySection(suffix, parts.toolFailureSection ?? "");
-  suffix = appendSummarySection(suffix, parts.fileOpsSummary ?? "");
-  suffix = appendSummarySection(suffix, parts.workspaceContext ?? "");
+  let suffix = Object.values(parts).reduce(
+    (summary, section) => appendSummarySection(summary, section ?? ""),
+    "",
+  );
   // Ensure leading separator so suffix does not merge with body (e.g. when body
   // ends without newline: "...## Exact identifiers## Tool Failures").
   if (suffix && !/^\s/.test(suffix)) {
@@ -580,18 +487,11 @@ function formatToolFailureMeta(details: unknown): string | undefined {
     typeof record.exitCode === "number" && Number.isFinite(record.exitCode)
       ? record.exitCode
       : undefined;
-  const parts: string[] = [];
-  if (status) {
-    parts.push(`status=${status}`);
-  }
-  if (exitCode !== undefined) {
-    parts.push(`exitCode=${exitCode}`);
-  }
-  return parts.length > 0 ? parts.join(" ") : undefined;
-}
-
-function extractToolResultText(content: unknown): string {
-  return collectTextContentBlocks(content).join("\n");
+  const parts = [
+    status ? `status=${status}` : "",
+    exitCode !== undefined ? `exitCode=${exitCode}` : "",
+  ];
+  return parts.filter(Boolean).join(" ") || undefined;
 }
 
 function collectToolFailures(messages: AgentMessage[]): ToolFailure[] {
@@ -599,11 +499,7 @@ function collectToolFailures(messages: AgentMessage[]): ToolFailure[] {
   const seen = new Set<string>();
 
   for (const message of messages) {
-    if (!message || typeof message !== "object") {
-      continue;
-    }
-    const role = (message as { role?: unknown }).role;
-    if (role !== "toolResult") {
+    if (message.role !== "toolResult" || !message.isError) {
       continue;
     }
     const toolResult = message as {
@@ -613,9 +509,6 @@ function collectToolFailures(messages: AgentMessage[]): ToolFailure[] {
       details?: unknown;
       isError?: unknown;
     };
-    if (toolResult.isError !== true) {
-      continue;
-    }
     // Accepted sessions_spawn launches are successes, not failures, even when a legacy
     // transcript persisted them with isError:true. Mirror the observer's detection
     // (toolName + accepted child-run identity, see embedded-agent-subscribe.handlers.tools)
@@ -637,7 +530,7 @@ function collectToolFailures(messages: AgentMessage[]): ToolFailure[] {
       typeof toolResult.toolName === "string" && toolResult.toolName.trim()
         ? toolResult.toolName
         : "tool";
-    const rawText = extractToolResultText(toolResult.content);
+    const rawText = collectTextContentBlocks(toolResult.content).join("\n");
     const meta = formatToolFailureMeta(toolResult.details);
     const normalized = normalizeFailureText(rawText);
     const summary = truncateFailureText(
@@ -703,24 +596,13 @@ function formatFileOperations(readFiles: string[], modifiedFiles: string[]): str
     return lines.length > 0 ? `${openTag}${lines.join("")}${closeTag}` : "";
   }
 
-  const sections: string[] = [];
-  const readSection = formatBoundedFileList("read-files", readFiles, MAX_FILE_OPS_LIST_CHARS);
-  const modifiedSection = formatBoundedFileList(
-    "modified-files",
-    modifiedFiles,
-    MAX_FILE_OPS_LIST_CHARS,
-  );
-  if (readSection) {
-    sections.push(readSection);
-  }
-  if (modifiedSection) {
-    sections.push(modifiedSection);
-  }
-  if (sections.length === 0) {
-    return "";
-  }
-  const combined = `\n\n${sections.join("\n\n")}`;
-  return capCompactionSummary(combined, MAX_FILE_OPS_SECTION_CHARS);
+  const sections = [
+    formatBoundedFileList("read-files", readFiles, MAX_FILE_OPS_LIST_CHARS),
+    formatBoundedFileList("modified-files", modifiedFiles, MAX_FILE_OPS_LIST_CHARS),
+  ].filter(Boolean);
+  return sections.length > 0
+    ? capCompactionSummary(`\n\n${sections.join("\n\n")}`, MAX_FILE_OPS_SECTION_CHARS)
+    : "";
 }
 
 function capCompactionSummary(summary: string, maxChars = MAX_COMPACTION_SUMMARY_CHARS): string {
@@ -777,20 +659,15 @@ function extractMessageText(message: AgentMessage): string {
   if (typeof content === "string") {
     return content.trim();
   }
-  if (!Array.isArray(content)) {
-    return "";
-  }
-  const parts: string[] = [];
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
-    const text = (block as { text?: unknown }).text;
-    if (typeof text === "string" && text.trim().length > 0) {
-      parts.push(text.trim());
-    }
-  }
-  return parts.join("\n").trim();
+  return Array.isArray(content)
+    ? content
+        .flatMap((block) => {
+          const text =
+            block && typeof block === "object" ? (block as { text?: unknown }).text : undefined;
+          return typeof text === "string" && text.trim() ? [text.trim()] : [];
+        })
+        .join("\n")
+    : "";
 }
 
 function formatNonTextPlaceholder(content: unknown): string | null {
@@ -835,94 +712,68 @@ function splitPreservedRecentTurns(params: {
   if (preserveTurns <= 0) {
     return { summarizableMessages: params.messages, preservedMessages: [] };
   }
-  const conversationIndexes: number[] = [];
-  const userIndexes: number[] = [];
-  for (const [i, message] of params.messages.entries()) {
-    const role = message.role;
-    if (role === "user" || role === "assistant") {
-      conversationIndexes.push(i);
-      if (role === "user") {
-        userIndexes.push(i);
-      }
-    }
-  }
+  const conversationIndexes = params.messages.flatMap((message, index) =>
+    message.role === "user" || message.role === "assistant" ? [index] : [],
+  );
   if (conversationIndexes.length === 0) {
     return { summarizableMessages: params.messages, preservedMessages: [] };
   }
 
+  const userIndexes = conversationIndexes.filter(
+    (index) => params.messages[index]?.role === "user",
+  );
   const preservedIndexSet = new Set<number>();
   if (userIndexes.length >= preserveTurns) {
     const boundaryStartIndex = userIndexes[userIndexes.length - preserveTurns] ?? -1;
-    if (boundaryStartIndex >= 0) {
-      for (const index of conversationIndexes) {
-        if (index >= boundaryStartIndex) {
-          preservedIndexSet.add(index);
-        }
+    for (const index of conversationIndexes) {
+      if (index >= boundaryStartIndex) {
+        preservedIndexSet.add(index);
       }
     }
   } else {
-    const fallbackMessageCount = preserveTurns * 2;
     for (const userIndex of userIndexes) {
       preservedIndexSet.add(userIndex);
     }
-    for (let i = conversationIndexes.length - 1; i >= 0; i -= 1) {
-      const index = conversationIndexes[i];
-      if (index === undefined) {
-        continue;
-      }
+    for (const index of conversationIndexes.toReversed()) {
       preservedIndexSet.add(index);
-      if (preservedIndexSet.size >= fallbackMessageCount) {
+      if (preservedIndexSet.size >= preserveTurns * 2) {
         break;
       }
     }
   }
-  if (preservedIndexSet.size === 0) {
-    return { summarizableMessages: params.messages, preservedMessages: [] };
-  }
   const preservedToolCallIds = new Set<string>();
-  for (const [i, message] of params.messages.entries()) {
-    if (!preservedIndexSet.has(i)) {
-      continue;
-    }
-    if (message.role !== "assistant") {
-      continue;
-    }
-    const toolCalls = extractToolCallsFromAssistant(message);
-    for (const toolCall of toolCalls) {
-      preservedToolCallIds.add(toolCall.id);
+  for (const index of preservedIndexSet) {
+    const message = params.messages[index];
+    if (message?.role === "assistant") {
+      for (const toolCall of extractToolCallsFromAssistant(message)) {
+        preservedToolCallIds.add(toolCall.id);
+      }
     }
   }
   if (preservedToolCallIds.size > 0) {
-    let preservedStartIndex = -1;
-    for (let i = 0; i < params.messages.length; i += 1) {
-      if (preservedIndexSet.has(i)) {
-        preservedStartIndex = i;
-        break;
+    const preservedStartIndex = conversationIndexes.find((index) => preservedIndexSet.has(index))!;
+    for (let index = preservedStartIndex; index < params.messages.length; index += 1) {
+      const message = params.messages[index];
+      if (message?.role !== "toolResult") {
+        continue;
       }
-    }
-    if (preservedStartIndex >= 0) {
-      for (const [offset, message] of params.messages.slice(preservedStartIndex).entries()) {
-        if (message.role !== "toolResult") {
-          continue;
-        }
-        const toolResultId = extractToolResultId(message);
-        if (toolResultId && preservedToolCallIds.has(toolResultId)) {
-          preservedIndexSet.add(preservedStartIndex + offset);
-        }
+      const toolResultId = extractToolResultId(message);
+      if (toolResultId && preservedToolCallIds.has(toolResultId)) {
+        preservedIndexSet.add(index);
       }
     }
   }
-  const summarizableMessages = params.messages.filter((_, idx) => !preservedIndexSet.has(idx));
+  const summarizableMessages: AgentMessage[] = [];
+  const preservedMessages: AgentMessage[] = [];
+  for (const [index, message] of params.messages.entries()) {
+    (preservedIndexSet.has(index) ? preservedMessages : summarizableMessages).push(message);
+  }
   // Preserving recent assistant turns can orphan downstream toolResult messages.
   // Repair pairings here so compaction summarization doesn't trip strict providers.
-  const repairedSummarizableMessages = repairToolUseResultPairing(summarizableMessages).messages;
-  const preservedMessages = params.messages
-    .filter((_, idx) => preservedIndexSet.has(idx))
-    .filter((msg) => {
-      const role = (msg as { role?: unknown }).role;
-      return role === "user" || role === "assistant" || role === "toolResult";
-    });
-  return { summarizableMessages: repairedSummarizableMessages, preservedMessages };
+  return {
+    summarizableMessages: repairToolUseResultPairing(summarizableMessages).messages,
+    preservedMessages,
+  };
 }
 
 function formatContextMessages(messages: AgentMessage[]): string[] {
@@ -958,26 +809,17 @@ function formatContextMessages(messages: AgentMessage[]): string[] {
     .filter((line): line is string => Boolean(line));
 }
 
-function formatPreservedTurnsSection(messages: AgentMessage[]): string {
-  if (messages.length === 0) {
-    return "";
-  }
+function formatContextSection(messages: AgentMessage[], heading: string): string {
   const lines = formatContextMessages(messages);
-  if (lines.length === 0) {
-    return "";
-  }
-  return `\n\n## Recent turns preserved verbatim\n${lines.join("\n")}`;
+  return lines.length > 0 ? `${heading}\n${lines.join("\n")}` : "";
+}
+
+function formatPreservedTurnsSection(messages: AgentMessage[]): string {
+  return formatContextSection(messages, "\n\n## Recent turns preserved verbatim");
 }
 
 function formatSplitTurnContextSection(messages: AgentMessage[]): string {
-  if (messages.length === 0) {
-    return "";
-  }
-  const lines = formatContextMessages(messages);
-  if (lines.length === 0) {
-    return "";
-  }
-  return `**Turn Context (split turn):**\n\n${lines.join("\n")}`;
+  return formatContextSection(messages, "**Turn Context (split turn):**\n");
 }
 
 function extractLatestUserAsk(messages: AgentMessage[]): string | null {
@@ -1140,75 +982,67 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     const providerId = runtime?.provider;
     const turnPrefixMessages = baseTurnPrefixMessages;
     const recentTurnsPreserve = resolveRecentTurnsPreserve(runtime?.recentTurnsPreserve);
-    const { preservedMessages: providerPreservedMessages } = splitPreservedRecentTurns({
-      messages: baseMessagesToSummarize,
-      recentTurnsPreserve,
-    });
-    const preservedTurnsSection = formatPreservedTurnsSection(providerPreservedMessages);
-    const splitTurnSection = preparation.isSplitTurn
-      ? formatSplitTurnContextSection(turnPrefixMessages)
-      : "";
     const structuredInstructions = buildCompactionStructureInstructions(
       customInstructions,
       summarizationInstructions,
     );
+    const finalizeSummary = async (
+      body: string,
+      sections: { splitTurnSection?: string; preservedTurnsSection?: string },
+    ) => ({
+      compaction: {
+        summary: capCompactionSummaryPreservingSuffix(
+          body,
+          assembleSuffix({
+            ...sections,
+            toolFailureSection,
+            fileOpsSummary,
+            workspaceContext: await readWorkspaceContextForSummary(
+              runtime?.postCompactionSections,
+              runtime?.workspaceDir,
+            ),
+          }),
+        ),
+        firstKeptEntryId: preparation.firstKeptEntryId,
+        tokensBefore: preparation.tokensBefore,
+        details: { readFiles, modifiedFiles },
+      },
+    });
 
-    // -----------------------------------------------------------------------
-    // Provider path — one call with all messages, no LLM-specific prep.
-    // Falls through to the LLM path below on failure.
-    // -----------------------------------------------------------------------
     if (providerId) {
-      const compactionProvider = getCompactionProvider(providerId);
+      const compactionProvider: CompactionProvider | undefined = getCompactionProvider(providerId);
       if (compactionProvider) {
         try {
           // Give the provider ALL messages — no pruning, no chunking, no split-turn splitting.
-          // The provider handles its own context management.
-          const allMessages = [...baseMessagesToSummarize, ...turnPrefixMessages];
-          const providerResult = await tryProviderSummarize(compactionProvider, {
-            messages: allMessages,
+          const providerResult = await compactionProvider.summarize({
+            messages: [...baseMessagesToSummarize, ...turnPrefixMessages],
             signal,
             customInstructions: structuredInstructions,
             summarizationInstructions,
             previousSummary: preparation.previousSummary,
           });
-
-          if (providerResult !== undefined) {
-            // Provider succeeded — assemble suffix metadata and return.
-            // No quality guard: the provider is trusted.
-            const workspaceContext = await readWorkspaceContextForSummary(
-              runtime?.postCompactionSections,
-              runtime?.workspaceDir,
-            );
-            const suffix = assembleSuffix({
-              splitTurnSection,
-              preservedTurnsSection,
-              toolFailureSection,
-              fileOpsSummary,
-              workspaceContext,
+          if (typeof providerResult === "string" && providerResult.trim()) {
+            const { preservedMessages } = splitPreservedRecentTurns({
+              messages: baseMessagesToSummarize,
+              recentTurnsPreserve,
             });
-            const summary = capCompactionSummaryPreservingSuffix(providerResult, suffix);
-            return {
-              compaction: {
-                summary,
-                firstKeptEntryId: preparation.firstKeptEntryId,
-                tokensBefore: preparation.tokensBefore,
-                details: { readFiles, modifiedFiles },
-              },
-            };
+            return await finalizeSummary(providerResult, {
+              splitTurnSection: preparation.isSplitTurn
+                ? formatSplitTurnContextSection(turnPrefixMessages)
+                : "",
+              preservedTurnsSection: formatPreservedTurnsSection(preservedMessages),
+            });
           }
-          // Provider returned empty — fall through to LLM path.
-          log.info("Compaction provider did not produce a result; falling back to LLM path.");
+          log.warn(
+            `Compaction provider "${compactionProvider.id}" returned empty result, falling back to LLM.`,
+          );
         } catch (err) {
-          // tryProviderSummarize rethrows on caller cancellation; reaching here
-          // means an unexpected error in the assembly step. Fall through to LLM.
-          if (signal?.aborted) {
-            throw err;
-          }
-          if (!isAbortError(err) && isTimeoutError(err)) {
+          // Caller cancellation and real transport timeouts remain terminal.
+          if (signal?.aborted || (!isAbortError(err) && isTimeoutError(err))) {
             throw err;
           }
           log.warn(
-            `Compaction provider path failed unexpectedly: ${err instanceof Error ? err.message : String(err)}`,
+            `Compaction provider "${compactionProvider.id}" failed, falling back to LLM: ${formatErrorMessage(err)}`,
           );
         }
       } else {
@@ -1218,9 +1052,6 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       }
     }
 
-    // -----------------------------------------------------------------------
-    // LLM path — resolve model + auth, prune, chunk, quality guard.
-    // -----------------------------------------------------------------------
     const model = ctx.model ?? runtime?.model;
     if (!model) {
       if (!ctx.model && !runtime?.model && !missedModelWarningSessions.has(ctx.sessionManager)) {
@@ -1243,9 +1074,6 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       setCompactionSafeguardCancelReason(ctx.sessionManager, authResult.reason);
       return { cancel: true };
     }
-    const apiKey = authResult.apiKey ?? "";
-    const authHeaders = authResult.headers;
-
     try {
       const modelContextWindow = resolveContextWindowTokens(model);
       const contextWindowTokens = runtime?.contextWindowTokens ?? modelContextWindow;
@@ -1253,8 +1081,19 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       const headers = buildCompactionSummaryHeaders({
         model,
         messages: messagesToSummarize,
-        headers: authHeaders,
+        headers: authResult.headers,
       });
+      const llmSummaryParams = {
+        model,
+        apiKey: authResult.apiKey ?? "",
+        headers,
+        signal,
+        reserveTokens: resolveSummaryReserveTokens(preparation.settings.reserveTokens, model),
+        contextWindow: contextWindowTokens,
+        summarizationInstructions,
+        thinkingLevel,
+        streamFn,
+      };
       const qualityGuardEnabled = runtime?.qualityGuardEnabled ?? false;
       const qualityGuardMaxRetries = resolveQualityGuardMaxRetries(runtime?.qualityGuardMaxRetries);
 
@@ -1304,22 +1143,11 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                     SUMMARIZATION_OVERHEAD_TOKENS,
                 );
                 droppedSummary = await summarizeViaLLM({
+                  ...llmSummaryParams,
                   messages: pruned.droppedMessagesList,
-                  model,
-                  apiKey,
-                  headers,
-                  signal,
-                  reserveTokens: resolveSummaryReserveTokens(
-                    preparation.settings.reserveTokens,
-                    model,
-                  ),
                   maxChunkTokens: droppedMaxChunkTokens,
-                  contextWindow: contextWindowTokens,
                   customInstructions: structuredInstructions,
-                  summarizationInstructions,
                   previousSummary: preparation.previousSummary,
-                  thinkingLevel,
-                  streamFn,
                 });
               } catch (droppedError) {
                 if (signal?.aborted) {
@@ -1364,8 +1192,6 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         1,
         Math.floor(contextWindowTokens * adaptiveRatio) - SUMMARIZATION_OVERHEAD_TOKENS,
       );
-      const reserveTokens = resolveSummaryReserveTokens(preparation.settings.reserveTokens, model);
-
       // Feed dropped-messages summary as previousSummary so the main summarization
       // incorporates context from pruned messages instead of losing it entirely.
       const effectivePreviousSummary = droppedSummary ?? preparation.previousSummary;
@@ -1386,41 +1212,25 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           historySummary =
             messagesToSummarize.length > 0
               ? await summarizeViaLLM({
+                  ...llmSummaryParams,
                   messages: messagesToSummarize,
-                  model,
-                  apiKey,
-                  headers,
-                  signal,
-                  reserveTokens,
                   maxChunkTokens,
-                  contextWindow: contextWindowTokens,
                   customInstructions: currentInstructions,
-                  summarizationInstructions,
                   previousSummary: effectivePreviousSummary,
-                  thinkingLevel,
-                  streamFn,
                 })
               : buildStructuredFallbackSummary(effectivePreviousSummary, summarizationInstructions);
 
           summaryWithoutPreservedTurns = historySummary;
           if (preparation.isSplitTurn && turnPrefixMessages.length > 0) {
             const prefixSummary = await summarizeViaLLM({
+              ...llmSummaryParams,
               messages: turnPrefixMessages,
-              model,
-              apiKey,
-              headers,
-              signal,
-              reserveTokens,
               maxChunkTokens,
-              contextWindow: contextWindowTokens,
               customInstructions: composeSplitTurnInstructions(
                 TURN_PREFIX_INSTRUCTIONS,
                 currentInstructions,
               ),
-              summarizationInstructions,
               previousSummary: undefined,
-              thinkingLevel,
-              streamFn,
             });
             splitTurnSectionLocal = `**Turn Context (split turn):**\n\n${prefixSummary}`;
             summaryWithoutPreservedTurns = historySummary.trim()
@@ -1477,30 +1287,11 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           : `${structuredInstructions}\n\n${qualityFeedbackInstruction}`;
       }
 
-      // Cap the main history body first, then append split-turn context, preserved
-      // turns, diagnostics, and workspace rules so they survive truncation.
-      const workspaceContext = await readWorkspaceContextForSummary(
-        runtime?.postCompactionSections,
-        runtime?.workspaceDir,
-      );
-      const suffix = assembleSuffix({
+      // Cap history before suffixes so diagnostics and workspace rules survive.
+      return await finalizeSummary(lastHistorySummary || summary, {
         splitTurnSection: lastSplitTurnSection,
         preservedTurnsSection: preservedTurnsSectionLocal,
-        toolFailureSection,
-        fileOpsSummary,
-        workspaceContext,
       });
-      const bodyToCap = lastHistorySummary || summary;
-      summary = capCompactionSummaryPreservingSuffix(bodyToCap, suffix);
-
-      return {
-        compaction: {
-          summary,
-          firstKeptEntryId: preparation.firstKeptEntryId,
-          tokensBefore: preparation.tokensBefore,
-          details: { readFiles, modifiedFiles },
-        },
-      };
     } catch (error) {
       // Caller cancellation is terminal, not a safeguard failure. Preserve the
       // original abort so the runner can classify it without a false data-loss warning.

@@ -36,6 +36,10 @@ import {
   testing,
 } from "./subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import {
+  createSubagentRunRecord,
+  type SubagentRunRecordOverrides,
+} from "./subagent-test-fixtures.test-helpers.js";
 
 const dispatchAgent = vi.fn(async (_payload: Record<string, unknown>, _timeoutMs?: number) => ({
   runId: "resumed-run-id",
@@ -58,18 +62,20 @@ vi.mock("../gateway/session-utils.fs.js", () => ({
 
 const TWO_HOURS_MS = 2 * 60 * 60 * 1_000;
 
-function makeRunRecord(overrides: Partial<SubagentRunRecord>): SubagentRunRecord {
-  return createCanonicalSubagentRunFixture({
-    runId: "run",
-    childSessionKey: "agent:main:subagent:child",
-    requesterSessionKey: "agent:main:main",
-    requesterDisplayKey: "main",
-    task: "restart-recoverable work",
-    cleanup: "keep",
-    createdAt: Date.now(),
-    startedAt: Date.now(),
-    ...overrides,
-  } as SubagentRunRecord);
+function makeRunRecord(overrides: Partial<SubagentRunRecordOverrides>): SubagentRunRecord {
+  return createCanonicalSubagentRunFixture(
+    createSubagentRunRecord({
+      runId: "run",
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "restart-recoverable work",
+      cleanup: "keep",
+      createdAt: Date.now(),
+      startedAt: Date.now(),
+      ...overrides,
+    }),
+  );
 }
 
 describe("subagent orphan recovery — faithful restart path", () => {
@@ -135,8 +141,8 @@ describe("subagent orphan recovery — faithful restart path", () => {
         runId,
         task: record.task,
         deliveryStatus: "pending",
-        startedAt: record.startedAt,
-        lastEventAt: record.startedAt,
+        startedAt: record.execution.startedAt,
+        lastEventAt: record.execution.startedAt,
       }),
     ).not.toBeNull();
     addSubagentRunForTests(record);
@@ -147,8 +153,8 @@ describe("subagent orphan recovery — faithful restart path", () => {
 
     const after = getSubagentRunByChildSessionKey(childSessionKey);
     expect(dispatchAgent).not.toHaveBeenCalled();
-    expect(after?.endedAt).toBeTypeOf("number");
-    expect(after?.outcome?.status).toBe("error");
+    expect(after?.execution.endedAt).toBeTypeOf("number");
+    expect(after?.execution.outcome?.status).toBe("error");
     expect(result.recovered).toBe(0);
     expect(findTaskByRunId(runId)).toMatchObject({
       status: "failed",
@@ -238,8 +244,8 @@ describe("subagent orphan recovery — faithful restart path", () => {
           runId: record.runId,
           task: record.task,
           deliveryStatus: "pending",
-          startedAt: record.startedAt,
-          lastEventAt: record.startedAt,
+          startedAt: record.execution.startedAt,
+          lastEventAt: record.execution.startedAt,
         }),
       ).not.toBeNull();
     }
@@ -257,7 +263,9 @@ describe("subagent orphan recovery — faithful restart path", () => {
     expect(dispatchAgent).not.toHaveBeenCalled();
     expect(runs.some((entry) => entry.runId === staleRecord.runId)).toBe(false);
     expect(runs).toContainEqual(expect.objectContaining({ runId: freshRecord.runId }));
-    expect(runs.find((entry) => entry.runId === freshRecord.runId)?.endedAt).toBeUndefined();
+    expect(
+      runs.find((entry) => entry.runId === freshRecord.runId)?.execution.endedAt,
+    ).toBeUndefined();
     expect(findTaskByRunId(staleRecord.runId)).toMatchObject({ status: "failed" });
     expect(findTaskByRunId(freshRecord.runId)).toMatchObject({ status: "running" });
   });

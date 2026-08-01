@@ -420,6 +420,59 @@ describe("models.list", () => {
     });
   });
 
+  it("does not block wildcard provider inventory on slow full discovery", async () => {
+    const catalog = createDeferred<never>();
+    const loadGatewayModelCatalog = vi.fn(() => catalog.promise);
+    const runtimeConfig = {
+      agents: {
+        defaults: {
+          modelPolicy: { allow: ["vllm/*"] },
+        },
+      },
+      models: {
+        providers: {
+          vllm: {
+            baseUrl: "https://vllm.example/v1",
+            models: [{ id: "llama-local", name: "Llama Local" }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const { request, respond } = requestModelsList({
+        view: "provider-config",
+        runtimeConfig,
+        loadGatewayModelCatalog,
+        reqId: "req-models-list-wildcard-provider-timeout",
+      });
+
+      await vi.advanceTimersByTimeAsync(800);
+      await vi.runOnlyPendingTimersAsync();
+      await request;
+
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        {
+          models: [
+            {
+              id: "llama-local",
+              name: "Llama Local",
+              provider: "vllm",
+            },
+          ],
+        },
+        undefined,
+      );
+      expect(loadGatewayModelCatalog).toHaveBeenCalledWith(
+        expect.objectContaining({ readOnly: false }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps SecretRef configured fallback rows unknown when catalog discovery times out", async () => {
     const catalog = createDeferred<never>();
     const loadGatewayModelCatalog = vi.fn(() => catalog.promise);

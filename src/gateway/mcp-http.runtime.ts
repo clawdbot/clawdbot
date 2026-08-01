@@ -179,6 +179,7 @@ export class McpLoopbackToolCache {
       params.accountId ?? "",
       params.inboundEventKind ?? "",
       params.sourceReplyDeliveryMode ?? "",
+      params.sourceReplyOnly === true ? "source-reply-only" : "",
       params.taskSuggestionDeliveryMode ?? "",
       params.requireExplicitMessageTarget === true ? "explicit-message-target" : "",
       // Unset (full scope) must never share a cache row with an empty

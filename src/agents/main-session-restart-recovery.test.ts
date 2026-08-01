@@ -65,7 +65,6 @@ import * as recoveryOwnerRelease from "./main-session-recovery-owner-release.js"
 import { claimMainSessionRecoveryOwner } from "./main-session-recovery-store.js";
 import {
   markRestartAbortedMainSessions,
-  markRestartAbortedMainSessionsFromLocks,
   markStartupOrphanedMainSessionsForRecovery,
   recoverStartupOrphanedMainSessions as recoverStartupOrphanedMainSessionsBase,
   recoverRestartAbortedMainSessions as recoverRestartAbortedMainSessionsBase,
@@ -75,7 +74,6 @@ import {
   scheduleRestartAbortedMainSessionRecovery as scheduleRestartAbortedMainSessionRecoveryBase,
 } from "./main-session-restart-recovery.js";
 import { AGENT_RUN_RESTART_ABORT_ERROR_CODE } from "./run-termination.js";
-import type { SessionLockInspection } from "./session-write-lock.js";
 import {
   createAssistantToolCallMessage,
   createSessionEntry,
@@ -356,26 +354,6 @@ function unresumableAssistantMessage(text = "provider failed") {
     stopReason: "error",
     errorMessage: "Provider finish_reason: content_filter",
   };
-}
-
-function cleanedLockForPath(lockPath: string): SessionLockInspection {
-  // Simulates lock cleanup after process restart: stale lock removed, owning
-  // PID dead, and the transcript path available for recovery.
-  return {
-    lockPath,
-    pid: 999_999,
-    pidAlive: false,
-    createdAt: new Date(Date.now() - 1_000).toISOString(),
-    ageMs: 1_000,
-    stale: true,
-    staleReasons: ["dead-pid"],
-    removable: true,
-    removed: true,
-  };
-}
-
-function cleanedLock(sessionsDir: string, sessionId: string): SessionLockInspection {
-  return cleanedLockForPath(path.join(sessionsDir, `${sessionId}.jsonl.lock`));
 }
 
 describe("main-session-restart-recovery", () => {
@@ -768,86 +746,6 @@ describe("main-session-restart-recovery", () => {
     expect(store["agent:main:custom-by-id"]?.abortedLastRun).toBe(true);
   });
 
-  it("marks only main running sessions whose transcript lock was cleaned", async () => {
-    const sessionsDir = await makeSessionsDir();
-    await writeStore(sessionsDir, {
-      "agent:main:main": {
-        ...runningSessionEntry("main-session"),
-      },
-      "agent:main:subagent:child": {
-        ...runningSessionEntry("child-session"),
-        spawnDepth: 1,
-      },
-      "agent:main:other": {
-        ...runningSessionEntry("other-session"),
-      },
-    });
-
-    const result = await markRestartAbortedMainSessionsFromLocks({
-      sessionsDir,
-      cleanedLocks: [
-        cleanedLock(sessionsDir, "main-session"),
-        cleanedLock(sessionsDir, "child-session"),
-      ],
-    });
-
-    const store = readStore(path.join(sessionsDir, "sessions.json"));
-    expect(result).toEqual({ marked: 1, skipped: 1 });
-    expect(store["agent:main:main"]?.abortedLastRun).toBe(true);
-    expect(store["agent:main:subagent:child"]?.abortedLastRun).toBeUndefined();
-    expect(store["agent:main:other"]?.abortedLastRun).toBeUndefined();
-  });
-
-  it.each([
-    {
-      name: "does not mark a session for an unrelated topic lock that only shares its id prefix",
-      sessionKey: "agent:main:main",
-      sessionId: "main-session",
-      sessionFile: "main-session.jsonl",
-      lockKind: "unrelated",
-      marked: 0,
-    },
-    {
-      name: "falls back to the session id transcript lock when persisted sessionFile is outside the sessions dir",
-      sessionKey: "agent:main:main",
-      sessionId: "main-session",
-      sessionFile: "../stale/outside.jsonl",
-      lockKind: "session-id",
-      marked: 1,
-    },
-    {
-      name: "falls back to the session id transcript lock when persisted sessionFile belongs to another generated session",
-      sessionKey: "agent:main:main",
-      sessionId: "11111111-1111-4111-8111-111111111111",
-      sessionFile: "22222222-2222-4222-8222-222222222222.jsonl",
-      lockKind: "session-id",
-      marked: 1,
-    },
-  ])("$name", async ({ sessionKey, sessionId, sessionFile, lockKind, marked }) => {
-    const sessionsDir = await makeSessionsDir();
-    await writeStore(sessionsDir, {
-      [sessionKey]: runningSessionEntry(sessionId, { sessionFile }),
-    });
-    const lockFile =
-      lockKind === "unrelated"
-        ? "main-session-topic-unrelated.jsonl.lock"
-        : `${sessionId}.jsonl.lock`;
-    const lockPath = path.join(sessionsDir, lockFile);
-
-    const result = await markRestartAbortedMainSessionsFromLocks({
-      sessionsDir,
-      cleanedLocks: [cleanedLockForPath(lockPath)],
-    });
-
-    const store = readStore(path.join(sessionsDir, "sessions.json"));
-    expect(result).toEqual({ marked, skipped: 0 });
-    if (marked === 1) {
-      expect(store[sessionKey]?.abortedLastRun).toBe(true);
-    } else {
-      expect(store[sessionKey]?.abortedLastRun).toBeUndefined();
-    }
-  });
-
   it("resumes marked sessions with a tool-result transcript tail", async () => {
     const sessionsDir = await makeSessionsDir();
     await writeStore(sessionsDir, mainSessionStore());
@@ -861,6 +759,71 @@ describe("main-session-restart-recovery", () => {
     expect(resumeParams.lane).toBe("main");
     const store = readStore(path.join(sessionsDir, "sessions.json"));
     expect(store["agent:main:main"]?.abortedLastRun).toBe(false);
+  });
+
+  it("resumes when durable commentary is mirrored after the restart recovery mark", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const sessionKey = "agent:main:main";
+    await writeStore(sessionsDir, {
+      [sessionKey]: runningSessionEntry("main-session"),
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "finish the interrupted long-running turn" },
+    ]);
+
+    await expect(
+      markRestartAbortedMainSessions({
+        stateDir: tmpDir,
+        sessionKeys: [sessionKey],
+        reason: "gateway restart drain",
+      }),
+    ).resolves.toEqual({ marked: 1, skipped: 0 });
+
+    await writeTranscript(sessionsDir, "main-session", [
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Checking the remaining background task." }],
+        stopReason: "stop",
+        openclawStreamFallback: {
+          replacementText: "Checking the remaining background task.",
+          source: "segment",
+          itemId: "progress-after-recovery-mark",
+        },
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "The restart handoff is in progress." }],
+        stopReason: "stop",
+        openclawStreamFallback: {
+          replacementText: "The restart handoff is in progress.",
+          source: "segment",
+          itemId: "progress-after-recovery-mark-2",
+        },
+      },
+    ]);
+
+    await expectRecovery({ recovered: 1, failed: 0, skipped: 0 });
+    expect(callGateway).toHaveBeenCalledOnce();
+    expect(gatewayParams().sessionKey).toBe(sessionKey);
+    expect(readStore(path.join(sessionsDir, "sessions.json"))[sessionKey]).toMatchObject({
+      status: "running",
+      abortedLastRun: false,
+    });
+
+    const transcript = await loadTestTranscript(
+      sessionKey,
+      path.join(sessionsDir, "sessions.json"),
+    );
+    expect(
+      transcript
+        .map((event) => event.message)
+        .filter(
+          (message) =>
+            message?.role === "assistant" &&
+            (message as { openclawStreamFallback?: { source?: unknown } }).openclawStreamFallback
+              ?.source === "segment",
+        ),
+    ).toHaveLength(2);
   });
 
   it.each([
@@ -2322,6 +2285,87 @@ describe("main-session-restart-recovery", () => {
     });
   });
 
+  it("waits for startup release while preserving the registration cutoff", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const releaseStartup = createDeferred();
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        ...runningSessionEntry("pre-start-session"),
+        updatedAt: 1,
+      },
+    });
+    await writeTranscript(sessionsDir, "pre-start-session", [
+      { role: "user", content: "resume the interrupted work" },
+      { role: "toolResult", content: "done" },
+    ]);
+
+    const recovery = scheduleRestartAbortedMainSessionRecovery({
+      cfg: {},
+      delayMs: 0,
+      stateDir: tmpDir,
+      waitForStart: () => releaseStartup.promise,
+    });
+    await Promise.resolve();
+    expect(callGateway).not.toHaveBeenCalled();
+
+    const postRegistrationUpdatedAt = Date.now() + 60_000;
+    await writeStore(sessionsDir, {
+      ...readStore(storePath),
+      "agent:main:fresh": {
+        ...runningSessionEntry("post-start-session"),
+        updatedAt: postRegistrationUpdatedAt,
+      },
+    });
+    await writeTranscript(sessionsDir, "post-start-session", [
+      { role: "user", content: "new work from this gateway" },
+      { role: "toolResult", content: "done" },
+    ]);
+
+    releaseStartup.resolve();
+    await waitForFast(() => expect(callGateway).toHaveBeenCalledOnce());
+    await recovery.stop();
+
+    const store = readStore(storePath);
+    expect(store["agent:main:main"]?.abortedLastRun).toBe(false);
+    expect(store["agent:main:fresh"]).toMatchObject({
+      sessionId: "post-start-session",
+      status: "running",
+    });
+    expect(store["agent:main:fresh"]?.abortedLastRun).toBeUndefined();
+  });
+
+  it("stops without waiting for an unresolved startup release", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const releaseStartup = createDeferred();
+    await writeMainSession({
+      sessionsDir,
+      pendingFinalDelivery: {
+        kind: "replayable",
+        text: "interrupted response",
+        createdAt: Date.now(),
+      },
+    });
+
+    const recovery = scheduleRestartAbortedMainSessionRecovery({
+      cfg: {},
+      delayMs: 0,
+      stateDir: tmpDir,
+      waitForStart: () => releaseStartup.promise,
+    });
+    await recovery.stop();
+    releaseStartup.resolve();
+    await Promise.resolve();
+
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+    expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
+      status: "running",
+      abortedLastRun: true,
+    });
+  });
+
   it("fences an in-flight startup recovery before its durable session claim", async () => {
     const sessionsDir = await makeSessionsDir();
     const storePath = path.join(sessionsDir, "sessions.json");
@@ -2732,49 +2776,6 @@ describe("main-session-restart-recovery", () => {
     );
   });
 
-  it("retries an exact legacy row after its canonical alias is reused", async () => {
-    const sessionsDir = await makeSessionsDir();
-    const storePath = path.join(sessionsDir, "sessions.json");
-    await writeStore(sessionsDir, {
-      "agent:main:main": {
-        sessionId: "replacement-session",
-        updatedAt: Date.now(),
-      },
-      main: {
-        sessionId: "legacy-session",
-        updatedAt: Date.now() - 10_000,
-        status: "running",
-        abortedLastRun: true,
-      },
-    });
-    await writeTranscript(sessionsDir, "legacy-session", [
-      { role: "user", content: "resume the legacy row" },
-    ]);
-
-    const result = await retryRestartAbortedMainSessionRecoveryAfterOwnerRelease({
-      cfg: { agents: { entries: { main: { default: true } } } },
-      expectedSessionId: "legacy-session",
-      sessionKey: "main",
-      storePath,
-    });
-
-    expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
-    expect(callGateway).toHaveBeenCalledOnce();
-    expect(gatewayParams()).toMatchObject({
-      expectedExistingSessionId: "legacy-session",
-      sessionKey: "agent:main:main",
-    });
-    expect(
-      sessionAccessor.loadExactSessionEntry({ sessionKey: "main", storePath })?.entry,
-    ).toMatchObject({
-      sessionId: "legacy-session",
-      abortedLastRun: false,
-    });
-    expect(
-      sessionAccessor.loadExactSessionEntry({ sessionKey: "agent:main:main", storePath })?.entry,
-    ).toMatchObject({ sessionId: "replacement-session" });
-  });
-
   it("retries a failed exact owner-release recovery with bounded backoff", async () => {
     const sessionsDir = await makeSessionsDir();
     const storePath = path.join(sessionsDir, "sessions.json");
@@ -3136,51 +3137,6 @@ describe("main-session-restart-recovery", () => {
       10_000,
     );
     expect(callGateway).not.toHaveBeenCalled();
-  });
-
-  it("targets a legacy durable row through its canonical agent session key", async () => {
-    const sessionsDir = await makeSessionsDir();
-    const storePath = path.join(sessionsDir, "sessions.json");
-    await writeStore(sessionsDir, {
-      main: {
-        sessionId: "legacy-main-session",
-        updatedAt: Date.now() - 10_000,
-        status: "running",
-        abortedLastRun: true,
-        restartRecoveryDeliveryRunId: "legacy-recovery",
-        restartRecoveryDeliverySourceRunId: "legacy-source",
-      },
-    });
-    await writeTranscript(sessionsDir, "legacy-main-session", [
-      { role: "user", content: "recover the legacy row" },
-    ]);
-
-    const result = await retryRestartAbortedMainSessionRecovery({
-      canonicalSessionKey: "agent:main:main",
-      cfg: {},
-      expectedRecoveryRunId: "legacy-recovery",
-      expectedRecoverySourceRunId: "legacy-source",
-      expectedSessionId: "legacy-main-session",
-      sessionKey: "main",
-      storePath,
-    });
-
-    expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
-    expect(gatewayParams()).toMatchObject({
-      expectedExistingSessionId: "legacy-main-session",
-      idempotencyKey: "legacy-recovery",
-      internalRuntimeHandoffId: expect.any(String),
-      sessionKey: "agent:main:main",
-    });
-    // The gateway mock stops before agent admission, which promotes this alias
-    // to the canonical key before the recovered run can execute message tools.
-    expect(
-      sessionAccessor.loadExactSessionEntry({ sessionKey: "main", storePath })?.entry,
-    ).toMatchObject({
-      abortedLastRun: false,
-      restartRecoveryDeliveryRunId: "legacy-recovery",
-      restartRecoveryDeliverySourceRunId: "legacy-source",
-    });
   });
 
   it("holds lifecycle replacement behind the targeted recovery dispatch", async () => {

@@ -742,6 +742,28 @@ public struct BoardCanvasDocumentSource: Codable, Sendable {
     }
 }
 
+public struct BoardWidgetGeneratedIdentity: Codable, Sendable {
+    public let source: String
+    public let key: String
+    public let fallbackname: String
+
+    public init(
+        source: String,
+        key: String,
+        fallbackname: String)
+    {
+        self.source = source
+        self.key = key
+        self.fallbackname = fallbackname
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case source
+        case key
+        case fallbackname = "fallbackName"
+    }
+}
+
 public struct BoardGetParams: Codable, Sendable {
     public let sessionkey: String
 
@@ -783,6 +805,7 @@ public struct BoardWidgetPutParams: Codable, Sendable {
     public let heightmode: AnyCodable?
     public let placement: [String: AnyCodable]?
     public let declared: BoardWidgetDeclared?
+    public let generatedidentity: BoardWidgetGeneratedIdentity?
 
     public init(
         sessionkey: String,
@@ -792,7 +815,8 @@ public struct BoardWidgetPutParams: Codable, Sendable {
         presentation: AnyCodable? = nil,
         heightmode: AnyCodable? = nil,
         placement: [String: AnyCodable]? = nil,
-        declared: BoardWidgetDeclared? = nil)
+        declared: BoardWidgetDeclared? = nil,
+        generatedidentity: BoardWidgetGeneratedIdentity? = nil)
     {
         self.sessionkey = sessionkey
         self.name = name
@@ -802,6 +826,7 @@ public struct BoardWidgetPutParams: Codable, Sendable {
         self.heightmode = heightmode
         self.placement = placement
         self.declared = declared
+        self.generatedidentity = generatedidentity
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -813,6 +838,37 @@ public struct BoardWidgetPutParams: Codable, Sendable {
         case heightmode = "heightMode"
         case placement
         case declared
+        case generatedidentity = "generatedIdentity"
+    }
+}
+
+public struct BoardWidgetPutResult: Codable, Sendable {
+    public let sessionkey: String
+    public let revision: Int
+    public let tabs: [BoardTab]
+    public let widgets: [BoardWidget]
+    public let resolvedwidgetname: String
+
+    public init(
+        sessionkey: String,
+        revision: Int,
+        tabs: [BoardTab],
+        widgets: [BoardWidget],
+        resolvedwidgetname: String)
+    {
+        self.sessionkey = sessionkey
+        self.revision = revision
+        self.tabs = tabs
+        self.widgets = widgets
+        self.resolvedwidgetname = resolvedwidgetname
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case revision
+        case tabs
+        case widgets
+        case resolvedwidgetname = "resolvedWidgetName"
     }
 }
 
@@ -9417,6 +9473,7 @@ public struct SystemAgentSetupDetectResult: Codable, Sendable {
     public let unavailablecandidates: [[String: AnyCodable]]?
     public let manualproviders: [[String: AnyCodable]]
     public let authoptions: [[String: AnyCodable]]?
+    public let prepareoptions: [[String: AnyCodable]]?
     public let recommendedinstalls: [[String: AnyCodable]]?
     public let workspace: String
     public let codexappserverdetected: Bool?
@@ -9428,6 +9485,7 @@ public struct SystemAgentSetupDetectResult: Codable, Sendable {
         unavailablecandidates: [[String: AnyCodable]]? = nil,
         manualproviders: [[String: AnyCodable]],
         authoptions: [[String: AnyCodable]]? = nil,
+        prepareoptions: [[String: AnyCodable]]? = nil,
         recommendedinstalls: [[String: AnyCodable]]? = nil,
         workspace: String,
         codexappserverdetected: Bool? = nil,
@@ -9438,6 +9496,7 @@ public struct SystemAgentSetupDetectResult: Codable, Sendable {
         self.unavailablecandidates = unavailablecandidates
         self.manualproviders = manualproviders
         self.authoptions = authoptions
+        self.prepareoptions = prepareoptions
         self.recommendedinstalls = recommendedinstalls
         self.workspace = workspace
         self.codexappserverdetected = codexappserverdetected
@@ -9450,6 +9509,7 @@ public struct SystemAgentSetupDetectResult: Codable, Sendable {
         case unavailablecandidates = "unavailableCandidates"
         case manualproviders = "manualProviders"
         case authoptions = "authOptions"
+        case prepareoptions = "prepareOptions"
         case recommendedinstalls = "recommendedInstalls"
         case workspace
         case codexappserverdetected = "codexAppServerDetected"
@@ -11952,6 +12012,7 @@ public struct ModelChoice: Codable, Sendable {
     public let available: Bool?
     public let contextwindow: Int?
     public let reasoning: Bool?
+    public let supportstools: Bool?
     public let agentruntime: [String: AnyCodable]?
     public let apikeysupported: Bool?
     public let input: [AnyCodable]?
@@ -11964,6 +12025,7 @@ public struct ModelChoice: Codable, Sendable {
         available: Bool? = nil,
         contextwindow: Int? = nil,
         reasoning: Bool? = nil,
+        supportstools: Bool? = nil,
         agentruntime: [String: AnyCodable]? = nil,
         apikeysupported: Bool? = nil,
         input: [AnyCodable]? = nil)
@@ -11975,6 +12037,7 @@ public struct ModelChoice: Codable, Sendable {
         self.available = available
         self.contextwindow = contextwindow
         self.reasoning = reasoning
+        self.supportstools = supportstools
         self.agentruntime = agentruntime
         self.apikeysupported = apikeysupported
         self.input = input
@@ -11988,6 +12051,7 @@ public struct ModelChoice: Codable, Sendable {
         case available
         case contextwindow = "contextWindow"
         case reasoning
+        case supportstools = "supportsTools"
         case agentruntime = "agentRuntime"
         case apikeysupported = "apiKeySupported"
         case input

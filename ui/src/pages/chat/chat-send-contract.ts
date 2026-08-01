@@ -23,7 +23,6 @@ export type ChatHost = ChatInputHistoryState &
     connectionEpoch?: number;
     chatAttachments: ChatAttachment[];
     chatQueue: ChatQueueItem[];
-    chatQueueByScope?: Record<string, ChatQueueItem[]>;
     /** Active leaf of the history snapshot currently rendered by this pane. */
     chatDisplayedLeafEntryId?: string | null;
     chatRunId: string | null;

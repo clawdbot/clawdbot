@@ -267,9 +267,17 @@ type RealtimeSpeakResult = {
 };
 
 type ForcedConsultState = {
+  owner: ActiveRealtimeVoiceBridge;
   promise: Promise<unknown>;
   sendSpeechPrompt: boolean;
+  cancelled: boolean;
+  cancel: () => void;
   completedAt?: number;
+};
+
+type RealtimeConsultSession = {
+  owner: ActiveRealtimeVoiceBridge;
+  coordinator: RealtimeVoiceSessionHarness["forcedConsults"];
 };
 
 type NativeConsultState = {
@@ -342,6 +350,7 @@ export class RealtimeCallHandler {
     ReturnType<typeof setTimeout>
   >();
   private readonly forcedConsultsByCallId = new Map<string, ForcedConsultState>();
+  private readonly consultSessionsByCallId = new Map<string, RealtimeConsultSession>();
   private readonly nativeConsultsInFlightByCallId = new Map<string, NativeConsultState>();
   private closePromise: Promise<void> | null = null;
   private closing = false;
@@ -934,12 +943,9 @@ export class RealtimeCallHandler {
         });
       },
       onClose: (reason) => {
-        this.activeBridgesByCallId.delete(callId);
-        this.activeBridgesByCallId.delete(callSid);
-        this.activeTelephonyClosersByCallId.delete(callId);
-        this.activeTelephonyClosersByCallId.delete(callSid);
         if (nativeConsultOwner.current) {
-          this.cancelNativeConsult(callId, nativeConsultOwner.current);
+          this.clearActiveBridgeMappings(callId, callSid, nativeConsultOwner.current);
+          this.cancelConsultSession(callId, nativeConsultOwner.current);
         }
         this.clearUserTranscriptState(callId);
         harness.finishOutputAudio(reason);
@@ -976,6 +982,14 @@ export class RealtimeCallHandler {
         emitCallEnd(reason);
       }
     };
+    const previousConsultSession = this.consultSessionsByCallId.get(callId);
+    if (previousConsultSession && previousConsultSession.owner !== session) {
+      this.cancelConsultSession(callId, previousConsultSession.owner);
+    }
+    this.consultSessionsByCallId.set(callId, {
+      owner: session,
+      coordinator: harness.forcedConsults,
+    });
     this.activeBridgesByCallId.set(callId, session);
     this.activeBridgesByCallId.set(callSid, session);
     this.activeTelephonyClosersByCallId.set(callId, closeTelephony);
@@ -1007,13 +1021,9 @@ export class RealtimeCallHandler {
       try {
         closeSession();
       } finally {
-        this.activeBridgesByCallId.delete(callId);
-        this.activeBridgesByCallId.delete(callSid);
-        this.activeTelephonyClosersByCallId.delete(callId);
-        this.activeTelephonyClosersByCallId.delete(callSid);
-        this.cancelNativeConsult(callId, session);
+        this.clearActiveBridgeMappings(callId, callSid, session);
+        this.cancelConsultSession(callId, session);
         this.clearUserTranscriptState(callId);
-        this.forcedConsultsByCallId.delete(callId);
         harness.close();
         audioPacer.close();
       }
@@ -1082,6 +1092,47 @@ export class RealtimeCallHandler {
     state.cancelled = true;
     this.nativeConsultsInFlightByCallId.delete(callId);
     state.cancel();
+  }
+
+  private cancelForcedConsult(callId: string, owner: ActiveRealtimeVoiceBridge): void {
+    const state = this.forcedConsultsByCallId.get(callId);
+    if (!state || state.owner !== owner) {
+      return;
+    }
+    state.cancelled = true;
+    state.sendSpeechPrompt = false;
+    state.cancel();
+    this.forcedConsultsByCallId.delete(callId);
+  }
+
+  private cancelConsultSession(callId: string, owner: ActiveRealtimeVoiceBridge | undefined): void {
+    if (!owner) {
+      return;
+    }
+    const session = this.consultSessionsByCallId.get(callId);
+    if (!session || session.owner !== owner) {
+      return;
+    }
+    // Forced and native consults share bridge ownership. Replacement or close
+    // must invalidate both before a newer bridge can observe call-scoped state.
+    session.coordinator.clearPending();
+    this.cancelForcedConsult(callId, owner);
+    this.cancelNativeConsult(callId, owner);
+    this.consultSessionsByCallId.delete(callId);
+  }
+
+  private clearActiveBridgeMappings(
+    callId: string,
+    callSid: string,
+    owner: ActiveRealtimeVoiceBridge,
+  ): void {
+    for (const key of [callId, callSid]) {
+      if (this.activeBridgesByCallId.get(key) !== owner) {
+        continue;
+      }
+      this.activeBridgesByCallId.delete(key);
+      this.activeTelephonyClosersByCallId.delete(key);
+    }
   }
 
   private resolveUserTranscriptContext(callId: string): string | undefined {
@@ -1161,7 +1212,10 @@ export class RealtimeCallHandler {
     transcript: string;
     clearAudio: () => void;
   }): void {
-    if (this.config.consultPolicy !== "always") {
+    if (
+      this.config.consultPolicy !== "always" ||
+      this.activeBridgesByCallId.get(params.callId) !== params.session
+    ) {
       return;
     }
     const question = params.transcript.trim();
@@ -1218,7 +1272,10 @@ export class RealtimeCallHandler {
     );
     params.clearAudio();
     const state: ForcedConsultState = {
+      owner: params.session,
       sendSpeechPrompt: true,
+      cancelled: false,
+      cancel: () => coordinator.markCancelled(params.handle),
       promise: Promise.resolve().then(() =>
         params.handler(
           {
@@ -1232,6 +1289,9 @@ export class RealtimeCallHandler {
     this.forcedConsultsByCallId.set(params.callId, state);
     try {
       const result = await state.promise;
+      if (state.cancelled || this.forcedConsultsByCallId.get(params.callId) !== state) {
+        return;
+      }
       state.completedAt = Date.now();
       coordinator.markDelivered(params.handle);
       const text = readSpeakableRealtimeVoiceToolResult(result, {
@@ -1257,13 +1317,19 @@ export class RealtimeCallHandler {
         `[voice-call] realtime forced agent consult failed callId=${params.callId} providerCallId=${params.callSid} error=${formatErrorMessage(error)}`,
       );
     } finally {
-      const cleanupTimer = setTimeout(() => {
-        if (this.forcedConsultsByCallId.get(params.callId) === state) {
-          this.forcedConsultsByCallId.delete(params.callId);
+      if (!state.cancelled) {
+        if (this.forcedConsultsByCallId.get(params.callId) !== state) {
           coordinator.remove(params.handle);
+        } else {
+          const cleanupTimer = setTimeout(() => {
+            if (this.forcedConsultsByCallId.get(params.callId) === state) {
+              this.forcedConsultsByCallId.delete(params.callId);
+              coordinator.remove(params.handle);
+            }
+          }, FORCED_CONSULT_NATIVE_DEDUPE_MS);
+          cleanupTimer.unref?.();
         }
-      }, FORCED_CONSULT_NATIVE_DEDUPE_MS);
-      cleanupTimer.unref?.();
+      }
     }
   }
 
@@ -1401,6 +1467,9 @@ export class RealtimeCallHandler {
       }
     };
     if (name === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME) {
+      if (this.activeBridgesByCallId.get(callId) !== bridge) {
+        return;
+      }
       const coordinator = harness.forcedConsults;
       const forcedMatch = coordinator.recordNativeConsult(args, bridgeCallId);
       if (forcedMatch.kind === "none") {
@@ -1409,7 +1478,11 @@ export class RealtimeCallHandler {
           coordinator.remove(pending);
         }
       }
-      const forcedConsult = this.forcedConsultsByCallId.get(callId);
+      const forcedConsultState = this.forcedConsultsByCallId.get(callId);
+      const forcedConsult =
+        forcedConsultState?.owner === bridge && !forcedConsultState.cancelled
+          ? forcedConsultState
+          : undefined;
       if (forcedMatch.kind === "already_delivered" && coordinator.isCancelled(forcedMatch.handle)) {
         if (forcedConsult) {
           forcedConsult.sendSpeechPrompt = false;
@@ -1432,6 +1505,13 @@ export class RealtimeCallHandler {
         const result = await forcedConsult.promise.catch((error: unknown) => ({
           error: formatErrorMessage(error),
         }));
+        if (
+          forcedConsult.cancelled ||
+          forcedConsult.owner !== bridge ||
+          this.forcedConsultsByCallId.get(callId) !== forcedConsult
+        ) {
+          return;
+        }
         await submitFinalToolResult(result);
         return;
       }

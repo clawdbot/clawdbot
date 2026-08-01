@@ -97,7 +97,7 @@ if (!isMain) {
 }
 
 if (isMain) {
-  const { restoreTerminalState } = await import("../packages/terminal-core/src/restore.js");
+  const { restoreRuntimeTerminalState } = await import("./runtime.js");
 
   // Global error handlers to prevent silent crashes from unhandled rejections/exceptions.
   // These log the error and exit gracefully instead of crashing without trace.
@@ -124,7 +124,7 @@ if (isMain) {
     for (const message of runFatalErrorHooks({ reason: "uncaught_exception", error })) {
       console.error("[openclaw]", message);
     }
-    restoreTerminalState("uncaught exception", { resumeStdinIfPaused: false });
+    restoreRuntimeTerminalState("uncaught exception", { resumeStdinIfPaused: false });
     process.exit(1);
   });
 
@@ -145,7 +145,7 @@ if (isMain) {
       for (const message of runFatalErrorHooks({ reason: "legacy_cli_failure", error: err })) {
         console.error("[openclaw]", message);
       }
-      restoreTerminalState("legacy cli failure", { resumeStdinIfPaused: false });
+      restoreRuntimeTerminalState("legacy cli failure", { resumeStdinIfPaused: false });
       process.exitCode = 1;
     },
   });

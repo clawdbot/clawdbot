@@ -40,6 +40,11 @@ import {
   DEFAULT_ACCOUNT_ID,
   PAIRING_APPROVED_MESSAGE,
 } from "../runtime-api.js";
+import {
+  extractMSTeamsToolSendResult,
+  msteamsContextTargetsMatch,
+  resolveMSTeamsAutoThreadId,
+} from "./action-threading.js";
 import { msTeamsApprovalAuth } from "./approval-auth.js";
 import {
   msteamsConfigAdapter,
@@ -66,7 +71,7 @@ import {
   resolveMSTeamsUserAllowlist,
 } from "./resolve-allowlist.js";
 import { resolveMSTeamsOutboundSessionRoute } from "./session-route.js";
-import { msteamsSetupAdapter, msteamsSetupContract } from "./setup-core.js";
+import { msteamsSetupContract } from "./setup-core.js";
 import { msteamsSetupWizard } from "./setup-surface.js";
 import { resolveMSTeamsCredentials } from "./token.js";
 
@@ -534,7 +539,6 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
         warnOnEmptyGroupSenderAllowlist: true,
         collectMutableAllowlistWarnings: collectMSTeamsMutableAllowlistWarnings,
       },
-      setup: msteamsSetupAdapter,
       setupContract: msteamsSetupContract,
       messaging: {
         targetPrefixes: ["msteams", "teams"],
@@ -721,6 +725,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
       },
       actions: {
         describeMessageTool: describeMSTeamsMessageTool,
+        extractToolSendResult: ({ result, send }) => extractMSTeamsToolSendResult(result, send),
         requiresTrustedRequesterSender: ({ action, toolContext }) =>
           normalizeOptionalString(toolContext?.currentChannelProvider)?.toLowerCase() ===
             "msteams" && MSTEAMS_GROUP_MANAGEMENT_ACTIONS.has(action),
@@ -1288,9 +1293,20 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
       },
     },
     threading: {
+      matchesToolContextTarget: ({ target, toolContext }) =>
+        msteamsContextTargetsMatch(target, toolContext),
       buildToolContext: ({ context, hasRepliedRef }) => {
         const nativeChannelId = context.NativeChannelId?.trim();
         const hasChannelRoute = Boolean(nativeChannelId && nativeChannelId.includes("/"));
+        const isChannel = context.ChatType === "channel";
+        const messageThreadId =
+          context.MessageThreadId != null
+            ? normalizeOptionalString(String(context.MessageThreadId))
+            : undefined;
+        // Prefer MessageThreadId (root). ReplyToId fallback is channel-only — DM/group
+        // quote replies must not inherit ambient thread metadata for dedupe.
+        const currentThreadTs =
+          messageThreadId ?? (isChannel ? normalizeOptionalString(context.ReplyToId) : undefined);
         return {
           currentChannelId: normalizeOptionalString(context.To),
           currentChatType:
@@ -1301,10 +1317,17 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
               : undefined,
           currentMessagingTarget: hasChannelRoute ? nativeChannelId : undefined,
           currentGraphChannelId: hasChannelRoute ? nativeChannelId : undefined,
-          currentThreadTs: context.ReplyToId,
+          currentThreadTs,
+          ...(currentThreadTs ? { replyToMode: "all" as const } : {}),
           hasRepliedRef,
         };
       },
+      resolveAutoThreadId: ({ cfg, to, toolContext }) =>
+        resolveMSTeamsAutoThreadId({
+          cfg: cfg.channels?.msteams,
+          to,
+          toolContext,
+        }),
     },
     outbound: msteamsChannelOutbound,
   });

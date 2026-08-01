@@ -67,11 +67,13 @@ describeControlUiE2e("Control UI agent model fallback ownership", () => {
       viewport: { height: 900, width: 1280 },
     });
     const page = await context.newPage();
-    const writer = { id: "writer", ...(model === undefined ? {} : { model }) };
     const config = {
       agents: {
         defaults: { model: { primary: primaryModel, fallbacks: [inheritedFallback] } },
-        list: [{ id: "main" }, writer],
+        entries: {
+          main: { default: true },
+          writer: model === undefined ? {} : { model },
+        },
       },
     };
     const gateway = await installMockGateway(page, {

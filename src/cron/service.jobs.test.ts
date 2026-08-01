@@ -1021,7 +1021,7 @@ describe("cron stagger defaults", () => {
     expectCronStaggerMs(job, 0);
   });
 
-  it("preserves existing stagger when editing cron expression without stagger", () => {
+  it("derives a fresh top-of-hour stagger when replacing the cron expression", () => {
     const now = Date.now();
     const job: CronJob = {
       id: "job-keep-stagger",
@@ -1043,8 +1043,57 @@ describe("cron stagger defaults", () => {
     expect(job.schedule.kind).toBe("cron");
     if (job.schedule.kind === "cron") {
       expect(job.schedule.expr).toBe("0 */2 * * *");
-      expect(job.schedule.staggerMs).toBe(120_000);
+      expect(job.schedule.staggerMs).toBe(DEFAULT_TOP_OF_HOUR_STAGGER_MS);
     }
+  });
+
+  it("drops an old stagger when the replacement expression has no stagger default", () => {
+    const now = Date.now();
+    const job: CronJob = {
+      id: "job-drop-stagger",
+      name: "job-drop-stagger",
+      enabled: true,
+      createdAtMs: now,
+      updatedAtMs: now,
+      schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC", staggerMs: 120_000 },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "tick" },
+      state: {},
+    };
+
+    applyJobPatch(job, {
+      schedule: { kind: "cron", expr: "30 9 * * *", tz: "UTC" },
+    });
+
+    expect(job.schedule).toEqual({ kind: "cron", expr: "30 9 * * *", tz: "UTC" });
+  });
+
+  it("preserves explicit staggering for a metadata-only cron schedule edit", () => {
+    const now = Date.now();
+    const job: CronJob = {
+      id: "job-keep-stagger",
+      name: "job-keep-stagger",
+      enabled: true,
+      createdAtMs: now,
+      updatedAtMs: now,
+      schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC", staggerMs: 120_000 },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "tick" },
+      state: {},
+    };
+
+    applyJobPatch(job, {
+      schedule: { kind: "cron", expr: "0 * * * *", tz: "America/Los_Angeles" },
+    });
+
+    expect(job.schedule).toEqual({
+      kind: "cron",
+      expr: "0 * * * *",
+      tz: "America/Los_Angeles",
+      staggerMs: 120_000,
+    });
   });
 
   it("applies default stagger when switching from every to top-of-hour cron", () => {

@@ -49,6 +49,14 @@ type RequestedApprovalEvent<TPayload extends ApprovalTurnSourceFields> = {
   expiresAtMs: number;
 };
 
+type ResolvedApprovalEvent<TPayload> = {
+  id: string;
+  decision: ExecApprovalDecision;
+  resolvedBy: string | null;
+  ts: number;
+  request: TPayload;
+};
+
 type PendingApprovalListEntry<TPayload> = {
   id: string;
   request: TPayload;
@@ -216,10 +224,10 @@ export function bindApprovalReviewerDeviceIds<TPayload>(params: {
   }
 }
 
-function respondApprovalStorageUnavailable(params: {
+export function respondApprovalStorageUnavailable(params: {
   context: GatewayRequestContext;
   respond: RespondFn;
-  operation: "request" | "resolve";
+  operation: "request" | "resolve" | "history" | "lookup";
   error: unknown;
 }): void {
   params.context.logGateway?.error?.(
@@ -282,7 +290,7 @@ export function resolveApprovalDecisionParams<TParams extends ApprovalResolvePar
 }
 
 /** Resolves the approval clients that should receive request or resolution events. */
-export function resolveApprovalRequestRecipientConnIds<TPayload>(params: {
+function resolveApprovalRequestRecipientConnIds<TPayload>(params: {
   approvalKind: "exec" | "plugin" | "system-agent";
   context: GatewayRequestContext;
   record: ExecApprovalRecord<TPayload>;
@@ -300,6 +308,31 @@ export function resolveApprovalRequestRecipientConnIds<TPayload>(params: {
         }),
     }) ?? null
   );
+}
+
+/** Sends a resolved approval only to clients authorized for its live binding. */
+export function broadcastApprovalResolvedEvent<TPayload>(params: {
+  approvalKind: "exec" | "plugin" | "system-agent";
+  context: GatewayRequestContext;
+  record: ExecApprovalRecord<TPayload>;
+  event: ResolvedApprovalEvent<TPayload>;
+}): void {
+  const eventName =
+    params.approvalKind === "system-agent"
+      ? "openclaw.approval.resolved"
+      : `${params.approvalKind}.approval.resolved`;
+  const recipientConnIds = resolveApprovalRequestRecipientConnIds({
+    approvalKind: params.approvalKind,
+    context: params.context,
+    record: params.record,
+  });
+  if (recipientConnIds) {
+    params.context.broadcastToConnIds(eventName, params.event, recipientConnIds, {
+      dropIfSlow: true,
+    });
+    return;
+  }
+  params.context.broadcast(eventName, params.event, { dropIfSlow: true });
 }
 
 /** Finds a pending approval by full id or prefix after applying client visibility rules. */
@@ -575,8 +608,28 @@ export async function handlePendingApprovalRequest<
   }
 }
 
+function respondRepeatedApprovalResolution<TPayload>(
+  record: ExecApprovalRecord<TPayload>,
+  decision: ExecApprovalDecision,
+  respond: RespondFn,
+): void {
+  // Identical retries are idempotent; a conflicting retry must never replace
+  // or obscure the first durable operator decision.
+  if (resolveRecordedApprovalDecision(record) === decision) {
+    respond(true, { ok: true }, undefined);
+    return;
+  }
+  respond(
+    false,
+    undefined,
+    errorShape(ErrorCodes.INVALID_REQUEST, "approval already resolved", {
+      details: APPROVAL_ALREADY_RESOLVED_DETAILS,
+    }),
+  );
+}
+
 /** Resolves a pending approval and broadcasts the final decision exactly once. */
-export async function handleApprovalResolve<TPayload, TResolvedEvent extends object>(params: {
+export async function handleApprovalResolve<TPayload>(params: {
   approvalKind: "exec" | "plugin";
   manager: ExecApprovalManager<TPayload>;
   inputId: string;
@@ -598,18 +651,10 @@ export async function handleApprovalResolve<TPayload, TResolvedEvent extends obj
     resolvedBy: string | null;
     snapshot: ExecApprovalRecord<TPayload>;
   }) => boolean;
-  resolvedEventName: string;
-  buildResolvedEvent: (params: {
-    approvalId: string;
-    decision: ExecApprovalDecision;
-    resolvedBy: string | null;
-    snapshot: ExecApprovalRecord<TPayload>;
-    nowMs: number;
-  }) => TResolvedEvent;
-  forwardResolved?: (event: TResolvedEvent) => Promise<void> | void;
+  forwardResolved?: (event: ResolvedApprovalEvent<TPayload>) => Promise<void> | void;
   forwardResolvedErrorLabel?: string;
   extraResolvedHandlers?: Array<{
-    run: (event: TResolvedEvent) => Promise<void> | void;
+    run: (event: ResolvedApprovalEvent<TPayload>) => Promise<void> | void;
     errorLabel: string;
   }>;
 }): Promise<void> {
@@ -639,19 +684,7 @@ export async function handleApprovalResolve<TPayload, TResolvedEvent extends obj
       return;
     }
     if (resolvedRepeat.ok) {
-      // Treat repeated identical resolves as successful retries; a conflicting
-      // retry is rejected so stale operators cannot overwrite the first choice.
-      if (resolveRecordedApprovalDecision(resolvedRepeat.snapshot) === params.decision) {
-        params.respond(true, { ok: true }, undefined);
-        return;
-      }
-      params.respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "approval already resolved", {
-          details: APPROVAL_ALREADY_RESOLVED_DETAILS,
-        }),
-      );
+      respondRepeatedApprovalResolution(resolvedRepeat.snapshot, params.decision, params.respond);
       return;
     }
     respondPendingApprovalLookupError({ respond: params.respond, response: resolved.response });
@@ -693,51 +726,27 @@ export async function handleApprovalResolve<TPayload, TResolvedEvent extends obj
     // resolve; report the recorded conflict, not a missing approval.
     const raced = params.manager.getSnapshot(resolved.approvalId);
     if (raced && raced.resolvedAtMs !== undefined) {
-      if (resolveRecordedApprovalDecision(raced) === params.decision) {
-        params.respond(true, { ok: true }, undefined);
-        return;
-      }
-      params.respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "approval already resolved", {
-          details: APPROVAL_ALREADY_RESOLVED_DETAILS,
-        }),
-      );
+      respondRepeatedApprovalResolution(raced, params.decision, params.respond);
       return;
     }
     respondUnknownOrExpiredApproval(params.respond);
     return;
   }
 
-  const resolvedEvent = params.buildResolvedEvent({
-    approvalId: resolved.approvalId,
+  const resolvedEvent: ResolvedApprovalEvent<TPayload> = {
+    id: resolved.approvalId,
     decision: params.decision,
     resolvedBy,
-    snapshot: resolved.snapshot,
-    nowMs: Date.now(),
-  });
-  const resolvedEventConnIds = resolveApprovalRequestRecipientConnIds({
+    ts: Date.now(),
+    request: resolved.snapshot.request,
+  };
+  broadcastApprovalResolvedEvent({
     approvalKind: params.approvalKind,
     context: params.context,
     record: resolved.snapshot,
+    event: resolvedEvent,
   });
-  if (resolvedEventConnIds) {
-    params.context.broadcastToConnIds(
-      params.resolvedEventName,
-      resolvedEvent,
-      resolvedEventConnIds,
-      {
-        dropIfSlow: true,
-      },
-    );
-  } else {
-    params.context.broadcast(params.resolvedEventName, resolvedEvent, { dropIfSlow: true });
-  }
-  params.context.approvalEvents?.publishResolved(
-    params.approvalKind ?? (params.resolvedEventName.startsWith("plugin.") ? "plugin" : "exec"),
-    resolvedEvent as never,
-  );
+  params.context.approvalEvents?.publishResolved(params.approvalKind, resolvedEvent as never);
 
   const followUps = [
     params.forwardResolved
@@ -750,8 +759,10 @@ export async function handleApprovalResolve<TPayload, TResolvedEvent extends obj
   ].filter(
     (
       entry,
-    ): entry is { run: (event: TResolvedEvent) => Promise<void> | void; errorLabel: string } =>
-      Boolean(entry),
+    ): entry is {
+      run: (event: ResolvedApprovalEvent<TPayload>) => Promise<void> | void;
+      errorLabel: string;
+    } => Boolean(entry),
   );
 
   // Resolution has already been recorded and broadcast; follow-up hooks are

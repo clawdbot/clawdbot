@@ -375,7 +375,7 @@ export async function runPluginsDoctorCommand(): Promise<void> {
     | undefined;
   const report = buildPluginDiagnosticsReport({ config: cfg, effectiveOnly: true });
   const errors = report.plugins.filter((p) => p.status === "error");
-  const diags = report.diagnostics.filter((d) => d.level === "error");
+  const diags = report.diagnostics.filter((entry) => !isConfigSelectedShadowDiagnostic(entry));
   const shadowed = report.diagnostics.filter((entry) =>
     isErroredConfigSelectedShadowDiagnostic({ entry, plugins: report.plugins }),
   );
@@ -396,7 +396,10 @@ export async function runPluginsDoctorCommand(): Promise<void> {
   const pluginConfigWarnings = [...stalePluginConfigWarnings, ...configuredRuntimePluginWarnings];
 
   if (!hasInstallTreeIssues && pluginConfigWarnings.length === 0) {
-    defaultRuntime.log("No plugin issues detected.");
+    defaultRuntime.log(
+      "Plugin discovery, module loading, compatibility, and configuration checks passed. " +
+        'Run "openclaw health" to check the running Gateway, including runtime quarantines and fallbacks.',
+    );
     return;
   }
 
@@ -889,10 +892,10 @@ export async function runPluginMarketplaceListCommand(
   opts: PluginMarketplaceListOptions,
 ): Promise<void> {
   const { listMarketplacePlugins } = await import("../plugins/marketplace.js");
-  const { createPluginInstallLogger } = await loadPluginsCommandHelpers();
+  const { createPluginInstallLogger, quietPluginJsonLogger } = await loadPluginsCommandHelpers();
   const result = await listMarketplacePlugins({
     marketplace: source,
-    logger: createPluginInstallLogger(),
+    logger: opts.json ? quietPluginJsonLogger : createPluginInstallLogger(),
   });
   if (!result.ok) {
     defaultRuntime.error(result.error);

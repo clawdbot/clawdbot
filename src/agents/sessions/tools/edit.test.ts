@@ -52,6 +52,36 @@ describe("edit tool", () => {
     );
   });
 
+  it("writes and reports only the requested fuzzy Unicode replacement", async () => {
+    const original =
+      "export const RETRY\u00A0MAX = 3; // \u518D\u8A66\u884C\uFF08\u6700\u5927\uFF13\u56DE\uFF09\uFF71\uFF72\uFF73 \u2014 \u8A2D\u5B9A\n";
+    const expected =
+      "export const RETRY_MAX = 5; // \u518D\u8A66\u884C\uFF08\u6700\u5927\uFF13\u56DE\uFF09\uFF71\uFF72\uFF73 \u2014 \u8A2D\u5B9A\n";
+    const filePath = await createTempFile(original);
+    const tool = createEditTool(tmpDir);
+
+    const result = await tool.execute(
+      "call-fuzzy-unicode",
+      {
+        path: filePath,
+        edits: [{ oldText: "export const RETRY MAX = 3;", newText: "export const RETRY_MAX = 5;" }],
+      },
+      undefined,
+    );
+
+    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(expected);
+    const details = result.details as EditToolDetails;
+    expect(details.changed).toBe(true);
+    if (!details.changed) {
+      throw new Error("Expected the edit to change the file.");
+    }
+    expect(details.diff).toContain(
+      "+1 export const RETRY_MAX = 5; // \u518D\u8A66\u884C\uFF08\u6700\u5927\uFF13\u56DE\uFF09\uFF71\uFF72\uFF73 \u2014 \u8A2D\u5B9A",
+    );
+    expect(details.diff).not.toContain("// \u518D\u8A66\u884C(\u6700\u59273\u56DE)");
+    expect(applyPatch(original, details.patch)).toBe(expected);
+  });
+
   it("rejects invalid UTF-8 without changing a real file", async () => {
     const original = Buffer.concat([Buffer.from("heading\nprice: 5\n"), Buffer.from([0xff, 0xfe])]);
     const filePath = await createTempFile(original);
@@ -351,6 +381,49 @@ describe("edit tool", () => {
     expect((component as { preview?: { diff?: string } } | undefined)?.preview?.diff).toContain(
       "remote changed",
     );
+  });
+
+  it("renders fuzzy Unicode previews from the original source bytes", async () => {
+    const readFile = vi.fn(async () =>
+      Buffer.from(
+        "const label\u00A0= \u201Chello\u201D; // keep \uFF08\uFF13\uFF09 \u2014 unchanged\n",
+      ),
+    );
+    const operations: EditOperations = {
+      access: async () => {},
+      readFile,
+      writeFile: async () => {},
+    };
+    const tool = createEditToolDefinition("/workspace", { operations });
+    const args = {
+      path: "remote.txt",
+      edits: [{ oldText: 'const label = "hello";', newText: "const label = 'hi';" }],
+    };
+    const context = {
+      args,
+      argsComplete: true,
+      cwd: "/workspace",
+      executionStarted: false,
+      expanded: false,
+      invalidate: vi.fn(),
+      isError: false,
+      isPartial: false,
+      lastComponent: undefined,
+      showImages: false,
+      state: {},
+      toolCallId: "call-preview-fuzzy-unicode",
+    };
+
+    const component = tool.renderCall?.(args, testTheme, context);
+    await vi.waitFor(() => expect(context.invalidate).toHaveBeenCalled());
+
+    const preview = (component as { preview?: { error?: string; diff?: string } } | undefined)
+      ?.preview;
+    expect(preview?.error).toBeUndefined();
+    expect(preview?.diff).toContain(
+      "+1 const label = 'hi'; // keep \uFF08\uFF13\uFF09 \u2014 unchanged",
+    );
+    expect(preview?.diff).not.toContain("// keep (3) - unchanged");
   });
 
   it("filters fuzzy no-op edits from mixed previews", async () => {

@@ -395,7 +395,7 @@ describe("subagent registry steer restarts", () => {
       }
       previous.execution = {
         status: "interrupted",
-        startedAt: previous.startedAt,
+        startedAt: previous.execution.startedAt,
         transcriptTarget: {
           agentId: "main",
           sessionId: "internal-run-old",
@@ -511,8 +511,12 @@ describe("subagent registry steer restarts", () => {
       if (previous) {
         previous.endedHookEmittedAt = Date.now();
         previous.endedReason = "subagent-complete";
-        previous.endedAt = Date.now();
-        previous.outcome = { status: "ok" };
+        previous.execution = {
+          ...previous.execution,
+          status: "terminal",
+          endedAt: Date.now(),
+          outcome: { status: "ok" },
+        };
       }
 
       const run = expectDefined(
@@ -700,11 +704,11 @@ describe("subagent registry steer restarts", () => {
       throw new Error("missing previous run");
     }
 
-    previous.startedAt = 1_000;
+    previous.execution.startedAt = 1_000;
     previous.sessionStartedAt = 1_000;
-    previous.endedAt = 121_000;
+    previous.execution.endedAt = 121_000;
     previous.accumulatedRuntimeMs = 0;
-    previous.outcome = { status: "ok" };
+    previous.execution.outcome = { status: "ok" };
 
     const replaced = mod.replaceSubagentRunAfterSteer({
       previousRunId: "run-runtime-old",
@@ -720,11 +724,11 @@ describe("subagent registry steer restarts", () => {
     expect(mod.getSubagentSessionStartedAt(next)).toBe(1_000);
     expect(next.accumulatedRuntimeMs).toBe(120_000);
 
-    if (!next.startedAt) {
+    if (!next.execution.startedAt) {
       throw new Error("missing next startedAt");
     }
-    next.endedAt = next.startedAt + 30_000;
-    expect(mod.getSubagentSessionRuntimeMs(next, next.endedAt)).toBe(150_000);
+    next.execution.endedAt = next.execution.startedAt + 30_000;
+    expect(mod.getSubagentSessionRuntimeMs(next, next.execution.endedAt)).toBe(150_000);
   });
 
   it("clears completion delivery metadata when replacing for steer restart", () => {
@@ -902,9 +906,11 @@ describe("subagent registry steer restarts", () => {
     });
     await waitForRegistrySideEffect(() => {
       expect(listMainRuns()[0]).toMatchObject({
-        endedAt: startedAt + 1_000,
         endedReason: "subagent-complete",
-        outcome: { status: "timeout" },
+        execution: {
+          endedAt: startedAt + 1_000,
+          outcome: { status: "timeout" },
+        },
         suppressAnnounceReason: "steer-restart",
       });
     });
@@ -952,13 +958,15 @@ describe("subagent registry steer restarts", () => {
     expect(mod.isSubagentSessionRunActive(childSessionKey)).toBe(false);
 
     const run = listMainRuns()[0];
-    expect(run?.outcome?.status).toBe("error");
-    expect(run?.outcome?.error).toBe("manual kill");
-    expect(run?.outcome?.startedAt).toBeTypeOf("number");
-    expect(run?.outcome?.endedAt).toBeTypeOf("number");
-    expect(run?.outcome?.elapsedMs).toBeTypeOf("number");
-    expect(run?.outcome?.elapsedMs).toBeGreaterThanOrEqual(0);
-    expect(run?.outcome?.endedAt).toBeGreaterThanOrEqual(run?.outcome?.startedAt ?? 0);
+    expect(run?.execution.outcome?.status).toBe("error");
+    expect(run?.execution.outcome?.error).toBe("manual kill");
+    expect(run?.execution.outcome?.startedAt).toBeTypeOf("number");
+    expect(run?.execution.outcome?.endedAt).toBeTypeOf("number");
+    expect(run?.execution.outcome?.elapsedMs).toBeTypeOf("number");
+    expect(run?.execution.outcome?.elapsedMs).toBeGreaterThanOrEqual(0);
+    expect(run?.execution.outcome?.endedAt).toBeGreaterThanOrEqual(
+      run?.execution.outcome?.startedAt ?? 0,
+    );
     expect(run?.cleanupHandled).toBe(true);
     expect(typeof run?.cleanupCompletedAt).toBe("number");
     await flushAnnounce();
@@ -1020,7 +1028,7 @@ describe("subagent registry steer restarts", () => {
 
     const run = listMainRuns()[0];
     expect(run?.endedReason).toBe("subagent-complete");
-    expect(run?.outcome?.status).not.toBe("error");
+    expect(run?.execution.outcome?.status).not.toBe("error");
     expect(run?.suppressAnnounceReason).toBeUndefined();
     expect(run?.cleanupHandled).toBe(true);
     expect(typeof run?.cleanupCompletedAt).toBe("number");

@@ -1,3 +1,4 @@
+import { runWithoutOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context.js";
 import {
   isGatewayRestartDraining,
   runWithGatewayIndependentRootWorkAdmission,
@@ -87,37 +88,41 @@ export function createSubagentRegistryLifecycleCleanupBase(
     // Completion makes the task projection non-blocking before delivery and
     // cleanup finish. This independent lease bridges that handoff and owns the
     // full detached attempt, including its final durable registry write.
-    void runWithGatewayIndependentRootWorkAdmission(async () => {
-      try {
-        await args.run();
-      } catch (err) {
-        defaultRuntime.log(
-          `[warn] subagent cleanup finalize failed (${args.runId}): ${String(err)}`,
-        );
-        const current = params.runs.get(args.runId);
-        if (
-          !current ||
-          current.cleanupCompletedAt ||
-          !isCleanupAttemptCurrent(args.runId, args.entry, args.cleanupGeneration)
-        ) {
-          return;
+    // Completion outlives the spawning attempt; inherited lock owners would
+    // reject requester transcript writes after that attempt is disposed.
+    runWithoutOwnedSessionTranscriptWrites(() => {
+      void runWithGatewayIndependentRootWorkAdmission(async () => {
+        try {
+          await args.run();
+        } catch (err) {
+          defaultRuntime.log(
+            `[warn] subagent cleanup finalize failed (${args.runId}): ${String(err)}`,
+          );
+          const current = params.runs.get(args.runId);
+          if (
+            !current ||
+            current.cleanupCompletedAt ||
+            !isCleanupAttemptCurrent(args.runId, args.entry, args.cleanupGeneration)
+          ) {
+            return;
+          }
+          current.cleanupHandled = false;
+          params.resumedRuns.delete(args.runId);
+          params.persist(args.runId);
         }
-        current.cleanupHandled = false;
-        params.resumedRuns.delete(args.runId);
-        params.persist(args.runId);
-      }
-    }).catch((err: unknown) => {
-      defaultRuntime.log(
-        `[warn] subagent cleanup admission failed (${args.runId}): ${String(err)}`,
-      );
-      if (isGatewayRestartDraining()) {
-        scheduleResumeSubagentRun(
-          args.runId,
-          args.entry,
-          MIN_ANNOUNCE_RETRY_DELAY_MS,
-          args.cleanupGeneration,
+      }).catch((err: unknown) => {
+        defaultRuntime.log(
+          `[warn] subagent cleanup admission failed (${args.runId}): ${String(err)}`,
         );
-      }
+        if (isGatewayRestartDraining()) {
+          scheduleResumeSubagentRun(
+            args.runId,
+            args.entry,
+            MIN_ANNOUNCE_RETRY_DELAY_MS,
+            args.cleanupGeneration,
+          );
+        }
+      });
     });
   };
 

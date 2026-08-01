@@ -40,10 +40,12 @@ type SlackSelfFilterArgs = {
   context?: {
     botId?: string;
     botUserId?: string;
+    isEnterpriseInstall?: boolean;
   };
   event?: unknown;
   message?: unknown;
 };
+type SlackContextIdentity = NonNullable<SlackSelfFilterArgs["context"]>;
 
 function isConstructorFunction<
   // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Constructor guard preserves the requested concrete Slack constructor type.
@@ -186,7 +188,7 @@ export function resolveSlackBoltInterop(params: {
 
 export function publishSlackConnectedStatus(
   setStatus?: (next: Record<string, unknown>) => void,
-  identityHealth: SlackIdentityHealth = { healthState: "healthy", lastError: null },
+  identityHealth: SlackIdentityHealth = { lifecycle: "ready", lastError: null },
 ) {
   if (!setStatus) {
     return;
@@ -209,7 +211,7 @@ export function publishSlackDisconnectedStatus(
   const message = error ? formatUnknownError(error) : undefined;
   setStatus({
     connected: false,
-    healthState: "disconnected",
+    lifecycle: "recovering",
     lastDisconnect: message ? { at, error: message } : { at },
     lastError: message ?? null,
   });
@@ -312,6 +314,7 @@ export function createSlackBoltApp(params: {
   clientOptions: Record<string, unknown>;
   dispatcher?: SlackSocketModeReceiverOptions["dispatcher"];
   wrapReceiver?: (receiver: SlackReceiver) => SlackReceiver;
+  onContextIdentity?: (identity: SlackContextIdentity) => void;
 }) {
   const socketModeLogger = createSlackSocketModeLogger();
   const socketModeReceiverOptions: SlackSocketModeReceiverOptions = {
@@ -355,6 +358,7 @@ export function createSlackBoltApp(params: {
     ...(appReceiver ? { receiver: appReceiver } : {}),
   });
   app.use(async (args) => {
+    params.onContextIdentity?.(args.context ?? {});
     if (shouldSkipOpenClawSlackSelfEvent(args)) {
       return;
     }
@@ -388,7 +392,7 @@ function createSlackSocketDisconnectWaiter(app: unknown, abortSignal?: AbortSign
 export async function startSlackSocketAndWaitForDisconnect(params: {
   app: { start: () => unknown };
   abortSignal?: AbortSignal;
-  onStarted?: () => void;
+  onStarted?: () => void | Promise<void>;
 }) {
   const disconnectWaiter = createSlackSocketDisconnectWaiter(params.app, params.abortSignal);
   try {
@@ -397,7 +401,7 @@ export async function startSlackSocketAndWaitForDisconnect(params: {
       disconnectWaiter.cancel();
       return null;
     }
-    params.onStarted?.();
+    await params.onStarted?.();
     const disconnect = await disconnectWaiter.promise;
     disconnectWaiter.complete();
     return disconnect;

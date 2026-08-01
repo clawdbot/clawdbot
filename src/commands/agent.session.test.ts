@@ -145,7 +145,7 @@ describe("agent session resolution", () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
       await writeSessionStoreSeed(store, {
-        main: {
+        "agent:main:main": {
           sessionId: "origin-provider-reset",
           updatedAt: Date.now() - 30 * 60_000,
           delivery: normalizeSessionDeliveryState({
@@ -175,35 +175,40 @@ describe("agent session resolution", () => {
       {
         label: "canonical done main",
         mainKey: "main",
-        sessionKey: "agent:main:main",
+        requestedSessionKey: "agent:main:main",
+        storedSessionKey: "agent:main:main",
         status: "done" as const,
         expectNewSession: false,
       },
       {
         label: "raw done main alias",
         mainKey: "main",
-        sessionKey: "main",
+        requestedSessionKey: "main",
+        storedSessionKey: "agent:main:main",
         status: "done" as const,
         expectNewSession: false,
       },
       {
         label: "custom done main alias",
         mainKey: "work",
-        sessionKey: "agent:main:main",
+        requestedSessionKey: "agent:main:main",
+        storedSessionKey: "agent:main:work",
         status: "done" as const,
         expectNewSession: false,
       },
       {
         label: "killed main",
         mainKey: "main",
-        sessionKey: "agent:main:main",
+        requestedSessionKey: "agent:main:main",
+        storedSessionKey: "agent:main:main",
         status: "killed" as const,
         expectNewSession: true,
       },
       {
         label: "endedAt-only main",
         mainKey: "main",
-        sessionKey: "agent:main:main",
+        requestedSessionKey: "agent:main:main",
+        storedSessionKey: "agent:main:main",
         status: undefined,
         expectNewSession: true,
       },
@@ -215,7 +220,7 @@ describe("agent session resolution", () => {
         const sessionId = `stale-terminal-${scenario.label.replaceAll(" ", "-")}`;
         const registryUpdatedAt = Date.now() - 10_000;
         await writeSessionStoreSeed(store, {
-          [scenario.sessionKey]: {
+          [scenario.storedSessionKey]: {
             sessionId,
             sessionFile,
             updatedAt: registryUpdatedAt,
@@ -239,7 +244,7 @@ describe("agent session resolution", () => {
           {
             agentId: "main",
             sessionId,
-            sessionKey: scenario.sessionKey,
+            sessionKey: scenario.storedSessionKey,
             storePath: store,
           },
           { type: "custom", timestamp: "1970-01-01T00:00:00.001Z" },
@@ -247,8 +252,9 @@ describe("agent session resolution", () => {
         const cfg = mockConfig(home, store);
         cfg.session = { ...cfg.session, mainKey: scenario.mainKey };
 
-        const resolution = resolveSession({ cfg, sessionKey: scenario.sessionKey });
+        const resolution = resolveSession({ cfg, sessionKey: scenario.requestedSessionKey });
 
+        expect(resolution.sessionKey).toBe(scenario.storedSessionKey);
         expect(resolution.isNewSession).toBe(scenario.expectNewSession);
         if (!scenario.expectNewSession) {
           expect(resolution.sessionId).toBe(sessionId);

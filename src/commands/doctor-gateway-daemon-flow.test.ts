@@ -36,6 +36,7 @@ const findSystemGatewayServices = vi.hoisted(() =>
 const buildGatewayRuntimeHints = vi.hoisted(() => vi.fn((): string[] => []));
 const formatGatewayRuntimeSummary = vi.hoisted(() => vi.fn((): string | null => null));
 const isDefaultInstallIdentity = vi.hoisted(() => vi.fn(() => true));
+const resolveGatewayBindHost = vi.hoisted(() => vi.fn(async () => "127.0.0.1"));
 
 vi.mock("../config/config.js", async () => {
   const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
@@ -95,6 +96,12 @@ vi.mock("../daemon/systemd.js", async () => {
     isSystemdUserServiceAvailable: vi.fn(async () => true),
   };
 });
+
+vi.mock("../gateway/net.js", () => ({
+  resolveGatewayBindHost,
+  resolveGatewayRequiredListenHosts: (bindHost: string) =>
+    bindHost === "100.64.0.40" ? [bindHost, "127.0.0.1"] : [bindHost],
+}));
 
 vi.mock("../infra/ports.js", () => ({
   inspectPortConnections,
@@ -170,6 +177,7 @@ describe("maybeRepairGatewayDaemon", () => {
     isDefaultInstallIdentity.mockReturnValue(true);
     readGatewayRestartHandoffSync.mockReturnValue(null);
     findSystemGatewayServices.mockResolvedValue([]);
+    resolveGatewayBindHost.mockResolvedValue("127.0.0.1");
     inspectPortUsage.mockResolvedValue({
       port: 18789,
       status: "free",
@@ -525,6 +533,10 @@ describe("maybeRepairGatewayDaemon", () => {
 
     await runNonInteractiveRepair();
 
+    expect(resolveGatewayBindHost).toHaveBeenCalledWith("loopback", undefined);
+    expect(inspectPortUsage).toHaveBeenCalledWith(18789, {
+      probeHosts: ["127.0.0.1"],
+    });
     expect(isExpectedGatewayListeners).toHaveBeenCalledWith(listeners, 18789);
     expect(formatPortDiagnostics).not.toHaveBeenCalled();
     expect(note.mock.calls.some(([, label]) => label === "Gateway port")).toBe(false);

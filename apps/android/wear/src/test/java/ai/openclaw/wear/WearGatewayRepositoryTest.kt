@@ -86,7 +86,7 @@ class WearGatewayRepositoryTest {
             WearRpcMethod.AgentsSelect -> JsonObject(emptyMap())
             WearRpcMethod.GatewayDisconnect ->
               json.parseToJsonElement(
-                """{"connected":false,"status":"Offline","activeAgentId":"main","selectedModelRef":"openai/gpt-test","capabilities":["agent-controls","gateway-controls","model-controls","session-selection-lookup"]}""",
+                """{"connected":false,"status":"Offline","activeAgentId":"main","selectedModelRef":"openai/gpt-test","capabilities":["agent-controls","gateway-controls","model-controls","session-selection-lookup","attempt-scoped-realtime-audio"]}""",
               )
             else -> error("unexpected $method")
           }
@@ -154,7 +154,7 @@ class WearGatewayRepositoryTest {
       val requester =
         RecordingRequester { _, _ ->
           json.parseToJsonElement(
-            """{"connected":true,"status":"Connected","capabilities":["agent-controls","future-capability","gateway-controls","model-controls","session-selection-lookup"]}""",
+            """{"connected":true,"status":"Connected","capabilities":["agent-controls","future-capability","gateway-controls","model-controls","session-selection-lookup","attempt-scoped-realtime-audio"]}""",
           )
         }
 
@@ -292,18 +292,44 @@ class WearGatewayRepositoryTest {
           attemptId = "attempt-7",
           language = "de",
           phoneNodeId = "phone-a",
+          attemptScopedAudio = true,
         )
 
       assertTrue(snapshot.active)
       assertEquals(
         json
           .parseToJsonElement(
-            """{"sessionKey":"agent:main:thread-7","attemptId":"attempt-7","language":"de"}""",
+            """{"sessionKey":"agent:main:thread-7","attemptId":"attempt-7","language":"de","attemptScopedAudio":true}""",
           ).jsonObject,
         requester.calls.single().second,
       )
       assertEquals("phone-a", requester.expectedNodeIds.single())
       assertTrue(requester.requirePreferredNodes.single())
+    }
+
+  @Test
+  fun realtimeTalkStartOmitsAttemptScopedAudioForLegacyPhones() =
+    runTest {
+      val requester =
+        RecordingRequester { _, _ ->
+          json.parseToJsonElement("""{"active":true}""")
+        }
+
+      WearGatewayRepository(requester).startRealtimeTalk(
+        sessionKey = "agent:main:thread-7",
+        attemptId = "attempt-7",
+        language = null,
+        phoneNodeId = "phone-a",
+        attemptScopedAudio = false,
+      )
+
+      assertEquals(
+        json
+          .parseToJsonElement(
+            """{"sessionKey":"agent:main:thread-7","attemptId":"attempt-7"}""",
+          ).jsonObject,
+        requester.calls.single().second,
+      )
     }
 
   @Test

@@ -259,8 +259,8 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
     async updateWithPrecondition(id, patch, precondition) {
       return await (await load()).state.cron.updateWithPrecondition(id, patch, precondition);
     },
-    async remove(id) {
-      return await (await load()).state.cron.remove(id);
+    async remove(id, opts) {
+      return await (await load()).state.cron.remove(id, opts);
     },
     async removeStaleJobFamily(family) {
       return await (await load()).state.cron.removeStaleJobFamily(family);
@@ -294,6 +294,9 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
         return undefined;
       }
       return loaded.state.cron.getDefaultAgentId();
+    },
+    async prepareWake() {
+      await load();
     },
     wake(opts) {
       if (!loaded) {

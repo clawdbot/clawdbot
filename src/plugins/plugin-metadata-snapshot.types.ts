@@ -63,7 +63,10 @@ export type PluginMetadataSnapshot = {
   discovery?: PluginDiscoveryResult;
 };
 
-export type PluginMetadataRegistryView = Pick<PluginMetadataSnapshot, "index" | "manifestRegistry">;
+export type PluginMetadataRegistryView = Pick<
+  PluginMetadataSnapshot,
+  "index" | "manifestRegistry" | "discovery"
+>;
 
 export type PluginMetadataManifestView = Pick<PluginMetadataSnapshot, "index" | "plugins">;
 

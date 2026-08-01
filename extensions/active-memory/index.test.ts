@@ -1676,6 +1676,33 @@ describe("active-memory plugin", () => {
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });
 
+  it.each(["你还记得我们上次讨论的数据库配置吗？", "你还记得我们上周决定明天部署的方案吗？"])(
+    "escalates only retrospective Chinese %j when recall mode is unset",
+    async (prompt) => {
+      registerPluginConfig({ mode: undefined });
+      expect(currentActiveMemoryConfig().mode).toBeUndefined();
+
+      const context = {
+        sessionKey: "agent:main:telegram:direct:owner",
+        messageProvider: "telegram",
+        channelId: "owner",
+      };
+
+      const ordinary = await runPromptBuild({ prompt: "部署之前先整理聊天记录" }, context);
+      expect(ordinary).toBeUndefined();
+      expect(runEmbeddedAgent).not.toHaveBeenCalled();
+
+      const future = await runPromptBuild({ prompt: "你记得明天发送报告吗？" }, context);
+      expect(future).toBeUndefined();
+      expect(runEmbeddedAgent).not.toHaveBeenCalled();
+
+      const recall = await runPromptBuild({ prompt }, context);
+      expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+      expectPrependContextContains(recall, "lemon pepper wings");
+      expectEmbeddedChannel("telegram");
+    },
+  );
+
   it("fails closed when the live active-memory plugin entry is removed", async () => {
     configFile = {
       plugins: {

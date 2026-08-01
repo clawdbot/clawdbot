@@ -23,6 +23,7 @@ scenario:
     - extensions/qa-lab/src/suite.ts
   execution:
     kind: flow
+    retryCount: 0
     suiteIsolation: isolated
     summary: Verify the agent can delegate multiple bounded subagent tasks and fold both results back into one parent reply.
     config:
@@ -49,10 +50,6 @@ scenario:
       expectedChildLabels:
         - qa-fanout-alpha
         - qa-fanout-beta
-      expectedChildCompletionMarkers:
-        - ALPHA-OK
-        - BETA-OK
-
 flow:
   steps:
     - name: spawns sequential workers and folds both results back into the parent reply
@@ -93,37 +90,46 @@ flow:
                           - set: sessionKey
                             value:
                               expr: "`agent:qa:fanout:${attempt}:${randomUUID().slice(0, 8)}`"
-                          - call: runAgentPrompt
+                          # sessions_yield ends the original run. Observe the resumed
+                          # parent result through its public session history.
+                          - call: startAgentRun
                             args:
                               - ref: env
                               - sessionKey:
                                   ref: sessionKey
                                 message:
-                                  ref: prompt
+                                  expr: "`${prompt}\nQA parent correlation: ${sessionKey}`"
+                                taskTracking: false
                                 timeoutMs:
-                                  expr: liveTurnTimeoutMs(env, 90000)
-                          - call: waitForCondition
-                            saveAs: parentTranscript
+                                  expr: liveTurnTimeoutMs(env, 30000)
+                          - call: waitForAgentHistoryReply
+                            saveAs: parentOutbound
                             args:
+                              - ref: env
+                              - ref: sessionKey
                               - lambda:
-                                  async: true
-                                  expr: "readSessionTranscriptSummary(env, sessionKey).then((summary) => config.expectedReplyGroups.every((group) => group.some((needle) => normalizeLowercaseStringOrEmpty(summary.finalText).includes(needle))) ? summary : undefined).catch(() => undefined)"
-                              - expr: "30000"
+                                  params: [text]
+                                  expr: "config.expectedReplyGroups.every((group) => group.some((needle) => normalizeLowercaseStringOrEmpty(text).includes(needle)))"
+                              - expr: liveTurnTimeoutMs(env, 90000)
                               - expr: "env.providerMode === 'mock-openai' ? 100 : 250"
-                          # Native child completions are private. Wait for this parent's
-                          # actual SQLite rows and both settled final transcripts.
+                          # The synthesized parent reply is the public result boundary.
+                          # Durable task records prove both child results succeeded and were
+                          # delivered without depending on private child transcripts.
                           - call: waitForCondition
-                            saveAs: completedFanout
+                            saveAs: fanoutChildren
                             args:
                               - lambda:
                                   async: true
-                                  expr: "(async () => { const store = await readRawQaSessionStore(env); const childRows = Object.entries(store).map(([key, entry]) => ({ ...entry, key })).filter((entry) => entry.spawnedBy === sessionKey); const alpha = childRows.find((entry) => entry.label === alphaLabel); const beta = childRows.find((entry) => entry.label === betaLabel); if (!alpha || !beta) return undefined; const [alphaTranscript, betaTranscript] = await Promise.all([readSessionTranscriptSummary(env, alpha.key), readSessionTranscriptSummary(env, beta.key)]); const alphaExpected = env.mock ? config.expectedChildCompletionMarkers[0] : 'ok'; const betaExpected = env.mock ? config.expectedChildCompletionMarkers[1] : 'ok'; return normalizeLowercaseStringOrEmpty(alphaTranscript.finalText) === normalizeLowercaseStringOrEmpty(alphaExpected) && normalizeLowercaseStringOrEmpty(betaTranscript.finalText) === normalizeLowercaseStringOrEmpty(betaExpected) ? { alpha, beta, alphaTranscript, betaTranscript } : undefined; })().catch(() => undefined)"
+                                  expr: "(async () => { if (env.mock) { const requests = [...(await fetchJson(`${env.mock.baseUrl}/debug/requests`))]; const belongsToFanout = (request) => String(request.allInputText ?? '').includes(sessionKey); const alpha = requests.find((request) => belongsToFanout(request) && request.plannedToolName === 'sessions_spawn' && request.plannedToolArgs?.label === alphaLabel); const beta = requests.find((request) => belongsToFanout(request) && request.plannedToolName === 'sessions_spawn' && request.plannedToolArgs?.label === betaLabel); return alpha && beta ? { alpha, beta } : undefined; } const payload = await runQaCli(env, ['tasks', 'list', '--json', '--runtime', 'subagent'], { timeoutMs: liveTurnTimeoutMs(env, 60000), json: true }); const alpha = payload.tasks?.find((task) => task.label === alphaLabel && task.requesterSessionKey === sessionKey); const beta = payload.tasks?.find((task) => task.label === betaLabel && task.requesterSessionKey === sessionKey); const settled = (task) => task?.status === 'succeeded' && task.deliveryStatus === 'delivered'; return settled(alpha) && settled(beta) ? { alpha, beta } : undefined; })().catch(() => undefined)"
                               - expr: liveTurnTimeoutMs(env, 30000)
                               - expr: "env.providerMode === 'mock-openai' ? 100 : 250"
-                          - assert:
-                              expr: "completedFanout.alpha.spawnedBy === sessionKey && completedFanout.beta.spawnedBy === sessionKey"
-                              message:
-                                expr: "`fanout completion must belong to parent ${sessionKey}`"
+                          - if:
+                              expr: "!env.mock"
+                              then:
+                                - assert:
+                                    expr: "fanoutChildren.alpha.requesterSessionKey === sessionKey && fanoutChildren.beta.requesterSessionKey === sessionKey"
+                                    message:
+                                      expr: "`fanout completion must belong to parent ${sessionKey}`"
                           - if:
                               expr: "Boolean(env.mock)"
                               then:
@@ -144,14 +150,14 @@ flow:
                                 # both subagents.
                                 - set: fanoutSpawnRequests
                                   value:
-                                    expr: "[...(await fetchJson(`${env.mock.baseUrl}/debug/requests`))].filter((request) => request.plannedToolName === 'sessions_spawn' && /subagent fanout synthesis check/i.test(String(request.allInputText ?? '')))"
+                                    expr: "[...(await fetchJson(`${env.mock.baseUrl}/debug/requests`))].filter((request) => request.plannedToolName === 'sessions_spawn' && String(request.allInputText ?? '').includes(sessionKey))"
                                 - assert:
-                                    expr: "fanoutSpawnRequests.length >= 2"
+                                    expr: "fanoutSpawnRequests.some((request) => request.plannedToolArgs?.label === alphaLabel) && fanoutSpawnRequests.some((request) => request.plannedToolArgs?.label === betaLabel)"
                                     message:
-                                      expr: "`expected at least two sessions_spawn tool calls during subagent fanout scenario, saw ${fanoutSpawnRequests.length}`"
+                                      expr: "`expected labeled alpha and beta sessions_spawn tool calls during subagent fanout scenario, saw ${JSON.stringify(fanoutSpawnRequests.map((request) => request.plannedToolArgs?.label ?? null))}`"
                           - set: details
                             value:
-                              expr: "parentTranscript.finalText"
+                              expr: "parentOutbound.text"
                           - set: lastError
                             value: __done__
                         catchAs: attemptError
@@ -159,82 +165,6 @@ flow:
                           - set: lastError
                             value:
                               ref: attemptError
-                          - if:
-                              expr: "/timed out after/i.test(formatErrorMessage(attemptError))"
-                              then:
-                                - try:
-                                    actions:
-                                      - set: timeoutAlphaExpected
-                                        value:
-                                          expr: "Boolean(env.mock) ? config.expectedChildCompletionMarkers[0] : 'ok'"
-                                      - set: timeoutBetaExpected
-                                        value:
-                                          expr: "Boolean(env.mock) ? config.expectedChildCompletionMarkers[1] : 'ok'"
-                                      - call: waitForCondition
-                                        saveAs: timeoutEvidence
-                                        args:
-                                          - lambda:
-                                              async: true
-                                              expr: "(async () => { const store = await readRawQaSessionStore(env); const childEntries = Object.entries(store).map(([key, entry]) => ({ ...entry, key })).filter((entry) => entry.spawnedBy === sessionKey); const alphaEntry = childEntries.find((entry) => entry.label === alphaLabel); const betaEntry = childEntries.find((entry) => entry.label === betaLabel); if (!alphaEntry || !betaEntry) return undefined; const [alphaTranscript, betaTranscript] = await Promise.all([readSessionTranscriptSummary(env, alphaEntry.key), readSessionTranscriptSummary(env, betaEntry.key)]); const alphaOk = normalizeLowercaseStringOrEmpty(alphaTranscript.finalText) === normalizeLowercaseStringOrEmpty(timeoutAlphaExpected); const betaOk = normalizeLowercaseStringOrEmpty(betaTranscript.finalText) === normalizeLowercaseStringOrEmpty(timeoutBetaExpected); return alphaOk && betaOk ? { store, childEntries, alphaTranscript, betaTranscript } : undefined; })().catch(() => undefined)"
-                                          - expr: "30000"
-                                          - expr: "env.providerMode === 'mock-openai' ? 100 : 250"
-                                      - set: timeoutStore
-                                        value:
-                                          expr: "timeoutEvidence.store"
-                                      - set: timeoutChildEntries
-                                        value:
-                                          expr: "timeoutEvidence.childEntries"
-                                      - set: timeoutChildRows
-                                        value:
-                                          expr: "timeoutChildEntries"
-                                      - set: timeoutSawAlpha
-                                        value:
-                                          expr: "timeoutChildRows.some((entry) => entry.label === alphaLabel)"
-                                      - set: timeoutSawBeta
-                                        value:
-                                          expr: "timeoutChildRows.some((entry) => entry.label === betaLabel)"
-                                      - set: timeoutAlphaTranscript
-                                        value:
-                                          expr: "timeoutEvidence.alphaTranscript"
-                                      - set: timeoutBetaTranscript
-                                        value:
-                                          expr: "timeoutEvidence.betaTranscript"
-                                      - set: timeoutAlphaOk
-                                        value:
-                                          expr: "normalizeLowercaseStringOrEmpty(timeoutAlphaTranscript?.finalText) === normalizeLowercaseStringOrEmpty(timeoutAlphaExpected)"
-                                      - set: timeoutBetaOk
-                                        value:
-                                          expr: "normalizeLowercaseStringOrEmpty(timeoutBetaTranscript?.finalText) === normalizeLowercaseStringOrEmpty(timeoutBetaExpected)"
-                                      - set: timeoutSpawnRequests
-                                        value:
-                                          expr: "[]"
-                                      - if:
-                                          expr: "Boolean(env.mock)"
-                                          then:
-                                            - set: timeoutSpawnRequests
-                                              value:
-                                                expr: "[...(await fetchJson(`${env.mock.baseUrl}/debug/requests`))].filter((request) => request.plannedToolName === 'sessions_spawn' && /subagent fanout synthesis check/i.test(String(request.allInputText ?? '')))"
-                                      - if:
-                                          expr: "timeoutSawAlpha && timeoutSawBeta && timeoutAlphaOk && timeoutBetaOk && (!env.mock || timeoutSpawnRequests.length >= 2)"
-                                          then:
-                                            - call: waitForCondition
-                                              saveAs: recoveredParentTranscript
-                                              args:
-                                                - lambda:
-                                                    async: true
-                                                    expr: "readSessionTranscriptSummary(env, sessionKey).then((summary) => config.expectedReplyGroups.every((group) => group.some((needle) => normalizeLowercaseStringOrEmpty(summary.finalText).includes(needle))) ? summary : undefined).catch(() => undefined)"
-                                                - expr: liveTurnTimeoutMs(env, 30000)
-                                                - expr: "env.providerMode === 'mock-openai' ? 100 : 250"
-                                            - set: details
-                                              value:
-                                                expr: recoveredParentTranscript.finalText
-                                            - set: lastError
-                                              value: __done__
-                                    catchAs: recoveryError
-                                    catch:
-                                      - set: lastError
-                                        value:
-                                          ref: recoveryError
                           - if:
                               expr: "lastError !== '__done__' && attempt < attempts"
                               then:

@@ -15,7 +15,7 @@ import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking"
 import { tlonChannelConfigSchema } from "./config-schema.js";
 import { tlonDoctor } from "./doctor.js";
 import { resolveTlonOutboundSessionRoute } from "./session-route.js";
-import { createTlonSetupWizardBase, tlonSetupAdapter, tlonSetupContract } from "./setup-core.js";
+import { createTlonSetupWizardBase, tlonSetupContract } from "./setup-core.js";
 import {
   formatTargetHint,
   normalizeShip,
@@ -107,7 +107,6 @@ export const tlonPlugin = createChatChannelPlugin({
       reply: true,
       threads: true,
     },
-    setup: tlonSetupAdapter,
     setupContract: tlonSetupContract,
     setupWizard: tlonSetupWizardProxy,
     reload: { configPrefixes: ["channels.tlon"] },
