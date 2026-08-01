@@ -250,6 +250,13 @@ function getLastDispatchedParams(): Record<string, unknown> | undefined {
   return call?.req?.params as Record<string, unknown> | undefined;
 }
 
+function getLastDispatchedMethod(): string | undefined {
+  const call = getLastMockFirstArg(handleGatewayRequest, "gateway request") as
+    | HandleGatewayRequestOptions
+    | undefined;
+  return call?.req?.method;
+}
+
 function getRequiredLastDispatchedParams(): Record<string, unknown> {
   return requireRecord(getLastDispatchedParams(), "dispatched params");
 }
@@ -1531,6 +1538,92 @@ describe("loadGatewayPlugins", () => {
       gatewayRequestScopeModule.withPluginRuntimePluginScope(
         { pluginId: "configured-receipt-owner", pluginOrigin: "config" },
         () => runtime.gateway.request("health", {}),
+      ),
+    ).rejects.toThrow("bundled or trusted official plugins");
+  });
+
+  test("lets an operator-authorized configured plugin observe only its bounded agent runs", async () => {
+    loadOpenClawPlugins.mockReturnValue(
+      addLoadedPlugin(createRegistry([]), {
+        id: "configured-receipt-owner",
+        origin: "config",
+      }),
+    );
+    loadGatewayStartupPluginsForTest();
+    const configuredContext = createTestContext("configured-receipt-owner-observation");
+    serverPluginsModule.setFallbackGatewayContext({
+      ...configuredContext,
+      getRuntimeConfig: () => ({
+        plugins: {
+          entries: {
+            "configured-receipt-owner": {
+              config: {
+                gatewayAgentObservationAllowed: true,
+                gatewayAgentObservationRunIdPrefix: "gaia-slack-admission-replay:",
+              },
+            },
+          },
+        },
+      }),
+    } as GatewayRequestContext);
+    const runtime = runtimeModule.createPluginRuntime();
+    const runId = "gaia-slack-admission-replay:request-1";
+
+    await expect(
+      gatewayRequestScopeModule.withPluginRuntimePluginScope(
+        { pluginId: "configured-receipt-owner", pluginOrigin: "config" },
+        () => runtime.gateway.request("agent.wait", { runId, timeoutMs: 0 }),
+      ),
+    ).resolves.toEqual({ status: "ok" });
+    expect(getLastDispatchedMethod()).toBe("agent.wait");
+    expect(getLastDispatchedParams()).toEqual({ runId, timeoutMs: 0 });
+
+    await expect(
+      gatewayRequestScopeModule.withPluginRuntimePluginScope(
+        { pluginId: "configured-receipt-owner", pluginOrigin: "config" },
+        () =>
+          runtime.gateway.request("audit.activity.list", {
+            runId,
+            kind: "agent_run",
+            limit: 20,
+          }),
+      ),
+    ).resolves.toEqual({});
+    expect(getLastDispatchedMethod()).toBe("audit.activity.list");
+
+    for (const request of [
+      () => runtime.gateway.request("agent.wait", { runId: "other-run", timeoutMs: 0 }),
+      () => runtime.gateway.request("agent.wait", { runId, timeoutMs: 1 }),
+      () =>
+        runtime.gateway.request("audit.activity.list", {
+          runId,
+          kind: "agent_run",
+          limit: 21,
+        }),
+      () =>
+        runtime.gateway.request("audit.activity.list", {
+          runId,
+          kind: "tool_action",
+          limit: 20,
+        }),
+      () => runtime.gateway.request("health", {}),
+    ]) {
+      await expect(
+        gatewayRequestScopeModule.withPluginRuntimePluginScope(
+          { pluginId: "configured-receipt-owner", pluginOrigin: "config" },
+          request,
+        ),
+      ).rejects.toThrow("bundled or trusted official plugins");
+    }
+
+    serverPluginsModule.setFallbackGatewayContext({
+      ...configuredContext,
+      getRuntimeConfig: () => ({ plugins: { entries: {} } }),
+    } as GatewayRequestContext);
+    await expect(
+      gatewayRequestScopeModule.withPluginRuntimePluginScope(
+        { pluginId: "configured-receipt-owner", pluginOrigin: "config" },
+        () => runtime.gateway.request("agent.wait", { runId, timeoutMs: 0 }),
       ),
     ).rejects.toThrow("bundled or trusted official plugins");
   });

@@ -566,7 +566,32 @@ export async function dispatchTrustedPluginGatewayMethod<T>(
     options?.scopes === undefined &&
     configuredPluginConfig?.gatewayAgentDispatchAllowed === true,
   );
-  if (!trustedOfficial && !configuredAgentDispatch) {
+  const observationRunId =
+    typeof params.runId === "string" && params.runId.trim() ? params.runId.trim() : undefined;
+  const observationRunIdPrefix =
+    typeof configuredPluginConfig?.gatewayAgentObservationRunIdPrefix === "string"
+      ? configuredPluginConfig.gatewayAgentObservationRunIdPrefix.trim()
+      : "";
+  const observationKeys = Object.keys(params);
+  const configuredAgentObservation = Boolean(
+    pluginId &&
+    scope?.pluginOrigin === "config" &&
+    options?.scopes === undefined &&
+    configuredPluginConfig?.gatewayAgentObservationAllowed === true &&
+    observationRunIdPrefix &&
+    observationRunId?.startsWith(observationRunIdPrefix) &&
+    ((method === "agent.wait" &&
+      observationKeys.every((key) => key === "runId" || key === "timeoutMs") &&
+      params.timeoutMs === 0) ||
+      (method === "audit.activity.list" &&
+        observationKeys.every((key) => key === "runId" || key === "kind" || key === "limit") &&
+        params.kind === "agent_run" &&
+        typeof params.limit === "number" &&
+        Number.isInteger(params.limit) &&
+        params.limit >= 1 &&
+        params.limit <= 20)),
+  );
+  if (!trustedOfficial && !configuredAgentDispatch && !configuredAgentObservation) {
     throw new Error("Gateway requests are only available to bundled or trusted official plugins.");
   }
   const trustedRequestMessageId =

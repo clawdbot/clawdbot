@@ -253,8 +253,12 @@ vi.mock("./server-tailscale.js", () => ({
   startGatewayTailscaleExposure: hoisted.startGatewayTailscaleExposure,
 }));
 
-const { startGatewayPostAttachRuntime, startGatewaySidecars, testing } =
-  await import("./server-startup-post-attach.js");
+const {
+  runGatewayStartAfterMainSessionRecovery,
+  startGatewayPostAttachRuntime,
+  startGatewaySidecars,
+  testing,
+} = await import("./server-startup-post-attach.js");
 const { scheduleContextCachePrewarm } = await import("./server-startup-context-cache-prewarm.js");
 const { STARTUP_UNAVAILABLE_GATEWAY_METHODS } = await import("./methods/core-descriptors.js");
 const { createGatewayCloseHandler } = await import("./server-close.js");
@@ -2492,7 +2496,7 @@ describe("startGatewayPostAttachRuntime", () => {
     });
   });
 
-  it("fails closed for gateway_start hooks when restart recovery is still unsettled", async () => {
+  it("runs gateway_start hooks after restart recovery exhausts its bounded attempts", async () => {
     hoisted.scheduleRestartAbortedMainSessionRecovery.mockResolvedValueOnce(false);
     const runGatewayStart = vi.fn(async () => {});
     const hookRunner = {
@@ -2522,13 +2526,40 @@ describe("startGatewayPostAttachRuntime", () => {
     });
     await vi.waitFor(() => {
       expect(log.warn).toHaveBeenCalledWith(
-        "gateway_start hooks skipped: main-session restart recovery is unsettled",
+        "gateway_start hooks proceeding after main-session restart recovery exhausted its bounded attempts",
       );
     });
-    expect(runGatewayStart).not.toHaveBeenCalled();
+    await vi.waitFor(() => {
+      expect(runGatewayStart).toHaveBeenCalledTimes(1);
+    });
   });
 
-  it("fails closed for gateway_start hooks when restart recovery cannot be scheduled", async () => {
+  it("bounds a non-settling main-session recovery before gateway_start hooks", async () => {
+    vi.useFakeTimers();
+    try {
+      const runGatewayStart = vi.fn(async () => {});
+      const warn = vi.fn();
+      const result = runGatewayStartAfterMainSessionRecovery({
+        recovery: new Promise<boolean>(() => {}),
+        runGatewayStart,
+        warn,
+        maxWaitMs: 25,
+      });
+
+      await vi.advanceTimersByTimeAsync(25);
+      await vi.runAllTimersAsync();
+
+      await expect(result).resolves.toBe(false);
+      expect(warn).toHaveBeenCalledWith(
+        "gateway_start hooks proceeding after main-session restart recovery exceeded 25ms",
+      );
+      expect(runGatewayStart).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("still runs gateway_start hooks when restart recovery cannot be scheduled", async () => {
     hoisted.scheduleRestartAbortedMainSessionRecovery.mockImplementationOnce(() => {
       throw new Error("recovery scheduler unavailable");
     });
@@ -2559,10 +2590,12 @@ describe("startGatewayPostAttachRuntime", () => {
     });
     await vi.waitFor(() => {
       expect(log.warn).toHaveBeenCalledWith(
-        "gateway_start hooks skipped: main-session restart recovery is unsettled",
+        "gateway_start hooks proceeding after main-session restart recovery exhausted its bounded attempts",
       );
     });
-    expect(runGatewayStart).not.toHaveBeenCalled();
+    await vi.waitFor(() => {
+      expect(runGatewayStart).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("does not resolve the global hook runner when no gateway_start hooks are registered", async () => {

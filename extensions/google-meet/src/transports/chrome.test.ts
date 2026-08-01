@@ -20,6 +20,13 @@ type TestGatewayRequest = (
 
 function browserRuntime(request: TestGatewayRequest): PluginRuntime {
   const gateway: PluginRuntime["gateway"] = {
+    capabilities: Object.freeze({
+      contractVersion: 1,
+      acceptedCallbackBarrier: true,
+      agentWaitProviderStarted: true,
+      agentWaitTimeoutPhase: true,
+      auditAgentRunSourceSequence: true,
+    }),
     isAvailable: async () => true,
     request: async <T = unknown>(
       method: string,

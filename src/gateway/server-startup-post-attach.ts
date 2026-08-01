@@ -75,24 +75,44 @@ const loadGatewayRestartSentinelModule = createLazyRuntimeModule(
 export type GatewayPostReadySidecarHandle = { stop: () => Awaitable<void> };
 
 /**
- * Keep plugin startup replay behind a stable main-session recovery result.
+ * Keep plugin startup replay behind a settled main-session recovery result.
+ * Exhausted recovery is surfaced but cannot disable every plugin's startup owner.
  * Exported so cross-repo integration tests can exercise the real startup barrier.
  */
 export async function runGatewayStartAfterMainSessionRecovery(params: {
   recovery: Promise<boolean>;
   runGatewayStart: () => Awaitable<void>;
   warn: (message: string) => void;
+  maxWaitMs?: number;
 }): Promise<boolean> {
-  const mainSessionRecoveryStable = await params.recovery;
+  const maxWaitMs = Math.max(1, params.maxWaitMs ?? 30_000);
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const mainSessionRecoveryStable = await Promise.race([
+    params.recovery,
+    new Promise<"timed_out">((resolve) => {
+      timeout = setTimeout(() => resolve("timed_out"), maxWaitMs);
+      timeout.unref?.();
+    }),
+  ]).finally(() => {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  });
+  if (mainSessionRecoveryStable === "timed_out") {
+    params.warn(
+      `gateway_start hooks proceeding after main-session restart recovery exceeded ${maxWaitMs}ms`,
+    );
+  }
   if (!mainSessionRecoveryStable) {
-    params.warn("gateway_start hooks skipped: main-session restart recovery is unsettled");
-    return false;
+    params.warn(
+      "gateway_start hooks proceeding after main-session restart recovery exhausted its bounded attempts",
+    );
   }
   await new Promise<void>((resolve) => {
     setImmediate(resolve);
   });
   await params.runGatewayStart();
-  return true;
+  return mainSessionRecoveryStable === true;
 }
 
 /** Stop sidecars immediately when shutdown has already started before they are reported. */

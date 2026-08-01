@@ -105,9 +105,19 @@ export type RuntimeGatewayRequestOptions = {
   scopes?: OperatorScope[];
 };
 
+export type RuntimeGatewayCapabilities = Readonly<{
+  contractVersion: 1;
+  acceptedCallbackBarrier: true;
+  agentWaitProviderStarted: true;
+  agentWaitTimeoutPhase: true;
+  auditAgentRunSourceSequence: true;
+}>;
+
 /** Trusted in-process runtime surface injected into native plugins. */
 export type PluginRuntime = PluginRuntimeCore & {
   gateway: {
+    /** Frozen host contract used by plugins before they assume durable agent observation semantics. */
+    capabilities: RuntimeGatewayCapabilities;
     /** Whether this process owns an active Gateway request context. */
     isAvailable: () => Promise<boolean>;
     /** Dispatch a Gateway method as the current trusted plugin. */

@@ -34,7 +34,11 @@ import { createRuntimeMedia } from "./runtime-media.js";
 import { createRuntimeSystem } from "./runtime-system.js";
 import { createRuntimeTaskFlow } from "./runtime-taskflow.js";
 import { createRuntimeTasks } from "./runtime-tasks.js";
-import type { CreatePluginRuntimeOptions, PluginRuntime } from "./types.js";
+import type {
+  CreatePluginRuntimeOptions,
+  PluginRuntime,
+  RuntimeGatewayCapabilities,
+} from "./types.js";
 
 const loadTtsRuntime = createLazyRuntimeModule(() => import("../../tts/tts.js"));
 const loadMediaUnderstandingRuntime = createLazyRuntimeModule(
@@ -47,8 +51,17 @@ const loadGatewayPluginRuntime = createLazyRuntimeModule(
   () => import("../../gateway/server-plugins.js"),
 );
 
+const RUNTIME_GATEWAY_CAPABILITIES: RuntimeGatewayCapabilities = Object.freeze({
+  contractVersion: 1,
+  acceptedCallbackBarrier: true,
+  agentWaitProviderStarted: true,
+  agentWaitTimeoutPhase: true,
+  auditAgentRunSourceSequence: true,
+});
+
 function createRuntimeGateway(): PluginRuntime["gateway"] {
   return {
+    capabilities: RUNTIME_GATEWAY_CAPABILITIES,
     isAvailable: async () => {
       const runtime = await loadGatewayPluginRuntime();
       return runtime.hasInProcessGatewayContext();

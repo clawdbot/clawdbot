@@ -485,6 +485,7 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
                 "openChannelIngressQueue is only available to bundled, trusted, or explicitly configured plugins.",
               );
             }
+            return record;
           };
           return {
             ...baseState,
@@ -499,16 +500,22 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
               return createPluginStateSyncKeyedStore<T>(pluginId, options);
             },
             openChannelIngressQueue: <TPayload, TMetadata = unknown, TCompletedMetadata = unknown>(
-              options?: Omit<
-                Parameters<typeof createChannelIngressQueue>[0],
-                "channelId" | "stateDir"
-              >,
+              options?: Omit<Parameters<typeof createChannelIngressQueue>[0], "channelId">,
             ) => {
-              assertPluginIngressQueueAllowed();
+              const record = assertPluginIngressQueueAllowed();
+              if (record?.origin === "config" && options?.stateDir !== undefined) {
+                throw new Error(
+                  "Explicitly configured plugins cannot select a channel ingress queue stateDir.",
+                );
+              }
+              const stateDir =
+                record?.origin === "config"
+                  ? baseState.resolveStateDir()
+                  : (options?.stateDir ?? baseState.resolveStateDir());
               return createChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>({
                 ...options,
                 channelId: pluginId,
-                stateDir: baseState.resolveStateDir(),
+                stateDir,
               });
             },
           } satisfies PluginRuntime["state"];
@@ -535,6 +542,7 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
         if (prop === "gateway") {
           const gateway = getRuntimeProperty();
           return {
+            capabilities: gateway.capabilities,
             isAvailable: () => runWithPluginScope(() => gateway.isAvailable()),
             request: async (method, params, options) =>
               await runWithPluginScope(async () => {

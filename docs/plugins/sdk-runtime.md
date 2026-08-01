@@ -275,6 +275,12 @@ two-party event loops that do not go through the shared inbound reply runner.
     identity. This is intended for bundled or trusted official plugins that compose plugin-owned
     Gateway capabilities without opening a loopback WebSocket connection.
 
+    `api.runtime.gateway.capabilities` is a frozen host descriptor. Contract version 1 declares
+    the accepted-callback execution barrier, `agent.wait` fields for `providerStarted` and
+    `timeoutPhase`, and per-run `sourceSequence` on `agent_run` audit events. A plugin that takes
+    durable ownership before dispatch should validate this descriptor before writing its row;
+    method-name availability alone does not prove those observation semantics.
+
     ```typescript
     if (await api.runtime.gateway.isAvailable()) {
       const result = await api.runtime.gateway.request<{ callId: string }>(
@@ -288,8 +294,11 @@ two-party event loops that do not go through the shared inbound reply runner.
     Requests use `operator.write` scope and do not grant admin scope. Calls from arbitrary external
     plugins are rejected. An operator may explicitly allow one config-origin plugin to start
     unscoped `agent` runs by setting
-    `plugins.entries.<id>.config.gatewayAgentDispatchAllowed: true`; that exception does not allow
-    other Gateway methods or caller-supplied scopes. Failed methods throw a
+    `plugins.entries.<id>.config.gatewayAgentDispatchAllowed: true`. A separate
+    `gatewayAgentObservationAllowed: true` plus non-empty
+    `gatewayAgentObservationRunIdPrefix` permits only nonblocking `agent.wait` and bounded
+    `audit.activity.list` calls for `agent_run` events whose exact run ID starts with that prefix.
+    Neither exception permits caller-supplied scopes or other Gateway methods. Failed methods throw a
     `GatewayClientRequestError`, preserving structured `details`, retry metadata, and the Gateway
     error code for recovery flows. Use `isAvailable()` before choosing this path from tools that can
     also run in standalone agent processes.
@@ -716,10 +725,13 @@ two-party event loops that do not go through the shared inbound reply runner.
 
     `openSyncKeyedStore<T>(...)` returns the same store shape with synchronous methods (`register`, `registerIfAbsent`, `deleteIf`, `lookup`, `consume`, `clear` all return values directly instead of promises) for callers that cannot await.
 
-    `openChannelIngressQueue<TPayload>(...)` opens a persisted ingress queue scoped to the calling plugin, for buffering inbound events that need at-least-once processing across restarts. When stale-claim recovery uses `shouldRecover`, also provide `shouldRecoverCorrupt` if corrupt claimed payloads should be quarantined: its payload-independent claim identity lets the plugin preserve live owner and lane policy before the queue tombstones the row.
+    `openChannelIngressQueue<TPayload>(...)` opens a persisted ingress queue scoped to the calling plugin, for buffering inbound events that need at-least-once processing across restarts. Its process-stable version 2 `capabilities` object lets a plugin verify stronger ownership requirements before accepting work, including exact lookup, durable `refreshClaim(..., { lastError })` checkpoints, atomic `blockClaimedLanes` exclusion, exact `excludedEventIds` reconciliation rows, and bounded pruning. Treat an absent or mismatched capability as an unsupported host contract; do not infer support from method names. When stale-claim recovery uses `shouldRecover`, also provide `shouldRecoverCorrupt` if corrupt claimed payloads should be quarantined: its payload-independent claim identity lets the plugin preserve live owner and lane policy before the queue tombstones the row.
 
     <Warning>
-    `openKeyedStore`, `openSyncKeyedStore`, and `openChannelIngressQueue` are available only to bundled plugins and trusted official plugin installations in this release.
+    `openKeyedStore` and `openSyncKeyedStore` are available only to bundled plugins and trusted
+    official plugin installations. `openChannelIngressQueue` also permits explicitly configured
+    plugins, but the host fixes their queue state directory and does not accept a plugin-selected
+    path.
     </Warning>
 
   </Accordion>

@@ -15,7 +15,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import { createChannelIngressQueue } from "./ingress-queue.js";
+import { CHANNEL_INGRESS_QUEUE_CAPABILITIES, createChannelIngressQueue } from "./ingress-queue.js";
 
 type ChannelIngressTestDatabase = Pick<OpenClawStateKyselyDatabase, "channel_ingress_events">;
 
@@ -32,6 +32,27 @@ async function withTempState<T>(fn: (stateDir: string) => Promise<T>): Promise<T
 describe("channel ingress queue", () => {
   afterEach(() => {
     closeOpenClawStateDatabaseForTest();
+  });
+
+  it("declares the process-stable durable ownership contract", async () => {
+    await withTempState(async (stateDir) => {
+      const queue = createChannelIngressQueue({
+        channelId: "test",
+        accountId: "account",
+        stateDir,
+      });
+
+      expect(queue.capabilities).toBe(CHANNEL_INGRESS_QUEUE_CAPABILITIES);
+      expect(queue.capabilities).toEqual({
+        contractVersion: 2,
+        lookup: true,
+        refreshClaimLastError: true,
+        blockClaimedLanes: true,
+        excludeEventIds: true,
+        boundedPrune: true,
+      });
+      expect(Object.isFrozen(queue.capabilities)).toBe(true);
+    });
   });
 
   it("deduplicates pending and completed ingress events", async () => {
@@ -370,6 +391,29 @@ describe("channel ingress queue", () => {
 
       expect(claimed?.id).toBe("independent");
       expect((await queue.listPending()).find((record) => record.id === "later")).toBeDefined();
+    });
+  });
+
+  it("excludes an exact reconciliation row without blocking a later row in the same lane", async () => {
+    await withTempState(async (stateDir) => {
+      const queue = createChannelIngressQueue<{ text: string }>({
+        channelId: "test",
+        accountId: "account",
+        stateDir,
+        now: () => 10,
+      });
+
+      await queue.enqueue("operator-row", { text: "ambiguous" }, { laneKey: "thread-1" });
+      await queue.enqueue("later-row", { text: "actionable" }, { laneKey: "thread-1" });
+
+      const claimed = await queue.claimNext({
+        ownerId: "worker",
+        excludedEventIds: ["operator-row"],
+        blockClaimedLanes: true,
+      });
+
+      expect(claimed?.id).toBe("later-row");
+      expect((await queue.lookup("operator-row"))?.kind).toBe("pending");
     });
   });
 

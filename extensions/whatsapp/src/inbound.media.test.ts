@@ -156,8 +156,8 @@ vi.mock("./runtime.js", async () => {
         resolveStateDir: () => stateDir,
         openKeyedStore: () => createInMemoryKeyedStore(),
         openChannelIngressQueue: (
-          options?: Omit<Parameters<typeof createChannelIngressQueue>[0], "channelId" | "stateDir">,
-        ) => createChannelIngressQueue({ ...options, channelId: "whatsapp", stateDir }),
+          options?: Omit<Parameters<typeof createChannelIngressQueue>[0], "channelId">,
+        ) => createChannelIngressQueue({ ...options, channelId: "whatsapp" }),
       },
     }),
     setWhatsAppRuntime: vi.fn(),

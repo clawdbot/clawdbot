@@ -65,6 +65,7 @@ export function createWhatsAppDurableInboundReceiveJournal(accountId: string) {
     WhatsAppDurableInboundCompletedMetadata
   >({
     accountId: accountPart,
+    stateDir: runtime.state.resolveStateDir(),
   });
   return createDurableInboundReceiveJournalFromQueue({
     queue,

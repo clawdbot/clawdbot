@@ -95,15 +95,24 @@ function processingPath(spoolDir: string, updateId: number): string {
   return path.join(spoolDir, processingFileName(updateId));
 }
 
-function resolveQueueParts(spoolDir: string): { accountId: string } {
+function resolveQueueParts(spoolDir: string): {
+  accountId: string;
+  stateDir: string;
+} {
   const basename = path.basename(spoolDir);
   const accountId = normalizeTelegramStateAccountId(
     basename.startsWith(TELEGRAM_INGRESS_SPOOL_PREFIX)
       ? basename.slice(TELEGRAM_INGRESS_SPOOL_PREFIX.length)
       : basename,
   );
+  const stateDir =
+    basename.startsWith(TELEGRAM_INGRESS_SPOOL_PREFIX) &&
+    path.basename(path.dirname(spoolDir)) === "telegram"
+      ? path.dirname(path.dirname(spoolDir))
+      : spoolDir;
   return {
     accountId,
+    stateDir,
   };
 }
 
@@ -113,6 +122,7 @@ function createTelegramIngressQueue(
   const parts = resolveQueueParts(spoolDir);
   return getTelegramRuntime().state.openChannelIngressQueue<TelegramSpooledUpdatePayload>({
     accountId: parts.accountId,
+    stateDir: parts.stateDir,
   });
 }
 

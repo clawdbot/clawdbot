@@ -132,8 +132,28 @@ export type ChannelIngressQueueEnqueueResult<TPayload, TMetadata, TCompletedMeta
       record: ChannelIngressQueueFailedRecord;
     };
 
+export type ChannelIngressQueueCapabilities = Readonly<{
+  contractVersion: 2;
+  lookup: true;
+  refreshClaimLastError: true;
+  blockClaimedLanes: true;
+  excludeEventIds: true;
+  boundedPrune: true;
+}>;
+
+export const CHANNEL_INGRESS_QUEUE_CAPABILITIES: ChannelIngressQueueCapabilities = Object.freeze({
+  contractVersion: 2,
+  lookup: true,
+  refreshClaimLastError: true,
+  blockClaimedLanes: true,
+  excludeEventIds: true,
+  boundedPrune: true,
+});
+
 /** Durable FIFO-ish ingress queue with claims, duplicate detection, and retention pruning. */
 export type ChannelIngressQueue<TPayload, TMetadata = unknown, TCompletedMetadata = unknown> = {
+  /** Process-stable contract facts for plugins that need stronger ownership guarantees. */
+  capabilities: ChannelIngressQueueCapabilities;
   lookup(
     id: string,
   ): Promise<ChannelIngressQueueEnqueueResult<TPayload, TMetadata, TCompletedMetadata> | null>;
@@ -158,6 +178,8 @@ export type ChannelIngressQueue<TPayload, TMetadata = unknown, TCompletedMetadat
     orderBy?: "received" | "id";
     scanLimit?: number;
     candidateIds?: Iterable<string>;
+    /** Atomically exclude exact rows retained for caller-owned reconciliation. */
+    excludedEventIds?: Iterable<string>;
     /** Atomically exclude lanes already held by any active claim. */
     blockClaimedLanes?: boolean;
     deriveLaneKey?: (record: ChannelIngressQueueRecord<TPayload, TMetadata>) => string | undefined;
@@ -648,6 +670,7 @@ export function createChannelIngressQueue<
       [...(claimOptions?.blockedLaneKeys ?? [])].map((key) => key.trim()).filter(Boolean),
     );
     const candidateIds = normalizedCandidateIds(claimOptions?.candidateIds);
+    const excludedEventIds = normalizedCandidateIds(claimOptions?.excludedEventIds);
     if (candidateIds?.length === 0) {
       return null;
     }
@@ -692,6 +715,9 @@ export function createChannelIngressQueue<
         let select = baseSelect;
         if (candidateIds) {
           select = select.where("event_id", "in", candidateIds);
+        }
+        if (excludedEventIds && excludedEventIds.length > 0) {
+          select = select.where("event_id", "not in", excludedEventIds);
         }
         if (effectiveBlocked.size > 0 && !claimOptions?.deriveLaneKey) {
           select = select.where((eb) =>
@@ -1249,6 +1275,7 @@ export function createChannelIngressQueue<
   };
 
   return {
+    capabilities: CHANNEL_INGRESS_QUEUE_CAPABILITIES,
     async lookup(id) {
       const { db } = openStateDatabase(options.stateDir);
       const row = selectRow(db, queueName, normalizePart(id, ""));

@@ -651,6 +651,11 @@ All variants require `eventType`, `schemaVersion`, `eventId`, `sequence`,
 `sourceSequence`, `occurredAt`, `kind`, `action`, `status`, `actor`, and
 `redaction`. Variant fields are:
 
+For `agent_run` events, `sourceSequence` is the per-run agent-event sequence. It
+starts at `1` and increases before each later event for the same run. Therefore
+an `agent.run.finished` event with `sourceSequence: 1` is authoritative evidence
+that no `agent.run.started` event preceded it for that run.
+
 | `eventType`        | Required fields                                                   | Optional fields                                                                                                                 |
 | ------------------ | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
 | `agent_run`        | `agentId`, `runId`; `kind: "agent_run"`                           | `sessionKey`, `sessionId`, `errorCode`                                                                                          |
