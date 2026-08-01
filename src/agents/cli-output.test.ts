@@ -1331,6 +1331,23 @@ describe("parseCliOutput", () => {
 });
 
 describe("createCliJsonlStreamingParser", () => {
+  function createClaudeTaggedReasoningHarness() {
+    const assistant: Array<{ text: string; delta: string }> = [];
+    const thinking: Array<{ text: string; delta: string; isReasoningSnapshot?: boolean }> = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "local-cli",
+      onAssistantDelta: (delta) => assistant.push(delta),
+      onThinkingDelta: (delta) => thinking.push(delta),
+    });
+    return { assistant, parser, thinking };
+  }
+
   it.each(OPENAI_COMPATIBLE_CLI_USAGE_CASES)(
     "normalizes $name while incrementally streaming CLI JSONL",
     ({ raw, normalized }) => {
@@ -2009,6 +2026,243 @@ describe("createCliJsonlStreamingParser", () => {
       sessionId: "session-diverged",
       usage: undefined,
     });
+  });
+
+  it("promotes complete leading tagged Claude reasoning and keeps only the answer visible", () => {
+    const { assistant, parser, thinking } = createClaudeTaggedReasoningHarness();
+
+    parser.push(
+      [
+        JSON.stringify({ type: "stream_event", event: { type: "message_start" } }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: {
+              type: "text_delta",
+              text: "<thinking>Private analysis.</thinking>Visible answer.",
+            },
+          },
+        }),
+        JSON.stringify({
+          type: "result",
+          session_id: "session-tagged",
+          result: "<thinking>Private analysis.</thinking>Visible answer.",
+        }),
+        "",
+      ].join("\n"),
+    );
+    parser.finish();
+
+    expect(thinking).toEqual([
+      {
+        text: "Private analysis.",
+        delta: "Private analysis.",
+        isReasoningSnapshot: true,
+      },
+    ]);
+    expect(assistant).toEqual([
+      {
+        text: "Visible answer.",
+        delta: "Visible answer.",
+        sessionId: undefined,
+        usage: undefined,
+      },
+    ]);
+    expect(parser.getOutput()).toEqual({
+      text: "Visible answer.",
+      sessionId: "session-tagged",
+      usage: undefined,
+    });
+  });
+
+  it("holds chunk-split tagged reasoning until its close tag is complete", () => {
+    const { assistant, parser, thinking } = createClaudeTaggedReasoningHarness();
+    const pushText = (text: string) =>
+      parser.push(
+        `${JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: { type: "text_delta", text },
+          },
+        })}\n`,
+      );
+
+    pushText("<thi");
+    pushText("nking>Private ");
+    expect(assistant).toEqual([]);
+    expect(thinking).toEqual([]);
+    pushText("analysis.</think");
+    expect(assistant).toEqual([]);
+    expect(thinking).toEqual([]);
+    pushText("ing>Visible answer.");
+    parser.finish();
+
+    expect(thinking.at(-1)?.text).toBe("Private analysis.");
+    expect(assistant.at(-1)?.text).toBe("Visible answer.");
+    expect(parser.getOutput()?.text).toBe("Visible answer.");
+  });
+
+  it("streams rejected angle prefixes while valid split reasoning stays buffered", () => {
+    const visible = createClaudeTaggedReasoningHarness();
+    const mixed = createClaudeTaggedReasoningHarness();
+    const tagged = createClaudeTaggedReasoningHarness();
+    const pushText = (parser: ReturnType<typeof createCliJsonlStreamingParser>, text: string) =>
+      parser.push(
+        `${JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: { type: "text_delta", text },
+          },
+        })}\n`,
+      );
+
+    pushText(visible.parser, "<div>Visible prefix <thi");
+    expect(visible.assistant.at(-1)?.text).toBe("<div>Visible prefix <thi");
+    expect(visible.parser.getOutput()?.text).toBe("<div>Visible prefix <thi");
+
+    pushText(mixed.parser, "<div>Visible prefix ");
+    pushText(mixed.parser, "<thi");
+    expect(mixed.assistant.at(-1)?.text).toBe("<div>Visible prefix <thi");
+    expect(mixed.parser.getOutput()?.text).toBe("<div>Visible prefix <thi");
+
+    pushText(tagged.parser, "<thi");
+    pushText(tagged.parser, "nking>Private analysis.");
+    expect(tagged.assistant).toEqual([]);
+    expect(tagged.thinking).toEqual([]);
+    pushText(tagged.parser, "</thinking>Visible answer.");
+    expect(tagged.thinking.at(-1)?.text).toBe("Private analysis.");
+    expect(tagged.assistant.at(-1)?.text).toBe("Visible answer.");
+  });
+
+  it("promotes consecutive leading blocks but preserves later literal tags", () => {
+    const { assistant, parser, thinking } = createClaudeTaggedReasoningHarness();
+
+    parser.push(
+      `${JSON.stringify({
+        type: "stream_event",
+        event: {
+          type: "content_block_delta",
+          delta: {
+            type: "text_delta",
+            text: [
+              "<think>First.</think>",
+              "<reasoning>Second.</reasoning>",
+              "Answer with <think>literal</think> markup.",
+            ].join("\n"),
+          },
+        },
+      })}\n`,
+    );
+    parser.finish();
+
+    expect(thinking.map((entry) => entry.text)).toEqual(["First.Second."]);
+    expect(assistant.at(-1)?.text).toBe("\nAnswer with <think>literal</think> markup.");
+    expect(parser.getOutput()?.text).toBe("Answer with <think>literal</think> markup.");
+  });
+
+  it("prefers native Claude thinking over a mirrored leading tagged block", () => {
+    const { assistant, parser, thinking } = createClaudeTaggedReasoningHarness();
+
+    parser.push(
+      [
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "thinking_delta", thinking: "Native analysis." },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            index: 1,
+            delta: {
+              type: "text_delta",
+              text: "<thinking>Native analysis.</thinking>Visible answer.",
+            },
+          },
+        }),
+        JSON.stringify({
+          type: "result",
+          result: "<thinking>Native analysis.</thinking>Visible answer.",
+        }),
+        "",
+      ].join("\n"),
+    );
+    parser.finish();
+
+    expect(thinking).toEqual([
+      { text: "Native analysis.", delta: "Native analysis.", isReasoningSnapshot: true },
+    ]);
+    expect(assistant.at(-1)?.text).toBe("Visible answer.");
+    expect(parser.getOutput()?.text).toBe("Visible answer.");
+  });
+
+  it.each([
+    {
+      name: "fenced code example",
+      text: "```xml\n<thinking>literal example</thinking>\n```",
+    },
+    { name: "incomplete leading tag", text: "<thinking>unfinished visible text" },
+    { name: "malformed leading tag", text: "<thinking broken visible text" },
+  ])("preserves $name on the visible path", ({ text }) => {
+    const { assistant, parser, thinking } = createClaudeTaggedReasoningHarness();
+
+    parser.push(
+      `${JSON.stringify({
+        type: "stream_event",
+        event: {
+          type: "content_block_delta",
+          delta: { type: "text_delta", text },
+        },
+      })}\n`,
+    );
+    parser.finish();
+
+    expect(thinking).toEqual([]);
+    expect(assistant.map((entry) => entry.delta).join("")).toBe(text);
+    expect(parser.getOutput()?.text).toBe(text);
+  });
+
+  it("resets tagged reasoning across Claude tool-round assistant messages", () => {
+    const { assistant, parser, thinking } = createClaudeTaggedReasoningHarness();
+    const textEvent = (text: string) =>
+      JSON.stringify({
+        type: "stream_event",
+        event: {
+          type: "content_block_delta",
+          delta: { type: "text_delta", text },
+        },
+      });
+
+    parser.push(
+      [
+        JSON.stringify({ type: "stream_event", event: { type: "message_start" } }),
+        textEvent("<think>First thought.</think>Before tool."),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_start",
+            content_block: { type: "tool_use", id: "tool-1", name: "Read" },
+          },
+        }),
+        JSON.stringify({ type: "stream_event", event: { type: "message_stop" } }),
+        JSON.stringify({ type: "stream_event", event: { type: "message_start" } }),
+        textEvent("<reasoning>Second thought.</reasoning>Final answer."),
+        JSON.stringify({ type: "result", result: "Final answer." }),
+        "",
+      ].join("\n"),
+    );
+    parser.finish();
+
+    expect(thinking.map((entry) => entry.text)).toEqual(["First thought.", "Second thought."]);
+    expect(assistant.at(-1)?.text).toBe("Before tool.\n\nFinal answer.");
+    expect(parser.getOutput()?.text).toBe("Before tool.\n\nFinal answer.");
   });
 
   it("streams thinking deltas, skips signature deltas, and dedupes the snapshot", () => {

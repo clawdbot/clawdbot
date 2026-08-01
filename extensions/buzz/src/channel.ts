@@ -24,7 +24,7 @@ import {
 import { buzzOutboundAdapter, sendBuzzTyping, startBuzzGatewayAccount } from "./gateway.js";
 import { discoverBuzzRooms } from "./room-discovery.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
-import { buzzSetupAdapter, buzzSetupContract } from "./setup-core.js";
+import { buzzSetupContract } from "./setup-core.js";
 import { buzzSetupWizard } from "./setup-surface.js";
 import {
   buildBuzzTarget,
@@ -70,7 +70,6 @@ export const buzzPlugin = createChatChannelPlugin<ResolvedBuzzAccount, BuzzProbe
     },
     reload: { configPrefixes: ["channels.buzz"] },
     configSchema: BuzzConfigSchema,
-    setup: buzzSetupAdapter,
     setupContract: buzzSetupContract,
     setupWizard: buzzSetupWizard,
     config: {

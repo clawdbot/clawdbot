@@ -1942,7 +1942,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     );
 
     expect(draftStream.update).toHaveBeenCalledWith(
-      "Shelling\n• ran &lt;!here&gt; &lt;@U123&gt; \\*bold\\* \\`code\\` &amp; done",
+      "Shelling\n\n• ran &lt;!here&gt; &lt;@U123&gt; \\*bold\\* \\`code\\` &amp; done",
     );
   });
 
@@ -3115,6 +3115,20 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       taskUpdate(taskUpdates.at(0)?.id, "bash — completed", "complete"),
     );
     expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+    expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
+  });
+
+  it("suppresses terminal progress callbacks without their terminal phase", async () => {
+    await dispatchNativeProgressScenario({
+      finalPayload: { text: FINAL_REPLY_TEXT },
+      events: [
+        { kind: "command_output", name: "bash", title: "must stay hidden", exitCode: 0 },
+        { kind: "patch", name: "apply_patch", summary: "must stay hidden" },
+      ],
+    });
+
+    expect(startSlackStreamMock).not.toHaveBeenCalled();
+    expect(appendSlackStreamMock).not.toHaveBeenCalled();
     expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
   });
 

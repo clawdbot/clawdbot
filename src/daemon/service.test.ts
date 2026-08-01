@@ -185,6 +185,31 @@ describe("readGatewayServiceState", () => {
       { timeoutMs: undefined },
     );
   });
+
+  it("validates merged service env before native status probes", async () => {
+    const isLoaded = vi.fn(async () => true);
+    const readRuntime = vi.fn(async () => ({ status: "running" as const }));
+    const service = createService({
+      isLoaded,
+      readCommand: vi.fn(async () => ({
+        programArguments: ["openclaw", "gateway", "run"],
+        environment: { OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway.service" },
+      })),
+      readRuntime,
+    });
+
+    await expect(
+      readGatewayServiceState(service, {
+        env: {},
+        validateEnvBeforeStatusRead: (env) => {
+          throw new Error(`refused ${env.OPENCLAW_SYSTEMD_UNIT}`);
+        },
+      }),
+    ).rejects.toThrow("refused openclaw-gateway.service");
+
+    expect(isLoaded).not.toHaveBeenCalled();
+    expect(readRuntime).not.toHaveBeenCalled();
+  });
 });
 
 describe("startGatewayService", () => {

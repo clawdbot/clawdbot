@@ -58,7 +58,17 @@ async function withIsolatedCompletionState(
   const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-completion-home-"));
 
   try {
-    await withEnvAsync({ HOME: homeDir, OPENCLAW_STATE_DIR: stateDir, ...env }, run);
+    await withEnvAsync(
+      {
+        HOME: homeDir,
+        USERPROFILE: homeDir,
+        OPENCLAW_STATE_DIR: stateDir,
+        XDG_CONFIG_HOME: undefined,
+        ZDOTDIR: undefined,
+        ...env,
+      },
+      run,
+    );
   } finally {
     await fs.rm(stateDir, { recursive: true, force: true });
     await fs.rm(homeDir, { recursive: true, force: true });

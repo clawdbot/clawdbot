@@ -22,7 +22,11 @@ import { ChatStateController } from "./chat-state-controller.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createPageState } from "./chat-state-page.ts";
-import { invalidateChatMetadataCache, refreshChatMetadata } from "./chat-state-refresh.ts";
+import {
+  invalidateChatMetadataCache,
+  refreshChatMetadata,
+  refreshChatModelAuthStatus,
+} from "./chat-state-refresh.ts";
 import {
   resetChatStateForRouteSession,
   retryChatComposerMemoryFallback,
@@ -1231,7 +1235,6 @@ describe("session pull request refresh", () => {
       chatMessages: [],
       chatMessagesBySession: new Map(),
       chatQueue: [],
-      chatQueueByScope: {},
       chatRunId: null,
       chatStream: null,
       chatStreamRenderFrame: null,
@@ -1370,7 +1373,6 @@ describe("route composer fallback", () => {
       chatMessage,
       chatComposerFallbackByScope: {},
       chatQueue: [],
-      chatQueueByScope: {},
       chatMessages: [],
       chatMessagesBySession: new Map(),
       imageLightbox: null,
@@ -2551,5 +2553,45 @@ describe("refreshChatMetadata", () => {
     expect(SLASH_COMMANDS.some((command) => command.name === "other-command")).toBe(true);
     expect(SLASH_COMMANDS.some((command) => command.name === "work-command")).toBe(false);
   });
+});
+
+describe("refreshChatModelAuthStatus", () => {
+  it.each(["success", "failure"] as const)(
+    "ignores a stale auth status %s after reconnecting the same client",
+    async (outcome) => {
+      let resolveStatus!: (value: { ts: number; providers: never[] }) => void;
+      let rejectStatus!: (error: unknown) => void;
+      const response = new Promise<{ ts: number; providers: never[] }>((resolve, reject) => {
+        resolveStatus = resolve;
+        rejectStatus = reject;
+      });
+      const request = vi.fn(() => response);
+      const currentStatus = { ts: 2, providers: [] };
+      const state = {
+        client: { request },
+        connected: true,
+        connectionEpoch: 1,
+        modelAuthStatusResult: currentStatus,
+        modelAuthStatusError: null,
+      } as unknown as ChatPageHost;
+
+      const refresh = refreshChatModelAuthStatus(state);
+      state.connected = false;
+      state.connectionEpoch += 1;
+      state.connected = true;
+      state.connectionEpoch += 1;
+
+      if (outcome === "success") {
+        resolveStatus({ ts: 1, providers: [] });
+      } else {
+        rejectStatus(new Error("stale connection auth status"));
+      }
+      await refresh;
+
+      expect(state.modelAuthStatusResult).toBe(currentStatus);
+      expect(state.modelAuthStatusError).toBeNull();
+      expect(request).toHaveBeenCalledOnce();
+    },
+  );
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

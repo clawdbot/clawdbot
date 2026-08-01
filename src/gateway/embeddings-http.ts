@@ -13,16 +13,8 @@ import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
-import {
-  getEmbeddingProvider as getGenericEmbeddingProvider,
-  type EmbeddingProvider as GenericEmbeddingProvider,
-  type EmbeddingProviderAdapter as GenericEmbeddingProviderAdapter,
-} from "../plugins/embedding-provider-runtime.js";
 import { getMemoryEmbeddingProvider } from "../plugins/memory-embedding-provider-runtime.js";
-import type {
-  MemoryEmbeddingProvider,
-  MemoryEmbeddingProviderAdapter,
-} from "../plugins/memory-embedding-providers.js";
+import type { MemoryEmbeddingProvider } from "../plugins/memory-embedding-providers.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { sendJson, sendMissingScopeForbidden, watchClientDisconnect } from "./http-common.js";
@@ -240,10 +232,7 @@ function isLocalEmbeddingProvider(params: {
 }): boolean {
   const providerId =
     params.provider === "auto" ? DEFAULT_MEMORY_EMBEDDING_PROVIDER : params.provider;
-  return (
-    getMemoryEmbeddingProvider(providerId, params.cfg)?.transport === "local" ||
-    getGenericEmbeddingProvider(providerId, params.cfg)?.transport === "local"
-  );
+  return getMemoryEmbeddingProvider(providerId, params.cfg)?.transport === "local";
 }
 
 async function createConfiguredEmbeddingProvider(params: {
@@ -256,83 +245,28 @@ async function createConfiguredEmbeddingProvider(params: {
   const acquireLocalService = createConfiguredProviderLocalServiceAcquirer(() => params.cfg);
   const providerId =
     params.provider === "auto" ? DEFAULT_MEMORY_EMBEDDING_PROVIDER : params.provider;
-  // Prefer memory-specific adapters because they understand query/document
-  // input types; generic embedding adapters are adapted only as a fallback.
-  const createWithAdapter = async (adapter: MemoryEmbeddingProviderAdapter) => {
-    const createOptions = {
-      config: params.cfg,
-      agentDir: params.agentDir,
-      provider: providerId,
-      model: params.model || adapter.defaultModel || "",
-      local: params.memorySearch?.local,
-      remote: resolveEmbeddingProviderRemoteConfig(params.memorySearch?.remote),
-      outputDimensionality: params.memorySearch?.outputDimensionality,
-      acquireLocalService,
-    };
-    const result = await adapter.create(createOptions);
-    return result.provider;
-  };
-  const createWithGenericAdapter = async (adapter: GenericEmbeddingProviderAdapter) => {
-    const createOptions = {
-      config: params.cfg,
-      agentDir: params.agentDir,
-      provider: providerId,
-      model: params.model || adapter.defaultModel || "",
-      local: params.memorySearch?.local,
-      remote: resolveEmbeddingProviderRemoteConfig(params.memorySearch?.remote),
-      dimensions: params.memorySearch?.outputDimensionality,
-      inputType: params.memorySearch?.inputType,
-      queryInputType: params.memorySearch?.queryInputType,
-      documentInputType: params.memorySearch?.documentInputType,
-      acquireLocalService,
-    };
-    const result = await adapter.create(createOptions);
-    return result.provider ? adaptGenericEmbeddingProvider(result.provider) : null;
-  };
-
   const adapter = getMemoryEmbeddingProvider(providerId, params.cfg);
-  if (adapter) {
-    const provider = await createWithAdapter(adapter);
-    if (!provider) {
-      throw new Error(`Memory embedding provider ${providerId} is unavailable.`);
-    }
-    return provider;
-  }
-
-  const genericAdapter = getGenericEmbeddingProvider(providerId, params.cfg);
-  if (!genericAdapter) {
+  if (!adapter) {
     throw new Error(`Unknown memory embedding provider: ${providerId}`);
   }
-  const provider = await createWithGenericAdapter(genericAdapter);
+  const createOptions = {
+    config: params.cfg,
+    agentDir: params.agentDir,
+    provider: providerId,
+    model: params.model || adapter.defaultModel || "",
+    local: params.memorySearch?.local,
+    remote: resolveEmbeddingProviderRemoteConfig(params.memorySearch?.remote),
+    inputType: params.memorySearch?.inputType,
+    queryInputType: params.memorySearch?.queryInputType,
+    documentInputType: params.memorySearch?.documentInputType,
+    outputDimensionality: params.memorySearch?.outputDimensionality,
+    acquireLocalService,
+  };
+  const { provider } = await adapter.create(createOptions);
   if (!provider) {
-    throw new Error(`Embedding provider ${providerId} is unavailable.`);
+    throw new Error(`Memory embedding provider ${providerId} is unavailable.`);
   }
   return provider;
-}
-
-// Generic embedding providers expose one embed API; memory search expects
-// query/document methods so the HTTP endpoint can batch document-style inputs.
-function adaptGenericEmbeddingProvider(
-  provider: GenericEmbeddingProvider,
-): MemoryEmbeddingProvider {
-  return {
-    id: provider.id,
-    model: provider.model,
-    ...(typeof provider.maxInputTokens === "number"
-      ? { maxInputTokens: provider.maxInputTokens }
-      : {}),
-    embedQuery: async (text, options) =>
-      await provider.embed(text, {
-        ...options,
-        inputType: "query",
-      }),
-    embedBatch: async (texts, options) =>
-      await provider.embedBatch(texts, {
-        ...options,
-        inputType: "document",
-      }),
-    ...(provider.close ? { close: async () => await provider.close?.() } : {}),
-  };
 }
 
 // Request model overrides are constrained to the configured memory provider so

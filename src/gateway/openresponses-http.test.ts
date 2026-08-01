@@ -1782,7 +1782,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       status?: string;
       output?: Array<Record<string, unknown>>;
     };
-    expect(json.status).toBe("incomplete");
+    expect(json.status).toBe("completed");
     expect(json.output?.map((item) => item.type)).toEqual(["message", "function_call"]);
     expect(json.output?.[0]?.phase).toBe("commentary");
     expect(
@@ -1844,7 +1844,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       status?: string;
       output?: Array<Record<string, unknown>>;
     };
-    expect(json.status).toBe("incomplete");
+    expect(json.status).toBe("completed");
     expect(json.output?.map((item) => item.type)).toEqual(["message", "function_call"]);
     expect(json.output?.[1]?.name).toBe("get_weather");
     const opts = firstAgentOpts();
@@ -2042,7 +2042,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         response?: { status?: string; output?: Array<Record<string, unknown>> };
       }
     ).response;
-    expect(response?.status).toBe("incomplete");
+    expect(response?.status).toBe("completed");
     expect(response?.output?.map((item) => item.type)).toEqual(["message", "function_call"]);
     expect(response?.output?.[1]?.name).toBe("get_weather");
   });
@@ -2113,7 +2113,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
           output?: Array<{ type?: string; content?: Array<{ text?: string }> }>;
         };
       };
-      expect(completed.response?.status).toBe("incomplete");
+      expect(completed.response?.status).toBe("completed");
       expect(completed.response?.output?.map((item) => item.type)).toEqual([
         "message",
         "function_call",
@@ -2235,7 +2235,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         response?: { status?: string; output?: Array<Record<string, unknown>> };
       }
     ).response;
-    expect(response?.status).toBe("incomplete");
+    expect(response?.status).toBe("completed");
     expect(response?.output?.map((item) => item.type)).toEqual(["message", "function_call"]);
     expect(response?.output?.[0]?.phase).toBe("commentary");
     expect(
@@ -2283,7 +2283,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       status?: string;
       output?: Array<Record<string, unknown>>;
     };
-    expect(json.status).toBe("incomplete");
+    expect(json.status).toBe("completed");
     expect(json.output?.map((item) => item.type)).toEqual([
       "message",
       "function_call",
@@ -2376,7 +2376,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         response?: { status?: string; output?: Array<Record<string, unknown>> };
       }
     ).response;
-    expect(response?.status).toBe("incomplete");
+    expect(response?.status).toBe("completed");
     expect(response?.output?.map((item) => item.type)).toEqual([
       "message",
       "function_call",

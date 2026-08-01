@@ -552,7 +552,7 @@ describe("subagent registry lifecycle error grace", () => {
     const run = mod
       .listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY)
       .find((candidate) => candidate.runId === "run-timeout");
-    expect(run?.outcome?.status).toBe("timeout");
+    expect(run?.execution.outcome?.status).toBe("timeout");
   });
 
   it("cancels timeout grace when a successful end event arrives before the grace window expires", async () => {

@@ -88,6 +88,7 @@ function sanitizeAbortedTaskStatusPatch(
   delete next.reconnectAttempts;
   delete next.lastStartAt;
   delete next.lastStopAt;
+  delete next.lifecycle;
 
   // A stale task may still emit a late "connected" heartbeat after the gateway
   // has already aborted it and marked restart recovery pending. Do not let that
@@ -386,7 +387,14 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
   ): ChannelAccountSnapshot => {
     const store = getStore(channelId);
     const current = getRuntime(channelId, accountId);
-    const next = { ...current, ...patch, accountId };
+    const lifecycle =
+      patch.lifecycle ??
+      (patch.restartPending === true
+        ? "recovering"
+        : patch.connected === true
+          ? "ready"
+          : undefined);
+    const next = { ...current, ...patch, ...(lifecycle ? { lifecycle } : {}), accountId };
     store.runtimes.set(accountId, next);
     return next;
   };
@@ -412,6 +420,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     return setRuntime(channelId, accountId, {
       accountId,
       running: false,
+      lifecycle: patch.restartPending === true ? "recovering" : "stopped",
       ...(typeof current.connected === "boolean" ? { connected: false } : {}),
       ...patch,
     });
@@ -707,6 +716,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             enabled: true,
             ...(linkState === "linked" ? { linked: true } : {}),
             running: true,
+            lifecycle: "starting",
             restartPending: false,
             lastStartAt: Date.now(),
             lastError: null,
@@ -1210,17 +1220,11 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         cfg,
       });
     const current = getRuntime(channelId, resolvedId);
-    const next: ChannelAccountSnapshot = {
-      accountId: resolvedId,
+    setStoppedRuntime(channelId, resolvedId, {
       ...(cleared ? { linked: false } : {}),
-      running: false,
       restartPending: false,
       lastError: cleared ? "logged out" : current.lastError,
-    };
-    if (typeof current.connected === "boolean") {
-      next.connected = false;
-    }
-    setRuntime(channelId, resolvedId, next);
+    });
   };
 
   const getRuntimeSnapshot = (): ChannelRuntimeSnapshot => {

@@ -526,6 +526,7 @@ async function noteSessionSqliteMigrationHealth(params: {
   let canonicalKeyReport: CanonicalSessionKeyRepairReport = {
     archivedTranscriptDirectories: [],
     foundGroups: 0,
+    repairBatches: 0,
     removedRows: 0,
     repairedGroups: 0,
     scannedStores: 0,
@@ -585,7 +586,7 @@ async function noteSessionSqliteMigrationHealth(params: {
   if (canonicalKeyReport.foundGroups > 0) {
     note(
       params.shouldRepair
-        ? `- Canonicalized ${canonicalKeyReport.repairedGroups} session-key group(s), removed ${canonicalKeyReport.removedRows} duplicate or alias row(s), and preserved cross-store history in ${canonicalKeyReport.archivedTranscriptDirectories.length} archive director${canonicalKeyReport.archivedTranscriptDirectories.length === 1 ? "y" : "ies"}.`
+        ? `- Canonicalized ${canonicalKeyReport.repairedGroups} session-key group(s) in ${canonicalKeyReport.repairBatches} transaction batch(es), removed ${canonicalKeyReport.removedRows} duplicate or alias row(s), and preserved cross-store history in ${canonicalKeyReport.archivedTranscriptDirectories.length} archive director${canonicalKeyReport.archivedTranscriptDirectories.length === 1 ? "y" : "ies"}.`
         : `- Found ${canonicalKeyReport.foundGroups} non-canonical or duplicate session-key group(s). Run "openclaw doctor --fix" to preserve their history and canonicalize the rows.`,
       "Session SQLite",
     );

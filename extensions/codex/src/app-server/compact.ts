@@ -8,6 +8,7 @@ import {
   type EmbeddedAgentCompactResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentDir, resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
+import { isCodexAlreadyTerminalInterruptError } from "./attempt-client-cleanup.js";
 import { readCodexNotificationItem } from "./attempt-notifications.js";
 import { resolveCodexBindingAppServerConnection } from "./binding-connection.js";
 import { CodexAppServerRpcError, type CodexAppServerClient } from "./client.js";
@@ -33,8 +34,6 @@ import {
 const warnedIgnoredCompactionOverrides = new Set<string>();
 const codexNativeCompactionQueues = new Map<string, Promise<void>>();
 const CODEX_NATIVE_COMPACTION_INTERRUPT_GRACE_MS = 30_000;
-const CODEX_NO_ACTIVE_TURN_ERROR_CODE = -32_600;
-const CODEX_NO_ACTIVE_TURN_ERROR_MESSAGE = "no active turn to interrupt";
 type CodexAppServerCompactOptions = {
   bindingStore: CodexAppServerBindingStore;
   pluginConfig?: unknown;
@@ -45,14 +44,6 @@ type CodexAppServerCompactOptions = {
 };
 
 type CodexNativeCompactionCompletion = { completed: true } | { completed: false; reason: string };
-
-function isAlreadyTerminalInterruptError(error: unknown): error is CodexAppServerRpcError {
-  return (
-    error instanceof CodexAppServerRpcError &&
-    error.code === CODEX_NO_ACTIVE_TURN_ERROR_CODE &&
-    error.message === CODEX_NO_ACTIVE_TURN_ERROR_MESSAGE
-  );
-}
 
 function watchCodexNativeCompactionCompletion(params: {
   client: CodexAppServerClient;
@@ -129,18 +120,9 @@ function watchCodexNativeCompactionCompletion(params: {
         },
         { timeoutMs: Math.max(1, params.interruptGraceMs) },
       )
-      .then(() => {
-        // Codex answers turn/interrupt only after terminal abort handling, so
-        // the RPC response is sufficient when its notification was dropped.
-        finish({
-          completed: false,
-          reason: "codex app-server confirmed native compaction interruption",
-        });
-      })
       .catch((error: unknown) => {
-        // Codex holds normal interrupt RPCs until TurnAborted. This exact
-        // InvalidRequest instead proves the target turn was already terminal.
-        if (isAlreadyTerminalInterruptError(error)) {
+        // This exact InvalidRequest proves the target turn was already terminal.
+        if (isCodexAlreadyTerminalInterruptError(error)) {
           finish(
             compactionItemCompleted
               ? { completed: true }

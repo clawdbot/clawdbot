@@ -215,6 +215,7 @@ export type DispatchInboundParams = {
     onCompactionEnd?: () => Promise<void> | void;
     onPartialReply?: (payload: { text?: string }) => Promise<void> | void;
     onAssistantMessageStart?: () => Promise<void> | void;
+    onQueuedFollowupAdmitted?: () => Promise<void> | void;
     allowProgressCallbacksWhenSourceDeliverySuppressed?: boolean;
     onTypingCleanup?: () => Promise<void> | void;
   };

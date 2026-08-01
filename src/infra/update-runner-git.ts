@@ -27,6 +27,7 @@ import {
   shouldRetryWindowsInstallIgnoringScripts,
 } from "./update-runner-git-commands.js";
 import { runGitDevPreflight } from "./update-runner-git-preflight.js";
+import { rebuildRolledBackGitRuntime } from "./update-runner-git-recovery.js";
 import {
   prepareGitMutation,
   readBranchName,
@@ -70,7 +71,7 @@ export async function runGitUpdate(params: {
   const branch = await readBranchName(runCommand, gitRoot, timeoutMs);
   const hasDevTargetRef = channel === "dev" && Boolean(opts.devTargetRef?.trim());
   const needsCheckoutMain = channel === "dev" && !hasDevTargetRef && branch !== DEV_BRANCH;
-  const totalSteps = channel === "dev" ? (needsCheckoutMain ? 12 : 11) : 10;
+  const totalSteps = channel === "dev" ? (needsCheckoutMain ? 11 : 10) : 9;
   const steps: UpdateStepResult[] = [];
   let stepIndex = 0;
   const step = (
@@ -94,6 +95,8 @@ export async function runGitUpdate(params: {
   let allowGatewayActivation = opts.allowGatewayActivation === true;
   let mutationPrepared = false;
   let createdDevBranchDuringUpdate = false;
+  let liveBuildStarted = false;
+  let recovery: UpdateRunResult["recovery"];
   const prepareMutation = async (revision: string) => {
     if (mutationPrepared) {
       return;
@@ -119,6 +122,7 @@ export async function runGitUpdate(params: {
     root: gitRoot,
     reason,
     before: { sha: beforeSha, version: beforeVersion },
+    ...(recovery ? { recovery } : {}),
     steps,
     durationMs: Date.now() - startedAt,
   });
@@ -141,22 +145,52 @@ export async function runGitUpdate(params: {
     });
     return result.code === 0;
   };
+  const verifyRollbackHead = async () => {
+    if (!beforeSha) {
+      return false;
+    }
+    const started = Date.now();
+    const result = await runCommand(["git", "-C", gitRoot, "rev-parse", "HEAD"], {
+      cwd: gitRoot,
+      timeoutMs,
+    });
+    const verified = result.code === 0 && result.stdout.trim() === beforeSha;
+    steps.push({
+      name: "git rollback verify HEAD",
+      command: `git -C ${gitRoot} rev-parse HEAD`,
+      cwd: gitRoot,
+      durationMs: Date.now() - started,
+      exitCode: verified ? 0 : 1,
+      stdoutTail: trimLogTail(result.stdout, MAX_LOG_CHARS),
+      stderrTail: verified
+        ? trimLogTail(result.stderr, MAX_LOG_CHARS)
+        : `expected ${beforeSha}, found ${result.stdout.trim() || "unreadable HEAD"}`,
+    });
+    return verified;
+  };
   const rollback = async () => {
     if (!beforeSha) {
-      return;
+      return false;
     }
-    await appendRecoveryStep("git rollback clean", ["git", "-C", gitRoot, "reset", "--hard"]);
-    // Preflight requires a clean checkout outside generated Control UI assets,
-    // so preserve that excluded directory while removing update-created paths.
-    await appendRecoveryStep("git rollback clean untracked", [
+    let restored = await appendRecoveryStep("git rollback clean", [
       "git",
       "-C",
       gitRoot,
-      "clean",
-      "-fd",
-      "-e",
-      "dist/control-ui/",
+      "reset",
+      "--hard",
     ]);
+    // Preflight requires a clean checkout outside generated Control UI assets,
+    // so preserve that excluded directory while removing update-created paths.
+    restored =
+      (await appendRecoveryStep("git rollback clean untracked", [
+        "git",
+        "-C",
+        gitRoot,
+        "clean",
+        "-fd",
+        "-e",
+        "dist/control-ui/",
+      ])) && restored;
     if (branch && branch !== "HEAD") {
       const checkedOut = await appendRecoveryStep("git rollback checkout", [
         "git",
@@ -167,14 +201,15 @@ export async function runGitUpdate(params: {
         branch,
       ]);
       if (checkedOut) {
-        await appendRecoveryStep("git rollback reset", [
-          "git",
-          "-C",
-          gitRoot,
-          "reset",
-          "--hard",
-          beforeSha,
-        ]);
+        restored =
+          (await appendRecoveryStep("git rollback reset", [
+            "git",
+            "-C",
+            gitRoot,
+            "reset",
+            "--hard",
+            beforeSha,
+          ])) && restored;
         if (createdDevBranchDuringUpdate) {
           await appendRecoveryStep(`git rollback delete ${DEV_BRANCH}`, [
             "git",
@@ -186,16 +221,18 @@ export async function runGitUpdate(params: {
           ]);
         }
       }
-      return;
+      const verified = await verifyRollbackHead();
+      return restored && checkedOut && verified;
     }
-    await appendRecoveryStep("git rollback checkout", [
-      "git",
-      "-C",
-      gitRoot,
-      "checkout",
-      "--detach",
-      beforeSha,
-    ]);
+    restored =
+      (await appendRecoveryStep("git rollback checkout", [
+        "git",
+        "-C",
+        gitRoot,
+        "checkout",
+        "--detach",
+        beforeSha,
+      ])) && restored;
     if (createdDevBranchDuringUpdate) {
       await appendRecoveryStep(`git rollback delete ${DEV_BRANCH}`, [
         "git",
@@ -206,9 +243,27 @@ export async function runGitUpdate(params: {
         DEV_BRANCH,
       ]);
     }
+    const verified = await verifyRollbackHead();
+    return restored && verified;
   };
   const rollbackError = async (reason: string) => {
-    await rollback();
+    const sourceRestored = await rollback();
+    if (mutationPrepared) {
+      recovery = sourceRestored
+        ? { serviceRestartSafe: true }
+        : { serviceRestartSafe: false, reason: "source-rollback-failed" };
+    }
+    if (sourceRestored && liveBuildStarted && beforeSha) {
+      recovery = await rebuildRolledBackGitRuntime({
+        gitRoot,
+        expectedSha: beforeSha,
+        channel,
+        runCommand,
+        defaultCommandEnv,
+        timeoutMs,
+        steps,
+      });
+    }
     return buildError(reason);
   };
 
@@ -384,12 +439,16 @@ export async function runGitUpdate(params: {
     if (installStep.exitCode !== 0) {
       return await rollbackError("deps-install-failed");
     }
+    liveBuildStarted = true;
     const buildStep = await runStep(
       step(
         "build",
         managerScriptArgs(manager.manager, "build"),
         gitRoot,
-        resolveBuildEnv(manager.env),
+        resolveBuildEnv(
+          manager.env,
+          channel === "dev" ? path.join(gitRoot, ".artifacts", "build-all-cache") : undefined,
+        ),
       ),
     );
     steps.push(buildStep);
@@ -410,12 +469,20 @@ export async function runGitUpdate(params: {
     if (buildCleanCheck.stdoutTail?.trim()) {
       return await rollbackError("build-dirty");
     }
-    const uiBuildStep = await runStep(
-      step("ui:build", managerScriptArgs(manager.manager, "ui:build"), gitRoot, manager.env),
-    );
-    steps.push(uiBuildStep);
-    if (uiBuildStep.exitCode !== 0) {
-      return await rollbackError("ui-build-failed");
+    const builtUiIndexHealth = await resolveControlUiDistIndexHealth({ root: gitRoot });
+    if (!builtUiIndexHealth.exists) {
+      const uiBuildStep = await runStep(
+        step(
+          "ui:build (build fallback)",
+          managerScriptArgs(manager.manager, "ui:build"),
+          gitRoot,
+          manager.env,
+        ),
+      );
+      steps.push(uiBuildStep);
+      if (uiBuildStep.exitCode !== 0) {
+        return await rollbackError("ui-build-failed");
+      }
     }
 
     const doctorEntry = path.join(gitRoot, "openclaw.mjs");

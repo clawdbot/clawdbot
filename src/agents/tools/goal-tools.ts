@@ -126,7 +126,7 @@ export function createUpdateGoalTool(options: GoalToolOptions): AnyAgentTool {
     name: "update_goal",
     displaySummary: "Complete or block a thread goal",
     description:
-      "Update the session goal status (complete | blocked) with an optional note. complete only achieved. blocked only same blocker 3+ consecutive goal turns; never ordinary difficulty/polish.",
+      "Update the session goal status (complete | blocked) with an optional note. complete only achieved. blocked only same blocker 3+ consecutive goal turns; never ordinary difficulty/polish. Updating a goal does not reply to the user; provide the requested final response afterward.",
     parameters: UpdateGoalToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -148,7 +148,12 @@ export function createUpdateGoalTool(options: GoalToolOptions): AnyAgentTool {
         status: status as (typeof MODEL_UPDATABLE_SESSION_GOAL_STATUSES)[number],
         ...(note ? { note } : {}),
       });
-      return jsonResult({ status: "updated", goal });
+      return jsonResult({
+        status: "updated",
+        goal,
+        nextAction:
+          "Goal status was updated, but no reply was sent to the user. Continue this turn and provide the requested visible final response.",
+      });
     },
   };
 }

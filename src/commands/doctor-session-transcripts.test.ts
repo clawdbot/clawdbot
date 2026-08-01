@@ -116,6 +116,7 @@ describe("doctor session transcript repair", () => {
     repairCanonicalSessionKeys.mockReset().mockResolvedValue({
       archivedTranscriptDirectories: [],
       foundGroups: 0,
+      repairBatches: 0,
       removedRows: 0,
       repairedGroups: 0,
       scannedStores: 0,

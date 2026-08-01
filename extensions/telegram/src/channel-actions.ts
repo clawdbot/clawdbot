@@ -170,7 +170,10 @@ function describeTelegramMessageTool({
       schema: null,
     };
   }
-  const actions = new Set<ChannelMessageActionName>(["send"]);
+  const actions = new Set<ChannelMessageActionName>();
+  if (discovery.isEnabled("sendMessage")) {
+    actions.add("send");
+  }
   if (discovery.pollEnabled) {
     actions.add("poll");
   }

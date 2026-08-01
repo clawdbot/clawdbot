@@ -357,6 +357,18 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
         throw new Error(output.errorMessage ?? "An unknown error occurred");
       }
 
+      // Some valid provider streams omit contentBlockStop; never persist their scratch state.
+      for (const block of blocks) {
+        if (block.index !== undefined) {
+          handleContentBlockStop(
+            { contentBlockIndex: block.index },
+            blocks,
+            output,
+            eventSink,
+            redactedReasoningChunks,
+          );
+        }
+      }
       refusalBuffer?.flush();
       stream.push({ type: "done", reason: output.stopReason, message: output });
       stream.end();

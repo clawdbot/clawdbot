@@ -21,6 +21,7 @@ type MockWebSocketHandler = (event?: MockWebSocketEvent) => void;
 type MockWebSocketEventType = "close" | "error" | "message" | "open";
 
 const wsInstances: MockGoogleLiveWebSocket[] = [];
+const audioContexts: MockAudioContext[] = [];
 const createdSources: MockAudioBufferSource[] = [];
 const inputProcessors: Array<{
   connect: ReturnType<typeof vi.fn>;
@@ -33,6 +34,7 @@ const inputSinks: Array<{
   gain: { value: number };
 }> = [];
 let getUserMedia: ReturnType<typeof vi.fn>;
+let stopInputTrack: ReturnType<typeof vi.fn>;
 
 async function flushMicrotasks(): Promise<void> {
   await Promise.resolve();
@@ -79,6 +81,19 @@ class MockGoogleLiveWebSocket {
       handler({ data });
     }
   }
+
+  emitClose() {
+    this.readyState = 3;
+    for (const handler of this.handlers.close) {
+      handler();
+    }
+  }
+
+  emitError() {
+    for (const handler of this.handlers.error) {
+      handler();
+    }
+  }
 }
 
 class MockAudioBufferSource {
@@ -97,6 +112,7 @@ class MockAudioContext {
 
   constructor(options?: { sampleRate?: number }) {
     this.sampleRate = options?.sampleRate ?? 24000;
+    audioContexts.push(this);
   }
 
   createMediaStreamSource() {
@@ -207,6 +223,26 @@ function latestWebSocket(): MockGoogleLiveWebSocket {
   return ws;
 }
 
+async function beginTransport(transport: GoogleLiveRealtimeTalkTransport): Promise<{
+  start: Promise<"ready" | "cancelled">;
+  ws: MockGoogleLiveWebSocket;
+}> {
+  const start = transport.start();
+  await waitForFast(() => expect(wsInstances).toHaveLength(1));
+  return { start, ws: latestWebSocket() };
+}
+
+async function startTransport(
+  transport: GoogleLiveRealtimeTalkTransport,
+): Promise<MockGoogleLiveWebSocket> {
+  const { start, ws } = await beginTransport(transport);
+  ws.emitOpen();
+  ws.emitMessage(encodeJsonFrame({ setupComplete: {} }));
+  await expect(start).resolves.toBe("ready");
+  transport.activate();
+  return ws;
+}
+
 function pumpMicrophone(samples: Float32Array): void {
   const processor = inputProcessors.at(-1);
   if (!processor) {
@@ -230,13 +266,15 @@ function requireFirstTalkEvent(onTalkEvent: ReturnType<typeof vi.fn>): Record<st
 describe("GoogleLiveRealtimeTalkTransport", () => {
   beforeEach(() => {
     wsInstances.length = 0;
+    audioContexts.length = 0;
     createdSources.length = 0;
     inputProcessors.length = 0;
     inputSinks.length = 0;
     vi.stubGlobal("WebSocket", MockGoogleLiveWebSocket);
     vi.stubGlobal("AudioContext", MockAudioContext);
+    stopInputTrack = vi.fn();
     getUserMedia = vi.fn(async () => ({
-      getTracks: () => [{ stop: vi.fn() }],
+      getTracks: () => [{ stop: stopInputTrack }],
     }));
     vi.stubGlobal("navigator", {
       mediaDevices: {
@@ -257,12 +295,13 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
       { callbacks: {}, client: createClient(), sessionKey: "main" },
     );
 
-    await transport.start();
+    const { start } = await beginTransport(transport);
 
     expect(latestWebSocket().url).toBe(
       "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained?access_token=auth_tokens%2Fbrowser-session",
     );
     transport.stop();
+    await expect(start).resolves.toBe("cancelled");
   });
 
   it.each([
@@ -283,7 +322,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
   it("captures from the selected microphone with an exact constraint", async () => {
     const transport = createTransport({}, createClient(), "usb-mic");
 
-    await transport.start();
+    const { start } = await beginTransport(transport);
 
     expect(getUserMedia).toHaveBeenCalledWith({
       audio: {
@@ -294,13 +333,13 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
       },
     });
     transport.stop();
+    await expect(start).resolves.toBe("cancelled");
   });
 
   it("keeps the microphone processor inaudible locally", async () => {
     const transport = createTransport();
 
-    await transport.start();
-    latestWebSocket().emitOpen();
+    await startTransport(transport);
 
     const processor = inputProcessors.at(-1);
     const sink = inputSinks.at(-1);
@@ -328,7 +367,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     const start = transport.start();
     transport.stop();
     resolveMedia({ getTracks: () => [{ stop: stopTrack }] } as unknown as MediaStream);
-    await start;
+    await expect(start).resolves.toBe("cancelled");
 
     expect(stopTrack).toHaveBeenCalledOnce();
     expect(inputProcessors).toHaveLength(0);
@@ -341,24 +380,133 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     const onTalkEvent = vi.fn();
     const transport = createTransport({ onStatus, onTalkEvent });
 
-    await transport.start();
-    const ws = latestWebSocket();
+    const { start, ws } = await beginTransport(transport);
+    ws.emitOpen();
     ws.emitMessage(encodeJsonFrame({ setupComplete: {} }));
+    await expect(start).resolves.toBe("ready");
 
     expect(ws.binaryType).toBe("arraybuffer");
-    await waitForFast(() => expect(onStatus).toHaveBeenCalledWith("listening"));
+    expect(onStatus).not.toHaveBeenCalled();
+    expect(onTalkEvent).not.toHaveBeenCalled();
+    transport.activate();
+    transport.activate();
+    expect(onStatus).toHaveBeenCalledWith("listening");
+    expect(onStatus).toHaveBeenCalledOnce();
     const readyEvent = requireFirstTalkEvent(onTalkEvent);
     expect(readyEvent.type).toBe("session.ready");
     expect(readyEvent.sessionId).toBe("main:google:provider-websocket");
     expect(readyEvent.transport).toBe("provider-websocket");
   });
 
+  it("releases owned media when the live socket closes", async () => {
+    const onStatus = vi.fn();
+    const onTranscript = vi.fn();
+    const transport = createTransport({ onStatus, onTranscript });
+
+    const ws = await startTransport(transport);
+    pumpMicrophone(new Float32Array(4096));
+    ws.emitClose();
+
+    expect(onStatus).toHaveBeenCalledWith("error", "Realtime connection closed");
+    expect(stopInputTrack).toHaveBeenCalledOnce();
+    expect(inputProcessors.at(-1)?.disconnect).toHaveBeenCalledOnce();
+    expect(audioContexts).toHaveLength(2);
+    for (const context of audioContexts) {
+      expect(context.close).toHaveBeenCalledOnce();
+    }
+
+    ws.emitMessage(
+      encodeJsonFrame({
+        serverContent: {
+          inputTranscription: { text: "too late", finished: true },
+        },
+      }),
+    );
+    await flushMicrotasks();
+    expect(onTranscript).not.toHaveBeenCalled();
+  });
+
+  it("preserves socket error precedence and ignores the later close", async () => {
+    const onStatus = vi.fn();
+    const onTranscript = vi.fn();
+    const transport = createTransport({ onStatus, onTranscript });
+
+    const ws = await startTransport(transport);
+    onStatus.mockClear();
+    ws.emitError();
+    ws.emitClose();
+
+    expect(onStatus).toHaveBeenCalledTimes(1);
+    expect(onStatus).toHaveBeenCalledWith("error", "Realtime connection failed");
+    expect(stopInputTrack).toHaveBeenCalledOnce();
+    ws.emitMessage(
+      encodeJsonFrame({
+        serverContent: {
+          inputTranscription: { text: "too late", finished: true },
+        },
+      }),
+    );
+    await flushMicrotasks();
+    expect(onTranscript).not.toHaveBeenCalled();
+  });
+
+  it.each(["status", "talk event"] as const)(
+    "releases socket resources when the terminal %s callback throws",
+    async (callbackKind) => {
+      const transport = createTransport(
+        callbackKind === "status"
+          ? {
+              onStatus: vi.fn((status) => {
+                if (status === "error") {
+                  throw new Error("consumer failed");
+                }
+              }),
+            }
+          : {
+              onTalkEvent: vi.fn((event) => {
+                if (event.type === "session.closed") {
+                  throw new Error("consumer failed");
+                }
+              }),
+            },
+      );
+
+      const ws = await startTransport(transport);
+      expect(() => ws.emitError()).toThrow("consumer failed");
+
+      expect(stopInputTrack).toHaveBeenCalledOnce();
+      expect(inputProcessors.at(-1)?.disconnect).toHaveBeenCalledOnce();
+      for (const context of audioContexts) {
+        expect(context.close).toHaveBeenCalledOnce();
+      }
+      ws.emitClose();
+    },
+  );
+
+  it("finishes cleanup when the input-level callback throws during activation", async () => {
+    const onInputLevel = vi.fn(() => {
+      throw new Error("meter callback failed");
+    });
+    const transport = createTransport({ onInputLevel });
+    const { start, ws } = await beginTransport(transport);
+    ws.emitOpen();
+    ws.emitMessage(encodeJsonFrame({ setupComplete: {} }));
+    await expect(start).resolves.toBe("ready");
+
+    expect(() => transport.activate()).toThrow("meter callback failed");
+    expect(stopInputTrack).toHaveBeenCalledOnce();
+    expect(inputProcessors).toHaveLength(0);
+    expect(ws.readyState).toBe(3);
+    for (const context of audioContexts) {
+      expect(context.close).toHaveBeenCalledOnce();
+    }
+  });
+
   it("reports microphone activity and resets it when stopped", async () => {
     const onInputLevel = vi.fn();
     const transport = createTransport({ onInputLevel });
 
-    await transport.start();
-    latestWebSocket().emitOpen();
+    await startTransport(transport);
     pumpMicrophone(new Float32Array(4096));
     pumpMicrophone(new Float32Array(4096).fill(0.25));
     transport.stop();
@@ -371,8 +519,11 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     const onStatus = vi.fn();
     const transport = createTransport({ onStatus });
 
-    await transport.start();
-    latestWebSocket().emitMessage(new Blob([JSON.stringify({ setupComplete: {} })]));
+    const { start, ws } = await beginTransport(transport);
+    ws.emitOpen();
+    ws.emitMessage(new Blob([JSON.stringify({ setupComplete: {} })]));
+    await expect(start).resolves.toBe("ready");
+    transport.activate();
 
     await waitForFast(() => expect(onStatus).toHaveBeenCalledWith("listening"));
   });
@@ -380,8 +531,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
   it("stops queued output when Google Live sends interruption", async () => {
     const onTalkEvent = vi.fn();
     const transport = createTransport({ onTalkEvent });
-    await transport.start();
-    const ws = latestWebSocket();
+    const ws = await startTransport(transport);
 
     ws.emitMessage(
       encodeJsonFrame({
@@ -409,8 +559,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     const onStatus = vi.fn();
     const onTalkEvent = vi.fn();
     const transport = createTransport({ onStatus, onTalkEvent });
-    await transport.start();
-    const ws = latestWebSocket();
+    const ws = await startTransport(transport);
 
     ws.emitMessage(
       encodeJsonFrame({
@@ -458,8 +607,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
   it("rejects an oversized first frame before decoding provider audio", async () => {
     const onStatus = vi.fn();
     const transport = createTransport({ onStatus });
-    await transport.start();
-    const ws = latestWebSocket();
+    const ws = await startTransport(transport);
 
     ws.emitMessage(
       encodeJsonFrame({
@@ -493,8 +641,9 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     const onTalkEvent = vi.fn();
     const transport = createTransport({ onTalkEvent, onTranscript });
 
-    await transport.start();
-    latestWebSocket().emitMessage(
+    const ws = await startTransport(transport);
+    onTalkEvent.mockClear();
+    ws.emitMessage(
       encodeJsonFrame({
         serverContent: {
           inputTranscription: { text: "hello", finished: true },
@@ -534,13 +683,47 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     expect(audioEvent?.transport).toBe("provider-websocket");
   });
 
+  it("stops processing the current provider message when a transcript callback closes it", async () => {
+    const onTalkEvent = vi.fn();
+    const onTranscript = vi.fn(() => transport.stop());
+    const transport = createTransport({ onTalkEvent, onTranscript });
+
+    const ws = await startTransport(transport);
+    onTalkEvent.mockClear();
+    ws.emitMessage(
+      encodeJsonFrame({
+        serverContent: {
+          inputTranscription: { text: "overflow", finished: true },
+          outputTranscription: { text: "too late", finished: true },
+          turnComplete: true,
+        },
+      }),
+    );
+    await flushMicrotasks();
+
+    expect(onTranscript).toHaveBeenCalledOnce();
+    expect(onTalkEvent.mock.calls.map(([event]) => event.type)).toEqual(["session.closed"]);
+  });
+
+  it("silently disposes a provisional Google Live transport", async () => {
+    const onTalkEvent = vi.fn();
+    const transport = createTransport({ onTalkEvent });
+    const { start, ws } = await beginTransport(transport);
+
+    transport.stop({ emitClosed: false });
+    await expect(start).resolves.toBe("cancelled");
+
+    expect(onTalkEvent).not.toHaveBeenCalled();
+    expect(ws.readyState).toBe(3);
+  });
+
   it("ignores late WebSocket events after stop", async () => {
     const onStatus = vi.fn();
     const transport = createTransport({ onStatus });
-    await transport.start();
-    const ws = latestWebSocket();
+    const { start, ws } = await beginTransport(transport);
 
     transport.stop();
+    await expect(start).resolves.toBe("cancelled");
     ws.emitOpen();
     ws.emitMessage(new Blob([JSON.stringify({ setupComplete: {} })]));
 
@@ -570,9 +753,10 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
       }),
     } as unknown as RealtimeTalkTransportContext["client"];
     const transport = createTransport({ onStatus }, client);
-    await transport.start();
+    const ws = await startTransport(transport);
+    onStatus.mockClear();
 
-    latestWebSocket().emitMessage(
+    ws.emitMessage(
       encodeJsonFrame({
         toolCall: {
           functionCalls: [
@@ -612,8 +796,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
       }),
     } as unknown as RealtimeTalkTransportContext["client"];
     const transport = createTransport({}, client);
-    await transport.start();
-    const ws = latestWebSocket();
+    const ws = await startTransport(transport);
 
     ws.emitMessage(
       encodeJsonFrame({
@@ -670,8 +853,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     });
     const transport = createTransport({ onStatus, onTalkEvent }, client);
 
-    await transport.start();
-    const ws = latestWebSocket();
+    const ws = await startTransport(transport);
     vi.spyOn(ws, "send").mockImplementation(() => {
       throw new Error("Google Live socket rejected the tool result");
     });
@@ -736,9 +918,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
       throw new Error(`unexpected request: ${method}`);
     });
     const transport = createTransport({}, client);
-    await transport.start();
-    const ws = latestWebSocket();
-    ws.emitOpen();
+    const ws = await startTransport(transport);
     ws.emitMessage(
       encodeJsonFrame({
         serverContent: {
@@ -809,9 +989,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
       throw new Error(`unexpected request: ${method}`);
     });
     const transport = createTransport({}, client);
-    await transport.start();
-    const ws = latestWebSocket();
-    ws.emitOpen();
+    const ws = await startTransport(transport);
     ws.emitMessage(
       encodeJsonFrame({
         serverContent: {
@@ -882,9 +1060,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
       throw new Error(`unexpected request: ${method}`);
     });
     const transport = createTransport({}, client);
-    await transport.start();
-    const ws = latestWebSocket();
-    ws.emitOpen();
+    const ws = await startTransport(transport);
     ws.emitMessage(
       encodeJsonFrame({
         serverContent: {

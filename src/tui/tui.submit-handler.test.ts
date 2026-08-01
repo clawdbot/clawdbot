@@ -179,18 +179,18 @@ describe("createSubmitBurstCoalescer", () => {
     vi.useFakeTimers();
     const submit = vi.fn();
     let now = 1_000;
-    const onSubmit = createSubmitBurstCoalescer({
+    const submitBurst = createSubmitBurstCoalescer({
       submit,
       enabled: true,
       burstWindowMs: 50,
       now: () => now,
     });
 
-    onSubmit("Line 1");
+    submitBurst("Line 1");
     now += 10;
-    onSubmit("Line 2");
+    submitBurst("Line 2");
     now += 10;
-    onSubmit("Line 3");
+    submitBurst("Line 3");
 
     expect(submit).not.toHaveBeenCalled();
 
@@ -265,17 +265,36 @@ describe("createSubmitBurstCoalescer", () => {
 
   it("passes through immediately when disabled", () => {
     const submit = vi.fn();
-    const onSubmit = createSubmitBurstCoalescer({
+    const submitBurst = createSubmitBurstCoalescer({
       submit,
       enabled: false,
     });
 
-    onSubmit("Line 1");
-    onSubmit("Line 2");
+    submitBurst("Line 1");
+    submitBurst("Line 2");
 
     expect(submit).toHaveBeenCalledTimes(2);
     expect(submit).toHaveBeenNthCalledWith(1, "Line 1");
     expect(submit).toHaveBeenNthCalledWith(2, "Line 2");
+  });
+
+  it("cancels pending and future submissions when disposed", () => {
+    vi.useFakeTimers();
+    const submit = vi.fn();
+    const submitBurst = createSubmitBurstCoalescer({
+      submit,
+      enabled: true,
+      burstWindowMs: 50,
+    });
+
+    submitBurst("pending");
+    submitBurst.dispose();
+    submitBurst.dispose();
+    submitBurst("after dispose");
+    vi.advanceTimersByTime(50);
+
+    expect(submit).not.toHaveBeenCalled();
+    vi.useRealTimers();
   });
 });
 

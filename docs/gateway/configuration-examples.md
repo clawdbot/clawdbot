@@ -367,7 +367,6 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
   // Cron jobs
   cron: {
     enabled: true,
-    store: "~/.openclaw/cron/jobs.json",
     sessionRetention: "24h",
   },
 

@@ -112,6 +112,24 @@ function loadMainSessionEntry(storePath: string): SessionEntry {
   return entry;
 }
 
+async function writeTestSessionTranscript(params: {
+  rootDir: string;
+  events: Parameters<typeof replaceSqliteTranscriptEvents>[1];
+  sessionKey?: string;
+  sessionId?: string;
+}): Promise<void> {
+  const sessionId = params.sessionId ?? "session";
+  const sessionKey = params.sessionKey ?? "main";
+  const scope = {
+    agentId: "main",
+    sessionId,
+    sessionKey,
+    storePath: path.join(params.rootDir, "sessions.json"),
+  };
+  await upsertSessionEntry(scope, { sessionId, updatedAt: 10 });
+  await replaceSqliteTranscriptEvents(scope, params.events);
+}
+
 type RefreshQueuedFollowupSessionParams = {
   key?: string;
   previousSessionId?: string;
@@ -344,10 +362,6 @@ describe("runMemoryFlushIfNeeded", () => {
       incrementCompactionCount: incrementCompactionCountMock as never,
       registerAgentRunContext: registerAgentRunContextMock as never,
       emitAgentEvent: emitAgentEventMock as never,
-      resolveSessionLogPath: (
-        _sessionId: string | undefined,
-        entry: (SessionEntry & { transcriptPath?: string }) | undefined,
-      ) => entry?.transcriptPath,
       randomUUID: () => "00000000-0000-0000-0000-000000000001",
       now: () => 1_700_000_000_000,
     });
@@ -1541,7 +1555,6 @@ describe("runMemoryFlushIfNeeded", () => {
     });
     const sessionEntry: SessionEntry = {
       sessionId: "session",
-      transcriptPath: sessionFile,
       updatedAt: Date.now(),
       totalTokens: 120,
       totalTokensFresh: true,
@@ -1636,7 +1649,6 @@ describe("runMemoryFlushIfNeeded", () => {
     });
     const sessionEntry: SessionEntry = {
       sessionId: "session",
-      transcriptPath: sessionFile,
       updatedAt: Date.now(),
       totalTokens: 120,
       totalTokensFresh: true,
@@ -1684,7 +1696,6 @@ describe("runMemoryFlushIfNeeded", () => {
     }));
     const sessionEntry: SessionEntry = {
       sessionId: "session",
-      transcriptPath: sessionFile,
       updatedAt: Date.now(),
       totalTokens: 120,
       totalTokensFresh: true,
@@ -1745,7 +1756,6 @@ describe("runMemoryFlushIfNeeded", () => {
       });
       const sessionEntry: SessionEntry = {
         sessionId: "session",
-        transcriptPath: sessionFile,
         updatedAt: Date.now(),
         totalTokens: 120,
         totalTokensFresh: true,
@@ -1798,7 +1808,6 @@ describe("runMemoryFlushIfNeeded", () => {
     });
     const sessionEntry: SessionEntry = {
       sessionId: "session",
-      transcriptPath: sessionFile,
       updatedAt: Date.now(),
       totalTokens: 120,
       totalTokensFresh: true,
@@ -1853,7 +1862,6 @@ describe("runMemoryFlushIfNeeded", () => {
     });
     const sessionEntry: SessionEntry = {
       sessionId: "session",
-      transcriptPath: sessionFile,
       updatedAt: Date.now(),
       totalTokens: 120,
       totalTokensFresh: true,
@@ -1886,10 +1894,8 @@ describe("runMemoryFlushIfNeeded", () => {
   it.each(["user", "auto"] as const)(
     "passes resolved context budget and $authProfileIdSource auth profile to preflight compaction",
     async (authProfileIdSource) => {
-      const sessionFile = path.join(rootDir, "budget-session.jsonl");
       const sessionEntry: SessionEntry = {
         sessionId: "session",
-        transcriptPath: sessionFile,
         updatedAt: Date.now(),
         totalTokens: 245_000,
         totalTokensFresh: true,
@@ -2000,11 +2006,11 @@ describe("runMemoryFlushIfNeeded", () => {
   it("updates the active preflight run after transcript rotation", async () => {
     const sessionFile = path.join(rootDir, "session.jsonl");
     const successorFile = path.join(rootDir, "session-rotated.jsonl");
-    await fs.writeFile(
-      sessionFile,
-      `${JSON.stringify({ message: { role: "user", content: "x".repeat(5_000) } })}\n`,
-      "utf8",
-    );
+    await writeTestSessionTranscript({
+      rootDir,
+      sessionKey: "agent:main:main",
+      events: [{ type: "message", message: { role: "user", content: "x".repeat(5_000) } }],
+    });
     registerMemoryFlushPlanResolverForTest(() => ({
       softThresholdTokens: 1,
       forceFlushTranscriptBytes: 1_000_000_000,
@@ -2024,7 +2030,6 @@ describe("runMemoryFlushIfNeeded", () => {
     });
     const sessionEntry: SessionEntry = {
       sessionId: "session",
-      transcriptPath: sessionFile,
       updatedAt: Date.now(),
       totalTokensFresh: false,
     };
@@ -2064,17 +2069,19 @@ describe("runMemoryFlushIfNeeded", () => {
 
   it("includes recent output tokens when deciding preflight compaction", async () => {
     const sessionFile = path.join(rootDir, "session-usage.jsonl");
-    await fs.writeFile(
-      sessionFile,
-      `${JSON.stringify({
-        message: {
-          role: "assistant",
-          content: "large answer",
-          usage: { input: 90_000, output: 10_000 },
+    await writeTestSessionTranscript({
+      rootDir,
+      events: [
+        {
+          type: "message",
+          message: {
+            role: "assistant",
+            content: "large answer",
+            usage: { input: 90_000, output: 10_000 },
+          },
         },
-      })}\n`,
-      "utf8",
-    );
+      ],
+    });
     registerMemoryFlushPlanResolverForTest(() => ({
       softThresholdTokens: 4_000,
       forceFlushTranscriptBytes: 1_000_000_000,
@@ -2085,7 +2092,6 @@ describe("runMemoryFlushIfNeeded", () => {
     }));
     const sessionEntry: SessionEntry = {
       sessionId: "session",
-      transcriptPath: sessionFile,
       updatedAt: Date.now(),
       totalTokensFresh: false,
     };
@@ -2111,26 +2117,27 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(compactCall.currentTokenCount).toBeGreaterThanOrEqual(100_000);
   });
 
-  it("reuses the transcript tail scan stat when memory flush needs usage and byte size", async () => {
+  it("reads flush usage and byte size from SQLite without statting a retired transcript path", async () => {
     const sessionFile = path.join(rootDir, "memory-flush-usage-and-size.jsonl");
-    await fs.writeFile(
-      sessionFile,
-      `${JSON.stringify({
-        message: {
-          role: "assistant",
-          content: "large answer",
-          usage: { input: 80_000, output: 4_000 },
+    await writeTestSessionTranscript({
+      rootDir,
+      events: [
+        {
+          type: "message",
+          message: {
+            role: "assistant",
+            content: "large answer",
+            usage: { input: 80_000, output: 4_000 },
+          },
         },
-      })}\n`,
-      "utf8",
-    );
+      ],
+    });
     const originalStat = fsCore.promises.stat.bind(fsCore.promises);
     const statSpy = vi
       .spyOn(fsCore.promises, "stat")
       .mockImplementation(async (target, options) => originalStat(target, options));
     const sessionEntry: SessionEntry = {
       sessionId: "session",
-      transcriptPath: sessionFile,
       updatedAt: Date.now(),
       totalTokensFresh: false,
     };
@@ -2174,7 +2181,6 @@ describe("runMemoryFlushIfNeeded", () => {
     });
     const sessionEntry: SessionEntry = {
       sessionId: "session",
-      transcriptPath: path.join(rootDir, "required-preflight-session.jsonl"),
       updatedAt: Date.now(),
       totalTokens: 180_499,
       totalTokensFresh: true,
@@ -2442,24 +2448,26 @@ describe("runMemoryFlushIfNeeded", () => {
 
   it("does not treat unavailable Anthropic context as transcript prompt usage", async () => {
     const sessionFile = path.join(rootDir, "unavailable-context-session.jsonl");
-    await fs.writeFile(
-      sessionFile,
-      `${JSON.stringify({
-        message: {
-          role: "assistant",
-          content: "small answer",
-          usage: {
-            input: 12,
-            output: 15_104,
-            cacheRead: 819_661,
-            cacheWrite: 93_130,
-            contextUsage: { state: "unavailable" },
-            totalTokens: 927_907,
+    await writeTestSessionTranscript({
+      rootDir,
+      events: [
+        {
+          type: "message",
+          message: {
+            role: "assistant",
+            content: "small answer",
+            usage: {
+              input: 12,
+              output: 15_104,
+              cacheRead: 819_661,
+              cacheWrite: 93_130,
+              contextUsage: { state: "unavailable" },
+              totalTokens: 927_907,
+            },
           },
         },
-      })}\n`,
-      "utf8",
-    );
+      ],
+    });
     registerMemoryFlushPlanResolverForTest(() => ({
       softThresholdTokens: 4_000,
       forceFlushTranscriptBytes: 1_000_000_000,
@@ -2470,7 +2478,6 @@ describe("runMemoryFlushIfNeeded", () => {
     }));
     const sessionEntry: SessionEntry = {
       sessionId: "session",
-      transcriptPath: sessionFile,
       updatedAt: Date.now(),
       totalTokensFresh: false,
     };
@@ -2497,25 +2504,26 @@ describe("runMemoryFlushIfNeeded", () => {
 
   it("keeps preflight compaction conservative for content appended after latest usage", async () => {
     const sessionFile = path.join(rootDir, "post-usage-tail-session.jsonl");
-    await fs.writeFile(
-      sessionFile,
-      [
-        JSON.stringify({
+    await writeTestSessionTranscript({
+      rootDir,
+      events: [
+        {
+          type: "message",
           message: {
             role: "assistant",
             content: "small answer",
             usage: { input: 40_000, output: 2_000 },
           },
-        }),
-        JSON.stringify({
+        },
+        {
+          type: "message",
           message: {
             role: "tool",
             content: `large interrupted tool output ${"x".repeat(450_000)}`,
           },
-        }),
-      ].join("\n"),
-      "utf8",
-    );
+        },
+      ],
+    });
     registerMemoryFlushPlanResolverForTest(() => ({
       softThresholdTokens: 4_000,
       forceFlushTranscriptBytes: 1_000_000_000,
@@ -2526,7 +2534,6 @@ describe("runMemoryFlushIfNeeded", () => {
     }));
     const sessionEntry: SessionEntry = {
       sessionId: "session",
-      transcriptPath: sessionFile,
       updatedAt: Date.now(),
       totalTokensFresh: false,
     };
@@ -2554,25 +2561,26 @@ describe("runMemoryFlushIfNeeded", () => {
 
   it("combines latest usage with post-usage tail pressure for preflight compaction", async () => {
     const sessionFile = path.join(rootDir, "combined-tail-pressure-session.jsonl");
-    await fs.writeFile(
-      sessionFile,
-      [
-        JSON.stringify({
+    await writeTestSessionTranscript({
+      rootDir,
+      events: [
+        {
+          type: "message",
           message: {
             role: "assistant",
             content: "small answer",
             usage: { input: 86_000, output: 2_000 },
           },
-        }),
-        JSON.stringify({
+        },
+        {
+          type: "message",
           message: {
             role: "tool",
             content: `moderate interrupted tool output ${"x".repeat(36_000)}`,
           },
-        }),
-      ].join("\n"),
-      "utf8",
-    );
+        },
+      ],
+    });
     registerMemoryFlushPlanResolverForTest(() => ({
       softThresholdTokens: 4_000,
       forceFlushTranscriptBytes: 1_000_000_000,
@@ -2583,7 +2591,6 @@ describe("runMemoryFlushIfNeeded", () => {
     }));
     const sessionEntry: SessionEntry = {
       sessionId: "session",
-      transcriptPath: sessionFile,
       updatedAt: Date.now(),
       totalTokensFresh: false,
     };
@@ -2611,23 +2618,19 @@ describe("runMemoryFlushIfNeeded", () => {
 
   it("does not count bytes from a large latest usage record as post-usage tail pressure", async () => {
     const sessionFile = path.join(rootDir, "large-usage-record-session.jsonl");
-    await fs.writeFile(
-      sessionFile,
-      [
-        JSON.stringify({
-          type: "session",
-          id: "session",
-        }),
-        JSON.stringify({
+    await writeTestSessionTranscript({
+      rootDir,
+      events: [
+        {
+          type: "message",
           message: {
             role: "assistant",
             content: `large answer ${"x".repeat(300_000)}`,
             usage: { input: 40_000, output: 2_000 },
           },
-        }),
-      ].join("\n") + "\n",
-      "utf8",
-    );
+        },
+      ],
+    });
     registerMemoryFlushPlanResolverForTest(() => ({
       softThresholdTokens: 4_000,
       forceFlushTranscriptBytes: 1_000_000_000,
@@ -2638,7 +2641,6 @@ describe("runMemoryFlushIfNeeded", () => {
     }));
     const sessionEntry: SessionEntry = {
       sessionId: "session",
-      transcriptPath: sessionFile,
       updatedAt: Date.now(),
       totalTokensFresh: false,
     };
@@ -2665,27 +2667,23 @@ describe("runMemoryFlushIfNeeded", () => {
 
   it("does not treat raw transcript metadata bytes as token pressure", async () => {
     const sessionFile = path.join(rootDir, "metadata-heavy-session.jsonl");
-    await fs.writeFile(
-      sessionFile,
-      [
-        JSON.stringify({
-          type: "session",
-          id: "session",
-        }),
-        JSON.stringify({
+    await writeTestSessionTranscript({
+      rootDir,
+      events: [
+        {
           type: "custom",
           payload: "x".repeat(450_000),
-        }),
-        JSON.stringify({
+        },
+        {
+          type: "message",
           message: {
             role: "assistant",
             content: "small answer",
             usage: { input: 40_000, output: 2_000 },
           },
-        }),
-      ].join("\n") + "\n",
-      "utf8",
-    );
+        },
+      ],
+    });
     registerMemoryFlushPlanResolverForTest(() => ({
       softThresholdTokens: 4_000,
       forceFlushTranscriptBytes: 1_000_000_000,
@@ -2696,7 +2694,6 @@ describe("runMemoryFlushIfNeeded", () => {
     }));
     const sessionEntry: SessionEntry = {
       sessionId: "session",
-      transcriptPath: sessionFile,
       updatedAt: Date.now(),
       totalTokensFresh: false,
     };
@@ -2747,14 +2744,12 @@ describe("runMemoryFlushIfNeeded", () => {
 
   it("triggers preflight compaction when the active transcript exceeds the configured byte threshold", async () => {
     const sessionFile = path.join(rootDir, "large-session.jsonl");
-    await fs.writeFile(
-      sessionFile,
-      `${JSON.stringify({ message: { role: "user", content: "x".repeat(256) } })}\n`,
-      "utf8",
-    );
+    await writeTestSessionTranscript({
+      rootDir,
+      events: [{ type: "message", message: { role: "user", content: "x".repeat(256) } }],
+    });
     const sessionEntry: SessionEntry = {
       sessionId: "session",
-      transcriptPath: sessionFile,
       updatedAt: Date.now(),
       totalTokens: 10,
       totalTokensFresh: true,
@@ -2794,7 +2789,7 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(compactCall.sessionId).toBe("session");
     expect(compactCall.trigger).toBe("budget");
     expect(compactCall.currentTokenCount).toBe(12);
-    expect(compactCall.sessionFile).toContain("large-session.jsonl");
+    expect(compactCall.sessionFile).toBe("main");
   });
 
   it("byte-guards a Codex runtime session through SQLite semantic compaction", async () => {
@@ -3204,14 +3199,12 @@ describe("runMemoryFlushIfNeeded", () => {
 
   it("emits preflight compaction notices around a successful budget compaction", async () => {
     const sessionFile = path.join(rootDir, "notify-session.jsonl");
-    await fs.writeFile(
-      sessionFile,
-      `${JSON.stringify({ message: { role: "user", content: "x".repeat(5_000) } })}\n`,
-      "utf8",
-    );
+    await writeTestSessionTranscript({
+      rootDir,
+      events: [{ type: "message", message: { role: "user", content: "x".repeat(5_000) } }],
+    });
     const sessionEntry: SessionEntry = {
       sessionId: "session",
-      transcriptPath: sessionFile,
       updatedAt: Date.now(),
       totalTokens: 120,
       totalTokensFresh: true,
@@ -3252,15 +3245,13 @@ describe("runMemoryFlushIfNeeded", () => {
 
   it("emits an incomplete preflight compaction notice when post-compaction state update throws", async () => {
     const sessionFile = path.join(rootDir, "notify-failed-session.jsonl");
-    await fs.writeFile(
-      sessionFile,
-      `${JSON.stringify({ message: { role: "user", content: "x".repeat(5_000) } })}\n`,
-      "utf8",
-    );
+    await writeTestSessionTranscript({
+      rootDir,
+      events: [{ type: "message", message: { role: "user", content: "x".repeat(5_000) } }],
+    });
     incrementCompactionCountMock.mockRejectedValueOnce(new Error("count update failed"));
     const sessionEntry: SessionEntry = {
       sessionId: "session",
-      transcriptPath: sessionFile,
       updatedAt: Date.now(),
       totalTokens: 120,
       totalTokensFresh: true,

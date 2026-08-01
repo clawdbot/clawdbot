@@ -1,92 +1,113 @@
-import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { readPresenceEntries, type PresencePayload } from "../app/user-profile.ts";
-import { createSessionEventRefreshCoordinator } from "../lib/sessions/event-refresh-coordinator.ts";
-import { readSessionChangedEvent } from "../lib/sessions/reconcile.ts";
-import { normalizeAgentId, parseAgentSessionKey } from "../lib/sessions/session-key.ts";
-import type { SidebarSessionStatusFilter } from "./app-sidebar-session-types.ts";
-import type { SessionDataControllerHost } from "./session-data-controller-catalog.ts";
+import type { SessionCapability, SessionListSnapshot } from "../lib/sessions/index.ts";
+import { normalizeAgentId } from "../lib/sessions/session-key.ts";
+import {
+  SIDEBAR_AGENT_SESSION_LIST_LIMIT,
+  type SidebarSessionStatusFilter,
+} from "./app-sidebar-session-types.ts";
 
-type SessionGatewayEventOwner = {
-  presencePayload: PresencePayload | undefined;
-  readonly sessionScopeGeneration: number;
-  handleSessionCatalogHostEvent(payload: unknown): void;
-  handleSessionCatalogPresence(payload: unknown): void;
-  refreshSidebarSessions(agentId?: string): Promise<void>;
+type SidebarSessionListOwner = {
+  readonly context: ApplicationContext<RouteId> | undefined;
+  readonly sessionCreatedOrder: Map<string, number>;
+  sessionRowsByAgent: Record<string, NonNullable<SessionListSnapshot["result"]>["sessions"]>;
+  sessionsResult: SessionListSnapshot["result"];
+  sessionsAgentId: SessionListSnapshot["agentId"];
+  sessionsLoading: boolean;
+  sessionMutationError: string | null;
+  expandedAgentId(): string;
   requestSessionDataUpdate(): void;
 };
 
-type FilteredSessionRefreshScope = {
-  agentId: string;
-  archivedFilter: SidebarSessionStatusFilter;
-  client: ApplicationContext<RouteId>["gateway"]["snapshot"]["client"];
-  generation: number;
+export function publishSidebarSessionList(
+  owner: SidebarSessionListOwner,
+  snapshot: SessionListSnapshot,
+): void {
+  owner.sessionsResult = snapshot.result;
+  owner.sessionsAgentId = snapshot.agentId;
+  for (const row of snapshot.result?.sessions ?? []) {
+    if (row.key && !owner.sessionCreatedOrder.has(row.key)) {
+      owner.sessionCreatedOrder.set(row.key, owner.sessionCreatedOrder.size);
+    }
+  }
+  if (snapshot.result && snapshot.agentId) {
+    owner.sessionRowsByAgent[normalizeAgentId(snapshot.agentId)] = snapshot.result.sessions;
+  }
+}
+
+export function subscribeFilteredSidebarSessions(
+  owner: SidebarSessionListOwner,
+  sessions: SessionCapability,
+  agentId: string,
+  archivedFilter: Exclude<SidebarSessionStatusFilter, "active">,
+  isCurrent: () => boolean,
+): () => void {
+  const scope = { agentId, archivedFilter };
+  const apply = (snapshot: SessionListSnapshot) => {
+    if (!isCurrent()) {
+      return;
+    }
+    // Keep visible rows across reconnect until the new connection owns a fresh list.
+    if (owner.context?.gateway.snapshot.phase !== "connected" && !snapshot.result) {
+      return;
+    }
+    publishSidebarSessionList(owner, snapshot);
+    owner.sessionsLoading = snapshot.loading;
+    if (snapshot.error) {
+      owner.sessionMutationError = snapshot.error;
+    }
+    owner.requestSessionDataUpdate();
+  };
+  const unsubscribe = sessions.subscribeList(scope, apply);
+  apply(sessions.listSnapshot(scope));
+  return unsubscribe;
+}
+
+export function refreshSidebarSessionList(
+  owner: SidebarSessionListOwner,
+  agentId: string | null,
+  archivedFilter: SidebarSessionStatusFilter,
+  append = false,
+): Promise<void> {
+  const result = owner.sessionsResult;
+  // An omitted cursor falls back to accumulated rows; an explicit null is terminal.
+  const offset = result?.nextOffset === undefined ? result?.sessions.length : result.nextOffset;
+  if (
+    !owner.context?.sessions ||
+    !agentId ||
+    (append &&
+      (owner.sessionsLoading ||
+        !result?.hasMore ||
+        typeof offset !== "number" ||
+        normalizeAgentId(agentId) !== normalizeAgentId(owner.expandedAgentId())))
+  ) {
+    return Promise.resolve();
+  }
+  return owner.context.sessions.refreshList({
+    agentId,
+    archivedFilter,
+    limit: SIDEBAR_AGENT_SESSION_LIST_LIMIT,
+    includeDerivedTitles: true,
+    ...(append && typeof offset === "number" ? { offset, append: true } : {}),
+    force: true,
+  });
+}
+
+type SessionGatewayEventOwner = {
+  presencePayload: PresencePayload | undefined;
+  handleSessionCatalogHostEvent(payload: unknown): void;
+  handleSessionCatalogPresence(payload: unknown): void;
+  requestSessionDataUpdate(): void;
 };
 
 export function subscribeSessionDataGatewayEvents(
   gateway: ApplicationContext<RouteId>["gateway"],
   owner: SessionGatewayEventOwner,
-  host: Pick<
-    SessionDataControllerHost,
-    "expandedAgentId" | "isConnected" | "sidebarSessionStatusFilter"
-  >,
 ): () => void {
-  let subscribed = true;
-  let refreshScope: FilteredSessionRefreshScope | null = null;
-  const scopeIsCurrent = () =>
-    refreshScope !== null &&
-    subscribed &&
-    host.isConnected &&
-    gateway.snapshot.phase === "connected" &&
-    gateway.snapshot.client === refreshScope.client &&
-    owner.sessionScopeGeneration === refreshScope.generation &&
-    host.sidebarSessionStatusFilter() === refreshScope.archivedFilter &&
-    normalizeAgentId(host.expandedAgentId()) === refreshScope.agentId;
-  const refreshCoordinator = createSessionEventRefreshCoordinator({
-    canRefresh: scopeIsCurrent,
-    refresh: () =>
-      refreshScope ? owner.refreshSidebarSessions(refreshScope.agentId) : Promise.resolve(),
-  });
-  const unsubscribe = gateway.subscribeEvents((event) => {
+  return gateway.subscribeEvents((event) => {
     if (event.event === "sessions.catalog.host") {
       owner.handleSessionCatalogHostEvent(event.payload);
-      return;
-    }
-    if (event.event === "sessions.changed") {
-      const archivedFilter = host.sidebarSessionStatusFilter();
-      if (archivedFilter === "active") {
-        return;
-      }
-      const agentId = normalizeAgentId(host.expandedAgentId());
-      const sessionEvent = readSessionChangedEvent(event.payload);
-      const payloadAgentId = asNullableRecord(event.payload)?.agentId;
-      const eventAgentId =
-        sessionEvent?.agentId ??
-        parseAgentSessionKey(sessionEvent?.key)?.agentId ??
-        (typeof payloadAgentId === "string" ? payloadAgentId : undefined);
-      if (eventAgentId && normalizeAgentId(eventAgentId) !== agentId) {
-        return;
-      }
-      const nextScope: FilteredSessionRefreshScope = {
-        agentId,
-        archivedFilter,
-        client: gateway.snapshot.client,
-        generation: owner.sessionScopeGeneration,
-      };
-      if (
-        refreshScope &&
-        (refreshScope.agentId !== nextScope.agentId ||
-          refreshScope.archivedFilter !== nextScope.archivedFilter ||
-          refreshScope.client !== nextScope.client ||
-          refreshScope.generation !== nextScope.generation)
-      ) {
-        refreshCoordinator.reset();
-      }
-      refreshScope = nextScope;
-      // Canonical debounce/max-wait and single-flight behavior belong to one
-      // coordinator; scope checks retire stale agents, filters, and clients.
-      refreshCoordinator.schedule();
       return;
     }
     if (event.event === "presence") {
@@ -96,9 +117,4 @@ export function subscribeSessionDataGatewayEvents(
       owner.handleSessionCatalogPresence(event.payload);
     }
   });
-  return () => {
-    subscribed = false;
-    refreshCoordinator.dispose();
-    unsubscribe();
-  };
 }

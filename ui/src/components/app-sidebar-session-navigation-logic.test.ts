@@ -5,10 +5,10 @@ import { buildSidebarSessionNavigationState } from "./app-sidebar-session-naviga
 import { projectSessionTree } from "./app-sidebar-session-tree.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 
-function projectDraftOwnership(
-  row: Pick<GatewaySessionRow, "createdActor" | "sharingRole" | "visibility">,
+function projectSidebarSession(
+  row: Partial<GatewaySessionRow>,
   selfUserId?: string,
-): boolean | undefined {
+): SidebarRecentSession {
   const context = {
     basePath: "",
     agents: { state: { agentsList: { mainKey: "main" } } },
@@ -45,8 +45,28 @@ function projectDraftOwnership(
     kind: "direct",
     updatedAt: 1,
     ...row,
-  }).draftOwnedBySelf;
+  });
 }
+
+function projectDraftOwnership(
+  row: Pick<GatewaySessionRow, "createdActor" | "sharingRole" | "visibility">,
+  selfUserId?: string,
+): boolean | undefined {
+  return projectSidebarSession(row, selfUserId).draftOwnedBySelf;
+}
+
+describe("sidebar session live-run projection", () => {
+  it.each([
+    ["legacy running status", { status: "running" }, true],
+    ["confirmed active run", { status: "running", hasActiveRun: true }, true],
+    ["stale running status", { status: "running", hasActiveRun: false }, false],
+    ["completed run with a stale active flag", { status: "done", hasActiveRun: true }, false],
+    ["failed run with a stale active flag", { status: "failed", hasActiveRun: true }, false],
+    ["archived active run", { status: "running", hasActiveRun: true, archived: true }, false],
+  ] as const)("normalizes %s before publishing sidebar state", (_name, row, expected) => {
+    expect(projectSidebarSession(row).hasActiveRun).toBe(expected);
+  });
+});
 
 describe("sidebar draft ownership presentation", () => {
   it("keeps owner drafts at normal emphasis", () => {
@@ -128,6 +148,30 @@ describe("sidebar navigation lineage ownership", () => {
       { key: controlParent.key, children: [] },
     ]);
   });
+
+  it.each([
+    ["legacy active child", { status: "running" }, 1, 0],
+    ["stale running child", { status: "running", hasActiveRun: false }, 0, 0],
+    ["failed child with a stale active flag", { status: "failed", hasActiveRun: true }, 0, 1],
+  ] as const)(
+    "counts normalized live runs for a %s",
+    (_name, runState, runningChildCount, failedChildCount) => {
+      const childRow = { ...child, ...runState };
+      const projected = projectSessionTree({
+        roots: [navigationParent],
+        agentRows: [navigationParent, childRow],
+        childRowsByParent: {},
+        loadingChildKeys: new Set(),
+        knownSessionAttention: [],
+        toSidebarSession: (row, isChild) => ({
+          ...projectSidebarSession(row),
+          isChild: isChild === true,
+        }),
+      });
+
+      expect(projected[0]).toMatchObject({ runningChildCount, failedChildCount });
+    },
+  );
 
   it("walks a directly opened child through its navigation parent, not its controller", async () => {
     const knownRows = new Map(

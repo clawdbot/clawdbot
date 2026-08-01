@@ -254,6 +254,8 @@ function resolveRuntimeProviderPluginLoadState(
     workspaceDir: base.workspaceDir,
     onlyPluginIds: runtimeRequestedPluginIds,
     applyAutoEnable: params.applyAutoEnable ?? true,
+    discovery: snapshot.discovery,
+    manifestRegistry: snapshot.manifestRegistry,
     compatMode: {
       vitest: params.bundledProviderVitestCompat,
     },

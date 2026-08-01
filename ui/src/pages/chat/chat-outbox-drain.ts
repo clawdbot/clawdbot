@@ -13,7 +13,7 @@ import { loadChatHistory, type ChatHistoryResult, type ChatState } from "./chat-
 import {
   excludeComposerAttachments,
   removeQueuedMessageWithoutReleasing,
-  syncChatQueueFromStoredOutbox,
+  syncVisibleChatQueueProjection,
   updateQueuedMessageForSession,
 } from "./chat-queue.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
@@ -184,7 +184,7 @@ async function readCurrentStoredChatHistory(
   if (!currentOutbox || !currentItem || !sameQueuedDeliveryVersion(currentItem, item)) {
     return "continue";
   }
-  syncChatQueueFromStoredOutbox(host, currentOutbox);
+  syncVisibleChatQueueProjection(host);
   if (chatMessagesContainQueuedSend(history.messages, item)) {
     // Server history owns the turn, but the visible transcript may not have
     // reloaded yet; materialize the turn locally before dropping the queue row
@@ -293,7 +293,7 @@ async function drainStoredChatOutbox(
       return "empty";
     }
     if (item.sendState === "unconfirmed" || item.sendState === "waiting-model") {
-      syncChatQueueFromStoredOutbox(host, outbox);
+      syncVisibleChatQueueProjection(host);
       return "blocked";
     }
     const visible = visibleSessionMatches(host, outbox.sessionKey, outbox.agentId);
@@ -303,7 +303,7 @@ async function drainStoredChatOutbox(
         lane.pendingOptions.delete(item.id);
         return "blocked";
       }
-      syncChatQueueFromStoredOutbox(host, outbox);
+      syncVisibleChatQueueProjection(host);
       if (item.localCommandName === "reset") {
         const resetText = item.localCommandArgs ? `/reset ${item.localCommandArgs}` : "/reset";
         const convertResetToMessage = (sendState?: ChatQueueItem["sendState"]) =>
@@ -494,7 +494,7 @@ async function drainStoredChatOutbox(
       }
     }
     if (visible && isChatBusy(host)) {
-      syncChatQueueFromStoredOutbox(host, outbox);
+      syncVisibleChatQueueProjection(host);
       updateQueuedMessageForSession(host, outbox.sessionKey, item.id, (entry) => ({
         ...entry,
         sendState: host.connected && host.client ? "waiting-idle" : "waiting-reconnect",
@@ -506,7 +506,7 @@ async function drainStoredChatOutbox(
     if (!currentOutbox || !currentItem || !sameQueuedDeliveryVersion(currentItem, item)) {
       continue;
     }
-    syncChatQueueFromStoredOutbox(host, currentOutbox);
+    syncVisibleChatQueueProjection(host);
     const result = await dependencies.sendQueuedChatMessage(
       host,
       item.id,

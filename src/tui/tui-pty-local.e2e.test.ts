@@ -432,45 +432,11 @@ function buildTuiCliScript(args: string[]) {
   ].join("\n");
 }
 
-function buildLocalValidationTuiScript() {
-  const agentEventsModuleUrl = pathToFileURL(
-    path.join(process.cwd(), "src/infra/agent-events.ts"),
-  ).href;
-  const embeddedBackendModuleUrl = pathToFileURL(
-    path.join(process.cwd(), "src/tui/embedded-backend.ts"),
-  ).href;
-  const tuiModuleUrl = pathToFileURL(path.join(process.cwd(), "src/tui/tui.ts")).href;
-  // A PTY-side abort can race the validation retry into another provider turn.
-  // Abort through the real local backend after its listener records the second
-  // tool error; the Gateway case below still covers keyboard-driven aborts.
-  return [
-    `import { onAgentEvent } from ${JSON.stringify(agentEventsModuleUrl)};`,
-    `import { EmbeddedTuiBackend } from ${JSON.stringify(embeddedBackendModuleUrl)};`,
-    `import { runTui } from ${JSON.stringify(tuiModuleUrl)};`,
-    `const backend = new EmbeddedTuiBackend();`,
-    `const sessionKey = "agent:main:main";`,
-    `let validationErrorCount = 0;`,
-    `onAgentEvent((event) => {`,
-    `  if (event.stream !== "tool" || event.data?.phase !== "result" || typeof event.data?.toolErrorSummary !== "string") return;`,
-    `  validationErrorCount += 1;`,
-    `  if (validationErrorCount !== 2) return;`,
-    `  queueMicrotask(() => {`,
-    `    void backend.abortChat({ sessionKey }).then((result) => {`,
-    `      if (!result.aborted) {`,
-    `        console.error("local validation test failed to abort its active run");`,
-    `        process.exit(1);`,
-    `      }`,
-    `    }).catch((error) => {`,
-    `      console.error(error);`,
-    `      process.exit(1);`,
-    `    });`,
-    `  });`,
-    `});`,
-    `runTui({ local: true, backend, session: sessionKey, deliver: false, historyLimit: 200, forceProcessExitOnReturn: true }).catch((error) => {`,
-    `  console.error(error);`,
-    `  process.exit(1);`,
-    `});`,
-  ].join("\n");
+function buildTuiProcessArgs(args: string[]) {
+  if (process.env.OPENCLAW_TUI_PTY_USE_BUILT_CLI === "1") {
+    return [path.join(process.cwd(), "openclaw.mjs"), ...args];
+  }
+  return ["--import", "tsx", "--eval", buildTuiCliScript(args)];
 }
 
 function buildMockModelProvider(baseUrl: string, modelIds: string[]): ModelProviderConfig {
@@ -539,6 +505,28 @@ function buildLocalModeConfig(params: {
   } satisfies OpenClawConfig;
 }
 
+async function cleanupLocalModeResources(params: {
+  run?: PtyRun;
+  mockModel: MockModelServer;
+  tempDir: string;
+}) {
+  const settled = await Promise.allSettled([
+    ...(params.run ? [params.run.dispose()] : []),
+    params.mockModel.stop(),
+  ]);
+  const failures = settled.flatMap((result) =>
+    result.status === "rejected" ? [result.reason] : [],
+  );
+  try {
+    await rm(params.tempDir, { recursive: true, force: true });
+  } catch (error) {
+    failures.push(error);
+  }
+  if (failures.length > 0) {
+    throw new AggregateError(failures, "local TUI PTY fixture cleanup failed");
+  }
+}
+
 async function startLocalModeTui(
   registerCleanup: CleanupRegistrar,
   opts: {
@@ -566,41 +554,60 @@ async function startLocalModeTui(
     providerBaseUrl: mockModel.baseUrl,
     toolsProfile: opts.invalidEditLoop ? "coding" : "minimal",
   });
-  const script = opts.invalidEditLoop
-    ? buildLocalValidationTuiScript()
-    : buildTuiCliScript(["tui", "--local"]);
-  await Promise.all([
-    mkdir(workspaceDir, { recursive: true }),
-    mkdir(homeDir, { recursive: true }),
-    mkdir(stateDir, { recursive: true }),
-    mkdir(xdgConfigHome, { recursive: true }),
-    mkdir(xdgDataHome, { recursive: true }),
-    mkdir(xdgCacheHome, { recursive: true }),
-    writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8"),
-  ]);
+  let run: PtyRun;
+  try {
+    await Promise.all([
+      mkdir(workspaceDir, { recursive: true }),
+      mkdir(homeDir, { recursive: true }),
+      mkdir(stateDir, { recursive: true }),
+      mkdir(xdgConfigHome, { recursive: true }),
+      mkdir(xdgDataHome, { recursive: true }),
+      mkdir(xdgCacheHome, { recursive: true }),
+      writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8"),
+    ]);
 
-  const run = startPty(process.execPath, ["--import", "tsx", "--eval", script], {
-    cwd: process.cwd(),
-    env: {
-      HOME: homeDir,
-      OPENCLAW_HOME: homeDir,
-      OPENCLAW_CONFIG_PATH: configPath,
-      OPENCLAW_STATE_DIR: stateDir,
-      XDG_CONFIG_HOME: xdgConfigHome,
-      XDG_DATA_HOME: xdgDataHome,
-      XDG_CACHE_HOME: xdgCacheHome,
-      OPENCLAW_THEME: "dark",
-      OPENCLAW_CODEX_DISCOVERY_LIVE: "0",
-      NO_COLOR: undefined,
-    },
-    exitTimeoutMs: LOCAL_EXIT_TIMEOUT_MS,
-    outputTimeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
-  });
+    run = startPty(process.execPath, buildTuiProcessArgs(["tui", "--local"]), {
+      cwd: process.cwd(),
+      env: {
+        HOME: homeDir,
+        OPENCLAW_HOME: homeDir,
+        OPENCLAW_CONFIG_PATH: configPath,
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_AGENT_DIR: undefined,
+        OPENCLAW_SKIP_PROVIDERS: undefined,
+        XDG_CONFIG_HOME: xdgConfigHome,
+        XDG_DATA_HOME: xdgDataHome,
+        XDG_CACHE_HOME: xdgCacheHome,
+        OPENCLAW_THEME: "dark",
+        OPENCLAW_CODEX_DISCOVERY_LIVE: "0",
+        NO_COLOR: undefined,
+      },
+      exitTimeoutMs: LOCAL_EXIT_TIMEOUT_MS,
+      outputTimeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
+    });
+  } catch (error) {
+    let cleanupFailure: unknown;
+    try {
+      await cleanupLocalModeResources({ mockModel, tempDir });
+    } catch (cleanupError) {
+      cleanupFailure = cleanupError;
+    }
+    if (cleanupFailure !== undefined) {
+      const cleanupDetail =
+        cleanupFailure instanceof Error
+          ? cleanupFailure.message
+          : typeof cleanupFailure === "string"
+            ? cleanupFailure
+            : "unknown cleanup error";
+      throw new Error(`local TUI PTY fixture cleanup failed: ${cleanupDetail}`, {
+        cause: error,
+      });
+    }
+    throw error;
+  }
 
   const cleanup = createIdempotentCleanup(async () => {
-    await run.dispose();
-    await mockModel.stop();
-    await rm(tempDir, { recursive: true, force: true });
+    await cleanupLocalModeResources({ run, mockModel, tempDir });
   });
   registerCleanup(cleanup);
   return {
@@ -790,25 +797,28 @@ async function startGatewayModeTui(
   const requestOffset = shared.mockModel.requests(scenario.modelId).length;
   const sessionKey = `agent:${scenario.agentId}:tui-pty-${++gatewaySessionSequence}`;
   const sessionKeys = new Set([sessionKey]);
-  const script = buildTuiCliScript([
-    "tui",
-    "--url",
-    shared.gateway.url,
-    "--token",
-    shared.gateway.gatewayToken,
-    "--session",
-    sessionKey,
-  ]);
-  const run = startPty(process.execPath, ["--import", "tsx", "--eval", script], {
-    cwd: process.cwd(),
-    env: {
-      ...shared.gateway.env,
-      OPENCLAW_THEME: "dark",
-      NO_COLOR: undefined,
+  const run = startPty(
+    process.execPath,
+    buildTuiProcessArgs([
+      "tui",
+      "--url",
+      shared.gateway.url,
+      "--token",
+      shared.gateway.gatewayToken,
+      "--session",
+      sessionKey,
+    ]),
+    {
+      cwd: process.cwd(),
+      env: {
+        ...shared.gateway.env,
+        OPENCLAW_THEME: "dark",
+        NO_COLOR: undefined,
+      },
+      exitTimeoutMs: LOCAL_EXIT_TIMEOUT_MS,
+      outputTimeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
     },
-    exitTimeoutMs: LOCAL_EXIT_TIMEOUT_MS,
-    outputTimeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
-  });
+  );
   const cleanup = createIdempotentCleanup(async () => {
     shared.mockModel.releaseFirstResponse(scenario.modelId);
     await run.dispose();
@@ -1077,9 +1087,7 @@ describe("TUI PTY real backends", () => {
                 ),
             });
           }
-          if (mode === "gateway") {
-            await fixture.run.write("\u001b", { delay: false });
-          }
+          await fixture.run.write("\u001b", { delay: false });
           await fixture.run.waitForOutput(
             "run aborted: edit tool validation failed:",
             LOCAL_OUTPUT_TIMEOUT_MS,

@@ -1058,7 +1058,7 @@ function applyAssistantVisibleTextStagePipeline(
       cleaned = stripAssistantInternalTraceLines(cleaned);
     }
     cleaned = stripLegacyBracketToolCallBlocks(cleaned);
-    cleaned = stripPlainTextToolCallBlocks(cleaned);
+    cleaned = stripPlainTextToolCallBlocks(cleaned, { resolveProtectedRanges: findCodeRegions });
     if (!options.preserveDowngradedToolText) {
       cleaned = stripDowngradedToolCallText(cleaned);
     }

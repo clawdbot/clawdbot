@@ -2,6 +2,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { tryReadJsonSync } from "../infra/json-files.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
@@ -35,7 +36,7 @@ import {
   type LoadInstalledPluginIndexParams,
   type RefreshInstalledPluginIndexParams,
 } from "./installed-plugin-index.js";
-import { loadPluginManifestRegistry } from "./manifest-registry.js";
+import { loadPluginManifestRegistry, type PluginManifestRegistry } from "./manifest-registry.js";
 import { getPackageManifestMetadata, type PackageManifest } from "./manifest.js";
 import { safeRealpathSync } from "./path-safety.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
@@ -61,6 +62,7 @@ type PluginRegistrySnapshotResult = {
   source: PluginRegistrySnapshotSource;
   diagnostics: readonly PluginRegistrySnapshotDiagnostic[];
   discovery?: PluginDiscoveryResult;
+  manifestRegistry?: PluginManifestRegistry;
 };
 
 const REGISTRY_SNAPSHOT_MEMO_ENV_KEYS = [
@@ -189,7 +191,6 @@ function loadCurrentPluginRegistrySnapshotResult(
     config: params.config,
     env,
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-    ...(params.workspaceDir === undefined ? { allowWorkspaceScopedSnapshot: true } : {}),
   });
   if (!current || current.registryDiagnostics.length > 0) {
     return undefined;
@@ -198,6 +199,7 @@ function loadCurrentPluginRegistrySnapshotResult(
     snapshot: current.index,
     source: "provided",
     diagnostics: current.registryDiagnostics,
+    manifestRegistry: current.manifestRegistry,
   };
 }
 
@@ -580,6 +582,7 @@ export function loadPluginRegistrySnapshotWithMetadata(
     source: "derived",
     diagnostics,
     discovery: derived.discovery,
+    manifestRegistry: derived.manifestRegistry,
   });
 }
 
@@ -609,5 +612,12 @@ export function inspectPluginRegistry(
 export function refreshPluginRegistry(
   params: RefreshInstalledPluginIndexParams & InstalledPluginIndexStoreOptions,
 ): Promise<PluginRegistrySnapshot> {
-  return refreshPersistedInstalledPluginIndex(params);
+  const workspaceDir =
+    params.workspaceDir ??
+    (params.config
+      ? resolveAgentWorkspaceDir(params.config, resolveDefaultAgentId(params.config), params.env)
+      : undefined);
+  return refreshPersistedInstalledPluginIndex(
+    workspaceDir === undefined ? params : { ...params, workspaceDir },
+  );
 }

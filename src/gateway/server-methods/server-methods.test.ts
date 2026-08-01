@@ -4953,6 +4953,54 @@ describe("gateway healthHandlers.health cache freshness", () => {
     expect(respond).toHaveBeenCalledWith(true, fresh, undefined);
   });
 
+  it("refreshes cached health when recorded lifecycle changes without socket churn", async () => {
+    const cached = createHealthSnapshot({
+      channels: {
+        slack: {
+          accountId: "default",
+          configured: true,
+          running: true,
+          connected: true,
+          lifecycle: "ready",
+          accounts: {
+            default: {
+              accountId: "default",
+              configured: true,
+              running: true,
+              connected: true,
+              lifecycle: "ready",
+            },
+          },
+        },
+      },
+      channelOrder: ["slack"],
+      channelLabels: { slack: "Slack" },
+    });
+    const fresh = { ...cached, ts: cached.ts + 1 };
+    const { refreshHealthSnapshot } = await requestHealthSnapshot({
+      cached,
+      fresh,
+      runtimeSnapshot: {
+        channels: {},
+        channelAccounts: {
+          slack: {
+            default: {
+              accountId: "default",
+              running: true,
+              connected: true,
+              lifecycle: "blocked",
+            },
+          },
+        },
+      },
+    });
+
+    expect(refreshHealthSnapshot).toHaveBeenCalledWith({
+      probe: false,
+      includeSensitive: false,
+    });
+  });
+
   it("preserves event-loop health sampled by the refresh path", async () => {
     const eventLoop = {
       degraded: true,

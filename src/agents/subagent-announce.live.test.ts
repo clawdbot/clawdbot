@@ -186,11 +186,12 @@ function summarizeSubagentRuns(runs: ReturnType<typeof listSubagentRunsForReques
     runs.map((run) => ({
       runId: run.runId,
       taskName: run.taskName,
-      ended: typeof run.endedAt === "number",
+      ended: typeof run.execution.endedAt === "number",
       endedReason: run.endedReason,
       pauseReason: run.pauseReason,
-      outcome: run.outcome?.status,
-      outcomeError: run.outcome?.status === "error" ? run.outcome.error : undefined,
+      outcome: run.execution.outcome?.status,
+      outcomeError:
+        run.execution.outcome?.status === "error" ? run.execution.outcome.error : undefined,
       delivery: run.delivery?.status,
       deliveryError: run.delivery?.lastError,
       suppressAnnounceReason: run.suppressAnnounceReason,
@@ -357,7 +358,7 @@ describeLive("subagent announce live", () => {
           (run) =>
             run.taskName === "issue_82913_child" &&
             run.completion?.resultText?.includes(childToken) === true &&
-            run.outcome?.status === "ok",
+            run.execution.outcome?.status === "ok",
         );
       });
       expect(completedRunBeforeDelivery.delivery?.announcedAt).toBeUndefined();
@@ -385,7 +386,7 @@ describeLive("subagent announce live", () => {
       console.log(
         `[issue-82913] repro ${JSON.stringify({
           runId: completedRun.runId,
-          childEndedAt: completedRun.endedAt,
+          childEndedAt: completedRun.execution.endedAt,
           completionEnqueuedAt: enqueuedAt,
           completionDeliveredAt: deliveredAt,
           completionAnnouncedAt: announcedAt,
@@ -568,7 +569,7 @@ describeLive("subagent announce live", () => {
         );
       });
       const runStateBeforeSteer = summarizeSubagentRuns(listSteeredChildRuns());
-      expect(runBeforeSteer.endedAt, runStateBeforeSteer).toBeUndefined();
+      expect(runBeforeSteer.execution.endedAt, runStateBeforeSteer).toBeUndefined();
       expect(runBeforeSteer.pauseReason, runStateBeforeSteer).toBeUndefined();
       expect(runBeforeSteer.completion?.resultText, runStateBeforeSteer).toBeUndefined();
       console.log(`[subagent-steer] steering active child run; runs=${runStateBeforeSteer}`);
@@ -594,7 +595,7 @@ describeLive("subagent announce live", () => {
         return listSteeredChildRuns().find(
           (run) =>
             run.completion?.resultText?.includes(childToken) === true &&
-            run.outcome?.status === "ok",
+            run.execution.outcome?.status === "ok",
         );
       }).catch((error: unknown) => {
         throw new Error(
@@ -774,7 +775,7 @@ describeLive("subagent announce live", () => {
           runs.some(
             (run) =>
               run.completion?.resultText?.includes(childToken) === true &&
-              run.outcome?.status === "ok",
+              run.execution.outcome?.status === "ok",
           ),
         );
         return completed ? runs : undefined;

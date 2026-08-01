@@ -777,6 +777,137 @@ describe("createOpenClawCodingTools", () => {
     expect(latestCreateOpenClawToolsOptions().sourceReplyDeliveryMode).toBe("message_tool_only");
   });
 
+  it.each([
+    {
+      name: "trusted one-tool completion",
+      trustedInternalHandoff: true,
+      sourceTool: "subagent_announce",
+      sourceReplyDeliveryMode: "message_tool_only" as const,
+      runtimeToolAllowlist: ["message"],
+      expected: true,
+    },
+    {
+      name: "ordinary private reply",
+      trustedInternalHandoff: false,
+      sourceTool: "subagent_announce",
+      sourceReplyDeliveryMode: "message_tool_only" as const,
+      runtimeToolAllowlist: ["message"],
+      expected: false,
+    },
+    {
+      name: "different handoff owner",
+      trustedInternalHandoff: true,
+      sourceTool: "sessions_send",
+      sourceReplyDeliveryMode: "message_tool_only" as const,
+      runtimeToolAllowlist: ["message"],
+      expected: false,
+    },
+    {
+      name: "unverified forged completion flags",
+      trustedInternalHandoff: true,
+      sourceTool: "subagent_announce",
+      sourceReplyDeliveryMode: "message_tool_only" as const,
+      runtimeToolAllowlist: ["message"],
+      verifiedLineage: false,
+      expected: false,
+    },
+    {
+      name: "wider trusted completion",
+      trustedInternalHandoff: true,
+      sourceTool: "subagent_announce",
+      sourceReplyDeliveryMode: "message_tool_only" as const,
+      runtimeToolAllowlist: ["message", "read"],
+      expected: true,
+    },
+    {
+      name: "automatic completion delivery",
+      trustedInternalHandoff: true,
+      sourceTool: "subagent_announce",
+      sourceReplyDeliveryMode: "automatic" as const,
+      runtimeToolAllowlist: ["message"],
+      expected: false,
+    },
+  ])("limits $name to the source only for verified completion delivery", async (testCase) => {
+    const storeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-completion-grant-"));
+    const storeTemplate = path.join(storeDir, "{agentId}", "sessions.json");
+    const requesterSessionKey = "agent:main:discord:direct:alice";
+    const requesterSessionId = "requester-session";
+    const childSessionKey = "agent:main:subagent:child";
+    const childSessionId = "verified-child-session";
+    const modelProvider = "openai";
+    const modelId = "gpt-5.4";
+    const config: OpenClawConfig = { session: { store: storeTemplate } };
+    const inputProvenance = {
+      kind: "inter_session" as const,
+      sourceSessionKey: childSessionKey,
+      sourceTool: testCase.sourceTool,
+    };
+    const trustedInternalHandoff = testCase.trustedInternalHandoff
+      ? {
+          kind: "subagent-completion" as const,
+          sourceSessionKey: childSessionKey,
+          sourceSessionId: childSessionId,
+          targetSessionKey: requesterSessionKey,
+          targetSessionId: requesterSessionId,
+          provider: modelProvider,
+          model: modelId,
+        }
+      : undefined;
+    const verifiedLineage = !("verifiedLineage" in testCase) || testCase.verifiedLineage !== false;
+
+    try {
+      if (verifiedLineage) {
+        await writeSessionStore(storeTemplate, "main", {
+          [childSessionKey]: {
+            sessionId: childSessionId,
+            updatedAt: Date.now(),
+            spawnedBy: requesterSessionKey,
+            spawnDepth: 1,
+            subagentRole: "orchestrator",
+            subagentControlScope: "children",
+            inheritedToolPolicyVersion: 1,
+          },
+        });
+      }
+      const conversationCapabilityProfile = resolveConversationCapabilityProfile({
+        config,
+        agentId: "main",
+        sessionKey: requesterSessionKey,
+        sessionId: requesterSessionId,
+        modelProvider,
+        modelId,
+        runtimeToolAllowlist: testCase.runtimeToolAllowlist,
+        inputProvenance,
+        trustedInternalHandoff,
+      });
+      const isVerifiedHandoff =
+        verifiedLineage &&
+        testCase.trustedInternalHandoff &&
+        testCase.sourceTool === "subagent_announce";
+      expect(conversationCapabilityProfile.policy.requesterPolicySource).toBe(
+        isVerifiedHandoff ? "completion-handoff" : "current-request",
+      );
+
+      vi.mocked(createOpenClawTools).mockClear();
+      createOpenClawCodingTools({
+        config,
+        agentId: "main",
+        sessionKey: requesterSessionKey,
+        sessionId: requesterSessionId,
+        modelProvider,
+        modelId,
+        conversationCapabilityProfile,
+        sourceReplyDeliveryMode: testCase.sourceReplyDeliveryMode,
+        runtimeToolAllowlist: testCase.runtimeToolAllowlist,
+        ...(!verifiedLineage ? { inputProvenance, trustedInternalHandoff } : {}),
+      });
+
+      expect(latestCreateOpenClawToolsOptions().sourceReplyOnly).toBe(testCase.expected);
+    } finally {
+      await fs.rm(storeDir, { recursive: true, force: true });
+    }
+  });
+
   it("passes configured filesystem policy to OpenClaw tool construction", () => {
     const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
     createOpenClawToolsMock.mockClear();

@@ -635,9 +635,21 @@ function normalizePortablePath(filePath) {
   return filePath.replaceAll("\\", "/");
 }
 
-function resolveCachePaths(rootDir, step) {
+function resolveBuildCacheRoot(rootDir, env) {
+  // Dev update preflight and final builds run in separate worktrees. A shared
+  // root lets content signatures decide reuse without relocating built trees.
+  const configuredRoot = env?.BUILD_ALL_CACHE_ROOT?.trim();
+  if (!configuredRoot) {
+    return path.resolve(rootDir, ".artifacts/build-all-cache");
+  }
+  return path.isAbsolute(configuredRoot)
+    ? path.normalize(configuredRoot)
+    : path.resolve(rootDir, configuredRoot);
+}
+
+function resolveCachePaths(rootDir, step, env) {
   const safeLabel = step.label.replace(/[^a-zA-Z0-9._-]+/g, "_");
-  const cacheDir = path.resolve(rootDir, ".artifacts/build-all-cache", safeLabel);
+  const cacheDir = path.join(resolveBuildCacheRoot(rootDir, env), safeLabel);
   return {
     cacheDir,
     outputRoot: path.join(cacheDir, "outputs"),
@@ -703,7 +715,7 @@ export function resolveBuildAllStepCacheState(step, params = {}) {
     step.cache.env ?? [],
     params.env ?? process.env,
   );
-  const { outputRoot, stampPath } = resolveCachePaths(rootDir, step);
+  const { outputRoot, stampPath } = resolveCachePaths(rootDir, step, params.env ?? process.env);
   const stamp = readCacheStamp(stampPath, fsImpl);
   const outputFiles = listCacheFiles(rootDir, step.cache.outputs, fsImpl);
   const relativeOutputFiles = outputFiles.map((file) => portableRelativePath(rootDir, file));

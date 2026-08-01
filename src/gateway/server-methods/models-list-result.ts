@@ -260,9 +260,38 @@ function resolveGatewayModelCatalogRouteKey(entry: ModelCatalogEntry): string {
   );
 }
 
+/** Configured dynamic-catalog providers that omit explicit model inventory. */
+function listConfiguredRuntimeDiscoveryProviderIds(
+  cfg: OpenClawConfig,
+  metadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">,
+): Set<string> {
+  const ids = new Set<string>();
+  const providers = cfg.models?.providers;
+  if (!providers || typeof providers !== "object" || !metadataSnapshot) {
+    return ids;
+  }
+  const dynamicProviders = new Set<string>();
+  for (const plugin of metadataSnapshot.plugins) {
+    for (const [providerRaw, mode] of Object.entries(plugin.modelCatalog?.discovery ?? {})) {
+      const providerId = normalizeProviderId(providerRaw);
+      if (providerId && (mode === "runtime" || mode === "refreshable")) {
+        dynamicProviders.add(providerId);
+      }
+    }
+  }
+  for (const [providerRaw, provider] of Object.entries(providers)) {
+    const providerId = normalizeProviderId(providerRaw);
+    if (providerId && dynamicProviders.has(providerId) && !Array.isArray(provider?.models)) {
+      ids.add(providerId);
+    }
+  }
+  return ids;
+}
+
 function resolveProviderConfigInventoryEntries(params: {
   authoredEntries: readonly ModelCatalogEntry[];
   canonicalEntries: readonly ModelCatalogEntry[];
+  discoveryOnlyProviderIds?: ReadonlySet<string>;
 }): ModelCatalogEntry[] {
   const canonicalByKey = new Map<string, ModelCatalogEntry>();
   for (const entry of params.canonicalEntries) {
@@ -282,6 +311,21 @@ function resolveProviderConfigInventoryEntries(params: {
     // Authored config owns inventory membership. Canonical catalog rows own
     // route metadata; configured logical overrides are applied by the projector.
     inventory.push(canonicalByKey.get(key) ?? authoredEntry);
+  }
+  if (params.discoveryOnlyProviderIds) {
+    // Providers configured without explicit model lists (for example litellm)
+    // surface their key-scoped discovered rows as the configured inventory.
+    for (const canonicalEntry of params.canonicalEntries) {
+      const key = resolveGatewayModelCatalogRouteKey(canonicalEntry);
+      if (seen.has(key)) {
+        continue;
+      }
+      if (!params.discoveryOnlyProviderIds.has(normalizeProviderId(canonicalEntry.provider))) {
+        continue;
+      }
+      seen.add(key);
+      inventory.push(canonicalEntry);
+    }
   }
   return inventory;
 }
@@ -510,6 +554,7 @@ export async function buildModelsListResult(
   };
   let snapshot = await loadPreparedModelCatalogSnapshotForBrowse({
     cfg: initialConfig,
+    agentId: initialAgentId,
     view,
     loadCatalog: async (loadParams) => {
       loadedReadOnly = loadParams.readOnly ?? true;
@@ -531,13 +576,18 @@ export async function buildModelsListResult(
   if (
     loadedSnapshot &&
     loadedReadOnly &&
-    modelCatalogBrowseRequiresFullDiscovery({ cfg: loadedSnapshot.config, view })
+    modelCatalogBrowseRequiresFullDiscovery({
+      cfg: loadedSnapshot.config,
+      agentId: loadedSnapshot.agentId,
+      view,
+    })
   ) {
     const escalationAgentId = loadedSnapshot.agentId;
     let escalationTimedOut = false;
     let fullSnapshot: typeof loadedSnapshot | undefined;
     const escalatedCatalog = await loadPreparedModelCatalogSnapshotForBrowse({
       cfg: loadedSnapshot.config,
+      agentId: escalationAgentId,
       view,
       loadCatalog: async ({ readOnly }) => {
         fullSnapshot = await params.context.loadGatewayModelCatalogSnapshot({
@@ -595,6 +645,10 @@ export async function buildModelsListResult(
       entries: resolveProviderConfigInventoryEntries({
         authoredEntries,
         canonicalEntries: catalog,
+        discoveryOnlyProviderIds: listConfiguredRuntimeDiscoveryProviderIds(
+          sourceConfig,
+          metadataSnapshot,
+        ),
       }),
       routeVariants,
     };

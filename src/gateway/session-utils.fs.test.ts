@@ -12,16 +12,70 @@ import {
 import { withEnv, withEnvAsync } from "../test-utils/env.js";
 import { estimateStringChars, estimateTokensFromChars } from "../utils/cjk-chars.js";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
-import { readSessionTranscriptIndex } from "./session-transcript-index.fs.js";
 import {
+  ArchivedTranscriptReader,
   buildSessionPreviewItems,
   readLatestSessionUsageFromTranscriptAsync,
-  readRecentSessionMessagesAsync,
-  readRecentSessionMessagesWithStatsAsync,
-  readSessionMessagesAsync,
-  readSessionMessagesPageWithStatsAsync,
   resolveSessionTranscriptCandidates,
+  type ReadRecentSessionMessagesOptions,
+  type ReadSessionMessagesAsyncOptions,
 } from "./session-utils.fs.js";
+
+function filesystemReader(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile?: string,
+  agentId?: string,
+) {
+  return new ArchivedTranscriptReader({ sessionId, storePath, sessionFile, agentId });
+}
+
+async function readSessionMessagesAsync(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile: string | undefined,
+  opts: ReadSessionMessagesAsyncOptions,
+  agentId?: string,
+) {
+  return (await filesystemReader(sessionId, storePath, sessionFile, agentId).read(opts)).messages;
+}
+
+async function readRecentSessionMessagesAsync(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile: string | undefined,
+  opts: ReadRecentSessionMessagesOptions,
+  agentId?: string,
+) {
+  return (
+    await filesystemReader(sessionId, storePath, sessionFile, agentId).read({
+      mode: "recent",
+      ...opts,
+    })
+  ).messages;
+}
+
+async function readRecentSessionMessagesWithStatsAsync(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile: string | undefined,
+  opts: ReadRecentSessionMessagesOptions,
+  agentId?: string,
+) {
+  return await filesystemReader(sessionId, storePath, sessionFile, agentId).readRecentWithStats(
+    opts,
+  );
+}
+
+async function readSessionMessagesPageWithStatsAsync(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile: string | undefined,
+  opts: { offset: number; maxMessages: number; allowResetArchiveFallback?: boolean },
+  agentId?: string,
+) {
+  return await filesystemReader(sessionId, storePath, sessionFile, agentId).readPage(opts);
+}
 
 function buildSessionAssistantMessage(text: string, timestamp: number) {
   return {
@@ -279,6 +333,21 @@ describe("readSessionMessages", () => {
     }
   });
 
+  test("returns no recent messages for a zero-sized page while preserving the total", async () => {
+    const sessionId = "test-session-recent-zero";
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      { message: { role: "user", content: "old" } },
+      { message: { role: "assistant", content: "latest" } },
+    ]);
+
+    await expect(
+      readRecentSessionMessagesWithStatsAsync(sessionId, storePath, undefined, {
+        maxMessages: 0,
+      }),
+    ).resolves.toMatchObject({ messages: [], totalMessages: 2 });
+  });
+
   test("forwards the outer JSONL record timestamp to __openclaw.recordTimestampMs (#85648)", async () => {
     const sessionId = "test-session-record-timestamp";
     const t1 = "2026-05-16T16:00:31.000Z";
@@ -389,29 +458,6 @@ describe("readSessionMessages", () => {
       sessionManagerOpenSpy.mockRestore();
       readFileSpy.mockRestore();
     }
-  });
-
-  test("supports file-wide identity lookup without exposing side branches to history", async () => {
-    const sessionId = "test-session-index-views";
-    const transcriptPath = writeTranscript(tmpDir, sessionId, [
-      { type: "session", version: 3, id: sessionId },
-      createTranscriptMessage("root", null, "user", "root"),
-      createTranscriptMessage("side-assistant", "root", "assistant", "side", {
-        message: { idempotencyKey: "side-idempotency" },
-      }),
-      createTranscriptMessage("active-assistant", "root", "assistant", "active"),
-      { type: "leaf", id: "active-leaf", parentId: "side-assistant", targetId: "active-assistant" },
-    ]);
-
-    const activeIndex = await readSessionTranscriptIndex(transcriptPath);
-    const allIndex = await readSessionTranscriptIndex(transcriptPath, { view: "all" });
-
-    expect(activeIndex?.entries.map((entry) => entry.id)).toEqual(["root", "active-assistant"]);
-    expect(allIndex?.entries.map((entry) => entry.id)).toEqual([
-      "root",
-      "side-assistant",
-      "active-assistant",
-    ]);
   });
 
   test("applies reset kept-tail projection to file-backed history", async () => {
@@ -703,6 +749,39 @@ describe("readSessionMessages", () => {
     expect(recent).toEqual({ messages: [], totalMessages: 0 });
   });
 
+  test("revalidates a custom archive header after same-path replacement", async () => {
+    const sessionId = "00000000-0000-4000-8000-00000000000a";
+    const previousSessionId = "00000000-0000-4000-8000-00000000000b";
+    const sessionFile = "shared-topic-replaced.jsonl";
+    const archivePath = writeResetArchive(
+      tmpDir,
+      "shared-topic-replaced",
+      "2026-02-16T22-26-36.000Z",
+      [
+        { type: "session", version: 1, id: sessionId },
+        { message: { role: "assistant", content: "matching archive" } },
+      ],
+    );
+    const read = () =>
+      readSessionMessagesAsync(sessionId, storePath, sessionFile, {
+        mode: "full",
+        reason: "same-path archive replacement test",
+        allowResetArchiveFallback: true,
+      });
+
+    await expect(read()).resolves.toHaveLength(1);
+    fs.writeFileSync(
+      archivePath,
+      [
+        { type: "session", version: 1, id: previousSessionId },
+        { message: { role: "assistant", content: "replaced archive" } },
+      ]
+        .map((line) => JSON.stringify(line))
+        .join("\n"),
+    );
+    await expect(read()).resolves.toEqual([]);
+  });
+
   test("uses the newest custom reset archive whose header matches the session", async () => {
     const sessionId = "00000000-0000-4000-8000-000000000008";
     const previousSessionId = "00000000-0000-4000-8000-000000000009";
@@ -778,16 +857,18 @@ describe("readSessionMessages", () => {
 
   test("caches async transcript indexes by file stats", async () => {
     const sessionId = "test-session-index-cache";
-    const transcriptPath = writeTranscript(tmpDir, sessionId, [
+    writeTranscript(tmpDir, sessionId, [
       { type: "session", version: 1, id: sessionId },
       { message: { role: "user", content: "hello" } },
       { message: { role: "assistant", content: "hi" } },
     ]);
-    expect((await readSessionTranscriptIndex(transcriptPath))?.entries).toHaveLength(2);
+    const read = () =>
+      filesystemReader(sessionId, storePath).read({ mode: "full", reason: "index cache test" });
+    expect((await read()).messages).toHaveLength(2);
 
-    const openSpy = vi.spyOn(fs.promises, "open");
+    const openSpy = vi.spyOn(fs, "createReadStream");
     try {
-      expect((await readSessionTranscriptIndex(transcriptPath))?.entries).toHaveLength(2);
+      expect((await read()).messages).toHaveLength(2);
       expect(openSpy).not.toHaveBeenCalled();
     } finally {
       openSpy.mockRestore();
@@ -796,18 +877,23 @@ describe("readSessionMessages", () => {
 
   test("shares concurrent async transcript index builds", async () => {
     const sessionId = "test-session-index-cache-concurrent";
-    const transcriptPath = writeTranscript(tmpDir, sessionId, [
+    writeTranscript(tmpDir, sessionId, [
       { type: "session", version: 1, id: sessionId },
       { message: { role: "user", content: "hello" } },
       { message: { role: "assistant", content: "hi" } },
     ]);
 
-    const openSpy = vi.spyOn(fs.promises, "open");
+    const openSpy = vi.spyOn(fs, "createReadStream");
     try {
-      const indexes = await Promise.all(
-        Array.from({ length: 8 }, () => readSessionTranscriptIndex(transcriptPath)),
+      const snapshots = await Promise.all(
+        Array.from({ length: 8 }, () =>
+          filesystemReader(sessionId, storePath).read({
+            mode: "full",
+            reason: "concurrent index cache test",
+          }),
+        ),
       );
-      expect(indexes.map((index) => index?.entries.length)).toEqual(
+      expect(snapshots.map((snapshot) => snapshot.messages.length)).toEqual(
         Array.from({ length: 8 }, () => 2),
       );
       expect(openSpy).toHaveBeenCalledTimes(1);

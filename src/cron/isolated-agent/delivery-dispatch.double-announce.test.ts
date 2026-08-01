@@ -214,6 +214,7 @@ function makeBaseParams(overrides: {
   runStartedAt?: number;
   sessionTarget?: string;
   deliveryBestEffort?: boolean;
+  spawnOnlyHandoff?: boolean;
   runSessionKey?: string;
   resolvedDeliveryMode?: "explicit" | "implicit";
 }): Parameters<typeof dispatchCronDelivery>[0] {
@@ -245,6 +246,7 @@ function makeBaseParams(overrides: {
     resolvedDelivery,
     deliveryRequested: overrides.deliveryRequested ?? true,
     skipHeartbeatDelivery: false,
+    spawnOnlyHandoff: overrides.spawnOnlyHandoff ?? false,
     sourceDeliveryOutcome: {
       visibleDeliveries: [],
       verifiedMessageToolDelivery: false,
@@ -1099,6 +1101,169 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       payloads: [{ text: "Detailed child result, everything finished successfully." }],
       deliveryIntentId: expect.stringContaining("cron-direct-delivery:v1:"),
     });
+  });
+
+  it.each([
+    {
+      name: "active direct",
+      activeDescendants: true,
+      threadId: undefined,
+      deliveryBestEffort: false,
+    },
+    {
+      name: "active threaded",
+      activeDescendants: true,
+      threadId: "42",
+      deliveryBestEffort: false,
+    },
+    {
+      name: "completed direct",
+      activeDescendants: false,
+      threadId: undefined,
+      deliveryBestEffort: false,
+    },
+    {
+      name: "completed threaded",
+      activeDescendants: false,
+      threadId: "42",
+      deliveryBestEffort: false,
+    },
+    {
+      name: "active best-effort direct",
+      activeDescendants: true,
+      threadId: undefined,
+      deliveryBestEffort: true,
+    },
+  ])(
+    "delivers $name accepted child results without parent text",
+    async ({ activeDescendants, deliveryBestEffort, threadId }) => {
+      const childReply = "Completed child result visible to the user.";
+      if (activeDescendants) {
+        vi.mocked(countActiveDescendantRuns).mockReturnValueOnce(1).mockReturnValueOnce(0);
+      } else {
+        vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+      }
+      vi.mocked(waitForDescendantSubagentSummary).mockResolvedValue(undefined);
+      vi.mocked(readDescendantSubagentFallbackReply).mockResolvedValue(childReply);
+
+      const params = makeBaseParams({
+        spawnOnlyHandoff: true,
+        deliveryBestEffort,
+        synthesizedText: "",
+      });
+      params.synthesizedText = undefined;
+      params.deliveryPayloads = [];
+      params.summary = undefined;
+      params.outputText = undefined;
+      params.resolvedDelivery = makeResolvedDelivery({ threadId });
+
+      const state = await dispatchCronDelivery(params);
+
+      expect(waitForDescendantSubagentSummary).toHaveBeenCalledTimes(activeDescendants ? 1 : 0);
+      expect(readDescendantSubagentFallbackReply).toHaveBeenCalledWith({
+        sessionKey: params.runSessionKey,
+        runStartedAt: params.runStartedAt,
+      });
+      expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+      expectDeliveryCall(0, {
+        channel: "telegram",
+        to: "123456",
+        ...(threadId === undefined ? {} : { threadId }),
+        payloads: [{ text: childReply }],
+      });
+      expect(state.delivered).toBe(true);
+      expect(state.deliveryAttempted).toBe(true);
+    },
+  );
+
+  it("preserves a substantive parent synthesis after an accepted child has completed", async () => {
+    const parentReply = "Combined parent summary already includes every child result.";
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+
+    const state = await dispatchCronDelivery(
+      makeBaseParams({ spawnOnlyHandoff: false, synthesizedText: parentReply }),
+    );
+
+    expect(readDescendantSubagentFallbackReply).not.toHaveBeenCalled();
+    expectDeliveryCall(0, { payloads: [{ text: parentReply }] });
+    expect(state.delivered).toBe(true);
+  });
+
+  it("immediately delivers a substantive threaded parent while its accepted child runs", async () => {
+    const parentReply = "Parent summary is ready for the existing thread.";
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(1);
+    const params = makeBaseParams({ spawnOnlyHandoff: false, synthesizedText: parentReply });
+    params.resolvedDelivery = makeResolvedDelivery({ threadId: "42" });
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(waitForDescendantSubagentSummary).not.toHaveBeenCalled();
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expectDeliveryCall(0, { threadId: "42", payloads: [{ text: parentReply }] });
+    expect(state.delivered).toBe(true);
+  });
+
+  it.each([
+    {
+      name: "active child times out",
+      activeDescendants: 1,
+      error: "cron child-session handoff timed out before producing a final assistant payload",
+    },
+    {
+      name: "completed child has no output",
+      activeDescendants: 0,
+      error: "cron child-session handoff completed without a final assistant payload",
+    },
+  ])("fails an accepted spawn-only handoff when $name", async ({ activeDescendants, error }) => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(activeDescendants);
+    const params = makeBaseParams({ spawnOnlyHandoff: true, synthesizedText: "" });
+    params.synthesizedText = undefined;
+    params.deliveryPayloads = [];
+    params.summary = undefined;
+    params.outputText = undefined;
+
+    const state = await dispatchCronDelivery(params);
+
+    expectResultFields(state.result, {
+      status: "error",
+      error,
+      delivered: false,
+      deliveryAttempted: true,
+    });
+    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+  });
+
+  it("preserves abort precedence when an accepted child handoff is interrupted", async () => {
+    const abortReason = "scheduled run aborted while waiting for its child";
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(1);
+    const params = makeBaseParams({ spawnOnlyHandoff: true, synthesizedText: "" });
+    params.synthesizedText = undefined;
+    params.deliveryPayloads = [];
+    params.summary = undefined;
+    params.outputText = undefined;
+    params.isAborted = () => true;
+    params.abortReason = () => abortReason;
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(waitForDescendantSubagentSummary).toHaveBeenCalledTimes(1);
+    expectResultFields(state.result, { status: "error", error: abortReason });
+    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+  });
+
+  it("keeps an empty no-spawn parent silent", async () => {
+    const params = makeBaseParams({ synthesizedText: "" });
+    params.synthesizedText = undefined;
+    params.deliveryPayloads = [];
+    params.summary = undefined;
+    params.outputText = undefined;
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(waitForDescendantSubagentSummary).not.toHaveBeenCalled();
+    expect(readDescendantSubagentFallbackReply).not.toHaveBeenCalled();
+    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(state.deliveryAttempted).toBe(false);
   });
 
   it("uses the run-scoped session key for isolated cron descendant fallback delivery", async () => {

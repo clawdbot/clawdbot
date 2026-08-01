@@ -179,7 +179,11 @@ export async function resolveOutboundDurableFinalDeliverySupport(params: {
     }
   }
 
-  return { ok: true };
+  return {
+    ok: true,
+    automaticUnknownSendReconciliation:
+      messageDurableFinal?.automaticUnknownSendReconciliation === true,
+  };
 }
 
 function createPluginHandler(
@@ -235,6 +239,7 @@ function createPluginHandler(
     threadId: overrides && "threadId" in overrides ? overrides.threadId : baseCtx.threadId,
     audioAsVoice: overrides?.audioAsVoice,
     deliveryPartIndex: overrides?.deliveryPartIndex,
+    deliveryPartCount: overrides?.deliveryPartCount,
     preparedMessageId:
       overrides?.deliveryPartIndex === undefined || overrides.deliveryPartIndex === 0
         ? baseCtx.preparedMessageId

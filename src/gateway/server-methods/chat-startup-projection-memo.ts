@@ -112,7 +112,13 @@ async function buildChatStartupMetadataResult(params: {
   if (!params.modelCatalog) {
     return undefined;
   }
-  if (modelCatalogBrowseRequiresFullDiscovery({ cfg: params.cfg, view: "configured" })) {
+  if (
+    modelCatalogBrowseRequiresFullDiscovery({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      view: "configured",
+    })
+  ) {
     return undefined;
   }
   try {

@@ -172,7 +172,7 @@ export async function readOllamaModelShowInfo(
     init: {
       method: "POST",
       headers,
-      body: JSON.stringify({ name: modelName }),
+      body: JSON.stringify({ model: modelName }),
     },
     // Guard-owned timeoutMs also bounds DNS/proxy preflight; init.signal does not.
     timeoutMs: Math.min(opts?.timeoutMs ?? OLLAMA_SHOW_TIMEOUT_MS, OLLAMA_SHOW_TIMEOUT_MS),

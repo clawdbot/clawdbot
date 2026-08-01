@@ -80,6 +80,13 @@ describe("bundled plugin build entries", () => {
     expect(artifacts).toContain("dist/extensions/codex/cli-metadata.js");
   });
 
+  it("builds narrow QA runner public surfaces", () => {
+    const entries = listBundledPluginBuildEntries();
+
+    expect(entries["extensions/buzz/qa-runner-api"]).toBe("extensions/buzz/qa-runner-api.ts");
+    expect(entries["extensions/msteams/qa-runner-api"]).toBe("extensions/msteams/qa-runner-api.ts");
+  });
+
   it("filters bundled plugin build entries for bounded script lanes", () => {
     const entries = listBundledPluginBuildEntries({
       env: {
@@ -349,6 +356,7 @@ describe("bundled plugin build entries", () => {
       "mistral",
       "novita",
       "opencode",
+      "opencode-go",
       "xiaomi",
     ]) {
       expect(artifacts).not.toContain(`dist/extensions/${pluginId}/index.js`);
@@ -411,6 +419,14 @@ describe("bundled plugin build entries", () => {
     expect(artifacts).not.toContain("dist/extensions/volcengine/index.js");
     expect(artifacts).not.toContain("dist/extensions/volcengine/openclaw.plugin.json");
     expect(artifacts).not.toContain("dist/extensions/volcengine/package.json");
+  });
+
+  it("excludes the externalized iMessage channel from bundled artifacts", () => {
+    const entries = listBundledPluginBuildEntries();
+    const artifacts = listBundledPluginPackArtifacts();
+
+    expectNoPrefixMatches(Object.keys(entries), "extensions/imessage/");
+    expectNoPrefixMatches(artifacts, "dist/extensions/imessage/");
   });
 
   it("keeps bundled channel secret contracts on packed top-level sidecars", () => {

@@ -588,39 +588,31 @@ describe("ensureSandboxContainer config-hash recreation", () => {
     expect(customMountIdx).toBeGreaterThan(workspaceMountIdx);
   });
 
-  it("applies read-only skill overlays after custom binds", async () => {
-    // Protected skill overlays must be appended last so even an overlapping
-    // custom bind cannot make checked-in skills writable.
-    const workspaceDir = makeTempDir();
-    const customRoot = makeTempDir();
-    fs.mkdirSync(path.join(workspaceDir, "skills", "demo"), { recursive: true });
-    fs.mkdirSync(customRoot, { recursive: true });
-    const cfg = createSandboxConfig([], [`${customRoot}:/workspace/skills:rw`]);
-    cfg.docker.dangerouslyAllowExternalBindSources = true;
+  it.each(["docker", "podman"] as const)(
+    "skips user binds that conflict with protected skill overlays for %s",
+    async (backend) => {
+      // The protected overlay remains authoritative for both engines, avoiding
+      // duplicate mount rejection without making checked-in skills writable.
+      const workspaceDir = makeTempDir();
+      const customRoot = makeTempDir();
+      fs.mkdirSync(path.join(workspaceDir, "skills", "demo"), { recursive: true });
+      const customMount = `${customRoot}:/workspace/skills:rw`;
+      const cfg = createSandboxConfig([], [customMount]);
+      cfg.backend = backend;
+      cfg.docker.workdir = "/workspace/.";
+      cfg.docker.dangerouslyAllowExternalBindSources = true;
+      spawnState.inspectRunning = false;
+      registryMocks.readRegistryEntry.mockResolvedValue(null);
 
-    spawnState.inspectRunning = false;
-    spawnState.labelHash = "stale-hash";
-    registryMocks.readRegistryEntry.mockResolvedValue({
-      containerName: "oc-test-shared",
-      sessionKey: "shared",
-      createdAtMs: 1,
-      lastUsedAtMs: 0,
-      image: cfg.docker.image,
-      configHash: "stale-hash",
-    });
+      const engine = backend === "podman" ? PODMAN_SANDBOX_ENGINE : undefined;
+      const createCall = await ensureSandboxCreateCallForTest({ cfg, workspaceDir, engine });
+      const bindArgs = collectDockerFlagValues(createCall.args, "-v");
 
-    const createCall = await ensureSandboxCreateCallForTest({ cfg, workspaceDir });
-    const bindArgs = collectDockerFlagValues(createCall.args, "-v");
-    const workspaceMountIdx = bindArgs.indexOf(`${workspaceDir}:/workspace:z`);
-    const customMountIdx = bindArgs.indexOf(`${customRoot}:/workspace/skills:rw`);
-    const protectedMountIdx = bindArgs.indexOf(
-      `${path.join(workspaceDir, "skills")}:/workspace/skills:ro,z`,
-    );
-
-    expect(workspaceMountIdx).toBeGreaterThanOrEqual(0);
-    expect(customMountIdx).toBeGreaterThan(workspaceMountIdx);
-    expect(protectedMountIdx).toBeGreaterThan(customMountIdx);
-  });
+      expect(createCall.command).toBe(backend);
+      expect(bindArgs).not.toContain(customMount);
+      expect(bindArgs).toContain(`${path.join(workspaceDir, "skills")}:/workspace/./skills:ro,z`);
+    },
+  );
 
   it.each([
     { workspaceAccess: "rw" as const, expectedMainMount: "/tmp/workspace:/workspace:z" },

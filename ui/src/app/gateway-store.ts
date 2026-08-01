@@ -94,7 +94,7 @@ export function createApplicationGateway(
   let canvasSurfaceLeaseClient: GatewayBrowserClient | null = null;
   let canvasSurfaceLeaseStarted = false;
   let canvasSurfaceLeaseGeneration = 0;
-  // Session lineage for this page lifetime: once a hello succeeded, later
+  // Session lineage belongs to the selected Gateway: once its hello succeeds,
   // transport drops render as "reconnecting" (shell + banner) instead of
   // kicking the operator back to the login gate.
   let everConnected = false;
@@ -235,6 +235,7 @@ export function createApplicationGateway(
     settings = patchSettings(patch, { selectGateway });
   };
   const recordGatewayEvent = (event: Parameters<GatewayEventListener>[0]) => {
+    const eventClient = client;
     if (event.event === "presence") {
       const entries = readPresenceEntries(event.payload);
       if (entries) {
@@ -242,7 +243,6 @@ export function createApplicationGateway(
         // A live connection owns its authenticated identity until onClose. Older
         // gateways can omit still-connected clients after presence TTL pruning.
         if (selfUser && !sameSelfUser(snapshot.selfUser, selfUser)) {
-          const eventClient = client;
           setSnapshot({ ...snapshot, selfUser });
           // A presence observer can replace its client before this event reaches the log.
           if (!isCurrentClient(eventClient)) {
@@ -255,7 +255,9 @@ export function createApplicationGateway(
       0,
       250,
     );
-    notifyGatewayObservers(eventLogListeners, eventLog, "event");
+    const ownsEventLog = (current: readonly EventLogEntry[]) =>
+      current === eventLog && isCurrentClient(eventClient);
+    notifyGatewayObservers(eventLogListeners, eventLog, "event", ownsEventLog);
   };
 
   const connect = (overrides: ApplicationGatewayConnectOptions = {}) => {
@@ -273,6 +275,10 @@ export function createApplicationGateway(
     const gatewayUrlChanged =
       connectionOverrides.gatewayUrl !== undefined &&
       connectionOverrides.gatewayUrl !== connection.gatewayUrl;
+    // A different Gateway has no established session to keep mounted on failure.
+    if (gatewayUrlChanged) {
+      everConnected = false;
+    }
     connection = nextConnection;
     // Trust the connected gateway's origin for avatar route resolution so
     // split-origin Control UI deployments load uploaded/proxied avatars.

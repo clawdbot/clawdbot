@@ -191,6 +191,7 @@ function createTestContext(): {
       replayState: { replayInvalid: false, hadPotentialSideEffects: false },
       messagingToolSentTexts: [],
       messagingToolSentTextsNormalized: [],
+      currentSourceMessagingToolSentTextsNormalized: [],
       messagingToolSentMediaUrls: [],
       messagingToolSourceReplyPayloads: [],
       messageToolOnlySourceReplyDelivered: false,
@@ -1633,6 +1634,43 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
     ]);
   });
 
+  it("records preview suppression text only for confirmed current-source sends", async () => {
+    const { ctx } = createTestContext();
+    ctx.params.sourceReplyDeliveryMode = "automatic";
+
+    await executeTool(ctx, {
+      toolName: "message",
+      toolCallId: "tool-message-other-route",
+      args: {
+        action: "send",
+        provider: "telegram",
+        to: "chat-other",
+        text: "Other route text",
+      },
+      isError: false,
+      result: { details: { ok: true } },
+    });
+    await executeTool(ctx, {
+      toolName: "message",
+      toolCallId: "tool-message-current-source",
+      args: {
+        action: "send",
+        provider: "telegram",
+        to: "chat-source",
+        text: "QA-MSTEAMS-DM-OK",
+      },
+      isError: false,
+      result: {
+        details: {
+          ok: true,
+          sourceReplyRoute: "current-source",
+        },
+      },
+    });
+
+    expect(ctx.state.currentSourceMessagingToolSentTextsNormalized).toEqual(["qa-msteams-dm-ok"]);
+  });
+
   it("records rich-content delivery when visible text is blank", async () => {
     const { ctx } = createTestContext();
     const toolCallId = "tool-message-rich-content";
@@ -1689,6 +1727,93 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
         to: "chat-reply",
       }),
     ]);
+  });
+
+  it.each([
+    {
+      name: "reply",
+      args: {
+        action: "reply",
+        provider: "telegram",
+        target: "chat-reply",
+        message: "Visible reply",
+      },
+      result: {
+        ok: true,
+        messageId: "message-reply",
+        details: { sourceReplyRoute: "current-source" },
+      },
+      expected: "visible reply",
+    },
+    {
+      name: "poll",
+      args: {
+        action: "poll",
+        provider: "telegram",
+        target: "chat-poll",
+        pollQuestion: "Preferred default?",
+        pollOption: ["Tell me right away", "Only important"],
+      },
+      result: {
+        ok: true,
+        pollId: "poll-1",
+        details: { sourceReplyRoute: "current-source" },
+      },
+      expected: "preferred default?",
+    },
+  ])("records confirmed current-source $name text for preview dedupe", async (testCase) => {
+    const { ctx } = createTestContext();
+    ctx.params.sourceReplyDeliveryMode = "automatic";
+
+    await executeTool(ctx, {
+      toolName: "message",
+      toolCallId: `tool-message-current-source-${testCase.name}`,
+      args: testCase.args,
+      isError: false,
+      result: testCase.result,
+    });
+
+    expect(ctx.state.currentSourceMessagingToolSentTextsNormalized).toEqual([testCase.expected]);
+    expect(ctx.state.messageToolOnlySourceReplyDelivered).toBe(true);
+    expect(ctx.state.messagingToolSentTexts).toEqual([]);
+  });
+
+  it.each([
+    {
+      name: "reply",
+      args: {
+        action: "reply",
+        provider: "telegram",
+        target: "chat-reply",
+        message: "Visible reply",
+      },
+      result: { ok: true, messageId: "message-reply" },
+    },
+    {
+      name: "poll",
+      args: {
+        action: "poll",
+        provider: "telegram",
+        target: "chat-poll",
+        pollQuestion: "Preferred default?",
+        pollOption: ["Tell me right away", "Only important"],
+      },
+      result: { ok: true, pollId: "poll-1" },
+    },
+  ])("does not record off-route $name text for preview dedupe", async (testCase) => {
+    const { ctx } = createTestContext();
+    ctx.params.sourceReplyDeliveryMode = "automatic";
+
+    await executeTool(ctx, {
+      toolName: "message",
+      toolCallId: `tool-message-off-route-${testCase.name}`,
+      args: testCase.args,
+      isError: false,
+      result: testCase.result,
+    });
+
+    expect(ctx.state.currentSourceMessagingToolSentTextsNormalized).toEqual([]);
+    expect(ctx.state.messageToolOnlySourceReplyDelivered).toBe(false);
   });
 
   it("records conversation creation target evidence", async () => {

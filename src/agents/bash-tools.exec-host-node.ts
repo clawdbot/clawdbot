@@ -18,7 +18,7 @@ import {
   defaultExecAutoReviewer,
   resolveExecAutoReviewDecision,
 } from "../infra/exec-auto-review.js";
-import { tail } from "./bash-process-registry.js";
+import { formatExecApprovalContinuationSourceOutput } from "./bash-tools.exec-approval-output.js";
 import {
   buildExecApprovalRequesterContext,
   buildExecApprovalTurnSourceContext,
@@ -36,11 +36,7 @@ import {
 } from "./bash-tools.exec-host-node-phases.js";
 import type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
 import * as execHostShared from "./bash-tools.exec-host-shared.js";
-import {
-  DEFAULT_NOTIFY_TAIL_CHARS,
-  createApprovalSlug,
-  normalizeNotifyOutput,
-} from "./bash-tools.exec-runtime.js";
+import { createApprovalSlug } from "./bash-tools.exec-runtime.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import { abortable } from "./embedded-agent-runner/run/abortable.js";
 import type { AgentToolResult } from "./runtime/index.js";
@@ -614,10 +610,11 @@ export async function executeNodeHostCommand(
                     timedOut?: boolean;
                   })
                 : {};
-            const combined = [payload.stdout, payload.stderr, payload.error]
-              .filter(Boolean)
-              .join("\n");
-            const output = normalizeNotifyOutput(tail(combined, DEFAULT_NOTIFY_TAIL_CHARS));
+            const output = formatExecApprovalContinuationSourceOutput([
+              { label: "stdout", value: payload.stdout },
+              { label: "stderr", value: payload.stderr },
+              { label: "error", value: payload.error },
+            ]);
             const exitLabel = payload.timedOut ? "timeout" : `code ${payload.exitCode ?? "?"}`;
             const summary = output
               ? `Exec finished (node=${target.nodeId} id=${approvalId}, ${exitLabel})\n${output}`
