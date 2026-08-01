@@ -44,12 +44,7 @@ import { editorTheme, theme } from "./theme/theme.js";
 import type { TuiBackend } from "./tui-backend.js";
 import { createCommandHandlers } from "./tui-command-handlers.js";
 import { createEventHandlers } from "./tui-event-handlers.js";
-import {
-  formatGoalFooter,
-  formatModelFooter,
-  formatTuiErrorMessage,
-  formatTokens,
-} from "./tui-formatters.js";
+import { formatTuiFooter, formatTuiErrorMessage } from "./tui-formatters.js";
 import {
   buildTuiLastSessionScopeKey,
   readTuiLastSessionKey,
@@ -1229,35 +1224,18 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       ? `${sessionKeyLabel} (${state.sessionInfo.displayName})`
       : sessionKeyLabel;
     const agentLabel = formatAgentLabel(state.currentAgentId);
-    const modelLabel = formatModelFooter({
-      model: state.sessionInfo.model,
-      thinkingLevel: thinkingLevelOverride ?? state.sessionInfo.thinkingLevel,
-    });
-    const tokens = formatTokens(
-      state.sessionInfo.totalTokens ?? null,
-      state.sessionInfo.contextTokens ?? null,
+    footer.setText(
+      theme.dim(
+        formatTuiFooter({
+          agentLabel,
+          sessionLabel,
+          sessionInfo: state.sessionInfo,
+          thinkingLevel: thinkingLevelOverride ?? state.sessionInfo.thinkingLevel,
+          // Delivery is fixed at launch; session switches and patches cannot change it.
+          deliver: deliverDefault,
+        }),
+      ),
     );
-    const fastLabel =
-      state.sessionInfo.fastMode === "auto"
-        ? "fast:auto"
-        : state.sessionInfo.fastMode === true
-          ? "fast"
-          : null;
-    const verbose = state.sessionInfo.verboseLevel ?? "off";
-    const reasoning = state.sessionInfo.reasoningLevel ?? "off";
-    const reasoningLabel =
-      reasoning === "on" ? "reasoning" : reasoning === "stream" ? "reasoning:stream" : null;
-    const footerParts = [
-      `agent ${agentLabel}`,
-      `session ${sessionLabel}`,
-      modelLabel,
-      formatGoalFooter(state.sessionInfo.goal),
-      fastLabel,
-      verbose !== "off" ? `verbose ${verbose}` : null,
-      reasoningLabel,
-      tokens,
-    ].filter(Boolean);
-    footer.setText(theme.dim(footerParts.join(" | ")));
   };
 
   const { openOverlay, closeOverlay } = createOverlayHandlers(tui, editor);
