@@ -675,7 +675,10 @@ describe("gatherDaemonStatus", () => {
     expect(serviceIsLoaded).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 100 }));
     expect(serviceReadRuntime).toHaveBeenCalledWith(expect.any(Object), { timeoutMs: 100 });
     expect(status.service.loaded).toBe(false);
-    expect(status.service.runtime).toBeUndefined();
+    expect(status.service.runtime).toEqual({
+      status: "unknown",
+      detail: "Error: systemctl show timed out",
+    });
 
     const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
     try {
@@ -688,10 +691,25 @@ describe("gatherDaemonStatus", () => {
       expect(JSON.parse(serialized)).toMatchObject({
         service: {
           loaded: false,
+          runtime: {
+            status: "unknown",
+            detail: "Error: systemctl show timed out",
+          },
         },
       });
     } finally {
       writeJson.mockRestore();
+    }
+
+    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    try {
+      printDaemonStatus(status, { json: false, deep: true });
+      const output = log.mock.calls.flat().join("\n");
+      expect(output).toContain("Runtime: unknown (Error: systemctl show timed out)");
+    } finally {
+      log.mockRestore();
+      error.mockRestore();
     }
   }, 1_000);
 
