@@ -454,17 +454,15 @@ export async function pruneImportedSourceEntries(params: {
     }
     // Recover durable Notes before removing an imported source page. The root
     // handle applies containment and no-follow checks to each operation.
-    let notesBlock: string | null = null;
-    let pageAlreadyRemoved = false;
+    let pageContent: string | undefined;
     try {
-      const pageContent = await readImportedSourcePageForNotes(vault, entry.pagePath);
-      notesBlock = extractHumanNotesBlock(pageContent);
+      pageContent = await readImportedSourcePageForNotes(vault, entry.pagePath);
     } catch (error) {
       if (!(error instanceof FsSafeError && error.code === "not-found")) {
         continue;
       }
-      pageAlreadyRemoved = true;
     }
+    const notesBlock = pageContent === undefined ? null : extractHumanNotesBlock(pageContent);
     if (notesBlock) {
       const salvageStem = entry.pagePath.replace(/\//g, "_");
       const contentHash = createHash("sha256").update(notesBlock).digest("hex").slice(0, 16);
@@ -501,7 +499,7 @@ export async function pruneImportedSourceEntries(params: {
         continue;
       }
     }
-    if (!pageAlreadyRemoved) {
+    if (pageContent !== undefined) {
       try {
         await vault.remove(entry.pagePath);
       } catch (error) {

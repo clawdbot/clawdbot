@@ -3309,7 +3309,7 @@ describe("qa mock openai server", () => {
     expect(outputText(await final.json())).toBe("subagent-1: ok\nsubagent-2: ok");
   });
 
-  it("completes subagent fanout from a continuation turn without tool output", async () => {
+  it("replays completed subagent fanout on requester-settle continuation turns", async () => {
     const server = await startMockServer();
 
     const prompt =
@@ -3354,6 +3354,43 @@ describe("qa mock openai server", () => {
     });
     expect(phaseOnlyFinal.status).toBe(200);
     expect(outputText(await phaseOnlyFinal.json())).toBe("subagent-1: ok\nsubagent-2: ok");
+
+    const settledContinuation = await postResponses(server, {
+      stream: false,
+      tools: [SESSIONS_SPAWN_TOOL],
+      input: [
+        makeUserInput(prompt),
+        makeUserInput(
+          "[Inter-session message]\nALPHA-OK\nBETA-OK\nAll spawned subagents have settled. Resume the parent turn and report both results together.",
+        ),
+      ],
+    });
+    expect(settledContinuation.status).toBe(200);
+    const settledPayload = await settledContinuation.json();
+    expect(outputText(settledPayload)).toBe("subagent-1: ok\nsubagent-2: ok");
+    expect(outputItems(settledPayload)).not.toContainEqual(
+      expect.objectContaining({ type: "function_call", name: "sessions_spawn" }),
+    );
+
+    const unrelatedContinuation = await postResponses(server, {
+      stream: false,
+      tools: [SESSIONS_SPAWN_TOOL],
+      input: [makeUserInput("Continue with an unrelated conversation.")],
+    });
+    expect(unrelatedContinuation.status).toBe(200);
+    expect(outputText(await unrelatedContinuation.json())).not.toBe(
+      "subagent-1: ok\nsubagent-2: ok",
+    );
+
+    const restartedFanout = await postResponses(server, {
+      stream: false,
+      tools: [SESSIONS_SPAWN_TOOL],
+      input: [makeUserInput(prompt)],
+    });
+    expect(restartedFanout.status).toBe(200);
+    expect(
+      outputToolArgsFromItem(outputToolCall(await restartedFanout.json(), "sessions_spawn")),
+    ).toEqual(expect.objectContaining({ label: "qa-fanout-alpha" }));
   });
 
   it("completes subagent fanout when beta completion arrives on a generic follow-up turn", async () => {

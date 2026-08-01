@@ -1477,6 +1477,10 @@ async function buildResponsesPayload(
     scenarioState.subagentFanoutPhase = 0;
     scenarioState.subagentFanoutCompletedWorkers.clear();
   }
+  // A later requester-settle wake must replay the completed synthesis without spawning again.
+  if (isSubagentFanoutPrompt && scenarioState.subagentFanoutPhase === 3) {
+    return buildAssistantEvents("subagent-1: ok\nsubagent-2: ok");
+  }
   if (canCallSessionsSpawn && isSubagentFanoutPrompt) {
     if (!toolOutput && scenarioState.subagentFanoutPhase === 0) {
       scenarioState.subagentFanoutPhase = 1;

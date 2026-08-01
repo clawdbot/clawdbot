@@ -35,7 +35,7 @@ import {
   type LoadInstalledPluginIndexParams,
   type RefreshInstalledPluginIndexParams,
 } from "./installed-plugin-index.js";
-import { loadPluginManifestRegistry } from "./manifest-registry.js";
+import { loadPluginManifestRegistry, type PluginManifestRegistry } from "./manifest-registry.js";
 import { getPackageManifestMetadata, type PackageManifest } from "./manifest.js";
 import { safeRealpathSync } from "./path-safety.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
@@ -61,6 +61,7 @@ type PluginRegistrySnapshotResult = {
   source: PluginRegistrySnapshotSource;
   diagnostics: readonly PluginRegistrySnapshotDiagnostic[];
   discovery?: PluginDiscoveryResult;
+  manifestRegistry?: PluginManifestRegistry;
 };
 
 const REGISTRY_SNAPSHOT_MEMO_ENV_KEYS = [
@@ -189,7 +190,6 @@ function loadCurrentPluginRegistrySnapshotResult(
     config: params.config,
     env,
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-    ...(params.workspaceDir === undefined ? { allowWorkspaceScopedSnapshot: true } : {}),
   });
   if (!current || current.registryDiagnostics.length > 0) {
     return undefined;
@@ -198,6 +198,7 @@ function loadCurrentPluginRegistrySnapshotResult(
     snapshot: current.index,
     source: "provided",
     diagnostics: current.registryDiagnostics,
+    manifestRegistry: current.manifestRegistry,
   };
 }
 
@@ -580,6 +581,7 @@ export function loadPluginRegistrySnapshotWithMetadata(
     source: "derived",
     diagnostics,
     discovery: derived.discovery,
+    manifestRegistry: derived.manifestRegistry,
   });
 }
 

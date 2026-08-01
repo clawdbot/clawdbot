@@ -1942,7 +1942,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     );
 
     expect(draftStream.update).toHaveBeenCalledWith(
-      "Shelling\n• ran &lt;!here&gt; &lt;@U123&gt; \\*bold\\* \\`code\\` &amp; done",
+      "Shelling\n\n• ran &lt;!here&gt; &lt;@U123&gt; \\*bold\\* \\`code\\` &amp; done",
     );
   });
 

@@ -396,6 +396,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
         targetRequesterSessionKey: requesterSessionKey,
         requesterIsSubagent: false,
         expectsCompletionMessage: false,
+        requireDirectDelivery: true,
         directIdempotencyKey: buildAnnounceIdempotencyKey(
           attemptIndex === 0 ? wakeKeyBase : `${wakeKeyBase}:retry-${attemptIndex}`,
         ),

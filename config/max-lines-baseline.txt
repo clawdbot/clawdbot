@@ -87,7 +87,6 @@ extensions/discord/src/monitor/message-handler.preflight.test.ts
 extensions/discord/src/monitor/message-handler.preflight.ts
 extensions/discord/src/monitor/model-picker.test.ts
 extensions/discord/src/monitor/model-picker.view.ts
-extensions/discord/src/monitor/native-command-model-picker-interaction.ts
 extensions/discord/src/monitor/native-command.model-picker.test.ts
 extensions/discord/src/monitor/native-command.plugin-dispatch.test.ts
 extensions/discord/src/monitor/native-command.ts
@@ -127,7 +126,6 @@ extensions/google/transport-stream.ts
 extensions/imessage/src/actions.test.ts
 extensions/imessage/src/actions.ts
 extensions/imessage/src/approval-reactions.test.ts
-extensions/imessage/src/approval-reactions.ts
 extensions/imessage/src/monitor.last-route.test.ts
 extensions/imessage/src/monitor/inbound-processing.ts
 extensions/imessage/src/monitor/monitor-provider.ts
@@ -507,7 +505,6 @@ src/agents/transcript-redact.test.ts
 src/agents/workspace.ts
 src/agents/worktrees/service.ts
 src/auto-reply/command-control.test.ts
-src/auto-reply/commands-registry.shared.ts
 src/auto-reply/inbound.test.ts
 src/auto-reply/reply/abort.test.ts
 src/auto-reply/reply/agent-runner-memory.test.ts
@@ -519,7 +516,6 @@ src/auto-reply/reply/commands-acp.test.ts
 src/auto-reply/reply/commands-approve.test.ts
 src/auto-reply/reply/commands-models.ts
 src/auto-reply/reply/commands-status.test.ts
-src/auto-reply/reply/directive-handling.impl.ts
 src/auto-reply/reply/directive-handling.model.test.ts
 src/auto-reply/reply/dispatch-acp.test.ts
 src/auto-reply/reply/dispatch-acp.ts
@@ -644,7 +640,6 @@ src/config/config-misc.test.ts
 src/config/config.plugin-validation.test.ts
 src/config/env-preserve.ts
 src/config/io.observe-recovery.test.ts
-src/config/io.observe-recovery.ts
 src/config/io.write-config.test.ts
 src/config/io.write-prepare.test.ts
 src/config/io.write-prepare.ts
@@ -974,13 +969,11 @@ src/wizard/setup.test.ts
 src/worker/worker.runtime.test.ts
 ui/src/api/gateway.node.test.ts
 ui/src/api/types.ts
-ui/src/app/app-host.ts
 ui/src/lib/config/index.test.ts
 ui/src/lib/config/index.ts
 ui/src/lib/cron/index.test.ts
 ui/src/lib/cron/index.ts
 ui/src/lib/nodes/index.ts
-ui/src/lib/sessions/index.ts
 ui/src/lib/skills/index.test.ts
 ui/src/lib/workboard/index.test.ts
 ui/src/pages/agents/agents-page.ts

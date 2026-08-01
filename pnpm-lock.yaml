@@ -1037,6 +1037,9 @@ importers:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/inworld:
     devDependencies:
@@ -2328,6 +2331,9 @@ importers:
       chalk:
         specifier: 6.0.0
         version: 6.0.0
+      string-width:
+        specifier: 8.2.2
+        version: 8.2.2
 
   packages/tool-call-repair:
     dependencies:

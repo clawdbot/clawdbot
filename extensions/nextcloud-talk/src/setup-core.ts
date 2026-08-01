@@ -140,7 +140,7 @@ export const nextcloudTalkDmPolicy = createChannelDmPolicy({
   promptAllowFrom: promptNextcloudTalkAllowFromForAccount,
 });
 
-export const nextcloudTalkSetupAdapter: ChannelSetupAdapter = {
+const nextcloudTalkSetupAdapter: ChannelSetupAdapter = {
   singleAccountKeysToMove: ["rooms"],
   resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
   prepareAccountConfigInput: ({ input }) => {

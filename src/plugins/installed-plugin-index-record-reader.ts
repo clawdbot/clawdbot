@@ -423,29 +423,7 @@ function mergeRecoveredManagedNpmInstallRecords(
 function extractPluginInstallRecordsFromPersistedInstalledPluginIndex(
   index: unknown,
 ): Record<string, PluginInstallRecord> | null {
-  if (!isRecord(index)) {
-    return null;
-  }
-  if (Object.hasOwn(index, "installRecords")) {
-    return readRecordMap(index.installRecords) ?? {};
-  }
-  if (Object.hasOwn(index, "records")) {
-    return readRecordMap(index.records) ?? {};
-  }
-  if (!Array.isArray(index.plugins)) {
-    return null;
-  }
-  const records: Record<string, PluginInstallRecord> = {};
-  for (const entry of index.plugins) {
-    if (!isRecord(entry) || typeof entry.pluginId !== "string" || !isRecord(entry.installRecord)) {
-      continue;
-    }
-    if (!isSafeRecordKey(entry.pluginId)) {
-      continue;
-    }
-    records[entry.pluginId] = structuredClone(entry.installRecord) as PluginInstallRecord;
-  }
-  return records;
+  return isRecord(index) ? (readRecordMap(index.installRecords) ?? {}) : null;
 }
 
 type InstalledPluginIndexRecordRow = {
@@ -469,7 +447,7 @@ function readPersistedInstalledPluginIndexForRecords(
     return null;
   }
   if (options.filePath?.endsWith(".json")) {
-    return tryReadJsonSync(options.filePath);
+    return null;
   }
   try {
     return withOpenClawStateDatabaseReadOnly(({ db }) => {

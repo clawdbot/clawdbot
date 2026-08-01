@@ -1,6 +1,7 @@
 import type { SessionsListResult } from "../api/types.ts";
 import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
+import { appendSessionResults } from "../lib/sessions/reconcile.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import {
   SIDEBAR_AGENT_SESSION_LIST_LIMIT,
@@ -54,34 +55,6 @@ function publishSidebarSessionResult(
     }
   }
   owner.requestSessionDataUpdate();
-}
-
-function appendSidebarSessionResults(
-  previous: SessionsListResult,
-  page: SessionsListResult,
-): SessionsListResult {
-  const seen = new Set<string>();
-  const sessions = [...previous.sessions, ...page.sessions].filter((row) => {
-    if (!row.key || seen.has(row.key)) {
-      return false;
-    }
-    seen.add(row.key);
-    return true;
-  });
-  const totalCount = page.totalCount ?? previous.totalCount;
-  const hasMore =
-    page.hasMore ??
-    (typeof totalCount === "number" && Number.isFinite(totalCount)
-      ? sessions.length < totalCount
-      : false);
-  return {
-    ...page,
-    count: sessions.length,
-    totalCount,
-    hasMore,
-    nextOffset: page.nextOffset ?? (hasMore ? sessions.length : null),
-    sessions,
-  };
 }
 
 export async function refreshSidebarSessions(
@@ -228,7 +201,7 @@ export async function loadMoreSidebarSessions(
       publishSidebarSessionResult(
         owner,
         agentId,
-        appendSidebarSessionResults(previous, page),
+        appendSessionResults(previous, page),
         archivedFilter,
         generation,
       );

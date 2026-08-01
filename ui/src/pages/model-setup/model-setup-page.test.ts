@@ -117,11 +117,12 @@ function createContext() {
 
 async function mountPage(
   context: ApplicationContext,
-  routeData: ModelSetupRouteData,
+  routeData: Omit<ModelSetupRouteData, "connection"> & { client: GatewayBrowserClient | null },
 ): Promise<{ page: TestModelSetupPage; provider: ApplicationContextProvider }> {
   const provider = createApplicationContextProvider(context);
   const page = document.createElement("openclaw-model-setup-page") as TestModelSetupPage;
-  page.routeData = routeData;
+  const { client, ...data } = routeData;
+  page.routeData = { ...data, connection: { client, hello: context.gateway.snapshot.hello } };
   provider.append(page);
   document.body.append(provider);
   await page.updateComplete;

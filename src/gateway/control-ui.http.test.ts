@@ -225,7 +225,7 @@ describe("handleControlUiHttpRequest", () => {
     trustedProxies?: string[];
     remoteAddress?: string;
   }) {
-    const { res, end } = makeMockHttpResponse();
+    const { res, end, setHeader } = makeMockHttpResponse();
     const handled = await handleControlUiAvatarRequest(
       {
         url: params.url,
@@ -241,7 +241,7 @@ describe("handleControlUiHttpRequest", () => {
         config: params.config,
       },
     );
-    return { res, end, handled };
+    return { res, end, setHeader, handled };
   }
 
   async function runAssistantMediaRequest(params: {
@@ -250,6 +250,7 @@ describe("handleControlUiHttpRequest", () => {
     basePath?: string;
     auth?: ResolvedGatewayAuth;
     headers?: IncomingMessage["headers"];
+    distinctHeaders?: IncomingMessage["headersDistinct"];
     trustedProxies?: string[];
     remoteAddress?: string;
   }) {
@@ -259,6 +260,14 @@ describe("handleControlUiHttpRequest", () => {
         url: params.url,
         method: params.method,
         headers: params.headers ?? {},
+        headersDistinct:
+          params.distinctHeaders ??
+          Object.fromEntries(
+            Object.entries(params.headers ?? {}).map(([name, value]) => [
+              name,
+              Array.isArray(value) ? value : [String(value)],
+            ]),
+          ),
         socket: { remoteAddress: params.remoteAddress ?? "127.0.0.1" },
       } as IncomingMessage,
       res,
@@ -600,6 +609,74 @@ describe("handleControlUiHttpRequest", () => {
             expect.anything(),
           );
           expect(conditional.end).toHaveBeenCalledWith();
+        },
+      });
+    },
+  );
+
+  it.each(["GET", "HEAD"] as const)(
+    "revalidates assistant media with If-Modified-Since before ranges for %s",
+    async (method) => {
+      await withAllowedAssistantMediaRoot({
+        prefix: "ui-media-modified-since-",
+        fn: async (tmpRoot) => {
+          const filePath = path.join(tmpRoot, "photo.png");
+          await fs.writeFile(filePath, Buffer.from("assistant-media-bytes"));
+          const url = `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=test-token`;
+          const auth = { mode: "token", token: "test-token", allowTailscale: false } as const;
+          const initial = await runAssistantMediaRequest({ url, method: "HEAD", auth });
+          const lastModified = initial.setHeader.mock.calls.find(
+            ([name]) => name === "Last-Modified",
+          )?.[1];
+          expect(lastModified).toEqual(expect.any(String));
+
+          const unchanged = await runAssistantMediaRequest({
+            url,
+            method,
+            auth,
+            headers: {
+              "if-modified-since": String(lastModified),
+              range: "bytes=0-3",
+              "if-range": '"stale"',
+            },
+          });
+
+          expect(unchanged.res.statusCode).toBe(304);
+          expect(unchanged.setHeader).toHaveBeenCalledWith("Last-Modified", lastModified);
+          expect(unchanged.setHeader).not.toHaveBeenCalledWith("Content-Length", expect.anything());
+          expect(unchanged.end).toHaveBeenCalledWith();
+        },
+      });
+    },
+  );
+
+  it.each(["GET", "HEAD"] as const)(
+    "ignores duplicate assistant-media dates discarded by normalized Node headers for %s",
+    async (method) => {
+      await withAllowedAssistantMediaRoot({
+        prefix: "ui-media-duplicate-modified-since-",
+        fn: async (tmpRoot) => {
+          const filePath = path.join(tmpRoot, "photo.png");
+          await fs.writeFile(filePath, Buffer.from("assistant-media-bytes"));
+          const url = `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=test-token`;
+          const auth = { mode: "token", token: "test-token", allowTailscale: false } as const;
+          const initial = await runAssistantMediaRequest({ url, method: "HEAD", auth });
+          const lastModified = String(
+            initial.setHeader.mock.calls.find(([name]) => name === "Last-Modified")?.[1],
+          );
+
+          const duplicate = await runAssistantMediaRequest({
+            url,
+            method,
+            auth,
+            headers: { "if-modified-since": lastModified },
+            distinctHeaders: {
+              "if-modified-since": [lastModified, "not-an-http-date"],
+            },
+          });
+
+          expect(duplicate.res.statusCode).toBe(200);
+          expect(duplicate.setHeader).toHaveBeenCalledWith("Last-Modified", lastModified);
         },
       });
     },
@@ -2228,6 +2305,92 @@ describe("handleControlUiHttpRequest", () => {
       expect(handled).toBe(true);
       expect(res.statusCode).toBe(200);
       expect(responseBody(end)).toBe("avatar-bytes\n");
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    { name: "PNG", filename: "avatar.png", contentType: "image/png" },
+    { name: "JPEG", filename: "avatar.jpg", contentType: "image/jpeg" },
+    { name: "GIF", filename: "avatar.gif", contentType: "image/gif" },
+    { name: "WebP", filename: "avatar.webp", contentType: "image/webp" },
+    { name: "SVG", filename: "avatar.svg", contentType: "image/svg+xml" },
+  ])(
+    "preserves the pinned $name avatar byte length and metadata on HEAD",
+    async ({ contentType, filename }) => {
+      const tmp = testTempDirs.make("openclaw-avatar-head-metadata-");
+      const body = Buffer.from(`avatar 東京 ${filename}\n`, "utf8");
+      const read = vi.spyOn(fsSync, "read");
+      const closeSync = vi.spyOn(fsSync, "closeSync");
+      try {
+        await fs.writeFile(path.join(tmp, filename), body);
+        const config = createAvatarConfig(tmp, filename);
+        const head = await runAvatarRequest({ url: "/avatar/main", method: "HEAD", config });
+
+        expect(head.handled).toBe(true);
+        expect(head.res.statusCode).toBe(200);
+        expect(head.setHeader).toHaveBeenCalledWith("Content-Length", String(body.byteLength));
+        expect(head.setHeader).toHaveBeenCalledWith("Content-Type", contentType);
+        expect(head.setHeader).toHaveBeenCalledWith("Cache-Control", "no-cache");
+        expect(head.end).toHaveBeenCalledWith();
+        expect(read).not.toHaveBeenCalled();
+        expect(closeSync).toHaveBeenCalledOnce();
+
+        const get = await runAvatarRequest({ url: "/avatar/main", method: "GET", config });
+        expect(get.res.statusCode).toBe(200);
+        expect(get.end).toHaveBeenCalledWith(body);
+        expect(get.setHeader).toHaveBeenCalledWith("Content-Type", contentType);
+        expect(get.setHeader).toHaveBeenCalledWith("Cache-Control", "no-cache");
+        expect(get.setHeader).not.toHaveBeenCalledWith("Content-Length", expect.anything());
+      } finally {
+        read.mockRestore();
+        closeSync.mockRestore();
+        await fs.rm(tmp, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each(["", "/openclaw"])(
+    "preserves authenticated avatar HEAD length under the %s Control UI base path",
+    async (basePath) => {
+      const tmp = testTempDirs.make("openclaw-avatar-head-base-");
+      const body = Buffer.from("authenticated avatar 東京", "utf8");
+      try {
+        await fs.writeFile(path.join(tmp, "main.png"), body);
+        const response = await runAvatarRequest({
+          url: `${basePath}/avatar/main`,
+          method: "HEAD",
+          config: createAvatarConfig(tmp, "main.png"),
+          ...(basePath ? { basePath } : {}),
+          auth: { mode: "token", token: "test-token", allowTailscale: false },
+          headers: { authorization: "Bearer test-token" },
+        });
+
+        expect(response.handled).toBe(true);
+        expect(response.res.statusCode).toBe(200);
+        expect(response.setHeader).toHaveBeenCalledWith("Content-Length", String(body.byteLength));
+        expect(response.end).toHaveBeenCalledWith();
+      } finally {
+        await fs.rm(tmp, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("does not expose avatar HEAD representation length before authentication", async () => {
+    const tmp = testTempDirs.make("openclaw-avatar-head-unauthorized-");
+    try {
+      await fs.writeFile(path.join(tmp, "main.png"), REAL_PNG);
+      const response = await runAvatarRequest({
+        url: "/avatar/main",
+        method: "HEAD",
+        config: createAvatarConfig(tmp, "main.png"),
+        auth: { mode: "token", token: "test-token", allowTailscale: false },
+      });
+
+      expect(response.handled).toBe(true);
+      expect(response.res.statusCode).toBe(401);
+      expect(response.setHeader).not.toHaveBeenCalledWith("Content-Length", expect.anything());
     } finally {
       await fs.rm(tmp, { recursive: true, force: true });
     }

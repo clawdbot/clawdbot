@@ -530,12 +530,15 @@ function afterSourceContentFence(page: string): number {
 function findNotesHumanBlock(page: string): { start: number; end: number } | null {
   const searchFrom = afterSourceContentFence(page);
   const start = page.indexOf(HUMAN_START_MARKER, searchFrom);
-  if (start === -1) {
+  const endMarker = page.lastIndexOf(HUMAN_END_MARKER);
+  if (start === -1 && endMarker < searchFrom) {
     return null;
   }
-  const endMarker = page.lastIndexOf(HUMAN_END_MARKER);
-  if (endMarker < start) {
-    return null;
+  if (start === -1 || endMarker < start) {
+    const missingMarker = start === -1 ? HUMAN_START_MARKER : HUMAN_END_MARKER;
+    throw new Error(
+      `Memory Wiki human Notes are missing ${missingMarker}; restore the missing marker before updating or removing this page`,
+    );
   }
   return { start, end: endMarker + HUMAN_END_MARKER.length };
 }

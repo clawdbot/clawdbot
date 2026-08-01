@@ -38,6 +38,7 @@ import { sleepWithAbort } from "../internal/retry-sleep.js";
 import { registerSessionResourceCleanup } from "../session-resources.js";
 import { processResponsesStream } from "../transports/openai-responses-stream-internal.js";
 import { transportAbortError } from "../transports/transport-stream-shared.js";
+import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../transports/transport-utils.js";
 import type {
   Api,
   AssistantMessage,
@@ -840,14 +841,20 @@ async function* parseSSE(response: Response): AsyncGenerator<Record<string, unkn
         if (dataLines.length > 0) {
           const data = dataLines.join("\n").trim();
           if (data && data !== "[DONE]") {
+            let event: Record<string, unknown>;
             try {
-              yield JSON.parse(data) as Record<string, unknown>;
+              event = JSON.parse(data) as Record<string, unknown>;
             } catch (cause) {
-              throw new CodexProtocolError(`Invalid Codex SSE JSON: ${formatThrownValue(cause)}`, {
-                cause,
-                payload: data,
-              });
+              if (!(cause instanceof SyntaxError)) {
+                throw cause;
+              }
+              // Align with the canonical transport contract: the shared marker is what
+              // assistant error formatting maps to the malformed-fragment retry copy.
+              throw new CodexProtocolError(MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE, { cause });
             }
+            // Keep suspension outside the parse catch so iterator.throw() cannot relabel a
+            // consumer failure as malformed provider input.
+            yield event;
           }
         }
         idx = buffer.indexOf("\n\n");
@@ -920,7 +927,10 @@ export function closeOpenAICodexWebSocketSessions(sessionId?: string): void {
     }
     closeWebSocketSilently(entry.socket, 1000, "debug_close");
   };
+  // Sticky SSE fallback follows the provider session-resource lifecycle;
+  // otherwise reused session ids stay degraded and the set grows indefinitely.
   if (sessionId) {
+    websocketSseFallbackSessions.delete(sessionId);
     const entry = websocketSessionCache.get(sessionId);
     if (entry) {
       closeEntry(entry);
@@ -932,6 +942,7 @@ export function closeOpenAICodexWebSocketSessions(sessionId?: string): void {
     closeEntry(entry);
   }
   websocketSessionCache.clear();
+  websocketSseFallbackSessions.clear();
 }
 
 registerSessionResourceCleanup(closeOpenAICodexWebSocketSessions);

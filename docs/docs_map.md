@@ -524,6 +524,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /channels/imessage
 - Headings:
+  - H2: Install the plugin
   - H2: Quick setup
   - H2: Requirements and permissions (macOS)
   - H2: Enabling the imsg private API

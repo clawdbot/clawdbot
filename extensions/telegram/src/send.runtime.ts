@@ -6,8 +6,6 @@ export type { PollInput } from "openclaw/plugin-sdk/media-runtime";
 export {
   buildOutboundMediaLoadOptions,
   getImageMetadata,
-  isGifMedia,
-  kindFromMime,
   normalizePollInput,
   probeVideoDimensions,
 } from "openclaw/plugin-sdk/media-runtime";

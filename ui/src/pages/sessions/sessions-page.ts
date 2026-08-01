@@ -1400,6 +1400,7 @@ class SessionsPage extends OpenClawLightDomElement {
           onSearchChange: (query) => {
             this.searchQuery = query;
             this.page = 0;
+            this.selectedKeys = new Set();
           },
           onTranscriptSearchChange: (query) => this.updateTranscriptSearchQuery(query),
           onTranscriptSearch: () => void this.runTranscriptSearch(),

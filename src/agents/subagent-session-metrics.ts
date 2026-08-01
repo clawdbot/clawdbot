@@ -82,10 +82,15 @@ export function resolveSubagentDisplayStatus(
   entry: Pick<SubagentRunRecord, "endedAt" | "endedReason" | "outcome">,
   pendingDescendants = 0,
 ): string {
+  const status = resolveSubagentSessionStatus(entry) ?? "done";
   const pending = Math.max(0, pendingDescendants);
   if (pending > 0) {
     const childLabel = pending === 1 ? "child" : "children";
-    return `active (waiting on ${pending} ${childLabel})`;
+    const waiting = `waiting on ${pending} ${childLabel}`;
+    // Pending descendants keep the row active without hiding a terminal failure.
+    return status === "running" || status === "done"
+      ? `active (${waiting})`
+      : `${status} (${waiting})`;
   }
-  return resolveSubagentSessionStatus(entry) ?? "done";
+  return status;
 }
