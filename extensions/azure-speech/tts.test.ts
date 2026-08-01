@@ -1,4 +1,6 @@
 // Azure Speech tests cover tts plugin behavior.
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-media-understanding";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -250,5 +252,49 @@ describe("azure speech tts", () => {
         timeoutMs: 5_000,
       }),
     ).rejects.toThrow("Azure Speech TTS API error: malformed audio response");
+  });
+
+  it("closes the upstream socket for a never-ending malformed response over a real connection", async () => {
+    let notifySocketClosed: ((closed: boolean) => void) | undefined;
+    const socketClosed = new Promise<boolean>((resolve) => {
+      notifySocketClosed = resolve;
+    });
+    const server = createServer((request, response) => {
+      request.socket.once("close", () => notifySocketClosed?.(true));
+      response.writeHead(200, { "content-type": "application/json" });
+      // Headers land, then the body never ends: only an explicit cancel closes this.
+      response.write('{"error":"still streaming');
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+
+    try {
+      const { port } = server.address() as AddressInfo;
+      await expect(
+        azureSpeechTTS({
+          text: "hello",
+          apiKey: "fixture-value",
+          endpoint: `http://127.0.0.1:${port}`,
+          voice: "en-US-JennyNeural",
+          lang: "en-US",
+          timeoutMs: 5_000,
+        }),
+      ).rejects.toThrow("Azure Speech TTS API error: malformed audio response");
+
+      await expect(
+        Promise.race([
+          socketClosed,
+          new Promise<boolean>((resolve) => {
+            setTimeout(() => resolve(false), 250);
+          }),
+        ]),
+      ).resolves.toBe(true);
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
   });
 });
