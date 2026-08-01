@@ -808,7 +808,9 @@ jobs:
     needs: [resolve_target, evidence_reuse, prepare_release_candidate]
     if: ${{ always() && needs.resolve_target.result == 'success' && (needs.prepare_release_candidate.result == 'success' || needs.prepare_release_candidate.result == 'skipped') && contains(fromJSON('["all","release-checks","install-smoke","cross-os","live-e2e","package","qa","qa-parity","qa-live"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: ${{ inputs.release_profile != 'beta' && 240 || 60 }}
+    # The child owns lane timeouts; this monitor must also tolerate queue delay
+    # so it does not cancel healthy release checks before their final verifier.
+    timeout-minutes: 240
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
       url: ${{ steps.dispatch.outputs.url }}
