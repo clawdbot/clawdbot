@@ -207,10 +207,17 @@ export const AgentDefaultsSchema = z
           .string()
           .trim()
           .min(1)
-          .refine(
-            (value) => path.isAbsolute(value) || value === "~" || value.startsWith("~/"),
-            "mediaLocalRoots entries must be absolute paths or start with ~/",
-          ),
+          .refine((value) => {
+            if (!(path.isAbsolute(value) || value === "~" || value.startsWith("~/"))) {
+              return false;
+            }
+            // Home-relative entries expand to a user directory, never a volume root.
+            if (value === "~" || value.startsWith("~/")) {
+              return true;
+            }
+            const resolved = path.resolve(value);
+            return resolved !== path.parse(resolved).root;
+          }, "mediaLocalRoots entries must be absolute (non-root) paths or start with ~/"),
       )
       .optional(),
     imageMaxDimensionPx: z.number().int().positive().optional(),

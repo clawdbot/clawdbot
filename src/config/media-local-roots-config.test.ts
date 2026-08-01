@@ -57,7 +57,29 @@ describe("agents.defaults.mediaLocalRoots config", () => {
       result.issues.some(
         (issue) =>
           issue.path.includes("mediaLocalRoots") &&
-          issue.message.includes("absolute paths or start with ~/"),
+          issue.message.includes("absolute (non-root) paths or start with ~/"),
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects filesystem-root mediaLocalRoots entries", () => {
+    const result = validateConfigObjectRaw({
+      agents: {
+        defaults: {
+          mediaLocalRoots: [process.platform === "win32" ? "C:\\" : "/"],
+        },
+        entries: { main: { default: true } },
+      },
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(
+      result.issues.some(
+        (issue) =>
+          issue.path.includes("mediaLocalRoots") &&
+          issue.message.includes("absolute (non-root) paths or start with ~/"),
       ),
     ).toBe(true);
   });

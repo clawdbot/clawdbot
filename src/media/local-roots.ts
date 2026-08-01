@@ -79,6 +79,10 @@ function appendConfiguredMediaLocalRoots(
       continue;
     }
     const normalizedRoot = path.resolve(expanded);
+    // Match local-media-access: never authorize a whole filesystem volume.
+    if (normalizedRoot === path.parse(normalizedRoot).root) {
+      continue;
+    }
     if (!roots.includes(normalizedRoot)) {
       roots.push(normalizedRoot);
     }
