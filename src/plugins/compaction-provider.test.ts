@@ -9,13 +9,11 @@ import {
   restoreRegisteredCompactionProviders,
   type CompactionProvider,
 } from "./compaction-provider.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
+import { setActivePluginRegistry, withPluginRegistrationContext } from "./runtime.js";
 
-const REGISTRY_KEY = Symbol.for("openclaw.compactionProviderRegistryState");
-
-/** Reset the process-global registry between tests. */
 afterEach(() => {
-  const g = globalThis as Record<symbol, unknown>;
-  delete g[REGISTRY_KEY];
+  clearCompactionProviders();
 });
 
 function makeProvider(id: string, label?: string): CompactionProvider {
@@ -65,6 +63,35 @@ describe("compaction provider registry", () => {
     const entry = getRegisteredCompactionProvider("owned");
     expect(entry?.provider).toBe(p);
     expect(entry?.ownerPluginId).toBe("my-plugin");
+  });
+
+  it("writes direct registration helpers into the synchronous builder context", () => {
+    const active = createEmptyPluginRegistry();
+    const building = createEmptyPluginRegistry();
+    setActivePluginRegistry(active);
+    const provider = makeProvider("builder-owned");
+
+    withPluginRegistrationContext(building, "builder-plugin", () => {
+      registerCompactionProvider(provider);
+    });
+
+    expect(active.compactionProviders).toStrictEqual([]);
+    expect(building.compactionProviders).toEqual([{ provider, ownerPluginId: "builder-plugin" }]);
+  });
+
+  it("does not let a registering plugin displace another owner's provider", () => {
+    const building = createEmptyPluginRegistry();
+    const original = makeProvider("shared", "original");
+    building.compactionProviders.push({ provider: original, ownerPluginId: "first-plugin" });
+
+    expect(() =>
+      withPluginRegistrationContext(building, "failing-plugin", () => {
+        registerCompactionProvider(makeProvider("shared", "replacement"));
+      }),
+    ).toThrow("compaction provider shared already registered by first-plugin");
+    expect(building.compactionProviders).toEqual([
+      { provider: original, ownerPluginId: "first-plugin" },
+    ]);
   });
 
   it("lists registered provider ids", () => {

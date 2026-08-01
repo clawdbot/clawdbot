@@ -1,5 +1,11 @@
+import {
+  assertDirectPluginRegistrationReplacement,
+  requireActivePluginRegistry,
+  resolveDirectPluginRegistrationOwner,
+} from "./runtime.js";
+
 /**
- * Compaction provider registry — process-global singleton.
+ * Compaction provider facade over the active plugin registry.
  *
  * Plugins implement the CompactionProvider interface and register via
  * `registerCompactionProvider()`. The compaction safeguard checks this
@@ -38,7 +44,7 @@ export interface CompactionProvider {
 // ---------------------------------------------------------------------------
 
 /** A compaction provider with its owning plugin id for lifecycle tracking. */
-type RegisteredCompactionProvider = {
+export type RegisteredCompactionProvider = {
   provider: CompactionProvider;
   ownerPluginId?: string;
 };
@@ -47,25 +53,7 @@ type RegisteredCompactionProvider = {
 // Registry (process-global singleton)
 // ---------------------------------------------------------------------------
 
-const COMPACTION_PROVIDER_REGISTRY_STATE = Symbol.for("openclaw.compactionProviderRegistryState");
-
-type CompactionProviderRegistryState = {
-  providers: Map<string, RegisteredCompactionProvider>;
-};
-
-// Keep compaction-provider registrations process-global so duplicated dist
-// chunks still share one registry map at runtime.
-function getCompactionProviderRegistryState(): CompactionProviderRegistryState {
-  const globalState = globalThis as typeof globalThis & {
-    [COMPACTION_PROVIDER_REGISTRY_STATE]?: CompactionProviderRegistryState;
-  };
-  if (!globalState[COMPACTION_PROVIDER_REGISTRY_STATE]) {
-    globalState[COMPACTION_PROVIDER_REGISTRY_STATE] = {
-      providers: new Map<string, RegisteredCompactionProvider>(),
-    };
-  }
-  return globalState[COMPACTION_PROVIDER_REGISTRY_STATE];
-}
+const getProviders = () => requireActivePluginRegistry().compactionProviders;
 
 // ---------------------------------------------------------------------------
 // Registration
@@ -79,10 +67,20 @@ export function registerCompactionProvider(
   provider: CompactionProvider,
   options?: { ownerPluginId?: string },
 ): void {
-  getCompactionProviderRegistryState().providers.set(provider.id, {
+  const providers = getProviders();
+  const ownerPluginId = resolveDirectPluginRegistrationOwner(options?.ownerPluginId);
+  const entry = {
     provider,
-    ownerPluginId: options?.ownerPluginId,
-  });
+    ownerPluginId,
+  };
+  const index = providers.findIndex((registered) => registered.provider.id === provider.id);
+  if (index !== -1) {
+    assertDirectPluginRegistrationReplacement(
+      providers[index]?.ownerPluginId,
+      `compaction provider ${provider.id}`,
+    );
+  }
+  index === -1 ? providers.push(entry) : providers.splice(index, 1, entry);
 }
 
 // ---------------------------------------------------------------------------
@@ -91,19 +89,19 @@ export function registerCompactionProvider(
 
 /** Return the provider for the given id, or undefined. */
 export function getCompactionProvider(id: string): CompactionProvider | undefined {
-  return getCompactionProviderRegistryState().providers.get(id)?.provider;
+  return getProviders().find((entry) => entry.provider.id === id)?.provider;
 }
 
 /** Return the registered entry (provider + owner) for the given id. */
 export function getRegisteredCompactionProvider(
   id: string,
 ): RegisteredCompactionProvider | undefined {
-  return getCompactionProviderRegistryState().providers.get(id);
+  return getProviders().find((entry) => entry.provider.id === id);
 }
 
 /** List all registered entries with owner metadata (for snapshot/restore). */
 export function listRegisteredCompactionProviders(): RegisteredCompactionProvider[] {
-  return Array.from(getCompactionProviderRegistryState().providers.values());
+  return [...getProviders()];
 }
 
 // ---------------------------------------------------------------------------
@@ -112,16 +110,12 @@ export function listRegisteredCompactionProviders(): RegisteredCompactionProvide
 
 /** Clear all compaction providers. Used by clearPluginLoaderCache() and reload. */
 export function clearCompactionProviders(): void {
-  getCompactionProviderRegistryState().providers.clear();
+  getProviders().length = 0;
 }
 
 /** Restore from a snapshot, replacing all current entries. */
 export function restoreRegisteredCompactionProviders(
   entries: RegisteredCompactionProvider[],
 ): void {
-  const map = getCompactionProviderRegistryState().providers;
-  map.clear();
-  for (const entry of entries) {
-    map.set(entry.provider.id, entry);
-  }
+  getProviders().splice(0, getProviders().length, ...entries);
 }

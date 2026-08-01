@@ -19,6 +19,8 @@ import {
   restoreMemoryPluginState,
   type MemoryPluginPublicArtifact,
 } from "./memory-state.test-fixtures.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
+import { withPluginRegistrationContext } from "./runtime.js";
 
 function createMemoryRuntime() {
   return {
@@ -81,6 +83,25 @@ describe("memory plugin state", () => {
 
   it("returns empty defaults when no memory plugin state is registered", () => {
     expectClearedMemoryState();
+  });
+
+  it("attributes direct builder registrations to the synchronous plugin owner", () => {
+    const building = createEmptyPluginRegistry();
+
+    withPluginRegistrationContext(building, "actual-plugin", () => {
+      registerMemoryCapability("spoofed-plugin", { runtime: createMemoryRuntime() });
+      registerMemoryCorpusSupplement("spoofed-plugin", {
+        search: async () => [],
+        get: async () => null,
+      });
+      registerMemoryPromptSupplement("spoofed-plugin", () => ["supplement"]);
+      registerMemoryPromptPreparation("spoofed-plugin", async () => ["prepared"]);
+    });
+
+    expect(building.memoryCapabilities[0]?.pluginId).toBe("actual-plugin");
+    expect(building.memoryCorpusSupplements[0]?.pluginId).toBe("actual-plugin");
+    expect(building.memoryPromptSupplements[0]?.pluginId).toBe("actual-plugin");
+    expect(building.memoryPromptPreparations[0]?.pluginId).toBe("actual-plugin");
   });
 
   it("delegates prompt building to the registered memory plugin", () => {
@@ -263,6 +284,19 @@ describe("memory plugin state", () => {
         contentType: "markdown",
       },
     ]);
+  });
+
+  it("preserves runtime fields when the same plugin adds public artifacts", () => {
+    const runtime = createMemoryRuntime();
+    const flushPlanResolver = () => createMemoryFlushPlan("memory/same-owner.md");
+
+    registerMemoryCapability("memory-core", { runtime, flushPlanResolver });
+    registerMemoryCapability("memory-core", {
+      publicArtifacts: { listArtifacts: async () => [] },
+    });
+
+    expect(getMemoryRuntime()).toBe(runtime);
+    expect(resolveMemoryFlushPlan({})?.relativePath).toBe("memory/same-owner.md");
   });
 
   it("passes citations mode through to the prompt builder", () => {

@@ -1,6 +1,5 @@
 import type { EmbeddingInput } from "../../packages/memory-host-sdk/src/engine-embeddings.js";
 // Resolves plugin-provided memory embedding providers from config and registry.
-import { resolveGlobalMap } from "../shared/global-singleton.js";
 import type {
   EmbeddingProvider,
   EmbeddingProviderAdapter,
@@ -9,6 +8,11 @@ import type {
   EmbeddingProviderIndexIdentity,
   EmbeddingProviderRuntime,
 } from "./embedding-provider-types.js";
+import {
+  assertDirectPluginRegistrationReplacement,
+  requireActivePluginRegistry,
+  resolveDirectPluginRegistrationOwner,
+} from "./runtime.js";
 
 /** Chunk submitted to memory embedding batch processing. */
 export type MemoryEmbeddingBatchChunk = {
@@ -106,10 +110,11 @@ export type RegisteredMemoryEmbeddingProvider = {
   ownerPluginId?: string;
 };
 
-const MEMORY_EMBEDDING_PROVIDERS_KEY = Symbol.for("openclaw.memoryEmbeddingProviders");
-
-function getMemoryEmbeddingProviders(): Map<string, RegisteredMemoryEmbeddingProvider> {
-  return resolveGlobalMap(MEMORY_EMBEDDING_PROVIDERS_KEY);
+function getMemoryEmbeddingProviders(): RegisteredMemoryEmbeddingProvider[] {
+  return requireActivePluginRegistry().memoryEmbeddingProviders.map((entry) => ({
+    adapter: entry.provider,
+    ownerPluginId: entry.pluginId || undefined,
+  }));
 }
 
 /** Registers a memory embedding provider adapter for the current process. */
@@ -117,22 +122,37 @@ export function registerMemoryEmbeddingProvider(
   adapter: MemoryEmbeddingProviderAdapter,
   options?: { ownerPluginId?: string },
 ): void {
-  getMemoryEmbeddingProviders().set(adapter.id, {
-    adapter,
-    ownerPluginId: options?.ownerPluginId,
-  });
+  const registry = requireActivePluginRegistry();
+  const pluginId = resolveDirectPluginRegistrationOwner(options?.ownerPluginId) ?? "";
+  const entry = {
+    pluginId,
+    provider: adapter,
+    source: "runtime",
+  };
+  const index = registry.memoryEmbeddingProviders.findIndex(
+    (registration) => registration.provider.id === adapter.id,
+  );
+  if (index !== -1) {
+    assertDirectPluginRegistrationReplacement(
+      registry.memoryEmbeddingProviders[index]?.pluginId || undefined,
+      `memory embedding provider ${adapter.id}`,
+    );
+  }
+  index === -1
+    ? registry.memoryEmbeddingProviders.push(entry)
+    : registry.memoryEmbeddingProviders.splice(index, 1, entry);
 }
 
 /** Returns a registered memory embedding provider entry. */
 export function getRegisteredMemoryEmbeddingProvider(
   id: string,
 ): RegisteredMemoryEmbeddingProvider | undefined {
-  return getMemoryEmbeddingProviders().get(id);
+  return getMemoryEmbeddingProviders().find((entry) => entry.adapter.id === id);
 }
 
 /** Lists registered memory embedding provider entries. */
 export function listRegisteredMemoryEmbeddingProviders(): RegisteredMemoryEmbeddingProvider[] {
-  return Array.from(getMemoryEmbeddingProviders().values());
+  return getMemoryEmbeddingProviders();
 }
 
 /** Lists registered memory embedding provider adapters. */
@@ -143,7 +163,7 @@ export function listMemoryEmbeddingProviders(): MemoryEmbeddingProviderAdapter[]
 export function restoreRegisteredMemoryEmbeddingProviders(
   entries: RegisteredMemoryEmbeddingProvider[],
 ): void {
-  getMemoryEmbeddingProviders().clear();
+  clearMemoryEmbeddingProviders();
   for (const entry of entries) {
     registerMemoryEmbeddingProvider(entry.adapter, {
       ownerPluginId: entry.ownerPluginId,
@@ -153,5 +173,5 @@ export function restoreRegisteredMemoryEmbeddingProviders(
 
 /** Clears registered memory embedding providers. */
 export function clearMemoryEmbeddingProviders(): void {
-  getMemoryEmbeddingProviders().clear();
+  requireActivePluginRegistry().memoryEmbeddingProviders.length = 0;
 }

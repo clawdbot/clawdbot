@@ -1,15 +1,18 @@
 /** Shared registration types that make up the in-memory plugin registry. */
 import type { AgentHarness } from "../agents/harness/types.js";
+import type { ContextEngineRegistration } from "../context-engine/registry.js";
 import type { GatewayMethodDescriptor } from "../gateway/methods/descriptor.js";
 import type { GatewayRequestHandlers } from "../gateway/server-methods/types.js";
 import type { HookEntry } from "../hooks/types.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
+import type { DetachedTaskLifecycleRuntimeRegistration } from "../tasks/detached-task-runtime-contract.js";
 import type {
   AgentToolResultMiddleware,
   AgentToolResultMiddlewareRuntime,
   AgentToolResultMiddlewareScope,
 } from "./agent-tool-result-middleware-types.js";
 import type { CodexAppServerExtensionFactory } from "./codex-app-server-extension-types.js";
+import type { RegisteredCompactionProvider } from "./compaction-provider.js";
 import type { PluginCompatCode } from "./compat/registry.js";
 import type { PluginActivationSource } from "./config-state.js";
 import type { EmbeddingProviderAdapter } from "./embedding-providers.js";
@@ -38,9 +41,17 @@ import type {
   PluginManifestMcpServer,
 } from "./manifest.js";
 import type { MemoryEmbeddingProviderAdapter } from "./memory-embedding-providers.js";
+import type {
+  MemoryCorpusSupplementRegistration,
+  MemoryPluginCapabilityRegistration,
+  MemoryPromptPreparationRegistration,
+  MemoryPromptSupplementRegistration,
+} from "./memory-state.js";
 import type { PluginKind } from "./plugin-kind.types.js";
+import type { ResolvedPluginRuntimeArtifact } from "./plugin-runtime-artifact-resolution.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import type { SessionCatalogProvider } from "./session-catalog.js";
+import type { SessionDiscussionProvider } from "./session-discussion-registry.js";
 import type { PluginDependencyStatus } from "./status-dependencies-core.js";
 import type {
   OpenClawPluginHttpRouteAuth,
@@ -337,6 +348,19 @@ export type PluginCommandRegistration = {
   command: OpenClawPluginCommandDefinition;
   source: string;
   rootDir?: string;
+  trustedOwnerStatusExposure?: true;
+};
+
+export type PluginLegacyInternalHookRegistration = {
+  pluginId: string;
+  name: string;
+  event: string;
+  handler: import("../hooks/internal-hooks.js").InternalHookHandler;
+};
+
+export type PluginSessionDiscussionRegistration = {
+  pluginId: string;
+  provider: SessionDiscussionProvider;
 };
 
 type PluginInteractiveHandlerRegistryRegistration = PluginInteractiveHandlerRegistration & {
@@ -515,6 +539,17 @@ export type PluginRegistry = {
   agentToolResultMiddlewares: PluginAgentToolResultMiddlewareRegistration[];
   memoryEmbeddingProviders: PluginMemoryEmbeddingProviderRegistration[];
   agentHarnesses: PluginAgentHarnessRegistration[];
+  pluginRuntimeArtifacts: Map<string, ResolvedPluginRuntimeArtifact>;
+  compactionProviders: RegisteredCompactionProvider[];
+  detachedTaskRuntimes: DetachedTaskLifecycleRuntimeRegistration[];
+  legacyInternalHooks: PluginLegacyInternalHookRegistration[];
+  memoryCapabilities: MemoryPluginCapabilityRegistration[];
+  memoryCorpusSupplements: MemoryCorpusSupplementRegistration[];
+  memoryPromptPreparations: MemoryPromptPreparationRegistration[];
+  memoryPromptSupplements: MemoryPromptSupplementRegistration[];
+  sessionDiscussionProviders: Map<string, PluginSessionDiscussionRegistration>;
+  contextEngines: Map<string, ContextEngineRegistration>;
+  commandRegistryLocked: boolean;
   gatewayHandlers: GatewayRequestHandlers;
   gatewayMethodDescriptors: GatewayMethodDescriptor[];
   dashboardDataBindings: Map<string, PluginDashboardDataBindingRegistration>;
