@@ -15,6 +15,7 @@ function requireCronAgentId(agentId: string | undefined): string {
 function resolveCurrentDefaultAgentId(state: CronServiceState): string | undefined {
   return state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId;
 }
+import { CRON_TASK_KIND } from "../../tasks/cron-task-contract.js";
 import {
   createRunningTaskRun,
   finalizeTaskRunById,
@@ -237,6 +238,7 @@ function tryCreateCronTaskRunRecord(params: {
       : undefined;
     const task = createRunningTaskRun({
       runtime: "cron",
+      taskKind: CRON_TASK_KIND,
       sourceId: params.jobId,
       ownerKey: "",
       scopeKind: "system",
