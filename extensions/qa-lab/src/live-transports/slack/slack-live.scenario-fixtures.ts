@@ -154,7 +154,9 @@ export function buildSlackProgressCommentaryRun(
       if (
         expectation.commentary === "lane" &&
         !nativeCommentaryTaskObserved &&
-        (commentaryLaneTimestamps.size !== 1 || !commentaryLaneTimestamps.has(commentaryTs))
+        (commentaryTs === undefined ||
+          commentaryLaneTimestamps.size !== 1 ||
+          !commentaryLaneTimestamps.has(commentaryTs))
       ) {
         throw new Error("expected commentary in a native Slack task update lane");
       }
