@@ -113,6 +113,28 @@ async function readPersistedSettings(page: Page): Promise<Record<string, unknown
   }, settingsStorageKey);
 }
 
+async function readThemeImportRaceState(page: Page) {
+  const importer = page.locator(".settings-theme-import");
+  const message = importer.locator(".settings-theme-import__message");
+  const settings = await readPersistedSettings(page);
+  return {
+    renderedThemeMode: await page.locator("html").getAttribute("data-theme"),
+    titleColor: await page
+      .locator(".page-title")
+      .evaluate((element) => getComputedStyle(element).color),
+    clawSelected:
+      (await page
+        .locator("#settings-appearance-theme .settings-theme-card--claw")
+        .getAttribute("aria-pressed")) === "true",
+    customThemeMetadataCount: await importer.locator(".settings-theme-import__meta").count(),
+    importUrl: await importer.locator("input").inputValue(),
+    message: (await message.count()) > 0 ? ((await message.textContent())?.trim() ?? "") : "",
+    importButtonDisabled: await importer.locator("button.primary").isDisabled(),
+    persistedTheme: settings.theme ?? null,
+    hasPersistedCustomTheme: settings.customTheme !== undefined,
+  };
+}
+
 async function captureViewport(page: Page, filename: string): Promise<void> {
   if (!captureUiProofEnabled) {
     return;
@@ -516,6 +538,7 @@ describeControlUiE2e("Control UI Appearance defaults mocked Gateway E2E", () => 
       await expect
         .poll(() => importer.locator(".settings-theme-import__meta-value").textContent())
         .toContain("Existing Test Theme");
+      const beforeReplace = await readThemeImportRaceState(page);
       await captureViewport(page, "04-custom-theme-before-replace.png");
 
       await importField.fill("replacement");
@@ -528,6 +551,7 @@ describeControlUiE2e("Control UI Appearance defaults mocked Gateway E2E", () => 
         .poll(() => themeSection.locator(".settings-theme-card--claw").getAttribute("aria-pressed"))
         .toBe("true");
       await expect.poll(() => importer.locator(".settings-theme-import__meta").count()).toBe(0);
+      const afterClear = await readThemeImportRaceState(page);
       await captureViewport(page, "05-custom-theme-cleared-with-replace-pending.png");
 
       releaseReplacement();
@@ -545,6 +569,36 @@ describeControlUiE2e("Control UI Appearance defaults mocked Gateway E2E", () => 
       await expect
         .poll(() => importer.locator(".settings-theme-import__message").textContent())
         .toContain("removed");
+      const afterDelayedResponse = await readThemeImportRaceState(page);
+      expect(beforeReplace).toMatchObject({
+        clawSelected: false,
+        customThemeMetadataCount: 1,
+        persistedTheme: "custom",
+        hasPersistedCustomTheme: true,
+      });
+      expect(afterClear).toMatchObject({
+        renderedThemeMode: "dark",
+        clawSelected: true,
+        customThemeMetadataCount: 0,
+        importUrl: "replacement",
+        importButtonDisabled: false,
+        persistedTheme: "claw",
+        hasPersistedCustomTheme: false,
+      });
+      expect(beforeReplace.titleColor).not.toBe(afterClear.titleColor);
+      expect(afterDelayedResponse).toEqual({
+        ...afterClear,
+        message: "Custom theme removed.",
+      });
+      console.info(
+        `[control-ui-e2e] THEME_IMPORT_RACE_VERDICT ${JSON.stringify({
+          scenario: "delayed-replace-then-clear",
+          beforeReplace,
+          afterClear,
+          afterDelayedResponse,
+          pass: true,
+        })}`,
+      );
       await captureViewport(page, "06-custom-theme-clear-remains-final.png");
     } finally {
       releaseReplacement();
