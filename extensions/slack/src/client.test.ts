@@ -231,13 +231,18 @@ describe("slack web client config", () => {
       slackApiUrl: "https://slack.test/api/",
     });
 
-    expect(WebClient).toHaveBeenCalledWith("xoxb-startup", {
-      fetch: customFetch,
-      rejectRateLimitedCalls: true,
-      retryConfig: { retries: 2, minTimeout: 0 },
-      slackApiUrl: "https://slack.test/api/",
-      timeout: 10_000,
-    });
+    expect(WebClient).toHaveBeenCalledWith(
+      "xoxb-startup",
+      expect.objectContaining({
+        fetch: expect.any(Function),
+        retryConfig: { ...SLACK_DEFAULT_RETRY_OPTIONS, maxRetryTime: 35_000 },
+        slackApiUrl: "https://slack.test/api/",
+        timeout: 10_000,
+      }),
+    );
+    const options = WebClient.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(options.fetch).not.toBe(customFetch);
+    expect(options).not.toHaveProperty("rejectRateLimitedCalls");
   });
 
   it("applies the default retry config when constructing a client without proxy env", () => {
