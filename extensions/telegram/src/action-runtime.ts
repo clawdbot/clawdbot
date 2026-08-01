@@ -161,7 +161,7 @@ function resolveActionTopicNameCacheScope(cfg: OpenClawConfig, accountId?: strin
 
 function formatTelegramDeliveryTarget(to: string, messageThreadId?: number | null): string {
   const parsed = parseTelegramTarget(to);
-  const topicId = parsed.messageThreadId ?? messageThreadId;
+  const topicId = messageThreadId ?? parsed.messageThreadId;
   if (topicId == null) {
     return to;
   }

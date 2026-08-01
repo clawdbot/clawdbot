@@ -1117,12 +1117,37 @@ describe("handleTelegramAction", () => {
     endUserRequest();
   });
 
-  it("marks topic room-event delivery when send uses a separate thread id", async () => {
+  it.each([
+    {
+      label: "a separate forum topic",
+      to: "-100123",
+      threadId: 77,
+      expectedTarget: "-100123:topic:77",
+    },
+    {
+      label: "an explicit forum topic instead of a stale embedded topic",
+      to: "-100123:topic:271",
+      threadId: 404,
+      expectedTarget: "-100123:topic:404",
+    },
+    {
+      label: "an explicit private-chat topic instead of a stale embedded topic",
+      to: "123:topic:7",
+      threadId: 11,
+      expectedTarget: "123:topic:11",
+    },
+    {
+      label: "an explicitly selected General forum topic",
+      to: "-100123:topic:271",
+      threadId: 1,
+      expectedTarget: "-100123:topic:1",
+    },
+  ])("marks topic room-event delivery for $label", async ({ to, threadId, expectedTarget }) => {
     let count = 0;
     const end = telegramInboundEventDelivery.begin(
       "telegram-session",
       {
-        outboundTo: "-100123:topic:77",
+        outboundTo: expectedTarget,
         markInboundEventDelivered: () => {
           count += 1;
         },
@@ -1133,14 +1158,16 @@ describe("handleTelegramAction", () => {
     await handleTelegramAction(
       {
         action: "sendMessage",
-        to: "-100123",
-        threadId: 77,
+        to,
+        threadId,
         content: "Hello from a room event topic",
       },
       telegramConfig(),
       { sessionKey: "telegram-session", inboundEventKind: "room_event" },
     );
 
+    const sent = mockCall(sendMessageTelegram, 0, "room event topic send");
+    expect(requireRecord(sent[2], "room event topic options").messageThreadId).toBe(threadId);
     expect(count).toBe(1);
     end();
   });
