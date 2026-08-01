@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { dirname, join, win32 } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  generatePluginNpmPackageLockWithRetry,
   resolveAugmentedPluginNpmPackageJson,
   resolveAugmentedPluginNpmManifest,
   resolvePluginNpmCommand,
@@ -280,6 +281,53 @@ describe("plugin npm package manifest staging", () => {
     ) as { status: number | null };
 
     expect(secondResult.status).toBe(0);
+  });
+
+  it("retries timed-out package-lock generation with a bounded command timeout", () => {
+    const timeoutError = Object.assign(new Error("timed out"), { code: "ETIMEDOUT" });
+    const generateOptions: Array<Record<string, unknown>> = [];
+    let generateCalls = 0;
+
+    const lock = generatePluginNpmPackageLockWithRetry(
+      "/tmp/plugin",
+      { installStrategy: "shallow" },
+      {
+        generate: (_packageDir: string, options: Record<string, unknown>) => {
+          generateCalls += 1;
+          generateOptions.push(options);
+          if (generateCalls === 1) {
+            throw timeoutError;
+          }
+          return '{"lockfileVersion":3}\n';
+        },
+        pluginDir: "whatsapp",
+      },
+    );
+
+    expect(lock).toBe('{"lockfileVersion":3}\n');
+    expect(generateOptions).toHaveLength(2);
+    expect(generateOptions[0]).toMatchObject({
+      env: { OPENCLAW_NPM_LOCK_COMMAND_TIMEOUT_MS: "180000" },
+      installStrategy: "shallow",
+    });
+    expect(generateOptions[1]).toEqual(generateOptions[0]);
+  });
+
+  it("does not retry ordinary package-lock generation failures", () => {
+    let generateCalls = 0;
+    expect(() =>
+      generatePluginNpmPackageLockWithRetry(
+        "/tmp/plugin",
+        { installStrategy: "shallow" },
+        {
+          generate: () => {
+            generateCalls += 1;
+            throw new Error("invalid dependency");
+          },
+        },
+      ),
+    ).toThrow("invalid dependency");
+    expect(generateCalls).toBe(1);
   });
 
   it("overlays generated channel configs while packing and restores source manifest", () => {
