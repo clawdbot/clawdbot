@@ -1,5 +1,6 @@
 // Openai API module exposes the plugin public contract.
 import type { ProviderDefaultThinkingPolicyContext } from "openclaw/plugin-sdk/core";
+import type { ProviderNormalizeResolvedModelContext } from "openclaw/plugin-sdk/plugin-entry";
 import type {
   ModelApi,
   ModelProviderConfig,
@@ -11,6 +12,7 @@ import type {
 } from "openclaw/plugin-sdk/provider-model-types";
 import {
   classifyOpenAIBaseUrl,
+  isOpenAICodexBaseUrl,
   OPENAI_API_BASE_URL,
   OPENAI_CODEX_RESPONSES_BASE_URL,
 } from "./base-url.js";
@@ -50,6 +52,28 @@ export function normalizeModelCatalogId(params: ProviderNormalizeModelCatalogIdC
   return params.provider.trim().toLowerCase() === "openai"
     ? normalizeOpenAIModelRouteId(params.modelId)
     : null;
+}
+
+/**
+ * Skips full runtime loading only when OpenAI normalization is provably a no-op.
+ * Transport-sensitive routes and legacy model aliases still use the runtime hook.
+ */
+export function projectConfiguredModelRow(ctx: ProviderNormalizeResolvedModelContext) {
+  if (ctx.provider.trim().toLowerCase() !== "openai") {
+    return undefined;
+  }
+  const modelId = ctx.model.id;
+  const canonicalModelId = normalizeOpenAIModelRouteId(modelId);
+  const canonicalRouteId = normalizeOpenAIModelRouteId(ctx.modelId);
+  if (
+    ctx.model.api !== OPENAI_RESPONSES_API ||
+    isOpenAICodexBaseUrl(ctx.model.baseUrl) ||
+    canonicalModelId !== modelId ||
+    canonicalRouteId !== ctx.modelId
+  ) {
+    return undefined;
+  }
+  return null;
 }
 
 function firstRouteBaseUrl(...values: unknown[]): unknown {
