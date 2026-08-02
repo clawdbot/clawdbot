@@ -4,29 +4,14 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
 import { splitShellArgs } from "../utils/shell-argv.js";
 import { buildCommandPayloadCandidates } from "./command-analysis/risks.js";
 import { explainShellCommand } from "./command-explainer/extract.js";
-
-type ParsedExecApprovalCommand = {
-  approvalId: string;
-  decision: "allow-once" | "allow-always" | "deny";
-};
+import { parseExecApprovalCommandText } from "./exec-approval-reply.js";
 
 type UnsafeExecControlShellCommandKind = "approve" | "channel-login" | "skill-workshop-lifecycle";
 
-function parseExecApprovalShellCommand(raw: string): ParsedExecApprovalCommand | null {
-  const normalized = raw.trimStart();
-  const match = normalized.match(
-    /^\/approve(?:@[^\s]+)?\s+([A-Za-z0-9][A-Za-z0-9._:-]*)\s+(allow-once|allow-always|always|deny)\b/i,
-  );
-  if (!match) {
-    return null;
-  }
-  return {
-    approvalId: expectDefined(match[1], "exec control command guard regex capture 1"),
-    decision:
-      normalizeLowercaseStringOrEmpty(match[2]) === "always"
-        ? "allow-always"
-        : (normalizeLowercaseStringOrEmpty(match[2]) as ParsedExecApprovalCommand["decision"]),
-  };
+function parseExecApprovalShellCommand(
+  raw: string,
+): ReturnType<typeof parseExecApprovalCommandText> {
+  return parseExecApprovalCommandText(raw);
 }
 
 function normalizeCommandBaseName(token: string | undefined): string {

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, RuntimeEnv } from "../runtime-api.js";
 import { maybeHandleMSTeamsApprovalControl } from "./approval-control.js";
+import { installMSTeamsTestRuntime } from "./monitor-handler.test-helpers.js";
 import type { MSTeamsMessageHandlerDeps } from "./monitor-handler.types.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 
@@ -53,11 +54,13 @@ function createContext(senderId: string): MSTeamsTurnContext {
         conversationType: "personal",
       },
     },
+    sendActivity: vi.fn(async () => ({ id: "status-activity" })),
   } as MSTeamsTurnContext;
 }
 
 describe("msteams approval control", () => {
   beforeEach(() => {
+    installMSTeamsTestRuntime();
     resolveApprovalOverGateway.mockClear();
   });
 
@@ -95,8 +98,9 @@ describe("msteams approval control", () => {
   );
 
   it("resolves exec approvals through the canonical exec owner", async () => {
+    const context = createContext(APPROVER_ID);
     const handled = await maybeHandleMSTeamsApprovalControl({
-      context: createContext(APPROVER_ID),
+      context,
       deps: createDeps(),
       text: "/approve exec-approval-123 deny",
     });
@@ -110,6 +114,23 @@ describe("msteams approval control", () => {
       approvalKind: "exec",
       clientDisplayName: `Microsoft Teams approval (${APPROVER_ID})`,
     });
+    expect(context.sendActivity).toHaveBeenCalledWith(
+      "✅ Approval deny submitted for exec-approval-123.",
+    );
+  });
+
+  it("consumes gateway failures and sends a generic failure status", async () => {
+    resolveApprovalOverGateway.mockRejectedValueOnce(new Error("gateway secret detail"));
+    const context = createContext(APPROVER_ID);
+
+    const handled = await maybeHandleMSTeamsApprovalControl({
+      context,
+      deps: createDeps(),
+      text: "/approve plugin:approval-123 allow-once",
+    });
+
+    expect(handled).toBe(true);
+    expect(context.sendActivity).toHaveBeenCalledWith("❌ Failed to submit approval.");
   });
 
   it("consumes but does not resolve an unauthorized approval command", async () => {
@@ -120,6 +141,33 @@ describe("msteams approval control", () => {
     });
 
     expect(handled).toBe(true);
+    expect(resolveApprovalOverGateway).not.toHaveBeenCalled();
+  });
+
+  it("does not treat the implicit same-chat fallback as explicit authorization", async () => {
+    const deps = createDeps();
+    deps.cfg = {} as OpenClawConfig;
+
+    const handled = await maybeHandleMSTeamsApprovalControl({
+      context: createContext(OTHER_ID),
+      deps,
+      text: "/approve plugin:approval-123 allow-once",
+    });
+
+    expect(handled).toBe(true);
+    expect(resolveApprovalOverGateway).not.toHaveBeenCalled();
+  });
+
+  it("does not intercept approvals when text commands are disabled", async () => {
+    installMSTeamsTestRuntime({ shouldHandleTextCommands: () => false });
+
+    const handled = await maybeHandleMSTeamsApprovalControl({
+      context: createContext(APPROVER_ID),
+      deps: createDeps(),
+      text: "/approve plugin:approval-123 allow-once",
+    });
+
+    expect(handled).toBe(false);
     expect(resolveApprovalOverGateway).not.toHaveBeenCalled();
   });
 

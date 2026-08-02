@@ -1,9 +1,22 @@
 // Msteams type declarations define plugin contracts.
+import type { ApprovalResolveResult } from "openclaw/plugin-sdk/approval-gateway-runtime";
 import type { OpenClawConfig, RuntimeEnv } from "../runtime-api.js";
 import type { MSTeamsConversationStore } from "./conversation-store.js";
 import type { MSTeamsMonitorLogger } from "./monitor-types.js";
 import type { MSTeamsPollStore } from "./polls.js";
 import type { MSTeamsApp } from "./sdk.js";
+
+export type MSTeamsApprovalGatewayRuntime = {
+  request: (
+    method: "approval.resolve",
+    params: {
+      id: string;
+      kind: "exec" | "plugin";
+      decision: "allow-once" | "allow-always" | "deny";
+    },
+    options?: { clientDisplayName?: string },
+  ) => Promise<ApprovalResolveResult>;
+};
 
 export type MSTeamsMessageHandlerDeps = {
   cfg: OpenClawConfig;
@@ -18,4 +31,5 @@ export type MSTeamsMessageHandlerDeps = {
   conversationStore: MSTeamsConversationStore;
   pollStore: MSTeamsPollStore;
   log: MSTeamsMonitorLogger;
+  approvalGatewayRuntime?: MSTeamsApprovalGatewayRuntime;
 };

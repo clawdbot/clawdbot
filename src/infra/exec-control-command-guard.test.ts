@@ -34,3 +34,14 @@ describe("Skill Workshop lifecycle exec guard", () => {
     ).rejects.toThrow("Use the skill_workshop tool");
   });
 });
+
+describe("approval command exec guard", () => {
+  it.each([
+    "/approve exec-123 allow-once",
+    "/approve exec-123 always",
+    "/approve always exec-123",
+    "/approve@openclaw plugin:approval-123 reject",
+  ])("uses the shared approval grammar for %s", async (command) => {
+    await expect(detectUnsafeExecControlShellCommand(command)).resolves.toBe("approve");
+  });
+});

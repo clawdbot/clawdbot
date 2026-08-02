@@ -13,6 +13,7 @@ import type { MSTeamsTurnContext } from "./sdk-types.js";
 
 const runtimeApiMockState = getMSTeamsTestRuntimeState();
 const resolveApprovalOverGateway = vi.hoisted(() => vi.fn(async () => undefined));
+const APPROVER_ID = "5e4b4b6f-c242-45de-b0de-bf44eb233145";
 
 vi.mock("openclaw/plugin-sdk/approval-gateway-runtime", () => ({
   resolveApprovalOverGateway,
@@ -62,6 +63,7 @@ async function runAdaptiveCardInvoke(
     run: NonNullable<MSTeamsActivityHandler["run"]>;
   },
   value: unknown,
+  senderId = "user-aad",
 ) {
   await registered.run({
     activity: {
@@ -72,7 +74,7 @@ async function runAdaptiveCardInvoke(
       serviceUrl: "https://service.example.test",
       from: {
         id: "user-bf",
-        aadObjectId: "user-aad",
+        aadObjectId: senderId,
         name: "User",
       },
       recipient: {
@@ -232,7 +234,7 @@ describe("msteams adaptive card action invoke", () => {
     deps.cfg = {
       channels: {
         msteams: {
-          allowFrom: ["user-aad"],
+          allowFrom: [APPROVER_ID],
         },
       },
     } as OpenClawConfig;
@@ -242,20 +244,24 @@ describe("msteams adaptive card action invoke", () => {
       run: NonNullable<MSTeamsActivityHandler["run"]>;
     };
 
-    await runAdaptiveCardInvoke(registered, {
-      action: {
-        type: "Action.Submit",
-        data: "/approve plugin:approval-123 allow-once",
+    await runAdaptiveCardInvoke(
+      registered,
+      {
+        action: {
+          type: "Action.Submit",
+          data: "/approve plugin:approval-123 allow-once",
+        },
       },
-    });
+      APPROVER_ID,
+    );
 
     expect(resolveApprovalOverGateway).toHaveBeenCalledWith({
       cfg: deps.cfg,
       approvalId: "plugin:approval-123",
       decision: "allow-once",
-      senderId: "user-aad",
+      senderId: APPROVER_ID,
       approvalKind: "plugin",
-      clientDisplayName: "Microsoft Teams approval (user-aad)",
+      clientDisplayName: `Microsoft Teams approval (${APPROVER_ID})`,
     });
     expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
     expect(run).not.toHaveBeenCalled();
