@@ -276,6 +276,7 @@ async function resolveCompletionProfileWritePath(profilePath: string): Promise<s
   const profileDir = path.dirname(profilePath);
   // Shell startup follows a symlink before `..`; create and canonicalize that lexical parent first.
   await fs.mkdir(profileDir, { recursive: true });
+  const canonicalDir = await fs.realpath(profileDir);
   try {
     // Existing dotfile-manager symlinks must keep pointing at the atomically replaced referent.
     return await fs.realpath(profilePath);
@@ -284,7 +285,22 @@ async function resolveCompletionProfileWritePath(profilePath: string): Promise<s
       throw error;
     }
   }
-  return path.join(await fs.realpath(profileDir), path.basename(profilePath));
+  const linkTarget = await fs.readlink(profilePath).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT" || error.code === "EINVAL") {
+      return undefined;
+    }
+    throw error;
+  });
+  if (linkTarget === undefined) {
+    return path.join(canonicalDir, path.basename(profilePath));
+  }
+  // A dangling relative link is resolved from the directory that physically owns the link.
+  const targetPath = path.isAbsolute(linkTarget)
+    ? linkTarget
+    : `${canonicalDir}${path.sep}${linkTarget}`;
+  const targetDir = path.dirname(targetPath);
+  await fs.mkdir(targetDir, { recursive: true });
+  return path.join(await fs.realpath(targetDir), path.basename(targetPath));
 }
 
 /** Resolves the shell startup profile path that should contain the OpenClaw completion block. */
