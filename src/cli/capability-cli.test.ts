@@ -2028,6 +2028,76 @@ describe("capability cli", () => {
     }
   });
 
+  it.each([
+    { kind: "image", extension: ".png", original: "existing-image", byte: 0x49 },
+    { kind: "video", extension: ".mp4", original: "existing-video", byte: 0x56 },
+  ])(
+    "preserves an existing buffered $kind --output when publication fails",
+    async ({ kind, extension, original, byte }) => {
+      const buffer = Buffer.alloc(2_048, byte);
+      if (kind === "image") {
+        mocks.generateImage.mockResolvedValue({
+          provider: "openai",
+          model: "gpt-image-2",
+          attempts: [],
+          images: [{ buffer, mimeType: "image/png", fileName: "generated.png" }],
+        });
+      } else {
+        mocks.generateVideo.mockResolvedValue({
+          provider: "openai",
+          model: "sora-2",
+          attempts: [],
+          videos: [{ buffer, mimeType: "video/mp4", fileName: "generated.mp4" }],
+        });
+      }
+
+      const tempDir = tempDirs.make(`openclaw-buffered-${kind}-fail-`);
+      const outputBase = path.join(tempDir, "result");
+      const outputPath = `${outputBase}${extension}`;
+      await fs.writeFile(outputPath, original);
+      await fs.chmod(outputPath, 0o640);
+
+      const writeFile = fs.writeFile.bind(fs);
+      const writeFileSpy = vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
+        const [filePath, data, options] = args;
+        if (
+          typeof filePath === "string" &&
+          Buffer.isBuffer(data) &&
+          data.byteLength === buffer.byteLength &&
+          path.dirname(filePath) === tempDir
+        ) {
+          await writeFile(filePath, data.subarray(0, 17), options);
+          throw new Error("injected buffered media write failure");
+        }
+        await writeFile(...args);
+      });
+
+      try {
+        await expect(
+          runCapability(
+            kind,
+            "generate",
+            "--prompt",
+            "friendly lobster",
+            "--output",
+            outputBase,
+            "--json",
+          ),
+        ).rejects.toThrow("exit 1");
+
+        expectRuntimeErrorContains("injected buffered media write failure");
+        expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+        expect(await fs.readFile(outputPath, "utf8")).toBe(original);
+        if (process.platform !== "win32") {
+          expect((await fs.stat(outputPath)).mode & 0o777).toBe(0o640);
+        }
+        expect(await fs.readdir(tempDir)).toEqual([`result${extension}`]);
+      } finally {
+        writeFileSpy.mockRestore();
+      }
+    },
+  );
+
   it("blocks private-network url-only generated video downloads by default", async () => {
     mocks.loadConfig.mockReturnValue({});
     primeGeneratedVideoUrl("http://127.0.0.2:40123/private-video.mp4?sig=secret-presigned-token");

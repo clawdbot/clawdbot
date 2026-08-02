@@ -14,7 +14,6 @@ import { getRuntimeConfig } from "../../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readResponseWithLimit } from "../../infra/http-body.js";
-import { writeSiblingTempFile } from "../../infra/sibling-temp-file.js";
 import { buildMediaUnderstandingRegistry } from "../../media-understanding/provider-registry.js";
 import { describeVideoFile } from "../../media-understanding/runtime.js";
 import { resolveGeneratedMediaMaxBytes } from "../../media/configured-max-bytes.js";
@@ -31,7 +30,7 @@ import {
 import type { VideoGenerationResolution } from "../../video-generation/types.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { getModelsCommandSecretTargetIds } from "../command-secret-targets.js";
-import { writeOutputAsset } from "./media-output.js";
+import { publishOutputFileAtomically, writeOutputAsset } from "./media-output.js";
 import type { CapabilityEnvelope } from "./metadata.js";
 import {
   emitJsonOrText,
@@ -45,18 +44,6 @@ import {
 } from "./shared.js";
 
 const GENERATED_VIDEO_DOWNLOAD_TIMEOUT_MS = 120_000;
-const GENERATED_VIDEO_OUTPUT_TEMP_PREFIX = ".openclaw-video-output";
-
-async function resolveExistingVideoOutputMode(filePath: string): Promise<number | undefined> {
-  try {
-    return (await fs.stat(filePath)).mode & 0o7777;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return undefined;
-    }
-    throw error;
-  }
-}
 
 function normalizeVideoResolution(raw: string | undefined): VideoGenerationResolution | undefined {
   const normalized = raw?.trim().toUpperCase();
@@ -176,14 +163,8 @@ async function runVideoGenerate(params: {
               result.videos.length <= 1
                 ? path.join(parsed.dir, `${parsed.name}${ext}`)
                 : path.join(parsed.dir, `${parsed.name}-${String(index + 1)}${ext}`);
-            const dir = path.dirname(filePath);
-            await fs.mkdir(dir, { recursive: true });
-            const mode = await resolveExistingVideoOutputMode(filePath);
-            const { result: size } = await writeSiblingTempFile({
-              dir,
-              chmodDir: false,
-              tempPrefix: GENERATED_VIDEO_OUTPUT_TEMP_PREFIX,
-              ...(mode === undefined ? {} : { mode }),
+            const size = await publishOutputFileAtomically({
+              filePath,
               writeTemp: async (tempPath) => {
                 await pipeline(
                   Readable.fromWeb(
@@ -197,7 +178,6 @@ async function runVideoGenerate(params: {
                 }
                 return writtenSize;
               },
-              resolveFinalPath: () => filePath,
             });
             return { path: filePath, mimeType: video.mimeType, size };
           }
