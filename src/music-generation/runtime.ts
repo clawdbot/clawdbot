@@ -100,6 +100,10 @@ export async function generateMusic(
         durationSeconds: params.durationSeconds,
         format: params.format,
         inputImages: params.inputImages,
+        audioUrl: params.audioUrl,
+        audioBase64: params.audioBase64,
+        coverFeatureId: params.coverFeatureId,
+        inputAudios: params.inputAudios,
       });
       const result: MusicGenerationResult = await provider.generateMusic({
         provider: candidate.provider,
@@ -113,6 +117,10 @@ export async function generateMusic(
         durationSeconds: sanitized.durationSeconds,
         format: sanitized.format,
         inputImages: params.inputImages,
+        audioUrl: params.audioUrl,
+        audioBase64: params.audioBase64,
+        coverFeatureId: params.coverFeatureId,
+        inputAudios: params.inputAudios,
         ...(timeoutMs !== undefined ? { timeoutMs } : {}),
       });
       if (!Array.isArray(result.tracks) || result.tracks.length === 0) {

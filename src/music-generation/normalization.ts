@@ -9,6 +9,7 @@ import type {
   MusicGenerationNormalization,
   MusicGenerationOutputFormat,
   MusicGenerationProvider,
+  MusicGenerationSourceAudio,
   MusicGenerationSourceImage,
 } from "./types.js";
 
@@ -45,6 +46,10 @@ export function resolveMusicGenerationOverrides(params: {
   durationSeconds?: number;
   format?: MusicGenerationOutputFormat;
   inputImages?: MusicGenerationSourceImage[];
+  audioUrl?: string;
+  audioBase64?: string;
+  coverFeatureId?: string;
+  inputAudios?: MusicGenerationSourceAudio[];
 }): ResolvedMusicGenerationOverrides {
   const { capabilities: caps } = resolveMusicGenerationModeCapabilities({
     provider: params.provider,

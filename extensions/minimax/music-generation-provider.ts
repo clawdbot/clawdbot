@@ -4,6 +4,7 @@ import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import type {
   GeneratedMusicAsset,
   MusicGenerationProvider,
+  MusicGenerationSourceAudio,
 } from "openclaw/plugin-sdk/music-generation";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
@@ -264,6 +265,56 @@ function resolveMinimaxMusicModel(model: string | undefined): string {
   return trimmed;
 }
 
+function isMinimaxMusicCoverModel(model: string): boolean {
+  return model === "music-cover" || model === "music-cover-free";
+}
+
+function resolveMinimaxMusicCoverSource(req: {
+  audioUrl?: string;
+  audioBase64?: string;
+  coverFeatureId?: string;
+  inputAudios?: MusicGenerationSourceAudio[];
+}): Record<string, string> | undefined {
+  const coverFeatureId = normalizeOptionalString(req.coverFeatureId);
+  const audioUrl = normalizeOptionalString(req.audioUrl);
+  const audioBase64 = normalizeOptionalString(req.audioBase64);
+  const explicitFields = [coverFeatureId, audioUrl, audioBase64].filter(
+    (value): value is string => Boolean(value),
+  );
+  if (explicitFields.length > 1) {
+    throw new Error(
+      "MiniMax music cover accepts only one of audioUrl, audioBase64, or coverFeatureId.",
+    );
+  }
+  if (coverFeatureId) {
+    return { cover_feature_id: coverFeatureId };
+  }
+  if (audioUrl) {
+    return { audio_url: audioUrl };
+  }
+  if (audioBase64) {
+    return { audio_base64: audioBase64 };
+  }
+  const inputAudios = req.inputAudios ?? [];
+  if (inputAudios.length > 1) {
+    throw new Error("MiniMax music cover accepts at most one reference audio.");
+  }
+  const sourceAudio = inputAudios[0];
+  if (!sourceAudio) {
+    return undefined;
+  }
+  const sourceAudioUrl = normalizeOptionalString(sourceAudio.url);
+  if (sourceAudioUrl) {
+    return { audio_url: sourceAudioUrl };
+  }
+  if (!sourceAudio.buffer || sourceAudio.buffer.byteLength === 0) {
+    throw new Error("MiniMax music cover reference audio is missing data.");
+  }
+  return {
+    audio_base64: Buffer.from(sourceAudio.buffer).toString("base64"),
+  };
+}
+
 function buildMinimaxMusicProvider(providerId: string): MusicGenerationProvider {
   return {
     id: providerId,
@@ -334,15 +385,38 @@ function buildMinimaxMusicProvider(providerId: string): MusicGenerationProvider 
 
       const model = resolveMinimaxMusicModel(req.model);
       const requestedLyrics = normalizeOptionalString(req.lyrics);
+      const isCoverModel = isMinimaxMusicCoverModel(model);
+      const coverSource = resolveMinimaxMusicCoverSource(req);
+      if (isCoverModel && normalizeOptionalString(req.coverFeatureId) && !requestedLyrics) {
+        throw new Error("MiniMax music cover requires lyrics when using coverFeatureId.");
+      }
+      if (isCoverModel && !coverSource) {
+        throw new Error(
+          "MiniMax music cover requires audioUrl, audioBase64, or coverFeatureId.",
+        );
+      }
+      if (!isCoverModel && coverSource) {
+        throw new Error("MiniMax music cover source audio requires a music-cover model.");
+      }
+      if (isCoverModel && req.instrumental === true) {
+        throw new Error("MiniMax music cover does not support instrumental mode.");
+      }
       const body = {
         model,
         prompt: req.prompt.trim(),
-        ...(req.instrumental === true ? { is_instrumental: true } : {}),
-        ...(requestedLyrics
-          ? { lyrics: requestedLyrics }
-          : req.instrumental === true
-            ? {}
-            : { lyrics_optimizer: true }),
+        ...(isCoverModel
+          ? {
+              ...(requestedLyrics ? { lyrics: requestedLyrics } : {}),
+              ...coverSource,
+            }
+          : {
+              ...(req.instrumental === true ? { is_instrumental: true } : {}),
+              ...(requestedLyrics
+                ? { lyrics: requestedLyrics }
+                : req.instrumental === true
+                  ? {}
+                  : { lyrics_optimizer: true }),
+            }),
         stream: true,
         output_format: "hex",
         audio_setting: {
