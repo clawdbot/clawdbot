@@ -51,6 +51,10 @@ function parseEventType(eventJson: string | null): string | undefined {
   }
 }
 
+function sqliteTranscriptBoundaryEventType() {
+  return /* kysely-allow-raw: boundary type lives inside canonical transcript JSON. */ sql<string>`json_extract(boundary_event.event_json, '$.type')`;
+}
+
 function readTitleProbeChunk(
   database: OpenClawAgentDatabase,
   sessionIds: readonly string[],
@@ -118,12 +122,8 @@ function readTitleProbeChunk(
               .select("boundary_event.event_json")
               .whereRef("boundary.session_id", "=", "window.session_id")
               .where("boundary.message_position", "is", null)
-              // kysely-allow-raw: boundary type lives inside canonical transcript JSON;
               // excluding latest-reset sessions prevents pre-reset text from leaking.
-              .where(sql<string>`json_extract(boundary_event.event_json, '$.type')`, "in", [
-                "reset",
-                "compaction",
-              ])
+              .where(sqliteTranscriptBoundaryEventType(), "in", ["reset", "compaction"])
               .orderBy("boundary.active_position", "desc")
               .limit(1)
               .as("latest_boundary_json"),
