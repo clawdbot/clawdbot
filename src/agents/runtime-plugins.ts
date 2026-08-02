@@ -104,9 +104,15 @@ export function loadAgentRuntimePluginRegistryHandle(
   params: AgentRuntimePluginRegistryParams,
 ): PluginRegistry {
   const load = resolveAgentRuntimePluginRegistryLoad(params);
-  // Discovery-only load: full mode can replace process-global sandbox backends.
-  // Adopt full-only runtime capabilities from the matching composition-root owners.
-  const pluginRegistry = loadPluginRegistryHandle({ ...load.loadOptions, activate: false });
+  // Register full runtime capabilities into this caller-owned handle without
+  // globally activating it: loadPluginRegistryHandle already forces activate:false,
+  // so runtime mode gives runtime-capable engines usable from the handle while
+  // skipping the full-activation-only side effects that replace process-global
+  // sandbox backends. Composition-root registrations are then adopted below.
+  const pluginRegistry = loadPluginRegistryHandle({
+    ...load.loadOptions,
+    handleRegistrationMode: "runtime",
+  });
   const activeRegistry = getActivePluginRegistry();
   if (!activeRegistry) {
     return pluginRegistry;

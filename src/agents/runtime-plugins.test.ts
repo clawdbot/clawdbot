@@ -133,13 +133,13 @@ describe("agent runtime plugin registries", () => {
       metadataSnapshot,
     });
     expect(hoisted.loadPluginRegistryHandle).toHaveBeenCalledWith({
-      activate: false,
       config,
       activationSourceConfig: config,
       env,
       discovery: metadataSnapshot.discovery,
       installRecords: {},
       manifestRegistry: metadataSnapshot.manifestRegistry,
+      handleRegistrationMode: "runtime",
       workspaceDir: "/tmp/workspace",
       runtimeOptions: { allowGatewaySubagentBinding: true },
     });
@@ -153,9 +153,9 @@ describe("agent runtime plugin registries", () => {
     expect(loadAgentRuntimePluginRegistryHandle(params)).toEqual({ handle: true });
     expect(hoisted.resolveAgentRuntimePluginLoadPlan).not.toHaveBeenCalled();
     expect(hoisted.loadPluginRegistryHandle).toHaveBeenCalledWith({
-      activate: false,
       activationSourceConfig: params.config,
       config: params.config,
+      handleRegistrationMode: "runtime",
       onlyPluginIds: [],
       runtimeOptions: undefined,
       workspaceDir: "/tmp/workspace",
@@ -252,12 +252,12 @@ describe("agent runtime plugin registries", () => {
       metadataSnapshot: snapshot,
     });
     expect(hoisted.loadPluginRegistryHandle).toHaveBeenCalledWith({
-      activate: false,
       activationSourceConfig: config,
       channelPluginLoadIntent: "full",
       config,
       discovery: snapshot.discovery,
       env,
+      handleRegistrationMode: "runtime",
       installRecords: {},
       manifestRegistry: snapshot.manifestRegistry,
       onlyPluginIds: ["codex", "memory-core"],

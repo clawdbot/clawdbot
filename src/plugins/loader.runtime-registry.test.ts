@@ -24,6 +24,8 @@ import {
 import {
   makePluginLoaderTempDir,
   resetPluginLoaderTestStateForTest,
+  useNoBundledPlugins,
+  writePlugin,
 } from "./loader.test-fixtures.js";
 import { buildMemoryPromptSection, registerMemoryCapability } from "./memory-state.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
@@ -59,6 +61,44 @@ it("keeps injected instance runtime surfaces independent of the broad runtime mo
   expect(runtime.nodes).toBe(nodes);
   expect(runtime.subagent).toBe(subagent);
   expect(loadPluginModule).not.toHaveBeenCalled();
+});
+
+it("registers runtime capabilities in an explicitly runtime-owned private handle", () => {
+  useNoBundledPlugins();
+  const root = loadAndActivateRootPluginRegistry({ cache: false, config: {} });
+  const plugin = writePlugin({
+    id: "private-runtime-context-engine",
+    body: `module.exports = {
+      id: "private-runtime-context-engine",
+      register(api) {
+        if (api.registrationMode === "full") {
+          api.registerContextEngine("private-runtime-engine", () => ({
+            info: { id: "private-runtime-engine", name: "Private runtime engine" },
+          }));
+        }
+      },
+    };`,
+  });
+
+  const handle = loadPluginRegistryHandle({
+    cache: false,
+    config: {
+      plugins: {
+        allow: [plugin.id],
+        load: { paths: [plugin.file] },
+      },
+    },
+    onlyPluginIds: [plugin.id],
+    handleRegistrationMode: "runtime",
+  });
+
+  expect(handle.contextEngines.get("private-runtime-engine")).toEqual(
+    expect.objectContaining({
+      owner: `plugin:${plugin.id}`,
+      lifecycle: "runtime",
+    }),
+  );
+  expect(getActivePluginRegistry()).toBe(root);
 });
 
 function requireMemoryEmbeddingProvider(providerId: string) {
@@ -112,6 +152,19 @@ describe("resolvePluginLoadCacheContext", () => {
     }).cacheKey;
 
     expect(isolatedKey).not.toBe(processHomeKey);
+  });
+
+  it("partitions discovery and private runtime registration handles", () => {
+    const discovery = resolvePluginLoadCacheContext({ config: {}, activate: false });
+    const runtime = resolvePluginLoadCacheContext({
+      config: {},
+      activate: false,
+      handleRegistrationMode: "runtime",
+    });
+
+    expect(discovery.shouldRegisterRuntimeCapabilities).toBe(false);
+    expect(runtime.shouldRegisterRuntimeCapabilities).toBe(true);
+    expect(runtime.cacheKey).not.toBe(discovery.cacheKey);
   });
 
   it("partitions full and setup channel plugin load intent", () => {

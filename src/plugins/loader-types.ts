@@ -10,6 +10,7 @@ import type { PluginLogger } from "./types.js";
 
 export type PluginRuntimeSubagentMode = "default" | "explicit" | "gateway-bindable";
 export type ChannelPluginLoadIntent = "full" | "setup";
+export type PluginHandleRegistrationMode = "discovery" | "runtime";
 
 /** Inputs shared by runtime, snapshot, and CLI-metadata plugin loading. */
 export type PluginLoadOptions = {
@@ -44,6 +45,8 @@ export type PluginLoadOptions = {
   /** Prefer bundled JavaScript artifacts over source TypeScript entrypoints. */
   preferBuiltPluginArtifacts?: boolean;
   toolDiscovery?: boolean;
+  /** Register runtime-owned capabilities in a private handle without activating it globally. */
+  handleRegistrationMode?: PluginHandleRegistrationMode;
   activate?: boolean;
   loadModules?: boolean;
   throwOnLoadError?: boolean;
