@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
+import { resolveEmbeddedSessionLane } from "../agents/embedded-agent-runner/lanes.js";
 import { enqueueFollowupRun, type FollowupRun } from "../auto-reply/reply/queue.js";
 import {
   clearFollowupQueue,
@@ -22,6 +23,11 @@ import {
   replaceSessionEntry,
   upsertSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import {
+  enqueueCommandInLane,
+  getCommandLaneSnapshot,
+  setCommandLaneConcurrency,
+} from "../process/command-queue.js";
 import {
   beginSessionWorkAdmission,
   isSessionWorkAdmissionActive,
@@ -1433,6 +1439,63 @@ test("sessions.compact preserves accepted queued follow-up work", async () => {
     clearFollowupQueue(sessionKey);
     ws.close();
   }
+});
+
+test("sessions.compact preserves an in-flight collected follow-up waiting in the command lane", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const sessionId = "sess-compact-command-queue";
+  const sessionKey = "agent:main:main";
+  await seedSessionEntry({
+    entry: sessionStoreEntry(sessionId),
+    sessionKey,
+    storePath,
+  });
+  await seedTranscriptRows({
+    sessionId,
+    sessionKey,
+    storePath,
+    totalLines: 3,
+  });
+  const lane = resolveEmbeddedSessionLane(sessionKey);
+  const queuedRun = {
+    prompt: "please also update the changelog",
+    enqueuedAt: Date.now(),
+    run: {},
+  } as unknown as FollowupRun;
+  const queue = getFollowupQueue(sessionKey, { mode: "collect" });
+  queue.inFlight.add(queuedRun);
+  setCommandLaneConcurrency(lane, 0);
+  let commandRan = false;
+  const queuedCommand = enqueueCommandInLane(lane, async () => {
+    commandRan = true;
+  });
+
+  const { ws } = await openClient();
+  try {
+    expect(getCommandLaneSnapshot(lane)).toMatchObject({
+      activeCount: 0,
+      queuedCount: 1,
+    });
+
+    const compacted = await rpcReq(ws, "sessions.compact", { key: "main" });
+
+    expect(compacted.ok).toBe(false);
+    expect(compacted.error).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: "Session main has queued work; retry after it finishes.",
+    });
+    expect(getExistingFollowupQueue(sessionKey)?.inFlight).toContain(queuedRun);
+    expect(getCommandLaneSnapshot(lane).queuedCount).toBe(1);
+    expect(commandRan).toBe(false);
+    expect(embeddedRunMock.compactEmbeddedAgentSession).not.toHaveBeenCalled();
+    expectNoSessionQueueCleanup();
+  } finally {
+    clearFollowupQueue(sessionKey);
+    setCommandLaneConcurrency(lane, 1);
+    await queuedCommand;
+    ws.close();
+  }
+  expect(commandRan).toBe(true);
 });
 
 test("sessions.compact preserves summary-elided queued follow-up work", async () => {

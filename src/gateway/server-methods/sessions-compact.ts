@@ -7,7 +7,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
-import { getExistingFollowupQueue } from "../../auto-reply/reply/queue/state.js";
+import { hasPendingFollowupQueueWork } from "../../auto-reply/reply/queue/state.js";
 import {
   resolveSessionWorkStartError,
   SESSION_LIFECYCLE_CHANGED_ERROR_REASON,
@@ -41,28 +41,6 @@ import {
 } from "./sessions-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
-
-function hasQueuedFollowup(keys: Array<string | undefined>): boolean {
-  const seen = new Set<string>();
-  for (const key of keys) {
-    const cleaned = key?.trim();
-    if (!cleaned || seen.has(cleaned)) {
-      continue;
-    }
-    seen.add(cleaned);
-    const queue = getExistingFollowupQueue(cleaned);
-    if (
-      queue &&
-      (queue.items.length > 0 ||
-        queue.summaryLines.length > 0 ||
-        queue.summarySources.length > 0 ||
-        queue.summaryElisions.length > 0)
-    ) {
-      return true;
-    }
-  }
-  return false;
-}
 
 export const sessionCompactHandlers: GatewayRequestHandlers = {
   "sessions.compact": async ({ params, respond, context }) => {
@@ -243,7 +221,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
               agentId: requestedAgentId,
               defaultAgentId: resolveDefaultAgentId(cfg),
             });
-          blockedByQueuedFollowup = hasQueuedFollowup([
+          blockedByQueuedFollowup = hasPendingFollowupQueueWork([
             key,
             target.canonicalKey,
             compactTarget.primaryKey,

@@ -1,7 +1,12 @@
 // Tests queue state storage, dedupe, and cleanup primitives.
 import { afterEach, describe, expect, it } from "vitest";
 import { enqueueFollowupRun } from "./enqueue.js";
-import { clearFollowupQueue, getFollowupQueue, refreshQueuedFollowupSession } from "./state.js";
+import {
+  clearFollowupQueue,
+  getFollowupQueue,
+  hasPendingFollowupQueueWork,
+  refreshQueuedFollowupSession,
+} from "./state.js";
 import type { FollowupRun } from "./types.js";
 
 const QUEUE_KEY = "agent:main:dm:test";
@@ -237,5 +242,43 @@ describe("getFollowupQueue", () => {
     expect(updated.summaryElisions.map((entry) => entry.contextKey)).toEqual(["newest"]);
     expect(updated.summaryElisions[0]?.sources).toHaveLength(1);
     expect(updated.evictedSummaryCount).toBe(13);
+  });
+});
+
+describe("hasPendingFollowupQueueWork", () => {
+  it("detects each actionable queued-work representation", () => {
+    const cases = [
+      (queue: ReturnType<typeof getFollowupQueue>) => {
+        queue.items.push({
+          prompt: "queued message",
+          enqueuedAt: Date.now(),
+          run: makeRun(),
+        });
+      },
+      (queue: ReturnType<typeof getFollowupQueue>) => {
+        queue.inFlight.add({
+          prompt: "in-flight collected message",
+          enqueuedAt: Date.now(),
+          run: makeRun(),
+        });
+      },
+      (queue: ReturnType<typeof getFollowupQueue>) => {
+        queue.droppedCount = 1;
+      },
+    ];
+
+    for (const populate of cases) {
+      const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
+      populate(queue);
+      expect(hasPendingFollowupQueueWork(["", ` ${QUEUE_KEY} `, QUEUE_KEY])).toBe(true);
+      clearFollowupQueue(QUEUE_KEY);
+    }
+  });
+
+  it("ignores empty queues and historical eviction accounting", () => {
+    const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
+    queue.evictedSummaryCount = 3;
+
+    expect(hasPendingFollowupQueueWork([undefined, "", QUEUE_KEY])).toBe(false);
   });
 });
