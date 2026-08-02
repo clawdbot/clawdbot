@@ -1,6 +1,7 @@
 // Gateway server integration tests cover startup, auth, device pairing, session
 // routing, OpenAI-compatible paths, and environment isolation for local servers.
 import fs from "node:fs/promises";
+import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -11,6 +12,13 @@ import {
   writeConfigFile,
 } from "../config/config.js";
 import { resetConfigOverrides, setConfigOverride } from "../config/runtime-overrides.js";
+import { resolveStorePath } from "../config/sessions/paths.js";
+import {
+  appendTranscriptMessage,
+  loadSessionEntry,
+  loadTranscriptEventsSync,
+  upsertSessionEntry,
+} from "../config/sessions/session-accessor.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import type { GatewayAuthConfig, GatewayTailscaleConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -542,6 +550,257 @@ describe("gateway e2e", () => {
       envSnapshot.restore();
     }
   });
+
+  it(
+    "applies a hot-reloaded compaction model to automatic chat preflight without restarting",
+    { timeout: GATEWAY_E2E_TIMEOUT_MS },
+    async () => {
+      const { envSnapshot, tempHome, workspaceDir } = await setupGatewayTempHome({
+        prefix: "openclaw-gw-compaction-hot-reload-",
+      });
+      const token = nextGatewayId("compaction-hot-reload-token");
+      setTestEnvValue("OPENCLAW_GATEWAY_TOKEN", token);
+
+      const providerRequests: Array<{ model: string }> = [];
+      const summaryByModel = new Map<string, string>();
+      const providerServer = createServer((request, response) => {
+        void (async () => {
+          const chunks: Buffer[] = [];
+          for await (const chunk of request) {
+            chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+          }
+          if (request.method !== "POST" || request.url !== "/v1/responses") {
+            response.writeHead(404).end();
+            return;
+          }
+          const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { model?: string };
+          const model = body.model ?? "";
+          providerRequests.push({ model });
+          const text = summaryByModel.get(model) ?? "Primary assistant answer.";
+          const message = {
+            type: "message",
+            id: nextGatewayId("provider-message"),
+            role: "assistant",
+            status: "completed",
+            content: [{ type: "output_text", text, annotations: [] }],
+          };
+          const events = [
+            {
+              type: "response.output_item.added",
+              item: { ...message, status: "in_progress", content: [] },
+            },
+            { type: "response.output_item.done", item: message },
+            {
+              type: "response.completed",
+              response: {
+                status: "completed",
+                usage: { input_tokens: 10, output_tokens: 10, total_tokens: 20 },
+              },
+            },
+          ];
+          response.writeHead(200, { "content-type": "text/event-stream" });
+          for (const event of events) {
+            response.write(`data: ${JSON.stringify(event)}\n\n`);
+          }
+          response.end("data: [DONE]\n\n");
+        })().catch((error: unknown) => {
+          response.writeHead(500).end(error instanceof Error ? error.message : String(error));
+        });
+      });
+
+      let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
+      try {
+        await new Promise<void>((resolve, reject) => {
+          providerServer.once("error", reject);
+          providerServer.listen(0, "127.0.0.1", resolve);
+        });
+        const providerAddress = providerServer.address();
+        if (!providerAddress || typeof providerAddress === "string") {
+          throw new Error("mock OpenAI Responses server did not bind a loopback port");
+        }
+        const baseUrl = `http://127.0.0.1:${providerAddress.port}/v1`;
+        const primaryModel = buildMockOpenAiResponsesProvider(baseUrl, "gpt-primary");
+        const oldCompactionModel = buildMockOpenAiResponsesProvider(baseUrl, "gpt-old-summary");
+        const newCompactionModel = buildMockOpenAiResponsesProvider(baseUrl, "gpt-new-summary");
+        const newSummary = "HOT_RELOAD_COMPACTION_SUMMARY";
+        summaryByModel.set(oldCompactionModel.modelId, "STALE_COMPACTION_SUMMARY");
+        summaryByModel.set(newCompactionModel.modelId, newSummary);
+
+        const initialConfig = {
+          agents: {
+            defaults: {
+              workspace: workspaceDir,
+              skipBootstrap: true,
+              model: { primary: primaryModel.modelRef },
+              models: {
+                [primaryModel.modelRef]: { params: { transport: "sse", openaiWsWarmup: false } },
+                [oldCompactionModel.modelRef]: {
+                  params: { transport: "sse", openaiWsWarmup: false },
+                },
+                [newCompactionModel.modelRef]: {
+                  params: { transport: "sse", openaiWsWarmup: false },
+                },
+              },
+              compaction: {
+                model: oldCompactionModel.modelRef,
+                maxActiveTranscriptBytes: "1mb",
+                keepRecentTokens: 1,
+                recentTurnsPreserve: 1,
+                qualityGuard: { enabled: false },
+                memoryFlush: { enabled: false },
+              },
+            },
+            entries: { dev: { default: true } },
+          },
+          models: {
+            mode: "replace",
+            providers: {
+              [primaryModel.providerId]: {
+                ...primaryModel.config,
+                models: [primaryModel, oldCompactionModel, newCompactionModel].map(({ config }) => ({
+                  ...config.models[0],
+                  input: [...config.models[0].input],
+                })),
+              },
+            },
+          },
+          gateway: { auth: { mode: "token", token } },
+        } satisfies OpenClawConfig;
+
+        const configPath = await createGatewayConfigPath(tempHome);
+        gateway = await startGatewayWithClient({
+          cfg: initialConfig,
+          configPath,
+          token,
+          clientDisplayName: "vitest-compaction-hot-reload",
+        });
+        const gatewayClient = gateway.client;
+        const sessionKey = "agent:dev:main";
+        const sessionId = nextGatewayId("existing-compaction-session");
+        const scope = {
+          agentId: "dev",
+          sessionId,
+          sessionKey,
+          storePath: resolveStorePath(undefined, { agentId: "dev" }),
+        };
+        await upsertSessionEntry(scope, {
+          sessionId,
+          updatedAt: Date.now(),
+          compactionCount: 0,
+          modelProvider: primaryModel.providerId,
+          model: primaryModel.modelId,
+          totalTokens: 20,
+          totalTokensFresh: true,
+        });
+        for (let turn = 0; turn < 6; turn += 1) {
+          const timestamp = Date.now() + turn;
+          await appendTranscriptMessage(scope, {
+            message: {
+              role: "user",
+              content: `Historical request ${turn}: ${"persisted conversation ".repeat(24)}`,
+              timestamp,
+            },
+            now: timestamp,
+          });
+          await appendTranscriptMessage(scope, {
+            message: {
+              role: "assistant",
+              content: [
+                {
+                  type: "text",
+                  text: `Historical answer ${turn}: ${"durable model context ".repeat(24)}`,
+                },
+              ],
+              api: "openai-responses",
+              provider: primaryModel.providerId,
+              model: primaryModel.modelId,
+              usage: {
+                input: 10,
+                output: 10,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 20,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+              },
+              stopReason: "stop",
+              timestamp,
+            },
+            now: timestamp,
+          });
+        }
+        expect(loadTranscriptEventsSync(scope).length).toBeGreaterThan(10);
+
+        const sendChatAndWait = async (message: string) => {
+          const started = await gatewayClient.request<{ runId: string; status: string }>(
+            "chat.send",
+            { sessionKey, message, idempotencyKey: nextGatewayId("compaction-chat") },
+          );
+          expect(started.status).toBe("started");
+          const completed = await gatewayClient.request<{ status: string }>(
+            "agent.wait",
+            { runId: started.runId, timeoutMs: 30_000 },
+            { timeoutMs: 35_000 },
+          );
+          expect(completed.status).toBe("ok");
+        };
+
+        await sendChatAndWait("Warm the existing prepared model runtime.");
+        expect(providerRequests.map(({ model }) => model)).toContain(primaryModel.modelId);
+        expect(loadSessionEntry(scope)?.compactionCount ?? 0).toBe(0);
+
+        await writeConfigFile({
+          ...initialConfig,
+          agents: {
+            ...initialConfig.agents,
+            defaults: {
+              ...initialConfig.agents.defaults,
+              compaction: {
+                ...initialConfig.agents.defaults.compaction,
+                model: newCompactionModel.modelRef,
+                maxActiveTranscriptBytes: "10b",
+              },
+            },
+          },
+        });
+        await expect
+          .poll(() => getRuntimeConfig().agents?.defaults?.compaction?.model, {
+            timeout: 5_000,
+            interval: 50,
+          })
+          .toBe(newCompactionModel.modelRef);
+        await expect
+          .poll(() => getRuntimeConfig().agents?.defaults?.compaction?.maxActiveTranscriptBytes, {
+            timeout: 5_000,
+            interval: 50,
+          })
+          .toBe("10b");
+
+        const requestsBeforeCompaction = providerRequests.length;
+        await sendChatAndWait("Compact the existing conversation before answering.");
+
+        const newRequests = providerRequests.slice(requestsBeforeCompaction);
+        expect(newRequests.map(({ model }) => model)).toContain(newCompactionModel.modelId);
+        expect(newRequests.map(({ model }) => model)).not.toContain(oldCompactionModel.modelId);
+        expect(loadSessionEntry(scope)?.compactionCount).toBe(1);
+        expect(loadTranscriptEventsSync(scope)).toContainEqual(
+          expect.objectContaining({
+            type: "compaction",
+            summary: expect.stringContaining(newSummary),
+          }),
+        );
+        await expect(gatewayClient.request("health", {})).resolves.toEqual(expect.any(Object));
+      } finally {
+        if (gateway) {
+          await disconnectGatewayClient(gateway.client);
+          await gateway.server.close({ reason: "compaction hot reload integration test complete" });
+        }
+        providerServer.closeAllConnections();
+        await new Promise<void>((resolve) => providerServer.close(() => resolve()));
+        await removeGatewayTempHome(tempHome);
+        envSnapshot.restore();
+      }
+    },
+  );
 
   it(
     "accepts a gateway agent request over ws and returns a run id",
