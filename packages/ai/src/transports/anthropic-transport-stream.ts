@@ -587,6 +587,20 @@ function parseAnthropicToolCallArguments(inputJson: string): unknown {
   return parseJsonObjectPreservingUnsafeIntegers(inputJson) ?? parseStreamingJson(inputJson);
 }
 
+/**
+ * Terminal seal for a completed tool-call block. The lenient streaming parser
+ * repairs truncated or malformed JSON into partial objects, which would let a
+ * tool execute with incomplete arguments; the completed payload must parse
+ * strictly into a JSON object.
+ */
+export function parseAnthropicToolCallArgumentsStrict(inputJson: string): Record<string, unknown> {
+  const parsed = parseJsonObjectPreservingUnsafeIntegers(inputJson);
+  if (parsed) {
+    return parsed;
+  }
+  throw new Error("Anthropic completed tool call has invalid JSON arguments");
+}
+
 const DEFAULT_ANTHROPIC_BASE_URL = "https://api.anthropic.com";
 
 /** Resolve the effective Anthropic API base URL from model or environment. */
@@ -1649,6 +1663,9 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               continue;
             }
             if (block.type === "toolCall") {
+              if (typeof block.partialJson === "string" && block.partialJson.trim() !== "") {
+                block.arguments = parseAnthropicToolCallArgumentsStrict(block.partialJson);
+              }
               delete block.partialJson;
               eventSink.push({
                 type: "toolcall_end",
@@ -1720,6 +1737,8 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           signal: options?.signal,
           error,
           cleanup: () => {
+            // Failed or canceled streams must never retain partially repaired tool calls.
+            output.content = output.content.filter((block) => block.type !== "toolCall");
             for (const block of output.content) {
               delete block.index;
             }

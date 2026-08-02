@@ -1720,6 +1720,123 @@ describe("Anthropic provider", () => {
     ]);
   });
 
+  it("fails the stream when a completed tool call carries truncated JSON arguments", async () => {
+    const client = createAnthropicSseClient([
+      {
+        type: "message_start",
+        message: { id: "msg_truncated_tool", usage: { input_tokens: 1, output_tokens: 0 } },
+      },
+      {
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "tool_use", id: "call_1", name: "lookup", input: {} },
+      },
+      {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "input_json_delta", partial_json: '{"query":"hel' },
+      },
+      { type: "content_block_stop", index: 0 },
+      {
+        type: "message_delta",
+        delta: { stop_reason: "tool_use" },
+        usage: { input_tokens: 1, output_tokens: 2 },
+      },
+      { type: "message_stop" },
+    ]);
+
+    const result = await streamAnthropic(
+      makeAnthropicModel(),
+      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+      { apiKey: "sk-ant-provider", client: client as never },
+    ).result();
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toContain(
+      "Anthropic completed tool call has invalid JSON arguments",
+    );
+    expect(result.content.some((block) => block.type === "toolCall")).toBe(false);
+  });
+
+  it("seals a completed tool call with strictly parsed JSON arguments", async () => {
+    const client = createAnthropicSseClient([
+      {
+        type: "message_start",
+        message: { id: "msg_valid_tool", usage: { input_tokens: 1, output_tokens: 0 } },
+      },
+      {
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "tool_use", id: "call_1", name: "lookup", input: {} },
+      },
+      {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "input_json_delta", partial_json: '{"query":"hel' },
+      },
+      {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "input_json_delta", partial_json: 'lo"}' },
+      },
+      { type: "content_block_stop", index: 0 },
+      {
+        type: "message_delta",
+        delta: { stop_reason: "tool_use" },
+        usage: { input_tokens: 1, output_tokens: 2 },
+      },
+      { type: "message_stop" },
+    ]);
+
+    const result = await streamAnthropic(
+      makeAnthropicModel(),
+      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+      { apiKey: "sk-ant-provider", client: client as never },
+    ).result();
+
+    expect(result.stopReason).toBe("toolUse");
+    expect(result.content).toEqual([
+      {
+        type: "toolCall",
+        id: "call_1",
+        name: "lookup",
+        arguments: { query: "hello" },
+      },
+    ]);
+  });
+
+  it("keeps the start-block input for a completed tool call with no JSON deltas", async () => {
+    const client = createAnthropicSseClient([
+      {
+        type: "message_start",
+        message: { id: "msg_empty_tool", usage: { input_tokens: 1, output_tokens: 0 } },
+      },
+      {
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "tool_use", id: "call_1", name: "noop", input: {} },
+      },
+      { type: "content_block_stop", index: 0 },
+      {
+        type: "message_delta",
+        delta: { stop_reason: "tool_use" },
+        usage: { input_tokens: 1, output_tokens: 2 },
+      },
+      { type: "message_stop" },
+    ]);
+
+    const result = await streamAnthropic(
+      makeAnthropicModel(),
+      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+      { apiKey: "sk-ant-provider", client: client as never },
+    ).result();
+
+    expect(result.stopReason).toBe("toolUse");
+    expect(result.content).toEqual([
+      { type: "toolCall", id: "call_1", name: "noop", arguments: {} },
+    ]);
+  });
+
   it("discards buffered Fable output when the stream fails before terminal status", async () => {
     const client = createAnthropicSseClient([
       {

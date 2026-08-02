@@ -20,6 +20,7 @@ import {
 import { calculateCost } from "../model-utils.js";
 import type { AnthropicOptions, AnthropicThinkingDisplay } from "../provider-options.js";
 import { applyAnthropicCacheControlToMessages } from "../transports/anthropic-payload-policy.js";
+import { parseAnthropicToolCallArgumentsStrict } from "../transports/anthropic-transport-stream.js";
 import { transportAbortError } from "../transports/transport-stream-shared.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../transports/transport-utils.js";
 import type {
@@ -610,7 +611,13 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
                 partial: output,
               });
             } else if (block.type === "toolCall") {
-              block.arguments = parseStreamingJson(block.partialJson);
+              // Terminal seal must be strict: the lenient streaming parse would
+              // salvage truncated JSON into a partial object and execute the
+              // tool with incomplete arguments. An empty buffer means the start
+              // block's input already carries the complete arguments.
+              if (block.partialJson.trim() !== "") {
+                block.arguments = parseAnthropicToolCallArgumentsStrict(block.partialJson);
+              }
               // Finalize in-place and strip the scratch buffer so replay only
               // carries parsed arguments.
               delete (block as { partialJson?: string }).partialJson;
@@ -651,6 +658,8 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
       stream.push({ type: "done", reason: output.stopReason, message: output });
       stream.end();
     } catch (error) {
+      // Failed or canceled generations must never retain partially repaired tool calls.
+      output.content = output.content.filter((block) => block.type !== "toolCall");
       for (const block of output.content) {
         delete (block as { index?: number }).index;
         // partialJson is only a streaming scratch buffer; never persist it.
