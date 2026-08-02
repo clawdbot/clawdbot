@@ -456,6 +456,7 @@ describe("requester lifecycle fence real-runtime proof", () => {
     instance: OpenClawTestInstance;
     modelServer: MockModelServer;
     sessionKey: string;
+    fixtureDir: string;
   }> {
     const fixtureDir = await mkdtemp(path.join(tmpdir(), "openclaw-lifecycle-fence-"));
     cleanupDirs.push(fixtureDir);
@@ -481,7 +482,7 @@ describe("requester lifecycle fence real-runtime proof", () => {
     instances.push(instance);
     await instance.startGateway();
     const sessionKey = `agent:main:proof-${randomUUID().slice(0, 8)}`;
-    return { instance, modelServer, sessionKey };
+    return { instance, modelServer, sessionKey, fixtureDir };
   }
 
   async function connectClient(instance: OpenClawTestInstance) {
@@ -533,7 +534,7 @@ describe("requester lifecycle fence real-runtime proof", () => {
     "fences the stale completion when the parent lifecycle is replaced before the child settles",
     { timeout: E2E_TIMEOUT_MS },
     async () => {
-      const { instance, modelServer, sessionKey } = await startProofRuntime();
+      const { instance, modelServer, sessionKey, fixtureDir } = await startProofRuntime();
       const client = await connectClient(instance);
       try {
         const parentTurn = startParentTurn(client, sessionKey);
@@ -571,7 +572,10 @@ describe("requester lifecycle fence real-runtime proof", () => {
         await new Promise((resolve) => setTimeout(resolve, 10_000));
 
         const outcome = await collectOutcome(instance, modelServer, sessionKey);
-        await writeFile("/tmp/proof-fenced-outcome.json", JSON.stringify(outcome, null, 2));
+        await writeFile(
+          path.join(fixtureDir, "proof-fenced-outcome.json"),
+          JSON.stringify(outcome, null, 2),
+        );
         console.log(`[proof:fenced] ${JSON.stringify(outcome)}`);
         const afterReset = readParentLifecycleRevision(instance.stateDir, sessionKey);
         expect(afterReset).toBeTruthy();
@@ -592,7 +596,7 @@ describe("requester lifecycle fence real-runtime proof", () => {
     "delivers the completion to the unchanged lifecycle as the control",
     { timeout: E2E_TIMEOUT_MS },
     async () => {
-      const { instance, modelServer, sessionKey } = await startProofRuntime();
+      const { instance, modelServer, sessionKey, fixtureDir } = await startProofRuntime();
       const client = await connectClient(instance);
       try {
         await startParentTurn(client, sessionKey);
@@ -627,7 +631,10 @@ describe("requester lifecycle fence real-runtime proof", () => {
           .catch(() => undefined);
         await new Promise((resolve) => setTimeout(resolve, 10_000));
         const outcome = await collectOutcome(instance, modelServer, sessionKey);
-        await writeFile("/tmp/proof-control-outcome.json", JSON.stringify(outcome, null, 2));
+        await writeFile(
+          path.join(fixtureDir, "proof-control-outcome.json"),
+          JSON.stringify(outcome, null, 2),
+        );
         console.log(`[proof:control] ${JSON.stringify(outcome)}`);
         expect(outcome.wakeRequestCount).toBe(0);
         expect(outcome.runs.length).toBeGreaterThan(0);
