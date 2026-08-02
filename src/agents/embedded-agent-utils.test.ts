@@ -8,10 +8,56 @@ import {
   extractAssistantText,
   extractAssistantThinking,
   extractAssistantVisibleText,
+  createThinkingTagStreamState,
+  extractThinkingFromTaggedStream,
+  extractThinkingFromTaggedText,
   formatReasoningMessage,
   promoteThinkingTagsToBlocks,
   stripDowngradedToolCallText,
 } from "./embedded-agent-utils.js";
+
+const REFERENCE_THINKING_TAG_NAME_PATTERN = String.raw`(?:(?:antml:|mm:)?(?:think(?:ing)?|thought)|antthinking)`;
+const REFERENCE_THINKING_TAG_OPEN_RE = new RegExp(
+  String.raw`<\s*${REFERENCE_THINKING_TAG_NAME_PATTERN}\s*>`,
+  "gi",
+);
+const REFERENCE_THINKING_TAG_CLOSE_RE = new RegExp(
+  String.raw`<\s*\/\s*${REFERENCE_THINKING_TAG_NAME_PATTERN}\s*>`,
+  "gi",
+);
+
+function extractThinkingFromTaggedStreamReference(text: string): string {
+  if (!text) {
+    return "";
+  }
+  const closed = extractThinkingFromTaggedText(text);
+  if (closed) {
+    return closed;
+  }
+  const openMatches = [...text.matchAll(REFERENCE_THINKING_TAG_OPEN_RE)];
+  const lastOpen = openMatches.at(-1);
+  if (!lastOpen) {
+    return "";
+  }
+  const lastClose = [...text.matchAll(REFERENCE_THINKING_TAG_CLOSE_RE)].at(-1);
+  if (lastClose && (lastClose.index ?? -1) > (lastOpen.index ?? -1)) {
+    return closed;
+  }
+  return text.slice((lastOpen.index ?? 0) + lastOpen[0].length).trim();
+}
+
+function randomChunks(text: string, seed: number): string[] {
+  const chunks: string[] = [];
+  let offset = 0;
+  let value = seed;
+  while (offset < text.length) {
+    value = (value * 1664525 + 1013904223) >>> 0;
+    const length = Math.min(1 + (value % 7), text.length - offset);
+    chunks.push(text.slice(offset, offset + length));
+    offset += length;
+  }
+  return chunks;
+}
 
 function makeAssistantMessage(
   message: Omit<
@@ -39,6 +85,32 @@ function makeAssistantMessage(
     ...message,
   } as unknown as AssistantMessage;
 }
+
+describe("extractThinkingFromTaggedStream", () => {
+  it("matches full-buffer extraction at every randomized chunk boundary", () => {
+    const cases = [
+      "plain text with <not-a-thinking-tag> and no reasoning",
+      "Before <think>first line\nsecond line</think> after",
+      "prefix<thought>one</thought>middle<mm:thinking>two</mm:thinking>suffix",
+      "surrounding text <antml:think>unfinished reasoning tail",
+      "< \nAnTThinking \t>spaced tag content< / antthinking > visible",
+      "<think>closed</think><think>unclosed trailing reasoning",
+    ];
+
+    for (const text of cases) {
+      for (let seed = 1; seed <= 24; seed += 1) {
+        const state = createThinkingTagStreamState();
+        let prefix = "";
+        for (const chunk of randomChunks(text, seed)) {
+          prefix += chunk;
+          expect(extractThinkingFromTaggedStream(prefix, state), `${text} (seed ${seed})`).toBe(
+            extractThinkingFromTaggedStreamReference(prefix),
+          );
+        }
+      }
+    }
+  });
+});
 
 describe("extractAssistantText", () => {
   it("strips tool-only Minimax invocation XML from text", () => {
