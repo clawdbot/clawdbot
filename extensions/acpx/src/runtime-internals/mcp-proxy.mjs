@@ -152,6 +152,20 @@ function main() {
   child.stdin.on("error", exitWithError);
   process.stdout.on("error", exitWithError);
 
+  // The target leads its own process group (detached off win32), so host
+  // signals aimed at the proxy no longer reach it. Forward them to the whole
+  // target tree before dying, or a host that terminates the proxy instead of
+  // closing stdin would orphan the target and its descendants.
+  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
+    process.once(signal, () => {
+      if (!exiting) {
+        exiting = true;
+        killTargetTree(child, signal);
+      }
+      process.kill(process.pid, signal);
+    });
+  }
+
   input.on("line", (line) => {
     if (exiting) {
       return;

@@ -308,6 +308,81 @@ setTimeout(() => {}, 300_000);
     expect(() => process.kill(pids.grandchildPid, 0)).toThrow();
   }, 15_000);
 
+  it("forwards a host SIGTERM to the detached target tree", async () => {
+    const parentServerPath = await makeTempScript(
+      "signal-parent-server.cjs",
+      String.raw`#!/usr/bin/env node
+const { spawn } = require("node:child_process");
+const grandchild = spawn(process.execPath, ["-e", "setTimeout(() => {}, 300000)"], {
+  stdio: "ignore",
+});
+process.stdout.write("ready " + process.pid + " " + grandchild.pid + "\n");
+setTimeout(() => {}, 300_000);
+`,
+    );
+
+    const payload = encodePayload({
+      targetCommand: `${process.execPath} ${parentServerPath}`,
+      mcpServers: [],
+    });
+
+    const child = spawn(process.execPath, [proxyPath, "--payload", payload], {
+      stdio: ["pipe", "pipe", "inherit"],
+      cwd: process.cwd(),
+    });
+
+    let stdout = "";
+    const pids = await new Promise<{ targetPid: number; grandchildPid: number }>((resolve) => {
+      child.stdout.on("data", (chunk) => {
+        stdout += String(chunk);
+        const match = stdout.match(/ready (\d+) (\d+)\n/);
+        if (match) {
+          resolve({ targetPid: Number(match[1]), grandchildPid: Number(match[2]) });
+        }
+      });
+    });
+
+    // The host terminates the proxy directly instead of closing stdin; the
+    // proxy must forward the signal to the detached target tree before dying.
+    child.kill("SIGTERM");
+
+    const exitSignal = await new Promise<string | null>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        child.kill("SIGKILL");
+        for (const pid of [pids.targetPid, pids.grandchildPid]) {
+          try {
+            process.kill(pid, "SIGKILL");
+          } catch {
+            // already gone
+          }
+        }
+        reject(new Error("proxy did not exit after host SIGTERM"));
+      }, 6_000);
+      child.once("close", (_code, signal) => {
+        clearTimeout(timer);
+        resolve(signal);
+      });
+    });
+
+    expect(exitSignal).toBe("SIGTERM");
+    // The tree signal is sent just before the proxy dies, so give the target
+    // and its descendant a short window to actually exit.
+    const deadline = Date.now() + 2_000;
+    const alive = (pid: number) => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    while ((alive(pids.targetPid) || alive(pids.grandchildPid)) && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    expect(alive(pids.targetPid)).toBe(false);
+    expect(alive(pids.grandchildPid)).toBe(false);
+  }, 15_000);
+
   it("reports target stdin pipe failures without an unhandled stream error", async () => {
     const closedStdinServerPath = await makeTempScript(
       "closed-stdin-server.cjs",
