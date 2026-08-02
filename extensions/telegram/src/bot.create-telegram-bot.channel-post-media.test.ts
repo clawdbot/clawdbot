@@ -7,6 +7,7 @@ import {
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
+import { resetTelegramForumFlagCacheForTest } from "./bot/helpers.js";
 import { setTelegramRuntime } from "./runtime.js";
 import type { TelegramRuntime } from "./runtime.types.js";
 
@@ -285,6 +286,7 @@ type TelegramMentionCaseForTest = [
   TelegramMentionPolicyForTest | undefined,
   number | undefined,
   boolean,
+  number,
 ];
 
 function setTelegramIngestGroupConfig(
@@ -411,7 +413,10 @@ function expectTelegramDownloadWarning(messageId: number, warning?: string) {
     1234,
     warning ?? "⚠️ Failed to download media. Please try again.",
     expect.objectContaining({
-      reply_parameters: expect.objectContaining({ message_id: messageId }),
+      reply_parameters: expect.objectContaining({
+        message_id: messageId,
+        allow_sending_without_reply: true,
+      }),
     }),
   );
 }
@@ -447,6 +452,7 @@ describe("createTelegramBot channel_post media", () => {
   });
 
   beforeEach(() => {
+    resetTelegramForumFlagCacheForTest();
     setTelegramRuntime({
       state: {
         openKeyedStore: ((options) =>
@@ -692,6 +698,10 @@ describe("createTelegramBot channel_post media", () => {
     expect(sendMessageSpy.mock.calls[0]?.[1]).toEqual(
       [undefined, "⚠️ Failed to download media. Please try again."][testCase.warnings],
     );
+    if (testCase.warnings) {
+      expectTelegramDownloadWarning(testCase.messageId);
+      expectTypeOnlyMediaPayload("document");
+    }
   });
 
   it.each([
@@ -792,21 +802,29 @@ describe("createTelegramBot channel_post media", () => {
   });
 
   it.each([
-    ["provider deny", { mode: "deny" }, undefined, undefined, false],
-    ["conversation deny", { mode: "allow", denyIn: ["-100456"] }, undefined, undefined, false],
-    ["topic deny", { mode: "allow", denyIn: [TELEGRAM_TEST_TOPIC] }, undefined, 42, false],
-    ["topic allow", { mode: "deny", allowIn: [TELEGRAM_TEST_TOPIC] }, undefined, 42, true],
-    ["account deny", { mode: "allow" }, { mode: "deny" }, undefined, false],
+    ["provider deny", { mode: "deny" }, undefined, undefined, false, 92073],
+    [
+      "conversation deny",
+      { mode: "allow", denyIn: ["-100456"] },
+      undefined,
+      undefined,
+      false,
+      92074,
+    ],
+    ["topic deny", { mode: "allow", denyIn: [TELEGRAM_TEST_TOPIC] }, undefined, 42, false, 92075],
+    ["topic allow", { mode: "deny", allowIn: [TELEGRAM_TEST_TOPIC] }, undefined, 42, true, 92076],
+    ["account deny", { mode: "allow" }, { mode: "deny" }, undefined, false, 92077],
     [
       "account topic allow",
       { mode: "deny" },
       { mode: "deny", allowIn: [TELEGRAM_TEST_TOPIC] },
       42,
       true,
+      92078,
     ],
   ] as TelegramMentionCaseForTest[])(
     "applies %s before classifying group media mentions (#92067)",
-    async (_name, providerPolicy, accountPolicy, topicId, shouldWarn) => {
+    async (_name, providerPolicy, accountPolicy, topicId, shouldWarn, messageId) => {
       setTelegramIngestGroupConfig({
         customMentionPatterns: true,
         providerPolicy,
@@ -814,7 +832,7 @@ describe("createTelegramBot channel_post media", () => {
       });
       createTelegramBot({ token: "tok", ...(accountPolicy ? { accountId: "work" } : {}) });
       await dispatchTelegramGroupPhoto({
-        messageId: 92073,
+        messageId,
         topicId,
         caption: "bert, see attachment",
         getFile: async () => {
@@ -843,7 +861,7 @@ describe("createTelegramBot channel_post media", () => {
     },
     {
       name: "a native mention with ingestion",
-      messageId: 81182,
+      messageId: 81186,
       caption: "@openclaw_bot check this",
       ingest: true,
     },
@@ -892,7 +910,10 @@ describe("createTelegramBot channel_post media", () => {
         -100456,
         "⚠️ Failed to download media. Please try again.",
         expect.objectContaining({
-          reply_parameters: expect.objectContaining({ message_id: testCase.messageId }),
+          reply_parameters: expect.objectContaining({
+            message_id: testCase.messageId,
+            allow_sending_without_reply: true,
+          }),
         }),
       );
       expect(replySpy).toHaveBeenCalledOnce();
