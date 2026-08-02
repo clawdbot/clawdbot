@@ -33,6 +33,9 @@ import type { RegisterSubagentRunParams } from "./subagent-registry-run-manager.
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 type SessionBindingAdapterCapabilities = NonNullable<SessionBindingAdapter["capabilities"]>;
+type BoundaryLifecycleControllerParams = Parameters<
+  typeof createSubagentRegistryLifecycleController
+>[0];
 
 function createDefaultSpawnConfig(): OpenClawConfig {
   return {
@@ -440,8 +443,8 @@ function createRegisteredRunEntry(registration: RegisterSubagentRunParams): Suba
 
 function createBoundaryLifecycleController(params: {
   entry: SubagentRunRecord;
-  captureSubagentCompletionReply: ReturnType<typeof vi.fn>;
-  runSubagentAnnounceFlow: ReturnType<typeof vi.fn>;
+  captureSubagentCompletionReply: BoundaryLifecycleControllerParams["captureSubagentCompletionReply"];
+  runSubagentAnnounceFlow: BoundaryLifecycleControllerParams["runSubagentAnnounceFlow"];
 }) {
   return createSubagentRegistryLifecycleController({
     runs: new Map([[params.entry.runId, params.entry]]),
