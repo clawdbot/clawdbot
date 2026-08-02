@@ -914,23 +914,48 @@ describe("subagent announce formatting", () => {
     expect(agentSpy).not.toHaveBeenCalled();
   });
 
-  it("records producer-owned empty output without consulting transcript fallback", async () => {
-    const didAnnounce = await runSubagentAnnounceFlow({
-      childSessionKey: "agent:main:subagent:test",
-      childRunId: "run-direct-completion-empty",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      requesterOrigin: { channel: "slack", to: "channel:C123", accountId: "acct-1" },
-      ...defaultOutcomeAnnounce,
-      expectsCompletionMessage: true,
-      terminalReply: { disposition: "empty" },
-    });
+  it.each([
+    {
+      name: "visible",
+      terminalReply: { disposition: "visible", text: "restored visible reply" } as const,
+      expectedAgentCalls: 1,
+      expectedMessage: "restored visible reply",
+    },
+    {
+      name: "silent",
+      terminalReply: { disposition: "silent" } as const,
+      expectedAgentCalls: 0,
+      expectedMessage: undefined,
+    },
+    {
+      name: "empty",
+      terminalReply: { disposition: "empty" } as const,
+      expectedAgentCalls: 1,
+      expectedMessage: "(no output)",
+    },
+  ])(
+    "replays restored durable $name output without transcript inference",
+    async ({ name, terminalReply, expectedAgentCalls, expectedMessage }) => {
+      const didAnnounce = await runSubagentAnnounceFlow({
+        childSessionKey: "agent:main:subagent:test",
+        childRunId: `run-restored-completion-${name}`,
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        requesterOrigin: { channel: "slack", to: "channel:C123", accountId: "acct-1" },
+        ...defaultOutcomeAnnounce,
+        expectsCompletionMessage: true,
+        terminalReply,
+      });
 
-    expect(didAnnounce).toBe(true);
-    expect(chatHistoryMock).not.toHaveBeenCalled();
-    expect(readLatestAssistantReplyMock).not.toHaveBeenCalled();
-    expect(getAgentCall()?.params?.message).toContain("(no output)");
-  });
+      expect(didAnnounce).toBe(true);
+      expect(chatHistoryMock).not.toHaveBeenCalled();
+      expect(readLatestAssistantReplyMock).not.toHaveBeenCalled();
+      expect(agentSpy).toHaveBeenCalledTimes(expectedAgentCalls);
+      if (expectedMessage) {
+        expect(getAgentCall()?.params?.message).toContain(expectedMessage);
+      }
+    },
+  );
 
   it("uses fallback reply when wake continuation returns NO_REPLY", async () => {
     const didAnnounce = await runSubagentAnnounceFlow({
