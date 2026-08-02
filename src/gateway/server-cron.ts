@@ -847,11 +847,12 @@ export function buildGatewayCronService(params: {
         };
       }
     },
-    sendCronWebhook: async ({ job, event, abortSignal, deadlineAtMs }) => {
+    sendCronWebhook: async ({ job, event, abortSignal, deadlineAtMs, onDeliveryAccepted }) => {
       await sendGatewayCronWebhook({
         job,
         event,
         abortSignal,
+        onDeliveryAccepted,
         ...(deadlineAtMs !== undefined ? { deadlineAtMs } : {}),
         webhookToken: params.cfg.cron?.webhookToken,
       });

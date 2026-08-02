@@ -319,9 +319,7 @@ export async function retryTransientDirectCronDelivery<T>(params: {
   assertActive();
   const runWithAbortCheck = async () => {
     assertActive();
-    const result = await params.run();
-    assertActive();
-    return result;
+    return await params.run();
   };
   const result = await retryAsync(runWithAbortCheck, {
     attempts: retryDelaysMs.length + 1,
@@ -348,6 +346,5 @@ export async function retryTransientDirectCronDelivery<T>(params: {
       assertActive();
     },
   });
-  assertActive();
   return result;
 }

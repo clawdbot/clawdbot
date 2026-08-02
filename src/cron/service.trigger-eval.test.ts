@@ -224,7 +224,7 @@ describe("cron trigger evaluation", () => {
   it("keeps webhook delivery not-requested when trigger evaluation stops before payload", async () => {
     const evaluateCronTrigger = vi.fn(async () => ({
       kind: "error" as const,
-      code: "runtime" as const,
+      code: "internal_error" as const,
       error: "trigger failed",
     }));
     const sendCronWebhook = vi.fn();

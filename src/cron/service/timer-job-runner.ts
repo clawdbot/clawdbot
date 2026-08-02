@@ -27,6 +27,12 @@ import {
   runsDetachedFromMainSession,
 } from "./timer-execution-timeout.js";
 import { executeJobCore } from "./timer-execution.js";
+import {
+  resolveInterruptedRunProgress,
+  withPrimaryWebhookInterruption,
+  withPrimaryWebhookTrace,
+  type CronRunProgress,
+} from "./timer-job-runner.interruption.js";
 
 type CronCoreRunOutcome = Awaited<ReturnType<typeof executeJobCore>> & {
   isolatedAgentSetupTimeout?: IsolatedAgentSetupTimeoutSignal;
@@ -39,68 +45,6 @@ type CronCoreRunOptions = {
   streamScheduleKey?: string;
   streamSourceIdentity?: string;
 };
-type CronRunProgress = {
-  completedCoreResult?: CronCoreRunOutcome;
-  settledDeliveryResult?: CronCoreRunOutcome;
-};
-
-function withPrimaryWebhookTrace(params: {
-  job: CronJob;
-  result: CronCoreRunOutcome;
-  delivered: boolean;
-  error?: string;
-}): CronCoreRunOutcome {
-  const plan = resolveCronDeliveryPlan(params.job);
-  const intended = params.result.delivery?.intended ?? {
-    to: plan.to,
-    source: "explicit" as const,
-  };
-  return {
-    ...params.result,
-    delivered: params.delivered,
-    deliveryAttempted: true,
-    ...(params.error ? { deliveryError: params.error } : { deliveryError: undefined }),
-    delivery: {
-      ...params.result.delivery,
-      intended,
-      delivered: params.delivered,
-      resolved: {
-        to: plan.to,
-        source: "explicit",
-        ok: params.delivered,
-        ...(params.error ? { error: params.error } : {}),
-      },
-    },
-  };
-}
-
-function withPrimaryWebhookInterruption(params: {
-  job: CronJob;
-  result: CronCoreRunOutcome;
-  error: string;
-}): CronCoreRunOutcome {
-  return resolveCronDeliveryPlan(params.job).mode === "webhook"
-    ? withPrimaryWebhookTrace({ ...params, delivered: false })
-    : params.result;
-}
-
-function resolveInterruptedRunProgress(params: {
-  progress: CronRunProgress;
-  job: CronJob;
-  error: string;
-}): CronCoreRunOutcome | undefined {
-  if (params.progress.settledDeliveryResult) {
-    return params.progress.settledDeliveryResult;
-  }
-  if (params.progress.completedCoreResult) {
-    return withPrimaryWebhookInterruption({
-      job: params.job,
-      result: params.progress.completedCoreResult,
-      error: params.error,
-    });
-  }
-  return undefined;
-}
 
 async function deliverPrimaryWebhook(
   state: CronServiceState,
@@ -113,8 +57,8 @@ async function deliverPrimaryWebhook(
   const settle = (settledResult: CronCoreRunOutcome) => {
     // Publish the terminal delivery fact before this async function resolves;
     // cancellation can win the outer race during the following microtask.
-    progress.settledDeliveryResult = settledResult;
-    return settledResult;
+    progress.settledDeliveryResult ??= settledResult;
+    return progress.settledDeliveryResult;
   };
   const plan = resolveCronDeliveryPlan(job);
   if (plan.mode !== "webhook" || result.triggerEval?.fired === false) {
@@ -161,6 +105,9 @@ async function deliverPrimaryWebhook(
       job,
       abortSignal,
       ...(deadlineAtMs !== undefined ? { deadlineAtMs } : {}),
+      onDeliveryAccepted: () => {
+        settle(deliveredResult);
+      },
       event: {
         jobId: job.id,
         action: "finished",
@@ -183,6 +130,9 @@ async function deliverPrimaryWebhook(
         usage: result.usage,
       },
     });
+    if (progress.settledDeliveryResult) {
+      return progress.settledDeliveryResult;
+    }
     if (abortSignal.aborted || deadlineExceeded()) {
       return withPrimaryWebhookTrace({
         job,
@@ -193,6 +143,9 @@ async function deliverPrimaryWebhook(
     }
     return settle(deliveredResult);
   } catch (error) {
+    if (progress.settledDeliveryResult) {
+      return progress.settledDeliveryResult;
+    }
     const deliveryError = abortSignal.aborted ? interruptionError() : formatErrorMessage(error);
     state.deps.log.warn({ jobId: job.id, err: deliveryError }, "cron: webhook delivery failed");
     return settle(withPrimaryWebhookTrace({ job, result, delivered: false, error: deliveryError }));

@@ -215,6 +215,7 @@ async function postCronWebhookStrict(params: {
   payload: unknown;
   signal?: AbortSignal;
   deadlineAtMs?: number;
+  onDeliveryAccepted?: () => void;
 }): Promise<void> {
   const remainingMs =
     params.deadlineAtMs === undefined ? CRON_WEBHOOK_TIMEOUT_MS : params.deadlineAtMs - Date.now();
@@ -236,33 +237,37 @@ async function postCronWebhookStrict(params: {
       body: JSON.stringify(params.payload),
     },
   });
+  let accepted = false;
   try {
     if (!result.response.ok) {
       throw new Error(`Webhook request failed with HTTP ${result.response.status}`);
     }
+    accepted = true;
+    params.onDeliveryAccepted?.();
   } finally {
-    // Guard release closes the dispatcher, not an unread response stream.
-    // Keep response cleanup inside the request deadline; a non-settling
-    // stream cancellation must not retain the dispatcher or Gateway root.
-    if (!result.response.bodyUsed) {
-      const cancellation = result.response.body?.cancel();
-      if (cancellation) {
-        await withTimeout(
-          cancellation,
-          Math.max(1, requestDeadlineAtMs - Date.now()),
-          "cron webhook response cleanup",
-        ).catch(() => undefined);
+    const cleanup = async () => {
+      // Guard release closes the dispatcher, not an unread response stream.
+      // Keep response cleanup inside the request deadline; a non-settling
+      // stream cancellation must not retain the dispatcher or Gateway root.
+      if (!result.response.bodyUsed) {
+        const cancellation = result.response.body?.cancel();
+        if (cancellation) {
+          await withTimeout(
+            cancellation,
+            Math.max(1, requestDeadlineAtMs - Date.now()),
+            "cron webhook response cleanup",
+          ).catch(() => undefined);
+        }
       }
+      await result.release();
+    };
+    if (accepted) {
+      // A 2xx acknowledgement is the terminal delivery fact. Cleanup must not
+      // rewrite it after the receiver has accepted the webhook.
+      await cleanup().catch(() => undefined);
+    } else {
+      await cleanup();
     }
-    await result.release();
-  }
-  if (params.signal?.aborted) {
-    throw new Error("cron webhook delivery aborted");
-  }
-  if (params.deadlineAtMs !== undefined && Date.now() >= params.deadlineAtMs) {
-    const error = new Error("cron webhook delivery deadline exceeded");
-    error.name = "TimeoutError";
-    throw error;
   }
 }
 
@@ -308,6 +313,7 @@ export async function sendGatewayCronWebhook(params: {
   abortSignal?: AbortSignal;
   deadlineAtMs?: number;
   webhookToken?: unknown;
+  onDeliveryAccepted?: () => void;
 }): Promise<void> {
   const deliveryPlan = resolveCronDeliveryPlan(params.job);
   const webhookUrl = normalizeHttpWebhookUrl(deliveryPlan.to);
@@ -327,6 +333,7 @@ export async function sendGatewayCronWebhook(params: {
         payload: buildCronFinishedWebhookPayload(event),
         ...(params.abortSignal ? { signal: params.abortSignal } : {}),
         ...(params.deadlineAtMs !== undefined ? { deadlineAtMs: params.deadlineAtMs } : {}),
+        ...(params.onDeliveryAccepted ? { onDeliveryAccepted: params.onDeliveryAccepted } : {}),
       }),
     shouldRetryError: (error) => !(error instanceof SsrFBlockedError),
   });

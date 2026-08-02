@@ -2,6 +2,15 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { describe, expect, it, vi } from "vitest";
+const mocks = vi.hoisted(() => ({
+  fetchWithSsrFGuard: vi.fn(),
+}));
+
+vi.mock("../infra/net/fetch-guard.js", () => ({
+  fetchWithSsrFGuard: mocks.fetchWithSsrFGuard,
+}));
+
+import { sendGatewayCronWebhook } from "../gateway/server-cron-notifications.js";
 import { runCronCommandJob } from "./command-runner.js";
 import { CronService } from "./service.js";
 import type { CronEvent } from "./service.js";
@@ -580,7 +589,7 @@ describe("CronService persists delivered status", () => {
     }
   });
 
-  it("preserves delivered when cancellation races after the POST settles", async () => {
+  it("preserves Gateway-delivered when cancellation races with post-2xx cleanup", async () => {
     const requests: string[] = [];
     const server = createServer((request, response) => {
       let body = "";
@@ -590,8 +599,12 @@ describe("CronService persists delivered status", () => {
       });
       request.on("end", () => {
         requests.push(body);
-        response.writeHead(204, { Connection: "close" });
-        response.end();
+        response.writeHead(200, {
+          Connection: "close",
+          "Content-Type": "text/plain",
+        });
+        response.flushHeaders();
+        response.write("accepted");
       });
     });
     await new Promise<void>((resolve) => {
@@ -599,9 +612,32 @@ describe("CronService persists delivered status", () => {
     });
     const address = server.address() as AddressInfo;
     const webhookUrl = `http://127.0.0.1:${address.port}/hook`;
-    let resolveSendStarted!: (value: { promise: Promise<void> }) => void;
-    const sendStarted = new Promise<{ promise: Promise<void> }>((resolve) => {
-      resolveSendStarted = resolve;
+    let resolveCleanupStarted!: () => void;
+    const cleanupStarted = new Promise<void>((resolve) => {
+      resolveCleanupStarted = resolve;
+    });
+    let resolveCleanup!: () => void;
+    const cleanup = new Promise<void>((resolve) => {
+      resolveCleanup = resolve;
+    });
+    mocks.fetchWithSsrFGuard.mockImplementationOnce(async (value: unknown) => {
+      const request = value as {
+        url: string;
+        init?: RequestInit;
+        signal?: AbortSignal;
+      };
+      const response = await fetch(request.url, {
+        ...request.init,
+        ...(request.signal ? { signal: request.signal } : {}),
+      });
+      return {
+        response,
+        finalUrl: request.url,
+        release: async () => {
+          resolveCleanupStarted();
+          await cleanup;
+        },
+      };
     });
     let resolveFinished!: (event: CronEvent) => void;
     const finished = new Promise<CronEvent>((resolve) => {
@@ -619,20 +655,7 @@ describe("CronService persists delivered status", () => {
         status: "ok" as const,
         summary: "HOOKSCHED_PAYLOAD",
       })),
-      sendCronWebhook: ({ event, abortSignal }) => {
-        const promise = fetch(webhookUrl, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(event),
-          signal: abortSignal,
-        }).then((response) => {
-          if (!response.ok) {
-            throw new Error(`Webhook request failed with HTTP ${response.status}`);
-          }
-        });
-        resolveSendStarted({ promise });
-        return promise;
-      },
+      sendCronWebhook: async (params) => await sendGatewayCronWebhook(params),
       onEvent: (event) => {
         if (event.action === "finished") {
           resolveFinished(event);
@@ -652,12 +675,13 @@ describe("CronService persists delivered status", () => {
         delivery: { mode: "webhook", to: webhookUrl },
       });
       const runPromise = cron.run(job.id, "force");
-      const send = await sendStarted;
-      await send.promise;
+      await cleanupStarted;
       expect(abortActiveCronTaskRuns("Cancelled after webhook acceptance.")).toBe(1);
 
       const event = await finished;
+      resolveCleanup();
       await runPromise;
+      expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledOnce();
       expect(requests).toHaveLength(1);
       expect(JSON.parse(requests[0] ?? "{}")).toMatchObject({
         jobId: job.id,
@@ -676,6 +700,7 @@ describe("CronService persists delivered status", () => {
       });
       expect(cron.getJob(job.id)?.state.lastDeliveryError).toBeUndefined();
     } finally {
+      resolveCleanup();
       cron.stop();
       await closeWebhookServer(server);
     }
