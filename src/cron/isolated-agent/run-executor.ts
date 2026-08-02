@@ -17,6 +17,7 @@ import type { CliSessionBinding } from "../../config/sessions.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SourceDeliveryPlan } from "../../infra/outbound/source-delivery-plan.js";
+import type { PluginRegistry } from "../../plugins/registry-types.js";
 import {
   createUserTurnTranscriptRecorder,
   type UserTurnTranscriptRecorder,
@@ -206,6 +207,7 @@ function createCronPromptExecutor(params: {
   runSessionKey: string;
   usesDetachedRunSession?: boolean;
   workspaceDir: string;
+  pluginRegistry?: PluginRegistry;
   lane?: string;
   resolvedVerboseLevel: VerboseLevel;
   immutableThinkLevel: ThinkLevel | undefined;
@@ -364,6 +366,7 @@ function createCronPromptExecutor(params: {
           sessionKey: params.runSessionKey,
           agentHarnessRuntimeOverride,
           workspaceDir: params.workspaceDir,
+          pluginRegistry: params.pluginRegistry,
         });
       },
       fallbacksOverride: cronFallbacksOverride,
@@ -558,6 +561,12 @@ function createCronPromptExecutor(params: {
         const result = await runEmbeddedAgent({
           sessionId: params.cronSession.sessionEntry.sessionId,
           sessionKey: params.runSessionKey,
+          sessionTarget: {
+            agentId: params.agentId,
+            sessionId: params.cronSession.sessionEntry.sessionId,
+            sessionKey: params.runSessionKey,
+            storePath: params.cronSession.storePath,
+          },
           promptCacheKey,
           agentId: params.agentId,
           trigger: "cron",
@@ -569,7 +578,6 @@ function createCronPromptExecutor(params: {
           messageTo: params.resolvedDelivery.to,
           messageThreadId: params.resolvedDelivery.threadId,
           currentChannelId,
-          sessionFile,
           agentDir: params.agentDir,
           workspaceDir: params.workspaceDir,
           config: params.cfgWithAgentDefaults,
@@ -724,6 +732,7 @@ export async function executeCronRun(params: {
   runTimeoutOverrideMs?: number;
   suppressExecNotifyOnExit: boolean;
   runStartedAt?: number;
+  pluginRegistry?: PluginRegistry;
 }): Promise<CronExecutionResult> {
   const resolvedVerboseLevel: VerboseLevel =
     normalizeVerboseLevel(params.cronSession.sessionEntry.verboseLevel) ??
@@ -744,6 +753,7 @@ export async function executeCronRun(params: {
     runSessionKey: params.runSessionKey,
     usesDetachedRunSession: params.usesDetachedRunSession,
     workspaceDir: params.workspaceDir,
+    pluginRegistry: params.pluginRegistry,
     lane: params.lane,
     resolvedVerboseLevel,
     immutableThinkLevel: params.immutableThinkLevel,
@@ -893,4 +903,5 @@ export async function executeCronRun(params: {
     liveSelection: params.liveSelection,
   };
 }
+
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -136,6 +136,13 @@ export type ExecToolDetails =
       exitCode: number | null;
       exitSignal?: NodeJS.Signals | number | null;
       failureKind?: string;
+      reason?: "not-dispatched" | "outcome-unknown";
+      nodeInvokeFailure?: {
+        failureCode?: string;
+        message: string;
+        nodeCommandDispatched?: boolean;
+        requestSent?: boolean;
+      };
       exitReason?: TerminationReason;
       durationMs: number;
       aggregated: string;

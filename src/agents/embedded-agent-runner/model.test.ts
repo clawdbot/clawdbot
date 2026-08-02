@@ -906,6 +906,7 @@ describe("resolveModel", () => {
     const preparedModelRuntime = {
       agentDir: "/tmp/agent",
       activeProjectKeys: [],
+      allowGatewaySubagentBinding: false,
       config: cfg,
       metadataSnapshot: { plugins: [] } as never,
       modelCatalog: { entries: [], routeVariants: [] },

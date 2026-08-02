@@ -3996,7 +3996,7 @@ describe("runCodexAppServerAttempt", () => {
     ]);
   });
 
-  it("waits for an already-active native turn before starting a resumed thread turn", async () => {
+  it("waits for the exact active native turn before starting a resumed thread turn", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
     await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
     const harness = createAppServerHarness(async (method) => {
@@ -4020,6 +4020,24 @@ describe("runCodexAppServerAttempt", () => {
     await harness.waitForMethod("thread/resume");
     await new Promise((resolve) => {
       setTimeout(resolve, 20);
+    });
+    expect(harness.requests.map((request) => request.method)).not.toContain("turn/start");
+    await harness.notify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-existing",
+        turn: { id: "stale-turn", status: "completed" },
+      },
+    });
+    expect(harness.requests.map((request) => request.method)).not.toContain("turn/start");
+    await harness.notify({
+      method: "error",
+      params: {
+        threadId: "thread-existing",
+        turnId: "compact-turn",
+        error: { message: "native turn has not completed" },
+        willRetry: false,
+      },
     });
     expect(harness.requests.map((request) => request.method)).not.toContain("turn/start");
     await harness.notify({

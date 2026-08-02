@@ -124,7 +124,7 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
     if (this.lifecycle.phase() === "terminal") {
       return;
     }
-    if (!this.canSubmitToolResult()) {
+    if (!this.canSubmitInput()) {
       if (this.pendingToolResults.length < XAI_REALTIME_MAX_PENDING_TOOL_RESULTS) {
         this.pendingToolResults.push({ callId, result, ...(options ? { options } : {}) });
       } else {
@@ -536,10 +536,6 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
       meta: { provider: "xai", capability: "realtime-voice" },
     });
     ws.send(payload);
-  }
-
-  private canSubmitToolResult(): boolean {
-    return this.isConnected();
   }
 
   private canSubmitInput(): boolean {

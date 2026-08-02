@@ -17,7 +17,8 @@ export function markRequesterTurnYieldedInRuns(params: {
   const entries = [...params.runs.values()].filter(
     (entry) =>
       entry.requesterSessionKey === requesterSessionKey &&
-      entry.requesterTurnRunId === requesterTurnRunId,
+      entry.requesterTurnRunId === requesterTurnRunId &&
+      entry.expectsCompletionMessage === true,
   );
   if (entries.every((entry) => entry.requesterTurnYielded === true)) {
     return entries.length;
@@ -60,13 +61,13 @@ export function settleRequesterTurnAfterSessionSpawns(params: {
   const entries = [...params.runs.values()].filter(
     (entry) =>
       entry.requesterSessionKey === requesterSessionKey &&
-      entry.requesterTurnRunId === requesterTurnRunId,
+      entry.requesterTurnRunId === requesterTurnRunId &&
+      entry.expectsCompletionMessage === true,
   );
   for (const entry of entries) {
     const spawn = spawnsByRunId.get(entry.runId);
     if (
       !spawn ||
-      entry.expectsCompletionMessage !== true ||
       entry.childSessionKey !== spawn.childSessionKey ||
       (params.requesterYielded && entry.requesterTurnYielded !== true)
     ) {

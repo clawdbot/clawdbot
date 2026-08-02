@@ -29,7 +29,7 @@ import type {
   AgentToolResultMiddlewareContext,
   AgentToolResultMiddlewareEvent,
 } from "../agent-tool-result-middleware-types.js";
-import { validatePluginCommandDefinition } from "../command-registration.js";
+import { registerPluginCommandInRegistry } from "../command-registration.js";
 import { executePluginCommand } from "../commands.js";
 import { createHookRunner } from "../hooks.js";
 import { cleanupReplacedPluginHostRegistry, runPluginHostCleanup } from "../host-hook-cleanup.js";
@@ -48,11 +48,7 @@ import {
 import { buildPluginAgentTurnPrepareContext, isPluginJsonValue } from "../host-hooks.js";
 import { createEmptyPluginRegistry } from "../registry-empty.js";
 import { createPluginRegistry } from "../registry.js";
-import {
-  pinActivePluginSessionExtensionRegistry,
-  releasePinnedPluginSessionExtensionRegistry,
-  setActivePluginRegistry,
-} from "../runtime.js";
+import { setActivePluginRegistry } from "../runtime.js";
 import type { PluginRuntime } from "../runtime/types.js";
 import { createPluginRecord } from "../status.test-helpers.js";
 import {
@@ -173,7 +169,6 @@ async function withHostHookState(
 
 describe("host-hook fixture plugin contract", () => {
   afterEach(() => {
-    releasePinnedPluginSessionExtensionRegistry();
     setActivePluginRegistry(createEmptyPluginRegistry());
     clearPluginHostRuntimeState();
     resetAgentEventsForTest();
@@ -2143,58 +2138,6 @@ describe("host-hook fixture plugin contract", () => {
     });
   });
 
-  it("keeps gateway UI descriptors pinned across agent registry replacement", () => {
-    const { config, registry } = createPluginRegistryFixture();
-    registerTestPlugin({
-      registry,
-      config,
-      record: createPluginRecord({
-        id: "pinned-ui-fixture",
-        name: "Pinned UI Fixture",
-      }),
-      register(api) {
-        api.registerControlUiDescriptor({
-          id: "gateway-panel",
-          surface: "session",
-          label: "Gateway panel",
-        });
-      },
-    });
-    setActivePluginRegistry(registry.registry);
-    pinActivePluginSessionExtensionRegistry(registry.registry);
-    setActivePluginRegistry(createEmptyPluginRegistry());
-
-    const calls: Array<[boolean, unknown, unknown]> = [];
-    void expectDefined(
-      pluginHostHookHandlers["plugins.uiDescriptors"],
-      'pluginHostHookHandlers["plugins.uiDescriptors"] test invariant',
-    )({
-      params: {},
-      respond: (ok: boolean, payload: unknown, error: unknown) => {
-        calls.push([ok, payload, error]);
-      },
-    } as never);
-
-    expect(calls).toEqual([
-      [
-        true,
-        {
-          ok: true,
-          descriptors: [
-            {
-              id: "gateway-panel",
-              pluginId: "pinned-ui-fixture",
-              pluginName: "Pinned UI Fixture",
-              surface: "session",
-              label: "Gateway panel",
-            },
-          ],
-        },
-        undefined,
-      ],
-    ]);
-  });
-
   it("enforces command requiredScopes for gateway clients and command owners", async () => {
     const handlerCalls: string[] = [];
     const { config, registry } = createPluginRegistryFixture();
@@ -2226,28 +2169,28 @@ describe("host-hook fixture plugin contract", () => {
       pluginRoot: registration.rootDir,
     };
     expect(
-      validatePluginCommandDefinition({
+      registerPluginCommandInRegistry(registry.registry, "invalid-command-fixture", {
         name: "invalid-scopes-fixture",
         description: "Invalid scopes.",
         requiredScopes: "operator.approvals" as never,
         handler: () => ({ text: "unused" }),
-      }),
+      }).error,
     ).toBe("Command requiredScopes must be an array of operator scopes");
     expect(
-      validatePluginCommandDefinition({
+      registerPluginCommandInRegistry(registry.registry, "invalid-command-fixture", {
         name: "unknown-scopes-fixture",
         description: "Unknown scopes.",
         requiredScopes: ["operator.unknown" as never],
         handler: () => ({ text: "unused" }),
-      }),
+      }).error,
     ).toBe("Command requiredScopes contains unknown operator scope: operator.unknown");
     expect(
-      validatePluginCommandDefinition({
+      registerPluginCommandInRegistry(registry.registry, "invalid-command-fixture", {
         name: "invalid-owner-status-fixture",
         description: "Invalid owner status exposure.",
         exposeSenderIsOwner: "yes" as never,
         handler: () => ({ text: "unused" }),
-      }),
+      }).error,
     ).toBe("Command exposeSenderIsOwner must be a boolean");
 
     await expect(

@@ -29,7 +29,8 @@ function createDirectNodeRun(signal?: AbortSignal): DirectNodeRun {
       nodeId: "node-1",
       argv: ["tool", "--version"],
       env: undefined,
-      invokeTimeoutMs: 30_000,
+      invokeDeadlineMs: 30_000,
+      invokeWaitMs: 35_000,
       runTimeoutSec: 30,
       supportsSystemRunPrepare: true,
     },
@@ -48,7 +49,7 @@ describe("direct node run cancellation", () => {
 
     expect(callGatewayTool).toHaveBeenCalledWith(
       "node.invoke",
-      { timeoutMs: 30_000 },
+      { timeoutMs: 35_000 },
       expect.objectContaining({ command: "system.run" }),
       { signal: controller.signal },
     );
@@ -59,7 +60,7 @@ describe("direct node run cancellation", () => {
 
     expect(callGatewayTool).toHaveBeenCalledWith(
       "node.invoke",
-      { timeoutMs: 30_000 },
+      { timeoutMs: 35_000 },
       expect.objectContaining({ command: "system.run" }),
     );
   });

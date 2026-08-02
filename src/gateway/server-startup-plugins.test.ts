@@ -108,6 +108,12 @@ const listAmbientOnlyConfiguredChannelIds = vi.hoisted(() =>
   vi.fn((_params: unknown) => [] as string[]),
 );
 const runStartupSessionMigration = vi.hoisted(() => vi.fn(async (_params: unknown) => undefined));
+const migrateLegacyDevicePairingStore = vi.hoisted(() =>
+  vi.fn(async (_params: unknown) => undefined),
+);
+const migrateLegacyNodePairingStore = vi.hoisted(() =>
+  vi.fn(async (_params: unknown) => undefined),
+);
 vi.mock("../agents/agent-scope.js", () => ({
   resolveAgentWorkspaceDir: () => "/workspace",
   resolveDefaultAgentId: () => "default",
@@ -128,6 +134,14 @@ vi.mock("../config/plugin-auto-enable.js", () => ({
 
 vi.mock("../infra/openclaw-root.js", () => ({
   resolveOpenClawPackageRootSync: (params: unknown) => resolveOpenClawPackageRootSync(params),
+}));
+
+vi.mock("../infra/device-pairing-migration.js", () => ({
+  migrateLegacyDevicePairingStore: (params: unknown) => migrateLegacyDevicePairingStore(params),
+}));
+
+vi.mock("../infra/node-pairing-migration.js", () => ({
+  migrateLegacyNodePairingStore: (params: unknown) => migrateLegacyNodePairingStore(params),
 }));
 
 vi.mock("../plugins/channel-presence-policy.js", () => ({
@@ -222,7 +236,6 @@ async function prepareBootstrapWithRuntimeConfig(
 
   return await prepareGatewayPluginBootstrap({
     cfgAtStart: cfg,
-    startupRuntimeConfig: cfg,
     minimalTestGateway: false,
     log,
     ...options,
@@ -246,6 +259,83 @@ function expectStartupPluginLoad(params: {
   expect(startupInput.suppressPluginInfoLogs).toBe(params.suppressPluginInfoLogs);
 }
 
+describe("runGatewayStartupMaintenance", () => {
+  beforeEach(() => {
+    runChannelPluginStartupMaintenance.mockClear();
+    runStartupSessionMigration.mockClear();
+    migrateLegacyDevicePairingStore.mockClear();
+    migrateLegacyNodePairingStore.mockClear();
+  });
+
+  it("runs channel, session, and ordered pairing maintenance for a normal gateway", async () => {
+    const log = createLog();
+    const { runGatewayStartupMaintenance } = await import("./server-startup-plugins.js");
+
+    await runGatewayStartupMaintenance({
+      cfgAtStart: {},
+      startupRuntimeConfig: {},
+      minimalTestGateway: false,
+      log,
+    });
+
+    expect(runChannelPluginStartupMaintenance).toHaveBeenCalledWith({
+      cfg: {},
+      env: process.env,
+      log,
+    });
+    expect(runStartupSessionMigration).toHaveBeenCalledWith({
+      cfg: {},
+      env: process.env,
+      log,
+    });
+    expect(migrateLegacyDevicePairingStore).toHaveBeenCalledWith({ log });
+    expect(migrateLegacyNodePairingStore).toHaveBeenCalledWith({ log });
+    const deviceMigrationOrder = migrateLegacyDevicePairingStore.mock.invocationCallOrder[0];
+    const nodeMigrationOrder = migrateLegacyNodePairingStore.mock.invocationCallOrder[0];
+    expect(deviceMigrationOrder).toBeDefined();
+    expect(nodeMigrationOrder).toBeDefined();
+    expect(deviceMigrationOrder!).toBeLessThan(nodeMigrationOrder!);
+  });
+
+  it("skips maintenance for a minimal gateway without channel config", async () => {
+    const { runGatewayStartupMaintenance } = await import("./server-startup-plugins.js");
+
+    await runGatewayStartupMaintenance({
+      cfgAtStart: {},
+      startupRuntimeConfig: {},
+      minimalTestGateway: true,
+      log: createLog(),
+    });
+
+    expect(runChannelPluginStartupMaintenance).not.toHaveBeenCalled();
+    expect(runStartupSessionMigration).not.toHaveBeenCalled();
+    expect(migrateLegacyDevicePairingStore).not.toHaveBeenCalled();
+    expect(migrateLegacyNodePairingStore).not.toHaveBeenCalled();
+  });
+
+  it("runs only channel maintenance for a minimal gateway with recovered channel config", async () => {
+    const log = createLog();
+    const recoveredConfig = slackConfig();
+    const { runGatewayStartupMaintenance } = await import("./server-startup-plugins.js");
+
+    await runGatewayStartupMaintenance({
+      cfgAtStart: {},
+      startupRuntimeConfig: recoveredConfig,
+      minimalTestGateway: true,
+      log,
+    });
+
+    expect(runChannelPluginStartupMaintenance).toHaveBeenCalledWith({
+      cfg: recoveredConfig,
+      env: process.env,
+      log,
+    });
+    expect(runStartupSessionMigration).not.toHaveBeenCalled();
+    expect(migrateLegacyDevicePairingStore).not.toHaveBeenCalled();
+    expect(migrateLegacyNodePairingStore).not.toHaveBeenCalled();
+  });
+});
+
 describe("prepareGatewayPluginBootstrap startup plugins", () => {
   beforeEach(() => {
     applyPluginAutoEnable.mockClear();
@@ -263,7 +353,18 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
     resolveOpenClawPackageRootSync.mockClear().mockReturnValue("/package");
     runChannelPluginStartupMaintenance.mockClear();
     runStartupSessionMigration.mockClear();
+    migrateLegacyDevicePairingStore.mockClear();
+    migrateLegacyNodePairingStore.mockClear();
   });
+  it("does not run startup maintenance", async () => {
+    await prepareBootstrapWithRuntimeConfig({});
+
+    expect(runChannelPluginStartupMaintenance).not.toHaveBeenCalled();
+    expect(runStartupSessionMigration).not.toHaveBeenCalled();
+    expect(migrateLegacyDevicePairingStore).not.toHaveBeenCalled();
+    expect(migrateLegacyNodePairingStore).not.toHaveBeenCalled();
+  });
+
   it("derives startup activation from source config instead of runtime plugin defaults", async () => {
     const sourceConfig = {
       channels: {
@@ -328,7 +429,6 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
     await prepareGatewayPluginBootstrap({
       cfgAtStart: runtimeConfig,
       activationSourceConfig: sourceConfig,
-      startupRuntimeConfig: runtimeConfig,
       pluginMetadataSnapshot,
       minimalTestGateway: false,
       log,
@@ -435,7 +535,6 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
     const { prepareGatewayPluginBootstrap } = await import("./server-startup-plugins.js");
     const result = await prepareGatewayPluginBootstrap({
       cfgAtStart: { channels: {} },
-      startupRuntimeConfig: { channels: {} },
       minimalTestGateway: false,
       ambientEnvTriggers: "suppress",
       log,

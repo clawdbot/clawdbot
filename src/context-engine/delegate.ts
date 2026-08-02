@@ -54,7 +54,8 @@ function buildCompactionResultSessionTarget(params: {
   const suppliedAgentId = targetAgentId ?? requestedAgentId;
   const suppliedSessionId = normalizeOptionalString(params.sessionId);
   const suppliedSessionKey = targetSessionKey ?? requestedSessionKey;
-  const callerAgentId = suppliedAgentId ?? parseAgentSessionKey(suppliedSessionKey)?.agentId;
+  const suppliedSessionKeyAgentId = parseAgentSessionKey(suppliedSessionKey)?.agentId;
+  const callerAgentId = suppliedAgentId ?? suppliedSessionKeyAgentId;
   if (
     (callerAgentId && marker && marker.agentId !== callerAgentId) ||
     (targetStorePath && marker && path.resolve(marker.storePath) !== path.resolve(targetStorePath))
@@ -64,12 +65,11 @@ function buildCompactionResultSessionTarget(params: {
   if (marker && suppliedSessionId && marker.sessionId !== suppliedSessionId) {
     throw new Error("Context-engine successor identity is inconsistent");
   }
-  const candidateSessionKey = suppliedSessionKey;
   const candidateEntry =
-    marker && candidateSessionKey
+    marker && suppliedSessionKey
       ? loadSessionEntry({
           agentId: marker.agentId,
-          sessionKey: candidateSessionKey,
+          sessionKey: suppliedSessionKey,
           storePath: marker.storePath,
         })
       : undefined;
@@ -86,17 +86,12 @@ function buildCompactionResultSessionTarget(params: {
       )
     : undefined;
   const callerAuthorizedMarkerKey = Boolean(
-    candidateSessionKey &&
-    suppliedSessionKey &&
-    candidateSessionKey === suppliedSessionKey &&
-    (!candidateEntry || candidateEntry.sessionId === callerSessionId),
+    suppliedSessionKey && (!candidateEntry || candidateEntry.sessionId === callerSessionId),
   );
   const markerSessionKey = marker
-    ? callerAuthorizedMarkerKey
-      ? candidateSessionKey
-      : candidateEntry?.sessionId === marker.sessionId
-        ? candidateSessionKey
-        : (preferredMarkerSessionKey ?? (candidateEntry ? undefined : candidateSessionKey))
+    ? callerAuthorizedMarkerKey || candidateEntry?.sessionId === marker.sessionId
+      ? suppliedSessionKey
+      : (preferredMarkerSessionKey ?? (candidateEntry ? undefined : suppliedSessionKey))
     : undefined;
   if (sessionFile && !marker) {
     throw new Error("Legacy context-engine file successors are unsupported");
@@ -106,7 +101,7 @@ function buildCompactionResultSessionTarget(params: {
   }
   if (
     marker &&
-    candidateSessionKey &&
+    suppliedSessionKey &&
     ((candidateEntry &&
       candidateEntry.sessionId !== marker.sessionId &&
       !callerAuthorizedMarkerKey) ||
@@ -114,11 +109,7 @@ function buildCompactionResultSessionTarget(params: {
   ) {
     throw new Error("Legacy context-engine successor session key is inconsistent");
   }
-  if (
-    marker &&
-    parseAgentSessionKey(candidateSessionKey)?.agentId &&
-    parseAgentSessionKey(candidateSessionKey)?.agentId !== marker.agentId
-  ) {
+  if (marker && suppliedSessionKeyAgentId && suppliedSessionKeyAgentId !== marker.agentId) {
     throw new Error("Legacy context-engine successor identity is inconsistent");
   }
   const sessionId = marker?.sessionId ?? suppliedSessionId ?? targetSessionId ?? callerSessionId;
@@ -239,16 +230,7 @@ function renderMemorySystemPromptAddition(
   params: MemoryPromptSectionParams,
   prepared?: PreparedMemoryPromptSection,
 ): string | undefined {
-  const lines = buildMemoryPromptSection(
-    {
-      availableTools: params.availableTools,
-      citationsMode: params.citationsMode,
-      agentId: params.agentId,
-      agentSessionKey: params.agentSessionKey,
-      sandboxed: params.sandboxed,
-    },
-    prepared,
-  );
+  const lines = buildMemoryPromptSection(params, prepared);
   if (lines.length === 0) {
     return undefined;
   }
@@ -277,12 +259,6 @@ export function buildMemorySystemPromptAddition(
 export async function prepareMemorySystemPromptAddition(
   params: MemoryPromptSectionParams,
 ): Promise<string | undefined> {
-  const prepared = await prepareMemoryPromptSection({
-    availableTools: params.availableTools,
-    citationsMode: params.citationsMode,
-    agentId: params.agentId,
-    agentSessionKey: params.agentSessionKey,
-    sandboxed: params.sandboxed,
-  });
+  const prepared = await prepareMemoryPromptSection(params);
   return renderMemorySystemPromptAddition(params, prepared);
 }

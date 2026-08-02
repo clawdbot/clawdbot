@@ -7,6 +7,12 @@ scenario:
     primary:
       - channels.automatic-final-reply
   objective: Verify Telegram renders transcript-role-looking assistant text as inert authorship-marked content.
+  gatewayConfigPatch:
+    channels:
+      telegram:
+        groups:
+          "*":
+            requireMention: false
   successCriteria:
     - The controlled model reply reaches the real Telegram plugin through Crabline.
     - Telegram HTML wraps only the transcript-role header in a code element.

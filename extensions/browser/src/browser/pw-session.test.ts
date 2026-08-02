@@ -1,4 +1,5 @@
 // Browser tests cover pw session plugin behavior.
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -729,23 +730,65 @@ describe("pw-session ensurePageState", () => {
     expect(saveAs).not.toHaveBeenCalled();
   });
 
-  it("does not emit an unhandled rejection when a download capture is abandoned", async () => {
-    const { page } = fakePage();
+  it("keeps an abandoned download timeout from terminating its process", async () => {
+    const captureModule = new URL("./pw-download-capture.ts", import.meta.url).href;
+    const script = `
+      import { createDownloadCaptureForPage } from ${JSON.stringify(captureModule)};
+      const state = { downloadWaiterDepth: 0 };
+      createDownloadCaptureForPage({ on() {}, off() {} }, state, 1);
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      if (state.downloadWaiterDepth !== 0) throw new Error("Download waiter was not released");
+    `;
+
+    await new Promise<void>((resolve, reject) => {
+      execFile(
+        process.execPath,
+        [
+          "--unhandled-rejections=strict",
+          "--import",
+          "tsx",
+          "--input-type=module",
+          "--eval",
+          script,
+        ],
+        { timeout: 10_000 },
+        (error, _stdout, stderr) => {
+          if (error) {
+            reject(new Error(stderr || error.message));
+            return;
+          }
+          resolve();
+        },
+      );
+    });
+  });
+
+  it("preserves the original timeout rejection for an active download waiter", async () => {
+    const { page, handlers } = fakePage();
     const state = ensurePageState(page);
-    const unhandled: unknown[] = [];
-    const onUnhandled = (reason: unknown) => unhandled.push(reason);
-    process.on("unhandledRejection", onUnhandled);
+    const listenerCount = handlers.get("download")?.length ?? 0;
+    const capture = createDownloadCaptureForPage(page, state, 1, {
+      timeoutMessage: "Explicit download waiter timed out",
+    });
 
-    try {
-      createDownloadCaptureForPage(page, state, 1);
-      await new Promise((resolve) => setTimeout(resolve, 10));
-      await new Promise((resolve) => setImmediate(resolve));
+    await expect(capture.promise).rejects.toThrow("Explicit download waiter timed out");
+    expect(state.downloadWaiterDepth).toBe(0);
+    expect(handlers.get("download")).toHaveLength(listenerCount);
+  });
 
-      expect(unhandled).toEqual([]);
-      expect(state.downloadWaiterDepth).toBe(0);
-    } finally {
-      process.off("unhandledRejection", onUnhandled);
-    }
+  it("keeps cancellation silent and releases the download waiter", async () => {
+    const { page, handlers } = fakePage();
+    const state = ensurePageState(page);
+    const listenerCount = handlers.get("download")?.length ?? 0;
+    const capture = createDownloadCaptureForPage(page, state, 1);
+
+    capture.cancel();
+    await new Promise((resolve) => {
+      setTimeout(resolve, 10);
+    });
+
+    expect(state.downloadWaiterDepth).toBe(0);
+    expect(handlers.get("download")).toHaveLength(listenerCount);
   });
 
   it("lets explicit download owners arm while passive capture yields", () => {

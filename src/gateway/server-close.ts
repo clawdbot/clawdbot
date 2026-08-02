@@ -12,6 +12,7 @@ import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { closePluginStateDatabase } from "../plugin-state/plugin-state-store.js";
+import { clearActivePluginRegistry } from "../plugins/runtime.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import {
   abortTrackedChatRunById,
@@ -671,7 +672,6 @@ export function createGatewayCloseHandler(
   params: {
     bonjourStop: (() => Promise<void>) | null;
     tailscaleCleanup: (() => Promise<void>) | null;
-    releasePluginRouteRegistry?: (() => void) | null;
     clearSecretsRuntimeSnapshot?: (() => void) | null;
     channelIds?: readonly ChannelId[];
     stopChannel: (name: ChannelId, accountId?: string) => Promise<void>;
@@ -1053,11 +1053,7 @@ export function createGatewayCloseHandler(
         warnings,
       });
     } finally {
-      try {
-        params.releasePluginRouteRegistry?.();
-      } catch {
-        /* ignore */
-      }
+      await shutdownStep("plugin-host-registry", clearActivePluginRegistry, warnings);
       // Channel and plugin teardown still resolve account credentials. Keep the
       // active snapshot until every teardown owner is done, then always scrub it.
       try {

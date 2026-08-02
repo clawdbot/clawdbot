@@ -26,6 +26,7 @@ import {
 
 const observedElements = new Set<Element>();
 const resizeObservers = new Set<RecordingResizeObserver>();
+let measuredRowHeight = 100;
 
 class RecordingResizeObserver implements ResizeObserver {
   private readonly targets = new Set<Element>();
@@ -58,6 +59,10 @@ class RecordingResizeObserver implements ResizeObserver {
     if (entries.length > 0) {
       this.callback(entries, this);
     }
+  }
+
+  observes(target: Element): boolean {
+    return this.targets.has(target);
   }
 }
 
@@ -107,11 +112,14 @@ describe("chat transcript row measurement", () => {
   beforeEach(() => {
     observedElements.clear();
     resizeObservers.clear();
+    measuredRowHeight = 100;
     vi.stubGlobal("ResizeObserver", RecordingResizeObserver);
     // jsdom reports 0x0 rects and offsetHeight 0; keep the virtualizer
     // viewport and measured row sizes non-zero so re-renders keep producing
     // virtual rows.
-    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(100);
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(
+      () => measuredRowHeight,
+    );
     vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue({
       x: 0,
       y: 0,
@@ -355,6 +363,46 @@ describe("chat transcript row measurement", () => {
     expect(hostA?.measureRowRefs.size).toBe(0);
     transcript.hostDisconnected();
     expect(observedElements.size).toBe(0);
+  });
+
+  it("updates rendered row offsets from freshly wrapped heights while scrolling", async () => {
+    const transcript = createTestTranscript();
+    const container = document.body.appendChild(document.createElement("div"));
+    const props = threadProps("pane-width-remeasure");
+    const renderTranscript = async () => {
+      render(renderChatThread(props, transcript), container);
+      transcript.hostUpdated();
+      await flushDeferredRowPrune();
+    };
+
+    await renderTranscript();
+    transcript.hostConnected();
+    await renderTranscript();
+    expect(transcriptRows(container)[1]?.style.transform).toBe("translateY(100px)");
+
+    const scrollElement = container.querySelector<HTMLElement>(".chat-thread");
+    expect(scrollElement).not.toBeNull();
+    scrollElement!.scrollTop = 40;
+    scrollElement!.dispatchEvent(new Event("scroll"));
+    const virtualizer = (
+      transcript as unknown as {
+        sessionVirtualizer: {
+          virtualizerController: { getVirtualizer: () => { isScrolling: boolean } };
+        };
+      }
+    ).sessionVirtualizer.virtualizerController.getVirtualizer();
+    expect(virtualizer.isScrolling).toBe(true);
+
+    measuredRowHeight = 180;
+    for (const observer of resizeObservers) {
+      if (scrollElement && observer.observes(scrollElement)) {
+        observer.emit(640, 600);
+      }
+    }
+    await renderTranscript();
+
+    expect(transcriptRows(container)[1]?.style.transform).toBe("translateY(180px)");
+    transcript.hostDisconnected();
   });
 
   it("rebinds guarded transcript images when the gateway rotates its auth token", async () => {

@@ -1,4 +1,5 @@
 /** Builds plugin status reports from persisted metadata without importing full plugin runtimes. */
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -94,7 +95,7 @@ function buildPluginRecordFromInstalledIndex(
     compat: plugin.compat,
     syntheticAuthRefs: [...(plugin.syntheticAuthRefs ?? manifest?.syntheticAuthRefs ?? [])],
     status: plugin.enabled ? "loaded" : "disabled",
-    toolNames: [],
+    toolNames: uniqueStrings(manifest?.contracts?.tools ?? []),
     hookNames: [],
     channelIds: [...(manifest?.channels ?? [])],
     cliBackendIds: [...(manifest?.cliBackends ?? []), ...(manifest?.setup?.cliBackends ?? [])],

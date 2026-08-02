@@ -4,7 +4,7 @@ import { isSensitiveConfigPath } from "../config/sensitive-paths.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { WizardSession, type WizardStep } from "../wizard/session.js";
+import { WizardSession, wizardStepAwaitsInput, type WizardStep } from "../wizard/session.js";
 import type {
   MemoryImportProviderOutcome,
   SetupMemoryImportOutcome,
@@ -535,9 +535,10 @@ function renderWizardStep(step: WizardStep): string {
     default:
       break;
   }
-  lines.push("Say `cancel` to stop this setup.");
   return lines.filter(Boolean).join("\n");
 }
+
+const WIZARD_CANCEL_HINT = "Say `cancel` to stop this setup.";
 
 /** Map a chat reply to a wizard step answer; null means "could not parse". */
 function parseWizardAnswer(step: WizardStep, text: string): { value: unknown } | null {
@@ -743,7 +744,15 @@ export class SystemAgentChatEngine {
     // Snapshot before resolving: wizard answers to sensitive steps (tokens,
     // passwords) must never enter the AI-visible history.
     const sensitiveTurn = this.wizardBridge?.step?.sensitive === true;
-    const reply = await this.resolveTurn(text, options);
+    const resolved = await this.resolveTurn(text, options);
+    // The hint belongs to the outgoing message, not to each rendered step: one
+    // turn can concatenate several auto-answered notes, and a wizard that just
+    // ended must not offer a cancel that can no longer happen.
+    const awaitedStep = this.wizardBridge?.step;
+    const reply: SystemAgentChatReply =
+      resolved.text && awaitedStep && wizardStepAwaitsInput(awaitedStep)
+        ? { ...resolved, text: `${resolved.text}\n${WIZARD_CANCEL_HINT}` }
+        : resolved;
     this.history.push({
       role: "user",
       text: sensitiveTurn ? "<redacted secret>" : redactSensitiveCommandText(text),

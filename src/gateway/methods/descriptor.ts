@@ -44,6 +44,8 @@ export type GatewayMethodDescriptorInput = Omit<GatewayMethodDescriptor, "name">
 
 /** Read-only method registry view used by request dispatch and method listing. */
 export type GatewayMethodRegistryView = {
+  /** Opaque registry handle carried into request scope by the gateway composition root. */
+  pluginRegistry?: object;
   getHandler: (name: string) => GatewayMethodHandler | undefined;
   listMethods: () => string[];
   listAdvertisedMethods: () => string[];

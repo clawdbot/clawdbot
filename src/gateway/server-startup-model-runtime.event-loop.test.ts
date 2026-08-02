@@ -87,12 +87,13 @@ async function listenHealthz(): Promise<{ port: number; close: () => Promise<voi
 }
 
 async function requestHealthzAfter(port: number, delayMs: number) {
-  const startedAt = performance.now();
+  const cpuStartedAt = process.threadCpuUsage();
   await new Promise<void>((resolve) => {
     setTimeout(resolve, delayMs);
   });
   const response = await fetch(`http://127.0.0.1:${port}/healthz`);
-  return { elapsedMs: performance.now() - startedAt, response };
+  const cpuUsage = process.threadCpuUsage(cpuStartedAt);
+  return { cpuMs: (cpuUsage.user + cpuUsage.system) / 1_000, response };
 }
 
 afterEach(() => {
@@ -163,11 +164,11 @@ describe("Gateway prepared model runtime startup", () => {
             logChannels: { info: vi.fn(), error: vi.fn() },
           });
 
-          const [{ elapsedMs, response }] = await Promise.all([probe, sidecars]);
+          const [{ cpuMs, response }] = await Promise.all([probe, sidecars]);
           expect(response.status).toBe(200);
-          // The configured model is already resolved from manifest facts. Either provider hook
-          // would deliberately block the event loop well beyond this responsiveness guard.
-          expect(elapsedMs).toBeLessThan(1_000);
+          // Current-thread CPU isolates startup work from runner descheduling. Either provider
+          // hook would consume well beyond this budget while starving health-probe handling.
+          expect(cpuMs).toBeLessThan(1_000);
           expect(providerMocks.staticCatalog).not.toHaveBeenCalled();
           expect(providerMocks.liveCatalog).not.toHaveBeenCalled();
         },

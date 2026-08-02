@@ -17,6 +17,8 @@ import {
 } from "../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import {
   getActiveGatewayRootWorkCount,
   markGatewayRestartDraining,
@@ -42,7 +44,10 @@ import {
   SUBAGENT_ENDED_REASON_ERROR,
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import type {
+  ContextEngineSubagentEndedParams,
+  SubagentRunRecord,
+} from "./subagent-registry.types.js";
 import {
   createSessionStore,
   createSubagentRunParams,
@@ -181,8 +186,8 @@ const mocks = vi.hoisted(() => ({
     },
   ),
   getGlobalHookRunner: vi.fn(() => null),
-  ensureRuntimePluginsLoaded: vi.fn(),
   ensureContextEnginesInitialized: vi.fn(),
+  loadAgentRuntimePluginRegistryHandle: vi.fn(),
   resolveContextEngine: vi.fn(),
   onSubagentEnded: vi.fn<
     (params: { childSessionKey?: string }, context?: unknown) => Promise<void>
@@ -252,10 +257,6 @@ vi.mock("./subagent-announce.js", () => ({
 
 vi.mock("../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: mocks.getGlobalHookRunner,
-}));
-
-vi.mock("./runtime-plugins.js", () => ({
-  ensureRuntimePluginsLoaded: mocks.ensureRuntimePluginsLoaded,
 }));
 
 vi.mock("../context-engine/init.js", () => ({
@@ -337,6 +338,11 @@ describe("subagent registry seam flow", () => {
     mocks.resolveContextEngine.mockResolvedValue({
       onSubagentEnded: mocks.onSubagentEnded,
     });
+    const pluginRegistry = createEmptyPluginRegistry();
+    mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(pluginRegistry);
+    mocks.runSubagentEnded.mockImplementation(async () => {
+      expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(pluginRegistry);
+    });
     mocks.scheduleOrphanRecovery.mockReset();
     mocks.resolveAgentTimeoutMs.mockReturnValue(1_000);
     mocks.restoreSubagentRunsFromDisk.mockReturnValue(0);
@@ -369,7 +375,7 @@ describe("subagent registry seam flow", () => {
       // root-count drain assertions here. Wake behavior has its own suites.
       maybeWakeRequesterAfterAllChildrenSettled: mocks.maybeWakeRequesterAfterAllChildrenSettled,
       ensureContextEnginesInitialized: mocks.ensureContextEnginesInitialized,
-      ensureRuntimePluginsLoaded: mocks.ensureRuntimePluginsLoaded,
+      loadAgentRuntimePluginRegistryHandle: mocks.loadAgentRuntimePluginRegistryHandle,
       resolveContextEngine: mocks.resolveContextEngine,
     });
     mod.resetSubagentRegistryForTests({ persist: false });
@@ -5054,9 +5060,10 @@ describe("subagent registry seam flow", () => {
     mockGatewayMethods(mocks.callGateway, {
       "agent.wait": { status: "pending" },
     });
-    mocks.ensureRuntimePluginsLoaded.mockRejectedValueOnce(
-      new Error("runtime unavailable during killed hook"),
-    );
+    mocks.getGlobalHookRunner.mockReturnValue({
+      hasHooks: (hookName: string) => hookName === "subagent_ended",
+      runSubagentEnded: vi.fn().mockRejectedValueOnce(new Error("ended hook unavailable")),
+    } as never);
 
     mod.registerSubagentRun({
       runId: "run-killed-recovery",
@@ -5089,11 +5096,8 @@ describe("subagent registry seam flow", () => {
       expect(run?.endedReason).toBe("subagent-killed");
       expect(run?.suppressAnnounceReason).toBe("killed");
     });
-    expect(mocks.ensureRuntimePluginsLoaded).not.toHaveBeenCalled();
-
     await mod.testing.sweepOnceForTests();
     await waitForFast(() => {
-      expect(mocks.ensureRuntimePluginsLoaded).toHaveBeenCalled();
       expect(
         mod
           .listSubagentRunsForRequester("agent:main:main")
@@ -5123,7 +5127,14 @@ describe("subagent registry seam flow", () => {
   });
 
   it("retries completion hooks before resuming ended cleanup", async () => {
-    mocks.ensureRuntimePluginsLoaded.mockRejectedValueOnce(new Error("runtime unavailable"));
+    const runSubagentEnded = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("ended hook unavailable"))
+      .mockResolvedValue(undefined);
+    mocks.getGlobalHookRunner.mockReturnValue({
+      hasHooks: (hookName: string) => hookName === "subagent_ended",
+      runSubagentEnded,
+    } as never);
 
     mod.registerSubagentRun({
       runId: "run-hook-retry",
@@ -5132,7 +5143,7 @@ describe("subagent registry seam flow", () => {
     });
 
     await waitForFast(() => {
-      expect(mocks.ensureRuntimePluginsLoaded.mock.calls.length).toBeGreaterThanOrEqual(2);
+      expect(runSubagentEnded.mock.calls.length).toBeGreaterThanOrEqual(2);
       const run = findRequesterRun("run-hook-retry");
       expect(run?.cleanupCompletedAt).toBeTypeOf("number");
     });
@@ -5190,56 +5201,6 @@ describe("subagent registry seam flow", () => {
 
     await vi.advanceTimersByTimeAsync(20_000);
     expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
-  });
-
-  it("emits the canonical ended hook when plugin loading overlaps a newer completion", async () => {
-    mocks.callGateway.mockImplementation(async (request: { method?: string }) =>
-      request.method === "agent.wait" ? { status: "pending" } : {},
-    );
-    mocks.getGlobalHookRunner.mockReturnValue({
-      hasHooks: (hookName: string) => hookName === "subagent_ended",
-      runSubagentEnded: mocks.runSubagentEnded,
-    } as never);
-    let releaseOldPluginLoad: (() => void) | undefined;
-    const oldPluginLoad = new Promise<void>((resolve) => {
-      releaseOldPluginLoad = resolve;
-    });
-    mocks.ensureRuntimePluginsLoaded.mockImplementationOnce(async () => {
-      await oldPluginLoad;
-    });
-
-    mod.registerSubagentRun({
-      runId: "run-hook-timeout-then-ok",
-      childSessionKey: "agent:main:subagent:hook-timeout-then-ok",
-      task: "publish only the canonical hook",
-      expectsCompletionMessage: false,
-    });
-    const lifecycleHandler = getLifecycleHandler();
-
-    lifecycleHandler?.({
-      runId: "run-hook-timeout-then-ok",
-      stream: "lifecycle",
-      data: { phase: "end", startedAt: 100, endedAt: 200, aborted: true },
-    });
-    await vi.advanceTimersByTimeAsync(15_000);
-    await waitForFast(() => expect(mocks.ensureRuntimePluginsLoaded).toHaveBeenCalledTimes(1));
-
-    lifecycleHandler?.({
-      runId: "run-hook-timeout-then-ok",
-      stream: "lifecycle",
-      data: { phase: "end", startedAt: 100, endedAt: 250 },
-    });
-    await waitForFast(() => expect(mocks.runSubagentEnded).toHaveBeenCalledTimes(1));
-    releaseOldPluginLoad?.();
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(mocks.runSubagentEnded).toHaveBeenCalledTimes(1);
-    expectRecordFields(
-      getMockCallArg(mocks.runSubagentEnded, 0, 0, "canonical ended hook"),
-      { reason: "subagent-complete", outcome: "ok", error: undefined },
-      "canonical ended hook",
-    );
   });
 
   it("deletes delete-mode completion runs when announce cleanup gives up after retry limit", async () => {
@@ -5557,10 +5518,7 @@ describe("subagent registry seam flow", () => {
       hasHooks: (hookName: string) => hookName === "subagent_ended",
       runSubagentEnded: mocks.runSubagentEnded,
     };
-    mocks.getGlobalHookRunner.mockReturnValue(null);
-    mocks.ensureRuntimePluginsLoaded.mockImplementation(() => {
-      mocks.getGlobalHookRunner.mockReturnValue(endedHookRunner as never);
-    });
+    mocks.getGlobalHookRunner.mockReturnValue(endedHookRunner as never);
 
     mod.registerSubagentRun({
       runId: "run-killed-init",
@@ -5587,20 +5545,8 @@ describe("subagent registry seam flow", () => {
       elapsedMs: 0,
     });
     expect(mocks.runSubagentEnded).not.toHaveBeenCalled();
-    mocks.ensureRuntimePluginsLoaded.mockClear();
-
     vi.setSystemTime(killedAt + 5 * 60_000);
     await mod.testing.sweepOnceForTests();
-    await waitForFast(() => {
-      expect(mocks.ensureRuntimePluginsLoaded).toHaveBeenCalledWith({
-        config: {
-          agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
-          session: { mainKey: "main", scope: "per-sender" },
-        },
-        workspaceDir: "/tmp/killed-workspace",
-        allowGatewaySubagentBinding: true,
-      });
-    });
     await waitForFast(() => expect(mocks.runSubagentEnded).toHaveBeenCalled());
     expectRecordFields(
       getMockCallArg(mocks.runSubagentEnded, 0, 0, "subagent ended hook"),
@@ -6038,7 +5984,18 @@ describe("subagent registry seam flow", () => {
     });
   });
 
-  it("loads plugin and context-engine runtime before released end hooks", async () => {
+  it("loads context-engine runtime before released end hooks", async () => {
+    const pluginRegistry = createEmptyPluginRegistry();
+    mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(pluginRegistry);
+    mocks.resolveContextEngine.mockImplementationOnce(async () => {
+      expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(pluginRegistry);
+      return {
+        onSubagentEnded: async (params: ContextEngineSubagentEndedParams) => {
+          expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(pluginRegistry);
+          await mocks.onSubagentEnded(params);
+        },
+      };
+    });
     mod.addSubagentRunForTests({
       runId: "run-release-context-engine",
       childSessionKey: "agent:main:session:child",
@@ -6067,14 +6024,6 @@ describe("subagent registry seam flow", () => {
         reason: "released",
         workspaceDir: "/tmp/workspace",
       });
-    });
-    expect(mocks.ensureRuntimePluginsLoaded).toHaveBeenCalledWith({
-      config: {
-        agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
-        session: { mainKey: "main", scope: "per-sender" },
-      },
-      workspaceDir: "/tmp/workspace",
-      allowGatewaySubagentBinding: true,
     });
     expect(mocks.ensureContextEnginesInitialized).toHaveBeenCalledTimes(1);
     expect(mocks.resolveContextEngine).toHaveBeenCalledWith(

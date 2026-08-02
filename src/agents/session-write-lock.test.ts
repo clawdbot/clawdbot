@@ -105,6 +105,26 @@ describe("SQLite session write leases", () => {
     await expect(lock.release()).resolves.toBeUndefined();
   });
 
+  it("aborts while waiting without affecting the current owner", async () => {
+    const sessionFile = target();
+    const held = await acquire(sessionFile);
+    const abort = new AbortController();
+    const reason = new Error("stop waiting");
+    const pending = acquire(sessionFile, {
+      timeoutMs: Number.POSITIVE_INFINITY,
+      signal: abort.signal,
+    });
+    const rejected = expect(pending).rejects.toBe(reason);
+
+    abort.abort(reason);
+
+    await rejected;
+    expect(() => held.assertOwned?.()).not.toThrow();
+    await held.release();
+    const successor = await acquire(sessionFile, { timeoutMs: 500 });
+    await successor.release();
+  });
+
   it("does not time-take over a live lease owner", async () => {
     testing.setProcessStartTimeResolverForTest(() => null);
     const sessionFile = target();

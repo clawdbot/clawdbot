@@ -621,7 +621,7 @@ describe("Slack live QA runtime helpers", () => {
     );
   });
 
-  it("verifies progress commentary by Slack message identity", () => {
+  it("verifies progress commentary from history or successful captured message writes", () => {
     const cases = [
       {
         id: "slack-progress-commentary-true",

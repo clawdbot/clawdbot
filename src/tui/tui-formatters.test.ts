@@ -1,4 +1,5 @@
 // Covers formatting helpers used by TUI status and message rendering.
+import { Text, visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
 import { markInboundContextLabel } from "../auto-reply/reply/inbound-context-marker.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
@@ -6,56 +7,106 @@ import {
   extractContentFromMessage,
   extractTextFromMessage,
   extractThinkingFromMessage,
-  formatModelFooter,
-  formatGoalFooter,
+  formatTuiFooter,
   formatTuiErrorMessage,
   isCommandMessage,
   sanitizeRenderableText,
 } from "./tui-formatters.js";
 
-describe("formatModelFooter", () => {
-  it("shows a compact model name and its active thinking level", () => {
+describe("formatTuiFooter", () => {
+  it("shows session modes and the process delivery mode in one compact summary", () => {
     expect(
-      formatModelFooter({
-        model: "gpt-5.6-sol@openai:setup-64cddea3-938c-431e-be3b-aa47090577c7",
+      formatTuiFooter({
+        agentLabel: "Main",
+        sessionLabel: "work",
+        sessionInfo: {
+          model: "gpt-5.6-sol@openai:setup-64cddea3-938c-431e-be3b-aa47090577c7",
+          fastMode: "auto",
+          verboseLevel: "full",
+          traceLevel: "raw",
+          reasoningLevel: "stream",
+          totalTokens: 1_200,
+          contextTokens: 128_000,
+        },
         thinkingLevel: "high",
+        deliver: true,
       }),
-    ).toBe("gpt-5.6-sol high");
+    ).toBe(
+      "agent Main | session work | gpt-5.6-sol high | fast:auto | verbose full | trace:raw | reasoning:stream | deliver:on | tokens 1.2k/128k (1%)",
+    );
   });
-});
 
-describe("formatGoalFooter", () => {
-  it("renders active goal usage", () => {
+  it("keeps disabled session modes hidden while reporting disabled delivery", () => {
     expect(
-      formatGoalFooter({
-        schemaVersion: 1,
-        id: "goal-1",
-        objective: "land PR",
-        status: "active",
-        createdAt: 1,
-        updatedAt: 1,
-        tokenStart: 0,
-        tokensUsed: 12_000,
-        tokenBudget: 30_000,
-        continuationTurns: 0,
+      formatTuiFooter({
+        agentLabel: "Main",
+        sessionLabel: "main",
+        sessionInfo: { model: "fixture-model" },
+        deliver: false,
       }),
-    ).toBe("Pursuing goal (12k/30k)");
+    ).toBe("agent Main | session main | fixture-model | deliver:off | tokens ?");
+  });
+
+  it("wraps the compact summary within the terminal width", () => {
+    const summary = formatTuiFooter({
+      agentLabel: "Main",
+      sessionLabel: "a-long-session-name",
+      sessionInfo: {
+        model: "fixture-provider/a-long-model-name",
+        traceLevel: "raw",
+        reasoningLevel: "stream",
+      },
+      deliver: true,
+    });
+
+    expect(new Text(summary, 1, 0).render(48).every((line) => visibleWidth(line) <= 48)).toBe(true);
+  });
+
+  it("renders active goal usage", () => {
+    const footer = formatTuiFooter({
+      agentLabel: "Main",
+      sessionLabel: "main",
+      sessionInfo: {
+        goal: {
+          schemaVersion: 1,
+          id: "goal-1",
+          objective: "land PR",
+          status: "active",
+          createdAt: 1,
+          updatedAt: 1,
+          tokenStart: 0,
+          tokensUsed: 12_000,
+          tokenBudget: 30_000,
+          continuationTurns: 0,
+        },
+      },
+      deliver: false,
+    });
+
+    expect(footer).toContain("Pursuing goal (12k/30k)");
   });
 
   it("renders resumable blocked goals", () => {
-    expect(
-      formatGoalFooter({
-        schemaVersion: 1,
-        id: "goal-1",
-        objective: "land PR",
-        status: "blocked",
-        createdAt: 1,
-        updatedAt: 1,
-        tokenStart: 0,
-        tokensUsed: 0,
-        continuationTurns: 0,
-      }),
-    ).toBe("Goal blocked (/goal resume)");
+    const footer = formatTuiFooter({
+      agentLabel: "Main",
+      sessionLabel: "main",
+      sessionInfo: {
+        goal: {
+          schemaVersion: 1,
+          id: "goal-1",
+          objective: "land PR",
+          status: "blocked",
+          createdAt: 1,
+          updatedAt: 1,
+          tokenStart: 0,
+          tokensUsed: 0,
+          continuationTurns: 0,
+        },
+      },
+      deliver: false,
+    });
+
+    expect(footer).toContain("Goal blocked (/goal resume)");
   });
 });
 
@@ -194,6 +245,71 @@ describe("extractTextFromMessage", () => {
         ],
       }),
     ).toBe("Attached file: report.pdf");
+  });
+
+  it.each([
+    { name: "image", block: { type: "image", data: "secret-image" }, expected: "Attached image" },
+    {
+      name: "audio",
+      block: { type: "audio", source: { type: "base64", data: "secret-audio" } },
+      expected: "Attached audio",
+    },
+    {
+      name: "video",
+      block: { type: "video", url: "file:///Users/operator/private/clip.mp4" },
+      expected: "Attached video",
+    },
+    {
+      name: "file",
+      block: { type: "file", url: "file:///etc/passwd", title: "private.txt" },
+      expected: "Attached file",
+    },
+    {
+      name: "nested audio attachment",
+      block: {
+        type: "attachment",
+        attachment: {
+          kind: "audio",
+          label: "private.ogg",
+          url: "file:///Users/operator/private/audio.ogg",
+        },
+      },
+      expected: "Attached audio",
+    },
+    {
+      name: "provider image URL block",
+      block: { type: "image_url", image_url: { url: "https://secret.test/image?ticket=secret" } },
+      expected: "Attached image",
+    },
+  ])("renders a terminal-safe assistant $name summary", ({ block, expected }) => {
+    const text = extractTextFromMessage({ role: "assistant", content: [block] });
+    expect(text).toBe(expected);
+    expect(text).not.toMatch(/secret|file:|operator|passwd|private/i);
+  });
+
+  it("renders canonical and legacy assistant media without exposing references", () => {
+    expect(
+      extractTextFromMessage({
+        role: "assistant",
+        content: [],
+        __openclaw: {
+          media: [
+            { kind: "image", path: "/private/generated.png" },
+            { kind: "audio", url: "https://secret.test/voice.ogg?ticket=secret" },
+            { kind: "video", fileName: "private.mov" },
+            { kind: "document", path: "/etc/passwd" },
+          ],
+        },
+      }),
+    ).toBe("Attached image\nAttached audio\nAttached video\nAttached file");
+    expect(
+      extractTextFromMessage({
+        role: "assistant",
+        content: [],
+        mediaUrl: "file:///private/one.png",
+        mediaUrls: ["https://secret.test/two.mp3?ticket=secret"],
+      }),
+    ).toBe("Attached media\nAttached media");
   });
 
   it("prefers final_answer text over commentary text for assistant messages", () => {

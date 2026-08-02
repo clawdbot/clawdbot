@@ -6,7 +6,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { listContextEngineQuarantines } from "../context-engine/registry.js";
 import {
   getActiveRuntimePluginRegistry,
-  listLoadedRuntimePluginIdsAcrossSurfaces,
+  listLoadedRuntimePluginIds,
 } from "../plugins/active-runtime-registry.js";
 import {
   dedupeChannelPluginFailures,
@@ -160,11 +160,7 @@ export function collectRuntimePluginHealthSnapshot(): StatusPluginHealthSnapshot
   const registry = getActiveRuntimePluginRegistry();
   const diagnostics = (registry?.diagnostics ?? []).map(normalizeDiagnostic);
   const plugins = (registry?.plugins ?? []).map(normalizeSnapshotPlugin);
-  // Confirmed runtime-loaded ids across all live registry surfaces (so a plugin
-  // still live via a pinned channel/http-route registry counts) let detailed
-  // status separate actually-loaded plugins from disk-scan inventory the merged
-  // snapshot also marks "loaded".
-  const runtimeLoadedPluginIds = listLoadedRuntimePluginIdsAcrossSurfaces();
+  const runtimeLoadedPluginIds = listLoadedRuntimePluginIds();
   return {
     plugins,
     diagnostics,

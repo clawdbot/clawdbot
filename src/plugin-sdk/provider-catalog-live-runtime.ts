@@ -1,7 +1,11 @@
 import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
 import { readResponseWithLimit } from "../infra/http-body.js";
 import { retainSafeHeadersForCrossOriginRedirect } from "../infra/net/redirect-headers.js";
-import type { ProviderCatalogContext, ProviderCatalogResult } from "../plugins/types.js";
+import type {
+  ProviderCatalogContext,
+  ProviderCatalogResult,
+  ProviderPlugin,
+} from "../plugins/types.js";
 import {
   buildOpenAICompatibleLiveModels,
   readLiveModelCatalogRecord,
@@ -11,6 +15,7 @@ import {
   clearLiveCatalogCacheForTests,
   getCachedLiveCatalogValue,
 } from "./provider-catalog-shared.js";
+import type { ManifestProviderCatalogEntry } from "./provider-catalog-shared.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "./provider-model-shared.js";
 import {
   fetchWithSsrFGuard,
@@ -591,6 +596,46 @@ export async function buildOpenAICompatibleLiveModelProviderConfig(params: {
       ((rows, fallbackProvider) =>
         buildOpenAICompatibleLiveModels(rows, fallbackProvider, acceptUnknownModel)),
   });
+}
+
+/** Builds the shared authenticated live/static hooks for an ordered provider family. */
+export function buildOpenAICompatibleProviderFamilyCatalog(params: {
+  credentialProviderId: string;
+  entries: readonly ManifestProviderCatalogEntry[];
+  staticCatalog: () => Promise<{ providers: Record<string, ModelProviderConfig> }>;
+  augmentModelCatalog: NonNullable<ProviderPlugin["augmentModelCatalog"]>;
+}) {
+  return {
+    catalog: {
+      order: "paired" as const,
+      run: async (ctx: ProviderCatalogContext) => {
+        const auth = ctx.resolveProviderApiKey(params.credentialProviderId);
+        if (!auth.apiKey) {
+          return null;
+        }
+        return {
+          providers: Object.fromEntries(
+            await Promise.all(
+              params.entries.map(
+                async ({ id, buildProvider }) =>
+                  [
+                    id,
+                    await buildOpenAICompatibleLiveModelProviderConfig({
+                      providerId: id,
+                      providerConfig: buildProvider(),
+                      apiKey: auth.apiKey,
+                      discoveryApiKey: auth.discoveryApiKey,
+                    }),
+                  ] as const,
+              ),
+            ),
+          ),
+        };
+      },
+      staticRun: params.staticCatalog,
+    },
+    augmentModelCatalog: params.augmentModelCatalog,
+  };
 }
 
 export async function buildOpenAICompatibleProviderCatalog(

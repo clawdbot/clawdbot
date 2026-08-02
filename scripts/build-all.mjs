@@ -31,6 +31,7 @@ const TSDOWN_SOURCE_EXTENSIONS = [
   ".json5",
   ".mjs",
   ".mts",
+  ".sql",
   ".ts",
   ".tsx",
   ".yaml",
@@ -229,19 +230,6 @@ export const BUILD_ALL_STEPS = [
     args: ["--import", "tsx", "scripts/copy-hook-metadata.ts"],
   },
   {
-    label: "copy-export-html-templates",
-    kind: "node",
-    args: ["--import", "tsx", "scripts/copy-export-html-templates.ts"],
-    cache: {
-      inputs: [
-        "scripts/copy-export-html-templates.ts",
-        "scripts/lib/copy-assets.ts",
-        "src/auto-reply/reply/export-html",
-      ],
-      outputs: ["dist/export-html"],
-    },
-  },
-  {
     label: "ui:build",
     kind: "pnpm",
     pnpmArgs: ["ui:build"],
@@ -286,7 +274,6 @@ export const BUILD_ALL_PROFILES = {
     "write-plugin-sdk-entry-dts",
     "check-plugin-sdk-exports",
     "copy-hook-metadata",
-    "copy-export-html-templates",
     "ui:build",
     "write-build-info",
     "write-cli-startup-metadata",
@@ -302,7 +289,6 @@ export const BUILD_ALL_PROFILES = {
     "write-plugin-sdk-entry-dts",
     "check-plugin-sdk-exports",
     "copy-hook-metadata",
-    "copy-export-html-templates",
     "ui:build",
     "write-build-info",
     "write-cli-startup-metadata",

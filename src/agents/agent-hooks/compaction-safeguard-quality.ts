@@ -94,10 +94,7 @@ function hasRequiredSummarySections(summary: string): boolean {
 }
 
 /** Return a structured fallback summary when model output is missing/invalid. */
-export function buildStructuredFallbackSummary(
-  previousSummary: string | undefined,
-  _summarizationInstructions?: CompactionSummarizationInstructions,
-): string {
+export function buildStructuredFallbackSummary(previousSummary: string | undefined): string {
   const trimmedPreviousSummary = previousSummary?.trim() ?? "";
   if (trimmedPreviousSummary && hasRequiredSummarySections(trimmedPreviousSummary)) {
     return trimmedPreviousSummary;
@@ -153,12 +150,10 @@ export function extractOpaqueIdentifiers(text: string): string[] {
     text.match(
       /([A-Fa-f0-9]{8,}|https?:\/\/\S+|\/[\w.-]{2,}(?:\/[\w.-]+)+|[A-Za-z]:\\[\w\\.-]+|[A-Za-z0-9._-]+\.[A-Za-z0-9._/-]+:\d{1,5}|\b\d{6,}\b)/g,
     ) ?? [];
-  return Array.from(
-    new Set(
-      matches
-        .map((value) => normalizeOpaqueIdentifier(sanitizeExtractedIdentifier(value)))
-        .filter((value) => value.length >= 4),
-    ),
+  return uniqueStrings(
+    matches
+      .map((value) => normalizeOpaqueIdentifier(sanitizeExtractedIdentifier(value)))
+      .filter((value) => value.length >= 4),
   ).slice(0, MAX_EXTRACTED_IDENTIFIERS);
 }
 

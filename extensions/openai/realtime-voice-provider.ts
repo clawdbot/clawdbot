@@ -1684,8 +1684,10 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     ) {
       return;
     }
-    this.pendingAudio.push(audio);
-    this.pendingAudioBytes += audio.byteLength;
+    // Capture transports can recycle caller-owned views before the provider becomes ready.
+    const queuedAudio = Buffer.from(audio);
+    this.pendingAudio.push(queuedAudio);
+    this.pendingAudioBytes += queuedAudio.byteLength;
   }
 
   private clearPendingAudio(): void {

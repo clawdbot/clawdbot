@@ -55,8 +55,8 @@ export const CLI_DEFAULT_OPERATOR_SCOPES: OperatorScope[] = [
 ];
 
 function resolveScopedMethod(method: string): OperatorScope | undefined {
-  // Gateway-pinned plugin descriptors prevent agent-scoped registry loads from
-  // changing gateway authorization. Node/dynamic sentinels are not operator scopes.
+  // Gateway method descriptors come from the process-root registry. Node/dynamic
+  // sentinels are not operator scopes.
   const explicitScope = resolveCoreOperatorGatewayMethodScope(method);
   if (explicitScope) {
     return explicitScope;

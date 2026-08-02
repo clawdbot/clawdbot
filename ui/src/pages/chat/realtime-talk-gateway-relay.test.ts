@@ -614,6 +614,25 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     expect(onInputLevel).toHaveBeenLastCalledWith(0);
   });
 
+  it("reclaims the input meter when its first level update stops the transport", async () => {
+    vi.useFakeTimers();
+    const client = createClient();
+    const onInputLevel = vi.fn((level: number) => {
+      if (level > 0) {
+        transport.stop();
+      }
+    });
+    const transport = createTransport({ client, callbacks: { onInputLevel } });
+
+    await expect(transport.start()).resolves.toBe("ready");
+    transport.stop();
+    transport.stop();
+    vi.advanceTimersByTime(1_000);
+
+    expect(vi.getTimerCount()).toBe(0);
+    expect(requestCallsFor(client, "talk.session.close")).toHaveLength(1);
+  });
+
   it("bounds stalled microphone appends and aborts every owner on stop", async () => {
     const onStatus = vi.fn();
     const client = createClient();

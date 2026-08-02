@@ -650,20 +650,23 @@ describe("CodexAppServerTurnRouter", () => {
     route.release();
   });
 
-  it("consumes one native completion and clears stale completion when arming", async () => {
+  it("consumes buffered exact native completions and clears them when arming", async () => {
     const harness = createHarness();
-    const route = getCodexAppServerTurnRouter(harness.client).reserveThread({
+    const router = getCodexAppServerTurnRouter(harness.client);
+    const route = router.reserveThread({
       threadId: "thread-native",
-      onNotification: vi.fn(),
     });
     harness.send({
       method: "turn/completed",
       params: { threadId: "thread-native", turn: { id: "turn-native", items: [] } },
     });
     await settleInput();
-
-    await expect(route.waitForTurnCompletion({ timeoutMs: 10 })).resolves.toBe(true);
-    await expect(route.waitForTurnCompletion({ timeoutMs: 1 })).resolves.toBe(false);
+    await route.activate({ onNotification: vi.fn() });
+    expect(route.observedNativeTurnId).toBe("turn-native");
+    const completion = (turnId: string, timeoutMs: number) =>
+      router.watchNativeTurnCompletion({ threadId: route.threadId, turnId, timeoutMs }).completion;
+    await expect(completion("turn-native", 10)).resolves.toBe(true);
+    await expect(completion("turn-native", 1)).resolves.toBe(false);
 
     harness.send({
       method: "turn/completed",
@@ -671,32 +674,93 @@ describe("CodexAppServerTurnRouter", () => {
     });
     await settleInput();
     route.armTurn();
-    await expect(route.waitForTurnCompletion({ timeoutMs: 1 })).resolves.toBe(false);
+    expect(route.observedNativeTurnId).toBeUndefined();
+    await expect(completion("turn-stale", 1)).resolves.toBe(false);
     await route.cancelTurn();
   });
 
-  it("settles an active native-completion waiter on completion, abort, and release", async () => {
+  it("keeps an observed active native turn exact across arm and stale completion", async () => {
     const harness = createHarness();
-    const route = getCodexAppServerTurnRouter(harness.client).reserveThread({
+    const router = getCodexAppServerTurnRouter(harness.client);
+    const route = router.reserveThread({
+      threadId: "thread-native-active",
+      onNotification: vi.fn(),
+    });
+    harness.send({
+      method: "turn/started",
+      params: {
+        threadId: "thread-native-active",
+        turn: { id: "turn-compact", status: "inProgress" },
+      },
+    });
+    await settleInput();
+
+    route.armTurn();
+    expect(route.observedNativeTurnId).toBe("turn-compact");
+    harness.send({
+      method: "turn/completed",
+      params: { threadId: "thread-native-active", turn: { id: "turn-stale", items: [] } },
+    });
+    await settleInput();
+    expect(route.observedNativeTurnId).toBe("turn-compact");
+
+    const completed = router.watchNativeTurnCompletion({
+      threadId: "thread-native-active",
+      turnId: "turn-compact",
+      timeoutMs: 100,
+    });
+    harness.send({
+      method: "turn/completed",
+      params: { threadId: "thread-native-active", turn: { id: "turn-compact", items: [] } },
+    });
+    await expect(completed.completion).resolves.toBe(true);
+    await route.cancelTurn();
+  });
+
+  it("settles exact native-completion watchers on completion, abort, and route release", async () => {
+    const harness = createHarness();
+    const router = getCodexAppServerTurnRouter(harness.client);
+    const route = router.reserveThread({
       threadId: "thread-native-wait",
       onNotification: vi.fn(),
     });
 
-    const completed = route.waitForTurnCompletion({ timeoutMs: 100 });
+    const completed = router.watchNativeTurnCompletion({
+      threadId: "thread-native-wait",
+      turnId: "turn-native",
+      timeoutMs: 100,
+    });
     harness.send({
       method: "turn/completed",
       params: { threadId: "thread-native-wait", turn: { id: "turn-native", items: [] } },
     });
-    await expect(completed).resolves.toBe(true);
+    await expect(completed.completion).resolves.toBe(true);
 
     const controller = new AbortController();
-    const aborted = route.waitForTurnCompletion({ timeoutMs: 100, signal: controller.signal });
+    const aborted = router.watchNativeTurnCompletion({
+      threadId: "thread-native-wait",
+      turnId: "turn-aborted",
+      timeoutMs: 100,
+      signal: controller.signal,
+    });
     controller.abort("test");
-    await expect(aborted).resolves.toBe(false);
+    await expect(aborted.completion).resolves.toBe(false);
+    const alreadyAborted = router.watchNativeTurnCompletion({
+      threadId: "thread-native-wait",
+      turnId: "turn-aborted",
+      timeoutMs: 100,
+      signal: controller.signal,
+    });
+    await expect(alreadyAborted.completion).resolves.toBe(false);
 
-    const released = route.waitForTurnCompletion({ timeoutMs: 100 });
+    const released = router.watchNativeTurnCompletion({
+      threadId: "thread-native-wait",
+      turnId: "turn-released",
+      timeoutMs: 100,
+      signal: route.signal,
+    });
     route.release();
-    await expect(released).resolves.toBe(false);
+    await expect(released.completion).resolves.toBe(false);
   });
 
   it("watches one exact native turn without reserving its thread", async () => {
