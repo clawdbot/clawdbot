@@ -863,7 +863,6 @@ src/plugins/discovery.ts
 src/plugins/hook-types.ts
 src/plugins/hooks.ts
 src/plugins/install-security-scan.runtime.ts
-src/plugins/install.npm-spec.e2e.test.ts
 src/plugins/install.npm-spec.test.ts
 src/plugins/install.test.ts
 src/plugins/installed-plugin-index.test.ts
