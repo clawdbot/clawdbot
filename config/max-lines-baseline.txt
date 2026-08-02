@@ -532,7 +532,6 @@ src/auto-reply/reply/session.ts
 src/auto-reply/status.test.ts
 src/channels/message/ingress-queue.ts
 src/channels/plugins/bundled.shape-guard.test.ts
-src/channels/plugins/bundled.ts
 src/channels/plugins/message-actions.security.test.ts
 src/channels/plugins/outbound/interactive.test.ts
 src/channels/plugins/read-only.test.ts
