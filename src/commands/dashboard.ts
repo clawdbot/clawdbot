@@ -322,8 +322,11 @@ export async function dashboardCommand(
       : "Browser launch disabled (--no-open). Use the URL above.";
   }
 
-  const fallbackToManualAuth = !copied && !opened && includeTokenInUrl;
-  const suppressNoOpenHint = options.noOpen === true && fallbackToManualAuth;
+  const handoffDeliveryFailed = !copied && !opened;
+  const fallbackToManualAuth = handoffDeliveryFailed && includeTokenInUrl;
+  const fallbackToJsonHandoff = handoffDeliveryFailed && !includeTokenInUrl;
+  const suppressNoOpenHint =
+    options.noOpen === true && (fallbackToManualAuth || fallbackToJsonHandoff);
 
   if (opened) {
     runtime.log("Opened in your browser. Keep that tab to control OpenClaw.");
@@ -334,6 +337,10 @@ export async function dashboardCommand(
   if (fallbackToManualAuth) {
     runtime.log(
       "Token auto-auth not delivered. Append your gateway token (from OPENCLAW_GATEWAY_TOKEN or gateway.auth.token) as a URL fragment with key `token` to authenticate.",
+    );
+  } else if (fallbackToJsonHandoff) {
+    runtime.log(
+      "One-time pairing URL not delivered. Run `openclaw dashboard --json` and open its `browserUrl` within ten minutes.",
     );
   }
 }

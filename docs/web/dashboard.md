@@ -36,7 +36,9 @@ The Control UI is an **admin surface** (chat, config, exec approvals). Do not ex
 - After onboarding, the CLI auto-opens the dashboard and prints a clean link.
 - Re-open or repair a browser anytime: `openclaw dashboard`. It copies/opens a single-use pairing link
   that replaces stale browser credentials without granting blanket remote auto-approval.
-- If clipboard and browser delivery both fail, `openclaw dashboard` still prints the clean URL and tells you to append your token (from `OPENCLAW_GATEWAY_TOKEN` or `gateway.auth.token`) as the URL fragment key `token`; it never prints the token value in logs.
+- If clipboard and browser delivery both fail, `openclaw dashboard` either gives a safe manual-token
+  hint or tells you to run `openclaw dashboard --json` and open its short-lived `browserUrl`; it never
+  prints the shared token value in interactive logs.
 - If the UI prompts for shared-secret auth, paste the configured token or password into Control UI settings.
 
 ## Auth basics (local vs remote)

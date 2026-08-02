@@ -287,14 +287,17 @@ describe("dashboardCommand", () => {
     expectLogWith("OPENCLAW_GATEWAY_TOKEN");
   });
 
-  it("respects --no-open with plain URL hint when clipboard fails and no token is configured", async () => {
+  it("guides no-token users to the explicit JSON handoff when clipboard delivery fails", async () => {
     mockSnapshot("");
     copyToClipboardMock.mockResolvedValue(false);
 
     await dashboardCommand(runtime, { noOpen: true });
 
-    expect(runtime.log).toHaveBeenCalledWith(
+    expect(runtime.log).not.toHaveBeenCalledWith(
       "Browser launch disabled (--no-open). Use the URL above.",
+    );
+    expect(runtime.log).toHaveBeenCalledWith(
+      "One-time pairing URL not delivered. Run `openclaw dashboard --json` and open its `browserUrl` within ten minutes.",
     );
   });
 
