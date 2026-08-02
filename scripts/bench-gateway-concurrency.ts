@@ -87,6 +87,7 @@ const MAX_WARMUP = 10;
 const MAX_SAMPLES_PER_RUN = 2_048;
 const MAX_HTTP_BODY_BYTES = 1_048_576;
 const HTTP_TIMEOUT_MS = 20_000;
+const AGENT_WAIT_RPC_GRACE_MS = 5_000;
 const BOOLEAN_FLAGS = new Set(["--help", "-h", "--json"]);
 const VALUE_FLAGS = new Set([
   "--cadence-ms",
@@ -386,7 +387,7 @@ async function connectGateway(port: number, deadlineAt: number) {
   return { close: client.close, request: requestRpc };
 }
 
-async function runTurn(rpc: GatewayRpc, index: number): Promise<void> {
+async function runTurn(rpc: GatewayRpc, index: number, deadlineAt: number): Promise<void> {
   const requestedRunId = randomUUID();
   const started = await rpc<{ runId?: string; status?: string }>("agent", {
     sessionKey: `agent:main:gateway-concurrency-${index + 1}`,
@@ -400,10 +401,20 @@ async function runTurn(rpc: GatewayRpc, index: number): Promise<void> {
   if (started.status !== "accepted") {
     throw new Error(`agent ${index + 1} was not accepted: ${JSON.stringify(started)}`);
   }
-  const completed = await rpc<{ status?: string }>("agent.wait", {
-    runId: started.runId ?? requestedRunId,
-    timeoutMs: 60_000,
-  });
+  const remaining = requireRemainingMs(deadlineAt, `waiting for agent ${index + 1} completion`);
+  const waitTimeoutMs = Math.max(
+    0,
+    Math.min(60_000, Math.floor(remaining - AGENT_WAIT_RPC_GRACE_MS)),
+  );
+  const rpcTimeoutMs = Math.min(65_000, Math.max(1, Math.ceil(remaining)));
+  const completed = await rpc<{ status?: string }>(
+    "agent.wait",
+    {
+      runId: started.runId ?? requestedRunId,
+      timeoutMs: waitTimeoutMs,
+    },
+    rpcTimeoutMs,
+  );
   if (completed.status !== "ok") {
     throw new Error(`agent ${index + 1} did not complete: ${JSON.stringify(completed)}`);
   }
@@ -553,7 +564,9 @@ async function runGatewaySample(options: {
     let turnsDone = false;
     const turnsStartedAt = performance.now();
     const turns = Promise.all(
-      Array.from({ length: options.concurrency }, (_, index) => runTurn(rpc, index)),
+      Array.from({ length: options.concurrency }, (_, index) =>
+        runTurn(rpc, index, options.deadlineAt),
+      ),
     ).finally(() => {
       turnsDone = true;
     });
@@ -687,6 +700,7 @@ async function main(): Promise<void> {
 
 export const testing = {
   parseOptions,
+  runTurn,
   summarizeNumbers,
   summarizeRuns,
 };

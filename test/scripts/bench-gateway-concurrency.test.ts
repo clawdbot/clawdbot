@@ -1,5 +1,6 @@
 // Gateway concurrency benchmark tests cover CLI parsing and bounded percentile summaries.
 import { spawnSync } from "node:child_process";
+import { performance } from "node:perf_hooks";
 import { describe, expect, it } from "vitest";
 import { testing } from "../../scripts/bench-gateway-concurrency.ts";
 
@@ -48,6 +49,29 @@ describe("gateway concurrency benchmark script", () => {
       p99: 100,
     });
     expect(testing.summarizeNumbers([])).toBeNull();
+  });
+
+  it("bounds an accepted turn wait by the benchmark deadline", async () => {
+    const calls: Array<{ method: string; params: unknown; timeoutMs?: number }> = [];
+    const rpc = async <T>(method: string, params: unknown, timeoutMs?: number): Promise<T> => {
+      calls.push({ method, params, timeoutMs });
+      return (
+        method === "agent" ? { runId: "run-1", status: "accepted" } : { status: "timeout" }
+      ) as T;
+    };
+
+    await expect(testing.runTurn(rpc, 0, performance.now() + 2_000)).rejects.toThrow(
+      "agent 1 did not complete",
+    );
+
+    const wait = calls.find((call) => call.method === "agent.wait");
+    expect(wait?.params).toMatchObject({ runId: "run-1" });
+    const serverTimeoutMs = (wait?.params as { timeoutMs?: unknown }).timeoutMs;
+    expect(serverTimeoutMs).toBe(0);
+    expect(wait?.timeoutMs).toEqual(expect.any(Number));
+    expect(Number.isInteger(wait?.timeoutMs)).toBe(true);
+    expect(wait?.timeoutMs).toBeGreaterThan(serverTimeoutMs as number);
+    expect(wait?.timeoutMs).toBeLessThanOrEqual(2_000);
   });
 
   it("ends CLI failures with the required wrapper marker", () => {
