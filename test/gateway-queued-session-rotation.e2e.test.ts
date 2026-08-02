@@ -295,7 +295,7 @@ describe("Gateway queued session rotation", () => {
         expect(JSON.stringify(modelServer.requests[1]?.body)).toContain("OPENCLAW_E2E_AFTER_RESET");
       } finally {
         await client.abortChat({ sessionKey }).catch(() => undefined);
-        client.stop();
+        void client.stop();
         modelServer.releaseHeldResponse();
       }
     },

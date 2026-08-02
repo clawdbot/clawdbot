@@ -16,17 +16,21 @@ window.renderMath = async (job) => {
       trust: false,
     });
     await document.fonts.ready;
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
     const initialBounds = container.getBoundingClientRect();
     const width = Math.ceil(Math.max(initialBounds.width, container.scrollWidth));
     document.body.style.width = `${width}px`;
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
     const finalBounds = container.getBoundingClientRect();
     const height = Math.ceil(Math.max(finalBounds.height, container.scrollHeight));
     window.ChatMathBridge.postMessage(
       JSON.stringify({ id: job.id, widthCssPx: width, heightCssPx: height, success: true }),
     );
-  } catch (_) {
+  } catch {
     window.ChatMathBridge.postMessage(
       JSON.stringify({ id: job.id, widthCssPx: 0, heightCssPx: 0, success: false }),
     );

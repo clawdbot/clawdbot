@@ -25,7 +25,7 @@ function run(cwd: string, command: string, args: string[], env?: NodeJS.ProcessE
 
 function commandOutput(error: unknown): string {
   const result = error as { stderr?: unknown; stdout?: unknown };
-  return `${String(result.stdout ?? "")}${String(result.stderr ?? "")}`;
+  return `${(result.stdout ?? "") as string}${(result.stderr ?? "") as string}`;
 }
 
 function createRepoWithPrChangelogDiff(entry: string): string {

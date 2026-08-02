@@ -5244,6 +5244,7 @@ describe("gateway healthHandlers.health cache freshness", () => {
   it("preserves event-loop health sampled by the refresh path", async () => {
     const eventLoop = {
       degraded: true,
+      degradedSinceMs: 61_000,
       reasons: ["event_loop_delay" as const],
       intervalMs: 2_000,
       delayP99Ms: 1_500,
@@ -5253,6 +5254,7 @@ describe("gateway healthHandlers.health cache freshness", () => {
     };
     const replacementEventLoop = {
       degraded: false,
+      degradedSinceMs: null,
       reasons: [],
       intervalMs: 1,
       delayP99Ms: 0,

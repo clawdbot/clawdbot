@@ -279,13 +279,16 @@ describe("before_tool_call loop detection behavior", () => {
     }
   }
 
-  function createGenericReadRepeatFixture() {
+  function createGenericReadRepeatFixture(
+    loopDetectionContext?: Parameters<typeof createWrappedTool>[2],
+  ) {
     const execute = vi.fn().mockResolvedValue({
       content: [{ type: "text", text: "same output" }],
       details: { ok: true },
     });
     return {
-      tool: createWrappedTool("read", execute),
+      tool: createWrappedTool("read", execute, loopDetectionContext),
+      execute,
       params: { path: "/tmp/file" },
     };
   }
@@ -961,12 +964,29 @@ describe("before_tool_call loop detection behavior", () => {
 
   it("escalates repeated critical vetoes to the global circuit breaker", async () => {
     await withToolLoopEvents(async (emitted) => {
-      const { tool, params } = createGenericReadRepeatFixture();
+      const runId = "codex-native-global-breaker";
+      const { tool, params, execute } = createGenericReadRepeatFixture({
+        ...enabledLoopDetectionContext,
+        runId,
+      });
 
-      for (let i = 0; i <= 30; i += 1) {
-        await tool.execute(`read-global-${i}`, params, undefined, undefined);
+      for (let i = 0; i <= GLOBAL_CIRCUIT_BREAKER_THRESHOLD; i += 1) {
+        const toolCallId = `read-global-${i}`;
+        const nativeOutcome = await runBeforeToolCallHook({
+          toolName: "read",
+          params,
+          toolCallId,
+          ctx: {
+            agentId: enabledLoopDetectionContext.agentId,
+            sessionKey: enabledLoopDetectionContext.sessionKey,
+            runId,
+          },
+        });
+        expect(nativeOutcome.blocked).toBe(false);
+        await tool.execute(toolCallId, params, undefined, undefined);
       }
 
+      expect(execute).toHaveBeenCalledTimes(CRITICAL_THRESHOLD);
       expect(emitted.at(-1)).toMatchObject({
         type: "tool.loop",
         level: "critical",
@@ -1188,6 +1208,7 @@ describe("before_tool_call loop detection behavior", () => {
         agentId: "main",
         sessionKey: "session-key",
         runId: "run-1",
+        loopDetection: { enabled: true },
       },
     );
 

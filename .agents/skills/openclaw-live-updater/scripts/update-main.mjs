@@ -61,12 +61,17 @@ const DEPENDENCY_INPUT_RE =
   /^(?:\.npmrc$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|patches\/)|(?:^|\/)package\.json$/u;
 
 class UpdateInvariantError extends Error {
-  constructor(code, message, details = undefined) {
+  constructor(code, message, details) {
     super(message);
     this.name = "UpdateInvariantError";
     this.code = code;
     this.details = details;
   }
+}
+
+/** Re-throw the original runtime value while exposing the Error contract to type-aware lint. */
+function throwPreservingValue(value) {
+  throw /** @type {Error} */ (value);
 }
 
 function git(checkout, args, options = {}) {
@@ -149,7 +154,7 @@ export function classifyActions(
 ) {
   // CI skips generated protocol-only macOS jobs, but the live app embeds these Swift sources.
   const generatedMacProtocolChanged = changedPaths.some((changedPath) =>
-    /^apps\/shared\/OpenClawKit\/Sources\/OpenClawProtocol\//u.test(changedPath),
+    changedPath.startsWith("apps/shared/OpenClawKit/Sources/OpenClawProtocol/"),
   );
   const runMacos =
     changedPaths.length > 0 &&
@@ -246,7 +251,9 @@ function missingControlUiAssets(checkout) {
   if (!hasAssetPayload) {
     missing.push("assets/*");
   }
-  return [...new Set(missing)].toSorted();
+  return [...new Set(missing)].toSorted((left, right) =>
+    left < right ? -1 : left > right ? 1 : 0,
+  );
 }
 
 export function inspectBuildState(checkout, expectedSha) {
@@ -867,7 +874,7 @@ function readManagedGatewayLaunchAgent(checkout) {
   if (plistResult.status !== 0) {
     throw new UpdateInvariantError(
       "gateway_launchagent_failed",
-      `could not read the managed Gateway LaunchAgent: ${String(plistResult.stderr).trim()}`,
+      `could not read the managed Gateway LaunchAgent: ${plistResult.stderr.trim()}`,
     );
   }
   const plist = JSON.parse(plistResult.stdout);
@@ -999,7 +1006,7 @@ function prepareLaunchAgentEntrypointReplacement(deployment, entrypoint, options
     if (plistResult.status !== 0) {
       throw new UpdateInvariantError(
         "gateway_repoint_failed",
-        `could not read the managed Gateway LaunchAgent: ${String(plistResult.stderr).trim()}`,
+        `could not read the managed Gateway LaunchAgent: ${plistResult.stderr.trim()}`,
       );
     }
     const programArguments = replaceLaunchAgentProgramArgument(
@@ -1131,10 +1138,9 @@ function verifyManagedGatewayRuntime(checkout, expectedSha) {
     ["print", `gui/${process.getuid()}/${deployment.label}`],
     { encoding: "utf8" },
   );
-  const pidMatch =
-    launchctl.status === 0 ? String(launchctl.stdout).match(/\bpid = (\d+)\b/u) : null;
+  const pidMatch = launchctl.status === 0 ? launchctl.stdout.match(/\bpid = (\d+)\b/u) : null;
   const pid = Number(pidMatch?.[1] ?? Number.NaN);
-  const loadedArguments = parseLaunchctlArguments(String(launchctl.stdout));
+  const loadedArguments = parseLaunchctlArguments(launchctl.stdout);
   const loadedCommand = resolveManagedGatewayCommand(
     loadedArguments,
     process.env.HOME,
@@ -1167,7 +1173,7 @@ function verifyManagedGatewayRuntime(checkout, expectedSha) {
     ["-nP", `-iTCP:${deployment.port}`, "-sTCP:LISTEN", "-t"],
     { encoding: "utf8" },
   );
-  const listenerPids = String(listeners.stdout).trim().split(/\s+/u).filter(Boolean).map(Number);
+  const listenerPids = listeners.stdout.trim().split(/\s+/u).filter(Boolean).map(Number);
   // The Gateway overwrites process.title, so ps cannot prove argv. The owned
   // LaunchAgent arguments plus its exact listener PID remain stable evidence.
   if (listeners.status !== 0 || !listenerPids.includes(pid)) {
@@ -1481,7 +1487,7 @@ function proveMacLaunchdGatewayStopped(checkout) {
     encoding: "utf8",
   });
   const listenerClosed =
-    listeners.status === 1 && !String(listeners.stdout).trim() && !String(listeners.stderr).trim();
+    listeners.status === 1 && !listeners.stdout.trim() && !listeners.stderr.trim();
   const details = { listenerClosed, processExited, serviceBootedOut };
   if (!serviceBootedOut) {
     throw new UpdateInvariantError(
@@ -1597,62 +1603,68 @@ function runBuildWithPreservedMacApp(runCommand, checkout, sleep = defaultSleep)
     `.openclaw-live-mac-${process.pid}-${randomUUID()}.app`,
   );
   renameSync(appBundle, preservedBundle);
+  let buildFailed = false;
+  let buildError;
   try {
     runCommand("pnpm", ["build"], checkout);
-  } finally {
-    // A running app or external file coordinator can temporarily relocate and
-    // restore the exact bundle while the JS build runs. Allow that move to settle, but
-    // require the original inode so an unrelated replacement still fails closed.
-    for (let attempt = 0; attempt < 20; attempt += 1) {
-      if (existsSync(preservedBundle) || existsSync(appBundle)) {
-        break;
-      }
-      sleep(100);
+  } catch (error) {
+    buildFailed = true;
+    buildError = error;
+  }
+  // Restore outside `finally` so restoration failures retain precedence over build failures.
+  // Accept an external restore only when the original inode returns; replacements still fail closed.
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    if (existsSync(preservedBundle) || existsSync(appBundle)) {
+      break;
     }
-    const alreadyRestored = isOriginalMacBundle(appBundle, appStat);
-    if (!alreadyRestored && existsSync(appBundle)) {
-      throw new UpdateInvariantError(
-        "mac_bundle_restore_conflict",
-        `build unexpectedly created ${appBundle}; preserved bundle remains at ${preservedBundle}`,
-      );
-    }
-    if (!alreadyRestored) {
-      mkdirSync(path.dirname(appBundle), { recursive: true });
-      try {
-        renameSync(preservedBundle, appBundle);
-      } catch (error) {
-        if (!isOriginalMacBundle(appBundle, appStat)) {
-          if (existsSync(appBundle)) {
-            throw new UpdateInvariantError(
-              "mac_bundle_restore_conflict",
-              `build unexpectedly created ${appBundle}; preserved bundle remains at ${preservedBundle}`,
-            );
-          }
-          if (existsSync(preservedBundle)) {
-            throw new UpdateInvariantError(
-              "mac_bundle_restore_failed",
-              `failed to restore Mac app bundle: ${String(error)}`,
-            );
-          }
+    sleep(100);
+  }
+  const alreadyRestored = isOriginalMacBundle(appBundle, appStat);
+  if (!alreadyRestored && existsSync(appBundle)) {
+    throw new UpdateInvariantError(
+      "mac_bundle_restore_conflict",
+      `build unexpectedly created ${appBundle}; preserved bundle remains at ${preservedBundle}`,
+    );
+  }
+  if (!alreadyRestored) {
+    mkdirSync(path.dirname(appBundle), { recursive: true });
+    try {
+      renameSync(preservedBundle, appBundle);
+    } catch (error) {
+      if (!isOriginalMacBundle(appBundle, appStat)) {
+        if (existsSync(appBundle)) {
           throw new UpdateInvariantError(
-            "missing_preserved_mac_bundle",
-            `preserved Mac app bundle disappeared: ${preservedBundle}`,
+            "mac_bundle_restore_conflict",
+            `build unexpectedly created ${appBundle}; preserved bundle remains at ${preservedBundle}`,
           );
         }
+        if (existsSync(preservedBundle)) {
+          throw new UpdateInvariantError(
+            "mac_bundle_restore_failed",
+            `failed to restore Mac app bundle: ${String(error)}`,
+          );
+        }
+        throw new UpdateInvariantError(
+          "missing_preserved_mac_bundle",
+          `preserved Mac app bundle disappeared: ${preservedBundle}`,
+        );
       }
     }
-    if (!isOriginalMacBundle(appBundle, appStat)) {
-      throw new UpdateInvariantError(
-        "missing_preserved_mac_bundle",
-        `original Mac app bundle was not restored to ${appBundle}`,
-      );
-    }
-    if (existsSync(preservedBundle)) {
-      throw new UpdateInvariantError(
-        "mac_bundle_restore_conflict",
-        `original Mac app bundle exists at both ${appBundle} and ${preservedBundle}`,
-      );
-    }
+  }
+  if (!isOriginalMacBundle(appBundle, appStat)) {
+    throw new UpdateInvariantError(
+      "missing_preserved_mac_bundle",
+      `original Mac app bundle was not restored to ${appBundle}`,
+    );
+  }
+  if (existsSync(preservedBundle)) {
+    throw new UpdateInvariantError(
+      "mac_bundle_restore_conflict",
+      `original Mac app bundle exists at both ${appBundle} and ${preservedBundle}`,
+    );
+  }
+  if (buildFailed) {
+    throwPreservingValue(buildError);
   }
 }
 
@@ -1666,7 +1678,6 @@ function restartGateway(
   options = {},
 ) {
   assertExactBuild(checkout, expectedSha);
-  const now = options.now ?? Date.now;
   if (!deployment) {
     runCommand("pnpm", ["openclaw", "gateway", "restart"], checkout);
     return { processStartedAt: null, restartStartedAtMs: startedAtMs };
@@ -1749,7 +1760,7 @@ function bootstrapManagedGateway(runCommand, checkout, deployment, options = {})
   }
   environmentRestore.disarm();
   if (restartError) {
-    throw restartError;
+    throwPreservingValue(restartError);
   }
   return { processStartedAt };
 }
@@ -1811,7 +1822,7 @@ function readLaunchdEnvironmentVariable(name) {
   }
   // launchd normalizes `setenv NAME ""` to the same absent manager state as
   // `unsetenv NAME`; both `getenv` and `print gui/$UID` omit the value.
-  const value = String(result.stdout).replace(/\r?\n$/u, "");
+  const value = result.stdout.replace(/\r?\n$/u, "");
   return value || null;
 }
 
@@ -1821,7 +1832,7 @@ function waitForManagedGatewayProcess(deployment, sleep = defaultSleep) {
     Math.ceil(GATEWAY_PROCESS_START_TIMEOUT_MS / GATEWAY_PROCESS_START_RETRY_DELAY_MS) + 1;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     const result = spawnSync("/bin/launchctl", ["print", target], { encoding: "utf8" });
-    if (result.status === 0 && /\bpid\s*=\s*\d+\b/iu.test(String(result.stdout))) {
+    if (result.status === 0 && /\bpid\s*=\s*\d+\b/iu.test(result.stdout)) {
       return;
     }
     if (attempt + 1 < attempts) {
@@ -1849,7 +1860,7 @@ function waitForManagedGatewayReadiness(
   sleep = defaultSleep,
 ) {
   for (let attempt = 1; attempt <= GATEWAY_READINESS_ATTEMPTS; attempt += 1) {
-    if (probeMilestones(deployment)?.readyzReady === true) {
+    if (probeMilestones(deployment)?.readyzReady) {
       return;
     }
     if (attempt < GATEWAY_READINESS_ATTEMPTS) {
@@ -1904,7 +1915,7 @@ function probeGatewayMilestones(deployment) {
     ["-nP", `-iTCP:${deployment.port}`, "-sTCP:LISTEN", "-t"],
     { encoding: "utf8" },
   );
-  const listenerReady = listeners.status === 0 && Boolean(String(listeners.stdout).trim());
+  const listenerReady = listeners.status === 0 && Boolean(listeners.stdout.trim());
   if (!listenerReady) {
     return { listenerReady: false, healthzReady: false, readyzReady: false };
   }
@@ -2342,7 +2353,7 @@ function verifyAndAuditGateway({
   }
   const audit = auditGatewayLogs(checkout, sinceMs, deployment);
   if (verificationError) {
-    throw verificationError;
+    throwPreservingValue(verificationError);
   }
   return { audit, timing: gatewayTiming };
 }
@@ -2815,7 +2826,7 @@ export function maintainMain(options, dependencies = {}) {
     if (actions.macAppRebuild) {
       const pendingState = {
         ...queuedMacState,
-        attempts: Number(queuedMacState?.attempts ?? 0) + 1,
+        attempts: (queuedMacState?.attempts ?? 0) + 1,
         lastAttemptAt: new Date().toISOString(),
       };
       writeMaintenanceState(statePath, pendingState);

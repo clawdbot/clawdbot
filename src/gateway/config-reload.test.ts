@@ -335,6 +335,10 @@ describe("buildGatewayReloadPlan", () => {
       expected: { restartHeartbeat: true },
     },
     {
+      path: "agents.defaults.heartbeat.every",
+      expected: { restartHeartbeat: true },
+    },
+    {
       path: "agents.defaults.modelPolicy.allow",
       expected: { restartHeartbeat: true },
     },
@@ -359,11 +363,22 @@ describe("buildGatewayReloadPlan", () => {
   });
 
   it.each([
+    "agents.defaults",
     "agents.defaults.compaction",
     "agents.defaults.compaction.model",
     "agents.defaults.compaction.maxActiveTranscriptBytes",
     "agents.defaults.compaction.memoryFlush.model",
-  ])("refreshes compaction config without restarting subsystems: %s", (path) => {
+    "agents.defaults.contextTokens",
+    "agents.defaults.contextPruning.mode",
+    "agents.defaults.contextLimits.postCompactionMaxChars",
+    "agents.defaults.timeoutSeconds",
+    "agents.defaults.userTimezone",
+    "tools",
+    "tools.deny",
+    "tools.allow",
+    "tools.profile",
+    "tools.byProvider.openai.deny",
+  ])("refreshes prepared model runtime policy without restarting subsystems: %s", (path) => {
     const plan = buildGatewayReloadPlan([path]);
 
     expect(plan).toMatchObject({
@@ -1741,7 +1756,7 @@ describe("startGatewayConfigReloader", () => {
     } satisfies OpenClawConfig;
     const terminalPolicy = createTerminalLaunchPolicy(initialConfig);
     const events: string[] = [];
-    const onNoopConfigCommit = async (
+    const onHotReload = async (
       plan: GatewayReloadPlan,
       nextConfig: OpenClawConfig,
       ownership: GatewayConfigReloadTransactionOwnership,
@@ -1763,7 +1778,7 @@ describe("startGatewayConfigReloader", () => {
     const harness = createReloaderHarness(vi.fn(), {
       initialConfig,
       initialCompareConfig: initialConfig,
-      onNoopConfigCommit,
+      onHotReload,
       onConfigApplied: () => {
         events.push("applied");
         terminalPolicy.commitConfig();
@@ -1811,7 +1826,7 @@ describe("startGatewayConfigReloader", () => {
         agents: { defaults: { sandbox: { mode: "all" as const } } },
       } satisfies OpenClawConfig;
       const terminalPolicy = createTerminalLaunchPolicy(initialConfig);
-      const onNoopConfigCommit = async (
+      const onHotReload = async (
         plan: GatewayReloadPlan,
         nextConfig: OpenClawConfig,
         ownership: GatewayConfigReloadTransactionOwnership,
@@ -1825,7 +1840,7 @@ describe("startGatewayConfigReloader", () => {
         {
           initialConfig,
           initialCompareConfig: initialConfig,
-          onNoopConfigCommit,
+          onHotReload,
           onConfigApplied: () => terminalPolicy.commitConfig(),
         },
       );
@@ -1867,7 +1882,7 @@ describe("startGatewayConfigReloader", () => {
     } satisfies OpenClawConfig;
     const terminalPolicy = createTerminalLaunchPolicy(initialConfig);
     const events: string[] = [];
-    const onNoopConfigCommit = async (
+    const onHotReload = async (
       plan: GatewayReloadPlan,
       nextConfig: OpenClawConfig,
       ownership: GatewayConfigReloadTransactionOwnership,
@@ -1888,7 +1903,7 @@ describe("startGatewayConfigReloader", () => {
     const harness = createReloaderHarness(vi.fn(), {
       initialConfig,
       initialCompareConfig: initialConfig,
-      onNoopConfigCommit,
+      onHotReload,
       onConfigApplied: () => {
         events.push("applied");
         terminalPolicy.commitConfig();
@@ -2460,7 +2475,7 @@ describe("startGatewayConfigReloader", () => {
     expect(stopResolved).toBe(true);
   });
 
-  it("notifies lifecycle owners for no-op sandbox policy changes", async () => {
+  it("hot-reloads sandbox policy for prepared model lifecycle owners", async () => {
     const initialConfig: OpenClawConfig = {
       gateway: { reload: {} },
       agents: { defaults: { sandbox: { mode: "off" } } },
@@ -2475,12 +2490,12 @@ describe("startGatewayConfigReloader", () => {
     await flushWatcherChange(harness);
 
     expect(harness.onConfigChange).toHaveBeenCalledTimes(1);
-    expect(harness.onConfigChange.mock.calls[0]?.[0].noopPaths).toContain(
+    expect(harness.onConfigChange.mock.calls[0]?.[0].hotReasons).toContain(
       "agents.defaults.sandbox.mode",
     );
     expect(harness.onConfigChange.mock.calls[0]?.[1]).toBe(nextConfig);
     expect(harness.onConfigApplied).toHaveBeenCalledTimes(1);
-    expect(harness.onHotReload).not.toHaveBeenCalled();
+    expect(harness.onHotReload).toHaveBeenCalledTimes(1);
     expect(harness.onRestart).not.toHaveBeenCalled();
     await harness.reloader.stop();
   });

@@ -3,11 +3,8 @@ import { resolveCronDeliveryPlan, resolveFailureDestination } from "../delivery-
 import { parseAbsoluteTimeMs } from "../parse.js";
 import type { CronRunLogEntry } from "../run-log-types.js";
 import type { CronJob, CronRunStatus } from "../types.js";
-import {
-  type DeferredAutoDisableNotifications,
-  maybeAutoDisableCronJobAfterRunFailure,
-} from "./auto-disable.js";
-import type { CronServiceState } from "./state.js";
+import { maybeAutoDisableCronJobAfterRunFailure } from "./auto-disable.js";
+import type { CronServiceState, DeferredCronNotifications } from "./state.js";
 import {
   applyJobResult,
   applyScriptRunResult,
@@ -58,7 +55,7 @@ export function markInterruptedStartupRun(params: {
   taskRunId?: string;
   runningAtMs: number;
   nowMs: number;
-  deferredAutoDisableNotifications?: DeferredAutoDisableNotifications;
+  deferredNotifications?: DeferredCronNotifications;
 }): InterruptedStartupRun {
   const { job, runningAtMs, nowMs } = params;
   const replacementAtMs = resolveOneShotReplacementAtMs(job, runningAtMs);
@@ -100,7 +97,7 @@ export function markInterruptedStartupRun(params: {
       job,
       atMs: nowMs,
       error: STARTUP_INTERRUPTED_ERROR,
-      deferredNotifications: params.deferredAutoDisableNotifications,
+      deferredNotifications: params.deferredNotifications,
     })
   ) {
     params.state.deps.log.error(
@@ -129,7 +126,7 @@ export function restoreFinalizedStartupRun(params: {
   entry: CronRunLogEntry & { status: CronRunStatus };
   scriptResult?: { scriptStateChanged: true; scriptState?: unknown };
   triggerEval?: CronTriggerEvalOutcome;
-  deferredAutoDisableNotifications?: DeferredAutoDisableNotifications;
+  deferredNotifications?: DeferredCronNotifications;
 }): { shouldDelete: boolean; replacementAtMs?: number } {
   const { state, job, runningAtMs, entry } = params;
   const startedAt = entry.runAtMs ?? runningAtMs;
@@ -146,7 +143,7 @@ export function restoreFinalizedStartupRun(params: {
     {
       replayFailureAlertAtMs: entry.ts,
       scheduleOwnership,
-      deferredAutoDisableNotifications: params.deferredAutoDisableNotifications,
+      deferredNotifications: params.deferredNotifications,
     },
   );
 

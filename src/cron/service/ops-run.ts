@@ -20,7 +20,7 @@ import {
 import { clearManualCronJobActive, maybeNotifyManualIsolatedSetupTimeout } from "./ops-shared.js";
 import { releaseQueuedCronRun, runWithCronAdmission } from "./run-admission.js";
 import { mergeManualRunSnapshotAfterReload } from "./startup-run-repair.js";
-import type { CronServiceState, CronWakeMode } from "./state.js";
+import type { CronServiceState, CronWakeMode, DeferredCronNotifications } from "./state.js";
 import { emit } from "./state.js";
 import { ensureLoaded, persistOrRestore, snapshotStoreForRollback } from "./store.js";
 import { tryFinishCronTaskRunWithoutHistory } from "./task-runs.js";
@@ -174,7 +174,7 @@ async function finishPreparedManualRun(
           : mode === "force"
             ? "force-preserve"
             : "advance";
-      const postPersistAutoDisableNotifications: Array<() => void> = [];
+      const postPersistNotifications: DeferredCronNotifications = [];
 
       let shouldDelete = false;
       if (coreResult.status === "ok" && coreResult.triggerEval?.fired === false) {
@@ -191,7 +191,7 @@ async function finishPreparedManualRun(
           {
             scheduleMode,
             triggerOwnership,
-            deferredAutoDisableNotifications: postPersistAutoDisableNotifications,
+            deferredNotifications: postPersistNotifications,
           },
         );
       } else {
@@ -209,7 +209,7 @@ async function finishPreparedManualRun(
             scheduleMode: scheduleMode === "force-preserve" ? "preserve" : "advance",
             scheduleOwnership,
             scheduleOwnershipAtMs: prepared.scheduleOwnershipAtMs,
-            deferredAutoDisableNotifications: postPersistAutoDisableNotifications,
+            deferredNotifications: postPersistNotifications,
           },
         );
         applyTriggerRunResult(
@@ -293,7 +293,7 @@ async function finishPreparedManualRun(
       });
       recomputeNextRunsForMaintenance(state, {
         recomputeExpired: true,
-        deferredAutoDisableNotifications: postPersistAutoDisableNotifications,
+        deferredNotifications: postPersistNotifications,
         ...(mode === "force"
           ? {
               preserveExpiredPacedNextRunJobId: jobId,
@@ -301,7 +301,7 @@ async function finishPreparedManualRun(
           : {}),
       });
       await persistOrRestore(state, rollbackSnapshot, {
-        postPersistAutoDisableNotifications,
+        postPersistNotifications,
       });
       if (removedJob) {
         emit(state, { jobId: removedJob.id, action: "removed", job: removedJob });

@@ -469,6 +469,7 @@ describe("channelsHandlers channels.status", () => {
     });
     const eventLoop = {
       degraded: true,
+      degradedSinceMs: 61_000,
       reasons: ["event_loop_delay"],
       intervalMs: 62_000,
       delayP99Ms: 62_000,

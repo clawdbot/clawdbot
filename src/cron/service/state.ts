@@ -66,6 +66,9 @@ export type CronSystemEventEnqueueResult =
       remove?: () => boolean | void;
     };
 
+/** Notifications queued by cron mutations until their state is durable. */
+export type DeferredCronNotifications = Array<() => void>;
+
 /** Dependency injection surface for the cron service runtime. */
 export type CronServiceDeps = {
   nowMs?: () => number;

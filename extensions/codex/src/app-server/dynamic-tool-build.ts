@@ -614,7 +614,9 @@ export function resolveCodexSandboxEnvironmentSelection(
   environment: CodexSandboxExecEnvironment | undefined,
   nativeToolSurfaceEnabled: boolean,
 ): CodexTurnEnvironmentParams[] | undefined {
-  return environment && nativeToolSurfaceEnabled ? [environment] : undefined;
+  // Omitting this selection while a turn sets cwd restores Codex's local
+  // environment; an explicit empty selection keeps native tools disabled.
+  return nativeToolSurfaceEnabled ? (environment ? [environment] : undefined) : [];
 }
 /** Chooses the cwd visible to Codex native execution after sandbox exec-server setup. */
 export function resolveCodexAppServerExecutionCwd(params: {

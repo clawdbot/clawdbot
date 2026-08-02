@@ -449,8 +449,8 @@ function readCriticalQualityWorkflow() {
   return readFileSync(".github/workflows/codeql-critical-quality.yml", "utf8");
 }
 
-function readWorkflow(path: string) {
-  return parse(readFileSync(path, "utf8"));
+function readWorkflow(filePath: string) {
+  return parse(readFileSync(filePath, "utf8"));
 }
 
 const PULL_REQUEST_EDIT_FIELDS = ["title", "body", "base"] as const;
@@ -3176,7 +3176,11 @@ describe("ci workflow guards", () => {
       ),
     ).toBe(true);
     expect(
-      new Set(retiredDisks.map((disk) => `${disk.key}:${disk.architecture}:${disk.region}`)).size,
+      new Set(
+        retiredDisks.map(
+          (disk) => `${disk.key as string}:${disk.architecture as string}:${disk.region as string}`,
+        ),
+      ).size,
     ).toBe(retiredDisks.length);
     expect(cleanup.on).toHaveProperty("workflow_dispatch");
     expect(cleanup.permissions).toEqual({ contents: "read" });
@@ -3263,7 +3267,7 @@ describe("ci workflow guards", () => {
     for (const retiredDisk of retiredDisks) {
       expect(
         activeKeyPatterns.some((pattern) => pattern.test(retiredDisk.key as string)),
-        `${retiredDisk.key} is still an active sticky-disk key`,
+        `${retiredDisk.key as string} is still an active sticky-disk key`,
       ).toBe(false);
     }
   });

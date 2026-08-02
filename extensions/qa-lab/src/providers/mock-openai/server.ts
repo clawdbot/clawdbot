@@ -9,6 +9,7 @@ import {
   listMockOpenAiServerModelIds,
 } from "../shared/mock-model-config.js";
 import { buildMessagesPayload } from "./mock-anthropic-messages.js";
+import { convertAnthropicMessagesToResponsesInput } from "./mock-anthropic-wire.js";
 import {
   buildAssistantText,
   isCanonicalCompactionRetryWriteResult,
@@ -1807,12 +1808,32 @@ export async function startQaMockOpenAiServer(params?: {
 }) {
   const host = params?.host ?? "127.0.0.1";
   const finalOnlyMarkerPauseMs = params?.finalOnlyMarkerPauseMs ?? 1_500;
-  const scenarioState: MockScenarioState = {
-    anthropicThinkingErrorScenarioKeys: new Set<string>(),
-    subagentFanoutCompletedWorkers: new Set<"alpha" | "beta">(),
-    subagentFanoutPhase: 0,
-    subagentHandoffSpawned: false,
-    toolLoopReadAttempts: 0,
+  const scenarioStates = new Map<string, MockScenarioState>();
+  const scenarioStateFor = (body: Record<string, unknown>): MockScenarioState => {
+    const input = Array.isArray(body.input)
+      ? body.input
+      : convertAnthropicMessagesToResponsesInput({
+          system: body.system as AnthropicMessagesRequest["system"],
+          messages: [],
+        });
+    const systemPrompt = extractAllRequestTexts(
+      input.filter((item) => item.role === "developer" || item.role === "system"),
+      body,
+    );
+    const sessionId =
+      /\bRuntime:\s*[^\n]*\bsessionId=([^\s|]+)/u.exec(systemPrompt)?.[1] ??
+      (body.client_metadata as { session_id?: unknown } | undefined)?.session_id;
+    const key = typeof sessionId === "string" ? sessionId : "";
+    // Runtime session identity survives provider switches and cache-boundary changes.
+    const state = scenarioStates.get(key) ?? {
+      anthropicThinkingErrorScenarioKeys: new Set<string>(),
+      subagentFanoutCompletedWorkers: new Set<"alpha" | "beta">(),
+      subagentFanoutPhase: 0,
+      subagentHandoffSpawned: false,
+      toolLoopReadAttempts: 0,
+    };
+    scenarioStates.set(key, state);
+    return state;
   };
   let lastRequest: MockOpenAiRequestSnapshot | null = null;
   const requests: MockOpenAiRequestSnapshot[] = [];
@@ -1845,7 +1866,7 @@ export async function startQaMockOpenAiServer(params?: {
     inflightRequests.set(inflightRequestId, { prompt, allInputText });
     let events: StreamEvent[];
     try {
-      events = await buildResponsesPayload(request.body, scenarioState);
+      events = await buildResponsesPayload(request.body, scenarioStateFor(request.body));
     } finally {
       inflightRequests.delete(inflightRequestId);
     }
@@ -2067,6 +2088,7 @@ export async function startQaMockOpenAiServer(params?: {
           });
           return;
         }
+        const scenarioState = scenarioStateFor(body as Record<string, unknown>);
         const {
           events,
           input,
