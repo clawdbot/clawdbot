@@ -207,7 +207,9 @@ jobs:
     name: Generate QA profile evidence
     needs: validate_selected_ref
     runs-on: blacksmith-8vcpu-ubuntu-2404
-    timeout-minutes: 90
+    # The full live profile can exceed 90 minutes before aggregate evidence is finalized.
+    # Preserve enough headroom to record its terminal result instead of losing it to cancellation.
+    timeout-minutes: 150
     permissions:
       contents: read
     outputs:

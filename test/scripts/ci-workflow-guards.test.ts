@@ -5045,7 +5045,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(qaEvidenceWorkflow.on.workflow_dispatch.inputs.qa_profile).not.toHaveProperty("options");
     expect(qaEvidenceWorkflow.on.workflow_dispatch.inputs.qa_profile.default).toBe("all");
     expect(qaEvidenceWorkflow.on.workflow_call.inputs.qa_profile.type).toBe("string");
-    expect(qaRunJob["timeout-minutes"]).toBe(90);
+    expect(qaRunJob["timeout-minutes"]).toBe(150);
     const validateProfileStep = qaRunJob.steps.find(
       (step: WorkflowStep) => step.name === "Validate QA profile input",
     );
