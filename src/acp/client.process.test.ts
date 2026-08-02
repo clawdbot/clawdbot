@@ -68,7 +68,9 @@ setInterval(() => {}, 60_000);
         message: "fixture newSession failure",
         data: { stage: "newSession" },
       });
-      expect(await readFile(termFile, "utf8")).toBe("SIGTERM");
+      if (process.platform !== "win32") {
+        expect(await readFile(termFile, "utf8")).toBe("SIGTERM");
+      }
       expect(() => process.kill(serverPid as number, 0)).toThrow();
     } finally {
       if (serverPid !== undefined) {
