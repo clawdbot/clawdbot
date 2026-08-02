@@ -164,7 +164,7 @@ export function readSessionTitleFieldsFromTranscriptBatch(
   scopes: readonly SessionTranscriptReadScope[],
   opts?: { includeInterSession?: boolean },
 ): SessionTitleFields[] {
-  const targets = scopes.map(resolveTranscriptReadTarget);
+  const targets: ResolvedTranscriptReadTarget[] = [];
   const variant = opts?.includeInterSession === true ? "includeInterSession" : "default";
   const results = new Map<number, SessionTitleFields>();
   const misses: Array<{
@@ -174,21 +174,23 @@ export function readSessionTitleFieldsFromTranscriptBatch(
     target: ResolvedTranscriptReadTarget;
   }> = [];
 
-  for (const [index, target] of targets.entries()) {
+  for (const [index, scope] of scopes.entries()) {
+    const target = resolveTranscriptReadTarget(scope);
+    targets.push(target);
     const cacheKey = sqliteTitleFieldCacheKey(target);
     const cached = sqliteTitleFieldCache.get(cacheKey);
     const cachedFields = cached?.fields[variant];
     if (cached && cachedFields) {
       // Keep the single-row generation/maxSeq validity contract, but validate only warm rows;
       // cold or changed rows still collapse into the one store-batched probe below.
-      const watermark = readSessionTranscriptWatermark(scopes[index]);
+      const watermark = readSessionTranscriptWatermark(scope);
       if (cached.generation === watermark.generation && cached.maxSeq === watermark.maxSeq) {
         setSqliteTitleFieldCache(cacheKey, cached);
         results.set(index, { ...cachedFields });
         continue;
       }
     }
-    misses.push({ cacheKey, index, scope: scopes[index], target });
+    misses.push({ cacheKey, index, scope, target });
   }
 
   const probes =
