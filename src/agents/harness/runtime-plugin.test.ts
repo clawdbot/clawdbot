@@ -304,6 +304,23 @@ describe("harness runtime plugins", () => {
     },
   );
 
+  it("keeps the selected context-engine owner in the prepared runtime", () => {
+    const plan = resolveAgentRuntimePluginLoadPlan({
+      config: {
+        plugins: {
+          allow: ["unrelated-plugin"],
+          slots: { contextEngine: "custom-context-engine" },
+        },
+      },
+      workspaceDir: "/tmp/workspace",
+      selections: [],
+    });
+
+    expect(plan.pluginIds).toEqual(["custom-context-engine"]);
+    expect(plan.config?.plugins?.allow).toEqual(["unrelated-plugin", "custom-context-engine"]);
+    expect(plan.config?.plugins?.entries?.["custom-context-engine"]).toEqual({ enabled: true });
+  });
+
   it("keeps standalone activation unrestricted when no complete startup base exists", () => {
     const plan = resolveAgentRuntimePluginLoadPlan({
       config: {

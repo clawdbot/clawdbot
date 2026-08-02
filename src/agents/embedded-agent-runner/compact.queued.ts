@@ -57,7 +57,10 @@ import {
 } from "./compaction-safety-timeout.js";
 import { resolveContextEngineCompactionSuccessor } from "./compaction-successor.js";
 import { resolveContextEngineCapabilities } from "./context-engine-capabilities.js";
-import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
+import {
+  runContextEngineMaintenance,
+  waitForDeferredTurnMaintenanceForSession,
+} from "./context-engine-maintenance.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import { resolveTieredModel } from "./model-resolution.js";
@@ -275,6 +278,15 @@ export async function compactEmbeddedAgentSession(
       compacted: false,
       reason: MANUAL_COMPACTION_ACTIVE_RUN_REASON,
       failure: { reason: "active_run" },
+    };
+  }
+  try {
+    await waitForDeferredTurnMaintenanceForSession(resolvedParams.sessionKey);
+  } catch (error) {
+    return {
+      ok: false,
+      compacted: false,
+      reason: formatErrorMessage(error),
     };
   }
 

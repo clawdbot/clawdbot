@@ -5,7 +5,6 @@ import { resolveManifestActivationPlan } from "../../plugins/activation-planner.
 import {
   isTestDefaultMemorySlotDisabled,
   resolveEffectivePluginActivationState,
-  resolveSelectedContextEnginePluginId,
 } from "../../plugins/config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "../../plugins/default-enablement.js";
 import {
@@ -28,6 +27,7 @@ import {
   resolveBundledProviderCompatPluginIds,
   resolveOwningPluginIdsForProviderRef,
 } from "../../plugins/providers.js";
+import { defaultSlotIdForKey } from "../../plugins/slots.js";
 import {
   isDefaultAgentRuntimeId,
   OPENCLAW_AGENT_RUNTIME_ID,
@@ -222,6 +222,25 @@ function resolveSelectedProviderOwnerPluginIds(params: {
   return providerOwnerPluginIds.filter((pluginId) => safeProviderOwnerPluginIds.includes(pluginId));
 }
 
+function resolveSelectedContextEnginePluginIds(params: {
+  config: OpenClawConfig | undefined;
+  workspaceDir: string;
+}): string[] {
+  const registry = loadPluginRegistrySnapshot(params);
+  const plugins = normalizePluginsConfigWithRegistry(params.config?.plugins, registry);
+  const contextEngineSlot = plugins.slots.contextEngine;
+  if (
+    !plugins.enabled ||
+    typeof contextEngineSlot !== "string" ||
+    contextEngineSlot === defaultSlotIdForKey("contextEngine") ||
+    plugins.deny.includes(contextEngineSlot) ||
+    plugins.entries[contextEngineSlot]?.enabled === false
+  ) {
+    return [];
+  }
+  return [contextEngineSlot];
+}
+
 /** Resolve manifest owners required by one selected non-core harness runtime. */
 export function resolveAgentHarnessOwnerPluginIds(params: {
   runtime: string;
@@ -321,8 +340,10 @@ export function resolveAgentRuntimePluginLoadPlan(params: {
     workspaceDir: params.workspaceDir,
     metadataSnapshot: params.metadataSnapshot,
   });
-  const contextEnginePluginId = resolveSelectedContextEnginePluginId(params.config);
-  const contextEnginePluginIds = contextEnginePluginId ? [contextEnginePluginId] : [];
+  const contextEnginePluginIds = resolveSelectedContextEnginePluginIds({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+  });
   const basePluginIds = (params.basePluginIds ?? []).filter(
     (pluginId) => !restrictiveAllowlistOmitsPlugin(params.config, pluginId),
   );
