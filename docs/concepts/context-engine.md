@@ -294,10 +294,11 @@ Background `maintain()` implementations should accept `abortSignal` and stop
 promptly when it aborts. OpenClaw requests cancellation when a foreground turn
 is waiting for deferred maintenance. If a selected plugin engine does not
 settle after a short cleanup grace, OpenClaw quarantines it for the current
-Gateway process and continues through the default context engine after any
-already-admitted transcript rewrite finishes. The default engine cannot be
-quarantined; OpenClaw stops the waiting turn with recovery guidance instead of
-starting an overlapping engine operation.
+Gateway process and stops the waiting turn with recovery guidance. A later
+retry can use the default context engine only after the original maintenance
+call and every already-admitted transcript rewrite have settled. The default
+engine cannot be quarantined; OpenClaw likewise stops the waiting turn instead
+of starting an overlapping engine operation.
 
 ### Runtime settings
 
