@@ -202,4 +202,40 @@ describe("memory-wiki tools", () => {
     const limitedCounts = asSchemaObject(asSchemaObject(limited.details).counts);
     expect(limitedCounts.total).toBe(1);
   });
+
+  it("caps output at a conservative default when limit is omitted", async () => {
+    const { rootDir, config } = await harness.createVault({ initialize: true });
+    // Seed more open questions than the default cap so an omitted `limit`
+    // cannot render (or retain in details.items) the entire vault.
+    const questions = Array.from({ length: 25 }, (_, index) => `  - Open question ${index + 1}?`);
+    await writeSynthesisPage(rootDir, path.join("syntheses", "many.md"), [
+      "id: synth-many",
+      "title: Many Questions",
+      "questions:",
+      ...questions,
+    ]);
+
+    const tool = createWikiOpenItemsTool(config);
+    const result = await tool.execute("open-items-default-cap", {});
+    const details = asSchemaObject(result.details);
+    const counts = asSchemaObject(details.counts);
+    const vaultCounts = asSchemaObject(details.vaultCounts);
+
+    // Returned + rendered set is capped at the default (20); vaultCounts still
+    // reports the true whole-vault total (25) so callers can detect truncation.
+    expect((details.items as unknown[]).length).toBe(20);
+    expect(counts.total).toBe(20);
+    expect(vaultCounts.total).toBe(25);
+    const text = result.content.find((part) => part.type === "text")?.text ?? "";
+    expect(text).toContain("20. ");
+    expect(text).not.toContain("21. ");
+  });
+
+  it("declares a bounded limit with a schema maximum", () => {
+    const tool = createWikiOpenItemsTool({} as ResolvedMemoryWikiConfig);
+    const properties = asSchemaObject(asSchemaObject(tool.parameters).properties);
+    const limit = asSchemaObject(properties.limit);
+    expect(limit.minimum).toBe(1);
+    expect(limit.maximum).toBe(100);
+  });
 });

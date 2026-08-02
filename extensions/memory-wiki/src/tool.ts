@@ -86,10 +86,16 @@ const WikiClaimSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+// Bound wiki_open_items output: an omitted `limit` must not flush an entire
+// vault's unresolved items into model context. The default keeps typical output
+// under the repo's model-visible-text budget; the schema maximum is a hard cap
+// so even an explicit caller cannot request an unbounded listing.
+const WIKI_OPEN_ITEMS_DEFAULT_LIMIT = 20;
+const WIKI_OPEN_ITEMS_MAX_LIMIT = 100;
 const WikiOpenItemsSchema = Type.Object(
   {
     kinds: Type.Optional(Type.Array(stringEnum(WIKI_OPEN_ITEM_KINDS), { minItems: 1 })),
-    limit: Type.Optional(Type.Integer({ minimum: 1 })),
+    limit: Type.Optional(Type.Integer({ minimum: 1, maximum: WIKI_OPEN_ITEMS_MAX_LIMIT })),
   },
   { additionalProperties: false },
 );
@@ -264,9 +270,11 @@ export function createWikiOpenItemsTool(
       let items = kindFilter
         ? result.items.filter((item) => kindFilter.has(item.kind))
         : result.items;
-      if (typeof params.limit === "number") {
-        items = items.slice(0, params.limit);
-      }
+      // Always cap output: apply the conservative default when `limit` is
+      // omitted so a normal call cannot render (or retain in details.items) an
+      // entire vault. The schema maximum bounds explicit callers.
+      const limit = params.limit ?? WIKI_OPEN_ITEMS_DEFAULT_LIMIT;
+      items = items.slice(0, limit);
       const text =
         items.length === 0
           ? "No open wiki items."
