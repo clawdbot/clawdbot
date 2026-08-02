@@ -50,6 +50,7 @@ import {
   resolveExternalAuthProfileProviderPluginIds,
   resolveOwningPluginIdsForProvider,
   resolveOwningPluginIdsForProviderRef,
+  resolveProviderRefOwnership,
   resolveUsageHookProviderPluginContracts,
 } from "./providers.js";
 import { getActivePluginRegistryWorkspaceDirFromState } from "./runtime-state.js";
@@ -825,6 +826,57 @@ export function formatProviderAuthProfileApiKeyWithPlugin(params: {
   context: AuthProfileCredential;
 }) {
   return resolveProviderRuntimePlugin(params)?.formatApiKey?.(params.context);
+}
+
+export async function loginProviderOAuthWithPlugin(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  context: Parameters<NonNullable<ProviderPlugin["loginOAuth"]>>[0];
+}) {
+  const ownership = resolveProviderRefOwnership(params);
+  const loginOAuth = resolveProviderRuntimePlugin(params)?.loginOAuth;
+  if (!loginOAuth) {
+    return {
+      status: ownership.status === "unowned" ? "unowned" : "configured-unavailable",
+    } as const;
+  }
+  return {
+    status: "available" as const,
+    credentials: await loginOAuth(params.context),
+  };
+}
+
+export async function resolveProviderOAuthCredentialWithPlugin(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  credential: OAuthCredential;
+  refresh: boolean;
+}) {
+  const ownership = resolveProviderRefOwnership(params);
+  const plugin = resolveProviderRuntimePlugin(params);
+  if (!plugin) {
+    return {
+      status: ownership.status === "unowned" ? "unowned" : "configured-unavailable",
+    } as const;
+  }
+  if (params.refresh && !plugin.refreshOAuth) {
+    return { status: "unhandled" } as const;
+  }
+  const credential = params.refresh
+    ? await plugin.refreshOAuth(params.credential)
+    : params.credential;
+  if (!credential) {
+    return { status: "unhandled" } as const;
+  }
+  const apiKey = plugin.formatApiKey?.(credential) ?? credential.access;
+  if (typeof apiKey !== "string" || !apiKey) {
+    return { status: "unhandled" } as const;
+  }
+  return { status: "available" as const, credential, apiKey };
 }
 
 export async function refreshProviderOAuthCredentialWithPlugin(params: {

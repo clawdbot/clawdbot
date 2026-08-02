@@ -16,6 +16,11 @@ import type {
   OAuthLoginCallbacks,
   OAuthProviderId,
 } from "../../llm/utils/oauth/types.js";
+import { OAuthProviderConfiguredUnavailableError } from "../../plugins/provider-runtime.errors.js";
+import {
+  loginProviderOAuthWithPlugin,
+  resolveProviderOAuthCredentialWithPlugin,
+} from "../../plugins/provider-runtime.runtime.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { AUTH_STORE_VERSION, OAUTH_REFRESH_LOCK_OPTIONS } from "../auth-profiles/constants.js";
 import {
@@ -60,6 +65,7 @@ export type TokenCredential = {
 export type AuthCredential = ApiKeyCredential | OAuthCredential | TokenCredential;
 
 export type AuthStorageData = Record<string, AuthCredential>;
+export { OAuthProviderConfiguredUnavailableError };
 export const AUTH_STORAGE_CREATE_DEPRECATION_CODE = "AUTH_STORAGE_CREATE_DEPRECATED" as const;
 export const FILE_AUTH_STORAGE_BACKEND_DEPRECATION_CODE =
   "FILE_AUTH_STORAGE_BACKEND_DEPRECATED" as const;
@@ -675,12 +681,22 @@ export class AuthStorage {
    */
   async login(providerId: OAuthProviderId, callbacks: OAuthLoginCallbacks): Promise<void> {
     const provider = getAuthStorageOAuthProviderRegistry(this).get(providerId);
-    if (!provider) {
+    if (provider) {
+      const credentials = await provider.login(callbacks);
+      this.set(providerId, { type: "oauth", ...credentials });
+      return;
+    }
+    const resolved = await loginProviderOAuthWithPlugin({
+      provider: providerId,
+      context: callbacks,
+    });
+    if (resolved.status === "unowned") {
       throw new Error(`Unknown OAuth provider: ${providerId}`);
     }
-
-    const credentials = await provider.login(callbacks);
-    this.set(providerId, { type: "oauth", ...credentials });
+    if (resolved.status !== "available") {
+      throw new OAuthProviderConfiguredUnavailableError(providerId);
+    }
+    this.set(providerId, { type: "oauth", ...resolved.credentials });
   }
 
   /**
@@ -688,6 +704,24 @@ export class AuthStorage {
    */
   logout(provider: string): void {
     this.remove(provider);
+  }
+
+  private async resolvePluginOAuthCredential(
+    providerId: OAuthProviderId,
+    credential: OAuthCredential,
+    refresh: boolean,
+  ): Promise<{ apiKey: string; newCredentials: OAuthCredentials } | null> {
+    const resolved = await resolveProviderOAuthCredentialWithPlugin({
+      provider: providerId,
+      credential: { ...credential, provider: providerId },
+      refresh,
+    });
+    if (resolved.status === "configured-unavailable") {
+      throw new OAuthProviderConfiguredUnavailableError(providerId);
+    }
+    return resolved.status === "available"
+      ? { apiKey: resolved.apiKey, newCredentials: resolved.credential }
+      : null;
   }
 
   /**
@@ -698,9 +732,6 @@ export class AuthStorage {
     providerId: OAuthProviderId,
   ): Promise<{ apiKey: string; newCredentials: OAuthCredentials } | null> {
     const provider = getAuthStorageOAuthProviderRegistry(this).get(providerId);
-    if (!provider) {
-      return null;
-    }
 
     const refresh = async () =>
       await this.storage.withLockAsync(async (current) => {
@@ -714,7 +745,10 @@ export class AuthStorage {
         }
 
         if (Date.now() < cred.expires) {
-          return { result: { apiKey: provider.getApiKey(cred), newCredentials: cred } };
+          if (provider) {
+            return { result: { apiKey: provider.getApiKey(cred), newCredentials: cred } };
+          }
+          return { result: await this.resolvePluginOAuthCredential(providerId, cred, false) };
         }
 
         const oauthCreds: Record<string, OAuthCredentials> = {};
@@ -724,10 +758,9 @@ export class AuthStorage {
           }
         }
 
-        const refreshed = await getAuthStorageOAuthProviderRegistry(this).getApiKey(
-          providerId,
-          oauthCreds,
-        );
+        const refreshed = provider
+          ? await getAuthStorageOAuthProviderRegistry(this).getApiKey(providerId, oauthCreds)
+          : await this.resolvePluginOAuthCredential(providerId, cred, true);
         if (!refreshed) {
           return { result: null };
         }
@@ -800,10 +833,6 @@ export class AuthStorage {
 
     if (cred?.type === "oauth") {
       const provider = getAuthStorageOAuthProviderRegistry(this).get(providerId);
-      if (!provider) {
-        // Unknown OAuth provider, can't get API key
-        return undefined;
-      }
 
       // Check if token needs refresh
       const needsRefresh = Date.now() >= cred.expires;
@@ -816,6 +845,9 @@ export class AuthStorage {
             return result.apiKey;
           }
         } catch (error) {
+          if (error instanceof OAuthProviderConfiguredUnavailableError) {
+            throw error;
+          }
           this.recordError(error);
           // Refresh failed - re-read file to check if another instance succeeded
           this.reload();
@@ -831,7 +863,11 @@ export class AuthStorage {
 
           if (updatedCred?.type === "oauth" && Date.now() < updatedCred.expires) {
             // Another instance refreshed successfully, use those credentials
-            return provider.getApiKey(updatedCred);
+            if (provider) {
+              return provider.getApiKey(updatedCred);
+            }
+            return (await this.resolvePluginOAuthCredential(providerId, updatedCred, false))
+              ?.apiKey;
           }
 
           // Refresh truly failed - return undefined so model discovery skips this provider
@@ -839,8 +875,10 @@ export class AuthStorage {
           return undefined;
         }
       } else {
-        // Token not expired, use current access token
-        return provider.getApiKey(cred);
+        if (provider) {
+          return provider.getApiKey(cred);
+        }
+        return (await this.resolvePluginOAuthCredential(providerId, cred, false))?.apiKey;
       }
     }
 
