@@ -38,6 +38,10 @@ import {
 import { findActiveSessionTask } from "../session-async-task-status.js";
 import { SessionManager } from "../sessions/index.js";
 import { resolveContextEngineCapabilities } from "./context-engine-capabilities.js";
+import {
+  createDeferredMaintenanceWriteFence,
+  type DeferredMaintenanceWriteFence,
+} from "./context-engine-maintenance-fence.js";
 import { log } from "./logger.js";
 import { rewriteTranscriptEntriesInSessionManager } from "./transcript-rewrite.js";
 import { resolveRuntimeTranscriptReadTarget } from "./transcript-runtime-state.js";
@@ -52,10 +56,6 @@ const DEFERRED_TURN_MAINTENANCE_ABORT_STATE_KEY = Symbol.for(
   "openclaw.contextEngineTurnMaintenanceAbortState",
 );
 type SessionManagerRewriteLock = <T>(operation: () => Promise<T> | T) => Promise<T>;
-type DeferredMaintenanceWriteFence = {
-  run: <T>(operation: () => Promise<T>) => Promise<T>;
-  close: (reason: Error) => Promise<void>;
-};
 
 type ContextEngineMaintenanceParams = {
   contextEngine?: ContextEngine;
@@ -96,40 +96,6 @@ type DeferredTurnMaintenanceRunState = {
 };
 
 const activeDeferredTurnMaintenanceRuns = new Map<string, DeferredTurnMaintenanceRunState>();
-
-// Closing rejects late rewrites and drains already-admitted host transcript writes
-// before fallback maintenance or foreground reads can enter the session.
-function createDeferredMaintenanceWriteFence(): DeferredMaintenanceWriteFence {
-  let closedReason: Error | undefined;
-  let activeWrites = 0;
-  let resolveDrain: (() => void) | undefined;
-  let drain = Promise.resolve();
-  return {
-    run: async <T>(operation: () => Promise<T>) => {
-      if (closedReason) {
-        throw closedReason;
-      }
-      if (activeWrites++ === 0) {
-        drain = new Promise<void>((resolve) => {
-          resolveDrain = resolve;
-        });
-      }
-      try {
-        return await operation();
-      } finally {
-        activeWrites -= 1;
-        if (activeWrites === 0) {
-          resolveDrain?.();
-          resolveDrain = undefined;
-        }
-      }
-    },
-    close: async (reason) => {
-      closedReason ??= reason;
-      await drain;
-    },
-  };
-}
 
 type DeferredTurnMaintenanceSignal = "SIGINT" | "SIGTERM";
 type DeferredTurnMaintenanceProcessLike = Pick<NodeJS.Process, "on" | "off"> &
