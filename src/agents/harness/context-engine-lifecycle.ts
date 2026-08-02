@@ -271,10 +271,11 @@ export async function finalizeHarnessContextEngineTurn(params: {
   });
   const runtimeSettings = buildHarnessContextEngineRuntimeSettings(params);
   let postTurnFinalizationSucceeded = true;
+  let skipBackgroundTurnMaintenance = false;
 
   if (typeof params.contextEngine.afterTurn === "function") {
     try {
-      await params.contextEngine.afterTurn({
+      const afterTurnResult = await params.contextEngine.afterTurn({
         sessionId: params.sessionIdUsed,
         sessionKey: params.sessionKey,
         sessionTarget: params.sessionTarget,
@@ -286,6 +287,11 @@ export async function finalizeHarnessContextEngineTurn(params: {
         runtimeContext: params.runtimeContext,
         isHeartbeat: params.isHeartbeat,
       });
+      // Only the engine-owned, exact no-debt fact suppresses background work.
+      // Missing or malformed results retain the legacy scheduling behavior.
+      skipBackgroundTurnMaintenance =
+        params.contextEngine.info.turnMaintenanceMode === "background" &&
+        afterTurnResult?.maintenanceDebt === "none";
     } catch (afterTurnErr) {
       postTurnFinalizationSucceeded = false;
       params.warn(`context engine afterTurn failed: ${String(afterTurnErr)}`);
@@ -329,7 +335,8 @@ export async function finalizeHarnessContextEngineTurn(params: {
     !params.promptError &&
     !params.aborted &&
     !params.yieldAborted &&
-    postTurnFinalizationSucceeded
+    postTurnFinalizationSucceeded &&
+    !skipBackgroundTurnMaintenance
   ) {
     await (params.runMaintenance ?? runHarnessContextEngineMaintenance)({
       contextEngine: params.contextEngine,

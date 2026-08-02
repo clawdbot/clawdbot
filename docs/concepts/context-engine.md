@@ -86,6 +86,8 @@ Every time OpenClaw runs a model prompt, the context engine participates at four
 
 Engines can also implement an optional `maintain()` method for transcript maintenance (safe rewrites via `runtimeContext.rewriteTranscriptEntries()`) after bootstrap, a successful turn, or compaction. Set `info.turnMaintenanceMode: "background"` to run it as deferred work instead of blocking the reply.
 
+A background engine may return `{ maintenanceDebt: "none" }` from `afterTurn()` to skip that turn's deferred task after authoritatively establishing that every responsibility of `maintain()` has no work for the session, including work recorded by earlier mid-turn hooks. Return `{ maintenanceDebt: "pending" }` after recording durable work; return nothing or omit `afterTurn()` to preserve unconditional scheduling. Bootstrap maintenance remains unconditional so durable debt survives restarts.
+
 For the bundled non-ACP Codex harness, OpenClaw applies the same lifecycle by projecting assembled context into Codex developer instructions and the current turn prompt. Codex still owns its native thread history and native compactor.
 
 ### Subagent lifecycle (optional)
@@ -248,7 +250,7 @@ Optional members:
 | `bootstrap(params)`            | Method | Initialize engine state for a session. Called once when the engine first sees a session (e.g., import history).                              |
 | `maintain(params)`             | Method | Transcript maintenance after bootstrap, a successful turn, or compaction. Use `runtimeContext.rewriteTranscriptEntries()` for safe rewrites. |
 | `ingestBatch(params)`          | Method | Ingest a completed turn as a batch. Called after a run completes, with all messages from that turn at once.                                  |
-| `afterTurn(params)`            | Method | Post-run lifecycle work (persist state, trigger background compaction).                                                                      |
+| `afterTurn(params)`            | Method | Post-run lifecycle work; may report authoritative background maintenance debt after recording it.                                            |
 | `prepareSubagentSpawn(params)` | Method | Set up shared state for a child session before it starts.                                                                                    |
 | `onSubagentEnded(params)`      | Method | Clean up after a subagent ends.                                                                                                              |
 | `dispose()`                    | Method | Release resources. Called during gateway shutdown or plugin reload - not per-session.                                                        |
