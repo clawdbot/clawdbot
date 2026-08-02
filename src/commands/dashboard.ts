@@ -305,7 +305,11 @@ export async function dashboardCommand(
     const browserSupport = await detectBrowserOpenSupport();
     if (browserSupport.ok) {
       opened = await openUrl(browserUrl);
-      hint = opened ? undefined : "Browser launch failed. Open the Dashboard URL above manually.";
+      hint = opened
+        ? undefined
+        : copied
+          ? "Browser launch failed. Open the one-time pairing URL copied to clipboard."
+          : "Browser launch failed. Open the Dashboard URL above manually.";
     } else {
       hint = formatControlUiSshHint({
         port,

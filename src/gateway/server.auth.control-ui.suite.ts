@@ -1835,6 +1835,8 @@ export function registerControlUiAndPairingSuite(): void {
       await import("../infra/device-pairing.js");
     const { BOOTSTRAP_HANDOFF_OPERATOR_SCOPES } =
       await import("../shared/device-bootstrap-profile.js");
+    const { resolveSharedGatewaySessionGeneration } =
+      await import("./server/ws-shared-generation.js");
     testState.gatewayControlUi = { allowedOrigins: ["https://localhost"] };
     const { server, port, prevToken } = await startControlUiServer("secret");
 
@@ -1903,6 +1905,38 @@ export function registerControlUiAndPairingSuite(): void {
       });
       expect(reload.ok).toBe(true);
       wsReload.close();
+
+      const sharedGatewaySessionGeneration = resolveSharedGatewaySessionGeneration({
+        mode: "token",
+        token: "secret",
+      });
+      if (!sharedGatewaySessionGeneration) {
+        throw new Error("expected shared gateway session generation");
+      }
+      await expect(
+        verifyDeviceToken({
+          deviceId: identity.deviceId,
+          token: deviceToken,
+          role: "operator",
+          scopes: [...BOOTSTRAP_HANDOFF_OPERATOR_SCOPES],
+          requiredSharedGatewaySessionGeneration: sharedGatewaySessionGeneration,
+        }),
+      ).resolves.toEqual({
+        ok: true,
+        issuer: {
+          kind: "shared-gateway-auth",
+          generation: sharedGatewaySessionGeneration,
+        },
+      });
+      await expect(
+        verifyDeviceToken({
+          deviceId: identity.deviceId,
+          token: deviceToken,
+          role: "operator",
+          scopes: [...BOOTSTRAP_HANDOFF_OPERATOR_SCOPES],
+          requiredSharedGatewaySessionGeneration: "rotated-generation",
+        }),
+      ).resolves.toEqual({ ok: false, reason: "issuer-generation-stale" });
 
       const wsReplay = await openWs(port, {
         origin: "https://localhost",

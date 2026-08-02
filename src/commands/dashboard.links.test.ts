@@ -212,7 +212,7 @@ describe("dashboardCommand", () => {
 
     expect(formatControlUiSshHintMock).not.toHaveBeenCalled();
     expect(runtime.log).toHaveBeenCalledWith(
-      "Browser launch failed. Open the Dashboard URL above manually.",
+      "Browser launch failed. Open the one-time pairing URL copied to clipboard.",
     );
   });
 
