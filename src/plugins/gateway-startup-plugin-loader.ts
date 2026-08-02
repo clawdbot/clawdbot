@@ -23,15 +23,6 @@ export function resolveChannelPluginIds(params: {
   return [...loadGatewayStartupPluginPlan(params).channelPluginIds];
 }
 
-export function resolveConfiguredDeferredChannelPluginIds(params: {
-  config: OpenClawConfig;
-  workspaceDir?: string;
-  env: NodeJS.ProcessEnv;
-  ambientEnvTriggers?: AmbientEnvTriggerPolicy;
-}): string[] {
-  return [...loadGatewayStartupPluginPlan(params).configuredDeferredChannelPluginIds];
-}
-
 export function resolveGatewayStartupPluginIdsFromRegistry(params: {
   config: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;

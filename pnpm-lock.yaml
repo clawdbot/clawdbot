@@ -316,6 +316,9 @@ importers:
       markdown-it:
         specifier: 14.3.0
         version: 14.3.0
+      marked:
+        specifier: 18.0.7
+        version: 18.0.7
       oxfmt:
         specifier: 0.60.0
         version: 0.60.0

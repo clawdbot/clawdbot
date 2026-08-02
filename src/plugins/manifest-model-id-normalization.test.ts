@@ -49,7 +49,6 @@ function writeInstallIndex(params: { stateDir: string; pluginDir: string }): voi
           startup: {
             sidecar: false,
             memory: false,
-            deferConfiguredChannelFullLoadUntilAfterListen: false,
             agentHarnesses: [],
           },
           compat: [],
@@ -108,7 +107,7 @@ describe("manifest model id normalization", () => {
     }
   });
 
-  it("keeps process metadata stable across manifest edits and reflects lifecycle resets", () => {
+  it("reflects manifest edits and state directory changes without a prepared snapshot", () => {
     const stateDirA = makeTempDir();
     const pluginDirA = path.join(stateDirA, "extensions", "normalizer");
     writeInstallIndex({ stateDir: stateDirA, pluginDir: pluginDirA });
@@ -122,7 +121,7 @@ describe("manifest model id normalization", () => {
     expect(normalizeDemoModel()).toBe("alpha/demo-model");
 
     writeNormalizerManifest({ pluginDir: pluginDirA, prefix: "bravo-local" });
-    expect(normalizeDemoModel()).toBe("alpha/demo-model");
+    expect(normalizeDemoModel()).toBe("bravo-local/demo-model");
 
     const stateDirB = makeTempDir();
     const pluginDirB = path.join(stateDirB, "extensions", "normalizer");

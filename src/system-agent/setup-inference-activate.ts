@@ -6,6 +6,7 @@ import {
   type CodexCliApiKeyCredential,
   readCodexCliActiveApiKey,
 } from "../agents/cli-credentials.js";
+import { loadAgentRuntimePluginRegistryHandle } from "../agents/runtime-plugins.js";
 import { applyAutoLocalModelLean } from "../config/local-model-lean-auto.js";
 import { createMergePatch } from "../config/merge-patch.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -281,18 +282,22 @@ async function activateSetupInferenceUnredacted(
         traceCommand: "openclaw-setup-probe",
         logger: { warn: (message) => (registryRefreshWarning = message) },
       });
-      const ensureHarnessPlugin =
-        deps.ensureSelectedAgentHarnessPlugin ??
-        (await import("../agents/harness/runtime-plugin.js")).ensureSelectedAgentHarnessPlugin;
       try {
-        await ensureHarnessPlugin({
-          provider: testPlan.provider,
-          modelId: testPlan.model,
+        const pluginRegistry = loadAgentRuntimePluginRegistryHandle({
           config: testPlan.config,
-          agentId: testPlan.routeAgentId,
-          agentHarnessRuntimeOverride: "codex",
           workspaceDir: tempDir,
+          selections: [
+            {
+              provider: testPlan.provider,
+              modelId: testPlan.model,
+              runtime: "codex",
+              agentId: testPlan.routeAgentId,
+            },
+          ],
         });
+        if (!pluginRegistry) {
+          throw new Error("The Codex runtime plugin registry is unavailable.");
+        }
       } catch (error) {
         const loadError = `Could not load the Codex runtime plugin: ${formatErrorMessage(error)}`;
         return {

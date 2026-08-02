@@ -44,7 +44,7 @@ function isTestOnlyPath(changedPath) {
 // Paths outside this set — repo scripts, workflows, qa scenarios, docs mixes —
 // cannot change dist or bundled plugin asset bytes.
 const BUILD_INPUT_RE =
-  /^(?:src|extensions|packages)\/|^(?:openclaw\.mjs|package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml)$|^tsconfig[^/]*\.json$|^scripts\/(?:build-[^/]+|write-plugin-sdk-entry-dts\.ts|copy-export-html-templates\.ts)$|^scripts\/lib\/(?:copy-assets\.ts|plugin-sdk-entries\.mjs)$/u;
+  /^(?:src|extensions|packages)\/|^(?:openclaw\.mjs|package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml)$|^tsconfig[^/]*\.json$|^scripts\/(?:build-[^/]+|runtime-postbuild\.mjs|write-plugin-sdk-entry-dts\.ts)$|^scripts\/lib\/(?:copy-assets\.ts|plugin-sdk-entries\.mjs)$/u;
 
 /**
  * True when a changed path can influence built dist/packaging bytes: a

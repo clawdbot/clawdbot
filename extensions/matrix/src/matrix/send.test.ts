@@ -441,6 +441,52 @@ describe("sendMessageMatrix durable delivery", () => {
     fs.rmSync(stateDir, { recursive: true, force: true });
   });
 
+  it("dispatches fractional BMP and astral limits through the real send path", async () => {
+    chunkMarkdownTextWithModeMock.mockImplementation((text) => Array.from(text));
+
+    resolveTextChunkLimitMock.mockReturnValue(0.5);
+    const bmp = makeClient();
+    await sendMessageMatrix("room:!room:example", "ABCD", {
+      client: bmp.client,
+      cfg: {} as never,
+    });
+    expect(bmp.sendMessage).toHaveBeenCalledTimes(4);
+    expect(
+      bmp.sendMessage.mock.calls.map((call) => requireRecord(call[1], "BMP content").body),
+    ).toEqual(["A", "B", "C", "D"]);
+
+    resolveTextChunkLimitMock.mockReturnValue(1.5);
+    const astral = makeClient();
+    await sendMessageMatrix("room:!room:example", "😀😀", {
+      client: astral.client,
+      cfg: {} as never,
+    });
+    expect(astral.sendMessage).toHaveBeenCalledTimes(2);
+    expect(
+      astral.sendMessage.mock.calls.map((call) => requireRecord(call[1], "astral content").body),
+    ).toEqual(["😀", "😀"]);
+
+    resolveTextChunkLimitMock.mockReturnValue(1.5);
+    const mixed = makeClient();
+    await sendMessageMatrix("room:!room:example", "😀AB", {
+      client: mixed.client,
+      cfg: {} as never,
+    });
+    expect(
+      mixed.sendMessage.mock.calls.map((call) => requireRecord(call[1], "mixed content").body),
+    ).toEqual(["😀", "A", "B"]);
+
+    resolveTextChunkLimitMock.mockReturnValue(1);
+    const integer = makeClient();
+    await sendMessageMatrix("room:!room:example", "😀AB", {
+      client: integer.client,
+      cfg: {} as never,
+    });
+    expect(
+      integer.sendMessage.mock.calls.map((call) => requireRecord(call[1], "integer content").body),
+    ).toEqual(["😀", "A", "B"]);
+  });
+
   it("persists the complete event plan before the first provider dispatch", async () => {
     const { client, sendMessage } = makeClient();
     const deliveryIdentity = resolveMatrixDurableDeliveryIdentity({
@@ -510,15 +556,32 @@ describe("sendMessageMatrix media", () => {
 
   it("uploads media with url payloads", async () => {
     const { client, sendMessage, uploadContent } = makeClient();
+    const mediaAccess = {
+      localRoots: ["/tmp/openclaw"],
+      workspaceDir: "/tmp/openclaw",
+    };
 
     await sendMessageMatrix("room:!room:example", "caption", {
       client,
       cfg: {} as never,
-      mediaUrl: "file:///tmp/photo.png",
+      mediaUrl: "chart.png",
+      mediaAccess,
+      mediaLocalRoots: mediaAccess.localRoots,
     });
+
+    expect(mockCallArg(loadOutboundMediaFromUrlMock, "loadOutboundMediaFromUrl", 0)).toBe(
+      "chart.png",
+    );
+    const mediaOptions = requireRecord(
+      mockCallArg(loadOutboundMediaFromUrlMock, "loadOutboundMediaFromUrl", 1),
+      "outbound media options",
+    );
+    expect(mediaOptions.mediaAccess).toBe(mediaAccess);
+    expect(mediaOptions.mediaLocalRoots).toBe(mediaAccess.localRoots);
 
     const uploadArg = mockCallArg(uploadContent, "uploadContent", 0);
     expect(Buffer.isBuffer(uploadArg)).toBe(true);
+    expect(uploadArg).toEqual(Buffer.from("media"));
 
     const content = sentContent(sendMessage) as {
       url?: string;

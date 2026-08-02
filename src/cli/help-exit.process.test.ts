@@ -215,6 +215,10 @@ type CliProcessFailure = Error & {
   stdout?: string;
 };
 describe("CLI help process exit", () => {
+  it("disables esbuild worker IPC for source CLI children", () => {
+    expect(process.env.ESBUILD_WORKER_THREADS).toBe("0");
+  });
+
   it("exits promptly after root --help", async () => {
     // Keep this precomputed-help case off plugin discovery; plugin-sensitive root help is covered
     // separately, so the shared child timeout remains a deadlock guard rather than a startup SLO.

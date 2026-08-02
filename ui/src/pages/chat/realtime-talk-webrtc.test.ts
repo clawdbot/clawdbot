@@ -108,11 +108,21 @@ function dispatchRealtimeEvent(peer: FakePeerConnection | undefined, event: unkn
 
 function dispatchConsultToolCall(peer: FakePeerConnection | undefined): void {
   dispatchRealtimeEvent(peer, {
-    type: "response.function_call_arguments.done",
-    item_id: "item-1",
-    call_id: "call-1",
-    name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
-    arguments: JSON.stringify({ question: "status?" }),
+    type: "response.done",
+    response: {
+      id: "response-1",
+      status: "completed",
+      output: [
+        {
+          type: "function_call",
+          id: "item-1",
+          status: "completed",
+          call_id: "call-1",
+          name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+          arguments: JSON.stringify({ question: "status?" }),
+        },
+      ],
+    },
   });
 }
 
@@ -135,13 +145,13 @@ async function startActiveConsult(
 
   await transport.start();
   const peer = FakePeerConnection.instances[0];
-  if (options.responseAlreadyActive) {
-    dispatchRealtimeEvent(peer, { type: "response.created" });
-  }
   dispatchConsultToolCall(peer);
   await waitForFast(() =>
     expect(request).toHaveBeenCalledWith("talk.client.toolCall", expect.any(Object)),
   );
+  if (options.responseAlreadyActive) {
+    dispatchRealtimeEvent(peer, { type: "response.created" });
+  }
 
   return { transport, peer };
 }
@@ -220,6 +230,42 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
 
     expect(onInputLevel.mock.calls.some(([level]) => level > 0)).toBe(true);
     expect(onInputLevel).toHaveBeenLastCalledWith(0);
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it("reclaims the input meter when its first level update stops the transport", async () => {
+    vi.useFakeTimers();
+    stubAnswerSdpFetch();
+    const close = vi.fn(async () => undefined);
+    class MockAudioContext {
+      readonly close = close;
+      createMediaStreamSource() {
+        return { connect: vi.fn(), disconnect: vi.fn() };
+      }
+      createAnalyser() {
+        return {
+          fftSize: 0,
+          smoothingTimeConstant: 0,
+          disconnect: vi.fn(),
+          getFloatTimeDomainData: (samples: Float32Array) => samples.fill(0.25),
+        };
+      }
+    }
+    vi.stubGlobal("AudioContext", MockAudioContext);
+    const onInputLevel = vi.fn((level: number) => {
+      if (level > 0) {
+        transport.stop();
+      }
+    });
+    const transport = createOpenAiTransport({}, { onInputLevel });
+
+    await expect(transport.start()).resolves.toBe("cancelled");
+    transport.stop();
+    transport.stop();
+    vi.advanceTimersByTime(1_000);
+
+    expect(vi.getTimerCount()).toBe(0);
+    expect(stopInputTrack).toHaveBeenCalledOnce();
     expect(close).toHaveBeenCalledOnce();
   });
 
@@ -794,17 +840,7 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
 
     await transport.start();
     const peer = FakePeerConnection.instances[0];
-    peer?.channel.dispatchEvent(
-      new MessageEvent("message", {
-        data: JSON.stringify({
-          type: "response.function_call_arguments.done",
-          item_id: "item-1",
-          call_id: "call-1",
-          name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
-          arguments: JSON.stringify({ question: "status?" }),
-        }),
-      }),
-    );
+    dispatchConsultToolCall(peer);
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(1));
     expect(request).toHaveBeenCalledWith("talk.client.toolCall", {
       sessionKey: "main",
@@ -1001,17 +1037,7 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
 
     await transport.start();
     const peer = FakePeerConnection.instances[0];
-    peer?.channel.dispatchEvent(
-      new MessageEvent("message", {
-        data: JSON.stringify({
-          type: "response.function_call_arguments.done",
-          item_id: "item-1",
-          call_id: "call-1",
-          name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
-          arguments: JSON.stringify({ question: "status?" }),
-        }),
-      }),
-    );
+    dispatchConsultToolCall(peer);
     await waitForFast(() =>
       expect(request).toHaveBeenCalledWith("talk.client.toolCall", expect.any(Object)),
     );

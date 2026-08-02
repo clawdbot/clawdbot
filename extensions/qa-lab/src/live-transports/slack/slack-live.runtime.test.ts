@@ -782,6 +782,37 @@ describe("Slack live QA runtime helpers", () => {
     ).toThrow("exactly one Slack message identity containing commentary");
   });
 
+  it("accepts one standalone commentary identity even when Slack prefixes it as commentary", () => {
+    const scenario = testing.findScenario(["slack-progress-commentary-verbose-dedupe"])[0];
+    const run = scenario?.buildRun("U_SUT");
+    if (
+      !run ||
+      run.kind === "approval" ||
+      run.kind === "codex-approval" ||
+      run.kind === "direct-transport" ||
+      !run.verifyObserved
+    ) {
+      throw new Error("expected Slack commentary message scenario");
+    }
+    const commentaryMarker = run.input.match(/SLACK-QA-COMMENTARY-[0-9A-F]{8}/u)?.[0];
+    const toolMarker = run.input.match(/SLACK-QA-TOOL-[0-9A-F]{8}/u)?.[0];
+    const finalMarker = run.input.match(/SLACK-QA-COMMENTARY-DONE-[0-9A-F]{8}/u)?.[0];
+    if (!commentaryMarker || !toolMarker || !finalMarker) {
+      throw new Error("missing Slack progress markers");
+    }
+
+    expect(() =>
+      run.verifyObserved?.({
+        finalMessage: { text: finalMarker, ts: "3.000000" },
+        messages: [
+          { channelId: "C123456789", text: `💬 ${commentaryMarker}`, ts: "1.000000" },
+          { channelId: "C123456789", text: toolMarker, ts: "2.000000" },
+          { channelId: "C123456789", text: finalMarker, ts: "3.000000" },
+        ],
+      }),
+    ).not.toThrow();
+  });
+
   it("settles complete channel and thread observations after the final reply", async () => {
     let historyCalls = 0;
     const observedMessages: Array<{ text: string }> = [];

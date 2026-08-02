@@ -71,6 +71,17 @@ describe("requireValidConfigSnapshot", () => {
     expect(runtime.log).not.toHaveBeenCalled();
   });
 
+  it("can validate core config without loading plugin schemas", async () => {
+    createValidSnapshot();
+    const runtime = createRuntime();
+
+    await expect(
+      requireValidConfigSnapshot(runtime, { skipPluginValidation: true }),
+    ).resolves.toEqual({ plugins: {} });
+
+    expect(readConfigFileSnapshot).toHaveBeenCalledWith({ skipPluginValidation: true });
+  });
+
   it("emits a non-blocking compatibility advisory when explicitly requested", async () => {
     createValidSnapshot();
     const runtime = createRuntime();

@@ -15,9 +15,13 @@ import { FailoverError } from "../agents/failover-error.js";
 import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
 import { resetConfigRuntimeState } from "../config/config.js";
-import { emitAgentEvent } from "../infra/agent-events.js";
+import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { enqueueCommandInLane } from "../process/command-queue.js";
-import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
+import {
+  getActiveGatewayRootWorkCount,
+  isGatewaySubordinateWorkAdmissionClosed,
+  waitForActiveGatewayRootWork,
+} from "../process/gateway-work-admission.js";
 import { createDeferred } from "../test-utils/deferred.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { buildAssistantDeltaResult } from "./test-helpers.agent-results.js";
@@ -2163,45 +2167,136 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
   });
 
   it.each([
-    { name: "successful completion", fail: false, expected: "hello" },
-    { name: "internal agent error", fail: true, expected: "Error: internal error" },
+    {
+      name: "successful completion without a provider terminal",
+      fail: false,
+      providerTerminal: false,
+      expected: "hello",
+    },
+    {
+      name: "successful completion with a provider terminal",
+      fail: false,
+      providerTerminal: true,
+      expected: "hello",
+    },
+    {
+      name: "internal agent error without a provider terminal",
+      fail: true,
+      providerTerminal: false,
+      expected: "Error: internal error",
+    },
+    {
+      name: "internal agent error with a provider terminal",
+      fail: true,
+      providerTerminal: true,
+      expected: "Error: internal error",
+    },
   ])(
     "separates streamed content from the terminal finish for an official SDK $name",
-    async ({ fail, expected }) => {
-      agentCommand.mockClear();
-      if (fail) {
-        agentCommand.mockRejectedValueOnce(new Error("private upstream failure"));
-      } else {
-        agentCommand.mockImplementationOnce((async (opts: unknown) =>
-          buildAssistantDeltaResult({
-            opts,
-            emit: emitAgentEvent,
-            deltas: ["he", "llo"],
-            text: expected,
-          })) as never);
-      }
-
-      const stream = await createOpenAiChatClient(enabledPort).chat.completions.create({
-        model: "openclaw",
-        messages: [{ role: "user", content: "Return a complete streamed response." }],
-        stream: true,
+    async ({ fail, providerTerminal, expected }) => {
+      const idleRootCount = getActiveGatewayRootWorkCount();
+      const terminalAdmission = createDeferred<{
+        active: number;
+        drained: { drained: boolean; active: number };
+      }>();
+      const wireResponse = createDeferred<string>();
+      const continueAgent = createDeferred();
+      const lifecycleTerminals: string[] = [];
+      let activeRunId: string | undefined;
+      const unsubscribe = onAgentEvent((event) => {
+        const phase = event.data?.phase;
+        if (event.runId !== activeRunId || event.stream !== "lifecycle") {
+          return;
+        }
+        if (phase !== "end" && phase !== "error") {
+          return;
+        }
+        lifecycleTerminals.push(phase);
+        // Agent settlement schedules the terminal in a later microtask. The
+        // request must remain admitted until Node finishes the actual stream.
+        const active = getActiveGatewayRootWorkCount();
+        void waitForActiveGatewayRootWork(0).then((drained) => {
+          terminalAdmission.resolve({ active, drained });
+        });
       });
-      const choices: Array<{
-        delta: { content?: string | null };
-        finish_reason: string | null;
-      }> = [];
-      for await (const chunk of stream) {
-        choices.push(...chunk.choices);
+      agentCommand.mockClear();
+      agentCommand.mockImplementationOnce((async (opts: unknown) => {
+        activeRunId = (opts as { runId?: string }).runId;
+        if (!activeRunId) {
+          throw new Error("expected a streaming chat-completion run ID");
+        }
+        await continueAgent.promise;
+        if (fail) {
+          if (providerTerminal) {
+            emitAgentEvent({ runId: activeRunId, stream: "lifecycle", data: { phase: "error" } });
+          }
+          throw new Error("private upstream failure");
+        }
+        const result = buildAssistantDeltaResult({
+          opts,
+          emit: emitAgentEvent,
+          deltas: ["he", "llo"],
+          text: expected,
+        });
+        if (providerTerminal) {
+          emitAgentEvent({ runId: activeRunId, stream: "lifecycle", data: { phase: "end" } });
+        }
+        return result;
+      }) as never);
+
+      try {
+        const client = new OpenAI({
+          apiKey: "test",
+          baseURL: `http://127.0.0.1:${enabledPort}/v1`,
+          defaultHeaders: { "x-openclaw-scopes": "operator.write" },
+          maxRetries: 0,
+          fetch: async (input, init) => {
+            const response = await fetch(input, init);
+            void response.clone().text().then(wireResponse.resolve, wireResponse.reject);
+            return response;
+          },
+        });
+        const stream = await client.chat.completions.create({
+          model: "openclaw",
+          messages: [{ role: "user", content: "Return a complete streamed response." }],
+          stream: true,
+        });
+        await vi.waitFor(() => expect(agentCommand).toHaveBeenCalledTimes(1));
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        continueAgent.resolve();
+
+        const choices: Array<{
+          delta: { content?: string | null };
+          finish_reason: string | null;
+        }> = [];
+        for await (const chunk of stream) {
+          choices.push(...chunk.choices);
+        }
+
+        const [admission, wire] = await Promise.all([
+          terminalAdmission.promise,
+          wireResponse.promise,
+        ]);
+        expect(admission.active).toBe(idleRootCount + 1);
+        expect(admission.drained).toEqual({ drained: false, active: idleRootCount + 1 });
+        expect(parseSseDataLines(wire).at(-1)).toBe("[DONE]");
+        expect(lifecycleTerminals).toEqual([fail ? "error" : "end"]);
+
+        const contentChoices = choices.filter((choice) => typeof choice.delta.content === "string");
+        expect(contentChoices.map((choice) => choice.delta.content).join("")).toBe(expected);
+        expect(contentChoices.every((choice) => choice.finish_reason === null)).toBe(true);
+
+        const terminalChoices = choices.filter((choice) => choice.finish_reason === "stop");
+        expect(terminalChoices).toHaveLength(1);
+        expect(terminalChoices[0]?.delta).toEqual({});
+        expect(choices.at(-1)).toEqual(terminalChoices[0]);
+        await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(idleRootCount));
+      } finally {
+        continueAgent.resolve();
+        unsubscribe();
       }
-
-      const contentChoices = choices.filter((choice) => typeof choice.delta.content === "string");
-      expect(contentChoices.map((choice) => choice.delta.content).join("")).toBe(expected);
-      expect(contentChoices.every((choice) => choice.finish_reason === null)).toBe(true);
-
-      const terminalChoices = choices.filter((choice) => choice.finish_reason === "stop");
-      expect(terminalChoices).toHaveLength(1);
-      expect(terminalChoices[0]?.delta).toEqual({});
-      expect(choices.at(-1)).toEqual(terminalChoices[0]);
     },
   );
 
@@ -3239,21 +3334,26 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
 
   it("aborts agent command when streaming client disconnects", { timeout: 15_000 }, async () => {
     const port = enabledPort;
+    const idleRootCount = getActiveGatewayRootWorkCount();
+    const agentAborted = createDeferred();
+    const finishAgentCleanup = createDeferred();
+    const cleanupAdmissionClosed = createDeferred<boolean>();
     let serverAbortSignal: AbortSignal | undefined;
 
     agentCommand.mockClear();
-    agentCommand.mockImplementationOnce(
-      (opts: unknown) =>
-        new Promise<undefined>((resolve) => {
-          const signal = (opts as { abortSignal?: AbortSignal } | undefined)?.abortSignal;
-          serverAbortSignal = signal;
-          if (signal?.aborted) {
-            resolve(undefined);
-            return;
-          }
-          signal?.addEventListener("abort", () => resolve(undefined), { once: true });
-        }),
-    );
+    agentCommand.mockImplementationOnce(async (opts: unknown) => {
+      const signal = (opts as { abortSignal?: AbortSignal } | undefined)?.abortSignal;
+      serverAbortSignal = signal;
+      if (signal?.aborted) {
+        agentAborted.resolve();
+      } else {
+        signal?.addEventListener("abort", () => agentAborted.resolve(), { once: true });
+      }
+      await agentAborted.promise;
+      cleanupAdmissionClosed.resolve(isGatewaySubordinateWorkAdmissionClosed());
+      await finishAgentCleanup.promise;
+      return undefined;
+    });
 
     const clientReq = http.request({
       hostname: "127.0.0.1",
@@ -3278,14 +3378,27 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       expect(agentCommand).toHaveBeenCalledTimes(1);
     });
 
-    clientReq.destroy();
+    try {
+      clientReq.destroy();
 
-    await vi.waitFor(
-      () => {
-        expect(serverAbortSignal?.aborted).toBe(true);
-      },
-      { timeout: 5_000, interval: 50 },
-    );
+      await vi.waitFor(() => expect(serverAbortSignal?.aborted).toBe(true), {
+        timeout: 5_000,
+        interval: 50,
+      });
+      expect(await cleanupAdmissionClosed.promise).toBe(false);
+      expect(getActiveGatewayRootWorkCount()).toBe(idleRootCount + 1);
+      expect(await waitForActiveGatewayRootWork(0)).toEqual({
+        drained: false,
+        active: idleRootCount + 1,
+      });
+    } finally {
+      finishAgentCleanup.resolve();
+    }
+
+    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(idleRootCount), {
+      timeout: 5_000,
+      interval: 50,
+    });
   });
 
   it(

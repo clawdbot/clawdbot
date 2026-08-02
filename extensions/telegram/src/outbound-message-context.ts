@@ -6,7 +6,8 @@ import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { TELEGRAM_GENERAL_TOPIC_ID, type TelegramThreadSpec } from "./bot/helpers.js";
 import { buildTelegramSelfSenderName } from "./group-history-window.js";
-import { createTelegramMessageCache, resolveTelegramMessageCacheScope } from "./message-cache.js";
+import { resolveTelegramMessageCacheScope } from "./message-cache-persistence.js";
+import { createTelegramMessageCache } from "./message-cache.js";
 import type { TelegramPromptContextProjection } from "./prompt-context-projection.js";
 
 type TelegramOutboundPromptContextUser = {

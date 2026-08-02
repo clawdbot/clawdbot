@@ -35,6 +35,55 @@ function createDeferred<T>() {
   return { promise, reject, resolve };
 }
 
+describe("chat pane composer prefill attention", () => {
+  function createComposerAttentionFixture() {
+    const { pane } = createTestChatPane({
+      client: {} as GatewayBrowserClient,
+      sessions: {} as SessionCapability,
+    });
+    const input = document.createElement("div");
+    input.className = "agent-chat__input";
+    const textarea = document.createElement("textarea");
+    input.append(textarea);
+    document.body.append(input);
+    vi.spyOn(pane, "querySelector").mockReturnValue(textarea);
+    const lifecycle = pane as TestChatPane & {
+      focusComposer: boolean;
+      updated: (changedProperties?: Map<PropertyKey, unknown>) => void;
+    };
+    lifecycle.focusComposer = true;
+    return { input, lifecycle, textarea };
+  }
+
+  it("focuses and clears the one-shot composer cue for an explicit route hint", () => {
+    vi.useFakeTimers();
+    const { input, lifecycle, textarea } = createComposerAttentionFixture();
+
+    lifecycle.updated(new Map([["focusComposer", false]]));
+
+    expect(document.activeElement).toBe(textarea);
+    expect(input.classList.contains("agent-chat__input--prefill-attention")).toBe(true);
+    vi.advanceTimersByTime(1_200);
+    expect(input.classList.contains("agent-chat__input--prefill-attention")).toBe(false);
+    input.remove();
+  });
+
+  it("restarts the cue without letting the prior timer clear it", () => {
+    vi.useFakeTimers();
+    const { input, lifecycle } = createComposerAttentionFixture();
+
+    lifecycle.updated(new Map([["focusComposer", false]]));
+    vi.advanceTimersByTime(600);
+    lifecycle.updated(new Map([["focusComposer", false]]));
+    vi.advanceTimersByTime(600);
+
+    expect(input.classList.contains("agent-chat__input--prefill-attention")).toBe(true);
+    vi.advanceTimersByTime(600);
+    expect(input.classList.contains("agent-chat__input--prefill-attention")).toBe(false);
+    input.remove();
+  });
+});
+
 describe("chat pane first-turn attachment lifecycle", () => {
   it("claims the connected client's first message before attaching the pane", () => {
     const pane = document.createElement("openclaw-chat-pane") as unknown as TestChatPane;
@@ -658,6 +707,7 @@ function createConfirmationOwner() {
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   for (const owner of confirmationOwners) {
     dismissConfirmedActionPopovers(owner);

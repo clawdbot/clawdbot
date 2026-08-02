@@ -12,7 +12,6 @@ import {
   ensureCliExecutionBootstrap,
   resolveCliExecutionStartupContext,
 } from "../command-execution-startup.js";
-import { shouldBypassConfigGuardForCommandPath } from "../command-startup-policy.js";
 import { applyResolvedCommandOutputMode } from "../json-output-mode.js";
 import {
   resolvePluginInstallInvalidConfigPolicy,
@@ -121,7 +120,7 @@ export function registerPreActionHooks(program: Command, programVersion: string)
     applyResolvedCommandOutputMode(jsonOutputMode);
     const { commandPath, startupPolicy } = resolveCliExecutionStartupContext({
       argv,
-      protocolCommandPath: getCommanderCommandPath(actionCommand),
+      commandPath: getCommanderCommandPath(actionCommand),
       jsonOutputMode,
       env: process.env,
     });
@@ -139,7 +138,7 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       process.env.NODE_NO_WARNINGS ??= "1";
     }
     if (
-      shouldBypassConfigGuardForCommandPath(commandPath) ||
+      startupPolicy.skipConfigGuard ||
       isGuidedConfigAction(actionCommand) ||
       isGuidedConfigCommandPath(commandPath)
     ) {
@@ -184,7 +183,6 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       ...(beforeStateMigrations ? { beforeStateMigrations } : {}),
       ...(skipPristineStartupStateMigrations ? { skipPristineStartupStateMigrations: true } : {}),
       ...(skipPristineCoreStateMigrations ? { skipPristineCoreStateMigrations: true } : {}),
-      skipConfigGuard: shouldBypassConfigGuardForCommandPath(commandPath),
     });
     if (beforeStateMigrations) {
       const { reloadTrustedGatewayRunEnvironment } =

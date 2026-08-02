@@ -4,6 +4,7 @@
  * Watches recent tool history for repeated no-progress patterns and circuit-breaker thresholds.
  */
 import { createHash } from "node:crypto";
+import { stableStringify } from "@openclaw/normalization-core";
 import {
   normalizeNullableString as nonEmptyStringField,
   normalizeOptionalString as normalizeRunId,
@@ -13,7 +14,6 @@ import type { SessionState, ToolCallRecord } from "../logging/diagnostic-session
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isPlainObject } from "../utils.js";
 import { isMessagingToolSendAction } from "./embedded-agent-messaging.js";
-import { stableStringify } from "./stable-stringify.js";
 import {
   buildArgumentChurnWarning,
   getArgumentChurnNoProgressStreak,

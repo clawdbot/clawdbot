@@ -32,7 +32,7 @@ import {
   resolveTelegramPollActionGateState,
 } from "./accounts.js";
 import { resolveTelegramInlineButtons } from "./button-types.js";
-import { notifyTelegramInboundEventOutboundSuccess } from "./inbound-event-delivery.js";
+import { telegramInboundEventDelivery } from "./inbound-event-delivery.js";
 import {
   resolveTelegramInlineButtonsScope,
   resolveTelegramTargetChatType,
@@ -346,6 +346,7 @@ export async function handleTelegramAction(
   params: Record<string, unknown>,
   cfg: OpenClawConfig,
   options?: {
+    mediaAccess?: ChannelMessageActionContext["mediaAccess"];
     mediaLocalRoots?: readonly string[];
     mediaReadFile?: (filePath: string) => Promise<Buffer>;
     sessionKey?: string | null;
@@ -365,7 +366,7 @@ export async function handleTelegramAction(
     accountId,
   });
   const notifyVisibleOutboundSuccess = (to: string, messageThreadId?: number | null) => {
-    notifyTelegramInboundEventOutboundSuccess({
+    telegramInboundEventDelivery.notify({
       sessionKey: options?.sessionKey ?? undefined,
       to: formatTelegramDeliveryTarget(to, messageThreadId),
       accountId,
@@ -562,12 +563,13 @@ export async function handleTelegramAction(
       quoteText,
     });
     const mediaAccess =
-      options?.mediaLocalRoots || options?.mediaReadFile
+      options?.mediaAccess ??
+      (options?.mediaLocalRoots || options?.mediaReadFile
         ? {
             ...(options.mediaLocalRoots ? { localRoots: options.mediaLocalRoots } : {}),
             ...(options.mediaReadFile ? { readFile: options.mediaReadFile } : {}),
           }
-        : undefined;
+        : undefined);
     const outboundSession = buildOutboundSessionContext({
       cfg,
       sessionKey: options?.sessionKey,

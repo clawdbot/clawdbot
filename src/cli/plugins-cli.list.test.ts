@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginRecord } from "../plugins/status.test-fixtures.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
   buildPluginDiagnosticsReport,
   buildPluginInspectReport,
@@ -98,6 +99,84 @@ describe("plugins cli list", () => {
 
     expect(buildPluginDiagnosticsReport).toHaveBeenCalledWith({ config: {}, effectiveOnly: true });
     expect(runtimeLogs).toContain(cleanDoctorMessage);
+  });
+
+  it("emits one sanitized JSON doctor report without human decoration", async () => {
+    const homeDir = "/tmp/openclaw-plugin-doctor-home";
+    buildPluginDiagnosticsReport.mockReturnValue({
+      plugins: [
+        createPluginRecord({
+          id: "broken",
+          origin: "config",
+          source: `${homeDir}/plugins/broken/index.ts`,
+          status: "error",
+          error: `failed to load ${homeDir}/plugins/broken/runtime.ts`,
+        }),
+      ],
+      diagnostics: [
+        {
+          level: "warn",
+          pluginId: "broken",
+          source: `${homeDir}/plugins/shadowed/index.ts`,
+          message:
+            "duplicate plugin id resolved by explicit config-selected plugin; " +
+            `global plugin will be overridden by config plugin (${homeDir}/plugins/broken/index.ts)`,
+        },
+        {
+          level: "warn",
+          message: `failed to inspect ${homeDir}/plugins/unreadable`,
+        },
+      ],
+    });
+
+    await withEnvAsync({ OPENCLAW_HOME: homeDir }, async () => {
+      await runPluginsCommand(["plugins", "doctor", "--json"]);
+    });
+
+    expect(runtimeLogs).toHaveLength(1);
+    expect(runtimeErrors).toEqual([]);
+    expect(runtimeLogs[0]).not.toContain(homeDir);
+    expect(runtimeLogs[0]).not.toContain("Plugin errors:");
+    expect(runtimeLogs[0]).not.toContain("Docs:");
+    expect(JSON.parse(runtimeLogs[0] ?? "null")).toEqual({
+      ok: false,
+      pluginErrors: [
+        {
+          id: "broken",
+          error: "failed to load $OPENCLAW_HOME/plugins/broken/runtime.ts",
+          source: "$OPENCLAW_HOME/plugins/broken/index.ts",
+        },
+      ],
+      diagnostics: [
+        {
+          level: "warn",
+          message: "failed to inspect $OPENCLAW_HOME/plugins/unreadable",
+        },
+      ],
+      sourceShadowing: [
+        {
+          pluginId: "broken",
+          message:
+            "duplicate plugin id resolved by explicit config-selected plugin; " +
+            "global plugin will be overridden by config plugin ($OPENCLAW_HOME/plugins/broken/index.ts)",
+          active: {
+            source: "$OPENCLAW_HOME/plugins/broken/index.ts",
+            origin: "config",
+            status: "error",
+            error: "failed to load $OPENCLAW_HOME/plugins/broken/runtime.ts",
+          },
+          shadowedSource: "$OPENCLAW_HOME/plugins/shadowed/index.ts",
+          repair: [
+            "openclaw plugins inspect broken",
+            "edit or remove the config-selected plugin source",
+            "openclaw plugins registry --refresh",
+            "openclaw gateway restart --force",
+          ],
+        },
+      ],
+      compatibility: [],
+      configurationWarnings: [],
+    });
   });
 
   it.each([

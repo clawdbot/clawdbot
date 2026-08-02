@@ -902,6 +902,7 @@ export async function handleOpenResponsesHttpRequest(
   let finalizeRequested: { status: ResponseResource["status"]; text: string } | null = null;
   let finalizeScheduled = false;
   let finalizeErrorMessage: string | undefined;
+  let terminalLifecyclePhase: "end" | "error" = "end";
 
   const maybeFinalize = () => {
     if (closed || finalizeScheduled) {
@@ -1158,15 +1159,24 @@ export async function handleOpenResponsesHttpRequest(
     }
   });
 
+  // Agent cleanup and deferred SSE delivery have independent lifetimes;
+  // shutdown must wait until both have settled, whichever finishes last.
+  const releaseAgentRootWork = retainGatewayRootWorkAdmissionContinuation();
+  const releaseResponseRootWork = retainGatewayRootWorkAdmissionContinuation();
+  const releaseStreamRootWork = () => {
+    res.off("finish", releaseStreamRootWork);
+    res.off("close", releaseStreamRootWork);
+    releaseResponseRootWork?.();
+  };
+  res.once("finish", releaseStreamRootWork);
+  res.once("close", releaseStreamRootWork);
+
   stopWatchingDisconnect = watchClientDisconnect(req, res, abortController, () => {
     closed = true;
     unsubscribe();
+    releaseStreamRootWork();
   });
 
-  // The streamed run outlives this handler, whose root-work admission is
-  // released on return. Without retaining it, subordinate session/lane
-  // admissions inherit a released lease and fail as GatewayDrainingError.
-  const releaseRootWork = retainGatewayRootWorkAdmissionContinuation();
   void (async () => {
     try {
       const result = await runResponsesAgentCommand({
@@ -1359,6 +1369,7 @@ export async function handleOpenResponsesHttpRequest(
       if (closed || abortController.signal.aborted) {
         return;
       }
+      terminalLifecyclePhase = "error";
       logWarn(`openresponses: streaming response failed: ${String(err)}`);
 
       finalUsage = finalUsage ?? createEmptyUsage();
@@ -1373,11 +1384,6 @@ export async function handleOpenResponsesHttpRequest(
         });
 
         finalizeFailedResponse(errorResponse);
-        emitAgentEvent({
-          runId: responseId,
-          stream: "lifecycle",
-          data: { phase: "error" },
-        });
         return;
       }
       const errorResponse = createResponseResource({
@@ -1404,28 +1410,18 @@ export async function handleOpenResponsesHttpRequest(
         });
         rememberResponseSession();
         finalizeFailedResponse(mappedResponse);
-        emitAgentEvent({
-          runId: responseId,
-          stream: "lifecycle",
-          data: { phase: "error" },
-        });
         return;
       }
       rememberResponseSession();
       finalizeFailedResponse(errorResponse);
-      emitAgentEvent({
-        runId: responseId,
-        stream: "lifecycle",
-        data: { phase: "error" },
-      });
     } finally {
-      releaseRootWork?.();
-      if (!closed) {
-        // Emit lifecycle end to trigger completion
+      releaseAgentRootWork?.();
+      // Existing provider terminals must not be replaced or emitted twice.
+      if (finalizeStatus === null && (terminalLifecyclePhase === "error" || !closed)) {
         emitAgentEvent({
           runId: responseId,
           stream: "lifecycle",
-          data: { phase: "end" },
+          data: { phase: terminalLifecyclePhase },
         });
       }
     }
