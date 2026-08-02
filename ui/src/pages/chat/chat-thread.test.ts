@@ -3926,12 +3926,14 @@ describe("expansion-state render dependencies", () => {
             content: "Expanded tool result",
             timestamp: 2,
           },
+          { role: "assistant", content: "The first tool completed.", timestamp: 3 },
+          { role: "user", content: "Show the next tool result.", timestamp: 4 },
           {
             role: "toolResult",
             toolCallId: "collapsed-tool",
             toolName: "browser.open",
             content: "Collapsed tool result",
-            timestamp: 3,
+            timestamp: 5,
           },
         ],
       };
@@ -3946,15 +3948,38 @@ describe("expansion-state render dependencies", () => {
         visibilityIds[1],
         "collapsed standalone tool disclosure",
       );
-      setExpansionState(visibilityState, expandedToolId, true);
-      setExpansionState(visibilityState, collapsedToolId, false);
+      const disclosureButtons = () =>
+        Array.from(
+          toolVisibilityPane.querySelectorAll<HTMLButtonElement>(".chat-tool-msg-summary"),
+        ).filter((button) => !button.closest(".chat-tool-msg-body"));
+      expect(disclosureButtons()).toHaveLength(2);
+      expect(disclosureButtons().map((button) => button.getAttribute("aria-expanded"))).toEqual([
+        "false",
+        "false",
+      ]);
+      expectDefined(disclosureButtons()[0], "first mounted tool disclosure").click();
+      render(toolVisibilityController.render(toolVisibilityProps), toolVisibilityPane);
+      expectDefined(disclosureButtons()[1], "second mounted tool disclosure").click();
+      render(toolVisibilityController.render(toolVisibilityProps), toolVisibilityPane);
+      expectDefined(disclosureButtons()[1], "second mounted tool disclosure").click();
+      render(toolVisibilityController.render(toolVisibilityProps), toolVisibilityPane);
+      expect(disclosureButtons().map((button) => button.getAttribute("aria-expanded"))).toEqual([
+        "true",
+        "false",
+      ]);
 
       render(
         toolVisibilityController.render({ ...toolVisibilityProps, showToolCalls: false }),
         toolVisibilityPane,
       );
+      expect(disclosureButtons()).toHaveLength(0);
       render(toolVisibilityController.render(toolVisibilityProps), toolVisibilityPane);
 
+      expect(disclosureButtons()).toHaveLength(2);
+      expect(disclosureButtons().map((button) => button.getAttribute("aria-expanded"))).toEqual([
+        "true",
+        "false",
+      ]);
       expect(visibilityState.get(expandedToolId)).toBe(true);
       expect(visibilityState.get(collapsedToolId)).toBe(false);
       render(
