@@ -26,6 +26,13 @@ import {
 import { lookupInboundMessageMeta } from "./quoted-message.js";
 import { DEFAULT_WHATSAPP_SOCKET_TIMING } from "./socket-timing.js";
 
+function createAcceptedSendMessageMock() {
+  let sequence = 0;
+  return vi.fn().mockImplementation(async () => ({
+    key: { id: `replacement-accepted-${++sequence}` },
+  }));
+}
+
 describe("web monitor inbox socket lifecycle", () => {
   installStreamsInboundMessageHooks();
 
@@ -83,7 +90,7 @@ describe("web monitor inbox socket lifecycle", () => {
     const inbound = inboundMessage(onMessage);
 
     const replacementSock = {
-      sendMessage: vi.fn(async () => undefined),
+      sendMessage: createAcceptedSendMessageMock(),
       sendPresenceUpdate: vi.fn(async () => undefined),
     };
     socketRef.current = replacementSock as unknown as NonNullable<
@@ -126,7 +133,7 @@ describe("web monitor inbox socket lifecycle", () => {
     });
 
     const replacementSock = {
-      sendMessage: vi.fn(async () => undefined),
+      sendMessage: createAcceptedSendMessageMock(),
       sendPresenceUpdate: vi.fn(async () => undefined),
     };
     socketRef.current = null;
