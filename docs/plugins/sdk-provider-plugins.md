@@ -690,6 +690,7 @@ catalog, API-key auth, and dynamic model resolution.
       | `resolveTransportTurnState` | Native per-turn headers/metadata |
       | `resolveWebSocketSessionPolicy` | Native WS session headers/cool-down |
       | `formatApiKey` | Custom runtime token shape |
+      | `loginOAuth` | Callback-based OAuth login for the session SDK `AuthStorage` API |
       | `refreshOAuth` | Custom OAuth refresh |
       | `buildAuthDoctorHint` | Auth repair guidance |
       | `matchesContextOverflowError` | Provider-owned overflow detection |

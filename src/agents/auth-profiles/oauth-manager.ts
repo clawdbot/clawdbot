@@ -42,7 +42,10 @@ type OAuthManagerAdapter = {
     credentials: OAuthCredential,
     context: { cfg?: OpenClawConfig; agentDir?: string },
   ) => Promise<string>;
-  refreshCredential: (credential: OAuthCredential) => Promise<OAuthCredentials | null>;
+  refreshCredential: (
+    credential: OAuthCredential,
+    context: { cfg?: OpenClawConfig; agentDir?: string },
+  ) => Promise<OAuthCredentials | null>;
   readBootstrapCredential: (params: {
     store: AuthProfileStore;
     profileId: string;
@@ -608,7 +611,10 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
           OAUTH_REFRESH_CALL_TIMEOUT_MS,
           async () => {
             params.attemptedCredentials?.push(credentialToRefresh);
-            const refreshed = await adapter.refreshCredential(credentialToRefresh);
+            const refreshed = await adapter.refreshCredential(credentialToRefresh, {
+              cfg: params.cfg,
+              agentDir: params.agentDir,
+            });
             return refreshed
               ? ({
                   ...credentialToRefresh,
