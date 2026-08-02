@@ -152,7 +152,6 @@ function createLookUpTableForTest(params: {
     },
     startup: {
       channelPluginIds: [],
-      configuredDeferredChannelPluginIds: [],
       pluginIds: params.pluginIds ?? [],
     },
     workerProviderIds: params.workerProviderIds ?? [],
@@ -165,7 +164,6 @@ function createLookUpTableForTest(params: {
       indexPluginCount: 0,
       manifestPluginCount: 0,
       startupPluginCount: params.pluginIds?.length ?? 0,
-      deferredChannelPluginCount: 0,
     },
   };
 }
@@ -1887,13 +1885,13 @@ describe("loadGatewayPlugins", () => {
     expect(getLastDispatchedClientInternal().pluginRuntimeOwnerId).toBe("memory-core");
   });
 
-  test("can prefer setup-runtime channel plugins during startup loads", () => {
+  test("can select setup-runtime channel plugins for setup flows", () => {
     loadOpenClawPlugins.mockReturnValue(createRegistry([]));
     loadGatewayPluginsForTest({
-      preferSetupRuntimeForChannelPlugins: true,
+      channelPluginLoadIntent: "setup",
     });
 
-    expect(getLastPluginLoadOption("preferSetupRuntimeForChannelPlugins")).toBe(true);
+    expect(getLastPluginLoadOption("channelPluginLoadIntent")).toBe("setup");
   });
 
   test("primes configured bindings during gateway startup", () => {
@@ -1943,61 +1941,6 @@ describe("loadGatewayPlugins", () => {
     const params = getRequiredLastDispatchedParams();
     expect(params.sessionKey).toBe("s-auto-enabled-bootstrap-policy");
     expect(params.model).toBe("openai/gpt-5.4");
-  });
-
-  test("can suppress duplicate diagnostics when reloading full runtime plugins", () => {
-    const { reloadDeferredGatewayPlugins } = serverPluginBootstrapModule;
-    const diagnostics: PluginDiagnostic[] = [
-      {
-        level: "error",
-        pluginId: "telegram",
-        source: "/tmp/telegram/index.ts",
-        message: "failed to load plugin: boom",
-      },
-    ];
-    loadOpenClawPlugins.mockReturnValue(createRegistry(diagnostics));
-    const log = createTestLog();
-
-    reloadDeferredGatewayPlugins({
-      cfg: {},
-      workspaceDir: "/tmp",
-      log,
-      coreGatewayHandlers: {},
-      baseMethods: [],
-      logDiagnostics: false,
-    });
-
-    expect(log.error).not.toHaveBeenCalled();
-    expect(log.info).not.toHaveBeenCalled();
-  });
-
-  test("reuses the initial startup plugin scope during deferred reloads", () => {
-    const { reloadDeferredGatewayPlugins } = serverPluginBootstrapModule;
-    loadOpenClawPlugins.mockReturnValue(createRegistry([]));
-    const manifestRegistry = { plugins: [], diagnostics: [] };
-
-    reloadDeferredGatewayPlugins({
-      cfg: {},
-      workspaceDir: "/tmp",
-      log: createTestLog(),
-      coreGatewayHandlers: {},
-      baseMethods: [],
-      pluginIds: ["discord"],
-      pluginLookUpTable: createLookUpTableForTest({
-        manifestRegistry,
-        pluginIds: ["discord"],
-      }),
-      logDiagnostics: false,
-    });
-
-    expect(loadPluginLookUpTable).not.toHaveBeenCalled();
-    expect(applyPluginAutoEnable).toHaveBeenCalledWith({
-      config: {},
-      env: process.env,
-      manifestRegistry,
-    });
-    expect(getLastPluginLoadOption("manifestRegistry")).toBe(manifestRegistry);
-    expect(getLastPluginLoadOption("onlyPluginIds")).toEqual(["discord"]);
   });
 
   test("shares fallback context across module reloads for existing runtimes", async () => {

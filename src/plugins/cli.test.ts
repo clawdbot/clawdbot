@@ -387,7 +387,7 @@ describe("registerPluginCliCommands", () => {
       demo: ["demo configured"],
     });
     expect(loadOptions.cache).toBe(false);
-    expect(loadOptions.forceFullRuntimeForChannelPlugins).toBe(true);
+    expect(loadOptions.channelPluginLoadIntent).toBe("full");
     expect(mocks.loadOpenClawPluginCliRegistry).not.toHaveBeenCalled();
   });
 

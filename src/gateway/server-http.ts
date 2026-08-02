@@ -332,6 +332,7 @@ export function createGatewayHttpServer(opts: {
   rateLimiter?: AuthRateLimiter;
   getReadiness?: ReadinessChecker;
   getRuntimeConfig?: () => OpenClawConfig;
+  isStartupPluginRuntimeReady?: () => boolean;
   isTerminalEnabled?: () => boolean;
   tlsOptions?: TlsOptions;
 }): HttpServer {
@@ -721,6 +722,17 @@ export function createGatewayHttpServer(opts: {
       addRequestStage("control-ui-http", controlUiEnabled, handleControlUiRequest);
 
       if (await runGatewayHttpRequestStages(requestStages)) {
+        return;
+      }
+
+      // Startup owns sidecar readiness. The plugin registry is still empty here, so an
+      // unclaimed path may be a plugin route that would otherwise dead-end as a transient 404.
+      if (opts.isStartupPluginRuntimeReady?.() === false) {
+        res.statusCode = 503;
+        res.setHeader("Cache-Control", "no-store");
+        res.setHeader("Retry-After", "1");
+        res.setHeader("Content-Type", "text/plain; charset=utf-8");
+        res.end("Plugin runtime is starting");
         return;
       }
 

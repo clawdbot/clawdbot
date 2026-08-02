@@ -199,6 +199,7 @@ describe("loadOpenClawPlugins", () => {
       load: ({ pluginDir }: { pluginDir: string }) =>
         loadOpenClawPlugins({
           cache: false,
+          channelPluginLoadIntent: "setup",
           config: {
             plugins: {
               load: { paths: [pluginDir] },
@@ -230,6 +231,7 @@ describe("loadOpenClawPlugins", () => {
       load: ({ pluginDir }: { pluginDir: string }) =>
         loadOpenClawPlugins({
           cache: false,
+          channelPluginLoadIntent: "setup",
           config: {
             plugins: {
               load: { paths: [pluginDir] },
@@ -260,6 +262,7 @@ describe("loadOpenClawPlugins", () => {
       load: ({ pluginDir }: { pluginDir: string }) =>
         loadOpenClawPlugins({
           cache: false,
+          channelPluginLoadIntent: "setup",
           config: {
             plugins: {
               load: { paths: [pluginDir] },
@@ -285,6 +288,7 @@ describe("loadOpenClawPlugins", () => {
       load: ({ pluginDir }: { pluginDir: string }) =>
         loadOpenClawPlugins({
           cache: false,
+          channelPluginLoadIntent: "setup",
           config: {
             plugins: {
               load: { paths: [pluginDir] },
@@ -311,6 +315,7 @@ describe("loadOpenClawPlugins", () => {
       load: ({ pluginDir }: { pluginDir: string }) =>
         loadOpenClawPlugins({
           cache: false,
+          channelPluginLoadIntent: "setup",
           config: {
             plugins: {
               load: { paths: [pluginDir] },
@@ -338,6 +343,7 @@ describe("loadOpenClawPlugins", () => {
       load: ({ pluginDir }: { pluginDir: string }) =>
         loadOpenClawPlugins({
           cache: false,
+          channelPluginLoadIntent: "setup",
           config: {
             plugins: {
               load: { paths: [pluginDir] },
@@ -349,41 +355,6 @@ describe("loadOpenClawPlugins", () => {
       expectSetupLoaded: true,
       expectedChannels: 1,
       expectSetupRuntimeLoaded: true,
-    },
-    {
-      name: "runs bundled setupEntry setup-runtime registrations before deferred full loads",
-      fixture: {
-        id: "setup-runtime-bundled-route-test",
-        label: "Setup Runtime Bundled Route Test",
-        packageName: "@openclaw/setup-runtime-bundled-route-test",
-        fullBlurb: "full entry should defer while configured",
-        setupBlurb: "setup runtime route",
-        configured: true,
-        startupDeferConfiguredChannelFullLoadUntilAfterListen: true,
-        useBundledSetupEntryContract: true,
-        bundledSetupRuntimeRoutePath: "/setup-runtime-route",
-      },
-      load: ({ pluginDir }: { pluginDir: string }) =>
-        loadOpenClawPlugins({
-          cache: false,
-          preferSetupRuntimeForChannelPlugins: true,
-          config: {
-            channels: {
-              "setup-runtime-bundled-route-test": {
-                enabled: true,
-                token: "configured",
-              },
-            },
-            plugins: {
-              load: { paths: [pluginDir] },
-              allow: ["setup-runtime-bundled-route-test"],
-            },
-          },
-        }),
-      expectFullLoaded: false,
-      expectSetupLoaded: true,
-      expectedChannels: 1,
-      expectedSetupRuntimeRoutePath: "/setup-runtime-route",
     },
     {
       name: "merges bundled runtime plugin into setup-runtime channel loads",
@@ -401,6 +372,7 @@ describe("loadOpenClawPlugins", () => {
       load: ({ pluginDir }: { pluginDir: string }) =>
         loadOpenClawPlugins({
           cache: false,
+          channelPluginLoadIntent: "setup",
           config: {
             plugins: {
               load: { paths: [pluginDir] },
@@ -414,63 +386,22 @@ describe("loadOpenClawPlugins", () => {
       expectBundledFullRuntimeLoaded: true,
     },
     {
-      name: "preserves external setupEntry runtime setter for deferred configured channel loads",
+      name: "defaults ordinary unconfigured channel loads to the full runtime",
       fixture: {
-        id: "setup-runtime-external-deferred-test",
-        label: "Setup Runtime External Deferred Test",
-        packageName: "@openclaw/setup-runtime-external-deferred-test",
-        fullBlurb: "full entry should defer while configured",
-        setupBlurb: "setup runtime external deferred",
-        configured: true,
-        startupDeferConfiguredChannelFullLoadUntilAfterListen: true,
-        bundledSetupRuntimeMarker: path.join(makeTempDir(), "external-setup-runtime-applied.txt"),
+        id: "setup-runtime-default-full-test",
+        label: "Setup Runtime Default Full Test",
+        packageName: "@openclaw/setup-runtime-default-full-test",
+        fullBlurb: "ordinary full runtime",
+        setupBlurb: "setup runtime should not load by default",
+        configured: false,
       },
       load: ({ pluginDir }: { pluginDir: string }) =>
         loadOpenClawPlugins({
           cache: false,
-          preferSetupRuntimeForChannelPlugins: true,
           config: {
-            channels: {
-              "setup-runtime-external-deferred-test": {
-                enabled: true,
-                token: "configured",
-              },
-            },
             plugins: {
               load: { paths: [pluginDir] },
-              allow: ["setup-runtime-external-deferred-test"],
-            },
-          },
-        }),
-      expectFullLoaded: false,
-      expectSetupLoaded: true,
-      expectedChannels: 1,
-      expectSetupRuntimeLoaded: true,
-    },
-    {
-      name: "does not prefer setupEntry for configured channel loads without startup opt-in",
-      fixture: {
-        id: "setup-runtime-not-preferred-test",
-        label: "Setup Runtime Not Preferred Test",
-        packageName: "@openclaw/setup-runtime-not-preferred-test",
-        fullBlurb: "full entry should still load without explicit startup opt-in",
-        setupBlurb: "setup runtime not preferred",
-        configured: true,
-      },
-      load: ({ pluginDir }: { pluginDir: string }) =>
-        loadOpenClawPlugins({
-          cache: false,
-          preferSetupRuntimeForChannelPlugins: true,
-          config: {
-            channels: {
-              "setup-runtime-not-preferred-test": {
-                enabled: true,
-                token: "configured",
-              },
-            },
-            plugins: {
-              load: { paths: [pluginDir] },
-              allow: ["setup-runtime-not-preferred-test"],
+              allow: ["setup-runtime-default-full-test"],
             },
           },
         }),
@@ -490,7 +421,6 @@ describe("loadOpenClawPlugins", () => {
       expectedSetupSecretId,
       expectSetupRuntimeLoaded,
       expectBundledFullRuntimeLoaded,
-      expectedSetupRuntimeRoutePath,
     }) => {
       const built = createSetupEntryChannelPluginFixture(fixture);
       const registry = load({ pluginDir: built.pluginDir });
@@ -521,14 +451,6 @@ describe("loadOpenClawPlugins", () => {
           ),
         ).toBe(true);
       }
-      if (expectedSetupRuntimeRoutePath) {
-        expect(
-          registry.httpRoutes.some(
-            (route) =>
-              route.pluginId === fixture.id && route.path === expectedSetupRuntimeRoutePath,
-          ),
-        ).toBe(true);
-      }
     },
   );
 
@@ -549,6 +471,7 @@ describe("loadOpenClawPlugins", () => {
 
     const registry = loadOpenClawPlugins({
       cache: false,
+      channelPluginLoadIntent: "setup",
       config: {
         plugins: {
           load: { paths: [built.pluginDir] },
@@ -582,6 +505,7 @@ describe("loadOpenClawPlugins", () => {
 
     const registry = loadOpenClawPlugins({
       cache: false,
+      channelPluginLoadIntent: "setup",
       config: {
         plugins: {
           load: { paths: [built.pluginDir, helperPlugin.file] },
@@ -608,8 +532,7 @@ describe("loadOpenClawPlugins", () => {
       packageName: "@openclaw/setup-runtime-route-error-test",
       fullBlurb: "full runtime plugin",
       setupBlurb: "setup runtime route",
-      configured: true,
-      startupDeferConfiguredChannelFullLoadUntilAfterListen: true,
+      configured: false,
       useBundledSetupEntryContract: true,
       bundledSetupRuntimeRoutePath: "/setup-runtime-route-error",
       bundledSetupRuntimeRegisterError: "broken setup-runtime registrar",
@@ -622,14 +545,8 @@ describe("loadOpenClawPlugins", () => {
 
     const registry = loadOpenClawPlugins({
       cache: false,
-      preferSetupRuntimeForChannelPlugins: true,
+      channelPluginLoadIntent: "setup",
       config: {
-        channels: {
-          "setup-runtime-route-error-test": {
-            enabled: true,
-            token: "configured",
-          },
-        },
         plugins: {
           load: { paths: [built.pluginDir, helperPlugin.file] },
           allow: ["setup-runtime-route-error-test", "setup-runtime-route-helper-test"],
@@ -658,8 +575,7 @@ describe("loadOpenClawPlugins", () => {
       packageName: "@openclaw/setup-runtime-late-route-test",
       fullBlurb: "full runtime plugin",
       setupBlurb: "setup runtime route",
-      configured: true,
-      startupDeferConfiguredChannelFullLoadUntilAfterListen: true,
+      configured: false,
       useBundledSetupEntryContract: true,
       bundledSetupRuntimeRoutePath: "/setup-runtime-sync-route",
       bundledSetupRuntimeLateRoutePath: "/setup-runtime-late-route",
@@ -667,14 +583,8 @@ describe("loadOpenClawPlugins", () => {
 
     const registry = loadOpenClawPlugins({
       cache: false,
-      preferSetupRuntimeForChannelPlugins: true,
+      channelPluginLoadIntent: "setup",
       config: {
-        channels: {
-          "setup-runtime-late-route-test": {
-            enabled: true,
-            token: "configured",
-          },
-        },
         plugins: {
           load: { paths: [built.pluginDir] },
           allow: ["setup-runtime-late-route-test"],
@@ -709,6 +619,7 @@ describe("loadOpenClawPlugins", () => {
 
     const registry = loadOpenClawPlugins({
       cache: false,
+      channelPluginLoadIntent: "setup",
       config: {
         plugins: {
           load: { paths: [built.pluginDir] },
@@ -744,6 +655,7 @@ describe("loadOpenClawPlugins", () => {
 
     const registry = loadOpenClawPlugins({
       cache: false,
+      channelPluginLoadIntent: "setup",
       config: {
         plugins: {
           load: { paths: [built.pluginDir] },
@@ -814,6 +726,7 @@ describe("loadOpenClawPlugins", () => {
 
     const registry = loadOpenClawPlugins({
       cache: false,
+      channelPluginLoadIntent: "setup",
       config: {
         plugins: {
           load: { paths: [pluginDir] },
@@ -904,6 +817,7 @@ describe("loadOpenClawPlugins", () => {
 
     const registry = loadOpenClawPlugins({
       cache: false,
+      channelPluginLoadIntent: "setup",
       config: {
         plugins: {
           enabled: true,
@@ -1025,6 +939,7 @@ describe("loadOpenClawPlugins", () => {
 
     const registry = loadOpenClawPlugins({
       cache: false,
+      channelPluginLoadIntent: "setup",
       config: {
         plugins: {
           enabled: true,
