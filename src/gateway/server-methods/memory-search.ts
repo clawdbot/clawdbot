@@ -146,7 +146,7 @@ export const memorySearchHandlers: GatewayRequestHandlers = {
         provider: status.provider,
         searchMode: resolveSearchMode(status),
         results,
-        ...(resolveMemorySearchStaleness(status, agentId) ?? {}),
+        ...resolveMemorySearchStaleness(status, agentId),
       };
       respond(true, payload, undefined);
     } catch (error) {

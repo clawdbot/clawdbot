@@ -279,7 +279,7 @@ export async function runMemorySearch(
         });
       }
       if (opts.json) {
-        defaultRuntime.writeJson({ results, ...(staleness ?? {}) });
+        defaultRuntime.writeJson({ results, ...staleness });
         return;
       }
       if (staleness) {

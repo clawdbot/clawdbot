@@ -58,6 +58,7 @@ function createStubManager() {
     status: vi.fn(() => ({
       backend: "builtin" as const,
       provider: "none",
+      dirty: false,
       custom: { searchMode: "fts-only" },
     })),
     close: vi.fn(async () => undefined),

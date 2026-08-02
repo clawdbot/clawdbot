@@ -856,7 +856,7 @@ export function createMemorySearchTool(options: {
               fallback,
               citations: citationsMode,
               mode: searchMode,
-              ...(staleness ?? {}),
+              ...staleness,
               debug: searchDebug,
             });
           } finally {
