@@ -125,6 +125,9 @@ export async function executeJobCore(
       return {
         status: "error",
         error: `cron trigger evaluation failed (${evaluation.code}): ${evaluation.error}`,
+        ...(evaluation.code === "timeout"
+          ? { errorClassification: { kind: "reason" as const, reason: "timeout" as const } }
+          : {}),
         triggerEval: { fired: false, stateChanged: false },
       };
     }

@@ -132,6 +132,7 @@ async function finishPreparedManualRun(
         taskRunId,
         status: coreResult.status,
         error: coreResult.error,
+        errorClassification: coreResult.errorClassification,
         endedAt,
         summary: coreResult.summary,
         childSessionKey: coreResult.sessionKey,

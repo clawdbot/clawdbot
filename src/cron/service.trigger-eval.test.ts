@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { listTaskRegistryRecordsByRuntimeSourceIdFromSqlite } from "../tasks/task-registry.store.sqlite.js";
 import type { CronEvent } from "./service.js";
 import { CronService } from "./service.js";
 import { createDeferred, setupCronServiceSuite } from "./service.test-harness.js";
@@ -203,6 +204,17 @@ describe("cron trigger evaluation", () => {
         status: "error",
         error: expect.stringContaining("deadline exceeded"),
       });
+      expect(
+        listTaskRegistryRecordsByRuntimeSourceIdFromSqlite({
+          runtime: "cron",
+          sourceId: job.id,
+        }),
+      ).toEqual([
+        expect.objectContaining({
+          status: "timed_out",
+          detail: expect.objectContaining({ errorReason: "timeout" }),
+        }),
+      ]);
       expect(harness.events.map((event) => event.action)).toEqual([
         "started",
         "finished",
@@ -214,6 +226,64 @@ describe("cron trigger evaluation", () => {
         nextRunAtMs: persisted?.state.nextRunAtMs,
         job: { state: { nextRunAtMs: persisted?.state.nextRunAtMs } },
       });
+    } finally {
+      harness.cron.stop();
+    }
+  });
+
+  it("persists classified script payload timeouts as timed-out tasks", async () => {
+    const runScriptJob = vi.fn(async () => ({
+      status: "error" as const,
+      error: "cron script payload failed (timeout): deadline exceeded",
+      errorClassification: { kind: "reason" as const, reason: "timeout" as const },
+    }));
+    const harness = await createHarness({ runScriptJob });
+    try {
+      const job = await harness.cron.add(
+        watcher({
+          trigger: undefined,
+          payload: { kind: "script", script: "return {}" },
+        }),
+      );
+
+      await runWhenDue(harness.cron, job.id);
+
+      expect(runScriptJob).toHaveBeenCalledOnce();
+      expect(
+        listTaskRegistryRecordsByRuntimeSourceIdFromSqlite({
+          runtime: "cron",
+          sourceId: job.id,
+        }),
+      ).toEqual([
+        expect.objectContaining({
+          status: "timed_out",
+          detail: expect.objectContaining({ errorReason: "timeout" }),
+        }),
+      ]);
+    } finally {
+      harness.cron.stop();
+    }
+  });
+
+  it("keeps ordinary trigger failures failed despite inferred provider timeout text", async () => {
+    const evaluateCronTrigger = vi.fn(async () => ({
+      kind: "error" as const,
+      code: "internal_error" as const,
+      error: "ordinary trigger failure",
+    }));
+    const harness = await createHarness({ evaluateCronTrigger });
+    try {
+      const job = await harness.cron.add(watcher());
+
+      await runWhenDue(harness.cron, job.id);
+
+      expect(evaluateCronTrigger).toHaveBeenCalledOnce();
+      expect(
+        listTaskRegistryRecordsByRuntimeSourceIdFromSqlite({
+          runtime: "cron",
+          sourceId: job.id,
+        }),
+      ).toEqual([expect.objectContaining({ status: "failed" })]);
     } finally {
       harness.cron.stop();
     }

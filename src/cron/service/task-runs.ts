@@ -3,7 +3,6 @@ import { randomUUID } from "node:crypto";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
-import { isCronTimeoutErrorText } from "../execution-error-constants.js";
 
 function requireCronAgentId(agentId: string | undefined): string {
   if (!agentId?.trim()) {
@@ -286,6 +285,7 @@ export function tryFinishCronTaskRunWithoutHistory(
     taskRunId?: string;
     status: "ok" | "error" | "skipped";
     error?: unknown;
+    errorClassification?: CronRunErrorClassification;
     endedAt: number;
     summary?: string;
     childSessionKey?: string;
@@ -300,12 +300,13 @@ export function tryFinishCronTaskRunWithoutHistory(
     finalizeTaskRunByRunId({
       runId: result.taskRunId,
       runtime: "cron",
-      status:
-        result.status === "ok" || result.status === "skipped"
-          ? "succeeded"
-          : isCronTimeoutErrorText(error)
-            ? "timed_out"
-            : "failed",
+      status: cronRunStatusToTaskStatus(
+        {
+          status: result.status,
+          error,
+        },
+        result.errorClassification,
+      ),
       endedAt: result.endedAt,
       lastEventAt: result.endedAt,
       error,
@@ -368,7 +369,7 @@ export function tryFinishCronTaskRun(
       status: Extract<
         TaskStatus,
         "succeeded" | "failed" | "timed_out" | "cancelled"
-      > = cronRunStatusToTaskStatus(entry),
+      > = cronRunStatusToTaskStatus(entry, result.errorClassification),
     ) =>
       finalizeTaskRunByRunId({
         runId,
@@ -400,7 +401,7 @@ export function tryFinishCronTaskRun(
         // Startup recovery replaces them with the durable interrupted outcome.
         const recovered = finalizeTaskRunById({
           taskId: existing.taskId,
-          status: cronRunStatusToTaskStatus(entry),
+          status: cronRunStatusToTaskStatus(entry, result.errorClassification),
           childSessionKey: entry.sessionKey ?? null,
           endedAt: entry.ts,
           lastEventAt: entry.ts,

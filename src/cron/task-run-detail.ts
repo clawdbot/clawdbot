@@ -11,6 +11,7 @@ type TaskRecord = import("../tasks/task-registry.types.js").TaskRecord;
 type TaskStatus = import("../tasks/task-registry.types.js").TaskStatus;
 type CronRunLogEntry = import("./run-log-types.js").CronRunLogEntry;
 type CronDeliveryStatus = import("./types.js").CronDeliveryStatus;
+type CronRunErrorClassification = import("./types.js").CronRunErrorClassification;
 type CronRunStatus = import("./types.js").CronRunStatus;
 
 const CRON_TASK_DETAIL_KIND = "cron-run";
@@ -254,12 +255,18 @@ export function cronTaskRecordToScriptRunResult(
 
 /** Maps the cron outcome vocabulary onto generic task terminal states. */
 export function cronRunStatusToTaskStatus(
-  entry: CronRunLogEntry,
+  entry: Pick<CronRunLogEntry, "status" | "error"> & Partial<CronRunLogEntry>,
+  errorClassification?: CronRunErrorClassification,
 ): Extract<TaskStatus, "succeeded" | "failed" | "timed_out"> {
   if (entry.status === "ok" || entry.status === "skipped") {
     return "succeeded";
   }
-  return isCronTimeoutErrorText(entry.error) ? "timed_out" : "failed";
+  // History error reasons can be inferred from provider-like local error text;
+  // only producer-owned classification or the stable watchdog contract is authoritative.
+  return (errorClassification?.kind === "reason" && errorClassification.reason === "timeout") ||
+    isCronTimeoutErrorText(entry.error)
+    ? "timed_out"
+    : "failed";
 }
 
 /** Reconstructs the unchanged CronRunLogEntry wire shape from a cron task row. */
