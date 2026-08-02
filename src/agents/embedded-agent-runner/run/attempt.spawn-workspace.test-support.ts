@@ -11,7 +11,6 @@ import type {
   AssembleResult,
   BootstrapResult,
   CompactResult,
-  ContextEngine,
   ContextEngineInfo,
   ContextEngineMaintenanceResult,
   ContextEngineSessionTarget,
@@ -1298,7 +1297,15 @@ export async function createContextEngineAttemptRunner(params: {
       tokenBudget?: number;
       model?: string;
     }) => Promise<AssembleResult>;
-    afterTurn?: NonNullable<ContextEngine["afterTurn"]>;
+    afterTurn?: (params: {
+      sessionId: string;
+      sessionKey?: string;
+      sessionFile: string;
+      messages: AgentMessage[];
+      prePromptMessageCount: number;
+      tokenBudget?: number;
+      runtimeContext?: Record<string, unknown>;
+    }) => Promise<void>;
     ingestBatch?: (params: {
       sessionId: string;
       sessionKey?: string;

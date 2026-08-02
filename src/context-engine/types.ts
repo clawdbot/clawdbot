@@ -402,9 +402,7 @@ export interface ContextEngine {
   /**
    * Execute optional post-turn lifecycle work after a run attempt completes.
    * Engines can use this to persist canonical context and trigger background
-   * compaction decisions. Background-maintenance engines may return an
-   * authoritative debt state after recording all work owned by maintain().
-   * Return nothing to preserve unconditional turn-maintenance scheduling.
+   * compaction decisions.
    */
   afterTurn?(params: {
     sessionId: string;
@@ -424,10 +422,7 @@ export interface ContextEngine {
     /** Optional runtime-owned context for engines that need caller state. */
     runtimeSettings?: ContextEngineRuntimeSettings;
     runtimeContext?: ContextEngineRuntimeContext;
-  }): Promise<void | {
-    /** Return "none" only when every session-wide maintain() responsibility has no work. */
-    maintenanceDebt: "pending" | "none";
-  }>;
+  }): Promise<void>;
 
   /**
    * Assemble model context under a token budget.
