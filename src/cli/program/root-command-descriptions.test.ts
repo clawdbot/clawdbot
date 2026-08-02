@@ -2,12 +2,19 @@
 // registered Commander commands. Keep those user-facing descriptions aligned.
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { cliCommandCatalog } from "../command-catalog.js";
+import { isReservedNonPluginCommandRoot } from "../command-registration-policy.js";
 import { collectShellCompletionCommandTree } from "../completion-command-tree.js";
 import { getCoreCliCommandNames, registerCoreCliByName } from "./command-registry-core.js";
 import { createProgramContext } from "./context.js";
 import { getCoreCliCommandDescriptors } from "./core-command-descriptors.js";
-import { registerSubCliByName } from "./register.subclis.js";
+import { registerSubCliByName, registerSubCliCommands } from "./register.subclis.js";
 import { getSubCliEntries } from "./subcli-descriptors.js";
+
+const RESERVED_CATALOG_ROOTS = {
+  tool: "reserved so plugin registration cannot claim this unregistered root",
+  tools: "reserved so plugin registration cannot claim this unregistered root",
+} as const;
 
 const JSON_NOT_APPLICABLE = {
   namespaces: {
@@ -241,6 +248,16 @@ function supportsJsonOutput(path: string, command: Command): boolean {
   );
 }
 
+function collectRegisteredCommandPaths(...programs: Command[]): Set<string> {
+  return new Set(
+    programs.flatMap((program) =>
+      collectShellCompletionCommandTree(program).descendants.flatMap((context) =>
+        context.pathVariants.map((path) => path.join(" ")),
+      ),
+    ),
+  );
+}
+
 describe("root command descriptions", () => {
   beforeEach(() => {
     vi.stubEnv("OPENCLAW_ENABLE_PRIVATE_QA_CLI", "");
@@ -282,6 +299,50 @@ describe("root command descriptions", () => {
 
     expect(missing, "catalog entries with no registered command or alias").toEqual([]);
     expect(mismatches, "root help vs registered command description drift").toEqual([]);
+  });
+
+  it("keeps startup policy catalog paths registered or explicitly reserved", async () => {
+    const program = await registerAllBuiltInCommands();
+    const { registerMemoryCli } = await import("../../../extensions/memory-core/cli.js");
+    registerMemoryCli(program);
+
+    // Private QA is a lazy source-checkout command. Its root placeholder proves
+    // registration without importing the private build omitted from normal dist.
+    vi.stubEnv("OPENCLAW_ENABLE_PRIVATE_QA_CLI", "1");
+    const lazyProgram = new Command().name("openclaw");
+    registerSubCliCommands(lazyProgram, ["node", "openclaw", "--help"]);
+
+    const registeredPaths = collectRegisteredCommandPaths(program, lazyProgram);
+    const catalogPaths = new Set(cliCommandCatalog.map((entry) => entry.commandPath.join(" ")));
+    const reservedPaths = new Set(Object.keys(RESERVED_CATALOG_ROOTS));
+
+    expect(
+      Object.entries(RESERVED_CATALOG_ROOTS).filter(([, reason]) => reason.trim().length === 0),
+      "every reserved catalog root must document why it has no command",
+    ).toEqual([]);
+
+    const missing = [...catalogPaths].filter(
+      (path) => !registeredPaths.has(path) && !reservedPaths.has(path),
+    );
+    expect(missing, "catalog entries with no registered command or reserved-root decision").toEqual(
+      [],
+    );
+
+    const staleReservedRoots = [...reservedPaths].filter(
+      (path) => !catalogPaths.has(path) || !isReservedNonPluginCommandRoot(path),
+    );
+    expect(
+      staleReservedRoots,
+      "reserved catalog roots must remain cataloged and blocked from plugin registration",
+    ).toEqual([]);
+
+    const reservedRootsThatNowRegister = [...reservedPaths].filter((path) =>
+      registeredPaths.has(path),
+    );
+    expect(
+      reservedRootsThatNowRegister,
+      "registered commands must leave the reserved-root exception list",
+    ).toEqual([]);
   });
 
   it("classifies every built-in command as JSON output or explicitly not applicable", async () => {
