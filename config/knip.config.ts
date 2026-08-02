@@ -410,6 +410,9 @@ const config = {
     "src/agents/failover/provider-patterns.ts": ["exports"],
     // Runtime reason values are exported now so protocol schemas can derive from one tuple later.
     "src/agents/failover/signal.ts": ["exports"],
+    // Focused lifecycle-revision unit tests consume this test seam; production
+    // code imports only loadRequesterLifecycleRevision.
+    "src/agents/subagent-requester-lifecycle.ts": ["exports"],
     "src/context-engine/registry.ts": ["exports", "types"],
     "src/plugins/compaction-provider.ts": ["exports"],
     "src/plugins/interactive-registry.ts": ["exports"],
