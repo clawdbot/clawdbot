@@ -5,6 +5,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   AGENT_RUN_TERMINAL_RETRY_GRACE_MS,
   buildAgentRunTerminalOutcome,
+  buildAgentRunTerminalOutcomeFromLifecycleEvent,
   isStickyAgentRunTerminalOutcome,
   mergeAgentRunTerminalOutcome,
   type AgentRunTerminalOutcome,
@@ -243,16 +244,9 @@ function createSnapshotFromLifecycleEvent(params: {
   const startedAt =
     typeof data?.startedAt === "number" ? data.startedAt : agentRunStarts.get(runId);
   const endedAt = typeof data?.endedAt === "number" ? data.endedAt : undefined;
-  const error = typeof data?.error === "string" ? data.error : undefined;
-  const stopReason = typeof data?.stopReason === "string" ? data.stopReason : undefined;
-  const livenessState = typeof data?.livenessState === "string" ? data.livenessState : undefined;
-  const terminalOutcome = buildAgentRunTerminalOutcome({
-    status: phase === "error" ? "error" : data?.aborted ? "timeout" : "ok",
-    error,
-    stopReason,
-    livenessState,
-    timeoutPhase: data?.timeoutPhase,
-    providerStarted: data?.providerStarted,
+  const terminalOutcome = buildAgentRunTerminalOutcomeFromLifecycleEvent({
+    phase,
+    data,
     startedAt,
     endedAt,
   });
@@ -264,8 +258,8 @@ function createSnapshotFromLifecycleEvent(params: {
     startedAt,
     endedAt,
     error: terminalOutcome.error,
-    stopReason,
-    livenessState,
+    stopReason: terminalOutcome.stopReason,
+    livenessState: terminalOutcome.livenessState,
     ...(data?.yielded === true ? { yielded: true } : {}),
     ...(terminalOutcome.timeoutPhase ? { timeoutPhase: terminalOutcome.timeoutPhase } : {}),
     ...(terminalOutcome.providerStarted !== undefined

@@ -4,7 +4,10 @@ import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
 import { normalizeAgentPlanSteps } from "../channels/streaming.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
 import { redactToolPayloadText } from "../logging/redact.js";
-import { buildAgentRunTerminalOutcome } from "./agent-run-terminal-outcome.js";
+import {
+  buildAgentRunTerminalOutcomeFromLifecycleEvent,
+  classifyAgentRunTerminalOutcome,
+} from "./agent-run-terminal-outcome.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
@@ -329,15 +332,9 @@ export function readFiniteNumber(value: unknown): number | undefined {
 
 export function terminalHealthFor(event: AgentEventPayload): "done" | "failed" {
   const phase = event.data.phase;
-  const outcome = buildAgentRunTerminalOutcome({
-    status: phase === "end" ? "ok" : "error",
-    error: event.data.error,
-    stopReason: event.data.stopReason,
-    livenessState: event.data.livenessState,
-    timeoutPhase: event.data.timeoutPhase,
-    providerStarted: event.data.providerStarted,
-    startedAt: event.data.startedAt,
-    endedAt: event.data.endedAt,
+  const outcome = buildAgentRunTerminalOutcomeFromLifecycleEvent({
+    phase: phase === "end" ? "end" : "error",
+    data: event.data,
   });
-  return outcome.reason === "completed" ? "done" : "failed";
+  return classifyAgentRunTerminalOutcome(outcome) === "success" ? "done" : "failed";
 }

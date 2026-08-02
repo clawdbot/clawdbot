@@ -824,6 +824,43 @@ describe("gateway agent handler", () => {
     });
   });
 
+  it("classifies an unsignaled AbortError task as cancelled without changing the error wire", async () => {
+    await withTempDir({ prefix: "openclaw-gateway-agent-task-plain-abort-" }, async (root) => {
+      useTestStateDir(root);
+      resetAgentTaskRegistryForTests();
+      primeMainAgentRun();
+      const abortError = new Error("This operation was aborted");
+      abortError.name = "AbortError";
+      const context = makeContext();
+      const runId = "task-registry-agent-run-plain-abort";
+      mocks.agentCommand.mockRejectedValueOnce(abortError);
+
+      await invokeAgent(
+        {
+          message: "background cli task",
+          sessionKey: "agent:main:main",
+          idempotencyKey: runId,
+        },
+        { context, reqId: runId },
+      );
+
+      await waitForAssertion(() => {
+        expectRecordFields(findTaskByRunId(runId), {
+          runtime: "cli",
+          childSessionKey: "agent:main:main",
+          status: "cancelled",
+          error: "AbortError: This operation was aborted",
+        });
+        expectRecordFields(context.dedupe.get(`agent:${runId}`)?.payload, {
+          runId,
+          status: "error",
+          summary: "AbortError: This operation was aborted",
+        });
+        expect(context.dedupe.get(`agent:${runId}`)?.ok).toBe(false);
+      });
+    });
+  });
+
   it("preserves restart ownership for aborted async gateway agent rejections", async () => {
     await withTempDir({ prefix: "openclaw-gateway-agent-task-restart-abort-" }, async (root) => {
       useTestStateDir(root);

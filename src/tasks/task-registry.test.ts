@@ -962,7 +962,7 @@ describe("task-registry", () => {
     });
   });
 
-  it("keeps stronger run-scoped terminal states when a late success arrives", async () => {
+  it("keeps signal-only cancellation when a late success arrives", async () => {
     await withTaskRegistryTempDir(async () => {
       resetTaskRegistryMemoryForTest();
 
@@ -991,7 +991,7 @@ describe("task-registry", () => {
       });
 
       expectRecordFields(requireTaskByRunId("run-timeout-then-success"), {
-        status: "timed_out",
+        status: "cancelled",
         endedAt: 200,
       });
     });
