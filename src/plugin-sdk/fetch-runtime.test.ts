@@ -75,7 +75,9 @@ describe("plugin SDK fetch runtime", () => {
     void eof.then(() => {
       eofSettled = true;
     });
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
 
     expect(eofSettled).toBe(true);
     await expect(eof).resolves.toEqual({ done: true, value: undefined });
@@ -108,7 +110,9 @@ describe("plugin SDK fetch runtime", () => {
     await pullStarted.promise;
 
     const cancellation = reader.cancel(reason);
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     expect(upstreamCancel).toHaveBeenCalledWith(reason);
     expect(release).not.toHaveBeenCalled();
 
