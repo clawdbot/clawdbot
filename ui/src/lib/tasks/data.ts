@@ -209,7 +209,7 @@ export function normalizeTasksCancelResult(value: unknown): NormalizedTasksCance
   const reason = optionalString(value.reason);
   const task = normalizeTaskSummary(value.task);
   return {
-    found: value.found === true,
+    found: value.found,
     cancelled: value.cancelled,
     ...(reason ? { reason } : {}),
     ...(task ? { task } : {}),
