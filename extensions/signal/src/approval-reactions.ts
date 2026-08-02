@@ -18,6 +18,7 @@ import {
 } from "openclaw/plugin-sdk/approval-reply-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { createPluginStateErrorReporter } from "openclaw/plugin-sdk/plugin-state-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import {
@@ -82,6 +83,13 @@ type SignalApprovalDeliveryResult = {
 };
 
 const resolverRuntimeLoader = createLazyRuntimeModule(() => import("./approval-resolver.js"));
+
+const reportPersistentApprovalReactionError = createPluginStateErrorReporter(
+  getOptionalSignalRuntime,
+  "signal",
+  "approval-reaction-state",
+  "Signal persistent approval reaction state failed",
+);
 
 const signalApprovalReactionTargets =
   createApprovalReactionTargetStore<SignalApprovalReactionTarget>({
@@ -289,16 +297,6 @@ function buildReactionTargetKey(params: {
     return null;
   }
   return `${accountId}:${conversationKey}:${messageId}`;
-}
-
-function reportPersistentApprovalReactionError(error: unknown): void {
-  try {
-    getOptionalSignalRuntime()
-      ?.logging.getChildLogger({ plugin: "signal", feature: "approval-reaction-state" })
-      .warn("Signal persistent approval reaction state failed", { error: String(error) });
-  } catch {
-    // Best effort only: persistent state must never break Signal reactions.
-  }
 }
 
 function readPersistedTarget(target: unknown): SignalApprovalReactionTarget | null {
