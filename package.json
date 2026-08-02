@@ -545,6 +545,10 @@
       "types": "./dist/plugin-sdk/inbound-envelope.d.ts",
       "default": "./dist/plugin-sdk/inbound-envelope.js"
     },
+    "./plugin-sdk/inbound-event-delivery": {
+      "types": "./dist/plugin-sdk/inbound-event-delivery.d.ts",
+      "default": "./dist/plugin-sdk/inbound-event-delivery.js"
+    },
     "./plugin-sdk/channel-reply-pipeline": {
       "types": "./dist/plugin-sdk/channel-reply-pipeline.d.ts",
       "default": "./dist/plugin-sdk/channel-reply-pipeline.js"

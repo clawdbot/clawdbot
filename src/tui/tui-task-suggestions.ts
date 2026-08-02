@@ -6,6 +6,7 @@ import {
   type OverlayHandle,
   type SelectItem,
 } from "@earendil-works/pi-tui";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import type { TaskSuggestion } from "../../packages/gateway-protocol/src/index.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { selectListTheme, theme } from "./theme/theme.js";
@@ -64,33 +65,30 @@ function sanitizeTaskText(text: string): string {
   return sanitizeRenderableText(text.replace(TASK_BIDI_CONTROL_RE, ""));
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
 /** Parses the task suggestion shape carried by Gateway list and event payloads. */
 function parseTuiTaskSuggestion(value: unknown): TaskSuggestion | null {
-  if (!isRecord(value)) {
+  const record = asOptionalObjectRecord(value);
+  if (!record) {
     return null;
   }
   const required = ["id", "title", "prompt", "tldr", "cwd", "sessionKey"] as const;
-  if (required.some((field) => typeof value[field] !== "string" || !value[field].trim())) {
+  if (required.some((field) => typeof record[field] !== "string" || !record[field].trim())) {
     return null;
   }
-  if (typeof value.createdAt !== "number" || value.createdAt < 0) {
+  if (typeof record.createdAt !== "number" || record.createdAt < 0) {
     return null;
   }
   return {
-    id: (value.id as string).trim(),
-    title: (value.title as string).trim(),
-    prompt: (value.prompt as string).trim(),
-    tldr: (value.tldr as string).trim(),
-    cwd: (value.cwd as string).trim(),
-    sessionKey: (value.sessionKey as string).trim(),
-    ...(typeof value.agentId === "string" && value.agentId.trim()
-      ? { agentId: value.agentId.trim() }
+    id: (record.id as string).trim(),
+    title: (record.title as string).trim(),
+    prompt: (record.prompt as string).trim(),
+    tldr: (record.tldr as string).trim(),
+    cwd: (record.cwd as string).trim(),
+    sessionKey: (record.sessionKey as string).trim(),
+    ...(typeof record.agentId === "string" && record.agentId.trim()
+      ? { agentId: record.agentId.trim() }
       : {}),
-    createdAt: value.createdAt,
+    createdAt: record.createdAt,
   };
 }
 
@@ -410,11 +408,12 @@ export function createTuiTaskSuggestionController(deps: TaskSuggestionController
 
   return {
     handleEvent(event: string, payload: unknown) {
-      if (disposed || event !== "task.suggestion" || !isRecord(payload)) {
+      const record = asOptionalObjectRecord(payload);
+      if (disposed || event !== "task.suggestion" || !record) {
         return;
       }
-      if (payload.action === "created") {
-        const suggestion = parseTuiTaskSuggestion(payload.suggestion);
+      if (record.action === "created") {
+        const suggestion = parseTuiTaskSuggestion(record.suggestion);
         if (suggestion) {
           revision += 1;
           hiddenIds.delete(suggestion.id);
@@ -423,8 +422,8 @@ export function createTuiTaskSuggestionController(deps: TaskSuggestionController
         }
         return;
       }
-      if (payload.action === "resolved" && typeof payload.taskId === "string") {
-        remove(payload.taskId);
+      if (record.action === "resolved" && typeof record.taskId === "string") {
+        remove(record.taskId);
         presentNext();
         deps.requestRender();
       }
