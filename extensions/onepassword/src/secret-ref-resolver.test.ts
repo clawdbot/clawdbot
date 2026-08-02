@@ -746,12 +746,14 @@ setInterval(() => {}, 1000);
 `;
         fs.writeFileSync(path.join(tempDir, "read"), opBody);
       } else {
+        // Executable trust validation requires the literal shebang path to be canonical.
+        const shellPath = fs.realpathSync("/bin/sh");
         const descendantPath = path.join(tempDir, "descendant.cjs");
         opPath = path.join(tempDir, "op");
         fs.writeFileSync(descendantPath, descendantBody);
         fs.writeFileSync(
           opPath,
-          `#!/bin/sh
+          `#!${shellPath}
 ${JSON.stringify(getTrustedNodePath())} ${JSON.stringify(descendantPath)} &
 printf ready > ${JSON.stringify(descendantReady)}
 while true; do sleep 1; done
