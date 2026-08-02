@@ -472,6 +472,21 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
               );
             }
           };
+          const assertPluginIngressQueueAllowed = () => {
+            const record =
+              pluginRuntimeRecordById.get(pluginId) ??
+              registry.plugins.find((entry) => entry.id === pluginId);
+            if (
+              record?.origin !== "bundled" &&
+              record?.origin !== "config" &&
+              record?.trustedOfficialInstall !== true
+            ) {
+              throw new Error(
+                "openChannelIngressQueue is only available to bundled, trusted, or explicitly configured plugins.",
+              );
+            }
+            return record;
+          };
           return {
             ...baseState,
             openKeyedStore: <T>(options: OpenKeyedStoreOptions): PluginStateKeyedStore<T> => {
@@ -487,8 +502,16 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
             openChannelIngressQueue: <TPayload, TMetadata = unknown, TCompletedMetadata = unknown>(
               options?: Omit<Parameters<typeof createChannelIngressQueue>[0], "channelId">,
             ) => {
-              assertPluginStateAllowed();
-              const stateDir = options?.stateDir ?? baseState.resolveStateDir();
+              const record = assertPluginIngressQueueAllowed();
+              if (record?.origin === "config" && options?.stateDir !== undefined) {
+                throw new Error(
+                  "Explicitly configured plugins cannot select a channel ingress queue stateDir.",
+                );
+              }
+              const stateDir =
+                record?.origin === "config"
+                  ? baseState.resolveStateDir()
+                  : (options?.stateDir ?? baseState.resolveStateDir());
               return createChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>({
                 ...options,
                 channelId: pluginId,
@@ -519,6 +542,7 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
         if (prop === "gateway") {
           const gateway = getRuntimeProperty();
           return {
+            capabilities: gateway.capabilities,
             isAvailable: () => runWithPluginScope(() => gateway.isAvailable()),
             request: async (method, params, options) =>
               await runWithPluginScope(async () => {

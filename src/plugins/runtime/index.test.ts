@@ -116,6 +116,19 @@ function expectRunCommandOutcome(params: {
 }
 
 describe("plugin runtime command execution", () => {
+  it("exposes an immutable durable gateway observation contract", () => {
+    const capabilities = createPluginRuntime().gateway.capabilities;
+
+    expect(capabilities).toEqual({
+      contractVersion: 1,
+      acceptedCallbackBarrier: true,
+      agentWaitProviderStarted: true,
+      agentWaitTimeoutPhase: true,
+      auditAgentRunSourceSequence: true,
+    });
+    expect(Object.isFrozen(capabilities)).toBe(true);
+  });
+
   beforeEach(() => {
     vi.restoreAllMocks();
     runtimeModelAuthMocks.getApiKeyForModel.mockReset();

@@ -100,6 +100,7 @@ type NativeHookRelayRegistration = {
   generationMismatchGraceExpiresAtMs?: number;
   generationMismatchGraceAcceptedGeneration?: string;
   agentId?: string;
+  accountId?: string;
   sessionId: string;
   sessionKey?: string;
   config?: OpenClawConfig;
@@ -133,6 +134,7 @@ type RegisterNativeHookRelayParams = {
   generation?: string;
   generationMismatchGraceMs?: number;
   agentId?: string;
+  accountId?: string;
   sessionId: string;
   sessionKey?: string;
   config?: OpenClawConfig;
@@ -446,6 +448,7 @@ export function registerNativeHookRelay(
       ? { generationMismatchGraceExpiresAtMs: now + generationMismatchGraceMs }
       : {}),
     ...(params.agentId ? { agentId: params.agentId } : {}),
+    ...(params.accountId ? { accountId: params.accountId } : {}),
     sessionId: params.sessionId,
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
     ...(params.config ? { config: params.config } : {}),
@@ -1485,6 +1488,7 @@ async function runNativeHookRelayPreToolUse(params: {
     signal: params.registration.signal,
     ctx: {
       ...(params.registration.agentId ? { agentId: params.registration.agentId } : {}),
+      ...(params.registration.accountId ? { accountId: params.registration.accountId } : {}),
       sessionId: params.registration.sessionId,
       ...(params.registration.sessionKey ? { sessionKey: params.registration.sessionKey } : {}),
       ...(params.registration.config ? { config: params.registration.config } : {}),
@@ -1564,6 +1568,7 @@ async function runNativeHookRelayPostToolUse(params: {
     toolCallId,
     runId: params.registration.runId,
     ...(params.registration.agentId ? { agentId: params.registration.agentId } : {}),
+    ...(params.registration.accountId ? { accountId: params.registration.accountId } : {}),
     sessionId: params.registration.sessionId,
     ...(params.registration.sessionKey ? { sessionKey: params.registration.sessionKey } : {}),
     ...(params.registration.channelId ? { channelId: params.registration.channelId } : {}),
@@ -1654,6 +1659,7 @@ async function runNativeHookRelayBeforeAgentFinalize(params: {
     },
     ctx: {
       ...(params.registration.agentId ? { agentId: params.registration.agentId } : {}),
+      ...(params.registration.accountId ? { accountId: params.registration.accountId } : {}),
       sessionId: params.registration.sessionId,
       ...(params.registration.sessionKey ? { sessionKey: params.registration.sessionKey } : {}),
       runId: params.registration.runId,

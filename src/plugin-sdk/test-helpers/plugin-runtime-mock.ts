@@ -366,6 +366,13 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
   const base: PluginRuntime = {
     version: "1.0.0-test",
     gateway: {
+      capabilities: Object.freeze({
+        contractVersion: 1,
+        acceptedCallbackBarrier: true,
+        agentWaitProviderStarted: true,
+        agentWaitTimeoutPhase: true,
+        auditAgentRunSourceSequence: true,
+      }),
       isAvailable: vi.fn(async () => false),
       request: vi.fn(),
     },

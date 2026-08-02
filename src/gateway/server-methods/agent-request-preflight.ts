@@ -52,6 +52,8 @@ type AgentRequestPreflight = {
   isOneShotModelRun: boolean;
   isRawModelRun: boolean;
   agentDedupeKeys: string[];
+  trustedRequestMessageId?: string;
+  trustedRequestSenderId?: string;
 };
 
 export function prepareAgentRequestPreflight(
@@ -196,6 +198,13 @@ export function prepareAgentRequestPreflight(
     }
     return undefined;
   }
+  const trustedRequestMessageId = normalizeOptionalString(
+    params.client?.internal?.trustedRequestMessageId,
+  );
+  const trustedRequestSenderId =
+    trustedRequestMessageId && inputProvenance?.kind === "external_user"
+      ? normalizeOptionalString(params.client?.internal?.trustedRequestSenderId)
+      : undefined;
   return {
     request,
     cfg,
@@ -224,5 +233,7 @@ export function prepareAgentRequestPreflight(
     isOneShotModelRun,
     isRawModelRun,
     agentDedupeKeys,
+    trustedRequestMessageId,
+    trustedRequestSenderId,
   };
 }

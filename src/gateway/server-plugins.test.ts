@@ -250,6 +250,13 @@ function getLastDispatchedParams(): Record<string, unknown> | undefined {
   return call?.req?.params as Record<string, unknown> | undefined;
 }
 
+function getLastDispatchedMethod(): string | undefined {
+  const call = getLastMockFirstArg(handleGatewayRequest, "gateway request") as
+    | HandleGatewayRequestOptions
+    | undefined;
+  return call?.req?.method;
+}
+
 function getRequiredLastDispatchedParams(): Record<string, unknown> {
   return requireRecord(getLastDispatchedParams(), "dispatched params");
 }
@@ -944,22 +951,102 @@ describe("loadGatewayPlugins", () => {
     }
   });
 
+  test("rejects the execution barrier when the first accepted response misses its deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      serverPluginsModule.setFallbackGatewayContext(createTestContext("first-response-deadline"));
+      let executionBarrier: Promise<void> | undefined;
+      const onAccepted = vi.fn();
+      handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
+        executionBarrier = opts.client?.internal?.agentAcceptedExecutionBarrier;
+        await new Promise((resolve) => {
+          setTimeout(resolve, 20);
+        });
+        opts.respond(true, { status: "accepted", runId: "run-too-late" });
+      });
+
+      const request = serverPluginsModule.dispatchGatewayMethodInProcess(
+        "agent",
+        { sessionKey: "s-first-response-deadline" },
+        { expectFinal: true, timeoutMs: 10, onAccepted },
+      );
+      const requestRejection = expect(request).rejects.toThrow("gateway request timeout for agent");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(executionBarrier).toBeInstanceOf(Promise);
+      const barrierRejection = expect(executionBarrier).rejects.toThrow(
+        "gateway request timeout for agent",
+      );
+
+      await vi.advanceTimersByTimeAsync(10);
+      await Promise.all([barrierRejection, requestRejection]);
+      await vi.advanceTimersByTimeAsync(10);
+      expect(onAccepted).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   test("reports accepted in-process agent requests before their final response", async () => {
     serverPluginsModule.setFallbackGatewayContext(createTestContext("accepted-callback"));
-    const onAccepted = vi.fn();
+    let releaseAccepted: (() => void) | undefined;
+    const acceptedCheckpoint = new Promise<void>((resolve) => {
+      releaseAccepted = resolve;
+    });
+    const onAccepted = vi.fn(async () => {
+      await acceptedCheckpoint;
+    });
     handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
       opts.respond(true, { status: "accepted", runId: "run-callback" });
       opts.respond(true, { status: "ok", runId: "run-callback" });
     });
 
-    await expect(
-      serverPluginsModule.dispatchGatewayMethodInProcess(
-        "agent",
-        { sessionKey: "s-callback" },
-        { expectFinal: true, onAccepted },
-      ),
-    ).resolves.toEqual({ status: "ok", runId: "run-callback" });
-    expect(onAccepted).toHaveBeenCalledWith({ status: "accepted", runId: "run-callback" });
+    const request = serverPluginsModule.dispatchGatewayMethodInProcess(
+      "agent",
+      { sessionKey: "s-callback" },
+      { expectFinal: true, onAccepted },
+    );
+    let settled = false;
+    void request.finally(() => {
+      settled = true;
+    });
+    await vi.waitFor(() => {
+      expect(onAccepted).toHaveBeenCalledWith({
+        status: "accepted",
+        runId: "run-callback",
+      });
+    });
+    expect(settled).toBe(false);
+    releaseAccepted?.();
+    await expect(request).resolves.toEqual({ status: "ok", runId: "run-callback" });
+  });
+
+  test("bounds the accepted checkpoint callback by the shared request deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      serverPluginsModule.setFallbackGatewayContext(createTestContext("accepted-callback-timeout"));
+      handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
+        opts.respond(true, { status: "accepted", runId: "run-callback-timeout" });
+        opts.respond(true, { status: "ok", runId: "run-callback-timeout" });
+      });
+
+      const result = expect(
+        serverPluginsModule.dispatchGatewayMethodInProcess(
+          "agent",
+          { sessionKey: "s-callback-timeout" },
+          {
+            expectFinal: true,
+            timeoutMs: 10,
+            onAccepted: async () => await new Promise<void>(() => {}),
+          },
+        ),
+      ).rejects.toThrow("gateway request timeout for agent");
+
+      await vi.advanceTimersByTimeAsync(10);
+      await result;
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   test("clears final-response timeout when handler rejects after accepted response", async () => {
@@ -1113,6 +1200,35 @@ describe("loadGatewayPlugins", () => {
     expect(getLastDispatchedClientInternal().pluginRuntimeOwnerId).toBe("google-meet");
   });
 
+  test("moves in-process recovery identity out of agent wire params", async () => {
+    serverPluginsModule.setFallbackGatewayContext(createTestContext("recovery-request-identity"));
+
+    await serverPluginsModule.dispatchGatewayMethodInProcess(
+      "agent",
+      {
+        message: "resume",
+        sessionKey: "agent:main:slack:channel:C123",
+        idempotencyKey: "recovery-run",
+        requestMessageId: "1784768109.234419",
+        requestSenderId: "U028EKM2A",
+        inputProvenance: {
+          kind: "external_user",
+          sourceChannel: "slack",
+        },
+      },
+      {
+        forceSyntheticClient: true,
+        trustedRequestMessageId: "1784768109.234419",
+        trustedRequestSenderId: "U028EKM2A",
+      },
+    );
+
+    expect(getRequiredLastDispatchedParams()).not.toHaveProperty("requestMessageId");
+    expect(getRequiredLastDispatchedParams()).not.toHaveProperty("requestSenderId");
+    expect(getLastDispatchedClientInternal().trustedRequestMessageId).toBe("1784768109.234419");
+    expect(getLastDispatchedClientInternal().trustedRequestSenderId).toBe("U028EKM2A");
+  });
+
   test("lets trusted official plugins request explicit Gateway scopes", async () => {
     loadOpenClawPlugins.mockReturnValue(addLoadedPlugin(createRegistry([]), { id: "google-meet" }));
     loadGatewayStartupPluginsForTest();
@@ -1131,6 +1247,31 @@ describe("loadGatewayPlugins", () => {
 
     expect(getLastDispatchedClientScopes()).toEqual(["operator.admin"]);
     expect(getLastDispatchedClientInternal().pluginRuntimeOwnerId).toBe("google-meet");
+  });
+
+  test("does not let trusted official plugins assert an external-user sender", async () => {
+    loadOpenClawPlugins.mockReturnValue(addLoadedPlugin(createRegistry([]), { id: "google-meet" }));
+    loadGatewayStartupPluginsForTest();
+    serverPluginsModule.setFallbackGatewayContext(createTestContext("official-sender-denied"));
+    const runtime = runtimeModule.createPluginRuntime();
+
+    await expect(
+      gatewayRequestScopeModule.withPluginRuntimePluginScope(
+        { pluginId: "google-meet", pluginOrigin: "bundled" },
+        () =>
+          runtime.gateway.request("agent", {
+            message: "impersonated external request",
+            sessionKey: "agent:main:slack:channel:C123",
+            requestMessageId: "1784768109.234419",
+            requestSenderId: "U028EKM2A",
+            inputProvenance: {
+              kind: "external_user",
+              sourceChannel: "slack",
+            },
+          }),
+      ),
+    ).rejects.toThrow("gatewayAgentSenderAssertionAllowed");
+    expect(handleGatewayRequest).not.toHaveBeenCalled();
   });
 
   test("reports whether trusted in-process Gateway dispatch is available", async () => {
@@ -1212,6 +1353,279 @@ describe("loadGatewayPlugins", () => {
       ),
     ).rejects.toThrow("bundled or trusted official plugins");
     expect(handleGatewayRequest).not.toHaveBeenCalled();
+  });
+
+  test("lets only an operator-authorized configured plugin start unscoped agent runs", async () => {
+    loadOpenClawPlugins.mockReturnValue(
+      addLoadedPlugin(createRegistry([]), {
+        id: "configured-receipt-owner",
+        origin: "config",
+      }),
+    );
+    loadGatewayStartupPluginsForTest();
+    serverPluginsModule.setFallbackGatewayContext({
+      ...createTestContext("configured-receipt-owner-agent"),
+      getRuntimeConfig: () => ({
+        plugins: {
+          entries: {
+            "configured-receipt-owner": {
+              config: {
+                gatewayAgentDispatchAllowed: true,
+                gatewayAgentSenderAssertionAllowed: true,
+              },
+            },
+          },
+        },
+      }),
+    } as GatewayRequestContext);
+    const runtime = runtimeModule.createPluginRuntime();
+    const params = {
+      message: "resume the admitted request",
+      sessionKey: "agent:main:slack:channel:C123:thread:1784768109.234419",
+      idempotencyKey: "configured-owner-run",
+      requestMessageId: "1784768109.234419",
+      requestSenderId: "U028EKM2A",
+      deliver: true,
+      inputProvenance: {
+        kind: "external_user",
+        sourceChannel: "slack",
+        messageSentReceiptPluginId: "configured-receipt-owner",
+      },
+    };
+
+    await expect(
+      gatewayRequestScopeModule.withPluginRuntimePluginScope(
+        { pluginId: "configured-receipt-owner", pluginOrigin: "config" },
+        () => runtime.gateway.request("agent", params),
+      ),
+    ).resolves.toEqual({ runId: "run-1" });
+
+    handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
+      opts.respond(true, { status: "accepted", runId: "configured-owner-final-run" });
+      opts.respond(true, { status: "ok", runId: "configured-owner-final-run" });
+    });
+    const configuredOnAccepted = vi.fn();
+    await expect(
+      gatewayRequestScopeModule.withPluginRuntimePluginScope(
+        { pluginId: "configured-receipt-owner", pluginOrigin: "config" },
+        () =>
+          runtime.gateway.request(
+            "agent",
+            { ...params, idempotencyKey: "configured-owner-final-run" },
+            {
+              expectFinal: true,
+              onAccepted: configuredOnAccepted,
+              timeoutMs: 10_000,
+            },
+          ),
+      ),
+    ).resolves.toEqual({ status: "ok", runId: "configured-owner-final-run" });
+    expect(configuredOnAccepted).toHaveBeenCalledWith({
+      status: "accepted",
+      runId: "configured-owner-final-run",
+    });
+    expect(getLastDispatchedClientInternal().agentAcceptedExecutionBarrier).toBeInstanceOf(Promise);
+
+    expect(getRequiredLastDispatchedParams()).not.toHaveProperty("requestMessageId");
+    expect(getRequiredLastDispatchedParams()).not.toHaveProperty("requestSenderId");
+    expect(getLastDispatchedClientInternal().trustedRequestMessageId).toBe("1784768109.234419");
+    expect(getLastDispatchedClientInternal().trustedRequestSenderId).toBe("U028EKM2A");
+    expect(getLastDispatchedClientInternal().pluginRuntimeOwnerId).toBe("configured-receipt-owner");
+
+    serverPluginsModule.setFallbackGatewayContext({
+      ...createTestContext("configured-receipt-owner-sender-denied"),
+      getRuntimeConfig: () => ({
+        plugins: {
+          entries: {
+            "configured-receipt-owner": {
+              config: { gatewayAgentDispatchAllowed: true },
+            },
+          },
+        },
+      }),
+    } as GatewayRequestContext);
+    await expect(
+      gatewayRequestScopeModule.withPluginRuntimePluginScope(
+        { pluginId: "configured-receipt-owner", pluginOrigin: "config" },
+        () => runtime.gateway.request("agent", params),
+      ),
+    ).rejects.toThrow("gatewayAgentSenderAssertionAllowed");
+
+    serverPluginsModule.setFallbackGatewayContext({
+      ...createTestContext("configured-receipt-owner-agent"),
+      getRuntimeConfig: () => ({
+        plugins: {
+          entries: {
+            "configured-receipt-owner": {
+              config: {
+                gatewayAgentDispatchAllowed: true,
+                gatewayAgentSenderAssertionAllowed: true,
+              },
+            },
+          },
+        },
+      }),
+    } as GatewayRequestContext);
+
+    await expect(
+      gatewayRequestScopeModule.withPluginRuntimePluginScope(
+        { pluginId: "configured-receipt-owner", pluginOrigin: "config" },
+        () =>
+          runtime.gateway.request("agent", {
+            ...params,
+            idempotencyKey: "configured-owner-inter-session-run",
+            inputProvenance: {
+              kind: "inter_session",
+              sourceTool: "stale-replay",
+            },
+          }),
+      ),
+    ).rejects.toThrow("external_user");
+
+    await expect(
+      gatewayRequestScopeModule.withPluginRuntimePluginScope(
+        { pluginId: "configured-receipt-owner", pluginOrigin: "config" },
+        () =>
+          runtime.gateway.request("agent", {
+            message: "recover a declined Gmail turn",
+            sessionKey: "agent:main:gmail:thread:abc",
+            idempotencyKey: "decline-recovery-run",
+            deliver: false,
+            inputProvenance: {
+              kind: "inter_session",
+              sourceTool: "decline-recovery",
+            },
+          }),
+      ),
+    ).resolves.toEqual({ runId: "run-1" });
+
+    serverPluginsModule.setFallbackGatewayContext({
+      ...createTestContext("configured-receipt-owner-denied"),
+      getRuntimeConfig: () => ({ plugins: { entries: {} } }),
+    } as GatewayRequestContext);
+    await expect(
+      gatewayRequestScopeModule.withPluginRuntimePluginScope(
+        { pluginId: "configured-receipt-owner", pluginOrigin: "config" },
+        () => runtime.gateway.request("agent", params),
+      ),
+    ).rejects.toThrow("bundled or trusted official plugins");
+
+    serverPluginsModule.setFallbackGatewayContext({
+      ...createTestContext("configured-receipt-owner-agent"),
+      getRuntimeConfig: () => ({
+        plugins: {
+          entries: {
+            "configured-receipt-owner": {
+              config: {
+                gatewayAgentDispatchAllowed: true,
+                gatewayAgentSenderAssertionAllowed: true,
+              },
+            },
+          },
+        },
+      }),
+    } as GatewayRequestContext);
+    await expect(
+      gatewayRequestScopeModule.withPluginRuntimePluginScope(
+        { pluginId: "configured-receipt-owner", pluginOrigin: "config" },
+        () =>
+          runtime.gateway.request("agent", params, {
+            scopes: ["operator.admin"],
+          }),
+      ),
+    ).rejects.toThrow("bundled or trusted official plugins");
+    await expect(
+      gatewayRequestScopeModule.withPluginRuntimePluginScope(
+        { pluginId: "configured-receipt-owner", pluginOrigin: "config" },
+        () => runtime.gateway.request("health", {}),
+      ),
+    ).rejects.toThrow("bundled or trusted official plugins");
+  });
+
+  test("lets an operator-authorized configured plugin observe only its bounded agent runs", async () => {
+    loadOpenClawPlugins.mockReturnValue(
+      addLoadedPlugin(createRegistry([]), {
+        id: "configured-receipt-owner",
+        origin: "config",
+      }),
+    );
+    loadGatewayStartupPluginsForTest();
+    const configuredContext = createTestContext("configured-receipt-owner-observation");
+    serverPluginsModule.setFallbackGatewayContext({
+      ...configuredContext,
+      getRuntimeConfig: () => ({
+        plugins: {
+          entries: {
+            "configured-receipt-owner": {
+              config: {
+                gatewayAgentObservationAllowed: true,
+                gatewayAgentObservationRunIdPrefix: "gaia-slack-admission-replay:",
+              },
+            },
+          },
+        },
+      }),
+    } as GatewayRequestContext);
+    const runtime = runtimeModule.createPluginRuntime();
+    const runId = "gaia-slack-admission-replay:request-1";
+
+    await expect(
+      gatewayRequestScopeModule.withPluginRuntimePluginScope(
+        { pluginId: "configured-receipt-owner", pluginOrigin: "config" },
+        () => runtime.gateway.request("agent.wait", { runId, timeoutMs: 0 }),
+      ),
+    ).resolves.toEqual({ status: "ok" });
+    expect(getLastDispatchedMethod()).toBe("agent.wait");
+    expect(getLastDispatchedParams()).toEqual({ runId, timeoutMs: 0 });
+
+    await expect(
+      gatewayRequestScopeModule.withPluginRuntimePluginScope(
+        { pluginId: "configured-receipt-owner", pluginOrigin: "config" },
+        () =>
+          runtime.gateway.request("audit.activity.list", {
+            runId,
+            kind: "agent_run",
+            limit: 20,
+          }),
+      ),
+    ).resolves.toEqual({});
+    expect(getLastDispatchedMethod()).toBe("audit.activity.list");
+
+    for (const request of [
+      () => runtime.gateway.request("agent.wait", { runId: "other-run", timeoutMs: 0 }),
+      () => runtime.gateway.request("agent.wait", { runId, timeoutMs: 1 }),
+      () =>
+        runtime.gateway.request("audit.activity.list", {
+          runId,
+          kind: "agent_run",
+          limit: 21,
+        }),
+      () =>
+        runtime.gateway.request("audit.activity.list", {
+          runId,
+          kind: "tool_action",
+          limit: 20,
+        }),
+      () => runtime.gateway.request("health", {}),
+    ]) {
+      await expect(
+        gatewayRequestScopeModule.withPluginRuntimePluginScope(
+          { pluginId: "configured-receipt-owner", pluginOrigin: "config" },
+          request,
+        ),
+      ).rejects.toThrow("bundled or trusted official plugins");
+    }
+
+    serverPluginsModule.setFallbackGatewayContext({
+      ...configuredContext,
+      getRuntimeConfig: () => ({ plugins: { entries: {} } }),
+    } as GatewayRequestContext);
+    await expect(
+      gatewayRequestScopeModule.withPluginRuntimePluginScope(
+        { pluginId: "configured-receipt-owner", pluginOrigin: "config" },
+        () => runtime.gateway.request("agent.wait", { runId, timeoutMs: 0 }),
+      ),
+    ).rejects.toThrow("bundled or trusted official plugins");
   });
 
   test("does not let arbitrary plugin nodes runtime mint admin scope for browser proxy", async () => {

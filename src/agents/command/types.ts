@@ -131,6 +131,8 @@ export type AgentCommandOpts = {
   abortSignal?: AbortSignal;
   lane?: string;
   runId?: string;
+  /** Immutable host-owned transport request id used for delivery and prompt-hook correlation. */
+  requestMessageId?: string;
   /** Immutable gateway lifecycle ownership captured when this run was admitted. */
   lifecycleGeneration?: string;
   extraSystemPrompt?: string;

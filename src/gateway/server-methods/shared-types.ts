@@ -70,6 +70,12 @@ export type GatewayClient = {
     agentRuntimeIdentity?: AgentRuntimeIdentity;
     pluginRuntimeOwnerId?: string;
     agentRunTracking?: "plugin_subagent";
+    /** Authenticated in-process recovery request identity; never accepted from Gateway params. */
+    trustedRequestMessageId?: string;
+    /** Authenticated in-process recovery actor; never accepted from Gateway params. */
+    trustedRequestSenderId?: string;
+    /** Host-owned barrier that prevents execution before a trusted caller durably accepts the run. */
+    agentAcceptedExecutionBarrier?: Promise<void>;
     /** Host-owned exact media set for a scoped automatic recovery delivery. */
     internalDeliveryMediaUrls?: string[];
     internalDeliverySuppressText?: boolean;

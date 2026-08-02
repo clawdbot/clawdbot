@@ -1,6 +1,9 @@
 /** Builds plugin hook agent context snapshots from active session and model state. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { parseRawSessionConversationRef } from "../sessions/session-key-utils.js";
+import {
+  parseRawSessionConversationRef,
+  parseThreadSessionSuffix,
+} from "../sessions/session-key-utils.js";
 import type { PluginHookChannelContext } from "./hook-channel-context.types.js";
 import type { PluginHookAgentContext } from "./hook-types.js";
 
@@ -76,16 +79,17 @@ function resolveAgentHookChannelId(params: {
 }): string | undefined {
   const provider = normalizeOptionalString(params.messageProvider);
   const messageChannel = normalizeOptionalString(params.messageChannel);
-  const parsed = parseRawSessionConversationRef(params.sessionKey);
-  if (parsed?.rawId) {
-    return parsed.rawId;
-  }
-
   const metadataChannel =
     stripConversationPrefix(params.currentChannelId ?? undefined, provider, messageChannel) ??
     stripConversationPrefix(params.messageTo ?? undefined, provider, messageChannel);
   if (metadataChannel && normalizeKey(metadataChannel) !== normalizeKey(provider)) {
     return metadataChannel;
+  }
+
+  const sessionBase = parseThreadSessionSuffix(params.sessionKey).baseSessionKey;
+  const parsed = parseRawSessionConversationRef(sessionBase ?? params.sessionKey);
+  if (parsed?.rawId) {
+    return parsed.rawId;
   }
 
   const strippedMessageChannel = stripConversationPrefix(
@@ -104,21 +108,45 @@ export function buildAgentHookContextChannelFields(params: {
   sessionKey?: string | null;
   messageChannel?: string | null;
   messageProvider?: string | null;
+  agentAccountId?: string | null;
   currentChannelId?: string | null;
+  currentMessageId?: string | number | null;
+  currentThreadTs?: string | null;
+  messageThreadId?: string | number | null;
   messageTo?: string | null;
   senderId?: string | null;
 }): Pick<
   PluginHookAgentContext,
-  "channel" | "channelId" | "chatId" | "messageProvider" | "senderId"
+  | "accountId"
+  | "channel"
+  | "channelId"
+  | "chatId"
+  | "messageId"
+  | "messageProvider"
+  | "senderId"
+  | "threadId"
 > {
   const channel = resolveAgentHookChannel(params);
   const channelId = resolveAgentHookChannelId(params);
+  const accountId = normalizeOptionalString(params.agentAccountId);
+  const messageId =
+    typeof params.currentMessageId === "string"
+      ? normalizeOptionalString(params.currentMessageId)
+      : (params.currentMessageId ?? undefined);
+  const rawThreadId = params.currentThreadTs ?? params.messageThreadId;
+  const threadId =
+    typeof rawThreadId === "string"
+      ? normalizeOptionalString(rawThreadId)
+      : (rawThreadId ?? undefined);
   return {
+    ...(accountId ? { accountId } : {}),
     channel,
     messageProvider: normalizeOptionalString(params.messageProvider),
     channelId,
     chatId: channelId,
+    ...(messageId !== undefined ? { messageId } : {}),
     senderId: normalizeOptionalString(params.senderId),
+    ...(threadId !== undefined ? { threadId } : {}),
   };
 }
 

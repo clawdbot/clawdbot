@@ -79,7 +79,9 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const harness = createStartedThreadHarness();
 
-    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+    const params = createParams(sessionFile, workspaceDir);
+    params.agentAccountId = "slack-account-1";
+    const run = runCodexAppServerAttempt(params, {
       nativeHookRelay: {
         enabled: true,
         events: ["post_tool_use"],
@@ -91,6 +93,9 @@ describe("runCodexAppServerAttempt native hook relay", () => {
       ?.config;
     expect(startConfig?.["hooks.PostToolUse"]).not.toEqual([]);
     const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
+    expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toMatchObject({
+      accountId: "slack-account-1",
+    });
 
     await invokeNativeHookRelay({
       provider: "codex",

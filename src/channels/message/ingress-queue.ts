@@ -132,8 +132,31 @@ export type ChannelIngressQueueEnqueueResult<TPayload, TMetadata, TCompletedMeta
       record: ChannelIngressQueueFailedRecord;
     };
 
+export type ChannelIngressQueueCapabilities = Readonly<{
+  contractVersion: 2;
+  lookup: true;
+  refreshClaimLastError: true;
+  blockClaimedLanes: true;
+  excludeEventIds: true;
+  boundedPrune: true;
+}>;
+
+export const CHANNEL_INGRESS_QUEUE_CAPABILITIES: ChannelIngressQueueCapabilities = Object.freeze({
+  contractVersion: 2,
+  lookup: true,
+  refreshClaimLastError: true,
+  blockClaimedLanes: true,
+  excludeEventIds: true,
+  boundedPrune: true,
+});
+
 /** Durable FIFO-ish ingress queue with claims, duplicate detection, and retention pruning. */
 export type ChannelIngressQueue<TPayload, TMetadata = unknown, TCompletedMetadata = unknown> = {
+  /** Process-stable contract facts for plugins that need stronger ownership guarantees. */
+  capabilities: ChannelIngressQueueCapabilities;
+  lookup(
+    id: string,
+  ): Promise<ChannelIngressQueueEnqueueResult<TPayload, TMetadata, TCompletedMetadata> | null>;
   enqueue(
     id: string,
     payload: TPayload,
@@ -155,6 +178,10 @@ export type ChannelIngressQueue<TPayload, TMetadata = unknown, TCompletedMetadat
     orderBy?: "received" | "id";
     scanLimit?: number;
     candidateIds?: Iterable<string>;
+    /** Atomically exclude exact rows retained for caller-owned reconciliation. */
+    excludedEventIds?: Iterable<string>;
+    /** Atomically exclude lanes already held by any active claim. */
+    blockClaimedLanes?: boolean;
     deriveLaneKey?: (record: ChannelIngressQueueRecord<TPayload, TMetadata>) => string | undefined;
   }): Promise<ChannelIngressQueueClaim<TPayload, TMetadata> | null>;
   claim(
@@ -163,7 +190,7 @@ export type ChannelIngressQueue<TPayload, TMetadata = unknown, TCompletedMetadat
   ): Promise<ChannelIngressQueueClaim<TPayload, TMetadata> | null>;
   refreshClaim?(
     claim: ChannelIngressQueueClaimRef,
-    options?: { refreshedAt?: number },
+    options?: { refreshedAt?: number; lastError?: string },
   ): Promise<boolean>;
   complete(
     idOrClaim: string | ChannelIngressQueueClaimRef,
@@ -186,6 +213,10 @@ export type ChannelIngressQueue<TPayload, TMetadata = unknown, TCompletedMetadat
   recoverStaleClaims(options?: {
     staleMs?: number;
     now?: number;
+    /** Bound rows inspected and mutated in one recovery call. Omit for legacy all-row behavior. */
+    limit?: number;
+    /** Exclude in-process claims before applying the bounded SQL scan. */
+    excludedEventIds?: Iterable<string>;
     shouldRecover?: (
       claim: ChannelIngressQueueClaim<TPayload, TMetadata>,
     ) => boolean | Promise<boolean>;
@@ -639,6 +670,7 @@ export function createChannelIngressQueue<
       [...(claimOptions?.blockedLaneKeys ?? [])].map((key) => key.trim()).filter(Boolean),
     );
     const candidateIds = normalizedCandidateIds(claimOptions?.candidateIds);
+    const excludedEventIds = normalizedCandidateIds(claimOptions?.excludedEventIds);
     if (candidateIds?.length === 0) {
       return null;
     }
@@ -647,18 +679,18 @@ export function createChannelIngressQueue<
       (tx) => {
         const kysely = getChannelIngressKysely(tx.db);
         let effectiveBlocked = blocked;
-        if (candidateIds && candidateIds.length > 0) {
+        if (claimOptions?.blockClaimedLanes || (candidateIds && candidateIds.length > 0)) {
           // Candidate snapshots can race a sibling drainer. If an earlier
-          // candidate is now claimed, its lane must block later same-lane rows.
-          const claimedCandidateRows = executeSqliteQuerySync(
-            tx.db,
-            kysely
-              .selectFrom("channel_ingress_events")
-              .selectAll()
-              .where("queue_name", "=", queueName)
-              .where("status", "=", "claimed")
-              .where("event_id", "in", candidateIds),
-          ).rows;
+          // row is now claimed, its lane must block later same-lane rows.
+          let claimedRowsQuery = kysely
+            .selectFrom("channel_ingress_events")
+            .selectAll()
+            .where("queue_name", "=", queueName)
+            .where("status", "=", "claimed");
+          if (!claimOptions?.blockClaimedLanes && candidateIds) {
+            claimedRowsQuery = claimedRowsQuery.where("event_id", "in", candidateIds);
+          }
+          const claimedCandidateRows = executeSqliteQuerySync(tx.db, claimedRowsQuery).rows;
           const claimedCandidateLaneKeys = claimedCandidateRows
             .map((row) => {
               if (row.lane_key) {
@@ -683,6 +715,9 @@ export function createChannelIngressQueue<
         let select = baseSelect;
         if (candidateIds) {
           select = select.where("event_id", "in", candidateIds);
+        }
+        if (excludedEventIds && excludedEventIds.length > 0) {
+          select = select.where("event_id", "not in", excludedEventIds);
         }
         if (effectiveBlocked.size > 0 && !claimOptions?.deriveLaneKey) {
           select = select.where((eb) =>
@@ -839,6 +874,9 @@ export function createChannelIngressQueue<
             .set({
               claimed_at: refreshedAt,
               updated_at: refreshedAt,
+              ...(typeof refreshOptions?.lastError === "string"
+                ? { last_error: refreshOptions.lastError }
+                : {}),
             })
             .where("queue_name", "=", queueName)
             .where("event_id", "=", eventId)
@@ -893,16 +931,24 @@ export function createChannelIngressQueue<
     const current = recoverOptions?.now ?? now();
     const staleMs = Math.max(0, Math.floor(recoverOptions?.staleMs ?? 0));
     const cutoff = current - staleMs;
+    const excludedEventIds = normalizedCandidateIds(recoverOptions?.excludedEventIds);
     const database = openStateDatabase(options.stateDir);
-    const claimedRows = executeSqliteQuerySync(
-      database.db,
-      getChannelIngressKysely(database.db)
-        .selectFrom("channel_ingress_events")
-        .selectAll()
-        .where("queue_name", "=", queueName)
-        .where("status", "=", "claimed")
-        .where("claimed_at", "<=", cutoff),
-    ).rows;
+    let staleClaimsQuery = getChannelIngressKysely(database.db)
+      .selectFrom("channel_ingress_events")
+      .selectAll()
+      .where("queue_name", "=", queueName)
+      .where("status", "=", "claimed")
+      .where("claimed_at", "<=", cutoff)
+      .orderBy("claimed_at", "asc")
+      .orderBy("received_at", "asc")
+      .orderBy("event_id", "asc");
+    if (excludedEventIds && excludedEventIds.length > 0) {
+      staleClaimsQuery = staleClaimsQuery.where("event_id", "not in", excludedEventIds);
+    }
+    if (recoverOptions?.limit !== undefined) {
+      staleClaimsQuery = staleClaimsQuery.limit(normalizeScanLimit(recoverOptions.limit));
+    }
+    const claimedRows = executeSqliteQuerySync(database.db, staleClaimsQuery).rows;
     let recovered = 0;
     for (const row of claimedRows) {
       const claimRec = claimedRecord<TPayload, TMetadata>(row);
@@ -1229,6 +1275,12 @@ export function createChannelIngressQueue<
   };
 
   return {
+    capabilities: CHANNEL_INGRESS_QUEUE_CAPABILITIES,
+    async lookup(id) {
+      const { db } = openStateDatabase(options.stateDir);
+      const row = selectRow(db, queueName, normalizePart(id, ""));
+      return row ? rowToEnqueueResult<TPayload, TMetadata, TCompletedMetadata>(row) : null;
+    },
     enqueue,
     listPending,
     listClaims,

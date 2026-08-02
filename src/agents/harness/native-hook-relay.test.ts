@@ -2498,6 +2498,7 @@ describe("native hook relay registry", () => {
     const relay = registerNativeHookRelay({
       provider: "codex",
       agentId: "agent-1",
+      accountId: "slack-account-1",
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
       runId: "run-1",
@@ -2529,6 +2530,7 @@ describe("native hook relay registry", () => {
     const context = getMockCallArg(afterToolCall, 0, 1, "after tool call context");
     expectRecordFields(context, {
       agentId: "agent-1",
+      accountId: "slack-account-1",
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
       runId: "run-1",

@@ -2078,7 +2078,7 @@ describe("deliverOutboundPayloads", () => {
   });
 
   it("directly acks a sent delivery when the post-send unknown marker cannot be written", async () => {
-    queueMocks.markDeliveryPlatformOutcomeUnknown.mockRejectedValueOnce(
+    queueMocks.markDeliveryPlatformOutcomeUnknown.mockRejectedValue(
       new Error("unknown marker offline"),
     );
     const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m1" });
@@ -2095,6 +2095,32 @@ describe("deliverOutboundPayloads", () => {
     expect(sendMatrix).toHaveBeenCalled();
     expect(queueMocks.ackDelivery).toHaveBeenCalledWith("mock-queue-id");
     expect(queueMocks.failDelivery).not.toHaveBeenCalled();
+  });
+
+  it("retains an exact-reconciliation delivery when its post-send marker fails", async () => {
+    queueMocks.markDeliveryPlatformOutcomeUnknown.mockRejectedValue(
+      new Error("unknown marker offline"),
+    );
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: {},
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "hi" }],
+        deps: { matrix: vi.fn().mockResolvedValue({ messageId: "m1" }) },
+        queuePolicy: "required",
+        requireUnknownSendReconciliation: true,
+        replyPayloadSendingHook: {
+          kind: "final",
+          runId: "run-1",
+          messageSentReceiptPluginId: "gaia-workflow-preflight",
+          context: { channelId: "matrix", runId: "run-1" },
+        },
+      }),
+    ).rejects.toThrow("unknown marker offline");
+
+    expect(queueMocks.ackDelivery).not.toHaveBeenCalled();
   });
 
   it("runs sent-result commit hooks when marker fallback ack precedes a partial failure", async () => {
@@ -4606,6 +4632,83 @@ describe("deliverOutboundPayloads", () => {
     expect(sendMatrix).not.toHaveBeenCalled();
   });
 
+  it("retains an exact-reconciliation delivery aborted before platform dispatch", async () => {
+    const sendMatrix = vi.fn();
+    const abortController = new AbortController();
+    abortController.abort();
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: {},
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "a" }],
+        deps: { matrix: sendMatrix },
+        abortSignal: abortController.signal,
+        requireUnknownSendReconciliation: true,
+        replyPayloadSendingHook: {
+          kind: "final",
+          runId: "run-1",
+          messageSentReceiptPluginId: "gaia-workflow-preflight",
+          context: { channelId: "matrix", runId: "run-1" },
+        },
+      }),
+    ).rejects.toThrow("Operation aborted");
+
+    expect(queueMocks.failDelivery).toHaveBeenCalled();
+    expect(queueMocks.ackDelivery).not.toHaveBeenCalled();
+    expect(sendMatrix).not.toHaveBeenCalled();
+  });
+
+  it("retains an exact-reconciliation delivery aborted after platform dispatch", async () => {
+    const providerAbort = new Error("provider aborted after dispatch");
+    providerAbort.name = "AbortError";
+    const messageSendText = vi.fn(async (ctx: ChannelMessageSendTextContext) => {
+      await ctx.onPlatformSendDispatch?.();
+      throw providerAbort;
+    });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: {
+            id: "matrix",
+            message: {
+              id: "matrix",
+              durableFinal: {
+                capabilities: { text: true, reconcileUnknownSend: true },
+                reconcileUnknownSendKinds: { text: true },
+                reconcileUnknownSend: async () => ({ status: "unresolved" }),
+              },
+              send: { text: messageSendText },
+            },
+          },
+        },
+      ]),
+    );
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: {},
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "a" }],
+        requireUnknownSendReconciliation: true,
+        replyPayloadSendingHook: {
+          kind: "final",
+          runId: "run-1",
+          messageSentReceiptPluginId: "gaia-workflow-preflight",
+          context: { channelId: "matrix", runId: "run-1" },
+        },
+      }),
+    ).rejects.toThrow("provider aborted after dispatch");
+
+    expect(queueMocks.markDeliveryPlatformSendDispatched).toHaveBeenCalled();
+    expect(queueMocks.failDeliveryAfterPlatformSend).toHaveBeenCalled();
+    expect(queueMocks.ackDelivery).not.toHaveBeenCalled();
+  });
+
   it("passes normalized payload to onError", async () => {
     const sendMatrix = vi.fn().mockRejectedValue(new Error("boom"));
     const onError = vi.fn();
@@ -4956,6 +5059,7 @@ describe("deliverOutboundPayloads", () => {
         channelId: "matrix",
         sessionKey: "agent:tank:main",
       }),
+      undefined,
     );
   });
 
@@ -5014,7 +5118,114 @@ describe("deliverOutboundPayloads", () => {
         runId: "run-1",
         replyToId: "thread-root-1",
       }),
+      undefined,
     );
+  });
+
+  it("keeps the durable row until an awaited message_sent receipt settles", async () => {
+    hookMocks.runner.hasHooks.mockReturnValue(true);
+    let releaseReceipt: (() => void) | undefined;
+    hookMocks.runner.runMessageSent.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseReceipt = resolve;
+        }),
+    );
+
+    const delivery = deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room",
+      payloads: [{ text: "hello" }],
+      deps: { matrix: vi.fn().mockResolvedValue({ messageId: "outbound-1" }) },
+      replyPayloadSendingHook: {
+        kind: "final",
+        runId: "run-1",
+        messageSentReceiptPluginId: "gaia-workflow-preflight",
+        context: { channelId: "matrix", conversationId: "!room", runId: "run-1" },
+      },
+    });
+
+    await vi.waitFor(() => expect(hookMocks.runner.runMessageSent).toHaveBeenCalledOnce());
+    expect(queueMocks.ackDelivery).not.toHaveBeenCalled();
+    releaseReceipt?.();
+    await delivery;
+    expect(queueMocks.ackDelivery).toHaveBeenCalledWith("mock-queue-id");
+  });
+
+  it("keeps the durable row when the required message_sent receipt rejects", async () => {
+    hookMocks.runner.hasHooks.mockReturnValue(true);
+    hookMocks.runner.runMessageSent.mockRejectedValueOnce(new Error("Gaia ledger unavailable"));
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: {},
+        channel: "matrix",
+        to: "!room",
+        payloads: [{ text: "hello" }],
+        deps: { matrix: vi.fn().mockResolvedValue({ messageId: "outbound-1" }) },
+        replyPayloadSendingHook: {
+          kind: "final",
+          runId: "run-1",
+          messageSentReceiptPluginId: "gaia-workflow-preflight",
+          context: { channelId: "matrix", runId: "run-1" },
+        },
+      }),
+    ).rejects.toThrow("Gaia ledger unavailable");
+    expect(queueMocks.ackDelivery).not.toHaveBeenCalled();
+  });
+
+  it("handles an earlier required receipt rejection when a later payload send fails", async () => {
+    hookMocks.runner.hasHooks.mockReturnValue(true);
+    hookMocks.runner.runMessageSent
+      .mockRejectedValueOnce(new Error("first receipt failed"))
+      .mockResolvedValueOnce();
+    const sendMatrix = vi
+      .fn()
+      .mockResolvedValueOnce({ messageId: "outbound-1" })
+      .mockRejectedValueOnce(new Error("second payload send failed"));
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: {},
+        channel: "matrix",
+        to: "!room",
+        payloads: [{ text: "first" }, { text: "second" }],
+        deps: { matrix: sendMatrix },
+        replyPayloadSendingHook: {
+          kind: "final",
+          runId: "run-1",
+          messageSentReceiptPluginId: "gaia-workflow-preflight",
+          context: { channelId: "matrix", runId: "run-1" },
+        },
+      }),
+    ).rejects.toThrow("second payload send failed");
+    expect(queueMocks.ackDelivery).not.toHaveBeenCalled();
+  });
+
+  it("does not await a required receipt for an unsuccessful platform send", async () => {
+    hookMocks.runner.hasHooks.mockReturnValue(true);
+    hookMocks.runner.runMessageSent.mockRejectedValueOnce(
+      new Error("failed-send receipt rejected"),
+    );
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: {},
+        channel: "matrix",
+        to: "!room",
+        payloads: [{ text: "hello" }],
+        deps: { matrix: vi.fn().mockRejectedValue(new Error("provider unavailable")) },
+        replyPayloadSendingHook: {
+          kind: "final",
+          runId: "run-1",
+          messageSentReceiptPluginId: "gaia-workflow-preflight",
+          context: { channelId: "matrix", runId: "run-1" },
+        },
+      }),
+    ).rejects.toThrow("provider unavailable");
+    await vi.waitFor(() => expect(hookMocks.runner.runMessageSent).toHaveBeenCalledOnce());
+    expect(queueMocks.ackDelivery).not.toHaveBeenCalled();
   });
 
   it("omits sessionKey from the message_sent hook context when session is absent", async () => {
@@ -5236,6 +5447,7 @@ describe("deliverOutboundPayloads", () => {
         messageId: "mx-1",
       }),
       expect.objectContaining({ channelId: "matrix" }),
+      undefined,
     );
     expect(hookMocks.runner.runMessageSent).toHaveBeenNthCalledWith(
       2,
@@ -5244,6 +5456,7 @@ describe("deliverOutboundPayloads", () => {
         success: false,
       }),
       expect.objectContaining({ channelId: "matrix" }),
+      undefined,
     );
     expect(hookMocks.runner.runMessageSent.mock.calls[1]?.[0]).not.toHaveProperty("messageId");
   });

@@ -24,6 +24,7 @@ import { classifySessionStateActor } from "../sessions/session-state-events.js";
 import type { DeliveryContext } from "../utils/delivery-context.shared.js";
 import {
   buildCurrentRunRestartRecoveryClaim,
+  shouldRetainRestartRecoveryClaimAfterRun,
   shouldPersistRestartRecoveryCleanup,
   shouldPersistRestartRecoveryContextClaim,
 } from "./agent-command-restart-recovery.js";
@@ -269,6 +270,7 @@ async function agentCommandInternal(
             disableMessageTool: opts.disableMessageTool,
             entry,
             forceRestartSafeTools: opts.forceRestartSafeTools,
+            requestMessageId: opts.requestMessageId,
             runId,
             sourceRunId:
               opts.internalDeliveryMediaUrls !== undefined &&
@@ -448,25 +450,37 @@ async function agentCommandInternal(
       try {
         const entry = sessionStore[sessionKey] ?? sessionEntry;
         if (entry?.restartRecoveryDeliveryRunId === runId) {
-          const next: SessionEntry = {
-            ...entry,
-            ...buildRestartRecoveryClaimCleanupPatch({
-              entry,
-              recordTerminalSource: true,
-              terminalDeliveryEvidence: restartRecoveryTerminalDeliveryEvidence,
-            }),
-            updatedAt: Date.now(),
-          };
-          const persisted = await persistSessionEntry({
-            sessionStore,
-            sessionKey,
-            storePath,
-            initialEntry: entry,
-            entry: next,
-            shouldPersist: (current) =>
-              shouldPersistRestartRecoveryCleanup(current, runOwnedSessionId, runId),
+          const retainClaimForGatewayTimeout = shouldRetainRestartRecoveryClaimAfterRun({
+            abortReason: opts.abortSignal?.reason,
+            claimedRunId: entry.restartRecoveryDeliveryRunId,
+            runId,
+            sourceRunId: entry.restartRecoveryDeliverySourceRunId,
+            terminalDeliveryEvidence: restartRecoveryTerminalDeliveryEvidence,
           });
-          sessionEntry = persisted;
+          // The lifecycle projection records a gateway timeout itself. Retain
+          // only its durable delivery claim; startup recovery will reclassify
+          // the exact timed-out row after confirming there is no live owner.
+          if (!retainClaimForGatewayTimeout) {
+            const next: SessionEntry = {
+              ...entry,
+              ...buildRestartRecoveryClaimCleanupPatch({
+                entry,
+                recordTerminalSource: true,
+                terminalDeliveryEvidence: restartRecoveryTerminalDeliveryEvidence,
+              }),
+              updatedAt: Date.now(),
+            };
+            const persisted = await persistSessionEntry({
+              sessionStore,
+              sessionKey,
+              storePath,
+              initialEntry: entry,
+              entry: next,
+              shouldPersist: (current) =>
+                shouldPersistRestartRecoveryCleanup(current, runOwnedSessionId, runId),
+            });
+            sessionEntry = persisted;
+          }
         }
       } catch (error) {
         log.warn(

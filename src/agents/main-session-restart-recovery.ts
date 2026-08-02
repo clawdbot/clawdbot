@@ -2,6 +2,7 @@
  * Post-restart recovery for main sessions interrupted while holding a transcript lock.
  */
 
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -53,11 +54,13 @@ import {
 import {
   buildUnresumableSessionNoticeIdempotencyKey,
   loadExpectedRestartRecoveryClaim,
+  MAX_GATEWAY_TIMEOUT_RECOVERY_ATTEMPTS,
   type ExpectedRestartRecoveryClaim,
 } from "./main-session-restart-claim.js";
 import {
   resolveRestartRecoveryDeliveryContext,
   resumeMainSession,
+  type MainSessionInterruptionReason,
 } from "./main-session-restart-dispatch.js";
 import { resolveAgentSessionDirs } from "./session-dirs.js";
 import type { SessionLockInspection } from "./session-write-lock.js";
@@ -66,9 +69,20 @@ const log = createSubsystemLogger("main-session-restart-recovery");
 const DEFAULT_RECOVERY_DELAY_MS = 5_000;
 const MAX_RECOVERY_RETRIES = 3;
 const RETRY_BACKOFF_MULTIPLIER = 2;
-const UNRESUMABLE_SESSION_NOTICE =
+const UNRESUMABLE_RESTART_NOTICE =
   "I was interrupted by a gateway restart and couldn't safely resume the previous turn. " +
   "Please send that last request again and I'll pick it up cleanly.";
+const UNRESUMABLE_TIMEOUT_NOTICE =
+  "I exceeded the gateway run deadline and couldn't safely resume the previous turn. " +
+  "Please send that last request again and I'll pick it up cleanly.";
+
+function resolveUnresumableSessionNotice(
+  interruptionReason: MainSessionInterruptionReason | undefined,
+): string {
+  return interruptionReason === "gateway_timeout"
+    ? UNRESUMABLE_TIMEOUT_NOTICE
+    : UNRESUMABLE_RESTART_NOTICE;
+}
 
 function shouldSkipMainRecovery(entry: SessionEntry, sessionKey: string): boolean {
   if (typeof entry.spawnDepth === "number" && entry.spawnDepth > 0) {
@@ -345,12 +359,17 @@ export async function markStartupOrphanedMainSessionsForRecovery(params: {
   for (const storePath of await resolveRestartRecoveryStorePaths(params)) {
     const storeResult = await applySessionEntryReplacements({
       storePath,
-      statuses: ["running"],
+      statuses: ["running", "timeout"],
       update: (entries) => {
         const replacements: Array<{ sessionKey: string; entry: SessionEntry }> = [];
         const counts = { marked: 0, skipped: 0 };
         for (const { sessionKey, entry } of entries) {
-          if (entry.status !== "running" || entry.abortedLastRun === true) {
+          const isStartupOrphan = entry.status === "running" && entry.abortedLastRun !== true;
+          const isGatewayTimeoutWithDurableClaim =
+            entry.status === "timeout" &&
+            normalizeOptionalString(entry.restartRecoveryDeliveryRunId) !== undefined &&
+            normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId) === undefined;
+          if (!isStartupOrphan && !isGatewayTimeoutWithDurableClaim) {
             continue;
           }
           if (shouldSkipMainRecovery(entry, sessionKey)) {
@@ -375,7 +394,27 @@ export async function markStartupOrphanedMainSessionsForRecovery(params: {
           ) {
             continue;
           }
+          entry.status = "running";
           entry.abortedLastRun = true;
+          if (isGatewayTimeoutWithDurableClaim) {
+            entry.restartRecoveryInterruptionReason = "gateway_timeout";
+            const timeoutAttemptCount = entry.restartRecoveryTimeoutAttemptCount ?? 0;
+            if (timeoutAttemptCount >= MAX_GATEWAY_TIMEOUT_RECOVERY_ATTEMPTS) {
+              entry.restartRecoveryTimeoutExhausted = true;
+            } else {
+              entry.restartRecoveryTimeoutAttemptCount = timeoutAttemptCount + 1;
+              // Persist the continuation RPC id as part of timeout adoption so
+              // startup retries cannot mint duplicate accepted continuations.
+              entry.restartRecoveryDeliveryRunId = randomUUID();
+            }
+          } else {
+            // The current interruption is a restart, even when the orphaned run
+            // happened to be a continuation of an earlier gateway timeout.
+            entry.restartRecoveryInterruptionReason = "gateway_restart";
+          }
+          entry.startedAt = undefined;
+          entry.endedAt = undefined;
+          entry.runtimeMs = undefined;
           entry.updatedAt = Date.now();
           replacements.push({ sessionKey, entry });
           counts.marked++;
@@ -746,12 +785,13 @@ async function markSessionFailed(params: {
 async function sendUnresumableSessionNotice(params: {
   deliveryContext: DeliveryContext;
   entry: SessionEntry;
+  interruptionReason?: MainSessionInterruptionReason;
   reason: string;
   sessionKey: string;
 }): Promise<void> {
   const messageParams: Record<string, unknown> = {
     to: params.deliveryContext.to,
-    message: UNRESUMABLE_SESSION_NOTICE,
+    message: resolveUnresumableSessionNotice(params.interruptionReason),
     bestEffort: true,
   };
   if (params.deliveryContext.threadId != null) {
@@ -790,6 +830,7 @@ async function sendUnresumableSessionNotice(params: {
 
 async function writeUnresumableSessionNotice(params: {
   entry: SessionEntry;
+  interruptionReason?: MainSessionInterruptionReason;
   sessionKey: string;
   storePath: string;
 }): Promise<boolean> {
@@ -801,13 +842,14 @@ async function writeUnresumableSessionNotice(params: {
       abortedLastRun: params.entry.abortedLastRun,
       restartRecoveryDeliveryRequestFingerprint:
         params.entry.restartRecoveryDeliveryRequestFingerprint,
+      restartRecoveryDeliveryRequestMessageId: params.entry.restartRecoveryDeliveryRequestMessageId,
       restartRecoveryDeliveryRunId: params.entry.restartRecoveryDeliveryRunId,
       restartRecoveryDeliverySourceRunId: params.entry.restartRecoveryDeliverySourceRunId,
       status: params.entry.status,
       updatedAt: params.entry.updatedAt,
     },
     storePath: params.storePath,
-    text: UNRESUMABLE_SESSION_NOTICE,
+    text: resolveUnresumableSessionNotice(params.interruptionReason),
     idempotencyKey: buildUnresumableSessionNoticeIdempotencyKey(params.entry),
   }).catch((error: unknown) => ({ ok: false as const, reason: String(error) }));
   if (!result.ok) {
@@ -891,16 +933,50 @@ function resolveRecoveryDispatchSessionKey(params: {
   }
 }
 
+/** Checks every non-liveness gate before a durable main-session row is adopted for recovery. */
+export function canPrepareMainSessionRecovery(params: {
+  cfg?: OpenClawConfig;
+  entry: SessionEntry;
+  sessionKey: string;
+  storePath: string;
+}): boolean {
+  return (
+    !shouldSkipMainRecovery(params.entry, params.sessionKey) &&
+    !resolveSessionWorkStartError(params.sessionKey, params.entry) &&
+    resolveRecoveryDispatchSessionKey({
+      cfg: params.cfg,
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+    }) !== undefined
+  );
+}
+
+type RecoveryAttemptResult = {
+  recovered: number;
+  failed: number;
+  skipped: number;
+  /** Failures that leave an interrupted row runnable and therefore need a retry. */
+  retryableFailures: number;
+};
+
+type RecoveryResult = Omit<RecoveryAttemptResult, "retryableFailures">;
+
 async function recoverStore(params: {
   cfg?: OpenClawConfig;
   storePath: string;
   resumedSessionKeys: Set<string>;
   expectedClaim?: ExpectedRestartRecoveryClaim;
+  interruptionReason?: MainSessionInterruptionReason;
   sessionWorkAdmissionHandoffId?: string;
   activeSessionIds?: Iterable<string>;
   activeSessionKeys?: Iterable<string>;
-}): Promise<{ recovered: number; failed: number; skipped: number }> {
-  const result = { recovered: 0, failed: 0, skipped: 0 };
+}): Promise<RecoveryAttemptResult> {
+  const result: RecoveryAttemptResult = {
+    recovered: 0,
+    failed: 0,
+    skipped: 0,
+    retryableFailures: 0,
+  };
   const providedActiveSessionIds =
     params.activeSessionIds === undefined ? undefined : normalizeStringSet(params.activeSessionIds);
   const providedActiveSessionKeys =
@@ -925,6 +1001,7 @@ async function recoverStore(params: {
   } catch (err) {
     log.warn(`failed to load session store ${params.storePath}: ${String(err)}`);
     result.failed++;
+    result.retryableFailures++;
     return result;
   }
 
@@ -934,11 +1011,15 @@ async function recoverStore(params: {
     if (!entry || entry.status !== "running" || entry.abortedLastRun !== true) {
       continue;
     }
-    if (shouldSkipMainRecovery(entry, sessionKey)) {
-      result.skipped++;
-      continue;
-    }
-    if (resolveSessionWorkStartError(sessionKey, entry)) {
+    const interruptionReason = params.interruptionReason ?? entry.restartRecoveryInterruptionReason;
+    if (
+      !canPrepareMainSessionRecovery({
+        cfg: params.cfg,
+        entry,
+        sessionKey,
+        storePath: params.storePath,
+      })
+    ) {
       result.skipped++;
       continue;
     }
@@ -971,6 +1052,7 @@ async function recoverStore(params: {
     }
 
     if (
+      !entry.restartRecoveryTimeoutExhausted &&
       entry.pendingFinalDelivery === true &&
       entry.pendingFinalDeliveryText &&
       entry.restartRecoveryForceSafeTools === true
@@ -982,6 +1064,8 @@ async function recoverStore(params: {
         storePath: params.storePath,
         sessionKey,
         pendingFinalDeliveryText: entry.pendingFinalDeliveryText,
+        interruptionReason,
+        notifyGatewayReset: params.interruptionReason !== "gateway_timeout",
         forceRestartSafeTools: true,
         sessionWorkAdmissionHandoffId: params.sessionWorkAdmissionHandoffId,
       });
@@ -990,6 +1074,7 @@ async function recoverStore(params: {
         result.recovered++;
       } else {
         result.failed++;
+        result.retryableFailures++;
       }
       continue;
     }
@@ -1011,7 +1096,11 @@ async function recoverStore(params: {
         },
       );
     } catch (err) {
-      if (entry.pendingFinalDelivery === true && entry.pendingFinalDeliveryText) {
+      if (
+        !entry.restartRecoveryTimeoutExhausted &&
+        entry.pendingFinalDelivery === true &&
+        entry.pendingFinalDeliveryText
+      ) {
         log.warn(
           `transcript unavailable for ${sessionKey}; resuming its durable pending final delivery`,
         );
@@ -1022,6 +1111,8 @@ async function recoverStore(params: {
           storePath: params.storePath,
           sessionKey,
           pendingFinalDeliveryText: entry.pendingFinalDeliveryText,
+          interruptionReason,
+          notifyGatewayReset: params.interruptionReason !== "gateway_timeout",
           sessionWorkAdmissionHandoffId: params.sessionWorkAdmissionHandoffId,
         });
         if (resumed) {
@@ -1029,15 +1120,21 @@ async function recoverStore(params: {
           result.recovered++;
         } else {
           result.failed++;
+          result.retryableFailures++;
         }
         continue;
       }
       log.warn(`failed to read transcript for ${sessionKey}: ${String(err)}`);
       result.failed++;
+      result.retryableFailures++;
       continue;
     }
 
-    if (entry.pendingFinalDelivery === true && entry.pendingFinalDeliveryText) {
+    if (
+      !entry.restartRecoveryTimeoutExhausted &&
+      entry.pendingFinalDelivery === true &&
+      entry.pendingFinalDeliveryText
+    ) {
       const resumed = await resumeMainSession({
         canonicalSessionKey: dispatchSessionKey,
         cfg: params.cfg,
@@ -1045,6 +1142,8 @@ async function recoverStore(params: {
         storePath: params.storePath,
         sessionKey,
         pendingFinalDeliveryText: entry.pendingFinalDeliveryText,
+        interruptionReason,
+        notifyGatewayReset: params.interruptionReason !== "gateway_timeout",
         forceRestartSafeTools: hasReplaySafeCodeModeCheckpointInCurrentTurn(messages),
         sessionWorkAdmissionHandoffId: params.sessionWorkAdmissionHandoffId,
       });
@@ -1053,14 +1152,17 @@ async function recoverStore(params: {
         result.recovered++;
       } else {
         result.failed++;
+        result.retryableFailures++;
       }
       continue;
     }
 
-    const transcriptResumePolicy = resolveMainSessionResumePolicy(
-      messages,
-      entry.restartRecoveryForceSafeTools === true,
-    );
+    const transcriptResumePolicy = entry.restartRecoveryTimeoutExhausted
+      ? {
+          blockReason: `gateway timeout recovery exhausted after ${MAX_GATEWAY_TIMEOUT_RECOVERY_ATTEMPTS} continuation attempts`,
+          forceRestartSafeTools: false,
+        }
+      : resolveMainSessionResumePolicy(messages, entry.restartRecoveryForceSafeTools === true);
     const resumePolicy = {
       ...transcriptResumePolicy,
       forceRestartSafeTools:
@@ -1080,12 +1182,14 @@ async function recoverStore(params: {
         !deliveryContext &&
         !(await writeUnresumableSessionNotice({
           entry,
+          interruptionReason,
           sessionKey,
           storePath: params.storePath,
         }))
       ) {
         // Keep the claim recoverable until its user-visible terminal notice is durable.
         result.failed++;
+        result.retryableFailures++;
         continue;
       }
       const failed = await markSessionFailed({
@@ -1103,6 +1207,7 @@ async function recoverStore(params: {
           await sendUnresumableSessionNotice({
             deliveryContext,
             entry,
+            interruptionReason,
             reason: resumePolicy.blockReason,
             sessionKey,
           });
@@ -1121,6 +1226,8 @@ async function recoverStore(params: {
       storePath: params.storePath,
       sessionKey,
       pendingFinalDeliveryText: entry.pendingFinalDeliveryText,
+      interruptionReason,
+      notifyGatewayReset: params.interruptionReason !== "gateway_timeout",
       forceRestartSafeTools: resumePolicy.forceRestartSafeTools,
       sessionWorkAdmissionHandoffId: params.sessionWorkAdmissionHandoffId,
     });
@@ -1129,6 +1236,7 @@ async function recoverStore(params: {
       result.recovered++;
     } else {
       result.failed++;
+      result.retryableFailures++;
     }
   }
 
@@ -1153,7 +1261,7 @@ async function resolveRestartRecoveryStorePaths(params: {
   return [...storePaths].toSorted((a, b) => a.localeCompare(b));
 }
 
-export async function recoverRestartAbortedMainSessions(
+async function recoverRestartAbortedMainSessionsWithStatus(
   params: {
     cfg?: OpenClawConfig;
     stateDir?: string;
@@ -1161,8 +1269,13 @@ export async function recoverRestartAbortedMainSessions(
     activeSessionIds?: Iterable<string>;
     activeSessionKeys?: Iterable<string>;
   } = {},
-): Promise<{ recovered: number; failed: number; skipped: number }> {
-  const result = { recovered: 0, failed: 0, skipped: 0 };
+): Promise<RecoveryAttemptResult> {
+  const result: RecoveryAttemptResult = {
+    recovered: 0,
+    failed: 0,
+    skipped: 0,
+    retryableFailures: 0,
+  };
   const resumedSessionKeys = params.resumedSessionKeys ?? new Set<string>();
 
   for (const storePath of await resolveRestartRecoveryStorePaths(params)) {
@@ -1176,6 +1289,7 @@ export async function recoverRestartAbortedMainSessions(
     result.recovered += storeResult.recovered;
     result.failed += storeResult.failed;
     result.skipped += storeResult.skipped;
+    result.retryableFailures += storeResult.retryableFailures;
   }
 
   if (result.recovered > 0 || result.failed > 0) {
@@ -1186,16 +1300,35 @@ export async function recoverRestartAbortedMainSessions(
   return result;
 }
 
+export async function recoverRestartAbortedMainSessions(
+  params: {
+    cfg?: OpenClawConfig;
+    stateDir?: string;
+    resumedSessionKeys?: Set<string>;
+    activeSessionIds?: Iterable<string>;
+    activeSessionKeys?: Iterable<string>;
+  } = {},
+): Promise<RecoveryResult> {
+  const { retryableFailures: _retryableFailures, ...result } =
+    await recoverRestartAbortedMainSessionsWithStatus(params);
+  return result;
+}
+
 /** Retries one exact durable Control UI row from its owning per-agent SQLite store. */
-export async function retryRestartAbortedMainSessionRecovery(params: {
+type RetryRestartAbortedMainSessionRecoveryParams = {
   canonicalSessionKey?: string;
   cfg?: OpenClawConfig;
   expectedRecoveryRunId: string;
-  expectedRecoverySourceRunId: string;
+  expectedRecoverySourceRunId?: string;
   expectedSessionId: string;
+  interruptionReason?: MainSessionInterruptionReason;
   sessionKey: string;
   storePath: string;
-}): Promise<{ recovered: number; failed: number; skipped: number }> {
+};
+
+export async function retryRestartAbortedMainSessionRecovery(
+  params: RetryRestartAbortedMainSessionRecoveryParams,
+): Promise<{ recovered: number; failed: number; skipped: number }> {
   const expectedClaim: ExpectedRestartRecoveryClaim = {
     canonicalSessionKey: params.canonicalSessionKey,
     recoveryRunId: params.expectedRecoveryRunId,
@@ -1224,19 +1357,55 @@ export async function retryRestartAbortedMainSessionRecovery(params: {
   });
   const handoffId = admission.createHandoff();
   try {
-    return await admission.run(
+    const { retryableFailures: _retryableFailures, ...result } = await admission.run(
       async () =>
         await recoverStore({
           cfg: params.cfg,
           storePath: params.storePath,
           resumedSessionKeys: new Set<string>(),
           expectedClaim,
+          interruptionReason: params.interruptionReason,
           sessionWorkAdmissionHandoffId: handoffId,
         }),
     );
+    return result;
   } finally {
     cancelSessionWorkAdmissionHandoff(handoffId);
   }
+}
+
+async function recoverStartupOrphanedMainSessionsWithStatus(
+  params: {
+    cfg?: OpenClawConfig;
+    stateDir?: string;
+    activeSessionIds?: Iterable<string>;
+    activeSessionKeys?: Iterable<string>;
+    updatedBeforeMs?: number;
+    resumedSessionKeys?: Set<string>;
+  } = {},
+): Promise<RecoveryAttemptResult & { marked: number }> {
+  const startupRecoveryCutoffMs = params.updatedBeforeMs ?? Date.now();
+  const marked = await markStartupOrphanedMainSessionsForRecovery({
+    cfg: params.cfg,
+    stateDir: params.stateDir,
+    activeSessionIds: params.activeSessionIds,
+    activeSessionKeys: params.activeSessionKeys,
+    updatedBeforeMs: startupRecoveryCutoffMs,
+  });
+  const recovered = await recoverRestartAbortedMainSessionsWithStatus({
+    cfg: params.cfg,
+    stateDir: params.stateDir,
+    resumedSessionKeys: params.resumedSessionKeys,
+    activeSessionIds: params.activeSessionIds,
+    activeSessionKeys: params.activeSessionKeys,
+  });
+  return {
+    marked: marked.marked,
+    recovered: recovered.recovered,
+    failed: recovered.failed,
+    skipped: marked.skipped + recovered.skipped,
+    retryableFailures: recovered.retryableFailures,
+  };
 }
 
 export async function recoverStartupOrphanedMainSessions(
@@ -1249,27 +1418,9 @@ export async function recoverStartupOrphanedMainSessions(
     resumedSessionKeys?: Set<string>;
   } = {},
 ): Promise<{ marked: number; recovered: number; failed: number; skipped: number }> {
-  const startupRecoveryCutoffMs = params.updatedBeforeMs ?? Date.now();
-  const marked = await markStartupOrphanedMainSessionsForRecovery({
-    cfg: params.cfg,
-    stateDir: params.stateDir,
-    activeSessionIds: params.activeSessionIds,
-    activeSessionKeys: params.activeSessionKeys,
-    updatedBeforeMs: startupRecoveryCutoffMs,
-  });
-  const recovered = await recoverRestartAbortedMainSessions({
-    cfg: params.cfg,
-    stateDir: params.stateDir,
-    resumedSessionKeys: params.resumedSessionKeys,
-    activeSessionIds: params.activeSessionIds,
-    activeSessionKeys: params.activeSessionKeys,
-  });
-  return {
-    marked: marked.marked,
-    recovered: recovered.recovered,
-    failed: recovered.failed,
-    skipped: marked.skipped + recovered.skipped,
-  };
+  const { retryableFailures: _retryableFailures, ...result } =
+    await recoverStartupOrphanedMainSessionsWithStatus(params);
+  return result;
 }
 
 export function scheduleRestartAbortedMainSessionRecovery(
@@ -1279,20 +1430,24 @@ export function scheduleRestartAbortedMainSessionRecovery(
     maxRetries?: number;
     stateDir?: string;
   } = {},
-): void {
+): Promise<boolean> {
   const initialDelay = params.delayMs ?? DEFAULT_RECOVERY_DELAY_MS;
   const maxRetries = params.maxRetries ?? MAX_RECOVERY_RETRIES;
   const resumedSessionKeys = new Set<string>();
   // Only reconcile rows that existed before this startup recovery was scheduled.
   // Fresh runs started by this gateway are protected again by the active-run check.
   const startupRecoveryCutoffMs = Date.now();
+  let resolveStableRecovery = (_stable: boolean) => {};
+  const stableRecovery = new Promise<boolean>((resolve) => {
+    resolveStableRecovery = resolve;
+  });
 
   const runRecoveryAttempt = (attempt: number, delay: number) => {
     // Delayed retries outlive startup; each attempt must independently block
     // host suspension while it reads and rewrites recovery session state.
     void runWithGatewayIndependentRootWorkAdmission(
       async () =>
-        await recoverStartupOrphanedMainSessions({
+        await recoverStartupOrphanedMainSessionsWithStatus({
           cfg: params.cfg,
           stateDir: params.stateDir,
           resumedSessionKeys,
@@ -1300,8 +1455,13 @@ export function scheduleRestartAbortedMainSessionRecovery(
         }),
     )
       .then((result) => {
-        if (result.failed > 0 && attempt < maxRetries) {
+        if (result.retryableFailures > 0 && attempt < maxRetries) {
           scheduleAttempt(attempt + 1, delay * RETRY_BACKOFF_MULTIPLIER);
+        } else if (result.retryableFailures > 0) {
+          log.warn("main-session restart recovery gave up with interrupted sessions still pending");
+          resolveStableRecovery(false);
+        } else {
+          resolveStableRecovery(true);
         }
       })
       .catch((err: unknown) => {
@@ -1310,6 +1470,7 @@ export function scheduleRestartAbortedMainSessionRecovery(
           scheduleAttempt(attempt + 1, delay * RETRY_BACKOFF_MULTIPLIER);
         } else {
           log.warn(`main-session restart recovery gave up: ${String(err)}`);
+          resolveStableRecovery(false);
         }
       });
   };
@@ -1325,5 +1486,6 @@ export function scheduleRestartAbortedMainSessionRecovery(
   };
 
   scheduleAttempt(1, initialDelay);
+  return stableRecovery;
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

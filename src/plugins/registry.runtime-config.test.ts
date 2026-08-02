@@ -24,6 +24,42 @@ function createTestRegistry(runtime: PluginRuntime) {
 }
 
 describe("plugin registry runtime config scope", () => {
+  it("allows explicitly configured plugins to use only their scoped channel ingress queue", () => {
+    const runtime = createPluginRuntime();
+    const pluginRegistry = createTestRegistry(runtime);
+    const configured = createPluginRecord({
+      id: "configured-ingress-owner",
+      name: "Configured Ingress Owner",
+      source: "/explicit/plugins/configured-ingress-owner/index.js",
+      origin: "config",
+      enabled: true,
+      configSchema: false,
+    });
+    const workspace = createPluginRecord({
+      id: "workspace-ingress-owner",
+      name: "Workspace Ingress Owner",
+      source: "/workspace/.openclaw/plugins/workspace-ingress-owner/index.js",
+      origin: "workspace",
+      enabled: true,
+      configSchema: false,
+    });
+
+    const configuredApi = pluginRegistry.createApi(configured, { config: {} as OpenClawConfig });
+    const queue = configuredApi.runtime.state.openChannelIngressQueue({ accountId: "test" });
+    expect(queue).toBeDefined();
+    expect(() =>
+      configuredApi.runtime.state.openChannelIngressQueue({
+        accountId: "test",
+        stateDir: path.join(os.tmpdir(), "configured-plugin-selected-state"),
+      }),
+    ).toThrow("cannot select a channel ingress queue stateDir");
+
+    const workspaceApi = pluginRegistry.createApi(workspace, { config: {} as OpenClawConfig });
+    expect(() => workspaceApi.runtime.state.openChannelIngressQueue({ accountId: "test" })).toThrow(
+      "only available to bundled, trusted, or explicitly configured plugins",
+    );
+  });
+
   it("resolves plugin API paths against the plugin root", () => {
     const pluginRoot = path.join(os.tmpdir(), "openclaw-plugins", "demo");
     const pluginRegistry = createTestRegistry(createPluginRuntime());
@@ -224,6 +260,7 @@ describe("plugin registry runtime config scope", () => {
     let requestScope = getPluginRuntimeGatewayRequestScope();
     const runtime = createPluginRuntime();
     runtime.gateway = {
+      capabilities: runtime.gateway.capabilities,
       isAvailable: async () => true,
       request: async <T>() => {
         requestScope = getPluginRuntimeGatewayRequestScope();
@@ -241,6 +278,7 @@ describe("plugin registry runtime config scope", () => {
     });
     const api = pluginRegistry.createApi(record, { config: {} as OpenClawConfig });
 
+    expect(api.runtime.gateway.capabilities).toBe(runtime.gateway.capabilities);
     await api.runtime.gateway.request("voicecall.start", { to: "+15550001234" });
 
     expect(requestScope).toMatchObject({
@@ -468,6 +506,7 @@ describe("plugin registry runtime config scope", () => {
     });
     const gatewayRequest = vi.fn(async () => ({ ok: true }));
     runtime.gateway = {
+      capabilities: runtime.gateway.capabilities,
       isAvailable: vi.fn(async () => true),
       request: gatewayRequest as unknown as PluginRuntime["gateway"]["request"],
     };

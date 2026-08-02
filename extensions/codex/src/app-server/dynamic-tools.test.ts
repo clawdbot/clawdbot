@@ -3063,6 +3063,7 @@ describe("createCodexDynamicToolBridge", () => {
       },
       {
         agentId: "agent-1",
+        accountId: "slack-account-1",
         sessionId: "session-1",
         sessionKey: "agent:agent-1:session-1",
         runId: "run-1",
@@ -3092,6 +3093,7 @@ describe("createCodexDynamicToolBridge", () => {
     });
     expectContextFields(callArg(afterToolCall, 0, 1, "after_tool_call context"), {
       agentId: "agent-1",
+      accountId: "slack-account-1",
       sessionId: "session-1",
       sessionKey: "agent:agent-1:session-1",
       runId: "run-1",

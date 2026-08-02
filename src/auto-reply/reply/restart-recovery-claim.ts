@@ -15,6 +15,7 @@ export function createReplyRestartRecoveryClaimController(params: {
   admittedRunId?: unknown;
   getEntry: () => SessionEntry | undefined;
   isRestartAbort: () => boolean;
+  requestMessageId?: unknown;
   resolveDeliveryContext: (entry: SessionEntry | undefined) => DeliveryContext | undefined;
   sessionId: string;
   sessionKey?: string;
@@ -47,6 +48,8 @@ export function createReplyRestartRecoveryClaimController(params: {
           current.abortedLastRun !== true &&
           current.restartRecoveryDeliveryContext === undefined &&
           current.restartRecoveryDeliveryRunId === admittedRunId &&
+          current.restartRecoveryDeliveryRequestMessageId ===
+            normalizeOptionalString(params.requestMessageId) &&
           current.restartRecoveryDeliverySourceRunId === entry.restartRecoveryDeliverySourceRunId &&
           current.restartRecoveryDeliveryRequestFingerprint ===
             entry.restartRecoveryDeliveryRequestFingerprint
@@ -93,6 +96,9 @@ export function createReplyRestartRecoveryClaimController(params: {
                 ...retiredClaim,
                 restartRecoveryDeliveryContext: deliveryContext,
                 restartRecoveryDeliveryRequestFingerprint: undefined,
+                restartRecoveryDeliveryRequestMessageId: normalizeOptionalString(
+                  params.requestMessageId,
+                ),
                 restartRecoveryDeliveryRunId: recoveryRunId,
                 restartRecoveryDeliverySourceRunId: undefined,
                 updatedAt,
@@ -103,6 +109,9 @@ export function createReplyRestartRecoveryClaimController(params: {
           ? {
               restartRecoveryDeliveryContext: deliveryContext,
               restartRecoveryDeliveryRequestFingerprint: undefined,
+              restartRecoveryDeliveryRequestMessageId: normalizeOptionalString(
+                params.requestMessageId,
+              ),
               restartRecoveryDeliveryRunId: recoveryRunId,
               restartRecoveryDeliverySourceRunId: undefined,
               updatedAt,

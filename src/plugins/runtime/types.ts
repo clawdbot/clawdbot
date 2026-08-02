@@ -96,14 +96,28 @@ type RuntimeNodeInvokeParams = {
 };
 
 export type RuntimeGatewayRequestOptions = {
+  /** Wait for the terminal response frame instead of returning the accepted frame. */
+  expectFinal?: boolean;
+  /** Persist caller-owned acceptance state before waiting for a terminal frame. */
+  onAccepted?: (payload: unknown) => Promise<void> | void;
   timeoutMs?: number;
   /** Requested Gateway scopes. Honored only for bundled or trusted official plugins. */
   scopes?: OperatorScope[];
 };
 
+export type RuntimeGatewayCapabilities = Readonly<{
+  contractVersion: 1;
+  acceptedCallbackBarrier: true;
+  agentWaitProviderStarted: true;
+  agentWaitTimeoutPhase: true;
+  auditAgentRunSourceSequence: true;
+}>;
+
 /** Trusted in-process runtime surface injected into native plugins. */
 export type PluginRuntime = PluginRuntimeCore & {
   gateway: {
+    /** Frozen host contract used by plugins before they assume durable agent observation semantics. */
+    capabilities: RuntimeGatewayCapabilities;
     /** Whether this process owns an active Gateway request context. */
     isAvailable: () => Promise<boolean>;
     /** Dispatch a Gateway method as the current trusted plugin. */

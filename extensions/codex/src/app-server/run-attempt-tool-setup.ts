@@ -228,6 +228,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     ),
     hookContext: {
       agentId: sessionAgentId,
+      accountId: params.agentAccountId,
       config: params.config,
       workspaceDir: effectiveWorkspace,
       sessionId: params.sessionId,

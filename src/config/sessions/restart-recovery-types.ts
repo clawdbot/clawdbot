@@ -45,8 +45,18 @@ export type SessionRestartRecoveryState = {
   /** Suppresses visible text when a recovery attempt repairs only missing media. */
   restartRecoverySuppressTextDelivery?: true;
   restartRecoveryDeliveryRequestFingerprint?: string;
+  /** Immutable transport request id that owns the externally visible recovery reply. */
+  restartRecoveryDeliveryRequestMessageId?: string;
   restartRecoveryDeliveryRunId?: string;
   restartRecoveryDeliverySourceRunId?: string;
+  /** Why the active recovery claim entered transcript continuation. */
+  restartRecoveryInterruptionReason?: "gateway_restart" | "gateway_timeout";
+  /** Number of timeout continuations dispatched for the active claim. */
+  restartRecoveryTimeoutAttemptCount?: number;
+  /** Stops repeated full-deadline continuation after the durable attempt budget is exhausted. */
+  restartRecoveryTimeoutExhausted?: true;
+  /** Durable at-most-once reservation for the user-visible gateway-reset notice. */
+  restartRecoveryResumingNoticeRunId?: string;
   restartRecoverySourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   restartRecoveryTerminalDeliveryEvidence?: RestartRecoveryTerminalDeliveryEvidence[];
   restartRecoveryTerminalRunIds?: string[];

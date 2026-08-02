@@ -21,6 +21,9 @@ export type AgentHarnessHookContext = {
   trace?: DiagnosticTraceContext;
   jobId?: string;
   agentId?: string;
+  accountId?: string;
+  messageId?: string | number;
+  threadId?: string | number;
   sessionKey?: string;
   sessionId?: string;
   workspaceDir?: string;
@@ -46,6 +49,9 @@ export function buildAgentHookContext(params: AgentHarnessHookContext): PluginHo
     ...(params.trace ? { trace: params.trace } : {}),
     ...(params.jobId ? { jobId: params.jobId } : {}),
     ...(params.agentId ? { agentId: params.agentId } : {}),
+    ...(params.accountId ? { accountId: params.accountId } : {}),
+    ...(params.messageId !== undefined ? { messageId: params.messageId } : {}),
+    ...(params.threadId !== undefined ? { threadId: params.threadId } : {}),
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
     ...(params.sessionId ? { sessionId: params.sessionId } : {}),
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),

@@ -87,6 +87,10 @@ export async function prepareCodexAttemptContext(
   const hookContext = {
     runId: params.runId,
     agentId: sessionAgentId,
+    accountId: params.agentAccountId,
+    messageId: params.currentMessageId,
+    senderId: params.senderId ?? undefined,
+    threadId: params.currentThreadTs,
     sessionKey: sandboxSessionKey,
     sessionId: params.sessionId,
     workspaceDir: params.workspaceDir,

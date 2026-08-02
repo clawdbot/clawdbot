@@ -627,6 +627,61 @@ describe("agent activity audit projection", () => {
     expect(projected?.runId).toBe(runId);
   });
 
+  it("preserves per-run source sequence for terminal-before-start evidence", async () => {
+    const inputs: AuditEventInput[] = [];
+    const recorder = createAgentEventAuditRecorder({
+      writer: captureAuditWriter(inputs),
+      terminalSettleMs: 0,
+    });
+
+    recorder.record(
+      agentEvent({
+        runId: "run-cancelled-before-start",
+        seq: 1,
+        data: { phase: "end", aborted: true },
+      }),
+    );
+    recorder.record(agentEvent({ runId: "run-started", seq: 1 }));
+    recorder.record(
+      agentEvent({
+        runId: "run-started",
+        seq: 2,
+        data: { phase: "end", aborted: true },
+      }),
+    );
+    await recorder.stop();
+
+    const projected = inputs.map(({ runId, action, status, sourceSequence }) => ({
+      runId,
+      action,
+      status,
+      sourceSequence,
+    }));
+    expect(projected).toHaveLength(3);
+    expect(projected).toEqual(
+      expect.arrayContaining([
+        {
+          runId: "run-cancelled-before-start",
+          action: "agent.run.finished",
+          status: "cancelled",
+          sourceSequence: 1,
+        },
+        {
+          runId: "run-started",
+          action: "agent.run.started",
+          status: "started",
+          sourceSequence: 1,
+        },
+        {
+          runId: "run-started",
+          action: "agent.run.finished",
+          status: "cancelled",
+          sourceSequence: 2,
+        },
+      ]),
+    );
+  });
+
   it("settles an error followed by a cleanup end as one failed outcome", async () => {
     const inputs: AuditEventInput[] = [];
     const writer: AuditEventWriter = {

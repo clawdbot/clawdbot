@@ -21,6 +21,9 @@ export function createSyntheticPluginRuntimeClient(params?: {
   pluginRuntimeOwnerId?: string;
   runtimePluginToolGrant?: RuntimePluginToolGrant;
   scopes?: string[];
+  trustedRequestMessageId?: string;
+  trustedRequestSenderId?: string;
+  agentAcceptedExecutionBarrier?: Promise<void>;
 }): GatewayRequestOptions["client"] {
   const pluginRuntimeOwnerId =
     typeof params?.pluginRuntimeOwnerId === "string" && params.pluginRuntimeOwnerId.trim()
@@ -48,6 +51,15 @@ export function createSyntheticPluginRuntimeClient(params?: {
         : {}),
       ...(params?.internalDeliverySuppressText === true
         ? { internalDeliverySuppressText: true }
+        : {}),
+      ...(params?.trustedRequestMessageId
+        ? { trustedRequestMessageId: params.trustedRequestMessageId }
+        : {}),
+      ...(params?.trustedRequestSenderId
+        ? { trustedRequestSenderId: params.trustedRequestSenderId }
+        : {}),
+      ...(params?.agentAcceptedExecutionBarrier
+        ? { agentAcceptedExecutionBarrier: params.agentAcceptedExecutionBarrier }
         : {}),
       ...(params?.scopes?.includes(APPROVALS_SCOPE) ? { approvalRuntime: true } : {}),
       ...(pluginRuntimeOwnerId ? { pluginRuntimeOwnerId } : {}),

@@ -105,6 +105,7 @@ type HookRunnerLogger = {
 type HookFailurePolicy = "fail-open" | "fail-closed";
 export type VoidHookRunOptions = {
   unrefTimeout?: boolean;
+  requiredPluginId?: string;
 };
 
 type BeforeAgentFinalizeRetry = NonNullable<PluginHookBeforeAgentFinalizeResult["retry"]>;
@@ -547,6 +548,10 @@ export function createHookRunner(
     optionsValue: VoidHookRunOptions = {},
   ): Promise<void> {
     const hooks = getHooksForName(registry, hookName);
+    const requiredPluginId = optionsValue.requiredPluginId?.trim();
+    if (requiredPluginId && !hooks.some((hook) => hook.pluginId === requiredPluginId)) {
+      throw new Error(`required ${hookName} handler missing: ${requiredPluginId}`);
+    }
     if (hooks.length === 0) {
       return;
     }
@@ -554,6 +559,7 @@ export function createHookRunner(
     logger?.debug?.(`[hooks] running ${hookName} (${hooks.length} handlers)`);
 
     const promises = hooks.map(async (hook) => {
+      const required = hook.pluginId === requiredPluginId;
       try {
         const promise = Promise.resolve(
           (hook.handler as (event: unknown, ctx: unknown) => Promise<void> | void)(event, ctx),
@@ -565,6 +571,9 @@ export function createHookRunner(
           await promise;
         }
       } catch (err) {
+        if (required) {
+          throw err;
+        }
         handleHookError({ hookName, pluginId: hook.pluginId, error: err });
       }
     });
@@ -1143,8 +1152,9 @@ export function createHookRunner(
   async function runMessageSent(
     event: PluginHookMessageSentEvent,
     ctx: PluginHookMessageContext,
+    optionsValue: VoidHookRunOptions = {},
   ): Promise<void> {
-    return runVoidHook("message_sent", event, ctx);
+    return runVoidHook("message_sent", event, ctx, optionsValue);
   }
 
   /**

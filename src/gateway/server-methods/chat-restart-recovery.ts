@@ -311,6 +311,7 @@ export function resolveRestartSafeChatAdmission(params: {
             abortedLastRun: entry.abortedLastRun,
             restartRecoveryDeliveryRequestFingerprint:
               entry.restartRecoveryDeliveryRequestFingerprint,
+            restartRecoveryDeliveryRequestMessageId: entry.restartRecoveryDeliveryRequestMessageId,
             restartRecoveryDeliveryRunId: entry.restartRecoveryDeliveryRunId,
             restartRecoveryDeliverySourceRunId: entry.restartRecoveryDeliverySourceRunId,
             status: entry.status,
@@ -341,6 +342,9 @@ export function buildRestartSafeChatTranscriptState(params: {
       endedAt: undefined,
       restartRecoveryDeliveryContext: undefined,
       restartRecoveryDeliveryRequestFingerprint: params.admission.requestFingerprint,
+      // Control UI chat has no authenticated transport request identity. Never
+      // let an earlier channel-owned reply id survive into a chat recovery claim.
+      restartRecoveryDeliveryRequestMessageId: undefined,
       restartRecoveryDeliveryRunId: params.clientRunId,
       restartRecoveryDeliverySourceRunId: params.clientRunId,
       ...(params.admission.priorTerminalSourceRunId

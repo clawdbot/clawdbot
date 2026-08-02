@@ -9,6 +9,11 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../../process/gateway-work-admission.js";
 import {
+  isAcpSessionKey,
+  isCronSessionKey,
+  isSubagentSessionKey,
+} from "../../routing/session-key.js";
+import {
   annotateInterSessionPromptText,
   type InputProvenance,
 } from "../../sessions/input-provenance.js";
@@ -27,6 +32,7 @@ import {
 import type { AgentRunRequest } from "./agent-request-types.js";
 import type { PreparedAgentRunDispatch } from "./agent-run-admission-phase.js";
 import {
+  deleteGatewayDedupeEntries,
   resolveAbortedAgentStopReason,
   dispatchAgentRunFromGateway,
 } from "./agent-run-dispatch.js";
@@ -59,6 +65,8 @@ export function startAgentRunExecution(params: {
   inputProvenance?: InputProvenance;
   runId: string;
   idempotencyKey: string;
+  requestMessageId?: string;
+  requestSenderId?: string;
   agentDedupeKeys: readonly string[];
   spawnedBy?: string;
   groupId?: string;
@@ -91,9 +99,19 @@ export function startAgentRunExecution(params: {
     releaseGatewayRootContinuation = undefined;
   };
   void prepared.activeGatewayWorkAdmission.run(async () => {
-    await yieldAfterAgentAcceptedAck();
     let dispatched = false;
+    const acceptedExecutionBarrier = params.client?.internal?.agentAcceptedExecutionBarrier;
+    let acceptedExecutionBarrierPassed = !acceptedExecutionBarrier;
+    let rejectedBarrierResponse:
+      | {
+          error: ReturnType<typeof errorShape>;
+          payload: { runId: string; status: "error"; summary: string };
+        }
+      | undefined;
     try {
+      await acceptedExecutionBarrier;
+      acceptedExecutionBarrierPassed = true;
+      await yieldAfterAgentAcceptedAck();
       if (prepared.activeRunAbort.controller.signal.aborted) {
         const stopReason = resolveAbortedAgentStopReason(prepared.activeRunAbort.entry);
         setAbortedAgentDedupeEntries({
@@ -253,6 +271,9 @@ export function startAgentRunExecution(params: {
           ? params.client.internal.runtimePluginToolGrant
           : undefined;
 
+      let handOffTimedOutMainSession = false;
+      let settledSessionId = params.resolvedSessionId;
+
       dispatchAgentRunFromGateway({
         ingressOpts: {
           message,
@@ -273,6 +294,7 @@ export function startAgentRunExecution(params: {
           runContext: {
             messageChannel: params.delivery.originMessageChannel,
             accountId: params.delivery.resolvedAccountId,
+            senderId: params.requestSenderId,
             groupId: params.groupId,
             groupChannel: params.groupChannel,
             groupSpace: params.groupSpace,
@@ -290,6 +312,7 @@ export function startAgentRunExecution(params: {
           bestEffortDeliver: params.bestEffortDeliver,
           messageChannel: params.delivery.originMessageChannel,
           runId: params.runId,
+          requestMessageId: params.requestMessageId,
           lane: params.request.lane,
           modelRun: params.request.modelRun === true,
           promptMode: params.request.promptMode,
@@ -341,6 +364,7 @@ export function startAgentRunExecution(params: {
             activeSessionAgentId: params.activeSessionAgentId,
           }),
           onSessionIdChanged: (sessionId) => {
+            settledSessionId = sessionId;
             if (prepared.activeRunAbort.entry) {
               prepared.activeRunAbort.entry.sessionId = sessionId;
             }
@@ -361,13 +385,58 @@ export function startAgentRunExecution(params: {
         dedupeKeys: params.agentDedupeKeys,
         abortController: prepared.activeRunAbort.controller,
         cleanupAbortController: cleanupAdmittedRun,
-        onSettled: params.restoredCronContinuation
-          ? async ({ terminalOutcome, onRecovered }) =>
-              await params.releaseCronContinuationClaimWithRecovery(
+        onSettled: async ({ terminalOutcome, onRecovered }) => {
+          const continuationSettled = params.restoredCronContinuation
+            ? await params.releaseCronContinuationClaimWithRecovery(
                 { terminalOutcome },
                 onRecovered,
               )
-          : undefined,
+            : true;
+          handOffTimedOutMainSession = Boolean(
+            continuationSettled &&
+            !params.restoredCronContinuation &&
+            (terminalOutcome.reason === "hard_timeout" || terminalOutcome.reason === "timed_out") &&
+            params.resolvedSessionKey &&
+            !isCronSessionKey(params.resolvedSessionKey) &&
+            !isSubagentSessionKey(params.resolvedSessionKey) &&
+            !isAcpSessionKey(params.resolvedSessionKey) &&
+            !params.spawnedBy &&
+            !(
+              typeof params.sessionEntry?.spawnDepth === "number" &&
+              params.sessionEntry.spawnDepth > 0
+            ) &&
+            params.sessionEntry?.subagentRole == null &&
+            settledSessionId,
+          );
+          return continuationSettled;
+        },
+        onCleanup: () => {
+          const canonicalSessionKey = params.resolvedSessionKey;
+          const expectedSessionId = settledSessionId;
+          if (!handOffTimedOutMainSession || !canonicalSessionKey || !expectedSessionId) {
+            return;
+          }
+          // Keep restart-recovery/transcript machinery behind the settled-run lifecycle boundary.
+          void import("../../agents/main-session-timeout-recovery.js")
+            .then(({ scheduleTimedOutMainSessionRecovery }) =>
+              scheduleTimedOutMainSessionRecovery({
+                canonicalSessionKey,
+                cfg: params.cfgForAgent ?? params.cfg,
+                expectedRunId: params.runId,
+                expectedSessionId,
+                sessionKeys: [
+                  canonicalSessionKey,
+                  ...(params.requestedSessionKey ? [params.requestedSessionKey] : []),
+                ],
+                storePath: prepared.lifecycleStorePath,
+              }),
+            )
+            .catch((error: unknown) => {
+              params.context.logGateway.warn(
+                `failed to schedule timed-out main-session recovery ${params.runId}: ${formatForLog(error)}`,
+              );
+            });
+        },
         respond: params.respond,
         context: params.context,
         taskTrackingMode: prepared.dispatchTaskTrackingMode,
@@ -380,21 +449,43 @@ export function startAgentRunExecution(params: {
         status: "error" as const,
         summary: formatForLog(err),
       };
-      setGatewayDedupeEntries({
-        dedupe: params.context.dedupe,
-        keys: params.agentDedupeKeys,
-        entry: { ts: Date.now(), ok: false, payload, error },
-      });
-      params.respond(false, payload, error, {
-        runId: params.runId,
-        error: formatForLog(err),
-      });
+      if (acceptedExecutionBarrier && !acceptedExecutionBarrierPassed) {
+        rejectedBarrierResponse = { error, payload };
+      } else {
+        setGatewayDedupeEntries({
+          dedupe: params.context.dedupe,
+          keys: params.agentDedupeKeys,
+          entry: { ts: Date.now(), ok: false, payload, error },
+        });
+        params.respond(false, payload, error, {
+          runId: params.runId,
+          error: formatForLog(err),
+        });
+      }
     } finally {
       if (!dispatched) {
         try {
           await params.releaseCronContinuationClaimWithRecovery();
         } finally {
-          cleanupAdmittedRun({ force: true });
+          try {
+            cleanupAdmittedRun({ force: true });
+          } finally {
+            if (rejectedBarrierResponse) {
+              deleteGatewayDedupeEntries({
+                dedupe: params.context.dedupe,
+                keys: params.agentDedupeKeys,
+              });
+              params.respond(
+                false,
+                rejectedBarrierResponse.payload,
+                rejectedBarrierResponse.error,
+                {
+                  runId: params.runId,
+                  error: rejectedBarrierResponse.payload.summary,
+                },
+              );
+            }
+          }
         }
       }
     }

@@ -129,6 +129,16 @@ function latestOutboundDeliveryArgs(): {
   payloads: ReplyPayload[];
   bestEffort?: boolean;
   queuePolicy?: string;
+  requireUnknownSendReconciliation?: boolean;
+  replyPayloadSendingHook?: {
+    kind?: string;
+    channel?: string;
+    sessionKey?: string;
+    runId?: string;
+    messageSentReceiptPluginId?: string;
+    context?: Record<string, unknown>;
+  };
+  session?: { key?: string; agentId?: string };
 } {
   const args = lastMockArg(deliverOutboundPayloadsMock, "outbound delivery arguments");
   if (!args || typeof args !== "object") {
@@ -143,6 +153,16 @@ function latestOutboundDeliveryArgs(): {
     payloads: ReplyPayload[];
     bestEffort?: boolean;
     queuePolicy?: string;
+    requireUnknownSendReconciliation?: boolean;
+    replyPayloadSendingHook?: {
+      kind?: string;
+      channel?: string;
+      sessionKey?: string;
+      runId?: string;
+      messageSentReceiptPluginId?: string;
+      context?: Record<string, unknown>;
+    };
+    session?: { key?: string; agentId?: string };
   };
 }
 
@@ -411,6 +431,44 @@ describe("deliverAgentCommandResult payload normalization", () => {
 
     expect(delivered.payloads).toHaveLength(1);
     expectTextPayload(delivered.payloads[0], "[openai/gpt-5.4] Ready.");
+  });
+
+  it("carries immutable run and request identity into command-mode delivery hooks", async () => {
+    const outboundSession = {
+      key: "agent:main:slack:channel:c0alpha:thread:100.001",
+      agentId: "main",
+    };
+    await deliverAgentCommandResult({
+      cfg: {} as OpenClawConfig,
+      deps: {} as CliDeps,
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      opts: {
+        message: "resume",
+        deliver: true,
+        channel: "slack",
+        to: "C0ALPHA",
+        threadId: "100.001",
+        runId: "recovery-run",
+        requestMessageId: "100.002",
+      } as AgentCommandOpts,
+      outboundSession: outboundSession as never,
+      sessionEntry: undefined,
+      payloads: [{ text: "recovered" }],
+      result: createResult(),
+    });
+
+    expect(latestOutboundDeliveryArgs()).toMatchObject({
+      session: outboundSession,
+      replyPayloadSendingHook: {
+        runId: "recovery-run",
+        sessionKey: outboundSession.key,
+        context: {
+          messageId: "100.002",
+          runId: "recovery-run",
+          sessionKey: outboundSession.key,
+        },
+      },
+    });
   });
 
   it("keeps Slack options text intact for local preview when delivery is disabled", async () => {
@@ -686,6 +744,60 @@ describe("deliverAgentCommandResult payload normalization", () => {
     expect(normalizerOptions.agentId).toBe("tester");
     expect(normalizerOptions.sessionKey).toBeUndefined();
     expect(normalizerOptions.workspaceDir).toBe("/tmp/agent-workspace");
+  });
+
+  it("binds an owner-declared delivery to its awaited durable receipt", async () => {
+    await deliverMediaReplyForTest(
+      { key: "agent:tester:slack:channel:C123", agentId: "tester" } as never,
+      {
+        runId: "request-1",
+        replyAccountId: "workspace-1",
+        threadId: "root-1",
+        inputProvenance: {
+          kind: "inter_session",
+          sourceTool: "owner_handoff",
+          messageSentReceiptPluginId: "receipt-owner",
+        },
+      },
+    );
+
+    expect(latestOutboundDeliveryArgs()).toMatchObject({
+      channel: "slack",
+      accountId: "workspace-1",
+      replyToId: "root-1",
+      requireUnknownSendReconciliation: true,
+      replyPayloadSendingHook: {
+        kind: "final",
+        runId: "request-1",
+        messageSentReceiptPluginId: "receipt-owner",
+        context: {
+          channelId: "slack",
+          runId: "request-1",
+        },
+      },
+    });
+
+    await deliverMediaReplyForTest(
+      { key: "agent:tester:slack:channel:C123", agentId: "tester" } as never,
+      { runId: "ordinary-run" },
+    );
+    expect(latestOutboundDeliveryArgs().requireUnknownSendReconciliation).toBe(false);
+    expect(latestOutboundDeliveryArgs().replyPayloadSendingHook).toMatchObject({
+      kind: "final",
+      channel: "slack",
+      sessionKey: "agent:tester:slack:channel:C123",
+      runId: "ordinary-run",
+      context: {
+        channelId: "slack",
+        accountId: "default",
+        conversationId: "#general",
+        sessionKey: "agent:tester:slack:channel:C123",
+        runId: "ordinary-run",
+      },
+    });
+    expect(
+      latestOutboundDeliveryArgs().replyPayloadSendingHook?.messageSentReceiptPluginId,
+    ).toBeUndefined();
   });
 
   it("keeps LINE directive-only replies intact for local preview when delivery is disabled", async () => {

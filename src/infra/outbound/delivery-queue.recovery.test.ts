@@ -30,9 +30,16 @@ import {
 const RECOVERY_REPLAY_SPACING_MS = 250;
 const MAX_RETRIES = 5;
 const resolveOutboundChannelMessageAdapterMock = vi.hoisted(() => vi.fn());
+const messageSentHookMock = vi.hoisted(() => ({
+  hasHooks: vi.fn(() => false),
+  runMessageSent: vi.fn(async (_event: unknown, _ctx: unknown) => {}),
+}));
 
 vi.mock("./channel-resolution.js", () => ({
   resolveOutboundChannelMessageAdapter: resolveOutboundChannelMessageAdapterMock,
+}));
+vi.mock("../../plugins/hook-runner-global.js", () => ({
+  getGlobalHookRunner: () => messageSentHookMock,
 }));
 
 function mockCallArg(mock: { mock: { calls: unknown[][] } }, index = 0): unknown {
@@ -64,6 +71,10 @@ describe("delivery-queue recovery", () => {
 
   beforeEach(() => {
     resolveOutboundChannelMessageAdapterMock.mockReset();
+    messageSentHookMock.hasHooks.mockReset();
+    messageSentHookMock.hasHooks.mockReturnValue(false);
+    messageSentHookMock.runMessageSent.mockReset();
+    messageSentHookMock.runMessageSent.mockResolvedValue(undefined);
   });
 
   const enqueueCrashRecoveryEntries = async () => {
@@ -758,7 +769,7 @@ describe("delivery-queue recovery", () => {
     expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
   });
 
-  it("acks unknown-after-send entries reconciled as already sent before commit hooks", async () => {
+  it("emits an awaited receipt before acking a reconciled Slack send", async () => {
     const auditEvents: TrustedMessageAuditEvent[] = [];
     const unsubscribe = onTrustedMessageAuditEvent((event) => auditEvents.push(event));
     const id = await enqueueDelivery(
@@ -770,6 +781,19 @@ describe("delivery-queue recovery", () => {
         replyToId: "root-message",
         threadId: "thread-1",
         silent: true,
+        replyPayloadSendingHook: {
+          kind: "final",
+          channel: "demo-channel-a",
+          sessionKey: "agent:gaia:slack:channel:C123",
+          runId: "request-1",
+          messageSentReceiptPluginId: "gaia-workflow-preflight",
+          context: {
+            channelId: "demo-channel-a",
+            accountId: "acct-1",
+            conversationId: "+1",
+            replyToId: "root-message",
+          },
+        },
       },
       tmpDir(),
     );
@@ -778,6 +802,15 @@ describe("delivery-queue recovery", () => {
     });
     await markDeliveryPlatformOutcomeUnknown(id, tmpDir());
     const order: string[] = [];
+    let releaseReceipt: (() => void) | undefined;
+    messageSentHookMock.hasHooks.mockReturnValue(true);
+    messageSentHookMock.runMessageSent.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          order.push("message_sent");
+          releaseReceipt = resolve;
+        }),
+    );
     const afterCommit = vi.fn(() => {
       order.push("afterCommit");
     });
@@ -804,7 +837,11 @@ describe("delivery-queue recovery", () => {
     });
 
     const deliver = vi.fn().mockResolvedValue([]);
-    const { result } = await runRecovery({ deliver });
+    const recovery = runRecovery({ deliver });
+    await vi.waitFor(() => expect(messageSentHookMock.runMessageSent).toHaveBeenCalledOnce());
+    expect(await loadPendingDeliveries(tmpDir())).toHaveLength(1);
+    releaseReceipt?.();
+    const { result } = await recovery;
     unsubscribe();
 
     expect(deliver).not.toHaveBeenCalled();
@@ -855,7 +892,22 @@ describe("delivery-queue recovery", () => {
     expect(afterCommitInput.threadId).toBe("thread-1");
     expect(afterCommitInput.silent).toBe(true);
     expect(afterCommitInput.result?.messageId).toBe("platform-1");
-    expect(order).toEqual(["afterCommit"]);
+    expect(messageSentHookMock.runMessageSent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: "platform-1",
+        runId: "request-1",
+        replyToId: "hooked-root-message",
+        threadId: "thread-1",
+      }),
+      expect.objectContaining({
+        channelId: "demo-channel-a",
+        accountId: "acct-1",
+        conversationId: "+1",
+        runId: "request-1",
+      }),
+      { requiredPluginId: "gaia-workflow-preflight" },
+    );
+    expect(order).toEqual(["message_sent", "afterCommit"]);
     expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
     expect(auditEvents).toHaveLength(1);
     expect(auditEvents[0]).toMatchObject({
@@ -1221,6 +1273,54 @@ describe("delivery-queue recovery", () => {
       expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
       expect(readOutboundQueueStatus(tmpDir(), id)).toBeUndefined();
       expectMockMessageContaining(log.warn, "falling back to direct ack");
+    } finally {
+      vi.doUnmock("./delivery-queue-storage.js");
+      vi.resetModules();
+    }
+  });
+
+  it("retains a recovered required-receipt send when its post-send marker fails", async () => {
+    const id = await enqueueDelivery(
+      {
+        channel: "demo-channel-a",
+        to: "+1",
+        payloads: [{ text: "a" }],
+        replyPayloadSendingHook: {
+          kind: "final",
+          runId: "run-1",
+          messageSentReceiptPluginId: "gaia-workflow-preflight",
+          context: { channelId: "demo-channel-a", runId: "run-1" },
+        },
+      },
+      tmpDir(),
+    );
+    vi.resetModules();
+    vi.doMock("./delivery-queue-storage.js", async () => {
+      const actual = await vi.importActual<typeof import("./delivery-queue-storage.js")>(
+        "./delivery-queue-storage.js",
+      );
+      return {
+        ...actual,
+        markDeliveryPlatformOutcomeUnknown: vi.fn(async () => {
+          throw new Error("post-send state db locked");
+        }),
+      };
+    });
+
+    try {
+      const { recoverPendingDeliveries: recoverWithMarkFailure } =
+        await import("./delivery-queue-recovery.js");
+      const summary = await recoverWithMarkFailure({
+        deliver: asDeliverFn(
+          vi.fn().mockResolvedValue([{ channel: "demo-channel-a", messageId: "m1" }]),
+        ),
+        cfg: baseCfg,
+        stateDir: tmpDir(),
+        log: createRecoveryLog(),
+      });
+
+      expect(summary).toMatchObject({ recovered: 0, failed: 1 });
+      expect((await loadPendingDeliveries(tmpDir())).map((entry) => entry.id)).toContain(id);
     } finally {
       vi.doUnmock("./delivery-queue-storage.js");
       vi.resetModules();
