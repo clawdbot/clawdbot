@@ -148,7 +148,10 @@ export class ExtensionRelayBridge {
    */
   devtoolsTargetDescriptors(): Array<RelayTabInfo & { id: string; type: string }> {
     return [...this.tabs.values()].map((tab) => ({
-      ...tab.info,
+      tabId: tab.info.tabId,
+      url: tab.info.url,
+      title: tab.info.title,
+      active: tab.info.active,
       id: tab.attached?.targetId ?? `tab-${tab.info.tabId}`,
       type: "page",
     }));
