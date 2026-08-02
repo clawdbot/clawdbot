@@ -23,6 +23,7 @@ import type {
 } from "../talk/provider-types.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { createChatRunState } from "./server-chat-state.js";
+import { drainingRelaySessions, relaySessions } from "./talk-realtime-relay-state.js";
 import {
   acknowledgeTalkRealtimeRelayMark,
   cancelTalkRealtimeRelayTurn,
@@ -59,7 +60,7 @@ function stopTalkRealtimeRelaySession(
 }
 
 describe("talk realtime gateway relay", () => {
-  afterEach(() => {
+  afterEach(async () => {
     for (const [relaySessionId, connId] of activeRelaySessions) {
       try {
         stopTalkRealtimeRelaySessionRaw({ relaySessionId, connId });
@@ -73,6 +74,9 @@ describe("talk realtime gateway relay", () => {
       }
     }
     activeRelaySessions.clear();
+    await Promise.all(
+      [...drainingRelaySessions].map((session) => session.voiceSessionClose ?? Promise.resolve()),
+    );
     vi.useRealTimers();
     embeddedRunTesting.resetActiveEmbeddedRuns();
   });
@@ -418,6 +422,131 @@ describe("talk realtime gateway relay", () => {
       closeOpenClawStateDatabaseForTest();
       envSnapshot.restore();
       await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("emits one terminal error and close when transcript persistence overflows", async () => {
+    const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+    const tempDir = await fs.realpath(tempDirs.make("openclaw-relay-voice-overflow-"));
+    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
+    let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
+    const bridgeClose = vi.fn();
+    const events: Array<{ event: string; payload: unknown; connIds: string[] }> = [];
+    let releaseQueue!: () => void;
+    const queueBlocked = new Promise<void>((resolve) => {
+      releaseQueue = resolve;
+    });
+    try {
+      await replaceSessionEntry(
+        { agentId: "main", sessionKey: "agent:main:main" },
+        { sessionId: "relay-voice-overflow-session", updatedAt: Date.now() },
+      );
+      const provider = createIdleRelayProvider();
+      provider.createBridge = (request) => {
+        bridgeRequest = request;
+        return {
+          ...createIdleRelayProvider().createBridge(request),
+          close: bridgeClose,
+        } as RealtimeVoiceBridge;
+      };
+      const session = createTalkRealtimeRelaySession({
+        context: {
+          broadcastToConnIds: (event: string, payload: unknown, connIds: ReadonlySet<string>) => {
+            events.push({ event, payload, connIds: [...connIds] });
+          },
+          chatAbortControllers: new Map(),
+          getRuntimeConfig: () => ({}),
+          logGateway: { warn: vi.fn() },
+        } as never,
+        connId: "conn-voice-overflow",
+        provider,
+        providerConfig: {},
+        instructions: "brief",
+        tools: [],
+        sessionKey: "agent:main:main",
+      });
+      const relay = relaySessions.get(session.relaySessionId);
+      if (!relay) {
+        throw new Error("expected active relay");
+      }
+      relay.voiceTranscriptQueue.enqueue(async () => await queueBlocked);
+
+      for (let index = 0; index < 10_000; index += 1) {
+        bridgeRequest?.onTranscript?.("user", `message ${index}`, true);
+      }
+
+      const errorPayloads = events
+        .map((entry) => entry.payload)
+        .filter(
+          (payload): payload is Record<string, unknown> =>
+            typeof payload === "object" &&
+            payload !== null &&
+            (payload as Record<string, unknown>).type === "error",
+        );
+      const closePayloads = events
+        .map((entry) => entry.payload)
+        .filter(
+          (payload): payload is Record<string, unknown> =>
+            typeof payload === "object" &&
+            payload !== null &&
+            (payload as Record<string, unknown>).type === "close",
+        );
+      expect(errorPayloads).toHaveLength(1);
+      expect(errorPayloads[0]).toMatchObject({
+        relaySessionId: session.relaySessionId,
+        type: "error",
+        message: expect.stringContaining("persistence could not keep up"),
+      });
+      expect(errorPayloads[0]).not.toHaveProperty("code");
+      expect(closePayloads).toEqual([
+        expect.objectContaining({
+          relaySessionId: session.relaySessionId,
+          type: "close",
+          reason: "error",
+        }),
+      ]);
+      expect(bridgeClose).toHaveBeenCalledOnce();
+      expect(relaySessions.has(session.relaySessionId)).toBe(false);
+      expect(drainingRelaySessions.has(relay)).toBe(true);
+
+      createTalkRealtimeRelaySession({
+        context: {
+          broadcastToConnIds: vi.fn(),
+          getRuntimeConfig: () => ({}),
+          logGateway: { warn: vi.fn() },
+        } as never,
+        connId: "conn-voice-overflow",
+        provider,
+        providerConfig: {},
+        instructions: "brief",
+        tools: [],
+      });
+      expect(() =>
+        createTalkRealtimeRelaySession({
+          context: {
+            broadcastToConnIds: vi.fn(),
+            getRuntimeConfig: () => ({}),
+            logGateway: { warn: vi.fn() },
+          } as never,
+          connId: "conn-voice-overflow",
+          provider,
+          providerConfig: {},
+          instructions: "brief",
+          tools: [],
+        }),
+      ).toThrow("Too many active realtime relay sessions for this connection");
+
+      releaseQueue();
+      await relay.voiceSessionClose;
+      expect(drainingRelaySessions.has(relay)).toBe(false);
+      expect(clientVoiceSessionTesting.readRecord("main", session.relaySessionId)?.status).toBe(
+        "closed",
+      );
+    } finally {
+      releaseQueue();
+      closeOpenClawAgentDatabasesForTest();
+      closeOpenClawStateDatabaseForTest();
+      envSnapshot.restore();
     }
   });
 
@@ -859,6 +988,165 @@ describe("talk realtime gateway relay", () => {
     expect(mockCallArg(mock, 0, 1)).toBe("chat");
     expectRecordFields(mockCallArg(mock, 0, 2), { runId: "run-1", state: "aborted" });
   }
+
+  it("resets provider continuity without cancelling the replacement provider", async () => {
+    let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
+    const pendingWorking = createDeferredVoid();
+    const handleBargeIn = vi.fn();
+    const submitToolResult = vi
+      .fn<RealtimeVoiceBridge["submitToolResult"]>()
+      .mockReturnValueOnce(pendingWorking.promise);
+    const bridge = {
+      supportsToolResultContinuation: true,
+      connect: vi.fn(async () => undefined),
+      sendAudio: vi.fn(),
+      setMediaTimestamp: vi.fn(),
+      sendUserMessage: vi.fn(),
+      handleBargeIn,
+      submitToolResult,
+      acknowledgeMark: vi.fn(),
+      close: vi.fn(),
+      isConnected: vi.fn(() => true),
+    };
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "relay-test",
+      label: "Relay Test",
+      isConfigured: () => true,
+      createBridge: (request) => {
+        bridgeRequest = request;
+        return bridge;
+      },
+    };
+    const fixture = createAbortableRelayRunFixture(provider);
+    const relay = relaySessions.get(fixture.session.relaySessionId);
+    if (!relay || !bridgeRequest) {
+      throw new Error("expected active relay continuity fixture");
+    }
+    const request = bridgeRequest;
+    request.onReady?.();
+    request.onEvent?.({
+      direction: "server",
+      type: "response.audio.delta",
+      itemId: "old-item",
+      responseId: "old-response",
+    });
+    request.onAudio(Buffer.from("old audio"));
+    request.onToolCall?.({
+      itemId: "old-item",
+      callId: "call-1",
+      name: "custom_tool",
+      args: {},
+    });
+    const working = submitTalkRealtimeRelayToolResult({
+      relaySessionId: fixture.session.relaySessionId,
+      connId: "conn-1",
+      callId: "call-1",
+      result: { status: "working" },
+      options: { willContinue: true },
+    });
+
+    request.onEvent?.({
+      direction: "client",
+      type: "session.continuity.reset",
+    });
+    request.onEvent?.({
+      direction: "client",
+      type: "session.continuity.reset",
+    });
+
+    expect(fixture.abortController.signal.aborted).toBe(true);
+    expect(handleBargeIn).not.toHaveBeenCalled();
+    expect(bridge.close).not.toHaveBeenCalled();
+    expect(submitToolResult).toHaveBeenCalledTimes(1);
+    expect(relay.pendingWorkingToolResults.size).toBe(0);
+    expect(relay.activeAgentRuns.size).toBe(0);
+    expect(relay.activeAgentToolCalls.size).toBe(0);
+    const payloads = fixture.broadcastToConnIds.mock.calls.map(([, payload]) => payload);
+    const clears = payloads.filter(
+      (payload): payload is Record<string, unknown> =>
+        typeof payload === "object" &&
+        payload !== null &&
+        (payload as Record<string, unknown>).type === "clear",
+    );
+    expect(clears).toHaveLength(1);
+    expectRecordFields(clears[0]?.talkEvent, {
+      type: "turn.cancelled",
+      payload: { reason: "session.continuity.reset" },
+      final: true,
+    });
+
+    pendingWorking.resolve();
+    await working;
+    expect(submitToolResult).toHaveBeenCalledTimes(1);
+
+    request.onEvent?.({ direction: "server", type: "session.created" });
+    request.onAudio(Buffer.from("fresh audio"));
+    const freshAudio = fixture.broadcastToConnIds.mock.calls
+      .map(([, payload]) => payload)
+      .findLast(
+        (payload): payload is Record<string, unknown> =>
+          typeof payload === "object" &&
+          payload !== null &&
+          (payload as Record<string, unknown>).type === "audio",
+      );
+    expectRecordFields(freshAudio, {
+      type: "audio",
+      audioBase64: Buffer.from("fresh audio").toString("base64"),
+    });
+    expect(freshAudio).not.toHaveProperty("itemId");
+    expect(freshAudio).not.toHaveProperty("responseId");
+
+    request.onToolCall?.({
+      itemId: "fresh-item",
+      callId: "call-1",
+      name: "custom_tool",
+      args: {},
+    });
+    const freshToolCall = fixture.broadcastToConnIds.mock.calls
+      .map(([, payload]) => payload)
+      .findLast(
+        (payload): payload is Record<string, unknown> =>
+          typeof payload === "object" &&
+          payload !== null &&
+          (payload as Record<string, unknown>).type === "toolCall",
+      );
+    const freshCallId = freshToolCall?.callId;
+    expect(typeof freshCallId).toBe("string");
+    expect(freshCallId).not.toBe("call-1");
+    await submitTalkRealtimeRelayToolResult({
+      relaySessionId: fixture.session.relaySessionId,
+      connId: "conn-1",
+      callId: "call-1",
+      result: { stale: true },
+    });
+    expect(submitToolResult).toHaveBeenCalledTimes(1);
+    await submitTalkRealtimeRelayToolResult({
+      relaySessionId: fixture.session.relaySessionId,
+      connId: "conn-1",
+      callId: String(freshCallId),
+      result: { ok: true },
+    });
+    expect(submitToolResult).toHaveBeenLastCalledWith("call-1", { ok: true }, undefined);
+
+    request.onEvent?.({
+      direction: "client",
+      type: "session.continuity.reset",
+    });
+    request.onEvent?.({
+      direction: "client",
+      type: "session.continuity.reset",
+    });
+    expect(
+      fixture.broadcastToConnIds.mock.calls
+        .map(([, payload]) => payload)
+        .filter(
+          (payload) =>
+            typeof payload === "object" &&
+            payload !== null &&
+            (payload as Record<string, unknown>).type === "clear",
+        ),
+    ).toHaveLength(2);
+  });
 
   it("bridges browser audio, transcripts, and tool results through a backend provider", async () => {
     let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;

@@ -15,6 +15,7 @@ import {
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
 import { createDiagnosticMessageLifecycle } from "../../logging/message-lifecycle.js";
+import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { isCommandLaneTaskTimeoutError } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -247,10 +248,13 @@ export async function runCronIsolatedAgentTurn(params: {
       timeoutMs: prepared.context.timeoutMs,
       runTimeoutOverrideMs: prepared.context.runTimeoutOverrideMs,
       suppressExecNotifyOnExit: prepared.context.suppressExecNotifyOnExit,
+      pluginRegistry: prepared.context.pluginRegistry,
     };
     const execution = await prepared.context.sessionWorkAdmission.run(() =>
       withAgentRunLifecycleGeneration(runLifecycleGeneration, () =>
-        executeCronRun(executionParams),
+        withPluginRuntimeRegistryScope(prepared.context.pluginRegistry, () =>
+          executeCronRun(executionParams),
+        ),
       ),
     );
     const finalized = await finalizeCronRun({

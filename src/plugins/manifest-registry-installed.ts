@@ -12,7 +12,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { tryReadJsonSync } from "../infra/json-files.js";
 import type { PluginCandidate } from "./discovery.js";
 import { hashJson } from "./installed-plugin-index-hash.js";
-import type { InstalledPluginFileSignature } from "./installed-plugin-index-hash.js";
 import type { InstalledPluginIndex, InstalledPluginIndexRecord } from "./installed-plugin-index.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "./installed-plugin-index.js";
 import {
@@ -39,14 +38,8 @@ import {
 } from "./status-dependencies-core.js";
 
 const installedManifestRegistryIndexFingerprintCache = new WeakMap<InstalledPluginIndex, string>();
-const installedPackageJsonPathCache = new Map<string, string | null>();
 const installedPackageMetadataCache = new Map<string, InstalledPackageMetadata>();
-// Installed plugin metadata is process-stable between explicit lifecycle clears.
-// Share realpaths across fingerprint builds to avoid repeated package boundary IO.
-const installedManifestRegistryRealpathCache = new Map<string, string>();
-const MAX_INSTALLED_PACKAGE_JSON_PATH_CACHE_ENTRIES = 256;
 const MAX_INSTALLED_PACKAGE_METADATA_CACHE_ENTRIES = 256;
-const MAX_INSTALLED_MANIFEST_REGISTRY_REALPATH_CACHE_ENTRIES = 512;
 
 type InstalledPackageMetadata = {
   packageManifest?: OpenClawPackageManifest;
@@ -55,9 +48,7 @@ type InstalledPackageMetadata = {
 };
 
 function clearInstalledManifestRegistryProcessCaches(): void {
-  installedPackageJsonPathCache.clear();
   installedPackageMetadataCache.clear();
-  installedManifestRegistryRealpathCache.clear();
 }
 
 registerPluginMetadataProcessMemoLifecycleClear(clearInstalledManifestRegistryProcessCaches);
@@ -77,20 +68,6 @@ function isDeepFrozenJsonLike(value: unknown, seen = new WeakSet<object>()): boo
   return Object.values(value).every((entry) => isDeepFrozenJsonLike(entry, seen));
 }
 
-function hasPersistedFileSignatures(index: InstalledPluginIndex): boolean {
-  return index.plugins.every(
-    (record) =>
-      record.manifestFile !== undefined &&
-      (record.packageJson === undefined || record.packageJson.fileSignature !== undefined),
-  );
-}
-
-function isInstalledManifestRegistryIndexFingerprintCacheable(
-  index: InstalledPluginIndex,
-): boolean {
-  return hasPersistedFileSignatures(index) && isDeepFrozenJsonLike(index);
-}
-
 function isRelativePathInsideOrEqual(relativePath: string): boolean {
   return (
     relativePath === "" ||
@@ -107,44 +84,18 @@ function resolvePackageJsonPath(
   if (!record.packageJson?.path) {
     return undefined;
   }
-  const cacheKey = buildInstalledPackageJsonPathCacheKey(record);
-  if (cacheKey) {
-    const cached = installedPackageJsonPathCache.get(cacheKey);
-    if (cached !== undefined) {
-      return cached ?? undefined;
-    }
-  }
   const rootDir = resolveInstalledPluginRootDir(record);
   const realRootDir = safeRealpathSync(rootDir, realpathCache) ?? path.resolve(rootDir);
   const packageJsonPath = path.resolve(realRootDir, record.packageJson.path);
   const relative = path.relative(realRootDir, packageJsonPath);
   if (!isRelativePathInsideOrEqual(relative)) {
-    return rememberInstalledPackageJsonPath(cacheKey, undefined);
+    return undefined;
   }
   const packageJsonRealPath = safeRealpathSync(packageJsonPath, realpathCache);
   if (!packageJsonRealPath || !isPathInside(realRootDir, packageJsonRealPath)) {
-    return rememberInstalledPackageJsonPath(cacheKey, undefined);
-  }
-  return rememberInstalledPackageJsonPath(cacheKey, packageJsonPath);
-}
-
-function safeFileSignature(filePath: string | undefined): string | undefined {
-  if (!filePath) {
     return undefined;
   }
-  try {
-    const stat = fs.statSync(filePath);
-    return formatFileSignature(filePath, stat);
-  } catch {
-    return `${filePath}:missing`;
-  }
-}
-
-function formatFileSignature(
-  filePath: string,
-  signature: Pick<InstalledPluginFileSignature, "size" | "mtimeMs">,
-): string {
-  return `${filePath}:${signature.size}:${signature.mtimeMs}`;
+  return packageJsonPath;
 }
 
 function rememberInstalledPackageMetadata(
@@ -158,17 +109,6 @@ function rememberInstalledPackageMetadata(
   return metadata;
 }
 
-function rememberInstalledPackageJsonPath(
-  key: string | undefined,
-  packageJsonPath: string | undefined,
-): string | undefined {
-  if (key) {
-    installedPackageJsonPathCache.set(key, packageJsonPath ?? null);
-    trimBoundedCache(installedPackageJsonPathCache, MAX_INSTALLED_PACKAGE_JSON_PATH_CACHE_ENTRIES);
-  }
-  return packageJsonPath;
-}
-
 function trimBoundedCache<Value>(cache: Map<string, Value>, maxEntries: number): void {
   while (cache.size > maxEntries) {
     const oldest = cache.keys().next().value;
@@ -179,7 +119,7 @@ function trimBoundedCache<Value>(cache: Map<string, Value>, maxEntries: number):
   }
 }
 
-function buildInstalledPackageJsonPathCacheKey(
+function buildInstalledPackageMetadataCacheKey(
   record: InstalledPluginIndexRecord,
 ): string | undefined {
   if (!record.packageJson?.path || !record.packageJson.hash) {
@@ -188,78 +128,8 @@ function buildInstalledPackageJsonPathCacheKey(
   return hashJson({
     rootDir: path.resolve(resolveInstalledPluginRootDir(record)),
     packageJson: record.packageJson,
+    packageChannel: record.packageChannel ?? null,
   });
-}
-
-function buildInstalledPackageMetadataCacheKey(params: {
-  packageJsonPath?: string;
-  record: InstalledPluginIndexRecord;
-}): string | undefined {
-  if (!params.packageJsonPath || !params.record.packageJson?.hash) {
-    return undefined;
-  }
-  return hashJson({
-    packageJsonPath: path.resolve(params.packageJsonPath),
-    packageJson: params.record.packageJson,
-    packageChannel: params.record.packageChannel ?? null,
-  });
-}
-
-function buildInstalledManifestRegistryIndexKey(index: InstalledPluginIndex) {
-  return {
-    version: index.version,
-    hostContractVersion: index.hostContractVersion,
-    compatRegistryVersion: index.compatRegistryVersion,
-    migrationVersion: index.migrationVersion,
-    policyHash: index.policyHash,
-    installRecords: index.installRecords,
-    diagnostics: index.diagnostics,
-    plugins: index.plugins.map((record) => {
-      const packageJsonPath = resolvePackageJsonPath(
-        record,
-        installedManifestRegistryRealpathCache,
-      );
-      trimBoundedCache(
-        installedManifestRegistryRealpathCache,
-        MAX_INSTALLED_MANIFEST_REGISTRY_REALPATH_CACHE_ENTRIES,
-      );
-      const packageJsonFile = record.packageJson?.fileSignature
-        ? packageJsonPath
-          ? formatFileSignature(packageJsonPath, record.packageJson.fileSignature)
-          : undefined
-        : safeFileSignature(packageJsonPath);
-      return {
-        pluginId: record.pluginId,
-        packageName: record.packageName,
-        packageVersion: record.packageVersion,
-        installRecord: record.installRecord,
-        installRecordHash: record.installRecordHash,
-        packageInstall: record.packageInstall,
-        packageChannel: record.packageChannel,
-        manifestPath: record.manifestPath,
-        manifestHash: record.manifestHash,
-        manifestFile: record.manifestFile
-          ? formatFileSignature(record.manifestPath, record.manifestFile)
-          : safeFileSignature(record.manifestPath),
-        format: record.format,
-        bundleFormat: record.bundleFormat,
-        source: record.source,
-        setupSource: record.setupSource,
-        packageJson: record.packageJson,
-        packageJsonFile,
-        rootDir: record.rootDir,
-        origin: record.origin,
-        enabled: record.enabled,
-        enabledByDefault: record.enabledByDefault,
-        enabledByDefaultOnPlatforms: record.enabledByDefaultOnPlatforms
-          ? [...record.enabledByDefaultOnPlatforms]
-          : undefined,
-        syntheticAuthRefs: record.syntheticAuthRefs,
-        startup: record.startup,
-        compat: record.compat,
-      };
-    }),
-  };
 }
 
 export function resolveInstalledManifestRegistryIndexFingerprint(
@@ -269,8 +139,19 @@ export function resolveInstalledManifestRegistryIndexFingerprint(
   if (cached) {
     return cached;
   }
-  const fingerprint = hashJson(buildInstalledManifestRegistryIndexKey(index));
-  if (isInstalledManifestRegistryIndexFingerprintCacheable(index)) {
+  // The immutable installed inventory owns freshness; lifecycle clears publish
+  // a replacement instead of polling manifests or package paths on hot reads.
+  const fingerprint = hashJson({
+    version: index.version,
+    hostContractVersion: index.hostContractVersion,
+    compatRegistryVersion: index.compatRegistryVersion,
+    migrationVersion: index.migrationVersion,
+    policyHash: index.policyHash,
+    installRecords: index.installRecords,
+    diagnostics: index.diagnostics,
+    plugins: index.plugins,
+  });
+  if (isDeepFrozenJsonLike(index)) {
     installedManifestRegistryIndexFingerprintCache.set(index, fingerprint);
   }
   return fingerprint;
@@ -571,6 +452,11 @@ function resolveInstalledPackageMetadata(
   record: InstalledPluginIndexRecord,
   realpathCache: Map<string, string>,
 ): InstalledPackageMetadata {
+  const cacheKey = buildInstalledPackageMetadataCacheKey(record);
+  const cached = cacheKey ? installedPackageMetadataCache.get(cacheKey) : undefined;
+  if (cached) {
+    return cached;
+  }
   const recordPackageChannel = normalizePersistedPackageChannel(record.packageChannel);
   const fallbackPackageManifest = recordPackageChannel
     ? {
@@ -580,11 +466,6 @@ function resolveInstalledPackageMetadata(
   const packageJsonPath = record.packageJson?.path
     ? resolvePackageJsonPath(record, realpathCache)
     : undefined;
-  const cacheKey = buildInstalledPackageMetadataCacheKey({ packageJsonPath, record });
-  const cached = cacheKey ? installedPackageMetadataCache.get(cacheKey) : undefined;
-  if (cached) {
-    return cached;
-  }
   if (!packageJsonPath) {
     return rememberInstalledPackageMetadata(
       cacheKey,

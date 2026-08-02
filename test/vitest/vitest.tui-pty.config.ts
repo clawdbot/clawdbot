@@ -43,6 +43,7 @@ function createTuiPtyVitestConfig(env?: Record<string, string | undefined>) {
       exclude,
       fileParallelism: false,
       maxWorkers: 1,
+      reporters: ["verbose", ...(configEnv.GITHUB_ACTIONS === "true" ? ["github-actions"] : [])],
       setupFiles: [
         ...new Set(
           [...(baseTest.setupFiles ?? []), "test/setup-openclaw-runtime.ts"].map(

@@ -4,7 +4,7 @@ import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-w
 
 const SIDEBAR_SESSION_LIST_LIMIT = 60;
 const SIDEBAR_CATALOG_LIMIT_PER_HOST = 40;
-const SIDEBAR_CATALOG_PREWARM_MAX_SESSION_ENTRIES = 2_000;
+const SIDEBAR_PREWARM_MAX_SESSION_ENTRIES = 2_000;
 
 type StartupTrace = {
   measure: <T>(name: string, run: () => T | Promise<T>) => Promise<T>;
@@ -19,10 +19,7 @@ type GatewayHandlerPrewarmHandle = {
   stop: () => void;
 };
 
-async function prewarmGatewaySessionListData(
-  cfg: OpenClawConfig,
-  agentId: string,
-): Promise<number> {
+async function prewarmGatewaySessionListData(cfg: OpenClawConfig, agentId: string): Promise<void> {
   const [{ loadCombinedSessionStoreForGateway }, { listSessionsFromStoreAsync }] =
     await Promise.all([
       import("../config/sessions/combined-store-gateway.js"),
@@ -46,19 +43,43 @@ async function prewarmGatewaySessionListData(
       limit: SIDEBAR_SESSION_LIST_LIMIT,
     },
   });
-  return Object.keys(store).length;
 }
 
-function dashboardDataPrewarmItems(cfg: OpenClawConfig): GatewayHandlerPrewarmItem[] {
+function dashboardDataPrewarmItems(
+  cfg: OpenClawConfig,
+  log: { info?: (msg: string) => void },
+): GatewayHandlerPrewarmItem[] {
   const agentIds = listAgentIds(cfg);
-  let loadedSessionStores = 0;
-  let totalSessionEntries = 0;
+  let sessionDataPrewarmChecked = false;
+  let sessionDataPrewarmAllowed = false;
+  const shouldPrewarmSessionData = async () => {
+    if (sessionDataPrewarmChecked) {
+      return sessionDataPrewarmAllowed;
+    }
+    sessionDataPrewarmChecked = true;
+    const { canPrewarmCombinedSessionStoresForGateway } =
+      await import("../config/sessions/combined-store-gateway.js");
+    sessionDataPrewarmAllowed = canPrewarmCombinedSessionStoresForGateway(cfg, {
+      agentIds,
+      maxRows: SIDEBAR_PREWARM_MAX_SESSION_ENTRIES,
+    });
+    if (!sessionDataPrewarmAllowed) {
+      log.info?.(
+        `skipping optional dashboard session prewarm: combined stores exceed ${SIDEBAR_PREWARM_MAX_SESSION_ENTRIES} rows`,
+      );
+    }
+    return sessionDataPrewarmAllowed;
+  };
   return [
     ...agentIds.map((agentId) => ({
       name: `sessions.${agentId}`,
       load: async () => {
-        totalSessionEntries += await prewarmGatewaySessionListData(cfg, agentId);
-        loadedSessionStores += 1;
+        // A count-only query keeps unusually large stores off the synchronous JSON projection
+        // path. Request-time session and catalog handlers remain authoritative when skipped.
+        if (!(await shouldPrewarmSessionData())) {
+          return;
+        }
+        await prewarmGatewaySessionListData(cfg, agentId);
       },
     })),
     {
@@ -71,12 +92,7 @@ function dashboardDataPrewarmItems(cfg: OpenClawConfig): GatewayHandlerPrewarmIt
     ...agentIds.map((agentId) => ({
       name: `session-catalog.${agentId}`,
       load: async () => {
-        // Catalog providers may project every OpenClaw session before returning their bounded
-        // page. Keep that optional cold-cache work off the event loop for unusually large stores.
-        if (
-          loadedSessionStores !== agentIds.length ||
-          totalSessionEntries > SIDEBAR_CATALOG_PREWARM_MAX_SESSION_ENTRIES
-        ) {
+        if (!(await shouldPrewarmSessionData())) {
           return;
         }
         const { prewarmSessionCatalogList } = await import("./server-methods/session-catalog.js");
@@ -93,14 +109,16 @@ function dashboardDataPrewarmItems(cfg: OpenClawConfig): GatewayHandlerPrewarmIt
 export function scheduleGatewayHandlerPrewarm(params: {
   cfgAtStart: OpenClawConfig;
   startupTrace?: StartupTrace;
-  log: { warn: (msg: string) => void };
+  log: { info?: (msg: string) => void; warn: (msg: string) => void };
   items?: readonly GatewayHandlerPrewarmItem[];
+  waitForPostReadyWork?: () => Promise<void>;
 }): GatewayHandlerPrewarmHandle {
   // Frequent updater restarts make cold dashboard data the remaining slow tier.
   // Keep cheap session reads first, process-stable plugin data second, and provider catalogs last.
-  const items = params.items ?? dashboardDataPrewarmItems(params.cfgAtStart);
+  const items = params.items ?? dashboardDataPrewarmItems(params.cfgAtStart, params.log);
   let stopped = false;
   let nextIndex = 0;
+  let currentItemName = "unknown";
   let timer: ReturnType<typeof setTimeout> | undefined;
 
   const scheduleNext = () => {
@@ -109,23 +127,27 @@ export function scheduleGatewayHandlerPrewarm(params: {
     }
     timer = setTimeout(() => {
       timer = undefined;
-      if (stopped) {
-        return;
-      }
-      const item = items[nextIndex++];
-      if (!item) {
-        return;
-      }
-      const load = () => item.load();
-      void runWithGatewayIndependentRootWorkAdmission(() =>
-        params.startupTrace
-          ? params.startupTrace.measure(`post-ready.gateway-data.${item.name}`, load)
-          : load(),
-      )
+      void (async () => {
+        await params.waitForPostReadyWork?.();
+        if (stopped) {
+          return;
+        }
+        const item = items[nextIndex++];
+        if (!item) {
+          return;
+        }
+        currentItemName = item.name;
+        const load = () => item.load();
+        await runWithGatewayIndependentRootWorkAdmission(() =>
+          params.startupTrace
+            ? params.startupTrace.measure(`post-ready.gateway-data.${item.name}`, load)
+            : load(),
+        );
+      })()
         .catch((err: unknown) => {
           // Prewarm only improves latency; readiness and request-time loaders remain authoritative.
           params.log.warn(
-            `post-ready gateway data prewarm failed for ${item.name}: ${String(err)}`,
+            `post-ready gateway data prewarm failed for ${currentItemName}: ${String(err)}`,
           );
         })
         .finally(scheduleNext);

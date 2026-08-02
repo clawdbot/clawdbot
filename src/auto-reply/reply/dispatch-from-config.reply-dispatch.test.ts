@@ -2,6 +2,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearAgentHarnesses } from "../../agents/harness/registry.js";
 import type { PluginHookReplyDispatchResult } from "../../plugins/hooks.test-fixtures.js";
+import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { createInternalHookEventPayload } from "../../test-utils/internal-hook-event-payload.js";
 import { withReplyDispatcher } from "../dispatch-dispatcher.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
@@ -34,12 +35,6 @@ let runAfterReplyOperationClear: typeof import("./reply-run-registry.js").runAft
 let resetReplyRunRegistry: typeof import("./reply-run-registry.test-support.js").testing.resetReplyRunRegistry;
 
 const REPLY_RUN_FINALIZATION_SETTLE_TIMEOUT_MS = 60_000;
-
-function firstRuntimeLoadCall() {
-  return runtimePluginMocks.ensureRuntimePluginsLoaded.mock.calls[0]?.[0] as
-    | { config?: unknown; workspaceDir?: unknown }
-    | undefined;
-}
 
 function firstReplyDispatchCall() {
   return hookMocks.runner.runReplyDispatch.mock.calls[0] as
@@ -154,15 +149,23 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     diagnosticMocks.logMessageProcessed.mockReset();
     diagnosticMocks.logSessionStateChange.mockReset();
     diagnosticMocks.markDiagnosticSessionProgress.mockReset();
-    runtimePluginMocks.ensureRuntimePluginsLoaded.mockReset();
+    runtimePluginMocks.loadAgentRuntimePluginRegistryHandle.mockReset();
+    runtimePluginMocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(
+      runtimePluginMocks.pluginRegistry,
+    );
     resetPluginTtsAndThreadMocks();
   });
 
   it("returns handled dispatch results from plugins", async () => {
-    hookMocks.runner.runReplyDispatch.mockResolvedValue({
-      handled: true,
-      queuedFinal: true,
-      counts: { tool: 1, block: 2, final: 3 },
+    hookMocks.runner.runReplyDispatch.mockImplementation(async () => {
+      expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(
+        runtimePluginMocks.pluginRegistry,
+      );
+      return {
+        handled: true,
+        queuedFinal: true,
+        counts: { tool: 1, block: 2, final: 3 },
+      };
     });
 
     const result = await dispatchReplyFromConfig({
@@ -175,12 +178,11 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       replyResolver: async () => ({ text: "model reply" }),
     });
 
-    expect(runtimePluginMocks.ensureRuntimePluginsLoaded).toHaveBeenCalledOnce();
-    const runtimeLoadCall = firstRuntimeLoadCall();
-    expect(runtimeLoadCall?.config).toBe(emptyConfig);
-    expect(typeof runtimeLoadCall?.workspaceDir).toBe("string");
-    expect(String(runtimeLoadCall?.workspaceDir).length).toBeGreaterThan(0);
-
+    expect(runtimePluginMocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledWith({
+      config: emptyConfig,
+      workspaceDir: expect.any(String),
+      allowGatewaySubagentBinding: true,
+    });
     expect(hookMocks.runner.runReplyDispatch).toHaveBeenCalledOnce();
     const [replyDispatchEvent, replyDispatchRuntime] = firstReplyDispatchCall() ?? [];
     expect(replyDispatchEvent?.sessionKey).toBe("agent:test:session");

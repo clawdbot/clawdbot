@@ -1,6 +1,4 @@
 // Doctor-only import for the retired primary device identity JSON.
-import { createHash } from "node:crypto";
-import path from "node:path";
 import { root, type Root } from "@openclaw/fs-safe";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -30,6 +28,14 @@ import {
 } from "./state-migrations.device-identity-repair.js";
 import type { LegacyDeviceIdentityDetection } from "./state-migrations.device-identity.types.js";
 import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
+import {
+  markLegacyMigrationSourceRemoved,
+  readLegacyMigrationReceipt,
+  readLegacyMigrationReceiptFromDatabase,
+  recordLegacyMigrationReceipt,
+  resolveLegacyMigrationSourceKey,
+  type LegacyMigrationReceipt,
+} from "./state-migrations.receipts.js";
 import {
   legacyMigrationSourceSnapshotsMatch as snapshotsMatch,
   readLegacyMigrationSourceSnapshot,
@@ -62,19 +68,10 @@ function deviceIdentityKeyMaterialMatches(left: DeviceIdentity, right: DeviceIde
   }
 }
 
-type DeviceIdentityMigrationDatabase = Pick<
-  OpenClawStateKyselyDatabase,
-  "device_identities" | "migration_runs" | "migration_sources"
->;
+type DeviceIdentityMigrationDatabase = Pick<OpenClawStateKyselyDatabase, "device_identities">;
 
 type LegacySourceSnapshot = LegacyMigrationSourceSnapshot & {
   identity: NormalizedLegacyDeviceIdentity;
-};
-
-type MigrationReceipt = {
-  sourceKey: string;
-  sourceSha256: string | null;
-  removedSource: boolean;
 };
 
 export { detectLegacyDeviceIdentity } from "./state-migrations.device-identity-repair.js";
@@ -98,29 +95,6 @@ async function readLegacySourceSnapshot(params: {
     throw new Error("legacy device identity is invalid or unsupported");
   }
   return { ...snapshot, identity };
-}
-
-function receiptSourceKey(sourcePath: string): string {
-  return `device-identity-json:${createHash("sha256").update(path.resolve(sourcePath)).digest("hex")}`;
-}
-
-function readMigrationReceipt(sourcePath: string, env: NodeJS.ProcessEnv): MigrationReceipt | null {
-  const sourceKey = receiptSourceKey(sourcePath);
-  const { db } = openOpenClawStateDatabase({ env });
-  const row = executeSqliteQueryTakeFirstSync(
-    db,
-    getNodeSqliteKysely<DeviceIdentityMigrationDatabase>(db)
-      .selectFrom("migration_sources")
-      .select(["removed_source", "source_sha256"])
-      .where("source_key", "=", sourceKey),
-  );
-  return row
-    ? {
-        sourceKey,
-        sourceSha256: row.source_sha256,
-        removedSource: row.removed_source === 1,
-      }
-    : null;
 }
 
 type CanonicalIdentityRow = {
@@ -196,21 +170,15 @@ function importAndRecordReceipt(params: {
   sourcePath: string;
   snapshot: LegacySourceSnapshot;
 }): { sourceKey: string; imported: boolean } {
-  const sourceKey = receiptSourceKey(params.sourcePath);
+  const sourceKey = resolveLegacyMigrationSourceKey("device-identity-json", params.sourcePath);
   const runId = `${sourceKey}:${params.snapshot.sha256.slice(0, 16)}`;
   const now = Date.now();
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
       const stateDb = getNodeSqliteKysely<DeviceIdentityMigrationDatabase>(db);
-      const existingReceipt = executeSqliteQueryTakeFirstSync(
-        db,
-        stateDb
-          .selectFrom("migration_sources")
-          .select("source_sha256")
-          .where("source_key", "=", sourceKey),
-      );
+      const existingReceipt = readLegacyMigrationReceiptFromDatabase(db, sourceKey);
       if (existingReceipt) {
-        if (existingReceipt.source_sha256 !== params.snapshot.sha256) {
+        if (existingReceipt.sourceSha256 !== params.snapshot.sha256) {
           throw new Error("migration receipt belongs to different device identity bytes");
         }
         const existing = readCanonicalIdentity(db);
@@ -272,51 +240,21 @@ function importAndRecordReceipt(params: {
         preservedSqliteRecordCount: existing ? 1 : 0,
         repairedSqliteRecordCount: repaired ? 1 : 0,
       });
-      executeSqliteQuerySync(
-        db,
-        stateDb.insertInto("migration_runs").values({
-          id: runId,
-          started_at: now,
-          finished_at: now,
-          status: "completed",
-          report_json: reportJson,
-        }),
-      );
-      executeSqliteQuerySync(
-        db,
-        stateDb.insertInto("migration_sources").values({
-          source_key: sourceKey,
-          migration_kind: MIGRATION_KIND,
-          source_path: params.sourcePath,
-          target_table: "device_identities",
-          source_sha256: params.snapshot.sha256,
-          source_size_bytes: params.snapshot.size,
-          source_record_count: 1,
-          last_run_id: runId,
-          status: "completed",
-          imported_at: now,
-          removed_source: 0,
-          report_json: reportJson,
-        }),
-      );
+      recordLegacyMigrationReceipt(db, {
+        sourceKey,
+        migrationKind: MIGRATION_KIND,
+        sourcePath: params.sourcePath,
+        targetTable: "device_identities",
+        sourceSha256: params.snapshot.sha256,
+        sourceSizeBytes: params.snapshot.size,
+        sourceRecordCount: 1,
+        runId,
+        now,
+        reportJson,
+      });
       return { sourceKey, imported };
     },
     { env: params.env },
-  );
-}
-
-function markSourceRemoved(sourceKey: string, env: NodeJS.ProcessEnv): void {
-  runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      executeSqliteQuerySync(
-        db,
-        getNodeSqliteKysely<DeviceIdentityMigrationDatabase>(db)
-          .updateTable("migration_sources")
-          .set({ removed_source: 1 })
-          .where("source_key", "=", sourceKey),
-      );
-    },
-    { env },
   );
 }
 
@@ -360,7 +298,7 @@ async function cleanupReceiptSources(params: {
   stateRoot: Root;
   stateDir: string;
   detected: LegacyDeviceIdentityDetection;
-  receipt: MigrationReceipt;
+  receipt: LegacyMigrationReceipt;
   env: NodeJS.ProcessEnv;
   removeSource?: (sourcePath: string) => Promise<void> | void;
 }): Promise<MigrationMessages> {
@@ -409,7 +347,7 @@ async function cleanupReceiptSources(params: {
     }
   }
   if (warnings.length === 0 && (!params.receipt.removedSource || removed > 0)) {
-    markSourceRemoved(params.receipt.sourceKey, params.env);
+    markLegacyMigrationSourceRemoved(params.receipt.sourceKey, params.env);
   }
   if (removed > 0) {
     changes.push("Removed retired device identity JSON covered by its SQLite receipt.");
@@ -426,7 +364,10 @@ async function migrateWithExclusiveStateOwnership(params: {
   beforeCleanup?: () => void;
   removeSource?: (sourcePath: string) => Promise<void> | void;
 }): Promise<MigrationMessages> {
-  const receipt = readMigrationReceipt(params.detected.sourcePath, params.env);
+  const receipt = readLegacyMigrationReceipt(
+    resolveLegacyMigrationSourceKey("device-identity-json", params.detected.sourcePath),
+    params.env,
+  );
   if (receipt) {
     return await cleanupReceiptSources({ ...params, receipt });
   }
@@ -547,7 +488,7 @@ async function migrateWithExclusiveStateOwnership(params: {
     ) {
       throw new Error("legacy device identity Doctor claim remains after cleanup");
     }
-    markSourceRemoved(result.sourceKey, params.env);
+    markLegacyMigrationSourceRemoved(result.sourceKey, params.env);
   } catch (error) {
     return {
       changes: [],

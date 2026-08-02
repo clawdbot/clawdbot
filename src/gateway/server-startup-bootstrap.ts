@@ -475,12 +475,20 @@ export async function prepareGatewayServerBootstrap(input: {
         const workerModule = await loadWorkerEnvironmentStartupModule();
         return await workerModule.loadGatewayWorkerEnvironmentStartupState();
       });
-  const { prepareGatewayPluginBootstrap } = await loadStartupPluginsModule();
+  const { prepareGatewayPluginBootstrap, runGatewayStartupMaintenance } =
+    await loadStartupPluginsModule();
+  await startupTrace.measure("startup.maintenance", () =>
+    runGatewayStartupMaintenance({
+      cfgAtStart,
+      startupRuntimeConfig,
+      minimalTestGateway,
+      log,
+    }),
+  );
   const pluginBootstrap = await startupTrace.measure("plugins.bootstrap", () =>
     prepareGatewayPluginBootstrap({
       cfgAtStart,
       activationSourceConfig: startupActivationSourceConfig,
-      startupRuntimeConfig,
       pluginMetadataSnapshot: startupConfigLoad.pluginMetadataSnapshot,
       workerProviderIds: workerEnvironmentStartup?.durableProviderIds ?? [],
       minimalTestGateway,

@@ -1214,6 +1214,7 @@ describe("delivery-queue recovery", () => {
     expect(reconcileInput.retryCount).toBe(0);
 
     const afterCommitInput = mockCallArg(afterCommit) as {
+      deliveryQueueId?: string;
       kind?: string;
       to?: string;
       accountId?: string;
@@ -1222,6 +1223,7 @@ describe("delivery-queue recovery", () => {
       silent?: boolean;
       result?: { messageId?: string };
     };
+    expect(afterCommitInput.deliveryQueueId).toBe(id);
     expect(afterCommitInput.kind).toBe("text");
     expect(afterCommitInput.to).toBe("+1");
     expect(afterCommitInput.accountId).toBe("acct-1");
@@ -1323,10 +1325,15 @@ describe("delivery-queue recovery", () => {
       error: "provider lookup timed out",
       retryable: true,
     });
+    const afterUnknownSendTerminal = vi.fn(async (ctx: { queueId: string }) => {
+      expect(ctx.queueId).toBe(id);
+      expect(readOutboundQueueStatus(tmpDir(), id)).toBe("failed");
+    });
     resolveOutboundChannelMessageAdapterMock.mockReturnValue({
       durableFinal: {
         capabilities: { reconcileUnknownSend: true },
         reconcileUnknownSend,
+        afterUnknownSendTerminal,
       },
     });
     const deliver = vi.fn().mockResolvedValue([]);
@@ -1338,6 +1345,7 @@ describe("delivery-queue recovery", () => {
     expect(result).toMatchObject({ failed: 1, skippedMaxRetries: 0 });
     expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
     expect(readOutboundQueueStatus(tmpDir(), id)).toBe("failed");
+    expect(afterUnknownSendTerminal).toHaveBeenCalledOnce();
   });
 
   it("does not reconcile unknown-after-send entries unless the adapter declares the capability", async () => {

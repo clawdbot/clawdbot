@@ -20,24 +20,8 @@ import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { canonicalizeModelCatalogProviderRef } from "./provider-aliases.js";
 
-export const ensureFlagCompatibility = (opts: { json?: boolean; plain?: boolean }) => {
-  if (opts.json && opts.plain) {
-    throw new Error("Choose either --json or --plain, not both.");
-  }
-};
-
-/** Formats token counts as compact K-suffixed labels. */
-export const formatTokenK = (value?: number | null) => {
-  if (!value || !Number.isFinite(value)) {
-    return "-";
-  }
-  // Token counts use decimal-K (/1000), matching formatTokenCount and how
-  // providers advertise context windows (e.g. 200000 -> "200k", not "195k").
-  if (value < 1000) {
-    return `${Math.round(value)}`;
-  }
-  return `${Math.round(value / 1000)}k`;
-};
+export { formatTokenK } from "./list.format.js";
+export { ensureFlagCompatibility } from "./list.options.js";
 
 /** Formats millisecond durations for model command output. */
 export const formatMs = (value?: number | null) => {

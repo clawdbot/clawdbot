@@ -66,6 +66,7 @@ describe("Google SDK construction auth", () => {
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     configureAiTransportHost({});
   });
 
@@ -172,4 +173,37 @@ describe("Google SDK construction auth", () => {
       );
     },
   );
+
+  it("ignores blank Vertex project and location env fallbacks", async () => {
+    vi.stubEnv("GOOGLE_CLOUD_PROJECT", "   ");
+    vi.stubEnv("GCLOUD_PROJECT", "   ");
+    vi.stubEnv("GOOGLE_CLOUD_LOCATION", "   ");
+
+    const missingProject = await streamGoogleVertex(vertexModel(), context).result();
+
+    expect(missingProject.stopReason).toBe("error");
+    expect(JSON.stringify(missingProject)).toContain("Vertex AI requires a project ID");
+    expect(googleMockState.configs).toHaveLength(0);
+
+    vi.stubEnv("GOOGLE_CLOUD_PROJECT", " vertex-project ");
+    vi.stubEnv("GCLOUD_PROJECT", "");
+    vi.stubEnv("GOOGLE_CLOUD_LOCATION", "   ");
+
+    const missingLocation = await streamGoogleVertex(vertexModel(), context).result();
+
+    expect(missingLocation.stopReason).toBe("error");
+    expect(JSON.stringify(missingLocation)).toContain("Vertex AI requires a location");
+    expect(googleMockState.configs).toHaveLength(0);
+
+    vi.stubEnv("GOOGLE_CLOUD_LOCATION", " us-central1 ");
+
+    const configured = await streamGoogleVertex(vertexModel(), context).result();
+
+    expect(configured.stopReason).toBe("error");
+    expect(googleMockState.configs[0]).toMatchObject({
+      vertexai: true,
+      project: "vertex-project",
+      location: "us-central1",
+    });
+  });
 });

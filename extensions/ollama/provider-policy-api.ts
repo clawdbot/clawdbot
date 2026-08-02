@@ -1,7 +1,10 @@
 // Ollama API module exposes the plugin public contract.
-import type { ProviderThinkingProfile } from "openclaw/plugin-sdk/plugin-entry";
+import type {
+  ProviderNormalizeResolvedModelContext,
+  ProviderThinkingProfile,
+} from "openclaw/plugin-sdk/plugin-entry";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-types";
-import { OLLAMA_DEFAULT_BASE_URL } from "./src/defaults.js";
+import { OLLAMA_CLOUD_PROVIDER_ID, OLLAMA_DEFAULT_BASE_URL } from "./src/defaults.js";
 
 type OllamaProviderConfigDraft = Partial<ModelProviderConfig>;
 
@@ -49,6 +52,15 @@ export function normalizeConfig({
   }
 
   return next;
+}
+
+/**
+ * Ollama's local and cloud providers do not normalize resolved models.
+ * Skip full plugin activation when the model-list path asks for that no-op.
+ */
+export function projectConfiguredModelRow(ctx: ProviderNormalizeResolvedModelContext) {
+  const provider = ctx.provider.trim().toLowerCase();
+  return provider === "ollama" || provider === OLLAMA_CLOUD_PROVIDER_ID ? null : undefined;
 }
 
 export function resolveThinkingProfile({

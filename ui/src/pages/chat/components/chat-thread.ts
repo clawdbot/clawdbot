@@ -264,6 +264,28 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
   };
   private readonly measureRowRefs = new Map<string, (element?: Element) => void>();
   private pruneDetachedRowsQueued = false;
+  private pendingRowMeasureFrame: number | null = null;
+  private measureConnectedRows(): void {
+    // Only width invalidation owns forced DOM reads. Ordinary row refs stay on
+    // TanStack's observer path so resizeItem cannot perturb scroll restoration.
+    const instance = this.virtualizerController.getVirtualizer();
+    for (const row of this.threadInnerElement?.querySelectorAll<HTMLElement>(".chat-virtual-row") ??
+      []) {
+      instance.resizeItem(
+        instance.indexFromElement(row),
+        row[instance.options.horizontal ? "offsetWidth" : "offsetHeight"],
+      );
+    }
+  }
+  private queueConnectedRowMeasure(): void {
+    if (this.pendingRowMeasureFrame !== null) {
+      return;
+    }
+    this.pendingRowMeasureFrame = requestAnimationFrame(() => {
+      this.pendingRowMeasureFrame = null;
+      this.measureConnectedRows();
+    });
+  }
   private measureRowRefFor(key: string): (element?: Element) => void {
     let callback = this.measureRowRefs.get(key);
     if (!callback) {
@@ -322,13 +344,11 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
           callback(rect);
           if (widthChanged) {
             // Cached offscreen sizes belong to the old wrapping width. Reset
-            // them and synchronously seed connected rows to avoid stale overlap.
+            // them, seed current rows, then repeat after any same-commit
+            // re-stamp has attached and completed layout.
             instance.measure();
-            for (const row of this.threadInnerElement?.querySelectorAll<HTMLElement>(
-              ".chat-virtual-row",
-            ) ?? []) {
-              instance.measureElement(row);
-            }
+            this.measureConnectedRows();
+            this.queueConnectedRowMeasure();
           }
         }),
       rangeExtractor: (range) => {
@@ -399,6 +419,10 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
   }
 
   disconnect(): void {
+    if (this.pendingRowMeasureFrame !== null) {
+      cancelAnimationFrame(this.pendingRowMeasureFrame);
+      this.pendingRowMeasureFrame = null;
+    }
     if (this.pendingScrollFrame !== null) {
       cancelAnimationFrame(this.pendingScrollFrame);
       this.pendingScrollFrame = null;

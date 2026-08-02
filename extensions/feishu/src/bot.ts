@@ -517,23 +517,26 @@ export async function handleFeishuMessage(params: {
     !effectiveThreadId &&
     isFeishuTopicSessionScope(groupSessionScope ?? "group")
   ) {
+    // Synthetic turns keep a local dedupe ID in messageId; their explicit reply target is
+    // the real Feishu message ID that topic hydration can send back to the provider.
+    const topicHydrationMessageId = ctx.replyTargetMessageId ?? ctx.messageId;
     try {
       const messageInfo = await getMessageFeishu({
         cfg,
         accountId: account.accountId,
-        messageId: ctx.messageId,
+        messageId: topicHydrationMessageId,
       });
       const hydratedThreadId = messageInfo?.threadId?.trim();
       if (hydratedThreadId) {
         ctx = { ...ctx, threadId: hydratedThreadId };
         effectiveThreadId = hydratedThreadId;
         log(
-          `feishu[${account.accountId}]: hydrated topic thread_id=${hydratedThreadId} for message=${ctx.messageId}`,
+          `feishu[${account.accountId}]: hydrated topic thread_id=${hydratedThreadId} for message=${topicHydrationMessageId}`,
         );
       }
     } catch (err) {
       log(
-        `feishu[${account.accountId}]: failed to hydrate topic thread_id for message=${ctx.messageId}: ${String(err)}`,
+        `feishu[${account.accountId}]: failed to hydrate topic thread_id for message=${topicHydrationMessageId}: ${String(err)}`,
       );
     }
   }

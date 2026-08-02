@@ -6,6 +6,13 @@ import {
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { PollInput } from "../runtime-api.js";
 import type { CoreConfig } from "../types.js";
+import {
+  createMatrixPlannedEvents,
+  loadMatrixDeliveryPlan,
+  persistMatrixDeliveryPlan,
+  resolveMatrixDurableDeliveryIdentity,
+  type MatrixPreparedEvent,
+} from "./delivery-plan.js";
 import { loadOutboundMediaFromUrl } from "./outbound-media-runtime.js";
 import { buildPollStartContent, M_POLL_START } from "./poll-types.js";
 import { buildMatrixReactionContent } from "./reaction-common.js";
@@ -174,6 +181,11 @@ export async function sendMessageMatrix(
   if (!trimmedMessage && !opts.mediaUrl) {
     throw new Error("Matrix send requires text or media");
   }
+  const durableIdentity = resolveMatrixDurableDeliveryIdentity({
+    queueId: opts.deliveryQueueId,
+    partIndex: opts.deliveryPartIndex,
+    partCount: opts.deliveryPartCount,
+  });
   return await withResolvedMatrixSendClient(
     {
       client: opts.client,
@@ -184,145 +196,188 @@ export async function sendMessageMatrix(
     async (client) => {
       const roomId = await resolveMatrixRoomId(client, to);
       const cfg = requireRuntimeConfig(opts.cfg, "Matrix send") as CoreConfig;
-      const { chunks, tableMode } = chunkMatrixText(trimmedMessage, {
-        cfg,
-        accountId: opts.accountId,
-      });
       const threadId = normalizeThreadId(opts.threadId);
-      const relation = threadId
-        ? buildThreadRelation(threadId, opts.replyToId)
-        : buildReplyRelation(opts.replyToId);
-      let pendingExtraContent = opts.extraContent;
-      const sendContent = async (content: MatrixOutboundContent, kind: MessageReceiptPartKind) => {
-        const contentWithExtra = withMatrixExtraContentFields(content, pendingExtraContent);
-        pendingExtraContent = undefined;
-        const eventId = await client.sendMessage(roomId, contentWithExtra);
-        const visibleContent = contentWithExtra.body ?? "";
-        if (eventId) {
-          acceptedContents.push(visibleContent);
-          await opts.onDeliveryResult?.({
-            messageId: eventId,
+      const transactionScopeId = durableIdentity ? await client.getTransactionScopeId() : undefined;
+      const wireEventType = durableIdentity
+        ? await client.getMessageWireEventType(roomId)
+        : undefined;
+      const storedPlan = durableIdentity
+        ? await loadMatrixDeliveryPlan({
+            identity: durableIdentity,
+            accountId: opts.accountId,
             roomId,
-            primaryMessageId: eventId,
-            receipt: createMatrixSendReceipt({
-              roomId,
-              platformMessageIds: [eventId],
-              kind,
-              replyToId: opts.replyToId,
-              threadId,
-            }),
-            content: visibleContent,
+            transactionScopeId: transactionScopeId!,
+            wireEventType: wireEventType!,
+          })
+        : null;
+      let plannedEvents: MatrixPreparedEvent[] | undefined = storedPlan?.events;
+      if (!plannedEvents) {
+        const { chunks, tableMode } = chunkMatrixText(trimmedMessage, {
+          cfg,
+          accountId: opts.accountId,
+        });
+        const relation = threadId
+          ? buildThreadRelation(threadId, opts.replyToId)
+          : buildReplyRelation(opts.replyToId);
+        let pendingExtraContent = opts.extraContent;
+        const events: Omit<MatrixPreparedEvent, "transactionId">[] = [];
+        const prepareContent = (
+          content: MatrixOutboundContent,
+          receiptKind: MessageReceiptPartKind,
+        ) => {
+          events.push({
+            content: withMatrixExtraContentFields(content, pendingExtraContent),
+            receiptKind,
           });
-        }
-        return eventId;
-      };
+          pendingExtraContent = undefined;
+        };
 
-      const platformMessageIds: string[] = [];
-      const acceptedContents: string[] = [];
-      let lastMessageId = "";
-      let receiptKind: MessageReceiptPartKind = "text";
-      if (opts.mediaUrl) {
-        const maxBytes = resolveMediaMaxBytes(opts.accountId, cfg);
-        const media = await loadOutboundMediaFromUrl(opts.mediaUrl, {
-          maxBytes,
-          mediaAccess: opts.mediaAccess,
-          mediaLocalRoots: opts.mediaLocalRoots,
-          mediaReadFile: opts.mediaReadFile,
-        });
-        const uploaded = await uploadMediaMaybeEncrypted(client, roomId, media.buffer, {
-          contentType: media.contentType,
-          filename: media.fileName,
-        });
-        const durationMs = await resolveMediaDurationMs({
-          buffer: media.buffer,
-          contentType: media.contentType,
-          fileName: media.fileName,
-          kind: media.kind === "sticker" ? "unknown" : (media.kind ?? "unknown"),
-        });
-        const baseMsgType = resolveMatrixMsgType(media.contentType, media.fileName);
-        const { useVoice } = resolveMatrixVoiceDecision({
-          wantsVoice: opts.audioAsVoice === true,
-          contentType: media.contentType,
-          fileName: media.fileName,
-        });
-        const msgtype = useVoice ? MsgType.Audio : baseMsgType;
-        receiptKind = useVoice ? "voice" : "media";
-        const isImage = msgtype === MsgType.Image;
-        const imageInfo = isImage
-          ? await prepareImageInfo({
-              buffer: media.buffer,
-              client,
-              encrypted: Boolean(uploaded.file),
-            })
-          : undefined;
-        const [firstChunk, ...rest] = chunks;
-        const captionMarkdown = useVoice ? "" : (firstChunk ?? "");
-        const body = useVoice ? "Voice message" : captionMarkdown || media.fileName || "(file)";
-        const content = buildMediaContent({
-          msgtype,
-          body,
-          url: uploaded.url,
-          file: uploaded.file,
-          filename: media.fileName,
-          mimetype: media.contentType,
-          size: media.buffer.byteLength,
-          durationMs,
-          relation,
-          isVoice: useVoice,
-          imageInfo,
-        });
-        await enrichMatrixFormattedContent({
-          client,
-          content,
-          markdown: captionMarkdown,
-          tableMode,
-        });
-        const eventId = await sendContent(content, receiptKind);
-        lastMessageId = eventId ?? lastMessageId;
-        if (eventId) {
-          platformMessageIds.push(eventId);
-        }
-        const textChunks = useVoice ? chunks : rest;
-        // Voice messages use a generic media body ("Voice message"), so keep any
-        // transcript follow-up attached to the same reply/thread context.
-        const followupRelation = useVoice || threadId ? relation : undefined;
-        for (const chunk of textChunks) {
-          const text = chunk;
-          if (!text.trim()) {
-            continue;
-          }
-          const followup = buildTextContent(text, followupRelation);
-          await enrichMatrixFormattedContent({
-            client,
-            content: followup,
-            markdown: text,
-            tableMode,
+        if (opts.mediaUrl) {
+          const maxBytes = resolveMediaMaxBytes(opts.accountId, cfg);
+          const media = await loadOutboundMediaFromUrl(opts.mediaUrl, {
+            maxBytes,
+            mediaAccess: opts.mediaAccess,
+            mediaLocalRoots: opts.mediaLocalRoots,
+            mediaReadFile: opts.mediaReadFile,
           });
-          const followupEventId = await sendContent(followup, "text");
-          lastMessageId = followupEventId ?? lastMessageId;
-          if (followupEventId) {
-            platformMessageIds.push(followupEventId);
-          }
-        }
-      } else {
-        for (const chunk of chunks.length ? chunks : [""]) {
-          const text = chunk;
-          if (!text.trim()) {
-            continue;
-          }
-          const content = buildTextContent(text, relation);
+          const uploaded = await uploadMediaMaybeEncrypted(client, roomId, media.buffer, {
+            contentType: media.contentType,
+            filename: media.fileName,
+          });
+          const durationMs = await resolveMediaDurationMs({
+            buffer: media.buffer,
+            contentType: media.contentType,
+            fileName: media.fileName,
+            kind: media.kind === "sticker" ? "unknown" : (media.kind ?? "unknown"),
+          });
+          const baseMsgType = resolveMatrixMsgType(media.contentType, media.fileName);
+          const { useVoice } = resolveMatrixVoiceDecision({
+            wantsVoice: opts.audioAsVoice === true,
+            contentType: media.contentType,
+            fileName: media.fileName,
+          });
+          const msgtype = useVoice ? MsgType.Audio : baseMsgType;
+          const receiptKind: MessageReceiptPartKind = useVoice ? "voice" : "media";
+          const imageInfo =
+            msgtype === MsgType.Image
+              ? await prepareImageInfo({
+                  buffer: media.buffer,
+                  client,
+                  encrypted: Boolean(uploaded.file),
+                })
+              : undefined;
+          const [firstChunk, ...rest] = chunks;
+          const captionMarkdown = useVoice ? "" : (firstChunk ?? "");
+          const content = buildMediaContent({
+            msgtype,
+            body: useVoice ? "Voice message" : captionMarkdown || media.fileName || "(file)",
+            url: uploaded.url,
+            file: uploaded.file,
+            filename: media.fileName,
+            mimetype: media.contentType,
+            size: media.buffer.byteLength,
+            durationMs,
+            relation,
+            isVoice: useVoice,
+            imageInfo,
+          });
           await enrichMatrixFormattedContent({
             client,
             content,
-            markdown: text,
+            markdown: captionMarkdown,
             tableMode,
           });
-          const eventId = await sendContent(content, "text");
-          lastMessageId = eventId ?? lastMessageId;
-          if (eventId) {
-            platformMessageIds.push(eventId);
+          prepareContent(content, receiptKind);
+          const textChunks = useVoice ? chunks : rest;
+          const followupRelation = useVoice || threadId ? relation : undefined;
+          for (const chunk of textChunks) {
+            if (!chunk.trim()) {
+              continue;
+            }
+            const followup = buildTextContent(chunk, followupRelation);
+            await enrichMatrixFormattedContent({
+              client,
+              content: followup,
+              markdown: chunk,
+              tableMode,
+            });
+            prepareContent(followup, "text");
+          }
+        } else {
+          for (const chunk of chunks.length ? chunks : [""]) {
+            if (!chunk.trim()) {
+              continue;
+            }
+            const content = buildTextContent(chunk, relation);
+            await enrichMatrixFormattedContent({
+              client,
+              content,
+              markdown: chunk,
+              tableMode,
+            });
+            prepareContent(content, "text");
           }
         }
+        plannedEvents = durableIdentity
+          ? createMatrixPlannedEvents({ identity: durableIdentity, events })
+          : events.map((event) => ({
+              content: event.content,
+              receiptKind: event.receiptKind,
+              transactionId: "",
+            }));
+      }
+
+      let platformDispatchStarted = false;
+      if (!durableIdentity) {
+        await opts.onPlatformSendDispatch?.();
+        platformDispatchStarted = true;
+      }
+      const platformMessageIds: string[] = [];
+      const acceptedContents: string[] = [];
+      let lastMessageId = "";
+      for (const planned of plannedEvents) {
+        const eventId = await client.sendMessage(
+          roomId,
+          planned.content,
+          planned.transactionId || undefined,
+          durableIdentity
+            ? async (dispatch) => {
+                await persistMatrixDeliveryPlan({
+                  identity: durableIdentity,
+                  accountId: opts.accountId,
+                  roomId,
+                  transactionScopeId: transactionScopeId!,
+                  wireEventType: dispatch.eventType,
+                  events: plannedEvents,
+                  dispatch,
+                });
+                if (!platformDispatchStarted) {
+                  await opts.onPlatformSendDispatch?.();
+                  platformDispatchStarted = true;
+                }
+              }
+            : undefined,
+        );
+        lastMessageId = eventId || lastMessageId;
+        if (!eventId) {
+          continue;
+        }
+        platformMessageIds.push(eventId);
+        const visibleContent = planned.content.body ?? "";
+        acceptedContents.push(visibleContent);
+        await opts.onDeliveryResult?.({
+          messageId: eventId,
+          roomId,
+          primaryMessageId: eventId,
+          receipt: createMatrixSendReceipt({
+            roomId,
+            platformMessageIds: [eventId],
+            kind: planned.receiptKind,
+            replyToId: opts.replyToId,
+            threadId,
+          }),
+          content: visibleContent,
+        });
       }
 
       return {
@@ -332,7 +387,7 @@ export async function sendMessageMatrix(
         receipt: createMatrixSendReceipt({
           roomId,
           platformMessageIds,
-          kind: receiptKind,
+          kind: plannedEvents[0]?.receiptKind ?? "text",
           replyToId: opts.replyToId,
           threadId,
         }),

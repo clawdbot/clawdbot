@@ -3118,6 +3118,20 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
   });
 
+  it("suppresses terminal progress callbacks without their terminal phase", async () => {
+    await dispatchNativeProgressScenario({
+      finalPayload: { text: FINAL_REPLY_TEXT },
+      events: [
+        { kind: "command_output", name: "bash", title: "must stay hidden", exitCode: 0 },
+        { kind: "patch", name: "apply_patch", summary: "must stay hidden" },
+      ],
+    });
+
+    expect(startSlackStreamMock).not.toHaveBeenCalled();
+    expect(appendSlackStreamMock).not.toHaveBeenCalled();
+    expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
+  });
+
   it("keeps duplicate-text native tool tasks as distinct rows", async () => {
     await dispatchNativeProgressScenario({
       finalPayload: { text: FINAL_REPLY_TEXT },

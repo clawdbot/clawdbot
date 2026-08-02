@@ -735,7 +735,7 @@ describe("CodexAppServerTurnRouter", () => {
     await expect(watch.completion).resolves.toBe(true);
   });
 
-  it("treats an exact non-retry error as native turn termination", async () => {
+  it("waits for completed notification after an exact non-retry error", async () => {
     const harness = createHarness();
     const watch = getCodexAppServerTurnRouter(harness.client).watchNativeTurnCompletion({
       threadId: "thread-native-error",
@@ -766,10 +766,20 @@ describe("CodexAppServerTurnRouter", () => {
         willRetry: false,
       },
     });
+    await settleInput();
+    expect(settled).not.toHaveBeenCalled();
+
+    harness.send({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-native-error",
+        turn: { id: "turn-native-error", status: "failed" },
+      },
+    });
     await expect(watch.completion).resolves.toBe(true);
   });
 
-  it("refreshes native turn idle timeout on exact progress", async () => {
+  it("keeps a hard completion deadline despite exact-turn progress", async () => {
     vi.useFakeTimers();
     const harness = createHarness();
     const watch = getCodexAppServerTurnRouter(harness.client).watchNativeTurnCompletion({
@@ -789,17 +799,9 @@ describe("CodexAppServerTurnRouter", () => {
         delta: "working",
       },
     });
-    await vi.advanceTimersByTimeAsync(900);
-    expect(settled).not.toHaveBeenCalled();
-
-    harness.send({
-      method: "turn/completed",
-      params: {
-        threadId: "thread-native-progress",
-        turn: { id: "turn-native-progress", status: "completed" },
-      },
-    });
-    await expect(watch.completion).resolves.toBe(true);
+    await vi.advanceTimersByTimeAsync(101);
+    await expect(watch.completion).resolves.toBe(false);
+    expect(settled).toHaveBeenCalledWith(false);
   });
 
   it("cancels a detached native-turn completion watch", async () => {
@@ -923,11 +925,18 @@ describe("CodexAppServerTurnRouter", () => {
       threadId: "thread-close",
       onRequest: requestHandler,
     });
-    harness.client.close();
+    harness.process.stderr.write("fatal transport detail\n");
+    harness.process.emit("exit", 17, "SIGTERM");
 
     await expect(closingRoute.bindTurn("turn-close")).rejects.toThrow("turn router closed");
     expect(closingRoute.signal.aborted).toBe(true);
-    expect(closingRoute.signal.reason).toEqual(new Error("codex app-server turn router closed"));
+    expect(closingRoute.signal.reason).toEqual(
+      new Error("codex app-server turn router closed", {
+        cause: new Error(
+          'codex app-server exited: code=17 signal=SIGTERM stderr="fatal transport detail"',
+        ),
+      }),
+    );
     expect(() =>
       router.reserveThread({ threadId: "thread-late", onRequest: requestHandler }),
     ).toThrow("turn router is closed");

@@ -309,4 +309,25 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
       fixture.trajectoryRecorder,
     );
   });
+
+  it("settles pending user-turn persistence before reconciling the session boundary", async () => {
+    const fixture = createFixture();
+    let releasePersistence: (() => void) | undefined;
+    const pendingPersistence = new Promise<void>((resolve) => {
+      releasePersistence = resolve;
+    });
+    const waitForRuntimePersistence = vi.fn(async () => await pendingPersistence);
+    fixture.input.attempt.userTurnTranscriptRecorder = {
+      waitForRuntimePersistence,
+    } as unknown as PrepareInput["attempt"]["userTurnTranscriptRecorder"];
+
+    const preparing = prepareEmbeddedAttemptSessionRuntime(fixture.input);
+    await vi.waitFor(() => expect(waitForRuntimePersistence).toHaveBeenCalledOnce());
+    expect(mocks.prepareSessionBoundary).not.toHaveBeenCalled();
+
+    releasePersistence?.();
+    await preparing;
+
+    expect(mocks.prepareSessionBoundary).toHaveBeenCalledOnce();
+  });
 });

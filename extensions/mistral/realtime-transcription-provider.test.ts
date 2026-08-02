@@ -337,4 +337,111 @@ describe("buildMistralRealtimeTranscriptionProvider", () => {
 
     expect(onPartial.mock.calls.map(([text]) => text)).toEqual(partials);
   });
+
+  it("tracks the in-progress transcript limit as aggregate UTF-8 bytes", async () => {
+    const exactUtf8Limit = "🙂".repeat((256 * 1024) / 4);
+    const splitSurrogatePrefix = "x".repeat(256 * 1024 - 4);
+    const splitSurrogateTranscript = `${splitSurrogatePrefix}🙂`;
+    const baseUrl = await createRealtimeServer(() => {}, [
+      { type: "transcription.text.delta", text: exactUtf8Limit },
+      { type: "transcription.segment", text: "first segment", start: 0, end: 1 },
+      { type: "transcription.text.delta", text: `${splitSurrogatePrefix}\ud83d` },
+      { type: "transcription.text.delta", text: "\ude42" },
+      { type: "transcription.done" },
+    ]);
+    const onError = vi.fn();
+    const onTranscript = vi.fn();
+    const session = buildMistralRealtimeTranscriptionProvider().createSession({
+      providerConfig: { apiKey: "fixture-value", baseUrl },
+      onError,
+      onTranscript,
+    });
+
+    await session.connect();
+    await vi.waitFor(() => {
+      expect(onTranscript.mock.calls.map(([text]) => text)).toEqual([
+        "first segment",
+        splitSurrogateTranscript,
+      ]);
+      expect(session.isConnected()).toBe(false);
+    });
+
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it("fails once and ignores late terminal events after 10,000 runaway deltas", async () => {
+    const baseUrl = await createRealtimeServer(() => {}, [
+      ...Array.from({ length: 10_000 }, () => ({
+        type: "transcription.text.delta",
+        text: "x".repeat(32),
+      })),
+      { type: "transcription.segment", text: "late segment", start: 0, end: 1 },
+      { type: "transcription.done", text: "late done" },
+    ]);
+    let resolveError: (() => void) | undefined;
+    const errorReceived = new Promise<void>((resolve) => {
+      resolveError = resolve;
+    });
+    const onError = vi.fn(() => resolveError?.());
+    const onTranscript = vi.fn();
+    let lastPartialLength = 0;
+    let partialCalls = 0;
+    const session = buildMistralRealtimeTranscriptionProvider().createSession({
+      providerConfig: { apiKey: "fixture-value", baseUrl },
+      onError,
+      onPartial: (partial) => {
+        lastPartialLength = partial.length;
+        partialCalls += 1;
+      },
+      onTranscript,
+    });
+
+    await session.connect();
+    await errorReceived;
+    await vi.waitFor(() => {
+      expect(onError).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          message:
+            "Mistral realtime transcription exceeded the 256 KiB in-progress transcript limit",
+        }),
+      );
+      expect(session.isConnected()).toBe(false);
+    });
+
+    expect(partialCalls).toBe(8_192);
+    expect(lastPartialLength).toBe(256 * 1024);
+    expect(onTranscript).not.toHaveBeenCalled();
+  });
+
+  it("makes a ready-state provider error terminal and ignores late events", async () => {
+    const baseUrl = await createRealtimeServer(() => {}, [
+      { type: "transcription.text.delta", text: "draft" },
+      { type: "error", error: { message: "provider failed" } },
+      { type: "transcription.text.delta", text: "x".repeat(256 * 1024 + 1) },
+      { type: "transcription.segment", text: "late segment", start: 0, end: 1 },
+      { type: "transcription.done", text: "late done" },
+    ]);
+    const onError = vi.fn(() => {
+      throw new Error("observer failed");
+    });
+    const onPartial = vi.fn();
+    const onTranscript = vi.fn();
+    const session = buildMistralRealtimeTranscriptionProvider().createSession({
+      providerConfig: { apiKey: "fixture-value", baseUrl },
+      onError,
+      onPartial,
+      onTranscript,
+    });
+
+    await session.connect();
+    await vi.waitFor(() => {
+      expect(onError).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ message: "provider failed" }),
+      );
+      expect(session.isConnected()).toBe(false);
+    });
+
+    expect(onPartial).toHaveBeenCalledExactlyOnceWith("draft");
+    expect(onTranscript).not.toHaveBeenCalled();
+  });
 });

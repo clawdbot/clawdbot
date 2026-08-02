@@ -5,7 +5,8 @@ import { resolveRequesterToolPolicies } from "./requester-tool-policy.js";
 import type { SandboxToolPolicy } from "./sandbox.js";
 import type { ScheduledToolPolicyContext } from "./scheduled-tool-policy.js";
 import { resolveSenderToolPolicy } from "./sender-tool-policy.js";
-import { isToolAllowedByPolicies } from "./tool-policy-match.js";
+import type { TrustedSubagentCompletionHandoff } from "./subagent-announce-handoff.js";
+import { isRuntimeToolAllowed, isToolAllowedByPolicies } from "./tool-policy-match.js";
 import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "./tool-policy.js";
 
 export type WebSearchToolPolicyParams = {
@@ -15,6 +16,7 @@ export type WebSearchToolPolicyParams = {
   modelId?: string;
   agentId?: string;
   sessionKey?: string;
+  sessionId?: string;
   sandboxToolPolicy?: SandboxToolPolicy;
   messageProvider?: string;
   agentAccountId?: string | null;
@@ -27,8 +29,9 @@ export type WebSearchToolPolicyParams = {
   senderUsername?: string | null;
   senderE164?: string | null;
   inputProvenance?: InputProvenance;
-  trustedInternalHandoff?: boolean;
+  trustedInternalHandoff?: TrustedSubagentCompletionHandoff;
   scheduledToolPolicy?: ScheduledToolPolicyContext;
+  runtimeToolAllowlist?: string[];
 };
 
 type WebSearchToolPolicyResolution = {
@@ -91,6 +94,9 @@ export function resolveWebSearchToolPolicy(
     senderE164: params.senderE164,
     inputProvenance: params.inputProvenance,
     trustedInternalHandoff: params.trustedInternalHandoff,
+    sessionId: params.sessionId,
+    modelProvider: params.modelProvider,
+    modelId: params.modelId,
     senderPolicyMode: params.scheduledToolPolicy ? "never" : "always",
     groupPolicySessionKey: params.scheduledToolPolicy?.ownerSessionKey,
     requireConfiguredGroupAccount: params.scheduledToolPolicy?.mode === "account",
@@ -116,12 +122,15 @@ export function resolveWebSearchToolPolicy(
     requesterPolicies.inheritedToolPolicy,
   ];
   return {
-    allowed: isToolAllowedByPolicies("web_search", [
-      ...fixedPolicies,
-      requesterPolicies.groupPolicy,
-      requesterPolicies.senderPolicy,
-      ...trailingPolicies,
-    ]),
+    // Runtime caps apply only to this turn; persistent policy keeps provider sessions reusable.
+    allowed:
+      isRuntimeToolAllowed("web_search", params.runtimeToolAllowlist) &&
+      isToolAllowedByPolicies("web_search", [
+        ...fixedPolicies,
+        requesterPolicies.groupPolicy,
+        requesterPolicies.senderPolicy,
+        ...trailingPolicies,
+      ]),
     persistentAllowed: isToolAllowedByPolicies("web_search", [
       ...fixedPolicies,
       persistentGroupPolicy,

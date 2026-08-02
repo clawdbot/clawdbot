@@ -48,7 +48,9 @@ export const slackQaMentionGatingScenario: SlackQaScenarioImplementation = {
 };
 
 export const slackQaMpimAppMentionDedupeScenario: SlackQaScenarioImplementation = {
-  configOverrides: { groupDmEnabled: true, replyToMode: "all" },
+  // Keep the event-dedupe assertion independent from Slack's separate
+  // streaming preview/final message lifecycle.
+  configOverrides: { groupDmEnabled: true, replyToMode: "all", streamingMode: "off" },
   buildRun: (sutUserId) => {
     const suffix = randomUUID().slice(0, 8).toUpperCase();
     const seedMarker = `SLACK_QA_MPIM_SEED_${suffix}`;
@@ -346,16 +348,14 @@ export const slackQaTablePresentationNativeScenario: SlackQaScenarioImplementati
   buildRun: (sutUserId) => {
     const suffix = randomUUID().slice(0, 8).toUpperCase();
     const summaryText = `SLACK_QA_TABLE_SUMMARY_${suffix}`;
-    const finalMarker = `SLACK_QA_TABLE_DONE_${suffix}`;
     const messageToolArgs = buildSlackTableMessageToolArgs(summaryText);
     return {
       expectReply: true,
       input: [
         `<@${sutUserId}> Slack native table QA check ${summaryText}.`,
         `Call the message tool exactly once with these exact arguments: ${JSON.stringify(messageToolArgs)}.`,
-        `After the table send succeeds, reply with only this exact marker: ${finalMarker}`,
       ].join(" "),
-      matchText: finalMarker,
+      matchText: summaryText,
       afterReply: async (_message, context) => {
         await waitForSlackStoredMessage({
           channelId: context.channelId,

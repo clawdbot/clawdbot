@@ -1,8 +1,17 @@
 // Matrix tests cover send plugin behavior.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import {
+  resetPluginBlobStoreForTests,
+  resetPluginStateStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../../runtime-api.js";
 import { setMatrixRuntime } from "../runtime.js";
+import { installMatrixTestRuntime } from "../test-runtime.js";
 import { voteMatrixPoll } from "./actions/polls.js";
+import { loadMatrixDeliveryPlan, resolveMatrixDurableDeliveryIdentity } from "./delivery-plan.js";
 import { markdownToMatrixBody, markdownToMatrixHtml } from "./format.js";
 import {
   chunkMatrixText,
@@ -115,6 +124,8 @@ const makeClient = () => {
     getEvent,
     getJoinedRoomMembers,
     uploadContent,
+    getTransactionScopeId: vi.fn().mockResolvedValue("scope-1"),
+    getMessageWireEventType: vi.fn().mockResolvedValue("m.room.message"),
     getUserId: vi.fn().mockResolvedValue("@bot:example.org"),
     prepareForOneOff: vi.fn(async () => undefined),
     start: vi.fn(async () => undefined),
@@ -408,6 +419,87 @@ describe("Matrix formatted chunk boundaries", () => {
     expect(
       chunkMatrixText(shortDivider, { cfg: {} as never, tableMode: "block" }).chunks.join("\n"),
     ).toContain("**bar**");
+  });
+});
+
+describe("sendMessageMatrix durable delivery", () => {
+  let stateDir = "";
+
+  beforeEach(() => {
+    resetMatrixSendRuntimeMocks();
+    stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-matrix-send-plan-"));
+    installMatrixTestRuntime({
+      stateDir,
+      cfg: {},
+      channel: runtimeStub.channel,
+    });
+  });
+
+  afterEach(() => {
+    resetPluginBlobStoreForTests({ closeDatabase: false });
+    resetPluginStateStoreForTests();
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  });
+
+  it("persists the complete event plan before the first provider dispatch", async () => {
+    const { client, sendMessage } = makeClient();
+    const deliveryIdentity = resolveMatrixDurableDeliveryIdentity({
+      queueId: "queue-1",
+      partIndex: 0,
+      partCount: 1,
+    });
+    if (!deliveryIdentity) {
+      throw new Error("expected durable Matrix identity");
+    }
+    const dispatch = vi.fn(async () => {
+      await expect(
+        loadMatrixDeliveryPlan({
+          identity: deliveryIdentity,
+          accountId: "default",
+          roomId: "!room:example",
+          transactionScopeId: "scope-1",
+          wireEventType: "m.room.message",
+        }),
+      ).resolves.not.toBeNull();
+    });
+    sendMessage.mockImplementation(
+      async (
+        roomId: string,
+        _content: unknown,
+        transactionId?: string,
+        beforeWireDispatch?: (dispatch: {
+          roomId: string;
+          eventType: "m.room.message";
+          transactionId: string;
+          requestPath: string;
+        }) => Promise<void>,
+      ) => {
+        if (!transactionId || !beforeWireDispatch) {
+          throw new Error("expected durable Matrix dispatch context");
+        }
+        await beforeWireDispatch({
+          roomId,
+          eventType: "m.room.message",
+          transactionId,
+          requestPath: `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/send/m.room.message/${transactionId}`,
+        });
+        return "$event-1";
+      },
+    );
+
+    const result = await sendMessageMatrix("room:!room:example", "durable", {
+      client,
+      cfg: {} as never,
+      accountId: "default",
+      deliveryQueueId: "queue-1",
+      deliveryPartIndex: 0,
+      deliveryPartCount: 1,
+      onPlatformSendDispatch: dispatch,
+    });
+
+    expect(result.messageId).toBe("$event-1");
+    expect(dispatch).toHaveBeenCalledOnce();
+    expect(sendMessage.mock.calls[0]?.[2]).toMatch(/^oc_/);
   });
 });
 

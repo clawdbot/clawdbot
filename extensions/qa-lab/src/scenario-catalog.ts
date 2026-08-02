@@ -163,6 +163,7 @@ const qaScenarioCoverageSchema = z
   }));
 
 const qaScenarioGatewayRuntimeSchema = z.object({
+  allowUnhealthyStartup: z.boolean().optional(),
   forwardHostHome: z.boolean().optional(),
   preserveDebugArtifacts: z.boolean().optional(),
 });

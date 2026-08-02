@@ -125,6 +125,47 @@ describe("Synology Chat user_list loopback", () => {
     }
   });
 
+  it("chunks long text before the Synology payload limit for every text adapter", async () => {
+    const receivedPayloads: Array<{ text: string; user_ids?: number[] }> = [];
+    const port = await listenLoopback((req, res) => {
+      let formBody = "";
+      req.setEncoding("utf8");
+      req.on("data", (chunk: string) => {
+        formBody += chunk;
+      });
+      req.on("end", () => {
+        const payload = JSON.parse(new URLSearchParams(formBody).get("payload") ?? "{}") as {
+          text?: string;
+          user_ids?: number[];
+        };
+        receivedPayloads.push({ text: payload.text ?? "", user_ids: payload.user_ids });
+        const accepted = (payload.text?.length ?? 0) <= 2_000;
+        res.writeHead(accepted ? 200 : 413, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ success: accepted }));
+      });
+    });
+    const incomingUrl = `http://127.0.0.1:${port}/webapi/entry.cgi`;
+    const cfg = {
+      channels: {
+        "synology-chat": {
+          enabled: true,
+          token: "loopback-token",
+          incomingUrl,
+        },
+      },
+    };
+    const text = "x".repeat(2_001);
+
+    await synologyChatPlugin.outbound.sendText({ cfg, text, to: "42" });
+    await synologyChatPlugin.message.send?.text?.({ cfg, text, to: "42" });
+    await sendMessage(incomingUrl, text, "42");
+
+    expect(receivedPayloads).toHaveLength(6);
+    expect(receivedPayloads.map(({ text: chunk }) => chunk).join("")).toBe(text + text + text);
+    expect(receivedPayloads.every(({ text: chunk }) => chunk.length <= 2_000)).toBe(true);
+    expect(receivedPayloads.every(({ user_ids }) => user_ids?.[0] === 42)).toBe(true);
+  });
+
   it("rejects unauthenticated webhook sends without fabricating delivery receipts", async () => {
     let rejectedRequests = 0;
     const port = await listenLoopback((_req, res) => {

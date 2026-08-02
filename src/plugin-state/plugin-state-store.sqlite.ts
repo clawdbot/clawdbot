@@ -399,6 +399,24 @@ function openPluginStateDatabase(
   }
 }
 
+function isMissingPluginStateTableError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (error as NodeJS.ErrnoException).code === "ERR_SQLITE_ERROR" &&
+    error.message === "no such table: plugin_state_entries"
+  );
+}
+
+function hasStateTablesBeyondStartupCheckpoint(db: DatabaseSync): boolean {
+  return (
+    /* sqlite-allow-raw -- Read-only startup-checkpoint schema discriminator. */ db
+      .prepare(
+        "SELECT 1 FROM main.sqlite_schema WHERE type = 'table' AND name NOT IN ('schema_meta', 'state_leases') LIMIT 1",
+      )
+      .get() !== undefined
+  );
+}
+
 /** Read plugin state without joining the shared writable database lifecycle. */
 function withPluginStateDatabaseReadOnly<T>(
   operationName: PluginStateStoreOperation,
@@ -410,7 +428,18 @@ function withPluginStateDatabaseReadOnly<T>(
   try {
     return withExistingOpenClawStateDatabaseReadOnly(({ db, path }) => {
       operationStarted = true;
-      return operation({ db, path });
+      try {
+        return operation({ db, path });
+      } catch (error) {
+        if (isMissingPluginStateTableError(error)) {
+          // The lease bootstrap creates exactly schema_meta + state_leases before the first write;
+          // any other table means the missing plugin-state table is damage, not fresh state.
+          if (!hasStateTablesBeyondStartupCheckpoint(db)) {
+            return undefined;
+          }
+        }
+        throw error;
+      }
     }, options);
   } catch (error) {
     if (!operationStarted) {

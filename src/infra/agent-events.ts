@@ -4,8 +4,8 @@ import { randomUUID } from "node:crypto";
 import type { VerboseLevel } from "../auto-reply/thinking.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
-import { createAbortError } from "./abort-signal.js";
 import { hasInvalidLifecycleStartTimestamp } from "./agent-event-lifecycle.js";
+import { createAgentRunStaleLifecycleError } from "./agent-lifecycle-error.js";
 import { clearAgentRunUsage, resetAgentRunUsageForTest } from "./agent-run-usage.js";
 
 /** Approval event phase for request/resolution transitions. */
@@ -194,7 +194,7 @@ export function assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration: st
   if (isAgentEventLifecycleGenerationCurrent(lifecycleGeneration)) {
     return;
   }
-  throw createAbortError("Agent run belongs to a stale gateway lifecycle");
+  throw createAgentRunStaleLifecycleError();
 }
 
 /** Captures immutable lifecycle ownership for one admitted execution. */

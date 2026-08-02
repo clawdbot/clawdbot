@@ -100,7 +100,6 @@ type Route = {
 type NativeTurnCompletionWatcher = {
   turnId: string;
   finish: (completed: boolean) => void;
-  touch: () => void;
 };
 
 const routers = new WeakMap<CodexAppServerClient, ClientTurnRouter>();
@@ -129,7 +128,9 @@ class ClientTurnRouter implements CodexAppServerTurnRouter {
   constructor(client: CodexAppServerClient) {
     client.addNotificationHandler((notification) => this.routeNotification(notification));
     client.addRequestHandler((request, signal) => this.routeRequest(request, signal));
-    client.addCloseHandler(() => this.dispose());
+    client.addCloseHandler((closedClient) => {
+      this.dispose(closedClient.getCloseError());
+    });
   }
 
   reserveThread(options: RouteOptions): CodexThreadRouteReservation {
@@ -203,23 +204,23 @@ class ClientTurnRouter implements CodexAppServerTurnRouter {
       clearTimeout(timeout);
       settle(completed);
     };
-    const touch = () => {
-      timeout.refresh();
-    };
-    const watcher = { turnId, finish, touch };
+    const watcher = { turnId, finish };
     watchers.add(watcher);
     const timeout = setTimeout(() => finish(false), Math.max(1, options.timeoutMs));
     timeout.unref?.();
     return { completion, cancel: () => finish(false) };
   }
 
-  private dispose(): void {
+  private dispose(cause?: Error): void {
     if (this.disposed) {
       return;
     }
     this.disposed = true;
+    const closeError = cause
+      ? new Error("codex app-server turn router closed", { cause })
+      : new Error("codex app-server turn router closed");
     for (const route of this.routes.values()) {
-      this.release(route, new Error("codex app-server turn router closed"));
+      this.release(route, closeError);
     }
     for (const watchers of this.nativeTurnCompletionWatchers.values()) {
       for (const watcher of watchers) {
@@ -309,12 +310,8 @@ class ClientTurnRouter implements CodexAppServerTurnRouter {
     const terminal = isCodexTerminalTurnNotification(notification);
     if (scope.turnId && watchers) {
       for (const watcher of watchers) {
-        if (watcher.turnId === scope.turnId) {
-          if (terminal) {
-            watcher.finish(true);
-          } else {
-            watcher.touch();
-          }
+        if (watcher.turnId === scope.turnId && notification.method === "turn/completed") {
+          watcher.finish(true);
         }
       }
     }

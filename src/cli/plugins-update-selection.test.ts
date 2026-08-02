@@ -34,6 +34,25 @@ function createNpmHookInstall(params: {
 }
 
 describe("resolvePluginUpdateSelection", () => {
+  it.each(["missing-plugin", "@acme/missing-plugin@beta", "constructor"])(
+    "does not select the untracked plugin target %s",
+    (rawId) => {
+      expect(resolvePluginUpdateSelection({ installs: {}, rawId })).toEqual({ pluginIds: [] });
+    },
+  );
+
+  it("does not guess an owner when an npm package maps to multiple tracked plugins", () => {
+    expect(
+      resolvePluginUpdateSelection({
+        installs: {
+          alpha: createNpmInstall({ spec: "@acme/shared", resolvedName: "@acme/shared" }),
+          beta: createNpmInstall({ spec: "@acme/shared", resolvedName: "@acme/shared" }),
+        },
+        rawId: "@acme/shared@beta",
+      }),
+    ).toEqual({ pluginIds: [] });
+  });
+
   it("maps an explicit unscoped npm dist-tag update to the tracked plugin id", () => {
     expect(
       resolvePluginUpdateSelection({

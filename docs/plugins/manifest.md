@@ -490,7 +490,9 @@ Planner diagnostics can distinguish explicit activation hints from manifest owne
 Use `qaRunners` when a plugin contributes one or more transport runners beneath
 the shared `openclaw qa` root. Keep this metadata cheap and static; the plugin
 runtime still owns actual CLI registration through a lightweight
-`runtime-api.ts` surface that exports matching `qaRunnerCliRegistrations`. An
+`qa-runner-api.ts` surface that exports matching `qaRunnerCliRegistrations`. For
+plugins using the shipped `runtime-api.ts` contract, that legacy surface remains
+accepted through 2026-10-01 while authors migrate. An
 optional `adapterFactory` exposes the transport to shared QA scenarios without
 changing the registered command's runner.
 

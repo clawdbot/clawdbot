@@ -16,7 +16,7 @@ import {
   type ModelAuthAvailabilityEvaluation,
   type ModelAuthAvailabilityResolver,
 } from "../../agents/model-auth-availability.js";
-import { hasSyntheticLocalProviderAuthConfig } from "../../agents/model-auth.js";
+import { hasSyntheticLocalProviderAuthConfig } from "../../agents/model-auth-provider-config.js";
 import {
   buildProviderConfigModelCatalogForBrowse,
   loadPreparedModelCatalogSnapshotForBrowse,

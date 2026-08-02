@@ -64,7 +64,7 @@ describe("slack socket reconnect helpers", () => {
     const status = statusCallAt(setStatus, 0);
     expect(status?.connected).toBe(true);
     expect(status?.lastConnectedAt).toBe(1_711_406_400_000);
-    expect(status?.healthState).toBe("healthy");
+    expect(status?.lifecycle).toBe("ready");
     expect(status?.lastError).toBeNull();
     expect(status).not.toHaveProperty("lastEventAt");
   });
@@ -74,7 +74,7 @@ describe("slack socket reconnect helpers", () => {
     vi.spyOn(Date, "now").mockReturnValue(1_711_406_400_500);
 
     publishSlackConnectedStatus(setStatus, {
-      healthState: "degraded",
+      lifecycle: "blocked",
       lastError: "auth.test returned no user_id",
     });
 
@@ -82,7 +82,7 @@ describe("slack socket reconnect helpers", () => {
     expect(setStatus).toHaveBeenCalledWith({
       connected: true,
       lastConnectedAt: 1_711_406_400_500,
-      healthState: "degraded",
+      lifecycle: "blocked",
       lastError: "auth.test returned no user_id",
     });
   });
@@ -97,7 +97,7 @@ describe("slack socket reconnect helpers", () => {
     expect(setStatus).toHaveBeenCalledTimes(1);
     expect(setStatus).toHaveBeenCalledWith({
       connected: false,
-      healthState: "disconnected",
+      lifecycle: "recovering",
       lastDisconnect: {
         at: 1_711_406_401_000,
         error: "dns down",
@@ -115,7 +115,7 @@ describe("slack socket reconnect helpers", () => {
     expect(setStatus).toHaveBeenCalledTimes(1);
     expect(setStatus).toHaveBeenCalledWith({
       connected: false,
-      healthState: "disconnected",
+      lifecycle: "recovering",
       lastDisconnect: {
         at: 1_711_406_402_000,
       },

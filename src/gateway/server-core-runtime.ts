@@ -316,15 +316,18 @@ export async function startGatewayCoreRuntime(input: {
         (workerPlacementDispatchAvailable || descriptor.name !== "sessions.dispatch") &&
         (workerPlacementControlAvailable || descriptor.name !== "sessions.reclaim"),
     );
-    return createGatewayMethodRegistry([
-      ...coreDescriptors,
-      ...createPluginGatewayMethodDescriptors(nextPluginRegistry),
-      ...createGatewayMethodDescriptorsFromHandlers({
-        handlers: auxHandlers,
-        owner: { kind: "aux", area: "gateway-extra" },
-        defaultScope: ADMIN_SCOPE,
-      }),
-    ]);
+    return createGatewayMethodRegistry(
+      [
+        ...coreDescriptors,
+        ...createPluginGatewayMethodDescriptors(nextPluginRegistry),
+        ...createGatewayMethodDescriptorsFromHandlers({
+          handlers: auxHandlers,
+          owner: { kind: "aux", area: "gateway-extra" },
+          defaultScope: ADMIN_SCOPE,
+        }),
+      ],
+      nextPluginRegistry,
+    );
   };
   let attachedGatewayMethodRegistry = buildAttachedGatewayMethodRegistry(pluginRuntime.registry);
   const listAttachedGatewayMethods = () => {

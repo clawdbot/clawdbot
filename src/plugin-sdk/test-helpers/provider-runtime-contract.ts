@@ -366,23 +366,11 @@ export function describeGoogleProviderRuntimeContract(load: ProviderRuntimeContr
       });
     });
 
-    it("owns usage-token parsing", async () => {
+    it("keeps retired usage telemetry hooks absent", () => {
       const provider = requireProviderContractProvider("google-gemini-cli");
-      await expect(
-        provider.resolveUsageAuth?.({
-          config: {} as never,
-          env: {} as NodeJS.ProcessEnv,
-          provider: "google-gemini-cli",
-          resolveApiKeyFromConfigAndStore: () => undefined,
-          resolveOAuthToken: async () => ({
-            token: '{"token":"google-oauth-token"}',
-            accountId: "google-account",
-          }),
-        }),
-      ).resolves.toEqual({
-        token: "google-oauth-token",
-        accountId: "google-account",
-      });
+
+      expect(provider.resolveUsageAuth).toBeUndefined();
+      expect(provider.fetchUsageSnapshot).toBeUndefined();
     });
 
     it("owns OAuth auth-profile formatting", () => {
@@ -398,38 +386,6 @@ export function describeGoogleProviderRuntimeContract(load: ProviderRuntimeContr
           projectId: "proj-123",
         }),
       ).toBe('{"token":"google-oauth-token","projectId":"proj-123"}');
-    });
-
-    it("owns usage snapshot fetching", async () => {
-      const provider = requireProviderContractProvider("google-gemini-cli");
-      const mockFetch = createProviderUsageFetch(async (url) => {
-        if (url.includes("cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota")) {
-          return makeResponse(200, {
-            buckets: [
-              { modelId: "gemini-3.1-pro-preview", remainingFraction: 0.4 },
-              { modelId: "gemini-3.1-flash-preview", remainingFraction: 0.8 },
-            ],
-          });
-        }
-        return makeResponse(404, "not found");
-      });
-
-      const snapshot = await provider.fetchUsageSnapshot?.({
-        config: {} as never,
-        env: {} as NodeJS.ProcessEnv,
-        provider: "google-gemini-cli",
-        token: "google-oauth-token",
-        timeoutMs: 5_000,
-        fetchFn: mockFetch as unknown as typeof fetch,
-      });
-
-      expectFields(snapshot, {
-        provider: "google-gemini-cli",
-        displayName: "Gemini",
-      });
-      expect(snapshot?.windows[0]).toEqual({ label: "Pro", usedPercent: 60 });
-      expect(snapshot?.windows[1]?.label).toBe("Flash");
-      expect(snapshot?.windows[1]?.usedPercent).toBeCloseTo(20);
     });
   });
 }

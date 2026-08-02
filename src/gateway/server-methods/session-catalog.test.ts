@@ -232,6 +232,27 @@ describe("session catalog Gateway methods", () => {
     }
   });
 
+  it("keeps differently ordered host filters distinct when sharing lists", async () => {
+    const observedHostIds: Array<string[] | undefined> = [];
+    const list = vi.fn(async ({ hostIds }: { hostIds?: string[] }) => {
+      observedHostIds.push(hostIds ? [...hostIds] : undefined);
+      return [];
+    });
+    hoisted.activeRegistry.sessionCatalogs = [{ provider: provider("codex", { list }) }];
+    const config = {};
+
+    await Promise.all([
+      call("sessions.catalog.list", { hostIds: ["host-a", "host-b"] }, config),
+      call("sessions.catalog.list", { hostIds: ["host-b", "host-a"] }, config),
+    ]);
+
+    expect(list).toHaveBeenCalledTimes(2);
+    expect(observedHostIds).toEqual([
+      ["host-a", "host-b"],
+      ["host-b", "host-a"],
+    ]);
+  });
+
   it("shares settled identical lists across out-of-phase clients until the window expires", async () => {
     let now = 1_000;
     const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);

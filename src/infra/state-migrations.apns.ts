@@ -1,13 +1,9 @@
 // Doctor-only import for the retired APNs registration JSON store.
-import { createHash } from "node:crypto";
 import path from "node:path";
 import { root, type Root } from "@openclaw/fs-safe";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-} from "../state/openclaw-state-db.js";
+import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -24,6 +20,14 @@ import {
   type ApnsRegistration,
 } from "./push-apns-store.js";
 import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
+import {
+  markLegacyMigrationSourceRemoved,
+  readLegacyMigrationReceipt,
+  readLegacyMigrationReceiptFromDatabase,
+  recordLegacyMigrationReceipt,
+  resolveLegacyMigrationSourceKey,
+  type LegacyMigrationReceipt,
+} from "./state-migrations.receipts.js";
 import {
   legacyMigrationSourceOrClaimMayExist,
   legacyMigrationSourceSnapshotsMatch as snapshotsMatch,
@@ -62,18 +66,13 @@ const RELAY_REGISTRATION_KEYS = new Set([
 
 type ApnsMigrationDatabase = Pick<
   OpenClawStateKyselyDatabase,
-  "apns_registrations" | "apns_registration_tombstones" | "migration_runs" | "migration_sources"
+  "apns_registrations" | "apns_registration_tombstones"
 >;
 
 type LegacySourceSnapshot = Pick<
   LegacyMigrationSourceSnapshot,
   "sourcePath" | "dev" | "ino" | "mtimeMs" | "sha256" | "size"
 >;
-
-type MigrationReceipt = {
-  sourceKey: string;
-  removedSource: boolean;
-};
 
 function resolveLegacyApnsPath(stateDir: string): string {
   return path.join(stateDir, LEGACY_APNS_REGISTRATION_PATH);
@@ -181,23 +180,6 @@ function parseLegacyApnsRegistration(
   return [normalizedNodeId, registration];
 }
 
-function receiptSourceKey(sourcePath: string): string {
-  return `apns-json:${createHash("sha256").update(path.resolve(sourcePath)).digest("hex")}`;
-}
-
-function readMigrationReceipt(sourcePath: string, env: NodeJS.ProcessEnv): MigrationReceipt | null {
-  const sourceKey = receiptSourceKey(sourcePath);
-  const { db } = openOpenClawStateDatabase({ env });
-  const row = executeSqliteQueryTakeFirstSync(
-    db,
-    getNodeSqliteKysely<ApnsMigrationDatabase>(db)
-      .selectFrom("migration_sources")
-      .select("removed_source")
-      .where("source_key", "=", sourceKey),
-  );
-  return row ? { sourceKey, removedSource: row.removed_source === 1 } : null;
-}
-
 function importAndRecordReceipt(params: {
   env: NodeJS.ProcessEnv;
   sourcePath: string;
@@ -210,19 +192,13 @@ function importAndRecordReceipt(params: {
   suppressed: number;
   receiptAuthoritative: boolean;
 } {
-  const sourceKey = receiptSourceKey(params.sourcePath);
+  const sourceKey = resolveLegacyMigrationSourceKey("apns-json", params.sourcePath);
   const runId = `${sourceKey}:${params.snapshot.sha256.slice(0, 16)}`;
   const now = Date.now();
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
       const stateDb = getNodeSqliteKysely<ApnsMigrationDatabase>(db);
-      const existingReceipt = executeSqliteQueryTakeFirstSync(
-        db,
-        stateDb
-          .selectFrom("migration_sources")
-          .select("source_key")
-          .where("source_key", "=", sourceKey),
-      );
+      const existingReceipt = readLegacyMigrationReceiptFromDatabase(db, sourceKey);
       if (existingReceipt) {
         return {
           sourceKey,
@@ -290,51 +266,21 @@ function importAndRecordReceipt(params: {
         preservedSqliteRecordCount: preserved,
         suppressedDeletedRecordCount: suppressed,
       });
-      executeSqliteQuerySync(
-        db,
-        stateDb.insertInto("migration_runs").values({
-          id: runId,
-          started_at: now,
-          finished_at: now,
-          status: "completed",
-          report_json: reportJson,
-        }),
-      );
-      executeSqliteQuerySync(
-        db,
-        stateDb.insertInto("migration_sources").values({
-          source_key: sourceKey,
-          migration_kind: MIGRATION_KIND,
-          source_path: params.sourcePath,
-          target_table: "apns_registrations",
-          source_sha256: params.snapshot.sha256,
-          source_size_bytes: params.snapshot.size,
-          source_record_count: params.registrations.size,
-          last_run_id: runId,
-          status: "completed",
-          imported_at: now,
-          removed_source: 0,
-          report_json: reportJson,
-        }),
-      );
+      recordLegacyMigrationReceipt(db, {
+        sourceKey,
+        migrationKind: MIGRATION_KIND,
+        sourcePath: params.sourcePath,
+        targetTable: "apns_registrations",
+        sourceSha256: params.snapshot.sha256,
+        sourceSizeBytes: params.snapshot.size,
+        sourceRecordCount: params.registrations.size,
+        runId,
+        now,
+        reportJson,
+      });
       return { sourceKey, imported, preserved, suppressed, receiptAuthoritative: false };
     },
     { env: params.env },
-  );
-}
-
-function markSourceRemoved(sourceKey: string, env: NodeJS.ProcessEnv): void {
-  runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      executeSqliteQuerySync(
-        db,
-        getNodeSqliteKysely<ApnsMigrationDatabase>(db)
-          .updateTable("migration_sources")
-          .set({ removed_source: 1 })
-          .where("source_key", "=", sourceKey),
-      );
-    },
-    { env },
   );
 }
 
@@ -355,7 +301,7 @@ async function cleanupReceiptAuthoritativeSources(params: {
   stateRoot: Root;
   stateDir: string;
   sourcePath: string;
-  receipt: MigrationReceipt;
+  receipt: LegacyMigrationReceipt;
   env: NodeJS.ProcessEnv;
   removeSource?: (sourcePath: string) => Promise<void> | void;
 }): Promise<number> {
@@ -370,7 +316,7 @@ async function cleanupReceiptAuthoritativeSources(params: {
     removed += 1;
   }
   if (!params.receipt.removedSource || removed > 0) {
-    markSourceRemoved(params.receipt.sourceKey, params.env);
+    markLegacyMigrationSourceRemoved(params.receipt.sourceKey, params.env);
   }
   return removed;
 }
@@ -413,7 +359,10 @@ async function migrateWithExclusiveStateOwnership(params: {
     return { changes, warnings };
   }
 
-  const receipt = readMigrationReceipt(params.detected.sourcePath, params.env);
+  const receipt = readLegacyMigrationReceipt(
+    resolveLegacyMigrationSourceKey("apns-json", params.detected.sourcePath),
+    params.env,
+  );
   if (receipt) {
     try {
       const removed = await cleanupReceiptAuthoritativeSources({
@@ -519,7 +468,7 @@ async function migrateWithExclusiveStateOwnership(params: {
       throw new Error("legacy APNs source reappeared during import");
     }
     await removePath({ ...params, sourcePath: claimPath });
-    markSourceRemoved(result.sourceKey, params.env);
+    markLegacyMigrationSourceRemoved(result.sourceKey, params.env);
   } catch (error) {
     warnings.push(`APNs state is in SQLite, but legacy cleanup failed: ${String(error)}`);
     return { changes, warnings };

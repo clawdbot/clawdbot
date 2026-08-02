@@ -44,6 +44,16 @@ export async function callGatewayFromCli(
     scopes?: OperatorScope[];
   },
 ) {
+  return await callGatewayFromCliWithTransport(method, opts, params, extra);
+}
+
+/** Internal CLI facade for callers that need transport or auth policy overrides. */
+export async function callGatewayFromCliWithTransport(
+  method: string,
+  opts: Parameters<GatewayRpcRuntimeModule["callGatewayFromCliRuntime"]>[1],
+  params?: unknown,
+  extra?: Parameters<GatewayRpcRuntimeModule["callGatewayFromCliRuntime"]>[3],
+) {
   const runtime = await loadGatewayRpcRuntime();
   return await runtime.callGatewayFromCliRuntime(method, opts, params, extra);
 }

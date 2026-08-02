@@ -18,11 +18,10 @@ import {
 } from "./kysely-sync.js";
 import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
 import {
-  legacyMigrationSourceContentMatches as contentSnapshotsMatch,
+  LegacyMigrationSourceClaim,
   legacyMigrationSourceOrClaimMayExist,
   legacyMigrationSourceSnapshotsMatch as sourceSnapshotsMatch,
   readLegacyMigrationSourceSnapshot,
-  resolveLegacyMigrationRelativePath,
   type LegacyMigrationSourceSnapshot as LegacySourceSnapshot,
 } from "./state-migrations.source-snapshot.js";
 import type { LegacyStateDetection, MigrationMessages } from "./state-migrations.types.js";
@@ -50,48 +49,6 @@ export function detectLegacyNodeHostConfig(params: {
       params.doctorOnlyStateMigrations === true &&
       legacyMigrationSourceOrClaimMayExist(sourcePath, LEGACY_NODE_HOST_CONFIG_CLAIM_SUFFIX),
   };
-}
-
-function relativeLegacyPath(stateDir: string, filePath: string): string {
-  return resolveLegacyMigrationRelativePath(stateDir, filePath, "node-host");
-}
-
-async function readLegacySourceSnapshot(
-  stateRoot: Root,
-  stateDir: string,
-  sourcePath: string,
-): Promise<LegacySourceSnapshot> {
-  return readLegacyMigrationSourceSnapshot({
-    stateRoot,
-    stateDir,
-    sourcePath,
-    maxBytes: LEGACY_NODE_HOST_MAX_BYTES,
-    label: "node-host",
-    hashDecodedText: true,
-  });
-}
-
-async function recoverInterruptedClaim(
-  stateRoot: Root,
-  stateDir: string,
-  sourcePath: string,
-): Promise<void> {
-  const claimPath = `${sourcePath}${LEGACY_NODE_HOST_CONFIG_CLAIM_SUFFIX}`;
-  const claimRelativePath = relativeLegacyPath(stateDir, claimPath);
-  const sourceRelativePath = relativeLegacyPath(stateDir, sourcePath);
-  if (!(await stateRoot.exists(claimRelativePath))) {
-    return;
-  }
-  const claim = await readLegacySourceSnapshot(stateRoot, stateDir, claimPath);
-  if (!(await stateRoot.exists(sourceRelativePath))) {
-    await stateRoot.move(claimRelativePath, sourceRelativePath);
-    return;
-  }
-  const source = await readLegacySourceSnapshot(stateRoot, stateDir, sourcePath);
-  if (!contentSnapshotsMatch(claim, source)) {
-    throw new Error("interrupted node-host Doctor claim conflicts with its source");
-  }
-  await stateRoot.remove(claimRelativePath);
 }
 
 function assertOnlyKeys(
@@ -342,31 +299,6 @@ function migrateIntoDatabase(params: { env: NodeJS.ProcessEnv; legacy: Canonical
   return { imported, preservedCanonical };
 }
 
-async function restoreClaim(params: {
-  stateRoot: Root;
-  stateDir: string;
-  snapshot: LegacySourceSnapshot;
-}): Promise<string | null> {
-  const claimPath = `${params.snapshot.sourcePath}${LEGACY_NODE_HOST_CONFIG_CLAIM_SUFFIX}`;
-  try {
-    if (!(await params.stateRoot.exists(relativeLegacyPath(params.stateDir, claimPath)))) {
-      return null;
-    }
-    if (
-      await params.stateRoot.exists(relativeLegacyPath(params.stateDir, params.snapshot.sourcePath))
-    ) {
-      return `source path already exists: ${params.snapshot.sourcePath}`;
-    }
-    await params.stateRoot.move(
-      relativeLegacyPath(params.stateDir, claimPath),
-      relativeLegacyPath(params.stateDir, params.snapshot.sourcePath),
-    );
-    return null;
-  } catch (error) {
-    return String(error);
-  }
-}
-
 async function migrateWithExclusiveStateOwnership(params: {
   stateRoot: Root;
   detected: LegacyStateDetection["nodeHost"];
@@ -383,19 +315,34 @@ async function migrateWithExclusiveStateOwnership(params: {
   const warnings: string[] = [];
   const notices: string[] = [];
   const sourcePath = params.detected.sourcePath;
+  const source = new LegacyMigrationSourceClaim({
+    stateRoot: params.stateRoot,
+    stateDir: params.stateDir,
+    sourcePath,
+    label: "node-host",
+    claimSuffix: LEGACY_NODE_HOST_CONFIG_CLAIM_SUFFIX,
+    readSnapshot: (snapshotPath) =>
+      readLegacyMigrationSourceSnapshot({
+        stateRoot: params.stateRoot,
+        stateDir: params.stateDir,
+        sourcePath: snapshotPath,
+        maxBytes: LEGACY_NODE_HOST_MAX_BYTES,
+        label: "node-host",
+        hashDecodedText: true,
+      }),
+  });
 
   let snapshot: LegacySourceSnapshot;
   let legacy: CanonicalNodeHostState;
   try {
-    await recoverInterruptedClaim(params.stateRoot, params.stateDir, sourcePath);
-    if (!(await params.stateRoot.exists(relativeLegacyPath(params.stateDir, sourcePath)))) {
+    await source.recover("interrupted node-host Doctor claim conflicts with its source");
+    if (!(await source.exists())) {
       return { changes, warnings };
     }
-    snapshot = await readLegacySourceSnapshot(params.stateRoot, params.stateDir, sourcePath);
+    snapshot = await source.read();
     legacy = parseLegacyNodeHostConfig(snapshot);
     params.beforeVerify?.();
-    const current = await readLegacySourceSnapshot(params.stateRoot, params.stateDir, sourcePath);
-    if (!sourceSnapshotsMatch(current, snapshot)) {
+    if (!sourceSnapshotsMatch(await source.read(), snapshot)) {
       throw new Error("legacy node-host source changed after Doctor loaded it");
     }
   } catch (error) {
@@ -403,23 +350,14 @@ async function migrateWithExclusiveStateOwnership(params: {
     return { changes, warnings };
   }
 
-  const claimPath = `${sourcePath}${LEGACY_NODE_HOST_CONFIG_CLAIM_SUFFIX}`;
   try {
-    params.beforeClaim?.();
-    await params.stateRoot.move(
-      relativeLegacyPath(params.stateDir, sourcePath),
-      relativeLegacyPath(params.stateDir, claimPath),
-    );
-    const claimed = await readLegacySourceSnapshot(params.stateRoot, params.stateDir, claimPath);
-    if (!sourceSnapshotsMatch(claimed, snapshot)) {
-      throw new Error("legacy node-host source changed before Doctor could claim it");
-    }
-  } catch (error) {
-    const restoreError = await restoreClaim({
-      stateRoot: params.stateRoot,
-      stateDir: params.stateDir,
+    await source.claim({
       snapshot,
+      mismatchMessage: "legacy node-host source changed before Doctor could claim it",
+      beforeClaim: params.beforeClaim,
     });
+  } catch (error) {
+    const restoreError = await source.restore();
     warnings.push(
       `Failed migrating legacy node-host state: ${String(error)}${restoreError ? `; restore failure: ${restoreError}` : ""}`,
     );
@@ -430,11 +368,7 @@ async function migrateWithExclusiveStateOwnership(params: {
   try {
     result = migrateIntoDatabase({ env: params.env, legacy });
   } catch (error) {
-    const restoreError = await restoreClaim({
-      stateRoot: params.stateRoot,
-      stateDir: params.stateDir,
-      snapshot,
-    });
+    const restoreError = await source.restore();
     warnings.push(
       `Failed migrating legacy node-host state: ${String(error)}${restoreError ? `; restore failure: ${restoreError}` : ""}`,
     );
@@ -442,20 +376,11 @@ async function migrateWithExclusiveStateOwnership(params: {
   }
 
   try {
-    if (await params.stateRoot.exists(relativeLegacyPath(params.stateDir, sourcePath))) {
-      throw new Error(`legacy node-host source reappeared during import: ${sourcePath}`);
-    }
-    if (params.removeSource) {
-      await params.removeSource(claimPath);
-    } else {
-      await params.stateRoot.remove(relativeLegacyPath(params.stateDir, claimPath));
-    }
-    if (
-      (await params.stateRoot.exists(relativeLegacyPath(params.stateDir, sourcePath))) ||
-      (await params.stateRoot.exists(relativeLegacyPath(params.stateDir, claimPath)))
-    ) {
-      throw new Error("legacy node-host source or Doctor claim remains after cleanup");
-    }
+    await source.remove({
+      removeSource: params.removeSource,
+      sourceReappearedMessage: `legacy node-host source reappeared during import: ${sourcePath}`,
+      remainingMessage: "legacy node-host source or Doctor claim remains after cleanup",
+    });
   } catch (error) {
     warnings.push(`Node-host state is in SQLite, but legacy cleanup failed: ${String(error)}`);
     return { changes, warnings };

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 
 type CreateStaticCatalogResolver =
   typeof import("./embedded-agent-runner/model.static-catalog.js").createBundledStaticCatalogModelResolver;
@@ -30,7 +31,7 @@ const mocks = vi.hoisted(() => ({
     agentDir: "/tmp/agent",
     wrote: false,
   })),
-  ensureRuntimePluginsLoaded: vi.fn(),
+  loadAgentRuntimePluginRegistryHandle: vi.fn(),
   planOpenClawModelsJsonSource: vi.fn(async (...args: unknown[]) => ({
     agentDir: String(args[1]),
     modelsJsonContents: null,
@@ -81,6 +82,10 @@ vi.mock("./agent-scope.js", () => ({
     (agentId === "default" ? "/tmp/unused-workspace" : `/tmp/workspace-${agentId}`),
   resolveDefaultAgentDir: () => "/tmp/unused-agent",
   resolveDefaultAgentId: () => "default",
+  resolveSessionAgentIds: ({ agentId }: { agentId?: string }) => ({
+    defaultAgentId: "default",
+    sessionAgentId: agentId ?? "default",
+  }),
 }));
 
 vi.mock("./auth-profiles/runtime-snapshots.js", () => ({
@@ -106,7 +111,8 @@ vi.mock("./models-config.providers.implicit.js", () => ({
 }));
 
 vi.mock("./runtime-plugins.js", () => ({
-  ensureRuntimePluginsLoaded: (...args: unknown[]) => mocks.ensureRuntimePluginsLoaded(...args),
+  loadAgentRuntimePluginRegistryHandle: (...args: unknown[]) =>
+    mocks.loadAgentRuntimePluginRegistryHandle(...args),
 }));
 
 vi.mock("./embedded-agent-runner/model.static-catalog.js", () => ({
@@ -144,7 +150,9 @@ describe("prepared model runtime owner selection", () => {
     mocks.discoverModels.mockClear();
     mocks.ensureOpenClawModelsJson.mockReset();
     mocks.ensureOpenClawModelsJson.mockResolvedValue({ agentDir: "/tmp/agent", wrote: false });
-    mocks.ensureRuntimePluginsLoaded.mockClear();
+    mocks.loadAgentRuntimePluginRegistryHandle
+      .mockReset()
+      .mockReturnValue(createEmptyPluginRegistry());
     mocks.modelRegistry.fork.mockClear();
     mocks.planOpenClawModelsJsonSource.mockReset();
     mocks.planOpenClawModelsJsonSource.mockImplementation(async (_config, agentDir) => ({
@@ -225,6 +233,44 @@ describe("prepared model runtime owner selection", () => {
 
     expect(snapshot.workspaceDir).toBe("/tmp/gateway-launch-workspace");
     expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledOnce();
+  });
+
+  it("reuses the configured owner for selections that need no plugin harness", async () => {
+    mocks.configuredAgentIds = ["default"];
+    const config = { agents: { defaults: { model: "openai/gpt-5.5" } } };
+    await refreshPreparedModelRuntimeSnapshots(config, {
+      allowGatewaySubagentBinding: true,
+      catalogMode: "static",
+      gatewayLifecycle: true,
+    });
+    const configured = getPreparedModelRuntimeSnapshot({
+      agentId: "default",
+      agentDir: "/tmp/unused-agent",
+      allowGatewaySubagentBinding: true,
+      config,
+      workspaceDir: "/tmp/unused-workspace",
+    });
+
+    await expect(
+      prepareModelRuntimeSnapshot({
+        agentId: "default",
+        agentDir: "/tmp/unused-agent",
+        allowGatewaySubagentBinding: true,
+        config,
+        runtimePluginSelections: [{ provider: "openai", modelId: "gpt-5.5", runtime: "openclaw" }],
+        workspaceDir: "/tmp/unused-workspace",
+      }),
+    ).resolves.toBe(configured);
+    await expect(
+      prepareModelRuntimeSnapshot({
+        agentId: "default",
+        agentDir: "/tmp/unused-agent",
+        allowGatewaySubagentBinding: true,
+        config,
+        runtimePluginSelections: [{ provider: "openai", modelId: "gpt-5.5", runtime: "codex" }],
+        workspaceDir: "/tmp/unused-workspace",
+      }),
+    ).rejects.toThrow("prepared model runtime owner was not published");
   });
 
   it("does not substitute a configured owner captured from another environment", async () => {
@@ -343,7 +389,7 @@ describe("prepared model runtime owner selection", () => {
     });
 
     expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
-    expect(mocks.ensureRuntimePluginsLoaded).not.toHaveBeenCalled();
+    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(2);
     expect(mocks.resolveAmbientCredentials).toHaveBeenCalledTimes(2);
     expect(mocks.prepareStaticCatalog).toHaveBeenCalledTimes(2);
     expect(mocks.resolveStaticCatalogModel).toHaveBeenCalledTimes(2);
@@ -569,7 +615,7 @@ describe("prepared model runtime owner selection", () => {
       catalogMode: "static",
     });
 
-    expect(mocks.ensureRuntimePluginsLoaded).not.toHaveBeenCalled();
+    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledOnce();
     expect(mocks.prepareStaticCatalog).toHaveBeenCalledOnce();
     expect(mocks.discoverModels).toHaveBeenCalledTimes(2);
     const loadAgentCatalog = (agentId: string) =>

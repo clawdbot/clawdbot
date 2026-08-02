@@ -11,12 +11,11 @@ import {
   shouldDeferConfiguredChannelFullRuntimeMerge,
 } from "./loader-channel-setup.js";
 import type { PluginModuleLoader } from "./loader-module-runtime.js";
-import { runPluginRegisterSync } from "./loader-module-runtime.js";
+import { runPluginRegisterSyncInRegistry } from "./loader-module-runtime.js";
 import { recordPluginError } from "./loader-records.js";
 import type { PluginRegistrationPlan } from "./loader-registration-plan.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import { withProfile } from "./plugin-load-profile.js";
-import { createPluginRegistrationTransaction } from "./plugin-registration-transaction.js";
 import { resolveCanonicalDistRuntimeSource } from "./plugin-runtime-artifact-resolution.js";
 import type { createPluginRegistry, PluginRecord } from "./registry.js";
 import type { OpenClawPluginModule, PluginLogger } from "./types.js";
@@ -254,18 +253,15 @@ export function loadSetupRuntimeChannelCandidate(params: {
     }
   }
   if (registrationPlan.mode === "setup-runtime" && mergedSetupRegistration.registerSetupRuntime) {
-    const transaction = createPluginRegistrationTransaction({
-      registry: registryBuilder.registry,
-      activeRecord: record,
-    });
     try {
-      runPluginRegisterSync(
+      runPluginRegisterSyncInRegistry(
         (registrationApi) => mergedSetupRegistration.registerSetupRuntime?.(registrationApi),
         api,
+        registryBuilder.registry,
+        record.id,
       );
-      transaction.commit({ activate: true });
     } catch (error) {
-      transaction.rollback();
+      registryBuilder.rollbackPluginGlobalSideEffects(record.id, record);
       recordPluginError({
         logger: params.logger,
         registry: registryBuilder.registry,

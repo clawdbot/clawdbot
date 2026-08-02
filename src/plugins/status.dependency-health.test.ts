@@ -121,6 +121,20 @@ describe("plugin dependency health projection", () => {
     expect(report.plugins[0]?.status).toBe("error");
   });
 
+  it("does not project package-local dependency health onto bundled plugins", () => {
+    const { fixture, reportParams } = createDependencyHealthFixture();
+    loaderState.registry = createDependencyHealthRegistry(fixture.pluginId, {
+      dependencyStatus: undefined,
+      origin: "bundled",
+    });
+
+    const report = buildPluginDiagnosticsReport(reportParams);
+
+    expect(report.plugins[0]?.dependencyStatus).toBeUndefined();
+    expect(report.plugins[0]?.status).toBe("loaded");
+    expect(report.diagnostics).toEqual([]);
+  });
+
   it("preserves an existing error diagnostic when dependency health also fails", () => {
     const registry = createDependencyHealthRegistry("existing-plugin-error", {
       status: "error",

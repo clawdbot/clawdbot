@@ -21,14 +21,16 @@ import { sleep } from "../../utils/sleep.js";
 import { inheritOptionFromParent } from "../command-options.js";
 import { addGatewayServiceCommands } from "../daemon-cli/register-service-commands.js";
 import { parseGatewayPortOption } from "../gateway-port-option.js";
+import { callGatewayFromCliWithTransport } from "../gateway-rpc.js";
 import { formatHelpExamples } from "../help-format.js";
 import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
 import { setCommandJsonMode } from "../program/json-mode.js";
-import type { GatewayRpcOpts } from "./call.js";
 import type { GatewayDiscoverOpts } from "./discover.js";
 import { isGatewayMachineOutput } from "./output-mode.js";
 import { addGatewayRestartHandoffCommands } from "./register-restart-handoff.js";
 import { addGatewayRunCommand } from "./run-command.js";
+
+type GatewayRpcOpts = Parameters<typeof callGatewayFromCliWithTransport>[1];
 
 const configModuleLoader = createLazyImportLoader(
   () => import("../../config/read-best-effort-config.runtime.js"),
@@ -120,8 +122,9 @@ function gatewayCallOpts(cmd: Command, defaultTimeoutMs = DEFAULT_GATEWAY_RPC_TI
 }
 
 async function callGatewayCli(method: string, opts: GatewayRpcOpts, params?: unknown) {
-  const mod = await import("./call.js");
-  return mod.callGatewayCli(method, opts, params);
+  return await callGatewayFromCliWithTransport(method, opts, params, {
+    defaultTimeoutMs: DEFAULT_GATEWAY_RPC_TIMEOUT_MS,
+  });
 }
 
 function parseGatewayCallParams(value = "{}"): unknown {

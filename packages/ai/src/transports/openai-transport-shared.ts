@@ -27,6 +27,10 @@ export const log = {
 
 export type { OpenAICompletionsOptions } from "../provider-options.js";
 
+export type OpenAICompletionsContentDelta =
+  | { kind: "thinking"; signature?: string; text: string }
+  | { kind: "text"; text: string; source?: "refusal" };
+
 type OpenAIModeCompatInput = Omit<OpenAICompletionsCompat, "thinkingFormat"> & {
   thinkingFormat?: string;
   requiresStringContent?: boolean;
@@ -141,4 +145,91 @@ export function resolvePromptCacheKey(
     return undefined;
   }
   return clampOpenAIPromptCacheKey(options?.promptCacheKey ?? options?.sessionId);
+}
+
+export function isOpenAICompletionsThinkingEnabled(effort: string): boolean {
+  const normalized = effort.trim().toLowerCase();
+  return normalized !== "off" && normalized !== "none";
+}
+
+export function readOpenAICompletionsContentDeltas(
+  content: unknown,
+  topLevelRefusal?: unknown,
+  mirroredThinking: readonly string[] = [],
+): OpenAICompletionsContentDelta[] {
+  let deltas = readOpenAICompletionsContentPartDeltas(content);
+  if (mirroredThinking.length > 0) {
+    const structuredThinking = deltas
+      .filter((delta) => delta.kind === "thinking")
+      .map((delta) => delta.text);
+    const mirrorsCombinedThinking =
+      structuredThinking.length > 1 && mirroredThinking.includes(structuredThinking.join(""));
+    // Suppress exact same-chunk mirrors, not independent structured thoughts.
+    deltas = deltas.filter(
+      (delta) =>
+        delta.kind !== "thinking" ||
+        (!mirrorsCombinedThinking && !mirroredThinking.includes(delta.text)),
+    );
+  }
+  if (typeof topLevelRefusal !== "string" || !topLevelRefusal) {
+    return deltas;
+  }
+  const structuredRefusals = deltas
+    .filter((delta) => delta.kind === "text" && delta.source === "refusal")
+    .map((delta) => delta.text);
+  // Compatible providers may mirror one refusal as parts and a top-level field;
+  // suppress only that exact duplicate, never distinct text or later chunks.
+  if (
+    structuredRefusals.some((refusal) => refusal === topLevelRefusal) ||
+    (structuredRefusals.length > 1 && structuredRefusals.join("") === topLevelRefusal)
+  ) {
+    return deltas;
+  }
+  return [...deltas, { kind: "text", text: topLevelRefusal, source: "refusal" }];
+}
+
+function readOpenAICompletionsContentPartDeltas(content: unknown): OpenAICompletionsContentDelta[] {
+  if (typeof content === "string") {
+    return content ? [{ kind: "text", text: content }] : [];
+  }
+  if (Array.isArray(content)) {
+    return content.flatMap(readOpenAICompletionsContentPartDeltas);
+  }
+  if (!content || typeof content !== "object") {
+    return [];
+  }
+  const record = content as Record<string, unknown>;
+  const type = typeof record.type === "string" ? record.type.toLowerCase() : "";
+  // Compatible providers stream typed objects; direct coercion persists them
+  // as "[object Object]" instead of preserving visible text and reasoning.
+  const extractText = (value: unknown): string => {
+    if (typeof value === "string") {
+      return value;
+    }
+    if (Array.isArray(value)) {
+      return value.map(extractText).join("");
+    }
+    if (value && typeof value === "object") {
+      const nested = value as Record<string, unknown>;
+      return extractText(nested.text ?? nested.content ?? nested.thinking ?? nested.refusal);
+    }
+    return "";
+  };
+  const text = extractText(record.text ?? record.content ?? record.thinking ?? record.refusal);
+  if (!text) {
+    return [];
+  }
+  // Thinking stays distinct so channel/UI policy controls its visibility.
+  if (type.includes("thinking") || type.includes("reasoning")) {
+    // Content parts supply no replay-field signature. Inventing "content"
+    // overwrites the visible assistant answer on the next completion request.
+    return [{ kind: "thinking", text }];
+  }
+  if (type === "refusal") {
+    return [{ kind: "text", text, source: "refusal" }];
+  }
+  if (["text", "output_text"].includes(type) || type.endsWith(".output_text")) {
+    return [{ kind: "text", text }];
+  }
+  return [];
 }

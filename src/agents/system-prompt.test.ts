@@ -159,6 +159,37 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("Subagent details");
   });
 
+  it("preserves required visible-source message-tool guidance in minimal prompts", () => {
+    const requiredMessageGuidance = "Current source visible reply MUST use `message(action=send)`";
+
+    const requiredMessagePrompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      promptMode: "minimal",
+      toolNames: ["message"],
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+    expect(requiredMessagePrompt).toContain(requiredMessageGuidance);
+    expect(requiredMessagePrompt).toContain("final text is private");
+
+    const unavailableMessagePrompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      promptMode: "minimal",
+      toolNames: ["read"],
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+    expect(unavailableMessagePrompt).not.toContain("message(action=send)");
+    expect(unavailableMessagePrompt).not.toContain("## Messaging");
+
+    const automaticMessagePrompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      promptMode: "minimal",
+      toolNames: ["message"],
+      sourceReplyDeliveryMode: "automatic",
+    });
+    expect(automaticMessagePrompt).not.toContain("message(action=send)");
+    expect(automaticMessagePrompt).not.toContain("## Messaging");
+  });
+
   it("keeps promised asynchronous work open in full and minimal prompts", () => {
     for (const promptMode of ["full", "minimal"] as const) {
       const prompt = buildAgentSystemPrompt({

@@ -24,8 +24,10 @@ const projectSessionsPatchEntryMock = vi.fn();
 const createSessionGoalMock = vi.fn();
 const clearSessionGoalMock = vi.fn();
 const getSessionGoalMock = vi.fn();
+const updateSessionGoalObjectiveMock = vi.fn();
 const updateSessionGoalStatusMock = vi.fn();
-const ensureRuntimePluginsLoadedMock = vi.fn();
+const loadAgentRuntimePluginRegistryHandleMock = vi.fn();
+const withPluginRuntimeRegistryScopeMock = vi.fn((_registry: unknown, run: () => unknown) => run());
 const ensureContextWindowCacheLoadedMock = vi.fn(async () => undefined);
 const runSessionStartupMigrationMock = vi.fn<() => Promise<void>>(async () => undefined);
 const createGatewaySessionMock = vi.fn();
@@ -54,13 +56,10 @@ const getRuntimeConfigMock = vi.fn(() => ({}));
 const loadGatewayModelCatalogMock = vi.fn(
   (_params?: unknown): Array<{ id: string; name: string; provider: string }> => [],
 );
-const readSessionMessagesAsyncMock = vi.fn(
-  async (
-    _sessionId?: string,
-    _storePath?: string,
-    _sessionFile?: string,
-    _opts?: unknown,
-  ): Promise<unknown[]> => [],
+const readChatHistoryPageMock = vi.fn(
+  async (_params?: unknown): Promise<{ messages: unknown[] }> => ({
+    messages: [],
+  }),
 );
 type LoadSessionEntryMockResult = {
   cfg: Record<string, unknown>;
@@ -122,6 +121,7 @@ vi.mock("../config/sessions.js", () => ({
   getSessionGoal: (...args: unknown[]) => getSessionGoalMock(...args),
   resolveAgentMainSessionKey: () => "agent:main:main",
   resolveStorePath: () => "/tmp/openclaw-sessions.json",
+  updateSessionGoalObjective: (...args: unknown[]) => updateSessionGoalObjectiveMock(...args),
   updateSessionGoalStatus: (...args: unknown[]) => updateSessionGoalStatusMock(...args),
   updateSessionStore: (...args: unknown[]) => updateSessionStoreMock(...args),
 }));
@@ -142,7 +142,13 @@ vi.mock("../agents/agent-scope.js", () => ({
 }));
 
 vi.mock("../agents/runtime-plugins.js", () => ({
-  ensureRuntimePluginsLoaded: (...args: unknown[]) => ensureRuntimePluginsLoadedMock(...args),
+  loadAgentRuntimePluginRegistryHandle: (...args: unknown[]) =>
+    loadAgentRuntimePluginRegistryHandleMock(...args),
+}));
+
+vi.mock("../plugins/runtime/gateway-request-scope.js", () => ({
+  withPluginRuntimeRegistryScope: (...args: [unknown, () => unknown]) =>
+    withPluginRuntimeRegistryScopeMock(...args),
 }));
 
 vi.mock("../agents/context.js", () => ({
@@ -178,11 +184,6 @@ vi.mock("../config/sessions/startup-migration.js", () => ({
     runSessionStartupMigrationMock(...args),
 }));
 
-vi.mock("../gateway/cli-session-history.js", () => ({
-  augmentChatHistoryWithCliSessionImports: ({ localMessages }: { localMessages?: unknown[] }) =>
-    localMessages ?? [],
-}));
-
 vi.mock("../gateway/chat-display-projection.js", () => ({
   projectChatDisplayMessages: (messages: unknown[]) => messages,
   projectRecentChatDisplayMessages: (messages: unknown[]) => messages,
@@ -198,6 +199,11 @@ vi.mock("../gateway/server-methods/chat.js", () => ({
   augmentChatHistoryWithCanvasBlocks: (messages: unknown[]) => messages,
   enforceChatHistoryFinalBudget: ({ messages }: { messages: unknown[] }) => ({ messages }),
   replaceOversizedChatHistoryMessages: ({ messages }: { messages: unknown[] }) => ({ messages }),
+}));
+
+vi.mock("../gateway/server-methods/chat-history-pages.js", () => ({
+  enrichChatHistoryCompactionMarkers: (messages: unknown[]) => messages,
+  readChatHistoryPage: (params: unknown) => readChatHistoryPageMock(params),
 }));
 
 vi.mock("../gateway/session-utils.js", () => ({
@@ -242,8 +248,6 @@ vi.mock("../gateway/session-reset-service.js", () => ({
 
 vi.mock("../gateway/session-transcript-readers.js", () => ({
   capArrayByJsonBytes: (items: unknown[]) => ({ items }),
-  readSessionMessagesAsync: (...args: Parameters<typeof readSessionMessagesAsyncMock>) =>
-    readSessionMessagesAsyncMock(...args),
 }));
 
 vi.mock("../gateway/sessions-patch.js", () => ({
@@ -309,13 +313,15 @@ describe("EmbeddedTuiBackend", () => {
     clearSessionGoalMock.mockResolvedValue(false);
     getSessionGoalMock.mockReset();
     getSessionGoalMock.mockResolvedValue({ status: "missing" });
+    updateSessionGoalObjectiveMock.mockReset();
     updateSessionGoalStatusMock.mockReset();
     updateSessionGoalStatusMock.mockImplementation(async ({ status }: { status: string }) => ({
       objective: "ship",
       status,
       tokensUsed: 0,
     }));
-    ensureRuntimePluginsLoadedMock.mockReset();
+    loadAgentRuntimePluginRegistryHandleMock.mockReset();
+    withPluginRuntimeRegistryScopeMock.mockClear();
     ensureContextWindowCacheLoadedMock.mockReset();
     ensureContextWindowCacheLoadedMock.mockResolvedValue(undefined);
     runSessionStartupMigrationMock.mockReset();
@@ -355,8 +361,8 @@ describe("EmbeddedTuiBackend", () => {
     getRuntimeConfigMock.mockReturnValue({});
     loadGatewayModelCatalogMock.mockReset();
     loadGatewayModelCatalogMock.mockReturnValue([]);
-    readSessionMessagesAsyncMock.mockReset();
-    readSessionMessagesAsyncMock.mockResolvedValue([]);
+    readChatHistoryPageMock.mockReset();
+    readChatHistoryPageMock.mockResolvedValue({ messages: [] });
     loadSessionEntryMock.mockReset();
     loadSessionEntryMock.mockImplementation((sessionKey: string) => ({
       cfg: {},
@@ -859,7 +865,10 @@ describe("EmbeddedTuiBackend", () => {
         sessionKey: "agent:main:main",
         command: "/GOAL start Ship Goal",
       }),
-    ).resolves.toEqual({ text: "Goal started: Ship Goal" });
+    ).resolves.toEqual({
+      text: "Goal started: Ship Goal",
+      continuationPrompt: "Ship Goal",
+    });
     expect(createSessionGoalMock).toHaveBeenCalledWith({
       sessionKey: "agent:main:main",
       storePath: "/tmp/openclaw-sessions.json",
@@ -1001,7 +1010,7 @@ describe("EmbeddedTuiBackend", () => {
     await backend.stop();
   });
 
-  it("uses reset-archive fallback for embedded TUI history reads", async () => {
+  it("uses the canonical gateway projector for embedded TUI history reads", async () => {
     loadSessionEntryMock.mockReturnValue({
       cfg: {},
       canonicalKey: "agent:main:main",
@@ -1014,21 +1023,19 @@ describe("EmbeddedTuiBackend", () => {
 
     await backend.loadHistory({ sessionKey: "agent:main:main" });
 
-    expect(readSessionMessagesAsyncMock).toHaveBeenCalledWith(
-      {
-        agentId: "main",
-        sessionEntry: { sessionId: "sess-main" },
-        sessionId: "sess-main",
-        sessionKey: "agent:main:main",
-        storePath: "/tmp/openclaw-sessions.json",
-      },
-      {
-        mode: "recent",
-        maxMessages: 200,
-        maxBytes: 1024 * 1024,
-        allowResetArchiveFallback: true,
-      },
-    );
+    expect(readChatHistoryPageMock).toHaveBeenCalledWith({
+      entry: { sessionId: "sess-main" },
+      provider: "openai",
+      sessionId: "sess-main",
+      storePath: "/tmp/openclaw-sessions.json",
+      sessionAgentId: "main",
+      canonicalKey: "agent:main:main",
+      max: 200,
+      maxHistoryBytes: 100_000,
+      effectiveMaxChars: 100_000,
+      offset: undefined,
+      messageId: undefined,
+    });
   });
 
   it("loads runtime plugins for the send-path workspace before returning embedded history", async () => {
@@ -1046,14 +1053,14 @@ describe("EmbeddedTuiBackend", () => {
     await expect(backend.loadHistory({ sessionKey: "agent:main:main" })).resolves.toMatchObject({
       runtimePluginsPrewarm: { status: "warmed" },
     });
-    expect(ensureRuntimePluginsLoadedMock).toHaveBeenCalledWith({
+    expect(loadAgentRuntimePluginRegistryHandleMock).toHaveBeenCalledWith({
       config: cfg,
       workspaceDir: "/tmp/openclaw-agent-main",
     });
   });
 
   it("returns embedded history when runtime plugin loading fails", async () => {
-    ensureRuntimePluginsLoadedMock.mockImplementationOnce(() => {
+    loadAgentRuntimePluginRegistryHandleMock.mockImplementationOnce(() => {
       throw new Error("runtime unavailable");
     });
     loadSessionEntryMock.mockReturnValue({
@@ -1071,6 +1078,56 @@ describe("EmbeddedTuiBackend", () => {
       messages: [],
       runtimePluginsPrewarm: { status: "failed", error: "runtime unavailable" },
     });
+  });
+
+  it("clears a prior runtime registry after plugins are disabled", async () => {
+    const registry = {};
+    loadAgentRuntimePluginRegistryHandleMock
+      .mockReturnValueOnce(registry)
+      .mockReturnValueOnce(undefined);
+    loadSessionEntryMock.mockReturnValue({
+      cfg: {},
+      canonicalKey: "agent:main:main",
+      entry: {},
+    });
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const backend = new EmbeddedTuiBackend();
+
+    await backend.loadHistory({ sessionKey: "agent:main:main" });
+    await backend.loadHistory({ sessionKey: "agent:main:main" });
+    withPluginRuntimeRegistryScopeMock.mockClear();
+    await backend.listModels();
+
+    expect(withPluginRuntimeRegistryScopeMock).toHaveBeenCalledWith(
+      undefined,
+      expect.any(Function),
+    );
+  });
+
+  it("clears a prior runtime registry after a later preload fails", async () => {
+    const registry = {};
+    loadAgentRuntimePluginRegistryHandleMock
+      .mockReturnValueOnce(registry)
+      .mockImplementationOnce(() => {
+        throw new Error("runtime unavailable");
+      });
+    loadSessionEntryMock.mockReturnValue({
+      cfg: {},
+      canonicalKey: "agent:main:main",
+      entry: {},
+    });
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const backend = new EmbeddedTuiBackend();
+
+    await backend.loadHistory({ sessionKey: "agent:main:main" });
+    await backend.loadHistory({ sessionKey: "agent:main:main" });
+    withPluginRuntimeRegistryScopeMock.mockClear();
+    await backend.listModels();
+
+    expect(withPluginRuntimeRegistryScopeMock).toHaveBeenCalledWith(
+      undefined,
+      expect.any(Function),
+    );
   });
 
   it("passes selected-agent global scope into local chat turns", async () => {
