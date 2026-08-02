@@ -1,4 +1,5 @@
 // WhatsApp monitor inbox behavior split by ownership.
+import type { GroupMetadata } from "baileys";
 import { describe, expect, it, vi } from "vitest";
 import {
   EXPECTED_WHATSAPP_GROUP_METADATA_CACHE_MAX_ENTRIES,
