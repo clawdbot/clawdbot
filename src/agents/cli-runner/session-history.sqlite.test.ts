@@ -3,8 +3,12 @@ import path from "node:path";
 import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.js";
+import {
+  loadTranscriptTailEventsByJsonlBytes,
+  replaceTranscriptEvents,
+} from "../../config/sessions/session-accessor.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
+import { serializeJsonlLines } from "../../config/sessions/transcript-jsonl.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { cliBackendLog } from "./log.js";
 import {
@@ -211,6 +215,56 @@ describe("SQLite CLI session history", () => {
         content: [{ type: "text", text: "prior answer" }],
       });
     });
+  });
+
+  it("counts every retained JSONL newline at an exact multi-row byte boundary", async () => {
+    const stateDir = tempDirs.make("openclaw-cli-state-");
+    const sessionId = "session-sqlite-jsonl-boundary";
+    const sessionKey = "agent:main:main";
+    const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+    const scope = { agentId: "main", sessionId, sessionKey, storePath };
+    const header = {
+      type: "session",
+      version: CURRENT_SESSION_VERSION,
+      id: sessionId,
+      timestamp: new Date(0).toISOString(),
+      cwd: stateDir,
+    };
+    const older = {
+      type: "message",
+      id: "msg-older",
+      parentId: null,
+      message: { role: "user", content: "older 🦞" },
+    };
+    const newest = {
+      type: "message",
+      id: "msg-newest",
+      parentId: "msg-older",
+      message: { role: "assistant", content: "newest 🦐" },
+    };
+    const twoRowJsonlBytes = Buffer.byteLength(
+      serializeJsonlLines([JSON.stringify(older), JSON.stringify(newest)]),
+    );
+
+    await replaceTranscriptEvents(scope, [header, older, newest]);
+
+    const belowBoundary = await loadTranscriptTailEventsByJsonlBytes(
+      scope,
+      twoRowJsonlBytes - 1,
+    );
+    expect(belowBoundary.truncated).toBe(true);
+    expect(belowBoundary.events.map((event) => requireRecord(event, "event").id)).toEqual([
+      sessionId,
+      "msg-newest",
+    ]);
+
+    const exactBoundary = await loadTranscriptTailEventsByJsonlBytes(scope, twoRowJsonlBytes);
+    expect(exactBoundary.truncated).toBe(true);
+    expect(exactBoundary.events.map((event) => requireRecord(event, "event").id)).toEqual([
+      sessionId,
+      "msg-older",
+      "msg-newest",
+    ]);
   });
 
   it("loads only a bounded tail from oversized transcripts", async () => {
