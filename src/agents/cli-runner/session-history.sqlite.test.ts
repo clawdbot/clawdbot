@@ -360,26 +360,36 @@ describe("SQLite CLI session history", () => {
       parentId: "msg-older",
       message: { role: "assistant", content: "newest 🦐" },
     };
-    const twoRowJsonlBytes = Buffer.byteLength(
-      serializeJsonlLines([JSON.stringify(older), JSON.stringify(newest)]),
+    const completeJsonlBytes = Buffer.byteLength(
+      serializeJsonlLines([JSON.stringify(header), JSON.stringify(older), JSON.stringify(newest)]),
     );
 
     await replaceTranscriptEvents(scope, [header, older, newest]);
 
-    const belowBoundary = loadTranscriptTailEventsByJsonlBytes(scope, twoRowJsonlBytes - 1);
+    const belowBoundary = loadTranscriptTailEventsByJsonlBytes(scope, completeJsonlBytes - 1);
     expect(belowBoundary.truncated).toBe(true);
     expect(belowBoundary.events.map((event) => requireRecord(event, "event").id)).toEqual([
       sessionId,
       "msg-newest",
     ]);
+    expect(
+      Buffer.byteLength(
+        serializeJsonlLines(belowBoundary.events.map((event) => JSON.stringify(event))),
+      ),
+    ).toBeLessThanOrEqual(completeJsonlBytes - 1);
 
-    const exactBoundary = loadTranscriptTailEventsByJsonlBytes(scope, twoRowJsonlBytes);
-    expect(exactBoundary.truncated).toBe(true);
+    const exactBoundary = loadTranscriptTailEventsByJsonlBytes(scope, completeJsonlBytes);
+    expect(exactBoundary.truncated).toBe(false);
     expect(exactBoundary.events.map((event) => requireRecord(event, "event").id)).toEqual([
       sessionId,
       "msg-older",
       "msg-newest",
     ]);
+    expect(
+      Buffer.byteLength(
+        serializeJsonlLines(exactBoundary.events.map((event) => JSON.stringify(event))),
+      ),
+    ).toBe(completeJsonlBytes);
   });
 
   it("loads only a bounded tail from oversized transcripts", async () => {
