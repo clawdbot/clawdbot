@@ -355,6 +355,10 @@ export async function runPreparedEmbeddedLoop(
       });
       startupStagesEmitted = dispatch.startupStagesEmitted;
       const { dispatchedAttempt, runtimePlan } = dispatch;
+      // Preserve the newest launch target before normalization can request an early retry.
+      latestMcpAppChannelView =
+        dispatchedAttempt.rawAttempt.latestMcpAppChannelView ?? latestMcpAppChannelView;
+      dispatchedAttempt.rawAttempt.latestMcpAppChannelView = latestMcpAppChannelView;
       const normalizedAttempt = await normalizeEmbeddedRunAttempt({
         runInput: input,
         preparedRuntime,
@@ -397,9 +401,6 @@ export async function runPreparedEmbeddedLoop(
         resolveReplayInvalidForAttempt,
         canRestartForLiveSwitch,
       } = normalizedAttempt;
-      // Continuation retries remain one user turn, so keep the newest launch target.
-      latestMcpAppChannelView = attempt.latestMcpAppChannelView ?? latestMcpAppChannelView;
-      attempt.latestMcpAppChannelView = latestMcpAppChannelView;
       const recovery = await recoverEmbeddedRunAttempt({
         runInput: input,
         preparedRuntime,
