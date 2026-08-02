@@ -108,12 +108,12 @@ pickers.
 | `nvidia/moonshotai/kimi-k2.6`              | Kimi K2.6             | 262,144   | 65,536     |
 | `nvidia/minimaxai/minimax-m3`              | Minimax M3            | 196,608   | 8,192      |
 | `nvidia/deepseek-ai/deepseek-v4-pro`       | DeepSeek V4 Pro       | 262,144   | 16,384     |
-| `nvidia/qwen/qwen3.5-397b-a17b`            | Qwen3.5 397B A17B     | 262,144   | 32,768     |
 
 The full compatibility catalog also retains these shipped refs for existing
-configurations: `nvidia/moonshotai/kimi-k2.5`, `nvidia/z-ai/glm-5.1`,
-`nvidia/z-ai/glm5`, and `nvidia/minimaxai/minimax-m2.7`. They remain available
-by exact reference but never appear in onboarding or model pickers.
+configurations: `nvidia/qwen/qwen3.5-397b-a17b`, `nvidia/moonshotai/kimi-k2.5`,
+`nvidia/z-ai/glm-5.1`, `nvidia/z-ai/glm5`, and `nvidia/minimaxai/minimax-m2.7`.
+They remain available by exact reference but never appear in onboarding or model
+pickers.
 
 ## Advanced configuration
 

@@ -44,15 +44,15 @@ const EXPECTED_FEATURED_MODELS = [
     contextWindow: 262_144,
     maxTokens: 16_384,
   },
+] as const;
+
+const EXPECTED_DEPRECATED_MODELS = [
   {
     id: "qwen/qwen3.5-397b-a17b",
     name: "Qwen3.5 397B A17B",
     contextWindow: 262_144,
     maxTokens: 32_768,
   },
-] as const;
-
-const EXPECTED_DEPRECATED_MODELS = [
   {
     id: "moonshotai/kimi-k2.5",
     name: "Kimi K2.5",
@@ -152,11 +152,6 @@ describe("nvidia provider catalog", () => {
         reasoning: true,
       },
       { id: "deepseek-ai/deepseek-v4-pro", input: ["text"], reasoning: true },
-      {
-        id: "qwen/qwen3.5-397b-a17b",
-        input: ["text", "image"],
-        reasoning: true,
-      },
     ]);
     expect(provider.models[0]).toMatchObject({
       contextWindow: 1_048_576,
@@ -175,8 +170,12 @@ describe("nvidia provider catalog", () => {
     expect(
       manifest.modelCatalog.providers.nvidia.models
         .filter((model) => "status" in model && model.status === "deprecated")
-        .map((model) => ({ id: model.id, replacedBy: model.replacedBy })),
+        .map((model) => ({
+          id: model.id,
+          ...("replacedBy" in model ? { replacedBy: model.replacedBy } : {}),
+        })),
     ).toEqual([
+      { id: "qwen/qwen3.5-397b-a17b" },
       { id: "moonshotai/kimi-k2.5", replacedBy: "moonshotai/kimi-k2.6" },
       { id: "z-ai/glm-5.1", replacedBy: "z-ai/glm-5.2" },
       { id: "z-ai/glm5", replacedBy: "z-ai/glm-5.2" },
@@ -308,7 +307,7 @@ describe("nvidia provider catalog", () => {
     expect(selectableLive.models.map((model) => model.id)).toEqual(["minimaxai/minimax-m3"]);
   });
 
-  it("maps current featured feed metadata for MiniMax, DeepSeek, and Qwen", async () => {
+  it("maps current featured rows while excluding a retired Qwen row", async () => {
     mockFeaturedCatalogResponse({
       "featured-models": [
         {
@@ -343,7 +342,6 @@ describe("nvidia provider catalog", () => {
     ).toEqual([
       { id: "minimaxai/minimax-m3", contextWindow: 196_608, maxTokens: 8_192 },
       { id: "deepseek-ai/deepseek-v4-pro", contextWindow: 262_144, maxTokens: 16_384 },
-      { id: "qwen/qwen3.5-397b-a17b", contextWindow: 262_144, maxTokens: 16_384 },
     ]);
   });
 
