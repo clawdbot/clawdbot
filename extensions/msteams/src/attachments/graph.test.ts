@@ -297,6 +297,56 @@ describe("downloadMSTeamsGraphMedia hosted content $value fallback", () => {
     expect(failedMessageResponse.bodyUsed).toBe(true);
   });
 
+  it("releases a cloned failed collection body without awaiting stalled cancellation", async () => {
+    const failedCollectionResponse = new Response("server error", { status: 500 });
+    const captureClone = failedCollectionResponse.clone();
+    const body = failedCollectionResponse.body;
+    if (!body) {
+      throw new Error("expected a readable collection error body");
+    }
+    const originalCancel = body.cancel.bind(body);
+    let cancellation: Promise<void> | undefined;
+    let cancellationSettled = false;
+    const cancellationStarted = new Promise<void>((resolve) => {
+      vi.spyOn(body, "cancel").mockImplementation((reason) => {
+        cancellation = originalCancel(reason).finally(() => {
+          cancellationSettled = true;
+        });
+        resolve();
+        return cancellation;
+      });
+    });
+    const release = vi.fn(async () => {});
+    vi.mocked(fetchWithSsrFGuard).mockImplementation(async (params: GuardedFetchParams) => {
+      if (params.url.endsWith("/hostedContents")) {
+        return guardedFetchResult(params, failedCollectionResponse, release);
+      }
+      return guardedFetchResult(params, mockFetchResponse({ body: {}, attachments: [] }));
+    });
+
+    const operation = downloadMSTeamsGraphMedia({
+      messageUrl: "https://graph.microsoft.com/v1.0/chats/c/messages/msg-cloned-collection",
+      tokenProvider: { getAccessToken: vi.fn(async () => "test-token") },
+      maxBytes: 10 * 1024 * 1024,
+    });
+
+    try {
+      await cancellationStarted;
+      expect(release).toHaveBeenCalledOnce();
+      expect(failedCollectionResponse.bodyUsed).toBe(true);
+      expect(cancellationSettled).toBe(false);
+      await expect(operation).resolves.toMatchObject({
+        media: [],
+        hostedCount: 0,
+        hostedStatus: 500,
+      });
+    } finally {
+      void captureClone.body?.cancel().catch(() => undefined);
+      await cancellation?.catch(() => undefined);
+      await operation.catch(() => undefined);
+    }
+  });
+
   it("ignores unexpected inline bytes and still fetches bounded $value", async () => {
     const fetchCalls: string[] = [];
     const base64Png = Buffer.from([0x89, 0x50, 0x4e, 0x47]).toString("base64");
