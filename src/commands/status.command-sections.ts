@@ -12,6 +12,7 @@ import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.j
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import type { Tone } from "../memory-host-sdk/status.js";
 import type { SessionStatus, StatusSummary } from "../status/types.js";
+import { collectGatewayHealthDiagnostics } from "./health-diagnostics.js";
 import type { HealthSummary } from "./health.js";
 import type { AgentLocalStatus } from "./status.agent-local.js";
 import type { MemoryStatusSnapshot, MemoryPluginStatus } from "./status.scan.shared.js";
@@ -309,6 +310,13 @@ export function buildStatusHealthRows(params: {
                 ? params.warn("UNLINKED")
                 : params.warn("WARN");
     rows.push({ Item: item, Status: status, Detail: detail });
+  }
+  for (const diagnostic of collectGatewayHealthDiagnostics(params.health)) {
+    rows.push({
+      Item: diagnostic.item,
+      Status: params.warn("WARN"),
+      Detail: diagnostic.detail,
+    });
   }
   return rows;
 }

@@ -14,6 +14,22 @@ import {
   statusHealthColumns,
 } from "./status.command-sections.ts";
 
+function createStatusHealthSummary(overrides: Partial<HealthSummary> = {}): HealthSummary {
+  return {
+    ok: true,
+    ts: 1_700_000_000_000,
+    durationMs: 42,
+    channels: {},
+    channelOrder: [],
+    channelLabels: {},
+    heartbeatSeconds: 60,
+    defaultAgentId: "main",
+    agents: [],
+    sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
+    ...overrides,
+  };
+}
+
 describe("status.command-sections", () => {
   it("formats security audit lines with finding caps and follow-up commands", () => {
     const lines = buildStatusSecurityAuditLines({
@@ -210,7 +226,7 @@ describe("status.command-sections", () => {
 
   it("maps health channel detail lines into status rows", () => {
     const rows = buildStatusHealthRows({
-      health: { durationMs: 42 } as HealthSummary,
+      health: createStatusHealthSummary(),
       formatHealthChannelLines: () => [
         "QuietChat: OK · ready",
         "WorkChat: failed · auth",
@@ -235,8 +251,7 @@ describe("status.command-sections", () => {
 
   it("adds degraded event-loop health to status rows", () => {
     const rows = buildStatusHealthRows({
-      health: {
-        durationMs: 42,
+      health: createStatusHealthSummary({
         eventLoop: {
           degraded: true,
           reasons: ["event_loop_delay"],
@@ -246,7 +261,7 @@ describe("status.command-sections", () => {
           utilization: 1,
           cpuCoreRatio: 1,
         },
-      } as HealthSummary,
+      }),
       formatHealthChannelLines: () => [],
       ok: (value) => `ok(${value})`,
       warn: (value) => `warn(${value})`,
@@ -261,6 +276,69 @@ describe("status.command-sections", () => {
         Detail: "reasons event_loop_delay · max 62000ms · p99 61000ms · util 1 · cpu 1",
       },
     ]);
+  });
+
+  it("surfaces gateway-owned context, delivery, and config-reload degradation", () => {
+    const rows = buildStatusHealthRows({
+      health: createStatusHealthSummary({
+        contextEngines: {
+          quarantined: [
+            {
+              engineId: "lossless-claw",
+              owner: "plugin:lossless-claw",
+              operation: "assemble",
+              reason: "database corrupt",
+              failedAt: 1_700_000_000_000,
+            },
+          ],
+        },
+        deliveryQueues: {
+          failed: [{ queueName: "outbound", count: 2 }],
+          ingressFailed: [{ channelId: "telegram", accountId: "ops", count: 1 }],
+        },
+        configReload: { hotReloadStatus: "disabled" },
+      }),
+      formatHealthChannelLines: () => ["QuietChat: OK · ready"],
+      ok: (value) => `ok(${value})`,
+      warn: (value) => `warn(${value})`,
+      muted: (value) => `muted(${value})`,
+    });
+
+    expect(rows).toEqual([
+      { Item: "Gateway", Status: "ok(reachable)", Detail: "42ms" },
+      { Item: "QuietChat", Status: "ok(OK)", Detail: "OK · ready" },
+      {
+        Item: "Context engine",
+        Status: "warn(WARN)",
+        Detail: "warning (1 quarantined; downgraded to legacy: lossless-claw)",
+      },
+      {
+        Item: "Delivery queue",
+        Status: "warn(WARN)",
+        Detail: "warning (dead-lettered entries — outbound: 2, inbound telegram/ops: 1)",
+      },
+      {
+        Item: "Config hot reload",
+        Status: "warn(WARN)",
+        Detail: "disabled (watcher retries exhausted; restart the gateway to restore it)",
+      },
+    ]);
+  });
+
+  it("omits healthy context, delivery, and config-reload state", () => {
+    const rows = buildStatusHealthRows({
+      health: createStatusHealthSummary({
+        contextEngines: { quarantined: [] },
+        deliveryQueues: { failed: [], ingressFailed: [] },
+        configReload: { hotReloadStatus: "active" },
+      }),
+      formatHealthChannelLines: () => [],
+      ok: (value) => `ok(${value})`,
+      warn: (value) => `warn(${value})`,
+      muted: (value) => `muted(${value})`,
+    });
+
+    expect(rows).toEqual([{ Item: "Gateway", Status: "ok(reachable)", Detail: "42ms" }]);
   });
 
   it("builds footer lines from update and reachability state", () => {

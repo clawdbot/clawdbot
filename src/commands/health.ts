@@ -26,7 +26,6 @@ import type { AgentHealthSummary, HealthSummary } from "../gateway/health/types.
 import { info } from "../globals.js";
 import { isDiagnosticFlagEnabled } from "../infra/diagnostic-flags.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { formatDurationHuman } from "../infra/format-time/format-duration.js";
 import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-summary.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { buildChannelAccountBindings, resolvePreferredAccountId } from "../routing/bindings.js";
@@ -36,8 +35,17 @@ import {
   GATEWAY_HEALTH_REACHABLE_LINE,
   gatewayProbeResultSawGateway,
 } from "./gateway-health-auth-diagnostic.js";
+import {
+  collectGatewayHealthDiagnostics,
+  formatGatewayHealthDiagnostic,
+} from "./health-diagnostics.js";
 import { formatHealthChannelLines } from "./health-format.js";
 import { logGatewayConnectionDetails } from "./status.gateway-connection.js";
+export {
+  formatConfigReloadHealthLine,
+  formatContextEngineHealthLine,
+  formatDeliveryQueueHealthLine,
+} from "./health-diagnostics.js";
 export { formatHealthChannelLines } from "./health-format.js";
 export type { HealthSummary } from "../gateway/health/types.js";
 
@@ -145,48 +153,6 @@ function formatEventLoopHealthLine(summary: HealthSummary): string | null {
   )}ms p99=${Math.round(eventLoop.delayP99Ms)}ms util=${eventLoop.utilization} cpu=${
     eventLoop.cpuCoreRatio
   }`;
-}
-
-/** Formats context engine quarantine state for text health output. */
-export function formatContextEngineHealthLine(summary: HealthSummary): string | null {
-  const quarantined = summary.contextEngines?.quarantined ?? [];
-  if (quarantined.length === 0) {
-    return null;
-  }
-  const engines = quarantined.map((entry) => entry.engineId).join(", ");
-  return `Context engine: warning (${quarantined.length} quarantined; downgraded to legacy: ${engines})`;
-}
-
-/** Formats dead-lettered delivery queue entries for text health output. */
-export function formatDeliveryQueueHealthLine(
-  summary: HealthSummary,
-  now = Date.now(),
-): string | null {
-  const failed = summary.deliveryQueues?.failed ?? [];
-  const ingressFailed = summary.deliveryQueues?.ingressFailed ?? [];
-  if (failed.length === 0 && ingressFailed.length === 0) {
-    return null;
-  }
-  const counts = [
-    ...failed.map((queue) => `${queue.queueName}: ${queue.count}`),
-    ...ingressFailed.map(
-      (queue) => `inbound ${queue.channelId}/${queue.accountId}: ${queue.count}`,
-    ),
-  ].join(", ");
-  const oldest = [...failed, ...ingressFailed]
-    .map((queue) => queue.oldestFailedAt)
-    .filter((value): value is number => typeof value === "number");
-  const oldestNote =
-    oldest.length > 0 ? `; oldest ${formatDurationHuman(now - Math.min(...oldest))} ago` : "";
-  return `Delivery queue: warning (dead-lettered entries — ${counts}${oldestNote})`;
-}
-
-/** Formats config hot-reload watcher degradation for text health output. */
-export function formatConfigReloadHealthLine(summary: HealthSummary): string | null {
-  if (summary.configReload?.hotReloadStatus !== "disabled") {
-    return null;
-  }
-  return "Config hot reload: disabled (watcher retries exhausted; restart the gateway to restore it)";
 }
 
 const resolveHeartbeatSummary = (cfg: OpenClawConfig, agentId: string) =>
@@ -399,17 +365,8 @@ export async function healthCommand(
     if (eventLoopLine) {
       runtime.log(styleHealthChannelLine(eventLoopLine, rich));
     }
-    const contextEngineLine = formatContextEngineHealthLine(summary);
-    if (contextEngineLine) {
-      runtime.log(styleHealthChannelLine(contextEngineLine, rich));
-    }
-    const deliveryQueueLine = formatDeliveryQueueHealthLine(summary);
-    if (deliveryQueueLine) {
-      runtime.log(styleHealthChannelLine(deliveryQueueLine, rich));
-    }
-    const configReloadLine = formatConfigReloadHealthLine(summary);
-    if (configReloadLine) {
-      runtime.log(styleHealthChannelLine(configReloadLine, rich));
+    for (const diagnostic of collectGatewayHealthDiagnostics(summary)) {
+      runtime.log(styleHealthChannelLine(formatGatewayHealthDiagnostic(diagnostic), rich));
     }
     for (const plugin of displayPlugins) {
       const channelSummary = summary.channels?.[plugin.id];
