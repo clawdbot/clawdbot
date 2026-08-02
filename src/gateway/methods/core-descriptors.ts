@@ -486,16 +486,17 @@ export type CoreGatewayHandlerFamily = Exclude<(typeof CORE_GATEWAY_METHOD_SPECS
 const CORE_GATEWAY_METHOD_SPEC_LIST: readonly CoreGatewayMethodSpec[] =
   CORE_GATEWAY_METHOD_SPECS.map(([name, family, scope, since, policy]) => {
     const spec: CoreGatewayMethodSpec = { name, scope, since };
+    const normalizedPolicy: CoreGatewayMethodPolicy | undefined = policy;
     if (family) {
       spec.family = family;
     }
-    if (policy?.advertise === false) {
+    if (normalizedPolicy?.advertise === false) {
       spec.advertise = false;
     }
-    if (policy?.startup === true) {
+    if (normalizedPolicy?.startup === true) {
       spec.startup = true;
     }
-    if (policy?.controlPlaneWrite === true) {
+    if (normalizedPolicy?.controlPlaneWrite === true) {
       spec.controlPlaneWrite = true;
     }
     return spec;
