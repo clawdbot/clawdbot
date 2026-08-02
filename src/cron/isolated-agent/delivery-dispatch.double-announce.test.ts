@@ -215,6 +215,8 @@ function makeBaseParams(overrides: {
   sessionTarget?: string;
   deliveryBestEffort?: boolean;
   spawnOnlyHandoff?: boolean;
+  executionOrigin?: Parameters<typeof dispatchCronDelivery>[0]["executionOrigin"];
+  executionReservedAtMs?: number;
   runSessionKey?: string;
   resolvedDeliveryMode?: "explicit" | "implicit";
 }): Parameters<typeof dispatchCronDelivery>[0] {
@@ -242,6 +244,8 @@ function makeBaseParams(overrides: {
     sessionUpdatedAt: 1_000,
     runStartedAt,
     runEndedAt: runStartedAt,
+    executionOrigin: overrides.executionOrigin ?? "scheduled",
+    executionReservedAtMs: overrides.executionReservedAtMs,
     timeoutMs: 30_000,
     resolvedDelivery,
     deliveryRequested: overrides.deliveryRequested ?? true,
@@ -1176,6 +1180,48 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     },
   );
 
+  it.each(["operator", "scheduled", "stream", "exit"] as const)(
+    "applies %s stale-delivery policy after recovering accepted child output",
+    async (executionOrigin) => {
+      const childReply = "Freshly completed accepted child result.";
+      const reservationAt = Date.now() - 4 * 60 * 60_000;
+      const eventOwned = executionOrigin === "stream" || executionOrigin === "exit";
+      vi.mocked(readDescendantSubagentFallbackReply).mockResolvedValue(childReply);
+      vi.mocked(deliverOutboundPayloads).mockResolvedValue([{ ok: true } as never]);
+
+      const params = makeBaseParams({
+        executionOrigin,
+        ...(eventOwned ? { executionReservedAtMs: reservationAt } : {}),
+        spawnOnlyHandoff: true,
+        synthesizedText: "",
+      });
+      params.synthesizedText = undefined;
+      params.deliveryPayloads = [];
+      params.summary = undefined;
+      params.outputText = undefined;
+      (params.job as { state?: { nextRunAtMs?: number } }).state = eventOwned
+        ? {}
+        : { nextRunAtMs: reservationAt };
+
+      const state = await dispatchCronDelivery(params);
+
+      expect(readDescendantSubagentFallbackReply).toHaveBeenCalledOnce();
+      expect(state.deliveryAttempted).toBe(true);
+      if (executionOrigin === "operator") {
+        expect(state.delivered).toBe(true);
+        expect(state.deliveryError).toBeUndefined();
+        expectDeliveryCall(0, { payloads: [{ text: childReply }] });
+      } else {
+        expectResultFields(state.result, {
+          status: "ok",
+          delivered: false,
+          deliveryError: "cron delivery skipped because execution began after its scheduled window",
+        });
+        expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+      }
+    },
+  );
+
   it("preserves a substantive parent synthesis after an accepted child has completed", async () => {
     const parentReply = "Combined parent summary already includes every child result.";
     vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
@@ -1769,23 +1815,80 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
   });
 
-  it("skips stale cron deliveries while still suppressing fallback main summary", async () => {
+  it.each(["scheduled", "stream", "exit"] as const)(
+    "records stale %s delivery suppression without announcing a fallback summary",
+    async (executionOrigin) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-03-18T17:00:00.000Z"));
+
+      const params = makeBaseParams({
+        synthesizedText: "Yesterday's morning briefing.",
+        executionOrigin,
+        ...(executionOrigin === "scheduled"
+          ? {}
+          : { executionReservedAtMs: Date.now() - (3 * 60 * 60_000 + 1) }),
+      });
+      (params.job as { state?: { nextRunAtMs?: number } }).state =
+        executionOrigin === "scheduled" ? { nextRunAtMs: Date.now() - (3 * 60 * 60_000 + 1) } : {};
+
+      const state = await dispatchCronDelivery(params);
+
+      expectResultFields(state.result, {
+        status: "ok",
+        delivered: false,
+        deliveryAttempted: true,
+        deliveryError: "cron delivery skipped because execution began after its scheduled window",
+      });
+      expect(state.deliveryError).toBe(
+        "cron delivery skipped because execution began after its scheduled window",
+      );
+      expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["stream", "exit"] as const)(
+    "delivers a promptly admitted %s event after a long agent execution",
+    async (executionOrigin) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-03-18T17:00:00.000Z"));
+      const reservationAt = Date.now();
+      vi.mocked(deliverOutboundPayloads).mockResolvedValue([{ ok: true } as never]);
+      const params = makeBaseParams({
+        synthesizedText: "Fresh source event.",
+        executionOrigin,
+        runStartedAt: reservationAt,
+        executionReservedAtMs: reservationAt,
+      });
+      (params.job as { state?: { nextRunAtMs?: number } }).state = {};
+      vi.setSystemTime(reservationAt + 4 * 60 * 60_000);
+
+      const state = await dispatchCronDelivery(params);
+
+      expect(state.delivered).toBe(true);
+      expect(state.deliveryError).toBeUndefined();
+      expect(deliverOutboundPayloads).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("delivers a fresh overdue operator-requested result exactly once", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-18T17:00:00.000Z"));
+    vi.mocked(deliverOutboundPayloads).mockResolvedValue([{ ok: true } as never]);
 
-    const params = makeBaseParams({ synthesizedText: "Yesterday's morning briefing." });
+    const params = makeBaseParams({
+      synthesizedText: "Freshly requested automation result.",
+      executionOrigin: "operator",
+    });
     (params.job as { state?: { nextRunAtMs?: number } }).state = {
-      nextRunAtMs: Date.now() - (3 * 60 * 60_000 + 1),
+      nextRunAtMs: Date.now() - 4 * 60 * 60_000,
     };
 
     const state = await dispatchCronDelivery(params);
 
-    expectResultFields(state.result, {
-      status: "ok",
-      delivered: false,
-      deliveryAttempted: true,
-    });
-    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(state.delivered).toBe(true);
+    expect(state.deliveryAttempted).toBe(true);
+    expect(state.deliveryError).toBeUndefined();
+    expect(deliverOutboundPayloads).toHaveBeenCalledOnce();
   });
 
   it("still delivers when the run started on time but finished more than three hours later", async () => {

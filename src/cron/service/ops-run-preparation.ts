@@ -22,7 +22,7 @@ import {
   reserveQueuedCronRun,
   updateQueuedCronRunReservationMarker,
 } from "./run-admission.js";
-import type { CronEvent, CronServiceState } from "./state.js";
+import type { CronEvent, CronRunOrigin, CronServiceState } from "./state.js";
 import { emit } from "./state.js";
 import {
   ensureLoaded,
@@ -55,6 +55,7 @@ type PreparedManualRun =
       scheduleOwnershipAtMs: number;
       reservationIdentity: object;
       wasEnabled: boolean;
+      executionOrigin: Exclude<CronRunOrigin, "scheduled">;
       payload?: CronPayload;
       evaluateTrigger?: boolean;
       streamBatch?: string;
@@ -78,6 +79,7 @@ export type ManualRunOptions = {
   payload?: CronPayload;
   terminalTracker?: ManualRunTerminalTracker;
   owningCronLaneTaskMarker?: CommandLaneTaskMarker;
+  executionOrigin?: Exclude<CronRunOrigin, "scheduled">;
   evaluateTrigger?: boolean;
   streamBatch?: string;
   streamScheduleKey?: string;
@@ -385,6 +387,7 @@ export async function prepareManualRun(
       scheduleOwnershipAtMs: opts?.scheduleOwnershipAtMs ?? reservationAt,
       reservationIdentity,
       wasEnabled: isJobEnabled(job),
+      executionOrigin: opts?.executionOrigin ?? "operator",
       ...(opts?.payload ? { payload: structuredClone(opts.payload) } : {}),
       ...(opts?.evaluateTrigger ? { evaluateTrigger: true } : {}),
       ...(opts?.streamBatch !== undefined ? { streamBatch: opts.streamBatch } : {}),
@@ -500,7 +503,12 @@ export async function activatePreparedManualRun(
       startedAt,
       publicRunId: prepared.runId,
     });
-    const activeJobMarker = markManualCronJobActive(state, job);
+    const activeJobMarker = markManualCronJobActive(
+      state,
+      job,
+      prepared.executionOrigin,
+      prepared.reservationAt,
+    );
     // Execute against a snapshot so later reload/merge can preserve delivery
     // target writeback from disk without mutating the running object.
     const admittedJob = structuredClone(job);

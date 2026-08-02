@@ -5,7 +5,7 @@ import { cronStreamScheduleKey } from "../stream-schedule.js";
 import type { CronJob } from "../types.js";
 import { recomputeNextRunsForMaintenance } from "./jobs.js";
 import { normalizeOptionalAgentId } from "./normalize.js";
-import type { CronServiceState } from "./state.js";
+import type { CronRunOrigin, CronServiceState } from "./state.js";
 import { ensureLoaded, persist } from "./store.js";
 import {
   type IsolatedAgentSetupTimeoutSignal,
@@ -31,12 +31,17 @@ export function resolveEffectiveJobAgentId(
 export function markManualCronJobActive(
   state: CronServiceState,
   job: CronJob,
+  origin: Exclude<CronRunOrigin, "scheduled">,
+  reservationAt: number,
 ): CronActiveJobMarker | undefined {
   const jobId = job.id;
-  state.activeManualRunJobIds.add(jobId);
-  return markCronJobActive(jobId, {
+  const marker = markCronJobActive(jobId, {
     preserveAcrossGenerationAdvance: !runsDetachedFromMainSession(job),
   });
+  if (marker) {
+    state.activeRunOrigins.set(jobId, { origin, marker, reservationAt });
+  }
+  return marker;
 }
 
 export function clearManualCronJobActive(
@@ -44,9 +49,12 @@ export function clearManualCronJobActive(
   jobId: string,
   activeJobMarker?: CronActiveJobMarker,
 ): void {
-  state.activeManualRunJobIds.delete(jobId);
+  // Older finalizers must never erase a replacement invocation's provenance.
+  if (state.activeRunOrigins.get(jobId)?.marker === activeJobMarker) {
+    state.activeRunOrigins.delete(jobId);
+  }
   clearCronJobActive(jobId, activeJobMarker);
-  if (state.activeManualRunJobIds.size === 0) {
+  if (state.activeRunOrigins.size === 0) {
     state.manualSetupTimeoutNotified = false;
   }
 }

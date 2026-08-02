@@ -434,6 +434,8 @@ export async function finalizeCronRun(params: {
     beforeSessionDelete: params.beforeSessionDelete,
     runStartedAt: execution.runStartedAt,
     runEndedAt: execution.runEndedAt,
+    executionOrigin: prepared.input.executionOrigin ?? "scheduled",
+    executionReservedAtMs: prepared.input.executionReservedAtMs,
     timeoutMs: prepared.timeoutMs,
     resolvedDelivery: prepared.resolvedDelivery,
     deliveryRequested: prepared.deliveryRequested,

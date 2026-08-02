@@ -322,6 +322,80 @@ describe("runCronIsolatedAgentTurn core-channel direct delivery", () => {
     clearRuntimeConfigSnapshot();
   });
 
+  it("delivers freshly generated output for an operator-requested overdue automation", async () => {
+    await withTempCronHome(async (home) => {
+      const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
+      const cfg = makeCfg(home, storePath);
+      const deps = createCliDeps();
+      const output = "Fresh operator-requested automation result";
+      mockAgentPayloads([{ text: output }]);
+
+      const result = await runCronIsolatedAgentTurn({
+        cfg,
+        deps,
+        job: {
+          ...makeJob({ kind: "agentTurn", message: "generate a fresh report" }),
+          state: { nextRunAtMs: Date.now() - 4 * 60 * 60_000 },
+          delivery: { mode: "announce", channel: "slack", to: "channel:C12345" },
+        },
+        message: "generate a fresh report",
+        sessionKey: "cron:job-1",
+        lane: "cron",
+        executionOrigin: "operator",
+      });
+
+      expect(result.status).toBe("ok");
+      expect(result.delivered).toBe(true);
+      expect(deps.sendMessageSlack).toHaveBeenCalledExactlyOnceWith(
+        "channel:C12345",
+        output,
+        expect.objectContaining({ cfg }),
+      );
+    });
+  });
+
+  it.each(["direct hook", "scheduled", "stream", "exit"] as const)(
+    "records overdue %s delivery suppression without sending stale output",
+    async (executionOrigin) => {
+      await withTempCronHome(async (home) => {
+        const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
+        const cfg = makeCfg(home, storePath);
+        const deps = createCliDeps();
+        const deliveryError =
+          "cron delivery skipped because execution began after its scheduled window";
+        const reservationAt = Date.now() - 4 * 60 * 60_000;
+        const eventOwned = executionOrigin === "stream" || executionOrigin === "exit";
+        mockAgentPayloads([{ text: "Overdue automation output" }]);
+
+        const result = await runCronIsolatedAgentTurn({
+          cfg,
+          deps,
+          job: {
+            ...makeJob({ kind: "agentTurn", message: "generate a report" }),
+            state: eventOwned ? {} : { nextRunAtMs: reservationAt },
+            delivery: { mode: "announce", channel: "slack", to: "channel:C12345" },
+          },
+          message: "generate a report",
+          sessionKey: "cron:job-1",
+          lane: "cron",
+          ...(executionOrigin === "direct hook" ? {} : { executionOrigin }),
+          ...(eventOwned ? { executionReservedAtMs: reservationAt } : {}),
+        });
+
+        expect(result).toMatchObject({
+          status: "ok",
+          delivered: false,
+          deliveryAttempted: true,
+          deliveryError,
+        });
+        expect(result.diagnostics?.entries).toContainEqual(
+          expect.objectContaining({ source: "delivery", message: deliveryError }),
+        );
+        expect(deps.sendMessageSlack).not.toHaveBeenCalled();
+      });
+    },
+  );
+
   for (const testCase of CASES) {
     it(`routes ${testCase.name} text-only announce delivery through the outbound adapter`, async () => {
       await expectCoreChannelAnnounceDelivery({

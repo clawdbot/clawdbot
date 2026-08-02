@@ -25,6 +25,7 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { shouldAttemptTtsPayload } from "../../tts/tts-config.js";
 import { createCronExecutionId } from "../run-id.js";
 import { hasScheduledNextRunAtMs } from "../service/jobs.js";
+import type { CronRunOrigin } from "../service/state.js";
 import type { CronJob } from "../types.js";
 import type { DeliveryTargetResolution } from "./delivery-target.js";
 import { cleanupCronRunSessionAfterRun } from "./session-cleanup.js";
@@ -154,23 +155,34 @@ export function logCronDeliveryErrorDeferred(message: string): void {
   });
 }
 
-export function resolveCronDeliveryScheduledAtMs(params: {
+type CronDeliveryExecutionTiming = {
   job: CronJob;
   runStartedAt: number;
-}): number {
+  executionOrigin?: CronRunOrigin;
+  executionReservedAtMs?: number;
+};
+
+export function resolveCronDeliveryScheduledAtMs(params: CronDeliveryExecutionTiming): number {
   const scheduledAt = params.job.state?.nextRunAtMs;
-  return hasScheduledNextRunAtMs(scheduledAt) ? scheduledAt : params.runStartedAt;
+  if (hasScheduledNextRunAtMs(scheduledAt)) {
+    return scheduledAt;
+  }
+  return params.executionOrigin === "stream" || params.executionOrigin === "exit"
+    ? (params.executionReservedAtMs ?? params.runStartedAt)
+    : params.runStartedAt;
 }
 
-export function resolveCronDeliveryStartDelayMs(params: {
-  job: CronJob;
-  runStartedAt: number;
-}): number {
+export function resolveCronDeliveryStartDelayMs(params: CronDeliveryExecutionTiming): number {
   return params.runStartedAt - resolveCronDeliveryScheduledAtMs(params);
 }
 
-export function isStaleCronDelivery(params: { job: CronJob; runStartedAt: number }): boolean {
-  return resolveCronDeliveryStartDelayMs(params) > STALE_CRON_DELIVERY_MAX_START_DELAY_MS;
+export function isStaleCronDelivery(
+  params: CronDeliveryExecutionTiming & { executionOrigin: CronRunOrigin },
+): boolean {
+  return (
+    params.executionOrigin !== "operator" &&
+    resolveCronDeliveryStartDelayMs(params) > STALE_CRON_DELIVERY_MAX_START_DELAY_MS
+  );
 }
 
 export async function maybeApplyTtsToCronPayloads(params: {

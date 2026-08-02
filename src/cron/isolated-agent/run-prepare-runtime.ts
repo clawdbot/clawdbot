@@ -5,6 +5,7 @@ import { HEARTBEAT_TOKEN } from "../../auto-reply/tokens.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import type { CronRunOrigin } from "../service/state.js";
 import type {
   CronAgentExecutionPhaseUpdate,
   CronAgentExecutionStarted,
@@ -27,6 +28,8 @@ export type RunCronAgentTurnParams = {
   sessionKey: string;
   agentId?: string;
   lane?: string;
+  executionOrigin?: CronRunOrigin;
+  executionReservedAtMs?: number;
 };
 
 export function resolveCronAgentTurnMessage(input: RunCronAgentTurnParams): string {

@@ -260,7 +260,7 @@ export function createMockCronStateForJobs(params: {
     schedulingPaused: false,
     schedulerStarted: false,
     restartRecoveryPending: false,
-    activeManualRunJobIds: new Set<string>(),
+    activeRunOrigins: new Map(),
     manualSetupTimeoutNotified: false,
     runAdmission: { active: 0, waiters: [] },
     queuedRunReservationsByJobId: new Map(),

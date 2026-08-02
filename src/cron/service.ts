@@ -1,4 +1,5 @@
 /** Stateful CronService facade around the locked service operation helpers. */
+import { isCronActiveJobMarkerCurrent } from "./active-jobs.js";
 import type {
   CronServiceContract,
   CronServiceRunOptions,
@@ -11,6 +12,7 @@ import * as readOps from "./service/ops-read.js";
 import * as runOps from "./service/ops-run.js";
 import {
   type CronAddOptions,
+  type CronRunOrigin,
   type CronServiceDeps,
   type CronUpdatePrecondition,
   type CronUpdateOptions,
@@ -141,7 +143,7 @@ export class CronService implements CronServiceContract {
   async run(
     id: string,
     mode?: "due" | "force",
-    opts?: CronServiceRunOptions,
+    opts?: CronServiceRunOptions & { executionOrigin?: "stream" | "exit" },
   ): Promise<CronServiceRunResult> {
     return await runOps.run(this.state, id, mode, opts);
   }
@@ -154,6 +156,14 @@ export class CronService implements CronServiceContract {
       throw new Error("cron enqueueRun returned unresolved runnable disposition");
     }
     return result;
+  }
+
+  /** Returns provenance from the exact invocation that currently owns this run. */
+  resolveRunExecution(id: string): { origin: CronRunOrigin; reservationAt?: number } {
+    const activeRun = this.state.activeRunOrigins.get(id);
+    return activeRun && isCronActiveJobMarkerCurrent(activeRun.marker)
+      ? { origin: activeRun.origin, reservationAt: activeRun.reservationAt }
+      : { origin: "scheduled" };
   }
 
   getJob(id: string): CronJob | undefined {

@@ -35,6 +35,8 @@ import {
   setupCronServiceSuite,
   writeCronStoreSnapshot,
 } from "./service.test-harness.js";
+import { clearManualCronJobActive, markManualCronJobActive } from "./service/ops-shared.js";
+import { createCronServiceState } from "./service/state.js";
 import type { CronJob } from "./types.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({
@@ -65,11 +67,15 @@ function createManualIsolatedJob(id: string): CronJob {
   };
 }
 
-async function createManualRunHarness(jobId: string) {
+async function createManualRunHarness(jobId: string, deliveryRequested = false) {
   const store = await makeStorePath();
+  const job = createManualIsolatedJob(jobId);
+  if (deliveryRequested) {
+    job.delivery = { mode: "announce", channel: "telegram", to: "123" };
+  }
   await writeCronStoreSnapshot({
     storePath: store.storePath,
-    jobs: [createManualIsolatedJob(jobId)],
+    jobs: [job],
   });
 
   const entered = createDeferred<void>();
@@ -97,26 +103,60 @@ describe("cron activeJobIds — manual-run mark/clear", () => {
     vi.useRealTimers();
   });
 
-  it("marks the job active during a manual run and clears it on success", async () => {
-    const { cron, entered, release, store } = await createManualRunHarness("manual-isolated-ok");
+  it.each(["operator", "stream", "exit"] as const)(
+    "preserves the %s run origin only while its invocation is active",
+    async (executionOrigin) => {
+      const jobId = `manual-isolated-${executionOrigin}`;
+      const deliveryRequested = executionOrigin !== "operator";
+      const { cron, entered, release, store } = await createManualRunHarness(
+        jobId,
+        deliveryRequested,
+      );
+      const deliveryError =
+        "cron delivery skipped because execution began after its scheduled window";
 
-    try {
-      await cron.start();
+      try {
+        await cron.start();
 
-      const runPromise = cron.run("manual-isolated-ok", "force");
-      await entered.promise;
+        const runPromise =
+          executionOrigin === "operator"
+            ? cron.run(jobId, "force")
+            : cron.run(jobId, "force", { executionOrigin });
+        await entered.promise;
 
-      expect(isCronJobActive("manual-isolated-ok")).toBe(true);
+        expect(isCronJobActive(jobId)).toBe(true);
+        expect(cron.resolveRunExecution(jobId)).toMatchObject({
+          origin: executionOrigin,
+          reservationAt: expect.any(Number),
+        });
 
-      release.resolve({ status: "ok", summary: "ok" });
-      await runPromise;
+        release.resolve({
+          status: "ok",
+          summary: "ok",
+          ...(deliveryRequested
+            ? { delivered: false, deliveryAttempted: true, deliveryError }
+            : {}),
+        });
+        await runPromise;
 
-      expect(isCronJobActive("manual-isolated-ok")).toBe(false);
-    } finally {
-      cron.stop();
-      await store.cleanup();
-    }
-  });
+        expect(isCronJobActive(jobId)).toBe(false);
+        expect(cron.resolveRunExecution(jobId)).toEqual({ origin: "scheduled" });
+        if (deliveryRequested) {
+          expect(cron.getJob(jobId)?.state).toMatchObject({
+            lastRunStatus: "ok",
+            lastDeliveryStatus: "not-delivered",
+            lastDeliveryError: deliveryError,
+            lastFailureNotificationDeliveryStatus: "not-requested",
+            consecutiveErrors: 0,
+          });
+          expect(cron.getJob(jobId)?.state.lastFailureAlertAtMs).toBeUndefined();
+        }
+      } finally {
+        cron.stop();
+        await store.cleanup();
+      }
+    },
+  );
 
   it("does not let old restart-lifecycle finalizers clear new active markers", () => {
     const oldMarker = markCronJobActive("manual-generation-reuse");
@@ -144,6 +184,116 @@ describe("cron activeJobIds — manual-run mark/clear", () => {
     clearCronJobActive("manual-token-reuse", freshMarker);
 
     expect(isCronJobActive("manual-token-reuse")).toBe(false);
+  });
+
+  it.each(["same-generation", "restart-generation"] as const)(
+    "keeps the replacement run origin when a %s finalizer retires an old marker",
+    (replacement) => {
+      const state = createCronServiceState({
+        storePath: "/unused/cron-origin-test.sqlite",
+        cronEnabled: false,
+        log: logger,
+        enqueueSystemEvent: () => {},
+        requestHeartbeat: () => {},
+        runIsolatedAgentJob: async () => ({ status: "ok" }),
+      });
+      const job = createManualIsolatedJob("manual-origin-replacement");
+      const oldReservationAt = Date.now();
+      const oldMarker = markManualCronJobActive(state, job, "operator", oldReservationAt);
+      if (replacement === "restart-generation") {
+        advanceCronActiveJobGeneration();
+      }
+      const freshReservationAt = oldReservationAt + 1;
+      const freshMarker = markManualCronJobActive(state, job, "stream", freshReservationAt);
+      state.manualSetupTimeoutNotified = true;
+
+      clearManualCronJobActive(state, job.id, oldMarker);
+
+      expect(state.activeRunOrigins.get(job.id)?.origin).toBe("stream");
+      expect(state.activeRunOrigins.get(job.id)?.reservationAt).toBe(freshReservationAt);
+      expect(state.manualSetupTimeoutNotified).toBe(true);
+      expect(isCronJobActive(job.id)).toBe(true);
+
+      clearManualCronJobActive(state, job.id, freshMarker);
+
+      expect(state.activeRunOrigins.has(job.id)).toBe(false);
+      expect(state.manualSetupTimeoutNotified).toBe(false);
+      expect(isCronJobActive(job.id)).toBe(false);
+    },
+  );
+
+  it.each(["generation advance", "global marker reset"] as const)(
+    "does not expose a retired isolated operator after %s before its finalizer runs",
+    async (retirement) => {
+      const jobId = "retired-manual-operator-origin";
+      const { cron, entered, release, store } = await createManualRunHarness(jobId);
+
+      try {
+        await cron.start();
+        const staleRun = cron.run(jobId, "force");
+        await entered.promise;
+        expect(cron.resolveRunExecution(jobId).origin).toBe("operator");
+
+        if (retirement === "generation advance") {
+          advanceCronActiveJobGeneration();
+        } else {
+          resetCronActiveJobs();
+        }
+
+        expect(cron.resolveRunExecution(jobId)).toEqual({ origin: "scheduled" });
+        release.resolve({ status: "ok", summary: "retired" });
+        await staleRun;
+      } finally {
+        cron.stop();
+        await store.cleanup();
+      }
+    },
+  );
+
+  it("preserves the real main-session operator invocation across generation advance", async () => {
+    const store = await makeStorePath();
+    const job = {
+      ...createManualIsolatedJob("preserved-main-operator-origin"),
+      sessionTarget: "main" as const,
+      wakeMode: "now" as const,
+      payload: { kind: "systemEvent" as const, text: "operator-owned wake" },
+    };
+    await writeCronStoreSnapshot({ storePath: store.storePath, jobs: [job] });
+    const heartbeatStarted = createDeferred();
+    const releaseHeartbeat = createDeferred();
+    const cron = new CronService({
+      storePath: store.storePath,
+      cronEnabled: true,
+      log: logger,
+      enqueueSystemEvent: () => {},
+      requestHeartbeat: () => {},
+      runHeartbeatOnce: async () => {
+        heartbeatStarted.resolve();
+        await releaseHeartbeat.promise;
+        return { status: "ran", durationMs: 1 };
+      },
+      runIsolatedAgentJob: async () => ({ status: "ok" }),
+    });
+    let run: Promise<unknown> | undefined;
+
+    try {
+      await cron.start();
+      run = cron.run(job.id, "force");
+      await heartbeatStarted.promise;
+
+      advanceCronActiveJobGeneration();
+
+      expect(cron.resolveRunExecution(job.id)).toMatchObject({ origin: "operator" });
+      resetCronActiveJobs();
+      expect(cron.resolveRunExecution(job.id)).toEqual({ origin: "scheduled" });
+    } finally {
+      releaseHeartbeat.resolve();
+      if (run) {
+        await run;
+      }
+      cron.stop();
+      await store.cleanup();
+    }
   });
 
   it("retires preserved main-session markers at the lifecycle cutoff", () => {

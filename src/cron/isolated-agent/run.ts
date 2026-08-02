@@ -1,8 +1,6 @@
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../browser-lifecycle-cleanup.js";
-import type { CliDeps } from "../../cli/outbound-send-deps.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
   claimAgentRunContext,
@@ -22,12 +20,9 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { removeCronRunContinuationSessionIfIdle } from "../../tasks/cron-run-continuation-cleanup.js";
 import { createCronRunDiagnosticsFromError, mergeCronRunDiagnostics } from "../run-diagnostics.js";
 import { resolveCronAbortReasonText } from "../service/execution-errors.js";
-import type {
-  CronAgentExecutionPhaseUpdate,
-  CronAgentExecutionStarted,
-  CronJob,
-} from "../types.js";
+import type { CronAgentExecutionPhaseUpdate } from "../types.js";
 import { finalizeCronRun } from "./run-finalize.js";
+import type { RunCronAgentTurnParams } from "./run-prepare-runtime.js";
 import { prepareCronRunContext } from "./run-prepare.js";
 import { CronSessionLifecycleClaimError, type MutableCronSession } from "./run-session-state.js";
 import { logWarn } from "./run.runtime.js";
@@ -77,20 +72,9 @@ async function disposeCronRunContext(params: {
 }
 
 /** Runs one isolated cron agent turn, including setup, execution, delivery, and persistence. */
-export async function runCronIsolatedAgentTurn(params: {
-  cfg: OpenClawConfig;
-  deps: CliDeps;
-  job: CronJob;
-  message: string;
-  abortSignal?: AbortSignal;
-  signal?: AbortSignal;
-  onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
-  onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
-  onLaneWait?: (info?: { waiting?: boolean }) => void;
-  sessionKey: string;
-  agentId?: string;
-  lane?: string;
-}): Promise<RunCronAgentTurnResult> {
+export async function runCronIsolatedAgentTurn(
+  params: RunCronAgentTurnParams,
+): Promise<RunCronAgentTurnResult> {
   const admittedLifecycleGeneration = getAgentEventLifecycleGeneration();
   const upstreamAbortSignal = params.abortSignal ?? params.signal;
   const lifecycleAbortController = new AbortController();

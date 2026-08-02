@@ -270,32 +270,28 @@ export async function dispatchCronDelivery(
           ...params.telemetry,
         });
       }
-      if (
-        params.deliveryRequested &&
-        isStaleCronDelivery({
-          job: params.job,
-          runStartedAt: params.runStartedAt,
-        })
-      ) {
+      const executionTiming = {
+        job: params.job,
+        runStartedAt: params.runStartedAt,
+        executionOrigin: params.executionOrigin,
+        executionReservedAtMs: params.executionReservedAtMs,
+      };
+      if (params.deliveryRequested && isStaleCronDelivery(executionTiming)) {
         deliveryAttempted = true;
         const nowMs = Date.now();
-        const scheduledAtMs = resolveCronDeliveryScheduledAtMs({
-          job: params.job,
-          runStartedAt: params.runStartedAt,
-        });
-        const startDelayMs = resolveCronDeliveryStartDelayMs({
-          job: params.job,
-          runStartedAt: params.runStartedAt,
-        });
+        const scheduledAtMs = resolveCronDeliveryScheduledAtMs(executionTiming);
+        const startDelayMs = resolveCronDeliveryStartDelayMs(executionTiming);
         await logCronDeliveryWarn(
           `[cron:${params.job.id}] skipping stale delivery scheduled at ${new Date(scheduledAtMs).toISOString()}, started ${Math.round(startDelayMs / 60_000)}m late, current age ${Math.round((nowMs - scheduledAtMs) / 60_000)}m`,
         );
+        deliveryError = "cron delivery skipped because execution began after its scheduled window";
         return params.withRunSession({
           status: "ok",
           summary,
           outputText,
           deliveryAttempted,
           delivered: false,
+          deliveryError,
           ...params.telemetry,
         });
       }
@@ -739,16 +735,11 @@ export async function dispatchCronDelivery(
     const useDirectDelivery =
       params.deliveryPayloadHasStructuredContent ||
       (params.resolvedDelivery.threadId != null && !params.spawnOnlyHandoff);
-    if (useDirectDelivery) {
-      const directResult = await deliverViaDirectAndCleanup(params.resolvedDelivery);
-      if (directResult) {
-        return buildDeliveryState(directResult);
-      }
-    } else {
-      const finalizedTextResult = await finalizeTextDelivery(params.resolvedDelivery);
-      if (finalizedTextResult) {
-        return buildDeliveryState(finalizedTextResult);
-      }
+    const deliveryResult = useDirectDelivery
+      ? await deliverViaDirectAndCleanup(params.resolvedDelivery)
+      : await finalizeTextDelivery(params.resolvedDelivery);
+    if (deliveryResult) {
+      return buildDeliveryState(deliveryResult);
     }
   }
 
