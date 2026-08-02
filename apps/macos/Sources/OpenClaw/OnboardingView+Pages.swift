@@ -124,6 +124,8 @@ extension OnboardingView {
                 }
             }
 
+            GatewayConfigConflictRecoveryView(state: self.state)
+
             HStack {
                 Spacer(minLength: 0)
                 Button("Set up later") {

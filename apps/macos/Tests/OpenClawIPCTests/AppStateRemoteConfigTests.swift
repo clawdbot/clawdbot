@@ -368,42 +368,110 @@ struct AppStateRemoteConfigTests {
     }
 
     @Test
-    func `dirty external token conflict keeps UI and disk values separate`() async {
+    func `dirty external token conflict offers both recovery choices`() async {
         let configPath = TestIsolation.tempConfigPath()
         await TestIsolation.withIsolatedState(env: ["OPENCLAW_CONFIG_PATH": configPath]) {
             #expect(OpenClawConfigFile.saveDict([
                 "gateway": [
                     "mode": "remote",
                     "remote": [
-                        "transport": "direct",
-                        "url": "wss://gateway.example.test",
+                        "transport": "ssh",
+                        "url": "ws://127.0.0.1:18789",
+                        "sshTarget": "alice@gateway.example.test",
+                        "sshIdentity": "/tmp/initial-identity",
                         "token": "initial-token",
                     ],
                 ],
             ]))
-            let state = AppState(preview: true)
+            var rejectSaves = false
+            let state = AppState(
+                preview: true,
+                gatewayConfigSaver: { root in
+                    rejectSaves ? false : OpenClawConfigFile.saveDict(root)
+                })
+            state.remoteIdentity = "/tmp/app-identity"
             state.remoteToken = "app-token"
 
             var externalRoot = OpenClawConfigFile.loadDict()
             var gateway = externalRoot["gateway"] as? [String: Any] ?? [:]
             var remote = gateway["remote"] as? [String: Any] ?? [:]
+            remote.removeValue(forKey: "sshIdentity")
             remote["token"] = "external-token"
             gateway["remote"] = remote
             externalRoot["gateway"] = gateway
             #expect(OpenClawConfigFile.saveDict(externalRoot))
             state._testApplyConfigFromDisk()
 
+            #expect(state.remoteIdentity == "/tmp/app-identity")
             #expect(state.remoteToken == "app-token")
             #expect(state.remoteTokenDirty)
-            #expect(state._testConflictedGatewayConfigFields == ["gateway.remote.token"])
+            #expect(state._testConflictedGatewayConfigFields == [
+                "gateway.remote.sshIdentity",
+                "gateway.remote.token",
+            ])
+            #expect(state.gatewayConfigConflict?.fields == [.remoteIdentity, .remoteToken])
+            #expect(state.gatewayConfigConflict?.fieldNames == ["Identity file", "Gateway token"])
+            #expect(state.gatewayConfigConflict?.message ==
+                "These settings changed outside the app while you were editing: " +
+                    "Identity file and Gateway token. " +
+                    "Choose which version to keep.")
             #expect(!state._testGatewayConfigIsCurrentForRouting)
 
             state._testEnableGatewayConfigSync()
             #expect(!state.syncGatewayConfigNow())
-            let persistedRemote = (OpenClawConfigFile.loadDict()["gateway"] as? [String: Any])?["remote"]
+            var persistedRemote = (OpenClawConfigFile.loadDict()["gateway"] as? [String: Any])?["remote"]
                 as? [String: Any]
             #expect(persistedRemote?["token"] as? String == "external-token")
             #expect(state.remoteToken == "app-token")
+
+            #expect(state.useFileGatewayConfigConflict())
+            #expect(state.remoteIdentity.isEmpty)
+            #expect(state.remoteToken == "external-token")
+            #expect(!state.remoteTokenDirty)
+            #expect(state.gatewayConfigConflict == nil)
+            #expect(state._testConflictedGatewayConfigFields.isEmpty)
+            #expect(state._testGatewayConfigIsCurrentForRouting)
+
+            state.remoteToken = "kept-token"
+            externalRoot = OpenClawConfigFile.loadDict()
+            gateway = externalRoot["gateway"] as? [String: Any] ?? [:]
+            remote = gateway["remote"] as? [String: Any] ?? [:]
+            remote["token"] = "second-external-token"
+            gateway["remote"] = remote
+            externalRoot["gateway"] = gateway
+            #expect(OpenClawConfigFile.saveDict(externalRoot))
+            state._testApplyConfigFromDisk()
+
+            #expect(state.gatewayConfigConflict?.fields == [.remoteToken])
+            #expect(state.keepGatewayConfigEdits())
+            persistedRemote = (OpenClawConfigFile.loadDict()["gateway"] as? [String: Any])?["remote"]
+                as? [String: Any]
+            #expect(persistedRemote?["token"] as? String == "kept-token")
+            #expect(state.remoteToken == "kept-token")
+            #expect(!state.remoteTokenDirty)
+            #expect(state.gatewayConfigConflict == nil)
+            #expect(state._testConflictedGatewayConfigFields.isEmpty)
+            #expect(state._testGatewayConfigIsCurrentForRouting)
+
+            state.remoteToken = "unsaved-token"
+            externalRoot = OpenClawConfigFile.loadDict()
+            gateway = externalRoot["gateway"] as? [String: Any] ?? [:]
+            remote = gateway["remote"] as? [String: Any] ?? [:]
+            remote["token"] = "third-external-token"
+            gateway["remote"] = remote
+            externalRoot["gateway"] = gateway
+            #expect(OpenClawConfigFile.saveDict(externalRoot))
+            state._testApplyConfigFromDisk()
+
+            rejectSaves = true
+            #expect(!state.keepGatewayConfigEdits())
+            persistedRemote = (OpenClawConfigFile.loadDict()["gateway"] as? [String: Any])?["remote"]
+                as? [String: Any]
+            #expect(persistedRemote?["token"] as? String == "third-external-token")
+            #expect(state.remoteToken == "unsaved-token")
+            #expect(state.gatewayConfigConflict?.fields == [.remoteToken])
+            #expect(state._testConflictedGatewayConfigFields == ["gateway.remote.token"])
+            #expect(!state._testGatewayConfigIsCurrentForRouting)
         }
     }
 

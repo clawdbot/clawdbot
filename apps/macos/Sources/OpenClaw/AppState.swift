@@ -391,6 +391,21 @@ final class AppState {
         self.dirtyGatewayConfigFields.contains(.remoteToken)
     }
 
+    var gatewayConfigConflict: GatewayConfigConflict? {
+        let fields = GatewayConfigField.allCases.filter(self.conflictedGatewayConfigFields.contains)
+        guard !fields.isEmpty else { return nil }
+        let fieldNames = fields.map(\.displayName)
+        let fieldList = ListFormatter.localizedString(byJoining: fieldNames)
+        let message = String(localized: """
+        These settings changed outside the app while you were editing: \(fieldList). \
+        Choose which version to keep.
+        """)
+        return GatewayConfigConflict(
+            fields: fields,
+            fieldNames: fieldNames,
+            message: message)
+    }
+
     private(set) var remoteTokenUnsupported = false
 
     var remoteIdentity: String {
@@ -845,7 +860,10 @@ extension AppState {
         return priorConflicts
     }
 
-    private func applyGatewayConfigView(_ root: [String: Any]) {
+    private func applyGatewayConfigView(
+        _ root: [String: Any],
+        forcing forcedFields: Set<GatewayConfigField> = [])
+    {
         let gateway = root["gateway"] as? [String: Any]
         let remote = gateway?["remote"] as? [String: Any]
         let modeRaw = (gateway?["mode"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -869,35 +887,35 @@ extension AppState {
         }
 
         self.isApplyingGatewayConfig = true
-        if !self.dirtyGatewayConfigFields.contains(.mode) {
-            if let desiredMode {
-                if desiredMode != self.connectionMode {
-                    self.connectionMode = desiredMode
-                }
-            } else if hasRemoteUrl, self.connectionMode != .remote {
-                self.connectionMode = .remote
-            }
-        }
+        self.applyGatewayConfigMode(
+            desiredMode,
+            hasRemoteUrl: hasRemoteUrl,
+            forcing: forcedFields.contains(.mode))
 
-        if !self.dirtyGatewayConfigFields.contains(.remoteTransport),
-           remoteTransport != self.remoteTransport
-        {
+        let shouldApplyTransport = forcedFields.contains(.remoteTransport) ||
+            !self.dirtyGatewayConfigFields.contains(.remoteTransport)
+        if shouldApplyTransport, remoteTransport != self.remoteTransport {
             self.remoteTransport = remoteTransport
         }
-        if !self.dirtyGatewayConfigFields.contains(.remoteUrl) {
+        if forcedFields.contains(.remoteUrl) || !self.dirtyGatewayConfigFields.contains(.remoteUrl) {
             let remoteUrlText = remoteResolution.directURL?.absoluteString ?? remoteUrl ?? ""
             if remoteUrlText != self.remoteUrl {
                 self.remoteUrl = remoteUrlText
             }
         }
-        if !self.dirtyGatewayConfigFields.contains(.remoteToken) {
+        if forcedFields.contains(.remoteToken) || !self.dirtyGatewayConfigFields.contains(.remoteToken) {
             self.applyRemoteTokenState(remoteToken)
         }
 
         let targetMode = desiredMode ?? self.connectionMode
-        if !self.dirtyGatewayConfigFields.contains(.remoteTarget),
-           targetMode == .remote,
-           remoteTransport != .direct
+        if forcedFields.contains(.remoteTarget) {
+            let configuredTarget = Self.sanitizeSSHTarget(remote?["sshTarget"] as? String ?? "")
+            if configuredTarget != Self.sanitizeSSHTarget(self.remoteTarget) {
+                self.remoteTarget = configuredTarget
+            }
+        } else if !self.dirtyGatewayConfigFields.contains(.remoteTarget),
+                  targetMode == .remote,
+                  remoteTransport != .direct
         {
             let hasConfiguredTarget = remote?.keys.contains("sshTarget") == true
             let configuredTarget = Self.sanitizeSSHTarget(remote?["sshTarget"] as? String ?? "")
@@ -910,8 +928,14 @@ extension AppState {
                 self.updateRemoteTarget(host: host)
             }
         }
-        if !self.dirtyGatewayConfigFields.contains(.remoteIdentity),
-           remote?.keys.contains("sshIdentity") == true
+        if forcedFields.contains(.remoteIdentity) {
+            let configuredIdentity = (remote?["sshIdentity"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if configuredIdentity != self.remoteIdentity {
+                self.remoteIdentity = configuredIdentity
+            }
+        } else if !self.dirtyGatewayConfigFields.contains(.remoteIdentity),
+                  remote?.keys.contains("sshIdentity") == true
         {
             let configuredIdentity = (remote?["sshIdentity"] as? String)?
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -920,6 +944,18 @@ extension AppState {
             }
         }
         self.isApplyingGatewayConfig = false
+    }
+
+    private func applyGatewayConfigMode(
+        _ desiredMode: ConnectionMode?,
+        hasRemoteUrl: Bool,
+        forcing: Bool)
+    {
+        guard forcing || !self.dirtyGatewayConfigFields.contains(.mode) else { return }
+        let nextMode = desiredMode ?? (hasRemoteUrl ? .remote : forcing ? .unconfigured : nil)
+        if let nextMode, nextMode != self.connectionMode {
+            self.connectionMode = nextMode
+        }
     }
 
     private func applyConfigOverrides(_ root: [String: Any]) {
@@ -1413,6 +1449,72 @@ extension AppState {
         self.conflictedGatewayConfigFields.subtract(persistedFields)
         self.lastObservedGatewayConfig = Self.gatewayConfigSnapshot(root)
     }
+
+    @discardableResult
+    func useFileGatewayConfigConflict() -> Bool {
+        let fields = self.conflictedGatewayConfigFields
+        guard !fields.isEmpty else { return true }
+
+        let priorDraft = self.gatewayConfigDraft()
+        let priorRemoteTokenUnsupported = self.remoteTokenUnsupported
+        let root = OpenClawConfigFile.loadDict()
+        self.dirtyGatewayConfigFields.subtract(fields)
+        self.conflictedGatewayConfigFields.subtract(fields)
+        self.applyGatewayConfigView(root, forcing: fields)
+
+        guard self.syncGatewayConfigNow() else {
+            self.restoreGatewayConfigDraft(priorDraft, fields: fields)
+            self.remoteTokenUnsupported = priorRemoteTokenUnsupported
+            self.dirtyGatewayConfigFields.formUnion(fields)
+            self.conflictedGatewayConfigFields.formUnion(fields)
+            self.setGatewayConfigSyncState(.failed)
+            return false
+        }
+        return true
+    }
+
+    @discardableResult
+    func keepGatewayConfigEdits() -> Bool {
+        let fields = self.conflictedGatewayConfigFields
+        guard !fields.isEmpty else { return true }
+
+        self.conflictedGatewayConfigFields.subtract(fields)
+        self.dirtyGatewayConfigFields.formUnion(fields)
+        guard self.syncGatewayConfigNow(),
+              self.dirtyGatewayConfigFields.isDisjoint(with: fields)
+        else {
+            self.conflictedGatewayConfigFields.formUnion(fields)
+            self.setGatewayConfigSyncState(.failed)
+            return false
+        }
+        return true
+    }
+
+    private func restoreGatewayConfigDraft(
+        _ draft: GatewayConfigSyncDraft,
+        fields: Set<GatewayConfigField>)
+    {
+        self.isApplyingGatewayConfig = true
+        if fields.contains(.mode) {
+            self.connectionMode = draft.connectionMode
+        }
+        if fields.contains(.remoteTransport) {
+            self.remoteTransport = draft.remoteTransport
+        }
+        if fields.contains(.remoteUrl) {
+            self.remoteUrl = draft.remoteUrl
+        }
+        if fields.contains(.remoteTarget) {
+            self.remoteTarget = draft.remoteTarget
+        }
+        if fields.contains(.remoteIdentity) {
+            self.remoteIdentity = draft.remoteIdentity
+        }
+        if fields.contains(.remoteToken) {
+            self.remoteToken = draft.remoteToken
+        }
+        self.isApplyingGatewayConfig = false
+    }
 }
 
 extension AppState {
@@ -1503,76 +1605,6 @@ extension AppState {
     enum RemoteTransport: String {
         case ssh
         case direct
-    }
-
-    enum GatewayConfigField: String, CaseIterable {
-        case mode = "gateway.mode"
-        case remoteTransport = "gateway.remote.transport"
-        case remoteUrl = "gateway.remote.url"
-        case remoteTarget = "gateway.remote.sshTarget"
-        case remoteIdentity = "gateway.remote.sshIdentity"
-        case remoteHostKeyPolicy = "gateway.remote.sshHostKeyPolicy"
-        case remoteToken = "gateway.remote.token"
-
-        var remoteKey: String? {
-            switch self {
-            case .mode:
-                nil
-            case .remoteTransport:
-                "transport"
-            case .remoteUrl:
-                "url"
-            case .remoteTarget:
-                "sshTarget"
-            case .remoteIdentity:
-                "sshIdentity"
-            case .remoteHostKeyPolicy:
-                "sshHostKeyPolicy"
-            case .remoteToken:
-                "token"
-            }
-        }
-    }
-
-    private enum GatewayConfigValue: Equatable {
-        case missing
-        case json(Data)
-    }
-
-    private struct GatewayConfigSnapshot {
-        static let empty = GatewayConfigSnapshot(values: [:])
-        let values: [GatewayConfigField: GatewayConfigValue]
-
-        subscript(field: GatewayConfigField) -> GatewayConfigValue {
-            self.values[field] ?? .missing
-        }
-    }
-
-    struct RemoteGatewayConfigDraft {
-        var transport: RemoteTransport
-        var remoteUrl: String
-        var remoteHost: String?
-        var remoteTarget: String
-        var remoteIdentity: String
-        var remoteToken: String
-        var dirtyFields: Set<GatewayConfigField>
-    }
-
-    struct GatewayConfigSyncDraft {
-        var connectionMode: ConnectionMode
-        var remoteTransport: RemoteTransport
-        var remoteTarget: String
-        var remoteIdentity: String
-        var remoteUrl: String
-        var remoteToken: String
-        var dirtyFields: Set<GatewayConfigField>
-    }
-
-    private struct GatewaySelectionSnapshot: Equatable {
-        let connectionMode: ConnectionMode
-        let remoteTransport: RemoteTransport
-        let remoteUrl: String
-        let remoteTarget: String
     }
 }
 
