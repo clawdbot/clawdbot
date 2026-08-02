@@ -38,11 +38,10 @@ import {
 
 /** Video asset returned by a provider after generation or transformation. */
 export type GeneratedVideoAsset = {
-  /** Raw video bytes. Either buffer or url must be present. */
+  /** Non-empty raw video bytes; may accompany url as a delivery fallback. */
   buffer?: Buffer;
-  /** Pre-signed or provider-hosted URL for the video. When set and buffer is
-   * absent, callers can deliver or download the asset without requiring the
-   * provider to materialize the full file in memory first. */
+  /** Provider-hosted URL returned instead of bytes or alongside them as a delivery fallback.
+   * When buffer is absent, callers can forward or download without materializing the video. */
   url?: string;
   mimeType: string;
   fileName?: string;
