@@ -415,5 +415,6 @@ export function completeEmbeddedAttemptResult(
     emptyAssistantReplyIsSilent,
     hasTerminalOutput,
     silentExpected: attempt.silentExpected,
+    sessionKey: attempt.sessionKey,
   });
 }

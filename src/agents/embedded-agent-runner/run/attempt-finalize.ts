@@ -1,6 +1,8 @@
 import { formatErrorMessage } from "../../../infra/errors.js";
+import { getDiagnosticSessionState } from "../../../logging/diagnostic-session-state.js";
 import { buildTrajectoryArtifacts } from "../../../trajectory/metadata.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
+import { recordVisibleReply } from "../../visible-loop-detection.js";
 import {
   resolveAttemptTrajectoryTerminal,
   resolveTerminalAssistantTexts,
@@ -15,13 +17,34 @@ type FinalizeEmbeddedAttemptParams = {
   emptyAssistantReplyIsSilent: boolean;
   hasTerminalOutput: boolean;
   silentExpected?: boolean;
+  /** Session key for visible-reply loop detection. Optional — when
+   * provided, the final assistant visible text + plan are recorded
+   * onto the diagnostic session state so the before-tool-call hook
+   * can detect same_visible_reply / same_plan_rewrite patterns. */
+  sessionKey?: string;
 };
 
 /** Classifies the completed attempt and records its terminal trajectory artifacts. */
 export function finalizeEmbeddedAttempt(
   params: FinalizeEmbeddedAttemptParams,
 ): EmbeddedRunAttemptResult {
-  const { result, trajectoryRecorder } = params;
+  const { result, trajectoryRecorder, sessionKey } = params;
+  const terminalVisibleText = resolveFinalAssistantVisibleText(result.lastAssistant);
+  // Visible-reply loop detection: record the final assistant visible
+  // text onto the diagnostic session state so the next
+  // before-tool-call hook can detect same_visible_reply /
+  // same_plan_rewrite patterns. The plan isn't available here yet
+  // (the assistant's plan update is delivered via tool calls in the
+  // same turn); we record undefined for plan and let the next
+  // before-tool-call invocation populate it from a later phase if
+  // needed. See src/agents/visible-loop-detection.ts.
+  if (sessionKey && terminalVisibleText) {
+    const sessionState = getDiagnosticSessionState({ sessionKey });
+    if (!sessionState.visibleReplyHistory) {
+      sessionState.visibleReplyHistory = [];
+    }
+    recordVisibleReply(sessionState.visibleReplyHistory, terminalVisibleText, undefined);
+  }
   const terminalState = projectAgentRunAttemptTerminal(result.terminal);
   const terminalAssistantTexts = resolveTerminalAssistantTexts({
     assistantTexts: result.assistantTexts,

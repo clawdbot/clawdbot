@@ -1,4 +1,6 @@
 // Process-local session-state tracker used by diagnostic stuck-session detection.
+import type { VisibleReplyRecord } from "../agents/visible-loop-detection.js";
+
 export type SessionStateValue = "idle" | "processing" | "waiting";
 
 /** Mutable diagnostic state for one session key or id. */
@@ -16,6 +18,12 @@ export type SessionState = {
   toolCallHistory?: ToolCallRecord[];
   toolLoopWarningBuckets?: Map<string, number>;
   commandPollCounts?: Map<string, { count: number; lastPollAt: number }>;
+  /** Recent assistant-visible replies + plan payloads for visible-reply
+   * loop detection. Sliding window, capped at VISIBLE_REPLY_HISTORY_SIZE
+   * (8 entries). Owned by the embedded-agent-runner; read by the
+   * before-tool-call hook to fire same_visible_reply /
+   * same_plan_rewrite alerts. See src/agents/visible-loop-detection.ts. */
+  visibleReplyHistory?: VisibleReplyRecord[];
 };
 
 /** Compact record of a recent tool call used for loop diagnostics. */

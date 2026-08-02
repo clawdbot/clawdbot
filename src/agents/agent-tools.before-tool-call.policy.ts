@@ -108,6 +108,8 @@ export async function runBeforeToolCallHook(args: {
         logToolLoopAction,
         detectToolCallLoop,
         recordToolCall,
+        detectVisibleReplyLoop,
+        recordVisibleReply,
       } = await loadBeforeToolCallRuntime();
       const sessionState = getDiagnosticSessionState({
         sessionKey: args.ctx.sessionKey,
@@ -122,6 +124,59 @@ export async function runBeforeToolCallHook(args: {
         args.ctx.loopDetection,
         loopScope,
       );
+
+      // Visible-reply loop detection: fires on same_visible_reply and
+      // same_plan_rewrite patterns that the tool-level detector misses.
+      // See src/agents/visible-loop-detection.ts for the full design.
+      const visibleReplyHistory = sessionState.visibleReplyHistory ?? [];
+      const lastVisibleReply = visibleReplyHistory.at(-1);
+      const visibleLoopResult = detectVisibleReplyLoop(
+        visibleReplyHistory,
+        lastVisibleReply?.text ?? "",
+        undefined,
+        args.ctx.loopDetection?.enabled === false ? { enabled: false } : undefined,
+        { runId: args.ctx.runId, sessionKey: args.ctx.sessionKey },
+      );
+
+      if (visibleLoopResult.stuck) {
+        if (visibleLoopResult.level === "critical") {
+          log.error(
+            `Blocking ${toolName} due to critical visible-reply loop: ${visibleLoopResult.message}`,
+          );
+          logToolLoopAction({
+            sessionKey: args.ctx.sessionKey,
+            sessionId: args.ctx.sessionId,
+            toolName,
+            level: "critical",
+            action: "block",
+            detector: visibleLoopResult.detector,
+            count: visibleLoopResult.count,
+            message: visibleLoopResult.message,
+          });
+          return {
+            blocked: true,
+            kind: "veto",
+            deniedReason: "tool-loop",
+            reason: visibleLoopResult.message,
+            params,
+          };
+        }
+        const baseWarningKey = visibleLoopResult.warningKey ?? `${visibleLoopResult.detector}`;
+        const warningKey = args.ctx.runId ? `${args.ctx.runId}:${baseWarningKey}` : baseWarningKey;
+        if (shouldEmitLoopWarning(sessionState, warningKey, visibleLoopResult.count)) {
+          log.warn(`Visible-reply loop warning: ${visibleLoopResult.message}`);
+          logToolLoopAction({
+            sessionKey: args.ctx.sessionKey,
+            sessionId: args.ctx.sessionId,
+            toolName,
+            level: "warning",
+            action: "warn",
+            detector: visibleLoopResult.detector,
+            count: visibleLoopResult.count,
+            message: visibleLoopResult.message,
+          });
+        }
+      }
 
       if (args.ctx.loopDetection?.enabled === true) {
         // Each concurrent policy/approval wait owns a token. Releasing one call
