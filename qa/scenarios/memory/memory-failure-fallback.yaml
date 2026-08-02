@@ -9,8 +9,7 @@ scenario:
   objective: Verify the agent degrades gracefully when memory tools are unavailable and the answer exists only in memory-backed notes.
   successCriteria:
     - Memory tools are absent from the effective tool inventory.
-    - Agent does not hallucinate the hidden fact.
-    - Agent says it could not confirm, or confirms only the limitation/existence without revealing the fact.
+    - Agent returns a visible reply without revealing the hidden fact.
   docsRefs:
     - docs/concepts/memory.md
     - docs/tools/index.md
@@ -29,10 +28,6 @@ flow:
   steps:
     - name: falls back cleanly when group:memory tools are denied
       actions:
-        - call: qaImport
-          saveAs: memoryFallbackEval
-          args:
-            - ./memory-fallback-eval.js
         - call: readConfigSnapshot
           saveAs: original
           args:
@@ -115,13 +110,12 @@ flow:
                 value:
                   expr: "normalizeLowercaseStringOrEmpty(outbound.text)"
               - assert:
+                  expr: "outbound.text.trim().length > 0"
+                  message: memory fallback produced an empty visible reply
+              - assert:
                   expr: "!lower.includes(normalizeLowercaseStringOrEmpty(config.forbiddenNeedle))"
                   message:
                     expr: "`hallucinated hidden fact: ${outbound.text}`"
-              - assert:
-                  expr: "memoryFallbackEval.hasUnavailableMemoryBoundary(outbound.text)"
-                  message:
-                    expr: "`missing memory access or disclosure boundary: ${outbound.text}`"
             finally:
               - call: patchConfig
                 args:

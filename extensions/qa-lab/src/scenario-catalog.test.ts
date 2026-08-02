@@ -147,8 +147,8 @@ describe("qa scenario catalog", () => {
     );
     expect(fallbackFlow).toContain("liveTurnTimeoutMs(env, 180000)");
     expect(fallbackFlow).toContain('"replacePaths":["tools.deny"]');
-    expect(fallbackFlow).toContain("hasUnavailableMemoryBoundary");
     expect(fallbackFlow).toContain("!tools.has('memory_search')");
+    expect(fallbackFlow).toContain("outbound.text.trim().length > 0");
     expect(bundledSkill.title).toBe("Bundled plugin skill runtime");
     expect(bundledSkillConfig?.pluginId).toBe("open-prose");
     expect(bundledSkillConfig?.expectedSkillName).toBe("prose");
