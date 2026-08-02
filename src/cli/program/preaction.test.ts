@@ -222,12 +222,31 @@ describe("registerPreActionHooks", () => {
     programLocal.command("secrets").action(() => {});
     const skills = programLocal.command("skills");
     skills.option("--json").action(() => {});
-    for (const skillCommand of ["list", "check"]) {
+    for (const skillCommand of ["list", "check", "info", "search"]) {
       skills
         .command(skillCommand)
+        .argument("[value]")
         .option("--json")
         .action(() => {});
     }
+    programLocal
+      .command("hooks")
+      .option("--json")
+      .action(() => {});
+    const memory = programLocal.command("memory");
+    memory
+      .command("status")
+      .option("--agent <id>")
+      .option("--index")
+      .option("--fix")
+      .option("--json")
+      .action(() => {});
+    memory
+      .command("search")
+      .argument("[query]")
+      .option("--agent <id>")
+      .option("--json")
+      .action(() => {});
     for (const skillCommand of ["install", "verify"]) {
       skills
         .command(skillCommand)
@@ -362,6 +381,11 @@ describe("registerPreActionHooks", () => {
     ["skills"],
     ["skills", "list"],
     ["skills", "check"],
+    ["skills", "info"],
+    ["skills", "search"],
+    ["hooks"],
+    ["memory", "status"],
+    ["memory", "search"],
     ["agents", "bindings"],
     ["gateway", "stability"],
     ["gateway", "usage-cost"],

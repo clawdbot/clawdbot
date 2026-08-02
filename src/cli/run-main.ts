@@ -1184,9 +1184,10 @@ async function runCliWithPreparedOutputMode(
   const readBestEffortCliConfig = async (): Promise<OpenClawConfig> => {
     if (!bestEffortConfigPromise) {
       bestEffortConfigPromise = import("../config/io.js").then(({ readBestEffortConfig }) =>
-        readBestEffortConfig(
-          isolateProxyConfigEnv ? { isolateEnv: true, observe: false } : undefined,
-        ),
+        readBestEffortConfig({
+          ...(isolateProxyConfigEnv ? { isolateEnv: true, observe: false } : {}),
+          skipPluginValidation: true,
+        }),
       );
     }
     return await bestEffortConfigPromise;
@@ -1542,11 +1543,17 @@ async function runCliWithPreparedOutputMode(
       });
       if (!shouldSkipPluginRegistration) {
         const config = await startupTrace.measure("register-plugin-commands", async () => {
-          const { registerPluginCliCommandsFromValidatedConfig } =
-            await import("../plugins/cli.js");
+          const [{ registerPluginCliCommandsFromValidatedConfig }, { resolveCliStartupPolicy }] =
+            await Promise.all([import("../plugins/cli.js"), import("./command-startup-policy.js")]);
+          const startupPolicy = resolveCliStartupPolicy({
+            argv: parseArgv,
+            commandPath: invocation.commandPath,
+            jsonOutputMode: suppressStartupProgress,
+          });
           return await registerPluginCliCommandsFromValidatedConfig(program, undefined, undefined, {
             mode: "lazy",
             primary,
+            skipPluginValidation: startupPolicy.skipConfigGuard,
           });
         });
         if (config) {
