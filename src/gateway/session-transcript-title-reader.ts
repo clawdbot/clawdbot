@@ -165,27 +165,55 @@ export function readSessionTitleFieldsFromTranscriptBatch(
   opts?: { includeInterSession?: boolean },
 ): SessionTitleFields[] {
   const targets = scopes.map(resolveTranscriptReadTarget);
-  const probes = readSessionTranscriptTitleProbeBatch(scopes);
   const variant = opts?.includeInterSession === true ? "includeInterSession" : "default";
-  return targets.map((target, index) => {
-    const probe = probes[index];
-    if (!probe) {
-      return readSqliteTitleFields(target, opts);
-    }
+  const results = new Map<number, SessionTitleFields>();
+  const misses: Array<{
+    cacheKey: string;
+    index: number;
+    scope: SessionTranscriptReadScope;
+    target: ResolvedTranscriptReadTarget;
+  }> = [];
+
+  for (const [index, target] of targets.entries()) {
     const cacheKey = sqliteTitleFieldCacheKey(target);
     const cached = sqliteTitleFieldCache.get(cacheKey);
+    const cachedFields = cached?.fields[variant];
+    if (cached && cachedFields) {
+      // Keep the single-row generation/maxSeq validity contract, but validate only warm rows;
+      // cold or changed rows still collapse into the one store-batched probe below.
+      const watermark = readSessionTranscriptWatermark(scopes[index]);
+      if (cached.generation === watermark.generation && cached.maxSeq === watermark.maxSeq) {
+        setSqliteTitleFieldCache(cacheKey, cached);
+        results.set(index, { ...cachedFields });
+        continue;
+      }
+    }
+    misses.push({ cacheKey, index, scope: scopes[index], target });
+  }
+
+  const probes =
+    misses.length > 0 ? readSessionTranscriptTitleProbeBatch(misses.map((miss) => miss.scope)) : [];
+  for (const [probeIndex, miss] of misses.entries()) {
+    const probe = probes[probeIndex];
+    if (!probe) {
+      results.set(miss.index, readSqliteTitleFields(miss.target, opts));
+      continue;
+    }
+    const cached = sqliteTitleFieldCache.get(miss.cacheKey);
     const cachedFields =
       cached?.generation === probe.generation && cached.maxSeq === probe.maxSeq
         ? cached.fields[variant]
         : undefined;
     if (cached && cachedFields) {
-      setSqliteTitleFieldCache(cacheKey, cached);
-      return Object.assign({}, cachedFields);
+      setSqliteTitleFieldCache(miss.cacheKey, cached);
+      results.set(miss.index, { ...cachedFields });
+      continue;
     }
     const firstUser = findFirstTitleUserMessage(probe.head, opts?.includeInterSession === true);
     const lastText = findLastMessageText(probe.tail);
     if (probe.totalMessages > SQLITE_TITLE_PROBE_INITIAL_MESSAGES && (!firstUser || !lastText)) {
-      return readSqliteTitleFields(target, opts);
+      results.set(miss.index, readSqliteTitleFields(miss.target, opts));
+      continue;
     }
     const fields = {
       firstUserMessage: firstUser ? extractMessageText(firstUser) : null,
@@ -196,12 +224,20 @@ export function readSessionTitleFieldsFromTranscriptBatch(
         ? cached.fields
         : {};
     fieldsByVariant[variant] = fields;
-    setSqliteTitleFieldCache(cacheKey, {
+    setSqliteTitleFieldCache(miss.cacheKey, {
       generation: probe.generation,
       maxSeq: probe.maxSeq,
       fields: fieldsByVariant,
     });
-    return Object.assign({}, fields);
+    results.set(miss.index, { ...fields });
+  }
+
+  return targets.map((target, index) => {
+    const fields = results.get(index);
+    if (!fields) {
+      throw new Error(`Missing batched title fields for session ${target.sessionId}`);
+    }
+    return fields;
   });
 }
 

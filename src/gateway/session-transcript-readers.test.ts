@@ -35,6 +35,7 @@ vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => {
     ...actual,
     readSessionTranscriptMessageEventPage: vi.fn(actual.readSessionTranscriptMessageEventPage),
     readSessionTranscriptMessageEvents: vi.fn(actual.readSessionTranscriptMessageEvents),
+    readSessionTranscriptTitleProbeBatch: vi.fn(actual.readSessionTranscriptTitleProbeBatch),
   };
 });
 
@@ -483,6 +484,45 @@ describe("session transcript reader facade", () => {
       firstUserMessage: "cached prompt",
       lastMessagePreview: "cached reply",
     });
+    expect(sessionAccessor.readSessionTranscriptMessageEventPage).not.toHaveBeenCalled();
+  });
+
+  test("skips batch title probes while every cached transcript watermark is unchanged", async () => {
+    const scope = await writeSqliteMessages("reader-title-batch-cache-warm", [
+      { role: "user", content: "cached batch prompt" },
+      { role: "assistant", content: "cached batch reply" },
+    ]);
+    expect(readSessionTitleFieldsFromTranscriptBatch([scope])).toEqual([
+      { firstUserMessage: "cached batch prompt", lastMessagePreview: "cached batch reply" },
+    ]);
+    vi.clearAllMocks();
+
+    expect(readSessionTitleFieldsFromTranscriptBatch([scope])).toEqual([
+      { firstUserMessage: "cached batch prompt", lastMessagePreview: "cached batch reply" },
+    ]);
+    expect(sessionAccessor.readSessionTranscriptTitleProbeBatch).not.toHaveBeenCalled();
+    expect(sessionAccessor.readSessionTranscriptMessageEventPage).not.toHaveBeenCalled();
+  });
+
+  test("reprobes cached batch title fields after an append advances max seq", async () => {
+    const sessionId = "reader-title-batch-cache-append";
+    const scope = await writeSqliteMessages(sessionId, [
+      { role: "user", content: "batch append prompt" },
+      { role: "assistant", content: "first batch reply" },
+    ]);
+    expect(readSessionTitleFieldsFromTranscriptBatch([scope])[0]?.lastMessagePreview).toBe(
+      "first batch reply",
+    );
+    await persistSessionTranscriptTurn(scope, {
+      messages: [{ message: { role: "assistant", content: "appended batch reply" } }],
+      touchSessionEntry: false,
+    });
+    vi.clearAllMocks();
+
+    expect(readSessionTitleFieldsFromTranscriptBatch([scope])[0]?.lastMessagePreview).toBe(
+      "appended batch reply",
+    );
+    expect(sessionAccessor.readSessionTranscriptTitleProbeBatch).toHaveBeenCalledOnce();
     expect(sessionAccessor.readSessionTranscriptMessageEventPage).not.toHaveBeenCalled();
   });
 
