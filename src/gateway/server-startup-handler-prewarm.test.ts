@@ -33,6 +33,10 @@ const mocks = vi.hoisted(() => ({
     mocks.events.push(`runtime-plugins.${params.workspaceDir ?? ""}`);
     return undefined;
   }),
+  loadResolvedPublishedModelCatalogOwner: vi.fn(async (params: { agentId: string }) => {
+    mocks.events.push(`model-catalog.${params.agentId}`);
+    return {};
+  }),
 }));
 
 vi.mock("../config/sessions/combined-store-gateway.js", () => ({
@@ -54,6 +58,10 @@ vi.mock("./server-methods/session-catalog.js", () => ({
 
 vi.mock("../agents/runtime-plugins.js", () => ({
   ensureRuntimePluginsLoaded: mocks.ensureRuntimePluginsLoaded,
+}));
+
+vi.mock("../agents/prepared-model-catalog.js", () => ({
+  loadResolvedPublishedModelCatalogOwner: mocks.loadResolvedPublishedModelCatalogOwner,
 }));
 
 vi.mock("../agents/agent-scope-config.js", async (importOriginal) => {
@@ -79,6 +87,7 @@ beforeEach(() => {
   mocks.listManagedPlugins.mockClear();
   mocks.prewarmSessionCatalogList.mockClear();
   mocks.ensureRuntimePluginsLoaded.mockClear();
+  mocks.loadResolvedPublishedModelCatalogOwner.mockClear();
 });
 
 afterEach(() => {
@@ -109,6 +118,8 @@ describe("scheduleGatewayHandlerPrewarm", () => {
       "sessions.rows.research",
       "runtime-plugins./ws/main",
       "runtime-plugins./ws/research",
+      "model-catalog.main",
+      "model-catalog.research",
       "plugins",
       "catalog.main",
       "catalog.research",
@@ -276,6 +287,8 @@ describe("scheduleGatewayHandlerPrewarm", () => {
       "sessions.count",
       "runtime-plugins./ws/main",
       "runtime-plugins./ws/research",
+      "model-catalog.main",
+      "model-catalog.research",
       "plugins",
     ]);
     expect(mocks.prewarmSessionCatalogList).not.toHaveBeenCalled();

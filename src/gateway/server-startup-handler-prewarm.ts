@@ -95,6 +95,18 @@ function dashboardDataPrewarmItems(
         ensureRuntimePluginsLoaded({ config: cfg, workspaceDir });
       },
     })),
+    // getReply resolves the published model-catalog owner per agent before its
+    // first traced phase; a cold catalog runs live provider discovery (5s
+    // timeout per provider) plus a manifest-model scan — measured 16s on an
+    // agent's first message. Warm each agent's catalog after the registries.
+    ...agentIds.map((agentId) => ({
+      name: `model-catalog.${agentId}`,
+      load: async () => {
+        const { loadResolvedPublishedModelCatalogOwner } =
+          await import("../agents/prepared-model-catalog.js");
+        await loadResolvedPublishedModelCatalogOwner({ agentId });
+      },
+    })),
     {
       name: "plugins",
       load: async () => {
