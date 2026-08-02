@@ -481,8 +481,11 @@ export function resolveCliSessionSqliteTranscriptScope(params: CliSessionTranscr
       storePath: string;
     }
   | undefined {
-  const marker = parseSqliteSessionFileMarker(params.sessionFile);
-  if (!marker) {
+  const sessionFile = params.sessionFile.trim();
+  const sessionKey = params.sessionKey?.trim();
+  const marker = parseSqliteSessionFileMarker(sessionFile);
+  const hasCanonicalSessionKeyTarget = Boolean(sessionKey && sessionFile === sessionKey);
+  if (!marker && !hasCanonicalSessionKeyTarget) {
     return undefined;
   }
   const { sessionAgentId } = resolveSessionAgentIds({
@@ -490,7 +493,7 @@ export function resolveCliSessionSqliteTranscriptScope(params: CliSessionTranscr
     config: params.config,
     agentId: params.agentId,
   });
-  if (marker.sessionId !== params.sessionId || marker.agentId !== sessionAgentId) {
+  if (marker && (marker.sessionId !== params.sessionId || marker.agentId !== sessionAgentId)) {
     return undefined;
   }
   // Persisted markers retain their old absolute store after a supported state
@@ -502,7 +505,7 @@ export function resolveCliSessionSqliteTranscriptScope(params: CliSessionTranscr
   return {
     agentId: sessionAgentId,
     sessionId: params.sessionId,
-    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+    ...(sessionKey ? { sessionKey } : {}),
     storePath,
   };
 }
@@ -551,11 +554,8 @@ function finalizeCliSessionEntries(params: {
 
 async function loadCliSessionEntries(params: CliSessionTranscriptParams): Promise<unknown[]> {
   try {
-    if (params.sessionFile.trim().startsWith("sqlite:")) {
-      const transcriptScope = resolveCliSessionSqliteTranscriptScope(params);
-      if (!transcriptScope) {
-        return [];
-      }
+    const transcriptScope = resolveCliSessionSqliteTranscriptScope(params);
+    if (transcriptScope) {
       const transcript = await loadTranscriptTailEventsByJsonlBytes(
         transcriptScope,
         MAX_CLI_SESSION_HISTORY_FILE_BYTES,
@@ -571,6 +571,9 @@ async function loadCliSessionEntries(params: CliSessionTranscriptParams): Promis
         truncated: transcript.truncated,
         excludeMessageIdempotencyKey: params.excludeMessageIdempotencyKey,
       });
+    }
+    if (params.sessionFile.trim().startsWith("sqlite:")) {
+      return [];
     }
     const { sessionFile, sessionsDir } = resolveSafeCliSessionFile(params);
     const entryStat = await fsp.lstat(sessionFile);
@@ -651,9 +654,12 @@ export async function hasCliSessionTranscript(
   params: CliSessionTranscriptParams,
 ): Promise<boolean> {
   try {
+    const transcriptScope = resolveCliSessionSqliteTranscriptScope(params);
+    if (transcriptScope) {
+      return hasTranscriptEventsSync(transcriptScope);
+    }
     if (params.sessionFile.trim().startsWith("sqlite:")) {
-      const transcriptScope = resolveCliSessionSqliteTranscriptScope(params);
-      return transcriptScope ? hasTranscriptEventsSync(transcriptScope) : false;
+      return false;
     }
     const { sessionFile, sessionsDir } = resolveSafeCliSessionFile(params);
     const entryStat = await fsp.lstat(sessionFile);
