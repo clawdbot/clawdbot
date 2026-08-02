@@ -1,7 +1,10 @@
 // Stuck session recovery runtime tests cover recovery inspection and event output.
-import fs from "node:fs";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  appendTranscriptMessageSync,
+  replaceSessionEntry,
+} from "../config/sessions/session-accessor.js";
 import { saveCronStore } from "../cron/store.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 
@@ -333,14 +336,14 @@ describe("stuck session recovery", () => {
           },
         ],
       });
-      fs.mkdirSync(path.join(tempDir, "agents", "clawblocker", "sessions"), {
-        recursive: true,
-      });
-      fs.writeFileSync(
-        path.join(tempDir, "agents", "clawblocker", "sessions", "run-456.jsonl"),
-        JSON.stringify({
-          message: { role: "assistant", content: "There are 40 cached mentions." },
-        }) + "\n",
+      const sessionKey = "agent:clawblocker:cron:job-123:run:run-456";
+      await replaceSessionEntry(
+        { agentId: "clawblocker", sessionKey },
+        { sessionId: "run-456", updatedAt: 1 },
+      );
+      appendTranscriptMessageSync(
+        { agentId: "clawblocker", sessionId: "run-456", sessionKey },
+        { message: { role: "assistant", content: "There are 40 cached mentions." } },
       );
       mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue("run-456");
       mocks.abortEmbeddedAgentRun.mockReturnValue(true);
@@ -348,7 +351,7 @@ describe("stuck session recovery", () => {
 
       await recoverStuckDiagnosticSession({
         sessionId: "run-456",
-        sessionKey: "agent:clawblocker:cron:job-123:run:run-456",
+        sessionKey,
         ageMs: 629_000,
         allowActiveAbort: true,
       });

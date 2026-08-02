@@ -763,6 +763,9 @@ export function buildFailoverRemediationHint(err: unknown): string | undefined {
   if (!provider) {
     return undefined;
   }
+  if (provider === "google-gemini-cli") {
+    return `Authenticate in Gemini CLI directly, or configure a supported Google API key with: ${formatCliCommand("openclaw configure")}`;
+  }
   const command = buildProviderReauthCommand(provider);
   return command ? `Re-authenticate with: ${command}` : undefined;
 }

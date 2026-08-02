@@ -19,6 +19,7 @@ type WizardStepControlsProps = {
   onAnswer: (value: unknown, includeValue?: boolean) => void;
   presentation?: "channels";
   answerLabel?: string;
+  confirmAffirmativeLabel?: string;
 };
 
 function stepClass(props: WizardStepControlsProps, name: string): string {
@@ -263,7 +264,7 @@ function renderConfirmStep(props: WizardStepControlsProps) {
           ?disabled=${props.busy}
           @click=${() => props.onAnswer(answer)}
         >
-          ${t(answer ? "common.yes" : "common.no")}
+          ${answer ? (props.confirmAffirmativeLabel ?? t("common.yes")) : t("common.no")}
         </button>`,
       )}
     </div>

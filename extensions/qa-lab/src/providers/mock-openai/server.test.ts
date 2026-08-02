@@ -916,6 +916,79 @@ describe("qa mock openai server", () => {
     expect(body).toContain(command);
   });
 
+  it("dispatches structured Slack commentary, exec, and final phases", async () => {
+    const server = await startMockServer();
+    const suffix = "A1B2C3D4";
+    const commentaryMarker = `SLACK-QA-COMMENTARY-${suffix}`;
+    const toolMarker = `SLACK-QA-TOOL-${suffix}`;
+    const finalMarker = `SLACK-QA-COMMENTARY-DONE-${suffix}`;
+    const command = `grep '${toolMarker}' /dev/null || sleep 5`;
+    const prompt = `${commentaryMarker} ${command} ${finalMarker}`;
+    const stalePrompt =
+      "SLACK-QA-COMMENTARY-11112222 grep 'SLACK-QA-TOOL-11112222' /dev/null || sleep 5 SLACK-QA-COMMENTARY-DONE-11112222";
+    const currentEnvelope = `${stalePrompt}\n${prompt}`;
+
+    const planResponse = await postStreamingResponses(server, {
+      tools: [{ type: "function", name: "exec" }],
+      input: [
+        makeUserInput(stalePrompt),
+        makeToolOutputWithCallId("call_stale_slack_progress", ""),
+        makeUserInput(currentEnvelope),
+      ],
+    });
+    expect(planResponse.status).toBe(200);
+    const events = (await planResponse.text())
+      .split("\n")
+      .filter((line) => line.startsWith("data: {"))
+      .map((line) => requireRecord(JSON.parse(line.slice("data: ".length)), "Slack SSE event"));
+    const completedItems = events
+      .filter((event) => event.type === "response.output_item.done")
+      .map((event) => requireRecord(event.item, "Slack completed item"));
+    expect(completedItems).toHaveLength(2);
+    expect(completedItems[0]).toMatchObject({
+      type: "message",
+      phase: "commentary",
+      content: [{ type: "output_text", text: commentaryMarker }],
+    });
+    const exec = completedItems[1];
+    if (!exec) {
+      throw new Error("expected Slack progress exec output item");
+    }
+    expect(exec).toMatchObject({ type: "function_call", name: "exec" });
+    expect(outputToolArgsFromItem(exec)).toEqual({ command });
+    expect(JSON.stringify(events)).not.toContain(finalMarker);
+
+    const final = await expectNonStreamingResponsesJson(server, {
+      tools: [{ type: "function", name: "exec" }],
+      input: [
+        makeUserInput(stalePrompt),
+        makeToolOutputWithCallId("call_stale_slack_progress", ""),
+        makeUserInput(currentEnvelope),
+        makeToolOutputWithCallId(outputToolCallId(exec, "call_slack_progress"), ""),
+      ],
+    });
+    expect(outputItem(final)).toMatchObject({ type: "message", phase: "final_answer" });
+    expect(outputText(final)).toBe(finalMarker);
+    expect(outputItems(final)).toHaveLength(1);
+    expect(JSON.stringify(final)).not.toContain(commentaryMarker);
+  });
+
+  it("does not dispatch Slack progress when structured marker suffixes disagree", async () => {
+    const server = await startMockServer();
+    const payload = await expectNonStreamingResponsesJson(server, {
+      tools: [{ type: "function", name: "exec" }],
+      input: [
+        makeUserInput(
+          "SLACK-QA-COMMENTARY-A1B2C3D4 grep 'SLACK-QA-TOOL-11112222' /dev/null || sleep 5 SLACK-QA-COMMENTARY-DONE-A1B2C3D4",
+        ),
+      ],
+    });
+
+    expect(outputItems(payload)).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ name: "exec" })]),
+    );
+  });
+
   it("honors exact replies after QA kickoff reads without marker wording", async () => {
     const server = await startMockServer();
     const prompt =
@@ -4588,6 +4661,38 @@ describe("qa mock openai server", () => {
       expectedOutput: "Successfully applied structured patch",
       structuredError: false,
     },
+    {
+      label: "empty native patch output",
+      prompt:
+        "tool search qa check target=apply_patch. Call apply_patch exactly once and then summarize.",
+      output: "",
+      expectedOutput: "",
+      structuredError: false,
+    },
+    {
+      label: "empty structured native patch output",
+      prompt:
+        "tool search qa check target=apply_patch. Call apply_patch exactly once and then summarize.",
+      output: [],
+      expectedOutput: "",
+      structuredError: false,
+    },
+    {
+      label: "non-text native patch output",
+      prompt:
+        "tool search qa check target=apply_patch. Call apply_patch exactly once and then summarize.",
+      output: [{ type: "input_image", image_url: "data:image/png;base64,AA==" }],
+      expectedOutput: "",
+      structuredError: false,
+    },
+    {
+      label: "empty failed native patch output",
+      prompt:
+        "tool search qa failure target=apply_patch. Exercise the denied-input path once and then summarize.",
+      output: "",
+      expectedOutput: "",
+      structuredError: true,
+    },
   ])("links and completes $label custom-tool outputs", async (testCase) => {
     const server = await startMockServer();
     const planResponse = await postNonStreamingResponses(server, {
@@ -4624,6 +4729,33 @@ describe("qa mock openai server", () => {
     }
     expect(debug).not.toHaveProperty("plannedToolName");
   });
+
+  it.each([false, true])(
+    "does not replay an empty function-tool result when stream=%s",
+    async (stream) => {
+      const server = await startMockServer();
+      const response = await postResponses(server, {
+        stream,
+        input: [
+          makeUserInput(
+            "tool search qa check target=apply_patch. Call apply_patch exactly once and then summarize.",
+          ),
+          makeToolOutputWithCallId("call_empty_patch", ""),
+        ],
+      });
+
+      expect(response.status).toBe(200);
+      const body = await response.text();
+      expect(body).toContain('"type":"message"');
+      expect(body).not.toContain('"type":"function_call"');
+      const debug = requireRecord(
+        await fetch(`${server.baseUrl}/debug/last-request`).then((result) => result.json()),
+        "empty function-tool debug request",
+      );
+      expect(debug).toMatchObject({ toolOutput: "", toolOutputCallId: "call_empty_patch" });
+      expect(debug).not.toHaveProperty("plannedToolName");
+    },
+  );
 
   it("plans Codex Responses Lite handoff from declared developer additional tools", async () => {
     const server = await startMockServer();
@@ -5883,6 +6015,54 @@ describe("qa mock openai server", () => {
     };
     expect(debug.toolOutputCallId).toBe("toolu_mock_read_error");
     expect(debug.toolOutputStructuredError).toBe(true);
+  });
+
+  it.each([
+    { label: "empty", content: "", isError: false },
+    { label: "whitespace", content: "  ", isError: false },
+    { label: "empty failed", content: [], isError: true },
+  ])("preserves $label Anthropic tool results without replay", async ({ content, isError }) => {
+    const server = await startMockServer();
+    const callId = "toolu_empty_patch";
+    const response = await postJson(server, "/v1/messages", {
+      model: "claude-opus-4-8",
+      max_tokens: 256,
+      tools: [{ name: "apply_patch", input_schema: { type: "object", properties: {} } }],
+      messages: [
+        makeAnthropicUserText(
+          "tool search qa check target=apply_patch. Call apply_patch exactly once and then summarize.",
+        ),
+        {
+          role: "assistant",
+          content: [{ type: "tool_use", id: callId, name: "apply_patch", input: {} }],
+        },
+        {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: callId,
+              content,
+              ...(isError ? { is_error: true } : {}),
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(response.status).toBe(200);
+    const body = requireRecord(await response.json(), "Anthropic empty tool completion");
+    expect(body.stop_reason).toBe("end_turn");
+    expect(requireArray(body.content, "Anthropic response content")).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ type: "tool_use" })]),
+    );
+    const debug = requireRecord(
+      await fetch(`${server.baseUrl}/debug/last-request`).then((result) => result.json()),
+      "Anthropic empty tool debug request",
+    );
+    expect(debug.toolOutputCallId).toBe(callId);
+    expect(debug.toolOutputStructuredError ?? false).toBe(isError);
+    expect(debug).not.toHaveProperty("plannedToolName");
   });
 
   it("replays one signed Anthropic thinking error for each independent scenario", async () => {

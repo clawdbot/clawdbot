@@ -21954,6 +21954,11 @@
       "translated": "Installatiedetails kopiëren"
     },
     {
+      "id": "native.apple.c90ec3f0f60d21bc",
+      "source": "Choose a different AI…",
+      "translated": "Kies een andere AI…"
+    },
+    {
       "id": "native.apple.e0458fcb8c0536ea",
       "source": "No usable AI access found on this Gateway",
       "translated": "Geen bruikbare AI-toegang gevonden op deze Gateway"
@@ -22184,26 +22189,6 @@
       "translated": "Fout kopiëren"
     },
     {
-      "id": "native.apple.7dee24e5bf088dd5",
-      "source": "\\(incomplete) \\(Self.memoryNoun(incomplete)) could not be imported.",
-      "translated": "\\(incomplete) \\(Self.memoryNoun(incomplete)) konden niet worden geïmporteerd."
-    },
-    {
-      "id": "native.apple.84189c39ea5803c6",
-      "source": "The Gateway returned an inconsistent provider plan. Try planning again.",
-      "translated": "De Gateway heeft een inconsistent providerplan geretourneerd. Probeer opnieuw een plan te maken."
-    },
-    {
-      "id": "native.apple.4c9e75d64cbc5cc2",
-      "source": "The Gateway did not return a usable import plan. Try planning again.",
-      "translated": "De Gateway heeft geen bruikbaar importplan geretourneerd. Probeer opnieuw een plan te maken."
-    },
-    {
-      "id": "native.apple.2070bf43a67680ee",
-      "source": "The Gateway could not plan \\(plan.summary.errors) \\(Self.memoryNoun(plan.summary.errors)). Try again.",
-      "translated": "De Gateway kon geen plan maken voor \\(plan.summary.errors) \\(Self.memoryNoun(plan.summary.errors)). Probeer het opnieuw."
-    },
-    {
       "id": "native.apple.ba758aa97c24ffe6",
       "source": "Wake up, my friend!",
       "translated": "Word wakker, mijn vriend!"
@@ -22254,7 +22239,12 @@
       "translated": "Aanbevolen"
     },
     {
-      "id": "native.apple.78d1ad73762a7ce8",
+      "id": "native.apple.6ed12b86d399b69d",
+      "source": "Authenticate with your Gateway",
+      "translated": "Verifieer met je Gateway"
+    },
+    {
+      "id": "native.apple.e319780979ae71d1",
       "source": "Connect your AI",
       "translated": "Verbind je AI"
     },
@@ -22262,106 +22252,6 @@
       "id": "native.apple.c8a2f8dc424fe447",
       "source": "Back",
       "translated": "Terug"
-    },
-    {
-      "id": "native.apple.7ca0977d5f73356d",
-      "source": "Bring your memories along",
-      "translated": "Neem je herinneringen mee"
-    },
-    {
-      "id": "native.apple.b57ee4f83cff23f3",
-      "source": "OpenClaw can bring useful context from AI tools you already use into your new assistant.",
-      "translated": "OpenClaw kan nuttige context uit AI-tools die je al gebruikt meenemen naar je nieuwe assistent."
-    },
-    {
-      "id": "native.apple.46cab71d748860b8",
-      "source": "Looking for memories…",
-      "translated": "Zoeken naar herinneringen…"
-    },
-    {
-      "id": "native.apple.c9e5f1aebe85e201",
-      "source": "Checking supported AI tools on this Mac.",
-      "translated": "Ondersteunde AI-tools op deze Mac controleren."
-    },
-    {
-      "id": "native.apple.77290f36f36f00e5",
-      "source": "No memories to import",
-      "translated": "Geen herinneringen om te importeren"
-    },
-    {
-      "id": "native.apple.e5cca7b9f082ace9",
-      "source": "You can import memories later from the dashboard.",
-      "translated": "Je kunt herinneringen later importeren via het dashboard."
-    },
-    {
-      "id": "native.apple.963add2f12fd18cb",
-      "source": "Import memories",
-      "translated": "Herinneringen importeren"
-    },
-    {
-      "id": "native.apple.9db369e036a38a29",
-      "source": "Importing memories…",
-      "translated": "Herinneringen importeren…"
-    },
-    {
-      "id": "native.apple.71b8e38a5e7040ef",
-      "source": "Refresh plan",
-      "translated": "Plan vernieuwen"
-    },
-    {
-      "id": "native.apple.e87bec72cb9c9dbf",
-      "source": "Retry pending imports before refreshing the plan.",
-      "translated": "Probeer importbewerkingen die nog in behandeling zijn opnieuw voordat je het plan vernieuwt."
-    },
-    {
-      "id": "native.apple.f678888102fded6e",
-      "source": "You can skip this and import later from the dashboard’s Memory import page.",
-      "translated": "Je kunt dit overslaan en later importeren via de pagina Geheugenimport in het dashboard."
-    },
-    {
-      "id": "native.apple.36108528c6acc448",
-      "source": "\\(provider.alreadyImportedCount) already imported",
-      "translated": "\\(provider.alreadyImportedCount) al geïmporteerd"
-    },
-    {
-      "id": "native.apple.9b3444de8c9b2acc",
-      "source": "Imported \\(result.migrated) \\(self.memoryLabel(result.migrated)).",
-      "translated": "\\(result.migrated) \\(self.memoryLabel(result.migrated)) geïmporteerd."
-    },
-    {
-      "id": "native.apple.3252fea4dac8669a",
-      "source": "Couldn’t check for memories",
-      "translated": "Kan niet controleren op herinneringen"
-    },
-    {
-      "id": "native.apple.d371deb696de9e6b",
-      "source": "Retry",
-      "translated": "Opnieuw proberen"
-    },
-    {
-      "id": "native.apple.406ae454540725d0",
-      "source": "You can do this later from the dashboard’s Memory import page.",
-      "translated": "Je kunt dit later doen via de pagina Geheugenimport in het dashboard."
-    },
-    {
-      "id": "native.apple.d1b5d99f67dae42e",
-      "source": "Your memories are ready",
-      "translated": "Je herinneringen zijn klaar"
-    },
-    {
-      "id": "native.apple.6dbe5b174271b62a",
-      "source": "Imported \\(imported) \\(self.memoryLabel(imported)) into OpenClaw.",
-      "translated": "\\(imported) \\(self.memoryLabel(imported)) geïmporteerd in OpenClaw."
-    },
-    {
-      "id": "native.apple.d47b887f98e13e24",
-      "source": "\\(result.migrated) imported",
-      "translated": "\\(result.migrated) geïmporteerd"
-    },
-    {
-      "id": "native.apple.6ac3d513f0ec5da7",
-      "source": "You can manage imported memories anytime from the dashboard.",
-      "translated": "Je kunt geïmporteerde herinneringen op elk moment beheren via het dashboard."
     },
     {
       "id": "native.apple.ea8beaeecef15e54",

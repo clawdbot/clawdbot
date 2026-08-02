@@ -4881,7 +4881,7 @@ export const en: TranslationMap = {
       hideConfirm: "Hide this message in this browser? The agent still sees it.",
       hideMessage: "Hide message",
       hideTooltip: "Hide in this browser only",
-      openInCanvas: "Open in canvas",
+      fullContentLoadFailed: "Could not load the full message.",
       reply: "Reply",
       replyToMessage: "Reply to message",
       replyingTo: "Replying to {name}",

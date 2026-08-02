@@ -26,6 +26,7 @@ const MAX_MANIFEST_ENTRY_LIST_BYTES = 8 * 1024;
 // headroom for GitHub latency while preventing one stalled read from consuming
 // the workflow budget.
 const GH_COMMAND_TIMEOUT_MS = 60_000;
+const SUCCESSFUL_PARENT_JOB_CONCLUSIONS = new Set(["neutral", "skipped", "success"]);
 
 const CHILD_DISPATCHES = [
   {
@@ -1506,6 +1507,16 @@ export function releaseCiWatchFingerprint(parent) {
   });
 }
 
+export function terminalParentJobFailures(parent) {
+  return (parent.jobs ?? [])
+    .filter(
+      (job) =>
+        job.status === "completed" &&
+        !SUCCESSFUL_PARENT_JOB_CONCLUSIONS.has(String(job.conclusion ?? "")),
+    )
+    .map((job) => String(job.name || "unnamed parent job"));
+}
+
 function summarizeReleaseCiRun(options) {
   execFileSync(
     process.execPath,
@@ -1548,6 +1559,12 @@ export async function watchReleaseCiRun(options, overrides = {}) {
     if (fingerprint !== previousFingerprint) {
       summarize();
       previousFingerprint = fingerprint;
+    }
+    const failedJobs = terminalParentJobFailures(parent);
+    if (failedJobs.length > 0) {
+      throw new Error(
+        `full release run ${options.runId} has terminal parent job failure(s): ${failedJobs.join(", ")}`,
+      );
     }
     if (parent.status === "completed") {
       if (parent.conclusion !== "success") {

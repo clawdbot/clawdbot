@@ -84,6 +84,8 @@ type AgentRunContext = {
   sessionId?: string;
   /** Gateway lifecycle generation captured when the run was registered. */
   lifecycleGeneration?: string;
+  /** Producer-owned start captured from this run's accepted lifecycle event. */
+  lifecycleStartedAt?: number;
   verboseLevel?: VerboseLevel;
   isHeartbeat?: boolean;
   /** Whether control UI clients should receive chat/agent updates for this run. */
@@ -617,6 +619,19 @@ function enrichAgentEvent(
   if (hasInvalidLifecycleStartTimestamp(event.stream, event.data)) {
     return undefined;
   }
+  let data = event.data;
+  if (context && event.stream === "lifecycle") {
+    if (data.phase === "start") {
+      context.lifecycleStartedAt = data.startedAt as number;
+    } else if (
+      (data.phase === "end" || data.phase === "error") &&
+      data.startedAt === undefined &&
+      context.lifecycleStartedAt !== undefined
+    ) {
+      // Preserve this run's identity after a newer run takes over its session.
+      data = { ...data, startedAt: context.lifecycleStartedAt };
+    }
+  }
   const nextSeq = (state.seqByRun.get(event.runId) ?? 0) + 1;
   state.seqByRun.set(event.runId, nextSeq);
   if (context) {
@@ -645,6 +660,7 @@ function enrichAgentEvent(
   const agentId = event.agentId ?? context?.agentId;
   const enriched: AgentEventRuntimePayload = {
     ...event,
+    data,
     sessionKey,
     ...(sessionId ? { sessionId } : {}),
     ...(agentId ? { agentId } : {}),

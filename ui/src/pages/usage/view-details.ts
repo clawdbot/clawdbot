@@ -46,7 +46,7 @@ function dateBoundaryMs(date: string, timeZone: "local" | "utc", dayOffset: 0 | 
   return timeZone === "utc" ? Date.UTC(year, month, day) : new Date(year, month, day).getTime();
 }
 
-function dateKey(timestamp: number, timeZone: "local" | "utc"): string {
+export function usageDateKey(timestamp: number, timeZone: "local" | "utc"): string {
   const value = new Date(timestamp);
   const year = timeZone === "utc" ? value.getUTCFullYear() : value.getFullYear();
   const month = (timeZone === "utc" ? value.getUTCMonth() : value.getMonth()) + 1;
@@ -448,7 +448,7 @@ function renderTimeSeriesCompact(
         return false;
       }
       if (selectedDaySet) {
-        return selectedDaySet.has(dateKey(p.timestamp, timeZone));
+        return selectedDaySet.has(usageDateKey(p.timestamp, timeZone));
       }
       return true;
     });

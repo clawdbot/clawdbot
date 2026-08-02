@@ -8,7 +8,7 @@ import {
   dispatchWithContext,
 } from "./bot-message-dispatch.test-harness.js";
 import type { TelegramMessageContext } from "./bot-message-dispatch.test-harness.js";
-import { notifyTelegramInboundEventOutboundSuccess } from "./inbound-event-delivery.js";
+import { telegramInboundEventDelivery } from "./inbound-event-delivery.js";
 
 describeTelegramDispatch("dispatchTelegramMessage pipeline-init", () => {
   it("keeps Telegram typing below its client expiry without a per-message cutoff", async () => {
@@ -30,7 +30,7 @@ describeTelegramDispatch("dispatchTelegramMessage pipeline-init", () => {
     const reactionApi = vi.fn(async () => undefined);
     const runtime = createRuntime();
     runtime.error = vi.fn(() => {
-      notifyTelegramInboundEventOutboundSuccess({
+      telegramInboundEventDelivery.notify({
         sessionKey,
         to: "123",
         accountId: "default",

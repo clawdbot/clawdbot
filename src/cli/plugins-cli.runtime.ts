@@ -20,6 +20,7 @@ import { defaultRuntime } from "../runtime.js";
 import { shortenHomeInString } from "../utils.js";
 import { formatMissingPluginMessage } from "./error-format.js";
 import type {
+  PluginDoctorOptions,
   PluginMarketplaceEntriesOptions,
   PluginMarketplaceListOptions,
   PluginMarketplaceRefreshOptions,
@@ -355,7 +356,7 @@ export async function runPluginsRegistryCommand(opts: PluginRegistryOptions): Pr
 }
 
 /** Print plugin install-tree, compatibility, and plugin-owned config diagnostics. */
-export async function runPluginsDoctorCommand(): Promise<void> {
+export async function runPluginsDoctorCommand(opts: PluginDoctorOptions = {}): Promise<void> {
   const {
     buildPluginCompatibilityNotices,
     buildPluginDiagnosticsReport,
@@ -392,6 +393,54 @@ export async function runPluginsDoctorCommand(): Promise<void> {
   const hasInstallTreeIssues =
     errors.length > 0 || diags.length > 0 || shadowed.length > 0 || compatibility.length > 0;
   const pluginConfigWarnings = [...stalePluginConfigWarnings, ...configuredRuntimePluginWarnings];
+
+  if (opts.json) {
+    defaultRuntime.writeJson({
+      ok: !hasInstallTreeIssues && pluginConfigWarnings.length === 0,
+      pluginErrors: errors.map((entry) => ({
+        id: entry.id,
+        ...(entry.failurePhase ? { failurePhase: entry.failurePhase } : {}),
+        error: shortenHomeInString(entry.error ?? "failed to load"),
+        source: shortenHomeInString(entry.source),
+      })),
+      diagnostics: diags.map((entry) => ({
+        level: entry.level,
+        ...(entry.pluginId ? { pluginId: entry.pluginId } : {}),
+        message: shortenHomeInString(entry.message),
+        ...(entry.source ? { source: shortenHomeInString(entry.source) } : {}),
+      })),
+      sourceShadowing: shadowed.map((entry) => {
+        const active = report.plugins.find((plugin) => plugin.id === entry.pluginId);
+        return {
+          ...(entry.pluginId ? { pluginId: entry.pluginId } : {}),
+          message: shortenHomeInString(entry.message),
+          ...(active
+            ? {
+                active: {
+                  source: shortenHomeInString(active.source),
+                  origin: active.origin,
+                  status: active.status,
+                  ...(active.error ? { error: shortenHomeInString(active.error) } : {}),
+                },
+              }
+            : {}),
+          ...(entry.source ? { shadowedSource: shortenHomeInString(entry.source) } : {}),
+          repair: [
+            `openclaw plugins inspect ${entry.pluginId ?? "<plugin-id>"}`,
+            "edit or remove the config-selected plugin source",
+            "openclaw plugins registry --refresh",
+            "openclaw gateway restart --force",
+          ],
+        };
+      }),
+      compatibility: compatibility.map((notice) => ({
+        ...notice,
+        message: shortenHomeInString(notice.message),
+      })),
+      configurationWarnings: pluginConfigWarnings.map(shortenHomeInString),
+    });
+    return;
+  }
 
   if (!hasInstallTreeIssues && pluginConfigWarnings.length === 0) {
     defaultRuntime.log(

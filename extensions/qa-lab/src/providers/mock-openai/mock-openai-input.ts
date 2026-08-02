@@ -126,116 +126,56 @@ function extractFunctionCallOutputText(item: ResponsesInputItem) {
   return stringifyFunctionCallOutput(item.output);
 }
 
-function extractFunctionCallOutputCallId(item: ResponsesInputItem) {
-  if (!isResponsesToolCallOutput(item)) {
-    return "";
+function findCurrentToolOutput(input: ResponsesInputItem[]): ResponsesInputItem | undefined {
+  const lastUserIndex = findLastUserIndex(input);
+  for (const item of input.slice(lastUserIndex + 1).toReversed()) {
+    if (isResponsesToolCallOutput(item)) {
+      return item;
+    }
   }
-  const record = item as {
-    call_id?: unknown;
-    tool_call_id?: unknown;
-    tool_use_id?: unknown;
-  };
+  for (const [candidateIndex, candidateItem] of Array.from(input.entries()).toReversed()) {
+    if (!isResponsesToolCallOutput(candidateItem)) {
+      continue;
+    }
+    const laterUserTexts = input
+      .slice(candidateIndex + 1)
+      .filter((laterItem) => laterItem.role === "user" && Array.isArray(laterItem.content))
+      .map((laterItem) => extractInputText(laterItem.content as unknown[]))
+      .filter(Boolean);
+    if (laterUserTexts.length > 0 && laterUserTexts.every(isContinuationUserText)) {
+      return candidateItem;
+    }
+  }
+  return undefined;
+}
+
+export function hasToolOutput(input: ResponsesInputItem[]) {
+  return findCurrentToolOutput(input) !== undefined;
+}
+
+export function extractToolOutput(input: ResponsesInputItem[]) {
+  const item = findCurrentToolOutput(input);
+  return item ? stringifyFunctionCallOutput(item.output) : "";
+}
+
+export function extractToolOutputStructuredError(input: ResponsesInputItem[]) {
+  const item = findCurrentToolOutput(input);
+  return item?.is_error === true || item?.isError === true;
+}
+
+export function extractToolOutputCallId(input: ResponsesInputItem[]) {
+  const item = findCurrentToolOutput(input);
   return (
-    [record.call_id, record.tool_call_id, record.tool_use_id].find(
+    [item?.call_id, item?.tool_call_id, item?.tool_use_id].find(
       (value): value is string => typeof value === "string" && value.trim().length > 0,
     ) ?? ""
   );
 }
 
-function functionCallOutputIsStructuredError(item: ResponsesInputItem) {
-  if (!isResponsesToolCallOutput(item)) {
-    return false;
-  }
-  return item.is_error === true || item.isError === true;
-}
-
-export function extractToolOutput(input: ResponsesInputItem[]) {
-  const lastUserIndex = findLastUserIndex(input);
-  for (const item of input.slice(lastUserIndex + 1).toReversed()) {
-    const output = extractFunctionCallOutputText(item);
-    if (output) {
-      return output;
-    }
-  }
-  for (const [candidateIndex, candidateItem] of Array.from(input.entries()).toReversed()) {
-    const output = extractFunctionCallOutputText(candidateItem);
-    if (output) {
-      const laterUserTexts = input
-        .slice(candidateIndex + 1)
-        .filter((laterItem) => laterItem.role === "user" && Array.isArray(laterItem.content))
-        .map((laterItem) => extractInputText(laterItem.content as unknown[]))
-        .filter(Boolean);
-      if (
-        laterUserTexts.length > 0 &&
-        laterUserTexts.every((text) => isContinuationUserText(text))
-      ) {
-        return output;
-      }
-      continue;
-    }
-  }
-  return "";
-}
-
-export function extractToolOutputStructuredError(input: ResponsesInputItem[]) {
-  const lastUserIndex = findLastUserIndex(input);
-  for (const item of input.slice(lastUserIndex + 1).toReversed()) {
-    const output = extractFunctionCallOutputText(item);
-    if (output) {
-      return functionCallOutputIsStructuredError(item);
-    }
-  }
-  for (const [candidateIndex, candidateItem] of Array.from(input.entries()).toReversed()) {
-    const output = extractFunctionCallOutputText(candidateItem);
-    if (output) {
-      const laterUserTexts = input
-        .slice(candidateIndex + 1)
-        .filter((laterItem) => laterItem.role === "user" && Array.isArray(laterItem.content))
-        .map((laterItem) => extractInputText(laterItem.content as unknown[]))
-        .filter(Boolean);
-      if (
-        laterUserTexts.length > 0 &&
-        laterUserTexts.every((text) => isContinuationUserText(text))
-      ) {
-        return functionCallOutputIsStructuredError(candidateItem);
-      }
-    }
-  }
-  return false;
-}
-
-export function extractToolOutputCallId(input: ResponsesInputItem[]) {
-  const lastUserIndex = findLastUserIndex(input);
-  for (const item of input.slice(lastUserIndex + 1).toReversed()) {
-    const output = extractFunctionCallOutputText(item);
-    if (output) {
-      return extractFunctionCallOutputCallId(item);
-    }
-  }
-  for (const [candidateIndex, candidateItem] of Array.from(input.entries()).toReversed()) {
-    const output = extractFunctionCallOutputText(candidateItem);
-    if (output) {
-      const laterUserTexts = input
-        .slice(candidateIndex + 1)
-        .filter((laterItem) => laterItem.role === "user" && Array.isArray(laterItem.content))
-        .map((laterItem) => extractInputText(laterItem.content as unknown[]))
-        .filter(Boolean);
-      if (
-        laterUserTexts.length > 0 &&
-        laterUserTexts.every((text) => isContinuationUserText(text))
-      ) {
-        return extractFunctionCallOutputCallId(candidateItem);
-      }
-    }
-  }
-  return "";
-}
-
 export function extractLatestToolOutput(input: ResponsesInputItem[]) {
   for (const item of input.toReversed()) {
-    const output = extractFunctionCallOutputText(item);
-    if (output) {
-      return output;
+    if (isResponsesToolCallOutput(item)) {
+      return stringifyFunctionCallOutput(item.output);
     }
   }
   return "";
@@ -249,9 +189,7 @@ export function extractAllToolOutputText(input: ResponsesInputItem[]) {
 }
 
 export function extractUserTextAfterLatestToolOutput(input: ResponsesInputItem[]) {
-  const latestToolOutputIndex = input.findLastIndex((item) =>
-    Boolean(extractFunctionCallOutputText(item)),
-  );
+  const latestToolOutputIndex = input.findLastIndex(isResponsesToolCallOutput);
   if (latestToolOutputIndex < 0) {
     return "";
   }

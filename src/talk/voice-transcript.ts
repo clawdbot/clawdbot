@@ -3,6 +3,7 @@ import { BoundedSerialQueue } from "../shared/bounded-serial-queue.js";
 
 const VOICE_TRANSCRIPT_MAX_CHARS = 8_000;
 const VOICE_TRANSCRIPT_QUEUE_MAX_PENDING = 40;
+export const VOICE_TRANSCRIPT_MAX_UNRESOLVED = VOICE_TRANSCRIPT_QUEUE_MAX_PENDING + 1;
 const VOICE_TRANSCRIPT_QUEUE_MAX_PENDING_CHARS =
   VOICE_TRANSCRIPT_QUEUE_MAX_PENDING * VOICE_TRANSCRIPT_MAX_CHARS;
 const VOICE_TRANSCRIPT_QUEUE_OVERFLOW_MESSAGE =
@@ -106,7 +107,7 @@ class VoiceTranscriptOperationRegistry {
     if (!owner.closePromise) {
       // Seal synchronously so no transcript can enter behind the close barrier.
       owner.queue.seal();
-      owner.closePromise = owner.queue.flush().then(operation);
+      owner.closePromise = owner.queue.flush({ requireSuccess: true }).then(operation);
     }
     try {
       await owner.closePromise;

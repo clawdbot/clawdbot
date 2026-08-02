@@ -16,11 +16,10 @@ import {
   projectSessionObserverDigest,
   resolveChatPaneObserverRunId,
 } from "../../lib/observer-digest.ts";
-import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
-import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
 import { buildAgentMainSessionKey } from "../../lib/sessions/session-key.ts";
 import { renderBoardSessionSurface } from "./board-session-surface.ts";
 import { clearChatHistory } from "./chat-history.ts";
+import { resolveChatMessageAccess } from "./chat-message-access.ts";
 import { createChatModelSetupBanner, requiresChatModelSetup } from "./chat-model-setup.ts";
 import { ChatPaneHeader } from "./chat-pane-header.ts";
 import {
@@ -29,7 +28,6 @@ import {
   WORKSPACE_RAIL_SIDE_MIN_PANE_WIDTH,
 } from "./chat-pane-shared.ts";
 import {
-  createSidebarFullMessageLoader,
   renderSidebarRegion,
   resolveSidebarLayoutForBoard,
   restoreHiddenSidebarChat,
@@ -122,7 +120,7 @@ export class ChatPane extends ChatPaneHeader {
       ),
     );
     const currentAgentId = resolveChatAgentId(state);
-    const catalogKey = parseCatalogSessionKey(state.sessionKey);
+    const { catalogKey, fullMessageLoader, chatProps } = resolveChatMessageAccess(state);
     const overlays = this.context?.overlays;
     const approvalSnapshot = overlays?.snapshot;
     const inlineApproval = this.active
@@ -542,7 +540,7 @@ export class ChatPane extends ChatPaneHeader {
       onClearHistory: () => void clearChatHistory(state),
       agentsList: state.agentsList,
       currentAgentId,
-      fullMessageAgentId: scopedAgentParamsForSession(state, state.sessionKey).agentId,
+      ...chatProps,
       onAgentChange: (agentId) => {
         const nextSessionKey = buildAgentMainSessionKey({ agentId });
         this.onPaneSessionChange?.(this.paneId, nextSessionKey);
@@ -615,7 +613,7 @@ export class ChatPane extends ChatPaneHeader {
             detail: html`<openclaw-chat-detail-panel
               class="chat-sidebar"
               .content=${state.sidebarContent}
-              .loadFullMessage=${createSidebarFullMessageLoader(state, Boolean(catalogKey))}
+              .loadFullMessage=${fullMessageLoader}
               .canvasPluginSurfaceUrl=${state.canvasPluginSurfaceUrl}
               .embedSandboxMode=${state.embedSandboxMode}
               .allowExternalEmbedUrls=${state.allowExternalEmbedUrls}

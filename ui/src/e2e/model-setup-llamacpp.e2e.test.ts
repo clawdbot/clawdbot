@@ -27,9 +27,9 @@ const prepareOptions = [
   {
     id: "llama-cpp",
     brandId: "llama-cpp",
-    label: "Local model (llama.cpp)",
-    hint: "Download and run a private GGUF model",
-    actionLabel: "Review download",
+    label: "llama.cpp",
+    hint: "Run one private GGUF model directly inside this Gateway",
+    actionLabel: "Set up model",
   },
   {
     id: "lmstudio",
@@ -106,7 +106,7 @@ describeControlUiE2e("Control UI llama.cpp setup mocked Gateway E2E", () => {
                 id: "llama-cpp-consent",
                 type: "confirm",
                 message:
-                  "Download Gemma 4 E4B IT Q4_K_M (about 5.0 GB) for local llama.cpp inference?",
+                  "OpenClaw will download Gemma 4 E4B IT Q4_K_M (about 5.0 GB) and run it directly inside this Gateway. Continue?",
                 initialValue: false,
               },
             },
@@ -140,7 +140,7 @@ describeControlUiE2e("Control UI llama.cpp setup mocked Gateway E2E", () => {
       const response = await page.goto(`${server.baseUrl}settings/model-setup`);
       expect(response?.status()).toBe(200);
       const llamaCppRow = page.locator('[data-prepare-choice="llama-cpp"]');
-      await llamaCppRow.getByRole("button", { name: "Review download" }).waitFor();
+      await llamaCppRow.getByRole("button", { name: "Set up model" }).waitFor();
       await expect
         .poll(() => llamaCppRow.locator('[data-provider-icon="llamacpp"]').count())
         .toBe(1);
@@ -157,11 +157,11 @@ describeControlUiE2e("Control UI llama.cpp setup mocked Gateway E2E", () => {
         });
       }
 
-      await llamaCppRow.getByRole("button", { name: "Review download" }).click();
+      await llamaCppRow.getByRole("button", { name: "Set up model" }).click();
       const start = await gateway.waitForRequest("openclaw.setup.prepare.start");
       expect(start.params).toMatchObject({ authChoice: "llama-cpp" });
       await page.getByRole("heading", { name: "Set up a local model" }).waitFor();
-      await page.getByText("Download Gemma 4 E4B IT Q4_K_M").waitFor();
+      await page.getByText("OpenClaw will download Gemma 4 E4B IT Q4_K_M").waitFor();
 
       if (artifactDir) {
         await page.screenshot({
@@ -185,7 +185,7 @@ describeControlUiE2e("Control UI llama.cpp setup mocked Gateway E2E", () => {
           },
         ],
       });
-      await page.getByRole("button", { name: "Yes" }).click();
+      await page.getByRole("button", { name: "Continue" }).click();
       await page.getByRole("heading", { name: "Connection verified" }).waitFor();
       await expect
         .poll(() => page.locator(".model-setup-success").textContent())

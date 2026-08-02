@@ -358,6 +358,30 @@ describe("buildGatewayReloadPlan", () => {
     });
   });
 
+  it.each([
+    "agents.defaults.compaction",
+    "agents.defaults.compaction.model",
+    "agents.defaults.compaction.maxActiveTranscriptBytes",
+    "agents.defaults.compaction.memoryFlush.model",
+  ])("refreshes compaction config without restarting subsystems: %s", (path) => {
+    const plan = buildGatewayReloadPlan([path]);
+
+    expect(plan).toMatchObject({
+      restartGateway: false,
+      restartReasons: [],
+      hotReasons: [path],
+      noopPaths: [],
+      restartHeartbeat: false,
+      restartCron: false,
+      reloadHooks: false,
+      reloadPlugins: false,
+      disposeMcpRuntimes: false,
+      restartChannels: new Set(),
+      restartChannelAccounts: new Map(),
+    });
+    expect(resolveConfigReloadMetadata(path).kind).toBe("hot");
+  });
+
   it.each(["gateway.remote.url", "secrets.providers.default.path", "tui.footer.showRemoteHost"])(
     "keeps runtime-irrelevant path as a no-op: %s",
     (path) => {

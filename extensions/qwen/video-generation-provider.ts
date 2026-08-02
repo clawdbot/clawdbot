@@ -1,6 +1,5 @@
 // Qwen provider module implements model/runtime integration.
 import { buildDashscopeVideoGenerationProvider } from "openclaw/plugin-sdk/video-generation";
-import { QWEN_STANDARD_CN_BASE_URL, QWEN_STANDARD_GLOBAL_BASE_URL } from "./models.js";
 
 const DEFAULT_QWEN_VIDEO_BASE_URL = "https://dashscope-intl.aliyuncs.com";
 function resolveQwenVideoBaseUrl(configuredBaseUrl: string | undefined): string {
@@ -16,24 +15,14 @@ function resolveQwenVideoBaseUrl(configuredBaseUrl: string | undefined): string 
 }
 
 function resolveDashscopeAigcApiBaseUrl(baseUrl: string): string {
-  try {
-    const url = new URL(baseUrl);
-    if (
-      url.hostname === "coding-intl.dashscope.aliyuncs.com" ||
-      url.hostname === "coding.dashscope.aliyuncs.com" ||
-      url.hostname === "dashscope-intl.aliyuncs.com" ||
-      url.hostname === "dashscope.aliyuncs.com"
-    ) {
-      return url.origin;
-    }
-  } catch {
-    // Fall through to legacy prefix handling for non-URL strings.
-  }
-  if (baseUrl.startsWith(QWEN_STANDARD_CN_BASE_URL)) {
-    return "https://dashscope.aliyuncs.com";
-  }
-  if (baseUrl.startsWith(QWEN_STANDARD_GLOBAL_BASE_URL)) {
-    return DEFAULT_QWEN_VIDEO_BASE_URL;
+  const url = new URL(baseUrl);
+  if (
+    url.hostname === "coding-intl.dashscope.aliyuncs.com" ||
+    url.hostname === "coding.dashscope.aliyuncs.com" ||
+    url.hostname === "dashscope-intl.aliyuncs.com" ||
+    url.hostname === "dashscope.aliyuncs.com"
+  ) {
+    return url.origin;
   }
   return baseUrl.replace(/\/+$/u, "");
 }

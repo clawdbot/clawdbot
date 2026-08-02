@@ -16,7 +16,7 @@ import {
   setupDraftStreams,
 } from "./bot-message-dispatch.test-harness.js";
 import type { TelegramMessageContext } from "./bot-message-dispatch.test-harness.js";
-import { notifyTelegramInboundEventOutboundSuccess } from "./inbound-event-delivery.js";
+import { telegramInboundEventDelivery } from "./inbound-event-delivery.js";
 
 describeTelegramDispatch("dispatchTelegramMessage reasoning-room-events", () => {
   it("keeps shared durable reasoning payloads disabled when reasoning is off", async () => {
@@ -402,7 +402,7 @@ describeTelegramDispatch("dispatchTelegramMessage reasoning-room-events", () => 
       streamMode: "partial",
     });
     await firstStartGate;
-    notifyTelegramInboundEventOutboundSuccess({
+    telegramInboundEventDelivery.notify({
       sessionKey: "agent:main:telegram:group:-100123",
       to: "telegram:-100123",
       inboundEventKind: "room_event",
@@ -484,7 +484,7 @@ describeTelegramDispatch("dispatchTelegramMessage reasoning-room-events", () => 
       streamMode: "partial",
     });
     await firstStartGate;
-    notifyTelegramInboundEventOutboundSuccess({
+    telegramInboundEventDelivery.notify({
       sessionKey: "agent:main:telegram:group:-100123",
       to: "telegram:group:-100123:topic:88",
       inboundEventKind: "room_event",

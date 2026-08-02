@@ -476,6 +476,24 @@ describe("printCronList", () => {
 });
 
 describe("parseAt", () => {
+  it.each([
+    ["2026-03-23T00:00:00", "UTC", "2026-03-23T00:00:00.000Z"],
+    ["2026-03-23T00:30:00.250", "UTC", "2026-03-23T00:30:00.250Z"],
+    ["2026-03-23T00:30:00", "Europe/Oslo", "2026-03-22T23:30:00.000Z"],
+    ["2026-03-23t23:00:00", "Europe/Oslo", "2026-03-23T22:00:00.000Z"],
+    ["2026-03-23T23:00:00", "Europe/Oslo", "2026-03-23T22:00:00.000Z"],
+    ["2026-03-29T01:30:00", "Europe/Oslo", "2026-03-29T00:30:00.000Z"],
+    ["2026-03-29T02:30:00", "Europe/Oslo", null],
+    ["2027-02-28T24:00:00", "UTC", "2027-03-01T00:00:00.000Z"],
+    ["2027-02-28t24:00", "Europe/Oslo", "2027-02-28T23:00:00.000Z"],
+    ["2027-02-28t24:00:00.000", "America/New_York", "2027-03-01T05:00:00.000Z"],
+    ["2027-02-28t24:00:00+05:45", "Europe/Oslo", "2027-02-28T18:15:00.000Z"],
+    ["2027-02-28t24:00:00.001", "UTC", null],
+    ["2027-09-04t24:00", "America/Santiago", null],
+  ])("interprets offsetless one-shot %s in %s", (input, timezone, expected) => {
+    expect(parseAt(input, timezone)).toBe(expected);
+  });
+
   it("accepts leading plus relative durations for cron add --at", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-25T00:00:00.000Z"));

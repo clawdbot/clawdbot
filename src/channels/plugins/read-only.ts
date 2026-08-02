@@ -27,6 +27,7 @@ import {
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "../../plugins/plugin-metadata-lifecycle.js";
 import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import {
   getCachedPluginModuleLoader,
   type PluginModuleLoaderCache,
@@ -59,6 +60,7 @@ type ReadOnlyChannelPluginOptions = {
   activationSourceConfig?: OpenClawConfig;
   includePersistedAuthState?: boolean;
   includeSetupFallbackPlugins?: boolean;
+  metadataSnapshot?: PluginMetadataSnapshot;
 };
 
 type ReadOnlyChannelPluginResolution = {
@@ -717,13 +719,15 @@ export function resolveReadOnlyChannelPluginsForConfig(
   if (cached) {
     return cloneReadOnlyChannelPluginResolution(cached);
   }
-  const manifestRecords = resolvePluginMetadataSnapshot({
-    config: cfg,
-    stateDir: options.stateDir,
-    workspaceDir,
-    env,
-    allowWorkspaceScopedCurrent: true,
-  }).plugins;
+  const manifestRecords =
+    options.metadataSnapshot?.plugins ??
+    resolvePluginMetadataSnapshot({
+      config: cfg,
+      stateDir: options.stateDir,
+      workspaceDir,
+      env,
+      allowWorkspaceScopedCurrent: true,
+    }).plugins;
   const bundledManifestRecords = listBundledChannelManifestRecords(manifestRecords);
   const externalManifestRecords = listExternalChannelManifestRecords(manifestRecords);
   const activationSourceConfig = options.activationSourceConfig ?? cfg;
