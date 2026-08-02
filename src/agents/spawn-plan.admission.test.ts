@@ -122,4 +122,29 @@ describe("resolveChildAdmission", () => {
       governingCap: "subagents.maxChildrenPerAgent",
     });
   });
+
+  it("preserves caller-owned fields on both admission outcomes", () => {
+    const reserve = (accept: boolean) =>
+      reserveChildAdmissionSlot({
+        controllerSessionKey: "agent:main:payload-controller",
+        resolveAdmission: () =>
+          accept
+            ? { ok: true as const, maxSpawnDepth: 2 }
+            : { ok: false as const, activeChildren: 1 },
+      });
+
+    const accepted = reserve(true);
+    if (!accepted.ok) {
+      throw new Error("Expected accepted child reservation");
+    }
+    expect(accepted.maxSpawnDepth).toBe(2);
+    accepted.release();
+
+    const rejected = reserve(false);
+    if (rejected.ok) {
+      rejected.release();
+      throw new Error("Expected rejected child reservation");
+    }
+    expect(rejected.activeChildren).toBe(1);
+  });
 });

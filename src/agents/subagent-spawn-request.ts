@@ -235,12 +235,13 @@ export function resolveSubagentSpawnRequest(
       additionalActiveChildren: pendingChildren,
     });
   };
-  const admission = params.collect
-    ? resolveAdmission()
+  const admissionReservation = params.collect
+    ? undefined
     : reserveChildAdmissionSlot({
         controllerSessionKey: ownership.controllerSessionKey,
         resolveAdmission,
       });
+  const admission = admissionReservation ?? resolveAdmission();
   if (!admission.ok) {
     return rejectSubagentSpawnRequest(
       "forbidden",
@@ -315,7 +316,7 @@ export function resolveSubagentSpawnRequest(
       admission: {
         resolve: resolveAdmission,
         initial: admission,
-        reservation: "release" in admission ? admission : undefined,
+        reservation: admissionReservation?.ok ? admissionReservation : undefined,
         childDepth,
         maxSpawnDepth,
       },

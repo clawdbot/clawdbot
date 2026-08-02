@@ -18,17 +18,28 @@ type ChildAdmissionParams = {
 /** ACP child keys deduplicate task rows; symbols keep anonymous starts distinct. */
 const pendingChildAdmissions = new Map<string, Set<string | symbol>>();
 
-export function reserveChildAdmissionSlot<
-  TAccepted extends { ok: true },
-  TRejected extends { ok: false },
->(params: {
+type ReservableChildAdmission = { ok: true } | { ok: false };
+
+type ChildAdmissionReservation<TAdmission extends ReservableChildAdmission> =
+  | Extract<TAdmission, { ok: false }>
+  | (Extract<TAdmission, { ok: true }> & { release: () => void });
+
+type ChildAdmissionReservationParams<TAdmission extends ReservableChildAdmission> = {
   controllerSessionKey: string;
   childSessionKey?: string;
   resolveAdmission: (
     pendingChildren: number,
     pendingChildSessionKeys: ReadonlySet<string>,
-  ) => TAccepted | TRejected;
-}): (TAccepted & { release: () => void }) | TRejected {
+  ) => TAdmission;
+};
+
+// Infer the complete decision once so native, ACP, and visible payloads survive narrowing.
+export function reserveChildAdmissionSlot<TAdmission extends ReservableChildAdmission>(
+  params: ChildAdmissionReservationParams<TAdmission>,
+): ChildAdmissionReservation<TAdmission>;
+export function reserveChildAdmissionSlot(
+  params: ChildAdmissionReservationParams<ReservableChildAdmission>,
+): ChildAdmissionReservation<ReservableChildAdmission> {
   const pending = pendingChildAdmissions.get(params.controllerSessionKey) ?? new Set();
   const pendingChildSessionKeys = new Set(
     [...pending].filter((sessionKey): sessionKey is string => typeof sessionKey === "string"),
