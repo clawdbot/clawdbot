@@ -350,6 +350,39 @@ describe("command-path-policy", () => {
       loadPlugins: "never",
       networkProxy: "bypass",
     });
+    for (const commandPath of [["hooks"], ["skills", "info"]]) {
+      expectResolvedPolicy(commandPath, {
+        configGuard: "skip",
+        loadPlugins: "never",
+        networkProxy: "bypass",
+      });
+    }
+    for (const commandPath of [
+      ["skills", "search"],
+      ["memory", "search"],
+    ]) {
+      expectResolvedPolicy(commandPath, {
+        configGuard: "skip",
+        loadPlugins: "never",
+      });
+    }
+    const memoryStatusPolicy = resolveCliCommandPathPolicy(["memory", "status"]);
+    expectConfigGuardResolver(memoryStatusPolicy);
+    expect(memoryStatusPolicy.loadPlugins).toBe("never");
+    expect(
+      memoryStatusPolicy.configGuard({
+        argv: ["node", "openclaw", "memory", "status"],
+        commandPath: ["memory", "status"],
+      }),
+    ).toBe("skip");
+    for (const flag of ["--index", "--fix"]) {
+      expect(
+        memoryStatusPolicy.configGuard({
+          argv: ["node", "openclaw", "memory", "status", flag],
+          commandPath: ["memory", "status"],
+        }),
+      ).toBe("run");
+    }
   });
 
   it("keeps routed and Commander config reads ahead of observing startup guards", () => {

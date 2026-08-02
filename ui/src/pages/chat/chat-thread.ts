@@ -41,6 +41,10 @@ const chatItemsByPane = new Map<string, Map<string, CachedChatItems>>();
 const expandedToolCardsBySession = new Map<string, Map<string, boolean>>();
 const expandedUserMessagesBySession = new Map<string, Map<string, boolean>>();
 const expandedBooleanMapVersions = new WeakMap<ReadonlyMap<string, boolean>, number>();
+const expandedAssistantMessagesBySession = new Map<
+  string,
+  Map<string, AssistantMessageExpansionState>
+>();
 const initializedToolCardsBySession = new Map<string, Set<string>>();
 const lastAutoExpandPrefBySession = new Map<string, boolean>();
 const lastToolCardItemsBySession = new Map<
@@ -57,6 +61,7 @@ export function resetChatThreadState(paneId?: string): void {
   resetWorkingProgress();
   expandedToolCardsBySession.clear();
   expandedUserMessagesBySession.clear();
+  expandedAssistantMessagesBySession.clear();
   initializedToolCardsBySession.clear();
   lastAutoExpandPrefBySession.clear();
   lastToolCardItemsBySession.clear();
@@ -389,6 +394,39 @@ export function getExpandedUserMessages(sessionKey: string): Map<string, boolean
     }
   }
   return getOrCreateSessionCacheValue(expandedUserMessagesBySession, sessionKey, () => new Map());
+}
+
+export type AssistantMessageExpansionState =
+  | { status: "loading"; revision: number }
+  | { status: "error"; revision: number }
+  | { status: "loaded"; expanded: boolean; markdown: string; revision: number };
+
+export function getExpandedAssistantMessages(
+  sessionKey: string,
+): Map<string, AssistantMessageExpansionState> {
+  for (const [cachedKey, state] of expandedAssistantMessagesBySession) {
+    if (areUiSessionKeysEquivalent(cachedKey, sessionKey)) {
+      if (cachedKey !== sessionKey) {
+        expandedAssistantMessagesBySession.delete(cachedKey);
+        setSessionCacheValue(expandedAssistantMessagesBySession, sessionKey, state);
+      }
+      return state;
+    }
+  }
+  return getOrCreateSessionCacheValue(
+    expandedAssistantMessagesBySession,
+    sessionKey,
+    () => new Map(),
+  );
+}
+
+export function assistantMessageExpansionSignature(
+  values: ReadonlyMap<string, AssistantMessageExpansionState>,
+): string {
+  return Array.from(values)
+    .toSorted(([left], [right]) => left.localeCompare(right))
+    .map(([key, value]) => `${key}:${value.revision}`)
+    .join("\u0000");
 }
 
 function getInitializedToolCards(sessionKey: string): Set<string> {

@@ -224,6 +224,7 @@ openclaw infer tts status --json
 Notes:
 
 - `tts status` only supports `--gateway` (it reflects gateway-managed TTS state).
+- Local and loopback-Gateway `tts convert --output` copies stage beside the destination and replace it only after success; a failed copy leaves an existing file unchanged.
 - Use `tts convert --provider <id>` when selecting a provider without overriding its model.
 - Use `tts providers`, `tts voices`, `tts personas`, `tts set-provider`, and `tts set-persona` to inspect and configure TTS behavior.
 

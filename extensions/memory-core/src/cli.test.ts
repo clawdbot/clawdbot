@@ -502,6 +502,8 @@ describe("memory cli", () => {
     const log = spyRuntimeLogs(defaultRuntime);
     await runMemoryCli(["status"]);
 
+    expect(getRuntimeConfig).toHaveBeenCalledWith({ skipPluginValidation: true });
+
     expect(probeVectorAvailability).not.toHaveBeenCalled();
     expectLogged(log, "Vector store: ready");
     expectLogged(log, "Semantic vectors: ready");
@@ -1743,6 +1745,8 @@ describe("memory cli", () => {
 
     const writeJson = spyRuntimeJson(defaultRuntime);
     await runMemoryCli(["search", "hidden codeword", "--agent", "main", "--json"]);
+
+    expect(getRuntimeConfig).toHaveBeenCalledWith({ skipPluginValidation: true });
 
     expect(firstWrittenJsonArg(writeJson)).toEqual({
       results: [],
