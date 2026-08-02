@@ -152,6 +152,7 @@ function setupDeps(params: {
     runAppRecommendations:
       params.runAppRecommendations ??
       vi.fn(async ({ config }) => ({ config, commitResult: vi.fn() })),
+    ensureControlUiAssetsBuilt: vi.fn(async () => ({ ok: true, built: false })),
     runSystemAgentChat,
     ...(params.handoffMode ? { handoffMode: params.handoffMode } : {}),
   } satisfies GuidedOnboardingDeps;
