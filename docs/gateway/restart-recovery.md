@@ -216,8 +216,8 @@ channels.start --params '{"channel":"<id>"}'`
      breaker for other channels.
 
   5. Or leave the healthy gateway running until the full unclean-boot window
-     drains. The same process logs `gateway restart-loop breaker recovered;
-     channel auto-start restored` and starts the deferred configured channels.
+     drains. The same process logs that the restart-loop breaker recovered and
+     starts the deferred configured channels.
      If that message does not appear after the window plus one health-monitor
      interval, inspect the gateway logs and run `openclaw doctor` before
      restarting.
