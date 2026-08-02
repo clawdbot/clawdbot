@@ -32,7 +32,7 @@ import {
   resolveTelegramPollActionGateState,
 } from "./accounts.js";
 import { resolveTelegramInlineButtons } from "./button-types.js";
-import { notifyTelegramInboundEventOutboundSuccess } from "./inbound-event-delivery.js";
+import { telegramInboundEventDelivery } from "./inbound-event-delivery.js";
 import {
   resolveTelegramInlineButtonsScope,
   resolveTelegramTargetChatType,
@@ -366,7 +366,7 @@ export async function handleTelegramAction(
     accountId,
   });
   const notifyVisibleOutboundSuccess = (to: string, messageThreadId?: number | null) => {
-    notifyTelegramInboundEventOutboundSuccess({
+    telegramInboundEventDelivery.notify({
       sessionKey: options?.sessionKey ?? undefined,
       to: formatTelegramDeliveryTarget(to, messageThreadId),
       accountId,

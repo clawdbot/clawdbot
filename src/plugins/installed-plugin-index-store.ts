@@ -55,7 +55,6 @@ const INSTALLED_PLUGIN_INDEX_SQLITE_KEY = "installed-plugin-index";
 const InstalledPluginIndexStartupSchema = z.object({
   sidecar: z.boolean(),
   memory: z.boolean(),
-  deferConfiguredChannelFullLoadUntilAfterListen: z.boolean(),
   agentHarnesses: StringArraySchema,
   configPaths: StringArraySchema.optional(),
 });

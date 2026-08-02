@@ -394,6 +394,7 @@ export async function prepareGatewayRuntimeState(params: {
         runtimeStateRef.current?.hookClientIpConfig ?? initialHookClientIpConfig,
       pluginRegistry: pluginRuntime.registry,
       getPluginRouteRegistry: () => pluginRuntime.registry,
+      isStartupPluginRuntimeReady: () => startupState.sidecarsReady,
       getGatewayRequestContext: () => pluginGatewayContext.current,
       deps,
       log,

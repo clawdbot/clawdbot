@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
+import {
+  resetGatewayWorkAdmission,
+  tryBeginGatewayRootWorkAdmission,
+} from "../process/gateway-work-admission.js";
 
 const mocks = vi.hoisted(() => ({
   events: [] as string[],
@@ -151,6 +154,30 @@ describe("scheduleGatewayHandlerPrewarm", () => {
     releaseGatewayReady();
     await vi.runAllTimersAsync();
     expect(load).toHaveBeenCalledOnce();
+    sidecar.stop();
+  });
+
+  it("waits for admitted request work before warming handler data", async () => {
+    vi.useFakeTimers();
+    const admission = tryBeginGatewayRootWorkAdmission();
+    if (!admission) {
+      throw new Error("Expected request work admission");
+    }
+    const load = vi.fn(async () => {});
+    const sidecar = scheduleGatewayHandlerPrewarm({
+      cfgAtStart: {} as never,
+      log: { warn: vi.fn() },
+      items: [{ name: "sessions", load }],
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(load).not.toHaveBeenCalled();
+
+    admission.release();
+    await vi.advanceTimersByTimeAsync(249);
+    expect(load).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await vi.waitFor(() => expect(load).toHaveBeenCalledOnce());
     sidecar.stop();
   });
 

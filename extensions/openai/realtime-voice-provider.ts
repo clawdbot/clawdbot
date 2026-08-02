@@ -24,12 +24,14 @@ import type {
   RealtimeVoiceProviderCapabilities,
   RealtimeVoiceProviderConfig,
   RealtimeVoiceProviderPlugin,
+  RealtimeVoiceSessionConnection,
   RealtimeVoiceTool,
   RealtimeVoiceToolResultOptions,
 } from "openclaw/plugin-sdk/realtime-voice";
 import {
   REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
   REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+  RealtimeVoiceSessionLifecycle,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { sleepWithAbort, warn } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -58,10 +60,6 @@ import {
   isSupportedOpenAIGptLiveModel,
   OPENAI_GPT_LIVE_MODELS,
 } from "./realtime-quicksilver.js";
-import {
-  OpenAIRealtimeVoiceLifecycle,
-  type OpenAIRealtimeVoiceConnection,
-} from "./realtime-voice-lifecycle.js";
 
 type OpenAIRealtimeVoice =
   | "alloy"
@@ -608,17 +606,11 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private static readonly MAX_RECONNECT_ATTEMPTS = 5;
   private static readonly BASE_RECONNECT_DELAY_MS = 1000;
   private static readonly CONNECT_TIMEOUT_MS = 10_000;
-  private static readonly MAX_PENDING_AUDIO_CHUNKS = 320;
-  private static readonly MAX_PENDING_AUDIO_BYTES = 1024 * 1024;
   readonly supportsToolResultContinuation = true;
   readonly supportsToolResultSuppression = true;
 
   private ws: WebSocket | null = null;
-  private connection: OpenAIRealtimeVoiceConnection | undefined;
-  private connectPromise: Promise<void> | undefined;
-  private readonly lifecycle = new OpenAIRealtimeVoiceLifecycle();
-  private pendingAudio: Buffer[] = [];
-  private pendingAudioBytes = 0;
+  private readonly lifecycle = new RealtimeVoiceSessionLifecycle("OpenAI");
   private nextMarkSequence = 1;
   private oldestOutstandingMarkSequence: number | null = null;
   private latestOutstandingMarkSequence: number | null = null;
@@ -651,23 +643,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     if (this.terminalError) {
       throw this.terminalError;
     }
-    if (this.lifecycle.isReady()) {
-      return;
-    }
-    if (this.connectPromise) {
-      return this.connectPromise;
-    }
-    const connection = this.lifecycle.connect();
-    this.connection = connection;
-    const connectPromise = this.doConnect(connection);
-    this.connectPromise = connectPromise;
-    try {
-      await connectPromise;
-    } finally {
-      if (this.connectPromise === connectPromise) {
-        this.connectPromise = undefined;
-      }
-    }
+    await this.lifecycle.connect((connection) => this.doConnect(connection));
   }
 
   sendAudio(audio: Buffer): void {
@@ -675,7 +651,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       return;
     }
     if (!this.lifecycle.isReady() || this.ws?.readyState !== WebSocket.OPEN) {
-      this.enqueuePendingAudio(audio);
+      this.lifecycle.enqueuePendingAudio(audio);
       return;
     }
     this.sendEvent({
@@ -757,7 +733,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   }
 
   close(): void {
-    const connection = this.connection;
+    const connection = this.lifecycle.currentConnection();
     if (!this.lifecycle.cancel()) {
       return;
     }
@@ -775,252 +751,209 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     return this.lifecycle.isReady() && this.ws?.readyState === WebSocket.OPEN;
   }
 
-  private async doConnect(lifecycleConnection: OpenAIRealtimeVoiceConnection): Promise<void> {
-    await new Promise<void>((resolve, reject) => {
-      let settled = false;
-      let reachedReady = false;
-      let startupFailureClosing = false;
-      let activeWs: WebSocket | undefined;
-      let removeAbortListener = () => {};
-      const settleResolve = () => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        if (connectTimeout) {
-          clearTimeout(connectTimeout);
-        }
-        removeAbortListener();
-        resolve();
-      };
-      const settleReject = (error: Error) => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        if (connectTimeout) {
-          clearTimeout(connectTimeout);
-        }
-        removeAbortListener();
-        reject(error);
-      };
-      const connectTimeout = setTimeout(() => {
-        if (
-          this.lifecycle.isCurrent(lifecycleConnection) &&
-          !reachedReady &&
-          this.lifecycle.terminalOutcome(lifecycleConnection) !== "completed"
-        ) {
-          const error = new Error("OpenAI realtime connection timeout");
-          startupFailureClosing = true;
-          activeWs?.terminate();
-          settleReject(error);
-        }
-      }, OpenAIRealtimeVoiceBridge.CONNECT_TIMEOUT_MS);
-      const onAbort = () => {
+  private async doConnect(lifecycleConnection: RealtimeVoiceSessionConnection): Promise<void> {
+    let activeWs: WebSocket | undefined;
+    const attempt = this.lifecycle.createConnectAttempt({
+      connection: lifecycleConnection,
+      timeoutMs: OpenAIRealtimeVoiceBridge.CONNECT_TIMEOUT_MS,
+      timeoutError: () => new Error("OpenAI realtime connection timeout"),
+      onTimeout: () => activeWs?.terminate(),
+      onAbort: () => {
         if (activeWs && activeWs.readyState !== WebSocket.CLOSED) {
           activeWs.close(1000, "connection canceled");
         }
-        if (this.lifecycle.terminalOutcome(lifecycleConnection) === "completed") {
-          settleResolve();
-          return;
-        }
-        const reason = lifecycleConnection.signal.reason;
-        settleReject(reason instanceof Error ? reason : new Error(String(reason)));
-      };
-      lifecycleConnection.signal.addEventListener("abort", onAbort, { once: true });
-      removeAbortListener = () => lifecycleConnection.signal.removeEventListener("abort", onAbort);
-      if (lifecycleConnection.signal.aborted) {
-        onAbort();
+      },
+    });
+
+    const openWebSocket = (resolvedConnection: {
+      url: string;
+      headers: Record<string, string>;
+    }) => {
+      if (attempt.settled) {
+        return;
       }
+      if (!this.lifecycle.isCurrent(lifecycleConnection) || lifecycleConnection.signal.aborted) {
+        attempt.resolve();
+        return;
+      }
+      const url = resolvedConnection.url;
+      this.connectionUrl = resolvedConnection.url;
+      const debugProxy = resolveDebugProxySettings();
+      const proxyAgent = createDebugProxyWebSocketAgent(debugProxy);
+      const ws = new WebSocket(resolvedConnection.url, {
+        headers: resolvedConnection.headers,
+        maxPayload: OPENAI_VOICE_WS_MAX_PAYLOAD_BYTES,
+        ...(proxyAgent ? { agent: proxyAgent } : {}),
+      });
+      activeWs = ws;
+      this.ws = ws;
 
-      const openWebSocket = (resolvedConnection: {
-        url: string;
-        headers: Record<string, string>;
-      }) => {
-        if (settled) {
+      const rejectStartup = (error: Error) => {
+        if (!attempt.rejectStartup(error)) {
           return;
         }
-        if (!this.lifecycle.isCurrent(lifecycleConnection) || lifecycleConnection.signal.aborted) {
-          settleResolve();
+        if (ws.readyState !== WebSocket.CLOSED) {
+          ws.close(1000, "startup failed");
+        }
+      };
+
+      ws.on("open", () => {
+        if (!this.lifecycle.acceptsEvents(lifecycleConnection)) {
+          ws.close(1000, "stale connection");
           return;
         }
-        const url = resolvedConnection.url;
-        this.connectionUrl = resolvedConnection.url;
-        const debugProxy = resolveDebugProxySettings();
-        const proxyAgent = createDebugProxyWebSocketAgent(debugProxy);
-        const ws = new WebSocket(resolvedConnection.url, {
-          headers: resolvedConnection.headers,
-          maxPayload: OPENAI_VOICE_WS_MAX_PAYLOAD_BYTES,
-          ...(proxyAgent ? { agent: proxyAgent } : {}),
+        this.resetRealtimeSessionState();
+        captureWsEvent({
+          url,
+          direction: "local",
+          kind: "ws-open",
+          flowId: this.flowId,
+          meta: {
+            provider: "openai",
+            capability: "realtime-voice",
+          },
         });
-        activeWs = ws;
-        this.ws = ws;
+        this.sendSessionUpdate();
+      });
 
-        const rejectStartup = (error: Error) => {
-          if (!this.lifecycle.acceptsEvents(lifecycleConnection) || reachedReady) {
-            return;
-          }
-          startupFailureClosing = true;
-          settleReject(error);
-          if (ws.readyState !== WebSocket.CLOSED) {
-            ws.close(1000, "startup failed");
-          }
-        };
-
-        ws.on("open", () => {
-          if (!this.lifecycle.acceptsEvents(lifecycleConnection)) {
-            ws.close(1000, "stale connection");
-            return;
-          }
-          this.resetRealtimeSessionState();
-          captureWsEvent({
-            url,
-            direction: "local",
-            kind: "ws-open",
-            flowId: this.flowId,
-            meta: {
-              provider: "openai",
-              capability: "realtime-voice",
-            },
-          });
-          this.sendSessionUpdate();
+      ws.on("message", (data: Buffer) => {
+        if (!this.lifecycle.acceptsEvents(lifecycleConnection) || this.ws !== ws) {
+          return;
+        }
+        if (attempt.settled && !attempt.ready) {
+          return;
+        }
+        captureWsEvent({
+          url,
+          direction: "inbound",
+          kind: "ws-frame",
+          flowId: this.flowId,
+          payload: data,
+          meta: {
+            provider: "openai",
+            capability: "realtime-voice",
+          },
         });
-
-        ws.on("message", (data: Buffer) => {
-          if (!this.lifecycle.acceptsEvents(lifecycleConnection) || this.ws !== ws) {
-            return;
-          }
-          if (settled && !reachedReady) {
-            return;
-          }
-          captureWsEvent({
-            url,
-            direction: "inbound",
-            kind: "ws-frame",
-            flowId: this.flowId,
-            payload: data,
-            meta: {
-              provider: "openai",
-              capability: "realtime-voice",
-            },
-          });
-          try {
-            const event = JSON.parse(data.toString()) as RealtimeEvent;
-            if (event.type === "error" && !reachedReady) {
-              // Only direct OpenAI auth failures get bounded remediation. Azure,
-              // custom endpoints, and non-auth startup details remain provider-owned.
-              rejectStartup(
-                isDirectOpenAIRealtimeWebSocketUrl(url) &&
-                  isOpenAIRealtimeStartupAuthFailure(event.error)
-                  ? new Error(OPENAI_REALTIME_CONFIGURED_API_KEY_REJECTED)
-                  : new Error(readRealtimeErrorDetail(event.error)),
-              );
-              return;
-            }
-            this.handleEvent(event, lifecycleConnection);
-            if (event.type === "session.updated") {
-              reachedReady = this.lifecycle.isReady();
-              settleResolve();
-            }
-          } catch (error) {
-            if (error instanceof OpenAIRealtimeMalformedAudioError) {
-              settleReject(error);
-              this.failConnection(error, ws, lifecycleConnection);
-              return;
-            }
-            console.error("[openai] realtime event parse failed:", error);
-          }
-        });
-
-        ws.on("error", (error) => {
-          if (!this.lifecycle.acceptsEvents(lifecycleConnection) || this.ws !== ws) {
-            return;
-          }
-          captureWsEvent({
-            url,
-            direction: "local",
-            kind: "error",
-            flowId: this.flowId,
-            errorText: error instanceof Error ? error.message : String(error),
-            meta: {
-              provider: "openai",
-              capability: "realtime-voice",
-            },
-          });
-          if (!reachedReady) {
-            const startupError = error instanceof Error ? error : new Error(String(error));
+        try {
+          const event = JSON.parse(data.toString()) as RealtimeEvent;
+          if (event.type === "error" && !attempt.ready) {
+            // Only direct OpenAI auth failures get bounded remediation. Azure,
+            // custom endpoints, and non-auth startup details remain provider-owned.
             rejectStartup(
               isDirectOpenAIRealtimeWebSocketUrl(url) &&
-                isOpenAIRealtimeStartupAuthFailure(startupError)
+                isOpenAIRealtimeStartupAuthFailure(event.error)
                 ? new Error(OPENAI_REALTIME_CONFIGURED_API_KEY_REJECTED)
-                : startupError,
+                : new Error(readRealtimeErrorDetail(event.error)),
             );
             return;
           }
-          this.config.onError?.(error instanceof Error ? error : new Error(String(error)));
-        });
+          this.handleEvent(event, lifecycleConnection);
+          if (event.type === "session.updated") {
+            attempt.resolve(this.lifecycle.isReady());
+          }
+        } catch (error) {
+          if (error instanceof OpenAIRealtimeMalformedAudioError) {
+            attempt.reject(error);
+            this.failConnection(error, ws, lifecycleConnection);
+            return;
+          }
+          console.error("[openai] realtime event parse failed:", error);
+        }
+      });
 
-        ws.on("close", (code, reasonBuffer) => {
-          captureOpenAIRealtimeWsClose({
-            url,
-            flowId: this.flowId,
+      ws.on("error", (error) => {
+        if (!this.lifecycle.acceptsEvents(lifecycleConnection) || this.ws !== ws) {
+          return;
+        }
+        captureWsEvent({
+          url,
+          direction: "local",
+          kind: "error",
+          flowId: this.flowId,
+          errorText: error instanceof Error ? error.message : String(error),
+          meta: {
+            provider: "openai",
             capability: "realtime-voice",
-            code,
-            reasonBuffer,
-          });
-          if (!this.lifecycle.isCurrent(lifecycleConnection)) {
-            return;
-          }
-          if (this.ws === ws) {
-            this.ws = null;
-          }
-          if (startupFailureClosing) {
-            return;
-          }
-          if (this.terminalError) {
-            this.notifyClose(lifecycleConnection, "error");
-            return;
-          }
-          if (this.lifecycle.terminalOutcome(lifecycleConnection) === "completed") {
-            settleResolve();
-            this.notifyClose(lifecycleConnection, "completed");
-            return;
-          }
-          if (!reachedReady && !settled) {
-            const error = new Error("OpenAI realtime connection closed before ready");
-            settleReject(error);
-            return;
-          }
-          const reason = this.reconnectReason ?? "websocket-close";
-          this.reconnectReason = undefined;
-          void this.attemptReconnect(reason, lifecycleConnection);
+          },
         });
-      };
+        if (!attempt.ready) {
+          const startupError = error instanceof Error ? error : new Error(String(error));
+          rejectStartup(
+            isDirectOpenAIRealtimeWebSocketUrl(url) &&
+              isOpenAIRealtimeStartupAuthFailure(startupError)
+              ? new Error(OPENAI_REALTIME_CONFIGURED_API_KEY_REJECTED)
+              : startupError,
+          );
+          return;
+        }
+        this.config.onError?.(error instanceof Error ? error : new Error(String(error)));
+      });
 
-      let connectionOrPromise:
-        | { url: string; headers: Record<string, string> }
-        | Promise<{ url: string; headers: Record<string, string> }>;
-      try {
-        connectionOrPromise = this.resolveConnectionParams();
-      } catch (error) {
-        settleReject(error instanceof Error ? error : new Error(String(error)));
-        return;
-      }
-      if (connectionOrPromise instanceof Promise) {
-        void connectionOrPromise.then(openWebSocket).catch((error: unknown) => {
-          if (
-            !this.lifecycle.isCurrent(lifecycleConnection) ||
-            this.lifecycle.terminalOutcome(lifecycleConnection) === "completed"
-          ) {
-            settleResolve();
-            return;
-          }
-          settleReject(error instanceof Error ? error : new Error(String(error)));
+      ws.on("close", (code, reasonBuffer) => {
+        captureOpenAIRealtimeWsClose({
+          url,
+          flowId: this.flowId,
+          capability: "realtime-voice",
+          code,
+          reasonBuffer,
         });
-        return;
+        if (!this.lifecycle.isCurrent(lifecycleConnection)) {
+          return;
+        }
+        if (this.ws === ws) {
+          this.ws = null;
+        }
+        if (attempt.startupFailed) {
+          return;
+        }
+        if (this.terminalError) {
+          this.notifyClose(lifecycleConnection, "error");
+          return;
+        }
+        if (this.lifecycle.terminalOutcome(lifecycleConnection) === "completed") {
+          attempt.resolve();
+          this.notifyClose(lifecycleConnection, "completed");
+          return;
+        }
+        if (!attempt.ready && !attempt.settled) {
+          const error = new Error("OpenAI realtime connection closed before ready");
+          attempt.reject(error);
+          return;
+        }
+        const reason = this.reconnectReason ?? "websocket-close";
+        this.reconnectReason = undefined;
+        void this.attemptReconnect(reason, lifecycleConnection);
+      });
+    };
+
+    let connectionOrPromise:
+      | { url: string; headers: Record<string, string> }
+      | Promise<{ url: string; headers: Record<string, string> }>;
+    try {
+      connectionOrPromise = this.resolveConnectionParams();
+    } catch (error) {
+      attempt.reject(error instanceof Error ? error : new Error(String(error)));
+      return attempt.promise;
+    }
+    if (connectionOrPromise instanceof Promise) {
+      void connectionOrPromise.then(openWebSocket).catch((error: unknown) => {
+        if (
+          !this.lifecycle.isCurrent(lifecycleConnection) ||
+          this.lifecycle.terminalOutcome(lifecycleConnection) === "completed"
+        ) {
+          attempt.resolve();
+          return;
+        }
+        attempt.reject(error instanceof Error ? error : new Error(String(error)));
+      });
+    } else {
+      try {
+        openWebSocket(connectionOrPromise);
+      } catch (error) {
+        attempt.reject(error instanceof Error ? error : new Error(String(error)));
       }
-      openWebSocket(connectionOrPromise);
-    });
+    }
+    await attempt.promise;
   }
 
   private resolveConnectionParams():
@@ -1120,7 +1053,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
 
   private async attemptReconnect(
     reason: string,
-    connection: OpenAIRealtimeVoiceConnection,
+    connection: RealtimeVoiceSessionConnection,
   ): Promise<void> {
     const retry = this.lifecycle.retry(
       connection,
@@ -1160,7 +1093,6 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     if (!nextConnection) {
       return;
     }
-    this.connection = nextConnection;
     try {
       await this.doConnect(nextConnection);
       this.config.onEvent?.({
@@ -1302,7 +1234,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     return this.audioFormat.encoding === "pcm16" ? "pcm16" : "g711_ulaw";
   }
 
-  private handleEvent(event: RealtimeEvent, connection: OpenAIRealtimeVoiceConnection): void {
+  private handleEvent(event: RealtimeEvent, connection: RealtimeVoiceSessionConnection): void {
     const emitServerEvent = () =>
       this.config.onEvent?.({
         direction: "server",
@@ -1348,9 +1280,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
           this.sessionReadyFired = true;
           this.config.onReady?.();
         }
-        const pendingAudio = this.pendingAudio.splice(0);
-        this.pendingAudioBytes = 0;
-        for (const chunk of pendingAudio) {
+        for (const chunk of this.lifecycle.drainPendingAudio()) {
           this.sendAudio(chunk);
         }
         return;
@@ -1677,33 +1607,14 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     this.deliveredToolCallKeys.clear();
   }
 
-  private enqueuePendingAudio(audio: Buffer): void {
-    if (
-      this.pendingAudio.length >= OpenAIRealtimeVoiceBridge.MAX_PENDING_AUDIO_CHUNKS ||
-      this.pendingAudioBytes + audio.byteLength > OpenAIRealtimeVoiceBridge.MAX_PENDING_AUDIO_BYTES
-    ) {
-      return;
-    }
-    // Capture transports can recycle caller-owned views before the provider becomes ready.
-    const queuedAudio = Buffer.from(audio);
-    this.pendingAudio.push(queuedAudio);
-    this.pendingAudioBytes += queuedAudio.byteLength;
-  }
-
-  private clearPendingAudio(): void {
-    this.pendingAudio = [];
-    this.pendingAudioBytes = 0;
-  }
-
   private resetTerminalState(): void {
-    this.clearPendingAudio();
     this.resetRealtimeSessionState();
   }
 
   private failConnection(
     error: OpenAIRealtimeMalformedAudioError,
     ws: WebSocket,
-    connection: OpenAIRealtimeVoiceConnection,
+    connection: RealtimeVoiceSessionConnection,
   ): void {
     if (this.terminalError) {
       return;
@@ -1723,7 +1634,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   }
 
   private notifyClose(
-    connection: OpenAIRealtimeVoiceConnection,
+    connection: RealtimeVoiceSessionConnection,
     outcome: "completed" | "error",
   ): void {
     const terminalOutcome = this.lifecycle.close(connection, outcome);

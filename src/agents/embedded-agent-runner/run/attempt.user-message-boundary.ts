@@ -1,3 +1,4 @@
+import { stableStringify } from "@openclaw/normalization-core";
 import { formatContextJsonBlock } from "../../../auto-reply/reply/channel-prompt-context.js";
 import { markInboundContextLabel } from "../../../auto-reply/reply/inbound-context-marker.js";
 import {
@@ -5,7 +6,6 @@ import {
   INTER_SESSION_PROMPT_PREFIX_BASE,
 } from "../../../sessions/input-provenance.js";
 import type { AgentMessage } from "../../runtime/index.js";
-import { stableStringify } from "../../stable-stringify.js";
 import { isRunnerToolCallBlockType } from "./attempt.tool-call-block-type.js";
 
 export type UserTranscriptContext = {
