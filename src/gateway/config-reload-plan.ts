@@ -7,7 +7,6 @@ import {
 } from "../channels/plugins/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  getActivePluginChannelRegistryVersion,
   getActivePluginHttpRouteRegistry,
   getActivePluginHttpRouteRegistryVersion,
 } from "../plugins/runtime.js";
@@ -157,25 +156,17 @@ const BASE_RELOAD_RULES_TAIL: ReloadRule[] = [
 let cachedReloadRules: ReloadRule[] | null = null;
 let cachedRegistry: ReturnType<typeof getActivePluginHttpRouteRegistry> | null = null;
 let cachedGatewayRegistryVersion = -1;
-let cachedChannelRegistryVersion = -1;
 
 function listReloadRules(): ReloadRule[] {
-  // Reload metadata is Gateway policy. Agent-scoped registry activation must
-  // not replace the pinned Gateway surface and silently change restart rules.
+  // Reload metadata is gateway policy owned by the process-root registry.
   const registry = getActivePluginHttpRouteRegistry();
   const gatewayRegistryVersion = getActivePluginHttpRouteRegistryVersion();
-  const channelRegistryVersion = getActivePluginChannelRegistryVersion();
-  // Plugin/channel reload rules are process-stable until the active registry
+  // Plugin/channel reload rules are process-stable until the root registry
   // version changes; cache them to keep every config diff cheap.
-  if (
-    registry !== cachedRegistry ||
-    gatewayRegistryVersion !== cachedGatewayRegistryVersion ||
-    channelRegistryVersion !== cachedChannelRegistryVersion
-  ) {
+  if (registry !== cachedRegistry || gatewayRegistryVersion !== cachedGatewayRegistryVersion) {
     cachedReloadRules = null;
     cachedRegistry = registry;
     cachedGatewayRegistryVersion = gatewayRegistryVersion;
-    cachedChannelRegistryVersion = channelRegistryVersion;
   }
   if (cachedReloadRules) {
     return cachedReloadRules;

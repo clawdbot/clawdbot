@@ -10,7 +10,7 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import {
   createTestRegistry,
-  releasePinnedPluginChannelRegistry,
+  resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -483,7 +483,7 @@ describe("createIMessageTestPlugin", () => {
         expect(runCliJson).toHaveBeenCalledTimes(1);
       });
     } finally {
-      releasePinnedPluginChannelRegistry();
+      resetPluginRuntimeStateForTest();
     }
   });
 
@@ -539,7 +539,7 @@ describe("createIMessageTestPlugin", () => {
         expect(captionRequest).not.toHaveBeenCalled();
       });
     } finally {
-      releasePinnedPluginChannelRegistry();
+      resetPluginRuntimeStateForTest();
     }
   });
 

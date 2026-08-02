@@ -1,5 +1,4 @@
-import { expectDefined } from "@openclaw/normalization-core";
-// Internal state and composed-registry view for the global hook runner.
+// Internal state and live registry view for the global hook runner.
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { GlobalHookRunnerRegistry } from "./hook-registry.types.js";
 import type { HookRunner } from "./hooks.js";
@@ -8,8 +7,8 @@ import type {
   PluginRegistry,
   PluginTrustedToolPolicyRegistryRegistration,
 } from "./registry-types.js";
-import { getPluginRegistryState } from "./runtime-state.js";
-import { collectLivePluginRegistries } from "./runtime.js";
+import { getActivePluginRegistry } from "./runtime.js";
+import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
 
 type TrustedPolicyHookRunnerRegistry = GlobalHookRunnerRegistry & {
   trustedToolPolicies?: PluginTrustedToolPolicyRegistryRegistration[];
@@ -29,232 +28,110 @@ export function getHookRunnerGlobalState(): HookRunnerGlobalState {
   }));
 }
 
-function collectHookRegistrySources(
-  lastInitialized: TrustedPolicyHookRunnerRegistry | null,
-): TrustedPolicyHookRunnerRegistry[] {
-  const ordered: TrustedPolicyHookRunnerRegistry[] = [];
-  const seen = new Set<TrustedPolicyHookRunnerRegistry>();
-  const add = (registry: TrustedPolicyHookRunnerRegistry | null) => {
-    if (!registry || seen.has(registry)) {
-      return;
-    }
-    // Retired registries were superseded by a newer activation; dispatching
-    // their hooks would resurrect stale config closures. Only lastInitialized
-    // can be retired here (the live registries below are active/pinned, never
-    // retired); SDK-supplied registries are not PluginRegistry and never match.
-    if (isPluginRegistryRetired(registry as PluginRegistry)) {
-      return;
-    }
-    seen.add(registry);
-    ordered.push(registry);
-  };
-  const liveRegistries = collectLivePluginRegistries();
-  const initializedLiveRegistry = liveRegistries.some((registry) => registry === lastInitialized);
-  // SDK callers can initialize an isolated registry and expect it to stay
-  // authoritative. Runtime activations compose all live registries; owner
-  // selection below aligns same-plugin hooks with their tool registry.
-  if (!initializedLiveRegistry) {
-    add(lastInitialized);
+function resolveRootHookRegistry(
+  state: HookRunnerGlobalState,
+): TrustedPolicyHookRunnerRegistry | null {
+  const activeRegistry = getActivePluginRegistry();
+  if (activeRegistry) {
+    return activeRegistry;
   }
-  for (const registry of liveRegistries) {
-    add(registry);
+  if (state.registry && !isPluginRegistryRetired(state.registry as PluginRegistry)) {
+    return state.registry;
   }
-  return ordered;
+  return null;
 }
 
-function composeLiveHookRegistry(
-  lastInitialized: TrustedPolicyHookRunnerRegistry | null,
-): TrustedPolicyHookRunnerRegistry {
-  const sources = collectHookRegistrySources(lastInitialized);
-  // One source registry owns a plugin's entire contribution (status + hooks),
-  // so handlers never double-fire across registries and a plugin's hooks stay
-  // paired with the status the inbound-claim path reads.
-  const ownerSourceIndexByPluginId = new Map<string, number>();
-  const claimOwner = (pluginId: string, index: number) => {
-    if (!ownerSourceIndexByPluginId.has(pluginId)) {
-      ownerSourceIndexByPluginId.set(pluginId, index);
-    }
-  };
-  // pluginIds each source actually contributes a hook for, so ownership can
-  // prefer a source that carries the plugin's hooks over a same-plugin record
-  // that loaded without any (e.g. a setup-runtime channel load registers the
-  // channel but not the plugin's api.on(...) hooks).
-  const hookPluginIdsBySource = sources.map((registry) => {
-    const ids = new Set<string>();
-    for (const hook of registry.typedHooks) {
-      ids.add(hook.pluginId);
-    }
-    for (const hook of registry.hooks) {
-      ids.add(hook.pluginId);
-    }
-    return ids;
-  });
-  const liveRegistries = collectLivePluginRegistries();
-  if (lastInitialized && !liveRegistries.includes(lastInitialized as PluginRegistry)) {
-    const isolatedSourceIndex = sources.indexOf(lastInitialized);
-    if (isolatedSourceIndex >= 0) {
-      for (const pluginId of expectDefined(
-        hookPluginIdsBySource[isolatedSourceIndex],
-        "isolated hook plugin ids",
-      )) {
-        claimOwner(pluginId, isolatedSourceIndex);
-      }
-    }
+function resolveHookRegistry(state: HookRunnerGlobalState): TrustedPolicyHookRunnerRegistry | null {
+  const scopedRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
+  const rootRegistry = resolveRootHookRegistry(state);
+  if (!scopedRegistry || scopedRegistry === rootRegistry) {
+    return scopedRegistry ?? rootRegistry;
   }
-  const claimToolOwners = (registry: PluginRegistry | null | undefined) => {
-    if (!registry) {
-      return;
+  if (!rootRegistry) {
+    return scopedRegistry;
+  }
+
+  // A handle overlays only the contributions it actually carries. A partial or
+  // failed handle must not hide root hooks or trusted policy from the same plugin.
+  const scopedPluginIds = new Set(scopedRegistry.plugins.map((plugin) => plugin.id));
+  const scopedLegacyHookEvents = new Map<string, Set<string>>();
+  for (const hook of scopedRegistry.hooks) {
+    if (!Array.isArray(hook.events)) {
+      continue;
     }
-    const sourceIndex = sources.indexOf(registry);
-    if (sourceIndex < 0) {
-      return;
+    const events = scopedLegacyHookEvents.get(hook.pluginId) ?? new Set<string>();
+    for (const event of hook.events) {
+      events.add(event);
     }
-    for (const tool of registry.tools) {
-      claimOwner(tool.pluginId, sourceIndex);
-    }
-  };
-  const runtimeState = getPluginRegistryState();
-  // Match tool resolution: an isolated initialized registry stays authoritative,
-  // then the pinned Gateway owner wins only for tools it actually registered,
-  // followed by the active registry for remaining tool owners.
-  claimToolOwners(runtimeState?.channel.pinned ? runtimeState.channel.registry : null);
-  claimToolOwners(runtimeState?.activeRegistry);
-  // Prefer the highest-precedence source where the plugin loaded AND actually
-  // contributes a hook, so a loaded-but-hookless record (failed/disabled scoped
-  // reload, or a setup-runtime channel load) cannot shadow a lower-precedence
-  // registration that still carries a fail-closed tool-call gate.
-  sources.forEach((registry, index) => {
-    for (const plugin of registry.plugins) {
-      if (
-        plugin.status === "loaded" &&
-        expectDefined(hookPluginIdsBySource[index], "hook plugin ids by source entry at index").has(
-          plugin.id,
-        )
-      ) {
-        claimOwner(plugin.id, index);
-      }
-    }
+    scopedLegacyHookEvents.set(hook.pluginId, events);
+  }
+  const scopedTypedHooks = new Set(
+    scopedRegistry.typedHooks.map((hook) => `${hook.pluginId}\0${hook.hookName}`),
+  );
+  const scopedTrustedPolicies = new Set(
+    (scopedRegistry.trustedToolPolicies ?? []).map(
+      (entry) => `${entry.pluginId}\0${entry.policy.id}`,
+    ),
+  );
+  const trustedToolPolicies = [
+    ...(rootRegistry.trustedToolPolicies ?? []).filter(
+      (entry) => !scopedTrustedPolicies.has(`${entry.pluginId}\0${entry.policy.id}`),
+    ),
+    ...(scopedRegistry.trustedToolPolicies ?? []),
+  ].toSorted((left, right) => {
+    const leftRank = left.origin === "bundled" ? 0 : 1;
+    const rightRank = right.origin === "bundled" ? 0 : 1;
+    return leftRank - rightRank;
   });
-  // Then a loaded record owns the plugin's status when no live source
-  // contributes a hook for it, keeping status paired with a single owner.
-  sources.forEach((registry, index) => {
-    for (const plugin of registry.plugins) {
-      if (plugin.status === "loaded") {
-        claimOwner(plugin.id, index);
-      }
-    }
-  });
-  sources.forEach((registry, index) => {
-    for (const plugin of registry.plugins) {
-      claimOwner(plugin.id, index);
-    }
-  });
-  // Defensive: claim any hook whose plugin record is absent from .plugins so a
-  // malformed registry never silently drops a registered hook.
-  sources.forEach((registry, index) => {
-    for (const hook of registry.typedHooks) {
-      claimOwner(hook.pluginId, index);
-    }
-    for (const hook of registry.hooks) {
-      claimOwner(hook.pluginId, index);
-    }
-  });
-  const policyOwnerSourceIndexByPluginId = new Map<string, number>();
-  const claimPolicyOwner = (pluginId: string, index: number) => {
-    if (!policyOwnerSourceIndexByPluginId.has(pluginId)) {
-      policyOwnerSourceIndexByPluginId.set(pluginId, index);
-    }
-  };
-  const trustedPolicyPluginIdsBySource = sources.map((registry) => {
-    const ids = new Set<string>();
-    for (const registration of registry.trustedToolPolicies ?? []) {
-      ids.add(registration.pluginId);
-    }
-    return ids;
-  });
-  sources.forEach((registry, index) => {
-    for (const plugin of registry.plugins) {
-      if (
-        plugin.status === "loaded" &&
-        expectDefined(
-          trustedPolicyPluginIdsBySource[index],
-          "trusted policy plugin ids by source entry at index",
-        ).has(plugin.id)
-      ) {
-        claimPolicyOwner(plugin.id, index);
-      }
-    }
-  });
-  sources.forEach((registry, index) => {
-    for (const plugin of registry.plugins) {
-      if (plugin.status === "loaded") {
-        claimPolicyOwner(plugin.id, index);
-      }
-    }
-  });
-  sources.forEach((registry, index) => {
-    for (const plugin of registry.plugins) {
-      claimPolicyOwner(plugin.id, index);
-    }
-  });
-  sources.forEach((registry, index) => {
-    for (const registration of registry.trustedToolPolicies ?? []) {
-      claimPolicyOwner(registration.pluginId, index);
-    }
-  });
-  const trustedToolPolicies = sources
-    .flatMap((registry, index) =>
-      (registry.trustedToolPolicies ?? []).filter(
-        (registration) => policyOwnerSourceIndexByPluginId.get(registration.pluginId) === index,
-      ),
-    )
-    // Preserve the trusted-policy tier contract across composed registries:
-    // bundled policies run before installed policies, and same-tier entries
-    // keep the source/plugin-load order selected above.
-    .toSorted((left, right) => {
-      const leftRank = left.origin === "bundled" ? 0 : 1;
-      const rightRank = right.origin === "bundled" ? 0 : 1;
-      return leftRank - rightRank;
-    });
   return {
-    hooks: sources.flatMap((registry, index) =>
-      registry.hooks.filter((hook) => ownerSourceIndexByPluginId.get(hook.pluginId) === index),
-    ),
-    typedHooks: sources.flatMap((registry, index) =>
-      registry.typedHooks.filter((hook) => ownerSourceIndexByPluginId.get(hook.pluginId) === index),
-    ),
-    plugins: sources.flatMap((registry, index) =>
-      registry.plugins.filter((plugin) => ownerSourceIndexByPluginId.get(plugin.id) === index),
-    ),
+    hooks: [
+      ...rootRegistry.hooks.flatMap((hook) => {
+        const scopedEvents = scopedLegacyHookEvents.get(hook.pluginId);
+        if (!scopedEvents || !Array.isArray(hook.events)) {
+          return hook;
+        }
+        const events = hook.events.filter((event) => !scopedEvents.has(event));
+        return events.length === 0 ? [] : [{ ...hook, events }];
+      }),
+      ...scopedRegistry.hooks,
+    ],
+    typedHooks: [
+      ...rootRegistry.typedHooks.filter(
+        (hook) => !scopedTypedHooks.has(`${hook.pluginId}\0${hook.hookName}`),
+      ),
+      ...scopedRegistry.typedHooks,
+    ],
+    plugins: [
+      ...rootRegistry.plugins.filter((plugin) => !scopedPluginIds.has(plugin.id)),
+      ...scopedRegistry.plugins,
+    ],
     trustedToolPolicies,
   };
 }
 
-export function createComposedHookRegistryFacade(
+export function createLiveHookRegistryFacade(
   state: HookRunnerGlobalState,
 ): TrustedPolicyHookRunnerRegistry {
-  // Live getters: createHookRunner reads these on every hasHooks/getHooksForName
-  // call, so the runner always dispatches the current live registry set rather
-  // than a snapshot captured at initialization. Composition is bounded by the
-  // small live registry set and runs on hook-paced events, not tight loops.
+  // The runner object stays stable while these getters select the current request
+  // handle or process root on every dispatch.
   return {
     get hooks() {
-      return composeLiveHookRegistry(state.registry).hooks;
+      return resolveHookRegistry(state)?.hooks ?? [];
     },
     get typedHooks() {
-      return composeLiveHookRegistry(state.registry).typedHooks;
+      return resolveHookRegistry(state)?.typedHooks ?? [];
     },
     get plugins() {
-      return composeLiveHookRegistry(state.registry).plugins;
+      return resolveHookRegistry(state)?.plugins ?? [];
     },
     get trustedToolPolicies() {
-      return composeLiveHookRegistry(state.registry).trustedToolPolicies;
+      return resolveHookRegistry(state)?.trustedToolPolicies ?? [];
     },
   };
 }
 
-/** Get the composed registry that backs global hook dispatch. */
+/** Get the registry view that backs global hook dispatch. */
 export function getGlobalHookRunnerRegistry(): TrustedPolicyHookRunnerRegistry | null {
   const state = getHookRunnerGlobalState();
-  return state.registry ? createComposedHookRegistryFacade(state) : null;
+  return resolveHookRegistry(state) ? createLiveHookRegistryFacade(state) : null;
 }

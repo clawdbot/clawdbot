@@ -3,7 +3,7 @@ import { sendDurableMessageBatch } from "openclaw/plugin-sdk/channel-outbound";
 import {
   createOutboundTestPlugin,
   createTestRegistry,
-  releasePinnedPluginChannelRegistry,
+  resetPluginRuntimeStateForTest,
   resetGlobalHookRunner,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/channel-test-helpers";
@@ -56,7 +56,7 @@ describe("Feishu outbound shared delivery", () => {
 
   afterEach(() => {
     resetGlobalHookRunner();
-    releasePinnedPluginChannelRegistry();
+    resetPluginRuntimeStateForTest();
   });
 
   it("routes oversized presentation media through one media send and chunked fallback text", async () => {
