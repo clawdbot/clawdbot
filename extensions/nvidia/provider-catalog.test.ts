@@ -170,10 +170,9 @@ describe("nvidia provider catalog", () => {
     expect(
       manifest.modelCatalog.providers.nvidia.models
         .filter((model) => "status" in model && model.status === "deprecated")
-        .map((model) => ({
-          id: model.id,
-          ...("replacedBy" in model ? { replacedBy: model.replacedBy } : {}),
-        })),
+        .map((model) =>
+          "replacedBy" in model ? { id: model.id, replacedBy: model.replacedBy } : { id: model.id },
+        ),
     ).toEqual([
       { id: "qwen/qwen3.5-397b-a17b" },
       { id: "moonshotai/kimi-k2.5", replacedBy: "moonshotai/kimi-k2.6" },
