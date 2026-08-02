@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
+import type { ZaloFetch } from "./api.js";
 import { probeZalo } from "./probe.js";
 
 describe("probeZalo", () => {
   it("returns the bot identity and elapsed time", async () => {
-    const fetcher = vi.fn(async () =>
+    const fetcher = vi.fn<ZaloFetch>(async () =>
       Response.json({
         ok: true,
         result: { account_name: "test-bot", account_type: "BASIC", id: "bot-1" },
@@ -19,7 +20,7 @@ describe("probeZalo", () => {
   });
 
   it("preserves provider errors", async () => {
-    const fetcher = vi.fn(async () =>
+    const fetcher = vi.fn<ZaloFetch>(async () =>
       Response.json({ ok: false, error_code: 401, description: "invalid token" }),
     );
 
@@ -31,7 +32,7 @@ describe("probeZalo", () => {
   });
 
   it("preserves timeout errors", async () => {
-    const fetcher = vi.fn(async () => {
+    const fetcher = vi.fn<ZaloFetch>(async () => {
       throw new DOMException("aborted", "AbortError");
     });
 
