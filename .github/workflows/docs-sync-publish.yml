@@ -6,8 +6,12 @@ on:
       - main
     paths:
       - docs/**
+      - extensions/**/openclaw.plugin.json
+      - extensions/**/package.json
       - scripts/docs-list.js
       - scripts/docs-sync-publish.mjs
+      - scripts/generate-plugin-inventory-doc.mjs
+      - scripts/lib/plugin-inventory-doc.mjs
       - .github/workflows/docs-sync-publish.yml
   workflow_dispatch:
 

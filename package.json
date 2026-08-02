@@ -1539,7 +1539,7 @@
     "docs:check-links": "node scripts/docs-link-audit.mjs",
     "docs:check-links:anchors": "node scripts/docs-link-audit.mjs --anchors",
     "docs:check-mdx": "node scripts/check-docs-mdx.mjs docs README.md",
-    "docs:dev": "cd docs && mint dev",
+    "docs:dev": "node scripts/generate-plugin-inventory-doc.mjs --materialize && cd docs && mint dev",
     "docs:list": "node scripts/docs-list.js",
     "docs:map:gen": "node scripts/docs-list.js --headings",
     "docs:spellcheck": "bash scripts/docs-spellcheck.sh",

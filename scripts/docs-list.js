@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 
 // Lists source docs pages and renders on-demand heading metadata for docs-aware tooling.
+import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const DOCS_DIR = join(process.cwd(), "docs");
@@ -25,6 +26,33 @@ function assertDocsDir(docsDir) {
   if (!statSync(docsDir).isDirectory()) {
     throw new Error("docs:list: docs path is not a directory.");
   }
+}
+
+/** Materialize source-owned plugin reference pages before traversing source documentation. */
+export function materializePluginReferenceDocs(docsDir = DOCS_DIR, options = {}) {
+  const sourceRoot = dirname(docsDir);
+  const generatorPath = join(sourceRoot, "scripts", "generate-plugin-inventory-doc.mjs");
+  if (
+    !existsSync(generatorPath) ||
+    !existsSync(join(sourceRoot, "extensions")) ||
+    !existsSync(join(docsDir, "plugins", "plugin-inventory.md"))
+  ) {
+    return false;
+  }
+
+  const result = spawnSync(
+    process.execPath,
+    [generatorPath, options.regenerate ? "--write" : "--materialize"],
+    { cwd: sourceRoot, encoding: "utf8" },
+  );
+  if (result.error || result.status !== 0) {
+    throw new Error(
+      result.error?.message ||
+        result.stderr.trim() ||
+        "failed to materialize plugin reference docs",
+    );
+  }
+  return true;
 }
 
 /**
@@ -255,6 +283,7 @@ function normalizeDocsMapRelativePath(relativePath) {
 /** Render the publish-only docs heading map without creating a source-tree mirror. */
 export function renderDocsHeadingMap(docsDir = DOCS_DIR, options = {}) {
   assertDocsDir(docsDir);
+  materializePluginReferenceDocs(docsDir);
   const files = walkMarkdownFiles(docsDir, docsDir, {
     excludedDirs: DOCS_MAP_EXCLUDED_DIRS,
     excludedFiles: DOCS_MAP_EXCLUDED_FILES,
@@ -297,6 +326,7 @@ export function renderDocsHeadingMap(docsDir = DOCS_DIR, options = {}) {
 
 function runDocsList(docsDir = DOCS_DIR) {
   assertDocsDir(docsDir);
+  materializePluginReferenceDocs(docsDir);
   console.log("Listing all markdown files in docs folder:");
   const markdownFiles = walkMarkdownFiles(docsDir, docsDir, {
     excludedDirs: DOCS_LIST_EXCLUDED_DIRS,

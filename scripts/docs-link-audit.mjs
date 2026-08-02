@@ -8,6 +8,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { createProcessor } from "@mdx-js/mdx";
 import MarkdownIt from "markdown-it";
+import { materializePluginReferenceDocs } from "./docs-list.js";
 import { resolveClawHubRepoPath, syncClawHubDocsTree } from "./docs-sync-publish.mjs";
 import { resolveNpmRunner } from "./npm-runner.mjs";
 
@@ -874,5 +875,6 @@ function isCliEntry() {
 }
 
 if (isCliEntry()) {
+  materializePluginReferenceDocs(DOCS_DIR);
   process.exit(runDocsLinkAuditCli());
 }

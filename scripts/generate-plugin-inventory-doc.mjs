@@ -35,6 +35,19 @@ const PLUGIN_DOC_ALIASES = new Map([
 const SKIPPED_REFERENCE_PAGE_IDS = new Set(["parallel"]);
 const MANUAL_SECTION_START = "<!-- openclaw-plugin-reference:manual-start -->";
 const MANUAL_SECTION_END = "<!-- openclaw-plugin-reference:manual-end -->";
+// Human-authored sections remain tracked; manifest-only pages are recreated on demand.
+const AUTHORED_REFERENCE_PAGE_IDS = new Set([
+  "acpx",
+  "anthropic",
+  "anthropic-vertex",
+  "clickclack",
+  "crabbox",
+  "diffs-language-pack",
+  "llama-cpp",
+  "microsoft-foundry",
+  "opencode",
+  "policy",
+]);
 // Generated link labels are user-visible product names and translation source.
 const RELATED_DOC_PRODUCT_IDS = new Set([
   "chutes",
@@ -584,6 +597,46 @@ function writeGeneratedDocs(records) {
   fs.writeFileSync(path.join(ROOT, REFERENCE_INDEX_PATH), renderReferenceIndex(records), "utf8");
 }
 
+function validateAuthoredReferencePages(records) {
+  for (const record of records.filter(hasGeneratedReferencePage)) {
+    const relativePath = path.join(REFERENCE_DIR, `${record.id}.md`);
+    const manualSections = readManualReferenceSections(relativePath);
+    if (AUTHORED_REFERENCE_PAGE_IDS.has(record.id) && !manualSections) {
+      throw new Error(`${relativePath} is missing its tracked, human-authored documentation`);
+    }
+    if (manualSections && !AUTHORED_REFERENCE_PAGE_IDS.has(record.id)) {
+      throw new Error(
+        `${relativePath} contains human-authored documentation; remove its .gitignore entry and add its plugin id to AUTHORED_REFERENCE_PAGE_IDS`,
+      );
+    }
+  }
+}
+
+function validateReferencePageIgnoreCoverage(records) {
+  const ignoredPaths = new Set(
+    fs
+      .readFileSync(path.join(ROOT, ".gitignore"), "utf8")
+      .split(/\r?\n/u)
+      .map((entry) => entry.trim().replace(/^\/+/, "")),
+  );
+  for (const record of records.filter(hasGeneratedReferencePage)) {
+    const relativePath = `${REFERENCE_DIR}/${record.id}.md`;
+    if (AUTHORED_REFERENCE_PAGE_IDS.has(record.id)) {
+      if (ignoredPaths.has(relativePath)) {
+        throw new Error(
+          `${relativePath} contains human-authored documentation and must not be ignored`,
+        );
+      }
+      continue;
+    }
+    if (!ignoredPaths.has(relativePath)) {
+      throw new Error(
+        `${relativePath} is not explicitly listed in .gitignore; add its exact path before generating manifest-only plugin documentation`,
+      );
+    }
+  }
+}
+
 function readGeneratedDocs(records) {
   return [
     [REFERENCE_INDEX_PATH, renderReferenceIndex(records)],
@@ -676,12 +729,17 @@ ${renderInventoryList(groups.source)}
 function main(argv = process.argv.slice(2)) {
   const write = argv.includes("--write");
   const check = argv.includes("--check");
-  if (write === check) {
-    console.error("usage: node scripts/generate-plugin-inventory-doc.mjs --write|--check");
+  const materialize = argv.includes("--materialize");
+  if (Number(write) + Number(check) + Number(materialize) !== 1) {
+    console.error(
+      "usage: node scripts/generate-plugin-inventory-doc.mjs --write|--check|--materialize",
+    );
     process.exit(2);
   }
 
   const records = collectPluginRecords();
+  validateAuthoredReferencePages(records);
+  validateReferencePageIgnoreCoverage(records);
   const next = renderDocument();
   const docPath = path.join(ROOT, DOC_PATH);
   if (write) {
@@ -697,6 +755,15 @@ function main(argv = process.argv.slice(2)) {
   }
   for (const [relativePath, expected] of readGeneratedDocs(records)) {
     const fullPath = path.join(ROOT, relativePath);
+    if (!fs.existsSync(fullPath) && relativePath.startsWith(`${REFERENCE_DIR}${path.sep}`)) {
+      try {
+        fs.writeFileSync(fullPath, expected, { encoding: "utf8", flag: "wx" });
+      } catch (error) {
+        if (error?.code !== "EEXIST") {
+          throw error;
+        }
+      }
+    }
     const actual = fs.existsSync(fullPath) ? fs.readFileSync(fullPath, "utf8") : "";
     if (actual !== expected) {
       console.error(`${relativePath} is stale. Run \`pnpm plugins:inventory:gen\`.`);

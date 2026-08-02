@@ -5,7 +5,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { renderDocsHeadingMap } from "./docs-list.js";
+import { materializePluginReferenceDocs, renderDocsHeadingMap } from "./docs-list.js";
 import { repairMintlifyAccordionIndentation } from "./lib/mintlify-accordion.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -758,6 +758,7 @@ export function syncClawHubDocsTree(targetDocsDir, options = {}) {
 }
 
 function syncDocsTree(targetRoot, options = {}) {
+  materializePluginReferenceDocs(SOURCE_DOCS_DIR, { regenerate: true });
   const targetDocsDir = path.join(targetRoot, "docs");
   ensureDir(targetDocsDir);
 

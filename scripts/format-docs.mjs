@@ -6,6 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { materializePluginReferenceDocs } from "./docs-list.js";
 import { resolveRepoToolBinPath } from "./lib/local-heavy-check-runtime.mjs";
 import { repairMintlifyAccordionIndentation } from "./lib/mintlify-accordion.mjs";
 import { outputTail } from "./lib/output-tail.mjs";
@@ -236,6 +237,7 @@ export function formatDocs(params = {}, deps = {}) {
 }
 
 function main() {
+  materializePluginReferenceDocs(path.join(ROOT, "docs"));
   const { changed, fileCount } = formatDocs({ check: CHECK, root: ROOT });
 
   if (CHECK && changed.length > 0) {

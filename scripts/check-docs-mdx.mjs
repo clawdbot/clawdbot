@@ -311,6 +311,17 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   const cwd = process.cwd();
   const roots = args.roots.map((root) => path.resolve(root));
+  const sourceScriptsDir = path.dirname(fileURLToPath(import.meta.url));
+  const sourceDocsDir = path.resolve(sourceScriptsDir, "..", "docs");
+  if (
+    roots.some(
+      (root) => root === sourceDocsDir || root.startsWith(`${sourceDocsDir}${path.sep}`),
+    ) &&
+    fs.existsSync(path.join(sourceScriptsDir, "docs-list.js"))
+  ) {
+    const { materializePluginReferenceDocs } = await import("./docs-list.js");
+    materializePluginReferenceDocs(sourceDocsDir);
+  }
   const files = [
     ...new Set(
       roots.flatMap((root) => {
