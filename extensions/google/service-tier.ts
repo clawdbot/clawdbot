@@ -3,7 +3,7 @@
 // must only be applied to the direct `google-generative-ai` transport.
 const GOOGLE_SERVICE_TIERS = ["FLEX", "PRIORITY", "STANDARD"] as const;
 
-export type GoogleServiceTier = (typeof GOOGLE_SERVICE_TIERS)[number];
+type GoogleServiceTier = (typeof GOOGLE_SERVICE_TIERS)[number];
 
 export function resolveGoogleServiceTier(
   extraParams: Record<string, unknown> | undefined,
