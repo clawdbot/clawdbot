@@ -2,7 +2,11 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { FailoverReason } from "../../agents/embedded-agent-helpers/types.js";
-import { resolveTargetPrefixedChannel } from "../../infra/outbound/channel-target-prefix.js";
+import { normalizeAnyChannelId } from "../../channels/registry-normalize.js";
+import {
+  resolveTargetPrefixedChannel,
+  stripTargetProviderPrefix,
+} from "../../infra/outbound/channel-target-prefix.js";
 import type { CronFailureNotificationDelivery, CronJob, CronMessageChannel } from "../types.js";
 import type { CronServiceState } from "./state.js";
 
@@ -43,9 +47,17 @@ function normalizeCronMessageChannel(input: unknown): CronMessageChannel | undef
 function resolveFailureAlertChannel(channel: unknown, to?: string): CronMessageChannel | undefined {
   const normalized = normalizeCronMessageChannel(channel);
   if (normalized && normalized !== "last") {
-    return normalized;
+    return normalizeAnyChannelId(normalized) ?? normalized;
   }
   return normalizeCronMessageChannel(resolveTargetPrefixedChannel(to)) ?? normalized;
+}
+
+function normalizeFailureAlertRecipient(channel: CronMessageChannel, to: string): string {
+  if (resolveTargetPrefixedChannel(to) !== channel) {
+    return to;
+  }
+  // Canonicalize loaded-provider aliases only; recipient/topic ids can be case-sensitive.
+  return stripTargetProviderPrefix(to, to.slice(0, to.indexOf(":")));
 }
 
 function normalizeTo(input: unknown): string | undefined {
@@ -109,7 +121,12 @@ export function resolveFailureAlert(
   const compatibleDeliveryTo = inheritsDeliveryChannel ? deliveryTo : undefined;
   const explicitTo = jobTo ?? globalTo;
   const inheritsDeliveryRoute =
-    inheritsDeliveryChannel && (explicitTo === undefined || explicitTo === deliveryTo);
+    inheritsDeliveryChannel &&
+    (explicitTo === undefined ||
+      explicitTo === deliveryTo ||
+      (deliveryTo !== undefined &&
+        normalizeFailureAlertRecipient(channel, explicitTo) ===
+          normalizeFailureAlertRecipient(channel, deliveryTo)));
   const inheritedDeliveryAccountId =
     mode !== "webhook" && inheritsDeliveryRoute ? job.delivery?.accountId : undefined;
   const accountId =
