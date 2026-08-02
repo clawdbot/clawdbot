@@ -83,6 +83,7 @@ import {
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { resolveContextTokensForModel } from "../context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
+import { waitForDeferredTurnMaintenanceForSession } from "../embedded-agent-runner/context-engine-maintenance.js";
 import {
   applyEmbeddedAttemptToolsAllow,
   mergeForcedEmbeddedAttemptToolsAllow,
@@ -184,6 +185,7 @@ const prepareDeps = {
   getClaudeLiveSessionGenerationForOwner,
   readExternalCliBootstrapCredential,
   resolveApiKeyForProfile,
+  waitForDeferredTurnMaintenanceForSession,
 };
 
 function resolveReusableCliSessionId(reusableCliSession: CliReusableSession): string | undefined {
@@ -715,16 +717,21 @@ export async function prepareCliRunContext(
     resolveCliSessionHistoryExcludedMessageIdempotencyKey(params);
   let openClawHistoryMessages: unknown[] | undefined;
   const loadOpenClawHistoryMessages = async () => {
-    openClawHistoryMessages ??= await loadCliSessionHistoryMessages({
-      sessionId: params.sessionId,
-      sessionFile: params.sessionFile,
-      sessionKey: params.sessionKey,
-      sessionTarget: params.sessionTarget,
-      agentId: params.agentId,
-      config: params.config,
-      ...(params.storePath ? { storePath: params.storePath } : {}),
-      ...(excludeMessageIdempotencyKey ? { excludeMessageIdempotencyKey } : {}),
-    });
+    if (openClawHistoryMessages === undefined) {
+      await prepareDeps.waitForDeferredTurnMaintenanceForSession(
+        params.sessionKey ?? params.sessionId,
+      );
+      openClawHistoryMessages = await loadCliSessionHistoryMessages({
+        sessionId: params.sessionId,
+        sessionFile: params.sessionFile,
+        sessionKey: params.sessionKey,
+        sessionTarget: params.sessionTarget,
+        agentId: params.agentId,
+        config: params.config,
+        ...(params.storePath ? { storePath: params.storePath } : {}),
+        ...(excludeMessageIdempotencyKey ? { excludeMessageIdempotencyKey } : {}),
+      });
+    }
     return openClawHistoryMessages;
   };
   const promptBuildHookResult = await (async () => {

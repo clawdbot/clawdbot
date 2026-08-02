@@ -49,12 +49,7 @@ const CLI_SESSION_RESEED_HISTORY_CONTEXT_SHARE = 0.08;
 const CHARS_PER_TOKEN_ESTIMATE = 4;
 const CLI_SESSION_HISTORY_HEADER_READ_BYTES = 64 * 1024;
 
-type HistoryMessage = {
-  role?: unknown;
-  content?: unknown;
-  summary?: unknown;
-  idempotencyKey?: unknown;
-};
+type HistoryMessage = Partial<Record<"role" | "content" | "summary" | "idempotencyKey", unknown>>;
 type HistoryEntry = {
   type?: unknown;
   message?: unknown;
@@ -537,6 +532,7 @@ function finalizeCliSessionEntries(params: {
   if (!params.excludeMessageIdempotencyKey) {
     return selectedEntries;
   }
+  const excludedKey = params.excludeMessageIdempotencyKey.replace(/:late-media$/, "");
   // Select the active branch first so removing the persisted turn cannot change its leaf.
   return selectedEntries.filter((entry) => {
     const candidate = entry as HistoryEntry;
@@ -544,7 +540,10 @@ function finalizeCliSessionEntries(params: {
       return true;
     }
     const message = candidate.message as HistoryMessage | undefined;
-    return message?.idempotencyKey !== params.excludeMessageIdempotencyKey;
+    const candidateKey = message?.idempotencyKey;
+    return (
+      typeof candidateKey !== "string" || candidateKey.replace(/:late-media$/, "") !== excludedKey
+    );
   });
 }
 
@@ -585,8 +584,7 @@ async function loadCliSessionEntries(params: CliSessionTranscriptParams): Promis
     ) {
       return [];
     }
-    const stat = await fsp.stat(realSessionFile);
-    if (!stat.isFile()) {
+    if (!(await fsp.stat(realSessionFile)).isFile()) {
       return [];
     }
     const transcript = await readBoundedCliSessionTranscript(realSessionFile);
