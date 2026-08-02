@@ -58,6 +58,9 @@ function createDeferredGatewayNodesRuntime(runtime: PluginRuntime): PluginRuntim
   };
 }
 
+/** A synchronous registry load above this blocks the event loop long enough to matter. */
+const SLOW_PLUGIN_LOAD_WARN_MS = 1_000;
+
 export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegistry {
   return loadOpenClawPluginsInternal(options);
 }
@@ -156,6 +159,7 @@ function loadOpenClawPluginsInternal(
       activateGlobalSideEffects: context.shouldActivate,
     });
     const { registry } = registryBuilder;
+    const discoveryStartMs = performance.now();
     const { manifestRegistry, orderedCandidates, manifestBySource, provenance } =
       resolvePluginLoadDiscovery({
         options,
@@ -167,6 +171,13 @@ function loadOpenClawPluginsInternal(
         warningCacheKey: context.cacheKey,
         suppliedManifestRegistry: options.manifestRegistry,
       });
+    const discoveryElapsedMs = performance.now() - discoveryStartMs;
+    if (discoveryElapsedMs > SLOW_PLUGIN_LOAD_WARN_MS) {
+      logger.warn(
+        `[plugins] SLOW plugin discovery: ${discoveryElapsedMs.toFixed(0)}ms ` +
+          `candidates=${orderedCandidates.length} cacheKey=${context.cacheKey}`,
+      );
+    }
     const selectedMiddlewareOwnerManifests = new Map<
       string,
       (typeof manifestRegistry.plugins)[number]
@@ -215,11 +226,13 @@ function loadOpenClawPluginsInternal(
       memorySlot,
     });
     const pluginLoadStartMs = performance.now();
+    const perPluginLoadMs: Array<[string, number]> = [];
     for (const candidate of orderedCandidates) {
       const manifestRecord = manifestBySource.get(candidate.source);
       if (!manifestRecord) {
         continue;
       }
+      const candidateStartMs = performance.now();
       loadRuntimePluginCandidate({
         candidate,
         manifestRecord,
@@ -233,11 +246,35 @@ function loadOpenClawPluginsInternal(
         logger,
         state,
       });
+      perPluginLoadMs.push([manifestRecord.id, performance.now() - candidateStartMs]);
     }
     const pluginLoadElapsedMs = performance.now() - pluginLoadStartMs;
     if (state.pluginLoadAttemptCount > 0) {
       logger.debug?.(
         `[plugins] loaded ${registry.plugins.length} plugin(s) (${state.pluginLoadAttemptCount} attempted) in ${pluginLoadElapsedMs.toFixed(1)}ms`,
+      );
+    }
+    // Registry loads are synchronous on the main thread; a slow one freezes the
+    // whole gateway (typing indicators, timers, every agent). Attribute the cost
+    // per plugin so a stall names its owner instead of hiding in aggregate.
+    if (pluginLoadElapsedMs > SLOW_PLUGIN_LOAD_WARN_MS) {
+      const slowest = perPluginLoadMs
+        .filter(([, ms]) => ms >= 50)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 10)
+        .map(([id, ms]) => `${id}=${ms.toFixed(0)}ms`)
+        .join(" ");
+      const callerFrames = (new Error().stack ?? "")
+        .split("\n")
+        .slice(2, 8)
+        .map((line) => line.trim().replace(/^at /, ""))
+        .join(" <- ");
+      logger.warn(
+        `[plugins] SLOW registry load: total=${pluginLoadElapsedMs.toFixed(0)}ms ` +
+          `plugins=${registry.plugins.length} attempted=${state.pluginLoadAttemptCount} ` +
+          `subagentMode=${context.runtimeSubagentMode} cacheKey=${context.cacheKey} ` +
+          `slowest: ${slowest || "(no plugin >=50ms — cost is outside the candidate loop)"} ` +
+          `caller: ${callerFrames}`,
       );
     }
     // Scoped snapshots may omit the configured memory plugin intentionally.
