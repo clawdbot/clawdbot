@@ -242,6 +242,19 @@ extension CronSettings {
                                 } else {
                                     StatusPill(text: "no delivery", tint: .secondary)
                                 }
+                                if let threadId = delivery.threadId?.value {
+                                    StatusPill(text: "thread \(String(describing: threadId))", tint: .secondary)
+                                }
+                                if let to = delivery.completionDestination?["to"]?.value as? String {
+                                    StatusPill(text: "completion \(to)", tint: .secondary)
+                                }
+                                if let failure = delivery.failureDestination {
+                                    let target = failure["to"]?.value as? String
+                                        ?? failure["channel"]?.value as? String
+                                        ?? failure["accountId"]?.value as? String
+                                        ?? "configured"
+                                    StatusPill(text: "failure \(target)", tint: .secondary)
+                                }
                             }
                         }
                     }

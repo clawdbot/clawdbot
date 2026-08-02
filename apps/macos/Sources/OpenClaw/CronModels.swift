@@ -60,6 +60,14 @@ struct CronDelivery: Codable, Equatable {
     var channel: String?
     var to: String?
     var bestEffort: Bool?
+    // The Gateway owns validation for these heterogeneous routing values. Keep
+    // their exact JSON representation so native edits do not erase them.
+    // Defaults keep ordinary delivery construction terse while exposing the fields when needed.
+    // swiftlint:disable implicit_optional_initialization
+    var threadId: AnyCodable? = nil
+    var completionDestination: [String: AnyCodable]? = nil
+    var failureDestination: [String: AnyCodable]? = nil
+    // swiftlint:enable implicit_optional_initialization
 }
 
 enum CronSchedule: Codable, Equatable {
