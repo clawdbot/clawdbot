@@ -85,6 +85,7 @@ const JSON_NOT_APPLICABLE = {
       "configure",
       "config",
       "acp client",
+      "gateway auth-token",
       "promos claim",
       "infer model auth login",
       "models auth add",
