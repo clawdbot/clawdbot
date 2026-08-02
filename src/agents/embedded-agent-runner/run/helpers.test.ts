@@ -217,19 +217,23 @@ describe("resolveLatestCallUsage", () => {
 });
 
 describe("buildUsageAgentMetaFields", () => {
-  it("keeps aggregate billing buckets out of the latest context snapshot", () => {
+  it("keeps cumulative usage separate from the latest context snapshot", () => {
     const usageAccumulator = createUsageAccumulator();
+    mergeUsageIntoAccumulator(usageAccumulator, {
+      input: 100,
+      output: 50,
+      total: 150,
+    });
     const latestCallUsage = {
-      input: 12,
-      output: 15_104,
-      cacheRead: 819_661,
-      cacheWrite: 93_130,
+      input: 80,
+      output: 20,
+      cacheRead: 100,
       contextUsage: {
         state: "available",
-        promptTokens: 148_874,
-        totalTokens: 163_978,
+        promptTokens: 180,
+        totalTokens: 200,
       },
-      total: 927_907,
+      total: 200,
     } satisfies NormalizedUsage;
     mergeUsageIntoAccumulator(usageAccumulator, latestCallUsage);
 
@@ -237,18 +241,16 @@ describe("buildUsageAgentMetaFields", () => {
       usageAccumulator,
       lastAssistantUsage: undefined,
       lastRunPromptUsage: latestCallUsage,
-      lastTurnTotal: latestCallUsage.total,
     });
 
     expect(fields.usage).toMatchObject({
-      input: 12,
-      output: 15_104,
-      cacheRead: 819_661,
-      cacheWrite: 93_130,
-      total: 927_907,
+      input: 180,
+      output: 70,
+      cacheRead: 100,
+      total: 350,
     });
     expect(fields.lastCallUsage).toEqual(latestCallUsage);
-    expect(fields.promptTokens).toBe(148_874);
+    expect(fields.promptTokens).toBe(180);
   });
 
   it("does not derive a prompt override from unavailable context usage", () => {
@@ -267,7 +269,6 @@ describe("buildUsageAgentMetaFields", () => {
       usageAccumulator,
       lastAssistantUsage: latestCallUsage,
       lastRunPromptUsage: latestCallUsage,
-      lastTurnTotal: latestCallUsage.total,
     });
 
     expect(fields.lastCallUsage).toEqual(latestCallUsage);
