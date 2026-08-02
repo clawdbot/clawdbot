@@ -29,10 +29,12 @@ window.renderMath = async (job) => {
     const height = Math.ceil(Math.max(finalBounds.height, container.scrollHeight));
     window.ChatMathBridge.postMessage(
       JSON.stringify({ id: job.id, widthCssPx: width, heightCssPx: height, success: true }),
+      window.location.origin,
     );
   } catch {
     window.ChatMathBridge.postMessage(
       JSON.stringify({ id: job.id, widthCssPx: 0, heightCssPx: 0, success: false }),
+      window.location.origin,
     );
   }
 };
