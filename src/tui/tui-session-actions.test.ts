@@ -14,7 +14,7 @@ import {
   getPendingSubmitDraft,
   type TuiPendingSubmit,
 } from "./tui-submit-state.js";
-import type { TuiStateAccess } from "./tui-types.js";
+import type { TuiHistoryLoadResult, TuiStateAccess } from "./tui-types.js";
 
 describe("tui session actions", () => {
   const sendingSubmit = (runId: string, draftText = "pending"): TuiPendingSubmit => ({
@@ -1220,10 +1220,9 @@ describe("tui session actions", () => {
       const setActivityStatus = vi.fn((status: string) => {
         state.activityStatus = status;
       });
-      let loadSelectedHistory: () => Promise<{
-        loaded: boolean;
-        inFlightRunId?: string | null;
-      }> = async () => ({ loaded: false });
+      let loadSelectedHistory: () => Promise<TuiHistoryLoadResult> = async () => ({
+        loaded: false,
+      });
       const handlers = createEventHandlers({
         chatLog,
         btw: createBtwPresenter(),
