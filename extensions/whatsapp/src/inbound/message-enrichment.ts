@@ -5,8 +5,9 @@ import {
   formatLocationText,
   type MediaPlaceholderTextFact,
 } from "openclaw/plugin-sdk/channel-inbound";
-import { getChildLogger, redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
+import { createSubsystemLogger, redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { getStatusCode } from "../session-errors.js";
 import {
   describeReplyContext,
   extractContactContext,
@@ -18,14 +19,14 @@ import {
 import { resolveInboundMediaMimetype } from "./media-mimetype.js";
 import { downloadInboundMedia, downloadQuotedInboundMedia } from "./media.js";
 
-const inboundMediaLogger = getChildLogger({ module: "web-inbound-media" });
+const inboundMediaLogger = createSubsystemLogger("gateway/channels/whatsapp").child("inbound");
 const MAX_MEDIA_ERROR_MESSAGE_CHARS = 256;
 
 function sanitizeMediaErrorMessage(error: unknown): string {
   const rawMessage = error instanceof Error ? error.message : String(error);
   const redacted = redactSensitiveText(rawMessage)
     .replace(/https?:\/\/\S+/giu, "[redacted-url]")
-    .replace(/\b[^@\s]+@(?:s\.whatsapp\.net|g\.us|lid|broadcast)\b/giu, "[redacted-jid]")
+    .replace(/\b[^@\s]+@[a-z][a-z\d.-]*\b/giu, "[redacted-jid]")
     .replace(/\+?\d[\d ().-]{6,}\d/gu, "[redacted-phone]");
   return truncateUtf16Safe(
     redacted.split("\n", 1)[0]?.trim() || "unknown error",
@@ -44,18 +45,25 @@ function logMediaMaterializationFailure(params: {
     params.error instanceof Error && /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/u.test(params.error.name)
       ? params.error.name
       : "Error";
-  inboundMediaLogger.warn(
-    {
-      channel: "whatsapp",
-      messageId: params.messageId ?? undefined,
-      mediaKind: params.mediaKind,
-      mimeType: params.mimeType,
-      failureStage: params.failureStage,
-      errorClass,
-      errorMessage: sanitizeMediaErrorMessage(params.error),
-    },
-    "WhatsApp inbound media materialization failed",
-  );
+  const statusCode = getStatusCode(params.error);
+  const errorMessage = sanitizeMediaErrorMessage(params.error);
+  const failureDetails = [
+    `stage=${params.failureStage}`,
+    ...(params.mediaKind ? [`kind=${params.mediaKind}`] : []),
+    ...(typeof statusCode === "number" ? [`status=${statusCode}`] : []),
+  ].join(" ");
+  // One subsystem event keeps the Gateway console and structured file log in sync.
+  inboundMediaLogger.warn("WhatsApp inbound media materialization failed", {
+    channel: "whatsapp",
+    messageId: params.messageId ?? undefined,
+    mediaKind: params.mediaKind,
+    mimeType: params.mimeType,
+    failureStage: params.failureStage,
+    errorClass,
+    ...(typeof statusCode === "number" ? { statusCode } : {}),
+    errorMessage,
+    consoleMessage: `WhatsApp inbound media materialization failed (${failureDetails}): ${errorMessage}`,
+  });
 }
 
 export type WhatsAppEnrichedInboundMessage = {

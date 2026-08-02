@@ -69,6 +69,7 @@ const readAllowFromStoreMock = vi.fn().mockResolvedValue([]);
 const upsertPairingRequestMock = vi.fn().mockResolvedValue({ code: "PAIRCODE", created: true });
 const saveMediaStreamSpy = vi.fn();
 const downloadMediaMessageMock = vi.hoisted(() => vi.fn());
+const observedConsoleWarnings = vi.hoisted(() => vi.fn());
 let currentMockSocket:
   | {
       ev: import("node:events").EventEmitter;
@@ -82,6 +83,33 @@ let currentMockSocket:
       user: { id: string };
     }
   | undefined;
+
+vi.mock("openclaw/plugin-sdk/logging-core", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/logging-core")>(
+    "openclaw/plugin-sdk/logging-core",
+  );
+  function observeConsoleWarnings(
+    logger: ReturnType<typeof actual.createSubsystemLogger>,
+  ): ReturnType<typeof actual.createSubsystemLogger> {
+    return {
+      ...logger,
+      warn(message, meta) {
+        if (logger.isEnabled("warn", "console")) {
+          observedConsoleWarnings(message, meta);
+        }
+        logger.warn(message, meta);
+      },
+      child(name) {
+        return observeConsoleWarnings(logger.child(name));
+      },
+    };
+  }
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) =>
+      observeConsoleWarnings(actual.createSubsystemLogger(subsystem)),
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async () => {
   const actual = await vi.importActual<
@@ -274,6 +302,25 @@ async function waitForLogLine(messageId: string): Promise<string> {
   return matchingLine;
 }
 
+async function createBaileysMediaHttpError(statusCode: number, details: string): Promise<Error> {
+  const fetchSpy = vi
+    .spyOn(globalThis, "fetch")
+    .mockResolvedValueOnce(new Response(null, { status: statusCode }));
+  try {
+    const { getHttpStream } = await vi.importActual<typeof import("baileys")>("baileys");
+    await getHttpStream("https://media.example/private");
+  } catch (error) {
+    if (!(error instanceof Error)) {
+      throw new Error("expected Baileys to reject media downloads with an Error");
+    }
+    error.message = `${error.message} ${details}`;
+    return error;
+  } finally {
+    fetchSpy.mockRestore();
+  }
+  throw new Error("expected Baileys to reject the failed media response");
+}
+
 describe("web inbound media saves with extension", () => {
   async function getMockSocket() {
     return (await createWaSocket(false, false)) as unknown as {
@@ -285,6 +332,7 @@ describe("web inbound media saves with extension", () => {
     vi.useRealTimers();
     currentMockSocket = undefined;
     downloadMediaMessageMock.mockClear();
+    observedConsoleWarnings.mockClear();
     saveMediaStreamSpy.mockClear();
     resetWebInboundDedupe();
   });
@@ -292,7 +340,7 @@ describe("web inbound media saves with extension", () => {
   beforeAll(async () => {
     await fs.rm(HOME, { recursive: true, force: true });
     ({ resetLogger, setLoggerOverride } = await import("openclaw/plugin-sdk/runtime-env"));
-    setLoggerOverride({ level: "trace", file: LOG_PATH });
+    setLoggerOverride({ level: "trace", consoleLevel: "info", file: LOG_PATH });
     ({ monitorWebInbox, resetWebInboundDedupe } = await import("./inbound.js"));
     ({ createWaSocket } = await import("./session.js"));
   });
@@ -587,8 +635,9 @@ describe("web inbound media saves with extension", () => {
 
   it("keeps a failed image fact with an unavailable notice", async () => {
     downloadMediaMessageMock.mockRejectedValueOnce(
-      new Error(
-        "expired media reference https://media.example/private +15551234567 111@s.whatsapp.net",
+      await createBaileysMediaHttpError(
+        410,
+        "expired media reference +15551234567 111@s.whatsapp.net 789@hosted.lid 42@c.us",
       ),
     );
     const onMessage = vi.fn();
@@ -635,6 +684,7 @@ describe("web inbound media saves with extension", () => {
     expect(diagnostic).toContain('"mimeType":"image/jpeg"');
     expect(diagnostic).toContain('"failureStage":"direct"');
     expect(diagnostic).toContain('"errorClass":"Error"');
+    expect(diagnostic).toContain('"statusCode":410');
     expect(diagnostic).toContain("expired media reference");
     expect(diagnostic).toContain("[redacted-url]");
     expect(diagnostic).toContain("[redacted-phone]");
@@ -642,12 +692,28 @@ describe("web inbound media saves with extension", () => {
     expect(diagnostic).not.toContain("media.example/private");
     expect(diagnostic).not.toContain("+15551234567");
     expect(diagnostic).not.toContain("111@s.whatsapp.net");
+    expect(diagnostic).not.toContain("789@hosted.lid");
+    expect(diagnostic).not.toContain("42@c.us");
+    const terminalDiagnostic = observedConsoleWarnings.mock.calls.find(
+      ([message]) => message === "WhatsApp inbound media materialization failed",
+    )?.[1]?.consoleMessage;
+    expect(terminalDiagnostic).toContain("stage=direct");
+    expect(terminalDiagnostic).toContain("status=410");
+    expect(terminalDiagnostic).toContain("[redacted-url]");
+    expect(terminalDiagnostic).not.toContain("media.example/private");
+    expect(terminalDiagnostic).not.toContain("789@hosted.lid");
+    expect(terminalDiagnostic).not.toContain("42@c.us");
 
     await listener.close();
   });
 
   it("logs quoted media failures without verbose logging", async () => {
-    downloadMediaMessageMock.mockRejectedValueOnce(new Error("quoted media reference expired"));
+    downloadMediaMessageMock.mockRejectedValueOnce(
+      await createBaileysMediaHttpError(
+        410,
+        "quoted media reference expired 7@hosted 88@newsletter",
+      ),
+    );
     const onMessage = vi.fn();
     const listener = await monitorWebInbox({
       cfg: {
@@ -689,7 +755,17 @@ describe("web inbound media saves with extension", () => {
     expect(diagnostic).toContain('"mimeType":"image/jpeg"');
     expect(diagnostic).toContain('"failureStage":"quoted"');
     expect(diagnostic).toContain('"errorClass":"Error"');
+    expect(diagnostic).toContain('"statusCode":410');
     expect(diagnostic).toContain("quoted media reference expired");
+    expect(diagnostic).not.toContain("7@hosted");
+    expect(diagnostic).not.toContain("88@newsletter");
+    const terminalDiagnostic = observedConsoleWarnings.mock.calls.find(
+      ([message]) => message === "WhatsApp inbound media materialization failed",
+    )?.[1]?.consoleMessage;
+    expect(terminalDiagnostic).toContain("stage=quoted");
+    expect(terminalDiagnostic).toContain("status=410");
+    expect(terminalDiagnostic).not.toContain("7@hosted");
+    expect(terminalDiagnostic).not.toContain("88@newsletter");
 
     await listener.close();
   });
