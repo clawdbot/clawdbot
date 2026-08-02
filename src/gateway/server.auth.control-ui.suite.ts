@@ -1909,6 +1909,7 @@ export function registerControlUiAndPairingSuite(): void {
       const sharedGatewaySessionGeneration = resolveSharedGatewaySessionGeneration({
         mode: "token",
         token: "secret",
+        allowTailscale: false,
       });
       if (!sharedGatewaySessionGeneration) {
         throw new Error("expected shared gateway session generation");
