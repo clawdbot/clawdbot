@@ -33,6 +33,14 @@ describe("command-startup-policy", () => {
       ["docs"],
       ["agent", "exec"],
       ["status"],
+      ["agents", "bindings"],
+      ["approvals", "pending"],
+      ["commitments"],
+      ["skills"],
+      ["skills", "list"],
+      ["skills", "check"],
+      ["gateway", "stability"],
+      ["gateway", "usage-cost"],
     ]) {
       expect(resolvePolicy({ commandPath }).skipConfigGuard, commandPath.join(" ")).toBe(true);
     }

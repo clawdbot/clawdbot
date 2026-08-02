@@ -322,6 +322,14 @@ struct OnboardingAISetupView: View {
                 .buttonStyle(.link)
                 .font(.caption)
             }
+
+            Button {
+                self.model.chooseDifferentAI()
+            } label: {
+                Label("Choose a different AI…", systemImage: "arrow.triangle.2.circlepath")
+            }
+            .buttonStyle(.link)
+            .font(.caption)
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -858,7 +866,10 @@ struct OnboardingAISetupView: View {
                     }
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(self.model.manualTesting ||
+                // isBusy, not just manualTesting: submitManualKey drops the tap
+                // while another test runs, so an enabled button would be a
+                // silent no-op.
+                .disabled(self.model.isBusy ||
                     self.model.manualKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
             Text(self.manualProviderHelp)

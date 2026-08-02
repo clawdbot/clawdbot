@@ -31,7 +31,6 @@ import {
   formatMs,
   formatRelativeTimestamp,
   formatTokens,
-  parseSessionKeyParts,
 } from "../../lib/format.ts";
 import { formatSessionTokens } from "../../lib/presenter.ts";
 import { isCronSessionKey } from "../../lib/session-display.ts";
@@ -51,6 +50,7 @@ import {
   resolveSessionPreferredFace,
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
+import { parseSessionKeyParts } from "../../lib/sessions/session-key.ts";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,

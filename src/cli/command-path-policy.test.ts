@@ -212,7 +212,6 @@ describe("command-path-policy", () => {
     }
     for (const commandPath of [
       ["agents", "bind"],
-      ["agents", "bindings"],
       ["agents", "unbind"],
       ["agents", "set-identity"],
       ["agents", "delete"],
@@ -222,6 +221,28 @@ describe("command-path-policy", () => {
         networkProxy: "bypass",
       });
     }
+    expectResolvedPolicy(["agents", "bindings"], {
+      configGuard: "skip",
+      loadPlugins: "never",
+      networkProxy: "bypass",
+    });
+  });
+
+  it.each([
+    ["approvals", "pending"],
+    ["commitments"],
+    ["skills"],
+    ["skills", "list"],
+    ["skills", "check"],
+    ["gateway", "stability"],
+    ["gateway", "usage-cost"],
+  ])("keeps read-only cold path %s out of startup config and plugins", (...commandPath) => {
+    expectResolvedPolicy(commandPath, {
+      configGuard: "skip",
+      loadPlugins: "never",
+      ...(commandPath[0] === "commitments" ? { ensureCliPath: false } : {}),
+      networkProxy: "bypass",
+    });
   });
 
   it("resolves mixed startup-only rules", () => {

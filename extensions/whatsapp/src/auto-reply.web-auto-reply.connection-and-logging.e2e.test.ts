@@ -65,54 +65,6 @@ function requireOnMessage(
   return value as Parameters<typeof sendWebDirectInboundMessage>[0]["onMessage"];
 }
 
-async function startWatchdogScenario(params: {
-  monitorWebChannel: typeof import("./auto-reply/monitor.js").monitorWebChannel;
-  statusSink?: Parameters<typeof startWebAutoReplyMonitor>[0]["statusSink"];
-}) {
-  const sleep = vi.fn(async () => {});
-  const scripted = createScriptedWebListenerFactory();
-  const started = startWebAutoReplyMonitor({
-    monitorWebChannelFn: params.monitorWebChannel as never,
-    listenerFactory: scripted.listenerFactory,
-    sleep,
-    heartbeatSeconds: 60,
-    messageTimeoutMs: 30,
-    watchdogCheckMs: 5,
-    statusSink: params.statusSink,
-  });
-
-  await vi.waitFor(
-    () => {
-      expect(scripted.getListenerCount()).toBe(1);
-    },
-    { timeout: 250, interval: 2 },
-  );
-  await vi.waitFor(
-    () => {
-      expect(scripted.getOnMessage()).toBeTypeOf("function");
-    },
-    { timeout: 250, interval: 2 },
-  );
-
-  await requireOnMessage(scripted.getOnMessage())(
-    createTestWebInboundMessage({
-      event: { id: "m1" },
-      payload: { body: "ignored" },
-      admission: {
-        conversation: { kind: "direct", id: "+1" },
-        ingress: {
-          admission: "drop",
-          decision: "block",
-          decisiveGateId: "sender",
-          reasonCode: "no_policy_match",
-        },
-      },
-    }),
-  );
-
-  return { scripted, sleep, ...started };
-}
-
 function expectErrorContaining(errorFn: unknown, text: string): void {
   const messages = ((errorFn as { mock?: { calls?: unknown[][] } }).mock?.calls ?? []).map(
     (call) =>
@@ -134,6 +86,20 @@ function mockCallArg(mocked: unknown, callIndex: number, argIndex: number): unkn
     throw new Error(`Expected mock call at index ${callIndex}`);
   }
   return call[argIndex];
+}
+
+async function waitForScriptedListeners(
+  scripted: ReturnType<typeof createScriptedWebListenerFactory>,
+  count: number,
+  atLeast = false,
+) {
+  await vi.waitFor(
+    () => {
+      const actual = scripted.getListenerCount();
+      expect(atLeast ? Math.min(actual, count) : actual).toBe(count);
+    },
+    { timeout: 250, interval: 2 },
+  );
 }
 
 describe("web auto-reply connection", () => {
@@ -661,318 +627,218 @@ describe("web auto-reply connection", () => {
     expectErrorContaining(runtime.error, "Stopping web monitoring");
   });
 
-  it("forces reconnect when watchdog closes without onClose", async () => {
-    vi.useFakeTimers();
-    try {
-      const statuses: Array<Record<string, unknown>> = [];
-      const { scripted, controller, run, runtime } = await startWatchdogScenario({
-        monitorWebChannel,
-        statusSink: (status) => statuses.push({ ...status }),
-      });
+  type WatchdogCaseContext = {
+    scripted: ReturnType<typeof createScriptedWebListenerFactory>;
+    statuses: Array<Record<string, unknown>>;
+    runtime: ReturnType<typeof startWebAutoReplyMonitor>["runtime"];
+  };
+  type WatchdogCase = {
+    name: string;
+    seedInbound?: boolean;
+    captureStatus?: boolean;
+    options?: {
+      heartbeatSeconds?: number;
+      transportTimeoutMs?: number;
+      messageTimeoutMs?: number;
+      watchdogCheckMs?: number;
+    };
+    cleanupWithoutError?: boolean;
+    exercise: (context: WatchdogCaseContext) => Promise<void>;
+    assertAfterRun?: (context: WatchdogCaseContext) => void;
+  };
 
-      await vi.advanceTimersByTimeAsync(200);
-      await Promise.resolve();
-      await vi.waitFor(
-        () => {
-          expect(scripted.getListenerCount()).toBeGreaterThanOrEqual(2);
-        },
-        { timeout: 250, interval: 2 },
-      );
-
-      controller.abort();
-      scripted.resolveClose(1, { status: 499, isLoggedOut: false });
-      await Promise.resolve();
-      await run;
-
-      expect(mockStringMessages(runtime.log).join("\n")).toContain(
-        "WhatsApp Web watchdog is recovering a stale connection",
-      );
-      expect(mockStringMessages(runtime.error).join("\n")).not.toContain("status 499");
-      expect(
-        statuses.filter(
-          (status) =>
-            status.healthState === "reconnecting" &&
-            status.reconnectAttempts === 1 &&
-            (status.lastDisconnect as { status?: number } | null)?.status === 499,
-        ),
-      ).not.toEqual([]);
-      expect(
-        statuses.filter(
-          (status) =>
-            status.lastDisconnect &&
-            typeof status.lastDisconnect === "object" &&
-            "expected" in status.lastDisconnect,
-        ),
-      ).toEqual([]);
-      expect(
-        statuses.filter(
-          (status) =>
-            status.connected === true &&
-            status.healthState === "healthy" &&
-            status.reconnectAttempts === 0 &&
-            status.lastDisconnect === null,
-        ),
-      ).not.toEqual([]);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("keeps quiet linked-device sessions open when transport frames keep arriving", async () => {
-    vi.useFakeTimers();
-    try {
-      const sleep = vi.fn(async () => {});
-      const scripted = createScriptedWebListenerFactory();
-      const { controller, run } = startWebAutoReplyMonitor({
-        monitorWebChannelFn: monitorWebChannel as never,
-        listenerFactory: scripted.listenerFactory,
-        sleep,
-        heartbeatSeconds: 60,
-        messageTimeoutMs: 30,
-        watchdogCheckMs: 5,
-      });
-
-      await vi.waitFor(
-        () => {
-          expect(scripted.getListenerCount()).toBe(1);
-        },
-        { timeout: 250, interval: 2 },
-      );
-
-      const socket = getLastWebAutoReplySessionSocket();
-      await vi.advanceTimersByTimeAsync(20);
-      socket.ws.emit("frame");
-      await vi.advanceTimersByTimeAsync(20);
-      socket.ws.emit("frame");
-      await vi.advanceTimersByTimeAsync(20);
-
-      expect(scripted.getListenerCount()).toBe(1);
-
-      controller.abort();
-      scripted.resolveClose(0, { status: 499, isLoggedOut: false });
-      await Promise.resolve();
-      await run;
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("does not let transport frames mask application silence forever", async () => {
-    vi.useFakeTimers();
-    try {
-      const sleep = vi.fn(async () => {});
-      const scripted = createScriptedWebListenerFactory();
-      const { controller, run } = startWebAutoReplyMonitor({
-        monitorWebChannelFn: monitorWebChannel as never,
-        listenerFactory: scripted.listenerFactory,
-        sleep,
-        heartbeatSeconds: 60,
-        messageTimeoutMs: 30,
-        watchdogCheckMs: 5,
-      });
-
-      await vi.waitFor(
-        () => {
-          expect(scripted.getListenerCount()).toBe(1);
-        },
-        { timeout: 250, interval: 2 },
-      );
-
-      const socket = getLastWebAutoReplySessionSocket();
-      for (let elapsedMs = 0; elapsedMs < 140; elapsedMs += 20) {
+  const watchdogCases = [
+    {
+      name: "forces reconnect when watchdog closes without onClose",
+      seedInbound: true,
+      captureStatus: true,
+      cleanupWithoutError: true,
+      exercise: async ({ scripted }) => {
+        await vi.advanceTimersByTimeAsync(200);
+        await Promise.resolve();
+        await waitForScriptedListeners(scripted, 2, true);
+      },
+      assertAfterRun: ({ runtime, statuses }) => {
+        expect(mockStringMessages(runtime.log).join("\n")).toContain(
+          "WhatsApp Web watchdog is recovering a stale connection",
+        );
+        expect(mockStringMessages(runtime.error).join("\n")).not.toContain("status 499");
+        expect(
+          statuses.filter(
+            (status) =>
+              status.healthState === "reconnecting" &&
+              status.reconnectAttempts === 1 &&
+              (status.lastDisconnect as { status?: number } | null)?.status === 499,
+          ),
+        ).not.toEqual([]);
+        expect(
+          statuses.filter(
+            (status) =>
+              status.lastDisconnect &&
+              typeof status.lastDisconnect === "object" &&
+              "expected" in status.lastDisconnect,
+          ),
+        ).toEqual([]);
+        expect(
+          statuses.filter(
+            (status) =>
+              status.connected === true &&
+              status.healthState === "healthy" &&
+              status.reconnectAttempts === 0 &&
+              status.lastDisconnect === null,
+          ),
+        ).not.toEqual([]);
+      },
+    },
+    {
+      name: "keeps quiet linked-device sessions open when transport frames keep arriving",
+      cleanupWithoutError: true,
+      exercise: async ({ scripted }) => {
+        const socket = getLastWebAutoReplySessionSocket();
+        await vi.advanceTimersByTimeAsync(20);
         socket.ws.emit("frame");
         await vi.advanceTimersByTimeAsync(20);
-      }
-      await vi.waitFor(
-        () => {
-          expect(scripted.getListenerCount()).toBeGreaterThanOrEqual(2);
-        },
-        { timeout: 250, interval: 2 },
-      );
-
-      controller.abort();
-      scripted.resolveClose(scripted.getListenerCount() - 1, {
-        status: 499,
-        isLoggedOut: false,
-        error: "aborted",
-      });
-      await Promise.resolve();
-      await run;
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("publishes frame-driven transport activity for quiet sessions", async () => {
-    vi.useFakeTimers();
-    try {
-      const sleep = vi.fn(async () => {});
-      const statuses: Array<Record<string, unknown>> = [];
-      const scripted = createScriptedWebListenerFactory();
-      const { controller, run } = startWebAutoReplyMonitor({
-        monitorWebChannelFn: monitorWebChannel as never,
-        listenerFactory: scripted.listenerFactory,
-        sleep,
+        socket.ws.emit("frame");
+        await vi.advanceTimersByTimeAsync(20);
+        expect(scripted.getListenerCount()).toBe(1);
+      },
+    },
+    {
+      name: "does not let transport frames mask application silence forever",
+      exercise: async ({ scripted }) => {
+        const socket = getLastWebAutoReplySessionSocket();
+        for (let elapsedMs = 0; elapsedMs < 140; elapsedMs += 20) {
+          socket.ws.emit("frame");
+          await vi.advanceTimersByTimeAsync(20);
+        }
+        await waitForScriptedListeners(scripted, 2, true);
+      },
+    },
+    {
+      name: "publishes frame-driven transport activity for quiet sessions",
+      captureStatus: true,
+      options: {
         heartbeatSeconds: 1,
         transportTimeoutMs: 60_000,
         messageTimeoutMs: 60_000,
-        watchdogCheckMs: 5,
-        statusSink: (next) => statuses.push({ ...next }),
-      });
-
-      await vi.waitFor(
-        () => {
-          expect(scripted.getListenerCount()).toBe(1);
-        },
-        { timeout: 250, interval: 2 },
-      );
-
-      const initialTransportAt = Number(statuses.at(-1)?.lastTransportActivityAt ?? 0);
-      const socket = getLastWebAutoReplySessionSocket();
-      await vi.advanceTimersByTimeAsync(250);
-      socket.ws.emit("frame");
-      await vi.advanceTimersByTimeAsync(1_000);
-
-      const lastTransportAt = Number(statuses.at(-1)?.lastTransportActivityAt ?? 0);
-      expect(lastTransportAt).toBeGreaterThan(initialTransportAt);
-
-      controller.abort();
-      scripted.resolveClose(0, { status: 499, isLoggedOut: false, error: "aborted" });
-      await Promise.resolve();
-      await run;
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("reconnects on transport stall before the long app-silence window", async () => {
-    vi.useFakeTimers();
-    try {
-      const sleep = vi.fn(async () => {});
-      const scripted = createScriptedWebListenerFactory();
-      const { controller, run } = startWebAutoReplyMonitor({
-        monitorWebChannelFn: monitorWebChannel as never,
-        listenerFactory: scripted.listenerFactory,
-        sleep,
+      },
+      exercise: async ({ statuses }) => {
+        const initialTransportAt = Number(statuses.at(-1)?.lastTransportActivityAt ?? 0);
+        const socket = getLastWebAutoReplySessionSocket();
+        await vi.advanceTimersByTimeAsync(250);
+        socket.ws.emit("frame");
+        await vi.advanceTimersByTimeAsync(1_000);
+        const lastTransportAt = Number(statuses.at(-1)?.lastTransportActivityAt ?? 0);
+        expect(lastTransportAt).toBeGreaterThan(initialTransportAt);
+      },
+    },
+    {
+      name: "reconnects on transport stall before the long app-silence window",
+      options: {
         heartbeatSeconds: 1,
         transportTimeoutMs: 30,
         messageTimeoutMs: 3_000,
-        watchdogCheckMs: 5,
-      });
+      },
+      exercise: async ({ scripted }) => {
+        await vi.advanceTimersByTimeAsync(36);
+        await Promise.resolve();
+        await waitForScriptedListeners(scripted, 2, true);
+      },
+    },
+    {
+      name: "recovers a post-408 listener when transport frames continue but app delivery stays silent",
+      seedInbound: true,
+      exercise: async ({ scripted }) => {
+        scripted.resolveClose(0, {
+          status: 408,
+          isLoggedOut: false,
+          error: "status=408 Request Time-out",
+        });
+        await waitForScriptedListeners(scripted, 2);
+        const reconnectedSocket = getLastWebAutoReplySessionSocket();
+        for (let elapsedMs = 0; elapsedMs < 45; elapsedMs += 5) {
+          reconnectedSocket.ws.emit("frame");
+          await vi.advanceTimersByTimeAsync(5);
+        }
+        await waitForScriptedListeners(scripted, 3, true);
+      },
+    },
+    {
+      name: "gives a reconnected listener a fresh watchdog window",
+      seedInbound: true,
+      exercise: async ({ scripted }) => {
+        scripted.resolveClose(0, { status: 499, isLoggedOut: false, error: "first-close" });
+        await waitForScriptedListeners(scripted, 2);
+        await vi.advanceTimersByTimeAsync(20);
+        await Promise.resolve();
+        expect(scripted.getListenerCount()).toBe(2);
+        await vi.advanceTimersByTimeAsync(20);
+        await Promise.resolve();
+        await waitForScriptedListeners(scripted, 3, true);
+      },
+    },
+  ] satisfies WatchdogCase[];
 
-      await vi.waitFor(
-        () => {
-          expect(scripted.getListenerCount()).toBe(1);
-        },
-        { timeout: 250, interval: 2 },
-      );
-
-      await vi.advanceTimersByTimeAsync(36);
-      await Promise.resolve();
-      await vi.waitFor(
-        () => {
-          expect(scripted.getListenerCount()).toBeGreaterThanOrEqual(2);
-        },
-        { timeout: 250, interval: 2 },
-      );
-
-      controller.abort();
-      scripted.resolveClose(scripted.getListenerCount() - 1, {
-        status: 499,
-        isLoggedOut: false,
-        error: "aborted",
-      });
-      await Promise.resolve();
-      await run;
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("recovers a post-408 listener when transport frames continue but app delivery stays silent", async () => {
+  it.each(watchdogCases)("$name", async (scenario) => {
     vi.useFakeTimers();
+    const sleep = vi.fn(async () => {});
+    const statuses: Array<Record<string, unknown>> = [];
+    const scripted = createScriptedWebListenerFactory();
+    const { controller, run, runtime } = startWebAutoReplyMonitor({
+      monitorWebChannelFn: monitorWebChannel as never,
+      listenerFactory: scripted.listenerFactory,
+      sleep,
+      heartbeatSeconds: 60,
+      messageTimeoutMs: 30,
+      watchdogCheckMs: 5,
+      ...scenario.options,
+      statusSink: scenario.captureStatus ? (status) => statuses.push({ ...status }) : undefined,
+    });
+    const context = { scripted, statuses, runtime };
+
     try {
-      const { scripted, controller, run } = await startWatchdogScenario({
-        monitorWebChannel,
-      });
-
-      scripted.resolveClose(0, {
-        status: 408,
-        isLoggedOut: false,
-        error: "status=408 Request Time-out",
-      });
-      await vi.waitFor(
-        () => {
-          expect(scripted.getListenerCount()).toBe(2);
-        },
-        { timeout: 250, interval: 2 },
-      );
-
-      const reconnectedSocket = getLastWebAutoReplySessionSocket();
-      for (let elapsedMs = 0; elapsedMs < 45; elapsedMs += 5) {
-        reconnectedSocket.ws.emit("frame");
-        await vi.advanceTimersByTimeAsync(5);
+      await waitForScriptedListeners(scripted, 1);
+      if (scenario.seedInbound) {
+        await vi.waitFor(
+          () => {
+            expect(scripted.getOnMessage()).toBeTypeOf("function");
+          },
+          { timeout: 250, interval: 2 },
+        );
+        await requireOnMessage(scripted.getOnMessage())(
+          createTestWebInboundMessage({
+            event: { id: "m1" },
+            payload: { body: "ignored" },
+            admission: {
+              conversation: { kind: "direct", id: "+1" },
+              ingress: {
+                admission: "drop",
+                decision: "block",
+                decisiveGateId: "sender",
+                reasonCode: "no_policy_match",
+              },
+            },
+          }),
+        );
       }
 
-      await vi.waitFor(
-        () => {
-          expect(scripted.getListenerCount()).toBeGreaterThanOrEqual(3);
-        },
-        { timeout: 250, interval: 2 },
-      );
-
+      await scenario.exercise(context);
+    } finally {
       controller.abort();
       scripted.resolveClose(scripted.getListenerCount() - 1, {
         status: 499,
         isLoggedOut: false,
-        error: "aborted",
+        ...(scenario.cleanupWithoutError ? {} : { error: "aborted" }),
       });
       await Promise.resolve();
-      await run;
-    } finally {
-      vi.useRealTimers();
+      try {
+        await run;
+      } finally {
+        vi.useRealTimers();
+      }
     }
-  });
 
-  it("gives a reconnected listener a fresh watchdog window", async () => {
-    vi.useFakeTimers();
-    try {
-      const { scripted, controller, run } = await startWatchdogScenario({
-        monitorWebChannel,
-      });
-
-      scripted.resolveClose(0, { status: 499, isLoggedOut: false, error: "first-close" });
-      await vi.waitFor(
-        () => {
-          expect(scripted.getListenerCount()).toBe(2);
-        },
-        { timeout: 250, interval: 2 },
-      );
-
-      await vi.advanceTimersByTimeAsync(20);
-      await Promise.resolve();
-      expect(scripted.getListenerCount()).toBe(2);
-
-      await vi.advanceTimersByTimeAsync(20);
-      await Promise.resolve();
-      await vi.waitFor(
-        () => {
-          expect(scripted.getListenerCount()).toBeGreaterThanOrEqual(3);
-        },
-        { timeout: 250, interval: 2 },
-      );
-
-      controller.abort();
-      scripted.resolveClose(scripted.getListenerCount() - 1, {
-        status: 499,
-        isLoggedOut: false,
-        error: "aborted",
-      });
-      await Promise.resolve();
-      await run;
-    } finally {
-      vi.useRealTimers();
-    }
+    scenario.assertAfterRun?.(context);
   });
 
   it("passes the global inbound debounce into the live listener", async () => {
@@ -1229,4 +1095,3 @@ function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
   }
   return error;
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
