@@ -759,6 +759,7 @@ describe("talk realtime gateway relay", () => {
           "closed",
         ),
       );
+      expect(warn).toHaveBeenCalledTimes(1);
     } finally {
       closeOpenClawAgentDatabasesForTest();
       closeOpenClawStateDatabaseForTest();
