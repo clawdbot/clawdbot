@@ -83,13 +83,7 @@ describe("SQLite CLI session history", () => {
     const customStoreDir = tempDirs.make("openclaw-cli-target-store-");
     const sessionId = "session-sqlite-resolved-target-store";
     const sessionKey = "agent:main:cron:resolved-target-store";
-    const defaultStorePath = path.join(
-      stateDir,
-      "agents",
-      "main",
-      "sessions",
-      "sessions.json",
-    );
+    const defaultStorePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
     const targetStorePath = path.join(customStoreDir, "sessions.json");
     const header = {
       type: "session",
