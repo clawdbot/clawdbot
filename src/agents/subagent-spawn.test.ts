@@ -1119,7 +1119,11 @@ describe("spawnSubagentDirect seam flow", () => {
     );
     installSessionStoreCaptureMock(hoisted.updateSessionStoreMock, {
       onStore: (store) => {
-        store[preallocatedChildSessionKey].sessionId ??= "plugin-reserved-created-session";
+        const preallocatedChildEntry = store[preallocatedChildSessionKey];
+        if (!preallocatedChildEntry) {
+          throw new Error("expected preallocated child session entry");
+        }
+        preallocatedChildEntry.sessionId ??= "plugin-reserved-created-session";
         persistedStore = store;
       },
     });

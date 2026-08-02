@@ -18,6 +18,9 @@ const loadGoogleChatChannelRuntime = createLazyRuntimeNamedExport(
   "googleChatChannelRuntime",
 );
 
+const UNRESOLVED_WEBHOOK_URL_ERROR =
+  "Invalid webhookUrl: expected an absolute URL such as https://chat.example.com/googlechat. No inbound webhook route was registered.";
+
 export async function startGoogleChatGatewayAccount(ctx: {
   account: ResolvedGoogleChatAccount;
   cfg: OpenClawConfig;
@@ -37,10 +40,23 @@ export async function startGoogleChatGatewayAccount(ctx: {
   ctx.log?.info?.(`[${account.accountId}] starting Google Chat webhook`);
   const { resolveGoogleChatWebhookPath, startGoogleChatMonitor } =
     await loadGoogleChatChannelRuntime();
+  // An unparseable webhookUrl resolves to no path, and the monitor bails before it
+  // creates ingress or registers the HTTP route. Reporting the default path instead
+  // would advertise a route nothing binds, and this channel never sets `connected`,
+  // so health evaluation would read "healthy" for the lifetime of the process.
+  // The status store patch-merges, so the blocked branch clears `webhookPath`
+  // explicitly: a restart with broken config must not keep the previous run's path.
+  const webhookPath = resolveGoogleChatWebhookPath({ account });
   statusSink({
     running: true,
     lastStartAt: Date.now(),
-    webhookPath: resolveGoogleChatWebhookPath({ account }),
+    ...(webhookPath
+      ? { webhookPath }
+      : {
+          webhookPath: undefined,
+          lifecycle: "blocked" as const,
+          lastError: UNRESOLVED_WEBHOOK_URL_ERROR,
+        }),
     audienceType: account.config.audienceType,
     audience: account.config.audience,
   });

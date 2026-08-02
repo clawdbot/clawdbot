@@ -1655,7 +1655,6 @@ describe("subagent registry seam flow", () => {
           requesterAgentId: "main",
           task: "restore failed spawn quarantine",
           cleanup: "delete",
-          agentId: "worker",
           createdAt: now - 10_000,
           execution: { status: "interrupted", interruptedAt: now - 9_000 },
           completion: { required: false },

@@ -315,7 +315,7 @@ export async function runBrowserHatchHandoff(
       t("wizard.guided.browserHandoffTitle"),
     );
   } else {
-    const sshHint = target.sshHint ? `\n\n${target.sshHint}` : "";
+    const sshHint = !graphical && target.sshHint ? `\n\n${target.sshHint}` : "";
     await params.prompter.note(
       `${t("wizard.guided.browserHandoffCopy", { url: target.dashboardUrl })}${sshHint}`,
       t("wizard.guided.browserHandoffTitle"),

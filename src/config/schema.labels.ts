@@ -54,6 +54,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "diagnostics.otel.protocol": "OpenTelemetry Protocol",
   "diagnostics.otel.headers": "OpenTelemetry Headers",
   "diagnostics.otel.serviceName": "OpenTelemetry Service Name",
+  "diagnostics.otel.metricNamePrefix": "OpenTelemetry Metric Name Prefix",
   "diagnostics.otel.traces": "OpenTelemetry Traces Enabled",
   "diagnostics.otel.metrics": "OpenTelemetry Metrics Enabled",
   "diagnostics.otel.logs": "OpenTelemetry Logs Enabled",

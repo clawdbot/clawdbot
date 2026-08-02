@@ -251,6 +251,13 @@ export function parseReleaseCiSummaryArgs(argv: string[]): {
   watch: boolean;
 };
 export function releaseCiWatchFingerprint(parent: unknown): string;
+export function terminalParentJobFailures(parent: {
+  jobs?: Array<{
+    conclusion?: string | null;
+    name?: string | null;
+    status?: string | null;
+  }>;
+}): string[];
 export function watchReleaseCiRun(
   options: unknown,
   overrides?: Record<string, unknown>,

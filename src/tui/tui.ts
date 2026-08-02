@@ -7,7 +7,6 @@ import { fileURLToPath } from "node:url";
 import {
   CombinedAutocompleteProvider,
   Container,
-  Key,
   Loader,
   matchesKey,
   ProcessTerminal,
@@ -259,18 +258,21 @@ export function resolveGatewayDisconnectState(reason?: string): {
 export function createBackspaceDeduper(params?: { dedupeWindowMs?: number; now?: () => number }) {
   const dedupeWindowMs = Math.max(0, Math.floor(params?.dedupeWindowMs ?? 8));
   const now = params?.now ?? (() => Date.now());
-  let lastBackspaceAt = -1;
+  let previousBackspace: { data: string; at: number } | undefined;
 
   return (data: string): string => {
-    if (data !== "\x08" && !matchesKey(data, Key.backspace)) {
+    if ((data !== "\x08" && data !== "\x7f") || !matchesKey(data, "backspace")) {
+      previousBackspace = undefined;
       return data;
     }
-    const ts = now();
-    if (lastBackspaceAt >= 0 && ts - lastBackspaceAt <= dedupeWindowMs) {
-      return "";
-    }
-    lastBackspaceAt = ts;
-    return data;
+    const at = now();
+    // SSH can emit both legacy encodings for one press; matching bytes are real repeats.
+    const isDuplicate =
+      previousBackspace !== undefined &&
+      previousBackspace.data !== data &&
+      at - previousBackspace.at <= dedupeWindowMs;
+    previousBackspace = isDuplicate ? undefined : { data, at };
+    return isDuplicate ? "" : data;
   };
 }
 
