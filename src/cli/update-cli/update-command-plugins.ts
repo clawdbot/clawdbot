@@ -247,23 +247,24 @@ function createPostUpdatePluginWarning(params: {
 
 function createGuidedPostUpdatePluginOutcome(
   outcome: PluginUpdateOutcome,
-  options: { includeWarningInReason?: boolean } = {},
-): {
-  outcome: PluginUpdateOutcome;
-  warning?: PostUpdatePluginWarning;
-} {
-  if (outcome.status !== "error" && !isActionableSkippedPostUpdateOutcome(outcome)) {
+  options: { includeWarningInReason: boolean },
+): { outcome: PluginUpdateOutcome; warning?: PostUpdatePluginWarning } {
+  const outcomeWarning = outcome.warning;
+  const actionable = outcome.status === "error" || isActionableSkippedPostUpdateOutcome(outcome);
+  if (!actionable && !outcomeWarning) {
     return { outcome };
   }
-  const includeWarningInReason = options.includeWarningInReason ?? true;
-  const warningReason =
-    outcome.warning && includeWarningInReason
-      ? `${outcome.warning}\n${outcome.message}`
-      : outcome.message;
   const warning = createPostUpdatePluginWarning({
     ...(outcome.pluginId && outcome.pluginId !== "unknown" ? { pluginId: outcome.pluginId } : {}),
-    reason: warningReason,
+    reason: actionable
+      ? outcomeWarning && options.includeWarningInReason
+        ? `${outcomeWarning}\n${outcome.message}`
+        : outcome.message
+      : (outcomeWarning ?? outcome.message),
   });
+  if (!actionable) {
+    return { outcome, warning };
+  }
   return {
     outcome: {
       ...outcome,
@@ -730,6 +731,13 @@ export async function updatePluginsAfterCoreUpdate(params: {
 
   for (const message of collectPluginChannelFallbackMessages(pluginUpdateOutcomes)) {
     defaultRuntime.log(theme.warn(message));
+  }
+
+  for (const outcome of pluginUpdateOutcomes) {
+    if (outcome.warning && !hasLoggedPluginWarning(outcome.warning)) {
+      recordLoggedPluginWarning(outcome.warning);
+      defaultRuntime.log(formatPluginUpdateWarning(outcome.warning));
+    }
   }
 
   for (const outcome of pluginUpdateOutcomes) {

@@ -12,7 +12,6 @@ import {
   upsertManagedNpmRootDependency,
   type ManagedNpmRootInstalledDependency,
 } from "../infra/npm-managed-root.js";
-import { installedPackageNeedsOpenClawPeerLinkRepair } from "../infra/package-update-utils.js";
 import {
   createSafeNpmInstallArgs,
   createSafeNpmInstallEnv,
@@ -65,7 +64,10 @@ import type {
   PluginInstallPolicyRequest,
 } from "./install-types.js";
 import { hasRetainedManagedNpmInstallMarker } from "./managed-npm-retention.js";
-import { relinkOpenClawPeerDependenciesInManagedNpmRoot } from "./plugin-peer-link.js";
+import {
+  convergeOpenClawPeerDependencyLink,
+  relinkOpenClawPeerDependenciesInManagedNpmRoot,
+} from "./plugin-peer-link.js";
 
 export async function installPluginFromManagedNpmRoot(
   params: InstallSafetyOverrides & {
@@ -486,10 +488,16 @@ export async function installPluginFromManagedNpmRoot(
         error: `Failed to repair openclaw peer links after npm install: ${String(error)}`,
       });
     }
-    if (installedPackageNeedsOpenClawPeerLinkRepair(installRoot)) {
+    const openClawPeerLinkConvergence = await convergeOpenClawPeerDependencyLink({
+      installedDir: installRoot,
+      packageName: params.packageName,
+      peerDependencies: packageManifestResult.manifest?.peerDependencies ?? {},
+      logger,
+    });
+    if (openClawPeerLinkConvergence.status === "unrepairable") {
       return await rollbackFailedManagedNpmInstall({
         ok: false,
-        error: formatUnresolvedOpenClawPeerLinkError(params.packageName),
+        error: `${formatUnresolvedOpenClawPeerLinkError(params.packageName)} ${openClawPeerLinkConvergence.reason}`,
       });
     }
 

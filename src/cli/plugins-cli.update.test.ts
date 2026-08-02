@@ -1010,6 +1010,31 @@ describe("plugins cli update", () => {
     expect(updateParams.officialPluginUpdateChannel).toBeUndefined();
   });
 
+  it("prints peer-link repair warnings for otherwise unchanged plugins", async () => {
+    const config = createTrackedPluginConfig({
+      pluginId: "secureclaw",
+      spec: "@adversa/secureclaw",
+    });
+    loadConfig.mockReturnValue(config);
+    setInstalledPluginIndexInstallRecords(config.plugins?.installs ?? {});
+    updateNpmInstalledPlugins.mockResolvedValue({
+      config,
+      changed: false,
+      outcomes: [
+        {
+          pluginId: "secureclaw",
+          status: "unchanged",
+          message: "secureclaw is up to date (2.2.0).",
+          warning: "Could not repair openclaw peer link for secureclaw",
+        },
+      ],
+    });
+
+    await runPluginsCommand(["plugins", "update", "secureclaw"]);
+
+    expect(runtimeLogs).toContain("Could not repair openclaw peer link for secureclaw");
+  });
+
   it("syncs official catalog specs with beta channel context for update --all", async () => {
     const config = createTrackedPluginConfig({
       pluginId: "codex",

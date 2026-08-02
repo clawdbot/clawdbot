@@ -8,6 +8,7 @@ type PluginUpdateCliOutcome = {
   channelFallback?: {
     message: string;
   };
+  warning?: string;
   code?: string;
 };
 
@@ -37,6 +38,9 @@ export function logPluginUpdateOutcomes(params: {
       continue;
     }
     params.log(outcome.message);
+    if (outcome.warning) {
+      params.log(theme.warn(outcome.warning));
+    }
     if (outcome.channelFallback) {
       params.log(theme.warn(outcome.channelFallback.message));
     }

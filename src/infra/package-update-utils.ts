@@ -1,6 +1,4 @@
 // Inspects installed package metadata for update/install verification.
-import fsSync from "node:fs";
-import path from "node:path";
 import { readRootJsonObjectSync } from "@openclaw/fs-safe/json";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 
@@ -45,8 +43,9 @@ export async function readInstalledPackageVersion(dir: string): Promise<string |
 }
 
 /** Read string-valued peer dependencies from an installed package. */
-export function readInstalledPackagePeerDependencies(dir: string): Record<string, string> {
-  const manifest = readInstalledPackageManifest(dir);
+export function readPackageManifestPeerDependencies(
+  manifest: Record<string, unknown> | undefined,
+): Record<string, string> {
   const peerDependencies = isRecord(manifest?.peerDependencies) ? manifest.peerDependencies : {};
   return Object.fromEntries(
     Object.entries(peerDependencies).filter((entry): entry is [string, string] => {
@@ -56,18 +55,7 @@ export function readInstalledPackagePeerDependencies(dir: string): Record<string
   );
 }
 
-/** Return true when an installed package needs an openclaw peer link repair. */
-export function installedPackageNeedsOpenClawPeerLinkRepair(dir: string): boolean {
-  const peerDependencies = readInstalledPackagePeerDependencies(dir);
-  if (!Object.hasOwn(peerDependencies, "openclaw")) {
-    return false;
-  }
-
-  try {
-    fsSync.statSync(path.join(dir, "node_modules", "openclaw"));
-    return false;
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException | undefined)?.code;
-    return code === "ENOENT" || code === "ENOTDIR";
-  }
+/** Read string-valued peer dependencies from an installed package. */
+export function readInstalledPackagePeerDependencies(dir: string): Record<string, string> {
+  return readPackageManifestPeerDependencies(readInstalledPackageManifest(dir));
 }

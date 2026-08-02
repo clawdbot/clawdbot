@@ -30,6 +30,12 @@ type AuditManagedNpmRootResult = {
 
 type OpenClawPeerLinkResult = "linked" | "skipped" | "unchanged";
 
+export type OpenClawPeerLinkConvergenceResult =
+  | { status: "healthy" }
+  | { status: "would-repair"; reason: string }
+  | { status: "repaired" }
+  | { status: "unrepairable"; reason: string };
+
 function readStringRecord(value: unknown): Record<string, string> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return {};
@@ -335,6 +341,65 @@ export async function linkOpenClawPeerDependencies(params: {
     }
   }
   return { repaired, skipped };
+}
+
+/** Converge a declared openclaw peer to the exact host package used by this process. */
+export async function convergeOpenClawPeerDependencyLink(params: {
+  installedDir: string;
+  packageName: string;
+  peerDependencies: Record<string, string>;
+  logger: PluginPeerLinkLogger;
+  dryRun?: boolean;
+}): Promise<OpenClawPeerLinkConvergenceResult> {
+  if (!Object.hasOwn(params.peerDependencies, "openclaw")) {
+    return { status: "healthy" };
+  }
+
+  try {
+    const hostRoot = resolveOpenClawPackageRootSync({
+      argv1: process.argv[1],
+      moduleUrl: import.meta.url,
+      cwd: process.cwd(),
+    });
+    const audit = async (): Promise<OpenClawPeerLinkAuditIssue | null> =>
+      hostRoot
+        ? await auditOpenClawPeerDependency({
+            hostRoot,
+            packageDir: params.installedDir,
+            packageName: params.packageName,
+          })
+        : {
+            packageName: params.packageName,
+            packageDir: params.installedDir,
+            reason: "could not locate openclaw package root",
+          };
+    const issue = await audit();
+    if (!issue) {
+      return { status: "healthy" };
+    }
+    if (params.dryRun) {
+      return { status: "would-repair", reason: issue.reason };
+    }
+
+    const warnings: string[] = [];
+    const repair = await linkOpenClawPeerDependencies({
+      installedDir: params.installedDir,
+      peerDependencies: params.peerDependencies,
+      logger: {
+        info: (message) => params.logger.info?.(message),
+        warn: (message) => warnings.push(message),
+      },
+    });
+    const remainingIssue = await audit();
+    if (repair.skipped > 0 || remainingIssue) {
+      const reason = `Could not repair openclaw peer link for "${params.packageName}" at ${params.installedDir}: ${warnings.join("; ") || remainingIssue?.reason || "peer link repair was skipped"}`;
+      return { status: "unrepairable", reason };
+    }
+    return repair.repaired > 0 ? { status: "repaired" } : { status: "healthy" };
+  } catch (error) {
+    const reason = `Could not repair openclaw peer link for "${params.packageName}" at ${params.installedDir}: ${String(error)}`;
+    return { status: "unrepairable", reason };
+  }
 }
 
 export async function relinkOpenClawPeerDependenciesInManagedNpmRoot(params: {

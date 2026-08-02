@@ -19,10 +19,10 @@ import {
 } from "../infra/npm-registry-spec.js";
 import {
   expectedIntegrityForUpdate,
-  installedPackageNeedsOpenClawPeerLinkRepair,
   readInstalledPackageManifest,
   readInstalledPackagePeerDependencies,
   readInstalledPackageVersion,
+  readPackageManifestPeerDependencies,
 } from "../infra/package-update-utils.js";
 import { compareValidSemver } from "../infra/semver.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
@@ -71,7 +71,10 @@ import {
 } from "./official-external-plugin-catalog.js";
 import { resolvePackagePluginApiRange } from "./package-compat.js";
 import { validatePackageExtensionEntriesForInstall } from "./package-entry-resolution.js";
-import { linkOpenClawPeerDependencies } from "./plugin-peer-link.js";
+import {
+  convergeOpenClawPeerDependencyLink,
+  type OpenClawPeerLinkConvergenceResult,
+} from "./plugin-peer-link.js";
 import { defaultSlotIdForKey } from "./slots.js";
 
 /** Logger surface used by plugin update flows. */
@@ -1345,10 +1348,11 @@ function disablePluginConfigEntry(config: OpenClawConfig, pluginId: string): Ope
 async function repairOpenClawPeerLinksForNpmInstalls(params: {
   config: OpenClawConfig;
   logger: PluginUpdateLogger;
+  skipPluginIds: ReadonlySet<string>;
 }): Promise<boolean> {
   let repaired = false;
   for (const [pluginId, record] of Object.entries(params.config.plugins?.installs ?? {})) {
-    if (record.source !== "npm") {
+    if (record.source !== "npm" || params.skipPluginIds.has(pluginId)) {
       continue;
     }
 
@@ -1364,36 +1368,15 @@ async function repairOpenClawPeerLinksForNpmInstalls(params: {
       continue;
     }
 
-    if (!installedPackageNeedsOpenClawPeerLinkRepair(installPath)) {
-      continue;
-    }
-
-    const peerDependencies = readInstalledPackagePeerDependencies(installPath);
-    if (!Object.hasOwn(peerDependencies, "openclaw")) {
-      continue;
-    }
-
-    try {
-      const warnings: string[] = [];
-      const peerLinkRepair = await linkOpenClawPeerDependencies({
-        installedDir: installPath,
-        peerDependencies,
-        logger: {
-          info: (message) => params.logger.info?.(message),
-          warn: (message) => warnings.push(message),
-        },
-      });
-      if (peerLinkRepair.skipped > 0) {
-        params.logger.warn?.(
-          `Could not repair openclaw peer link for "${pluginId}" at ${installPath}: ${warnings.join("; ") || "peer link repair was skipped"}`,
-        );
-        continue;
-      }
-      repaired = !installedPackageNeedsOpenClawPeerLinkRepair(installPath) || repaired;
-    } catch (err) {
-      params.logger.warn?.(
-        `Could not repair openclaw peer link for "${pluginId}" at ${installPath}: ${String(err)}`,
-      );
+    const result = await convergeOpenClawPeerDependencyLink({
+      packageName: pluginId,
+      installedDir: installPath,
+      peerDependencies: readInstalledPackagePeerDependencies(installPath),
+      logger: params.logger,
+    });
+    repaired ||= result.status === "repaired";
+    if (result.status === "unrepairable") {
+      params.logger.warn?.(result.reason);
     }
   }
   return repaired;
@@ -1429,6 +1412,7 @@ export async function updateNpmInstalledPlugins(params: {
   let next = params.config;
   let changed = false;
   let ranNpmInstaller = false;
+  const peerLinkWarningPluginIds = new Set<string>();
   const installNpmSpecForUpdate = async (
     installParams: Parameters<typeof installPluginFromNpmSpec>[0],
   ): Promise<Awaited<ReturnType<typeof installPluginFromNpmSpec>>> => {
@@ -1710,6 +1694,17 @@ export async function updateNpmInstalledPlugins(params: {
       pluginId,
       installPath,
     });
+    // Update repair must converge the exact host peer target before any
+    // same-version fast path; package presence alone cannot prove this link.
+    let openClawPeerLinkRepair: OpenClawPeerLinkConvergenceResult =
+      await convergeOpenClawPeerDependencyLink({
+        packageName: pluginId,
+        installedDir: installPath,
+        peerDependencies: readPackageManifestPeerDependencies(installedManifest),
+        logger,
+        dryRun: params.dryRun,
+      });
+    changed ||= openClawPeerLinkRepair.status === "repaired";
 
     if (
       !params.dryRun &&
@@ -1753,7 +1748,7 @@ export async function updateNpmInstalledPlugins(params: {
           currentVersion &&
           !bypassTrustedOfficialUnchangedNpmCheck &&
           isNpmMetadataCompatibleWithCurrentHost(metadataResult.metadata) &&
-          !installedPackageNeedsOpenClawPeerLinkRepair(installPath) &&
+          openClawPeerLinkRepair.status !== "unrepairable" &&
           shouldSkipUnchangedNpmInstall({
             currentVersion,
             record,
@@ -1795,7 +1790,10 @@ export async function updateNpmInstalledPlugins(params: {
             status: "unchanged",
             currentVersion,
             nextVersion: metadataResult.metadata.version,
-            message: `${pluginId} is up to date (${currentVersion}).`,
+            message:
+              openClawPeerLinkRepair.status === "repaired"
+                ? `${pluginId} is up to date (${currentVersion}); repaired OpenClaw host peer link.`
+                : `${pluginId} is up to date (${currentVersion}).`,
           });
           continue;
         }
@@ -2078,6 +2076,10 @@ export async function updateNpmInstalledPlugins(params: {
           : undefined);
       const nextVersion = resolvedProbeVersion ?? "unknown";
       const currentLabel = currentVersion ?? "unknown";
+      const peerLinkDryRunNote =
+        openClawPeerLinkRepair.status === "would-repair"
+          ? ` Would repair OpenClaw host peer link: ${openClawPeerLinkRepair.reason}.`
+          : "";
       const gitProbe =
         record.source === "git"
           ? (probe as Extract<Awaited<ReturnType<typeof installPluginFromGitSpec>>, { ok: true }>)
@@ -2107,8 +2109,9 @@ export async function updateNpmInstalledPlugins(params: {
             ? `${pluginId} is pinned to ${effectiveSpec} (installed ${currentLabel}); ` +
               `registry default resolves to ${newerExactPinnedDefaultLine.version}. ` +
               `Pass \`openclaw plugins update ${newerExactPinnedDefaultLine.packageName}@latest\` to follow the registry default line.` +
-              channelFallbackSuffix
-            : `${pluginId} is up to date (${currentLabel}).${channelFallbackSuffix}`;
+              channelFallbackSuffix +
+              peerLinkDryRunNote
+            : `${pluginId} is up to date (${currentLabel}).${channelFallbackSuffix}${peerLinkDryRunNote}`;
         outcomes.push({
           pluginId,
           status: "unchanged",
@@ -2123,7 +2126,7 @@ export async function updateNpmInstalledPlugins(params: {
           status: "updated",
           currentVersion: currentVersion ?? undefined,
           nextVersion: resolvedProbeVersion,
-          message: `Would update ${pluginId}: ${currentLabel} -> ${nextVersion}.${channelFallbackSuffix}`,
+          message: `Would update ${pluginId}: ${currentLabel} -> ${nextVersion}.${channelFallbackSuffix}${peerLinkDryRunNote}`,
           ...(npmChannelFallback ? { channelFallback: npmChannelFallback } : {}),
         });
       }
@@ -2371,7 +2374,17 @@ export async function updateNpmInstalledPlugins(params: {
       continue;
     }
 
+    openClawPeerLinkRepair = await convergeOpenClawPeerDependencyLink({
+      packageName: pluginId,
+      installedDir: result.targetDir,
+      peerDependencies: readInstalledPackagePeerDependencies(result.targetDir),
+      logger,
+    });
+
     const resolvedPluginId = result.pluginId;
+    if (openClawPeerLinkRepair.status === "unrepairable") {
+      peerLinkWarningPluginIds.add(resolvedPluginId);
+    }
     if (resolvedPluginId !== pluginId) {
       next = migratePluginConfigId(next, pluginId, resolvedPluginId);
     }
@@ -2455,6 +2468,9 @@ export async function updateNpmInstalledPlugins(params: {
         currentVersion: currentVersion ?? undefined,
         nextVersion: nextVersion ?? undefined,
         message: `${pluginId} already at ${currentLabel}.${channelFallbackSuffix}`,
+        ...(openClawPeerLinkRepair.status === "unrepairable"
+          ? { warning: openClawPeerLinkRepair.reason }
+          : {}),
         ...(npmChannelFallback ? { channelFallback: npmChannelFallback } : {}),
       });
     } else {
@@ -2464,6 +2480,9 @@ export async function updateNpmInstalledPlugins(params: {
         currentVersion: currentVersion ?? undefined,
         nextVersion: nextVersion ?? undefined,
         message: `Updated ${pluginId}: ${currentLabel} -> ${nextLabel}.${channelFallbackSuffix}`,
+        ...(openClawPeerLinkRepair.status === "unrepairable"
+          ? { warning: openClawPeerLinkRepair.reason }
+          : {}),
         ...(npmChannelFallback ? { channelFallback: npmChannelFallback } : {}),
       });
     }
@@ -2474,6 +2493,7 @@ export async function updateNpmInstalledPlugins(params: {
       (await repairOpenClawPeerLinksForNpmInstalls({
         config: next,
         logger,
+        skipPluginIds: peerLinkWarningPluginIds,
       })) || changed;
   }
 
