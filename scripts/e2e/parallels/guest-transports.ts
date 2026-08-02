@@ -92,6 +92,8 @@ function throwIfParallelsVmStopped(label: string, result: CommandResult): void {
 const POSIX_GUEST_SCRIPT_CLEANUP_TIMEOUT_MS = 30_000;
 const POSIX_BACKGROUND_LOG_MAX_BYTES = 8 * 1024 * 1024;
 const WINDOWS_BACKGROUND_LOG_MAX_BYTES = 8 * 1024 * 1024;
+const WINDOWS_BACKGROUND_CLEANUP_RESERVE_MS = 120_000;
+const WINDOWS_BACKGROUND_POLL_FAILURE_LIMIT = 3;
 
 function appendCommandResult(phases: PhaseRunner, result: CommandResult): void {
   phases.append(result.stdout);
@@ -324,7 +326,22 @@ export async function runWindowsBackgroundPowerShell(
   const windowsLogPath = `%WINDIR%\\Temp\\${guestRunDir}\\run.log`;
   const backgroundExitPrefix = `__OPENCLAW_BACKGROUND_EXIT__:${nonce}:`;
   const backgroundDoneMarker = `__OPENCLAW_BACKGROUND_DONE__:${nonce}`;
-  const deadline = Date.now() + options.timeoutMs;
+  // PhaseRunner cannot cancel an in-flight callback. Keep cleanup inside the
+  // helper budget so a timed-out lane cannot overlap the next snapshot restore.
+  const deadline =
+    Date.now() + Math.max(1, options.timeoutMs - WINDOWS_BACKGROUND_CLEANUP_RESERVE_MS);
+  let consecutivePollFailures = 0;
+  const recordPollFailure = (stage: string, result: CommandResult): void => {
+    consecutivePollFailures++;
+    options.onLaunchRetry?.(
+      `${options.label} ${stage} transport failure ${consecutivePollFailures}/${WINDOWS_BACKGROUND_POLL_FAILURE_LIMIT} (exit ${result.status})`,
+    );
+    if (consecutivePollFailures >= WINDOWS_BACKGROUND_POLL_FAILURE_LIMIT) {
+      throw new Error(
+        `${options.label} ${stage} failed after ${WINDOWS_BACKGROUND_POLL_FAILURE_LIMIT} consecutive guest transport errors`,
+      );
+    }
+  };
   const pathsScript = `$runDir = Join-Path (Join-Path $env:WINDIR 'Temp\\openclaw-parallels') ${psSingleQuote(nonce)}
 $scriptPath = Join-Path $runDir 'run.ps1'
 $logPath = Join-Path $runDir 'run.log'
@@ -506,9 +523,18 @@ cmd.exe /d /s /c start "" /b powershell.exe -NoProfile -ExecutionPolicy Bypass -
       appendOutput(append, doneProbe);
       throwIfParallelsVmStopped(options.label, doneProbe);
       if (doneProbe.stdout.split(/\r?\n/u).some((line) => line.trim() === "done")) {
+        consecutivePollFailures = 0;
         doneFileSeen = true;
         completedLogDrainDeadline ||= Date.now() + completedLogDrainGraceMs;
+      } else if (
+        doneProbe.status === 0 &&
+        doneProbe.stdout.split(/\r?\n/u).some((line) => line.trim() === "wait")
+      ) {
+        consecutivePollFailures = 0;
+        await sleep(pollIntervalMs);
+        continue;
       } else {
+        recordPollFailure("done poll", doneProbe);
         await sleep(pollIntervalMs);
         continue;
       }
@@ -529,6 +555,7 @@ cmd.exe /d /s /c start "" /b powershell.exe -NoProfile -ExecutionPolicy Bypass -
       appendOutput(append, poll);
       throwIfParallelsVmStopped(options.label, poll);
       if (hasControlLine(poll.stdout, backgroundDoneMarker)) {
+        consecutivePollFailures = 0;
         doneSeen = true;
         const backgroundExit = findControlValue(poll.stdout, backgroundExitPrefix) ?? "0";
         if (backgroundExit !== "0" || (poll.status !== 0 && poll.status !== 124)) {
@@ -536,6 +563,7 @@ cmd.exe /d /s /c start "" /b powershell.exe -NoProfile -ExecutionPolicy Bypass -
         }
         return;
       }
+      recordPollFailure("log poll", poll);
       await sleep(Math.min(pollIntervalMs, 100));
     }
     if (doneSeen) {
