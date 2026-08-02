@@ -672,29 +672,20 @@ struct OnboardingView: View {
 
     static func pageOrder(
         for mode: AppState.ConnectionMode,
-        requiresCLIInstall: Bool,
-        memoryImportEligible: Bool = false) -> [Int]
+        requiresCLIInstall: Bool) -> [Int]
     {
         switch mode {
-        case .remote:
-            // Remote mode skips local Gateway/workspace setup, but its Mac node
-            // still runs the matching CLI node-host runtime inside the app.
-            let setupPages = requiresCLIInstall ? [0, 1, 2, 3, 5] : [0, 1, 3, 5]
-            return setupPages + [9]
+        case .remote, .local:
+            // Native onboarding ends once inference works: install (when
+            // needed) plus AI setup. Everything after — memory import,
+            // permissions, channels, hatch — belongs to the dashboard's
+            // custodian onboarding, which Finish opens.
+            requiresCLIInstall ? [0, 1, 2, 3] : [0, 1, 3]
         case .unconfigured:
-            return [0, 1, 9]
-        case .local:
-            let memoryPages = memoryImportEligible ? [4] : []
-            let setupPages = (requiresCLIInstall ? [0, 1, 2, 3] : [0, 1, 3]) + memoryPages + [5]
-            return setupPages + [9]
+            // "Set up later" has no gateway to hand off to; keep the native
+            // ready page so the flow still ends with a visible outcome.
+            [0, 1, 9]
         }
-    }
-
-    static func shouldIncludeMemoryImportPage(
-        for mode: AppState.ConnectionMode,
-        modelEligible: Bool) -> Bool
-    {
-        mode == .local && modelEligible
     }
 
     static func reconciledPageCursor(
@@ -727,14 +718,9 @@ struct OnboardingView: View {
     }
 
     var pageOrder: [Int] {
-        let requiresCLIInstall = !self.cliInstalled
-        let includeMemoryImport = Self.shouldIncludeMemoryImportPage(
+        Self.pageOrder(
             for: self.state.connectionMode,
-            modelEligible: self.memoryImport.pageEligible)
-        return Self.pageOrder(
-            for: self.state.connectionMode,
-            requiresCLIInstall: requiresCLIInstall,
-            memoryImportEligible: includeMemoryImport)
+            requiresCLIInstall: !self.cliInstalled)
     }
 
     var pageCount: Int {

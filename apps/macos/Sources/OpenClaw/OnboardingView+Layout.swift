@@ -61,18 +61,6 @@ extension OnboardingView {
             guard installed else { return }
             self.updateMonitoring(for: self.activePageIndex)
         }
-        .onChange(of: aiSetup.connected) { _, connected in
-            guard connected else { return }
-            self.maybeStartMemoryImportPlanning()
-        }
-        .onChange(of: memoryImport.autoAdvanceRequested) { _, requested in
-            guard requested else { return }
-            self.advancePastEmptyMemoryImportIfNeeded()
-        }
-        .onChange(of: memoryImport.pageEligible) { wasEligible, isEligible in
-            guard wasEligible, !isEligible else { return }
-            self.reconcileCursorAfterMemoryImportRemoval()
-        }
         .onDisappear {
             self.onboardingDidDisappear()
         }
@@ -115,24 +103,6 @@ extension OnboardingView {
         guard !pageOrder.isEmpty else { return 0 }
         let clamped = min(max(0, pageCursor), pageOrder.count - 1)
         return pageOrder[clamped]
-    }
-
-    func reconcileCursorAfterMemoryImportRemoval() {
-        guard self.state.connectionMode == .local else { return }
-        let previousOrder = Self.pageOrder(
-            for: .local,
-            requiresCLIInstall: !self.cliInstalled,
-            memoryImportEligible: true)
-        let newOrder = Self.pageOrder(
-            for: .local,
-            requiresCLIInstall: !self.cliInstalled,
-            memoryImportEligible: false)
-        let target = Self.reconciledPageCursor(
-            currentPage: self.currentPage,
-            previousOrder: previousOrder,
-            newOrder: newOrder)
-        guard target != self.currentPage else { return }
-        withAnimation { self.currentPage = target }
     }
 
     func reconcilePageForModeChange(previousActivePageIndex: Int) {
