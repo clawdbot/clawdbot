@@ -112,6 +112,8 @@ describe("project memory scope", () => {
       await fs.chmod(fakeGitPath, 0o755);
       const repo = path.join(parent, "repo");
       await fs.mkdir(repo);
+      await git(repo, "init");
+      await git(repo, "remote", "add", "origin", "https://github.com/OpenClaw/OpenClaw.git");
 
       const started = Date.now();
       const key = await withEnvAsync(
