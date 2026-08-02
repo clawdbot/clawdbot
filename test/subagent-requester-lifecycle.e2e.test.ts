@@ -212,13 +212,6 @@ async function startMockModelServer(): Promise<MockModelServer> {
           : requests.length === 1
             ? "parent"
             : "parent-text";
-      if (requests.length >= 3) {
-        const { appendFile } = await import("node:fs/promises");
-        await appendFile(
-          "/tmp/proof-late-requests.jsonl",
-          `${JSON.stringify({ sequence: requests.length, classification, body })}\n`,
-        );
-      }
       console.log(
         `[proof:model-request:${requests.length}] ${classification} subagentKey=${text.includes(
           "agent:main:subagent:",
