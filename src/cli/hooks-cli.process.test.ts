@@ -59,6 +59,7 @@ async function createLingeringPluginFixture(): Promise<{
     JSON.stringify({
       id: "linger",
       name: "Linger",
+      activation: { onCapabilities: ["hook"] },
       configSchema: { type: "object", additionalProperties: false, properties: {} },
     }),
   );
@@ -69,8 +70,9 @@ async function createLingeringPluginFixture(): Promise<{
       "export default {",
       '  id: "linger",',
       '  name: "Linger",',
-      "  register() {",
+      "  register(api) {",
       '    fs.writeFileSync(process.env.LINGER_MARKER, "registered\\n");',
+      '    api.registerHook("command:new", () => {}, { name: "fixture-hook", description: "Fixture hook" });',
       "    setInterval(() => {}, 60_000);",
       "  },",
       "};",
@@ -408,7 +410,9 @@ describe("hooks CLI process lifecycle", () => {
 
     expect(listResult, listResult.stderr).toMatchObject({ code: 0, signal: null });
     expect(listResult.stderr).not.toContain("Error:");
-    expect(JSON.parse(listResult.stdout)).toMatchObject({ hooks: expect.any(Array) });
+    expect(JSON.parse(listResult.stdout)).toMatchObject({
+      hooks: expect.arrayContaining([expect.objectContaining({ name: "fixture-hook" })]),
+    });
     await expect(fs.readFile(fixture.markerPath, "utf8")).resolves.toBe("registered\n");
     expect(relayResult, relayResult.stderr).toMatchObject({ code: 0, signal: null });
     expect(JSON.parse(relayResult.stdout)).toMatchObject({

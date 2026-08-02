@@ -1049,10 +1049,13 @@ export function logSessionAttention(
         ? "stalled session"
         : "long-running session";
   const activityFields = formatSessionActivityLogFields(activity);
-  const cronFields = formatCronSessionDiagnosticFields(
-    resolveCronSessionDiagnosticContext({ sessionKey: state.sessionKey }),
+  const sessionFields = formatCronSessionDiagnosticFields(
+    resolveCronSessionDiagnosticContext({
+      sessionKey: state.sessionKey,
+      activeSessionId: state.sessionId,
+    }),
   );
-  const detailFields = [activityFields, cronFields].filter(Boolean).join(" ");
+  const detailFields = [activityFields, sessionFields].filter(Boolean).join(" ");
   const message = `${label}: sessionId=${state.sessionId ?? "unknown"} sessionKey=${
     state.sessionKey ?? "unknown"
   } state=${params.state} age=${Math.round(params.ageMs / 1000)}s queueDepth=${

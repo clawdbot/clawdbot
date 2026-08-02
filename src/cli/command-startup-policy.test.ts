@@ -39,6 +39,11 @@ describe("command-startup-policy", () => {
       ["skills"],
       ["skills", "list"],
       ["skills", "check"],
+      ["skills", "info"],
+      ["skills", "search"],
+      ["hooks"],
+      ["memory", "search"],
+      ["memory", "status"],
       ["gateway", "stability"],
       ["gateway", "usage-cost"],
     ]) {
@@ -57,6 +62,14 @@ describe("command-startup-policy", () => {
       }).skipConfigGuard,
     ).toBe(false);
     expect(resolvePolicy({ commandPath: ["config", "set"] }).skipConfigGuard).toBe(false);
+    for (const flag of ["--index", "--fix"]) {
+      expect(
+        resolvePolicy({
+          argv: ["node", "openclaw", "memory", "status", flag],
+          commandPath: ["memory", "status"],
+        }).skipConfigGuard,
+      ).toBe(false);
+    }
   });
 
   it("keeps every route-first command on the same config guard declaration as Commander", () => {
