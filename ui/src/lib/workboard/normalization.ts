@@ -1,7 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { Value } from "typebox/value";
-import { TaskSummarySchema } from "../../../../packages/gateway-protocol/src/schema/tasks.js";
-import type { TaskSummary } from "../../../../packages/gateway-protocol/src/schema/tasks.js";
+import { normalizeTaskSummary } from "../tasks/task-summary.ts";
 import {
   normalizeEvents,
   normalizeExecution,
@@ -137,23 +135,6 @@ export function normalizeCardPayload(payload: unknown): WorkboardCard {
     throw new Error("workboard response did not include a card");
   }
   return card;
-}
-
-export function normalizeTaskSummary(value: unknown): WorkboardTaskSummary | null {
-  if (!Value.Check(TaskSummarySchema, value)) {
-    return null;
-  }
-  const task = value as TaskSummary;
-  const id = task.id.trim();
-  const taskId = task.taskId?.trim() || id;
-  if (!id || !taskId) {
-    return null;
-  }
-  return {
-    ...task,
-    id,
-    taskId,
-  };
 }
 
 export function normalizeTasksPage(payload: unknown): {

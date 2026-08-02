@@ -176,6 +176,7 @@ describe("CronPage editor state sync", () => {
       sessionTarget: "isolated",
       wakeMode: "now",
       payload: { kind: "agentTurn", message: "digest" },
+      state: {},
     };
     const request = vi.fn(async (method: string) => {
       if (method === "cron.list") {
