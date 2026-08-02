@@ -420,6 +420,27 @@ function readQaProfileEvidenceWorkflow() {
   return parse(readFileSync(".github/workflows/qa-profile-evidence.yml", "utf8"));
 }
 
+function runQaProfileFailureGate(options: {
+  allowFailures: boolean;
+  evidenceValidated?: boolean;
+  qaExitCode?: string;
+}) {
+  const workflow = readQaProfileEvidenceWorkflow();
+  const failStep = workflow.jobs.run_qa_profile.steps.find(
+    (step: WorkflowStep) => step.name === "Fail if QA profile failed",
+  );
+  return spawnSync("bash", ["-c", failStep.run], {
+    encoding: "utf8",
+    env: {
+      ALLOW_FAILURES: String(options.allowFailures),
+      EVIDENCE_VALIDATED: String(options.evidenceValidated ?? true),
+      PATH: process.env.PATH ?? "",
+      QA_EXIT_CODE: options.qaExitCode ?? "",
+      QA_PROFILE: "all",
+    },
+  });
+}
+
 function readReleaseChecksWorkflow() {
   return parse(readFileSync(".github/workflows/openclaw-release-checks.yml", "utf8"));
 }
@@ -4970,6 +4991,18 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         default: "",
         type: "string",
       },
+      allow_failures: {
+        description: "Allow rendering from valid incomplete QA evidence",
+        required: false,
+        default: false,
+        type: "boolean",
+      },
+    });
+    expect(maturityWorkflow.on.workflow_dispatch.inputs.allow_failures).toEqual({
+      description: "Allow rendering from valid incomplete QA evidence",
+      required: false,
+      default: false,
+      type: "boolean",
     });
     expect(maturityWorkflow.on.workflow_dispatch.inputs.publish_pull_request).toEqual({
       description: "Open or update a pull request for generated maturity files",
@@ -5001,6 +5034,14 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     }
     expect(qaEvidenceWorkflow.on.workflow_dispatch.inputs).not.toHaveProperty("fail_on_qa_failure");
     expect(qaEvidenceWorkflow.on.workflow_call.inputs).not.toHaveProperty("fail_on_qa_failure");
+    for (const trigger of ["workflow_dispatch", "workflow_call"] as const) {
+      expect(qaEvidenceWorkflow.on[trigger].inputs.allow_failures).toEqual({
+        description: "Continue after validated QA result failures",
+        required: false,
+        default: false,
+        type: "boolean",
+      });
+    }
     expect(qaEvidenceWorkflow.on.workflow_dispatch.inputs.qa_profile).not.toHaveProperty("options");
     expect(qaEvidenceWorkflow.on.workflow_dispatch.inputs.qa_profile.default).toBe("all");
     expect(qaEvidenceWorkflow.on.workflow_call.inputs.qa_profile.type).toBe("string");
@@ -5026,10 +5067,20 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(runProfileStep.env?.OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS).toBe("120000");
     expect(runProfileStep.run).toContain("--concurrency 3");
     expect(runProfileStep.run).toContain("--fast");
+    expect(runProfileStep.run).toContain("qa_exit_code=$?");
+    expect(runProfileStep.run).not.toContain("--allow-failures");
     const failProfileStep = qaRunJob.steps.find(
       (step: WorkflowStep) => step.name === "Fail if QA profile failed",
     );
     expect(failProfileStep.if).toBe("always()");
+    expect(failProfileStep.env?.ALLOW_FAILURES).toBe("${{ inputs.allow_failures }}");
+    expect(failProfileStep.env?.EVIDENCE_VALIDATED).toBe(
+      "${{ steps.evidence.outcome == 'success' }}",
+    );
+    expect(failProfileStep.run).toContain(
+      '[[ "$ALLOW_FAILURES" == "true" && "$EVIDENCE_VALIDATED" == "true" ]]',
+    );
+    expect(failProfileStep.run).toContain('exit "$QA_EXIT_CODE"');
     expect(generateJob.needs).toEqual(["validate_selected_ref", "publisher_preflight"]);
     expect(generateJob.if.replace(/\s+/gu, " ")).toBe(
       "${{ always() && needs.validate_selected_ref.result == 'success' && (!inputs.publish_pull_request || needs.publisher_preflight.result == 'success') && inputs.qa_evidence_run_id == '' }}",
@@ -5040,6 +5091,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       ref: "${{ needs.validate_selected_ref.outputs.selected_revision }}",
       expected_sha: "${{ needs.validate_selected_ref.outputs.selected_revision }}",
       qa_profile: "all",
+      allow_failures: "${{ inputs.allow_failures }}",
     });
     expect(generateJob.with).not.toHaveProperty("fail_on_qa_failure");
     expect(generateJob.secrets).toMatchObject({
@@ -5189,6 +5241,12 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "qa-profile-evidence-${{ steps.profile.outputs.profile }}-${{ needs.validate_selected_ref.outputs.selected_revision }}",
     );
     expect(qaEvidenceStep.run).toContain("qa-profile-evidence-manifest.json");
+    expect(qaEvidenceStep.run).toContain("validateQaEvidenceSummaryJson");
+    expect(qaEvidenceStep.env.ALLOW_FAILURES).toBe("${{ inputs.allow_failures }}");
+    expect(qaEvidenceStep.run).toContain("qaExitCode: Number(process.env.QA_EXIT_CODE)");
+    expect(qaEvidenceStep.run).toContain('qaPassed: process.env.QA_EXIT_CODE === "0"');
+    expect(qaEvidenceStep.run).toContain('allowFailures: process.env.ALLOW_FAILURES === "true"');
+    expect(qaEvidenceStep.run).toContain("QA failures allowed:");
 
     const qaUploadStep = qaRunJob.steps.find(
       (step: WorkflowStep) => step.name === "Upload QA profile evidence",
@@ -5216,6 +5274,18 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       },
     });
     expect(generatedPrUploadStep.with.path.trim().split("\n")).toEqual(MATURITY_GENERATED_PR_PATHS);
+
+    for (const stepName of ["Render artifact docs", "Render committed docs preview"]) {
+      const renderStep = publishJob.steps.find((step: WorkflowStep) => step.name === stepName);
+      expect(renderStep.env.ALLOW_FAILURES).toBe("${{ inputs.allow_failures }}");
+      expect(renderStep.run).toContain('[[ "$ALLOW_FAILURES" == "true" ]]');
+      expect(renderStep.run).toContain("allow_failures_args+=(--allow-failures)");
+      expect(renderStep.run).toContain('"${allow_failures_args[@]}"');
+    }
+    const renderArtifactStep = publishJob.steps.find(
+      (step: WorkflowStep) => step.name === "Render artifact docs",
+    );
+    expect(renderArtifactStep.run).toContain("QA failures allowed:");
 
     expect(publishPrJob.needs).toEqual(["validate_selected_ref", "publisher_preflight", "publish"]);
     expect(publishPrJob["runs-on"]).toBe("ubuntu-24.04");
@@ -5303,6 +5373,23 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(maturityWorkflowSource).not.toContain("gh auth setup-git");
     expect(maturityWorkflowSource).not.toContain("git push --force-with-lease");
   });
+
+  it.skipIf(process.platform === "win32")(
+    "suppresses only reported QA result failures when explicitly allowed",
+    () => {
+      expect(runQaProfileFailureGate({ allowFailures: false, qaExitCode: "7" }).status).toBe(7);
+      expect(runQaProfileFailureGate({ allowFailures: true, qaExitCode: "7" }).status).toBe(0);
+      expect(
+        runQaProfileFailureGate({
+          allowFailures: true,
+          evidenceValidated: false,
+          qaExitCode: "7",
+        }).status,
+      ).toBe(7);
+      expect(runQaProfileFailureGate({ allowFailures: true }).status).toBe(1);
+      expect(runQaProfileFailureGate({ allowFailures: false, qaExitCode: "0" }).status).toBe(0);
+    },
+  );
 
   it.skipIf(process.platform === "win32")(
     "authorizes maturity PR publication only for a canonical direct dispatch",
