@@ -623,6 +623,32 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     ]);
   });
 
+  it("returns browser expiry in the epoch milliseconds required by the Talk gateway", async () => {
+    vi.useFakeTimers();
+    const nowMs = Date.UTC(2026, 7, 1, 12, 34, 56, 789);
+    vi.setSystemTime(nowMs);
+    const provider = buildGoogleRealtimeVoiceProvider();
+
+    const sessionLocal = await provider.createBrowserSession?.({
+      providerConfig: { apiKey: "gemini-key" },
+    });
+
+    const tokenConfig = requireFirstMockArg(createTokenMock, "Google Live auth token config") as {
+      config?: {
+        expireTime?: string;
+        newSessionExpireTime?: string;
+      };
+    };
+    expect(tokenConfig.config?.expireTime).toBe(new Date(nowMs + 30 * 60 * 1000).toISOString());
+    expect(tokenConfig.config?.newSessionExpireTime).toBe(
+      new Date(nowMs + 60 * 1000).toISOString(),
+    );
+    expect(sessionLocal?.expiresAt).toBeGreaterThan(nowMs + 5_000);
+    vi.advanceTimersByTime(60_001);
+    expect(sessionLocal?.expiresAt).toBeLessThanOrEqual(Date.now() + 5_000);
+    expect(sessionLocal?.expiresAt).toBe(nowMs + 60 * 1000);
+  });
+
   it("constrains default browser sessions to Gemini 3.1 capabilities", async () => {
     const provider = buildGoogleRealtimeVoiceProvider();
 

@@ -1199,7 +1199,7 @@ async function createGoogleRealtimeBrowserSession(
     initialMessage: buildBrowserInitialSetup(model),
     model,
     voice,
-    expiresAt: Math.floor(expiresAtMs / 1000),
+    expiresAt: newSessionExpiresAtMs,
   };
 }
 
