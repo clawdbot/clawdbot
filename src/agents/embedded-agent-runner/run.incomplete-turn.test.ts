@@ -1687,7 +1687,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       }),
     );
 
-    await runEmbeddedAgent({
+    const result = await runEmbeddedAgent({
       ...overflowBaseRunParams,
       provider: "openai",
       model: "gpt-5.4",
@@ -4507,7 +4507,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       }),
     );
 
-    const result = await runEmbeddedAgent({
+    await runEmbeddedAgent({
       ...overflowBaseRunParams,
       allowEmptyAssistantReplyAsSilent: true,
       provider: "openai",
@@ -4542,7 +4542,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       }),
     );
 
-    const result = await runEmbeddedAgent({
+    await runEmbeddedAgent({
       ...overflowBaseRunParams,
       allowEmptyAssistantReplyAsSilent: true,
       provider: "openai",
