@@ -51,6 +51,8 @@ export type AgentsState = {
   agentsPanel?: AgentsPanel;
 };
 
+type AgentToolsState = Omit<AgentsState, "agentsLoading" | "agentsError">;
+
 type AgentsConfigCapability = {
   readonly state: { configFormDirty: boolean };
   save: () => Promise<boolean>;
@@ -100,7 +102,7 @@ async function loadAgentFilesList(
   return client.request<AgentsFilesListResult | null>("agents.files.list", { agentId });
 }
 
-function hasSelectedAgentMismatch(state: AgentsState, agentId: string): boolean {
+function hasSelectedAgentMismatch(state: AgentToolsState, agentId: string): boolean {
   return Boolean(state.agentsSelectedId && state.agentsSelectedId !== agentId);
 }
 
@@ -113,7 +115,7 @@ function resolveToolsErrorMessage(
     : String(err);
 }
 
-export async function loadToolsCatalog(state: AgentsState, agentId: string) {
+export async function loadToolsCatalog(state: AgentToolsState, agentId: string) {
   const resolvedAgentId = agentId.trim();
   const client = state.client;
   if (
@@ -167,7 +169,7 @@ export {
 };
 
 export async function loadToolsEffective(
-  state: AgentsState,
+  state: AgentToolsState,
   params: { agentId: string; sessionKey: string },
 ) {
   const client = state.client;

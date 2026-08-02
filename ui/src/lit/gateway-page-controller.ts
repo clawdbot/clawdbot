@@ -26,7 +26,7 @@ type GatewayPageControllerOptions = {
   onPageActivation?: () => void;
 };
 
-export type GatewayRouteDataIdentity = {
+type GatewayRouteDataIdentity = {
   gateway: ApplicationContext["gateway"];
   gatewaySnapshot: ApplicationGatewaySnapshot;
 };

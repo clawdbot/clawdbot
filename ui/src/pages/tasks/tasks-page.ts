@@ -65,7 +65,6 @@ class TasksPage extends OpenClawLightDomElement {
   private context!: ApplicationContext;
 
   @state() private tasks: TaskSummary[] = [];
-  @state() private connected = false;
   @state() private error: string | null = null;
   @state() private cancellingTaskIds = new Set<string>();
 

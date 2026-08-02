@@ -32,7 +32,7 @@ function createGateway(initial: ApplicationGatewaySnapshot) {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
-  } as ApplicationGateway;
+  } as unknown as ApplicationGateway;
   return {
     gateway,
     publish(next: ApplicationGatewaySnapshot) {
