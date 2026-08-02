@@ -14,10 +14,7 @@ import {
   listTaskRecords,
   markTaskTerminalById,
 } from "../../tasks/task-registry.js";
-import {
-  resetTaskRegistryForTests,
-  setDetachedTaskLifecycleRuntime,
-} from "../../tasks/task-runtime.test-helpers.js";
+import { setDetachedTaskLifecycleRuntime } from "../../tasks/task-runtime.test-helpers.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
 import { dispatchAgentRunFromGateway } from "./agent-run-dispatch.js";
 import { registerPluginSubagentRunFromGateway } from "./agent-task-tracking.js";
@@ -38,6 +35,7 @@ import {
   primeMainAgentRun,
   backendGatewayClient,
   operatorWriteGatewayClient,
+  resetAgentTaskRegistryForTests,
   waitForAgentCommandCall,
   invokeAgent,
   describe0AfterEach0,
@@ -157,7 +155,7 @@ describe("gateway agent handler", () => {
   it("terminalizes successful async gateway agent runs in the shared task registry", async () => {
     await withTempDir({ prefix: "openclaw-gateway-agent-task-" }, async (root) => {
       useTestStateDir(root);
-      resetTaskRegistryForTests();
+      resetAgentTaskRegistryForTests();
       primeMainAgentRun();
 
       await invokeAgent(
@@ -188,7 +186,7 @@ describe("gateway agent handler", () => {
   ])("tracks plugin subagent $identity runs through the registry", async ({ runId }) => {
     await withTempDir({ prefix: "openclaw-gateway-plugin-subagent-task-" }, async (root) => {
       useTestStateDir(root);
-      resetTaskRegistryForTests();
+      resetAgentTaskRegistryForTests();
       resetSubagentRegistryForTests({ persist: false });
       const childSessionKey = "agent:work:subagent:plugin-helper";
       const cfg = {
@@ -375,7 +373,7 @@ describe("gateway agent handler", () => {
       { prefix: "openclaw-gateway-plugin-subagent-registry-fail-" },
       async (root) => {
         useTestStateDir(root);
-        resetTaskRegistryForTests();
+        resetAgentTaskRegistryForTests();
         resetSubagentRegistryForTests({ persist: false });
         const persistSubagentRunsToDiskOrThrow = vi.fn(() => {
           throw new Error("disk full");
@@ -456,7 +454,7 @@ describe("gateway agent handler", () => {
   it("terminalizes failed async gateway agent runs in the shared task registry", async () => {
     await withTempDir({ prefix: "openclaw-gateway-agent-task-error-" }, async (root) => {
       useTestStateDir(root);
-      resetTaskRegistryForTests();
+      resetAgentTaskRegistryForTests();
       primeMainAgentRun();
       mocks.agentCommand.mockRejectedValueOnce(new Error("agent unavailable"));
 
@@ -483,7 +481,7 @@ describe("gateway agent handler", () => {
   it("preserves aborted async gateway agent runs as cancelled", async () => {
     await withTempDir({ prefix: "openclaw-gateway-agent-task-aborted-" }, async (root) => {
       useTestStateDir(root);
-      resetTaskRegistryForTests();
+      resetAgentTaskRegistryForTests();
       primeMainAgentRun();
       mocks.agentCommand.mockResolvedValueOnce({
         payloads: [],
@@ -783,7 +781,7 @@ describe("gateway agent handler", () => {
   it("classifies RPC-aborted async gateway agent rejections as cancelled", async () => {
     await withTempDir({ prefix: "openclaw-gateway-agent-task-abort-error-" }, async (root) => {
       useTestStateDir(root);
-      resetTaskRegistryForTests();
+      resetAgentTaskRegistryForTests();
       primeMainAgentRun();
       const abortError = new Error("This operation was aborted");
       abortError.name = "AbortError";
@@ -829,7 +827,7 @@ describe("gateway agent handler", () => {
   it("preserves restart ownership for aborted async gateway agent rejections", async () => {
     await withTempDir({ prefix: "openclaw-gateway-agent-task-restart-abort-" }, async (root) => {
       useTestStateDir(root);
-      resetTaskRegistryForTests();
+      resetAgentTaskRegistryForTests();
       primeMainAgentRun();
       const abortError = createAgentRunRestartAbortError();
       const wrappedError = new Error("ACP turn failed before completion", {
@@ -870,7 +868,7 @@ describe("gateway agent handler", () => {
   it("classifies timeout async gateway agent rejections as timed out", async () => {
     await withTempDir({ prefix: "openclaw-gateway-agent-task-timeout-error-" }, async (root) => {
       useTestStateDir(root);
-      resetTaskRegistryForTests();
+      resetAgentTaskRegistryForTests();
       primeMainAgentRun();
       const timeoutError = new Error("chat run timed out");
       timeoutError.name = "TimeoutError";
@@ -918,7 +916,7 @@ describe("gateway agent handler", () => {
       { prefix: "openclaw-gateway-agent-task-wrapped-timeout-error-" },
       async (root) => {
         useTestStateDir(root);
-        resetTaskRegistryForTests();
+        resetAgentTaskRegistryForTests();
         primeMainAgentRun();
         const timeoutReason = new Error("chat run timed out");
         timeoutReason.name = "TimeoutError";
@@ -967,7 +965,7 @@ describe("gateway agent handler", () => {
   it("does not hide provider timeout async gateway agent rejections", async () => {
     await withTempDir({ prefix: "openclaw-gateway-agent-task-provider-timeout-" }, async (root) => {
       useTestStateDir(root);
-      resetTaskRegistryForTests();
+      resetAgentTaskRegistryForTests();
       primeMainAgentRun();
       const providerError = new Error("provider request timed out");
       providerError.name = "TimeoutError";
@@ -1147,7 +1145,7 @@ describe("gateway agent handler", () => {
   it("does not overwrite operator-cancelled async gateway agent tasks after late completion", async () => {
     await withTempDir({ prefix: "openclaw-gateway-agent-task-cancelled-" }, async (root) => {
       useTestStateDir(root);
-      resetTaskRegistryForTests();
+      resetAgentTaskRegistryForTests();
       primeMainAgentRun();
       let resolveRun: (value: {
         payloads: Array<{ text: string }>;
@@ -2225,7 +2223,7 @@ describe("gateway agent handler", () => {
   it("dispatches async gateway agent task creation through the detached task runtime seam", async () => {
     await withTempDir({ prefix: "openclaw-gateway-agent-seam-" }, async (root) => {
       useTestStateDir(root);
-      resetTaskRegistryForTests();
+      resetAgentTaskRegistryForTests();
       primeMainAgentRun();
 
       const defaultRuntime = getDetachedTaskLifecycleRuntime();
@@ -2323,7 +2321,7 @@ describe("gateway agent handler", () => {
     it("suppresses the gateway CLI task row for confirmed ACP manual-spawn child turns", async () => {
       await withTempDir({ prefix: "openclaw-gateway-acp-suppress-" }, async (root) => {
         useTestStateDir(root);
-        resetTaskRegistryForTests();
+        resetAgentTaskRegistryForTests();
         const childSessionKey = "agent:main:acp:child-confirmed";
         mockAcpChildSessionEntry(childSessionKey);
         mocks.readAcpSessionMeta.mockReturnValue(confirmedAcpMeta);
@@ -2348,7 +2346,7 @@ describe("gateway agent handler", () => {
     it("keeps CLI tracking when a non-backend operator-write caller sets acpTurnSource", async () => {
       await withTempDir({ prefix: "openclaw-gateway-acp-operator-write-" }, async (root) => {
         useTestStateDir(root);
-        resetTaskRegistryForTests();
+        resetAgentTaskRegistryForTests();
         const childSessionKey = "agent:main:acp:child-operator-write";
         mockAcpChildSessionEntry(childSessionKey);
         // Persisted ACP metadata is present and the turn looks like a manual
@@ -2388,7 +2386,7 @@ describe("gateway agent handler", () => {
     it("keeps CLI tracking for ACP-shaped manual-spawn turns without persisted ACP metadata", async () => {
       await withTempDir({ prefix: "openclaw-gateway-acp-no-meta-" }, async (root) => {
         useTestStateDir(root);
-        resetTaskRegistryForTests();
+        resetAgentTaskRegistryForTests();
         const childSessionKey = "agent:main:acp:child-missing-meta";
         mockAcpChildSessionEntry(childSessionKey);
         mocks.readAcpSessionMeta.mockReturnValue(undefined);
@@ -2423,7 +2421,7 @@ describe("gateway agent handler", () => {
     it("keeps dispatch and CLI tracking when ACP metadata read fails", async () => {
       await withTempDir({ prefix: "openclaw-gateway-acp-meta-throw-" }, async (root) => {
         useTestStateDir(root);
-        resetTaskRegistryForTests();
+        resetAgentTaskRegistryForTests();
         const childSessionKey = "agent:main:acp:child-meta-throw";
         mockAcpChildSessionEntry(childSessionKey);
         const metadataError = new Error("state db unavailable");
@@ -2474,7 +2472,7 @@ describe("gateway agent handler", () => {
     it("keeps CLI tracking for ACP-shaped turns that are not manual spawns", async () => {
       await withTempDir({ prefix: "openclaw-gateway-acp-not-manual-spawn-" }, async (root) => {
         useTestStateDir(root);
-        resetTaskRegistryForTests();
+        resetAgentTaskRegistryForTests();
         const childSessionKey = "agent:main:acp:child-not-spawn";
         mockAcpChildSessionEntry(childSessionKey);
         // Metadata is present but the turn lacks acpTurnSource, so the spawn
@@ -2504,7 +2502,7 @@ describe("gateway agent handler", () => {
     it("does not affect plugin-subagent tracking for confirmed ACP conditions", async () => {
       await withTempDir({ prefix: "openclaw-gateway-acp-plugin-subagent-" }, async (root) => {
         useTestStateDir(root);
-        resetTaskRegistryForTests();
+        resetAgentTaskRegistryForTests();
         resetSubagentRegistryForTests({ persist: false });
         const childSessionKey = "agent:main:acp:plugin-child";
         const runId = "acp-plugin-subagent-run";
@@ -2557,7 +2555,7 @@ describe("gateway agent handler", () => {
   it("logs a swallowed finalize error without blocking the background run", async () => {
     await withTempDir({ prefix: "openclaw-gateway-agent-finalize-throw-" }, async (root) => {
       useTestStateDir(root);
-      resetTaskRegistryForTests();
+      resetAgentTaskRegistryForTests();
       primeMainAgentRun();
 
       const defaultRuntime = getDetachedTaskLifecycleRuntime();
