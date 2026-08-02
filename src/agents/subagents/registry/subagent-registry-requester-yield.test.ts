@@ -16,6 +16,7 @@ function makeRun(runId: string, requesterTurnYielded = true): SubagentRunRecord 
     childSessionKey: `agent:main:subagent:${runId}`,
     requesterSessionKey: REQUESTER,
     requesterDisplayKey: "main",
+    expectedRequesterLifecycleRevision: "revision-1",
     task: "finish",
     cleanup: "keep",
     createdAt: 1_000,
@@ -208,6 +209,33 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
     expect(beta.delivery?.disposition).toBe("intentional_non_delivery");
     expect(calls).toEqual(["persist", "schedule"]);
     expect(schedule).toHaveBeenCalledExactlyOnceWith(alpha.runId, alpha);
+  });
+
+  it("preserves a lifecycle fence across requester-yield re-admission", () => {
+    const entry = makeRun("run-child");
+    entry.requesterSettleWake = {
+      status: "pending",
+      attemptCount: 1,
+      lifecycleMismatch: "requester_replaced",
+    };
+
+    expect(
+      settleRequesterTurnAfterSessionSpawns({
+        requesterSessionKey: REQUESTER,
+        requesterTurnRunId: REQUESTER_TURN,
+        requesterYielded: true,
+        acceptedSessionSpawns: [accepted(entry)],
+        runs: new Map([[entry.runId, entry]]),
+        persistOrThrow: vi.fn(),
+        schedule: vi.fn(),
+      }),
+    ).toBe(true);
+
+    expect(entry.requesterSettleWake).toMatchObject({
+      requesterYieldBatch: true,
+      afterRequesterYield: true,
+      lifecycleMismatch: "requester_replaced",
+    });
   });
 
   it.each([true, false])(

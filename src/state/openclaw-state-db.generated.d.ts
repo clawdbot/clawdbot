@@ -1333,6 +1333,7 @@ export interface SubagentRuns {
   ended_at: number | null;
   ended_hook_emitted_at: number | null;
   ended_reason: string | null;
+  expected_requester_lifecycle_revision: string | null;
   expects_completion_message: number | null;
   fallback_frozen_result_captured_at: number | null;
   fallback_frozen_result_text: string | null;
@@ -1357,6 +1358,7 @@ export interface SubagentRuns {
   requester_settle_wake_attempt_count: number | null;
   requester_settle_wake_batch_run_ids_json: string | null;
   requester_settle_wake_last_error: string | null;
+  requester_settle_wake_lifecycle_mismatch: string | null;
   requester_settle_wake_next_attempt_at: number | null;
   requester_settle_wake_replay_count: number | null;
   requester_settle_wake_retire_after: number | null;

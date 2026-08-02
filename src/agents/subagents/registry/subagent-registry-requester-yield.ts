@@ -116,6 +116,9 @@ export function settleRequesterTurnAfterSessionSpawns(params: {
         requesterYieldBatch: true,
         ...(completionMayBeAttachedToYieldedTurn ? { afterRequesterYield: true } : {}),
         rearmGeneration,
+        ...(existing?.lifecycleMismatch !== undefined
+          ? { lifecycleMismatch: existing.lifecycleMismatch }
+          : {}),
         ...(existing?.retireAfterSettle === true || entry.retireAfterRequesterTurn === true
           ? { retireAfterSettle: true }
           : {}),

@@ -94,6 +94,7 @@ describe("subagent registry sqlite store", () => {
         requesterTurnRunId: "run-requester",
         requesterTurnYielded: true,
         retireAfterRequesterTurn: true,
+        expectedRequesterLifecycleRevision: "revision-1",
         endedReason: "subagent-error",
         execution: {
           status: "terminal",
@@ -113,17 +114,33 @@ describe("subagent registry sqlite store", () => {
           afterRequesterYield: true,
           rearmGeneration: 3,
           lastError: "provider timeout",
+          lifecycleMismatch: "requester_replaced",
           retireAfterSettle: true,
         },
       });
 
       saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
 
+      const { db } = openOpenClawStateDatabase();
+      const { rows } = executeSqliteQuerySync(
+        db,
+        getNodeSqliteKysely<SubagentRegistryDatabase>(db)
+          .selectFrom("subagent_runs")
+          .select([
+            "expected_requester_lifecycle_revision",
+            "requester_settle_wake_lifecycle_mismatch",
+          ])
+          .where("run_id", "=", run.runId),
+      );
+      expect(rows[0]?.expected_requester_lifecycle_revision).toBe("revision-1");
+      expect(rows[0]?.requester_settle_wake_lifecycle_mismatch).toBe("requester_replaced");
+
       const restored = loadSubagentRegistryFromSqlite();
       expect(restored.get(run.runId)).toMatchObject({
         runId: run.runId,
         childSessionKey: run.childSessionKey,
         requesterSessionKey: run.requesterSessionKey,
+        expectedRequesterLifecycleRevision: "revision-1",
         task: run.task,
         requesterTurnRunId: "run-requester",
         requesterTurnYielded: true,
@@ -221,10 +238,12 @@ describe("subagent registry sqlite store", () => {
   it("keeps the complete payload authoritative over stale derived state columns", async () => {
     await withTempStateEnv(async () => {
       const run = createRun({
+        expectedRequesterLifecycleRevision: "revision-1",
         requesterSettleWake: {
           status: "dispatching",
           attemptCount: 2,
           batchRunIds: ["run-one"],
+          lifecycleMismatch: "requester_replaced",
         },
       });
       saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
@@ -240,6 +259,8 @@ describe("subagent registry sqlite store", () => {
             pending_final_delivery_last_error: "stale typed delivery",
             requester_settle_wake_status: "pending",
             requester_settle_wake_attempt_count: 99,
+            requester_settle_wake_lifecycle_mismatch: "requester_missing",
+            expected_requester_lifecycle_revision: "stale-revision",
             outcome_json: JSON.stringify({ status: "timeout" }),
           })
           .where("run_id", "=", run.runId),
@@ -251,6 +272,7 @@ describe("subagent registry sqlite store", () => {
       expect(restored?.completion?.resultText).toBe("done");
       expect(restored?.delivery).toMatchObject({ status: "pending", lastError: "retry later" });
       expect(restored?.requesterSettleWake).toEqual(run.requesterSettleWake);
+      expect(restored?.expectedRequesterLifecycleRevision).toBe("revision-1");
       expect(restored?.execution.outcome?.status).toBe("ok");
       const sessionListRun = loadSubagentSessionListRunsFromSqlite().get(run.runId);
       expect(sessionListRun?.execution.outcome?.status).toBe("ok");

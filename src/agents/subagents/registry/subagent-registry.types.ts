@@ -191,6 +191,8 @@ export type RequesterSettleWakeState = {
   afterRequesterYield?: true;
   /** Monotonic process generation protecting a newer yield from stale completion. */
   rearmGeneration?: number;
+  /** Fenced settlement: the requester lifecycle no longer matches handoff admission. */
+  lifecycleMismatch?: "requester_replaced" | "legacy_unfenced" | "requester_missing";
   lastError?: string | null;
   /** Cleanup wanted to retire this row; defer deletion until the outbox resolves. */
   retireAfterSettle?: boolean;
@@ -227,6 +229,8 @@ export type SubagentRunRecord = {
   childSessionKey: string;
   controllerSessionKey?: string;
   requesterSessionKey: string;
+  /** Requester lifecycle revision captured when this handoff was admitted. */
+  expectedRequesterLifecycleRevision?: string;
   requesterOrigin?: DeliveryContext;
   /** Durable source locator for transport-neutral progress presentation. */
   progressOrigin?: SubagentProgressOrigin;

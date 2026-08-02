@@ -19,7 +19,10 @@ const deliverSpy = vi.fn(
   }),
 );
 
-let sessionStore: Record<string, { sessionId?: string; lastChannel?: string; lastTo?: string }>;
+let sessionStore: Record<
+  string,
+  { sessionId?: string; lastChannel?: string; lastTo?: string; lifecycleRevision?: string }
+>;
 
 const { registryRuntimeMock } = vi.hoisted(() => ({
   registryRuntimeMock: {
@@ -93,6 +96,7 @@ function makeSettledChild(overrides: SettledChildOverrides): SubagentRunRecord {
     childSessionKey: overrides.childSessionKey ?? `agent:main:subagent:${runId}`,
     requesterSessionKey: REQUESTER,
     requesterDisplayKey: "main",
+    expectedRequesterLifecycleRevision: "revision-1",
     task: "investigate",
     cleanup: "keep",
     createdAt: 1_000,
@@ -172,7 +176,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     deliverSpy.mockClear();
     transitionBatchSpy.mockClear();
     completeBatchSpy.mockClear();
-    sessionStore = { [REQUESTER]: { sessionId: "sess-main" } };
+    sessionStore = { [REQUESTER]: { sessionId: "sess-main", lifecycleRevision: "revision-1" } };
     registryRuntimeMock.hasDescendantRunAwaitingSettle.mockReset().mockReturnValue(false);
     registryRuntimeMock.listSubagentRunsForRequester.mockReset().mockReturnValue([]);
     registryRuntimeMock.getLatestSubagentRunByChildSessionKey
@@ -384,9 +388,22 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     expect(deliverSpy).not.toHaveBeenCalled();
   });
 
-  it("skips requesters whose session entry is gone", async () => {
+  it("retains an explicit requester_missing outcome when the session entry is gone", async () => {
     sessionStore = {};
+    const children = [makeSettledChild({ runId: "run-a" }), makeSettledChild({ runId: "run-b" })];
     // A qualifying drained wave, so the missing session entry is what rejects.
+    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue(children);
+
+    const woke = await maybeWakeRequesterAfterAllChildrenSettled(wakeParams());
+
+    expect(woke).toBe(false);
+    expect(deliverSpy).not.toHaveBeenCalled();
+    expect(completeBatchSpy).not.toHaveBeenCalled();
+    expect(children[0].requesterSettleWake?.lifecycleMismatch).toBe("requester_missing");
+    expect(children[0].requesterSettleWake?.lastError).toContain("requester_missing");
+  });
+
+  it("delivers to the unchanged requester lifecycle exactly once", async () => {
     registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([
       makeSettledChild({ runId: "run-a" }),
       makeSettledChild({ runId: "run-b" }),
@@ -394,8 +411,54 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
 
     const woke = await maybeWakeRequesterAfterAllChildrenSettled(wakeParams());
 
+    expect(woke).toBe(true);
+    expect(deliverSpy).toHaveBeenCalledTimes(1);
+    expect(completeBatchSpy).toHaveBeenCalledWith(["run-a", "run-b"]);
+  });
+
+  it("fences a stale completion out of a replaced requester lifecycle", async () => {
+    sessionStore = { [REQUESTER]: { sessionId: "sess-main", lifecycleRevision: "revision-2" } };
+    const children = [makeSettledChild({ runId: "run-a" }), makeSettledChild({ runId: "run-b" })];
+    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue(children);
+
+    const woke = await maybeWakeRequesterAfterAllChildrenSettled(wakeParams());
+
     expect(woke).toBe(false);
     expect(deliverSpy).not.toHaveBeenCalled();
+    expect(completeBatchSpy).not.toHaveBeenCalled();
+    expect(transitionBatchSpy).toHaveBeenCalledWith(
+      ["run-a", "run-b"],
+      expect.objectContaining({
+        status: "pending",
+        lifecycleMismatch: "requester_replaced",
+      }),
+    );
+    for (const child of children) {
+      expect(child.requesterSettleWake?.lifecycleMismatch).toBe("requester_replaced");
+      expect(child.requesterSettleWake?.lastError).toContain("requester_replaced");
+    }
+
+    // A later drain keeps the fence without delivering or retrying.
+    const secondWoke = await maybeWakeRequesterAfterAllChildrenSettled(wakeParams());
+    expect(secondWoke).toBe(false);
+    expect(deliverSpy).not.toHaveBeenCalled();
+    expect(transitionBatchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails closed for legacy persisted wakes without a captured lifecycle revision", async () => {
+    const children = [
+      makeSettledChild({ runId: "run-a", expectedRequesterLifecycleRevision: undefined }),
+      makeSettledChild({ runId: "run-b", expectedRequesterLifecycleRevision: undefined }),
+    ];
+    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue(children);
+
+    const woke = await maybeWakeRequesterAfterAllChildrenSettled(wakeParams());
+
+    expect(woke).toBe(false);
+    expect(deliverSpy).not.toHaveBeenCalled();
+    expect(completeBatchSpy).not.toHaveBeenCalled();
+    expect(children[0].requesterSettleWake?.lifecycleMismatch).toBe("legacy_unfenced");
+    expect(children[0].requesterSettleWake?.lastError).toContain("legacy_unfenced");
   });
 
   it("does not add a wake turn for an ordinary frozen single completion", async () => {

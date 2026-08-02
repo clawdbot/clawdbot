@@ -463,7 +463,9 @@ export function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureColumn(db, "subagent_runs", "requester_settle_wake_next_attempt_at INTEGER");
   ensureColumn(db, "subagent_runs", "requester_settle_wake_batch_run_ids_json TEXT");
   ensureColumn(db, "subagent_runs", "requester_settle_wake_last_error TEXT");
+  ensureColumn(db, "subagent_runs", "requester_settle_wake_lifecycle_mismatch TEXT");
   ensureColumn(db, "subagent_runs", "requester_settle_wake_retire_after INTEGER");
+  ensureColumn(db, "subagent_runs", "expected_requester_lifecycle_revision TEXT");
   ensureColumn(db, "subagent_runs", "swarm_group_id TEXT");
   ensureColumn(db, "subagent_runs", "swarm_collector INTEGER");
   ensureColumn(db, "subagent_runs", "swarm_output_schema_json TEXT");
