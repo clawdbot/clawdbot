@@ -82,6 +82,7 @@ import {
   handleSessionStateSessionReset,
   recordSessionCreated,
 } from "../sessions/session-state-events.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import {
   forgetActiveSessionForShutdown,
@@ -103,7 +104,26 @@ import {
   resolveSessionStoreKey,
 } from "./session-utils.js";
 
-const mcpRunEndWatchers = new Map<string, Promise<void>>();
+type McpRunEndWatcherState = {
+  cancellations: Map<string, () => void>;
+  retirements: Set<Promise<void>>;
+  watchers: Map<string, Promise<void>>;
+};
+
+const mcpRunEndWatcherState = resolveGlobalSingleton<McpRunEndWatcherState>(
+  Symbol.for("openclaw.mcpRunEndWatchers"),
+  () => ({ cancellations: new Map(), retirements: new Set(), watchers: new Map() }),
+  async (state) => {
+    for (const cancel of state.cancellations.values()) {
+      cancel();
+    }
+    await Promise.allSettled([...state.watchers.values(), ...state.retirements]);
+    state.cancellations.clear();
+    state.retirements.clear();
+    state.watchers.clear();
+  },
+);
+const mcpRunEndWatchers = mcpRunEndWatcherState.watchers;
 
 const ACP_RUNTIME_CLEANUP_TIMEOUT_MS = 15_000;
 
@@ -445,12 +465,25 @@ async function ensureSessionRuntimeCleanup(params: {
     });
   };
   const ensureMcpRetirementWatcher = () => {
+    if (mcpRunEndWatchers.has(sessionId)) {
+      return;
+    }
+    let cancelWatcher = () => {};
+    const cancelled = new Promise<false>((resolve) => {
+      cancelWatcher = () => resolve(false);
+    });
     const watcher = getOrCreatePromise(
       mcpRunEndWatchers,
       sessionId,
       async () => {
+        mcpRunEndWatcherState.cancellations.set(sessionId, cancelWatcher);
         try {
-          while (await embeddedAgent.waitForEmbeddedAgentRunEnd(sessionId, null)) {
+          while (
+            await Promise.race([
+              embeddedAgent.waitForEmbeddedAgentRunEnd(sessionId, null),
+              cancelled,
+            ])
+          ) {
             // A replacement can register after the wait promise settles but before
             // this continuation runs. Keep the required retirement armed for it.
             if (embeddedAgent.isEmbeddedAgentRunActive(sessionId)) {
@@ -459,13 +492,23 @@ async function ensureSessionRuntimeCleanup(params: {
             if (mcpRunEndWatchers.get(sessionId) === watcher) {
               mcpRunEndWatchers.delete(sessionId);
             }
-            await retireMcpRuntime(false);
+            const retirement = retireMcpRuntime(false);
+            mcpRunEndWatcherState.retirements.add(retirement);
+            try {
+              await retirement;
+            } finally {
+              mcpRunEndWatcherState.retirements.delete(retirement);
+            }
             return;
           }
         } catch (error) {
           logVerbose(
             `sessions cleanup: failed to disarm deferred MCP retirement: ${String(error)}`,
           );
+        } finally {
+          if (mcpRunEndWatcherState.cancellations.get(sessionId) === cancelWatcher) {
+            mcpRunEndWatcherState.cancellations.delete(sessionId);
+          }
         }
       },
       { evictOnSettled: true },

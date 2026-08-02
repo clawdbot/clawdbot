@@ -11,6 +11,7 @@ import {
 } from "../../agents/agent-run-terminal-outcome.js";
 import { onAgentEvent } from "../../infra/agent-events.js";
 import { isNonTerminalAgentRunStatus } from "../../shared/agent-run-status.js";
+import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { setSafeTimeout } from "../../utils/timer-delay.js";
 import type { DedupeEntry } from "../server-shared.js";
 
@@ -46,23 +47,60 @@ type AgentJobRecord = {
   cachedAt: number;
   snapshotsBySource: Map<AgentJobSource, AgentRunSnapshot>;
 };
-type AgentJobWaiter = () => void;
+type AgentJobWaiter = (lifecycleReset?: boolean) => void;
 type DedupeObservation =
   | { state: "active" }
   | { state: "terminal"; snapshot: AgentJobTerminalSnapshot }
   | { state: "untracked" };
 
-const agentJobs = new Map<string, AgentJobRecord>();
-const agentRunStarts = new Map<string, number>();
-const pendingAgentRunErrors = new Map<string, PendingAgentRunTerminal>();
-const pendingAgentRunTimeouts = new Map<string, PendingAgentRunTerminal>();
-const agentRunWaiters = new Map<string, Set<AgentJobWaiter>>();
-let agentRunListenerStarted = false;
-let agentRunVersion = 0;
+type AgentJobState = {
+  jobs: Map<string, AgentJobRecord>;
+  runStarts: Map<string, number>;
+  pendingErrors: Map<string, PendingAgentRunTerminal>;
+  pendingTimeouts: Map<string, PendingAgentRunTerminal>;
+  waiters: Map<string, Set<AgentJobWaiter>>;
+  listenerStarted: boolean;
+  version: number;
+};
+
+const agentJobState = resolveGlobalSingleton<AgentJobState>(
+  Symbol.for("openclaw.agentJobState"),
+  () => ({
+    jobs: new Map(),
+    runStarts: new Map(),
+    pendingErrors: new Map(),
+    pendingTimeouts: new Map(),
+    waiters: new Map(),
+    listenerStarted: false,
+    version: 0,
+  }),
+  (state) => {
+    for (const pending of state.pendingErrors.values()) {
+      clearTimeout(pending.timer);
+    }
+    for (const pending of state.pendingTimeouts.values()) {
+      clearTimeout(pending.timer);
+    }
+    state.jobs.clear();
+    state.runStarts.clear();
+    state.pendingErrors.clear();
+    state.pendingTimeouts.clear();
+    const waiters = Array.from(state.waiters.values()).flatMap((entries) => Array.from(entries));
+    state.waiters.clear();
+    for (const waiter of waiters) {
+      waiter(true);
+    }
+  },
+);
+const agentJobs = agentJobState.jobs;
+const agentRunStarts = agentJobState.runStarts;
+const pendingAgentRunErrors = agentJobState.pendingErrors;
+const pendingAgentRunTimeouts = agentJobState.pendingTimeouts;
+const agentRunWaiters = agentJobState.waiters;
 
 function nextAgentRunVersion(): number {
-  agentRunVersion += 1;
-  return agentRunVersion;
+  agentJobState.version += 1;
+  return agentJobState.version;
 }
 
 function pruneAgentRunCache(now = Date.now()) {
@@ -276,10 +314,10 @@ function createSnapshotFromLifecycleEvent(params: {
 }
 
 function ensureAgentRunListener() {
-  if (agentRunListenerStarted) {
+  if (agentJobState.listenerStarted) {
     return;
   }
-  agentRunListenerStarted = true;
+  agentJobState.listenerStarted = true;
   onAgentEvent((evt) => {
     if (!evt || evt.stream !== "lifecycle") {
       return;
@@ -523,7 +561,7 @@ export async function waitForAgentJob(params: {
   source?: "chat";
 }): Promise<AgentJobTerminalSnapshot | null> {
   ensureAgentRunListener();
-  const afterVersion = params.ignoreCachedSnapshot ? agentRunVersion : -1;
+  const afterVersion = params.ignoreCachedSnapshot ? agentJobState.version : -1;
   const cached = getAgentRunSnapshot({
     runId: params.runId,
     source: params.source,
@@ -548,7 +586,11 @@ export async function waitForAgentJob(params: {
       removeWaiter();
       resolve(snapshot);
     };
-    const onWake = () => {
+    const onWake = (lifecycleReset = false) => {
+      if (lifecycleReset) {
+        finish(null);
+        return;
+      }
       const snapshot = getAgentRunSnapshot({
         runId: params.runId,
         source: params.source,

@@ -1,5 +1,6 @@
 /** Covers plugin runtime registration API behavior and registry mutation guards. */
 import { beforeEach, describe, expect, it } from "vitest";
+import { getPluginRunContext, setPluginRunContext } from "./host-hook-runtime.js";
 import { createEmptyPluginRegistry } from "./registry.js";
 import type { PluginHttpRouteRegistration } from "./registry.js";
 import {
@@ -212,5 +213,21 @@ describe("setActivePluginRegistry", () => {
 
     expect(getActivePluginRegistry()).toBeNull();
     expect(cleanupCount).toBe(1);
+  });
+
+  it("clears plugin host run contexts with the active registry", async () => {
+    setPluginRunContext({
+      pluginId: "runtime-test",
+      patch: { runId: "run-1", namespace: "state", value: { ready: true } },
+    });
+
+    await clearActivePluginRegistry();
+
+    expect(
+      getPluginRunContext({
+        pluginId: "runtime-test",
+        get: { runId: "run-1", namespace: "state" },
+      }),
+    ).toBeUndefined();
   });
 });
