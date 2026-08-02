@@ -786,6 +786,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                         isCurrentTask()
                           ? setRuntimeFromTaskStatus(channelId, id, next, abort.signal)
                           : getRuntime(channelId, id),
+                      invalidateDirectoryCache: () =>
+                        resetDirectoryCache({ channel: channelId, accountId: id }),
                       ...(channelRuntimeForTask ? { channelRuntime: channelRuntimeForTask } : {}),
                     }),
                   ).finally(recordDuration);
