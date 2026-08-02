@@ -3,6 +3,7 @@ import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   loadRunOverflowCompactionHarness,
+  mockedBuildEmbeddedRunPayloads,
   mockedGlobalHookRunner,
   mockedRunEmbeddedAttempt,
   overflowBaseRunParams,
@@ -43,13 +44,22 @@ function finalAnswerAttempt(
 
 function attemptCall(index: number): {
   prompt?: string;
+  disableTools?: boolean;
+  operation?: string;
+  skipPreparedUserTurnMessage?: boolean;
   suppressNextUserMessagePersistence?: boolean;
 } {
   const call = mockedRunEmbeddedAttempt.mock.calls[index];
   if (!call) {
     throw new Error(`Expected embedded attempt call ${index}`);
   }
-  return call[0] as { prompt?: string; suppressNextUserMessagePersistence?: boolean };
+  return call[0] as {
+    prompt?: string;
+    disableTools?: boolean;
+    operation?: string;
+    skipPreparedUserTurnMessage?: boolean;
+    suppressNextUserMessagePersistence?: boolean;
+  };
 }
 
 describe("runEmbeddedAgent before_agent_finalize", () => {
@@ -199,5 +209,114 @@ describe("runEmbeddedAgent before_agent_finalize", () => {
     });
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+  });
+
+  it("runs settled tool finalization through the full entrypoint", async () => {
+    const toolUseAssistant = {
+      role: "assistant",
+      stopReason: "toolUse",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [{ type: "toolCall", id: "tool_1", name: "write", arguments: {} }],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [{ toolName: "write" }],
+        itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+        messagesSnapshot: [
+          toolUseAssistant,
+          { role: "toolResult", toolCallId: "tool_1", toolName: "write", isError: false },
+        ] as unknown as EmbeddedRunAttemptResult["messagesSnapshot"],
+        lastAssistant: toolUseAssistant,
+        currentAttemptAssistant: toolUseAssistant,
+      }),
+    );
+    const finalAssistant = {
+      role: "assistant",
+      stopReason: "stop",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [{ type: "text", text: "Write completed." }],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["Write completed."],
+        lastAssistant: finalAssistant,
+        currentAttemptAssistant: finalAssistant,
+        currentAttemptCompletedAssistant: finalAssistant,
+      }),
+    );
+    mockedBuildEmbeddedRunPayloads
+      .mockReturnValueOnce([])
+      .mockReturnValueOnce([{ text: "Write completed." }]);
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-settled-finalization-entry",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(attemptCall(1)).toMatchObject({
+      disableTools: true,
+      operation: "settled-tool-finalization",
+      skipPreparedUserTurnMessage: true,
+    });
+    expect(result.payloads).toEqual([{ text: "Write completed." }]);
+  });
+
+  it("keeps terminal presentation selection in model-call order", async () => {
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (params) => {
+      const onToolOutcome = (
+        params as {
+          onToolOutcome?: (observation: {
+            toolName: string;
+            argsHash: string;
+            resultHash: string;
+            toolCallOrdinal: number;
+            terminalPresentation?: string;
+          }) => void;
+        }
+      ).onToolOutcome;
+      onToolOutcome?.({
+        toolName: "exec",
+        argsHash: "exec-args",
+        resultHash: "exec-result",
+        toolCallOrdinal: 1,
+      });
+      onToolOutcome?.({
+        toolName: "web_fetch",
+        argsHash: "fetch-args",
+        resultHash: "fetch-result",
+        toolCallOrdinal: 0,
+        terminalPresentation: "Fetched older result.",
+      });
+      return makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [{ toolName: "web_fetch" }, { toolName: "exec" }],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "toolUse",
+          provider: "openai",
+          model: "gpt-5.5",
+          content: [],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      });
+    });
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-terminal-presentation-order-entry",
+    });
+
+    expect(result.payloads?.[0]?.text).not.toContain("Fetched older result.");
+    expect(result.meta.error).toMatchObject({
+      fallbackSafe: false,
+      terminalPresentation: false,
+    });
   });
 });
