@@ -451,12 +451,9 @@ describe("sendMessageMatrix durable delivery", () => {
       cfg: {} as never,
     });
     expect(bmp.sendMessage).toHaveBeenCalledTimes(4);
-    expect(bmp.sendMessage.mock.calls.map((call) => requireRecord(call[1]).body)).toEqual([
-      "A",
-      "B",
-      "C",
-      "D",
-    ]);
+    expect(
+      bmp.sendMessage.mock.calls.map((call) => requireRecord(call[1], "BMP content").body),
+    ).toEqual(["A", "B", "C", "D"]);
 
     resolveTextChunkLimitMock.mockReturnValue(1.5);
     const astral = makeClient();
@@ -465,10 +462,9 @@ describe("sendMessageMatrix durable delivery", () => {
       cfg: {} as never,
     });
     expect(astral.sendMessage).toHaveBeenCalledTimes(2);
-    expect(astral.sendMessage.mock.calls.map((call) => requireRecord(call[1]).body)).toEqual([
-      "😀",
-      "😀",
-    ]);
+    expect(
+      astral.sendMessage.mock.calls.map((call) => requireRecord(call[1], "astral content").body),
+    ).toEqual(["😀", "😀"]);
   });
 
   it("persists the complete event plan before the first provider dispatch", async () => {
