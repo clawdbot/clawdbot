@@ -207,7 +207,7 @@ describe("memory-core plugin runtime registration", () => {
       .mockResolvedValueOnce({ manager: { sync: syncMain } } as never)
       .mockResolvedValueOnce({ manager: { sync: syncWork } } as never);
     const config = {
-      agents: { list: [{ id: "main" }, { id: "work" }] },
+      agents: { entries: { main: { default: true }, work: {} } },
     } as OpenClawConfig;
     const testApi = createTestPluginApi({
       config,

@@ -611,6 +611,29 @@ describe("memory cli", () => {
     expect(close).toHaveBeenCalled();
   });
 
+  it("fans status out to every keyed agent entry", async () => {
+    const agentIds = ["main", ...Array.from({ length: 21 }, (_, index) => `agent-${index + 1}`)];
+    getRuntimeConfig.mockReturnValue({
+      agents: {
+        entries: Object.fromEntries(
+          agentIds.map((agentId, index) => [agentId, { default: index === 0 }]),
+        ),
+      },
+    });
+    getMemorySearchManager.mockImplementation(async () => ({
+      manager: {
+        status: () => makeMemoryStatus({ workspaceDir: undefined }),
+        close: vi.fn(async () => {}),
+      },
+    }));
+
+    await runMemoryCli(["status"]);
+
+    expect(
+      getMemorySearchManager.mock.calls.map(([params]) => (params as { agentId: string }).agentId),
+    ).toEqual(agentIds);
+  });
+
   it("resolves configured memory SecretRefs through gateway snapshot", async () => {
     const config = {
       memory: {
