@@ -72,8 +72,68 @@ function isZeroWidthDefaultIgnorable(code: number): boolean {
   );
 }
 
-function normalizePrintableWidthChunk(input: string): string {
-  return /[\u1100-\u11FF]/u.test(input) ? input.normalize("NFC") : input;
+function isHangulLeadingJamo(code: number): boolean {
+  return (code >= 0x1100 && code <= 0x115e) || (code >= 0xa960 && code <= 0xa97c);
+}
+
+function isHangulMedialJamo(code: number): boolean {
+  return (code >= 0x1161 && code <= 0x11a7) || (code >= 0xd7b0 && code <= 0xd7c6);
+}
+
+function isHangulTrailingJamo(code: number): boolean {
+  return (code >= 0x11a8 && code <= 0x11ff) || (code >= 0xd7cb && code <= 0xd7fb);
+}
+
+function codePointAtStart(input: string, index: number): number | undefined {
+  return input.codePointAt(index);
+}
+
+function charLengthForCodePoint(code: number): number {
+  return code > 0xffff ? 2 : 1;
+}
+
+function readHangulJamoSyllableCluster(input: string, start: number): string | undefined {
+  const firstCode = codePointAtStart(input, start);
+  if (firstCode === undefined || !isHangulLeadingJamo(firstCode)) {
+    return undefined;
+  }
+  let index = start + charLengthForCodePoint(firstCode);
+  const medialCode = codePointAtStart(input, index);
+  if (medialCode === undefined || !isHangulMedialJamo(medialCode)) {
+    return undefined;
+  }
+  index += charLengthForCodePoint(medialCode);
+  while (index < input.length) {
+    const trailingCode = codePointAtStart(input, index);
+    if (trailingCode === undefined || !isHangulTrailingJamo(trailingCode)) {
+      break;
+    }
+    index += charLengthForCodePoint(trailingCode);
+  }
+  return input.slice(start, index);
+}
+
+function splitPrintableWidthClusters(input: string): string[] {
+  return splitGraphemes(input);
+}
+
+function printableWidthClusterWidth(input: string): number {
+  const normalized = /[\u1100-\u11FF\uA960-\uA97C\uD7B0-\uD7FB]/u.test(input)
+    ? input.normalize("NFC")
+    : input;
+  const startsWithHangulSyllable =
+    normalized.length === input.length &&
+    input === normalized &&
+    input.length > 0 &&
+    readHangulJamoSyllableCluster(input, 0) === input;
+  return startsWithHangulSyllable ? 2 : stringWidth(normalized);
+}
+
+function printableWidthChunkWidth(input: string): number {
+  return splitPrintableWidthClusters(input).reduce(
+    (width, cluster) => width + printableWidthClusterWidth(cluster),
+    0,
+  );
 }
 
 function widthAcrossDefaultIgnorableBoundaries(input: string): number {
@@ -81,7 +141,7 @@ function widthAcrossDefaultIgnorableBoundaries(input: string): number {
   let chunk = "";
   const flush = (): void => {
     if (chunk) {
-      width += stringWidth(normalizePrintableWidthChunk(chunk));
+      width += printableWidthChunkWidth(chunk);
       chunk = "";
     }
   };
@@ -206,14 +266,56 @@ export function splitGraphemes(input: string): string[] {
   if (!input) {
     return [];
   }
-  if (!graphemeSegmenter) {
-    return Array.from(input);
+  const segments = (() => {
+    if (!graphemeSegmenter) {
+      return Array.from(input);
+    }
+    try {
+      return Array.from(graphemeSegmenter.segment(input), (segment) => segment.segment);
+    } catch {
+      return Array.from(input);
+    }
+  })();
+  if (!/[\u1100-\u11FF\uA960-\uA97C\uD7B0-\uD7FB]/u.test(input)) {
+    return segments;
   }
-  try {
-    return Array.from(graphemeSegmenter.segment(input), (segment) => segment.segment);
-  } catch {
-    return Array.from(input);
+  const combined: string[] = [];
+  for (let index = 0; index < segments.length; index += 1) {
+    const segment = segments[index] ?? "";
+    const firstCode = codePointAtStart(segment, 0);
+    if (firstCode === undefined || !isHangulLeadingJamo(firstCode)) {
+      combined.push(segment);
+      continue;
+    }
+    let cluster = segment;
+    let nextIndex = index + 1;
+    const segmentHasMedial = Array.from(segment).some((char) => {
+      const code = char.codePointAt(0);
+      return code !== undefined && isHangulMedialJamo(code);
+    });
+    if (!segmentHasMedial) {
+      const next = segments[nextIndex] ?? "";
+      const nextCode = codePointAtStart(next, 0);
+      if (nextCode === undefined || !isHangulMedialJamo(nextCode)) {
+        combined.push(segment);
+        continue;
+      }
+      cluster += next;
+      nextIndex += 1;
+    }
+    while (nextIndex < segments.length) {
+      const next = segments[nextIndex] ?? "";
+      const nextCode = codePointAtStart(next, 0);
+      if (nextCode === undefined || !isHangulTrailingJamo(nextCode)) {
+        break;
+      }
+      cluster += next;
+      nextIndex += 1;
+    }
+    combined.push(cluster);
+    index = nextIndex - 1;
   }
+  return combined;
 }
 
 /**

@@ -209,6 +209,8 @@ describe("terminal ansi helpers", () => {
     ["decomposed Hangul L/V syllable", "\u1100\u1161", 2],
     ["decomposed Hangul L/V/T syllable", "\u1100\u1161\u11A8", 2],
     ["mixed decomposed Hangul L/V/T text", "A\u1100\u1161\u11A8B", 4],
+    ["archaic decomposed Hangul L/V syllable", "\uA960\uD7B0", 2],
+    ["archaic decomposed Hangul L/V/T syllable", "\uA960\uD7B0\uD7CB", 2],
     ["Hangul leading filler", "\u115F", 2],
     ["Hangul vowel filler", "\u1160", 0],
     ["Hangul compatibility filler", "\u3164", 2],
@@ -306,6 +308,10 @@ describe("terminal ansi helpers", () => {
     expect(truncateToVisibleWidth("\u1100\u1161\u11A8", 1)).toBe("");
     expect(truncateToVisibleWidth("\u1100\u1161\u11A8", 2)).toBe("\u1100\u1161\u11A8");
     expect(truncateToVisibleWidth("\u1100\u1161\u11A8", 3)).toBe("\u1100\u1161\u11A8");
+    expect(truncateToVisibleWidth("\uA960\uD7B0", 1)).toBe("");
+    expect(truncateToVisibleWidth("\uA960\uD7B0", 2)).toBe("\uA960\uD7B0");
+    expect(truncateToVisibleWidth("\uA960\uD7B0\uD7CB", 1)).toBe("");
+    expect(truncateToVisibleWidth("\uA960\uD7B0\uD7CB", 2)).toBe("\uA960\uD7B0\uD7CB");
     expect(truncateToVisibleWidth("A\u1100\u1161\u11A8B", 1)).toBe("A");
     expect(truncateToVisibleWidth("A\u1100\u1161\u11A8B", 2)).toBe("A");
     expect(truncateToVisibleWidth("A\u1100\u1161\u11A8B", 3)).toBe("A\u1100\u1161\u11A8");
