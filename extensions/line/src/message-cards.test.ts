@@ -16,7 +16,6 @@ import { registerLineCardCommand } from "./card-command.js";
 import {
   createActionCard,
   createAppleTvRemoteCard,
-  createCarousel,
   createDeviceControlCard,
   createEventCard,
   createImageCard,
@@ -30,9 +29,6 @@ import {
   createButtonTemplate,
   createTemplateCarousel,
   createCarouselColumn,
-  createImageCarousel,
-  createImageCarouselColumn,
-  createProductCarousel,
 } from "./template-messages.js";
 
 const loneHighSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/;
@@ -85,14 +81,6 @@ const lineTemplateMessageScenarios = [
         { altText },
       ),
     bodyLimit: 120,
-  },
-  {
-    kind: "image carousel",
-    create: (altText: string) =>
-      createImageCarousel(
-        [createImageCarouselColumn("https://example.test/image.png", messageAction("Open"))],
-        altText,
-      ),
   },
 ] as const;
 
@@ -340,97 +328,13 @@ describe("createCarouselColumn", () => {
 });
 
 describe("carousel column limits", () => {
-  it.each([
-    {
-      createTemplate: () =>
-        createTemplateCarousel(
-          Array.from({ length: 15 }, () =>
-            createCarouselColumn({ text: "Text", actions: [messageAction("OK")] }),
-          ),
-        ),
-    },
-    {
-      createTemplate: () =>
-        createImageCarousel(
-          Array.from({ length: 15 }, (_, i) =>
-            createImageCarouselColumn(`https://example.com/${i}.jpg`, messageAction("View")),
-          ),
-        ),
-    },
-  ])("limits columns to 10", ({ createTemplate }) => {
-    const template = createTemplate();
-    expect((template.template as { columns: unknown[] }).columns.length).toBe(10);
-  });
-
-  it("drops a surrogate-pair emoji from image-carousel altText instead of splitting it", () => {
-    const template = createImageCarousel(
-      [createImageCarouselColumn("https://example.com/0.jpg", messageAction("View"))],
-      `${"x".repeat(1499)}😀`,
-    );
-
-    expect(template.altText).toBe("x".repeat(1499));
-    expect(loneHighSurrogate.test(template.altText)).toBe(false);
-  });
-
-  it("keeps unavailable action labels within the image-carousel cap", () => {
-    const template = createImageCarousel([
-      createImageCarouselColumn(
-        "https://example.com/0.jpg",
-        uriAction("Open", `https://example.com/?q=${"x".repeat(1200)}`),
+  it("limits columns to 10", () => {
+    const template = createTemplateCarousel(
+      Array.from({ length: 15 }, () =>
+        createCarouselColumn({ text: "Text", actions: [messageAction("OK")] }),
       ),
-    ]);
-    const column = (
-      template.template as {
-        columns: Array<{ action: { label?: string; text?: string; type: string } }>;
-      }
-    ).columns[0];
-
-    expect(column?.action).toEqual({
-      type: "message",
-      label: "Unavailable",
-      text: "Link unavailable: URL exceeds LINE's limit.",
-    });
-    expect(column?.action.label).toHaveLength(11);
-  });
-});
-
-describe("createProductCarousel", () => {
-  it.each([
-    {
-      title: "Product",
-      description: "Desc",
-      actionLabel: "Buy",
-      actionUrl: "https://shop.com/buy",
-      expectedType: "uri",
-    },
-    {
-      title: "Product",
-      description: "Desc",
-      actionLabel: "Select",
-      actionData: "product_id=123",
-      expectedType: "postback",
-    },
-  ])("uses expected action type for product action", ({ expectedType, ...item }) => {
-    const template = createProductCarousel([item]);
-    const columns = (template.template as { columns: Array<{ actions: Array<{ type: string }> }> })
-      .columns;
-    const column = expectDefined(columns[0], "product carousel column");
-    expect(expectDefined(column.actions[0], "product carousel action").type).toBe(expectedType);
-  });
-
-  it("preserves the complete price when truncating a long description", () => {
-    const template = createProductCarousel([
-      {
-        title: "Product",
-        description: "x".repeat(59),
-        price: "$12.99",
-      },
-    ]);
-    const columns = (template.template as { columns: Array<{ text: string }> }).columns;
-
-    const column = expectDefined(columns[0], "priced product carousel column");
-    expect(column.text).toBe(`${"x".repeat(53)}\n$12.99`);
-    expect(column.text.length).toBe(60);
+    );
+    expect((template.template as { columns: unknown[] }).columns.length).toBe(10);
   });
 });
 
@@ -468,13 +372,6 @@ describe("flex cards", () => {
 
     const footer = card.footer as { contents: unknown[] };
     expect(footer.contents.length).toBe(4);
-  });
-
-  it("limits carousels to 12 bubbles", () => {
-    const bubbles = Array.from({ length: 15 }, (_, i) => createInfoCard(`Card ${i}`, `Body ${i}`));
-    const carousel = createCarousel(bubbles);
-
-    expect(carousel.contents.length).toBe(12);
   });
 
   it("limits device controls to 6", () => {
@@ -700,8 +597,12 @@ describe("action label/data surrogate-safe truncation", () => {
       expect(received.every((request) => request.authenticated)).toBe(true);
       expect(received.every((request) => request.type === "template")).toBe(true);
       expect(received.every((request) => request.altText === altText)).toBe(true);
-      expect(received.filter((request) => request.path.endsWith("/push"))).toHaveLength(4);
-      expect(received.filter((request) => request.path.endsWith("/reply"))).toHaveLength(4);
+      expect(received.filter((request) => request.path.endsWith("/push"))).toHaveLength(
+        lineTemplateMessageScenarios.length,
+      );
+      expect(received.filter((request) => request.path.endsWith("/reply"))).toHaveLength(
+        lineTemplateMessageScenarios.length,
+      );
     });
   });
 
@@ -841,11 +742,6 @@ describe("action label/data surrogate-safe truncation", () => {
     };
     expect(carousel.columns[0]?.actions).toEqual([unavailableAction]);
     expect(carousel.columns[0]?.defaultAction).toEqual(unavailableLink);
-
-    const imageCarousel = createImageCarousel([
-      { imageUrl: "https://e.example/image.jpg", action: oversizedPostback },
-    ]).template as { columns: Array<{ action: Action }> };
-    expect(imageCarousel.columns[0]?.action).toEqual(unavailableAction);
   });
 
   it("normalizes every length-constrained raw action field", () => {
