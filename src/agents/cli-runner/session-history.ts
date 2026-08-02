@@ -496,9 +496,8 @@ export function resolveCliSessionSqliteTranscriptScope(params: CliSessionTranscr
   if (marker && (marker.sessionId !== params.sessionId || marker.agentId !== sessionAgentId)) {
     return undefined;
   }
-  // Persisted markers retain their old absolute store after a supported state
-  // relocation. Identity-gate the marker, then read only the current canonical
-  // store so stale marker metadata cannot redirect transcript access.
+  // Identity-gate relocated markers, then read the current canonical store so
+  // stale absolute metadata cannot redirect transcript access.
   const storePath = resolveStorePath(params.storePath ?? params.config?.session?.store, {
     agentId: sessionAgentId,
   });
@@ -540,8 +539,7 @@ function finalizeCliSessionEntries(params: {
   if (!params.excludeMessageIdempotencyKey) {
     return selectedEntries;
   }
-  // Select the active branch before removing the already-persisted current
-  // turn so its tree edge cannot change leaf resolution for prior history.
+  // Select the active branch first so removing the persisted turn cannot change its leaf.
   return selectedEntries.filter((entry) => {
     const candidate = entry as HistoryEntry;
     if (candidate.type !== "message") {
