@@ -31,6 +31,8 @@ import { loadCronFailingCount } from "./scope.ts";
 export { loadCronFailingCount, loadCronScopeStats } from "./scope.ts";
 
 const CRON_CHANNEL_LAST = "last";
+type CronDelivery = NonNullable<CronJob["delivery"]>;
+type CronAnnounceDelivery = Extract<CronDelivery, { mode: "announce" }>;
 
 export type CronFormState = {
   name: string;
@@ -66,6 +68,9 @@ export type CronFormState = {
   deliveryTo: string;
   deliveryAccountId: string;
   deliveryBestEffort: boolean;
+  deliveryThreadId?: CronDelivery["threadId"];
+  deliveryCompletionDestination?: CronAnnounceDelivery["completionDestination"];
+  deliveryFailureDestination?: CronDelivery["failureDestination"];
   failureAlertMode: "inherit" | "disabled" | "custom";
   failureAlertAfter: string;
   failureAlertCooldownSeconds: string;
@@ -799,6 +804,10 @@ function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
     deliveryTo: job.delivery?.to ?? "",
     deliveryAccountId: job.delivery?.accountId ?? "",
     deliveryBestEffort: job.delivery?.bestEffort ?? false,
+    deliveryThreadId: job.delivery?.threadId,
+    deliveryCompletionDestination:
+      job.delivery?.mode === "announce" ? job.delivery.completionDestination : undefined,
+    deliveryFailureDestination: job.delivery?.failureDestination,
     failureAlertMode:
       failureAlert === false
         ? "disabled"
@@ -1066,9 +1075,23 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
             to: form.deliveryTo.trim() || undefined,
             accountId: deliveryAccountId,
             bestEffort: form.deliveryBestEffort,
+            ...(form.deliveryThreadId !== undefined ? { threadId: form.deliveryThreadId } : {}),
+            ...(selectedDeliveryMode === "announce" && form.deliveryCompletionDestination
+              ? { completionDestination: form.deliveryCompletionDestination }
+              : {}),
+            ...(form.deliveryFailureDestination
+              ? { failureDestination: form.deliveryFailureDestination }
+              : {}),
           }
         : selectedDeliveryMode === "none"
-          ? ({ mode: "none" } as const)
+          ? ({
+              mode: "none",
+              ...(form.deliveryBestEffort ? { bestEffort: true } : {}),
+              ...(form.deliveryThreadId !== undefined ? { threadId: form.deliveryThreadId } : {}),
+              ...(form.deliveryFailureDestination
+                ? { failureDestination: form.deliveryFailureDestination }
+                : {}),
+            } as const)
           : undefined;
     const failureAlert = buildFailureAlert(form, editingJob?.failureAlert);
     const agentId = form.clearAgent ? null : form.agentId.trim();
