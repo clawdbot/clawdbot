@@ -74,7 +74,7 @@ function codeBlockSpans(ir: MarkdownIR): MarkdownStyleSpan[] {
 function toCodeBlock(ir: MarkdownIR, span: MarkdownStyleSpan): CodeBlock {
   return {
     ...(span.language ? { language: span.language } : {}),
-    code: ir.text.slice(span.start, span.end).trim(),
+    code: ir.text.slice(span.start, span.end).trimEnd(),
   };
 }
 
