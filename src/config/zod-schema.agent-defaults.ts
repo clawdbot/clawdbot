@@ -208,12 +208,15 @@ export const AgentDefaultsSchema = z
           .trim()
           .min(1)
           .refine((value) => {
-            if (!(path.isAbsolute(value) || value === "~" || value.startsWith("~/"))) {
+            // Bare `~` / `~/` expand to the whole home directory — only `~/…` subpaths.
+            if (value === "~" || value === "~/") {
               return false;
             }
-            // Home-relative entries expand to a user directory, never a volume root.
-            if (value === "~" || value.startsWith("~/")) {
+            if (value.startsWith("~/")) {
               return true;
+            }
+            if (!path.isAbsolute(value)) {
+              return false;
             }
             const resolved = path.resolve(value);
             return resolved !== path.parse(resolved).root;

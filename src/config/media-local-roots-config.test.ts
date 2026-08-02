@@ -83,4 +83,28 @@ describe("agents.defaults.mediaLocalRoots config", () => {
       ),
     ).toBe(true);
   });
+
+  it("rejects bare ~ and ~/ mediaLocalRoots entries", () => {
+    for (const entry of ["~", "~/"] as const) {
+      const result = validateConfigObjectRaw({
+        agents: {
+          defaults: {
+            mediaLocalRoots: [entry],
+          },
+          entries: { main: { default: true } },
+        },
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) {
+        return;
+      }
+      expect(
+        result.issues.some(
+          (issue) =>
+            issue.path.includes("mediaLocalRoots") &&
+            issue.message.includes("absolute (non-root) paths or start with ~/"),
+        ),
+      ).toBe(true);
+    }
+  });
 });

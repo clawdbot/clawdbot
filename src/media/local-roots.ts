@@ -69,8 +69,12 @@ export function appendConfiguredMediaLocalRoots(
     if (!trimmedRoot) {
       continue;
     }
-    // Keep the declared absolute-or-`~/` contract: never authorize via cwd-relative resolve.
-    if (!(path.isAbsolute(trimmedRoot) || trimmedRoot === "~" || trimmedRoot.startsWith("~/"))) {
+    // Keep the declared absolute-or-`~/…` contract: never authorize via cwd-relative
+    // resolve, and never accept bare `~` / `~/` (whole home directory).
+    if (trimmedRoot === "~" || trimmedRoot === "~/") {
+      continue;
+    }
+    if (!(path.isAbsolute(trimmedRoot) || trimmedRoot.startsWith("~/"))) {
       continue;
     }
     const expanded = trimmedRoot.startsWith("~") ? expandHomePrefix(trimmedRoot) : trimmedRoot;

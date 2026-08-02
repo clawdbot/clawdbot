@@ -6,6 +6,7 @@ import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withEnv } from "../test-utils/env.js";
 import {
+  appendConfiguredMediaLocalRoots,
   appendLocalMediaParentRoots,
   getAgentScopedMediaLocalRoots as getAgentScopedMediaLocalRootsBase,
   getAgentScopedMediaLocalRootsForSources as getAgentScopedMediaLocalRootsForSourcesBase,
@@ -134,6 +135,16 @@ describe("local media roots", () => {
     );
     expect(roots).not.toContain(extraRoot);
     expectNormalizedRootsContain(roots, [path.join(stateDir, "workspace-ops")]);
+  });
+
+  it("skips bare ~ and ~/ mediaLocalRoots instead of authorizing the home directory", () => {
+    const home = process.env.HOME || process.env.USERPROFILE;
+    if (!home) {
+      return;
+    }
+    const roots = appendConfiguredMediaLocalRoots([], ["~", "~/", "~/captures"]);
+    expect(roots).not.toContain(path.resolve(home));
+    expect(roots).toContain(path.resolve(home, "captures"));
   });
 
   it("skips filesystem-root mediaLocalRoots instead of authorizing the volume", () => {
