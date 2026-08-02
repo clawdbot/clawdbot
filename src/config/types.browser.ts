@@ -1,5 +1,7 @@
 // Defines browser profile configuration types.
 export type BrowserProfileConfig = {
+  /** @deprecated Doctor-only legacy input; canonical schema rejects this field. */
+  color?: string;
   /** CDP port for this profile. Allocated once at creation, persisted permanently. */
   cdpPort?: number;
   /** CDP/DevTools endpoint URL for this profile (remote CDP or existing-session endpoint attach). */
@@ -21,8 +23,6 @@ export type BrowserProfileConfig = {
   executablePath?: string;
   /** If true, never launch a browser for this profile; only attach. Falls back to browser.attachOnly. */
   attachOnly?: boolean;
-  /** Profile color (hex). Auto-assigned at creation. */
-  color: string;
 };
 export type BrowserSnapshotDefaults = {
   /** Default snapshot mode (applies when mode is not provided). */
@@ -36,17 +36,14 @@ export type BrowserSsrFPolicyConfig = {
   /** If true, permit browser navigation to private/internal networks. Default: false */
   dangerouslyAllowPrivateNetwork?: boolean;
   /**
-   * Explicitly allowed hostnames (exact-match), including blocked names like localhost.
-   * Example: ["localhost", "metadata.internal"]
-   */
-  allowedHostnames?: string[];
-  /**
-   * Hostname allowlist patterns for browser navigation.
+   * Explicitly allowed hostname patterns, including blocked names like localhost.
    * Supports exact hosts and "*.example.com" wildcard subdomains.
    */
-  hostnameAllowlist?: string[];
+  allowedHostnames?: string[];
 };
 export type BrowserConfig = {
+  /** @deprecated Doctor-only legacy input; canonical schema rejects this field. */
+  color?: string;
   enabled?: boolean;
   /** Allow importing cookies from the user's real Chrome-family profile into a managed profile (macOS). Default: true. */
   allowSystemProfileImport?: boolean;
@@ -54,8 +51,6 @@ export type BrowserConfig = {
   evaluateEnabled?: boolean;
   /** Base URL of the CDP endpoint (for remote browsers). Default: loopback CDP on the derived port. */
   cdpUrl?: string;
-  /** Accent color for the openclaw browser profile (hex). Default: #FF4500 */
-  color?: string;
   /** Override the browser executable path (all platforms). */
   executablePath?: string;
   /** Start Chrome headless (best-effort). Default: false */

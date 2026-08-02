@@ -114,9 +114,10 @@ current call and passes the resolved value to `onResolution`. If your plugin
 offers `allow-always`, document and implement exactly what future calls it
 trusts.
 
-If the hook also returns `params`, OpenClaw applies those parameter changes only
-after the approval succeeds. A lower-priority hook can still block after a
-higher-priority hook requested approval.
+If the hook also returns `params`, OpenClaw snapshots the base parameters and
+those overrides when approval is requested, then applies the overrides only
+after approval succeeds. A lower-priority hook can still block, but cannot
+rewrite the parameters covered by the pending approval.
 
 `allowedDecisions` limits the buttons and commands shown to the user. The
 Gateway rejects a resolve attempt for any decision the request did not offer.

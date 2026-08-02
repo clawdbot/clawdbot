@@ -20,20 +20,6 @@ function normalizePluginIdForMigration(value: unknown): string | undefined {
   return typeof value === "string" ? value.trim().toLowerCase() : undefined;
 }
 
-const BUNDLED_DISCOVERY_COMPAT_RULE: LegacyConfigRule = {
-  path: ["plugins", "allow"],
-  message:
-    'plugins.allow now gates bundled provider discovery by default; run "openclaw doctor --fix" to preserve legacy bundled provider compatibility as plugins.bundledDiscovery="compat", or set plugins.bundledDiscovery="allowlist" to keep the stricter behavior.',
-  requireSourceLiteral: true,
-  match: (value, root) => {
-    if (!Array.isArray(value) || value.length === 0) {
-      return false;
-    }
-    const plugins = isRecord(root.plugins) ? root.plugins : undefined;
-    return plugins?.bundledDiscovery === undefined;
-  },
-};
-
 const X_SEARCH_RULE: LegacyConfigRule = {
   path: ["tools", "web", "x_search", "apiKey"],
   message:
@@ -272,25 +258,6 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_PROVIDERS: LegacyConfigMigrationSp
     ],
     apply: (raw, changes) => {
       changes.push(...rewriteLegacyOpenAICodexPluginPolicy(raw));
-    },
-  }),
-  defineLegacyConfigMigration({
-    id: "plugins.allow->plugins.bundledDiscovery.compat",
-    describe: "Preserve bundled provider discovery for existing restrictive allowlists",
-    legacyRules: [BUNDLED_DISCOVERY_COMPAT_RULE],
-    apply: (raw, changes) => {
-      const plugins = isRecord(raw.plugins) ? raw.plugins : undefined;
-      if (!plugins || plugins.bundledDiscovery !== undefined) {
-        return;
-      }
-      const allow = plugins.allow;
-      if (!Array.isArray(allow) || allow.length === 0) {
-        return;
-      }
-      plugins.bundledDiscovery = "compat";
-      changes.push(
-        'Set plugins.bundledDiscovery="compat" to preserve legacy bundled provider discovery for this restrictive plugins.allow config.',
-      );
     },
   }),
   defineLegacyConfigMigration({

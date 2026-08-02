@@ -39,13 +39,13 @@ OpenClaw provides `pixverse` as an official external plugin for hosted PixVerse 
     Non-interactive runs (key from `--pixverse-api-key` or `PIXVERSE_API_KEY`)
     default to International.
 
-    Onboarding also sets `agents.defaults.videoGenerationModel.primary` to
+    Onboarding also sets `agents.defaults.mediaModels.video.primary` to
     `pixverse/v6` when no default video model is configured yet.
 
   </Step>
   <Step title="Switch an existing default video provider (optional)">
     ```bash
-    openclaw config set agents.defaults.videoGenerationModel.primary "pixverse/v6"
+    openclaw config set agents.defaults.mediaModels.video.primary "pixverse/v6"
     ```
   </Step>
   <Step title="Generate a video">
@@ -154,7 +154,7 @@ The video provider accepts these optional provider-specific keys:
     PixVerse returns a `video_id` from the generation request. OpenClaw polls
     `/openapi/v2/video/result/{video_id}` every 5 seconds until the task
     succeeds, fails, or hits the timeout (default 5 minutes; override with
-    `agents.defaults.videoGenerationModel.timeoutMs`).
+    `agents.defaults.mediaModels.video.timeoutMs`).
   </Accordion>
 </AccordionGroup>
 

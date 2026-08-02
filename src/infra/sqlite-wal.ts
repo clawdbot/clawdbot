@@ -10,6 +10,10 @@ import { isSqliteLockError } from "./sqlite-transaction.js";
 // checkpoints so state databases do not accumulate unbounded WAL files.
 const DEFAULT_SQLITE_WAL_AUTOCHECKPOINT_PAGES = 1000;
 const DEFAULT_SQLITE_WAL_CHECKPOINT_INTERVAL_MS = 30 * 60 * 1000;
+// SQLite applies this ceiling when a fully checkpointed WAL resets on the next
+// commit. Keep it well above the usual ~4 MiB autocheckpoint window so only
+// pathological high-water marks pay the truncation cost.
+const DEFAULT_SQLITE_WAL_JOURNAL_SIZE_LIMIT_BYTES = 64 * 1024 * 1024;
 // 512 pages (~2MB at 4KB pages) per periodic pass keeps page release strictly
 // bounded so maintenance can never behave like a blocking full VACUUM.
 const INCREMENTAL_VACUUM_MAX_PAGES_PER_PASS = 512;
@@ -467,6 +471,7 @@ export function configureSqliteWalMaintenance(
   }
   enableMacosCheckpointFullfsync(db);
   db.exec(`PRAGMA wal_autocheckpoint = ${autoCheckpointPages};`);
+  db.exec(`PRAGMA journal_size_limit = ${DEFAULT_SQLITE_WAL_JOURNAL_SIZE_LIMIT_BYTES};`);
 
   const runCheckpoint = (mode: SqliteWalCheckpointMode): boolean => {
     try {

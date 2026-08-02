@@ -7,6 +7,7 @@ import {
 } from "./app-server/capabilities.js";
 import {
   resolveCodexAppServerRuntimeOptions,
+  resolveCodexSupervisionAppServerRuntimeOptions,
   type CodexAppServerStartOptions,
 } from "./app-server/config.js";
 import { listCodexAppServerModels } from "./app-server/models.js";
@@ -71,7 +72,10 @@ export async function codexControlRequest(
   requestParams?: unknown,
   options: CodexControlRequestOptions = {},
 ): Promise<unknown> {
-  const runtime = resolveCodexAppServerRuntimeOptions({ pluginConfig });
+  // Explicit control options own the connection; harness defaults would reject user-home Unix.
+  const runtime = options.startOptions
+    ? resolveCodexSupervisionAppServerRuntimeOptions({ pluginConfig })
+    : resolveCodexAppServerRuntimeOptions({ pluginConfig });
   return await requestCodexAppServerJson({
     method,
     requestParams,

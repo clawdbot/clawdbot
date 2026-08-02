@@ -1,13 +1,13 @@
 // Gateway client bootstrap tests keep URL override provenance wired into shared
 // auth resolution so CLI and env callers authenticate against the intended target.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { resolveGatewayConnectionAuth } from "./connection-auth.js";
+import type { resolveGatewayCredentialsWithSecretInputs } from "./credentials-secret-inputs.js";
 
-type AuthResolutionParams = Parameters<typeof resolveGatewayConnectionAuth>[0];
+type AuthResolutionParams = Parameters<typeof resolveGatewayCredentialsWithSecretInputs>[0];
 
 const mockState = vi.hoisted(() => ({
   buildGatewayConnectionDetails: vi.fn(),
-  resolveGatewayConnectionAuth: vi.fn(),
+  resolveGatewayCredentialsWithSecretInputs: vi.fn(),
 }));
 
 vi.mock("./connection-details.js", () => ({
@@ -15,9 +15,9 @@ vi.mock("./connection-details.js", () => ({
     mockState.buildGatewayConnectionDetails(...args),
 }));
 
-vi.mock("./connection-auth.js", () => ({
-  resolveGatewayConnectionAuth: (...args: unknown[]) =>
-    mockState.resolveGatewayConnectionAuth(...args),
+vi.mock("./credentials-secret-inputs.js", () => ({
+  resolveGatewayCredentialsWithSecretInputs: (...args: unknown[]) =>
+    mockState.resolveGatewayCredentialsWithSecretInputs(...args),
 }));
 const { resolveGatewayClientBootstrap } = await import("./client-bootstrap.js");
 
@@ -25,7 +25,7 @@ function expectLastAuthResolutionParams(expected: {
   urlOverride?: string;
   urlOverrideSource?: "cli" | "env";
 }) {
-  const [params] = mockState.resolveGatewayConnectionAuth.mock.calls.at(-1) ?? [];
+  const [params] = mockState.resolveGatewayCredentialsWithSecretInputs.mock.calls.at(-1) ?? [];
   if (params === undefined) {
     throw new Error("Expected shared auth resolution to be called");
   }
@@ -38,8 +38,8 @@ function expectLastAuthResolutionParams(expected: {
 describe("resolveGatewayClientBootstrap", () => {
   beforeEach(() => {
     mockState.buildGatewayConnectionDetails.mockReset();
-    mockState.resolveGatewayConnectionAuth.mockReset();
-    mockState.resolveGatewayConnectionAuth.mockResolvedValue({
+    mockState.resolveGatewayCredentialsWithSecretInputs.mockReset();
+    mockState.resolveGatewayCredentialsWithSecretInputs.mockResolvedValue({
       token: undefined,
       password: undefined,
     });

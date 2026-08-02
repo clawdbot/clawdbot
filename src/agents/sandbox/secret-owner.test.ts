@@ -11,6 +11,7 @@ describe("sandbox SSH secret owner", () => {
   it("rejects an unmaterialized inherited ref without active degraded-owner state", async () => {
     const config: OpenClawConfig = {
       agents: {
+        entries: { main: { default: true } },
         defaults: {
           sandbox: {
             mode: "all",

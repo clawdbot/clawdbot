@@ -24,7 +24,7 @@ function result(overrides: Partial<SkillWorkshopHistoryScanResult> = {}) {
 function gateway(request: ReturnType<typeof vi.fn>): ApplicationGateway {
   return {
     snapshot: {
-      connected: true,
+      phase: "connected",
       client: { request },
     },
   } as unknown as ApplicationGateway;

@@ -3,6 +3,8 @@ package ai.openclaw.wear
 import ai.openclaw.wear.shared.WearRealtimeTalkEntry
 import ai.openclaw.wear.shared.WearRealtimeTalkRole
 import ai.openclaw.wear.shared.WearRealtimeTalkSnapshot
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -154,6 +156,77 @@ class MainActivityTest {
         contentRevision = revision,
       )
     assertTrue(restarted.scrollToLatest)
+  }
+
+  @Test
+  fun proxyErrorsMapToLocalizedFailureCodes() {
+    assertEquals(
+      WearConversationFailure.PHONE_UNAVAILABLE,
+      WearProxyException("phone_unavailable", "Raw phone error").toWearConversationFailure(),
+    )
+    assertEquals(
+      WearConversationFailure.INCOMPATIBLE,
+      WearProxyException("unsupported_peer", "Raw compatibility error").toWearConversationFailure(),
+    )
+    assertEquals(
+      WearConversationFailure.INTERNAL_ERROR,
+      IllegalStateException("Raw internal error").toWearConversationFailure(),
+    )
+  }
+
+  @Test
+  fun conversationSnapshotCarriesSemanticFailureAndUntitledSession() {
+    val session =
+      WearSession(
+        key = "session-1",
+        title = null,
+        updatedAt = null,
+        hasActiveRun = false,
+        phoneNodeId = "phone-1",
+      )
+    val snapshot =
+      WearUiState(
+        connected = true,
+        phoneNodeId = "phone-1",
+        sessions = listOf(session),
+        selectedSession = session,
+        failure = WearConversationFailure.ACTION_REJECTED,
+      ).toConversationSnapshot()
+
+    assertEquals(WearConversationFailure.ACTION_REJECTED, snapshot?.failure)
+    assertNull(snapshot?.sessions?.single()?.title)
+  }
+
+  @Test
+  fun connectionEventsPreserveTypedAndLegacyIncompatibilityReasons() {
+    assertEquals(
+      WearConversationFailure.INCOMPATIBLE,
+      wearConversationFailureForConnection(
+        buildJsonObject {
+          put("connected", false)
+          put("failure", "incompatible")
+          put("status", "Offline")
+        },
+      ),
+    )
+    assertEquals(
+      WearConversationFailure.INCOMPATIBLE,
+      wearConversationFailureForConnection(
+        buildJsonObject {
+          put("connected", false)
+          put("status", "Update required")
+        },
+      ),
+    )
+    assertEquals(
+      WearConversationFailure.GATEWAY_OFFLINE,
+      wearConversationFailureForConnection(
+        buildJsonObject {
+          put("connected", false)
+          put("status", "Offline")
+        },
+      ),
+    )
   }
 
   private fun threadRevision(

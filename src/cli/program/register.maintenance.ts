@@ -5,6 +5,8 @@ import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { defaultRuntime } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { hasExplicitOptions } from "../command-options.js";
+import { isDoctorMachineOutput } from "../doctor-output-mode.js";
+import { setCommandJsonMode } from "./json-mode.js";
 
 const STATE_SQLITE_CONFLICTING_OPTION_NAMES = [
   "workspaceSuggestions",
@@ -31,7 +33,7 @@ const STATE_SQLITE_CONFLICTING_OPTION_NAMES = [
 
 /** Register maintenance commands that inspect or mutate local OpenClaw state. */
 export function registerMaintenanceCommands(program: Command) {
-  program
+  const doctor = program
     .command("doctor")
     .description("Health checks + quick fixes for the gateway and channels")
     .addHelpText(
@@ -39,7 +41,7 @@ export function registerMaintenanceCommands(program: Command) {
       () =>
         `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/doctor", "docs.openclaw.ai/cli/doctor")}\n`,
     )
-    .option("--no-workspace-suggestions", "Disable workspace memory system suggestions", false)
+    .option("--no-workspace-suggestions", "Disable workspace memory system suggestions", true)
     .option("--yes", "Accept defaults without prompting", false)
     .option("--repair", "Apply recommended repairs without prompting", false)
     .option("--fix", "Apply recommended repairs (alias for --repair)", false)
@@ -174,6 +176,7 @@ export function registerMaintenanceCommands(program: Command) {
         defaultRuntime.exit(0);
       });
     });
+  setCommandJsonMode(doctor, "output", isDoctorMachineOutput);
 
   program
     .command("dashboard")

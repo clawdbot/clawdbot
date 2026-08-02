@@ -227,24 +227,24 @@ See [Image Generation](/tools/image-generation) for shared tool parameters, prov
 
 ### Text-to-speech
 
-The bundled `minimax` plugin registers MiniMax T2A v2 as a speech provider for `messages.tts`.
+The bundled `minimax` plugin registers MiniMax T2A v2 as a speech provider for `tts`.
 
 - Default TTS model: `speech-2.8-hd`
 - Default voice: `English_expressive_narrator`
 - Bundled model ids: `speech-2.8-hd`, `speech-2.8-turbo`, `speech-2.6-hd`, `speech-2.6-turbo`, `speech-02-hd`, `speech-02-turbo`, `speech-01-hd`, `speech-01-turbo`
-- Auth resolution order: `messages.tts.providers.minimax.apiKey`, then `minimax-portal` OAuth/token auth profiles, then Token Plan environment keys (`MINIMAX_OAUTH_TOKEN`, `MINIMAX_CODE_PLAN_KEY`, `MINIMAX_CODING_API_KEY`), then `MINIMAX_API_KEY`
+- Auth resolution order: `tts.providers.minimax.apiKey`, then `minimax-portal` OAuth/token auth profiles, then Token Plan environment keys (`MINIMAX_OAUTH_TOKEN`, `MINIMAX_CODE_PLAN_KEY`, `MINIMAX_CODING_API_KEY`), then `MINIMAX_API_KEY`
 - If no TTS host is configured, OpenClaw reuses the configured `minimax-portal` OAuth host and strips Anthropic-compatible path suffixes such as `/anthropic`
 - Normal audio attachments stay MP3. Voice-note targets (Feishu, Telegram, and other channels that request a voice-note-compatible attachment) are transcoded from MiniMax MP3 to 48kHz Opus with `ffmpeg`, because e.g. the Feishu/Lark file API only accepts `file_type: "opus"` for native audio messages
 - MiniMax T2A accepts fractional `speed` and `vol`, but `pitch` is sent as an integer; OpenClaw truncates fractional `pitch` values before the API request
 
-| Setting                                  | Env var                | Default                       | Description                      |
-| ---------------------------------------- | ---------------------- | ----------------------------- | -------------------------------- |
-| `messages.tts.providers.minimax.baseUrl` | `MINIMAX_API_HOST`     | `https://api.minimax.io`      | MiniMax T2A API host.            |
-| `messages.tts.providers.minimax.model`   | `MINIMAX_TTS_MODEL`    | `speech-2.8-hd`               | TTS model id.                    |
-| `messages.tts.providers.minimax.voiceId` | `MINIMAX_TTS_VOICE_ID` | `English_expressive_narrator` | Voice id used for speech output. |
-| `messages.tts.providers.minimax.speed`   |                        | `1.0`                         | Playback speed, `0.5..2.0`.      |
-| `messages.tts.providers.minimax.vol`     |                        | `1.0`                         | Volume, `(0, 10]`.               |
-| `messages.tts.providers.minimax.pitch`   |                        | `0`                           | Integer pitch shift, `-12..12`.  |
+| Setting                         | Env var                | Default                       | Description                      |
+| ------------------------------- | ---------------------- | ----------------------------- | -------------------------------- |
+| `tts.providers.minimax.baseUrl` | `MINIMAX_API_HOST`     | `https://api.minimax.io`      | MiniMax T2A API host.            |
+| `tts.providers.minimax.model`   | `MINIMAX_TTS_MODEL`    | `speech-2.8-hd`               | TTS model id.                    |
+| `tts.providers.minimax.voiceId` | `MINIMAX_TTS_VOICE_ID` | `English_expressive_narrator` | Voice id used for speech output. |
+| `tts.providers.minimax.speed`   |                        | `1.0`                         | Playback speed, `0.5..2.0`.      |
+| `tts.providers.minimax.vol`     |                        | `1.0`                         | Volume, `(0, 10]`.               |
+| `tts.providers.minimax.pitch`   |                        | `0`                           | Integer pitch shift, `-12..12`.  |
 
 ### Music generation
 

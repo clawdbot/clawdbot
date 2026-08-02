@@ -1,5 +1,6 @@
 // Npm Verify Exec script supports OpenClaw repository automation.
 import { execFileSync, type ExecFileSyncOptionsWithStringEncoding } from "node:child_process";
+import { readPositiveEnvInt } from "./numeric-options.mjs";
 
 export type NpmVerifyCommandInvocation = {
   command: string;
@@ -14,21 +15,6 @@ type NpmVerifyExecOptions = ExecFileSyncOptionsWithStringEncoding & {
 const DEFAULT_NPM_VERIFY_COMMAND_TIMEOUT_MS = 5 * 60 * 1000;
 const DEFAULT_NPM_VERIFY_COMMAND_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
 
-function positiveEnvInt(name: string, fallback: number): number {
-  const raw = process.env[name]?.trim();
-  if (raw === undefined || raw === "") {
-    return fallback;
-  }
-  if (!/^[1-9]\d*$/u.test(raw)) {
-    throw new Error(`invalid ${name}: ${raw}`);
-  }
-  const value = Number(raw);
-  if (!Number.isSafeInteger(value)) {
-    throw new Error(`invalid ${name}: ${raw}`);
-  }
-  return value;
-}
-
 export function runNpmVerifyCommand(
   invocation: NpmVerifyCommandInvocation,
   cwd: string,
@@ -36,11 +22,16 @@ export function runNpmVerifyCommand(
 ): string {
   const timeoutMs =
     options.timeoutMs ??
-    positiveEnvInt("OPENCLAW_NPM_VERIFY_COMMAND_TIMEOUT_MS", DEFAULT_NPM_VERIFY_COMMAND_TIMEOUT_MS);
+    readPositiveEnvInt(
+      "OPENCLAW_NPM_VERIFY_COMMAND_TIMEOUT_MS",
+      process.env,
+      DEFAULT_NPM_VERIFY_COMMAND_TIMEOUT_MS,
+    );
   const maxBuffer =
     options.maxBufferBytes ??
-    positiveEnvInt(
+    readPositiveEnvInt(
       "OPENCLAW_NPM_VERIFY_COMMAND_MAX_BUFFER_BYTES",
+      process.env,
       DEFAULT_NPM_VERIFY_COMMAND_MAX_BUFFER_BYTES,
     );
 

@@ -4,6 +4,23 @@ import Testing
 
 @Suite(.serialized)
 struct MacNodeClaudeSessionCatalogTests {
+    private final class EnumerationCounter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var count = 0
+
+        func increment() {
+            lock.lock()
+            count += 1
+            lock.unlock()
+        }
+
+        func value() -> Int {
+            lock.lock()
+            defer { self.lock.unlock() }
+            return count
+        }
+    }
+
     private func makeHome() throws -> URL {
         let home = FileManager.default.temporaryDirectory
             .appendingPathComponent("openclaw-claude-home-\(UUID().uuidString)", isDirectory: true)
@@ -157,14 +174,17 @@ struct MacNodeClaudeSessionCatalogTests {
         }
     }
 
-    @Test func `rejects sidechain unindexed and symlink escaped transcript ids`() throws {
+    @Test func `discovers CLI fallback transcripts and rejects sidechains foreign entrypoints and escapes`() throws {
         let home = try makeHome()
         defer { try? FileManager.default.removeItem(at: home) }
         let project = home.appendingPathComponent(".claude/projects/-workspace", isDirectory: true)
         try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
         let sidechainId = "sidechain-session"
+        let cliSidechainId = "cli-sidechain-session"
         let discoveredSidechainId = "discovered-sidechain"
+        let foreignEntrypointId = "foreign-entrypoint-session"
         let unindexedId = "unindexed-session"
+        let cliId = "cli-session"
         let sdkCLIId = "sdk-cli-session"
         let escapedId = "escaped-session"
         let escapedURL = project.appendingPathComponent("\(escapedId).jsonl")
@@ -195,7 +215,20 @@ struct MacNodeClaudeSessionCatalogTests {
             [message(sessionId: unindexedId, role: "user", text: "unindexed", index: 1)],
             to: project.appendingPathComponent("\(unindexedId).jsonl")
         )
-        var sdkCLIMessage = message(sessionId: sdkCLIId, role: "user", text: "CLI prompt", index: 1)
+        var cliMessage = message(sessionId: cliId, role: "user", text: "Interactive CLI prompt", index: 1)
+        cliMessage["entrypoint"] = "cli"
+        cliMessage["cwd"] = "/work/cli"
+        cliMessage["version"] = "2.1.216"
+        try writeTranscript(
+            [cliMessage],
+            to: project.appendingPathComponent("\(cliId).jsonl")
+        )
+        var sdkCLIMessage = message(
+            sessionId: sdkCLIId,
+            role: "user",
+            text: "Headless CLI prompt",
+            index: 1
+        )
         sdkCLIMessage["entrypoint"] = "sdk-cli"
         sdkCLIMessage["cwd"] = "/work/sdk"
         sdkCLIMessage["version"] = "2.1.204"
@@ -203,10 +236,22 @@ struct MacNodeClaudeSessionCatalogTests {
             [sdkCLIMessage],
             to: project.appendingPathComponent("\(sdkCLIId).jsonl")
         )
+        var cliSidechain = message(
+            sessionId: cliSidechainId,
+            role: "user",
+            text: "interactive sidechain",
+            index: 1
+        )
+        cliSidechain["entrypoint"] = "cli"
+        cliSidechain["isSidechain"] = true
+        try writeTranscript(
+            [cliSidechain],
+            to: project.appendingPathComponent("\(cliSidechainId).jsonl")
+        )
         var discoveredSidechain = message(
             sessionId: discoveredSidechainId,
             role: "user",
-            text: "sidechain",
+            text: "headless sidechain",
             index: 1
         )
         discoveredSidechain["entrypoint"] = "sdk-cli"
@@ -214,6 +259,17 @@ struct MacNodeClaudeSessionCatalogTests {
         try writeTranscript(
             [discoveredSidechain],
             to: project.appendingPathComponent("\(discoveredSidechainId).jsonl")
+        )
+        var foreignEntrypoint = message(
+            sessionId: foreignEntrypointId,
+            role: "user",
+            text: "SDK session",
+            index: 1
+        )
+        foreignEntrypoint["entrypoint"] = "sdk-ts"
+        try writeTranscript(
+            [foreignEntrypoint],
+            to: project.appendingPathComponent("\(foreignEntrypointId).jsonl")
         )
         try writeTranscript(
             [message(sessionId: escapedId, role: "user", text: "outside", index: 1)],
@@ -232,8 +288,18 @@ struct MacNodeClaudeSessionCatalogTests {
         )
         try writeJSON(
             [
+                "cliSessionId": cliSidechainId,
+                "title": "Interactive Desktop sidechain",
+                "isArchived": false,
+            ],
+            to: home.appendingPathComponent(
+                "Library/Application Support/Claude/claude-code-sessions/account/workspace/local_cli_sidechain.json"
+            )
+        )
+        try writeJSON(
+            [
                 "cliSessionId": discoveredSidechainId,
-                "title": "Discovered Desktop sidechain",
+                "title": "Headless Desktop sidechain",
                 "isArchived": false,
             ],
             to: home.appendingPathComponent(
@@ -246,13 +312,33 @@ struct MacNodeClaudeSessionCatalogTests {
             JSONSerialization.jsonObject(with: Data(listJSON.utf8)) as? [String: Any]
         )
         let sessions = try #require(list["sessions"] as? [[String: Any]])
-        #expect(sessions.map { $0["threadId"] as? String } == [sdkCLIId])
-        #expect(sessions.first?["name"] as? String == "CLI prompt")
-        _ = try MacNodeClaudeSessionCatalog.read(
-            paramsJSON: #"{"threadId":"sdk-cli-session","limit":1}"#,
-            homeURL: home
+        #expect(sessions.compactMap { $0["threadId"] as? String }.sorted() == [cliId, sdkCLIId])
+        #expect(
+            sessions.first(where: { $0["threadId"] as? String == cliId })?["name"] as? String ==
+                "Interactive CLI prompt"
         )
-        for threadId in [sidechainId, discoveredSidechainId, unindexedId, escapedId] {
+        for (threadId, expectedText) in [
+            (cliId, "Interactive CLI prompt"),
+            (sdkCLIId, "Headless CLI prompt"),
+        ] {
+            let readJSON = try MacNodeClaudeSessionCatalog.read(
+                paramsJSON: #"{"threadId":"\#(threadId)","limit":1}"#,
+                homeURL: home
+            )
+            let read = try #require(
+                JSONSerialization.jsonObject(with: Data(readJSON.utf8)) as? [String: Any]
+            )
+            let items = try #require(read["items"] as? [[String: Any]])
+            #expect(items.first?["text"] as? String == expectedText)
+        }
+        for threadId in [
+            sidechainId,
+            cliSidechainId,
+            discoveredSidechainId,
+            foreignEntrypointId,
+            unindexedId,
+            escapedId,
+        ] {
             #expect(throws: MacNodeClaudeSessionCatalog.CatalogError.self) {
                 try MacNodeClaudeSessionCatalog.read(
                     paramsJSON: #"{"threadId":"\#(threadId)","limit":1}"#,
@@ -304,8 +390,7 @@ struct MacNodeClaudeSessionCatalogTests {
         #expect((refreshed["sessions"] as? [[String: Any]])?.first?["name"] as? String == "Bravo")
     }
 
-
-    @Test func `reads transcript pages backward without loading the whole history`() throws {
+    @Test func `reuses catalog discovery only across transcript read pages`() throws {
         let home = try makeHome()
         defer { try? FileManager.default.removeItem(at: home) }
         let project = home.appendingPathComponent(".claude/projects/-workspace", isDirectory: true)
@@ -334,6 +419,14 @@ struct MacNodeClaudeSessionCatalogTests {
             message(sessionId: sessionId, role: "assistant", text: "new assistant", index: 4),
         ], to: transcript)
 
+        let enumerations = EnumerationCounter()
+        MacNodeClaudeSessionCatalog.setCatalogEnumerationObserverForTesting { rootPath in
+            if rootPath == home.appendingPathComponent(".claude/projects").standardizedFileURL.path {
+                enumerations.increment()
+            }
+        }
+        defer { MacNodeClaudeSessionCatalog.setCatalogEnumerationObserverForTesting(nil) }
+
         let latestJSON = try MacNodeClaudeSessionCatalog.read(
             paramsJSON: #"{"threadId":"transcript-session","limit":2}"#,
             homeURL: home
@@ -344,6 +437,7 @@ struct MacNodeClaudeSessionCatalogTests {
         let latestItems = try #require(latest["items"] as? [[String: Any]])
         #expect(latestItems.map { $0["text"] as? String } == ["new assistant", "new user"])
         let cursor = try #require(latest["nextCursor"] as? String)
+        #expect(enumerations.value() == 1)
 
         let olderParams = try #require(String(
             data: JSONSerialization.data(withJSONObject: [
@@ -360,6 +454,211 @@ struct MacNodeClaudeSessionCatalogTests {
         let olderItems = try #require(older["items"] as? [[String: Any]])
         #expect(olderItems.map { $0["text"] as? String } == ["old assistant", oldUser])
         #expect(older["nextCursor"] == nil)
+        #expect(enumerations.value() == 1)
+    }
+
+    @Test func `missing pagination lease falls back to current discovery`() throws {
+        let home = try makeHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let project = home.appendingPathComponent(".claude/projects/-workspace", isDirectory: true)
+        try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+        let sessionId = "lease-session"
+        let transcript = project.appendingPathComponent("\(sessionId).jsonl")
+        try writeJSON(
+            [
+                "version": 1,
+                "entries": [[
+                    "sessionId": sessionId,
+                    "fullPath": transcript.path,
+                    "isSidechain": false,
+                ]],
+            ],
+            to: project.appendingPathComponent("sessions-index.json")
+        )
+        try writeTranscript([
+            message(sessionId: sessionId, role: "user", text: "old", index: 1),
+            message(sessionId: sessionId, role: "assistant", text: "new", index: 2),
+        ], to: transcript)
+
+        let enumerations = EnumerationCounter()
+        MacNodeClaudeSessionCatalog.setCatalogEnumerationObserverForTesting { rootPath in
+            if rootPath == home.appendingPathComponent(".claude/projects").standardizedFileURL.path {
+                enumerations.increment()
+            }
+        }
+        defer { MacNodeClaudeSessionCatalog.setCatalogEnumerationObserverForTesting(nil) }
+
+        let firstJSON = try MacNodeClaudeSessionCatalog.read(
+            paramsJSON: #"{"threadId":"lease-session","limit":1}"#,
+            homeURL: home
+        )
+        let first = try #require(
+            JSONSerialization.jsonObject(with: Data(firstJSON.utf8)) as? [String: Any]
+        )
+        var encoded = try #require(first["nextCursor"] as? String)
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        encoded += String(repeating: "=", count: (4 - encoded.count % 4) % 4)
+        let cursorData = try #require(Data(base64Encoded: encoded))
+        var cursorValue = try #require(
+            JSONSerialization.jsonObject(with: cursorData) as? [String: Any]
+        )
+        cursorValue["lease"] = UUID().uuidString
+        let missingLeaseCursor = try JSONSerialization.data(
+            withJSONObject: cursorValue,
+            options: [.sortedKeys]
+        ).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+
+        let secondParams = try #require(String(
+            data: JSONSerialization.data(withJSONObject: [
+                "threadId": sessionId,
+                "limit": 1,
+                "cursor": missingLeaseCursor,
+            ]),
+            encoding: .utf8
+        ))
+        let secondJSON = try MacNodeClaudeSessionCatalog.read(paramsJSON: secondParams, homeURL: home)
+        let second = try #require(
+            JSONSerialization.jsonObject(with: Data(secondJSON.utf8)) as? [String: Any]
+        )
+        #expect((second["items"] as? [[String: Any]])?.first?["text"] as? String == "old")
+        #expect(enumerations.value() == 2)
+    }
+
+    @Test func `fresh reads recheck catalog eligibility after a pagination lease`() throws {
+        let home = try makeHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let project = home.appendingPathComponent(".claude/projects/-workspace", isDirectory: true)
+        try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+        let sessionId = "eligibility-session"
+        let transcript = project.appendingPathComponent("\(sessionId).jsonl")
+        let index = project.appendingPathComponent("sessions-index.json")
+        try writeTranscript([
+            message(sessionId: sessionId, role: "user", text: "old", index: 1),
+            message(sessionId: sessionId, role: "assistant", text: "new", index: 2),
+        ], to: transcript)
+        try writeJSON(
+            [
+                "version": 1,
+                "entries": [[
+                    "sessionId": sessionId,
+                    "fullPath": transcript.path,
+                    "isSidechain": false,
+                ]],
+            ],
+            to: index
+        )
+
+        let firstJSON = try MacNodeClaudeSessionCatalog.read(
+            paramsJSON: #"{"threadId":"eligibility-session","limit":1}"#,
+            homeURL: home
+        )
+        let first = try #require(
+            JSONSerialization.jsonObject(with: Data(firstJSON.utf8)) as? [String: Any]
+        )
+        #expect(first["nextCursor"] is String)
+
+        try writeJSON(
+            [
+                "version": 1,
+                "entries": [[
+                    "sessionId": sessionId,
+                    "fullPath": transcript.path,
+                    "isSidechain": true,
+                ]],
+            ],
+            to: index
+        )
+
+        #expect(throws: MacNodeClaudeSessionCatalog.CatalogError.self) {
+            try MacNodeClaudeSessionCatalog.read(
+                paramsJSON: #"{"threadId":"eligibility-session","limit":1}"#,
+                homeURL: home
+            )
+        }
+    }
+
+    @Test func `fresh reads discover a moved session file`() throws {
+        let home = try makeHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let firstProject = home.appendingPathComponent(".claude/projects/-first", isDirectory: true)
+        let secondProject = home.appendingPathComponent(".claude/projects/-second", isDirectory: true)
+        try FileManager.default.createDirectory(at: firstProject, withIntermediateDirectories: true)
+        let sessionId = "moving-session"
+        let firstTranscript = firstProject.appendingPathComponent("\(sessionId).jsonl")
+        try writeTranscript([
+            message(sessionId: sessionId, role: "user", text: "first location", index: 1),
+            message(sessionId: sessionId, role: "assistant", text: "latest", index: 2),
+        ], to: firstTranscript)
+        try writeJSON(
+            [
+                "version": 1,
+                "entries": [[
+                    "sessionId": sessionId,
+                    "fullPath": firstTranscript.path,
+                    "summary": "Moving",
+                    "isSidechain": false,
+                ]],
+            ],
+            to: firstProject.appendingPathComponent("sessions-index.json")
+        )
+
+        let enumerations = EnumerationCounter()
+        MacNodeClaudeSessionCatalog.setCatalogEnumerationObserverForTesting { rootPath in
+            if rootPath == home.appendingPathComponent(".claude/projects").standardizedFileURL.path {
+                enumerations.increment()
+            }
+        }
+        defer { MacNodeClaudeSessionCatalog.setCatalogEnumerationObserverForTesting(nil) }
+
+        let firstRead = try MacNodeClaudeSessionCatalog.read(
+            paramsJSON: #"{"threadId":"moving-session","limit":1}"#,
+            homeURL: home
+        )
+        let firstPayload = try #require(
+            JSONSerialization.jsonObject(with: Data(firstRead.utf8)) as? [String: Any]
+        )
+        #expect((firstPayload["items"] as? [[String: Any]])?.first?["text"] as? String == "latest")
+        #expect(enumerations.value() == 1)
+
+        try FileManager.default.createDirectory(at: secondProject, withIntermediateDirectories: true)
+        let secondTranscript = secondProject.appendingPathComponent("\(sessionId).jsonl")
+        try FileManager.default.moveItem(at: firstTranscript, to: secondTranscript)
+        try writeJSON(
+            ["version": 1, "entries": []],
+            to: firstProject.appendingPathComponent("sessions-index.json")
+        )
+        try writeJSON(
+            [
+                "version": 1,
+                "entries": [[
+                    "sessionId": sessionId,
+                    "fullPath": secondTranscript.path,
+                    "summary": "Moving",
+                    "isSidechain": false,
+                ]],
+            ],
+            to: secondProject.appendingPathComponent("sessions-index.json")
+        )
+
+        let refreshedRead = try MacNodeClaudeSessionCatalog.read(
+            paramsJSON: #"{"threadId":"moving-session","limit":1}"#,
+            homeURL: home
+        )
+        let refreshedPayload = try #require(
+            JSONSerialization.jsonObject(with: Data(refreshedRead.utf8)) as? [String: Any]
+        )
+        #expect((refreshedPayload["items"] as? [[String: Any]])?.first?["text"] as? String == "latest")
+        #expect(enumerations.value() == 2)
+
+        _ = try MacNodeClaudeSessionCatalog.read(
+            paramsJSON: #"{"threadId":"moving-session","limit":1}"#,
+            homeURL: home
+        )
+        #expect(enumerations.value() == 3)
     }
 
     @Test func `bounds oversized transcript items by encoded response size`() throws {

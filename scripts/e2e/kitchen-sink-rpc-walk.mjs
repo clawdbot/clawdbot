@@ -1268,16 +1268,13 @@ function configureKitchenSink(env, port) {
     profile: config.tools?.profile ?? "full",
     alsoAllow: [...new Set([...(config.tools?.alsoAllow ?? []), ...EXPECTED_TOOLS])],
   };
-  config.messages = {
-    ...config.messages,
-    tts: {
-      ...config.messages?.tts,
-      provider: config.messages?.tts?.provider ?? EXPECTED_SPEECH_PROVIDERS[0],
-      providers: {
-        ...config.messages?.tts?.providers,
-        [EXPECTED_SPEECH_PROVIDERS[0]]: {
-          ...config.messages?.tts?.providers?.[EXPECTED_SPEECH_PROVIDERS[0]],
-        },
+  config.tts = {
+    ...config.tts,
+    provider: config.tts?.provider ?? EXPECTED_SPEECH_PROVIDERS[0],
+    providers: {
+      ...config.tts?.providers,
+      [EXPECTED_SPEECH_PROVIDERS[0]]: {
+        ...config.tts?.providers?.[EXPECTED_SPEECH_PROVIDERS[0]],
       },
     },
   };

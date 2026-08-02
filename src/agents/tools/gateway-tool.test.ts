@@ -38,4 +38,17 @@ describe("gateway tool", () => {
       expect(callGatewayToolMock).not.toHaveBeenCalled();
     },
   );
+
+  it.each([
+    ["config.get", { action: "config.get" }],
+    ["config.schema.lookup", { action: "config.schema.lookup", path: "channels" }],
+  ])("forwards the abort signal for %s", async (method, params) => {
+    const controller = new AbortController();
+
+    await createGatewayTool().execute("tool-call", params, controller.signal);
+
+    expect(callGatewayToolMock).toHaveBeenCalledWith(method, expect.anything(), expect.anything(), {
+      signal: controller.signal,
+    });
+  });
 });

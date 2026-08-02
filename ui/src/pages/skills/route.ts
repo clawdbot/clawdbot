@@ -1,5 +1,6 @@
 import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
+import { routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { loadSkillStatusReport } from "../../lib/skills/index.ts";
 import type { SkillsRouteData } from "./skills-page.ts";
@@ -13,7 +14,7 @@ async function loadSkillsRouteData(context: ApplicationContext): Promise<SkillsR
   const gatewaySnapshot = gateway.snapshot;
   const agents = context.agents;
   const client = gatewaySnapshot.client;
-  if (!gatewaySnapshot.connected || !client) {
+  if (gatewaySnapshot.phase !== "connected" || !client) {
     return {
       gateway,
       gatewaySnapshot,
@@ -50,8 +51,7 @@ async function loadSkillsRouteData(context: ApplicationContext): Promise<SkillsR
 }
 
 export const page = definePage({
-  id: "skills",
-  path: "/skills",
+  ...routePageSpec("skills"),
   loader: loadSkillsRouteData,
   component: () =>
     import("./skills-page.ts").then(() => ({

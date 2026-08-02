@@ -161,14 +161,37 @@ describe("registerSetupCommand", () => {
 
     expect(setupWizardCommandMock).toHaveBeenCalledWith(lastWizardOptions(), runtime);
     expect(lastWizardOptions()?.workspace).toBe("/tmp/ws");
+    expect(lastWizardOptions()?.tailscaleResetOnExit).toBeUndefined();
     expect(setupCommandMock).not.toHaveBeenCalled();
   });
 
+  it("forwards explicit --no-tailscale-reset-on-exit", async () => {
+    await runCli(["setup", "--no-tailscale-reset-on-exit"]);
+
+    expect(lastWizardOptions()?.tailscaleResetOnExit).toBe(false);
+  });
+
   it("runs baseline setup command when --baseline is set", async () => {
-    await runCli(["setup", "--baseline", "--workspace", "/tmp/ws"]);
+    await runCli(["setup", "--baseline", "--workspace", "/tmp/ws", "--json"]);
 
     expect(setupCommandMock).toHaveBeenCalledWith(lastSetupOptions(), runtime);
     expect(lastSetupOptions()?.workspace).toBe("/tmp/ws");
+    expect(lastSetupOptions()?.json).toBe(true);
+    expect(setupWizardCommandMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["onboarding mode", ["--mode", "remote"]],
+    ["remote Gateway", ["--remote-url", "wss://example.invalid"]],
+    ["reset", ["--reset"]],
+    ["daemon", ["--daemon-runtime", "node"]],
+    ["auth", ["--auth-choice", "skip"]],
+  ])("rejects explicit %s options with --baseline", async (_label, args) => {
+    await runCli(["setup", "--baseline", ...args]);
+
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining(args[0]!));
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(setupCommandMock).not.toHaveBeenCalled();
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
   });
 
@@ -191,6 +214,38 @@ describe("registerSetupCommand", () => {
     expect(lastWizardOptions()?.remoteToken).toBe(remoteToken);
     expect(setupCommandMock).not.toHaveBeenCalled();
   });
+
+  it("forwards --tui through the canonical onboarding path", async () => {
+    await runCli(["setup", "--tui"]);
+
+    expect(lastWizardOptions()?.tui).toBe(true);
+    expect(setupCommandMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects conflicting custom model input capabilities", async () => {
+    await runCli(["setup", "--custom-image-input", "--custom-text-input"]);
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Use either --custom-image-input or --custom-text-input, not both.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(setupWizardCommandMock).not.toHaveBeenCalled();
+    expect(setupCommandMock).not.toHaveBeenCalled();
+  });
+
+  it.each(["not-a-port", "70000"])(
+    "rejects invalid --gateway-port %s before onboarding dispatch",
+    async (gatewayPort) => {
+      await runCli(["setup", "--gateway-port", gatewayPort]);
+
+      expect(runtime.error).toHaveBeenCalledWith(
+        "Error: --gateway-port must be an integer between 1 and 65535.",
+      );
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+      expect(setupWizardCommandMock).not.toHaveBeenCalled();
+      expect(setupCommandMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("runs setup wizard command when wizard-only flags are passed explicitly", async () => {
     await runCli(["setup", "--mode", "remote", "--non-interactive", "--accept-risk"]);
@@ -219,6 +274,7 @@ describe("registerSetupCommand", () => {
       "--skip-search",
       "--skip-skills",
       "--skip-bootstrap",
+      "--tailscale-reset-on-exit",
       "--node-manager",
       "pnpm",
       "--json",
@@ -237,6 +293,7 @@ describe("registerSetupCommand", () => {
       skipSearch: true,
       skipSkills: true,
       skipBootstrap: true,
+      tailscaleResetOnExit: true,
       nodeManager: "pnpm",
       json: true,
     });

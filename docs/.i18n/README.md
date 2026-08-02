@@ -40,8 +40,8 @@ Generated locale trees and live translation memory now live in the publish repo:
 ## Files in this folder
 
 - `glossary.<lang>.json` — preferred term mappings used as prompt guidance.
-- `zh-Hans-navigation.json` — curated zh-Hans Mintlify locale navigation reinserted into the publish repo during sync.
-- `ar-navigation.json`, `de-navigation.json`, `es-navigation.json`, `fr-navigation.json`, `id-navigation.json`, `it-navigation.json`, `ja-navigation.json`, `ko-navigation.json`, `pl-navigation.json`, `pt-BR-navigation.json`, and `tr-navigation.json` — starter locale metadata kept alongside the source repo, but the publish sync now clones the full English nav tree for clone-en locales so translated pages are visible in Mintlify without hand-maintaining per-locale nav JSON.
+- `zh-Hans-navigation.json` — curated zh-Hans tab and group labels overlaid onto the current English navigation tree during publish sync.
+- `ar-navigation.json`, `de-navigation.json`, `es-navigation.json`, `fr-navigation.json`, `id-navigation.json`, `it-navigation.json`, `ja-navigation.json`, `ko-navigation.json`, `pl-navigation.json`, `pt-BR-navigation.json`, and `tr-navigation.json` — starter locale labels kept alongside the source repo. Publish sync clones the full English navigation tree, prefixes locale routes, and overlays translated labels by matching shared page anchors.
 - `<lang>.tm.jsonl` — translation memory keyed by workflow + model + text hash.
 
 In this repo, generated locale TM files such as `docs/.i18n/zh-CN.tm.jsonl`, `docs/.i18n/zh-TW.tm.jsonl`, `docs/.i18n/ja-JP.tm.jsonl`, `docs/.i18n/es.tm.jsonl`, `docs/.i18n/pt-BR.tm.jsonl`, `docs/.i18n/ko.tm.jsonl`, `docs/.i18n/de.tm.jsonl`, `docs/.i18n/fr.tm.jsonl`, `docs/.i18n/ar.tm.jsonl`, `docs/.i18n/it.tm.jsonl`, `docs/.i18n/vi.tm.jsonl`, `docs/.i18n/nl.tm.jsonl`, `docs/.i18n/fa.tm.jsonl`, `docs/.i18n/tr.tm.jsonl`, `docs/.i18n/uk.tm.jsonl`, `docs/.i18n/id.tm.jsonl`, `docs/.i18n/pl.tm.jsonl`, and `docs/.i18n/th.tm.jsonl` are intentionally no longer committed.

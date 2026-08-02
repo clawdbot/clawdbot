@@ -1,8 +1,10 @@
 // Discord tests cover native command.plugin dispatch plugin behavior.
 import { ChannelType } from "discord-api-types/v10";
+import { dispatchChannelInboundTurn } from "openclaw/plugin-sdk/channel-inbound";
 import type { NativeCommandSpec } from "openclaw/plugin-sdk/command-auth-native";
 import { resolveDirectStatusReplyForSession } from "openclaw/plugin-sdk/command-status-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import {
   clearPluginCommands,
   executePluginCommand,
@@ -13,7 +15,6 @@ import {
   createTestRegistry,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { dispatchReplyWithDispatcher } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -37,6 +38,26 @@ const runtimeModuleMocks = vi.hoisted(() => ({
   resolveDirectStatusReplyForSession: vi.fn(),
   getSessionEntry: vi.fn(),
 }));
+
+const dispatchChannelInboundTurnForTest: typeof dispatchChannelInboundTurn = async (plan) => {
+  const dispatchResult = await runtimeModuleMocks.dispatchReplyWithDispatcher({
+    ctx: plan.ctxPayload,
+    cfg: plan.cfg,
+    dispatcherOptions: {
+      ...plan.dispatcherOptions,
+      deliver: "deliver" in plan.delivery ? plan.delivery.deliver : undefined,
+      onError: plan.delivery.onError,
+    },
+    replyOptions: plan.replyOptions,
+  });
+  return {
+    admission: { kind: "dispatch" },
+    dispatched: true,
+    ctxPayload: plan.ctxPayload,
+    routeSessionKey: plan.route.sessionKey,
+    dispatchResult,
+  };
+};
 
 function createConfig(): OpenClawConfig {
   return {
@@ -80,9 +101,8 @@ function createConfiguredAcpCase(params: {
 }) {
   return {
     cfg: {
-      commands: {
-        useAccessGroups: false,
-      },
+      agents: { entries: { [params.agentId ?? "codex"]: {} } },
+      commands: { allowFrom: { discord: ["user:owner"] } },
       ...(params.includeChannelAccess === false
         ? {}
         : params.channelType === ChannelType.DM
@@ -411,7 +431,7 @@ describe("Discord native plugin command dispatch", () => {
     setActivePluginRegistry(createTestRegistry());
     nativeCommandRuntime.matchPluginCommand = matchPluginCommand;
     nativeCommandRuntime.executePluginCommand = executePluginCommand;
-    nativeCommandRuntime.dispatchReplyWithDispatcher = dispatchReplyWithDispatcher;
+    nativeCommandRuntime.dispatchChannelInboundTurn = dispatchChannelInboundTurn;
     nativeCommandRuntime.resolveDirectStatusReplyForSession = resolveDirectStatusReplyForSession;
     nativeCommandRuntime.resolveDiscordNativeInteractionRouteState =
       resolveDiscordNativeInteractionRouteState;
@@ -445,8 +465,7 @@ describe("Discord native plugin command dispatch", () => {
       runtimeModuleMocks.matchPluginCommand as typeof import("openclaw/plugin-sdk/plugin-runtime").matchPluginCommand;
     nativeCommandRuntime.executePluginCommand =
       runtimeModuleMocks.executePluginCommand as typeof import("openclaw/plugin-sdk/plugin-runtime").executePluginCommand;
-    nativeCommandRuntime.dispatchReplyWithDispatcher =
-      runtimeModuleMocks.dispatchReplyWithDispatcher as typeof dispatchReplyWithDispatcher;
+    nativeCommandRuntime.dispatchChannelInboundTurn = dispatchChannelInboundTurnForTest;
     nativeCommandRuntime.resolveDirectStatusReplyForSession =
       runtimeModuleMocks.resolveDirectStatusReplyForSession as typeof resolveDirectStatusReplyForSession;
     nativeCommandRuntime.resolveDiscordNativeInteractionRouteState = async (params) =>
@@ -939,6 +958,7 @@ describe("Discord native plugin command dispatch", () => {
     expect(dispatchSpy).not.toHaveBeenCalled();
     expectFollowUpFields(interaction, { content: "direct plugin output" });
     expect(interaction.reply).not.toHaveBeenCalled();
+    expect(interaction.deleteReply).not.toHaveBeenCalled();
   });
 
   it("returns an explicit warning instead of success when dispatch produces zero visible replies", async () => {
@@ -961,6 +981,180 @@ describe("Discord native plugin command dispatch", () => {
       content: "⚠️ Command produced no visible reply.",
       ephemeral: true,
     });
+    expect(interaction.reply).not.toHaveBeenCalled();
+  });
+
+  it("does not emit the empty warning when the routed reply hook cancels delivery", async () => {
+    const cfg = createConfig();
+    const interaction = createInteraction();
+    runtimeModuleMocks.matchPluginCommand.mockReturnValue(null);
+    nativeCommandRuntime.dispatchChannelInboundTurn = async (plan) => {
+      await plan.delivery.onDelivered?.(
+        { text: "cancelled" },
+        { kind: "final" },
+        {
+          visibleReplySent: false,
+          suppression: { reason: "cancelled_by_reply_payload_sending_hook" },
+        },
+      );
+      return {
+        admission: { kind: "dispatch" },
+        dispatched: true,
+        ctxPayload: plan.ctxPayload,
+        routeSessionKey: plan.route.sessionKey,
+        dispatchResult: {
+          counts: { final: 0, block: 0, tool: 0 },
+          queuedFinal: false,
+        },
+      };
+    };
+    const command = await createNativeCommand(cfg, {
+      name: "new",
+      description: "Start a new session.",
+      acceptsArgs: true,
+    });
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
+
+    expectNoFollowUpContent(interaction, "⚠️ Command produced no visible reply.");
+    expect(interaction.reply).not.toHaveBeenCalled();
+    expect(interaction.deleteReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a native reply visible when a later Discord chunk expires", async () => {
+    const cfg = createConfig();
+    const interaction = createInteraction();
+    interaction.followUp
+      .mockResolvedValueOnce({ ok: true })
+      .mockRejectedValueOnce({ discordCode: 10062, message: "Unknown interaction" });
+    runtimeModuleMocks.matchPluginCommand.mockReturnValue(null);
+    runtimeModuleMocks.dispatchReplyWithDispatcher.mockImplementation(async (params: unknown) => {
+      const dispatcherOptions = (
+        params as {
+          dispatcherOptions: {
+            deliver: (payload: { text: string }, info: { kind: "final" }) => Promise<void>;
+            onError?: (error: unknown, info: { kind: "final" }) => void;
+          };
+        }
+      ).dispatcherOptions;
+      try {
+        await dispatcherOptions.deliver({ text: "x".repeat(2500) }, { kind: "final" });
+      } catch (error) {
+        dispatcherOptions.onError?.(error, { kind: "final" });
+      }
+      return {
+        counts: { final: 0, block: 0, tool: 0 },
+        failedCounts: { final: 1, block: 0, tool: 0 },
+        queuedFinal: false,
+      };
+    });
+    const command = await createNativeCommand(cfg, {
+      name: "new",
+      description: "Start a new session.",
+      acceptsArgs: true,
+    });
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
+
+    expect(interaction.followUp).toHaveBeenCalledTimes(2);
+    expectNoFollowUpContent(interaction, "⚠️ Command produced no visible reply.");
+    expect(interaction.reply).not.toHaveBeenCalled();
+    expect(interaction.deleteReply).not.toHaveBeenCalled();
+  });
+
+  it("does not classify an already-deferred interaction as partial before this payload sends", async () => {
+    const cfg = createConfig();
+    const interaction = createInteraction();
+    interaction.followUp.mockRejectedValue({
+      discordCode: 10062,
+      message: "Unknown interaction",
+    });
+    runtimeModuleMocks.matchPluginCommand.mockReturnValue(null);
+    nativeCommandRuntime.dispatchChannelInboundTurn = async (plan) => {
+      if (!("deliver" in plan.delivery)) {
+        throw new Error("expected direct delivery adapter");
+      }
+      const deliver = plan.delivery.deliver;
+      if (!deliver) {
+        throw new Error("expected direct deliverer");
+      }
+      const payload = { text: "expired before delivery" };
+      const info = { kind: "final" as const };
+      let deliveryError: unknown;
+      try {
+        await deliver(payload, info);
+      } catch (error) {
+        deliveryError = error;
+        plan.delivery.onError?.(error, info);
+      }
+      expect(deliveryError).toBeInstanceOf(PlatformMessageNotDispatchedError);
+      return {
+        admission: { kind: "dispatch" },
+        dispatched: true,
+        ctxPayload: plan.ctxPayload,
+        routeSessionKey: plan.route.sessionKey,
+        dispatchResult: {
+          counts: { final: 0, block: 0, tool: 0 },
+          failedCounts: { final: 1, block: 0, tool: 0 },
+          queuedFinal: false,
+        },
+      };
+    };
+    const command = await createNativeCommand(cfg, {
+      name: "new",
+      description: "Start a new session.",
+      acceptsArgs: true,
+    });
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
+
+    expect(interaction.followUp).toHaveBeenCalledTimes(2);
+    const fallback = requireRecord(
+      (interaction.followUp as unknown as MockCalls).mock.calls[1]?.[0],
+      "empty fallback",
+    );
+    expect(fallback.content).toBe("⚠️ Command produced no visible reply.");
+    expect(interaction.reply).not.toHaveBeenCalled();
+    expect(interaction.deleteReply).not.toHaveBeenCalled();
+  });
+
+  it("preserves partial delivery when a later Discord chunk fails without expiry", async () => {
+    const cfg = createConfig();
+    const interaction = createInteraction();
+    interaction.followUp
+      .mockResolvedValueOnce({ ok: true })
+      .mockRejectedValueOnce(new Error("provider connection failed"));
+    runtimeModuleMocks.matchPluginCommand.mockReturnValue(null);
+    runtimeModuleMocks.dispatchReplyWithDispatcher.mockImplementation(async (params: unknown) => {
+      const dispatcherOptions = (
+        params as {
+          dispatcherOptions: {
+            deliver: (payload: { text: string }, info: { kind: "final" }) => Promise<void>;
+            onError?: (error: unknown, info: { kind: "final" }) => void;
+          };
+        }
+      ).dispatcherOptions;
+      try {
+        await dispatcherOptions.deliver({ text: "x".repeat(2500) }, { kind: "final" });
+      } catch (error) {
+        dispatcherOptions.onError?.(error, { kind: "final" });
+      }
+      return {
+        counts: { final: 0, block: 0, tool: 0 },
+        failedCounts: { final: 1, block: 0, tool: 0 },
+        queuedFinal: false,
+      };
+    });
+    const command = await createNativeCommand(cfg, {
+      name: "new",
+      description: "Start a new session.",
+      acceptsArgs: true,
+    });
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
+
+    expect(interaction.followUp).toHaveBeenCalledTimes(2);
+    expectNoFollowUpContent(interaction, "⚠️ Command produced no visible reply.");
     expect(interaction.reply).not.toHaveBeenCalled();
   });
 
@@ -1048,13 +1242,11 @@ describe("Discord native plugin command dispatch", () => {
     expect(dispatchSpy).not.toHaveBeenCalled();
     expectNoFollowUpContent(interaction, "⚠️ Command produced no visible reply.");
     expect(interaction.reply).not.toHaveBeenCalled();
+    expect(interaction.deleteReply).toHaveBeenCalledTimes(1);
   });
 
   it("forwards Discord thread metadata into direct plugin command execution", async () => {
     const cfg = {
-      commands: {
-        useAccessGroups: false,
-      },
       channels: {
         discord: {
           groupPolicy: "allowlist",
@@ -1120,9 +1312,6 @@ describe("Discord native plugin command dispatch", () => {
 
   it("preserves fetched thread parent metadata when interaction parentId getter throws", async () => {
     const cfg = {
-      commands: {
-        useAccessGroups: false,
-      },
       channels: {
         discord: {
           groupPolicy: "allowlist",
@@ -1224,9 +1413,8 @@ describe("Discord native plugin command dispatch", () => {
     const guildId = "1459246755253325866";
     const channelId = "1478836151241412759";
     const cfg = {
-      commands: {
-        useAccessGroups: false,
-      },
+      agents: { entries: { qwen: {} } },
+      commands: { allowFrom: { discord: ["user:owner"] } },
       bindings: [
         {
           agentId: "qwen",

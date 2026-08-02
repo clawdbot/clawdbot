@@ -17,7 +17,6 @@ import {
   resolveGroupDmAllow,
   shouldEmitDiscordReactionNotification,
 } from "./monitor/allow-list.js";
-import { buildDiscordMediaPayload } from "./monitor/message-utils.js";
 import { resolveDiscordReplyTarget, sanitizeDiscordThreadName } from "./monitor/threading.js";
 type DiscordReactionEvent = Parameters<
   import("./monitor/listeners.js").DiscordReactionListener["handle"]
@@ -243,20 +242,22 @@ describe("discord allowlist helpers", () => {
       ["123", "steipete", "Friends of OpenClaw"],
       ["discord:", "user:", "guild:", "channel:"],
     );
-    expect(allowListMatches(allow, { id: "123" })).toBe(true);
-    expect(allowListMatches(allow, { name: "steipete" })).toBe(false);
-    expect(allowListMatches(allow, { name: "friends-of-openclaw" })).toBe(false);
+    expect(allowListMatches(allow, { id: "123" }, { allowNameMatching: false })).toBe(true);
+    expect(allowListMatches(allow, { name: "steipete" }, { allowNameMatching: false })).toBe(false);
+    expect(
+      allowListMatches(allow, { name: "friends-of-openclaw" }, { allowNameMatching: false }),
+    ).toBe(false);
     expect(allowListMatches(allow, { name: "steipete" }, { allowNameMatching: true })).toBe(true);
     expect(
       allowListMatches(allow, { name: "friends-of-openclaw" }, { allowNameMatching: true }),
     ).toBe(true);
-    expect(allowListMatches(allow, { name: "other" })).toBe(false);
+    expect(allowListMatches(allow, { name: "other" }, { allowNameMatching: false })).toBe(false);
   });
 
   it("matches pk-prefixed allowlist entries", () => {
     const allow = expectNormalizedAllowList(["pk:member-123"], ["discord:", "user:", "pk:"]);
-    expect(allowListMatches(allow, { id: "member-123" })).toBe(true);
-    expect(allowListMatches(allow, { id: "member-999" })).toBe(false);
+    expect(allowListMatches(allow, { id: "member-123" }, { allowNameMatching: false })).toBe(true);
+    expect(allowListMatches(allow, { id: "member-999" }, { allowNameMatching: false })).toBe(false);
   });
 
   it("does not treat DM wildcard access as owner access", () => {
@@ -903,21 +904,6 @@ describe("discord reaction notification gating", () => {
   });
 });
 
-describe("discord media payload", () => {
-  it("preserves attachment order for MediaPaths/MediaUrls", () => {
-    const payload = buildDiscordMediaPayload([
-      { path: "/tmp/a.png", contentType: "image/png" },
-      { path: "/tmp/b.png", contentType: "image/png" },
-      { path: "/tmp/c.png", contentType: "image/png" },
-    ]);
-    expect(payload.MediaPath).toBe("/tmp/a.png");
-    expect(payload.MediaUrl).toBe("/tmp/a.png");
-    expect(payload.MediaType).toBe("image/png");
-    expect(payload.MediaPaths).toEqual(["/tmp/a.png", "/tmp/b.png", "/tmp/c.png"]);
-    expect(payload.MediaUrls).toEqual(["/tmp/a.png", "/tmp/b.png", "/tmp/c.png"]);
-  });
-});
-
 // --- DM reaction integration tests ---
 // These test that handleDiscordReactionEvent (via DiscordReactionListener)
 // properly handles DM reactions instead of silently dropping them.
@@ -942,8 +928,12 @@ vi.spyOn(channelRuntimeModule, "enqueueSystemEvent").mockImplementation(enqueueS
 const routingModule = await import("openclaw/plugin-sdk/routing");
 vi.spyOn(routingModule, "resolveAgentRoute").mockImplementation(resolveAgentRouteMock);
 
-const { DiscordMessageListener, DiscordReactionListener, registerDiscordListener } =
-  await import("./monitor/listeners.js");
+const {
+  DiscordMessageListener,
+  DiscordReactionListener,
+  DiscordReactionRemoveListener,
+  registerDiscordListener,
+} = await import("./monitor/listeners.js");
 
 type MockWithCalls = { mock: { calls: unknown[][] } };
 
@@ -970,6 +960,7 @@ function makeReactionEvent(overrides?: {
   guildId?: string;
   channelId?: string;
   userId?: string;
+  username?: string;
   messageId?: string;
   emojiName?: string;
   botAsAuthor?: boolean;
@@ -1000,7 +991,7 @@ function makeReactionEvent(overrides?: {
     user: {
       id: userId,
       bot: false,
-      username: "testuser",
+      username: overrides?.username ?? "testuser",
       discriminator: "0",
     },
     message: {
@@ -1110,6 +1101,18 @@ describe("discord DM reaction handling", () => {
         "discord:acc-1:dm:user-1",
       );
     }
+  });
+
+  it("keeps the actor id when a reaction removal does not include a Discord username", async () => {
+    const data = makeReactionEvent({ userId: "user-42", username: "", botAsAuthor: true });
+    const client = makeReactionClient({ channelType: ChannelType.DM });
+    const listener = new DiscordReactionRemoveListener(makeReactionListenerParams());
+
+    await listener.handle(data, client);
+
+    expect(enqueueSystemEventSpy).toHaveBeenCalledOnce();
+    const text = firstMockArg(enqueueSystemEventSpy, "enqueueSystemEvent");
+    expect(text).toContain("Discord reaction removed: 👍 by user-42 on");
   });
 
   it("blocks DM reactions when dmPolicy is disabled", async () => {

@@ -33,6 +33,7 @@ import {
   voteMatrixPoll,
   verifyMatrixRecoveryKey,
 } from "./matrix/actions.js";
+import type { MatrixActionClientOpts, MatrixMessageSummary } from "./matrix/actions/types.js";
 import { withAuthorizedMatrixReadTarget, type MatrixReadContext } from "./matrix/read-policy.js";
 import type { MatrixClient } from "./matrix/sdk.js";
 import { reactMatrixMessage } from "./matrix/send.js";
@@ -71,6 +72,20 @@ const verificationActions = new Set([
   "verificationBackupStatus",
   "verificationBackupRestore",
 ]);
+
+function projectMatrixMessagesForDisplay(messages: readonly MatrixMessageSummary[]) {
+  return messages.map((message) => ({
+    ...message,
+    ...(message.eventId ? { id: message.eventId } : {}),
+    ...(message.sender ? { authorTag: message.sender } : {}),
+    ...(message.body !== undefined ? { content: message.body } : {}),
+    ...(typeof message.timestamp === "number" &&
+    Number.isFinite(message.timestamp) &&
+    Math.abs(message.timestamp) <= 8_640_000_000_000_000
+      ? { ts: new Date(message.timestamp).toISOString() }
+      : {}),
+  }));
+}
 
 function readRoomId(params: Record<string, unknown>, required = true): string {
   const direct = readStringParam(params, "roomId") ?? readStringParam(params, "channelId");
@@ -149,7 +164,9 @@ function readPositiveIntegerArrayParam(params: Record<string, unknown>, key: str
 export async function handleMatrixAction(
   params: Record<string, unknown>,
   cfg: CoreConfig,
-  opts: { mediaLocalRoots?: readonly string[]; readContext?: MatrixReadContext } = {},
+  opts: Pick<MatrixActionClientOpts, "mediaAccess" | "mediaLocalRoots"> & {
+    readContext?: MatrixReadContext;
+  } = {},
 ): Promise<AgentToolResult<unknown>> {
   const action = readStringParam(params, "action", { required: true });
   const accountId = readStringParam(params, "accountId") ?? undefined;
@@ -268,6 +285,7 @@ export async function handleMatrixAction(
               : undefined;
         const result = await sendMatrixMessage(to, content, {
           mediaUrl: mediaUrl ?? undefined,
+          ...(opts.mediaAccess ? { mediaAccess: opts.mediaAccess } : {}),
           mediaLocalRoots: opts.mediaLocalRoots,
           replyToId: replyToId ?? undefined,
           threadId: threadId ?? undefined,
@@ -320,6 +338,7 @@ export async function handleMatrixAction(
           });
           return {
             ...messages,
+            messages: projectMatrixMessagesForDisplay(messages.messages),
             roomId: target.roomId,
             ...(threadId ? { threadId } : {}),
           };
@@ -362,7 +381,12 @@ export async function handleMatrixAction(
         return jsonResult({ ok: true, pinned: result.pinned });
       }
       const result = await listMatrixPins(target.roomId, actionOpts);
-      return jsonResult({ ok: true, pinned: result.pinned, events: result.events });
+      return jsonResult({
+        ok: true,
+        pinned: result.pinned,
+        events: result.events,
+        pins: projectMatrixMessagesForDisplay(result.events),
+      });
     });
   }
 

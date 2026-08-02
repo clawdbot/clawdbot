@@ -2,7 +2,7 @@ import {
   FAST_MODE_AUTO_PROGRESS_KIND,
   type ReplyPayload,
 } from "../../../auto-reply/reply-payload.js";
-import { emitAgentItemEvent } from "../../../infra/agent-events.js";
+import { emitAgentItemEvent } from "../../../infra/agent-activity-events.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { resolveFastModeModelAutoOnSeconds } from "../../../shared/fast-mode.js";
 import {

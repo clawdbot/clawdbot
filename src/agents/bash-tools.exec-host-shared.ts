@@ -432,7 +432,7 @@ export function buildHeadlessExecApprovalDeniedMessage(params: {
   ask: ExecAsk;
   askFallback: ExecApprovalsResolved["agent"]["askFallback"];
 }): string {
-  const runLabel = params.trigger === "cron" ? "Cron runs" : "Headless runs";
+  const runLabel = params.trigger === "cron" ? "Automation runs" : "Headless runs";
   return [
     `exec denied: ${runLabel} cannot wait for interactive exec approval.`,
     `Effective host exec policy: security=${params.security} ask=${params.ask} askFallback=${params.askFallback}`,
@@ -460,6 +460,7 @@ export async function sendExecApprovalFollowupResult(
           approvalId: target.approvalId,
           sessionKey: target.sessionKey,
           bashElevated: target.bashElevated,
+          resultText,
         });
   await send({
     approvalId: target.approvalId,

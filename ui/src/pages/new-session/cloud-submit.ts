@@ -12,7 +12,7 @@ import {
 } from "./cloud-target.ts";
 
 type CloudDraftAdvanceResult =
-  | { status: "started"; messageId: string }
+  | { status: "started"; messageId: string; messageSeq?: number }
   | { status: "send-rejected"; error: string; messageId: string }
   | { status: "cleanup-rejected"; error: string; messageId?: string }
   | { status: "dispatch-rejected"; error: string }
@@ -30,12 +30,14 @@ export async function advanceCloudDraftSession(params: {
   gatewayUrl: string;
   recoveryScope: string;
   recoveryPhase: CloudSessionRecovery["phase"];
+  persistRecovery?: boolean;
   recovering: boolean;
   isCurrent: () => boolean;
   ownsRecovery: () => boolean;
   clearRecovery: () => void;
   setRecoveryPhase: (phase: CloudSessionRecovery["phase"]) => void;
 }): Promise<CloudDraftAdvanceResult> {
+  const persistRecovery = params.persistRecovery !== false;
   const recovery = {
     sessionKey: params.key,
     messageId: params.messageId,
@@ -47,13 +49,16 @@ export async function advanceCloudDraftSession(params: {
     recoveryScope: params.recoveryScope,
     phase: params.recoveryPhase,
   } satisfies CloudSessionRecovery;
-  const existingRecovery = params.recovering
-    ? readCloudSessionRecovery(params.gatewayUrl, params.recoveryScope)
-    : null;
+  const existingRecovery =
+    params.recovering && persistRecovery
+      ? readCloudSessionRecovery(params.gatewayUrl, params.recoveryScope)
+      : null;
   if (!params.isCurrent()) {
-    const recoveryPersisted = params.recovering
-      ? existingRecovery?.sessionKey === params.key
-      : writeCloudSessionRecoveryIfAvailable(recovery);
+    const recoveryPersisted = persistRecovery
+      ? params.recovering
+        ? existingRecovery?.sessionKey === params.key
+        : writeCloudSessionRecoveryIfAvailable(recovery)
+      : false;
     const cleanupError = params.recovering
       ? await deleteRecoveredCloudDraftSession(params.client, params.key, params.agentId)
       : await deleteCloudDraftSession(params.client, params.key, params.agentId);
@@ -66,9 +71,11 @@ export async function advanceCloudDraftSession(params: {
       recoveryPersisted: cleanupError ? recoveryPersisted : false,
     };
   }
-  const recoveryPersisted = params.recovering
-    ? existingRecovery?.sessionKey === params.key
-    : writeCloudSessionRecovery(recovery);
+  const recoveryPersisted = persistRecovery
+    ? params.recovering
+      ? existingRecovery?.sessionKey === params.key
+      : writeCloudSessionRecovery(recovery)
+    : true;
   if (!params.isCurrent() || !recoveryPersisted) {
     if (params.recovering && !recoveryPersisted) {
       return {
@@ -103,6 +110,10 @@ export async function advanceCloudDraftSession(params: {
       if (params.recoveryPhase === "sending") {
         return true;
       }
+      if (!persistRecovery) {
+        params.setRecoveryPhase("sending");
+        return true;
+      }
       const persisted = writeCloudSessionRecovery({ ...recovery, phase: "sending" });
       if (persisted) {
         params.setRecoveryPhase("sending");
@@ -115,7 +126,7 @@ export async function advanceCloudDraftSession(params: {
     if (!cleanupError) {
       params.clearRecovery();
     }
-    return { status: "cancelled", cleanupError, recoveryPersisted: true };
+    return { status: "cancelled", cleanupError, recoveryPersisted: persistRecovery };
   }
   if (cloudStart.status === "cleanup-rejected") {
     return cloudStart;

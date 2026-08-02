@@ -117,10 +117,11 @@ describe("createVllmQwenThinkingWrapper", () => {
   });
 });
 
-describe("createVllmProviderThinkingWrapper", () => {
+describe("vLLM provider thinking composition", () => {
   function captureProviderPayload(params: {
     thinkingLevel?: "off" | "low" | "medium" | "high" | "xhigh" | "max";
     initialPayload?: Record<string, unknown>;
+    contextModelId?: string;
     model?: Partial<Model<"openai-completions">>;
   }): Record<string, unknown> {
     let captured: Record<string, unknown> = {};
@@ -140,7 +141,7 @@ describe("createVllmProviderThinkingWrapper", () => {
     } as Model<"openai-completions">;
     const wrapped = wrapVllmProviderStream({
       provider: "vllm",
-      modelId: model.id,
+      modelId: params.contextModelId ?? model.id,
       model,
       thinkingLevel: params.thinkingLevel ?? "high",
       streamFn: baseStreamFn,
@@ -176,6 +177,24 @@ describe("createVllmProviderThinkingWrapper", () => {
     ).toEqual({
       chat_template_kwargs: {
         enable_thinking: true,
+        force_nonempty_content: true,
+      },
+    });
+  });
+
+  it("composes Qwen thinking before runtime Nemotron payload defaults", () => {
+    expect(
+      captureProviderPayload({
+        thinkingLevel: "off",
+        contextModelId: "Qwen/Qwen3-8B",
+        model: {
+          compat: { thinkingFormat: "qwen-chat-template" },
+        },
+      }),
+    ).toEqual({
+      chat_template_kwargs: {
+        enable_thinking: false,
+        preserve_thinking: true,
         force_nonempty_content: true,
       },
     });

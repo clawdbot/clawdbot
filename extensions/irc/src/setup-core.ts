@@ -1,5 +1,9 @@
 // Irc plugin module implements setup core behavior.
-import type { ChannelSetupAdapter, ChannelSetupInput } from "openclaw/plugin-sdk/channel-setup";
+import {
+  defineChannelSetupContract,
+  type ChannelSetupAdapter,
+  type ChannelSetupInput,
+} from "openclaw/plugin-sdk/channel-setup";
 import type { DmPolicy } from "openclaw/plugin-sdk/config-contracts";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
@@ -111,6 +115,7 @@ export function setIrcGroupAccess(
 }
 
 export const ircSetupAdapter: ChannelSetupAdapter = {
+  singleAccountKeysToMove: ["password"],
   resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
   applyAccountName: ({ cfg, accountId, name }) =>
     applyAccountNameToChannelSection({
@@ -150,3 +155,28 @@ export const ircSetupAdapter: ChannelSetupAdapter = {
     }) as CoreConfig;
   },
 };
+
+export const ircSetupContract = defineChannelSetupContract({
+  fields: {
+    host: { kind: "string", cli: { flags: "--host <host>", description: "IRC server host" } },
+    port: { kind: "string", cli: { flags: "--port <port>", description: "IRC server port" } },
+    tls: { kind: "boolean", cli: { flags: "--tls", description: "Use TLS for IRC" } },
+    nick: { kind: "string", cli: { flags: "--nick <nick>", description: "IRC nickname" } },
+    username: { kind: "string", cli: { flags: "--username <name>", description: "IRC username" } },
+    realname: { kind: "string", cli: { flags: "--realname <name>", description: "IRC real name" } },
+    channels: {
+      kind: "string-list",
+      cli: { flags: "--channels <names>", description: "IRC channels" },
+    },
+    password: {
+      kind: "string",
+      sensitive: true,
+      cli: { flags: "--password <password>", description: "IRC server password" },
+    },
+    useEnv: {
+      kind: "boolean",
+      cli: { flags: "--use-env", description: "Use IRC environment configuration" },
+    },
+  },
+  legacyAdapter: ircSetupAdapter,
+});

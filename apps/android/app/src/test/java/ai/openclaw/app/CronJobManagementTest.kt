@@ -185,6 +185,34 @@ class CronJobManagementTest {
   }
 
   @Test
+  fun scriptPayloadStaysReadOnlyDuringMetadataEdits() {
+    val original =
+      requireNotNull(
+        parseGatewayCronJobDetail(
+          jobJson(
+            payload =
+              """{"kind":"script","script":"const result = await agent('check status')","toolBudget":4}""",
+          ),
+        ),
+      )
+    val initial = original.toCronJobEdit()
+    val script = initial.payload as GatewayCronPayloadEdit.ReadOnlyScript
+
+    assertEquals("const result = await agent('check status')", script.script)
+
+    val patch =
+      objectJson(
+        buildCronUpdateParams(
+          original = original,
+          edit = initial.copy(name = "Renamed script"),
+        ),
+      ).getValue("patch").jsonObject
+
+    assertEquals(setOf("name"), patch.keys)
+    assertEquals("Renamed script", patch.getValue("name").jsonPrimitive.content)
+  }
+
+  @Test
   fun historyParserRequiresTimestampAndKeepsUsefulFields() {
     val entries =
       Json

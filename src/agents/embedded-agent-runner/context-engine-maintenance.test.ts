@@ -7,6 +7,7 @@ import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-e
 import { enqueueCommandInLane, markGatewayDraining } from "../../process/command-queue.js";
 import * as commandQueueModule from "../../process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
+import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { createQueuedTaskRun as createQueuedTaskRunOrNull } from "../../tasks/task-executor.js";
 import { getTaskFlowById } from "../../tasks/task-flow-registry.js";
 import { getTaskById, listTasksForOwnerKey } from "../../tasks/task-registry.js";
@@ -25,10 +26,13 @@ const rewriteTranscriptEntriesInSessionManagerMock = vi.fn((_params?: unknown) =
   bytesFreed: 77,
   rewrittenEntries: 1,
 }));
-const rewriteTranscriptEntriesInRuntimeTranscriptMock = vi.fn(async (_params?: unknown) => ({
-  changed: true,
-  bytesFreed: 123,
-  rewrittenEntries: 2,
+const openedSessionManager = { kind: "opened-session-manager" };
+const sessionManagerOpenMock = vi.fn((_target?: unknown) => openedSessionManager);
+const resolveRuntimeTranscriptReadTargetMock = vi.fn(async (scope: Record<string, unknown>) => ({
+  agentId: scope.agentId ?? "main",
+  sessionId: scope.sessionId,
+  sessionKey: scope.sessionKey,
+  storePath: scope.storePath ?? "/tmp/default-openclaw.sqlite",
 }));
 let createDeferredTurnMaintenanceAbortSignal: typeof import("./context-engine-maintenance.test-support.js").createDeferredTurnMaintenanceAbortSignal;
 let resetDeferredTurnMaintenanceStateForTest: typeof import("./context-engine-maintenance.test-support.js").resetDeferredTurnMaintenanceStateForTest;
@@ -104,8 +108,15 @@ vi.mock("./context-engine-capabilities.js", () => ({
 vi.mock("./transcript-rewrite.js", () => ({
   rewriteTranscriptEntriesInSessionManager: (params: unknown) =>
     rewriteTranscriptEntriesInSessionManagerMock(params),
-  rewriteTranscriptEntriesInRuntimeTranscript: (params: unknown) =>
-    rewriteTranscriptEntriesInRuntimeTranscriptMock(params),
+}));
+
+vi.mock("../sessions/index.js", () => ({
+  SessionManager: { open: (target: unknown) => sessionManagerOpenMock(target) },
+}));
+
+vi.mock("./transcript-runtime-state.js", () => ({
+  resolveRuntimeTranscriptReadTarget: (scope: Record<string, unknown>) =>
+    resolveRuntimeTranscriptReadTargetMock(scope),
 }));
 
 async function loadFreshContextEngineMaintenanceModuleForTest() {
@@ -172,7 +183,8 @@ describe("runContextEngineMaintenance", () => {
   beforeEach(async () => {
     vi.useRealTimers();
     rewriteTranscriptEntriesInSessionManagerMock.mockClear();
-    rewriteTranscriptEntriesInRuntimeTranscriptMock.mockClear();
+    sessionManagerOpenMock.mockClear();
+    resolveRuntimeTranscriptReadTargetMock.mockClear();
     await loadFreshContextEngineMaintenanceModuleForTest();
   });
 
@@ -236,12 +248,19 @@ describe("runContextEngineMaintenance", () => {
     });
     expect(rewriteResult).toEqual({
       changed: true,
-      bytesFreed: 123,
-      rewrittenEntries: 2,
+      bytesFreed: 77,
+      rewrittenEntries: 1,
+    });
+    expect(sessionManagerOpenMock).toHaveBeenCalledWith(sessionTarget);
+    expect(rewriteTranscriptEntriesInSessionManagerMock).toHaveBeenCalledWith({
+      sessionManager: openedSessionManager,
+      replacements: [
+        { entryId: "entry-2", message: { role: "user", content: "hello", timestamp: 2 } },
+      ],
     });
   });
 
-  it("forces background maintenance rewrites through the session file even when a session manager exists", async () => {
+  it("forces background maintenance rewrites through the runtime target even when a session manager exists", async () => {
     const maintain = vi.fn(async (params?: unknown) => {
       await (
         params as { runtimeContext?: ContextEngineRuntimeContext } | undefined
@@ -266,44 +285,71 @@ describe("runContextEngineMaintenance", () => {
     const sessionManager = { appendMessage: vi.fn() } as unknown as Parameters<
       typeof runContextEngineMaintenance
     >[0]["sessionManager"];
+    const transcriptUpdateListener = vi.fn();
+    const cleanupTranscriptUpdateListener = onSessionTranscriptUpdate(transcriptUpdateListener);
 
-    await runContextEngineMaintenance({
-      contextEngine: {
-        info: { id: "test", name: "Test Engine", turnMaintenanceMode: "background" },
-        ingest: async () => ({ ingested: true }),
-        assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
-        compact: async () => ({ ok: true, compacted: false }),
-        maintain,
-      },
-      sessionId: "session-background-file-rewrite",
-      sessionKey: "agent:main:session-background-file-rewrite",
-      sessionFile: "/tmp/session-background-file-rewrite.jsonl",
-      reason: "turn",
-      executionMode: "background",
-      sessionManager,
-      config: {},
-    });
-
-    expect(rewriteTranscriptEntriesInSessionManagerMock).not.toHaveBeenCalled();
-    expect(rewriteTranscriptEntriesInRuntimeTranscriptMock).toHaveBeenCalledWith({
-      scope: {
+    try {
+      await runContextEngineMaintenance({
+        contextEngine: {
+          info: { id: "test", name: "Test Engine", turnMaintenanceMode: "background" },
+          ingest: async () => ({ ingested: true }),
+          assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
+          compact: async () => ({ ok: true, compacted: false }),
+          maintain,
+        },
         sessionId: "session-background-file-rewrite",
         sessionKey: "agent:main:session-background-file-rewrite",
+        sessionTarget: {
+          agentId: "custom-agent",
+          sessionId: "custom-session",
+          sessionKey: "agent:custom-agent:custom-session",
+          storePath: "/tmp/custom-agent.sqlite",
+        },
         sessionFile: "/tmp/session-background-file-rewrite.jsonl",
+        reason: "turn",
+        executionMode: "background",
+        sessionManager,
+        config: {},
+      });
+    } finally {
+      cleanupTranscriptUpdateListener();
+    }
+
+    expect(resolveRuntimeTranscriptReadTargetMock).toHaveBeenCalledWith({
+      agentId: "custom-agent",
+      sessionId: "custom-session",
+      sessionKey: "agent:custom-agent:custom-session",
+      sessionFile: "/tmp/session-background-file-rewrite.jsonl",
+      storePath: "/tmp/custom-agent.sqlite",
+    });
+    expect(sessionManagerOpenMock).toHaveBeenCalledWith({
+      agentId: "custom-agent",
+      sessionId: "custom-session",
+      sessionKey: "agent:custom-agent:custom-session",
+      storePath: "/tmp/custom-agent.sqlite",
+    });
+    expect(rewriteTranscriptEntriesInSessionManagerMock).toHaveBeenCalledWith({
+      sessionManager: openedSessionManager,
+      replacements: [
+        {
+          entryId: "entry-1",
+          message: castAgentMessage({
+            role: "assistant",
+            content: [{ type: "text", text: "done" }],
+            timestamp: 2,
+          }),
+        },
+      ],
+    });
+    expect(transcriptUpdateListener).toHaveBeenCalledWith({
+      agentId: "custom-agent",
+      sessionId: "custom-session",
+      sessionKey: "agent:custom-agent:custom-session",
+      target: {
+        agentId: "custom-agent",
+        sessionId: "custom-session",
+        sessionKey: "agent:custom-agent:custom-session",
       },
-      request: {
-        replacements: [
-          {
-            entryId: "entry-1",
-            message: castAgentMessage({
-              role: "assistant",
-              content: [{ type: "text", text: "done" }],
-              timestamp: 2,
-            }),
-          },
-        ],
-      },
-      config: {},
     });
   });
 
@@ -367,7 +413,7 @@ describe("runContextEngineMaintenance", () => {
         { entryId: "entry-1", message: { role: "user", content: "hi", timestamp: 1 } },
       ],
     });
-    expect(rewriteTranscriptEntriesInRuntimeTranscriptMock).not.toHaveBeenCalled();
+    expect(sessionManagerOpenMock).not.toHaveBeenCalled();
   });
 
   it("defers turn maintenance to a hidden background task when enabled", async () => {
@@ -442,25 +488,18 @@ describe("runContextEngineMaintenance", () => {
         expect(result).toBeUndefined();
         await waitForAssertion(() => expect(maintain).toHaveBeenCalledTimes(1));
         await waitForAssertion(() =>
-          expect(rewriteTranscriptEntriesInRuntimeTranscriptMock).toHaveBeenCalledWith({
-            scope: {
-              sessionId: "session-1",
-              sessionKey,
-              sessionFile: "/tmp/session.jsonl",
-            },
-            request: {
-              replacements: [
-                {
-                  entryId: "entry-1",
-                  message: castAgentMessage({
-                    role: "assistant",
-                    content: [{ type: "text", text: "done" }],
-                    timestamp: 2,
-                  }),
-                },
-              ],
-            },
-            config: {},
+          expect(rewriteTranscriptEntriesInSessionManagerMock).toHaveBeenCalledWith({
+            sessionManager: openedSessionManager,
+            replacements: [
+              {
+                entryId: "entry-1",
+                message: castAgentMessage({
+                  role: "assistant",
+                  content: [{ type: "text", text: "done" }],
+                  timestamp: 2,
+                }),
+              },
+            ],
           }),
         );
 
@@ -1214,16 +1253,14 @@ describe("runContextEngineMaintenance", () => {
           };
         });
 
-        rewriteTranscriptEntriesInRuntimeTranscriptMock.mockImplementationOnce(
-          async (_params?: unknown) => {
-            events.push("rewrite");
-            return {
-              changed: true,
-              bytesFreed: 123,
-              rewrittenEntries: 2,
-            };
-          },
-        );
+        rewriteTranscriptEntriesInSessionManagerMock.mockImplementationOnce((_params?: unknown) => {
+          events.push("rewrite");
+          return {
+            changed: true,
+            bytesFreed: 123,
+            rewrittenEntries: 2,
+          };
+        });
 
         const backgroundEngine = {
           info: {

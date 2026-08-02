@@ -1,11 +1,11 @@
 import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
+import { routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { SkillWorkshopRouteData } from "./proposals.ts";
 
 export const page = definePage({
-  id: "skill-workshop",
-  path: "/skills/workshop",
+  ...routePageSpec("skill-workshop"),
   component: () =>
     import("./skill-workshop-page.ts").then(() => ({
       render: (data: unknown) => html`

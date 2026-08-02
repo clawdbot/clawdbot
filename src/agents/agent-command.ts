@@ -19,9 +19,10 @@ import { isSubagentSessionKey } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { isAgentMediatedCompletionSourceTool } from "../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
+import { ensureSessionDiffBaseline } from "../sessions/session-diff-baseline.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import { classifySessionStateActor } from "../sessions/session-state-events.js";
-import type { DeliveryContext } from "../utils/delivery-context.shared.js";
+import { sessionDeliveryChannel, type DeliveryContext } from "../utils/delivery-context.shared.js";
 import { runWithAgentCommandRecoveryOwner } from "./agent-command-recovery-owner.js";
 import {
   buildCurrentRunRestartRecoveryClaim,
@@ -55,6 +56,7 @@ import { AGENT_LANE_SUBAGENT } from "./lanes.js";
 import type { MainSessionRecoveryPendingTarget } from "./main-session-recovery-store.js";
 import type { AgentRunSessionTarget } from "./run-session-target.js";
 import { createAgentRunRestartAbortError } from "./run-termination.js";
+import { measureAgentStartup } from "./startup-timing.js";
 
 const log = createSubsystemLogger("agents/agent-command");
 
@@ -124,6 +126,7 @@ async function agentCommandInternal(
     sessionAgentId,
     outboundSession,
     workspaceDir,
+    cwd,
     runId,
     isSubagentLane,
     acpManager,
@@ -223,7 +226,7 @@ async function agentCommandInternal(
           cfg,
           entry: sessionEntry,
           sessionKey,
-          channel: sessionEntry?.channel,
+          channel: sessionDeliveryChannel(sessionEntry),
           chatType: sessionEntry?.chatType,
         });
         if (sendPolicy === "deny") {
@@ -335,6 +338,26 @@ async function agentCommandInternal(
         sessionEntry = persisted;
         trackedRestartRecoveryDeliveryClaim = persisted?.restartRecoveryDeliveryRunId === runId;
       }
+      if (sessionEntry && sessionKey && !suppressVisibleSessionEffects) {
+        try {
+          sessionEntry = await ensureSessionDiffBaseline({
+            cwd: cwd ?? workspaceDir,
+            entry: sessionEntry,
+            isNewSession,
+            sessionKey,
+            storePath,
+          });
+          if (sessionStore) {
+            sessionStore[sessionKey] = sessionEntry;
+          }
+        } catch (error) {
+          log.warn(
+            `session diff baseline capture failed; continuing without attribution filtering: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        }
+      }
       await prepareDeliveryForRun(sessionEntry);
 
       if (!isRawModelRun && acpResolution?.kind === "ready" && sessionKey) {
@@ -364,53 +387,63 @@ async function agentCommandInternal(
         });
       }
 
-      const embeddedSessionState = await prepareEmbeddedSessionState({
-        cfg,
-        opts,
-        sessionEntry,
-        sessionStore,
-        sessionKey,
-        sessionId,
-        storePath,
-        sessionAgentId,
-        lifecycleGeneration,
-        runId,
-        workspaceDir,
-        isNewSession,
-        isSubagentLaneTurn,
-        suppressVisibleSessionEffects,
-        thinkOnce,
-        thinkOverride,
-        persistedThinking,
-        verboseOverride,
-        persistedVerbose,
-        verboseDefault: agentCfg?.verboseDefault as VerboseLevel | undefined,
-        sessionStateActor,
-      });
+      const embeddedSessionState = await measureAgentStartup(
+        "session-state",
+        () =>
+          prepareEmbeddedSessionState({
+            cfg,
+            opts,
+            sessionEntry,
+            sessionStore,
+            sessionKey,
+            sessionId,
+            storePath,
+            sessionAgentId,
+            lifecycleGeneration,
+            runId,
+            workspaceDir,
+            isNewSession,
+            isSubagentLaneTurn,
+            suppressVisibleSessionEffects,
+            thinkOnce,
+            thinkOverride,
+            persistedThinking,
+            verboseOverride,
+            persistedVerbose,
+            verboseDefault: agentCfg?.verboseDefault as VerboseLevel | undefined,
+            sessionStateActor,
+          }),
+        { config: cfg },
+      );
       sessionEntry = embeddedSessionState.sessionEntry;
       const { requestedThinkLevel, runContext } = embeddedSessionState;
 
-      const modelSelection = await resolveEmbeddedModelSelection({
-        cfg,
-        opts,
-        sessionEntry,
-        sessionStore,
-        sessionKey,
-        sessionId,
-        storePath,
-        sessionAgentId,
-        workspaceDir,
-        pluginsEnabled,
-        manifestMetadataSnapshot,
-        modelManifestContext,
-        configuredThinkingCatalog,
-        requestedThinkLevel,
-        thinkOverride,
-        thinkOnce,
-        isSubagentLane,
-        suppressVisibleSessionEffects,
-        runContext,
-      });
+      const modelSelection = await measureAgentStartup(
+        "model-selection",
+        () =>
+          resolveEmbeddedModelSelection({
+            cfg,
+            opts,
+            sessionEntry,
+            sessionStore,
+            sessionKey,
+            sessionId,
+            storePath,
+            sessionAgentId,
+            workspaceDir,
+            pluginsEnabled,
+            manifestMetadataSnapshot,
+            modelManifestContext,
+            configuredThinkingCatalog,
+            requestedThinkLevel,
+            thinkOverride,
+            thinkOnce,
+            isSubagentLane,
+            suppressVisibleSessionEffects,
+            runContext,
+          }),
+        { config: cfg },
+      );
       sessionEntry = modelSelection.sessionEntry;
       const embeddedAttempt = await runEmbeddedAgentAttempt({
         prepared,
@@ -426,6 +459,9 @@ async function agentCommandInternal(
         embeddedSessionState,
         trackInternalModelRunTarget,
       });
+      if (embeddedAttempt.fallbackExhausted) {
+        opts.onModelFallbackExhausted?.();
+      }
       sessionEntry = embeddedAttempt.sessionEntry;
       lifecycleGeneration = embeddedAttempt.lifecycleGeneration;
       const finalized = await finalizeEmbeddedAgentCommand({
@@ -521,7 +557,9 @@ export async function agentCommand(
   runtime: RuntimeEnv = defaultRuntime,
   deps?: CliDeps,
 ) {
-  const resolvedDeps = await resolveAgentCommandDeps(deps);
+  const resolvedDeps = await measureAgentStartup("command-dependencies", () =>
+    resolveAgentCommandDeps(deps),
+  );
   const lifecycleGeneration =
     opts.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(opts.runId ?? "");
   return await withAgentRunLifecycleGeneration(lifecycleGeneration, () =>
@@ -545,7 +583,9 @@ export async function agentCommand(
             allowModelOverride: opts.allowModelOverride ?? true,
           },
           prepare: async (preparedOpts) =>
-            await prepareAgentCommandExecution(preparedOpts, runtime),
+            await measureAgentStartup("command-prepare", () =>
+              prepareAgentCommandExecution(preparedOpts, runtime),
+            ),
           run: async (prepared) =>
             await agentCommandInternal(prepared, prepared.opts, runtime, resolvedDeps),
         }),

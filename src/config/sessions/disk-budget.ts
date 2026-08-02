@@ -21,7 +21,7 @@ import {
   isTrajectorySessionArtifactName,
 } from "./artifacts.js";
 import { resolveSessionFilePath } from "./paths.js";
-import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
+import { listDurableSqliteTargetPathsForSessionStorePath } from "./session-sqlite-target.js";
 import { projectSessionStoreForPersistence } from "./skill-prompt-blobs.js";
 import { shouldPreserveMaintenanceEntry } from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";
@@ -258,23 +258,21 @@ async function readSessionsDirFiles(sessionsDir: string): Promise<SessionsDirFil
 }
 
 async function readSqliteDatabaseFiles(storePath: string): Promise<SessionsDirFileStat[]> {
-  const databasePath = resolveSqliteTargetFromSessionStorePath(storePath).path;
-  if (!databasePath) {
-    return [];
-  }
   const files: SessionsDirFileStat[] = [];
-  for (const filePath of [databasePath, `${databasePath}-wal`]) {
-    const stat = await fs.promises.stat(filePath).catch(() => null);
-    if (!stat?.isFile()) {
-      continue;
+  for (const databasePath of listDurableSqliteTargetPathsForSessionStorePath(storePath)) {
+    for (const filePath of [databasePath, `${databasePath}-wal`]) {
+      const stat = await fs.promises.stat(filePath).catch(() => null);
+      if (!stat?.isFile()) {
+        continue;
+      }
+      files.push({
+        path: filePath,
+        canonicalPath: canonicalizePathForComparison(filePath),
+        name: path.basename(filePath),
+        size: stat.size,
+        mtimeMs: stat.mtimeMs,
+      });
     }
-    files.push({
-      path: filePath,
-      canonicalPath: canonicalizePathForComparison(filePath),
-      name: path.basename(filePath),
-      size: stat.size,
-      mtimeMs: stat.mtimeMs,
-    });
   }
   return files;
 }
@@ -286,17 +284,24 @@ export async function measureSessionPhysicalDiskUsage(
   const sessionsDirFiles = await readSessionsDirFiles(path.dirname(storePath));
   const promptBlobFiles = await readSessionPromptBlobFiles(path.dirname(storePath));
   const databaseFiles = await readSqliteDatabaseFiles(storePath);
-  const databasePath = resolveSqliteTargetFromSessionStorePath(storePath).path;
-  const databaseMainPath = databasePath ? canonicalizePathForComparison(databasePath) : undefined;
-  const databaseWalPath = databasePath
-    ? canonicalizePathForComparison(`${databasePath}-wal`)
-    : undefined;
+  const databaseMainPaths = new Set(
+    databaseFiles.filter((file) => !file.path.endsWith("-wal")).map((file) => file.canonicalPath),
+  );
+  const databaseWalPaths = new Set(
+    databaseFiles.filter((file) => file.path.endsWith("-wal")).map((file) => file.canonicalPath),
+  );
   const uniqueFiles = new Map<string, SessionsDirFileStat>();
   for (const file of [...sessionsDirFiles, ...promptBlobFiles, ...databaseFiles]) {
     uniqueFiles.set(file.canonicalPath, file);
   }
-  const databaseMainBytes = databaseMainPath ? (uniqueFiles.get(databaseMainPath)?.size ?? 0) : 0;
-  const databaseWalBytes = databaseWalPath ? (uniqueFiles.get(databaseWalPath)?.size ?? 0) : 0;
+  const databaseMainBytes = [...databaseMainPaths].reduce(
+    (sum, databasePath) => sum + (uniqueFiles.get(databasePath)?.size ?? 0),
+    0,
+  );
+  const databaseWalBytes = [...databaseWalPaths].reduce(
+    (sum, databasePath) => sum + (uniqueFiles.get(databasePath)?.size ?? 0),
+    0,
+  );
   const totalBytes = [...uniqueFiles.values()].reduce((sum, file) => sum + file.size, 0);
   return {
     databaseMainBytes,

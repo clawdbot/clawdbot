@@ -13,6 +13,7 @@ import {
   EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS,
   resolveEmbeddedRunLaneTimeoutMs,
   resolveEmbeddedRunSessionQueuePriority,
+  shouldNoteLaneWait,
   withEmbeddedRunLaneTimeout,
 } from "./lane-runtime.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
@@ -32,7 +33,10 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
   setParams: (params: TParams) => void;
 }) {
   const initialParams = options.getParams();
-  const sessionQueuePriority = resolveEmbeddedRunSessionQueuePriority(initialParams.trigger);
+  const sessionQueuePriority = resolveEmbeddedRunSessionQueuePriority(
+    initialParams.trigger,
+    initialParams.inputProvenance,
+  );
   const laneTaskTimeoutMs = resolveEmbeddedRunLaneTimeoutMs(initialParams.timeoutMs);
   const laneTaskAbortController = new AbortController();
   const laneTaskReleaseController = new AbortController();
@@ -87,7 +91,7 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
       return;
     }
     const snapshot = getCommandLaneSnapshot(lane);
-    if (snapshot.queuedCount > 0 || snapshot.activeCount >= snapshot.maxConcurrent) {
+    if (shouldNoteLaneWait(snapshot)) {
       params.onLaneWait({
         waitMs: 0,
         queuedAhead: snapshot.queuedCount + snapshot.activeCount,
@@ -99,6 +103,9 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     task: () => Promise<EmbeddedAgentRunResult>,
     opts?: CommandQueueEnqueueOptions,
   ) => {
+    // Global-lane admission is healthy waiting, not run execution. Keep reply
+    // staleness and stuck recovery fenced until this queue grants capacity.
+    options.getParams().replyOperation?.markWaitingForGlobalLane();
     const globalOpts: CommandQueueEnqueueOptions = {
       ...opts,
       priority: sessionQueuePriority,
@@ -106,6 +113,7 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     const taskWithCurrentLifecycle = async () => {
       let params = options.getParams();
       params.onLaneWait?.({ waitMs: 0, queuedAhead: 0, waiting: false });
+      params.replyOperation?.markGlobalLaneWaitEnded();
       throwIfAborted();
       let lifecycleGeneration = options.getLifecycleGeneration();
       const currentLifecycleGeneration = getAgentEventLifecycleGeneration();

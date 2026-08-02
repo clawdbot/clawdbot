@@ -10,10 +10,12 @@ import {
   registerInternalHook,
   type InternalHookEvent,
 } from "../hooks/internal-hooks.js";
+import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../sessions/model-overrides.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../sessions/session-id-resolution.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
 import { buildTaskStatusSnapshot } from "../tasks/task-status.js";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { compactToolOutputHint } from "./tool-schema-hints.js";
 
 const loadSessionStoreMock = vi.fn();
@@ -320,6 +322,11 @@ vi.mock("../agents/provider-model-normalization.runtime.js", () => ({
 vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
   getCurrentPluginMetadataSnapshot: () => emptyPluginMetadataSnapshot,
 }));
+vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>()),
+  isPluginMetadataSnapshotCompatible: () => true,
+  resolvePluginMetadataSnapshot: () => emptyPluginMetadataSnapshot,
+}));
 vi.mock("../plugins/provider-thinking.js", () => ({
   resolveProviderBinaryThinking: () => undefined,
   resolveProviderDefaultThinkingLevel: () => undefined,
@@ -388,7 +395,13 @@ beforeAll(async () => {
   await getSessionStatusTool("agent:main:spawned").execute("warm-spawned-workspace-status", {});
 });
 
-function resetSessionStore(store: Record<string, SessionEntry>) {
+function resetSessionStore(inputStore: Record<string, SessionEntry>) {
+  const store = Object.fromEntries(
+    Object.entries(inputStore).map(([key, entry]) => [
+      key,
+      normalizeLegacySessionEntryDelivery(entry),
+    ]),
+  ) as Record<string, SessionEntry>;
   buildStatusMessageMock.mockClear();
   resolveQueueSettingsMock.mockClear();
   resolveQueueSettingsMock.mockReturnValue({ mode: "interrupt" });
@@ -566,6 +579,25 @@ describe("session_status tool", () => {
     listSessionStateEventsSinceMock.mockReturnValue({
       events: [
         {
+          sequence: 11,
+          sessionKey: "main",
+          sessionId: "s1",
+          agentId: "main",
+          kind: "run_failed",
+          actorType: "agent",
+          actorId: "worker-1",
+          runId: "run-11",
+          occurredAt: 90,
+          summary: "child run timed out",
+          payload: {
+            outcome: "timeout",
+            channel: "codex",
+            turns: 2,
+            catalogId: "internal-catalog",
+            nested: { drop: true },
+          },
+        },
+        {
           sequence: 12,
           sessionKey: "main",
           sessionId: "s1",
@@ -578,7 +610,7 @@ describe("session_status tool", () => {
         },
       ],
       truncated: false,
-      earliestAvailableSequence: 12,
+      earliestAvailableSequence: 11,
       historyGap: true,
     });
 
@@ -590,9 +622,18 @@ describe("session_status tool", () => {
     expect(getSessionStateVersionMock).toHaveBeenCalledWith("main", "main");
     expect(listSessionStateEventsSinceMock).toHaveBeenCalledWith("main", "main", 3, 200);
     expect(details.stateVersion).toBe(12);
-    expect(details.stateChanges).toMatchObject({
-      historyGap: true,
+    const expectedStateChanges = {
       events: [
+        {
+          sequence: 11,
+          kind: "run_failed",
+          actorType: "agent",
+          occurredAt: 90,
+          summary: "child run timed out",
+          actorId: "worker-1",
+          runId: "run-11",
+          payload: { outcome: "timeout", channel: "codex", turns: 2 },
+        },
         {
           sequence: 12,
           kind: "upstream_missing",
@@ -602,11 +643,35 @@ describe("session_status tool", () => {
           payload: { channel: "codex" },
         },
       ],
-    });
+      truncated: false,
+      earliestAvailableSequence: 11,
+      historyGap: true,
+    };
+    expect(details.stateChanges).toEqual(expectedStateChanges);
     expect(Value.Check(tool.outputSchema!, result.details)).toBe(true);
-    expect(JSON.stringify(details.stateChanges)).not.toContain("internal-catalog");
-    expect(text).toContain("Session state changes:");
-    expect(text).toContain('"kind": "upstream_missing"');
+    expect(details.statusText).toBe(text);
+    const stateChangesMarker = "Session state changes:\n```json\n";
+    const stateChangesStart = text.indexOf(stateChangesMarker);
+    expect(stateChangesStart).toBeGreaterThanOrEqual(0);
+    const stateChangesJsonStart = stateChangesStart + stateChangesMarker.length;
+    const stateChangesJsonEnd = text.indexOf("\n```", stateChangesJsonStart);
+    expect(stateChangesJsonEnd).toBeGreaterThan(stateChangesJsonStart);
+    const visibleStateChangesText = text.slice(stateChangesJsonStart, stateChangesJsonEnd);
+    expect(JSON.parse(visibleStateChangesText)).toEqual({
+      stateVersion: 12,
+      stateChanges: expectedStateChanges,
+    });
+    for (const omittedField of [
+      '"sessionKey"',
+      '"sessionId"',
+      '"agentId"',
+      '"catalogId"',
+      '"nested"',
+      "internal-catalog",
+    ]) {
+      expect(visibleStateChangesText).not.toContain(omittedField);
+      expect(String(details.statusText)).not.toContain(omittedField);
+    }
   });
 
   it("returns watched group changesSince under tree visibility", async () => {
@@ -909,13 +974,15 @@ describe("session_status tool", () => {
       [sessionKey]: {
         sessionId: "s-discord-origin-webchat-active",
         updatedAt: 10,
-        origin: { provider: "discord", accountId: "bot-primary" },
-        deliveryContext: {
-          channel: "discord",
-          to: "channel:1489550370136129537",
-          accountId: "bot-primary",
-          threadId: "thread-origin",
-        },
+        delivery: normalizeSessionDeliveryState({
+          origin: { provider: "discord", accountId: "bot-primary" },
+          context: {
+            channel: "discord",
+            to: "channel:1489550370136129537",
+            accountId: "bot-primary",
+            threadId: "thread-origin",
+          },
+        }),
       },
     });
 
@@ -947,7 +1014,11 @@ describe("session_status tool", () => {
     };
     expect(details.ok).toBe(true);
     expect(details.sessionKey).toBe(sessionKey);
-    expect(details.origin).toEqual({ provider: "discord", accountId: "bot-primary" });
+    expect(details.origin).toEqual({
+      provider: "discord",
+      accountId: "bot-primary",
+      threadId: "thread-origin",
+    });
     expect(details.active).toEqual({
       channel: "webchat",
       to: "control-ui-conversation",
@@ -981,10 +1052,12 @@ describe("session_status tool", () => {
       [targetKey]: {
         sessionId: "s-target",
         updatedAt: 10,
-        deliveryContext: {
-          channel: "discord",
-          to: "channel:1489550370136129537",
-        },
+        delivery: normalizeSessionDeliveryState({
+          context: {
+            channel: "discord",
+            to: "channel:1489550370136129537",
+          },
+        }),
       },
     });
     mockConfig = {
@@ -1025,10 +1098,12 @@ describe("session_status tool", () => {
       [policyKey]: {
         sessionId: "s-policy",
         updatedAt: 5,
-        deliveryContext: {
-          channel: "telegram",
-          to: "telegram:direct:1234",
-        },
+        delivery: normalizeSessionDeliveryState({
+          context: {
+            channel: "telegram",
+            to: "telegram:direct:1234",
+          },
+        }),
       },
       [runKey]: {
         sessionId: "s-run",
@@ -1383,13 +1458,13 @@ describe("session_status tool", () => {
     expect(saved.sessionId).toMatch(UUID_RE);
   });
 
-  it("preserves an existing legacy main row when implicit fallback mutates model state", async () => {
+  it("preserves an existing canonical main row when implicit fallback mutates model state", async () => {
     resetSessionStore({
       main: {
         sessionId: "legacy-main-session",
         updatedAt: 10,
         label: "Legacy Main",
-        lastChannel: "telegram",
+        delivery: { kind: "none" },
       },
     });
 
@@ -1411,7 +1486,7 @@ describe("session_status tool", () => {
     expect(savedStore.main).toMatchObject({
       sessionId: "legacy-main-session",
       label: "Legacy Main",
-      lastChannel: "telegram",
+      delivery: { kind: "none" },
       providerOverride: "anthropic",
       modelOverride: "claude-sonnet-4-6",
       liveModelSwitchPending: true,
@@ -1981,12 +2056,15 @@ describe("session_status tool", () => {
     }
   });
 
-  it("falls back to origin.provider when resolving queue settings", async () => {
+  it("uses canonical delivery state when resolving queue settings", async () => {
     resetSessionStore({
       main: {
         sessionId: "status-origin-provider",
         updatedAt: 10,
-        origin: { provider: "quietchat" },
+        delivery: normalizeSessionDeliveryState({
+          context: { channel: "quietchat", to: "quietchat:status" },
+          origin: { provider: "quietchat" },
+        }),
       },
     });
 
@@ -1996,7 +2074,9 @@ describe("session_status tool", () => {
 
     const queueArg = mockCallArg(resolveQueueSettingsMock) as Record<string, unknown>;
     expect(queueArg.channel).toBe("quietchat");
-    expectRecordFields(queueArg.sessionEntry, { origin: { provider: "quietchat" } });
+    expect(queueArg.sessionEntry).toMatchObject({
+      delivery: { kind: "external", origin: { provider: "quietchat" } },
+    });
   });
 
   it("resolves sessionId inputs", async () => {
@@ -2203,7 +2283,7 @@ describe("session_status tool", () => {
         model: "default",
       }),
     ).rejects.toThrow(
-      "Session status visibility is restricted to the current session tree (tools.sessions.visibility=tree).",
+      "Session status visibility is restricted to the current session tree and any watched same-agent group sessions (tools.sessions.visibility=tree).",
     );
 
     expect(loadSessionStoreMock).not.toHaveBeenCalled();
@@ -2306,7 +2386,7 @@ describe("session_status tool", () => {
         model: "default",
       }),
     ).rejects.toThrow(
-      "Session status visibility is restricted to the current session tree (tools.sessions.visibility=tree).",
+      "Session status visibility is restricted to the current session tree and any watched same-agent group sessions (tools.sessions.visibility=tree).",
     );
 
     expect(updateSessionStoreMock).not.toHaveBeenCalled();

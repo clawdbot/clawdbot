@@ -11,6 +11,7 @@ import { listSystemAgentAuditEntriesForTests } from "../system-agent/audit.test-
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
 import { createSqliteAuditRecordStore } from "./sqlite-audit-record-store.js";
+import { openLegacyAuditRawCheckpointStore } from "./state-migrations.audit-checkpoints.js";
 import { detectLegacyAuditLogs, migrateLegacyAuditLogs } from "./state-migrations.audit-logs.js";
 
 const TEST_AUDIT_SCRUB_PATTERN = Buffer.from(
@@ -202,10 +203,26 @@ describe("legacy core audit log migration", () => {
       const modifiedRaw = `${JSON.stringify(modified)}\n`;
       expect(Buffer.byteLength(modifiedRaw)).toBe(checkpointedStat.size);
       await fs.writeFile(rawPath, modifiedRaw);
-      await fs.utimes(rawPath, checkpointedStat.atimeMs / 1_000, checkpointedStat.mtimeMs / 1_000);
       const rewrittenStat = await fs.stat(rawPath);
-      expect(rewrittenStat.mtimeMs).toBe(checkpointedStat.mtimeMs);
       expect(rewrittenStat.size).toBe(checkpointedStat.size);
+      const checkpointStore = openLegacyAuditRawCheckpointStore(stateDir);
+      const checkpoint = checkpointStore.entries()[0];
+      if (!checkpoint) {
+        throw new Error("expected a raw archive checkpoint");
+      }
+      // Match the rewritten file's cheap identity while retaining the original content hash.
+      // Detection must still hash the archive before treating the checkpoint as current.
+      checkpointStore.upsert(
+        checkpoint.key,
+        {
+          ...checkpoint.value,
+          dev: rewrittenStat.dev,
+          ino: rewrittenStat.ino,
+          mtimeMs: rewrittenStat.mtimeMs,
+          size: rewrittenStat.size,
+        },
+        checkpoint.createdAt,
+      );
 
       const detected = detectLegacyAuditLogs({ stateDir, doctorOnlyStateMigrations: true });
       expect(detected.sources).toMatchObject([{ sourcePath: rawPath, storage: "raw-archive" }]);
@@ -854,7 +871,9 @@ describe("legacy core audit log migration", () => {
         mode: number,
       ) {
         chmodCalls += 1;
-        if (chmodCalls === 3) {
+        // fs-safe 0.5 applies the requested mode while creating the sanitized file before the
+        // migration's explicit hardening checks. Fail the later raw-archive hardening call.
+        if (chmodCalls === 4) {
           return Promise.reject(new Error("simulated chmod failure"));
         }
         return originalChmod.call(this, mode);

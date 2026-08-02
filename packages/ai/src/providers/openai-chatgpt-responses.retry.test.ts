@@ -99,6 +99,82 @@ describe("streamOpenAICodexResponses retry classification", () => {
   });
 
   it.each([
+    Object.assign(new Error("unable to verify the first certificate"), {
+      code: "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+    }),
+    new Error("fetch failed", {
+      cause: Object.assign(new Error("certificate has expired"), {
+        code: "CERT_HAS_EXPIRED",
+      }),
+    }),
+    Object.assign(new Error("TLS validation failed"), {
+      code: "CERT_NOT_YET_VALID",
+    }),
+    new Error("fetch failed", {
+      cause: Object.assign(new Error("TLS validation failed"), {
+        code: "CERT_NOT_YET_VALID",
+      }),
+    }),
+    new Error("certificate is not yet valid"),
+    Object.assign(new Error("TLS validation failed"), {
+      code: "ERR_TLS_CERT_ALTNAME_INVALID",
+    }),
+  ])("does not retry deterministic TLS certificate failures", async (error) => {
+    const fetchMock = vi.fn<typeof fetch>().mockRejectedValue(error);
+    vi.stubGlobal("fetch", fetchMock);
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+    const result = await streamOpenAICodexResponses(model, context, {
+      apiKey: jwt,
+      transport: "sse",
+    }).result();
+
+    expect(result.stopReason).toBe("error");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(setTimeoutSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not retry a non-Error rejection with a wrapped certificate code", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockRejectedValue({
+      cause: { code: "INVALID_CA" },
+      message: "fetch failed",
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+    const result = await streamOpenAICodexResponses(model, context, {
+      apiKey: jwt,
+      transport: "sse",
+    }).result();
+
+    expect(result.stopReason).toBe("error");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(setTimeoutSpy).not.toHaveBeenCalled();
+  });
+
+  it("keeps retrying transient network failures", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockRejectedValueOnce(Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }))
+      .mockRejectedValueOnce(new Error("usage limit: stop after retry"));
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(globalThis, "setTimeout").mockImplementation((callback: TimerHandler) => {
+      if (typeof callback === "function") {
+        callback();
+      }
+      return 0 as unknown as ReturnType<typeof setTimeout>;
+    });
+
+    const result = await streamOpenAICodexResponses(model, context, {
+      apiKey: jwt,
+      transport: "sse",
+    }).result();
+
+    expect(result.stopReason).toBe("error");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
     { label: "unparseable", retryAfterMs: "not-a-number" },
     { label: "empty", retryAfterMs: "" },
   ])("honors retry-after when retry-after-ms is $label", async ({ retryAfterMs }) => {

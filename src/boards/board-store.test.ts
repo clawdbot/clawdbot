@@ -48,9 +48,9 @@ describe("in-memory board store", () => {
           serverName: "server",
           toolName: "tool",
           uiResourceUri: "ui://resource",
-          originSessionKey: "origin",
           toolCallId: "call",
         },
+        interactive: false,
       },
     });
     expect(store.readWidgetHtml("session", "html")).toMatchObject({
@@ -58,15 +58,17 @@ describe("in-memory board store", () => {
       revision: 1,
       sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
     });
-    expect(store.readWidgetHtml("session", "app")).toEqual({
+    expect(store.readWidgetHtml("session", "app")).toBeUndefined();
+    expect(store.readWidgetMcpApp("session", "app")).toMatchObject({
       descriptor: {
         serverName: "server",
         toolName: "tool",
         uiResourceUri: "ui://resource",
-        originSessionKey: "origin",
         toolCallId: "call",
       },
       revision: 1,
+      instanceId: expect.stringMatching(/^[a-f0-9]{32}$/u),
+      interactive: false,
     });
     expect(store.readWidgetHtml("session", "unknown")).toBeUndefined();
   });
@@ -80,10 +82,13 @@ describe("in-memory board store", () => {
       declared: { netOrigins: ["https://example.com"] },
     });
     expect(pending.widgets[0]!.grantState).toBe("pending");
-    expect(store.grant("session", "networked", "granted", 1).widgets[0]!.grantState).toBe(
-      "granted",
-    );
-    expect(() => store.grant("session", "networked", "rejected", 1)).toThrow("not pending");
+    expect(
+      store.grant("session", "networked", "granted", 1, pending.widgets[0]?.instanceId).widgets[0]!
+        .grantState,
+    ).toBe("granted");
+    expect(() =>
+      store.grant("session", "networked", "rejected", 1, pending.widgets[0]?.instanceId),
+    ).toThrow("not pending");
   });
 
   it("survives reset/new boundaries", () => {
@@ -95,7 +100,7 @@ describe("in-memory board store", () => {
 
   it("rejects stale grant revisions and accepts the current revision", () => {
     const store = new InMemoryBoardStore();
-    store.putWidget({
+    const pending = store.putWidget({
       sessionKey: "session",
       name: "networked",
       content: { kind: "html", html: "ok" },
@@ -109,7 +114,9 @@ describe("in-memory board store", () => {
       expect(error).toMatchObject({ code: "conflict" });
       expect((error as Error).message).toContain("revision changed");
     }
-    expect(store.grant("session", "networked", "granted", 1).widgets[0]).toMatchObject({
+    expect(
+      store.grant("session", "networked", "granted", 1, pending.widgets[0]?.instanceId).widgets[0],
+    ).toMatchObject({
       grantState: "granted",
       revision: 1,
     });

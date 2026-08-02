@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { PluginRuntime, RuntimeLogger } from "../plugins/runtime/types.js";
@@ -14,31 +15,92 @@ import {
 import type { RealtimeVoiceTool, RealtimeVoiceToolCallEvent } from "../talk/provider-types.js";
 import type { RealtimeVoiceBridgeSession } from "../talk/session-runtime.js";
 import type { TalkEventInput } from "../talk/talk-events.js";
+import type {
+  MeetingAgentConsultSurface,
+  MeetingPlatformRuntimeMetadata,
+} from "./platform-adapter-contract.js";
+import type {
+  MeetingAgentConsultParams,
+  MeetingRealtimeToolCallParams,
+  MeetingRuntimePlatform,
+} from "./realtime-engine.js";
+import { readMeetingRealtimeToolAbortSignal } from "./realtime-tool-continuity.js";
 
-export type MeetingAgentConsultSurface = {
-  id: string;
-  provider: string;
-  lane: string;
-  surface: string;
-  userLabel: string;
-  assistantLabel: string;
-  questionSourceLabel: string;
-  workingResponseLabel: string;
-  extraSystemPrompt: string;
-};
-
-export function resolveMeetingRealtimeTools(
+function resolveMeetingRealtimeTools(
   policy: RealtimeVoiceAgentConsultToolPolicy,
 ): RealtimeVoiceTool[] {
   return resolveRealtimeVoiceAgentConsultTools(policy);
 }
 
+function resolveMeetingAgentConsultSurface(
+  platform: MeetingPlatformRuntimeMetadata,
+): MeetingAgentConsultSurface {
+  return {
+    id: platform.id,
+    provider: platform.id,
+    lane: platform.id,
+    ...platform.agentConsult,
+  };
+}
+
+export function createMeetingRealtimeEngineBindings(params: {
+  platform: MeetingPlatformRuntimeMetadata;
+  config: {
+    realtime: {
+      agentId?: string;
+      toolPolicy: RealtimeVoiceAgentConsultToolPolicy;
+    };
+  };
+  fullConfig: OpenClawConfig;
+  runtime: PluginRuntime;
+  logger: RuntimeLogger;
+}): {
+  platform: MeetingRuntimePlatform;
+  consultAgent: (consult: MeetingAgentConsultParams) => Promise<{ text: string }>;
+  tools: RealtimeVoiceTool[];
+  handleToolCall: (call: MeetingRealtimeToolCallParams) => Promise<void>;
+} {
+  const surface = resolveMeetingAgentConsultSurface(params.platform);
+  return {
+    platform: {
+      displayName: params.platform.displayName,
+      logScope: params.platform.logScope,
+      sessionIdPrefix: params.platform.id,
+    },
+    consultAgent: async (consult) =>
+      await consultMeetingAgent({
+        surface,
+        config: params.fullConfig,
+        runtime: params.runtime,
+        logger: params.logger,
+        agentId: params.config.realtime.agentId,
+        toolPolicy: params.config.realtime.toolPolicy,
+        ...consult,
+      }),
+    tools: resolveMeetingRealtimeTools(params.config.realtime.toolPolicy),
+    handleToolCall: async (call) => {
+      const abortSignal = readMeetingRealtimeToolAbortSignal(call.session);
+      await handleMeetingRealtimeConsultToolCall({
+        surface,
+        config: params.fullConfig,
+        runtime: params.runtime,
+        logger: params.logger,
+        agentId: params.config.realtime.agentId,
+        toolPolicy: params.config.realtime.toolPolicy,
+        abortSignal,
+        ...call,
+      });
+    },
+  };
+}
+
 async function submitMeetingConsultWorkingResponse(params: {
   session: RealtimeVoiceBridgeSession;
+  abortSignal?: AbortSignal;
   callId: string;
   label: string;
 }): Promise<void> {
-  if (!params.session.bridge.supportsToolResultContinuation) {
+  if (params.abortSignal?.aborted || !params.session.bridge.supportsToolResultContinuation) {
     return;
   }
   await params.session.submitToolResult(
@@ -48,7 +110,7 @@ async function submitMeetingConsultWorkingResponse(params: {
   );
 }
 
-export async function consultMeetingAgent(params: {
+async function consultMeetingAgent(params: {
   surface: MeetingAgentConsultSurface;
   config: OpenClawConfig;
   runtime: PluginRuntime;
@@ -59,8 +121,11 @@ export async function consultMeetingAgent(params: {
   requesterSessionKey?: string;
   args: unknown;
   transcript: Array<{ role: "user" | "assistant"; text: string }>;
+  abortSignal?: AbortSignal;
 }): Promise<{ text: string }> {
-  const agentId = normalizeAgentId(params.agentId);
+  const agentId = params.agentId
+    ? normalizeAgentId(params.agentId)
+    : resolveDefaultAgentId(params.config);
   const requesterSessionKey =
     normalizeOptionalString(params.requesterSessionKey) ?? `agent:${agentId}:main`;
   const sessionKey = `agent:${agentId}:subagent:${params.surface.id}:${params.meetingSessionId}`;
@@ -83,10 +148,11 @@ export async function consultMeetingAgent(params: {
     questionSourceLabel: params.surface.questionSourceLabel,
     toolsAllow: resolveRealtimeVoiceAgentConsultToolsAllow(params.toolPolicy),
     extraSystemPrompt: params.surface.extraSystemPrompt,
+    abortSignal: params.abortSignal,
   });
 }
 
-export async function handleMeetingRealtimeConsultToolCall(params: {
+async function handleMeetingRealtimeConsultToolCall(params: {
   surface: MeetingAgentConsultSurface;
   strategy: string;
   session: RealtimeVoiceBridgeSession;
@@ -99,12 +165,19 @@ export async function handleMeetingRealtimeConsultToolCall(params: {
   meetingSessionId: string;
   requesterSessionKey?: string;
   transcript: Array<{ role: "user" | "assistant"; text: string }>;
+  abortSignal?: AbortSignal;
   onTalkEvent?: (event: TalkEventInput) => void;
 }): Promise<void> {
   const callId = params.event.callId || params.event.itemId;
+  if (params.abortSignal?.aborted) {
+    return;
+  }
   if (params.strategy !== "bidi") {
     const error = `Tool "${params.event.name}" is only available in bidi realtime strategy`;
     await params.session.submitToolResult(callId, { error });
+    if (params.abortSignal?.aborted) {
+      return;
+    }
     params.onTalkEvent?.({
       type: "tool.error",
       callId,
@@ -116,6 +189,9 @@ export async function handleMeetingRealtimeConsultToolCall(params: {
   if (params.event.name !== REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME) {
     const error = `Tool "${params.event.name}" not available`;
     await params.session.submitToolResult(callId, { error });
+    if (params.abortSignal?.aborted) {
+      return;
+    }
     params.onTalkEvent?.({
       type: "tool.error",
       callId,
@@ -126,9 +202,13 @@ export async function handleMeetingRealtimeConsultToolCall(params: {
   }
   await submitMeetingConsultWorkingResponse({
     session: params.session,
+    abortSignal: params.abortSignal,
     callId,
     label: params.surface.workingResponseLabel,
   });
+  if (params.abortSignal?.aborted) {
+    return;
+  }
   params.onTalkEvent?.({
     type: "tool.progress",
     callId,
@@ -147,10 +227,17 @@ export async function handleMeetingRealtimeConsultToolCall(params: {
       requesterSessionKey: params.requesterSessionKey,
       args: params.event.args,
       transcript: params.transcript,
+      abortSignal: params.abortSignal,
     });
   } catch (error) {
+    if (params.abortSignal?.aborted) {
+      return;
+    }
     const message = formatErrorMessage(error);
     await params.session.submitToolResult(callId, { error: message });
+    if (params.abortSignal?.aborted) {
+      return;
+    }
     params.onTalkEvent?.({
       type: "tool.error",
       callId,
@@ -159,7 +246,13 @@ export async function handleMeetingRealtimeConsultToolCall(params: {
     });
     return;
   }
+  if (params.abortSignal?.aborted) {
+    return;
+  }
   await params.session.submitToolResult(callId, result);
+  if (params.abortSignal?.aborted) {
+    return;
+  }
   params.onTalkEvent?.({
     type: "tool.result",
     callId,

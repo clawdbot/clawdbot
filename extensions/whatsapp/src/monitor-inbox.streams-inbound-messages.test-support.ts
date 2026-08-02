@@ -9,7 +9,7 @@ import {
   readWhatsAppBaileysCacheEntry,
   type WhatsAppBaileysGroupMetadataCache,
   type WhatsAppBaileysMessageCache,
-} from "./inbound/monitor.js";
+} from "./inbound/baileys-cache.js";
 
 const EXPECTED_WHATSAPP_GROUP_METADATA_CACHE_MAX_ENTRIES = 500;
 import { createWhatsAppDurableInboundQueue } from "./inbound/durable-receive.js";
@@ -272,7 +272,7 @@ describe("web monitor inbox", () => {
     await listener.close();
   }
 
-  it("streams inbound messages", async () => {
+  it("delivery coordinator streams inbound messages", async () => {
     const onMessage = vi.fn(async (msg) => {
       await msg.sendComposing();
       await msg.reply("flat reply works");
@@ -331,7 +331,7 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
-  it("delays read receipts until inbound handlers complete", async () => {
+  it("delivery coordinator delays read receipts until inbound handlers complete", async () => {
     let finishMessage: (() => void) | undefined;
     const handlerGate = new Promise<void>((resolve) => {
       finishMessage = resolve;
@@ -371,7 +371,7 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
-  it("keeps the first delivery's prepared entry when a duplicate arrives", async () => {
+  it("delivery coordinator keeps the first durable delivery when a duplicate arrives", async () => {
     const onMessage = vi.fn(async () => undefined);
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
     const messageId = nextMessageId("dup-prepared");
@@ -384,8 +384,7 @@ describe("web monitor inbox", () => {
     });
 
     sock.ev.emit("messages.upsert", upsert);
-    // Duplicate delivery of the same message id: its pending verdict must not
-    // delete the first delivery's kept preparation.
+    // Duplicate delivery of the same message id stays pending behind the first claim.
     sock.ev.emit("messages.upsert", upsert);
     await waitForMessageCalls(onMessage, 1);
     await settleInboundWork();
@@ -395,7 +394,7 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
-  it("retries a transient persistence failure and still delivers through the drain", async () => {
+  it("delivery coordinator retries a transient persistence failure through the drain", async () => {
     const onMessage = vi.fn(async () => undefined);
     const queue = createWhatsAppDurableInboundQueue(DEFAULT_ACCOUNT_ID);
     // One transient rejection absorbs into the bounded retry; the message then
@@ -440,7 +439,7 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
-  it("does not dispatch live duplicates that already have pending durable delivery", async () => {
+  it("delivery coordinator does not dispatch duplicates with pending durable delivery", async () => {
     let finishMessage: (() => void) | undefined;
     const handlerGate = new Promise<void>((resolve) => {
       finishMessage = resolve;
@@ -471,7 +470,7 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
-  it("does not redispatch a completed transport-key duplicate", async () => {
+  it("delivery coordinator does not redispatch a completed transport-key duplicate", async () => {
     const onMessage = vi.fn(async () => undefined);
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
     const upsert = buildNotifyMessageUpsert({
@@ -494,7 +493,7 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
-  it("stays unavailable on connect in self-chat mode", async () => {
+  it("socket session stays unavailable on connect in self-chat mode", async () => {
     const { listener, sock } = await startInboxMonitor(vi.fn(async () => {}) as InboxOnMessage, {
       selfChatMode: true,
     });
@@ -504,7 +503,7 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
-  it("hydrates participating groups once after connect", async () => {
+  it("group metadata cache hydrates participating groups once after connect", async () => {
     const { listener, sock } = await startInboxMonitor(vi.fn(async () => {}) as InboxOnMessage);
 
     expect(sock.groupFetchAllParticipating).toHaveBeenCalledTimes(1);
@@ -512,7 +511,7 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
-  it("continues when group hydration fails on connect", async () => {
+  it("group metadata cache keeps delivery alive when hydration fails", async () => {
     const sock = getSock();
     sock.groupFetchAllParticipating.mockRejectedValueOnce(new Error("no groups"));
 
@@ -524,7 +523,7 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
-  it("omits group context when a group message has no group facts", async () => {
+  it("group metadata cache omits group context when no group facts exist", async () => {
     const sock = getSock();
     sock.groupFetchAllParticipating.mockRejectedValueOnce(new Error("no groups"));
     const onMessage = vi.fn(async () => {});
@@ -550,7 +549,7 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
-  it("keeps group inbound alive with cached metadata after reconnect-time metadata fetch failures", async () => {
+  it("group metadata cache serves reconnect metadata after live fetch failures", async () => {
     const groupMetadataCache: NonNullable<InboxMonitorOptions["groupMetadataCache"]> = new Map();
     const onMessage = vi.fn(async (_msg: Parameters<InboxOnMessage>[0]) => {});
 
@@ -601,7 +600,7 @@ describe("web monitor inbox", () => {
     await second.listener.close();
   });
 
-  it("keeps full participating group metadata available to Baileys", async () => {
+  it("group metadata cache keeps full participating metadata available to Baileys", async () => {
     const sock = getSock();
     sock.groupFetchAllParticipating.mockResolvedValueOnce({
       "123@g.us": groupMetadata({
@@ -623,7 +622,148 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
-  it("invalidates cached group metadata on partial group and participant updates", async () => {
+  it("group metadata cache reuses hydrated participant identities without querying WhatsApp again", async () => {
+    const participantLid = "277038292303944@lid";
+    const participantPhone = "15551234567@s.whatsapp.net";
+    const sock = getSock();
+    sock.groupFetchAllParticipating.mockResolvedValueOnce({
+      "123@g.us": {
+        id: "123@g.us",
+        subject: "Hydrated Group",
+        owner: undefined,
+        participants: [{ id: participantLid, phoneNumber: participantPhone }],
+      },
+    });
+    sock.signalRepository.lidMapping.getPNForLID.mockResolvedValue(participantPhone);
+
+    const { listener, baileysCache } = await startInboxMonitorWithBaileysCache();
+    try {
+      await vi.waitFor(() => {
+        expect(baileysCache.baileysGroupMetaCache.has("123@g.us")).toBe(true);
+      });
+      sock.groupMetadata.mockRejectedValue(new Error("408 timed out"));
+
+      await listener.sendMessage("123@g.us", "ping @+15551234567");
+
+      expect(sock.groupMetadata).not.toHaveBeenCalled();
+      expect(sock.sendMessage).toHaveBeenCalledWith("123@g.us", {
+        text: "ping @277038292303944",
+        mentions: [participantLid],
+      });
+    } finally {
+      await listener.close();
+    }
+  });
+
+  it("group metadata cache refreshes provider snapshots that omit participant identities", async () => {
+    const sock = getSock();
+    sock.groupFetchAllParticipating.mockResolvedValueOnce({
+      "123@g.us": groupMetadata({ subject: "Incomplete Group", participants: [] }),
+    });
+    sock.groupMetadata.mockResolvedValueOnce(
+      groupMetadata({
+        subject: "Complete Group",
+        participants: ["15551234567@s.whatsapp.net"],
+      }),
+    );
+
+    const { listener, baileysCache } = await startInboxMonitorWithBaileysCache();
+    try {
+      await vi.waitFor(() => {
+        expect(baileysCache.baileysGroupMetaCache.get("123@g.us")?.value.participants).toEqual([]);
+      });
+
+      await listener.sendMessage("123@g.us", "recovered @15551234567");
+
+      expect(sock.groupMetadata).toHaveBeenCalledOnce();
+      expect(sock.sendMessage).toHaveBeenCalledWith("123@g.us", {
+        text: "recovered @15551234567",
+        mentions: ["15551234567@s.whatsapp.net"],
+      });
+      await expectCachedGroupMetadata(baileysCache, {
+        id: "123@g.us",
+        subject: "Complete Group",
+        participants: [{ id: "15551234567@s.whatsapp.net" }],
+      });
+    } finally {
+      await listener.close();
+    }
+  });
+
+  it("group metadata cache never extends hydrated participant identities beyond their provider expiry", async () => {
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+    const sock = getSock();
+    sock.groupFetchAllParticipating.mockResolvedValueOnce({
+      "123@g.us": groupMetadata({
+        subject: "Expiring Group",
+        participants: ["15551234567@s.whatsapp.net"],
+      }),
+    });
+    sock.groupMetadata.mockRejectedValue(new Error("408 timed out"));
+
+    const { listener, baileysCache } = await startInboxMonitorWithBaileysCache();
+    try {
+      await vi.waitFor(() => {
+        expect(baileysCache.baileysGroupMetaCache.get("123@g.us")?.expiresAt).toBe(
+          1_700_000_300_000,
+        );
+      });
+
+      dateNow.mockReturnValue(1_700_000_299_000);
+      await listener.sendMessage("123@g.us", "fresh @15551234567");
+
+      dateNow.mockReturnValue(1_700_000_300_001);
+      await listener.sendMessage("123@g.us", "expired @15551234567");
+
+      expect(sock.sendMessage).toHaveBeenNthCalledWith(1, "123@g.us", {
+        text: "fresh @15551234567",
+        mentions: ["15551234567@s.whatsapp.net"],
+      });
+      expect(sock.sendMessage).toHaveBeenNthCalledWith(2, "123@g.us", {
+        text: "expired @15551234567",
+      });
+      expect(sock.groupMetadata).toHaveBeenCalledTimes(1);
+      expect(baileysCache.baileysGroupMetaCache.has("123@g.us")).toBe(false);
+    } finally {
+      dateNow.mockRestore();
+      await listener.close();
+    }
+  });
+
+  it("group metadata cache drops hydrated local participants when membership changes", async () => {
+    const sock = getSock();
+    sock.groupFetchAllParticipating.mockResolvedValueOnce({
+      "123@g.us": groupMetadata({
+        subject: "Changing Group",
+        participants: ["15551234567@s.whatsapp.net"],
+      }),
+    });
+    const { listener, baileysCache } = await startInboxMonitorWithBaileysCache();
+    try {
+      await vi.waitFor(() => {
+        expect(baileysCache.baileysGroupMetaCache.has("123@g.us")).toBe(true);
+      });
+      await listener.sendMessage("123@g.us", "before @15551234567");
+      sock.groupMetadata.mockRejectedValue(new Error("408 timed out"));
+
+      sock.ev.emit("group-participants.update", { id: "123@g.us" });
+      await listener.sendMessage("123@g.us", "after @15551234567");
+
+      expect(sock.sendMessage).toHaveBeenNthCalledWith(1, "123@g.us", {
+        text: "before @15551234567",
+        mentions: ["15551234567@s.whatsapp.net"],
+      });
+      expect(sock.sendMessage).toHaveBeenNthCalledWith(2, "123@g.us", {
+        text: "after @15551234567",
+      });
+      expect(sock.groupMetadata).toHaveBeenCalledTimes(1);
+      expect(baileysCache.baileysGroupMetaCache.has("123@g.us")).toBe(false);
+    } finally {
+      await listener.close();
+    }
+  });
+
+  it("group metadata cache invalidates partial group and participant updates", async () => {
     const groupMetadataCache: NonNullable<InboxMonitorOptions["groupMetadataCache"]> = new Map();
     const { listener, sock, baileysCache } = await startInboxMonitorWithBaileysCache({
       groupMetadataCache,
@@ -660,7 +800,7 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
-  it("expires Baileys retry and group metadata cache entries", async () => {
+  it("group metadata cache expires Baileys retry and metadata entries", async () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
     const baileysCache = createBaileysCacheSupport();
     const onMessage = vi.fn(async (_msg: Parameters<InboxOnMessage>[0]) => {});
@@ -717,7 +857,7 @@ describe("web monitor inbox", () => {
     }
   });
 
-  it("does not republish invalidated group metadata from pending hydration", async () => {
+  it("group metadata cache does not republish invalidated pending hydration", async () => {
     const groupMetadataCache: NonNullable<InboxMonitorOptions["groupMetadataCache"]> = new Map();
     const baileysCache = createBaileysCacheSupport();
     const sock = getSock();
@@ -751,7 +891,7 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
-  it("cleans up Baileys group metadata listeners on close", async () => {
+  it("group metadata cache detaches Baileys listeners on close", async () => {
     const baileysCache = createBaileysCacheSupport();
     const { listener, sock } = await startInboxMonitor(vi.fn(async () => {}) as InboxOnMessage, {
       recentMessageKeys: baileysCache.recentMessageKeys,
@@ -769,7 +909,7 @@ describe("web monitor inbox", () => {
     expect(sock.ev.listenerCount("group-participants.update")).toBe(0);
   });
 
-  it("bounds cached group metadata kept across reconnects", async () => {
+  it("group metadata cache bounds reconnect entries", async () => {
     const groupMetadataCache: NonNullable<InboxMonitorOptions["groupMetadataCache"]> = new Map();
     const groups = Object.fromEntries(
       Array.from({ length: EXPECTED_WHATSAPP_GROUP_METADATA_CACHE_MAX_ENTRIES + 2 }, (_, index) => [
@@ -800,7 +940,7 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
-  it("does not keep reconnect group metadata when the expiry would exceed a valid Date", async () => {
+  it("group metadata cache rejects reconnect expiry beyond a valid Date", async () => {
     const groupMetadataCache: NonNullable<InboxMonitorOptions["groupMetadataCache"]> = new Map();
     const dateNow = vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
     try {
@@ -829,7 +969,7 @@ describe("web monitor inbox", () => {
     }
   });
 
-  it("does not block inbound listeners while group hydration is pending", async () => {
+  it("group metadata cache does not block inbound listeners during hydration", async () => {
     let resolveHydration!: () => void;
     const sock = getSock();
     const pendingHydration = new Promise<Record<string, never>>((resolve) => {
@@ -855,7 +995,7 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
-  it("uses a replacement socket for replies created before reconnect", async () => {
+  it("socket session uses a replacement socket for replies created before reconnect", async () => {
     const onMessage = vi.fn(async () => undefined);
     const socketRef: NonNullable<InboxMonitorOptions["socketRef"]> = { current: null };
 
@@ -942,7 +1082,7 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
-  it("waits for a replacement socket before sending replies", async () => {
+  it("socket session waits for a replacement socket before sending replies", async () => {
     const onMessage = vi.fn(async () => undefined);
     const socketRef = createSocketRef();
     const { listener, sock, inbound } = await primeInboundReplyHandle({
@@ -980,71 +1120,178 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
-  it("drains serialized same-lane messages after close", async () => {
-    vi.useFakeTimers();
-    try {
-      let releaseFirst: (() => void) | undefined;
-      const firstTurn = new Promise<void>((resolve) => {
-        releaseFirst = resolve;
-      });
-      const onMessage = vi.fn(async () => {
-        if (onMessage.mock.calls.length === 1) {
-          await firstTurn;
-        }
-      });
-      const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
-        debounceMs: 50,
-      });
-      sock.ev.emit(
-        "messages.upsert",
-        buildNotifyMessageUpsert({
-          id: nextMessageId("debounce-close-1"),
-          remoteJid: "999@s.whatsapp.net",
-          text: "first",
-          timestamp: 1_700_000_000,
-          pushName: "Tester",
-        }),
-      );
-      await vi.advanceTimersByTimeAsync(50);
-      await waitForMessageCalls(onMessage, 1);
-      expect(inboundMessage(onMessage).payload.body).toBe("first");
+  it("delivery coordinator lets a later same-key flush steer during an active turn", async () => {
+    let releaseFirst: (() => void) | undefined;
+    const firstTurn = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const onMessage = vi.fn(async (message: WebInboundMessage) => {
+      const lifecycle = resolveWhatsAppIngressLifecycle(message);
+      if (!lifecycle) {
+        throw new Error("expected durable ingress lifecycle");
+      }
+      await lifecycle.onAdopted();
+      if (onMessage.mock.calls.length === 1) {
+        await firstTurn;
+      }
+    });
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
+      debounceMs: 20,
+    });
+    sock.ev.emit(
+      "messages.upsert",
+      buildNotifyMessageUpsert({
+        id: nextMessageId("debounce-steer-1"),
+        remoteJid: "999@s.whatsapp.net",
+        text: "first",
+        timestamp: 1_700_000_000,
+        pushName: "Tester",
+      }),
+    );
+    await waitForMessageCalls(onMessage, 1);
+    expect(inboundMessage(onMessage).payload.body).toBe("first");
 
-      const second = buildNotifyMessageUpsert({
-        id: nextMessageId("debounce-close-2"),
+    sock.ev.emit(
+      "messages.upsert",
+      buildNotifyMessageUpsert({
+        id: nextMessageId("debounce-steer-2"),
+        remoteJid: "999@s.whatsapp.net",
+        text: "steer",
+        timestamp: 1_700_000_001,
+        pushName: "Tester",
+      }),
+    );
+    await waitForMessageCalls(onMessage, 2);
+    expect(inboundMessage(onMessage, 1).payload.body).toBe("steer");
+
+    releaseFirst?.();
+    await listener.close();
+  });
+
+  it("delivery coordinator drains admitted same-lane turns before close completes", async () => {
+    let releaseFirst: (() => void) | undefined;
+    const firstTurn = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const onMessage = vi.fn(async (message: WebInboundMessage) => {
+      const lifecycle = resolveWhatsAppIngressLifecycle(message);
+      if (!lifecycle) {
+        throw new Error("expected durable ingress lifecycle");
+      }
+      await lifecycle.onAdopted();
+      if (onMessage.mock.calls.length === 1) {
+        await firstTurn;
+      }
+    });
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
+      debounceMs: 20,
+    });
+    sock.ev.emit(
+      "messages.upsert",
+      buildNotifyMessageUpsert({
+        id: nextMessageId("debounce-close-1"),
+        remoteJid: "999@s.whatsapp.net",
+        text: "first",
+        timestamp: 1_700_000_000,
+        pushName: "Tester",
+      }),
+    );
+    await waitForMessageCalls(onMessage, 1);
+
+    const second = buildNotifyMessageUpsert({
+      id: nextMessageId("debounce-close-2"),
+      remoteJid: "999@s.whatsapp.net",
+      text: "second",
+      timestamp: 1_700_000_001,
+      pushName: "Tester",
+    });
+    const third = buildNotifyMessageUpsert({
+      id: nextMessageId("debounce-close-3"),
+      remoteJid: "999@s.whatsapp.net",
+      text: "third",
+      timestamp: 1_700_000_002,
+      pushName: "Tester",
+    });
+    sock.ev.emit("messages.upsert", {
+      type: "notify",
+      messages: [...second.messages, ...third.messages],
+    });
+
+    let closed = false;
+    const closePromise = listener.close().then(() => {
+      closed = true;
+    });
+    await waitForMessageCalls(onMessage, 3);
+    expect(closed).toBe(false);
+    expect(inboundMessage(onMessage, 1).payload.body).toBe("second");
+    expect(inboundMessage(onMessage, 2).payload.body).toBe("third");
+
+    releaseFirst?.();
+    await closePromise;
+    expect(closed).toBe(true);
+  });
+
+  it("delivery coordinator keeps a reused debounce key pending across turns", async () => {
+    let releaseFirst!: () => void;
+    let finishFirst!: () => void;
+    const firstTurn = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const firstFinished = new Promise<void>((resolve) => {
+      finishFirst = resolve;
+    });
+    const onMessage = vi.fn(async (message: WebInboundMessage) => {
+      const lifecycle = resolveWhatsAppIngressLifecycle(message);
+      if (!lifecycle) {
+        throw new Error("expected durable ingress lifecycle");
+      }
+      await lifecycle.onAdopted();
+      if (onMessage.mock.calls.length === 1) {
+        await firstTurn;
+        finishFirst();
+      }
+    });
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
+      debounceMs: 60_000,
+      shouldDebounce: (message) => message.payload.body !== "first",
+    });
+    sock.ev.emit(
+      "messages.upsert",
+      buildNotifyMessageUpsert({
+        id: nextMessageId("debounce-reused-key-1"),
+        remoteJid: "999@s.whatsapp.net",
+        text: "first",
+        timestamp: 1_700_000_000,
+        pushName: "Tester",
+      }),
+    );
+    await waitForMessageCalls(onMessage, 1);
+
+    sock.ev.emit(
+      "messages.upsert",
+      buildNotifyMessageUpsert({
+        id: nextMessageId("debounce-reused-key-2"),
         remoteJid: "999@s.whatsapp.net",
         text: "second",
         timestamp: 1_700_000_001,
         pushName: "Tester",
-      });
-      const third = buildNotifyMessageUpsert({
-        id: nextMessageId("debounce-close-3"),
-        remoteJid: "999@s.whatsapp.net",
-        text: "third",
-        timestamp: 1_700_000_002,
-        pushName: "Tester",
-      });
-      sock.ev.emit("messages.upsert", {
-        type: "notify",
-        messages: [...second.messages, ...third.messages],
-      });
+      }),
+    );
+    await settleInboundWork();
+    expect(onMessage).toHaveBeenCalledTimes(1);
 
-      const closePromise = listener.close();
-      expect(onMessage).toHaveBeenCalledTimes(1);
+    releaseFirst();
+    await firstFinished;
+    await settleInboundWork();
 
-      releaseFirst?.();
-      await closePromise;
-
-      expect(onMessage).toHaveBeenCalledTimes(3);
-      expect(inboundMessage(onMessage, 1).payload.body).toBe("second");
-      expect(inboundMessage(onMessage, 1).admission?.conversation.kind).toBe("direct");
-      expect(inboundMessage(onMessage, 2).payload.body).toBe("third");
-      expect(inboundMessage(onMessage, 2).admission?.conversation.kind).toBe("direct");
-    } finally {
-      vi.useRealTimers();
-    }
+    const closeStarted = Date.now();
+    await listener.close();
+    expect(Date.now() - closeStarted).toBeLessThan(5_000);
+    expect(onMessage).toHaveBeenCalledTimes(2);
+    expect(inboundMessage(onMessage, 1).payload.body).toBe("second");
   });
 
-  it("completes shutdown under a long durable debounce without waiting for the window", async () => {
+  it("delivery coordinator force-flushes long durable debounce during shutdown", async () => {
     // Durable pump tasks await claim flush waiters; close must force-flush
     // debounced batches before waiting on those pumps (socket-close timeout).
     const onMessage = vi.fn(async () => undefined);
@@ -1074,7 +1321,7 @@ describe("web monitor inbox", () => {
     expect(sock.end).toHaveBeenCalledTimes(1);
   });
 
-  it("lets serialized same-lane replies drain before closing the socket", async () => {
+  it("delivery coordinator drains serialized same-lane replies before socket close", async () => {
     vi.useFakeTimers();
     try {
       let releaseFirst: (() => void) | undefined;
@@ -1145,7 +1392,7 @@ describe("web monitor inbox", () => {
     }
   });
 
-  it("waits for in-flight inbound handlers before draining on close", async () => {
+  it("delivery coordinator waits for in-flight handlers before close drain", async () => {
     let releaseHandler: (() => void) | undefined;
     const handlerGate = new Promise<void>((resolve) => {
       releaseHandler = resolve;
@@ -1194,7 +1441,7 @@ describe("web monitor inbox", () => {
     );
   });
 
-  it("retries timed-out sends on the same socket without clearing the socket ref", async () => {
+  it("socket session retries timed-out sends without clearing the socket ref", async () => {
     const onMessage = vi.fn(async () => undefined);
     const socketRef = createSocketRef();
     const { listener, sock, inbound } = await primeInboundReplyHandle({
@@ -1222,7 +1469,7 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
-  it("rejects direct sends before Baileys sendMessage when reachout timelock is active", async () => {
+  it("socket session rejects direct sends while reachout timelock is active", async () => {
     const onMessage = vi.fn(async () => undefined);
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
     sock.fetchAccountReachoutTimelock.mockResolvedValueOnce({
@@ -1243,7 +1490,7 @@ describe("web monitor inbox", () => {
     }
   });
 
-  it("uses connection.update reachout timelock state before direct sends", async () => {
+  it("socket session uses connection updates before direct sends", async () => {
     const onMessage = vi.fn(async () => undefined);
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
     sock.ev.emit("connection.update", {
@@ -1265,7 +1512,7 @@ describe("web monitor inbox", () => {
     }
   });
 
-  it("allows direct sends after reachout timelock clears", async () => {
+  it("socket session allows direct sends after reachout timelock clears", async () => {
     const onMessage = vi.fn(async () => undefined);
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
     sock.ev.emit("connection.update", {
@@ -1290,7 +1537,7 @@ describe("web monitor inbox", () => {
     }
   });
 
-  it("refreshes inactive reachout timelock state before later direct sends", async () => {
+  it("socket session refreshes inactive reachout state before later direct sends", async () => {
     const onMessage = vi.fn(async () => undefined);
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
     sock.fetchAccountReachoutTimelock
@@ -1314,7 +1561,7 @@ describe("web monitor inbox", () => {
     }
   });
 
-  it("reuses a successful readiness preflight for the immediate direct send", async () => {
+  it("socket session reuses readiness preflight for the immediate direct send", async () => {
     const onMessage = vi.fn(async () => undefined);
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
     sock.fetchAccountReachoutTimelock.mockResolvedValueOnce({ isActive: false });
@@ -1330,7 +1577,7 @@ describe("web monitor inbox", () => {
     }
   });
 
-  it("invalidates readiness preflight when a later active timelock update arrives", async () => {
+  it("socket session invalidates readiness after an active timelock update", async () => {
     const onMessage = vi.fn(async () => undefined);
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
     sock.fetchAccountReachoutTimelock.mockResolvedValueOnce({ isActive: false });
@@ -1354,7 +1601,7 @@ describe("web monitor inbox", () => {
     }
   });
 
-  it("does not apply account reachout timelock to group sends", async () => {
+  it("socket session does not apply account reachout timelock to group sends", async () => {
     const onMessage = vi.fn(async () => undefined);
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
     sock.ev.emit("connection.update", {
@@ -1374,7 +1621,7 @@ describe("web monitor inbox", () => {
     }
   });
 
-  it("blocks direct inbound composing presence when reachout timelock is active", async () => {
+  it("socket session blocks direct composing presence during reachout timelock", async () => {
     const onMessage = vi.fn(async () => undefined);
     const socketRef = createSocketRef();
     const { listener, sock, inbound } = await primeInboundReplyHandle({
@@ -1401,7 +1648,7 @@ describe("web monitor inbox", () => {
     }
   });
 
-  it("times out stalled socket sends at the default Baileys query timeout", async () => {
+  it("socket session times out stalled sends at the Baileys query timeout", async () => {
     const onMessage = vi.fn(async () => undefined);
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
     vi.useFakeTimers();
@@ -1418,7 +1665,7 @@ describe("web monitor inbox", () => {
     }
   });
 
-  it("does not retry or clear the socket after the local socket send timeout", async () => {
+  it("socket session preserves the socket after a local send timeout", async () => {
     const onMessage = vi.fn(async () => undefined);
     const socketRef = createSocketRef();
     const { listener, sock, inbound } = await primeInboundReplyHandle({
@@ -1443,7 +1690,7 @@ describe("web monitor inbox", () => {
     }
   });
 
-  it("records outbound replies for Baileys retry lookup", async () => {
+  it("socket session records outbound replies for Baileys retry lookup", async () => {
     const onMessage = vi.fn(async () => undefined);
     const socketRef = createSocketRef();
     const baileysCache = createBaileysCacheSupport();
@@ -1475,7 +1722,7 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
-  it("suppresses self-echo when a timed-out socket send is later accepted", async () => {
+  it("socket session suppresses self-echo after a late accepted send", async () => {
     const onMessage = vi.fn(async () => undefined);
     const socketRef = createSocketRef();
     const baileysCache = createBaileysCacheSupport();
@@ -1537,7 +1784,7 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
-  it("times out stalled send-api presence updates", async () => {
+  it("socket session times out stalled send-api presence updates", async () => {
     const onMessage = vi.fn(async () => undefined);
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
     vi.useFakeTimers();
@@ -1555,7 +1802,7 @@ describe("web monitor inbox", () => {
     }
   });
 
-  it("bounds stalled read-receipt socket operations instead of hanging", async () => {
+  it("socket session bounds stalled read-receipt operations", async () => {
     const onMessage = vi.fn(async () => undefined);
     const logSpy = vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
@@ -1607,7 +1854,7 @@ describe("web monitor inbox", () => {
     }
   });
 
-  it("bounds reconnect-gap retries even when reconnect attempts are unlimited", async () => {
+  it("socket session bounds reconnect-gap retries when attempts are unlimited", async () => {
     const onMessage = vi.fn(async () => undefined);
     const socketRef = createSocketRef();
     const { listener, inbound } = await primeInboundReplyHandle({
@@ -1635,7 +1882,7 @@ describe("web monitor inbox", () => {
   // of throwing RECONNECT_IN_PROGRESS. Before the registry fallback was added,
   // sendTrackedMessage only knew its own controller's socketRef and the captured
   // reply was permanently broken.
-  it("routes the captured reply through a successor controller when the original controller's socket is gone", async () => {
+  it("socket session routes captured replies through a matching successor", async () => {
     const onMessage = vi.fn(async () => undefined);
     const socketRefA = createSocketRef();
 
@@ -1701,7 +1948,7 @@ describe("web monitor inbox", () => {
   // `<x>@lid`). The fallback must recognize the same account when one side
   // reports only PN and the other only LID, because the captured reply
   // shouldn't be dropped just because the identity form rotated.
-  it("accepts successor-controller fallback when only the LID-vs-PN form differs for the same account e164", async () => {
+  it("socket session accepts a successor with equivalent LID and phone identity", async () => {
     const onMessage = vi.fn(async () => undefined);
     const socketRefA = createSocketRef();
 
@@ -1760,7 +2007,7 @@ describe("web monitor inbox", () => {
   // VE-513 session-safety guard: if the registered successor controller has been
   // re-linked to a different WhatsApp identity (different self JID), the
   // captured reply must fail closed rather than route through the wrong number.
-  it("refuses successor-controller fallback when the registered controller's self JID does not match", async () => {
+  it("socket session refuses a successor with a mismatched self identity", async () => {
     const onMessage = vi.fn(async () => undefined);
     const socketRefA = createSocketRef();
 
@@ -1815,7 +2062,7 @@ describe("web monitor inbox", () => {
     }
   });
 
-  it("deduplicates redelivered messages by id", async () => {
+  it("delivery coordinator deduplicates redelivered messages by id", async () => {
     const onMessage = vi.fn(async () => {});
 
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
@@ -1836,7 +2083,7 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
-  it("retries redelivered messages after an explicit retryable inbound failure", async () => {
+  it("delivery coordinator retries redelivery after an explicit retryable failure", async () => {
     let attempts = 0;
     const onMessage = vi.fn(async () => {
       attempts += 1;
@@ -1868,7 +2115,7 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
-  it("retries redelivered messages after reply session initialization conflicts", async () => {
+  it("delivery coordinator retries redelivery after reply session conflicts", async () => {
     let attempts = 0;
     const onMessage = vi.fn(async () => {
       attempts += 1;
@@ -1984,7 +2231,7 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
-  it("keeps a same-lane follow-up pending until the first handler adopts", async () => {
+  it("delivery coordinator keeps same-lane follow-up pending until turn adoption", async () => {
     let adoptFirst: (() => void | Promise<void>) | undefined;
     const onMessage = vi.fn(async (message: WebInboundMessage) => {
       if (!adoptFirst) {
@@ -2036,6 +2283,47 @@ describe("web monitor inbox", () => {
 
   it("captures reply context from quoted messages", async () => {
     await expectQuotedReplyContext({ conversation: "original" });
+  });
+
+  it("preserves native reply context when WhatsApp omits the quoted message", async () => {
+    const onMessage = vi.fn(async () => {});
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+
+    sock.ev.emit("messages.upsert", {
+      type: "notify",
+      messages: [
+        {
+          key: {
+            id: nextMessageId("quoted-unavailable"),
+            fromMe: false,
+            remoteJid: "999@s.whatsapp.net",
+          },
+          message: {
+            extendedTextMessage: {
+              text: "yes",
+              contextInfo: {
+                stanzaId: "original-message",
+                participant: "111@s.whatsapp.net",
+              },
+            },
+          },
+          messageTimestamp: 1_700_000_000,
+          pushName: "Tester",
+        },
+      ],
+    });
+
+    await waitForMessageCalls(onMessage, 1);
+
+    const inbound = inboundMessage(onMessage);
+    expect(inbound.payload.body).toBe("yes");
+    expect(inbound.quote).toMatchObject({
+      id: "original-message",
+      body: "[quoted message unavailable]",
+      sender: { displayName: "+111", jid: "111@s.whatsapp.net", e164: "+111" },
+    });
+
+    await listener.close();
   });
 
   it("captures reply context from wrapped quoted messages", async () => {

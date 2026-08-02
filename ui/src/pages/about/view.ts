@@ -6,6 +6,7 @@ import { icons } from "../../components/icons.ts";
 import {
   canonicalLobsterLook,
   LOBSTER_PET_PALETTES,
+  lobsterLookStyle,
   renderLobsterSvg,
 } from "../../components/lobster-pet.ts";
 import {
@@ -133,6 +134,7 @@ function renderCommit(props: AboutProps) {
   return html`
     <span class="about-commit">
       <code dir="ltr" title=${commit}>${commit.slice(0, SHORT_COMMIT_LENGTH)}</code>
+      ${renderCommitAge(props.buildInfo.commitAt)}
       <openclaw-tooltip .content=${label}>
         <button
           type="button"
@@ -145,7 +147,6 @@ function renderCommit(props: AboutProps) {
           <span aria-hidden="true">${props.copyState === "copied" ? icons.check : icons.copy}</span>
         </button>
       </openclaw-tooltip>
-      ${renderCommitAge(props.buildInfo.commitAt)}
       <span class="about-sr-only" role="status" aria-live="polite"
         >${copyStatus(props.copyState)}</span
       >
@@ -165,7 +166,7 @@ function renderHero(props: AboutProps) {
       <button
         type="button"
         class="about-hero__clawd ${props.clawdWaving ? "about-hero__clawd--wave" : ""}"
-        style=${`--lob-shell:${look.palette.shell};--lob-claw:${look.palette.claw}`}
+        style=${lobsterLookStyle(look)}
         aria-label=${t("aboutPage.waveHello")}
         @click=${props.onPokeClawd}
       >
@@ -198,7 +199,11 @@ function renderHero(props: AboutProps) {
 export function renderAbout(props: AboutProps) {
   const buildDate = formatControlUiBuildDate(props.buildInfo.builtAt, i18n.getLocale());
   const buildFacts = html`
-    <dl class="settings-kv" role="group" aria-label=${t("aboutPage.artifactDetails")}>
+    <dl
+      class="settings-kv about-build-grid"
+      role="group"
+      aria-label=${t("aboutPage.artifactDetails")}
+    >
       <dt>${t("aboutPage.version")}</dt>
       <dd>
         ${props.buildInfo.version

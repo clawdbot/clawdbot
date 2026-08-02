@@ -35,6 +35,8 @@ type SyntheticOpenAIModelCatalogEntry = {
 
 const OPENAI_API_BASE_URL = "https://api.openai.com/v1";
 
+export const OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS = 272_000;
+
 export function resolveConfiguredOpenAIBaseUrl(cfg: OpenClawConfig | undefined): string {
   return normalizeOptionalString(cfg?.models?.providers?.openai?.baseUrl) ?? OPENAI_API_BASE_URL;
 }

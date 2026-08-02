@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { normalizeChatType, type ChatType } from "../channels/chat-type.js";
+import { parseSqliteSessionEntryRecord } from "../config/sessions/session-entry-json.js";
 import { normalizeAccountId } from "../routing/account-id.js";
 import { buildConversationRef, normalizeConversationPeerId } from "../routing/conversation-ref.js";
 import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
@@ -65,8 +66,11 @@ function migratedConversation(
   persistedChatType?: string,
   sessionKey?: string,
 ) {
-  const delivery = migratedObject(entry, "deliveryContext");
-  const origin = migratedObject(entry, "origin");
+  const canonicalDelivery = migratedObject(entry, "delivery");
+  const delivery =
+    migratedObject(canonicalDelivery ?? {}, "context") ?? migratedObject(entry, "deliveryContext");
+  const origin =
+    migratedObject(canonicalDelivery ?? {}, "origin") ?? migratedObject(entry, "origin");
   const deliveryRouteTarget = migratedText(delivery?.to);
   const kind = inferMigratedChatType({
     entry,
@@ -129,6 +133,27 @@ function migratedConversation(
 
 /** Backfills canonical external addresses once when conversation routing becomes active. */
 export function backfillSessionConversations(db: DatabaseSync): void {
+  if (
+    !readSqliteTableColumns(db, "session_entries") ||
+    !readSqliteTableColumns(db, "sessions") ||
+    !readSqliteTableColumns(db, "conversations")
+  ) {
+    return;
+  }
+  if (!readSqliteTableColumns(db, "session_conversations")) {
+    db.exec(`
+      CREATE TABLE session_conversations (
+        session_id TEXT NOT NULL,
+        conversation_id TEXT NOT NULL,
+        role TEXT NOT NULL DEFAULT 'primary' CHECK (role IN ('primary', 'participant', 'related')),
+        first_seen_at INTEGER NOT NULL,
+        last_seen_at INTEGER NOT NULL,
+        PRIMARY KEY (session_id, conversation_id, role),
+        FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE,
+        FOREIGN KEY (conversation_id) REFERENCES conversations(conversation_id) ON DELETE CASCADE
+      );
+    `);
+  }
   // Earlier schemas did not retain an exact delivery target. Remove their
   // derived projection, then rebuild only addresses recoverable from sessions.
   db.exec(`
@@ -272,6 +297,57 @@ export function migrateConversationDeliveryTargetColumn(db: DatabaseSync): void 
   // SQLite requires a default for a NOT NULL additive column. The canonical
   // session projection replaces recoverable rows; backfill drops the rest.
   db.exec("ALTER TABLE conversations ADD COLUMN delivery_target TEXT NOT NULL DEFAULT '';");
+}
+
+/** Adds the validity projection and settles only rows left pending by older writers. */
+export function ensureSessionEntryValidityProjection(db: DatabaseSync): void {
+  const columns = readSqliteTableColumns(db, "session_nodes");
+  if (!columns) {
+    return;
+  }
+  const addedColumn = !columns.has("entry_valid");
+  if (addedColumn) {
+    db.exec(
+      "ALTER TABLE session_nodes ADD COLUMN entry_valid INTEGER NOT NULL DEFAULT 0 CHECK (entry_valid IN (-1, 0, 1))",
+    );
+  }
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS session_nodes_entry_valid_after_insert
+    AFTER INSERT ON session_nodes
+    BEGIN
+      UPDATE session_nodes SET entry_valid = 0 WHERE session_key = NEW.session_key;
+    END;
+    CREATE TRIGGER IF NOT EXISTS session_nodes_entry_valid_after_entry_update
+    AFTER UPDATE OF entry_json ON session_nodes
+    BEGIN
+      UPDATE session_nodes SET entry_valid = 0 WHERE session_key = NEW.session_key;
+    END;
+    CREATE TRIGGER IF NOT EXISTS session_nodes_entry_valid_after_identity_update
+    AFTER UPDATE OF current_session_id, updated_at ON session_nodes
+    BEGIN
+      UPDATE session_nodes SET entry_valid = 0 WHERE session_key = NEW.session_key;
+    END;
+  `);
+  const selectPending = db.prepare(
+    "SELECT current_session_id, entry_json, session_key, updated_at FROM session_nodes WHERE entry_valid = 0 ORDER BY session_key LIMIT 256",
+  );
+  const update = db.prepare("UPDATE session_nodes SET entry_valid = ? WHERE session_key = ?");
+  while (true) {
+    // Exhaust the bounded SELECT before updating its source table; SQLite does not define
+    // stepping a cursor while the same connection mutates rows visible to that cursor.
+    const rows = selectPending.all() as Array<{
+      current_session_id: string;
+      entry_json: string;
+      session_key: string;
+      updated_at: number;
+    }>;
+    if (rows.length === 0) {
+      break;
+    }
+    for (const row of rows) {
+      update.run(parseSqliteSessionEntryRecord(row) ? 1 : -1, row.session_key);
+    }
+  }
 }
 
 export function migrateSessionEntryStatusProjection(

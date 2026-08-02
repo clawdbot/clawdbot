@@ -441,6 +441,21 @@ export async function resolveImplicitMantleProvider(params: {
   // adaptive thinking semantics.
   const claudeModels: ModelDefinitionConfig[] = [
     {
+      id: "anthropic.claude-opus-5",
+      name: "Claude Opus 5",
+      api: "anthropic-messages" as const,
+      reasoning: true,
+      params: { canonicalModelId: "claude-opus-5" },
+      input: ["text", "image"],
+      mediaInput: {
+        image: { maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
+      },
+      cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+      thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+    },
+    {
       id: "anthropic.claude-sonnet-5",
       name: "Claude Sonnet 5",
       api: "anthropic-messages" as const,

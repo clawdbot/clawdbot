@@ -227,7 +227,9 @@ describe("sendMessageSlack customize-scope fallback", () => {
     const client = createSlackSendTestClient();
     vi.mocked(client.chat.postMessage)
       .mockRejectedValueOnce(
-        buildMissingScopeError({ acceptedScopes: ["chat:write", "chat:write.customize"] }),
+        buildMissingScopeError({
+          acceptedScopes: [" chat:write ", "", " chat:write.customize "],
+        }),
       )
       .mockResolvedValueOnce({ ts: "171234.567" });
 
@@ -383,8 +385,8 @@ describe("sendMessageSlack customize-scope fallback", () => {
     vi.mocked(client.chat.postMessage).mockRejectedValueOnce(
       buildMissingScopeError({
         needed: "im:write",
-        scopes: ["chat:write", "users:read"],
-        acceptedScopes: ["im:write", "mpim:write"],
+        scopes: [" chat:write ", "", " users:read "],
+        acceptedScopes: [" im:write ", " mpim:write "],
       }),
     );
 

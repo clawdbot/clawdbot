@@ -175,6 +175,7 @@ export function isDirectScriptExecution(
  */
 export function ensurePlaywrightChromium(options = {}) {
   const env = options.env ?? process.env;
+  const requirePlaywrightChromium = options.requirePlaywrightChromium ?? false;
   const executableOverride =
     typeof env[executableOverrideEnvKey] === "string" ? env[executableOverrideEnvKey].trim() : "";
   const executablePath = options.executablePath ?? chromium.executablePath();
@@ -199,6 +200,10 @@ export function ensurePlaywrightChromium(options = {}) {
     return result.status ?? 1;
   };
   const useLinuxSystemChromiumPackage = () => {
+    if (requirePlaywrightChromium) {
+      log(`[ui-e2e] This lane requires Playwright-managed Chromium; refusing system fallback.`);
+      return 1;
+    }
     log(`[ui-e2e] Playwright install is unavailable; installing a system Chromium package.`);
     const installStatus = installLinuxSystemChromiumPackage({
       cwd: options.cwd,
@@ -234,7 +239,7 @@ export function ensurePlaywrightChromium(options = {}) {
     return status;
   };
 
-  if (executableOverride) {
+  if (!requirePlaywrightChromium && executableOverride) {
     if (existsSync(executableOverride) && canRunChromiumExecutable(executableOverride, spawnSync)) {
       return ensureFfmpeg();
     }
@@ -248,11 +253,13 @@ export function ensurePlaywrightChromium(options = {}) {
     return ensureFfmpeg();
   }
 
-  const systemExecutablePath =
-    options.systemExecutablePath ?? resolveSystemChromiumExecutablePath(existsSync, spawnSync);
-  if (systemExecutablePath && canRunChromiumExecutable(systemExecutablePath, spawnSync)) {
-    log(`[ui-e2e] Using system Chromium at ${systemExecutablePath}.`);
-    return ensureFfmpeg();
+  if (!requirePlaywrightChromium) {
+    const systemExecutablePath =
+      options.systemExecutablePath ?? resolveSystemChromiumExecutablePath(existsSync, spawnSync);
+    if (systemExecutablePath && canRunChromiumExecutable(systemExecutablePath, spawnSync)) {
+      log(`[ui-e2e] Using system Chromium at ${systemExecutablePath}.`);
+      return ensureFfmpeg();
+    }
   }
 
   if (env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1") {
@@ -315,8 +322,13 @@ export function shouldEnsureFfmpegFromArgv(argv = process.argv) {
   return !argv.includes("--skip-ffmpeg");
 }
 
+export function shouldRequirePlaywrightChromiumFromArgv(argv = process.argv) {
+  return argv.includes("--require-playwright-chromium");
+}
+
 if (isDirectScriptExecution()) {
   process.exitCode = ensurePlaywrightChromium({
     ensureFfmpeg: shouldEnsureFfmpegFromArgv(),
+    requirePlaywrightChromium: shouldRequirePlaywrightChromiumFromArgv(),
   });
 }

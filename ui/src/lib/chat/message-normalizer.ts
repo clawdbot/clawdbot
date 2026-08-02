@@ -3,6 +3,7 @@
  */
 
 import { mediaKindFromMime } from "@openclaw/media-core/constants";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
 import { extractCanvasShortcodes } from "../../../../src/chat/canvas-render.js";
 import {
@@ -146,6 +147,9 @@ function coerceCanvasPreview(
               ? { uiResourceUri: mcpApp.uiResourceUri }
               : {}),
             ...(typeof mcpApp.toolCallId === "string" ? { toolCallId: mcpApp.toolCallId } : {}),
+            ...(typeof mcpApp.originSessionKey === "string"
+              ? { originSessionKey: mcpApp.originSessionKey }
+              : {}),
           },
         }
       : {}),
@@ -214,12 +218,16 @@ function mimeTypeFromUrl(url: string): string | undefined {
 }
 
 function inferAttachmentKind(url: string): {
-  kind: "image" | "audio" | "video" | "document";
+  kind: Extract<MessageContentItem, { type: "attachment" }>["attachment"]["kind"];
   mimeType?: string;
   label: string;
 } {
   const mimeType = mimeTypeFromUrl(url);
-  const kind = mediaKindFromMime(mimeType) ?? "document";
+  const inferredKind = mediaKindFromMime(mimeType);
+  const kind =
+    !inferredKind || inferredKind === "sticker" || inferredKind === "unknown"
+      ? "document"
+      : inferredKind;
   const label = (() => {
     try {
       if (/^https?:\/\//i.test(url)) {
@@ -284,6 +292,52 @@ function coerceAudioContentBlock(
     };
   }
   return null;
+}
+
+function coerceManagedMediaContentBlock(
+  item: Record<string, unknown>,
+): Extract<MessageContentItem, { type: "attachment" }> | null {
+  if ((item.type !== "audio" && item.type !== "video") || typeof item.url !== "string") {
+    return null;
+  }
+  const url = item.url.trim();
+  if (!url) {
+    return null;
+  }
+  const kind = item.type;
+  const fallbackLabel = kind === "audio" ? "Audio" : "Video";
+  const label =
+    typeof item.fileName === "string" && item.fileName.trim()
+      ? item.fileName.trim()
+      : typeof item.label === "string" && item.label.trim()
+        ? item.label.trim()
+        : fallbackLabel;
+  return {
+    type: "attachment",
+    attachment: {
+      url,
+      kind,
+      label,
+      ...(typeof item.mimeType === "string" ? { mimeType: item.mimeType } : {}),
+      ...(typeof item.artifactId === "string" ? { artifactId: item.artifactId } : {}),
+      ...(kind === "audio" && item.isVoiceNote === true ? { isVoiceNote: true } : {}),
+      ...(item.playback === "native" || item.playback === "transcode"
+        ? { playback: item.playback }
+        : {}),
+      ...(typeof item.sizeBytes === "number" && item.sizeBytes >= 0
+        ? { sizeBytes: item.sizeBytes }
+        : {}),
+      ...(typeof item.durationMs === "number" && item.durationMs >= 0
+        ? { durationMs: item.durationMs }
+        : {}),
+      ...(kind === "video" && typeof item.width === "number" && item.width > 0
+        ? { width: item.width }
+        : {}),
+      ...(kind === "video" && typeof item.height === "number" && item.height > 0
+        ? { height: item.height }
+        : {}),
+    },
+  };
 }
 
 function mergeAdjacentTextItems(items: MessageContentItem[]): MessageContentItem[] {
@@ -358,7 +412,8 @@ function expandTextContent(text: string): {
       replyTarget = { kind: "current" };
     }
     if (directives.text) {
-      parts.push({ type: "text", text: directives.text });
+      const normalizedText = directives.text + (segment.text.endsWith("\n") ? "\n" : "");
+      parts.push({ type: "text", text: normalizedText });
     }
   }
   for (const preview of extracted.previews) {
@@ -406,13 +461,11 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
     typeof m.tool_use_id === "string";
 
   const contentRaw = m.content;
-  const contentItems = Array.isArray(contentRaw) ? contentRaw : null;
+  const contentItems = Array.isArray(contentRaw) ? contentRaw.filter(isRecord) : null;
   const hasToolContent =
-    Array.isArray(contentItems) &&
-    contentItems.some((item) => {
-      const x = item as Record<string, unknown>;
-      return isToolResultContentType(x.type) || isToolCallContentType(x.type);
-    });
+    contentItems?.some(
+      (item) => isToolResultContentType(item.type) || isToolCallContentType(item.type),
+    ) ?? false;
 
   const hasToolName = typeof m.toolName === "string" || typeof m.tool_name === "string";
 
@@ -435,9 +488,13 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
     } else {
       content = [{ type: "text", text: m.content }];
     }
-  } else if (Array.isArray(m.content)) {
-    content = m.content.flatMap((item: Record<string, unknown>) => {
+  } else if (contentItems) {
+    content = contentItems.flatMap((item) => {
       if (isAssistantMessage) {
+        const managedMediaAttachment = coerceManagedMediaContentBlock(item);
+        if (managedMediaAttachment) {
+          return [managedMediaAttachment];
+        }
         const audioAttachment = coerceAudioContentBlock(item);
         if (audioAttachment) {
           return [audioAttachment];
@@ -457,6 +514,12 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
           label?: unknown;
           mimeType?: unknown;
           isVoiceNote?: unknown;
+          artifactId?: unknown;
+          playback?: unknown;
+          sizeBytes?: unknown;
+          durationMs?: unknown;
+          width?: unknown;
+          height?: unknown;
         };
         if (
           typeof attachment.url !== "string" ||
@@ -477,6 +540,24 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
               label: attachment.label,
               ...(typeof attachment.mimeType === "string" ? { mimeType: attachment.mimeType } : {}),
               ...(attachment.isVoiceNote === true ? { isVoiceNote: true } : {}),
+              ...(typeof attachment.artifactId === "string"
+                ? { artifactId: attachment.artifactId }
+                : {}),
+              ...(attachment.playback === "native" || attachment.playback === "transcode"
+                ? { playback: attachment.playback }
+                : {}),
+              ...(typeof attachment.sizeBytes === "number" && attachment.sizeBytes >= 0
+                ? { sizeBytes: attachment.sizeBytes }
+                : {}),
+              ...(typeof attachment.durationMs === "number" && attachment.durationMs >= 0
+                ? { durationMs: attachment.durationMs }
+                : {}),
+              ...(typeof attachment.width === "number" && attachment.width > 0
+                ? { width: attachment.width }
+                : {}),
+              ...(typeof attachment.height === "number" && attachment.height > 0
+                ? { height: attachment.height }
+                : {}),
             },
           },
         ];

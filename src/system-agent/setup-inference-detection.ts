@@ -2,8 +2,10 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker, type WorkerOptions } from "node:worker_threads";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "../agents/workspace-default.js";
+import { detectAmbientInferenceBackends } from "../commands/onboard-inference-ambient.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { listRecommendedToolInstalls } from "../plugins/recommended-tool-installs.js";
+import { resolveSetupInferenceCandidateBrandId } from "./setup-inference-brand.js";
 import type { SetupInferenceDetection } from "./setup-inference.js";
 
 const SETUP_INFERENCE_DETECTION_TIMEOUT_MS = 10_000;
@@ -20,6 +22,7 @@ type DetectionWorkerOptions = {
   workerUrl?: URL;
   workerData?: WorkerOptions["workerData"];
   fallback?: () => Promise<SetupInferenceDetection>;
+  fallbackEnv?: NodeJS.ProcessEnv;
 };
 
 let inFlightDetection: Promise<SetupInferenceDetection> | undefined;
@@ -75,18 +78,40 @@ function parseDetectionWorkerMessage(value: unknown): DetectionWorkerMessage | u
   return undefined;
 }
 
-function createUndetectedFallback(): SetupInferenceDetection {
+function withAmbientCandidates(
+  detection: SetupInferenceDetection,
+  env: NodeJS.ProcessEnv,
+): SetupInferenceDetection {
+  const existing = new Set(
+    detection.candidates.map((candidate) => `${candidate.kind}\0${candidate.modelRef}`),
+  );
+  const ambient = detectAmbientInferenceBackends(env)
+    .filter((candidate) => !existing.has(`${candidate.kind}\0${candidate.modelRef}`))
+    .map((candidate) => {
+      const brandId = resolveSetupInferenceCandidateBrandId(candidate);
+      return Object.assign(candidate, brandId ? { brandId } : {}, { recommended: false as const });
+    });
+  if (ambient.length === 0) {
+    return detection;
+  }
+  return { ...detection, candidates: [...detection.candidates, ...ambient] };
+}
+
+function createUndetectedFallback(env: NodeJS.ProcessEnv = process.env): SetupInferenceDetection {
   // This fallback must stay independent of the detection/plugin graph. The worker
   // supplies richer partial data when that graph loads before the deadline.
-  return {
-    candidates: [],
-    unavailableCandidates: [],
-    manualProviders: [],
-    authOptions: [],
-    recommendedInstalls: listRecommendedToolInstalls(),
-    workspace: DEFAULT_AGENT_WORKSPACE_DIR,
-    setupComplete: false,
-  };
+  return withAmbientCandidates(
+    {
+      candidates: [],
+      unavailableCandidates: [],
+      manualProviders: [],
+      authOptions: [],
+      recommendedInstalls: listRecommendedToolInstalls(),
+      workspace: DEFAULT_AGENT_WORKSPACE_DIR,
+      setupComplete: false,
+    },
+    env,
+  );
 }
 
 async function runDetectionWorker(
@@ -155,7 +180,11 @@ async function runDetectionWorker(
           void options.fallback().then(resolve, reject);
           return;
         }
-        const detection = partialDetection ?? createUndetectedFallback();
+        const env = options.fallbackEnv ?? process.env;
+        const detection = withAmbientCandidates(
+          partialDetection ?? createUndetectedFallback(env),
+          env,
+        );
         workerShutdownResult = detection;
         resolve(detection);
       });

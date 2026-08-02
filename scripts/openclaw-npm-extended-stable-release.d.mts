@@ -8,7 +8,7 @@ export function validateNpmPublishBoundary(
   }?: {
     bypassExtendedStableGuard?: boolean | undefined;
   },
-): import("./lib/npm-publish-plan.mjs").ParsedReleaseVersion;
+): import("./lib/release-version.mjs").ParsedReleaseVersion;
 export function validateExtendedStableNpmReleaseRequest(request: unknown):
   | {
       extendedStable: boolean;

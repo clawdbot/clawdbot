@@ -40,10 +40,7 @@ describe("resolveCurrentTurnImages", () => {
       const result = await resolveCurrentTurnImages({
         ctx: {
           Body: "caption",
-          MediaPath: relativePath,
-          MediaPaths: [relativePath],
-          MediaType: "image/jpeg",
-          MediaTypes: ["image/jpeg"],
+          media: [{ path: relativePath, contentType: "image/jpeg" }],
         } satisfies MsgContext,
         cfg: {} as OpenClawConfig,
       });
@@ -61,6 +58,31 @@ describe("resolveCurrentTurnImages", () => {
     });
   });
 
+  it("hydrates AVIF attachments when transport metadata only declares generic bytes", async () => {
+    await withTempDir({ prefix: "openclaw-current-turn-avif-" }, async (base) => {
+      const imagePath = path.join(base, "photo.avif");
+      const imageBytes = Buffer.from("avif-image");
+      await fs.writeFile(imagePath, imageBytes);
+
+      const result = await resolveCurrentTurnImages({
+        ctx: {
+          Body: "caption",
+          media: [{ path: imagePath, contentType: "application/octet-stream", workspaceDir: base }],
+        } satisfies MsgContext,
+        cfg: {} as OpenClawConfig,
+      });
+
+      expect(result.images).toEqual([
+        {
+          type: "image",
+          data: imageBytes.toString("base64"),
+          mimeType: "image/avif",
+        },
+      ]);
+      expect(result.imageOrder).toEqual(["inline"]);
+    });
+  });
+
   it("does not duplicate a prepared host-staged image during runner hydration", async () => {
     await withTempDir({ prefix: "openclaw-current-turn-staged-image-" }, async (base) => {
       const stagingRoot = path.join(base, "media", "inbound", "staged");
@@ -70,14 +92,14 @@ describe("resolveCurrentTurnImages", () => {
       await fs.writeFile(imagePath, imageBytes);
       const sharedContext = {
         Body: "caption",
-        MediaPath: imagePath,
-        MediaPaths: [imagePath],
-        MediaType: "image/png",
-        MediaTypes: ["image/png"],
+        media: [{ path: imagePath, contentType: "image/png" }],
       } satisfies MsgContext;
 
       const prepared = await resolveCurrentTurnImages({
-        ctx: { ...sharedContext, MediaWorkspaceDir: stagingRoot },
+        ctx: {
+          ...sharedContext,
+          media: [{ path: imagePath, contentType: "image/png", workspaceDir: stagingRoot }],
+        },
         cfg: {} as OpenClawConfig,
       });
       const runner = await resolveCurrentTurnImages({
@@ -103,11 +125,7 @@ describe("resolveCurrentTurnImages", () => {
       const result = await resolveCurrentTurnImages({
         ctx: {
           Body: "caption",
-          MediaPath: rejectedPath,
-          MediaPaths: [rejectedPath],
-          MediaType: "image/png",
-          MediaTypes: ["image/png"],
-          MediaWorkspaceDir: stagingRoot,
+          media: [{ path: rejectedPath, contentType: "image/png", workspaceDir: stagingRoot }],
         } satisfies MsgContext,
         cfg: {} as OpenClawConfig,
       });
@@ -185,9 +203,14 @@ describe("resolveCurrentTurnImages", () => {
       const result = await resolveCurrentTurnImages({
         ctx: {
           Body: "caption",
-          MediaPaths: [imagePath, path.join(base, "scan.pdf")],
-          MediaTypes: ["image/png", "application/pdf"],
-          MediaWorkspaceDir: base,
+          media: [
+            { path: imagePath, contentType: "image/png", workspaceDir: base },
+            {
+              path: path.join(base, "scan.pdf"),
+              contentType: "application/pdf",
+              workspaceDir: base,
+            },
+          ],
         } satisfies MsgContext,
         cfg: {} as OpenClawConfig,
         extractedFileImages: [pdfPage],
@@ -223,9 +246,14 @@ describe("resolveCurrentTurnImages", () => {
       const result = await resolveCurrentTurnImages({
         ctx: {
           Body: "caption",
-          MediaPaths: [path.join(base, "scan.pdf"), imagePath],
-          MediaTypes: ["application/pdf", "image/png"],
-          MediaWorkspaceDir: base,
+          media: [
+            {
+              path: path.join(base, "scan.pdf"),
+              contentType: "application/pdf",
+              workspaceDir: base,
+            },
+            { path: imagePath, contentType: "image/png", workspaceDir: base },
+          ],
         } satisfies MsgContext,
         cfg: {} as OpenClawConfig,
         extractedFileImages: [pdfPage],

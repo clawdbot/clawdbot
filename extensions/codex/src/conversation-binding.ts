@@ -1,5 +1,6 @@
 // Codex plugin module implements conversation binding behavior.
 import {
+  embeddedAgentLog,
   formatErrorMessage,
   resolveSandboxContext,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -14,8 +15,15 @@ import type {
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveCodexAppServerForModelProvider } from "./app-server/app-server-policy.js";
+import {
+  CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
+  closeCodexStartupClientBestEffort,
+  interruptCodexTurnAndWaitBestEffort,
+  unsubscribeCodexThreadBestEffort,
+} from "./app-server/attempt-client-cleanup.js";
 import { resolveCodexAppServerAuthProfileIdForAgent } from "./app-server/auth-bridge.js";
 import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
+import type { CodexAppServerClient } from "./app-server/client.js";
 import {
   canUseCodexModelBackedApprovalsReviewerForModel,
   codexSandboxPolicyForTurn,
@@ -32,7 +40,6 @@ import type {
   CodexThreadStartResponse,
   CodexTurnStartResponse,
   JsonObject,
-  JsonValue,
 } from "./app-server/protocol.js";
 import {
   resolveCodexNativeExecutionBlock,
@@ -59,6 +66,10 @@ import {
   resolveCodexAppServerRequestModelSelection,
 } from "./app-server/thread-lifecycle.js";
 import { resumeCodexAppServerThread } from "./app-server/thread-resume.js";
+import {
+  getCodexAppServerTurnRouter,
+  type CodexThreadRouteReservation,
+} from "./app-server/turn-router.js";
 import { canMutateCodexHost, CODEX_NATIVE_EXECUTION_AUTH_ERROR } from "./command-authorization.js";
 import { formatCodexDisplayText } from "./command-formatters.js";
 import {
@@ -69,8 +80,12 @@ import {
   type CodexAppServerConversationBindingData,
 } from "./conversation-binding-data.js";
 import { trackCodexConversationActiveTurn } from "./conversation-control.js";
-import { createCodexConversationTurnCollector } from "./conversation-turn-collector.js";
+import {
+  CodexConversationTurnTimeoutError,
+  createCodexConversationTurnCollector,
+} from "./conversation-turn-collector.js";
 import { buildCodexConversationTurnInput } from "./conversation-turn-input.js";
+import { isIncognitoSessionKey } from "./incognito-session.js";
 import { resumeCodexCliSessionOnNode } from "./node-cli-sessions.js";
 
 const DEFAULT_BOUND_TURN_TIMEOUT_MS = 20 * 60_000;
@@ -513,6 +528,7 @@ async function requestNewConversationBindingThread(
           ...buildThreadRequestRuntimeOptions(params, resolved),
           developerInstructions: CODEX_CONVERSATION_THREAD_DEVELOPER_INSTRUCTIONS,
           experimentalRawEvents: true,
+          ...(isIncognitoSessionKey(params.sessionKey) ? { ephemeral: true } : {}),
         },
         requestOptions,
       ),
@@ -703,8 +719,10 @@ async function runBoundTurn(params: {
   } satisfies CodexAppServerClientOptions;
   let client = await getLeasedSharedCodexAppServerClient(clientOptions);
   const clientLease: CodexAppServerClientLease = { client };
-  let notificationCleanup: () => void = () => undefined;
-  let requestCleanup: () => void = () => undefined;
+  let activeTurnId: string | undefined;
+  let activeTurnCleanup: () => void = () => undefined;
+  let retiredUnsafeClient: CodexAppServerClient | undefined;
+  let turnRoute: CodexThreadRouteReservation | undefined;
   try {
     if (networkProxyBindingChanged) {
       const response = assertCodexThreadStartResponse(
@@ -729,6 +747,7 @@ async function runBoundTurn(params: {
                 ...(serviceTier ? { serviceTier } : {}),
                 developerInstructions: CODEX_CONVERSATION_THREAD_DEVELOPER_INSTRUCTIONS,
                 experimentalRawEvents: true,
+                ...(isIncognitoSessionKey(params.sessionKey) ? { ephemeral: true } : {}),
               },
               requestOptions,
             ),
@@ -774,7 +793,10 @@ async function runBoundTurn(params: {
           await resumeCodexAppServerThread({
             client: requestClient,
             abandonClient: async () => {
-              await requestClient.closeAndWait();
+              // A retired connection may still serve sibling leases; remember
+              // its identity so incognito cleanup never retires it a second time.
+              retiredUnsafeClient = requestClient;
+              await closeCodexStartupClientBestEffort(requestClient);
             },
             request: {
               threadId,
@@ -814,44 +836,14 @@ async function runBoundTurn(params: {
         throw new Error("Codex conversation binding changed while resuming on a new client.");
       }
     }
-    const collector = createCodexConversationTurnCollector(threadId);
-    notificationCleanup = client.addNotificationHandler((notification) =>
-      collector.handleNotification(notification),
-    );
-    requestCleanup = client.addRequestHandler(async (request): Promise<JsonValue | undefined> => {
-      if (request.method === "item/tool/call") {
-        return {
-          contentItems: [
-            {
-              type: "inputText",
-              text: "OpenClaw native Codex conversation binding does not expose dynamic OpenClaw tools yet.",
-            },
-          ],
-          success: false,
-        };
-      }
-      if (
-        request.method === "item/commandExecution/requestApproval" ||
-        request.method === "item/fileChange/requestApproval"
-      ) {
-        return {
-          decision: "decline",
-          reason:
-            "OpenClaw native Codex conversation binding cannot route interactive approvals yet; use the Codex harness or explicit /acp spawn codex for that workflow.",
-        };
-      }
-      if (request.method === "item/permissions/requestApproval") {
-        return { permissions: {}, scope: "turn" };
-      }
-      if (request.method.includes("requestApproval")) {
-        return {
-          decision: "decline",
-          reason:
-            "OpenClaw native Codex conversation binding cannot route interactive approvals yet; use the Codex harness or explicit /acp spawn codex for that workflow.",
-        };
-      }
-      return undefined;
+    const turnCollector = createCodexConversationTurnCollector(threadId);
+    turnRoute = getCodexAppServerTurnRouter(client).reserveThread({
+      threadId,
+      onNotification: turnCollector.handleNotification,
     });
+    // The client denies unclaimed approvals and dynamic tools. Its keyed router owns
+    // pre-bind buffering so this conversation cannot claim sibling turn requests.
+    turnRoute.armTurn();
     const response: CodexTurnStartResponse = await client.request(
       "turn/start",
       {
@@ -872,29 +864,75 @@ async function runBoundTurn(params: {
       },
       { timeoutMs: runtime.requestTimeoutMs },
     );
-    const turnId = response.turn.id;
-    const activeCleanup = trackCodexConversationActiveTurn({
+    activeTurnId = response.turn.id;
+    activeTurnCleanup = trackCodexConversationActiveTurn({
       identity,
       client,
       threadId,
-      turnId,
+      turnId: activeTurnId,
     });
-    collector.setTurnId(turnId);
-    const completion = await collector
-      .wait({
-        timeoutMs: params.timeoutMs ?? DEFAULT_BOUND_TURN_TIMEOUT_MS,
-      })
-      .finally(activeCleanup);
+    turnCollector.setTurnId(activeTurnId);
+    await turnRoute.bindTurn(activeTurnId);
+    const completion = await turnCollector.wait({
+      timeoutMs: params.timeoutMs ?? DEFAULT_BOUND_TURN_TIMEOUT_MS,
+    });
     const replyText = completion.replyText.trim();
     return {
       reply: {
         text: replyText || "Codex completed without a text reply.",
       },
     };
+  } catch (error) {
+    const timedOut = error instanceof CodexConversationTurnTimeoutError;
+    if (timedOut && activeTurnId) {
+      // Keep the exact turn, notification handlers, and lease alive until
+      // Codex confirms the terminal notification; otherwise inference survives.
+      const completed = await interruptCodexTurnAndWaitBestEffort(client, {
+        threadId,
+        turnId: activeTurnId,
+      });
+      if (!completed) {
+        // Retirement detaches the physical client while sibling leases finish;
+        // never send another cleanup request or retire that detached client twice.
+        retiredUnsafeClient = client;
+        await retireUnsafeCodexConversationClientBestEffort(client, "turn interrupt");
+      }
+    }
+    if (isIncognitoSessionKey(params.sessionKey)) {
+      const bindingReleased = await params.bindingStore.mutate(identity, {
+        kind: "clear",
+        threadId,
+      });
+      if (bindingReleased && retiredUnsafeClient !== client) {
+        const unsubscribed = await unsubscribeCodexThreadBestEffort(client, {
+          threadId,
+          timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
+        });
+        if (!unsubscribed) {
+          await retireUnsafeCodexConversationClientBestEffort(client, "thread unsubscribe");
+        }
+      }
+    }
+    throw error;
   } finally {
-    notificationCleanup();
-    requestCleanup();
+    activeTurnCleanup();
+    turnRoute?.release();
     releaseCodexAppServerClientLease(clientLease);
+  }
+}
+
+async function retireUnsafeCodexConversationClientBestEffort(
+  client: CodexAppServerClient,
+  operation: "turn interrupt" | "thread unsubscribe",
+): Promise<void> {
+  try {
+    await closeCodexStartupClientBestEffort(client);
+  } catch (error) {
+    // Cleanup must not replace the original turn or timeout failure.
+    embeddedAgentLog.debug("codex conversation client retirement failed during cleanup", {
+      operation,
+      error,
+    });
   }
 }
 

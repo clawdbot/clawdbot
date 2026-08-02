@@ -1255,14 +1255,21 @@ async function resolveDriveCommentEventCore(params: ResolveDriveCommentEventPara
     logger?.(`feishu[${accountId}]: unsupported drive comment notice type ${noticeType}`);
     return null;
   }
-  if (!botOpenId) {
+  const configuredBotOpenId = botOpenId?.trim();
+  const eventRecipientBotOpenId = event.notice_meta?.to_user_id?.open_id?.trim();
+  // Mentioned comment notices identify their recipient even when the startup
+  // identity probe is unavailable. Keep this fallback event-local so an
+  // unverified envelope can never seed process or persisted bot identity.
+  const effectiveBotOpenId =
+    configuredBotOpenId || (event.is_mentioned === true ? eventRecipientBotOpenId : undefined);
+  if (!effectiveBotOpenId) {
     logger?.(
       `feishu[${accountId}]: skipping drive comment notice because bot open_id is unavailable ` +
         `event=${eventId}`,
     );
     return null;
   }
-  if (senderId === botOpenId) {
+  if (senderId === effectiveBotOpenId) {
     logger?.(
       `feishu[${accountId}]: ignoring self-authored drive comment notice event=${eventId} sender=${senderId}`,
     );
@@ -1280,7 +1287,7 @@ async function resolveDriveCommentEventCore(params: ResolveDriveCommentEventPara
     fileType,
     commentId,
     replyId,
-    botOpenIds: [botOpenId, event.notice_meta?.to_user_id?.open_id],
+    botOpenIds: [effectiveBotOpenId, event.notice_meta?.to_user_id?.open_id],
     timeoutMs: verificationTimeoutMs,
     logger,
     accountId,

@@ -1,6 +1,6 @@
-import type { detectOpenAICompletionsCompat } from "./openai-completions-compat.js";
+import type { detectOpenAICompletionsCompat } from "@openclaw/ai/transports";
 import type { ProviderEndpointClass } from "./provider-attribution.js";
-import "./openai-completions-compat.js";
+import "@openclaw/ai/transports";
 
 type OpenAICompletionsCompatDefaultsInput = {
   provider?: string;

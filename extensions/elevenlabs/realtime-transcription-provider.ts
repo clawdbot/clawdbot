@@ -247,6 +247,16 @@ function createElevenLabsRealtimeTranscriptionSession(
   });
 }
 
+function resolveElevenLabsRealtimeApiKey(
+  config: ElevenLabsRealtimeTranscriptionProviderConfig,
+): string | null | undefined {
+  return (
+    config.apiKey ??
+    resolveElevenLabsApiKeyWithProfileFallback() ??
+    normalizeOptionalString(process.env.XI_API_KEY)
+  );
+}
+
 export function buildElevenLabsRealtimeTranscriptionProvider(): RealtimeTranscriptionProviderPlugin {
   return {
     id: "elevenlabs",
@@ -256,15 +266,10 @@ export function buildElevenLabsRealtimeTranscriptionProvider(): RealtimeTranscri
     autoSelectOrder: 40,
     resolveConfig: ({ rawConfig }) => normalizeProviderConfig(rawConfig),
     isConfigured: ({ providerConfig }) =>
-      Boolean(
-        normalizeProviderConfig(providerConfig).apiKey ||
-        resolveElevenLabsApiKeyWithProfileFallback() ||
-        process.env.XI_API_KEY,
-      ),
+      Boolean(resolveElevenLabsRealtimeApiKey(normalizeProviderConfig(providerConfig))),
     createSession: (req) => {
       const config = normalizeProviderConfig(req.providerConfig);
-      const apiKey =
-        config.apiKey || resolveElevenLabsApiKeyWithProfileFallback() || process.env.XI_API_KEY;
+      const apiKey = resolveElevenLabsRealtimeApiKey(config);
       if (!apiKey) {
         throw new Error("ElevenLabs API key missing");
       }

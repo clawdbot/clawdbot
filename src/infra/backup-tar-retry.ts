@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import { sleep } from "../utils/sleep.js";
 
 const BACKUP_TAR_MAX_ATTEMPTS = 3;
@@ -24,52 +23,25 @@ function resolveBackupTarAttemptTempPath(tempArchivePath: string, attempt: numbe
   return attempt === 1 ? tempArchivePath : `${tempArchivePath}.retry-${attempt}`;
 }
 
-export function resolveBackupTarAttemptTempPaths(tempArchivePath: string): string[] {
-  return Array.from({ length: BACKUP_TAR_MAX_ATTEMPTS }, (_value, index) =>
-    resolveBackupTarAttemptTempPath(tempArchivePath, index + 1),
-  );
-}
-
-export async function removeBackupTempArchiveBestEffort(tempArchivePath: string): Promise<void> {
-  await fs.rm(tempArchivePath, { force: true }).catch(() => undefined);
-}
-
-export async function writeTarArchiveWithRetry(params: {
+export async function writeTarArchiveWithRetry<T>(params: {
   tempArchivePath: string;
-  runTar: (tempArchivePath: string) => Promise<void>;
+  runTar: (tempArchivePath: string) => Promise<T>;
   log?: BackupTarRetryLogger;
   sleepMs?: (ms: number) => Promise<void>;
-}): Promise<string> {
+}): Promise<T> {
   const sleepFn = params.sleepMs ?? sleep;
   let lastErr: unknown;
-  const attemptTempArchivePaths: string[] = [];
   for (let attempt = 1; attempt <= BACKUP_TAR_MAX_ATTEMPTS; attempt += 1) {
     const attemptTempArchivePath = resolveBackupTarAttemptTempPath(params.tempArchivePath, attempt);
-    attemptTempArchivePaths.push(attemptTempArchivePath);
     try {
-      await params.runTar(attemptTempArchivePath);
-      for (const staleTempArchivePath of attemptTempArchivePaths.slice(0, -1)) {
-        await removeBackupTempArchiveBestEffort(staleTempArchivePath);
-      }
-      return attemptTempArchivePath;
+      return await params.runTar(attemptTempArchivePath);
     } catch (err) {
       lastErr = err;
       if (!isTarEofRaceError(err) || attempt === BACKUP_TAR_MAX_ATTEMPTS) {
-        for (const staleTempArchivePath of attemptTempArchivePaths) {
-          await removeBackupTempArchiveBestEffort(staleTempArchivePath);
-        }
         break;
       }
-      try {
-        await fs.rm(attemptTempArchivePath, { force: true });
-      } catch (cleanupErr) {
-        const code = (cleanupErr as NodeJS.ErrnoException).code;
-        if (code && code !== "ENOENT") {
-          params.log?.(
-            `Backup archiver could not remove temp archive ${attemptTempArchivePath} between retries: ${code}. Continuing.`,
-          );
-        }
-      }
+      // The writer owns checked cleanup inside the private staging directory.
+      // A fresh path keeps retries independent when a changed entry is preserved.
       const backoff = BACKUP_TAR_BACKOFF_MS[attempt - 1] ?? 0;
       const offendingPath = (err as NodeJS.ErrnoException).path;
       params.log?.(

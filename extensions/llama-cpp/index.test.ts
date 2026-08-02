@@ -9,9 +9,12 @@ import {
 import {
   clearEmbeddingProviders,
   clearMemoryEmbeddingProviders,
+  createEmptyPluginRegistry,
+  getActivePluginRegistry,
   getRegisteredEmbeddingProvider,
+  setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const memoryHostEmbeddingMocks = vi.hoisted(() => ({
   createLocalEmbeddingProvider: vi.fn(),
@@ -32,6 +35,11 @@ type MemoryCreateTestOptions = AdapterCreateOptions & {
   fallback?: "none";
   outputDimensionality?: number;
 };
+let previousPluginRegistry: ReturnType<typeof getActivePluginRegistry>;
+
+beforeEach(() => {
+  previousPluginRegistry = getActivePluginRegistry();
+});
 
 async function createLlamaCppMemoryEmbeddingProvider(options: MemoryCreateTestOptions) {
   const { fallback: _fallback, outputDimensionality, ...adapterOptions } = options;
@@ -44,6 +52,7 @@ async function createLlamaCppMemoryEmbeddingProvider(options: MemoryCreateTestOp
 afterEach(() => {
   clearEmbeddingProviders();
   clearMemoryEmbeddingProviders();
+  setActivePluginRegistry(previousPluginRegistry ?? createEmptyPluginRegistry());
   memoryHostEmbeddingMocks.createLocalEmbeddingProvider.mockReset();
 });
 
@@ -68,6 +77,8 @@ describe("llama.cpp provider plugin", () => {
         id: "llama-cpp",
         label: "Local model (llama.cpp)",
         createStreamFn: expect.any(Function),
+        normalizeToolSchemas: expect.any(Function),
+        inspectToolSchemas: expect.any(Function),
         auth: [expect.objectContaining({ id: "local" })],
       }),
     );
@@ -86,6 +97,7 @@ describe("llama.cpp provider plugin", () => {
       },
       register: llamaCppPlugin.register,
     });
+    setActivePluginRegistry(registry.registry);
 
     const provider = getRegisteredEmbeddingProvider("local");
     expect(provider?.ownerPluginId).toBe("llama-cpp");

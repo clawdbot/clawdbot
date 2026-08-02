@@ -108,6 +108,22 @@ describe("sandbox ssh helpers", () => {
     );
   });
 
+  it.each([
+    ["identityFile", "IdentityFile"] as const,
+    ["certificateFile", "CertificateFile"] as const,
+    ["knownHostsFile", "UserKnownHostsFile"] as const,
+  ])("rejects %s values that would break ssh config directives", async (field, directive) => {
+    await expect(
+      createSshSandboxSessionFromSettings({
+        command: "ssh",
+        target: "peter@example.com:2222",
+        strictHostKeyChecking: true,
+        updateHostKeys: false,
+        [field]: `/tmp/key\n  ${directive} /tmp/injected`,
+      }),
+    ).rejects.toThrow(`SSH sandbox ${field} must not contain line breaks.`);
+  });
+
   it("wraps remote exec commands with env and workdir", () => {
     const command = buildExecRemoteCommand({
       command: "pwd && printenv TOKEN",

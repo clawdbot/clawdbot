@@ -3,6 +3,7 @@ import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
 import { SESSION_ROUTING_CHANGED_ERROR_REASON } from "../../config/sessions/main-session.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
+import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
 import { chatAbortMarkerTimestampMs } from "../server-chat-state.js";
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX } from "../server-shared.js";
 import { loadSessionEntry } from "../session-utils.js";
@@ -21,12 +22,24 @@ import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
+export const ACTIVE_LEAF_CHANGED_ERROR_REASON = "active-leaf-changed";
+
 export function respondChatSessionRoutingChanged(respond: GatewayRequestHandlerOptions["respond"]) {
   respond(
     false,
     undefined,
     errorShape(ErrorCodes.INVALID_REQUEST, "session routing changed; review and retry", {
       details: { reason: SESSION_ROUTING_CHANGED_ERROR_REASON },
+    }),
+  );
+}
+
+export function respondChatActiveLeafChanged(respond: GatewayRequestHandlerOptions["respond"]) {
+  respond(
+    false,
+    undefined,
+    errorShape(ErrorCodes.INVALID_REQUEST, "active branch changed; review and resend", {
+      details: { reason: ACTIVE_LEAF_CHANGED_ERROR_REASON },
     }),
   );
 }
@@ -46,6 +59,7 @@ export async function runChatSendPreAdmission(params: {
     entry,
     sessionKey,
     rawSessionKey,
+    sessionLoadKey,
     selectedAgent,
     clientRunId,
     pendingChatSendKey,
@@ -59,7 +73,7 @@ export async function runChatSendPreAdmission(params: {
     cfg,
     entry,
     sessionKey,
-    channel: entry?.channel,
+    channel: sessionDeliveryChannel(entry),
     chatType: entry?.chatType,
   });
   if (sendPolicy === "deny") {
@@ -106,7 +120,7 @@ export async function runChatSendPreAdmission(params: {
     return false;
   }
 
-  const abortMarker = context.chatAbortedRuns.get(clientRunId);
+  const abortMarker = context.chatRunState.runs.get(clientRunId)?.abortMarker;
   if (abortMarker !== undefined) {
     const abortedAt = chatAbortMarkerTimestampMs(abortMarker);
     const payload = buildAbortedChatSendPayload({ runId: clientRunId, endedAt: abortedAt });
@@ -146,7 +160,7 @@ export async function runChatSendPreAdmission(params: {
     clientRunId,
     entry,
     persistedSessionKey: legacyKey ?? sessionKey,
-    reloadEntry: () => loadSessionEntry(rawSessionKey, sessionLoadOptions).entry,
+    reloadEntry: () => loadSessionEntry(sessionLoadKey, sessionLoadOptions).entry,
     storePath,
     recoveryRuntime: context.recoveryRuntime,
     warn: (message) =>

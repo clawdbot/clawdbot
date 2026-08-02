@@ -68,6 +68,36 @@ class AndroidScreenshotFixtureTest {
   }
 
   @Test
+  fun providesSwarmChildRosterForSwarmScene() {
+    AndroidScreenshotFixture.configure(AndroidScreenshotScene.Swarm)
+    try {
+      val params = "{\"spawnedBy\":\"${AndroidScreenshotFixture.mainSessionKey}\"}"
+      val sessions =
+        json
+          .parseToJsonElement(AndroidScreenshotFixture.request("sessions.list", params))
+          .jsonObject["sessions"]
+          ?.jsonArray
+          .orEmpty()
+      val metadata =
+        json
+          .parseToJsonElement(AndroidScreenshotFixture.request("chat.metadata", null))
+          .jsonObject
+      assertEquals("true", metadata["swarmEnabled"]?.jsonPrimitive?.content)
+      assertEquals(5, sessions.size)
+      assertEquals(
+        "swarm:${AndroidScreenshotFixture.mainSessionKey}:research",
+        sessions
+          .first()
+          .jsonObject["swarmGroupId"]
+          ?.jsonPrimitive
+          ?.content,
+      )
+    } finally {
+      AndroidScreenshotFixture.configure(AndroidScreenshotScene.Home)
+    }
+  }
+
+  @Test
   fun providesDeterministicChatHistory() {
     val messages =
       json
@@ -108,6 +138,40 @@ class AndroidScreenshotFixtureTest {
           fields["timestamp"]?.jsonPrimitive?.content,
         )
       },
+    )
+  }
+
+  @Test
+  fun providesDeterministicSystemAgentConversation() {
+    val greeting =
+      json
+        .parseToJsonElement(
+          AndroidScreenshotFixture.request(
+            "openclaw.chat",
+            """{"sessionId":"android-settings-openclaw-test"}""",
+          ),
+        ).jsonObject
+    val response =
+      json
+        .parseToJsonElement(
+          AndroidScreenshotFixture.request(
+            "openclaw.chat",
+            """{"sessionId":"android-settings-openclaw-test","message":"Check status"}""",
+          ),
+        ).jsonObject
+
+    assertEquals("android-screenshot-openclaw", greeting["sessionId"]?.jsonPrimitive?.content)
+    assertEquals(
+      "What should we look at first?",
+      greeting["question"]
+        ?.jsonObject
+        ?.get("question")
+        ?.jsonPrimitive
+        ?.content,
+    )
+    assertEquals(
+      "I’ll keep this conversation separate from ordinary agent chat.",
+      response["reply"]?.jsonPrimitive?.content,
     )
   }
 

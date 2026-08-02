@@ -2,8 +2,8 @@ import {
   embeddedAgentLog,
   formatErrorMessage,
   type EmbeddedRunAttemptParams,
-  type EmbeddedRunAttemptResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import { CodexAppServerRpcError } from "./client.js";
 import { isJsonObject, type CodexServerNotification } from "./protocol.js";
 import type {

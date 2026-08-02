@@ -1,5 +1,7 @@
+import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 // Mattermost tests cover send plugin behavior.
 import { expectProvidedCfgSkipsRuntimeLoad } from "openclaw/plugin-sdk/channel-test-helpers";
+import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 let sendMessageMattermost: typeof import("./send.js").sendMessageMattermost;
@@ -10,6 +12,13 @@ type SendMessageMattermostOptions = NonNullable<
 >;
 
 const TEST_CFG = {};
+const MATTERMOST_TABLE_GOLDEN = {
+  name: "keeps native Mattermost tables instead of downgrading them to code",
+  input: "| A | B |\n|---|---|\n| 1 | 2 |",
+  before: "```\n| A | B |\n| --- | --- |\n| 1 | 2 |\n```",
+  after: "| A | B |\n|---|---|\n| 1 | 2 |",
+};
+const MATTERMOST_MARKDOWN_GOLDENS = [MATTERMOST_TABLE_GOLDEN];
 
 const mockState = vi.hoisted(() => ({
   loadConfig: vi.fn(() => ({})),
@@ -30,6 +39,10 @@ const mockState = vi.hoisted(() => ({
   fetchMattermostUserTeams: vi.fn(),
   fetchMattermostUserByUsername: vi.fn(),
   normalizeMattermostBaseUrl: vi.fn((input: string | undefined) => input?.trim() ?? ""),
+  resolveMarkdownTableMode: vi.fn(
+    (params: { cfg?: { channels?: { mattermost?: { markdown?: { tables?: string } } } } }) =>
+      params.cfg?.channels?.mattermost?.markdown?.tables ?? "off",
+  ),
   uploadMattermostFile: vi.fn(),
 }));
 
@@ -112,11 +125,10 @@ vi.mock("openclaw/plugin-sdk/plugin-config-runtime", () => ({
     }
     throw new Error("Mattermost send requires a resolved runtime config");
   },
-  resolveMarkdownTableMode: vi.fn(() => "off"),
 }));
 
-vi.mock("openclaw/plugin-sdk/text-chunking", () => ({
-  convertMarkdownTables: vi.fn((text: string) => text),
+vi.mock("openclaw/plugin-sdk/markdown-table-runtime", () => ({
+  resolveMarkdownTableMode: mockState.resolveMarkdownTableMode,
 }));
 
 vi.mock("openclaw/plugin-sdk/string-coerce-runtime", () => ({
@@ -206,6 +218,7 @@ describe("sendMessageMattermost", () => {
     mockState.fetchMattermostUser.mockReset();
     mockState.fetchMattermostUserTeams.mockReset();
     mockState.fetchMattermostUserByUsername.mockReset();
+    mockState.resolveMarkdownTableMode.mockClear();
     mockState.uploadMattermostFile.mockReset();
     mockState.createMattermostClient.mockReturnValue({});
     mockState.createMattermostPost.mockResolvedValue({ id: "post-1" });
@@ -250,6 +263,25 @@ describe("sendMessageMattermost", () => {
     });
   });
 
+  it.each(MATTERMOST_MARKDOWN_GOLDENS)("$name", async ({ input, before, after }) => {
+    expect(convertMarkdownTables(input, "code")).toBe(before);
+
+    await sendMessageMattermost("channel:town-square", input, { cfg: TEST_CFG });
+
+    expect(createMattermostPostParams().message).toBe(after);
+  });
+
+  it.each(["code", "block"] as const)(
+    "respects the explicit Mattermost %s table fallback mode",
+    async (tables) => {
+      await sendMessageMattermost("channel:town-square", MATTERMOST_TABLE_GOLDEN.input, {
+        cfg: { channels: { mattermost: { markdown: { tables } } } },
+      });
+
+      expect(createMattermostPostParams().message).toBe(MATTERMOST_TABLE_GOLDEN.before);
+    },
+  );
+
   it("fails hard when cfg is omitted", async () => {
     await expect(
       sendMessageMattermost("channel:town-square", "hello", undefined as never),
@@ -288,7 +320,84 @@ describe("sendMessageMattermost", () => {
     expect(result.receipt.parts).toHaveLength(1);
     expect(result.receipt.parts[0]?.platformMessageId).toBe("post-1");
     expect(result.receipt.parts[0]?.kind).toBe("text");
+    expect(result.content).toBe("hello");
     expect(mockState.loadConfig).not.toHaveBeenCalled();
+  });
+
+  it("preserves the provider post when outbound bookkeeping fails afterward", async () => {
+    const events: string[] = [];
+    const onDeliveryResult = vi.fn(() => {
+      events.push("delivery");
+    });
+    mockState.createMattermostPost.mockResolvedValueOnce({
+      id: "post-final",
+      message: "provider-final",
+    });
+    mockState.recordActivity.mockImplementationOnce(() => {
+      events.push("activity");
+      throw new Error("activity store unavailable");
+    });
+
+    let caught: unknown;
+    try {
+      await sendMessageMattermost("channel:town-square", "requested text", {
+        cfg: TEST_CFG,
+        onDeliveryResult,
+      });
+    } catch (error: unknown) {
+      caught = error;
+    }
+
+    expect(isChannelPartialDeliveryError(caught)).toBe(true);
+    if (!isChannelPartialDeliveryError(caught)) {
+      throw new Error("expected a partial Mattermost delivery error");
+    }
+    expect(caught.deliveryResult).toMatchObject({
+      messageIds: ["post-final"],
+      visibleReplySent: true,
+      content: "provider-final",
+    });
+    expect(onDeliveryResult).toHaveBeenCalledTimes(1);
+    expect(onDeliveryResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: "post-final",
+        channelId: "town-square",
+        content: "provider-final",
+      }),
+    );
+    expect(events).toStrictEqual(["delivery", "activity"]);
+  });
+
+  it("preserves the provider post when delivery reporting fails afterward", async () => {
+    const onDeliveryResult = vi.fn(async () => {
+      throw new Error("delivery store unavailable");
+    });
+    mockState.createMattermostPost.mockResolvedValueOnce({
+      id: "post-final",
+      message: "provider-final",
+    });
+
+    let caught: unknown;
+    try {
+      await sendMessageMattermost("channel:town-square", "requested text", {
+        cfg: TEST_CFG,
+        onDeliveryResult,
+      });
+    } catch (error: unknown) {
+      caught = error;
+    }
+
+    expect(isChannelPartialDeliveryError(caught)).toBe(true);
+    if (!isChannelPartialDeliveryError(caught)) {
+      throw new Error("expected a partial Mattermost delivery error");
+    }
+    expect(caught.deliveryResult).toMatchObject({
+      messageIds: ["post-final"],
+      visibleReplySent: true,
+      content: "provider-final",
+    });
+    expect(onDeliveryResult).toHaveBeenCalledTimes(1);
+    expect(mockState.recordActivity).not.toHaveBeenCalled();
   });
 
   it("loads outbound media with trusted local roots before upload", async () => {

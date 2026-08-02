@@ -57,7 +57,7 @@ export function compactDoctorSessionSqliteTarget(
   }
 
   const compact = compactDoctorSqliteFile({
-    afterMutation: () => {
+    afterSuccess: () => {
       requireQuarantineCleared();
       ensureOpenClawAgentDatabasePermissions(sqlitePath, {
         agentId: target.agentId,

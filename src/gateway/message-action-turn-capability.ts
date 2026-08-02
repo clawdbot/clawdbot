@@ -16,6 +16,8 @@ const CAPABILITY_COMPLETION_GRACE_MS = 60_000;
 type AgentRuntimeMessageActionContextBase = {
   expiresAtMs: number;
   sessionId?: string;
+  /** Durable session entry that owns restart-recovery receipt state. */
+  sourceReplySessionKey?: string;
   requesterAccountId?: string;
   requesterSenderId?: string;
   toolContext?: InternalChannelThreadingToolContext;
@@ -112,6 +114,7 @@ export function mintMessageActionTurnCapability(params: {
   agentId: string;
   runId: string;
   sessionKey: string;
+  sourceReplySessionKey?: string;
   sessionId?: string;
   requesterAccountId?: string;
   requesterSenderId?: string;
@@ -142,6 +145,7 @@ export function mintMessageActionTurnCapability(params: {
       ? RUN_LIFETIME_EXPIRES_AT_MS
       : nowMs + resolveTtlMs(params.ttlMs),
     sessionId: normalizeOptionalString(params.sessionId),
+    sourceReplySessionKey: normalizeOptionalString(params.sourceReplySessionKey),
     requesterAccountId: normalizeOptionalString(params.requesterAccountId),
     requesterSenderId: normalizeOptionalString(params.requesterSenderId),
     toolContext: copyToolContext(params.toolContext),
@@ -181,6 +185,7 @@ export function resolveMessageActionTurnCapability(params: {
   return {
     expiresAtMs: capability.expiresAtMs,
     sessionId: capability.sessionId,
+    sourceReplySessionKey: capability.sourceReplySessionKey,
     requesterAccountId: capability.requesterAccountId,
     requesterSenderId: capability.requesterSenderId,
     toolContext: copyToolContext(capability.toolContext),

@@ -1,8 +1,4 @@
-/**
- * music_generate built-in tool.
- *
- * Resolves music providers/options, saves generated tracks, and supports detached background runs.
- */
+/** Runs music generation, persistence, and detached completion. */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import { getRuntimeConfig } from "../../config/config.js";
@@ -10,6 +6,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveGeneratedMediaMaxBytes } from "../../media/configured-max-bytes.js";
+import { probeMediaFilesWithinBudget } from "../../media/media-probe.js";
 import {
   classifyMediaReferenceSource,
   normalizeMediaReferenceSource,
@@ -40,6 +37,7 @@ import {
   buildMediaGenerationRequestKey,
   recordRecentMediaGenerationTaskStartForSession,
 } from "../media-generation-task-status-shared.js";
+import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.js";
 import { ToolInputError, readNumberParam, readStringParam } from "./common.js";
 import { decodeDataUrl } from "./image-tool.helpers.js";
 import {
@@ -55,12 +53,13 @@ import {
   applyMusicGenerationModelConfigDefaults,
   buildMediaReferenceDetails,
   buildTaskRunDetails,
+  createCapabilityProviderRuntimeDeps,
   hasGenerationToolAvailability,
   normalizeMediaReferenceInputs,
   readBooleanToolParam,
   resolveCapabilityModelConfigForTool,
   resolveGenerateAction,
-  resolveMediaToolLocalRoots,
+  resolveMediaToolReferenceAccess,
   resolveRemoteMediaSsrfPolicy,
   resolveSelectedCapabilityProvider,
 } from "./media-tool-shared.js";
@@ -84,7 +83,6 @@ import {
 } from "./music-generate-tool.actions.js";
 import {
   createSandboxBridgeReadFile,
-  resolveSandboxedBridgeMediaPath,
   type AnyAgentTool,
   type SandboxFsBridge,
   type ToolFsPolicy,
@@ -96,6 +94,9 @@ const SUPPORTED_OUTPUT_FORMATS = new Set<MusicGenerationOutputFormat>(["mp3", "w
 const DEFAULT_REFERENCE_FETCH_TIMEOUT_MS = 30_000;
 const DEFAULT_MUSIC_GENERATION_TIMEOUT_MS = 300_000;
 const MIN_MUSIC_GENERATION_TIMEOUT_MS = 120_000;
+const GENERATED_MUSIC_PROBE_BUDGET_MS = 3000;
+const GENERATED_MUSIC_PROBE_CONCURRENCY = 2;
+const MAX_GENERATED_MUSIC_PROBES = 8;
 
 const MusicGenerateToolSchema = Type.Object({
   action: Type.Optional(
@@ -159,22 +160,23 @@ function resolveMusicGenerationModelConfigForTool(params: {
     workspaceDir: params.workspaceDir,
     agentDir: params.agentDir,
     authStore: params.authStore,
-    modelConfig: params.cfg?.agents?.defaults?.musicGenerationModel,
+    modelConfig: params.cfg?.agents?.defaults?.mediaModels?.music,
     providers: () => listRuntimeMusicGenerationProviders({ config: params.cfg }),
   });
 }
 
 function hasExplicitMusicGenerationModelConfig(cfg?: OpenClawConfig): boolean {
-  return hasToolModelConfig(coerceToolModelConfig(cfg?.agents?.defaults?.musicGenerationModel));
+  return hasToolModelConfig(coerceToolModelConfig(cfg?.agents?.defaults?.mediaModels?.music));
 }
 
 function resolveSelectedMusicGenerationProvider(params: {
   config?: OpenClawConfig;
+  providers?: MusicGenerationProvider[];
   musicGenerationModelConfig: ToolModelConfig;
   modelOverride?: string;
 }): MusicGenerationProvider | undefined {
   return resolveSelectedCapabilityProvider({
-    providers: listRuntimeMusicGenerationProviders({ config: params.config }),
+    providers: params.providers ?? listRuntimeMusicGenerationProviders({ config: params.config }),
     modelConfig: params.musicGenerationModelConfig,
     modelOverride: params.modelOverride,
     parseModelRef: parseMusicGenerationModelRef,
@@ -298,6 +300,7 @@ async function loadReferenceImages(params: {
   sandboxConfig: { root: string; bridge: SandboxFsBridge; workspaceOnly: boolean } | null;
   ssrfPolicy?: SsrFPolicy;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }): Promise<
   Array<{
     sourceImage: MusicGenerationSourceImage;
@@ -312,6 +315,7 @@ async function loadReferenceImages(params: {
   }> = [];
 
   for (const rawInput of params.inputs) {
+    params.signal?.throwIfAborted();
     const trimmed = rawInput.trim();
     const inputRaw = normalizeMediaReferenceSource(
       trimmed.startsWith("@") ? trimmed.slice(1).trim() : trimmed,
@@ -335,33 +339,20 @@ async function loadReferenceImages(params: {
       : inputRaw.startsWith("~")
         ? resolveUserPath(inputRaw)
         : inputRaw;
-    const resolvedPathInfo: { resolved: string; rewrittenFrom?: string } = isDataUrl
-      ? { resolved: "" }
-      : params.sandboxConfig
-        ? await resolveSandboxedBridgeMediaPath({
-            sandbox: params.sandboxConfig,
-            mediaPath: resolvedInput,
-            inboundFallbackDir: "media/inbound",
-          })
-        : {
-            resolved: resolvedInput.startsWith("file://")
-              ? resolvedInput.slice("file://".length)
-              : resolvedInput,
-          };
-    const resolvedPath = isDataUrl ? null : resolvedPathInfo.resolved;
-    const localRoots = resolveMediaToolLocalRoots(
-      params.workspaceDir,
-      {
-        workspaceOnly: params.sandboxConfig?.workspaceOnly === true,
-      },
-      resolvedPath ? [resolvedPath] : undefined,
-    );
+    const { resolvedPath, localRoots, rewrittenFrom } = await resolveMediaToolReferenceAccess({
+      input: resolvedInput,
+      isDataUrl,
+      workspaceDir: params.workspaceDir,
+      sandbox: params.sandboxConfig,
+    });
+    params.signal?.throwIfAborted();
     const media = isDataUrl
       ? decodeDataUrl(resolvedInput)
       : params.sandboxConfig
         ? await loadWebMedia(resolvedPath ?? resolvedInput, {
             sandboxValidated: true,
             readFile: createSandboxBridgeReadFile({ sandbox: params.sandboxConfig }),
+            ...(params.signal ? { requestInit: { signal: params.signal } } : {}),
           })
         : await (async () => {
             const referenceTarget = resolvedPath ?? resolvedInput;
@@ -369,6 +360,7 @@ async function loadReferenceImages(params: {
             const { signal, cleanup } = buildTimeoutAbortSignal({
               timeoutMs: params.timeoutMs ?? DEFAULT_REFERENCE_FETCH_TIMEOUT_MS,
               operation: "music-generate.reference-fetch",
+              ...(params.signal ? { signal: params.signal } : {}),
               ...(isRemoteReference ? { url: referenceTarget } : {}),
             });
             try {
@@ -381,6 +373,7 @@ async function loadReferenceImages(params: {
               cleanup();
             }
           })();
+    params.signal?.throwIfAborted();
     if (media.kind !== "image") {
       throw new ToolInputError(`Unsupported media type: ${media.kind ?? "unknown"}`);
     }
@@ -393,7 +386,7 @@ async function loadReferenceImages(params: {
         fileName,
       },
       resolvedInput,
-      ...(resolvedPathInfo.rewrittenFrom ? { rewrittenFrom: resolvedPathInfo.rewrittenFrom } : {}),
+      ...(rewrittenFrom ? { rewrittenFrom } : {}),
     });
   }
 
@@ -429,6 +422,7 @@ async function executeMusicGenerationJob(params: {
   autoProviderFallback?: boolean;
   timeoutMs?: number;
   timeoutNormalization?: MusicGenerationTimeoutNormalization;
+  providers?: MusicGenerationProvider[];
 }): Promise<ExecutedMusicGeneration> {
   if (params.taskHandle) {
     recordMusicGenerationTaskProgress({
@@ -436,19 +430,22 @@ async function executeMusicGenerationJob(params: {
       progressSummary: "Generating music",
     });
   }
-  const result = await generateMusic({
-    cfg: params.effectiveCfg,
-    prompt: params.prompt,
-    agentDir: params.agentDir,
-    modelOverride: params.model,
-    lyrics: params.lyrics,
-    instrumental: params.instrumental,
-    durationSeconds: params.durationSeconds,
-    format: params.format,
-    inputImages: params.loadedReferenceImages.map((entry) => entry.sourceImage),
-    autoProviderFallback: params.autoProviderFallback,
-    timeoutMs: params.timeoutMs,
-  });
+  const result = await generateMusic(
+    {
+      cfg: params.effectiveCfg,
+      prompt: params.prompt,
+      agentDir: params.agentDir,
+      modelOverride: params.model,
+      lyrics: params.lyrics,
+      instrumental: params.instrumental,
+      durationSeconds: params.durationSeconds,
+      format: params.format,
+      inputImages: params.loadedReferenceImages.map((entry) => entry.sourceImage),
+      autoProviderFallback: params.autoProviderFallback,
+      timeoutMs: params.timeoutMs,
+    },
+    createCapabilityProviderRuntimeDeps(params.providers),
+  );
   if (params.taskHandle) {
     recordMusicGenerationTaskProgress({
       handle: params.taskHandle,
@@ -490,11 +487,24 @@ async function executeMusicGenerationJob(params: {
     ignoredOverrides.length > 0
       ? `Ignored unsupported overrides for ${result.provider}/${result.model}: ${ignoredOverrides.map((entry) => `${entry.key}=${String(entry.value)}`).join(", ")}.`
       : undefined;
+  const savedTrackMetadata = await probeMediaFilesWithinBudget(
+    savedTracks.map((track) => ({ filePath: track.path, kind: "audio" })),
+    {
+      budgetMs: GENERATED_MUSIC_PROBE_BUDGET_MS,
+      concurrency: GENERATED_MUSIC_PROBE_CONCURRENCY,
+      maxProbes: MAX_GENERATED_MUSIC_PROBES,
+    },
+  );
   const attachments: AgentGeneratedAttachment[] = savedTracks.map((track, index) => ({
     type: "audio",
     path: track.path,
     mimeType: track.contentType,
     name: result.tracks[index]?.fileName,
+    sizeBytes: track.size,
+    ...(typeof appliedDurationSeconds === "number"
+      ? { durationMs: appliedDurationSeconds * 1000 }
+      : {}),
+    ...savedTrackMetadata[index],
   }));
   const lines = [
     `Generated ${savedTracks.length} track${savedTracks.length === 1 ? "" : "s"} with ${result.provider}/${result.model}.`,
@@ -578,20 +588,26 @@ export function createMusicGenerateTool(options?: {
   agentSessionKey?: string;
   requesterOrigin?: DeliveryContext;
   workspaceDir?: string;
+  preparedModelRuntime?: PreparedModelRuntimeSnapshot;
   sandbox?: MusicGenerateSandboxConfig;
   fsPolicy?: ToolFsPolicy;
   scheduleBackgroundWork?: MediaGenerateBackgroundScheduler;
   onAsyncTaskStarted?: MediaGenerateAsyncStartCallback;
 }): AnyAgentTool | null {
   const cfg: OpenClawConfig = options?.config ?? getRuntimeConfig();
+  const preparedProviders = options?.preparedModelRuntime?.mediaCapabilityProviders
+    ?.musicGenerationProviders
+    ? [...options.preparedModelRuntime.mediaCapabilityProviders.musicGenerationProviders]
+    : undefined;
   if (
     !hasGenerationToolAvailability({
       cfg,
       agentDir: options?.agentDir,
       workspaceDir: options?.workspaceDir,
       authStore: options?.authProfileStore,
-      modelConfig: cfg.agents?.defaults?.musicGenerationModel,
+      modelConfig: cfg.agents?.defaults?.mediaModels?.music,
       providerKey: "musicGenerationProviders",
+      providers: preparedProviders,
     })
   ) {
     return null;
@@ -612,9 +628,9 @@ export function createMusicGenerateTool(options?: {
     name: "music_generate",
     displaySummary: "Generate music",
     description:
-      "Create song/jingle/beat/loop/soundtrack/anthem/instrumental. Make/generate music => call; lyrics-only request => text only. prompt: style/genre/mood/tempo/instruments/purpose; lyrics: exact sung words. Session chat background: call once/request, await, then visible reply + structured media. status checks active task.",
+      "Create song/jingle/beat/loop/soundtrack/anthem/instrumental. Make/generate music => call; lyrics-only request => text only. prompt: style/genre/mood/tempo/instruments/purpose; lyrics: exact sung words; image/images condition on reference image(s). action=list discovers providers/models. Session chat background: call once/request, await, then visible reply + structured media. status checks active task.",
     parameters: MusicGenerateToolSchema,
-    execute: async (_toolCallId, rawArgs) => {
+    execute: async (_toolCallId, rawArgs, signal) => {
       const args = rawArgs as Record<string, unknown>;
       const action = resolveAction(args);
 
@@ -680,6 +696,7 @@ export function createMusicGenerateTool(options?: {
       const selectedProvider = shouldResolveSelectedProvider
         ? resolveSelectedMusicGenerationProvider({
             config: effectiveCfg,
+            providers: preparedProviders,
             musicGenerationModelConfig,
             modelOverride: model,
           })
@@ -715,6 +732,7 @@ export function createMusicGenerateTool(options?: {
         workspaceDir: options?.workspaceDir,
         sandboxConfig,
         ssrfPolicy: remoteMediaSsrfPolicy,
+        signal,
       });
       validateMusicGenerationCapabilities({
         provider: selectedProvider,
@@ -725,6 +743,8 @@ export function createMusicGenerateTool(options?: {
         durationSeconds,
         format,
       });
+      // Accepted tasks own their paid work independently; cancellation applies only before admission.
+      signal?.throwIfAborted();
       const taskHandle = createMusicGenerationTaskRun({
         sessionKey: options?.agentSessionKey,
         requesterOrigin: options?.requesterOrigin,
@@ -771,6 +791,7 @@ export function createMusicGenerateTool(options?: {
               autoProviderFallback: explicitModelConfig ? false : undefined,
               timeoutMs,
               timeoutNormalization: timeout.normalization,
+              providers: preparedProviders,
             }),
         });
 
@@ -829,6 +850,7 @@ export function createMusicGenerateTool(options?: {
           autoProviderFallback: explicitModelConfig ? false : undefined,
           timeoutMs,
           timeoutNormalization: timeout.normalization,
+          providers: preparedProviders,
         });
         completeMusicGenerationTaskRun({
           handle: taskHandle,

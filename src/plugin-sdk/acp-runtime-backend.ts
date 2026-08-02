@@ -1,6 +1,10 @@
 // Lightweight ACP runtime backend helpers for startup-loaded plugins.
 
 import { hasExplicitCommandContextText } from "../auto-reply/reply/context-text.js";
+import {
+  finalizeInboundContextForSdk,
+  isFinalizedInboundContext,
+} from "../auto-reply/reply/inbound-context.js";
 import type {
   PluginHookReplyDispatchContext,
   PluginHookReplyDispatchEvent,
@@ -46,19 +50,22 @@ export async function tryDispatchAcpReplyHook(
   event: PluginHookReplyDispatchEvent,
   ctx: PluginHookReplyDispatchContext,
 ): Promise<PluginHookReplyDispatchResult | void> {
+  const finalizedCtx = isFinalizedInboundContext(event.ctx)
+    ? event.ctx
+    : finalizeInboundContextForSdk(event.ctx);
   // Under sendPolicy: "deny", ACP-bound sessions still need their turns to flow
   // through acpManager.runTurn so session state, tool calls, and memory stay
   // consistent. Delivery suppression is handled by the ACP delivery path.
   if (
     event.sendPolicy === "deny" &&
     !event.suppressUserDelivery &&
-    !hasExplicitCommandContextText(event.ctx) &&
+    !hasExplicitCommandContextText(finalizedCtx) &&
     !event.isTailDispatch
   ) {
     return;
   }
   const runtime = await loadDispatchAcpRuntime();
-  const bypassForCommand = await runtime.shouldBypassAcpDispatchForCommand(event.ctx, ctx.cfg);
+  const bypassForCommand = await runtime.shouldBypassAcpDispatchForCommand(finalizedCtx, ctx.cfg);
 
   if (
     event.sendPolicy === "deny" &&
@@ -70,7 +77,7 @@ export async function tryDispatchAcpReplyHook(
   }
 
   const result = await runtime.tryDispatchAcpReply({
-    ctx: event.ctx,
+    ctx: finalizedCtx,
     cfg: ctx.cfg,
     dispatcher: ctx.dispatcher,
     runId: event.runId,

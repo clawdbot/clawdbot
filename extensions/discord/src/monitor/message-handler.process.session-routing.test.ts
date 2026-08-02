@@ -41,14 +41,13 @@ describe("processDiscordMessage session routing", () => {
           },
         ],
       },
-      baseText: "<media:audio>",
-      messageText: "<media:audio>",
+      baseText: "",
+      messageText: "",
       preflightAudioTranscript: "hello from discord voice",
       preparedMedia: [
         {
           path: "/tmp/openclaw-discord-test/voice.ogg",
           contentType: "audio/ogg",
-          placeholder: "<media:audio>",
         },
       ],
     });
@@ -59,7 +58,7 @@ describe("processDiscordMessage session routing", () => {
       BodyForAgent: "hello from discord voice",
       CommandBody: "hello from discord voice",
       Transcript: "hello from discord voice",
-      MediaTranscribedIndexes: [0],
+      media: [expect.objectContaining({ contentType: "audio/ogg", transcribed: true })],
     });
   });
 
@@ -91,7 +90,6 @@ describe("processDiscordMessage session routing", () => {
         {
           path: "/tmp/openclaw-discord-test/photo.png",
           contentType: "image/png",
-          placeholder: "<media:image>",
         },
       ],
       discordRestFetch: fetchImpl,
@@ -101,9 +99,12 @@ describe("processDiscordMessage session routing", () => {
 
     expect(fetchImpl).not.toHaveBeenCalled();
     expectRecordFields(requireRecord(getLastDispatchCtx(), "dispatch context"), {
-      MediaPath: "/tmp/openclaw-discord-test/photo.png",
-      MediaType: "image/png",
-      MediaPaths: ["/tmp/openclaw-discord-test/photo.png"],
+      media: [
+        expect.objectContaining({
+          path: "/tmp/openclaw-discord-test/photo.png",
+          contentType: "image/png",
+        }),
+      ],
     });
   });
 

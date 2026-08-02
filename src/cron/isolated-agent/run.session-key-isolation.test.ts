@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
+  cleanupBrowserSessionsForLifecycleEndMock,
   isCliProviderMock,
   loadSessionEntryMock,
   loadRunCronIsolatedAgentTurn,
@@ -64,18 +65,38 @@ describe("runCronIsolatedAgentTurn isolated session identity", () => {
     const runRequest = requireFirstMockArg(runEmbeddedAgentMock, "runEmbeddedAgentMock") as {
       sessionId?: string;
       sessionKey?: string;
+      sessionFile?: string;
+      sessionTarget?: {
+        agentId?: string;
+        sessionId?: string;
+        sessionKey?: string;
+        storePath?: string;
+      };
       promptCacheKey?: string;
       bootstrapContextMode?: string;
       bootstrapContextRunKind?: string;
     };
     expect(runRequest.sessionId).toBe("isolated-run-1");
     expect(runRequest.sessionKey).toBe("agent:default:cron:daily-monitor:run:isolated-run-1");
+    expect(runRequest.sessionFile).toBeUndefined();
+    expect(runRequest.sessionTarget).toEqual({
+      agentId: "default",
+      sessionId: "isolated-run-1",
+      sessionKey: "agent:default:cron:daily-monitor:run:isolated-run-1",
+      storePath: expect.any(String),
+    });
     expect(runRequest.sessionKey).not.toBe("agent:default:cron:daily-monitor");
     expect(runRequest.promptCacheKey).toMatch(/^openclaw-cron-[a-f0-9]{32}$/u);
     expect(runRequest.promptCacheKey).not.toContain("isolated-run-1");
     expect(runRequest.promptCacheKey).not.toContain("daily-monitor");
     expect(runRequest.bootstrapContextMode).toBe("lightweight");
     expect(runRequest.bootstrapContextRunKind).toBe("cron");
+    expect(cleanupBrowserSessionsForLifecycleEndMock).toHaveBeenCalledOnce();
+    expect(cleanupBrowserSessionsForLifecycleEndMock).toHaveBeenCalledWith({
+      cfg: expect.any(Object),
+      sessionKeys: ["agent:default:cron:daily-monitor:run:isolated-run-1"],
+      onWarn: expect.any(Function),
+    });
     const embeddedRunOrder = runEmbeddedAgentMock.mock.invocationCallOrder[0];
     if (embeddedRunOrder === undefined) {
       throw new Error("Expected embedded cron execution order");
@@ -180,6 +201,7 @@ describe("runCronIsolatedAgentTurn isolated session identity", () => {
     expect(runRequest.promptCacheKey).toBeUndefined();
     expect(runRequest.bootstrapContextMode).toBeUndefined();
     expect(runRequest.bootstrapContextRunKind).toBe("cron");
+    expect(cleanupBrowserSessionsForLifecycleEndMock).not.toHaveBeenCalled();
   });
 
   it.each([

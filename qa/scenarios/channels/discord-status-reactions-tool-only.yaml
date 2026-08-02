@@ -3,15 +3,17 @@ scenario:
   id: discord-status-reactions-tool-only
   surface: channels
   coverage:
-    primary: [channels.message-actions]
+    primary:
+      - channels.reply-message-actions
   execution:
     kind: flow
     channel: discord
     timeoutMs: 75000
     retryCount: 1
     suiteIsolation: isolated
-    config: { discordScenarioId: discord-status-reactions-tool-only }
 flow:
   module: ./live-transports/discord/scenario-runtime.js
-  call: runDiscordStatusReactionsToolOnlyScenario
-  args: [{ expr: discordScenarioContext }]
+  call: runDiscordScenario
+  args:
+    - { expr: discordScenarioContext }
+    - { moduleExport: discordQaStatusReactionsToolOnlyScenario }

@@ -214,6 +214,39 @@ describe("push-apns.relay", () => {
   });
 
   describe("sendApnsRelayPush", () => {
+    it("revalidates ownership before relay fetch and combines the lifecycle signal", async () => {
+      const controller = new AbortController();
+      const isCurrent = vi.fn().mockResolvedValue(true);
+      const fetchMock = vi.fn().mockResolvedValue(new Response("", { status: 202 }));
+      vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+      await sendApnsRelayPush({
+        ...createRelayPushParams(),
+        signal: controller.signal,
+        isCurrent,
+      });
+
+      expect(isCurrent).toHaveBeenCalledTimes(2);
+      const fetchOptions = firstMockCall(fetchMock)?.[1] as { signal?: AbortSignal } | undefined;
+      expect(fetchOptions?.signal?.aborted).toBe(false);
+      controller.abort(new Error("pairing removed"));
+      expect(fetchOptions?.signal?.aborted).toBe(true);
+    });
+
+    it("does not start relay transport when persistent ownership changed", async () => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+      await expect(
+        sendApnsRelayPush({
+          ...createRelayPushParams(),
+          isCurrent: vi.fn().mockResolvedValue(false),
+        }),
+      ).rejects.toThrow("APNs send invalidated");
+
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
     it("signs relay payloads and forwards the request through the injected sender", async () => {
       vi.spyOn(Date, "now").mockReturnValue(123_456_789);
       const sender = vi.fn().mockResolvedValue({
@@ -455,6 +488,35 @@ describe("push-apns.relay", () => {
       expect(result.ok).toBe(false);
       expect(result.reason).toBe("RelayResponseTooLarge");
       expect(result.status).toBe(202);
+    });
+
+    it("rejects relay body with malformed UTF-8 bytes instead of parsing corrupted metadata", async () => {
+      // Regression guard: with { fatal: true } on the TextDecoder, a relay body
+      // containing invalid UTF-8 sequences must be rejected at decode time and
+      // treated as absent (status-derived fallback). Corrupted field values must
+      // never reach the caller.
+      const encoder = new TextEncoder();
+      const prefix = encoder.encode('{"ok":true,"status":200,"apnsId":"test-');
+      const suffix = encoder.encode('1234"}');
+      const body = new Uint8Array(prefix.length + 1 + suffix.length);
+      body.set(prefix, 0);
+      body[prefix.length] = 0xff; // bare invalid byte inside the apns-id string
+      body.set(suffix, prefix.length + 1);
+
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValue(
+          new Response(body, { status: 202, headers: { "content-type": "application/json" } }),
+        );
+      vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+      await expect(sendApnsRelayPush(createRelayPushParams())).resolves.toEqual({
+        ok: true,
+        status: 202,
+        apnsId: undefined,
+        reason: undefined,
+        tokenSuffix: undefined,
+      });
     });
   });
 });

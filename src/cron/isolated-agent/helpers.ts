@@ -200,9 +200,8 @@ export function isHeartbeatOnlyResponse(payloads: DeliveryPayload[], ackMaxChars
 }
 
 /** Resolves the non-negative heartbeat ack length used for heartbeat-only filtering. */
-export function resolveHeartbeatAckMaxChars(agentCfg?: { heartbeat?: { ackMaxChars?: number } }) {
-  const raw = agentCfg?.heartbeat?.ackMaxChars ?? DEFAULT_HEARTBEAT_ACK_MAX_CHARS;
-  return Math.max(0, raw);
+export function resolveHeartbeatAckMaxChars(_agentCfg?: { heartbeat?: object }) {
+  return DEFAULT_HEARTBEAT_ACK_MAX_CHARS;
 }
 
 function isCronMessagePresentationWarning(text: string | undefined): boolean {

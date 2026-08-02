@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { normalizeWorkboardChange } from "./change-payload.ts";
@@ -5,9 +6,9 @@ import {
   configureWorkboardLiveRefresh,
   handleWorkboardChanged,
   resumeWorkboardLiveRefresh,
-  stopWorkboardLiveRefresh,
 } from "./live-refresh.ts";
 import { loadWorkboard } from "./loading.ts";
+import { stopWorkboardLiveRefresh } from "./runtime.ts";
 import { getWorkboardState } from "./runtime.ts";
 
 function createDeferred<T>() {

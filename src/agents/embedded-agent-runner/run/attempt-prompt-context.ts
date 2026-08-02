@@ -110,8 +110,6 @@ export function prepareEmbeddedAttemptPromptContext(input: {
   const contextTokenBudget = attempt.contextTokenBudget ?? DEFAULT_CONTEXT_TOKENS;
   const promptToolResultMaxChars = resolveLiveToolResultMaxChars({
     contextWindowTokens: contextTokenBudget,
-    cfg: attempt.config,
-    agentId: input.sessionAgentId,
   });
   const promptToolResultAggregateMaxChars = resolveLiveToolResultAggregateMaxChars({
     contextWindowTokens: contextTokenBudget,
@@ -141,7 +139,7 @@ export function prepareEmbeddedAttemptPromptContext(input: {
     if (aggregatePressureEngaged) {
       if (!toolResultWarningDedupe.promptPressure.check(sessionLogKey)) {
         log.warn(
-          `${truncationLog}; aggregate tool-result pressure detected, compaction has been requested; consider /compact or /new if pressure persists`,
+          `${truncationLog}; aggregate tool-result pressure detected; final provider-bound projection will determine whether recovery is needed`,
         );
       }
     } else {

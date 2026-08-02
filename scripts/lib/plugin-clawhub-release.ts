@@ -117,6 +117,7 @@ const CLAWHUB_SHARED_RELEASE_INPUT_PATHS = [
   "packages/plugin-package-contract/src/index.ts",
   "scripts/lib/bounded-response.ts",
   "scripts/lib/npm-publish-plan.mjs",
+  "scripts/lib/release-version.mjs",
   "scripts/lib/plugin-npm-release.ts",
   "scripts/lib/plugin-clawhub-release.ts",
   "scripts/openclaw-npm-release-check.ts",

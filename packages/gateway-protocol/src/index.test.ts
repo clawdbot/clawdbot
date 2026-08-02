@@ -1,5 +1,5 @@
 // Gateway Protocol tests cover index behavior.
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import { TALK_TEST_PROVIDER_ID } from "../../../src/test-utils/talk-test-provider.js";
 import * as protocol from "./index.js";
 import {
@@ -15,7 +15,15 @@ import {
   validateNodePluginToolsUpdateParams,
   validateNodeSkillsUpdateParams,
   validateNodePresenceActivityPayload,
+  validateSessionsListParams,
+  validateSessionsCompanionAskParams,
+  validateSessionsCompanionResetParams,
+  validateSessionsCompanionStateParams,
+  validateSessionsCreateParams,
+  validateSessionsObserverVisibilityParams,
+  validateSessionsPatchParams,
   validateSessionsSearchParams,
+  validateSessionsSendParams,
   validateSessionsUsageParams,
   validateTasksCancelParams,
   validateTasksListParams,
@@ -34,6 +42,16 @@ import {
   validateWakeParams,
   type ValidationError,
 } from "./index.js";
+import type {
+  ConfigSchemaLookupParams,
+  ModelsListParams,
+  SessionsCatalogListParams,
+  TalkEvent,
+} from "./index.js";
+import * as schemaExportRegistry from "./schema-export-registry.js";
+import type * as Schema from "./schema.js";
+import { ProtocolSchemas } from "./schema/protocol-schemas.js";
+import * as validatorRegistry from "./validator-registry.js";
 
 /**
  * Broad protocol validator smoke tests.
@@ -56,12 +74,125 @@ const makeError = (overrides: Partial<ValidationError>): ValidationError => ({
 /** Runtime shape shared by all exported lazy protocol validator functions. */
 type ProtocolValidator = (value: unknown) => boolean;
 
+describe("protocol export registries", () => {
+  it("re-exports every runtime registry symbol by identity", () => {
+    for (const registry of [schemaExportRegistry, validatorRegistry]) {
+      for (const [name, value] of Object.entries(registry)) {
+        expect((protocol as Record<string, unknown>)[name], name).toBe(value);
+      }
+    }
+  });
+
+  it("re-exports schema-backed protocol types from the package root", () => {
+    expectTypeOf<ConfigSchemaLookupParams>().toEqualTypeOf<Schema.ConfigSchemaLookupParams>();
+    expectTypeOf<ModelsListParams>().toEqualTypeOf<Schema.ModelsListParams>();
+    expectTypeOf<SessionsCatalogListParams>().toEqualTypeOf<Schema.SessionsCatalogListParams>();
+    expectTypeOf<TalkEvent>().toEqualTypeOf<Schema.TalkEvent>();
+  });
+
+  it("registers Skill Workshop evaluation and lifecycle replay schemas", () => {
+    expect(ProtocolSchemas.SkillsProposalEvaluateParams).toBe(
+      schemaExportRegistry.SkillsProposalEvaluateParamsSchema,
+    );
+    expect(ProtocolSchemas.SkillsProposalEvaluateResult).toBe(
+      schemaExportRegistry.SkillsProposalEvaluateResultSchema,
+    );
+    expect(ProtocolSchemas.SkillsProposalEventsListParams).toBe(
+      schemaExportRegistry.SkillsProposalEventsListParamsSchema,
+    );
+    expect(ProtocolSchemas.SkillsProposalEventsListResult).toBe(
+      schemaExportRegistry.SkillsProposalEventsListResultSchema,
+    );
+  });
+});
+
 describe("lazy protocol validators", () => {
+  it("accepts bounded request-frame trace context metadata", () => {
+    const request = {
+      type: "req",
+      id: "request-1",
+      method: "status.summary",
+      params: {},
+    };
+
+    expect(protocol.validateRequestFrame(request)).toBe(true);
+    expect(
+      protocol.validateRequestFrame({
+        ...request,
+        traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+      }),
+    ).toBe(true);
+    expect(protocol.validateRequestFrame({ ...request, traceparent: "x".repeat(129) })).toBe(false);
+  });
+
   it("validates through exported lazy validators", () => {
     expect(validateCommandsListParams({})).toBe(true);
     expect(validateCommandsListParams({ includeArgs: true })).toBe(true);
     expect(validateCommandsListParams({ includeArgs: "yes" })).toBe(false);
     expect(formatValidationErrors(validateCommandsListParams.errors)).toContain("must be boolean");
+  });
+
+  it("accepts every sessions.list archive filter mode", () => {
+    expect(validateSessionsListParams({})).toBe(true);
+    expect(validateSessionsListParams({ archived: false })).toBe(true);
+    expect(validateSessionsListParams({ archived: true })).toBe(true);
+    expect(validateSessionsListParams({ archived: "all" })).toBe(true);
+    expect(validateSessionsListParams({ archived: "archived" })).toBe(false);
+  });
+
+  it("validates session board face list and patch values", () => {
+    expect(validateSessionsListParams({ boardFace: "dashboard" })).toBe(true);
+    expect(validateSessionsListParams({ boardFace: "grid" })).toBe(false);
+    expect(validateSessionsPatchParams({ key: "agent:main:main", boardFace: "chat" })).toBe(true);
+    expect(validateSessionsPatchParams({ key: "agent:main:main", boardFace: "grid" })).toBe(false);
+    // The schemas are closed objects; the pre-rename name must not slip back in.
+    expect(validateSessionsListParams({ face: "dashboard" })).toBe(false);
+  });
+
+  it("validates session patch compare-and-swap identity", () => {
+    expect(
+      validateSessionsPatchParams({
+        key: "agent:main:self-archive",
+        archived: true,
+        expectedSessionId: "session-self-archive",
+        expectedLifecycleRevision: "revision-self-archive",
+      }),
+    ).toBe(true);
+    expect(
+      validateSessionsPatchParams({
+        key: "agent:main:self-archive",
+        expectedSessionId: "",
+      }),
+    ).toBe(false);
+    expect(
+      validateSessionsPatchParams({
+        key: "agent:main:self-archive",
+        expectedLifecycleRevision: "",
+      }),
+    ).toBe(false);
+  });
+
+  it("validates sparse session tool overrides", () => {
+    const key = "agent:main:main";
+    expect(
+      validateSessionsPatchParams({
+        key,
+        toolOverrides: {
+          mcpServers: { docs: false },
+          mcpToolsDeny: { github: ["delete_issue"] },
+          skills: { release: true },
+          webSearch: false,
+        },
+      }),
+    ).toBe(true);
+    expect(validateSessionsPatchParams({ key, toolOverrides: null })).toBe(true);
+    expect(
+      validateSessionsPatchParams({ key, toolOverrides: { mcpServers: { docs: "no" } } }),
+    ).toBe(false);
+    expect(
+      validateSessionsPatchParams({ key, toolOverrides: { mcpToolsDeny: { github: [1] } } }),
+    ).toBe(false);
+    expect(validateSessionsPatchParams({ key, toolOverrides: { unknown: true } })).toBe(false);
   });
 
   it("keeps validation errors readable on the exported validator", () => {
@@ -264,6 +395,40 @@ describe("lazy protocol validators", () => {
     expect(validateSessionsSearchParams({ query: "x".repeat(4097) })).toBe(false);
   });
 
+  it("validates closed bounded session companion params", () => {
+    expect(
+      validateSessionsCompanionAskParams({
+        sessionKey: "agent:main:current",
+        question: "What changed in the project?",
+      }),
+    ).toBe(true);
+    expect(
+      validateSessionsCompanionAskParams({
+        sessionKey: "agent:main:current",
+        question: "x".repeat(401),
+      }),
+    ).toBe(false);
+    expect(validateSessionsCompanionAskParams({ sessionKey: "", question: "why" })).toBe(false);
+    expect(
+      validateSessionsCompanionAskParams({
+        sessionKey: "agent:main:current",
+        question: "why",
+        extra: true,
+      }),
+    ).toBe(false);
+    expect(validateSessionsCompanionStateParams({ sessionKey: "agent:main:current" })).toBe(true);
+    expect(validateSessionsCompanionStateParams({ sessionKey: "" })).toBe(false);
+    expect(validateSessionsCompanionResetParams({ sessionKey: "agent:main:current" })).toBe(true);
+    expect(validateSessionsCompanionResetParams({})).toBe(false);
+  });
+
+  it("validates closed session observer visibility declarations", () => {
+    expect(validateSessionsObserverVisibilityParams({ visible: true })).toBe(true);
+    expect(validateSessionsObserverVisibilityParams({})).toBe(false);
+    expect(validateSessionsObserverVisibilityParams({ visible: "true" })).toBe(false);
+    expect(validateSessionsObserverVisibilityParams({ visible: false, extra: true })).toBe(false);
+  });
+
   it("validates chat sends that suppress command interpretation", () => {
     expect(
       validateChatSendParams({
@@ -279,6 +444,7 @@ describe("lazy protocol validators", () => {
     expect(
       protocol.validateSkillsProposalRequestRevisionParams({
         proposalId: "support-file-sampler-20260531-68207b7b7f",
+        expectedRevisionHash: "a".repeat(64),
         targetAgentId: "writer",
         instructions: "Make the support files 5",
         sessionKey: "agent:main:session:skill-workshop",
@@ -302,6 +468,52 @@ describe("lazy protocol validators", () => {
         hiddenPrompt: "do not accept caller-provided hidden prompts",
       }),
     ).toBe(false);
+  });
+
+  it("accepts support-file-only Skill Workshop revisions", () => {
+    expect(
+      protocol.validateSkillsProposalReviseParams({
+        proposalId: "support-file-sampler-20260531-68207b7b7f",
+        expectedRevisionHash: "a".repeat(64),
+        supportFiles: [{ path: "references/example.md", content: "Updated example.\n" }],
+      }),
+    ).toBe(true);
+  });
+
+  it("validates Skill Workshop evaluation and event replay params", () => {
+    expect(
+      protocol.validateSkillsProposalEvaluateParams({
+        proposalId: "support-file-sampler-20260531-68207b7b7f",
+        expectedRevisionHash: "b".repeat(64),
+        correlationId: "evaluation-1",
+      }),
+    ).toBe(true);
+    expect(
+      protocol.validateSkillsProposalEvaluateParams({
+        proposalId: "support-file-sampler-20260531-68207b7b7f",
+        expectedRevisionHash: "stale",
+      }),
+    ).toBe(false);
+    expect(
+      protocol.validateSkillsProposalEvaluateParams({
+        proposalId: "support-file-sampler-20260531-68207b7b7f",
+        correlationId: "x".repeat(257),
+      }),
+    ).toBe(false);
+    expect(
+      protocol.validateSkillsProposalEvaluateParams({
+        proposalId: "support-file-sampler-20260531-68207b7b7f",
+        correlationId: "😀".repeat(200),
+      }),
+    ).toBe(true);
+    expect(
+      protocol.validateSkillsProposalEventsListParams({
+        proposalId: "support-file-sampler-20260531-68207b7b7f",
+        afterSequence: 41,
+        limit: 200,
+      }),
+    ).toBe(true);
+    expect(protocol.validateSkillsProposalEventsListParams({ limit: 201 })).toBe(false);
   });
 
   it("can still compile every exported protocol validator", () => {
@@ -714,6 +926,43 @@ describe("validateChatSendParams", () => {
     }
     expect(validateChatSendParams({ ...base, queueMode: "invalid" })).toBe(false);
   });
+
+  it("accepts typed attachment metadata and legacy extra fields", () => {
+    const attachments = [
+      {
+        type: "audio",
+        mimeType: "audio/mpeg",
+        fileName: "theme.mp3",
+        content: "YXVkaW8=",
+        sizeBytes: 5,
+        durationMs: 1_250,
+        width: 0,
+        height: 0,
+        legacyPayload: { source: "older-client" },
+      },
+      { legacyBlob: { opaque: true } },
+    ];
+    const base = {
+      sessionKey: "agent:main:main",
+      message: "hello",
+      idempotencyKey: "run-attachments",
+      attachments,
+    };
+
+    expect(validateChatSendParams(base)).toBe(true);
+    expect(
+      validateSessionsCreateParams({ key: "agent:main:main", message: "hello", attachments }),
+    ).toBe(true);
+    expect(
+      validateSessionsSendParams({ key: "agent:main:main", message: "hello", attachments }),
+    ).toBe(true);
+    expect(
+      validateChatSendParams({
+        ...base,
+        attachments: [{ type: "audio", content: new Uint8Array([1, 2, 3]) }],
+      }),
+    ).toBe(true);
+  });
 });
 
 describe("validateModelsListParams", () => {
@@ -734,8 +983,14 @@ describe("validateModelsProbeParams", () => {
   it("accepts one provider with optional profile and timeout", () => {
     expect(validateModelsProbeParams({ provider: "openai" })).toBe(true);
     expect(
-      validateModelsProbeParams({ provider: "OpenAI", profileId: "work", timeoutMs: 20_000 }),
+      validateModelsProbeParams({
+        provider: "OpenAI",
+        profileId: "work",
+        timeoutMs: 20_000,
+        agentId: "writer",
+      }),
     ).toBe(true);
+    expect(validateModelsProbeParams({ provider: "openai", agentId: "" })).toBe(true);
   });
 
   it("rejects missing providers, invalid timeouts, and extra fields", () => {
@@ -770,11 +1025,14 @@ describe("validateNodePresenceActivityPayload", () => {
     expect(validateNodePresenceActivityPayload({ idleSeconds: 2_592_000, saturated: true })).toBe(
       true,
     );
+    expect(validateNodePresenceActivityPayload({ action: "clear" })).toBe(true);
   });
 
   it("rejects negative, unbounded, and extra fields", () => {
     expect(validateNodePresenceActivityPayload({ idleSeconds: -1 })).toBe(false);
     expect(validateNodePresenceActivityPayload({ idleSeconds: 2_592_001 })).toBe(false);
     expect(validateNodePresenceActivityPayload({ idleSeconds: 1, active: true })).toBe(false);
+    expect(validateNodePresenceActivityPayload({ action: "clear", idleSeconds: 1 })).toBe(false);
+    expect(validateNodePresenceActivityPayload({ action: "disable" })).toBe(false);
   });
 });

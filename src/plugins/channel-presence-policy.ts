@@ -6,6 +6,7 @@ import {
   hasMeaningfulChannelConfig,
   listExplicitlyDisabledChannelIdsForConfig,
   listPotentialConfiguredChannelPresenceSignals,
+  type AmbientEnvTriggerPolicy,
   type ChannelPresenceSignalSource,
 } from "../channels/config-presence.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -55,6 +56,8 @@ export type ConfiguredChannelPresencePolicyEntry = {
   pluginIds: string[];
   blockedReasons: ConfiguredChannelBlockedReason[];
 };
+
+const AMBIENT_ENV_SOURCES = new Set<ConfiguredChannelPresenceSource>(["env", "manifest-env"]);
 
 const ANNOUNCE_SUPPRESSING_BLOCKED_REASONS = new Set<ConfiguredChannelBlockedReason>([
   "plugins-disabled",
@@ -352,6 +355,7 @@ export function resolveConfiguredChannelPresencePolicy(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   includePersistedAuthState?: boolean;
+  ambientEnvTriggers?: AmbientEnvTriggerPolicy;
   manifestRecords?: readonly PluginManifestRecord[];
 }): ConfiguredChannelPresencePolicyEntry[] {
   const env = params.env ?? process.env;
@@ -373,22 +377,32 @@ export function resolveConfiguredChannelPresencePolicy(params: {
   }
   for (const signal of listPotentialConfiguredChannelPresenceSignals(params.config, env, {
     includePersistedAuthState: params.includePersistedAuthState,
+    ambientEnvTriggers: params.ambientEnvTriggers,
   })) {
     if (signal.source === "config") {
       continue;
     }
     addPolicySignal(entrySources, signal.channelId, signal.source);
   }
-  for (const signal of listManifestEnvConfiguredChannelSignals({
-    records,
-    config: params.config,
-    activationSourceConfig: params.activationSourceConfig,
-    env,
-  })) {
-    addPolicySignal(entrySources, signal.channelId, signal.source);
+  if (params.ambientEnvTriggers !== "suppress") {
+    for (const signal of listManifestEnvConfiguredChannelSignals({
+      records,
+      config: params.config,
+      activationSourceConfig: params.activationSourceConfig,
+      env,
+    })) {
+      addPolicySignal(entrySources, signal.channelId, signal.source);
+    }
   }
   for (const channelId of disabledChannelIds) {
     entrySources.delete(channelId);
+  }
+  if (params.ambientEnvTriggers === "suppress") {
+    for (const [channelId, sources] of entrySources) {
+      if (sources.size > 0 && [...sources].every((source) => AMBIENT_ENV_SOURCES.has(source))) {
+        entrySources.delete(channelId);
+      }
+    }
   }
 
   const activationSource = createPluginActivationSource({
@@ -431,6 +445,22 @@ export function resolveConfiguredChannelPresencePolicy(params: {
     });
   }
   return entries;
+}
+
+/** Lists channels that suppression removes because their only presence is ambient env. */
+export function listAmbientOnlyConfiguredChannelIds(
+  params: Omit<Parameters<typeof resolveConfiguredChannelPresencePolicy>[0], "ambientEnvTriggers">,
+): string[] {
+  return resolveConfiguredChannelPresencePolicy({
+    ...params,
+    ambientEnvTriggers: "allow",
+  })
+    .filter(
+      (entry) =>
+        entry.sources.length > 0 &&
+        entry.sources.every((source) => AMBIENT_ENV_SOURCES.has(source)),
+    )
+    .map((entry) => entry.channelId);
 }
 
 /** Lists effective channel ids available to read-only scoped discovery. */

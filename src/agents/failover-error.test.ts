@@ -3,6 +3,7 @@
  * Exercises raw error coercion, remediation hints, timeout/auth/billing/rate-limit cases.
  */
 import { describe, expect, it } from "vitest";
+import { createAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-error.js";
 import { classifyFailoverSignal } from "./embedded-agent-helpers/errors.js";
 import {
   buildFailoverRemediationHint,
@@ -233,6 +234,33 @@ describe("failover-error", () => {
     expect(resolveFailoverReasonFromError({ status: 523 })).toBeNull();
     expect(resolveFailoverReasonFromError({ status: 524 })).toBeNull();
     expect(resolveFailoverReasonFromError({ status: 529 })).toBe("overloaded");
+  });
+
+  it("classifies certificate failures separately from timeouts", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        code: "ERR_TLS_CERT_ALTNAME_INVALID",
+        message: "Hostname/IP does not match certificate's altnames",
+      }),
+    ).toBe("tls_certificate");
+    expect(
+      resolveFailoverReasonFromError(
+        new TypeError("fetch failed", {
+          cause: {
+            code: "CERT_HAS_EXPIRED",
+            message: "certificate has expired",
+          },
+        }),
+      ),
+    ).toBe("tls_certificate");
+    expect(
+      resolveFailoverReasonFromError({
+        status: 400,
+        code: "CERT_HAS_EXPIRED",
+        message: "certificate field rejected",
+      }),
+    ).toBe("format");
+    expect(resolveFailoverStatus("tls_certificate")).toBe(502);
   });
 
   it("stops on cyclic cause chains", () => {
@@ -966,20 +994,26 @@ describe("failover-error", () => {
     expect(resolveFailoverReasonFromError({ code: "OVERLOADED_ERROR" })).toBe("overloaded");
   });
 
-  it("infers timeout from abort/error stop-reason messages", () => {
+  it("infers timeout from abort/network stop-reason messages", () => {
     expect(resolveFailoverReasonFromError({ message: "Unhandled stop reason: abort" })).toBe(
       "timeout",
     );
-    expect(resolveFailoverReasonFromError({ message: "Unhandled stop reason: error" })).toBe(
-      "timeout",
-    );
     expect(resolveFailoverReasonFromError({ message: "stop reason: abort" })).toBe("timeout");
-    expect(resolveFailoverReasonFromError({ message: "stop reason: error" })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ message: "reason: abort" })).toBe("timeout");
-    expect(resolveFailoverReasonFromError({ message: "reason: error" })).toBe("timeout");
     expect(
       resolveFailoverReasonFromError({ message: "Unhandled stop reason: network_error" }),
     ).toBe("timeout");
+  });
+
+  it("infers server_error from bare error finish/stop reasons (#109218)", () => {
+    expect(resolveFailoverReasonFromError({ message: "Unhandled stop reason: error" })).toBe(
+      "server_error",
+    );
+    expect(resolveFailoverReasonFromError({ message: "stop reason: error" })).toBe("server_error");
+    expect(resolveFailoverReasonFromError({ message: "reason: error" })).toBe("server_error");
+    expect(resolveFailoverReasonFromError({ message: "Provider finish_reason: error" })).toBe(
+      "server_error",
+    );
   });
 
   it("infers timeout from connection/network error messages", () => {
@@ -1383,6 +1417,17 @@ describe("failover-error", () => {
       ).toBe(true);
     });
 
+    it("returns true for stale gateway lifecycle ownership loss", () => {
+      const staleLifecycle = createAgentRunStaleLifecycleError();
+      expect(isNonProviderRuntimeCoordinationError(staleLifecycle)).toBe(true);
+      expect(
+        isNonProviderRuntimeCoordinationError(new Error("wrapper", { cause: staleLifecycle })),
+      ).toBe(true);
+      const abortWrapper = new Error("request was aborted", { cause: staleLifecycle });
+      abortWrapper.name = "AbortError";
+      expect(isNonProviderRuntimeCoordinationError(abortWrapper)).toBe(true);
+    });
+
     it("returns true when the coordination error is nested via cause", () => {
       const wrapped = new Error("wrapper", { cause: makeSessionLockError() });
       expect(isNonProviderRuntimeCoordinationError(wrapped)).toBe(true);
@@ -1424,6 +1469,13 @@ describe("failover-error", () => {
           status: 503,
           message: "upstream overloaded",
           cause: { result: { reason: "missing_tool_result" } },
+        }),
+      ).toBe(false);
+      expect(
+        isNonProviderRuntimeCoordinationError({
+          status: 503,
+          message: "upstream overloaded",
+          cause: createAgentRunStaleLifecycleError(),
         }),
       ).toBe(false);
       expect(isNonProviderRuntimeCoordinationError(null)).toBe(false);

@@ -34,6 +34,42 @@ describe("ClickClack account resolution", () => {
     expect(resolveClickClackAccount({ cfg }).token).toBe("test-token-placeholder");
   });
 
+  it("merges partial named-account group overrides with the root group policy", () => {
+    const cfg = {
+      channels: {
+        clickclack: {
+          baseUrl: "https://app.clickclack.chat",
+          workspace: "wsp_1",
+          token: "test-token-placeholder",
+          groups: {
+            " chn_1 ": {
+              requireMention: true,
+              mentionPatterns: ["@root-bot"],
+            },
+          },
+          accounts: {
+            work: {
+              groups: {
+                chn_1: {
+                  requireMention: false,
+                },
+              },
+            },
+          },
+        },
+      },
+    } satisfies CoreConfig;
+
+    const account = resolveClickClackAccount({ cfg, accountId: "work" });
+    expect(account.groups).toEqual({
+      chn_1: {
+        requireMention: false,
+        mentionPatterns: ["@root-bot"],
+      },
+    });
+    expect(account.config.groups).toEqual(account.groups);
+  });
+
   it("does not synthesize a partial top-level default account from inherited credentials", () => {
     const cfg = {
       channels: {
@@ -100,12 +136,14 @@ describe("ClickClack account resolution", () => {
     ).toEqual({
       allowFrom: ["*"],
       accountId: "service",
+      apiEndpoint: "https://app.clickclack.chat",
       baseUrl: "https://app.clickclack.chat",
       config: {
         allowFrom: ["*"],
         baseUrl: "https://app.clickclack.chat",
         enabled: true,
         token: { source: "env", provider: "default", id: "CLICKCLACK_SERVICE_TOKEN" },
+        tokenFile: undefined,
         workspace: "wsp_1",
       },
       configured: true,
@@ -120,10 +158,13 @@ describe("ClickClack account resolution", () => {
         workspace: "wsp_1",
         section: "Sessions",
       },
+      groups: {},
+      mentionPatterns: [],
       model: undefined,
       name: undefined,
       reconnectMs: 1_500,
       replyMode: "agent",
+      requireMention: false,
       systemPrompt: undefined,
       token: "test-token-placeholder",
       toolsAllow: undefined,
@@ -202,6 +243,7 @@ describe("ClickClack account resolution", () => {
       allowFrom: ["*"],
       accountId: "peter",
       agentId: "peter-bot",
+      apiEndpoint: "https://app.clickclack.chat",
       baseUrl: "https://app.clickclack.chat",
       config: {
         agentId: "peter-bot",
@@ -211,6 +253,7 @@ describe("ClickClack account resolution", () => {
         model: "openai/gpt-5.4-mini",
         replyMode: "model",
         token: "token-oversized",
+        tokenFile: undefined,
         toolsAllow: ["web_search"],
         workspace: "wsp_1",
       },
@@ -225,10 +268,13 @@ describe("ClickClack account resolution", () => {
         workspace: "wsp_1",
         section: "Sessions",
       },
+      groups: {},
+      mentionPatterns: [],
       model: "openai/gpt-5.4-mini",
       name: undefined,
       reconnectMs: 1_500,
       replyMode: "model",
+      requireMention: false,
       systemPrompt: undefined,
       token: "token-oversized",
       toolsAllow: ["web_search"],
@@ -256,6 +302,44 @@ describe("ClickClack account resolution", () => {
 
     expect(resolveClickClackAccount({ cfg }).agentActivity).toBe(false);
     expect(resolveClickClackAccount({ cfg, accountId: "bridge" }).agentActivity).toBe(true);
+  });
+
+  it("resolves a private API base per account and defaults it to the public base", () => {
+    const cfg = {
+      channels: {
+        clickclack: {
+          baseUrl: "https://clack.openclaw.ai/",
+          apiBaseUrl: "http://127.0.0.1:8484/",
+          workspace: "default",
+          token: "test-token-placeholder",
+          accounts: {
+            public: { apiBaseUrl: "https://api.clickclack.example/" },
+            inherited: {},
+          },
+        },
+      },
+    } satisfies CoreConfig;
+
+    expect(resolveClickClackAccount({ cfg }).apiEndpoint).toBe("http://127.0.0.1:8484");
+    expect(resolveClickClackAccount({ cfg, accountId: "public" }).apiEndpoint).toBe(
+      "https://api.clickclack.example",
+    );
+    expect(resolveClickClackAccount({ cfg, accountId: "inherited" }).apiEndpoint).toBe(
+      "http://127.0.0.1:8484",
+    );
+
+    const fallbackCfg = {
+      channels: {
+        clickclack: {
+          baseUrl: "https://clack.openclaw.ai/",
+          workspace: "default",
+          token: "test-token-placeholder",
+        },
+      },
+    } satisfies CoreConfig;
+    expect(resolveClickClackAccount({ cfg: fallbackCfg }).apiEndpoint).toBe(
+      "https://clack.openclaw.ai",
+    );
   });
 
   it("normalizes per-account discussion settings and defaults", () => {

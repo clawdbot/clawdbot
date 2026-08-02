@@ -1,4 +1,5 @@
 // Feishu plugin module implements probe behavior.
+import { createHash } from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   asDateTimestampMs,
@@ -23,20 +24,39 @@ type ProbeFeishuOptions = {
   abortSignal?: AbortSignal;
 };
 
-type FeishuPingResponse = {
+type FeishuBotInfoResponse = {
   code: number;
   msg?: string;
-  data?: { pingBotInfo?: { botID?: string; botName?: string } };
+  bot?: { app_name?: string; open_id?: string };
+  data?: { bot?: { app_name?: string; open_id?: string } };
+};
+
+type FeishuAiAgentRegistrationResponse = {
+  code: number;
 };
 
 type FeishuRequestClient = ReturnType<typeof createFeishuClient> & {
   request(params: {
-    method: "POST";
+    method: "GET" | "POST";
     url: string;
-    data: Record<string, unknown>;
+    data?: Record<string, unknown>;
     timeout: number;
-  }): Promise<FeishuPingResponse>;
+  }): Promise<FeishuBotInfoResponse | FeishuAiAgentRegistrationResponse>;
 };
+
+type FeishuAiAgentRegistrationResult =
+  | { ok: true }
+  | {
+      ok: false;
+      reason: "missing-credentials" | "aborted" | "timeout" | "api-error" | "request-error";
+    };
+
+function buildProbeCacheKey(creds: FeishuClientCredentials): string {
+  // Account ids survive config reloads. Bind cached health and identity to the
+  // complete credentials so a reconfigured account must perform a fresh probe.
+  const identity = [creds.accountId ?? null, creds.appId, creds.appSecret, creds.domain ?? null];
+  return createHash("sha256").update(JSON.stringify(identity)).digest("hex");
+}
 
 function setCachedProbeResult(
   cacheKey: string,
@@ -78,11 +98,8 @@ export async function probeFeishu(
 
   const timeoutMs = options.timeoutMs ?? FEISHU_PROBE_REQUEST_TIMEOUT_MS;
 
-  // Return cached result if still valid.
-  // Use accountId when available; otherwise include appSecret prefix so two
-  // accounts sharing the same appId (e.g. after secret rotation) don't
-  // pollute each other's cache entry.
-  const cacheKey = creds.accountId ?? `${creds.appId}:${creds.appSecret.slice(0, 8)}`;
+  // Return cached result if still valid for this exact configured identity.
+  const cacheKey = buildProbeCacheKey(creds);
   const cached = probeCache.get(cacheKey);
   if (cached) {
     const now = asDateTimestampMs(Date.now());
@@ -95,16 +112,14 @@ export async function probeFeishu(
 
   try {
     const client = createFeishuClient(creds) as FeishuRequestClient;
-    // Feishu-provided endpoint for OpenClaw, supported on both Feishu (CN)
-    // and Lark (international). No OAuth scopes required. Validates
-    // credentials and registers the app as an AI agent (智能体).
-    const responseResult = await raceWithTimeoutAndAbort<FeishuPingResponse>(
+    // Bot identity is required for mention and self-message filtering. Keep it on the
+    // standard bot-info API so optional AI-agent registration cannot gate the channel.
+    const responseResult = await raceWithTimeoutAndAbort<FeishuBotInfoResponse>(
       client.request({
-        method: "POST",
-        url: "/open-apis/bot/v1/openclaw_bot/ping",
-        data: { needBotInfo: true },
+        method: "GET",
+        url: "/open-apis/bot/v3/info",
         timeout: timeoutMs,
-      }),
+      }) as Promise<FeishuBotInfoResponse>,
       {
         timeoutMs,
         abortSignal: options.abortSignal,
@@ -151,14 +166,25 @@ export async function probeFeishu(
       );
     }
 
-    const botInfo = response.data?.pingBotInfo;
+    const botInfo = response.bot ?? response.data?.bot;
+    if (!botInfo?.open_id) {
+      return setCachedProbeResult(
+        cacheKey,
+        {
+          ok: false,
+          appId: creds.appId,
+          error: "API response missing bot open_id",
+        },
+        PROBE_ERROR_TTL_MS,
+      );
+    }
     return setCachedProbeResult(
       cacheKey,
       {
         ok: true,
         appId: creds.appId,
-        botName: botInfo?.botName,
-        botOpenId: botInfo?.botID,
+        botName: botInfo.app_name,
+        botOpenId: botInfo.open_id,
       },
       PROBE_SUCCESS_TTL_MS,
     );
@@ -172,5 +198,44 @@ export async function probeFeishu(
       },
       PROBE_ERROR_TTL_MS,
     );
+  }
+}
+
+/**
+ * Preserve Feishu's optional AI-agent registration without coupling it to health or
+ * identity. Monitor startup calls this once per account and never awaits it.
+ */
+export async function registerFeishuAiAgent(
+  creds?: FeishuClientCredentials,
+  options: ProbeFeishuOptions = {},
+): Promise<FeishuAiAgentRegistrationResult> {
+  if (!creds?.appId || !creds?.appSecret) {
+    return { ok: false, reason: "missing-credentials" };
+  }
+  if (options.abortSignal?.aborted) {
+    return { ok: false, reason: "aborted" };
+  }
+
+  const timeoutMs = options.timeoutMs ?? FEISHU_PROBE_REQUEST_TIMEOUT_MS;
+  try {
+    const client = createFeishuClient(creds) as FeishuRequestClient;
+    const responseResult = await raceWithTimeoutAndAbort<FeishuAiAgentRegistrationResponse>(
+      client.request({
+        method: "POST",
+        url: "/open-apis/bot/v1/openclaw_bot/ping",
+        data: { needBotInfo: true },
+        timeout: timeoutMs,
+      }) as Promise<FeishuAiAgentRegistrationResponse>,
+      { timeoutMs, abortSignal: options.abortSignal },
+    );
+    if (responseResult.status === "aborted" || options.abortSignal?.aborted) {
+      return { ok: false, reason: "aborted" };
+    }
+    if (responseResult.status === "timeout") {
+      return { ok: false, reason: "timeout" };
+    }
+    return responseResult.value.code === 0 ? { ok: true } : { ok: false, reason: "api-error" };
+  } catch {
+    return { ok: false, reason: "request-error" };
   }
 }

@@ -86,12 +86,11 @@ type OnboardingPluginInstallResult = {
   error?: string;
 };
 
-async function markOnboardingPluginInstalled(
-  result: OnboardingPluginInstallResult & { installed: true },
-  params: {
-    runtime: RuntimeEnv;
-  },
-): Promise<OnboardingPluginInstallResult & { installed: true }> {
+async function markOnboardingPluginInstalled(params: {
+  cfg: OpenClawConfig;
+  pluginId: string;
+  runtime: RuntimeEnv;
+}): Promise<OnboardingPluginInstallResult & { installed: true }> {
   // Onboarding has not committed config yet, so invalidate only process-local
   // discovery. The next lookup recovers the new package alongside persisted records.
   clearLoadInstalledPluginIndexInstallRecordsCache();
@@ -99,7 +98,12 @@ async function markOnboardingPluginInstalled(
   await invalidatePluginRuntimeDiscoveryAfterConfigMutation({
     logger: { warn: (message) => params.runtime.log(message) },
   });
-  return result;
+  return {
+    cfg: params.cfg,
+    installed: true,
+    pluginId: params.pluginId,
+    status: "installed",
+  };
 }
 
 function shouldFallbackClawHubToNpm(params: {
@@ -595,6 +599,75 @@ async function applyPluginEnablement(params: {
   return enableResult;
 }
 
+async function finishOnboardingPluginInstall(params: {
+  cfg: OpenClawConfig;
+  pluginId: string;
+  label: string;
+  prompter: WizardPrompter;
+  runtime: RuntimeEnv;
+  install?: Parameters<typeof recordPluginInstall>[1];
+}): Promise<OnboardingPluginInstallResult> {
+  const enableResult = await applyPluginEnablement(params);
+  if (!enableResult.enabled) {
+    return {
+      cfg: enableResult.config,
+      installed: false,
+      pluginId: params.pluginId,
+      status: "failed",
+    };
+  }
+  return await markOnboardingPluginInstalled({
+    cfg: params.install
+      ? recordPluginInstall(enableResult.config, params.install)
+      : enableResult.config,
+    pluginId: params.pluginId,
+    runtime: params.runtime,
+  });
+}
+
+async function installLocalOnboardingPlugin(params: {
+  cfg: OpenClawConfig;
+  entry: OnboardingPluginInstallEntry;
+  localPath: string;
+  bundledLocalPath: string | null;
+  npmSpec: string | null;
+  workspaceDir?: string;
+  prompter: WizardPrompter;
+  runtime: RuntimeEnv;
+}): Promise<OnboardingPluginInstallResult> {
+  const enableResult = await applyPluginEnablement({
+    cfg: params.cfg,
+    pluginId: params.entry.pluginId,
+    label: params.entry.label,
+    prompter: params.prompter,
+    runtime: params.runtime,
+  });
+  if (!enableResult.enabled) {
+    return {
+      cfg: enableResult.config,
+      installed: false,
+      pluginId: params.entry.pluginId,
+      status: "failed",
+    };
+  }
+  // Bundled sources already belong to the host and must not gain an install
+  // record or a duplicate plugin load path.
+  const cfg = pathsReferToSameDirectory(params.localPath, params.bundledLocalPath)
+    ? enableResult.config
+    : await recordLocalPluginInstall({
+        cfg: addPluginLoadPath(enableResult.config, params.localPath),
+        entry: params.entry,
+        localPath: params.localPath,
+        npmSpec: params.npmSpec,
+        workspaceDir: params.workspaceDir,
+      });
+  return await markOnboardingPluginInstalled({
+    cfg,
+    pluginId: params.entry.pluginId,
+    runtime: params.runtime,
+  });
+}
+
 type AnimatedProgress = {
   setLabel: (label: string) => void;
   stop: () => void;
@@ -741,13 +814,16 @@ function isClawHubTrustWarning(message: string): boolean {
   );
 }
 
-async function installPluginFromNpmSpecWithProgress(params: {
+async function runOnboardingPluginInstallWithProgress(params: {
   cfg: OpenClawConfig;
   entry: OnboardingPluginInstallEntry;
-  npmSpec: string;
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
-  trustedSourceLinkedOfficialInstall?: boolean;
+  install: (logger: {
+    info: (message: string) => void;
+    warn: (message: string) => void;
+  }) => Promise<InstallPluginResult>;
+  rethrowUnexpectedErrors?: boolean;
 }): Promise<
   | { status: "timed_out" }
   | {
@@ -769,95 +845,11 @@ async function installPluginFromNpmSpecWithProgress(params: {
 
   try {
     const result = await withTimeout(
-      installPluginFromNpmSpec({
-        spec: params.npmSpec,
-        mode: "update",
-        config: params.cfg,
-        timeoutMs: ONBOARDING_PLUGIN_INSTALL_TIMEOUT_MS,
-        expectedPluginId: params.entry.pluginId,
-        expectedIntegrity: params.entry.install.expectedIntegrity,
-        ...((params.trustedSourceLinkedOfficialInstall ??
-        params.entry.trustedSourceLinkedOfficialInstall)
-          ? { trustedSourceLinkedOfficialInstall: true }
-          : {}),
-        extensionsDir: resolveDefaultPluginExtensionsDir(),
-        logger: {
-          info: updateProgress,
-          warn: (message) => {
-            updateProgress(message);
-            logInstallWarningWithSpacing(params.runtime, message);
-          },
-        },
-      }),
-      ONBOARDING_PLUGIN_INSTALL_WATCHDOG_TIMEOUT_MS,
-    );
-    animated.stop();
-    if (result.ok) {
-      progress.stop(formatPluginInstalled(safeLabel));
-    } else {
-      progress.stop(formatPluginInstallFailed(safeLabel));
-    }
-    return {
-      status: "completed",
-      result,
-    };
-  } catch (error) {
-    animated.stop();
-    if (isTimeoutError(error)) {
-      progress.stop(formatPluginInstallTimedOut(safeLabel));
-      return { status: "timed_out" };
-    }
-    progress.stop(formatPluginInstallFailed(safeLabel));
-    return {
-      status: "completed",
-      result: {
-        ok: false,
-        error: error instanceof Error ? error.message : String(error),
-      },
-    };
-  }
-}
-
-async function installPluginFromNpmPackArchiveWithProgress(params: {
-  cfg: OpenClawConfig;
-  entry: OnboardingPluginInstallEntry;
-  archivePath: string;
-  prompter: WizardPrompter;
-  runtime: RuntimeEnv;
-}): Promise<
-  | { status: "timed_out" }
-  | {
-      status: "completed";
-      result: InstallPluginResult & { npmTarballName?: string };
-    }
-> {
-  const safeLabel = sanitizeTerminalText(params.entry.label);
-  const progress = params.prompter.progress(formatPluginInstallProgress(safeLabel));
-  const animated = createAnimatedInstallProgress(progress);
-  animated.setLabel(t("wizard.plugins.preparingInstall"));
-  const updateProgress = (message: string) => {
-    const sanitized = sanitizeTerminalText(message).trim();
-    if (!sanitized) {
-      return;
-    }
-    animated.setLabel(shortenInstallLabel(sanitized));
-  };
-
-  try {
-    const result = await withTimeout(
-      installPluginFromNpmPackArchive({
-        archivePath: params.archivePath,
-        timeoutMs: ONBOARDING_PLUGIN_INSTALL_TIMEOUT_MS,
-        config: params.cfg,
-        expectedPluginId: params.entry.pluginId,
-        expectedIntegrity: params.entry.install.expectedIntegrity,
-        extensionsDir: resolveDefaultPluginExtensionsDir(),
-        logger: {
-          info: updateProgress,
-          warn: (message) => {
-            updateProgress(message);
-            logInstallWarningWithSpacing(params.runtime, message);
-          },
+      params.install({
+        info: updateProgress,
+        warn: (message) => {
+          updateProgress(message);
+          logInstallWarningWithSpacing(params.runtime, message);
         },
       }),
       ONBOARDING_PLUGIN_INSTALL_WATCHDOG_TIMEOUT_MS,
@@ -874,10 +866,83 @@ async function installPluginFromNpmPackArchiveWithProgress(params: {
       return { status: "timed_out" };
     }
     progress.stop(formatPluginInstallFailed(safeLabel));
-    throw error;
+    if (params.rethrowUnexpectedErrors) {
+      throw error;
+    }
+    return {
+      status: "completed",
+      result: {
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+      },
+    };
   } finally {
     animated.stop();
   }
+}
+
+async function installPluginFromNpmSpecWithProgress(params: {
+  cfg: OpenClawConfig;
+  entry: OnboardingPluginInstallEntry;
+  npmSpec: string;
+  prompter: WizardPrompter;
+  runtime: RuntimeEnv;
+  trustedSourceLinkedOfficialInstall?: boolean;
+}): Promise<
+  | { status: "timed_out" }
+  | {
+      status: "completed";
+      result: InstallPluginResult;
+    }
+> {
+  return await runOnboardingPluginInstallWithProgress({
+    ...params,
+    install: (logger) =>
+      installPluginFromNpmSpec({
+        spec: params.npmSpec,
+        mode: "update",
+        config: params.cfg,
+        timeoutMs: ONBOARDING_PLUGIN_INSTALL_TIMEOUT_MS,
+        expectedPluginId: params.entry.pluginId,
+        expectedIntegrity: params.entry.install.expectedIntegrity,
+        ...((params.trustedSourceLinkedOfficialInstall ??
+        params.entry.trustedSourceLinkedOfficialInstall)
+          ? { trustedSourceLinkedOfficialInstall: true }
+          : {}),
+        extensionsDir: resolveDefaultPluginExtensionsDir(),
+        logger,
+      }),
+  });
+}
+
+async function installPluginFromNpmPackArchiveWithProgress(params: {
+  cfg: OpenClawConfig;
+  entry: OnboardingPluginInstallEntry;
+  archivePath: string;
+  prompter: WizardPrompter;
+  runtime: RuntimeEnv;
+}): Promise<
+  | { status: "timed_out" }
+  | {
+      status: "completed";
+      result: InstallPluginResult & { npmTarballName?: string };
+    }
+> {
+  return await runOnboardingPluginInstallWithProgress({
+    ...params,
+    install: (logger) =>
+      installPluginFromNpmPackArchive({
+        archivePath: params.archivePath,
+        timeoutMs: ONBOARDING_PLUGIN_INSTALL_TIMEOUT_MS,
+        config: params.cfg,
+        expectedPluginId: params.entry.pluginId,
+        expectedIntegrity: params.entry.install.expectedIntegrity,
+        extensionsDir: resolveDefaultPluginExtensionsDir(),
+        logger,
+      }),
+    // Archive overrides retain their existing unexpected-error contract.
+    rethrowUnexpectedErrors: true,
+  });
 }
 
 async function installPluginFromOverride(params: {
@@ -954,21 +1019,6 @@ async function installPluginFromOverride(params: {
     };
   }
 
-  const enableResult = await applyPluginEnablement({
-    cfg: params.cfg,
-    pluginId: result.pluginId,
-    label: entry.label,
-    prompter,
-    runtime,
-  });
-  if (!enableResult.enabled) {
-    return {
-      cfg: enableResult.config,
-      installed: false,
-      pluginId: result.pluginId,
-      status: "failed",
-    };
-  }
   const npmTarballName =
     params.override.kind === "npm-pack"
       ? (result as InstallPluginResult & { npmTarballName?: string }).npmTarballName
@@ -999,15 +1049,14 @@ async function installPluginFromOverride(params: {
           ...(result.version ? { version: result.version } : {}),
           ...buildNpmResolutionInstallFields(result.npmResolution),
         } as const);
-  return await markOnboardingPluginInstalled(
-    {
-      cfg: recordPluginInstall(enableResult.config, install),
-      installed: true,
-      pluginId: result.pluginId,
-      status: "installed",
-    },
-    { runtime: params.runtime },
-  );
+  return await finishOnboardingPluginInstall({
+    cfg: params.cfg,
+    pluginId: result.pluginId,
+    label: entry.label,
+    prompter,
+    runtime,
+    install,
+  });
 }
 
 async function installPluginFromClawHubSpecWithProgress(params: {
@@ -1129,7 +1178,7 @@ export async function ensureOnboardingPluginInstalled(params: {
   beforePersistentEffect?: () => Promise<void>;
 }): Promise<OnboardingPluginInstallResult> {
   const { entry, prompter, runtime, workspaceDir } = params;
-  let next = params.cfg;
+  const next = params.cfg;
   const installOverride = resolvePluginInstallOverride({ pluginId: entry.pluginId });
   if (installOverride) {
     // Any install override mutates config/install records, so guard it with the
@@ -1214,45 +1263,16 @@ export async function ensureOnboardingPluginInstalled(params: {
   assertConfigWriteAllowedInCurrentMode();
 
   if (choice === "local" && localPath) {
-    // Bundled plugin sources are already part of the host checkout; enabling is
-    // enough and no install record/load path should be added for that case.
-    const enableResult = await applyPluginEnablement({
+    return await installLocalOnboardingPlugin({
       cfg: next,
-      pluginId: entry.pluginId,
-      label: entry.label,
+      entry,
+      localPath,
+      bundledLocalPath,
+      npmSpec,
+      workspaceDir,
       prompter,
       runtime,
     });
-    if (!enableResult.enabled) {
-      return {
-        cfg: enableResult.config,
-        installed: false,
-        pluginId: entry.pluginId,
-        status: "failed",
-      };
-    }
-    if (pathsReferToSameDirectory(localPath, bundledLocalPath)) {
-      return await markOnboardingPluginInstalled(
-        {
-          cfg: enableResult.config,
-          installed: true,
-          pluginId: entry.pluginId,
-          status: "installed",
-        },
-        { runtime },
-      );
-    }
-    next = addPluginLoadPath(enableResult.config, localPath);
-    next = await recordLocalPluginInstall({ cfg: next, entry, localPath, npmSpec, workspaceDir });
-    return await markOnboardingPluginInstalled(
-      {
-        cfg: next,
-        installed: true,
-        pluginId: entry.pluginId,
-        status: "installed",
-      },
-      { runtime },
-    );
   }
 
   let shouldTryNpm = choice === "npm";
@@ -1284,37 +1304,19 @@ export async function ensureOnboardingPluginInstalled(params: {
 
     const { result } = installOutcome;
     if (result.ok) {
-      const enableResult = await applyPluginEnablement({
+      return await finishOnboardingPluginInstall({
         cfg: next,
         pluginId: result.pluginId,
         label: entry.label,
         prompter,
         runtime,
-      });
-      if (!enableResult.enabled) {
-        return {
-          cfg: enableResult.config,
-          installed: false,
+        install: {
           pluginId: result.pluginId,
-          status: "failed",
-        };
-      }
-      next = enableResult.config;
-      next = recordPluginInstall(next, {
-        pluginId: result.pluginId,
-        ...buildClawHubPluginInstallRecordFields(result.clawhub),
-        spec: clawhubSpecs?.recordSpec ?? clawhubInstallSpec,
-        installPath: result.targetDir,
-      });
-      return await markOnboardingPluginInstalled(
-        {
-          cfg: next,
-          installed: true,
-          pluginId: result.pluginId,
-          status: "installed",
+          ...buildClawHubPluginInstallRecordFields(result.clawhub),
+          spec: clawhubSpecs?.recordSpec ?? clawhubInstallSpec,
+          installPath: result.targetDir,
         },
-        { runtime },
-      );
+      });
     }
 
     await prompter.note(
@@ -1406,44 +1408,25 @@ export async function ensureOnboardingPluginInstalled(params: {
   const { result } = installOutcome;
 
   if (result.ok) {
-    const enableResult = await applyPluginEnablement({
+    return await finishOnboardingPluginInstall({
       cfg: next,
       pluginId: result.pluginId,
       label: entry.label,
       prompter,
       runtime,
-    });
-    if (!enableResult.enabled) {
-      return {
-        cfg: enableResult.config,
-        installed: false,
+      install: {
         pluginId: result.pluginId,
-        status: "failed",
-      };
-    }
-    next = enableResult.config;
-    const install = {
-      pluginId: result.pluginId,
-      source: "npm",
-      spec: resolveNpmInstallRecordSpec({
-        requestedSpec: npmSpecs?.recordSpec ?? npmInstallSpec,
-        resolution: result.npmResolution,
-        pinResolvedRegistrySpec: false,
-      }),
-      installPath: result.targetDir,
-      version: result.version,
-      ...buildNpmResolutionInstallFields(result.npmResolution),
-    } as const;
-    next = recordPluginInstall(next, install);
-    return await markOnboardingPluginInstalled(
-      {
-        cfg: next,
-        installed: true,
-        pluginId: result.pluginId,
-        status: "installed",
+        source: "npm",
+        spec: resolveNpmInstallRecordSpec({
+          requestedSpec: npmSpecs?.recordSpec ?? npmInstallSpec,
+          resolution: result.npmResolution,
+          pinResolvedRegistrySpec: false,
+        }),
+        installPath: result.targetDir,
+        version: result.version,
+        ...buildNpmResolutionInstallFields(result.npmResolution),
       },
-      { runtime },
-    );
+    });
   }
 
   await prompter.note(
@@ -1467,43 +1450,16 @@ export async function ensureOnboardingPluginInstalled(params: {
       initialValue: true,
     });
     if (fallback) {
-      const enableResult = await applyPluginEnablement({
+      return await installLocalOnboardingPlugin({
         cfg: next,
-        pluginId: entry.pluginId,
-        label: entry.label,
+        entry,
+        localPath,
+        bundledLocalPath,
+        npmSpec,
+        workspaceDir,
         prompter,
         runtime,
       });
-      if (!enableResult.enabled) {
-        return {
-          cfg: enableResult.config,
-          installed: false,
-          pluginId: entry.pluginId,
-          status: "failed",
-        };
-      }
-      if (pathsReferToSameDirectory(localPath, bundledLocalPath)) {
-        return await markOnboardingPluginInstalled(
-          {
-            cfg: enableResult.config,
-            installed: true,
-            pluginId: entry.pluginId,
-            status: "installed",
-          },
-          { runtime },
-        );
-      }
-      next = addPluginLoadPath(enableResult.config, localPath);
-      next = await recordLocalPluginInstall({ cfg: next, entry, localPath, npmSpec, workspaceDir });
-      return await markOnboardingPluginInstalled(
-        {
-          cfg: next,
-          installed: true,
-          pluginId: entry.pluginId,
-          status: "installed",
-        },
-        { runtime },
-      );
     }
   }
 

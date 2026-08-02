@@ -38,7 +38,7 @@ The wizard also asks for the API domain (Feishu vs Lark) and the group policy. I
 
 ## Inbound durability
 
-OpenClaw durably queues authenticated `im.message.receive_v1` and `drive.notice.comment_add_v1` envelopes before agent dispatch. Pending or retryable events survive a Gateway restart, remain serialized per chat or document, and use Feishu's event ID to suppress duplicate queue entries while the active or retained completion record exists.
+OpenClaw durably queues authenticated `im.message.receive_v1` and `drive.notice.comment_add_v1` envelopes before agent dispatch. In webhook mode, the durable `200` carries `x-openclaw-delivery-accepted: durable`; verification challenges, non-durable event types, and error responses omit the marker, so reverse proxies can require it to distinguish durable acceptance from a generic `200`. Pending or retryable events survive a Gateway restart, remain serialized per chat or document, and use Feishu's event ID to suppress duplicate queue entries while the active or retained completion record exists.
 
 If a WebSocket event cannot be persisted after bounded retries, OpenClaw closes that socket and forces a fresh authenticated connection instead of continuing past an uncommitted turn. Other Feishu event types, including reactions and VC meeting invitations, use their normal event paths and do not receive this durable-queue guarantee.
 
@@ -311,7 +311,7 @@ The official `lark-cli` VC agent skill currently marks meeting-bot actions as a 
 ```
 
 `defaultAccount` controls which account is used when outbound APIs do not specify an `accountId`. Account entries inherit top-level settings; most top-level keys can be overridden per account.
-`accounts.<id>.tts` uses the same shape as `messages.tts` and deep-merges over global TTS config, so multi-bot Feishu setups can keep shared provider credentials globally while overriding only voice, model, persona, or auto mode per account.
+`accounts.<id>.tts` uses the same shape as `tts` and deep-merges over global TTS config, so multi-bot Feishu setups can keep shared provider credentials globally while overriding only voice, model, persona, or auto mode per account.
 
 ### Message limits
 
@@ -385,7 +385,11 @@ The plugin ships agent tools for Feishu documents, chats, knowledge base, cloud 
 | `tools.scopes`  | `feishu_app_scopes` app scope diagnostics     | `true`              |
 | `tools.bitable` | `feishu_bitable_*` Bitable/Base operations    | `true`              |
 
-`tools.base` is an alias for `tools.bitable`; the explicit `bitable` value wins when both are set. Per-account gates live under `accounts.<id>.tools`.
+Per-account gates live under `accounts.<id>.tools`.
+
+`feishu_doc` creates title-only documents. To add Markdown, pass the returned
+`document_id` as `doc_token` in a separate `write` action. A `create` request
+that includes `content` fails without creating an empty document.
 
 Grant `drive:drive.metadata:readonly` for direct `feishu_drive info` lookups outside the root
 directory, unless the app already has the full `drive:drive` scope. Without either scope, `info`
@@ -642,7 +646,7 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 | `channels.feishu.accounts.<id>.appId`                    | App ID                                                                               | -                                    |
 | `channels.feishu.accounts.<id>.appSecret`                | App Secret                                                                           | -                                    |
 | `channels.feishu.accounts.<id>.domain`                   | Per-account domain override                                                          | `feishu`                             |
-| `channels.feishu.accounts.<id>.tts`                      | Per-account TTS override                                                             | `messages.tts`                       |
+| `channels.feishu.accounts.<id>.tts`                      | Per-account TTS override                                                             | `tts`                                |
 | `channels.feishu.dmPolicy`                               | DM policy (`pairing`, `allowlist`, `open`)                                           | `pairing`                            |
 | `channels.feishu.allowFrom`                              | DM allowlist (open_id list)                                                          | -                                    |
 | `channels.feishu.groupPolicy`                            | Group policy (`open`, `allowlist`, `disabled`)                                       | `allowlist`                          |
@@ -677,9 +681,7 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 | `channels.feishu.tools.perm`                             | Enable permission management tools                                                   | `false`                              |
 | `channels.feishu.tools.scopes`                           | Enable app scopes diagnostic tool                                                    | `true`                               |
 | `channels.feishu.tools.bitable`                          | Enable Bitable/Base tools                                                            | `true`                               |
-| `channels.feishu.tools.base`                             | Alias for `channels.feishu.tools.bitable`; explicit `bitable` wins when both set     | `true`                               |
 | `channels.feishu.accounts.<id>.tools.bitable`            | Per-account Bitable/Base tool gate                                                   | inherited                            |
-| `channels.feishu.accounts.<id>.tools.base`               | Per-account alias for `tools.bitable`                                                | inherited                            |
 
 ## Supported message types
 

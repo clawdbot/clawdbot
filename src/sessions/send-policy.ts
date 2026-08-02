@@ -6,6 +6,7 @@ import {
 import { normalizeChatType } from "../channels/chat-type.js";
 import type { SessionChatType, SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { sessionDeliveryChannel } from "../utils/delivery-context.shared.js";
 import {
   hasAmbiguousCanonicalSessionPeerShape,
   parseCanonicalSessionPeerShape,
@@ -104,8 +105,7 @@ export function resolveSendPolicy(params: {
   const getChannel = () => {
     channel ??=
       normalizeMatchValue(params.channel) ??
-      normalizeMatchValue(params.entry?.channel) ??
-      normalizeMatchValue(params.entry?.lastChannel) ??
+      normalizeMatchValue(sessionDeliveryChannel(params.entry)) ??
       deriveChannelFromKey(params.sessionKey);
     return channel;
   };

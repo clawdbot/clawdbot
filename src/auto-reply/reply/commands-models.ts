@@ -18,8 +18,8 @@ import {
   resolveLogicalVisibleModelCatalog,
   type ModelCatalogAuthChecker,
 } from "../../agents/model-catalog-visibility.js";
-import { isRetiredModelPickerProvider } from "../../agents/model-picker-visibility.js";
 import { createProviderAuthChecker } from "../../agents/model-provider-auth.js";
+import { isRetiredModelPickerProvider } from "../../agents/model-runtime-aliases.js";
 import { modelCatalogLogicalKey } from "../../agents/model-selection-shared.js";
 import {
   buildModelAliasIndex,
@@ -170,6 +170,7 @@ export async function buildModelsProviderData(
 
   const snapshot = await loadPreparedModelCatalogSnapshotForBrowse({
     cfg,
+    agentId,
     view: options.view ?? "default",
     loadCatalog: ({ readOnly }) =>
       loadPreparedModelCatalogSnapshot({

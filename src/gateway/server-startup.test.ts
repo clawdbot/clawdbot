@@ -8,7 +8,12 @@ const prepareModelRuntimeSnapshotMock = vi.fn(async (_params: unknown) => ({}));
 const refreshPreparedModelRuntimeSnapshotsMock = vi.fn(
   async (
     _cfg: OpenClawConfig,
-    _options?: { gatewayLifecycle?: boolean; defaultWorkspaceDir?: string },
+    _options?: {
+      gatewayLifecycle?: boolean;
+      defaultWorkspaceDir?: string;
+      catalogMode?: "live" | "static";
+      allowGatewaySubagentBinding?: boolean;
+    },
   ) => {},
 );
 
@@ -22,7 +27,12 @@ vi.mock("../agents/prepared-model-runtime.js", () => ({
   publishPreparedModelRuntimeSnapshot: (params: unknown) => prepareModelRuntimeSnapshotMock(params),
   refreshPreparedModelRuntimeSnapshots: (
     cfg: OpenClawConfig,
-    options?: { gatewayLifecycle?: boolean; defaultWorkspaceDir?: string },
+    options?: {
+      gatewayLifecycle?: boolean;
+      defaultWorkspaceDir?: string;
+      catalogMode?: "live" | "static";
+      allowGatewaySubagentBinding?: boolean;
+    },
   ) => refreshPreparedModelRuntimeSnapshotsMock(cfg, options),
 }));
 
@@ -63,7 +73,9 @@ describe("gateway startup primary model warmup", () => {
     });
 
     expect(refreshPreparedModelRuntimeSnapshotsMock).toHaveBeenCalledWith(cfg, {
+      allowGatewaySubagentBinding: true,
       gatewayLifecycle: true,
+      catalogMode: "static",
     });
   });
 
@@ -75,7 +87,9 @@ describe("gateway startup primary model warmup", () => {
     });
 
     expect(refreshPreparedModelRuntimeSnapshotsMock).toHaveBeenCalledWith(cfg, {
+      allowGatewaySubagentBinding: true,
       gatewayLifecycle: true,
+      catalogMode: "static",
     });
   });
 
@@ -109,7 +123,10 @@ describe("gateway startup primary model warmup", () => {
       expect(refreshPreparedModelRuntimeSnapshotsMock).toHaveBeenCalledOnce();
       expect(refreshPreparedModelRuntimeSnapshotsMock).toHaveBeenCalledWith(
         expect.any(Object),
-        expect.objectContaining({ defaultWorkspaceDir: "/tmp/skip-explicit-workspace" }),
+        expect.objectContaining({
+          allowGatewaySubagentBinding: true,
+          defaultWorkspaceDir: "/tmp/skip-explicit-workspace",
+        }),
       );
       expect(optionalPrewarm).not.toHaveBeenCalled();
     } finally {
@@ -124,19 +141,15 @@ describe("gateway startup primary model warmup", () => {
           model: {
             primary: "codex-cli/gpt-5.5",
           },
-          cliBackends: {
-            "codex-cli": {
-              command: "codex",
-              args: ["exec"],
-            },
-          },
         },
       },
     } as OpenClawConfig;
     await prewarmConfiguredPrimaryModel({ cfg, log: { warn: vi.fn() } });
 
     expect(refreshPreparedModelRuntimeSnapshotsMock).toHaveBeenCalledWith(cfg, {
+      allowGatewaySubagentBinding: true,
       gatewayLifecycle: true,
+      catalogMode: "static",
     });
   });
 
@@ -149,7 +162,9 @@ describe("gateway startup primary model warmup", () => {
     });
 
     expect(refreshPreparedModelRuntimeSnapshotsMock).toHaveBeenCalledWith(cfg, {
+      allowGatewaySubagentBinding: true,
       gatewayLifecycle: true,
+      catalogMode: "static",
       defaultWorkspaceDir: "/tmp/explicit-workspace",
     });
   });

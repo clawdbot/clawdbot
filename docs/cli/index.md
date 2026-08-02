@@ -15,7 +15,7 @@ Setup commands by intent:
 - `openclaw setup` and `openclaw onboard` verify inference first, then start OpenClaw for Gateway, workspace, channels, skills, and health setup.
 - `openclaw setup --baseline` creates the baseline config and workspace without walking the guided onboarding flow.
 - `openclaw configure` changes targeted parts of an existing setup: model auth, gateway, channels, plugins, or skills.
-- `openclaw channels add` configures channel accounts after the baseline exists; run without flags for guided setup, or with channel-specific flags for scripts.
+- `openclaw channels add` configures channel accounts after the baseline exists; a channel selection alone uses guided setup, while account, credential, or channel-config flags use the direct path for scripts.
 
 ## Command pages
 
@@ -47,6 +47,10 @@ Setup commands by intent:
 | `--no-color`            | Disable ANSI colors (`NO_COLOR=1` is also respected)                                                    |
 | `--update`              | Shorthand for [`openclaw update`](/cli/update); works for both source checkouts and package installs    |
 | `-V`, `--version`, `-v` | Print version and exit                                                                                  |
+
+A named `--profile` replaces canonical state and config paths inherited from
+another profile, including a running Gateway service. Explicitly customized
+state directories and config paths remain unchanged.
 
 ## Output modes
 

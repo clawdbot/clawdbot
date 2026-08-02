@@ -36,6 +36,7 @@ describe("realtime Talk microphone inputs", () => {
         { deviceId: "built-in", label: "Built-in Microphone" },
         { deviceId: "usb", label: "Microphone 2" },
       ],
+      permissionRequired: true,
       warning: null,
     });
     expect(getUserMedia).not.toHaveBeenCalled();
@@ -61,6 +62,7 @@ describe("realtime Talk microphone inputs", () => {
         { deviceId: "built-in", label: "Built-in Microphone" },
         { deviceId: "loopback", label: "Loopback Audio" },
       ],
+      permissionRequired: false,
       warning: null,
     });
     expect(getUserMedia).toHaveBeenCalledWith({ audio: true });
@@ -82,6 +84,7 @@ describe("realtime Talk microphone inputs", () => {
     const result = await discoverRealtimeTalkInputs(true);
 
     expect(result.devices).toEqual([]);
+    expect(result.permissionRequired).toBe(true);
     expect(result.warning).toContain("Microphone access is blocked");
   });
 
@@ -118,6 +121,25 @@ describe("realtime Talk microphone inputs", () => {
         deviceId: { exact: "usb-mic" },
       },
     });
+  });
+
+  it("settles microphone cancellation before browser permission resolves", async () => {
+    const stop = vi.fn();
+    let resolveMedia: (stream: MediaStream) => void = () => undefined;
+    const pending = new Promise<MediaStream>((resolve) => {
+      resolveMedia = resolve;
+    });
+    vi.stubGlobal("navigator", {
+      mediaDevices: { getUserMedia: vi.fn(() => pending) },
+    });
+    const controller = new AbortController();
+
+    const opening = openRealtimeTalkInput(undefined, { signal: controller.signal });
+    controller.abort();
+
+    await expect(opening).rejects.toMatchObject({ name: "AbortError" });
+    resolveMedia({ getTracks: () => [{ stop }] } as unknown as MediaStream);
+    await vi.waitFor(() => expect(stop).toHaveBeenCalledOnce());
   });
 
   it("acquires camera separately so camera errors cannot stop microphone input", async () => {
@@ -169,10 +191,10 @@ describe("realtime Talk microphone inputs", () => {
     const opening = openRealtimeTalkCamera(undefined, { signal: controller.signal });
     await vi.waitFor(() => expect(getUserMedia).toHaveBeenCalledOnce());
     controller.abort();
-    resolveCamera(camera);
 
     await expect(opening).rejects.toMatchObject({ name: "AbortError" });
-    expect(videoStop).toHaveBeenCalledOnce();
+    resolveCamera(camera);
+    await vi.waitFor(() => expect(videoStop).toHaveBeenCalledOnce());
   });
 
   it("enables voice processing with the system default microphone", async () => {
@@ -212,6 +234,7 @@ describe("realtime Talk camera inputs", () => {
         { deviceId: "front", label: "Front Camera" },
         { deviceId: "back", label: "Camera 2" },
       ],
+      permissionRequired: true,
       warning: null,
     });
     expect(getUserMedia).not.toHaveBeenCalled();
@@ -228,6 +251,7 @@ describe("realtime Talk camera inputs", () => {
 
     await expect(discoverRealtimeTalkCameras(true)).resolves.toEqual({
       devices: [{ deviceId: "camera", label: "Desk Camera" }],
+      permissionRequired: false,
       warning: null,
     });
     expect(getUserMedia).toHaveBeenCalledWith({ video: true });

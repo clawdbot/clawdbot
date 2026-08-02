@@ -171,8 +171,10 @@ describe("debug proxy runtime", () => {
           Cookie: "sid=session-token",
           "x-api-key": "provider-key",
           "content-type": "application/json",
+          "X-Routing-Target": "staging-private-route",
           "x-safe": "visible",
         },
+        meta: { sensitiveRequestHeaderNames: ["x-routing-target"] },
         response: new Response("{}", {
           status: 200,
           headers: {
@@ -195,6 +197,7 @@ describe("debug proxy runtime", () => {
       Cookie: "[REDACTED]",
       "x-api-key": "[REDACTED]",
       "content-type": "application/json",
+      "X-Routing-Target": "[REDACTED]",
       "x-safe": "visible",
     });
     const response = events.find((event) => event.kind === "response");

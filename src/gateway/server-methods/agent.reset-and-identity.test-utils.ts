@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AVATAR_MAX_BYTES } from "../../shared/avatar-policy.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import {
   REAL_PNG,
   REAL_PNG_DATA_URL,
@@ -610,8 +611,9 @@ describe("gateway agent handler", () => {
       entry: {
         sessionId: key === sessionKey ? "wechat-session-id" : "main-session-id",
         updatedAt: Date.now(),
-        lastChannel: "openclaw-weixin",
-        lastTo: "o9cq802hhmfc@im.wechat",
+        delivery: normalizeSessionDeliveryState({
+          context: { channel: "openclaw-weixin", to: "o9cq802hhmfc@im.wechat" },
+        }),
       },
       canonicalKey: key,
     }));

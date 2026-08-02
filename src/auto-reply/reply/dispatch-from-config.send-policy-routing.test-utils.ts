@@ -29,114 +29,58 @@ beforeAll(globalBeforeAll0);
 describe("sendPolicy deny — suppress delivery, not processing (#53328)", () => {
   beforeEach(describe2BeforeEach0);
 
-  it("suppresses marked runtime failure notices for room events", async () => {
+  it.each([
+    {
+      name: "suppresses marked runtime failure notices for room events",
+      text: "⚠️ You've reached your Codex subscription usage limit.",
+      command: {},
+      queuedFinal: false,
+    },
+    {
+      name: "delivers marked explicit command terminal replies in room events (#87107)",
+      text: "⚙️ Compacted (76k → 934 tokens)",
+      command: { CommandSource: "text", CommandAuthorized: true, CommandBody: "/compact" },
+      queuedFinal: true,
+    },
+    {
+      name: "delivers marked /compact reply in room event when CommandSource is undefined (#87107)",
+      text: "⚙️ Compacted (76k → 934 tokens)",
+      command: { CommandAuthorized: true, CommandBody: "/compact" },
+      queuedFinal: true,
+    },
+  ] as const)("$name", async ({ text, command, queuedFinal }) => {
     setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "allow",
-    };
+    sessionStoreMocks.currentEntry = { sessionId: "s1", updatedAt: 0, sendPolicy: "allow" };
     const dispatcher = createDispatcher();
-    const failureNotice = setReplyPayloadMetadata(
-      { text: "⚠️ You've reached your Codex subscription usage limit." },
+    const payload = setReplyPayloadMetadata(
+      { text },
       { deliverDespiteSourceReplySuppression: true },
     );
-    const replyResolver = vi.fn(async () => failureNotice satisfies ReplyPayload);
-    const ctx = buildTestCtx({
-      ChatType: "group",
-      InboundEventKind: "room_event",
-      SessionKey: "test:session",
-    });
+    const replyResolver = vi.fn(async () => payload satisfies ReplyPayload);
 
     const result = await dispatchReplyFromConfig({
-      ctx,
+      ctx: buildTestCtx({
+        ChatType: "group",
+        InboundEventKind: "room_event",
+        SessionKey: "test:session",
+        ...command,
+      }),
       cfg: emptyConfig,
       dispatcher,
       replyResolver,
-      replyOptions: {
-        sourceReplyDeliveryMode: "message_tool_only",
-      },
+      replyOptions: { sourceReplyDeliveryMode: "message_tool_only" },
     });
 
     expect(replyResolver).toHaveBeenCalledTimes(1);
-    expect(result.queuedFinal).toBe(false);
-    expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
-    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
-    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
-  });
-
-  it("delivers marked explicit command terminal replies in room events (#87107)", async () => {
-    setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "allow",
-    };
-    const dispatcher = createDispatcher();
-    const commandReply = setReplyPayloadMetadata(
-      { text: "⚙️ Compacted (76k → 934 tokens)" },
-      { deliverDespiteSourceReplySuppression: true },
-    );
-    const replyResolver = vi.fn(async () => commandReply satisfies ReplyPayload);
-    const ctx = buildTestCtx({
-      ChatType: "group",
-      InboundEventKind: "room_event",
-      SessionKey: "test:session",
-      CommandSource: "text",
-      CommandAuthorized: true,
-      CommandBody: "/compact",
-    });
-
-    const result = await dispatchReplyFromConfig({
-      ctx,
-      cfg: emptyConfig,
-      dispatcher,
-      replyResolver,
-      replyOptions: {
-        sourceReplyDeliveryMode: "message_tool_only",
-      },
-    });
-
-    expect(replyResolver).toHaveBeenCalledTimes(1);
-    expect(result.queuedFinal).toBe(true);
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(commandReply);
-  });
-
-  it("delivers marked /compact reply in room event when CommandSource is undefined (#87107)", async () => {
-    setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "allow",
-    };
-    const dispatcher = createDispatcher();
-    const commandReply = setReplyPayloadMetadata(
-      { text: "⚙️ Compacted (76k → 934 tokens)" },
-      { deliverDespiteSourceReplySuppression: true },
-    );
-    const replyResolver = vi.fn(async () => commandReply satisfies ReplyPayload);
-    const ctx = buildTestCtx({
-      ChatType: "group",
-      InboundEventKind: "room_event",
-      SessionKey: "test:session",
-      CommandAuthorized: true,
-      CommandBody: "/compact",
-    });
-
-    const result = await dispatchReplyFromConfig({
-      ctx,
-      cfg: emptyConfig,
-      dispatcher,
-      replyResolver,
-      replyOptions: {
-        sourceReplyDeliveryMode: "message_tool_only",
-      },
-    });
-
-    expect(replyResolver).toHaveBeenCalledTimes(1);
-    expect(result.queuedFinal).toBe(true);
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(commandReply);
+    expect(result.queuedFinal).toBe(queuedFinal);
+    if (queuedFinal) {
+      expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(payload);
+    } else {
+      expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
+      expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+      expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+      expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+    }
   });
 
   it("mirrors internal source reply payloads into the active transcript", async () => {
@@ -287,7 +231,16 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     );
     transcriptMocks.appendAssistantMessageToSessionTranscript.mockImplementationOnce(async () => {
       order.push("mirror");
-      return { ok: true, sessionFile: "/tmp/session.jsonl", messageId: "message-1" };
+      return {
+        ok: true,
+        target: {
+          agentId: "main",
+          sessionId: "test-session",
+          sessionKey: "agent:main",
+          storePath: "/tmp/sessions.json",
+        },
+        messageId: "message-1",
+      };
     });
 
     const firstResult = await dispatchReplyFromConfig({
@@ -457,47 +410,23 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
-  it("keeps opted-in group/channel final replies private when message-tool-only events miss the message tool", async () => {
-    setNoAbort();
-    const dispatcher = createDispatcher();
-    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      expect(opts?.sourceReplyDeliveryMode).toBe("message_tool_only");
-      expect(opts?.suppressTyping).toBe(false);
-      return { text: "final reply" } satisfies ReplyPayload;
-    });
-
-    const result = await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
+  it.each([
+    {
+      name: "keeps opted-in group/channel final replies private when message-tool-only events miss the message tool",
+      ctx: {
         ChatType: "channel",
         CommandSource: undefined,
         SessionKey: "test:discord:channel:C1",
-      }),
-      cfg: {
-        messages: {
-          groupChat: { visibleReplies: "message_tool" },
-        },
       },
-      dispatcher,
-      replyResolver,
-    });
-
-    expect(replyResolver).toHaveBeenCalledTimes(1);
-    expect(result.queuedFinal).toBe(false);
-    expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
-    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-  });
-
-  it("keeps same-provider group/channel final replies private in message-tool-only mode", async () => {
-    setNoAbort();
-    mocks.routeReply.mockClear();
-    const dispatcher = createDispatcher();
-    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      expect(opts?.sourceReplyDeliveryMode).toBe("message_tool_only");
-      return { text: "final reply" } satisfies ReplyPayload;
-    });
-
-    const result = await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
+      cfg: { messages: { groupChat: { visibleReplies: "message_tool" } } },
+      text: "final reply",
+      mode: "message_tool_only",
+      queuedFinal: false,
+      checkTyping: true,
+    },
+    {
+      name: "keeps same-provider group/channel final replies private in message-tool-only mode",
+      ctx: {
         ChatType: "channel",
         CommandSource: undefined,
         Provider: "discord",
@@ -505,121 +434,94 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
         OriginatingChannel: "discord",
         OriginatingTo: "channel:C1",
         SessionKey: "test:discord:channel:C1",
-      }),
-      cfg: {
-        messages: {
-          groupChat: { visibleReplies: "message_tool" },
-        },
       },
-      dispatcher,
-      replyResolver,
-    });
-
-    expect(replyResolver).toHaveBeenCalledTimes(1);
-    expect(result.queuedFinal).toBe(false);
-    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-    expect(mocks.routeReply).not.toHaveBeenCalled();
-  });
-
-  it("keeps ambient room-event group/channel finals private without a message tool send", async () => {
-    setNoAbort();
-    const dispatcher = createDispatcher();
-    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      expect(opts?.sourceReplyDeliveryMode).toBe("message_tool_only");
-      return { text: "ambient final reply" } satisfies ReplyPayload;
-    });
-
-    const result = await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
+      cfg: { messages: { groupChat: { visibleReplies: "message_tool" } } },
+      text: "final reply",
+      mode: "message_tool_only",
+      queuedFinal: false,
+      checkTyping: false,
+    },
+    {
+      name: "keeps ambient room-event group/channel finals private without a message tool send",
+      ctx: {
         ChatType: "channel",
         InboundEventKind: "room_event",
         SessionKey: "test:discord:channel:C1",
-      }),
+      },
       cfg: emptyConfig,
-      dispatcher,
-      replyResolver,
-    });
-
-    expect(replyResolver).toHaveBeenCalledTimes(1);
-    expect(result.queuedFinal).toBe(false);
-    expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
-    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-  });
-
-  it("delivers internal WebChat room-event final replies automatically", async () => {
-    setNoAbort();
-    const dispatcher = createDispatcher();
-    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      expect(opts?.sourceReplyDeliveryMode).toBe("automatic");
-      return { text: "visible webchat reply" } satisfies ReplyPayload;
-    });
-
-    const result = await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
+      text: "ambient final reply",
+      mode: "message_tool_only",
+      queuedFinal: false,
+      checkTyping: false,
+    },
+    {
+      name: "delivers internal WebChat room-event final replies automatically",
+      ctx: {
         ChatType: "direct",
         InboundEventKind: "room_event",
         Provider: "webchat",
         Surface: "webchat",
         SessionKey: "agent:forge:webchat:forge-main",
-      }),
+      },
       cfg: emptyConfig,
-      dispatcher,
-      replyResolver,
-    });
-
-    expect(replyResolver).toHaveBeenCalledTimes(1);
-    expect(result.queuedFinal).toBe(true);
-    expect(result.sourceReplyDeliveryMode).toBeUndefined();
-    expect(firstFinalReplyPayload(dispatcher)?.text).toBe("visible webchat reply");
-  });
-
-  it("preserves configured message-tool delivery for internal WebChat direct replies", async () => {
-    setNoAbort();
-    const dispatcher = createDispatcher();
-    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      expect(opts?.sourceReplyDeliveryMode).toBe("message_tool_only");
-      return { text: "private webchat final" } satisfies ReplyPayload;
-    });
-
-    const result = await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
+      text: "visible webchat reply",
+      mode: "automatic",
+      queuedFinal: true,
+      checkTyping: false,
+    },
+    {
+      name: "preserves configured message-tool delivery for internal WebChat direct replies",
+      ctx: {
         ChatType: "direct",
         Provider: "webchat",
         Surface: "webchat",
         SessionKey: "agent:forge:webchat:forge-main",
-      }),
-      cfg: { messages: { visibleReplies: "message_tool" } } as OpenClawConfig,
-      dispatcher,
-      replyResolver,
-    });
-
-    expect(replyResolver).toHaveBeenCalledTimes(1);
-    expect(result.queuedFinal).toBe(false);
-    expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
-    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-  });
-
-  it("keeps default direct source delivery automatic", async () => {
+      },
+      cfg: { messages: { visibleReplies: "message_tool" } },
+      text: "private webchat final",
+      mode: "message_tool_only",
+      queuedFinal: false,
+      checkTyping: false,
+    },
+    {
+      name: "keeps default direct source delivery automatic",
+      ctx: { ChatType: "direct", SessionKey: "agent:main:telegram:direct:U1" },
+      cfg: emptyConfig,
+      text: "visible direct reply",
+      mode: "automatic",
+      queuedFinal: true,
+      checkTyping: false,
+    },
+  ] as const)("$name", async ({ ctx, cfg, text, mode, queuedFinal, checkTyping }) => {
     setNoAbort();
+    mocks.routeReply.mockClear();
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      expect(opts?.sourceReplyDeliveryMode).toBe("automatic");
-      return { text: "visible direct reply" } satisfies ReplyPayload;
+      expect(opts?.sourceReplyDeliveryMode).toBe(mode);
+      if (checkTyping) {
+        expect(opts?.suppressTyping).toBe(false);
+      }
+      return { text } satisfies ReplyPayload;
     });
 
     const result = await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        ChatType: "direct",
-        SessionKey: "agent:main:telegram:direct:U1",
-      }),
-      cfg: emptyConfig,
+      ctx: buildTestCtx(ctx),
+      cfg,
       dispatcher,
       replyResolver,
     });
 
     expect(replyResolver).toHaveBeenCalledTimes(1);
-    expect(result.queuedFinal).toBe(true);
-    expect(firstFinalReplyPayload(dispatcher)?.text).toBe("visible direct reply");
+    expect(result.queuedFinal).toBe(queuedFinal);
+    if (queuedFinal) {
+      expect(firstFinalReplyPayload(dispatcher)?.text).toBe(text);
+    } else {
+      expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
+      expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    }
+    if ("OriginatingChannel" in ctx) {
+      expect(mocks.routeReply).not.toHaveBeenCalled();
+    }
   });
 
   it("keeps Codex direct source delivery message-tool-only when config is unset", async () => {

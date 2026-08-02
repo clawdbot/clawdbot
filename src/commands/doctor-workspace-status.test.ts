@@ -15,6 +15,7 @@ import {
 } from "./doctor-workspace-status.js";
 
 const mocks = vi.hoisted(() => ({
+  listAgentIds: vi.fn<(_cfg: OpenClawConfig) => string[]>(() => ["default"]),
   resolveAgentWorkspaceDir: vi.fn(),
   resolveDefaultAgentId: vi.fn(),
   buildPluginRegistrySnapshotReport: vi.fn(),
@@ -24,8 +25,9 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({
+  listAgentIds: (cfg: OpenClawConfig) => mocks.listAgentIds(cfg),
   resolveAgentWorkspaceDir: (...args: unknown[]) => mocks.resolveAgentWorkspaceDir(...args),
-  resolveDefaultAgentId: (...args: unknown[]) => mocks.resolveDefaultAgentId(...args),
+  tryResolveDefaultAgentId: (...args: unknown[]) => mocks.resolveDefaultAgentId(...args),
 }));
 
 vi.mock("../plugins/status.js", () => ({
@@ -55,6 +57,7 @@ async function runNoteWorkspaceStatusForTest(
 ) {
   const cfg: OpenClawConfig = opts?.cfg ?? {};
   mocks.resolveDefaultAgentId.mockReturnValue("default");
+  mocks.listAgentIds.mockReturnValue(["default"]);
   mocks.resolveAgentWorkspaceDir.mockReturnValue("/workspace");
   mocks.buildPluginRegistrySnapshotReport.mockReturnValue({
     workspaceDir: "/workspace",
@@ -489,5 +492,33 @@ describe("noteWorkspaceStatus", () => {
     } finally {
       noteSpy.mockRestore();
     }
+  });
+
+  it("labels workspace diagnostics for the affected secondary agent", () => {
+    mocks.buildPluginRegistrySnapshotReport.mockClear();
+    mocks.listAgentIds.mockReturnValue(["default", "secondary"]);
+    mocks.resolveAgentWorkspaceDir.mockImplementation((_cfg, agentId) => `/${agentId}`);
+    mocks.buildPluginRegistrySnapshotReport.mockImplementation(({ workspaceDir }) => ({
+      workspaceDir,
+      ...createPluginLoadResult({
+        plugins: [],
+        diagnostics:
+          workspaceDir === "/secondary"
+            ? [{ level: "error", pluginId: "broken", message: "load failed" }]
+            : [],
+      }),
+    }));
+    mocks.buildPluginCompatibilityWarnings.mockReturnValue([]);
+    mocks.listTaskFlowRecords.mockReturnValue([]);
+
+    const findings = collectWorkspaceStatusHealthFindings({});
+
+    expect(mocks.buildPluginRegistrySnapshotReport).toHaveBeenCalledTimes(2);
+    expect(findings).toEqual([
+      expect.objectContaining({
+        message: 'Agent "secondary": load failed',
+        path: "plugins.entries.broken",
+      }),
+    ]);
   });
 });

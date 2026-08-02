@@ -57,6 +57,7 @@ describeControlUiE2e("Control UI mobile pairing mocked Gateway E2E", () => {
     const pageErrors: string[] = [];
     page.on("pageerror", (error) => pageErrors.push(String(error)));
     const gateway = await installMockGateway(page, {
+      presenceUsers: [{ self: true, id: "operator", name: "Operator" }],
       methodResponses: {
         "device.pair.list": {
           paired: [],
@@ -77,11 +78,11 @@ describeControlUiE2e("Control UI mobile pairing mocked Gateway E2E", () => {
       const response = await page.goto(`${server.baseUrl}chat`);
       expect(response?.status()).toBe(200);
 
-      // Pairing folded into the identity-card agent menu.
+      // Pairing lives with the account-level controls in the footer identity menu.
       const sidebar = page.locator("openclaw-app-sidebar");
-      await sidebar.getByRole("button", { name: /Agent menu/ }).click();
+      await sidebar.getByRole("button", { name: /^Identity and app menu for / }).click();
       const sidebarPairingButton = sidebar
-        .locator("wa-dropdown.sidebar-agent-menu")
+        .locator("wa-dropdown.sidebar-identity-menu")
         .locator(".sidebar-pair-mobile");
       await sidebarPairingButton.waitFor();
       await expect.poll(async () => sidebarPairingButton.isEnabled()).toBe(true);

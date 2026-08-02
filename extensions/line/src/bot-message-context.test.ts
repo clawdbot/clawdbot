@@ -206,8 +206,10 @@ describe("buildLineMessageContext", () => {
     expect(context?.ctxPayload.RawBody).toBe("");
     expect(context?.ctxPayload.CommandBody).toBe("");
     expect(context?.ctxPayload.BodyForAgent).toBe("[line attachment unavailable]");
-    expect(context?.ctxPayload.MediaPath).toBeUndefined();
-    expect(context?.ctxPayload.MediaType).toBe("image");
+    expect(context?.ctxPayload.media?.[0]).toMatchObject({
+      path: undefined,
+      kind: "image",
+    });
   });
 
   it("keeps materialized media-only text empty and projects structured media facts", async () => {
@@ -230,8 +232,11 @@ describe("buildLineMessageContext", () => {
     expect(context?.ctxPayload.RawBody).toBe("");
     expect(context?.ctxPayload.CommandBody).toBe("");
     expect(context?.ctxPayload.BodyForAgent).toBe("");
-    expect(context?.ctxPayload.MediaPath).toBe("/tmp/line-image.png");
-    expect(context?.ctxPayload.MediaType).toBe("image/png");
+    expect(context?.ctxPayload.media?.[0]).toMatchObject({
+      path: "/tmp/line-image.png",
+      contentType: "image/png",
+      kind: "image",
+    });
   });
 
   it("routes group postback replies to the group id", async () => {

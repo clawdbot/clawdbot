@@ -57,6 +57,7 @@ struct TalkRealtimeServerEvent: Decodable {
     let error: TalkRealtimeServerError?
     let itemId: String?
     let item: TalkRealtimeServerItem?
+    let turn: TalkRealtimeServerTurn?
     let callId: String?
     let name: String?
     let delta: String?
@@ -69,6 +70,7 @@ struct TalkRealtimeServerEvent: Decodable {
         case error
         case itemId = "item_id"
         case item
+        case turn
         case callId = "call_id"
         case name
         case delta
@@ -103,9 +105,16 @@ struct TalkRealtimeServerError: Decodable {
     let message: String?
 }
 
+struct TalkRealtimeServerTurn: Decodable {
+    let id: String?
+    let role: String?
+    let transcript: String?
+}
+
 struct TalkRealtimeServerItem: Decodable {
     let id: String?
     let type: String?
+    let text: String?
     let callId: String?
     let name: String?
     let arguments: String?
@@ -113,6 +122,7 @@ struct TalkRealtimeServerItem: Decodable {
     enum CodingKeys: String, CodingKey {
         case id
         case type
+        case text
         case callId = "call_id"
         case name
         case arguments

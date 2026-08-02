@@ -1,4 +1,5 @@
 public enum OpenClawGatewayClientCapability {
+    public static let agentKind = "agent-kind"
     public static let inlineWidgets = "inline-widgets"
 }
 

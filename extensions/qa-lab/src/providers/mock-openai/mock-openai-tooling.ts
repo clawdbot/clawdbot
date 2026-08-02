@@ -40,9 +40,10 @@ export function readTargetFromPrompt(prompt: string) {
     return repoScoped;
   }
 
-  const loosePath = /\b[A-Za-z0-9._-]+\.(?:md|json|ts|tsx|js|mjs|cjs|txt|yaml|yml)\b/i
-    .exec(prompt)?.[0]
-    ?.trim();
+  const loosePath =
+    /\b[A-Za-z0-9_][A-Za-z0-9._@!:-]*\.(?:md|json|ts|tsx|js|mjs|cjs|txt|yaml|yml)\b/i
+      .exec(prompt)?.[0]
+      ?.trim();
   if (loosePath) {
     return loosePath;
   }
@@ -64,7 +65,11 @@ export function execCommandFromToolProgressPrompt(prompt: string) {
   );
 }
 
-export function buildMockFunctionCall(name: string, args: Record<string, unknown>) {
+export function buildMockFunctionCall(
+  name: string,
+  args: Record<string, unknown>,
+  namespace?: string,
+) {
   const serialized = JSON.stringify(args);
   const callSuffix = createHash("sha256")
     .update(name)
@@ -81,6 +86,7 @@ export function buildMockFunctionCall(name: string, args: Record<string, unknown
     id: itemId,
     call_id: callId,
     name,
+    ...(namespace ? { namespace } : {}),
     arguments: serialized,
   };
   return {
@@ -95,8 +101,9 @@ export function buildMockFunctionCall(name: string, args: Record<string, unknown
 export function buildToolCallEventsWithArgs(
   name: string,
   args: Record<string, unknown>,
+  namespace?: string,
 ): StreamEvent[] {
-  const call = buildMockFunctionCall(name, args);
+  const call = buildMockFunctionCall(name, args, namespace);
   return [
     {
       type: "response.output_item.added",
@@ -105,6 +112,7 @@ export function buildToolCallEventsWithArgs(
         id: call.itemId,
         call_id: call.callId,
         name,
+        ...(namespace ? { namespace } : {}),
         arguments: "",
       },
     },
@@ -119,6 +127,50 @@ export function buildToolCallEventsWithArgs(
         id: call.responseId,
         status: "completed",
         output: [call.item],
+        usage: { input_tokens: 64, output_tokens: 16, total_tokens: 80 },
+      },
+    },
+  ];
+}
+
+export function buildCustomToolCallEventsWithInput(
+  name: string,
+  input: string,
+  namespace?: string,
+): StreamEvent[] {
+  const call = buildMockFunctionCall(name, { input }, namespace);
+  const itemId = call.itemId.replace(/^fc_/, "ctc_");
+  const item = {
+    type: "custom_tool_call",
+    id: itemId,
+    call_id: call.callId,
+    name,
+    ...(namespace ? { namespace } : {}),
+    input,
+    status: "completed",
+  };
+  return [
+    {
+      type: "response.created",
+      response: { id: call.responseId },
+    },
+    {
+      type: "response.output_item.added",
+      item: { ...item, input: "", status: "in_progress" },
+    },
+    {
+      type: "response.custom_tool_call_input.delta",
+      item_id: itemId,
+      call_id: call.callId,
+      delta: input,
+    },
+    { type: "response.output_item.done", item },
+    {
+      type: "response.completed",
+      response: {
+        id: call.responseId,
+        status: "completed",
+        output: [item],
         usage: { input_tokens: 64, output_tokens: 16, total_tokens: 80 },
       },
     },
@@ -170,6 +222,19 @@ export function buildQaToolSearchArgs(
 ): Record<string, unknown> {
   if (failureMode && targetTool === "web_search") {
     return { query: QA_LAB_WEB_SEARCH_DENIED_INPUT_QUERY };
+  }
+  if (failureMode && targetTool === "apply_patch") {
+    return {
+      input: [
+        "*** Begin Patch",
+        "*** Update File: ../runtime-tool-fixture-denied.txt",
+        "@@",
+        "-runtime-tool-fixture-denied-original",
+        "+runtime patch outside the workspace",
+        "*** End Patch",
+        "",
+      ].join("\n"),
+    };
   }
   if (failureMode) {
     return { __qaFailureMode: "denied-input" };

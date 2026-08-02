@@ -14,6 +14,19 @@ export function createSandboxFsBridgeFromResolver(
 ): SandboxFsBridge {
   return {
     resolvePath: ({ filePath, cwd }) => resolvePath(filePath, cwd),
+    copyFile: async ({ sourcePath, destinationPath, cwd, mkdir = true }) => {
+      const source = resolvePath(sourcePath, cwd);
+      const destination = resolvePath(destinationPath, cwd);
+      if (!source.hostPath || !destination.hostPath) {
+        throw new Error(
+          `Expected hostPath for copy: ${source.containerPath} -> ${destination.containerPath}`,
+        );
+      }
+      if (mkdir) {
+        await fs.mkdir(path.dirname(destination.hostPath), { recursive: true });
+      }
+      await fs.copyFile(source.hostPath, destination.hostPath);
+    },
     readFile: async ({ filePath, cwd }) => {
       const target = resolvePath(filePath, cwd);
       if (!target.hostPath) {
@@ -31,6 +44,25 @@ export function createSandboxFsBridgeFromResolver(
       }
       const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
       await fs.writeFile(target.hostPath, buffer);
+    },
+    createFileExclusive: async ({ filePath, cwd, data, mkdir = true }) => {
+      const target = resolvePath(filePath, cwd);
+      if (!target.hostPath) {
+        throw new Error(`Expected hostPath for ${target.containerPath}`);
+      }
+      if (mkdir) {
+        await fs.mkdir(path.dirname(target.hostPath), { recursive: true });
+      }
+      const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
+      try {
+        await fs.writeFile(target.hostPath, buffer, { flag: "wx" });
+        return "created";
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+          return "exists";
+        }
+        throw error;
+      }
     },
     mkdirp: async ({ filePath, cwd }) => {
       const target = resolvePath(filePath, cwd);

@@ -10,6 +10,7 @@ import {
 } from "openclaw/plugin-sdk/runtime-doctor";
 import {
   deleteSessionEntry,
+  deliveryContextFromSession,
   listSessionEntries,
   resolveStorePath,
   upsertSessionEntry,
@@ -112,7 +113,7 @@ function collectLegacyZalouserDmEntries(
       const canonicalKey = buildAgentSessionKey({
         agentId: parsed.agentId,
         channel: "zalouser",
-        accountId: entry.lastAccountId?.trim() || fallbackAccountId,
+        accountId: deliveryContextFromSession(entry)?.accountId?.trim() || fallbackAccountId,
         peer: { kind: "direct", id: peerId },
         dmScope: resolveZalouserDmSessionScope(config),
         identityLinks: config.session?.identityLinks,

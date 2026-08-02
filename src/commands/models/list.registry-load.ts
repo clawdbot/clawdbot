@@ -1,12 +1,12 @@
-/** Registry-loading adapters for model-list row construction. */
-import { loadAgentModelRegistry } from "../../agents/model-registry-loader.js";
+import { modelKey } from "../../agents/model-ref-shared.js";
 import { shouldSuppressBuiltInModel } from "../../agents/model-suppression.js";
+/** Registry-loading adapters for model-list row construction. */
+import { loadPreparedAgentModelRegistry as loadAgentModelRegistry } from "../../agents/prepared-model-registry.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ModelRegistry } from "../../llm/model-registry.js";
 import type { Model } from "../../llm/types.js";
 import { loadModelRegistry } from "./list.registry.js";
 import type { ConfiguredEntry } from "./list.types.js";
-import { modelKey } from "./shared.js";
 
 /** Loads the full model registry and tracks discovered provider/model keys. */
 export async function loadListModelRegistry(

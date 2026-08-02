@@ -46,24 +46,39 @@ export function canonicalizeConfiguredMcpServer(
   if (isKnownCliMcpTypeAlias(next.type)) {
     delete next.type;
   }
+  if (typeof next.cwd !== "string" && typeof next.workingDirectory === "string") {
+    next.cwd = next.workingDirectory;
+  }
+  delete next.workingDirectory;
   if (
     typeof next.supports_parallel_tool_calls === "boolean" &&
     typeof next.supportsParallelToolCalls !== "boolean"
   ) {
     next.supportsParallelToolCalls = next.supports_parallel_tool_calls;
-    delete next.supports_parallel_tool_calls;
   }
+  delete next.supports_parallel_tool_calls;
   if (typeof next.ssl_verify === "boolean" && typeof next.sslVerify !== "boolean") {
     next.sslVerify = next.ssl_verify;
-    delete next.ssl_verify;
   }
+  delete next.ssl_verify;
   if (typeof next.client_cert === "string" && typeof next.clientCert !== "string") {
     next.clientCert = next.client_cert;
-    delete next.client_cert;
   }
+  delete next.client_cert;
   if (typeof next.client_key === "string" && typeof next.clientKey !== "string") {
     next.clientKey = next.client_key;
-    delete next.client_key;
+  }
+  delete next.client_key;
+  const codex = isRecord(next.codex) ? { ...next.codex } : undefined;
+  if (codex) {
+    if (
+      typeof codex.defaultToolsApprovalMode !== "string" &&
+      typeof codex.default_tools_approval_mode === "string"
+    ) {
+      codex.defaultToolsApprovalMode = codex.default_tools_approval_mode;
+    }
+    delete codex.default_tools_approval_mode;
+    next.codex = codex;
   }
   return next;
 }

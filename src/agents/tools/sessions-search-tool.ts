@@ -7,9 +7,11 @@ import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { redactToolPayloadText } from "../../logging/redact.js";
 import {
   agentSessionKeysMatchByRequestKey,
+  isIncognitoSessionKey,
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
 import { truncateUtf16Safe } from "../../utils.js";
+import { resolveDefaultAgentId } from "../agent-scope-config.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { optionalPositiveIntegerSchema } from "../schema/typebox.js";
 import {
@@ -385,50 +387,54 @@ export function createSessionsSearchTool(opts?: {
         sandboxed: opts?.sandboxed === true,
       });
       const a2aPolicy = createAgentToAgentPolicy(cfg);
+      const defaultAgentId = resolveDefaultAgentId(cfg);
+      const requesterAgentId =
+        opts?.agentId ?? resolveSessionAgentId({ sessionKey: effectiveRequesterKey, config: cfg });
       const guard = await createSessionVisibilityGuard({
         action: "history",
-        requesterAgentId: opts?.agentId,
+        defaultAgentId,
+        requesterAgentId,
         requesterSessionKey: effectiveRequesterKey,
         visibility,
         a2aPolicy,
       });
       const rowGuard = createSessionVisibilityRowChecker({
         action: "history",
-        requesterAgentId: opts?.agentId,
+        defaultAgentId,
+        requesterAgentId,
         requesterSessionKey: effectiveRequesterKey,
         visibility,
         a2aPolicy,
       });
       if (sessionKey) {
-        const access =
-          opts?.agentId && !parseAgentSessionKey(sessionKey)
-            ? rowGuard.check({ key: sessionKey, agentId: opts.agentId })
-            : guard.check(sessionKey);
+        const access = !parseAgentSessionKey(sessionKey)
+          ? rowGuard.check({ key: sessionKey, agentId: requesterAgentId })
+          : guard.check(sessionKey);
         if (!access.allowed) {
           return jsonResult({ status: access.status, error: access.error });
         }
       }
-      const requesterAgentId =
-        opts?.agentId ?? resolveSessionAgentId({ sessionKey: effectiveRequesterKey, config: cfg });
-
-      const searchSessions = sessionKey
-        ? [
-            {
-              key: sessionKey,
-              access: "direct" as const,
-              ...(opts?.agentId && !parseAgentSessionKey(sessionKey)
-                ? { agentId: opts.agentId }
-                : {}),
-            },
-          ]
-        : await listVisibleSearchSessions({
-            unscopedAgentId: requesterAgentId,
-            effectiveRequesterAgentId: opts?.agentId,
-            effectiveRequesterKey,
-            gatewayCall,
-            rowGuard,
-            restrictToSpawned,
-          });
+      const searchSessions = (
+        sessionKey
+          ? [
+              {
+                key: sessionKey,
+                access: "direct" as const,
+                ...(!parseAgentSessionKey(sessionKey) ? { agentId: requesterAgentId } : {}),
+              },
+            ]
+          : await listVisibleSearchSessions({
+              unscopedAgentId: requesterAgentId,
+              effectiveRequesterAgentId: opts?.agentId,
+              effectiveRequesterKey,
+              gatewayCall,
+              rowGuard,
+              restrictToSpawned,
+            })
+      )
+        // Search excerpts are re-persisted in the caller transcript; incognito
+        // sessions therefore stay absent even when the caller could otherwise see them.
+        .filter((candidate) => !isIncognitoSessionKey(candidate.key));
       const visibleHits: SanitizedSearchHit[] = [];
       let indexing = false;
       let backendTruncated = false;

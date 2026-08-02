@@ -23,6 +23,19 @@ vi.mock("../../system-agent/transcript-store.js", () => ({
   appendTranscriptTurn: vi.fn(),
   readTranscriptTail: vi.fn(() => []),
 }));
+// Ownership tests exercise fresh-session creation; keep the caretaker greeting
+// deterministic so identity behavior is the only variable under test.
+vi.mock("../../system-agent/greeting.js", () => ({
+  acknowledgeSystemAgentGreetingDelivery: vi.fn(),
+  buildSystemAgentGreetingQuestion: vi.fn(() => undefined),
+  loadSystemAgentGreetingFacts: vi.fn(() => ({
+    updateAvailable: null,
+    channelHealth: { available: true, degraded: [] },
+    recentExternalEdit: false,
+    auditSequence: 0,
+  })),
+  resolveSystemAgentGreeting: vi.fn(async () => ({ text: "welcome text", source: "template" })),
+}));
 
 type FakeEngine = {
   handle: ReturnType<typeof vi.fn>;

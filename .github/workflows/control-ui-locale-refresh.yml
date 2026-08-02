@@ -10,10 +10,13 @@ on:
       - ui/src/i18n/.i18n/*
       - ui/src/i18n/lib/types.ts
       - ui/src/i18n/lib/registry.ts
+      - ui/config/control-ui-locales.ts
       - scripts/control-ui-i18n.ts
       - scripts/control-ui-i18n-verify.ts
+      - scripts/lib/control-ui-i18n-catalog.ts
       - scripts/lib/control-ui-i18n-config.ts
       - scripts/lib/control-ui-i18n-raw-copy.ts
+      - scripts/lib/control-ui-i18n-sync-plan.ts
       - .github/actions/create-generated-pr-tokens/action.yml
       - .github/actions/publish-generated-pr/action.yml
       - .github/workflows/control-ui-locale-refresh.yml
@@ -82,7 +85,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ needs.resolve-base.outputs.sha }}
           persist-credentials: false
@@ -154,7 +157,7 @@ jobs:
     name: Refresh ${{ matrix.locale }}
     steps:
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ needs.resolve-base.outputs.sha }}
           persist-credentials: false
@@ -250,8 +253,10 @@ jobs:
           set -euo pipefail
           artifact_dir="${RUNNER_TEMP}/control-ui-locale-${LOCALE}"
           mkdir -p "${artifact_dir}"
-          git add -A ui/src/i18n
-          git diff --cached --binary --full-index -- ui/src/i18n ':(exclude)ui/src/i18n/.i18n/catalog-fallbacks.json' > "${artifact_dir}/${LOCALE}.patch"
+          locale_memory="ui/src/i18n/.i18n/${LOCALE}.tm.jsonl"
+          locale_metadata="ui/src/i18n/.i18n/${LOCALE}.meta.json"
+          git add -A -- "${locale_memory}" "${locale_metadata}"
+          git diff --cached --binary --full-index -- "${locale_memory}" "${locale_metadata}" ':(exclude)ui/src/i18n/.i18n/catalog-fallbacks.json' > "${artifact_dir}/${LOCALE}.patch"
 
       - name: Upload locale artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -272,7 +277,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ needs.resolve-base.outputs.sha }}
           fetch-depth: 0
@@ -318,17 +323,25 @@ jobs:
           commit-message: "chore(ui): refresh control ui locales"
           pr-title: "chore(ui): refresh control ui locales"
           auto-merge: "true"
-          generated-paths: ui/src/i18n
+          generated-paths: |
+            ui/src/i18n/.i18n/*.tm.jsonl
+            ui/src/i18n/.i18n/*.meta.json
+            ui/src/i18n/.i18n/catalog-fallbacks.json
           invalidation-paths: |
+            ui/src/i18n/locales/*.ts
             ui/src/i18n/locales/en.ts
+            ui/src/i18n/locales/en-agents.ts
             ui/src/i18n/.i18n/glossary.*.json
             ui/src/i18n/.i18n/raw-copy-baseline.json
             ui/src/i18n/lib/types.ts
             ui/src/i18n/lib/registry.ts
+            ui/config/control-ui-locales.ts
             scripts/control-ui-i18n.ts
             scripts/control-ui-i18n-verify.ts
+            scripts/lib/control-ui-i18n-catalog.ts
             scripts/lib/control-ui-i18n-config.ts
             scripts/lib/control-ui-i18n-raw-copy.ts
+            scripts/lib/control-ui-i18n-sync-plan.ts
             .github/actions/create-generated-pr-tokens/action.yml
             .github/actions/publish-generated-pr/action.yml
             .github/workflows/control-ui-locale-refresh.yml

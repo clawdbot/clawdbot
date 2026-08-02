@@ -92,6 +92,7 @@ type ModelCatalogRpcEntry = {
   contextWindow?: number;
   input?: string[];
   reasoning?: boolean;
+  supportsTools?: boolean;
   agentRuntime?: GatewayAgentRuntime;
 };
 
@@ -179,6 +180,7 @@ type ConfiguredProviderModelFixture = {
   name: string;
   alias: string;
   contextWindow: number;
+  supportsTools?: boolean;
 };
 
 const configuredProviderModelConfig = (params: ConfiguredProviderModelFixture) => ({
@@ -200,6 +202,9 @@ const configuredProviderModelConfig = (params: ConfiguredProviderModelFixture) =
             id: params.modelId,
             name: params.name,
             contextWindow: params.contextWindow,
+            ...(params.supportsTools === undefined
+              ? {}
+              : { compat: { supportsTools: params.supportsTools } }),
           },
         ],
       },
@@ -213,6 +218,7 @@ const expectedConfiguredProviderModel = (params: ConfiguredProviderModelFixture)
   alias: params.alias,
   provider: params.provider,
   contextWindow: params.contextWindow,
+  ...(params.supportsTools === undefined ? {} : { supportsTools: params.supportsTools }),
 });
 
 describe("gateway server models + voicewake", () => {
@@ -361,6 +367,9 @@ describe("gateway server models + voicewake", () => {
     }
     if (expected.contextWindow !== undefined) {
       expect(models[0]?.contextWindow).toBe(expected.contextWindow);
+    }
+    if (expected.supportsTools !== undefined) {
+      expect(models[0]?.supportsTools).toBe(expected.supportsTools);
     }
   };
 
@@ -757,6 +766,7 @@ describe("gateway server models + voicewake", () => {
         name: "Kimi K2.5 (Configured)",
         alias: "Kimi K2.5 (NVIDIA)",
         contextWindow: 32_000,
+        supportsTools: false,
       },
     },
     {

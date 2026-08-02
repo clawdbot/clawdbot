@@ -1,5 +1,6 @@
 // Gateway plugin bootstrap helpers.
-// Applies activation config, installs runtime bindings, loads and pins plugins.
+// Applies activation config and loads the process-root plugin registry.
+import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import { primeConfiguredBindingRegistry } from "../channels/plugins/binding-registry.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -10,27 +11,13 @@ import {
   findActiveDegradedPlugin,
   formatPluginVerificationDiagnostic,
 } from "../plugins/runtime-degraded-state.js";
-import {
-  pinActivePluginChannelRegistry,
-  pinActivePluginSessionExtensionRegistry,
-} from "../plugins/runtime.js";
-import {
-  setGatewayNodesRuntime,
-  setGatewaySubagentRuntime,
-} from "../plugins/runtime/gateway-bindings.js";
 import { resolveDurableWorkerProviderAutoEnabledReasons } from "../plugins/worker-provider-registry.js";
 import { mergeActivationSectionsIntoRuntimeConfig } from "./plugin-activation-runtime-config.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
-import {
-  createGatewayNodesRuntime,
-  createGatewaySubagentRuntime,
-  loadGatewayPlugins,
-  setPluginSubagentOverridePolicies,
-} from "./server-plugins.js";
+import { loadGatewayPlugins, setPluginSubagentOverridePolicies } from "./server-plugins.js";
 
-// Gateway plugin bootstrap applies activation/auto-enable config, installs
-// plugin runtime bindings, loads plugins, primes channel bindings, and pins the
-// active registry for startup/reload paths.
+// Gateway plugin bootstrap applies activation/auto-enable config, loads plugins,
+// and primes channel bindings for startup/reload paths.
 type GatewayPluginBootstrapLog = {
   info: (msg: string) => void;
   warn: (msg: string) => void;
@@ -57,18 +44,11 @@ type GatewayPluginBootstrapParams = {
   suppressPluginInfoLogs?: boolean;
   logDiagnostics?: boolean;
   startupTrace?: GatewayStartupTrace;
-  beforePrimeRegistry?: (pluginRegistry: PluginRegistry) => void;
+  ambientEnvTriggers?: AmbientEnvTriggerPolicy;
 };
 
 function installGatewayPluginRuntimeEnvironment(cfg: OpenClawConfig) {
   setPluginSubagentOverridePolicies(cfg);
-  setGatewaySubagentRuntime(createGatewaySubagentRuntime());
-  setGatewayNodesRuntime(createGatewayNodesRuntime());
-}
-
-function pinGatewayPluginRuntimeRegistries(pluginRegistry: PluginRegistry): void {
-  pinActivePluginChannelRegistry(pluginRegistry);
-  pinActivePluginSessionExtensionRegistry(pluginRegistry);
 }
 
 // Diagnostics are logged after registry priming so startup output contains
@@ -115,6 +95,7 @@ export function prepareGatewayPluginLoad(params: GatewayPluginBootstrapParams) {
       ? { manifestRegistry: params.pluginLookUpTable.manifestRegistry }
       : {}),
     discovery: params.pluginLookUpTable?.discovery,
+    ambientEnvTriggers: params.ambientEnvTriggers,
   });
   const resolvedConfig =
     activationSourceConfig === params.cfg
@@ -154,8 +135,8 @@ export function prepareGatewayPluginLoad(params: GatewayPluginBootstrapParams) {
     preferSetupRuntimeForChannelPlugins: params.preferSetupRuntimeForChannelPlugins,
     suppressPluginInfoLogs: params.suppressPluginInfoLogs,
     startupTrace: params.startupTrace,
+    ambientEnvTriggers: params.ambientEnvTriggers,
   });
-  params.beforePrimeRegistry?.(loaded.pluginRegistry);
   primeConfiguredBindingRegistry({ cfg: resolvedConfig });
   if ((params.logDiagnostics ?? true) && loaded.pluginRegistry.diagnostics.length > 0) {
     logGatewayPluginDiagnostics({
@@ -166,25 +147,14 @@ export function prepareGatewayPluginLoad(params: GatewayPluginBootstrapParams) {
   return loaded;
 }
 
-/** Loads and pins gateway plugins during normal gateway startup. */
-export function loadGatewayStartupPlugins(
-  params: Omit<GatewayPluginBootstrapParams, "beforePrimeRegistry">,
-) {
-  return prepareGatewayPluginLoad({
-    ...params,
-    beforePrimeRegistry: pinGatewayPluginRuntimeRegistries,
-  });
+/** Loads gateway plugins during normal gateway startup. */
+export function loadGatewayStartupPlugins(params: GatewayPluginBootstrapParams) {
+  return prepareGatewayPluginLoad(params);
 }
 
 /** Reloads deferred gateway plugins while preserving startup bootstrap behavior. */
 export function reloadDeferredGatewayPlugins(
-  params: Omit<
-    GatewayPluginBootstrapParams,
-    "beforePrimeRegistry" | "preferSetupRuntimeForChannelPlugins"
-  >,
+  params: Omit<GatewayPluginBootstrapParams, "preferSetupRuntimeForChannelPlugins">,
 ) {
-  return prepareGatewayPluginLoad({
-    ...params,
-    beforePrimeRegistry: pinGatewayPluginRuntimeRegistries,
-  });
+  return prepareGatewayPluginLoad(params);
 }

@@ -58,7 +58,7 @@ export async function createTelephonyTtsProvider(params: {
     text: "",
   });
   const synthesisTimeoutMs = resolveTimerTimeoutMs(
-    preparedConfig.cfg.messages?.tts?.timeoutMs,
+    preparedConfig.cfg.tts?.timeoutMs,
     TELEPHONY_DEFAULT_TTS_TIMEOUT_MS,
   );
 

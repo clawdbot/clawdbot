@@ -15,6 +15,7 @@ import { resolveCommandResolutionFromArgv } from "../infra/exec-command-resoluti
 import { isInterpreterLikeSafeBin } from "../infra/exec-safe-bin-runtime-policy.js";
 import {
   isBlockedShellWrapperCommand,
+  POSIX_PARSEABLE_SHELL_WRAPPERS,
   POSIX_SHELL_WRAPPERS,
   normalizeExecutableToken,
   unwrapKnownDispatchWrapperInvocation,
@@ -176,7 +177,17 @@ const POSIX_SHELL_OPTIONS_WITH_VALUE = new Set([
   "+o",
 ]);
 
-const POSIX_SHELLS_WITH_PLUS_OPTIONS = new Set(["ash", "bash", "dash", "ksh", "sh", "zsh"]);
+const POSIX_SHELLS_WITH_PLUS_OPTIONS = new Set([
+  "ash",
+  "bash",
+  "dash",
+  "ksh",
+  "mksh",
+  "osh",
+  "sh",
+  "yash",
+  "zsh",
+]);
 
 function isPosixShellOptionToken(token: string, supportsPlusOptions: boolean): boolean {
   return token.startsWith("-") || (supportsPlusOptions && token.startsWith("+"));
@@ -684,6 +695,9 @@ function resolveMutableFileOperandIndex(argv: string[], cwd: string | undefined)
     return null;
   }
   if ((POSIX_SHELL_WRAPPERS as ReadonlySet<string>).has(executable)) {
+    if (!(POSIX_PARSEABLE_SHELL_WRAPPERS as ReadonlySet<string>).has(executable)) {
+      return null;
+    }
     const shellIndex = resolvePosixShellScriptOperandIndex(unwrapped.argv, executable);
     return shellIndex === null ? null : unwrapped.baseIndex + shellIndex;
   }

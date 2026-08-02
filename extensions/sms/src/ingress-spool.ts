@@ -17,11 +17,6 @@ import type { ResolvedSmsAccount, SmsInboundMessage } from "./types.js";
 
 const SMS_INGRESS_PAYLOAD_VERSION = 1;
 const SMS_INGRESS_DRAIN_INTERVAL_MS = 500;
-// Tombstones dominate the retired 10-minute / 10,000-key replay cache.
-const SMS_COMPLETED_TTL_MS = 24 * 60 * 60 * 1000;
-const SMS_COMPLETED_MAX_ENTRIES = 20_000;
-const SMS_FAILED_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-const SMS_FAILED_MAX_ENTRIES = 1_000;
 
 type SmsIngressPayload = {
   version: typeof SMS_INGRESS_PAYLOAD_VERSION;
@@ -118,12 +113,11 @@ export function createSmsIngressSpool(params: {
         event.receivedAt,
       ),
     pollIntervalMs: SMS_INGRESS_DRAIN_INTERVAL_MS,
+    // The 1-day / 20k tombstones dominate the retired 10-minute / 10,000-key cache.
     retention: {
       pruneIntervalMs: 0,
-      completedTtlMs: SMS_COMPLETED_TTL_MS,
-      completedMaxEntries: SMS_COMPLETED_MAX_ENTRIES,
-      failedTtlMs: SMS_FAILED_TTL_MS,
-      failedMaxEntries: SMS_FAILED_MAX_ENTRIES,
+      completedTtlMs: 24 * 60 * 60 * 1_000,
+      failedMaxEntries: 1_000,
     },
     appendRetryDelaysMs: [0],
     waitForDeliveryIdleBeforeRepump: false,

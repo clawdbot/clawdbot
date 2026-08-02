@@ -2,12 +2,15 @@ import {
   getWorkboardState,
   stopWorkboardLifecycleRefresh,
   stopWorkboardLiveRefresh,
-  type WorkboardUiState,
-} from "./index.ts";
+} from "./runtime.ts";
+import type { WorkboardUiState } from "./types.ts";
 
 export type WorkboardCapability = {
   readonly state: WorkboardUiState;
+  readonly boardsReady: boolean;
   notify: () => void;
+  setBoardsReady: (ready: boolean) => void;
+  clearBoards: () => void;
   subscribe: (listener: () => void) => () => void;
   dispose: () => void;
 };
@@ -15,9 +18,13 @@ export type WorkboardCapability = {
 export function createWorkboardCapability(): WorkboardCapability {
   const listeners = new Set<() => void>();
   let disposed = false;
+  let boardsReady = false;
   const capability: WorkboardCapability = {
     get state() {
       return getWorkboardState(capability);
+    },
+    get boardsReady() {
+      return boardsReady;
     },
     notify() {
       if (disposed) {
@@ -25,6 +32,18 @@ export function createWorkboardCapability(): WorkboardCapability {
       }
       for (const listener of listeners) {
         listener();
+      }
+    },
+    setBoardsReady(ready) {
+      boardsReady = ready;
+    },
+    clearBoards() {
+      const hadBoards = capability.state.boards.length > 0;
+      const wasReady = boardsReady;
+      boardsReady = false;
+      capability.state.boards = [];
+      if (hadBoards || wasReady) {
+        capability.notify();
       }
     },
     subscribe(listener) {

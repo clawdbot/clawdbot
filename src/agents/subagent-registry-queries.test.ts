@@ -13,14 +13,18 @@ import {
   shouldIgnorePostCompletionAnnounceForSessionFromRuns,
 } from "./subagent-registry-queries.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import {
+  createSubagentRunRecord,
+  type SubagentRunRecordOverrides,
+} from "./subagent-test-fixtures.test-helpers.js";
 
 const STALE_UNENDED_SUBAGENT_RUN_MS = 2 * 60 * 60 * 1_000;
 
-function makeRun(overrides: Partial<SubagentRunRecord>): SubagentRunRecord {
+function makeRun(overrides: Partial<SubagentRunRecordOverrides>): SubagentRunRecord {
   const runId = overrides.runId ?? "run-default";
   const childSessionKey = overrides.childSessionKey ?? `agent:main:subagent:${runId}`;
   const requesterSessionKey = overrides.requesterSessionKey ?? "agent:main:main";
-  return {
+  return createSubagentRunRecord({
     runId,
     childSessionKey,
     requesterSessionKey,
@@ -29,7 +33,7 @@ function makeRun(overrides: Partial<SubagentRunRecord>): SubagentRunRecord {
     cleanup: "keep",
     createdAt: overrides.createdAt ?? 1,
     ...overrides,
-  };
+  });
 }
 
 function toRunMap(runs: SubagentRunRecord[]): Map<string, SubagentRunRecord> {

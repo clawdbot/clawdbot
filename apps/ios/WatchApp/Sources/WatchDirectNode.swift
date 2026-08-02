@@ -36,6 +36,26 @@ final class WatchDirectNode {
 
     private struct ChallengeResponse: Decodable {
         let nonce: String
+        let ts: Int64?
+
+        private enum CodingKeys: String, CodingKey {
+            case nonce
+            case ts
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            self.nonce = try container.decode(String.self, forKey: .nonce)
+            self.ts = container.contains(.ts)
+                ? try container.decode(Int64.self, forKey: .ts)
+                : nil
+            if let ts, ts < 0 {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .ts,
+                    in: container,
+                    debugDescription: "Gateway challenge timestamp must be non-negative")
+            }
+        }
     }
 
     private struct PollResponse: Decodable {
@@ -427,6 +447,8 @@ final class WatchDirectNode {
         let params = try connectParams(
             identity: identity,
             nonce: challenge.nonce,
+            // Older watch-node Gateways omitted ts; retain their original local-clock behavior.
+            signedAtMs: challenge.ts ?? Int64(Date().timeIntervalSince1970 * 1000),
             credential: credential,
             notificationsAuthorized: notificationSettings.authorizationStatus == .authorized
                 || notificationSettings.authorizationStatus == .provisional)
@@ -442,10 +464,10 @@ final class WatchDirectNode {
     private func connectParams(
         identity: DeviceIdentity,
         nonce: String,
+        signedAtMs: Int64,
         credential: ConnectCredential,
         notificationsAuthorized: Bool) throws -> ConnectParams
     {
-        let signedAtMs = Int64(Date().timeIntervalSince1970 * 1000)
         let payload = GatewayDeviceAuthPayload.buildV3(
             fields: .init(
                 deviceId: identity.deviceId,

@@ -79,10 +79,11 @@ async function uploadToSharePoint(params: {
   // reuse names (image-1.png each generation) and Teams caches file cards by driveItem URL, so
   // replace clobbers history and shows stale images; "rename" mints a unique driveItem instead.
   const uploadUrl = `${GRAPH_ROOT}/sites/${params.siteId}/drive/root:${uploadPath}:/content?@microsoft.graph.conflictBehavior=rename`;
+  const timeoutMs = resolveMSTeamsSharePointUploadTimeoutMs(params.buffer.length);
 
   const data = await withMSTeamsAbortableRequestTimeout({
     label: SHAREPOINT_UPLOAD_TIMEOUT_LABEL,
-    timeoutMs: resolveMSTeamsSharePointUploadTimeoutMs(params.buffer.length),
+    timeoutMs,
     work: async (signal) => {
       const token = await getGraphAccessToken(params.tokenProvider);
       const res = await fetchFn(uploadUrl, {
@@ -104,7 +105,7 @@ async function uploadToSharePoint(params: {
         id?: string;
         webUrl?: string;
         name?: string;
-      }>(res, "msteams.graph-upload.uploadSharePointFile");
+      }>(res, "msteams.graph-upload.uploadSharePointFile", { chunkTimeoutMs: timeoutMs });
     },
   });
 

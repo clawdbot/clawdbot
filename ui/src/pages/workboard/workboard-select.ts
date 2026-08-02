@@ -1,10 +1,14 @@
 import { html, nothing } from "lit";
+import { renderWorkboardBoardGlyph } from "../../components/workboard-board-glyph.ts";
 import "../../components/web-awesome-select.ts";
 
 export type WorkboardSelectOption<Value extends string = string> = {
   value: Value;
   label: string;
   description?: string;
+  icon?: string;
+  color?: string;
+  boardId?: string;
   disabled?: boolean;
 };
 
@@ -18,6 +22,7 @@ export function renderWorkboardSelect<Value extends string>(params: {
   showLabel?: boolean;
   disabled?: boolean;
 }) {
+  const selectedOption = params.options.find((option) => option.value === params.value);
   const select = html`
     <wa-select
       class="workboard-select ${params.className ?? ""}"
@@ -37,6 +42,16 @@ export function renderWorkboardSelect<Value extends string>(params: {
         }
       }}
     >
+      ${selectedOption?.boardId
+        ? html`<span slot="start"
+            >${renderWorkboardBoardGlyph({
+              id: selectedOption.boardId,
+              name: selectedOption.label,
+              icon: selectedOption.icon,
+              color: selectedOption.color,
+            })}</span
+          >`
+        : nothing}
       ${params.options.map(
         (option) => html`
           <wa-option
@@ -46,6 +61,16 @@ export function renderWorkboardSelect<Value extends string>(params: {
             ?selected=${option.value === params.value}
             ?disabled=${option.disabled}
           >
+            ${option.boardId
+              ? html`<span slot="start"
+                  >${renderWorkboardBoardGlyph({
+                    id: option.boardId,
+                    name: option.label,
+                    icon: option.icon,
+                    color: option.color,
+                  })}</span
+                >`
+              : nothing}
             <span class="workboard-select__copy">
               <span class="workboard-select__label">${option.label}</span>
               ${option.description

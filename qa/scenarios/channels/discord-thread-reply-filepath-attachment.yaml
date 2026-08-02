@@ -3,15 +3,18 @@ scenario:
   id: discord-thread-reply-filepath-attachment
   surface: channels
   coverage:
-    primary: [channels.media-rich-content]
+    primary:
+      - discord.thread-actions
+      - discord.media-and-rich-content
   execution:
     kind: flow
     channel: discord
     timeoutMs: 45000
     retryCount: 1
     suiteIsolation: isolated
-    config: { discordScenarioId: discord-thread-reply-filepath-attachment }
 flow:
   module: ./live-transports/discord/scenario-runtime.js
-  call: runDiscordThreadReplyFilepathAttachmentScenario
-  args: [{ expr: discordScenarioContext }]
+  call: runDiscordScenario
+  args:
+    - { expr: discordScenarioContext }
+    - { moduleExport: discordQaThreadReplyFilepathAttachmentScenario }

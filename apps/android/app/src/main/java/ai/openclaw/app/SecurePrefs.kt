@@ -62,6 +62,7 @@ class SecurePrefs(
     private const val installedAppsDisclosureConsentVersionKey =
       "device.apps.prominentDisclosure.consentVersion"
     private const val currentInstalledAppsDisclosureConsentVersion = 1
+    private const val accessibilityControlEnabledKey = "mobileUi.accessibilityControl.enabled"
     private const val cameraEnabledKey = "camera.enabled"
     private const val preferredCameraFacingKey = "camera.preferredFacing"
     private const val voiceMicEnabledKey = "voice.micEnabled"
@@ -154,6 +155,10 @@ class SecurePrefs(
   private val _installedAppsSharingEnabled =
     MutableStateFlow(loadInstalledAppsSharingEnabled())
   val installedAppsSharingEnabled: StateFlow<Boolean> = _installedAppsSharingEnabled
+
+  private val _accessibilityControlEnabled =
+    MutableStateFlow(plainPrefs.getBoolean(accessibilityControlEnabledKey, false))
+  val accessibilityControlEnabled: StateFlow<Boolean> = _accessibilityControlEnabled
 
   private val _notificationForwardingEnabled =
     MutableStateFlow(plainPrefs.getBoolean(notificationsForwardingEnabledKey, defaultNotificationForwardingEnabled))
@@ -312,6 +317,11 @@ class SecurePrefs(
       remove(installedAppsDisclosureConsentVersionKey)
     }
     _installedAppsSharingEnabled.value = false
+  }
+
+  fun setAccessibilityControlEnabled(value: Boolean) {
+    plainPrefs.edit { putBoolean(accessibilityControlEnabledKey, value) }
+    _accessibilityControlEnabled.value = value
   }
 
   private fun loadInstalledAppsSharingEnabled(): Boolean {

@@ -1,7 +1,12 @@
 // Whatsapp plugin module implements outbound media contract behavior.
 import path from "node:path";
 import { sanitizeForPlainText } from "openclaw/plugin-sdk/channel-outbound";
-import { mediaKindFromMime, normalizeMimeType } from "openclaw/plugin-sdk/media-mime";
+import {
+  mediaKindFromMime,
+  mimeTypeFromFilePath,
+  normalizeMimeType,
+} from "openclaw/plugin-sdk/media-mime";
+import type { MediaKind } from "openclaw/plugin-sdk/media-mime";
 import {
   MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS,
   transcodeAudioBufferToOpus,
@@ -46,7 +51,7 @@ export type DeliverableWhatsAppOutboundPayload<T extends WhatsAppOutboundPayload
 
 type CanonicalWhatsAppLoadedMedia = {
   buffer: Buffer;
-  kind: "image" | "audio" | "video" | "document";
+  kind: Exclude<MediaKind, "sticker" | "unknown">;
   mimetype: string;
   fileName?: string;
 };
@@ -116,27 +121,51 @@ export function normalizeWhatsAppOutboundPayload<T extends WhatsAppOutboundPaylo
 
 function inferWhatsAppMediaKind(
   media: WhatsAppLoadedMediaLike,
-): "image" | "audio" | "video" | "document" {
+  resolvedContentType?: string,
+): CanonicalWhatsAppLoadedMedia["kind"] {
+  // Generic binary responses are initially classified as documents; let a
+  // real filename recover their native family instead of preserving that guess.
+  const isGenericDocument =
+    media.kind === "document" &&
+    normalizeMimeType(media.contentType) === "application/octet-stream";
   if (
     media.kind === "image" ||
     media.kind === "audio" ||
     media.kind === "video" ||
-    media.kind === "document"
+    (media.kind === "document" && !isGenericDocument)
   ) {
     return media.kind;
   }
-  return mediaKindFromMime(normalizeMimeType(media.contentType)) ?? "document";
+  const inferredKind = mediaKindFromMime(normalizeMimeType(resolvedContentType));
+  return !inferredKind || inferredKind === "sticker" || inferredKind === "unknown"
+    ? "document"
+    : inferredKind;
 }
 
 function normalizeWhatsAppLoadedMedia(
   media: WhatsAppLoadedMediaLike,
   mediaUrl?: string,
 ): CanonicalWhatsAppLoadedMedia {
-  const kind = inferWhatsAppMediaKind(media);
+  // Infer the kind and native payload MIME from the same filename fact; Baileys
+  // does not replace an explicit application/octet-stream on images or videos.
+  const filenameMimeType = mimeTypeFromFilePath(media.fileName);
+  const normalizedContentType = normalizeMimeType(media.contentType);
+  const resolvedContentType =
+    !normalizedContentType || normalizedContentType === "application/octet-stream"
+      ? (filenameMimeType ?? normalizedContentType)
+      : normalizedContentType;
+  const kind = inferWhatsAppMediaKind(media, resolvedContentType);
+  // Match the existing URL/filename voice rule used by the transcode decision;
+  // otherwise native .ogg/.opus uploads carry an inconsistent payload MIME.
   const mimetype =
-    kind === "audio" && isWhatsAppNativeVoiceAudio({ contentType: media.contentType, mediaUrl })
+    kind === "audio" &&
+    isWhatsAppNativeVoiceAudio({
+      contentType: media.contentType,
+      fileName: media.fileName,
+      mediaUrl,
+    })
       ? WHATSAPP_VOICE_MIMETYPE
-      : (media.contentType ?? "application/octet-stream");
+      : (resolvedContentType ?? "application/octet-stream");
   const fileName =
     kind === "document"
       ? resolveWhatsAppDocumentFileName({

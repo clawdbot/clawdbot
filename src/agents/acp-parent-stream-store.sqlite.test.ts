@@ -21,10 +21,21 @@ describe("ACP parent stream SQLite store", () => {
         env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
       };
       runOpenClawAgentWriteTransaction((database) => {
-        const db = getNodeSqliteKysely<Pick<OpenClawAgentKyselyDatabase, "sessions">>(database.db);
+        const db = getNodeSqliteKysely<
+          Pick<OpenClawAgentKyselyDatabase, "session_nodes" | "session_windows">
+        >(database.db);
         executeSqliteQuerySync(
           database.db,
-          db.insertInto("sessions").values({
+          db.insertInto("session_nodes").values({
+            session_key: "agent:codex:acp:child",
+            current_session_id: "session-1",
+            entry_json: "{}",
+            updated_at: 1,
+          }),
+        );
+        executeSqliteQuerySync(
+          database.db,
+          db.insertInto("session_windows").values({
             session_id: "session-1",
             session_key: "agent:codex:acp:child",
             session_scope: "conversation",
@@ -52,10 +63,12 @@ describe("ACP parent stream SQLite store", () => {
       ]);
 
       runOpenClawAgentWriteTransaction((database) => {
-        const db = getNodeSqliteKysely<Pick<OpenClawAgentKyselyDatabase, "sessions">>(database.db);
+        const db = getNodeSqliteKysely<Pick<OpenClawAgentKyselyDatabase, "session_windows">>(
+          database.db,
+        );
         executeSqliteQuerySync(
           database.db,
-          db.deleteFrom("sessions").where("session_id", "=", "session-1"),
+          db.deleteFrom("session_windows").where("session_id", "=", "session-1"),
         );
       }, options);
       expect(
@@ -71,10 +84,21 @@ describe("ACP parent stream SQLite store", () => {
         env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
       };
       runOpenClawAgentWriteTransaction((database) => {
-        const db = getNodeSqliteKysely<Pick<OpenClawAgentKyselyDatabase, "sessions">>(database.db);
+        const db = getNodeSqliteKysely<
+          Pick<OpenClawAgentKyselyDatabase, "session_nodes" | "session_windows">
+        >(database.db);
         executeSqliteQuerySync(
           database.db,
-          db.insertInto("sessions").values({
+          db.insertInto("session_nodes").values({
+            session_key: "agent:codex:acp:invalid",
+            current_session_id: "session-1",
+            entry_json: "{}",
+            updated_at: 1,
+          }),
+        );
+        executeSqliteQuerySync(
+          database.db,
+          db.insertInto("session_windows").values({
             session_id: "session-1",
             session_key: "agent:codex:acp:invalid",
             session_scope: "conversation",

@@ -100,6 +100,4 @@ The focused proof should use:
 node scripts/run-vitest.mjs src/config/sessions/session-accessor.conformance.test.ts
 ```
 
-If the final tests live in `store.session-lifecycle-mutation.test.ts`, run that
-file explicitly with the same wrapper. Broad `pnpm` gates should stay on
-Crabbox/Testbox for this Codex worktree.
+Broad `pnpm` gates should stay on Crabbox/Testbox for this Codex worktree.

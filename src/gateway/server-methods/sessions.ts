@@ -12,11 +12,15 @@ import { sessionMessagingHandlers } from "./sessions-messaging.js";
 import { sessionMutationHandlers } from "./sessions-mutations.js";
 import { sessionReadHandlers } from "./sessions-read.js";
 import { sessionRewindHandlers } from "./sessions-rewind.js";
+import { sessionSharingHandlers } from "./sessions-sharing.js";
 import { sessionSubscriptionHandlers } from "./sessions-subscriptions.js";
+import { sessionSuggestionHandlers } from "./sessions-suggestions.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 export const sessionsHandlers: GatewayRequestHandlers = {
   ...sessionReadHandlers,
+  ...sessionSharingHandlers,
+  ...sessionSuggestionHandlers,
   ...sessionSubscriptionHandlers,
   ...sessionCreateHandlers,
   ...sessionCheckpointQueryHandlers,

@@ -11,6 +11,8 @@ export type CronCreatorToolAllowlistEntry =
 
 export type CronToolOptions = {
   agentSessionKey?: string;
+  /** Authenticated source account; authority must not be inferred from delivery. */
+  agentAccountId?: string;
   currentDeliveryContext?: DeliveryContext;
   /**
    * Effective tool surface visible to the caller that created or edited a cron job.

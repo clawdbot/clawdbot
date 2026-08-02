@@ -7,10 +7,11 @@ import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness
 import { classifyEmbeddedAgentRunResultForModelFallback } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   createContractRunResult,
+  openFileBackedSessionManagerForTest,
   OUTCOME_FALLBACK_RUNTIME_CONTRACT,
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
-import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
 import { createCodexTestModel } from "./test-support.js";
@@ -28,7 +29,7 @@ async function createParams(): Promise<EmbeddedRunAttemptParams> {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-outcome-contract-"));
   tempDirs.add(tempDir);
   const sessionFile = path.join(tempDir, "session.jsonl");
-  SessionManager.open(sessionFile);
+  openFileBackedSessionManagerForTest(sessionFile);
   return {
     prompt: OUTCOME_FALLBACK_RUNTIME_CONTRACT.prompt,
     sessionId: OUTCOME_FALLBACK_RUNTIME_CONTRACT.sessionId,
@@ -80,7 +81,7 @@ function classifyProjectedAttemptResult(result: ProjectedAttemptResult) {
       ...result,
       meta: {
         durationMs: 1,
-        aborted: result.aborted,
+        aborted: readAttemptTerminal(result).aborted,
         agentHarnessResultClassification: result.agentHarnessResultClassification,
         finalAssistantRawText: finalAssistantText || undefined,
         finalAssistantVisibleText: finalAssistantText || undefined,
@@ -115,7 +116,7 @@ describe("Outcome/fallback runtime contract - Codex app-server adapter", () => {
 
     expect(result.assistantTexts).toStrictEqual([]);
     expect(result.lastAssistant).toBeUndefined();
-    expect(result.promptError).toBeNull();
+    expect(readAttemptTerminal(result).promptError).toBeNull();
   });
 
   it("preserves exact NO_REPLY as assistant text instead of classifying in the adapter", async () => {
@@ -140,7 +141,7 @@ describe("Outcome/fallback runtime contract - Codex app-server adapter", () => {
 
     expect(result.assistantTexts).toEqual(["NO_REPLY"]);
     expect(result.lastAssistant?.content).toEqual([{ type: "text", text: "NO_REPLY" }]);
-    expect(result.promptError).toBeNull();
+    expect(readAttemptTerminal(result).promptError).toBeNull();
   });
 
   it("preserves reasoning-only terminal turns for OpenClaw-owned fallback classification", async () => {
@@ -165,7 +166,7 @@ describe("Outcome/fallback runtime contract - Codex app-server adapter", () => {
 
     expect(result.assistantTexts).toStrictEqual([]);
     expect(result.lastAssistant).toBeUndefined();
-    expect(result.promptError).toBeNull();
+    expect(readAttemptTerminal(result).promptError).toBeNull();
     expect(result.messagesSnapshot.map((message) => message.role)).toStrictEqual([
       "user",
       "assistant",
@@ -231,7 +232,7 @@ describe("Outcome/fallback runtime contract - Codex app-server adapter", () => {
 
     expect(result.assistantTexts).toStrictEqual([]);
     expect(result.lastAssistant).toBeUndefined();
-    expect(result.promptError).toBeNull();
+    expect(readAttemptTerminal(result).promptError).toBeNull();
     expect(result.messagesSnapshot.map((message) => message.role)).toStrictEqual([
       "user",
       "assistant",

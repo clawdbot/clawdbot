@@ -10,6 +10,7 @@ import {
   mockIsJidGroup,
   mockNormalizeMessageContent,
 } from "../../../test/mocks/baileys.js";
+import { lookupInboundMessageMeta } from "./quoted-message.js";
 
 type MockMessageInput = Parameters<typeof mockNormalizeMessageContent>[0];
 type InMemoryKeyedStoreEntry<T> = {
@@ -229,7 +230,7 @@ let createWaSocket: typeof import("./session.js").createWaSocket;
 async function waitForMessage(onMessage: ReturnType<typeof vi.fn>) {
   await vi.waitFor(() => expect(onMessage).toHaveBeenCalledTimes(1), {
     interval: 1,
-    timeout: 250,
+    timeout: 2_000,
   });
   return onMessage.mock.calls[0]?.[0];
 }
@@ -284,7 +285,6 @@ describe("web inbound media saves with extension", () => {
     const listener = await monitorWebInbox({
       cfg: {
         channels: { whatsapp: { allowFrom: ["*"] } },
-        messages: { responsePrefix: undefined },
       } as never,
       verbose: false,
       onMessage,
@@ -337,7 +337,6 @@ describe("web inbound media saves with extension", () => {
     const listener = await monitorWebInbox({
       cfg: {
         channels: { whatsapp: { allowFrom: ["*"] } },
-        messages: { responsePrefix: undefined },
       } as never,
       verbose: false,
       onMessage,
@@ -370,12 +369,154 @@ describe("web inbound media saves with extension", () => {
     });
 
     const inbound = await waitForMessage(onMessage);
-    expect(inbound.quote?.body).toBe("<media:image>");
+    expect(inbound.quote?.body).toBe("");
+    expect(inbound.quote?.media).toEqual({ contentType: "image/jpeg", kind: "image" });
     const mediaPath = requireMediaPath(inbound.payload.media?.path);
     expect(path.extname(mediaPath)).toBe(".jpg");
     expect(saveMediaStreamSpy).toHaveBeenCalled();
     const lastCall = latestSaveMediaStreamCall();
     expect(lastCall[1]).toBe("image/jpeg");
+    expect(
+      lookupInboundMessageMeta("default", "111@g.us", "quote-img-reply")?.media,
+    ).toBeUndefined();
+
+    await listener.close();
+  });
+
+  it("preserves self-authored quoted media through the real Baileys reupload boundary", async () => {
+    const onMessage = vi.fn();
+    const listener = await monitorWebInbox({
+      cfg: { channels: { whatsapp: { allowFrom: ["*"] } } } as never,
+      verbose: false,
+      onMessage,
+      accountId: "default",
+      authDir: path.join(HOME, "wa-auth"),
+    });
+    const realSock = await getMockSocket();
+
+    realSock.ev.emit("messages.upsert", {
+      type: "notify",
+      messages: [
+        {
+          key: { id: "quote-own-image", fromMe: false, remoteJid: "111@s.whatsapp.net" },
+          message: {
+            extendedTextMessage: {
+              text: "what is in your image?",
+              contextInfo: {
+                stanzaId: "bot-image",
+                participant: "me@s.whatsapp.net",
+                quotedMessage: { imageMessage: { mimetype: "image/jpeg" } },
+              },
+            },
+          },
+          messageTimestamp: 1_700_000_007,
+        },
+      ],
+    });
+
+    await waitForMessage(onMessage);
+    const quoted = downloadMediaMessageMock.mock.calls[0]?.[0] as
+      | { key?: { fromMe?: boolean; id?: string; remoteJid?: string } }
+      | undefined;
+    expect(quoted?.key).toMatchObject({ fromMe: true, id: "bot-image" });
+
+    const { encryptMediaRetryRequest } = await vi.importActual<typeof import("baileys")>("baileys");
+    const retry = encryptMediaRetryRequest(
+      quoted!.key as never,
+      Buffer.alloc(32, 1),
+      "me@s.whatsapp.net",
+    );
+    const retryNode = Array.isArray(retry.content)
+      ? retry.content.find((node) => node.tag === "rmr")
+      : undefined;
+    expect(retryNode?.attrs.from_me).toBe("true");
+
+    await listener.close();
+  });
+
+  it("delivers incoming video notes as normal video media", async () => {
+    const onMessage = vi.fn();
+    const listener = await monitorWebInbox({
+      cfg: { channels: { whatsapp: { allowFrom: ["*"] } } } as never,
+      verbose: false,
+      onMessage,
+      accountId: "default",
+      authDir: path.join(HOME, "wa-auth"),
+    });
+    const realSock = await getMockSocket();
+
+    realSock.ev.emit("messages.upsert", {
+      type: "notify",
+      messages: [
+        {
+          key: { id: "video-note-1", fromMe: false, remoteJid: "111@s.whatsapp.net" },
+          message: { ptvMessage: { mimetype: "video/mp4" } },
+          messageTimestamp: 1_700_000_008,
+        },
+      ],
+    });
+
+    const inbound = await waitForMessage(onMessage);
+    expect(inbound.payload.media).toMatchObject({ kind: "video", type: "video/mp4" });
+    expect(inbound.payload.media?.path).toBeTruthy();
+    expect(downloadMediaMessageMock).toHaveBeenCalled();
+
+    await listener.close();
+  });
+
+  it("delivers native polls and preserves their questions when quoted", async () => {
+    const onMessage = vi.fn();
+    const listener = await monitorWebInbox({
+      cfg: { channels: { whatsapp: { allowFrom: ["*"] } } } as never,
+      verbose: false,
+      onMessage,
+      accountId: "default",
+      authDir: path.join(HOME, "wa-auth"),
+    });
+    const realSock = await getMockSocket();
+    const poll = {
+      name: "Lunch?",
+      options: [{ optionName: "Pizza" }, { optionName: "Sushi" }],
+    };
+
+    realSock.ev.emit("messages.upsert", {
+      type: "notify",
+      messages: [
+        {
+          key: { id: "poll-1", fromMe: false, remoteJid: "111@s.whatsapp.net" },
+          message: { pollCreationMessageV3: poll },
+          messageTimestamp: 1_700_000_009,
+        },
+      ],
+    });
+
+    expect((await waitForMessage(onMessage)).payload.body).toBe("Lunch?\n- Pizza\n- Sushi");
+    onMessage.mockClear();
+
+    realSock.ev.emit("messages.upsert", {
+      type: "notify",
+      messages: [
+        {
+          key: { id: "poll-reply", fromMe: false, remoteJid: "111@s.whatsapp.net" },
+          message: {
+            extendedTextMessage: {
+              text: "Pizza, please",
+              contextInfo: {
+                stanzaId: "poll-1",
+                participant: "111@s.whatsapp.net",
+                quotedMessage: { pollCreationMessageV3: poll },
+              },
+            },
+          },
+          messageTimestamp: 1_700_000_010,
+        },
+      ],
+    });
+
+    expect((await waitForMessage(onMessage)).quote).toMatchObject({
+      id: "poll-1",
+      body: "Lunch?\n- Pizza\n- Sushi",
+    });
 
     await listener.close();
   });
@@ -385,7 +526,6 @@ describe("web inbound media saves with extension", () => {
     const listener = await monitorWebInbox({
       cfg: {
         channels: { whatsapp: { allowFrom: ["*"] } },
-        messages: { responsePrefix: undefined },
       } as never,
       verbose: false,
       onMessage,
@@ -416,13 +556,12 @@ describe("web inbound media saves with extension", () => {
     await listener.close();
   });
 
-  it("replaces a failed image placeholder with an unavailable notice", async () => {
+  it("keeps a failed image fact with an unavailable notice", async () => {
     downloadMediaMessageMock.mockRejectedValueOnce(new Error("expired media reference"));
     const onMessage = vi.fn();
     const listener = await monitorWebInbox({
       cfg: {
         channels: { whatsapp: { allowFrom: ["*"] } },
-        messages: { responsePrefix: undefined },
       } as never,
       verbose: false,
       onMessage,
@@ -444,8 +583,19 @@ describe("web inbound media saves with extension", () => {
 
     const inbound = await waitForMessage(onMessage);
     expect(inbound.payload.body).toBe("[whatsapp attachment unavailable]");
-    expect(inbound.payload.commandBody).toBe("<media:image>");
-    expect(inbound.payload.media).toBeUndefined();
+    expect(inbound.payload.commandBody).toBe("");
+    expect(inbound.payload.media).toEqual({
+      path: undefined,
+      type: "image/jpeg",
+      fileName: undefined,
+      kind: "image",
+    });
+    expect(inbound.payload.channelStructuredContext).toContainEqual({
+      label: "WhatsApp media",
+      source: "whatsapp",
+      type: "media",
+      payload: { contentType: "image/jpeg", kind: "image" },
+    });
 
     await listener.close();
   });

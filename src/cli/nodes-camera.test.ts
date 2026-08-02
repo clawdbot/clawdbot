@@ -35,6 +35,7 @@ let writeBase64ToFile: typeof import("./nodes-camera.js").writeBase64ToFile;
 let parseScreenRecordPayload: typeof import("./nodes-screen.js").parseScreenRecordPayload;
 let parseScreenSnapshotPayload: typeof import("./nodes-screen.js").parseScreenSnapshotPayload;
 let screenRecordTempPath: typeof import("./nodes-screen.js").screenRecordTempPath;
+let screenSnapshotFormatForPath: typeof import("./nodes-screen.js").screenSnapshotFormatForPath;
 let screenSnapshotTempPath: typeof import("./nodes-screen.js").screenSnapshotTempPath;
 let writeScreenRecordToFile: typeof import("./nodes-screen.js").writeScreenRecordToFile;
 let writeScreenSnapshotToFile: typeof import("./nodes-screen.js").writeScreenSnapshotToFile;
@@ -88,6 +89,7 @@ describe("nodes camera helpers", () => {
       parseScreenRecordPayload,
       parseScreenSnapshotPayload,
       screenRecordTempPath,
+      screenSnapshotFormatForPath,
       screenSnapshotTempPath,
       writeScreenRecordToFile,
       writeScreenSnapshotToFile,
@@ -535,8 +537,21 @@ describe("nodes screen helpers", () => {
     );
   });
 
-  it("builds screen snapshot temp path", () => {
-    expect(screenSnapshotTempPath({ tmpDir: "/tmp", id: "id1" })).toBe(
+  it("maps a snapshot output path to the encoding the node should produce", () => {
+    expect(screenSnapshotFormatForPath("/workspace/shot.png")).toBe("png");
+    expect(screenSnapshotFormatForPath("/workspace/shot.PNG")).toBe("png");
+    expect(screenSnapshotFormatForPath("/workspace/shot.jpg")).toBe("jpeg");
+    expect(screenSnapshotFormatForPath("/workspace/shot.jpeg")).toBe("jpeg");
+    // Nothing recognizable is claimed, so the node's own default should stand.
+    expect(screenSnapshotFormatForPath("/workspace/shot")).toBeUndefined();
+    expect(screenSnapshotFormatForPath("/workspace/shot.webp")).toBeUndefined();
+  });
+
+  it("builds screen snapshot temp path from the reported format", () => {
+    expect(screenSnapshotTempPath({ ext: "jpg", tmpDir: "/tmp", id: "id1" })).toBe(
+      path.join("/tmp", "openclaw-screen-snapshot-id1.jpg"),
+    );
+    expect(screenSnapshotTempPath({ ext: "png", tmpDir: "/tmp", id: "id1" })).toBe(
       path.join("/tmp", "openclaw-screen-snapshot-id1.png"),
     );
   });

@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CronJob } from "../cron/types.js";
 import { resolveExitWatchShell } from "./cron-exit-watch-shell.js";
 import { createCronExitWatchers, type CronExitResult } from "./cron-exit-watchers.js";
@@ -141,7 +141,7 @@ describe("createCronExitWatchers", () => {
       stderr: "",
     });
     // One-shot terminal state is persisted BEFORE firing (restart-safe).
-    expect(persistCompletion).toHaveBeenCalledWith("job-a");
+    expect(persistCompletion).toHaveBeenCalledWith(expect.objectContaining({ id: "job-a" }));
     expect(order).toEqual(["persist", "fire"]);
   });
 
@@ -385,10 +385,11 @@ describe("createCronExitWatchers", () => {
 
   it("retains a blocker and suppresses stale fire when removed during terminal persistence", async () => {
     const { supervisor, runs } = makeFakeSupervisor();
-    let releasePersist = () => {};
+    let releasePersist: (release: () => void) => void = () => {};
+    const releaseCompletion = vi.fn();
     const persistCompletion = vi.fn(
       () =>
-        new Promise<void>((resolve) => {
+        new Promise<() => void>((resolve) => {
           releasePersist = resolve;
         }),
     );
@@ -410,9 +411,10 @@ describe("createCronExitWatchers", () => {
     w.reconcile([]);
     expect(w.activeJobIds()).toEqual(["job-a"]);
 
-    releasePersist();
+    releasePersist(releaseCompletion);
     await vi.waitFor(() => expect(w.activeJobIds()).toEqual([]));
     expect(fireOnExit).not.toHaveBeenCalled();
+    expect(releaseCompletion).toHaveBeenCalledOnce();
   });
 
   it("is one-shot: a fired job is not re-armed on a later reconcile", async () => {
@@ -437,10 +439,19 @@ describe("createCronExitWatchers", () => {
 });
 
 describe("resolveExitWatchShell", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it("uses cmd.exe on Windows so native gateways without bash can run on-exit", () => {
     const shell = resolveExitWatchShell("win32");
     expect(shell.command).toMatch(/cmd\.exe$/i);
     expect(shell.argsFor("echo hi")).toEqual(["/d", "/s", "/c", "echo hi"]);
+  });
+
+  it("uses cmd.exe when ComSpec is blank", () => {
+    vi.stubEnv("ComSpec", "   ");
+    expect(resolveExitWatchShell("win32").command).toBe("cmd.exe");
   });
 
   it("uses bash -lc on POSIX", () => {

@@ -10,6 +10,8 @@ import {
   jsdomOptimizedDeps,
   resolveDefaultVitestPool,
 } from "../test/vitest/vitest.shared.config.ts";
+import { uiIsolatedTestFiles } from "../test/vitest/vitest.ui-isolated-paths.mjs";
+import { controlUiLocaleModulesPlugin } from "./config/control-ui-locales.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..");
@@ -59,6 +61,14 @@ const workspaceSourceAliases = [
     replacement: path.resolve(repoRoot, "packages/media-core/src/index.ts"),
   },
   {
+    find: "@openclaw/session-url-contract/parse",
+    replacement: path.resolve(repoRoot, "packages/session-url-contract/src/parse.ts"),
+  },
+  {
+    find: "@openclaw/session-url-contract",
+    replacement: path.resolve(repoRoot, "packages/session-url-contract/src/index.ts"),
+  },
+  {
     find: "@openclaw/workboard-contract",
     replacement: path.resolve(repoRoot, "packages/workboard-contract/src/index.ts"),
   },
@@ -86,6 +96,7 @@ const nodeDrivenBrowserLayoutTests = [
   "src/pages/sessions/view.browser.test.ts",
 ] as const;
 const mockRegistryUnitTests = [
+  ...uiIsolatedTestFiles.map((testFile) => testFile.slice("ui/".length)),
   "src/components/mcp-app-view.test.ts",
   "src/pages/chat/chat-page.test.ts",
 ] as const;
@@ -130,6 +141,7 @@ export default defineConfig({
     ...sharedUiTestConfig,
     projects: [
       defineProject({
+        plugins: [controlUiLocaleModulesPlugin()],
         resolve: {
           alias: workspaceSourceAliases,
         },
@@ -149,13 +161,14 @@ export default defineConfig({
         },
       }),
       defineProject({
+        plugins: [controlUiLocaleModulesPlugin()],
         resolve: {
           alias: workspaceSourceAliases,
         },
         test: {
           ...sharedUiTestConfig,
-          // These two tests intentionally replace module exports. Isolate only this tiny
-          // project so the main 339-file suite keeps its isolate:false speed contract.
+          // Reuse the canonical singleton-sensitive list so the package and
+          // root runners isolate the same tests without slowing the main suite.
           isolate: true,
           deps: jsdomOptimizedDeps,
           name: "unit-mock-registry",
@@ -165,6 +178,7 @@ export default defineConfig({
         },
       }),
       defineProject({
+        plugins: [controlUiLocaleModulesPlugin()],
         resolve: {
           alias: workspaceSourceAliases,
         },
@@ -178,6 +192,7 @@ export default defineConfig({
         },
       }),
       defineProject({
+        plugins: [controlUiLocaleModulesPlugin()],
         resolve: {
           alias: workspaceSourceAliases,
         },

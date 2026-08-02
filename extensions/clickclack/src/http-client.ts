@@ -2,6 +2,7 @@
  * Thin ClickClack REST/websocket client used by gateway, resolver, and outbound
  * delivery code.
  */
+import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import {
   readProviderJsonResponse,
   readResponseTextLimited,
@@ -152,7 +153,13 @@ export function createClickClackClient(options: ClientOptions) {
     const response = await fetcher(`${baseUrl}${path}`, { ...init, headers: requestHeaders });
     if (!response.ok) {
       const detail = await readResponseTextLimited(response, CLICKCLACK_ERROR_BODY_LIMIT_BYTES);
-      throw new ClickClackHttpError(response.status, detail, new Headers(response.headers));
+      // Remote error bodies are untrusted output; redact them even when the
+      // operator disables log redaction or overrides log-only patterns.
+      throw new ClickClackHttpError(
+        response.status,
+        redactToolPayloadText(detail),
+        new Headers(response.headers),
+      );
     }
     return await readProviderJsonResponse<T>(response, "ClickClack response", {
       maxBytes: CLICKCLACK_INBOUND_JSON_LIMIT_BYTES,
@@ -222,6 +229,7 @@ export function createClickClackClient(options: ClientOptions) {
         external_ref: string;
         external_url?: string;
         sidebar_section: string;
+        display_title?: string;
       },
     ): Promise<ClickClackChannel> => {
       const data = await request<{ channel: ClickClackChannel }>(
@@ -239,6 +247,7 @@ export function createClickClackClient(options: ClientOptions) {
         external_ref?: string;
         external_url?: string;
         sidebar_section?: string;
+        display_title?: string;
       },
     ): Promise<ClickClackChannel> => {
       const data = await request<{ channel: ClickClackChannel }>(

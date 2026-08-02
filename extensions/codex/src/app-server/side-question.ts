@@ -30,6 +30,7 @@ import { isCodexAppServerApprovalRequest, type CodexAppServerClient } from "./cl
 import {
   canUseCodexModelBackedApprovalsReviewerForModel,
   readCodexPluginConfig,
+  resolveCodexAppServerHomeScope,
   resolveOpenClawExecPolicyForCodexAppServer,
   resolveCodexModelBackedReviewerPolicyContext,
   shouldAutoApproveCodexAppServerApprovals,
@@ -55,7 +56,7 @@ import {
 } from "./dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge, type CodexDynamicToolBridge } from "./dynamic-tools.js";
 import { handleCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
-import { CodexNativeToolLifecycleProjector } from "./event-projector.js";
+import { CodexNativeToolLifecycleProjector } from "./event-projector-native-tool-lifecycle.js";
 import {
   buildCodexNativeHookRelayConfig,
   buildCodexNativeHookRelayDisabledConfig,
@@ -199,6 +200,7 @@ export async function runCodexAppServerSideQuestion(
         authProfileId: preparedRuntimeAuth.plan.forwardedAuthProfileId,
         authProfileStore: preparedRuntimeAuth.authProfileStore,
         agentDir: params.agentDir,
+        homeScope: resolveCodexAppServerHomeScope({ appServer: pluginConfig.appServer }),
         config: params.cfg,
         subscriptionProfileRequiredError:
           "Prepared Codex subscription route requires a scoped native OAuth or token profile.",
@@ -1042,6 +1044,7 @@ async function createCodexSideToolBridge(input: {
       hookContext: {
         agentId: input.sessionAgentId,
         config: input.params.cfg,
+        contextWindowTokens: runtimeModel.contextWindow,
         sessionId: input.params.sessionId,
         sessionKey: input.params.sessionKey,
         runId: input.runId,

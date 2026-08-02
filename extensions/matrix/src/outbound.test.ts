@@ -99,13 +99,18 @@ describe("matrixOutbound cfg threading", () => {
         },
       },
     } as OpenClawConfig;
+    const mediaAccess = {
+      localRoots: ["/tmp/openclaw"],
+      workspaceDir: "/tmp/openclaw",
+    };
 
     await matrixOutbound.sendMedia!({
       cfg,
       to: "room:!room:example",
       text: "caption",
-      mediaUrl: "file:///tmp/cat.png",
-      mediaLocalRoots: ["/tmp/openclaw"],
+      mediaUrl: "chart.png",
+      mediaAccess,
+      mediaLocalRoots: mediaAccess.localRoots,
       accountId: "default",
       audioAsVoice: true,
     });
@@ -115,7 +120,8 @@ describe("matrixOutbound cfg threading", () => {
     expect(call[1]).toBe("caption");
     const options = mockOptions(mocks.sendMessageMatrix, "sendMessageMatrix");
     expect(options.cfg).toBe(cfg);
-    expect(options.mediaUrl).toBe("file:///tmp/cat.png");
+    expect(options.mediaUrl).toBe("chart.png");
+    expect(options.mediaAccess).toBe(mediaAccess);
     expect(options.mediaLocalRoots).toEqual(["/tmp/openclaw"]);
     expect(options.audioAsVoice).toBe(true);
   });
@@ -239,6 +245,38 @@ describe("matrixOutbound cfg threading", () => {
       version: 1,
       type: "message.presentation",
     });
+  });
+
+  it("keeps typed select commands actionable in Matrix fallback content", async () => {
+    const presentation = {
+      blocks: [
+        {
+          type: "select" as const,
+          placeholder: "Environment",
+          options: [
+            {
+              label: "Production",
+              action: { type: "command" as const, command: "/deploy production" },
+            },
+            {
+              label: "Opaque",
+              action: { type: "callback" as const, value: "private-callback-token" },
+            },
+          ],
+        },
+      ],
+    };
+
+    const rendered = await matrixOutbound.renderPresentation!({
+      payload: { text: "Choose", presentation },
+      presentation,
+      ctx: {} as never,
+    });
+
+    expect(rendered?.text).toBe(
+      "Choose\n\nEnvironment:\n- Production: `/deploy production`\n- Opaque",
+    );
+    expect(rendered?.text).not.toContain("private-callback-token");
   });
 
   it("passes Matrix presentation metadata through sendPayload extraContent", async () => {

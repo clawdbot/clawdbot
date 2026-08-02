@@ -1,6 +1,10 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { Insertable, Selectable } from "kysely";
 import type { HeartbeatToolResponse } from "../auto-reply/heartbeat-tool-response.js";
+import {
+  resolveSqliteScope,
+  toDatabaseOptions,
+} from "../config/sessions/session-accessor.sqlite-scope.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
 import type { HeartbeatWakeSource } from "./heartbeat-wake.js";
@@ -88,6 +92,7 @@ function rowToOutcome(row: HeartbeatOutcomeRow): PersistedHeartbeatOutcome | und
 export function persistHeartbeatOutcome(params: {
   agentId: string;
   sessionKey: string;
+  storePath?: string;
   runSessionKey: string;
   response: HeartbeatToolResponse;
   taskNames?: readonly string[];
@@ -147,7 +152,7 @@ export function persistHeartbeatOutcome(params: {
           ),
       );
     },
-    { agentId: params.agentId, env: params.env },
+    toDatabaseOptions(resolveSqliteScope(params)),
     { operationLabel: "heartbeat.outcome.persist" },
   );
 }
@@ -156,6 +161,7 @@ export function persistHeartbeatOutcome(params: {
 export function claimHeartbeatOutcomeForRun(params: {
   agentId: string;
   sessionKey: string;
+  storePath?: string;
   runId: string;
   env?: NodeJS.ProcessEnv;
 }): PersistedHeartbeatOutcome | undefined {
@@ -187,7 +193,7 @@ export function claimHeartbeatOutcomeForRun(params: {
       }
       return rowToOutcome(row);
     },
-    { agentId: params.agentId, env: params.env },
+    toDatabaseOptions(resolveSqliteScope(params)),
     { operationLabel: "heartbeat.outcome.claim" },
   );
 }

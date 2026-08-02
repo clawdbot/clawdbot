@@ -10,10 +10,10 @@ import {
 import {
   listConversations,
   registerConversationAddresses,
+  resolveConversationRegistryScope,
   type ConversationRecord,
   type ConversationRegistryScope,
 } from "../config/sessions/conversation-registry.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveOutboundChannelPlugin } from "../infra/outbound/channel-resolution.js";
@@ -36,19 +36,6 @@ const defaultDeps: ConversationListDeps = {
   resolveOutboundChannelPlugin,
   resolveOutboundSessionRoute,
 };
-
-function resolveConversationScope(params: {
-  agentId: string;
-  config: OpenClawConfig;
-}): ConversationRegistryScope {
-  const configuredStore = params.config.session?.store;
-  return {
-    agentId: params.agentId,
-    ...(configuredStore
-      ? { storePath: resolveStorePath(configuredStore, { agentId: params.agentId }) }
-      : {}),
-  };
-}
 
 function presentConversation(conversation: ConversationRecord): ConversationListItem {
   return {
@@ -233,7 +220,7 @@ export async function runGatewayConversationList(
   },
   deps: ConversationListDeps = defaultDeps,
 ): Promise<ConversationListResult> {
-  const scope = resolveConversationScope(params);
+  const scope = resolveConversationRegistryScope(params);
   const query = params.query?.trim() || undefined;
   const discovery = params.channel
     ? await discoverChannelAddresses({

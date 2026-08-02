@@ -7,6 +7,9 @@ export type CliCommandPluginLoadPolicy =
   | "text-only"
   | ((ctx: { argv: string[]; commandPath: string[]; jsonOutputMode: boolean }) => boolean);
 type CliRouteConfigGuardPolicy = "never" | "always" | "when-suppressed";
+type CliConfigGuardBypassPolicy =
+  | boolean
+  | ((ctx: { argv: string[]; commandPath: string[] }) => boolean);
 export type CliPluginRegistryScope = "all" | "channels" | "configured-channels";
 export type CliPluginRegistryPolicy = {
   scope: CliPluginRegistryScope;
@@ -18,6 +21,7 @@ type CliNetworkProxyPolicyResolver =
 type CliRoutedCommandId =
   | "health"
   | "status"
+  | "gateway-health"
   | "gateway-status"
   | "sessions"
   | "agents-list"
@@ -32,7 +36,7 @@ type CliRoutedCommandId =
   | "plugins-list";
 
 export type CliCommandPathPolicy = {
-  bypassConfigGuard: boolean;
+  bypassConfigGuard: CliConfigGuardBypassPolicy;
   routeConfigGuard: CliRouteConfigGuardPolicy;
   loadPlugins: CliCommandPluginLoadPolicy;
   pluginRegistry: CliPluginRegistryPolicy;
@@ -83,12 +87,24 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   {
     commandPath: ["agent"],
     policy: {
-      loadPlugins: ({ argv, jsonOutputMode }) => hasFlag(argv, "--local") || !jsonOutputMode,
+      bypassConfigGuard: ({ argv }) => !hasFlag(argv, "--local"),
+      loadPlugins: ({ argv }) => hasFlag(argv, "--local"),
       pluginRegistry: { scope: "all" },
       networkProxy: ({ argv }) => (hasFlag(argv, "--local") ? "default" : "bypass"),
     },
   },
+  {
+    commandPath: ["agent", "exec"],
+    policy: {
+      bypassConfigGuard: true,
+      loadPlugins: "never",
+      ownsProtocolStdout: true,
+      hideBanner: true,
+      networkProxy: "default",
+    },
+  },
   { commandPath: ["message"], policy: { loadPlugins: "never" } },
+  { commandPath: ["docs"], policy: { bypassConfigGuard: true } },
   {
     commandPath: ["channels"],
     policy: {
@@ -185,7 +201,14 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   { commandPath: ["gateway", "diagnostics"], exact: true, policy: { networkProxy: "bypass" } },
   { commandPath: ["gateway", "discover"], exact: true, policy: { networkProxy: "bypass" } },
   { commandPath: ["gateway", "export"], exact: true, policy: { networkProxy: "bypass" } },
-  { commandPath: ["gateway", "health"], exact: true, policy: { networkProxy: "bypass" } },
+  {
+    commandPath: ["gateway", "health"],
+    exact: true,
+    // The routed JSON command owns its config read; running the startup guard first
+    // duplicates config/state initialization before the health socket can open.
+    policy: { routeConfigGuard: "always", networkProxy: "bypass" },
+    route: { id: "gateway-health" },
+  },
   { commandPath: ["gateway", "install"], exact: true, policy: { networkProxy: "bypass" } },
   { commandPath: ["gateway", "probe"], exact: true, policy: { networkProxy: "bypass" } },
   { commandPath: ["gateway", "restart"], exact: true, policy: { networkProxy: "bypass" } },
@@ -197,7 +220,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   {
     commandPath: ["sessions"],
     exact: true,
-    policy: { ensureCliPath: false, networkProxy: "bypass" },
+    policy: { ensureCliPath: false, ownsProtocolStdout: true, networkProxy: "bypass" },
     route: { id: "sessions" },
   },
   {
@@ -216,9 +239,26 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     route: { id: "agents-list" },
   },
   {
+    commandPath: ["config", "file"],
+    exact: true,
+    // A path query must work before config validation and must not initialize state.
+    policy: {
+      bypassConfigGuard: true,
+      ensureCliPath: false,
+      loadPlugins: "never",
+      ownsProtocolStdout: true,
+      networkProxy: "bypass",
+    },
+  },
+  {
     commandPath: ["config", "get"],
     exact: true,
-    policy: { ensureCliPath: false, networkProxy: "bypass" },
+    policy: {
+      bypassConfigGuard: true,
+      routeConfigGuard: "always",
+      ensureCliPath: false,
+      networkProxy: "bypass",
+    },
     route: { id: "config-get" },
   },
   {
@@ -287,6 +327,8 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     policy: { ownsProtocolStdout: true },
   },
   { commandPath: ["approvals"], policy: { networkProxy: "bypass" } },
+  // automations is a commander alias for cron; argv-derived command paths keep the typed token.
+  { commandPath: ["automations"], policy: { networkProxy: "bypass" } },
   { commandPath: ["backup"], policy: { bypassConfigGuard: true, networkProxy: "bypass" } },
   { commandPath: ["chat"], policy: { networkProxy: "bypass" } },
   { commandPath: ["config"], policy: { networkProxy: "bypass" } },
@@ -443,6 +485,8 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     commandPath: ["channels", "status"],
     exact: true,
     policy: {
+      bypassConfigGuard: true,
+      routeConfigGuard: "always",
       loadPlugins: "never",
       networkProxy: ({ argv }) => (hasFlag(argv, "--probe") ? "default" : "bypass"),
     },
@@ -461,4 +505,5 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   { commandPath: ["skills", "list"], exact: true, policy: { networkProxy: "bypass" } },
   { commandPath: ["skills", "search"], exact: true },
   { commandPath: ["skills", "update"], exact: true },
+  { commandPath: ["skills", "verify"], exact: true },
 ];

@@ -55,9 +55,9 @@ extension AgentProTab {
                 self.gatewayToolbarButton
             }
             if let headerSidebarAction {
-                ToolbarItem(placement: .topBarLeading) {
-                    OpenClawSidebarHeaderLeadingSlot(action: headerSidebarAction)
-                }
+                OpenClawSidebarToolbarItem(
+                    action: headerSidebarAction,
+                    placement: .topBarLeading)
             }
         }
     }

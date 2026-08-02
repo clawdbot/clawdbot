@@ -416,7 +416,7 @@ Notes:
 
 - `list` sorts server names.
 - `show` without a name prints the full configured MCP server object.
-- `status` classifies configured transports without connecting. `--verbose` includes resolved launch, timeout, OAuth, filter, and parallel-call details, including when stored OAuth tokens require additional authorization.
+- `status` classifies configured transports without connecting. `--verbose` includes resolved launch, timeout, OAuth, filter, and parallel-call details, including when stored OAuth tokens require additional authorization. Credential-bearing stdio arguments are redacted in text and JSON output.
 - `doctor` performs static checks without connecting. Add `--probe` when the command should also verify that enabled servers connect.
 - `probe` connects and reports tool counts, resources/prompts support, list-change support, and diagnostics.
 - `add` accepts stdio flags such as `--command`, `--arg`, `--env`, and `--cwd`, or HTTP flags such as `--url`, `--transport`, `--header`, `--auth oauth`, TLS, timeout, and tool-selection flags.
@@ -511,7 +511,7 @@ These examples save server definitions only. Run `openclaw mcp doctor --probe` a
   <Tab title="Desktop/CUA">
     ```bash
     openclaw mcp set cua-driver '{"command":"cua-driver","args":["mcp"]}'
-    openclaw mcp tools cua-driver --include 'list_apps,observe,click,type'
+    openclaw mcp tools cua-driver --include 'list_apps,get_window_state,click,type_text'
     openclaw mcp doctor cua-driver --probe
     ```
 
@@ -602,7 +602,7 @@ Use `--json` for scripts and dashboards. Field sets can grow over time, so consu
     }
     ```
 
-    `probe --json` opens a live MCP client session and prints its result directly; unlike `status`/`doctor`, the output has no top-level `path` field. `resources` and `prompts` keys are present only when the server actually advertises that capability (a server without prompts omits the `prompts` key rather than reporting `false`). Use `probe` for reachability and capability proof, not for static config audits.
+    `probe --json` opens a live MCP client session and prints its result directly; unlike `status`/`doctor`, the output has no top-level `path` field. `resources` and `prompts` keys are present only when the server actually advertises that capability (a server without prompts omits the `prompts` key rather than reporting `false`). The command prints the complete result before exiting nonzero when diagnostics are present or a selected enabled server did not connect, so automation can inspect partial successes. Use `probe` for reachability and capability proof, not for static config audits.
 
   </Accordion>
 </AccordionGroup>
@@ -809,6 +809,8 @@ Registry commands do not start the channel bridge. Only `probe` and `doctor --pr
 
 The browser Control UI includes a dedicated MCP settings page at `/settings/mcp`; the previous `/mcp` path remains an alias. The page shows configured server counts, enabled/OAuth/filter summaries, per-server transport rows, enable/disable controls, common CLI commands, and a scoped editor for the `mcp` config section.
 
+For a shorter setup walkthrough covering Settings, the composer path (**+** → **Connectors** → **Add MCP server…**) and its **This session** / **Everywhere** scopes, CLI, and direct config, see [Connect MCP servers](/tools/mcp).
+
 Use the page for operator edits and quick inventory. Use `openclaw mcp doctor --probe` or `openclaw mcp probe` when you need live server proof.
 
 Operator workflow:
@@ -900,5 +902,6 @@ Current limits:
 
 ## Related
 
+- [Connect MCP servers](/tools/mcp)
 - [CLI reference](/cli)
 - [Plugins](/cli/plugins)

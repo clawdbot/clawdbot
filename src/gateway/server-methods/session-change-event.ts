@@ -1,6 +1,8 @@
 // Shared sessions.changed broadcaster for gateway RPC and chat-command mutations.
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { hasSessionChangeReceivers } from "../session-change-receivers.js";
 import { buildGatewaySessionEventFields } from "../session-event-payload.js";
+import { invalidateSessionSharingSnapshot } from "../session-sharing.js";
 import { loadGatewaySessionRow } from "../session-utils.js";
 import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -22,8 +24,9 @@ export function emitSessionsChanged(
   >,
   payload: SessionChangedPayload,
 ) {
+  invalidateSessionSharingSnapshot(payload.sessionKey);
   const connIds = context.getSessionEventSubscriberConnIds();
-  if (connIds.size === 0) {
+  if (!hasSessionChangeReceivers(connIds)) {
     return;
   }
   const sessionRow = payload.sessionKey
@@ -67,6 +70,12 @@ export function emitSessionsChanged(
         : {}),
     },
     connIds,
-    { dropIfSlow: true },
+    {
+      ...(payload.agentId ? { agentId: payload.agentId } : {}),
+      dropIfSlow: true,
+      // Scope only to a concrete key; a `[undefined]` scope filters no connection
+      // correctly and would strip draft gating, so fall back to an unscoped send.
+      ...(sessionRow?.key ? { sessionKeys: [sessionRow.key] } : {}),
+    },
   );
 }

@@ -7,6 +7,7 @@ import {
 import {
   createMessageReceiptFromOutboundResults,
   defineChannelMessageAdapter,
+  type ChannelMessageSendPayloadContext,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { DEFAULT_ACCOUNT_ID } from "./accounts.js";
 import {
@@ -18,22 +19,93 @@ import {
 import { qaChannelMessageActions } from "./channel-actions.js";
 import { createQaChannelPluginBase, QA_CHANNEL_ID, qaChannelRuntimeMeta } from "./channel-base.js";
 import { startQaGatewayAccount } from "./gateway.js";
-import { sendQaChannelText } from "./outbound.js";
+import { sendQaChannelMedia, sendQaChannelMediaBatch, sendQaChannelText } from "./outbound.js";
 import type { ChannelPlugin } from "./runtime-api.js";
 import { qaChannelStatus } from "./status.js";
 import type { CoreConfig, ResolvedQaChannelAccount } from "./types.js";
+
+type QaChannelPayloadSendContext = Pick<
+  ChannelMessageSendPayloadContext,
+  | "cfg"
+  | "to"
+  | "text"
+  | "payload"
+  | "accountId"
+  | "threadId"
+  | "replyToId"
+  | "mediaUrl"
+  | "mediaAccess"
+  | "mediaLocalRoots"
+  | "mediaReadFile"
+>;
+
+function createQaChannelMessageReceipt(
+  ctx: Pick<QaChannelPayloadSendContext, "replyToId" | "threadId" | "to">,
+  messageId: string,
+  kind: "media" | "text",
+) {
+  const { threadId } = resolveQaTargetThread({ target: ctx.to, threadId: ctx.threadId });
+  return createMessageReceiptFromOutboundResults({
+    results: [{ channel: QA_CHANNEL_ID, messageId }],
+    threadId,
+    replyToId: ctx.replyToId ?? undefined,
+    kind,
+  });
+}
+
+async function sendQaChannelMessagePayload(ctx: QaChannelPayloadSendContext) {
+  const text = ctx.payload.text ?? ctx.text;
+  const mediaUrls = Array.from(
+    new Set(
+      [ctx.mediaUrl, ctx.payload.mediaUrl, ...(ctx.payload.mediaUrls ?? [])].filter(
+        (mediaUrl): mediaUrl is string =>
+          typeof mediaUrl === "string" && mediaUrl.trim().length > 0,
+      ),
+    ),
+  );
+  const params = {
+    cfg: ctx.cfg as CoreConfig,
+    accountId: ctx.accountId,
+    to: ctx.to,
+    text,
+    threadId: ctx.threadId,
+    replyToId: ctx.replyToId,
+  };
+  const result =
+    mediaUrls.length === 0
+      ? await sendQaChannelText(params)
+      : await sendQaChannelMediaBatch({
+          ...params,
+          mediaUrls,
+          mediaAccess: ctx.mediaAccess,
+          mediaLocalRoots: ctx.mediaLocalRoots,
+          mediaReadFile: ctx.mediaReadFile,
+        });
+  return {
+    messageId: result.messageId,
+    receipt: createQaChannelMessageReceipt(
+      ctx,
+      result.messageId,
+      mediaUrls.length > 0 ? "media" : "text",
+    ),
+  };
+}
 
 const qaChannelMessageAdapter = defineChannelMessageAdapter({
   id: QA_CHANNEL_ID,
   durableFinal: {
     capabilities: {
       text: true,
+      media: true,
+      payload: true,
       replyTo: true,
       thread: true,
       messageSendingHooks: true,
     },
   },
   send: {
+    // Detached completions must deliver the visible caption and media atomically.
+    payload: sendQaChannelMessagePayload,
     text: async (ctx) => {
       const result = await sendQaChannelText({
         cfg: ctx.cfg as CoreConfig,
@@ -43,24 +115,38 @@ const qaChannelMessageAdapter = defineChannelMessageAdapter({
         threadId: ctx.threadId,
         replyToId: ctx.replyToId,
       });
-      const threadId = ctx.threadId == null ? undefined : String(ctx.threadId);
-      const replyToId = ctx.replyToId ?? undefined;
       return {
         messageId: result.messageId,
-        receipt: createMessageReceiptFromOutboundResults({
-          results: [{ channel: QA_CHANNEL_ID, messageId: result.messageId }],
-          threadId,
-          replyToId,
-          kind: "text",
-        }),
+        receipt: createQaChannelMessageReceipt(ctx, result.messageId, "text"),
+      };
+    },
+    media: async (ctx) => {
+      const result = await sendQaChannelMedia({
+        cfg: ctx.cfg as CoreConfig,
+        accountId: ctx.accountId,
+        to: ctx.to,
+        text: ctx.text,
+        mediaUrl: ctx.mediaUrl,
+        mediaAccess: ctx.mediaAccess,
+        mediaLocalRoots: ctx.mediaLocalRoots,
+        mediaReadFile: ctx.mediaReadFile,
+        threadId: ctx.threadId,
+        replyToId: ctx.replyToId,
+      });
+      return {
+        messageId: result.messageId,
+        receipt: createQaChannelMessageReceipt(ctx, result.messageId, "media"),
       };
     },
   },
 });
 
+const qaChannelPluginBase = createQaChannelPluginBase(qaChannelRuntimeMeta);
+
 export const qaChannelPlugin: ChannelPlugin<ResolvedQaChannelAccount> = createChatChannelPlugin({
   base: {
-    ...createQaChannelPluginBase(qaChannelRuntimeMeta),
+    ...qaChannelPluginBase,
+    capabilities: { ...qaChannelPluginBase.capabilities, media: true },
     messaging: {
       normalizeTarget: normalizeQaTarget,
       inferTargetChatType: ({ to }) => parseQaTarget(to).chatType,
@@ -138,6 +224,10 @@ export const qaChannelPlugin: ChannelPlugin<ResolvedQaChannelAccount> = createCh
   outbound: {
     base: {
       deliveryMode: "direct",
+      sendPayload: async (ctx) => {
+        const result = await sendQaChannelMessagePayload(ctx);
+        return { channel: QA_CHANNEL_ID, messageId: result.messageId };
+      },
     },
     attachedResults: {
       channel: QA_CHANNEL_ID,
@@ -150,6 +240,34 @@ export const qaChannelPlugin: ChannelPlugin<ResolvedQaChannelAccount> = createCh
           threadId,
           replyToId,
         }),
+      sendMedia: async ({
+        cfg,
+        to,
+        text,
+        mediaUrl,
+        accountId,
+        threadId,
+        replyToId,
+        mediaAccess,
+        mediaLocalRoots,
+        mediaReadFile,
+      }) => {
+        if (!mediaUrl) {
+          throw new Error("QA channel media send requires mediaUrl");
+        }
+        return await sendQaChannelMedia({
+          cfg: cfg as CoreConfig,
+          accountId,
+          to,
+          text,
+          mediaUrl,
+          threadId,
+          replyToId,
+          mediaAccess,
+          mediaLocalRoots,
+          mediaReadFile,
+        });
+      },
     },
   },
 });

@@ -38,7 +38,7 @@ export const raftPlugin: ChannelPlugin<ResolvedRaftAccount, RaftProbe> = createC
     capabilities: {
       chatTypes: ["direct"],
     },
-    setup: raftSetupPlugin.setup,
+    setupContract: raftSetupPlugin.setupContract,
     setupWizard: raftSetupPlugin.setupWizard,
     reload: { configPrefixes: ["channels.raft"] },
     configSchema: raftChannelConfigSchema,

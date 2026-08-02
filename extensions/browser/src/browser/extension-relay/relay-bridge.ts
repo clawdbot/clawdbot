@@ -8,6 +8,7 @@
  * untestable MV3 service worker, which is why it rotted and was removed.
  */
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { resolveCreateTargetParams } from "./create-target-params.js";
 import { PAGE_SHARE_GATEWAY_REQUIRED_ERROR } from "./page-share.js";
 import {
   type ExtensionToRelayMessage,
@@ -873,18 +874,16 @@ export class ExtensionRelayBridge {
       }
       case "Target.createTarget": {
         const url = typeof request.params?.url === "string" ? request.params.url : "about:blank";
-        const created = (await this.callExtension({ type: "createTab", url })) as {
-          tabId?: unknown;
-        } | null;
+        const createParams = resolveCreateTargetParams(request.params);
+        const command = { type: "createTab", url, ...createParams } as const;
+        const created = (await this.callExtension(command)) as { tabId?: unknown } | null;
         if (typeof created?.tabId !== "number") {
           this.respondError(client, request, "extension did not return a tabId for createTab");
           return;
         }
         const tabId = created.tabId;
         if (!this.tabs.has(tabId)) {
-          this.tabs.set(tabId, {
-            info: { tabId, url, title: "", active: false },
-          });
+          this.tabs.set(tabId, { info: { tabId, url, title: "", active: false } });
         }
         const attached = await this.ensureTabAttached(tabId);
         // Announce before responding, mirroring Chrome's event-then-result order.

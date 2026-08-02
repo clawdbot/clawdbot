@@ -1,7 +1,7 @@
 // Native hook relay CLI tests cover relay command registration and runtime delegation.
 import { PassThrough, Readable, Writable } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
-import { runNativeHookRelayCli } from "./native-hook-relay-cli.js";
+import { runNativeHookRelayCli, runNativeHookRelayCliFromArgv } from "./native-hook-relay-cli.js";
 
 function createReadableTextStream(text: string): NodeJS.ReadableStream {
   return Readable.from([text]);
@@ -21,6 +21,49 @@ function createWritableTextBuffer(): NodeJS.WritableStream & { text: () => strin
 }
 
 describe("native hook relay CLI", () => {
+  it("parses the internal cold-path argument vector", async () => {
+    const invokeBridge = vi.fn(async () => ({ stdout: "", stderr: "", exitCode: 0 }));
+
+    await expect(
+      runNativeHookRelayCliFromArgv(
+        [
+          "node",
+          "openclaw.mjs",
+          "hooks",
+          "relay",
+          "--provider=codex",
+          "--relay-id",
+          "relay-1",
+          "--state-db",
+          "/tmp/profile/state/openclaw.sqlite",
+          "--generation",
+          "generation-1",
+          "--event",
+          "pre_tool_use",
+          "--pre-tool-use-unavailable",
+          "noop",
+          "--timeout",
+          "1234",
+        ],
+        {
+          stdin: createReadableTextStream("{}"),
+          invokeBridge: invokeBridge as never,
+        },
+      ),
+    ).resolves.toBe(0);
+
+    expect(invokeBridge).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "codex",
+        relayId: "relay-1",
+        stateDbPath: "/tmp/profile/state/openclaw.sqlite",
+        generation: "generation-1",
+        event: "pre_tool_use",
+        timeoutMs: expect.any(Number),
+      }),
+    );
+  });
+
   it("passes the explicit state database path to direct bridge lookup", async () => {
     const invokeBridge = vi.fn(async () => ({ stdout: "", stderr: "", exitCode: 0 }));
 

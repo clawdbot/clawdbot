@@ -25,12 +25,7 @@ function createContext(): PreparedCliRunContext {
           otel: {
             enabled: true,
             traces: true,
-            captureContent: {
-              enabled: true,
-              inputMessages: true,
-              outputMessages: true,
-              systemPrompt: true,
-            },
+            captureContent: true,
           },
         },
       },

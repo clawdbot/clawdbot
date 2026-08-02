@@ -169,6 +169,10 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
         branchEntries: pathEntries,
         customInstructions: options.customInstructions,
         signal: options.signal,
+        // Extension-owned compaction must use the same prepared model execution
+        // context as the core path below or provider wrappers and reasoning drift.
+        thinkingLevel: this.thinkingLevel,
+        streamFn: this.agent.streamFn,
       });
 
       if (extensionResult?.cancel) {
@@ -278,6 +282,9 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       (assistantMessage.stopReason === "error" || assistantMessage.stopReason === "length") &&
       isContextOverflow(assistantMessage, contextWindow)
     ) {
+      if (this.contextOverflowRecoveryOwner === "caller") {
+        return false;
+      }
       if (this.overflowRecoveryAttempted) {
         this.emit({
           type: "compaction_end",

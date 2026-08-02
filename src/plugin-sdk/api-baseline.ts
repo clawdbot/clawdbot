@@ -682,21 +682,28 @@ export async function renderPluginSdkApiBaseline(params?: {
   const entrypoints = params?.entrypoints ?? listPluginSdkApiBaselineEntrypoints();
   validateMetadata();
   const { checker, printer, program } = createCompilerContext(repoRoot, entrypoints);
-  const modules = entrypoints
-    .map((entrypoint) =>
-      buildModuleSurface({
-        checker,
-        printer,
-        program,
-        repoRoot,
-        entrypoint,
-      }),
-    )
-    .toSorted((left, right) => compareText(left.importSpecifier, right.importSpecifier));
+  const modules = entrypoints.map((entrypoint) =>
+    buildModuleSurface({
+      checker,
+      printer,
+      program,
+      repoRoot,
+      entrypoint,
+    }),
+  );
 
+  return renderPluginSdkApiBaselineModules(modules);
+}
+
+/** Serialize discovered SDK modules in canonical order without rebuilding declarations. */
+export function renderPluginSdkApiBaselineModules(
+  modules: readonly PluginSdkApiModule[],
+): PluginSdkApiBaselineRender {
   const baseline: PluginSdkApiBaseline = {
     generatedBy: GENERATED_BY,
-    modules,
+    modules: [...modules].toSorted((left, right) =>
+      compareText(left.importSpecifier, right.importSpecifier),
+    ),
   };
 
   return {

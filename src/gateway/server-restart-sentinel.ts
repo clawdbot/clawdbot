@@ -47,6 +47,7 @@ import { removeCronRunContinuationSessionIfIdle } from "../tasks/cron-run-contin
 import {
   deliveryContextFromSession,
   mergeDeliveryContext,
+  sessionDeliveryOrigin,
 } from "../utils/delivery-context.shared.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import { deliverQueuedGeneratedMediaAgentTurn } from "./server-restart-sentinel-agent-delivery.js";
@@ -477,6 +478,21 @@ async function loadRestartSentinelStartupTask(params: {
     }
 
     if (!sessionKey) {
+      const controlPlaneOnlyConfigRestart =
+        (payload.kind === "config-patch" || payload.kind === "config-apply") &&
+        (typeof payload.message !== "string" || payload.message.trim().length === 0) &&
+        !payload.continuation &&
+        !payload.deliveryContext &&
+        payload.threadId == null;
+      if (controlPlaneOnlyConfigRestart) {
+        // A targetless config acknowledgement has no agent turn to resume.
+        // Synthesizing a main-session wake races real restart recovery and spends a model turn.
+        const consumed = await clearRestartSentinelIfRevision(sentinelRevision);
+        if (!consumed) {
+          log.info(`${summary}: newer restart sentinel preserved while consuming config restart`);
+        }
+        return { status: "ran" as const };
+      }
       const mainSessionKey = resolveMainSessionKeyFromConfig();
       const wakeQueueId = await enqueueSessionDelivery(
         buildQueuedRestartContinuation({
@@ -506,14 +522,17 @@ async function loadRestartSentinelStartupTask(params: {
 
     const sentinelContext = payload.deliveryContext;
     let sessionDeliveryContext = deliveryContextFromSession(entry);
-    let chatType = entry?.origin?.chatType ?? "direct";
+    let chatType = sessionDeliveryOrigin(entry)?.chatType ?? "direct";
     if (
       !hasRoutableDeliveryContext(sessionDeliveryContext) &&
       baseSessionKey &&
       baseSessionKey !== sessionKey
     ) {
       const { entry: baseEntry } = loadSessionEntry(baseSessionKey);
-      chatType = entry?.origin?.chatType ?? baseEntry?.origin?.chatType ?? "direct";
+      chatType =
+        sessionDeliveryOrigin(entry)?.chatType ??
+        sessionDeliveryOrigin(baseEntry)?.chatType ??
+        "direct";
       sessionDeliveryContext = mergeDeliveryContext(
         sessionDeliveryContext,
         deliveryContextFromSession(baseEntry),
@@ -612,6 +631,7 @@ async function loadRestartSentinelStartupTask(params: {
 
     if (resolvedTo && channel) {
       const queuedNotice = await enqueueRestartSentinelNotice({
+        cfg,
         channel,
         to: resolvedTo,
         accountId: origin?.accountId,

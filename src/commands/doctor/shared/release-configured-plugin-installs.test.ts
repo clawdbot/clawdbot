@@ -284,12 +284,10 @@ describe("configured plugin install release step", () => {
             model: "groq/llama-3.3-70b-versatile",
           },
         },
-        messages: {
-          tts: {
-            provider: "gradium",
-            providers: {
-              inworld: {},
-            },
+        tts: {
+          provider: "gradium",
+          providers: {
+            inworld: {},
           },
         },
         tools: {
@@ -312,9 +310,13 @@ describe("configured plugin install release step", () => {
       cfg: {
         tools: {
           media: {
-            audio: {
-              models: [{ provider: "groq", model: "whisper-large-v3-turbo" }],
-            },
+            models: [
+              {
+                provider: "groq",
+                model: "whisper-large-v3-turbo",
+                capabilities: ["audio"],
+              },
+            ],
           },
         },
       },

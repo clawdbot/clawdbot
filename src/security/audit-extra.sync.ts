@@ -6,6 +6,7 @@ import {
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { listAgentEntries } from "../agents/agent-scope-config.js";
 import { resolveConfiguredToolPolicies } from "../agents/agent-tools.policy.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import { isDangerousNetworkMode, normalizeNetworkMode } from "../agents/sandbox/network-mode.js";
@@ -217,7 +218,7 @@ function listKnownNodeCommands(cfg: OpenClawConfig): Set<string> {
       ...cfg.gateway,
       nodes: {
         ...cfg.gateway?.nodes,
-        denyCommands: [],
+        commands: { ...cfg.gateway?.nodes?.commands, deny: [] },
       },
     },
   };
@@ -233,13 +234,20 @@ function listKnownNodeCommands(cfg: OpenClawConfig): Set<string> {
         "system.run.prepare",
         "system.which",
         "browser.proxy",
+        "browser.proxy.upload.v1",
         "screen.snapshot",
       ],
     },
     {
       platform: "linux",
       deviceFamily: "Linux",
-      approvedCommands: ["system.run", "system.run.prepare", "system.which", "browser.proxy"],
+      approvedCommands: [
+        "system.run",
+        "system.run.prepare",
+        "system.which",
+        "browser.proxy",
+        "browser.proxy.upload.v1",
+      ],
     },
     {
       platform: "windows",
@@ -249,6 +257,7 @@ function listKnownNodeCommands(cfg: OpenClawConfig): Set<string> {
         "system.run.prepare",
         "system.which",
         "browser.proxy",
+        "browser.proxy.upload.v1",
         "screen.snapshot",
       ],
     },
@@ -481,12 +490,12 @@ type AuditAgentToolContext = {
 
 function listAuditAgentToolContexts(cfg: OpenClawConfig): AuditAgentToolContext[] {
   const contexts: AuditAgentToolContext[] = [{ label: "agents.defaults" }];
-  for (const agent of cfg.agents?.list ?? []) {
+  for (const agent of listAgentEntries(cfg)) {
     if (!agent || typeof agent !== "object" || typeof agent.id !== "string") {
       continue;
     }
     contexts.push({
-      label: `agents.list.${agent.id}`,
+      label: `agents.entries.${agent.id}`,
       agentId: agent.id,
       tools: agent.tools,
     });
@@ -798,7 +807,7 @@ export function collectGatewayHttpNoAuthFindings(
 export function collectSandboxDockerNoopFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   const configuredPaths: string[] = [];
-  const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
+  const agents = listAgentEntries(cfg);
 
   const defaultsSandbox = cfg.agents?.defaults?.sandbox;
   const hasDefaultDocker = hasConfiguredDockerConfig(
@@ -823,7 +832,7 @@ export function collectSandboxDockerNoopFindings(cfg: OpenClawConfig): SecurityA
       continue;
     }
     if (resolveSandboxConfigForAgent(cfg, entry.id).mode === "off") {
-      configuredPaths.push(`agents.list.${entry.id}.sandbox.docker`);
+      configuredPaths.push(`agents.entries.${entry.id}.sandbox.docker`);
     }
   }
 
@@ -847,7 +856,7 @@ export function collectSandboxDockerNoopFindings(cfg: OpenClawConfig): SecurityA
 
 export function collectSandboxDangerousConfigFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
-  const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
+  const agents = listAgentEntries(cfg);
 
   const configs: Array<{ source: string; docker: Record<string, unknown> }> = [];
   const defaultDocker = cfg.agents?.defaults?.sandbox?.docker;
@@ -864,7 +873,7 @@ export function collectSandboxDangerousConfigFindings(cfg: OpenClawConfig): Secu
     const agentDocker = entry.sandbox?.docker;
     if (agentDocker && typeof agentDocker === "object") {
       configs.push({
-        source: `agents.list.${entry.id}.sandbox.docker`,
+        source: `agents.entries.${entry.id}.sandbox.docker`,
         docker: agentDocker as Record<string, unknown>,
       });
     }
@@ -959,7 +968,7 @@ export function collectSandboxDangerousConfigFindings(cfg: OpenClawConfig): Secu
 
 export function collectNodeDenyCommandPatternFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
-  const denyListRaw = cfg.gateway?.nodes?.denyCommands;
+  const denyListRaw = cfg.gateway?.nodes?.commands?.deny;
   if (!Array.isArray(denyListRaw) || denyListRaw.length === 0) {
     return findings;
   }
@@ -995,20 +1004,22 @@ export function collectNodeDenyCommandPatternFindings(cfg: OpenClawConfig): Secu
       })
       .join(", ");
 
-    detailParts.push(`Unknown command names (not in defaults/allowCommands): ${unknownDetails}`);
+    detailParts.push(
+      `Unknown command names (not in defaults/gateway.nodes.commands.allow): ${unknownDetails}`,
+    );
   }
   const examples = Array.from(knownCommands).slice(0, 8);
 
   findings.push({
     checkId: "gateway.nodes.deny_commands_ineffective",
     severity: "warn",
-    title: "Some gateway.nodes.denyCommands entries are ineffective",
+    title: "Some gateway.nodes.commands.deny entries are ineffective",
     detail:
-      "gateway.nodes.denyCommands uses exact node command-name matching only (for example `system.run`), not shell-text filtering inside a command payload.\n" +
+      "gateway.nodes.commands.deny uses exact node command-name matching only (for example `system.run`), not shell-text filtering inside a command payload.\n" +
       detailParts.map((entry) => `- ${entry}`).join("\n"),
     remediation:
       `Use exact command names (for example: ${examples.join(", ")}). ` +
-      "If you need broader restrictions, remove risky command IDs from allowCommands/default workflows and tighten tools.exec policy.",
+      "If you need broader restrictions, remove risky command IDs from gateway.nodes.commands.allow/default workflows and tighten tools.exec policy.",
   });
 
   return findings;
@@ -1018,7 +1029,7 @@ export function collectNodeDangerousAllowCommandFindings(
   cfg: OpenClawConfig,
 ): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
-  const allowRaw = cfg.gateway?.nodes?.allowCommands;
+  const allowRaw = cfg.gateway?.nodes?.commands?.allow;
   if (!Array.isArray(allowRaw) || allowRaw.length === 0) {
     return findings;
   }
@@ -1028,7 +1039,7 @@ export function collectNodeDangerousAllowCommandFindings(
     return findings;
   }
 
-  const deny = new Set((cfg.gateway?.nodes?.denyCommands ?? []).map(normalizeNodeCommand));
+  const deny = new Set((cfg.gateway?.nodes?.commands?.deny ?? []).map(normalizeNodeCommand));
   const dangerousAllowed = [
     ...DEFAULT_DANGEROUS_NODE_COMMANDS,
     ...listDangerousPluginNodeCommands(),
@@ -1042,10 +1053,10 @@ export function collectNodeDangerousAllowCommandFindings(
     severity: isGatewayRemotelyExposed(cfg) ? "critical" : "warn",
     title: "Dangerous node commands explicitly enabled",
     detail:
-      `gateway.nodes.allowCommands includes: ${dangerousAllowed.join(", ")}. ` +
+      `gateway.nodes.commands.allow includes: ${dangerousAllowed.join(", ")}. ` +
       "These commands can trigger high-impact device actions or read sensitive data (desktop input/camera/screen/contacts/calendar/reminders/health/SMS/file).",
     remediation:
-      "Remove these entries from gateway.nodes.allowCommands (recommended). " +
+      "Remove these entries from gateway.nodes.commands.allow (recommended). " +
       "If you keep them, treat gateway auth as full operator access and keep gateway exposure local/tailnet-only.",
   });
 
@@ -1058,7 +1069,7 @@ export function collectMinimalProfileOverrideFindings(cfg: OpenClawConfig): Secu
     return findings;
   }
 
-  const overrides = (cfg.agents?.list ?? [])
+  const overrides = listAgentEntries(cfg)
     .filter((entry): entry is { id: string; tools?: AgentToolsConfig } => {
       return Boolean(
         entry &&
@@ -1080,7 +1091,7 @@ export function collectMinimalProfileOverrideFindings(cfg: OpenClawConfig): Secu
     title: "Global tools.profile=minimal is overridden by agent profiles",
     detail:
       "Global minimal profile is set, but these agent profiles take precedence:\n" +
-      overrides.map((entry) => `- agents.list.${entry}`).join("\n"),
+      overrides.map((entry) => `- agents.entries.${entry}`).join("\n"),
     remediation:
       'Set those agents to `tools.profile="minimal"` (or remove the agent override) if you want minimal tools enforced globally.',
   });

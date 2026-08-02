@@ -142,7 +142,7 @@ struct OpenClawChatAttachmentMenu: View {
                 self.showsFileImporter = true
             } label: {
                 Label {
-                    Text("Choose Image File")
+                    Text("Choose Media File")
                         .font(OpenClawChatTypography.body)
                 } icon: {
                     Image(systemName: "folder")

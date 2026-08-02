@@ -6,6 +6,23 @@ import { describe, expect, it } from "vitest";
 import { prepareCliBundleMcpCaptureAttempt, prepareCliBundleMcpConfig } from "./bundle-mcp.js";
 
 describe("prepareCliBundleMcpConfig gemini", () => {
+  it("disables Gemini native web search without bundle MCP", async () => {
+    const prepared = await prepareCliBundleMcpConfig({
+      enabled: false,
+      mode: "gemini-system-settings",
+      backend: { command: "gemini" },
+      workspaceDir: "/tmp/openclaw-cli-gemini-web-search-disabled",
+      toolOverrides: { webSearch: false },
+    });
+    const raw = JSON.parse(
+      await fs.readFile(prepared.env?.GEMINI_CLI_SYSTEM_SETTINGS_PATH as string, "utf-8"),
+    ) as { tools?: { exclude?: string[] } };
+
+    expect(raw.tools?.exclude).toEqual(["google_web_search"]);
+    expect(prepared.mcpConfigHash).toMatch(/^[0-9a-f]{64}$/);
+    await prepared.cleanup?.();
+  });
+
   it("writes Gemini system settings for bundle MCP servers", async () => {
     const prepared = await prepareCliBundleMcpConfig({
       enabled: true,
@@ -21,6 +38,7 @@ describe("prepareCliBundleMcpConfig gemini", () => {
           openclaw: {
             type: "http",
             url: "http://127.0.0.1:23119/mcp",
+            excludeTools: ["global_delete"],
             headers: {
               Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}",
               "x-openclaw-client-caps": "${OPENCLAW_MCP_CLIENT_CAPS}",
@@ -32,6 +50,7 @@ describe("prepareCliBundleMcpConfig gemini", () => {
         OPENCLAW_MCP_TOKEN: "lb-tk-123",
         OPENCLAW_MCP_CLIENT_CAPS: "tool-events,inline-widgets",
       },
+      toolOverrides: { mcpToolsDeny: { openclaw: ["delete_docs"] }, webSearch: false },
     });
 
     expect(prepared.backend.args).toEqual(["--prompt", "{prompt}"]);
@@ -42,7 +61,11 @@ describe("prepareCliBundleMcpConfig gemini", () => {
       await fs.readFile(prepared.env?.GEMINI_CLI_SYSTEM_SETTINGS_PATH as string, "utf-8"),
     ) as {
       mcp?: { allowed?: string[] };
-      mcpServers?: Record<string, { url?: string; headers?: Record<string, string> }>;
+      tools?: { exclude?: string[] };
+      mcpServers?: Record<
+        string,
+        { url?: string; headers?: Record<string, string>; excludeTools?: string[] }
+      >;
     };
     expect(raw.mcp?.allowed).toEqual(["openclaw"]);
     expect(raw.mcpServers?.openclaw?.url).toBe("http://127.0.0.1:23119/mcp");
@@ -50,6 +73,8 @@ describe("prepareCliBundleMcpConfig gemini", () => {
     expect(raw.mcpServers?.openclaw?.headers?.["x-openclaw-client-caps"]).toBe(
       "tool-events,inline-widgets",
     );
+    expect(raw.mcpServers?.openclaw?.excludeTools).toEqual(["delete_docs", "global_delete"]);
+    expect(raw.tools?.exclude).toEqual(["google_web_search"]);
 
     await prepared.cleanup?.();
   });

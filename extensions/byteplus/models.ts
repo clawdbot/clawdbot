@@ -25,12 +25,3 @@ export const BYTEPLUS_MODEL_CATALOG: ModelDefinitionConfig[] = BYTEPLUS_MANIFEST
 /** BytePlus coding/planning model catalog entries. */
 export const BYTEPLUS_CODING_MODEL_CATALOG: ModelDefinitionConfig[] =
   BYTEPLUS_CODING_MANIFEST_PROVIDER.models;
-
-/** Clones one manifest model definition so callers can mutate safely. */
-export function buildBytePlusModelDefinition(entry: ModelDefinitionConfig): ModelDefinitionConfig {
-  return {
-    ...entry,
-    input: [...entry.input],
-    cost: { ...entry.cost },
-  };
-}

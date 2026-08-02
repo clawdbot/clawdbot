@@ -112,9 +112,9 @@ struct CommandCenterTab: View {
                 }
             }
             if self.usesNativeNavigationChrome, let headerSidebarAction {
-                ToolbarItem(placement: .topBarTrailing) {
-                    OpenClawSidebarRevealButton(action: headerSidebarAction)
-                }
+                OpenClawSidebarToolbarItem(
+                    action: headerSidebarAction,
+                    placement: .topBarTrailing)
             }
         }
     }

@@ -1,5 +1,8 @@
 // Google tests cover realtime voice provider plugin behavior.
-import { REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ } from "openclaw/plugin-sdk/realtime-voice";
+import {
+  REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+  resamplePcm,
+} from "openclaw/plugin-sdk/realtime-voice";
 import type { RealtimeVoiceTool } from "openclaw/plugin-sdk/realtime-voice";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildGoogleRealtimeVoiceProvider } from "./realtime-voice-provider.js";
@@ -120,6 +123,29 @@ function createMalformedToolName(name: unknown): RealtimeVoiceTool {
     description: "Contract test tool",
     parameters: { type: "object", properties: {} },
   } as unknown as RealtimeVoiceTool;
+}
+
+function createMockGoogleLiveSession(): MockGoogleLiveSession {
+  return {
+    close: vi.fn(),
+    sendClientContent: vi.fn(),
+    sendRealtimeInput: vi.fn(),
+    sendToolResponse: vi.fn(),
+  };
+}
+
+function createDeferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (error: unknown) => void;
+} {
+  let resolve = (_value: T) => {};
+  let reject = (_error: unknown) => {};
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
 }
 
 describe("buildGoogleRealtimeVoiceProvider", () => {
@@ -701,7 +727,82 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     expect(lastConnectParams().config).not.toHaveProperty("sessionResumption");
   });
 
+  it("shares one pending Google Live connection across concurrent callers", async () => {
+    const pendingSession = createDeferred<MockGoogleLiveSession>();
+    const connectedSession = createMockGoogleLiveSession();
+    connectMock.mockReturnValueOnce(pendingSession.promise);
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "gemini-key" },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+
+    const firstConnect = bridge.connect();
+    const secondConnect = bridge.connect();
+
+    expect(connectMock).toHaveBeenCalledTimes(1);
+    pendingSession.resolve(connectedSession);
+    await Promise.all([firstConnect, secondConnect]);
+    expect(connectedSession.close).not.toHaveBeenCalled();
+  });
+
+  it("disposes a late session and ignores stale callbacks after reconnecting", async () => {
+    vi.useFakeTimers();
+    const pendingSession = createDeferred<MockGoogleLiveSession>();
+    const lateSession = createMockGoogleLiveSession();
+    const replacementSession = createMockGoogleLiveSession();
+    connectMock
+      .mockReturnValueOnce(pendingSession.promise)
+      .mockResolvedValueOnce(replacementSession);
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const onReady = vi.fn();
+    const onError = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "gemini-key" },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onReady,
+      onError,
+    });
+
+    const cancelledConnect = bridge.connect();
+    const staleCallbacks = lastConnectParams().callbacks;
+    bridge.close();
+    await cancelledConnect;
+
+    await bridge.connect();
+    const activeCallbacks = lastConnectParams().callbacks;
+    activeCallbacks.onopen();
+    activeCallbacks.onmessage({ setupComplete: {} });
+    expect(bridge.isConnected()).toBe(true);
+    expect(onReady).toHaveBeenCalledTimes(1);
+
+    staleCallbacks.onopen();
+    staleCallbacks.onmessage({ setupComplete: {} });
+    staleCallbacks.onerror({ message: "stale error" });
+    staleCallbacks.onclose({ code: 1011, reason: "stale close" });
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(connectMock).toHaveBeenCalledTimes(2);
+    expect(onReady).toHaveBeenCalledTimes(1);
+    expect(onError).not.toHaveBeenCalled();
+    expect(bridge.isConnected()).toBe(true);
+    expect(replacementSession.close).not.toHaveBeenCalled();
+
+    pendingSession.resolve(lateSession);
+    await vi.waitFor(() => {
+      expect(lateSession.close).toHaveBeenCalledTimes(1);
+    });
+    expect(bridge.isConnected()).toBe(true);
+
+    bridge.close();
+    bridge.close();
+    expect(replacementSession.close).toHaveBeenCalledTimes(1);
+  });
+
   it("preserves transcript fragments while reusing a resumption handle", async () => {
+    vi.useFakeTimers();
     const provider = buildGoogleRealtimeVoiceProvider();
     const onTranscript = vi.fn();
     const bridge = provider.createBridge({
@@ -712,12 +813,16 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     });
 
     await bridge.connect();
-    lastConnectParams().callbacks.onmessage({
+    const firstSession = lastConnectParams().callbacks;
+    firstSession.onmessage({
       sessionResumptionUpdate: { resumable: true, newHandle: "resume-1" },
       serverContent: { inputTranscription: { text: "Before " } },
     });
-
-    await bridge.connect();
+    firstSession.onmessage({
+      sessionResumptionUpdate: { newHandle: "unconfirmed-handle" },
+    });
+    firstSession.onclose({ code: 1011, reason: "temporary" });
+    await vi.advanceTimersByTimeAsync(250);
     lastConnectParams().callbacks.onmessage({
       serverContent: { inputTranscription: { text: "after", finished: true } },
     });
@@ -728,7 +833,48 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     ]);
   });
 
+  it("preserves continuity when resumability recovers before reconnect", async () => {
+    vi.useFakeTimers();
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const onEvent = vi.fn();
+    const onTranscript = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "gemini-key" },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onEvent,
+      onTranscript,
+    });
+
+    await bridge.connect();
+    const firstSession = lastConnectParams().callbacks;
+    firstSession.onmessage({
+      sessionResumptionUpdate: { resumable: true, newHandle: "resume-1" },
+      serverContent: { inputTranscription: { text: "Before " } },
+    });
+    firstSession.onmessage({
+      sessionResumptionUpdate: { resumable: false },
+    });
+    firstSession.onmessage({
+      sessionResumptionUpdate: { resumable: true, newHandle: "resume-2" },
+    });
+    expect(onEvent).not.toHaveBeenCalled();
+
+    firstSession.onclose({ code: 1011, reason: "temporary" });
+    await vi.advanceTimersByTimeAsync(250);
+    lastConnectParams().callbacks.onmessage({
+      serverContent: { inputTranscription: { text: "after", finished: true } },
+    });
+
+    expect(lastConnectParams().config.sessionResumption).toEqual({ handle: "resume-2" });
+    expect(onEvent).not.toHaveBeenCalled();
+    expect(onTranscript.mock.calls.filter((call) => call[2] === true)).toEqual([
+      ["user", "Before after", true],
+    ]);
+  });
+
   it("drops unfinished hypotheses when a new session has no continuity", async () => {
+    vi.useFakeTimers();
     const provider = buildGoogleRealtimeVoiceProvider();
     const onTranscript = vi.fn();
     const bridge = provider.createBridge({
@@ -739,11 +885,12 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     });
 
     await bridge.connect();
-    lastConnectParams().callbacks.onmessage({
+    const firstSession = lastConnectParams().callbacks;
+    firstSession.onmessage({
       serverContent: { inputTranscription: { text: "Old fragment " } },
     });
-
-    await bridge.connect();
+    firstSession.onclose({ code: 1011, reason: "temporary" });
+    await vi.advanceTimersByTimeAsync(250);
     lastConnectParams().callbacks.onmessage({
       serverContent: { inputTranscription: { text: "New turn", finished: true } },
     });
@@ -753,28 +900,37 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     ]);
   });
 
-  it("reconnects unexpected Google Live closes with the latest resumption handle", async () => {
+  it.each([undefined, "invalidated-handle"])("invalidates resume handles %#", async (newHandle) => {
     vi.useFakeTimers();
     try {
       const provider = buildGoogleRealtimeVoiceProvider();
       const onClose = vi.fn();
       const onError = vi.fn();
+      const onEvent = vi.fn();
+      const onTranscript = vi.fn();
       const bridge = provider.createBridge({
         providerConfig: { apiKey: "gemini-key" },
         onAudio: vi.fn(),
         onClearAudio: vi.fn(),
         onClose,
         onError,
+        onEvent,
+        onTranscript,
       });
 
       await bridge.connect();
       lastConnectParams().callbacks.onmessage({
         setupComplete: { sessionId: "session-1" },
         sessionResumptionUpdate: { resumable: true, newHandle: "resume-1" },
+        serverContent: {
+          inputTranscription: { text: "Previous caller " },
+          outputTranscription: { text: "Previous assistant " },
+        },
       });
       lastConnectParams().callbacks.onmessage({
-        sessionResumptionUpdate: { resumable: false },
+        sessionResumptionUpdate: { resumable: false, ...(newHandle ? { newHandle } : {}) },
       });
+      expect(onEvent).not.toHaveBeenCalled();
       lastConnectParams().callbacks.onclose({
         code: 1011,
         reason: "temporary upstream close",
@@ -782,13 +938,38 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
       });
 
       expect(onClose).not.toHaveBeenCalled();
+      expect(onEvent).toHaveBeenCalledOnce();
+      expect(onEvent).toHaveBeenCalledWith({
+        direction: "client",
+        type: "session.continuity.reset",
+      });
       const error = requireFirstError(onError);
       expect(error.message).toContain("reconnecting 1/3");
 
       await vi.advanceTimersByTimeAsync(250);
 
       expect(connectMock).toHaveBeenCalledTimes(2);
-      expect(lastConnectParams().config.sessionResumption).toEqual({ handle: "resume-1" });
+      expect(lastConnectParams().config.sessionResumption).toEqual({});
+      expect(onEvent).toHaveBeenCalledOnce();
+      const resetOrder = onEvent.mock.invocationCallOrder[0];
+      const reconnectOrder = connectMock.mock.invocationCallOrder[1];
+      if (resetOrder === undefined || reconnectOrder === undefined) {
+        throw new Error("expected continuity reset before reconnect");
+      }
+      expect(resetOrder).toBeLessThan(reconnectOrder);
+
+      lastConnectParams().callbacks.onmessage({
+        setupComplete: { sessionId: "session-2" },
+        serverContent: {
+          inputTranscription: { text: "Fresh caller", finished: true },
+          outputTranscription: { text: "Fresh assistant", finished: true },
+        },
+      });
+
+      expect(onTranscript.mock.calls.filter((call) => call[2] === true)).toEqual([
+        ["user", "Fresh caller", true],
+        ["assistant", "Fresh assistant", true],
+      ]);
     } finally {
       vi.useRealTimers();
     }
@@ -894,7 +1075,123 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     );
   });
 
-  it("waits for setup completion before draining audio and firing ready", async () => {
+  it("emits one continuity reset across failed fresh reconnect attempts", async () => {
+    vi.useFakeTimers();
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const onClose = vi.fn();
+    const onEvent = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "gemini-key", sessionResumption: false },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onClose,
+      onEvent,
+    });
+
+    await bridge.connect();
+    const firstSession = lastConnectParams().callbacks;
+    firstSession.onmessage({ setupComplete: {} });
+    connectMock
+      .mockRejectedValueOnce(new Error("connect failed 1"))
+      .mockRejectedValueOnce(new Error("connect failed 2"))
+      .mockRejectedValueOnce(new Error("connect failed 3"));
+    firstSession.onclose({ code: 1011, reason: "temporary" });
+
+    await vi.advanceTimersByTimeAsync(1_750);
+
+    expect(connectMock).toHaveBeenCalledTimes(4);
+    expect(onEvent.mock.calls).toEqual([
+      [{ direction: "client", type: "session.continuity.reset" }],
+    ]);
+    expect(onClose).toHaveBeenCalledWith("error");
+  });
+
+  it("rearms continuity reset after pre-return setup selects a fresh session", async () => {
+    vi.useFakeTimers();
+    const pendingSession = createDeferred<MockGoogleLiveSession>();
+    const freshSession = createMockGoogleLiveSession();
+    connectMock
+      .mockReturnValueOnce(Promise.resolve(session))
+      .mockReturnValueOnce(pendingSession.promise);
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const onEvent = vi.fn();
+    const onReady = vi.fn();
+    const onTranscript = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "gemini-key", sessionResumption: false },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onEvent,
+      onReady,
+      onTranscript,
+    });
+
+    await bridge.connect();
+    const firstCallbacks = lastConnectParams().callbacks;
+    firstCallbacks.onopen();
+    firstCallbacks.onmessage({ setupComplete: {} });
+    firstCallbacks.onclose({ code: 1011, reason: "temporary" });
+    const queuedAudio = Buffer.from([0x7f]);
+    bridge.sendAudio(queuedAudio);
+    await vi.advanceTimersByTimeAsync(250);
+
+    const freshCallbacks = lastConnectParams().callbacks;
+    expect(onEvent).toHaveBeenCalledTimes(1);
+    freshCallbacks.onopen();
+    freshCallbacks.onmessage({
+      setupComplete: {},
+      serverContent: { inputTranscription: { text: "Fresh partial " } },
+    });
+    expect(onEvent.mock.calls.map(([event]) => event.type)).toEqual([
+      "session.continuity.reset",
+      "session.created",
+    ]);
+    expect(onReady).toHaveBeenCalledTimes(1);
+    expect(freshSession.sendRealtimeInput).not.toHaveBeenCalled();
+
+    pendingSession.resolve(freshSession);
+    await vi.waitFor(() => {
+      expect(onReady).toHaveBeenCalledTimes(2);
+    });
+    const sessionCreatedOrder = onEvent.mock.invocationCallOrder[1];
+    const queuedAudioOrder = freshSession.sendRealtimeInput.mock.invocationCallOrder[0];
+    const freshReadyOrder = onReady.mock.invocationCallOrder[1];
+    if (
+      sessionCreatedOrder === undefined ||
+      queuedAudioOrder === undefined ||
+      freshReadyOrder === undefined
+    ) {
+      throw new Error("expected fresh session creation, queued audio, and readiness");
+    }
+    expect(sessionCreatedOrder).toBeLessThan(queuedAudioOrder);
+    expect(queuedAudioOrder).toBeLessThan(freshReadyOrder);
+    expect(freshSession.sendRealtimeInput).toHaveBeenCalledOnce();
+    expect(freshSession.sendRealtimeInput).toHaveBeenCalledWith({
+      audio: {
+        data: expect.any(String),
+        mimeType: "audio/pcm;rate=16000",
+      },
+    });
+    freshCallbacks.onclose({ code: 1011, reason: "temporary again" });
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(onEvent.mock.calls.map(([event]) => event.type)).toEqual([
+      "session.continuity.reset",
+      "session.created",
+      "session.continuity.reset",
+    ]);
+    lastConnectParams().callbacks.onmessage({
+      serverContent: { inputTranscription: { text: "Next", finished: true } },
+    });
+    expect(onTranscript.mock.calls.filter((call) => call[2] === true)).toEqual([
+      ["user", "Next", true],
+    ]);
+  });
+
+  it("waits for the returned session after setup completion before activating", async () => {
+    const pendingSession = createDeferred<MockGoogleLiveSession>();
+    const connectedSession = createMockGoogleLiveSession();
+    connectMock.mockReturnValueOnce(pendingSession.promise);
     const provider = buildGoogleRealtimeVoiceProvider();
     const onReady = vi.fn();
     const bridge = provider.createBridge({
@@ -904,20 +1201,193 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
       onReady,
     });
 
-    await bridge.connect();
+    const connect = bridge.connect();
     lastConnectParams().callbacks.onopen();
     bridge.sendAudio(Buffer.from([0xff, 0xff]));
 
-    expect(session.sendRealtimeInput).not.toHaveBeenCalled();
+    expect(connectedSession.sendRealtimeInput).not.toHaveBeenCalled();
     expect(onReady).not.toHaveBeenCalled();
+    expect(bridge.isConnected()).toBe(false);
 
     lastConnectParams().callbacks.onmessage({ setupComplete: { sessionId: "session-1" } });
 
+    expect(connectedSession.sendRealtimeInput).not.toHaveBeenCalled();
+    expect(onReady).not.toHaveBeenCalled();
+    expect(bridge.isConnected()).toBe(false);
+
+    pendingSession.resolve(connectedSession);
+    await connect;
+
     expect(onReady).toHaveBeenCalledTimes(1);
-    expect(session.sendRealtimeInput).toHaveBeenCalledTimes(1);
-    const audio = sentAudio();
-    expect(typeof audio.data).toBe("string");
-    expect(audio.mimeType).toBe("audio/pcm;rate=16000");
+    expect(bridge.isConnected()).toBe(true);
+    expect(connectedSession.sendRealtimeInput).toHaveBeenCalledTimes(1);
+    const audio = connectedSession.sendRealtimeInput.mock.calls[0]?.[0]?.audio as
+      | { data?: unknown; mimeType?: unknown }
+      | undefined;
+    expect(typeof audio?.data).toBe("string");
+    expect(audio?.mimeType).toBe("audio/pcm;rate=16000");
+
+    lastConnectParams().callbacks.onmessage({ setupComplete: { sessionId: "session-1" } });
+    expect(onReady).toHaveBeenCalledTimes(1);
+    expect(connectedSession.sendRealtimeInput).toHaveBeenCalledTimes(1);
+  });
+
+  it("copies and bounds pending audio by aggregate bytes before activation", async () => {
+    const connectedSession = createMockGoogleLiveSession();
+    connectMock.mockResolvedValueOnce(connectedSession);
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "gemini-key" },
+      audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+    const backing = Buffer.alloc(2 * 1024 * 1024);
+    const firstChunk = backing.subarray(0, 512 * 1024);
+    firstChunk.writeInt16LE(513);
+    const expectedFirstSample = resamplePcm(Buffer.from(firstChunk), 24_000, 16_000).readInt16LE(0);
+
+    bridge.sendAudio(firstChunk);
+    bridge.sendAudio(Buffer.alloc(512 * 1024, 0x7f));
+    bridge.sendAudio(Buffer.from([0x01]));
+    firstChunk.fill(0);
+
+    await bridge.connect();
+    lastConnectParams().callbacks.onopen();
+    lastConnectParams().callbacks.onmessage({ setupComplete: { sessionId: "session-1" } });
+
+    expect(connectedSession.sendRealtimeInput).toHaveBeenCalledTimes(2);
+    const firstAudio = connectedSession.sendRealtimeInput.mock.calls[0]?.[0]?.audio as
+      | { data?: unknown }
+      | undefined;
+    expect(Buffer.from(String(firstAudio?.data), "base64").readInt16LE(0)).toBe(
+      expectedFirstSample,
+    );
+  });
+
+  it("bounds pending audio by chunk count before activation", async () => {
+    const connectedSession = createMockGoogleLiveSession();
+    connectMock.mockResolvedValueOnce(connectedSession);
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "gemini-key" },
+      audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+
+    for (let index = 0; index < 321; index += 1) {
+      bridge.sendAudio(Buffer.alloc(2, index & 0xff));
+    }
+
+    await bridge.connect();
+    lastConnectParams().callbacks.onopen();
+    lastConnectParams().callbacks.onmessage({ setupComplete: { sessionId: "session-1" } });
+
+    expect(connectedSession.sendRealtimeInput).toHaveBeenCalledTimes(320);
+  });
+
+  it("drops reconnect audio on terminal exhaustion until an explicit reconnect owns admission", async () => {
+    vi.useFakeTimers();
+    const reconnectedSession = createMockGoogleLiveSession();
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const onClose = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "gemini-key" },
+      audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onClose,
+    });
+
+    await bridge.connect();
+    const firstSession = lastConnectParams().callbacks;
+    firstSession.onopen();
+    firstSession.onmessage({ setupComplete: { sessionId: "session-1" } });
+    connectMock
+      .mockRejectedValueOnce(new Error("connect failed 1"))
+      .mockRejectedValueOnce(new Error("connect failed 2"))
+      .mockRejectedValueOnce(new Error("connect failed 3"))
+      .mockResolvedValueOnce(reconnectedSession);
+    firstSession.onclose({ code: 1011, reason: "temporary" });
+    bridge.sendAudio(Buffer.from([0x01, 0x00]));
+
+    await vi.advanceTimersByTimeAsync(1_750);
+    bridge.sendAudio(Buffer.from([0x02, 0x00]));
+
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(onClose).toHaveBeenCalledWith("error");
+
+    await bridge.connect();
+    const reconnected = lastConnectParams().callbacks;
+    reconnected.onopen();
+    reconnected.onmessage({ setupComplete: { sessionId: "session-2" } });
+    bridge.sendAudio(Buffer.alloc(480, 0x03));
+
+    expect(reconnectedSession.sendRealtimeInput).toHaveBeenCalledOnce();
+    const sent = reconnectedSession.sendRealtimeInput.mock.calls[0]?.[0]?.audio as
+      | { data?: unknown }
+      | undefined;
+    expect(sent?.data).toBeTypeOf("string");
+    bridge.close();
+  });
+
+  it("does not activate a late session after close during setup", async () => {
+    const pendingSession = createDeferred<MockGoogleLiveSession>();
+    const lateSession = createMockGoogleLiveSession();
+    connectMock.mockReturnValueOnce(pendingSession.promise);
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const onReady = vi.fn();
+    const onClose = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "gemini-key" },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onReady,
+      onClose,
+    });
+
+    const connect = bridge.connect();
+    lastConnectParams().callbacks.onopen();
+    lastConnectParams().callbacks.onmessage({ setupComplete: { sessionId: "session-1" } });
+    bridge.close();
+    await connect;
+
+    expect(onReady).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(onClose).toHaveBeenCalledWith("completed");
+    expect(bridge.isConnected()).toBe(false);
+
+    pendingSession.resolve(lateSession);
+    await vi.waitFor(() => {
+      expect(lateSession.close).toHaveBeenCalledTimes(1);
+    });
+    expect(onReady).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes the session when the ready callback rejects activation", async () => {
+    const pendingSession = createDeferred<MockGoogleLiveSession>();
+    const connectedSession = createMockGoogleLiveSession();
+    connectMock.mockReturnValueOnce(pendingSession.promise);
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "gemini-key" },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onReady: () => {
+        throw new Error("ready callback failed");
+      },
+    });
+
+    const connect = bridge.connect();
+    lastConnectParams().callbacks.onopen();
+    lastConnectParams().callbacks.onmessage({ setupComplete: { sessionId: "session-1" } });
+    pendingSession.resolve(connectedSession);
+
+    await expect(connect).rejects.toThrow("ready callback failed");
+    expect(connectedSession.close).toHaveBeenCalledTimes(1);
+    expect(bridge.isConnected()).toBe(false);
   });
 
   it("marks the Google audio stream complete after sustained telephony silence", async () => {
@@ -1122,6 +1592,53 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     expect(requireFirstAudio(onAudio)).toEqual(pcm24k);
   });
 
+  it.each([
+    ["invalid alphabet", "not-base64!"],
+    ["non-canonical pad bits", "ZE=="],
+  ])("terminates the session for %s in output audio", async (_scenario, data) => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const onAudio = vi.fn();
+    const onError = vi.fn();
+    const onClose = vi.fn();
+    const onTranscript = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "gemini-key" },
+      audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+      onAudio,
+      onClearAudio: vi.fn(),
+      onError,
+      onClose,
+      onTranscript,
+    });
+
+    await bridge.connect();
+    lastConnectParams().callbacks.onmessage({
+      setupComplete: { sessionId: "session-1" },
+      serverContent: {
+        outputTranscription: { text: "finalize me" },
+        modelTurn: {
+          parts: [{ inlineData: { mimeType: "audio/pcm;rate=24000", data } }],
+        },
+      },
+    });
+
+    expect(onAudio).not.toHaveBeenCalled();
+    expect(onTranscript.mock.calls).toEqual([
+      ["assistant", "finalize me", false],
+      ["assistant", "finalize me", true],
+    ]);
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Google Live stream returned malformed base64 audio data",
+      }),
+    );
+    expect(onClose).toHaveBeenCalledWith("error");
+    expect(session.close).toHaveBeenCalledTimes(1);
+    await expect(bridge.connect()).rejects.toThrow(
+      "Google Live stream returned malformed base64 audio data",
+    );
+  });
+
   it("uses official output transcription instead of model-turn text", async () => {
     const provider = buildGoogleRealtimeVoiceProvider();
     const onTranscript = vi.fn();
@@ -1194,6 +1711,85 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
       ["user", "Last words", false],
       ["user", "Last words", true],
     ]);
+  });
+
+  it("allows each role's UTF-8 transcript limit and releases it on finished", async () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const onTranscript = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "gemini-key" },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onTranscript,
+    });
+
+    await bridge.connect();
+    const onmessage = lastConnectParams().callbacks.onmessage;
+    const halfLimit = "é".repeat(64 * 1024);
+    onmessage({
+      serverContent: {
+        inputTranscription: { text: halfLimit },
+        outputTranscription: { text: halfLimit },
+      },
+    });
+    onmessage({
+      serverContent: {
+        inputTranscription: { text: halfLimit },
+        outputTranscription: { text: halfLimit },
+      },
+    });
+    onmessage({ serverContent: { outputTranscription: { finished: true } } });
+    onmessage({ serverContent: { inputTranscription: { finished: true } } });
+
+    expect(onTranscript.mock.calls.filter((call) => call[2] === true)).toEqual([
+      ["assistant", `${halfLimit}${halfLimit}`, true],
+      ["user", `${halfLimit}${halfLimit}`, true],
+    ]);
+    expect(session.close).not.toHaveBeenCalled();
+  });
+
+  it("terminates and clears a runaway transcript stream at the UTF-8 byte limit", async () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const onError = vi.fn();
+    const onClose = vi.fn();
+    const onTranscript = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "gemini-key" },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onError,
+      onClose,
+      onTranscript,
+    });
+
+    await bridge.connect();
+    const callbacks = lastConnectParams().callbacks;
+    const transcriptChunk = "€".repeat(16);
+    const acceptedChunks = Math.floor((256 * 1024) / Buffer.byteLength(transcriptChunk, "utf8"));
+    for (let index = 0; index < 10_000; index += 1) {
+      callbacks.onmessage({
+        serverContent: {
+          inputTranscription: { text: transcriptChunk },
+        },
+      });
+    }
+    callbacks.onclose({ code: 1000, reason: "late clean close", wasClean: true });
+
+    expect(onTranscript).toHaveBeenCalledTimes(acceptedChunks);
+    expect(onTranscript.mock.calls.at(-1)).toEqual(["user", transcriptChunk, false]);
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Google Live transcript exceeded the 256 KiB UTF-8 pending buffer limit",
+      }),
+    );
+    expect(onTranscript.mock.calls.filter((call) => call[2] === true)).toEqual([]);
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(onClose).toHaveBeenCalledWith("error");
+    expect(session.close).toHaveBeenCalledTimes(1);
+    await expect(bridge.connect()).rejects.toThrow(
+      "Google Live transcript exceeded the 256 KiB UTF-8 pending buffer limit",
+    );
   });
 
   it("retains unordered transcript chunks until a protocol terminal or close", async () => {

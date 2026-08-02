@@ -1,6 +1,8 @@
-// Applies JSON merge-patch updates to config-like objects.
+// Creates and applies JSON merge-patch updates to config-like objects.
+import { isDeepStrictEqual } from "node:util";
 import { isPlainObject } from "../infra/plain-object.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
+import { isRecord } from "../utils.js";
 
 type PlainObject = Record<string, unknown>;
 
@@ -9,6 +11,46 @@ type MergePatchOptions = {
   replaceArrayPaths?: ReadonlySet<string>;
   path?: string;
 };
+
+function cloneUnknown<T>(value: T): T {
+  return structuredClone(value);
+}
+
+/** Builds an RFC-7396-style merge patch between source and target config values. */
+export function createMergePatch(base: unknown, target: unknown): unknown {
+  if (!isRecord(base) || !isRecord(target)) {
+    return cloneUnknown(target);
+  }
+
+  const patch: Record<string, unknown> = {};
+  const keys = new Set([...Object.keys(base), ...Object.keys(target)]);
+  for (const key of keys) {
+    const hasBase = Object.hasOwn(base, key);
+    const hasTarget = Object.hasOwn(target, key);
+    if (!hasTarget) {
+      patch[key] = null;
+      continue;
+    }
+    const targetValue = target[key];
+    if (!hasBase) {
+      patch[key] = cloneUnknown(targetValue);
+      continue;
+    }
+    const baseValue = base[key];
+    if (isRecord(baseValue) && isRecord(targetValue)) {
+      const childPatch = createMergePatch(baseValue, targetValue);
+      if (isRecord(childPatch) && Object.keys(childPatch).length === 0) {
+        continue;
+      }
+      patch[key] = childPatch;
+      continue;
+    }
+    if (!isDeepStrictEqual(baseValue, targetValue)) {
+      patch[key] = cloneUnknown(targetValue);
+    }
+  }
+  return patch;
+}
 
 function isObjectWithStringId(value: unknown): value is Record<string, unknown> & { id: string } {
   if (!isPlainObject(value)) {

@@ -19,13 +19,13 @@ function withCdpControlHostname(
   if (!ssrfPolicy || !cdpHost) {
     return ssrfPolicy;
   }
-  const hostnameAllowlist = (ssrfPolicy.hostnameAllowlist ?? [])
+  const allowedHostnames = (ssrfPolicy.allowedHostnames ?? [])
     .map((pattern) => normalizeHostname(pattern))
     .filter((pattern) => pattern && pattern !== "*" && pattern !== "*.");
   if (
     requireAllowlistMatch &&
-    hostnameAllowlist.length > 0 &&
-    !matchesHostnameAllowlist(cdpHost, hostnameAllowlist)
+    allowedHostnames.length > 0 &&
+    !matchesHostnameAllowlist(cdpHost, allowedHostnames)
   ) {
     return ssrfPolicy;
   }
@@ -45,7 +45,7 @@ export function resolveCdpReachabilityPolicy(
   }
   // Configured local relays are control-plane endpoints even when page policy
   // excludes loopback. Remote CDP hosts must still satisfy an explicit
-  // hostnameAllowlist before their control policy is narrowed.
+  // allowedHostnames before their control policy is narrowed.
   return withCdpControlHostname(profile, ssrfPolicy, capabilities.isRemote);
 }
 

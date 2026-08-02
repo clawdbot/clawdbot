@@ -6,7 +6,7 @@ import { setTimeout as sleep } from "node:timers/promises";
  * control or Chrome MCP existing-session operations with navigation guards.
  */
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
-import { formatErrorMessage } from "../../infra/errors.js";
+import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
 import {
   ChromeMcpDocumentUnavailableError,
   clickChromeMcpElement,
@@ -31,6 +31,7 @@ import {
 } from "../navigation-guard.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import type { BrowserRouteContext } from "../server-context.js";
+import { clearSnapshotKeysForTab } from "../snapshot-delta-cache.js";
 import { matchBrowserUrlPattern } from "../url-pattern.js";
 import { registerBrowserAgentActDownloadRoutes } from "./agent.act.download.js";
 import {
@@ -185,7 +186,7 @@ async function runExistingSessionActionWithNavigationGuard<T>(params: {
   }
 
   if (actionError) {
-    throw toLintErrorObject(actionError, "Non-Error thrown");
+    throw toErrorObject(actionError, "Non-Error thrown");
   }
 
   return result as T;
@@ -691,6 +692,7 @@ export function registerBrowserAgentActRoutes(
                 ...existingSessionCallOptions,
                 exactTargetId: true,
               });
+              clearSnapshotKeysForTab(ctx, profileCtx.profile.name, tab.targetId);
               return await jsonOk();
             case "batch":
               return jsonActError(
@@ -721,10 +723,17 @@ export function registerBrowserAgentActRoutes(
           });
         }
         const downloads = result.downloads;
+        if (action.kind === "close" || result.aborted?.reason === "closed") {
+          clearSnapshotKeysForTab(ctx, profileCtx.profile.name, tab.targetId);
+        }
         switch (action.kind) {
           case "batch":
             return await jsonOk(
-              { results: result.results ?? [], ...(downloads ? { downloads } : {}) },
+              {
+                results: result.results ?? [],
+                ...(result.aborted ? { aborted: result.aborted } : {}),
+                ...(downloads ? { downloads } : {}),
+              },
               { resolveCurrentTarget: true },
             );
           case "evaluate":
@@ -864,17 +873,4 @@ export function registerBrowserAgentActRoutes(
   });
 }
 
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

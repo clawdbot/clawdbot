@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { note } from "../../../packages/terminal-core/src/note.js";
+import type { ConfigSnapshotReadMeasure } from "../../config/io.js";
 import { ExitError } from "../../runtime.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { formatCliCommand } from "../command-format.js";
@@ -169,6 +170,16 @@ describe("ensureConfigReady", () => {
       expectedDoctorCalls: 0,
     },
     {
+      name: "skips doctor flow for logs",
+      commandPath: ["logs"],
+      expectedDoctorCalls: 0,
+    },
+    {
+      name: "skips doctor flow for remote gateway calls",
+      commandPath: ["gateway", "call"],
+      expectedDoctorCalls: 0,
+    },
+    {
       name: "skips doctor flow for agent without legacy state",
       commandPath: ["agent"],
       expectedDoctorCalls: 0,
@@ -201,6 +212,21 @@ describe("ensureConfigReady", () => {
     expect(readConfigFileSnapshotMock).toHaveBeenCalledWith({ observe: false });
   });
 
+  it("keeps logs config guard reads non-observing and independent of plugin state", async () => {
+    await runEnsureConfigReady(["logs"]);
+
+    expect(readConfigFileSnapshotMock).toHaveBeenCalledWith({
+      observe: false,
+      skipPluginValidation: true,
+    });
+  });
+
+  it("keeps remote gateway call config reads non-observing", async () => {
+    await runEnsureConfigReady(["gateway", "call"]);
+
+    expect(readConfigFileSnapshotMock).toHaveBeenCalledWith({ observe: false });
+  });
+
   it("runs doctor flow when lightweight startup detection finds legacy state", async () => {
     const root = useTempOpenClawHome();
     writeLegacyTaskSidecarMarker(root);
@@ -213,6 +239,25 @@ describe("ensureConfigReady", () => {
       invalidConfigNote: false,
       observe: false,
     });
+  });
+
+  it("keeps remote gateway calls from migrating existing local legacy state", async () => {
+    const root = useTempOpenClawHome();
+    writeLegacyTaskSidecarMarker(root);
+
+    await runEnsureConfigReady(["gateway", "call"]);
+
+    expect(loadAndMaybeMigrateDoctorConfigMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps logs from migrating existing local legacy state", async () => {
+    const root = useTempOpenClawHome();
+    writeStateMarker(root, "cron/runs/legacy-job.jsonl");
+
+    await runEnsureConfigReady(["logs"]);
+
+    expect(loadAndMaybeMigrateDoctorConfigMock).not.toHaveBeenCalled();
+    expect(fs.existsSync(path.join(root, ".openclaw", "cron/runs/legacy-job.jsonl"))).toBe(true);
   });
 
   it.each(["restart-sentinel.json", "restart-sentinel.json.doctor-importing"])(
@@ -458,6 +503,53 @@ describe("ensureConfigReady", () => {
       snapshot.runtimeConfig,
       snapshot.sourceConfig,
     );
+  });
+
+  it("forwards config snapshot phase measurement", async () => {
+    const snapshot = makeSnapshot();
+    const measuredStages: string[] = [];
+    const measure: ConfigSnapshotReadMeasure = async (stage, run) => {
+      measuredStages.push(stage);
+      return await run();
+    };
+    readConfigFileSnapshotMock.mockImplementationOnce(
+      async (options?: { measure?: ConfigSnapshotReadMeasure }) => {
+        await options?.measure?.("config.snapshot.read.validate", async () => undefined);
+        return snapshot;
+      },
+    );
+
+    await ensureConfigReady({
+      runtime: makeRuntime() as never,
+      commandPath: ["health"],
+      measure,
+    });
+
+    expect(measuredStages).toEqual(["config.snapshot.read.validate"]);
+  });
+
+  it("forwards config snapshot phase measurement through doctor preflight", async () => {
+    const root = useTempOpenClawHome();
+    writeStateMarker(root, "plugins/installs.json");
+    const measuredStages: string[] = [];
+    const measure: ConfigSnapshotReadMeasure = async (stage, run) => {
+      measuredStages.push(stage);
+      return await run();
+    };
+    loadAndMaybeMigrateDoctorConfigMock.mockImplementationOnce(
+      async (options?: { measure?: ConfigSnapshotReadMeasure }) => {
+        await options?.measure?.("config.snapshot.read.validate", async () => undefined);
+        return { snapshot: makeSnapshot(), baseConfig: {} };
+      },
+    );
+
+    await ensureConfigReady({
+      runtime: makeRuntime() as never,
+      commandPath: ["agent"],
+      measure,
+    });
+
+    expect(measuredStages).toEqual(["config.snapshot.read.validate"]);
   });
 
   it("pins plugin listing config without loading state migration runtime", async () => {

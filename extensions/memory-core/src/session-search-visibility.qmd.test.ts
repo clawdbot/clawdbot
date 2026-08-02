@@ -245,7 +245,7 @@ describe("filterMemorySearchHitsBySessionVisibility for QMD", () => {
     expect(filtered).toEqual([copiedHit]);
   });
 
-  it("denies mapped QMD hits whose transcript file also has a shared group alias", async () => {
+  it("denies mapped QMD hits whose transcript identity also has a shared group alias", async () => {
     combinedSessionStore = {
       "agent:main:telegram:direct:owner": {
         sessionId: "current",
@@ -259,10 +259,9 @@ describe("filterMemorySearchHitsBySessionVisibility for QMD", () => {
         sessionFile: "/tmp/sessions/shared-transcript.jsonl",
         chatType: "direct",
       },
-      // Same transcript file exposed under a group alias with a different
-      // sessionId: session-id alias resolution alone would miss this.
+      // The canonical transcript identity is also exposed through a group alias.
       "agent:main:telegram:group:team": {
-        sessionId: "group-alias-id",
+        sessionId: "actual-session-id",
         updatedAt: 1,
         sessionFile: "/tmp/sessions/shared-transcript.jsonl",
         chatType: "group",
@@ -399,6 +398,27 @@ describe("filterMemorySearchHitsBySessionVisibility for QMD", () => {
 
     const filtered = await filterMemorySearchHitsBySessionVisibility({
       cfg,
+      requesterSessionKey: "agent:main:main",
+      sandboxed: false,
+      hits: [hit],
+    });
+
+    expect(filtered).toStrictEqual([]);
+  });
+
+  it("denies ownerless legacy QMD orphan hits when no session-store key remains", async () => {
+    combinedSessionStore = {};
+    const hit: MemorySearchResult = {
+      path: "qmd/sessions-main/ownerless-orphan.md",
+      source: "sessions",
+      score: 1,
+      snippet: "x",
+      startLine: 1,
+      endLine: 2,
+    };
+
+    const filtered = await filterMemorySearchHitsBySessionVisibility({
+      cfg: asOpenClawConfig({ tools: { sessions: { visibility: "agent" } } }),
       requesterSessionKey: "agent:main:main",
       sandboxed: false,
       hits: [hit],

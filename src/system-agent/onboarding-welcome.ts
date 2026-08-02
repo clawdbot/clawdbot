@@ -26,6 +26,7 @@ const READY_WELCOME_QUESTION: SystemAgentChatQuestion = {
     { label: "See all channels", reply: "channels" },
   ],
   isOther: true,
+  skipAction: "exit",
 };
 
 const SETUP_WELCOME_QUESTION: SystemAgentChatQuestion = {
@@ -118,7 +119,7 @@ export async function buildOnboardingWelcome(params: {
   }
   if (!defaultModel) {
     throw new Error(
-      "OpenClaw onboarding requires working inference first. Run `openclaw onboard` to configure and verify a default model.",
+      "OpenClaw onboarding requires working inference first. Run `openclaw onboard` on the machine running OpenClaw to configure and verify a default model.",
     );
   }
 

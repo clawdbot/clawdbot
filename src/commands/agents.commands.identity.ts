@@ -10,8 +10,10 @@ import {
 import { loadAgentIdentityFromFile } from "../agents/identity-file.js";
 import { DEFAULT_IDENTITY_FILENAME } from "../agents/workspace.js";
 import { replaceConfigFile } from "../config/config.js";
+import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import { logConfigUpdated } from "../config/logging.js";
 import type { AgentConfig, IdentityConfig } from "../config/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
@@ -62,7 +64,9 @@ export async function agentsSetIdentityCommand(
   if (!configSnapshot) {
     return;
   }
-  const cfg = configSnapshot.sourceConfig ?? configSnapshot.config;
+  const cfg = migratePersistedImplicitMainRoster(
+    configSnapshot.sourceConfig ?? configSnapshot.config,
+  ).config as OpenClawConfig;
   const baseHash = configSnapshot.hash;
 
   const agentRaw = normalizeOptionalString(opts.agent);
@@ -196,7 +200,12 @@ export async function agentsSetIdentityCommand(
     ...cfg,
     agents: {
       ...cfg.agents,
-      list: nextList,
+      entries: Object.fromEntries(
+        nextList.map((entry) => {
+          const { id, ...config } = entry;
+          return [id, config];
+        }),
+      ),
     },
   };
 

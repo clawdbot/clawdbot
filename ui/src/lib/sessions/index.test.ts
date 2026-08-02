@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
 import {
   GatewayRequestError,
@@ -32,13 +33,13 @@ function deferred<T>() {
 function createGatewayHarness(client: GatewayBrowserClient, featureMethods?: string[]) {
   let snapshot: {
     client: GatewayBrowserClient | null;
-    connected: boolean;
+    phase: "connected" | "reconnecting";
     sessionKey: string;
     assistantAgentId: string | null;
     hello: GatewayHelloOk | null;
   } = {
     client,
-    connected: true,
+    phase: "connected" as const,
     sessionKey: "agent:main:main",
     assistantAgentId: "main",
     hello:
@@ -67,8 +68,12 @@ function createGatewayHarness(client: GatewayBrowserClient, featureMethods?: str
         listener(event);
       }
     },
-    publish: (connected: boolean) => {
-      snapshot = { ...snapshot, connected };
+    publish: (connected: boolean, nextClient: GatewayBrowserClient | null = snapshot.client) => {
+      snapshot = {
+        ...snapshot,
+        client: nextClient,
+        phase: connected ? "connected" : "reconnecting",
+      };
       for (const listener of listeners) {
         listener(snapshot);
       }
@@ -103,7 +108,10 @@ describe("createSessionCapability", () => {
       if (groupsCalls === 1) {
         throw new Error("temporary catalog failure");
       }
-      return { groups: [{ name: "Research" }] };
+      return {
+        groups: [{ name: "Research" }],
+        sectionOrder: ["work", "category:Research", "ungrouped"],
+      };
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const { gateway } = createGatewayHarness(client, ["sessions.groups.list"]);
@@ -115,6 +123,7 @@ describe("createSessionCapability", () => {
 
     expect(groupsCalls).toBe(2);
     expect(sessions.state.groups).toEqual(["Research"]);
+    expect(sessions.state.sectionOrder).toEqual(["work", "category:Research", "ungrouped"]);
     sessions.dispose();
   });
 
@@ -216,7 +225,7 @@ describe("createSessionCapability", () => {
         return await renamed.promise;
       }
       if (method === "sessions.subscribe") {
-        return {};
+        return { subscribed: true };
       }
       if (method === "sessions.list") {
         return sessionsResult([], 2);
@@ -244,7 +253,7 @@ describe("createSessionCapability", () => {
         return await replaced.promise;
       }
       if (method === "sessions.subscribe") {
-        return {};
+        return { subscribed: true };
       }
       if (method === "sessions.list") {
         return sessionsResult([], 2);
@@ -411,7 +420,7 @@ describe("createSessionCapability", () => {
     const sessions = createSessionCapability({
       snapshot: {
         client,
-        connected: true,
+        phase: "connected" as const,
         sessionKey: "agent:main:main",
         assistantAgentId: "main",
         hello: null,
@@ -440,7 +449,7 @@ describe("createSessionCapability", () => {
     let listCalls = 0;
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.subscribe") {
-        return {};
+        return { subscribed: true };
       }
       if (method === "sessions.list") {
         listCalls += 1;
@@ -473,7 +482,7 @@ describe("createSessionCapability", () => {
         return await staleCreate.promise;
       }
       if (method === "sessions.subscribe") {
-        return {};
+        return { subscribed: true };
       }
       if (method === "sessions.list") {
         return sessionsResult([], 2);
@@ -551,7 +560,7 @@ describe("createSessionCapability", () => {
     const sessions = createSessionCapability({
       snapshot: {
         client,
-        connected: true,
+        phase: "connected" as const,
         sessionKey: "agent:main:source",
         assistantAgentId: "main",
         hello: null,
@@ -574,7 +583,7 @@ describe("createSessionCapability", () => {
         return await staleReset.promise;
       }
       if (method === "sessions.subscribe") {
-        return {};
+        return { subscribed: true };
       }
       if (method === "sessions.list") {
         return sessionsResult([], 2);
@@ -600,7 +609,7 @@ describe("createSessionCapability", () => {
         throw new Error("post-commit lifecycle failed");
       }
       if (method === "sessions.subscribe") {
-        return {};
+        return { subscribed: true };
       }
       if (method === "sessions.list") {
         return sessionsResult([], 2);
@@ -623,7 +632,7 @@ describe("createSessionCapability", () => {
         return await stalePatch.promise;
       }
       if (method === "sessions.subscribe") {
-        return {};
+        return { subscribed: true };
       }
       if (method === "sessions.list") {
         return sessionsResult([], 2);
@@ -656,7 +665,7 @@ describe("createSessionCapability", () => {
         return { ok: true, path: "", key: "agent:main:main", entry: {} };
       }
       if (method === "sessions.subscribe") {
-        return {};
+        return { subscribed: true };
       }
       if (method === "sessions.list") {
         return sessionsResult([], 2);
@@ -701,7 +710,7 @@ describe("createSessionCapability", () => {
     const sessions = createSessionCapability({
       snapshot: {
         client,
-        connected: true,
+        phase: "connected" as const,
         sessionKey: "agent:main:source",
         assistantAgentId: "main",
         hello: null,
@@ -752,7 +761,7 @@ describe("createSessionCapability", () => {
     const gateway = {
       snapshot: {
         client,
-        connected: true,
+        phase: "connected" as const,
         sessionKey: "agent:main:oldest",
         assistantAgentId: "main",
         hello: null,
@@ -807,7 +816,7 @@ describe("createSessionCapability", () => {
     const sessions = createSessionCapability({
       snapshot: {
         client,
-        connected: true,
+        phase: "connected" as const,
         sessionKey: key,
         assistantAgentId: "main",
         hello: null,
@@ -1049,7 +1058,7 @@ describe("createSessionCapability", () => {
     const gateway = {
       snapshot: {
         client,
-        connected: true,
+        phase: "connected" as const,
         sessionKey: key,
         assistantAgentId: "main",
         hello: null,

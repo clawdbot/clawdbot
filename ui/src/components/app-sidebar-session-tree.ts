@@ -1,7 +1,12 @@
 import type { GatewaySessionRow } from "../api/types.ts";
-import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
+import {
+  areUiSessionKeysEquivalent,
+  resolveUiSessionNavigationParentKey,
+} from "../lib/sessions/session-key.ts";
 import {
   SIDEBAR_SESSION_NO_ATTENTION,
+  rowDemandsVisibility,
+  RowVisibilityReason,
   sidebarSessionAttentionPriority,
   type SidebarKnownSessionAttention,
   type SidebarRecentSession,
@@ -48,11 +53,17 @@ export function projectSessionTree(params: {
   };
   for (const row of rowsByKey.values()) {
     for (const childKey of row.childSessions ?? []) {
-      appendChild(row.key, childKey);
+      const child = rowsByKey.get(childKey);
+      const navigationParentKey = resolveUiSessionNavigationParentKey(child);
+      // Runtime control and sidebar navigation can have different parents;
+      // known children belong to their explicit navigation parent only.
+      if (!navigationParentKey || areUiSessionKeysEquivalent(navigationParentKey, row.key)) {
+        appendChild(row.key, childKey);
+      }
     }
   }
   for (const row of rowsByKey.values()) {
-    const parentKey = row.spawnedBy ?? row.parentSessionKey;
+    const parentKey = resolveUiSessionNavigationParentKey(row);
     if (parentKey) {
       appendChild(parentKey, row.key);
     }
@@ -63,7 +74,7 @@ export function projectSessionTree(params: {
     isChild: boolean,
     ancestors: ReadonlySet<string>,
   ): SidebarRecentSession => {
-    const childSessionKeys = childKeysByParent.get(row.key) ?? [];
+    const childSessionKeys = row.archived === true ? [] : (childKeysByParent.get(row.key) ?? []);
     const nextAncestors = new Set(ancestors);
     nextAncestors.add(row.key);
     const children = childSessionKeys.flatMap((key) => {
@@ -72,10 +83,7 @@ export function projectSessionTree(params: {
     });
     const projected = toSidebarSession(row, isChild);
     const projectedRunningChildCount = children.reduce(
-      (count, child) =>
-        count +
-        (child.hasActiveRun || child.status === "running" ? 1 : 0) +
-        child.runningChildCount,
+      (count, child) => count + (child.hasActiveRun ? 1 : 0) + child.runningChildCount,
       0,
     );
     const runningChildCount = Math.max(
@@ -88,6 +96,13 @@ export function projectSessionTree(params: {
         (child.status === "failed" || child.status === "timeout" ? 1 : 0) +
         child.failedChildCount,
       0,
+    );
+    // Conflict attention is transitive: a collapsed parent must expose staged
+    // cloud results held by descendants or the recovery signal disappears.
+    const workspaceConflictCount = Math.min(
+      Number.MAX_SAFE_INTEGER,
+      (projected.workspaceConflictCount ?? 0) +
+        children.reduce((count, child) => count + (child.workspaceConflictCount ?? 0), 0),
     );
     const unloadedChildKeys = childSessionKeys.filter((key) => !rowsByKey.has(key));
     // Only direct unloaded children can match: parents carry their keys, but not grandchildren's.
@@ -105,6 +120,7 @@ export function projectSessionTree(params: {
     // ancestor remains actionable even when the blocked descendant is hidden.
     const attention = children.reduce(
       (current, child) =>
+        rowDemandsVisibility(child, RowVisibilityReason.Attention) &&
         sidebarSessionAttentionPriority(child.attention) > sidebarSessionAttentionPriority(current)
           ? child.attention
           : current,
@@ -122,6 +138,7 @@ export function projectSessionTree(params: {
       containsActiveDescendant: children.some(
         (child) => child.active || child.visuallyActive || child.containsActiveDescendant,
       ),
+      workspaceConflictCount: workspaceConflictCount || undefined,
       runningChildCount,
       failedChildCount,
     };
@@ -130,7 +147,7 @@ export function projectSessionTree(params: {
   const rootKeys = new Set(roots.map((row) => row.key));
   return roots
     .filter((row) => {
-      const parentKey = row.spawnedBy ?? row.parentSessionKey;
+      const parentKey = resolveUiSessionNavigationParentKey(row);
       return !parentKey || !rootKeys.has(parentKey);
     })
     .map((row) => build(row, false, new Set()));

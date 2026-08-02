@@ -583,6 +583,7 @@ struct IPadSkillWorkshopScreen: View {
     private var agentScopeOptions: [IPadSkillWorkshopAgentScope] {
         let defaultID = Self.normalizedScopeID(self.appModel.gatewayDefaultAgentId)
         return self.appModel.gatewayAgents
+            .filter(\.isSelectableAgent)
             .filter { Self.normalizedScopeID($0.id) != defaultID }
             .map { agent in
                 let name = Self.normalizedScopeID(agent.name)

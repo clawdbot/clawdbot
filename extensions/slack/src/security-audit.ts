@@ -44,19 +44,6 @@ export async function collectSlackSecurityAuditFindings(params: {
     return findings;
   }
 
-  const useAccessGroups = params.cfg.commands?.useAccessGroups !== false;
-  if (!useAccessGroups) {
-    findings.push({
-      checkId: "channels.slack.commands.slash.useAccessGroups_off",
-      severity: "critical",
-      title: "Slack slash commands bypass access groups",
-      detail:
-        "Slack slash/native commands are enabled while commands.useAccessGroups=false; this can allow unrestricted /… command execution from channels/users you didn't explicitly authorize.",
-      remediation: "Set commands.useAccessGroups=true (recommended).",
-    });
-    return findings;
-  }
-
   const allowFromRaw = slackCfg.allowFrom;
   const legacyAllowFromRaw = (params.account as { dm?: { allowFrom?: unknown } }).dm?.allowFrom;
   const allowFrom = Array.isArray(allowFromRaw)

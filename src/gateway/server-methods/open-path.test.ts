@@ -18,7 +18,7 @@ function fakeChild(result: Promise<unknown>) {
   const kill = vi.fn();
   const stderr = new PassThrough();
   return {
-    child: Object.assign(result, { kill, stderr, unref }),
+    child: Object.assign(result, { kill, stderr, nodeChildProcess: { unref } }),
     kill,
     stderr,
     unref,

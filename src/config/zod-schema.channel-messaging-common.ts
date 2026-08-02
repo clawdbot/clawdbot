@@ -8,14 +8,48 @@ import {
   ChannelHeartbeatVisibilitySchema,
 } from "./zod-schema.channels.js";
 import {
+  BlockStreamingChunkSchema,
   ChannelDeliveryStreamingConfigSchema,
+  ChannelStreamingBlockSchema,
   ContextVisibilityModeSchema,
   DmConfigSchema,
   DmPolicySchema,
   GroupPolicySchema,
   MarkdownConfigSchema,
   ReplyToModeSchema,
+  TextChunkModeSchema,
 } from "./zod-schema.core.js";
+
+export const UnifiedStreamingModeSchema = z.enum(["off", "partial", "block", "progress"]);
+export const ChannelStreamingPreviewSchema = z
+  .object({
+    chunk: BlockStreamingChunkSchema.optional(),
+    toolProgress: z.boolean().optional(),
+    commandText: z.enum(["raw", "status"]).optional(),
+  })
+  .strict();
+export const ChannelStreamingProgressSchema = z
+  .object({
+    label: z.union([z.string(), z.literal(false)]).optional(),
+    labels: z.array(z.string()).optional(),
+    maxLines: z.number().int().positive().optional(),
+    maxLineChars: z.number().int().positive().optional(),
+    render: z.enum(["text", "rich"]).optional(),
+    toolProgress: z.boolean().optional(),
+    commandText: z.enum(["raw", "status"]).optional(),
+    commentary: z.boolean().optional(),
+    narration: z.boolean().optional(),
+  })
+  .strict();
+export const ChannelPreviewStreamingConfigSchema = z
+  .object({
+    mode: UnifiedStreamingModeSchema.optional(),
+    chunkMode: TextChunkModeSchema.optional(),
+    preview: ChannelStreamingPreviewSchema.optional(),
+    progress: ChannelStreamingProgressSchema.optional(),
+    block: ChannelStreamingBlockSchema.optional(),
+  })
+  .strict();
 
 const CommonCapabilitiesSchema = z.array(z.string()).optional();
 const CommonIdListSchema = z.array(z.union([z.string(), z.number()])).optional();
@@ -94,7 +128,7 @@ function createCommonChannelAccountShape<
     dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
     textChunkLimit: z.number().int().positive().optional(),
     streaming: (options.streaming ?? CommonStreamingSchema) as TStreaming,
-    heartbeat: ChannelHeartbeatVisibilitySchema,
+    heartbeatVisibility: ChannelHeartbeatVisibilitySchema,
     healthMonitor: ChannelHealthMonitorSchema,
     responsePrefix: z.string().optional(),
     mediaMaxMb: (options.mediaMaxMb ?? CommonMediaMaxMbSchema) as TMediaMaxMb,

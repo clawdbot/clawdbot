@@ -70,6 +70,10 @@ export function gitFileMode(mode: number): number {
   return (mode & 0o111) === 0 ? 0o644 : 0o755;
 }
 
+function compareManifestPaths(left: { path: string }, right: { path: string }): number {
+  return left.path < right.path ? -1 : left.path > right.path ? 1 : 0;
+}
+
 type RawManifestEntry =
   | { path: string; type: "directory"; mode: number }
   | WorkerWorkspaceManifestEntry;
@@ -173,7 +177,7 @@ export function serializeWorkerWorkspaceManifest(manifest: WorkerWorkspaceManife
           mode: 0o700,
         })),
       ...manifest.entries.filter((entry) => !isDerivedWorkspacePath(entry.path)),
-    ].toSorted((left, right) => left.path.localeCompare(right.path)),
+    ].toSorted(compareManifestPaths),
   });
 }
 

@@ -23,16 +23,6 @@ function extractCaptures(text: string, pattern: RegExp) {
   return Array.from(text.matchAll(globalPattern), (match) => match[1]?.trim()).filter(Boolean);
 }
 
-export function extractLastMatchingUserText(texts: string[], pattern: RegExp) {
-  for (let index = texts.length - 1; index >= 0; index -= 1) {
-    const text = texts[index] ?? "";
-    if (pattern.test(text)) {
-      return text;
-    }
-  }
-  return "";
-}
-
 export function extractExactReplyDirective(text: string) {
   const backtickedMatch = extractLastCapture(text, /reply(?: with)? exactly\s+`([^`]+)`/i);
   if (backtickedMatch) {
@@ -113,7 +103,31 @@ export function shouldUseWhatsAppContactMarker(prompt: string) {
 }
 
 export function shouldUseWhatsAppStickerMarker(prompt: string) {
-  return hasWhatsAppStructuredMessageBody(prompt, /^<media:sticker>(?:\s|$)/iu);
+  const label = "WhatsApp media:";
+  let searchFrom = 0;
+  for (;;) {
+    const labelIndex = prompt.indexOf(label, searchFrom);
+    if (labelIndex < 0) {
+      return false;
+    }
+    const fenceStart = prompt.indexOf("```json", labelIndex + label.length);
+    const fenceEnd = fenceStart >= 0 ? prompt.indexOf("```", fenceStart + 7) : -1;
+    if (fenceStart >= 0 && fenceEnd >= 0) {
+      try {
+        const value = JSON.parse(prompt.slice(fenceStart + 7, fenceEnd)) as {
+          payload?: { kind?: unknown };
+        };
+        if (value.payload?.kind === "sticker") {
+          return true;
+        }
+      } catch {
+        // Ignore malformed metadata and continue to the next matching block.
+      }
+      searchFrom = fenceEnd + 3;
+      continue;
+    }
+    searchFrom = labelIndex + label.length;
+  }
 }
 
 function extractLabeledMarkerDirective(text: string, label: string) {
@@ -165,15 +179,10 @@ function extractBareToolArg(text: string, name: string) {
 }
 
 export function hasDeclaredTool(body: Record<string, unknown>, name: string) {
-  const tools = Array.isArray(body.tools) ? body.tools : [];
-  const dynamicTools = Array.isArray(body.dynamicTools) ? body.dynamicTools : [];
-  if (
-    [...tools, ...dynamicTools].some((tool) => toolDefinitionMentionsName(tool, name)) ||
+  return (
+    hasToolDefinition(body, name) ||
     instructionTextMentionsToolName(extractInstructionsText(body), name)
-  ) {
-    return true;
-  }
-  return false;
+  );
 }
 
 export function hasToolDefinition(body: Record<string, unknown>, name: string) {

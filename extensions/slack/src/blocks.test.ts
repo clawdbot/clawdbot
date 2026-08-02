@@ -60,6 +60,48 @@ describe("buildSlackBlocksFallbackText", () => {
     ).toBe("Pipeline report (table)\n- Account: Acme; ARR: 125000");
   });
 
+  it("renders inbound table cells as bounded delimiter-safe TSV", () => {
+    const table = {
+      type: "table",
+      rows: [
+        [
+          { type: "raw_text", text: "Name" },
+          { type: "raw_number", value: 42 },
+          { type: "raw_text", text: "Note" },
+        ],
+        [
+          {
+            type: "rich_text",
+            elements: [
+              {
+                type: "rich_text_section",
+                elements: [
+                  { type: "text", text: "Ada" },
+                  { type: "text", text: " " },
+                  { type: "user", user_id: "U123" },
+                ],
+              },
+            ],
+          },
+          { type: "raw_number", value: 7, text: "seven" },
+          { type: "raw_text", text: "A\tB\nC\\D" },
+        ],
+      ],
+    };
+
+    expect(renderSlackBlockFallbackText(table, { nativeDataFormat: "plain" })).toBe(
+      ["Name\t42\tNote", "Ada <@U123>\tseven\tA\\tB\\nC\\\\D"].join("\n"),
+    );
+    expect(renderSlackBlockFallbackText(table)).toBe(
+      ["Name\t42\tNote", "Ada &lt;@U123&gt;\tseven\tA\\tB\\nC\\\\D"].join("\n"),
+    );
+  });
+
+  it("rejects inbound tables outside Slack's published row limit", () => {
+    const rows = Array.from({ length: 101 }, () => [{ type: "raw_text", text: "cell" }]);
+    expect(renderSlackBlockFallbackText({ type: "table", rows })).toBeUndefined();
+  });
+
   it("uses only visible action labels and select placeholders", () => {
     const fallback = buildSlackBlocksFallbackText([
       {

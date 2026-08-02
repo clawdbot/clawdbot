@@ -2,11 +2,16 @@ import fs from "node:fs";
 import path from "node:path";
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 // Slack helper module supports monitor helpers behavior.
-import { closeOpenClawStateDatabaseForTest } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import type { PluginRuntime } from "openclaw/plugin-sdk/core";
+import {
+  closeOpenClawStateDatabaseForTest,
+  createChannelIngressQueueForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { vi } from "vitest";
 import type { Mock } from "vitest";
+import { setSlackRuntime } from "./runtime.js";
 
 type SlackHandler = (args: unknown) => Promise<void>;
 type SlackMiddleware = (args: { next: () => Promise<void> } & Record<string, unknown>) => unknown;
@@ -317,10 +322,24 @@ export function resetSlackTestState(config: Record<string, unknown> = defaultSla
   if (lastSlackTestStateDir) {
     fs.rmSync(lastSlackTestStateDir, { recursive: true, force: true });
   }
-  lastSlackTestStateDir = fs.realpathSync(
+  const stateDir = fs.realpathSync(
     fs.mkdtempSync(path.join(resolvePreferredOpenClawTmpDir(), "openclaw-slack-monitor-state-")),
   );
-  process.env.OPENCLAW_STATE_DIR = lastSlackTestStateDir;
+  lastSlackTestStateDir = stateDir;
+  process.env.OPENCLAW_STATE_DIR = stateDir;
+  setSlackRuntime({
+    state: {
+      openChannelIngressQueue: (
+        options?: Omit<Parameters<typeof createChannelIngressQueueForTests>[0], "channelId">,
+      ) =>
+        createChannelIngressQueueForTests({
+          ...options,
+          channelId: "slack",
+          stateDir: options?.stateDir ?? stateDir,
+        }),
+      resolveStateDir: () => stateDir,
+    },
+  } as unknown as PluginRuntime);
   slackTestState.config = config;
   slackTestState.appConstructorArgs = undefined;
   slackTestState.socketModeLogger = undefined;

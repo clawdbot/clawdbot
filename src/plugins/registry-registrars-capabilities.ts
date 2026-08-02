@@ -1,14 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { registerContextEngineForOwner } from "../context-engine/registry.js";
-import {
-  getDetachedTaskLifecycleRuntimeRegistration,
-  registerDetachedTaskLifecycleRuntime,
-} from "../tasks/detached-task-runtime-state.js";
-import {
-  getRegisteredCompactionProvider,
-  registerCompactionProvider as registerGlobalCompactionProvider,
-} from "./compaction-provider.js";
-import { registerRegistryPluginInteractiveHandler } from "./interactive-registry.js";
+import { registerContextEngineInRegistry } from "../context-engine/registry.js";
+import { registerPluginInteractiveHandlerInRegistry } from "./interactive-registry.js";
 import type { PluginRegistryState } from "./registry-state.js";
 import type { PluginRecord } from "./registry-types.js";
 import { defaultSlotIdForKey } from "./slots.js";
@@ -21,7 +13,7 @@ export function createCapabilityRegistrars(state: PluginRegistryState) {
     record: PluginRecord,
     runtime: Parameters<OpenClawPluginApi["registerDetachedTaskRuntime"]>[0],
   ) => {
-    const existing = getDetachedTaskLifecycleRuntimeRegistration();
+    const existing = registry.detachedTaskRuntimes[0];
     if (existing && existing.pluginId !== record.id) {
       pushDiagnostic({
         level: "error",
@@ -31,14 +23,19 @@ export function createCapabilityRegistrars(state: PluginRegistryState) {
       });
       return;
     }
-    registerDetachedTaskLifecycleRuntime(record.id, runtime);
+    const next = { pluginId: record.id, runtime };
+    if (existing) {
+      registry.detachedTaskRuntimes.splice(0, 1, next);
+    } else {
+      registry.detachedTaskRuntimes.push(next);
+    }
   };
 
   const registerInteractiveHandler = (
     record: PluginRecord,
     registration: Parameters<OpenClawPluginApi["registerInteractiveHandler"]>[0],
   ) => {
-    const result = registerRegistryPluginInteractiveHandler(record.id, registration, {
+    const result = registerPluginInteractiveHandlerInRegistry(registry, record.id, registration, {
       pluginName: record.name,
       pluginRoot: record.rootDir,
     });
@@ -49,14 +46,7 @@ export function createCapabilityRegistrars(state: PluginRegistryState) {
         source: record.source,
         message: result.error ?? "interactive handler registration failed",
       });
-      return;
     }
-    registry.interactiveHandlers.push({
-      ...registration,
-      pluginId: record.id,
-      pluginName: record.name,
-      pluginRoot: record.rootDir,
-    });
   };
 
   const registerContextEngine = (
@@ -93,10 +83,16 @@ export function createCapabilityRegistrars(state: PluginRegistryState) {
       });
       return;
     }
-    const result = registerContextEngineForOwner(normalizedId, factory, `plugin:${record.id}`, {
-      allowSameOwnerRefresh: true,
-      lifecycle: registrationMode === "full" ? "runtime" : "readOnlyDiscovery",
-    });
+    const result = registerContextEngineInRegistry(
+      registry,
+      normalizedId,
+      factory,
+      `plugin:${record.id}`,
+      {
+        allowSameOwnerRefresh: true,
+        lifecycle: registrationMode === "full" ? "runtime" : "readOnlyDiscovery",
+      },
+    );
     if (!result.ok) {
       pushDiagnostic({
         level: "error",
@@ -137,7 +133,7 @@ export function createCapabilityRegistrars(state: PluginRegistryState) {
       });
       return;
     }
-    const existing = getRegisteredCompactionProvider(id);
+    const existing = registry.compactionProviders.find((entry) => entry.provider.id === id);
     if (existing) {
       const ownerDetail = existing.ownerPluginId ? ` (owner: ${existing.ownerPluginId})` : "";
       pushDiagnostic({
@@ -148,7 +144,7 @@ export function createCapabilityRegistrars(state: PluginRegistryState) {
       });
       return;
     }
-    registerGlobalCompactionProvider(provider, { ownerPluginId: record.id });
+    registry.compactionProviders.push({ provider, ownerPluginId: record.id });
   };
 
   return {

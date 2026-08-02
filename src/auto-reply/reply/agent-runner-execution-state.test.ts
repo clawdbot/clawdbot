@@ -4,7 +4,7 @@ import type { SessionEntry } from "../../config/sessions.js";
 import type { TemplateContext } from "../templating.js";
 import {
   setupAgentRunnerExecutionTestState,
-  getRunAgentTurnWithFallback,
+  getExecuteAgentTurnForTest,
   createMockTypingSignaler,
   createFollowupRun,
   expectMockCallArgFields,
@@ -14,7 +14,7 @@ import type { FallbackRunnerParams } from "./agent-runner-execution.test-support
 
 const state = setupAgentRunnerExecutionTestState();
 
-describe("runAgentTurnWithFallback: session state", () => {
+describe("executeAgentTurn: session state", () => {
   it("restarts the active prompt when a live model switch is requested", async () => {
     let fallbackInvocation = 0;
     state.runWithModelFallbackMock.mockImplementation(
@@ -51,9 +51,9 @@ describe("runAgentTurnWithFallback: session state", () => {
         };
       });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
     const followupRun = createFollowupRun();
-    const result = await runAgentTurnWithFallback({
+    const result = await executeAgentTurn({
       commandBody: "hello",
       followupRun,
       sessionCtx: {
@@ -108,9 +108,9 @@ describe("runAgentTurnWithFallback: session state", () => {
       });
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
     const followupRun = createFollowupRun();
-    const result = await runAgentTurnWithFallback({
+    const result = await executeAgentTurn({
       commandBody: "hello",
       followupRun,
       sessionCtx: {
@@ -192,9 +192,9 @@ describe("runAgentTurnWithFallback: session state", () => {
         };
       });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
     const followupRun = createFollowupRun();
-    const result = await runAgentTurnWithFallback({
+    const result = await executeAgentTurn({
       commandBody: "hello",
       followupRun,
       sessionCtx: {
@@ -250,8 +250,8 @@ describe("runAgentTurnWithFallback: session state", () => {
       throw new Error("fallback failed");
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn({
       commandBody: "hello",
       followupRun: createFollowupRun(),
       sessionCtx: {
@@ -312,8 +312,8 @@ describe("runAgentTurnWithFallback: session state", () => {
     };
     const sessionStore = { main: sessionEntry };
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn({
       commandBody: "hello",
       followupRun,
       sessionCtx: {
@@ -388,8 +388,8 @@ describe("runAgentTurnWithFallback: session state", () => {
     };
     const sessionStore = { main: sessionEntry };
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn({
       commandBody: "hello",
       followupRun,
       sessionCtx: {
@@ -451,8 +451,8 @@ describe("runAgentTurnWithFallback: session state", () => {
     };
     const sessionStore = { main: sessionEntry };
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn({
       commandBody: "hello",
       followupRun,
       sessionCtx: {
@@ -517,8 +517,8 @@ describe("runAgentTurnWithFallback: session state", () => {
     };
     const sessionStore = { main: sessionEntry };
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn({
       commandBody: "hello",
       followupRun,
       sessionCtx: {
@@ -582,8 +582,8 @@ describe("runAgentTurnWithFallback: session state", () => {
       meta: {},
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    await executeAgentTurn(createMinimalRunAgentTurnParams());
 
     expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(3);
     expectMockCallArgFields(state.runEmbeddedAgentMock, 0, "primary candidate", {
@@ -614,8 +614,8 @@ describe("runAgentTurnWithFallback: session state", () => {
       meta: {},
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    await executeAgentTurn(createMinimalRunAgentTurnParams());
 
     expect(state.runCliAgentMock).toHaveBeenCalledOnce();
     expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
@@ -653,8 +653,8 @@ describe("runAgentTurnWithFallback: session state", () => {
       meta: {},
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    await executeAgentTurn(createMinimalRunAgentTurnParams());
 
     expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
     expectMockCallArgFields(state.runEmbeddedAgentMock, 0, "primary candidate", {

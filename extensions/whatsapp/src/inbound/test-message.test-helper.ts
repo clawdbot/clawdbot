@@ -167,6 +167,7 @@ export function createTestWebAudioInboundMessage(
     : {
         type: "audio/ogg; codecs=opus",
         path: "/tmp/voice.ogg",
+        kind: "audio" as const,
       };
   return createTestWebInboundMessage({
     event: {
@@ -175,7 +176,7 @@ export function createTestWebAudioInboundMessage(
       ...event,
     },
     payload: {
-      body: "<media:audio>",
+      body: "",
       media,
       ...payload,
     },

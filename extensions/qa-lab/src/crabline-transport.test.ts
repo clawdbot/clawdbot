@@ -195,6 +195,13 @@ describe("crabline transport", () => {
           senderId: "alice",
           senderName: "Alice",
         });
+        await transport.sendInbound({
+          conversation: { id: "alice", kind: "direct" },
+          senderId: "alice",
+          senderName: "Alice",
+          text: "/status",
+          nativeCommand: { name: "status" },
+        });
 
         const config = transport.createGatewayConfig({ baseUrl: "http://127.0.0.1:1" });
         const telegram = config.channels?.telegram as
@@ -209,6 +216,12 @@ describe("crabline transport", () => {
               message: {
                 entities: [{ length: 5, offset: 0, type: "bot_command" }],
                 text: "/stop",
+              },
+            },
+            {
+              message: {
+                entities: [{ length: 7, offset: 0, type: "bot_command" }],
+                text: "/status",
               },
             },
           ],
@@ -473,17 +486,22 @@ describe("crabline transport", () => {
 
       try {
         expect(transport.requiredPluginIds).toEqual(["signal"]);
-        expect(transport.createGatewayConfig({ baseUrl: "http://127.0.0.1:1" })).toMatchObject({
+        const gatewayConfig = transport.createGatewayConfig({ baseUrl: "http://127.0.0.1:1" });
+        expect(gatewayConfig).toMatchObject({
           channels: {
             signal: {
               account: "+15550000000",
-              apiMode: "native",
-              autoStart: false,
               enabled: true,
-              httpUrl: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+$/u),
+              transport: {
+                kind: "external-native",
+                url: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+$/u),
+              },
             },
           },
         });
+        expect(gatewayConfig.channels?.signal).not.toHaveProperty("apiMode");
+        expect(gatewayConfig.channels?.signal).not.toHaveProperty("autoStart");
+        expect(gatewayConfig.channels?.signal).not.toHaveProperty("httpUrl");
         expect(transport.createRuntimeEnvPatch?.()).toEqual({});
         const delivery = transport.buildAgentDelivery({ target: "dm:alice" });
         expect(delivery).toMatchObject({
@@ -528,8 +546,8 @@ describe("crabline transport", () => {
       try {
         const delivery = transport.buildAgentDelivery({ target: "dm:alice" });
         const config = transport.createGatewayConfig({ baseUrl: "http://127.0.0.1:1" });
-        const signal = config.channels?.signal as { httpUrl?: string } | undefined;
-        const signalBaseUrl = requireString(signal?.httpUrl, "Signal HTTP URL");
+        const signal = config.channels?.signal as { transport?: { url?: string } } | undefined;
+        const signalBaseUrl = requireString(signal?.transport?.url, "Signal HTTP URL");
         const { response, release } = await fetchWithSsrFGuard({
           url: `${signalBaseUrl}/api/v1/rpc`,
           init: {

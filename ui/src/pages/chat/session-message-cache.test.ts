@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   appendChatMessageToCache,
   cacheChatSessionSnapshot,
+  clearChatMessagesFromCache,
   readChatMessagesFromCache,
   readChatSessionSnapshot,
   type ChatMessageCache,
@@ -43,6 +44,67 @@ describe("session message cache", () => {
     ]);
     expect(readChatMessagesFromCache(cache, host, { sessionKey: "agent:main:home" })).toEqual([]);
   });
+
+  it.each([
+    {
+      name: "Matrix room IDs",
+      sessionKey: "Agent:Ops:Matrix:Channel:!Room:Example.Org",
+      canonicalKey: "agent:ops:matrix:channel:!Room:Example.Org",
+      distinctKey: "agent:ops:matrix:channel:!room:example.org",
+    },
+    {
+      name: "Matrix room and thread IDs",
+      sessionKey: "Agent:Ops:Matrix:Channel:!Room:Example.Org:Thread:$Event",
+      canonicalKey: "agent:ops:matrix:channel:!Room:Example.Org:thread:$Event",
+      distinctKey: "agent:ops:matrix:channel:!Room:Example.Org:thread:$event",
+    },
+    {
+      name: "Signal group IDs",
+      sessionKey: "Agent:Ops:Signal:Group:AbC123=",
+      canonicalKey: "agent:ops:signal:group:AbC123=",
+      distinctKey: "agent:ops:signal:group:abc123=",
+    },
+    {
+      name: "Signal group IDs with a normalized thread suffix",
+      sessionKey: "Agent:Ops:Signal:Group:AbC123=:Thread:XyZ",
+      canonicalKey: "agent:ops:signal:group:AbC123=:thread:xyz",
+      distinctKey: "agent:ops:signal:group:abc123=:thread:xyz",
+    },
+  ])(
+    "keeps case-distinct $name in separate transcript caches",
+    ({ sessionKey, canonicalKey, distinctKey }) => {
+      const host = createHost();
+      const cache: ChatMessageCache = new Map();
+
+      cacheChatMessages(cache, host, { sessionKey }, ["first session"]);
+      cacheChatMessages(cache, host, { sessionKey: distinctKey }, ["second session"]);
+
+      expect(readChatMessagesFromCache(cache, host, { sessionKey: canonicalKey })).toEqual([
+        "first session",
+      ]);
+      expect(readChatMessagesFromCache(cache, host, { sessionKey: distinctKey })).toEqual([
+        "second session",
+      ]);
+
+      appendChatMessageToCache(cache, host, { sessionKey: canonicalKey }, "first session update");
+
+      expect(readChatMessagesFromCache(cache, host, { sessionKey })).toEqual([
+        "first session",
+        "first session update",
+      ]);
+      expect(readChatMessagesFromCache(cache, host, { sessionKey: distinctKey })).toEqual([
+        "second session",
+      ]);
+
+      clearChatMessagesFromCache(cache, host, { sessionKey: distinctKey });
+
+      expect(readChatMessagesFromCache(cache, host, { sessionKey })).toEqual([
+        "first session",
+        "first session update",
+      ]);
+      expect(readChatMessagesFromCache(cache, host, { sessionKey: distinctKey })).toEqual([]);
+    },
+  );
 
   it("uses explicit event agent identity for global cache targets", () => {
     const host = {

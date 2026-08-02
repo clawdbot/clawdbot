@@ -21,6 +21,18 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 import { shortenHomePath } from "../utils.js";
 import {
+  repairCanonicalSessionKeys,
+  type CanonicalSessionKeyRepairReport,
+} from "./doctor-session-canonical-keys.js";
+import {
+  repairCanonicalSessionDeliveryStates,
+  type SessionDeliveryStateRepairReport,
+} from "./doctor-session-delivery-state.js";
+import {
+  repairReservedIncognitoSessionKeys,
+  type ReservedIncognitoKeyRepairReport,
+} from "./doctor-session-incognito-key-repair.js";
+import {
   DoctorSqliteMaintenanceLockUnavailableError,
   withDoctorSqliteMaintenanceLock,
 } from "./doctor-sqlite-maintenance-lock.js";
@@ -505,13 +517,45 @@ async function noteSessionSqliteMigrationHealth(params: {
   // Public doctor owns the operator-facing SQLite import; the targeted
   // --session-sqlite subcommand remains the diagnostic/proof surface.
   const { runDoctorSessionSqlite } = await import("./doctor-session-sqlite.js");
-  const runSessionSqlite = async () =>
-    await runDoctorSessionSqlite({
+  let reservedKeyReport: ReservedIncognitoKeyRepairReport = { found: 0, repaired: 0 };
+  let deliveryReport: SessionDeliveryStateRepairReport = {
+    found: 0,
+    repaired: 0,
+    scannedStores: 0,
+  };
+  let canonicalKeyReport: CanonicalSessionKeyRepairReport = {
+    archivedTranscriptDirectories: [],
+    foundGroups: 0,
+    repairBatches: 0,
+    removedRows: 0,
+    repairedGroups: 0,
+    scannedStores: 0,
+  };
+  const runSessionSqlite = async () => {
+    const report = await runDoctorSessionSqlite({
       allAgents: true,
       ...(params.cfg ? { cfg: params.cfg } : {}),
       env: params.env,
       mode: params.shouldRepair ? "import" : "dry-run",
     });
+    canonicalKeyReport = await repairCanonicalSessionKeys({
+      apply: params.shouldRepair,
+      cfg: params.cfg ?? {},
+      env: params.env,
+    });
+    // Import may create the first durable SQLite row for a colliding legacy key.
+    reservedKeyReport = repairReservedIncognitoSessionKeys({
+      apply: params.shouldRepair,
+      cfg: params.cfg ?? {},
+      env: params.env,
+    });
+    deliveryReport = repairCanonicalSessionDeliveryStates({
+      apply: params.shouldRepair,
+      cfg: params.cfg ?? {},
+      env: params.env,
+    });
+    return report;
+  };
   let report: Awaited<ReturnType<typeof runSessionSqlite>>;
   try {
     report = params.shouldRepair
@@ -530,6 +574,30 @@ async function noteSessionSqliteMigrationHealth(params: {
       "Session SQLite",
     );
     return;
+  }
+  if (reservedKeyReport.found > 0) {
+    note(
+      params.shouldRepair
+        ? `- Renamed ${reservedKeyReport.repaired} durable session key(s) that collided with the reserved incognito namespace.`
+        : `- Found ${reservedKeyReport.found} durable session key(s) that collide with the reserved incognito namespace. Run "openclaw doctor --fix" to rename them.`,
+      "Session SQLite",
+    );
+  }
+  if (canonicalKeyReport.foundGroups > 0) {
+    note(
+      params.shouldRepair
+        ? `- Canonicalized ${canonicalKeyReport.repairedGroups} session-key group(s) in ${canonicalKeyReport.repairBatches} transaction batch(es), removed ${canonicalKeyReport.removedRows} duplicate or alias row(s), and preserved cross-store history in ${canonicalKeyReport.archivedTranscriptDirectories.length} archive director${canonicalKeyReport.archivedTranscriptDirectories.length === 1 ? "y" : "ies"}.`
+        : `- Found ${canonicalKeyReport.foundGroups} non-canonical or duplicate session-key group(s). Run "openclaw doctor --fix" to preserve their history and canonicalize the rows.`,
+      "Session SQLite",
+    );
+  }
+  if (deliveryReport.found > 0) {
+    note(
+      params.shouldRepair
+        ? `- Canonicalized delivery state for ${deliveryReport.repaired} durable session row(s).`
+        : `- Found ${deliveryReport.found} durable session row(s) with legacy delivery fields. Run "openclaw doctor --fix" to canonicalize them.`,
+      "Session SQLite",
+    );
   }
   if (
     report.totals.legacyEntries === 0 &&

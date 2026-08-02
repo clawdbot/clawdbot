@@ -228,6 +228,11 @@ describe("tlon core", () => {
     expect(resolved.error.message).toMatch(/invalid tlon target/i);
   });
 
+  it("does not invent an account when the Tlon channel is unconfigured", () => {
+    expect(listTlonAccountIds({} as OpenClawConfig)).toEqual([]);
+    expect(listTlonAccountIds({ channels: { tlon: {} } } as OpenClawConfig)).toEqual([]);
+  });
+
   it("lists named accounts and the implicit default account", () => {
     const cfg = {
       channels: {

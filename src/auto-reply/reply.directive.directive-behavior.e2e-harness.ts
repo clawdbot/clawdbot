@@ -2,7 +2,7 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { afterEach, beforeEach, vi } from "vitest";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles.js";
-import { clearSessionStoreCacheForTest } from "../config/sessions.js";
+import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import { resetSystemEventsForTest } from "../infra/system-events.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginRegistry } from "../plugins/registry.js";

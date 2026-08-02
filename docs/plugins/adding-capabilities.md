@@ -96,7 +96,7 @@ Image generation follows the standard shape:
 The config key is intentionally separate from vision-analysis routing:
 
 - `agents.defaults.imageModel` analyzes images.
-- `agents.defaults.imageGenerationModel` generates images.
+- `agents.defaults.mediaModels.image` generates images.
 
 Keep those separate so fallback and policy remain explicit.
 

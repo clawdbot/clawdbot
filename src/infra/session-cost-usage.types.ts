@@ -8,15 +8,6 @@ import type {
 
 export type CostBreakdown = Partial<Usage["cost"]>;
 
-export type ParsedUsageEntry = {
-  usage: NormalizedUsage;
-  costTotal?: number;
-  costBreakdown?: CostBreakdown;
-  provider?: string;
-  model?: string;
-  timestamp?: Date;
-};
-
 export type ParsedTranscriptEntry = {
   message: Record<string, unknown>;
   role?: "user" | "assistant";

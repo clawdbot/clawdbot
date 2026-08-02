@@ -5,6 +5,7 @@ export type {
   SessionCatalogDescriptor,
   SessionCatalogHost,
   SessionCatalogLocator,
+  SessionCatalogPullRequestSummary,
   SessionCatalogSession,
   SessionCatalogTranscriptItem,
   SessionsCatalogArchiveParams,

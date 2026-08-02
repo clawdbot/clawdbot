@@ -207,7 +207,15 @@ function hostGroupedNativeCatalogs() {
 
 async function expandCodingSection(page: Page) {
   const toggle = page.locator('[data-session-section="work"] .sidebar-session-group-toggle');
-  await toggle.waitFor({ state: "visible" });
+  await page.waitForFunction(() =>
+    Boolean(
+      document.querySelector('[data-session-section="work"]') ??
+      document.querySelector('[data-session-section^="catalog:"]'),
+    ),
+  );
+  if ((await toggle.count()) === 0) {
+    return;
+  }
   if ((await toggle.getAttribute("aria-expanded")) === "false") {
     await toggle.click();
   }
@@ -248,13 +256,20 @@ suite("Claude native session catalog", () => {
       await page.goto(`${server.baseUrl}chat`);
       await expandCodingSection(page);
       for (const catalogId of ["claude", "codex"]) {
+        const catalogLabel = catalogId === "claude" ? "Claude Code" : "Codex";
         const section = page.locator(`[data-session-section="catalog:${catalogId}"]`);
         const gatewayHost = section.locator('[data-session-catalog-host="gateway:local"]');
         const buildHost = section.locator('[data-session-catalog-host="node:build"]');
-        await gatewayHost.getByText("Gateway Mac", { exact: true }).waitFor();
+        await gatewayHost.getByText(`${catalogLabel} local plan`, { exact: true }).waitFor();
         await buildHost.getByText("Build Node", { exact: true }).waitFor();
+        await buildHost.getByText(`${catalogLabel} remote review`, { exact: true }).waitFor();
+        expect(await gatewayHost.locator(".sidebar-session-catalog-host__head").count()).toBe(0);
+        expect(await gatewayHost.getByText("Gateway Mac", { exact: true }).count()).toBe(0);
         expect(await gatewayHost.locator(".sidebar-recent-session").count()).toBe(1);
         expect(await buildHost.locator(".sidebar-recent-session").count()).toBe(1);
+        expect(await section.getByText(`${catalogLabel} local plan`, { exact: true }).count()).toBe(
+          1,
+        );
       }
 
       const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
@@ -470,7 +485,7 @@ suite("Claude native session catalog", () => {
     });
     await page.goto(`${server.baseUrl}chat`);
     await expandCodingSection(page);
-    await page.getByRole("button", { name: "Load more threads" }).click();
+    await page.locator('[data-session-catalog-load-more="claude"]').click();
     await page.getByText("Older remote review", { exact: true }).waitFor();
     expect((await gateway.getRequests("sessions.catalog.list")).at(-1)?.params).toEqual({
       agentId: "main",
@@ -497,12 +512,12 @@ suite("Claude native session catalog", () => {
     });
     await page.clock.runFor(100);
     await page.locator('.chat-virtual-row:not([data-virtual-row-key="history"])').first().waitFor();
-    const anchor = await firstVisibleVirtualRow(thread);
     await expect
       .poll(() => gateway.getRequests("sessions.catalog.read").then((requests) => requests.length))
       .toBe(initialReadCount + 1);
     await page.locator(".chat-history-loading").waitFor();
     expect(await page.getByRole("button", { name: "Load older" }).count()).toBe(0);
+    const anchor = await firstVisibleVirtualRow(thread);
     await startVirtualRowPrependProbe(thread, anchor);
     await gateway.resolveDeferred("sessions.catalog.read");
     await expect
@@ -630,9 +645,9 @@ suite("Claude native session catalog", () => {
       element.dispatchEvent(new Event("scroll"));
     });
     await page.locator('.chat-virtual-row:not([data-virtual-row-key="history"])').first().waitFor();
-    const anchor = await firstVisibleVirtualRow(thread);
     await gateway.waitForRequest("chat.history");
     await page.locator(".chat-history-loading").waitFor();
+    const anchor = await firstVisibleVirtualRow(thread);
     await startVirtualRowPrependProbe(thread, anchor);
     await gateway.resolveDeferred("chat.history");
     await expect

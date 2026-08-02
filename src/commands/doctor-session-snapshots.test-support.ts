@@ -18,7 +18,6 @@ type TestApi = {
     store: Record<string, SessionEntry>;
     bundledSkillsDir: string | undefined;
     pathExists?: (filePath: string) => boolean;
-    homeDir?: string;
     env?: NodeJS.ProcessEnv;
   }): Array<{
     sessionKey: string;

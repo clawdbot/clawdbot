@@ -4,8 +4,6 @@ import { DEEPINFRA_BASE_URL } from "./provider-models.js";
 
 export { DEEPINFRA_BASE_URL };
 
-export const DEEPINFRA_NATIVE_BASE_URL = "https://api.deepinfra.com/v1/inference";
-
 // Structural capability shapes — not model IDs.
 export const DEFAULT_DEEPINFRA_IMAGE_SIZE = "1024x1024";
 export const DEFAULT_DEEPINFRA_TTS_VOICE = "af_bella";

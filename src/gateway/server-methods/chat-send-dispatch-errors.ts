@@ -3,9 +3,11 @@ import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { clearAgentRunContext } from "../../infra/agent-events.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../../process/gateway-work-admission.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import { chatAbortMarkerTimestampMs } from "../server-chat-state.js";
 import { persistGatewaySessionLifecycleEvent } from "../session-lifecycle-state.js";
 import { formatForLog } from "../ws-log.js";
 import { setGatewayDedupeEntry } from "./agent-job.js";
+import { buildAbortedChatSendPayload } from "./chat-abort-authorization.js";
 import { broadcastChatError, broadcastChatFinal } from "./chat-broadcast.js";
 import type { AdmittedChatSend } from "./chat-send-admission.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
@@ -57,8 +59,97 @@ export function createChatSendDispatchErrorLifecycle(params: {
   const handleError = async (err: unknown) => {
     const errorMessage = String(err);
     const queuedFollowupEnqueued = isQueuedFollowupEnqueued();
+    if (queuedFollowupEnqueued) {
+      context.logGateway.warn(
+        `webchat dispatch failed after followup queue admission: ${formatForLog(err)}`,
+      );
+      if (!context.chatRunState.hasAbortMarker(clientRunId)) {
+        setGatewayDedupeEntry({
+          dedupe: context.dedupe,
+          key: `chat:${clientRunId}`,
+          entry: {
+            ts: Date.now(),
+            ok: true,
+            payload: { runId: clientRunId, status: "ok" as const },
+          },
+        });
+        broadcastChatFinal({
+          context,
+          runId: clientRunId,
+          sessionKey,
+          agentId,
+        });
+      }
+      return;
+    }
+
+    // Capture terminal ownership before durable cleanup yields: an explicit
+    // abort has both its signal and canonical marker, but a restart may abort
+    // only the signal and must retain its real dispatch-failure outcome.
+    const abortedAtDispatchReject = activeRunAbort.controller.signal.aborted;
+    const abortMarkerAtDispatchReject = context.chatRunState.runs.get(clientRunId)?.abortMarker;
+    const agentTerminalPersistenceOwnedAtDispatchReject =
+      activeRunAbort.entry?.projectSessionTerminalPending === true ||
+      activeRunAbort.entry?.projectSessionTerminalPersistence !== undefined ||
+      activeRunAbort.entry?.projectSessionTerminalPersisted === true;
+
+    if (abortedAtDispatchReject && abortMarkerAtDispatchReject !== undefined) {
+      // chat.abort has already emitted the canonical terminal lifecycle and
+      // retained its registration until that durable projection settles.
+      // A competing restart-admission write can strand an acknowledged abort.
+      const endedAt = chatAbortMarkerTimestampMs(abortMarkerAtDispatchReject);
+      setGatewayDedupeEntry({
+        dedupe: context.dedupe,
+        key: `chat:${clientRunId}`,
+        entry: {
+          ts: endedAt,
+          ok: true,
+          payload: buildAbortedChatSendPayload({
+            runId: clientRunId,
+            stopReason: activeRunAbort.entry?.abortStopReason ?? "rpc",
+            endedAt,
+          }),
+        },
+      });
+      context.logGateway.warn(
+        `chat.send post-dispatch threw after abort for runId=${clientRunId}: ${formatForLog(err)}`,
+      );
+
+      const shouldPersistUserTurn =
+        !userTurnRecorder.hasPersisted() && !userTurnRecorder.isBlocked();
+      // Cleanup releases the admitted run; retain its root until the accepted
+      // user's transcript is settled so shutdown cannot drop that turn.
+      const releaseAbortTranscriptRoot = shouldPersistUserTurn
+        ? retainGatewayRootWorkAdmissionContinuation()
+        : null;
+      cleanupAdmittedRun();
+      clearAgentRunContext(clientRunId, lifecycleGeneration);
+      if (shouldPersistUserTurn) {
+        try {
+          await persistUserTurnTranscript();
+        } catch (transcriptError: unknown) {
+          context.logGateway.warn(
+            `webchat user transcript update failed after abort: ${formatForLog(transcriptError)}`,
+          );
+        } finally {
+          releaseAbortTranscriptRoot?.();
+        }
+      }
+      return;
+    }
+
+    // Retire abortability before asynchronous terminal persistence. Otherwise
+    // a later chat.abort can publish a second terminal for a rejected run.
+    context.chatRunState.deleteAbortMarker(clientRunId);
+    if (agentTerminalPersistenceOwnedAtDispatchReject && activeRunAbort.entry) {
+      activeRunAbort.entry.isAbortable = () => false;
+      activeRunAbort.cleanup();
+    } else {
+      activeRunAbort.cleanup({ force: true });
+    }
+
     let restartSafeDispatchFailureTerminalized = false;
-    if (restartSafeAdmission && !queuedFollowupEnqueued) {
+    if (restartSafeAdmission && !agentTerminalPersistenceOwnedAtDispatchReject) {
       restartSafeDispatchFailureTerminalized = await terminalizeRestartSafeAdmission({
         retryable: true,
         status: "failed",
@@ -78,29 +169,6 @@ export function createChatSendDispatchErrorLifecycle(params: {
         });
       }
     }
-    if (queuedFollowupEnqueued) {
-      context.logGateway.warn(
-        `webchat dispatch failed after followup queue admission: ${formatForLog(err)}`,
-      );
-      if (!context.chatAbortedRuns.has(clientRunId)) {
-        setGatewayDedupeEntry({
-          dedupe: context.dedupe,
-          key: `chat:${clientRunId}`,
-          entry: {
-            ts: Date.now(),
-            ok: true,
-            payload: { runId: clientRunId, status: "ok" as const },
-          },
-        });
-        broadcastChatFinal({
-          context,
-          runId: clientRunId,
-          sessionKey,
-          agentId,
-        });
-      }
-      return;
-    }
     persistDispatchErrorUserTurn =
       userTurnRecorder.hasPersisted() || userTurnRecorder.isBlocked()
         ? undefined
@@ -109,8 +177,8 @@ export function createChatSendDispatchErrorLifecycle(params: {
           };
     if (
       !restartSafeDispatchFailureTerminalized &&
-      !activeRunAbort.controller.signal.aborted &&
-      !context.chatAbortedRuns.has(clientRunId)
+      abortMarkerAtDispatchReject === undefined &&
+      !agentTerminalPersistenceOwnedAtDispatchReject
     ) {
       pendingDispatchLifecycleError = {
         endedAt: Date.now(),
@@ -119,28 +187,32 @@ export function createChatSendDispatchErrorLifecycle(params: {
         startedAt: activeRunAbort.entry?.startedAtMs ?? now,
       };
     }
-    const error = errorShape(ErrorCodes.UNAVAILABLE, errorMessage);
-    setGatewayDedupeEntry({
-      dedupe: context.dedupe,
-      key: `chat:${clientRunId}`,
-      entry: {
-        ts: Date.now(),
-        ok: false,
-        payload: {
-          runId: clientRunId,
-          status: "error" as const,
-          summary: errorMessage,
+    if (!agentTerminalPersistenceOwnedAtDispatchReject) {
+      // The lifecycle owner may have already cached its authoritative
+      // terminal; a late dispatch error must not replace that replay result.
+      const error = errorShape(ErrorCodes.UNAVAILABLE, errorMessage);
+      setGatewayDedupeEntry({
+        dedupe: context.dedupe,
+        key: `chat:${clientRunId}`,
+        entry: {
+          ts: Date.now(),
+          ok: false,
+          payload: {
+            runId: clientRunId,
+            status: "error" as const,
+            summary: errorMessage,
+          },
+          error,
         },
-        error,
-      },
-    });
-    broadcastChatError({
-      context,
-      runId: clientRunId,
-      sessionKey,
-      agentId,
-      errorMessage,
-    });
+      });
+      broadcastChatError({
+        context,
+        runId: clientRunId,
+        sessionKey,
+        agentId,
+        errorMessage,
+      });
+    }
   };
 
   const finalize = () => {

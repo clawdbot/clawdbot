@@ -22,6 +22,7 @@ import {
   resolveAvailableAgentHarnessPolicy,
   resolvePluginHarnessPolicyToolsAllow,
   runAgentHarnessAttempt,
+  runAgentHarnessSettledTurnFinalization,
   selectAgentHarness,
   selectAgentHarnessForPreparedModelProviders,
 } from "./selection.js";
@@ -43,6 +44,7 @@ const compactAuthMocks = vi.hoisted(() => ({
   ensureAuthProfileStore: vi.fn(),
   ensureAuthProfileStoreWithoutExternalProfiles: vi.fn(),
   getApiKeyForModel: vi.fn(),
+  prepareAgentRuntimeAuth: vi.fn(),
   resolveModelAsync: vi.fn(),
 }));
 const providerOwnerMocks = vi.hoisted(() => ({
@@ -80,6 +82,14 @@ vi.mock("../model-auth.js", async (importOriginal) => ({
 vi.mock("../embedded-agent-runner/model.js", () => ({
   resolveModelAsync: compactAuthMocks.resolveModelAsync,
 }));
+vi.mock("../runtime-plan/prepare-auth.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../runtime-plan/prepare-auth.js")>();
+  compactAuthMocks.prepareAgentRuntimeAuth.mockImplementation(actual.prepareAgentRuntimeAuth);
+  return {
+    ...actual,
+    prepareAgentRuntimeAuth: compactAuthMocks.prepareAgentRuntimeAuth,
+  };
+});
 vi.mock("../../plugins/providers.js", () => ({
   resolveProviderRefOwnership: providerOwnerMocks.resolveProviderRefOwnership,
 }));
@@ -128,6 +138,7 @@ afterEach(() => {
   clearAgentHarnesses();
   cliBackendsTesting.resetDepsForTest();
   agentRunAttempt.mockClear();
+  compactAuthMocks.prepareAgentRuntimeAuth.mockClear();
   compactAuthMocks.resolveModelAsync.mockReset();
   compactAuthMocks.getApiKeyForModel.mockReset();
   compactAuthMocks.ensureAuthProfileStore.mockReset();
@@ -161,14 +172,7 @@ function createAttemptParams(config?: OpenClawConfig): EmbeddedRunAttemptParams 
 
 function createAttemptResult(sessionIdUsed: string): EmbeddedRunAttemptResult {
   return {
-    aborted: false,
-    externalAbort: false,
-    timedOut: false,
-    idleTimedOut: false,
-    timedOutDuringCompaction: false,
-    timedOutDuringToolExecution: false,
-    promptError: null,
-    promptErrorSource: null,
+    terminal: { kind: "ok" },
     sessionIdUsed,
     messagesSnapshot: [],
     assistantTexts: [`${sessionIdUsed} ok`],
@@ -181,6 +185,26 @@ function createAttemptResult(sessionIdUsed: string): EmbeddedRunAttemptResult {
     cloudCodeAssistFormatError: false,
     replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
     itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
+  };
+}
+
+function createFinalAssistant(): NonNullable<EmbeddedRunAttemptResult["lastAssistant"]> {
+  return {
+    role: "assistant",
+    content: [{ type: "text", text: "final answer" }],
+    api: "openai-responses",
+    provider: "openai",
+    model: "gpt-5.5",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop",
+    timestamp: 0,
   };
 }
 
@@ -379,6 +403,62 @@ function registerTestCompactor(
 }
 
 describe("runAgentHarnessAttempt", () => {
+  it("routes settled turns only through an explicit harness finalizer", async () => {
+    const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async () => createAttemptResult("run"));
+    let hostAuthorityActive = true;
+    const finalizeSettledTurn = vi.fn<NonNullable<AgentHarness["finalizeSettledTurn"]>>(
+      async ({ attempt, settledAttempt: _settledAttempt }) => {
+        hostAuthorityActive = isHostScopedAgentToolActive("openclaw");
+        expect(attempt.operation).toBe("settled-tool-finalization");
+        return {
+          assistant: createFinalAssistant(),
+        };
+      },
+    );
+    const harness: AgentHarness = {
+      id: "codex",
+      label: "Codex",
+      supports: () => ({ supported: true, priority: 100 }),
+      runAttempt,
+      finalizeSettledTurn,
+    };
+    registerAgentHarness(harness, { ownerPluginId: "codex" });
+    const params = createAttemptParams(providerRuntimeConfig("codex", "codex"));
+    const settledAttempt = createAttemptResult("settled");
+
+    await expect(
+      runAgentHarnessSettledTurnFinalization(params, settledAttempt, harness),
+    ).resolves.toMatchObject({
+      assistant: { content: [{ type: "text", text: "final answer" }] },
+    });
+    expect(runAttempt).not.toHaveBeenCalled();
+    expect(hostAuthorityActive).toBe(false);
+    expect(finalizeSettledTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        settledAttempt,
+        attempt: expect.objectContaining({ provider: "codex" }),
+      }),
+    );
+  });
+
+  it("fails closed when the selected harness has no settled-turn finalizer", async () => {
+    const harness: AgentHarness = {
+      id: "codex",
+      label: "Codex",
+      supports: () => ({ supported: true, priority: 100 }),
+      runAttempt: async () => createAttemptResult("run"),
+    };
+    registerAgentHarness(harness, { ownerPluginId: "codex" });
+
+    await expect(
+      runAgentHarnessSettledTurnFinalization(
+        createAttemptParams(providerRuntimeConfig("codex", "codex")),
+        createAttemptResult("settled"),
+        harness,
+      ),
+    ).rejects.toThrow("Agent harness codex cannot safely finalize a settled tool turn");
+  });
+
   it.each(["codex", "copilot"] as const)(
     "binds the host OpenClaw tool to the %s SDK construction path without leaking authority",
     async (harnessId) => {
@@ -1423,6 +1503,35 @@ describe("selectAgentHarness", () => {
     },
   );
 
+  it("keeps native model run controls compatible with Codex", () => {
+    expect(
+      buildAgentHarnessSupportContext({
+        provider: "openai",
+        modelId: "gpt-5.6-sol",
+        modelProvider: {
+          api: "openai-responses",
+          baseUrl: "https://api.openai.com/v1",
+          requestTransportOverrides: "none",
+        },
+        requestedRuntime: "codex",
+        config: {
+          agents: {
+            defaults: {
+              models: {
+                "openai/gpt-5.6-sol": {
+                  params: { thinking: "xhigh", fastMode: true, fastAutoOnSeconds: 30 },
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+      }).modelProvider,
+    ).toMatchObject({
+      requestTransportOverrides: "none",
+      runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
+    });
+  });
+
   it("rejects explicit Codex when agent request params cannot be reproduced", () => {
     const supports = vi.fn((ctx: Parameters<AgentHarness["supports"]>[0]) =>
       ctx.modelProvider?.requestTransportOverrides === "present"
@@ -2432,6 +2541,45 @@ describe("selectAgentHarness", () => {
     expect(compact).not.toHaveBeenCalled();
   });
 
+  it("lets harness-owned compaction proceed without ambient auth when model lookup fails", async () => {
+    compactAuthMocks.resolveModelAsync.mockRejectedValue(new Error("model lookup unavailable"));
+    const result = { ok: true, compacted: false, reason: "harness result" } as const;
+    const compact = registerTestCompactor({ authBootstrap: "harness", result });
+
+    await expect(
+      maybeCompactAgentHarnessSession(createCompactionParams({ agentHarnessId: "codex" })),
+    ).resolves.toEqual(result);
+    expect(compact).toHaveBeenCalledTimes(1);
+    expect(compact.mock.calls[0]?.[0]).not.toHaveProperty("resolvedApiKey");
+    expect(compact.mock.calls[0]?.[0]).not.toHaveProperty("runtimeModel");
+  });
+
+  it("lets harness-owned compaction proceed without ambient auth when auth preparation fails", async () => {
+    // Model resolution must succeed so this test exercises the auth-preparation
+    // catch, not the model-resolution fallback covered above.
+    compactAuthMocks.resolveModelAsync.mockResolvedValue({
+      model: {
+        id: "proxy-model",
+        provider: "local-proxy",
+        api: "openai-responses",
+        baseUrl: "https://proxy.example/v1",
+      },
+    });
+    compactAuthMocks.prepareAgentRuntimeAuth.mockImplementationOnce(() => {
+      throw new Error("auth preparation unavailable");
+    });
+    const result = { ok: true, compacted: false, reason: "harness result" } as const;
+    const compact = registerTestCompactor({ authBootstrap: "harness", result });
+
+    await expect(
+      maybeCompactAgentHarnessSession(createCompactionParams({ agentHarnessId: "codex" })),
+    ).resolves.toEqual(result);
+    expect(compactAuthMocks.prepareAgentRuntimeAuth).toHaveBeenCalled();
+    expect(compact).toHaveBeenCalledTimes(1);
+    expect(compact.mock.calls[0]?.[0]).not.toHaveProperty("resolvedApiKey");
+    expect(compact.mock.calls[0]?.[0]).not.toHaveProperty("runtimeModel");
+  });
+
   it("passes runtime model and default credentials to compaction when auth profile id is absent", async () => {
     compactAuthMocks.resolveModelAsync.mockResolvedValue({
       model: {
@@ -2637,27 +2785,6 @@ describe("selectAgentHarness", () => {
       ).toBe("openclaw");
     },
   );
-
-  it("still throws MissingAgentHarnessError for an explicit configured cliBackends id", () => {
-    const config = {
-      agents: {
-        defaults: {
-          cliBackends: {
-            "my-custom-cli": { command: "echo" },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    expect(() =>
-      selectAgentHarness({
-        provider: "anthropic",
-        modelId: "sonnet-4.6",
-        agentHarnessRuntimeOverride: "my-custom-cli",
-        config,
-      }),
-    ).toThrow('Requested agent harness "my-custom-cli" is not registered');
-  });
 
   it("still throws MissingAgentHarnessError for an explicit non-CLI unknown runtime", () => {
     expect(() =>

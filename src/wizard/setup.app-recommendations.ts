@@ -29,6 +29,7 @@ import {
   getSetupAppRecommendations,
   type SetupAppRecommendationMatch,
   type SetupAppRecommendationsResult,
+  type SetupAppScanPhase,
 } from "../system-agent/setup-app-recommendations.js";
 import { t } from "./i18n/index.js";
 import type { WizardPrompter } from "./prompts.js";
@@ -36,7 +37,9 @@ import type { WizardPrompter } from "./prompts.js";
 const SKIP_VALUE = "__skip__";
 
 type SetupAppRecommendationDeps = {
-  recommend?: () => Promise<SetupAppRecommendationsResult>;
+  recommend?: (
+    onPhase?: (phase: SetupAppScanPhase) => void,
+  ) => Promise<SetupAppRecommendationsResult>;
   ensurePlugin?: typeof ensureOnboardingPluginInstalled;
   installSkill?: typeof installSkillFromClawHub;
   isSkillInstalled?: (params: { workspaceDir: string; skillRef: string }) => Promise<boolean>;
@@ -126,8 +129,8 @@ export async function setupAppRecommendations(params: {
   const platform = params.platform ?? process.platform;
   // Product decision: default-on "magical" scan with a kill switch, not
   // consent-first. App labels/bundle ids go to the user's configured model and
-  // ClawHub search; the scanning progress line and the results note disclose
-  // this, and wizard.appRecommendations=false disables the step entirely.
+  // ClawHub search; a static disclosure stays in scrollback before app names
+  // leave the machine, while results repeat it. The config flag disables the step.
   if (
     params.config.wizard?.appRecommendations === false ||
     platform !== "darwin" ||
@@ -189,14 +192,35 @@ export async function setupAppRecommendations(params: {
     appLabels = [...new Set(stored.matches.map((match) => match.appLabel))];
     recordResult = commitStoredResult;
   } else {
+    const scanDisclosure = t("wizard.appRecommendations.scanDisclosure");
+    // Gateway wizards must show the disclosure on the client before app names
+    // leave the machine; CLI plain output preserves the same ordering locally.
+    if (params.prompter.plain) {
+      await params.prompter.plain(scanDisclosure);
+    } else {
+      params.runtime.log(scanDisclosure);
+    }
     const progress = params.prompter.progress(t("wizard.appRecommendations.scanning"));
+    const scanPhaseMessage = (phase: SetupAppScanPhase): string => {
+      if (phase.kind === "candidates") {
+        return t(
+          phase.appCount === 1
+            ? "wizard.appRecommendations.scanningCandidate"
+            : "wizard.appRecommendations.scanningCandidates",
+          { count: phase.appCount, sample: phase.sampleLabels.join(", ") },
+        );
+      }
+      return t("wizard.appRecommendations.scanningMatch");
+    };
+    const onPhase = (phase: SetupAppScanPhase) => progress.update(scanPhaseMessage(phase));
     let result: SetupAppRecommendationsResult;
     try {
       result = params.deps?.recommend
-        ? await params.deps.recommend()
+        ? await params.deps.recommend(onPhase)
         : await getSetupAppRecommendations({
             inventorySource: async () => await scanInstalledApps({ platform }),
             runtime: params.runtime,
+            onPhase,
           });
     } catch (error) {
       progress.stop();

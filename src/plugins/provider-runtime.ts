@@ -41,6 +41,7 @@ import {
   wrapProviderStreamFn,
 } from "./provider-hook-runtime.js";
 import { resolveBundledProviderPolicySurface } from "./provider-public-artifacts.js";
+import { matchesProviderPluginRef } from "./provider-registry-shared.js";
 import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
 import type { ProviderThinkingProfile } from "./provider-thinking.types.js";
 import {
@@ -51,6 +52,7 @@ import {
   resolveUsageHookProviderPluginContracts,
 } from "./providers.js";
 import { getActivePluginRegistryWorkspaceDirFromState } from "./runtime-state.js";
+import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
 import { resolveRuntimeTextTransforms } from "./text-transforms.runtime.js";
 import type {
   ProviderAuthDoctorHintContext,
@@ -93,19 +95,6 @@ import type {
   ProviderValidateReplayTurnsContext,
   PluginTextTransforms,
 } from "./types.js";
-
-function matchesProviderPluginRef(provider: ProviderPlugin, providerId: string): boolean {
-  const normalized = normalizeProviderId(providerId);
-  if (!normalized) {
-    return false;
-  }
-  if (normalizeProviderId(provider.id) === normalized) {
-    return true;
-  }
-  return [...(provider.aliases ?? []), ...(provider.hookAliases ?? [])].some(
-    (alias) => normalizeProviderId(alias) === normalized,
-  );
-}
 
 function resolveProviderHookRefs(
   provider: string,
@@ -167,11 +156,8 @@ export {
   wrapProviderStreamFn,
 };
 
-function resetExternalAuthFallbackWarningCacheForTest(): void {}
-
 export const testing = {
   clearProviderRuntimePluginCacheForTest,
-  resetExternalAuthFallbackWarningCacheForTest,
 } as const;
 
 function resolveProviderPluginsForCatalogHooks(params: {
@@ -700,20 +686,31 @@ export async function resolveProviderUsageSnapshotWithPlugin(params: {
     return undefined;
   }
 
-  let harness = getRegisteredAgentHarness(params.provider)?.harness;
+  const harness = getRegisteredAgentHarness(params.provider)?.harness;
   if (!harness) {
     const workspaceDir =
       params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState() ?? process.cwd();
+    const { loadAgentRuntimePluginRegistryHandle } = await import("../agents/runtime-plugins.js");
     const { ensureSelectedAgentHarnessPlugin } =
       await import("../agents/harness/runtime-plugin.js");
-    await ensureSelectedAgentHarnessPlugin({
-      provider: params.context.provider,
-      modelId: "",
+    const pluginRegistry = loadAgentRuntimePluginRegistryHandle({
       config: params.config,
-      agentHarnessId: params.provider,
       workspaceDir,
+      selections: [{ provider: params.context.provider, modelId: "", runtime: params.provider }],
     });
-    harness = getRegisteredAgentHarness(params.provider)?.harness;
+    return await withPluginRuntimeRegistryScope(pluginRegistry, async () => {
+      await ensureSelectedAgentHarnessPlugin({
+        provider: params.context.provider,
+        modelId: "",
+        config: params.config,
+        agentHarnessId: params.provider,
+        workspaceDir,
+        pluginRegistry,
+      });
+      return await getRegisteredAgentHarness(params.provider)?.harness.fetchUsageSnapshot?.(
+        params.context,
+      );
+    });
   }
   return await harness?.fetchUsageSnapshot?.(params.context);
 }

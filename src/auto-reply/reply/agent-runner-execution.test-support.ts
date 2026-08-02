@@ -2,6 +2,8 @@
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import { AUTH_INVALID_TOKEN_USER_TEXT } from "../../agents/embedded-agent-helpers/errors.js";
+import type { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
+import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import type { ReplyOptionsWithHeartbeatRunScope } from "../../infra/heartbeat-run-scope.js";
 import {
@@ -15,6 +17,11 @@ import type { FollowupRun } from "./queue.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import type { TypingSignaler } from "./typing-mode.js";
 
+type RunEntryParams = Parameters<typeof runEmbeddedAgentEntry<EmbeddedAgentRunResult>>[0];
+type RunEntryResult = Awaited<ReturnType<typeof runEmbeddedAgentEntry<EmbeddedAgentRunResult>>>;
+type RunEntryDelegate = (params: RunEntryParams) => Promise<RunEntryResult>;
+type RunCliAgent = typeof import("../../agents/cli-runner.js").runCliAgent;
+
 export const PROVIDER_AUTHENTICATION_ERROR_USER_MESSAGE = `⚠️ ${AUTH_INVALID_TOKEN_USER_TEXT}`;
 export const PROVIDER_RATE_LIMIT_OR_QUOTA_ERROR_USER_MESSAGE =
   "⚠️ The model provider returned HTTP 429 before replying. This can mean rate limiting, exhausted quota, or an account balance/billing issue. Check the selected provider/model, API key, and provider billing/quota dashboard, then try again.";
@@ -23,7 +30,9 @@ export const PROVIDER_INTERNAL_ERROR_USER_MESSAGE =
 
 const state = vi.hoisted(() => ({
   runEmbeddedAgentMock: vi.fn(),
+  runEmbeddedAgentEntryMock: vi.fn(),
   runCliAgentMock: vi.fn(),
+  runCliAgentActual: undefined as RunCliAgent | undefined,
   runWithModelFallbackMock: vi.fn(),
   isCliProviderMock: vi.fn((_: unknown) => false),
   isInternalMessageChannelMock: vi.fn((_: unknown) => false),
@@ -55,16 +64,37 @@ vi.mock("../../agents/embedded-agent.js", () => ({
   runEmbeddedAgent: (params: unknown) => state.runEmbeddedAgentMock(params),
 }));
 
+vi.mock("../../agents/embedded-agent-runner/run-entry.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../../agents/embedded-agent-runner/run-entry.js")
+  >("../../agents/embedded-agent-runner/run-entry.js");
+  return {
+    ...actual,
+    runEmbeddedAgentEntry: (params: RunEntryParams) =>
+      state.runEmbeddedAgentEntryMock(params, actual.runEmbeddedAgentEntry as RunEntryDelegate),
+  };
+});
+
 vi.mock("../../agents/agent-bundle-mcp-manager-api.js", () => ({
   peekSessionMcpRuntime: (params: unknown) => state.peekSessionMcpRuntimeMock(params),
 }));
 
-vi.mock("../../agents/cli-runner.js", () => ({
-  runCliAgent: (params: unknown) => state.runCliAgentMock(params),
+vi.mock("../../agents/cli-runner.js", async () => {
+  const actual = await vi.importActual<typeof import("../../agents/cli-runner.js")>(
+    "../../agents/cli-runner.js",
+  );
+  state.runCliAgentActual = actual.runCliAgent;
+  return {
+    ...actual,
+    runCliAgent: (params: unknown) => state.runCliAgentMock(params),
+  };
+});
+
+vi.mock("../../agents/model-fallback-runner.js", () => ({
+  runWithModelFallback: (params: unknown) => state.runWithModelFallbackMock(params),
 }));
 
-vi.mock("../../agents/model-fallback.js", () => ({
-  runWithModelFallback: (params: unknown) => state.runWithModelFallbackMock(params),
+vi.mock("../../agents/model-fallback-attempt.js", () => ({
   isFallbackSummaryError: (err: unknown) =>
     err instanceof Error &&
     err.name === "FallbackSummaryError" &&
@@ -81,7 +111,10 @@ vi.mock("../../agents/model-selection.js", async () => {
   };
 });
 
-vi.mock("../../agents/bootstrap-budget.js", () => ({
+vi.mock("../../agents/bootstrap-budget.js", async () => ({
+  ...(await vi.importActual<typeof import("../../agents/bootstrap-budget.js")>(
+    "../../agents/bootstrap-budget.js",
+  )),
   resolveBootstrapWarningSignaturesSeen: () => [],
 }));
 
@@ -90,6 +123,7 @@ vi.mock("../../agents/embedded-agent-helpers.js", async () => {
     "../../agents/embedded-agent-helpers.js",
   );
   return {
+    ...actual,
     BILLING_ERROR_USER_MESSAGE: "billing",
     formatBillingErrorMessage: actual.formatBillingErrorMessage,
     formatRateLimitOrOverloadedErrorCopy: (message: string) => {
@@ -123,7 +157,8 @@ vi.mock("../../config/sessions.js", () => ({
   updateSessionStore: state.updateSessionStoreMock,
 }));
 
-vi.mock("../../globals.js", () => ({
+vi.mock("../../globals.js", async () => ({
+  ...(await vi.importActual<typeof import("../../globals.js")>("../../globals.js")),
   logVerbose: vi.fn(),
 }));
 
@@ -148,7 +183,10 @@ vi.mock("../../runtime.js", () => ({
   },
 }));
 
-vi.mock("../../utils/message-channel.js", () => ({
+vi.mock("../../utils/message-channel.js", async () => ({
+  ...(await vi.importActual<typeof import("../../utils/message-channel.js")>(
+    "../../utils/message-channel.js",
+  )),
   isMarkdownCapableMessageChannel: () => true,
   resolveMessageChannel: () => "whatsapp",
   isInternalMessageChannel: (value: unknown) => state.isInternalMessageChannelMock(value),
@@ -235,8 +273,32 @@ vi.mock("./reply-media-paths.runtime.js", () => ({
   createReplyMediaPathNormalizer: () => (payload: unknown) => payload,
 }));
 
-export async function getRunAgentTurnWithFallback() {
-  return (await import("./agent-runner-execution.js")).runAgentTurnWithFallback;
+export async function getExecuteAgentTurnForTest() {
+  const execute = (await import("./agent-runner-execution.js")).executeAgentTurn;
+  return async (...args: Parameters<typeof execute>) => {
+    const execution = await execute(...args);
+    const outcome = execution.outcome;
+    if (outcome.kind === "settled") {
+      return {
+        kind: "success" as const,
+        runId: execution.runId,
+        runResult: outcome.result,
+        fallbackProvider: outcome.resolved.provider,
+        fallbackModel: outcome.resolved.model,
+        ...(outcome.fallback.exhausted ? { fallbackExhausted: true as const } : {}),
+        fallbackAttempts: outcome.fallback.attempts,
+        didLogHeartbeatStrip: outcome.didLogHeartbeatStrip,
+        autoCompactionCount: outcome.autoCompactionCount,
+        directlySentBlockKeys: outcome.directlySentBlockKeys,
+        directlySentBlockPayloads: outcome.directlySentBlockPayloads,
+        terminalFailurePayload: outcome.terminalFailurePayload,
+      };
+    }
+    if (outcome.kind === "rejected") {
+      return { kind: "final" as const, payload: outcome.payload };
+    }
+    return { kind: "final" as const, payload: { text: "NO_REPLY" } };
+  };
 }
 
 export type FallbackRunnerParams = {
@@ -283,6 +345,7 @@ export type EmbeddedAgentParams = {
     toolCallId?: string;
     itemId?: string;
   }) => void;
+  onLaneWait?: (info: { waitMs: number; queuedAhead: number; waiting?: boolean }) => void;
   onBlockReply?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
   onPartialReply?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
   onAssistantMessageStart?: () => Promise<void> | void;
@@ -388,6 +451,7 @@ export function createMockReplyOperation(options?: { abortSignal?: AbortSignal }
       key: "main",
       sessionId: "session",
       abortSignal: options?.abortSignal ?? new AbortController().signal,
+      staleExpiryReason: undefined,
       resetTriggered: false,
       terminalRecovery: false,
       acceptedSteeredInboundAudio: false,
@@ -400,6 +464,8 @@ export function createMockReplyOperation(options?: { abortSignal?: AbortSignal }
       setPhase: vi.fn(),
       markWaitingForDeferredMaintenance: vi.fn(),
       markDeferredMaintenanceWaitEnded: vi.fn(),
+      markWaitingForGlobalLane: vi.fn(),
+      markGlobalLaneWaitEnded: vi.fn(),
       updateSessionId: updateSessionIdMock,
       updateSessionKey: vi.fn(),
       attachBackend: vi.fn(),
@@ -553,6 +619,9 @@ export function setupAgentRunnerExecutionTestState() {
   beforeEach(() => {
     vi.useRealTimers();
     state.runEmbeddedAgentMock.mockReset();
+    state.runEmbeddedAgentEntryMock
+      .mockReset()
+      .mockImplementation((params: RunEntryParams, delegate: RunEntryDelegate) => delegate(params));
     state.runCliAgentMock.mockReset();
     state.runWithModelFallbackMock.mockReset();
     state.isCliProviderMock.mockReset();

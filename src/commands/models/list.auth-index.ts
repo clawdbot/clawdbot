@@ -8,12 +8,12 @@ import {
 import type { createOpenAIModelRoutesResolver } from "../../agents/openai-model-routes.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
-import { loadPluginRegistrySnapshotWithMetadata } from "../../plugins/plugin-registry.js";
 
 export type ModelListAuthRef = ModelAuthAvailabilityRef;
 export type ModelListAuthEvaluation = ModelAuthAvailabilityEvaluation;
 
 export type ModelListAuthIndex = {
+  providerDiscoveryProviderIds?: readonly string[];
   evaluateModelAuth(provider: string, ref?: ModelListAuthRef): ModelListAuthEvaluation;
 };
 
@@ -24,30 +24,22 @@ type CreateModelListAuthIndexParams = {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   syntheticAuthProviderRefs?: readonly string[];
-  metadataSnapshot?: PluginMetadataSnapshot;
+  metadataSnapshot: PluginMetadataSnapshot;
   externalCliProviderIds?: readonly string[];
   routeResolverFactory?: typeof createOpenAIModelRoutesResolver;
 };
 
 function listValidatedSyntheticAuthProviderRefs(params: {
-  cfg: OpenClawConfig;
-  workspaceDir?: string;
-  env: NodeJS.ProcessEnv;
-  metadataSnapshot?: PluginMetadataSnapshot;
+  metadataSnapshot: PluginMetadataSnapshot;
 }): readonly string[] {
-  if (params.metadataSnapshot && (params.metadataSnapshot.registryDiagnostics?.length ?? 0) > 0) {
+  if (
+    params.metadataSnapshot.registryDiagnostics.length > 0 ||
+    (params.metadataSnapshot.registrySource !== "persisted" &&
+      params.metadataSnapshot.registrySource !== "provided")
+  ) {
     return [];
   }
-  const result = loadPluginRegistrySnapshotWithMetadata({
-    config: params.cfg,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-    index: params.metadataSnapshot?.index,
-  });
-  if (result.source !== "persisted" && result.source !== "provided") {
-    return [];
-  }
-  return result.snapshot.plugins
+  return params.metadataSnapshot.index.plugins
     .filter((plugin) => plugin.enabled)
     .flatMap((plugin) => plugin.syntheticAuthRefs ?? []);
 }
@@ -69,13 +61,11 @@ export function createModelListAuthIndex(
     syntheticAuthProviderRefs:
       params.syntheticAuthProviderRefs ??
       listValidatedSyntheticAuthProviderRefs({
-        cfg: params.cfg,
-        workspaceDir: params.workspaceDir,
-        env,
         metadataSnapshot: params.metadataSnapshot,
       }),
   });
   return {
+    providerDiscoveryProviderIds: resolver.providerDiscoveryProviderIds,
     evaluateModelAuth: (provider, ref) => resolver.evaluateModelAuth(provider, ref),
   };
 }

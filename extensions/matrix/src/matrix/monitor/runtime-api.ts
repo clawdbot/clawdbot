@@ -19,7 +19,7 @@ export {
   createTypingCallbacks,
 } from "openclaw/plugin-sdk/channel-outbound";
 export { formatLocationText, toLocationContext } from "openclaw/plugin-sdk/channel-inbound";
-export { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/agent-media-payload";
+export { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-local-roots";
 export { logInboundDrop } from "openclaw/plugin-sdk/channel-inbound";
 export { logTypingFailure } from "openclaw/plugin-sdk/channel-outbound";
 export { buildChannelKeyCandidates } from "openclaw/plugin-sdk/channel-targets";

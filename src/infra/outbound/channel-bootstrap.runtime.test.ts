@@ -4,21 +4,27 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
-  pinActivePluginChannelRegistry,
+  getActivePluginRegistry,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../../plugins/runtime.js";
 
 const loaderMocks = vi.hoisted(() => ({
-  resolveRuntimePluginRegistry: vi.fn(),
+  loadPluginRegistryHandle: vi.fn(),
+  resolveDiscoverableScopedChannelPluginIds: vi.fn(() => ["discord"]),
+}));
+
+vi.mock("../../plugins/channel-plugin-ids.js", () => ({
+  resolveDiscoverableScopedChannelPluginIds: loaderMocks.resolveDiscoverableScopedChannelPluginIds,
 }));
 
 vi.mock("../../plugins/loader.js", () => ({
-  resolveRuntimePluginRegistry: loaderMocks.resolveRuntimePluginRegistry,
+  loadPluginRegistryHandle: loaderMocks.loadPluginRegistryHandle,
 }));
 
 const { bootstrapOutboundChannelPlugin, resetOutboundChannelBootstrapStateForTests } =
   await import("./channel-bootstrap.runtime.js");
+const { resolveOutboundDurableFinalDeliverySupport } = await import("./deliver-channel.js");
 
 const discordConfig = {
   channels: {
@@ -32,7 +38,7 @@ const updatedDiscordConfig = {
   },
 } satisfies OpenClawConfig;
 
-function pinDiscordSetupShell(): void {
+function installDiscordSetupShell(): void {
   const registry = createEmptyPluginRegistry();
   registry.channels = [
     {
@@ -42,25 +48,25 @@ function pinDiscordSetupShell(): void {
     },
   ] as never;
   setActivePluginRegistry(registry);
-  pinActivePluginChannelRegistry(registry);
 }
 
 describe("bootstrapOutboundChannelPlugin", () => {
   afterEach(() => {
-    loaderMocks.resolveRuntimePluginRegistry.mockReset();
+    loaderMocks.loadPluginRegistryHandle.mockReset();
+    loaderMocks.resolveDiscoverableScopedChannelPluginIds.mockClear();
     resetOutboundChannelBootstrapStateForTests();
     resetPluginRuntimeStateForTest();
   });
 
   it("bootstraps when the selected channel registry has only a setup shell", () => {
-    pinDiscordSetupShell();
+    installDiscordSetupShell();
 
     bootstrapOutboundChannelPlugin({
       channel: "discord",
       cfg: discordConfig,
     });
 
-    expect(loaderMocks.resolveRuntimePluginRegistry).toHaveBeenCalledTimes(1);
+    expect(loaderMocks.loadPluginRegistryHandle).toHaveBeenCalledTimes(1);
   });
 
   it("skips bootstrap when the selected channel entry can already send", () => {
@@ -77,27 +83,20 @@ describe("bootstrapOutboundChannelPlugin", () => {
       },
     ] as never;
     setActivePluginRegistry(registry);
-    pinActivePluginChannelRegistry(registry);
 
     bootstrapOutboundChannelPlugin({
       channel: "discord",
       cfg: discordConfig,
     });
 
-    expect(loaderMocks.resolveRuntimePluginRegistry).not.toHaveBeenCalled();
+    expect(loaderMocks.loadPluginRegistryHandle).not.toHaveBeenCalled();
   });
 
-  it("skips bootstrap when the active replacement registry can send for a pinned setup shell", () => {
-    const setup = createEmptyPluginRegistry();
-    setup.channels = [
-      {
-        pluginId: "discord",
-        plugin: { id: "discord", meta: {} },
-        source: "setup",
-      },
-    ] as never;
-    const runtime = createEmptyPluginRegistry();
-    runtime.channels = [
+  it("returns a scoped handle without replacing the process root", () => {
+    installDiscordSetupShell();
+    const root = getActivePluginRegistry();
+    const handle = createEmptyPluginRegistry();
+    handle.channels = [
       {
         pluginId: "discord",
         plugin: {
@@ -108,99 +107,85 @@ describe("bootstrapOutboundChannelPlugin", () => {
         source: "runtime",
       },
     ] as never;
-    setActivePluginRegistry(setup);
-    pinActivePluginChannelRegistry(setup);
-    setActivePluginRegistry(runtime);
+    loaderMocks.loadPluginRegistryHandle.mockReturnValue(handle);
 
-    bootstrapOutboundChannelPlugin({
-      channel: "discord",
-      cfg: discordConfig,
-    });
-
-    expect(loaderMocks.resolveRuntimePluginRegistry).not.toHaveBeenCalled();
+    expect(bootstrapOutboundChannelPlugin({ channel: "discord", cfg: discordConfig })).toBe(handle);
+    expect(getActivePluginRegistry()).toBe(root);
+    expect(loaderMocks.loadPluginRegistryHandle).toHaveBeenCalledWith(
+      expect.objectContaining({ onlyPluginIds: ["discord"] }),
+    );
   });
 
-  it("skips bootstrap when the active replacement registry has a message send surface", () => {
-    const setup = createEmptyPluginRegistry();
-    setup.channels = [
-      {
-        pluginId: "discord",
-        plugin: { id: "discord", meta: {} },
-        source: "setup",
-      },
-    ] as never;
-    const runtime = createEmptyPluginRegistry();
-    runtime.channels = [
+  it("resolves durable message capabilities inside the scoped handle", async () => {
+    installDiscordSetupShell();
+    const handle = createEmptyPluginRegistry();
+    handle.channels = [
       {
         pluginId: "discord",
         plugin: {
           id: "discord",
           meta: {},
-          message: { send: { text: async () => ({ messageId: "1" }) } },
+          message: {
+            durableFinal: { capabilities: { text: true, silent: true } },
+            send: { text: async () => ({ messageId: "1" }) },
+          },
         },
         source: "runtime",
       },
     ] as never;
-    setActivePluginRegistry(setup);
-    pinActivePluginChannelRegistry(setup);
-    setActivePluginRegistry(runtime);
+    loaderMocks.loadPluginRegistryHandle.mockReturnValue(handle);
 
-    bootstrapOutboundChannelPlugin({
-      channel: "discord",
-      cfg: discordConfig,
-    });
-
-    expect(loaderMocks.resolveRuntimePluginRegistry).not.toHaveBeenCalled();
+    await expect(
+      resolveOutboundDurableFinalDeliverySupport({
+        channel: "discord",
+        cfg: discordConfig,
+        requirements: { text: true, silent: true },
+      }),
+    ).resolves.toEqual({ ok: true, automaticUnknownSendReconciliation: false });
   });
 
-  it("does not retry an unusable replacement registry in the same generation", () => {
-    pinDiscordSetupShell();
-    loaderMocks.resolveRuntimePluginRegistry.mockImplementation(() => {
-      setActivePluginRegistry(createEmptyPluginRegistry());
-    });
+  it("does not retry an unusable handle in the same generation", () => {
+    installDiscordSetupShell();
+    loaderMocks.loadPluginRegistryHandle.mockReturnValue(createEmptyPluginRegistry());
 
-    bootstrapOutboundChannelPlugin({
-      channel: "discord",
-      cfg: discordConfig,
-    });
-    bootstrapOutboundChannelPlugin({
-      channel: "discord",
-      cfg: discordConfig,
-    });
+    expect(
+      bootstrapOutboundChannelPlugin({ channel: "discord", cfg: discordConfig }),
+    ).toBeUndefined();
+    expect(
+      bootstrapOutboundChannelPlugin({ channel: "discord", cfg: discordConfig }),
+    ).toBeUndefined();
 
-    expect(loaderMocks.resolveRuntimePluginRegistry).toHaveBeenCalledTimes(1);
+    expect(loaderMocks.loadPluginRegistryHandle).toHaveBeenCalledTimes(1);
   });
 
   it("does not retry a thrown bootstrap in the same generation", () => {
-    pinDiscordSetupShell();
-    loaderMocks.resolveRuntimePluginRegistry.mockImplementation(() => {
+    installDiscordSetupShell();
+    loaderMocks.loadPluginRegistryHandle.mockImplementation(() => {
       throw new Error("load failed");
     });
 
     bootstrapOutboundChannelPlugin({ channel: "discord", cfg: discordConfig });
     bootstrapOutboundChannelPlugin({ channel: "discord", cfg: discordConfig });
 
-    expect(loaderMocks.resolveRuntimePluginRegistry).toHaveBeenCalledTimes(1);
+    expect(loaderMocks.loadPluginRegistryHandle).toHaveBeenCalledTimes(1);
   });
 
   it("retries after the runtime config changes", () => {
-    pinDiscordSetupShell();
+    installDiscordSetupShell();
     bootstrapOutboundChannelPlugin({ channel: "discord", cfg: discordConfig });
     bootstrapOutboundChannelPlugin({ channel: "discord", cfg: updatedDiscordConfig });
 
-    expect(loaderMocks.resolveRuntimePluginRegistry).toHaveBeenCalledTimes(2);
+    expect(loaderMocks.loadPluginRegistryHandle).toHaveBeenCalledTimes(2);
   });
 
   it("retains failed attempts when distinct runtime configs interleave", () => {
-    pinDiscordSetupShell();
-    loaderMocks.resolveRuntimePluginRegistry.mockImplementation(() => {
-      setActivePluginRegistry(createEmptyPluginRegistry());
-    });
+    installDiscordSetupShell();
+    loaderMocks.loadPluginRegistryHandle.mockReturnValue(createEmptyPluginRegistry());
 
     bootstrapOutboundChannelPlugin({ channel: "discord", cfg: discordConfig });
     bootstrapOutboundChannelPlugin({ channel: "discord", cfg: updatedDiscordConfig });
     bootstrapOutboundChannelPlugin({ channel: "discord", cfg: discordConfig });
 
-    expect(loaderMocks.resolveRuntimePluginRegistry).toHaveBeenCalledTimes(2);
+    expect(loaderMocks.loadPluginRegistryHandle).toHaveBeenCalledTimes(2);
   });
 });

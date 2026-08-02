@@ -1,6 +1,7 @@
 // Cron service job tests cover job creation, updates, and runtime scheduling.
 import { describe, expect, it } from "vitest";
 import {
+  applyDeclarativeJobSpec,
   applyJobPatch,
   computeJobNextRunAtMs,
   computeJobPreviousRunAtOrBeforeMs,
@@ -13,6 +14,12 @@ import type { CronServiceState } from "./service/state.js";
 import type { CronJob, CronJobPatch } from "./types.js";
 
 const DEFAULT_TOP_OF_HOUR_STAGGER_MS = 5 * 60 * 1000;
+const CREDENTIAL_WEBHOOK_URL = (() => {
+  const url = new URL("https://example.invalid/hook");
+  url.username = "user";
+  url.password = "password";
+  return url.href;
+})();
 
 function expectCronStaggerMs(job: CronJob, expected: number): void {
   expect(job.schedule.kind).toBe("cron");
@@ -272,440 +279,152 @@ describe("applyJobPatch", () => {
     expect(job.delivery?.accountId).toBeUndefined();
   });
 
-  it("persists agentTurn payload.lightContext updates when editing existing jobs", () => {
-    const job = createIsolatedAgentTurnJob("job-light-context", {
-      mode: "announce",
-      channel: "telegram",
-    });
-    job.payload = {
-      kind: "agentTurn",
-      message: "do it",
-      lightContext: true,
-    };
+  it.each([
+    {
+      name: "persists agentTurn payload.lightContext updates when editing existing jobs",
+      id: "job-light-context",
+      initial: { lightContext: true },
+      patch: { lightContext: false },
+      expected: { lightContext: false },
+    },
+    {
+      name: "persists agentTurn payload.fallbacks updates when editing existing jobs",
+      id: "job-fallbacks",
+      initial: { fallbacks: ["openrouter/gpt-4.1-mini"] },
+      patch: { fallbacks: ["anthropic/claude-haiku-3-5", "openai/gpt-5"] },
+      expected: { fallbacks: ["anthropic/claude-haiku-3-5", "openai/gpt-5"] },
+    },
+    {
+      name: "clears agentTurn payload.fallbacks when patch requests null",
+      id: "job-fallbacks-clear",
+      initial: { fallbacks: ["openrouter/gpt-4.1-mini"] },
+      patch: { fallbacks: null },
+      expected: { fallbacks: undefined },
+    },
+    {
+      name: "omits null payload.fallbacks when replacing a non-agent payload",
+      id: "job-fallbacks-kind-switch",
+      replace: true,
+      patch: { fallbacks: null },
+      expected: { fallbacks: undefined },
+    },
+    {
+      name: "persists agentTurn payload.toolsAllow updates when editing existing jobs",
+      id: "job-tools",
+      initial: { toolsAllow: ["exec"] },
+      patch: { toolsAllow: ["read", "write"] },
+      expected: { toolsAllow: ["read", "write"] },
+    },
+    {
+      name: "clears the default toolsAllow flag when editing to an explicit restriction",
+      id: "job-tools-explicit",
+      initial: { toolsAllow: ["exec", "read"], toolsAllowIsDefault: true },
+      patch: { toolsAllow: ["read"], toolsAllowIsDefault: true },
+      expected: { toolsAllow: ["read"], toolsAllowIsDefault: undefined },
+    },
+    {
+      name: "preserves the default toolsAllow flag when a full payload edit keeps the default list",
+      id: "job-tools-default-edit",
+      initial: { toolsAllow: ["exec", "read"], toolsAllowIsDefault: true },
+      patch: { message: "do it later", toolsAllow: ["exec", "read"], toolsAllowIsDefault: true },
+      expected: { message: "do it later", toolsAllow: ["exec", "read"], toolsAllowIsDefault: true },
+    },
+    {
+      name: "preserves the default toolsAllow flag when a self-edit echoes the default list",
+      id: "job-tools-default-echo",
+      initial: { toolsAllow: ["exec", "read"], toolsAllowIsDefault: true },
+      patch: { message: "do it later", toolsAllow: ["exec", "read"] },
+      expected: { message: "do it later", toolsAllow: ["exec", "read"], toolsAllowIsDefault: true },
+    },
+    {
+      name: "stores an explicit wildcard when a patch clears agentTurn payload.toolsAllow",
+      id: "job-tools-clear",
+      initial: { toolsAllow: ["exec", "read"], toolsAllowIsDefault: true },
+      patch: { toolsAllow: null },
+      expected: { toolsAllow: ["*"], toolsAllowIsDefault: undefined },
+    },
+    {
+      name: "clears agentTurn payload.model when patch requests null",
+      id: "job-model-clear",
+      initial: { model: "openai/gpt-5.5" },
+      patch: { model: null },
+      expected: { message: "do it", model: undefined },
+    },
+    {
+      name: "omits null model when patch builds a replacement agentTurn payload",
+      id: "job-model-replace",
+      replaceMain: true,
+      patch: { model: null },
+      expected: { message: "do it", model: undefined },
+    },
+    {
+      name: "persists agentTurn payload.thinking updates when editing existing jobs",
+      id: "job-thinking",
+      initial: { thinking: "high" },
+      patch: { thinking: "low" },
+      expected: { thinking: "low" },
+    },
+    {
+      name: "clears agentTurn payload.thinking when patch requests null",
+      id: "job-thinking-clear",
+      initial: { thinking: "high" },
+      patch: { thinking: null },
+      expected: { message: "do it", thinking: undefined },
+    },
+    {
+      name: "omits null thinking when patch builds a replacement agentTurn payload",
+      id: "job-thinking-replace",
+      replaceMain: true,
+      patch: { thinking: null },
+      expected: { message: "do it", thinking: undefined },
+    },
+    {
+      name: "applies payload.lightContext when replacing payload kind via patch",
+      id: "job-light-context-switch",
+      replace: true,
+      patch: { lightContext: true },
+      expected: { lightContext: true },
+    },
+    {
+      name: "carries payload.fallbacks when replacing payload kind via patch",
+      id: "job-fallbacks-switch",
+      replace: true,
+      patch: { fallbacks: ["anthropic/claude-haiku-3-5", "openai/gpt-5"] },
+      expected: { fallbacks: ["anthropic/claude-haiku-3-5", "openai/gpt-5"] },
+    },
+    {
+      name: "carries payload.toolsAllow when replacing payload kind via patch",
+      id: "job-tools-switch",
+      replace: true,
+      patch: { toolsAllow: ["exec", "read"] },
+      expected: { toolsAllow: ["exec", "read"] },
+    },
+    {
+      name: "carries payload.toolsAllow default flag when replacing payload kind via patch",
+      id: "job-tools-default-switch",
+      replace: true,
+      patch: { toolsAllow: ["exec", "read"], toolsAllowIsDefault: true },
+      expected: { toolsAllow: ["exec", "read"], toolsAllowIsDefault: true },
+    },
+  ])("$name", ({ id, initial, patch, expected, replace, replaceMain }) => {
+    const job = replaceMain
+      ? createMainSystemEventJob(id, { mode: "none" })
+      : createIsolatedAgentTurnJob(id, { mode: "announce", channel: "telegram" });
+    job.payload =
+      replace || replaceMain
+        ? { kind: "systemEvent", text: replaceMain ? "ping" : "tick" }
+        : { kind: "agentTurn", message: "do it", ...initial };
 
     applyJobPatch(job, {
-      payload: {
-        kind: "agentTurn",
-        message: "do it",
-        lightContext: false,
-      },
-    });
+      ...(replaceMain ? { sessionTarget: "isolated" } : {}),
+      payload: { kind: "agentTurn", message: "do it", ...patch },
+    } as CronJobPatch);
 
     expect(job.payload.kind).toBe("agentTurn");
     if (job.payload.kind === "agentTurn") {
-      expect(job.payload.lightContext).toBe(false);
-    }
-  });
-
-  it("persists agentTurn payload.fallbacks updates when editing existing jobs", () => {
-    const job = createIsolatedAgentTurnJob("job-fallbacks", {
-      mode: "announce",
-      channel: "telegram",
-    });
-    job.payload = {
-      kind: "agentTurn",
-      message: "do it",
-      fallbacks: ["openrouter/gpt-4.1-mini"],
-    };
-
-    applyJobPatch(job, {
-      payload: {
-        kind: "agentTurn",
-        message: "do it",
-        fallbacks: ["anthropic/claude-haiku-3-5", "openai/gpt-5"],
-      },
-    });
-
-    expect(job.payload.kind).toBe("agentTurn");
-    if (job.payload.kind === "agentTurn") {
-      expect(job.payload.fallbacks).toEqual(["anthropic/claude-haiku-3-5", "openai/gpt-5"]);
-    }
-  });
-
-  it("clears agentTurn payload.fallbacks when patch requests null", () => {
-    const job = createIsolatedAgentTurnJob("job-fallbacks-clear", {
-      mode: "announce",
-      channel: "telegram",
-    });
-    job.payload = {
-      kind: "agentTurn",
-      message: "do it",
-      fallbacks: ["openrouter/gpt-4.1-mini"],
-    };
-
-    applyJobPatch(job, {
-      payload: {
-        kind: "agentTurn",
-        message: "do it",
-        fallbacks: null,
-      },
-    });
-
-    expect(job.payload.kind).toBe("agentTurn");
-    if (job.payload.kind === "agentTurn") {
-      expect(job.payload.fallbacks).toBeUndefined();
-    }
-  });
-
-  it("omits null payload.fallbacks when replacing a non-agent payload", () => {
-    const job = createIsolatedAgentTurnJob("job-fallbacks-kind-switch", {
-      mode: "announce",
-      channel: "telegram",
-    });
-    job.payload = { kind: "systemEvent", text: "tick" };
-
-    applyJobPatch(job, {
-      payload: {
-        kind: "agentTurn",
-        message: "do it",
-        fallbacks: null,
-      },
-    });
-
-    const payload = job.payload as CronJob["payload"];
-    expect(payload.kind).toBe("agentTurn");
-    if (payload.kind === "agentTurn") {
-      expect(payload.fallbacks).toBeUndefined();
-    }
-  });
-
-  it("persists agentTurn payload.toolsAllow updates when editing existing jobs", () => {
-    const job = createIsolatedAgentTurnJob("job-tools", {
-      mode: "announce",
-      channel: "telegram",
-    });
-    job.payload = {
-      kind: "agentTurn",
-      message: "do it",
-      toolsAllow: ["exec"],
-    };
-
-    applyJobPatch(job, {
-      payload: {
-        kind: "agentTurn",
-        message: "do it",
-        toolsAllow: ["read", "write"],
-      },
-    });
-
-    expect(job.payload.kind).toBe("agentTurn");
-    if (job.payload.kind === "agentTurn") {
-      expect(job.payload.toolsAllow).toEqual(["read", "write"]);
-    }
-  });
-
-  it("clears the default toolsAllow flag when editing to an explicit restriction", () => {
-    const job = createIsolatedAgentTurnJob("job-tools-explicit", {
-      mode: "announce",
-      channel: "telegram",
-    });
-    job.payload = {
-      kind: "agentTurn",
-      message: "do it",
-      toolsAllow: ["exec", "read"],
-      toolsAllowIsDefault: true,
-    };
-
-    applyJobPatch(job, {
-      payload: {
-        kind: "agentTurn",
-        message: "do it",
-        toolsAllow: ["read"],
-        toolsAllowIsDefault: true,
-      },
-    });
-
-    expect(job.payload.kind).toBe("agentTurn");
-    if (job.payload.kind === "agentTurn") {
-      expect(job.payload.toolsAllow).toEqual(["read"]);
-      expect(job.payload.toolsAllowIsDefault).toBeUndefined();
-    }
-  });
-
-  it("preserves the default toolsAllow flag when a full payload edit keeps the default list", () => {
-    const job = createIsolatedAgentTurnJob("job-tools-default-edit", {
-      mode: "announce",
-      channel: "telegram",
-    });
-    job.payload = {
-      kind: "agentTurn",
-      message: "do it",
-      toolsAllow: ["exec", "read"],
-      toolsAllowIsDefault: true,
-    };
-
-    applyJobPatch(job, {
-      payload: {
-        kind: "agentTurn",
-        message: "do it later",
-        toolsAllow: ["exec", "read"],
-        toolsAllowIsDefault: true,
-      },
-    });
-
-    expect(job.payload.kind).toBe("agentTurn");
-    if (job.payload.kind === "agentTurn") {
-      expect(job.payload.message).toBe("do it later");
-      expect(job.payload.toolsAllow).toEqual(["exec", "read"]);
-      expect(job.payload.toolsAllowIsDefault).toBe(true);
-    }
-  });
-
-  it("preserves the default toolsAllow flag when a self-edit echoes the default list", () => {
-    const job = createIsolatedAgentTurnJob("job-tools-default-echo", {
-      mode: "announce",
-      channel: "telegram",
-    });
-    job.payload = {
-      kind: "agentTurn",
-      message: "do it",
-      toolsAllow: ["exec", "read"],
-      toolsAllowIsDefault: true,
-    };
-
-    applyJobPatch(job, {
-      payload: {
-        kind: "agentTurn",
-        message: "do it later",
-        toolsAllow: ["exec", "read"],
-      },
-    });
-
-    expect(job.payload.kind).toBe("agentTurn");
-    if (job.payload.kind === "agentTurn") {
-      expect(job.payload.message).toBe("do it later");
-      expect(job.payload.toolsAllow).toEqual(["exec", "read"]);
-      expect(job.payload.toolsAllowIsDefault).toBe(true);
-    }
-  });
-
-  it("clears agentTurn payload.toolsAllow when patch requests null", () => {
-    const job = createIsolatedAgentTurnJob("job-tools-clear", {
-      mode: "announce",
-      channel: "telegram",
-    });
-    job.payload = {
-      kind: "agentTurn",
-      message: "do it",
-      toolsAllow: ["exec", "read"],
-      toolsAllowIsDefault: true,
-    };
-
-    applyJobPatch(job, {
-      payload: {
-        kind: "agentTurn",
-        message: "do it",
-        toolsAllow: null,
-      },
-    });
-
-    expect(job.payload.kind).toBe("agentTurn");
-    if (job.payload.kind === "agentTurn") {
-      expect(job.payload.toolsAllow).toBeUndefined();
-      expect(job.payload.toolsAllowIsDefault).toBeUndefined();
-    }
-  });
-
-  it("clears agentTurn payload.model when patch requests null", () => {
-    const job = createIsolatedAgentTurnJob("job-model-clear", {
-      mode: "announce",
-      channel: "telegram",
-    });
-    job.payload = {
-      kind: "agentTurn",
-      message: "do it",
-      model: "openai/gpt-5.5",
-    };
-
-    applyJobPatch(job, {
-      payload: {
-        kind: "agentTurn",
-        model: null,
-      },
-    });
-
-    expect(job.payload.kind).toBe("agentTurn");
-    if (job.payload.kind === "agentTurn") {
-      expect(job.payload.message).toBe("do it");
-      expect(job.payload.model).toBeUndefined();
-    }
-  });
-
-  it("omits null model when patch builds a replacement agentTurn payload", () => {
-    const job = createMainSystemEventJob("job-model-replace", { mode: "none" });
-
-    applyJobPatch(job, {
-      sessionTarget: "isolated",
-      payload: {
-        kind: "agentTurn",
-        message: "do it",
-        model: null,
-      },
-    });
-
-    expect(job.payload.kind).toBe("agentTurn");
-    if (job.payload.kind === "agentTurn") {
-      expect(job.payload.message).toBe("do it");
-      expect(job.payload.model).toBeUndefined();
-    }
-  });
-
-  it("persists agentTurn payload.thinking updates when editing existing jobs", () => {
-    const job = createIsolatedAgentTurnJob("job-thinking", {
-      mode: "announce",
-      channel: "telegram",
-    });
-    job.payload = {
-      kind: "agentTurn",
-      message: "do it",
-      thinking: "high",
-    };
-
-    applyJobPatch(job, {
-      payload: {
-        kind: "agentTurn",
-        message: "do it",
-        thinking: "low",
-      },
-    });
-
-    expect(job.payload.kind).toBe("agentTurn");
-    if (job.payload.kind === "agentTurn") {
-      expect(job.payload.thinking).toBe("low");
-    }
-  });
-
-  it("clears agentTurn payload.thinking when patch requests null", () => {
-    const job = createIsolatedAgentTurnJob("job-thinking-clear", {
-      mode: "announce",
-      channel: "telegram",
-    });
-    job.payload = {
-      kind: "agentTurn",
-      message: "do it",
-      thinking: "high",
-    };
-
-    applyJobPatch(job, {
-      payload: {
-        kind: "agentTurn",
-        thinking: null,
-      },
-    });
-
-    expect(job.payload.kind).toBe("agentTurn");
-    if (job.payload.kind === "agentTurn") {
-      expect(job.payload.message).toBe("do it");
-      expect(job.payload.thinking).toBeUndefined();
-    }
-  });
-
-  it("omits null thinking when patch builds a replacement agentTurn payload", () => {
-    const job = createMainSystemEventJob("job-thinking-replace", { mode: "none" });
-
-    applyJobPatch(job, {
-      sessionTarget: "isolated",
-      payload: {
-        kind: "agentTurn",
-        message: "do it",
-        thinking: null,
-      },
-    });
-
-    expect(job.payload.kind).toBe("agentTurn");
-    if (job.payload.kind === "agentTurn") {
-      expect(job.payload.message).toBe("do it");
-      expect(job.payload.thinking).toBeUndefined();
-    }
-  });
-
-  it("applies payload.lightContext when replacing payload kind via patch", () => {
-    const job = createIsolatedAgentTurnJob("job-light-context-switch", {
-      mode: "announce",
-      channel: "telegram",
-    });
-    job.payload = { kind: "systemEvent", text: "ping" };
-
-    applyJobPatch(job, {
-      payload: {
-        kind: "agentTurn",
-        message: "do it",
-        lightContext: true,
-      },
-    });
-
-    const payload = job.payload as CronJob["payload"];
-    expect(payload.kind).toBe("agentTurn");
-    if (payload.kind === "agentTurn") {
-      expect(payload.lightContext).toBe(true);
-    }
-  });
-
-  it("carries payload.fallbacks when replacing payload kind via patch", () => {
-    const job = createIsolatedAgentTurnJob("job-fallbacks-switch", {
-      mode: "announce",
-      channel: "telegram",
-    });
-    job.payload = { kind: "systemEvent", text: "ping" };
-
-    applyJobPatch(job, {
-      payload: {
-        kind: "agentTurn",
-        message: "do it",
-        fallbacks: ["anthropic/claude-haiku-3-5", "openai/gpt-5"],
-      },
-    });
-
-    const payload = job.payload as CronJob["payload"];
-    expect(payload.kind).toBe("agentTurn");
-    if (payload.kind === "agentTurn") {
-      expect(payload.fallbacks).toEqual(["anthropic/claude-haiku-3-5", "openai/gpt-5"]);
-    }
-  });
-
-  it("carries payload.toolsAllow when replacing payload kind via patch", () => {
-    const job = createIsolatedAgentTurnJob("job-tools-switch", {
-      mode: "announce",
-      channel: "telegram",
-    });
-    job.payload = { kind: "systemEvent", text: "ping" };
-
-    applyJobPatch(job, {
-      payload: {
-        kind: "agentTurn",
-        message: "do it",
-        toolsAllow: ["exec", "read"],
-      },
-    });
-
-    const payload = job.payload as CronJob["payload"];
-    expect(payload.kind).toBe("agentTurn");
-    if (payload.kind === "agentTurn") {
-      expect(payload.toolsAllow).toEqual(["exec", "read"]);
-    }
-  });
-
-  it("carries payload.toolsAllow default flag when replacing payload kind via patch", () => {
-    const job = createIsolatedAgentTurnJob("job-tools-default-switch", {
-      mode: "announce",
-      channel: "telegram",
-    });
-    job.payload = { kind: "systemEvent", text: "ping" };
-
-    applyJobPatch(job, {
-      payload: {
-        kind: "agentTurn",
-        message: "do it",
-        toolsAllow: ["exec", "read"],
-        toolsAllowIsDefault: true,
-      },
-    });
-
-    const payload = job.payload as CronJob["payload"];
-    expect(payload.kind).toBe("agentTurn");
-    if (payload.kind === "agentTurn") {
-      expect(payload.toolsAllow).toEqual(["exec", "read"]);
-      expect(payload.toolsAllowIsDefault).toBe(true);
+      for (const [key, value] of Object.entries(expected)) {
+        expect(job.payload[key as keyof typeof job.payload]).toEqual(value);
+      }
     }
   });
 
@@ -724,6 +443,12 @@ describe("applyJobPatch", () => {
     {
       name: "invalid URL",
       patch: { delivery: { mode: "webhook", to: "not-a-url" } } satisfies CronJobPatch,
+    },
+    {
+      name: "URL-embedded credentials",
+      patch: {
+        delivery: { mode: "webhook", to: CREDENTIAL_WEBHOOK_URL },
+      } satisfies CronJobPatch,
     },
   ] as const)("rejects invalid webhook delivery target URL: $name", ({ patch }) => {
     const expectedError = "cron webhook delivery requires delivery.to to be a valid http(s) URL";
@@ -832,6 +557,143 @@ function createMockState(
     },
   } as unknown as CronServiceState;
 }
+
+describe("cron tool authority defaults", () => {
+  const now = Date.parse("2026-07-21T12:00:00.000Z");
+
+  it("stores an explicit wildcard for newly created tool-runtime jobs", () => {
+    const agentTurn = createJob(createMockState(now), {
+      name: "agent turn",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "work" },
+    });
+    const triggeredEvent = createJob(createMockState(now, { scriptPayloadsEnabled: true }), {
+      name: "triggered event",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "wake" },
+      trigger: { script: "return true" },
+    });
+
+    expect(agentTurn.payload.toolsAllow).toEqual(["*"]);
+    expect(triggeredEvent.payload.toolsAllow).toEqual(["*"]);
+  });
+
+  it("preserves explicit empty caps and leaves transport-only jobs capless", () => {
+    const noTools = createJob(createMockState(now), {
+      name: "no tools",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "render", toolsAllow: [] },
+    });
+    const transportOnly = createJob(createMockState(now), {
+      name: "transport only",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "wake" },
+    });
+
+    expect(noTools.payload.toolsAllow).toEqual([]);
+    expect(transportOnly.payload.toolsAllow).toBeUndefined();
+  });
+
+  it("preserves legacy and explicit state during declarative convergence", () => {
+    const base = {
+      id: "declared-job",
+      name: "declared job",
+      enabled: true,
+      createdAtMs: now,
+      updatedAtMs: now,
+      schedule: { kind: "every" as const, everyMs: 60_000, anchorMs: now },
+      sessionTarget: "isolated" as const,
+      wakeMode: "now" as const,
+      delivery: { mode: "none" as const },
+      state: {},
+    };
+    const input = {
+      name: "declared job",
+      enabled: true,
+      schedule: { kind: "every" as const, everyMs: 60_000 },
+      sessionTarget: "isolated" as const,
+      wakeMode: "now" as const,
+      payload: { kind: "agentTurn" as const, message: "updated" },
+      delivery: { mode: "none" as const },
+    };
+    const legacy: CronJob = {
+      ...base,
+      payload: { kind: "agentTurn", message: "legacy" },
+    };
+    const explicit: CronJob = {
+      ...base,
+      id: "explicit-job",
+      payload: {
+        kind: "agentTurn",
+        message: "explicit",
+        toolsAllow: ["read", "cron"],
+        toolsAllowIsDefault: true,
+      },
+    };
+
+    applyDeclarativeJobSpec(legacy, input, {
+      enabledExplicit: true,
+      nowMs: now,
+    });
+    applyDeclarativeJobSpec(explicit, input, {
+      enabledExplicit: true,
+      nowMs: now,
+    });
+
+    expect(legacy.payload.toolsAllow).toBeUndefined();
+    expect(explicit.payload).toMatchObject({
+      toolsAllow: ["read", "cron"],
+      toolsAllowIsDefault: true,
+    });
+  });
+
+  it("adopts explicit authority when a declaration becomes tool-bearing", () => {
+    const job: CronJob = {
+      id: "declared-trigger",
+      name: "declared trigger",
+      enabled: true,
+      createdAtMs: now,
+      updatedAtMs: now,
+      schedule: { kind: "every", everyMs: 60_000, anchorMs: now },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "wake" },
+      state: {},
+    };
+
+    applyDeclarativeJobSpec(
+      job,
+      {
+        name: "declared trigger",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "main",
+        wakeMode: "now",
+        payload: { kind: "systemEvent", text: "wake" },
+        trigger: { script: "return true" },
+      },
+      {
+        enabledExplicit: true,
+        nowMs: now,
+        cronConfig: { triggers: { enabled: true } },
+      },
+    );
+
+    expect(job.payload.toolsAllow).toEqual(["*"]);
+  });
+});
 
 describe("script payload validation", () => {
   const now = Date.parse("2026-07-18T12:00:00.000Z");
@@ -1159,7 +1021,7 @@ describe("cron stagger defaults", () => {
     expectCronStaggerMs(job, 0);
   });
 
-  it("preserves existing stagger when editing cron expression without stagger", () => {
+  it("derives a fresh top-of-hour stagger when replacing the cron expression", () => {
     const now = Date.now();
     const job: CronJob = {
       id: "job-keep-stagger",
@@ -1181,8 +1043,57 @@ describe("cron stagger defaults", () => {
     expect(job.schedule.kind).toBe("cron");
     if (job.schedule.kind === "cron") {
       expect(job.schedule.expr).toBe("0 */2 * * *");
-      expect(job.schedule.staggerMs).toBe(120_000);
+      expect(job.schedule.staggerMs).toBe(DEFAULT_TOP_OF_HOUR_STAGGER_MS);
     }
+  });
+
+  it("drops an old stagger when the replacement expression has no stagger default", () => {
+    const now = Date.now();
+    const job: CronJob = {
+      id: "job-drop-stagger",
+      name: "job-drop-stagger",
+      enabled: true,
+      createdAtMs: now,
+      updatedAtMs: now,
+      schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC", staggerMs: 120_000 },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "tick" },
+      state: {},
+    };
+
+    applyJobPatch(job, {
+      schedule: { kind: "cron", expr: "30 9 * * *", tz: "UTC" },
+    });
+
+    expect(job.schedule).toEqual({ kind: "cron", expr: "30 9 * * *", tz: "UTC" });
+  });
+
+  it("preserves explicit staggering for a metadata-only cron schedule edit", () => {
+    const now = Date.now();
+    const job: CronJob = {
+      id: "job-keep-stagger",
+      name: "job-keep-stagger",
+      enabled: true,
+      createdAtMs: now,
+      updatedAtMs: now,
+      schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC", staggerMs: 120_000 },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "tick" },
+      state: {},
+    };
+
+    applyJobPatch(job, {
+      schedule: { kind: "cron", expr: "0 * * * *", tz: "America/Los_Angeles" },
+    });
+
+    expect(job.schedule).toEqual({
+      kind: "cron",
+      expr: "0 * * * *",
+      tz: "America/Los_Angeles",
+      staggerMs: 120_000,
+    });
   });
 
   it("applies default stagger when switching from every to top-of-hour cron", () => {

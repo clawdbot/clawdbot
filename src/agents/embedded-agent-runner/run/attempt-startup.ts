@@ -18,6 +18,7 @@ import {
   applySkillEnvOverrides,
   applySkillEnvOverridesFromSnapshot,
 } from "../../../skills/runtime/env-overrides.js";
+import { resolveCodeModeSkills, type CodeModeSkillReader } from "../../code-mode-skills.js";
 import {
   mapSandboxSkillEntriesForPrompt,
   mapSandboxSkillUsagePaths,
@@ -34,6 +35,15 @@ export function prepareEmbeddedAttemptSkills(params: {
   sandbox: AttemptSetup["sandbox"];
   sessionAgentId: string;
 }) {
+  if (params.attempt.operation === "settled-tool-finalization") {
+    return {
+      restoreSkillEnv: () => {},
+      skillUsagePaths: undefined,
+      skillsPrompt: "",
+      skillsSnapshotForRun: undefined,
+      codeModeSkills: [],
+    };
+  }
   const {
     skillsEligibility,
     skillsPromptWorkspaceDir,
@@ -81,11 +91,33 @@ export function prepareEmbeddedAttemptSkills(params: {
       agentId: params.sessionAgentId,
       eligibility: skillsEligibility,
     });
+    const sandbox = params.sandbox;
+    const sandboxSkillReader: CodeModeSkillReader | undefined = sandbox?.enabled
+      ? async ({ location, signal }) => {
+          const bridge = sandbox.fsBridge;
+          if (!bridge) {
+            throw new Error("Sandbox filesystem bridge is unavailable for skill reads.");
+          }
+          return (
+            await bridge.readFile({
+              filePath: location,
+              cwd: sandbox.containerWorkdir,
+              signal,
+            })
+          ).toString("utf8");
+        }
+      : undefined;
+    const codeModeSkills = resolveCodeModeSkills({
+      skillsPrompt,
+      candidates: skillsSnapshot?.resolvedSkills ?? skillEntries.map((entry) => entry.skill),
+      reader: sandboxSkillReader,
+    });
     return {
       restoreSkillEnv,
       skillUsagePaths,
       skillsPrompt,
       skillsSnapshotForRun: skillsSnapshot,
+      codeModeSkills,
     };
   } catch (error) {
     restoreSkillEnv();

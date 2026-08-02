@@ -67,7 +67,6 @@ export type IMessageAccountConfig = Omit<
      * `messages.inbound.byChannel.imessage` or global
      * `messages.inbound.debounceMs`. Default: `false`.
      */
-    coalesceSameSenderDms?: boolean;
     groups?: Record<
       string,
       {

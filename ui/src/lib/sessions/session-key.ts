@@ -49,6 +49,12 @@ export function parseAgentSessionKey(
   return { agentId, rest };
 }
 
+export function resolveUiSessionNavigationParentKey(
+  row: { parentSessionKey?: string | null; spawnedBy?: string | null } | null | undefined,
+): string | undefined {
+  return normalizeOptionalString(row?.parentSessionKey) ?? normalizeOptionalString(row?.spawnedBy);
+}
+
 function normalizeMainKey(value: string | undefined | null): string {
   return normalizeOptionalLowercaseString(value) ?? DEFAULT_MAIN_KEY;
 }
@@ -224,13 +230,20 @@ function normalizeUiSessionEventKey(
       buildAgentMainSessionKey({ agentId: defaultAgentId, mainKey }),
     ]
       .filter((value): value is string => Boolean(value))
-      .map(normalizeLowercaseStringOrEmpty),
+      .map(normalizeSessionKeyForUiComparison),
   );
-  const normalized = normalizeLowercaseStringOrEmpty(raw);
-  return aliases.has(normalized) ? normalizeLowercaseStringOrEmpty(canonicalMain) : normalized;
+  const normalized = normalizeSessionKeyForUiComparison(raw);
+  return aliases.has(normalized) ? normalizeSessionKeyForUiComparison(canonicalMain) : normalized;
 }
 
-export function areUiSessionKeysEquivalentForHost(
+export function canonicalUiSessionKeyForPersistence(
+  host: Pick<UiSessionDefaultsHost, "agentsList" | "hello">,
+  sessionKey: string | undefined | null,
+): string {
+  return normalizeUiSessionEventKey(host, sessionKey) ?? "";
+}
+
+function areUiSessionKeysEquivalentForHost(
   host: Pick<UiSessionDefaultsHost, "agentsList" | "hello">,
   left: string | undefined | null,
   right: string | undefined | null,

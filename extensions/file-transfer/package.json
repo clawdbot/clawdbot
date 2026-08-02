@@ -5,7 +5,7 @@
   "type": "module",
   "dependencies": {
     "minimatch": "10.2.5",
-    "typebox": "1.3.3"
+    "typebox": "1.3.6"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

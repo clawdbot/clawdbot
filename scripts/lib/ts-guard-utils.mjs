@@ -49,10 +49,14 @@ function isTestLikeTypeScriptFile(filePath, options = {}) {
  * Recursively collects TypeScript files under a file or directory target.
  */
 export async function collectTypeScriptFiles(targetPath, options = {}) {
+  const fileExtensions = options.fileExtensions ?? [".ts"];
   const includeTests = options.includeTests ?? false;
   const extraTestSuffixes = options.extraTestSuffixes ?? [];
   const skipNodeModules = options.skipNodeModules ?? true;
+  const skipDirectories = options.skipDirectories ?? [];
   const ignoreMissing = options.ignoreMissing ?? false;
+  const isSourceFile = (filePath) =>
+    fileExtensions.some((extension) => filePath.endsWith(extension));
 
   let stat;
   try {
@@ -71,7 +75,7 @@ export async function collectTypeScriptFiles(targetPath, options = {}) {
   }
 
   if (stat.isFile()) {
-    if (!targetPath.endsWith(".ts")) {
+    if (!isSourceFile(targetPath)) {
       return [];
     }
     if (!includeTests && isTestLikeTypeScriptFile(targetPath, { extraTestSuffixes })) {
@@ -85,13 +89,16 @@ export async function collectTypeScriptFiles(targetPath, options = {}) {
   for (const entry of entries) {
     const entryPath = path.join(targetPath, entry.name);
     if (entry.isDirectory()) {
-      if (skipNodeModules && entry.name === "node_modules") {
+      if (
+        (skipNodeModules && entry.name === "node_modules") ||
+        skipDirectories.includes(entry.name)
+      ) {
         continue;
       }
       out.push(...(await collectTypeScriptFiles(entryPath, options)));
       continue;
     }
-    if (!entry.isFile() || !entryPath.endsWith(".ts")) {
+    if (!entry.isFile() || !isSourceFile(entryPath)) {
       continue;
     }
     if (!includeTests && isTestLikeTypeScriptFile(entryPath, { extraTestSuffixes })) {
