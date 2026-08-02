@@ -173,7 +173,10 @@ describe("fetchThreadReplies", () => {
       token: "tok",
       path: "/teams/group-1/channels/channel-1/messages/msg-1/replies?$top=50&$select=id,from,body,createdDateTime",
       maxPages: 50,
-      retainLast: 50,
+      retainLastBy: {
+        limit: 50,
+        compare: expect.any(Function),
+      },
     });
   });
 
@@ -226,8 +229,27 @@ describe("fetchThreadReplies", () => {
       token: "tok",
       path: "/teams/g/channels/c/messages/m/replies?$top=50&$select=id,from,body,createdDateTime",
       maxPages: 50,
-      retainLast: 2,
+      retainLastBy: {
+        limit: 2,
+        compare: expect.any(Function),
+      },
     });
+    const retainLastBy = vi.mocked(fetchAllGraphPages).mock.calls[0]?.[0]?.retainLastBy;
+    if (!retainLastBy) {
+      throw new Error("Expected fetchThreadReplies to retain replies by timestamp");
+    }
+    const oppositeOrder = [
+      { id: "reply-4", createdDateTime: "2026-07-01T00:03:00Z" },
+      { id: "reply-1", createdDateTime: "2026-07-01T00:00:00Z" },
+      { id: "reply-3", createdDateTime: "2026-07-01T00:02:00Z" },
+      { id: "reply-2", createdDateTime: "2026-07-01T00:01:00Z" },
+    ];
+    expect(
+      oppositeOrder
+        .toSorted(retainLastBy.compare)
+        .slice(-2)
+        .map((reply) => reply.id),
+    ).toStrictEqual(["reply-3", "reply-4"]);
   });
 
   it("rejects truncated pagination instead of returning a stale scanned prefix", async () => {
@@ -258,7 +280,10 @@ describe("fetchThreadReplies", () => {
       token: "tok",
       path: "/teams/g/channels/c/messages/m/replies?$top=50&$select=id,from,body,createdDateTime",
       maxPages: Number.MAX_SAFE_INTEGER,
-      retainLast: 50,
+      retainLastBy: {
+        limit: 50,
+        compare: expect.any(Function),
+      },
       deadline,
     });
   });

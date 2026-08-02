@@ -103,9 +103,9 @@ export async function fetchChatMessageText(
 /**
  * Fetch thread replies for a channel message, ordered chronologically.
  *
- * Graph returns replies oldest-first, has a per-page `$top` cap of 50, and does
- * not support `$orderby`. Follow `@odata.nextLink` with a bounded page cap, then
- * keep the newest requested reply window in chronological order.
+ * Graph has a per-page `$top` cap of 50 and does not support `$orderby`.
+ * Follow `@odata.nextLink` with a bounded page cap, then keep the newest
+ * requested reply window by timestamp in chronological order.
  */
 export async function fetchThreadReplies(
   token: string,
@@ -121,7 +121,10 @@ export async function fetchThreadReplies(
     token,
     path,
     maxPages: deadline ? Number.MAX_SAFE_INTEGER : 50,
-    retainLast: requestedLimit,
+    retainLastBy: {
+      limit: requestedLimit,
+      compare: compareThreadMessagesChronologically,
+    },
     ...(deadline ? { deadline } : {}),
   });
   if (res.truncated) {

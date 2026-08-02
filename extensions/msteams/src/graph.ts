@@ -178,11 +178,17 @@ export async function fetchAllGraphPages<T>(params: {
   maxPages?: number;
   /** Keep only the final N items while pagination continues. */
   retainLast?: number;
+  /** Keep only the final N items by comparator while pagination continues. */
+  retainLastBy?: {
+    limit: number;
+    compare: (a: T, b: T) => number;
+  };
   /** Stop pagination early when this predicate returns true. */
   findOne?: (item: T) => boolean;
 }): Promise<PaginatedResult<T>> {
   const maxPages = params.maxPages ?? 50;
   const retainLast = params.retainLast;
+  const retainLastBy = params.retainLastBy;
   const items: T[] = [];
   let nextPath: string | undefined = params.path;
 
@@ -205,7 +211,10 @@ export async function fetchAllGraphPages<T>(params: {
     }
 
     items.push(...pageItems);
-    if (typeof retainLast === "number" && retainLast > 0 && items.length > retainLast) {
+    if (retainLastBy && retainLastBy.limit > 0 && items.length > retainLastBy.limit) {
+      items.sort(retainLastBy.compare);
+      items.splice(0, items.length - retainLastBy.limit);
+    } else if (typeof retainLast === "number" && retainLast > 0 && items.length > retainLast) {
       items.splice(0, items.length - retainLast);
     }
 

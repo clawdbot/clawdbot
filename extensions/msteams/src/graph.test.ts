@@ -528,7 +528,7 @@ describe("msteams graph helpers", () => {
   });
 
   describe("fetchAllGraphPages", () => {
-    type Item = { id: string; name: string };
+    type Item = { id: string; name: string; createdDateTime?: string };
 
     /** Build a paged Graph response with optional nextLink. */
     function pagedResponse(items: Item[], nextLink?: string) {
@@ -683,6 +683,60 @@ describe("msteams graph helpers", () => {
           { id: "4", name: "d" },
           { id: "5", name: "e" },
           { id: "6", name: "f" },
+        ],
+        truncated: false,
+      });
+      expect(globalThis.fetch).toHaveBeenCalledTimes(3);
+    });
+
+    it("retains only the final requested items by comparator while continuing pagination", async () => {
+      let callCount = 0;
+      mockFetch(async () => {
+        callCount++;
+        if (callCount === 1) {
+          return jsonResponse(
+            pagedResponse(
+              [
+                { id: "1", name: "oldest", createdDateTime: "2026-07-01T00:00:00Z" },
+                { id: "5", name: "newer", createdDateTime: "2026-07-01T00:04:00Z" },
+              ],
+              "https://graph.microsoft.com/v1.0/items?$skiptoken=page2",
+            ),
+          );
+        }
+        if (callCount === 2) {
+          return jsonResponse(
+            pagedResponse(
+              [
+                { id: "2", name: "older", createdDateTime: "2026-07-01T00:01:00Z" },
+                { id: "4", name: "middle", createdDateTime: "2026-07-01T00:03:00Z" },
+              ],
+              "https://graph.microsoft.com/v1.0/items?$skiptoken=page3",
+            ),
+          );
+        }
+        return jsonResponse(
+          pagedResponse([
+            { id: "3", name: "middle-old", createdDateTime: "2026-07-01T00:02:00Z" },
+            { id: "6", name: "newest", createdDateTime: "2026-07-01T00:05:00Z" },
+          ]),
+        );
+      });
+
+      const result = await fetchAllGraphPages<Item>({
+        token: graphToken,
+        path: "/items",
+        retainLastBy: {
+          limit: 2,
+          compare: (a, b) =>
+            Date.parse(a.createdDateTime ?? "") - Date.parse(b.createdDateTime ?? ""),
+        },
+      });
+
+      expect(result).toEqual({
+        items: [
+          { id: "5", name: "newer", createdDateTime: "2026-07-01T00:04:00Z" },
+          { id: "6", name: "newest", createdDateTime: "2026-07-01T00:05:00Z" },
         ],
         truncated: false,
       });
