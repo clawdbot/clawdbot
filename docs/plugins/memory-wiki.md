@@ -438,10 +438,9 @@ the existing `~/.openclaw/wiki/main` path.
 
 Agent tools, compiled prompt digests, and the wiki supplement exposed through
 `memory_search` / `memory_get` resolve the vault from the active agent context.
-For CLI and Gateway calls in a setup with multiple configured agents, provide
-the agent explicitly with `openclaw wiki --agent <agentId> ...` or the Gateway
-request's `agentId`. A single configured agent remains the default when no id is
-provided.
+CLI calls use the configured default agent unless the command passes
+`--agent <agentId>`. Gateway calls in a multi-agent setup still require the
+request's `agentId`.
 
 In bridge mode, agent-scoped imports accept a public memory artifact only when
 its `agentIds` includes the selected agent. Artifacts owned by another agent,
