@@ -91,6 +91,32 @@ export function exitOnChildProcessClose(child, options = {}) {
   });
 }
 
+function attachPtyProcess(spawned) {
+  bridgeStdio(spawned);
+  forwardSignals(spawned);
+  spawned.onExit(({ exitCode, signal }) => {
+    process.exit(typeof exitCode === "number" ? exitCode : signalExitCode(signal));
+  });
+}
+
+function attachChildProcess(spawned) {
+  bridgeChildProcess(spawned);
+  forwardSignals(spawned);
+  exitOnChildProcessClose(spawned);
+}
+
+export async function launchSandbox(spawnSandboxFromConfig, config, options, bridges = {}) {
+  // Normalize sync and Promise-returning SDK implementations before selecting an I/O bridge.
+  const spawned = await spawnSandboxFromConfig(config, options ?? {});
+
+  if (typeof spawned.onData === "function") {
+    (bridges.pty ?? attachPtyProcess)(spawned);
+    return;
+  }
+
+  (bridges.child ?? attachChildProcess)(spawned);
+}
+
 const SIGNAL_NUMBERS = new Map([
   ["SIGHUP", 1],
   ["SIGINT", 2],
@@ -123,22 +149,7 @@ export async function main() {
   try {
     const { config, options } = decodePayload(process.argv.slice(2));
     const { spawnSandboxFromConfig } = await import("@microsoft/mxc-sdk");
-    const spawned = spawnSandboxFromConfig(config, options ?? {});
-    // Keep listener attachment one microtask after spawning, matching the prior await boundary.
-    await Promise.resolve();
-
-    if (typeof spawned.onData === "function") {
-      bridgeStdio(spawned);
-      forwardSignals(spawned);
-      spawned.onExit(({ exitCode, signal }) => {
-        process.exit(typeof exitCode === "number" ? exitCode : signalExitCode(signal));
-      });
-      return;
-    }
-
-    bridgeChildProcess(spawned);
-    forwardSignals(spawned);
-    exitOnChildProcessClose(spawned);
+    await launchSandbox(spawnSandboxFromConfig, config, options);
   } catch (error) {
     process.stderr.write(`${formatErrorStack(error)}\n`);
     process.exit(127);
