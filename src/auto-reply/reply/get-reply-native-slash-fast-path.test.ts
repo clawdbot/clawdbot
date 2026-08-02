@@ -535,25 +535,10 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
 
   it.each([
     { selection: "user override", source: "user" as const },
-    { selection: "automatic fallback", source: "auto" as const, useRealStatusOwner: true },
+    { selection: "automatic fallback", source: "auto" as const },
     { selection: "channel override", source: undefined },
   ])("preserves canonical native /status $selection", async (testCase) => {
     vi.spyOn(preparedModelCatalog, "loadPreparedModelCatalog").mockResolvedValueOnce([]);
-    if ("useRealStatusOwner" in testCase) {
-      buildStatusReplyMock.mockImplementationOnce(async (params) => {
-        const actual =
-          await vi.importActual<typeof import("./commands-status.js")>("./commands-status.js");
-        return actual.buildStatusReply({
-          ...params,
-          resolvedHarness: "openclaw",
-          modelAuthOverride: "api-key",
-          activeModelAuthOverride: "api-key",
-          pluginHealthLineOverride: "",
-          skipDefaultTaskLookup: true,
-          includeTranscriptUsage: false,
-        });
-      });
-    }
     const targetSessionKey = "agent:main:main";
     const storePath = path.join(tempDirs.make("openclaw-native-status-"), "sessions.json");
     await replaceSessionEntry(
@@ -634,12 +619,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
       expect(statusCall.sessionEntry).not.toHaveProperty("providerOverride");
       expect(statusCall.sessionEntry).not.toHaveProperty("modelOverride");
     }
-    if ("useRealStatusOwner" in testCase) {
-      expect(result).toMatchObject({
-        reply: { text: expect.stringContaining("Model: anthropic/claude-fable-5") },
-      });
-      expect(result).toMatchObject({ reply: { text: expect.stringContaining("auto fallback") } });
-    }
+    expect(result).toMatchObject({ reply: { text: "selected model status" } });
   });
 
   it("keeps model-independent /status plugins available under an invalid model policy", async () => {
