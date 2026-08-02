@@ -137,7 +137,7 @@ function hasIndeterminateReservedCleanup(result: SpawnSubagentResult): boolean {
 }
 
 function assertReservedSubagentTextWithinLimit(
-  fieldName: "childSessionKey" | "label" | "runId" | "task",
+  fieldName: "childSessionKey" | "label" | "requesterSessionKey" | "runId" | "task",
   value: string,
   maxBytes: number,
 ): void {
@@ -159,9 +159,15 @@ function assertReservedSubagentLabelWithinLimit(label: string | undefined): void
 }
 
 function assertReservedSubagentIdentitiesWithinLimit(params: {
+  requesterSessionKey: string;
   childSessionKey: string;
   runId: string;
 }): void {
+  assertReservedSubagentTextWithinLimit(
+    "requesterSessionKey",
+    params.requesterSessionKey,
+    RESERVED_SUBAGENT_IDENTITY_MAX_BYTES,
+  );
   assertReservedSubagentTextWithinLimit(
     "childSessionKey",
     params.childSessionKey,
@@ -373,6 +379,7 @@ export const spawnReservedSubagent: PluginRuntime["subagent"]["spawnReserved"] =
   const runId = params.runId.trim();
   const task = params.task.trim();
   assertReservedSubagentIdentitiesWithinLimit({
+    requesterSessionKey: params.requesterSessionKey,
     childSessionKey: params.childSessionKey,
     runId: params.runId,
   });

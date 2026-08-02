@@ -60,8 +60,7 @@ export function readReservedSubagentDedupeReservation(
     typeof payload.sessionKey === "string" &&
     typeof payload.pluginRuntimeOwnerId === "string" &&
     typeof payload.reservedSubagentClaimToken === "string" &&
-    (isActiveReservedSubagentDedupeEntry(entry) ||
-      isFutureDateTimestampMs(payload.expiresAtMs, { nowMs: Date.now() })) &&
+    isFutureDateTimestampMs(payload.expiresAtMs, { nowMs: Date.now() }) &&
     payload.reservationId === payload.reservedSubagentClaimToken
     ? (payload as ReservedSubagentDedupeReservation)
     : undefined;

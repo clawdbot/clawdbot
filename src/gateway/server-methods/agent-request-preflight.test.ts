@@ -1,7 +1,11 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { attachReservedSubagentClaimToken } from "../../agents/reserved-subagent-admission.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  attachReservedSubagentClaimToken,
+  type ReservedSubagentAdmissionRequest,
+} from "../../agents/reserved-subagent-admission.js";
 import { subagentRuns } from "../../agents/subagent-registry-memory.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
+import { DEDUPE_TTL_MS } from "../server-constants.js";
 import { createAgentAdmissionController } from "./agent-admission-controller.js";
 import { createAgentDedupeLifecycle } from "./agent-dedupe-lifecycle.js";
 import { reserveReservedSubagentDedupeEntry, setGatewayDedupeEntries } from "./agent-dedupe.js";
@@ -90,6 +94,11 @@ describe("agent request Swarm preflight", () => {
   beforeEach(() => {
     subagentRuns.clear();
     vi.spyOn(sessionAccessor, "loadSessionEntry").mockReturnValue(undefined);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 
   it("rejects malformed and non-object structured output schemas", () => {
@@ -355,6 +364,123 @@ describe("agent request Swarm preflight", () => {
   });
 });
 
+describe("reserved subagent admission TTL", () => {
+  beforeEach(() => {
+    vi.spyOn(sessionAccessor, "loadSessionEntry").mockReturnValue({
+      sessionId: "reserved-session",
+      updatedAt: 1,
+    });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("rejects an expired active reservation instead of replaying an in-flight child run", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-01T00:00:00Z"));
+    const dedupe = new Map();
+    const claimToken = "reserved-claim-token";
+    const release = reserveReservedSubagentDedupeEntry({
+      dedupe,
+      runId: "reserved-expired-run",
+      sessionKey: "agent:worker:subagent:reserved-expired-child",
+      pluginRuntimeOwnerId: "agentic-os",
+      claimToken,
+    });
+    vi.advanceTimersByTime(DEDUPE_TTL_MS + 1);
+
+    const respond = vi.fn();
+    const request = attachReservedSubagentClaimToken(
+      {
+        message: "run reserved child",
+        sessionKey: "agent:worker:subagent:reserved-expired-child",
+        idempotencyKey: "reserved-expired-run",
+      },
+      claimToken,
+    ) as ReservedSubagentAdmissionRequest;
+    const result = prepareAgentRequestPreflight({
+      params: request,
+      respond,
+      context: {
+        getRuntimeConfig: () => ({}),
+        dedupe,
+      },
+      client: {
+        internal: { pluginRuntimeOwnerId: "agentic-os" },
+      },
+    } as never);
+
+    expect(result).toBeUndefined();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: "agent runId is reserved for a different plugin subagent admission.",
+      }),
+    );
+    release();
+  });
+
+  it("fails closed when a reserved admission expires before final admission", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-01T00:00:00Z"));
+    const dedupe = new Map();
+    const claimToken = "reserved-final-claim-token";
+    const release = reserveReservedSubagentDedupeEntry({
+      dedupe,
+      runId: "reserved-final-expired-run",
+      sessionKey: "agent:worker:subagent:reserved-final-expired-child",
+      pluginRuntimeOwnerId: "agentic-os",
+      claimToken,
+    });
+    vi.advanceTimersByTime(DEDUPE_TTL_MS + 1);
+
+    const respond = vi.fn();
+    const markAccepted = vi.fn();
+    const controller = createAgentAdmissionController({
+      cfg: {},
+      runId: "reserved-final-expired-run",
+      lifecycleGeneration: "generation",
+      agentDedupeKeys: ["agent:reserved-final-expired-run"],
+      preAcceptedReservedSessionKey: "agent:worker:subagent:reserved-final-expired-child",
+      context: { dedupe } as never,
+      respond,
+      dedupeLifecycle: {
+        isReserved: () => true,
+        reservationId: claimToken,
+        markAccepted,
+        abortForLifecycleRotation: vi.fn(() => false),
+      } as never,
+      getRequestedSessionKey: () => "agent:worker:subagent:reserved-final-expired-child",
+      getResolvedSessionKey: () => "agent:worker:subagent:reserved-final-expired-child",
+      getResolvedSessionId: () => "reserved-session",
+      getResolvedSessionAgentId: () => "worker",
+      getAgentId: () => "worker",
+      getCfgForAgent: () => ({}),
+      getSessionPersisted: () => false,
+      getSupersededSessionId: () => undefined,
+      setAdmittedSessionId: vi.fn(),
+    });
+
+    controller.assertAllowed();
+    expect(controller.respondToOutcome()).toBe(true);
+    expect(markAccepted).toHaveBeenCalledWith(true);
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      expect.objectContaining({
+        runId: "reserved-final-expired-run",
+        status: "timeout",
+        providerStarted: false,
+      }),
+      undefined,
+      expect.objectContaining({ cached: true, runId: "reserved-final-expired-run" }),
+    );
+    release();
+  });
+});
+
 describe("reserved subagent Gateway admission", () => {
   const runId = "plugin-reserved-run";
   const sessionKey = "agent:worker:subagent:plugin-reserved-child";
@@ -481,7 +607,7 @@ describe("reserved subagent Gateway admission", () => {
     );
   });
 
-  it("keeps an in-flight reserved marker authorized past its ttl", () => {
+  it("rejects an active reserved marker after its ttl expires", () => {
     const context = createContext();
     const release = reserveReservedSubagentDedupeEntry({
       dedupe: context.dedupe,
@@ -502,8 +628,14 @@ describe("reserved subagent Gateway admission", () => {
       client: { internal: { pluginRuntimeOwnerId } },
     } as never);
 
-    expect(result).toBeDefined();
-    expect(respond).not.toHaveBeenCalled();
+    expect(result).toBeUndefined();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: "agent runId is reserved for a different plugin subagent admission.",
+      }),
+    );
     release();
   });
 
@@ -563,7 +695,7 @@ describe("reserved subagent Gateway admission", () => {
     expect(controller.respondToOutcome()).toBe(true);
     expect(context.dedupe.get(`agent:${runId}`)).toBe(reservedEntry);
     expect(ordinaryRespond).toHaveBeenLastCalledWith(
-      true,
+      false,
       { runId, status: "in_flight" },
       undefined,
       expect.objectContaining({ cached: true, runId }),
@@ -642,7 +774,7 @@ describe("reserved subagent Gateway admission", () => {
     expect(controller.respondToOutcome()).toBe(true);
     expect(context.dedupe.get(`agent:${runId}`)).toBe(acceptedEntry);
     expect(ordinaryRespond).toHaveBeenLastCalledWith(
-      true,
+      false,
       { runId, status: "in_flight" },
       undefined,
       expect.objectContaining({ cached: true, runId }),

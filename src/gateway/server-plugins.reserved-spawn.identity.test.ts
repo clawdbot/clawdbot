@@ -75,6 +75,10 @@ describe("spawnReserved identity byte bounds", () => {
 
   it("accepts exact-limit identities and rejects raw UTF-8 overflow before persistence", async () => {
     const childPrefix = "agent:worker:subagent:";
+    const requesterPrefix = "agent:main:";
+    const exactLimitRequesterSessionKey = `${requesterPrefix}${"r".repeat(
+      RESERVED_SUBAGENT_IDENTITY_MAX_BYTES - Buffer.byteLength(requesterPrefix, "utf8"),
+    )}`;
     const exactLimitChildSessionKey = `${childPrefix}${"c".repeat(
       RESERVED_SUBAGENT_IDENTITY_MAX_BYTES - Buffer.byteLength(childPrefix, "utf8"),
     )}`;
@@ -90,6 +94,7 @@ describe("spawnReserved identity byte bounds", () => {
       withReservedPluginScope(() =>
         createGatewaySubagentRuntime().spawnReserved({
           ...reservation,
+          requesterSessionKey: exactLimitRequesterSessionKey,
           childSessionKey: exactLimitChildSessionKey,
           runId: exactLimitRunId,
         }),
@@ -98,6 +103,9 @@ describe("spawnReserved identity byte bounds", () => {
       childSessionKey: exactLimitChildSessionKey,
       runId: exactLimitRunId,
     });
+
+    const requesterLoadCalls = loadSessionEntryReadOnly.mock.calls;
+    expect(requesterLoadCalls[0]?.[0]).toBe(exactLimitRequesterSessionKey);
 
     loadSessionEntryReadOnly.mockClear();
     getAgentRunContext.mockClear();
@@ -122,6 +130,26 @@ describe("spawnReserved identity byte bounds", () => {
       ),
     ).rejects.toThrow(`${RESERVED_SUBAGENT_IDENTITY_MAX_BYTES} byte limit`);
 
+    const multibyteRequesterSessionKey = `${requesterPrefix}${"€".repeat(
+      Math.floor(
+        (RESERVED_SUBAGENT_IDENTITY_MAX_BYTES - Buffer.byteLength(requesterPrefix, "utf8")) /
+          Buffer.byteLength("€", "utf8"),
+      ),
+    )}€`;
+    expect(Buffer.byteLength(multibyteRequesterSessionKey, "utf8")).toBeGreaterThan(
+      RESERVED_SUBAGENT_IDENTITY_MAX_BYTES,
+    );
+    await expect(
+      withReservedPluginScope(() =>
+        createGatewaySubagentRuntime().spawnReserved({
+          ...reservation,
+          requesterSessionKey: multibyteRequesterSessionKey,
+          childSessionKey: "agent:worker:subagent:plugin-reserved-child-requester-utf8",
+          runId: "plugin-reserved-run-requester-utf8",
+        }),
+      ),
+    ).rejects.toThrow(`${RESERVED_SUBAGENT_IDENTITY_MAX_BYTES} byte limit`);
+
     const rawWhitespaceOverLimitRunId = `${" ".repeat(RESERVED_SUBAGENT_IDENTITY_MAX_BYTES)}x`;
     await expect(
       withReservedPluginScope(() =>
@@ -129,6 +157,20 @@ describe("spawnReserved identity byte bounds", () => {
           ...reservation,
           childSessionKey: "agent:worker:subagent:plugin-reserved-child-identity-raw",
           runId: rawWhitespaceOverLimitRunId,
+        }),
+      ),
+    ).rejects.toThrow(`${RESERVED_SUBAGENT_IDENTITY_MAX_BYTES} byte limit`);
+
+    const rawWhitespaceOverLimitRequesterSessionKey = `${" ".repeat(
+      RESERVED_SUBAGENT_IDENTITY_MAX_BYTES,
+    )}x`;
+    await expect(
+      withReservedPluginScope(() =>
+        createGatewaySubagentRuntime().spawnReserved({
+          ...reservation,
+          requesterSessionKey: rawWhitespaceOverLimitRequesterSessionKey,
+          childSessionKey: "agent:worker:subagent:plugin-reserved-child-requester-raw",
+          runId: "plugin-reserved-run-requester-raw",
         }),
       ),
     ).rejects.toThrow(`${RESERVED_SUBAGENT_IDENTITY_MAX_BYTES} byte limit`);
