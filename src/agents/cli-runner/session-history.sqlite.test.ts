@@ -267,6 +267,16 @@ describe("SQLite CLI session history", () => {
             idempotencyKey: excludeMessageIdempotencyKey,
           },
         },
+        {
+          type: "message",
+          id: "msg-current-late-media",
+          parentId: "msg-current",
+          message: {
+            role: "user",
+            content: "[media attached: media://inbound/current]",
+            idempotencyKey: `${excludeMessageIdempotencyKey}:late-media`,
+          },
+        },
       ]);
 
       const controlHistory = await loadCliSessionHistoryMessages({
@@ -275,45 +285,53 @@ describe("SQLite CLI session history", () => {
         sessionKey,
         agentId: "main",
       });
-      expect(controlHistory).toHaveLength(3);
-      expectMessageFields(controlHistory.at(-1), { role: "user", content: "current ask" });
+      expect(controlHistory).toHaveLength(4);
+      expectMessageFields(controlHistory.at(-1), {
+        role: "user",
+        content: "[media attached: media://inbound/current]",
+      });
 
-      const transcriptParams = {
-        sessionId,
-        sessionFile,
-        sessionKey,
-        agentId: "main",
+      for (const excludedKey of [
         excludeMessageIdempotencyKey,
-      };
-      const history = await loadCliSessionHistoryMessages(transcriptParams);
-      expect(history).toHaveLength(2);
-      expectMessageFields(history[0], { role: "user", content: "prior ask" });
-      expectMessageFields(history[1], {
-        role: "assistant",
-        content: [{ type: "text", text: "prior answer" }],
-      });
+        `${excludeMessageIdempotencyKey}:late-media`,
+      ]) {
+        const transcriptParams = {
+          sessionId,
+          sessionFile,
+          sessionKey,
+          agentId: "main",
+          excludeMessageIdempotencyKey: excludedKey,
+        };
+        const history = await loadCliSessionHistoryMessages(transcriptParams);
+        expect(history).toHaveLength(2);
+        expectMessageFields(history[0], { role: "user", content: "prior ask" });
+        expectMessageFields(history[1], {
+          role: "assistant",
+          content: [{ type: "text", text: "prior answer" }],
+        });
 
-      const contextEngineHistory = await loadCliSessionContextEngineMessages(transcriptParams);
-      expect(contextEngineHistory).toHaveLength(2);
-      expect(contextEngineHistory[0]).toMatchObject({
-        role: "compactionSummary",
-        summary: "prior compacted context",
-      });
-      expectMessageFields(contextEngineHistory[1], {
-        role: "assistant",
-        content: [{ type: "text", text: "prior answer" }],
-      });
+        const contextEngineHistory = await loadCliSessionContextEngineMessages(transcriptParams);
+        expect(contextEngineHistory).toHaveLength(2);
+        expect(contextEngineHistory[0]).toMatchObject({
+          role: "compactionSummary",
+          summary: "prior compacted context",
+        });
+        expectMessageFields(contextEngineHistory[1], {
+          role: "assistant",
+          content: [{ type: "text", text: "prior answer" }],
+        });
 
-      const reseedHistory = await loadCliSessionReseedMessages(transcriptParams);
-      expect(reseedHistory).toHaveLength(2);
-      expect(reseedHistory[0]).toMatchObject({
-        role: "compactionSummary",
-        summary: "prior compacted context",
-      });
-      expectMessageFields(reseedHistory[1], {
-        role: "assistant",
-        content: [{ type: "text", text: "prior answer" }],
-      });
+        const reseedHistory = await loadCliSessionReseedMessages(transcriptParams);
+        expect(reseedHistory).toHaveLength(2);
+        expect(reseedHistory[0]).toMatchObject({
+          role: "compactionSummary",
+          summary: "prior compacted context",
+        });
+        expectMessageFields(reseedHistory[1], {
+          role: "assistant",
+          content: [{ type: "text", text: "prior answer" }],
+        });
+      }
     });
   });
 

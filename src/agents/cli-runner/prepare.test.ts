@@ -4018,6 +4018,43 @@ describe("prepareCliRunContext", () => {
     }
   });
 
+  it("waits for deferred transcript maintenance before preparing history", async () => {
+    fixture.appendTranscript({
+      id: "msg-before-maintenance",
+      parentId: null,
+      timestamp: new Date(1).toISOString(),
+      message: { role: "user", content: "history after maintenance", timestamp: 1 },
+    });
+    setCliBackendForPrepareTest({ reseedFromRawTranscriptWhenUncompacted: true });
+    let releaseMaintenance: (() => void) | undefined;
+    const maintenance = new Promise<void>((resolve) => {
+      releaseMaintenance = resolve;
+    });
+    const waitForDeferredTurnMaintenanceForSession = vi.fn(() => maintenance);
+    setCliRunnerPrepareTestDeps({ waitForDeferredTurnMaintenanceForSession });
+
+    const preparation = fixture.prepare({
+      sessionKey: "agent:main:telegram:direct:peer",
+      prompt: "latest ask",
+    });
+
+    await vi.waitFor(() =>
+      expect(waitForDeferredTurnMaintenanceForSession).toHaveBeenCalledWith(
+        "agent:main:telegram:direct:peer",
+      ),
+    );
+    let prepared = false;
+    void preparation.then(() => {
+      prepared = true;
+    });
+    await Promise.resolve();
+    expect(prepared).toBe(false);
+
+    releaseMaintenance?.();
+    const context = await preparation;
+    expect(context.openClawHistoryPrompt).toContain("history after maintenance");
+  });
+
   it("prepares node-placed Claude resumes without Gateway MCP, skills, or transcript checks", async () => {
     fixture.appendTranscript({
       id: "msg-node-1",
