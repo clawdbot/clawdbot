@@ -249,6 +249,7 @@ type RestartRecoveryNormalizedField =
   | "restartRecoveryInterruptionReason"
   | "restartRecoveryTimeoutAttemptCount"
   | "restartRecoveryTimeoutExhausted"
+  | "restartRecoveryResumingNoticeRunId"
   | "restartRecoverySourceReplyDeliveryMode"
   | "restartRecoveryTerminalDeliveryEvidence"
   | "restartRecoveryTerminalRunIds";
@@ -320,6 +321,10 @@ export function normalizeRestartRecoveryEntryFields(
   assign(
     "restartRecoveryTimeoutExhausted",
     entry.restartRecoveryTimeoutExhausted === true ? true : undefined,
+  );
+  assign(
+    "restartRecoveryResumingNoticeRunId",
+    normalizeRunId(entry.restartRecoveryResumingNoticeRunId),
   );
   assign(
     "restartRecoverySourceReplyDeliveryMode",
@@ -426,6 +431,7 @@ export function buildRestartRecoveryClaimCleanupPatch(params: {
     restartRecoveryInterruptionReason: undefined,
     restartRecoveryTimeoutAttemptCount: undefined,
     restartRecoveryTimeoutExhausted: undefined,
+    restartRecoveryResumingNoticeRunId: undefined,
     restartRecoverySourceReplyDeliveryMode: undefined,
     restartRecoveryForceSafeTools: undefined,
     ...(terminalDeliveryEvidence

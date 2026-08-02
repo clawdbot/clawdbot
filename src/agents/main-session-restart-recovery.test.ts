@@ -34,6 +34,7 @@ import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
 } from "./internal-runtime-context.js";
+import { resumeMainSession } from "./main-session-restart-dispatch.js";
 import {
   markRestartAbortedMainSessions,
   markRestartAbortedMainSessionsFromLocks,
@@ -161,6 +162,12 @@ function firstGatewayParams(): Record<string, unknown> {
     throw new Error("expected gateway params");
   }
   return params as Record<string, unknown>;
+}
+
+function gatewayCall(method: string, index = 0) {
+  return vi.mocked(callGateway).mock.calls.filter(([request]) => request.method === method)[
+    index
+  ]?.[0];
 }
 
 describe("main-session-restart-recovery", () => {
@@ -852,7 +859,28 @@ describe("main-session-restart-recovery", () => {
     const result = await recoverStartupOrphanedMainSessions({ stateDir: tmpDir });
 
     expect(result).toEqual({ marked: 1, recovered: 1, failed: 0, skipped: 0 });
-    expect(firstGatewayParams()).toMatchObject({
+    const noticeCall = gatewayCall("message.action");
+    expect(noticeCall).toMatchObject({
+      clientName: "gateway-client",
+      mode: "backend",
+      params: {
+        channel: "slack",
+        action: "send",
+        accountId: "main",
+        sessionKey: "agent:main:slack:channel:c0bly1apgh5",
+        sessionId: "main-session",
+        idempotencyKey: expect.stringMatching(
+          /^main-session-restart-recovery:.+:resuming-notice$/u,
+        ),
+        params: {
+          to: "channel:C0BLY1APGH5",
+          threadId: "1785613439.266819",
+          bestEffort: true,
+          message: "The gateway reset interrupted me. I'm resuming this work now.",
+        },
+      },
+    });
+    expect(gatewayCall("agent")?.params).toMatchObject({
       sessionKey: "agent:main:slack:channel:c0bly1apgh5",
       expectedExistingSessionId: "main-session",
       deliver: true,
@@ -861,6 +889,22 @@ describe("main-session-restart-recovery", () => {
       threadId: "1785613439.266819",
       message: expect.stringContaining("exceeded the gateway run deadline"),
     });
+    expect(vi.mocked(callGateway).mock.calls.map(([request]) => request.method)).toEqual([
+      "message.action",
+      "agent",
+    ]);
+    const recoveryRunId = String(
+      (gatewayCall("agent")?.params as { idempotencyKey?: unknown } | undefined)?.idempotencyKey,
+    );
+    expect(noticeCall?.params).toMatchObject({
+      idempotencyKey: `main-session-restart-recovery:${recoveryRunId}:resuming-notice`,
+    });
+    expect(
+      loadSessionEntry({
+        sessionKey: "agent:main:slack:channel:c0bly1apgh5",
+        storePath: path.join(sessionsDir, "sessions.json"),
+      })?.restartRecoveryResumingNoticeRunId,
+    ).toBe(recoveryRunId);
   });
 
   it("reuses one durably minted timeout continuation id across startup retries", async () => {
@@ -884,7 +928,17 @@ describe("main-session-restart-recovery", () => {
       { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "ceto" }] },
       { role: "toolResult", content: '{"job_id":"dr_rUN3w1Jh","status":"running"}' },
     ]);
-    vi.mocked(callGateway).mockRejectedValueOnce(new Error("ambiguous gateway rejection"));
+    let agentAttempts = 0;
+    vi.mocked(callGateway).mockImplementation(async (request) => {
+      if (request.method === "message.action") {
+        return { status: "ok" };
+      }
+      agentAttempts += 1;
+      if (agentAttempts === 1) {
+        throw new Error("ambiguous gateway rejection");
+      }
+      return { runId: String((request.params as { idempotencyKey?: unknown }).idempotencyKey) };
+    });
 
     await expect(
       scheduleRestartAbortedMainSessionRecovery({ delayMs: 0, maxRetries: 2, stateDir: tmpDir }),
@@ -898,6 +952,11 @@ describe("main-session-restart-recovery", () => {
     expect(runIds[0]).toEqual(expect.any(String));
     expect(runIds[0]).not.toBe("timed-out-run");
     expect(runIds[1]).toBe(runIds[0]);
+    expect(vi.mocked(callGateway).mock.calls.map(([request]) => request.method)).toEqual([
+      "message.action",
+      "agent",
+      "agent",
+    ]);
   });
 
   it("leaves an ordinary terminal timeout without a delivery claim untouched", async () => {
@@ -981,7 +1040,7 @@ describe("main-session-restart-recovery", () => {
     const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
 
     expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
-    const resumeParams = firstGatewayParams();
+    const resumeParams = gatewayCall("agent")?.params as Record<string, unknown>;
     expect(resumeParams).toMatchObject({
       sessionKey: "agent:main:discord:direct:123",
       deliver: true,
@@ -1152,7 +1211,7 @@ describe("main-session-restart-recovery", () => {
     expect(settled?.restartRecoveryDeliverySourceRunId).toBeUndefined();
   });
 
-  it("does not deliver restart recovery when session send policy denies sends", async () => {
+  it("keeps a populated delivery context transcript-only when session send policy denies sends", async () => {
     const sessionsDir = await makeSessionsDir();
     await writeStore(sessionsDir, {
       "agent:main:discord:direct:123": {
@@ -1180,6 +1239,85 @@ describe("main-session-restart-recovery", () => {
 
     expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
     expect(firstGatewayParams().deliver).toBe(false);
+    expect(gatewayCall("message.action")).toBeUndefined();
+  });
+
+  it("continues restart recovery when the resuming notice cannot be sent", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, {
+      "agent:main:slack:channel:room-1": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryDeliveryRunId: "source-run",
+        restartRecoveryDeliverySourceRunId: "source-run",
+        restartRecoveryDeliveryContext: {
+          channel: "slack",
+          to: "channel:ROOM1",
+          accountId: "main",
+          threadId: "thread-1",
+        },
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "finish this" },
+      { role: "toolResult", content: "ready" },
+    ]);
+    vi.mocked(callGateway).mockImplementation(async (request) => {
+      if (request.method === "message.action") {
+        throw new Error("Slack unavailable");
+      }
+      return { runId: "recovery-run" };
+    });
+
+    await expect(recoverRestartAbortedMainSessions({ stateDir: tmpDir })).resolves.toEqual({
+      recovered: 1,
+      failed: 0,
+      skipped: 0,
+    });
+
+    expect(vi.mocked(callGateway).mock.calls.map(([request]) => request.method)).toEqual([
+      "message.action",
+      "agent",
+    ]);
+    expect(gatewayCall("agent")?.params).toMatchObject({ deliver: true });
+  });
+
+  it("continues restart recovery when the notice reservation cannot be persisted", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const sessionKey = "agent:main:slack:channel:room-1";
+    const entry: SessionEntry = {
+      sessionId: "main-session",
+      updatedAt: Date.now() - 10_000,
+      status: "running",
+      abortedLastRun: true,
+      restartRecoveryDeliveryRunId: "source-run",
+      restartRecoveryDeliverySourceRunId: "source-run",
+      restartRecoveryDeliveryContext: {
+        channel: "slack",
+        to: "channel:ROOM1",
+        accountId: "main",
+        threadId: "thread-1",
+      },
+    };
+    await writeStore(sessionsDir, { [sessionKey]: entry });
+    const applyReplacements = sessionAccessor.applySessionEntryReplacements;
+    const applySpy = vi
+      .spyOn(sessionAccessor, "applySessionEntryReplacements")
+      .mockImplementationOnce(applyReplacements)
+      .mockRejectedValueOnce(new Error("session store unavailable"));
+
+    await expect(resumeMainSession({ entry, sessionKey, storePath })).resolves.toBe(true);
+    applySpy.mockRestore();
+
+    expect(gatewayCall("message.action")).toBeUndefined();
+    expect(gatewayCall("agent")?.params).toMatchObject({
+      deliver: true,
+      channel: "slack",
+      threadId: "thread-1",
+    });
   });
 
   it("fails marked sessions with stale approval-pending exec tool results", async () => {
@@ -1250,8 +1388,9 @@ describe("main-session-restart-recovery", () => {
     const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
 
     expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
-    expect(callGateway).toHaveBeenCalledOnce();
-    expect(firstGatewayParams()).toMatchObject({
+    expect(callGateway).toHaveBeenCalledTimes(2);
+    const resumeParams = gatewayCall("agent")?.params as Record<string, unknown>;
+    expect(resumeParams).toMatchObject({
       deliver: true,
       bestEffortDeliver: true,
       channel: "discord",
@@ -1259,7 +1398,7 @@ describe("main-session-restart-recovery", () => {
       accountId: "main",
       forceRestartSafeTools: true,
     });
-    expect(firstGatewayParams().message).toContain(pendingPayload);
+    expect(resumeParams.message).toContain(pendingPayload);
 
     const beforeStoreRead = Date.now();
     const store = readStore(path.join(sessionsDir, "sessions.json"));
@@ -2341,7 +2480,7 @@ describe("main-session-restart-recovery", () => {
 
     expect(result).toEqual({ recovered: 0, failed: 1, skipped: 0 });
     expect(callGateway).toHaveBeenCalledOnce();
-    const gatewayCall = vi.mocked(callGateway).mock.calls[0]?.[0] as
+    const externalNoticeCall = gatewayCall("message.action") as
       | {
           method?: string;
           params?: Record<string, unknown>;
@@ -2349,24 +2488,24 @@ describe("main-session-restart-recovery", () => {
           mode?: string;
         }
       | undefined;
-    expect(gatewayCall?.method).toBe("message.action");
-    expect(gatewayCall?.clientName).toBe("gateway-client");
-    expect(gatewayCall?.mode).toBe("backend");
-    expect(gatewayCall?.params).toMatchObject({
+    expect(externalNoticeCall?.method).toBe("message.action");
+    expect(externalNoticeCall?.clientName).toBe("gateway-client");
+    expect(externalNoticeCall?.mode).toBe("backend");
+    expect(externalNoticeCall?.params).toMatchObject({
       channel: "discord",
       action: "send",
       accountId: "default",
       sessionKey: "agent:main:demo-channel:room-1",
       sessionId: "main-session",
     });
-    expect(gatewayCall?.params?.params).toMatchObject({
+    expect(externalNoticeCall?.params?.params).toMatchObject({
       to: "discord:channel:room-1",
       threadId: "thread-1",
       bestEffort: true,
     });
-    expect(String((gatewayCall?.params?.params as Record<string, unknown>)?.message)).toContain(
-      "couldn't safely resume",
-    );
+    expect(
+      String((externalNoticeCall?.params?.params as Record<string, unknown>)?.message),
+    ).toContain("couldn't safely resume");
 
     const store = readStore(path.join(sessionsDir, "sessions.json"));
     expect(store["agent:main:demo-channel:room-1"]?.status).toBe("failed");
@@ -2425,15 +2564,15 @@ describe("main-session-restart-recovery", () => {
     const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
 
     expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
-    expect(callGateway).toHaveBeenCalledOnce();
-    const gatewayCall = vi.mocked(callGateway).mock.calls[0]?.[0] as
+    expect(callGateway).toHaveBeenCalledTimes(2);
+    const agentCall = gatewayCall("agent") as
       | {
           method?: string;
           params?: Record<string, unknown>;
         }
       | undefined;
-    expect(gatewayCall?.method).toBe("agent");
-    expect(gatewayCall?.params).toMatchObject({
+    expect(agentCall?.method).toBe("agent");
+    expect(agentCall?.params).toMatchObject({
       message: expect.stringContaining("Continue from the existing transcript"),
       deliver: true,
       channel: "discord",

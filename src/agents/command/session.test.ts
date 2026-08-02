@@ -7,8 +7,16 @@ describe("clearRotatedSessionMetadata", () => {
       sessionId: "session-1",
       updatedAt: Date.now(),
       restartRecoveryDeliveryRequestMessageId: "request-1",
+      restartRecoveryInterruptionReason: "gateway_timeout",
+      restartRecoveryResumingNoticeRunId: "recovery-1",
+      restartRecoveryTimeoutAttemptCount: 1,
+      restartRecoveryTimeoutExhausted: true,
     });
 
     expect(rotated.restartRecoveryDeliveryRequestMessageId).toBeUndefined();
+    expect(rotated.restartRecoveryInterruptionReason).toBeUndefined();
+    expect(rotated.restartRecoveryResumingNoticeRunId).toBeUndefined();
+    expect(rotated.restartRecoveryTimeoutAttemptCount).toBeUndefined();
+    expect(rotated.restartRecoveryTimeoutExhausted).toBeUndefined();
   });
 });

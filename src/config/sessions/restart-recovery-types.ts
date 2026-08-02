@@ -55,6 +55,8 @@ export type SessionRestartRecoveryState = {
   restartRecoveryTimeoutAttemptCount?: number;
   /** Stops repeated full-deadline continuation after the durable attempt budget is exhausted. */
   restartRecoveryTimeoutExhausted?: true;
+  /** Durable at-most-once reservation for the user-visible gateway-reset notice. */
+  restartRecoveryResumingNoticeRunId?: string;
   restartRecoverySourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   restartRecoveryTerminalDeliveryEvidence?: RestartRecoveryTerminalDeliveryEvidence[];
   restartRecoveryTerminalRunIds?: string[];

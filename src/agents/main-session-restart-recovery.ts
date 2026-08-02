@@ -1065,6 +1065,7 @@ async function recoverStore(params: {
         sessionKey,
         pendingFinalDeliveryText: entry.pendingFinalDeliveryText,
         interruptionReason,
+        notifyGatewayReset: params.interruptionReason !== "gateway_timeout",
         forceRestartSafeTools: true,
         sessionWorkAdmissionHandoffId: params.sessionWorkAdmissionHandoffId,
       });
@@ -1111,6 +1112,7 @@ async function recoverStore(params: {
           sessionKey,
           pendingFinalDeliveryText: entry.pendingFinalDeliveryText,
           interruptionReason,
+          notifyGatewayReset: params.interruptionReason !== "gateway_timeout",
           sessionWorkAdmissionHandoffId: params.sessionWorkAdmissionHandoffId,
         });
         if (resumed) {
@@ -1141,6 +1143,7 @@ async function recoverStore(params: {
         sessionKey,
         pendingFinalDeliveryText: entry.pendingFinalDeliveryText,
         interruptionReason,
+        notifyGatewayReset: params.interruptionReason !== "gateway_timeout",
         forceRestartSafeTools: hasReplaySafeCodeModeCheckpointInCurrentTurn(messages),
         sessionWorkAdmissionHandoffId: params.sessionWorkAdmissionHandoffId,
       });
@@ -1224,6 +1227,7 @@ async function recoverStore(params: {
       sessionKey,
       pendingFinalDeliveryText: entry.pendingFinalDeliveryText,
       interruptionReason,
+      notifyGatewayReset: params.interruptionReason !== "gateway_timeout",
       forceRestartSafeTools: resumePolicy.forceRestartSafeTools,
       sessionWorkAdmissionHandoffId: params.sessionWorkAdmissionHandoffId,
     });

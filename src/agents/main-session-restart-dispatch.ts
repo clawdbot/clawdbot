@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../packages/gateway-protocol/src/client-info.js";
 import { sanitizePendingFinalDeliveryText } from "../auto-reply/reply/pending-final-delivery.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { buildRestartRecoveryClaimCleanupPatch } from "../config/sessions/restart-recovery-state.js";
@@ -15,6 +19,10 @@ import {
   type DeliveryContext,
 } from "../utils/delivery-context.shared.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel.js";
+import {
+  buildResumingSessionNoticeIdempotencyKey,
+  resolveResumingSessionNoticeRunId,
+} from "./main-session-restart-claim.js";
 
 const log = createSubsystemLogger("main-session-restart-recovery");
 const GATEWAY_RESTART_RECOVERY_RESUME_MESSAGE =
@@ -28,6 +36,8 @@ const GATEWAY_TIMEOUT_RECOVERY_RESUME_MESSAGE =
   "ready; otherwise post a concise progress or blocker update before this turn's deadline.";
 
 export type MainSessionInterruptionReason = "gateway_restart" | "gateway_timeout";
+const RESTART_RECOVERY_RESUMING_NOTICE =
+  "The gateway reset interrupted me. I'm resuming this work now.";
 
 type RestartRecoveryTerminalStatus = "error" | "ok" | "timeout";
 
@@ -113,6 +123,87 @@ async function probeRestartRecoveryTerminalStatus(
   } catch {
     return undefined;
   }
+}
+
+async function sendRestartRecoveryResumingNotice(params: {
+  deliveryContext: DeliveryContext;
+  entry: SessionEntry;
+  noticeRunId: string;
+  sessionKey: string;
+}): Promise<void> {
+  const messageParams: Record<string, unknown> = {
+    to: params.deliveryContext.to,
+    message: RESTART_RECOVERY_RESUMING_NOTICE,
+    bestEffort: true,
+  };
+  if (params.deliveryContext.threadId != null) {
+    messageParams.threadId = String(params.deliveryContext.threadId);
+  }
+  const actionParams: Record<string, unknown> = {
+    channel: params.deliveryContext.channel,
+    action: "send",
+    sessionKey: params.sessionKey,
+    sessionId: params.entry.sessionId,
+    idempotencyKey: buildResumingSessionNoticeIdempotencyKey(params.noticeRunId),
+    params: messageParams,
+  };
+  const accountId = normalizeOptionalString(params.deliveryContext.accountId);
+  if (accountId) {
+    actionParams.accountId = accountId;
+  }
+
+  try {
+    await callGateway({
+      method: "message.action",
+      params: actionParams,
+      timeoutMs: 10_000,
+      clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+      mode: GATEWAY_CLIENT_MODES.BACKEND,
+    });
+    log.info(`sent gateway reset resuming notice: ${params.sessionKey}`);
+  } catch (error) {
+    // Recovery is the terminality contract. A failed courtesy notice must not
+    // prevent the interrupted work from continuing.
+    log.warn(`failed to send gateway reset resuming notice ${params.sessionKey}: ${String(error)}`);
+  }
+}
+
+async function reserveRestartRecoveryResumingNotice(params: {
+  entry: SessionEntry;
+  recoveryRunId: string;
+  sessionKey: string;
+  sourceRunId?: string;
+  storePath: string;
+}): Promise<string | undefined> {
+  return await applySessionEntryReplacements({
+    sessionKeys: [params.sessionKey],
+    storePath: params.storePath,
+    update: (entries) => {
+      const current = entries.find((candidate) => candidate.sessionKey === params.sessionKey);
+      const entry = current?.entry;
+      if (
+        !entry ||
+        entry.sessionId !== params.entry.sessionId ||
+        entry.status !== "running" ||
+        entry.abortedLastRun !== true ||
+        normalizeOptionalString(entry.restartRecoveryDeliveryRunId) !== params.recoveryRunId ||
+        normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId) !== params.sourceRunId ||
+        normalizeOptionalString(entry.restartRecoveryResumingNoticeRunId) !== undefined
+      ) {
+        return { result: undefined };
+      }
+      const noticeRunId = resolveResumingSessionNoticeRunId({
+        entry,
+        recoveryRunId: params.recoveryRunId,
+      });
+      entry.restartRecoveryResumingNoticeRunId = noticeRunId;
+      entry.updatedAt = Date.now();
+      return {
+        result: noticeRunId,
+        replacements: [{ sessionKey: params.sessionKey, entry }],
+      };
+    },
+  });
 }
 
 async function settleRestartRecoveryDispatch(params: {
@@ -202,6 +293,7 @@ export async function resumeMainSession(params: {
   sessionKey: string;
   pendingFinalDeliveryText?: string | null;
   interruptionReason?: MainSessionInterruptionReason;
+  notifyGatewayReset?: boolean;
   forceRestartSafeTools?: boolean;
   sessionWorkAdmissionHandoffId?: string;
 }): Promise<boolean> {
@@ -253,6 +345,33 @@ export async function resumeMainSession(params: {
     if (!recoveryStatePrepared) {
       throw new Error("restart recovery session ownership changed before dispatch");
     }
+    let resumingNoticeRunId: string | undefined;
+    if (deliveryContext && params.notifyGatewayReset !== false) {
+      try {
+        resumingNoticeRunId = await reserveRestartRecoveryResumingNotice({
+          entry: params.entry,
+          recoveryRunId,
+          sessionKey: params.sessionKey,
+          sourceRunId,
+          storePath: params.storePath,
+        });
+      } catch (error) {
+        // Courtesy-notice durability must never become a prerequisite for the
+        // interrupted work's terminality path.
+        log.warn(
+          `failed to reserve gateway reset resuming notice ${params.sessionKey}: ${String(error)}`,
+        );
+      }
+    }
+    const resumingNoticePromise =
+      deliveryContext && resumingNoticeRunId
+        ? sendRestartRecoveryResumingNotice({
+            deliveryContext,
+            entry: params.entry,
+            noticeRunId: resumingNoticeRunId,
+            sessionKey: dispatchSessionKey,
+          })
+        : Promise.resolve();
     const agentParams: Record<string, unknown> = {
       message: buildResumeMessage(
         params.interruptionReason ?? "gateway_restart",
@@ -285,11 +404,12 @@ export async function resumeMainSession(params: {
     if (params.forceRestartSafeTools) {
       log.info(`dispatching restart-safe recovery for ${params.sessionKey}`);
     }
-    const dispatchResult = await callGateway<{ runId: string; status?: unknown }>({
+    const dispatchPromise = callGateway<{ runId: string; status?: unknown }>({
       method: "agent",
       params: agentParams,
       timeoutMs: 10_000,
     });
+    const [dispatchResult] = await Promise.all([dispatchPromise, resumingNoticePromise]);
     let terminalStatus = normalizeRestartRecoveryTerminalStatus(dispatchResult.status);
     if (!terminalStatus && reusingRecoveryRunId && dispatchResult.status === "accepted") {
       terminalStatus = await probeRestartRecoveryTerminalStatus(recoveryRunId);
