@@ -17,6 +17,7 @@ import {
 } from "../../config/sessions/sqlite-marker.js";
 import { clearSessionStoreCacheForTest } from "../../config/sessions/store.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveMessageActionTurnCapability } from "../../gateway/message-action-turn-capability.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
@@ -262,6 +263,8 @@ describe("CLI attempt execution", () => {
     userTurnTranscriptRecorder?: RunAgentAttemptParams["userTurnTranscriptRecorder"];
     sessionEntry?: Partial<SessionEntry>;
     configuredAuthProfileId?: string;
+    messageChannel?: RunAgentAttemptParams["messageChannel"];
+    runContext?: Partial<RunAgentAttemptParams["runContext"]>;
   }) {
     const runId = overrides?.runId ?? "run-embedded-live-stream-gate";
     const sessionKey = `agent:main:direct:${runId}`;
@@ -300,9 +303,9 @@ describe("CLI attempt execution", () => {
         message: "stream gate",
         ...overrides?.opts,
       } as RunAgentAttemptParams["opts"],
-      runContext: {} as RunAgentAttemptParams["runContext"],
+      runContext: (overrides?.runContext ?? {}) as RunAgentAttemptParams["runContext"],
       spawnedBy: undefined,
-      messageChannel: "telegram",
+      messageChannel: overrides?.messageChannel ?? "telegram",
       skillsSnapshot: undefined,
       resolvedVerboseLevel: undefined,
       agentDir: tmpDir,
@@ -2481,6 +2484,112 @@ describe("CLI attempt execution", () => {
     });
 
     expect(embeddedArg.currentMessageId).toBe("1784896784.051849");
+  });
+
+  it("mints an exact current-turn capability for trusted embedded Slack ingress", async () => {
+    const runId = "trusted-slack-message-capability";
+    const sessionKey = `agent:main:direct:${runId}`;
+    let capability: string | undefined;
+    runEmbeddedAgentMock.mockImplementationOnce(async (input: Record<string, unknown>) => {
+      capability = input.messageActionTurnCapability as string | undefined;
+      expect(
+        resolveMessageActionTurnCapability({
+          token: capability,
+          agentId: "main",
+          runId,
+          sessionKey,
+          sessionId: `session-${runId}`,
+        }),
+      ).toMatchObject({
+        requesterAccountId: "default",
+        requesterSenderId: "U028EKM2A",
+        toolContext: {
+          currentChannelProvider: "slack",
+          currentChannelId: "C0BLY1APGH5",
+          currentThreadTs: "1785648163.012979",
+          currentMessageId: "1785648163.012979",
+        },
+      });
+      return { meta: { durationMs: 1 } } satisfies EmbeddedAgentRunResult;
+    });
+
+    await runOpenClawEmbeddedAttemptForTest({
+      runId,
+      messageChannel: "slack",
+      opts: {
+        messageProvider: "slack",
+        requestMessageId: "1785648163.012979",
+      },
+      runContext: {
+        accountId: "default",
+        senderId: "U028EKM2A",
+        currentChannelId: "C0BLY1APGH5",
+        currentThreadTs: "1785648163.012979",
+      },
+    });
+
+    expect(capability).toEqual(expect.any(String));
+    expect(
+      resolveMessageActionTurnCapability({
+        token: capability,
+        agentId: "main",
+        runId,
+        sessionKey,
+        sessionId: `session-${runId}`,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("does not mint a message-action capability without host-owned request identity", async () => {
+    const embeddedArg = await runOpenClawEmbeddedAttemptForTest({
+      runId: "untrusted-slack-message-context",
+      messageChannel: "slack",
+      opts: { messageProvider: "slack" },
+      runContext: {
+        accountId: "default",
+        senderId: "U028EKM2A",
+        currentChannelId: "C0BLY1APGH5",
+      },
+    });
+
+    expect(embeddedArg.messageActionTurnCapability).toBeUndefined();
+  });
+
+  it("revokes the trusted message-action capability when embedded execution rejects", async () => {
+    const runId = "rejected-slack-message-capability";
+    const sessionKey = `agent:main:direct:${runId}`;
+    let capability: string | undefined;
+    runEmbeddedAgentMock.mockImplementationOnce(async (input: Record<string, unknown>) => {
+      capability = input.messageActionTurnCapability as string | undefined;
+      throw new Error("embedded failure");
+    });
+
+    await expect(
+      runOpenClawEmbeddedAttemptForTest({
+        runId,
+        messageChannel: "slack",
+        opts: {
+          messageProvider: "slack",
+          requestMessageId: "1785648163.012979",
+        },
+        runContext: {
+          accountId: "default",
+          senderId: "U028EKM2A",
+          currentChannelId: "C0BLY1APGH5",
+        },
+      }),
+    ).rejects.toThrow("embedded failure");
+
+    expect(capability).toEqual(expect.any(String));
+    expect(
+      resolveMessageActionTurnCapability({
+        token: capability,
+        agentId: "main",
+        runId,
+        sessionKey,
+        sessionId: `session-${runId}`,
+      }),
+    ).toBeUndefined();
   });
 
   it("forwards Gateway plugin runtime binding to embedded runs", async () => {

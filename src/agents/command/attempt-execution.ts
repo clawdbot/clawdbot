@@ -18,6 +18,11 @@ import { readTailAssistantTextFromSessionTranscript } from "../../config/session
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
+  isTrustedMessageActionTurnIngress,
+  mintMessageActionTurnCapability,
+  revokeMessageActionTurnCapability,
+} from "../../gateway/message-action-turn-capability.js";
+import {
   injectTimestamp,
   timestampOptsFromConfig,
 } from "../../gateway/server-methods/agent-timestamp.js";
@@ -123,6 +128,19 @@ const ACP_TRANSCRIPT_USAGE = {
 } as const;
 function shouldSuppressEmbeddedLiveStreamOutput(params: { opts: AgentCommandOpts }): boolean {
   return params.opts.sessionEffects === "internal" && params.opts.deliver !== true;
+}
+
+function createEmbeddedAgentTurnRunner(messageActionTurnCapability: string | undefined) {
+  return (params: Parameters<typeof runEmbeddedAgent>[0]) => {
+    try {
+      return runEmbeddedAgent(params).finally(() => {
+        revokeMessageActionTurnCapability(messageActionTurnCapability);
+      });
+    } catch (error) {
+      revokeMessageActionTurnCapability(messageActionTurnCapability);
+      throw error;
+    }
+  };
 }
 
 type TranscriptUsage = {
@@ -878,7 +896,31 @@ export function runAgentAttempt(params: {
     });
   }
 
-  return runEmbeddedAgent({
+  const requestMessageId = params.opts.requestMessageId?.trim();
+  const messageActionTurnCapability =
+    requestMessageId &&
+    params.sessionKey &&
+    isTrustedMessageActionTurnIngress(params.messageChannel)
+      ? mintMessageActionTurnCapability({
+          agentId: params.sessionAgentId,
+          runId: params.runId,
+          sessionKey: params.sessionKey,
+          sessionId: params.sessionId,
+          requesterAccountId: params.runContext.accountId,
+          requesterSenderId: params.runContext.senderId ?? undefined,
+          toolContext: {
+            currentChannelId: params.runContext.currentChannelId,
+            currentChannelProvider: params.messageChannel,
+            currentThreadTs: params.runContext.currentThreadTs,
+            currentMessageId: requestMessageId,
+            replyToMode: params.runContext.replyToMode,
+            hasRepliedRef: params.runContext.hasRepliedRef,
+          },
+          ttlMs: params.timeoutMs + 60_000,
+        })
+      : undefined;
+  const runEmbeddedAgentForTurn = createEmbeddedAgentTurnRunner(messageActionTurnCapability);
+  return runEmbeddedAgentForTurn({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     sessionTarget: params.sessionTarget,
@@ -898,7 +940,7 @@ export function runAgentAttempt(params: {
     chatId: params.runContext.chatId,
     channelContext: params.runContext.channelContext,
     currentThreadTs: params.runContext.currentThreadTs,
-    currentMessageId: params.opts.requestMessageId,
+    currentMessageId: requestMessageId,
     currentInboundAudio: params.runContext.currentInboundAudio,
     replyToMode: params.runContext.replyToMode,
     hasRepliedRef: params.runContext.hasRepliedRef,
@@ -958,6 +1000,7 @@ export function runAgentAttempt(params: {
     modelRun: params.opts.modelRun,
     promptMode: params.opts.promptMode,
     disableTools: params.opts.modelRun === true,
+    messageActionTurnCapability,
     onAgentEvent: params.onAgentEvent,
     deferTerminalLifecycle: params.deferTerminalLifecycle,
     suppressNextUserMessagePersistence: params.suppressPromptPersistenceOnRetry === true,
