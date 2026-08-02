@@ -21,6 +21,7 @@ import {
   rotateAgentEventLifecycleGeneration,
   runOncePerAgentRun,
   sweepStaleRunContexts,
+  withAgentEventSink,
   withAgentRunLifecycleGeneration,
 } from "./agent-events.js";
 import { emitAgentRunStatusEvent } from "./agent-run-status-events.js";
@@ -57,6 +58,84 @@ describe("agent-events sequencing", () => {
       }),
     ]);
     unsubscribe();
+  });
+
+  test("delivers enriched events to the current runtime sink", () => {
+    const sink = vi.fn();
+    const shared = vi.fn();
+    const stop = onAgentEvent(shared);
+
+    withAgentEventSink(sink, () => {
+      emitAgentEvent({
+        runId: "scoped-run",
+        sessionKey: "agent:main:main",
+        stream: "assistant",
+        data: { delta: "hello" },
+      });
+    });
+
+    stop();
+    expect(sink).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "scoped-run",
+        seq: 1,
+        stream: "assistant",
+        sessionKey: "agent:main:main",
+        data: { delta: "hello" },
+      }),
+    );
+    expect(shared).toHaveBeenCalledWith(sink.mock.calls[0]?.[0]);
+  });
+
+  test("does not deliver events emitted outside the runtime sink scope", () => {
+    const sink = vi.fn();
+
+    withAgentEventSink(sink, () => {
+      emitAgentEvent({ runId: "inside", stream: "assistant", data: { delta: "inside" } });
+    });
+    emitAgentEvent({ runId: "outside", stream: "assistant", data: { delta: "outside" } });
+
+    expect(sink.mock.calls.map(([event]) => event.runId)).toEqual(["inside"]);
+  });
+
+  test("preserves the runtime sink through nested lifecycle ownership", () => {
+    const sink = vi.fn();
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+
+    withAgentEventSink(sink, () =>
+      withAgentRunLifecycleGeneration(lifecycleGeneration, () => {
+        emitAgentEvent({
+          runId: "nested-run",
+          lifecycleGeneration,
+          stream: "lifecycle",
+          data: { phase: "start", startedAt: 1_000 },
+        });
+      }),
+    );
+
+    expect(sink).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "nested-run",
+        lifecycleGeneration,
+        stream: "lifecycle",
+      }),
+    );
+  });
+
+  test("isolates runtime sink failures from event producers", () => {
+    expect(() =>
+      withAgentEventSink(
+        () => {
+          throw new Error("sink failed");
+        },
+        () =>
+          emitAgentEvent({
+            runId: "sink-error",
+            stream: "assistant",
+            data: { delta: "still delivered" },
+          }),
+      ),
+    ).not.toThrow();
   });
 
   test("stores and clears run context", () => {

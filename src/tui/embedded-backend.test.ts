@@ -1,4 +1,5 @@
 // Covers embedded backend behavior used by the TUI runtime.
+import { AsyncLocalStorage } from "node:async_hooks";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
@@ -78,6 +79,8 @@ const loadSessionEntryMock = vi.fn(
   }),
 );
 let registeredListener: ((evt: unknown) => void) | undefined;
+const activeEventSinks = new Set<(evt: unknown) => void>();
+const eventSinkStorage = new AsyncLocalStorage<(evt: unknown) => void>();
 const embeddedEventTimestamp = Date.parse("2026-05-09T07:26:00.000Z");
 
 vi.mock("../agents/agent-command.js", () => ({
@@ -99,15 +102,31 @@ vi.mock("../infra/agent-events.js", () => ({
   getAgentEventLifecycleGeneration: () => "test-generation",
   isAgentEventLifecycleGenerationCurrent: (generation: string) => generation === "test-generation",
   registerAgentEventLifecycleRotationHandler: vi.fn(),
-  onAgentEvent: (listener: (evt: unknown) => void) => {
-    registeredListener = listener;
-    return () => {
-      if (registeredListener === listener) {
-        registeredListener = undefined;
+  withAgentEventSink: <T>(sink: (evt: unknown) => void, run: () => T): T =>
+    eventSinkStorage.run(sink, () => {
+      activeEventSinks.add(sink);
+      try {
+        const result = run();
+        if (result instanceof Promise) {
+          return result.finally(() => activeEventSinks.delete(sink)) as T;
+        }
+        activeEventSinks.delete(sink);
+        return result;
+      } catch (error) {
+        activeEventSinks.delete(sink);
+        throw error;
       }
-    };
-  },
+    }),
+  withAgentRunLifecycleGeneration: <T>(_generation: string, run: () => T): T => run(),
 }));
+
+function installEventDispatcher() {
+  registeredListener = (event) => {
+    for (const sink of activeEventSinks) {
+      notifyListeners([sink], event);
+    }
+  };
+}
 
 vi.mock("../cli/deps.js", () => ({
   createDefaultDeps: () => ({}),
@@ -373,7 +392,8 @@ describe("EmbeddedTuiBackend", () => {
     }));
     buildGatewaySessionInfoMock.mockClear();
     getSessionDefaultsMock.mockClear();
-    registeredListener = undefined;
+    activeEventSinks.clear();
+    installEventDispatcher();
     setEmbeddedMode(false);
     defaultRuntime.log = originalRuntimeLog;
     defaultRuntime.error = originalRuntimeError;
@@ -557,6 +577,119 @@ describe("EmbeddedTuiBackend", () => {
     backend.onEvent = undefined;
     pending.resolve({ payloads: [{ text: "hello" }], meta: {} });
     await flushMicrotasks();
+    await backend.stop();
+  });
+
+  it("can start again after stopping", async () => {
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    agentCommandFromIngressMock.mockResolvedValueOnce({
+      payloads: [{ text: "after restart" }],
+      meta: {},
+    });
+    const backend = new EmbeddedTuiBackend();
+    const onConnected = vi.fn();
+    backend.onConnected = onConnected;
+
+    backend.start();
+    await flushMicrotasks();
+    await backend.stop();
+    backend.start();
+    await flushMicrotasks();
+
+    await backend.sendChat({
+      sessionKey: "agent:main:main",
+      message: "hello again",
+      runId: "run-after-restart",
+    });
+    await vi.waitFor(() => expect(agentCommandFromIngressMock).toHaveBeenCalledOnce());
+    expect(onConnected).toHaveBeenCalledTimes(2);
+    await backend.stop();
+  });
+
+  it("ignores late turn events after stopping", async () => {
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const pending = deferred<{
+      payloads: Array<{ text: string }>;
+      meta: Record<string, unknown>;
+    }>();
+    agentCommandFromIngressMock.mockReturnValueOnce(pending.promise);
+    const backend = new EmbeddedTuiBackend();
+    const events: Array<{ event: string; payload: unknown }> = [];
+    backend.onEvent = (event) => {
+      events.push({ event: event.event, payload: event.payload });
+    };
+
+    backend.start();
+    await backend.sendChat({
+      sessionKey: "agent:main:main",
+      message: "still running",
+      runId: "run-detached-on-stop",
+    });
+    await backend.stop();
+
+    registeredListener?.({
+      runId: "run-detached-on-stop",
+      stream: "assistant",
+      data: { delta: "too late" },
+    });
+    expect(events).toEqual([]);
+
+    pending.resolve({ payloads: [{ text: "too late" }], meta: {} });
+    await flushMicrotasks();
+    expect(events).toEqual([]);
+  });
+
+  it("does not let a stopped turn settle into a reused run id after restart", async () => {
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const stale = deferred<{
+      payloads: Array<{ text: string }>;
+      meta: Record<string, unknown>;
+    }>();
+    const replacement = deferred<{
+      payloads: Array<{ text: string }>;
+      meta: Record<string, unknown>;
+    }>();
+    agentCommandFromIngressMock
+      .mockReturnValueOnce(stale.promise)
+      .mockReturnValueOnce(replacement.promise);
+    const backend = new EmbeddedTuiBackend();
+    const chatEvents: Array<{ runId?: string; state?: string; message?: unknown }> = [];
+    backend.onEvent = (event) => {
+      if (event.event === "chat") {
+        chatEvents.push(event.payload as (typeof chatEvents)[number]);
+      }
+    };
+
+    backend.start();
+    await backend.sendChat({
+      sessionKey: "agent:main:main",
+      message: "old",
+      runId: "reused-after-restart",
+    });
+    await backend.stop();
+    backend.start();
+    await backend.sendChat({
+      sessionKey: "agent:main:main",
+      message: "new",
+      runId: "reused-after-restart",
+    });
+
+    stale.resolve({ payloads: [{ text: "stale result" }], meta: {} });
+    await flushMicrotasks();
+    expect(chatEvents).toEqual([]);
+
+    replacement.resolve({ payloads: [{ text: "fresh result" }], meta: {} });
+    await vi.waitFor(() => {
+      expect(chatEvents).toEqual([
+        expect.objectContaining({
+          runId: "reused-after-restart",
+          state: "final",
+          message: expect.objectContaining({
+            content: [{ type: "text", text: "fresh result" }],
+          }),
+        }),
+      ]);
+    });
     await backend.stop();
   });
 
@@ -1315,7 +1448,7 @@ describe("EmbeddedTuiBackend", () => {
     await stopPromise;
 
     expect(abortListener).not.toHaveBeenCalled();
-    expect(registeredListener).toBeUndefined();
+    expect(activeEventSinks.size).toBe(0);
     expect(isEmbeddedMode()).toBe(false);
   });
 
@@ -3023,8 +3156,7 @@ describe("EmbeddedTuiBackend", () => {
       expect(sentDuringError).toBeDefined();
     });
     await sentDuringError;
-    await flushMicrotasks();
-    expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(2));
   });
 
   it.each([

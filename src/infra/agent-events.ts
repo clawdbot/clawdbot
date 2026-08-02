@@ -127,6 +127,7 @@ const AGENT_EVENT_EXECUTION_CONTEXT_KEY = Symbol.for("openclaw.agentEvents.execu
 type AgentEventExecutionContext = {
   lifecycleGeneration: string;
   onceByRun: Map<string, Promise<unknown>>;
+  eventSink?: (event: AgentEventPayload) => void;
 };
 
 function getAgentEventState(): AgentEventState {
@@ -152,7 +153,29 @@ export function withAgentRunLifecycleGeneration<T>(lifecycleGeneration: string, 
   const parent = storage.getStore();
   const onceByRun =
     parent?.lifecycleGeneration === lifecycleGeneration ? parent.onceByRun : new Map();
-  return storage.run({ lifecycleGeneration, onceByRun }, run);
+  return storage.run({ lifecycleGeneration, onceByRun, eventSink: parent?.eventSink }, run);
+}
+
+/**
+ * Delivers enriched events directly to the runtime that owns the current turn.
+ *
+ * The sink follows async work through nested lifecycle scopes while the shared
+ * listener bus remains available for Gateway projections and compatibility.
+ */
+export function withAgentEventSink<T>(
+  eventSink: (event: AgentEventPayload) => void,
+  run: () => T,
+): T {
+  const storage = getAgentEventExecutionContext();
+  const parent = storage.getStore();
+  return storage.run(
+    {
+      lifecycleGeneration: parent?.lifecycleGeneration ?? getAgentEventState().lifecycleGeneration,
+      onceByRun: parent?.onceByRun ?? new Map(),
+      eventSink,
+    },
+    run,
+  );
 }
 
 /** Shares one operation across fallback attempts that belong to the same admitted run. */
@@ -709,6 +732,10 @@ export function emitAgentEventIfCurrent(event: Omit<AgentEventPayload, "seq" | "
     return false;
   }
   notifyListeners(getAgentEventState().listeners, enriched);
+  const eventSink = getAgentEventExecutionContext().getStore()?.eventSink;
+  if (eventSink) {
+    notifyListeners([eventSink], enriched);
+  }
   return true;
 }
 
@@ -724,6 +751,10 @@ export function emitAgentEventForOwner(
   const enriched = enrichAgentEvent(event, claimId);
   if (enriched) {
     notifyListeners(getAgentEventState().listeners, enriched);
+    const eventSink = getAgentEventExecutionContext().getStore()?.eventSink;
+    if (eventSink) {
+      notifyListeners([eventSink], enriched);
+    }
   }
 }
 
