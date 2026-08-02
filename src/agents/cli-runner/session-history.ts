@@ -20,7 +20,6 @@ import {
   scanSessionTranscriptTree,
   selectSessionTranscriptLeafControlledPath,
 } from "../../config/sessions/transcript-tree.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { readFileWindowFully } from "../../infra/file-read.js";
 import { isPathInside } from "../../infra/path-guards.js";
@@ -71,13 +70,10 @@ type HistoryEntry = {
   tokensAfter?: unknown;
 };
 
-type CliSessionTranscriptParams = {
-  sessionId: string;
-  sessionFile: string;
-  sessionKey?: string;
-  agentId?: string;
-  config?: OpenClawConfig;
-  storePath?: string;
+type CliSessionTranscriptParams = Pick<
+  RunCliAgentParams,
+  "sessionId" | "sessionFile" | "sessionKey" | "agentId" | "config" | "storePath"
+> & {
   excludeMessageIdempotencyKey?: string;
 };
 
@@ -570,7 +566,9 @@ async function loadCliSessionEntries(params: CliSessionTranscriptParams): Promis
         excludeMessageIdempotencyKey: params.excludeMessageIdempotencyKey,
       });
     }
-    if (params.sessionFile.trim().startsWith("sqlite:")) return [];
+    if (params.sessionFile.trim().startsWith("sqlite:")) {
+      return [];
+    }
     const { sessionFile, sessionsDir } = resolveSafeCliSessionFile(params);
     const entryStat = await fsp.lstat(sessionFile);
     if (!entryStat.isFile() || entryStat.isSymbolicLink()) {
@@ -654,7 +652,9 @@ export async function hasCliSessionTranscript(
     if (transcriptScope) {
       return hasTranscriptEventsSync(transcriptScope);
     }
-    if (params.sessionFile.trim().startsWith("sqlite:")) return false;
+    if (params.sessionFile.trim().startsWith("sqlite:")) {
+      return false;
+    }
     const { sessionFile, sessionsDir } = resolveSafeCliSessionFile(params);
     const entryStat = await fsp.lstat(sessionFile);
     if (!entryStat.isFile() || entryStat.isSymbolicLink()) {
