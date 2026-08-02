@@ -27,11 +27,6 @@ struct OpenClawApp: App {
         self.statusItem?.button?.highlight(self.isPanelVisible)
     }
 
-    @MainActor
-    private func updateHoverHUDSuppression() {
-        HoverHUDController.shared.setSuppressed(self.isMenuPresented || self.isPanelVisible)
-    }
-
     init() {
         OpenClawLogging.bootstrapIfNeeded()
 
@@ -66,7 +61,6 @@ struct OpenClawApp: App {
             MenuSessionsInjector.shared.install(into: item)
             self.applyStatusItemAppearance(paused: self.state.isPaused, sleeping: self.isGatewaySleeping)
             self.installStatusItemMouseHandler(for: item)
-            self.updateHoverHUDSuppression()
         }
         .menuBarExtraStyle(.menu)
         .onChange(of: self.state.isPaused) { _, paused in
@@ -144,7 +138,6 @@ struct OpenClawApp: App {
         }
         .onChange(of: self.isMenuPresented) { _, _ in
             self.updateStatusHighlight()
-            self.updateHoverHUDSuppression()
         }
     }
 
@@ -198,7 +191,6 @@ struct OpenClawApp: App {
         WebChatManager.shared.onPanelVisibilityChanged = { [self] visible in
             self.isPanelVisible = visible
             self.updateStatusHighlight()
-            self.updateHoverHUDSuppression()
         }
         CanvasManager.shared.onPanelVisibilityChanged = { [self] visible in
             self.state.canvasPanelVisible = visible
@@ -208,25 +200,17 @@ struct OpenClawApp: App {
         self.statusItemMouseRouter.install(
             on: item,
             onLeftClick: { [self] in
-                HoverHUDController.shared.dismiss()
                 self.openDashboardWindow()
             },
             onRightClick: { [self] in
-                HoverHUDController.shared.dismiss()
                 WebChatManager.shared.closePanel()
                 self.isMenuPresented = true
                 self.updateStatusHighlight()
-            },
-            onHoverChanged: { [self] inside in
-                HoverHUDController.shared.statusItemHoverChanged(
-                    inside: inside,
-                    anchorProvider: { [self] in self.statusButtonScreenFrame() })
             })
     }
 
     @MainActor
     private func openDashboardWindow() {
-        HoverHUDController.shared.setSuppressed(true)
         self.isMenuPresented = false
         AppNavigationActions.openDashboard()
     }
@@ -263,10 +247,8 @@ final class StatusItemMouseRouter: NSResponder {
 
     private weak var button: NSView?
     private var eventMonitor: Any?
-    private var trackingArea: NSTrackingArea?
     private var onLeftClick: (() -> Void)?
     private var onRightClick: (() -> Void)?
-    private var onHoverChanged: ((Bool) -> Void)?
     private let eventMonitorInstaller: EventMonitorInstaller
     private let eventMonitorRemover: EventMonitorRemover
 
@@ -296,27 +278,23 @@ final class StatusItemMouseRouter: NSResponder {
     func install(
         on item: NSStatusItem,
         onLeftClick: @escaping () -> Void,
-        onRightClick: @escaping () -> Void,
-        onHoverChanged: @escaping (Bool) -> Void)
+        onRightClick: @escaping () -> Void)
     {
         guard let button = item.button else { return }
         self.install(
             on: button,
             onLeftClick: onLeftClick,
-            onRightClick: onRightClick,
-            onHoverChanged: onHoverChanged)
+            onRightClick: onRightClick)
     }
 
     func install(
         on button: NSView,
         onLeftClick: @escaping () -> Void,
-        onRightClick: @escaping () -> Void,
-        onHoverChanged: @escaping (Bool) -> Void)
+        onRightClick: @escaping () -> Void)
     {
         self.onLeftClick = onLeftClick
         self.onRightClick = onRightClick
-        self.onHoverChanged = onHoverChanged
-        self.track(button)
+        self.button = button
 
         guard self.eventMonitor == nil else { return }
         self.eventMonitor = Self.installMonitor(using: self.eventMonitorInstaller) { [weak self] event in
@@ -361,33 +339,10 @@ final class StatusItemMouseRouter: NSResponder {
         }
     }
 
-    private func track(_ button: NSView) {
-        guard self.button !== button else { return }
-        if let previousButton = self.button, let trackingArea {
-            previousButton.removeTrackingArea(trackingArea)
-        }
-        let trackingArea = NSTrackingArea(
-            rect: button.bounds,
-            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
-            owner: self,
-            userInfo: nil)
-        button.addTrackingArea(trackingArea)
-        self.button = button
-        self.trackingArea = trackingArea
-    }
-
     private static func contains(_ event: NSEvent, in button: NSView) -> Bool {
         guard let window = button.window, event.windowNumber == window.windowNumber else { return false }
         let point = button.convert(event.locationInWindow, from: nil)
         return button.bounds.contains(point)
-    }
-
-    override func mouseEntered(with _: NSEvent) {
-        self.onHoverChanged?(true)
-    }
-
-    override func mouseExited(with _: NSEvent) {
-        self.onHoverChanged?(false)
     }
 
     @MainActor deinit {
