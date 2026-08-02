@@ -2,6 +2,7 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { McpLoopbackRequestContext } from "../../gateway/mcp-grant-store.js";
+import { resolveAgentToAgentSendSourceSessionKey } from "../../sessions/input-provenance.a2a.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import type { RunCliAgentParams } from "./types.js";
 
@@ -155,6 +156,9 @@ export function buildCliMcpGrantContext(params: {
     sourceReplyDeliveryMode: params.run.sourceReplyDeliveryMode,
     ...(sourceReplyOnly ? { sourceReplyOnly: true } : {}),
     taskSuggestionDeliveryMode: params.run.taskSuggestionDeliveryMode,
+    sessionsSendCallerSessionKey: resolveAgentToAgentSendSourceSessionKey(
+      params.run.inputProvenance,
+    ),
     requireExplicitMessageTarget: params.requireExplicitMessageTarget ? true : undefined,
     senderIsOwner: params.run.senderIsOwner === true,
     nodeExecAllowed: true,

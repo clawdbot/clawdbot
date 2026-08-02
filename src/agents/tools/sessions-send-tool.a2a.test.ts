@@ -392,7 +392,7 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
     expect(firstMockArg(vi.mocked(runAgentStep), "agent step")).toMatchObject({
       sessionKey: "agent:main:discord:group:req",
       sourceSessionKey: "agent:worker:discord:group:dev",
-      sourceTool: "sessions_send",
+      sourceTool: "sessions_send_delivery_failure",
     });
     const stepInput = firstMockArg(vi.mocked(runAgentStep), "agent step");
     expect(stepInput.message).toContain("sessions_send delivery to");

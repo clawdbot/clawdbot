@@ -133,7 +133,9 @@ export async function runSessionsSendA2AFlow(params: {
             timeoutMs: params.announceTimeoutMs,
             lane: resolveNestedAgentLaneForSession(params.requesterSessionKey),
             sourceSessionKey: params.targetSessionKey,
-            sourceTool: "sessions_send",
+            // This is a requester recovery turn, not the target A2A turn. Keep
+            // sessions_send available so the model can perform the requested retry.
+            sourceTool: "sessions_send_delivery_failure",
           });
         }
         return;

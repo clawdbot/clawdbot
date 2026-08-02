@@ -116,6 +116,7 @@ vi.mock("../../agents/embedded-agent-runner/runs.js", () => ({
       ? `queue_message_failed reason=${outcome.reason} sessionId=${outcome.sessionId} gatewayHealth=live`
       : undefined,
   queueEmbeddedAgentMessageWithOutcomeAsync: queueEmbeddedAgentMessageWithOutcomeAsyncMock,
+  retainSessionsSendTargetBlockForActiveRun: () => undefined,
 }));
 
 vi.mock("../../cli/command-secret-gateway.js", () => ({

@@ -2,7 +2,7 @@
 import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
-import type { InputProvenance } from "../../sessions/input-provenance.js";
+import { isSessionsSendHandoffInputProvenance } from "../../sessions/input-provenance.a2a.js";
 import {
   deliveryContextFromSession,
   sessionDeliveryOrigin,
@@ -39,13 +39,6 @@ type EffectiveReplyRoute = {
 /** Returns true for synthetic providers that should not define a user channel route. */
 export function isSystemEventProvider(provider?: string): boolean {
   return provider === "heartbeat" || provider === "cron-event" || provider === "exec-event";
-}
-
-function isSessionsSendInterSessionHandoff(inputProvenance: InputProvenance | undefined): boolean {
-  return (
-    inputProvenance?.kind === "inter_session" &&
-    inputProvenance.sourceTool?.toLowerCase() === "sessions_send"
-  );
 }
 
 function resolveTrustedInheritedThreadId(
@@ -87,7 +80,7 @@ export function resolveEffectiveReplyRoute(params: {
     params.entry?.chatType ??
     normalizeChatType(persistedOrigin?.chatType);
   if (
-    isSessionsSendInterSessionHandoff(params.ctx.InputProvenance) &&
+    isSessionsSendHandoffInputProvenance(params.ctx.InputProvenance) &&
     currentSurface === INTERNAL_MESSAGE_CHANNEL &&
     persistedDeliveryChannel &&
     persistedDeliveryChannel !== INTERNAL_MESSAGE_CHANNEL &&

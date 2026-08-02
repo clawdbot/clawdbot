@@ -2,8 +2,10 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
 import {
+  type EmbeddedAgentQueueMessageOutcome,
   formatEmbeddedAgentQueueFailureSummary,
   queueEmbeddedAgentMessageWithOutcomeAsync,
+  retainSessionsSendTargetBlockForActiveRun,
 } from "../../agents/embedded-agent-runner/runs.js";
 import { isIngressAdoptionLostError } from "../../channels/message/ingress-drain.js";
 import { hasRestartRecoverySourceClaim } from "../../config/sessions/restart-recovery-state.js";
@@ -19,6 +21,7 @@ import {
   buildAgentHookContextChannelFields,
   buildAgentHookContextIdentityFields,
 } from "../../plugins/hook-agent-context.js";
+import { resolveAgentToAgentSendSourceSessionKey } from "../../sessions/input-provenance.a2a.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
@@ -275,26 +278,43 @@ export async function runReplyAgent(
       typing.cleanup();
       return buildHandledBeforeAgentReplyPayloads(hookResult.reply);
     }
-    const steerOutcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
-      steerSessionId,
-      followupRun.prompt,
-      {
-        steeringMode: "all",
-        isInboundUserMessage: true,
-        ...(followupRun.images?.length ? { images: followupRun.images } : {}),
-        ...(followupRun.imageOrder?.length ? { imageOrder: followupRun.imageOrder } : {}),
-        ...(followupRun.media?.length ? { media: followupRun.media } : {}),
-        ...(turnAdoptionLifecycle ? { waitForTranscriptCommit: true } : {}),
-        ...(resolvedQueue.debounceMs !== undefined ? { debounceMs: resolvedQueue.debounceMs } : {}),
-        ...(followupRun.run.sourceReplyDeliveryMode
-          ? { sourceReplyDeliveryMode: followupRun.run.sourceReplyDeliveryMode }
-          : {}),
-        taskSuggestionDeliveryMode: followupRun.run.taskSuggestionDeliveryMode,
-        ...(followupRun.userTurnTranscriptRecorder
-          ? { userTurnTranscriptRecorder: followupRun.userTurnTranscriptRecorder }
-          : {}),
-      },
+    const sessionsSendCallerSessionKey = resolveAgentToAgentSendSourceSessionKey(
+      followupRun.run.inputProvenance,
     );
+    const releaseSessionsSendTargetBlock = sessionsSendCallerSessionKey
+      ? retainSessionsSendTargetBlockForActiveRun({
+          sessionId: steerSessionId,
+          targetSessionKey: sessionsSendCallerSessionKey,
+        })
+      : undefined;
+    let steerOutcome: EmbeddedAgentQueueMessageOutcome;
+    try {
+      steerOutcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
+        steerSessionId,
+        followupRun.prompt,
+        {
+          steeringMode: "all",
+          isInboundUserMessage: true,
+          ...(followupRun.images?.length ? { images: followupRun.images } : {}),
+          ...(followupRun.imageOrder?.length ? { imageOrder: followupRun.imageOrder } : {}),
+          ...(followupRun.media?.length ? { media: followupRun.media } : {}),
+          ...(turnAdoptionLifecycle ? { waitForTranscriptCommit: true } : {}),
+          ...(resolvedQueue.debounceMs !== undefined
+            ? { debounceMs: resolvedQueue.debounceMs }
+            : {}),
+          ...(followupRun.run.sourceReplyDeliveryMode
+            ? { sourceReplyDeliveryMode: followupRun.run.sourceReplyDeliveryMode }
+            : {}),
+          taskSuggestionDeliveryMode: followupRun.run.taskSuggestionDeliveryMode,
+          ...(followupRun.userTurnTranscriptRecorder
+            ? { userTurnTranscriptRecorder: followupRun.userTurnTranscriptRecorder }
+            : {}),
+        },
+      );
+    } catch (error) {
+      releaseSessionsSendTargetBlock?.();
+      throw error;
+    }
     if (steerOutcome.queued) {
       if (replyOperationRunState) {
         // Transcript commit has already transferred this turn to the active
@@ -343,6 +363,7 @@ export async function runReplyAgent(
       typing.cleanup();
       return undefined;
     }
+    releaseSessionsSendTargetBlock?.();
     // The active runtime still owns the turn but cannot prove transcript adoption.
     // Keep the inbound message queued so ingress can finalize after a later run.
     shouldQueueAfterSteerRejection = steerOutcome.reason === "transcript_commit_wait_unsupported";

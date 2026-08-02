@@ -9,6 +9,7 @@ import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-co
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
+import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
 import { parseSessionThreadInfo } from "../../config/sessions/thread-info.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { AgentRouteBinding } from "../../config/types.agents.js";
@@ -45,7 +46,9 @@ import {
   type EmbeddedAgentQueueMessageOptions,
   type EmbeddedAgentQueueMessageOutcome,
   formatEmbeddedAgentQueueFailureSummary,
+  isSessionsSendTargetBlockedForActiveRun,
   queueEmbeddedAgentMessageWithOutcomeAsync,
+  retainSessionsSendTargetBlockForActiveRun,
   resolveActiveEmbeddedRunSessionId,
 } from "../embedded-agent-runner/runs.js";
 import { resolveNestedAgentLaneForSession } from "../lanes.js";
@@ -75,6 +78,7 @@ import {
   resolveVisibleSessionReference,
 } from "./sessions-helpers.js";
 import { buildAgentToAgentMessageContext, resolvePingPongTurns } from "./sessions-send-helpers.js";
+import { captureSessionsSendRestrictionContext } from "./sessions-send-restriction-context.js";
 import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
 
 const SessionsSendToolSchema = Type.Object({
@@ -200,6 +204,54 @@ function isConfiguredAgentMainSessionKey(params: {
       mainKey: params.mainKey,
     })
   );
+}
+
+type SessionsSendSessionIdentity = {
+  agentId?: string;
+  sessionKey: string;
+};
+
+function resolveSessionsSendSessionIdentity(
+  cfg: OpenClawConfig,
+  sessionKey: string,
+): SessionsSendSessionIdentity {
+  const agentId = parseAgentSessionKey(sessionKey)?.agentId;
+  return {
+    ...(agentId ? { agentId } : {}),
+    sessionKey: canonicalizeMainSessionAlias({
+      cfg,
+      agentId: agentId ?? resolveDefaultAgentId(cfg),
+      sessionKey,
+    }),
+  };
+}
+
+function sessionsSendSessionIdentitiesMatch(
+  cfg: OpenClawConfig,
+  leftSessionKey: string,
+  rightSessionKey: string,
+): boolean {
+  const left = resolveSessionsSendSessionIdentity(cfg, leftSessionKey);
+  const right = resolveSessionsSendSessionIdentity(cfg, rightSessionKey);
+  return (
+    left.sessionKey === right.sessionKey &&
+    (!left.agentId || !right.agentId || left.agentId === right.agentId)
+  );
+}
+
+function resolveScopedGlobalRequesterSessionKey(params: {
+  agentId?: string;
+  cfg: OpenClawConfig;
+  mainKey: string;
+  requesterSessionKey?: string;
+}): string | undefined {
+  if (params.cfg.session?.scope !== "global" || params.requesterSessionKey !== "global") {
+    return undefined;
+  }
+  return buildAgentMainSessionKey({
+    agentId: normalizeAgentId(params.agentId ?? resolveDefaultAgentId(params.cfg)),
+    mainKey: params.mainKey,
+  });
 }
 
 async function ensureConfiguredAgentMainSession(params: {
@@ -339,6 +391,7 @@ async function startAgentRun(params: {
   sessionKey: string;
   deliveryTimeoutMs?: number;
   allowActiveRunQueueDelivery?: boolean;
+  sessionsSendCallerSessionKey?: string;
 }): Promise<
   | {
       ok: true;
@@ -369,23 +422,36 @@ async function startAgentRun(params: {
         waitForTranscriptCommit: true,
         ...(sourceReplyDeliveryMode ? { sourceReplyDeliveryMode } : {}),
       };
-      let queueOutcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
-        activeRunSessionId,
-        messageText,
-        queueOptions,
-      );
-      if (!queueOutcome.queued && queueOutcome.reason === "transcript_commit_wait_unsupported") {
-        const bestEffortQueueOptions = { ...queueOptions };
-        delete bestEffortQueueOptions.waitForTranscriptCommit;
+      const releaseTargetBlock = params.sessionsSendCallerSessionKey
+        ? retainSessionsSendTargetBlockForActiveRun({
+            sessionId: activeRunSessionId,
+            targetSessionKey: params.sessionsSendCallerSessionKey,
+          })
+        : undefined;
+      let queueOutcome: EmbeddedAgentQueueMessageOutcome;
+      try {
         queueOutcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
           activeRunSessionId,
           messageText,
-          bestEffortQueueOptions,
+          queueOptions,
         );
+        if (!queueOutcome.queued && queueOutcome.reason === "transcript_commit_wait_unsupported") {
+          const bestEffortQueueOptions = { ...queueOptions };
+          delete bestEffortQueueOptions.waitForTranscriptCommit;
+          queueOutcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
+            activeRunSessionId,
+            messageText,
+            bestEffortQueueOptions,
+          );
+        }
+      } catch (error) {
+        releaseTargetBlock?.();
+        throw error;
       }
       if (queueOutcome.queued) {
         return { ok: true, runId: params.runId, activeRunQueue: true };
       }
+      releaseTargetBlock?.();
       const fallbackSessionKey = resolveCronRunScopedFallbackSessionKey(params.sessionKey);
       if (fallbackSessionKey && shouldFallbackCronRunScopedActiveDelivery(queueOutcome)) {
         const response = await params.callGateway<{ runId: string }>({
@@ -434,12 +500,14 @@ async function startAgentRun(params: {
 }
 
 export function createSessionsSendTool(opts?: {
+  agentId?: string;
   agentSessionKey?: string;
   agentChannel?: GatewayMessageChannel;
   sandboxed?: boolean;
   config?: OpenClawConfig;
   callGateway?: GatewayCaller;
 }): AnyAgentTool {
+  const restrictionContext = captureSessionsSendRestrictionContext();
   return {
     label: "Session Send",
     name: "sessions_send",
@@ -603,6 +671,27 @@ export function createSessionsSendTool(opts?: {
       // Normalize sessionKey/sessionId input into a canonical session key.
       const resolvedKey = visibleSession.key;
       const displayKey = visibleSession.displayKey;
+      const sessionsSendCallerSessionKey = normalizeOptionalString(
+        restrictionContext.callerSessionKey,
+      );
+      if (
+        (sessionsSendCallerSessionKey &&
+          sessionsSendSessionIdentitiesMatch(cfg, resolvedKey, sessionsSendCallerSessionKey)) ||
+        isSessionsSendTargetBlockedForActiveRun({
+          sessionId: restrictionContext.agentSessionId,
+          targetSessionKey: resolvedKey,
+          matchesSessionKey: (blockedSessionKey, targetSessionKey) =>
+            sessionsSendSessionIdentitiesMatch(cfg, blockedSessionKey, targetSessionKey),
+        })
+      ) {
+        return jsonResult({
+          runId: crypto.randomUUID(),
+          status: "forbidden",
+          error:
+            "sessions_send cannot send back to the requester of the current A2A handoff; return the result in this turn instead",
+          sessionKey: unresolvedDisplayKey,
+        });
+      }
       const rawRequesterSessionKey = opts?.agentSessionKey ? effectiveRequesterKey : undefined;
       const parsedRequesterSessionKey = parseAgentSessionKey(rawRequesterSessionKey);
       const requesterRouteBindings = cfg.bindings?.filter(
@@ -682,7 +771,13 @@ export function createSessionsSendTool(opts?: {
       // checks; global/binding-isolated DMs and non-DM owners stay private.
       const requesterSessionKey = rawRequesterSessionKey;
       const replyRequesterSessionKey =
-        rawRequesterSessionKey &&
+        resolveScopedGlobalRequesterSessionKey({
+          agentId: opts?.agentId,
+          cfg,
+          mainKey,
+          requesterSessionKey: rawRequesterSessionKey,
+        }) ??
+        (rawRequesterSessionKey &&
         parsedRequesterSessionKey &&
         rawRequesterSessionKey !== resolvedKey &&
         requesterDmScope === "main" &&
@@ -697,7 +792,7 @@ export function createSessionsSendTool(opts?: {
               agentId: parsedRequesterSessionKey.agentId,
               mainKey,
             })
-          : rawRequesterSessionKey;
+          : rawRequesterSessionKey);
       const timeoutMs =
         finiteSecondsToTimerSafeMilliseconds(timeoutSeconds, {
           floorSeconds: true,
@@ -929,6 +1024,7 @@ export function createSessionsSendTool(opts?: {
               sessionKey: displayKey,
               deliveryTimeoutMs: announceTimeoutMs,
               allowActiveRunQueueDelivery: true,
+              sessionsSendCallerSessionKey: replyRequesterSessionKey,
             });
             if (!start.ok) {
               return start.result;

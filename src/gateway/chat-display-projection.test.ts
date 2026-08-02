@@ -1,8 +1,32 @@
 import { describe, expect, it } from "vitest";
-import { sanitizeChatHistoryMessages } from "./chat-display-projection.js";
+import {
+  projectChatDisplayMessages,
+  sanitizeChatHistoryMessages,
+} from "./chat-display-projection.js";
 import { mirrorMessageToolVisibleReplies } from "./chat-display-projection.message-tool.js";
 
 describe("chat display message-tool projection", () => {
+  it("projects sessions_send delivery recovery as synthetic inter-session content", () => {
+    const projected = projectChatDisplayMessages([
+      {
+        role: "user",
+        content: [{ type: "text", text: "Retry or report the failed delivery." }],
+        provenance: {
+          kind: "inter_session",
+          sourceSessionKey: "agent:worker:main",
+          sourceTool: "sessions_send_delivery_failure",
+        },
+      },
+    ]);
+
+    expect(projected).toContainEqual(
+      expect.objectContaining({
+        role: "assistant",
+        senderLabel: "Forwarded from worker",
+      }),
+    );
+  });
+
   it("mirrors an automatic-mode send confirmed for the current source", () => {
     const sourceReply = "Visible reply delivered to Slack.";
     const projected = mirrorMessageToolVisibleReplies([

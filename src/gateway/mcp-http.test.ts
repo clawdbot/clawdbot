@@ -60,6 +60,7 @@ type ScopedToolsCall = {
   sourceReplyDeliveryMode?: string;
   sourceReplyOnly?: boolean;
   taskSuggestionDeliveryMode?: string;
+  sessionsSendCallerSessionKey?: string;
   requireExplicitMessageTarget?: boolean;
   senderIsOwner?: boolean;
   conversationReadOrigin?: "delegated" | "direct-operator";
@@ -1300,6 +1301,7 @@ describe("mcp loopback server", () => {
         sourceReplyOnly: true,
         toolsAllow: ["message"],
         taskSuggestionDeliveryMode: "gateway",
+        sessionsSendCallerSessionKey: "agent:requester:main",
         requireExplicitMessageTarget: true,
         senderIsOwner: false,
         nodeExecAllowed: true,
@@ -1383,6 +1385,7 @@ describe("mcp loopback server", () => {
       sourceReplyDeliveryMode: "message_tool_only",
       sourceReplyOnly: true,
       taskSuggestionDeliveryMode: "gateway",
+      sessionsSendCallerSessionKey: "agent:requester:main",
       requireExplicitMessageTarget: true,
       senderIsOwner: false,
       nodeExecAllowed: true,

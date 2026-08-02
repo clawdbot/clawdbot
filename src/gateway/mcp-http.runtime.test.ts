@@ -197,4 +197,17 @@ describe("McpLoopbackToolCache", () => {
     expect(resolveGatewayScopedTools.mock.calls[0]?.[0]).not.toHaveProperty("sourceReplyOnly");
     expect(resolveGatewayScopedTools.mock.calls[1]?.[0]).toMatchObject({ sourceReplyOnly: true });
   });
+
+  it("does not share cache rows across sessions_send requester restrictions", () => {
+    const cache = new McpLoopbackToolCache();
+    const cfg = {} as OpenClawConfig;
+
+    cache.resolve(scopeParams({ cfg, sessionsSendCallerSessionKey: "agent:requester-a:main" }));
+    cache.resolve(scopeParams({ cfg, sessionsSendCallerSessionKey: "agent:requester-b:main" }));
+
+    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(2);
+    expect(resolveGatewayScopedTools).toHaveBeenLastCalledWith(
+      expect.objectContaining({ sessionsSendCallerSessionKey: "agent:requester-b:main" }),
+    );
+  });
 });

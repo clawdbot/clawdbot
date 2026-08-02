@@ -1,6 +1,10 @@
 // Input provenance tests cover source metadata attached to session inputs.
 import { describe, expect, it } from "vitest";
 import {
+  isSessionsSendHandoffInputProvenance,
+  resolveAgentToAgentSendSourceSessionKey,
+} from "./input-provenance.a2a.js";
+import {
   annotateInterSessionPromptText,
   isAgentMediatedCompletionSourceTool,
   shouldPreserveUserFacingSessionStateForInputProvenance,
@@ -97,12 +101,60 @@ describe("isAgentMediatedCompletionSourceTool", () => {
   );
 });
 
+describe("sessions_send provenance routing", () => {
+  it("returns the exact requester session for destination-aware blocking", () => {
+    expect(
+      resolveAgentToAgentSendSourceSessionKey({
+        kind: "inter_session",
+        sourceSessionKey: " agent:requester:main ",
+        sourceTool: "SESSIONS_SEND",
+      }),
+    ).toBe("agent:requester:main");
+  });
+
+  it.each([
+    "subagent_announce",
+    "agent_harness_task",
+    "image_generate",
+    "sessions_send_delivery_failure",
+  ])("does not return a requester key for inter-session %s turns", (sourceTool) => {
+    expect(
+      resolveAgentToAgentSendSourceSessionKey({
+        kind: "inter_session",
+        sourceSessionKey: "agent:requester:main",
+        sourceTool,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("does not return a requester key for external-user or missing provenance", () => {
+    expect(
+      resolveAgentToAgentSendSourceSessionKey({
+        kind: "external_user",
+        sourceSessionKey: "agent:requester:main",
+        sourceTool: "sessions_send",
+      }),
+    ).toBeUndefined();
+    expect(resolveAgentToAgentSendSourceSessionKey(undefined)).toBeUndefined();
+  });
+
+  it.each(["sessions_send", "sessions_send_delivery_failure"])(
+    "classifies %s as a sessions_send route-inheriting handoff",
+    (sourceTool) => {
+      expect(isSessionsSendHandoffInputProvenance({ kind: "inter_session", sourceTool })).toBe(
+        true,
+      );
+    },
+  );
+});
+
 describe("shouldPreserveUserFacingSessionStateForInputProvenance", () => {
   it.each([
     "agent_harness_task",
     "exec_approval_followup",
     "image_generate",
     "music_generate",
+    "sessions_send_delivery_failure",
     "subagent_announce",
     "subagent_interrupted_resume",
     "video_generate",
