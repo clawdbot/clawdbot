@@ -388,7 +388,13 @@ function readRegistryRows(stateDbPath: string, requesterSessionKey: string): Reg
         taskName?: string;
         execution?: { endedAt?: number };
         cleanupCompletedAt?: number;
-        delivery?: { status?: string; deliveredAt?: number; announcedAt?: number };
+        delivery?: {
+          status?: string;
+          deliveredAt?: number;
+          announcedAt?: number;
+          enqueuedAt?: number;
+          payload?: unknown;
+        };
         requesterSettleWake?: {
           status?: string;
           lifecycleMismatch?: string;
