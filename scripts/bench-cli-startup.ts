@@ -537,7 +537,12 @@ function parseNonNegativeInt(raw: string | undefined, fallback: number, label = 
 
 // This runner is checked out from trusted main beside frozen candidates, whose
 // root dependencies need not include current workspace packages.
-function parseIntegerOption(raw: string | undefined, fallback: number, label: string, min: number): number {
+function parseIntegerOption(
+  raw: string | undefined,
+  fallback: number,
+  label: string,
+  min: number,
+): number {
   const value = raw?.trim();
   if (!value) {
     return fallback;
