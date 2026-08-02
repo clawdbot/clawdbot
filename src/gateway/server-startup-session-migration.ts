@@ -1,3 +1,4 @@
+import { SESSION_SQLITE_WARNING_ISSUE_CODES } from "../commands/doctor-session-sqlite-policy.js";
 import type {
   DoctorSessionSqliteIssue,
   DoctorSessionSqliteReport,
@@ -31,14 +32,6 @@ type SessionMigrationDeps = Parameters<typeof runSessionStartupMigration>[0]["de
   runDoctorSessionSqlite?: SessionSqliteStartupImportRunner;
   writeSessionSqliteMigrationFailureReports?: SessionSqliteStartupFailureReportWriter;
 };
-
-const STARTUP_WARNING_ISSUE_CODES = new Set([
-  "entry_invalid",
-  "transcript_archive_failed",
-  "transcript_malformed",
-  "transcript_missing",
-  "unreferenced_jsonl_archive_failed",
-]);
 
 /**
  * Run session migrations at gateway startup before runtime session access.
@@ -166,7 +159,7 @@ function collectStartupBlockingIssues(
   report: DoctorSessionSqliteReport,
 ): DoctorSessionSqliteIssue[] {
   return report.targets.flatMap((target) =>
-    target.issues.filter((issue) => !STARTUP_WARNING_ISSUE_CODES.has(issue.code)),
+    target.issues.filter((issue) => !SESSION_SQLITE_WARNING_ISSUE_CODES.has(issue.code)),
   );
 }
 
@@ -174,7 +167,7 @@ function collectStartupWarningIssues(
   report: DoctorSessionSqliteReport,
 ): DoctorSessionSqliteIssue[] {
   return report.targets.flatMap((target) =>
-    target.issues.filter((issue) => STARTUP_WARNING_ISSUE_CODES.has(issue.code)),
+    target.issues.filter((issue) => SESSION_SQLITE_WARNING_ISSUE_CODES.has(issue.code)),
   );
 }
 
@@ -189,6 +182,7 @@ function sessionSqliteReportHasChanges(report: DoctorSessionSqliteReport): boole
   return (
     report.totals.importedEntries > 0 ||
     report.totals.importedTranscriptEvents > 0 ||
+    (report.totals.archivedLegacyStoreFiles ?? 0) > 0 ||
     report.totals.archivedTranscriptFiles > 0 ||
     report.totals.archivedUnreferencedJsonlFiles > 0
   );
@@ -199,7 +193,7 @@ function formatSessionSqliteStartupImportSummary(report: DoctorSessionSqliteRepo
     "session: imported legacy session metadata/transcripts into SQLite:",
     `- targets=${report.totals.targets} legacyEntries=${report.totals.legacyEntries} sqliteEntries=${report.totals.sqliteEntries}`,
     `- importedEntries=${report.totals.importedEntries} importedTranscriptEvents=${report.totals.importedTranscriptEvents}`,
-    `- archivedTranscriptArtifacts=${report.totals.archivedTranscriptFiles} archivedUnreferencedJsonl=${report.totals.archivedUnreferencedJsonlFiles}`,
+    `- archivedLegacyStores=${report.totals.archivedLegacyStoreFiles ?? 0} archivedTranscriptArtifacts=${report.totals.archivedTranscriptFiles} archivedUnreferencedJsonl=${report.totals.archivedUnreferencedJsonlFiles}`,
   ].join("\n");
 }
 

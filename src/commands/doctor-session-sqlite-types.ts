@@ -96,6 +96,7 @@ export type DoctorSessionSqliteTargetReport = {
   sqliteEntries: number;
   sqlitePath: string;
   storePath: string;
+  supersededEntries?: number;
   unreferencedJsonlFiles: string[];
   validatedEntries: number;
   validatedTranscriptEvents: number;
@@ -124,6 +125,7 @@ export type DoctorSessionSqliteReport = {
     legacyEntries: number;
     reclaimedBytes?: number;
     sqliteEntries: number;
+    supersededEntries?: number;
     targets: number;
     unreferencedJsonlFiles: number;
     validatedEntries: number;

@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { runDoctorSessionSqlite } from "../commands/doctor-session-sqlite.js";
 import type { SessionEntry } from "../config/sessions.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import {
@@ -12,6 +13,8 @@ import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import { callGateway } from "../gateway/call.js";
 import {
   getAgentEventLifecycleGeneration,
@@ -1559,6 +1562,66 @@ describe("main-session-restart-recovery", () => {
     store = readStore(path.join(sessionsDir, "sessions.json"));
     expect(store["agent:main:main"]?.abortedLastRun).toBe(false);
     expect(store["agent:main:already-marked"]?.abortedLastRun).toBe(false);
+  });
+
+  it("does not resurrect a terminal recovery claim across repeated legacy imports", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const sqlitePath = resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path;
+    if (!sqlitePath) {
+      throw new Error("expected SQLite target path");
+    }
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        abortedLastRun: true,
+        restartRecoveryTerminalRunIds: ["terminal-run"],
+        sessionFile: formatSqliteSessionFileMarker({
+          agentId: "main",
+          sessionId: "terminal-session",
+          storePath: sqlitePath,
+        }),
+        sessionId: "terminal-session",
+        status: "failed",
+        updatedAt: Date.now() - 10_000,
+      },
+    });
+    const staleLegacyStore = `${JSON.stringify({
+      "agent:main:main": {
+        abortedLastRun: true,
+        restartRecoveryDeliveryContext: { channel: "slack", to: "channel:C1" },
+        restartRecoveryDeliveryRunId: "terminal-run",
+        sessionId: "terminal-session",
+        status: "timeout",
+        updatedAt: Date.now() - 20_000,
+      },
+    })}\n`;
+    await fs.writeFile(storePath, staleLegacyStore, { mode: 0o600 });
+
+    const env = { ...process.env, OPENCLAW_STATE_DIR: tmpDir };
+    const firstImport = await runDoctorSessionSqlite({ env, mode: "import", store: storePath });
+    await fs.writeFile(storePath, staleLegacyStore, { mode: 0o600 });
+    const secondImport = await runDoctorSessionSqlite({ env, mode: "import", store: storePath });
+
+    expect(firstImport.totals).toMatchObject({
+      importedEntries: 0,
+      issues: 0,
+      legacyEntries: 1,
+      validatedEntries: 1,
+    });
+    expect(secondImport.totals).toMatchObject({
+      importedEntries: 0,
+      issues: 0,
+      legacyEntries: 1,
+      validatedEntries: 1,
+    });
+
+    await expect(recoverStartupOrphanedMainSessions({ stateDir: tmpDir })).resolves.toEqual({
+      failed: 0,
+      marked: 0,
+      recovered: 0,
+      skipped: 0,
+    });
+    expect(callGateway).not.toHaveBeenCalled();
   });
 
   it("recovers only the configured store for duplicate startup-orphaned session keys", async () => {
