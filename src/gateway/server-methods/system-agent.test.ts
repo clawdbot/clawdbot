@@ -139,7 +139,10 @@ function systemAgentLane() {
   return getCommandLaneSnapshot(CommandLane.SystemAgent);
 }
 
-const waitOneTask = () => new Promise((resolve) => setTimeout(resolve, 0));
+const waitOneTask = () =>
+  new Promise<void>((resolve) => {
+    setTimeout(resolve, 0);
+  });
 
 const defaultClient = {
   connId: "conn-test",
