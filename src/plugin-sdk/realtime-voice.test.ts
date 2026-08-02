@@ -115,9 +115,14 @@ describe("RealtimeVoiceSessionLifecycle", () => {
         new Promise<void>((_resolve, reject) => {
           firstConnection = connection;
           firstStarted();
-          connection.signal.addEventListener("abort", () => reject(connection.signal.reason), {
-            once: true,
-          });
+          connection.signal.addEventListener(
+            "abort",
+            () => {
+              const reason = connection.signal.reason;
+              reject(reason instanceof Error ? reason : new Error(String(reason)));
+            },
+            { once: true },
+          );
         }),
     );
     const coalesced = lifecycle.connect(async () => {
