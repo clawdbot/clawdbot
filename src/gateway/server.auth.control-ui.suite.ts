@@ -1040,8 +1040,7 @@ export function registerControlUiAndPairingSuite(): void {
     const { publicKeyRawBase64UrlFromPem } = await import("../infra/device-identity.js");
     const { FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE } =
       await import("../shared/device-bootstrap-profile.js");
-    const { getPairedDevice, listDevicePairing, verifyDeviceToken } =
-      await import("../infra/device-pairing.js");
+    const { getPairedDevice, listDevicePairing } = await import("../infra/device-pairing.js");
     const { server, port, prevToken } = await startControlUiServer("secret");
 
     const { identityPath, identity } = await createOperatorIdentityFixture(
@@ -1890,14 +1889,20 @@ export function registerControlUiAndPairingSuite(): void {
       const paired = await getPairedDevice(identity.deviceId);
       expect(paired?.roles).toEqual(["operator"]);
       expect(paired?.approvedScopes).toEqual([...BOOTSTRAP_HANDOFF_OPERATOR_SCOPES]);
-      await expect(
-        verifyDeviceToken({
-          deviceId: identity.deviceId,
-          token: deviceToken,
-          role: "operator",
-          scopes: [...BOOTSTRAP_HANDOFF_OPERATOR_SCOPES],
-        }),
-      ).resolves.toEqual({ ok: true });
+      const wsReload = await openWs(port, {
+        origin: "https://localhost",
+        "x-forwarded-for": "203.0.113.50",
+      });
+      const reload = await connectReq(wsReload, {
+        skipDefaultAuth: true,
+        deviceToken,
+        role: "operator",
+        scopes: [...BOOTSTRAP_HANDOFF_OPERATOR_SCOPES],
+        client: CONTROL_UI_CLIENT,
+        deviceIdentityPath: identityPath,
+      });
+      expect(reload.ok).toBe(true);
+      wsReload.close();
 
       const wsReplay = await openWs(port, {
         origin: "https://localhost",

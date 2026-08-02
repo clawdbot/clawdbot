@@ -4351,6 +4351,8 @@ export const en: TranslationMap = {
           "This browser needs one-time approval from the Gateway host before it can use the Control UI.",
         upgradeSummary:
           "This browser is already known, but the requested access changed and needs a fresh approval.",
+        stepDashboard:
+          "On the Gateway host, run openclaw dashboard to open a secure one-time pairing link.",
         stepList: "Run openclaw devices list on the Gateway host.",
         stepApproveId: "Approve this request: openclaw devices approve {requestId}.",
         stepApprove: "Approve the pending browser/device request from that list.",
