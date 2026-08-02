@@ -51,6 +51,12 @@ vi.mock("../plugins/provider-discovery.js", async (importOriginal) => {
   };
 });
 
+// Session orphan recovery has separate owner coverage; avoid loading its broad
+// cold startup graph inside this timed model-runtime responsiveness proof.
+vi.mock("../agents/main-session-restart-recovery-marking.js", () => ({
+  markStartupOrphanedMainSessionsForRecovery: vi.fn(async () => ({ marked: 0, skipped: 0 })),
+}));
+
 const { resetPreparedModelRuntimeSnapshotsForTest } =
   await import("../agents/prepared-model-runtime.test-support.js");
 const { writePersistedAuthProfileStoreRaw } = await import("../agents/auth-profiles/sqlite.js");
