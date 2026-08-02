@@ -15,8 +15,14 @@ export function createAgentRunModelSelectionHandler(params: {
   resolvedSessionKey?: string;
   lifecycleStorePath: string;
   activeSessionAgentId: string;
+  trustedInternalHandoff?: { provider: string; model: string };
 }): (selection: { provider: string; model: string }) => Promise<void> {
   return async ({ provider, model }) => {
+    if (params.trustedInternalHandoff) {
+      // The one-use grant remains tied to this run while its active model falls back.
+      params.trustedInternalHandoff.provider = provider.trim().toLowerCase();
+      params.trustedInternalHandoff.model = model.trim();
+    }
     updateChatRunProvider(params.context.chatAbortControllers, {
       runId: params.runId,
       providerId: provider,

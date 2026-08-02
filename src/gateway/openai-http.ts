@@ -1199,6 +1199,8 @@ export async function handleOpenAiHttpRequest(
   let finalizeFinishReason: "stop" | "tool_calls" = "stop";
   let resultResolved = false;
   let closed = false;
+  let observedTerminalLifecycle = false;
+  let terminalLifecyclePhase: "end" | "error" = "end";
   let stopWatchingDisconnect = () => {};
 
   const maybeFinalize = () => {
@@ -1299,7 +1301,11 @@ export async function handleOpenAiHttpRequest(
 
     if (evt.stream === "lifecycle") {
       const phase = evt.data?.phase;
+      if (phase === "start") {
+        observedTerminalLifecycle = false;
+      }
       if (phase === "end" || phase === "error") {
+        observedTerminalLifecycle = true;
         requestFinalize();
       }
     }
@@ -1416,6 +1422,7 @@ export async function handleOpenAiHttpRequest(
       if (closed || abortController.signal.aborted) {
         return;
       }
+      terminalLifecyclePhase = "error";
       logWarn(`openai-compat: streaming chat completion failed: ${String(err)}`);
       if (isClientToolNameConflictError(err)) {
         closed = true;
@@ -1449,19 +1456,15 @@ export async function handleOpenAiHttpRequest(
         completion_tokens: 0,
         total_tokens: 0,
       };
-      emitAgentEvent({
-        runId,
-        stream: "lifecycle",
-        data: { phase: "error" },
-      });
       requestFinalize();
     } finally {
       releaseAgentRootWork?.();
-      if (!closed) {
+      // The provider owns observed terminals; a second end would erase a failed session.
+      if (!observedTerminalLifecycle && (terminalLifecyclePhase === "error" || !closed)) {
         emitAgentEvent({
           runId,
           stream: "lifecycle",
-          data: { phase: "end" },
+          data: { phase: terminalLifecyclePhase },
         });
       }
     }
