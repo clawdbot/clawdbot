@@ -570,9 +570,7 @@ async function loadCliSessionEntries(params: CliSessionTranscriptParams): Promis
         excludeMessageIdempotencyKey: params.excludeMessageIdempotencyKey,
       });
     }
-    if (params.sessionFile.trim().startsWith("sqlite:")) {
-      return [];
-    }
+    if (params.sessionFile.trim().startsWith("sqlite:")) return [];
     const { sessionFile, sessionsDir } = resolveSafeCliSessionFile(params);
     const entryStat = await fsp.lstat(sessionFile);
     if (!entryStat.isFile() || entryStat.isSymbolicLink()) {
@@ -656,9 +654,7 @@ export async function hasCliSessionTranscript(
     if (transcriptScope) {
       return hasTranscriptEventsSync(transcriptScope);
     }
-    if (params.sessionFile.trim().startsWith("sqlite:")) {
-      return false;
-    }
+    if (params.sessionFile.trim().startsWith("sqlite:")) return false;
     const { sessionFile, sessionsDir } = resolveSafeCliSessionFile(params);
     const entryStat = await fsp.lstat(sessionFile);
     if (!entryStat.isFile() || entryStat.isSymbolicLink()) {
