@@ -1,7 +1,9 @@
 // OpenClaw test instance tests cover spawned test instance lifecycle.
 import fs from "node:fs/promises";
+import net from "node:net";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { WebSocketServer } from "ws";
 import { createOpenClawTestInstance, testing } from "./openclaw-test-instance.js";
 
 async function expectPathMissing(targetPath: string): Promise<void> {
@@ -42,6 +44,67 @@ describe("openclaw test instance", () => {
     await expect(
       testing.waitForPortOpen({ exitCode: null, signalCode: "SIGTERM" }, [], [], 1, 10_000),
     ).rejects.toThrow("gateway exited before listening");
+  });
+
+  it("waits for a websocket upgrade instead of treating raw TCP as ready", async () => {
+    const server = net.createServer();
+    const sockets = new Set<net.Socket>();
+    server.on("connection", (socket) => {
+      sockets.add(socket);
+      socket.once("close", () => sockets.delete(socket));
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected TCP listener address");
+    }
+
+    try {
+      await expect(
+        testing.waitForGatewayWebSocketReady(
+          { exitCode: null, signalCode: null },
+          [],
+          [],
+          address.port,
+          50,
+        ),
+      ).rejects.toThrow("timeout waiting for gateway websocket readiness");
+    } finally {
+      for (const socket of sockets) {
+        socket.destroy();
+      }
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      );
+    }
+  });
+
+  it("returns once a websocket upgrade is available", async () => {
+    const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+    await new Promise<void>((resolve, reject) => {
+      server.once("listening", resolve);
+      server.once("error", reject);
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected WebSocket listener address");
+    }
+
+    try {
+      await expect(
+        testing.waitForGatewayWebSocketReady(
+          { exitCode: null, signalCode: null },
+          [],
+          [],
+          address.port,
+          1_000,
+        ),
+      ).resolves.toBeUndefined();
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      );
+    }
   });
 
   it("signals test instance process groups on POSIX", () => {
