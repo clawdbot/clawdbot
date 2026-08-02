@@ -77,14 +77,23 @@ type TrustedToolsEffectiveContext = {
 };
 
 type ToolsEffectiveCacheEntry = {
-  value: EffectiveToolInventoryResult;
+  value: BaseToolsEffectiveResolution;
   createdAtMs: number;
+};
+
+type RuntimeModelContext = Awaited<
+  ReturnType<typeof resolveEffectiveToolInventoryRuntimeModelContextAsync>
+>;
+
+type BaseToolsEffectiveResolution = {
+  inventory: EffectiveToolInventoryResult;
+  runtimeModelContext: RuntimeModelContext;
 };
 
 type SessionMcpConfigSummary = ReturnType<typeof resolveSessionMcpConfigSummary>;
 
 const toolsEffectiveCache = new Map<string, ToolsEffectiveCacheEntry>();
-const toolsEffectiveInflight = new Map<string, Promise<EffectiveToolInventoryResult>>();
+const toolsEffectiveInflight = new Map<string, Promise<BaseToolsEffectiveResolution>>();
 const mcpConfigSummaryCache = new Map<string, SessionMcpConfigSummary>();
 
 function optionalCacheString(value: string | undefined | null): string {
@@ -173,7 +182,7 @@ function resolveCachedSessionMcpConfigSummary(params: {
   return summary;
 }
 
-function cacheToolsEffectiveResult(key: string, value: EffectiveToolInventoryResult): void {
+function cacheToolsEffectiveResult(key: string, value: BaseToolsEffectiveResolution): void {
   toolsEffectiveCache.delete(key);
   toolsEffectiveCache.set(key, { value, createdAtMs: nowForToolsEffectiveCache() });
   trimToolsEffectiveCache();
@@ -185,13 +194,13 @@ function cacheToolsEffectiveResult(key: string, value: EffectiveToolInventoryRes
 function scheduleBaseToolsEffectiveRefresh(
   key: string,
   context: TrustedToolsEffectiveContext,
-): Promise<EffectiveToolInventoryResult> {
+): Promise<BaseToolsEffectiveResolution> {
   const existing = toolsEffectiveInflight.get(key);
   if (existing) {
     return existing;
   }
   const startedAt = nowForToolsEffectiveCache();
-  const task = new Promise<EffectiveToolInventoryResult>((resolve, reject) => {
+  const task = new Promise<BaseToolsEffectiveResolution>((resolve, reject) => {
     setImmediate(() => {
       void resolveBaseToolsEffectiveInventory(context)
         .then((value) => {
@@ -199,7 +208,7 @@ function scheduleBaseToolsEffectiveRefresh(
           const durationMs = nowForToolsEffectiveCache() - startedAt;
           if (durationMs >= TOOLS_EFFECTIVE_SLOW_LOG_MS) {
             logDebug(
-              `tools-effective: refresh durationMs=${durationMs} agent=${context.agentId} session=${context.sessionKey} tools=${value.groups.reduce((sum, group) => sum + group.tools.length, 0)}`,
+              `tools-effective: refresh durationMs=${durationMs} agent=${context.agentId} session=${context.sessionKey} tools=${value.inventory.groups.reduce((sum, group) => sum + group.tools.length, 0)}`,
             );
           }
           resolve(value);
@@ -224,7 +233,7 @@ function refreshBaseToolsEffectiveInBackground(
 async function resolveCachedBaseToolsEffective(params: {
   sessionKey: string;
   context: TrustedToolsEffectiveContext;
-}): Promise<EffectiveToolInventoryResult> {
+}): Promise<BaseToolsEffectiveResolution> {
   const key = buildToolsEffectiveCacheKey(params);
   const now = nowForToolsEffectiveCache();
   const cached = toolsEffectiveCache.get(key);
@@ -352,7 +361,7 @@ function maybeAppendMcpNotice(
 
 async function resolveBaseToolsEffectiveInventory(
   context: TrustedToolsEffectiveContext,
-): Promise<EffectiveToolInventoryResult> {
+): Promise<BaseToolsEffectiveResolution> {
   const agentDir = resolveAgentDir(context.cfg, context.agentId);
   const runtimeModelContext = await resolveEffectiveToolInventoryRuntimeModelContextAsync({
     cfg: context.cfg,
@@ -362,25 +371,28 @@ async function resolveBaseToolsEffectiveInventory(
     modelProvider: context.modelProvider,
     modelId: context.modelId,
   });
-  return resolveEffectiveToolInventory({
-    cfg: context.cfg,
-    agentId: context.agentId,
-    agentDir,
-    sessionKey: context.sessionKey,
-    workspaceDir: context.workspaceDir,
-    messageProvider: context.messageProvider,
-    modelProvider: context.modelProvider,
-    modelId: context.modelId,
-    modelApi: runtimeModelContext.modelApi,
-    runtimeModel: runtimeModelContext.runtimeModel,
-    currentChannelId: context.currentChannelId,
-    currentThreadTs: context.currentThreadTs,
-    accountId: context.accountId,
-    groupId: context.groupId,
-    groupChannel: context.groupChannel,
-    groupSpace: context.groupSpace,
-    replyToMode: context.replyToMode,
-  });
+  return {
+    runtimeModelContext,
+    inventory: resolveEffectiveToolInventory({
+      cfg: context.cfg,
+      agentId: context.agentId,
+      agentDir,
+      sessionKey: context.sessionKey,
+      workspaceDir: context.workspaceDir,
+      messageProvider: context.messageProvider,
+      modelProvider: context.modelProvider,
+      modelId: context.modelId,
+      modelApi: runtimeModelContext.modelApi,
+      runtimeModel: runtimeModelContext.runtimeModel,
+      currentChannelId: context.currentChannelId,
+      currentThreadTs: context.currentThreadTs,
+      accountId: context.accountId,
+      groupId: context.groupId,
+      groupChannel: context.groupChannel,
+      groupSpace: context.groupSpace,
+      replyToMode: context.replyToMode,
+    }),
+  };
 }
 
 function filterMcpTools(params: {
@@ -410,10 +422,11 @@ function filterMcpTools(params: {
 async function resolveReadOnlyToolsEffectiveInventory(
   context: TrustedToolsEffectiveContext,
 ): Promise<EffectiveToolInventoryResult> {
-  const base = await resolveCachedBaseToolsEffective({
+  const baseResolution = await resolveCachedBaseToolsEffective({
     sessionKey: context.sessionKey,
     context,
   });
+  const base = baseResolution.inventory;
   const harness = context.agentHarnessId
     ? getRegisteredAgentHarness(context.agentHarnessId)?.harness
     : undefined;
@@ -440,6 +453,7 @@ async function resolveReadOnlyToolsEffectiveInventory(
           base,
           catalog,
           context,
+          runtimeModelContext: baseResolution.runtimeModelContext,
           workspaceDir: context.workspaceDir,
         });
       }
@@ -481,13 +495,20 @@ async function resolveReadOnlyToolsEffectiveInventory(
   if (!catalog) {
     return maybeAppendMcpNotice(base, mcpConfig.serverNames, "not-listed");
   }
-  return await projectMcpCatalog({ base, catalog, context, workspaceDir: runtime.workspaceDir });
+  return await projectMcpCatalog({
+    base,
+    catalog,
+    context,
+    runtimeModelContext: baseResolution.runtimeModelContext,
+    workspaceDir: runtime.workspaceDir,
+  });
 }
 
 async function projectMcpCatalog(params: {
   base: EffectiveToolInventoryResult;
   catalog: Parameters<typeof buildBundleMcpToolsFromCatalog>[0]["catalog"];
   context: TrustedToolsEffectiveContext;
+  runtimeModelContext: RuntimeModelContext;
   workspaceDir: string;
 }): Promise<EffectiveToolInventoryResult> {
   const projectedMcpTools = buildBundleMcpToolsFromCatalog({
@@ -499,23 +520,14 @@ async function projectMcpCatalog(params: {
     context: params.context,
     mcpTools: projectedMcpTools,
   });
-  const agentDir = resolveAgentDir(params.context.cfg, params.context.agentId);
-  const runtimeModelContext = await resolveEffectiveToolInventoryRuntimeModelContextAsync({
-    cfg: params.context.cfg,
-    agentId: params.context.agentId,
-    agentDir,
-    workspaceDir: params.workspaceDir,
-    modelProvider: params.context.modelProvider,
-    modelId: params.context.modelId,
-  });
   const mcpInventory = buildRuntimeCompatibleMcpToolInventory({
     tools: filteredMcpTools,
     cfg: params.context.cfg,
     workspaceDir: params.workspaceDir,
     modelProvider: params.context.modelProvider,
     modelId: params.context.modelId,
-    modelApi: runtimeModelContext.modelApi,
-    runtimeModel: runtimeModelContext.runtimeModel,
+    modelApi: params.runtimeModelContext.modelApi,
+    runtimeModel: params.runtimeModelContext.runtimeModel,
   });
   return appendMcpInventoryGroups({ base: params.base, mcpInventory });
 }
