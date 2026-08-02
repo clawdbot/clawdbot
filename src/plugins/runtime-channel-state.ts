@@ -16,15 +16,22 @@ export type ActivePluginChannelRegistrySnapshot = {
   version: number;
 };
 
+let activePluginChannelRegistrySnapshot: ActivePluginChannelRegistrySnapshot | undefined;
+
 /** Returns a snapshot of the process-root plugin registry. */
 export function getActivePluginChannelRegistrySnapshotFromState(): ActivePluginChannelRegistrySnapshot {
   const state: GlobalChannelRegistryRuntimeState = (globalThis as GlobalChannelRegistryState)[
     PLUGIN_REGISTRY_STATE
   ];
-  return {
-    registry: state?.activeRegistry ?? null,
-    version: state?.activeVersion ?? 0,
-  };
+  const registry = state?.activeRegistry ?? null;
+  const version = state?.activeVersion ?? 0;
+  const cached = activePluginChannelRegistrySnapshot;
+  if (cached && cached.registry === registry && cached.version === version) {
+    return cached;
+  }
+  const snapshot = { registry, version };
+  activePluginChannelRegistrySnapshot = snapshot;
+  return snapshot;
 }
 
 /** Returns the active plugin channel registry from global runtime state. */
