@@ -4,12 +4,11 @@ import path from "node:path";
 import type { OpenClawPackageManifest } from "./manifest.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import type { PluginRegistry } from "./registry-types.js";
-import { collectLivePluginRegistries, requireActivePluginRegistry } from "./runtime.js";
+import { getActivePluginRegistry, requireActivePluginRegistry } from "./runtime.js";
 
 type PluginRuntimeArtifactEntryKind = "runtime" | "setup";
 
 // Pin one physical path per plugin id and logical entry within one installed registry.
-// Pinned surfaces retain their registry while replacement builders resolve independently.
 function safeRealpathOrResolve(value: string): string {
   try {
     return fs.realpathSync(value);
@@ -19,9 +18,7 @@ function safeRealpathOrResolve(value: string): string {
 }
 
 export function clearPluginRuntimeArtifactResolutionMemo(): void {
-  for (const registry of collectLivePluginRegistries()) {
-    registry.pluginRuntimeArtifacts.clear();
-  }
+  getActivePluginRegistry()?.pluginRuntimeArtifacts.clear();
 }
 
 /** Canonical packaged runtime replaces staging-only dist-runtime artifacts. */

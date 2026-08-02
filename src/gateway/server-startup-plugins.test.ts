@@ -88,14 +88,13 @@ const pluginLookUpTableMetrics = vi.hoisted(() => ({
   indexPluginCount: 0,
   manifestPluginCount: 0,
   startupPluginCount: 1,
-  deferredChannelPluginCount: 0,
 }));
 const loadPluginLookUpTable = vi.hoisted(() =>
   vi.fn((_params: unknown) => ({
     manifestRegistry: pluginManifestRegistry,
     startup: {
-      configuredDeferredChannelPluginIds: [] as string[],
       pluginIds: ["telegram"] as string[],
+      channelPluginIds: ["telegram"] as string[],
     },
     metrics: pluginLookUpTableMetrics,
   })),
@@ -167,14 +166,6 @@ vi.mock("./server-methods-list.js", () => ({
   listGatewayMethods: () => ["ping"],
 }));
 
-vi.mock("./methods/core-descriptors.js", () => ({
-  listCoreGatewayMethodNames: () => ["ping", "config.openFile"],
-}));
-
-vi.mock("./server-methods.js", () => ({
-  coreGatewayHandlers: {},
-}));
-
 vi.mock("./server-plugin-bootstrap.js", () => ({
   loadGatewayStartupPlugins: (params: unknown) => loadGatewayStartupPlugins(params),
 }));
@@ -200,21 +191,6 @@ function firstCallArg<T>(mock: { mock: { calls: unknown[][] } }, _type?: (value:
   return call[0] as T;
 }
 
-function mockDeferredSlackStartupPlugins(): void {
-  loadPluginLookUpTable.mockReturnValueOnce({
-    manifestRegistry: pluginManifestRegistry,
-    startup: {
-      configuredDeferredChannelPluginIds: ["slack"] as string[],
-      pluginIds: ["slack", "memory-core"] as string[],
-    },
-    metrics: {
-      ...pluginLookUpTableMetrics,
-      startupPluginCount: 2,
-      deferredChannelPluginCount: 1,
-    },
-  });
-}
-
 function slackConfig(): OpenClawConfig {
   return {
     channels: {
@@ -226,8 +202,6 @@ function slackConfig(): OpenClawConfig {
 async function prepareBootstrapWithRuntimeConfig(
   cfg: OpenClawConfig,
   options: {
-    loadRuntimePlugins?: boolean;
-    loadSetupRuntimePlugins?: boolean;
     workerProviderIds?: readonly string[];
   } = {},
 ) {
@@ -240,23 +214,6 @@ async function prepareBootstrapWithRuntimeConfig(
     log,
     ...options,
   });
-}
-
-function expectStartupPluginLoad(params: {
-  pluginIds: string[];
-  preferSetupRuntimeForChannelPlugins: boolean;
-  suppressPluginInfoLogs: boolean;
-}): void {
-  const startupInput = firstCallArg<{
-    pluginIds?: string[];
-    preferSetupRuntimeForChannelPlugins?: boolean;
-    suppressPluginInfoLogs?: boolean;
-  }>(loadGatewayStartupPlugins);
-  expect(startupInput.pluginIds).toEqual(params.pluginIds);
-  expect(startupInput.preferSetupRuntimeForChannelPlugins).toBe(
-    params.preferSetupRuntimeForChannelPlugins,
-  );
-  expect(startupInput.suppressPluginInfoLogs).toBe(params.suppressPluginInfoLogs);
 }
 
 describe("runGatewayStartupMaintenance", () => {
@@ -345,8 +302,8 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
     loadPluginLookUpTable.mockClear().mockReturnValue({
       manifestRegistry: pluginManifestRegistry,
       startup: {
-        configuredDeferredChannelPluginIds: [] as string[],
         pluginIds: ["telegram"] as string[],
+        channelPluginIds: ["telegram"] as string[],
       },
       metrics: pluginLookUpTableMetrics,
     });
@@ -458,55 +415,14 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
       dreaming: { enabled: false },
     });
 
-    const startupInput = firstCallArg<{
-      activationSourceConfig?: OpenClawConfig;
-      cfg?: OpenClawConfig;
-      baseMethods?: string[];
-      coreGatewayMethodNames?: string[];
-    }>(loadGatewayStartupPlugins);
-    expect(startupInput.activationSourceConfig).toBe(sourceConfig);
-    expect(startupInput.baseMethods).toEqual(["ping"]);
-    expect(startupInput.coreGatewayMethodNames).toEqual(["ping", "config.openFile"]);
-    expect(startupInput.cfg?.channels?.telegram?.enabled).toBe(true);
-    expect(startupInput.cfg?.channels?.telegram?.dmPolicy).toBe("pairing");
-    expect(startupInput.cfg?.channels?.telegram?.groupPolicy).toBe("allowlist");
-    expect(startupInput.cfg?.plugins?.allow).toEqual(["bench-plugin"]);
-    expect(startupInput.cfg?.plugins?.entries?.["bench-plugin"]?.enabled).toBe(true);
-    expect(startupInput.cfg?.plugins?.entries?.["bench-plugin"]?.config).toEqual({
-      runtimeDefault: true,
-    });
-    expect(startupInput.cfg?.plugins?.entries?.["memory-core"]?.config).toEqual({
-      dreaming: { enabled: false },
-    });
+    expect(loadGatewayStartupPlugins).not.toHaveBeenCalled();
   });
 
-  it("loads only deferred setup-runtime plugins during pre-bind bootstrap", async () => {
-    mockDeferredSlackStartupPlugins();
-
-    const result = await prepareBootstrapWithRuntimeConfig(slackConfig(), {
-      loadRuntimePlugins: false,
-      loadSetupRuntimePlugins: true,
-    });
-
-    expect(result.runtimePluginsLoaded).toBe(false);
-    expectStartupPluginLoad({
-      pluginIds: ["slack"],
-      preferSetupRuntimeForChannelPlugins: true,
-      suppressPluginInfoLogs: true,
-    });
-  });
-
-  it("does not use setup-runtime preference for full bootstrap loads", async () => {
-    mockDeferredSlackStartupPlugins();
-
+  it("publishes an empty registry without loading plugin runtimes before bind", async () => {
     const result = await prepareBootstrapWithRuntimeConfig(slackConfig());
 
-    expect(result.runtimePluginsLoaded).toBe(true);
-    expectStartupPluginLoad({
-      pluginIds: ["slack", "memory-core"],
-      preferSetupRuntimeForChannelPlugins: false,
-      suppressPluginInfoLogs: false,
-    });
+    expect(result.pluginRegistry.plugins).toEqual([]);
+    expect(loadGatewayStartupPlugins).not.toHaveBeenCalled();
   });
 
   it("threads durable worker provider ids into startup lookup planning", async () => {
@@ -525,8 +441,8 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
     loadPluginLookUpTable.mockReturnValueOnce({
       manifestRegistry: emptyManifestRegistry,
       startup: {
-        configuredDeferredChannelPluginIds: [],
         pluginIds: [],
+        channelPluginIds: [],
       },
       metrics: pluginLookUpTableMetrics,
     });
@@ -567,23 +483,11 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
       workerProviderIds: ["static-ssh"],
     });
     expect(result.startupPluginIds).toEqual([]);
-    expect(result.deferredConfiguredChannelPluginIds).toEqual([]);
     expect(result.pluginLookUpTable).toBeUndefined();
     expect(result.baseGatewayMethods).toEqual(["ping"]);
 
     expect(loadPluginLookUpTable).not.toHaveBeenCalled();
-    const startupInput = firstCallArg<{
-      cfg?: OpenClawConfig;
-      pluginIds?: string[];
-      pluginLookUpTable?: unknown;
-      preferSetupRuntimeForChannelPlugins?: boolean;
-      suppressPluginInfoLogs?: boolean;
-    }>(loadGatewayStartupPlugins);
-    expect(startupInput.cfg).toStrictEqual(cfg);
-    expect(startupInput.pluginIds).toEqual([]);
-    expect(startupInput.pluginLookUpTable).toBeUndefined();
-    expect(startupInput.preferSetupRuntimeForChannelPlugins).toBe(false);
-    expect(startupInput.suppressPluginInfoLogs).toBe(false);
+    expect(loadGatewayStartupPlugins).not.toHaveBeenCalled();
   });
 });
 
@@ -617,35 +521,13 @@ describe("loadGatewayStartupPluginRuntime", () => {
       startupPluginIds: ["voyage"],
     });
 
+    const startupInput = firstCallArg<{ channelPluginLoadIntent?: "full" | "setup" }>(
+      loadGatewayStartupPlugins,
+    );
+    expect(startupInput.channelPluginLoadIntent).toBe("full");
     expect(log.warn).toHaveBeenCalledWith(
       expect.stringContaining('memory.search.provider="voyage"'),
     );
-  });
-
-  it("does not warn during setup-runtime pre-bind loads", async () => {
-    const log = createLog();
-    const { loadGatewayStartupPluginRuntime } = await import("./server-startup-plugins.js");
-
-    await loadGatewayStartupPluginRuntime({
-      cfg: {
-        memory: {
-          search: {
-            provider: "voyage",
-          },
-        },
-
-        agents: {
-          defaults: {},
-        },
-      } as OpenClawConfig,
-      workspaceDir: "/workspace",
-      log,
-      baseMethods: ["ping"],
-      startupPluginIds: ["telegram"],
-      preferSetupRuntimeForChannelPlugins: true,
-    });
-
-    expect(log.warn).not.toHaveBeenCalled();
   });
 });
 

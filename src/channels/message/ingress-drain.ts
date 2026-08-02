@@ -101,6 +101,11 @@ export type CreateChannelIngressDrainOptions<
     pendingEvent: ChannelIngressQueueClaim<TPayload, TMetadata>,
   ) => boolean | Promise<boolean>;
   deriveLaneKey?: (record: ChannelIngressQueueRecord<TPayload, TMetadata>) => string | undefined;
+  reconcileStoredLaneKey?: (
+    record: ChannelIngressQueueRecord<TPayload, TMetadata>,
+    storedLaneKey: string,
+    derivedLaneKey: string,
+  ) => boolean;
   ownerId?: string;
   adoptionStallTimeoutMs?: number;
   claimLeaseMs?: number;
@@ -756,6 +761,9 @@ export function createChannelIngressDrain<
         scanLimit,
         candidateIds,
         deriveLaneKey: options.deriveLaneKey,
+        ...(options.reconcileStoredLaneKey
+          ? { reconcileStoredLaneKey: options.reconcileStoredLaneKey }
+          : {}),
       });
       if (!claimed) {
         break;

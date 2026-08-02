@@ -805,7 +805,7 @@ module.exports = {
     const registry = loadOpenClawPlugins({
       activate: false,
       cache: false,
-      forceFullRuntimeForChannelPlugins: true,
+      channelPluginLoadIntent: "full",
       config: {
         plugins: {
           load: { paths: [pluginDir] },

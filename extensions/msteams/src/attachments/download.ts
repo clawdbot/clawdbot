@@ -178,8 +178,7 @@ async function fetchWithAuthFallback(params: {
   if (!isUrlAllowed(params.url, params.policy.authAllowHosts)) {
     return firstAttempt;
   }
-  await firstAttempt.body?.cancel();
-
+  let fallbackAttempt = firstAttempt;
   const scopes = scopeCandidatesForUrl(params.url);
   const fetchFn = params.fetchFn ?? fetch;
   for (const scope of scopes) {
@@ -203,25 +202,18 @@ async function fetchWithAuthFallback(params: {
         resolveFn: params.resolveFn,
         timeoutMs: resolveMSTeamsRequestTimeoutMs(params.deadline),
       });
-      if (authAttempt.ok) {
-        return authAttempt;
-      }
-      if (isRedirectStatus(authAttempt.status)) {
+      await fallbackAttempt.body?.cancel().catch(() => undefined);
+      if (authAttempt.ok || isRedirectStatus(authAttempt.status)) {
         // Redirects in guarded fetch mode must propagate to the outer guard.
         return authAttempt;
       }
-      if (authAttempt.status !== 401 && authAttempt.status !== 403) {
-        // Preserve scope fallback semantics for non-auth failures.
-        await authAttempt.body?.cancel();
-        continue;
-      }
-      await authAttempt.body?.cancel();
+      fallbackAttempt = authAttempt;
     } catch {
       // Try the next scope.
     }
   }
 
-  return firstAttempt;
+  return fallbackAttempt;
 }
 
 /**

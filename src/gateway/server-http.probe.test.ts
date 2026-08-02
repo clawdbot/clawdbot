@@ -125,6 +125,49 @@ describe("gateway OpenAI-compatible disabled HTTP routes", () => {
   });
 });
 
+describe("startup plugin HTTP routing", () => {
+  it("keeps unclaimed webhook POSTs outside the root Control UI SPA", async () => {
+    await withMarkedControlUiRoot(async (controlUiRoot) => {
+      let sidecarsReady = false;
+      const handlePluginRequest = vi.fn(async () => false);
+      await withGatewayServer({
+        prefix: "startup-plugin-post-root-control-ui",
+        resolvedAuth: AUTH_NONE,
+        overrides: {
+          controlUiEnabled: true,
+          controlUiBasePath: "",
+          controlUiRoot: { kind: "resolved", path: controlUiRoot },
+          handlePluginRequest,
+          shouldEnforcePluginGatewayAuth: () => false,
+          isStartupPluginRuntimeReady: () => sidecarsReady,
+        },
+        run: async (server) => {
+          const request = {
+            path: "/slack/events",
+            method: "POST",
+            headers: { accept: "text/html" },
+          };
+          const starting = createResponse();
+          await dispatchRequest(server, createRequest(request), starting.res);
+
+          expect(starting.res.statusCode).toBe(503);
+          expect(starting.setHeader).toHaveBeenCalledWith("Retry-After", "1");
+          expect(starting.getBody()).toBe("Plugin runtime is starting");
+
+          sidecarsReady = true;
+          const ready = createResponse();
+          await dispatchRequest(server, createRequest(request), ready.res);
+
+          expect(ready.res.statusCode).toBe(404);
+          expect(ready.setHeader).toHaveBeenCalledWith("Content-Type", "text/plain; charset=utf-8");
+          expect(ready.getBody()).toBe("Not Found");
+          expect(handlePluginRequest).toHaveBeenCalledTimes(2);
+        },
+      });
+    });
+  });
+});
+
 describe("standalone MCP App HTTP routing", () => {
   it.each([
     {

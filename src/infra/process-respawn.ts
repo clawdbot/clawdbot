@@ -1,8 +1,8 @@
 // Respawns the gateway process when no supervisor handles restart.
 import { spawn, type ChildProcess } from "node:child_process";
-import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { scheduleDetachedLaunchdRestartHandoff } from "../daemon/launchd-restart-handoff.js";
 import { isContainerEnvironment } from "./container-environment.js";
+import { isTruthyEnvValue } from "./env.js";
 import { formatErrorMessage } from "./errors.js";
 import { triggerOpenClawRestart } from "./restart.js";
 import { detectGatewayRespawnSupervisor } from "./supervisor-markers.js";
@@ -22,11 +22,6 @@ type GatewayUpdateRespawnResult = GatewayRespawnResult & {
 type GatewayRespawnOptions = {
   env?: NodeJS.ProcessEnv;
 };
-
-function isTruthy(value: string | undefined): boolean {
-  const normalized = normalizeOptionalLowercaseString(value);
-  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
-}
 
 const PNPM_VERSIONED_OPENCLAW_ENTRY_PATTERN =
   /^(.*?)([\\/])node_modules\2\.pnpm\2openclaw@[^\\/]+\2node_modules\2openclaw\2.+$/;
@@ -83,7 +78,7 @@ function scheduleLaunchdRestartAfterExit(): GatewayRespawnResult {
 export function restartGatewayProcessWithFreshPid(
   _opts: GatewayRespawnOptions = {},
 ): GatewayRespawnResult {
-  if (isTruthy(process.env.OPENCLAW_NO_RESPAWN)) {
+  if (isTruthyEnvValue(process.env.OPENCLAW_NO_RESPAWN)) {
     return { mode: "disabled" };
   }
   const supervisor = detectGatewayRespawnSupervisor(process.env);
@@ -154,7 +149,7 @@ export function respawnGatewayProcessForUpdate(
     }
     return { mode: "supervised" };
   }
-  if (isTruthy(process.env.OPENCLAW_NO_RESPAWN)) {
+  if (isTruthyEnvValue(process.env.OPENCLAW_NO_RESPAWN)) {
     return { mode: "disabled", detail: "OPENCLAW_NO_RESPAWN" };
   }
   try {

@@ -1,5 +1,7 @@
 // Application-owned browser push subscription lifecycle.
+import { formatErrorMessage } from "@openclaw/normalization-core";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { redactToolDetail } from "../lib/browser-redact.ts";
 import type { ApplicationGateway } from "./gateway.ts";
 
 type WebPushSnapshot = {
@@ -27,10 +29,6 @@ function isWebPushSupported(): boolean {
     "PushManager" in window &&
     "Notification" in window
   );
-}
-
-function webPushError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 export function createWebPushCapability(gateway: ApplicationGateway): WebPushCapability {
@@ -91,7 +89,7 @@ export function createWebPushCapability(gateway: ApplicationGateway): WebPushCap
     publish({ loading: true, error: null });
     operation = action(client)
       .catch((error: unknown) => {
-        publish({ error: webPushError(error) });
+        publish({ error: formatErrorMessage(error, { redact: redactToolDetail }) });
       })
       .finally(() => {
         operation = null;
