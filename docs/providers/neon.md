@@ -102,6 +102,7 @@ same isolation your Neon database already has.
             input: ["text", "image"],
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
             contextWindow: 1000000,
+            compat: { supportsUsageInStreaming: false },
           },
           {
             id: "qwen3-next-80b-a3b-instruct",
@@ -148,6 +149,16 @@ not a per-request cap.
 The `input` array accepts `text`, `image`, `video`, and `audio`. Neon's catalog lists more input
 types than that for some models, including PDF for the Codex models and video and audio for Gemini,
 but only the four values above are valid in an OpenClaw model entry.
+
+### Gemini models need `supportsUsageInStreaming: false`
+
+OpenClaw asks for token usage in the stream unless a model turns it off, which is why the
+`gemini-3-flash` entry above sets `compat: { supportsUsageInStreaming: false }`. Neon translates
+its `gemini-` models into a Gemini request, and that request shape has no `stream_options` field,
+so leaving the default in place makes every call fail with
+`400 Unknown name "stream_options" at 'generation_config'`. The cost is that OpenClaw reports no
+token usage for those models. The other Neon families take `stream_options` and need no `compat`
+block.
 
 ## Models
 
