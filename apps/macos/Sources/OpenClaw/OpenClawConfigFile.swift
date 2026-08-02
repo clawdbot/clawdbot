@@ -207,18 +207,6 @@ enum OpenClawConfigFile {
         }
     }
 
-    static func updateGatewayDict(_ mutate: (inout [String: Any]) -> Void) {
-        var root = self.loadDict()
-        var gateway = root["gateway"] as? [String: Any] ?? [:]
-        mutate(&gateway)
-        if gateway.isEmpty {
-            root.removeValue(forKey: "gateway")
-        } else {
-            root["gateway"] = gateway
-        }
-        self.saveDict(root)
-    }
-
     static func gatewayUpdateChannel() -> String? {
         let root = self.loadDict()
         let update = root["update"] as? [String: Any]
