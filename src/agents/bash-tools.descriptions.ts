@@ -34,7 +34,7 @@ export function describeExecTool(params?: { agentId?: string; hasCronTool?: bool
   }
   const lines: string[] = [base];
   lines.push(
-    "IMPORTANT (Windows): Run executables directly; do NOT wrap commands in `cmd /c`, `powershell -Command`, `& ` prefix, or WSL. Use backslash paths (C:\\path), not forward slashes. Use short executable names (e.g. `node`, `python3`) instead of full paths.",
+    "IMPORTANT (Windows): Run executables directly; do NOT wrap commands in `cmd /c`, `powershell -Command`, `& ` prefix, or WSL. Use backslash paths (C:\\path), not forward slashes. Use short executable names (e.g. `node`, `python3`) instead of full paths. Prefer PowerShell equivalents when available: `Get-Content -TotalCount N` instead of `head -N`, `$env:USERPROFILE` instead of `~`, `Get-ChildItem` instead of `ls`/`dir`, `2>$null` instead of `2>nul`. Note that Unix utilities (sed, awk, grep, head, tail) may not exist on all Windows systems.",
   );
   try {
     const approvalsFile = loadExecApprovals();
