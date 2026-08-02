@@ -3,11 +3,9 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import type { CronJob, CronJobState } from "../types.js";
 import { normalizeOptionalAgentId } from "./normalize.js";
-import type { CronServiceState } from "./state.js";
+import type { CronServiceState, DeferredCronNotifications } from "./state.js";
 
 type CronAutoDisableReason = NonNullable<CronJobState["autoDisabled"]>["reason"];
-
-export type DeferredAutoDisableNotifications = Array<() => void>;
 
 /**
  * Run failures get more room than schedule errors (10 vs. 3) because provider
@@ -27,7 +25,7 @@ export function autoDisableCronJob(params: {
   atMs: number;
   consecutiveErrors: number;
   error: unknown;
-  deferredNotifications?: DeferredAutoDisableNotifications;
+  deferredNotifications?: DeferredCronNotifications;
 }): boolean {
   const { state, job } = params;
   if (!job.enabled || job.state.autoDisabled) {
@@ -91,7 +89,7 @@ export function maybeAutoDisableCronJobAfterRunFailure(params: {
   job: CronJob;
   atMs: number;
   error: unknown;
-  deferredNotifications?: DeferredAutoDisableNotifications;
+  deferredNotifications?: DeferredCronNotifications;
 }): boolean {
   const consecutiveErrors = params.job.state.consecutiveErrors ?? 0;
   if (

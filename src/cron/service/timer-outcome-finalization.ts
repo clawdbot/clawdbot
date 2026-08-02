@@ -5,7 +5,7 @@ import type { CronJob } from "../types.js";
 import { recomputeNextRunsForMaintenance } from "./jobs.js";
 import { locked } from "./locked.js";
 import { clearQueuedCronRunReservationMarker, releaseQueuedCronRun } from "./run-admission.js";
-import { emit, type CronServiceState } from "./state.js";
+import { emit, type CronServiceState, type DeferredCronNotifications } from "./state.js";
 import { ensureLoaded, persistOrRestore, snapshotStoreForRollback } from "./store.js";
 import { tryFinishCronTaskRunWithoutHistory } from "./task-runs.js";
 import type { TimedCronRunOutcome } from "./timer-execution-timeout.js";
@@ -134,10 +134,10 @@ export async function finalizeCompletedCronRunOutcomes(
 
       const rollbackSnapshot = snapshotStoreForRollback(state);
       const removedJobs: CronJob[] = [];
-      const postPersistAutoDisableNotifications: Array<() => void> = [];
+      const postPersistNotifications: DeferredCronNotifications = [];
       for (const outcome of finalizedOutcomes) {
         const removedJob = applyOutcomeToStoredJob(state, outcome, {
-          deferredAutoDisableNotifications: postPersistAutoDisableNotifications,
+          deferredNotifications: postPersistNotifications,
         });
         if (removedJob) {
           removedJobs.push(removedJob);
@@ -151,14 +151,14 @@ export async function finalizeCompletedCronRunOutcomes(
         opts?.repairFutureCronNextRunAtMs === false
           ? {
               repairFutureCronNextRunAtMs: false,
-              deferredAutoDisableNotifications: postPersistAutoDisableNotifications,
+              deferredNotifications: postPersistNotifications,
             }
-          : { deferredAutoDisableNotifications: postPersistAutoDisableNotifications },
+          : { deferredNotifications: postPersistNotifications },
       );
-      // Auto-disable alerts describe durable state. Drain them only after the
-      // terminal write succeeds so a rolled-back run cannot publish a false transition.
+      // Run notifications describe durable state. Drain them only after the
+      // terminal write succeeds so rollback cannot publish a false outcome.
       await persistOrRestore(state, rollbackSnapshot, {
-        postPersistAutoDisableNotifications,
+        postPersistNotifications,
       });
       finishPersistedQuietCronTaskRuns(state, finalizedOutcomes);
       for (const removedJob of removedJobs) {

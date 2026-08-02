@@ -2844,7 +2844,7 @@ describe("cron service timer regressions", () => {
       state,
       job,
       { status: "error", error: "ninth failure", startedAt, endedAt: startedAt + 10 },
-      { deferredAutoDisableNotifications: deferredNotifications },
+      { deferredNotifications },
     );
     expect(job.enabled).toBe(true);
     expect(job.state.consecutiveErrors).toBe(9);
@@ -2860,7 +2860,7 @@ describe("cron service timer regressions", () => {
         startedAt: startedAt + 60_000,
         endedAt: startedAt + 60_010,
       },
-      { deferredAutoDisableNotifications: deferredNotifications },
+      { deferredNotifications },
     );
     expect(job.enabled).toBe(false);
     expect(job.state.nextRunAtMs).toBeUndefined();
@@ -2901,7 +2901,7 @@ describe("cron service timer regressions", () => {
           startedAt: startedAt + run * 60_000,
           endedAt: startedAt + run * 60_000 + 10,
         },
-        { deferredAutoDisableNotifications: [] },
+        { deferredNotifications: [] },
       );
 
     for (let run = 0; run < 9; run += 1) {
@@ -2945,7 +2945,7 @@ describe("cron service timer regressions", () => {
       state,
       job,
       { status: "error", error: "tenth failure", startedAt, endedAt: startedAt + 10 },
-      { ...opts, deferredAutoDisableNotifications: deferredNotifications },
+      { ...opts, deferredNotifications },
     );
 
     expect(job.enabled).toBe(true);

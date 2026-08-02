@@ -35,6 +35,7 @@ import type {
   CronServiceState,
   CronUpdateOptions,
   CronUpdatePrecondition,
+  DeferredCronNotifications,
 } from "./state.js";
 import { emit } from "./state.js";
 import {
@@ -276,15 +277,15 @@ export async function add(state: CronServiceState, input: CronJobCreate, opts?: 
     });
     state.store?.jobs.push(job);
 
-    // Auto-disable notifications describe durable state, so publish them only
+    // Mutation notifications describe durable state, so publish them only
     // after the write succeeds instead of leaking a rolled-back transition.
-    const postPersistAutoDisableNotifications: Array<() => void> = [];
+    const postPersistNotifications: DeferredCronNotifications = [];
     recomputeNextRunsForMaintenance(state, {
-      deferredAutoDisableNotifications: postPersistAutoDisableNotifications,
+      deferredNotifications: postPersistNotifications,
     });
 
     await persistOrRestore(state, snapshot, {
-      postPersistAutoDisableNotifications,
+      postPersistNotifications,
       suppressScheduledJobId: job.id,
     });
     armTimer(state);
@@ -428,13 +429,13 @@ export async function remove(
     state.store.jobs = state.store.jobs.filter((j) => j.id !== id);
     const removed = (state.store.jobs.length ?? 0) !== before;
 
-    const postPersistAutoDisableNotifications: Array<() => void> = [];
+    const postPersistNotifications: DeferredCronNotifications = [];
     recomputeNextRunsForMaintenance(state, {
-      deferredAutoDisableNotifications: postPersistAutoDisableNotifications,
+      deferredNotifications: postPersistNotifications,
     });
 
     await persistOrRestore(state, snapshot, {
-      postPersistAutoDisableNotifications,
+      postPersistNotifications,
       suppressScheduledJobId: id,
     });
     if (removed) {
