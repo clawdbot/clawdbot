@@ -379,6 +379,8 @@ export interface ContextEngine {
     sessionFile: string;
     runtimeSettings?: ContextEngineRuntimeSettings;
     runtimeContext?: ContextEngineRuntimeContext;
+    /** Aborted when a foreground turn needs deferred maintenance to yield. */
+    abortSignal?: AbortSignal;
   }): Promise<ContextEngineMaintenanceResult>;
 
   /**

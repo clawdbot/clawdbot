@@ -9,7 +9,8 @@ type ContextEngineMaintenanceTestApi = {
   createDeferredTurnMaintenanceAbortSignal(params?: {
     processLike?: DeferredTurnMaintenanceProcessLike;
   }): {
-    abortSignal?: AbortSignal;
+    abortSignal: AbortSignal;
+    abort: (reason: Error) => void;
     dispose: () => void;
   };
   resetDeferredTurnMaintenanceStateForTest(): void;
@@ -24,7 +25,8 @@ function getTestApi(): ContextEngineMaintenanceTestApi {
 export function createDeferredTurnMaintenanceAbortSignal(params?: {
   processLike?: DeferredTurnMaintenanceProcessLike;
 }): {
-  abortSignal?: AbortSignal;
+  abortSignal: AbortSignal;
+  abort: (reason: Error) => void;
   dispose: () => void;
 } {
   return getTestApi().createDeferredTurnMaintenanceAbortSignal(params);

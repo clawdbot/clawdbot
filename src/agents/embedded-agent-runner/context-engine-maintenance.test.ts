@@ -3,6 +3,15 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { registerLegacyContextEngine } from "../../context-engine/legacy.registration.js";
+import {
+  registerContextEngineForOwner,
+  resolveContextEngine,
+} from "../../context-engine/registry.js";
+import {
+  captureContextEngineRegistryStateForTests,
+  resetContextEngineRuntimeQuarantineForTests,
+} from "../../context-engine/registry.test-support.js";
 import type { ContextEngineRuntimeContext } from "../../context-engine/types.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-events.js";
 import { enqueueCommandInLane, markGatewayDraining } from "../../process/command-queue.js";
@@ -1211,7 +1220,7 @@ describe("runContextEngineMaintenance", () => {
     });
   });
 
-  it("waits at the same-session read checkpoint before deferred maintenance rewrites", async () => {
+  it("preempts deferred maintenance at the same-session read checkpoint", async () => {
     await withStateDirEnv("openclaw-turn-maintenance-", async () => {
       vi.useFakeTimers();
       try {
@@ -1301,15 +1310,225 @@ describe("runContextEngineMaintenance", () => {
             "maintenance-start",
             "foreground-before-read-checkpoint",
             "maintenance-before-rewrite",
-            "rewrite",
-            "maintenance-after-rewrite",
             "foreground-read",
           ]),
         );
 
         expect(maintain).toHaveBeenCalledTimes(1);
+        expect(rewriteTranscriptEntriesInSessionManagerMock).not.toHaveBeenCalled();
         await foregroundTurn;
       } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  it("fails a waiting turn without overlapping an unquarantinable maintenance run", async () => {
+    await withStateDirEnv("openclaw-turn-maintenance-", async () => {
+      vi.useFakeTimers();
+      try {
+        resetCommandQueueStateForTest();
+        resetTaskRegistryForTests({ persist: false });
+        resetTaskFlowRegistryForTests({ persist: false });
+        resetSystemEventsForTest();
+
+        const sessionKey = "agent:main:session-preempt-blocked";
+        let releaseMaintenance: (() => void) | undefined;
+        let receivedAbortSignal: AbortSignal | undefined;
+        let maintenanceRuntimeContext: ContextEngineRuntimeContext | undefined;
+        const maintain = vi.fn(async (params?: unknown) => {
+          const callParams = params as {
+            abortSignal?: AbortSignal;
+            runtimeContext?: ContextEngineRuntimeContext;
+          };
+          receivedAbortSignal = callParams.abortSignal;
+          maintenanceRuntimeContext = callParams.runtimeContext;
+          await new Promise<void>((resolve) => {
+            releaseMaintenance = resolve;
+          });
+          return { changed: false, bytesFreed: 0, rewrittenEntries: 0 };
+        });
+        const backgroundEngine = {
+          info: {
+            id: "unquarantinable-test",
+            name: "Unquarantinable Test Engine",
+            turnMaintenanceMode: "background" as const,
+          },
+          ingest: async () => ({ ingested: true }),
+          assemble: async ({ messages }: { messages: unknown[] }) => ({
+            messages,
+            estimatedTokens: 0,
+          }),
+          compact: async () => ({ ok: true, compacted: false }),
+          maintain,
+        } as NonNullable<Parameters<typeof runContextEngineMaintenance>[0]["contextEngine"]>;
+
+        await runContextEngineMaintenance({
+          contextEngine: backgroundEngine,
+          sessionId: "session-preempt-blocked",
+          sessionKey,
+          sessionFile: "/tmp/session-preempt-blocked.jsonl",
+          reason: "turn",
+        });
+        await waitForAssertion(() => expect(maintain).toHaveBeenCalledOnce());
+
+        const foregroundWait = expect(
+          waitForDeferredTurnMaintenanceForSession(sessionKey),
+        ).rejects.toThrow("this turn was stopped to avoid overlapping engine operations");
+        await flushAsyncWork();
+        expect(receivedAbortSignal?.aborted).toBe(true);
+        if (!maintenanceRuntimeContext?.rewriteTranscriptEntries) {
+          throw new Error("Expected maintenance runtime rewrite helper");
+        }
+        await expect(
+          maintenanceRuntimeContext.rewriteTranscriptEntries({ replacements: [] }),
+        ).rejects.toThrow("waiting foreground turn");
+        await vi.advanceTimersByTimeAsync(1_001);
+        await foregroundWait;
+        const task = listTasksForOwnerKey(sessionKey).find(
+          (candidate) => candidate.taskKind === TURN_MAINTENANCE_TASK_KIND,
+        );
+        expect(task?.status).toBe("timed_out");
+        await vi.advanceTimersByTimeAsync(11_000);
+        expect(peekSystemEvents(sessionKey).join("\n")).not.toContain(
+          "Deferred maintenance is still running.",
+        );
+
+        await runContextEngineMaintenance({
+          contextEngine: backgroundEngine,
+          sessionId: "session-preempt-blocked",
+          sessionKey,
+          sessionFile: "/tmp/session-preempt-blocked.jsonl",
+          reason: "turn",
+        });
+        expect(maintain).toHaveBeenCalledOnce();
+
+        if (!releaseMaintenance) {
+          throw new Error("Expected maintenance release callback to be initialized");
+        }
+        releaseMaintenance();
+        await flushAsyncWork();
+        expect(task && getTaskById(task.taskId)?.status).toBe("timed_out");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  it("drains admitted rewrites before routing foreground compaction maintenance to fallback", async () => {
+    await withStateDirEnv("openclaw-turn-maintenance-", async () => {
+      vi.useFakeTimers();
+      const restoreRegistry = captureContextEngineRegistryStateForTests();
+      try {
+        resetCommandQueueStateForTest();
+        resetTaskRegistryForTests({ persist: false });
+        resetTaskFlowRegistryForTests({ persist: false });
+        resetContextEngineRuntimeQuarantineForTests();
+        registerLegacyContextEngine();
+
+        const sessionKey = "agent:main:session-preempt-fallback";
+        const engineId = "preempt-fallback-engine";
+        let releaseMaintenance: (() => void) | undefined;
+        let releaseRewriteRead: (() => void) | undefined;
+        let rewriteReadStarted: (() => void) | undefined;
+        const rewriteStarted = new Promise<void>((resolve) => {
+          rewriteReadStarted = resolve;
+        });
+        resolveRuntimeTranscriptReadTargetMock.mockImplementationOnce(
+          async (scope: Record<string, unknown>) => {
+            rewriteReadStarted?.();
+            await new Promise<void>((resolve) => {
+              releaseRewriteRead = resolve;
+            });
+            return {
+              agentId: scope.agentId ?? "main",
+              sessionId: scope.sessionId,
+              sessionKey: scope.sessionKey,
+              storePath: scope.storePath ?? "/tmp/default-openclaw.sqlite",
+            };
+          },
+        );
+        const maintain = vi.fn(async (params?: unknown) => {
+          const runtimeContext = (params as { runtimeContext?: ContextEngineRuntimeContext })
+            .runtimeContext;
+          void runtimeContext
+            ?.rewriteTranscriptEntries?.({ replacements: [] })
+            .catch(() => undefined);
+          await new Promise<void>((resolve) => {
+            releaseMaintenance = resolve;
+          });
+          return { changed: false, bytesFreed: 0, rewrittenEntries: 0 };
+        });
+        registerContextEngineForOwner(
+          engineId,
+          () => ({
+            info: {
+              id: engineId,
+              name: "Preempt Fallback Engine",
+              turnMaintenanceMode: "background" as const,
+              acceptedHostParams: ["sessionKey", "runtimeContext", "abortSignal"],
+            },
+            ingest: vi.fn(async () => ({ ingested: true })),
+            assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
+            compact: async () => ({ ok: true, compacted: false }),
+            maintain,
+          }),
+          `test:${engineId}`,
+        );
+        const contextEngine = await resolveContextEngine({
+          plugins: { slots: { contextEngine: engineId } },
+        });
+
+        await runContextEngineMaintenance({
+          contextEngine,
+          sessionId: "session-preempt-fallback",
+          sessionKey,
+          sessionFile: "/tmp/session-preempt-fallback.jsonl",
+          reason: "turn",
+        });
+        await rewriteStarted;
+
+        let foregroundReleased = false;
+        const foregroundMaintenance = runContextEngineMaintenance({
+          contextEngine,
+          sessionId: "session-preempt-fallback",
+          sessionKey,
+          sessionFile: "/tmp/session-preempt-fallback.jsonl",
+          reason: "compaction",
+        }).then((result) => {
+          foregroundReleased = true;
+          return result;
+        });
+        await vi.advanceTimersByTimeAsync(1_001);
+        expect(contextEngine.info.id).toBe("legacy");
+        expect(foregroundReleased).toBe(false);
+        expect(maintain).toHaveBeenCalledOnce();
+
+        if (!releaseRewriteRead) {
+          throw new Error("Expected transcript read release callback to be initialized");
+        }
+        releaseRewriteRead();
+        await expect(foregroundMaintenance).resolves.toEqual({
+          changed: false,
+          bytesFreed: 0,
+          rewrittenEntries: 0,
+          reason: "context engine downgraded to legacy",
+        });
+        expect(foregroundReleased).toBe(true);
+        expect(maintain).toHaveBeenCalledOnce();
+
+        if (!releaseMaintenance) {
+          throw new Error("Expected maintenance release callback to be initialized");
+        }
+        releaseMaintenance();
+        await flushAsyncWork();
+        const task = listTasksForOwnerKey(sessionKey).find(
+          (candidate) => candidate.taskKind === TURN_MAINTENANCE_TASK_KIND,
+        );
+        expect(task?.status).toBe("timed_out");
+      } finally {
+        resetDeferredTurnMaintenanceStateForTest();
+        restoreRegistry();
         vi.useRealTimers();
       }
     });

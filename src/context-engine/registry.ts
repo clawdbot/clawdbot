@@ -46,11 +46,12 @@ const GUARDED_CONTEXT_ENGINE_METHODS = new Set<PropertyKey>(
   ),
 );
 export const CONTEXT_ENGINE_HOST_PARAMS = new Set(
-  "sessionKey prompt runtimeSettings sessionTarget runtimeContext".split(" "),
+  "sessionKey prompt runtimeSettings sessionTarget runtimeContext abortSignal".split(" "),
 );
 type ResolvedContextEngineMetadata = {
   owner: string;
   engineId: string;
+  defaultEngineId?: string;
 };
 
 const resolvedEngineMetadata = new WeakMap<ContextEngine, ResolvedContextEngineMetadata>();
@@ -471,6 +472,26 @@ function pluginIdFromContextEngineOwner(owner: string): string | undefined {
     return undefined;
   }
   return owner.slice("plugin:".length).trim() || undefined;
+}
+
+/** Quarantine a resolved custom engine after a host-owned lifecycle failure. */
+export function quarantineResolvedContextEngine(params: {
+  contextEngine: ContextEngine;
+  operation: "maintain";
+  error: unknown;
+}): boolean {
+  const metadata = resolvedEngineMetadata.get(params.contextEngine);
+  if (!metadata?.defaultEngineId) {
+    return false;
+  }
+  recordContextEngineQuarantine({
+    engineId: metadata.engineId,
+    owner: metadata.owner,
+    operation: params.operation,
+    error: params.error,
+    defaultEngineId: metadata.defaultEngineId,
+  });
+  return true;
 }
 
 function describeResolvedContextEngineContractError(
