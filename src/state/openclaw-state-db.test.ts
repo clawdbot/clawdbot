@@ -2346,6 +2346,40 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     expect(readSqliteNumberPragma(opened.db, "user_version")).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
   });
 
+  it("snapshots the pre-v2 upgrade that normal open performs, not repair", () => {
+    const stateDir = createTempStateDir();
+    const databasePath = createLegacyAuditStateDatabase(stateDir);
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacy = new DatabaseSync(databasePath);
+    legacy.exec("DROP TABLE audit_events");
+    legacy.close();
+    const backupDir = path.join(path.dirname(databasePath), "pre-migration-backups");
+
+    // Repair defers this database's version bump, so it must not copy it either:
+    // a snapshot here would be a duplicate reported as a migration that never ran.
+    expect(repairOpenClawStateDatabaseSchema(options)).toEqual({ changes: [], warnings: [] });
+    expect(fs.existsSync(backupDir)).toBe(false);
+
+    // Normal open is where the forward migration actually happens, so that is
+    // where the rollback copy has to exist.
+    const opened = openOpenClawStateDatabase(options);
+    expect(readSqliteNumberPragma(opened.db, "user_version")).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
+    const snapshots = fs.readdirSync(backupDir).filter((name) => name.endsWith(".sqlite"));
+    expect(snapshots).toHaveLength(1);
+    expect(snapshots[0]).toContain(`v1-to-v${OPENCLAW_STATE_SCHEMA_VERSION}`);
+
+    // And it has to carry the pre-migration version, or it cannot roll anything back.
+    const snapshot = new DatabaseSync(path.join(backupDir, snapshots[0] as string), {
+      readOnly: true,
+    });
+    try {
+      expect(readSqliteNumberPragma(snapshot, "user_version")).toBe(1);
+    } finally {
+      snapshot.close();
+    }
+  });
+
   it("refuses to rebuild a noncanonical audit table with unknown data columns", () => {
     const stateDir = createTempStateDir();
     const databasePath = createLegacyAuditStateDatabase(stateDir);
