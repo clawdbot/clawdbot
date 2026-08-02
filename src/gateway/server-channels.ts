@@ -479,7 +479,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     }
     const { preserveRestartAttempts = false, preserveManualStop = false } = optsValue;
     const cfg = getRuntimeConfig();
-    resetDirectoryCache({ channel: channelId, accountId });
+    resetDirectoryCache({ cfg, channel: channelId, accountId });
     const store = getStore(channelId);
     const accountIds = accountId
       ? [accountId]
@@ -795,7 +795,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                           ? setRuntimeFromTaskStatus(channelId, id, next, abort.signal)
                           : getRuntime(channelId, id),
                       invalidateDirectoryCache: () =>
-                        resetDirectoryCache({ channel: channelId, accountId: id }),
+                        resetDirectoryCache({ cfg, channel: channelId, accountId: id }),
                       ...(channelRuntimeForTask ? { channelRuntime: channelRuntimeForTask } : {}),
                     }),
                   ).finally(recordDuration);
