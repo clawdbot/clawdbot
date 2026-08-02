@@ -13,6 +13,9 @@ const resolveCliRuntimeExecutionProvider = vi.hoisted(() => vi.fn());
 const runCliAgent = vi.hoisted(() => vi.fn());
 const retireSessionMcpRuntime = vi.hoisted(() => vi.fn());
 const retireSessionMcpRuntimeForSessionKey = vi.hoisted(() => vi.fn());
+const userTurnTranscriptRecorder = vi.hoisted(() => ({
+  persistApproved: vi.fn(),
+}));
 
 vi.mock("../model-auth.js", () => ({
   ensureAuthProfileStore,
@@ -34,6 +37,7 @@ vi.mock("../agent-bundle-mcp-tools.js", () => ({
 }));
 const transcriptRecorder = vi.hoisted(() => ({
   userMessageIdempotencyKey: "run-cli-dispatch-test:user",
+  userTurnTranscriptRecorder,
   noteToolEvent: vi.fn(),
   noteAssistantText: vi.fn(),
   flushAssistantSnapshot: vi.fn(),
@@ -355,6 +359,7 @@ describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
       cleanupCliLiveSessionOnRunEnd: true,
       requireExplicitMessageTarget: true,
       excludeMessageIdempotencyKey: "run-cli-dispatch-test:user",
+      userTurnTranscriptRecorder,
       cliToolAvailability: {
         native: [],
         openClaw: ["memory_search", "memory_get", "notes_retrieve_context"],

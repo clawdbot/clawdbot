@@ -26,11 +26,12 @@ const MAX_AUTO_CLI_SESSION_RESEED_HISTORY_CHARS = 256 * 1024;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 it("uses a caller-owned current-turn key before recorder persistence settles", () => {
+  const idempotencyKey = " run-cli-dispatch-test:user ";
   expect(
     resolveCliSessionHistoryExcludedMessageIdempotencyKey({
-      excludeMessageIdempotencyKey: "run-cli-dispatch-test:user",
+      excludeMessageIdempotencyKey: idempotencyKey,
     }),
-  ).toBe("run-cli-dispatch-test:user");
+  ).toBe(idempotencyKey);
 });
 
 function createSessionTranscript(params: {

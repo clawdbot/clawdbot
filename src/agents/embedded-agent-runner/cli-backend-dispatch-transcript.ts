@@ -6,12 +6,19 @@
  * recall) read the run's transcript for timeout partial-text salvage,
  * tool-result evidence, and a live terminal-search watcher that polls
  * mid-run. Mirror the run into canonical transcript records through the
- * session accessor: the user turn at start, tool calls/results as they
- * stream, and the final assistant snapshot at run end.
+ * session accessor: the accepted user turn at the CLI runner boundary,
+ * tool calls/results as they stream, and the final assistant snapshot at run
+ * end.
  */
 import { appendTranscriptMessage } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import {
+  buildRunUserTurnIdempotencyKey,
+  createUserTurnTranscriptRecorder,
+  type UserTurnTranscriptRecorder,
+} from "../../sessions/user-turn-transcript.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { buildAssistantMessage, buildUsageWithNoCost } from "../stream-message-shared.js";
 
@@ -32,6 +39,8 @@ type CliDispatchTranscriptToolEvent = {
 };
 
 type CliDispatchTranscriptRecorder = {
+  userMessageIdempotencyKey: string;
+  userTurnTranscriptRecorder: UserTurnTranscriptRecorder;
   noteToolEvent: (event: CliDispatchTranscriptToolEvent) => void;
   noteAssistantText: (text: string) => void;
   /**
@@ -72,6 +81,9 @@ export function createCliDispatchTranscriptRecorder(params: {
   let finalized = false;
   let turnTainted = false;
   let toolRecordSequence = 0;
+  const userMessageIdempotencyKey = buildRunUserTurnIdempotencyKey(params.runId);
+  const sessionKey = params.sessionKey?.trim() || params.sessionId;
+  const agentId = params.agentId?.trim() || resolveAgentIdFromSessionKey(sessionKey);
 
   const scope = {
     sessionId: params.sessionId,
@@ -104,6 +116,40 @@ export function createCliDispatchTranscriptRecorder(params: {
     id: params.model ?? "",
   };
 
+  const userTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
+    input: {
+      text: params.prompt,
+      idempotencyKey: userMessageIdempotencyKey,
+      ...(params.senderIsOwner !== undefined ? { senderIsOwner: params.senderIsOwner } : {}),
+    },
+    target: {
+      sessionId: params.sessionId,
+      sessionKey,
+      sessionEntry: undefined,
+      ...(params.storePath ? { storePath: params.storePath } : {}),
+      agentId,
+      ...(params.cwd ? { cwd: params.cwd } : {}),
+      ...(params.config ? { config: params.config } : {}),
+    },
+    updateMode: "none",
+    errorContext: "CLI dispatch user turn transcript",
+    onPersistenceError: (error) => {
+      log.warn(
+        `cli dispatch transcript append failed: runId=${params.runId} error=${String(error)}`,
+      );
+    },
+  });
+  const persistApprovedUserTurn = userTurnTranscriptRecorder.persistApproved;
+  userTurnTranscriptRecorder.persistApproved = async (options) => {
+    try {
+      return await persistApprovedUserTurn(options);
+    } catch {
+      // Transcript mirroring is best-effort; preserve the existing dispatch
+      // behavior when the canonical user-turn write fails.
+      return undefined;
+    }
+  };
+
   type AssistantBuildParams = Parameters<typeof buildAssistantMessage>[0];
   // Mirrored records carry zero usage: the CLI child's token accounting is
   // not visible on this bridge, and cost fields must not invent values.
@@ -121,16 +167,9 @@ export function createCliDispatchTranscriptRecorder(params: {
     return tainted ? ({ ...message, __openclaw: { turnTainted: true } } as AgentMessage) : message;
   };
 
-  enqueue(() => ({
-    role: "user",
-    content: [{ type: "text", text: params.prompt }],
-    timestamp: Date.now(),
-    ...(params.senderIsOwner !== undefined
-      ? { __openclaw: { senderIsOwner: params.senderIsOwner } }
-      : {}),
-  }));
-
   return {
+    userMessageIdempotencyKey,
+    userTurnTranscriptRecorder,
     noteToolEvent: (event) => {
       if (finalized) {
         return;

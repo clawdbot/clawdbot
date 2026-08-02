@@ -98,6 +98,8 @@ export type RunCliAgentParams = {
   storePath?: string;
   /** Canonical user-turn recorder shared with gateway/queue dispatch. */
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
+  /** Caller-owned current-turn key to exclude from prior session history. */
+  excludeMessageIdempotencyKey?: string;
   /** Skip current-turn user persistence when a retry/fallback already wrote it. */
   suppressNextUserMessagePersistence?: boolean;
   /** Notification fired after the current user turn has been accepted into the transcript. */

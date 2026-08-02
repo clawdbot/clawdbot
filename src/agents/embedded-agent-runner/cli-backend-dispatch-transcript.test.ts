@@ -2,9 +2,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createCliDispatchTranscriptRecorder } from "./cli-backend-dispatch-transcript.js";
 
 const appendTranscriptMessage = vi.hoisted(() => vi.fn());
+const persistSessionTranscriptTurn = vi.hoisted(() => vi.fn());
 
 vi.mock("../../config/sessions/session-accessor.js", () => ({
   appendTranscriptMessage,
+  persistSessionTranscriptTurn,
 }));
 
 type AppendedRecord = {
@@ -37,25 +39,44 @@ function recorderParams() {
 beforeEach(() => {
   appendTranscriptMessage.mockReset();
   appendTranscriptMessage.mockResolvedValue({ appended: true, message: {}, messageId: "m" });
+  persistSessionTranscriptTurn.mockReset();
+  persistSessionTranscriptTurn.mockImplementation(
+    async (
+      _target: unknown,
+      options: { messages: Array<{ message: Record<string, unknown> }> },
+    ) => ({
+      sessionEntry: undefined,
+      messages: [
+        {
+          appended: true,
+          messageId: "user-message",
+          message: options.messages[0]?.message,
+        },
+      ],
+    }),
+  );
 });
 
 describe("createCliDispatchTranscriptRecorder", () => {
-  it("appends the user turn to the run's session identity", async () => {
+  it("defers the user turn to the CLI runner's persistence boundary", async () => {
     const recorder = createCliDispatchTranscriptRecorder(recorderParams());
     expect(recorder.userMessageIdempotencyKey).toBe("run-transcript-test:user");
-    await recorder.finalize();
+    expect(persistSessionTranscriptTurn).not.toHaveBeenCalled();
+    expect(appendTranscriptMessage).not.toHaveBeenCalled();
 
-    const records = appendedRecords();
-    expect(records[0]?.scope).toMatchObject({
+    await recorder.userTurnTranscriptRecorder.persistApproved();
+
+    const [target, options] = persistSessionTranscriptTurn.mock.calls[0] ?? [];
+    expect(target).toMatchObject({
       sessionId: "recall-session",
       sessionKey: "agent:main:recall",
       agentId: "main",
-      sessionFile: "sqlite://agents/main/recall-session",
       storePath: "/tmp/recall/current/agents/main/sessions/sessions.json",
     });
-    expect(records[0]?.message).toMatchObject({
+    expect(options).toMatchObject({ updateMode: "none" });
+    expect(options?.messages?.[0]?.message).toMatchObject({
       role: "user",
-      content: [{ type: "text", text: "recall prompt" }],
+      content: "recall prompt",
       idempotencyKey: "run-transcript-test:user",
       __openclaw: { senderIsOwner: true },
     });
@@ -82,7 +103,7 @@ describe("createCliDispatchTranscriptRecorder", () => {
     await recorder.finalize("Lemon pepper.");
 
     const messages = appendedRecords().map((record) => record.message);
-    expect(messages[1]).toMatchObject({
+    expect(messages[0]).toMatchObject({
       role: "assistant",
       content: [
         { type: "toolCall", id: "call-1", name: "memory_search", arguments: { query: "wings" } },
@@ -91,7 +112,7 @@ describe("createCliDispatchTranscriptRecorder", () => {
     });
     // The toolResult shape is what active-memory's transcript readers parse:
     // role/toolName gate the record; details/content decide usable-vs-unavailable.
-    expect(messages[2]).toMatchObject({
+    expect(messages[1]).toMatchObject({
       role: "toolResult",
       toolCallId: "call-1",
       toolName: "memory_search",
@@ -99,7 +120,7 @@ describe("createCliDispatchTranscriptRecorder", () => {
       details: { results: [{ id: "m1" }], debug: { backend: "builtin", hits: 1 } },
       isError: false,
     });
-    expect(messages[3]).toMatchObject({
+    expect(messages[2]).toMatchObject({
       role: "assistant",
       content: [{ type: "text", text: "Lemon pepper." }],
       stopReason: "stop",
@@ -118,11 +139,11 @@ describe("createCliDispatchTranscriptRecorder", () => {
     await recorder.finalize("summary");
 
     const messages = appendedRecords().map((record) => record.message);
-    expect(messages[1]).toMatchObject({
+    expect(messages[0]).toMatchObject({
       role: "toolResult",
       __openclaw: { resultContentSource: "network" },
     });
-    expect(messages[2]).toMatchObject({
+    expect(messages[1]).toMatchObject({
       role: "assistant",
       __openclaw: { turnTainted: true },
     });
@@ -149,7 +170,7 @@ describe("createCliDispatchTranscriptRecorder", () => {
     await recorder.finalize("Port 4173.");
 
     const messages = appendedRecords().map((record) => record.message);
-    expect(messages[2]).toMatchObject({
+    expect(messages[1]).toMatchObject({
       role: "toolResult",
       toolCallId: "call-1",
       toolName: "memory_search",
@@ -229,8 +250,9 @@ describe("createCliDispatchTranscriptRecorder", () => {
   });
 
   it("survives append failures without failing the run or later appends", async () => {
-    appendTranscriptMessage.mockRejectedValueOnce(new Error("store unavailable"));
+    persistSessionTranscriptTurn.mockRejectedValueOnce(new Error("store unavailable"));
     const recorder = createCliDispatchTranscriptRecorder(recorderParams());
+    await expect(recorder.userTurnTranscriptRecorder.persistApproved()).resolves.toBeUndefined();
     recorder.noteToolEvent({ phase: "result", toolName: "memory_search", isError: false });
     await expect(recorder.finalize("text")).resolves.toBeUndefined();
     // The user-turn append failed; the tool and assistant records still land.

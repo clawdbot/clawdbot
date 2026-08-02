@@ -4023,6 +4023,42 @@ describe("prepareCliRunContext", () => {
     }
   });
 
+  it("keeps an unpersisted current turn out of fresh-session detection", async () => {
+    const { dir } = fixture.session;
+    const currentTurnKey = "run-cli-dispatch-fresh:user";
+    const sessionKey = "agent:main:telegram:direct:peer";
+    const storePath = path.join(dir, "fresh-sessions.json");
+    const userTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
+      input: {
+        text: "latest ask",
+        idempotencyKey: currentTurnKey,
+      },
+      target: createTestUserTurnTranscriptTarget({
+        sessionId: "session-test",
+        sessionKey,
+        storePath,
+        cwd: dir,
+      }),
+    });
+
+    const context = await fixture.prepare({
+      sessionId: "session-test",
+      sessionKey,
+      sessionFile: sessionKey,
+      sessionTarget: {
+        agentId: "main",
+        sessionId: "session-test",
+        sessionKey,
+        storePath,
+      },
+      userTurnTranscriptRecorder,
+      excludeMessageIdempotencyKey: currentTurnKey,
+    });
+
+    expect(context.hadSessionFile).toBe(false);
+    expect(userTurnTranscriptRecorder.hasPersisted()).toBe(false);
+  });
+
   it("waits for deferred transcript maintenance before preparing history", async () => {
     fixture.appendTranscript({
       id: "msg-before-maintenance",

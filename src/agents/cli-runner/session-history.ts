@@ -37,6 +37,8 @@ import {
 import { cliBackendLog } from "./log.js";
 import type { RunCliAgentParams } from "./types.js";
 
+export { resolveCliSessionHistoryExcludedMessageIdempotencyKey } from "./session-history-exclusion.js";
+
 /** Maximum transcript size read for CLI session history. */
 const MAX_CLI_SESSION_HISTORY_FILE_BYTES = 5 * 1024 * 1024;
 /** Maximum transcript messages exposed to CLI hook history. */
@@ -92,24 +94,6 @@ const RAW_TRANSCRIPT_RESEED_ALLOWED_REASONS = new Set<RawTranscriptReseedReason>
   "mcp",
   "session-expired",
 ]);
-
-/** Resolves a persisted current turn that must not be exposed as prior CLI history. */
-export function resolveCliSessionHistoryExcludedMessageIdempotencyKey(
-  params: Pick<
-    RunCliAgentParams,
-    "suppressNextUserMessagePersistence" | "userTurnTranscriptRecorder"
-  >,
-): string | undefined {
-  const recorder = params.userTurnTranscriptRecorder;
-  if (params.suppressNextUserMessagePersistence !== true || !recorder?.hasPersisted()) {
-    return undefined;
-  }
-  const message = recorder.getPersistedMessage?.() ?? recorder.message;
-  const idempotencyKey = (message as { idempotencyKey?: unknown } | undefined)?.idempotencyKey;
-  return typeof idempotencyKey === "string" && idempotencyKey.length > 0
-    ? idempotencyKey
-    : undefined;
-}
 
 /** Resolves how much prior transcript text may reseed a fresh CLI session. */
 export function resolveAutoCliSessionReseedHistoryChars(contextWindowTokens: number): number {

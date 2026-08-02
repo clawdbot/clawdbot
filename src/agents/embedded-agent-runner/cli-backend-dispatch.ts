@@ -213,6 +213,8 @@ async function runEmbeddedAgentViaCliBackend(
       config: params.config,
       prompt: params.prompt,
       imagePrompt: params.prompt,
+      excludeMessageIdempotencyKey: transcript.userMessageIdempotencyKey,
+      userTurnTranscriptRecorder: transcript.userTurnTranscriptRecorder,
       media: params.media,
       provider: dispatch.provider,
       model: params.model,
