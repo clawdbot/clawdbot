@@ -1,10 +1,9 @@
-// Sleep utility tests cover timer-safe delay clamping and abort-listener cleanup
-// for long-running agent waits.
+// Sleep utility tests cover timer-safe delay clamping and abort-listener cleanup.
 import { describe, expect, it, vi } from "vitest";
-import { MAX_TIMER_TIMEOUT_MS } from "../../shared/number-coercion.js";
+import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { sleep } from "./sleep.js";
 
-describe("agents sleep", () => {
+describe("sleep", () => {
   it("clamps oversized delays before scheduling", async () => {
     vi.useFakeTimers();
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");

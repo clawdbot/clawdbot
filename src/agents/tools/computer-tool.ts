@@ -14,6 +14,7 @@ import { Type } from "typebox";
 import { parseScreenSnapshotPayload } from "../../cli/nodes-screen.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { sleep } from "../../utils/sleep.js";
 import {
   DEFAULT_IMAGE_MAX_DIMENSION_PX,
   resolveImageSanitizationLimits,
@@ -27,7 +28,6 @@ import {
   stringEnum,
 } from "../schema/typebox.js";
 import { sanitizeToolResultImages } from "../tool-images.js";
-import { sleep } from "../utils/sleep.js";
 import {
   type AnyAgentTool,
   readFiniteNumberParam,
