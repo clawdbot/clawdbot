@@ -13,4 +13,17 @@ describe("debug proxy coverage report", () => {
     expect(entryIds.has("provider-transport-fetch")).toBe(true);
     expect(entryIds.has("feishu-client-http")).toBe(true);
   });
+
+  it.each([
+    ["discord-rest", "extensions/discord/src/monitor/rest-fetch.ts"],
+    ["discord-gateway", "extensions/discord/src/monitor/gateway-plugin.ts"],
+    ["telegram-fetch", "extensions/telegram/src/fetch.ts"],
+    ["mattermost-ws", "extensions/mattermost/src/mattermost/monitor-websocket.ts"],
+    ["feishu-client-http", "extensions/feishu/src/client.ts"],
+    ["feishu-client-ws", "extensions/feishu/src/client.ts"],
+  ])("reports the canonical source module for %s", (entryId, modulePath) => {
+    const entry = buildDebugProxyCoverageReport().entries.find(({ id }) => id === entryId);
+
+    expect(entry?.modulePath).toBe(modulePath);
+  });
 });

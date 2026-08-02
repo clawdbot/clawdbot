@@ -22,6 +22,11 @@ export type DebugProxyCoverageSummary = {
   uncovered: number;
 };
 
+// Diagnostic paths describe plugin owners without importing their private source modules.
+function pluginSourceModulePath(pluginId: string, relativePath: string): string {
+  return ["extensions", pluginId, "src", relativePath].join("/");
+}
+
 const DEBUG_PROXY_COVERAGE_ENTRIES: readonly DebugProxyCoverageEntry[] = [
   {
     id: "provider-transport-fetch",
@@ -35,7 +40,7 @@ const DEBUG_PROXY_COVERAGE_ENTRIES: readonly DebugProxyCoverageEntry[] = [
   {
     id: "discord-rest",
     label: "Discord REST monitor fetch",
-    modulePath: "extensions/discord/monitor/rest-fetch.ts",
+    modulePath: pluginSourceModulePath("discord", "monitor/rest-fetch.ts"),
     protocols: ["http", "https"],
     status: "captured",
     notes: "Discord monitor REST calls inherit the debug proxy and record HTTP exchanges.",
@@ -43,7 +48,7 @@ const DEBUG_PROXY_COVERAGE_ENTRIES: readonly DebugProxyCoverageEntry[] = [
   {
     id: "discord-gateway",
     label: "Discord gateway monitor",
-    modulePath: "extensions/discord/monitor/gateway-plugin.ts",
+    modulePath: pluginSourceModulePath("discord", "monitor/gateway-plugin.ts"),
     protocols: ["https", "wss"],
     status: "captured",
     notes:
@@ -52,7 +57,7 @@ const DEBUG_PROXY_COVERAGE_ENTRIES: readonly DebugProxyCoverageEntry[] = [
   {
     id: "telegram-fetch",
     label: "Telegram fetch resolver",
-    modulePath: "extensions/telegram/fetch.ts",
+    modulePath: pluginSourceModulePath("telegram", "fetch.ts"),
     protocols: ["http", "https"],
     status: "captured",
     notes:
@@ -61,7 +66,7 @@ const DEBUG_PROXY_COVERAGE_ENTRIES: readonly DebugProxyCoverageEntry[] = [
   {
     id: "mattermost-ws",
     label: "Mattermost monitor websocket",
-    modulePath: "extensions/mattermost/mattermost/monitor-websocket.ts",
+    modulePath: pluginSourceModulePath("mattermost", "mattermost/monitor-websocket.ts"),
     protocols: ["ws", "wss"],
     status: "captured",
     notes: "Mattermost websocket monitor uses the debug proxy agent and records frame activity.",
@@ -105,7 +110,7 @@ const DEBUG_PROXY_COVERAGE_ENTRIES: readonly DebugProxyCoverageEntry[] = [
   {
     id: "feishu-client-http",
     label: "Feishu SDK HTTP client",
-    modulePath: "extensions/feishu/client.ts",
+    modulePath: pluginSourceModulePath("feishu", "client.ts"),
     protocols: ["https"],
     status: "proxy-only",
     notes:
@@ -114,7 +119,7 @@ const DEBUG_PROXY_COVERAGE_ENTRIES: readonly DebugProxyCoverageEntry[] = [
   {
     id: "feishu-client-ws",
     label: "Feishu SDK websocket client",
-    modulePath: "extensions/feishu/client.ts",
+    modulePath: pluginSourceModulePath("feishu", "client.ts"),
     protocols: ["wss"],
     status: "proxy-only",
     notes:
