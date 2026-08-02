@@ -191,7 +191,7 @@ const JSON_NOT_APPLICABLE = {
 } as const;
 
 // These subcommands intentionally consume --json from their parent and emit JSON.
-const JSON_OUTPUT_INHERITED_FROM_PARENT = new Set<string>([
+const JSON_OUTPUT_INHERITED_FROM_PARENT = new Set([
   "skills curator status",
   "skills curator pin",
   "skills curator unpin",
@@ -199,7 +199,7 @@ const JSON_OUTPUT_INHERITED_FROM_PARENT = new Set<string>([
 ]);
 
 // Route-first parsing accepts JSON before Commander registration is reached.
-const JSON_OUTPUT_ROUTE_FIRST = new Set<string>(["agents"]);
+const JSON_OUTPUT_ROUTE_FIRST = new Set(["agents"]);
 
 async function registerAllBuiltInCommands(): Promise<Command> {
   const program = new Command().name("openclaw");
@@ -293,7 +293,7 @@ describe("root command descriptions", () => {
     const notApplicableEntries = Object.values(JSON_NOT_APPLICABLE).flatMap((category) =>
       category.commands.map((command) => ({ command, reason: category.reason })),
     );
-    const notApplicable = new Map(
+    const notApplicable = new Map<string, string>(
       notApplicableEntries.map(({ command, reason }) => [command, reason]),
     );
 
