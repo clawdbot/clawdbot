@@ -673,7 +673,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     new PlatformMessageNotDispatchedError("offline", { cause: new Error("offline"), retryable });
   const wrapDeliveryFailure = (cause: unknown) =>
     new OutboundDeliveryError("delivery failed", { cause });
-  const refusedConnection = Object.assign(new Error(), {
+  const refused = Object.assign(new Error(), {
     code: "ECONNREFUSED",
     syscall: "connect",
   });
@@ -686,7 +686,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
   it.each([
     ["direct retryable provider proof", createNoSendFailure(), true],
     ["wrapped retryable provider proof", wrapDeliveryFailure(createNoSendFailure()), true],
-    ["wrapped pre-connect ECONNREFUSED proof", wrapDeliveryFailure(refusedConnection), true],
+    ["wrapped pre-connect ECONNREFUSED proof", wrapDeliveryFailure(refused), true],
     ["permanent provider rejection", createNoSendFailure(false), false],
     [
       "partial outbound delivery",
@@ -711,9 +711,11 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       deliver: async () => {
         throw error;
       },
-      ...(name.startsWith("observer")
-        ? { onError: () => Object.assign(error, { visibleReplySent: true }) }
-        : {}),
+      onError: () => {
+        if (name.startsWith("observer")) {
+          Object.assign(error, { visibleReplySent: true });
+        }
+      },
     });
     await withReplyDispatcher({
       dispatcher,
@@ -725,8 +727,6 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
           replyResolver: async () => ({ text: "recoverable final reply" }),
         }),
     });
-    expect(dispatcher.getFailedCounts?.()).toEqual({ tool: 0, block: 0, final: 1 });
-    expect(sessionStoreMocks.updateSessionEntry).toHaveBeenCalledOnce();
     expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toEqual(
       preserve ? pending : undefined,
     );

@@ -1,5 +1,5 @@
 // Dispatches final reply payloads through visible senders and message tools.
-import { isChannelPartialDeliveryError } from "../../channels/turn/delivery-result.js";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { TypingCallbacks } from "../../channels/typing.js";
 import type { HumanDelayConfig } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -61,11 +61,11 @@ function isRetryableNoSendFailure(error: unknown): boolean {
       ...(Array.isArray(candidate.errors) ? candidate.errors : []),
     ]).some(
       (candidate) =>
-        candidate !== null &&
-        typeof candidate === "object" &&
-        (isChannelPartialDeliveryError(candidate) ||
-          (candidate as { sentBeforeError?: unknown }).sentBeforeError === true ||
-          (candidate as { visibleReplySent?: unknown }).visibleReplySent === true),
+        isRecord(candidate) &&
+        (candidate.sentBeforeError === true ||
+          candidate.visibleReplySent === true ||
+          (isRecord(candidate.deliveryResult) &&
+            candidate.deliveryResult.visibleReplySent === true)),
     )
   );
 }
