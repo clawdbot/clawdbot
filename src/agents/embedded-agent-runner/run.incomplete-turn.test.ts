@@ -38,8 +38,6 @@ import {
   shouldRetryMissingAssistantTurn,
   shouldRetrySilentErrorAssistantTurn,
   shouldTreatEmptyAssistantReplyAsSilent,
-  TURN_BUDGET_TIMEOUT_NOTICE,
-  TURN_IDLE_TIMEOUT_NOTICE,
 } from "./run/incomplete-turn.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
@@ -49,6 +47,18 @@ const EMPTY_RESPONSE_RETRY_INSTRUCTION =
   "The previous attempt did not produce a user-visible answer. Continue from the current state and produce the visible answer now. Do not restart from scratch.";
 const SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION =
   "The previous assistant turn completed its tool calls but did not produce a user-visible answer. Continue from the current transcript and produce the final user-visible answer now. Do not repeat completed tool calls or restart from scratch.";
+// Declared locally rather than imported, matching the retry/continuation instructions
+// above: these notices are internal to the incomplete-turn policy, and exporting them
+// solely for this suite would leave an export unused by production code.
+const TURN_BUDGET_TIMEOUT_NOTICE =
+  "⚠️ I hit my time budget on this request and stopped before finishing. " +
+  "Ask me to continue, or simplify the request. " +
+  "If this happens often, raise `agents.defaults.timeoutSeconds` in your config.";
+const TURN_IDLE_TIMEOUT_NOTICE =
+  "⚠️ The model stopped responding before its idle timeout elapsed, so I stopped before finishing. " +
+  "Ask me to continue, or simplify the request. " +
+  "If this happens often, raise `models.providers.<id>.timeoutSeconds` for slow local or self-hosted providers; " +
+  "`agents.defaults.timeoutSeconds` cannot extend a provider idle timeout.";
 
 let runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
 
