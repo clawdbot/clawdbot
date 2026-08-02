@@ -35,7 +35,7 @@ jobs:
           swift --version
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@7188fc363630916deb702c7fdcf4e481b751f97a # v4.37.1
+        uses: github/codeql-action/init@f205ea1c3313d32999d8d6a48b4f6530d4437b38 # v4.37.4
         with:
           languages: swift
           build-mode: manual
@@ -46,7 +46,7 @@ jobs:
 
       - name: Analyze
         id: analyze
-        uses: github/codeql-action/analyze@7188fc363630916deb702c7fdcf4e481b751f97a # v4.37.1
+        uses: github/codeql-action/analyze@f205ea1c3313d32999d8d6a48b4f6530d4437b38 # v4.37.4
         with:
           output: sarif-results
           upload: failure-only
@@ -83,7 +83,7 @@ jobs:
           done
 
       - name: Upload filtered SARIF
-        uses: github/codeql-action/upload-sarif@7188fc363630916deb702c7fdcf4e481b751f97a # v4.37.1
+        uses: github/codeql-action/upload-sarif@f205ea1c3313d32999d8d6a48b4f6530d4437b38 # v4.37.4
         with:
           sarif_file: sarif-results-filtered
           category: "/codeql-critical-security/macos"
