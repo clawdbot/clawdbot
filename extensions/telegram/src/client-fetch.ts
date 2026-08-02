@@ -1,5 +1,6 @@
 // Telegram plugin module implements client fetch behavior.
 import type { ApiClientOptions } from "grammy";
+import { responseWithRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { TelegramTransport } from "./fetch.js";
 import { isTelegramMisdirectedRequestError, tagTelegramNetworkError } from "./network-errors.js";
@@ -11,7 +12,7 @@ type TelegramClientFetch = NonNullable<ApiClientOptions["fetch"]>;
 type TelegramCompatFetch = (
   input: TelegramFetchInput,
   init?: TelegramFetchInit,
-) => ReturnType<TelegramClientFetch>;
+) => Promise<Response>;
 type TelegramAbortSignalLike = {
   aborted: boolean;
   reason?: unknown;
@@ -179,17 +180,7 @@ export function createTelegramClientFetch(params: {
         requestTimeout.unref?.();
       }
 
-      try {
-        return await callFetch(input, {
-          ...init,
-          signal: controller.signal,
-        });
-      } catch (err) {
-        if (requestTimedOut && timeoutError) {
-          throw timeoutError;
-        }
-        throw err;
-      } finally {
+      const releaseRequest = async () => {
         if (requestTimeout) {
           clearTimeout(requestTimeout);
         }
@@ -197,12 +188,29 @@ export function createTelegramClientFetch(params: {
         if (requestSignal && onRequestAbort) {
           requestSignal.removeEventListener("abort", onRequestAbort);
         }
+      };
+
+      try {
+        const response = await callFetch(input, {
+          ...init,
+          signal: controller.signal,
+        });
+        // grammY consumes JSON after fetch resolves; keep its deadline and
+        // cancellation linked until the response body settles.
+        return responseWithRelease(response, releaseRequest);
+      } catch (err) {
+        await releaseRequest();
+        if (requestTimedOut && timeoutError) {
+          throw timeoutError;
+        }
+        throw err;
       }
     };
 
     try {
       const response = await runFetch();
       if (response.status === 421 && canForceTransportFallback("misdirected-request")) {
+        await response.body?.cancel().catch(() => undefined);
         return await runFetch();
       }
       return response;
