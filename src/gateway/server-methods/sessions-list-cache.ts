@@ -1,6 +1,6 @@
 import type { SessionsListParams } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { readAgentRunIndexVersion } from "../../infra/agent-events.js";
+import { readAgentRunIndexVersion } from "../../infra/agent-run-registry.js";
 import { isGatewayAdmin } from "../session-sharing.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { readSessionsMutationVersion } from "./session-change-event.js";

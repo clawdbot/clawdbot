@@ -20,9 +20,8 @@ import {
   type AgentEventPayload,
   type AgentEventRuntimePayload,
   getAgentEventLifecycleGeneration,
-  getAgentRunContext,
-  getAgentRunContextOwnerStatus,
 } from "../infra/agent-events.js";
+import { getAgentRunContext, getAgentRunContextOwnerStatus } from "../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
 import { logError } from "../logger.js";

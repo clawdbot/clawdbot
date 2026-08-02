@@ -1,10 +1,9 @@
 import {
   assertAgentRunLifecycleGenerationCurrent,
-  claimAgentRunContext,
   getAgentEventLifecycleGeneration,
-  getAgentRunContext,
   withAgentRunLifecycleGeneration,
 } from "../../../infra/agent-events.js";
+import { claimAgentRunContext, getAgentRunContext } from "../../../infra/agent-run-registry.js";
 import { enqueueCommandInLane, getCommandLaneSnapshot } from "../../../process/command-queue.js";
 import type { CommandQueueEnqueueOptions } from "../../../process/command-queue.types.js";
 import { withSessionPlacementTurnAdmission } from "../../session-placement-admission.js";

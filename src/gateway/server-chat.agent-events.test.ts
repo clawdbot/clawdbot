@@ -9,14 +9,16 @@ import {
 } from "../agents/internal-runtime-context.js";
 import { formatChannelProgressDraftLine } from "../channels/streaming.js";
 import {
-  claimAgentRunContext,
   emitAgentEvent as emitRuntimeAgentEvent,
   emitAgentEventForOwner,
   onAgentRuntimeEvent,
-  registerAgentRunContext,
-  releaseAgentRunContext,
   resetAgentEventsForTest,
 } from "../infra/agent-events.js";
+import {
+  claimAgentRunContext,
+  registerAgentRunContext,
+  releaseAgentRunContext,
+} from "../infra/agent-run-registry.js";
 import { subscribePluginSessionsChanged } from "../plugins/gateway-events.js";
 
 const persistGatewaySessionLifecycleEventMock = vi.fn();

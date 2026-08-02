@@ -3,36 +3,46 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 import {
   type AgentEventPayload,
   captureAgentRunLifecycleGeneration,
-  claimAgentRunContext,
-  clearAgentRunContext,
   emitAgentAuditEvent,
   emitAgentEvent,
   emitAgentEventForOwner,
   emitAgentEventIfCurrent,
   getAgentEventLifecycleGeneration,
-  getAgentRunContext,
-  listAgentRunsForSession,
   onAgentAuditEvent,
   onAgentEvent,
   onAgentRuntimeEvent,
-  readAgentRunIndexVersion,
-  registerAgentRunContext,
-  releaseAgentRunContext,
   resetAgentEventsForTest,
   rotateAgentEventLifecycleGeneration,
   runOncePerAgentRun,
-  sweepStaleRunContexts,
   withAgentRunLifecycleGeneration,
 } from "./agent-events.js";
+import {
+  claimAgentRunContext,
+  clearAgentRunContext,
+  getAgentRunContext,
+  listAgentRunsForSession,
+  readAgentRunIndexVersion,
+  registerAgentRunContext,
+  releaseAgentRunContext,
+  sweepStaleRunContexts,
+} from "./agent-run-registry.js";
 import { emitAgentRunStatusEvent } from "./agent-run-status-events.js";
 import { recordAgentRunOutputTokens } from "./agent-run-usage.js";
 
-type AgentEventsModule = typeof import("./agent-events.js");
+type AgentEventsModule = {
+  events: typeof import("./agent-events.js");
+  registry: typeof import("./agent-run-registry.js");
+};
 
 const agentEventsModuleUrl = new URL("./agent-events.ts", import.meta.url).href;
+const agentRunRegistryModuleUrl = new URL("./agent-run-registry.ts", import.meta.url).href;
 
 async function importAgentEventsModule(cacheBust: string): Promise<AgentEventsModule> {
-  return (await import(`${agentEventsModuleUrl}?t=${cacheBust}`)) as AgentEventsModule;
+  const [events, registry] = await Promise.all([
+    import(`${agentEventsModuleUrl}?t=${cacheBust}`),
+    import(`${agentRunRegistryModuleUrl}?t=${cacheBust}`),
+  ]);
+  return { events, registry } as AgentEventsModule;
 }
 
 describe("agent-events sequencing", () => {
@@ -931,23 +941,23 @@ describe("agent-events sequencing", () => {
     const first = await importAgentEventsModule(`first-${Date.now()}`);
     const second = await importAgentEventsModule(`second-${Date.now()}`);
 
-    first.resetAgentEventsForTest();
-    first.registerAgentRunContext("run-dup", { sessionKey: "session-dup" });
+    first.events.resetAgentEventsForTest();
+    first.registry.registerAgentRunContext("run-dup", { sessionKey: "session-dup" });
 
     const seen: Array<{ seq: number; sessionKey?: string }> = [];
-    const stop = first.onAgentEvent((evt) => {
+    const stop = first.events.onAgentEvent((evt) => {
       if (evt.runId === "run-dup") {
         seen.push({ seq: evt.seq, sessionKey: evt.sessionKey });
       }
     });
 
-    second.emitAgentEvent({
+    second.events.emitAgentEvent({
       runId: "run-dup",
       stream: "assistant",
       data: { text: "from second" },
       sessionKey: "   ",
     });
-    first.emitAgentEvent({
+    first.events.emitAgentEvent({
       runId: "run-dup",
       stream: "assistant",
       data: { text: "from first" },
@@ -956,13 +966,13 @@ describe("agent-events sequencing", () => {
 
     stop();
 
-    expect(second.getAgentRunContext("run-dup")?.sessionKey).toBe("session-dup");
+    expect(second.registry.getAgentRunContext("run-dup")?.sessionKey).toBe("session-dup");
     expect(seen).toEqual([
       { seq: 1, sessionKey: "session-dup" },
       { seq: 2, sessionKey: "session-dup" },
     ]);
 
-    first.resetAgentEventsForTest();
+    first.events.resetAgentEventsForTest();
   });
 
   test("sweeps stale run contexts and clears their sequence state", () => {
