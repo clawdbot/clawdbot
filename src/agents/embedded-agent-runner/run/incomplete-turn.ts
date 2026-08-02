@@ -145,6 +145,15 @@ export const TURN_BUDGET_TIMEOUT_NOTICE =
   "⚠️ I hit my time budget on this request and stopped before finishing. " +
   "Ask me to continue, or simplify the request. " +
   "If this happens often, raise `agents.defaults.timeoutSeconds` in your config.";
+// An idle-watchdog timeout is a provider-side stall, not an exhausted run budget.
+// `resolveEmbeddedRunTerminalTimeout` already makes this distinction for prompt
+// timeouts; tool-execution timeouts point at the same setting so the remediation
+// a user is told to change is the one that actually governs the timeout they hit.
+export const TURN_IDLE_TIMEOUT_NOTICE =
+  "⚠️ The model stopped responding before its idle timeout elapsed, so I stopped before finishing. " +
+  "Ask me to continue, or simplify the request. " +
+  "If this happens often, raise `models.providers.<id>.timeoutSeconds` for slow local or self-hosted providers; " +
+  "`agents.defaults.timeoutSeconds` cannot extend a provider idle timeout.";
 
 /**
  * Marks whether retrying the attempt can safely replay the prompt. Concrete
@@ -268,14 +277,22 @@ export function resolveIncompleteTurnPayloadText(params: {
   });
   // Timeout phase and interruption precedence belong to the canonical attempt terminal.
   // Only its tool-execution timeout may become an incomplete-turn payload here.
+  //
+  // This returns before the general suppression guard below, so it cannot inherit
+  // that guard's external-abort silence and has to reject externally owned
+  // interruptions itself. A `timeout` terminal carries `source: "external"` when an
+  // operator cancellation raced the timeout, so the two states genuinely co-occur;
+  // without this check that cancellation would be reported as an exhausted time budget.
   if (
     terminal.timedOut &&
     terminal.timedOutDuringToolExecution &&
+    !terminal.externalAbort &&
+    !(params.aborted && params.externalAbort) &&
     params.payloadCount === 0 &&
     params.allowEmptyAssistantReplyAsSilent !== true &&
     !hasTimeoutTerminalOutput
   ) {
-    return TURN_BUDGET_TIMEOUT_NOTICE;
+    return terminal.idleTimedOut ? TURN_IDLE_TIMEOUT_NOTICE : TURN_BUDGET_TIMEOUT_NOTICE;
   }
 
   if (

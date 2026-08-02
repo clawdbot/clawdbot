@@ -39,6 +39,7 @@ import {
   shouldRetrySilentErrorAssistantTurn,
   shouldTreatEmptyAssistantReplyAsSilent,
   TURN_BUDGET_TIMEOUT_NOTICE,
+  TURN_IDLE_TIMEOUT_NOTICE,
 } from "./run/incomplete-turn.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
@@ -4984,6 +4985,61 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
     expect((result.payloads ?? []).some((p) => (p.text ?? "").includes("time budget"))).toBe(false);
     expect(result.meta.livenessState).toBe("paused");
+  });
+
+  it("stays silent when an external cancellation races a tool-execution timeout", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        timedOut: true,
+        timedOutDuringToolExecution: true,
+        externalAbort: true,
+        lastToolError: { toolName: "exec", error: "command aborted", meta: "sleep 30" },
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-tool-exec-timeout-external-abort",
+      config: { messages: { suppressToolErrors: true } } as OpenClawConfig,
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    // An operator cancellation owns the interruption, so the run stays silent
+    // instead of claiming the configured time budget was exhausted.
+    expect((result.payloads ?? []).some((p) => (p.text ?? "").includes("time budget"))).toBe(false);
+    expect(result.payloads?.some((p) => p.text === TURN_BUDGET_TIMEOUT_NOTICE)).toBeFalsy();
+  });
+
+  it("points an idle tool-execution timeout at the provider timeout, not the run budget", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        timedOut: true,
+        idleTimedOut: true,
+        timedOutDuringToolExecution: true,
+        lastToolError: { toolName: "exec", error: "command aborted", meta: "sleep 30" },
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-tool-exec-timeout-idle-notice",
+      config: { messages: { suppressToolErrors: true } } as OpenClawConfig,
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(result.payloads?.[0]?.isError).toBe(true);
+    expect(result.payloads?.[0]?.text).toBe(TURN_IDLE_TIMEOUT_NOTICE);
+    // The remediation must name the provider idle timeout, which the run budget cannot extend.
+    expect(result.payloads?.[0]?.text).toContain("models.providers.<id>.timeoutSeconds");
+    expect(result.payloads?.[0]?.text).not.toBe(TURN_BUDGET_TIMEOUT_NOTICE);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
