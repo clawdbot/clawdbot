@@ -99,15 +99,42 @@ describe("sweepTombstonedCronRunRemnants", () => {
     return sessionId;
   }
 
-  function sweep(params: { dryRun: boolean; olderThanMs?: number }) {
+  function sweep(params: {
+    dryRun: boolean;
+    olderThanMs?: number;
+    includeUnidentifiedPlaceholders?: boolean;
+  }) {
     return sweepTombstonedCronRunRemnants({
       agentId: "main",
       storePath,
       sqlitePath,
       olderThanMs: params.olderThanMs ?? 15 * DAY_MS,
       dryRun: params.dryRun,
+      ...(params.includeUnidentifiedPlaceholders === undefined
+        ? {}
+        : { includeUnidentifiedPlaceholders: params.includeUnidentifiedPlaceholders }),
       nowMs: NOW_MS,
     });
+  }
+
+  /**
+   * Same shape as a canonical placeholder except `entry_json`, which the
+   * canonical predicate requires to be exactly "{}". This is the row class the
+   * superseded fix/session-node-orphan-cleanup branch reaped and the canonical
+   * sweep deliberately preserves.
+   */
+  async function seedUnidentifiedPlaceholder(params: { ageMs?: number } = {}): Promise<string> {
+    const sessionId = await seedCanonicalPlaceholder({ ageMs: params.ageMs });
+    const database = openDatabase();
+    const db = getSessionKysely(database.db);
+    executeSqliteQuerySync(
+      database.db,
+      db
+        .updateTable("session_nodes")
+        .set({ entry_json: JSON.stringify({ delivery: { kind: "none" } }) })
+        .where("session_key", "=", CRON_RUN_KEY),
+    );
+    return sessionId;
   }
 
   function countRows(
@@ -349,5 +376,51 @@ describe("sweepTombstonedCronRunRemnants", () => {
       expect(countRows("session_nodes", "session_key", testCase.key)).toBe(1);
       expect(countRows("session_windows", "session_key", testCase.key)).toBe(1);
     }
+  });
+
+  it("preserves an unidentifiable aged cron row by default", async () => {
+    await seedUnidentifiedPlaceholder();
+
+    const result = await sweep({ dryRun: true });
+
+    expect(result).toMatchObject({ candidates: 0, unidentifiedCandidates: 0 });
+    expect(countRows("session_nodes", "session_key", CRON_RUN_KEY)).toBe(1);
+  });
+
+  it("reaps an unidentifiable aged cron row when explicitly opted in", async () => {
+    await seedUnidentifiedPlaceholder();
+
+    const dry = await sweep({ dryRun: true, includeUnidentifiedPlaceholders: true });
+    expect(dry).toMatchObject({
+      candidates: 1,
+      unidentifiedCandidates: 1,
+      removedNodes: 0,
+    });
+    expect(countRows("session_nodes", "session_key", CRON_RUN_KEY)).toBe(1);
+
+    const applied = await sweep({ dryRun: false, includeUnidentifiedPlaceholders: true });
+    expect(applied).toMatchObject({
+      candidates: 1,
+      unidentifiedCandidates: 1,
+      removedNodes: 1,
+    });
+    expect(countRows("session_nodes", "session_key", CRON_RUN_KEY)).toBe(0);
+  });
+
+  it("keeps the age gate under the unidentified opt-in", async () => {
+    await seedUnidentifiedPlaceholder({ ageMs: 2 * DAY_MS });
+
+    const result = await sweep({ dryRun: true, includeUnidentifiedPlaceholders: true });
+
+    expect(result).toMatchObject({ candidates: 0, unidentifiedCandidates: 0 });
+    expect(countRows("session_nodes", "session_key", CRON_RUN_KEY)).toBe(1);
+  });
+
+  it("reports canonical sweeps as identified even with the opt-in on", async () => {
+    await seedCanonicalPlaceholder({});
+
+    const result = await sweep({ dryRun: true, includeUnidentifiedPlaceholders: true });
+
+    expect(result).toMatchObject({ candidates: 1, unidentifiedCandidates: 0 });
   });
 });

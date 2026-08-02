@@ -51,6 +51,11 @@ import type { SessionEntry } from "./types.js";
 
 export type SessionsCleanupOptions = SessionStoreSelectionOptions & {
   dryRun?: boolean;
+  /**
+   * Also reap aged cron-run rows whose entry_json is not a parseable canonical
+   * placeholder. Unsafe by default-off: see sweepTombstonedCronRunRemnants.
+   */
+  sweepUnidentifiedCronRemnants?: boolean;
   enforce?: boolean;
   activeKey?: string;
   json?: boolean;
@@ -305,6 +310,7 @@ async function previewStoreCleanup(params: {
   activeKey?: string;
   fixMissing?: boolean;
   fixDmScope?: boolean;
+  sweepUnidentifiedCronRemnants?: boolean;
 }) {
   const beforeStore = loadCleanupSessionStore(params.target, {
     createIfMissing: !params.dryRun,
@@ -407,6 +413,7 @@ async function previewStoreCleanup(params: {
           sqlitePath: resolveCleanupSqlitePath(params.target),
           olderThanMs: cronSessionRetentionMs,
           dryRun: true,
+          includeUnidentifiedPlaceholders: params.sweepUnidentifiedCronRemnants === true,
         })
       : null;
   const diskBudgetPreview = fs.existsSync(resolveCleanupSqlitePath(params.target))
@@ -498,6 +505,7 @@ export async function runSessionsCleanup(params: {
       activeKey: opts.activeKey,
       fixMissing: Boolean(opts.fixMissing),
       fixDmScope: Boolean(opts.fixDmScope),
+      sweepUnidentifiedCronRemnants: Boolean(opts.sweepUnidentifiedCronRemnants),
     });
     previewResults.push(result);
   }
@@ -592,6 +600,7 @@ export async function runSessionsCleanup(params: {
               sqlitePath: resolveCleanupSqlitePath(target),
               olderThanMs: cronSessionRetentionMs,
               dryRun: false,
+              includeUnidentifiedPlaceholders: opts.sweepUnidentifiedCronRemnants === true,
             });
       const appliedDiskBudget = await enforceSqliteSessionHistoryDiskBudget({
         agentId: target.agentId,
