@@ -9,17 +9,37 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { CliSessionBinding, SessionEntry } from "../config/sessions.js";
 import { normalizeCliSessionReseedReceipt } from "../config/sessions/cli-session-binding.js";
 import { readErrorName } from "../infra/errors.js";
-import { isFailoverError } from "./failover-error.js";
+import { isFailoverError, isSignalTimeoutReason } from "./failover-error.js";
 export { getCliSessionBinding, getCliSessionId } from "../config/sessions/cli-session-binding.js";
 
 const CLAUDE_CLI_BACKEND_ID = "claude-cli";
-const preservedCliSessionAbortErrors = new WeakSet<object>();
+const preservedCliSessionAbortSignals = new WeakMap<
+  object,
+  WeakMap<CliSessionBinding, AbortSignal>
+>();
 
 /** Preserve only the original caller abort from a bounded same-session retry. */
-export function preserveCliSessionBindingOnRecoveryAbort(error: unknown): void {
-  if (typeof error === "object" && error !== null && readErrorName(error) === "AbortError") {
-    preservedCliSessionAbortErrors.add(error);
+export function preserveCliSessionBindingOnRecoveryAbort(
+  signal: AbortSignal,
+  binding: CliSessionBinding | undefined,
+): unknown {
+  const reason = signal.reason;
+  if (!signal.aborted || !binding || isSignalTimeoutReason(reason)) {
+    return reason;
   }
+  // Primitive reasons have no identity. Give each aborted signal its own
+  // wrapper so an unrelated turn with the same reason cannot inherit its grant.
+  const error =
+    reason !== null && (typeof reason === "object" || typeof reason === "function")
+      ? reason
+      : Object.assign(new Error(String(reason), { cause: reason }), { name: "AbortError" });
+  let recoveryBindings = preservedCliSessionAbortSignals.get(error);
+  if (!recoveryBindings) {
+    recoveryBindings = new WeakMap<CliSessionBinding, AbortSignal>();
+    preservedCliSessionAbortSignals.set(error, recoveryBindings);
+  }
+  recoveryBindings.set(binding, signal);
+  return error;
 }
 
 /** Hash CLI session-sensitive text so reuse checks can compare stable fingerprints. */
@@ -134,26 +154,41 @@ export function shouldClearFailedCliSessionBinding(params: {
   binding?: CliSessionBinding;
   hasNewGeneratedMediaTask?: boolean;
 }): boolean {
-  if (!normalizeOptionalString(params.binding?.sessionId)) {
+  const binding = params.binding;
+  if (!binding || !normalizeOptionalString(binding.sessionId)) {
     return false;
+  }
+  // Grants belong to the exact recovery binding and are consumed immediately;
+  // a shared caller signal/reason must not authorize another concurrent turn.
+  if (
+    (typeof params.error === "object" && params.error !== null) ||
+    typeof params.error === "function"
+  ) {
+    const recoveryBindings = preservedCliSessionAbortSignals.get(params.error);
+    const signal = recoveryBindings?.get(binding);
+    if (signal) {
+      recoveryBindings?.delete(binding);
+      if (
+        signal.aborted &&
+        (Object.is(signal.reason, params.error) ||
+          (params.error instanceof Error && Object.is(params.error.cause, signal.reason)))
+      ) {
+        return false;
+      }
+    }
   }
   // Detached media delivers back into this run later and still needs the binding.
   if (params.hasNewGeneratedMediaTask === true) {
     return false;
   }
-  // A same-process recovery cancellation never invalidates its original binding.
-  if (
-    typeof params.error === "object" &&
-    params.error !== null &&
-    preservedCliSessionAbortErrors.has(params.error)
-  ) {
-    return false;
+  if (isSignalTimeoutReason(params.error)) {
+    return true;
   }
   if (isFailoverError(params.error)) {
     return true;
   }
   // A pre-successor fork abort keeps its one-shot marker for the next turn.
-  return params.binding?.forkNextResume !== true && readErrorName(params.error) === "AbortError";
+  return binding.forkNextResume !== true && readErrorName(params.error) === "AbortError";
 }
 
 /** Stable reason used when recording why a failed reused CLI session was cleared. */

@@ -566,17 +566,35 @@ describe("executeAgentTurn: CLI session routing", () => {
       { timing: "queued", syntheticRecovery: true },
       { timing: "inflight", syntheticRecovery: true },
       { timing: "ordinary", syntheticRecovery: false },
-    ].flatMap((scenario) => [
-      { ...scenario, allowSilent: false },
-      { ...scenario, allowSilent: true },
-    ]),
+    ].flatMap((scenario) =>
+      (scenario.syntheticRecovery
+        ? (["abort-error", "custom-error", "primitive", "function", "nan", "timeout"] as const)
+        : (["abort-error", "timeout"] as const)
+      ).flatMap((abortReason) => [
+        { ...scenario, abortReason, allowSilent: false },
+        { ...scenario, abortReason, allowSilent: true },
+      ]),
+    ),
   )(
-    "preserves only $timing recovery cancellation with allowSilent=$allowSilent",
-    async ({ timing, syntheticRecovery, allowSilent }) => {
+    "preserves only $timing $abortReason recovery cancellation with allowSilent=$allowSilent",
+    async ({ timing, syntheticRecovery, abortReason, allowSilent }) => {
       const abortController = new AbortController();
-      const callerAbort = Object.assign(new Error(`${timing} caller cancelled`), {
-        name: "AbortError",
-      });
+      const callerAbort =
+        abortReason === "primitive"
+          ? `${timing} caller cancelled`
+          : abortReason === "nan"
+            ? Number.NaN
+            : abortReason === "function"
+              ? () => undefined
+              : Object.assign(
+                  new Error(`${timing} caller cancelled`),
+                  abortReason === "abort-error"
+                    ? { name: "AbortError" }
+                    : abortReason === "timeout"
+                      ? { name: "TimeoutError" }
+                      : {},
+                );
+      let thrownAbort: unknown = callerAbort;
       state.isCliProviderMock.mockReturnValue(true);
       state.runWithModelFallbackMock.mockImplementationOnce(
         async (params: FallbackRunnerParams) => {
@@ -588,7 +606,7 @@ describe("executeAgentTurn: CLI session routing", () => {
               attempts: [],
             };
           } catch (error) {
-            expect(error).toBe(callerAbort);
+            expect(error).toBe(thrownAbort);
             throw error;
           }
         },
@@ -600,9 +618,12 @@ describe("executeAgentTurn: CLI session routing", () => {
         }
         abortController.abort(callerAbort);
         if (syntheticRecovery) {
-          preserveCliSessionBindingOnRecoveryAbort(callerAbort);
+          thrownAbort = preserveCliSessionBindingOnRecoveryAbort(
+            abortController.signal,
+            params.cliSessionBinding,
+          );
         }
-        throw callerAbort;
+        throw thrownAbort;
       });
 
       const followupRun = createFollowupRun();
@@ -635,14 +656,15 @@ describe("executeAgentTurn: CLI session routing", () => {
       expect(result.kind).toBe("final");
       expect(state.runCliAgentMock).toHaveBeenCalledOnce();
       expect(abortController.signal.reason).toBe(callerAbort);
+      const preserveBinding = syntheticRecovery && abortReason !== "timeout";
       expect(sessionEntry.cliSessionBindings?.["claude-cli"]?.sessionId).toBe(
-        syntheticRecovery ? "original-live-session" : undefined,
+        preserveBinding ? "original-live-session" : undefined,
       );
       expect(sessionEntry.cliSessionIds?.["claude-cli"]).toBe(
-        syntheticRecovery ? "original-live-session" : undefined,
+        preserveBinding ? "original-live-session" : undefined,
       );
       expect(sessionEntry.claudeCliSessionId).toBe(
-        syntheticRecovery ? "original-live-session" : undefined,
+        preserveBinding ? "original-live-session" : undefined,
       );
       expect(sessionEntry.cliSessionBindings?.["codex-cli"]?.sessionId).toBe("unrelated-session");
       expect(sessionEntry.cliSessionIds?.["codex-cli"]).toBe("unrelated-session");

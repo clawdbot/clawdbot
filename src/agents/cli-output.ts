@@ -426,7 +426,8 @@ function collectExplicitCliErrorText(parsed: Record<string, unknown>): string {
     const text =
       collectCliText(parsed.result) ||
       collectCliText(parsed.message) ||
-      collectCliText(parsed.content);
+      collectCliText(parsed.content) ||
+      readClaudeResultErrorText(parsed);
     if (text) {
       return unwrapCliErrorText(text);
     }
@@ -492,7 +493,7 @@ function readClaudeMaxTurnsFailure(
   return { reason: "max_turns" };
 }
 
-function readClaudeMaxTurnsErrorText(parsed: Record<string, unknown>): string | undefined {
+function readClaudeResultErrorText(parsed: Record<string, unknown>): string | undefined {
   if (!Array.isArray(parsed.errors)) {
     return undefined;
   }
@@ -510,7 +511,7 @@ function resolveCliTerminalErrorText(
 ): string {
   const explicitErrorText = collectExplicitCliErrorText(parsed);
   return (
-    ((terminalFailure ? readClaudeMaxTurnsErrorText(parsed) : undefined) ?? explicitErrorText) ||
+    ((terminalFailure ? readClaudeResultErrorText(parsed) : undefined) ?? explicitErrorText) ||
     (terminalFailure ? "Reached maximum number of turns." : "")
   );
 }

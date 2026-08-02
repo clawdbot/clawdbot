@@ -226,10 +226,11 @@ function emitSyntheticLiveTurn(
       {
         type: "result",
         subtype: params.resultSubtype ?? "success",
-        ...(params.isError ? { is_error: true } : {}),
+        ...(params.isError
+          ? { is_error: true, errors: [params.result ?? ""] }
+          : { result: params.result ?? "" }),
         ...(params.status ? { status: params.status, is_error: false } : {}),
         session_id: sessionId,
-        result: params.result ?? "",
       },
     ]),
   );
@@ -581,6 +582,108 @@ describe("claude live session provisional results", () => {
     expect(driver.cancel).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { activity: "native", terminal: "success", reason: "approved_native_tool" },
+    { activity: "native", terminal: "error", reason: "approved_native_tool" },
+    { activity: "mcp", terminal: "success", reason: "completed_mcp_tool" },
+    { activity: "mcp", terminal: "error", reason: "completed_mcp_tool" },
+    { activity: "unknown", terminal: "success", reason: "replay_unsafe_activity" },
+    { activity: "background", terminal: "success", reason: "replay_unsafe_activity" },
+  ] as const)(
+    "marks a $terminal result after $activity activity without a synthetic placeholder",
+    async ({ activity, terminal, reason }) => {
+      const driver = installLiveStdoutDriver();
+      const sessionId = `live-plain-${activity}-${terminal}`;
+      const resultPromise = startLiveTurn({
+        runId: `run-plain-${activity}-${terminal}`,
+        allowNativeTools: activity === "native",
+      });
+      await driver.stdout.waitReady();
+
+      driver.stdout.emit(
+        jsonl([
+          { type: "system", subtype: "init", session_id: sessionId },
+          {
+            type: "assistant",
+            session_id: sessionId,
+            message: {
+              model: "claude-fable-5",
+              role: "assistant",
+              content:
+                activity === "mcp"
+                  ? [
+                      { type: "mcp_tool_use", id: "plain-mcp", name: "action", input: {} },
+                      {
+                        type: "mcp_tool_result",
+                        tool_use_id: "plain-mcp",
+                        content: [{ type: "text", text: "done" }],
+                        is_error: false,
+                      },
+                    ]
+                  : [],
+            },
+          },
+          ...(activity === "native"
+            ? [
+                {
+                  type: "control_request",
+                  request_id: "plain-native-approval",
+                  request: {
+                    subtype: "can_use_tool",
+                    tool_use_id: "plain-native",
+                    tool_name: "Bash",
+                    input: { command: "touch once" },
+                  },
+                },
+              ]
+            : []),
+          ...(activity === "unknown" ? [{ type: "unknown_lifecycle_activity" }] : []),
+          ...(activity === "background"
+            ? [
+                {
+                  type: "system",
+                  subtype: "background_tasks_changed",
+                  tasks: [
+                    {
+                      task_id: "plain-background",
+                      task_type: "local_agent",
+                      description: "background work",
+                    },
+                  ],
+                },
+                { type: "system", subtype: "background_tasks_changed", tasks: [] },
+              ]
+            : []),
+          {
+            type: "result",
+            subtype: terminal === "error" ? "error_during_execution" : "success",
+            ...(terminal === "error"
+              ? { is_error: true, errors: ["vendor failed after tool execution"] }
+              : { result: "" }),
+            session_id: sessionId,
+          },
+        ]),
+      );
+
+      if (terminal === "error") {
+        await expect(resultPromise).rejects.toMatchObject({
+          name: "FailoverError",
+          code: "cli_non_replayable_incomplete_turn",
+          nonReplayableReason: reason,
+          rawError: expect.stringContaining("vendor failed after tool execution"),
+          cause: expect.objectContaining({
+            rawError: expect.stringContaining("vendor failed after tool execution"),
+          }),
+        });
+      } else {
+        const result = await resultPromise;
+        expect(result.output.text).toBe("");
+        expect(result.output.nonReplayableReason).toBe(reason);
+        expect(result.output.retryableSyntheticPlaceholder).toBeUndefined();
+      }
+    },
+  );
+
   it("marks an expired resumed synthetic placeholder safe for a same-session retry", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     const driver = installLiveStdoutDriver();
@@ -891,6 +994,7 @@ describe("claude live session provisional results", () => {
     await expect(resultPromise).rejects.toMatchObject({
       name: "FailoverError",
       rawError: expect.stringMatching(/provider failed/i),
+      code: undefined,
     });
   });
 
@@ -916,7 +1020,7 @@ describe("claude live session provisional results", () => {
           subtype: "error_during_execution",
           is_error: true,
           session_id: "live-bg-err",
-          result: "agent crashed",
+          errors: ["agent crashed"],
         },
       ]),
     );

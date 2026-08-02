@@ -84,6 +84,31 @@ describe("parseCliJson", () => {
     });
   });
 
+  it("preserves Claude execution error-array diagnostics in JSON mode", () => {
+    const result = parseCliJson(
+      JSON.stringify({
+        type: "result",
+        subtype: "error_during_execution",
+        is_error: true,
+        session_id: "session-json-execution-error",
+        errors: ["", "Vendor execution failed.", "Unused secondary detail."],
+      }),
+      {
+        command: "claude",
+        output: "json",
+        sessionIdFields: ["session_id"],
+      },
+      "claude-cli",
+    );
+
+    expect(result).toEqual({
+      text: "",
+      sessionId: "session-json-execution-error",
+      usage: undefined,
+      errorText: "Vendor execution failed.",
+    });
+  });
+
   it("classifies Claude is_error JSON results as provider errors", () => {
     const result = parseCliJson(
       JSON.stringify({
@@ -1181,6 +1206,31 @@ describe("parseCliJsonl", () => {
       sessionId: "session-api-error",
       usage: undefined,
       errorText: message,
+    });
+  });
+
+  it("preserves Claude execution error-array diagnostics in stream-json mode", () => {
+    const result = parseCliJsonl(
+      JSON.stringify({
+        type: "result",
+        subtype: "error_during_execution",
+        is_error: true,
+        session_id: "session-stream-execution-error",
+        errors: ["", "Vendor execution failed.", "Unused secondary detail."],
+      }),
+      {
+        command: "claude",
+        output: "jsonl",
+        sessionIdFields: ["session_id"],
+      },
+      "claude-cli",
+    );
+
+    expect(result).toEqual({
+      text: "",
+      sessionId: "session-stream-execution-error",
+      usage: undefined,
+      errorText: "Vendor execution failed.",
     });
   });
 

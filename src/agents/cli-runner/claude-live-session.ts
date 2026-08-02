@@ -94,6 +94,8 @@ type ClaudeLiveTurn = {
   observedSyntheticPlaceholder: boolean;
   /** True after anything beyond init, an exact synthetic placeholder, or its empty result. */
   hasReplayUnsafeActivity: boolean;
+  /** Unknown/malformed lifecycle or stderr can hide effects even without a placeholder. */
+  hasUnexpectedLifecycleActivity: boolean;
   /** An allow control frame reached Claude; its native tool may already have run. */
   hasApprovedNativeToolUse: boolean;
   /** Only a successful owner-classified MCP result proves a completed tool action. */
@@ -973,7 +975,36 @@ function isClaudeLiveSubstantiveAssistantProgress(parsed: Record<string, unknown
   );
 }
 
-function annotateClaudeLiveSyntheticTerminalOutput(
+function resolveClaudeLiveNonReplayableReason(
+  session: ClaudeLiveSession,
+  turn: ClaudeLiveTurn,
+): CliOutput["nonReplayableReason"] {
+  if (turn.hasApprovedNativeToolUse) {
+    return "approved_native_tool";
+  }
+  if (turn.hasCompletedMcpToolUse) {
+    return "completed_mcp_tool";
+  }
+  if (session.mcpCaptureKey) {
+    return "captured_tool_activity";
+  }
+  if (turn.nonReplayableTerminalStatus) {
+    return turn.nonReplayableTerminalStatus;
+  }
+  if (
+    turn.toolEventCount > 0 ||
+    turn.activeTools.size > 0 ||
+    turn.completedToolCallIds.size > 0 ||
+    session.outstandingBackgroundTaskIds.size > 0 ||
+    turn.hasUnexpectedLifecycleActivity ||
+    (turn.observedSyntheticPlaceholder && turn.hasReplayUnsafeActivity)
+  ) {
+    return "replay_unsafe_activity";
+  }
+  return undefined;
+}
+
+function annotateClaudeLiveTerminalOutput(
   session: ClaudeLiveSession,
   turn: ClaudeLiveTurn,
   terminalOutput: CliOutput,
@@ -996,17 +1027,7 @@ function annotateClaudeLiveSyntheticTerminalOutput(
     !terminalOutput.messagingToolSentMediaUrls?.length &&
     !terminalOutput.messagingToolSentTargets?.length &&
     !terminalOutput.messagingToolSourceReplyPayloads?.length;
-  const nonReplayableReason: CliOutput["nonReplayableReason"] =
-    turn.nonReplayableTerminalStatus ??
-    (turn.hasApprovedNativeToolUse
-      ? "approved_native_tool"
-      : turn.hasCompletedMcpToolUse
-        ? "completed_mcp_tool"
-        : session.mcpCaptureKey
-          ? "captured_tool_activity"
-          : turn.observedSyntheticPlaceholder && turn.hasReplayUnsafeActivity
-            ? "replay_unsafe_activity"
-            : undefined);
+  const nonReplayableReason = resolveClaudeLiveNonReplayableReason(session, turn);
   return {
     ...terminalOutput,
     liveSessionGeneration: session.generation,
@@ -1038,7 +1059,7 @@ function deferClaudeLiveSyntheticResult(
     turn.syntheticContinuationTimer = null;
     turn.deferredSyntheticOutput = null;
     emitClaudeLiveProgress(turn, "cli_live:synthetic_placeholder_grace_expired");
-    finishTurn(session, annotateClaudeLiveSyntheticTerminalOutput(session, turn, terminalOutput));
+    finishTurn(session, annotateClaudeLiveTerminalOutput(session, turn, terminalOutput));
   }, graceMs);
   emitClaudeLiveProgress(turn, "cli_live:result_deferred_synthetic_placeholder");
 }
@@ -1441,6 +1462,7 @@ function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
   if (!parsed) {
     if (turn) {
       turn.hasReplayUnsafeActivity = true;
+      turn.hasUnexpectedLifecycleActivity = true;
     }
     return;
   }
@@ -1472,14 +1494,27 @@ function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
     (parsed.status === undefined || parsed.status === "success") &&
     typeof parsed.result === "string" &&
     parsed.result.length === 0;
+  const vendorTerminalFailure =
+    parsed.type === "result" &&
+    (parsed.is_error === true ||
+      (typeof parsed.subtype === "string" && parsed.subtype.startsWith("error_")));
   if (
     !(
       (parsed.type === "system" && parsed.subtype === "init") ||
       syntheticPlaceholder ||
-      syntheticPlaceholderResult
+      syntheticPlaceholderResult ||
+      vendorTerminalFailure
     )
   ) {
     turn.hasReplayUnsafeActivity = true;
+  }
+  if (
+    parsed.type !== "assistant" &&
+    parsed.type !== "stream_event" &&
+    parsed.type !== "result" &&
+    !(parsed.type === "system" && parsed.subtype === "init")
+  ) {
+    turn.hasUnexpectedLifecycleActivity = true;
   }
   noteClaudeLiveContinuationAfterSyntheticPlaceholder(session, turn);
   turn.rawChars += trimmed.length + 1;
@@ -1531,7 +1566,24 @@ function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
       sessionId: turn.diagnosticRefs.sessionId,
     });
     if (error) {
-      failTurn(session, error);
+      const nonReplayableReason = resolveClaudeLiveNonReplayableReason(session, turn);
+      const terminalError = nonReplayableReason
+        ? Object.assign(
+            new FailoverError(error.message, {
+              reason: error.reason,
+              provider: error.provider,
+              model: error.model,
+              status: error.status,
+              code: "cli_non_replayable_incomplete_turn",
+              rawError: error.rawError,
+              sessionId: error.sessionId,
+              lane: error.lane,
+              cause: error,
+            }),
+            { nonReplayableReason },
+          )
+        : error;
+      failTurn(session, terminalError);
     }
     scheduleIdleClose(session);
     return;
@@ -1552,8 +1604,8 @@ function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
     deferClaudeLiveSyntheticResult(session, turn, output);
     return;
   }
-  if (turn.useResume && turn.observedSyntheticPlaceholder && !output.text.trim()) {
-    finishTurn(session, annotateClaudeLiveSyntheticTerminalOutput(session, turn, output));
+  if (!output.text.trim()) {
+    finishTurn(session, annotateClaudeLiveTerminalOutput(session, turn, output));
     return;
   }
   finishTurn(session, output);
@@ -1720,6 +1772,7 @@ async function createClaudeLiveSession(params: {
           session.currentTurn?.onCliOutput?.(chunk, "stderr");
           if (session.currentTurn && chunk.trim()) {
             session.currentTurn.hasReplayUnsafeActivity = true;
+            session.currentTurn.hasUnexpectedLifecycleActivity = true;
           }
           session.stderr += chunk;
           if (session.stderr.length > LIVE_SESSION_LIMITS.maxStderrChars) {
@@ -1823,6 +1876,7 @@ function createTurn(params: {
     useResume: params.useResume,
     observedSyntheticPlaceholder: false,
     hasReplayUnsafeActivity: false,
+    hasUnexpectedLifecycleActivity: false,
     hasApprovedNativeToolUse: false,
     hasCompletedMcpToolUse: false,
     pendingSyntheticPlaceholder: false,

@@ -65,7 +65,10 @@ import { prepareCliRunContext } from "./cli-runner/prepare.js";
 import { hashCliReseedPrompt } from "./cli-runner/reseed-envelope.js";
 import * as sessionHistoryModule from "./cli-runner/session-history.js";
 import type { PreparedCliRunContext } from "./cli-runner/types.js";
-import { shouldClearFailedCliSessionBinding } from "./cli-session.js";
+import {
+  preserveCliSessionBindingOnRecoveryAbort,
+  shouldClearFailedCliSessionBinding,
+} from "./cli-session.js";
 import { classifyEmbeddedAgentRunResultForModelFallback } from "./embedded-agent-runner/result-fallback-classifier.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "./harness/hook-helpers.js";
 import { MAX_AGENT_HOOK_HISTORY_MESSAGES } from "./harness/hook-history.js";
@@ -2046,14 +2049,25 @@ describe("runCliAgent reliability", () => {
         interleavedReplacement: false,
         abortTiming: "inflight" as const,
       },
-    ].flatMap((scenario) => [
-      { ...scenario, allowSilent: false },
-      {
-        ...scenario,
-        label: `${scenario.label} when intentional empty replies are allowed`,
-        allowSilent: true,
-      },
-    ]),
+    ].flatMap((scenario) =>
+      (scenario.abortTiming
+        ? (["abort-error", "custom-error", "primitive", "function", "nan", "timeout"] as const)
+        : (["abort-error"] as const)
+      ).flatMap((abortReason) => [
+        {
+          ...scenario,
+          label: scenario.abortTiming ? `${scenario.label} (${abortReason})` : scenario.label,
+          abortReason,
+          allowSilent: false,
+        },
+        {
+          ...scenario,
+          label: `${scenario.label}${scenario.abortTiming ? ` (${abortReason})` : ""} when intentional empty replies are allowed`,
+          abortReason,
+          allowSilent: true,
+        },
+      ]),
+    ),
   )(
     "$label",
     async ({
@@ -2061,6 +2075,7 @@ describe("runCliAgent reliability", () => {
       exhaustedBudget,
       interleavedReplacement,
       abortTiming,
+      abortReason,
       allowSilent,
     }) => {
       vi.useFakeTimers();
@@ -2074,9 +2089,21 @@ describe("runCliAgent reliability", () => {
       const writtenPrompts: string[] = [];
       const replacementPrompts: string[] = [];
       const abortController = new AbortController();
-      const callerAbort = Object.assign(new Error("caller cancelled synthetic recovery"), {
-        name: "AbortError",
-      });
+      const callerAbort =
+        abortReason === "primitive"
+          ? "caller cancelled synthetic recovery"
+          : abortReason === "nan"
+            ? Number.NaN
+            : abortReason === "function"
+              ? () => undefined
+              : Object.assign(
+                  new Error("caller cancelled synthetic recovery"),
+                  abortReason === "abort-error"
+                    ? { name: "AbortError" }
+                    : abortReason === "timeout"
+                      ? { name: "TimeoutError" }
+                      : {},
+                );
       let firstWriteReady: (() => void) | undefined;
       const firstWrite = new Promise<void>((resolve) => {
         firstWriteReady = resolve;
@@ -2240,7 +2267,20 @@ describe("runCliAgent reliability", () => {
           classifyEmbeddedAgentRunResultForModelFallback({ result, provider, model }),
       });
       const cancellationAssertion = abortTiming
-        ? expect(resultPromise).rejects.toBe(callerAbort)
+        ? resultPromise.then(
+            () => {
+              throw new Error("expected caller cancellation");
+            },
+            (error: unknown) => {
+              if (typeof callerAbort === "string" || typeof callerAbort === "number") {
+                expect(error).toMatchObject({ name: "AbortError" });
+                expect(Object.is((error as Error).cause, callerAbort)).toBe(true);
+              } else {
+                expect(error).toBe(callerAbort);
+              }
+              return error;
+            },
+          )
         : undefined;
       await firstWrite;
       const replacementRun = interleavedReplacement
@@ -2262,13 +2302,24 @@ describe("runCliAgent reliability", () => {
         releaseReplacementWrite?.();
       }
       if (abortTiming) {
-        await cancellationAssertion;
+        const markedAbort = await cancellationAssertion;
         expect(
           shouldClearFailedCliSessionBinding({
-            error: callerAbort,
-            binding: { sessionId: "retained-live" },
+            error: markedAbort,
+            binding: context.params.cliSessionBinding,
           }),
-        ).toBe(false);
+        ).toBe(abortReason === "timeout");
+        if (typeof callerAbort === "string") {
+          const unrelatedAbort = Object.assign(new Error(callerAbort, { cause: callerAbort }), {
+            name: "AbortError",
+          });
+          expect(
+            shouldClearFailedCliSessionBinding({
+              error: unrelatedAbort,
+              binding: { sessionId: "retained-live" },
+            }),
+          ).toBe(true);
+        }
         expect(run).toHaveBeenCalledOnce();
         expect(hookRunner.runAgentEnd).not.toHaveBeenCalled();
         expect(writtenPrompts).toHaveLength(abortTiming === "queued" ? 1 : 2);
@@ -2313,6 +2364,48 @@ describe("runCliAgent reliability", () => {
     },
   );
 
+  it("consumes recovery abort grants only for their original session binding", () => {
+    const abortController = new AbortController();
+    const callerAbort = Object.assign(new Error("shared recovery cancellation"), {
+      name: "AbortError",
+    });
+    const recoveryBinding = { sessionId: "shared-live-session" };
+    const concurrentRecoveryBinding = { sessionId: "shared-live-session" };
+    const otherOperationBinding = { sessionId: "shared-live-session" };
+    abortController.abort(callerAbort);
+
+    expect(preserveCliSessionBindingOnRecoveryAbort(abortController.signal, recoveryBinding)).toBe(
+      callerAbort,
+    );
+    expect(
+      preserveCliSessionBindingOnRecoveryAbort(abortController.signal, concurrentRecoveryBinding),
+    ).toBe(callerAbort);
+    expect(
+      shouldClearFailedCliSessionBinding({
+        error: callerAbort,
+        binding: otherOperationBinding,
+      }),
+    ).toBe(true);
+    expect(
+      shouldClearFailedCliSessionBinding({ error: callerAbort, binding: recoveryBinding }),
+    ).toBe(false);
+    expect(
+      shouldClearFailedCliSessionBinding({ error: callerAbort, binding: recoveryBinding }),
+    ).toBe(true);
+    expect(
+      shouldClearFailedCliSessionBinding({
+        error: callerAbort,
+        binding: concurrentRecoveryBinding,
+      }),
+    ).toBe(false);
+    expect(
+      shouldClearFailedCliSessionBinding({
+        error: callerAbort,
+        binding: concurrentRecoveryBinding,
+      }),
+    ).toBe(true);
+  });
+
   it.each(
     [
       { label: "an approved native Bash action", activity: "native" as const, status: undefined },
@@ -2328,17 +2421,73 @@ describe("runCliAgent reliability", () => {
       { label: "a cancelled turn", activity: undefined, status: "cancelled" as const },
       { label: "an aborted turn", activity: undefined, status: "aborted" as const },
       { label: "a failed turn", activity: undefined, status: "failed" as const },
+      {
+        label: "an approved native action followed by an ordinary empty success",
+        activity: "native" as const,
+        status: undefined,
+        withoutPlaceholder: true,
+        vendorError: false,
+      },
+      {
+        label: "an approved native action followed by a real vendor error",
+        activity: "native" as const,
+        status: undefined,
+        withoutPlaceholder: true,
+        vendorError: true,
+      },
+      {
+        label: "a completed MCP action followed by an ordinary empty success",
+        activity: "mcp" as const,
+        status: undefined,
+        withoutPlaceholder: true,
+        vendorError: false,
+      },
+      {
+        label: "a completed MCP action followed by a real vendor error",
+        activity: "mcp" as const,
+        status: undefined,
+        withoutPlaceholder: true,
+        vendorError: true,
+      },
+      {
+        label: "an unknown lifecycle event without a synthetic placeholder",
+        activity: "unknown" as const,
+        status: undefined,
+        withoutPlaceholder: true,
+        vendorError: false,
+      },
+      {
+        label: "malformed process output without a synthetic placeholder",
+        activity: "malformed" as const,
+        status: undefined,
+        withoutPlaceholder: true,
+        vendorError: false,
+      },
+      {
+        label: "unexpected diagnostics without a synthetic placeholder",
+        activity: "stderr" as const,
+        status: undefined,
+        withoutPlaceholder: true,
+        vendorError: false,
+      },
     ].flatMap((scenario) => [
-      { ...scenario, allowSilent: false },
       {
         ...scenario,
+        withoutPlaceholder: "withoutPlaceholder" in scenario && scenario.withoutPlaceholder,
+        vendorError: "vendorError" in scenario && scenario.vendorError,
+        allowSilent: false,
+      },
+      {
+        ...scenario,
+        withoutPlaceholder: "withoutPlaceholder" in scenario && scenario.withoutPlaceholder,
+        vendorError: "vendorError" in scenario && scenario.vendorError,
         label: `${scenario.label} when intentional empty replies are allowed`,
         allowSilent: true,
       },
     ]),
   )(
     "never runs a configured fallback model after $label",
-    async ({ activity, status, allowSilent }) => {
+    async ({ activity, status, allowSilent, withoutPlaceholder, vendorError }) => {
       vi.useFakeTimers();
       supervisorSpawnMock.mockClear();
       const hookRunner = {
@@ -2389,10 +2538,12 @@ describe("runCliAgent reliability", () => {
                     type: "assistant",
                     session_id: sessionId,
                     message: {
-                      model: "<synthetic>",
+                      model: withoutPlaceholder ? "claude-sonnet-5" : "<synthetic>",
                       role: "assistant",
                       content: [
-                        { type: "text", text: "No response requested." },
+                        ...(!withoutPlaceholder
+                          ? [{ type: "text", text: "No response requested." }]
+                          : []),
                         ...(activity === "mcp"
                           ? [
                               {
@@ -2429,10 +2580,12 @@ describe("runCliAgent reliability", () => {
                   ...(activity === "unknown" ? [{ type: "unknown_lifecycle_activity" }] : []),
                   {
                     type: "result",
-                    subtype: "success",
+                    subtype: vendorError ? "error_during_execution" : "success",
+                    ...(vendorError
+                      ? { is_error: true, errors: ["vendor failed after tool execution"] }
+                      : { result: "" }),
                     ...(status ? { status, is_error: false } : {}),
                     session_id: sessionId,
-                    result: "",
                   },
                 ];
                 if (activity === "stderr") {
@@ -2510,7 +2663,7 @@ describe("runCliAgent reliability", () => {
       });
 
       await firstUserWrite;
-      await vi.advanceTimersByTimeAsync(30_000);
+      await vi.advanceTimersByTimeAsync(withoutPlaceholder ? 0 : 30_000);
       const fallbackResult = await fallbackPromise;
 
       expect(run).toHaveBeenCalledOnce();
@@ -2519,9 +2672,11 @@ describe("runCliAgent reliability", () => {
       expect(fallbackResult.result.payloads).toEqual([
         expect.objectContaining({
           text: expect.stringMatching(
-            activity === "unknown" || activity === "malformed" || activity === "stderr"
-              ? /unexpected session activity.*check the session before retrying manually/i
-              : /review any (?:possible )?tool effects before retrying manually/i,
+            vendorError
+              ? /vendor failed after tool execution/i
+              : activity === "unknown" || activity === "malformed" || activity === "stderr"
+                ? /unexpected session activity.*check the session before retrying manually/i
+                : /review any (?:possible )?tool effects before retrying manually/i,
           ),
           isError: true,
         }),
@@ -2557,7 +2712,7 @@ describe("runCliAgent reliability", () => {
           }),
         );
       }
-      if (activity === "captured") {
+      if (activity === "captured" || vendorError) {
         expect(cancelLiveProcess).toHaveBeenCalledOnce();
       } else {
         expect(cancelLiveProcess).not.toHaveBeenCalled();
