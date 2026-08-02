@@ -1,4 +1,6 @@
 // Matrix API module exposes the plugin public contract.
+import { chunkTextForOutbound as chunkTextForOutboundSdk } from "openclaw/plugin-sdk/text-chunking";
+
 export {
   type MatrixResolvedStringField,
   type MatrixResolvedStringValues,
@@ -54,6 +56,9 @@ export type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 export type { WizardPrompter } from "openclaw/plugin-sdk/setup";
 
 export function chunkTextForOutbound(text: string, limit: number): string[] {
+  if (Number.isFinite(limit) && limit > 0 && !Number.isInteger(limit)) {
+    return chunkTextForOutboundSdk(text, limit);
+  }
   const chunks: string[] = [];
   let remaining = text;
   while (remaining.length > limit) {
