@@ -96,6 +96,9 @@ importers:
       '@silvia-odwyer/photon-node':
         specifier: 0.3.4
         version: 0.3.4
+      '@trycua/cua-driver':
+        specifier: 0.14.1
+        version: 0.14.1
       acorn:
         specifier: 8.17.0
         version: 8.17.0
