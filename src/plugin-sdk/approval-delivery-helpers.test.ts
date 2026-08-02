@@ -19,7 +19,7 @@ describe("createApproverRestrictedNativeApprovalAdapter", () => {
       isExecAuthorizedSender: ({ senderId }) => senderId === "exec-owner",
       isPluginAuthorizedSender: ({ senderId }) => senderId === "plugin-owner",
       isNativeDeliveryEnabled: () => true,
-      resolveNativeDeliveryMode: () => "dm",
+      resolveNativeDeliveryMode: () => "dm" as const,
     });
     const authorizeActorAction = adapter.auth.authorizeActorAction;
     if (!authorizeActorAction) {
@@ -432,7 +432,7 @@ describe("createApproverRestrictedNativeApprovalCapability", () => {
   });
 
   it("assembles forwarding-routed capabilities without replacing channel auth results", () => {
-    const authResult = { authorized: true };
+    const authResult = { authorized: true } as const;
     const authorizeActorAction = vi.fn(() => authResult);
     const render = { exec: { buildPendingPayload: vi.fn() } };
     const routed = createApproverRestrictedNativeApprovalCapability({

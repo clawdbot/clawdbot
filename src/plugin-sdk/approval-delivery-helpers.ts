@@ -199,23 +199,24 @@ function createStandardNativeApprovalRouting(
       return to ? { to, accountId: normalizeOptionalString(input.accountId) } : null;
     },
   });
-  const shouldSuppressForwardingFallback = createNativeApprovalForwardingFallbackSuppressor({
-    channel,
-    normalizeForwardTarget: targetResolvers.normalizeForwardTarget,
-    resolveAccountId: ({ forwardingTarget, request }) =>
-      forwardingTarget.accountId ?? normalizeOptionalString(request.request.turnSourceAccountId),
-    resolveForwardingTargetForMatch: ({ forwardingTarget, accountId }) => ({
-      ...forwardingTarget,
-      accountId,
-    }),
-    isSessionRouteEligible: routeGates.isSessionApprovalEligible,
-    isExplicitTargetEligible:
-      params.suppressExplicitTargetFallback === false
-        ? undefined
-        : routeGates.isExplicitTargetEligible,
-    resolveOriginTarget,
-    resolveApproverDmTargets,
-  });
+  const shouldSuppressForwardingFallback =
+    createNativeApprovalForwardingFallbackSuppressor<NativeApprovalTarget>({
+      channel,
+      normalizeForwardTarget: targetResolvers.normalizeForwardTarget,
+      resolveAccountId: ({ forwardingTarget, request }) =>
+        forwardingTarget.accountId ?? normalizeOptionalString(request.request.turnSourceAccountId),
+      resolveForwardingTargetForMatch: ({ forwardingTarget, accountId }) => ({
+        ...forwardingTarget,
+        accountId,
+      }),
+      isSessionRouteEligible: routeGates.isSessionApprovalEligible,
+      isExplicitTargetEligible:
+        params.suppressExplicitTargetFallback === false
+          ? undefined
+          : routeGates.isExplicitTargetEligible,
+      resolveOriginTarget,
+      resolveApproverDmTargets,
+    });
   const availabilityState = (enabled: boolean) =>
     enabled ? ({ kind: "enabled" } as const) : ({ kind: "disabled" } as const);
 
