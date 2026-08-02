@@ -98,7 +98,6 @@ import {
   shouldUseWhatsAppContactMarker,
   shouldUseWhatsAppStickerMarker,
   extractBlockStreamingMarkerDirectives,
-  hasDeclaredCustomTool,
   hasDeclaredTool,
   hasToolDefinition,
   isQaToolSearchFixture,
@@ -410,8 +409,9 @@ function buildScenarioToolCallEvents(
       ...(Array.isArray(body.tools) ? body.tools : []),
       ...(Array.isArray(body.dynamicTools) ? body.dynamicTools : []),
     ].find((tool) => findNamedToolDefinition(tool, name));
-    // Codex registers namespaced tools by their complete wire identity;
-    // emitting only the nested name makes direct-only lifecycle tools unusable.
+    const definition = findNamedToolDefinition(declaration, name);
+    // Function and custom calls both retain their declared namespace; Codex
+    // dispatches the complete identity and rejects a flattened nested tool.
     const namespace =
       declaration &&
       typeof declaration === "object" &&
@@ -419,6 +419,9 @@ function buildScenarioToolCallEvents(
       typeof declaration.name === "string"
         ? declaration.name
         : undefined;
+    if (definition?.type === "custom" && typeof args.input === "string") {
+      return buildCustomToolCallEventsWithInput(name, args.input, namespace);
+    }
     return buildRawToolCallEventsWithArgs(name, args, namespace);
   }
   const encodedTarget = encodeCodeModeTarget(name, args);
@@ -574,11 +577,11 @@ async function buildResponsesPayload(
       ? buildQaToolSearchArgs(targetTool, QA_TOOL_SEARCH_FAILURE_PROMPT_RE.test(allInputText))
       : {};
     if (
-      targetTool === "apply_patch" &&
-      hasDeclaredCustomTool(body, targetTool) &&
+      targetTool &&
+      findNamedToolDefinition(toolDeclarationBody, targetTool)?.type === "custom" &&
       typeof plannedArgs.input === "string"
     ) {
-      return buildCustomToolCallEventsWithInput(targetTool, plannedArgs.input);
+      return buildToolCallEventsWithArgs(targetTool, plannedArgs);
     }
     if (targetTool && hasDeclaredTool(body, "tool_search_code")) {
       return buildToolCallEventsWithArgs("tool_search_code", {
