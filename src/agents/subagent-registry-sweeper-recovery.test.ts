@@ -90,6 +90,22 @@ describe("subagent registry recovery scheduling", () => {
       "subagent interrupted terminal projection remains incomplete",
       { runId: "interrupted-run" },
     );
+    recoverRow.mockResolvedValue({ status: "handled" });
+    await sweeper.runTick();
+    expect(recoverRow).toHaveBeenCalledTimes(5);
+    sweeper.reset();
+  });
+
+  it("coalesces duplicate schedules before the owner pass starts", async () => {
+    const runtime = { current: {} as GatewayRecoveryRuntime };
+    recoverRow.mockResolvedValue({ status: "handled" });
+    const { sweeper } = createHarness(runtime);
+
+    sweeper.schedule({ delayMs: 1 });
+    sweeper.schedule({ delayMs: 1 });
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(recoverRow).toHaveBeenCalledOnce();
     sweeper.reset();
   });
 
@@ -131,6 +147,21 @@ describe("subagent registry recovery scheduling", () => {
     await vi.advanceTimersByTimeAsync(0);
 
     expect(recoverRow).toHaveBeenCalledTimes(2);
+    sweeper.reset();
+  });
+
+  it("releases the owner lane after an unexpected pass failure", async () => {
+    const runtime = { current: {} as GatewayRecoveryRuntime };
+    recoverRow
+      .mockRejectedValueOnce(new Error("unexpected recovery failure"))
+      .mockResolvedValue({ status: "handled" });
+    const { sweeper, warn } = createHarness(runtime);
+
+    await sweeper.runTick();
+    await sweeper.runTick();
+
+    expect(recoverRow).toHaveBeenCalledTimes(2);
+    expect(warn).toHaveBeenCalledWith("subagent run sweep failed: unexpected recovery failure");
     sweeper.reset();
   });
 });
