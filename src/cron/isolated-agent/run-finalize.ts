@@ -368,8 +368,11 @@ export async function finalizeCronRun(params: {
     finalRunResult.meta?.terminalReplyKind === "silent-empty" ||
     isSilentReplyPayloadText(finalRunResult.meta?.finalAssistantRawText) ||
     isSilentReplyPayloadText(finalRunResult.meta?.finalAssistantVisibleText);
+  // Not gated on deliveryRequested: "the runner does not deliver" (mode none/webhook) must
+  // not also mean "nothing checks that the run produced anything". The remaining conditions
+  // already describe a run with no observable outcome — no payload, no committed send, no
+  // deliberate silence — which is a failure in every delivery mode (#113181).
   if (
-    prepared.deliveryRequested &&
     !hasFatalErrorPayload &&
     !sourceDeliveryOutcome.satisfiesSourceDelivery &&
     !hasCommittedTerminalProgress &&

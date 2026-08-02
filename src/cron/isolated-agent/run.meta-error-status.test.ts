@@ -176,6 +176,46 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
     expect(result.delivered).toBe(false);
   });
 
+  // #113181: delivery.mode "none" only means the runner does not deliver. It must not
+  // also disable the no-outcome guard, or a run that sent nothing and produced nothing
+  // is recorded as a clean success and failureAlert can never fire.
+  it("marks a delivery-disabled run with no committed outcome as a cron error", async () => {
+    runWithModelFallbackMock.mockResolvedValueOnce({
+      result: {
+        payloads: [],
+        meta: {
+          agentMeta: { usage: { input: 10, output: 0 } },
+        },
+      },
+      provider: "anthropic",
+      model: "claude-opus-4-8",
+      attempts: [],
+    });
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: false,
+      mode: "none",
+      channel: "messagechat",
+      to: "test-target",
+    });
+    resolveCronPayloadOutcomeMock.mockReturnValue({
+      summary: undefined,
+      outputText: undefined,
+      synthesizedText: undefined,
+      deliveryPayload: undefined,
+      deliveryPayloads: [],
+      deliveryPayloadHasStructuredContent: false,
+      hasFatalErrorPayload: false,
+      hasFatalStructuredErrorPayload: false,
+      embeddedRunError: undefined,
+    });
+
+    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
+
+    expect(result.status).toBe("error");
+    expect(result.error).toBe("cron isolated run completed without a final assistant payload");
+    expect(result.delivered).toBe(false);
+  });
+
   it("keeps explicit silent replies as successful cron completions", async () => {
     runWithModelFallbackMock.mockResolvedValueOnce({
       result: {
