@@ -15,6 +15,8 @@ import {
   sanitizeAssistantVisibleText,
   stripMarkdown,
 } from "openclaw/plugin-sdk/text-chunking";
+import { recordInitialSmsDeliveryResult } from "./delivery-observations.js";
+import { getSmsRuntime } from "./runtime.js";
 import { sendSmsViaTwilio, TWILIO_MESSAGE_BODY_MAX_LENGTH } from "./twilio.js";
 import type { ResolvedSmsAccount, SmsSendResult } from "./types.js";
 
@@ -134,8 +136,9 @@ async function sendSmsProviderMessage(params: {
   onPlatformSendDispatch?: () => Promise<void>;
 }): Promise<SmsSendResult> {
   let platformDispatchStarted = false;
+  let result: SmsSendResult;
   try {
-    return await sendSmsViaTwilio({
+    result = await sendSmsViaTwilio({
       account: params.account,
       to: params.to,
       ...(params.text !== undefined ? { text: params.text } : {}),
@@ -155,6 +158,33 @@ async function sendSmsProviderMessage(params: {
       `SMS send failed before Twilio dispatch: ${formatErrorMessage(error)}`,
       { cause: error },
     );
+  }
+  await recordInitialDeliveryBestEffort(params.account, result);
+  return result;
+}
+
+function logInitialDeliveryPersistenceFailure(result: SmsSendResult, error: unknown): void {
+  try {
+    getSmsRuntime()
+      .logging.getChildLogger({ plugin: "sms", feature: "delivery-status" })
+      .warn("SMS delivery initial state could not be persisted.", {
+        messageSid: result.sid,
+        errorType: error instanceof Error ? error.name : typeof error,
+      });
+  } catch {
+    // The provider send already succeeded; unavailable logging cannot turn
+    // observation persistence into a resend or user-visible send failure.
+  }
+}
+
+async function recordInitialDeliveryBestEffort(
+  account: ResolvedSmsAccount,
+  result: SmsSendResult,
+): Promise<void> {
+  try {
+    await recordInitialSmsDeliveryResult({ account, result });
+  } catch (error) {
+    logInitialDeliveryPersistenceFailure(result, error);
   }
 }
 

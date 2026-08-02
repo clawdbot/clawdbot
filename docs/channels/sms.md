@@ -1,12 +1,12 @@
 ---
-summary: "Twilio SMS/MMS setup, access controls, and webhook configuration"
+summary: "Twilio SMS/MMS setup, access controls, webhooks, and delivery status"
 read_when:
   - You want to connect OpenClaw to SMS or MMS through Twilio
   - You need SMS/MMS webhook or allowlist setup
 title: "SMS"
 ---
 
-OpenClaw receives and sends SMS/MMS through a Twilio phone number or Messaging Service. The Gateway registers an inbound webhook route (default `/webhooks/sms`), validates Twilio request signatures by default, and sends replies back through Twilio's Messages API.
+OpenClaw receives and sends SMS/MMS through a Twilio phone number or Messaging Service. The Gateway registers a webhook route (default `/webhooks/sms`), validates Twilio request signatures by default, sends replies through Twilio's Messages API, and records outbound delivery callbacks.
 
 Status: official plugin, installed separately. SMS text and MMS attachments, direct messages only.
 
@@ -325,12 +325,18 @@ Outbound OpenClaw deliveries attach one media item. OpenClaw caps JPEG, JPG, PNG
 
 For incoming MMS, OpenClaw processes at most 10 attachments and downloads at most 5 MiB total. Any additional or unavailable attachments produce a visible unavailable-media notice instead of discarding the signed message or silently delivering an empty turn. Downloads happen only after sender authorization, with Twilio authentication and an `api.twilio.com` host restriction.
 
+### Delivery status
+
+After each successful outbound send, OpenClaw stores the initial Twilio API status when the response includes one. When `publicWebhookUrl` is configured, every outbound message also gives Twilio that same URL, including any connection-override fragment, as its `StatusCallback`.
+
+Later delivery callbacks update the same plugin-scoped SQLite record. Semantic retries are deduplicated, older transitions cannot regress a terminal state, and conflicting terminal observations are reported as `conflicted` instead of choosing a false winner. Records contain message SIDs, status/error metadata, and timestamps, but not message bodies or phone-number addresses. Each record is retained for up to 30 days after its latest observation, subject to the plugin-wide 5,000-message cap and oldest-record eviction.
+
 ## Verify Setup
 
 After the Gateway starts:
 
 1. Confirm the Gateway log shows the SMS webhook route.
-2. Run a Twilio-side probe (checks the configured Twilio webhook URL/method and recent inbound errors):
+2. Run a Twilio-side probe (checks the configured Twilio webhook URL/method, recent inbound errors, and the most recent stored outbound delivery state):
 
 ```bash
 openclaw channels capabilities --channel sms
@@ -369,11 +375,14 @@ The webhook route also enforces, independent of signature validation:
 
 - `POST` only.
 - Failed-request budget of 300 requests per minute per SMS account, webhook route, and resolved client address. All requests count toward this budget, but HTTP 429 is applied only after body parsing or Twilio signature validation fails.
+- Signed delivery callbacks are classified before inbound sender quotas. They use a separate ceiling of 3,000 callbacks per minute per SMS account and webhook route, then commit to plugin-scoped SQLite state before HTTP 200. With signature validation disabled, delivery callbacks first use the stricter 30/minute resolved-client-address cap before persistence.
 - Dispatchable callback rate limit of 30 accepted callbacks per minute per SMS account, webhook route, and validated sender after body parsing and signature validation pass (HTTP 429 above that). The sender key is the canonicalized, signature-covered `From` value, so equivalent SMS/RCS address forms share one budget, one flooding sender exhausts only its own budget, and callbacks from other senders behind Twilio's shared egress addresses remain dispatchable. Invalid or missing sender values share a separate empty-sender budget.
 - Aggregate validated-callback ceiling of 300 accepted callbacks per minute per SMS account and webhook route. This bounds durable-ingress pressure from many distinct signed senders without recreating shared-egress cross-throttling. If signature validation is disabled, nothing authenticates `From`; the stricter 30/min resolved-client-address dispatch cap applies instead of the validated sender and aggregate policy.
 - Client addresses are resolved through the shared Gateway trusted-proxy rules. If `gateway.trustedProxies` contains the reverse proxy that forwards Twilio callbacks, OpenClaw keys the address-based limits from the forwarded client address; otherwise it falls back to the direct socket address.
-- The payload `AccountSid` must exactly match the configured `accountSid`. Direct-number callbacks must target the configured `fromNumber`; Messaging Service callbacks must carry the configured `MessagingServiceSid`. The raw callback is first committed to the durable ingress queue and acknowledged; an identity mismatch is then marked as a permanent invalid-payload failure during drain and is never dispatched or allowed to download media.
+- Inbound payloads must carry a nonempty `AccountSid` that exactly matches the configured `accountSid`. Direct-number callbacks must target the configured `fromNumber`; Messaging Service callbacks must carry the configured `MessagingServiceSid`. The raw callback is first committed to the durable ingress queue and acknowledged; an identity mismatch is then marked as a permanent invalid-payload failure during drain and is never dispatched or allowed to download media.
+- Delivery callbacks with a missing or different `AccountSid` are acknowledged, logged, and intentionally not stored.
 - Replayed `MessageSid` values are deduplicated by the durable ingress queue. Completed-message tombstones are retained for 24 hours (up to 20,000 entries per account); permanent-failure tombstones are retained for 30 days (up to 1,000 entries).
+- Delivery observations use a semantic, non-PII fingerprint of source, message SID, normalized status, error code, and carrier completion date. Multiple states for one outbound message remain distinct. Records expire 30 days after their latest observation, while the 5,000-message cap can evict older records sooner.
 - Request bodies over 32 KB are rejected.
 
 Twilio does not retry HTTP 429 by default. The `#rp=4xx` and `#rp=all` connection overrides opt into 4xx retries, but Twilio caps the complete retry transaction at 15 seconds. Configure a fallback URL when another handler must receive failed deliveries; treat a 429 as a fail-closed rejection, not reliable backpressure.

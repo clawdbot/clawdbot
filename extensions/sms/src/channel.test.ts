@@ -1,6 +1,8 @@
 // Sms tests cover channel plugin behavior.
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { SmsDeliveryRecord } from "./delivery-observations.js";
+import type { probeSmsAccount as probeSmsAccountType } from "./status.js";
 import type { sendSmsViaTwilio as sendSmsViaTwilioType } from "./twilio.js";
 
 type ChannelModule = typeof import("./channel.js");
@@ -31,6 +33,17 @@ const hostedMediaMocks = vi.hoisted(() => {
     })),
   };
 });
+const listRecentSmsDeliveryRecords = vi.hoisted(() =>
+  vi.fn(async (): Promise<SmsDeliveryRecord[]> => []),
+);
+const recordInitialSmsDeliveryResult = vi.hoisted(() => vi.fn(async () => null));
+const probeSmsAccount = vi.hoisted(() =>
+  vi.fn<typeof probeSmsAccountType>(async () => ({
+    ok: true,
+    webhook: { status: "skipped" as const, reason: "test" },
+    hints: [],
+  })),
+);
 
 beforeEach(async () => {
   vi.resetModules();
@@ -51,6 +64,10 @@ beforeEach(async () => {
     url: "https://gateway.example.com/webhooks/sms/media/abc?token=token",
     cleanup: hostedMediaMocks.cleanup,
   });
+  listRecentSmsDeliveryRecords.mockClear();
+  recordInitialSmsDeliveryResult.mockReset();
+  recordInitialSmsDeliveryResult.mockResolvedValue(null);
+  probeSmsAccount.mockClear();
   vi.doMock("./twilio.js", () => ({
     sendSmsViaTwilio,
     TWILIO_MESSAGE_BODY_MAX_LENGTH: 1600,
@@ -58,13 +75,24 @@ beforeEach(async () => {
   vi.doMock("./media.js", () => ({
     prepareHostedSmsMedia: hostedMediaMocks.prepare,
   }));
+  vi.doMock("./delivery-observations.js", () => ({
+    listRecentSmsDeliveryRecords,
+    recordInitialSmsDeliveryResult,
+  }));
+  vi.doMock("./status.js", () => ({
+    probeSmsAccount,
+    formatSmsProbeLines: vi.fn(() => []),
+  }));
   ({ PlatformMessageNotDispatchedError } = await import("openclaw/plugin-sdk/error-runtime"));
   ({ smsPlugin } = await import("./channel.js"));
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.doUnmock("./twilio.js");
   vi.doUnmock("./media.js");
+  vi.doUnmock("./delivery-observations.js");
+  vi.doUnmock("./status.js");
 });
 
 describe("smsPlugin status", () => {
@@ -119,6 +147,91 @@ describe("smsPlugin status", () => {
     });
 
     expect(snapshot).toMatchObject({ lifecycle: "blocked", terminalDisconnect: true });
+  });
+
+  it("loads delivery observations with the full Twilio account identity", async () => {
+    const account = {
+      accountId: "support",
+      enabled: true,
+      accountSid: "AC-support",
+      authToken: "secret",
+      fromNumber: "+15557654321",
+      messagingServiceSid: "",
+      defaultTo: "",
+      webhookPath: "/webhooks/sms",
+      publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
+      dangerouslyDisableSignatureValidation: false,
+      dmPolicy: "pairing" as const,
+      allowFrom: [],
+      textChunkLimit: 1500,
+    };
+    const records = [
+      {
+        accountId: "support",
+        accountSidHash: "account-sid-hash",
+        messageSid: "SM123",
+        status: "delivered",
+        firstObservedAt: 1,
+        lastObservedAt: 2,
+        observations: [],
+      },
+    ];
+    listRecentSmsDeliveryRecords.mockResolvedValueOnce(records);
+
+    await smsPlugin.status?.probeAccount?.({
+      cfg: {},
+      account,
+      timeoutMs: 1000,
+    });
+
+    expect(listRecentSmsDeliveryRecords).toHaveBeenCalledWith(account);
+    expect(probeSmsAccount).toHaveBeenCalledWith({
+      account,
+      timeoutMs: expect.any(Number),
+      options: { deliveryRecords: records },
+    });
+    const remainingTimeoutMs = probeSmsAccount.mock.calls[0]?.[0]?.timeoutMs;
+    expect(remainingTimeoutMs).toBeGreaterThan(0);
+    expect(remainingTimeoutMs).toBeLessThanOrEqual(1000);
+  });
+
+  it("passes only the remaining probe budget after loading delivery observations", async () => {
+    vi.useFakeTimers();
+    const account = {
+      accountId: "support",
+      enabled: true,
+      accountSid: "AC-support",
+      authToken: "secret",
+      fromNumber: "+15557654321",
+      messagingServiceSid: "",
+      defaultTo: "",
+      webhookPath: "/webhooks/sms",
+      publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
+      dangerouslyDisableSignatureValidation: false,
+      dmPolicy: "pairing" as const,
+      allowFrom: [],
+      textChunkLimit: 1500,
+    };
+    listRecentSmsDeliveryRecords.mockImplementationOnce(
+      async () =>
+        await new Promise<SmsDeliveryRecord[]>((resolve) => {
+          setTimeout(() => resolve([]), 250);
+        }),
+    );
+
+    const probe = smsPlugin.status?.probeAccount?.({
+      cfg: {},
+      account,
+      timeoutMs: 1000,
+    });
+    await vi.advanceTimersByTimeAsync(250);
+    await probe;
+
+    expect(probeSmsAccount).toHaveBeenCalledWith({
+      account,
+      timeoutMs: 750,
+      options: { deliveryRecords: [] },
+    });
   });
 });
 

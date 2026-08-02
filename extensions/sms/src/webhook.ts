@@ -6,6 +6,11 @@ import {
   resolveRequestClientIp,
 } from "openclaw/plugin-sdk/webhook-ingress";
 import {
+  createSmsDeliveryRecorder,
+  isTwilioDeliveryStatusForm,
+  type SmsDeliveryRecorder,
+} from "./delivery-observations.js";
+import {
   readTwilioWebhookForm,
   respondTwiml,
   resolveTwilioInboundSender,
@@ -52,6 +57,7 @@ export type SmsWebhookHandlerParams = {
   ingress: {
     enqueue: (form: Record<string, string>) => Promise<{ duplicate: boolean }>;
   };
+  delivery?: SmsDeliveryRecorder;
   log?: SmsWebhookLog;
 };
 
@@ -94,6 +100,7 @@ function rejectInvalidRequestRateLimit(params: {
 
 // Each account route owns one durable ingress adapter.
 export function createSmsWebhookHandler(params: SmsWebhookHandlerParams) {
+  let deliveryRecorder = params.delivery;
   return async (req: IncomingMessage, res: ServerResponse) => {
     if (req.method !== "POST") {
       respondTwiml(res, 405, "Method not allowed");
@@ -138,6 +145,43 @@ export function createSmsWebhookHandler(params: SmsWebhookHandlerParams) {
     if (invalidRequestRateLimited && params.account.dangerouslyDisableSignatureValidation) {
       return rejectInvalidRequestRateLimit({ key: clientAddressKey, log: params.log, res });
     }
+
+    if (isTwilioDeliveryStatusForm(form)) {
+      if (
+        params.account.dangerouslyDisableSignatureValidation &&
+        callbackDispatchRateLimiter.isRateLimited(clientAddressKey)
+      ) {
+        params.log?.warn?.("SMS webhook callback rate limit exceeded");
+        respondTwiml(res, 429, "Rate limit exceeded");
+        return true;
+      }
+      const messageSid = resolveTwilioMessageSid(form);
+      if (!messageSid) {
+        respondTwiml(res, 400, "Missing MessageSid");
+        return true;
+      }
+      const callbackAccountSid = form.AccountSid;
+      if (!callbackAccountSid || callbackAccountSid !== params.account.accountSid) {
+        params.log?.warn?.(
+          `SMS delivery callback ignored missing or mismatched account for message ${messageSid}`,
+        );
+        respondTwiml(res, 200);
+        return true;
+      }
+      deliveryRecorder ??= createSmsDeliveryRecorder();
+      const verdict = await deliveryRecorder.record({ account: params.account, form });
+      if (verdict.duplicate) {
+        params.log?.info?.(`SMS delivery callback ignored duplicate for message ${messageSid}`);
+      } else {
+        params.log?.info?.(
+          `SMS delivery observation ${verdict.record.status} recorded for message ${messageSid}`,
+        );
+      }
+      res.setHeader(SMS_WEBHOOK_ACCEPTED_HEADER, SMS_WEBHOOK_ACCEPTED_VALUE);
+      respondTwiml(res, 200);
+      return true;
+    }
+
     // Twilio egress IPs are shared across unrelated senders: an address-keyed quota
     // would let one flooding sender 429 every sender behind that IP, so validated
     // callbacks meter on the canonical signature-covered From value (invalid or absent
