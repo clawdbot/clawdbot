@@ -5,9 +5,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { InProcessGatewayCaller } from "../agents/tools/in-process-gateway.js";
-import { InMemoryBoardStore } from "../boards/board-store.js";
+import { createTestBoardStore } from "../boards/board-store.test-support.js";
 import { createBoardHandlers } from "../gateway/server-methods/board.js";
 import type { GatewayRequestContext, RespondFn } from "../gateway/server-methods/types.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { resolveCanvasDocumentsDir } from "./documents.js";
 import { createShowWidgetTool } from "./widget-tool.js";
 import { buildWidgetDocument } from "./wrap.js";
@@ -19,6 +21,8 @@ const tempDirs: string[] = [];
 
 afterEach(async () => {
   vi.useRealTimers();
+  closeOpenClawAgentDatabasesForTest();
+  closeOpenClawStateDatabaseForTest();
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
@@ -269,7 +273,7 @@ describe("show_widget", () => {
 
   it("lets the board domain wrap pinned source before storing and broadcasting", async () => {
     const stateDir = await createStateDir();
-    const store = new InMemoryBoardStore();
+    const store = createTestBoardStore({ stateDir });
     const broadcast = vi.fn();
     const handlers = createBoardHandlers(store);
     const title = "Release Status ".repeat(8).trim();
@@ -331,7 +335,7 @@ describe("show_widget", () => {
 
   it("pins a granted-CSP document and declaration without networking in the inline preview", async () => {
     const stateDir = await createStateDir();
-    const store = new InMemoryBoardStore();
+    const store = createTestBoardStore({ stateDir });
     const handlers = createBoardHandlers(store);
     const callGateway: InProcessGatewayCaller = async <T>(
       method: string,
@@ -460,7 +464,7 @@ describe("show_widget", () => {
 
   it("keeps colliding generated pins distinct and canonical spellings stable", async () => {
     const stateDir = await createStateDir();
-    const store = new InMemoryBoardStore();
+    const store = createTestBoardStore({ stateDir });
     const handlers = createBoardHandlers(store);
     const callGateway: InProcessGatewayCaller = async <T>(
       method: string,

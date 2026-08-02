@@ -651,12 +651,19 @@ type CronWakeMode = "next-heartbeat" | "now";
 
 export type CronPayload = CoreCronPayload;
 
+type CronCompletionDestination = {
+  mode: "webhook";
+  to: string;
+};
+
 type CronDelivery = {
   mode: "none" | "announce" | "webhook";
   channel?: string;
   to?: string;
+  threadId?: string | number;
   accountId?: string;
   bestEffort?: boolean;
+  completionDestination?: CronCompletionDestination;
   failureDestination?: CronFailureDestination;
 };
 

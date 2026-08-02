@@ -31,6 +31,7 @@ import {
 } from "./talk-realtime-relay-issues.js";
 import {
   abortRelayAgentRuns,
+  cancelTalkRealtimeRelayProviderToolCall,
   closeRelaySession,
   enforceRelaySessionLimits,
   pruneInactiveRelayAgentRuns,
@@ -283,6 +284,23 @@ export function createTalkRealtimeRelaySession(
       }
       if (event.type === "session.created") {
         continuityResetActive = false;
+      }
+      if (event.type === "tool.call.cancelled" && event.itemId) {
+        const relayCallId = cancelTalkRealtimeRelayProviderToolCall(relay, event.itemId);
+        if (relayCallId) {
+          const cancelledEvent = {
+            relaySessionId,
+            type: "toolCallCancelled" as const,
+            callId: relayCallId,
+          };
+          broadcastToOwner(
+            params.context,
+            params.connId,
+            cancelledEvent,
+            relayEventDeliveryOptions(cancelledEvent),
+          );
+        }
+        return;
       }
       if (
         event.type === "conversation.output_audio.delta" ||

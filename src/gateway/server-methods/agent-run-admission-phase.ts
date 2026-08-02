@@ -5,14 +5,16 @@ import {
   isEmbeddedAgentRunAbortableForRunId,
   retainEmbeddedAgentRunAbortabilityForRunId,
 } from "../../agents/embedded-agent-runner/runs.js";
-import { AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION } from "../../agents/internal-event-contract.js";
 import {
   commitMainSessionRecovery,
   type MainSessionRecoveryPendingTarget,
 } from "../../agents/main-session-recovery-store.js";
 import { resolvePersistedOverrideModelRef } from "../../agents/model-selection.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
-import type { TrustedSubagentCompletionHandoff } from "../../agents/subagent-announce-handoff.js";
+import {
+  resolveExactSubagentCompletionEvent,
+  type TrustedSubagentCompletionHandoff,
+} from "../../agents/subagent-announce-handoff.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -275,20 +277,10 @@ export async function prepareAgentRunDispatch(params: {
 
   const resolvedThreadId =
     params.delivery.explicitThreadId ?? params.delivery.deliveryPlan.resolvedThreadId;
-  const completionSourceSessionKey =
-    params.inputProvenance?.kind === "inter_session" &&
-    params.inputProvenance.sourceTool === "subagent_announce"
-      ? params.inputProvenance.sourceSessionKey
-      : undefined;
-  const completionEvents = params.request.internalEvents?.filter(
-    (event) =>
-      event.type === AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION && event.source === "subagent",
-  );
-  const completionEvent =
-    completionEvents?.length === 1 &&
-    completionEvents[0]?.childSessionKey === completionSourceSessionKey
-      ? completionEvents[0]
-      : undefined;
+  const completionEvent = resolveExactSubagentCompletionEvent({
+    inputProvenance: params.inputProvenance,
+    internalEvents: params.request.internalEvents,
+  });
   const trustedInternalHandoff =
     params.providerOverride === undefined &&
     params.modelOverride === undefined &&

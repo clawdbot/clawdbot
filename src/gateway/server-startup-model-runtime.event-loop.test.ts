@@ -2,7 +2,6 @@ import { mkdtemp, rm } from "node:fs/promises";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { performance } from "node:perf_hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderPlugin } from "../plugins/types.js";
@@ -41,8 +40,8 @@ vi.mock("../plugins/provider-discovery.js", async (importOriginal) => {
     pluginId: "openai",
     label: "OpenAI",
     auth: [],
-    catalog: { order: "simple", run: async () => null },
-    staticCatalog: { order: "simple", run: async () => null },
+    catalog: { order: "simple", run: providerMocks.liveCatalog },
+    staticCatalog: { order: "simple", run: providerMocks.staticCatalog },
   };
   return {
     ...actual,
@@ -56,6 +55,11 @@ const { resetPreparedModelRuntimeSnapshotsForTest } =
   await import("../agents/prepared-model-runtime.test-support.js");
 const { writePersistedAuthProfileStoreRaw } = await import("../agents/auth-profiles/sqlite.js");
 const { resolveAgentDir } = await import("../agents/agent-scope.js");
+const { createPluginMetadataSnapshot, makeRegistry } =
+  await import("../config/plugin-auto-enable.test-helpers.js");
+const { setCurrentPluginMetadataSnapshot } =
+  await import("../plugins/current-plugin-metadata-snapshot.js");
+const pluginDiscovery = await import("../plugins/discovery.js");
 const { startGatewaySidecars } = await import("./server-startup-post-attach.js");
 
 async function listenHealthz(
@@ -108,9 +112,55 @@ describe("Gateway prepared model runtime startup", () => {
         },
       },
       gateway: { mode: "local", bind: "loopback", auth: { mode: "none" } },
-      plugins: { enabled: false },
     } satisfies OpenClawConfig;
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const manifestRegistry = makeRegistry([
+      { id: "openai", channels: [], providers: ["openai"], origin: "bundled" },
+    ]);
+    const providerManifest = manifestRegistry.plugins[0];
+    if (!providerManifest) {
+      throw new Error("expected bundled OpenAI provider manifest");
+    }
+    providerManifest.enabledByDefault = true;
+    providerManifest.modelCatalog = { ...providerConfig, discovery: { openai: "runtime" } };
+    const metadataSnapshot = createPluginMetadataSnapshot({
+      config: cfg,
+      manifestRegistry,
+      workspaceDir,
+    });
+    const startupMetadataSnapshot = {
+      ...metadataSnapshot,
+      index: {
+        ...metadataSnapshot.index,
+        plugins: [
+          {
+            pluginId: providerManifest.id,
+            manifestPath: providerManifest.manifestPath,
+            manifestHash: "openai-test-manifest",
+            rootDir: providerManifest.rootDir,
+            origin: providerManifest.origin,
+            enabled: true,
+            enabledByDefault: true,
+            startup: {
+              sidecar: false,
+              memory: false,
+              deferConfiguredChannelFullLoadUntilAfterListen: false,
+              agentHarnesses: [],
+            },
+            compat: [],
+          },
+        ],
+      },
+      owners: {
+        ...metadataSnapshot.owners,
+        providers: new Map([["openai", ["openai"]]]),
+        modelCatalogProviders: new Map([["openai", ["openai"]]]),
+      },
+      metrics: { ...metadataSnapshot.metrics, indexPluginCount: 1 },
+      startup: { channelPluginIds: [], configuredDeferredChannelPluginIds: [], pluginIds: [] },
+    };
+    setCurrentPluginMetadataSnapshot(startupMetadataSnapshot, { config: cfg, env, workspaceDir });
+    const discoverPlugins = vi.spyOn(pluginDiscovery, "discoverOpenClawPlugins");
     const agentDir = resolveAgentDir(cfg, "main", env);
     writePersistedAuthProfileStoreRaw(
       {
@@ -126,15 +176,6 @@ describe("Gateway prepared model runtime startup", () => {
       },
       agentDir,
     );
-    const blockEventLoop = async () => {
-      const stopAt = performance.now() + 1_500;
-      while (performance.now() < stopAt) {
-        // Deliberately model synchronous provider/plugin catalog work that starves timers.
-      }
-      return providerConfig;
-    };
-    providerMocks.staticCatalog.mockImplementation(blockEventLoop);
-    providerMocks.liveCatalog.mockImplementation(blockEventLoop);
     const startupEvents: string[] = [];
     const healthServer = await listenHealthz(() => {
       startupEvents.push("health-served");
@@ -198,6 +239,7 @@ describe("Gateway prepared model runtime startup", () => {
             "startup-complete",
           ]);
           console.info(`[gateway-startup-proof] ${startupEvents.join(" -> ")}`);
+          expect(discoverPlugins).not.toHaveBeenCalled();
           expect(providerMocks.staticCatalog).not.toHaveBeenCalled();
           expect(providerMocks.liveCatalog).not.toHaveBeenCalled();
         },
