@@ -24,7 +24,7 @@ export type RealtimeTalkCallbacks = {
   onVideoError?: (error: unknown) => void;
 };
 
-type RealtimeTalkEventInput<TPayload = unknown> = {
+export type RealtimeTalkEventInput<TPayload = unknown> = {
   type: RealtimeTalkEvent["type"];
   payload?: TPayload;
   turnId?: string;
@@ -471,7 +471,11 @@ export async function submitRealtimeTalkAgentControl(params: {
   callId: string;
   sessionId?: string;
   emitTalkEvent?: (input: RealtimeTalkEventInput) => void;
+  signal?: AbortSignal;
 }): Promise<void> {
+  if (params.signal?.aborted) {
+    return;
+  }
   let result: unknown;
   let talkEvent: RealtimeTalkEventInput;
   try {
@@ -489,6 +493,9 @@ export async function submitRealtimeTalkAgentControl(params: {
             text: parsed.text,
             mode: parsed.mode,
           });
+    if (params.signal?.aborted) {
+      return;
+    }
     talkEvent = {
       type: "tool.progress",
       callId: params.callId,
@@ -510,8 +517,14 @@ export async function submitRealtimeTalkAgentControl(params: {
       final: true,
     };
     result = { error: message };
+    if (params.signal?.aborted || isAbortError(error)) {
+      return;
+    }
   }
   await params.submit(params.callId, result);
+  if (params.signal?.aborted) {
+    return;
+  }
   params.emitTalkEvent?.(talkEvent);
 }
 
@@ -586,6 +599,8 @@ export async function submitRealtimeTalkConsult(params: {
       await submitAbortResult();
       return;
     }
+    // Cancellation must not hide the acknowledgement that owns the Gateway run.
+    // Once the run id arrives, abortRun() can cancel the exact started consult.
     const response = await ctx.client.request<{ runId?: string; idempotencyKey?: string }>(
       "talk.client.toolCall",
       {
@@ -635,9 +650,10 @@ export async function submitRealtimeTalkConsult(params: {
 
 function isAbortError(error: unknown): boolean {
   return (
-    typeof DOMException !== "undefined" &&
-    error instanceof DOMException &&
-    error.name === "AbortError"
+    (typeof DOMException !== "undefined" &&
+      error instanceof DOMException &&
+      error.name === "AbortError") ||
+    (typeof error === "object" && error !== null && "name" in error && error.name === "AbortError")
   );
 }
 

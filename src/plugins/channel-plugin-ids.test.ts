@@ -74,7 +74,6 @@ import {
   listExplicitConfiguredChannelIdsForConfig,
   resolveConfiguredChannelPluginIds,
   resolveConfiguredChannelPresencePolicy,
-  resolveConfiguredDeferredChannelPluginIdsFromRegistry,
   resolveConfigValidationMetadataPluginIds,
   resolveGatewayStartupMetadataPluginIds,
   resolveGatewayStartupPluginIdsFromRegistry,
@@ -291,7 +290,6 @@ function createManifestRegistryFixtureWithWorkspaceDemoChannel(): PluginManifest
       withManifestLoadPaths({
         id: "workspace-demo-channel-plugin",
         channels: ["demo-channel"],
-        startupDeferConfiguredChannelFullLoadUntilAfterListen: true,
         origin: "workspace",
         enabledByDefault: undefined,
         providers: [],
@@ -328,8 +326,6 @@ function createInstalledPluginRecordFixture(
     startup: {
       sidecar: record.activation?.onStartup === true,
       memory,
-      deferConfiguredChannelFullLoadUntilAfterListen:
-        record.startupDeferConfiguredChannelFullLoadUntilAfterListen === true,
       agentHarnesses: normalizeStartupAgentHarnesses(record),
       configPaths: record.activation?.onConfigPaths ?? [],
     },
@@ -422,19 +418,6 @@ function expectStartupPluginIds(params: {
         : {}),
     }),
   ).toEqual(params.expected);
-}
-
-function resolveConfiguredDeferredChannelPluginIdsForFixture(params: {
-  config: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-}): string[] {
-  const manifestRegistry = loadPluginManifestRegistry() as PluginManifestRegistry;
-  return resolveConfiguredDeferredChannelPluginIdsFromRegistry({
-    config: params.config,
-    env: createPluginPlanningTestEnv(params.env),
-    index: createInstalledPluginIndexFixture(manifestRegistry),
-    manifestRegistry,
-  });
 }
 
 function createStartupConfig(params: {
@@ -1898,33 +1881,6 @@ describe("resolveGatewayStartupPluginIds", () => {
       }),
       expected: ["demo-channel", "browser", "memory-core"],
     });
-    expect(
-      resolveConfiguredDeferredChannelPluginIdsForFixture({
-        config,
-        env: createPluginPlanningTestEnv({
-          DEMO_CHANNEL_ANYTHING: "1",
-        }),
-      }),
-    ).toStrictEqual([]);
-  });
-
-  it("keeps explicitly trusted deferred channel owners eligible at startup", () => {
-    useManifestRegistryFixture(createManifestRegistryFixtureWithWorkspaceDemoChannel());
-    expect(
-      resolveConfiguredDeferredChannelPluginIdsForFixture({
-        config: {
-          channels: {
-            "demo-channel": {
-              token: "configured",
-            },
-          },
-          plugins: {
-            allow: ["workspace-demo-channel-plugin"],
-          },
-        } as OpenClawConfig,
-        env: createPluginPlanningTestEnv(),
-      }),
-    ).toEqual(["workspace-demo-channel-plugin"]);
   });
 
   it("preserves explicit bundled channel config under restrictive allowlists", () => {
@@ -2162,8 +2118,6 @@ describe("resolveGatewayStartupPluginIds", () => {
       startup: {
         sidecar: browserPlugin.startup.sidecar,
         memory: browserPlugin.startup.memory,
-        deferConfiguredChannelFullLoadUntilAfterListen:
-          browserPlugin.startup.deferConfiguredChannelFullLoadUntilAfterListen,
         agentHarnesses: browserPlugin.startup.agentHarnesses,
       },
       compat: ["activation-config-path-hint"],
@@ -2487,31 +2441,7 @@ describe("resolveGatewayStartupPluginIds", () => {
     });
   });
 
-  it("does not treat persisted auth alone as deferred channel startup intent", () => {
-    useManifestRegistryFixture(createManifestRegistryFixtureWithWorkspaceDemoChannel());
-    listPotentialConfiguredChannelIds.mockImplementation(
-      (
-        configForTest: OpenClawConfig,
-        _env: NodeJS.ProcessEnv,
-        options?: { includePersistedAuthState?: boolean },
-      ) => (options?.includePersistedAuthState === false ? [] : ["demo-channel"]),
-    );
-
-    expect(
-      resolveConfiguredDeferredChannelPluginIdsForFixture({
-        config: {
-          plugins: {
-            allow: ["workspace-demo-channel-plugin"],
-          },
-        } as OpenClawConfig,
-        env: createPluginPlanningTestEnv({
-          OPENCLAW_STATE_DIR: "/tmp/openclaw-with-persisted-demo-channel",
-        }),
-      }),
-    ).toStrictEqual([]);
-  });
-
-  it("resolves channel, deferred, and startup plugin ids from one manifest registry", () => {
+  it("resolves channel and startup plugin ids from one manifest registry", () => {
     const registry = createManifestRegistryFixture();
     const index = createInstalledPluginIndexFixture(registry);
 
@@ -2530,10 +2460,9 @@ describe("resolveGatewayStartupPluginIds", () => {
 
     expect(plan.channelPluginIds).toContain("demo-channel");
     expect(plan.pluginIds).toContain("demo-channel");
-    expect(plan.configuredDeferredChannelPluginIds).toStrictEqual([]);
   });
 
-  it("carries deferred configured channel ids through the startup plan", () => {
+  it("keeps explicitly trusted channel owners eligible in the startup plan", () => {
     const registry = createManifestRegistryFixtureWithWorkspaceDemoChannel();
     const index = createInstalledPluginIndexFixture(registry);
 
@@ -2554,30 +2483,6 @@ describe("resolveGatewayStartupPluginIds", () => {
     });
 
     expect(plan.pluginIds).toContain("workspace-demo-channel-plugin");
-    expect(plan.configuredDeferredChannelPluginIds).toStrictEqual([
-      "workspace-demo-channel-plugin",
-    ]);
-  });
-
-  it("does not treat explicitly disabled stale channel config as deferred startup intent", () => {
-    useManifestRegistryFixture(createManifestRegistryFixtureWithWorkspaceDemoChannel());
-
-    expect(
-      resolveConfiguredDeferredChannelPluginIdsForFixture({
-        config: {
-          channels: {
-            "demo-channel": {
-              enabled: false,
-              token: "stale",
-            },
-          },
-          plugins: {
-            allow: ["workspace-demo-channel-plugin"],
-          },
-        } as OpenClawConfig,
-        env: createPluginPlanningTestEnv(),
-      }),
-    ).toStrictEqual([]);
   });
 
   it("includes the explicitly selected memory slot plugin in startup scope", () => {

@@ -346,7 +346,6 @@ export async function prepareGatewayRuntimeState(params: {
     current?: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
   } = {};
   const {
-    releasePluginRouteRegistry,
     httpServer,
     httpServers,
     httpBindHosts,
@@ -395,8 +394,8 @@ export async function prepareGatewayRuntimeState(params: {
         runtimeStateRef.current?.hookClientIpConfig ?? initialHookClientIpConfig,
       pluginRegistry: pluginRuntime.registry,
       getPluginRouteRegistry: () => pluginRuntime.registry,
+      isStartupPluginRuntimeReady: () => startupState.sidecarsReady,
       getGatewayRequestContext: () => pluginGatewayContext.current,
-      pinChannelRegistry: !minimalTestGateway,
       deps,
       log,
       logHooks,
@@ -463,7 +462,6 @@ export async function prepareGatewayRuntimeState(params: {
     isGatewayStartupPending,
     pluginGatewayContext,
     watchNodeRequestHandler,
-    releasePluginRouteRegistry,
     httpServer,
     httpServers,
     httpBindHosts,

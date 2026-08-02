@@ -865,7 +865,10 @@ describe("talk realtime gateway relay", () => {
     ).toThrow("Realtime relay session expiry is outside the supported Date range");
   });
 
-  function createAbortableRelayRunFixture(provider = createIdleRelayProvider()) {
+  function createAbortableRelayRunFixture(
+    provider = createIdleRelayProvider(),
+    options: { register?: boolean } = {},
+  ) {
     const abortController = new AbortController();
     const broadcastToConnIds = vi.fn();
     const broadcast = vi.fn();
@@ -918,13 +921,15 @@ describe("talk realtime gateway relay", () => {
       tools: [],
     });
 
-    registerTalkRealtimeRelayAgentRun({
-      relaySessionId: session.relaySessionId,
-      connId: "conn-1",
-      sessionKey: "main",
-      runId: "run-1",
-      callId: "call-1",
-    });
+    if (options.register !== false) {
+      registerTalkRealtimeRelayAgentRun({
+        relaySessionId: session.relaySessionId,
+        connId: "conn-1",
+        sessionKey: "main",
+        runId: "run-1",
+        callId: "call-1",
+      });
+    }
     return {
       abortController,
       broadcast,
@@ -935,6 +940,177 @@ describe("talk realtime gateway relay", () => {
       session,
     };
   }
+
+  it("aborts the exact relay consult when the provider cancels its tool call", async () => {
+    let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
+    const submitToolResult = vi.fn();
+    const provider = createIdleRelayProvider();
+    provider.createBridge = (request) => {
+      bridgeRequest = request;
+      return {
+        ...createIdleRelayProvider().createBridge?.(request),
+        submitToolResult,
+      } as RealtimeVoiceBridge;
+    };
+    const fixture = createAbortableRelayRunFixture(provider);
+    await Promise.resolve();
+    bridgeRequest?.onToolCall?.({
+      itemId: "call-1",
+      callId: "call-1",
+      name: "openclaw_agent_consult",
+      args: { question: "status?" },
+    });
+
+    bridgeRequest?.onEvent?.({
+      direction: "server",
+      type: "tool.call.cancelled",
+      itemId: "call-1",
+    });
+
+    expect(fixture.abortController.signal.aborted).toBe(true);
+    expect(
+      fixture.broadcastToConnIds.mock.calls
+        .map(([, payload]) => payload)
+        .filter(
+          (payload) =>
+            typeof payload === "object" &&
+            payload !== null &&
+            (payload as Record<string, unknown>).type === "toolCallCancelled",
+        ),
+    ).toEqual([
+      expect.objectContaining({
+        relaySessionId: fixture.session.relaySessionId,
+        type: "toolCallCancelled",
+        callId: "call-1",
+      }),
+    ]);
+    await submitTalkRealtimeRelayToolResult({
+      relaySessionId: fixture.session.relaySessionId,
+      connId: "conn-1",
+      callId: "call-1",
+      result: { result: "late" },
+    });
+    expect(submitToolResult).not.toHaveBeenCalled();
+
+    const eventCount = fixture.broadcastToConnIds.mock.calls.length;
+    bridgeRequest?.onEvent?.({
+      direction: "server",
+      type: "tool.call.cancelled",
+      itemId: "call-1",
+    });
+    bridgeRequest?.onEvent?.({
+      direction: "server",
+      type: "tool.call.cancelled",
+      itemId: "unknown",
+    });
+    expect(fixture.broadcastToConnIds).toHaveBeenCalledTimes(eventCount);
+  });
+
+  it("aborts a consult that registers after provider cancellation", async () => {
+    let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
+    const provider = createIdleRelayProvider();
+    provider.createBridge = (request) => {
+      bridgeRequest = request;
+      return createIdleRelayProvider().createBridge?.(request) as RealtimeVoiceBridge;
+    };
+    const fixture = createAbortableRelayRunFixture(provider, { register: false });
+    await Promise.resolve();
+    bridgeRequest?.onToolCall?.({
+      itemId: "call-1",
+      callId: "call-1",
+      name: "openclaw_agent_consult",
+      args: { question: "status?" },
+    });
+    bridgeRequest?.onEvent?.({
+      direction: "server",
+      type: "tool.call.cancelled",
+      itemId: "call-1",
+    });
+
+    expect(() =>
+      registerTalkRealtimeRelayAgentRun({
+        relaySessionId: fixture.session.relaySessionId,
+        connId: "conn-1",
+        sessionKey: "main",
+        runId: "run-1",
+        callId: "call-1",
+      }),
+    ).toThrow("Realtime provider cancelled the tool call before run registration");
+    expect(fixture.abortController.signal.aborted).toBe(true);
+    const relay = relaySessions.get(fixture.session.relaySessionId);
+    expect(relay?.activeAgentRuns.size).toBe(0);
+    expect(relay?.activeAgentToolCalls.size).toBe(0);
+    expect(relay?.providerToolCallIds.size).toBe(0);
+    expect(relay?.relayToolCallIdsByProviderId.size).toBe(0);
+  });
+
+  it("cancels the forced consult owner when a matching native call is cancelled", async () => {
+    let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
+    const submitToolResult = vi.fn();
+    const provider = createIdleRelayProvider();
+    provider.createBridge = (request) => {
+      bridgeRequest = request;
+      return {
+        ...createIdleRelayProvider().createBridge?.(request),
+        submitToolResult,
+      } as RealtimeVoiceBridge;
+    };
+    const fixture = createAbortableRelayRunFixture(provider, { register: false });
+    const relay = relaySessions.get(fixture.session.relaySessionId);
+    const forcedConsult = relay?.harness.forcedConsults.prepare("status?", { id: "forced-call" });
+    if (!relay || !forcedConsult) {
+      throw new Error("missing forced consult fixture");
+    }
+    relay.harness.forcedConsults.markStarted(forcedConsult);
+    await Promise.resolve();
+    bridgeRequest?.onToolCall?.({
+      itemId: "native-call",
+      callId: "native-call",
+      name: "openclaw_agent_consult",
+      args: { question: "status?" },
+    });
+    registerTalkRealtimeRelayAgentRun({
+      relaySessionId: fixture.session.relaySessionId,
+      connId: "conn-1",
+      sessionKey: "main",
+      runId: "run-1",
+      callId: forcedConsult.id,
+    });
+
+    bridgeRequest?.onEvent?.({
+      direction: "server",
+      type: "tool.call.cancelled",
+      itemId: "native-call",
+    });
+
+    expect(fixture.abortController.signal.aborted).toBe(true);
+    expect(relay.harness.forcedConsults.isCancelled(forcedConsult)).toBe(true);
+    expect(
+      fixture.broadcastToConnIds.mock.calls
+        .map(([, payload]) => payload)
+        .filter(
+          (payload) =>
+            typeof payload === "object" &&
+            payload !== null &&
+            (payload as Record<string, unknown>).type === "toolCallCancelled",
+        ),
+    ).toEqual([
+      expect.objectContaining({
+        relaySessionId: fixture.session.relaySessionId,
+        type: "toolCallCancelled",
+        callId: forcedConsult.id,
+      }),
+    ]);
+    expect(
+      submitTalkRealtimeRelayToolResult({
+        relaySessionId: fixture.session.relaySessionId,
+        connId: "conn-1",
+        callId: forcedConsult.id,
+        result: { result: "late" },
+      }),
+    ).toBeUndefined();
+    expect(submitToolResult).not.toHaveBeenCalled();
+  });
 
   function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
     if (!record || typeof record !== "object") {

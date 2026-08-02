@@ -117,7 +117,21 @@ function formatHookStatus(hook: HookStatusEntry): string {
   if (!hook.enabledByConfig) {
     return theme.warn(decorativePrefix("⏸", "disabled"));
   }
-  return theme.error("✗ missing");
+  return theme.error(`✗ ${formatHookBlockedStatusReason(hook)}`);
+}
+
+function formatHookBlockedStatusReason(hook: HookStatusEntry): string {
+  return hook.blockedReason && hook.blockedReason !== "missing requirements"
+    ? hook.blockedReason
+    : "missing";
+}
+
+function formatHookInfoBlockedStatusReason(hook: HookStatusEntry): string {
+  const reason =
+    hook.blockedReason && hook.blockedReason !== "missing requirements"
+      ? hook.blockedReason
+      : "missing requirements";
+  return reason ? `${reason[0]?.toUpperCase() ?? ""}${reason.slice(1)}` : reason;
 }
 
 function formatHookName(hook: HookStatusEntry): string {
@@ -135,6 +149,9 @@ function formatHookSource(hook: HookStatusEntry): string {
 
 function formatHookMissingSummary(hook: HookStatusEntry): string {
   const missing: string[] = [];
+  if (hook.enabledByConfig && hook.blockedReason && hook.blockedReason !== "missing requirements") {
+    missing.push(hook.blockedReason);
+  }
   if (hook.missing.bins.length > 0) {
     missing.push(`bins: ${hook.missing.bins.join(", ")}`);
   }
@@ -294,7 +311,7 @@ export function formatHookInfo(
     ? theme.success("✓ Ready")
     : !hook.enabledByConfig
       ? theme.warn(decorativePrefix("⏸", "Disabled"))
-      : theme.error("✗ Missing requirements");
+      : theme.error(`✗ ${formatHookInfoBlockedStatusReason(hook)}`);
 
   lines.push(`${emoji ? `${emoji} ` : ""}${theme.heading(hook.name)} ${status}`);
   lines.push("");

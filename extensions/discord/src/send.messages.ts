@@ -1,6 +1,7 @@
 // Discord plugin module implements send.messages behavior.
 import type { APIChannel, APIMessage } from "discord-api-types/v10";
 import { ChannelType } from "discord-api-types/v10";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   createChannelMessage,
   createThread,
@@ -25,10 +26,6 @@ import type {
   DiscordThreadCreate,
   DiscordThreadList,
 } from "./send.types.js";
-
-function formatDiscordThreadInitialMessageError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 function assertDiscordResponseArray<T>(value: unknown, label: string): T[] {
   if (!Array.isArray(value)) {
@@ -56,7 +53,7 @@ export class DiscordThreadInitialMessageError extends Error {
   readonly thread: APIChannel;
 
   constructor(thread: APIChannel, error: unknown) {
-    const initialMessageError = formatDiscordThreadInitialMessageError(error);
+    const initialMessageError = formatErrorMessage(error);
     super(
       `Discord thread was created, but sending the initial message failed: ${initialMessageError}`,
     );

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
+import { stableStringify } from "@openclaw/normalization-core";
 import { listAgentEntries } from "../agents/agent-scope.js";
-import { stableStringify } from "../agents/stable-stringify.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { AgentConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";

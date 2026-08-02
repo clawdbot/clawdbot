@@ -45,6 +45,22 @@ function buildMessageChain(message: proto.IMessage | undefined): proto.IMessage[
   return chain;
 }
 
+export function findMessageSection<K extends keyof proto.IMessage>(
+  rawMessage: proto.IMessage | undefined,
+  sectionNames: readonly K[],
+): { name: K; value: Record<string, unknown> } | undefined {
+  const chain = buildMessageChain(rawMessage);
+  for (const name of sectionNames) {
+    for (const message of chain) {
+      const value = message[name];
+      if (isRecord(value)) {
+        return { name, value };
+      }
+    }
+  }
+  return undefined;
+}
+
 function unwrapMessage(message: proto.IMessage | undefined): proto.IMessage | undefined {
   const chain = buildMessageChain(message);
   return chain.at(-1);
