@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
+import { ref } from "lit/directives/ref.js";
 import { ensureCustomElementDefined } from "../../../app/lazy-custom-element.ts";
 import { icons } from "../../../components/icons.ts";
 import {
@@ -9,7 +10,12 @@ import {
 } from "../../../components/mcp-app-security.ts";
 import "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
-import { canvasWidgetNameForDocument, type BoardProvider } from "../../../lib/board/provider.ts";
+import {
+  canvasWidgetNameForDocument,
+  mcpAppWidgetNameForViewId,
+  type BoardProvider,
+} from "../../../lib/board/provider.ts";
+import { getCanvasWidgetFrameConnectionGeneration } from "../../../lib/chat/canvas-widget-frame-generation.ts";
 import type { ToolPreview } from "../../../lib/chat/tool-cards.ts";
 import {
   isInternalCanvasEntryUrl,
@@ -42,14 +48,43 @@ async function pinCanvasWidget(
   name: string,
 ): Promise<void> {
   const button = event.currentTarget;
-  if (!(button instanceof HTMLButtonElement) || !preview.viewId) {
+  const docId = preview.viewId?.trim();
+  if (!(button instanceof HTMLButtonElement) || !docId) {
     return;
   }
   button.disabled = true;
   button.textContent = t("chat.toolCards.pinToDashboardPending");
   try {
     await provider.pinWidget({
-      docId: preview.viewId,
+      docId,
+      name,
+      ...(preview.title?.trim() ? { title: preview.title.trim() } : {}),
+    });
+    button.textContent = t("chat.toolCards.pinnedToDashboard");
+    button.dataset.pinned = "true";
+  } catch (error) {
+    button.disabled = false;
+    button.textContent = t("chat.toolCards.pinToDashboard");
+    button.title = error instanceof Error ? error.message : String(error);
+  }
+}
+
+async function pinMcpAppWidget(
+  event: Event,
+  preview: ToolPreview,
+  provider: BoardProvider,
+  name: string,
+  viewId: string,
+): Promise<void> {
+  const button = event.currentTarget;
+  if (!(button instanceof HTMLButtonElement)) {
+    return;
+  }
+  button.disabled = true;
+  button.textContent = t("chat.toolCards.pinToDashboardPending");
+  try {
+    await provider.pinMcpApp({
+      viewId,
       name,
       ...(preview.title?.trim() ? { title: preview.title.trim() } : {}),
     });
@@ -66,7 +101,8 @@ function canvasWidgetName(preview: ToolPreview): string | undefined {
   if (preview.boardWidgetName) {
     return preview.boardWidgetName;
   }
-  return preview.viewId ? canvasWidgetNameForDocument(preview.viewId) : undefined;
+  const viewId = preview.viewId?.trim();
+  return viewId ? canvasWidgetNameForDocument(viewId) : undefined;
 }
 
 function isManagedCanvasDocumentPreview(preview: ToolPreview): boolean {
@@ -99,30 +135,36 @@ function isManagedCanvasDocumentPreview(preview: ToolPreview): boolean {
 const WIDGET_SIZE_MESSAGE_TYPE = "openclaw:widget-size";
 const WIDGET_PROMPT_OFFER_MESSAGE_TYPE = "openclaw:widget-prompt-offer";
 const WIDGET_PROMPT_MESSAGE_TYPE = "openclaw:widget-prompt";
+const WIDGET_PROMPT_HOST_READY_MESSAGE_TYPE = "openclaw:widget-prompt-host-ready";
 const WIDGET_FRAME_MIN_HEIGHT = 160;
 const WIDGET_FRAME_MAX_HEIGHT = 1200;
 // Preview frames render inside lit shadow roots, so a document query cannot
 // find them; frames register themselves on load and are dropped once detached.
 const widgetFrameRegistry = new Set<HTMLIFrameElement>();
-// Reported heights keyed by frame src: lit re-renders re-apply the style
-// binding, so the template must read the reported height back or it resets.
-const widgetFrameHeightsBySrc = new Map<string, number>();
+// Reported heights keyed by the frame's stable identity, NOT its src: lit
+// re-renders re-apply the style binding, so the template must read the reported
+// height back or it resets. A capability rotation changes the src while the
+// frame stays mounted, and the in-frame reporter only posts on height change —
+// keying by src would strand the frame at its default height until its content
+// happened to resize.
+const widgetFrameHeightsByKey = new Map<string, number>();
+const WIDGET_FRAME_HEIGHT_KEY_ATTRIBUTE = "data-frame-key";
 const WIDGET_FRAME_HEIGHTS_MAX_ENTRIES = 100;
 // Keyed by window, not a module boolean: non-isolated test workers swap the
 // global window between files while module state persists.
 const widgetSizeListenerWindows = new WeakSet<Window>();
 
-function rememberWidgetFrameHeight(src: string, height: number) {
+function rememberWidgetFrameHeight(key: string, height: number) {
   if (
-    !widgetFrameHeightsBySrc.has(src) &&
-    widgetFrameHeightsBySrc.size >= WIDGET_FRAME_HEIGHTS_MAX_ENTRIES
+    !widgetFrameHeightsByKey.has(key) &&
+    widgetFrameHeightsByKey.size >= WIDGET_FRAME_HEIGHTS_MAX_ENTRIES
   ) {
-    const oldest = widgetFrameHeightsBySrc.keys().next().value;
+    const oldest = widgetFrameHeightsByKey.keys().next().value;
     if (oldest !== undefined) {
-      widgetFrameHeightsBySrc.delete(oldest);
+      widgetFrameHeightsByKey.delete(oldest);
     }
   }
-  widgetFrameHeightsBySrc.set(src, height);
+  widgetFrameHeightsByKey.set(key, height);
 }
 
 function registerWidgetFrame(event: Event) {
@@ -171,6 +213,9 @@ function tryAdoptWidgetPromptPort(frame: HTMLIFrameElement) {
     handleWidgetPromptMessage(frame, message.data);
   });
   port.start();
+  // The wrapper waits for this trusted adoption signal before using the
+  // legacy inline channel, so board widgets can wait for their view ticket.
+  port.postMessage({ type: WIDGET_PROMPT_HOST_READY_MESSAGE_TYPE });
 }
 
 function installWidgetPromptOfferListener() {
@@ -242,9 +287,10 @@ function installWidgetSizeListener() {
         // must override both properties to fit short widgets.
         frame.style.height = `${height}px`;
         frame.style.minHeight = `${height}px`;
-        const src = frame.getAttribute("src");
-        if (src) {
-          rememberWidgetFrameHeight(src, height);
+        const key =
+          frame.getAttribute(WIDGET_FRAME_HEIGHT_KEY_ATTRIBUTE) ?? frame.getAttribute("src");
+        if (key) {
+          rememberWidgetFrameHeight(key, height);
         }
         return;
       }
@@ -255,6 +301,8 @@ function installWidgetSizeListener() {
 function renderPreviewFrame(params: {
   title: string;
   src?: string;
+  frameKey?: string;
+  connectionGeneration?: number;
   height?: number;
   sandbox?: string;
   promptCapable?: boolean;
@@ -263,7 +311,8 @@ function renderPreviewFrame(params: {
   installWidgetThemeObserver(() => widgetFrameRegistry);
   const sandbox = params.sandbox ?? "";
   const src = params.src ?? "";
-  const reportedHeight = src ? widgetFrameHeightsBySrc.get(src) : undefined;
+  const heightKey = params.frameKey || src;
+  const reportedHeight = heightKey ? widgetFrameHeightsByKey.get(heightKey) : undefined;
   const height = reportedHeight ?? params.height;
   if (params.promptCapable) {
     installWidgetPromptOfferListener();
@@ -279,13 +328,26 @@ function renderPreviewFrame(params: {
     }
   };
   return keyed(
-    `${sandbox}\u0000${src}\u0000${params.height ?? ""}`,
+    `${sandbox}\u0000${params.frameKey ?? ""}\u0000${src ? 1 : 0}\u0000${params.connectionGeneration ?? 0}\u0000${params.height ?? ""}`,
     html`
       <iframe
+        ${ref((element) => {
+          if (!(element instanceof HTMLIFrameElement)) {
+            return;
+          }
+          if (heightKey) {
+            element.setAttribute(WIDGET_FRAME_HEIGHT_KEY_ATTRIBUTE, heightKey);
+          }
+          // Assign the capability URL once per element: a rotation must not
+          // reload a mounted widget, while a fresh element always gets the
+          // current lease URL.
+          if (src && !element.hasAttribute("src")) {
+            element.setAttribute("src", src);
+          }
+        })}
         class="chat-tool-card__preview-frame"
         title=${params.title}
         sandbox=${sandbox}
-        src=${src || nothing}
         style=${height ? `height:${height}px;min-height:${height}px` : ""}
         @load=${handleLoad}
       ></iframe>
@@ -293,7 +355,10 @@ function renderPreviewFrame(params: {
   );
 }
 
-const loadMcpAppView = () => import("../../../components/mcp-app-view-registration.ts");
+const loadMcpAppView = async () => {
+  const registration = await import("../../../components/mcp-app-view-registration.ts");
+  registration.registerMcpAppView();
+};
 
 function renderMcpAppView(params: {
   sessionKey: string;
@@ -320,7 +385,8 @@ function renderWidgetContent(
   options?: WidgetCardOptions,
 ) {
   switch (kind) {
-    case "canvas-html":
+    case "canvas-html": {
+      const promptCapable = isInternalCanvasEntryUrl(preview.url);
       return renderPreviewFrame({
         title: preview.title?.trim() || t("chat.toolCards.canvas"),
         src: resolveCanvasIframeUrl(
@@ -328,12 +394,17 @@ function renderWidgetContent(
           options?.canvasPluginSurfaceUrl,
           options?.allowExternalEmbedUrls ?? false,
         ),
+        frameKey: preview.url?.trim() || preview.viewId?.trim(),
+        connectionGeneration: promptCapable
+          ? getCanvasWidgetFrameConnectionGeneration()
+          : undefined,
         height: preview.preferredHeight,
         sandbox: resolveEmbedSandbox(options?.embedSandboxMode ?? "scripts", preview.sandbox),
         // Only hosted Canvas documents may drive the chat; externally
         // allowed embed URLs render but never get prompt authority.
-        promptCapable: isInternalCanvasEntryUrl(preview.url),
+        promptCapable,
       });
+    }
     case "mcp-app":
       return preview.mcpApp
         ? renderMcpAppView({
@@ -424,17 +495,28 @@ function renderWidgetCard(
   }
   const label = preview.title?.trim() || t("chat.toolCards.canvas");
   const contentKind = preview.mcpApp ? "mcp-app" : "canvas-html";
-  const pinName = canvasWidgetName(preview);
-  const pinned = Boolean(
-    pinName &&
-    options?.boardProvider?.snapshot$.value.widgets.some((widget) => widget.name === pinName),
-  );
+  const provider = options?.boardProvider;
+  const mcpAppViewId = preview.mcpApp?.viewId?.trim();
+  const pinName = preview.mcpApp
+    ? mcpAppViewId
+      ? mcpAppWidgetNameForViewId(mcpAppViewId)
+      : undefined
+    : canvasWidgetName(preview);
+  const pinnedWidget = pinName
+    ? provider?.snapshot$.value.widgets.find((widget) => widget.name === pinName)
+    : undefined;
+  const pinned = Boolean(pinnedWidget);
+  // Chat keeps its labeled card shell, but the inner inset follows the pinned
+  // widget's presentation so authored edge-to-edge content matches the board.
+  const bleed = pinned && (pinnedWidget?.presentation ?? "card") !== "card";
   const pinAction =
-    contentKind === "canvas-html" &&
-    preview.sandbox === "scripts" &&
-    options?.boardProvider?.canPinWidgets &&
-    isManagedCanvasDocumentPreview(preview) &&
-    pinName
+    provider &&
+    (contentKind === "mcp-app" ? provider.canPinMcpApps : provider.canPinWidgets) &&
+    pinName &&
+    ((contentKind === "canvas-html" &&
+      preview.sandbox === "scripts" &&
+      isManagedCanvasDocumentPreview(preview)) ||
+      (contentKind === "mcp-app" && mcpAppViewId))
       ? html`<button
           class="chat-tool-card__widget-action"
           type="button"
@@ -446,13 +528,20 @@ function renderWidgetCard(
             pinned ? "chat.toolCards.pinnedToDashboard" : "chat.toolCards.pinToDashboard",
           )}
           @click=${(event: Event) =>
-            void pinCanvasWidget(event, preview, options.boardProvider!, pinName)}
+            contentKind === "mcp-app" && mcpAppViewId
+              ? void pinMcpAppWidget(event, preview, provider, pinName, mcpAppViewId)
+              : void pinCanvasWidget(event, preview, provider, pinName)}
         >
           ${t(pinned ? "chat.toolCards.pinnedToDashboard" : "chat.toolCards.pinToDashboard")}
         </button>`
       : nothing;
   return html`
-    <div class="chat-tool-card__preview" data-kind="canvas" data-surface=${surface}>
+    <div
+      class="chat-tool-card__preview"
+      data-content-kind=${contentKind}
+      data-kind="canvas"
+      data-surface=${surface}
+    >
       <div class="chat-tool-card__preview-header">
         <span class="chat-tool-card__preview-label">${label}</span>
         <div class="chat-tool-card__preview-actions">
@@ -460,7 +549,7 @@ function renderWidgetCard(
           ${renderWidgetActions(preview)}
         </div>
       </div>
-      <div class="chat-tool-card__preview-panel" data-side="canvas">
+      <div class="chat-tool-card__preview-panel" data-side="canvas" ?data-bleed=${bleed}>
         ${renderWidgetContent(contentKind, preview, options)}
       </div>
     </div>

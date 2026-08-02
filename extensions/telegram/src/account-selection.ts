@@ -1,6 +1,7 @@
 // Telegram plugin module implements account selection behavior.
 import {
-  listCombinedAccountIds,
+  createAccountListHelpers,
+  hasConfiguredAccountValue,
   resolveListedDefaultAccountId,
 } from "openclaw/plugin-sdk/account-core";
 import {
@@ -30,16 +31,6 @@ function resolveDefaultAgentId(cfg: OpenClawConfig): string {
   const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
   const chosen = (agents.find((agent) => agent?.default) ?? agents[0])?.id;
   return normalizeAgentId(chosen);
-}
-
-function listConfiguredAccountIds(cfg: OpenClawConfig): string[] {
-  const ids = new Set<string>();
-  for (const key of Object.keys(cfg.channels?.telegram?.accounts ?? {})) {
-    if (key) {
-      ids.add(normalizeAccountId(key));
-    }
-  }
-  return [...ids];
 }
 
 function resolveBindingAccount(params: {
@@ -88,33 +79,25 @@ function resolveDefaultAgentBoundAccountId(cfg: OpenClawConfig, channelId: strin
   return null;
 }
 
-function hasConfiguredDefaultAccountValue(value: unknown): boolean {
-  if (typeof value === "string") {
-    return value.trim().length > 0;
-  }
-  return value !== undefined && value !== null;
-}
-
 function hasImplicitDefaultTelegramAccount(cfg: OpenClawConfig): boolean {
   const telegram = cfg.channels?.telegram;
   if (!telegram) {
     return false;
   }
   return (
-    hasConfiguredDefaultAccountValue(telegram.botToken) ||
-    hasConfiguredDefaultAccountValue(telegram.tokenFile) ||
-    hasConfiguredDefaultAccountValue(process.env.TELEGRAM_BOT_TOKEN)
+    hasConfiguredAccountValue(telegram.botToken) ||
+    hasConfiguredAccountValue(telegram.tokenFile) ||
+    hasConfiguredAccountValue(process.env.TELEGRAM_BOT_TOKEN)
   );
 }
 
-export function listTelegramAccountIds(cfg: OpenClawConfig): string[] {
-  return listCombinedAccountIds({
-    configuredAccountIds: listConfiguredAccountIds(cfg),
-    additionalAccountIds: listBoundAccountIds(cfg, "telegram"),
-    implicitAccountId: hasImplicitDefaultTelegramAccount(cfg) ? DEFAULT_ACCOUNT_ID : undefined,
-    fallbackAccountIdWhenEmpty: DEFAULT_ACCOUNT_ID,
-  });
-}
+const { listAccountIds: listTelegramAccountIds } = createAccountListHelpers("telegram", {
+  normalizeAccountId,
+  additionalAccountIds: (cfg) => listBoundAccountIds(cfg, "telegram"),
+  hasImplicitDefaultAccount: hasImplicitDefaultTelegramAccount,
+});
+
+export { listTelegramAccountIds };
 
 export function resolveDefaultTelegramAccountSelection(cfg: OpenClawConfig): {
   accountId: string;

@@ -1,6 +1,7 @@
 #!/usr/bin/env -S node --import tsx
 // Openclaw Npm Prepublish Verify script supports OpenClaw repository automation.
 
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,14 +16,15 @@ import {
   resolveInstalledBinaryCommandInvocation,
 } from "./openclaw-npm-postpublish-verify.ts";
 import { resolveNpmCommandInvocation } from "./openclaw-npm-release-check.ts";
-import {
-  assertPreparedOpenClawNpmShrinkwrap,
-  npmTarballIntegrity,
-  readTarballJson,
-} from "./prepare-openclaw-npm-shrinkwrap.ts";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
 
 type InstalledPackageJson = {
+  version?: string;
+};
+
+type PackedPackageJson = {
+  dependencies?: Record<string, string>;
+  name?: string;
   version?: string;
 };
 
@@ -80,6 +82,37 @@ export function usesPreparedLocalDependencyInstall(dependencyTarballCount: numbe
   return dependencyTarballCount === 1;
 }
 
+export function assertPreparedOpenClawAiDependency(params: {
+  aiManifest: PackedPackageJson;
+  rootManifest: PackedPackageJson;
+}): void {
+  if (params.aiManifest.name !== "@openclaw/ai" || !params.aiManifest.version) {
+    throw new Error("Prepared dependency tarball must contain @openclaw/ai with a version.");
+  }
+  if (params.rootManifest.name !== "openclaw") {
+    throw new Error("Prepared root tarball must contain the openclaw package.");
+  }
+  if (!params.rootManifest.version || params.rootManifest.version !== params.aiManifest.version) {
+    throw new Error(
+      `Prepared root and @openclaw/ai tarballs must both be version ${params.aiManifest.version}.`,
+    );
+  }
+  if (params.rootManifest.dependencies?.["@openclaw/ai"] !== params.aiManifest.version) {
+    throw new Error(
+      `Prepared root tarball must depend on exact @openclaw/ai@${params.aiManifest.version}.`,
+    );
+  }
+}
+
+function readPackedPackageJson(tarballPath: string): PackedPackageJson {
+  return JSON.parse(
+    execFileSync("tar", ["-xOf", tarballPath, "package/package.json"], {
+      encoding: "utf8",
+      maxBuffer: 1024 * 1024,
+    }),
+  ) as PackedPackageJson;
+}
+
 function npmExec(args: string[], cwd: string): string {
   const invocation = resolveNpmCommandInvocation({
     npmArgs: args,
@@ -107,11 +140,9 @@ function main(argv = process.argv.slice(2)): void {
       const aiTarballPath = realpathSync(
         expectDefined(args.dependencyTarballPaths[0], "prepared dependency tarball"),
       );
-      assertPreparedOpenClawNpmShrinkwrap({
-        aiIntegrity: npmTarballIntegrity(aiTarballPath),
-        aiManifest: readTarballJson(aiTarballPath, "package/package.json"),
-        rootManifest: readTarballJson(args.tarballPath, "package/package.json"),
-        shrinkwrap: readTarballJson(args.tarballPath, "package/npm-shrinkwrap.json"),
+      assertPreparedOpenClawAiDependency({
+        aiManifest: readPackedPackageJson(aiTarballPath),
+        rootManifest: readPackedPackageJson(args.tarballPath),
       });
       mkdirSync(prefixDir, { recursive: true });
       writeFileSync(

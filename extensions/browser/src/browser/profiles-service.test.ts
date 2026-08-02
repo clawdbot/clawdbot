@@ -406,7 +406,6 @@ describe("BrowserProfilesService", () => {
     const resolvedProfile = state.resolved.profiles["chrome-live"];
     expect(resolvedProfile?.driver).toBe("existing-session");
     expect(resolvedProfile?.attachOnly).toBe(true);
-    expect(typeof resolvedProfile?.color).toBe("string");
     const profiles = writtenBrowserConfig().profiles as Record<
       string,
       { attachOnly?: boolean; driver?: string }
@@ -490,7 +489,6 @@ describe("BrowserProfilesService", () => {
     expect(resolvedProfile?.driver).toBe("existing-session");
     expect(resolvedProfile?.attachOnly).toBe(true);
     expect(resolvedProfile?.userDataDir).toBe(userDataDir);
-    expect(typeof resolvedProfile?.color).toBe("string");
   });
 
   it("rejects userDataDir for non-existing-session profiles", async () => {

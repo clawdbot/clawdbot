@@ -19,6 +19,7 @@ const CODEX_DYNAMIC_TOOL_TIMEOUT_MS = 90_000;
 const CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS = 600_000;
 const CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS = 60_000;
 const CODEX_DYNAMIC_MESSAGE_TOOL_TIMEOUT_MS = CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS;
+const CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS = 660_000;
 
 describe("dynamic tool execution helpers", () => {
   afterEach(() => {
@@ -138,10 +139,60 @@ describe("dynamic tool execution helpers", () => {
         config: {
           agents: {
             defaults: {
-              imageGenerationModel: {
-                primary: "openai/gpt-image-1",
-                timeoutMs: 180_000,
+              mediaModels: {
+                image: {
+                  primary: "openai/gpt-image-1",
+                  timeoutMs: 180_000,
+                },
               },
+            },
+          },
+        },
+      }),
+    ).toBe(180_000);
+    expect(
+      resolveDynamicToolCallTimeoutMs({
+        call: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-image-capability-default",
+          namespace: null,
+          tool: "image",
+          arguments: { prompt: "describe", images: ["/tmp/one.jpg"] },
+        },
+        config: {
+          tools: {
+            media: {
+              models: [{ provider: "openai", model: "vision", capabilities: ["image"] }],
+              image: { timeoutSeconds: 180 },
+            },
+          },
+        },
+      }),
+    ).toBe(180_000);
+    expect(
+      resolveDynamicToolCallTimeoutMs({
+        call: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-image-mixed-timeouts",
+          namespace: null,
+          tool: "image",
+          arguments: { prompt: "describe", images: ["/tmp/one.jpg"] },
+        },
+        config: {
+          tools: {
+            media: {
+              models: [
+                { provider: "openai", model: "inherited", capabilities: ["image"] },
+                {
+                  provider: "openai",
+                  model: "short",
+                  capabilities: ["image"],
+                  timeoutSeconds: 60,
+                },
+              ],
+              image: { timeoutSeconds: 180 },
             },
           },
         },
@@ -248,9 +299,11 @@ describe("dynamic tool execution helpers", () => {
         config: {
           tools: {
             media: {
-              image: {
-                timeoutSeconds: 180,
-              },
+              models: [
+                { provider: "openai", model: "short", timeoutSeconds: 60, capabilities: ["image"] },
+                { provider: "openai", model: "long", timeoutSeconds: 180, capabilities: ["image"] },
+              ],
+              image: { preferredModel: "openai/long" },
             },
           },
         },
@@ -288,6 +341,35 @@ describe("dynamic tool execution helpers", () => {
         config: undefined,
       }),
     ).toBe(90_000);
+  });
+
+  it("gives agents_wait the long-running cap while preserving its inner timeout budget", () => {
+    const call = {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-agents-wait",
+      namespace: null,
+      tool: "agents_wait",
+    };
+
+    expect(
+      resolveDynamicToolCallTimeoutMs({
+        call: { ...call, arguments: { ids: ["run-1"] } },
+        config: undefined,
+      }),
+    ).toBe(630_000);
+    expect(
+      resolveDynamicToolCallTimeoutMs({
+        call: { ...call, arguments: { ids: ["run-1"], timeoutSeconds: 120 } },
+        config: undefined,
+      }),
+    ).toBe(150_000);
+    const fullWaitTimeoutMs = resolveDynamicToolCallTimeoutMs({
+      call: { ...call, arguments: { ids: ["run-1"], timeoutSeconds: 600 } },
+      config: undefined,
+    });
+    expect(fullWaitTimeoutMs).toBe(630_000);
+    expect(CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS).toBeGreaterThan(fullWaitTimeoutMs);
   });
 
   it("returns a failed dynamic tool response when an app-server tool call exceeds the deadline", async () => {

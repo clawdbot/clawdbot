@@ -41,7 +41,7 @@ function buildNoImageGenerationModelConfiguredMessage(
   const listProviders = deps.listProviders ?? listImageGenerationProviders;
   return buildNoCapabilityModelConfiguredMessage({
     capabilityLabel: "image-generation",
-    modelConfigKey: "imageGenerationModel",
+    modelConfigKey: "mediaModels.image",
     providers: listProviders(cfg),
     getProviderEnvVars: deps.getProviderEnvVars,
   });
@@ -64,10 +64,10 @@ export async function generateImage(
   const logger = deps.log ?? log;
   const requestedTimeoutMs =
     params.timeoutMs ??
-    resolveAgentModelTimeoutMsValue(params.cfg.agents?.defaults?.imageGenerationModel);
+    resolveAgentModelTimeoutMsValue(params.cfg.agents?.defaults?.mediaModels?.image);
   const candidates = resolveCapabilityModelCandidates({
     cfg: params.cfg,
-    modelConfig: params.cfg.agents?.defaults?.imageGenerationModel,
+    modelConfig: params.cfg.agents?.defaults?.mediaModels?.image,
     modelOverride: params.modelOverride,
     parseModelRef: parseImageGenerationModelRef,
     agentDir: params.agentDir,

@@ -1,7 +1,9 @@
 // Doctor health flow renders interactive health check output.
+import fs from "node:fs";
 import { intro as clackIntro, outro as clackOutro } from "@clack/prompts";
 import { stylePromptTitle } from "../../packages/terminal-core/src/prompt-style.js";
 import type { DoctorOptions } from "../commands/doctor-prompter.js";
+import { resolveStateDir } from "../config/paths.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contributions.js";
@@ -12,9 +14,20 @@ const outro = (message: string) => clackOutro(stylePromptTitle(message) ?? messa
 
 const loadConfigModule = createLazyRuntimeModule(() => import("../config/config.js"));
 
+function stateDirectoryExistsAtDoctorStart(): boolean {
+  try {
+    return fs.statSync(resolveStateDir()).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 /** Runs the full interactive doctor flow against the provided or default runtime. */
 export async function doctorCommand(runtime?: RuntimeEnv, options: DoctorOptions = {}) {
   const effectiveRuntime = runtime ?? (await import("../runtime.js")).defaultRuntime;
+  // Config loading can initialize SQLite-backed state before integrity runs.
+  // Preserve the entry fact so doctor can report that automatic initialization.
+  const stateDirExistedAtStart = stateDirectoryExistsAtDoctorStart();
   if (options.repair === true || options.yes === true || options.generateGatewayToken === true) {
     const { assertConfigWriteAllowedInCurrentMode } = await loadConfigModule();
     assertConfigWriteAllowedInCurrentMode();
@@ -71,6 +84,7 @@ export async function doctorCommand(runtime?: RuntimeEnv, options: DoctorOptions
     cfgForPersistence: structuredClone(configResult.cfg),
     sourceConfigValid: configResult.sourceConfigValid ?? true,
     configPath: configResult.path ?? CONFIG_PATH,
+    stateDirExistedAtStart,
   };
   const { runDoctorHealthContributions } = await import("./doctor-health-contributions.js");
   await runDoctorHealthContributions(ctx);

@@ -5,9 +5,11 @@ import {
   inspectDeepSeekToolSchemas,
   findOpenAIStrictSchemaViolations,
   inspectGeminiToolSchemas,
+  inspectLlamacppGbnfToolSchemas,
   inspectOpenAIToolSchemas,
   normalizeDeepSeekToolSchemas,
   normalizeGeminiToolSchemas,
+  normalizeLlamacppGbnfToolSchemas,
   normalizeOpenAIToolSchemas,
 } from "./provider-tools.js";
 
@@ -43,6 +45,11 @@ describe("buildProviderToolCompatFamilyHooks", () => {
         inspectToolSchemas: inspectGeminiToolSchemas,
       },
       {
+        family: "llamacpp-gbnf" as const,
+        normalizeToolSchemas: normalizeLlamacppGbnfToolSchemas,
+        inspectToolSchemas: inspectLlamacppGbnfToolSchemas,
+      },
+      {
         family: "openai" as const,
         normalizeToolSchemas: normalizeOpenAIToolSchemas,
         inspectToolSchemas: inspectOpenAIToolSchemas,
@@ -55,6 +62,74 @@ describe("buildProviderToolCompatFamilyHooks", () => {
       expect(hooks.normalizeToolSchemas).toBe(testCase.normalizeToolSchemas);
       expect(hooks.inspectToolSchemas).toBe(testCase.inspectToolSchemas);
     }
+  });
+
+  it("removes llama.cpp GBNF-hostile constraints from nested tool schemas", () => {
+    const hooks = buildProviderToolCompatFamilyHooks("llamacpp-gbnf");
+    const tools = [
+      {
+        name: "cron",
+        description: "",
+        parameters: {
+          type: "object",
+          properties: {
+            job: {
+              type: "object",
+              properties: {
+                declarationKey: {
+                  type: "string",
+                  maxLength: 1999,
+                  pattern: "^\\S+$",
+                },
+                trigger: {
+                  anyOf: [
+                    {
+                      type: "object",
+                      properties: {
+                        script: { type: "string", minLength: 1, maxLength: 65_536 },
+                        boundary: { type: "string", maxLength: 2000 },
+                      },
+                    },
+                    { type: "null" },
+                  ],
+                },
+              },
+            },
+          },
+        },
+      },
+    ] as never;
+
+    const normalized = hooks.normalizeToolSchemas({
+      provider: "ollama",
+      modelId: "qwen3.5",
+      tools,
+    });
+
+    expect(normalized[0]?.parameters).toEqual({
+      type: "object",
+      properties: {
+        job: {
+          type: "object",
+          properties: {
+            declarationKey: { type: "string", maxLength: 1999 },
+            trigger: {
+              anyOf: [
+                {
+                  type: "object",
+                  properties: {
+                    script: { type: "string", minLength: 1 },
+                    boundary: { type: "string" },
+                  },
+                },
+                { type: "null" },
+              ],
+            },
+          },
+        },
+      },
+    });
+    expect(hooks.inspectToolSchemas({ provider: "ollama", tools: normalized })).toEqual([]);
   });
 
   it("normalizes canonical OpenAI Codex Responses tool schemas", () => {

@@ -58,9 +58,11 @@ describe("cli program (smoke)", () => {
     await runProgram(["tui", "--timeout-ms", "45000"]);
     const options = firstMockArg(runTui) as {
       timeoutMs?: number;
+      historyLimit?: number;
       forceProcessExitOnReturn?: boolean;
     };
     expect(options?.timeoutMs).toBe(45000);
+    expect(options?.historyLimit).toBe(200);
     expect(options?.forceProcessExitOnReturn).toBe(true);
   });
 
@@ -89,6 +91,30 @@ describe("cli program (smoke)", () => {
     expect(runtime.error).toHaveBeenCalledWith(
       "Error: --history-limit must be a positive integer.",
     );
+    expect(runTui).not.toHaveBeenCalled();
+  });
+
+  it("accepts the maximum Gateway tui history limit", async () => {
+    await runProgram(["tui", "--history-limit", "1000"]);
+
+    expect(firstMockArg(runTui)).toMatchObject({ local: false, historyLimit: 1000 });
+  });
+
+  it.each([
+    { entryPoint: "tui --local", args: ["tui", "--local"] },
+    { entryPoint: "terminal", args: ["terminal"] },
+    { entryPoint: "chat", args: ["chat"] },
+  ])("preserves oversized history limits for local $entryPoint", async ({ args }) => {
+    await runProgram([...args, "--history-limit", "1001"]);
+
+    expect(firstMockArg(runTui)).toMatchObject({ local: true, historyLimit: 1001 });
+    expect(runtime.error).not.toHaveBeenCalled();
+  });
+
+  it("rejects tui history limits above the Gateway maximum", async () => {
+    await expect(runProgram(["tui", "--history-limit", "1001"])).rejects.toThrow("exit");
+
+    expect(runtime.error).toHaveBeenCalledWith("Error: --history-limit must be at most 1000.");
     expect(runTui).not.toHaveBeenCalled();
   });
 

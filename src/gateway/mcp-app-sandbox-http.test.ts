@@ -1,12 +1,12 @@
 import type { IncomingMessage } from "node:http";
 import { describe, expect, it } from "vitest";
 import { buildMcpAppSandboxPath } from "../agents/mcp-app-sandbox.js";
-import { createMcpAppSandboxHttpServer } from "./mcp-app-sandbox-http.js";
+import { createSandboxHostHttpServer } from "./mcp-app-sandbox-http.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
 function request(url: string, method: "GET" | "HEAD" | "POST" = "GET") {
   const { res, end, setHeader } = makeMockHttpResponse();
-  const server = createMcpAppSandboxHttpServer();
+  const server = createSandboxHostHttpServer();
   server.emit("request", { url, method } as IncomingMessage, res);
   server.removeAllListeners();
   return { res, end, setHeader };
@@ -26,6 +26,7 @@ describe("MCP App sandbox HTTP origin", () => {
       (call) => call[0] === "Content-Security-Policy",
     )?.[1];
     expect(String(csp)).toContain("connect-src https://api.example.com");
+    expect(String(csp)).toContain("webrtc 'block'");
     expect(String(csp)).toContain("script-src 'self' 'unsafe-inline' https://cdn.example.com");
     expect(String(csp)).toContain("font-src 'self' https://cdn.example.com");
     expect(String(csp)).toContain("frame-ancestors");
@@ -39,6 +40,13 @@ describe("MCP App sandbox HTTP origin", () => {
     expect(result.end).toHaveBeenCalledWith(expect.stringContaining("document.referrer"));
     expect(result.end).toHaveBeenCalledWith(expect.stringContaining("sandbox-proxy-ready"));
     expect(result.end).toHaveBeenCalledWith(expect.stringContaining("allow-scripts allow-forms"));
+    expect(result.end).toHaveBeenCalledWith(
+      expect.stringContaining("openclaw:widget-bridge-port-offer"),
+    );
+    expect(result.end).toHaveBeenCalledWith(expect.stringContaining("widgetBridgePortOffered"));
+    const proxyHtml = String(result.end.mock.calls.at(-1)?.[0]);
+    expect(proxyHtml).toContain("const guardedHtml = guardDocument(params.html)");
+    expect(proxyHtml).toContain("nextInner.srcdoc = guardedHtml");
   });
 
   it("supports HEAD and rejects other paths, methods, and malformed policy", () => {
@@ -53,5 +61,23 @@ describe("MCP App sandbox HTTP origin", () => {
     expect(request(`${buildMcpAppSandboxPath()}?csp=${jsonButNotCsp}`).res.statusCode).toBe(400);
     expect(request(`${buildMcpAppSandboxPath()}?csp=`).res.statusCode).toBe(400);
     expect(request("http://[", "GET").res.statusCode).toBe(400);
+    const unsafeHeaderPolicy = Buffer.from(
+      JSON.stringify({ connectDomains: ["https://api.\nexample.com"] }),
+      "utf8",
+    ).toString("base64url");
+    expect(request(`${buildMcpAppSandboxPath()}?csp=${unsafeHeaderPolicy}`).res.statusCode).toBe(
+      400,
+    );
+  });
+
+  it("emits canonical ASCII origins for validated CSP domains", () => {
+    const result = request(
+      buildMcpAppSandboxPath({ connectDomains: ["https://b\u00fccher.example"] }),
+    );
+
+    expect(result.setHeader).toHaveBeenCalledWith(
+      "Content-Security-Policy",
+      expect.stringContaining("connect-src https://xn--bcher-kva.example"),
+    );
   });
 });

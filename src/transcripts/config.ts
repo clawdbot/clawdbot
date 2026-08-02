@@ -72,7 +72,7 @@ function resolveAutoStart(raw: unknown): ResolvedTranscriptsAutoStartConfig[] {
 export function resolveTranscriptsConfig(raw: unknown): ResolvedTranscriptsConfig {
   const config = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
   return {
-    enabled: config.enabled === true,
+    enabled: config.enabled !== false,
     maxUtterances: DEFAULT_TRANSCRIPTS_MAX_UTTERANCES,
     autoStart: resolveAutoStart(config.autoStart),
   };

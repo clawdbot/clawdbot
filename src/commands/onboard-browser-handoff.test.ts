@@ -1,8 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
+import {
+  GATEWAY_CLIENT_IDS,
+  GATEWAY_CLIENT_MODES,
+} from "../../packages/gateway-protocol/src/client-info.js";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import {
   detectGraphicalSession,
   probeBrowserHatchGateway,
+  resolveConnectedControlUiPresenceKeys,
   runBrowserHatchHandoff,
 } from "./onboard-browser-handoff.js";
 
@@ -47,7 +52,68 @@ describe("detectGraphicalSession", () => {
   });
 });
 
+const connectedControlUiPresence = {
+  host: GATEWAY_CLIENT_IDS.CONTROL_UI,
+  mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+  reason: "connect",
+  deviceId: "same-device",
+  instanceId: "existing-tab",
+  text: "Control UI",
+  ts: 1,
+};
+
+describe("resolveConnectedControlUiPresenceKeys", () => {
+  it("uses connection identity instead of mutable presence freshness", () => {
+    const baseline = resolveConnectedControlUiPresenceKeys([connectedControlUiPresence]);
+
+    expect(
+      resolveConnectedControlUiPresenceKeys([{ ...connectedControlUiPresence, ts: 2 }]),
+    ).toEqual(baseline);
+    expect(
+      resolveConnectedControlUiPresenceKeys([
+        { ...connectedControlUiPresence, instanceId: "new-tab", ts: 2 },
+      ]),
+    ).not.toEqual(baseline);
+    expect(
+      resolveConnectedControlUiPresenceKeys([
+        { ...connectedControlUiPresence, reason: "disconnect", ts: 2 },
+      ]),
+    ).toEqual([]);
+  });
+});
+
 describe("runBrowserHatchHandoff", () => {
+  it("does not hand off when only an existing Control UI heartbeat changes", async () => {
+    const prompter = createWizardPrompter();
+    let elapsedMs = 0;
+
+    const result = await runBrowserHatchHandoff(
+      { config: {}, prompter },
+      {
+        env: { DISPLAY: ":0" },
+        platform: "linux",
+        openBrowser: vi.fn(async () => true),
+        resolveTarget: async () => target,
+        probePresence: async () => ({
+          reachable: true,
+          clientKeys: resolveConnectedControlUiPresenceKeys([
+            { ...connectedControlUiPresence, ts: elapsedMs },
+          ]),
+        }),
+        now: () => elapsedMs,
+        sleep: async (ms) => {
+          elapsedMs += ms;
+        },
+      },
+    );
+
+    expect(result).toEqual({ handedOff: false, reason: "timeout" });
+    expect(prompter.note).not.toHaveBeenCalledWith(
+      "Dashboard connected — continuing in your browser.",
+      expect.anything(),
+    );
+  });
+
   it.each([
     { platform: "darwin" as const, env: {} },
     { platform: "linux" as const, env: { DISPLAY: ":0" } },

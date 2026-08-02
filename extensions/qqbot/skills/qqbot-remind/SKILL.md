@@ -58,7 +58,7 @@ metadata: { "openclaw": { "emoji": "⏰", "requires": { "config": ["channels.qqb
 | `delivery.accountId` | 当前账户 ID   | 多账号场景下不可省略         |
 | `sessionTarget`      | `"isolated"`  | 隔离会话避免污染             |
 
-> `schedule.atMs` 必须是**绝对毫秒时间戳**（如 `1770733800000`），不支持 `"5m"` 等相对字符串。
+> `schedule.at` 必须是**绝对 ISO 8601 时间戳**（如 `"2026-07-29T09:00:00.000Z"`），不支持 `"5m"` 等相对字符串。
 > 计算方式：`当前时间戳ms + 延迟毫秒`。
 
 ### 一次性提醒（schedule.kind = "at"）
@@ -68,7 +68,7 @@ metadata: { "openclaw": { "emoji": "⏰", "requires": { "config": ["channels.qqb
   "action": "add",
   "job": {
     "name": "{任务名}",
-    "schedule": { "kind": "at", "atMs": "{当前时间戳ms + N*60000}" },
+    "schedule": { "kind": "at", "at": "{当前时间戳ms + N*60000 转换为 ISO 8601}" },
     "sessionTarget": "isolated",
     "wakeMode": "now",
     "deleteAfterRun": true,

@@ -1,11 +1,12 @@
 use mdns_sd::{ResolvedService, ServiceDaemon, ServiceEvent};
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use tauri::Url;
+use tauri::{Manager, Url, WebviewUrl, WebviewWindowBuilder};
 
 const GATEWAY_SERVICE_TYPE: &str = "_openclaw-gw._tcp.local.";
 
@@ -216,6 +217,38 @@ impl GatewayDiscovery {
             .map_err(|_| "The discovered gateway returned an invalid port.".to_string())?;
         Ok(url)
     }
+
+    fn gateway_name(&self, host: &str, port: u16, tls: bool) -> Result<String, String> {
+        let host = validated_service_host(host)
+            .ok_or_else(|| "The discovered gateway returned an invalid host.".to_string())?;
+        self.gateways
+            .lock()
+            .map_err(|_| "Gateway discovery snapshot is unavailable.".to_string())?
+            .values()
+            .find(|gateway| gateway.host == host && gateway.port == port && gateway.tls == tls)
+            .map(|gateway| gateway.name.clone())
+            .ok_or_else(|| "The discovered gateway is no longer available.".to_string())
+    }
+}
+
+fn gateway_window_label(url: &Url) -> String {
+    let host = url
+        .host_str()
+        .unwrap_or_default()
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
+    let route = format!(
+        "{}://{}:{}",
+        url.scheme(),
+        host,
+        url.port_or_known_default().unwrap_or_default()
+    );
+    let digest = Sha256::digest(route.as_bytes());
+    let suffix = digest[..12]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    format!("gateway-{suffix}")
 }
 
 fn apply_event(gateways: &GatewayMap, event: ServiceEvent) -> bool {
@@ -422,14 +455,34 @@ pub fn discover_gateways(
 #[tauri::command]
 pub fn connect_discovered_gateway(
     app: tauri::AppHandle,
-    desktop: tauri::State<'_, crate::DesktopState>,
     discovery: tauri::State<'_, GatewayDiscovery>,
     host: String,
     port: u16,
     tls: bool,
 ) -> Result<(), String> {
     let url = discovery.dashboard_url(&host, port, tls)?;
-    desktop.navigate_remote(&app, url)
+    let name = discovery.gateway_name(&host, port, tls)?;
+    let label = gateway_window_label(&url);
+    if let Some(window) = app.get_webview_window(&label) {
+        window
+            .navigate(url)
+            .map_err(|error| format!("Could not refresh Gateway window: {error}"))?;
+        window
+            .show()
+            .map_err(|error| format!("Could not show Gateway window: {error}"))?;
+        window
+            .set_focus()
+            .map_err(|error| format!("Could not focus Gateway window: {error}"))?;
+        return Ok(());
+    }
+    WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(url))
+        .title(format!("{name} — OpenClaw"))
+        .inner_size(1080.0, 720.0)
+        .min_inner_size(720.0, 520.0)
+        .center()
+        .build()
+        .map_err(|error| format!("Could not open Gateway window: {error}"))?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -471,6 +524,31 @@ mod tests {
         assert_eq!(
             gateway.tailnet_dns.as_deref(),
             Some("studio.example.ts.net")
+        );
+    }
+
+    #[test]
+    fn gateway_window_labels_are_route_scoped_and_stable() {
+        let mixed_case = Url::parse("https://Studio.Local:18789/").unwrap();
+        let canonical = Url::parse("https://studio.local:18789/").unwrap();
+        let trailing_dot = Url::parse("https://studio.local.:18789/").unwrap();
+        let other_port = Url::parse("https://studio.local:18790/").unwrap();
+        let plaintext = Url::parse("http://studio.local:18789/").unwrap();
+        assert_eq!(
+            gateway_window_label(&mixed_case),
+            gateway_window_label(&canonical),
+        );
+        assert_eq!(
+            gateway_window_label(&canonical),
+            gateway_window_label(&trailing_dot)
+        );
+        assert_ne!(
+            gateway_window_label(&canonical),
+            gateway_window_label(&other_port),
+        );
+        assert_ne!(
+            gateway_window_label(&canonical),
+            gateway_window_label(&plaintext),
         );
     }
 

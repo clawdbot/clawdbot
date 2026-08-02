@@ -1,3 +1,4 @@
+import type { SessionCatalogPullRequestSummary } from "openclaw/plugin-sdk/session-catalog";
 import type { ClaudeTranscriptItem } from "./session-catalog-transcript.js";
 
 type ClaudeSessionSource = "claude-cli" | "claude-desktop";
@@ -14,6 +15,8 @@ export type ClaudeSessionCatalogSession = {
   modelProvider: "anthropic";
   cliVersion?: string;
   gitBranch?: string;
+  customGroup?: string;
+  pullRequest?: SessionCatalogPullRequestSummary;
   archived: false;
 };
 

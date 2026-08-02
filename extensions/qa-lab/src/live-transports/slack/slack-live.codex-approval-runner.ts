@@ -20,7 +20,7 @@ import {
 import type {
   SlackQaCodexApprovalScenarioRun,
   SlackQaScenarioContext,
-  SlackQaScenarioDefinition,
+  SlackQaScenarioMetadata,
   SlackObservedMessage,
   SlackApprovalArtifact,
 } from "./slack-live.contracts.js";
@@ -31,7 +31,7 @@ export async function runSlackCodexApprovalScenario(params: {
   observedMessages: SlackObservedMessage[];
   primaryModel: string;
   run: SlackQaCodexApprovalScenarioRun;
-  scenario: SlackQaScenarioDefinition;
+  scenario: SlackQaScenarioMetadata;
   stopGateway: (preserveDebugArtifacts: boolean) => Promise<void>;
   sutAccountId: string;
 }) {
@@ -97,7 +97,7 @@ async function runSlackCodexApprovalScenarioInner(params: {
   observedMessages: SlackObservedMessage[];
   primaryModel: string;
   run: SlackQaCodexApprovalScenarioRun;
-  scenario: SlackQaScenarioDefinition;
+  scenario: SlackQaScenarioMetadata;
   sutAccountId: string;
 }) {
   const requestStartedAt = new Date();

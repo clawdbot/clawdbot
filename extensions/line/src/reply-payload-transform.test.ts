@@ -1,6 +1,7 @@
 // Line tests cover reply payload transform plugin behavior.
 import { describe, expect, it } from "vitest";
 import { hasLineDirectives, parseLineDirectives } from "./reply-payload-transform.js";
+import { buildTemplateMessageFromPayload } from "./template-messages.js";
 
 const getLineData = (result: ReturnType<typeof parseLineDirectives>) =>
   (result.channelData?.line as Record<string, unknown> | undefined) ?? {};
@@ -163,6 +164,18 @@ describe("parseLineDirectives", () => {
         expect(result.text, testCase.name).toBe(testCase.expectedText);
       }
     });
+
+    it("preserves the full provider-valid confirm alternative text through template delivery", () => {
+      const question = "q".repeat(1200);
+      const parsed = parseLineDirectives({ text: `[[confirm: ${question} | Yes | No]]` });
+      const payload = getLineData(parsed).templateMessage as Parameters<
+        typeof buildTemplateMessageFromPayload
+      >[0];
+      const message = buildTemplateMessageFromPayload(payload);
+
+      expect(message?.altText).toBe(question);
+      expect((message?.template as { text?: string } | undefined)?.text).toHaveLength(240);
+    });
   });
 
   describe("buttons", () => {
@@ -228,6 +241,18 @@ describe("parseLineDirectives", () => {
           );
         }
       }
+    });
+
+    it("preserves the full provider-valid button alternative text through template delivery", () => {
+      const text = "b".repeat(1200);
+      const parsed = parseLineDirectives({ text: `[[buttons: Menu | ${text} | Open:ok]]` });
+      const payload = getLineData(parsed).templateMessage as Parameters<
+        typeof buildTemplateMessageFromPayload
+      >[0];
+      const message = buildTemplateMessageFromPayload(payload);
+
+      expect(message?.altText).toBe(`Menu: ${text}`);
+      expect((message?.template as { text?: string } | undefined)?.text).toHaveLength(60);
     });
   });
 
@@ -447,6 +472,33 @@ describe("parseLineDirectives", () => {
         const flexMessage = requireFlexMessage(getLineData(result).flexMessage, testCase.text);
         expect(flexMessage.altText).toBe(testCase.altText);
       }
+    });
+  });
+
+  describe("overlong action payloads", () => {
+    it("keeps the card visible but disables a callback that cannot round-trip", () => {
+      const deviceName = `${"a".repeat(280)}_living_room`;
+      const result = parseLineDirectives({
+        text: `[[device: ${deviceName} | Streaming Box | Playing | Play/Pause:toggle]]`,
+      });
+      const flexMessage = requireFlexMessage(getLineData(result).flexMessage, "long device name");
+      const footer = flexMessage.contents?.footer as {
+        contents?: Array<{
+          contents?: Array<{
+            action?: { type?: string; data?: string; label?: string; text?: string };
+          }>;
+        }>;
+      };
+      const action = (footer?.contents ?? [])
+        .flatMap((row) => row.contents ?? [])
+        .find((button) => button.action)?.action;
+
+      expect(flexMessage.altText).toContain("living_room");
+      expect(action).toEqual({
+        type: "message",
+        label: "Unavailable",
+        text: "Action unavailable: callback data exceeds LINE's limit.",
+      });
     });
   });
 

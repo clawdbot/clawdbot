@@ -451,6 +451,16 @@ export async function dispatchOutbound(
               `Session metadata update failed: ${err instanceof Error ? err.message : String(err)}`,
             );
           },
+          ...(inbound.isGroupChat
+            ? {
+                updateLastRoute: {
+                  sessionKey: inbound.route.sessionKey,
+                  channel: "qqbot",
+                  to: qualifiedTarget,
+                  accountId: inbound.route.accountId,
+                },
+              }
+            : {}),
         },
         dispatcherOptions: {
           responsePrefix: messagesConfig.responsePrefix,
@@ -773,7 +783,16 @@ async function buildCtxPayload(
 ): Promise<FinalizedMsgContext> {
   const { event } = inbound;
   const commandSource = resolveCommandSource(inbound, runtime, cfg);
-  const hasImageMedia = inbound.localMediaPaths.length > 0 || inbound.remoteMediaUrls.length > 0;
+  // QQ inbound attachments are images only; remote URLs carry no MIME, so the
+  // explicit kind keeps image/vision gates from classifying them as generic files.
+  const imageMedia = [
+    ...inbound.localMediaPaths.map((path, index) => ({
+      path,
+      contentType: inbound.localMediaTypes[index],
+      kind: "image" as const,
+    })),
+    ...inbound.remoteMediaUrls.map((url) => ({ url, kind: "image" as const })),
+  ];
   return buildChannelInboundEventContext({
     channel: "qqbot",
     accountId: inbound.route.accountId,
@@ -815,9 +834,10 @@ async function buildCtxPayload(
           authorized: inbound.commandAuthorized,
         }
       : undefined,
-    media: hasImageMedia
-      ? undefined
-      : inbound.voiceMediaTypes.map((contentType) => ({ contentType })),
+    media:
+      imageMedia.length > 0
+        ? imageMedia
+        : inbound.voiceMediaTypes.map((contentType) => ({ contentType })),
     supplemental: {
       quote: inbound.replyTo
         ? {
@@ -840,17 +860,6 @@ async function buildCtxPayload(
       QQVoiceAsrReferTexts: inbound.uniqueVoiceAsrReferTexts,
       QQVoiceInputStrategy: "prefer_audio_stt_then_asr_fallback",
       ...(commandSource ? { CommandSource: commandSource } : {}),
-      ...(inbound.localMediaPaths.length > 0
-        ? {
-            MediaPaths: inbound.localMediaPaths,
-            MediaPath: inbound.localMediaPaths[0],
-            MediaTypes: inbound.localMediaTypes,
-            MediaType: inbound.localMediaTypes[0],
-          }
-        : {}),
-      ...(inbound.remoteMediaUrls.length > 0
-        ? { MediaUrls: inbound.remoteMediaUrls, MediaUrl: inbound.remoteMediaUrls[0] }
-        : {}),
     },
   });
 }

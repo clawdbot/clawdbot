@@ -170,13 +170,14 @@ async function runCommandWithOutputEncoding(
     stripFinalNewline: false,
     windowsVerbatimArguments: options.windowsVerbatimArguments,
   });
-  const releaseOutput = releaseChildProcessOutputAfterExit(child);
-  child.once("exit", (code, signalValue) => {
+  const nodeChild = child.nodeChildProcess;
+  const releaseOutput = releaseChildProcessOutputAfterExit(nodeChild);
+  nodeChild.once("exit", (code, signalValue) => {
     childExited = true;
     childExitState = { code, signal: signalValue };
   });
   const terminationController = createCommandTerminationController({
-    child,
+    child: nodeChild,
     cancelController,
     baseEnv,
     env,
@@ -374,7 +375,7 @@ async function runCommandWithOutputEncoding(
   const isCauseLessWindowsShimResult =
     !termination &&
     invocation.usesWindowsExitCodeShim &&
-    typeof child.pid === "number" &&
+    typeof nodeChild.pid === "number" &&
     result.code === undefined &&
     result.cause === undefined &&
     !result.timedOut &&
@@ -392,8 +393,8 @@ async function runCommandWithOutputEncoding(
       if (
         childExitState?.code != null ||
         childExitState?.signal != null ||
-        child.exitCode != null ||
-        child.signalCode != null
+        nodeChild.exitCode != null ||
+        nodeChild.signalCode != null
       ) {
         break;
       }
@@ -421,10 +422,10 @@ async function runCommandWithOutputEncoding(
     throw error;
   }
 
-  const resolvedSignal = result.signal ?? childExitState?.signal ?? child.signalCode ?? null;
+  const resolvedSignal = result.signal ?? childExitState?.signal ?? nodeChild.signalCode ?? null;
   const resolvedCode = resolveProcessExitCode({
     explicitCode: result.exitCode ?? childExitState?.code,
-    childExitCode: child.exitCode,
+    childExitCode: nodeChild.exitCode,
     resolvedSignal,
     usesWindowsExitCodeShim: invocation.usesWindowsExitCodeShim,
     timedOut: termination === "timeout",
@@ -474,7 +475,7 @@ async function runCommandWithOutputEncoding(
   };
 
   return {
-    pid: child.pid,
+    pid: nodeChild.pid,
     stdout: decodeCapturedOutput(stdoutCapture, stdoutCaptureMode),
     stderr: decodeCapturedOutput(stderrCapture, stderrCaptureMode),
     stdoutTruncatedBytes: stdoutCapture.truncatedBytes || undefined,
@@ -485,7 +486,7 @@ async function runCommandWithOutputEncoding(
       stderrCapture.preservedLines.length > 0 ? stderrCapture.preservedLines : undefined,
     code: normalizedCode,
     signal: resolvedSignal,
-    killed: child.killed,
+    killed: nodeChild.killed,
     termination: termination === "output-limit" ? "signal" : termination,
     noOutputTimedOut: termination === "no-output-timeout",
     outputLimitExceeded: termination === "output-limit" || undefined,

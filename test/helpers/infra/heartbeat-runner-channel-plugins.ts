@@ -111,7 +111,7 @@ export const heartbeatRunnerWhatsAppPlugin = createHeartbeatChannelPlugin({
   docsPath: "/channels/whatsapp",
   heartbeat: {
     checkReady: async ({ cfg, deps }) => {
-      if (cfg.web?.enabled === false) {
+      if (cfg.channels?.whatsapp?.enabled === false) {
         return { ok: false, reason: "whatsapp-disabled" };
       }
       const authExists = await (deps?.webAuthExists ?? (async () => true))();

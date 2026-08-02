@@ -181,6 +181,7 @@ export function mergeTelegramGroupHistoryPromptContext(params: {
     return leftTimestamp - rightTimestamp;
   });
   const mergedEntry: TelegramPromptContextEntry = {
+    ...baseEntry,
     label: "Conversation context",
     source: baseEntry?.source ?? "telegram",
     type: "chat_window",

@@ -5,6 +5,9 @@ type MainRecoveryStateFields = Pick<
   "abortedLastRun" | "restartRecoveryRuns" | "mainRestartRecovery"
 >;
 
+// restartRecoveryDeliveryRunId stays out of this patch: it keys delivery-claim
+// adoption (agent-command-restart-recovery.ts), not recovery ownership, and
+// clearing it here strands the paired delivery context on the successor entry.
 export const MAIN_SESSION_RECOVERY_CLEAR_PATCH: Partial<MainRecoveryStateFields> = {
   abortedLastRun: false,
   restartRecoveryRuns: undefined,

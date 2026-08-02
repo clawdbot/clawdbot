@@ -16,7 +16,7 @@ const privateLocalOnlyPluginSdkSubpathSet = new Set<string>(
   ),
 );
 
-/** Entrypoints reserved for local repo/runtime checks and excluded from package exports. */
+/** Entrypoints excluded from the typed, documented public SDK surface. */
 export const privateLocalOnlyPluginSdkEntrypoints = pluginSdkSubpaths.filter((entry) =>
   privateLocalOnlyPluginSdkSubpathSet.has(entry),
 );

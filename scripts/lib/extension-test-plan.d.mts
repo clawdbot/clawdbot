@@ -21,7 +21,15 @@ export type ExtensionTestShard = ExtensionBatchPlan & {
 };
 
 export const DEFAULT_EXTENSION_TEST_SHARD_COUNT: number;
+export function createExtensionTestProcessTargetChunks(
+  config: string,
+  roots: string[],
+  vitestArgs?: string[],
+): string[][];
+export function listExtensionTestFilesForRoots(roots: string[]): string[];
 export function listTrackedTestFilesForRoots(roots: string[]): string[];
+export function shouldSplitExtensionTestProcesses(config: string, vitestArgs?: string[]): boolean;
+export function splitExtensionTestProcessTargets(config: string, targets: string[]): string[][];
 export function resolveExtensionTestConfig(root: string): string;
 export function resolveExtensionTestPlan(params?: {
   cwd?: string;

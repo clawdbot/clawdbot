@@ -1,3 +1,5 @@
+import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
+import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
 // Account-scoped conversation binding managers adapt channel-local thread maps
 // into the shared session binding service.
 import { resolveThreadBindingConversationIdFromBindingId } from "../../channels/thread-binding-id.js";
@@ -147,25 +149,52 @@ export function createAccountScopedConversationBindingManager<TKind extends stri
     channel: params.channel,
     accountId,
   });
+  const resolveActiveBinding = (
+    record: AccountScopedConversationBindingRecord<TKind> | undefined,
+    now = Date.now(),
+  ): AccountScopedConversationBindingRecord<TKind> | undefined => {
+    if (!record) {
+      return undefined;
+    }
+    const { expiresAt } = toSessionBindingRecord({
+      channel: params.channel,
+      record,
+      idleTimeoutMs,
+      maxAgeMs,
+      toSessionBindingTargetKind: params.toSessionBindingTargetKind,
+    });
+    if (expiresAt === undefined || isFutureDateTimestampMs(expiresAt, { nowMs: now })) {
+      return record;
+    }
+
+    // Prune at the account owner so SDK lookups and touches cannot revive stale bindings.
+    state.bindingsByAccountConversation.delete(
+      resolveBindingKey({ accountId, conversationId: record.conversationId }),
+    );
+    return undefined;
+  };
   const manager: AccountScopedConversationBindingManager<TKind> = {
     accountId,
     getByConversationId: (conversationId) =>
-      getState<TKind>(params.stateKey).bindingsByAccountConversation.get(
-        resolveBindingKey({ accountId, conversationId }),
+      resolveActiveBinding(
+        state.bindingsByAccountConversation.get(resolveBindingKey({ accountId, conversationId })),
       ),
-    listBySessionKey: (targetSessionKey) =>
-      [...getState<TKind>(params.stateKey).bindingsByAccountConversation.values()].filter(
-        (record) => record.accountId === accountId && record.targetSessionKey === targetSessionKey,
-      ),
+    listBySessionKey: (targetSessionKey) => {
+      const now = Date.now();
+      return [...state.bindingsByAccountConversation.values()].filter(
+        (record) =>
+          record.accountId === accountId &&
+          record.targetSessionKey === targetSessionKey &&
+          resolveActiveBinding(record, now) !== undefined,
+      );
+    },
     bindConversation: ({ conversationId, targetKind, targetSessionKey, metadata }) => {
       const normalizedConversationId = conversationId.trim();
       const normalizedTargetSessionKey = targetSessionKey.trim();
       if (!normalizedConversationId || !normalizedTargetSessionKey) {
         return null;
       }
-      const existingLocal = getState<TKind>(params.stateKey).bindingsByAccountConversation.get(
-        resolveBindingKey({ accountId, conversationId: normalizedConversationId }),
-      );
+      const existingLocal = manager.getByConversationId(normalizedConversationId);
       const now = Date.now();
       const record: AccountScopedConversationBindingRecord<TKind> = {
         accountId,
@@ -175,7 +204,11 @@ export function createAccountScopedConversationBindingManager<TKind extends stri
         agentId:
           typeof metadata?.agentId === "string" && metadata.agentId.trim()
             ? metadata.agentId.trim()
-            : (existingLocal?.agentId ?? resolveAgentIdFromSessionKey(normalizedTargetSessionKey)),
+            : (existingLocal?.agentId ??
+              resolveAgentIdFromSessionKey(
+                normalizedTargetSessionKey,
+                resolveDefaultAgentId(params.cfg),
+              )),
         label:
           typeof metadata?.label === "string" && metadata.label.trim()
             ? metadata.label.trim()
@@ -195,9 +228,7 @@ export function createAccountScopedConversationBindingManager<TKind extends stri
     },
     touchConversation: (conversationId, at = Date.now()) => {
       const key = resolveBindingKey({ accountId, conversationId });
-      const existingRecord = getState<TKind>(params.stateKey).bindingsByAccountConversation.get(
-        key,
-      );
+      const existingRecord = manager.getByConversationId(conversationId);
       if (!existingRecord) {
         return null;
       }

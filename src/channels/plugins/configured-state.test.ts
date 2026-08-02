@@ -11,6 +11,7 @@ const nodeRequire = createRequire(import.meta.url);
 describe("bundled channel configured-state metadata", () => {
   it("lists the shipped metadata-first configured-state channels", () => {
     expect(listBundledChannelIdsWithConfiguredState()).toEqual([
+      "buzz",
       "clickclack",
       "discord",
       "feishu",

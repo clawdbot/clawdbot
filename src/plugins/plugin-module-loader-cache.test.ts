@@ -1,4 +1,6 @@
 /** Tests plugin module loader cache keys and lifecycle reset behavior. */
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -71,7 +73,7 @@ function expectNativeOptions(mock: unknown, target: string) {
   const options = requireRecord(callArg(mock, 0, 1, "native options"), "native options");
   expect(options.allowWindows).toBe(true);
   expect(options.fallbackOnMissingDependency).toBe(true);
-  expect(options.fallbackOnNativeError).toBe(true);
+  expect(options.fallbackOnNativeError).toBeUndefined();
 }
 
 function expectStats(value: unknown, fields: Record<string, unknown>) {
@@ -154,6 +156,43 @@ describe("getCachedPluginModuleLoader", () => {
     first("/repo/extensions/demo/index.ts");
     expect(createJiti).toHaveBeenCalledTimes(1);
     expect(cache.size).toBe(1);
+  });
+
+  it("installs native internal aliases only on exact loader cache misses", async () => {
+    const nativeResolver = await import("./plugin-sdk-native-resolver.js");
+    const installNativeResolver = vi.spyOn(
+      nativeResolver,
+      "installOpenClawInternalCorePackageNativeResolver",
+    );
+    const { getCachedPluginModuleLoader } = await loadCachedPluginModuleLoader(
+      "native-resolver-cache-misses",
+    );
+    const cache = new Map();
+    const params = {
+      cache,
+      modulePath: "/repo/extensions/demo/index.ts",
+      importerUrl: "file:///repo/src/plugins/loader.ts",
+      loaderFilename: "/repo/extensions/demo/index.ts",
+      tryNative: false,
+    } as const;
+
+    const first = getCachedPluginModuleLoader(params);
+    expect(installNativeResolver).toHaveBeenCalledTimes(1);
+    expect(installNativeResolver).toHaveBeenCalledWith({ moduleUrl: params.importerUrl });
+
+    expect(getCachedPluginModuleLoader(params)).toBe(first);
+    expect(installNativeResolver).toHaveBeenCalledTimes(1);
+
+    const differentlyScoped = getCachedPluginModuleLoader({
+      ...params,
+      cacheScopeKey: "different-loader-scope",
+    });
+    expect(differentlyScoped).not.toBe(first);
+    expect(installNativeResolver).toHaveBeenCalledTimes(2);
+    expect(installNativeResolver).toHaveBeenNthCalledWith(2, {
+      moduleUrl: params.importerUrl,
+    });
+    expect(cache.size).toBe(2);
   });
 
   it("creates bounded loader caches", async () => {
@@ -241,7 +280,7 @@ describe("getCachedPluginModuleLoader", () => {
       tryNative: false,
     });
     expect(options.fsCache).toEqual(expect.any(String));
-    expect(String(options.fsCache)).toContain(`${path.sep}jiti${path.sep}openclaw${path.sep}`);
+    expect(String(options.fsCache)).toContain(`${path.sep}openclaw${path.sep}jiti${path.sep}`);
     expect(options.alias).toEqual({
       alpha: "/repo/alpha.js",
       zeta: "/repo/zeta.js",
@@ -511,6 +550,48 @@ describe("getCachedPluginModuleLoader", () => {
       sourceTransformFallbacks: 0,
       sourceTransformForced: 0,
     });
+  });
+
+  it("propagates native plugin evaluation errors without running the plugin twice", async () => {
+    vi.doUnmock("./native-module-require.js");
+    const fixtureDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-native-evaluation-"));
+    const modulePath = path.join(fixtureDir, "plugin.cjs");
+    const markerName = `openclaw.pluginModuleLoaderCache.nativeEvaluation:${fixtureDir}`;
+    const sideEffectMarker = Symbol.for(markerName);
+    const expectedError = "plugin exploded during native evaluation";
+    const fromSourceTransformer = vi.fn();
+    const createJiti = vi.fn(() => fromSourceTransformer);
+
+    try {
+      fs.writeFileSync(
+        modulePath,
+        [
+          `const marker = Symbol.for(${JSON.stringify(markerName)});`,
+          "globalThis[marker] = (globalThis[marker] ?? 0) + 1;",
+          `throw new Error(${JSON.stringify(expectedError)});`,
+        ].join("\n"),
+        "utf8",
+      );
+      const { getCachedPluginModuleLoader } = await importFreshModule<
+        typeof import("./plugin-module-loader-cache.js")
+      >(import.meta.url, "./plugin-module-loader-cache.js?scope=native-evaluation-error");
+      const loader = getCachedPluginModuleLoader({
+        cache: new Map(),
+        modulePath,
+        importerUrl: import.meta.url,
+        loaderFilename: modulePath,
+        tryNative: true,
+        createLoader: asPluginModuleLoaderFactory(createJiti),
+      });
+
+      expect(() => loader(modulePath)).toThrow(expectedError);
+      expect(Reflect.get(globalThis, sideEffectMarker)).toBe(1);
+      expect(createJiti).not.toHaveBeenCalled();
+      expect(fromSourceTransformer).not.toHaveBeenCalled();
+    } finally {
+      Reflect.deleteProperty(globalThis, sideEffectMarker);
+      fs.rmSync(fixtureDir, { recursive: true, force: true });
+    }
   });
 
   it("does not source-transform fallback after native loading reaches a missing dependency", async () => {

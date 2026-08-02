@@ -96,7 +96,6 @@ describe("worker environment service", () => {
           development: {
             provider: "fake",
             settings: { region: "test" },
-            lifetime: { idleTimeoutMinutes: 10 },
           },
         },
       },
@@ -311,7 +310,6 @@ describe("worker environment service", () => {
           profileSnapshot: {
             install: "bundle",
             settings: { region: "test" },
-            lifetime: { idleTimeoutMinutes: 10 },
           },
         });
         getDevelopmentProfile().settings = { region: "mutated" };
@@ -1732,11 +1730,15 @@ describe("worker environment service", () => {
     await createService(createProvider({ destroy })).reconcileOnce();
 
     expect(destroy).toHaveBeenCalledOnce();
+    expect(destroy).toHaveBeenCalledWith({
+      leaseId: `lease:${environmentId}`,
+      profile: { region: "test" },
+    });
     expect(store.get(environmentId)).toMatchObject({
-      state: "failed",
-      leaseId: null,
+      state: "destroyed",
+      leaseId: `lease:${environmentId}`,
       attachedSessionIds: [],
-      lastError: "Attached worker build no longer matches the Gateway",
+      lastError: null,
     });
   });
 

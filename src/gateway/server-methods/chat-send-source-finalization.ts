@@ -7,7 +7,7 @@ import {
   appendLocalMediaParentRoots,
   getAgentScopedMediaLocalRoots,
 } from "../../media/local-roots.js";
-import { attachManagedOutgoingImagesToMessage } from "../managed-image-attachments.js";
+import { attachManagedOutgoingMediaToMessage } from "../managed-image-attachments.js";
 import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import {
@@ -108,13 +108,10 @@ export async function finalizeChatSendSourceReplies(params: {
       sessionKey,
       agentId,
       payloads,
-      managedImageLocalRoots: mediaLocalRoots,
+      managedMediaLocalRoots: mediaLocalRoots,
       includeSensitiveMedia: false,
-      onLocalAudioAccessDenied: (message) => {
-        context.logGateway.warn(`webchat audio embedding denied local path: ${message}`);
-      },
-      onManagedImagePrepareError: (message) => {
-        context.logGateway.warn(`webchat image embedding skipped attachment: ${message}`);
+      onManagedMediaPrepareError: (message) => {
+        context.logGateway.warn(`webchat media embedding skipped attachment: ${message}`);
       },
     });
   const buildReplyMediaMessage = async (payloads: typeof finalPayloads) =>
@@ -231,7 +228,7 @@ export async function finalizeChatSendSourceReplies(params: {
     if (!attachParams.messageId) {
       return;
     }
-    await attachManagedOutgoingImagesToMessage({
+    await attachManagedOutgoingMediaToMessage({
       messageId: attachParams.messageId,
       blocks: attachParams.request.state.persistedContent,
     });

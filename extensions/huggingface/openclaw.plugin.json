@@ -6,6 +6,11 @@
   },
   "enabledByDefault": true,
   "providers": ["huggingface"],
+  "modelCatalog": {
+    "discovery": {
+      "huggingface": "refreshable"
+    }
+  },
   "modelIdNormalization": {
     "providers": {
       "huggingface": {

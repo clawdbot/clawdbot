@@ -9,6 +9,7 @@ import {
   upsertSessionUpstreamLink,
 } from "openclaw/plugin-sdk/session-catalog";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isIncognitoSessionKey } from "../incognito-session.js";
 import type { CodexSessionCatalogControl } from "../session-catalog-types.js";
 import { codexLastTerminalTurnId, codexUpstreamBaseline } from "../session-upstream-marker.js";
 import { assertCodexThreadForkResponse } from "./protocol-validators.js";
@@ -46,6 +47,11 @@ export async function forkCodexUpstreamSession(
 ): Promise<AgentHarnessSessionForkResult> {
   try {
     return await options.control.withPinnedConnection(async (control) => {
+      const incognito = isIncognitoSessionKey(params.targetKey);
+      const clientId = control.clientId?.trim();
+      if (incognito && !clientId) {
+        throw new Error("Incognito Codex forks require the live pinned app-server client");
+      }
       let linked = false;
       let bindingIdentity: ReturnType<typeof sessionBindingIdentity> | undefined;
       const compensateFork = async (forkedThreadId: string) => {
@@ -92,7 +98,8 @@ export async function forkCodexUpstreamSession(
       const rawResponse = await control.forkThread({
         threadId: params.upstream.threadId,
         beforeTurnId: resolved.boundary.beforeTurnId,
-        excludeTurns: true,
+        ...(incognito ? { ephemeral: true } : {}),
+        excludeTurns: !incognito,
       });
       let response: CodexThreadForkResponse;
       try {
@@ -124,7 +131,9 @@ export async function forkCodexUpstreamSession(
         if (!connectionFingerprint) {
           throw new Error("Codex fork connection did not include a fingerprint");
         }
-        const forkedTurns = await listCodexUpstreamTurns(control, threadId);
+        const forkedTurns = incognito
+          ? (response.thread.turns ?? [])
+          : await listCodexUpstreamTurns(control, threadId);
         const expectedLastTurnId = resolved.boundary.retainedMarker.turnId;
         const actualLastTurnId = forkedTurns.at(-1)?.id ?? null;
         // Boundary resolution already verified the source prefix; this read-back tail identity
@@ -179,6 +188,7 @@ export async function forkCodexUpstreamSession(
               kind: "set",
               binding: {
                 threadId,
+                ...(incognito && clientId ? { clientId } : {}),
                 cwd: forkedThread.cwd ?? "",
                 model: response.model,
                 modelProvider: response.modelProvider ?? undefined,

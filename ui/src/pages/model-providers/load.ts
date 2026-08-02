@@ -1,4 +1,4 @@
-// Fetches the gateway signals behind the Model Providers settings page.
+// Fetches the gateway signals behind the Models settings page.
 // Each source degrades independently: a missing usage hook or an older
 // gateway must not blank the provider list.
 import type { UsageSummary } from "../../../../src/infra/provider-usage.types.js";
@@ -57,8 +57,14 @@ function errorMessage(error: unknown): string {
 
 export async function loadModelProvidersData(
   client: GatewayBrowserClient,
-  opts?: { refresh?: boolean },
+  opts?: { refresh?: boolean; agentId?: string; signal?: AbortSignal },
 ): Promise<ModelProvidersData> {
+  const request = <T>(method: string, params?: unknown): Promise<T> =>
+    opts?.signal
+      ? client.request<T>(method, params, { signal: opts.signal })
+      : params === undefined
+        ? client.request<T>(method)
+        : client.request<T>(method, params);
   const [authStatus, models, catalogModels, config, providerUsage, costByProvider] =
     await Promise.all([
       loadModelAuthStatus(client, opts).then(
@@ -66,18 +72,16 @@ export async function loadModelProvidersData(
         (error: unknown) => ({ ok: false as const, error }),
       ),
       loadModels(client, opts).catch(() => null),
-      client
-        .request<{ models?: ModelCatalogEntry[] }>("models.list", {
-          view: "all",
-          includeProviderCapabilities: true,
-        })
+      request<{ models?: ModelCatalogEntry[] }>("models.list", {
+        view: "all",
+        includeProviderCapabilities: true,
+      })
         .then((result) => result?.models ?? null)
         .catch(() => null),
-      client
-        .request<ConfigSnapshot>("config.get", {})
+      request<ConfigSnapshot>("config.get", {})
         .then((snapshot) => resolveEditableSnapshotConfig(snapshot))
         .catch(() => null),
-      client.request<UsageSummary>("usage.status").catch(() => null),
+      request<UsageSummary>("usage.status").catch(() => null),
       requestSessionUsage(client, {
         startDate: localDate(MODEL_PROVIDERS_COST_DAYS - 1),
         endDate: localDate(0),
@@ -88,7 +92,8 @@ export async function loadModelProvidersData(
         .catch(() => null),
     ]);
   return {
-    authStatus: authStatus.ok ? authStatus.result : null,
+    authStatus:
+      authStatus.ok && Array.isArray(authStatus.result?.providers) ? authStatus.result : null,
     models,
     catalogModels,
     config,

@@ -179,7 +179,7 @@ describe("runEmbeddedAgent before_agent_finalize", () => {
     // finalize revision would replay an invalid or blocked provider turn.
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       finalAnswerAttempt("Late answer.", {
-        timedOut: true,
+        terminal: { kind: "timeout", phase: "prompt", source: "runtime" },
         beforeAgentFinalizeRevisionReason: "Revise the late answer.",
         promptTimeoutOutcome: {
           message: "Request timed out.",

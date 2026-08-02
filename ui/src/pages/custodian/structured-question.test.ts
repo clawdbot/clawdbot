@@ -14,6 +14,7 @@ describe("custodian typed question", () => {
         { label: "Connect WhatsApp", reply: "connect whatsapp", description: "Chat there." },
       ],
       isOther: true,
+      skipAction: "exit",
     };
     expect(parseCustodianQuestion(question)).toEqual({
       id: "onboarding-next-step",
@@ -24,6 +25,7 @@ describe("custodian typed question", () => {
         { label: "Connect WhatsApp", reply: "connect whatsapp", description: "Chat there." },
       ],
       isOther: true,
+      skipAction: "exit",
     });
   });
 

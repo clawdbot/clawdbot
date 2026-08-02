@@ -108,6 +108,31 @@ describe("cloud draft advancement", () => {
     expect(clearRecovery).toHaveBeenCalledOnce();
   });
 
+  it("does not persist volatile incognito recovery when submission is cancelled", async () => {
+    const request = vi.fn().mockResolvedValueOnce({ ok: true, deleted: true });
+
+    await expect(
+      advanceCloudDraftSession({
+        client: clientWith(request),
+        key: "agent:cloud:incognito",
+        agentId: "cloud",
+        profileId: "aws",
+        message: "private task",
+        messageId: "message-private",
+        gatewayUrl: "ws://gateway.example",
+        recoveryScope: "principal-a",
+        recoveryPhase: "dispatching",
+        persistRecovery: false,
+        recovering: false,
+        isCurrent: () => false,
+        ownsRecovery: () => false,
+        clearRecovery: vi.fn(),
+        setRecoveryPhase: vi.fn(),
+      }),
+    ).resolves.toEqual({ status: "cancelled", recoveryPersisted: false });
+    expect(sessionStorage.length).toBe(0);
+  });
+
   it("keeps a cancelled draft recoverable when its cleanup fails", async () => {
     const request = vi.fn().mockRejectedValueOnce(new Error("delete unavailable"));
     const clearRecovery = vi.fn();

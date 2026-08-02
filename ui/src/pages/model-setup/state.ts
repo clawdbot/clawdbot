@@ -27,7 +27,7 @@ export type ModelSetupActivationState =
       status: Exclude<NonNullable<SystemAgentSetupActivateResult["status"]>, "ok">;
       error: string;
     }
-  | { phase: "success"; modelRef: string; latencyMs?: number };
+  | { phase: "success"; modelRef: string; latencyMs?: number; warning?: string };
 
 type ModelSetupVerifyFailure = Extract<SystemAgentSetupVerifyResult, { ok: false }>;
 

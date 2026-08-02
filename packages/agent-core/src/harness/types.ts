@@ -61,6 +61,14 @@ export interface CompactionEntry<T = unknown> extends SessionTreeEntryBase {
   fromHook?: boolean;
 }
 
+type ResetReason = "new" | "reset" | "idle" | "daily" | "cron-stale";
+
+export interface ResetEntry extends SessionTreeEntryBase {
+  type: "reset";
+  reason: ResetReason;
+  firstKeptEntryId?: string;
+}
+
 interface BranchSummaryEntry<T = unknown> extends SessionTreeEntryBase {
   type: "branch_summary";
   fromId: string;
@@ -105,6 +113,7 @@ export type SessionTreeEntry =
   | ThinkingLevelChangeEntry
   | ModelChangeEntry
   | CompactionEntry
+  | ResetEntry
   | BranchSummaryEntry
   | CustomEntry
   | CustomMessageEntry

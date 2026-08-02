@@ -1,6 +1,6 @@
 // Firecrawl plugin module implements firecrawl client behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
+import { readProviderJsonObjectResponse } from "openclaw/plugin-sdk/provider-http";
 import {
   DEFAULT_CACHE_TTL_MINUTES,
   markdownToText,
@@ -71,7 +71,7 @@ async function readFirecrawlJsonResponse(
   label: string,
   opts?: { maxBytes?: number },
 ): Promise<Record<string, unknown>> {
-  return await readProviderJsonResponse<Record<string, unknown>>(response, label, opts);
+  return await readProviderJsonObjectResponse(response, label, opts);
 }
 
 type FirecrawlSearchParams = {

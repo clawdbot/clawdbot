@@ -3,16 +3,17 @@ scenario:
   id: whatsapp-reply-to-message
   surface: channels
   coverage:
-    primary: [channels.group-messages]
+    primary:
+      - whatsapp.outbound-text-sends
   execution:
-    profiles: { "whatsapp:default": 3, "whatsapp:mock-default": 7 }
     kind: flow
     channel: whatsapp
     timeoutMs: 60000
     retryCount: 1
     suiteIsolation: isolated
-    config: { whatsappScenarioId: whatsapp-reply-to-message }
 flow:
   module: ./live-transports/whatsapp/scenario-runtime.js
-  call: runWhatsAppReplyToMessageScenario
-  args: [{ expr: whatsappScenarioContext }]
+  call: runWhatsAppScenario
+  args:
+    - { expr: whatsappScenarioContext }
+    - { moduleExport: whatsappQaReplyToMessageScenario }

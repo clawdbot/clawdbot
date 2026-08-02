@@ -7,6 +7,7 @@ import {
   calculateContextTokens,
   compact,
   estimateContextTokens,
+  estimateTokens,
   findCutPoint,
   generateSummary,
   getLastAssistantUsage,
@@ -196,6 +197,85 @@ describe("calculateContextTokens", () => {
 });
 
 describe("session-entry compaction budgeting", () => {
+  it("applies the shared common-CJK budget heuristic", () => {
+    expect(estimateTokens({ role: "user", content: "hello world", timestamp: 1 })).toBe(3);
+    expect(estimateTokens({ role: "user", content: "你好世界", timestamp: 1 })).toBe(4);
+    expect(estimateTokens({ role: "user", content: "こんにちは", timestamp: 1 })).toBe(5);
+    expect(estimateTokens({ role: "user", content: "안녕하세요", timestamp: 1 })).toBe(5);
+  });
+
+  it("uses conservative weights for halfwidth and supplementary CJK", () => {
+    expect(estimateTokens({ role: "user", content: "ｺﾝﾆﾁﾊ", timestamp: 1 })).toBe(10);
+    expect(
+      estimateTokens({ role: "user", content: String.fromCodePoint(0xffa1), timestamp: 1 }),
+    ).toBe(2);
+    expect(
+      estimateTokens({ role: "user", content: String.fromCodePoint(0x20000), timestamp: 1 }),
+    ).toBe(4);
+    expect(
+      estimateTokens({ role: "user", content: String.fromCodePoint(0x30000), timestamp: 1 }),
+    ).toBe(4);
+  });
+
+  it("uses a conservative weight for rare BMP CJK", () => {
+    expect(
+      estimateTokens({ role: "user", content: String.fromCodePoint(0x3400), timestamp: 1 }),
+    ).toBe(3);
+    expect(
+      estimateTokens({ role: "user", content: String.fromCodePoint(0x9fff), timestamp: 1 }),
+    ).toBe(3);
+  });
+
+  it("accounts for decomposed Hangul and compatibility forms", () => {
+    expect(
+      estimateTokens({ role: "user", content: "안녕하세요".normalize("NFD"), timestamp: 1 }),
+    ).toBe(36);
+    expect(
+      estimateTokens({ role: "user", content: String.fromCodePoint(0xfe10), timestamp: 1 }),
+    ).toBe(2);
+    expect(
+      estimateTokens({ role: "user", content: String.fromCodePoint(0xffe0), timestamp: 1 }),
+    ).toBe(2);
+  });
+
+  it("uses a conservative weight for supplementary Japanese forms", () => {
+    expect(
+      estimateTokens({ role: "user", content: String.fromCodePoint(0x1aff0), timestamp: 1 }),
+    ).toBe(4);
+    expect(
+      estimateTokens({ role: "user", content: String.fromCodePoint(0x1f200), timestamp: 1 }),
+    ).toBe(4);
+  });
+
+  it("uses measured weights for CJK script-extension marks", () => {
+    expect(
+      estimateTokens({ role: "user", content: String.fromCodePoint(0x00b7), timestamp: 1 }),
+    ).toBe(1);
+    expect(estimateTokens({ role: "user", content: "·".repeat(32), timestamp: 1 })).toBe(32);
+    expect(
+      estimateTokens({ role: "user", content: String.fromCodePoint(0x02ca), timestamp: 1 }),
+    ).toBe(2);
+    expect(
+      estimateTokens({ role: "user", content: String.fromCodePoint(0x1d360), timestamp: 1 }),
+    ).toBe(3);
+  });
+
+  it("uses CJK-aware token estimates when choosing the retained tail", () => {
+    const entries: SessionTreeEntry[] = [
+      createMessageEntry({ role: "user", content: "start", timestamp: 1 }, 0),
+      createMessageEntry(createAssistant("ok", createUsage(2), 2), 1),
+      createMessageEntry({ role: "user", content: "早上好", timestamp: 3 }, 2),
+      createMessageEntry(createAssistant("ok", createUsage(2), 4), 3),
+      createMessageEntry({ role: "user", content: "你好世界", timestamp: 5 }, 4),
+    ];
+
+    expect(findCutPoint(entries, 0, entries.length, 4)).toEqual({
+      firstKeptEntryIndex: 4,
+      turnStartIndex: -1,
+      isSplitTurn: false,
+    });
+  });
+
   it.each(["custom_message", "branch_summary"] as const)(
     "counts a %s entry that projects into model context",
     (entryType) => {
@@ -251,6 +331,113 @@ describe("session-entry compaction budgeting", () => {
         keepRecentTokens: 10_000,
       }),
     ).toEqual({ ok: true, value: undefined });
+  });
+
+  it("plans provider-triggered cuts in provider token units", () => {
+    const entries = [
+      createMessageEntry({ role: "user", content: "first", timestamp: 1 }, 0),
+      createMessageEntry(createAssistant("ok", createUsage(2), 2), 1),
+      createMessageEntry({ role: "user", content: "second", timestamp: 3 }, 2),
+      createMessageEntry(createAssistant("ok", createUsage(2), 4), 3),
+      createMessageEntry({ role: "user", content: "latest", timestamp: 5 }, 4),
+      createMessageEntry(createAssistant("done", createUsage(170_000), 6), 5),
+    ];
+
+    const result = prepareCompaction(entries, {
+      enabled: true,
+      reserveTokens: 16_384,
+      keepRecentTokens: 20_000,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok || !result.value) {
+      throw new Error("expected provider usage to produce a compactable prefix");
+    }
+    expect(result.value.firstKeptEntryId).toBe("entry-4");
+    expect(result.value.messagesToSummarize.length).toBeGreaterThan(0);
+  });
+
+  it("keeps reset-filtered tool rows out of later compaction input", () => {
+    const entries: SessionTreeEntry[] = [
+      createMessageEntry({ role: "user", content: "discarded", timestamp: 1 }, 0),
+      createMessageEntry({ role: "user", content: "kept question", timestamp: 2 }, 1),
+      createMessageEntry(
+        {
+          role: "toolResult",
+          toolCallId: "call-1",
+          toolName: "read",
+          content: [{ type: "text", text: "hidden tool result" }],
+          isError: false,
+          timestamp: 3,
+        },
+        2,
+      ),
+      createMessageEntry(createAssistant("kept answer", createUsage(2), 4), 3),
+      {
+        type: "reset",
+        id: "entry-4",
+        parentId: "entry-3",
+        timestamp: new Date(5).toISOString(),
+        reason: "new",
+        firstKeptEntryId: "entry-1",
+      },
+      createMessageEntry({ role: "user", content: "post reset", timestamp: 6 }, 5),
+      createMessageEntry(createAssistant("new answer", createUsage(2), 7), 6),
+    ];
+
+    const result = prepareCompaction(entries, {
+      enabled: true,
+      reserveTokens: 0,
+      keepRecentTokens: 1,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok || !result.value) {
+      throw new Error("expected reset transcript to be compactable");
+    }
+    expect(JSON.stringify(result.value.messagesToSummarize)).not.toContain("hidden tool result");
+    expect(JSON.stringify(result.value.turnPrefixMessages)).not.toContain("hidden tool result");
+    expect(["entry-5", "entry-6"]).toContain(result.value.firstKeptEntryId);
+  });
+
+  it("moves the cut earlier when a reset kept-tail prelude consumes the compaction budget", () => {
+    const largePrelude = "kept context ".repeat(4_000);
+    const postResetEntries: SessionTreeEntry[] = [
+      createMessageEntry({ role: "user", content: "post one ".repeat(500), timestamp: 4 }, 3),
+      createMessageEntry(createAssistant("answer one ".repeat(500), createUsage(2), 5), 4),
+      createMessageEntry({ role: "user", content: "post two ".repeat(500), timestamp: 6 }, 5),
+      createMessageEntry(createAssistant("answer two ".repeat(500), createUsage(2), 7), 6),
+    ];
+    const buildEntries = (firstKeptEntryId?: string): SessionTreeEntry[] => [
+      createMessageEntry({ role: "user", content: largePrelude, timestamp: 1 }, 0),
+      {
+        type: "reset",
+        id: "entry-1",
+        parentId: "entry-0",
+        timestamp: new Date(2).toISOString(),
+        reason: "new",
+        ...(firstKeptEntryId ? { firstKeptEntryId } : {}),
+      },
+      ...postResetEntries.map((entry, index) =>
+        Object.assign({}, entry, {
+          id: `entry-${index + 2}`,
+          parentId: `entry-${index + 1}`,
+        }),
+      ),
+    ];
+    const settings = { enabled: true, reserveTokens: 0, keepRecentTokens: 500 };
+    const withoutPrelude = prepareCompaction(buildEntries(), settings);
+    const withPrelude = prepareCompaction(buildEntries("entry-0"), settings);
+
+    expect(withoutPrelude.ok && withoutPrelude.value).toBeTruthy();
+    expect(withPrelude.ok && withPrelude.value).toBeTruthy();
+    if (!withoutPrelude.ok || !withoutPrelude.value || !withPrelude.ok || !withPrelude.value) {
+      throw new Error("expected both reset transcripts to be compactable");
+    }
+    const cutIndex = (entryId: string) => Number.parseInt(entryId.slice("entry-".length), 10);
+    expect(cutIndex(withPrelude.value.firstKeptEntryId)).toBeLessThan(
+      cutIndex(withoutPrelude.value.firstKeptEntryId),
+    );
   });
 });
 

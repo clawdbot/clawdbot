@@ -269,6 +269,47 @@ describe("qa-bus server", () => {
     });
   });
 
+  it.each(["inbound", "outbound"] as const)(
+    "accepts a generated-media payload larger than 1 MiB on the %s message route",
+    async (direction) => {
+      const state = createQaBusState();
+      const bus = await startQaBusServer({ state });
+      stops.push(bus["stop"]);
+
+      const generatedImage = Buffer.alloc(1_600_000, 0x71);
+      const attachment = {
+        id: "qa-lighthouse-image",
+        kind: "image",
+        mimeType: "image/png",
+        fileName: "qa-lighthouse.png",
+        contentBase64: generatedImage.toString("base64"),
+      };
+      const response = await postQaBusJson(bus.baseUrl, `/v1/${direction}/message`, {
+        accountId: "acct-a",
+        text: "QA lighthouse",
+        attachments: [attachment],
+        ...(direction === "inbound"
+          ? {
+              conversation: { id: "qa-operator", kind: "direct" },
+              senderId: "qa-operator",
+            }
+          : { to: "dm:qa-operator" }),
+      });
+
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toMatchObject({
+        message: { direction, attachments: [attachment] },
+      });
+
+      const snapshot = state.getSnapshot();
+      expect(snapshot.messages).toHaveLength(1);
+      expect(snapshot.events).toHaveLength(1);
+      const storedAttachment = snapshot.messages[0]?.attachments?.[0];
+      expect(storedAttachment).toEqual(attachment);
+      expect(Buffer.from(storedAttachment?.contentBase64 ?? "", "base64")).toEqual(generatedImage);
+    },
+  );
+
   it("returns a controlled error when a v1 POST body contains malformed JSON", async () => {
     const state = createQaBusState();
     const bus = await startQaBusServer({ state });
@@ -328,6 +369,42 @@ describe("qa-bus server", () => {
 });
 
 describe("handleQaBusRequest", () => {
+  it.each(["/v1/inbound/message", "/v1/outbound/message"] as const)(
+    "returns a controlled error when the %s body exceeds the media limit",
+    async (pathname) => {
+      const req = {
+        method: "POST",
+        url: pathname,
+        headers: { "content-length": String(16 * 1024 * 1024 + 1) },
+        destroyed: false,
+        destroy() {
+          this.destroyed = true;
+        },
+      };
+      const res = {
+        statusCode: 0,
+        body: "",
+        writeHead(statusCode: number) {
+          this.statusCode = statusCode;
+        },
+        end(payload: string) {
+          this.body = payload;
+        },
+      };
+
+      const handled = await handleQaBusRequest({
+        req: req as never,
+        res: res as never,
+        state: createQaBusState(),
+      });
+
+      expect(handled).toBe(true);
+      expect(req.destroyed).toBe(true);
+      expect(res.statusCode).toBe(413);
+      expect(JSON.parse(res.body)).toEqual({ error: "Payload too large" });
+    },
+  );
+
   it("returns a controlled error when a v1 POST body exceeds the limit", async () => {
     const req = {
       method: "POST",

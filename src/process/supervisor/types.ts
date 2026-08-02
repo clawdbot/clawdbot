@@ -44,6 +44,8 @@ export type ManagedRun = {
   stdin?: ManagedRunStdin;
   wait: () => Promise<RunExit>;
   cancel: (reason?: TerminationReason) => void;
+  /** Stop delivering output callbacks before owner teardown kills the child. */
+  detachOutput?: () => void;
 };
 
 export type ManagedRunStdin = {
@@ -54,6 +56,11 @@ export type ManagedRunStdin = {
   writable?: boolean;
   writableEnded?: boolean;
   writableFinished?: boolean;
+};
+
+export type SpawnSecretInput = {
+  fd: number;
+  createData: () => Buffer;
 };
 
 export type SpawnProcessAdapter<WaitSignal = NodeJS.Signals | number | null> = {
@@ -95,6 +102,7 @@ type SpawnChildInput = SpawnBaseInput & {
   windowsVerbatimArguments?: boolean;
   input?: string;
   stdinMode?: "inherit" | "pipe-open" | "pipe-closed";
+  secretInput?: SpawnSecretInput;
 };
 
 type SpawnPtyInput = SpawnBaseInput & {

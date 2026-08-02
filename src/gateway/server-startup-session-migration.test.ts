@@ -1,7 +1,11 @@
 /**
  * Gateway startup session migration tests.
  */
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { runStartupSessionMigration } from "./server-startup-session-migration.js";
 
 type StartupMigrationDeps = NonNullable<Parameters<typeof runStartupSessionMigration>[0]["deps"]>;
@@ -14,6 +18,7 @@ type RunDoctorSessionSqlite = NonNullable<StartupMigrationDeps["runDoctorSession
 type ReconcileSessionTranscriptIndexes = NonNullable<
   StartupMigrationDeps["reconcileSessionTranscriptIndexes"]
 >;
+type SessionSqliteDatabaseExists = NonNullable<StartupMigrationDeps["sessionSqliteDatabaseExists"]>;
 
 function makeLog() {
   return {
@@ -50,7 +55,14 @@ function makeDeps(
       .mockResolvedValue(0),
     runDoctorSessionSqlite,
     reconcileSessionTranscriptIndexes,
+    sessionSqliteDatabaseExists: vi.fn<SessionSqliteDatabaseExists>().mockReturnValue(true),
   };
+}
+
+function useDefaultDatabaseExists(deps: ReturnType<typeof makeDeps>): StartupMigrationDeps {
+  const defaultDeps: StartupMigrationDeps = { ...deps };
+  delete defaultDeps.sessionSqliteDatabaseExists;
+  return defaultDeps;
 }
 
 function firstLogMessage(log: ReturnType<typeof vi.fn>, label: string): string {
@@ -229,6 +241,105 @@ describe("runStartupSessionMigration", () => {
     expect(log.info).toHaveBeenCalledWith(
       "session: rebuilt 3 transcript projection(s) before serving history",
     );
+  });
+
+  it("skips transcript reconciliation when configured agents have no SQLite database", async () => {
+    const log = makeLog();
+    const migrate = vi.fn<MigrateSessionKeys>().mockResolvedValue({ changes: [], warnings: [] });
+    const reconcile = vi
+      .fn<ReconcileSessionTranscriptIndexes>()
+      .mockResolvedValue({ reconciledSessions: 0 });
+    const deps = makeDeps(migrate, 0, makeSessionSqliteImport(), reconcile);
+    const defaultDeps = useDefaultDatabaseExists(deps);
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-startup-"));
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    try {
+      await runStartupSessionMigration({
+        cfg: {
+          agents: { defaults: {}, list: [{ id: "main" }, { id: "ops" }] },
+          session: {},
+        } as Parameters<typeof runStartupSessionMigration>[0]["cfg"],
+        env,
+        log,
+        deps: defaultDeps,
+      });
+
+      expect(reconcile).not.toHaveBeenCalled();
+      expect(fs.existsSync(resolveOpenClawAgentSqlitePath({ agentId: "main", env }))).toBe(false);
+      expect(fs.existsSync(resolveOpenClawAgentSqlitePath({ agentId: "ops", env }))).toBe(false);
+    } finally {
+      fs.rmSync(stateDir, { force: true, recursive: true });
+    }
+  });
+
+  it("reconciles configured agents with an existing SQLite database", async () => {
+    const log = makeLog();
+    const migrate = vi.fn<MigrateSessionKeys>().mockResolvedValue({ changes: [], warnings: [] });
+    const reconcile = vi
+      .fn<ReconcileSessionTranscriptIndexes>()
+      .mockResolvedValue({ reconciledSessions: 1 });
+    const deps = makeDeps(migrate, 0, makeSessionSqliteImport(), reconcile);
+    const defaultDeps = useDefaultDatabaseExists(deps);
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-startup-"));
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "ops", env });
+    fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+    fs.writeFileSync(databasePath, "");
+    try {
+      await runStartupSessionMigration({
+        cfg: {
+          agents: { defaults: {}, list: [{ id: "main" }, { id: "ops" }] },
+          session: {},
+        } as Parameters<typeof runStartupSessionMigration>[0]["cfg"],
+        env,
+        log,
+        deps: defaultDeps,
+      });
+
+      expect(reconcile).toHaveBeenCalledOnce();
+      expect(reconcile).toHaveBeenCalledWith({ agentId: "ops", env });
+    } finally {
+      fs.rmSync(stateDir, { force: true, recursive: true });
+    }
+  });
+
+  it("reconciles a SQLite database created by the startup import", async () => {
+    const log = makeLog();
+    const migrate = vi.fn<MigrateSessionKeys>().mockResolvedValue({ changes: [], warnings: [] });
+    const events: string[] = [];
+    const importSessionSqlite = makeSessionSqliteImport();
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-startup-"));
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env });
+    const runDoctorSessionSqlite = vi.fn<RunDoctorSessionSqlite>().mockImplementation(async () => {
+      events.push("import");
+      fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+      fs.writeFileSync(databasePath, "");
+      return await importSessionSqlite({
+        allAgents: true,
+        cfg: makeCfg(),
+        env,
+        mode: "import",
+      });
+    });
+    const reconcile = vi
+      .fn<ReconcileSessionTranscriptIndexes>()
+      .mockResolvedValue({ reconciledSessions: 1 });
+    const deps = makeDeps(migrate, 0, runDoctorSessionSqlite, reconcile);
+    const defaultDeps = useDefaultDatabaseExists(deps);
+    const cfg = makeCfg();
+    reconcile.mockImplementation(async () => {
+      events.push("reconcile");
+      return { reconciledSessions: 1 };
+    });
+    try {
+      await runStartupSessionMigration({ cfg, env, log, deps: defaultDeps });
+
+      expect(events).toEqual(["import", "reconcile"]);
+      expect(reconcile).toHaveBeenCalledWith({ agentId: "main", env });
+    } finally {
+      fs.rmSync(stateDir, { force: true, recursive: true });
+    }
   });
 
   it("warns without blocking when hot legacy session SQLite import reports legacy file issues", async () => {

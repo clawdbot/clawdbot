@@ -259,7 +259,10 @@ describe("SQLite historical session disk budget", () => {
     const db = getSessionKysely(owner.db);
     executeSqliteQuerySync(
       owner.db,
-      db.updateTable("sessions").set({ updated_at: updatedAt }).where("session_id", "=", sessionId),
+      db
+        .updateTable("session_windows")
+        .set({ updated_at: updatedAt })
+        .where("session_id", "=", sessionId),
     );
   }
 
@@ -268,9 +271,12 @@ describe("SQLite historical session disk budget", () => {
     const db = getSessionKysely(owner.db);
     executeSqliteQuerySync(
       owner.db,
-      db
-        .insertInto("session_routes")
-        .values({ session_key: sessionKey, session_id: sessionId, updated_at: Date.now() }),
+      db.insertInto("session_nodes").values({
+        session_key: sessionKey,
+        current_session_id: sessionId,
+        entry_json: "{}",
+        updated_at: Date.now(),
+      }),
     );
   }
 
@@ -280,7 +286,7 @@ describe("SQLite historical session disk budget", () => {
     return (
       executeSqliteQuerySync(
         owner.db,
-        db.selectFrom("sessions").select("session_id").where("session_id", "=", sessionId),
+        db.selectFrom("session_windows").select("session_id").where("session_id", "=", sessionId),
       ).rows.length === 1
     );
   }

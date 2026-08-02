@@ -19,10 +19,8 @@ type AttemptTrajectoryTerminal = {
 
 /** Signals that decide whether a completed run attempt has deliverable output. */
 type ResolveAttemptTrajectoryTerminalParams = {
-  promptError?: unknown;
-  aborted: boolean;
-  externalAbort: boolean;
-  timedOut: boolean;
+  failed: boolean;
+  interrupted: boolean;
   assistantTexts: string[];
   toolMetas: Array<{
     toolName: string;
@@ -103,11 +101,11 @@ function hasAsyncStartedToolActivity(toolMetas?: readonly { asyncStarted?: boole
 export function resolveAttemptTrajectoryTerminal(
   params: ResolveAttemptTrajectoryTerminalParams,
 ): AttemptTrajectoryTerminal {
-  if (params.promptError) {
-    return { status: "error" };
-  }
-  if ((params.aborted && params.externalAbort) || params.timedOut) {
+  if (params.interrupted) {
     return { status: "interrupted" };
+  }
+  if (params.failed) {
+    return { status: "error" };
   }
 
   // Messaging/tool-use attempts may not have assistant text; only committed

@@ -24,6 +24,9 @@
       "./index.ts"
     ],
     "setupEntry": "./setup-entry.ts",
+    "setupFeatures": {
+      "configPromotion": true
+    },
     "channel": {
       "id": "zalo",
       "configuredState": {
@@ -43,7 +46,28 @@
         "zl"
       ],
       "order": 80,
-      "quickstartAllowFrom": true
+      "quickstartAllowFrom": true,
+      "setup": {
+        "fields": [
+          {
+            "key": "token",
+            "kind": "string",
+            "sensitive": true,
+            "cli": { "flags": "--token <token>", "description": "Zalo bot token" }
+          },
+          {
+            "key": "tokenFile",
+            "kind": "string",
+            "sensitive": true,
+            "cli": { "flags": "--token-file <path>", "description": "Zalo bot token file" }
+          },
+          {
+            "key": "useEnv",
+            "kind": "boolean",
+            "cli": { "flags": "--use-env", "description": "Use ZALO_BOT_TOKEN" }
+          }
+        ]
+      }
     },
     "install": {
       "npmSpec": "@openclaw/zalo",

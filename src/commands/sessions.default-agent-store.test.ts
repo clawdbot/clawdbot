@@ -45,6 +45,7 @@ vi.mock("../infra/state-migrations.js", async () => ({
 
 vi.mock("../config/sessions/session-accessor.js", () => ({
   listSessionEntries: listSessionEntriesMock,
+  listSessionEntriesReadOnly: listSessionEntriesMock,
 }));
 
 import { sessionsCommand } from "./sessions.js";
@@ -156,8 +157,8 @@ describe("sessionsCommand default store agent selection", () => {
     expect(payload.count).toBe(2);
     expect(payload.allAgents).toBe(true);
     expect(payload.stores).toEqual([
-      { agentId: "main", path: "/tmp/shared-sessions.json" },
-      { agentId: "voice", path: "/tmp/shared-sessions.json" },
+      { agentId: "main", path: "/tmp/shared-sessions.sqlite" },
+      { agentId: "voice", path: "/tmp/shared-sessions.voice.sqlite" },
     ]);
     expect(payload.sessions?.map((session) => session.agentId).toSorted()).toEqual([
       "main",
@@ -177,7 +178,7 @@ describe("sessionsCommand default store agent selection", () => {
       agentId: "voice",
       storePath: "/tmp/sessions-voice.json",
     });
-    expect(logs[0]).toContain("Session store: /tmp/sessions-voice.json");
+    expect(logs[0]).toContain("Session store: /tmp/sessions-voice.voice.sqlite");
   });
 
   it("uses all configured agent stores with --all-agents", async () => {

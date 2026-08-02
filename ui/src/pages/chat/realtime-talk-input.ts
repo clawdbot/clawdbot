@@ -9,6 +9,7 @@ export type RealtimeTalkCameraDevice = RealtimeTalkInputDevice;
 
 type RealtimeTalkDeviceDiscovery = {
   devices: RealtimeTalkInputDevice[];
+  permissionRequired: boolean;
   warning: string | null;
 };
 
@@ -57,6 +58,11 @@ function normalizeDevices(
   return normalized;
 }
 
+function deviceDetailsHidden(devices: MediaDeviceInfo[], kind: RealtimeTalkDeviceKind): boolean {
+  const inputs = devices.filter((device) => device.kind === kind);
+  return inputs.length === 0 || inputs.some((device) => !device.deviceId || !device.label);
+}
+
 function describeDeviceError(error: unknown, kind: RealtimeTalkDeviceKind): string {
   const name = error instanceof DOMException ? error.name : "";
   if (name === "NotAllowedError") {
@@ -102,13 +108,15 @@ async function discoverRealtimeTalkDevices(
     devices = mediaDevices(kind);
     entries = await devices.enumerateDevices();
   } catch (error) {
-    return { devices: [], warning: describeDeviceError(error, kind) };
+    return {
+      devices: [],
+      permissionRequired: false,
+      warning: describeDeviceError(error, kind),
+    };
   }
-  const inputs = entries.filter((device) => device.kind === kind);
-  const detailsHidden =
-    inputs.length === 0 || inputs.some((device) => !device.deviceId || !device.label);
-  if (!requestPermission || !detailsHidden || !devices.getUserMedia) {
-    return { devices: normalizeDevices(entries, kind), warning: null };
+  const permissionRequired = deviceDetailsHidden(entries, kind);
+  if (!requestPermission || !permissionRequired || !devices.getUserMedia) {
+    return { devices: normalizeDevices(entries, kind), permissionRequired, warning: null };
   }
 
   try {
@@ -117,10 +125,15 @@ async function discoverRealtimeTalkDevices(
     );
     probe.getTracks().forEach((track) => track.stop());
     entries = await devices.enumerateDevices();
-    return { devices: normalizeDevices(entries, kind), warning: null };
+    return {
+      devices: normalizeDevices(entries, kind),
+      permissionRequired: deviceDetailsHidden(entries, kind),
+      warning: null,
+    };
   } catch (error) {
     return {
       devices: normalizeDevices(entries, kind),
+      permissionRequired,
       warning: describeDeviceError(error, kind),
     };
   }
@@ -154,6 +167,44 @@ function realtimeTalkAbortReason(signal: AbortSignal): Error {
     : new DOMException("Realtime Talk input cancelled", "AbortError");
 }
 
+async function awaitRealtimeTalkMediaRequest(
+  request: Promise<MediaStream>,
+  signal: AbortSignal | undefined,
+): Promise<MediaStream> {
+  if (!signal) {
+    return await request;
+  }
+  if (signal.aborted) {
+    void request.then(
+      (stream) => stream.getTracks().forEach((track) => track.stop()),
+      () => undefined,
+    );
+    throw realtimeTalkAbortReason(signal);
+  }
+  let removeAbortListener: () => void = () => undefined;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    const onAbort = () => reject(realtimeTalkAbortReason(signal));
+    signal.addEventListener("abort", onAbort, { once: true });
+    removeAbortListener = () => signal.removeEventListener("abort", onAbort);
+  });
+  try {
+    return await Promise.race([request, aborted]);
+  } catch (error) {
+    if (signal.aborted) {
+      // Browser permission prompts are not cancellable. Release any stream that
+      // arrives after the lifecycle owner has already moved on.
+      void request.then(
+        (stream) => stream.getTracks().forEach((track) => track.stop()),
+        () => undefined,
+      );
+      throw realtimeTalkAbortReason(signal);
+    }
+    throw error;
+  } finally {
+    removeAbortListener();
+  }
+}
+
 export async function openRealtimeTalkInput(
   inputDeviceId: string | undefined,
   options: { signal?: AbortSignal } = {},
@@ -164,9 +215,12 @@ export async function openRealtimeTalkInput(
   }
   let audio: MediaStream;
   try {
-    audio = await devices.getUserMedia({
-      audio: realtimeTalkAudioConstraints(inputDeviceId),
-    });
+    audio = await awaitRealtimeTalkMediaRequest(
+      devices.getUserMedia({
+        audio: realtimeTalkAudioConstraints(inputDeviceId),
+      }),
+      options.signal,
+    );
   } catch (error) {
     if (
       inputDeviceId?.trim() &&
@@ -195,9 +249,12 @@ export async function openRealtimeTalkCamera(
   const deviceId = videoDeviceId?.trim();
   let camera: MediaStream;
   try {
-    camera = await devices.getUserMedia({
-      video: deviceId ? { deviceId: { exact: deviceId } } : true,
-    });
+    camera = await awaitRealtimeTalkMediaRequest(
+      devices.getUserMedia({
+        video: deviceId ? { deviceId: { exact: deviceId } } : true,
+      }),
+      options.signal,
+    );
     if (options.signal?.aborted) {
       camera.getTracks().forEach((track) => track.stop());
       throw realtimeTalkAbortReason(options.signal);

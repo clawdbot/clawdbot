@@ -3,9 +3,10 @@
  */
 import type { LlmRuntime } from "@openclaw/ai";
 import { stripSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
+import { createBoundaryAwareStreamFnForModel } from "@openclaw/ai/transports";
 import { getStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
+import "../ai-transport-runtime-host.js";
 import { createAnthropicVertexStreamFnForModel } from "../anthropic-vertex-stream.js";
-import { createBoundaryAwareStreamFnForModel } from "../provider-transport-stream.js";
 import type { StreamFn } from "../runtime/index.js";
 import type { EmbeddedRunAttemptParams } from "./run/types.js";
 
@@ -231,6 +232,7 @@ export function resolveEmbeddedAgentStreamFn(
         authProfileId: params.authProfileId,
         authStorage: params.authStorage,
         providerId: params.model.provider,
+        sessionId: params.sessionId,
         promptCacheKey: params.promptCacheKey,
       });
     }
@@ -267,7 +269,11 @@ function wrapEmbeddedAgentStreamFn(
     params.transformContext ?? ((context: Parameters<StreamFn>[1]) => context);
   const mergeRunSignal = (options: Parameters<StreamFn>[2]) => {
     const embeddedOptions = options as EmbeddedStreamOptions | undefined;
-    const signal = embeddedOptions?.signal ?? params.runSignal;
+    const callerSignal = embeddedOptions?.signal;
+    const signal =
+      callerSignal && params.runSignal && callerSignal !== params.runSignal
+        ? AbortSignal.any([callerSignal, params.runSignal])
+        : (callerSignal ?? params.runSignal);
     let merged =
       params.sessionId && !embeddedOptions?.sessionId
         ? { ...embeddedOptions, sessionId: params.sessionId }

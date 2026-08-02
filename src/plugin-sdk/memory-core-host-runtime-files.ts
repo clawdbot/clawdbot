@@ -8,6 +8,9 @@ export {
   resolveMemoryBackendConfig,
 } from "../../packages/memory-host-sdk/src/runtime-files.js";
 export type {
+  MemoryEntryProvenance,
+  MemoryOriginClass,
   MemorySearchResult,
   MemorySearchRuntimeDebug,
+  MemorySessionKind,
 } from "../../packages/memory-host-sdk/src/runtime-files.js";

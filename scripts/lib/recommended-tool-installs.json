@@ -2,6 +2,7 @@
   "entries": [
     {
       "id": "ollama",
+      "brandId": "ollama",
       "label": "Ollama",
       "hint": "Run open models locally",
       "website": "https://ollama.com/download",
@@ -16,6 +17,7 @@
     },
     {
       "id": "claude-code",
+      "brandId": "claude",
       "label": "Claude Code",
       "hint": "Anthropic's coding agent CLI",
       "website": "https://code.claude.com/docs/en/quickstart",
@@ -23,6 +25,7 @@
     },
     {
       "id": "codex-cli",
+      "brandId": "openai",
       "label": "Codex CLI",
       "hint": "OpenAI's coding agent CLI",
       "website": "https://developers.openai.com/codex/cli/",
@@ -37,6 +40,7 @@
     },
     {
       "id": "opencode",
+      "brandId": "opencode",
       "label": "OpenCode",
       "hint": "Open-source coding agent",
       "website": "https://opencode.ai/docs/",
@@ -44,6 +48,7 @@
     },
     {
       "id": "gemini-cli",
+      "brandId": "gemini",
       "label": "Gemini CLI",
       "hint": "Google's coding agent CLI",
       "website": "https://geminicli.com/docs/get-started/installation/",
@@ -51,6 +56,7 @@
     },
     {
       "id": "kimi-code",
+      "brandId": "kimi",
       "label": "Kimi Code",
       "hint": "Moonshot's coding agent CLI",
       "website": "https://www.kimi.com/code",
@@ -58,6 +64,7 @@
     },
     {
       "id": "grok-build",
+      "brandId": "grok",
       "label": "Grok Build",
       "hint": "xAI's coding agent CLI",
       "website": "https://x.ai/cli",

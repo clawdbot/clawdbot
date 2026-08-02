@@ -217,6 +217,19 @@ struct QuickChatModelTests {
         #expect(model.sessionKey == "agent:three:main")
     }
 
+    @Test func `system agents are not quick chat targets`() async {
+        let model = self.makeModel(agentsProvider: {
+            Self.agentsResult(
+                defaultID: "main",
+                agentIDs: ["main", "ordinary-looking-id", "legacy"],
+                kinds: [.agent, .system, nil])
+        })
+
+        await self.prepare(model)
+
+        #expect(model.agents.map(\.id) == ["main", "legacy"])
+    }
+
     @Test func `grant refreshes permission status immediately`() async {
         let granted = GrantFlag()
         let model = QuickChatModel(
@@ -649,6 +662,7 @@ struct QuickChatModelTests {
         defaultID: String,
         agentIDs: [String],
         names: [String] = [],
+        kinds: [AgentKind?] = [],
         scope: String = "per-agent") -> AgentsListResult
     {
         AgentsListResult(
@@ -658,6 +672,7 @@ struct QuickChatModelTests {
             agents: agentIDs.enumerated().map { index, id in
                 AgentSummary(
                     id: id,
+                    kind: kinds.indices.contains(index) ? kinds[index] : nil,
                     name: names.indices.contains(index) ? names[index] : id,
                     identity: ["emoji": AnyCodable("🦞")])
             })

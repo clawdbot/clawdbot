@@ -9,7 +9,6 @@ import path from "node:path";
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
-  timestampMsToIsoString,
 } from "@openclaw/normalization-core/number-coercion";
 import { resolveOsHomeRelativePath } from "../infra/home-dir.js";
 import { loadJsonFile } from "../infra/json-file.js";
@@ -82,6 +81,13 @@ export type CodexCliCredential = {
   expires: number;
   accountId?: string;
   idToken?: string;
+};
+
+/** API-key credential parsed from the active Codex CLI auth mode. */
+export type CodexCliApiKeyCredential = {
+  type: "api_key";
+  provider: "openai";
+  key: string;
 };
 
 /** Credential shape parsed from MiniMax portal CLI storage. */
@@ -184,6 +190,14 @@ function codexAuthJsonUsesChatGptTokens(data: Record<string, unknown>): boolean 
     return authMode === "chatgpt" || authMode === "chatgptauthtokens";
   }
   return typeof data.OPENAI_API_KEY !== "string";
+}
+
+function codexAuthJsonUsesApiKey(data: Record<string, unknown>): boolean {
+  const authMode = typeof data.auth_mode === "string" ? data.auth_mode.toLowerCase() : undefined;
+  if (authMode) {
+    return authMode === "apikey" || authMode === "api_key";
+  }
+  return typeof data.OPENAI_API_KEY === "string";
 }
 
 function resolveMiniMaxCliCredentialsPath(homeDir?: string) {
@@ -335,59 +349,46 @@ function resolveCodexFallbackExpiryMs(nowMs?: number): number | undefined {
   return resolveExpiresAtMsFromDurationMs(CODEX_CLI_FALLBACK_EXPIRY_MS, { nowMs: baseMs });
 }
 
-function readCodexKeychainCredentials(options?: {
-  codexHome?: string;
-  platform?: NodeJS.Platform;
-  execSync?: ExecSyncFn;
-  allowKeychainPrompt?: boolean;
-}): CodexCliCredential | null {
-  const parsed = readCodexKeychainAuthRecord(options);
-  if (!parsed) {
+function parseCodexOauthCredential(
+  data: Record<string, unknown>,
+  fallbackExpiry: number | undefined,
+): CodexCliCredential | null {
+  if (!codexAuthJsonUsesChatGptTokens(data)) {
     return null;
   }
-  const tokens = parsed.tokens as Record<string, unknown> | undefined;
-  try {
-    const accessToken = tokens?.access_token;
-    const refreshToken = tokens?.refresh_token;
-    if (typeof accessToken !== "string" || !accessToken) {
-      return null;
-    }
-    if (typeof refreshToken !== "string" || !refreshToken) {
-      return null;
-    }
-
-    // No explicit expiry stored; treat as fresh for an hour from last_refresh or now.
-    const lastRefreshRaw = parsed.last_refresh;
-    const lastRefresh =
-      typeof lastRefreshRaw === "string" || typeof lastRefreshRaw === "number"
-        ? new Date(lastRefreshRaw).getTime()
-        : Date.now();
-    const fallbackExpiry =
-      resolveCodexFallbackExpiryMs(lastRefresh) ?? resolveCodexFallbackExpiryMs();
-    const expires = decodeJwtExpiryMs(accessToken) ?? fallbackExpiry;
-    if (expires === undefined) {
-      return null;
-    }
-    const accountId = typeof tokens?.account_id === "string" ? tokens.account_id : undefined;
-    const idToken = typeof tokens?.id_token === "string" ? tokens.id_token : undefined;
-
-    log.info("read codex credentials from keychain", {
-      source: "keychain",
-      expires: timestampMsToIsoString(expires),
-    });
-
-    return {
-      type: "oauth",
-      provider: "openai" as OAuthProvider,
-      access: accessToken,
-      refresh: refreshToken,
-      expires,
-      accountId,
-      idToken,
-    };
-  } catch {
+  const tokens = data.tokens as Record<string, unknown> | undefined;
+  const accessToken = tokens?.access_token;
+  const refreshToken = tokens?.refresh_token;
+  if (typeof accessToken !== "string" || !accessToken) {
     return null;
   }
+  if (typeof refreshToken !== "string" || !refreshToken) {
+    return null;
+  }
+
+  const expires = decodeJwtExpiryMs(accessToken) ?? fallbackExpiry;
+  if (expires === undefined) {
+    return null;
+  }
+  return {
+    type: "oauth",
+    provider: "openai" as OAuthProvider,
+    access: accessToken,
+    refresh: refreshToken,
+    expires,
+    accountId: typeof tokens?.account_id === "string" ? tokens.account_id : undefined,
+    idToken: typeof tokens?.id_token === "string" ? tokens.id_token : undefined,
+  };
+}
+
+function parseCodexApiKeyCredential(
+  data: Record<string, unknown>,
+): CodexCliApiKeyCredential | null {
+  if (!codexAuthJsonUsesApiKey(data)) {
+    return null;
+  }
+  const key = typeof data.OPENAI_API_KEY === "string" ? data.OPENAI_API_KEY.trim() : "";
+  return key ? { type: "api_key", provider: "openai", key } : null;
 }
 
 function readCliOauthTokenFields(
@@ -591,6 +592,74 @@ export function readClaudeCliCredentialsCached(options?: {
   });
 }
 
+function formatCodexApiKeyForLoginStatus(key: string): string {
+  return key.length <= 13 ? "***" : `${key.slice(0, 8)}***${key.slice(-5)}`;
+}
+
+/** Reads an API key only when Codex confirms that exact credential is active. */
+export function readCodexCliActiveApiKey(options?: {
+  codexHome?: string;
+  allowKeychainPrompt?: boolean;
+  platform?: NodeJS.Platform;
+  execSync?: ExecSyncFn;
+}): CodexCliApiKeyCredential | null {
+  const { execSyncImpl, codexHome } = resolveCodexKeychainParams(options);
+  let status: string;
+  try {
+    status = execSyncImpl("codex login status 2>&1", {
+      encoding: "utf8",
+      timeout: 5000,
+      stdio: ["pipe", "pipe", "pipe"],
+      env: { ...process.env, CODEX_HOME: codexHome },
+    }).trim();
+  } catch {
+    return null;
+  }
+  const statusMatch = /^Logged in using an API key - (.+)$/mu.exec(status);
+  const activeFingerprint = statusMatch?.[1]?.trim();
+  const legacyApiKeyStatus = status.trim() === "Logged in using an API key";
+  if (!activeFingerprint && !legacyApiKeyStatus) {
+    return null;
+  }
+
+  const candidates: CodexCliApiKeyCredential[] = [];
+  const authPath = path.join(codexHome, CODEX_CLI_AUTH_FILENAME);
+  const raw = loadJsonFile(authPath);
+  if (raw && typeof raw === "object") {
+    const fileCredential = parseCodexApiKeyCredential(raw as Record<string, unknown>);
+    if (fileCredential) {
+      candidates.push(fileCredential);
+    }
+  }
+  const keychainRecord = readCodexKeychainAuthRecord({
+    codexHome,
+    allowKeychainPrompt: options?.allowKeychainPrompt,
+    platform: options?.platform,
+    execSync: options?.execSync,
+  });
+  if (keychainRecord) {
+    const keychainCredential = parseCodexApiKeyCredential(keychainRecord);
+    if (keychainCredential) {
+      candidates.push(keychainCredential);
+    }
+  }
+
+  const matchingKeys = new Set(
+    candidates
+      .filter(
+        (candidate) =>
+          legacyApiKeyStatus ||
+          formatCodexApiKeyForLoginStatus(candidate.key) === activeFingerprint,
+      )
+      .map((candidate) => candidate.key),
+  );
+  if (matchingKeys.size !== 1) {
+    return null;
+  }
+  const key = [...matchingKeys][0];
+  return key ? { type: "api_key", provider: "openai", key } : null;
+}
+
 /** Reads Codex CLI OAuth credentials from Keychain or CODEX_HOME auth.json. */
 function readCodexCliCredentials(options?: {
   codexHome?: string;
@@ -598,14 +667,20 @@ function readCodexCliCredentials(options?: {
   platform?: NodeJS.Platform;
   execSync?: ExecSyncFn;
 }): CodexCliCredential | null {
-  const keychain = readCodexKeychainCredentials({
-    codexHome: options?.codexHome,
-    allowKeychainPrompt: options?.allowKeychainPrompt,
-    platform: options?.platform,
-    execSync: options?.execSync,
-  });
-  if (keychain) {
-    return keychain;
+  const keychainRecord = readCodexKeychainAuthRecord(options);
+  if (keychainRecord) {
+    const lastRefreshRaw = keychainRecord.last_refresh;
+    const lastRefresh =
+      typeof lastRefreshRaw === "string" || typeof lastRefreshRaw === "number"
+        ? new Date(lastRefreshRaw).getTime()
+        : Date.now();
+    const keychainCredential = parseCodexOauthCredential(
+      keychainRecord,
+      resolveCodexFallbackExpiryMs(lastRefresh) ?? resolveCodexFallbackExpiryMs(),
+    );
+    if (keychainCredential) {
+      return keychainCredential;
+    }
   }
 
   const authPath = path.join(resolveCodexHomePath(options?.codexHome), CODEX_CLI_AUTH_FILENAME);
@@ -613,47 +688,13 @@ function readCodexCliCredentials(options?: {
   if (!raw || typeof raw !== "object") {
     return null;
   }
-
-  const data = raw as Record<string, unknown>;
-  if (!codexAuthJsonUsesChatGptTokens(data)) {
-    return null;
-  }
-  const tokens = data.tokens as Record<string, unknown> | undefined;
-  if (!tokens || typeof tokens !== "object") {
-    return null;
-  }
-
-  const accessToken = tokens.access_token;
-  const refreshToken = tokens.refresh_token;
-
-  if (typeof accessToken !== "string" || !accessToken) {
-    return null;
-  }
-  if (typeof refreshToken !== "string" || !refreshToken) {
-    return null;
-  }
-
   let fallbackExpiry: number | undefined;
   try {
-    const stat = fs.statSync(authPath);
-    fallbackExpiry = resolveCodexFallbackExpiryMs(stat.mtimeMs);
+    fallbackExpiry = resolveCodexFallbackExpiryMs(fs.statSync(authPath).mtimeMs);
   } catch {
     fallbackExpiry = resolveCodexFallbackExpiryMs();
   }
-  const expires = decodeJwtExpiryMs(accessToken) ?? fallbackExpiry;
-  if (expires === undefined) {
-    return null;
-  }
-
-  return {
-    type: "oauth",
-    provider: "openai" as OAuthProvider,
-    access: accessToken,
-    refresh: refreshToken,
-    expires,
-    accountId: typeof tokens.account_id === "string" ? tokens.account_id : undefined,
-    idToken: typeof tokens.id_token === "string" ? tokens.id_token : undefined,
-  };
+  return parseCodexOauthCredential(raw as Record<string, unknown>, fallbackExpiry);
 }
 
 /** Reads Codex CLI credentials with optional short-lived cache and file fingerprinting. */

@@ -1,9 +1,27 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { normalizeControlUiBuildInfo } from "./build-info-normalizers.ts";
 
 const COMMIT = "0123456789abcdef0123456789abcdef01234567";
 
 describe("Control UI build info", () => {
+  it("compares the normalized embedded version with the gateway", async () => {
+    vi.stubGlobal("OPENCLAW_CONTROL_UI_BUILD_INFO", {
+      version: "2026.7.19",
+      buildId: "test",
+    });
+    vi.resetModules();
+
+    try {
+      const { controlUiVersionDiffersFrom } = await import("./build-info.ts");
+      expect(controlUiVersionDiffersFrom(" 2026.7.19 ")).toBe(false);
+      expect(controlUiVersionDiffersFrom("2026.7.20")).toBe(true);
+      expect(controlUiVersionDiffersFrom(undefined)).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+      vi.resetModules();
+    }
+  });
+
   it("keeps only full Git SHAs", () => {
     expect(normalizeControlUiBuildInfo({ commit: COMMIT.toUpperCase() }).commit).toBe(COMMIT);
     expect(normalizeControlUiBuildInfo({ commit: COMMIT.slice(0, 12) }).commit).toBeNull();
@@ -59,6 +77,7 @@ describe("Control UI build info", () => {
         builtAt: "later",
         branch: "HEAD",
         dirty: "yes",
+        release: "yes",
         buildId: "",
       }),
     ).toEqual({
@@ -68,14 +87,18 @@ describe("Control UI build info", () => {
       builtAt: null,
       branch: null,
       dirty: null,
+      release: false,
       buildId: "dev",
     });
   });
 
-  it("passes through normalized branch and boolean dirty state", () => {
-    expect(normalizeControlUiBuildInfo({ branch: " feature/x ", dirty: false })).toMatchObject({
+  it("passes through normalized branch, dirty state, and release identity", () => {
+    expect(
+      normalizeControlUiBuildInfo({ branch: " feature/x ", dirty: false, release: true }),
+    ).toMatchObject({
       branch: "feature/x",
       dirty: false,
+      release: true,
     });
   });
 
@@ -85,7 +108,8 @@ describe("Control UI build info", () => {
         version: "2026.7.10",
         commit: COMMIT,
         builtAt: "2026-07-10T12:34:56.000Z",
+        release: true,
       }).buildId,
-    ).toBe("2026.7.10-0123456789ab-2026-07-10T12-34-56.000Z");
+    ).toBe("2026.7.10-release-0123456789ab-2026-07-10T12-34-56.000Z");
   });
 });

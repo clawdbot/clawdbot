@@ -1,14 +1,15 @@
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
+import "./ai-transport-runtime-host.js";
+import {
+  applyAnthropicPayloadPolicyToParams,
+  resolveAnthropicPayloadPolicy,
+} from "@openclaw/ai/transports";
 /**
  * Tests Anthropic payload policy mutation.
  * Covers service tier, cache-control retention, prompt cache boundaries, and
  * deprecated marker compatibility.
  */
 import { describe, expect, it } from "vitest";
-import {
-  applyAnthropicPayloadPolicyToParams,
-  resolveAnthropicPayloadPolicy,
-} from "./anthropic-payload-policy.js";
 
 type TestPayload = {
   messages: Array<{ role: string; content: unknown }>;

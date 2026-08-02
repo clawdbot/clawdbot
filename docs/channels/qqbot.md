@@ -146,6 +146,11 @@ Notes:
   `allowFrom` has a concrete (non-wildcard) entry, otherwise `open`.
   `groupPolicy` defaults to `allowlist` once either `groupAllowFrom` or
   `allowFrom` has a concrete entry, otherwise `open`.
+- `contextVisibility` controls quoted-message text that QQ supplies as
+  supplemental context. The default, `"all"`, keeps quoted text as received.
+  Set `"allowlist"` to include quoted bodies only when the quoted sender passes
+  the configured sender policy, or `"allowlist_quote"` to keep explicit quotes
+  while filtering other supplemental context. See [Groups](/channels/groups#context-visibility-and-allowlists).
 - "Auth: allowlist" slash commands require an explicit non-wildcard entry in
   `allowFrom` (or `groupAllowFrom` for group invocations) regardless of
   `dmPolicy` / `groupPolicy` — see [Slash commands](#slash-commands).
@@ -252,10 +257,10 @@ commands run one by one, independent of any merge batch.
 
 STT and TTS support two-level configuration with priority fallback:
 
-| Setting | Plugin-specific                                          | Framework fallback            |
-| ------- | -------------------------------------------------------- | ----------------------------- |
-| STT     | `channels.qqbot.stt`                                     | `tools.media.audio.models[0]` |
-| TTS     | `channels.qqbot.tts`, `channels.qqbot.accounts.<id>.tts` | `messages.tts`                |
+| Setting | Plugin-specific                                          | Framework fallback                               |
+| ------- | -------------------------------------------------------- | ------------------------------------------------ |
+| STT     | `channels.qqbot.stt`                                     | first audio-capable `tools.media.models[]` entry |
+| TTS     | `channels.qqbot.tts`, `channels.qqbot.accounts.<id>.tts` | `tts`                                            |
 
 ```json5
 {
@@ -285,12 +290,11 @@ STT and TTS support two-level configuration with priority fallback:
 ```
 
 Set `enabled: false` on either to disable. Account-level TTS overrides use the
-same shape as `messages.tts` and deep-merge over channel/global TTS config.
+same shape as `tts` and deep-merge over channel/global TTS config.
 
 STT requests time out after 60 seconds by default. Plugin-specific STT uses the
 selected `models.providers.<id>.timeoutSeconds` override. Framework audio STT
-uses `tools.media.audio.models[0].timeoutSeconds`, then
-`tools.media.audio.timeoutSeconds`, then the selected provider override.
+uses the selected audio-capable `tools.media.models[]` entry's `timeoutSeconds`, then the selected provider override.
 
 Inbound QQ voice attachments are exposed to agents as audio media metadata
 while keeping raw voice files out of generic `MediaPaths`. `[[audio_as_voice]]`

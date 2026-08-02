@@ -10,12 +10,13 @@ export type NostrIngressPayload = {
 };
 
 export class NostrIngressPermanentError extends Error {
-  readonly reason: string;
-
-  constructor(reason: string, message: string, options?: ErrorOptions) {
+  constructor(
+    readonly reason: string,
+    message: string,
+    options?: ErrorOptions,
+  ) {
     super(message, options);
     this.name = "NostrIngressPermanentError";
-    this.reason = reason;
   }
 }
 

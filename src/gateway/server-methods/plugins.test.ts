@@ -228,7 +228,7 @@ describe("plugin management Gateway handlers", () => {
 
   it.each([
     { mode: "off", restartRequired: true },
-    { mode: "restart", restartRequired: true },
+    { mode: "restart", restartRequired: false },
     { mode: "hot", restartRequired: false },
   ] as const)(
     "reports restartRequired=$restartRequired for $mode reload mode",

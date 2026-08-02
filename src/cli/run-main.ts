@@ -7,7 +7,11 @@ import type { Command as CommanderCommand, Option as CommanderOption } from "com
 import { resolveStateDir } from "../config/paths.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { isLoopbackAddress, isSecureWebSocketUrl } from "../gateway/net.js";
-import { FLAG_TERMINATOR, isValueToken } from "../infra/cli-root-options.js";
+import {
+  consumeRootOptionToken,
+  FLAG_TERMINATOR,
+  isValueToken,
+} from "../infra/cli-root-options.js";
 import { isTruthyEnvValue, normalizeEnv } from "../infra/env.js";
 import type { ProxyHandle } from "../infra/net/proxy/proxy-lifecycle.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
@@ -34,12 +38,20 @@ import {
   resolveGatewayCatalogCommandPath,
   resolveGatewayRunPreBootstrapOptions,
 } from "./gateway-run-argv.js";
-import { hasJsonOutputFlag, withConsoleLogsRoutedToStderrForJson } from "./json-output-mode.js";
-import { flushExitAfterOneShotOutput, requestExitAfterOneShotOutput } from "./one-shot-exit.js";
+import {
+  hasJsonOutputFlag,
+  withConsoleLogsRoutedToStderr,
+  withConsoleLogsRoutedToStderrForJson,
+} from "./json-output-mode.js";
+import { isMachineOutputStdoutTTY } from "./machine-output-argv.js";
+import { requestExitAfterOneShotOutput } from "./one-shot-exit.js";
 import { tryOutputPrecomputedCommandHelp } from "./precomputed-help.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./profile.js";
 import { formatCliCommandSuggestions } from "./program/command-suggestions.js";
-import { getCoreCliCommandNames } from "./program/core-command-descriptors.js";
+import {
+  getCoreCliCommandDescriptors,
+  getCoreCliCommandNames,
+} from "./program/core-command-descriptors.js";
 import { getSubCliEntries } from "./program/subcli-descriptors.js";
 import {
   resolveMissingPluginCommandMessage as resolveMissingPluginCommandMessageFromPolicy,
@@ -51,7 +63,10 @@ import {
   shouldUseSetupOnboardConfigureHelpFastPath,
 } from "./run-main-policy.js";
 import { registerSignalExitBarrier, waitForSignalExitBarriers } from "./signal-exit-barrier.js";
-import { createGatewayStartupTrace } from "./startup-trace.js";
+import {
+  configureGatewayStartupTraceConsoleFormatting,
+  createGatewayStartupTrace,
+} from "./startup-trace.js";
 import { normalizeWindowsArgv } from "./windows-argv.js";
 
 export {
@@ -112,6 +127,11 @@ export function isGatewayRunFastPathArgv(argv: string[]): boolean {
       continue;
     }
 
+    const rootConsumed = consumeRootOptionToken(args, index);
+    if (rootConsumed > 0) {
+      index += rootConsumed - 1;
+      continue;
+    }
     const consumed = consumeGatewayRunOptionToken(args, index);
     if (consumed > 0) {
       index += consumed - 1;
@@ -148,7 +168,6 @@ async function tryRunGatewayRunFastPath(
     { VERSION },
     { emitCliBanner },
     { resolveCliStartupPolicy },
-    { enableConsoleCapture },
     { ensureCliExecutionBootstrap },
     { defaultRuntime },
   ] = await startupTrace.measure("gateway-run-imports", () =>
@@ -158,7 +177,6 @@ async function tryRunGatewayRunFastPath(
       import("../version.js"),
       import("./banner.js"),
       import("./command-startup-policy.js"),
-      loadLoggingModule(),
       import("./command-execution-startup.js"),
       import("../runtime.js"),
     ]),
@@ -230,9 +248,10 @@ async function tryRunGatewayRunFastPath(
     gateway.command("run").description("Run the WebSocket Gateway (foreground)"),
     { beforeRun },
   );
-  enableConsoleCapture();
   try {
-    await startupTrace.measure("gateway-run-parse", () => program.parseAsync(argv));
+    await startupTrace.measure("gateway-run-parse", () => program.parseAsync(argv), {
+      timeline: false,
+    });
   } catch (error) {
     if (!isCommanderParseExit(error)) {
       throw error;
@@ -267,6 +286,20 @@ async function disposeCliAgentHarnesses(): Promise<void> {
   } catch {
     // Best-effort teardown for short-lived CLI commands. Harness plugins may
     // own subprocesses, but cleanup must not hide the command's real outcome.
+  }
+}
+
+async function closeCliMcpLoopbackServer(): Promise<void> {
+  try {
+    const { getActiveMcpLoopbackRuntime } = await import("../gateway/mcp-http.loopback-runtime.js");
+    if (!getActiveMcpLoopbackRuntime()) {
+      return;
+    }
+    const { closeMcpLoopbackServer } = await import("../gateway/mcp-http.js");
+    await closeMcpLoopbackServer();
+  } catch {
+    // Best-effort teardown for short-lived CLI commands. A command result is
+    // already final, so cleanup must not replace its outcome.
   }
 }
 
@@ -677,6 +710,10 @@ function shouldLoadCliDotEnv(env: NodeJS.ProcessEnv = process.env): boolean {
   return existsSync(path.join(resolveStateDir(env), ".env"));
 }
 
+function isAgentExecInvocation(commandPath: string[]): boolean {
+  return commandPath[0] === "agent" && commandPath[1] === "exec";
+}
+
 function isCommanderParseExit(error: unknown): error is { exitCode: number } {
   if (!error || typeof error !== "object") {
     return false;
@@ -829,6 +866,44 @@ function isKnownBuiltInCommandRoot(primary: string): boolean {
   );
 }
 
+function resolvesMachineOutput(
+  descriptor: {
+    machineOutput?: (params: { argv: readonly string[]; stdoutIsTTY: boolean }) => boolean;
+  },
+  argv: readonly string[],
+): boolean {
+  return descriptor.machineOutput?.({ argv, stdoutIsTTY: isMachineOutputStdoutTTY() }) ?? false;
+}
+
+function resolveBuiltInMachineOutput(argv: string[]): boolean {
+  const { primary } = resolveCliArgvInvocation(argv);
+  if (!primary) {
+    return false;
+  }
+  const descriptor = [...getCoreCliCommandDescriptors(), ...getSubCliEntries()].find(
+    (entry) => entry.name === primary,
+  );
+  return descriptor ? resolvesMachineOutput(descriptor, argv) : false;
+}
+
+async function resolvePluginMachineOutput(params: {
+  argv: string[];
+  config: OpenClawConfig;
+}): Promise<boolean> {
+  const { primary } = resolveCliArgvInvocation(params.argv);
+  if (!primary || isKnownBuiltInCommandRoot(primary)) {
+    return false;
+  }
+  const { loadPluginCliDescriptors } = await loadCliRegistryLoaderModule();
+  const descriptors = await loadPluginCliDescriptors({
+    cfg: params.config,
+    env: process.env,
+    primaryCommand: primary,
+  });
+  const descriptor = descriptors.find((entry) => entry.name === primary);
+  return descriptor ? resolvesMachineOutput(descriptor, params.argv) : false;
+}
+
 async function isPluginCliRoot(params: {
   primary: string;
   config: OpenClawConfig;
@@ -960,31 +1035,98 @@ async function bootstrapCliProxyCaptureAndDispatcher(
   if (options.ensureDispatcher !== false) {
     await startupTrace.measure("proxy-dispatcher", () => ensureCliEnvProxyDispatcher());
   }
-  maybeWarnAboutDebugProxyCoverage();
+  maybeWarnAboutDebugProxyCoverage(undefined, (message) => console.warn(message));
 }
 
-export async function runCli(argv: string[] = process.argv) {
+export async function runCli(
+  argv: string[] = process.argv,
+  options: {
+    additionalStartupTrace?: ReturnType<typeof createGatewayStartupTrace>;
+    retainConsoleRoutingUntilProcessExit?: boolean;
+  } = {},
+) {
   const originalArgv = normalizeWindowsArgv(argv);
+  const builtInMachineOutput = resolveBuiltInMachineOutput(originalArgv);
+  return await withConsoleLogsRoutedToStderrForJson(
+    originalArgv,
+    () => runCliWithPreparedOutputMode(originalArgv, { ...options, builtInMachineOutput }),
+    {
+      machineOutput: builtInMachineOutput,
+      restoreChanges: true,
+      retainRoutingUntilProcessExit: options.retainConsoleRoutingUntilProcessExit,
+    },
+  );
+}
+
+async function runCliWithPreparedOutputMode(
+  originalArgv: string[],
+  options: {
+    additionalStartupTrace?: ReturnType<typeof createGatewayStartupTrace>;
+    builtInMachineOutput: boolean;
+  },
+) {
   const startupTrace = createGatewayStartupTrace(originalArgv, "cli.main");
+  const earlyProfile = parseCliProfileArgs(originalArgv);
+  if (earlyProfile.ok && earlyProfile.profile) {
+    applyCliProfileEnv({ profile: earlyProfile.profile });
+  }
+  const originalInvocation = resolveCliArgvInvocation(originalArgv);
+  let consoleCaptureInstalled = false;
+  const installConsoleCapture = async () => {
+    if (consoleCaptureInstalled) {
+      return;
+    }
+    const { enableConsoleCapture } = await loadLoggingModule();
+    enableConsoleCapture();
+    consoleCaptureInstalled = true;
+  };
+  const configureStartupTraces = async () => {
+    await configureGatewayStartupTraceConsoleFormatting(startupTrace);
+    if (options.additionalStartupTrace) {
+      await configureGatewayStartupTraceConsoleFormatting(options.additionalStartupTrace);
+    }
+  };
   const parsedContainer = parseCliContainerArgs(originalArgv);
   if (!parsedContainer.ok) {
+    await installConsoleCapture();
+    await configureStartupTraces();
     throw new Error(parsedContainer.error);
   }
   const parsedProfile = parseCliProfileArgs(parsedContainer.argv);
+  const containerTargetName =
+    parsedContainer.container ?? normalizeOptionalString(process.env.OPENCLAW_CONTAINER) ?? null;
+  const hasPreHelpValidationError =
+    !parsedProfile.ok || (containerTargetName !== null && parsedProfile.profile !== null);
+  // Console formatting is a process-wide invariant. Install capture before
+  // container dispatch or validation can bypass the pure help/version path.
+  if (
+    !originalInvocation.hasHelpOrVersion ||
+    containerTargetName !== null ||
+    hasPreHelpValidationError
+  ) {
+    await installConsoleCapture();
+  }
   if (!parsedProfile.ok) {
+    await configureStartupTraces();
     throw new Error(parsedProfile.error);
   }
   if (parsedProfile.profile) {
     applyCliProfileEnv({ profile: parsedProfile.profile });
   }
-  const containerTargetName =
-    parsedContainer.container ?? normalizeOptionalString(process.env.OPENCLAW_CONTAINER) ?? null;
   if (containerTargetName && parsedProfile.profile) {
+    await configureStartupTraces();
     throw new Error("--container cannot be combined with --profile/--dev");
   }
 
-  const containerTarget = maybeRunCliInContainer(originalArgv);
+  let containerTarget: ReturnType<typeof maybeRunCliInContainer>;
+  try {
+    containerTarget = maybeRunCliInContainer(originalArgv);
+  } catch (error) {
+    await configureStartupTraces();
+    throw error;
+  }
   if (containerTarget.handled) {
+    await configureStartupTraces();
     if (containerTarget.exitCode !== 0) {
       process.exitCode = containerTarget.exitCode;
     }
@@ -999,7 +1141,11 @@ export async function runCli(argv: string[] = process.argv) {
   // Enforce the minimum supported runtime before gateway selection can read or recover config.
   assertSupportedRuntime();
 
-  if (!isHelpOrVersionInvocation && (isGatewayRunInvocation || shouldLoadCliDotEnv())) {
+  if (
+    !isHelpOrVersionInvocation &&
+    !isAgentExecInvocation(normalizedInvocation.commandPath) &&
+    (isGatewayRunInvocation || shouldLoadCliDotEnv())
+  ) {
     await startupTrace.measure("dotenv", async () => {
       if (isRemoteAgentDispatchInvocation(normalizedArgv, normalizedInvocation.primary)) {
         const { loadGatewayDispatchCliDotEnv } = await import("./gateway-dispatch-dotenv.js");
@@ -1010,6 +1156,7 @@ export async function runCli(argv: string[] = process.argv) {
       }
     });
   }
+  await configureStartupTraces();
   if (!isHelpOrVersionInvocation && isGatewayRunInvocation) {
     await startupTrace.measure("gateway-run-select-environment", async () => {
       const [{ selectGatewayRunEnvironment }, { defaultRuntime }] = await Promise.all([
@@ -1045,6 +1192,32 @@ export async function runCli(argv: string[] = process.argv) {
     }
     return await bestEffortConfigPromise;
   };
+  const startupTraces = [startupTrace, options.additionalStartupTrace].filter(
+    (trace): trace is ReturnType<typeof createGatewayStartupTrace> => Boolean(trace),
+  );
+  if (
+    (await Promise.all(startupTraces.map((trace) => trace.requiresDiagnosticsConfig()))).some(
+      Boolean,
+    )
+  ) {
+    const config = await withConsoleLogsRoutedToStderr(readBestEffortCliConfig);
+    await Promise.all(startupTraces.map((trace) => trace.configureDiagnosticsTimeline(config)));
+  }
+  if (
+    !isHelpOrVersionInvocation &&
+    normalizedInvocation.primary &&
+    !isKnownBuiltInCommandRoot(normalizedInvocation.primary)
+  ) {
+    const config = await withConsoleLogsRoutedToStderr(readBestEffortCliConfig);
+    if (
+      await withConsoleLogsRoutedToStderr(() =>
+        resolvePluginMachineOutput({ argv: normalizedArgv, config }),
+      )
+    ) {
+      const { routeLogsToStderr } = await loadLoggingModule();
+      routeLogsToStderr();
+    }
+  }
   const uninstallProxySignalHandlers = () => {
     if (onSigterm) {
       process.off("SIGTERM", onSigterm);
@@ -1099,7 +1272,7 @@ export async function runCli(argv: string[] = process.argv) {
     installProxySignalHandlers();
   };
   if (!isHelpOrVersionInvocation && shouldStartProxyForCli(normalizedArgv)) {
-    const config = await readBestEffortCliConfig();
+    const config = await withConsoleLogsRoutedToStderr(readBestEffortCliConfig);
     const unownedPrimary = await resolveUnownedCliPrimary({ argv: normalizedArgv, config });
     if (unownedPrimary) {
       throw new Error(await resolveUnownedCliPrimaryMessage({ primary: unownedPrimary, config }));
@@ -1116,7 +1289,6 @@ export async function runCli(argv: string[] = process.argv) {
     });
   }
 
-  let flushedHelpExit = false;
   try {
     if (shouldUseRootHelpFastPath(normalizedArgv)) {
       const { loadRootHelpRenderOptionsForConfigSensitivePlugins } =
@@ -1146,6 +1318,10 @@ export async function runCli(argv: string[] = process.argv) {
         return;
       }
     }
+
+    // Genuine help fast paths have returned. Any remaining help/version-shaped
+    // invocation can still fail validation and must honor the console style.
+    await installConsoleCapture();
 
     // Reject unowned command roots before help/version routing, so that
     // `openclaw <typo> --help` surfaces the same Unknown command error as
@@ -1255,7 +1431,15 @@ export async function runCli(argv: string[] = process.argv) {
     }
 
     const { tryRouteCli } = await startupTrace.measure("route-import", () => import("./route.js"));
-    if (await startupTrace.measure("route", () => tryRouteCli(normalizedArgv))) {
+    const routed = await startupTrace.measure(
+      "route",
+      () =>
+        options.builtInMachineOutput
+          ? tryRouteCli(normalizedArgv, { machineOutput: true })
+          : tryRouteCli(normalizedArgv),
+      { timeline: false },
+    );
+    if (routed) {
       return;
     }
 
@@ -1278,10 +1462,6 @@ export async function runCli(argv: string[] = process.argv) {
     };
 
     try {
-      // Capture all console output into structured logs while keeping stdout/stderr behavior.
-      const { enableConsoleCapture } = await loadLoggingModule();
-      enableConsoleCapture();
-
       const [
         { buildProgram },
         { formatUncaughtError },
@@ -1292,7 +1472,7 @@ export async function runCli(argv: string[] = process.argv) {
           isBenignUncaughtExceptionError,
           isUncaughtExceptionHandled,
         },
-        { restoreTerminalState },
+        { restoreRuntimeTerminalState },
       ] = await startupTrace.measure("core-imports", () =>
         Promise.all([
           import("./program.js"),
@@ -1300,7 +1480,7 @@ export async function runCli(argv: string[] = process.argv) {
           import("./failure-output.js"),
           import("../infra/fatal-error-hooks.js"),
           import("../infra/unhandled-rejections.js"),
-          import("../../packages/terminal-core/src/restore.js"),
+          import("../runtime.js"),
         ]),
       );
       const program = await startupTrace.measure("build-program", () => buildProgram());
@@ -1330,7 +1510,7 @@ export async function runCli(argv: string[] = process.argv) {
         for (const message of runFatalErrorHooks({ reason: "uncaught_exception", error })) {
           console.error("[openclaw]", message);
         }
-        restoreTerminalState("uncaught exception", { resumeStdinIfPaused: false });
+        restoreRuntimeTerminalState("uncaught exception", { resumeStdinIfPaused: false });
         process.exit(1);
       });
 
@@ -1365,12 +1545,10 @@ export async function runCli(argv: string[] = process.argv) {
         const config = await startupTrace.measure("register-plugin-commands", async () => {
           const { registerPluginCliCommandsFromValidatedConfig } =
             await import("../plugins/cli.js");
-          return await withConsoleLogsRoutedToStderrForJson(parseArgv, () =>
-            registerPluginCliCommandsFromValidatedConfig(program, undefined, undefined, {
-              mode: "lazy",
-              primary,
-            }),
-          );
+          return await registerPluginCliCommandsFromValidatedConfig(program, undefined, undefined, {
+            mode: "lazy",
+            primary,
+          });
         });
         if (config) {
           if (
@@ -1409,7 +1587,9 @@ export async function runCli(argv: string[] = process.argv) {
 
       let completedHelpOrVersion = false;
       try {
-        await startupTrace.measure("parse", () => program.parseAsync(parseArgv));
+        await startupTrace.measure("parse", () => program.parseAsync(parseArgv), {
+          timeline: false,
+        });
         completedHelpOrVersion = isHelpOrVersionInvocation;
       } catch (error) {
         if (!isCommanderParseExit(error)) {
@@ -1420,10 +1600,9 @@ export async function runCli(argv: string[] = process.argv) {
       }
       if (completedHelpOrVersion) {
         // Lazy command-group registrars can import native/runtime resources solely to
-        // render complete help. Exit after Commander has rendered and streams flush.
+        // render complete help. Request an exit now; the top-level finally flushes it
+        // after shared async teardown completes.
         requestExitAfterOneShotOutput();
-        flushExitAfterOneShotOutput();
-        flushedHelpExit = true;
       }
     } finally {
       stopStartupProgress();
@@ -1432,11 +1611,9 @@ export async function runCli(argv: string[] = process.argv) {
     uninstallGatewayRunRuntimeHooks?.();
     await stopStartedProxy();
     await disposeCliAgentHarnesses();
+    await closeCliMcpLoopbackServer();
     await closeCliMemoryManagers();
     pauseNonTtyStdinForCliExit();
-    if (!flushedHelpExit) {
-      flushExitAfterOneShotOutput();
-    }
   }
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

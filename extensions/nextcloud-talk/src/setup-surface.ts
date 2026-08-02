@@ -13,7 +13,6 @@ import {
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveNextcloudTalkAccount } from "./accounts.js";
 import {
-  clearNextcloudTalkAccountFields,
   nextcloudTalkDmPolicy,
   normalizeNextcloudTalkBaseUrl,
   setNextcloudTalkAccountConfig,
@@ -102,10 +101,8 @@ export const nextcloudTalkSetupWizard: ChannelSetupWizard = {
         accountId === DEFAULT_ACCOUNT_ID
           ? normalizeOptionalString(process.env.NEXTCLOUD_TALK_BOT_SECRET)
           : undefined,
-      patchAccount: ({ cfg, accountId, patch, clearFields }) => {
-        const cleared = clearNextcloudTalkAccountFields(cfg as CoreConfig, accountId, clearFields);
-        return setNextcloudTalkAccountConfig(cleared, accountId, patch);
-      },
+      patchAccount: ({ cfg, accountId, patch, clearFields }) =>
+        setNextcloudTalkAccountConfig(cfg as CoreConfig, accountId, patch, clearFields),
       useEnv: {
         clearFields: ["botSecret", "botSecretFile"],
         patch: (account) => ({ baseUrl: account.baseUrl }),
@@ -135,11 +132,7 @@ export const nextcloudTalkSetupWizard: ChannelSetupWizard = {
         ),
       shouldPrompt: ({ credentialValues }) => credentialValues[CONFIGURE_API_FLAG] === "1",
       patchAccount: ({ cfg, accountId, patch, clearFields }) =>
-        setNextcloudTalkAccountConfig(
-          clearNextcloudTalkAccountFields(cfg as CoreConfig, accountId, clearFields),
-          accountId,
-          patch,
-        ),
+        setNextcloudTalkAccountConfig(cfg as CoreConfig, accountId, patch, clearFields),
       set: { clearFields: ["apiPassword", "apiPasswordFile"] },
     }),
   ],

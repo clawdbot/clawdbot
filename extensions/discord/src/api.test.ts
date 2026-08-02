@@ -338,6 +338,35 @@ describe("fetchDiscord", () => {
     expect(String(error)).toContain("Discord API /users/@me/guilds returned malformed JSON");
   });
 
+  it("rejects malformed UTF-8 in otherwise valid Discord JSON", async () => {
+    let response: Response | undefined;
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.write('[{"id":"guild-');
+      res.write(Buffer.from([0xff]));
+      res.end('","name":"Guild"}]');
+    });
+    const port = await listenLoopbackServer(server);
+
+    try {
+      stubDiscordFetchToLoopback(`http://127.0.0.1:${port}`, (nextResponse) => {
+        response = nextResponse;
+      });
+
+      await expect(
+        requestDiscord("/users/@me/guilds", "test", {
+          retry: { attempts: 1 },
+        }),
+      ).rejects.toThrow("Discord API /users/@me/guilds returned malformed JSON");
+      expect(response?.bodyUsed).toBe(true);
+      console.log(
+        `[discord requestDiscord loopback proof] malformed UTF-8: rejected=true body_used=${response?.bodyUsed}`,
+      );
+    } finally {
+      await closeServer(server);
+    }
+  });
+
   it("returns under-cap requestDiscord responses from a real loopback HTTP server", async () => {
     const payload = { id: "channel-42", name: "loopback", type: 0 };
     let contentLength: string | null | undefined;

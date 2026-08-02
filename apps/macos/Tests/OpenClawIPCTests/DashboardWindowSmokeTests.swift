@@ -55,6 +55,7 @@ struct DashboardWindowSmokeTests {
         controller.show()
         #expect(controller.window?.styleMask.contains(.titled) == true)
         #expect(controller.window?.styleMask.contains(.closable) == true)
+        #expect(controller.window?.isRestorable == false)
         #expect(controller.window?.contentViewController != nil)
         #expect(controller.window?.standardWindowButton(.closeButton) != nil)
         // The empty unified toolbar is what grows the titlebar to 52pt so the
@@ -188,17 +189,56 @@ struct DashboardWindowSmokeTests {
         let staleEndpoint = try #require(URL(string: "http://127.0.0.1:18790/control/chat"))
         #expect(try DashboardWindowController.shouldAllowNavigation(
             to: #require(URL(string: "http://127.0.0.1:18789/control/chat")),
-            dashboardURL: dashboard))
+            dashboardURL: dashboard,
+            isMainFrame: true))
         #expect(try !DashboardWindowController.shouldAllowNavigation(
             to: #require(URL(string: "https://docs.openclaw.ai/")),
-            dashboardURL: dashboard))
+            dashboardURL: dashboard,
+            isMainFrame: true))
         #expect(!DashboardWindowController.shouldAllowNavigation(
             to: staleEndpoint,
-            dashboardURL: dashboard))
+            dashboardURL: dashboard,
+            isMainFrame: true))
         #expect(!DashboardWindowController.shouldOpenExternalDashboardNavigation(
             staleEndpoint,
             navigationType: .backForward,
             buttonNumber: 1))
+    }
+
+    @Test func `dashboard permits only trusted ClickClack discussion subframes`() throws {
+        let dashboard = try #require(URL(string: "http://127.0.0.1:18789/control/"))
+        let channel = try #require(URL(string: "http://127.0.0.1:18890/embed/channel/T01/C01"))
+        let thread = try #require(URL(string: "http://127.0.0.1:18890/embed/thread/T01/M01"))
+        let hostnameAlias = try #require(URL(string: "http://localhost:18890/embed/channel/T01/C01"))
+        let ipv6Alias = try #require(URL(string: "http://[::1]:18890/embed/thread/T01/M01"))
+        let credentialedFrame = try #require(URL(string: "http://user:pass@localhost:18890/embed/channel/T01/C01"))
+        let unrelatedPath = try #require(URL(string: "http://127.0.0.1:18890/admin"))
+        let externalFrame = try #require(URL(string: "https://clickclack.example/embed/channel/T01/C01"))
+        let externalHTTPFrame = try #require(URL(string: "http://clickclack.example/embed/thread/T01/M01"))
+        let localFile = try #require(URL(string: "file:///tmp/discussion.html"))
+
+        #expect(DashboardWindowController.shouldAllowNavigation(
+            to: channel, dashboardURL: dashboard, isMainFrame: false, isTrustedDashboardSource: true))
+        #expect(DashboardWindowController.shouldAllowNavigation(
+            to: thread, dashboardURL: dashboard, isMainFrame: false, isTrustedDashboardSource: true))
+        #expect(DashboardWindowController.shouldAllowNavigation(
+            to: hostnameAlias, dashboardURL: dashboard, isMainFrame: false, isTrustedDashboardSource: true))
+        #expect(DashboardWindowController.shouldAllowNavigation(
+            to: ipv6Alias, dashboardURL: dashboard, isMainFrame: false, isTrustedDashboardSource: true))
+        #expect(DashboardWindowController.shouldAllowNavigation(
+            to: externalFrame, dashboardURL: dashboard, isMainFrame: false, isTrustedDashboardSource: true))
+        #expect(DashboardWindowController.shouldAllowNavigation(
+            to: externalHTTPFrame, dashboardURL: dashboard, isMainFrame: false, isTrustedDashboardSource: true))
+        #expect(!DashboardWindowController.shouldAllowNavigation(
+            to: channel, dashboardURL: dashboard, isMainFrame: true))
+        #expect(!DashboardWindowController.shouldAllowNavigation(
+            to: credentialedFrame, dashboardURL: dashboard, isMainFrame: false, isTrustedDashboardSource: true))
+        #expect(!DashboardWindowController.shouldAllowNavigation(
+            to: unrelatedPath, dashboardURL: dashboard, isMainFrame: false, isTrustedDashboardSource: true))
+        #expect(!DashboardWindowController.shouldAllowNavigation(
+            to: externalFrame, dashboardURL: dashboard, isMainFrame: false, isTrustedDashboardSource: false))
+        #expect(!DashboardWindowController.shouldAllowNavigation(
+            to: localFile, dashboardURL: dashboard, isMainFrame: false, isTrustedDashboardSource: true))
     }
 
     @Test func `dashboard navigation shortcuts target the focused browser`() throws {
@@ -425,6 +465,7 @@ struct DashboardWindowSmokeTests {
         #expect(controller._testLinkBrowserWebViewIdentity == nil)
         #expect(controller._testLinkBrowserDataStore === controller._testDashboardDataStore)
         #expect(!controller._testCanOpenWindowsAutomatically)
+        #expect(controller._testAllWebViewsEnableTabNavigation)
         #expect(controller._testLinkBrowserNavigationObservationCount == 0)
         #expect(controller._testLinkBrowserTabBarIsHidden)
         #expect(controller._testLinkBrowserTabBarHeight == 0)
@@ -439,6 +480,7 @@ struct DashboardWindowSmokeTests {
         #expect(!controller._testLinkBrowserIsCollapsed)
         #expect(controller._testLinkBrowserRepresentedURL == urlA)
         #expect(!controller._testCanOpenWindowsAutomatically)
+        #expect(controller._testAllWebViewsEnableTabNavigation)
         #expect(controller._testLinkBrowserTabBarIsHidden)
         #expect(controller._testLinkBrowserTabBarHeight == 0)
         #expect(controller._testLinkBrowserToolbarHeight == DashboardWindowLayout.linkBrowserToolbarHeight)

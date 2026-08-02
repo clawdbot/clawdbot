@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { markdownToIR, sliceMarkdownIR } from "./ir.js";
+import { renderMarkdownWithAttributedRanges } from "./render-attributed.js";
 import { renderMarkdownWithMarkers } from "./render.js";
 
 describe("renderMarkdownWithMarkers semantic annotations", () => {
@@ -89,5 +90,43 @@ describe("renderMarkdownWithMarkers semantic annotations", () => {
     });
 
     expect(rendered.match(/`user\[t\d+\]`/gu)).toHaveLength(256);
+  });
+});
+
+describe("renderMarkdownWithAttributedRanges", () => {
+  it("projects annotations and splits styles around link suffixes", () => {
+    const ir = markdownToIR("user[Thu] **[docs](https://example.com) tail**", {
+      assistantTranscriptRoleHeaders: true,
+    });
+    expect(
+      renderMarkdownWithAttributedRanges(ir, {
+        styleMap: { bold: "strong" },
+        annotationStyleMap: { assistant_transcript_role: "code" },
+        renderLink: (link) => ` (${link.href})`,
+      }),
+    ).toEqual({
+      text: "user[Thu] docs (https://example.com) tail",
+      ranges: [
+        { start: 0, length: 9, style: "code" },
+        { start: 10, length: 4, style: "strong" },
+        { start: 36, length: 5, style: "strong" },
+      ],
+    });
+  });
+
+  it("uses UTF-16 offsets and clamps ranges after trimming", () => {
+    expect(
+      renderMarkdownWithAttributedRanges(
+        {
+          text: "😀 CJK文字  ",
+          styles: [{ start: 3, end: 10, style: "bold" }],
+          links: [],
+        },
+        { styleMap: { bold: "strong" }, trimEnd: true },
+      ),
+    ).toEqual({
+      text: "😀 CJK文字",
+      ranges: [{ start: 3, length: 5, style: "strong" }],
+    });
   });
 });

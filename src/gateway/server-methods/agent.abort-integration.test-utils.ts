@@ -124,7 +124,7 @@ describe("gateway agent handler chat.abort integration", () => {
           goal: expect.objectContaining({ id: "goal-work-global" }),
         }),
         new Set(["conn-1"]),
-        { dropIfSlow: true },
+        { agentId: "work", dropIfSlow: true, sessionKeys: ["global"] },
       );
     });
   });

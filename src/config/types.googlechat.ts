@@ -32,8 +32,6 @@ export type GoogleChatAccountConfig = Omit<CommonChannelMessagingConfig, "mentio
     groups?: Record<string, GoogleChatGroupConfig>;
     /** Service account JSON (inline string, object, or secret reference). */
     serviceAccount?: string | Record<string, unknown> | SecretRef;
-    /** Explicit secret reference for service account JSON. */
-    serviceAccountRef?: SecretRef;
     /** Service account JSON file path. */
     serviceAccountFile?: string;
     /** Webhook audience type (app-url or project-number). */

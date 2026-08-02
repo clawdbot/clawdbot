@@ -1,15 +1,14 @@
 // Run context lifecycle contract tests cover plugin run context setup and cleanup.
-import fs from "node:fs/promises";
 import path from "node:path";
 import {
   createPluginRegistryFixture,
   registerTestPlugin,
 } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { loadSessionStore, updateSessionStore } from "../../config/sessions.js";
 import { withTempConfig } from "../../gateway/test-temp-config.js";
 import { emitAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.js";
-import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
+import { loadSessionStore, updateSessionStore } from "../../plugin-sdk/session-store-runtime.js";
+import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { runPluginHostCleanup } from "../host-hook-cleanup.js";
 import {
   clearPluginHostRuntimeState,
@@ -22,6 +21,7 @@ import {
   listPluginSessionSchedulerJobs,
   PLUGIN_TERMINAL_EVENT_CLEANUP_WAIT_MS,
 } from "../host-hook-runtime.test-fixtures.js";
+import { runPluginRegisterSyncInRegistry } from "../loader-module-runtime.js";
 import { createEmptyPluginRegistry } from "../registry-empty.js";
 import { setActivePluginRegistry } from "../runtime.js";
 import { createPluginRecord } from "../status.test-helpers.js";
@@ -58,7 +58,57 @@ describe("plugin run context lifecycle", () => {
     resetAgentEventsForTest();
   });
 
-  it("blocks stale plugin API run-context mutations after registry replacement", () => {
+  it("keeps run-context APIs callable after registration closes", () => {
+    const { config, registry } = createPluginRegistryFixture();
+    let capturedApi: OpenClawPluginApi | undefined;
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "late-run-context-plugin",
+        name: "Late Run Context Plugin",
+      }),
+      register(api) {
+        runPluginRegisterSyncInRegistry(
+          (guardedApi) => {
+            capturedApi = guardedApi;
+          },
+          api,
+          registry.registry,
+          "late-run-context-plugin",
+        );
+      },
+    });
+    setActivePluginRegistry(registry.registry);
+
+    capturedApi?.registerGatewayMethod("late-run-context.blocked", () => {});
+    expect(Object.keys(registry.registry.gatewayHandlers)).not.toContain(
+      "late-run-context.blocked",
+    );
+    expect(
+      capturedApi?.runContext.setRunContext({
+        runId: "late-run",
+        namespace: "state",
+        value: { available: true },
+      }),
+    ).toBe(true);
+    expect(
+      capturedApi?.runContext.getRunContext({
+        runId: "late-run",
+        namespace: "state",
+      }),
+    ).toEqual({ available: true });
+
+    capturedApi?.runContext.clearRunContext({ runId: "late-run", namespace: "state" });
+    expect(
+      capturedApi?.runContext.getRunContext({
+        runId: "late-run",
+        namespace: "state",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("blocks stale plugin API run-context access after registry replacement", () => {
     const { config, registry } = createPluginRegistryFixture();
     let capturedApi: OpenClawPluginApi | undefined;
     registerTestPlugin({
@@ -95,6 +145,10 @@ describe("plugin run context lifecycle", () => {
         patch: { runId: "stale-run", namespace: "state", value: { live: true } },
       }),
     ).toBe(true);
+    expect(capturedApi?.getRunContext({ runId: "stale-run", namespace: "state" })).toBeUndefined();
+    expect(
+      capturedApi?.runContext.getRunContext({ runId: "stale-run", namespace: "state" }),
+    ).toBeUndefined();
     capturedApi?.runContext?.clearRunContext({ runId: "stale-run", namespace: "state" });
     expect(
       getPluginRunContext({
@@ -686,16 +740,16 @@ describe("plugin run context lifecycle", () => {
       },
     });
 
-    const stateDir = await fs.mkdtemp(
-      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-run-context-restart-state-"),
-    );
+    const openClawState = await createOpenClawTestState({
+      layout: "state-only",
+      prefix: "openclaw-run-context-restart-state-",
+    });
+    const stateDir = openClawState.stateDir;
     const storePath = path.join(stateDir, "sessions.json");
     const tempConfig = {
       session: { store: storePath },
     };
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     try {
-      process.env.OPENCLAW_STATE_DIR = stateDir;
       await withTempConfig({
         cfg: tempConfig,
         run: async () => {
@@ -748,12 +802,7 @@ describe("plugin run context lifecycle", () => {
         },
       });
     } finally {
-      if (previousStateDir === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
-      }
-      await fs.rm(stateDir, { recursive: true, force: true });
+      await openClawState.cleanup();
     }
   });
 

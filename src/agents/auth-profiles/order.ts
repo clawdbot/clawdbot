@@ -188,7 +188,7 @@ export function isConfiguredAwsSdkAuthProfileForProvider(params: {
   ) {
     return false;
   }
-  return providerAllowsAwsSdkAuth(params.cfg, params.provider);
+  return providerAllowsAwsSdkAuth(params.cfg, providerAuthKey);
 }
 
 /** Resolves whether a profile can be used for a provider right now. */

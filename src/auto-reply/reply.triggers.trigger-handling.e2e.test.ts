@@ -22,9 +22,9 @@ import {
   loadSessionEntry,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
-import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import { registerGroupIntroPromptCases } from "./reply.triggers.group-intro-prompts.cases.js";
 import { registerTriggerHandlingUsageSummaryCases } from "./reply.triggers.trigger-handling.filters-usage-summary-current-model-provider.cases.js";
+import { buildControlUiAgentFailureText } from "./reply/agent-runner-failure-copy.js";
 import { enqueueFollowupRun, getFollowupQueueDepth, type FollowupRun } from "./reply/queue.js";
 import type { MsgContext } from "./templating.js";
 import { HEARTBEAT_TOKEN } from "./tokens.js";
@@ -65,8 +65,7 @@ vi.mock("./reply/agent-runner.runtime.js", () => ({
       if (/context window exceeded/i.test(message)) {
         return "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model.";
       }
-      const trimmed = message.replace(/\.\s*$/, "");
-      return `⚠️ Agent failed before reply: ${trimmed}.\nLogs: openclaw logs --follow`;
+      return buildControlUiAgentFailureText(message);
     };
     const stripHeartbeat = (text?: string) => {
       const trimmed = text?.trim();
@@ -361,8 +360,7 @@ describe("trigger handling", () => {
   for (const testCase of [
     {
       error: "sandbox is not defined.",
-      expected:
-        "⚠️ Agent failed before reply: sandbox is not defined.\nLogs: openclaw logs --follow",
+      expected: buildControlUiAgentFailureText("sandbox is not defined."),
     },
     {
       error: "Context window exceeded",
@@ -565,12 +563,12 @@ describe("trigger handling", () => {
       const text = maybeReplyText(res);
       expect(text?.startsWith("⚙️ Compacted")).toBe(true);
       expect(getCompactEmbeddedAgentSessionMock()).toHaveBeenCalledOnce();
-      const sessionKey = resolveSessionKey("per-sender", request);
+      const sessionKey = resolveSessionKey("per-sender", request, undefined, "main");
       expect(loadSessionEntry({ storePath, sessionKey })?.compactionCount).toBe(1);
     });
   });
 
-  it("compacts worker sessions via the agent session file", async () => {
+  it("compacts worker sessions via the explicit session target", async () => {
     await withTempHome(async (home) => {
       getCompactEmbeddedAgentSessionMock().mockReset();
       mockSuccessfulCompaction();
@@ -591,17 +589,16 @@ describe("trigger handling", () => {
       const text = maybeReplyText(res);
       expect(text?.startsWith("⚙️ Compacted")).toBe(true);
       expect(getCompactEmbeddedAgentSessionMock()).toHaveBeenCalledOnce();
-      const sessionFile = firstMockCallArg(
+      const call = firstMockCallArg(
         getCompactEmbeddedAgentSessionMock(),
         "embedded OpenClaw compaction",
-      ).sessionFile;
-      if (typeof sessionFile !== "string") {
-        throw new Error("expected embedded OpenClaw compaction sessionFile");
-      }
-      expect(parseSqliteSessionFileMarker(sessionFile)).toMatchObject({
+      );
+      expect(call.sessionTarget).toMatchObject({
         agentId: "worker1",
+        sessionKey: "agent:worker1:telegram:12345",
         storePath: cfg.session.store,
       });
+      expect(call.sessionFile).toBe("agent:worker1:telegram:12345");
     });
   });
 

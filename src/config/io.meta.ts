@@ -1,3 +1,4 @@
+import { writeConfigMachineState } from "../state/config-machine-state.js";
 import { isRecord } from "../utils.js";
 // Maintains config metadata fields written alongside user config.
 import { VERSION } from "../version.js";
@@ -16,7 +17,7 @@ const AUTO_MANAGED_CONFIG_META_FIELDS = {
 
 export const AUTO_MANAGED_CONFIG_META_PATHS = [
   ["meta", AUTO_MANAGED_CONFIG_META_FIELDS.lastTouchedVersion],
-  ["meta", AUTO_MANAGED_CONFIG_META_FIELDS.lastTouchedAt],
+  ["meta", "migrations", "modelPolicyAllowlist"],
 ] as const;
 
 function defaultModelScope(value: unknown): Record<string, unknown> | null {
@@ -93,7 +94,7 @@ function stampModelPolicyAllowlistMigrationForWrite(
 
 export function stampConfigWriteMetadata(
   cfg: OpenClawConfig,
-  now: string = new Date().toISOString(),
+  _now: string = new Date().toISOString(),
   version: string = VERSION,
   previousConfig?: unknown,
 ): OpenClawConfig {
@@ -106,7 +107,14 @@ export function stampConfigWriteMetadata(
     meta: {
       ...migrationStamped.meta,
       [AUTO_MANAGED_CONFIG_META_FIELDS.lastTouchedVersion]: version,
-      [AUTO_MANAGED_CONFIG_META_FIELDS.lastTouchedAt]: now,
     },
   };
+}
+
+/** Persist machine-owned metadata only after the matching config file commit succeeds. */
+export function recordConfigWriteMetadata(
+  now: string = new Date().toISOString(),
+  _version: string = VERSION,
+): void {
+  writeConfigMachineState("config.lastTouchedAt", now);
 }

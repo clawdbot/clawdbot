@@ -21,7 +21,8 @@ import { resolveStorePath } from "../../config/sessions/paths.js";
 import {
   deleteSessionEntryLifecycle,
   listSessionEntries as listAccessorSessionEntries,
-  loadSessionEntry,
+  listSessionEntriesReadOnly as listAccessorSessionEntriesReadOnly,
+  loadSessionEntryReadOnly,
   patchSessionEntry as patchAccessorSessionEntry,
   replaceSessionEntry,
   rollbackAgentHarnessSessionEntryLifecycle,
@@ -30,8 +31,8 @@ import {
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { normalizeResolvedMaintenanceConfigInput } from "../../config/sessions/store-maintenance.js";
-import type { ResolvedSessionMaintenanceConfigInput } from "../../config/sessions/store.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
+import type { ResolvedSessionMaintenanceConfigInput } from "../../config/sessions/store-maintenance.js";
+import type { SessionAcpMeta, SessionEntry } from "../../config/sessions/types.js";
 import {
   beginSessionWorkAdmission,
   isSessionWorkAdmissionActive,
@@ -51,7 +52,9 @@ type RuntimeSessionStoreReadParams = {
   storePath?: string;
 };
 
-type RuntimeSessionStoreListParams = Partial<Omit<RuntimeSessionStoreReadParams, "sessionKey">>;
+type RuntimeSessionStoreListParams = Partial<Omit<RuntimeSessionStoreReadParams, "sessionKey">> & {
+  readOnly?: boolean;
+};
 
 type RuntimeSessionStoreEntrySummary = {
   sessionKey: string;
@@ -104,13 +107,16 @@ function toSessionAccessScope(params: RuntimeSessionStoreReadParams): SessionAcc
 }
 
 function getSessionEntry(params: RuntimeSessionStoreReadParams): SessionEntry | undefined {
-  return loadSessionEntry(toSessionAccessScope(params));
+  return loadSessionEntryReadOnly(toSessionAccessScope(params));
 }
 
 function listSessionEntries(
   params: RuntimeSessionStoreListParams = {},
 ): RuntimeSessionStoreEntrySummary[] {
-  return listAccessorSessionEntries({
+  const listEntries = params.readOnly
+    ? listAccessorSessionEntriesReadOnly
+    : listAccessorSessionEntries;
+  return listEntries({
     ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
     ...(params.env !== undefined ? { env: params.env } : {}),
     ...(params.hydrateSkillPromptRefs !== undefined
@@ -164,9 +170,16 @@ async function createSessionEntry(
 ): Promise<Awaited<ReturnType<PluginRuntime["agent"]["session"]["createSessionEntry"]>>> {
   // Session creation stays behind the canonical Gateway lifecycle boundary while
   // keeping that heavier runtime out of plugin discovery and cold startup.
-  const [{ createGatewaySession }, { resolveGatewaySessionStoreTarget }] = await Promise.all([
+  const [
+    { createGatewaySession },
+    { resolveGatewaySessionStoreTarget },
+    { readAcpSessionMetaForEntry, upsertAcpSessionMeta },
+  ] = await Promise.all([
     import("../../gateway/session-create-service.js"),
     import("../../gateway/session-utils.js"),
+    // session-meta rides the same lazy boundary: session-utils already pulls it
+    // in transitively, so a separate import here would only duplicate the edge.
+    import("../../acp/runtime/session-meta.js"),
   ]);
   type CreatedContext = Parameters<
     NonNullable<Parameters<typeof createGatewaySession>[0]["afterCreate"]>
@@ -177,7 +190,54 @@ async function createSessionEntry(
     ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
   });
   const cliInitial = "cliBackendId" in params.initialEntry ? params.initialEntry : undefined;
+  const acpInitial = "acpSessionBinding" in params.initialEntry ? params.initialEntry : undefined;
   const harnessInitial = "agentHarnessId" in params.initialEntry ? params.initialEntry : undefined;
+  const pluginInitial = cliInitial ?? acpInitial;
+  const acpBackendId = acpInitial?.acpBackendId.trim();
+  const acpAgentId = acpInitial?.acpSessionBinding.acpAgentId.trim();
+  const agentSessionId = acpInitial?.acpSessionBinding.agentSessionId.trim();
+  if (acpInitial && (!acpBackendId || !acpAgentId || !agentSessionId)) {
+    throw new Error("initial ACP session binding fields must be non-empty");
+  }
+  const initialAcpMeta = (now: number): SessionAcpMeta | undefined =>
+    acpInitial
+      ? {
+          backend: acpBackendId!,
+          agent: acpAgentId!,
+          runtimeSessionName: target.canonicalKey,
+          identity: {
+            state: "resolved",
+            agentSessionId: agentSessionId!,
+            source: "ensure",
+            lastUpdatedAt: now,
+          },
+          mode: "persistent",
+          ...(params.spawnedCwd?.trim() ? { cwd: params.spawnedCwd.trim() } : {}),
+          state: "idle",
+          lastActivityAt: now,
+        }
+      : undefined;
+  const persistedAcpBinding = acpInitial
+    ? { acpBackendId: acpBackendId!, acpAgentId: acpAgentId!, agentSessionId: agentSessionId! }
+    : undefined;
+  const acpMetaMatches = (meta: SessionAcpMeta | undefined): boolean => {
+    return Boolean(
+      meta &&
+      meta.backend === acpBackendId &&
+      meta.agent === acpAgentId &&
+      meta.runtimeSessionName === target.canonicalKey &&
+      meta.identity?.state === "resolved" &&
+      meta.identity.agentSessionId === agentSessionId &&
+      meta.mode === "persistent" &&
+      meta.cwd === (params.spawnedCwd?.trim() || undefined),
+    );
+  };
+  const initializesAfterCreate = Boolean(params.afterCreate || acpInitial);
+  const matchesExceptUpdatedAt = (left: SessionEntry, right: SessionEntry): boolean => {
+    const { updatedAt: _leftUpdatedAt, ...leftStable } = left;
+    const { updatedAt: _rightUpdatedAt, ...rightStable } = right;
+    return isDeepStrictEqual(leftStable, rightStable);
+  };
   const identities = new Set([target.canonicalKey, ...target.storeKeys]);
   return await runExclusiveSessionLifecycleMutation({
     scope: target.storePath,
@@ -196,15 +256,35 @@ async function createSessionEntry(
       let rollbackExpectedEntry: SessionEntry | undefined;
       const runAfterCreate = async (context: CreatedContext): Promise<void> => {
         callbackContext = context;
-        rollbackExpectedEntry = structuredClone(context.entry);
+        if (acpInitial) {
+          const meta = initialAcpMeta(Date.now());
+          const persisted = await upsertAcpSessionMeta({
+            cfg: params.cfg,
+            sessionKey: context.key,
+            mutate: () => meta,
+          });
+          if (!persisted?.acp) {
+            throw new Error(`could not persist initial ACP binding for ${context.key}`);
+          }
+          const persistedEntry = getSessionEntry({
+            sessionKey: context.key,
+            storePath: context.storePath,
+            readConsistency: "latest",
+          });
+          if (!persistedEntry) {
+            throw new Error(`created ACP session ${context.key} disappeared during initialization`);
+          }
+          callbackContext = { ...context, entry: persistedEntry };
+        }
+        rollbackExpectedEntry = structuredClone(callbackContext.entry);
         if (!afterCreate) {
           return;
         }
         const finalPatch = await afterCreate({
-          key: context.key,
-          agentId: context.agentId,
-          sessionId: context.entry.sessionId,
-          entry: structuredClone(context.entry),
+          key: callbackContext.key,
+          agentId: callbackContext.agentId,
+          sessionId: callbackContext.entry.sessionId,
+          entry: structuredClone(callbackContext.entry),
         });
         if (finalPatch === undefined) {
           return;
@@ -232,10 +312,16 @@ async function createSessionEntry(
           const expectedSpawnedCwd = params.spawnedCwd?.trim() || undefined;
           const expectedExecNode = params.execNode?.trim() || undefined;
           const expectedExecCwd = params.execCwd?.trim() || undefined;
+          const matchingAcpMeta = acpInitial
+            ? readAcpSessionMetaForEntry({
+                sessionKey: target.canonicalKey,
+                entry: matchingEntry,
+              })
+            : undefined;
           const initialEntryMatches =
             matchingEntry.initializationPending === true &&
             matchingEntry.agentHarnessId === harnessInitial?.agentHarnessId &&
-            matchingEntry.pluginOwnerId === cliInitial?.pluginOwnerId &&
+            matchingEntry.pluginOwnerId === pluginInitial?.pluginOwnerId &&
             matchingEntry.modelSelectionLocked === params.initialEntry.modelSelectionLocked &&
             (!cliInitial ||
               (matchingEntry.providerOverride === cliInitial.cliBackendId &&
@@ -244,6 +330,9 @@ async function createSessionEntry(
                   matchingEntry.cliSessionBindings?.[cliInitial.cliBackendId],
                   cliInitial.cliSessionBinding,
                 ))) &&
+            (!acpInitial ||
+              (isDeepStrictEqual(matchingEntry.acpSessionBinding, persistedAcpBinding) &&
+                (matchingAcpMeta === undefined || acpMetaMatches(matchingAcpMeta)))) &&
             matchingEntry.spawnedCwd === expectedSpawnedCwd &&
             matchingEntry.execNode === expectedExecNode &&
             matchingEntry.execCwd === expectedExecCwd &&
@@ -282,9 +371,16 @@ async function createSessionEntry(
                     pluginOwnerId: cliInitial.pluginOwnerId,
                     providerOverride: cliInitial.cliBackendId,
                     modelOverride: cliInitial.model,
+                    modelOverrideRouteResolution: "resolved",
                     cliSessionBindings: {
                       [cliInitial.cliBackendId]: cliInitial.cliSessionBinding,
                     },
+                  }
+                : {}),
+              ...(acpInitial
+                ? {
+                    pluginOwnerId: acpInitial.pluginOwnerId,
+                    acpSessionBinding: persistedAcpBinding,
                   }
                 : {}),
               ...(params.initialEntry.modelSelectionLocked === true
@@ -293,12 +389,21 @@ async function createSessionEntry(
               ...(params.initialEntry.pluginExtensions
                 ? { pluginExtensions: params.initialEntry.pluginExtensions }
                 : {}),
-              ...(afterCreate ? { initializationPending: true } : {}),
+              ...(initializesAfterCreate ? { initializationPending: true } : {}),
             },
             ...(harnessInitial ? { authorizedAgentHarnessId: harnessInitial.agentHarnessId } : {}),
-            ...(cliInitial?.pluginOwnerId ? { authorizedPluginId: cliInitial.pluginOwnerId } : {}),
+            ...(pluginInitial?.pluginOwnerId
+              ? { authorizedPluginId: pluginInitial.pluginOwnerId }
+              : {}),
+            creation: {
+              via: "plugin",
+              actor: {
+                type: "system",
+                ...(pluginInitial?.pluginOwnerId ? { id: pluginInitial.pluginOwnerId } : {}),
+              },
+            },
             commandSource: "plugin-runtime",
-            ...(afterCreate ? { afterCreate: runAfterCreate } : {}),
+            ...(initializesAfterCreate ? { afterCreate: runAfterCreate } : {}),
           });
           if (!result.ok) {
             throw new Error(result.error.message);
@@ -309,10 +414,11 @@ async function createSessionEntry(
           throw new Error("session creation recovery requires a final patch");
         }
         let finalEntry = created.entry;
-        if (afterCreate) {
+        if (initializesAfterCreate) {
           const patch: Partial<SessionEntry> = {
             ...finalEntryPatch,
             initializationPending: undefined,
+            ...(acpInitial ? { acpSessionBinding: undefined } : {}),
           };
           const expectedEntry = rollbackExpectedEntry;
           if (!callbackContext || !expectedEntry) {
@@ -360,7 +466,17 @@ async function createSessionEntry(
         try {
           // Delete only the untouched row created for this callback. A concurrent
           // claimant changes the snapshot and must survive failed initialization.
-          const expectedEntry = rollbackExpectedEntry ?? callbackContext.entry;
+          let expectedEntry = rollbackExpectedEntry ?? callbackContext.entry;
+          if (acpInitial && !rollbackExpectedEntry) {
+            const currentEntry = getSessionEntry({
+              sessionKey: callbackContext.key,
+              storePath: callbackContext.storePath,
+              readConsistency: "latest",
+            });
+            if (currentEntry && matchesExceptUpdatedAt(currentEntry, callbackContext.entry)) {
+              expectedEntry = currentEntry;
+            }
+          }
           const rollbackParams = {
             agentId: callbackContext.agentId,
             archiveTranscript: true,
@@ -381,12 +497,19 @@ async function createSessionEntry(
                 ? await rollbackAgentHarnessSessionEntryLifecycle(rollbackParams)
                 : await rollbackPluginOwnedSessionEntryLifecycle({
                     ...rollbackParams,
-                    expectedPluginOwnerId: cliInitial?.pluginOwnerId ?? "",
+                    expectedPluginOwnerId: pluginInitial?.pluginOwnerId ?? "",
                   })
               : await deleteSessionEntryLifecycle(rollbackParams);
           if (!rolledBack.deleted) {
             throw new Error(`created session ${callbackContext.key} changed before rollback`, {
               cause: error,
+            });
+          }
+          if (acpInitial) {
+            await upsertAcpSessionMeta({
+              cfg: params.cfg,
+              sessionKey: callbackContext.key,
+              mutate: () => null,
             });
           }
         } catch (rollbackError) {

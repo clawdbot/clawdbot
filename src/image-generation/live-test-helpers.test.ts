@@ -40,9 +40,11 @@ describe("image-generation live-test helpers", () => {
     const cfg = {
       agents: {
         defaults: {
-          imageGenerationModel: {
-            primary: "openai/gpt-image-2",
-            fallbacks: ["google/gemini-3.1-flash-image-preview", "invalid"],
+          mediaModels: {
+            image: {
+              primary: "openai/gpt-image-2",
+              fallbacks: ["google/gemini-3.1-flash-image-preview", "invalid"],
+            },
           },
         },
       },
@@ -85,7 +87,8 @@ describe("image-generation live-test helpers", () => {
 
   it("redacts live API keys for diagnostics", () => {
     expect(redactLiveApiKey(undefined)).toBe("none");
-    expect(redactLiveApiKey("short-key")).toBe("short-key");
-    expect(redactLiveApiKey("sk-proj-1234567890")).toBe("sk-proj-...7890");
+    expect(redactLiveApiKey("   ")).toBe("none");
+    expect(redactLiveApiKey("synthetic-12")).toBe("<redacted>");
+    expect(redactLiveApiKey("synthetic-credential-value")).toBe("<redacted>");
   });
 });

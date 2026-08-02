@@ -2,13 +2,13 @@ title: Native command active session target evidence
 
 scenario:
   id: native-command-session-target
-  surface: channel-framework
-  category: channel-framework.channel-actions-commands-and-approvals
+  surface: channels
+  category: channels.channel-actions-commands-and-approvals
   coverage:
     primary:
       - channels.native-command-session-target
     secondary:
-      - channels.native-commands
+      - channels.channel-native-commands
   objective: Verify a channel-native `/stop` command aborts the active routed conversation session instead of its separate slash-command session.
   successCriteria:
     - A real delayed agent turn is active on the routed channel conversation session.
@@ -34,6 +34,7 @@ scenario:
       requiredProviderMode: mock-openai
       conversationId: native-stop-target
       senderId: qa-native-operator
+      sessionKey: agent:main:telegram:direct:qa-native-operator
       delayedPrompt: "Subagent recovery worker native command target proof. Wait until stopped."
       abortReplyNeedle: Agent was aborted
       recoveryMarker: QA-NATIVE-STOP-RECOVERY-OK
@@ -69,7 +70,7 @@ flow:
           args:
             - lambda:
                 async: true
-                expr: "env.gateway.call('sessions.list', {}).then((result) => result.sessions?.find((session) => session.hasActiveRun === true))"
+                expr: "env.gateway.call('sessions.list', {}).then((result) => result.sessions?.find((session) => session.key === config.sessionKey && session.hasActiveRun === true))"
             - expr: liveTurnTimeoutMs(env, 30000)
             - 100
         - set: startIndex

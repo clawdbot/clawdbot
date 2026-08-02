@@ -19,7 +19,10 @@ registerCodexEventProjectorTestLifecycle();
 
 describe("CodexAppServerEventProjector dynamic tool projection", () => {
   it("records dynamic OpenClaw tool calls in mirrored transcript snapshots", async () => {
-    const projector = await createProjector();
+    const projector = await createProjector(undefined, {
+      resolveDynamicToolResultContentSource: (toolName) =>
+        toolName === "browser" ? "network" : undefined,
+    });
 
     projector.recordDynamicToolCall({
       callId: "call-browser-1",
@@ -56,6 +59,7 @@ describe("CodexAppServerEventProjector dynamic tool projection", () => {
     expect(toolResultMessage.toolCallId).toBe("call-browser-1");
     expect(toolResultMessage.toolName).toBe("browser");
     expect(toolResultMessage.isError).toBe(false);
+    expect(toolResultMessage["__openclaw"]).toMatchObject({ resultContentSource: "network" });
     const toolResultContent = requireRecord(
       requireArray(toolResultMessage.content, "tool result content")[0],
       "tool result content item",
@@ -66,9 +70,87 @@ describe("CodexAppServerEventProjector dynamic tool projection", () => {
     expect(toolResultContent.toolName).toBe("browser");
     expect(toolResultContent.toolCallId).toBe("call-browser-1");
     expect(toolResultContent.content).toBe("opened");
+    expect(
+      requireRecord(result.messagesSnapshot[3], "final assistant")["__openclaw"],
+    ).toMatchObject({
+      turnTainted: true,
+    });
   });
 
-  it("does not mirror Codex-native web searches into transcript snapshots", async () => {
+  it("retains MCP App preview details in mirrored dynamic tool results", async () => {
+    const projector = await createProjector();
+    const details = {
+      mcpAppPreview: {
+        kind: "canvas",
+        view: { id: "mcp-app-view-1" },
+        presentation: { target: "assistant_message", sandbox: "scripts" },
+        mcpApp: { viewId: "mcp-app-view-1" },
+      },
+    };
+
+    projector.recordDynamicToolCall({
+      callId: "call-app-1",
+      tool: "sample__show_options",
+      arguments: { limit: 4 },
+    });
+    projector.recordDynamicToolResult({
+      callId: "call-app-1",
+      tool: "sample__show_options",
+      success: true,
+      contentItems: [{ type: "inputText", text: "Found four nearby restaurants." }],
+      details,
+    });
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    const toolResultMessage = requireRecord(result.messagesSnapshot[2], "tool result message");
+    expect(toolResultMessage.details).toEqual(details);
+  });
+
+  it("awaits MCP App preview details for native MCP tool results", async () => {
+    const details = {
+      mcpAppPreview: {
+        kind: "canvas",
+        view: { id: "mcp-app-native-1" },
+        presentation: { target: "assistant_message", sandbox: "scripts" },
+        mcpApp: {
+          viewId: "mcp-app-native-1",
+          serverName: "sample",
+          toolName: "show_options",
+          uiResourceUri: "ui://sample/options.html",
+          toolCallId: "call-native-app-1",
+        },
+      },
+    };
+    const prepareNativeMcpAppResultDetails = vi.fn(async () => details);
+    const projector = await createProjector(undefined, { prepareNativeMcpAppResultDetails });
+
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "mcpToolCall",
+          id: "call-native-app-1",
+          status: "completed",
+          server: "sample",
+          tool: "show_options",
+          arguments: { limit: 4 },
+          appContext: { connectorId: "sample", resourceUri: "ui://sample/options.html" },
+          result: {
+            content: [{ type: "text", text: "Found four nearby restaurants." }],
+            structuredContent: { stores: [{ id: "store-1", name: "Nan's Noodle House" }] },
+          },
+        },
+      }),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    const toolResultMessage = requireRecord(result.messagesSnapshot[2], "tool result message");
+    expect(prepareNativeMcpAppResultDetails).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "call-native-app-1", type: "mcpToolCall" }),
+    );
+    expect(toolResultMessage.details).toEqual(details);
+  });
+
+  it("marks native web-search results and subsequent assistant output as tainted", async () => {
     const projector = await createProjector();
 
     await projector.handleNotification(
@@ -78,28 +160,24 @@ describe("CodexAppServerEventProjector dynamic tool projection", () => {
           id: "search-observed",
           status: "completed",
           durationMs: 5,
+          query: "hostile result",
         },
       }),
     );
+    await projector.handleNotification(agentMessageDelta("summary"));
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
-
+    const toolResult = requireRecord(result.messagesSnapshot[2], "native web-search result");
+    expect(toolResult).toMatchObject({
+      role: "toolResult",
+      toolName: "web_search",
+      __openclaw: { resultContentSource: "network" },
+    });
     expect(
-      result.messagesSnapshot.some((message) => {
-        const record = message as unknown as Record<string, unknown>;
-        if (record.role === "toolResult") {
-          return true;
-        }
-        const content = Array.isArray(record.content) ? record.content : [];
-        return content.some((entry) => {
-          return (
-            typeof entry === "object" &&
-            entry !== null &&
-            (entry as Record<string, unknown>).type === "toolCall"
-          );
-        });
-      }),
-    ).toBe(false);
+      requireRecord(result.messagesSnapshot[3], "final assistant")["__openclaw"],
+    ).toMatchObject({
+      turnTainted: true,
+    });
   });
 
   it("carries async-started dynamic tool metadata into attempt results", async () => {

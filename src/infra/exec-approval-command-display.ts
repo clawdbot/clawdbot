@@ -187,10 +187,17 @@ export function sanitizeExecApprovalDisplayTextWithStatus(
  * Sanitizes warning prose for approval UI while preserving real line boundaries.
  */
 export function sanitizeExecApprovalWarningText(warningText: string): string {
+  return sanitizeExecApprovalWarningTextWithStatus(warningText).text;
+}
+
+/** Sanitizes warning prose and reports whether display bounds suppressed any content. */
+export function sanitizeExecApprovalWarningTextWithStatus(
+  warningText: string,
+): SanitizedExecApprovalDisplayText {
   return sanitizeExecApprovalDisplayTextInternal(normalizeDisplayLineBreaks(warningText), {
     preserveLineBreaks: true,
     oversizedMarker: EXEC_APPROVAL_WARNING_OVERSIZED_MARKER,
-  }).text;
+  });
 }
 
 function normalizePreview(commandText: string, commandPreview?: string | null): string | null {

@@ -139,12 +139,10 @@ describe("LogbookService vision model selection", () => {
       fullConfig: {
         tools: {
           media: {
-            image: {
-              models: [
-                { provider: "openai", model: "gpt-5.5", capabilities: ["image"] },
-                { provider: " Codex ", model: "gpt-5.5", capabilities: ["image"] },
-              ],
-            },
+            models: [
+              { provider: "openai", model: "gpt-5.5", capabilities: ["image"] },
+              { provider: " Codex ", model: "gpt-5.5", capabilities: ["image"] },
+            ],
           },
         },
       },

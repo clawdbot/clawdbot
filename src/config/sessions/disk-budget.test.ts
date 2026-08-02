@@ -4,6 +4,12 @@ import type { PathLike, StatOptions } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { saveLegacySessionStore as saveSessionStore } from "../../infra/state-migrations.legacy-session-store.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
 import {
   resolveTrajectoryFilePath,
@@ -16,7 +22,6 @@ import {
   pruneUnreferencedSessionArtifacts,
 } from "./disk-budget.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
-import { saveSessionStore } from "./store.js";
 import type { SessionEntry } from "./types.js";
 
 async function expectPathExists(targetPath: string): Promise<void> {
@@ -97,6 +102,31 @@ describe("enforceSessionDiskBudget", () => {
 
       expect(usage.totalBytes).toBe(100);
       expect(usage.sessionFilesBytes).toBe(0);
+    });
+  });
+
+  it("counts durable fixed-store agent partitions and their WAL files", async () => {
+    await withTempDir({ prefix: "openclaw-disk-budget-partition-" }, async (dir) => {
+      const stateDir = path.join(dir, "state");
+      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+      const storePath = path.join(dir, "shared.json");
+      const partitionPath = resolveSqliteTargetFromSessionStorePath(storePath, {
+        agentId: "ops",
+        defaultAgentId: "main",
+        env,
+      }).path;
+      const database = openOpenClawAgentDatabase({ agentId: "ops", env, path: partitionPath });
+      closeOpenClawAgentDatabasesForTest();
+      closeOpenClawStateDatabaseForTest();
+      await fs.writeFile(`${partitionPath}-wal`, Buffer.alloc(77));
+      const partitionBytes = (await fs.stat(database.path)).size;
+
+      const usage = await measureSessionPhysicalDiskUsage(storePath);
+
+      expect(usage.databaseMainBytes).toBe(partitionBytes);
+      expect(usage.databaseWalBytes).toBe(77);
+      expect(usage.sessionFilesBytes).toBe(0);
+      expect(usage.totalBytes).toBe(partitionBytes + 77);
     });
   });
 

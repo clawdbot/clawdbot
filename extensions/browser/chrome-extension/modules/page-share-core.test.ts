@@ -48,12 +48,93 @@ describe("page share core", () => {
       content: "x".repeat(PAGE_SHARE_MAX_CONTENT_CHARS + 1),
     });
     expect(atBoundary.content).toHaveLength(PAGE_SHARE_MAX_CONTENT_CHARS);
+    expect(beyondBoundary.content).toHaveLength(PAGE_SHARE_MAX_CONTENT_CHARS);
     expect(
       beyondBoundary.content.endsWith(
         `[Truncated: original was ${PAGE_SHARE_MAX_CONTENT_CHARS + 1} characters]`,
       ),
     ).toBe(true);
   });
+
+  it.each(["content", "selection"] as const)(
+    "preserves exact-boundary %s without truncating it",
+    (field) => {
+      const text = "x".repeat(PAGE_SHARE_MAX_CONTENT_CHARS);
+      const payload = buildPageSharePayload({
+        url: "https://example.com",
+        title: "Example",
+        content: field === "content" ? text : "",
+        ...(field === "selection" ? { selection: text } : {}),
+      });
+      const sharedText = field === "selection" ? payload.selection : payload.content;
+
+      expect(sharedText).toBe(text);
+      expect(sharedText).toHaveLength(PAGE_SHARE_MAX_CONTENT_CHARS);
+    },
+  );
+
+  it("keeps oversized selected text and its truncation marker within the producer field cap", () => {
+    const selection = "x".repeat(PAGE_SHARE_MAX_CONTENT_CHARS + 1);
+    const payload = buildPageSharePayload({
+      url: "https://example.com",
+      title: "Example",
+      content: "",
+      selection,
+    });
+
+    expect(payload.selection).toHaveLength(PAGE_SHARE_MAX_CONTENT_CHARS);
+    expect(
+      payload.selection?.endsWith(`[Truncated: original was ${selection.length} characters]`),
+    ).toBe(true);
+  });
+
+  it.each(["content", "selection"] as const)(
+    "never leaves a split Unicode surrogate while truncating %s",
+    (field) => {
+      const originalLength = PAGE_SHARE_MAX_CONTENT_CHARS + 1;
+      const marker = `\n\n[Truncated: original was ${originalLength} characters]`;
+      const text =
+        `${"x".repeat(PAGE_SHARE_MAX_CONTENT_CHARS - marker.length - 1)}😀` +
+        "x".repeat(marker.length);
+      expect(text).toHaveLength(originalLength);
+
+      const payload = buildPageSharePayload({
+        url: "https://example.com",
+        title: "Example",
+        content: field === "content" ? text : "",
+        ...(field === "selection" ? { selection: text } : {}),
+      });
+      const sharedText = field === "selection" ? payload.selection : payload.content;
+
+      expect(sharedText?.length).toBeLessThanOrEqual(PAGE_SHARE_MAX_CONTENT_CHARS);
+      expect(sharedText?.endsWith(marker)).toBe(true);
+      expect(sharedText?.slice(0, -marker.length)).not.toMatch(/[\uD800-\uDBFF]$/u);
+    },
+  );
+
+  it.each(["content", "selection"] as const)(
+    "preserves a newline after a non-terminal surrogate while truncating %s",
+    (field) => {
+      const originalLength = PAGE_SHARE_MAX_CONTENT_CHARS + 1;
+      const marker = `\n\n[Truncated: original was ${originalLength} characters]`;
+      const text =
+        `${"x".repeat(PAGE_SHARE_MAX_CONTENT_CHARS - marker.length - 2)}\uD83D\n` +
+        "x".repeat(marker.length + 1);
+      expect(text).toHaveLength(originalLength);
+
+      const payload = buildPageSharePayload({
+        url: "https://example.com",
+        title: "Example",
+        content: field === "content" ? text : "",
+        ...(field === "selection" ? { selection: text } : {}),
+      });
+      const sharedText = field === "selection" ? payload.selection : payload.content;
+
+      expect(sharedText).toHaveLength(PAGE_SHARE_MAX_CONTENT_CHARS);
+      expect(sharedText?.endsWith(marker)).toBe(true);
+      expect(sharedText?.slice(0, -marker.length).endsWith("\uD83D\n")).toBe(true);
+    },
+  );
 
   it("trims fields, preserves newlines, applies caps, and drops empty optionals", () => {
     const payload = buildPageSharePayload({

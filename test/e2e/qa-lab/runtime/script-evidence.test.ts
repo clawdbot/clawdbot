@@ -29,7 +29,6 @@ async function makeWriter(params: { maxDetailsBytes?: number; maxLogBytes?: numb
         id: "script-evidence-test",
         title: "Script evidence test",
         sourcePath: "test/e2e/qa-lab/runtime/script-evidence.test.ts",
-        primaryCoverageIds: ["qa.script-evidence"],
       },
     }),
   };

@@ -1,5 +1,4 @@
 // Session active-run cancellation and agent-scope resolution.
-import { expectDefined } from "@openclaw/normalization-core";
 import {
   normalizeOptionalString,
   readStringValue,
@@ -10,6 +9,8 @@ import {
   validateSessionsAbortParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { abortEmbeddedAgentRun } from "../../agents/embedded-agent-runner/runs.js";
+import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
 import {
   isConfiguredSessionStoreAgentId,
   resolveExistingAgentSessionStoreTargetsSync,
@@ -28,7 +29,7 @@ import { loadSessionEntry } from "../session-utils.js";
 import { asWorkerInferenceControl } from "../worker-environments/inference-control.js";
 import { resolveWorkerSessionTarget } from "../worker-environments/session-target.js";
 import { setGatewayDedupeEntry } from "./agent-job.js";
-import { chatHandlers } from "./chat.js";
+import { handleChatAbortRequestWithLifecycle } from "./chat-abort-handler.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { requireSessionKey } from "./sessions-shared.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
@@ -125,6 +126,7 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
     const requestedRunId = readStringValue(p.runId);
     const requestedKey = normalizeOptionalString(p.key);
     const requestedParamAgentId = normalizeOptionalString(p.agentId);
+    const clearQueued = p.clearQueued === true;
     const workerRunSessionId = requestedRunId
       ? asWorkerInferenceControl(context.workerEnvironmentService)?.resolveInferenceSessionForRunId(
           requestedRunId,
@@ -221,14 +223,18 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
     }
     // An exact live controller is already authoritative. Avoid opening the fallback store when
     // neither config nor persistence owns it; that edge is the only one that could create state.
-    const canonicalKey =
+    const loadedSession =
       configuredTarget || existingTargets.length > 0
-        ? loadSessionEntry(key, { agentId: requestedGlobalAgentId }).canonicalKey
-        : resolveSessionStoreKey({
-            cfg,
-            sessionKey: key,
-            ...(requestedGlobalAgentId ? { storeAgentId: requestedGlobalAgentId } : {}),
-          });
+        ? loadSessionEntry(key, { agentId: requestedGlobalAgentId })
+        : undefined;
+    const canonicalKey =
+      loadedSession?.canonicalKey ??
+      resolveSessionStoreKey({
+        cfg,
+        sessionKey: key,
+        ...(requestedGlobalAgentId ? { storeAgentId: requestedGlobalAgentId } : {}),
+      });
+    const sessionEntry = loadedSession?.entry;
     const requestedKeyAliases =
       requestedKey &&
       requestedKey !== key &&
@@ -260,68 +266,105 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
       }
     }
     let abortedRunId: string | null = null;
-    await expectDefined(
-      chatHandlers["chat.abort"],
-      "chat.abort handler",
-    )({
-      req,
-      params: {
-        sessionKey: abortSessionKey,
-        runId: requestedRunId,
-        ...(abortAgentId ? { agentId: abortAgentId } : {}),
-      },
-      respond: (ok, payload, error, meta) => {
-        if (!ok) {
-          respond(ok, payload, error, meta);
-          return;
-        }
-        const runIds =
-          payload &&
-          typeof payload === "object" &&
-          Array.isArray((payload as { runIds?: unknown[] }).runIds)
-            ? (payload as { runIds: unknown[] }).runIds.filter((value): value is string =>
-                Boolean(normalizeOptionalString(value)),
-              )
-            : [];
-        const firstAbortedRunId = runIds[0] ?? null;
-        abortedRunId = firstAbortedRunId;
-        const workerOnly = Boolean(workerRunSessionId && !activeRun);
-        if (firstAbortedRunId && !workerOnly) {
-          const endedAt = Date.now();
-          const runKind = preAbortRunKinds.get(firstAbortedRunId);
-          const dedupePrefix = runKind === "agent" ? "agent" : "chat";
-          setGatewayDedupeEntry({
-            dedupe: context.dedupe,
-            key: `${dedupePrefix}:${firstAbortedRunId}`,
-            entry: {
-              ts: endedAt,
-              ok: true,
-              payload: {
-                status: "timeout",
-                runId: firstAbortedRunId,
-                ...(abortAgentId ? { agentId: abortAgentId } : {}),
-                stopReason: "rpc",
-                endedAt,
+    let aborted = false;
+    let chatAbortSucceeded = false;
+    let responseMeta: Record<string, unknown> | undefined;
+    const persistedSessionId = sessionEntry?.sessionId;
+    const onAuthorizedAfterQueuedAbort =
+      !requestedRunId && canonicalKey !== "global" && (clearQueued || persistedSessionId)
+        ? () => {
+            let queueCleared = false;
+            if (clearQueued) {
+              // Explicit full-session stops clear first so an aborting run cannot
+              // promote queued work. Ordinary sessions.abort calls preserve it.
+              const cleared = clearSessionQueues([
+                key,
+                ...(requestedKeyAliases ?? []),
+                canonicalKey,
+                ...(persistedSessionId ? [persistedSessionId] : []),
+              ]);
+              queueCleared = cleared.followupCleared > 0 || cleared.laneCleared > 0;
+            }
+            // Persisted channel replies are active session work even when they
+            // have no connection-owned chat controller.
+            const embeddedAborted = persistedSessionId
+              ? abortEmbeddedAgentRun(persistedSessionId)
+              : false;
+            return embeddedAborted || queueCleared;
+          }
+        : undefined;
+    await handleChatAbortRequestWithLifecycle(
+      {
+        req,
+        params: {
+          sessionKey: abortSessionKey,
+          runId: requestedRunId,
+          ...(abortAgentId ? { agentId: abortAgentId } : {}),
+        },
+        respond: (ok, payload, error, meta) => {
+          if (!ok) {
+            respond(ok, payload, error, meta);
+            return;
+          }
+          chatAbortSucceeded = true;
+          responseMeta = meta;
+          const runIds =
+            payload &&
+            typeof payload === "object" &&
+            Array.isArray((payload as { runIds?: unknown[] }).runIds)
+              ? (payload as { runIds: unknown[] }).runIds.filter((value): value is string =>
+                  Boolean(normalizeOptionalString(value)),
+                )
+              : [];
+          const firstAbortedRunId = runIds[0] ?? null;
+          abortedRunId = firstAbortedRunId;
+          aborted =
+            firstAbortedRunId !== null ||
+            (payload !== null &&
+              typeof payload === "object" &&
+              (payload as { aborted?: unknown }).aborted === true);
+          const workerOnly = Boolean(workerRunSessionId && !activeRun);
+          if (firstAbortedRunId && !workerOnly) {
+            const endedAt = Date.now();
+            const runKind = preAbortRunKinds.get(firstAbortedRunId);
+            const dedupePrefix = runKind === "agent" ? "agent" : "chat";
+            setGatewayDedupeEntry({
+              dedupe: context.dedupe,
+              key: `${dedupePrefix}:${firstAbortedRunId}`,
+              entry: {
+                ts: endedAt,
+                ok: true,
+                payload: {
+                  status: "timeout",
+                  runId: firstAbortedRunId,
+                  ...(abortAgentId ? { agentId: abortAgentId } : {}),
+                  stopReason: "rpc",
+                  endedAt,
+                },
               },
-            },
-          });
-        }
-        respond(
-          true,
-          {
-            ok: true,
-            abortedRunId,
-            status: abortedRunId ? "aborted" : "no-active-run",
-          },
-          undefined,
-          meta,
-        );
+            });
+          }
+        },
+        context,
+        client,
+        isWebchatConnect,
       },
-      context,
-      client,
-      isWebchatConnect,
-    });
-    if (abortedRunId) {
+      onAuthorizedAfterQueuedAbort ? { onAuthorizedAfterQueuedAbort } : {},
+    );
+    if (!chatAbortSucceeded) {
+      return;
+    }
+    respond(
+      true,
+      {
+        ok: true,
+        abortedRunId,
+        status: aborted ? "aborted" : "no-active-run",
+      },
+      undefined,
+      responseMeta,
+    );
+    if (aborted) {
       emitSessionsChanged(context, {
         sessionKey: canonicalKey,
         ...(canonicalKey === "global" && abortAgentId ? { agentId: abortAgentId } : {}),

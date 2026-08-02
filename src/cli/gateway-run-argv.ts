@@ -51,6 +51,10 @@ function consumeGatewayRunPreBootstrapOptionToken(
   args: ReadonlyArray<string>,
   index: number,
 ): number {
+  const rootConsumed = consumeRootOptionToken(args, index);
+  if (rootConsumed > 0) {
+    return rootConsumed;
+  }
   const consumed = consumeGatewayRunOptionToken(args, index);
   if (consumed > 0) {
     return consumed;
@@ -108,16 +112,22 @@ function resolveGatewayCommandStart(argv: string[]): {
   return null;
 }
 
-/** Resolve the gateway command path from raw argv for catalog/policy lookups. */
-export function resolveGatewayCatalogCommandPath(argv: string[]): string[] | null {
+/** Resolve the gateway command path from raw argv without full Commander registration. */
+export function resolveGatewayCommandPath(argv: string[], depth = 2): string[] | null {
   const gateway = resolveGatewayCommandStart(argv);
   if (!gateway) {
     return null;
   }
+  const commandPath = ["gateway"];
   for (let index = gateway.startIndex; index < gateway.args.length; index += 1) {
     const arg = gateway.args[index];
     if (!arg || arg === "--") {
       break;
+    }
+    const rootConsumed = consumeRootOptionToken(gateway.args, index);
+    if (rootConsumed > 0) {
+      index += rootConsumed - 1;
+      continue;
     }
     const consumed = consumeGatewayRunOptionToken(gateway.args, index);
     if (consumed > 0) {
@@ -127,10 +137,18 @@ export function resolveGatewayCatalogCommandPath(argv: string[]): string[] | nul
     if (arg.startsWith("-")) {
       continue;
     }
-    return ["gateway", arg];
+    commandPath.push(arg);
+    if (commandPath.length >= depth) {
+      return commandPath;
+    }
   }
 
-  return ["gateway"];
+  return commandPath;
+}
+
+/** Resolve the gateway command path used by catalog and startup-policy lookups. */
+export function resolveGatewayCatalogCommandPath(argv: string[]): string[] | null {
+  return resolveGatewayCommandPath(argv, 2);
 }
 
 /** Resolve destructive gateway-run flags before Commander registration. */

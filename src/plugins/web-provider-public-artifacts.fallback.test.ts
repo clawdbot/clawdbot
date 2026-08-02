@@ -8,11 +8,16 @@ const mocks = vi.hoisted(() => ({
   resolveBundledExplicitWebFetchProvidersFromPublicArtifacts: vi.fn(() => null),
   loadBundledWebSearchProviderEntriesFromDir: vi.fn(),
   loadBundledWebFetchProviderEntriesFromDir: vi.fn(),
+  readBundledDiscoveryMode: vi.fn<() => "compat" | "allowlist">(),
 }));
 
 vi.mock("./plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: mocks.loadPluginMetadataSnapshot,
   resolvePluginMetadataSnapshot: mocks.resolvePluginMetadataSnapshot,
+}));
+
+vi.mock("./bundled-discovery-state.js", () => ({
+  readBundledDiscoveryMode: mocks.readBundledDiscoveryMode,
 }));
 
 vi.mock("./web-search-providers.shared.js", () => ({
@@ -43,6 +48,7 @@ const {
 
 describe("web provider public artifact manifest fallback", () => {
   beforeEach(() => {
+    mocks.readBundledDiscoveryMode.mockReturnValue("allowlist");
     vi.clearAllMocks();
     mocks.loadPluginMetadataSnapshot.mockReturnValue({
       diagnostics: [],
@@ -124,6 +130,7 @@ describe("web provider public artifact manifest fallback", () => {
   });
 
   it("keeps deprecated bundledDiscovery compat discovery outside plugin allowlists", () => {
+    mocks.readBundledDiscoveryMode.mockReturnValue("compat");
     const resolveExplicitWebSearchProviders =
       mocks.resolveBundledExplicitWebSearchProvidersFromPublicArtifacts as unknown as {
         mockImplementation: (
@@ -140,7 +147,6 @@ describe("web provider public artifact manifest fallback", () => {
       config: {
         plugins: {
           allow: ["some-other-plugin"],
-          bundledDiscovery: "compat",
         },
       },
       onlyPluginIds: ["fallback-search"],

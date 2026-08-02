@@ -1,24 +1,24 @@
 // Verifies catalog-backed endpoint classification for externalized official providers.
 import { describe, expect, it, vi } from "vitest";
 
-// Simulates a built dist tree: externalized provider plugins (qwen, moonshot,
-// zai, ...) are excluded from dist packaging, so no plugin manifest supplies
-// their endpoint metadata. Classification must come from the bundled catalog.
-// The single conflicting manifest entry proves installed manifests stay
-// authoritative over catalog metadata (first match wins).
-vi.mock("../plugins/manifest-metadata-scan.js", () => ({
-  listOpenClawPluginManifestMetadata: () => [
-    {
-      pluginDir: "installed-conflict-fixture",
-      manifest: {
-        providerEndpoints: [
-          { endpointClass: "openai-public", hosts: ["coding.dashscope.aliyuncs.com"] },
-        ],
-      },
-      origin: "installed",
-    },
-  ],
-}));
+// Simulates a built dist tree: externalized provider metadata comes from the
+// catalog, while one installed manifest proves first-match precedence.
+vi.mock("../plugins/current-plugin-metadata-snapshot.js", async () => {
+  const { buildPluginMetadataProviderFacts } =
+    await import("../plugins/plugin-metadata-provider-facts.js");
+  return {
+    getCurrentPluginMetadataSnapshot: () => ({
+      owners: buildPluginMetadataProviderFacts([
+        {
+          id: "installed-conflict-fixture",
+          providerEndpoints: [
+            { endpointClass: "openai-public", hosts: ["coding.dashscope.aliyuncs.com"] },
+          ],
+        } as never,
+      ]),
+    }),
+  };
+});
 
 import {
   resolveProviderEndpoint,

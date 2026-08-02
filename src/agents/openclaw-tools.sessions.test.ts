@@ -10,6 +10,7 @@ import {
   appendTranscriptMessage,
   upsertSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import { createSessionVisibilityChecker } from "../plugin-sdk/session-visibility.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 
 const callGatewayMock = vi.fn();
@@ -1178,6 +1179,68 @@ describe("sessions tools", () => {
     expect(waitCalls).toHaveLength(6);
     expect(historyOnlyCalls).toHaveLength(7);
     expect(sendCallCount).toBe(0);
+  });
+
+  it("keeps scoped sends from creating post-return work or durable watches", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-scoped-session-send-"));
+    const storePath = path.join(tmpDir, "sessions.json");
+    const requesterSessionKey = "agent:main:clickclack:discussion-proof";
+    const targetSessionKey = "agent:main:main";
+    const expectedSessionId = "scoped-main-incarnation";
+    await upsertSessionEntry(
+      { agentId: "main", sessionKey: targetSessionKey, storePath },
+      { sessionId: expectedSessionId, updatedAt: 1 },
+    );
+    const unregister = createSessionVisibilityChecker.registerScopedAccessProvider((request) =>
+      request.requesterSessionKey === requesterSessionKey &&
+      request.targetSessionKey === targetSessionKey
+        ? { expectedSessionId }
+        : undefined,
+    );
+    const calls: GatewayCall[] = [];
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as GatewayCall;
+      calls.push(request);
+      if (request.method === "agent") {
+        return { runId: "run-scoped", status: "accepted", acceptedAt: 1 };
+      }
+      return {};
+    });
+    try {
+      const tool = createOpenClawTools({
+        agentSessionKey: requesterSessionKey,
+        sandboxed: true,
+        config: {
+          session: { store: storePath, mainKey: "main", scope: "per-sender" },
+          tools: { sessions: { visibility: "self" }, agentToAgent: { enabled: false } },
+          agents: { defaults: { sandbox: { sessionToolsVisibility: "spawned" } } },
+        } as OpenClawConfig,
+      }).find((candidate) => candidate.name === "sessions_send");
+      if (!tool) {
+        throw new Error("missing sessions_send tool");
+      }
+
+      const result = await tool.execute("scoped-send", {
+        sessionKey: targetSessionKey,
+        message: "Please check the main session",
+        timeoutSeconds: 0,
+        watch: true,
+      });
+
+      expect(result.details).toMatchObject({
+        status: "accepted",
+        delivery: { status: "skipped", mode: "announce" },
+        watched: false,
+      });
+      expect(calls.map((call) => call.method)).toEqual([
+        "sessions.list",
+        "sessions.resolve",
+        "agent",
+      ]);
+    } finally {
+      unregister();
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 
   it("sessions_send returns pending agent error diagnostics on timeout", async () => {

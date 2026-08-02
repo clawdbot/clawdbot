@@ -6,7 +6,7 @@ struct AgentProTab: View {
     @Environment(NodeAppModel.self) var appModel
     @Environment(\.scenePhase) var scenePhase
     let directRoute: AgentRoute?
-    let headerLeadingAction: OpenClawSidebarHeaderAction?
+    let headerSidebarAction: OpenClawSidebarHeaderAction?
     let headerTitle: String
     let openSettings: (() -> Void)?
     @State var overview: AgentOverviewSnapshot?
@@ -156,12 +156,12 @@ struct AgentProTab: View {
 
     init(
         directRoute: AgentRoute? = nil,
-        headerLeadingAction: OpenClawSidebarHeaderAction? = nil,
+        headerSidebarAction: OpenClawSidebarHeaderAction? = nil,
         headerTitle: String = "Agents",
         openSettings: (() -> Void)? = nil)
     {
         self.directRoute = directRoute
-        self.headerLeadingAction = headerLeadingAction
+        self.headerSidebarAction = headerSidebarAction
         self.headerTitle = headerTitle
         self.openSettings = openSettings
     }
@@ -231,7 +231,7 @@ struct AgentProTab: View {
     private func directDestination(for route: AgentRoute) -> some View {
         self.destination(for: route)
             .toolbar(
-                route != .agents && self.directHeaderLeadingAction(for: route) != nil ? .hidden : .visible,
+                route != .agents && self.directHeaderSidebarAction(for: route) != nil ? .hidden : .visible,
                 for: .navigationBar)
     }
 }

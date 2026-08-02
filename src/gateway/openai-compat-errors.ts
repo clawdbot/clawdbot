@@ -23,6 +23,7 @@ const ERROR_TYPE_BY_REASON: Partial<Record<FailoverReason, string>> = {
   rate_limit: "rate_limit_error",
   server_error: "api_error",
   session_expired: "invalid_request_error",
+  tls_certificate: "api_error",
   timeout: "api_error",
 };
 

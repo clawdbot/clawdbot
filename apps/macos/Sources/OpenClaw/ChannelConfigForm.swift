@@ -98,8 +98,8 @@ struct ConfigSchemaForm: View {
             if self.isChannelQuickLeaf(path) {
                 return AnyView(
                     SettingsCardToggleRow(
-                        title: label ?? "Enabled",
-                        subtitle: help,
+                        title: label.map(SettingsTextValue.verbatim) ?? "Enabled",
+                        subtitle: help.map(SettingsTextValue.verbatim),
                         binding: self.boolBinding(path, defaultValue: schema.explicitDefault as? Bool)))
             }
             return AnyView(
@@ -299,7 +299,10 @@ struct ConfigSchemaForm: View {
         subtitle: String?,
         @ViewBuilder control: () -> some View) -> some View
     {
-        SettingsCardRow(title: title ?? "Value", subtitle: subtitle) {
+        SettingsCardRow(
+            title: title.map(SettingsTextValue.verbatim) ?? "Value",
+            subtitle: subtitle.map(SettingsTextValue.verbatim))
+        {
             control()
         }
     }

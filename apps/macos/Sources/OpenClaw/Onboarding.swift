@@ -526,6 +526,7 @@ final class OnboardingController: NSObject, NSWindowDelegate {
         }
         let hosting = NSHostingController(rootView: OnboardingView())
         let window = NSWindow(contentViewController: hosting)
+        window.isRestorable = false
         window.title = UIStrings.welcomeTitle
         window.styleMask = Self.windowStyleMask
         window.setContentSize(NSSize(width: OnboardingView.windowWidth, height: OnboardingView.windowHeight))

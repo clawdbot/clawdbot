@@ -21,6 +21,9 @@
       "./index.ts"
     ],
     "setupEntry": "./setup-entry.ts",
+    "setupFeatures": {
+      "configPromotion": true
+    },
     "install": {
       "npmSpec": "@openclaw/twitch",
       "defaultChoice": "npm",
@@ -47,9 +50,11 @@
       "blurb": "Twitch chat integration",
       "aliases": [
         "twitch-chat"
-      ]
+      ],
+      "setup": { "fields": [] }
     },
     "release": {
+      "bundleRuntimeDependencies": false,
       "publishToClawHub": true,
       "publishToNpm": true
     }

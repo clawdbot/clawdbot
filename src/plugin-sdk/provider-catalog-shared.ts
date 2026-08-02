@@ -1,6 +1,7 @@
 // Provider catalog helpers normalize, hash, and expose model catalogs for provider plugins.
 import { createHash } from "node:crypto";
 import { normalizeModelCatalog } from "@openclaw/model-catalog-core/model-catalog-normalize";
+import { buildModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type {
   ModelCatalogCost,
   ModelCatalogMediaInputConfig,
@@ -12,6 +13,7 @@ import {
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "../../packages/normalization-core/src/number-coercion.js";
+import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import { normalizeConfiguredProviderCatalogModelId } from "../agents/model-ref-shared.js";
 import { resolveProviderRequestCapabilities } from "../agents/provider-attribution.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
@@ -125,6 +127,19 @@ function countRawManifestCatalogModels(catalog: unknown): number | undefined {
   return Array.isArray(models) ? models.length : undefined;
 }
 
+/** Reads a provider's normalized manifest default as a fully qualified model ref. */
+export function readManifestProviderDefaultModelRef(
+  manifest: unknown,
+  providerId: string,
+): string | undefined {
+  const catalog = (manifest as { modelCatalog?: { providers?: Record<string, unknown> } })
+    ?.modelCatalog?.providers?.[providerId];
+  const defaultModel = normalizeOptionalString(
+    (catalog as { defaultModel?: unknown })?.defaultModel,
+  );
+  return defaultModel ? buildModelCatalogRef(providerId, defaultModel) : undefined;
+}
+
 function cloneManifestCatalogTieredCost(
   tier: ModelCatalogTieredCost,
 ): NonNullable<ModelDefinitionConfig["cost"]["tieredPricing"]>[number] {
@@ -228,6 +243,32 @@ export function buildManifestModelProviderConfig(params: {
     ...(catalog.api ? { api: catalog.api } : {}),
     ...(catalog.headers ? { headers: { ...catalog.headers } } : {}),
     models: catalog.models.map((model) => buildManifestCatalogModel(params.providerId, model)),
+  };
+}
+
+/** Builds one normalized runtime model row from a provider manifest catalog entry. */
+export function buildManifestModelDefinition(params: {
+  /** Provider id that owns the manifest catalog row. */
+  providerId: string;
+  /** Raw manifest modelCatalog provider block that contains the row. */
+  catalog: unknown;
+  /** Optional provider policy applied after manifest normalization. */
+  decorate?: (model: ModelDefinitionConfig) => ModelDefinitionConfig;
+}): (model: unknown) => ModelDefinitionConfig {
+  if (!params.catalog || typeof params.catalog !== "object" || Array.isArray(params.catalog)) {
+    throw new Error(`Missing modelCatalog.providers.${params.providerId}`);
+  }
+  const catalog = params.catalog;
+  return (rawModel) => {
+    const provider = buildManifestModelProviderConfig({
+      providerId: params.providerId,
+      catalog: { ...catalog, models: [rawModel] },
+    });
+    const model = provider.models[0];
+    if (!model) {
+      throw new Error(`Missing modelCatalog.providers.${params.providerId}.models[0]`);
+    }
+    return params.decorate?.(model) ?? model;
   };
 }
 

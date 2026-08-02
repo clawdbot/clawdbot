@@ -2,6 +2,7 @@ export * from "../providers/agent-tools-parameter-schema.js";
 export * from "../providers/azure-deployment-map.js";
 export * from "../providers/azure-openai-responses-client-compat.js";
 export * from "../providers/clean-for-gemini.js";
+export * from "../providers/clean-for-llamacpp-gbnf.js";
 export * from "../providers/openai-completions.js";
 export * from "../providers/openai-prompt-cache.js";
 export * from "../providers/openai-reasoning-effort.js";

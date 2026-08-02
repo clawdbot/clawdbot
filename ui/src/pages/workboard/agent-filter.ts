@@ -1,5 +1,6 @@
 import type { AgentsListResult } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
+import { listSelectableAgents } from "../../lib/agents/display.ts";
 import type { WorkboardCard, WorkboardUiState } from "../../lib/workboard/index.ts";
 
 type WorkboardAgentRow = AgentsListResult["agents"][number];
@@ -127,9 +128,17 @@ export function buildAssignableAgentOptions(
   agentsList: AgentsListResult | null,
   currentAgentId: string,
 ) {
-  const configuredAgents = buildConfiguredAgentOptions(agentsList);
+  const selectableList = agentsList
+    ? { ...agentsList, agents: listSelectableAgents(agentsList.agents) }
+    : null;
+  const configuredAgents = buildConfiguredAgentOptions(selectableList);
   const currentId = normalizeAgentOptionId(currentAgentId);
-  const hasCurrent = currentId ? configuredAgents.some((agent) => agent.id === currentId) : true;
+  const currentIsSystem = agentsList?.agents.some(
+    (agent) => agent.id === currentId && agent.kind === "system",
+  );
+  const hasCurrent = currentId
+    ? configuredAgents.some((agent) => agent.id === currentId) || currentIsSystem
+    : true;
   return [
     {
       id: "",

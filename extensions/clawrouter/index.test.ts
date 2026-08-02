@@ -454,6 +454,38 @@ describe("ClawRouter plugin", () => {
     expect(provider?.resolveDynamicModel?.(context as never)).toBeUndefined();
   });
 
+  it("keeps discovered models isolated to their plugin registration", async () => {
+    providerAuthRuntimeMocks.resolveApiKeyForProvider.mockResolvedValue({
+      apiKey: "resolved-proxy-key",
+      mode: "api-key",
+      source: "auth profile",
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json(LIVE_CATALOG)),
+    );
+    const first = await registerSingleProviderPlugin(plugin);
+    const second = await registerSingleProviderPlugin(plugin);
+    const context = {
+      config: { models: {} },
+      agentDir: "/agent",
+      workspaceDir: "/workspace",
+      provider: "clawrouter",
+      modelId: "openai/gpt-5.5",
+      modelRegistry: { find: vi.fn(() => null) },
+      authProfileId: "clawrouter-profile",
+      authProfileMode: "api_key",
+    };
+
+    await first.prepareDynamicModel?.(context as never);
+
+    expect(first.resolveDynamicModel?.(context as never)).toMatchObject({
+      id: "openai/gpt-5.5",
+    });
+    expect(second.resolveDynamicModel?.(context as never)).toBeUndefined();
+    expect(second.preferRuntimeResolvedModel?.(context as never)).toBe(false);
+  });
+
   it("keeps the previous dynamic model snapshot while rebuilding", async () => {
     providerAuthRuntimeMocks.resolveApiKeyForProvider
       .mockResolvedValueOnce({ apiKey: "decoy-token" })

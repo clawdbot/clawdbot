@@ -2,7 +2,6 @@
 // embedded run was interrupted while the registry still considers them active.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as config from "../config/config.js";
-import * as sessions from "../config/sessions.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import type { GatewayRecoveryRuntime } from "../gateway/server-instance-runtime.types.js";
 import {
@@ -14,10 +13,15 @@ import { resolveInternalSessionEffectsTarget } from "./internal-session-effects.
 import * as announceDelivery from "./subagent-announce-delivery.js";
 import {
   recoverOrphanedSubagentSessions as recoverOrphanedSubagentSessionsWithRuntime,
+  resetOrphanRecoveryCoordinationForTest,
   scheduleOrphanRecovery as scheduleOrphanRecoveryWithRuntime,
 } from "./subagent-orphan-recovery.js";
 import * as subagentRegistrySteerRuntime from "./subagent-registry-steer-runtime.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import {
+  createSubagentRunRecord,
+  type SubagentRunRecordOverrides,
+} from "./subagent-test-fixtures.test-helpers.js";
 
 const loggerMocks = vi.hoisted(() => ({
   info: vi.fn(),
@@ -146,8 +150,10 @@ vi.mock("./subagent-registry-steer-runtime.js", () => ({
   reserveSwarmCollectorLaunch: vi.fn(() => true),
 }));
 
-function createTestRunRecord(overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord {
-  return {
+function createTestRunRecord(
+  overrides: Partial<SubagentRunRecordOverrides> = {},
+): SubagentRunRecord {
+  return createSubagentRunRecord({
     runId: "run-1",
     childSessionKey: "agent:main:subagent:test-session-1",
     requesterSessionKey: "agent:main:quietchat:direct:+1234567890",
@@ -157,7 +163,7 @@ function createTestRunRecord(overrides: Partial<SubagentRunRecord> = {}): Subage
     createdAt: Date.now() - 60_000,
     startedAt: Date.now() - 55_000,
     ...overrides,
-  };
+  });
 }
 
 function createActiveRuns(...runs: SubagentRunRecord[]) {
@@ -165,7 +171,7 @@ function createActiveRuns(...runs: SubagentRunRecord[]) {
 }
 
 function mockSingleAbortedSession(
-  overrides: Partial<NonNullable<ReturnType<typeof sessions.loadSessionStore>[string]>> = {},
+  overrides: Partial<NonNullable<ReturnType<typeof sessionMocks.loadSessionStore>[string]>> = {},
 ) {
   const store = {
     "agent:main:subagent:test-session-1": {
@@ -175,12 +181,12 @@ function mockSingleAbortedSession(
       ...overrides,
     },
   };
-  vi.mocked(sessions.loadSessionStore).mockReturnValue(store);
+  sessionMocks.loadSessionStore.mockReturnValue(store);
   return store;
 }
 
-async function expectSkippedRecovery(store: ReturnType<typeof sessions.loadSessionStore>) {
-  vi.mocked(sessions.loadSessionStore).mockReturnValue(store);
+async function expectSkippedRecovery(store: ReturnType<typeof sessionMocks.loadSessionStore>) {
+  sessionMocks.loadSessionStore.mockReturnValue(store);
 
   const result = await recoverOrphanedSubagentSessions({
     getActiveRuns: () => createActiveRuns(createTestRunRecord()),
@@ -219,6 +225,7 @@ describe("subagent-orphan-recovery", () => {
     vi.useFakeTimers();
     vi.clearAllMocks();
     resetGatewayWorkAdmission();
+    resetOrphanRecoveryCoordinationForTest();
     dispatchAgent.mockReset();
     dispatchAgent.mockResolvedValue({ runId: "test-run-id" });
     readSessionMessages.mockReset();
@@ -230,6 +237,7 @@ describe("subagent-orphan-recovery", () => {
 
   afterEach(() => {
     resetGatewayWorkAdmission();
+    resetOrphanRecoveryCoordinationForTest();
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
@@ -241,7 +249,7 @@ describe("subagent-orphan-recovery", () => {
       abortedLastRun: true,
     };
 
-    vi.mocked(sessions.loadSessionStore).mockReturnValue({
+    sessionMocks.loadSessionStore.mockReturnValue({
       "agent:main:subagent:test-session-1": sessionEntry,
     });
 
@@ -387,7 +395,7 @@ describe("subagent-orphan-recovery", () => {
         abortedLastRun: true,
       },
     };
-    vi.mocked(sessions.loadSessionStore).mockReturnValue(store);
+    sessionMocks.loadSessionStore.mockReturnValue(store);
     const activeRuns = createActiveRuns(
       createTestRunRecord({
         runId: "fresh-run",
@@ -467,7 +475,7 @@ describe("subagent-orphan-recovery", () => {
   });
 
   it("recovers restart-aborted timeout runs even when the registry marked them ended", async () => {
-    vi.mocked(sessions.loadSessionStore).mockReturnValue({
+    sessionMocks.loadSessionStore.mockReturnValue({
       "agent:main:subagent:test-session-1": {
         sessionId: "session-abc",
         updatedAt: Date.now(),
@@ -525,12 +533,12 @@ describe("subagent-orphan-recovery", () => {
       endedAt: 2_000,
     });
     expect(config.getRuntimeConfig).not.toHaveBeenCalled();
-    expect(sessions.loadSessionStore).not.toHaveBeenCalled();
+    expect(sessionMocks.loadSessionStore).not.toHaveBeenCalled();
     expect(dispatchAgent).not.toHaveBeenCalled();
   });
 
   it("handles multiple orphaned sessions", async () => {
-    vi.mocked(sessions.loadSessionStore).mockReturnValue({
+    sessionMocks.loadSessionStore.mockReturnValue({
       "agent:main:subagent:session-a": {
         sessionId: "id-a",
         updatedAt: Date.now(),
@@ -584,7 +592,7 @@ describe("subagent-orphan-recovery", () => {
   });
 
   it("handles instance dispatch failure gracefully and preserves abortedLastRun flag", async () => {
-    vi.mocked(sessions.loadSessionStore).mockReturnValue({
+    sessionMocks.loadSessionStore.mockReturnValue({
       "agent:main:subagent:test-session-1": {
         sessionId: "session-abc",
         updatedAt: Date.now(),
@@ -639,7 +647,7 @@ describe("subagent-orphan-recovery", () => {
         abortedLastRun: true,
       },
     };
-    vi.mocked(sessions.loadSessionStore).mockReturnValue(store);
+    sessionMocks.loadSessionStore.mockReturnValue(store);
 
     const activeRuns = new Map<string, SubagentRunRecord>();
     activeRuns.set("run-1", createTestRunRecord());
@@ -841,7 +849,7 @@ describe("subagent-orphan-recovery", () => {
     dispatchAgent.mockResolvedValue({ runId: "new-run" } as never);
     vi.mocked(sessionAccessor.patchSessionEntry).mockRejectedValueOnce(new Error("write failed"));
 
-    vi.mocked(sessions.loadSessionStore).mockReturnValue({
+    sessionMocks.loadSessionStore.mockReturnValue({
       "agent:main:subagent:test-session-1": {
         sessionId: "session-abc",
         updatedAt: Date.now(),
@@ -870,7 +878,7 @@ describe("subagent-orphan-recovery", () => {
     dispatchAgent.mockResolvedValue({ runId: "new-run" } as never);
     vi.mocked(subagentRegistrySteerRuntime.replaceSubagentRunAfterSteer).mockReturnValue(false);
 
-    vi.mocked(sessions.loadSessionStore).mockReturnValue({
+    sessionMocks.loadSessionStore.mockReturnValue({
       "agent:main:subagent:test-session-1": {
         sessionId: "session-abc",
         updatedAt: Date.now(),
@@ -900,7 +908,7 @@ describe("subagent-orphan-recovery", () => {
   });
 
   it("finalizes interrupted runs with a readable failure after recovery retries are exhausted", async () => {
-    vi.mocked(sessions.loadSessionStore).mockReturnValue({
+    sessionMocks.loadSessionStore.mockReturnValue({
       "agent:main:subagent:test-session-1": {
         sessionId: "session-abc",
         updatedAt: Date.now(),

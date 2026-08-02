@@ -105,9 +105,9 @@ async function shouldFailPackageTelegramRun(
   if (parseBoolean(env.OPENCLAW_NPM_TELEGRAM_ALLOW_FAILURES)) {
     return false;
   }
-  const { readQaSuiteFailedScenarioCountFromFile } =
+  const { readQaSuiteFailedOrSkippedScenarioCountFromFile } =
     await import("../../extensions/qa-lab/src/suite-summary.ts");
-  return (await readQaSuiteFailedScenarioCountFromFile(result.summaryPath)) > 0;
+  return (await readQaSuiteFailedOrSkippedScenarioCountFromFile(result.summaryPath)) > 0;
 }
 
 async function resolveTrustedOpenClawCommand(

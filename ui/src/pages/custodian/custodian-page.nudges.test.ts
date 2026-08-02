@@ -304,11 +304,11 @@ describe("custodian page nudges", () => {
     await page.updateComplete;
     expect(page.querySelector(".custodian__nudge")).not.toBeNull();
 
-    setGatewaySnapshot({ connected: false, reconnecting: true });
+    setGatewaySnapshot({ phase: "reconnecting" });
     await page.updateComplete;
     expect(page.querySelector(".custodian__nudge")).not.toBeNull();
 
-    setGatewaySnapshot({ connected: true, reconnecting: false });
+    setGatewaySnapshot({ phase: "connected" });
     await page.updateComplete;
     expect(page.querySelector(".custodian__nudge")).not.toBeNull();
     expect(request).toHaveBeenCalledOnce();
@@ -337,8 +337,7 @@ describe("custodian page nudges", () => {
     setGatewayToken("new-operator-token");
     setGatewaySnapshot({
       client: { request } as unknown as GatewayBrowserClient,
-      connected: true,
-      reconnecting: false,
+      phase: "connected",
     });
     await waitForFast(() => expect(page.querySelector(".custodian__nudge")).toBeNull());
     expect(request).toHaveBeenCalledTimes(2);
@@ -758,9 +757,9 @@ describe("custodian page nudges", () => {
     page.querySelector<HTMLButtonElement>(".option-card__skip")!.click();
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
 
-    setGatewaySnapshot({ connected: false, reconnecting: true });
+    setGatewaySnapshot({ phase: "reconnecting" });
     await page.updateComplete;
-    setGatewaySnapshot({ connected: true, reconnecting: false });
+    setGatewaySnapshot({ phase: "connected" });
     await page.updateComplete;
     resolveQuestion({
       sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
@@ -838,9 +837,9 @@ describe("custodian page nudges", () => {
     page.querySelector<HTMLButtonElement>(".custodian__nudge-action")!.click();
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
 
-    setGatewaySnapshot({ connected: false, reconnecting: true });
+    setGatewaySnapshot({ phase: "reconnecting" });
     await page.updateComplete;
-    setGatewaySnapshot({ connected: true, reconnecting: false });
+    setGatewaySnapshot({ phase: "connected" });
     await page.updateComplete;
     resolveNudge({
       sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",

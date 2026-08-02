@@ -18,8 +18,39 @@ describe("subagent run timeout helpers", () => {
       resolveSubagentRunDeadlineMs({
         createdAt: 1_000,
         runTimeoutSeconds: thirtyDaysSeconds,
+        execution: {},
       }),
     ).toBe(2_592_001_000);
+  });
+
+  it("waits for the collector lifecycle start before setting its deadline", () => {
+    expect(
+      resolveSubagentRunDeadlineMs({
+        collect: true,
+        createdAt: 1_000,
+        runTimeoutSeconds: 60,
+        execution: {},
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveSubagentRunDeadlineMs({
+        collect: true,
+        createdAt: 1_000,
+        runTimeoutSeconds: 60,
+        execution: {},
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveSubagentRunDeadlineMs(
+        {
+          collect: true,
+          createdAt: 1_000,
+          runTimeoutSeconds: 60,
+          execution: {},
+        },
+        5_000,
+      ),
+    ).toBe(65_000);
   });
 
   it("caps actual timer delays without shortening semantic durations", () => {
@@ -34,7 +65,7 @@ describe("subagent run timeout helpers", () => {
   it("clamps delayed terminal observations to the explicit deadline", () => {
     expect(
       resolveSubagentRunEffectiveEndedAt(
-        { createdAt: 1_000, startedAt: 2_000, runTimeoutSeconds: 3 },
+        { createdAt: 1_000, execution: { startedAt: 2_000 }, runTimeoutSeconds: 3 },
         6_000,
       ),
     ).toBe(5_000);
@@ -47,6 +78,7 @@ describe("subagent run timeout helpers", () => {
       resolveSubagentRunDeadlineMs({
         createdAt: Number.POSITIVE_INFINITY,
         runTimeoutSeconds: 60,
+        execution: {},
       }),
     ).toBeUndefined();
   });

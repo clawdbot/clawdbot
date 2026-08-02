@@ -9,6 +9,7 @@ import {
   forceDisconnectPlaywrightForTarget,
   getObservedBrowserStateForPage,
   getObservedBrowserStateViaPlaywright,
+  getMainFrameDocumentIdentityViaPlaywright,
   getPageForTargetId,
   isBrowserObservedDialogBlockedError,
   listPagesViaPlaywright,
@@ -30,6 +31,7 @@ import {
   uploadViaPlaywright,
   waitForDownloadViaPlaywright,
 } from "./pw-tools-core.downloads.js";
+import { pageContentViaPlaywright } from "./pw-tools-core.extract.js";
 import {
   batchViaPlaywright,
   clickViaPlaywright,
@@ -92,6 +94,7 @@ export const pwAi = {
   createObservedDialogAbortSignalForPage,
   getObservedBrowserStateForPage,
   getObservedBrowserStateViaPlaywright,
+  getMainFrameDocumentIdentityViaPlaywright,
   getPageForTargetId,
   isBrowserObservedDialogBlockedError,
   listPagesViaPlaywright,
@@ -119,6 +122,7 @@ export const pwAi = {
   highlightViaPlaywright,
   hoverViaPlaywright,
   navigateViaPlaywright,
+  pageContentViaPlaywright,
   pdfViaPlaywright,
   pressKeyViaPlaywright,
   resizeViewportViaPlaywright,

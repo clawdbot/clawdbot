@@ -63,6 +63,7 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
 
         self.inject(into: menu)
         self.injectNodes(into: menu)
+        MenuGatewaysInjector.shared.inject(into: menu)
 
         // Refresh in the background for the next open. Rebuilding custom menu
         // rows while AppKit is tracking the menu causes visible flicker.

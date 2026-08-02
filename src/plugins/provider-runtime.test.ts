@@ -8,6 +8,7 @@ import {
   expectAugmentedCodexCatalog,
   expectCodexMissingAuthHint,
 } from "./provider-runtime.test-support.js";
+import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
 import type {
   AnyAgentTool,
   ProviderExternalAuthProfile,
@@ -49,6 +50,7 @@ const resolveBundledProviderPolicySurfaceMock = vi.fn<ResolveBundledProviderPoli
 );
 const providerRuntimeWarnMock = vi.fn();
 
+let getAiTransportHost: typeof import("@openclaw/ai").getAiTransportHost;
 let augmentModelCatalogWithProviderPlugins: typeof import("./provider-runtime.js").augmentModelCatalogWithProviderPlugins;
 let buildProviderAuthDoctorHintWithPlugin: typeof import("./provider-runtime.js").buildProviderAuthDoctorHintWithPlugin;
 let buildProviderMissingAuthMessageWithPlugin: typeof import("./provider-runtime.js").buildProviderMissingAuthMessageWithPlugin;
@@ -351,6 +353,8 @@ describe("provider-runtime", () => {
       wrapProviderSimpleCompletionStreamFn,
       wrapProviderStreamFn,
     } = await import("./provider-runtime.js"));
+    await import("../agents/ai-transport-runtime-host.js");
+    ({ getAiTransportHost } = await import("@openclaw/ai"));
     ({ createEmptyPluginRegistry } = await import("./registry.js"));
     ({ resetPluginRuntimeStateForTest, setActivePluginRegistry } = await import("./runtime.js"));
   });
@@ -358,7 +362,6 @@ describe("provider-runtime", () => {
   beforeEach(() => {
     resetPluginRuntimeStateForTest();
     providerRuntimeTesting.clearProviderRuntimePluginCacheForTest();
-    providerRuntimeTesting.resetExternalAuthFallbackWarningCacheForTest();
     resolvePluginProvidersMock.mockReset();
     resolvePluginProvidersMock.mockReturnValue([]);
     isPluginProvidersLoadInFlightMock.mockReset();
@@ -552,6 +555,31 @@ describe("provider-runtime", () => {
     expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
   });
 
+  it("uses the prepared run registry without repeating provider discovery", () => {
+    const provider: ProviderPlugin = {
+      id: DEMO_PROVIDER_ID,
+      label: "Prepared demo",
+      auth: [],
+    };
+    const registry = createEmptyPluginRegistry();
+    registry.providers.push({
+      pluginId: DEMO_PROVIDER_ID,
+      provider,
+      source: "test",
+    });
+
+    const resolved = withPluginRuntimeRegistryScope(registry, () =>
+      resolveProviderRuntimePlugin({
+        provider: DEMO_PROVIDER_ID,
+        workspaceDir: "/tmp/prepared-workspace",
+      }),
+    );
+
+    expect(resolved?.id).toBe(DEMO_PROVIDER_ID);
+    expect(resolved?.pluginId).toBe(DEMO_PROVIDER_ID);
+    expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
+  });
+
   it("matches active provider hooks through a custom provider's native api owner", () => {
     const provider: ProviderPlugin = {
       id: "ollama",
@@ -612,6 +640,35 @@ describe("provider-runtime", () => {
         context: createDemoResolvedModelContext({}),
       }),
     ).toBeTypeOf("function");
+    expect(createStreamFn).toHaveBeenCalledOnce();
+    expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
+  });
+
+  it("installs provider stream hooks into the AI transport host", () => {
+    const streamFn = vi.fn();
+    const createStreamFn = vi.fn(() => streamFn);
+    const provider: ProviderPlugin = {
+      id: DEMO_PROVIDER_ID,
+      label: "Demo",
+      auth: [],
+      createStreamFn,
+    };
+    const registry = createEmptyPluginRegistry();
+    registry.providers.push({
+      pluginId: DEMO_PROVIDER_ID,
+      provider,
+      source: "test",
+    });
+    setActivePluginRegistry(registry, "startup-registry", "gateway-bindable", "/tmp/workspace");
+
+    expect(
+      getAiTransportHost().plugin.resolveProviderStream({
+        provider: DEMO_PROVIDER_ID,
+        workspaceDir: "/tmp/workspace",
+        allowRuntimePluginLoad: false,
+        context: createDemoResolvedModelContext({}),
+      }),
+    ).toBe(streamFn);
     expect(createStreamFn).toHaveBeenCalledOnce();
     expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
   });
@@ -1261,18 +1318,16 @@ describe("provider-runtime", () => {
 
   it("respects the shared GPT-5 prompt overlay personality config", () => {
     const contribution = resolveProviderSystemPromptContribution({
-      provider: "opencode",
+      provider: "openai",
       config: {
-        agents: {
-          defaults: {
-            promptOverlays: {
-              gpt5: { personality: "off" },
-            },
+        plugins: {
+          entries: {
+            openai: { config: { personality: "off" } },
           },
         },
       },
       context: {
-        provider: "opencode",
+        provider: "openai",
         modelId: "gpt-5.4",
         promptMode: "full",
       } as never,

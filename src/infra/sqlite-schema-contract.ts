@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import { requireNodeSqlite } from "./node-sqlite.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
 
 type SqliteIndexListRow = {
   name: string;
@@ -24,6 +24,7 @@ type SqliteIndexTermContract = Omit<SqliteIndexTermRow, "cid"> & {
 type SqliteSchemaRow = {
   name: string;
   sql: string | null;
+  tbl_name?: string;
 };
 
 type SqliteTableListRow = {
@@ -57,7 +58,23 @@ type SqliteTableContract = {
 
 type SqliteSchemaContract = Map<string, SqliteTableContract>;
 
+export type CanonicalSqliteNamedIndexContract = {
+  definition: string;
+  fingerprint: SqliteIndexContract;
+  name: string;
+  tableName: string;
+  unique: boolean;
+};
+
 export type SqliteSchemaCompatibility = {
+  /**
+   * Canonical additive tables that may be absent until their owning feature
+   * performs its one-time lazy ensure. Present tables still require the exact
+   * canonical shape.
+   */
+  allowedMissingTables?: readonly string[];
+  /** Additive columns that may be absent until their owning feature lazily ensures them. */
+  allowedMissingColumns?: readonly string[];
   /**
    * Exact definitions produced by supported additive migrations when SQLite
    * requires a temporary default that the clean schema does not retain.
@@ -65,9 +82,12 @@ export type SqliteSchemaCompatibility = {
   allowedColumnDefinitions?: Readonly<Record<string, readonly string[]>>;
   /**
    * Exact owner-defined trigger groups that may be absent when their derived
-   * schema is disabled, but must be complete and canonical when present.
+   * or lazily ensured schema is absent, but must be complete and canonical
+   * when present.
    */
   optionalCanonicalTriggerGroups?: readonly {
+    /** The trigger group is optional only while this canonical table is absent. */
+    optionalWhenTableMissing?: string;
     tableName: string;
     triggers: readonly {
       name: string;
@@ -89,16 +109,16 @@ export function assertSqliteSchemaContains(
   schemaSql: string,
   compatibility: SqliteSchemaCompatibility = {},
 ): void {
-  let expected = schemaContractCache.get(schemaSql);
-  if (!expected) {
-    expected = buildSqliteSchemaContract(schemaSql);
-    schemaContractCache.set(schemaSql, expected);
-  }
+  const expected = getSqliteSchemaContract(schemaSql);
+  const allowedMissingTables = new Set(compatibility.allowedMissingTables ?? []);
 
   const mismatches: string[] = [];
   for (const [tableName, expectedTable] of expected) {
     const actualTable = collectSqliteTableContract(database, tableName);
     if (!actualTable) {
+      if (allowedMissingTables.has(tableName)) {
+        continue;
+      }
       mismatches.push(`missing table ${tableName}`);
       continue;
     }
@@ -125,23 +145,39 @@ export function assertSqliteSchemaContains(
         mismatches.push(`unexpected unique index ${actualIndex.name ?? `on ${tableName}`}`);
       }
     }
+    const optionalCanonicalTriggerGroups = collectOptionalCanonicalTriggerGroups(
+      database,
+      compatibility,
+      tableName,
+    );
+    const optionalCanonicalTriggers = optionalCanonicalTriggerGroups.flatMap(
+      (group) => group.triggers,
+    );
+    const allowedMissingCanonicalTriggers = optionalCanonicalTriggerGroups
+      .filter((group) => group.optional)
+      .flatMap((group) => group.triggers);
     for (const expectedTrigger of expectedTable.triggers) {
+      if (
+        allowedMissingCanonicalTriggers.some(
+          (canonicalTrigger) => canonicalTrigger.name === expectedTrigger.name,
+        )
+      ) {
+        continue;
+      }
       if (!actualTable.triggers.some((actualTrigger) => isEqual(actualTrigger, expectedTrigger))) {
         mismatches.push(`missing or drifted trigger ${expectedTrigger.name}`);
       }
     }
-    const optionalCanonicalTriggerGroups = collectOptionalCanonicalTriggerGroups(
-      compatibility,
-      tableName,
-    );
     for (const triggerGroup of optionalCanonicalTriggerGroups) {
       const isPresent = actualTable.triggers.some((actualTrigger) =>
-        triggerGroup.some((canonicalTrigger) => actualTrigger.name === canonicalTrigger.name),
+        triggerGroup.triggers.some(
+          (canonicalTrigger) => actualTrigger.name === canonicalTrigger.name,
+        ),
       );
-      if (!isPresent) {
+      if (triggerGroup.optional && !isPresent) {
         continue;
       }
-      for (const canonicalTrigger of triggerGroup) {
+      for (const canonicalTrigger of triggerGroup.triggers) {
         if (
           !actualTable.triggers.some((actualTrigger) => isEqual(actualTrigger, canonicalTrigger))
         ) {
@@ -149,7 +185,6 @@ export function assertSqliteSchemaContains(
         }
       }
     }
-    const optionalCanonicalTriggers = optionalCanonicalTriggerGroups.flat();
     for (const actualTrigger of actualTable.triggers) {
       if (
         !expectedTable.triggers.some((expectedTrigger) =>
@@ -174,28 +209,110 @@ export function assertSqliteSchemaContains(
   }
 
   if (mismatches.length > 0) {
-    const shown = mismatches.slice(0, 8);
-    if (mismatches.length > shown.length) {
-      shown.push(`${mismatches.length - shown.length} additional mismatch(es)`);
-    }
-    throw new Error(
-      `SQLite schema is incomplete or noncanonical for ${databaseLabel}: ${shown.join("; ")}`,
-    );
+    throwSqliteSchemaMismatches(databaseLabel, mismatches);
   }
 }
 
+/** Require stable canonical tables before a version-specific additive migration. */
+export function assertSqliteSchemaTablesPresent(
+  database: DatabaseSync,
+  databaseLabel: string,
+  schemaSql: string,
+  options: { allowedMissingTables?: readonly string[] } = {},
+): void {
+  const allowedMissingTables = new Set(options.allowedMissingTables ?? []);
+  const missingTables = getCanonicalSqliteTableNames(schemaSql)
+    .filter((tableName) => !allowedMissingTables.has(tableName))
+    .filter(
+      (tableName) =>
+        !database
+          .prepare("SELECT 1 FROM main.sqlite_schema WHERE type = 'table' AND name = ? LIMIT 1")
+          .get(tableName),
+    )
+    .map((tableName) => `missing table ${tableName}`);
+  if (missingTables.length > 0) {
+    throwSqliteSchemaMismatches(databaseLabel, missingTables);
+  }
+}
+
+function throwSqliteSchemaMismatches(databaseLabel: string, mismatches: string[]): never {
+  const shown = mismatches.slice(0, 8);
+  if (mismatches.length > shown.length) {
+    shown.push(`${mismatches.length - shown.length} additional mismatch(es)`);
+  }
+  throw new Error(
+    `SQLite schema is incomplete or noncanonical for ${databaseLabel}: ${shown.join("; ")}`,
+  );
+}
+
+/** Return every explicit named index owned by one committed schema. */
+export function getCanonicalSqliteNamedIndexContracts(
+  schemaSql: string,
+): CanonicalSqliteNamedIndexContract[] {
+  const schema = getSqliteSchemaContract(schemaSql);
+  const indexes: CanonicalSqliteNamedIndexContract[] = [];
+  for (const [tableName, table] of schema) {
+    for (const fingerprint of table.indexes) {
+      if (fingerprint.name === null || fingerprint.sql === null || fingerprint.origin !== "c") {
+        continue;
+      }
+      indexes.push({
+        definition: readCanonicalIndexDefinition(fingerprint),
+        fingerprint,
+        name: fingerprint.name,
+        tableName,
+        unique: fingerprint.unique === 1,
+      });
+    }
+  }
+  return indexes;
+}
+
+/** Return every table owned by one committed schema. */
+export function getCanonicalSqliteTableNames(schemaSql: string): string[] {
+  return [...getSqliteSchemaContract(schemaSql).keys()];
+}
+
+/** Inspect one explicit main-schema index using the canonical schema fingerprint shape. */
+export function collectSqliteNamedIndexContract(
+  database: DatabaseSync,
+  indexName: string,
+): SqliteIndexContract | undefined {
+  const row = database
+    .prepare("SELECT name, sql, tbl_name FROM main.sqlite_schema WHERE type = 'index' AND name = ?")
+    .get(indexName) as SqliteSchemaRow | undefined;
+  if (!row || typeof row.tbl_name !== "string") {
+    return undefined;
+  }
+  const index = (
+    database.prepare(`PRAGMA main.index_list(${quoteSqliteIdentifier(row.tbl_name)})`).all() as
+      | SqliteIndexListRow[]
+      | undefined
+  )?.find((candidate) => candidate.name === indexName);
+  return index ? collectSqliteIndexContract(database, index) : undefined;
+}
+
 function collectOptionalCanonicalTriggerGroups(
+  database: DatabaseSync,
   compatibility: SqliteSchemaCompatibility,
   tableName: string,
-): Array<Array<{ name: string; sql: string | null }>> {
+): Array<{
+  optional: boolean;
+  triggers: Array<{ name: string; sql: string | null }>;
+}> {
   return (compatibility.optionalCanonicalTriggerGroups ?? [])
     .filter((group) => group.tableName === tableName)
-    .map((group) =>
-      group.triggers.map((trigger) => ({
+    .map((group) => ({
+      optional:
+        !group.optionalWhenTableMissing ||
+        !database
+          .prepare("SELECT 1 FROM main.sqlite_schema WHERE type = 'table' AND name = ? LIMIT 1")
+          .get(group.optionalWhenTableMissing),
+      triggers: group.triggers.map((trigger) => ({
         name: trigger.name,
         sql: normalizeOptionalCanonicalTriggerSql(trigger.sql),
       })),
-    );
+    }));
 }
 
 function normalizeOptionalCanonicalTriggerSql(sql: string): string | null {
@@ -203,9 +320,17 @@ function normalizeOptionalCanonicalTriggerSql(sql: string): string | null {
   return normalizeSchemaSql(sql)?.replace(/^(CREATE TRIGGER) main\./iu, "$1 ") ?? null;
 }
 
+function getSqliteSchemaContract(schemaSql: string): SqliteSchemaContract {
+  let expected = schemaContractCache.get(schemaSql);
+  if (!expected) {
+    expected = buildSqliteSchemaContract(schemaSql);
+    schemaContractCache.set(schemaSql, expected);
+  }
+  return expected;
+}
+
 function buildSqliteSchemaContract(schemaSql: string): SqliteSchemaContract {
-  const sqlite = requireNodeSqlite();
-  const database = new sqlite.DatabaseSync(":memory:");
+  const database = openNodeSqliteDatabase(":memory:");
   try {
     database.exec(schemaSql);
     const rows = database
@@ -231,6 +356,27 @@ function buildSqliteSchemaContract(schemaSql: string): SqliteSchemaContract {
   } finally {
     database.close();
   }
+}
+
+function readCanonicalIndexDefinition(index: SqliteIndexContract): string {
+  if (index.name === null || index.sql === null) {
+    throw new Error("Canonical SQLite named index is missing its schema definition.");
+  }
+  const createPrefix =
+    index.unique === 1 ? /^CREATE\s+UNIQUE\s+INDEX\s+/iu : /^CREATE\s+INDEX\s+/iu;
+  const prefix = createPrefix.exec(index.sql);
+  if (!prefix) {
+    throw new Error(`Canonical SQLite index ${index.name} has an unreadable definition.`);
+  }
+  const name = readSqlToken(index.sql, prefix[0].length);
+  if (!name || normalizeSqlIdentifier(name.raw) !== index.name.toLowerCase()) {
+    throw new Error(`Canonical SQLite index ${index.name} has an unexpected schema name.`);
+  }
+  const definition = index.sql.slice(name.end).trim();
+  if (!/^ON\s+/iu.test(definition)) {
+    throw new Error(`Canonical SQLite index ${index.name} has an unreadable target.`);
+  }
+  return definition;
 }
 
 function collectSqliteTableContract(
@@ -294,11 +440,22 @@ function compareTableDefinitions(
   if (!actual || !expected) {
     return actual === expected ? null : "table definition";
   }
-  if (actual.columns.size !== expected.columns.size) {
+  const allowedMissingColumns = new Set(compatibility.allowedMissingColumns ?? []);
+  const allowedMissingCount = [...expected.columns].filter(
+    ([columnName]) =>
+      !actual.columns.has(columnName) && allowedMissingColumns.has(`${tableName}.${columnName}`),
+  ).length;
+  if (actual.columns.size + allowedMissingCount !== expected.columns.size) {
+    return "column definitions";
+  }
+  if ([...actual.columns].some(([columnName]) => !expected.columns.has(columnName))) {
     return "column definitions";
   }
   for (const [columnName, expectedDefinition] of expected.columns) {
     const actualDefinition = actual.columns.get(columnName);
+    if (actualDefinition === undefined && allowedMissingColumns.has(`${tableName}.${columnName}`)) {
+      continue;
+    }
     if (actualDefinition === expectedDefinition) {
       continue;
     }

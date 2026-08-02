@@ -108,8 +108,6 @@ async function resolveBrowserHatchTarget(
     config,
     env,
     modeOverride: "local",
-    localTokenPrecedence: "config-first",
-    localPasswordPrecedence: "config-first",
   });
   const auth = resolveGatewayAuth({
     authConfig: {
@@ -174,8 +172,12 @@ function isConnectedControlUi(entry: SystemPresence): boolean {
   );
 }
 
-function dashboardPresenceKey(entry: SystemPresence): string {
-  return [entry.deviceId, entry.instanceId, entry.host, entry.mode, entry.ts].join("\0");
+export function resolveConnectedControlUiPresenceKeys(
+  entries: readonly SystemPresence[],
+): string[] {
+  return entries
+    .filter(isConnectedControlUi)
+    .map((entry) => [entry.deviceId, entry.instanceId, entry.host, entry.mode].join("\0"));
 }
 
 async function probeDashboardPresence(
@@ -205,7 +207,7 @@ async function probeDashboardPresence(
     });
     return {
       reachable: true,
-      clientKeys: (presence ?? []).filter(isConnectedControlUi).map(dashboardPresenceKey),
+      clientKeys: resolveConnectedControlUiPresenceKeys(presence ?? []),
     };
   } catch (error) {
     return {

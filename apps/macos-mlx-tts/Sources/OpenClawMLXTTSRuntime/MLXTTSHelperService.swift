@@ -1,11 +1,52 @@
 import Foundation
+@preconcurrency import MLX
+import MLXAudioCore
 import MLXAudioTTS
 import OpenClawMLXTTSProtocol
 
 protocol MLXTTSSpeechModel: AnyObject, Sendable {
     var sampleRate: Int { get }
 
-    func generate(text: String, voice: String?, language: String?) async throws -> [Float]
+    func generate(
+        text: String,
+        voice: String?,
+        language: String?,
+        referenceAudioPath: String?,
+        referenceText: String?) async throws -> [Float]
+
+    func generateStream(
+        text: String,
+        voice: String?,
+        language: String?,
+        referenceAudioPath: String?,
+        referenceText: String?) -> AsyncThrowingStream<[Float], Error>
+}
+
+extension MLXTTSSpeechModel {
+    func generateStream(
+        text: String,
+        voice: String?,
+        language: String?,
+        referenceAudioPath: String?,
+        referenceText: String?) -> AsyncThrowingStream<[Float], Error>
+    {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    try await continuation.yield(self.generate(
+                        text: text,
+                        voice: voice,
+                        language: language,
+                        referenceAudioPath: referenceAudioPath,
+                        referenceText: referenceText))
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
 }
 
 typealias MLXTTSModelLoader = @Sendable (String) async throws -> any MLXTTSSpeechModel
@@ -54,7 +95,7 @@ public actor MLXTTSHelperService {
             return true
 
         case let .cancel(id):
-            guard self.currentID == id, let task = self.currentTask else {
+            guard self.currentID == id, let task = currentTask else {
                 await self.emit(.canceled(id: id))
                 return true
             }
@@ -94,16 +135,45 @@ public actor MLXTTSHelperService {
 
         do {
             try Task.checkCancellation()
-            let samples = try await model.generate(
-                text: request.text,
-                voice: request.voice,
-                language: request.language)
-            try Task.checkCancellation()
-            let audio = MLXTTSAudio(
-                id: request.id,
-                sampleRate: model.sampleRate,
-                pcm: Self.makePCM16(samples: samples))
-            await self.finish(event: .audio(audio), id: request.id)
+            if request.stream {
+                var started = false
+                for try await samples in model.generateStream(
+                    text: request.text,
+                    voice: request.voice,
+                    language: request.language,
+                    referenceAudioPath: request.referenceAudioPath,
+                    referenceText: request.referenceText)
+                {
+                    try Task.checkCancellation()
+                    guard !samples.isEmpty else { continue }
+                    if !started {
+                        started = true
+                        await self.emit(.streamStarted(MLXTTSStreamStart(
+                            id: request.id,
+                            sampleRate: model.sampleRate)))
+                    }
+                    await self.emit(.audioChunk(MLXTTSAudioChunk(
+                        id: request.id,
+                        pcm: Self.makePCM16(samples: samples))))
+                }
+                guard started else {
+                    throw AudioGenerationError.generationFailed("generation produced no audio")
+                }
+                await self.finish(event: .completed(id: request.id), id: request.id)
+            } else {
+                let samples = try await model.generate(
+                    text: request.text,
+                    voice: request.voice,
+                    language: request.language,
+                    referenceAudioPath: request.referenceAudioPath,
+                    referenceText: request.referenceText)
+                try Task.checkCancellation()
+                let audio = MLXTTSAudio(
+                    id: request.id,
+                    sampleRate: model.sampleRate,
+                    pcm: Self.makePCM16(samples: samples))
+                await self.finish(event: .audio(audio), id: request.id)
+            }
         } catch is CancellationError {
             await self.finishCanceled(id: request.id)
         } catch {
@@ -117,15 +187,15 @@ public actor MLXTTSHelperService {
     }
 
     private func model(repo: String) async throws -> any MLXTTSSpeechModel {
-        if let cachedModel = self.cachedModel, cachedModel.repo == repo {
+        if let cachedModel, cachedModel.repo == repo {
             return cachedModel.model
         }
 
         // Only one model is retained. Dropping the previous reference before
         // loading a new repo avoids holding both sets of MLX weights at once.
-        self.cachedModel = nil
-        let model = try await self.loadModel(repo)
-        self.cachedModel = CachedModel(repo: repo, model: model)
+        cachedModel = nil
+        let model = try await loadModel(repo)
+        cachedModel = CachedModel(repo: repo, model: model)
         return model
     }
 
@@ -162,13 +232,61 @@ private final class UncheckedSpeechModel: MLXTTSSpeechModel, @unchecked Sendable
         self.raw.sampleRate
     }
 
-    func generate(text: String, voice: String?, language: String?) async throws -> [Float] {
-        let generatedAudio = try await self.raw.generate(
+    func generate(
+        text: String,
+        voice: String?,
+        language: String?,
+        referenceAudioPath: String?,
+        referenceText: String?) async throws -> [Float]
+    {
+        let referenceAudio = try loadReferenceAudio(path: referenceAudioPath)
+        let generatedAudio = try await raw.generate(
             text: text,
             voice: voice,
-            refAudio: nil,
-            refText: nil,
+            refAudio: referenceAudio,
+            refText: referenceText,
             language: language)
         return generatedAudio.asArray(Float.self)
+    }
+
+    func generateStream(
+        text: String,
+        voice: String?,
+        language: String?,
+        referenceAudioPath: String?,
+        referenceText: String?) -> AsyncThrowingStream<[Float], Error>
+    {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    let referenceAudio = try self.loadReferenceAudio(path: referenceAudioPath)
+                    for try await samples in self.raw.generateSamplesStream(
+                        text: text,
+                        voice: voice,
+                        refAudio: referenceAudio,
+                        refText: referenceText,
+                        language: language)
+                    {
+                        try Task.checkCancellation()
+                        continuation.yield(samples)
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    private func loadReferenceAudio(path: String?) throws -> MLXArray? {
+        guard let path = path?.trimmingCharacters(in: .whitespacesAndNewlines), !path.isEmpty else {
+            return nil
+        }
+        let expanded = NSString(string: path).expandingTildeInPath
+        let (_, audio) = try loadAudioArray(
+            from: URL(fileURLWithPath: expanded),
+            sampleRate: sampleRate)
+        return audio
     }
 }

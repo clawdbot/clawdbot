@@ -1,6 +1,7 @@
 import type { PresenceEntry } from "../api/types.ts";
 
 export type AuthenticatedUser = NonNullable<PresenceEntry["user"]>;
+export type PresencePayload = { presence: readonly PresenceEntry[] };
 
 export function readPresenceEntries(value: unknown): PresenceEntry[] | undefined {
   if (!value || typeof value !== "object") {
@@ -57,12 +58,9 @@ export function userProfileAvatarUrl(
     } else if (url.protocol === "wss:") {
       url.protocol = "https:";
     }
-    // The authenticated avatar endpoint is HTTP-only and the Control UI CSP
-    // permits images from its own origin. Cross-origin gateways keep initials.
-    if (
-      !["http:", "https:"].includes(url.protocol) ||
-      url.origin !== new URL(documentHref).origin
-    ) {
+    // The shared avatar loader authenticates cross-origin Gateway requests and
+    // turns their response into a local blob accepted by the Control UI CSP.
+    if (!["http:", "https:"].includes(url.protocol)) {
       return null;
     }
     url.username = "";

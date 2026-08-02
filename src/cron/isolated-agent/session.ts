@@ -1,6 +1,7 @@
 /** Resolves session rollover and carried state for isolated cron runs. */
 import crypto from "node:crypto";
 import { clearBootstrapSnapshotOnSessionRollover } from "../../agents/bootstrap-cache.js";
+import { clearAllCliSessions } from "../../agents/cli-session.js";
 import { hasProviderOwnedSession } from "../../config/sessions/entry-freshness.js";
 import {
   resolveSessionLifecycleTimestamps,
@@ -18,7 +19,6 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
 const FRESH_CRON_CARRIED_PREFERENCE_FIELDS = [
-  "heartbeatTaskState",
   "chatType",
   "thinkingLevel",
   "fastMode",
@@ -41,12 +41,10 @@ const AMBIENT_SESSION_CONTEXT_FIELDS = [
   "queueDebounceMs",
   "queueCap",
   "queueDrop",
-  "channel",
   "groupId",
   "subject",
   "groupChannel",
   "space",
-  "origin",
   "acp",
 ] as const satisfies readonly (keyof SessionEntry)[];
 
@@ -80,6 +78,9 @@ function preserveNonAutoModelOverride(target: SessionEntry, entry: SessionEntry)
     }
     if (entry.modelOverrideSource !== undefined) {
       target.modelOverrideSource = entry.modelOverrideSource;
+    }
+    if (entry.modelOverrideRouteResolution !== undefined) {
+      target.modelOverrideRouteResolution = entry.modelOverrideRouteResolution;
     }
     // Runtime overrides qualify an explicit model selection; carrying one alone
     // would pin a fresh cron session to a stale engine after its model resets.
@@ -149,7 +150,10 @@ export function resolveCronSession(params: {
   const store =
     params.store ??
     Object.fromEntries(
-      listSessionEntries({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+      listSessionEntries({ agentId: params.agentId, storePath }).map(({ sessionKey, entry }) => [
+        sessionKey,
+        entry,
+      ]),
     );
   const sourceSessionKey = params.sourceSessionKey?.trim();
   const sourceSessionDiffers = Boolean(sourceSessionKey && sourceSessionKey !== params.sessionKey);
@@ -165,6 +169,8 @@ export function resolveCronSession(params: {
   let sessionId: string;
   let isNewSession: boolean;
   let systemSent: boolean;
+  let resetBoundaryPending: { reason: "cron-stale"; sessionFile: string } | undefined;
+  let staleBoundaryReset = false;
 
   if (!params.forceNew && entry?.sessionId) {
     // Cron/webhook sessions follow the direct reset policy so scheduled turns
@@ -181,6 +187,7 @@ export function resolveCronSession(params: {
           ...resolveSessionLifecycleTimestamps({
             entry,
             agentId: params.agentId,
+            sessionKey: params.sessionKey,
             storePath,
           }),
           now: params.nowMs,
@@ -192,9 +199,13 @@ export function resolveCronSession(params: {
       isNewSession = false;
       systemSent = entry.systemSent ?? false;
     } else {
-      sessionId = crypto.randomUUID();
+      sessionId = sourceSessionDiffers ? crypto.randomUUID() : entry.sessionId;
       isNewSession = true;
       systemSent = false;
+      if (!sourceSessionDiffers) {
+        staleBoundaryReset = true;
+        resetBoundaryPending = { reason: "cron-stale", sessionFile: params.sessionKey };
+      }
     }
   } else {
     sessionId = crypto.randomUUID();
@@ -202,7 +213,8 @@ export function resolveCronSession(params: {
     systemSent = false;
   }
 
-  const previousSessionId = isNewSession && !sourceSessionDiffers ? entry?.sessionId : undefined;
+  const previousSessionId =
+    isNewSession && !sourceSessionDiffers && !staleBoundaryReset ? entry?.sessionId : undefined;
   clearBootstrapSnapshotOnSessionRollover({
     sessionKey: params.sessionKey,
     previousSessionId,
@@ -228,6 +240,7 @@ export function resolveCronSession(params: {
         resolveSessionLifecycleTimestamps({
           entry,
           agentId: params.agentId,
+          sessionKey: params.sessionKey,
           storePath,
         }).sessionStartedAt),
     lastInteractionAt: isNewSession ? params.nowMs : baseEntry?.lastInteractionAt,
@@ -236,6 +249,11 @@ export function resolveCronSession(params: {
       : {}),
     systemSent,
   };
+  if (resetBoundaryPending) {
+    clearAllCliSessions(sessionEntry);
+    sessionEntry.agentHarnessId = undefined;
+    sessionEntry.compactionCount = 0;
+  }
   return {
     storePath,
     store,
@@ -244,6 +262,7 @@ export function resolveCronSession(params: {
     systemSent,
     isNewSession,
     previousSessionId,
+    resetBoundaryPending,
     initialSessionEntry: targetEntry,
   };
 }

@@ -1,7 +1,4 @@
-import {
-  normalizeOptionalString,
-  readStringValue,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
 type StringOptions<T extends string> = readonly T[] | ReadonlySet<T>;
 
@@ -15,19 +12,6 @@ export function isStringOption<T extends string>(
       ? (options as readonly string[]).includes(value)
       : (options as ReadonlySet<string>).has(value))
   );
-}
-
-export function readStringAlias(
-  record: Readonly<Record<string, unknown>>,
-  keys: readonly string[],
-): string | undefined {
-  for (const key of keys) {
-    const value = readStringValue(record[key]);
-    if (value !== undefined) {
-      return value;
-    }
-  }
-  return undefined;
 }
 
 export function readTrimmedStringAlias(

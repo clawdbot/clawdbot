@@ -39,10 +39,9 @@ type ModelPolicyWildcardRef = {
 /** Parse and canonicalize a segment-boundary model-policy prefix wildcard. */
 export function parseModelPolicyWildcardRef(raw: string): ModelPolicyWildcardRef | null {
   const trimmed = raw.trim();
-  if (!trimmed.endsWith("/*")) {
-    return null;
-  }
-  const segments = trimmed.split("/");
+  // Wildcard keys match on segment boundaries, so normalize boundary padding
+  // before building the canonical key used by policy matching.
+  const segments = trimmed.split("/").map((segment) => segment.trim());
   if (
     segments.at(-1) !== "*" ||
     !hasValidSegments(segments.slice(0, -1), {
@@ -63,9 +62,13 @@ export function parseModelPolicyWildcardRef(raw: string): ModelPolicyWildcardRef
 
 /** True for a syntactically valid exact provider/model policy reference. */
 export function isValidExactModelPolicyRef(raw: string): boolean {
-  const trimmed = raw.trim();
-  const parsed = parseModelCatalogRef(trimmed);
-  return Boolean(parsed && hasValidSegments(trimmed.split("/"), { min: 2 }));
+  const parsed = parseModelCatalogRef(raw);
+  return Boolean(
+    parsed &&
+    hasValidSegments([parsed.provider, ...parsed.modelId.split("/")], {
+      min: 2,
+    }),
+  );
 }
 
 /** True for a supported bare selector whose target is resolved from config. */

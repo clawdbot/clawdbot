@@ -8,18 +8,18 @@ struct IPadActivityScreen: View {
     @State private var sessions: [OpenClawChatSessionEntry] = []
     @State private var isLoading = false
     @State private var loadErrorText: String?
-    let headerLeadingAction: OpenClawSidebarHeaderAction?
+    let headerSidebarAction: OpenClawSidebarHeaderAction?
     let usesNativeNavigationChrome: Bool
     let openChat: () -> Void
     let openSettings: () -> Void
 
     init(
-        headerLeadingAction: OpenClawSidebarHeaderAction? = nil,
+        headerSidebarAction: OpenClawSidebarHeaderAction? = nil,
         usesNativeNavigationChrome: Bool = false,
         openChat: @escaping () -> Void,
         openSettings: @escaping () -> Void)
     {
-        self.headerLeadingAction = headerLeadingAction
+        self.headerSidebarAction = headerSidebarAction
         self.usesNativeNavigationChrome = usesNativeNavigationChrome
         self.openChat = openChat
         self.openSettings = openSettings
@@ -29,7 +29,7 @@ struct IPadActivityScreen: View {
         IPadSidebarScreenChrome(
             title: "Activity",
             subtitle: "Live device and gateway activity.",
-            headerLeadingAction: self.headerLeadingAction,
+            headerSidebarAction: self.headerSidebarAction,
             usesNativeNavigationChrome: self.usesNativeNavigationChrome,
             gatewayAction: self.openSettings)
         {
@@ -58,7 +58,7 @@ struct IPadActivityScreen: View {
                 color: OpenClawBrand.accentForeground),
             ProMetric(
                 icon: "bubble.left.and.text.bubble.right",
-                title: "Threads",
+                title: "Sessions",
                 value: self.isLoading ? "..." : "\(self.sessionRows.count)",
                 color: OpenClawBrand.accentHotForeground),
         ]
@@ -112,7 +112,7 @@ struct IPadActivityScreen: View {
                     Divider().padding(.leading, 58)
                     ProStatusRow(
                         icon: "hourglass",
-                        title: "Loading threads",
+                        title: "Loading sessions",
                         detail: "Fetching recent activity from the gateway.",
                         value: "loading",
                         color: OpenClawBrand.accentForeground,
@@ -122,7 +122,7 @@ struct IPadActivityScreen: View {
                     Divider().padding(.leading, 58)
                     ProStatusRow(
                         icon: "exclamationmark.triangle.fill",
-                        title: "Threads unavailable",
+                        title: "Sessions unavailable",
                         detail: .verbatim(loadErrorText),
                         value: "error",
                         color: OpenClawBrand.warn,
@@ -132,7 +132,7 @@ struct IPadActivityScreen: View {
                     Divider().padding(.leading, 58)
                     ProStatusRow(
                         icon: "bubble.left.and.text.bubble.right",
-                        title: self.sessionsAvailable ? "No recent threads" : "Thread activity offline",
+                        title: self.sessionsAvailable ? "No recent sessions" : "Session activity offline",
                         detail: self.sessionsAvailable
                             ? "Start a chat and it will appear here."
                             : "Connect to the gateway to load recent chat activity.",

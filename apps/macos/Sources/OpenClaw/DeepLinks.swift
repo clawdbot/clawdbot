@@ -180,11 +180,7 @@ final class DeepLinkHandler {
     // MARK: - UI
 
     private func openDashboard() async {
-        do {
-            try await DashboardManager.shared.show()
-        } catch {
-            DashboardManager.shared.showFailure(error)
-        }
+        AppNavigationActions.openDashboard()
     }
 
     private func confirm(title: String, message: String) -> Bool {

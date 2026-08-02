@@ -6,6 +6,7 @@ import type { GatewayClient, GatewayReconnectPausedInfo } from "../gateway/clien
 import { isApprovalMethod } from "../gateway/method-scopes.js";
 import { createOperatorApprovalsGatewayClient } from "../gateway/operator-approvals-client.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { createDeferred } from "../shared/deferred.js";
 import { getGatewayNativeApprovalRuntime } from "./approval-gateway-runtime-context.js";
 import {
   isGatewayNativeApprovalMethod,
@@ -368,22 +369,8 @@ export function createExecApprovalChannelRuntime<
           return;
         }
 
-        let readySettled = false;
-        let resolveReady!: () => void;
-        let rejectReady!: (error: unknown) => void;
-        const ready = new Promise<void>((resolve, reject) => {
-          resolveReady = resolve;
-          rejectReady = reject;
-        });
+        const ready = createDeferred();
         let lastConnectError: unknown = null;
-        const settleReady = (fn: () => void) => {
-          if (readySettled) {
-            return;
-          }
-          readySettled = true;
-          // Hello, close, and reconnect-paused callbacks can race during startup.
-          fn();
-        };
 
         const client = await createOperatorApprovalsGatewayClient({
           config: adapter.cfg,
@@ -392,7 +379,7 @@ export function createExecApprovalChannelRuntime<
           onEvent: handleGatewayEvent,
           onHelloOk: () => {
             log.debug("connected to gateway");
-            settleReady(resolveReady);
+            ready.resolve();
           },
           onConnectError: (err) => {
             log.error(`connect error: ${err.message}`);
@@ -400,18 +387,14 @@ export function createExecApprovalChannelRuntime<
             if (readGatewayConnectErrorDetailCode(err)) {
               return;
             }
-            settleReady(() => rejectReady(err));
+            ready.reject(err);
           },
           onReconnectPaused: (info) => {
-            settleReady(() =>
-              rejectReady(new ExecApprovalChannelRuntimeTerminalStartError(info, lastConnectError)),
-            );
+            ready.reject(new ExecApprovalChannelRuntimeTerminalStartError(info, lastConnectError));
           },
           onClose: (code, reason) => {
             log.debug(`gateway closed: ${code} ${reason}`);
-            settleReady(() =>
-              rejectReady(lastConnectError ?? new Error(`gateway closed: ${code} ${reason}`)),
-            );
+            ready.reject(lastConnectError ?? new Error(`gateway closed: ${code} ${reason}`));
           },
         });
 
@@ -432,7 +415,7 @@ export function createExecApprovalChannelRuntime<
                 : "gateway readiness unavailable before exec approval runtime start",
             );
           }
-          await ready;
+          await ready.promise;
           if (stopClientIfInactive(client)) {
             return;
           }

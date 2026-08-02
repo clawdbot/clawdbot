@@ -2,8 +2,8 @@ title: ClawHub release candidate package install proof
 
 scenario:
   id: clawhub-release-candidate-checklist
-  surface: clawhub-and-external-plugin-distribution
-  category: clawhub-and-external-plugin-distribution.plugin-lifecycle-and-health
+  surface: clawhub
+  category: clawhub.plugin-lifecycle-and-health
   coverage:
     primary:
       - clawhub.npm-pack-local-release-candidate-installs

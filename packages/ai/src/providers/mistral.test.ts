@@ -630,8 +630,7 @@ describe("Mistral provider", () => {
     }).result();
     const toolCalls = result.content.filter((block) => block.type === "toolCall");
 
-    expect(toolCalls).toHaveLength(2);
-    expect(new Set(toolCalls.map((toolCall) => toolCall.id)).size).toBe(2);
+    expect(toolCalls).toHaveLength(0);
     expect(result.stopReason).toBe("error");
     expect(result.errorMessage).toContain("tool-call continuation is ambiguous");
   });

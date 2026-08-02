@@ -7,7 +7,10 @@ import { normalizeOpenClawVersionBase } from "../config/version.js";
 import { listImportedBundledPluginFacadeIds } from "../plugin-sdk/facade-runtime.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { inspectBundleLspRuntimeSupport } from "./bundle-lsp.js";
-import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
+import {
+  inspectBundleMcpRuntimeSupport,
+  inspectNativePluginMcpRuntimeSupport,
+} from "./bundle-mcp.js";
 import { withBundledPluginEnablementCompat } from "./bundled-compat.js";
 import type { PluginCompatCode } from "./compat/registry.js";
 import { normalizePluginsConfig } from "./config-state.js";
@@ -17,7 +20,7 @@ import {
   type PluginCapabilityEntry,
   type PluginInspectShape,
 } from "./inspect-shape.js";
-import { loadOpenClawPlugins } from "./loader.js";
+import { loadPluginRegistryHandle, resolveCompatibleRuntimePluginRegistry } from "./loader.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import { tracePluginLifecyclePhase } from "./plugin-lifecycle-trace.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
@@ -29,7 +32,10 @@ import {
   resolvePluginRuntimeLoadContext,
 } from "./runtime/load-context.js";
 import { loadPluginMetadataRegistrySnapshot } from "./runtime/metadata-registry-loader.js";
-import { buildPluginDependencyStatus } from "./status-dependencies-core.js";
+import {
+  buildPluginDependencyStatus,
+  projectPluginDependencyHealth,
+} from "./status-dependencies-core.js";
 import type { PluginHookName, PluginLogger } from "./types.js";
 
 export type PluginStatusReport = PluginRegistry & {
@@ -231,6 +237,9 @@ function buildPluginReport(
           ...baseContext,
           workspaceDir,
         };
+  const manifestByPluginId =
+    metadataSnapshot?.byPluginId ??
+    new Map(context.manifestRegistry?.plugins.map((manifest) => [manifest.id, manifest]) ?? []);
   const config = context.config;
 
   // Apply bundled-provider allowlist compat so that `plugins list` and `doctor`
@@ -260,14 +269,13 @@ function buildPluginReport(
     ? tracePluginLifecyclePhase(
         "runtime plugin registry load",
         () =>
-          loadOpenClawPlugins(
+          loadPluginRegistryHandle(
             buildPluginRuntimeLoadOptions(context, {
               config: runtimeCompatConfig,
               activationSourceConfig: rawConfig,
               workspaceDir,
               env: params?.env,
               loadModules,
-              activate: false,
               cache: false,
               onlyPluginIds,
             }),
@@ -300,7 +308,7 @@ function buildPluginReport(
     ...listImportedBundledPluginFacadeIds(),
   ]);
 
-  return {
+  return projectPluginDependencyHealth({
     workspaceDir,
     ...registry,
     plugins: registry.plugins.map((plugin) =>
@@ -309,15 +317,17 @@ function buildPluginReport(
         version: resolveReportedPluginVersion(plugin, params?.env),
         dependencyStatus:
           plugin.dependencyStatus ??
-          buildPluginDependencyStatus({
-            rootDir: plugin.rootDir,
-            dependencies: metadataSnapshot?.byPluginId.get(plugin.id)?.packageDependencies,
-            optionalDependencies: metadataSnapshot?.byPluginId.get(plugin.id)
-              ?.packageOptionalDependencies,
-          }),
+          (plugin.origin === "bundled"
+            ? undefined
+            : buildPluginDependencyStatus({
+                rootDir: plugin.rootDir,
+                dependencies: manifestByPluginId.get(plugin.id)?.packageDependencies,
+                optionalDependencies: manifestByPluginId.get(plugin.id)
+                  ?.packageOptionalDependencies,
+              })),
       }),
     ),
-  };
+  });
 }
 
 export function buildPluginSnapshotReport(params?: PluginReportParams): PluginStatusReport {
@@ -389,24 +399,34 @@ export function buildPluginInspectReport(params: {
     )
     .map((descriptor) => descriptor.name);
 
-  // Populate MCP server info for bundle-format plugins with a known rootDir.
+  // MCP metadata is process-stable and comes from the discovered plugin manifest.
   let mcpServers: PluginInspectReport["mcpServers"] = [];
-  if (plugin.format === "bundle" && plugin.bundleFormat && plugin.rootDir) {
-    const mcpSupport = inspectBundleMcpRuntimeSupport({
-      pluginId: plugin.id,
-      rootDir: plugin.rootDir,
-      bundleFormat: plugin.bundleFormat,
-    });
-    mcpServers = [
-      ...mcpSupport.supportedServerNames.map((name) => ({
-        name,
-        hasStdioTransport: true,
-      })),
-      ...mcpSupport.unsupportedServerNames.map((name) => ({
-        name,
-        hasStdioTransport: false,
-      })),
-    ];
+  if (plugin.rootDir) {
+    const mcpSupport =
+      plugin.format === "bundle" && plugin.bundleFormat
+        ? inspectBundleMcpRuntimeSupport({
+            pluginId: plugin.id,
+            rootDir: plugin.rootDir,
+            bundleFormat: plugin.bundleFormat,
+          })
+        : plugin.mcpServers
+          ? inspectNativePluginMcpRuntimeSupport({
+              rootDir: plugin.rootDir,
+              mcpServers: plugin.mcpServers,
+            })
+          : undefined;
+    if (mcpSupport) {
+      mcpServers = [
+        ...mcpSupport.supportedServerNames.map((name) => ({
+          name,
+          hasStdioTransport: true,
+        })),
+        ...mcpSupport.unsupportedServerNames.map((name) => ({
+          name,
+          hasStdioTransport: false,
+        })),
+      ];
+    }
   }
 
   // Populate LSP server info for bundle-format plugins with a known rootDir.
@@ -535,9 +555,28 @@ export function buildPluginCompatibilitySnapshotNotices(params?: {
   env?: NodeJS.ProcessEnv;
 }): PluginCompatibilityNotice[] {
   const report = buildPluginSnapshotReport(params);
+  const context = resolvePluginRuntimeLoadContext(params);
+  const runtimeRegistry = resolveCompatibleRuntimePluginRegistry(
+    buildPluginRuntimeLoadOptions(context, { activate: false }),
+  );
+  const registeredPlugins = new Map(runtimeRegistry?.plugins.map((plugin) => [plugin.id, plugin]));
+  // Hook shape is a runtime registration fact. Reuse compatible live registrations without
+  // importing cold plugins or guessing their capabilities from a manifest-only snapshot.
+  const registrationReport = runtimeRegistry
+    ? {
+        ...report,
+        ...runtimeRegistry,
+        workspaceDir: report.workspaceDir,
+        plugins: report.plugins.map((plugin) => ({
+          ...plugin,
+          ...registeredPlugins.get(plugin.id),
+          imported: plugin.imported,
+        })),
+      }
+    : report;
   return buildPluginCompatibilityNotices({
     ...params,
-    report,
+    report: registrationReport,
   });
 }
 

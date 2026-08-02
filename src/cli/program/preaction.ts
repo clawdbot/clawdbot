@@ -13,12 +13,16 @@ import {
   resolveCliExecutionStartupContext,
 } from "../command-execution-startup.js";
 import { shouldBypassConfigGuardForCommandPath } from "../command-startup-policy.js";
+import { applyResolvedCommandOutputMode } from "../json-output-mode.js";
 import {
   resolvePluginInstallInvalidConfigPolicy,
   resolvePluginInstallPreactionRequest,
 } from "../plugin-install-config-policy.js";
+import { getCommanderCommandPath, hasCommanderOptionValue } from "./commander-parse-facts.js";
 import { isCommandJsonOutputMode } from "./json-mode.js";
 import { isParentDefaultHelpAction } from "./parent-default-help.js";
+
+const HELP_OR_VERSION_FLAGS = new Set(["-h", "--help", "-V", "--version"]);
 
 function setProcessTitleForCommand(actionCommand: Command) {
   let current: Command = actionCommand;
@@ -35,6 +39,7 @@ function setProcessTitleForCommand(actionCommand: Command) {
 
 function shouldAllowInvalidConfigForAction(actionCommand: Command, commandPath: string[]): boolean {
   return (
+    commandPath[0] === "update" ||
     resolvePluginInstallInvalidConfigPolicy(
       resolvePluginInstallPreactionRequest({
         actionCommand,
@@ -43,16 +48,6 @@ function shouldAllowInvalidConfigForAction(actionCommand: Command, commandPath: 
       }),
     ) === "allow-plugin-recovery"
   );
-}
-
-function getActionCommandPath(actionCommand: Command): string[] {
-  const commandPath: string[] = [];
-  let current: Command | null = actionCommand;
-  while (current.parent) {
-    commandPath.unshift(current.name());
-    current = current.parent;
-  }
-  return commandPath;
 }
 
 function getCliLogLevel(actionCommand: Command): LogLevel | undefined {
@@ -111,16 +106,26 @@ export function registerPreActionHooks(program: Command, programVersion: string)
   program.hook("preAction", async (_thisCommand, actionCommand) => {
     setProcessTitleForCommand(actionCommand);
     const argv = process.argv;
-    if (isHelpOrVersionInvocation(argv) || isBareParentDefaultHelpInvocation(actionCommand, argv)) {
+    const helpOrVersionWasOptionValue = hasCommanderOptionValue(
+      actionCommand,
+      argv,
+      HELP_OR_VERSION_FLAGS,
+    );
+    if (
+      (isHelpOrVersionInvocation(argv) && !helpOrVersionWasOptionValue) ||
+      isBareParentDefaultHelpInvocation(actionCommand, argv)
+    ) {
       return;
     }
     const jsonOutputMode = isCommandJsonOutputMode(actionCommand, argv);
+    applyResolvedCommandOutputMode(jsonOutputMode);
     const { commandPath, startupPolicy } = resolveCliExecutionStartupContext({
       argv,
-      protocolCommandPath: getActionCommandPath(actionCommand),
+      commandPath: getCommanderCommandPath(actionCommand),
       jsonOutputMode,
       env: process.env,
     });
+    const bypassConfigGuard = shouldBypassConfigGuardForCommandPath(commandPath, argv);
     await applyCliExecutionStartupPresentation({
       startupPolicy,
       version: programVersion,
@@ -135,7 +140,7 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       process.env.NODE_NO_WARNINGS ??= "1";
     }
     if (
-      shouldBypassConfigGuardForCommandPath(commandPath) ||
+      bypassConfigGuard ||
       isGuidedConfigAction(actionCommand) ||
       isGuidedConfigCommandPath(commandPath)
     ) {
@@ -180,7 +185,7 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       ...(beforeStateMigrations ? { beforeStateMigrations } : {}),
       ...(skipPristineStartupStateMigrations ? { skipPristineStartupStateMigrations: true } : {}),
       ...(skipPristineCoreStateMigrations ? { skipPristineCoreStateMigrations: true } : {}),
-      skipConfigGuard: shouldBypassConfigGuardForCommandPath(commandPath),
+      skipConfigGuard: bypassConfigGuard,
     });
     if (beforeStateMigrations) {
       const { reloadTrustedGatewayRunEnvironment } =

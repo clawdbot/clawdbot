@@ -9,6 +9,12 @@ const emptyPluginMetadataSnapshot = vi.hoisted(() => ({
   plugins: [],
 }));
 
+const mocks = vi.hoisted(() => ({
+  loadPreparedModelCatalogSnapshot: vi.fn(),
+  normalizeProviderResolvedModelWithPlugin: vi.fn(() => undefined),
+  shouldSuppressBuiltInModelFromManifest: vi.fn(() => false),
+}));
+
 vi.mock("../../agents/provider-model-normalization.runtime.js", () => ({
   normalizeProviderModelIdWithRuntime: vi.fn(() => {
     throw new Error("runtime model normalization should not load for models list entries");
@@ -19,7 +25,22 @@ vi.mock("../../plugins/current-plugin-metadata-snapshot.js", () => ({
   getCurrentPluginMetadataSnapshot: () => emptyPluginMetadataSnapshot,
 }));
 
+vi.mock("../../agents/prepared-model-catalog.js", () => ({
+  loadPreparedModelCatalogSnapshot: mocks.loadPreparedModelCatalogSnapshot,
+}));
+
+vi.mock("../../agents/model-suppression.js", () => ({
+  shouldSuppressBuiltInModel: vi.fn(() => false),
+  shouldSuppressBuiltInModelFromManifest: mocks.shouldSuppressBuiltInModelFromManifest,
+}));
+
+vi.mock("../../plugins/provider-runtime.js", () => ({
+  normalizeProviderResolvedModelWithPlugin: mocks.normalizeProviderResolvedModelWithPlugin,
+}));
+
 import { resolveConfiguredEntries } from "./list.configured.js";
+import { appendConfiguredModelRowSources } from "./list.row-sources.js";
+import type { ModelRow } from "./list.types.js";
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -177,5 +198,95 @@ describe("resolveConfiguredEntries", () => {
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("configured model list rows", () => {
+  it("renders plugin-catalog metadata for a fallback ref instead of default placeholders", async () => {
+    const catalogEntry = {
+      id: "k3",
+      name: "Kimi K3",
+      provider: "kimi",
+      api: "openai-completions" as const,
+      baseUrl: "https://api.moonshot.ai/v1",
+      contextWindow: 1_048_576,
+      input: ["text", "image"] as const,
+    };
+    // Conflicting catalog metadata for an explicitly configured provider model:
+    // the user's models.providers definition must win over the catalog row.
+    const conflictingCatalogEntry = {
+      id: "own-model",
+      name: "Catalog Own Model",
+      provider: "custom",
+      contextWindow: 999_999,
+      input: ["text", "image"] as const,
+    };
+    mocks.loadPreparedModelCatalogSnapshot.mockResolvedValue({
+      entries: [catalogEntry, conflictingCatalogEntry],
+      routeVariants: [catalogEntry, conflictingCatalogEntry],
+    });
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "kimi/kimi-for-coding", fallbacks: ["kimi/k3", "custom/own-model"] },
+        },
+      },
+      models: {
+        providers: {
+          custom: {
+            api: "openai-completions" as const,
+            baseUrl: "https://custom.test/v1",
+            models: [
+              {
+                id: "own-model",
+                name: "Own Model",
+                reasoning: false,
+                input: ["text" as const],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 32_000,
+                maxTokens: 8_000,
+              },
+            ],
+          },
+        },
+      },
+    };
+    const { entries } = resolveConfiguredEntries(cfg);
+    const rows: ModelRow[] = [];
+
+    await appendConfiguredModelRowSources({
+      rows,
+      entries,
+      context: {
+        cfg,
+        agentDir: "/tmp/openclaw-agent",
+        authIndex: { evaluateModelAuth: () => ({ availability: true, routeResolution: null }) },
+        configuredByKey: new Map(entries.map((entry) => [entry.key, entry])),
+        discoveredKeys: new Set<string>(),
+        filter: {},
+        skipRuntimeModelSuppression: true,
+      },
+    });
+
+    const fallbackRow = rows.find((row) => row.key === "kimi/k3");
+    expect(fallbackRow).toMatchObject({
+      name: "Kimi K3",
+      input: "text+image",
+      contextWindow: 1_048_576,
+    });
+    expect(fallbackRow?.tags).toContain("fallback#1");
+    // Explicit models.providers metadata beats the conflicting catalog row.
+    expect(rows.find((row) => row.key === "custom/own-model")).toMatchObject({
+      name: "Own Model",
+      input: "text",
+      contextWindow: 32_000,
+    });
+    // Refs the catalog does not know still fall back to the default placeholder row.
+    expect(rows.find((row) => row.key === "kimi/kimi-for-coding")).toMatchObject({
+      input: "text",
+      contextWindow: 200_000,
+    });
+    // The catalog is a single committed generation; configured and catalog rows share one load.
+    expect(mocks.loadPreparedModelCatalogSnapshot).toHaveBeenCalledTimes(1);
   });
 });

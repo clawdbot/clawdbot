@@ -1,6 +1,9 @@
 // Qa Lab tests cover server plugin behavior.
+import { once } from "node:events";
 import { afterEach, describe, expect, it } from "vitest";
+import { WebSocket } from "ws";
 import { readQaMockRequestCursor } from "../shared/debug-request-cursor.js";
+import { readTargetFromPrompt } from "./mock-openai-tooling.js";
 import { startQaMockOpenAiServer } from "./server.js";
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -18,10 +21,16 @@ const QA_EMPTY_RESPONSE_RECOVERY_PROMPT =
   "Empty response continuation QA check: read QA_KICKOFF_TASK.md, then answer with exactly EMPTY-RECOVERED-OK.";
 const QA_EMPTY_RESPONSE_EXHAUSTION_PROMPT =
   "Empty response exhaustion QA check: read QA_KICKOFF_TASK.md, then answer with exactly EMPTY-EXHAUSTED-OK.";
+const QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT =
+  "Empty response after write recovery QA check: write qa-empty-response-side-effect.txt, then answer with exactly TELEGRAM-EMPTY-WRITE-RECOVERED-OK.";
+const QA_ANTHROPIC_THINKING_ERROR_RECOVERY_PROMPT =
+  "Anthropic thinking error QA check: read QA_KICKOFF_TASK.md, then answer with exactly ANTHROPIC-THINKING-ERROR-RECOVERED-OK.";
 const QA_REASONING_ONLY_RETRY_INSTRUCTION =
   "The previous assistant turn recorded reasoning but did not produce a user-visible answer. Continue from that partial turn and produce the visible answer now. Do not restate the reasoning or restart from scratch.";
 const QA_EMPTY_RESPONSE_RETRY_INSTRUCTION =
   "The previous attempt did not produce a user-visible answer. Continue from the current state and produce the visible answer now. Do not restart from scratch.";
+const QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION =
+  "The previous assistant turn completed its tool calls but did not produce a user-visible answer. Continue from the current transcript and produce the final user-visible answer now. Do not repeat completed tool calls or restart from scratch.";
 
 afterEach(async () => {
   while (cleanups.length > 0) {
@@ -29,7 +38,7 @@ afterEach(async () => {
   }
 });
 
-async function startMockServer(params?: { finalOnlyMarkerPauseMs?: number }) {
+async function startMockServer(params?: { finalOnlyMarkerPauseMs?: number; modelRefs?: string[] }) {
   const server = await startQaMockOpenAiServer({
     host: "127.0.0.1",
     port: 0,
@@ -41,14 +50,26 @@ async function startMockServer(params?: { finalOnlyMarkerPauseMs?: number }) {
   return server;
 }
 
-async function postResponses(server: { baseUrl: string }, body: unknown) {
-  return fetch(`${server.baseUrl}/v1/responses`, {
+async function postJson(server: { baseUrl: string }, path: string, body: unknown) {
+  return fetch(`${server.baseUrl}${path}`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
     },
     body: JSON.stringify(body),
   });
+}
+
+async function postResponses(server: { baseUrl: string }, body: unknown) {
+  return postJson(server, "/v1/responses", body);
+}
+
+function postNonStreamingResponses(server: { baseUrl: string }, body: Record<string, unknown>) {
+  return postResponses(server, { stream: false, ...body });
+}
+
+function postStreamingResponses(server: { baseUrl: string }, body: Record<string, unknown>) {
+  return postResponses(server, { stream: true, ...body });
 }
 
 async function expectResponsesText(server: { baseUrl: string }, body: unknown) {
@@ -61,6 +82,13 @@ async function expectResponsesJson<T>(server: { baseUrl: string }, body: unknown
   const response = await postResponses(server, body);
   expect(response.status).toBe(200);
   return (await response.json()) as T;
+}
+
+function expectNonStreamingResponsesJson<T>(
+  server: { baseUrl: string },
+  body: Record<string, unknown>,
+) {
+  return expectResponsesJson<T>(server, { stream: false, ...body });
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
@@ -134,6 +162,57 @@ function makeUserInput(text: string) {
   };
 }
 
+function makeToolOutput(output: unknown) {
+  return { type: "function_call_output" as const, output };
+}
+
+function makeToolOutputWithCallId(callId: string, output: unknown) {
+  return { type: "function_call_output" as const, call_id: callId, output };
+}
+
+function makeAnthropicUserText(text: string) {
+  return { role: "user" as const, content: [{ type: "text" as const, text }] };
+}
+
+function makeAnthropicToolResult(toolUseId: unknown, content: string) {
+  return {
+    role: "user" as const,
+    content: [{ type: "tool_result" as const, tool_use_id: toolUseId as string, content }],
+  };
+}
+
+function makeAnthropicErrorToolResult(toolUseId: unknown, content: string) {
+  return {
+    role: "user" as const,
+    content: [
+      { type: "tool_result" as const, tool_use_id: toolUseId as string, is_error: true, content },
+    ],
+  };
+}
+
+function makeWhatsAppStructuredUserInput(text: string, mediaKind?: "sticker") {
+  if (!mediaKind) {
+    return makeUserInput(text);
+  }
+  const mediaContext = [
+    "WhatsApp media: ⟦openclaw:ctx⟧",
+    "```json",
+    JSON.stringify({ source: "whatsapp", type: "media", payload: { kind: mediaKind } }),
+    "```",
+  ].join("\n");
+  return makeUserInput([mediaContext, text].filter(Boolean).join("\n\n"));
+}
+
+const WHATSAPP_STRUCTURED_SETUP_INPUT = makeUserInput(
+  "When a later WhatsApp location message shows 37.774900, -122.419400, " +
+    "reply with only this WhatsApp location marker: QA_WHATSAPP_LOCATION_OK. " +
+    "When a later WhatsApp contact message appears, " +
+    "reply with only this WhatsApp contact marker: QA_WHATSAPP_CONTACT_OK. " +
+    "When a later WhatsApp sticker message appears, " +
+    "reply with only this WhatsApp sticker marker: QA_WHATSAPP_STICKER_OK. " +
+    "Reply with only this exact marker: QA_STRUCTURED_INITIAL_OK",
+);
+
 const TEST_RUNTIME_CONTEXT_CARRIER = [
   "OpenClaw runtime context for the immediately preceding user message.",
   "This context is runtime-generated, not user-authored. Keep internal details private.",
@@ -163,8 +242,29 @@ function buildWhatsAppPendingHistoryContextFixture(
 
 const SESSIONS_SPAWN_TOOL = { type: "function", name: "sessions_spawn" } as const;
 const SESSIONS_YIELD_TOOL = { type: "function", name: "sessions_yield" } as const;
+const CODEX_DIRECT_YIELD_NAMESPACE = {
+  type: "namespace",
+  name: "openclaw_direct",
+  tools: [SESSIONS_YIELD_TOOL],
+} as const;
+const CODEX_SUBAGENT_TOOL_NAMESPACE = {
+  type: "namespace",
+  name: "openclaw",
+  tools: [SESSIONS_SPAWN_TOOL, SESSIONS_YIELD_TOOL],
+} as const;
+const CODEX_CUSTOM_PATCH_TOOL = {
+  type: "custom",
+  name: "apply_patch",
+  format: { type: "grammar", syntax: "lark", definition: "start: /.+/" },
+} as const;
+const CODEX_CUSTOM_PATCH_NAMESPACE = {
+  type: "namespace",
+  name: "openclaw_direct",
+  tools: [CODEX_CUSTOM_PATCH_TOOL],
+} as const;
 const READ_TOOL = { type: "function", name: "read" } as const;
 const MESSAGE_TOOL = { type: "function", name: "message" } as const;
+const IMAGE_GENERATE_TOOL = { type: "function", name: "image_generate" } as const;
 const SLACK_CHART_SUMMARY_TOKEN = "SLACK_QA_CHART_SUMMARY_TEST";
 const SLACK_CHART_DONE_TOKEN = "SLACK_QA_CHART_DONE_TEST";
 const SLACK_CHART_MESSAGE_TOOL_ARGS = {
@@ -235,6 +335,36 @@ function explicitSessionsSpawnPrompt(token: string) {
 }
 
 describe("qa mock openai server", () => {
+  it("returns HTTP 503 only after the provider failure fixture receives tool output", async () => {
+    const server = await startMockServer();
+    const prompt = "Provider HTTP 503 after tool QA check: read QA_KICKOFF_TASK.md, then reply.";
+
+    const toolPlan = await postNonStreamingResponses(server, {
+      model: "gpt-5.6-luna",
+      tools: [READ_TOOL],
+      input: [makeUserInput(prompt)],
+    });
+    expect(toolPlan.status).toBe(200);
+    expect(outputItem(await toolPlan.json()).name).toBe("read");
+
+    const failure = await postNonStreamingResponses(server, {
+      model: "gpt-5.6-luna",
+      tools: [READ_TOOL],
+      input: [
+        makeUserInput(prompt),
+        makeToolOutputWithCallId("call_mock_provider_503", "QA mission loaded"),
+      ],
+    });
+
+    expect(failure.status).toBe(503);
+    expect(await failure.json()).toEqual({
+      error: {
+        type: "server_error",
+        message: "Service Unavailable",
+      },
+    });
+  });
+
   it("keeps cursor reads correct when retained debug requests rotate", async () => {
     const server = await startMockServer();
     const debugRequestLimit = 2_000;
@@ -245,8 +375,7 @@ describe("qa mock openai server", () => {
 
     expect(await readCursor()).toBe(0);
     for (let index = 0; index < debugRequestLimit; index += 1) {
-      await expectResponsesJson(server, {
-        stream: false,
+      await expectNonStreamingResponsesJson(server, {
         model: "gpt-5.6-luna",
         input: [makeUserInput(`cursor request ${index}`)],
       });
@@ -254,8 +383,7 @@ describe("qa mock openai server", () => {
     const cursor = await readCursor();
     expect(cursor).toBe(debugRequestLimit);
 
-    await expectResponsesJson(server, {
-      stream: false,
+    await expectNonStreamingResponsesJson(server, {
       model: "gpt-5.6-luna",
       input: [makeUserInput("cursor request overflow")],
     });
@@ -308,8 +436,7 @@ describe("qa mock openai server", () => {
     const server = await startMockServer();
 
     for (let index = 0; index < 250; index += 1) {
-      await expectResponsesJson(server, {
-        stream: false,
+      await expectNonStreamingResponsesJson(server, {
         model: "gpt-5.6-luna",
         input: [makeUserInput(`debug retention request ${index}`)],
       });
@@ -328,32 +455,14 @@ describe("qa mock openai server", () => {
   });
 
   it("serves health and streamed responses", async () => {
-    const server = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await server.stop();
-    });
+    const server = await startMockServer();
 
     const health = await fetch(`${server.baseUrl}/healthz`);
     expect(health.status).toBe(200);
     expect(await health.json()).toEqual({ ok: true, status: "live" });
 
-    const response = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        stream: true,
-        input: [
-          {
-            role: "user",
-            content: [{ type: "input_text", text: "Inspect the repo docs and kickoff task." }],
-          },
-        ],
-      }),
+    const response = await postStreamingResponses(server, {
+      input: [makeUserInput("Inspect the repo docs and kickoff task.")],
     });
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toContain("text/event-stream");
@@ -365,43 +474,29 @@ describe("qa mock openai server", () => {
   it("turns a short approval into a kickoff-task read", async () => {
     const server = await startMockServer();
 
-    const preActionResponse = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        stream: false,
-        model: "gpt-5.6-luna",
-        input: [
-          makeUserInput(
-            "Before acting, tell me the single file you would start with in six words or fewer. Do not use tools yet.",
-          ),
-        ],
-      }),
+    const preActionResponse = await postNonStreamingResponses(server, {
+      model: "gpt-5.6-luna",
+      input: [
+        makeUserInput(
+          "Before acting, tell me the single file you would start with in six words or fewer. Do not use tools yet.",
+        ),
+      ],
     });
     expect(preActionResponse.status).toBe(200);
     const preActionPayload = await preActionResponse.json();
     expect(outputItem(preActionPayload).type).toBe("message");
     expect(outputText(preActionPayload)).toContain("Protocol note: acknowledged.");
 
-    const approvalResponse = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        stream: true,
-        model: "gpt-5.6-luna",
-        input: [
-          makeUserInput(
-            "Before acting, tell me the single file you would start with in six words or fewer. Do not use tools yet.",
-          ),
-          makeUserInput(
-            "ok do it. read `QA_KICKOFF_TASK.md` now and reply with the QA mission in one short sentence.",
-          ),
-        ],
-      }),
+    const approvalResponse = await postStreamingResponses(server, {
+      model: "gpt-5.6-luna",
+      input: [
+        makeUserInput(
+          "Before acting, tell me the single file you would start with in six words or fewer. Do not use tools yet.",
+        ),
+        makeUserInput(
+          "ok do it. read `QA_KICKOFF_TASK.md` now and reply with the QA mission in one short sentence.",
+        ),
+      ],
     });
     expect(approvalResponse.status).toBe(200);
     const approvalBody = await approvalResponse.text();
@@ -422,10 +517,9 @@ describe("qa mock openai server", () => {
   it("returns a substantive private final fixture for the message-tool warning scenario", async () => {
     const server = await startMockServer();
 
-    const body = await expectResponsesJson<{
+    const body = await expectNonStreamingResponsesJson<{
       output?: Array<{ content?: Array<{ text?: string }> }>;
     }>(server, {
-      stream: false,
       model: "gpt-5.6-luna",
       input: [
         makeUserInput(
@@ -443,10 +537,9 @@ describe("qa mock openai server", () => {
   it("recovers the stranded-final fixture by calling the message tool on the retry prompt", async () => {
     const server = await startMockServer();
 
-    const initialBody = await expectResponsesJson<{
+    const initialBody = await expectNonStreamingResponsesJson<{
       output?: Array<{ content?: Array<{ text?: string }> }>;
     }>(server, {
-      stream: false,
       model: "gpt-5.6-luna",
       tools: [MESSAGE_TOOL],
       input: [
@@ -458,11 +551,12 @@ describe("qa mock openai server", () => {
 
     const initialText = initialBody.output?.[0]?.content?.[0]?.text ?? "";
     expect(initialText).toContain("QA-STRANDED-85714");
-    expect(initialText.length).toBeGreaterThanOrEqual(120);
+    expect(initialText).toContain("近 7 日營收較前期增加");
+    expect(initialText).toHaveLength(167);
+    expect(initialText.match(/[.!?]+(?:\s|$)/g) ?? []).toHaveLength(0);
     expect(outputItems(initialBody).some((item) => item.type === "function_call")).toBe(false);
 
-    const retryBody = await expectResponsesJson(server, {
-      stream: false,
+    const retryBody = await expectNonStreamingResponsesJson(server, {
       model: "gpt-5.6-luna",
       tools: [MESSAGE_TOOL],
       input: [
@@ -479,17 +573,51 @@ describe("qa mock openai server", () => {
     const toolCall = outputToolCall(retryBody, "message");
     expect(outputToolArgsFromItem(toolCall)).toEqual({
       action: "send",
-      message: "QA-STRANDED-85714",
+      message: initialText,
     });
+  });
+
+  it("returns the same Teams final after the message-tool send", async () => {
+    const server = await startMockServer();
+    const prompt = [
+      "qa msteams thread message-tool final dedupe.",
+      "msteams message target: `conversation:19:other@thread.tacv2;messageid=other-root`.",
+      "exact marker: `QA-MSTEAMS-THREAD-DEDUPE-OK`",
+    ].join(" ");
+
+    const initialBody = await expectNonStreamingResponsesJson(server, {
+      model: "gpt-5.6-luna",
+      tools: [MESSAGE_TOOL],
+      input: [makeUserInput(prompt)],
+    });
+    const toolCall = outputToolCall(initialBody, "message");
+    expect(outputToolArgsFromItem(toolCall)).toEqual({
+      action: "send",
+      message: "QA-MSTEAMS-THREAD-DEDUPE-OK",
+      target: "conversation:19:other@thread.tacv2;messageid=other-root",
+    });
+
+    const finalBody = await expectNonStreamingResponsesJson(server, {
+      model: "gpt-5.6-luna",
+      tools: [MESSAGE_TOOL],
+      input: [
+        makeUserInput(prompt),
+        makeToolOutputWithCallId(
+          outputToolCallId(toolCall, "call_msteams_thread_dedupe"),
+          JSON.stringify({ ok: true }),
+        ),
+      ],
+    });
+    expect(outputText(finalBody)).toBe("QA-MSTEAMS-THREAD-DEDUPE-OK");
+    expect(outputItems(finalBody).some((item) => item.type === "function_call")).toBe(false);
   });
 
   it("keeps the retry-failure stranded-final fixture as text without a message tool call", async () => {
     const server = await startMockServer();
 
-    const body = await expectResponsesJson<{
+    const body = await expectNonStreamingResponsesJson<{
       output?: Array<{ content?: Array<{ text?: string }> }>;
     }>(server, {
-      stream: false,
       model: "gpt-5.6-luna",
       tools: [MESSAGE_TOOL],
       input: [
@@ -510,19 +638,12 @@ describe("qa mock openai server", () => {
 
   it("keeps final-only marker preview deltas separate from the final answer", async () => {
     const server = await startMockServer({ finalOnlyMarkerPauseMs: 1 });
-    const response = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        stream: true,
-        input: [
-          makeUserInput(
-            "Final-only marker streaming QA check. Reply exactly: QA-FINAL-ONLY-STREAMING-OK",
-          ),
-        ],
-      }),
+    const response = await postStreamingResponses(server, {
+      input: [
+        makeUserInput(
+          "Final-only marker streaming QA check. Reply exactly: QA-FINAL-ONLY-STREAMING-OK",
+        ),
+      ],
     });
 
     expect(response.status).toBe(200);
@@ -544,8 +665,7 @@ describe("qa mock openai server", () => {
     const prompt =
       'qa a2a message-tool mirror check. sessionKey="agent:qa:a2a-target". exact marker: `QA-A2A-MIRROR-OK`';
 
-    const toolPlan = await expectResponsesJson(server, {
-      stream: false,
+    const toolPlan = await expectNonStreamingResponsesJson(server, {
       model: "gpt-5.6-luna",
       tools: [{ type: "function", name: "sessions_send" }],
       input: [makeUserInput(prompt)],
@@ -570,23 +690,20 @@ describe("qa mock openai server", () => {
       timeoutSeconds: 0,
     });
 
-    const final = await expectResponsesJson(server, {
-      stream: false,
+    const final = await expectNonStreamingResponsesJson(server, {
       model: "gpt-5.6-luna",
       tools: [{ type: "function", name: "sessions_send" }],
       input: [
         makeUserInput(prompt),
-        {
-          type: "function_call_output",
-          call_id: "call_mock_sessions_send_fixture",
-          output: JSON.stringify({ status: "accepted", delivery: { mode: "announce" } }),
-        },
+        makeToolOutputWithCallId(
+          "call_mock_sessions_send_fixture",
+          JSON.stringify({ status: "accepted", delivery: { mode: "announce" } }),
+        ),
       ],
     });
     expect(outputText(final)).toBe("");
 
-    const targetToolPlan = await expectResponsesJson(server, {
-      stream: false,
+    const targetToolPlan = await expectNonStreamingResponsesJson(server, {
       model: "gpt-5.6-luna",
       tools: [
         { type: "function", name: "sessions_send" },
@@ -611,15 +728,8 @@ describe("qa mock openai server", () => {
   it("emits deterministic text deltas for generic streaming QA prompts", async () => {
     const server = await startMockServer();
 
-    const quietResponse = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        stream: true,
-        input: [makeUserInput("Quiet streaming QA check: reply exactly `QA_STREAMING_OK`.")],
-      }),
+    const quietResponse = await postStreamingResponses(server, {
+      input: [makeUserInput("Quiet streaming QA check: reply exactly `QA_STREAMING_OK`.")],
     });
     expect(quietResponse.status).toBe(200);
     const quietBody = await quietResponse.text();
@@ -627,52 +737,27 @@ describe("qa mock openai server", () => {
     expect(quietBody).toContain('"phase":"final_answer"');
     expect(quietBody).toContain("QA_STREAMING_OK");
 
-    const partialResponse = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        stream: true,
-        input: [makeUserInput("Partial streaming QA check: reply exactly `QA_PARTIAL_OK`.")],
-      }),
+    const partialResponse = await postStreamingResponses(server, {
+      input: [makeUserInput("Partial streaming QA check: reply exactly `QA_PARTIAL_OK`.")],
     });
     expect(partialResponse.status).toBe(200);
     const partialBody = await partialResponse.text();
     expect(partialBody).toContain('"type":"response.output_text.delta"');
     expect(partialBody).toContain("QA_PARTIAL_OK");
 
-    const telegramStreamResponse = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        stream: true,
-        input: [
-          makeUserInput(
-            "Telegram reply-chain marker QA. Reply exactly: QA-TELEGRAM-REPLY-CHAIN-OK",
-          ),
-          makeUserInput("Quiet streaming QA check. Reply exactly: QA-TELEGRAM-STREAM-SINGLE-OK"),
-        ],
-      }),
+    const telegramStreamResponse = await postStreamingResponses(server, {
+      input: [
+        makeUserInput("Telegram reply-chain marker QA. Reply exactly: QA-TELEGRAM-REPLY-CHAIN-OK"),
+        makeUserInput("Quiet streaming QA check. Reply exactly: QA-TELEGRAM-STREAM-SINGLE-OK"),
+      ],
     });
     expect(telegramStreamResponse.status).toBe(200);
     const telegramStreamBody = await telegramStreamResponse.text();
     expect(telegramStreamBody).toContain("QA-TELEGRAM-STREAM-SINGLE-OK");
     expect(telegramStreamBody).not.toContain("QA-TELEGRAM-REPLY-CHAIN-OK");
 
-    const telegramLongResponse = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        stream: true,
-        input: [
-          makeUserInput("Telegram long final QA check. Use the scripted long final response."),
-        ],
-      }),
+    const telegramLongResponse = await postStreamingResponses(server, {
+      input: [makeUserInput("Telegram long final QA check. Use the scripted long final response.")],
     });
     expect(telegramLongResponse.status).toBe(200);
     const telegramLongBody = await telegramLongResponse.text();
@@ -682,17 +767,8 @@ describe("qa mock openai server", () => {
     expect(telegramLongBody).toContain("TELEGRAM-LONG-FINAL-END");
     expect(telegramLongBody.length).toBeGreaterThan(4_500);
 
-    const whatsappLongResponse = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        stream: true,
-        input: [
-          makeUserInput("WhatsApp long final QA check. Use the scripted long final response."),
-        ],
-      }),
+    const whatsappLongResponse = await postStreamingResponses(server, {
+      input: [makeUserInput("WhatsApp long final QA check. Use the scripted long final response.")],
     });
     expect(whatsappLongResponse.status).toBe(200);
     const whatsappLongBody = await whatsappLongResponse.text();
@@ -702,19 +778,12 @@ describe("qa mock openai server", () => {
     expect(whatsappLongBody).toContain("WHATSAPP-LONG-FINAL-END");
     expect(whatsappLongBody.length).toBeGreaterThan(6_000);
 
-    const telegramThreeChunkLongResponse = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        stream: true,
-        input: [
-          makeUserInput(
-            "Telegram long final three chunk QA check. Use the scripted three chunk final response.",
-          ),
-        ],
-      }),
+    const telegramThreeChunkLongResponse = await postStreamingResponses(server, {
+      input: [
+        makeUserInput(
+          "Telegram long final three chunk QA check. Use the scripted three chunk final response.",
+        ),
+      ],
     });
     expect(telegramThreeChunkLongResponse.status).toBe(200);
     const telegramThreeChunkLongBody = await telegramThreeChunkLongResponse.text();
@@ -732,15 +801,8 @@ describe("qa mock openai server", () => {
       "Step 3: after that read completes, send a final assistant text block containing only this exact marker: `BLOCK_TWO_OK`.",
       "Never put both markers in the same assistant text block.",
     ].join("\n");
-    const blockResponse = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        stream: true,
-        input: [makeUserInput(blockPrompt)],
-      }),
+    const blockResponse = await postStreamingResponses(server, {
+      input: [makeUserInput(blockPrompt)],
     });
     expect(blockResponse.status).toBe(200);
     const blockBody = await blockResponse.text();
@@ -750,22 +812,11 @@ describe("qa mock openai server", () => {
     expect(blockBody).toContain("BLOCK_ONE_OK");
     expect(blockBody).not.toContain('"item_id":"msg_mock_block_2"');
 
-    const blockContinuation = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        stream: true,
-        input: [
-          makeUserInput(blockPrompt),
-          {
-            type: "function_call_output",
-            call_id: "call_mock_read_fixture",
-            output: "QA kickoff task read",
-          },
-        ],
-      }),
+    const blockContinuation = await postStreamingResponses(server, {
+      input: [
+        makeUserInput(blockPrompt),
+        makeToolOutputWithCallId("call_mock_read_fixture", "QA kickoff task read"),
+      ],
     });
     expect(blockContinuation.status).toBe(200);
     const blockContinuationBody = await blockContinuation.text();
@@ -777,19 +828,12 @@ describe("qa mock openai server", () => {
   it("plans deterministic tool-progress reads from prompt paths", async () => {
     const server = await startMockServer();
 
-    const response = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        stream: true,
-        input: [
-          makeUserInput(
-            "Tool progress QA check: read `qa-progress-target.txt` before answering. After the read completes, reply exactly `TOOL_PROGRESS_OK`.",
-          ),
-        ],
-      }),
+    const response = await postStreamingResponses(server, {
+      input: [
+        makeUserInput(
+          "Tool progress QA check: read `qa-progress-target.txt` before answering. After the read completes, reply exactly `TOOL_PROGRESS_OK`.",
+        ),
+      ],
     });
 
     expect(response.status).toBe(200);
@@ -803,15 +847,8 @@ describe("qa mock openai server", () => {
     const prompt =
       "Tool progress QA check: use the read tool exactly once on `QA_KICKOFF_TASK.md` before answering. After that read completes, reply with only this exact marker and no other text: `TOOL_PROGRESS_MARKER_OK`.";
 
-    const toolPlan = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        stream: true,
-        input: [makeUserInput(prompt)],
-      }),
+    const toolPlan = await postStreamingResponses(server, {
+      input: [makeUserInput(prompt)],
     });
 
     expect(toolPlan.status).toBe(200);
@@ -819,20 +856,48 @@ describe("qa mock openai server", () => {
     expect(toolPlanBody).toContain('"name":"read"');
     expect(toolPlanBody).toContain("QA_KICKOFF_TASK.md");
 
-    const final = await expectResponsesJson<{
+    const final = await expectNonStreamingResponsesJson<{
       output: Array<{ content?: Array<{ text?: string }> }>;
     }>(server, {
-      stream: false,
       input: [
         makeUserInput(prompt),
-        {
-          type: "function_call_output",
-          call_id: "call_mock_read_1",
-          output: JSON.stringify({ text: "kickoff task" }),
-        },
+        makeToolOutputWithCallId("call_mock_read_1", JSON.stringify({ text: "kickoff task" })),
       ],
     });
     expect(final.output[0]?.content?.[0]?.text).toBe("TOOL_PROGRESS_MARKER_OK");
+  });
+
+  it("prefers a current tool-result marker over system and stale user directives", async () => {
+    const server = await startMockServer();
+    const prompt = [
+      "Tool progress QA check: call the read tool exactly once on `QA_KICKOFF_TASK.md` before answering.",
+      "The only valid final marker is inside that file.",
+      "After the read completes, reply with only the exact marker from the file.",
+    ].join(" ");
+    const marker = "TOOL_PROGRESS_OUTPUT_MARKER_OK";
+
+    const final = await expectNonStreamingResponsesJson<{
+      output: Array<{ content?: Array<{ text?: string }> }>;
+    }>(server, {
+      instructions: "If nothing needs attention, reply exactly: HEARTBEAT_OK",
+      input: [
+        makeUserInput(
+          "Earlier tool progress QA check: after the tool returns, reply exactly `STALE_PROGRESS_MARKER`.",
+        ),
+        makeUserInput(prompt),
+        makeToolOutputWithCallId(
+          "call_mock_read_1",
+          [
+            "Matrix tool progress QA task.",
+            "Reply with only this exact marker and no other text:",
+            marker,
+          ].join("\n"),
+        ),
+        makeUserInput(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION),
+      ],
+    });
+
+    expect(final.output[0]?.content?.[0]?.text).toBe(marker);
   });
 
   it("plans deterministic tool-progress exec commands from exact command prompts", async () => {
@@ -841,15 +906,8 @@ describe("qa mock openai server", () => {
       "rg -n 'matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt' . ; sleep 2";
     const prompt = `Tool progress QA check: call the exec tool exactly once with this exact command before answering: \`${command}\`. After that exec command completes or fails, reply exactly \`TOOL_PROGRESS_EXEC_OK\`.`;
 
-    const response = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        stream: true,
-        input: [makeUserInput(prompt)],
-      }),
+    const response = await postStreamingResponses(server, {
+      input: [makeUserInput(prompt)],
     });
 
     expect(response.status).toBe(200);
@@ -863,17 +921,15 @@ describe("qa mock openai server", () => {
     const prompt =
       "Gateway restart in-flight QA check. Read QA_KICKOFF_TASK.md, then reply exactly: RESTART-INFLIGHT-MAYBE-OK";
 
-    const final = await expectResponsesJson<{
+    const final = await expectNonStreamingResponsesJson<{
       output: Array<{ content?: Array<{ text?: string }> }>;
     }>(server, {
-      stream: false,
       input: [
         makeUserInput(prompt),
-        {
-          type: "function_call_output",
-          call_id: "call_mock_read_1",
-          output: JSON.stringify({ text: "QA mission: understand this OpenClaw repo." }),
-        },
+        makeToolOutputWithCallId(
+          "call_mock_read_1",
+          JSON.stringify({ text: "QA mission: understand this OpenClaw repo." }),
+        ),
       ],
     });
 
@@ -883,18 +939,16 @@ describe("qa mock openai server", () => {
   it("does not use stale exact replies from instructions after QA reads", async () => {
     const server = await startMockServer();
 
-    const final = await expectResponsesJson<{
+    const final = await expectNonStreamingResponsesJson<{
       output: Array<{ content?: Array<{ text?: string }> }>;
     }>(server, {
-      stream: false,
       instructions: "If this is a heartbeat check, reply exactly: HEARTBEAT_OK",
       input: [
         makeUserInput("Read QA_KICKOFF_TASK.md, then summarize what you found."),
-        {
-          type: "function_call_output",
-          call_id: "call_mock_read_1",
-          output: JSON.stringify({ text: "QA mission: understand this OpenClaw repo." }),
-        },
+        makeToolOutputWithCallId(
+          "call_mock_read_1",
+          JSON.stringify({ text: "QA mission: understand this OpenClaw repo." }),
+        ),
       ],
     });
 
@@ -907,17 +961,12 @@ describe("qa mock openai server", () => {
     const server = await startMockServer();
     const safePrefix = "x".repeat(219);
 
-    const final = await expectResponsesJson<{
+    const final = await expectNonStreamingResponsesJson<{
       output: Array<{ content?: Array<{ text?: string }> }>;
     }>(server, {
-      stream: false,
       input: [
         makeUserInput("Summarize the tool result."),
-        {
-          type: "function_call_output",
-          call_id: "call_mock_read_1",
-          output: `${safePrefix}😀tail`,
-        },
+        makeToolOutputWithCallId("call_mock_read_1", `${safePrefix}😀tail`),
       ],
     });
 
@@ -931,15 +980,8 @@ describe("qa mock openai server", () => {
     const prompt =
       "Tool progress error QA check: read `missing-tool-progress-target.txt` before answering. After the read fails, reply exactly `TOOL_PROGRESS_ERROR_OK`.";
 
-    const toolPlan = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        stream: true,
-        input: [makeUserInput(prompt)],
-      }),
+    const toolPlan = await postStreamingResponses(server, {
+      input: [makeUserInput(prompt)],
     });
 
     expect(toolPlan.status).toBe(200);
@@ -947,59 +989,48 @@ describe("qa mock openai server", () => {
     expect(toolPlanBody).toContain('"name":"read"');
     expect(toolPlanBody).toContain("missing-tool-progress-target.txt");
 
-    const successOutput = await expectResponsesJson<{
+    const successOutput = await expectNonStreamingResponsesJson<{
       output: Array<{ content?: Array<{ text?: string }> }>;
     }>(server, {
-      stream: false,
       input: [
         makeUserInput(prompt),
-        {
-          type: "function_call_output",
-          call_id: "call_mock_read_1",
-          output: JSON.stringify({ text: "unexpected success" }),
-        },
+        makeToolOutputWithCallId(
+          "call_mock_read_1",
+          JSON.stringify({ text: "unexpected success" }),
+        ),
       ],
     });
     expect(successOutput.output[0]?.content?.[0]?.text).toBe("BUG-TOOL-DID-NOT-FAIL");
 
-    const errorOutput = await expectResponsesJson<{
+    const errorOutput = await expectNonStreamingResponsesJson<{
       output: Array<{ content?: Array<{ text?: string }> }>;
     }>(server, {
-      stream: false,
       input: [
         makeUserInput(prompt),
-        {
-          type: "function_call_output",
-          call_id: "call_mock_read_1",
-          output: JSON.stringify({ error: "ENOENT: no such file or directory" }),
-        },
+        makeToolOutputWithCallId(
+          "call_mock_read_1",
+          JSON.stringify({ error: "ENOENT: no such file or directory" }),
+        ),
       ],
     });
     expect(errorOutput.output[0]?.content?.[0]?.text).toBe("TOOL_PROGRESS_ERROR_OK");
   });
 
-  it("uses the latest user prompt path for tool-progress plans", async () => {
+  it("uses the latest user tool-progress prompt kind and target for plans", async () => {
     const server = await startMockServer();
 
-    const response = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        stream: true,
-        input: [
-          makeUserInput(
-            "Tool progress QA check: read `older-progress-target.txt` before answering. After the read completes, reply exactly `OLD_PROGRESS_OK`.",
-          ),
-          makeUserInput(
-            "Tool progress error QA check: read `latest-missing-progress-target.txt` before answering. After the read fails, reply exactly `LATEST_PROGRESS_OK`.",
-          ),
-          makeUserInput(
-            "Continue with the QA scenario plan and report worked, failed, and blocked items.",
-          ),
-        ],
-      }),
+    const response = await postStreamingResponses(server, {
+      input: [
+        makeUserInput(
+          "Tool progress QA check: read `older-progress-target.txt` before answering. After the read completes, reply exactly `OLD_PROGRESS_OK`.",
+        ),
+        makeUserInput(
+          "Tool progress error QA check: read `latest-missing-progress-target.txt` before answering. After the read fails, reply exactly `LATEST_PROGRESS_OK`.",
+        ),
+        makeUserInput(
+          "Continue with the QA scenario plan and report worked, failed, and blocked items.",
+        ),
+      ],
     });
 
     expect(response.status).toBe(200);
@@ -1007,36 +1038,245 @@ describe("qa mock openai server", () => {
     expect(body).toContain('"name":"read"');
     expect(body).toContain("latest-missing-progress-target.txt");
     expect(body).not.toContain("older-progress-target.txt");
+
+    const command = "sleep 2; cat 'current-progress-target.txt'";
+    const currentNormal = await postStreamingResponses(server, {
+      input: [
+        makeUserInput(
+          "Tool progress error QA check: read `stale-missing-progress-target.txt` before answering. After the read fails, reply exactly `STALE_PROGRESS_OK`.",
+        ),
+        makeToolOutputWithCallId(
+          "call_stale_progress_read",
+          JSON.stringify({ error: "ENOENT: stale turn" }),
+        ),
+        makeUserInput(
+          `Tool progress QA check: call the exec tool exactly once with this exact command before answering: \`${command}\`. After that command completes, reply exactly \`CURRENT_PROGRESS_OK\`.`,
+        ),
+      ],
+    });
+
+    expect(currentNormal.status).toBe(200);
+    const currentNormalBody = await currentNormal.text();
+    expect(currentNormalBody).toContain('"name":"exec"');
+    expect(currentNormalBody).toContain(command);
+    expect(currentNormalBody).not.toContain("stale-missing-progress-target.txt");
+  });
+
+  it.each([
+    {
+      name: "preview",
+      prompt:
+        "@openclaw:matrix-qa.test Tool progress QA check: call the read tool exactly once on `QA_KICKOFF_TASK.md` before answering. After that read completes, reply exactly `CURRENT_PREVIEW_OK`.",
+      toolName: "read",
+      expectedArgs: { path: "QA_KICKOFF_TASK.md" },
+    },
+    {
+      name: "command preview",
+      prompt:
+        "@openclaw:matrix-qa.test Tool progress QA check: call the exec tool exactly once with this exact command before answering: `printf 'matrix-command-progress-start\\n'; sleep 2`. After that exec command completes or fails, reply exactly `CURRENT_COMMAND_OK`.",
+      toolName: "exec",
+      expectedArgs: { command: "printf 'matrix-command-progress-start\\n'; sleep 2" },
+    },
+    {
+      name: "error",
+      prompt:
+        "@openclaw:matrix-qa.test Tool progress error QA check: read `missing-matrix-tool-progress-target.txt` before answering. After the read fails, reply exactly `CURRENT_ERROR_OK`.",
+      toolName: "read",
+      expectedArgs: { path: "missing-matrix-tool-progress-target.txt" },
+    },
+    {
+      name: "mention safety",
+      prompt:
+        "@openclaw:matrix-qa.test Tool progress QA check: read the missing workspace file `matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt` before answering. After that read fails, reply exactly `CURRENT_MENTION_OK`.",
+      toolName: "read",
+      expectedArgs: {
+        path: "matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt",
+      },
+    },
+  ])("routes current Matrix $name after stale streaming history", async (fixture) => {
+    const server = await startMockServer();
+    const payload = await expectNonStreamingResponsesJson(server, {
+      input: [
+        makeUserInput(
+          "@openclaw:matrix-qa.test Quiet streaming QA check: reply exactly `STALE_STREAMING_OK`.",
+        ),
+        makeUserInput(fixture.prompt),
+        makeUserInput("Continue with the current Matrix QA scenario."),
+      ],
+    });
+
+    const toolCall = outputToolCall(payload, fixture.toolName);
+    expect(outputToolArgsFromItem(toolCall)).toEqual(fixture.expectedArgs);
+    expect(JSON.stringify(payload)).not.toContain("STALE_STREAMING_OK");
+  });
+
+  it("does not let a prior Matrix tool result satisfy the current progress prompt", async () => {
+    const server = await startMockServer();
+    const payload = await expectNonStreamingResponsesJson(server, {
+      input: [
+        makeUserInput(
+          "@openclaw:matrix-qa.test Tool progress QA check: read `stale-progress-target.txt` before answering. Reply exactly `STALE_PROGRESS_OK`.",
+        ),
+        makeToolOutputWithCallId("call_mock_read_stale_progress", "STALE_PROGRESS_OK"),
+        makeUserInput(
+          "@openclaw:matrix-qa.test Tool progress QA check: read `current-progress-target.txt` before answering. Reply exactly `CURRENT_PROGRESS_OK`.",
+        ),
+      ],
+    });
+
+    const toolCall = outputToolCall(payload, "read");
+    expect(outputToolArgsFromItem(toolCall)).toEqual({ path: "current-progress-target.txt" });
+    expect(JSON.stringify(payload)).not.toContain("STALE_PROGRESS_OK");
+  });
+
+  it.each([
+    {
+      name: "quiet streaming",
+      stalePrompt:
+        "@openclaw:matrix-qa.test Quiet streaming QA check: reply exactly `STALE_QUIET_OK`.",
+    },
+    {
+      name: "tool progress",
+      stalePrompt:
+        "@openclaw:matrix-qa.test Tool progress QA check: read `stale-progress-target.txt` before answering. Reply exactly `STALE_PROGRESS_OK`.",
+    },
+  ])("does not resurrect stale Matrix $name across an ordinary turn", async (fixture) => {
+    const server = await startMockServer();
+    const payload = await expectNonStreamingResponsesJson(server, {
+      input: [
+        makeUserInput(fixture.stalePrompt),
+        makeUserInput("Reply exactly `CURRENT_ORDINARY_OK`."),
+      ],
+    });
+
+    expect(outputText(payload)).toBe("CURRENT_ORDINARY_OK");
+    expect(JSON.stringify(payload)).not.toContain("stale-progress-target.txt");
+  });
+
+  it("does not treat an ordinary retry request as a Matrix scenario continuation", async () => {
+    const server = await startMockServer();
+    const payload = await expectNonStreamingResponsesJson(server, {
+      input: [
+        makeUserInput(
+          "@openclaw:matrix-qa.test Quiet streaming QA check: reply exactly `STALE_STREAMING_OK`.",
+        ),
+        makeUserInput(
+          "Please retry the new database operation, then reply exactly `CURRENT_RETRY_OK`.",
+        ),
+      ],
+    });
+
+    expect(outputText(payload)).toBe("CURRENT_RETRY_OK");
+    expect(JSON.stringify(payload)).not.toContain("STALE_STREAMING_OK");
+  });
+
+  it("uses the current tool result marker after stale streaming history", async () => {
+    const server = await startMockServer();
+    const currentPrompt =
+      "@openclaw:matrix-qa.test Tool progress QA check: call the read tool exactly once on `QA_KICKOFF_TASK.md` before answering. The only valid final marker is inside that file.";
+    const payload = await expectNonStreamingResponsesJson(server, {
+      input: [
+        makeUserInput(
+          "@openclaw:matrix-qa.test Quiet streaming QA check: reply exactly `STALE_STREAMING_OK`.",
+        ),
+        makeUserInput(currentPrompt),
+        makeToolOutputWithCallId(
+          "call_mock_read_current_progress",
+          "Reply with only this exact marker and no other text:\nCURRENT_PROGRESS_OK",
+        ),
+      ],
+    });
+
+    expect(outputText(payload)).toBe("CURRENT_PROGRESS_OK");
+  });
+
+  it("selects tool progress after quiet streaming in one user envelope", async () => {
+    const server = await startMockServer();
+    const currentPrompt =
+      "@openclaw:matrix-qa.test Tool progress QA check: call the read tool exactly once on `QA_KICKOFF_TASK.md` before answering. The only valid final marker is inside that file.";
+    const envelope = [
+      "@openclaw:matrix-qa.test Quiet streaming QA check: reply exactly `STALE_ENVELOPE_OK`.",
+      currentPrompt,
+    ].join("\n");
+    const plan = await expectNonStreamingResponsesJson(server, {
+      input: [makeUserInput(envelope)],
+    });
+
+    const toolCall = outputToolCall(plan, "read");
+    expect(outputToolArgsFromItem(toolCall)).toEqual({ path: "QA_KICKOFF_TASK.md" });
+    expect(JSON.stringify(plan)).not.toContain("STALE_ENVELOPE_OK");
+
+    const final = await expectNonStreamingResponsesJson(server, {
+      input: [
+        makeUserInput(envelope),
+        makeToolOutputWithCallId(
+          "call_mock_read_current_envelope",
+          "Reply with only this exact marker and no other text:\nCURRENT_ENVELOPE_OK",
+        ),
+      ],
+    });
+
+    expect(outputText(final)).toBe("CURRENT_ENVELOPE_OK");
+  });
+
+  it("selects the latest tool-progress target in one user envelope", async () => {
+    const server = await startMockServer();
+    const envelope = [
+      "Tool progress QA check: read `stale-progress-target.txt` before answering. Reply exactly `STALE_PROGRESS_OK`.",
+      "Tool progress QA check: read `current-progress-target.txt` before answering. Reply exactly `CURRENT_PROGRESS_OK`.",
+    ].join("\n");
+    const payload = await expectNonStreamingResponsesJson(server, {
+      input: [makeUserInput(envelope)],
+    });
+
+    const toolCall = outputToolCall(payload, "read");
+    expect(outputToolArgsFromItem(toolCall)).toEqual({ path: "current-progress-target.txt" });
+    expect(JSON.stringify(payload)).not.toContain("stale-progress-target.txt");
+  });
+
+  it("selects the latest block-streaming markers and target in one user envelope", async () => {
+    const server = await startMockServer();
+    const envelope = [
+      "Block streaming QA check: first exact marker: `STALE_ONE`; read `stale-block.txt`; second exact marker: `STALE_TWO`.",
+      "Block streaming QA check: first exact marker: `CURRENT_ONE`; read `current-block.txt`; second exact marker: `CURRENT_TWO`.",
+    ].join("\n");
+    const payload = await expectNonStreamingResponsesJson(server, {
+      input: [makeUserInput(envelope)],
+    });
+
+    expect(outputText(payload)).toBe("CURRENT_ONE");
+    const toolCall = outputToolCall(payload, "read");
+    expect(outputToolArgsFromItem(toolCall)).toEqual({ path: "current-block.txt" });
+    expect(JSON.stringify(payload)).not.toContain("STALE_ONE");
+    expect(JSON.stringify(payload)).not.toContain("stale-block.txt");
+  });
+
+  it("rejects successful error-progress results without a prompt directive", async () => {
+    const server = await startMockServer();
+    const payload = await expectNonStreamingResponsesJson(server, {
+      input: [
+        makeUserInput(
+          "Tool progress error QA check: read `missing-progress-target.txt` before answering. The final marker is supplied only after the tool runs.",
+        ),
+        makeToolOutputWithCallId(
+          "call_mock_read_unexpected_success",
+          "Reply with only this exact marker and no other text:\nFALSE_POSITIVE_OK",
+        ),
+      ],
+    });
+
+    expect(outputText(payload)).toBe("BUG-TOOL-DID-NOT-FAIL");
   });
 
   it("prefers path-like refs over generic quoted keys in prompts", async () => {
-    const server = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await server.stop();
-    });
+    const server = await startMockServer();
 
-    const response = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        stream: true,
-        input: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: 'Please inspect "message_id" metadata first, then read `./QA_KICKOFF_TASK.md`.',
-              },
-            ],
-          },
-        ],
-      }),
+    const response = await postStreamingResponses(server, {
+      input: [
+        makeUserInput(
+          'Please inspect "message_id" metadata first, then read `./QA_KICKOFF_TASK.md`.',
+        ),
+      ],
     });
     expect(response.status).toBe(200);
     const body = await response.text();
@@ -1054,6 +1294,15 @@ describe("qa mock openai server", () => {
     expect(debugPayload.plannedToolName).toBe("read");
   });
 
+  it("keeps unformatted Matrix mention-shaped filenames intact", () => {
+    expect(
+      readTargetFromPrompt(
+        "Read the missing workspace file matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt before answering.",
+      ),
+    ).toBe("matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt");
+    expect(readTargetFromPrompt("Read _fixture.json before answering.")).toBe("_fixture.json");
+  });
+
   it("reads unquoted fixture paths and honors exact replies after tool output", async () => {
     const server = await startMockServer();
     const prompt =
@@ -1066,17 +1315,15 @@ describe("qa mock openai server", () => {
     expect(toolPlan).toContain('"name":"read"');
     expect(toolPlan).toContain('"arguments":"{\\"path\\":\\"large-cache-fixture.txt\\"}"');
 
-    const completion = await expectResponsesJson<{
+    const completion = await expectNonStreamingResponsesJson<{
       output?: Array<{ content?: Array<{ text?: string }> }>;
     }>(server, {
-      stream: false,
       input: [
         makeUserInput(prompt),
-        {
-          type: "function_call_output",
-          call_id: "call_mock_read_1",
-          output: "CACHE-FIXTURE-1600 stable tool-result evidence.",
-        },
+        makeToolOutputWithCallId(
+          "call_mock_read_1",
+          "CACHE-FIXTURE-1600 stable tool-result evidence.",
+        ),
       ],
     });
 
@@ -1096,10 +1343,9 @@ describe("qa mock openai server", () => {
 
   it("does not treat natural reply-exactly-with phrasing as a marker token", async () => {
     const server = await startMockServer();
-    const response = await expectResponsesJson<{
+    const response = await expectNonStreamingResponsesJson<{
       output?: Array<{ content?: Array<{ text?: string }> }>;
     }>(server, {
-      stream: false,
       input: [
         makeUserInput(
           "Use qa-visible-skill now. Reply exactly with the visible skill marker and nothing else.",
@@ -1111,70 +1357,26 @@ describe("qa mock openai server", () => {
   });
 
   it("drives the Lobster Invaders write flow and memory recall responses", async () => {
-    const server = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await server.stop();
-    });
+    const server = await startMockServer();
 
-    const lobster = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        stream: true,
-        model: "gpt-5.6-luna",
-        input: [
-          {
-            role: "user",
-            content: [
-              { type: "input_text", text: "Please build Lobster Invaders after reading context." },
-            ],
-          },
-          {
-            type: "function_call_output",
-            output: "QA mission: read source and docs first.",
-          },
-        ],
-      }),
+    const lobster = await postStreamingResponses(server, {
+      model: "gpt-5.6-luna",
+      input: [
+        makeUserInput("Please build Lobster Invaders after reading context."),
+        makeToolOutput("QA mission: read source and docs first."),
+      ],
     });
     expect(lobster.status).toBe(200);
     const lobsterBody = await lobster.text();
     expect(lobsterBody).toContain('"name":"write"');
     expect(lobsterBody).toContain("lobster-invaders.html");
 
-    const recall = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        stream: false,
-        model: "gpt-5.6-luna-alt",
-        input: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: "Please remember this fact for later: the QA canary code is ALPHA-7.",
-              },
-            ],
-          },
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: "What was the QA canary code I asked you to remember earlier?",
-              },
-            ],
-          },
-        ],
-      }),
+    const recall = await postNonStreamingResponses(server, {
+      model: "gpt-5.6-luna-alt",
+      input: [
+        makeUserInput("Please remember this fact for later: the QA canary code is ALPHA-7."),
+        makeUserInput("What was the QA canary code I asked you to remember earlier?"),
+      ],
     });
     expect(recall.status).toBe(200);
     const payload = (await recall.json()) as {
@@ -1190,34 +1392,15 @@ describe("qa mock openai server", () => {
   });
 
   it("keeps remember prompts prose-only even when they mention repo cleanup", async () => {
-    const server = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await server.stop();
-    });
+    const server = await startMockServer();
 
-    const response = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        stream: true,
-        model: "gpt-5.6-luna",
-        input: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: "Please remember this fact for later: the QA canary code is ALPHA-7. Use your normal memory mechanism, avoid manual repo cleanup, and reply exactly `Remembered ALPHA-7.` once stored.",
-              },
-            ],
-          },
-        ],
-      }),
+    const response = await postStreamingResponses(server, {
+      model: "gpt-5.6-luna",
+      input: [
+        makeUserInput(
+          "Please remember this fact for later: the QA canary code is ALPHA-7. Use your normal memory mechanism, avoid manual repo cleanup, and reply exactly `Remembered ALPHA-7.` once stored.",
+        ),
+      ],
     });
     expect(response.status).toBe(200);
     const body = await response.text();
@@ -1225,103 +1408,141 @@ describe("qa mock openai server", () => {
     expect(body).not.toContain('"name":"read"');
   });
 
+  it("requires retained bot history in the Slack MPIM thread-history prelude", async () => {
+    const server = await startMockServer();
+    const seedMarker = "SLACK_QA_MPIM_SEED_A1B2C3D4";
+    const recallMarker = "SLACK_QA_MPIM_RECALL_A1B2C3D4";
+    const missingMarker = "SLACK_QA_MPIM_MISSING_A1B2C3D4";
+    const seedPrompt =
+      `Slack MPIM assistant-history seed check. Reply with only a marker in this exact format: ${seedMarker}_BOT_<NONCE>. ` +
+      "Replace <NONCE> with 8 to 32 new uppercase letters or digits. " +
+      "Do not include angle brackets, spaces, Markdown, or punctuation.";
+    const seedResponse = await expectNonStreamingResponsesJson<unknown>(server, {
+      model: "gpt-5.6-luna",
+      input: [makeUserInput(seedPrompt)],
+    });
+    const botReplyMarker = outputText(seedResponse);
+    expect(botReplyMarker).toMatch(new RegExp(`^${seedMarker}_BOT_[A-Z0-9]+$`, "u"));
+    const botNonce = botReplyMarker.slice(`${seedMarker}_BOT_`.length);
+    const expectedRecallMarker = `${recallMarker}_${botNonce}`;
+    const recallPrompt = [
+      "Slack MPIM assistant-history recall check.",
+      `Recall the nonce from your immediately previous reply beginning with ${seedMarker}_BOT_.`,
+      `Reply with only this exact format: ${recallMarker}_<NONCE>, using that same nonce.`,
+      `Otherwise reply with only: ${missingMarker}`,
+    ].join(" ");
+    expect(recallPrompt).not.toContain(botReplyMarker);
+    expect(recallPrompt).not.toContain(botNonce);
+
+    const withRetainedBotHistory = await expectNonStreamingResponsesJson<unknown>(server, {
+      model: "gpt-5.6-luna",
+      input: [
+        makeUserInput(
+          [
+            "[Thread history - for context]",
+            `[Slack Driver (user) Fri 2026-07-31 10:00 UTC] ${seedPrompt}`,
+            "[slack message id: 1.000000 channel: C123]",
+            "",
+            `[Slack OpenClaw (this assistant) (assistant) Fri 2026-07-31 10:01 UTC] ${botReplyMarker}`,
+            "[slack message id: 1.500000 channel: C123]",
+            "",
+            `[Slack Driver (user) Fri 2026-07-31 10:02 UTC] ${recallPrompt}`,
+          ].join("\n"),
+        ),
+      ],
+    });
+    expect(outputText(withRetainedBotHistory)).toBe(expectedRecallMarker);
+
+    const withStructuredAssistantHistoryOnly = await expectNonStreamingResponsesJson<unknown>(
+      server,
+      {
+        model: "gpt-5.6-luna",
+        input: [
+          makeUserInput(seedPrompt),
+          {
+            role: "assistant",
+            content: [{ type: "output_text", text: botReplyMarker }],
+          },
+          makeUserInput(recallPrompt),
+        ],
+      },
+    );
+    expect(outputText(withStructuredAssistantHistoryOnly)).toBe(missingMarker);
+
+    const withHumanAttributedSeed = await expectNonStreamingResponsesJson<unknown>(server, {
+      model: "gpt-5.6-luna",
+      input: [
+        makeUserInput(
+          [
+            "[Thread history - for context]",
+            `[Slack Alice (user) Fri 2026-07-31 10:00 UTC] ${botReplyMarker}`,
+            "[slack message id: 1.000000 channel: C123]",
+            "",
+            `[Slack Driver (user) Fri 2026-07-31 10:02 UTC] ${recallPrompt}`,
+          ].join("\n"),
+        ),
+      ],
+    });
+    expect(outputText(withHumanAttributedSeed)).toBe(missingMarker);
+  });
+
   it("drives repo-contract followthrough as read-read-read-write-then-report", async () => {
-    const server = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await server.stop();
-    });
+    const server = await startMockServer();
 
     const prompt =
       "Repo contract followthrough check. Read AGENT.md, SOUL.md, and FOLLOWTHROUGH_INPUT.md first. Then follow the repo contract exactly, write ./repo-contract-summary.txt, and reply with three labeled lines: Read, Wrote, Status.";
 
-    const first = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        stream: true,
-        model: "gpt-5.6-luna",
-        input: [{ role: "user", content: [{ type: "input_text", text: prompt }] }],
-      }),
+    const first = await postStreamingResponses(server, {
+      model: "gpt-5.6-luna",
+      input: [makeUserInput(prompt)],
     });
     expect(first.status).toBe(200);
     expect(await first.text()).toContain('"arguments":"{\\"path\\":\\"AGENT.md\\"}"');
 
-    const second = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        stream: true,
-        model: "gpt-5.6-luna",
-        input: [
-          { role: "user", content: [{ type: "input_text", text: prompt }] },
-          {
-            type: "function_call_output",
-            output:
-              "# Repo contract\n\nStep order:\n1. Read AGENT.md.\n2. Read SOUL.md.\n3. Read FOLLOWTHROUGH_INPUT.md.\n4. Write ./repo-contract-summary.txt.\n",
-          },
-        ],
-      }),
+    const second = await postStreamingResponses(server, {
+      model: "gpt-5.6-luna",
+      input: [
+        makeUserInput(prompt),
+        makeToolOutput(
+          "# Repo contract\n\nStep order:\n1. Read AGENT.md.\n2. Read SOUL.md.\n3. Read FOLLOWTHROUGH_INPUT.md.\n4. Write ./repo-contract-summary.txt.\n",
+        ),
+      ],
     });
     expect(second.status).toBe(200);
     expect(await second.text()).toContain('"arguments":"{\\"path\\":\\"SOUL.md\\"}"');
 
-    const third = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        stream: true,
-        model: "gpt-5.6-luna",
-        input: [
-          { role: "user", content: [{ type: "input_text", text: prompt }] },
-          {
-            type: "function_call_output",
-            output: "# Execution style\n\nStay brief, honest, and action-first.\n",
-          },
-        ],
-      }),
+    const third = await postStreamingResponses(server, {
+      model: "gpt-5.6-luna",
+      input: [
+        makeUserInput(prompt),
+        makeToolOutput("# Execution style\n\nStay brief, honest, and action-first.\n"),
+      ],
     });
     expect(third.status).toBe(200);
     expect(await third.text()).toContain('"arguments":"{\\"path\\":\\"FOLLOWTHROUGH_INPUT.md\\"}"');
 
-    const fourth = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        stream: true,
-        model: "gpt-5.6-luna",
-        input: [
-          { role: "user", content: [{ type: "input_text", text: prompt }] },
-          {
-            type: "function_call_output",
-            output:
-              "Mission: prove you followed the repo contract.\nEvidence path: AGENT.md -> SOUL.md -> FOLLOWTHROUGH_INPUT.md -> repo-contract-summary.txt\n",
-          },
-        ],
-      }),
+    const fourth = await postStreamingResponses(server, {
+      model: "gpt-5.6-luna",
+      input: [
+        makeUserInput(prompt),
+        makeToolOutput(
+          "Mission: prove you followed the repo contract.\nEvidence path: AGENT.md -> SOUL.md -> FOLLOWTHROUGH_INPUT.md -> repo-contract-summary.txt\n",
+        ),
+      ],
     });
     expect(fourth.status).toBe(200);
     const fourthBody = await fourth.text();
     expect(fourthBody).toContain('"name":"write"');
     expect(fourthBody).toContain("repo-contract-summary.txt");
 
-    const fifth = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        stream: false,
-        model: "gpt-5.6-luna",
-        input: [
-          { role: "user", content: [{ type: "input_text", text: prompt }] },
-          {
-            type: "function_call_output",
-            output:
-              "Successfully wrote repo-contract-summary.txt\nMission: prove you followed the repo contract.\nStatus: complete\n",
-          },
-        ],
-      }),
+    const fifth = await postNonStreamingResponses(server, {
+      model: "gpt-5.6-luna",
+      input: [
+        makeUserInput(prompt),
+        makeToolOutput(
+          "Successfully wrote repo-contract-summary.txt\nMission: prove you followed the repo contract.\nStatus: complete\n",
+        ),
+      ],
     });
     expect(fifth.status).toBe(200);
     const payload = (await fifth.json()) as {
@@ -1333,45 +1554,27 @@ describe("qa mock openai server", () => {
   });
 
   it("uses argument-scoped tool call ids for repeated tool names", async () => {
-    const server = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await server.stop();
-    });
+    const server = await startMockServer();
 
     const prompt =
       "Repo contract followthrough check. Read AGENT.md, SOUL.md, and FOLLOWTHROUGH_INPUT.md first. Then follow the repo contract exactly, write ./repo-contract-summary.txt, and reply with three labeled lines: Read, Wrote, Status.";
 
-    const first = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        stream: false,
-        model: "gpt-5.6-luna",
-        input: [{ role: "user", content: [{ type: "input_text", text: prompt }] }],
-      }),
+    const first = await postNonStreamingResponses(server, {
+      model: "gpt-5.6-luna",
+      input: [makeUserInput(prompt)],
     });
     const firstPayload = (await first.json()) as {
       output?: Array<{ call_id?: string }>;
     };
 
-    const second = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        stream: false,
-        model: "gpt-5.6-luna",
-        input: [
-          { role: "user", content: [{ type: "input_text", text: prompt }] },
-          {
-            type: "function_call_output",
-            output:
-              "# Repo contract\n\nStep order:\n1. Read AGENT.md.\n2. Read SOUL.md.\n3. Read FOLLOWTHROUGH_INPUT.md.\n4. Write ./repo-contract-summary.txt.\n",
-          },
-        ],
-      }),
+    const second = await postNonStreamingResponses(server, {
+      model: "gpt-5.6-luna",
+      input: [
+        makeUserInput(prompt),
+        makeToolOutput(
+          "# Repo contract\n\nStep order:\n1. Read AGENT.md.\n2. Read SOUL.md.\n3. Read FOLLOWTHROUGH_INPUT.md.\n4. Write ./repo-contract-summary.txt.\n",
+        ),
+      ],
     });
     const secondPayload = (await second.json()) as {
       output?: Array<{ call_id?: string }>;
@@ -1406,8 +1609,7 @@ describe("qa mock openai server", () => {
   it("emits the Slack native chart presentation through the declared message tool", async () => {
     const server = await startMockServer();
 
-    const undeclaredPayload = await expectResponsesJson(server, {
-      stream: false,
+    const undeclaredPayload = await expectNonStreamingResponsesJson(server, {
       model: "gpt-5.6-luna",
       input: [makeUserInput(SLACK_CHART_PROMPT)],
     });
@@ -1417,8 +1619,7 @@ describe("qa mock openai server", () => {
       ),
     ).toBe(false);
 
-    const declaredPayload = await expectResponsesJson(server, {
-      stream: false,
+    const declaredPayload = await expectNonStreamingResponsesJson(server, {
       model: "gpt-5.6-luna",
       tools: [MESSAGE_TOOL],
       input: [makeUserInput(SLACK_CHART_PROMPT)],
@@ -1426,17 +1627,15 @@ describe("qa mock openai server", () => {
     const toolCall = outputToolCall(declaredPayload, "message");
     expect(outputToolArgsFromItem(toolCall)).toEqual(SLACK_CHART_MESSAGE_TOOL_ARGS);
 
-    const afterToolPayload = await expectResponsesJson(server, {
-      stream: false,
+    const afterToolPayload = await expectNonStreamingResponsesJson(server, {
       model: "gpt-5.6-luna",
       tools: [MESSAGE_TOOL],
       input: [
         makeUserInput(SLACK_CHART_PROMPT),
-        {
-          type: "function_call_output",
-          call_id: outputToolCallId(toolCall, "call_mock_message_chart"),
-          output: "message sent",
-        },
+        makeToolOutputWithCallId(
+          outputToolCallId(toolCall, "call_mock_message_chart"),
+          "message sent",
+        ),
       ],
     });
     expect(
@@ -1450,8 +1649,7 @@ describe("qa mock openai server", () => {
   it("emits WhatsApp agent reaction message tool calls only when the tool is declared", async () => {
     const server = await startMockServer();
 
-    const undeclaredPayload = await expectResponsesJson(server, {
-      stream: false,
+    const undeclaredPayload = await expectNonStreamingResponsesJson(server, {
       model: "gpt-5.6-luna",
       input: [makeUserInput(WHATSAPP_AGENT_REACT_PROMPT)],
     });
@@ -1462,8 +1660,7 @@ describe("qa mock openai server", () => {
       ),
     ).toBe(false);
 
-    const unrelatedToolPayload = await expectResponsesJson(server, {
-      stream: false,
+    const unrelatedToolPayload = await expectNonStreamingResponsesJson(server, {
       model: "gpt-5.6-luna",
       tools: [READ_TOOL],
       input: [makeUserInput(WHATSAPP_AGENT_REACT_PROMPT)],
@@ -1475,14 +1672,12 @@ describe("qa mock openai server", () => {
       ),
     ).toBe(false);
 
-    const declaredPayload = await expectResponsesJson(server, {
-      stream: false,
+    const declaredPayload = await expectNonStreamingResponsesJson(server, {
       model: "gpt-5.6-luna",
       tools: [MESSAGE_TOOL],
       input: [makeUserInput(WHATSAPP_AGENT_REACT_PROMPT)],
     });
-    const groupDeclaredPayload = await expectResponsesJson(server, {
-      stream: false,
+    const groupDeclaredPayload = await expectNonStreamingResponsesJson(server, {
       model: "gpt-5.6-luna",
       tools: [MESSAGE_TOOL],
       input: [makeUserInput(WHATSAPP_GROUP_AGENT_REACT_PROMPT)],
@@ -1504,17 +1699,15 @@ describe("qa mock openai server", () => {
       emoji: "👍",
     });
 
-    const afterToolPayload = await expectResponsesJson(server, {
-      stream: false,
+    const afterToolPayload = await expectNonStreamingResponsesJson(server, {
       model: "gpt-5.6-luna",
       tools: [MESSAGE_TOOL],
       input: [
         makeUserInput(WHATSAPP_AGENT_REACT_PROMPT),
-        {
-          type: "function_call_output",
-          call_id: outputToolCallId(toolCall, "call_mock_message_react"),
-          output: "reaction sent",
-        },
+        makeToolOutputWithCallId(
+          outputToolCallId(toolCall, "call_mock_message_react"),
+          "reaction sent",
+        ),
       ],
     });
 
@@ -1534,8 +1727,7 @@ describe("qa mock openai server", () => {
   it("emits WhatsApp agent upload-file message tool calls only when the tool is declared", async () => {
     const server = await startMockServer();
 
-    const undeclaredPayload = await expectResponsesJson(server, {
-      stream: false,
+    const undeclaredPayload = await expectNonStreamingResponsesJson(server, {
       model: "gpt-5.6-luna",
       input: [makeUserInput(WHATSAPP_AGENT_UPLOAD_PROMPT)],
     });
@@ -1546,14 +1738,12 @@ describe("qa mock openai server", () => {
       ),
     ).toBe(false);
 
-    const declaredPayload = await expectResponsesJson(server, {
-      stream: false,
+    const declaredPayload = await expectNonStreamingResponsesJson(server, {
       model: "gpt-5.6-luna",
       tools: [MESSAGE_TOOL],
       input: [makeUserInput(WHATSAPP_AGENT_UPLOAD_PROMPT)],
     });
-    const groupDeclaredPayload = await expectResponsesJson(server, {
-      stream: false,
+    const groupDeclaredPayload = await expectNonStreamingResponsesJson(server, {
       model: "gpt-5.6-luna",
       tools: [MESSAGE_TOOL],
       input: [makeUserInput(WHATSAPP_GROUP_AGENT_UPLOAD_PROMPT)],
@@ -1574,17 +1764,15 @@ describe("qa mock openai server", () => {
     });
     expect(outputToolArgsFromItem(toolCall).buffer).toEqual(expect.any(String));
 
-    const afterToolPayload = await expectResponsesJson(server, {
-      stream: false,
+    const afterToolPayload = await expectNonStreamingResponsesJson(server, {
       model: "gpt-5.6-luna",
       tools: [MESSAGE_TOOL],
       input: [
         makeUserInput(WHATSAPP_AGENT_UPLOAD_PROMPT),
-        {
-          type: "function_call_output",
-          call_id: outputToolCallId(toolCall, "call_mock_message_upload"),
-          output: "media sent",
-        },
+        makeToolOutputWithCallId(
+          outputToolCallId(toolCall, "call_mock_message_upload"),
+          "media sent",
+        ),
       ],
     });
 
@@ -1611,8 +1799,7 @@ describe("qa mock openai server", () => {
         body: `quiet context ${WHATSAPP_PENDING_HISTORY_QUIET_MARKER} ${WHATSAPP_PENDING_HISTORY_CONTEXT_SENTINEL}`,
       },
     ]);
-    const withStructuredHistory = await expectResponsesJson(server, {
-      stream: false,
+    const withStructuredHistory = await expectNonStreamingResponsesJson(server, {
       model: "gpt-5.6-luna",
       input: [
         makeUserInput(currentTriggerPrompt),
@@ -1622,16 +1809,14 @@ describe("qa mock openai server", () => {
 
     expect(outputText(withStructuredHistory)).toBe(WHATSAPP_PENDING_HISTORY_OK_MARKER);
 
-    const withoutHistory = await expectResponsesJson(server, {
-      stream: false,
+    const withoutHistory = await expectNonStreamingResponsesJson(server, {
       model: "gpt-5.6-luna",
       input: [makeUserInput(currentTriggerPrompt)],
     });
 
     expect(outputText(withoutHistory)).not.toBe(WHATSAPP_PENDING_HISTORY_OK_MARKER);
 
-    const currentMessageOnlyMarkers = await expectResponsesJson(server, {
-      stream: false,
+    const currentMessageOnlyMarkers = await expectNonStreamingResponsesJson(server, {
       model: "gpt-5.6-luna",
       input: [
         makeDeveloperInput(
@@ -1654,8 +1839,7 @@ describe("qa mock openai server", () => {
 
     expect(outputText(currentMessageOnlyMarkers)).not.toBe(WHATSAPP_PENDING_HISTORY_OK_MARKER);
 
-    const ordinaryEarlierUserMarkers = await expectResponsesJson(server, {
-      stream: false,
+    const ordinaryEarlierUserMarkers = await expectNonStreamingResponsesJson(server, {
       model: "gpt-5.6-luna",
       input: [
         makeUserInput(
@@ -1667,8 +1851,7 @@ describe("qa mock openai server", () => {
 
     expect(outputText(ordinaryEarlierUserMarkers)).not.toBe(WHATSAPP_PENDING_HISTORY_OK_MARKER);
 
-    const contextWithoutCurrentTrigger = await expectResponsesJson(server, {
-      stream: false,
+    const contextWithoutCurrentTrigger = await expectNonStreamingResponsesJson(server, {
       model: "gpt-5.6-luna",
       input: [
         makeUserInput(
@@ -1685,16 +1868,14 @@ describe("qa mock openai server", () => {
   it("uses the WhatsApp broadcast runtime agent id context for distinct markers", async () => {
     const server = await startMockServer();
 
-    const mainPayload = await expectResponsesJson(server, {
-      stream: false,
+    const mainPayload = await expectNonStreamingResponsesJson(server, {
       model: "gpt-5.6-luna",
       input: [
         makeDeveloperInput("Runtime: agent=main | channel=whatsapp | capabilities=messageactions"),
         makeUserInput(WHATSAPP_BROADCAST_PROMPT),
       ],
     });
-    const secondPayload = await expectResponsesJson(server, {
-      stream: false,
+    const secondPayload = await expectNonStreamingResponsesJson(server, {
       model: "gpt-5.6-luna",
       input: [
         makeDeveloperInput(
@@ -1703,8 +1884,7 @@ describe("qa mock openai server", () => {
         makeUserInput(WHATSAPP_BROADCAST_PROMPT),
       ],
     });
-    const noIdentityPayload = await expectResponsesJson(server, {
-      stream: false,
+    const noIdentityPayload = await expectNonStreamingResponsesJson(server, {
       model: "gpt-5.6-luna",
       input: [
         makeDeveloperInput("Runtime: channel=whatsapp | capabilities=messageactions"),
@@ -1722,13 +1902,11 @@ describe("qa mock openai server", () => {
   it("answers the WhatsApp activation-always marker without matching unrelated prompts", async () => {
     const server = await startMockServer();
 
-    const activationPayload = await expectResponsesJson(server, {
-      stream: false,
+    const activationPayload = await expectNonStreamingResponsesJson(server, {
       model: "gpt-5.6-luna",
       input: [makeUserInput(WHATSAPP_ACTIVATION_ALWAYS_PROMPT)],
     });
-    const unrelatedPayload = await expectResponsesJson(server, {
-      stream: false,
+    const unrelatedPayload = await expectNonStreamingResponsesJson(server, {
       model: "gpt-5.6-luna",
       input: [makeUserInput("Group activation visible behavior marker WHATSAPP_QA_UNRELATED_TEST")],
     });
@@ -1740,18 +1918,15 @@ describe("qa mock openai server", () => {
   it("answers reply-to-bot seed and implicit quoted-trigger markers deterministically", async () => {
     const server = await startMockServer();
 
-    const seedPayload = await expectResponsesJson(server, {
-      stream: false,
+    const seedPayload = await expectNonStreamingResponsesJson(server, {
       model: "gpt-5.6-luna",
       input: [makeUserInput(WHATSAPP_REPLY_TO_BOT_SEED_PROMPT)],
     });
-    const triggerPayload = await expectResponsesJson(server, {
-      stream: false,
+    const triggerPayload = await expectNonStreamingResponsesJson(server, {
       model: "gpt-5.6-luna",
       input: [makeUserInput(WHATSAPP_REPLY_TO_BOT_TRIGGER_PROMPT)],
     });
-    const unrelatedPayload = await expectResponsesJson(server, {
-      stream: false,
+    const unrelatedPayload = await expectNonStreamingResponsesJson(server, {
       model: "gpt-5.6-luna",
       input: [makeUserInput("Quoted implicit reply trigger marker WHATSAPP_QA_UNRELATED_TEST")],
     });
@@ -1763,36 +1938,20 @@ describe("qa mock openai server", () => {
   });
 
   it("continues repo-contract followthrough when a retry user item follows tool output", async () => {
-    const server = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await server.stop();
-    });
+    const server = await startMockServer();
 
     const prompt =
       "Repo contract followthrough check. Read AGENT.md, SOUL.md, and FOLLOWTHROUGH_INPUT.md first. Then follow the repo contract exactly, write ./repo-contract-summary.txt, and reply with three labeled lines: Read, Wrote, Status.";
 
-    const response = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        stream: true,
-        model: "gpt-5.6-luna",
-        input: [
-          { role: "user", content: [{ type: "input_text", text: prompt }] },
-          {
-            type: "function_call_output",
-            output:
-              "# Repo contract\n\nStep order:\n1. Read AGENT.md.\n2. Read SOUL.md.\n3. Read FOLLOWTHROUGH_INPUT.md.\n4. Write ./repo-contract-summary.txt.\n",
-          },
-          {
-            role: "user",
-            content: [{ type: "input_text", text: "Continue after compaction." }],
-          },
-        ],
-      }),
+    const response = await postStreamingResponses(server, {
+      model: "gpt-5.6-luna",
+      input: [
+        makeUserInput(prompt),
+        makeToolOutput(
+          "# Repo contract\n\nStep order:\n1. Read AGENT.md.\n2. Read SOUL.md.\n3. Read FOLLOWTHROUGH_INPUT.md.\n4. Write ./repo-contract-summary.txt.\n",
+        ),
+        makeUserInput("Continue after compaction."),
+      ],
     });
 
     expect(response.status).toBe(200);
@@ -1800,40 +1959,23 @@ describe("qa mock openai server", () => {
   });
 
   it("continues repo-contract followthrough from structured tool output", async () => {
-    const server = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await server.stop();
-    });
+    const server = await startMockServer();
 
     const prompt =
       "Repo contract followthrough check. Read AGENT.md, SOUL.md, and FOLLOWTHROUGH_INPUT.md first. Then follow the repo contract exactly, write ./repo-contract-summary.txt, and reply with three labeled lines: Read, Wrote, Status.";
 
-    const response = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        stream: true,
-        model: "gpt-5.6-luna",
-        input: [
-          { role: "user", content: [{ type: "input_text", text: prompt }] },
+    const response = await postStreamingResponses(server, {
+      model: "gpt-5.6-luna",
+      input: [
+        makeUserInput(prompt),
+        makeToolOutput([
           {
-            type: "function_call_output",
-            output: [
-              {
-                type: "output_text",
-                text: "# Repo contract\n\nStep order:\n1. Read AGENT.md.\n2. Read SOUL.md.\n3. Read FOLLOWTHROUGH_INPUT.md.\n4. Write ./repo-contract-summary.txt.\n",
-              },
-            ],
+            type: "output_text",
+            text: "# Repo contract\n\nStep order:\n1. Read AGENT.md.\n2. Read SOUL.md.\n3. Read FOLLOWTHROUGH_INPUT.md.\n4. Write ./repo-contract-summary.txt.\n",
           },
-          {
-            role: "user",
-            content: [{ type: "input_text", text: "Continue after compaction." }],
-          },
-        ],
-      }),
+        ]),
+        makeUserInput("Continue after compaction."),
+      ],
     });
 
     expect(response.status).toBe(200);
@@ -1841,41 +1983,20 @@ describe("qa mock openai server", () => {
   });
 
   it("advances repo-contract followthrough when transcript text is newer than extracted tool output", async () => {
-    const server = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await server.stop();
-    });
+    const server = await startMockServer();
 
     const prompt =
       "Repo contract followthrough check. Read AGENT.md, SOUL.md, and FOLLOWTHROUGH_INPUT.md first. Then follow the repo contract exactly, write ./repo-contract-summary.txt, and reply with three labeled lines: Read, Wrote, Status.";
 
-    const response = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        stream: true,
-        model: "gpt-5.6-luna",
-        input: [
-          { role: "user", content: [{ type: "input_text", text: prompt }] },
-          {
-            type: "function_call_output",
-            output:
-              "# Repo contract\n\nStep order:\n1. Read AGENT.md.\n2. Read SOUL.md.\n3. Read FOLLOWTHROUGH_INPUT.md.\n4. Write ./repo-contract-summary.txt.\n",
-          },
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: "# Execution style\n\nStay brief, honest, and action-first.\n",
-              },
-            ],
-          },
-        ],
-      }),
+    const response = await postStreamingResponses(server, {
+      model: "gpt-5.6-luna",
+      input: [
+        makeUserInput(prompt),
+        makeToolOutput(
+          "# Repo contract\n\nStep order:\n1. Read AGENT.md.\n2. Read SOUL.md.\n3. Read FOLLOWTHROUGH_INPUT.md.\n4. Write ./repo-contract-summary.txt.\n",
+        ),
+        makeUserInput("# Execution style\n\nStay brief, honest, and action-first.\n"),
+      ],
     });
 
     expect(response.status).toBe(200);
@@ -1884,89 +2005,32 @@ describe("qa mock openai server", () => {
     );
   });
 
-  it("keeps the dreaming shadow trial ahead of system exact-reply fallbacks", async () => {
-    const server = await startMockServer();
-    const response = await postResponses(server, {
-      stream: true,
-      model: "gpt-5.6-luna",
-      input: [
-        {
-          role: "system",
-          content: [
-            {
-              type: "input_text",
-              text: "Nothing to say: entire reply exactly NO_REPLY",
-            },
-          ],
-        },
-        makeUserInput(
-          "Dreaming shadow trial report check. Read DREAMING_SHADOW_TRIAL_BRIEF.md and DREAMING_CANDIDATE_EVIDENCE.md first. Reply with the report path and exact marker DREAMING-SHADOW-TRIAL-OK.",
-        ),
-      ],
-    });
-
-    expect(response.status).toBe(200);
-    const body = await response.text();
-    expect(body).toContain('"name":"read"');
-    expect(body).toContain('"arguments":"{\\"path\\":\\"DREAMING_SHADOW_TRIAL_BRIEF.md\\"}"');
-    expect(body).not.toContain('"text":"NO_REPLY"');
-
-    const debugResponse = await fetch(`${server.baseUrl}/debug/last-request`);
-    expect(debugResponse.status).toBe(200);
-    const debugPayload = requireRecord(await debugResponse.json(), "debug request");
-    expect(debugPayload.plannedToolName).toBe("read");
-  });
-
   it("advances personal task followthrough when transcript text is newer than extracted tool output", async () => {
-    const server = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await server.stop();
-    });
+    const server = await startMockServer();
 
     const prompt =
       "Personal task followthrough check. Read PERSONAL_TASK_LEDGER.md and FOLLOWTHROUGH_NOTE.md first. Then write ./personal-task-status.txt and reply with three labeled lines: Pending, Blocked, Done.";
 
-    const first = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        stream: true,
-        model: "gpt-5.6-luna",
-        input: [{ role: "user", content: [{ type: "input_text", text: prompt }] }],
-      }),
+    const first = await postStreamingResponses(server, {
+      model: "gpt-5.6-luna",
+      input: [makeUserInput(prompt)],
     });
     expect(first.status).toBe(200);
     const firstBody = await first.text();
     expect(firstBody).toContain('"arguments":"{\\"path\\":\\"PERSONAL_TASK_LEDGER.md\\"}"');
     expect(firstBody).not.toContain("repo/package.json");
 
-    const response = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        stream: true,
-        model: "gpt-5.6-luna",
-        input: [
-          { role: "user", content: [{ type: "input_text", text: prompt }] },
-          {
-            type: "function_call_output",
-            output:
-              "# Personal task ledger\n\nRequired status contract:\n1. Read PERSONAL_TASK_LEDGER.md.\n2. Read FOLLOWTHROUGH_NOTE.md.\n3. Write ./personal-task-status.txt.\n",
-          },
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: "Task: prepare a local OpenClaw PR readiness note.\nPending: wait for maintainer feedback before publishing.\nBlocked: publishing needs explicit user approval.\nDone: local evidence captured in personal-task-status.txt.\n",
-              },
-            ],
-          },
-        ],
-      }),
+    const response = await postStreamingResponses(server, {
+      model: "gpt-5.6-luna",
+      input: [
+        makeUserInput(prompt),
+        makeToolOutput(
+          "# Personal task ledger\n\nRequired status contract:\n1. Read PERSONAL_TASK_LEDGER.md.\n2. Read FOLLOWTHROUGH_NOTE.md.\n3. Write ./personal-task-status.txt.\n",
+        ),
+        makeUserInput(
+          "Task: prepare a local OpenClaw PR readiness note.\nPending: wait for maintainer feedback before publishing.\nBlocked: publishing needs explicit user approval.\nDone: local evidence captured in personal-task-status.txt.\n",
+        ),
+      ],
     });
 
     expect(response.status).toBe(200);
@@ -1976,55 +2040,31 @@ describe("qa mock openai server", () => {
   });
 
   it("gates personal completion claims on a written proof artifact", async () => {
-    const server = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await server.stop();
-    });
+    const server = await startMockServer();
 
     const prompt =
       "Personal no-fake-progress check. Read PROGRESS_REQUEST.md and PROGRESS_EVIDENCE.md first. Then write ./personal-progress-proof.txt with the local evidence and external status.";
 
-    const first = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        stream: true,
-        model: "gpt-5.6-luna",
-        input: [{ role: "user", content: [{ type: "input_text", text: prompt }] }],
-      }),
+    const first = await postStreamingResponses(server, {
+      model: "gpt-5.6-luna",
+      input: [makeUserInput(prompt)],
     });
     expect(first.status).toBe(200);
     const firstBody = await first.text();
     expect(firstBody).toContain('"arguments":"{\\"path\\":\\"PROGRESS_REQUEST.md\\"}"');
     expect(firstBody).not.toContain("sent successfully");
 
-    const writePlan = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        stream: true,
-        model: "gpt-5.6-luna",
-        input: [
-          { role: "user", content: [{ type: "input_text", text: prompt }] },
-          {
-            type: "function_call_output",
-            output:
-              "# Progress request\n\nRequired contract:\n1. Read PROGRESS_REQUEST.md.\n2. Read PROGRESS_EVIDENCE.md.\n3. Write ./personal-progress-proof.txt.\n",
-          },
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: "# Progress evidence\n\nTask: prepare a maintainer-ready local handoff note.\nExternal status: not sent, not published, not uploaded, not merged.\nHonest completion claim: local proof artifact written.\n",
-              },
-            ],
-          },
-        ],
-      }),
+    const writePlan = await postStreamingResponses(server, {
+      model: "gpt-5.6-luna",
+      input: [
+        makeUserInput(prompt),
+        makeToolOutput(
+          "# Progress request\n\nRequired contract:\n1. Read PROGRESS_REQUEST.md.\n2. Read PROGRESS_EVIDENCE.md.\n3. Write ./personal-progress-proof.txt.\n",
+        ),
+        makeUserInput(
+          "# Progress evidence\n\nTask: prepare a maintainer-ready local handoff note.\nExternal status: not sent, not published, not uploaded, not merged.\nHonest completion claim: local proof artifact written.\n",
+        ),
+      ],
     });
 
     expect(writePlan.status).toBe(200);
@@ -2033,21 +2073,14 @@ describe("qa mock openai server", () => {
     expect(writeBody).toContain("personal-progress-proof.txt");
     expect(writeBody).not.toContain("published successfully");
 
-    const final = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        stream: true,
-        model: "gpt-5.6-luna",
-        input: [
-          { role: "user", content: [{ type: "input_text", text: prompt }] },
-          {
-            type: "function_call_output",
-            output:
-              "Successfully wrote personal-progress-proof.txt with local proof artifact written.",
-          },
-        ],
-      }),
+    const final = await postStreamingResponses(server, {
+      model: "gpt-5.6-luna",
+      input: [
+        makeUserInput(prompt),
+        makeToolOutput(
+          "Successfully wrote personal-progress-proof.txt with local proof artifact written.",
+        ),
+      ],
     });
 
     expect(final.status).toBe(200);
@@ -2058,55 +2091,31 @@ describe("qa mock openai server", () => {
   });
 
   it("reports personal failure recovery with a retry boundary", async () => {
-    const server = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await server.stop();
-    });
+    const server = await startMockServer();
 
     const prompt =
       "Personal failure recovery check. Read FAILURE_RECOVERY_REQUEST.md and FAILURE_RECOVERY_EVIDENCE.md first. Then write ./personal-failure-recovery.txt with Completed, Failed step, Retry boundary, and Next step.";
 
-    const first = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        stream: true,
-        model: "gpt-5.6-luna",
-        input: [{ role: "user", content: [{ type: "input_text", text: prompt }] }],
-      }),
+    const first = await postStreamingResponses(server, {
+      model: "gpt-5.6-luna",
+      input: [makeUserInput(prompt)],
     });
     expect(first.status).toBe(200);
     const firstBody = await first.text();
     expect(firstBody).toContain('"arguments":"{\\"path\\":\\"FAILURE_RECOVERY_REQUEST.md\\"}"');
     expect(firstBody).not.toContain("fully complete");
 
-    const writePlan = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        stream: true,
-        model: "gpt-5.6-luna",
-        input: [
-          { role: "user", content: [{ type: "input_text", text: prompt }] },
-          {
-            type: "function_call_output",
-            output:
-              "# Failure recovery request\n\nRequired contract:\n1. Read FAILURE_RECOVERY_REQUEST.md.\n2. Read FAILURE_RECOVERY_EVIDENCE.md.\n3. Write ./personal-failure-recovery.txt.\n",
-          },
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: "# Failure recovery evidence\n\nCompleted: request reviewed and local evidence captured.\nFailed step: external calendar update was not attempted because explicit approval is missing.\nRetry boundary: do not retry the external step until approval is given.\nNext step: ask for approval before any external update.\n",
-              },
-            ],
-          },
-        ],
-      }),
+    const writePlan = await postStreamingResponses(server, {
+      model: "gpt-5.6-luna",
+      input: [
+        makeUserInput(prompt),
+        makeToolOutput(
+          "# Failure recovery request\n\nRequired contract:\n1. Read FAILURE_RECOVERY_REQUEST.md.\n2. Read FAILURE_RECOVERY_EVIDENCE.md.\n3. Write ./personal-failure-recovery.txt.\n",
+        ),
+        makeUserInput(
+          "# Failure recovery evidence\n\nCompleted: request reviewed and local evidence captured.\nFailed step: external calendar update was not attempted because explicit approval is missing.\nRetry boundary: do not retry the external step until approval is given.\nNext step: ask for approval before any external update.\n",
+        ),
+      ],
     });
 
     expect(writePlan.status).toBe(200);
@@ -2116,21 +2125,14 @@ describe("qa mock openai server", () => {
     expect(writeBody).toContain("Retry boundary: do not retry");
     expect(writeBody).not.toContain("retry succeeded");
 
-    const final = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        stream: true,
-        model: "gpt-5.6-luna",
-        input: [
-          { role: "user", content: [{ type: "input_text", text: prompt }] },
-          {
-            type: "function_call_output",
-            output:
-              "Successfully wrote personal-failure-recovery.txt with the failed step and retry boundary.",
-          },
-        ],
-      }),
+    const final = await postStreamingResponses(server, {
+      model: "gpt-5.6-luna",
+      input: [
+        makeUserInput(prompt),
+        makeToolOutput(
+          "Successfully wrote personal-failure-recovery.txt with the failed step and retry boundary.",
+        ),
+      ],
     });
 
     expect(final.status).toBe(200);
@@ -2141,68 +2143,32 @@ describe("qa mock openai server", () => {
   });
 
   it("drives the compaction retry mutating tool parity flow", async () => {
-    const server = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await server.stop();
-    });
+    const server = await startMockServer();
 
-    const writePlan = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        stream: true,
-        model: "gpt-5.6-luna",
-        input: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: "Compaction retry mutating tool check: read COMPACTION_RETRY_CONTEXT.md, then create compaction-retry-summary.txt and keep replay safety explicit.",
-              },
-            ],
-          },
-          {
-            type: "function_call_output",
-            output: "compaction retry evidence block 0000\ncompaction retry evidence block 0001",
-          },
-        ],
-      }),
+    const writePlan = await postStreamingResponses(server, {
+      model: "gpt-5.6-luna",
+      input: [
+        makeUserInput(
+          "Compaction retry mutating tool check: read COMPACTION_RETRY_CONTEXT.md, then create compaction-retry-summary.txt and keep replay safety explicit.",
+        ),
+        makeToolOutput(
+          "compaction retry evidence block 0000\ncompaction retry evidence block 0001",
+        ),
+      ],
     });
     expect(writePlan.status).toBe(200);
     const writePlanBody = await writePlan.text();
     expect(writePlanBody).toContain('"name":"write"');
     expect(writePlanBody).toContain("compaction-retry-summary.txt");
 
-    const finalReply = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        stream: false,
-        model: "gpt-5.6-luna",
-        input: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: "Compaction retry mutating tool check: read COMPACTION_RETRY_CONTEXT.md, then create compaction-retry-summary.txt and keep replay safety explicit.",
-              },
-            ],
-          },
-          {
-            type: "function_call_output",
-            output: "Successfully wrote 41 bytes to compaction-retry-summary.txt.",
-          },
-        ],
-      }),
+    const finalReply = await postNonStreamingResponses(server, {
+      model: "gpt-5.6-luna",
+      input: [
+        makeUserInput(
+          "Compaction retry mutating tool check: read COMPACTION_RETRY_CONTEXT.md, then create compaction-retry-summary.txt and keep replay safety explicit.",
+        ),
+        makeToolOutput("Successfully wrote 41 bytes to compaction-retry-summary.txt."),
+      ],
     });
     expect(finalReply.status).toBe(200);
     const finalPayload = (await finalReply.json()) as {
@@ -2212,101 +2178,56 @@ describe("qa mock openai server", () => {
   });
 
   it("keeps compaction retry planning across continuation prompts", async () => {
-    const server = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await server.stop();
-    });
+    const server = await startMockServer();
 
     const prompt =
       "Compaction retry mutating tool check: read COMPACTION_RETRY_CONTEXT.md, then create compaction-retry-summary.txt and keep replay safety explicit.";
-    const writePlan = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        stream: true,
-        model: "gpt-5.6-luna",
-        input: [
-          makeUserInput(prompt),
-          {
-            type: "function_call_output",
-            output: "compaction retry evidence block 0000\ncompaction retry evidence block 0001",
-          },
-          makeUserInput("Continue after compaction."),
-        ],
-      }),
+    const writePlan = await postStreamingResponses(server, {
+      model: "gpt-5.6-luna",
+      input: [
+        makeUserInput(prompt),
+        makeToolOutput(
+          "compaction retry evidence block 0000\ncompaction retry evidence block 0001",
+        ),
+        makeUserInput("Continue after compaction."),
+      ],
     });
     expect(writePlan.status).toBe(200);
     expect(await writePlan.text()).toContain('"name":"write"');
 
-    const contextOnlyWritePlan = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        stream: true,
-        model: "gpt-5.6-luna",
-        input: [
-          {
-            type: "function_call_output",
-            output: "compaction retry evidence block 0000\ncompaction retry evidence block 0001",
-          },
-          makeUserInput("Continue after compaction."),
-        ],
-      }),
+    const contextOnlyWritePlan = await postStreamingResponses(server, {
+      model: "gpt-5.6-luna",
+      input: [
+        makeToolOutput(
+          "compaction retry evidence block 0000\ncompaction retry evidence block 0001",
+        ),
+        makeUserInput("Continue after compaction."),
+      ],
     });
     expect(contextOnlyWritePlan.status).toBe(200);
     expect(await contextOnlyWritePlan.text()).toContain('"name":"write"');
 
-    const finalReply = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        stream: false,
-        model: "gpt-5.6-luna",
-        input: [
-          makeUserInput(prompt),
-          {
-            type: "function_call_output",
-            output: "Successfully wrote 41 bytes to compaction-retry-summary.txt.",
-          },
-          makeUserInput("Continue after compaction."),
-        ],
-      }),
+    const finalReply = await postNonStreamingResponses(server, {
+      model: "gpt-5.6-luna",
+      input: [
+        makeUserInput(prompt),
+        makeToolOutput("Successfully wrote 41 bytes to compaction-retry-summary.txt."),
+        makeUserInput("Continue after compaction."),
+      ],
     });
     expect(finalReply.status).toBe(200);
     expect(outputText(await finalReply.json())).toContain("replay unsafe after write");
   });
 
   it("supports exact reply memory prompts and embeddings requests", async () => {
-    const server = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await server.stop();
-    });
+    const server = await startMockServer();
 
-    const remember = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        stream: false,
-        input: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: "Please remember this fact for later: the QA canary code is ALPHA-7. Reply exactly `Remembered ALPHA-7.` once stored.",
-              },
-            ],
-          },
-        ],
-      }),
+    const remember = await postNonStreamingResponses(server, {
+      input: [
+        makeUserInput(
+          "Please remember this fact for later: the QA canary code is ALPHA-7. Reply exactly `Remembered ALPHA-7.` once stored.",
+        ),
+      ],
     });
     expect(remember.status).toBe(200);
     const rememberPayload = (await remember.json()) as {
@@ -2336,34 +2257,15 @@ describe("qa mock openai server", () => {
   });
 
   it("requests non-threaded subagent handoff for QA channel runs", async () => {
-    const server = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await server.stop();
-    });
+    const server = await startMockServer();
 
-    const response = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        stream: true,
-        tools: [SESSIONS_SPAWN_TOOL],
-        input: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: "Delegate a bounded QA task to a subagent, then summarize the delegated result clearly.",
-              },
-            ],
-          },
-        ],
-      }),
+    const response = await postStreamingResponses(server, {
+      tools: [SESSIONS_SPAWN_TOOL],
+      input: [
+        makeUserInput(
+          "Delegate a bounded QA task to a subagent, then summarize the delegated result clearly.",
+        ),
+      ],
     });
     expect(response.status).toBe(200);
     const body = await response.text();
@@ -2378,17 +2280,7 @@ describe("qa mock openai server", () => {
     const body = await expectResponsesText(server, {
       stream: true,
       tools: [SESSIONS_SPAWN_TOOL],
-      input: [
-        {
-          role: "user",
-          content: [
-            {
-              type: "input_text",
-              text: explicitSessionsSpawnPrompt("QA_SUBAGENT_CHILD_FIXED"),
-            },
-          ],
-        },
-      ],
+      input: [makeUserInput(explicitSessionsSpawnPrompt("QA_SUBAGENT_CHILD_FIXED"))],
     });
     expect(body).toContain('"name":"sessions_spawn"');
     expect(body).toContain('\\"label\\":\\"qa-thread-subagent\\"');
@@ -2421,14 +2313,25 @@ describe("qa mock openai server", () => {
     expect(plannedToolArgs.mode).toBe("run");
   });
 
-  it("drives yielded-parent subagent fallback QA through sessions_spawn and sessions_yield", async () => {
+  it.each([
+    {
+      name: "flat tools",
+      tools: [SESSIONS_SPAWN_TOOL, SESSIONS_YIELD_TOOL],
+      namespace: undefined,
+    },
+    {
+      name: "Codex direct-only tools",
+      tools: [SESSIONS_SPAWN_TOOL, CODEX_DIRECT_YIELD_NAMESPACE],
+      namespace: "openclaw_direct",
+    },
+  ])("drives yielded-parent subagent fallback through $name", async ({ tools, namespace }) => {
     const server = await startMockServer();
     const prompt =
       "Subagent direct fallback QA check: spawn one worker and yield until QA-SUBAGENT-DIRECT-FALLBACK-OK is delivered.";
 
     await expectResponsesText(server, {
       stream: true,
-      tools: [SESSIONS_SPAWN_TOOL, SESSIONS_YIELD_TOOL],
+      tools,
       input: [makeUserInput(prompt)],
     });
 
@@ -2445,23 +2348,25 @@ describe("qa mock openai server", () => {
 
     const body = await expectResponsesText(server, {
       stream: true,
-      tools: [SESSIONS_SPAWN_TOOL, SESSIONS_YIELD_TOOL],
+      tools,
       input: [
         makeUserInput(prompt),
-        {
-          type: "function_call_output",
-          call_id: "call_mock_sessions_spawn_1",
-          output: JSON.stringify({
+        makeToolOutputWithCallId(
+          "call_mock_sessions_spawn_1",
+          JSON.stringify({
             status: "accepted",
             childSessionKey: "agent:qa:subagent:child",
             runId: "run-child-1",
           }),
-        },
+        ),
       ],
     });
 
     expect(body).toContain('"name":"sessions_yield"');
     expect(body).toContain("QA-SUBAGENT-DIRECT-FALLBACK-OK");
+    if (namespace) {
+      expect(body.match(new RegExp(`"namespace":"${namespace}"`, "g"))).toHaveLength(3);
+    }
     const yieldDebug = requireRecord(
       await (await fetch(`${server.baseUrl}/debug/last-request`)).json(),
       "yield debug request",
@@ -2472,10 +2377,9 @@ describe("qa mock openai server", () => {
   it("returns no visible announce output for the direct fallback QA marker", async () => {
     const server = await startMockServer();
 
-    const body = await expectResponsesJson<{
+    const body = await expectNonStreamingResponsesJson<{
       output?: Array<{ content?: Array<{ text?: string }> }>;
     }>(server, {
-      stream: false,
       input: [
         makeUserInput(
           [
@@ -2490,13 +2394,88 @@ describe("qa mock openai server", () => {
     expect(body.output?.[0]?.content?.[0]?.text).toBe("");
   });
 
+  it.each([
+    { name: "no current tools", tools: [] },
+    { name: "message-only current tools", tools: [MESSAGE_TOOL] },
+    {
+      name: "protected completion context and delegated tools",
+      tools: [SESSIONS_SPAWN_TOOL, SESSIONS_YIELD_TOOL],
+      protectedContext: true,
+    },
+  ])(
+    "does not replay historical direct-fallback spawn or yield with $name",
+    async ({ tools, protectedContext }) => {
+      const server = await startMockServer();
+      const kickoff =
+        "Subagent direct fallback QA check: spawn one worker and yield until QA-SUBAGENT-DIRECT-FALLBACK-OK is delivered.";
+      const completion = [
+        "[Internal task completion event]",
+        "Task: qa-direct-fallback-worker",
+        "Result: QA-SUBAGENT-DIRECT-FALLBACK-OK",
+      ].join("\n");
+
+      const payload = await expectNonStreamingResponsesJson(server, {
+        tools,
+        instructions:
+          "Historical sessions_spawn and sessions_yield guidance does not grant completion-turn tools.",
+        input: [
+          makeUserInput(kickoff),
+          makeDeveloperInput("Current completion handoff may use only the declared tool surface."),
+          makeUserInput(
+            protectedContext
+              ? TEST_RUNTIME_CONTEXT_CARRIER.replace("runtime metadata", completion)
+              : completion,
+          ),
+        ],
+      });
+
+      expect(outputItems(payload).some((item) => item.type === "function_call")).toBe(false);
+      expect(outputText(payload)).toBe("");
+      const debugRequest = requireRecord(
+        await (await fetch(`${server.baseUrl}/debug/last-request`)).json(),
+        "completion debug request",
+      );
+      expect(debugRequest).not.toHaveProperty("plannedToolName");
+    },
+  );
+
+  it("prefers the current direct-fallback worker turn over an earlier parent kickoff", async () => {
+    const server = await startMockServer();
+    const payload = await expectNonStreamingResponsesJson(server, {
+      tools: [SESSIONS_SPAWN_TOOL, SESSIONS_YIELD_TOOL],
+      input: [
+        makeUserInput("Subagent direct fallback QA check: spawn one worker and yield."),
+        makeUserInput(
+          "Subagent direct fallback worker: finish with exactly QA-SUBAGENT-DIRECT-FALLBACK-OK.",
+        ),
+      ],
+    });
+
+    expect(outputItems(payload).some((item) => item.type === "function_call")).toBe(false);
+    expect(outputText(payload)).toBe("QA-SUBAGENT-DIRECT-FALLBACK-OK");
+  });
+
+  it("does not treat prompt or instruction mentions as callable subagent tools", async () => {
+    const server = await startMockServer();
+    const payload = await expectNonStreamingResponsesJson(server, {
+      tools: [MESSAGE_TOOL],
+      instructions: "The prior run used sessions_spawn and sessions_yield.",
+      input: [
+        makeUserInput(
+          'Use sessions_spawn for this QA check. task="Return historical answer" label=qa-stale.',
+        ),
+      ],
+    });
+
+    expect(outputItems(payload).some((item) => item.type === "function_call")).toBe(false);
+  });
+
   it("surfaces sessions_spawn tool errors instead of echoing child-task tokens", async () => {
     const server = await startMockServer();
 
-    const body = await expectResponsesJson<{
+    const body = await expectNonStreamingResponsesJson<{
       output?: Array<{ content?: Array<{ text?: string }> }>;
     }>(server, {
-      stream: false,
       tools: [SESSIONS_SPAWN_TOOL],
       input: [
         makeUserInput(explicitSessionsSpawnPrompt(THREAD_SUBAGENT_CHILD_ERROR_TOKEN)),
@@ -2510,13 +2489,12 @@ describe("qa mock openai server", () => {
             mode: "session",
           }),
         },
-        {
-          type: "function_call_output",
-          output: JSON.stringify({
+        makeToolOutput(
+          JSON.stringify({
             status: "error",
             error: THREAD_SUBAGENT_TOOL_ERROR,
           }),
-        },
+        ),
       ],
     });
 
@@ -2529,10 +2507,9 @@ describe("qa mock openai server", () => {
     const server = await startMockServer();
     const childToken = "QA_SUBAGENT_CHILD_ACCEPTED";
 
-    const body = await expectResponsesJson<{
+    const body = await expectNonStreamingResponsesJson<{
       output?: Array<{ content?: Array<{ text?: string }> }>;
     }>(server, {
-      stream: false,
       tools: [SESSIONS_SPAWN_TOOL],
       input: [
         makeUserInput(explicitSessionsSpawnPrompt(childToken)),
@@ -2546,13 +2523,12 @@ describe("qa mock openai server", () => {
             mode: "session",
           }),
         },
-        {
-          type: "function_call_output",
-          output: JSON.stringify({
+        makeToolOutput(
+          JSON.stringify({
             status: "accepted",
             threadRootEventId: "$thread-root",
           }),
-        },
+        ),
       ],
     });
 
@@ -2565,10 +2541,9 @@ describe("qa mock openai server", () => {
     const server = await startMockServer();
     const childToken = "QA_SUBAGENT_CHILD_DIRECT";
 
-    const childPayload = await expectResponsesJson<{
+    const childPayload = await expectNonStreamingResponsesJson<{
       output?: Array<{ content?: Array<{ text?: string }> }>;
     }>(server, {
-      stream: false,
       input: [makeUserInput(threadSubagentTask(childToken))],
     });
     expect(outputText(childPayload)).toBe(childToken);
@@ -2578,10 +2553,9 @@ describe("qa mock openai server", () => {
     const server = await startMockServer();
     const childToken = "QA_SUBAGENT_CHILD_WITH_PARENT_CONTEXT";
 
-    const childPayload = await expectResponsesJson<{
+    const childPayload = await expectNonStreamingResponsesJson<{
       output?: Array<{ content?: Array<{ text?: string }> }>;
     }>(server, {
-      stream: false,
       input: [
         makeUserInput(explicitSessionsSpawnPrompt(childToken)),
         makeUserInput(threadSubagentTask(childToken)),
@@ -2591,76 +2565,35 @@ describe("qa mock openai server", () => {
   });
 
   it("plans memory tools and serves mock image generations", async () => {
-    const server = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await server.stop();
-    });
+    const server = await startMockServer();
 
-    const memorySearch = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        stream: true,
-        input: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: "Memory tools check: what is the hidden project codename stored only in memory? Use memory tools first.",
-              },
-            ],
-          },
-        ],
-      }),
+    const memorySearch = await postStreamingResponses(server, {
+      input: [
+        makeUserInput(
+          "Memory tools check: what is the hidden project codename stored only in memory? Use memory tools first.",
+        ),
+      ],
     });
     expect(memorySearch.status).toBe(200);
     expect(await memorySearch.text()).toContain('"name":"memory_search"');
 
-    const memoryGetFromPathOnlySearchResult = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        stream: true,
-        input: [
-          {
-            role: "user",
-            content: [
+    const memoryGetFromPathOnlySearchResult = await postStreamingResponses(server, {
+      input: [
+        makeUserInput(
+          "Memory tools check: what is the hidden project codename stored only in memory? Use memory tools first.",
+        ),
+        makeToolOutput(
+          JSON.stringify({
+            results: [
               {
-                type: "input_text",
-                text: "Memory tools check: what is the hidden project codename stored only in memory? Use memory tools first.",
+                path: "MEMORY.md",
+                snippet: "Hidden QA fact: the project codename is ORBIT-9.",
               },
             ],
-          },
-          {
-            type: "function_call_output",
-            output: JSON.stringify({
-              results: [
-                {
-                  path: "MEMORY.md",
-                  snippet: "Hidden QA fact: the project codename is ORBIT-9.",
-                },
-              ],
-            }),
-          },
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: "Protocol note: acknowledged. Continue with the QA scenario plan.",
-              },
-            ],
-          },
-        ],
-      }),
+          }),
+        ),
+        makeUserInput("Protocol note: acknowledged. Continue with the QA scenario plan."),
+      ],
     });
     expect(memoryGetFromPathOnlySearchResult.status).toBe(200);
     const memoryGetText = await memoryGetFromPathOnlySearchResult.text();
@@ -2696,370 +2629,301 @@ describe("qa mock openai server", () => {
   });
 
   it("supports advanced QA memory and subagent recovery prompts", async () => {
-    const server = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await server.stop();
-    });
+    const server = await startMockServer();
 
-    const memory = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        stream: true,
-        input: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: "Session memory ranking check: what is the current Project Nebula codename? Use memory tools first.",
-              },
-            ],
-          },
-        ],
-      }),
+    const memory = await postStreamingResponses(server, {
+      input: [
+        makeUserInput(
+          "Session memory ranking check: what is the current Project Nebula codename? Use memory tools first.",
+        ),
+      ],
     });
     expect(memory.status).toBe(200);
     const memoryText = await memory.text();
     expect(memoryText).toContain('"name":"memory_search"');
     expect(memoryText).toContain('\\"corpus\\":\\"sessions\\"');
 
-    const threadMemorySearch = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        stream: true,
-        instructions:
-          "@openclaw Thread memory check: what is the hidden thread codename stored only in memory? Use memory tools first and reply only in this thread.",
-        input: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: "Protocol note: acknowledged. Continue with the QA scenario plan.",
-              },
-            ],
-          },
-        ],
-      }),
+    const threadMemorySearch = await postStreamingResponses(server, {
+      instructions:
+        "@openclaw Thread memory check: what is the hidden thread codename stored only in memory? Use memory tools first and reply only in this thread.",
+      input: [makeUserInput("Protocol note: acknowledged. Continue with the QA scenario plan.")],
     });
     expect(threadMemorySearch.status).toBe(200);
     const threadMemorySearchText = await threadMemorySearch.text();
     expect(threadMemorySearchText).toContain('"name":"memory_search"');
     expect(threadMemorySearchText).toContain("ORBIT-22");
 
-    const threadMemorySummary = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        stream: false,
-        instructions:
-          "@openclaw Thread memory check: what is the hidden thread codename stored only in memory? Use memory tools first and reply only in this thread.",
-        input: [
-          {
-            type: "function_call_output",
-            output: JSON.stringify({
-              text: "Thread-hidden codename: ORBIT-22.",
-            }),
-          },
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: "Protocol note: acknowledged. Continue with the QA scenario plan.",
-              },
-            ],
-          },
-        ],
-      }),
+    const threadMemorySummary = await postNonStreamingResponses(server, {
+      instructions:
+        "@openclaw Thread memory check: what is the hidden thread codename stored only in memory? Use memory tools first and reply only in this thread.",
+      input: [
+        makeToolOutput(
+          JSON.stringify({
+            text: "Thread-hidden codename: ORBIT-22.",
+          }),
+        ),
+        makeUserInput("Protocol note: acknowledged. Continue with the QA scenario plan."),
+      ],
     });
     expect(threadMemorySummary.status).toBe(200);
     expect(JSON.stringify(await threadMemorySummary.json())).toContain("ORBIT-22");
 
-    const structuredThreadMemorySummary = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        stream: false,
-        instructions:
-          "@openclaw Thread memory check: what is the hidden thread codename stored only in memory? Use memory tools first and reply only in this thread.",
-        input: [
-          {
-            type: "function_call_output",
-            output: {
-              text: "Thread-hidden codename: ORBIT-22.",
-            },
-          },
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: "Protocol note: acknowledged. Continue with the QA scenario plan.",
-              },
-            ],
-          },
-        ],
-      }),
+    const structuredThreadMemorySummary = await postNonStreamingResponses(server, {
+      instructions:
+        "@openclaw Thread memory check: what is the hidden thread codename stored only in memory? Use memory tools first and reply only in this thread.",
+      input: [
+        makeToolOutput({
+          text: "Thread-hidden codename: ORBIT-22.",
+        }),
+        makeUserInput("Protocol note: acknowledged. Continue with the QA scenario plan."),
+      ],
     });
     expect(structuredThreadMemorySummary.status).toBe(200);
     expect(JSON.stringify(await structuredThreadMemorySummary.json())).toContain("ORBIT-22");
 
-    const systemFallbackThreadMemorySummary = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        stream: false,
-        input: [
-          {
-            role: "system",
-            content:
-              "Available tools include sessions_spawn.\n## /workspace/MEMORY.md\nThread-hidden codename: ORBIT-22.",
-          },
-          makeUserInput(
-            "@openclaw Thread memory check: what is the hidden thread codename stored only in memory? Use memory tools first and reply only in this thread.",
-          ),
-          {
-            type: "function_call_output",
-            output: JSON.stringify({
-              results: [],
-              unavailable: true,
-              error: "database is not open",
-            }),
-          },
-        ],
-      }),
+    const unavailableThreadMemorySummary = await postNonStreamingResponses(server, {
+      input: [
+        {
+          role: "system",
+          content:
+            "Available tools include sessions_spawn.\n## /workspace/MEMORY.md\nThread-hidden codename: ORBIT-22.",
+        },
+        makeUserInput(
+          "@openclaw Thread memory check: what is the hidden thread codename stored only in memory? Use memory tools first and reply only in this thread.",
+        ),
+        makeToolOutput(
+          JSON.stringify({
+            results: [],
+            unavailable: true,
+            error: "database is not open",
+          }),
+        ),
+      ],
     });
-    expect(systemFallbackThreadMemorySummary.status).toBe(200);
-    expect(JSON.stringify(await systemFallbackThreadMemorySummary.json())).toContain("ORBIT-22");
+    expect(unavailableThreadMemorySummary.status).toBe(200);
+    const unavailableThreadMemoryText = JSON.stringify(await unavailableThreadMemorySummary.json());
+    expect(unavailableThreadMemoryText).toContain("NONE");
+    expect(unavailableThreadMemoryText).not.toContain("ORBIT-22");
 
-    const memoryFollowup = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        stream: true,
-        input: [
-          {
-            role: "user",
-            content: [
+    const emptyThreadMemorySummary = await postNonStreamingResponses(server, {
+      input: [
+        {
+          role: "system",
+          content: "## /workspace/MEMORY.md\nThread-hidden codename: ORBIT-22.",
+        },
+        makeUserInput(
+          "@openclaw Thread memory check: what is the hidden thread codename stored only in memory? Use memory tools first and reply only in this thread.",
+        ),
+        makeToolOutput(JSON.stringify({ results: [] })),
+      ],
+    });
+    expect(emptyThreadMemorySummary.status).toBe(200);
+    const emptyThreadMemoryText = JSON.stringify(await emptyThreadMemorySummary.json());
+    expect(emptyThreadMemoryText).toContain("NONE");
+    expect(emptyThreadMemoryText).not.toContain("ORBIT-22");
+
+    const memoryFollowup = await postStreamingResponses(server, {
+      input: [
+        makeUserInput(
+          "Session memory ranking check: what is the current Project Nebula codename? Use memory tools first.",
+        ),
+        makeToolOutput(
+          JSON.stringify({
+            results: [
               {
-                type: "input_text",
-                text: "Session memory ranking check: what is the current Project Nebula codename? Use memory tools first.",
+                path: "sessions/qa-session-memory-ranking.jsonl",
+                startLine: 2,
+                endLine: 3,
+                snippet: "Project Nebula current codename: ORBIT-10.",
               },
             ],
-          },
-          {
-            type: "function_call_output",
-            output: JSON.stringify({
-              results: [
-                {
-                  path: "sessions/qa-session-memory-ranking.jsonl",
-                  startLine: 2,
-                  endLine: 3,
-                },
-              ],
-            }),
-          },
-        ],
-      }),
+          }),
+        ),
+      ],
     });
     expect(memoryFollowup.status).toBe(200);
     expect(await memoryFollowup.text()).toContain(
       "Protocol note: I checked memory and the current Project Nebula codename is ORBIT-10.",
     );
 
-    const memoryFollowupPrefersSessionResult = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        stream: true,
-        input: [
-          {
-            role: "user",
-            content: [
+    const memoryFollowupPrefersSessionResult = await postStreamingResponses(server, {
+      input: [
+        makeUserInput(
+          "Session memory ranking check: what is the current Project Nebula codename? Use memory tools first.",
+        ),
+        makeToolOutput(
+          JSON.stringify({
+            results: [
               {
-                type: "input_text",
-                text: "Session memory ranking check: what is the current Project Nebula codename? Use memory tools first.",
+                path: "MEMORY.md",
+                startLine: 1,
+                endLine: 2,
+                snippet: "Project Nebula stale codename: ORBIT-9.",
+              },
+              {
+                path: "sessions/qa-session-memory-ranking.jsonl",
+                startLine: 2,
+                endLine: 3,
+                snippet: "Project Nebula current codename: ORBIT-10.",
               },
             ],
-          },
-          {
-            type: "function_call_output",
-            output: JSON.stringify({
-              results: [
-                {
-                  path: "MEMORY.md",
-                  startLine: 1,
-                  endLine: 2,
-                },
-                {
-                  path: "sessions/qa-session-memory-ranking.jsonl",
-                  startLine: 2,
-                  endLine: 3,
-                },
-              ],
-            }),
-          },
-        ],
-      }),
+          }),
+        ),
+      ],
     });
     expect(memoryFollowupPrefersSessionResult.status).toBe(200);
     expect(await memoryFollowupPrefersSessionResult.text()).toContain(
       "Protocol note: I checked memory and the current Project Nebula codename is ORBIT-10.",
     );
 
-    const activeMemorySearch = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        stream: true,
-        input: [
-          {
-            role: "user",
-            content: [
+    const pathOnlySessionMemory = await postStreamingResponses(server, {
+      input: [
+        makeUserInput(
+          "Session memory ranking check: what is the current Project Nebula codename? Use memory tools first.",
+        ),
+        makeToolOutput(
+          JSON.stringify({
+            results: [
               {
-                type: "input_text",
-                text: [
-                  "You are a memory search agent.",
-                  "Use only the available memory tools.",
-                  "Prefer memory_recall when available.",
-                  "If memory_recall is unavailable, use memory_search and memory_get.",
-                  "",
-                  "Conversation context:",
-                  "Latest user message:",
-                  "Silent snack recall check: what snack do I usually want for QA movie night? Reply in one short sentence.",
-                ].join("\n"),
+                path: "sessions/qa-session-memory-ranking.jsonl",
+                startLine: 2,
+                endLine: 3,
               },
             ],
-          },
-        ],
-      }),
+          }),
+        ),
+      ],
+    });
+    expect(pathOnlySessionMemory.status).toBe(200);
+    const pathOnlySessionMemoryText = await pathOnlySessionMemory.text();
+    expect(pathOnlySessionMemoryText).toContain('"name":"memory_get"');
+    expect(pathOnlySessionMemoryText).not.toContain("codename is ORBIT-10");
+
+    const unavailableSessionMemory = await postStreamingResponses(server, {
+      input: [
+        makeUserInput(
+          "Session memory ranking check: what is the current Project Nebula codename? Use memory tools first.",
+        ),
+        makeToolOutput(
+          JSON.stringify({
+            results: [
+              {
+                path: "sessions/qa-session-memory-ranking.jsonl",
+                snippet: "Project Nebula current codename: ORBIT-10.",
+              },
+            ],
+            unavailable: true,
+            error: "database is not open",
+          }),
+        ),
+      ],
+    });
+    expect(unavailableSessionMemory.status).toBe(200);
+    const unavailableSessionMemoryText = await unavailableSessionMemory.text();
+    expect(unavailableSessionMemoryText).toContain("NONE");
+    expect(unavailableSessionMemoryText).not.toContain("codename is ORBIT-10");
+
+    const differentlyRankedSessionMemory = await postStreamingResponses(server, {
+      input: [
+        makeUserInput(
+          "Session memory ranking check: what is the current Project Nebula codename? Use memory tools first.",
+        ),
+        makeToolOutput(
+          JSON.stringify({
+            results: [
+              {
+                path: "sessions/qa-session-memory-ranking.jsonl",
+                snippet: "Project Nebula current codename: ORBIT-9.",
+              },
+            ],
+          }),
+        ),
+      ],
+    });
+    expect(differentlyRankedSessionMemory.status).toBe(200);
+    const differentlyRankedSessionMemoryText = await differentlyRankedSessionMemory.text();
+    expect(differentlyRankedSessionMemoryText).toContain("codename is ORBIT-9");
+    expect(differentlyRankedSessionMemoryText).not.toContain("codename is ORBIT-10");
+
+    const activeMemorySearch = await postStreamingResponses(server, {
+      input: [
+        makeUserInput(
+          [
+            "You are a memory search agent.",
+            "Use only the available memory tools.",
+            "Prefer memory_recall when available.",
+            "If memory_recall is unavailable, use memory_search and memory_get.",
+            "",
+            "Conversation context:",
+            "Latest user message:",
+            "Silent snack recall check: what snack do I usually want for QA movie night? Reply in one short sentence.",
+          ].join("\n"),
+        ),
+      ],
     });
     expect(activeMemorySearch.status).toBe(200);
     expect(await activeMemorySearch.text()).toContain('"name":"memory_search"');
 
-    const activeMemoryStreamSummary = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        stream: true,
-        input: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: [
-                  "You are a memory search agent.",
-                  "Use only the available memory tools.",
-                  "Prefer memory_recall when available.",
-                  "If memory_recall is unavailable, use memory_search and memory_get.",
-                  "",
-                  "Conversation context:",
-                  "Latest user message:",
-                  "Silent snack recall check: what snack do I usually want for QA movie night? Reply in one short sentence.",
-                ].join("\n"),
-              },
-            ],
-          },
-          {
-            type: "function_call_output",
-            output: JSON.stringify({
-              text: "Stable QA movie night snack preference: lemon pepper wings with blue cheese.",
-            }),
-          },
-        ],
-      }),
+    const activeMemoryStreamSummary = await postStreamingResponses(server, {
+      input: [
+        makeUserInput(
+          [
+            "You are a memory search agent.",
+            "Use only the available memory tools.",
+            "Prefer memory_recall when available.",
+            "If memory_recall is unavailable, use memory_search and memory_get.",
+            "",
+            "Conversation context:",
+            "Latest user message:",
+            "Silent snack recall check: what snack do I usually want for QA movie night? Reply in one short sentence.",
+          ].join("\n"),
+        ),
+        makeToolOutput(
+          JSON.stringify({
+            text: "Stable QA movie night snack preference: lemon pepper wings with blue cheese.",
+          }),
+        ),
+      ],
     });
     expect(activeMemoryStreamSummary.status).toBe(200);
     expect(await activeMemoryStreamSummary.text()).toContain("lemon pepper wings with blue cheese");
 
-    const activeMemorySummary = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        stream: false,
-        input: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: [
-                  "You are a memory search agent.",
-                  "Use only the available memory tools.",
-                  "Prefer memory_recall when available.",
-                  "If memory_recall is unavailable, use memory_search and memory_get.",
-                  "",
-                  "Conversation context:",
-                  "Latest user message:",
-                  "Silent snack recall check: what snack do I usually want for QA movie night? Reply in one short sentence.",
-                ].join("\n"),
-              },
-            ],
-          },
-          {
-            type: "function_call_output",
-            output: JSON.stringify({
-              text: "Stable QA movie night snack preference: lemon pepper wings with blue cheese.",
-            }),
-          },
-        ],
-      }),
+    const activeMemorySummary = await postNonStreamingResponses(server, {
+      input: [
+        makeUserInput(
+          [
+            "You are a memory search agent.",
+            "Use only the available memory tools.",
+            "Prefer memory_recall when available.",
+            "If memory_recall is unavailable, use memory_search and memory_get.",
+            "",
+            "Conversation context:",
+            "Latest user message:",
+            "Silent snack recall check: what snack do I usually want for QA movie night? Reply in one short sentence.",
+          ].join("\n"),
+        ),
+        makeToolOutput(
+          JSON.stringify({
+            text: "Stable QA movie night snack preference: lemon pepper wings with blue cheese.",
+          }),
+        ),
+      ],
     });
     expect(activeMemorySummary.status).toBe(200);
     expect(JSON.stringify(await activeMemorySummary.json())).toContain(
       "lemon pepper wings with blue cheese",
     );
 
-    const injectedMainReply = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        stream: false,
-        instructions: [
-          "System context:",
-          "<active_memory_plugin>User usually wants lemon pepper wings with blue cheese for QA movie night.</active_memory_plugin>",
-        ].join("\n"),
-        input: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: "Silent snack recall check: what snack do I usually want for QA movie night? Reply in one short sentence.",
-              },
-            ],
-          },
-        ],
-      }),
+    const injectedMainReply = await postNonStreamingResponses(server, {
+      instructions: [
+        "System context:",
+        "<active_memory_plugin>User usually wants lemon pepper wings with blue cheese for QA movie night.</active_memory_plugin>",
+      ].join("\n"),
+      input: [
+        makeUserInput(
+          "Silent snack recall check: what snack do I usually want for QA movie night? Reply in one short sentence.",
+        ),
+      ],
     });
     expect(injectedMainReply.status).toBe(200);
     expect(JSON.stringify(await injectedMainReply.json())).toContain(
@@ -3071,30 +2935,17 @@ describe("qa mock openai server", () => {
     expect(String(lastRequestPayload.instructions)).toContain("<active_memory_plugin>");
     expect(String(lastRequestPayload.allInputText)).toContain("<active_memory_plugin>");
 
-    const rememberSearch = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        stream: true,
-        input: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: [
-                  "You are a memory search agent.",
-                  "Use only the available memory tools.",
-                  "Latest user message:",
-                  "Remember across conversations QA check: what snack do I usually want for QA movie night?",
-                ].join("\n"),
-              },
-            ],
-          },
-        ],
-      }),
+    const rememberSearch = await postStreamingResponses(server, {
+      input: [
+        makeUserInput(
+          [
+            "You are a memory search agent.",
+            "Use only the available memory tools.",
+            "Latest user message:",
+            "Remember across conversations QA check: what snack do I usually want for QA movie night?",
+          ].join("\n"),
+        ),
+      ],
     });
     expect(rememberSearch.status).toBe(200);
     const rememberSearchText = await rememberSearch.text();
@@ -3102,412 +2953,468 @@ describe("qa mock openai server", () => {
     expect(rememberSearchText).toContain("QA movie night snack lemon pepper wings blue cheese");
     expect(rememberSearchText).toContain('\\"maxResults\\":10');
 
-    const rememberSearchSummary = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        stream: true,
-        input: [
-          {
-            role: "user",
-            content: [
+    const rememberSearchSummary = await postStreamingResponses(server, {
+      input: [
+        makeUserInput(
+          [
+            "You are a memory search agent.",
+            "Use only the available memory tools.",
+            "Latest user message:",
+            "Remember across conversations QA check: what snack do I usually want for QA movie night?",
+          ].join("\n"),
+        ),
+        makeToolOutput(
+          JSON.stringify({
+            results: [
               {
-                type: "input_text",
-                text: [
-                  "You are a memory search agent.",
-                  "Use only the available memory tools.",
-                  "Latest user message:",
-                  "Remember across conversations QA check: what snack do I usually want for QA movie night?",
-                ].join("\n"),
+                path: "sessions/private-source.jsonl",
+                startLine: 2,
+                endLine: 3,
+                snippet:
+                  "Stable QA movie night snack preference: lemon pepper wings with blue cheese.",
               },
             ],
-          },
-          {
-            type: "function_call_output",
-            output: JSON.stringify({
-              results: [
-                {
-                  path: "sessions/private-source.jsonl",
-                  startLine: 2,
-                  endLine: 3,
-                  snippet:
-                    "Stable QA movie night snack preference: lemon pepper wings with blue cheese.",
-                },
-              ],
-            }),
-          },
-        ],
-      }),
+          }),
+        ),
+      ],
     });
     expect(rememberSearchSummary.status).toBe(200);
     const rememberSearchSummaryText = await rememberSearchSummary.text();
     expect(rememberSearchSummaryText).toContain("lemon pepper wings with blue cheese");
     expect(rememberSearchSummaryText).not.toContain('"name":"memory_get"');
 
-    const rememberInjectedMainReply = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        stream: false,
-        instructions:
-          "<active_memory_plugin>User usually wants lemon pepper wings with blue cheese for QA movie night.</active_memory_plugin>",
-        input: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: "Remember across conversations QA check: what snack do I usually want for QA movie night?",
-              },
-            ],
-          },
-        ],
-      }),
+    const rememberInjectedMainReply = await postNonStreamingResponses(server, {
+      instructions:
+        "<active_memory_plugin>User usually wants lemon pepper wings with blue cheese for QA movie night.</active_memory_plugin>",
+      input: [
+        makeUserInput(
+          "Remember across conversations QA check: what snack do I usually want for QA movie night?",
+        ),
+      ],
     });
     expect(rememberInjectedMainReply.status).toBe(200);
     expect(JSON.stringify(await rememberInjectedMainReply.json())).toContain(
       "lemon pepper wings with blue cheese",
     );
 
-    const spawn = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        stream: true,
-        tools: [SESSIONS_SPAWN_TOOL],
-        input: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: "Subagent fanout synthesis check: delegate two bounded subagents sequentially, then report both results together.",
-              },
-            ],
-          },
-        ],
-      }),
+    const spawn = await postStreamingResponses(server, {
+      tools: [SESSIONS_SPAWN_TOOL],
+      input: [
+        makeUserInput(
+          "Subagent fanout synthesis check: delegate two bounded subagents sequentially, then report both results together.",
+        ),
+      ],
     });
     expect(spawn.status).toBe(200);
     const spawnBody = await spawn.text();
     expect(spawnBody).toContain('"name":"sessions_spawn"');
     expect(spawnBody).toContain('\\"label\\":\\"qa-fanout-alpha\\"');
 
-    const secondSpawn = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        stream: true,
-        tools: [SESSIONS_SPAWN_TOOL],
-        input: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: "Subagent fanout synthesis check: delegate two bounded subagents sequentially, then report both results together.",
-              },
-            ],
-          },
-          {
-            type: "function_call_output",
-            output:
-              '{"status":"accepted","childSessionKey":"agent:qa:subagent:alpha","note":"ALPHA-OK"}',
-          },
-        ],
-      }),
+    const secondSpawn = await postStreamingResponses(server, {
+      tools: [SESSIONS_SPAWN_TOOL],
+      input: [
+        makeUserInput(
+          "Subagent fanout synthesis check: delegate two bounded subagents sequentially, then report both results together.",
+        ),
+        makeToolOutput(
+          '{"status":"accepted","childSessionKey":"agent:qa:subagent:alpha","note":"ALPHA-OK"}',
+        ),
+      ],
     });
     expect(secondSpawn.status).toBe(200);
     const secondSpawnBody = await secondSpawn.text();
     expect(secondSpawnBody).toContain('"name":"sessions_spawn"');
     expect(secondSpawnBody).toContain('\\"label\\":\\"qa-fanout-beta\\"');
 
-    const final = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        stream: false,
-        tools: [SESSIONS_SPAWN_TOOL],
-        input: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: "Subagent fanout synthesis check: delegate two bounded subagents sequentially, then report both results together.",
-              },
-            ],
-          },
-          {
-            type: "function_call_output",
-            output:
-              '{"status":"accepted","childSessionKey":"agent:qa:subagent:beta","note":"BETA-OK"}',
-          },
-        ],
-      }),
+    const final = await postNonStreamingResponses(server, {
+      tools: [SESSIONS_SPAWN_TOOL],
+      input: [
+        makeUserInput(
+          "Subagent fanout synthesis check: delegate two bounded subagents sequentially, then report both results together.",
+        ),
+        makeToolOutput(
+          '{"status":"accepted","childSessionKey":"agent:qa:subagent:beta","note":"BETA-OK"}',
+        ),
+      ],
     });
     expect(final.status).toBe(200);
     expect(outputText(await final.json())).toBe("subagent-1: ok\nsubagent-2: ok");
   });
 
-  it("completes subagent fanout from a continuation turn without tool output", async () => {
-    const server = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await server.stop();
-    });
+  it.each([
+    "body instructions",
+    "developer-role input",
+    "Codex base instructions plus developer-role input",
+  ])(
+    "delivers synthesized fanout results through the message tool when %s makes the final private",
+    async (instructionSource) => {
+      const server = await startMockServer();
+      const prompt =
+        "Subagent fanout synthesis check: delegate two bounded subagents sequentially, then report both results together.";
+      const tools = [SESSIONS_SPAWN_TOOL, MESSAGE_TOOL];
 
-    const prompt =
-      "Subagent fanout synthesis check: delegate two bounded subagents sequentially, then report both results together.";
-    const spawn = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        stream: true,
-        tools: [SESSIONS_SPAWN_TOOL],
-        input: [{ role: "user", content: [{ type: "input_text", text: prompt }] }],
-      }),
-    });
-    expect(spawn.status).toBe(200);
-    expect(await spawn.text()).toContain('\\"label\\":\\"qa-fanout-alpha\\"');
+      const firstSpawn = await expectNonStreamingResponsesJson(server, {
+        tools,
+        input: [makeUserInput(prompt)],
+      });
+      expect(outputToolArgsFromItem(outputToolCall(firstSpawn, "sessions_spawn"))).toMatchObject({
+        label: "qa-fanout-alpha",
+      });
 
-    const secondSpawn = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        stream: true,
-        tools: [SESSIONS_SPAWN_TOOL],
+      const secondSpawn = await expectNonStreamingResponsesJson(server, {
+        tools,
         input: [
-          { role: "user", content: [{ type: "input_text", text: prompt }] },
-          {
-            type: "function_call_output",
-            output:
-              '{"status":"accepted","childSessionKey":"agent:qa:subagent:alpha","note":"ALPHA-OK"}',
-          },
+          makeUserInput(prompt),
+          makeToolOutput(
+            '{"status":"accepted","childSessionKey":"agent:qa:subagent:alpha","note":"ALPHA-OK"}',
+          ),
         ],
-      }),
-    });
-    expect(secondSpawn.status).toBe(200);
-    expect(await secondSpawn.text()).toContain('\\"label\\":\\"qa-fanout-beta\\"');
+      });
+      expect(outputToolArgsFromItem(outputToolCall(secondSpawn, "sessions_spawn"))).toMatchObject({
+        label: "qa-fanout-beta",
+      });
 
-    const phaseOnlyFinal = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        stream: false,
-        tools: [SESSIONS_SPAWN_TOOL],
-        input: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: "Continue.",
-              },
-            ],
-          },
-        ],
-      }),
-    });
-    expect(phaseOnlyFinal.status).toBe(200);
-    expect(outputText(await phaseOnlyFinal.json())).toBe("subagent-1: ok\nsubagent-2: ok");
-  });
+      const completionInput = [
+        makeUserInput(prompt),
+        makeUserInput("[Internal task completion event]\nresult: ALPHA-OK\nresult: BETA-OK"),
+      ];
+      const usesCodexDelivery = instructionSource.startsWith("Codex");
+      const instructions = usesCodexDelivery
+        ? "Visible source replies are not automatically delivered for this run. Use `message(action=send)` for user-visible source-channel output. For progress, set `final=false`. When the message is the completed reply to the current source conversation, set `final=true`; OpenClaw stops after confirming delivery."
+        : "Current source visible reply MUST use `message(action=send)`; final text is private. Skip tool = user gets nothing.";
+      const withDeliveryInstructions = (input: unknown[]) =>
+        instructionSource === "body instructions"
+          ? { instructions, input }
+          : {
+              ...(usesCodexDelivery
+                ? { instructions: "Follow the unrelated Codex base instructions." }
+                : {}),
+              input: [
+                { role: "developer", content: [{ type: "input_text", text: instructions }] },
+                ...input,
+              ],
+            };
+      const delivery = await expectNonStreamingResponsesJson(server, {
+        tools,
+        ...withDeliveryInstructions(completionInput),
+      });
+      const messageCall = outputToolCall(delivery, "message");
+      expect(outputToolArgsFromItem(messageCall)).toEqual({
+        action: "send",
+        message: "subagent-1: ok\nsubagent-2: ok",
+        ...(usesCodexDelivery ? { final: true } : {}),
+      });
 
-  it("completes subagent fanout when beta completion arrives on a generic follow-up turn", async () => {
-    const server = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await server.stop();
-    });
+      const settled = await expectNonStreamingResponsesJson(server, {
+        tools,
+        ...withDeliveryInstructions([
+          ...completionInput,
+          messageCall,
+          makeToolOutputWithCallId(
+            outputToolCallId(messageCall, "call_mock_message_fanout"),
+            '{"ok":true,"messageId":"qa-fanout-final"}',
+          ),
+        ]),
+      });
+      expect(outputItems(settled).some((item) => item.type === "function_call")).toBe(false);
+      expect(outputText(settled)).toBe("");
+    },
+  );
 
-    const prompt =
-      "Subagent fanout synthesis check: delegate two bounded subagents sequentially, then report both results together.";
-    const spawn = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        stream: true,
+  it.each(["OpenAI developer instructions", "Codex developer instructions"])(
+    "waits for separate private fanout completion turns before message-only delivery with %s",
+    async (instructionSource) => {
+      const server = await startMockServer();
+      const prompt =
+        "Subagent fanout synthesis check: delegate two bounded subagents sequentially, then report both results together.";
+      const usesCodexDelivery = instructionSource.startsWith("Codex");
+      const instructions = usesCodexDelivery
+        ? "Visible source replies are not automatically delivered for this run. Use `message(action=send)` for user-visible source-channel output. For progress, set `final=false`. When the message is the completed reply to the current source conversation, set `final=true`; OpenClaw stops after confirming delivery."
+        : "Current source visible reply MUST use `message(action=send)`; final text is private. Skip tool = user gets nothing.";
+
+      const firstSpawn = await expectNonStreamingResponsesJson(server, {
         tools: [SESSIONS_SPAWN_TOOL],
         input: [makeUserInput(prompt)],
-      }),
-    });
-    expect(spawn.status).toBe(200);
-    expect(await spawn.text()).toContain('\\"label\\":\\"qa-fanout-alpha\\"');
+      });
+      expect(outputToolArgsFromItem(outputToolCall(firstSpawn, "sessions_spawn"))).toMatchObject({
+        label: "qa-fanout-alpha",
+      });
 
-    const secondSpawn = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        stream: true,
+      const secondSpawn = await expectNonStreamingResponsesJson(server, {
         tools: [SESSIONS_SPAWN_TOOL],
         input: [
           makeUserInput(prompt),
-          {
-            type: "function_call_output",
-            output:
-              '{"status":"accepted","childSessionKey":"agent:qa:subagent:alpha","note":"ALPHA-OK"}',
-          },
+          makeToolOutput('{"status":"accepted","childSessionKey":"agent:qa:subagent:alpha"}'),
         ],
-      }),
+      });
+      expect(outputToolArgsFromItem(outputToolCall(secondSpawn, "sessions_spawn"))).toMatchObject({
+        label: "qa-fanout-beta",
+      });
+
+      const privateCompletion = (workerMarker: "ALPHA-OK" | "BETA-OK") => ({
+        stream: false,
+        tools: [MESSAGE_TOOL],
+        ...(usesCodexDelivery
+          ? { instructions: "Follow the unrelated Codex base instructions." }
+          : {}),
+        input: [
+          { role: "developer", content: [{ type: "input_text", text: instructions }] },
+          makeUserInput(prompt),
+          makeUserInput(`[Internal task completion event]\nresult: ${workerMarker}`),
+        ],
+      });
+
+      const alphaCompletion = await expectResponsesJson(server, privateCompletion("ALPHA-OK"));
+      expect(outputItems(alphaCompletion).some((item) => item.type === "function_call")).toBe(
+        false,
+      );
+      expect(outputText(alphaCompletion)).toBe("");
+
+      const betaCompletion = await expectResponsesJson(server, privateCompletion("BETA-OK"));
+      expect(outputToolArgsFromItem(outputToolCall(betaCompletion, "message"))).toEqual({
+        action: "send",
+        message: "subagent-1: ok\nsubagent-2: ok",
+        ...(usesCodexDelivery ? { final: true } : {}),
+      });
+    },
+  );
+
+  it.each(["OpenAI developer instructions", "Codex developer instructions"])(
+    "defers private zero-tool fanout completions to the parent-owned settle wake with %s",
+    async (instructionSource) => {
+      const server = await startMockServer();
+      const prompt =
+        "Subagent fanout synthesis check: delegate two bounded subagents sequentially, then report both results together.";
+      const usesCodexDelivery = instructionSource.startsWith("Codex");
+      const instructions = usesCodexDelivery
+        ? "Visible source replies are not automatically delivered for this run. Use `message(action=send)` for user-visible source-channel output. For progress, set `final=false`. When the message is the completed reply to the current source conversation, set `final=true`; OpenClaw stops after confirming delivery."
+        : "Current source visible reply MUST use `message(action=send)`; final text is private. Skip tool = user gets nothing.";
+
+      const firstSpawn = await expectNonStreamingResponsesJson(server, {
+        tools: [SESSIONS_SPAWN_TOOL],
+        input: [makeUserInput(prompt)],
+      });
+      expect(outputToolArgsFromItem(outputToolCall(firstSpawn, "sessions_spawn"))).toMatchObject({
+        label: "qa-fanout-alpha",
+      });
+
+      const secondSpawn = await expectNonStreamingResponsesJson(server, {
+        tools: [SESSIONS_SPAWN_TOOL],
+        input: [
+          makeUserInput(prompt),
+          makeToolOutput('{"status":"accepted","childSessionKey":"agent:qa:subagent:alpha"}'),
+        ],
+      });
+      expect(outputToolArgsFromItem(outputToolCall(secondSpawn, "sessions_spawn"))).toMatchObject({
+        label: "qa-fanout-beta",
+      });
+
+      for (const workerMarker of ["ALPHA-OK", "BETA-OK"] as const) {
+        const completion = await expectNonStreamingResponsesJson(server, {
+          tools: [],
+          ...(usesCodexDelivery
+            ? { instructions: "Follow the unrelated Codex base instructions." }
+            : {}),
+          input: [
+            makeDeveloperInput(instructions),
+            makeUserInput(prompt),
+            makeUserInput(`[Internal task completion event]\nresult: ${workerMarker}`),
+          ],
+        });
+        expect(outputItems(completion).some((item) => item.type === "function_call")).toBe(false);
+        expect(outputText(completion)).toBe("");
+      }
+
+      const requesterSettleWake = await expectNonStreamingResponsesJson(server, {
+        tools: [SESSIONS_SPAWN_TOOL],
+        input: [
+          makeUserInput(prompt),
+          makeUserInput(
+            "[Subagent Context] Every subagent spawned from this session has now settled.\n[Subagent Context] Review the completion results and send your consolidated final answer to the user now.\nALPHA-OK\nBETA-OK",
+          ),
+        ],
+      });
+      expect(outputItems(requesterSettleWake).some((item) => item.type === "function_call")).toBe(
+        false,
+      );
+      expect(outputText(requesterSettleWake)).toBe("subagent-1: ok\nsubagent-2: ok");
+    },
+  );
+
+  it("replays completed subagent fanout on requester-settle continuation turns", async () => {
+    const server = await startMockServer();
+
+    const prompt =
+      "Subagent fanout synthesis check: delegate two bounded subagents sequentially, then report both results together.";
+    const spawn = await postStreamingResponses(server, {
+      tools: [SESSIONS_SPAWN_TOOL],
+      input: [makeUserInput(prompt)],
+    });
+    expect(spawn.status).toBe(200);
+    expect(await spawn.text()).toContain('\\"label\\":\\"qa-fanout-alpha\\"');
+
+    const secondSpawn = await postStreamingResponses(server, {
+      tools: [SESSIONS_SPAWN_TOOL],
+      input: [
+        makeUserInput(prompt),
+        makeToolOutput(
+          '{"status":"accepted","childSessionKey":"agent:qa:subagent:alpha","note":"ALPHA-OK"}',
+        ),
+      ],
     });
     expect(secondSpawn.status).toBe(200);
     expect(await secondSpawn.text()).toContain('\\"label\\":\\"qa-fanout-beta\\"');
 
-    const final = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        stream: false,
-        tools: [SESSIONS_SPAWN_TOOL],
-        input: [
-          makeUserInput(
-            "Continue with the QA scenario plan and report grouped into Worked, Failed, Blocked, and Follow-up.",
-          ),
-          {
-            type: "function_call_output",
-            output: '{"status":"accepted","childSessionKey":"agent:qa:subagent:beta"}',
-          },
-        ],
-      }),
+    const settledFinal = await postNonStreamingResponses(server, {
+      tools: [SESSIONS_SPAWN_TOOL],
+      input: [
+        makeUserInput(prompt),
+        makeUserInput(
+          "[Subagent Context] Every subagent spawned from this session has now settled.\nALPHA-OK\nBETA-OK",
+        ),
+      ],
+    });
+    expect(settledFinal.status).toBe(200);
+    expect(outputText(await settledFinal.json())).toBe("subagent-1: ok\nsubagent-2: ok");
+
+    const settledContinuation = await postNonStreamingResponses(server, {
+      tools: [SESSIONS_SPAWN_TOOL],
+      input: [
+        makeUserInput(prompt),
+        makeUserInput(
+          "[Inter-session message]\nALPHA-OK\nBETA-OK\nAll spawned subagents have settled. Resume the parent turn and report both results together.",
+        ),
+      ],
+    });
+    expect(settledContinuation.status).toBe(200);
+    const settledPayload = await settledContinuation.json();
+    expect(outputText(settledPayload)).toBe("subagent-1: ok\nsubagent-2: ok");
+    expect(outputItems(settledPayload)).not.toContainEqual(
+      expect.objectContaining({ type: "function_call", name: "sessions_spawn" }),
+    );
+
+    const unrelatedContinuation = await postNonStreamingResponses(server, {
+      tools: [SESSIONS_SPAWN_TOOL],
+      input: [makeUserInput("Continue with an unrelated conversation.")],
+    });
+    expect(unrelatedContinuation.status).toBe(200);
+    expect(outputText(await unrelatedContinuation.json())).not.toBe(
+      "subagent-1: ok\nsubagent-2: ok",
+    );
+
+    const restartedFanout = await postNonStreamingResponses(server, {
+      tools: [SESSIONS_SPAWN_TOOL],
+      input: [makeUserInput(prompt)],
+    });
+    expect(restartedFanout.status).toBe(200);
+    expect(
+      outputToolArgsFromItem(outputToolCall(await restartedFanout.json(), "sessions_spawn")),
+    ).toEqual(expect.objectContaining({ label: "qa-fanout-alpha" }));
+  });
+
+  it("completes subagent fanout when beta completion arrives on a generic follow-up turn", async () => {
+    const server = await startMockServer();
+
+    const prompt =
+      "Subagent fanout synthesis check: delegate two bounded subagents sequentially, then report both results together.";
+    const spawn = await postStreamingResponses(server, {
+      tools: [SESSIONS_SPAWN_TOOL],
+      input: [makeUserInput(prompt)],
+    });
+    expect(spawn.status).toBe(200);
+    expect(await spawn.text()).toContain('\\"label\\":\\"qa-fanout-alpha\\"');
+
+    const secondSpawn = await postStreamingResponses(server, {
+      tools: [SESSIONS_SPAWN_TOOL],
+      input: [
+        makeUserInput(prompt),
+        makeToolOutput(
+          '{"status":"accepted","childSessionKey":"agent:qa:subagent:alpha","note":"ALPHA-OK"}',
+        ),
+      ],
+    });
+    expect(secondSpawn.status).toBe(200);
+    expect(await secondSpawn.text()).toContain('\\"label\\":\\"qa-fanout-beta\\"');
+
+    const final = await postNonStreamingResponses(server, {
+      tools: [SESSIONS_SPAWN_TOOL],
+      input: [
+        makeUserInput(
+          "Continue with the QA scenario plan and report grouped into Worked, Failed, Blocked, and Follow-up.",
+        ),
+        makeToolOutput('{"status":"accepted","childSessionKey":"agent:qa:subagent:beta"}'),
+      ],
     });
     expect(final.status).toBe(200);
     expect(outputText(await final.json())).toBe("subagent-1: ok\nsubagent-2: ok");
   });
 
   it("uses full request text when planning continuation subagent tool calls", async () => {
-    const server = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await server.stop();
-    });
+    const server = await startMockServer();
 
     const handoffPrompt =
       "Delegate one bounded QA task to a subagent. Wait for the subagent to finish.";
-    const handoff = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        stream: true,
-        tools: [SESSIONS_SPAWN_TOOL],
-        input: [makeUserInput(handoffPrompt), makeUserInput("Continue.")],
-      }),
+    const handoff = await postStreamingResponses(server, {
+      tools: [SESSIONS_SPAWN_TOOL],
+      input: [makeUserInput(handoffPrompt), makeUserInput("Continue.")],
     });
     expect(handoff.status).toBe(200);
     expect(await handoff.text()).toContain('"name":"sessions_spawn"');
 
-    const handoffServer = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await handoffServer.stop();
-    });
+    const handoffServer = await startMockServer();
 
-    const appServerHandoff = await fetch(`${handoffServer.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        stream: true,
-        input: [makeUserInput(handoffPrompt), makeUserInput("Continue.")],
-      }),
+    const appServerHandoff = await postStreamingResponses(handoffServer, {
+      tools: [CODEX_SUBAGENT_TOOL_NAMESPACE],
+      input: [makeUserInput(handoffPrompt), makeUserInput("Continue.")],
     });
     expect(appServerHandoff.status).toBe(200);
     expect(await appServerHandoff.text()).toContain('"name":"sessions_spawn"');
 
-    const repeatedHandoff = await fetch(`${handoffServer.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        stream: true,
-        input: [makeUserInput(handoffPrompt), makeUserInput("Continue again.")],
-      }),
+    const repeatedHandoff = await postStreamingResponses(handoffServer, {
+      tools: [CODEX_SUBAGENT_TOOL_NAMESPACE],
+      input: [makeUserInput(handoffPrompt), makeUserInput("Continue again.")],
     });
     expect(repeatedHandoff.status).toBe(200);
     expect(await repeatedHandoff.text()).not.toContain('"name":"sessions_spawn"');
 
-    const handoffFinal = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        stream: false,
-        tools: [SESSIONS_SPAWN_TOOL],
-        input: [
-          makeUserInput(handoffPrompt),
-          { type: "function_call_output", output: "SUBAGENT-OK" },
-          makeUserInput("Continue."),
-        ],
-      }),
+    const handoffFinal = await postNonStreamingResponses(server, {
+      tools: [SESSIONS_SPAWN_TOOL],
+      input: [
+        makeUserInput(handoffPrompt),
+        makeToolOutput("SUBAGENT-OK"),
+        makeUserInput("Continue."),
+      ],
     });
     expect(handoffFinal.status).toBe(200);
     expect(outputText(await handoffFinal.json())).toContain("Delegated task");
 
     const fanoutPrompt =
       "Subagent fanout synthesis check: delegate two bounded subagents sequentially, then report both results together.";
-    const appServerFanout = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        stream: true,
-        input: [makeUserInput(fanoutPrompt), makeUserInput("Continue.")],
-      }),
+    const appServerFanout = await postStreamingResponses(server, {
+      tools: [CODEX_SUBAGENT_TOOL_NAMESPACE],
+      input: [makeUserInput(fanoutPrompt), makeUserInput("Continue.")],
     });
     expect(appServerFanout.status).toBe(200);
     expect(await appServerFanout.text()).toContain('\\"label\\":\\"qa-fanout-alpha\\"');
 
-    const fanoutServer = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await fanoutServer.stop();
-    });
+    const fanoutServer = await startMockServer();
 
-    const firstFanout = await fetch(`${fanoutServer.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        stream: true,
-        tools: [SESSIONS_SPAWN_TOOL],
-        input: [makeUserInput(fanoutPrompt)],
-      }),
+    const firstFanout = await postStreamingResponses(fanoutServer, {
+      tools: [SESSIONS_SPAWN_TOOL],
+      input: [makeUserInput(fanoutPrompt)],
     });
     expect(firstFanout.status).toBe(200);
     expect(await firstFanout.text()).toContain('\\"label\\":\\"qa-fanout-alpha\\"');
 
-    const secondFanout = await fetch(`${fanoutServer.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        stream: true,
-        tools: [SESSIONS_SPAWN_TOOL],
-        input: [
-          makeUserInput(fanoutPrompt),
-          {
-            type: "function_call_output",
-            output:
-              '{"status":"accepted","childSessionKey":"agent:qa:subagent:alpha","note":"ALPHA-OK"}',
-          },
-          makeUserInput("Continue."),
-        ],
-      }),
+    const secondFanout = await postStreamingResponses(fanoutServer, {
+      tools: [SESSIONS_SPAWN_TOOL],
+      input: [
+        makeUserInput(fanoutPrompt),
+        makeToolOutput(
+          '{"status":"accepted","childSessionKey":"agent:qa:subagent:alpha","note":"ALPHA-OK"}',
+        ),
+        makeUserInput("Continue."),
+      ],
     });
     expect(secondFanout.status).toBe(200);
     expect(await secondFanout.text()).toContain('\\"label\\":\\"qa-fanout-beta\\"');
@@ -3517,8 +3424,7 @@ describe("qa mock openai server", () => {
     const server = await startMockServer();
     const startedAt = Date.now();
 
-    const response = await postResponses(server, {
-      stream: false,
+    const response = await postNonStreamingResponses(server, {
       input: [
         makeUserInput("Subagent recovery worker native command target proof. Wait until stopped."),
         makeUserInput("Reply exactly: QA-NATIVE-STOP-RECOVERY-OK"),
@@ -3532,31 +3438,18 @@ describe("qa mock openai server", () => {
   });
 
   it("keeps source discovery reports out of subagent handoff prose", async () => {
-    const server = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await server.stop();
-    });
+    const server = await startMockServer();
 
-    const response = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        stream: false,
-        input: [
-          makeUserInput(
-            "Read the seeded docs and source plan, then report grouped into Worked, Failed, Blocked, and Follow-up.",
-          ),
-          {
-            type: "function_call_output",
-            output:
-              "repo/qa/scenarios/index.yaml includes scenario: subagent-handoff and repo/extensions/qa-lab/src/suite.ts.",
-          },
-          makeUserInput("Continue."),
-        ],
-      }),
+    const response = await postNonStreamingResponses(server, {
+      input: [
+        makeUserInput(
+          "Read the seeded docs and source plan, then report grouped into Worked, Failed, Blocked, and Follow-up.",
+        ),
+        makeToolOutput(
+          "repo/qa/scenarios/index.yaml includes scenario: subagent-handoff and repo/extensions/qa-lab/src/suite.ts.",
+        ),
+        makeUserInput("Continue."),
+      ],
     });
 
     expect(response.status).toBe(200);
@@ -3568,141 +3461,71 @@ describe("qa mock openai server", () => {
   });
 
   it("does not let fanout completion state hijack child worker replies", async () => {
-    const server = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await server.stop();
-    });
+    const server = await startMockServer();
 
     const prompt =
       "Subagent fanout synthesis check: delegate two bounded subagents sequentially, then report both results together.";
-    const spawn = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        stream: true,
-        tools: [SESSIONS_SPAWN_TOOL],
-        input: [{ role: "user", content: [{ type: "input_text", text: prompt }] }],
-      }),
+    const spawn = await postStreamingResponses(server, {
+      tools: [SESSIONS_SPAWN_TOOL],
+      input: [makeUserInput(prompt)],
     });
     expect(spawn.status).toBe(200);
     expect(await spawn.text()).toContain('\\"label\\":\\"qa-fanout-alpha\\"');
 
-    const secondSpawn = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        stream: true,
-        tools: [SESSIONS_SPAWN_TOOL],
-        input: [
-          { role: "user", content: [{ type: "input_text", text: prompt }] },
-          {
-            type: "function_call_output",
-            output:
-              '{"status":"accepted","childSessionKey":"agent:qa:subagent:alpha","note":"ALPHA-OK"}',
-          },
-        ],
-      }),
+    const secondSpawn = await postStreamingResponses(server, {
+      tools: [SESSIONS_SPAWN_TOOL],
+      input: [
+        makeUserInput(prompt),
+        makeToolOutput(
+          '{"status":"accepted","childSessionKey":"agent:qa:subagent:alpha","note":"ALPHA-OK"}',
+        ),
+      ],
     });
     expect(secondSpawn.status).toBe(200);
     expect(await secondSpawn.text()).toContain('\\"label\\":\\"qa-fanout-beta\\"');
 
-    const childReply = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        stream: false,
-        input: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: "Fanout worker alpha: inspect the QA workspace and finish with exactly ALPHA-OK.",
-              },
-            ],
-          },
-        ],
-      }),
+    const childReply = await postNonStreamingResponses(server, {
+      input: [
+        makeUserInput(
+          "Fanout worker alpha: inspect the QA workspace and finish with exactly ALPHA-OK.",
+        ),
+      ],
     });
     expect(childReply.status).toBe(200);
     expect(outputText(await childReply.json())).toBe("ALPHA-OK");
   });
 
   it("keeps subagent fanout state isolated per mock server instance", async () => {
-    const serverA = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await serverA.stop();
-    });
-    const serverB = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await serverB.stop();
-    });
+    const serverA = await startMockServer();
+    const serverB = await startMockServer();
 
     const prompt =
       "Subagent fanout synthesis check: delegate two bounded subagents sequentially, then report both results together.";
 
-    const firstA = await fetch(`${serverA.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        stream: true,
-        tools: [SESSIONS_SPAWN_TOOL],
-        input: [{ role: "user", content: [{ type: "input_text", text: prompt }] }],
-      }),
+    const firstA = await postStreamingResponses(serverA, {
+      tools: [SESSIONS_SPAWN_TOOL],
+      input: [makeUserInput(prompt)],
     });
     expect(firstA.status).toBe(200);
     expect(await firstA.text()).toContain('\\"label\\":\\"qa-fanout-alpha\\"');
 
-    const firstB = await fetch(`${serverB.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        stream: true,
-        tools: [SESSIONS_SPAWN_TOOL],
-        input: [{ role: "user", content: [{ type: "input_text", text: prompt }] }],
-      }),
+    const firstB = await postStreamingResponses(serverB, {
+      tools: [SESSIONS_SPAWN_TOOL],
+      input: [makeUserInput(prompt)],
     });
     expect(firstB.status).toBe(200);
     expect(await firstB.text()).toContain('\\"label\\":\\"qa-fanout-alpha\\"');
   });
 
   it("answers heartbeat prompts without spawning extra subagents", async () => {
-    const server = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await server.stop();
-    });
+    const server = await startMockServer();
 
-    const response = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        stream: false,
-        input: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: "System: Gateway restart config-apply ok\nSystem: QA-SUBAGENT-RECOVERY-1234\n\nRead HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.",
-              },
-            ],
-          },
-        ],
-      }),
+    const response = await postNonStreamingResponses(server, {
+      input: [
+        makeUserInput(
+          "System: Gateway restart config-apply ok\nSystem: QA-SUBAGENT-RECOVERY-1234\n\nRead HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.",
+        ),
+      ],
     });
 
     expect(response.status).toBe(200);
@@ -3710,98 +3533,29 @@ describe("qa mock openai server", () => {
   });
 
   it("returns exact markers for visible and hot-installed skills", async () => {
-    const server = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await server.stop();
-    });
+    const server = await startMockServer();
 
-    const visible = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        stream: false,
-        input: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: "Visible skill marker: give me the visible skill marker exactly.",
-              },
-            ],
-          },
-        ],
-      }),
+    const visible = await postNonStreamingResponses(server, {
+      input: [makeUserInput("Visible skill marker: give me the visible skill marker exactly.")],
     });
     expect(visible.status).toBe(200);
     expect(outputText(await visible.json())).toBe("VISIBLE-SKILL-OK");
 
-    const hot = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        stream: false,
-        input: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: "Hot install marker: give me the hot install marker exactly.",
-              },
-            ],
-          },
-        ],
-      }),
+    const hot = await postNonStreamingResponses(server, {
+      input: [makeUserInput("Hot install marker: give me the hot install marker exactly.")],
     });
     expect(hot.status).toBe(200);
     expect(outputText(await hot.json())).toBe("HOT-INSTALL-OK");
   });
 
   it("uses the latest exact marker directive from conversation history", async () => {
-    const server = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await server.stop();
-    });
+    const server = await startMockServer();
 
-    const response = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        stream: false,
-        input: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: "Earlier turn: reply with only this exact marker: OLD_TOKEN",
-              },
-            ],
-          },
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: "Current turn: reply with only this exact marker: NEW_TOKEN",
-              },
-            ],
-          },
-        ],
-      }),
+    const response = await postNonStreamingResponses(server, {
+      input: [
+        makeUserInput("Earlier turn: reply with only this exact marker: OLD_TOKEN"),
+        makeUserInput("Current turn: reply with only this exact marker: NEW_TOKEN"),
+      ],
     });
 
     expect(response.status).toBe(200);
@@ -3809,115 +3563,47 @@ describe("qa mock openai server", () => {
   });
 
   it("requires both WhatsApp batched markers before returning the final batched marker", async () => {
-    const server = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await server.stop();
-    });
+    const server = await startMockServer();
 
-    const standalone = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        stream: false,
-        input: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text:
-                  "Second batched WhatsApp QA message. Reply with only this exact marker: " +
-                  "WHATSAPP_QA_BATCHED_FINAL_TEST only if the previous queued message is visible " +
-                  "in this same run context.",
-              },
-            ],
-          },
-        ],
-      }),
+    const standalone = await postNonStreamingResponses(server, {
+      input: [
+        makeUserInput(
+          "Second batched WhatsApp QA message. Reply with only this exact marker: " +
+            "WHATSAPP_QA_BATCHED_FINAL_TEST only if the previous queued message is visible " +
+            "in this same run context.",
+        ),
+      ],
     });
     expect(standalone.status).toBe(200);
     expect(outputText(await standalone.json())).toBe("WHATSAPP_QA_BATCHED_MISSING_CONTEXT_TEST");
 
-    const batched = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        stream: false,
-        input: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text:
-                  "First batched WhatsApp QA message WHATSAPP_QA_BATCHED_FIRST_TEST. " +
-                  "Wait for the next message before replying.",
-              },
-            ],
-          },
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text:
-                  "Second batched WhatsApp QA message. Reply with only this exact marker: " +
-                  "WHATSAPP_QA_BATCHED_FINAL_TEST only if the previous queued message is visible " +
-                  "in this same run context.",
-              },
-            ],
-          },
-        ],
-      }),
+    const batched = await postNonStreamingResponses(server, {
+      input: [
+        makeUserInput(
+          "First batched WhatsApp QA message WHATSAPP_QA_BATCHED_FIRST_TEST. " +
+            "Wait for the next message before replying.",
+        ),
+        makeUserInput(
+          "Second batched WhatsApp QA message. Reply with only this exact marker: " +
+            "WHATSAPP_QA_BATCHED_FINAL_TEST only if the previous queued message is visible " +
+            "in this same run context.",
+        ),
+      ],
     });
     expect(batched.status).toBe(200);
     expect(outputText(await batched.json())).toBe("WHATSAPP_QA_BATCHED_FINAL_TEST");
   });
 
   it("lets the latest exact marker prompt beat stale Telegram session_status history", async () => {
-    const server = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await server.stop();
-    });
+    const server = await startMockServer();
 
-    const response = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        stream: false,
-        input: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: "Telegram current session_status QA check. Call session_status with sessionKey set to current.",
-              },
-            ],
-          },
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: "Telegram reply-chain marker QA. Reply exactly: QA-TELEGRAM-REPLY-CHAIN-OK",
-              },
-            ],
-          },
-        ],
-      }),
+    const response = await postNonStreamingResponses(server, {
+      input: [
+        makeUserInput(
+          "Telegram current session_status QA check. Call session_status with sessionKey set to current.",
+        ),
+        makeUserInput("Telegram reply-chain marker QA. Reply exactly: QA-TELEGRAM-REPLY-CHAIN-OK"),
+      ],
     });
 
     expect(response.status).toBe(200);
@@ -3925,42 +3611,17 @@ describe("qa mock openai server", () => {
   });
 
   it("does not repeat stale Telegram session_status for later ordinary prompts", async () => {
-    const server = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await server.stop();
-    });
+    const server = await startMockServer();
 
-    const response = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        stream: false,
-        input: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: "Telegram current session_status QA check. Call session_status with sessionKey set to current.",
-              },
-            ],
-          },
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: "@sut Telegram QA mention routing check. Reply with a short acknowledgement.",
-              },
-            ],
-          },
-        ],
-      }),
+    const response = await postNonStreamingResponses(server, {
+      input: [
+        makeUserInput(
+          "Telegram current session_status QA check. Call session_status with sessionKey set to current.",
+        ),
+        makeUserInput(
+          "@sut Telegram QA mention routing check. Reply with a short acknowledgement.",
+        ),
+      ],
     });
 
     expect(response.status).toBe(200);
@@ -3969,42 +3630,15 @@ describe("qa mock openai server", () => {
   });
 
   it("uses exact marker directives from request context when the latest user text is generic", async () => {
-    const server = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await server.stop();
-    });
+    const server = await startMockServer();
 
-    const response = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        stream: false,
-        input: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: "@qa-sut.example.test reply with only this exact marker: QA_CANARY_TEST",
-              },
-            ],
-          },
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: "Continue with the QA scenario plan and report worked, failed, and blocked items.",
-              },
-            ],
-          },
-        ],
-      }),
+    const response = await postNonStreamingResponses(server, {
+      input: [
+        makeUserInput("@qa-sut.example.test reply with only this exact marker: QA_CANARY_TEST"),
+        makeUserInput(
+          "Continue with the QA scenario plan and report worked, failed, and blocked items.",
+        ),
+      ],
     });
 
     expect(response.status).toBe(200);
@@ -4014,8 +3648,7 @@ describe("qa mock openai server", () => {
   it("prefers Matrix exact marker prompts over quoted silent-reply guidance", async () => {
     const server = await startMockServer();
 
-    const response = await postResponses(server, {
-      stream: false,
+    const response = await postNonStreamingResponses(server, {
       instructions: [
         "You are in a Matrix group chat.",
         'If no response is needed, reply with exactly "NO_REPLY" and nothing else.',
@@ -4034,8 +3667,7 @@ describe("qa mock openai server", () => {
   it("lets current exact replies beat stale exact marker history", async () => {
     const server = await startMockServer();
 
-    const response = await postResponses(server, {
-      stream: false,
+    const response = await postNonStreamingResponses(server, {
       input: [
         makeUserInput("Earlier turn: reply with only this exact marker: STALE_MARKER"),
         makeUserInput("Reply exactly: CURRENT_REPLY"),
@@ -4049,8 +3681,7 @@ describe("qa mock openai server", () => {
   it("uses the previous user instruction when the tail user item is runtime context", async () => {
     const server = await startMockServer();
 
-    const response = await postResponses(server, {
-      stream: false,
+    const response = await postNonStreamingResponses(server, {
       input: [
         makeUserInput("Reply exactly: QA_RUNTIME_CONTEXT_CARRIER_OK"),
         makeUserInput(TEST_RUNTIME_CONTEXT_CARRIER),
@@ -4069,13 +3700,11 @@ describe("qa mock openai server", () => {
         "Reply with only this exact marker: QA_INITIAL_OK",
     );
 
-    const setupResponse = await postResponses(server, {
-      stream: false,
+    const setupResponse = await postNonStreamingResponses(server, {
       input: [setupInput],
     });
 
-    const response = await postResponses(server, {
-      stream: false,
+    const response = await postNonStreamingResponses(server, {
       input: [setupInput, makeUserInput("  📍 37.774900, -122.419400")],
     });
 
@@ -4095,17 +3724,24 @@ describe("qa mock openai server", () => {
         "Reply with only this exact marker: QA_STRUCTURED_INITIAL_OK",
     );
 
-    const setupResponse = await postResponses(server, {
-      stream: false,
+    const setupResponse = await postNonStreamingResponses(server, {
       input: [setupInput],
     });
-    const contactResponse = await postResponses(server, {
-      stream: false,
+    const contactResponse = await postNonStreamingResponses(server, {
       input: [setupInput, makeUserInput("  <contact>")],
     });
-    const stickerResponse = await postResponses(server, {
-      stream: false,
-      input: [setupInput, makeUserInput("  <media:sticker>")],
+    const stickerResponse = await postNonStreamingResponses(server, {
+      input: [setupInput, makeWhatsAppStructuredUserInput("", "sticker")],
+    });
+    const webpImageInput = {
+      role: "user" as const,
+      content: [
+        { type: "input_text" as const, text: "" },
+        { type: "input_image" as const, image_url: "data:image/webp;base64,AA==" },
+      ],
+    };
+    const webpImageResponse = await postNonStreamingResponses(server, {
+      input: [setupInput, webpImageInput],
     });
 
     expect(setupResponse.status).toBe(200);
@@ -4114,31 +3750,23 @@ describe("qa mock openai server", () => {
     expect(outputText(await contactResponse.json())).toBe("QA_WHATSAPP_CONTACT_OK");
     expect(stickerResponse.status).toBe(200);
     expect(outputText(await stickerResponse.json())).toBe("QA_WHATSAPP_STICKER_OK");
+    expect(outputText(await webpImageResponse.json())).not.toBe("QA_WHATSAPP_STICKER_OK");
   });
 
   it("uses WhatsApp structured markers for metadata-prefixed message bodies", async () => {
     const server = await startMockServer();
-    const setupInput = makeUserInput(
-      "When a later WhatsApp location message shows 37.774900, -122.419400, " +
-        "reply with only this WhatsApp location marker: QA_WHATSAPP_LOCATION_OK. " +
-        "When a later WhatsApp contact message appears, " +
-        "reply with only this WhatsApp contact marker: QA_WHATSAPP_CONTACT_OK. " +
-        "When a later WhatsApp sticker message appears, " +
-        "reply with only this WhatsApp sticker marker: QA_WHATSAPP_STICKER_OK. " +
-        "Reply with only this exact marker: QA_STRUCTURED_INITIAL_OK",
-    );
+    const setupInput = WHATSAPP_STRUCTURED_SETUP_INPUT;
     const previousExactMarkerInput = makeUserInput(
       "Reply with only this previous unrelated exact marker: QA_WHATSAPP_PREVIOUS_OK",
     );
 
-    const locationResponse = await postResponses(server, {
-      stream: false,
+    const locationResponse = await postNonStreamingResponses(server, {
       input: [
         setupInput,
         previousExactMarkerInput,
         makeUserInput(
           [
-            "Conversation info (untrusted metadata):",
+            "Conversation info: ⟦openclaw:ctx⟧",
             "```json",
             '{"inbound_event_kind":"user_request"}',
             "```",
@@ -4148,32 +3776,29 @@ describe("qa mock openai server", () => {
         ),
       ],
     });
-    const contactResponse = await postResponses(server, {
-      stream: false,
+    const contactResponse = await postNonStreamingResponses(server, {
       input: [
         setupInput,
         previousExactMarkerInput,
         makeUserInput(
-          ["Sender (untrusted metadata):", "```json", '{"name":"QA"}', "```", "", "<contact>"].join(
-            "\n",
-          ),
+          ["Sender: ⟦openclaw:ctx⟧", "```json", '{"name":"QA"}', "```", "", "<contact>"].join("\n"),
         ),
       ],
     });
-    const stickerResponse = await postResponses(server, {
-      stream: false,
+    const stickerResponse = await postNonStreamingResponses(server, {
       input: [
         setupInput,
         previousExactMarkerInput,
-        makeUserInput(
+        makeWhatsAppStructuredUserInput(
           [
-            "Conversation info (untrusted metadata):",
+            "Conversation info: ⟦openclaw:ctx⟧",
             "```json",
             '{"inbound_event_kind":"user_request"}',
             "```",
             "",
-            "<media:sticker>",
+            "",
           ].join("\n"),
+          "sticker",
         ),
       ],
     });
@@ -4188,15 +3813,7 @@ describe("qa mock openai server", () => {
 
   it("detects each WhatsApp structured body after a channel envelope", async () => {
     const server = await startMockServer();
-    const setupInput = makeUserInput(
-      "When a later WhatsApp location message shows 37.774900, -122.419400, " +
-        "reply with only this WhatsApp location marker: QA_WHATSAPP_LOCATION_OK. " +
-        "When a later WhatsApp contact message appears, " +
-        "reply with only this WhatsApp contact marker: QA_WHATSAPP_CONTACT_OK. " +
-        "When a later WhatsApp sticker message appears, " +
-        "reply with only this WhatsApp sticker marker: QA_WHATSAPP_STICKER_OK. " +
-        "Reply with only this exact marker: QA_STRUCTURED_INITIAL_OK",
-    );
+    const setupInput = WHATSAPP_STRUCTURED_SETUP_INPUT;
 
     const cases = [
       {
@@ -4204,15 +3821,17 @@ describe("qa mock openai server", () => {
         expected: "QA_WHATSAPP_LOCATION_OK",
       },
       { body: "<contact>", expected: "QA_WHATSAPP_CONTACT_OK" },
-      { body: "<media:sticker>", expected: "QA_WHATSAPP_STICKER_OK" },
+      { body: "", mediaKind: "sticker" as const, expected: "QA_WHATSAPP_STICKER_OK" },
     ];
     for (const structuredCase of cases) {
-      const response = await postResponses(server, {
-        stream: false,
+      const response = await postNonStreamingResponses(server, {
         input: [
           setupInput,
           makeUserInput("Reply with only this previous document marker: QA_WHATSAPP_DOCUMENT_OK"),
-          makeUserInput(`[WhatsApp +15555550123] +15555550123: ${structuredCase.body}`),
+          makeWhatsAppStructuredUserInput(
+            `[WhatsApp +15555550123] +15555550123: ${structuredCase.body}`,
+            "mediaKind" in structuredCase ? structuredCase.mediaKind : undefined,
+          ),
         ],
       });
 
@@ -4223,31 +3842,23 @@ describe("qa mock openai server", () => {
 
   it("detects each WhatsApp structured body after combined timestamp and channel prefixes", async () => {
     const server = await startMockServer();
-    const setupInput = makeUserInput(
-      "When a later WhatsApp location message shows 37.774900, -122.419400, " +
-        "reply with only this WhatsApp location marker: QA_WHATSAPP_LOCATION_OK. " +
-        "When a later WhatsApp contact message appears, " +
-        "reply with only this WhatsApp contact marker: QA_WHATSAPP_CONTACT_OK. " +
-        "When a later WhatsApp sticker message appears, " +
-        "reply with only this WhatsApp sticker marker: QA_WHATSAPP_STICKER_OK. " +
-        "Reply with only this exact marker: QA_STRUCTURED_INITIAL_OK",
-    );
+    const setupInput = WHATSAPP_STRUCTURED_SETUP_INPUT;
     const cases = [
       {
         body: "📍 37.774900, -122.419400",
         expected: "QA_WHATSAPP_LOCATION_OK",
       },
       { body: "<contact>", expected: "QA_WHATSAPP_CONTACT_OK" },
-      { body: "<media:sticker>", expected: "QA_WHATSAPP_STICKER_OK" },
+      { body: "", mediaKind: "sticker" as const, expected: "QA_WHATSAPP_STICKER_OK" },
     ];
 
     for (const structuredCase of cases) {
-      const response = await postResponses(server, {
-        stream: false,
+      const response = await postNonStreamingResponses(server, {
         input: [
           setupInput,
-          makeUserInput(
+          makeWhatsAppStructuredUserInput(
             `[Tue 2026-07-14 18:17 GMT+5:30] [WhatsApp +15555550123] +15555550123: ${structuredCase.body}`,
+            "mediaKind" in structuredCase ? structuredCase.mediaKind : undefined,
           ),
         ],
       });
@@ -4259,15 +3870,7 @@ describe("qa mock openai server", () => {
 
   it("detects each WhatsApp structured body after canonical timestamp prefixes", async () => {
     const server = await startMockServer();
-    const setupInput = makeUserInput(
-      "When a later WhatsApp location message shows 37.774900, -122.419400, " +
-        "reply with only this WhatsApp location marker: QA_WHATSAPP_LOCATION_OK. " +
-        "When a later WhatsApp contact message appears, " +
-        "reply with only this WhatsApp contact marker: QA_WHATSAPP_CONTACT_OK. " +
-        "When a later WhatsApp sticker message appears, " +
-        "reply with only this WhatsApp sticker marker: QA_WHATSAPP_STICKER_OK. " +
-        "Reply with only this exact marker: QA_STRUCTURED_INITIAL_OK",
-    );
+    const setupInput = WHATSAPP_STRUCTURED_SETUP_INPUT;
     const timestampPrefixes = [
       "[Tue 2026-07-14 12:47 UTC]",
       "[Tue 2026-07-14 07:47 EST]",
@@ -4282,14 +3885,19 @@ describe("qa mock openai server", () => {
         expected: "QA_WHATSAPP_LOCATION_OK",
       },
       { body: "<contact>", expected: "QA_WHATSAPP_CONTACT_OK" },
-      { body: "<media:sticker>", expected: "QA_WHATSAPP_STICKER_OK" },
+      { body: "", mediaKind: "sticker" as const, expected: "QA_WHATSAPP_STICKER_OK" },
     ];
 
     for (const prefix of timestampPrefixes) {
       for (const structuredCase of cases) {
-        const response = await postResponses(server, {
-          stream: false,
-          input: [setupInput, makeUserInput(`${prefix} ${structuredCase.body}`)],
+        const response = await postNonStreamingResponses(server, {
+          input: [
+            setupInput,
+            makeWhatsAppStructuredUserInput(
+              `${prefix} ${structuredCase.body}`,
+              "mediaKind" in structuredCase ? structuredCase.mediaKind : undefined,
+            ),
+          ],
         });
 
         expect(response.status).toBe(200);
@@ -4307,8 +3915,7 @@ describe("qa mock openai server", () => {
         "reply with only this WhatsApp contact marker: QA_WHATSAPP_CONTACT_OK. " +
         "Reply with only this exact marker: QA_STRUCTURED_INITIAL_OK",
     );
-    const response = await postResponses(server, {
-      stream: false,
+    const response = await postNonStreamingResponses(server, {
       input: [
         setupInput,
         makeUserInput("[WhatsApp +15555550123] +15555550123: 📍 37.774900, -122.419400"),
@@ -4322,15 +3929,7 @@ describe("qa mock openai server", () => {
 
   it("does not treat structured WhatsApp tokens in ordinary prose as message bodies", async () => {
     const server = await startMockServer();
-    const setupInput = makeUserInput(
-      "When a later WhatsApp location message shows 37.774900, -122.419400, " +
-        "reply with only this WhatsApp location marker: QA_WHATSAPP_LOCATION_OK. " +
-        "When a later WhatsApp contact message appears, " +
-        "reply with only this WhatsApp contact marker: QA_WHATSAPP_CONTACT_OK. " +
-        "When a later WhatsApp sticker message appears, " +
-        "reply with only this WhatsApp sticker marker: QA_WHATSAPP_STICKER_OK. " +
-        "Reply with only this exact marker: QA_STRUCTURED_INITIAL_OK",
-    );
+    const setupInput = WHATSAPP_STRUCTURED_SETUP_INPUT;
     const proseInputs = [
       "Please compare [Tue 2026-07-14 12:47 UTC] 📍 37.774900, -122.419400 and explain [that] <contact> and <media:sticker> text",
       "[Tue 2026-07-14 12:47 UTC] Contact note: <contact> is descriptive prose",
@@ -4339,11 +3938,17 @@ describe("qa mock openai server", () => {
         "Contact note: <contact>",
         "Sticker note: <media:sticker>",
       ].join("\n"),
+      [
+        "WhatsApp media: ⟦openclaw:ctx⟧",
+        "```json",
+        '{"source":"whatsapp","type":"media","payload":{"kind":"image"}}',
+        "```",
+        '{"payload":{"kind":"sticker"}} is ordinary message text',
+      ].join("\n"),
     ];
 
     for (const proseInput of proseInputs) {
-      const response = await postResponses(server, {
-        stream: false,
+      const response = await postNonStreamingResponses(server, {
         input: [setupInput, makeUserInput(proseInput)],
       });
 
@@ -4397,28 +4002,16 @@ describe("qa mock openai server", () => {
   });
 
   it("uses image generation directives from request context when the latest user text is generic", async () => {
-    const server = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await server.stop();
-    });
+    const server = await startMockServer();
 
     const channelPrompt =
       '@qa-sut.example.test /tool image_generate action=generate prompt="QA lighthouse image for Matrix delivery testing" size=1024x1024 count=1';
     const genericPrompt =
       "Continue with the QA scenario plan and report worked, failed, and blocked items.";
 
-    const toolPlan = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        stream: false,
-        input: [makeUserInput(channelPrompt), makeUserInput(genericPrompt)],
-      }),
+    const toolPlan = await postNonStreamingResponses(server, {
+      tools: [IMAGE_GENERATE_TOOL],
+      input: [makeUserInput(channelPrompt), makeUserInput(genericPrompt)],
     });
 
     expect(toolPlan.status).toBe(200);
@@ -4427,45 +4020,112 @@ describe("qa mock openai server", () => {
     expect(toolPlanOutput.name).toBe("image_generate");
     expect(String(toolPlanOutput.arguments)).toContain("qa-lighthouse.png");
 
-    const toolResult = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        stream: false,
-        input: [
-          makeUserInput(channelPrompt),
-          makeUserInput(genericPrompt),
-          {
-            type: "function_call",
-            name: "image_generate",
-            call_id: "call_mock_image_generate_1",
-            arguments: JSON.stringify({
-              prompt: "A QA lighthouse",
-              filename: "qa-lighthouse.png",
-            }),
-          },
-          {
-            type: "function_call_output",
-            call_id: "call_mock_image_generate_1",
-            output: JSON.stringify({
-              details: { media: { mediaUrls: ["/tmp/qa-lighthouse.png"] } },
-            }),
-          },
-        ],
-      }),
+    const toolResult = await postNonStreamingResponses(server, {
+      input: [
+        makeUserInput(channelPrompt),
+        makeUserInput(genericPrompt),
+        {
+          type: "function_call",
+          name: "image_generate",
+          call_id: "call_mock_image_generate_1",
+          arguments: JSON.stringify({
+            prompt: "A QA lighthouse",
+            filename: "qa-lighthouse.png",
+          }),
+        },
+        makeToolOutputWithCallId(
+          "call_mock_image_generate_1",
+          JSON.stringify({
+            details: { media: { mediaUrls: ["/tmp/qa-lighthouse.png"] } },
+          }),
+        ),
+      ],
     });
 
     expect(toolResult.status).toBe(200);
     expect(outputText(await toolResult.json())).toContain("Attachment: /tmp/qa-lighthouse.png");
   });
 
+  it("completes an image without replaying a tool unavailable to the completion turn", async () => {
+    const server = await startMockServer();
+    const prompt = "Image generation check: generate a QA lighthouse image.";
+    const imagePlan = await expectNonStreamingResponsesJson<unknown>(server, {
+      tools: [IMAGE_GENERATE_TOOL],
+      input: [makeUserInput(prompt)],
+    });
+    const imageCall = outputToolCall(imagePlan, "image_generate");
+    const callId = outputToolCallId(imageCall, "call_mock_image_generate_unavailable");
+    const completionEvent = [
+      "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+      "OpenClaw runtime context (internal):",
+      "",
+      "[Internal task completion event]",
+      "source: image_generation",
+      "task: A QA lighthouse on a dark sea with a tiny protocol droid silhouette.",
+      "status: completed successfully",
+      "Generated media:",
+      "MEDIA:/tmp/qa-lighthouse.png",
+      "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+    ].join("\n");
+    const completion = await expectNonStreamingResponsesJson<unknown>(server, {
+      tools: [MESSAGE_TOOL],
+      input: [
+        makeUserInput(prompt),
+        {
+          type: "function_call",
+          name: "image_generate",
+          call_id: callId,
+          arguments: String(imageCall.arguments),
+        },
+        makeToolOutputWithCallId(
+          callId,
+          JSON.stringify({
+            content: [{ type: "text", text: "Background image generation started." }],
+            details: { async: true, status: "started" },
+          }),
+        ),
+        makeUserInput(completionEvent),
+      ],
+    });
+
+    expect(
+      outputItems(completion).some(
+        (item) => item.type === "function_call" && item.name === "image_generate",
+      ),
+    ).toBe(false);
+    expect(outputText(completion)).toBe(
+      "Protocol note: generated the QA lighthouse image successfully.\nMEDIA:/tmp/qa-lighthouse.png",
+    );
+  });
+
+  it("does not replay a historical image completion on a new marker turn", async () => {
+    const server = await startMockServer();
+    const completion = await expectNonStreamingResponsesJson<unknown>(server, {
+      tools: [MESSAGE_TOOL],
+      input: [
+        makeUserInput(
+          [
+            "[Internal task completion event]",
+            "source: image_generation",
+            "status: completed successfully",
+            "MEDIA:/tmp/qa-lighthouse.png",
+          ].join("\n"),
+        ),
+        {
+          role: "assistant",
+          content: [{ type: "output_text", text: "MEDIA:/tmp/qa-lighthouse.png" }],
+        },
+        makeUserInput("Marker exact marker: `fresh-image-completion-marker`"),
+      ],
+    });
+
+    expect(outputText(completion)).toBe("fresh-image-completion-marker");
+  });
+
   it("plans QA tool-search calls for instruction-declared Codex dynamic tools", async () => {
     const server = await startMockServer();
 
-    const response = await postResponses(server, {
-      stream: false,
+    const response = await postNonStreamingResponses(server, {
       instructions: "Codex dynamic OpenClaw tools available in this turn: web_search.",
       input: [
         makeUserInput(
@@ -4484,8 +4144,7 @@ describe("qa mock openai server", () => {
   it("plans QA tool-search calls from explicit fixture targets even without Responses tools", async () => {
     const server = await startMockServer();
 
-    const response = await postResponses(server, {
-      stream: false,
+    const response = await postNonStreamingResponses(server, {
       input: [
         makeUserInput(
           "tool search qa check target=session_status. Call exactly that tool once and then summarize.",
@@ -4505,8 +4164,7 @@ describe("qa mock openai server", () => {
     const prompt =
       "Call web_fetch exactly once with URL https://example.com/ and maxChars 500, wait for its result, then summarize. If web_fetch is already callable, call it directly without tool_search. Otherwise use tool_search to locate it first, then call web_fetch. A tool_search result alone does not complete the task; do not finish before web_fetch returns. QA routing marker: tool search qa check target=web_fetch.";
 
-    const response = await postResponses(server, {
-      stream: false,
+    const response = await postNonStreamingResponses(server, {
       input: [makeUserInput(prompt)],
     });
 
@@ -4524,16 +4182,14 @@ describe("qa mock openai server", () => {
     const server = await startMockServer();
     const targetTool = "fake_plugin_tool_17";
 
-    const response = await postResponses(server, {
-      stream: false,
+    const response = await postNonStreamingResponses(server, {
       input: [
         makeUserInput(
           `tool search qa check target=${targetTool}. Call exactly that tool once and then summarize.`,
         ),
-        {
-          type: "function_call_output",
-          call_id: "call_tool_search_code_1",
-          output: JSON.stringify({
+        makeToolOutputWithCallId(
+          "call_tool_search_code_1",
+          JSON.stringify({
             ok: true,
             value: {
               tool: {
@@ -4553,7 +4209,7 @@ describe("qa mock openai server", () => {
               },
             },
           }),
-        },
+        ),
       ],
     });
 
@@ -4565,8 +4221,7 @@ describe("qa mock openai server", () => {
     const server = await startMockServer();
     const targetTool = "fake_plugin_tool_17";
 
-    const response = await postResponses(server, {
-      stream: false,
+    const response = await postNonStreamingResponses(server, {
       input: [
         {
           role: "system",
@@ -4580,10 +4235,9 @@ describe("qa mock openai server", () => {
         makeUserInput(
           `tool search qa check target=${targetTool}. Call exactly that tool once and then summarize.`,
         ),
-        {
-          type: "function_call_output",
-          call_id: "call_tool_search_code_1",
-          output: JSON.stringify({
+        makeToolOutputWithCallId(
+          "call_tool_search_code_1",
+          JSON.stringify({
             ok: true,
             value: {
               tool: { name: targetTool },
@@ -4592,7 +4246,7 @@ describe("qa mock openai server", () => {
               },
             },
           }),
-        },
+        ),
       ],
     });
 
@@ -4602,8 +4256,7 @@ describe("qa mock openai server", () => {
 
   it("derives ask_user QA summaries from the returned answers", async () => {
     const server = await startMockServer();
-    const response = await postResponses(server, {
-      stream: false,
+    const response = await postNonStreamingResponses(server, {
       input: [
         {
           role: "system",
@@ -4617,10 +4270,9 @@ describe("qa mock openai server", () => {
         makeUserInput(
           "QA routing marker: tool search qa check target=ask_user. Ask structured questions, then summarize their actual answers.",
         ),
-        {
-          type: "function_call_output",
-          call_id: "call_ask_user_1",
-          output: JSON.stringify({
+        makeToolOutputWithCallId(
+          "call_ask_user_1",
+          JSON.stringify({
             content: [
               {
                 type: "text",
@@ -4628,7 +4280,7 @@ describe("qa mock openai server", () => {
               },
             ],
           }),
-        },
+        ),
       ],
     });
 
@@ -4641,8 +4293,7 @@ describe("qa mock openai server", () => {
   it("plans QA tool-search failure calls with denied-input args", async () => {
     const server = await startMockServer();
 
-    const response = await postResponses(server, {
-      stream: false,
+    const response = await postNonStreamingResponses(server, {
       input: [
         makeUserInput(
           "tool search qa failure target=web_search. Exercise the denied-input path once and then summarize.",
@@ -4657,12 +4308,333 @@ describe("qa mock openai server", () => {
     expect(String(toolPlanOutput.arguments)).toContain("OPENCLAW_QA_WEB_SEARCH_DENIED_INPUT");
   });
 
-  it("plans QA subagent handoff calls even when Codex dynamic tools are not in body.tools", async () => {
+  it.each([
+    {
+      label: "workspace-local happy",
+      prompt:
+        "tool search qa check target=apply_patch. Call apply_patch exactly once and then summarize.",
+      operation: "Add File",
+      patchPath: "runtime-tool-fixture-patch.txt",
+    },
+    {
+      label: "workspace-escaping failure",
+      prompt:
+        "tool search qa failure target=apply_patch. Exercise the denied-input path once and then summarize.",
+      operation: "Update File",
+      patchPath: "../runtime-tool-fixture-denied.txt",
+    },
+  ])("plans a valid $label apply_patch envelope", async ({ prompt, operation, patchPath }) => {
+    const server = await startMockServer();
+    const response = await postNonStreamingResponses(server, {
+      input: [makeUserInput(prompt)],
+    });
+
+    expect(response.status).toBe(200);
+    const payload = await response.json();
+    expect(outputItem(payload)).toMatchObject({ type: "function_call", name: "apply_patch" });
+    const args = outputToolArgs(payload);
+    expect(args).not.toHaveProperty("__qaFailureMode");
+    expect(args.input).toBeTypeOf("string");
+    expect(args.input).toContain("*** Begin Patch\n");
+    expect(args.input).toContain(`*** ${operation}: ${patchPath}\n`);
+    if (operation === "Update File") {
+      expect(args.input).toContain("\n@@\n-runtime-tool-fixture-denied-original\n");
+    }
+    expect(args.input).toContain("\n*** End Patch\n");
+  });
+
+  it.each([
+    {
+      label: "workspace-local happy",
+      prompt:
+        "tool search qa check target=apply_patch. Call apply_patch exactly once and then summarize.",
+      operation: "Add File",
+      patchPath: "runtime-tool-fixture-patch.txt",
+    },
+    {
+      label: "workspace-escaping failure",
+      prompt:
+        "tool search qa failure target=apply_patch. Exercise the denied-input path once and then summarize.",
+      operation: "Update File",
+      patchPath: "../runtime-tool-fixture-denied.txt",
+    },
+  ])("plans an actual $label native freeform patch", async (testCase) => {
+    const server = await startMockServer();
+    const response = await postNonStreamingResponses(server, {
+      tools: [CODEX_CUSTOM_PATCH_TOOL],
+      input: [makeUserInput(testCase.prompt)],
+    });
+
+    expect(response.status).toBe(200);
+    const item = outputItem(await response.json());
+    expect(item).toMatchObject({ type: "custom_tool_call", name: "apply_patch" });
+    expect(item).not.toHaveProperty("arguments");
+    expect(item.input).toEqual(
+      expect.stringContaining(`*** ${testCase.operation}: ${testCase.patchPath}\n`),
+    );
+    if (testCase.operation === "Update File") {
+      expect(item.input).toEqual(
+        expect.stringContaining("\n@@\n-runtime-tool-fixture-denied-original\n"),
+      );
+    }
+
+    const debugResponse = await fetch(`${server.baseUrl}/debug/last-request`);
+    expect(debugResponse.status).toBe(200);
+    const debug = requireRecord(await debugResponse.json(), "native patch plan debug request");
+    expect(debug.plannedToolName).toBe("apply_patch");
+    expect(debug.plannedToolCallId).toBe(item.call_id);
+    expect(debug.plannedToolArgs).toEqual({ input: item.input });
+  });
+
+  it.each([
+    {
+      label: "namespaced tools",
+      declarations: { tools: [CODEX_CUSTOM_PATCH_NAMESPACE] },
+      additionalTools: undefined,
+    },
+    {
+      label: "namespaced dynamic tools",
+      declarations: { dynamicTools: [CODEX_CUSTOM_PATCH_NAMESPACE] },
+      additionalTools: undefined,
+    },
+    {
+      label: "developer additional tools",
+      declarations: {},
+      additionalTools: [CODEX_CUSTOM_PATCH_NAMESPACE],
+    },
+    {
+      label: "direct custom tools before tool search",
+      declarations: {
+        tools: [{ type: "function", name: "tool_search_code" }, CODEX_CUSTOM_PATCH_NAMESPACE],
+      },
+      additionalTools: undefined,
+    },
+  ])("preserves custom-tool identity through $label", async ({ declarations, additionalTools }) => {
+    const server = await startMockServer();
+    const input: Array<Record<string, unknown>> = [];
+    if (additionalTools) {
+      input.push({ type: "additional_tools", role: "developer", tools: additionalTools });
+    }
+    input.push(
+      makeUserInput(
+        "tool search qa check target=apply_patch. Call apply_patch exactly once and then summarize.",
+      ),
+    );
+
+    const response = await postNonStreamingResponses(server, { ...declarations, input });
+
+    expect(response.status).toBe(200);
+    expect(outputItem(await response.json())).toMatchObject({
+      type: "custom_tool_call",
+      name: "apply_patch",
+      namespace: "openclaw_direct",
+    });
+  });
+
+  it.each([
+    { label: "flat", tools: [CODEX_CUSTOM_PATCH_TOOL], namespace: undefined },
+    {
+      label: "namespaced",
+      tools: [CODEX_CUSTOM_PATCH_NAMESPACE],
+      namespace: "openclaw_direct",
+    },
+  ])("streams $label native Codex patch input as custom-tool SSE", async ({ tools, namespace }) => {
+    const server = await startMockServer();
+    const response = await postStreamingResponses(server, {
+      tools,
+      input: [
+        makeUserInput(
+          "tool search qa check target=apply_patch. Call apply_patch exactly once and then summarize.",
+        ),
+      ],
+    });
+
+    expect(response.status).toBe(200);
+    const body = await response.text();
+    const events = body
+      .split("\n")
+      .filter((line) => line.startsWith("data: {"))
+      .map(
+        (line) =>
+          JSON.parse(line.slice("data: ".length)) as {
+            type: string;
+            response?: { id?: string; output?: Array<Record<string, unknown>> };
+            item?: Record<string, unknown>;
+            item_id?: string;
+            call_id?: string;
+            delta?: string;
+          },
+      );
+    expect(events.map((event) => event.type)).toEqual([
+      "response.created",
+      "response.output_item.added",
+      "response.custom_tool_call_input.delta",
+      "response.output_item.done",
+      "response.completed",
+    ]);
+    const [created, added, delta, done, completed] = events;
+    expect(created?.response?.id).toBe(completed?.response?.id);
+    expect(added?.item).toMatchObject({
+      type: "custom_tool_call",
+      name: "apply_patch",
+      input: "",
+      status: "in_progress",
+    });
+    expect(done?.item).toMatchObject({
+      type: "custom_tool_call",
+      name: "apply_patch",
+      status: "completed",
+    });
+    expect(done?.item?.id).toEqual(expect.stringMatching(/^ctc_mock_apply_patch_/));
+    expect(delta?.item_id).toBe(done?.item?.id);
+    expect(delta?.call_id).toBe(done?.item?.call_id);
+    expect(delta?.delta).toBe(done?.item?.input);
+    expect(delta?.delta).toContain("runtime-tool-fixture-patch.txt");
+    expect(completed?.response?.output).toEqual([done?.item]);
+    for (const item of [added?.item, done?.item, completed?.response?.output?.[0]]) {
+      if (namespace) {
+        expect(item).toMatchObject({ namespace });
+      } else {
+        expect(item).not.toHaveProperty("namespace");
+      }
+    }
+  });
+
+  it("preserves namespaced native custom-tool identity over Responses WebSocket", async () => {
+    const server = await startMockServer();
+    const socket = new WebSocket(`${server.baseUrl.replace(/^http/u, "ws")}/v1/responses`);
+    cleanups.push(async () => socket.terminate());
+    await once(socket, "open");
+
+    const completed = new Promise<Array<Record<string, unknown>>>((resolve, reject) => {
+      const events: Array<Record<string, unknown>> = [];
+      socket.on("error", reject);
+      socket.on("message", (message) => {
+        const event = JSON.parse(Buffer.from(message as Buffer).toString("utf8")) as Record<
+          string,
+          unknown
+        >;
+        events.push(event);
+        if (event.type === "response.completed") {
+          resolve(events);
+        }
+      });
+    });
+    socket.send(
+      JSON.stringify({
+        type: "response.create",
+        tools: [CODEX_CUSTOM_PATCH_NAMESPACE],
+        input: [
+          makeUserInput(
+            "tool search qa check target=apply_patch. Call apply_patch exactly once and then summarize.",
+          ),
+        ],
+      }),
+    );
+
+    const events = await completed;
+    const added = requireRecord(
+      events.find((event) => event.type === "response.output_item.added")?.item,
+      "WebSocket custom-tool added item",
+    );
+    const done = requireRecord(
+      events.find((event) => event.type === "response.output_item.done")?.item,
+      "WebSocket custom-tool completed item",
+    );
+    const response = requireRecord(
+      events.find((event) => event.type === "response.completed")?.response,
+      "WebSocket completed response",
+    );
+    for (const item of [added, done, outputItem(response)]) {
+      expect(item).toMatchObject({
+        type: "custom_tool_call",
+        name: "apply_patch",
+        namespace: "openclaw_direct",
+      });
+    }
+  });
+
+  it.each([
+    {
+      label: "successful native patch",
+      prompt:
+        "tool search qa check target=apply_patch. Call apply_patch exactly once and then summarize.",
+      output: "Successfully applied patch",
+      expectedOutput: "Successfully applied patch",
+      structuredError: false,
+    },
+    {
+      label: "denied native patch",
+      prompt:
+        "tool search qa failure target=apply_patch. Exercise the denied-input path once and then summarize.",
+      output: "Error: Path escapes sandbox root",
+      expectedOutput: "Error: Path escapes sandbox root",
+      structuredError: true,
+    },
+    {
+      label: "upstream Codex native patch rejection without a wire error flag",
+      prompt:
+        "tool search qa failure target=apply_patch. Exercise the denied-input path once and then summarize.",
+      output: "patch rejected: writing outside of the project; rejected by user approval settings",
+      expectedOutput:
+        "patch rejected: writing outside of the project; rejected by user approval settings",
+      structuredError: false,
+    },
+    {
+      label: "structured native patch output",
+      prompt:
+        "tool search qa check target=apply_patch. Call apply_patch exactly once and then summarize.",
+      output: [{ type: "input_text", text: "Successfully applied structured patch" }],
+      expectedOutput: "Successfully applied structured patch",
+      structuredError: false,
+    },
+  ])("links and completes $label custom-tool outputs", async (testCase) => {
+    const server = await startMockServer();
+    const planResponse = await postNonStreamingResponses(server, {
+      input: [makeUserInput(testCase.prompt)],
+    });
+    expect(planResponse.status).toBe(200);
+    const plannedCall = outputItem(await planResponse.json());
+    expect(plannedCall).toMatchObject({ type: "function_call", name: "apply_patch" });
+    const callId = outputToolCallId(plannedCall, "native-patch-call");
+
+    const continuationResponse = await postNonStreamingResponses(server, {
+      input: [
+        makeUserInput(testCase.prompt),
+        {
+          type: "custom_tool_call_output",
+          call_id: callId,
+          output: testCase.output,
+          ...(testCase.structuredError ? { is_error: true } : {}),
+        },
+      ],
+    });
+    expect(continuationResponse.status).toBe(200);
+    expect(outputItem(await continuationResponse.json()).type).toBe("message");
+
+    const debugResponse = await fetch(`${server.baseUrl}/debug/last-request`);
+    expect(debugResponse.status).toBe(200);
+    const debug = requireRecord(await debugResponse.json(), "custom patch debug request");
+    expect(debug.toolOutput).toBe(testCase.expectedOutput);
+    expect(debug.toolOutputCallId).toBe(callId);
+    if (testCase.structuredError) {
+      expect(debug.toolOutputStructuredError).toBe(true);
+    } else {
+      expect(debug).not.toHaveProperty("toolOutputStructuredError");
+    }
+    expect(debug).not.toHaveProperty("plannedToolName");
+  });
+
+  it("plans Codex Responses Lite handoff from declared developer additional tools", async () => {
     const server = await startMockServer();
 
-    const response = await postResponses(server, {
-      stream: false,
+    const response = await postNonStreamingResponses(server, {
       input: [
+        {
+          type: "additional_tools",
+          role: "developer",
+          tools: [CODEX_SUBAGENT_TOOL_NAMESPACE],
+        },
         makeUserInput(
           "Delegate one bounded QA task to a subagent. Wait for the subagent to finish.",
         ),
@@ -4673,40 +4645,30 @@ describe("qa mock openai server", () => {
     const toolPlanOutput = outputItem(await response.json());
     expect(toolPlanOutput.type).toBe("function_call");
     expect(toolPlanOutput.name).toBe("sessions_spawn");
+    expect(toolPlanOutput.namespace).toBe("openclaw");
   });
 
   it("records image inputs and describes attached images", async () => {
-    const server = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await server.stop();
-    });
+    const server = await startMockServer();
 
-    const response = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        stream: false,
-        model: "mock-openai/gpt-5.6-luna",
-        input: [
-          {
-            role: "user",
-            content: [
-              { type: "input_text", text: "Image understanding check: what do you see?" },
-              {
-                type: "input_image",
-                source: {
-                  type: "base64",
-                  mime_type: "image/png",
-                  data: QA_IMAGE_PNG_BASE64,
-                },
+    const response = await postNonStreamingResponses(server, {
+      model: "mock-openai/gpt-5.6-luna",
+      input: [
+        {
+          role: "user",
+          content: [
+            { type: "input_text", text: "Image understanding check: what do you see?" },
+            {
+              type: "input_image",
+              source: {
+                type: "base64",
+                mime_type: "image/png",
+                data: QA_IMAGE_PNG_BASE64,
               },
-            ],
-          },
-        ],
-      }),
+            },
+          ],
+        },
+      ],
     });
     expect(response.status).toBe(200);
     const payload = (await response.json()) as {
@@ -4723,35 +4685,24 @@ describe("qa mock openai server", () => {
   });
 
   it("recognizes OpenAI-compatible image_url parts as image inputs", async () => {
-    const server = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await server.stop();
-    });
+    const server = await startMockServer();
 
-    const response = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        stream: false,
-        model: "mock-openai/gpt-5.6-luna",
-        input: [
-          {
-            role: "user",
-            content: [
-              { type: "input_text", text: "Image understanding check: what do you see?" },
-              {
-                type: "image_url",
-                image_url: {
-                  url: `data:image/png;base64,${QA_IMAGE_PNG_BASE64}`,
-                },
+    const response = await postNonStreamingResponses(server, {
+      model: "mock-openai/gpt-5.6-luna",
+      input: [
+        {
+          role: "user",
+          content: [
+            { type: "input_text", text: "Image understanding check: what do you see?" },
+            {
+              type: "image_url",
+              image_url: {
+                url: `data:image/png;base64,${QA_IMAGE_PNG_BASE64}`,
               },
-            ],
-          },
-        ],
-      }),
+            },
+          ],
+        },
+      ],
     });
     expect(response.status).toBe(200);
     const payload = (await response.json()) as {
@@ -4767,41 +4718,30 @@ describe("qa mock openai server", () => {
   });
 
   it("answers image prompts when media context is the latest text part", async () => {
-    const server = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await server.stop();
-    });
+    const server = await startMockServer();
 
-    const response = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        stream: false,
-        model: "mock-openai/gpt-5.6-luna",
-        input: [
-          {
-            role: "user",
-            content: [
-              { type: "input_text", text: "Image understanding check: what do you see?" },
-              {
-                type: "input_image",
-                source: {
-                  type: "base64",
-                  mime_type: "image/png",
-                  data: QA_IMAGE_PNG_BASE64,
-                },
+    const response = await postNonStreamingResponses(server, {
+      model: "mock-openai/gpt-5.6-luna",
+      input: [
+        {
+          role: "user",
+          content: [
+            { type: "input_text", text: "Image understanding check: what do you see?" },
+            {
+              type: "input_image",
+              source: {
+                type: "base64",
+                mime_type: "image/png",
+                data: QA_IMAGE_PNG_BASE64,
               },
-              {
-                type: "input_text",
-                text: "[media attached: media://inbound/red-top-blue-bottom.png (image/png)]",
-              },
-            ],
-          },
-        ],
-      }),
+            },
+            {
+              type: "input_text",
+              text: "[media attached: media://inbound/red-top-blue-bottom.png (image/png)]",
+            },
+          ],
+        },
+      ],
     });
     expect(response.status).toBe(200);
     const payload = (await response.json()) as {
@@ -4815,41 +4755,36 @@ describe("qa mock openai server", () => {
   it("lets image prompts beat stale exact marker directives from chat history", async () => {
     const server = await startMockServer();
 
-    const response = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        stream: false,
-        model: "mock-openai/gpt-5.6-luna",
-        input: [
-          makeUserInput("Control UI bridge check. Marker exact marker: `ui bridge armed`"),
-          {
-            role: "assistant",
-            content: [{ type: "output_text", text: "ui bridge armed" }],
-          },
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: "Image understanding check: describe the top and bottom colors.",
+    const response = await postNonStreamingResponses(server, {
+      model: "mock-openai/gpt-5.6-luna",
+      input: [
+        makeUserInput("Control UI bridge check. Marker exact marker: `ui bridge armed`"),
+        {
+          role: "assistant",
+          content: [{ type: "output_text", text: "ui bridge armed" }],
+        },
+        {
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: "Image understanding check: describe the top and bottom colors.",
+            },
+            {
+              type: "input_image",
+              source: {
+                type: "base64",
+                mime_type: "image/png",
+                data: QA_IMAGE_PNG_BASE64,
               },
-              {
-                type: "input_image",
-                source: {
-                  type: "base64",
-                  mime_type: "image/png",
-                  data: QA_IMAGE_PNG_BASE64,
-                },
-              },
-              {
-                type: "input_text",
-                text: "[media attached: media://inbound/red-top-blue-bottom.png (image/png)]",
-              },
-            ],
-          },
-        ],
-      }),
+            },
+            {
+              type: "input_text",
+              text: "[media attached: media://inbound/red-top-blue-bottom.png (image/png)]",
+            },
+          ],
+        },
+      ],
     });
     expect(response.status).toBe(200);
     const payload = (await response.json()) as {
@@ -4864,42 +4799,37 @@ describe("qa mock openai server", () => {
   it("keeps stale image prompts from overriding later marker turns", async () => {
     const server = await startMockServer();
 
-    const response = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        stream: false,
-        model: "mock-openai/gpt-5.6-luna",
-        input: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: "Image understanding check: describe the top and bottom colors.",
+    const response = await postNonStreamingResponses(server, {
+      model: "mock-openai/gpt-5.6-luna",
+      input: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: "Image understanding check: describe the top and bottom colors.",
+            },
+            {
+              type: "input_image",
+              source: {
+                type: "base64",
+                mime_type: "image/png",
+                data: QA_IMAGE_PNG_BASE64,
               },
-              {
-                type: "input_image",
-                source: {
-                  type: "base64",
-                  mime_type: "image/png",
-                  data: QA_IMAGE_PNG_BASE64,
-                },
-              },
-            ],
-          },
-          {
-            role: "assistant",
-            content: [
-              {
-                type: "output_text",
-                text: "Protocol note: the attached image is split horizontally, with red on top and blue on the bottom.",
-              },
-            ],
-          },
-          makeUserInput("Marker exact marker: `fresh-marker-ok`"),
-        ],
-      }),
+            },
+          ],
+        },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "output_text",
+              text: "Protocol note: the attached image is split horizontally, with red on top and blue on the bottom.",
+            },
+          ],
+        },
+        makeUserInput("Marker exact marker: `fresh-marker-ok`"),
+      ],
     });
     expect(response.status).toBe(200);
     const payload = (await response.json()) as {
@@ -4911,33 +4841,28 @@ describe("qa mock openai server", () => {
   it("keeps stale consecutive image prompts from overriding later marker turns", async () => {
     const server = await startMockServer();
 
-    const response = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        stream: false,
-        model: "mock-openai/gpt-5.6-luna",
-        input: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: "Image understanding check: describe the top and bottom colors.",
+    const response = await postNonStreamingResponses(server, {
+      model: "mock-openai/gpt-5.6-luna",
+      input: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: "Image understanding check: describe the top and bottom colors.",
+            },
+            {
+              type: "input_image",
+              source: {
+                type: "base64",
+                mime_type: "image/png",
+                data: QA_IMAGE_PNG_BASE64,
               },
-              {
-                type: "input_image",
-                source: {
-                  type: "base64",
-                  mime_type: "image/png",
-                  data: QA_IMAGE_PNG_BASE64,
-                },
-              },
-            ],
-          },
-          makeUserInput("Marker exact marker: `fresh-consecutive-marker-ok`"),
-        ],
-      }),
+            },
+          ],
+        },
+        makeUserInput("Marker exact marker: `fresh-consecutive-marker-ok`"),
+      ],
     });
     expect(response.status).toBe(200);
     const payload = (await response.json()) as {
@@ -4947,13 +4872,7 @@ describe("qa mock openai server", () => {
   });
 
   it("handles deeply nested image input shapes without recursive traversal failure", async () => {
-    const server = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await server.stop();
-    });
+    const server = await startMockServer();
 
     let content: unknown = {
       type: "input_image",
@@ -4967,19 +4886,14 @@ describe("qa mock openai server", () => {
       content = [{ type: "input_text", text: "nested" }, content];
     }
 
-    const response = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        stream: false,
-        model: "mock-openai/gpt-5.6-luna",
-        input: [
-          {
-            role: "user",
-            content,
-          },
-        ],
-      }),
+    const response = await postNonStreamingResponses(server, {
+      model: "mock-openai/gpt-5.6-luna",
+      input: [
+        {
+          role: "user",
+          content,
+        },
+      ],
     });
     expect(response.status).toBe(200);
 
@@ -4989,40 +4903,29 @@ describe("qa mock openai server", () => {
   });
 
   it("describes reattached generated images in the roundtrip flow", async () => {
-    const server = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await server.stop();
-    });
+    const server = await startMockServer();
 
-    const response = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        stream: false,
-        model: "mock-openai/gpt-5.6-luna",
-        input: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: "Roundtrip image inspection check: describe the generated lighthouse attachment in one short sentence.",
+    const response = await postNonStreamingResponses(server, {
+      model: "mock-openai/gpt-5.6-luna",
+      input: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: "Roundtrip image inspection check: describe the generated lighthouse attachment in one short sentence.",
+            },
+            {
+              type: "input_image",
+              source: {
+                type: "base64",
+                mime_type: "image/png",
+                data: QA_IMAGE_PNG_BASE64,
               },
-              {
-                type: "input_image",
-                source: {
-                  type: "base64",
-                  mime_type: "image/png",
-                  data: QA_IMAGE_PNG_BASE64,
-                },
-              },
-            ],
-          },
-        ],
-      }),
+            },
+          ],
+        },
+      ],
     });
     expect(response.status).toBe(200);
     const payload = (await response.json()) as {
@@ -5033,79 +4936,34 @@ describe("qa mock openai server", () => {
   });
 
   it("ignores stale tool output from prior turns when planning the current turn", async () => {
-    const server = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await server.stop();
-    });
+    const server = await startMockServer();
 
-    const response = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        stream: true,
-        input: [
-          {
-            role: "user",
-            content: [{ type: "input_text", text: "Read QA_KICKOFF_TASK.md first." }],
-          },
-          {
-            type: "function_call_output",
-            output: "QA mission: read source and docs first.",
-          },
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: "Switch models now. Tool continuity check: reread QA_KICKOFF_TASK.md and mention the handoff in one short sentence.",
-              },
-            ],
-          },
-        ],
-      }),
+    const response = await postStreamingResponses(server, {
+      input: [
+        makeUserInput("Read QA_KICKOFF_TASK.md first."),
+        makeToolOutput("QA mission: read source and docs first."),
+        makeUserInput(
+          "Switch models now. Tool continuity check: reread QA_KICKOFF_TASK.md and mention the handoff in one short sentence.",
+        ),
+      ],
     });
     expect(response.status).toBe(200);
     expect(await response.text()).toContain('"name":"read"');
   });
 
   it("returns continuity language after the model-switch reread completes", async () => {
-    const server = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await server.stop();
-    });
+    const server = await startMockServer();
 
-    const response = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        stream: false,
-        model: "gpt-5.6-luna-alt",
-        input: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: "Switch models now. Tool continuity check: reread QA_KICKOFF_TASK.md and mention the handoff in one short sentence.",
-              },
-            ],
-          },
-          {
-            type: "function_call_output",
-            output: "QA mission: Understand this OpenClaw repo from source + docs before acting.",
-          },
-        ],
-      }),
+    const response = await postNonStreamingResponses(server, {
+      model: "gpt-5.6-luna-alt",
+      input: [
+        makeUserInput(
+          "Switch models now. Tool continuity check: reread QA_KICKOFF_TASK.md and mention the handoff in one short sentence.",
+        ),
+        makeToolOutput(
+          "QA mission: Understand this OpenClaw repo from source + docs before acting.",
+        ),
+      ],
     });
 
     expect(response.status).toBe(200);
@@ -5113,29 +4971,10 @@ describe("qa mock openai server", () => {
   });
 
   it("returns the Codex remote-compaction-v2 response shape", async () => {
-    const server = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await server.stop();
-    });
+    const server = await startMockServer();
 
-    const response = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        stream: true,
-        input: [
-          {
-            role: "user",
-            content: [{ type: "input_text", text: "Retained context." }],
-          },
-          { type: "compaction_trigger" },
-        ],
-      }),
+    const response = await postStreamingResponses(server, {
+      input: [makeUserInput("Retained context."), { type: "compaction_trigger" }],
     });
 
     expect(response.status).toBe(200);
@@ -5150,46 +4989,21 @@ describe("qa mock openai server", () => {
   });
 
   it("returns NO_REPLY for unmentioned group chatter", async () => {
-    const server = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await server.stop();
-    });
+    const server = await startMockServer();
 
-    const response = await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        stream: false,
-        input: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: 'Conversation info (untrusted metadata): {"is_group_chat": true}\n\nhello team, no bot ping here',
-              },
-            ],
-          },
-        ],
-      }),
+    const response = await postNonStreamingResponses(server, {
+      input: [
+        makeUserInput(
+          'Conversation info: ⟦openclaw:ctx⟧\n{"is_group_chat": true}\n\nhello team, no bot ping here',
+        ),
+      ],
     });
     expect(response.status).toBe(200);
     expect(outputText(await response.json())).toBe("NO_REPLY");
   });
 
   it("advertises Anthropic claude-opus-4-8 baseline model on /v1/models", async () => {
-    const server = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await server.stop();
-    });
+    const server = await startMockServer();
 
     const response = await fetch(`${server.baseUrl}/v1/models`);
     expect(response.status).toBe(200);
@@ -5201,13 +5015,8 @@ describe("qa mock openai server", () => {
   });
 
   it("advertises selected target-era models on /v1/models", async () => {
-    const server = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
+    const server = await startMockServer({
       modelRefs: ["mock-openai/gpt-5.5", "mock-openai/gpt-5.5-alt"],
-    });
-    cleanups.push(async () => {
-      await server.stop();
     });
 
     const response = await fetch(`${server.baseUrl}/v1/models`);
@@ -5218,14 +5027,51 @@ describe("qa mock openai server", () => {
     );
   });
 
+  it("advertises directly executable native Codex metadata alongside OpenAI models", async () => {
+    const server = await startMockServer({
+      modelRefs: ["mock-openai/gpt-5.6-luna", "mock-openai/gpt-5.6-luna-alt"],
+    });
+
+    const response = await fetch(`${server.baseUrl}/v1/models?client_version=0.142.0`);
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      data: Array<{ id: string; object: string }>;
+      models: Array<Record<string, unknown>>;
+    };
+    expect(body.data).toEqual(
+      expect.arrayContaining([
+        { id: "gpt-5.6-luna", object: "model" },
+        { id: "gpt-5.6-luna-alt", object: "model" },
+      ]),
+    );
+    expect(body.models).toHaveLength(2);
+    expect(body.models).toEqual([
+      expect.objectContaining({
+        slug: "gpt-5.6-luna",
+        display_name: "gpt-5.6-luna",
+        apply_patch_tool_type: "freeform",
+        tool_mode: "direct",
+        shell_type: "shell_command",
+        visibility: "list",
+        supported_in_api: true,
+        base_instructions: expect.any(String),
+        truncation_policy: { mode: "tokens", limit: 10_000 },
+        supported_reasoning_levels: expect.arrayContaining([
+          { effort: "medium", description: "Balanced QA reasoning" },
+        ]),
+        experimental_supported_tools: [],
+        input_modalities: ["text", "image"],
+      }),
+      expect.objectContaining({
+        slug: "gpt-5.6-luna-alt",
+        apply_patch_tool_type: "freeform",
+        tool_mode: "direct",
+      }),
+    ]);
+  });
+
   it("serves deterministic OpenAI-compatible audio transcription responses", async () => {
-    const server = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await server.stop();
-    });
+    const server = await startMockServer();
 
     const response = await fetch(`${server.baseUrl}/v1/audio/transcriptions`, {
       method: "POST",
@@ -5242,13 +5088,7 @@ describe("qa mock openai server", () => {
   });
 
   it("serves deterministic WhatsApp group audio transcription for the trigger fixture", async () => {
-    const server = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await server.stop();
-    });
+    const server = await startMockServer();
 
     const triggered = await fetch(`${server.baseUrl}/v1/audio/transcriptions`, {
       method: "POST",
@@ -5278,13 +5118,7 @@ describe("qa mock openai server", () => {
   });
 
   it("serves deterministic Matrix voice preflight transcription for the request prompt", async () => {
-    const server = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await server.stop();
-    });
+    const server = await startMockServer();
 
     const response = await fetch(`${server.baseUrl}/v1/audio/transcriptions`, {
       method: "POST",
@@ -5304,32 +5138,16 @@ describe("qa mock openai server", () => {
   });
 
   it("dispatches an Anthropic /v1/messages read tool call for source discovery prompts", async () => {
-    const server = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await server.stop();
-    });
+    const server = await startMockServer();
 
-    const response = await fetch(`${server.baseUrl}/v1/messages`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        model: "claude-opus-4-8",
-        max_tokens: 256,
-        messages: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "text",
-                text: "Read the seeded docs and report worked, failed, blocked, and follow-up items.",
-              },
-            ],
-          },
-        ],
-      }),
+    const response = await postJson(server, "/v1/messages", {
+      model: "claude-opus-4-8",
+      max_tokens: 256,
+      messages: [
+        makeAnthropicUserText(
+          "Read the seeded docs and report worked, failed, blocked, and follow-up items.",
+        ),
+      ],
     });
     expect(response.status).toBe(200);
     const body = (await response.json()) as {
@@ -5356,13 +5174,403 @@ describe("qa mock openai server", () => {
     expect(debugPayload.plannedToolName).toBe("read");
   });
 
-  it("preserves Anthropic /v1/messages declared tools for explicit sessions_spawn prompts", async () => {
+  it("routes Anthropic hidden tools through Code Mode and preserves scenario evidence", async () => {
     const server = await startMockServer();
+    const prompt =
+      "Repo contract followthrough check. Read AGENT.md, SOUL.md, and FOLLOWTHROUGH_INPUT.md first. Then follow the repo contract exactly, write ./repo-contract-summary.txt, and reply with three labeled lines: Read, Wrote, Status.";
+    const tools = [
+      {
+        name: "exec",
+        input_schema: {
+          type: "object",
+          properties: {
+            language: { type: "string" },
+            code: { type: "string" },
+          },
+          required: ["code"],
+        },
+      },
+      {
+        name: "wait",
+        input_schema: {
+          type: "object",
+          properties: { runId: { type: "string" } },
+          required: ["runId"],
+        },
+      },
+    ];
+    const messages: Array<Record<string, unknown>> = [makeAnthropicUserText(prompt)];
 
-    const response = await fetch(`${server.baseUrl}/v1/messages`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
+    const request = async () => {
+      const response = await postJson(server, "/v1/messages", {
+        model: "claude-opus-4-8",
+        max_tokens: 256,
+        tools,
+        messages,
+      });
+      expect(response.status).toBe(200);
+      return (await response.json()) as {
+        stop_reason: string;
+        content: Array<Record<string, unknown>>;
+      };
+    };
+    const readToolUse = (body: {
+      stop_reason: string;
+      content: Array<Record<string, unknown>>;
+    }) => {
+      expect(body.stop_reason).toBe("tool_use");
+      const toolUse = body.content.find((block) => block.type === "tool_use");
+      if (!toolUse || typeof toolUse.id !== "string" || typeof toolUse.name !== "string") {
+        throw new Error("Expected Anthropic tool_use block");
+      }
+      return toolUse;
+    };
+    const appendToolResult = (
+      toolUse: Record<string, unknown>,
+      result: Record<string, unknown>,
+    ) => {
+      messages.push(
+        { role: "assistant", content: [toolUse] },
+        makeAnthropicToolResult(toolUse.id, JSON.stringify(result)),
+      );
+    };
+    const expectPlan = async (name: string, args: Record<string, unknown>, wireName = "exec") => {
+      const debugResponse = await fetch(`${server.baseUrl}/debug/last-request`);
+      expect(debugResponse.status).toBe(200);
+      const debug = requireRecord(await debugResponse.json(), "debug request");
+      expect(debug.plannedToolName).toBe(name);
+      expect(debug.plannedWireToolName).toBe(wireName);
+      expect(debug.plannedToolArgs).toEqual(args);
+    };
+
+    const readAgent = readToolUse(await request());
+    expect(readAgent.name).toBe("exec");
+    const readAgentCode = String(requireRecord(readAgent.input, "exec input").code);
+    expect(readAgentCode).toContain("tools.callValue(target.id, targetArgs)");
+    expect(readAgentCode).toContain("value.content.slice(0, 2048)");
+    await expectPlan("read", { path: "AGENT.md" });
+
+    appendToolResult(readAgent, { status: "waiting", runId: "qa-code-mode-read-agent" });
+    const waitForAgent = readToolUse(await request());
+    expect(waitForAgent.name).toBe("wait");
+    const waitDebug = requireRecord(
+      await fetch(`${server.baseUrl}/debug/last-request`).then((response) => response.json()),
+      "wait debug request",
+    );
+    expect(waitDebug.plannedToolName).toBe("wait");
+    expect(waitDebug).not.toHaveProperty("plannedWireToolName");
+    expect(waitDebug.plannedToolArgs).toEqual({ runId: "qa-code-mode-read-agent" });
+
+    appendToolResult(waitForAgent, {
+      status: "completed",
+      value: { kind: "text", content: "# Repo contract\nDo not stop after planning." },
+    });
+    const readSoul = readToolUse(await request());
+    expect(readSoul.name).toBe("exec");
+    await expectPlan("read", { path: "SOUL.md" });
+
+    appendToolResult(readSoul, {
+      status: "completed",
+      value: { kind: "text", content: "# Execution style\nStay action-first." },
+    });
+    const readInput = readToolUse(await request());
+    expect(readInput.name).toBe("exec");
+    await expectPlan("read", { path: "FOLLOWTHROUGH_INPUT.md" });
+
+    appendToolResult(readInput, {
+      status: "completed",
+      value: {
+        kind: "text",
+        content:
+          "Mission: prove you followed the repo contract.\nEvidence path: AGENT.md -> SOUL.md -> FOLLOWTHROUGH_INPUT.md -> repo-contract-summary.txt",
+      },
+    });
+    const writeSummary = readToolUse(await request());
+    expect(writeSummary.name).toBe("exec");
+    await expectPlan("write", {
+      path: "repo-contract-summary.txt",
+      content:
+        "Mission: prove you followed the repo contract.\nEvidence: AGENT.md -> SOUL.md -> FOLLOWTHROUGH_INPUT.md\nStatus: complete",
+    });
+
+    appendToolResult(writeSummary, {
+      status: "completed",
+      value: "Successfully wrote 146 bytes to repo-contract-summary.txt.",
+    });
+    const final = await request();
+    expect(final.stop_reason).toBe("end_turn");
+    const text = final.content.find((block) => block.type === "text")?.text;
+    expect(text).toBe(
+      "Read: AGENT.md, SOUL.md, FOLLOWTHROUGH_INPUT.md\nWrote: repo-contract-summary.txt\nStatus: complete",
+    );
+  });
+
+  it("routes Anthropic image generation through Code Mode when only exec and wait are visible", async () => {
+    const server = await startMockServer();
+    const response = await postJson(server, "/v1/messages", {
+      model: "claude-opus-4-8",
+      max_tokens: 256,
+      tools: [
+        {
+          name: "exec",
+          input_schema: {
+            type: "object",
+            properties: { code: { type: "string" } },
+            required: ["code"],
+          },
+        },
+        {
+          name: "wait",
+          input_schema: {
+            type: "object",
+            properties: { runId: { type: "string" } },
+            required: ["runId"],
+          },
+        },
+      ],
+      messages: [
+        makeAnthropicUserText(
+          "Capability flip image check: generate a QA lighthouse image in this turn right now.",
+        ),
+      ],
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      stop_reason: string;
+      content: Array<Record<string, unknown>>;
+    };
+    expect(body.stop_reason).toBe("tool_use");
+    expect(body.content.find((block) => block.type === "tool_use")?.name).toBe("exec");
+
+    const debug = requireRecord(
+      await fetch(`${server.baseUrl}/debug/last-request`).then((result) => result.json()),
+      "debug request",
+    );
+    expect(debug.plannedToolName).toBe("image_generate");
+    expect(debug.plannedWireToolName).toBe("exec");
+  });
+
+  it("does not route hidden capabilities through ordinary shell exec", async () => {
+    const server = await startMockServer();
+    const response = await postJson(server, "/v1/messages", {
+      model: "claude-opus-4-8",
+      max_tokens: 256,
+      tools: [
+        {
+          name: "exec",
+          input_schema: {
+            type: "object",
+            properties: { command: { type: "string" } },
+            required: ["command"],
+          },
+        },
+      ],
+      messages: [
+        makeAnthropicUserText(
+          "Capability flip image check: generate a QA lighthouse image in this turn right now.",
+        ),
+      ],
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      stop_reason: string;
+      content: Array<Record<string, unknown>>;
+    };
+    expect(body.stop_reason).toBe("end_turn");
+    expect(body.content.some((block) => block.type === "tool_use")).toBe(false);
+  });
+
+  it("does not interpret ordinary tool results as Code Mode control envelopes", async () => {
+    const server = await startMockServer();
+    const prompt = "Read the seeded docs and report worked, failed, blocked, and follow-up items.";
+    const tools = [
+      {
+        name: "read",
+        input_schema: {
+          type: "object",
+          properties: { path: { type: "string" } },
+          required: ["path"],
+        },
+      },
+      {
+        name: "wait",
+        input_schema: {
+          type: "object",
+          properties: { runId: { type: "string" } },
+          required: ["runId"],
+        },
+      },
+    ];
+    const messages: Array<Record<string, unknown>> = [makeAnthropicUserText(prompt)];
+    const firstResponse = await postJson(server, "/v1/messages", {
+      model: "claude-opus-4-8",
+      max_tokens: 256,
+      tools,
+      messages,
+    });
+    const firstBody = (await firstResponse.json()) as {
+      content: Array<Record<string, unknown>>;
+    };
+    const readToolUse = firstBody.content.find((block) => block.type === "tool_use");
+    if (!readToolUse || typeof readToolUse.id !== "string") {
+      throw new Error("Expected Anthropic read tool_use block");
+    }
+    messages.push(
+      { role: "assistant", content: [readToolUse] },
+      makeAnthropicToolResult(
+        readToolUse.id,
+        JSON.stringify({ status: "waiting", runId: "ordinary-read" }),
+      ),
+    );
+
+    const response = await postJson(server, "/v1/messages", {
+      model: "claude-opus-4-8",
+      max_tokens: 256,
+      tools,
+      messages,
+    });
+    const body = (await response.json()) as {
+      stop_reason: string;
+      content: Array<Record<string, unknown>>;
+    };
+    expect(body.stop_reason).toBe("end_turn");
+    expect(body.content.some((block) => block.type === "tool_use")).toBe(false);
+  });
+
+  it("does not interpret unmarked direct exec results as Code Mode control envelopes", async () => {
+    const server = await startMockServer();
+    const response = await postJson(server, "/v1/messages", {
+      model: "claude-opus-4-8",
+      max_tokens: 256,
+      tools: [
+        {
+          name: "exec",
+          input_schema: {
+            type: "object",
+            properties: { code: { type: "string" } },
+            required: ["code"],
+          },
+        },
+        {
+          name: "wait",
+          input_schema: {
+            type: "object",
+            properties: { runId: { type: "string" } },
+            required: ["runId"],
+          },
+        },
+      ],
+      messages: [
+        makeAnthropicUserText("Direct exec envelope isolation check."),
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "tool_use",
+              id: "toolu_direct_exec",
+              name: "exec",
+              input: { language: "javascript", code: "return 1;" },
+            },
+          ],
+        },
+        makeAnthropicToolResult(
+          "toolu_direct_exec",
+          JSON.stringify({ status: "waiting", runId: "direct-exec" }),
+        ),
+      ],
+    });
+    const body = (await response.json()) as {
+      stop_reason: string;
+      content: Array<Record<string, unknown>>;
+    };
+    expect(body.stop_reason).toBe("end_turn");
+    expect(body.content.some((block) => block.type === "tool_use")).toBe(false);
+  });
+
+  it("finishes Anthropic Code Mode fanout after the second wrapped spawn result", async () => {
+    const server = await startMockServer();
+    const prompt =
+      "Subagent fanout synthesis check: delegate exactly two bounded subagents sequentially using sessions_spawn, not ACP.";
+    const messages: Array<Record<string, unknown>> = [makeAnthropicUserText(prompt)];
+    const request = async () => {
+      const response = await postJson(server, "/v1/messages", {
+        model: "claude-opus-4-8",
+        max_tokens: 256,
+        tools: [
+          {
+            name: "exec",
+            input_schema: {
+              type: "object",
+              properties: { code: { type: "string" } },
+              required: ["code"],
+            },
+          },
+          {
+            name: "wait",
+            input_schema: {
+              type: "object",
+              properties: { runId: { type: "string" } },
+              required: ["runId"],
+            },
+          },
+        ],
+        messages,
+      });
+      expect(response.status).toBe(200);
+      return (await response.json()) as {
+        stop_reason: string;
+        content: Array<Record<string, unknown>>;
+      };
+    };
+    const appendCompletedResult = (
+      toolUse: Record<string, unknown>,
+      value: Record<string, unknown>,
+    ) => {
+      messages.push(
+        { role: "assistant", content: [toolUse] },
+        makeAnthropicToolResult(toolUse.id, JSON.stringify({ status: "completed", value })),
+      );
+    };
+    const requireToolUse = (
+      body: {
+        stop_reason: string;
+        content: Array<Record<string, unknown>>;
+      },
+      expectedName: string,
+    ) => {
+      expect(body.stop_reason).toBe("tool_use");
+      const toolUse = body.content.find((block) => block.type === "tool_use");
+      if (!toolUse || typeof toolUse.id !== "string") {
+        throw new Error("Expected Anthropic tool_use block");
+      }
+      expect(toolUse.name).toBe(expectedName);
+      return toolUse;
+    };
+    const alpha = requireToolUse(await request(), "exec");
+    appendCompletedResult(alpha, { status: "accepted", childSessionKey: "alpha" });
+    const beta = requireToolUse(await request(), "exec");
+    appendCompletedResult(beta, { status: "accepted", childSessionKey: "beta" });
+    const firstYield = requireToolUse(await request(), "exec");
+    appendCompletedResult(firstYield, { status: "yielded" });
+    messages.push(makeAnthropicUserText("[Inter-session message]\nALPHA-OK"));
+    const secondYield = requireToolUse(await request(), "exec");
+    appendCompletedResult(secondYield, { status: "yielded" });
+    messages.push(makeAnthropicUserText("[Inter-session message]\nBETA-OK"));
+
+    const final = await request();
+    expect(final.stop_reason).toBe("end_turn");
+    expect(final.content.find((block) => block.type === "text")?.text).toBe(
+      "subagent-1: ok\nsubagent-2: ok",
+    );
+  });
+
+  it("finishes Anthropic fanout without sessions_yield when Code Mode is unavailable", async () => {
+    const server = await startMockServer();
+    const prompt =
+      "Subagent fanout synthesis check: delegate exactly two bounded subagents sequentially using sessions_spawn, not ACP.";
+    const messages: Array<Record<string, unknown>> = [makeAnthropicUserText(prompt)];
+    const request = async () => {
+      const response = await postJson(server, "/v1/messages", {
         model: "claude-opus-4-8",
         max_tokens: 256,
         tools: [
@@ -5371,18 +5579,134 @@ describe("qa mock openai server", () => {
             input_schema: { type: "object", properties: {} },
           },
         ],
-        messages: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "text",
-                text: explicitSessionsSpawnPrompt("QA_SUBAGENT_CHILD_ANTHROPIC"),
-              },
-            ],
-          },
-        ],
-      }),
+        messages,
+      });
+      return (await response.json()) as {
+        stop_reason: string;
+        content: Array<Record<string, unknown>>;
+      };
+    };
+    const appendResult = (toolUse: Record<string, unknown>, childSessionKey: string) => {
+      messages.push(
+        { role: "assistant", content: [toolUse] },
+        makeAnthropicToolResult(
+          toolUse.id,
+          JSON.stringify({ status: "accepted", childSessionKey }),
+        ),
+      );
+    };
+
+    const alpha = (await request()).content.find((block) => block.type === "tool_use");
+    if (!alpha || typeof alpha.id !== "string") {
+      throw new Error("Expected first Anthropic sessions_spawn tool_use block");
+    }
+    appendResult(alpha, "alpha");
+    const beta = (await request()).content.find((block) => block.type === "tool_use");
+    if (!beta || typeof beta.id !== "string") {
+      throw new Error("Expected second Anthropic sessions_spawn tool_use block");
+    }
+    appendResult(beta, "beta");
+
+    const final = await request();
+    expect(final.stop_reason).toBe("end_turn");
+    expect(final.content.find((block) => block.type === "text")?.text).toBe(
+      "subagent-1: ok\nsubagent-2: ok",
+    );
+  });
+
+  it.each([
+    {
+      name: "system string",
+      system:
+        "Current source visible reply MUST use `message(action=send)`; final text is private. Skip tool = user gets nothing.",
+    },
+    {
+      name: "system text blocks",
+      system: [
+        {
+          type: "text" as const,
+          text: "Current source visible reply MUST use `message(action=send)`; final text is private. Skip tool = user gets nothing.",
+        },
+      ],
+    },
+  ])(
+    "delivers Anthropic private fanout results through the message tool ($name)",
+    async ({ system }) => {
+      const server = await startMockServer();
+      const messages: Array<Record<string, unknown>> = [
+        makeAnthropicUserText(
+          "Subagent fanout synthesis check: delegate exactly two bounded subagents sequentially using sessions_spawn, not ACP.",
+        ),
+      ];
+      const request = async () => {
+        const response = await postJson(server, "/v1/messages", {
+          model: "claude-opus-4-8",
+          max_tokens: 256,
+          system,
+          tools: [
+            { name: "sessions_spawn", input_schema: { type: "object", properties: {} } },
+            { name: "message", input_schema: { type: "object", properties: {} } },
+          ],
+          messages,
+        });
+        expect(response.status).toBe(200);
+        return (await response.json()) as {
+          stop_reason: string;
+          content: Array<Record<string, unknown>>;
+        };
+      };
+      const appendResult = (toolUse: Record<string, unknown>, result: Record<string, unknown>) => {
+        messages.push(
+          { role: "assistant", content: [toolUse] },
+          makeAnthropicToolResult(toolUse.id, JSON.stringify(result)),
+        );
+      };
+
+      for (const [label, marker] of [
+        ["qa-fanout-alpha", "ALPHA-OK"],
+        ["qa-fanout-beta", "BETA-OK"],
+      ] as const) {
+        const spawned = await request();
+        expect(spawned.stop_reason).toBe("tool_use");
+        const toolUse = spawned.content.find((block) => block.type === "tool_use");
+        expect(toolUse).toMatchObject({ name: "sessions_spawn", input: { label } });
+        if (!toolUse || typeof toolUse.id !== "string") {
+          throw new Error(`Expected Anthropic ${label} sessions_spawn tool_use block`);
+        }
+        appendResult(toolUse, { status: "accepted", childSessionKey: label, note: marker });
+      }
+
+      const delivered = await request();
+      expect(delivered.stop_reason).toBe("tool_use");
+      const messageToolUse = delivered.content.find((block) => block.type === "tool_use");
+      expect(messageToolUse).toMatchObject({
+        name: "message",
+        input: { action: "send", message: "subagent-1: ok\nsubagent-2: ok" },
+      });
+      if (!messageToolUse || typeof messageToolUse.id !== "string") {
+        throw new Error("Expected Anthropic fanout message tool_use block");
+      }
+      appendResult(messageToolUse, { ok: true, messageId: "qa-fanout-final" });
+
+      const settled = await request();
+      expect(settled.stop_reason).toBe("end_turn");
+      expect(settled.content).toEqual([{ type: "text", text: "" }]);
+    },
+  );
+
+  it("preserves Anthropic /v1/messages declared tools for explicit sessions_spawn prompts", async () => {
+    const server = await startMockServer();
+
+    const response = await postJson(server, "/v1/messages", {
+      model: "claude-opus-4-8",
+      max_tokens: 256,
+      tools: [
+        {
+          name: "sessions_spawn",
+          input_schema: { type: "object", properties: {} },
+        },
+      ],
+      messages: [makeAnthropicUserText(explicitSessionsSpawnPrompt("QA_SUBAGENT_CHILD_ANTHROPIC"))],
     });
     expect(response.status).toBe(200);
     const body = (await response.json()) as {
@@ -5415,53 +5739,28 @@ describe("qa mock openai server", () => {
     // scenario is ideal because the mock has a two-stage flow: first
     // delegate prompt → sessions_spawn tool_use, then tool_result →
     // "Delegated task: ..." prose summary.
-    const server = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await server.stop();
-    });
+    const server = await startMockServer();
 
-    const response = await fetch(`${server.baseUrl}/v1/messages`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        model: "claude-opus-4-8",
-        max_tokens: 256,
-        messages: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "text",
-                text: "Delegate one bounded QA task to a subagent, wait for it to finish, then reply with Delegated task, Result, and Evidence sections.",
-              },
-            ],
-          },
-          {
-            role: "assistant",
-            content: [
-              {
-                type: "tool_use",
-                id: "toolu_mock_spawn_1",
-                name: "sessions_spawn",
-                input: { task: "Inspect the QA workspace", label: "qa-sidecar", thread: false },
-              },
-            ],
-          },
-          {
-            role: "user",
-            content: [
-              {
-                type: "tool_result",
-                tool_use_id: "toolu_mock_spawn_1",
-                content: "SUBAGENT-OK",
-              },
-            ],
-          },
-        ],
-      }),
+    const response = await postJson(server, "/v1/messages", {
+      model: "claude-opus-4-8",
+      max_tokens: 256,
+      messages: [
+        makeAnthropicUserText(
+          "Delegate one bounded QA task to a subagent, wait for it to finish, then reply with Delegated task, Result, and Evidence sections.",
+        ),
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "tool_use",
+              id: "toolu_mock_spawn_1",
+              name: "sessions_spawn",
+              input: { task: "Inspect the QA workspace", label: "qa-sidecar", thread: false },
+            },
+          ],
+        },
+        makeAnthropicToolResult("toolu_mock_spawn_1", "SUBAGENT-OK"),
+      ],
     });
     expect(response.status).toBe(200);
     const body = (await response.json()) as {
@@ -5489,64 +5788,46 @@ describe("qa mock openai server", () => {
     // that /debug/last-request exposes: the last-request `toolOutput`
     // field should be the stringified tool_result content, and `prompt`
     // should be the trailing fresh-text block.
-    const server = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await server.stop();
-    });
+    const server = await startMockServer();
 
-    const response = await fetch(`${server.baseUrl}/v1/messages`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        model: "claude-opus-4-8",
-        max_tokens: 256,
-        messages: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "text",
-                text: "Delegate one bounded QA task to a subagent.",
-              },
-            ],
-          },
-          {
-            role: "assistant",
-            content: [
-              {
-                type: "tool_use",
-                id: "toolu_mock_spawn_mixed",
-                name: "sessions_spawn",
-                input: { task: "Inspect the QA workspace", label: "qa-sidecar", thread: false },
-              },
-            ],
-          },
-          {
-            role: "user",
-            content: [
-              {
-                type: "tool_result",
-                tool_use_id: "toolu_mock_spawn_mixed",
-                content: "SUBAGENT-OK",
-              },
-              // A trailing fresh text block in the same user turn. Before
-              // the loop-6 fix, the tool_result was pushed BEFORE the
-              // parent user message, so extractToolOutput saw the text
-              // turn as the last user-role item and found no
-              // function_call_output after it → returned "". The
-              // downstream dispatcher then behaved as if no tool output
-              // was present at all.
-              {
-                type: "text",
-                text: "Keep going with the fanout.",
-              },
-            ],
-          },
-        ],
-      }),
+    const response = await postJson(server, "/v1/messages", {
+      model: "claude-opus-4-8",
+      max_tokens: 256,
+      messages: [
+        makeAnthropicUserText("Delegate one bounded QA task to a subagent."),
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "tool_use",
+              id: "toolu_mock_spawn_mixed",
+              name: "sessions_spawn",
+              input: { task: "Inspect the QA workspace", label: "qa-sidecar", thread: false },
+            },
+          ],
+        },
+        {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "toolu_mock_spawn_mixed",
+              content: "SUBAGENT-OK",
+            },
+            // A trailing fresh text block in the same user turn. Before
+            // the loop-6 fix, the tool_result was pushed BEFORE the
+            // parent user message, so extractToolOutput saw the text
+            // turn as the last user-role item and found no
+            // function_call_output after it → returned "". The
+            // downstream dispatcher then behaved as if no tool output
+            // was present at all.
+            {
+              type: "text",
+              text: "Keep going with the fanout.",
+            },
+          ],
+        },
+      ],
     });
     expect(response.status).toBe(200);
 
@@ -5572,45 +5853,25 @@ describe("qa mock openai server", () => {
   });
 
   it("exposes structured Anthropic tool_result errors in debug snapshots", async () => {
-    const server = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await server.stop();
-    });
+    const server = await startMockServer();
 
-    const response = await fetch(`${server.baseUrl}/v1/messages`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        model: "claude-opus-4-8",
-        max_tokens: 256,
-        messages: [
-          {
-            role: "assistant",
-            content: [
-              {
-                type: "tool_use",
-                id: "toolu_mock_read_error",
-                name: "read",
-                input: { path: "/missing" },
-              },
-            ],
-          },
-          {
-            role: "user",
-            content: [
-              {
-                type: "tool_result",
-                tool_use_id: "toolu_mock_read_error",
-                is_error: true,
-                content: "ENOENT: no such file or directory",
-              },
-            ],
-          },
-        ],
-      }),
+    const response = await postJson(server, "/v1/messages", {
+      model: "claude-opus-4-8",
+      max_tokens: 256,
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "tool_use",
+              id: "toolu_mock_read_error",
+              name: "read",
+              input: { path: "/missing" },
+            },
+          ],
+        },
+        makeAnthropicErrorToolResult("toolu_mock_read_error", "ENOENT: no such file or directory"),
+      ],
     });
     expect(response.status).toBe(200);
 
@@ -5624,34 +5885,138 @@ describe("qa mock openai server", () => {
     expect(debug.toolOutputStructuredError).toBe(true);
   });
 
-  it("streams Anthropic /v1/messages tool_use responses as SSE", async () => {
-    const server = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await server.stop();
-    });
+  it("replays one signed Anthropic thinking error for each independent scenario", async () => {
+    const server = await startMockServer();
+    const readCallIds: string[] = [];
+    const scenarioPrompts: string[] = [];
 
-    const response = await fetch(`${server.baseUrl}/v1/messages`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
+    const requestAnthropicStream = async (messages: unknown[]) => {
+      const response = await postJson(server, "/v1/messages", {
         model: "claude-opus-4-8",
         max_tokens: 256,
         stream: true,
-        messages: [
+        messages,
+      });
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toContain("text/event-stream");
+      return response.text();
+    };
+
+    const readAnthropicToolCallId = (readStream: string) => {
+      const readEvents = readStream
+        .split("\n")
+        .filter((line) => line.startsWith("data: "))
+        .map((line) =>
+          requireRecord(JSON.parse(line.slice("data: ".length)) as unknown, "Anthropic SSE event"),
+        );
+      const readEvent = readEvents.find(
+        (event) =>
+          event.type === "content_block_start" &&
+          requireRecord(event.content_block, "Anthropic content block").type === "tool_use",
+      );
+      const readTool = requireRecord(readEvent?.content_block, "Anthropic read tool call");
+      expect(readTool.name).toBe("read");
+      expect(readTool.input).toEqual({});
+      const readInputEvent = readEvents.find(
+        (event) => event.type === "content_block_delta" && event.index === readEvent?.index,
+      );
+      expect(requireRecord(readInputEvent?.delta, "Anthropic read tool input delta")).toEqual({
+        type: "input_json_delta",
+        partial_json: JSON.stringify({ path: "QA_KICKOFF_TASK.md" }),
+      });
+      const callId = readTool.id;
+      if (typeof callId !== "string" || callId.length === 0) {
+        throw new Error("Expected an Anthropic read tool call ID");
+      }
+      readCallIds.push(callId);
+      return callId;
+    };
+
+    const buildReplayMessages = (
+      promptMessage: { role: "user"; content: Array<{ type: "text"; text: string }> },
+      callId: string,
+    ) => [
+      promptMessage,
+      {
+        role: "assistant" as const,
+        content: [
           {
-            role: "user",
-            content: [
-              {
-                type: "text",
-                text: "Read the seeded docs and report worked, failed, blocked, and follow-up items.",
-              },
-            ],
+            type: "tool_use" as const,
+            id: callId,
+            name: "read",
+            input: { path: "QA_KICKOFF_TASK.md" },
           },
         ],
-      }),
+      },
+      makeAnthropicToolResult(callId, "QA kickoff task completed."),
+    ];
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const scenarioPrompt = `${QA_ANTHROPIC_THINKING_ERROR_RECOVERY_PROMPT} QA scenario run: direct-${attempt}`;
+      scenarioPrompts.push(scenarioPrompt);
+      const promptMessage = makeAnthropicUserText(scenarioPrompt);
+      const initialCallId = readAnthropicToolCallId(await requestAnthropicStream([promptMessage]));
+      const errorStream = await requestAnthropicStream(
+        buildReplayMessages(promptMessage, initialCallId),
+      );
+      expect(errorStream).toContain('"type":"thinking_delta"');
+      expect(errorStream).toContain('"type":"signature_delta"');
+      expect(errorStream).toContain('"signature":"qa_signed_thinking_block_91953"');
+      expect(errorStream).toContain("event: error");
+      expect(errorStream).toContain('"type":"api_error"');
+
+      const retryCallId = readAnthropicToolCallId(await requestAnthropicStream([promptMessage]));
+      expect(retryCallId).not.toBe(initialCallId);
+      const recoveryStream = await requestAnthropicStream(
+        buildReplayMessages(promptMessage, retryCallId),
+      );
+      expect(recoveryStream).toContain("event: message_stop");
+      expect(recoveryStream).toContain("ANTHROPIC-THINKING-ERROR-RECOVERED-OK");
+      expect(recoveryStream).not.toContain("event: error");
+    }
+
+    expect(new Set(readCallIds).size).toBe(4);
+    const debugResponse = await fetch(`${server.baseUrl}/debug/requests`);
+    expect(debugResponse.status).toBe(200);
+    const debugRequests = requireArray(await debugResponse.json(), "Anthropic debug requests").map(
+      (request) => requireRecord(request, "Anthropic debug request"),
+    );
+    expect(debugRequests).toHaveLength(8);
+    expect(debugRequests.every((request) => request.providerVariant === "anthropic")).toBe(true);
+    expect(debugRequests.map((request) => request.toolOutputCallId)).toEqual([
+      undefined,
+      readCallIds[0],
+      undefined,
+      readCallIds[1],
+      undefined,
+      readCallIds[2],
+      undefined,
+      readCallIds[3],
+    ]);
+    expect(debugRequests.map((request) => request.prompt)).toEqual([
+      scenarioPrompts[0],
+      scenarioPrompts[0],
+      scenarioPrompts[0],
+      scenarioPrompts[0],
+      scenarioPrompts[1],
+      scenarioPrompts[1],
+      scenarioPrompts[1],
+      scenarioPrompts[1],
+    ]);
+  });
+
+  it("streams Anthropic /v1/messages tool_use responses as SSE", async () => {
+    const server = await startMockServer();
+
+    const response = await postJson(server, "/v1/messages", {
+      model: "claude-opus-4-8",
+      max_tokens: 256,
+      stream: true,
+      messages: [
+        makeAnthropicUserText(
+          "Read the seeded docs and report worked, failed, blocked, and follow-up items.",
+        ),
+      ],
     });
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toContain("text/event-stream");
@@ -5666,54 +6031,29 @@ describe("qa mock openai server", () => {
   });
 
   it("streams Anthropic /v1/messages tool_result follow-ups as text deltas", async () => {
-    const server = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await server.stop();
-    });
+    const server = await startMockServer();
 
-    const response = await fetch(`${server.baseUrl}/v1/messages`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        model: "claude-opus-4-8",
-        max_tokens: 256,
-        stream: true,
-        messages: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "text",
-                text: "Delegate one bounded QA task to a subagent, wait for it to finish, then reply with Delegated task, Result, and Evidence sections.",
-              },
-            ],
-          },
-          {
-            role: "assistant",
-            content: [
-              {
-                type: "tool_use",
-                id: "toolu_mock_spawn_1",
-                name: "sessions_spawn",
-                input: { task: "Inspect the QA workspace", label: "qa-sidecar", thread: false },
-              },
-            ],
-          },
-          {
-            role: "user",
-            content: [
-              {
-                type: "tool_result",
-                tool_use_id: "toolu_mock_spawn_1",
-                content: "SUBAGENT-OK",
-              },
-            ],
-          },
-        ],
-      }),
+    const response = await postJson(server, "/v1/messages", {
+      model: "claude-opus-4-8",
+      max_tokens: 256,
+      stream: true,
+      messages: [
+        makeAnthropicUserText(
+          "Delegate one bounded QA task to a subagent, wait for it to finish, then reply with Delegated task, Result, and Evidence sections.",
+        ),
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "tool_use",
+              id: "toolu_mock_spawn_1",
+              name: "sessions_spawn",
+              input: { task: "Inspect the QA workspace", label: "qa-sidecar", thread: false },
+            },
+          ],
+        },
+        makeAnthropicToolResult("toolu_mock_spawn_1", "SUBAGENT-OK"),
+      ],
     });
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toContain("text/event-stream");
@@ -5725,39 +6065,23 @@ describe("qa mock openai server", () => {
   });
 
   it("keeps Anthropic remember prompts on the prose branch even when system text mentions HEARTBEAT", async () => {
-    const server = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await server.stop();
-    });
+    const server = await startMockServer();
 
-    const response = await fetch(`${server.baseUrl}/v1/messages`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        model: "claude-opus-4-8",
-        max_tokens: 256,
-        stream: true,
-        system: [
-          {
-            type: "text",
-            text: "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. If nothing needs attention, reply HEARTBEAT_OK.",
-          },
-        ],
-        messages: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "text",
-                text: "Please remember this fact for later: the QA canary code is ALPHA-7. Use your normal memory mechanism, avoid manual repo cleanup, and reply exactly `Remembered ALPHA-7.` once stored.",
-              },
-            ],
-          },
-        ],
-      }),
+    const response = await postJson(server, "/v1/messages", {
+      model: "claude-opus-4-8",
+      max_tokens: 256,
+      stream: true,
+      system: [
+        {
+          type: "text",
+          text: "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. If nothing needs attention, reply HEARTBEAT_OK.",
+        },
+      ],
+      messages: [
+        makeAnthropicUserText(
+          "Please remember this fact for later: the QA canary code is ALPHA-7. Use your normal memory mechanism, avoid manual repo cleanup, and reply exactly `Remembered ALPHA-7.` once stored.",
+        ),
+      ],
     });
 
     expect(response.status).toBe(200);
@@ -5768,43 +6092,27 @@ describe("qa mock openai server", () => {
   });
 
   it("prefers the prompt-local exact reply directive over heartbeat context", async () => {
-    const server = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await server.stop();
-    });
+    const server = await startMockServer();
 
-    const response = await fetch(`${server.baseUrl}/v1/messages`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        model: "claude-opus-4-8",
-        max_tokens: 256,
-        stream: true,
-        system: [
-          {
-            type: "text",
-            text: [
-              "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly.",
-              "If the current user message is a heartbeat poll and nothing needs attention, reply exactly:",
-              "HEARTBEAT_OK",
-            ].join("\n"),
-          },
-        ],
-        messages: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "text",
-                text: "Please remember this fact for later: the QA canary code is ALPHA-7. Use your normal memory mechanism, avoid manual repo cleanup, and reply exactly `Remembered ALPHA-7.` once stored.",
-              },
-            ],
-          },
-        ],
-      }),
+    const response = await postJson(server, "/v1/messages", {
+      model: "claude-opus-4-8",
+      max_tokens: 256,
+      stream: true,
+      system: [
+        {
+          type: "text",
+          text: [
+            "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly.",
+            "If the current user message is a heartbeat poll and nothing needs attention, reply exactly:",
+            "HEARTBEAT_OK",
+          ].join("\n"),
+        },
+      ],
+      messages: [
+        makeAnthropicUserText(
+          "Please remember this fact for later: the QA canary code is ALPHA-7. Use your normal memory mechanism, avoid manual repo cleanup, and reply exactly `Remembered ALPHA-7.` once stored.",
+        ),
+      ],
     });
 
     expect(response.status).toBe(200);
@@ -5814,13 +6122,7 @@ describe("qa mock openai server", () => {
   });
 
   it("rejects malformed or non-object Anthropic /v1/messages JSON", async () => {
-    const server = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await server.stop();
-    });
+    const server = await startMockServer();
 
     for (const rawBody of ['{"model":"claude-opus-4-8","messages":[', "null", "[]", '"text"']) {
       const response = await fetch(`${server.baseUrl}/v1/messages`, {
@@ -5844,13 +6146,7 @@ describe("qa mock openai server", () => {
   });
 
   it("rejects malformed OpenAI-compatible JSON without crashing the mock server", async () => {
-    const server = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await server.stop();
-    });
+    const server = await startMockServer();
 
     for (const path of ["/v1/responses", "/v1/embeddings", "/v1/images/generations"]) {
       for (const rawBody of ["{bad", "[]", '"text"']) {
@@ -5879,27 +6175,17 @@ describe("qa mock openai server", () => {
     // through to `lastRequest.model` and `responseBody.model`. Empty
     // strings must be treated the same as absent and default to
     // `"claude-opus-4-8"` so parity consumers can trust the echoed label.
-    const server = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await server.stop();
-    });
+    const server = await startMockServer();
 
-    const response = await fetch(`${server.baseUrl}/v1/messages`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        model: "",
-        max_tokens: 256,
-        messages: [
-          {
-            role: "user",
-            content: "Read the plan",
-          },
-        ],
-      }),
+    const response = await postJson(server, "/v1/messages", {
+      model: "",
+      max_tokens: 256,
+      messages: [
+        {
+          role: "user",
+          content: "Read the plan",
+        },
+      ],
     });
     expect(response.status).toBe(200);
     const body = (await response.json()) as { model: string };
@@ -5922,17 +6208,15 @@ describe("qa mock openai server", () => {
     expect(toolPlan).toContain('"name":"read"');
     expect(toolPlan).toContain("QA_KICKOFF_TASK.md");
 
-    const reasoningPayload = await expectResponsesJson<{
+    const reasoningPayload = await expectNonStreamingResponsesJson<{
       output?: Array<{ type?: string; id?: string; summary?: Array<{ text?: string }> }>;
     }>(server, {
-      stream: false,
       model: "gpt-5.6-luna",
       input: [
         makeUserInput(QA_REASONING_ONLY_RECOVERY_PROMPT),
-        {
-          type: "function_call_output",
-          output: "QA mission: Understand this OpenClaw repo from source + docs before acting.",
-        },
+        makeToolOutput(
+          "QA mission: Understand this OpenClaw repo from source + docs before acting.",
+        ),
       ],
     });
     const reasoningOutput = outputItem(reasoningPayload);
@@ -5943,18 +6227,16 @@ describe("qa mock openai server", () => {
       "Need visible answer",
     );
 
-    const recoveredPayload = await expectResponsesJson<{
+    const recoveredPayload = await expectNonStreamingResponsesJson<{
       output?: Array<{ content?: Array<{ text?: string }> }>;
     }>(server, {
-      stream: false,
       model: "gpt-5.6-luna",
       input: [
         makeUserInput(QA_REASONING_ONLY_RECOVERY_PROMPT),
         makeUserInput(QA_REASONING_ONLY_RETRY_INSTRUCTION),
-        {
-          type: "function_call_output",
-          output: "QA mission: Understand this OpenClaw repo from source + docs before acting.",
-        },
+        makeToolOutput(
+          "QA mission: Understand this OpenClaw repo from source + docs before acting.",
+        ),
       ],
     });
     expect(outputText(recoveredPayload)).toBe("REASONING-RECOVERED-OK");
@@ -5974,17 +6256,16 @@ describe("qa mock openai server", () => {
   it("scripts the GPT-5.6 Luna thinking visibility switch prompts", async () => {
     const server = await startMockServer();
 
-    const offPayload = await expectResponsesJson<{
+    const offPayload = await expectNonStreamingResponsesJson<{
       output?: Array<{ type?: string; content?: Array<{ text?: string }> }>;
     }>(server, {
-      stream: false,
       model: "gpt-5.6-luna",
       input: [makeUserInput(QA_THINKING_VISIBILITY_OFF_PROMPT)],
     });
     expect(outputItem(offPayload).type).toBe("message");
     expect(outputText(offPayload)).toBe("THINKING-OFF-OK");
 
-    const maxPayload = await expectResponsesJson<{
+    const maxPayload = await expectNonStreamingResponsesJson<{
       output?: Array<{
         type?: string;
         id?: string;
@@ -5992,7 +6273,6 @@ describe("qa mock openai server", () => {
         content?: Array<{ text?: string }>;
       }>;
     }>(server, {
-      stream: false,
       model: "gpt-5.6-luna",
       input: [makeUserInput(QA_THINKING_VISIBILITY_MAX_PROMPT)],
     });
@@ -6015,10 +6295,9 @@ describe("qa mock openai server", () => {
   it("keeps stale thinking visibility prompts from overriding later marker turns", async () => {
     const server = await startMockServer();
 
-    const payload = await expectResponsesJson<{
+    const payload = await expectNonStreamingResponsesJson<{
       output?: Array<{ content?: Array<{ text?: string }> }>;
     }>(server, {
-      stream: false,
       model: "gpt-5.6-luna",
       input: [
         makeUserInput(QA_THINKING_VISIBILITY_MAX_PROMPT),
@@ -6043,17 +6322,13 @@ describe("qa mock openai server", () => {
     expect(toolPlan).toContain('"name":"write"');
     expect(toolPlan).toContain("reasoning-only-side-effect.txt");
 
-    const sideEffectPayload = await expectResponsesJson<{
+    const sideEffectPayload = await expectNonStreamingResponsesJson<{
       output?: Array<{ type?: string; id?: string }>;
     }>(server, {
-      stream: false,
       model: "gpt-5.6-luna",
       input: [
         makeUserInput(QA_REASONING_ONLY_SIDE_EFFECT_PROMPT),
-        {
-          type: "function_call_output",
-          output: "Successfully wrote 28 bytes to reasoning-only-side-effect.txt.",
-        },
+        makeToolOutput("Successfully wrote 28 bytes to reasoning-only-side-effect.txt."),
       ],
     });
     const sideEffectOutput = outputItem(sideEffectPayload);
@@ -6075,35 +6350,31 @@ describe("qa mock openai server", () => {
     });
     expect(toolPlan).toContain('"name":"read"');
 
-    const emptyPayload = await expectResponsesJson<{
+    const emptyPayload = await expectNonStreamingResponsesJson<{
       output?: Array<{ content?: Array<{ type?: string; text?: string }> }>;
     }>(server, {
-      stream: false,
       model: "gpt-5.6-luna",
       input: [
         makeUserInput(QA_EMPTY_RESPONSE_RECOVERY_PROMPT),
-        {
-          type: "function_call_output",
-          output: "QA mission: Understand this OpenClaw repo from source + docs before acting.",
-        },
+        makeToolOutput(
+          "QA mission: Understand this OpenClaw repo from source + docs before acting.",
+        ),
       ],
     });
     const emptyContent = outputContentItem(emptyPayload);
     expect(emptyContent.type).toBe("output_text");
     expect(emptyContent.text).toBe("");
 
-    const recoveredPayload = await expectResponsesJson<{
+    const recoveredPayload = await expectNonStreamingResponsesJson<{
       output?: Array<{ content?: Array<{ text?: string }> }>;
     }>(server, {
-      stream: false,
       model: "gpt-5.6-luna",
       input: [
         makeUserInput(QA_EMPTY_RESPONSE_RECOVERY_PROMPT),
-        makeUserInput(QA_EMPTY_RESPONSE_RETRY_INSTRUCTION),
-        {
-          type: "function_call_output",
-          output: "QA mission: Understand this OpenClaw repo from source + docs before acting.",
-        },
+        makeUserInput(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION),
+        makeToolOutput(
+          "QA mission: Understand this OpenClaw repo from source + docs before acting.",
+        ),
       ],
     });
     expect(outputText(recoveredPayload)).toBe("EMPTY-RECOVERED-OK");
@@ -6118,36 +6389,99 @@ describe("qa mock openai server", () => {
       input: [makeUserInput(QA_EMPTY_RESPONSE_EXHAUSTION_PROMPT)],
     });
 
-    const firstEmpty = await expectResponsesJson<{
+    const firstEmpty = await expectNonStreamingResponsesJson<{
       output?: Array<{ content?: Array<{ text?: string }> }>;
     }>(server, {
-      stream: false,
       model: "gpt-5.6-luna",
       input: [
         makeUserInput(QA_EMPTY_RESPONSE_EXHAUSTION_PROMPT),
-        {
-          type: "function_call_output",
-          output: "QA mission: Understand this OpenClaw repo from source + docs before acting.",
-        },
+        makeToolOutput(
+          "QA mission: Understand this OpenClaw repo from source + docs before acting.",
+        ),
       ],
     });
     expect(firstEmpty.output?.[0]?.content?.[0]?.text).toBe("");
 
-    const secondEmpty = await expectResponsesJson<{
+    const secondEmpty = await expectNonStreamingResponsesJson<{
       output?: Array<{ content?: Array<{ text?: string }> }>;
     }>(server, {
-      stream: false,
       model: "gpt-5.6-luna",
       input: [
         makeUserInput(QA_EMPTY_RESPONSE_EXHAUSTION_PROMPT),
         makeUserInput(QA_EMPTY_RESPONSE_RETRY_INSTRUCTION),
-        {
-          type: "function_call_output",
-          output: "QA mission: Understand this OpenClaw repo from source + docs before acting.",
-        },
+        makeToolOutput(
+          "QA mission: Understand this OpenClaw repo from source + docs before acting.",
+        ),
       ],
     });
     expect(secondEmpty.output?.[0]?.content?.[0]?.text).toBe("");
+  });
+
+  it("scripts settled continuation after an empty response from a side-effecting write", async () => {
+    const server = await startMockServer();
+
+    const toolPlan = await expectResponsesText(server, {
+      stream: true,
+      model: "gpt-5.6-luna",
+      input: [makeUserInput(QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT)],
+    });
+    expect(toolPlan).toContain('"name":"write"');
+
+    const toolOutput = {
+      type: "function_call_output" as const,
+      output: "Successfully wrote 27 bytes to qa-empty-response-side-effect.txt",
+    };
+    const emptyPayload = await expectNonStreamingResponsesJson<{
+      output?: Array<{ content?: Array<{ text?: string }> }>;
+    }>(server, {
+      model: "gpt-5.6-luna",
+      input: [makeUserInput(QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT), toolOutput],
+    });
+    expect(emptyPayload.output?.[0]?.content?.[0]?.text).toBe("");
+
+    const recoveredPayload = await expectNonStreamingResponsesJson<{
+      output?: Array<{ content?: Array<{ text?: string }> }>;
+    }>(server, {
+      model: "gpt-5.6-luna",
+      input: [
+        makeUserInput(QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT),
+        makeUserInput(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION),
+        toolOutput,
+      ],
+    });
+    expect(outputText(recoveredPayload)).toBe("TELEGRAM-EMPTY-WRITE-RECOVERED-OK");
+
+    const cronRecoveredPayload = await expectNonStreamingResponsesJson<{
+      output?: Array<{ content?: Array<{ text?: string }> }>;
+    }>(server, {
+      model: "gpt-5.6-luna",
+      input: [
+        makeUserInput(
+          [
+            "Empty response after write recovery QA check: write once, then respond with exact marker: `CRON-EMPTY-WRITE-RECOVERED-OK`.",
+            "This is an unattended scheduled run. If nothing needs doing, reply exactly HEARTBEAT_OK.",
+          ].join("\n\n"),
+        ),
+        makeUserInput(
+          `${QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION}\nRead HEARTBEAT.md if it exists.`,
+        ),
+        toolOutput,
+      ],
+    });
+    expect(outputText(cronRecoveredPayload)).toBe("CRON-EMPTY-WRITE-RECOVERED-OK");
+
+    const laterHeartbeatPayload = await expectNonStreamingResponsesJson<{
+      output?: Array<{ content?: Array<{ text?: string }> }>;
+    }>(server, {
+      model: "gpt-5.6-luna",
+      input: [
+        makeUserInput(QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT),
+        makeUserInput(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION),
+        toolOutput,
+        makeUserInput("Read HEARTBEAT.md if it exists."),
+      ],
+    });
+    expect(outputText(laterHeartbeatPayload)).toBe("HEARTBEAT_OK");
   });
 });
 
@@ -6180,6 +6514,7 @@ describe("qa mock openai server provider variant tagging", () => {
     const openaiHandoff = await expectResponsesJson(openaiHandoffServer, {
       model: "gpt-5.6-luna",
       stream: false,
+      tools: [SESSIONS_SPAWN_TOOL],
       input: [makeUserInput(handoffPrompt)],
     });
     expect(outputToolArgs(openaiHandoff)).toMatchObject({
@@ -6191,6 +6526,7 @@ describe("qa mock openai server provider variant tagging", () => {
     const anthropicHandoff = await expectResponsesJson(anthropicHandoffServer, {
       model: "claude-opus-4-8",
       stream: false,
+      tools: [SESSIONS_SPAWN_TOOL],
       input: [makeUserInput(handoffPrompt)],
     });
     expect(outputToolArgs(anthropicHandoff)).toMatchObject({
@@ -6223,83 +6559,52 @@ describe("qa mock openai server provider variant tagging", () => {
     });
   });
 
-  it("records providerVariant on /debug/last-request for openai requests", async () => {
-    const server = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await server.stop();
-    });
-
-    await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
+  it.each([
+    {
+      name: "records providerVariant on /debug/last-request for openai requests",
+      path: "/v1/responses",
+      body: {
         model: "openai/gpt-5.6-luna",
         stream: false,
-        input: [{ role: "user", content: [{ type: "input_text", text: "Heartbeat check" }] }],
-      }),
-    });
-
-    const debug = (await (await fetch(`${server.baseUrl}/debug/last-request`)).json()) as {
-      model: string;
-      providerVariant: string;
-    };
-    expect(debug.model).toBe("openai/gpt-5.6-luna");
-    expect(debug.providerVariant).toBe("openai");
-  });
-
-  it("records providerVariant=anthropic on /v1/messages requests", async () => {
-    const server = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await server.stop();
-    });
-
-    await fetch(`${server.baseUrl}/v1/messages`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
+        input: [makeUserInput("Heartbeat check")],
+      },
+      expectedModel: "openai/gpt-5.6-luna",
+      expectedVariant: "openai",
+    },
+    {
+      name: "records providerVariant=anthropic on /v1/messages requests",
+      path: "/v1/messages",
+      body: {
         model: "claude-opus-4-8",
         max_tokens: 256,
         messages: [{ role: "user", content: "Heartbeat check" }],
-      }),
-    });
-
-    const debug = (await (await fetch(`${server.baseUrl}/debug/last-request`)).json()) as {
-      model: string;
-      providerVariant: string;
-    };
-    expect(debug.model).toBe("claude-opus-4-8");
-    expect(debug.providerVariant).toBe("anthropic");
-  });
-
-  it("records providerVariant=unknown for unrecognized models", async () => {
-    const server = await startQaMockOpenAiServer({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    cleanups.push(async () => {
-      await server.stop();
-    });
-
-    await fetch(`${server.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
+      },
+      expectedModel: "claude-opus-4-8",
+      expectedVariant: "anthropic",
+    },
+    {
+      name: "records providerVariant=unknown for unrecognized models",
+      path: "/v1/responses",
+      body: {
         model: "mistral/mistral-large",
         stream: false,
-        input: [{ role: "user", content: [{ type: "input_text", text: "Heartbeat check" }] }],
-      }),
-    });
+        input: [makeUserInput("Heartbeat check")],
+      },
+      expectedModel: undefined,
+      expectedVariant: "unknown",
+    },
+  ])("$name", async ({ path, body, expectedModel, expectedVariant }) => {
+    const server = await startMockServer();
+    await postJson(server, path, body);
 
     const debug = (await (await fetch(`${server.baseUrl}/debug/last-request`)).json()) as {
+      model?: string;
       providerVariant: string;
     };
-    expect(debug.providerVariant).toBe("unknown");
+    if (expectedModel) {
+      expect(debug.model).toBe(expectedModel);
+    }
+    expect(debug.providerVariant).toBe(expectedVariant);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

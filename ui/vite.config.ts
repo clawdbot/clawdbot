@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { brotliCompressSync, constants as zlibConstants, gzipSync } from "node:zlib";
 import type { Plugin, UserConfig } from "vite";
 import { controlUiCodeSplitting } from "./config/control-ui-chunking.ts";
+import { controlUiLocaleModulesPlugin } from "./config/control-ui-locales.ts";
 import { normalizeControlUiBuildInfo } from "./src/build-info-normalizers.ts";
 import type { ControlUiBuildInfo } from "./src/build-info.ts";
 
@@ -223,7 +224,12 @@ export function resolveControlUiBuildInfo(
     normalizeControlUiBuildInfo({ branch: githubBranch }).branch ??
     normalizeControlUiBuildInfo({ branch: (sources.readGitBranch ?? readGitBranch)() }).branch;
   const dirty = (sources.readGitDirty ?? readGitDirty)();
-  const metadata = { version, commit, builtAt };
+  const releaseFlag = env.OPENCLAW_CONTROL_UI_RELEASE_BUILD?.trim();
+  if (releaseFlag && releaseFlag !== "1") {
+    throw new Error("OPENCLAW_CONTROL_UI_RELEASE_BUILD must be 1 when set");
+  }
+  const release = releaseFlag === "1";
+  const metadata = { version, commit, builtAt, release };
   const explicitBuildId = env.OPENCLAW_CONTROL_UI_BUILD_ID?.trim();
   return {
     ...metadata,
@@ -300,32 +306,33 @@ function sourcePackageAlias(packageId: string, subpath?: string): ControlUiViteA
 
 export function resolveSourcePackageAliasesForVite(): ControlUiViteAlias[] {
   return [
+    sourcePackageAlias("normalization-core", "json-schema"),
     sourcePackageAlias("normalization-core", "number-coercion"),
+    sourcePackageAlias("normalization-core", "phone-presentation"),
     sourcePackageAlias("normalization-core", "record-coerce"),
     sourcePackageAlias("normalization-core", "string-coerce"),
     sourcePackageAlias("normalization-core", "string-normalization"),
     sourcePackageAlias("normalization-core", "utf16-slice"),
     sourcePackageAlias("normalization-core"),
+    sourcePackageAlias("session-url-contract", "parse"),
+    sourcePackageAlias("session-url-contract"),
     sourcePackageAlias("workboard-contract"),
   ];
 }
 
-export function resolveExternalPackageAliasesForVite(): ControlUiViteAlias[] {
+export function resolveExternalPackageAliasesForVite(
+  resolvePackage: (specifier: string) => string = require.resolve,
+): ControlUiViteAlias[] {
+  const packageRoot = (specifier: string) =>
+    path.dirname(resolvePackage(`${specifier}/package.json`));
   return [
     {
       find: "@openclaw/libterminal/browser",
-      replacement: path.join(
-        repoRoot,
-        "node_modules",
-        "@openclaw",
-        "libterminal",
-        "dist",
-        "browser.js",
-      ),
+      replacement: path.join(packageRoot("@openclaw/libterminal"), "dist/browser.js"),
     },
     {
       find: "@openclaw/uirouter",
-      replacement: path.join(repoRoot, "node_modules", "@openclaw", "uirouter", "dist", "index.js"),
+      replacement: path.join(packageRoot("@openclaw/uirouter"), "dist/index.js"),
     },
   ];
 }
@@ -463,6 +470,7 @@ export default function controlUiViteConfig(): UserConfig {
       strictPort: true,
     },
     plugins: [
+      controlUiLocaleModulesPlugin(),
       controlUiBrowserOnlySharedModuleAliases(),
       controlUiPrecompressedAssetsPlugin(),
       controlUiServiceWorkerBuildIdPlugin(buildInfo.buildId),

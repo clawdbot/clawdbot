@@ -5,7 +5,7 @@ import { MissingProviderAuthError } from "../../agents/model-auth.js";
 import type { TemplateContext } from "../templating.js";
 import {
   setupAgentRunnerExecutionTestState,
-  getRunAgentTurnWithFallback,
+  getExecuteAgentTurnForTest,
   createMockTypingSignaler,
   createFollowupRun,
   createMinimalRunAgentTurnParams,
@@ -13,7 +13,7 @@ import {
 
 const state = setupAgentRunnerExecutionTestState();
 
-describe("runAgentTurnWithFallback: authentication failures", () => {
+describe("executeAgentTurn: authentication failures", () => {
   it("surfaces gateway reauth guidance for known OAuth refresh failures", async () => {
     state.runEmbeddedAgentMock.mockRejectedValueOnce(
       new Error(
@@ -21,8 +21,8 @@ describe("runAgentTurnWithFallback: authentication failures", () => {
       ),
     );
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn({
       commandBody: "hello",
       followupRun: createFollowupRun(),
       sessionCtx: {
@@ -62,8 +62,8 @@ describe("runAgentTurnWithFallback: authentication failures", () => {
       }),
     );
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(createMinimalRunAgentTurnParams());
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
@@ -91,8 +91,8 @@ describe("runAgentTurnWithFallback: authentication failures", () => {
       }),
     );
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(createMinimalRunAgentTurnParams());
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
@@ -130,8 +130,8 @@ describe("runAgentTurnWithFallback: authentication failures", () => {
     });
     state.runEmbeddedAgentMock.mockRejectedValueOnce(summaryError);
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(createMinimalRunAgentTurnParams());
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
@@ -148,8 +148,8 @@ describe("runAgentTurnWithFallback: authentication failures", () => {
       }),
     );
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback(
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(
       createMinimalRunAgentTurnParams({
         sessionCtx: {
           Provider: "whatsapp",
@@ -176,8 +176,8 @@ describe("runAgentTurnWithFallback: authentication failures", () => {
       }),
     );
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(createMinimalRunAgentTurnParams());
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
@@ -207,8 +207,8 @@ describe("runAgentTurnWithFallback: authentication failures", () => {
       ),
     );
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(createMinimalRunAgentTurnParams());
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
@@ -231,8 +231,8 @@ describe("runAgentTurnWithFallback: authentication failures", () => {
       ),
     );
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(createMinimalRunAgentTurnParams());
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
@@ -252,8 +252,8 @@ describe("runAgentTurnWithFallback: authentication failures", () => {
       }),
     );
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(createMinimalRunAgentTurnParams());
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
@@ -270,8 +270,8 @@ describe("runAgentTurnWithFallback: authentication failures", () => {
       ),
     );
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn({
       commandBody: "hello",
       followupRun: createFollowupRun(),
       sessionCtx: {
@@ -310,8 +310,8 @@ describe("runAgentTurnWithFallback: authentication failures", () => {
       }),
     );
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(createMinimalRunAgentTurnParams());
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
@@ -332,8 +332,8 @@ describe("runAgentTurnWithFallback: authentication failures", () => {
       }),
     );
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(createMinimalRunAgentTurnParams());
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
@@ -354,8 +354,8 @@ describe("runAgentTurnWithFallback: authentication failures", () => {
       }),
     );
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(createMinimalRunAgentTurnParams());
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
@@ -371,8 +371,8 @@ describe("runAgentTurnWithFallback: authentication failures", () => {
       new Error('No API key found for provider "openai".'),
     );
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(createMinimalRunAgentTurnParams());
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
@@ -387,8 +387,8 @@ describe("runAgentTurnWithFallback: authentication failures", () => {
       new Error('No API key found for provider "openai`\nrm -rf /".'),
     );
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn({
       commandBody: "hello",
       followupRun: createFollowupRun(),
       sessionCtx: {
@@ -426,8 +426,8 @@ describe("runAgentTurnWithFallback: authentication failures", () => {
       ),
     );
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn({
       commandBody: "hello",
       followupRun: createFollowupRun(),
       sessionCtx: {

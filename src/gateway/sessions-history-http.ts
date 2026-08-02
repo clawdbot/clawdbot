@@ -3,10 +3,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfig } from "../config/io.js";
 import { isSessionTranscriptProjectionUnavailableError } from "../config/sessions/session-accessor.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -20,7 +17,9 @@ import {
   sendJson,
   sendMethodNotAllowed,
   setSseHeaders,
+  SSE_CONTENT_TYPE,
 } from "./http-common.js";
+import { hasExplicitAcceptableMediaRange } from "./http-media-range.js";
 import {
   authorizeScopedGatewayHttpRequestOrReply,
   checkGatewayHttpRequestAuth,
@@ -39,7 +38,7 @@ import {
   readSessionMessagesWithSourceAsync,
 } from "./session-transcript-readers.js";
 import {
-  resolveFreshestSessionEntryFromStoreKeys,
+  resolveCanonicalSessionEntryFromStoreKeys,
   resolveGatewaySessionStoreTargetWithStore,
   resolveSessionTranscriptCandidates,
 } from "./session-utils.js";
@@ -62,8 +61,7 @@ function resolveSessionHistoryPath(req: IncomingMessage): string | null {
 }
 
 function shouldStreamSse(req: IncomingMessage): boolean {
-  const accept = normalizeLowercaseStringOrEmpty(getHeader(req, "accept"));
-  return accept.includes("text/event-stream");
+  return hasExplicitAcceptableMediaRange(getHeader(req, "accept"), SSE_CONTENT_TYPE);
 }
 
 function getRequestUrl(req: IncomingMessage): URL {
@@ -134,8 +132,24 @@ export async function handleSessionHistoryHttpRequest(
   }
   const { cfg } = authResult;
 
-  const target = resolveGatewaySessionStoreTargetWithStore({ cfg, key: sessionKey });
-  const entry = resolveFreshestSessionEntryFromStoreKeys(target.store, target.storeKeys);
+  let target: ReturnType<typeof resolveGatewaySessionStoreTargetWithStore>;
+  let entry: ReturnType<typeof resolveCanonicalSessionEntryFromStoreKeys>;
+  try {
+    target = resolveGatewaySessionStoreTargetWithStore({ cfg, key: sessionKey });
+    entry = resolveCanonicalSessionEntryFromStoreKeys(target.store, target.storeKeys);
+  } catch (error) {
+    if ((error as { code?: unknown })?.code !== "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED") {
+      throw error;
+    }
+    sendJson(res, 409, {
+      ok: false,
+      error: {
+        type: "migration_required",
+        message: error instanceof Error ? error.message : String(error),
+      },
+    });
+    return true;
+  }
   if (!entry?.sessionId) {
     sendJson(res, 404, {
       ok: false,
@@ -233,7 +247,7 @@ export async function handleSessionHistoryHttpRequest(
         resolveSessionTranscriptCandidates(
           entry.sessionId,
           target.storePath,
-          entry.sessionFile,
+          undefined,
           target.agentId,
         )
           .map((candidate) => resolveTranscriptPathForComparison(candidate))
@@ -265,6 +279,16 @@ export async function handleSessionHistoryHttpRequest(
     heartbeat?: ReturnType<typeof setInterval>;
     unsubscribe?: () => void;
   } = {};
+
+  function writeStreamHistory(snapshot: ReturnType<SessionHistorySseState["snapshot"]>) {
+    sseWrite(res, "history", {
+      sessionKey: target.canonicalKey,
+      ...snapshot,
+    });
+    // Send the entire requested page before bounding private live state.
+    // Cursor refreshes reread SQLite, so their next page remains complete.
+    sentHistory = sseState.retainRecentMessages(MAX_SESSION_HISTORY_LIMIT);
+  }
 
   function releaseStreamResources() {
     if (streamStopped) {
@@ -338,10 +362,7 @@ export async function handleSessionHistoryHttpRequest(
   if (isStreamClosed()) {
     return true;
   }
-  sseWrite(res, "history", {
-    sessionKey: target.canonicalKey,
-    ...sentHistory,
-  });
+  writeStreamHistory(sentHistory);
   if (isStreamClosed()) {
     return true;
   }
@@ -423,10 +444,7 @@ export async function handleSessionHistoryHttpRequest(
         if (limit === undefined && cursor === undefined) {
           if (sseState.shouldRefreshForTranscriptPath(updatePath)) {
             sentHistory = await sseState.refreshAsync();
-            sseWrite(res, "history", {
-              sessionKey: target.canonicalKey,
-              ...sentHistory,
-            });
+            writeStreamHistory(sentHistory);
             return;
           }
           const nextEvent = sseState.appendInlineMessage({
@@ -439,16 +457,13 @@ export async function handleSessionHistoryHttpRequest(
           }
           if (nextEvent.shouldRefresh) {
             sentHistory = await sseState.refreshAsync();
-            sseWrite(res, "history", {
-              sessionKey: target.canonicalKey,
-              ...sentHistory,
-            });
+            writeStreamHistory(sentHistory);
             return;
           }
           if (nextEvent.message === undefined) {
             return;
           }
-          sentHistory = sseState.snapshot();
+          sentHistory = sseState.retainRecentMessages(MAX_SESSION_HISTORY_LIMIT);
           sseWrite(res, "message", {
             sessionKey: target.canonicalKey,
             message: nextEvent.message,
@@ -459,10 +474,7 @@ export async function handleSessionHistoryHttpRequest(
         }
       }
       sentHistory = await sseState.refreshAsync();
-      sseWrite(res, "history", {
-        sessionKey: target.canonicalKey,
-        ...sentHistory,
-      });
+      writeStreamHistory(sentHistory);
     });
   });
   return true;

@@ -9,7 +9,6 @@ import {
 import pMap from "p-map";
 import type { ActiveMediaModel } from "../../packages/media-understanding-common/src/active-model.js";
 import {
-  extractMediaUserText,
   formatAudioTranscripts,
   formatMediaUnderstandingBody,
 } from "../../packages/media-understanding-common/src/format.js";
@@ -543,11 +542,10 @@ export async function applyMediaUnderstanding(params: {
   processingMode?: "audio-only";
 }): Promise<ApplyMediaUnderstandingResult> {
   const { ctx, cfg } = params;
-  const mediaWorkspaceDir = ctx.MediaWorkspaceDir ?? params.workspaceDir;
   const commandCandidates = [ctx.CommandBody, ctx.RawBody, ctx.Body];
   const originalUserText =
     commandCandidates
-      .map((value) => extractMediaUserText(value))
+      .map((value) => normalizeOptionalString(value))
       .find((value) => value && value.trim()) ?? undefined;
 
   const attachments = normalizeMediaAttachments(ctx);
@@ -559,7 +557,7 @@ export async function applyMediaUnderstanding(params: {
       workspaceDir: params.workspaceDir,
     }),
     ssrfPolicy: cfg.tools?.web?.fetch?.ssrfPolicy,
-    workspaceDir: mediaWorkspaceDir,
+    workspaceDir: params.workspaceDir,
   });
 
   try {

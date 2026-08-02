@@ -1,6 +1,5 @@
 // FFmpeg exec tests cover command execution wrappers and error mapping.
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { parseFfprobeCodecAndSampleRate, resolveFfmpegBin, runFfprobe } from "./ffmpeg-exec.js";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { runExecMock, resolveSystemBinMock } = vi.hoisted(() => ({
   runExecMock: vi.fn(),
@@ -14,6 +13,22 @@ vi.mock("../process/exec.js", () => ({
 vi.mock("../infra/resolve-system-bin.js", () => ({
   resolveSystemBin: resolveSystemBinMock,
 }));
+
+let parseFfprobeCodecAndSampleRate: typeof import("./ffmpeg-exec.js").parseFfprobeCodecAndSampleRate;
+let resolveFfmpegBin: typeof import("./ffmpeg-exec.js").resolveFfmpegBin;
+let runFfprobe: typeof import("./ffmpeg-exec.js").runFfprobe;
+
+beforeAll(async () => {
+  vi.resetModules();
+  ({ parseFfprobeCodecAndSampleRate, resolveFfmpegBin, runFfprobe } =
+    await import("./ffmpeg-exec.js"));
+});
+
+afterAll(() => {
+  vi.doUnmock("../process/exec.js");
+  vi.doUnmock("../infra/resolve-system-bin.js");
+  vi.resetModules();
+});
 
 beforeEach(() => {
   runExecMock.mockReset();
@@ -97,6 +112,18 @@ describe("runFfprobe", () => {
       logOutput: false,
       maxBuffer: 5678,
       timeoutMs: 1234,
+    });
+  });
+
+  it("passes an inherited file descriptor through the canonical exec wrapper", async () => {
+    runExecMock.mockResolvedValue({ stdout: "ok", stderr: "" });
+
+    await expect(runFfprobe(["pipe:0"], { stdinFileDescriptor: 17 })).resolves.toBe("ok");
+    expect(runExecMock).toHaveBeenCalledWith("/usr/bin/ffprobe", ["pipe:0"], {
+      logOutput: false,
+      maxBuffer: 10 * 1024 * 1024,
+      stdinFileDescriptor: 17,
+      timeoutMs: 10_000,
     });
   });
 

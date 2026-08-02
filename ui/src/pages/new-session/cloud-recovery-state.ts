@@ -38,9 +38,12 @@ export class PendingCloudRecoveryState {
   createParams: CloudSessionCreateParams | undefined;
   retryAllowed = false;
   restored = false;
+  persistent = true;
 
   clear() {
-    clearCloudSessionRecovery(this.gatewayUrl, this.recoveryScope, this.sessionKey);
+    if (this.persistent) {
+      clearCloudSessionRecovery(this.gatewayUrl, this.recoveryScope, this.sessionKey);
+    }
     this.reset();
   }
 
@@ -72,6 +75,7 @@ export class PendingCloudRecoveryState {
     this.createParams = undefined;
     this.retryAllowed = false;
     this.restored = false;
+    this.persistent = true;
   }
 
   restore(gatewayUrl: string, recoveryScope: string): CloudSessionRecovery | null {
@@ -79,7 +83,7 @@ export class PendingCloudRecoveryState {
     if (!recovery) {
       return null;
     }
-    this.apply(recovery, true);
+    this.apply(recovery, true, true);
     return recovery;
   }
 
@@ -95,6 +99,7 @@ export class PendingCloudRecoveryState {
     gatewayUrl: string;
     recoveryScope: string;
     createParams: SessionCreateParams;
+    persistent?: boolean;
   }): CloudSessionCreateParams | null {
     const sessionKey = `agent:${params.agentId}:dashboard:${generateUUID()}`;
     const createParams = parseCloudSessionCreateParams(
@@ -104,6 +109,10 @@ export class PendingCloudRecoveryState {
     );
     if (!createParams) {
       return null;
+    }
+    const persistent = params.persistent !== false;
+    if (!persistent) {
+      delete createParams.key;
     }
     const recovery = {
       sessionKey,
@@ -117,16 +126,16 @@ export class PendingCloudRecoveryState {
       phase: "creating",
       createParams,
     } satisfies CloudSessionRecovery;
-    if (!writeCloudSessionRecovery(recovery)) {
+    if (persistent && !writeCloudSessionRecovery(recovery)) {
       return null;
     }
-    this.apply(recovery, false);
+    this.apply(recovery, false, persistent);
     return createParams;
   }
 
   promoteToDispatching(sessionKey: string): boolean {
     const recovery = this.snapshot(sessionKey, "dispatching");
-    if (!recovery || !writeCloudSessionRecovery(recovery)) {
+    if (!recovery || (this.persistent && !writeCloudSessionRecovery(recovery))) {
       return false;
     }
     this.sessionKey = sessionKey;
@@ -164,7 +173,7 @@ export class PendingCloudRecoveryState {
     };
   }
 
-  private apply(recovery: CloudSessionRecovery, restored: boolean) {
+  private apply(recovery: CloudSessionRecovery, restored: boolean, persistent: boolean) {
     this.sessionKey = recovery.sessionKey;
     this.messageId = recovery.messageId;
     this.message = recovery.message;
@@ -177,5 +186,6 @@ export class PendingCloudRecoveryState {
     this.createParams = recovery.createParams;
     this.retryAllowed = true;
     this.restored = restored;
+    this.persistent = persistent;
   }
 }

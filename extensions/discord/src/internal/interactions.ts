@@ -16,6 +16,7 @@ import {
 import {
   createInteractionCallback,
   createWebhookMessage,
+  deleteWebhookMessage,
   editWebhookMessage,
   getWebhookMessage,
 } from "./api.js";
@@ -202,6 +203,17 @@ class BaseInteraction {
           { body },
         );
     this.response.recordReplyEdit();
+    return result;
+  }
+
+  async deleteReply(): Promise<unknown> {
+    const result = await deleteWebhookMessage(
+      this.client.rest,
+      this.client.options.clientId,
+      this.token,
+      "@original",
+    );
+    this.response.recordReplyDelete();
     return result;
   }
 

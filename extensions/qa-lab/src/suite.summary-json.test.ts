@@ -134,6 +134,25 @@ describe("buildQaSuiteSummaryJson", () => {
       total: 2,
       passed: 1,
       failed: 1,
+      skipped: 0,
+    });
+  });
+
+  it("includes skipped scenarios in the canonical summary counts", () => {
+    const json = buildQaSuiteSummaryJson({
+      ...baseParams,
+      scenarios: [
+        ...baseParams.scenarios,
+        { name: "Scenario C", status: "skip" as const, steps: [] },
+        { name: "Scenario D", status: "skip" as const, steps: [] },
+      ],
+    });
+
+    expect(json.counts).toEqual({
+      total: 4,
+      passed: 1,
+      failed: 1,
+      skipped: 2,
     });
   });
 
@@ -183,6 +202,7 @@ describe("buildQaSuiteSummaryJson", () => {
             cells: {
               openclaw: {
                 runtime: "openclaw" as const,
+                status: "pass" as const,
                 transcriptBytes: "",
                 toolCalls: [],
                 finalText: "done",
@@ -192,6 +212,7 @@ describe("buildQaSuiteSummaryJson", () => {
               },
               codex: {
                 runtime: "codex" as const,
+                status: "pass" as const,
                 transcriptBytes: "",
                 toolCalls: [],
                 finalText: "done",
@@ -208,6 +229,10 @@ describe("buildQaSuiteSummaryJson", () => {
     expect(json.scenarios[0]).toMatchObject({
       runtimeParity: {
         scenarioId: "scenario-a",
+        cells: {
+          openclaw: { status: "pass" },
+          codex: { status: "pass" },
+        },
         runtimeParityUsage: {
           expectation: "not-applicable",
           reason: "Local fixture only; no assistant turn runs.",

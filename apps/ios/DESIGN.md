@@ -4,7 +4,8 @@ OpenClaw follows the native iOS 26 design language while keeping an iOS 18 deplo
 
 ## Principles
 
-- Prefer `NavigationStack`, `TabView`, `List`, `Form`, toolbars, sheets, and system controls. They adopt the current platform appearance automatically.
+- Prefer `NavigationStack`, `List`, `Form`, toolbars, sheets, and system controls. They adopt the current platform appearance automatically.
+- Root navigation uses one black sidebar on every idiom: persistent in wide landscape and a push-reveal layer behind the content on phones, portrait, and narrow layouts.
 - Reserve Liquid Glass for navigation and interactive controls. Do not apply glass to every card, row, or status surface.
 - Keep content hierarchy clear with typography, spacing, and grouping before adding backgrounds.
 - Use semantic colors. Red means destructive or stopped; orange means attention; green means healthy. Neutral actions use the app accent.
@@ -20,6 +21,7 @@ Apple references: [Adopting Liquid Glass](https://developer.apple.com/documentat
 - `pagePadding`: standard page gutter
 - `cardRadius`: content group radius
 - `controlRadius`: inset control radius
+- `drawerRadius`: all-corner radius for compact content while the sidebar is revealed
 - `compactControlSize`: compact circular control size
 - `bottomScrollInset`: clearance above persistent navigation
 
@@ -33,14 +35,15 @@ Feature-local layout enums may define row heights and grid dimensions, but shoul
 - `OpenClawNoticeBanner`: shared connection and runtime notices
 - `OpenClawAdaptiveHeaderRow`: responsive destination heading
 - `OpenClawGlassControlGroup`: performance and morphing boundary for nearby glass controls
+- `OpenClawSidebarPalette`: fixed black-sidebar colors that remain dark in every app appearance
+- `OpenClawSidebarRevealButton`, `OpenClawSidebarHeaderLeadingSlot`: shared leading toolbar affordance
 - `openClawGlassButton(prominent:tint:)`: iOS 26 glass button with an iOS 18 bordered fallback
-- `openClawTabBarBehavior()`: iOS 26 tab-bar minimization with an earlier-system no-op
 
 ## Liquid Glass rules
 
 Use `openClawGlassButton` for primary actions, compact header controls, and navigation-adjacent controls. Use the prominent style for one primary action per region. Wrap nearby controls in `OpenClawGlassControlGroup`.
 
-Do not place Liquid Glass behind reading content, forms, metrics, or every card in a scroll view. Excess glass weakens hierarchy, increases rendering cost, and competes with the system tab bar and navigation chrome.
+Do not place Liquid Glass behind reading content, forms, metrics, or every card in a scroll view. Excess glass weakens hierarchy, increases rendering cost, and competes with the sidebar and navigation chrome.
 
 Keep new iOS APIs behind `#available(iOS 26.0, *)`. The fallback must preserve the same label, action, tint meaning, accessibility, and approximate hit target.
 

@@ -167,6 +167,15 @@ struct DebugSettings: View {
                     Text("\(ProcessInfo.processInfo.processIdentifier)")
                 }
                 GridRow {
+                    self.gridLabel("Settings")
+                    VStack(alignment: .leading, spacing: 4) {
+                        Toggle("Show native settings panes", isOn: self.$state.nativeSettingsPanesEnabled)
+                        Text("These panes are being retired in favor of the Dashboard.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                GridRow {
                     self.gridLabel("Binary path")
                     Text(Bundle.main.bundlePath)
                         .font(.caption2.monospaced())

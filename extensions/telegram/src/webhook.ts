@@ -529,24 +529,41 @@ export async function startTelegramWebhook(opts: {
   });
 
   let webhookAdvertised = false;
+  const runShutdownPhase = async (
+    label: string,
+    run: () => void | Promise<void>,
+  ): Promise<void> => {
+    try {
+      await run();
+    } catch (err) {
+      runtime.error?.(`telegram webhook ${label} failed: ${formatErrorMessage(err)}`);
+    }
+  };
   const shutdown = async () => {
     if (shutDown) {
       return;
     }
-    botAbortController.abort();
     shutDown = true;
+    botAbortController.abort();
     shutdownAbortController.abort();
-    const ingressStopTask = webhookIngressMonitor?.stop();
+    // Every fallible phase is isolated so one failed release cannot skip the
+    // remaining resources or reject the fire-and-forget abort hook.
+    const ingressMonitor = webhookIngressMonitor;
     webhookIngressMonitor = undefined;
-    server.close();
-    await bot.stop();
+    const ingressStopTask = ingressMonitor
+      ? runShutdownPhase("ingress stop", () => ingressMonitor.stop())
+      : undefined;
+    await runShutdownPhase("server close", () => {
+      server.close();
+    });
+    await runShutdownPhase("bot stop", () => bot.stop());
     // The webhook owns this transport because it resolved and injected it into
     // createTelegramBot; close once so abort/startup-failure paths cannot leak sockets.
-    await closeTransportOnce();
-    await waitForWebhookIngressStop(ingressStopTask);
-    status.noteWebhookStop();
+    await runShutdownPhase("transport close", closeTransportOnce);
+    await runShutdownPhase("ingress drain", () => waitForWebhookIngressStop(ingressStopTask));
+    await runShutdownPhase("status update", () => status.noteWebhookStop());
     if (diagnosticsEnabled) {
-      stopDiagnosticHeartbeat();
+      await runShutdownPhase("diagnostics stop", () => stopDiagnosticHeartbeat());
     }
   };
   if (opts.abortSignal?.aborted) {

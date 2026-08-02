@@ -46,7 +46,7 @@
 }
 
 .nodes-entry__details > summary:hover {
-  color: var(--fg);
+  color: var(--text);
 }
 
 .nodes-entry__details > .muted {
@@ -87,7 +87,7 @@
 }
 
 .nodes-group__dups > summary:hover {
-  color: var(--fg);
+  color: var(--text);
 }
 
 .nodes-group__dups .settings-row {

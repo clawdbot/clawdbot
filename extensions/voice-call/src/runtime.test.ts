@@ -282,6 +282,13 @@ describe("createVoiceCallRuntime lifecycle", () => {
 
   it("returns an idempotent stop handler", async () => {
     const tunnelStop = vi.fn().mockResolvedValue(undefined);
+    let releaseWebhookStop: (() => void) | undefined;
+    mocks.webhookStop.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseWebhookStop = resolve;
+        }),
+    );
     mocks.startTunnel.mockResolvedValue({
       publicUrl: "https://public.example/voice/webhook",
       provider: "ngrok",
@@ -294,8 +301,22 @@ describe("createVoiceCallRuntime lifecycle", () => {
       agentRuntime: {} as never,
     });
 
-    await runtime.stop();
-    await runtime.stop();
+    const firstStop = runtime.stop();
+    const secondStop = runtime.stop();
+    let stopped = false;
+    void secondStop.then(() => {
+      stopped = true;
+    });
+
+    expect(secondStop).toBe(firstStop);
+    await vi.waitFor(() => {
+      expect(mocks.webhookStop).toHaveBeenCalledTimes(1);
+    });
+    expect(stopped).toBe(false);
+
+    releaseWebhookStop?.();
+    await firstStop;
+    expect(stopped).toBe(true);
 
     expect(tunnelStop).toHaveBeenCalledTimes(1);
     expect(mocks.cleanupTailscaleExposure).toHaveBeenCalledTimes(1);
@@ -303,7 +324,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
   });
 
   it("passes fullConfig to the webhook server for streaming provider resolution", async () => {
-    const coreConfig = { messages: { tts: { provider: "openai" } } } as CoreConfig;
+    const coreConfig = { tts: { provider: "openai" } } as CoreConfig;
     const fullConfig = {
       plugins: {
         entries: {
@@ -334,13 +355,13 @@ describe("createVoiceCallRuntime lifecycle", () => {
       files: ["SOUL.md"],
     };
     const fullConfig = {
-      agents: { list: [{ id: "main" }, { id: "support" }] },
+      agents: { list: [{ id: "operator", default: true }, { id: "support" }] },
     } as OpenClawConfig;
     const resolveAgentIdentity = vi.fn((_cfg: OpenClawConfig, agentId: string) => ({
       name: agentId === "support" ? "Support Voice" : "Main Voice",
     }));
 
-    await createVoiceCallRuntime({
+    const runtime = await createVoiceCallRuntime({
       config,
       coreConfig: {} as CoreConfig,
       fullConfig,
@@ -353,6 +374,16 @@ describe("createVoiceCallRuntime lifecycle", () => {
     if (typeof resolveInstructions !== "function") {
       throw new Error("expected per-call realtime instruction resolver");
     }
+    expect(runtime.config.agentId).toBe("operator");
+    const defaultInstructions = resolveInstructions({
+      callId: "call-default",
+      direction: "outbound",
+      from: "+15550001111",
+      to: "+15550002222",
+    });
+    expect(defaultInstructions).toContain("- Agent id: operator");
+    expect(resolveAgentIdentity).toHaveBeenCalledWith(fullConfig, "operator");
+
     const supportInstructions = resolveInstructions({
       callId: "call-support",
       agentId: "support",

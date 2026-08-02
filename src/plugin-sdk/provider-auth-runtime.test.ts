@@ -74,7 +74,7 @@ describe("plugin-sdk provider-auth-runtime", () => {
       callbackPath: "/callback",
       redirectUri: `http://127.0.0.1:${port}/callback`,
       hostname: "127.0.0.1",
-      successTitle: "OAuth complete",
+      successTitle: `OAuth <complete>&"'`,
       corsOriginAllowlist: ["auth.x.ai", "accounts.x.ai"],
     });
 
@@ -101,6 +101,7 @@ describe("plugin-sdk provider-auth-runtime", () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get("access-control-allow-origin")).toBe("https://auth.x.ai");
+    await expect(response.text()).resolves.toContain("OAuth &lt;complete&gt;&amp;&quot;&#39;");
     await expect(callback).resolves.toEqual({ code: "code-1", state: "state-1" });
   });
 

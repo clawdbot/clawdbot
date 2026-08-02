@@ -1,41 +1,129 @@
 import CryptoKit
+import Darwin
 import Foundation
+import OpenClawKit
 import OSLog
 import Security
 
+enum ExecApprovalsMigrationLogEvent: Equatable {
+    case required(ExecApprovalsLegacyMigrationRequiredError)
+    case recovered(stateDirectoryPath: String)
+}
+
+final class ExecApprovalsMigrationRequiredCache: @unchecked Sendable {
+    struct FileIdentity: Hashable, Sendable {
+        let device: UInt64
+        let inode: UInt64
+        let modificationSeconds: Int64
+        let modificationNanoseconds: Int64
+    }
+
+    private struct CachedFailure {
+        let error: ExecApprovalsLegacyMigrationRequiredError
+        let identity: FileIdentity
+    }
+
+    private struct Condition {
+        var cachedFailure: CachedFailure?
+        var loggedIdentities: Set<FileIdentity?> = []
+    }
+
+    private let lock = NSLock()
+    private var conditions: [String: Condition] = [:]
+    private let identityReader: (URL) -> FileIdentity?
+    private let onEvent: (ExecApprovalsMigrationLogEvent) -> Void
+
+    init(
+        identityReader: @escaping (URL) -> FileIdentity? = ExecApprovalsMigrationRequiredCache.fileIdentity,
+        onEvent: @escaping (ExecApprovalsMigrationLogEvent) -> Void)
+    {
+        self.identityReader = identityReader
+        self.onEvent = onEvent
+    }
+
+    func cachedError(stateDirectoryURL: URL) -> ExecApprovalsLegacyMigrationRequiredError? {
+        let key = Self.stateDirectoryKey(stateDirectoryURL)
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        guard var condition = self.conditions[key],
+              let cachedFailure = condition.cachedFailure
+        else { return nil }
+        guard self.identityReader(cachedFailure.error.legacyFileURL) == cachedFailure.identity else {
+            // A changed path may be Doctor's source -> claim rename. Keep the condition
+            // open until a full SQLite resolve succeeds, so that rename cannot log recovery.
+            condition.cachedFailure = nil
+            self.conditions[key] = condition
+            return nil
+        }
+        return cachedFailure.error
+    }
+
+    func record(_ error: ExecApprovalsLegacyMigrationRequiredError) {
+        let identity = self.identityReader(error.legacyFileURL)
+        let key = Self.stateDirectoryKey(error.stateDirectoryURL)
+        self.lock.lock()
+        var condition = self.conditions[key] ?? Condition()
+        let shouldLog = condition.loggedIdentities.insert(identity).inserted
+        condition.cachedFailure = identity.map { CachedFailure(error: error, identity: $0) }
+        self.conditions[key] = condition
+        self.lock.unlock()
+        if shouldLog {
+            self.onEvent(.required(error))
+        }
+    }
+
+    func markResolved(stateDirectoryURL: URL) {
+        let key = Self.stateDirectoryKey(stateDirectoryURL)
+        self.lock.lock()
+        let recovered = self.conditions.removeValue(forKey: key) != nil
+        self.lock.unlock()
+        if recovered {
+            self.onEvent(.recovered(stateDirectoryPath: key))
+        }
+    }
+
+    private static func stateDirectoryKey(_ url: URL) -> String {
+        url.standardizedFileURL.path
+    }
+
+    private static func fileIdentity(_ url: URL) -> FileIdentity? {
+        var status = stat()
+        guard lstat(url.path, &status) == 0 else { return nil }
+        return FileIdentity(
+            device: UInt64(truncatingIfNeeded: status.st_dev),
+            inode: UInt64(truncatingIfNeeded: status.st_ino),
+            modificationSeconds: Int64(status.st_mtimespec.tv_sec),
+            modificationNanoseconds: Int64(status.st_mtimespec.tv_nsec))
+    }
+}
+
 enum ExecApprovalsStore {
     private static let logger = Logger(subsystem: "ai.openclaw", category: "exec-approvals")
+    private static let migrationRequiredCache = ExecApprovalsMigrationRequiredCache { event in
+        switch event {
+        case let .required(error):
+            Self.logger.error("exec approvals resolve blocked: \(error.localizedDescription, privacy: .public)")
+        case let .recovered(stateDirectoryPath):
+            Self.logger.info(
+                "exec approvals migration requirement cleared for \(stateDirectoryPath, privacy: .public)")
+        }
+    }
+
     private static let defaultAgentId = "main"
     // Keep omitted-file behavior aligned with the TypeScript gateway/CLI contract.
     private static let defaultSecurity: ExecSecurity = .full
     private static let defaultAsk: ExecAsk = .off
     private static let defaultAskFallback: ExecSecurity = .deny
     private static let defaultAutoAllowSkills = false
-    private static let secureStateDirPermissions = 0o700
-
-    /// Match the TypeScript writer's `<approvals>.lock` protocol. Both processes
-    /// must cover the complete read-modify-write transaction or a stale native
-    /// usage update can restore policy that an administrator just revoked.
-    private static func withWriteLock<T>(_ body: () throws -> T) throws -> T {
-        let fileURL = self.fileURL()
-        let trustedRoot = self.trustedRootURL()
-        try ExecApprovalsFileIO.assertSafeParentChain(of: fileURL, trustedRoot: trustedRoot)
-        try self.ensureSecureStateDirectory()
-        return try ExecApprovalsFileIO.withLock(
-            fileURL: fileURL,
-            trustedRoot: trustedRoot,
-            body)
-    }
-
-    static func fileURL() -> URL {
-        self.stateDirURL().appendingPathComponent("exec-approvals.json")
+    static func databaseURL() -> URL {
+        ExecApprovalsSQLiteStore.databaseURL(stateDirectoryURL: self.stateDirURL())
     }
 
     static func socketPath() -> String {
         self.stateDirURL().appendingPathComponent("exec-approvals.sock").path
     }
 
-    private static func trustedRootURL() -> URL {
+    private static func homeURL() -> URL {
         guard let configured = OpenClawEnv.path("OPENCLAW_HOME") else {
             return FileManager().homeDirectoryForCurrentUser
         }
@@ -46,9 +134,9 @@ enum ExecApprovalsStore {
 
     private static func stateDirURL() -> URL {
         guard let configured = OpenClawEnv.path("OPENCLAW_STATE_DIR") else {
-            return self.trustedRootURL().appendingPathComponent(".openclaw", isDirectory: true)
+            return self.homeURL().appendingPathComponent(".openclaw", isDirectory: true)
         }
-        let home = self.trustedRootURL().path
+        let home = self.homeURL().path
         let expanded: String = if configured == "~" {
             home
         } else if configured.hasPrefix("~/") {
@@ -108,190 +196,59 @@ enum ExecApprovalsStore {
 
     static func readSnapshot() -> ExecApprovalsSnapshot {
         do {
-            return try self.withWriteLock {
-                try self.readSnapshotUnlocked()
-            }
+            let record = try ExecApprovalsSQLiteStore.read(stateDirectoryURL: self.stateDirURL())
+            return self.snapshot(record)
         } catch {
-            self.logger.warning("exec approvals snapshot lock failed: \(error.localizedDescription, privacy: .public)")
+            self.logger.warning("exec approvals snapshot read failed: \(error.localizedDescription, privacy: .public)")
             return ExecApprovalsSnapshot(
-                path: self.fileURL().path,
-                exists: ExecApprovalsFileIO.pathExistsNoFollow(self.fileURL()),
+                path: ExecApprovalsSQLiteStore.locator,
+                exists: false,
                 hash: "",
                 file: self.failClosedFallbackFile())
         }
     }
 
-    private static func readSnapshotUnlocked() throws -> ExecApprovalsSnapshot {
-        let url = self.fileURL()
-        guard let current = try ExecApprovalsFileIO.read(at: url, trustedRoot: self.trustedRootURL()) else {
+    private static func snapshot(_ record: ExecApprovalsSQLiteRecord?) -> ExecApprovalsSnapshot {
+        guard let record else {
             return ExecApprovalsSnapshot(
-                path: url.path,
+                path: ExecApprovalsSQLiteStore.locator,
                 exists: false,
                 hash: self.hashRaw(nil),
                 file: ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:]))
         }
-        let raw = String(bytes: current.data, encoding: .utf8) ?? ""
-        let decoded = (try? self.decodeCurrentFile(current.data))
-            .map(self.normalizeIncoming) ?? self.failClosedFallbackFile()
         return ExecApprovalsSnapshot(
-            path: url.path,
+            path: ExecApprovalsSQLiteStore.locator,
             exists: true,
-            hash: self.hashRaw(raw),
-            file: decoded)
+            hash: self.hashRaw(record.rawJSON),
+            file: self.normalizeIncoming(record.document))
     }
 
     static func loadFile() -> ExecApprovalsFile {
         do {
-            return try self.withWriteLock {
-                self.loadFileUnlocked()
-            }
+            return try self.loadFileForMutation(
+                ExecApprovalsSQLiteStore.read(stateDirectoryURL: self.stateDirURL()))
         } catch {
-            self.logger.warning("exec approvals read lock failed: \(error.localizedDescription, privacy: .public)")
+            self.logger.warning("exec approvals read failed: \(error.localizedDescription, privacy: .public)")
             return self.failClosedFallbackFile()
         }
     }
 
-    private static func loadFileUnlocked() -> ExecApprovalsFile {
-        do {
-            return try self.loadFileForMutationUnlocked()
-        } catch {
-            self.logger.warning("exec approvals load failed: \(error.localizedDescription, privacy: .public)")
-            return self.failClosedFallbackFile()
-        }
-    }
-
-    /// Existing unreadable files are policy state, not equivalent to an absent
-    /// file. Mutations must fail instead of replacing them with permissive defaults.
-    private static func loadFileForMutationUnlocked() throws -> ExecApprovalsFile {
-        let url = self.fileURL()
-        guard let current = try ExecApprovalsFileIO.read(at: url, trustedRoot: self.trustedRootURL()) else {
-            return ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:])
-        }
-        return try self.normalizeIncoming(self.decodeCurrentFile(current.data))
-    }
-
-    private static func decodeCurrentFile(_ data: Data) throws -> ExecApprovalsFile {
-        guard self.hasValidPersistedStructure(data) else {
-            throw NSError(domain: "ExecApprovals", code: 13, userInfo: [
-                NSLocalizedDescriptionKey: "invalid exec approvals structure",
-            ])
-        }
-        let decoded = try JSONDecoder().decode(ExecApprovalsFile.self, from: data)
-        guard decoded.version == 1 else {
-            throw NSError(domain: "ExecApprovals", code: 12, userInfo: [
-                NSLocalizedDescriptionKey: "unsupported exec approvals version \(decoded.version)",
-            ])
-        }
-        return decoded
-    }
-
-    private static func fileNeedsAllowlistRewrite(_ data: Data) -> Bool {
-        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let agents = root["agents"] as? [String: Any]
-        else { return false }
-        for case let agent as [String: Any] in agents.values {
-            guard let allowlist = agent["allowlist"] as? [Any] else { continue }
-            if allowlist.contains(where: { value in
-                guard let entry = value as? [String: Any] else { return true }
-                guard let rawID = entry["id"] as? String else { return true }
-                return rawID.isEmpty || entry["commandText"] != nil
-            }) {
-                return true
-            }
-        }
-        return false
-    }
-
-    private static func hasValidPersistedStructure(_ data: Data) -> Bool {
-        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let version = root["version"] as? NSNumber,
-              CFGetTypeID(version) != CFBooleanGetTypeID(),
-              version.doubleValue == 1
-        else { return false }
-
-        if let socket = root["socket"] {
-            guard let object = socket as? [String: Any],
-                  self.hasOptionalString(object, key: "path"),
-                  self.hasOptionalString(object, key: "token")
-            else { return false }
-        }
-        if let defaults = root["defaults"], !self.hasValidPolicyFields(defaults) {
-            return false
-        }
-        if let agents = root["agents"] {
-            guard let object = agents as? [String: Any] else { return false }
-            for value in object.values {
-                guard self.hasValidPolicyFields(value), let agent = value as? [String: Any] else { return false }
-                if let allowlist = agent["allowlist"] {
-                    guard let entries = allowlist as? [Any],
-                          entries.allSatisfy(self.hasValidAllowlistEntry)
-                    else { return false }
-                }
-            }
-        }
-        return true
-    }
-
-    private static func hasValidAllowlistEntry(_ value: Any) -> Bool {
-        if let pattern = value as? String {
-            return !pattern.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        }
-        guard let object = value as? [String: Any],
-              let pattern = object["pattern"] as? String,
-              !pattern.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        else { return false }
-        for key in ["id", "source", "commandText", "argPattern", "lastUsedCommand", "lastResolvedPath"] {
-            if let value = object[key], !(value is String) {
-                return false
-            }
-        }
-        if let lastUsedAt = object["lastUsedAt"] {
-            guard let number = lastUsedAt as? NSNumber,
-                  CFGetTypeID(number) != CFBooleanGetTypeID(),
-                  number.doubleValue.isFinite
-            else { return false }
-        }
-        return true
-    }
-
-    private static func hasValidPolicyFields(_ value: Any) -> Bool {
-        guard let object = value as? [String: Any] else { return false }
-        if let security = object["security"] {
-            guard let raw = security as? String, ExecSecurity(rawValue: raw) != nil else { return false }
-        }
-        if let ask = object["ask"] {
-            guard let raw = ask as? String, ExecAsk(rawValue: raw) != nil else { return false }
-        }
-        if let fallback = object["askFallback"] {
-            guard let raw = fallback as? String, ExecSecurity(rawValue: raw) != nil else { return false }
-        }
-        if let autoAllowSkills = object["autoAllowSkills"], !(autoAllowSkills is Bool) {
-            return false
-        }
-        return true
-    }
-
-    private static func hasOptionalString(_ object: [String: Any], key: String) -> Bool {
-        guard let value = object[key] else { return true }
-        return value is String
-    }
-
-    private static func saveFileUnlocked(_ file: ExecApprovalsFile) throws {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        let data = try encoder.encode(self.normalizeIncoming(file))
-        let url = self.fileURL()
-        try self.ensureSecureStateDirectory()
-        try FileManager().createDirectory(
-            at: url.deletingLastPathComponent(),
-            withIntermediateDirectories: true)
-        try ExecApprovalsFileIO.write(data, to: url, trustedRoot: self.trustedRootURL())
+    private static func loadFileForMutation(
+        _ record: ExecApprovalsSQLiteRecord?) throws -> ExecApprovalsFile
+    {
+        self.normalizeIncoming(
+            record?.document ?? ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:]))
     }
 
     static func ensureFile() -> ExecApprovalsFile {
         do {
-            return try self.withWriteLock {
-                try self.ensureFileUnlocked()
+            return try ExecApprovalsSQLiteStore.withImmediateTransaction(
+                stateDirectoryURL: self.stateDirURL())
+            { record in
+                let ensured = self.ensureFile(record)
+                return ExecApprovalsSQLiteMutation(
+                    value: ensured.file,
+                    documentToWrite: ensured.needsWrite ? ensured.file : nil)
             }
         } catch {
             self.logger.error("exec approvals ensure failed: \(error.localizedDescription, privacy: .public)")
@@ -299,17 +256,11 @@ enum ExecApprovalsStore {
         }
     }
 
-    private static func ensureFileUnlocked() throws -> ExecApprovalsFile {
-        try self.ensureSecureStateDirectory()
-        let url = self.fileURL()
-        let current = try ExecApprovalsFileIO.read(at: url, trustedRoot: self.trustedRootURL())
-        let existed = current != nil
-        let needsAllowlistRewrite = current.map { self.fileNeedsAllowlistRewrite($0.data) } ?? false
-        let loaded = try current.map { try self.decodeCurrentFile($0.data) }
-            ?? ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:])
-        let loadedHash = self.hashFile(loaded)
-
-        var file = self.normalizeIncoming(loaded)
+    private static func ensureFile(
+        _ record: ExecApprovalsSQLiteRecord?) -> (file: ExecApprovalsFile, needsWrite: Bool)
+    {
+        var file = self.normalizeIncoming(
+            record?.document ?? ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:]))
         if file.socket == nil {
             file.socket = ExecApprovalsSocketConfig(path: nil, token: nil)
         }
@@ -324,10 +275,27 @@ enum ExecApprovalsStore {
         if file.agents == nil {
             file.agents = [:]
         }
-        if !existed || needsAllowlistRewrite || current?.linkCount != 1 || loadedHash != self.hashFile(file) {
-            try self.saveFileUnlocked(file)
+        let needsCanonicalRewrite = record.map { self.rawNeedsAllowlistRewrite($0.rawJSON) } ?? false
+        return (file, record?.document != file || needsCanonicalRewrite)
+    }
+
+    private static func rawNeedsAllowlistRewrite(_ rawJSON: String) -> Bool {
+        guard let data = rawJSON.data(using: .utf8),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let agents = root["agents"] as? [String: Any]
+        else { return false }
+        for case let agent as [String: Any] in agents.values {
+            guard let allowlist = agent["allowlist"] as? [Any] else { continue }
+            if allowlist.contains(where: { value in
+                guard let entry = value as? [String: Any],
+                      let rawID = entry["id"] as? String
+                else { return true }
+                return rawID.isEmpty || entry["commandText"] != nil
+            }) {
+                return true
+            }
         }
-        return file
+        return false
     }
 
     static func saveFile(
@@ -335,26 +303,28 @@ enum ExecApprovalsStore {
         ifBaseHash baseHash: String?) -> ExecApprovalsConditionalSaveResult
     {
         do {
-            return try self.withWriteLock {
+            return try ExecApprovalsSQLiteStore.withImmediateTransaction(
+                stateDirectoryURL: self.stateDirURL())
+            { record in
                 // A conditional write must not create or normalize policy state
                 // before it proves the caller still owns the observed snapshot.
-                let snapshot = try self.readSnapshotUnlocked()
+                let snapshot = self.snapshot(record)
                 let expected = baseHash?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 if snapshot.exists {
                     if snapshot.hash.isEmpty {
-                        return .baseHashUnavailable
+                        return ExecApprovalsSQLiteMutation(value: .baseHashUnavailable)
                     }
                     if expected.isEmpty {
-                        return .baseHashRequired
+                        return ExecApprovalsSQLiteMutation(value: .baseHashRequired)
                     }
                     if expected != snapshot.hash {
-                        return .conflict
+                        return ExecApprovalsSQLiteMutation(value: .conflict)
                     }
                 } else if !expected.isEmpty, expected != snapshot.hash {
-                    return .conflict
+                    return ExecApprovalsSQLiteMutation(value: .conflict)
                 }
 
-                let current = try self.ensureFileUnlocked()
+                let current = self.ensureFile(record).file
                 var normalized = self.normalizeIncoming(incoming)
                 let socketPath = normalized.socket?.path?.trimmingCharacters(in: .whitespacesAndNewlines)
                 let token = normalized.socket?.token?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -366,9 +336,11 @@ enum ExecApprovalsStore {
                     ? token!
                     : current.socket?.token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 normalized.socket = ExecApprovalsSocketConfig(path: resolvedPath, token: resolvedToken)
-
-                try self.saveFileUnlocked(normalized)
-                return try .saved(self.readSnapshotUnlocked())
+                let rawJSON = try ExecApprovalsSQLiteStore.serialize(normalized)
+                let saved = self.snapshot(ExecApprovalsSQLiteRecord(
+                    rawJSON: rawJSON,
+                    document: normalized))
+                return ExecApprovalsSQLiteMutation(value: .saved(saved), documentToWrite: normalized)
             }
         } catch {
             self.logger.error("exec approvals conditional save failed: \(error.localizedDescription, privacy: .public)")
@@ -388,11 +360,24 @@ enum ExecApprovalsStore {
     static func resolveResult(
         agentId: String?) -> Result<ExecApprovalsResolved, ExecApprovalsReadError>
     {
+        let stateDirectoryURL = self.stateDirURL()
+        if let error = self.migrationRequiredCache.cachedError(stateDirectoryURL: stateDirectoryURL) {
+            return .failure(.migrationRequired(error))
+        }
         do {
-            let file = try self.withWriteLock {
-                try self.ensureFileUnlocked()
+            let file = try ExecApprovalsSQLiteStore.withImmediateTransaction(
+                stateDirectoryURL: stateDirectoryURL)
+            { record in
+                let ensured = self.ensureFile(record)
+                return ExecApprovalsSQLiteMutation(
+                    value: ensured.file,
+                    documentToWrite: ensured.needsWrite ? ensured.file : nil)
             }
+            self.migrationRequiredCache.markResolved(stateDirectoryURL: stateDirectoryURL)
             return .success(self.resolveFromFile(file, agentId: agentId))
+        } catch let error as ExecApprovalsLegacyMigrationRequiredError {
+            self.migrationRequiredCache.record(error)
+            return .failure(.migrationRequired(error))
         } catch {
             self.logger.warning("exec approvals resolve failed: \(error.localizedDescription, privacy: .public)")
             return .failure(.unavailable)
@@ -405,21 +390,6 @@ enum ExecApprovalsStore {
         await Task.detached(priority: .userInitiated) {
             self.resolveResult(agentId: agentId)
         }.value
-    }
-
-    /// Read-only resolve: loads file without writing (no ensureFile side effects).
-    /// Safe to call from background threads / off MainActor.
-    static func resolveReadOnly(agentId: String?) -> ExecApprovalsResolved {
-        let file: ExecApprovalsFile
-        do {
-            file = try self.withWriteLock {
-                self.loadFileUnlocked()
-            }
-        } catch {
-            self.logger.warning("exec approvals read-only lock failed: \(error.localizedDescription, privacy: .public)")
-            file = self.failClosedFallbackFile()
-        }
-        return self.resolveFromFile(file, agentId: agentId)
     }
 
     static func resolveDefaults(from file: ExecApprovalsFile) -> ExecApprovalsResolvedDefaults {
@@ -449,7 +419,7 @@ enum ExecApprovalsStore {
         let socketPath = self.expandPath(file.socket?.path ?? self.socketPath())
         let token = file.socket?.token ?? ""
         return ExecApprovalsResolved(
-            url: self.fileURL(),
+            url: self.databaseURL(),
             socketPath: socketPath,
             token: token,
             defaults: resolvedDefaults,
@@ -566,8 +536,11 @@ extension ExecApprovalsStore {
             uniquingKeysWith: { first, _ in first })
 
         do {
-            try self.withWriteLock {
-                var file = try self.ensureFileUnlocked()
+            try ExecApprovalsSQLiteStore.withImmediateTransaction(
+                stateDirectoryURL: self.stateDirURL())
+            { record in
+                let ensured = self.ensureFile(record)
+                var file = ensured.file
                 try self.assertCurrentExecutionAuthorization(
                     file: file,
                     agentId: commit.agentId,
@@ -582,9 +555,9 @@ extension ExecApprovalsStore {
                     agentId: commit.agentId,
                     usesByKey: allUsesByKey,
                     command: commit.command)
-                if grantsChanged || usesChanged {
-                    try self.saveFileUnlocked(file)
-                }
+                return ExecApprovalsSQLiteMutation(
+                    value: (),
+                    documentToWrite: ensured.needsWrite || grantsChanged || usesChanged ? file : nil)
             }
             return .success(())
         } catch {
@@ -612,16 +585,19 @@ extension ExecApprovalsStore {
             uses.map { (self.allowlistEntryMatchKey($0.match), $0) },
             uniquingKeysWith: { first, _ in first })
         do {
-            try self.withWriteLock {
-                var file = try self.ensureFileUnlocked()
-                if self.applyAllowlistUsesUnlocked(
+            try ExecApprovalsSQLiteStore.withImmediateTransaction(
+                stateDirectoryURL: self.stateDirURL())
+            { record in
+                let ensured = self.ensureFile(record)
+                var file = ensured.file
+                let changed = self.applyAllowlistUsesUnlocked(
                     file: &file,
                     agentId: agentId,
                     usesByKey: usesByKey,
                     command: command)
-                {
-                    try self.saveFileUnlocked(file)
-                }
+                return ExecApprovalsSQLiteMutation(
+                    value: (),
+                    documentToWrite: ensured.needsWrite || changed ? file : nil)
             }
             return .success(())
         } catch {
@@ -791,7 +767,7 @@ extension ExecApprovalsStore {
                     source: item.source,
                     argPattern: item.argPattern,
                     lastUsedAt: now,
-                    lastUsedCommand: command,
+                    lastUsedCommand: self.shouldRecordLastUsedCommand(for: item) ? command : nil,
                     lastResolvedPath: use.resolvedPath)
             }
             if entryChanged {
@@ -804,6 +780,10 @@ extension ExecApprovalsStore {
             file.agents = agents
         }
         return changed
+    }
+
+    private static func shouldRecordLastUsedCommand(for entry: ExecAllowlistEntry) -> Bool {
+        !(entry.argPattern?.hasPrefix("sha256:argv:") ?? false)
     }
 
     @discardableResult
@@ -884,10 +864,14 @@ extension ExecApprovalsStore {
         _ mutate: (inout ExecApprovalsFile) throws -> Void) -> Result<Void, ExecApprovalsMutationError>
     {
         do {
-            try self.withWriteLock {
-                var file = try self.ensureFileUnlocked()
+            try ExecApprovalsSQLiteStore.withImmediateTransaction(
+                stateDirectoryURL: self.stateDirURL())
+            { record in
+                var file = self.ensureFile(record).file
                 try mutate(&file)
-                try self.saveFileUnlocked(file)
+                return ExecApprovalsSQLiteMutation(
+                    value: (),
+                    documentToWrite: self.normalizeIncoming(file))
             }
             return .success(())
         } catch let error as ExecApprovalsMutationError {
@@ -909,23 +893,6 @@ extension ExecApprovalsStore {
             argPattern: entry.argPattern)
     }
 
-    private static func ensureSecureStateDirectory() throws {
-        let url = self.stateDirURL()
-        // Create with the final 0700 mode directly: a default-mode (0755)
-        // create followed by the chmod below leaves a transient window where
-        // the directory is world-listable and concurrent observers see the
-        // wrong permissions.
-        try FileManager().createDirectory(
-            at: url,
-            withIntermediateDirectories: true,
-            attributes: [.posixPermissions: self.secureStateDirPermissions])
-        try ExecApprovalsFileIO.assertSafeDirectory(at: url)
-        try FileManager().setAttributes(
-            [.posixPermissions: self.secureStateDirPermissions],
-            ofItemAtPath: url.path)
-        try ExecApprovalsFileIO.assertSafeDirectory(at: url)
-    }
-
     private static func generateToken() -> String {
         var bytes = [UInt8](repeating: 0, count: 24)
         let status = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
@@ -944,14 +911,6 @@ extension ExecApprovalsStore {
         let digest = SHA256.hash(data: data)
         let hash = digest.map { String(format: "%02x", $0) }.joined()
         return raw == nil ? "missing:\(hash)" : hash
-    }
-
-    private static func hashFile(_ file: ExecApprovalsFile) -> String {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys]
-        let data = (try? encoder.encode(file)) ?? Data()
-        let digest = SHA256.hash(data: data)
-        return digest.map { String(format: "%02x", $0) }.joined()
     }
 
     static func expandPath(_ raw: String) -> String {

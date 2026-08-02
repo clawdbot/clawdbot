@@ -1,10 +1,12 @@
 // Matrix tests cover channelirectory plugin behavior.
 import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { withEnv } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { RuntimeEnv } from "../runtime-api.js";
 import { matrixPlugin } from "./channel.js";
 import { resolveMatrixAccount } from "./matrix/accounts.js";
 import { resolveMatrixConfigForAccount } from "./matrix/client/config.js";
+import type { MatrixSetupInput } from "./setup-config.js";
 import { installMatrixTestRuntime } from "./test-runtime.js";
 import type { CoreConfig } from "./types.js";
 
@@ -353,14 +355,14 @@ describe("matrix directory", () => {
       },
     } as unknown as CoreConfig;
 
-    const updated = matrixPlugin.setup!.applyAccountConfig({
+    const updated = matrixPlugin.setupContract!.applyAccountConfig({
       cfg,
       accountId: "ops",
       input: {
         homeserver: "https://matrix.example.org",
         userId: "@ops:example.org",
         accessToken: "ops-token",
-      },
+      } as MatrixSetupInput,
     }) as CoreConfig;
 
     expect(updated.channels?.["matrix"]?.accessToken).toBeUndefined();
@@ -398,14 +400,14 @@ describe("matrix directory", () => {
       },
     } as unknown as CoreConfig;
 
-    const updated = matrixPlugin.setup!.applyAccountConfig({
+    const updated = matrixPlugin.setupContract!.applyAccountConfig({
       cfg,
       accountId: "default",
       input: {
         homeserver: "https://matrix.example.org",
         userId: "@bot:example.org",
         accessToken: "bot-token",
-      },
+      } as MatrixSetupInput,
     }) as CoreConfig;
 
     const matrixConfig = updated.channels?.["matrix"];
@@ -417,132 +419,100 @@ describe("matrix directory", () => {
   });
 
   it("requires account-scoped env vars when --use-env is set for non-default accounts", () => {
-    const envKeys = [
-      "MATRIX_OPS_HOMESERVER",
-      "MATRIX_OPS_USER_ID",
-      "MATRIX_OPS_ACCESS_TOKEN",
-      "MATRIX_OPS_PASSWORD",
-    ] as const;
-    const previousEnv = Object.fromEntries(envKeys.map((key) => [key, process.env[key]])) as Record<
-      (typeof envKeys)[number],
-      string | undefined
-    >;
-    for (const key of envKeys) {
-      delete process.env[key];
-    }
-    try {
-      const error = matrixPlugin.setup!.validateInput?.({
-        cfg: {} as CoreConfig,
-        accountId: "ops",
-        input: { useEnv: true },
-      });
-      expect(error).toBe(
-        'Set per-account env vars for "ops" (for example MATRIX_OPS_HOMESERVER + MATRIX_OPS_ACCESS_TOKEN or MATRIX_OPS_USER_ID + MATRIX_OPS_PASSWORD).',
-      );
-    } finally {
-      for (const key of envKeys) {
-        if (previousEnv[key] === undefined) {
-          delete process.env[key];
-        } else {
-          process.env[key] = previousEnv[key];
-        }
-      }
-    }
+    withEnv(
+      {
+        MATRIX_OPS_HOMESERVER: undefined,
+        MATRIX_OPS_USER_ID: undefined,
+        MATRIX_OPS_ACCESS_TOKEN: undefined,
+        MATRIX_OPS_PASSWORD: undefined,
+      },
+      () => {
+        const error = matrixPlugin.setupContract!.validateInput?.({
+          cfg: {} as CoreConfig,
+          accountId: "ops",
+          input: { useEnv: true },
+        });
+        expect(error).toBe(
+          'Set per-account env vars for "ops" (for example MATRIX_OPS_HOMESERVER + MATRIX_OPS_ACCESS_TOKEN or MATRIX_OPS_USER_ID + MATRIX_OPS_PASSWORD).',
+        );
+      },
+    );
   });
 
   it("accepts --use-env for non-default account when scoped env vars are present", () => {
-    const envKeys = {
-      MATRIX_OPS_HOMESERVER: process.env.MATRIX_OPS_HOMESERVER,
-      MATRIX_OPS_ACCESS_TOKEN: process.env.MATRIX_OPS_ACCESS_TOKEN,
-    };
-    process.env.MATRIX_OPS_HOMESERVER = "https://ops.example.org";
-    process.env.MATRIX_OPS_ACCESS_TOKEN = "ops-token";
-    try {
-      const error = matrixPlugin.setup!.validateInput?.({
-        cfg: {} as CoreConfig,
-        accountId: "ops",
-        input: { useEnv: true },
-      });
-      expect(error).toBeNull();
-    } finally {
-      for (const [key, value] of Object.entries(envKeys)) {
-        if (value === undefined) {
-          delete process.env[key];
-        } else {
-          process.env[key] = value;
-        }
-      }
-    }
+    withEnv(
+      {
+        MATRIX_OPS_HOMESERVER: "https://ops.example.org",
+        MATRIX_OPS_ACCESS_TOKEN: "ops-token",
+      },
+      () => {
+        const error = matrixPlugin.setupContract!.validateInput?.({
+          cfg: {} as CoreConfig,
+          accountId: "ops",
+          input: { useEnv: true },
+        });
+        expect(error).toBeNull();
+      },
+    );
   });
 
   it("clears stored auth fields when switching a Matrix account to env-backed auth", () => {
-    const envKeys = {
-      MATRIX_OPS_HOMESERVER: process.env.MATRIX_OPS_HOMESERVER,
-      MATRIX_OPS_ACCESS_TOKEN: process.env.MATRIX_OPS_ACCESS_TOKEN,
-      MATRIX_OPS_DEVICE_ID: process.env.MATRIX_OPS_DEVICE_ID,
-      MATRIX_OPS_DEVICE_NAME: process.env.MATRIX_OPS_DEVICE_NAME,
-    };
-    process.env.MATRIX_OPS_HOMESERVER = "https://ops.env.example.org";
-    process.env.MATRIX_OPS_ACCESS_TOKEN = "ops-env-token";
-    process.env.MATRIX_OPS_DEVICE_ID = "OPSENVDEVICE";
-    process.env.MATRIX_OPS_DEVICE_NAME = "Ops Env Device";
-
-    try {
-      const cfg = {
-        channels: {
-          matrix: {
-            accounts: {
-              ops: {
-                homeserver: "https://ops.inline.example.org",
-                userId: "@ops:inline.example.org",
-                accessToken: "ops-inline-token",
-                password: "ops-inline-password", // pragma: allowlist secret
-                deviceId: "OPSINLINEDEVICE",
-                deviceName: "Ops Inline Device",
-                encryption: true,
+    withEnv(
+      {
+        MATRIX_OPS_HOMESERVER: "https://ops.env.example.org",
+        MATRIX_OPS_ACCESS_TOKEN: "ops-env-token",
+        MATRIX_OPS_DEVICE_ID: "OPSENVDEVICE",
+        MATRIX_OPS_DEVICE_NAME: "Ops Env Device",
+      },
+      () => {
+        const cfg = {
+          channels: {
+            matrix: {
+              accounts: {
+                ops: {
+                  homeserver: "https://ops.inline.example.org",
+                  userId: "@ops:inline.example.org",
+                  accessToken: "ops-inline-token",
+                  password: "ops-inline-password", // pragma: allowlist secret
+                  deviceId: "OPSINLINEDEVICE",
+                  deviceName: "Ops Inline Device",
+                  encryption: true,
+                },
               },
             },
           },
-        },
-      } as unknown as CoreConfig;
+        } as unknown as CoreConfig;
 
-      const updated = matrixPlugin.setup!.applyAccountConfig({
-        cfg,
-        accountId: "ops",
-        input: {
-          useEnv: true,
-          name: "Ops",
-        },
-      }) as CoreConfig;
+        const updated = matrixPlugin.setupContract!.applyAccountConfig({
+          cfg,
+          accountId: "ops",
+          input: {
+            useEnv: true,
+            name: "Ops",
+          },
+        }) as CoreConfig;
 
-      const opsAccount = updated.channels?.["matrix"]?.accounts?.ops;
-      expect(opsAccount?.name).toBe("Ops");
-      expect(opsAccount?.enabled).toBe(true);
-      expect(opsAccount?.encryption).toBe(true);
-      expect(opsAccount?.homeserver).toBeUndefined();
-      expect(opsAccount?.userId).toBeUndefined();
-      expect(opsAccount?.accessToken).toBeUndefined();
-      expect(opsAccount?.password).toBeUndefined();
-      expect(opsAccount?.deviceId).toBeUndefined();
-      expect(opsAccount?.deviceName).toBeUndefined();
-      const resolvedOps = resolveMatrixConfigForAccount(updated, "ops", process.env);
-      expect(resolvedOps.homeserver).toBe("https://ops.env.example.org");
-      expect(resolvedOps.accessToken).toBe("ops-env-token");
-      expect(resolvedOps.deviceId).toBe("OPSENVDEVICE");
-      expect(resolvedOps.deviceName).toBe("Ops Env Device");
-    } finally {
-      for (const [key, value] of Object.entries(envKeys)) {
-        if (value === undefined) {
-          delete process.env[key];
-        } else {
-          process.env[key] = value;
-        }
-      }
-    }
+        const opsAccount = updated.channels?.["matrix"]?.accounts?.ops;
+        expect(opsAccount?.name).toBe("Ops");
+        expect(opsAccount?.enabled).toBe(true);
+        expect(opsAccount?.encryption).toBe(true);
+        expect(opsAccount?.homeserver).toBeUndefined();
+        expect(opsAccount?.userId).toBeUndefined();
+        expect(opsAccount?.accessToken).toBeUndefined();
+        expect(opsAccount?.password).toBeUndefined();
+        expect(opsAccount?.deviceId).toBeUndefined();
+        expect(opsAccount?.deviceName).toBeUndefined();
+        const resolvedOps = resolveMatrixConfigForAccount(updated, "ops", process.env);
+        expect(resolvedOps.homeserver).toBe("https://ops.env.example.org");
+        expect(resolvedOps.accessToken).toBe("ops-env-token");
+        expect(resolvedOps.deviceId).toBe("OPSENVDEVICE");
+        expect(resolvedOps.deviceName).toBe("Ops Env Device");
+      },
+    );
   });
 
   it("resolves account id from input name when explicit account id is missing", () => {
-    const accountId = matrixPlugin.setup!.resolveAccountId?.({
+    const accountId = matrixPlugin.setupContract!.resolveAccountId?.({
       cfg: {} as CoreConfig,
       accountId: undefined,
       input: { name: "Main Bot" },
@@ -551,7 +521,7 @@ describe("matrix directory", () => {
   });
 
   it("resolves binding account id from agent id when omitted", () => {
-    const accountId = matrixPlugin.setup!.resolveBindingAccountId?.({
+    const accountId = matrixPlugin.setupContract!.resolveBindingAccountId?.({
       cfg: {} as CoreConfig,
       agentId: "Ops",
       accountId: undefined,
@@ -573,14 +543,14 @@ describe("matrix directory", () => {
       },
     } as unknown as CoreConfig;
 
-    const updated = matrixPlugin.setup!.applyAccountConfig({
+    const updated = matrixPlugin.setupContract!.applyAccountConfig({
       cfg,
       accountId: "default",
       input: {
         homeserver: "https://matrix.example.org",
         userId: "@bot:example.org",
         password: "new-password", // pragma: allowlist secret
-      },
+      } as MatrixSetupInput,
     }) as CoreConfig;
 
     expect(updated.channels?.["matrix"]?.accounts?.default?.password).toBe("new-password");
@@ -602,13 +572,13 @@ describe("matrix directory", () => {
       },
     } as unknown as CoreConfig;
 
-    const updated = matrixPlugin.setup!.applyAccountConfig({
+    const updated = matrixPlugin.setupContract!.applyAccountConfig({
       cfg,
       accountId: "default",
       input: {
         homeserver: "https://matrix.example.org",
         accessToken: "new-token",
-      },
+      } as MatrixSetupInput,
     }) as CoreConfig;
 
     expect(updated.channels?.["matrix"]?.accounts?.default?.accessToken).toBe("new-token");

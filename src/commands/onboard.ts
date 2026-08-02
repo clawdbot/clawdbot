@@ -8,6 +8,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { formatInvalidPortOption } from "../cli/error-format.js";
 import { readConfigFileSnapshot, resolveGatewayPort } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isValidEnvSecretRefId } from "../config/types.secrets.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { assertSupportedRuntime } from "../infra/runtime-guard.js";
 import { resolveProviderMatch } from "../plugins/provider-auth-choice-helpers.js";
@@ -21,6 +22,7 @@ import { resolveProviderInstallCatalogEntries } from "../plugins/provider-instal
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
+import { t } from "../wizard/i18n/index.js";
 import {
   formatDeprecatedNonInteractiveAuthChoiceError,
   isDeprecatedAuthChoice,
@@ -28,6 +30,7 @@ import {
   resolveDeprecatedAuthChoiceReplacement,
 } from "./auth-choice-legacy.js";
 import { formatAuthChoiceChoicesForCli } from "./auth-choice-options.js";
+import { isGatewayDaemonRuntime } from "./daemon-runtime.js";
 import {
   applyCustomApiConfig,
   CustomApiError,
@@ -36,13 +39,19 @@ import {
 } from "./onboard-custom-config.js";
 import { runGuidedOnboarding } from "./onboard-guided.js";
 import { DEFAULT_WORKSPACE, handleReset } from "./onboard-helpers.js";
+import { hasInteractiveOnboardingTty } from "./onboard-interactive-runner.js";
 import { runInteractiveSetup } from "./onboard-interactive.js";
 import { runNonInteractiveSetup } from "./onboard-non-interactive.js";
 import { resolveNonInteractiveApiKey as resolveNonInteractiveCredential } from "./onboard-non-interactive/api-keys.js";
 import { inferAuthChoiceFromFlags } from "./onboard-non-interactive/local/auth-choice-inference.js";
 import { applyNonInteractiveGatewayConfig } from "./onboard-non-interactive/local/gateway-config.js";
 import { validateGatewayWebSocketUrl } from "./onboard-remote.js";
-import type { OnboardOptions, ResetScope } from "./onboard-types.js";
+import {
+  isNodeManagerChoice,
+  isOnboardFlow,
+  type OnboardOptions,
+  type ResetScope,
+} from "./onboard-types.js";
 
 const VALID_RESET_SCOPES = new Set<ResetScope>(["config", "config+creds+sessions", "full"]);
 const BUILT_IN_AUTH_CHOICES = ["setup-token", "token", "apiKey", "custom-api-key", "skip"];
@@ -53,20 +62,27 @@ function rejectOption(runtime: RuntimeEnv, message: string): false {
   return false;
 }
 
-function validateResetPreflightOptions(opts: OnboardOptions, runtime: RuntimeEnv): boolean {
+function validatePreflightOptions(opts: OnboardOptions, runtime: RuntimeEnv): boolean {
   if (opts.mode !== undefined && opts.mode !== "local" && opts.mode !== "remote") {
     return rejectOption(
       runtime,
       `Invalid --mode "${String(opts.mode)}". Use "local" or "remote", or run ${formatCliCommand("openclaw onboard")} for interactive setup.`,
     );
   }
+  const remoteOnlyFlags = [
+    opts.remoteUrl !== undefined ? "--remote-url" : undefined,
+    opts.remoteToken !== undefined ? "--remote-token" : undefined,
+  ].filter((flag): flag is string => flag !== undefined);
+  if (opts.nonInteractive && (opts.mode ?? "local") === "local" && remoteOnlyFlags.length > 0) {
+    return rejectOption(
+      runtime,
+      `${remoteOnlyFlags.join(" and ")} ${remoteOnlyFlags.length === 1 ? "requires" : "require"} --mode remote in non-interactive setup.`,
+    );
+  }
   const choiceValidations: Array<readonly [string, string | undefined, readonly string[]]> = [
-    ["--flow", opts.flow, ["quickstart", "advanced", "import"]],
     ["--gateway-bind", opts.gatewayBind, ["loopback", "tailnet", "lan", "auto", "custom"]],
     ["--gateway-auth", opts.gatewayAuth, ["token", "password"]],
     ["--tailscale", opts.tailscale, ["off", "serve", "funnel"]],
-    ["--node-manager", opts.nodeManager, ["npm", "pnpm", "bun"]],
-    ["--daemon-runtime", opts.daemonRuntime, ["node"]],
     [
       "--custom-compatibility",
       opts.customCompatibility,
@@ -81,11 +97,44 @@ function validateResetPreflightOptions(opts: OnboardOptions, runtime: RuntimeEnv
       );
     }
   }
+  if (opts.flow !== undefined && !isOnboardFlow(opts.flow)) {
+    return rejectOption(
+      runtime,
+      'Invalid --flow. Use "quickstart", "advanced", "manual", or "import".',
+    );
+  }
+  if (opts.daemonRuntime !== undefined && !isGatewayDaemonRuntime(opts.daemonRuntime)) {
+    return rejectOption(runtime, 'Invalid --daemon-runtime. Use "node".');
+  }
+  if (opts.nodeManager !== undefined && !isNodeManagerChoice(opts.nodeManager)) {
+    return rejectOption(runtime, 'Invalid --node-manager. Use "npm", "pnpm", or "bun".');
+  }
   if (
     opts.gatewayPort !== undefined &&
     (!Number.isFinite(opts.gatewayPort) || opts.gatewayPort <= 0 || opts.gatewayPort > 65_535)
   ) {
     return rejectOption(runtime, formatInvalidPortOption("--gateway-port"));
+  }
+  if (opts.gatewayTokenRefEnv !== undefined) {
+    const gatewayTokenRefEnv = opts.gatewayTokenRefEnv.trim();
+    if (!isValidEnvSecretRefId(gatewayTokenRefEnv)) {
+      return rejectOption(
+        runtime,
+        "Invalid --gateway-token-ref-env. Use an environment variable name like OPENCLAW_GATEWAY_TOKEN.",
+      );
+    }
+    if (opts.gatewayToken !== undefined) {
+      return rejectOption(
+        runtime,
+        "Use either --gateway-token or --gateway-token-ref-env, not both. Prefer --gateway-token-ref-env to avoid writing plaintext tokens.",
+      );
+    }
+    if (!process.env[gatewayTokenRefEnv]?.trim()) {
+      return rejectOption(
+        runtime,
+        `Environment variable "${gatewayTokenRefEnv}" is missing or empty. Export it first, then rerun ${formatCliCommand("openclaw onboard")}.`,
+      );
+    }
   }
   if (opts.nonInteractive && opts.mode === "remote" && !opts.remoteUrl?.trim()) {
     return rejectOption(
@@ -361,10 +410,11 @@ function validateResetNonInteractiveGateway(params: {
  * Interactive onboarding defaults to guided setup. Any explicit
  * setup flag beyond this allowlist keeps the classic wizard — those flags are
  * a public automation contract and guided setup does not honor them.
- * Boolean false and undefined mean "not passed" (Commander coerces unset
- * booleans to false); explicit `--no-install-daemon` arrives as `false` via
- * resolveInstallDaemonFlag and is special-cased. `--modern` never reaches this
- * dispatch; the command layer routes it through the inference-gated OpenClaw.
+ * Most false booleans mean "not passed" because the command layer normalizes
+ * them with Boolean(). False-valued explicit choices preserve undefined when
+ * omitted, so daemon, Tailscale-reset, and custom-model input overrides are
+ * special-cased. `--modern` never reaches this dispatch; the command layer
+ * routes it through the inference-gated OpenClaw.
  */
 const GUIDED_SAFE_ONBOARD_KEYS = new Set([
   "workspace",
@@ -380,7 +430,11 @@ function wantsClassicInteractiveSetup(opts: OnboardOptions): boolean {
   if (opts.classic === true) {
     return true;
   }
-  if (opts.installDaemon !== undefined) {
+  if (
+    opts.installDaemon !== undefined ||
+    opts.tailscaleResetOnExit !== undefined ||
+    opts.customImageInput !== undefined
+  ) {
     return true;
   }
   for (const [key, value] of Object.entries(opts)) {
@@ -426,9 +480,19 @@ export async function setupWizardCommand(
     normalizedAuthChoice === opts.authChoice && flow === opts.flow
       ? opts
       : { ...opts, authChoice: normalizedAuthChoice, flow };
+  if (!validatePreflightOptions(normalizedOpts, runtime)) {
+    return;
+  }
   if (normalizedOpts.classic && normalizedOpts.nonInteractive) {
     runtime.error(
       "--classic cannot be combined with --non-interactive. Remove --non-interactive to open the classic wizard, or remove --classic for automated setup.",
+    );
+    runtime.exit(1);
+    return;
+  }
+  if (normalizedOpts.tui && normalizedOpts.nonInteractive) {
+    runtime.error(
+      "--tui cannot be combined with --non-interactive. Remove --tui for automation, or remove --non-interactive to open the terminal hatch.",
     );
     runtime.exit(1);
     return;
@@ -452,6 +516,13 @@ export async function setupWizardCommand(
     runtime.exit(1);
     return;
   }
+  if (normalizedOpts.resetScope && !normalizedOpts.reset) {
+    runtime.error(
+      `--reset-scope requires --reset. Re-run with ${formatCliCommand(`openclaw onboard --reset --reset-scope ${normalizedOpts.resetScope}`)}.`,
+    );
+    runtime.exit(1);
+    return;
+  }
 
   if (normalizedOpts.nonInteractive && normalizedOpts.acceptRisk !== true) {
     // Non-interactive setup can write credentials and daemon config without a
@@ -463,6 +534,14 @@ export async function setupWizardCommand(
         `Re-run with: ${formatCliCommand("openclaw onboard --non-interactive --accept-risk ...")}`,
       ].join("\n"),
     );
+    runtime.exit(1);
+    return;
+  }
+
+  if (!normalizedOpts.nonInteractive && !hasInteractiveOnboardingTty()) {
+    // Reset is destructive, so prove the selected interactive surface can run
+    // before reading or moving any operator state.
+    runtime.error(t("wizard.guided.ttyRequired"));
     runtime.exit(1);
     return;
   }
@@ -485,9 +564,6 @@ export async function setupWizardCommand(
       : runGuidedOnboarding;
 
   if (normalizedOpts.reset) {
-    if (!validateResetPreflightOptions(normalizedOpts, runtime)) {
-      return;
-    }
     const snapshot = await readConfigFileSnapshot();
     const baseConfig = snapshot.sourceConfig ?? (snapshot.valid ? snapshot.config : {});
     const resetScope: ResetScope = normalizedOpts.resetScope ?? "config+creds+sessions";
@@ -502,7 +578,10 @@ export async function setupWizardCommand(
       normalizedOpts.workspace === undefined &&
       snapshot.exists &&
       !snapshot.valid &&
-      !snapshot.sourceConfig
+      // A snapshot always carries a sourceConfig object (empty on failure), so
+      // only readError distinguishes "config could not be read" from "config
+      // parsed but configures no workspace", where the default is correct.
+      snapshot.readError !== undefined
     ) {
       rejectOption(
         runtime,

@@ -11,6 +11,7 @@ import {
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import {
   getAgentTestMocks,
   makeContext,
@@ -131,12 +132,16 @@ describe("gateway agent handler", () => {
       accountId: "work",
       threadId: "topic-42",
     });
-    expect(persistedEntry?.deliveryContext).toEqual({
-      channel: "whatsapp",
-      to: "user:+15551234567",
-      accountId: "work",
-      threadId: "topic-42",
-    });
+    expect(persistedEntry?.delivery).toEqual(
+      normalizeSessionDeliveryState({
+        context: {
+          channel: "whatsapp",
+          to: "user:+15551234567",
+          accountId: "work",
+          threadId: "topic-42",
+        },
+      }),
+    );
   });
 
   it.each(["webchat", "LAST"])(

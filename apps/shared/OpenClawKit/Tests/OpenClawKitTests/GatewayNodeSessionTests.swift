@@ -36,6 +36,80 @@ private actor StringCapture {
     }
 }
 
+/// Delivers a pong asynchronously, well before the deadline, so a cancelled deadline
+/// task racing the gate would surface as a spurious timeout.
+private final class DelayedPongWebSocketTask: WebSocketTasking, @unchecked Sendable {
+    private let delay: Duration
+
+    init(delay: Duration) {
+        self.delay = delay
+    }
+
+    var state: URLSessionTask.State {
+        .running
+    }
+
+    func resume() {}
+
+    func cancel(with closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
+        _ = (closeCode, reason)
+    }
+
+    func send(_ message: URLSessionWebSocketTask.Message) async throws {
+        _ = message
+    }
+
+    func sendPing(pongReceiveHandler: @escaping @Sendable (Error?) -> Void) {
+        let delay = self.delay
+        Task {
+            try? await Task.sleep(for: delay)
+            pongReceiveHandler(nil)
+        }
+    }
+
+    func receive() async throws -> URLSessionWebSocketTask.Message {
+        throw URLError(.badServerResponse)
+    }
+
+    func receive(
+        completionHandler: @escaping @Sendable (Result<URLSessionWebSocketTask.Message, Error>) -> Void)
+    {
+        completionHandler(.failure(URLError(.badServerResponse)))
+    }
+}
+
+/// Mirrors URLSession dropping a pong handler outright when the task is cancelled or
+/// closed mid-flight: the ping is accepted and no callback ever arrives.
+private final class SilentPingWebSocketTask: WebSocketTasking, @unchecked Sendable {
+    var state: URLSessionTask.State {
+        .running
+    }
+
+    func resume() {}
+
+    func cancel(with closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
+        _ = (closeCode, reason)
+    }
+
+    func send(_ message: URLSessionWebSocketTask.Message) async throws {
+        _ = message
+    }
+
+    func sendPing(pongReceiveHandler: @escaping @Sendable (Error?) -> Void) {
+        _ = pongReceiveHandler
+    }
+
+    func receive() async throws -> URLSessionWebSocketTask.Message {
+        throw URLError(.badServerResponse)
+    }
+
+    func receive(
+        completionHandler: @escaping @Sendable (Result<URLSessionWebSocketTask.Message, Error>) -> Void)
+    {
+        completionHandler(.failure(URLError(.badServerResponse)))
+    }
+}
+
 private final class DoubleCallbackPingWebSocketTask: WebSocketTasking, @unchecked Sendable {
     private let callbacks: [Error?]
 
@@ -323,7 +397,7 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
         let frame: [String: Any] = [
             "type": "event",
             "event": "connect.challenge",
-            "payload": ["nonce": nonce],
+            "payload": ["nonce": nonce, "ts": 1_800_000_000_000],
         ]
         return (try? JSONSerialization.data(withJSONObject: frame)) ?? Data()
     }
@@ -1082,6 +1156,32 @@ struct GatewayNodeSessionTests {
     }
 
     @Test
+    func `websocket ping times out when no pong callback ever arrives`() async throws {
+        // Without the deadline this await never returns: the checked continuation is
+        // orphaned, Swift logs CONTINUATION MISUSE, and the keepalive loop wedges forever.
+        let task = SilentPingWebSocketTask()
+
+        do {
+            try await WebSocketTaskBox(task: task).sendPing(timeout: .milliseconds(50))
+            Issue.record("sendPing unexpectedly succeeded without a pong")
+        } catch let error as URLError {
+            #expect(error.code == .timedOut)
+        }
+    }
+
+    @Test
+    func `websocket ping succeeds when the pong beats the deadline`() async throws {
+        // Cancelling the deadline makes Task.sleep throw; if that cancellation were
+        // swallowed the deadline task would fall through and race the pong callback,
+        // reporting a healthy ping as timed out.
+        let task = DelayedPongWebSocketTask(delay: .milliseconds(20))
+
+        for _ in 0..<20 {
+            try await WebSocketTaskBox(task: task).sendPing(timeout: .seconds(5))
+        }
+    }
+
+    @Test
     func `websocket ping ignores duplicate success callbacks`() async throws {
         let task = DoubleCallbackPingWebSocketTask(callbacks: [nil, nil])
         try await WebSocketTaskBox(task: task).sendPing()
@@ -1218,6 +1318,30 @@ struct GatewayNodeSessionTests {
             "connect-returned",
         ])
         await gateway.disconnect()
+    }
+
+    @Test
+    func `completed snapshot timeout cannot release a later route waiter`() async throws {
+        let gateway = GatewayNodeSession()
+        let firstWait = Task {
+            await gateway._test_waitForSnapshot(timeoutMs: 1000)
+        }
+        try await waitUntil("initial snapshot waiter registered") {
+            await gateway._test_snapshotWaiterCount() == 1
+        }
+        await gateway._test_markSnapshotReceived()
+        #expect(await firstWait.value)
+
+        await gateway._test_resetConnectionState()
+        let replacementWait = Task {
+            await gateway._test_waitForSnapshot(timeoutMs: 3000)
+        }
+        try await waitUntil("replacement snapshot waiter registered") {
+            await gateway._test_snapshotWaiterCount() == 1
+        }
+        try await Task.sleep(nanoseconds: 1_200_000_000)
+        await gateway._test_markSnapshotReceived()
+        #expect(await replacementWait.value)
     }
 
     @Test
@@ -2139,6 +2263,142 @@ struct GatewayNodeSessionTests {
     }
 
     @Test
+    func `route bound node event request distinguishes handled and legacy acknowledgements`() async throws {
+        let session = FakeGatewayWebSocketSession()
+        let gateway = GatewayNodeSession()
+        let options = GatewayConnectOptions(
+            role: "node",
+            scopes: [],
+            caps: [],
+            commands: [],
+            permissions: [:],
+            clientId: "openclaw-macos-test",
+            clientMode: "node",
+            clientDisplayName: "macOS Test",
+            includeDeviceIdentity: false)
+
+        try await gateway.connect(
+            url: #require(URL(string: "ws://gateway.example.invalid")),
+            connectOptions: options,
+            sessionBox: WebSocketSessionBox(session: session),
+            onConnected: {},
+            onDisconnected: { _ in },
+            onInvoke: { request in BridgeInvokeResponse(id: request.id, ok: true) })
+        let route = try #require(await gateway.currentRoute())
+        let task = try #require(session.latestTask())
+
+        let handledRequest = Task {
+            try await gateway.requestEventResult(
+                event: "node.presence.activity",
+                payloadJSON: #"{"action":"clear"}"#,
+                ifCurrentRoute: route)
+        }
+        try await waitUntil("handled node event request sent") {
+            task.sentRequestCount(method: "node.event") == 1
+        }
+        let firstRequest = try #require(task.sentRequests(method: "node.event").first)
+        try task.emitResponse(
+            id: #require(firstRequest["id"] as? String),
+            payload: [
+                "ok": true,
+                "event": "node.presence.activity",
+                "handled": true,
+                "reason": "cleared",
+            ])
+        let handled = try await handledRequest.value
+        #expect(handled?.handled == true)
+        #expect(handled?.reason == "cleared")
+
+        let unsupportedRequest = Task {
+            try await gateway.requestEventResult(
+                event: "node.presence.activity",
+                payloadJSON: #"{"action":"clear"}"#,
+                ifCurrentRoute: route)
+        }
+        try await waitUntil("unsupported node event request sent") {
+            task.sentRequestCount(method: "node.event") == 2
+        }
+        let secondRequest = try #require(task.sentRequests(method: "node.event").last)
+        try task.emitResponse(
+            id: #require(secondRequest["id"] as? String),
+            payload: [
+                "ok": true,
+                "event": "node.presence.activity",
+                "handled": false,
+                "reason": "invalid_payload",
+            ])
+        let unsupported = try await unsupportedRequest.value
+        #expect(unsupported?.handled == false)
+        #expect(unsupported?.reason == "invalid_payload")
+
+        let legacyRequest = Task {
+            try await gateway.requestEventResult(
+                event: "node.presence.activity",
+                payloadJSON: #"{"action":"clear"}"#,
+                ifCurrentRoute: route)
+        }
+        try await waitUntil("legacy node event request sent") {
+            task.sentRequestCount(method: "node.event") == 3
+        }
+        let thirdRequest = try #require(task.sentRequests(method: "node.event").last)
+        try task.emitResponse(
+            id: #require(thirdRequest["id"] as? String),
+            payload: ["ok": true])
+        let legacy = try await legacyRequest.value
+        #expect(legacy == nil)
+
+        await gateway.disconnect()
+    }
+
+    @Test
+    func `route bound request rejects a response after its socket is retired`() async throws {
+        let session = FakeGatewayWebSocketSession()
+        let gateway = GatewayNodeSession()
+        let options = GatewayConnectOptions(
+            role: "node",
+            scopes: [],
+            caps: [],
+            commands: [],
+            permissions: [:],
+            clientId: "openclaw-ios-test",
+            clientMode: "node",
+            clientDisplayName: "iOS Test",
+            includeDeviceIdentity: false)
+
+        try await gateway.connect(
+            url: #require(URL(string: "ws://gateway.example.invalid")),
+            connectOptions: options,
+            sessionBox: WebSocketSessionBox(session: session),
+            onConnected: {},
+            onDisconnected: { _ in },
+            onInvoke: { request in BridgeInvokeResponse(id: request.id, ok: true) })
+        let route = try #require(await gateway.currentRoute())
+        let socket = try #require(session.latestTask())
+        let request = Task {
+            try await gateway.request(
+                method: "sessions.list",
+                paramsJSON: "{}",
+                ifCurrentRoute: route)
+        }
+        try await waitUntil("route bound request sent") {
+            socket.sentRequestCount(method: "sessions.list") == 1
+        }
+        let sent = try #require(socket.sentRequests(method: "sessions.list").first)
+
+        await gateway._test_handleChannelDisconnected("socket retired", socketGeneration: 1)
+        try socket.emitResponse(
+            id: #require(sent["id"] as? String),
+            payload: ["sessions": []])
+
+        do {
+            _ = try await request.value
+            Issue.record("late response unexpectedly crossed the retired route")
+        } catch is CancellationError {
+            // Expected: the response belongs to the retired admission generation.
+        }
+    }
+
+    @Test
     func `captured route bound operations never use a replacement channel`() async throws {
         let session = FakeGatewayWebSocketSession()
         let gateway = GatewayNodeSession()
@@ -2862,7 +3122,9 @@ struct GatewayNodeSessionTests {
         #expect(shareDeviceId != primaryIdentity.deviceId)
         #expect(DeviceAuthStore.loadToken(deviceId: primaryIdentity.deviceId, role: "node")?
             .token == "primary-node-token")
-        #expect(DeviceAuthStore.loadToken(deviceId: shareDeviceId, role: "node") == nil)
+        // Profile selects identity resolution, not a token namespace; (device_id, role) is the canonical key.
+        // Per-profile identities keep caches disjoint in practice, and Node reads the same table by that key.
+        #expect(DeviceAuthStore.loadToken(deviceId: shareDeviceId, role: "node")?.token == "share-node-token")
         #expect(
             DeviceAuthStore
                 .loadToken(deviceId: shareDeviceId, role: "node", profile: .shareExtension)?.token ==
@@ -3374,6 +3636,21 @@ struct GatewayNodeSessionTests {
             against: URL(string: "wss://gateway.example.com:7443"))
 
         #expect(normalized == "https://gateway.example.com:7443/__openclaw__/cap/token")
+    }
+
+    @Test
+    func `resolve gateway HTTP url supports relative broker routes and preserves absolute providers`() {
+        let gateway = URL(string: "wss://gateway.example.com:7443")
+
+        #expect(GatewayPluginSurfaceURL.resolveHTTPURL(
+            raw: "/plugins/codex/realtime/calls",
+            against: gateway)?.absoluteString == "https://gateway.example.com:7443/plugins/codex/realtime/calls")
+        #expect(GatewayPluginSurfaceURL.resolveHTTPURL(
+            raw: "https://api.openai.com/v1/realtime/calls",
+            against: gateway)?.absoluteString == "https://api.openai.com/v1/realtime/calls")
+        #expect(GatewayPluginSurfaceURL.resolveHTTPURL(
+            raw: "wss://gateway.example.com/realtime",
+            against: gateway) == nil)
     }
 
     @Test

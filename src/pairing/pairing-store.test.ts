@@ -29,10 +29,13 @@ import {
 import {
   addChannelAllowFromStoreEntry,
   approveChannelPairingCode,
+  approveChannelPairingRequest,
+  dismissChannelPairingRequest,
   listChannelPairingRequests,
   readChannelAllowFromStore,
   readChannelAllowFromStoreSync,
   removeChannelAllowFromStoreEntry,
+  resolveChannelPairingRequestId,
   upsertChannelPairingRequest,
 } from "./pairing-store.js";
 
@@ -270,6 +273,63 @@ describe("pairing store", () => {
       }),
     ).resolves.toMatchObject({ id: "alice" });
     await expect(readChannelAllowFromStore("demo-a", env)).resolves.toEqual(["fixture-entry"]);
+  });
+
+  it("approves and dismisses account-scoped requests by opaque id", async () => {
+    const { env } = createTestEnv();
+    await upsertChannelPairingRequest({
+      channel: "telegram",
+      accountId: "alpha",
+      id: "shared-sender",
+      env,
+    });
+    await upsertChannelPairingRequest({
+      channel: "telegram",
+      accountId: "beta",
+      id: "shared-sender",
+      env,
+    });
+    const alphaRequest = requireFirstPairingRequest(
+      await listChannelPairingRequests("telegram", env, "alpha"),
+    );
+    const betaRequest = requireFirstPairingRequest(
+      await listChannelPairingRequests("telegram", env, "beta"),
+    );
+    const alphaRequestId = resolveChannelPairingRequestId("telegram", alphaRequest);
+    const betaRequestId = resolveChannelPairingRequestId("telegram", betaRequest);
+
+    expect(alphaRequestId).not.toBe(betaRequestId);
+    expect(alphaRequestId).not.toContain(alphaRequest.code);
+    await expect(
+      approveChannelPairingRequest({
+        channel: "telegram",
+        accountId: "alpha",
+        requestId: alphaRequestId,
+        env,
+      }),
+    ).resolves.toMatchObject({ id: "shared-sender" });
+    await expect(readChannelAllowFromStore("telegram", env, "alpha")).resolves.toEqual([
+      "shared-sender",
+    ]);
+    await expect(
+      approveChannelPairingRequest({
+        channel: "telegram",
+        accountId: "beta",
+        requestId: alphaRequestId,
+        env,
+      }),
+    ).resolves.toBeNull();
+
+    await expect(
+      dismissChannelPairingRequest({
+        channel: "telegram",
+        accountId: "beta",
+        requestId: betaRequestId,
+        env,
+      }),
+    ).resolves.toMatchObject({ id: "shared-sender" });
+    await expect(readChannelAllowFromStore("telegram", env, "beta")).resolves.toEqual([]);
+    await expect(listChannelPairingRequests("telegram", env)).resolves.toEqual([]);
   });
 
   it("regenerates colliding codes and reports exhaustion without leaking codes", async () => {

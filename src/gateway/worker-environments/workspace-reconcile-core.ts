@@ -189,6 +189,7 @@ export async function readActualWorkspaceManifest(params: {
   root: string;
   baseCommit: string | null;
   preserveDirectories?: ReadonlySet<string>;
+  includePaths?: ReadonlySet<string>;
 }): Promise<{ manifest: WorkerWorkspaceManifest; manifestRef: string }> {
   const rawEntries: Array<
     WorkerWorkspaceManifestEntry | { path: string; type: "directory"; mode: number }
@@ -230,6 +231,9 @@ export async function readActualWorkspaceManifest(params: {
       }
       if (isDerivedWorkspacePath(relative)) {
         hasDerivedEntry = true;
+        continue;
+      }
+      if (params.includePaths && !params.includePaths.has(relative)) {
         continue;
       }
       const absolute = localPath(params.root, relative);
@@ -355,6 +359,7 @@ export async function assertActualWorkspaceManifest(params: {
   expectedRef: string;
   baseCommit: string | null;
   preserveDirectories?: ReadonlySet<string>;
+  includePaths?: ReadonlySet<string>;
 }): Promise<void> {
   const actual = await readActualWorkspaceManifest(params);
   if (actual.manifestRef !== params.expectedRef) {
@@ -368,6 +373,23 @@ export function changedPaths(
 ): Set<string> {
   const baseByPath = manifestNodes(base);
   const currentByPath = manifestNodes(current);
+  return new Set(
+    [...new Set([...baseByPath.keys(), ...currentByPath.keys()])].filter(
+      (entryPath) => !sameEntry(baseByPath.get(entryPath), currentByPath.get(entryPath)),
+    ),
+  );
+}
+
+export function changedEntryPaths(
+  base: WorkerWorkspaceManifest,
+  current: WorkerWorkspaceManifest,
+): Set<string> {
+  const baseByPath = new Map(
+    reconciliationEntries(base.entries).map((entry) => [entry.path, entry]),
+  );
+  const currentByPath = new Map(
+    reconciliationEntries(current.entries).map((entry) => [entry.path, entry]),
+  );
   return new Set(
     [...new Set([...baseByPath.keys(), ...currentByPath.keys()])].filter(
       (entryPath) => !sameEntry(baseByPath.get(entryPath), currentByPath.get(entryPath)),

@@ -435,9 +435,7 @@ final class GatewayProcessManager {
         }
         self.lastEnvironmentRefresh = now
         self.environmentRefreshTask = Task { [weak self] in
-            let status = await Task.detached(priority: .utility) {
-                GatewayEnvironment.check()
-            }.value
+            let status = await GatewayEnvironment.check()
             await MainActor.run {
                 guard let self else { return }
                 self.environmentStatus = status
@@ -617,9 +615,7 @@ extension GatewayProcessManager {
     private func prepareLaunchdGatewayStart(startGeneration: UInt64) async -> LaunchAgentStartupContext? {
         guard self.isCurrentGatewayStart(startGeneration) else { return nil }
         self.existingGatewayDetails = nil
-        let resolution = await Task.detached(priority: .utility) {
-            GatewayEnvironment.resolveGatewayCommand()
-        }.value
+        let resolution = await GatewayEnvironment.resolveGatewayCommand()
         guard self.isCurrentGatewayStart(startGeneration) else { return nil }
         await MainActor.run { self.environmentStatus = resolution.status }
         guard resolution.command != nil else {

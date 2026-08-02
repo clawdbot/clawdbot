@@ -218,6 +218,470 @@ describe("CodexAppServerEventProjector native tool audit projection", () => {
     expect(toolCall.input).toEqual({ changes: expectedChanges });
   });
 
+  it.each([
+    {
+      label: "successful patch output after its native item",
+      status: "completed",
+      output: "Successfully applied patch to runtime-tool-fixture-patch.txt",
+      outputFirst: false,
+      isError: false,
+    },
+    {
+      label: "successful patch output before its native item",
+      status: "completed",
+      output: "Successfully applied patch to runtime-tool-fixture-patch.txt",
+      outputFirst: true,
+      isError: false,
+    },
+    {
+      label: "workspace rejection after its native item",
+      status: "declined",
+      output: "patch rejected: writing outside of the project; rejected by user approval settings",
+      outputFirst: false,
+      isError: true,
+    },
+    {
+      label: "workspace rejection before its native item",
+      status: "declined",
+      output: "patch rejected: writing outside of the project; rejected by user approval settings",
+      outputFirst: true,
+      isError: true,
+    },
+    {
+      label: "JSON-function patch success before its native item",
+      status: "completed",
+      output: "Successfully applied patch to runtime-tool-fixture-patch.txt",
+      outputFirst: true,
+      isError: false,
+      functionCall: true,
+    },
+    {
+      label: "JSON-function workspace rejection before its native item",
+      status: "declined",
+      output: "patch rejected: writing outside of the project; rejected by user approval settings",
+      outputFirst: true,
+      isError: true,
+      functionCall: true,
+    },
+    {
+      label: "JSON-function workspace rejection without a native FileChange item",
+      status: "declined",
+      output: "patch rejected: writing outside of the project; rejected by user approval settings",
+      outputFirst: true,
+      isError: true,
+      functionCall: true,
+      omitNativeItem: true,
+    },
+    {
+      label: "intercepted exec-command patch success before its native FileChange item",
+      status: "completed",
+      output: "Successfully applied patch to runtime-tool-fixture-patch.txt",
+      outputFirst: true,
+      isError: false,
+      functionCall: true,
+      execCommand: true,
+    },
+    {
+      label: "intercepted exec-command workspace rejection without a native FileChange item",
+      status: "declined",
+      output: "patch rejected: writing outside of the project; rejected by user approval settings",
+      outputFirst: true,
+      isError: true,
+      functionCall: true,
+      execCommand: true,
+      omitNativeItem: true,
+    },
+    {
+      label:
+        "intercepted cd-prefixed exec-command workspace rejection without a native FileChange item",
+      status: "declined",
+      output: "patch rejected: writing outside of the project; rejected by user approval settings",
+      outputFirst: true,
+      isError: true,
+      functionCall: true,
+      execCommand: true,
+      workingDirectoryPrefix: true,
+      omitNativeItem: true,
+    },
+    {
+      label: "workdir-scoped exec-command workspace rejection without a native FileChange item",
+      status: "declined",
+      output: "patch rejected: writing outside of the project; rejected by user approval settings",
+      outputFirst: true,
+      isError: true,
+      functionCall: true,
+      execCommand: true,
+      executionWorkdir: "/repo/subdir",
+      omitNativeItem: true,
+    },
+    {
+      label: "code-mode native workspace rejection without a FileChange item",
+      status: "declined",
+      output: "patch rejected: writing outside of the project; rejected by user approval settings",
+      outputFirst: true,
+      isError: true,
+      codeMode: true,
+      omitNativeItem: true,
+    },
+    {
+      label: "code-mode native invalid patch without a FileChange item",
+      status: "failed",
+      output: "apply_patch verification failed: failed to find expected lines",
+      outputFirst: true,
+      isError: true,
+      codeMode: true,
+      omitNativeItem: true,
+    },
+  ])("persists the linked Codex raw $label", async (testCase) => {
+    const projector = await createProjector();
+    const callId = "native-patch-raw-result";
+    const patchInput =
+      "*** Begin Patch\n*** Add File: runtime-tool-fixture-patch.txt\n+runtime patch\n+*** End Patch\n*** End Patch\n";
+
+    await projector.handleNotification(
+      forCurrentTurn("rawResponseItem/completed", {
+        item: {
+          type: "functionCall" in testCase ? "function_call" : "custom_tool_call",
+          call_id: callId,
+          name:
+            "codeMode" in testCase
+              ? "exec"
+              : "execCommand" in testCase
+                ? "exec_command"
+                : "apply_patch",
+          ...("functionCall" in testCase
+            ? {
+                arguments: JSON.stringify(
+                  "execCommand" in testCase
+                    ? {
+                        cmd: `${"workingDirectoryPrefix" in testCase ? "cd /workspace && " : ""}apply_patch <<'PATCH'\n${patchInput}PATCH\n`,
+                        ...("executionWorkdir" in testCase
+                          ? { workdir: testCase.executionWorkdir }
+                          : {}),
+                      }
+                    : { input: patchInput },
+                ),
+              }
+            : {
+                input:
+                  "codeMode" in testCase
+                    ? `const result = await tools.apply_patch(${JSON.stringify(patchInput)});\ntext(result);\n`
+                    : patchInput,
+              }),
+        },
+      }),
+    );
+
+    const completed = forCurrentTurn("item/completed", {
+      item: {
+        type: "fileChange",
+        id: callId,
+        changes: [{ path: "runtime-tool-fixture-patch.txt", kind: { type: "add" } }],
+        status: testCase.status,
+      },
+    });
+    const rawOutput = forCurrentTurn("rawResponseItem/completed", {
+      item: {
+        type: "functionCall" in testCase ? "function_call_output" : "custom_tool_call_output",
+        call_id: callId,
+        output:
+          "codeMode" in testCase
+            ? [
+                {
+                  type: "input_text",
+                  text: `Script ${testCase.isError ? "failed" : "completed"}\nWall time 6.0 seconds\nOutput:\n`,
+                },
+                {
+                  type: "input_text",
+                  text: testCase.isError ? `Script error:\n${testCase.output}` : testCase.output,
+                },
+              ]
+            : testCase.output,
+      },
+    });
+    const notifications =
+      "omitNativeItem" in testCase
+        ? [rawOutput]
+        : testCase.outputFirst
+          ? [rawOutput, completed]
+          : [completed, rawOutput];
+    for (const notification of notifications) {
+      await projector.handleNotification(notification);
+    }
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    const assistant = requireRecord(result.messagesSnapshot[1], "native patch call");
+    const call = requireRecord(requireArray(assistant.content, "native patch content")[0], "call");
+    expect(call).toMatchObject({
+      type: "toolCall",
+      id: callId,
+      name: "apply_patch",
+      arguments: {
+        input: patchInput,
+        ...("workingDirectoryPrefix" in testCase
+          ? { cwd: "/workspace" }
+          : "executionWorkdir" in testCase
+            ? { cwd: testCase.executionWorkdir }
+            : {}),
+      },
+    });
+    const toolResult = requireRecord(result.messagesSnapshot[2], "native patch result");
+    expect(toolResult).toMatchObject({
+      role: "toolResult",
+      toolCallId: callId,
+      toolName: "apply_patch",
+      isError: testCase.isError,
+    });
+    const output = requireRecord(
+      requireArray(toolResult.content, "native patch result")[0],
+      "result",
+    );
+    expect(output.content).toBe(testCase.output);
+  });
+
+  it("does not double-count a successful code-mode patch and its canonical FileChange", async () => {
+    const projector = await createProjector();
+    const outerCallId = "code-mode-patch-exec";
+    const nativeCallId = "code-mode-patch-file-change";
+    const patchInput =
+      "*** Begin Patch\n*** Add File: runtime-tool-fixture-patch.txt\n+runtime patch\n*** End Patch\n";
+
+    await projector.handleNotification(
+      forCurrentTurn("rawResponseItem/completed", {
+        item: {
+          type: "custom_tool_call",
+          call_id: outerCallId,
+          name: "exec",
+          input: `const result = await tools.apply_patch(${JSON.stringify(patchInput)});\ntext(result);\n`,
+        },
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "fileChange",
+          id: nativeCallId,
+          changes: [{ path: "runtime-tool-fixture-patch.txt", kind: { type: "add" } }],
+          status: "completed",
+        },
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("rawResponseItem/completed", {
+        item: {
+          type: "custom_tool_call_output",
+          call_id: outerCallId,
+          output: [
+            {
+              type: "input_text",
+              text: "Script completed\nWall time 6.0 seconds\nOutput:\n",
+            },
+            { type: "input_text", text: "{}" },
+          ],
+        },
+      }),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    const patchCalls = result.messagesSnapshot.flatMap((message) => {
+      if (message.role !== "assistant" || !Array.isArray(message.content)) {
+        return [];
+      }
+      return message.content.filter(
+        (block) => block.type === "toolCall" && "name" in block && block.name === "apply_patch",
+      );
+    });
+    expect(patchCalls).toHaveLength(1);
+    expect(patchCalls[0]).toMatchObject({ id: nativeCallId, name: "apply_patch" });
+    expect(
+      result.messagesSnapshot.some(
+        (message) =>
+          message.role === "toolResult" &&
+          (message as { toolCallId?: string }).toolCallId === outerCallId,
+      ),
+    ).toBe(false);
+  });
+
+  it("does not classify an unrecognized raw patch failure as a success", async () => {
+    const projector = await createProjector();
+    const callId = "native-patch-unrecognized-failure";
+    await projector.handleNotification(
+      forCurrentTurn("rawResponseItem/completed", {
+        item: {
+          type: "custom_tool_call",
+          call_id: callId,
+          name: "apply_patch",
+          input: "*** Begin Patch\n*** Add File: broken.txt\n+broken\n*** End Patch\n",
+        },
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("rawResponseItem/completed", {
+        item: {
+          type: "custom_tool_call_output",
+          call_id: callId,
+          output: "apply_patch failed: invalid patch",
+        },
+      }),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    const toolResult = requireRecord(result.messagesSnapshot[2], "unresolved native patch result");
+    expect(toolResult).toMatchObject({
+      role: "toolResult",
+      toolCallId: callId,
+      toolName: "apply_patch",
+      isError: true,
+    });
+  });
+
+  it.each([
+    {
+      label: "patch text quoted inside a shell heredoc",
+      command:
+        "cat <<'TEXT'\napply_patch is documented below\n*** Begin Patch\n*** Add File: fake.txt\n+not a patch invocation\n*** End Patch\nTEXT\n",
+    },
+    {
+      label: "a nested apply_patch heredoc",
+      command:
+        "cat <<'OUTER'\napply_patch <<'PATCH'\n*** Begin Patch\n*** Add File: fake.txt\n+not a patch invocation\n*** End Patch\nPATCH\nOUTER\n",
+    },
+    {
+      label: "a user-created absolute-path executable",
+      command:
+        "/workspace/fake/apply_patch <<'PATCH'\n*** Begin Patch\n*** Add File: fake.txt\n+not a native patch invocation\n*** End Patch\nPATCH\n",
+    },
+    {
+      label: "an expanding unquoted patch delimiter",
+      command:
+        "apply_patch <<PATCH\n*** Begin Patch\n*** Add File: fake.txt\n+$(touch /tmp/not-a-native-patch)\n*** End Patch\nPATCH\n",
+    },
+    {
+      label: "an expanding working-directory operand",
+      command:
+        "cd $(touch /tmp/not-a-native-patch) && apply_patch <<'PATCH'\n*** Begin Patch\n*** Add File: fake.txt\n+not a native patch invocation\n*** End Patch\nPATCH\n",
+    },
+  ])("does not mistake $label for a native patch", async ({ command }) => {
+    const projector = await createProjector();
+    const callId = "not-a-native-patch";
+
+    await projector.handleNotification(
+      forCurrentTurn("rawResponseItem/completed", {
+        item: {
+          type: "function_call",
+          call_id: callId,
+          name: "exec_command",
+          arguments: JSON.stringify({ cmd: command }),
+        },
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("rawResponseItem/completed", {
+        item: {
+          type: "function_call_output",
+          call_id: callId,
+          output:
+            "patch rejected: writing outside of the project; rejected by user approval settings",
+        },
+      }),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    expect(
+      result.messagesSnapshot.some(
+        (message) =>
+          message.role === "toolResult" &&
+          (message as { toolCallId?: string }).toolCallId === callId,
+      ),
+    ).toBe(false);
+  });
+
+  it.each([
+    {
+      label: "an extra executable code-mode call",
+      source:
+        'const result = await tools.apply_patch("*** Begin Patch\\n*** Add File: fake.txt\\n+x\\n*** End Patch");\nawait tools.exec_command({cmd:"touch /tmp/not-a-native-patch"});\ntext(result);\n',
+    },
+    {
+      label: "a dynamically interpolated code-mode patch",
+      source:
+        "const result = await tools.apply_patch(`*** Begin Patch\\n${patch}\\n*** End Patch`);\ntext(result);\n",
+    },
+    {
+      label: "a mismatched code-mode output variable",
+      source:
+        'const result = await tools.apply_patch("*** Begin Patch\\n*** Add File: fake.txt\\n+x\\n*** End Patch");\ntext(other);\n',
+    },
+  ])("does not mistake $label for an isolated native patch", async ({ source }) => {
+    const projector = await createProjector();
+    const callId = "not-an-isolated-code-mode-patch";
+
+    await projector.handleNotification(
+      forCurrentTurn("rawResponseItem/completed", {
+        item: { type: "custom_tool_call", call_id: callId, name: "exec", input: source },
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("rawResponseItem/completed", {
+        item: {
+          type: "custom_tool_call_output",
+          call_id: callId,
+          output: [
+            { type: "input_text", text: "Script failed\nWall time 6.0 seconds\nOutput:\n" },
+            {
+              type: "input_text",
+              text: "Script error:\npatch rejected: writing outside of the project; rejected by user approval settings",
+            },
+          ],
+        },
+      }),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    expect(
+      result.messagesSnapshot.some(
+        (message) =>
+          message.role === "toolResult" &&
+          (message as { toolCallId?: string }).toolCallId === callId,
+      ),
+    ).toBe(false);
+  });
+
+  it("does not infer a patch rejection from a successful path named denied", async () => {
+    const projector = await createProjector();
+    const callId = "successful-patch-path-named-denied";
+
+    await projector.handleNotification(
+      forCurrentTurn("rawResponseItem/completed", {
+        item: {
+          type: "custom_tool_call",
+          call_id: callId,
+          name: "apply_patch",
+          input:
+            "*** Begin Patch\n*** Add File: denied.txt\n+not a rejected patch\n*** End Patch\n",
+        },
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("rawResponseItem/completed", {
+        item: {
+          type: "custom_tool_call_output",
+          call_id: callId,
+          output: "Successfully applied patch to denied.txt",
+        },
+      }),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    const toolResult = requireRecord(result.messagesSnapshot[2], "unresolved native patch result");
+    expect(toolResult).toMatchObject({
+      role: "toolResult",
+      toolCallId: callId,
+      toolName: "apply_patch",
+      isError: true,
+    });
+  });
+
   it("bounds mirrored file-change diffs without losing full stats", async () => {
     const diff = [
       "--- a/src/large.ts",

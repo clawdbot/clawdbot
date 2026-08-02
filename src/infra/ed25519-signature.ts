@@ -23,7 +23,7 @@ function assertBoundedBase64Input(input: string): void {
 }
 
 /** Decode the existing permissive base64url wire shape. */
-export function base64UrlDecode(input: string): Buffer {
+function base64UrlDecode(input: string): Buffer {
   if (input.length > MAX_BASE64URL_DECODE_INPUT_LENGTH) {
     throw new Error("base64url input exceeds the maximum allowed length");
   }

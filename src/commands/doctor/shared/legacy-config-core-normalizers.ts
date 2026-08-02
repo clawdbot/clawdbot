@@ -5,10 +5,12 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
-import { resolveSingleAccountKeysToMove } from "../../../channels/plugins/setup-promotion-helpers.js";
+import { resolveBundledChannelSetupPromotionSurface } from "../../../channels/plugins/setup-promotion-bundled.js";
+import { resolveSingleAccountPromotion } from "../../../channels/plugins/setup-promotion-helpers.js";
 import { resolveNormalizedProviderModelMaxTokens } from "../../../config/defaults.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { DEFAULT_GOOGLE_API_BASE_URL } from "../../../infra/google-api-base-url.js";
+import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { DEFAULT_ACCOUNT_ID } from "../../../routing/session-key.js";
 import {
   isBlockedLegacyCodexModelRef,
@@ -24,6 +26,7 @@ import {
 export { normalizeLegacyTalkConfig } from "./legacy-talk-config-normalizer.js";
 
 const INHERITED_ACCOUNT_POLICY_KEYS = ["dmPolicy", "allowFrom", "groupPolicy", "groupAllowFrom"];
+const log = createSubsystemLogger("doctor");
 
 /** Migrate legacy browser/Chrome relay config to current browser profile settings. */
 export function normalizeLegacyBrowserConfig(
@@ -144,10 +147,20 @@ export function seedMissingDefaultAccountsFromSingleAccountBase(
     if (hasDefault) {
       continue;
     }
-    const keysToMove = resolveSingleAccountKeysToMove({
+    const promotion = resolveSingleAccountPromotion({
       channelKey: channelId,
       channel: rawChannel,
+      resolveBundledSurface: resolveBundledChannelSetupPromotionSurface,
     });
+    // Defer only undeclared keys outside generic + legacy coverage. A partial
+    // accounts.default would make later runs skip and permanently strand them at root.
+    if (promotion.shouldDeferPromotion) {
+      log.debug(
+        `Deferring channels.${channelId} single-account promotion until its plugin declares uncovered root keys.`,
+      );
+      continue;
+    }
+    const keysToMove = promotion.keysToMove;
     if (keysToMove.length === 0) {
       continue;
     }
@@ -939,7 +952,7 @@ export function normalizeLegacyNanoBananaSkill(
     };
   }
 
-  const existingImageGenerationModel = next.agents?.defaults?.imageGenerationModel;
+  const existingImageGenerationModel = next.agents?.defaults?.mediaModels?.image;
   if (existingImageGenerationModel === undefined) {
     next = {
       ...next,
@@ -947,14 +960,15 @@ export function normalizeLegacyNanoBananaSkill(
         ...next.agents,
         defaults: {
           ...next.agents?.defaults,
-          imageGenerationModel: {
-            primary: NANO_BANANA_MODEL,
+          mediaModels: {
+            ...next.agents?.defaults?.mediaModels,
+            image: { primary: NANO_BANANA_MODEL },
           },
         },
       },
     };
     changes.push(
-      `Moved skills.entries.${NANO_BANANA_SKILL_KEY} → agents.defaults.imageGenerationModel.primary (${NANO_BANANA_MODEL}).`,
+      `Moved skills.entries.${NANO_BANANA_SKILL_KEY} → agents.defaults.mediaModels.image.primary (${NANO_BANANA_MODEL}).`,
     );
   }
 

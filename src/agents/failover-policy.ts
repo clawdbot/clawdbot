@@ -43,6 +43,7 @@ export function shouldPreserveTransientCooldownProbeSlot(
     reason === "format" ||
     reason === "auth" ||
     reason === "auth_permanent" ||
-    reason === "session_expired"
+    reason === "session_expired" ||
+    reason === "tls_certificate"
   );
 }

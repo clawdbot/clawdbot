@@ -74,12 +74,9 @@ describe("resolveWhatsAppAuthDir", () => {
         channels: {
           whatsapp: {
             sendReadReceipts: false,
-            messagePrefix: "[root]",
-            debounceMs: 100,
+            responsePrefix: "[root]",
             accounts: {
-              work: {
-                debounceMs: 250,
-              },
+              work: {},
             },
           },
         },
@@ -89,7 +86,6 @@ describe("resolveWhatsAppAuthDir", () => {
 
     expect(resolved.sendReadReceipts).toBe(false);
     expect(resolved.messagePrefix).toBe("[root]");
-    expect(resolved.debounceMs).toBe(250);
   });
 
   it("inherits shared defaults from accounts.default for named accounts", () => {

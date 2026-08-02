@@ -10,8 +10,8 @@ import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtim
 import { castAgentMessage } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
 import { runAgentHarnessBeforeMessageWriteHook } from "../agents/harness/hook-helpers.js";
+import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { loadTranscriptEvents } from "../config/sessions/session-accessor.js";
-import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import { persistUserTurnTranscript } from "./user-turn-transcript.test-support.js";
 
 describe("persistUserTurnTranscript", () => {
@@ -96,21 +96,56 @@ describe("persistUserTurnTranscript", () => {
       updateMode: "none",
     });
 
-    expect(appended?.message).toMatchObject({
+    const expected = {
       role: "user",
       content: "What is in this image?",
-      MediaPath: "/tmp/image.png",
+      timestamp: 123,
+      __openclaw: {
+        senderIsOwner: true,
+        media: [{ path: "/tmp/image.png", contentType: "image/png" }],
+      },
+      provenance,
+    };
+    expect(appended?.message).toEqual(expected);
+    expect(JSON.stringify(appended?.message)).toBe(JSON.stringify(expected));
+    const messages = await readTranscriptMessages(target);
+    expect(messages).toEqual([expected]);
+    expect(JSON.stringify(messages[0])).toBe(JSON.stringify(expected));
+  });
+
+  it("round-trips a multi-attachment SQLite row byte-identically", async () => {
+    const dir = createTempDir("openclaw-user-turn-append-media-");
+    const target = createSqliteTranscriptTarget({ dir });
+    const expected = {
+      role: "user",
+      content: "Inspect both",
+      timestamp: 456,
+      __openclaw: {
+        media: [
+          { path: "/tmp/image.png", contentType: "image/png" },
+          { url: "https://example.test/report.pdf", contentType: "application/pdf" },
+        ],
+      },
+    };
+
+    const appended = await persistUserTurnTranscript({
+      ...target,
+      input: {
+        text: "Inspect both",
+        timestamp: 456,
+        media: [
+          { path: "/tmp/image.png", contentType: "image/png" },
+          { url: "https://example.test/report.pdf", contentType: "application/pdf" },
+        ],
+      },
+      updateMode: "none",
     });
-    await expect(readTranscriptMessages(target)).resolves.toEqual([
-      expect.objectContaining({
-        role: "user",
-        content: "What is in this image?",
-        MediaPath: "/tmp/image.png",
-        __openclaw: { senderIsOwner: true },
-        provenance,
-        MediaType: "image/png",
-      }),
-    ]);
+
+    expect(appended?.message).toEqual(expected);
+    expect(JSON.stringify(appended?.message)).toBe(JSON.stringify(expected));
+    const messages = await readTranscriptMessages(target);
+    expect(messages).toEqual([expected]);
+    expect(JSON.stringify(messages[0])).toBe(JSON.stringify(expected));
   });
 
   it("persists sender metadata as __openclaw envelope", async () => {

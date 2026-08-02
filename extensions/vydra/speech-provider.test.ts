@@ -42,7 +42,7 @@ describe("vydra speech provider", () => {
       .mockResolvedValueOnce(
         new Response(
           JSON.stringify({
-            audioUrl: "https://cdn.vydra.ai/generated/test.mp3",
+            audioUrl: "https://www.vydra.ai/generated/test.mp3",
           }),
           {
             status: 200,
@@ -78,6 +78,8 @@ describe("vydra speech provider", () => {
     );
     const headers = new Headers(init.headers);
     expect(headers.get("authorization")).toBe("Bearer vydra-test-key");
+    const [, downloadInit] = fetchMock.mock.calls[1] as [string, RequestInit];
+    expect(new Headers(downloadInit.headers).get("authorization")).toBe("Bearer vydra-test-key");
     expect(result.outputFormat).toBe("mp3");
     expect(result.fileExtension).toBe(".mp3");
     expect(result.audioBuffer).toEqual(Buffer.from("mp3-data"));

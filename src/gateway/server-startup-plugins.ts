@@ -1,11 +1,12 @@
-// Gateway plugin startup bootstrap.
-// Runs startup maintenance, loads plugin runtime, and prepares advertised methods.
+// Gateway plugin startup bootstrap and adjacent startup maintenance.
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { initSubagentRegistry } from "../agents/subagent-registry.js";
+import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   collectRegisteredEmbeddingProviderIds,
   collectUnregisteredConfiguredMemoryEmbeddingProviders,
+  listAmbientOnlyConfiguredChannelIds,
 } from "../plugins/channel-plugin-ids.js";
 import { loadPluginLookUpTable } from "../plugins/plugin-lookup-table.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
@@ -43,19 +44,13 @@ export function resolveGatewayStartupMaintenanceConfig(params: {
     : params.cfgAtStart;
 }
 
-/** Builds plugin startup state and gateway method lists before the server binds. */
-export async function prepareGatewayPluginBootstrap(params: {
+/** Runs channel, session, and pairing maintenance before plugin bootstrap. */
+export async function runGatewayStartupMaintenance(params: {
   cfgAtStart: OpenClawConfig;
-  activationSourceConfig?: OpenClawConfig;
   startupRuntimeConfig: OpenClawConfig;
-  pluginMetadataSnapshot?: PluginMetadataSnapshot;
-  workerProviderIds?: readonly string[];
   minimalTestGateway: boolean;
   log: GatewayPluginBootstrapLog;
-  loadRuntimePlugins?: boolean;
-  loadSetupRuntimePlugins?: boolean;
-}) {
-  const activationSourceConfig = params.activationSourceConfig ?? params.cfgAtStart;
+}): Promise<void> {
   const startupMaintenanceConfig = resolveGatewayStartupMaintenanceConfig({
     cfgAtStart: params.cfgAtStart,
     startupRuntimeConfig: params.startupRuntimeConfig,
@@ -107,7 +102,21 @@ export async function prepareGatewayPluginBootstrap(params: {
     }
     await Promise.all(startupTasks);
   }
+}
 
+/** Builds plugin startup state and gateway method lists before the server binds. */
+export async function prepareGatewayPluginBootstrap(params: {
+  cfgAtStart: OpenClawConfig;
+  activationSourceConfig?: OpenClawConfig;
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
+  workerProviderIds?: readonly string[];
+  minimalTestGateway: boolean;
+  log: GatewayPluginBootstrapLog;
+  loadRuntimePlugins?: boolean;
+  loadSetupRuntimePlugins?: boolean;
+  ambientEnvTriggers?: AmbientEnvTriggerPolicy;
+}) {
+  const activationSourceConfig = params.activationSourceConfig ?? params.cfgAtStart;
   initSubagentRegistry();
 
   // Activation uses the pre-runtime source so auto-enable policy cannot be skewed by
@@ -122,6 +131,7 @@ export async function prepareGatewayPluginBootstrap(params: {
           ? { manifestRegistry: params.pluginMetadataSnapshot.manifestRegistry }
           : {}),
         discovery: params.pluginMetadataSnapshot?.discovery,
+        ambientEnvTriggers: params.ambientEnvTriggers,
       });
   const pluginsGloballyDisabled = gatewayPluginConfig.plugins?.enabled === false;
   const defaultAgentId = resolveDefaultAgentId(gatewayPluginConfig);
@@ -136,11 +146,30 @@ export async function prepareGatewayPluginBootstrap(params: {
           activationSourceConfig,
           metadataSnapshot: params.pluginMetadataSnapshot,
           workerProviderIds: params.workerProviderIds ?? [],
+          ambientEnvTriggers: params.ambientEnvTriggers,
         });
+  // Startup logging consumes the same process-stable manifest snapshot used for
+  // activation planning. Minimal gateways deliberately have no plugin metadata.
+  const pluginManifestRecords =
+    pluginLookUpTable?.manifestRegistry.plugins ??
+    params.pluginMetadataSnapshot?.manifestRegistry.plugins ??
+    [];
   const deferredConfiguredChannelPluginIds = [
     ...(pluginLookUpTable?.startup.configuredDeferredChannelPluginIds ?? []),
   ];
   const startupPluginIds = [...(pluginLookUpTable?.startup.pluginIds ?? [])];
+  const ambientAutostartSuppressedChannelIds =
+    params.ambientEnvTriggers === "suppress"
+      ? new Set(
+          listAmbientOnlyConfiguredChannelIds({
+            config: params.cfgAtStart,
+            activationSourceConfig,
+            env: process.env,
+            includePersistedAuthState: false,
+            manifestRecords: pluginManifestRecords,
+          }),
+        )
+      : new Set<string>();
 
   const baseMethods = listGatewayMethods();
   const coreGatewayMethodNames = listCoreGatewayMethodNames();
@@ -166,6 +195,7 @@ export async function prepareGatewayPluginBootstrap(params: {
         pluginLookUpTable,
         preferSetupRuntimeForChannelPlugins: true,
         suppressPluginInfoLogs: true,
+        ambientEnvTriggers: params.ambientEnvTriggers,
       },
     ));
   } else if (!params.minimalTestGateway && shouldLoadRuntimePlugins) {
@@ -183,6 +213,7 @@ export async function prepareGatewayPluginBootstrap(params: {
         pluginLookUpTable,
         preferSetupRuntimeForChannelPlugins: false,
         suppressPluginInfoLogs: false,
+        ambientEnvTriggers: params.ambientEnvTriggers,
       },
     ));
   } else {
@@ -202,16 +233,18 @@ export async function prepareGatewayPluginBootstrap(params: {
     defaultWorkspaceDir,
     deferredConfiguredChannelPluginIds,
     startupPluginIds,
+    pluginManifestRecords,
     pluginLookUpTable,
     baseMethods,
     pluginRegistry,
     baseGatewayMethods,
     runtimePluginsLoaded,
+    ambientAutostartSuppressedChannelIds,
   };
 }
 
 /**
- * Warn when `agents.*.memorySearch.provider` selects a memory embedding provider
+ * Warn when `memory.search.provider` selects a memory embedding provider
  * that no loaded plugin registered. Without the owning plugin, `active-memory`
  * cannot embed and silently falls back to keyword/FTS-only recall.
  */
@@ -225,7 +258,7 @@ export function warnUnregisteredConfiguredMemoryEmbeddingProviders(params: {
     registeredProviderIds: collectRegisteredEmbeddingProviderIds(params.pluginRegistry),
   });
   for (const provider of unregistered) {
-    const path = `memorySearch.${provider.source}`;
+    const path = `memory.search.${provider.source}`;
     params.log.warn(
       `${path}="${provider.configuredId}" is configured, but no loaded plugin registered a memory embedding provider that can serve "${provider.configuredId}". Semantic memory recall will fall back to keyword/FTS-only search. Ensure the plugin that provides "${provider.configuredId}" is installed and enabled.`,
     );
@@ -246,6 +279,7 @@ export async function loadGatewayStartupPluginRuntime(params: {
   preferSetupRuntimeForChannelPlugins?: boolean;
   suppressPluginInfoLogs?: boolean;
   startupTrace?: GatewayStartupTrace;
+  ambientEnvTriggers?: AmbientEnvTriggerPolicy;
 }) {
   // Keep server-plugin-bootstrap behind one lazy boundary; startup config tests can exercise
   // planning without importing plugin package runtimes.
@@ -265,6 +299,7 @@ export async function loadGatewayStartupPluginRuntime(params: {
     preferSetupRuntimeForChannelPlugins: params.preferSetupRuntimeForChannelPlugins,
     suppressPluginInfoLogs: params.suppressPluginInfoLogs,
     startupTrace: params.startupTrace,
+    ambientEnvTriggers: params.ambientEnvTriggers,
   });
   if (params.preferSetupRuntimeForChannelPlugins !== true) {
     // Surface configured memory embedding providers after the full startup

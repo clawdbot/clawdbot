@@ -11,6 +11,7 @@ import {
   resolvePollMaxSelections,
   resolveReactionMessageId,
 } from "openclaw/plugin-sdk/channel-actions";
+import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import { normalizeOutboundLocation } from "openclaw/plugin-sdk/channel-inbound";
 import {
   buildOutboundSessionContext,
@@ -37,6 +38,10 @@ import {
   resolveTelegramTargetChatType,
 } from "./inline-buttons.js";
 import { resolveTelegramInteractiveTextFallback } from "./interactive-fallback.js";
+import {
+  resolveTelegramMessageMutationChatId,
+  type TelegramMessageMutationContext,
+} from "./message-topic-binding.js";
 import { resolveTelegramPollVisibility } from "./poll-visibility.js";
 import { resolveTelegramReactionLevel } from "./reaction-level.js";
 import {
@@ -96,6 +101,9 @@ const TELEGRAM_ACTION_ALIASES = {
 } as const;
 
 type TelegramActionName = (typeof TELEGRAM_ACTION_ALIASES)[keyof typeof TELEGRAM_ACTION_ALIASES];
+type ConversationReadInvocationOrigin = NonNullable<
+  ChannelMessageActionContext["conversationReadOrigin"]
+>;
 type TelegramForumTopicIconColor = (typeof TELEGRAM_FORUM_TOPIC_ICON_COLORS)[number];
 
 function readTelegramForumTopicIconColor(
@@ -338,11 +346,15 @@ export async function handleTelegramAction(
   params: Record<string, unknown>,
   cfg: OpenClawConfig,
   options?: {
+    mediaAccess?: ChannelMessageActionContext["mediaAccess"];
     mediaLocalRoots?: readonly string[];
     mediaReadFile?: (filePath: string) => Promise<Buffer>;
     sessionKey?: string | null;
     inboundEventKind?: string;
     gatewayClientScopes?: readonly string[];
+    conversationReadOrigin?: ConversationReadInvocationOrigin;
+    requesterAccountId?: string | null;
+    toolContext?: TelegramMessageMutationContext["toolContext"];
   },
 ): Promise<AgentToolResult<unknown>> {
   const { action, accountId } = {
@@ -418,8 +430,15 @@ export async function handleTelegramAction(
     }
     let reactionResult: Awaited<ReturnType<typeof telegramActionRuntime.reactMessageTelegram>>;
     try {
+      const authorizedChatId = await resolveTelegramMessageMutationChatId({
+        chatId: chatId ?? "",
+        messageId,
+        cfg,
+        accountId,
+        context: options,
+      });
       reactionResult = await telegramActionRuntime.reactMessageTelegram(
-        chatId ?? "",
+        authorizedChatId,
         messageId ?? 0,
         emoji ?? "",
         {
@@ -544,12 +563,13 @@ export async function handleTelegramAction(
       quoteText,
     });
     const mediaAccess =
-      options?.mediaLocalRoots || options?.mediaReadFile
+      options?.mediaAccess ??
+      (options?.mediaLocalRoots || options?.mediaReadFile
         ? {
             ...(options.mediaLocalRoots ? { localRoots: options.mediaLocalRoots } : {}),
             ...(options.mediaReadFile ? { readFile: options.mediaReadFile } : {}),
           }
-        : undefined;
+        : undefined);
     const outboundSession = buildOutboundSessionContext({
       cfg,
       sessionKey: options?.sessionKey,
@@ -671,18 +691,29 @@ export async function handleTelegramAction(
     if (messageId === undefined) {
       throw new Error("messageId required");
     }
+    const authorizedChatId = await resolveTelegramMessageMutationChatId({
+      chatId: chatId ?? "",
+      messageId,
+      cfg,
+      accountId,
+      context: options,
+    });
     const token = resolveTelegramToken(cfg, { accountId }).token;
     if (!token) {
       throw new Error(
         "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
       );
     }
-    const result = await telegramActionRuntime.deleteMessageTelegram(chatId ?? "", messageId ?? 0, {
-      cfg,
-      token,
-      accountId: accountId ?? undefined,
-      gatewayClientScopes: options?.gatewayClientScopes,
-    });
+    const result = await telegramActionRuntime.deleteMessageTelegram(
+      authorizedChatId,
+      messageId ?? 0,
+      {
+        cfg,
+        token,
+        accountId: accountId ?? undefined,
+        gatewayClientScopes: options?.gatewayClientScopes,
+      },
+    );
     if (!result.ok) {
       return jsonResult({ ok: false, deleted: false, warning: result.warning });
     }
@@ -700,10 +731,18 @@ export async function handleTelegramAction(
     if (messageId === undefined) {
       throw new Error("messageId required");
     }
+    const authorizedChatId = await resolveTelegramMessageMutationChatId({
+      chatId: chatId ?? "",
+      messageId,
+      cfg,
+      accountId,
+      context: options,
+    });
     const content =
       readStringParam(params, "content", { allowEmpty: false }) ??
       readStringParam(params, "message", { allowEmpty: false });
-    const caption = readStringParam(params, "caption", { allowEmpty: false });
+    // Telegram treats an explicit empty caption as a request to remove it.
+    const caption = readStringParam(params, "caption", { allowEmpty: true });
     const buttons = resolveTelegramButtonsFromParams(params, undefined, {
       allowWebAppButtons: resolveTelegramTargetChatType(chatId ?? "") === "direct",
     });
@@ -729,7 +768,7 @@ export async function handleTelegramAction(
     }
     if (content == null && caption == null && buttons !== undefined) {
       const result = await telegramActionRuntime.editMessageReplyMarkupTelegram(
-        chatId ?? "",
+        authorizedChatId,
         messageId ?? 0,
         buttons,
         {
@@ -746,7 +785,7 @@ export async function handleTelegramAction(
       });
     }
     const result = await telegramActionRuntime.editMessageTelegram(
-      chatId ?? "",
+      authorizedChatId,
       messageId ?? 0,
       caption ?? content ?? "",
       {

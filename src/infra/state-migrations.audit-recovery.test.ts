@@ -381,7 +381,8 @@ describe("legacy audit recovery byte handling", () => {
           mode: number,
         ) {
           chmodCalls += 1;
-          if (chmodCalls === 2) {
+          // fs-safe 0.5 applies the write mode before the migration's explicit hardening check.
+          if (chmodCalls === 3) {
             return Promise.reject(new Error("simulated recovery chmod failure"));
           }
           return originalChmod.call(this, mode);

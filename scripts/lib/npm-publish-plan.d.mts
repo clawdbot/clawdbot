@@ -1,14 +1,3 @@
-export type ParsedReleaseVersion = {
-  version: string;
-  baseVersion: string;
-  channel: "stable" | "alpha" | "beta";
-  year: number;
-  month: number;
-  patch: number;
-  alphaNumber?: number;
-  betaNumber?: number;
-  correctionNumber?: number;
-};
 export type NpmPublishPlan = {
   channel: "stable" | "alpha" | "beta";
   publishTag: "latest" | "alpha" | "beta" | "extended-stable";
@@ -29,11 +18,6 @@ export function fetchNpmRegistryPackumentWithRetry(params: {
   sleep?: (delayMs: number) => Promise<void>;
   createSignal?: (timeoutMs: number) => AbortSignal;
 }): Promise<NpmRegistryPackumentResult>;
-export function parseReleaseVersion(version: string): ParsedReleaseVersion | null;
-export function collectReleaseVersionFloorErrors(
-  version: string | ParsedReleaseVersion | null,
-): string[];
-export function compareReleaseVersions(left: string, right: string): number | null;
 export function resolveNpmPublishPlan(
   version: string,
   currentBetaVersion?: string | null,

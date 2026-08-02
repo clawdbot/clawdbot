@@ -11,6 +11,7 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { resolveToolCallKind, unwrapShellWrapperCommand } from "../../lib/chat/tool-call-view.ts";
+import { fnv1aUtf16 } from "../../lib/fnv1a.ts";
 
 const MAX_TITLE_INPUT_CHARS = 2_000;
 const MAX_ITEMS_PER_REQUEST = 24;
@@ -56,12 +57,7 @@ let notifyUpdate: (() => void) | null = null;
 /** FNV-1a over name + serialized args; stable across renders of one call. */
 function digest(name: string, input: string): string {
   const source = `${name}\u0000${input}`;
-  let hash = 0x811c9dc5;
-  for (let index = 0; index < source.length; index += 1) {
-    hash ^= source.charCodeAt(index);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return `t${(hash >>> 0).toString(36)}${source.length.toString(36)}`;
+  return `t${fnv1aUtf16(source).toString(36)}${source.length.toString(36)}`;
 }
 
 function serializeArgs(args: unknown): string | null {

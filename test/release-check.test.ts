@@ -18,7 +18,10 @@ import {
   WORKSPACE_TEMPLATE_PACK_PATHS,
   createWorkspaceBootstrapSmokeEnv,
 } from "../scripts/lib/workspace-bootstrap-smoke.mjs";
-import { collectInstalledRootDependencyManifestErrors } from "../scripts/openclaw-npm-postpublish-verify.ts";
+import {
+  collectInstalledBundledRuntimeSidecarPaths,
+  collectInstalledRootDependencyManifestErrors,
+} from "../scripts/openclaw-npm-postpublish-verify.ts";
 import {
   collectAppcastSparkleVersionErrors,
   collectBundledExtensionManifestErrors,
@@ -43,6 +46,7 @@ import {
   resolveMissingPackBuildHint,
   runReleaseCheckCommand,
 } from "../scripts/release-check.ts";
+import { listStaticExtensionAssetOutputs } from "../scripts/runtime-postbuild.mjs";
 import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../src/cli/completion-runtime.ts";
 import { withEnv } from "../src/test-utils/env.js";
 
@@ -63,6 +67,7 @@ const requiredPluginSdkPackPaths = listPluginSdkDistArtifacts();
 const packagedPrivatePluginSdkRuntimePaths = listPackagedPrivatePluginSdkRuntimeArtifacts();
 const unpackagedPrivatePluginSdkPaths = listUnpackagedPrivatePluginSdkDistArtifacts();
 const requiredBundledPluginPackPaths = listBundledPluginPackArtifacts();
+const requiredStaticExtensionAssetPaths = listStaticExtensionAssetOutputs();
 
 describe("collectAppcastSparkleVersionErrors", () => {
   it("accepts legacy 9-digit calver builds before lane-floor cutover", () => {
@@ -714,6 +719,7 @@ describe("collectMissingPackPaths", () => {
       "scripts/lib/official-external-plugin-catalog.json",
       "scripts/lib/official-external-provider-catalog.json",
       "scripts/lib/recommended-tool-installs.json",
+      "scripts/lib/guard-inventory-utils.mjs",
       "scripts/lib/package-dist-imports.mjs",
       "scripts/postinstall-bundled-plugins.mjs",
       "dist/agents/compaction-planning.worker.js",
@@ -735,7 +741,6 @@ describe("collectMissingPackPaths", () => {
   it("accepts the shipped upgrade surface when optional bundled metadata is present", () => {
     expect(
       collectMissingPackPaths([
-        "npm-shrinkwrap.json",
         "dist/index.js",
         "dist/entry.js",
         "dist/control-ui/index.html",
@@ -743,6 +748,7 @@ describe("collectMissingPackPaths", () => {
         "dist/extensions/acpx/mcp-command-line.mjs",
         "dist/extensions/acpx/mcp-proxy.mjs",
         ...requiredBundledPluginPackPaths,
+        ...requiredStaticExtensionAssetPaths,
         ...requiredPluginSdkPackPaths,
         ...packagedPrivatePluginSdkRuntimePaths,
         ...WORKSPACE_TEMPLATE_PACK_PATHS,
@@ -753,6 +759,7 @@ describe("collectMissingPackPaths", () => {
         "scripts/lib/official-external-plugin-catalog.json",
         "scripts/lib/official-external-provider-catalog.json",
         "scripts/lib/recommended-tool-installs.json",
+        "scripts/lib/guard-inventory-utils.mjs",
         "scripts/lib/package-dist-imports.mjs",
         "scripts/postinstall-bundled-plugins.mjs",
         "dist/agents/compaction-planning.worker.js",
@@ -785,8 +792,18 @@ describe("collectMissingPackPaths", () => {
         mkdirSync(dirname(filePath), { recursive: true });
         writeFileSync(filePath, "export {};\n");
       }
-      for (const pluginId of ["image-generation-core", "media-understanding-core"]) {
-        writeFileSync(join(distDir, "extensions", pluginId, "package.json"), "{}\n");
+      for (const relativePath of requiredBundledPluginPackPaths) {
+        if (!/^dist\/extensions\/[^/]+\/package\.json$/u.test(relativePath)) {
+          continue;
+        }
+        const packageJsonPath = join(packageRoot, relativePath);
+        mkdirSync(dirname(packageJsonPath), { recursive: true });
+        writeFileSync(packageJsonPath, "{}\n");
+      }
+      for (const relativePath of collectInstalledBundledRuntimeSidecarPaths(packageRoot)) {
+        const sidecarPath = join(packageRoot, relativePath);
+        mkdirSync(dirname(sidecarPath), { recursive: true });
+        writeFileSync(sidecarPath, "export {};\n");
       }
       writeFileSync(
         join(packageRoot, "package.json"),

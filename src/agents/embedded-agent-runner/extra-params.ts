@@ -1,3 +1,5 @@
+import { canonicalizeMaxTokensParam, resolveMaxTokensParam } from "@openclaw/ai/transports";
+import { detectOpenAICompletionsCompat } from "@openclaw/ai/transports";
 import {
   type NativeWebSearchToolPolicyParams,
   isNativeWebSearchAllowedByToolPolicy,
@@ -33,9 +35,6 @@ import {
 } from "../../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { resolveModelExtraParamSources } from "../model-extra-params.js";
-import { canonicalizeMaxTokensParam, resolveMaxTokensParam } from "../model-max-tokens-params.js";
-import { detectOpenAICompletionsCompat } from "../openai-completions-compat.js";
-import { supportsGptParallelToolCallsPayload } from "../provider-api-families.js";
 import { resolveProviderRequestPolicyConfig } from "../provider-request-config.js";
 import type { AgentRuntimeTransport } from "../runtime-plan/types.js";
 import type { StreamFn } from "../runtime/index.js";
@@ -63,8 +62,20 @@ const providerRuntimeDeps = {
 
 let preparedExtraParamsCache = new WeakMap<OpenClawConfig, Map<string, Record<string, unknown>>>();
 const REQUEST_SCOPED_EXTRA_PARAM_KEYS = new Set(["response_format", "responseFormat", "stop"]);
+const GPT_PARALLEL_TOOL_CALLS_APIS = new Set([
+  "openai-completions",
+  "openai-responses",
+  "openai-chatgpt-responses",
+  "azure-openai-responses",
+]);
+
+/** True when a provider API accepts GPT parallel-tool-call payload settings. */
+function supportsGptParallelToolCallsPayload(api: unknown): boolean {
+  return typeof api === "string" && GPT_PARALLEL_TOOL_CALLS_APIS.has(api);
+}
 
 const testing = {
+  supportsGptParallelToolCallsPayload,
   setProviderRuntimeDepsForTest(
     deps: Partial<typeof defaultProviderRuntimeDeps> | undefined,
   ): void {
@@ -167,7 +178,6 @@ type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
   cacheRetention?: "none" | "short" | "long";
   cachedContent?: string;
   topP?: number;
-  responseFormat?: Record<string, unknown>;
   frequencyPenalty?: number;
   presencePenalty?: number;
   seed?: number;

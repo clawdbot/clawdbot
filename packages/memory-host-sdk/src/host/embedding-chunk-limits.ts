@@ -40,9 +40,13 @@ export function enforceEmbeddingMaxInputTokens(
       out.push({
         startLine: chunk.startLine,
         endLine: chunk.endLine,
+        ...(chunk.entryStartLine !== undefined
+          ? { entryStartLine: chunk.entryStartLine, entryEndLine: chunk.entryEndLine }
+          : {}),
         text,
         hash: hashText(text),
         embeddingInput: { text },
+        ...(chunk.provenance ? { provenance: chunk.provenance } : {}),
       });
     }
   }

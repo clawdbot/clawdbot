@@ -176,7 +176,6 @@ export async function readAgentMemoryFile(params: {
     relPath: params.relPath,
     from: params.from,
     lines: params.lines,
-    defaultLines: contextLimits?.memoryGetDefaultLines,
     maxChars: contextLimits?.memoryGetMaxChars,
   });
 }

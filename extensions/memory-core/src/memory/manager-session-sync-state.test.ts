@@ -95,9 +95,21 @@ describe("memory session sync state", () => {
           size: 10,
         },
         {
+          absPath: "/tmp/sessions/invalidated.jsonl",
+          path: "sessions/invalidated.jsonl",
+          mtimeMs: 200,
+          size: 20,
+        },
+        {
           absPath: "/tmp/sessions/newer.jsonl",
           path: "sessions/newer.jsonl",
           mtimeMs: 250,
+          size: 20,
+        },
+        {
+          absPath: "/tmp/sessions/rolled-back.jsonl",
+          path: "sessions/rolled-back.jsonl",
+          mtimeMs: 150,
           size: 20,
         },
         {
@@ -116,14 +128,18 @@ describe("memory session sync state", () => {
       existingRows: [
         { path: "sessions/unchanged.jsonl", hash: "hash-unchanged", mtime: 100.75, size: 10 },
         { path: "sessions/sub-ms-newer.jsonl", hash: "hash-sub-ms", mtime: 100.25, size: 10 },
+        { path: "sessions/invalidated.jsonl", hash: "", mtime: 200, size: 20 },
         { path: "sessions/newer.jsonl", hash: "hash-newer", mtime: 200, size: 20 },
+        { path: "sessions/rolled-back.jsonl", hash: "hash-rolled-back", mtime: 200, size: 20 },
         { path: "sessions/resized.jsonl", hash: "hash-resized", mtime: 300, size: 30 },
       ],
     });
 
     expect(dirtyFiles).toEqual([
       "/tmp/sessions/sub-ms-newer.jsonl",
+      "/tmp/sessions/invalidated.jsonl",
       "/tmp/sessions/newer.jsonl",
+      "/tmp/sessions/rolled-back.jsonl",
       "/tmp/sessions/resized.jsonl",
       "/tmp/sessions/missing.jsonl",
     ]);

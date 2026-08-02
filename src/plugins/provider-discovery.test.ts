@@ -95,7 +95,7 @@ describe("resolveInstalledPluginProviderContributionIds", () => {
   it("keeps current production callers off the ambiguous runtime-discovery alias", () => {
     const callerPaths = [
       "src/agents/models-config.providers.implicit.ts",
-      "src/commands/models/list.provider-catalog.ts",
+      "src/commands/models/list.row-sources.ts",
     ];
 
     for (const callerPath of callerPaths) {
@@ -380,27 +380,7 @@ describe("runProviderStaticCatalog", () => {
       },
     };
 
-    await expect(
-      runProviderStaticCatalog({
-        provider,
-        config: {
-          models: {
-            providers: {
-              demo: {
-                baseUrl: "https://configured.example/v1",
-                models: [],
-                apiKey: "secret-value",
-              },
-            },
-          },
-        },
-        agentDir: "/tmp/agent",
-        workspaceDir: "/tmp/workspace",
-        env: {
-          SECRET_TOKEN: "secret-value",
-        },
-      }),
-    ).resolves.toEqual({
+    await expect(runProviderStaticCatalog({ provider })).resolves.toEqual({
       provider: {
         baseUrl: "https://static.example/v1",
         models: [],

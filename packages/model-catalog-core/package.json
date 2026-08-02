@@ -9,7 +9,8 @@
   "main": "./dist/index.mjs",
   "types": "./dist/index.d.mts",
   "dependencies": {
-    "@openclaw/normalization-core": "workspace:*"
+    "@openclaw/normalization-core": "workspace:*",
+    "zod": "4.4.3"
   },
   "exports": {
     ".": {

@@ -52,6 +52,14 @@ export function resolveRoute(
 
 export function sanitizeDocsConfigForEnglishOnly(value: unknown): unknown;
 
+export function prepareExternalLinkAuditTree(
+  repoRoot: string,
+  outputDir: string,
+): {
+  files: number;
+  projectedLinks: number;
+};
+
 export function prepareMirroredDocsDir(
   sourceDir?: string,
   options?: {

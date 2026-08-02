@@ -2,7 +2,6 @@
 import fs from "node:fs";
 import {
   normalizeOptionalLowercaseString,
-  normalizeOptionalString,
   resolvePrimaryStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
@@ -10,7 +9,7 @@ import { resolveModelAgentRuntimeMetadata } from "../agents/agent-runtime-metada
 import {
   listAgentIds,
   resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
+  tryResolveDefaultAgentId,
 } from "../agents/agent-scope.js";
 import { CLAUDE_CLI_PROFILE_ID } from "../agents/auth-profiles/constants.js";
 import { resolveAuthStorePathForDisplay } from "../agents/auth-profiles/paths.js";
@@ -20,6 +19,7 @@ import type {
   OAuthCredential,
   TokenCredential,
 } from "../agents/auth-profiles/types.js";
+import { resolveCliBackendConfig } from "../agents/cli-backends.js";
 import { readClaudeCliCredentialsCached } from "../agents/cli-credentials.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "../agents/command/claude-cli-project-dir.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -49,17 +49,7 @@ function usesClaudeCliModelSelection(cfg: OpenClawConfig): boolean {
 }
 
 function resolveClaudeCliCommand(cfg: OpenClawConfig): string {
-  const configured = cfg.agents?.defaults?.cliBackends ?? {};
-  for (const [key, entry] of Object.entries(configured)) {
-    if (normalizeOptionalLowercaseString(key) !== CLAUDE_CLI_PROVIDER) {
-      continue;
-    }
-    const command = normalizeOptionalString(entry?.command);
-    if (command) {
-      return command;
-    }
-  }
-  return "claude";
+  return resolveCliBackendConfig(CLAUDE_CLI_PROVIDER, cfg)?.config.command ?? "claude";
 }
 
 function probeDirectoryHealth(dirPath: string): ClaudeCliDirHealth {
@@ -131,7 +121,8 @@ function resolveClaudeCliAgentIds(cfg: OpenClawConfig): string[] {
     return runtimeAgentIds;
   }
   if (usesClaudeCliModelSelection(cfg)) {
-    return [resolveDefaultAgentId(cfg)];
+    const defaultAgentId = tryResolveDefaultAgentId(cfg);
+    return defaultAgentId ? [defaultAgentId] : [];
   }
   return [];
 }
@@ -151,7 +142,7 @@ function resolveClaudeCliWorkspaceTargets(params: {
   workspaceDir?: string;
 }): ClaudeCliWorkspaceTarget[] {
   const agentIds = resolveClaudeCliAgentIds(params.cfg);
-  const defaultAgentId = resolveDefaultAgentId(params.cfg);
+  const defaultAgentId = tryResolveDefaultAgentId(params.cfg);
   const seen = new Set<string>();
   return agentIds
     .filter((agentId) => {
@@ -222,7 +213,7 @@ export function noteClaudeCliHealth(
   const commandPath = resolveCommandPath(command, env);
   const authStorePath = resolveAuthStorePathForDisplay();
   const storedProfile = store.profiles[CLAUDE_CLI_PROFILE_ID];
-  const defaultAgentId = resolveDefaultAgentId(cfg);
+  const defaultAgentId = tryResolveDefaultAgentId(cfg);
   const showAgentLabels =
     workspaceTargets.length > 1 ||
     workspaceTargets.some((target) => target.agentId !== defaultAgentId);
@@ -233,7 +224,7 @@ export function noteClaudeCliHealth(
   if (!commandPath) {
     lines.push(`- Binary: command "${command}" was not found on PATH.`);
     fixHints.push(
-      "- Fix: install Claude CLI or set agents.defaults.cliBackends.claude-cli.command to the real binary path.",
+      "- Fix: install Claude CLI on PATH for the gateway user; custom executable paths belong in a CLI backend plugin registration.",
     );
   }
 

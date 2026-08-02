@@ -5,9 +5,9 @@ scenario:
   surface: dm
   coverage:
     primary:
-      - models.codex-cli
+      - openai.codex-harness-codex-cli
     secondary:
-      - runtime.no-meta-leak
+      - openai.codex-harness-no-meta-leak
   plugins:
     - codex
   objective: Verify the Codex app-server harness keeps coordination/meta chatter out of the visible reply.

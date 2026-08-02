@@ -864,7 +864,7 @@ Room allowlist keys (`groups`, legacy `rooms`) should be room IDs or aliases. Pl
 
 - `groupPolicy`: `"open"`, `"allowlist"`, or `"disabled"`. Default: `"allowlist"`.
 - `groupAllowFrom`: allowlist of user IDs for room traffic.
-- `mentionPatterns`: scoped regex patterns for room mentions. Object with `{ mode: "allow"|"deny", allowIn: [roomId, ...], denyIn: [roomId, ...] }`. Controls whether configured `agents.list[].groupChat.mentionPatterns` apply per-room.
+- `mentionPatterns`: scoped regex patterns for room mentions. Object with `{ mode: "allow"|"deny", allowIn: [roomId, ...], denyIn: [roomId, ...] }`. Controls whether configured `agents.entries.*.groupChat.mentionPatterns` apply per-room.
 - `dm.enabled`: when `false`, ignore all DMs. Default: `true`.
 - `dm.policy`: `"pairing"` (default), `"allowlist"`, `"open"`, or `"disabled"`. Applies after the bot has joined and classified the room as a DM; it does not affect invite handling.
 - `dm.allowFrom`: allowlist of user IDs for DM traffic.

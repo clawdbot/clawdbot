@@ -1,3 +1,4 @@
+import type { PolicyRoutingRules } from "./policy-routing.js";
 import {
   scanPolicyChannels,
   scanPolicyMcpServers,
@@ -13,6 +14,7 @@ import {
 import { scanPolicyExecApprovals } from "./policy-state-exec-approvals.js";
 import { scanPolicyGatewayExposure } from "./policy-state-gateway.js";
 import { scanPolicyIngress } from "./policy-state-ingress.js";
+import { scanPolicyRouting } from "./policy-state-routing.js";
 import { scanPolicySandboxPosture } from "./policy-state-sandbox.js";
 import { scanPolicyToolPosture } from "./policy-state-tool-posture.js";
 import { scanPolicyTools } from "./policy-state-tools.js";
@@ -34,6 +36,7 @@ export function collectPolicyEvidence(
     readonly includeAuthProfiles?: boolean;
     readonly execApprovalsRaw?: string | null;
     readonly includeExecApprovals?: boolean;
+    readonly routing?: PolicyRoutingRules;
   },
 ): PolicyEvidence;
 
@@ -51,6 +54,7 @@ export function collectPolicyEvidence(
     readonly includeAuthProfiles?: boolean;
     readonly execApprovalsRaw?: string | null;
     readonly includeExecApprovals?: boolean;
+    readonly routing?: PolicyRoutingRules;
   },
 ): Promise<PolicyEvidence>;
 
@@ -68,6 +72,7 @@ export function collectPolicyEvidence(
     readonly includeAuthProfiles?: boolean;
     readonly execApprovalsRaw?: string | null;
     readonly includeExecApprovals?: boolean;
+    readonly routing?: PolicyRoutingRules;
   } = {},
 ): PolicyEvidence | Promise<PolicyEvidence> {
   const evidence = {
@@ -98,6 +103,7 @@ export function collectPolicyEvidence(
               ? []
               : scanPolicyExecApprovals(options.execApprovalsRaw),
         }),
+    ...(options.routing === undefined ? {} : { routing: scanPolicyRouting(cfg, options.routing) }),
   };
   if (options.toolsRaw === undefined) {
     return evidence;

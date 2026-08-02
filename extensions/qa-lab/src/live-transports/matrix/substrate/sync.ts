@@ -1,6 +1,7 @@
 // Qa Lab Matrix module implements sync behavior.
 import {
   findMatrixQaObservedEventMatch,
+  inheritMatrixQaReplacementRelation,
   normalizeMatrixQaObservedEvent,
   type MatrixQaObservedEvent,
   type MatrixQaRoomEvent,
@@ -57,6 +58,7 @@ export type MatrixQaRoomObserver = {
 
 type MatrixQaRoomObserverState = {
   cursorIndexes: Map<string, number>;
+  eventsById: Map<string, MatrixQaObservedEvent>;
   events: MatrixQaObservedEvent[];
   pollPromise?: Promise<void>;
   since?: string;
@@ -108,8 +110,15 @@ async function pollMatrixQaRoomObserver(
         if (!normalized) {
           continue;
         }
-        params.observedEvents.push(normalized);
-        params.roomObserver.events.push(normalized);
+        const observed = inheritMatrixQaReplacementRelation({
+          event: normalized,
+          replacedEvent: normalized.replacesEventId
+            ? params.roomObserver.eventsById.get(normalized.replacesEventId)
+            : undefined,
+        });
+        params.roomObserver.eventsById.set(observed.eventId, observed);
+        params.observedEvents.push(observed);
+        params.roomObserver.events.push(observed);
       }
     }
   })();
@@ -129,6 +138,7 @@ export function createMatrixQaRoomObserver(
 ): MatrixQaRoomObserver {
   const roomObserver: MatrixQaRoomObserverState = {
     cursorIndexes: new Map(),
+    eventsById: new Map(),
     events: [],
     since: params.since,
   };

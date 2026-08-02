@@ -1,5 +1,3 @@
-// Media-understanding provider registry combines plugin capability providers,
-// config-derived image providers, and test/runtime overrides.
 import type { OpenClawConfig } from "../config/types.js";
 import { resolvePluginCapabilityProviders } from "../plugins/capability-provider-runtime.js";
 import { resolveImageCapableConfigProviderIds } from "./config-provider-models.js";
@@ -52,12 +50,16 @@ export { normalizeMediaExecutionProviderId, normalizeMediaProviderId } from "./p
 export function buildMediaUnderstandingRegistry(
   overrides?: Record<string, MediaUnderstandingProvider>,
   cfg?: OpenClawConfig,
+  preparedProviders?: readonly MediaUnderstandingProvider[],
 ): Map<string, MediaUnderstandingProvider> {
   const registry = new Map<string, MediaUnderstandingProvider>();
-  for (const provider of resolvePluginCapabilityProviders({
-    key: "mediaUnderstandingProviders",
-    cfg,
-  })) {
+  const providers =
+    preparedProviders ??
+    resolvePluginCapabilityProviders({
+      key: "mediaUnderstandingProviders",
+      cfg,
+    });
+  for (const provider of providers) {
     mergeProviderIntoRegistry(registry, provider);
   }
   // Auto-register media-understanding for config providers with image-capable models (#51392)

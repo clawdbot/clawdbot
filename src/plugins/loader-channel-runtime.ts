@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { openRootFileSync } from "../infra/boundary-file-read.js";
+import { describeRootFileOpenFailure, openRootFileSync } from "../infra/boundary-file-read.js";
 import type { NormalizedPluginsConfig } from "./config-state.js";
 import {
   channelPluginIdBelongsToManifest,
@@ -11,12 +11,11 @@ import {
   shouldDeferConfiguredChannelFullRuntimeMerge,
 } from "./loader-channel-setup.js";
 import type { PluginModuleLoader } from "./loader-module-runtime.js";
-import { runPluginRegisterSync } from "./loader-module-runtime.js";
+import { runPluginRegisterSyncInRegistry } from "./loader-module-runtime.js";
 import { recordPluginError } from "./loader-records.js";
 import type { PluginRegistrationPlan } from "./loader-registration-plan.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import { withProfile } from "./plugin-load-profile.js";
-import { createPluginRegistrationTransaction } from "./plugin-registration-transaction.js";
 import { resolveCanonicalDistRuntimeSource } from "./plugin-runtime-artifact-resolution.js";
 import type { createPluginRegistry, PluginRecord } from "./registry.js";
 import type { OpenClawPluginModule, PluginLogger } from "./types.js";
@@ -114,7 +113,14 @@ export function loadSetupRuntimeChannelCandidate(params: {
       skipLexicalRootCheck: true,
     });
     if (!runtimeOpened.ok) {
-      params.pushPluginLoadError("plugin entry path escapes plugin root or fails alias checks");
+      params.pushPluginLoadError(
+        describeRootFileOpenFailure({
+          failure: runtimeOpened,
+          subject: "plugin entry path",
+          boundaryLabel: "plugin root",
+          filePath: runtimeModuleSource,
+        }),
+      );
       return true;
     }
     const safeRuntimeSource = runtimeOpened.path;
@@ -247,15 +253,15 @@ export function loadSetupRuntimeChannelCandidate(params: {
     }
   }
   if (registrationPlan.mode === "setup-runtime" && mergedSetupRegistration.registerSetupRuntime) {
-    const transaction = createPluginRegistrationTransaction({ registry: registryBuilder.registry });
     try {
-      runPluginRegisterSync(
+      runPluginRegisterSyncInRegistry(
         (registrationApi) => mergedSetupRegistration.registerSetupRuntime?.(registrationApi),
         api,
+        registryBuilder.registry,
+        record.id,
       );
-      transaction.commit({ activate: true });
     } catch (error) {
-      transaction.rollback();
+      registryBuilder.rollbackPluginGlobalSideEffects(record.id, record);
       recordPluginError({
         logger: params.logger,
         registry: registryBuilder.registry,

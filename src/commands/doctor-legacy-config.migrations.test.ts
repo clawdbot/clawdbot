@@ -5,6 +5,8 @@ import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { validateConfigObject } from "../config/validation.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { maybeRepairCodexRoutes } from "./doctor/shared/codex-route-warnings.js";
 import { normalizeCompatibilityConfigValues } from "./doctor/shared/legacy-config-core-migrate.js";
 import { LEGACY_CONFIG_MIGRATIONS } from "./doctor/shared/legacy-config-migrations.js";
@@ -163,6 +165,7 @@ describe("normalizeCompatibilityConfigValues", () => {
   });
 
   beforeEach(() => {
+    resetPluginRuntimeStateForTest();
     fs.rmSync(tempOauthDir, { recursive: true, force: true });
     fs.mkdirSync(tempOauthDir, { recursive: true });
   });
@@ -174,6 +177,40 @@ describe("normalizeCompatibilityConfigValues", () => {
       process.env.OPENCLAW_OAUTH_DIR = previousOauthDir;
     }
     fs.rmSync(tempOauthDir, { recursive: true, force: true });
+  });
+
+  it("drops reserved MCP server names without touching sibling servers", () => {
+    const raw = JSON.parse(
+      '{"mcp":{"servers":{"__proto__":{"command":"bad"},"docs":{"command":"docs"}}},"nodeHost":{"mcp":{"servers":{"__proto__":{"command":"bad-node"},"local":{"command":"local"}}}}}',
+    ) as OpenClawConfig;
+
+    const normalized = {
+      mcp: { servers: { docs: { command: "docs" } } },
+      nodeHost: { mcp: { servers: { local: { command: "local" } } } },
+    } as OpenClawConfig;
+    const migrated = normalizeCompatibilityConfigValues(normalized, { sourceRaw: raw });
+
+    expect(migrated.config.mcp?.servers).toStrictEqual({ docs: { command: "docs" } });
+    expect(migrated.config.nodeHost?.mcp?.servers).toStrictEqual({
+      local: { command: "local" },
+    });
+    expect(Object.hasOwn(migrated.config.mcp?.servers ?? {}, "__proto__")).toBe(false);
+    expect(Object.hasOwn(migrated.config.nodeHost?.mcp?.servers ?? {}, "__proto__")).toBe(false);
+    expect(migrated.changes).toStrictEqual([
+      'Dropped MCP server "__proto__" from mcp.servers because the name is reserved; re-add it under a different name.',
+      'Dropped MCP server "__proto__" from nodeHost.mcp.servers because the name is reserved; re-add it under a different name.',
+    ]);
+
+    const secondPass = normalizeCompatibilityConfigValues(migrated.config);
+    expect(secondPass.config).toStrictEqual(migrated.config);
+    expect(secondPass.changes).toStrictEqual([]);
+
+    const candidateOnly = normalizeCompatibilityConfigValues(raw, { sourceRaw: {} });
+    expect(Object.hasOwn(candidateOnly.config.mcp?.servers ?? {}, "__proto__")).toBe(false);
+    expect(Object.hasOwn(candidateOnly.config.nodeHost?.mcp?.servers ?? {}, "__proto__")).toBe(
+      false,
+    );
+    expect(candidateOnly.changes).toStrictEqual(migrated.changes);
   });
 
   it("does not materialize a group visible reply default for configured channels", () => {
@@ -224,6 +261,56 @@ describe("normalizeCompatibilityConfigValues", () => {
 
     expect(res.config.agents?.list).toEqual([{ id: "main", workspace: "/main" }, { id: "beta" }]);
     expect(res.changes.some((change) => change.includes("workspace"))).toBe(false);
+  });
+
+  it("removes invalid heartbeat active-hours windows so saved config can load", () => {
+    const res = normalizeCompatibilityConfigValues(
+      legacyConfig({
+        agents: {
+          defaults: {
+            heartbeat: {
+              every: "30m",
+              activeHours: { start: "99:99", end: "17:00" },
+            },
+          },
+          list: [
+            {
+              id: "ops",
+              heartbeat: {
+                prompt: "Check alerts",
+                activeHours: { start: "09:00", end: "not-a-time" },
+              },
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(res.config.agents?.defaults?.heartbeat).toEqual({ every: "30m" });
+    expect(res.config.agents?.list?.[0]?.heartbeat).toEqual({ prompt: "Check alerts" });
+    expect(res.changes).toContain(
+      "Removed invalid agents.defaults.heartbeat.activeHours; heartbeats will use unrestricted hours until it is reconfigured.",
+    );
+    expect(res.changes).toContain(
+      "Removed invalid agents.list[0].heartbeat.activeHours; heartbeats will use unrestricted hours until it is reconfigured.",
+    );
+    expect(validateConfigObject(res.config).ok).toBe(true);
+  });
+
+  it("preserves valid heartbeat active-hours windows", () => {
+    const config = legacyConfig({
+      agents: {
+        defaults: {
+          heartbeat: {
+            activeHours: { start: "09:00", end: "24:00", timezone: "user" },
+          },
+        },
+      },
+    });
+    const res = normalizeCompatibilityConfigValues(config);
+
+    expect(res.config).toEqual(config);
+    expect(res.changes.some((change) => change.includes("activeHours"))).toBe(false);
   });
 
   it("removes bindings for missing configured agents", () => {
@@ -353,7 +440,7 @@ describe("normalizeCompatibilityConfigValues", () => {
           token: "secretref-env:DISCORD_BOT_TOKEN",
           accounts: {
             work: {
-              token: "secretref-env:DISCORD_WORK_TOKEN",
+              token: "__env__:DISCORD_WORK_TOKEN",
             },
           },
         },
@@ -375,7 +462,7 @@ describe("normalizeCompatibilityConfigValues", () => {
       "Moved channels.discord.accounts.default.token secretref-env:DISCORD_BOT_TOKEN marker → structured env SecretRef.",
     );
     expect(res.changes).toContain(
-      "Moved channels.discord.accounts.work.token secretref-env:DISCORD_WORK_TOKEN marker → structured env SecretRef.",
+      "Moved channels.discord.accounts.work.token __env__:DISCORD_WORK_TOKEN marker → structured env SecretRef.",
     );
   });
 
@@ -437,6 +524,101 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(res.changes).toContain(
       "Moved channels.whatsapp single-account top-level values into channels.whatsapp.accounts.default.",
     );
+  });
+
+  it("defers the whole promotion for uncovered keys on an undeclared channel", () => {
+    const config = {
+      channels: {
+        "uninstalled-demo": {
+          dmPolicy: "allowlist",
+          appToken: "covered-legacy-key",
+          customAuth: "keep-at-root",
+          accounts: { work: { enabled: true } },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const res = normalizeCompatibilityConfigValues(config);
+
+    expect(res.config).toEqual(config);
+    expect(res.changes).toStrictEqual([]);
+  });
+
+  it("promotes the legacy tier when a loaded adapter is undeclared", () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "undeclared-demo",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "undeclared-demo", label: "Undeclared Demo" }),
+            setup: {
+              applyAccountConfig: ({ cfg }: { cfg: OpenClawConfig }) => cfg,
+            },
+          },
+        },
+      ]),
+    );
+
+    const res = normalizeCompatibilityConfigValues({
+      channels: {
+        "undeclared-demo": {
+          dmPolicy: "allowlist",
+          appToken: "legacy-app-token",
+          accounts: { work: { enabled: true } },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    const channel = res.config.channels?.["undeclared-demo"] as
+      | { dmPolicy?: string; appToken?: string; accounts?: Record<string, unknown> }
+      | undefined;
+    expect(channel?.dmPolicy).toBeUndefined();
+    expect(channel?.appToken).toBeUndefined();
+    expect(channel?.accounts?.default).toEqual({
+      dmPolicy: "allowlist",
+      appToken: "legacy-app-token",
+    });
+    expect(channel?.accounts?.work).toEqual({ enabled: true, dmPolicy: "allowlist" });
+  });
+
+  it("promotes generic and declared keys together after the plugin becomes available", () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "late-demo",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "late-demo", label: "Late Demo" }),
+            setup: {
+              applyAccountConfig: ({ cfg }: { cfg: OpenClawConfig }) => cfg,
+              singleAccountKeysToMove: ["customAuth"],
+            },
+          },
+        },
+      ]),
+    );
+
+    const res = normalizeCompatibilityConfigValues({
+      channels: {
+        "late-demo": {
+          dmPolicy: "allowlist",
+          customAuth: "move-with-plugin",
+          accounts: { work: { enabled: true } },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    const channel = res.config.channels?.["late-demo"] as
+      | { dmPolicy?: string; customAuth?: string; accounts?: Record<string, unknown> }
+      | undefined;
+    expect(channel?.dmPolicy).toBeUndefined();
+    expect(channel?.customAuth).toBeUndefined();
+    expect(channel?.accounts?.default).toEqual({
+      dmPolicy: "allowlist",
+      customAuth: "move-with-plugin",
+    });
+    expect(channel?.accounts?.work).toEqual({ enabled: true, dmPolicy: "allowlist" });
   });
 
   it.each(["discord", "slack", "telegram", "signal", "imessage", "irc"])(
@@ -616,7 +798,7 @@ describe("normalizeCompatibilityConfigValues", () => {
       },
     });
 
-    expect(res.config.agents?.defaults?.imageGenerationModel).toEqual({
+    expect(res.config.agents?.defaults?.mediaModels?.image).toEqual({
       primary: "google/gemini-3-pro-image-preview",
     });
     expect(res.config.models?.providers?.google?.apiKey).toEqual({
@@ -630,7 +812,7 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(res.config.models?.providers?.google?.models).toStrictEqual([]);
     expect(res.config.skills?.entries).toBeUndefined();
     expect(res.changes).toEqual([
-      "Moved skills.entries.nano-banana-pro → agents.defaults.imageGenerationModel.primary (google/gemini-3-pro-image-preview).",
+      "Moved skills.entries.nano-banana-pro → agents.defaults.mediaModels.image.primary (google/gemini-3-pro-image-preview).",
       "Moved skills.entries.nano-banana-pro.apiKey → models.providers.google.apiKey.",
       "Removed legacy skills.entries.nano-banana-pro.",
     ]);
@@ -759,19 +941,18 @@ describe("normalizeCompatibilityConfigValues", () => {
       'Removed duplicate agents.defaults.model fallback "openai/gpt-5.6-sol" after selecting it as the default primary.',
       'Removed stale agents.defaults.models entry "deleted/models-add-row" (provider "deleted" is unavailable).',
       'Added agents.defaults.models entry "openai/gpt-5.6-sol" to keep the repaired allowlist restrictive.',
-      'Removed stale agents.list[0].model "deleted/agent-primary" so agent "main" inherits the default model (provider "deleted" is unavailable).',
-      'Removed stale agents.list[0].models entry "deleted/agent-models-add-row" (provider "deleted" is unavailable).',
-      'Added agents.list[0].models entry "openai/gpt-5.6-sol" to keep the repaired allowlist restrictive.',
+      'Removed stale agents.list.main.model "deleted/agent-primary" so agent "main" inherits the default model (provider "deleted" is unavailable).',
+      'Removed stale agents.list.main.models entry "deleted/agent-models-add-row" (provider "deleted" is unavailable).',
+      'Added agents.list.main.models entry "openai/gpt-5.6-sol" to keep the repaired allowlist restrictive.',
     ]);
   });
 
-  it("preserves configured CLI backends and agent-local models.json providers", () => {
+  it("preserves plugin-owned CLI providers and agent-local models.json providers", () => {
     const result = repairStaleAgentModelRefs(
       {
         agents: {
           defaults: {
             model: "my-cli/model",
-            cliBackends: { "my-cli": { command: "my-cli" } },
           },
           list: [
             { id: "worker", model: "agent-local/model" },
@@ -780,7 +961,7 @@ describe("normalizeCompatibilityConfigValues", () => {
         },
       } as OpenClawConfig,
       {
-        pluginProviderIds: new Set(["anthropic"]),
+        pluginProviderIds: new Set(["anthropic", "my-cli"]),
         persistedProviderIdsByAgentId: new Map([["worker", new Set(["agent-local"])]]),
       },
     );
@@ -789,6 +970,31 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(result.config.agents?.defaults?.model).toBe("my-cli/model");
     expect(result.config.agents?.list?.[0]?.model).toBe("agent-local/model");
     expect(result.config.agents?.list?.[1]?.model).toBe("anthropic/claude-sonnet-4-6");
+  });
+
+  it("preserves model refs backed by a configured installable provider", () => {
+    const result = repairStaleAgentModelRefs(
+      {
+        plugins: {
+          allow: ["mistral"],
+          entries: { mistral: { enabled: true } },
+        },
+        agents: {
+          defaults: {
+            model: { primary: "mistral/mistral-large-latest" },
+          },
+        },
+      } as OpenClawConfig,
+      {
+        pluginProviderIds: new Set(),
+        persistedProviderIdsByAgentId: new Map(),
+      },
+    );
+
+    expect(result.changes).toEqual([]);
+    expect(result.config.agents?.defaults?.model).toEqual({
+      primary: "mistral/mistral-large-latest",
+    });
   });
 
   it("does not treat one agent-local provider as globally available", () => {
@@ -812,6 +1018,33 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(result.changes).toEqual([
       'Replaced stale agents.defaults.model "agent-local/model" with default "openai/gpt-5.6-sol" (provider "agent-local" is unavailable).',
     ]);
+  });
+
+  it("evaluates and repairs every canonical keyed agent", () => {
+    const result = repairStaleAgentModelRefs(
+      {
+        agents: {
+          defaults: { model: "agent-local/model" },
+          entries: {
+            main: { default: true },
+            worker: { model: "deleted/worker" },
+          },
+        },
+      } as OpenClawConfig,
+      {
+        pluginProviderIds: new Set(),
+        persistedProviderIdsByAgentId: new Map([
+          ["main", new Set(["agent-local"])],
+          ["worker", new Set()],
+        ]),
+      },
+    );
+
+    expect(result.config.agents?.defaults?.model).toBe("openai/gpt-5.6-sol");
+    expect(result.config.agents?.entries?.worker?.model).toBeUndefined();
+    expect(result.changes).toContain(
+      'Removed stale agents.entries.worker.model "deleted/worker" so agent "worker" inherits the default model (provider "deleted" is unavailable).',
+    );
   });
 
   it("keeps a repaired model allowlist restrictive", () => {
@@ -1501,8 +1734,8 @@ describe("normalizeCompatibilityConfigValues", () => {
     const res = normalizeCompatibilityConfigValues({
       agents: {
         defaults: {
-          imageGenerationModel: {
-            primary: "fal/fal-ai/flux/dev",
+          mediaModels: {
+            image: { primary: "fal/fal-ai/flux/dev" },
           },
         },
       },
@@ -1525,7 +1758,7 @@ describe("normalizeCompatibilityConfigValues", () => {
       },
     });
 
-    expect(res.config.agents?.defaults?.imageGenerationModel).toEqual({
+    expect(res.config.agents?.defaults?.mediaModels?.image).toEqual({
       primary: "fal/fal-ai/flux/dev",
     });
     expect(res.config.models?.providers?.google?.apiKey).toBe("existing-google-key");
@@ -2054,6 +2287,35 @@ describe("normalizeCompatibilityConfigValues", () => {
       "Normalized models.providers.mistral.models[0].cost.cacheRead (0 → 0.05) for Mistral prompt-cache billing.",
       "Normalized models.providers.mistral.models[1].maxTokens (128000 → 40000) to avoid Mistral context-window rejects.",
       "Normalized models.providers.mistral.models[1].cost.cacheRead (0 → 0.05) for Mistral prompt-cache billing.",
+    ]);
+  });
+
+  it("caps explicit mistral maxTokens above the named model limit", () => {
+    const res = normalizeCompatibilityConfigValues({
+      models: {
+        providers: {
+          mistral: {
+            baseUrl: "https://api.mistral.ai/v1",
+            api: "openai-completions",
+            models: [
+              {
+                id: "mistral-large-latest",
+                name: "Mistral Large",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 1, output: 2, cacheRead: 0.05, cacheWrite: 0 },
+                contextWindow: 32_768,
+                maxTokens: 17_000,
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(res.config.models?.providers?.mistral?.models?.[0]?.maxTokens).toBe(16_384);
+    expect(res.changes).toEqual([
+      "Normalized models.providers.mistral.models[0].maxTokens (17000 → 16384) to avoid Mistral context-window rejects.",
     ]);
   });
 

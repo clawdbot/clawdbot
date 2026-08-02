@@ -36,7 +36,6 @@ export {
   createMoonshotThinkingWrapper,
   createPlainTextToolCallCompatWrapper,
   createToolStreamWrapper,
-  createZaiToolStreamWrapper,
   defaultToolStreamExtraParams,
   isOpenAICompatibleThinkingEnabled,
   type ProviderStreamWrapperFactory,
@@ -220,7 +219,6 @@ export { createMinimaxFastModeWrapper } from "../llm/providers/stream-wrappers/m
 export {
   createOpenAIAttributionHeadersWrapper,
   createCodexNativeWebSearchWrapper,
-  createOpenAIDefaultTransportWrapper,
   createOpenAIFastModeWrapper,
   createOpenAIReasoningCompatibilityWrapper,
   createOpenAIResponsesContextManagementWrapper,

@@ -61,17 +61,13 @@ import { assertSlackDirectSendAllowed } from "./direct-send-admission.js";
 import { formatSlackError } from "./errors.js";
 import { shouldSuppressLocalSlackExecApprovalPrompt } from "./exec-approvals.js";
 import { resolveSlackGroupRequireMention, resolveSlackGroupToolPolicy } from "./group-policy.js";
-import {
-  compileSlackInteractiveReplies,
-  isSlackInteractiveRepliesEnabled,
-} from "./interactive-replies.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
 import { SLACK_PRESENTATION_CAPABILITIES } from "./presentation.js";
 import type { SlackProbe } from "./probe.js";
 import { resolveSlackReplyBlocks } from "./reply-blocks.js";
 import { getOptionalSlackRuntime } from "./runtime.js";
 import { slackSecurityAdapter } from "./security.js";
-import { createSlackSetupWizardProxy, slackSetupAdapter } from "./setup-core.js";
+import { createSlackSetupWizardProxy, slackSetupContract } from "./setup-core.js";
 import {
   createSlackPluginBase,
   isSlackPluginAccountConfigured,
@@ -470,10 +466,6 @@ const slackChannelOutbound: ChannelOutboundAdapter = {
   chunker: null,
   textChunkLimit: SLACK_TEXT_LIMIT,
   sanitizeText: ({ text }) => sanitizeAssistantVisibleText(text),
-  normalizePayload: ({ payload, cfg, accountId }) =>
-    isSlackInteractiveRepliesEnabled({ cfg, accountId })
-      ? compileSlackInteractiveReplies(payload)
-      : payload,
   deliveryCapabilities: {
     durableFinal: {
       text: true,
@@ -621,7 +613,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
   base: {
     ...createSlackPluginBase({
       setupWizard: createSlackSetupWizardProxy(loadSlackSetupSurfaceModule),
-      setup: slackSetupAdapter,
+      setupContract: slackSetupContract,
     }),
     allowlist: {
       ...buildLegacyDmAccountAllowlistAdapter({
@@ -676,12 +668,6 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
       },
       inferTargetChatType: ({ to }) => resolveSlackRouteTarget(to)?.chatType,
       resolveOutboundSessionRoute: async (params) => await resolveSlackOutboundSessionRoute(params),
-      transformReplyPayload: ({ payload, cfg, accountId }) =>
-        isSlackInteractiveRepliesEnabled({ cfg, accountId })
-          ? compileSlackInteractiveReplies(payload)
-          : payload,
-      enableInteractiveReplies: ({ cfg, accountId }) =>
-        isSlackInteractiveRepliesEnabled({ cfg, accountId }),
       hasStructuredReplyPayload: ({ payload }) => {
         try {
           return Boolean(resolveSlackReplyBlocks(payload)?.length);
@@ -796,7 +782,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
           snapshot,
           snapshot.identity === "user"
             ? {
-                identity: "user",
+                postAs: "user",
                 userTokenSource: snapshot.userTokenSource ?? "none",
                 ...(snapshot.mode === "http"
                   ? { signingSecretSource: snapshot.signingSecretSource ?? "none" }
@@ -872,7 +858,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
       },
       resolveAccountSnapshot: ({ account }) => {
         const mode = account.config.mode ?? "socket";
-        const identity = account.config.identity ?? "bot";
+        const identity = account.config.postAs ?? "bot";
         const credentialConfigured =
           mode === "http"
             ? resolveConfiguredFromRequiredCredentialStatuses(account, [
@@ -948,6 +934,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
   },
   security: slackSecurityAdapter,
   threading: {
+    threadAddressing: "message",
     matchesToolContextTarget: ({ target, toolContext }) =>
       slackContextTargetsMatch(target, toolContext),
     scopedAccountReplyToMode: {

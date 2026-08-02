@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
-import { list, run } from "./service/ops.js";
+import { list } from "./service/ops-read.js";
+import { run } from "./service/ops-run.js";
 import { createCronServiceState, type CronEvent, type CronServiceState } from "./service/state.js";
 import { ensureLoaded } from "./service/store.js";
 import { runMissedJobs } from "./service/timer.js";
@@ -205,17 +206,16 @@ describe.each(removalPaths)("cron one-shot removal via %s", (path) => {
     state.pendingQuarantineConfigJobs = [
       { sourceIndex: 0, reason: "invalid-schedule", job: { id: "quarantined-job" } },
     ];
-    vi.spyOn(cronStoreModule, "saveCronQuarantineFile").mockRejectedValue(
-      new Error("quarantine unavailable"),
-    );
-    const saveStore = vi.spyOn(cronStoreModule, "saveCronJobsStore");
+    const saveStore = vi
+      .spyOn(cronStoreModule, "saveCronJobsStore")
+      .mockRejectedValue(new Error("quarantine unavailable"));
 
     try {
       await expect(executeRemovalPath(path, state, job.id)).rejects.toThrow(
         "cron: durable store write did not complete",
       );
 
-      expect(saveStore).not.toHaveBeenCalled();
+      expect(saveStore).toHaveBeenCalledTimes(1);
       expect(events.some((event) => event.action === "removed")).toBe(false);
       const durableStore = await loadCronStore(storePath);
       expect(durableStore).toEqual(durableBefore);

@@ -69,14 +69,21 @@ class DiscordActivityButton extends Button {
           this.logPendingLaunchFailure(error);
           return "failed" as const;
         });
+      let timer: ReturnType<typeof setTimeout> | undefined;
       const timeout = new Promise<"timeout">((resolve) => {
-        const timer = setTimeout(() => resolve("timeout"), PENDING_LAUNCH_WRITE_BUDGET_MS);
+        timer = setTimeout(() => resolve("timeout"), PENDING_LAUNCH_WRITE_BUDGET_MS);
         timer.unref?.();
       });
-      if ((await Promise.race([write, timeout])) === "timeout") {
-        this.logPendingLaunchFailure(
-          new Error(`pending launch write exceeded ${PENDING_LAUNCH_WRITE_BUDGET_MS}ms`),
-        );
+      try {
+        if ((await Promise.race([write, timeout])) === "timeout") {
+          this.logPendingLaunchFailure(
+            new Error(`pending launch write exceeded ${PENDING_LAUNCH_WRITE_BUDGET_MS}ms`),
+          );
+        }
+      } finally {
+        if (timer) {
+          clearTimeout(timer);
+        }
       }
     }
     await interaction.launchActivity();

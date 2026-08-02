@@ -7,10 +7,8 @@ import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString as parseString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString as parseString } from "@openclaw/normalization-core/string-coerce";
+import { isApprovalNotFoundError } from "../infra/approval-errors.js";
 import type {
   ExecApprovalCommandSpan,
   ExecApprovalUnavailableDecision,
@@ -21,7 +19,7 @@ import type {
 import { normalizeExecutableToken } from "../infra/exec-wrapper-tokens.js";
 import {
   isShellWrapperExecutable,
-  POSIX_SHELL_WRAPPERS,
+  POSIX_PARSEABLE_SHELL_WRAPPERS,
   resolveShellWrapperTransportArgv,
 } from "../infra/shell-wrapper-resolution.js";
 import { createLazyPromise } from "../shared/lazy-runtime.js";
@@ -31,7 +29,7 @@ import {
 } from "./bash-tools.exec-runtime.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
-const POSIX_COMMAND_HIGHLIGHT_SHELLS: ReadonlySet<string> = POSIX_SHELL_WRAPPERS;
+const POSIX_COMMAND_HIGHLIGHT_SHELLS: ReadonlySet<string> = POSIX_PARSEABLE_SHELL_WRAPPERS;
 
 const loadExecApprovalCommandSpansRuntime = createLazyPromise(
   () => import("./bash-tools.exec-approval-request.runtime.js"),
@@ -197,8 +195,7 @@ export async function resolveRegisteredExecApprovalDecision(params: {
     return parseDecision(decisionResult).value;
   } catch (err) {
     // Timeout/cleanup path: treat missing/expired as no decision so askFallback applies.
-    const message = normalizeLowercaseStringOrEmpty(String(err));
-    if (message.includes("approval expired or not found")) {
+    if (isApprovalNotFoundError(err)) {
       return null;
     }
     throw err;

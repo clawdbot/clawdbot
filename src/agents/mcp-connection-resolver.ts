@@ -8,6 +8,7 @@ import { resolveOpenClawMcpTransportAlias } from "../config/mcp-config-normalize
 import { logWarn } from "../logger.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
+import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import type {
   McpServerConnectionResolved,
   McpServerConnectionResolveContext,
@@ -136,15 +137,14 @@ function listMcpServerConnectionResolversByServerName(): Map<
   if (testOverrides) {
     return new Map([...testOverrides.entries()].toSorted(([a], [b]) => a.localeCompare(b)));
   }
-  const registry = getActivePluginRegistry();
   const byName = new Map<string, McpServerConnectionResolverEntry>();
+  const registry =
+    getPluginRuntimeGatewayRequestScope()?.pluginRegistry ?? getActivePluginRegistry();
   for (const entry of registry?.mcpServerConnectionResolvers ?? []) {
     const serverName = normalizeOptionalString(entry.resolver.serverName);
-    if (!serverName || typeof entry.resolver.resolve !== "function") {
+    if (!serverName || typeof entry.resolver.resolve !== "function" || byName.has(serverName)) {
       continue;
     }
-    // The registry registrar rejects duplicate serverName claims across
-    // plugins, so entries here are unique per server.
     byName.set(serverName, {
       pluginId: entry.pluginId,
       serverName,
@@ -160,7 +160,7 @@ export function partitionMcpServersByConnectionScope<T>(mcpServers: Record<strin
   requesterScopedServerNames: string[];
 } {
   const resolvers = listMcpServerConnectionResolversByServerName();
-  const staticServers: Record<string, T> = {};
+  const staticServerEntries: Array<[string, T]> = [];
   const requesterScopedServerNames: string[] = [];
   for (const [serverName, rawServer] of Object.entries(mcpServers).toSorted(([a], [b]) =>
     a.localeCompare(b),
@@ -169,8 +169,11 @@ export function partitionMcpServersByConnectionScope<T>(mcpServers: Record<strin
       requesterScopedServerNames.push(serverName);
       continue;
     }
-    staticServers[serverName] = rawServer;
+    staticServerEntries.push([serverName, rawServer]);
   }
+  // Data-property construction preserves every own key from unvalidated inputs,
+  // including "__proto__", without invoking Object.prototype's legacy setter.
+  const staticServers = Object.fromEntries(staticServerEntries);
   return { staticServers, requesterScopedServerNames };
 }
 

@@ -4,9 +4,8 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - channels.threads
+      - matrix.matrix-thread-reply-routing
   execution:
-    profiles: { "matrix:all": 3, "matrix:transport": 2 }
     kind: flow
     channel: matrix
     timeoutMs: 60000

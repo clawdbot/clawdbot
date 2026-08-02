@@ -16,6 +16,7 @@ const SmsAccountConfigSchema = z
   .object({
     name: z.string().optional(),
     enabled: z.boolean().optional(),
+    configWrites: z.boolean().optional(),
     accountSid: z.string().optional(),
     authToken: SecretInputSchema.optional(),
     fromNumber: z.string().optional(),
@@ -60,6 +61,7 @@ export const SmsChannelConfigSchema = buildChannelConfigSchema(SmsConfigSchema, 
     fromNumber: {
       label: "SMS From Number",
       help: "Twilio SMS-capable phone number in E.164 format, for example +15551234567.",
+      presentation: "phone-number",
     },
     messagingServiceSid: {
       label: "Twilio Messaging Service SID",
@@ -68,6 +70,7 @@ export const SmsChannelConfigSchema = buildChannelConfigSchema(SmsConfigSchema, 
     defaultTo: {
       label: "SMS Default To Number",
       help: "Optional default outbound phone number used when a send flow omits an explicit SMS target.",
+      presentation: "phone-number",
     },
     publicWebhookUrl: {
       label: "SMS Public Webhook URL",
@@ -84,7 +87,11 @@ export const SmsChannelConfigSchema = buildChannelConfigSchema(SmsConfigSchema, 
     allowFrom: {
       label: "SMS Allow From",
       help: "Allowed sender phone numbers in E.164 format, or * when dmPolicy is open.",
+      presentation: "phone-number",
     },
+    "accounts.*.fromNumber": { presentation: "phone-number" },
+    "accounts.*.defaultTo": { presentation: "phone-number" },
+    "accounts.*.allowFrom.*": { presentation: "phone-number" },
     textChunkLimit: {
       label: "SMS Text Chunk Limit",
       help: "Maximum characters per outbound SMS chunk before OpenClaw splits long replies.",

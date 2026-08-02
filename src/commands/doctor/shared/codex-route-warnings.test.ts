@@ -2086,24 +2086,23 @@ describe("collectCodexRouteWarnings", () => {
                 model: "openai-codex/gpt-5.4-mini",
               },
             },
-            imageGenerationModel: {
-              primary: "openai-codex/gpt-image-2",
-              fallbacks: ["openai-codex/gpt-image-1"],
-            },
-            videoGenerationModel: {
-              primary: "openai-codex/sora-2",
+            mediaModels: {
+              image: {
+                primary: "openai-codex/gpt-image-2",
+                fallbacks: ["openai-codex/gpt-image-1"],
+              },
+              video: { primary: "openai-codex/sora-2" },
             },
             models: {
               "openai-codex/gpt-5.5": { alias: "codex" },
             },
           },
-          list: [
-            {
-              id: "worker",
+          entries: {
+            worker: {
               model: "openai-codex/gpt-5.4",
               agentRuntime: { id: "codex" },
             },
-          ],
+          },
         },
         channels: {
           modelByChannel: {
@@ -2122,10 +2121,8 @@ describe("collectCodexRouteWarnings", () => {
             model: "openai-codex/gpt-5.4",
           },
         },
-        messages: {
-          tts: {
-            summaryModel: "openai-codex/gpt-5.4-mini",
-          },
+        tts: {
+          summaryModel: "openai-codex/gpt-5.4-mini",
         },
       } as unknown as OpenClawConfig,
       shouldRepair: true,
@@ -2138,25 +2135,25 @@ describe("collectCodexRouteWarnings", () => {
         "Repaired Codex model routes:",
         "- agents.defaults.model.primary: openai-codex/gpt-5.5 -> openai/gpt-5.5.",
         "- agents.defaults.model.fallbacks.0: openai-codex/gpt-5.4 -> openai/gpt-5.4.",
-        "- agents.defaults.imageGenerationModel.primary: openai-codex/gpt-image-2 -> openai/gpt-image-2.",
-        "- agents.defaults.imageGenerationModel.fallbacks.0: openai-codex/gpt-image-1 -> openai/gpt-image-1.",
-        "- agents.defaults.videoGenerationModel.primary: openai-codex/sora-2 -> openai/sora-2.",
         "- agents.defaults.heartbeat.model: openai-codex/gpt-5.4-mini -> openai/gpt-5.4-mini.",
         "- agents.defaults.subagents.model.primary: openai-codex/gpt-5.5 -> openai/gpt-5.5.",
         "- agents.defaults.subagents.model.fallbacks.0: openai-codex/gpt-5.4 -> openai/gpt-5.4.",
         "- agents.defaults.compaction.memoryFlush.model: openai-codex/gpt-5.4-mini -> openai/gpt-5.4-mini.",
+        "- agents.defaults.mediaModels.image.primary: openai-codex/gpt-image-2 -> openai/gpt-image-2.",
+        "- agents.defaults.mediaModels.image.fallbacks.0: openai-codex/gpt-image-1 -> openai/gpt-image-1.",
+        "- agents.defaults.mediaModels.video.primary: openai-codex/sora-2 -> openai/sora-2.",
         "- agents.defaults.models.openai-codex/gpt-5.5: openai-codex/gpt-5.5 -> openai/gpt-5.5.",
-        "- agents.list.worker.model: openai-codex/gpt-5.4 -> openai/gpt-5.4.",
+        "- agents.entries.worker.model: openai-codex/gpt-5.4 -> openai/gpt-5.4.",
         "- channels.modelByChannel.telegram.default: openai-codex/gpt-5.4 -> openai/gpt-5.4.",
         "- hooks.mappings.0.model: openai-codex/gpt-5.4-mini -> openai/gpt-5.4-mini.",
         "- hooks.gmail.model: openai-codex/gpt-5.4 -> openai/gpt-5.4.",
-        "- messages.tts.summaryModel: openai-codex/gpt-5.4-mini -> openai/gpt-5.4-mini.",
+        "- tts.summaryModel: openai-codex/gpt-5.4-mini -> openai/gpt-5.4-mini.",
       ].join("\n"),
       'Set agents.defaults.models.openai/gpt-5.5.agentRuntime.id to "codex" so repaired OpenAI refs keep Codex auth routing.',
       'Set agents.defaults.models.openai/gpt-5.4.agentRuntime.id to "codex" so repaired OpenAI refs keep Codex auth routing.',
-      'Set agents.list.worker.models.openai/gpt-5.4.agentRuntime.id to "codex" so repaired OpenAI refs keep Codex auth routing.',
+      'Set agents.entries.worker.models.openai/gpt-5.4.agentRuntime.id to "codex" so repaired OpenAI refs keep Codex auth routing.',
       "Removed agents.defaults.agentRuntime; runtime is now provider/model scoped.",
-      "Removed agents.list.worker.agentRuntime; runtime is now provider/model scoped.",
+      "Removed agents.entries.worker.agentRuntime; runtime is now provider/model scoped.",
       "Removed agents.defaults.compaction.model; Codex runtime uses native server-side compaction.",
     ]);
     expect(result.cfg.agents?.defaults?.model).toEqual({
@@ -2170,11 +2167,11 @@ describe("collectCodexRouteWarnings", () => {
     });
     expect(result.cfg.agents?.defaults?.compaction?.model).toBeUndefined();
     expect(result.cfg.agents?.defaults?.compaction?.memoryFlush?.model).toBe("openai/gpt-5.4-mini");
-    expect(result.cfg.agents?.defaults?.imageGenerationModel).toEqual({
+    expect(result.cfg.agents?.defaults?.mediaModels?.image).toEqual({
       primary: "openai/gpt-image-2",
       fallbacks: ["openai/gpt-image-1"],
     });
-    expect(result.cfg.agents?.defaults?.videoGenerationModel).toEqual({
+    expect(result.cfg.agents?.defaults?.mediaModels?.video).toEqual({
       primary: "openai/sora-2",
     });
     expect(result.cfg.agents?.defaults?.agentRuntime).toBeUndefined();
@@ -2182,16 +2179,15 @@ describe("collectCodexRouteWarnings", () => {
       "openai/gpt-5.5": { alias: "codex", agentRuntime: { id: "codex" } },
       "openai/gpt-5.4": { agentRuntime: { id: "codex" } },
     });
-    expect(result.cfg.agents?.list?.[0]?.id).toBe("worker");
-    expect(result.cfg.agents?.list?.[0]?.model).toBe("openai/gpt-5.4");
-    expect(result.cfg.agents?.list?.[0]?.agentRuntime).toBeUndefined();
-    expect(result.cfg.agents?.list?.[0]?.models).toEqual({
+    expect(result.cfg.agents?.entries?.worker?.model).toBe("openai/gpt-5.4");
+    expect(result.cfg.agents?.entries?.worker?.agentRuntime).toBeUndefined();
+    expect(result.cfg.agents?.entries?.worker?.models).toEqual({
       "openai/gpt-5.4": { agentRuntime: { id: "codex" } },
     });
     expect(result.cfg.channels?.modelByChannel?.telegram?.default).toBe("openai/gpt-5.4");
     expect(result.cfg.hooks?.mappings?.[0]?.model).toBe("openai/gpt-5.4-mini");
     expect(result.cfg.hooks?.gmail?.model).toBe("openai/gpt-5.4");
-    expect(result.cfg.messages?.tts?.summaryModel).toBe("openai/gpt-5.4-mini");
+    expect(result.cfg.tts?.summaryModel).toBe("openai/gpt-5.4-mini");
   });
 
   it("keeps whole-agent runtime pins while repairing compaction-only model refs and overrides", () => {
@@ -3926,10 +3922,8 @@ describe("collectCodexRouteWarnings", () => {
         hooks: {
           mappings: [{ model: "openai-codex/gpt-5.4" }],
         },
-        messages: {
-          tts: {
-            summaryModel: "openai-codex/gpt-5.4",
-          },
+        tts: {
+          summaryModel: "openai-codex/gpt-5.4",
         },
       } as unknown as OpenClawConfig,
       shouldRepair: true,
@@ -3939,7 +3933,7 @@ describe("collectCodexRouteWarnings", () => {
     expect(result.cfg.channels?.modelByChannel?.telegram?.default).toBe("openai/gpt-5.5");
     expect(result.cfg.channels?.discord?.voice?.model).toBe("openai/gpt-5.4-mini");
     expect(result.cfg.hooks?.mappings?.[0]?.model).toBe("openai/gpt-5.4");
-    expect(result.cfg.messages?.tts?.summaryModel).toBe("openai/gpt-5.4");
+    expect(result.cfg.tts?.summaryModel).toBe("openai/gpt-5.4");
     expect(result.cfg.agents?.defaults?.models).toBeUndefined();
   });
 
@@ -4004,9 +3998,12 @@ describe("collectCodexRouteWarnings", () => {
         authProfileOverride: "openai-codex:default",
         authProfileOverrideSource: "auto",
         authProfileOverrideCompactionCount: 2,
-        fallbackNoticeSelectedModel: "openai-codex/gpt-5.5",
-        fallbackNoticeActiveModel: "openai-codex/gpt-5.4",
-        fallbackNoticeReason: "rate-limit",
+        fallbackNotice: {
+          kind: "active",
+          selectedModel: "openai-codex/gpt-5.5",
+          activeModel: "openai-codex/gpt-5.4",
+          reason: "rate-limit",
+        },
       },
       other: {
         sessionId: "s2",
@@ -4027,6 +4024,9 @@ describe("collectCodexRouteWarnings", () => {
     expect(expectDefined(store.main, "store.main test invariant").providerOverride).toBe("openai");
     expect(expectDefined(store.main, "store.main test invariant").modelOverride).toBe("gpt-5.4");
     expect(expectDefined(store.main, "store.main test invariant").modelOverrideSource).toBe("auto");
+    expect(
+      expectDefined(store.main, "store.main test invariant").modelOverrideRouteResolution,
+    ).toBe("resolved");
     expect(expectDefined(store.main, "store.main test invariant").authProfileOverride).toBe(
       "openai-codex:default",
     );
@@ -4040,15 +4040,7 @@ describe("collectCodexRouteWarnings", () => {
     expect(expectDefined(store.main, "store.main test invariant").agentRuntimeOverride).toBe(
       "codex",
     );
-    expect(
-      expectDefined(store.main, "store.main test invariant").fallbackNoticeSelectedModel,
-    ).toBeUndefined();
-    expect(
-      expectDefined(store.main, "store.main test invariant").fallbackNoticeActiveModel,
-    ).toBeUndefined();
-    expect(
-      expectDefined(store.main, "store.main test invariant").fallbackNoticeReason,
-    ).toBeUndefined();
+    expect(expectDefined(store.main, "store.main test invariant").fallbackNotice).toBeUndefined();
     expect(expectDefined(store.other, "store.other test invariant").updatedAt).toBe(2);
     expect(expectDefined(store.other, "store.other test invariant").agentHarnessId).toBe("codex");
   });
@@ -4064,7 +4056,11 @@ describe("collectCodexRouteWarnings", () => {
         modelOverride: "codex/gpt-5.6-sol",
         authProfileOverride: "codex:default",
         authProfileOverrideSource: "auto",
-        fallbackNoticeSelectedModel: "codex/gpt-5.6-sol",
+        fallbackNotice: {
+          kind: "active",
+          selectedModel: "codex/gpt-5.6-sol",
+          activeModel: "openai/gpt-5.6-sol",
+        },
         agentRuntimeOverride: "codex",
       },
     };
@@ -4080,7 +4076,7 @@ describe("collectCodexRouteWarnings", () => {
       authProfileOverride: "codex:default",
       updatedAt: 123,
     });
-    expect(store.main?.fallbackNoticeSelectedModel).toBeUndefined();
+    expect(store.main?.fallbackNotice).toBeUndefined();
     expect(store.main?.agentRuntimeOverride).toBe("codex");
   });
 
@@ -4181,18 +4177,19 @@ describe("collectCodexRouteWarnings", () => {
         updatedAt: 1,
         modelProvider: "openai",
         model: "gpt-5.6-sol",
-        fallbackNoticeSelectedModel: "codex/gpt-5.6-sol",
-        fallbackNoticeActiveModel: "openai/gpt-5.6-sol",
-        fallbackNoticeReason: "rate-limit",
+        fallbackNotice: {
+          kind: "active",
+          selectedModel: "codex/gpt-5.6-sol",
+          activeModel: "openai/gpt-5.6-sol",
+          reason: "rate-limit",
+        },
       },
     };
 
     const result = repairCodexSessionStoreRoutes({ store, now: 123 });
 
     expect(result).toEqual({ changed: true, sessionKeys: ["main"] });
-    expect(store.main?.fallbackNoticeSelectedModel).toBeUndefined();
-    expect(store.main?.fallbackNoticeActiveModel).toBeUndefined();
-    expect(store.main?.fallbackNoticeReason).toBeUndefined();
+    expect(store.main?.fallbackNotice).toBeUndefined();
   });
 
   it("retains a fallback notice atomically when one legacy endpoint is blocked", () => {
@@ -4202,9 +4199,12 @@ describe("collectCodexRouteWarnings", () => {
         updatedAt: 1,
         modelProvider: "openai",
         model: "gpt-5.6-sol",
-        fallbackNoticeSelectedModel: "codex/gpt-5.6-sol",
-        fallbackNoticeActiveModel: "openai/gpt-5.6-sol",
-        fallbackNoticeReason: "rate-limit",
+        fallbackNotice: {
+          kind: "active",
+          selectedModel: "codex/gpt-5.6-sol",
+          activeModel: "openai/gpt-5.6-sol",
+          reason: "rate-limit",
+        },
       },
     };
     // Build the blocked identity through the production plan so the test
@@ -4230,9 +4230,12 @@ describe("collectCodexRouteWarnings", () => {
     expect(result).toEqual({ changed: false, sessionKeys: [] });
     expect(store.main).toMatchObject({
       updatedAt: 1,
-      fallbackNoticeSelectedModel: "codex/gpt-5.6-sol",
-      fallbackNoticeActiveModel: "openai/gpt-5.6-sol",
-      fallbackNoticeReason: "rate-limit",
+      fallbackNotice: {
+        kind: "active",
+        selectedModel: "codex/gpt-5.6-sol",
+        activeModel: "openai/gpt-5.6-sol",
+        reason: "rate-limit",
+      },
     });
   });
 
@@ -4243,16 +4246,19 @@ describe("collectCodexRouteWarnings", () => {
         updatedAt: 1,
         modelProvider: "openai",
         model: "gpt-5.6-sol",
-        fallbackNoticeSelectedModel: "codex/gpt-5.6-sol",
-        fallbackNoticeReason: "rate-limit",
+        fallbackNotice: {
+          kind: "active",
+          selectedModel: "codex/gpt-5.6-sol",
+          activeModel: "openai/gpt-5.6-sol",
+          reason: "rate-limit",
+        },
       },
     };
 
     const result = repairCodexSessionStoreRoutes({ store, now: 123 });
 
     expect(result).toEqual({ changed: true, sessionKeys: ["main"] });
-    expect(store.main?.fallbackNoticeSelectedModel).toBeUndefined();
-    expect(store.main?.fallbackNoticeReason).toBeUndefined();
+    expect(store.main?.fallbackNotice).toBeUndefined();
     expect(store.main?.agentRuntimeOverride).toBeUndefined();
     expect(store.main?.agentHarnessId).toBeUndefined();
   });
@@ -4270,7 +4276,11 @@ describe("collectCodexRouteWarnings", () => {
       model: "gpt-5.5",
       providerOverride: "openai-codex",
       modelOverride: "openai-codex/gpt-5.4",
-      fallbackNoticeSelectedModel: "openai-codex/gpt-5.5",
+      fallbackNotice: {
+        kind: "active",
+        selectedModel: "openai-codex/gpt-5.5",
+        activeModel: "openai-codex/gpt-5.4",
+      },
     };
     const store: Record<string, SessionEntry> = {
       [supervisedKey]: lockedEntry,
@@ -4428,6 +4438,7 @@ describe("collectCodexRouteWarnings", () => {
     expect(entry.providerOverride).toBe("openai");
     expect(entry.modelOverride).toBe("gpt-5.5");
     expect(entry.modelOverrideSource).toBe("auto");
+    expect(entry.modelOverrideRouteResolution).toBe("resolved");
     expect(entry.authProfileOverride).toBe("openai:work");
     expect(entry.authProfileOverrideSource).toBe("auto");
     expect(entry.agentHarnessId).toBeUndefined();
@@ -4478,6 +4489,9 @@ describe("collectCodexRouteWarnings", () => {
     expect(expectDefined(store.main, "store.main test invariant").providerOverride).toBe("openai");
     expect(expectDefined(store.main, "store.main test invariant").modelOverride).toBe("gpt-5.5");
     expect(expectDefined(store.main, "store.main test invariant").modelOverrideSource).toBe("auto");
+    expect(
+      expectDefined(store.main, "store.main test invariant").modelOverrideRouteResolution,
+    ).toBe("resolved");
     expect(expectDefined(store.main, "store.main test invariant").authProfileOverride).toBe(
       "openai-codex:default",
     );

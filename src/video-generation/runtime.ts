@@ -99,7 +99,7 @@ function buildNoVideoGenerationModelConfiguredMessage(
   const listProviders = deps.listProviders ?? listVideoGenerationProviders;
   return buildNoCapabilityModelConfiguredMessage({
     capabilityLabel: "video-generation",
-    modelConfigKey: "videoGenerationModel",
+    modelConfigKey: "mediaModels.video",
     providers: listProviders(cfg),
     getProviderEnvVars: deps.getProviderEnvVars,
   });
@@ -121,10 +121,10 @@ export async function generateVideo(
   const logger = deps.log ?? log;
   const requestedTimeoutMs =
     params.timeoutMs ??
-    resolveAgentModelTimeoutMsValue(params.cfg.agents?.defaults?.videoGenerationModel);
+    resolveAgentModelTimeoutMsValue(params.cfg.agents?.defaults?.mediaModels?.video);
   const candidates = resolveCapabilityModelCandidates({
     cfg: params.cfg,
-    modelConfig: params.cfg.agents?.defaults?.videoGenerationModel,
+    modelConfig: params.cfg.agents?.defaults?.mediaModels?.video,
     modelOverride: params.modelOverride,
     parseModelRef: parseVideoGenerationModelRef,
     agentDir: params.agentDir,

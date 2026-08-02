@@ -60,7 +60,7 @@ describe("buildTelegramMessageContext prompt context", () => {
     });
 
     expect(ctx?.ctxPayload.SessionKey).toBe("agent:main:main");
-    expect(ctx?.ctxPayload.UntrustedStructuredContext).toBeUndefined();
+    expect(ctx?.ctxPayload.ChannelStructuredContext).toBeUndefined();
   });
 
   it("keeps Telegram chat-window context for fresh private DM sessions", async () => {
@@ -73,7 +73,7 @@ describe("buildTelegramMessageContext prompt context", () => {
       promptContext: [telegramChatWindowContext],
     });
 
-    expect(ctx?.ctxPayload.UntrustedStructuredContext).toEqual([telegramChatWindowContext]);
+    expect(ctx?.ctxPayload.ChannelStructuredContext).toEqual([telegramChatWindowContext]);
   });
 
   it("keeps Telegram chat-window context for existing private DM replies", async () => {
@@ -97,7 +97,7 @@ describe("buildTelegramMessageContext prompt context", () => {
       },
     });
 
-    expect(ctx?.ctxPayload.UntrustedStructuredContext).toEqual([telegramChatWindowContext]);
+    expect(ctx?.ctxPayload.ChannelStructuredContext).toEqual([telegramChatWindowContext]);
   });
 
   it("preserves richer chat-window fields when merging duplicate group history", async () => {
@@ -148,7 +148,7 @@ describe("buildTelegramMessageContext prompt context", () => {
       ],
     });
 
-    expect(ctx?.ctxPayload.UntrustedStructuredContext).toEqual([
+    expect(ctx?.ctxPayload.ChannelStructuredContext).toEqual([
       expect.objectContaining({
         type: "chat_window",
         payload: expect.objectContaining({
@@ -213,7 +213,7 @@ describe("buildTelegramMessageContext prompt context", () => {
       },
     });
 
-    expect(ctx?.ctxPayload.UntrustedStructuredContext).toEqual([
+    expect(ctx?.ctxPayload.ChannelStructuredContext).toEqual([
       expect.objectContaining({
         type: "chat_window",
         payload: expect.objectContaining({
@@ -226,7 +226,7 @@ describe("buildTelegramMessageContext prompt context", () => {
         }),
       }),
     ]);
-    expect(JSON.stringify(ctx?.ctxPayload.UntrustedStructuredContext)).not.toContain(
+    expect(JSON.stringify(ctx?.ctxPayload.ChannelStructuredContext)).not.toContain(
       "persisted ambient",
     );
   });
@@ -331,7 +331,7 @@ describe("buildTelegramMessageContext prompt context", () => {
       SenderName: "Pat",
     });
     expect(ctx.ctxPayload.InboundHistory).toBeUndefined();
-    expect(ctx.ctxPayload.UntrustedStructuredContext).toBeUndefined();
+    expect(ctx.ctxPayload.ChannelStructuredContext).toBeUndefined();
   });
 
   it("backfills Telegram group history when the ambient watermark belongs to a reset session", async () => {
@@ -410,7 +410,7 @@ describe("buildTelegramMessageContext prompt context", () => {
       },
     });
 
-    expect(ctx?.ctxPayload.UntrustedStructuredContext).toEqual([
+    expect(ctx?.ctxPayload.ChannelStructuredContext).toEqual([
       expect.objectContaining({
         type: "chat_window",
         payload: expect.objectContaining({

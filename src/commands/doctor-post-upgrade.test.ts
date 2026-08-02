@@ -3,13 +3,37 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { resetLogger, setLoggerOverride } from "../logging.js";
 import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store.js";
 import type { InstalledPluginIndex } from "../plugins/installed-plugin-index.js";
 import { runPostUpgradeProbes } from "./doctor-post-upgrade.js";
 
 async function makeFixtureRoot(prefix: string): Promise<string> {
   return await fs.mkdtemp(path.join(os.tmpdir(), `doctor-post-upgrade-${prefix}-`));
+}
+
+async function writeDeclaredPackageFixture(root: string, packageContents: string): Promise<string> {
+  const pluginDir = path.join(root, "user-plugins", "broken");
+  await fs.mkdir(pluginDir, { recursive: true });
+  await fs.writeFile(path.join(pluginDir, "package.json"), packageContents, "utf-8");
+  const installsPath = path.join(root, "plugins", "installs.json");
+  await fs.mkdir(path.dirname(installsPath), { recursive: true });
+  await fs.writeFile(
+    installsPath,
+    JSON.stringify({
+      plugins: [
+        {
+          pluginId: "broken",
+          rootDir: pluginDir,
+          enabled: true,
+          packageJson: { path: "package.json" },
+        },
+      ],
+    }),
+    "utf-8",
+  );
+  return installsPath;
 }
 
 describe("runPostUpgradeProbes — plugin.index_unavailable", () => {
@@ -75,6 +99,153 @@ describe("runPostUpgradeProbes — plugin.index_unavailable", () => {
 });
 
 describe("runPostUpgradeProbes — plugin.entry_unresolved", () => {
+  it("reports unreadable plugin packages as structured errors without losing JSON console diagnostics", async () => {
+    const root = await makeFixtureRoot("entry-unreadable-json");
+    const stderrSpy = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation(() => true as unknown as ReturnType<typeof process.stderr.write>);
+    try {
+      const installsPath = path.join(root, "plugins", "installs.json");
+      await fs.mkdir(path.dirname(installsPath), { recursive: true });
+      await fs.writeFile(
+        installsPath,
+        JSON.stringify({
+          plugins: [
+            {
+              pluginId: "broken",
+              rootDir: path.join(root, "broken"),
+              enabled: true,
+              packageJson: { path: "missing-package.json" },
+            },
+          ],
+        }),
+        "utf-8",
+      );
+      setLoggerOverride({ level: "silent", consoleLevel: "info", consoleStyle: "json" });
+
+      const report = await runPostUpgradeProbes({ installsPath });
+
+      expect(report.findings).toEqual([
+        expect.objectContaining({
+          level: "error",
+          code: "plugin.entry_unresolved",
+          plugin: "broken",
+          entry: "missing-package.json",
+          message: expect.stringContaining("openclaw plugins registry --refresh"),
+        }),
+      ]);
+      const line = stderrSpy.mock.calls.map(([value]) => String(value)).join("");
+      expect(JSON.parse(line)).toMatchObject({
+        level: "warn",
+        message: expect.stringContaining("could not read package.json for broken"),
+      });
+    } finally {
+      stderrSpy.mockRestore();
+      resetLogger();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reports malformed declared plugin packages as entry resolution errors", async () => {
+    const root = await makeFixtureRoot("entry-malformed-package");
+    const stderrSpy = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation(() => true as unknown as ReturnType<typeof process.stderr.write>);
+    try {
+      const installsPath = await writeDeclaredPackageFixture(root, "{ not json");
+      const report = await runPostUpgradeProbes({ installsPath });
+
+      expect(report.findings).toEqual([
+        expect.objectContaining({
+          level: "error",
+          code: "plugin.entry_unresolved",
+          plugin: "broken",
+          entry: "package.json",
+          message: expect.stringContaining("openclaw plugins registry --refresh"),
+        }),
+      ]);
+      expect(stderrSpy).toHaveBeenCalled();
+    } finally {
+      stderrSpy.mockRestore();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    { label: "null", packageJson: null },
+    { label: "array", packageJson: [] },
+    { label: "string", packageJson: "not a package" },
+  ])("rejects a $label declared package manifest", async ({ label, packageJson }) => {
+    const root = await makeFixtureRoot(`entry-non-object-${label}`);
+    const stderrSpy = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation(() => true as unknown as ReturnType<typeof process.stderr.write>);
+    try {
+      const installsPath = await writeDeclaredPackageFixture(root, JSON.stringify(packageJson));
+      const report = await runPostUpgradeProbes({ installsPath });
+
+      expect(report.findings).toEqual([
+        expect.objectContaining({
+          level: "error",
+          code: "plugin.entry_unresolved",
+          plugin: "broken",
+          entry: "package.json",
+          message: expect.stringContaining("package.json must contain a JSON object"),
+        }),
+      ]);
+    } finally {
+      stderrSpy.mockRestore();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    {
+      label: "non-object metadata",
+      openclaw: "invalid",
+      reason: "package.json openclaw must be an object",
+    },
+    {
+      label: "non-array entries",
+      openclaw: { extensions: "./dist/index.js" },
+      reason: "package.json openclaw.extensions must be an array",
+    },
+    {
+      label: "blank entries",
+      openclaw: { extensions: ["  "] },
+      reason: "package.json openclaw.extensions[0] must be a non-empty string",
+    },
+    {
+      label: "non-string entries",
+      openclaw: { extensions: [42] },
+      reason: "package.json openclaw.extensions[0] must be a non-empty string",
+    },
+  ])(
+    "reports $label through the canonical package contract",
+    async ({ label, openclaw, reason }) => {
+      const root = await makeFixtureRoot(`entry-invalid-${label.replaceAll(" ", "-")}`);
+      try {
+        const installsPath = await writeDeclaredPackageFixture(
+          root,
+          JSON.stringify({ name: "broken", openclaw }),
+        );
+        const report = await runPostUpgradeProbes({ installsPath });
+
+        expect(report.findings).toEqual([
+          expect.objectContaining({
+            level: "error",
+            code: "plugin.entry_unresolved",
+            plugin: "broken",
+            entry: "package.json",
+            message: expect.stringContaining(reason),
+          }),
+        ]);
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("reads the canonical SQLite plugin index by default", async () => {
     const root = await makeFixtureRoot("entry-sqlite");
     try {

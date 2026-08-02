@@ -39,6 +39,7 @@ import type { AgentTurnTimingTracker } from "./agent-runner-turn-timing.js";
 import { buildEmbeddedRunExecutionParams } from "./agent-runner-utils.js";
 import type { FollowupRun } from "./queue.js";
 import { isReplyOperationRestartAbort } from "./reply-operation-abort.js";
+import { markReplyOperationGlobalLaneWaitProgress } from "./reply-run-registry.js";
 
 type EmbeddedPresentation = Pick<
   ReturnType<typeof createAgentTurnPresentation>,
@@ -144,6 +145,7 @@ export async function runEmbeddedFallbackCandidate(params: {
           agentId: embeddedContext.agentId,
           runId: params.runId,
           sessionKey: messageActionCapabilitySessionKey,
+          sourceReplySessionKey: embeddedContext.sessionKey,
           sessionId: embeddedContext.sessionId,
           requesterAccountId: embeddedContext.agentAccountId,
           requesterSenderId: senderContext.senderId,
@@ -210,6 +212,7 @@ export async function runEmbeddedFallbackCandidate(params: {
         sandboxSessionKey: turn.runtimePolicySessionKey,
         prompt: turn.commandBody,
         transcriptPrompt: turn.transcriptCommandBody,
+        media: turn.followupRun.media,
         userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
         currentInboundEventKind: turn.followupRun.currentInboundEventKind,
         currentInboundContext: turn.followupRun.currentInboundContext,
@@ -247,6 +250,12 @@ export async function runEmbeddedFallbackCandidate(params: {
           }
         },
         onExecutionPhase: params.signalExecutionPhaseForTyping,
+        onLaneWait: ({ waiting }) => {
+          const replyOperation = turn.replyOperation;
+          if (waiting && replyOperation) {
+            markReplyOperationGlobalLaneWaitProgress(replyOperation);
+          }
+        },
         blockReplyBreak: turn.resolvedBlockStreamingBreak,
         blockReplyChunking: turn.blockReplyChunking,
         // Subscriber callbacks are detached. Stage channel presentation before typing I/O.
@@ -345,25 +354,26 @@ export async function runEmbeddedFallbackCandidate(params: {
               // Serialized delivery preserves tool result order across detached callbacks.
               let toolResultChain: Promise<void> = Promise.resolve();
               return (payload: ReplyPayload) => {
-                toolResultChain = toolResultChain
-                  .then(async () => {
-                    turn.replyOperation?.recordActivity();
-                    const { text, skip } = params.presentation.normalizeStreamingText(payload);
-                    if (skip) {
-                      return;
-                    }
-                    if (text !== undefined) {
-                      await turn.typingSignals.signalTextDelta(text);
-                    }
-                    await turn.opts?.onToolResult?.({ ...payload, text });
-                  })
-                  .catch((err: unknown) => {
-                    logVerbose(`tool result delivery failed: ${String(err)}`);
-                  });
+                const delivery = toolResultChain.then(async () => {
+                  turn.replyOperation?.recordActivity();
+                  const { text, skip } = params.presentation.normalizeStreamingText(payload);
+                  if (skip) {
+                    return;
+                  }
+                  if (text !== undefined) {
+                    await turn.typingSignals.signalTextDelta(text);
+                  }
+                  await turn.opts?.onToolResult?.({ ...payload, text });
+                });
+                // Keep later results best-effort while exposing this delivery to awaiting owners.
+                toolResultChain = delivery.catch((err: unknown) => {
+                  logVerbose(`tool result delivery failed: ${String(err)}`);
+                });
                 const task = toolResultChain.finally(() => {
                   turn.pendingToolTasks.delete(task);
                 });
                 turn.pendingToolTasks.add(task);
+                return delivery;
               };
             })()
           : undefined,

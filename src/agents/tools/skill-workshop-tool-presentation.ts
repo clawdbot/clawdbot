@@ -63,7 +63,7 @@ export function formatProposalList(proposals: readonly SkillProposalManifestEntr
   return proposals
     .map(
       (proposal) =>
-        `- ${proposal.id} [${proposal.status}, ${proposal.kind}, ${proposal.scanState}] ${proposal.skillKey}: ${proposal.title}`,
+        `- ${proposal.id} [${proposal.status}, ${proposal.kind}, ${proposal.scanState}${proposal.workspaceMismatch ? ", previous workspace" : ""}] ${proposal.skillKey}: ${proposal.title}`,
     )
     .join("\n");
 }
@@ -77,6 +77,25 @@ export function formatProposalInspect(proposal: SkillProposalReadResult): string
           ...proposal.supportFiles.flatMap((file) => ["", `--- ${file.path} ---`, file.content]),
         ]
       : [];
+  const evaluation = proposal.record.evaluation;
+  const evaluationLines = evaluation
+    ? [
+        "",
+        `Evaluation: ${evaluation.outcomes.length} result(s), ${evaluation.trigger}, ${evaluation.completedAt}`,
+        ...evaluation.outcomes.map((outcome) => {
+          const label = `${outcome.pluginId}/${outcome.evaluatorId}`;
+          if (outcome.status === "error") {
+            return `- ${label}: error - ${outcome.error}`;
+          }
+          if (outcome.status === "skipped") {
+            return `- ${label}: skipped`;
+          }
+          const decision = outcome.result.decision ? `, ${outcome.result.decision}` : "";
+          const summary = outcome.result.summary ? ` - ${outcome.result.summary}` : "";
+          return `- ${label}: completed${decision}${summary}`;
+        }),
+      ]
+    : [];
   return [
     `Proposal: ${proposal.record.id}`,
     `Status: ${proposal.record.status}`,
@@ -84,6 +103,7 @@ export function formatProposalInspect(proposal: SkillProposalReadResult): string
     `Skill: ${proposal.record.target.skillKey}`,
     `Version: ${proposal.record.proposedVersion}`,
     `Scan: ${proposal.record.scan.state}`,
+    ...evaluationLines,
     "",
     proposal.content,
     ...supportFiles,

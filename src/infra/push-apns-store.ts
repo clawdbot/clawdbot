@@ -10,11 +10,14 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import { loadPairedDevicePairingStoreRecordFromDatabase } from "./device-pairing-store.js";
+import { resolveNodePairingGeneration } from "./device-pairing.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import { nextApnsRegistrationVersion } from "./push-apns-store-transaction.js";
 import {
   normalizeApnsRelayBaseUrl,
   normalizePersistedApnsRelayBaseUrl,
@@ -48,12 +51,20 @@ export type RelayApnsRegistration = {
 /** Stored APNs registration for either direct device tokens or official relay handles. */
 export type ApnsRegistration = DirectApnsRegistration | RelayApnsRegistration;
 
+export class ApnsRegistrationPairingChangedError extends Error {
+  constructor() {
+    super("node pairing changed before APNs registration");
+    this.name = "ApnsRegistrationPairingChangedError";
+  }
+}
+
 type RegisterDirectApnsParams = {
   nodeId: string;
   transport?: "direct";
   token: string;
   topic: string;
   environment?: unknown;
+  expectedPairingGeneration?: string;
   baseDir?: string;
 };
 
@@ -68,6 +79,7 @@ type RegisterRelayApnsParams = {
   distribution?: unknown;
   relayOrigin?: unknown;
   tokenDebugSuffix?: unknown;
+  expectedPairingGeneration?: string;
   baseDir?: string;
 };
 
@@ -346,7 +358,7 @@ export function apnsRegistrationFromRow(row: ApnsRegistrationRow): ApnsRegistrat
     normalizePersistedRelayOrigin,
   );
   if (!normalized) {
-    throw new Error(`invalid APNs registration row for node ${row.node_id}`);
+    throw new Error("invalid APNs registration row");
   }
   const canonical = apnsRegistrationToRow(normalized);
   if (
@@ -363,7 +375,7 @@ export function apnsRegistrationFromRow(row: ApnsRegistrationRow): ApnsRegistrat
     canonical.token_debug_suffix !== row.token_debug_suffix ||
     canonical.updated_at_ms !== row.updated_at_ms
   ) {
-    throw new Error(`non-canonical APNs registration row for node ${row.node_id}`);
+    throw new Error("non-canonical APNs registration row");
   }
   return normalized;
 }
@@ -424,20 +436,6 @@ function apnsRegistrationsEqual(left: ApnsRegistration, right: ApnsRegistration)
     left.relayOrigin === right.relayOrigin &&
     left.tokenDebugSuffix === right.tokenDebugSuffix
   );
-}
-
-function nextApnsRegistrationVersion(nodeId: string, previousVersions: readonly number[]): number {
-  let latest = -1;
-  for (const version of previousVersions) {
-    if (!Number.isSafeInteger(version) || version < 0) {
-      throw new Error(`invalid APNs registration version for node ${nodeId}`);
-    }
-    latest = Math.max(latest, version);
-  }
-  if (latest === Number.MAX_SAFE_INTEGER) {
-    throw new Error(`APNs registration version exhausted for node ${nodeId}`);
-  }
-  return Math.max(Date.now(), latest + 1);
 }
 
 /** Persists a validated direct or relay APNs registration for one node id. */
@@ -507,6 +505,16 @@ export async function registerApnsRegistration(
   }
 
   return runOpenClawStateWriteTransaction(({ db }) => {
+    if (params.expectedPairingGeneration) {
+      // The Gateway admission check happens before this transaction. Reread the
+      // pairing here so removal and APNs ownership cannot commit out of order.
+      const pairing = resolveNodePairingGeneration(
+        loadPairedDevicePairingStoreRecordFromDatabase(db, nodeId),
+      );
+      if (pairing?.key !== params.expectedPairingGeneration) {
+        throw new ApnsRegistrationPairingChangedError();
+      }
+    }
     const stateDb = getNodeSqliteKysely<ApnsRegistrationDatabase>(db);
     const current = executeSqliteQueryTakeFirstSync(
       db,

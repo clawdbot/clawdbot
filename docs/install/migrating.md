@@ -11,7 +11,7 @@ OpenClaw supports three migration paths: importing from another agent system, mo
 
 ## Import from another agent system
 
-Bundled migration providers bring instructions, MCP servers, skills, model config, and (opt-in) API keys into OpenClaw. Plans are previewed before any change, secrets are redacted in reports, and apply is backed by a verified backup.
+Bundled migration providers bring instructions, MCP servers, skills, model config, and (opt-in) API keys into OpenClaw. Plans are previewed before any change and secrets are redacted in reports. Standalone `openclaw migrate` is backed by a verified backup; fresh onboarding imports instead stage and verify local artifacts before publishing them with configuration committed before any irreversible external activation.
 
 <CardGroup cols={2}>
   <Card title="Migrating from Claude" href="/install/migrating-claude" icon="brain">

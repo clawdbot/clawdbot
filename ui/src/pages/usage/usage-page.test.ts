@@ -12,10 +12,8 @@ type TestUsagePage = HTMLElement & {
   context: ApplicationContext;
   usageSelectedSessions: string[];
   usageTimeSeries: SessionUsageTimeSeries | null;
-  usageTimeSeriesLoading: boolean;
   usageTimeSeriesStatus: { error: string | null; hasLoaded: boolean; stale: boolean };
   usageSessionLogs: SessionLogEntry[] | null;
-  usageSessionLogsLoading: boolean;
   usageSessionLogsStatus: { error: string | null; hasLoaded: boolean; stale: boolean };
   loadSessionTimeSeries: (sessionKey: string) => Promise<void>;
   loadSessionLogs: (sessionKey: string) => Promise<void>;
@@ -35,8 +33,7 @@ function contextWithClient(client: GatewayBrowserClient): ApplicationContext {
   const subscribe = () => () => undefined;
   const snapshot = {
     client,
-    connected: true,
-    reconnecting: false,
+    phase: "connected",
     hello: null,
     assistantAgentId: null,
     sessionKey: "main",
@@ -81,6 +78,28 @@ afterEach(() => {
 });
 
 describe("UsagePage detail requests", () => {
+  it("commits only the latest time-series selection", async () => {
+    const first = deferred<SessionUsageTimeSeries>();
+    const second = deferred<SessionUsageTimeSeries>();
+    const request = vi.fn((_method: string, params: { key: string }) =>
+      params.key === "agent:main:a" ? first.promise : second.promise,
+    );
+    const page = await createPage({ request } as unknown as GatewayBrowserClient);
+
+    page.usageSelectedSessions = ["agent:main:a"];
+    const firstLoad = page.loadSessionTimeSeries("agent:main:a");
+    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    page.usageSelectedSessions = ["agent:main:b"];
+    const secondLoad = page.loadSessionTimeSeries("agent:main:b");
+    const latest = { points: [{ timestamp: 2 }] } as SessionUsageTimeSeries;
+    second.resolve(latest);
+    await secondLoad;
+    first.resolve({ points: [{ timestamp: 1 }] } as SessionUsageTimeSeries);
+    await firstLoad;
+
+    expect(page.usageTimeSeries).toBe(latest);
+  });
+
   it("retains stale time-series data until a retry succeeds", async () => {
     const retry = deferred<SessionUsageTimeSeries>();
     const request = vi
@@ -99,19 +118,16 @@ describe("UsagePage detail requests", () => {
       hasLoaded: true,
       stale: true,
     });
-    expect(page.usageTimeSeriesLoading).toBe(false);
     expect(page.usageTimeSeries).toBe(previous);
 
     const retryLoad = page.loadSessionTimeSeries("agent:main:detail");
     expect(page.usageTimeSeriesStatus).toEqual({ error: null, hasLoaded: true, stale: true });
-    expect(page.usageTimeSeriesLoading).toBe(true);
     const result = { points: [] } as unknown as SessionUsageTimeSeries;
     retry.resolve(result);
     await retryLoad;
 
     expect(page.usageTimeSeries).toBe(result);
     expect(page.usageTimeSeriesStatus).toEqual({ error: null, hasLoaded: true, stale: false });
-    expect(page.usageTimeSeriesLoading).toBe(false);
   });
 
   it("surfaces a session-log failure and clears it after a successful retry", async () => {
@@ -125,13 +141,11 @@ describe("UsagePage detail requests", () => {
 
     await page.loadSessionLogs("agent:main:detail");
     expect(page.usageSessionLogsStatus.error).toBe("logs unavailable");
-    expect(page.usageSessionLogsLoading).toBe(false);
     expect(page.usageSessionLogs).toBeNull();
 
     await page.loadSessionLogs("agent:main:detail");
     expect(page.usageSessionLogs).toEqual([{ timestamp: 1, role: "user", content: "hello" }]);
     expect(page.usageSessionLogsStatus).toEqual({ error: null, hasLoaded: true, stale: false });
-    expect(page.usageSessionLogsLoading).toBe(false);
   });
 
   it("does not retain detail data when the selected session changes", async () => {

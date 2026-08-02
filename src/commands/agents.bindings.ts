@@ -260,7 +260,9 @@ function resolveBindingAccountId(params: {
   }
 
   const plugin = getBindingChannelPlugin(params.channel);
-  const pluginAccountId = plugin?.setup?.resolveBindingAccountId?.({
+  const resolvePluginAccountId =
+    plugin?.setupContract?.resolveBindingAccountId ?? plugin?.setup?.resolveBindingAccountId;
+  const pluginAccountId = resolvePluginAccountId?.({
     cfg: params.config,
     agentId: params.agentId,
   });

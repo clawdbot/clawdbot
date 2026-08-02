@@ -545,6 +545,77 @@ describe("probeIMessage", () => {
     expect(createIMessageRpcClientMock).not.toHaveBeenCalled();
   });
 
+  it("explains how to update imsg when its private status subcommand is unsupported", async () => {
+    const runCommand = vi.spyOn(processRuntime, "runCommandWithTimeout").mockResolvedValueOnce({
+      stdout: "",
+      stderr: "Unknown subcommand 'status' for command 'imsg'",
+      code: 1,
+      signal: null,
+      killed: false,
+      termination: "exit",
+    });
+
+    await expect(
+      probeIMessagePrivateApi("imsg-legacy-private-status", 1000),
+    ).resolves.toMatchObject({
+      available: false,
+      v2Ready: false,
+      selectors: {},
+      rpcMethods: [],
+      cliCapabilities: {
+        sendRichSupportsAttachment: false,
+        pollSendSupportsNoComment: false,
+      },
+      error:
+        'imsg CLI does not support the "status" subcommand. Update imsg on the Messages Mac: brew update && brew upgrade imsg',
+    });
+    expect(runCommand).toHaveBeenCalledExactlyOnceWith(
+      ["imsg-legacy-private-status", "status", "--json"],
+      { timeoutMs: 1000 },
+    );
+  });
+
+  it("keeps foundational RPC healthy when an older imsg lacks private status", async () => {
+    const runCommand = vi
+      .spyOn(processRuntime, "runCommandWithTimeout")
+      .mockResolvedValueOnce({
+        stdout: "rpc help",
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      })
+      .mockResolvedValueOnce({
+        stdout: "",
+        stderr: "Unknown subcommand 'status' for command 'imsg'",
+        code: 1,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      });
+    const request = vi.fn().mockResolvedValue({ chats: [] });
+    const stop = vi.fn().mockResolvedValue(undefined);
+    vi.spyOn(clientModule, "createIMessageRpcClient").mockResolvedValue({
+      request,
+      stop,
+    } as unknown as Awaited<ReturnType<typeof clientModule.createIMessageRpcClient>>);
+
+    await expect(
+      probeIMessage(1000, { cliPath: "imsg-legacy-foundational-rpc", platform: "darwin" }),
+    ).resolves.toMatchObject({
+      ok: true,
+      privateApi: {
+        available: false,
+        error:
+          'imsg CLI does not support the "status" subcommand. Update imsg on the Messages Mac: brew update && brew upgrade imsg',
+      },
+    });
+    expect(runCommand).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenCalledWith("chats.list", { limit: 1 }, { timeoutMs: 1000 });
+    expect(stop).toHaveBeenCalledOnce();
+  });
+
   it("explains how to install imsg when the default binary is missing", async () => {
     vi.spyOn(setupRuntime, "detectBinary").mockResolvedValue(false);
     const createIMessageRpcClientMock = vi
@@ -720,7 +791,9 @@ describe("probeIMessage", () => {
       available: false,
     });
 
-    expect(runCommand).toHaveBeenCalledTimes(4);
+    // Each uncached probe runs status plus both side-effect-free CLI capability
+    // checks (send-rich attachment and poll caption suppression).
+    expect(runCommand).toHaveBeenCalledTimes(6);
   });
 
   it("propagates imsg's status message when advanced features are unavailable", async () => {
@@ -753,6 +826,92 @@ describe("probeIMessage", () => {
     await expect(probeIMessagePrivateApi("imsg-status-message-test", 1000)).resolves.toMatchObject({
       available: false,
       statusMessage: note,
+    });
+  });
+
+  it("detects poll caption suppression from the exact poll send help contract", async () => {
+    const runCommand = vi
+      .spyOn(processRuntime, "runCommandWithTimeout")
+      .mockResolvedValueOnce({
+        stdout: JSON.stringify({
+          advanced_features: true,
+          v2_ready: true,
+          selectors: { pollPayloadMessage: true },
+          rpc_methods: ["chats.list"],
+        }),
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      })
+      .mockResolvedValueOnce({
+        stdout: "send-rich --file",
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      })
+      .mockResolvedValueOnce({
+        stdout: "poll send --question <text> --option <text> --no-comment",
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      });
+
+    await expect(
+      probeIMessagePrivateApi("imsg-poll-no-comment-supported", 1000),
+    ).resolves.toMatchObject({
+      cliCapabilities: { pollSendSupportsNoComment: true },
+    });
+    expect(runCommand).toHaveBeenNthCalledWith(
+      3,
+      ["imsg-poll-no-comment-supported", "poll", "send", "--help"],
+      { timeoutMs: 1000 },
+    );
+  });
+
+  it("does not infer poll caption suppression from selectors when the flag is absent", async () => {
+    vi.spyOn(processRuntime, "runCommandWithTimeout")
+      .mockResolvedValueOnce({
+        stdout: JSON.stringify({
+          advanced_features: true,
+          v2_ready: true,
+          selectors: { pollPayloadMessage: true },
+          rpc_methods: ["chats.list"],
+        }),
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      })
+      .mockResolvedValueOnce({
+        stdout: "send-rich --file",
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      })
+      .mockResolvedValueOnce({
+        stdout: "poll send --question <text> --option <text>",
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      });
+
+    await expect(
+      probeIMessagePrivateApi("imsg-poll-no-comment-absent", 1000),
+    ).resolves.toMatchObject({
+      available: true,
+      selectors: { pollPayloadMessage: true },
+      cliCapabilities: { pollSendSupportsNoComment: false },
     });
   });
 

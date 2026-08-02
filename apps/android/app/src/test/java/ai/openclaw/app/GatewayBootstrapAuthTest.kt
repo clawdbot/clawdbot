@@ -1,5 +1,8 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.chat.ChatMessage
+import ai.openclaw.app.chat.ChatSessionEntry
+import ai.openclaw.app.chat.ChatTranscriptCache
 import ai.openclaw.app.gateway.DeviceAuthStore
 import ai.openclaw.app.gateway.DeviceIdentityStore
 import ai.openclaw.app.gateway.GatewayConnectOptions
@@ -448,6 +451,7 @@ class GatewayBootstrapAuthTest {
 
       assertEquals("ab".repeat(32), prefs.loadGatewayTlsFingerprint(endpoint.stableId))
       assertEquals("setup-bootstrap-token", waitForDesiredBootstrapToken(runtime, "nodeSession"))
+      assertEquals("ab".repeat(32), runtime.gatewayControlPage.value?.tlsFingerprintSha256)
       assertNull(desiredBootstrapToken(runtime, "operatorSession"))
     }
 
@@ -734,6 +738,32 @@ class GatewayBootstrapAuthTest {
   }
 
   @Test
+  fun permissionSurfaceReconnectsOnlyAfterAndroidAuthorityChanges() {
+    val app: android.app.Application = RuntimeEnvironment.getApplication()
+    shadowOf(app).denyPermissions(Manifest.permission.CAMERA)
+    val (runtime, prefs) = createNeutralizedRuntime()
+    armSavedActiveManualGateway(prefs)
+    writeField(
+      runtime,
+      "connectedEndpoint",
+      GatewayEndpoint.manual(host = "127.0.0.1", port = 18789),
+    )
+
+    runtime.refreshNodePermissionSurface()
+    assertNull(desiredConnection(runtime, "nodeSession"))
+
+    shadowOf(app).grantPermissions(Manifest.permission.CAMERA)
+    runtime.refreshNodePermissionSurface()
+
+    val options =
+      readField<GatewayConnectOptions>(
+        waitForDesiredConnection(runtime, "nodeSession"),
+        "options",
+      )
+    assertTrue(options.permissions.getValue("camera"))
+  }
+
+  @Test
   fun connect_showsSecureEndpointGuidanceWhenTlsProbeFails() {
     val app = RuntimeEnvironment.getApplication()
     val runtime =
@@ -847,6 +877,25 @@ class GatewayBootstrapAuthTest {
       assertEquals("other-token", prefs.loadGatewayCredentials(other).token)
       assertNull(authStore.loadToken(target, deviceId, "node"))
       assertEquals("other-node-token", authStore.loadToken(other, deviceId, "node"))
+    }
+
+  @Test
+  fun resetGatewaySetupAuthClearsInjectedTranscriptStore() =
+    runBlocking {
+      val app = RuntimeEnvironment.getApplication()
+      val securePrefs =
+        app.getSharedPreferences(
+          "openclaw.node.secure.test.${UUID.randomUUID()}",
+          android.content.Context.MODE_PRIVATE,
+        )
+      val prefs = SecurePrefs(app, securePrefsOverride = securePrefs)
+      val transcriptCache = RecordingTranscriptCache()
+      val runtime = NodeRuntime(app, prefs, transcriptCache)
+      val target = GatewayEndpoint.manual("target.example", 18789).stableId
+
+      assertTrue(runtime.resetGatewaySetupAuth(target))
+
+      assertEquals(listOf(target), transcriptCache.clearedGatewayIds)
     }
 
   @Test
@@ -1506,5 +1555,51 @@ class GatewayBootstrapAuthTest {
       }
     }
     error("Field $name not found on ${target.javaClass.name}")
+  }
+
+  private class RecordingTranscriptCache : ChatTranscriptCache {
+    val clearedGatewayIds = mutableListOf<String>()
+
+    override suspend fun loadLastDefaultAgentId(gatewayId: String): String? = null
+
+    override suspend fun saveLastDefaultAgentId(
+      gatewayId: String,
+      agentId: String,
+    ) = Unit
+
+    override suspend fun loadSessions(
+      gatewayId: String,
+      agentId: String,
+    ): List<ChatSessionEntry> = emptyList()
+
+    override suspend fun loadTranscript(
+      gatewayId: String,
+      agentId: String,
+      sessionKey: String,
+    ): List<ChatMessage> = emptyList()
+
+    override suspend fun saveSessions(
+      gatewayId: String,
+      agentId: String,
+      sessions: List<ChatSessionEntry>,
+      retainedSessionKey: String?,
+    ) = Unit
+
+    override suspend fun saveTranscript(
+      gatewayId: String,
+      agentId: String,
+      sessionKey: String,
+      messages: List<ChatMessage>,
+    ) = Unit
+
+    override suspend fun deleteSession(
+      gatewayId: String,
+      agentId: String,
+      sessionKey: String,
+    ) = Unit
+
+    override suspend fun clearGateway(gatewayId: String) {
+      clearedGatewayIds += gatewayId
+    }
   }
 }

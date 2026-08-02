@@ -10,6 +10,7 @@ import {
   deliveryContextFromSession,
   mergeDeliveryContext,
   normalizeDeliveryContext,
+  sessionDeliveryOrigin,
 } from "../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { resolveGroupSessionKey } from "./group.js";
@@ -65,7 +66,7 @@ function resolvePairedOriginPeerId(params: {
   if (params.kind !== "direct") {
     return undefined;
   }
-  const origin = params.entry.origin;
+  const origin = sessionDeliveryOrigin(params.entry);
   const originFrom = normalizeText(origin?.from);
   const originTo = normalizeText(origin?.to);
   const originChannel = normalizeText(origin?.provider)?.toLowerCase();
@@ -158,20 +159,14 @@ export function buildConversationIdentity(params: {
 export function conversationIdentityFromSessionEntry(
   entry: SessionEntry,
 ): ConversationIdentity | null {
-  // Explicit route snapshots own their populated fields, while persisted
-  // origin/last-route facts fill gaps such as an omitted account id.
-  const deliveryContext = mergeDeliveryContext(
-    normalizeDeliveryContext(entry.deliveryContext),
-    deliveryContextFromSession(entry),
-  );
+  const deliveryContext = deliveryContextFromSession(entry);
+  const origin = sessionDeliveryOrigin(entry);
   const kind = normalizeKind(entry.chatType);
   const routeTarget = normalizeText(deliveryContext?.to);
   const deliveryTarget =
-    routeTarget ?? (kind === "direct" ? normalizeText(entry.origin?.from) : undefined);
+    routeTarget ?? (kind === "direct" ? normalizeText(origin?.from) : undefined);
   const routeOwnsTarget = Boolean(routeTarget);
-  const channel = routeOwnsTarget
-    ? deliveryContext?.channel
-    : (normalizeText(entry.origin?.provider) ?? normalizeText(entry.channel));
+  const channel = routeOwnsTarget ? deliveryContext?.channel : normalizeText(origin?.provider);
   // Outbound routes can use an alias for delivery while `origin.from` carries
   // the canonical peer. Trust it only when both snapshots are fully paired.
   const pairedOriginPeerId = routeTarget
@@ -184,14 +179,14 @@ export function conversationIdentityFromSessionEntry(
     : undefined;
   return buildConversationIdentity({
     channel,
-    accountId: routeOwnsTarget ? deliveryContext?.accountId : entry.origin?.accountId,
+    accountId: routeOwnsTarget ? deliveryContext?.accountId : origin?.accountId,
     kind,
     // Native ids remain descriptive metadata and cannot redirect a stored conversation ref.
     peerId: pairedOriginPeerId ?? deliveryTarget,
     deliveryTarget,
-    threadId: routeOwnsTarget ? deliveryContext?.threadId : entry.origin?.threadId,
-    nativeChannelId: entry.origin?.nativeChannelId,
-    nativeDirectUserId: entry.origin?.nativeDirectUserId,
+    threadId: routeOwnsTarget ? deliveryContext?.threadId : origin?.threadId,
+    nativeChannelId: origin?.nativeChannelId,
+    nativeDirectUserId: origin?.nativeDirectUserId,
     label: entry.displayName ?? entry.label,
   });
 }

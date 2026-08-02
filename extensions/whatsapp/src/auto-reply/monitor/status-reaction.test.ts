@@ -48,6 +48,8 @@ describe("createWhatsAppStatusReactionController", () => {
   it("uses the sender LID as the group reaction participant when no sender JID is available", async () => {
     const cfg = {
       messages: {
+        ackReaction: "👀",
+        ackReactionScope: "all",
         statusReactions: {
           enabled: true,
         },
@@ -55,11 +57,6 @@ describe("createWhatsAppStatusReactionController", () => {
       channels: {
         whatsapp: {
           reactionLevel: "ack",
-          ackReaction: {
-            emoji: "👀",
-            direct: true,
-            group: "always",
-          },
         },
       },
     } as OpenClawConfig;
@@ -121,12 +118,14 @@ describe("createWhatsAppStatusReactionController", () => {
     );
   });
 
-  it("uses the agent identity emoji when WhatsApp ackReaction has no emoji", async () => {
+  it("uses the canonical emoji preserved from agent identity", async () => {
     const cfg = {
       agents: {
-        list: [{ id: "agent", identity: { emoji: "🔥" } }],
+        entries: { agent: { identity: { emoji: "🔥" } } },
       },
       messages: {
+        ackReaction: "🔥",
+        ackReactionScope: "all",
         statusReactions: {
           enabled: true,
         },
@@ -134,10 +133,6 @@ describe("createWhatsAppStatusReactionController", () => {
       channels: {
         whatsapp: {
           reactionLevel: "ack",
-          ackReaction: {
-            direct: true,
-            group: "mentions",
-          },
         },
       },
     } as OpenClawConfig;
@@ -170,6 +165,8 @@ describe("createWhatsAppStatusReactionController", () => {
   it("uses the active account reactionLevel override from admission", async () => {
     const cfg = {
       messages: {
+        ackReaction: "👀",
+        ackReactionScope: "all",
         statusReactions: {
           enabled: true,
         },
@@ -177,11 +174,6 @@ describe("createWhatsAppStatusReactionController", () => {
       channels: {
         whatsapp: {
           reactionLevel: "off",
-          ackReaction: {
-            emoji: "👀",
-            direct: true,
-            group: "mentions",
-          },
           accounts: {
             work: {
               reactionLevel: "ack",

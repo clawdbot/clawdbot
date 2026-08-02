@@ -6,27 +6,28 @@ read_when:
 title: "Zoom meetings plugin"
 ---
 
-The `zoom-meetings` plugin joins Zoom meeting links as a guest through the Zoom Web App in the OpenClaw Chrome profile. It accepts meeting links under `zoom.us/j/...` and account subdomains such as `example.zoom.us/j/...`. It does not create meetings, dial in, use the Zoom Meeting SDK, or record meetings.
+The `zoom-meetings` plugin joins Zoom meeting links as a guest through the Zoom Web App in the OpenClaw Chrome profile. It accepts meeting links under `zoom.us/j/...` and account subdomains such as `example.zoom.us/j/...`. It does not create meetings, dial in, use the Zoom Meeting SDK, or capture audio/video recordings.
 
 ## Setup
 
 Talk-back uses the same local audio prerequisites as the [Google Meet plugin](/plugins/google-meet): macOS, the `BlackHole 2ch` virtual audio device, and SoX.
 
 ```bash
+openclaw plugins install @openclaw/zoom-meetings
+openclaw gateway restart
 brew install blackhole-2ch sox
 sudo reboot
 system_profiler SPAudioDataType | grep -i BlackHole
 command -v sox
 ```
 
-Enable the plugin, then check setup:
+The plugin is enabled by default after installation. Add an entry only to customize it, then check setup:
 
 ```json5
 {
   plugins: {
     entries: {
       "zoom-meetings": {
-        enabled: true,
         config: {
           defaultMode: "agent",
           chrome: { guestName: "OpenClaw Agent" },
@@ -36,6 +37,8 @@ Enable the plugin, then check setup:
   },
 }
 ```
+
+Run `openclaw plugins disable zoom-meetings` if you do not want the plugin active.
 
 ```bash
 openclaw zoommeetings setup
@@ -52,7 +55,15 @@ Use `chromeNode.node` to run Chrome, BlackHole, and SoX on a paired macOS node. 
 | `bidi`       | A realtime voice model listens and replies directly.                        |
 | `transcribe` | Observe-only join with live-caption transcript snapshots.                   |
 
-Transcribe mode enables Zoom live captions after admission and captures the bounded caption display. The `transcript` action returns the caption buffer for the active OpenClaw meeting session.
+Zoom live captions are enabled after admission in every mode so OpenClaw can
+persist meeting notes. The `transcript` action still returns the bounded live
+buffer only for `transcribe` sessions. On leave, OpenClaw stores the durable
+transcript and derived summary in the shared state database; list or export
+them with [`openclaw transcripts`](/cli/transcripts).
+
+Automatic notes are enabled by default. Set `transcripts.enabled: false` to
+disable durable notes globally; explicit `transcribe` mode still exposes only
+its bounded live tail.
 
 ## Guest join limits
 

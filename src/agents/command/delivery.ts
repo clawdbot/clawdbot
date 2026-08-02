@@ -1,6 +1,7 @@
 /**
  * Normalizes and delivers agent command results to outbound channels.
  */
+import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
@@ -50,7 +51,7 @@ import type { MessagingToolSend } from "../embedded-agent-messaging.types.js";
 import type { EmbeddedAgentRunMeta } from "../embedded-agent-runner/types.js";
 import { isNestedAgentLane } from "../lanes.js";
 import { isAgentRunRestartAbortReason } from "../run-termination.js";
-import type { AgentCommandOpts, AgentCommandResultMetaOverrides } from "./types.js";
+import type { AgentCommandOpts } from "./types.js";
 
 type RunResult = Awaited<ReturnType<(typeof import("../embedded-agent.js"))["runEmbeddedAgent"]>>;
 type DurableSendResult = Awaited<ReturnType<typeof sendDurableMessageBatch>>;
@@ -98,7 +99,7 @@ type AgentCommandDeliveryStatus = {
 /** Agent command result after payload normalization and optional delivery. */
 type AgentCommandDeliveryResult = {
   payloads: ReturnType<typeof projectOutboundPayloadPlanForJson>;
-  meta: EmbeddedAgentRunMeta & AgentCommandResultMetaOverrides;
+  meta: EmbeddedAgentRunMeta;
   didSendViaMessagingTool?: boolean;
   messagingToolSentTexts?: string[];
   messagingToolSentMediaUrls?: string[];
@@ -182,23 +183,6 @@ function logNestedOutput(
     }
     runtime.log(`${prefix} ${line}`);
   }
-}
-
-function mergeResultMetaOverrides(
-  meta: EmbeddedAgentRunMeta,
-  overrides: AgentCommandResultMetaOverrides | undefined,
-): EmbeddedAgentRunMeta & AgentCommandResultMetaOverrides {
-  if (!overrides) {
-    return meta;
-  }
-  return {
-    ...meta,
-    ...overrides,
-  };
-}
-
-function hasNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
 }
 
 function hasNonEmptyStringArray(value: unknown): value is string[] {
@@ -852,7 +836,6 @@ export async function deliverAgentCommandResult(
   params.assertDeliveryCurrent?.();
   const outboundPayloadPlan = createOutboundPayloadPlan(mediaNormalizedReplyPayloads);
   const normalizedPayloads = projectOutboundPayloadPlanForJson(outboundPayloadPlan);
-  const resultMeta = mergeResultMetaOverrides(result.meta, opts.resultMetaOverrides);
   const captureDeliveryResult = (
     deliveryResult: AgentCommandDeliveryResult,
   ): AgentCommandDeliveryResult => {
@@ -866,7 +849,7 @@ export async function deliverAgentCommandResult(
     writeRuntimeJson(runtime, {
       ...buildOutboundResultEnvelope({
         payloads: normalizedPayloads,
-        meta: resultMeta,
+        meta: result.meta,
       }),
       ...(status ? { deliveryStatus: status } : {}),
     });
@@ -876,7 +859,7 @@ export async function deliverAgentCommandResult(
     captureDeliveryResult(
       buildDeliveryResult({
         payloads: normalizedPayloads,
-        meta: resultMeta,
+        meta: result.meta,
         result,
         deliveryStatus,
       }),
@@ -892,7 +875,7 @@ export async function deliverAgentCommandResult(
     return captureDeliveryResult(
       buildDeliveryResult({
         payloads: normalizedPayloads,
-        meta: resultMeta,
+        meta: result.meta,
         result,
         deliverySucceeded,
         deliveryStatus,
@@ -921,7 +904,7 @@ export async function deliverAgentCommandResult(
     }
     emitJsonEnvelope();
     return captureDeliveryResult(
-      buildDeliveryResult({ payloads: normalizedPayloads, meta: resultMeta, result }),
+      buildDeliveryResult({ payloads: normalizedPayloads, meta: result.meta, result }),
     );
   }
   if (deliver && deliveryChannel && !isInternalMessageChannel(deliveryChannel)) {
@@ -937,6 +920,19 @@ export async function deliverAgentCommandResult(
           accountId: resolvedAccountId,
           payloads: deliveryPayloads,
           session: outboundSession,
+          replyPayloadSendingHook: {
+            kind: "final",
+            channel: deliveryChannel,
+            ...(effectiveSessionKey ? { sessionKey: effectiveSessionKey } : {}),
+            ...(opts.runId ? { runId: opts.runId } : {}),
+            context: {
+              channelId: deliveryChannel,
+              ...(resolvedAccountId ? { accountId: resolvedAccountId } : {}),
+              conversationId: deliveryTarget,
+              ...(effectiveSessionKey ? { sessionKey: effectiveSessionKey } : {}),
+              ...(opts.runId ? { runId: opts.runId } : {}),
+            },
+          },
           replyToId: resolvedReplyToId ?? null,
           threadId: resolvedThreadTarget ?? null,
           bestEffort: bestEffortDeliver,
@@ -959,7 +955,7 @@ export async function deliverAgentCommandResult(
         captureDeliveryResult(
           buildDeliveryResult({
             payloads: normalizedPayloads,
-            meta: resultMeta,
+            meta: result.meta,
             result,
             deliverySucceeded: false,
             deliveryStatus,
@@ -989,7 +985,7 @@ export async function deliverAgentCommandResult(
   return captureDeliveryResult(
     buildDeliveryResult({
       payloads: normalizedPayloads,
-      meta: resultMeta,
+      meta: result.meta,
       result,
       deliverySucceeded,
       deliveryStatus,
