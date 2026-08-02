@@ -173,7 +173,7 @@ function resolveDynamicRuntimeModelContext(params: {
 }
 
 /** Resolves the runtime model metadata needed to filter model-compatible tools. */
-export function resolveEffectiveToolInventoryRuntimeModelContext(params: {
+function resolveEffectiveToolInventoryRuntimeModelContext(params: {
   cfg: OpenClawConfig;
   agentId?: string;
   agentDir?: string;
