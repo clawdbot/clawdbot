@@ -806,11 +806,16 @@ describe("scripts/run-vitest", () => {
         [
           'const { spawn } = require("node:child_process");',
           'const fs = require("node:fs");',
-          'const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {',
-          '  stdio: ["ignore", "inherit", "inherit"],',
+          'const descendant = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {',
+          '  stdio: "ignore",',
           "});",
-          "fs.writeFileSync(process.env.OPENCLAW_RESIDUAL_PID_PATH, String(child.pid));",
-          "child.unref();",
+          "descendant.unref();",
+          'process.once("SIGTERM", () => process.exit(0));',
+          "const pidPath = process.env.OPENCLAW_RESIDUAL_PID_PATH;",
+          "const pendingPath = `${pidPath}.${process.pid}.tmp`;",
+          "fs.writeFileSync(pendingPath, String(descendant.pid));",
+          "fs.renameSync(pendingPath, pidPath);",
+          "setInterval(() => {}, 1000);",
         ].join("\n"),
       ],
       spawnParams: {
@@ -823,11 +828,28 @@ describe("scripts/run-vitest", () => {
     let descendantPid = 0;
 
     try {
-      await waitFor(() => fs.existsSync(descendantPidPath));
+      await waitFor(() => fs.existsSync(descendantPidPath), LOAD_SENSITIVE_PROCESS_TIMEOUT_MS);
       descendantPid = Number(fs.readFileSync(descendantPidPath, "utf8"));
       expect(Number.isInteger(descendantPid)).toBe(true);
-      await expect(watched.completion).resolves.toEqual({ code: 0, signal: null });
-      await waitFor(() => !isProcessAlive(descendantPid));
+      expect(isProcessAlive(descendantPid)).toBe(true);
+
+      process.kill(watched.child.pid!, "SIGTERM");
+      const snapshot = await Promise.race([
+        watched.completion.then((result) => ({
+          descendantAlive: isProcessAlive(descendantPid),
+          groupAlive: isProcessGroupAlive(watched.child.pid!),
+          result,
+        })),
+        delay(LOAD_SENSITIVE_PROCESS_TIMEOUT_MS, undefined, { ref: false }).then(() => {
+          throw new Error("timed out waiting for watched Vitest completion");
+        }),
+      ]);
+
+      expect(snapshot).toEqual({
+        descendantAlive: false,
+        groupAlive: false,
+        result: { code: 0, signal: null },
+      });
     } finally {
       watched.teardown();
       forceKillVitestProcessGroup(watched.child);
@@ -1112,5 +1134,14 @@ function isProcessAlive(pid: number) {
     return true;
   } catch {
     return false;
+  }
+}
+
+function isProcessGroupAlive(pgid: number) {
+  try {
+    process.kill(-pgid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
   }
 }

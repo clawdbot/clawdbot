@@ -12,7 +12,7 @@ import { boundaryTestFiles } from "../test/vitest/vitest.unit-paths.mjs";
 import { resolveLocalVitestEnv } from "./lib/vitest-local-scheduling.mjs";
 import { spawnPnpmRunner } from "./pnpm-runner.mjs";
 import {
-  forceKillVitestProcessGroup,
+  createVitestProcessCompletion,
   forwardSignalToVitestProcessGroup,
   installVitestProcessGroupCleanup,
   shouldUseDetachedVitestProcessGroup,
@@ -1032,25 +1032,10 @@ export function spawnWatchedVitestProcess({
     teardownChildCleanup();
     teardownNoOutputWatchdog();
   };
-  const ownsDetachedGroup = spawnParams.detached === true && shouldUseDetachedVitestProcessGroup();
-  // POSIX detached groups remain addressable after the leader exits: reap any
-  // residual workers, then keep cleanup/watchdog ownership until their pipes close.
-  if (ownsDetachedGroup) {
-    child.once("exit", () => forceKillVitestProcessGroup(child));
-  }
-  // Windows has no equivalent group target after leader exit. Preserve the
-  // direct-child contract there until a Job Object owner can join the full tree.
-  const completionEvent = ownsDetachedGroup ? "close" : "exit";
-  const completion = new Promise((resolve, reject) => {
-    child.once(completionEvent, (code, signal) => {
-      teardown();
-      resolve({ code, signal });
-    });
-    child.once("error", (error) => {
-      teardown();
-      reject(error instanceof Error ? error : new Error(String(error)));
-    });
-  });
+  const completion = createVitestProcessCompletion({
+    child,
+    detached: spawnParams.detached === true,
+  }).finally(teardown);
 
   return {
     child,
@@ -1080,8 +1065,9 @@ export function resolveTestProjectsRunnerSpawnParams(env, platform = process.pla
 
 function spawnTestProjectsRunner(argv, env, options = {}) {
   let forwardedSignal = null;
+  const spawnParams = resolveTestProjectsRunnerSpawnParams(env);
   const child = spawn(process.execPath, [options.runnerPath ?? testProjectsRunnerPath, ...argv], {
-    ...resolveTestProjectsRunnerSpawnParams(env),
+    ...spawnParams,
   });
   const teardown = installVitestProcessGroupCleanup({
     child,
@@ -1091,30 +1077,33 @@ function spawnTestProjectsRunner(argv, env, options = {}) {
       forwardedSignal ??= signal;
     },
   });
-  return { child, getForwardedSignal: () => forwardedSignal, teardown };
+  const completion = createVitestProcessCompletion({
+    child,
+    detached: spawnParams.detached,
+  }).finally(teardown);
+  return { child, completion, getForwardedSignal: () => forwardedSignal };
 }
 
 export function runTestProjectsDelegation(argv, env, options = {}) {
-  const { child, getForwardedSignal, teardown } = spawnTestProjectsRunner(argv, env, options);
-  child.on("close", (code, signal) => {
-    teardown();
-    const forwardedSignal = getForwardedSignal();
-    if (forwardedSignal) {
-      forceKillVitestProcessGroup(child);
-      process.kill(process.pid, forwardedSignal);
-      return;
-    }
-    if (signal) {
-      process.kill(process.pid, signal);
-      return;
-    }
-    process.exit(code ?? 1);
-  });
-  child.on("error", (error) => {
-    teardown();
-    console.error(error);
-    process.exit(1);
-  });
+  const { child, completion, getForwardedSignal } = spawnTestProjectsRunner(argv, env, options);
+  completion.then(
+    ({ code, signal }) => {
+      const forwardedSignal = getForwardedSignal();
+      if (forwardedSignal) {
+        process.kill(process.pid, forwardedSignal);
+        return;
+      }
+      if (signal) {
+        process.kill(process.pid, signal);
+        return;
+      }
+      process.exit(code ?? 1);
+    },
+    /** @param {unknown} error */ (error) => {
+      console.error(error);
+      process.exit(1);
+    },
+  );
   return child;
 }
 
@@ -1155,7 +1144,7 @@ function main(argv = process.argv.slice(2), env = process.env) {
     throw error;
   }
 
-  const { child, completion, getForwardedSignal } = spawnWatchedVitestProcess({
+  const { completion, getForwardedSignal } = spawnWatchedVitestProcess({
     pnpmArgs: ["exec", "node", ...resolveVitestNodeArgs(env), vitestCliEntry, ...guardedVitestArgs],
     spawnParams: resolveVitestSpawnParams(spawnEnv),
     env: spawnEnv,
@@ -1166,7 +1155,6 @@ function main(argv = process.argv.slice(2), env = process.env) {
     ({ code, signal }) => {
       const forwardedSignal = getForwardedSignal();
       if (forwardedSignal) {
-        forceKillVitestProcessGroup(child);
         process.kill(process.pid, forwardedSignal);
         return;
       }

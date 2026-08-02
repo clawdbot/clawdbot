@@ -43,7 +43,6 @@ import {
   withRetryNoOutputTimeout,
   writeVitestIncludeFile,
 } from "./test-projects.test-support.mjs";
-import { forceKillVitestProcessGroup } from "./vitest-process-group.mjs";
 
 // Keep this shim so `pnpm test -- src/foo.test.ts` still forwards filters
 // cleanly instead of leaking pnpm's passthrough sentinel to Vitest.
@@ -91,7 +90,7 @@ function cleanupVitestRunSpec(spec) {
 function runPnpmSpecCommand(spec, pnpmArgs, label) {
   let noOutputTimedOut = false;
   return new Promise((resolve, reject) => {
-    const { child, completion, getForwardedSignal } = spawnWatchedVitestProcess({
+    const { completion, getForwardedSignal } = spawnWatchedVitestProcess({
       pnpmArgs,
       env: spec.env,
       label,
@@ -108,7 +107,6 @@ function runPnpmSpecCommand(spec, pnpmArgs, label) {
       ({ code, signal }) => {
         const forwardedSignal = getForwardedSignal();
         if (forwardedSignal) {
-          forceKillVitestProcessGroup(child);
           resolve({ code: 143, noOutputTimedOut, signal: forwardedSignal });
           return;
         }
