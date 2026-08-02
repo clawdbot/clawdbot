@@ -492,4 +492,16 @@ describe("cron task run history", () => {
       })?.errorReason,
     ).toBeUndefined();
   });
+
+  it("preserves TLS certificate failures in stored run history", () => {
+    const entry = {
+      ts: 100,
+      jobId: JOB_ID,
+      action: "finished",
+      status: "error",
+      errorReason: "tls_certificate",
+    } as const;
+
+    expect(parseCronRunLogEntryObject(entry)?.errorReason).toBe("tls_certificate");
+  });
 });

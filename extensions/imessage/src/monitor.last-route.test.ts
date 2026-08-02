@@ -1194,6 +1194,237 @@ describe("iMessage monitor last-route updates", () => {
     ).toBe(4996);
   });
 
+  const replacedDatabaseCases = [
+    {
+      name: "tails a chat.db replaced at the same path instead of suppressing every row below the stale cursor",
+      prefix: "openclaw-imsg-db-replaced-",
+      seededRowid: 5,
+      liveRowid: 6,
+      expectedSinceRowid: 5,
+    },
+    {
+      name: "tails a chat.db rebuilt empty at the same path instead of suppressing its first rows",
+      prefix: "openclaw-imsg-db-rebuilt-",
+      seededRowid: null,
+      liveRowid: 1,
+      expectedSinceRowid: -1,
+    },
+  ];
+
+  for (const replacedDatabase of replacedDatabaseCases) {
+    it(replacedDatabase.name, async () => {
+      const stateDir = createTestStateDir(replacedDatabase.prefix);
+      const dbPath = path.join(stateDir, "chat.db");
+      advanceIMessageRecoveryCursor(
+        "default",
+        resolveIMessageRecoveryCursorDbIdentity({ dbPath }),
+        9000,
+      );
+      const { DatabaseSync } = await import("node:sqlite");
+      const replacement = new DatabaseSync(dbPath);
+      try {
+        replacement.exec(
+          "CREATE TABLE message (guid TEXT, sender TEXT, text TEXT, created_at TEXT);",
+        );
+        if (replacedDatabase.seededRowid !== null) {
+          replacement
+            .prepare(
+              "INSERT INTO message(rowid, guid, sender, text, created_at) VALUES (?, ?, ?, ?, ?)",
+            )
+            .run(
+              replacedDatabase.seededRowid,
+              `RESTORED-GUID-${replacedDatabase.seededRowid}`,
+              "+15550001111",
+              "restored history",
+              new Date(Date.now() - 30 * 60 * 1000).toISOString(),
+            );
+        }
+      } finally {
+        replacement.close();
+      }
+
+      let sinceRowid: unknown;
+      const client = createIMessageWatchClient({
+        request: async (method: string, params?: Record<string, unknown>) => {
+          if (method === "watch.subscribe") {
+            sinceRowid = params?.since_rowid;
+          }
+          return { subscription: 1 };
+        },
+        onClose: async (notify) => {
+          const live = new DatabaseSync(dbPath);
+          try {
+            live
+              .prepare(
+                "INSERT INTO message(rowid, guid, sender, text, created_at) VALUES (?, ?, ?, ?, ?)",
+              )
+              .run(
+                replacedDatabase.liveRowid,
+                `REPLACEMENT-GUID-${replacedDatabase.liveRowid}`,
+                "+15550001111",
+                "sent after the restore",
+                new Date().toISOString(),
+              );
+            const rows = live
+              .prepare(
+                "SELECT rowid AS id, guid, sender, text, created_at FROM message WHERE rowid > ? ORDER BY rowid",
+              )
+              .all(typeof sinceRowid === "number" ? sinceRowid : 0) as Array<{
+              id: number;
+              guid: string;
+              sender: string;
+              text: string;
+              created_at: string;
+            }>;
+            for (const row of rows) {
+              notify({
+                id: row.id,
+                guid: row.guid,
+                chat_id: 123,
+                sender: row.sender,
+                is_from_me: false,
+                text: row.text,
+                is_group: false,
+                created_at: row.created_at,
+              });
+            }
+          } finally {
+            live.close();
+          }
+          await Promise.resolve();
+          await Promise.resolve();
+        },
+      });
+
+      await runIMessageMonitor({ imessage: { dbPath } });
+
+      expect(client.request).toHaveBeenCalledWith(
+        "watch.subscribe",
+        {
+          attachments: false,
+          include_reactions: true,
+          since_rowid: replacedDatabase.expectedSinceRowid,
+        },
+        { timeoutMs: 10_000 },
+      );
+      await vi.waitFor(() => {
+        expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(1);
+      });
+      expect(
+        loadIMessageRecoveryCursor("default", resolveIMessageRecoveryCursorDbIdentity({ dbPath })),
+      ).toBe(replacedDatabase.liveRowid);
+    });
+  }
+
+  it("does not self-fence past the first row inserted while an empty rebuilt chat.db starts", async () => {
+    const stateDir = createTestStateDir("openclaw-imsg-db-rebuilt-startup-race-");
+    const dbPath = path.join(stateDir, "chat.db");
+    advanceIMessageRecoveryCursor(
+      "default",
+      resolveIMessageRecoveryCursorDbIdentity({ dbPath }),
+      9000,
+    );
+    const { DatabaseSync } = await import("node:sqlite");
+    const replacement = new DatabaseSync(dbPath);
+    try {
+      replacement.exec(
+        "CREATE TABLE message (guid TEXT, sender TEXT, text TEXT, created_at TEXT);",
+      );
+    } finally {
+      replacement.close();
+    }
+
+    let effectiveWatcherCursor: number | undefined;
+    const client = createIMessageWatchClient({
+      request: async (method: string, params?: Record<string, unknown>) => {
+        if (method !== "watch.subscribe") {
+          return { subscription: 1 };
+        }
+        const live = new DatabaseSync(dbPath);
+        try {
+          live
+            .prepare(
+              "INSERT INTO message(rowid, guid, sender, text, created_at) VALUES (?, ?, ?, ?, ?)",
+            )
+            .run(
+              1,
+              "REBUILT-STARTUP-GUID-1",
+              "+15550001111",
+              "sent while the watcher starts",
+              new Date().toISOString(),
+            );
+          const requestedCursor = params?.since_rowid;
+          const maxRowid = (
+            live.prepare("SELECT MAX(ROWID) AS maxRowid FROM message").get() as {
+              maxRowid: number;
+            }
+          ).maxRowid;
+          // Match imsg's MessageWatcher.start contract: cursor 0 self-fences to
+          // the subscribe-time maximum, while any other explicit cursor is kept.
+          effectiveWatcherCursor =
+            requestedCursor === 0
+              ? maxRowid
+              : typeof requestedCursor === "number"
+                ? requestedCursor
+                : maxRowid;
+        } finally {
+          live.close();
+        }
+        return { subscription: 1 };
+      },
+      onClose: async (notify) => {
+        const live = new DatabaseSync(dbPath);
+        try {
+          const rows = live
+            .prepare(
+              "SELECT rowid AS id, guid, sender, text, created_at FROM message WHERE rowid > ? ORDER BY rowid",
+            )
+            .all(effectiveWatcherCursor ?? 0) as Array<{
+            id: number;
+            guid: string;
+            sender: string;
+            text: string;
+            created_at: string;
+          }>;
+          for (const row of rows) {
+            notify({
+              id: row.id,
+              guid: row.guid,
+              chat_id: 123,
+              sender: row.sender,
+              is_from_me: false,
+              text: row.text,
+              is_group: false,
+              created_at: row.created_at,
+            });
+          }
+        } finally {
+          live.close();
+        }
+        await Promise.resolve();
+        await Promise.resolve();
+      },
+    });
+
+    await runIMessageMonitor({ imessage: { dbPath } });
+
+    expect(client.request).toHaveBeenCalledWith(
+      "watch.subscribe",
+      {
+        attachments: false,
+        include_reactions: true,
+        since_rowid: -1,
+      },
+      { timeoutMs: 10_000 },
+    );
+    await vi.waitFor(() => {
+      expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(1);
+    });
+    expect(
+      loadIMessageRecoveryCursor("default", resolveIMessageRecoveryCursorDbIdentity({ dbPath })),
+    ).toBe(1);
+  });
+
   it("repairs anchorless group watch payloads before routing or cursor updates", async () => {
     openClawStates.push(
       await createOpenClawTestState({

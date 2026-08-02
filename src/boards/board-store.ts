@@ -1,9 +1,8 @@
-import { createHash, randomBytes } from "node:crypto";
+import { createHash } from "node:crypto";
 import type {
   BoardMcpAppDescriptor,
   BoardOp,
   BoardSnapshot,
-  BoardWidgetMaterializedContent,
   BoardWidgetMaterializedPutParams,
   BoardWidgetDeclared,
   BoardWidgetGeneratedIdentity,
@@ -11,7 +10,6 @@ import type {
 } from "../../packages/gateway-protocol/src/index.js";
 import { boardDeclarationIsSubset, normalizeBoardWidgetDeclared } from "./board-capabilities.js";
 import {
-  applyBoardOps,
   BOARD_SIZE_PRESETS,
   BoardValidationError,
   insertBoardWidget,
@@ -59,12 +57,6 @@ export interface BoardStore {
   listSessionsWithBoards(): string[];
 }
 
-type StoredBoard = {
-  snapshot: BoardSnapshot;
-  documents: Map<string, BoardWidgetDocument>;
-  nameIdentities: Map<string, BoardWidgetNameIdentityMarker>;
-};
-
 const BOARD_MAX_WIDGETS = 48;
 const BOARD_MAX_WIDGET_HTML_BYTES = 256 * 1024;
 const BOARD_MAX_WIDGET_PLUGIN_PROPS_BYTES = 8 * 1024;
@@ -75,10 +67,6 @@ export type BoardWidgetNameIdentityMarker =
   | { kind: "explicit" }
   | BoardWidgetGeneratedIdentityMarker
   | { kind: "invalid" };
-
-function emptyBoardSnapshot(sessionKey: string): BoardSnapshot {
-  return { sessionKey, revision: 0, tabs: [], widgets: [] };
-}
 
 export function cloneBoardSnapshot(snapshot: BoardSnapshot): BoardSnapshot {
   return {
@@ -102,59 +90,6 @@ export function cloneBoardSnapshot(snapshot: BoardSnapshot): BoardSnapshot {
           }
         : {}),
     })),
-  };
-}
-
-function cloneBoardWidgetHtmlDocument(document: BoardWidgetHtmlDocument): BoardWidgetHtmlDocument {
-  return {
-    ...document,
-    ...(document.declared
-      ? {
-          declared: {
-            ...(document.declared.netOrigins
-              ? { netOrigins: [...document.declared.netOrigins] }
-              : {}),
-            ...(document.declared.tools ? { tools: [...document.declared.tools] } : {}),
-          },
-        }
-      : {}),
-  };
-}
-
-function cloneBoardWidgetHtmlViewMetadata(
-  document: BoardWidgetHtmlDocument,
-): BoardWidgetHtmlViewMetadata {
-  const { html: _html, ...metadata } = cloneBoardWidgetHtmlDocument(document);
-  return metadata;
-}
-
-function createBoardWidgetDocument(
-  content: BoardWidgetMaterializedContent,
-  revision: number,
-  grantState: BoardWidgetHtmlDocument["grantState"],
-  declared: BoardWidgetDeclared | undefined,
-  instanceId: string,
-): BoardWidgetDocument | undefined {
-  if (content.kind === "html") {
-    return {
-      html: content.html,
-      revision,
-      sha256: createHash("sha256").update(content.html).digest("hex"),
-      viewGeneration: instanceId,
-      grantState,
-      ...(declared ? { declared } : {}),
-    };
-  }
-  if (content.kind === "plugin") {
-    return undefined;
-  }
-  return {
-    descriptor: { ...content.descriptor },
-    revision,
-    instanceId,
-    grantState,
-    declaredTools: [...(declared?.tools ?? [])],
-    interactive: content.interactive,
   };
 }
 
@@ -236,33 +171,6 @@ export function createBoardWidgetPutResult(
   resolvedWidgetName: string,
 ): BoardWidgetPutResult {
   return { ...cloneBoardSnapshot(snapshot), resolvedWidgetName };
-}
-
-type BoardWidgetGrantScope =
-  | { kind: "html" }
-  | { kind: "mcp-app"; serverName: string }
-  | { kind: "plugin" };
-
-function grantScopeMatches(
-  previous: BoardWidgetDocument | undefined,
-  content: BoardWidgetMaterializedContent,
-) {
-  const prior: BoardWidgetGrantScope | undefined = previous
-    ? "html" in previous
-      ? { kind: "html" }
-      : { kind: "mcp-app", serverName: previous.descriptor.serverName }
-    : undefined;
-  const next: BoardWidgetGrantScope =
-    content.kind === "html"
-      ? { kind: "html" }
-      : content.kind === "mcp-app"
-        ? { kind: "mcp-app", serverName: content.descriptor.serverName }
-        : { kind: "plugin" };
-  return (
-    prior === undefined ||
-    (prior.kind === "html" && next.kind === "html") ||
-    (prior.kind === "mcp-app" && next.kind === "mcp-app" && prior.serverName === next.serverName)
-  );
 }
 
 function validatePluginContent(params: BoardWidgetMaterializedPutParams): void {
@@ -431,167 +339,4 @@ export function createBoardGrantSnapshot(
   snapshot.widgets.find((candidate) => candidate.name === name)!.grantState = decision;
   snapshot.revision += 1;
   return snapshot;
-}
-
-export class InMemoryBoardStore implements BoardStore {
-  private readonly boards = new Map<string, StoredBoard>();
-
-  getSnapshot(sessionKey: string): BoardSnapshot {
-    return cloneBoardSnapshot(
-      this.boards.get(sessionKey)?.snapshot ?? emptyBoardSnapshot(sessionKey),
-    );
-  }
-
-  getSnapshotWithHtmlViewMetadata(sessionKey: string): BoardSnapshotWithHtmlViewMetadata {
-    const stored = this.boards.get(sessionKey);
-    const htmlViewMetadata = new Map<string, BoardWidgetHtmlViewMetadata>();
-    for (const [name, document] of stored?.documents ?? []) {
-      if ("html" in document) {
-        htmlViewMetadata.set(name, cloneBoardWidgetHtmlViewMetadata(document));
-      }
-    }
-    return {
-      snapshot: cloneBoardSnapshot(stored?.snapshot ?? emptyBoardSnapshot(sessionKey)),
-      htmlViewMetadata,
-    };
-  }
-
-  applyOps(sessionKey: string, ops: readonly BoardOp[]): BoardSnapshot {
-    const current = this.boards.get(sessionKey);
-    const snapshot = current?.snapshot ?? emptyBoardSnapshot(sessionKey);
-    if (ops.length === 0) {
-      return cloneBoardSnapshot(snapshot);
-    }
-    const layout = applyBoardOps(snapshot, ops);
-    const next: BoardSnapshot = {
-      sessionKey,
-      revision: snapshot.revision + 1,
-      ...layout,
-    };
-    const removedNames = new Set(next.widgets.map((widget) => widget.name));
-    const documents = new Map(
-      [...(current?.documents ?? [])].filter(([name]) => removedNames.has(name)),
-    );
-    const nameIdentities = new Map(
-      [...(current?.nameIdentities ?? [])].filter(([name]) => removedNames.has(name)),
-    );
-    if (next.tabs.length === 0 && next.widgets.length === 0) {
-      this.boards.delete(sessionKey);
-    } else {
-      this.boards.set(sessionKey, { snapshot: next, documents, nameIdentities });
-    }
-    return cloneBoardSnapshot(next);
-  }
-
-  putWidget(params: BoardWidgetMaterializedPutParams): BoardWidgetPutResult {
-    let canonicalParams = normalizeBoardWidgetPutParams(params);
-    const declared = canonicalParams.declared;
-    const current = this.boards.get(canonicalParams.sessionKey);
-    const prior = current?.snapshot ?? emptyBoardSnapshot(canonicalParams.sessionKey);
-    canonicalParams = resolveBoardWidgetPutParams(
-      prior,
-      canonicalParams,
-      current?.nameIdentities ?? new Map(),
-    );
-    const existingDocument = current?.documents.get(canonicalParams.name);
-    const grantedSha256 =
-      existingDocument && "html" in existingDocument && existingDocument.grantState === "granted"
-        ? existingDocument.sha256
-        : undefined;
-    const instanceId = randomBytes(16).toString("hex");
-    const snapshot = createBoardWidgetPutSnapshot(prior, canonicalParams, {
-      grantScopeMatches: grantScopeMatches(existingDocument, canonicalParams.content),
-      grantedSha256,
-      instanceId,
-    });
-    const documents = new Map(current?.documents ?? []);
-    const widgetRevision = snapshot.widgets.find(
-      (widget) => widget.name === canonicalParams.name,
-    )!.revision;
-    const widget = snapshot.widgets.find((candidate) => candidate.name === canonicalParams.name)!;
-    const document = createBoardWidgetDocument(
-      canonicalParams.content,
-      widgetRevision,
-      widget.grantState,
-      declared,
-      instanceId,
-    );
-    if (document) {
-      documents.set(canonicalParams.name, document);
-    } else {
-      documents.delete(canonicalParams.name);
-    }
-    const nameIdentities = new Map(current?.nameIdentities ?? []);
-    if (canonicalParams.generatedIdentity) {
-      nameIdentities.set(canonicalParams.name, {
-        kind: "generated",
-        source: canonicalParams.generatedIdentity.source,
-        key: canonicalParams.generatedIdentity.key,
-      });
-    } else {
-      nameIdentities.set(canonicalParams.name, { kind: "explicit" });
-    }
-    this.boards.set(canonicalParams.sessionKey, {
-      snapshot,
-      documents,
-      nameIdentities,
-    });
-    return createBoardWidgetPutResult(snapshot, canonicalParams.name);
-  }
-
-  grant(
-    sessionKey: string,
-    name: string,
-    decision: "granted" | "rejected",
-    revision: number,
-    instanceId?: string,
-  ): BoardSnapshot {
-    const current = this.boards.get(sessionKey);
-    if (!current) {
-      throw new BoardValidationError("not_found", `board widget not found: ${name}`);
-    }
-    const snapshot = createBoardGrantSnapshot(
-      current.snapshot,
-      name,
-      decision,
-      revision,
-      instanceId,
-    );
-    const document = current.documents.get(name);
-    if (document) {
-      document.grantState = decision;
-    }
-    this.boards.set(sessionKey, {
-      snapshot,
-      documents: current.documents,
-      nameIdentities: current.nameIdentities,
-    });
-    return cloneBoardSnapshot(snapshot);
-  }
-
-  readWidgetHtml(sessionKey: string, name: string): BoardWidgetHtmlDocument | undefined {
-    const document = this.boards.get(sessionKey)?.documents.get(name);
-    if (!document) {
-      return undefined;
-    }
-    return "html" in document ? cloneBoardWidgetHtmlDocument(document) : undefined;
-  }
-
-  readWidgetMcpApp(sessionKey: string, name: string): BoardWidgetMcpAppDocument | undefined {
-    const document = this.boards.get(sessionKey)?.documents.get(name);
-    return document && !("html" in document)
-      ? {
-          ...document,
-          descriptor: { ...document.descriptor },
-          declaredTools: [...document.declaredTools],
-        }
-      : undefined;
-  }
-
-  listSessionsWithBoards(): string[] {
-    return [...this.boards]
-      .filter(([, board]) => board.snapshot.tabs.length > 0 || board.snapshot.widgets.length > 0)
-      .map(([sessionKey]) => sessionKey)
-      .toSorted();
-  }
 }

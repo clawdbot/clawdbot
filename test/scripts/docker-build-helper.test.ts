@@ -4422,10 +4422,14 @@ heartbeat_elapsed="\${BASH_REMATCH[1]}"
       'if [ -z "$account_home" ]; then',
       'export HOME="$account_home"',
       'export USERPROFILE="$account_home"',
+      "unset OPENCLAW_HOME",
       'export OPENCLAW_STATE_DIR="$account_home/.openclaw"',
       'export OPENCLAW_CONFIG_PATH="$OPENCLAW_STATE_DIR/openclaw.json"',
     ]);
 
+    expect(runner.indexOf("unset OPENCLAW_HOME")).toBeLessThan(
+      runner.indexOf('export OPENCLAW_STATE_DIR="$account_home/.openclaw"'),
+    );
     expect(
       runner.indexOf('export OPENCLAW_CONFIG_PATH="$OPENCLAW_STATE_DIR/openclaw.json"'),
     ).toBeLessThan(runner.indexOf("node scripts/e2e/lib/upgrade-survivor/assertions.mjs seed"));

@@ -3,6 +3,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { requestSessionCreate } from "../sessions/index.ts";
 import { normalizeAgentId } from "../sessions/session-key.ts";
+import { normalizeTaskSummary } from "../tasks/task-summary.ts";
 import {
   normalizeString,
   replaceCard,
@@ -10,7 +11,7 @@ import {
   workboardCardSessionKey,
 } from "./card-state.ts";
 import { formatError } from "./normalization-utils.ts";
-import { normalizeCardPayload, normalizeTaskSummary } from "./normalization.ts";
+import { normalizeCardPayload } from "./normalization.ts";
 import {
   getWorkboardState,
   invalidateWorkboardLoads,
