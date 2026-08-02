@@ -202,9 +202,10 @@ describe("plugin npm extended-stable workflow", () => {
     );
     expect(prepare.if).toBeUndefined();
     expect(prepare.run).toContain('bash scripts/plugin-npm-publish.sh --pack "${PACKAGE_DIR}"');
-    expect(prepare.run).toContain('raw.lastIndexOf("[")');
+    expect(prepare.run).toContain("function resolvePackEntries(value)");
+    expect(prepare.run).toContain('raw[index] !== "[" && raw[index] !== "{"');
+    expect(prepare.run).toContain("const entries = resolvePackEntries(candidate)");
     expect(prepare.run).toContain("npm can print bundled-dependency summaries");
-    expect(prepare.run).toContain("if (index === 0)");
     expect(prepare.run).toContain(
       "fs.writeFileSync(process.argv[3], `${JSON.stringify(pack, null, 2)}\\n`)",
     );

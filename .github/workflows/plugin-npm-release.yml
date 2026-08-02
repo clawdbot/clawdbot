@@ -401,23 +401,36 @@ jobs:
           node - "${pack_output}" "${pack_json}" <<'NODE'
           const fs = require("node:fs");
           const raw = fs.readFileSync(process.argv[2], "utf8").trim();
+          function resolvePackEntries(value) {
+            if (Array.isArray(value)) return value;
+            if (!value || typeof value !== "object") return [];
+            const looksLikeEntry =
+              typeof value.id === "string" ||
+              typeof value.name === "string" ||
+              typeof value.version === "string" ||
+              typeof value.filename === "string";
+            return looksLikeEntry
+              ? [value]
+              : Object.values(value).filter(
+                  (entry) => entry && typeof entry === "object" && !Array.isArray(entry),
+                );
+          }
           let pack;
-          for (let index = raw.lastIndexOf("["); index >= 0; index = raw.lastIndexOf("[", index - 1)) {
+          for (let index = raw.length - 1; index >= 0; index -= 1) {
+            if (raw[index] !== "[" && raw[index] !== "{") continue;
             try {
               const candidate = JSON.parse(raw.slice(index));
-              if (Array.isArray(candidate)) {
-                pack = candidate;
+              const entries = resolvePackEntries(candidate);
+              if (entries.length > 0) {
+                pack = entries;
                 break;
               }
             } catch {
               // npm can print bundled-dependency summaries before its JSON result.
             }
-            if (index === 0) {
-              break;
-            }
           }
           if (!pack) {
-            throw new Error("npm pack did not emit a JSON array.");
+            throw new Error("npm pack did not emit package JSON.");
           }
           fs.writeFileSync(process.argv[3], `${JSON.stringify(pack, null, 2)}\n`);
           NODE
