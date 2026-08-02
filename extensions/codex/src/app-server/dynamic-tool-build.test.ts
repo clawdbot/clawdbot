@@ -1162,7 +1162,10 @@ describe("Codex app-server dynamic tool build", () => {
     params.disableTools = false;
     params.authProfileStore = authProfileStore;
     params.messageActionTurnCapability = "turn-capability-1";
+    params.senderId = "U_REQUESTER";
+    params.currentMessageId = "1785660529.966149";
     params.runtimePlan = createCodexRuntimePlanFixture();
+    const info = vi.spyOn(embeddedAgentLog, "info").mockImplementation(() => undefined);
     const factoryOptions: unknown[] = [];
     setOpenClawCodingToolsFactoryForTests((options) => {
       factoryOptions.push(options);
@@ -1178,6 +1181,36 @@ describe("Codex app-server dynamic tool build", () => {
     expect(
       (factoryOptions[0] as { messageActionTurnCapability?: unknown }).messageActionTurnCapability,
     ).toBe("turn-capability-1");
+    expect(info).toHaveBeenCalledWith("Codex message action capability construction boundary", {
+      capabilityPresent: true,
+      currentMessageIdPresent: true,
+      senderIdPresent: true,
+      sessionKeyPresent: true,
+    });
+    expect(JSON.stringify(info.mock.calls)).not.toContain("turn-capability-1");
+  });
+
+  it("reports a missing capability at Codex construction without logging identity values", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    params.disableTools = false;
+    params.senderId = "U_PRIVATE_REQUESTER";
+    params.currentMessageId = "1785660529.966149";
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    const info = vi.spyOn(embeddedAgentLog, "info").mockImplementation(() => undefined);
+    setOpenClawCodingToolsFactoryForTests(() => []);
+
+    await buildDynamicToolsForTest(params, workspaceDir, { sandbox: null as never });
+
+    expect(info).toHaveBeenCalledWith("Codex message action capability construction boundary", {
+      capabilityPresent: false,
+      currentMessageIdPresent: true,
+      senderIdPresent: true,
+      sessionKeyPresent: true,
+    });
+    expect(JSON.stringify(info.mock.calls)).not.toContain("U_PRIVATE_REQUESTER");
+    expect(JSON.stringify(info.mock.calls)).not.toContain("1785660529.966149");
   });
 
   it("passes owner identity into Codex dynamic tool construction", async () => {

@@ -232,6 +232,16 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
   toolBuildStages.mark("load-agent-harness-tools");
   const sessionKeys = resolveOpenClawCodingToolsSessionKeys(params, input.sandboxSessionKey);
   const nativeExecutionPolicy = resolveCodexNativeExecutionPolicyForDynamicTools(input);
+  if (params.messageActionTurnCapability || params.senderId) {
+    // The token is process-local authority and must never enter diagnostics.
+    // Presence-only facts distinguish a mint failure from a harness handoff loss.
+    embeddedAgentLog.info("Codex message action capability construction boundary", {
+      capabilityPresent: Boolean(params.messageActionTurnCapability),
+      currentMessageIdPresent: params.currentMessageId != null,
+      senderIdPresent: Boolean(params.senderId),
+      sessionKeyPresent: Boolean(sessionKeys.sessionKey),
+    });
+  }
   const allTools = createOpenClawCodingTools({
     agentId: input.sessionAgentId,
     ...buildEmbeddedAttemptToolRunContext(params),

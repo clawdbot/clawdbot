@@ -94,6 +94,22 @@ export {
 
 const log = createSubsystemLogger("agents/agent-command");
 
+export function resolveMessageActionTurnCapabilityMintBoundary(params: {
+  requestMessageId?: string;
+  messageChannel?: string;
+  sessionKey?: string;
+  currentChannelId?: string;
+  capability?: string;
+}) {
+  return {
+    requestMessageIdPresent: Boolean(params.requestMessageId?.trim()),
+    trustedIngress: isTrustedMessageActionTurnIngress(params.messageChannel),
+    sessionKeyPresent: Boolean(params.sessionKey?.trim()),
+    channelContextPresent: Boolean(params.currentChannelId?.trim()),
+    capabilityMinted: Boolean(params.capability),
+  };
+}
+
 function shouldClearReusedCliSessionAfterError(err: unknown): boolean {
   if (readErrorName(err) === "AbortError") {
     return true;
@@ -654,10 +670,9 @@ export function runAgentAttempt(params: {
       ? "openclaw"
       : undefined);
   const requestMessageId = params.opts.requestMessageId?.trim();
+  const trustedMessageIngress = isTrustedMessageActionTurnIngress(params.messageChannel);
   const messageActionTurnCapability =
-    requestMessageId &&
-    params.sessionKey &&
-    isTrustedMessageActionTurnIngress(params.messageChannel)
+    requestMessageId && params.sessionKey && trustedMessageIngress
       ? mintMessageActionTurnCapability({
           agentId: params.sessionAgentId,
           runId: params.runId,
@@ -676,6 +691,19 @@ export function runAgentAttempt(params: {
           ttlMs: params.timeoutMs + 60_000,
         })
       : undefined;
+  if (requestMessageId || params.runContext.senderId) {
+    // Never log the opaque capability. These boundary facts identify which
+    // trusted ingress prerequisite was lost before a fail-closed tool call.
+    log.info("message action turn capability mint boundary", {
+      ...resolveMessageActionTurnCapabilityMintBoundary({
+        requestMessageId,
+        messageChannel: params.messageChannel,
+        sessionKey: params.sessionKey,
+        currentChannelId: params.runContext.currentChannelId,
+        capability: messageActionTurnCapability,
+      }),
+    });
+  }
   if (!isRawModelRun && isCliExecutionProvider) {
     const cliSessionBinding = getCliSessionBinding(params.sessionEntry, cliExecutionProvider);
     const cliProcessCwd = params.cwd ? resolveUserPath(params.cwd) : params.workspaceDir;

@@ -30,11 +30,50 @@ import { FailoverError } from "../failover-error.js";
 import {
   persistAcpTurnTranscript,
   persistCliTurnTranscript,
+  resolveMessageActionTurnCapabilityMintBoundary,
   runAgentAttempt as runAgentAttemptImpl,
 } from "./attempt-execution.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "./claude-cli-project-dir.js";
 
 type RunAgentAttemptParams = Parameters<typeof runAgentAttemptImpl>[0];
+
+describe("message action capability mint diagnostics", () => {
+  it("reports only categorical boundary facts", () => {
+    const diagnostic = resolveMessageActionTurnCapabilityMintBoundary({
+      requestMessageId: "1785660529.966149",
+      messageChannel: "slack",
+      sessionKey: "agent:main:slack:channel:c0bly1apgh5",
+      currentChannelId: "C0BLY1APGH5",
+      capability: "opaque-secret-token",
+    });
+
+    expect(diagnostic).toEqual({
+      requestMessageIdPresent: true,
+      trustedIngress: true,
+      sessionKeyPresent: true,
+      channelContextPresent: true,
+      capabilityMinted: true,
+    });
+    expect(JSON.stringify(diagnostic)).not.toContain("opaque-secret-token");
+  });
+
+  it("identifies a missing trusted request id before mint", () => {
+    expect(
+      resolveMessageActionTurnCapabilityMintBoundary({
+        messageChannel: "slack",
+        sessionKey: "agent:main:slack:channel:c0bly1apgh5",
+        currentChannelId: "C0BLY1APGH5",
+      }),
+    ).toEqual({
+      requestMessageIdPresent: false,
+      trustedIngress: true,
+      sessionKeyPresent: true,
+      channelContextPresent: true,
+      capabilityMinted: false,
+    });
+  });
+});
+
 const runAgentAttempt = (
   params: Omit<RunAgentAttemptParams, "lifecycleGeneration"> &
     Partial<Pick<RunAgentAttemptParams, "lifecycleGeneration">>,
