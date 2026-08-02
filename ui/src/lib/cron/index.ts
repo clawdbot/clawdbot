@@ -32,7 +32,6 @@ export { loadCronFailingCount, loadCronScopeStats } from "./scope.ts";
 
 const CRON_CHANNEL_LAST = "last";
 type CronDelivery = NonNullable<CronJob["delivery"]>;
-type CronAnnounceDelivery = Extract<CronDelivery, { mode: "announce" }>;
 
 export type CronFormState = {
   name: string;
@@ -69,7 +68,7 @@ export type CronFormState = {
   deliveryAccountId: string;
   deliveryBestEffort: boolean;
   deliveryThreadId?: CronDelivery["threadId"];
-  deliveryCompletionDestination?: CronAnnounceDelivery["completionDestination"];
+  deliveryCompletionDestination?: CronDelivery["completionDestination"];
   deliveryFailureDestination?: CronDelivery["failureDestination"];
   failureAlertMode: "inherit" | "disabled" | "custom";
   failureAlertAfter: string;
