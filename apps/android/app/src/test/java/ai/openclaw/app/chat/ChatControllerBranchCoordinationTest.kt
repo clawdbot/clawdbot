@@ -723,24 +723,9 @@ class ChatControllerBranchCoordinationTest {
         ownerAgentId = "main",
       )
       val gateway = ScriptedGateway(json)
-      gateway.respondWith(
-        "chat.history",
-        historyResponse(
-          sessionId = "background",
-          messages = listOf(ReplayHistoryMessage("user", "old", 1, entryId = "leaf-old")),
-        ),
-      )
-      gateway.respondWith(
-        "sessions.branches.list",
-        """{"branches":[{"leafEntryId":"leaf-old","headline":"Old","messageCount":1,"active":true}]}""",
-      )
-      val controller = controller(gateway)
+      val controller = controller(gateway, StandardTestDispatcher(testScheduler))
+      runCurrent()
       controller.awaitOutboxRestore()
-      controller.load(backgroundKey)
-      withContext(Dispatchers.Default.limitedParallelism(1)) {
-        withTimeout(5_000) { controller.sessionBranches.first { it.isNotEmpty() } }
-      }
-      controller.switchSession("main")
       gateway.respondWith(
         "chat.history",
         historyResponse(
@@ -760,13 +745,11 @@ class ChatControllerBranchCoordinationTest {
         "sessions.changed",
         """{"reason":"branch-switch","sessionKey":"$backgroundKey","agentId":"main"}""",
       )
-      withContext(Dispatchers.Default.limitedParallelism(1)) {
-        withTimeout(5_000) {
-          while (outbox.load("gateway-a").single().status != ChatOutboxStatus.Failed) {
-            kotlinx.coroutines.delay(10)
-          }
-        }
-      }
+      runCurrent()
+      assertTrue(outbox.branchState("gateway-a", backgroundScope)?.needsReconciliation == true)
+
+      controller.handleGatewayEvent("health", null)
+      advanceUntilIdle()
 
       assertEquals(ChatOutboxStatus.Failed, outbox.load("gateway-a").single().status)
     }
@@ -860,25 +843,20 @@ class ChatControllerBranchCoordinationTest {
             ),
         )
       }
-      val controller = controller(gateway)
+      val controller = controller(gateway, StandardTestDispatcher(testScheduler))
+      runCurrent()
       controller.awaitOutboxRestore()
       controller.handleGatewayEvent("health", null)
-      withContext(Dispatchers.Default.limitedParallelism(1)) {
-        withTimeout(5_000) { controller.healthOk.first { it } }
-      }
+      runCurrent()
+      assertTrue(controller.healthOk.value)
       branchesEntered.await()
 
       assertTrue(controller.sendMessageAwaitAcceptance("second queued", "off", emptyList()))
-      releaseBranches.complete(Unit)
-      withContext(Dispatchers.Default.limitedParallelism(1)) {
-        withTimeout(5_000) {
-          while (outbox.branchState("gateway-a", branchScope)?.needsReconciliation != false) {
-            kotlinx.coroutines.delay(10)
-          }
-        }
-      }
-
       assertEquals(2, outbox.load("gateway-a").size)
+      releaseBranches.complete(Unit)
+      advanceUntilIdle()
+
+      assertEquals(2, gateway.callCount("chat.send"))
       assertTrue(outbox.load("gateway-a").none { it.status == ChatOutboxStatus.Failed })
     }
 }
