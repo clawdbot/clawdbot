@@ -18,6 +18,7 @@ import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommandFromIngress } from "../commands/agent.js";
 import type { GatewayHttpChatCompletionsConfig } from "../config/types.gateway.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
 import {
   DEFAULT_INPUT_IMAGE_MAX_BYTES,
@@ -861,16 +862,6 @@ function resolveChatCompletionTokenCap(value: unknown, field: string): number | 
   return maxTokens;
 }
 
-function resolveErrorMessage(err: unknown): string {
-  if (err instanceof Error) {
-    const message = err.message.trim();
-    if (message) {
-      return message;
-    }
-  }
-  return String(err);
-}
-
 export async function handleOpenAiHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -916,7 +907,7 @@ export async function handleOpenAiHttpRequest(
     maxTokens = maxCompletionTokens ?? legacyMaxTokens;
   } catch (err) {
     sendJson(res, 400, {
-      error: { message: resolveErrorMessage(err), type: "invalid_request_error" },
+      error: { message: formatErrorMessage(err).trim(), type: "invalid_request_error" },
     });
     return true;
   }
@@ -933,7 +924,7 @@ export async function handleOpenAiHttpRequest(
   } catch (err) {
     sendJson(res, 400, {
       error: {
-        message: `Invalid response_format: ${resolveErrorMessage(err)}`,
+        message: `Invalid response_format: ${formatErrorMessage(err).trim()}`,
         type: "invalid_request_error",
       },
     });
@@ -945,7 +936,7 @@ export async function handleOpenAiHttpRequest(
   } catch (err) {
     sendJson(res, 400, {
       error: {
-        message: `Invalid stop: ${resolveErrorMessage(err)}`,
+        message: `Invalid stop: ${formatErrorMessage(err).trim()}`,
         type: "invalid_request_error",
       },
     });
@@ -1034,7 +1025,7 @@ export async function handleOpenAiHttpRequest(
   } catch (err) {
     sendJson(res, 400, {
       error: {
-        message: `Invalid tools/tool_choice: ${resolveErrorMessage(err)}`,
+        message: `Invalid tools/tool_choice: ${formatErrorMessage(err).trim()}`,
         type: "invalid_request_error",
       },
     });
