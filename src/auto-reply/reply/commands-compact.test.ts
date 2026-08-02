@@ -204,6 +204,36 @@ describe("handleCompactCommand", () => {
     expect(vi.mocked(waitForEmbeddedAgentRunEnd)).not.toHaveBeenCalled();
   });
 
+  it("keeps the verified current owner in bounded manual-compaction prompt guidance", async () => {
+    vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({
+      ok: true,
+      compacted: false,
+    });
+    const ownerIds = Array.from({ length: 24 }, (_, index) => `owner-${index}`);
+    const params = buildCompactParams("/compact", {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig);
+    params.command = {
+      ...params.command,
+      ownerList: ownerIds,
+      senderId: "owner-23",
+      senderIsOwner: true,
+    };
+    params.sessionEntry = {
+      sessionId: "session-1",
+      updatedAt: Date.now(),
+    };
+
+    await handleCompactCommand(params, true);
+
+    const call = requireCompactEmbeddedAgentSessionCall();
+    expect(call.ownerNumbers).toHaveLength(16);
+    expect(call.ownerNumbers?.at(-1)).toBe("owner-23");
+    expect(call).not.toHaveProperty("senderIsOwner");
+    expect(params.command.ownerList).toEqual(ownerIds);
+  });
+
   it("does not abort the command reply run before compacting", async () => {
     vi.mocked(isEmbeddedAgentRunAbortableForCompaction).mockReturnValueOnce(false);
     vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({
