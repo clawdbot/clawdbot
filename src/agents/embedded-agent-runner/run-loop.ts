@@ -280,11 +280,17 @@ export async function runPreparedEmbeddedLoop(
       hookContext: hookCtx,
       sessionPromptState,
     });
+    startupStages.mark("compaction-runtime");
     let authRetryPending = false;
     let accumulatedReplayState = createEmbeddedRunReplayState();
     let latestMcpAppChannelView: McpAppChannelView | undefined;
     while (true) {
       refreshPreparedRuntimeSnapshot();
+      // First-attempt diagnostics only; later iterations reuse the tracker
+      // whose summary has already been emitted.
+      if (runLoopIterations === 0) {
+        startupStages.mark("runtime-snapshot");
+      }
       if (runLoopIterations >= MAX_RUN_LOOP_ITERATIONS) {
         const message =
           `Exceeded retry limit after ${runLoopIterations} attempts ` +

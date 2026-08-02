@@ -1,4 +1,4 @@
-import { listAgentIds } from "../agents/agent-scope-config.js";
+import { listAgentIds, resolveConfiguredAgentWorkspaceDirs } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { scheduleGatewayIdleTask, type GatewayIdleTaskHandle } from "./server-idle-task.js";
@@ -82,6 +82,17 @@ function dashboardDataPrewarmItems(
           return;
         }
         await prewarmGatewaySessionListData(cfg, agentId);
+      },
+    })),
+    // Dispatch resolves the runtime plugin registry under a per-agent-workspace
+    // cache key; a cold key pays a multi-second synchronous load that freezes
+    // the whole event loop on that agent's FIRST message. Warm every
+    // configured workspace's key here instead, while nobody is waiting.
+    ...resolveConfiguredAgentWorkspaceDirs(cfg).map((workspaceDir, index) => ({
+      name: `runtime-plugins.${index}`,
+      load: async () => {
+        const { ensureRuntimePluginsLoaded } = await import("../agents/runtime-plugins.js");
+        ensureRuntimePluginsLoaded({ config: cfg, workspaceDir });
       },
     })),
     {

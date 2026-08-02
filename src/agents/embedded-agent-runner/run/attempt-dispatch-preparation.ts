@@ -89,6 +89,9 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     resolveRunAttemptAuthProfileStore,
   } = preparedRuntime;
   const runtime = preparedRuntime.snapshot();
+  if (!input.startupStagesEmitted) {
+    startupStages.mark("attempt-entry");
+  }
 
   await fs.mkdir(workspaceDir, { recursive: true });
   if (!input.startupStagesEmitted) {

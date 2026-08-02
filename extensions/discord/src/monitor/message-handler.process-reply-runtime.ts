@@ -8,7 +8,7 @@ import { resolveChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyDispatchKind, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-import { getChildLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { info, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { readLatestAssistantTextByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
@@ -103,7 +103,6 @@ export function createDiscordMessageReplyRuntime(params: {
   const typingChannelId = deliverTarget.startsWith("channel:")
     ? deliverTarget.slice("channel:".length)
     : messageChannelId;
-  const typingLatencyLogger = getChildLogger({ module: "discord-auto-reply" });
   let typingLatencyLogged = false;
   let typingFeedback: ReturnType<typeof createDiscordReplyTypingFeedback> | undefined;
   const getTypingFeedback = () =>
@@ -136,13 +135,13 @@ export function createDiscordMessageReplyRuntime(params: {
           typingLatencyLogged = true;
           const now = Date.now();
           const messageTimestampMs = resolveTimestampMs(message.timestamp) ?? 0;
-          typingLatencyLogger.info(
-            {
-              channelId: typingChannelId,
-              ...(messageTimestampMs > 0 ? { sinceMessageMs: now - messageTimestampMs } : {}),
-              sinceDispatchMs: now - params.dispatchStartedAt,
-            },
-            "discord inbound→typing latency",
+          // Console (journald-visible) on purpose: the pino child logger only
+          // reaches the file log, which is where this line went unnoticed.
+          const sinceMessage =
+            messageTimestampMs > 0 ? ` sinceMessageMs=${now - messageTimestampMs}` : "";
+          info(
+            `[discord] inbound→typing latency channel=${typingChannelId}${sinceMessage} ` +
+              `sinceDispatchMs=${now - params.dispatchStartedAt}`,
           );
         }
         return getTypingFeedback().onReplyStart();
