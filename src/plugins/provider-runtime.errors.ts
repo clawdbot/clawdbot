@@ -1,5 +1,4 @@
-export const OAUTH_PROVIDER_CONFIGURED_UNAVAILABLE =
-  "OAUTH_PROVIDER_CONFIGURED_UNAVAILABLE" as const;
+const OAUTH_PROVIDER_CONFIGURED_UNAVAILABLE = "OAUTH_PROVIDER_CONFIGURED_UNAVAILABLE" as const;
 
 /** A known OAuth provider could not load its owning plugin or required auth hooks. */
 export class OAuthProviderConfiguredUnavailableError extends Error {

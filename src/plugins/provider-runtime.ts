@@ -863,12 +863,14 @@ export async function resolveProviderOAuthCredentialWithPlugin(params: {
       status: ownership.status === "unowned" ? "unowned" : "configured-unavailable",
     } as const;
   }
-  if (params.refresh && !plugin.refreshOAuth) {
-    return { status: "unhandled" } as const;
+  let credential = params.credential;
+  if (params.refresh) {
+    const refreshOAuth = plugin.refreshOAuth;
+    if (!refreshOAuth) {
+      return { status: "unhandled" } as const;
+    }
+    credential = await refreshOAuth(params.credential);
   }
-  const credential = params.refresh
-    ? await plugin.refreshOAuth(params.credential)
-    : params.credential;
   if (!credential) {
     return { status: "unhandled" } as const;
   }
