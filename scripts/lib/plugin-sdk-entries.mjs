@@ -30,6 +30,16 @@ export const privateLocalOnlyPluginSdkEntrypoints = pluginSdkSubpaths.filter((en
   privateLocalOnlyPluginSdkSubpathSet.has(entry),
 );
 
+/**
+ * Private owner-scoped runtimes that external official plugins need at runtime.
+ * These ship as JavaScript without becoming public package exports.
+ */
+export const packagedPrivatePluginSdkRuntimeEntrypoints = ["codex-native-task-runtime"];
+
+const packagedPrivatePluginSdkRuntimeEntrypointSet = new Set(
+  packagedPrivatePluginSdkRuntimeEntrypoints,
+);
+
 /** Public plugin SDK entrypoints that appear in package exports. */
 export const publicPluginSdkEntrypoints = pluginSdkEntrypoints.filter(
   (entry) => entry === "index" || !privateLocalOnlyPluginSdkSubpathSet.has(entry),
@@ -103,4 +113,17 @@ export function listPrivateLocalOnlyPluginSdkDistArtifacts() {
     `dist/plugin-sdk/${entry}.js`,
     `dist/plugin-sdk/${entry}.d.ts`,
   ]);
+}
+
+/** List private owner-scoped JavaScript runtimes required in the root npm package. */
+export function listPackagedPrivatePluginSdkRuntimeArtifacts() {
+  return packagedPrivatePluginSdkRuntimeEntrypoints.map((entry) => `dist/plugin-sdk/${entry}.js`);
+}
+
+/** List private SDK artifacts that must remain absent from the root npm package. */
+export function listForbiddenPrivatePluginSdkPackArtifacts() {
+  return listPrivateLocalOnlyPluginSdkDistArtifacts().filter((artifact) => {
+    const match = /^dist\/plugin-sdk\/([^/]+)\.js$/u.exec(artifact);
+    return !match || !packagedPrivatePluginSdkRuntimeEntrypointSet.has(match[1]);
+  });
 }

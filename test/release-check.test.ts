@@ -10,8 +10,9 @@ import {
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
 } from "../scripts/lib/package-dist-inventory.ts";
 import {
+  listForbiddenPrivatePluginSdkPackArtifacts,
+  listPackagedPrivatePluginSdkRuntimeArtifacts,
   listPluginSdkDistArtifacts,
-  listPrivateLocalOnlyPluginSdkDistArtifacts,
 } from "../scripts/lib/plugin-sdk-entries.mjs";
 import {
   WORKSPACE_TEMPLATE_PACK_PATHS,
@@ -59,7 +60,8 @@ function withProcessEnv<T>(env: Record<string, string>, callback: () => T): T {
 }
 
 const requiredPluginSdkPackPaths = [...listPluginSdkDistArtifacts(), "dist/plugin-sdk/compat.js"];
-const privateLocalOnlyPluginSdkPackPaths = listPrivateLocalOnlyPluginSdkDistArtifacts();
+const forbiddenPrivatePluginSdkPackPaths = listForbiddenPrivatePluginSdkPackArtifacts();
+const packagedPrivatePluginSdkRuntimePaths = listPackagedPrivatePluginSdkRuntimeArtifacts();
 const requiredBundledPluginPackPaths = listBundledPluginPackArtifacts();
 
 describe("collectAppcastSparkleVersionErrors", () => {
@@ -565,16 +567,31 @@ describe("collectForbiddenPackPaths", () => {
 
   it("blocks private local-only plugin SDK artifacts from npm pack output", () => {
     expect(
-      collectForbiddenPackPaths(["dist/index.js", ...privateLocalOnlyPluginSdkPackPaths]),
-    ).toEqual([...privateLocalOnlyPluginSdkPackPaths].toSorted());
+      collectForbiddenPackPaths(["dist/index.js", ...forbiddenPrivatePluginSdkPackPaths]),
+    ).toEqual([...forbiddenPrivatePluginSdkPackPaths].toSorted());
   });
 
   it("keeps private local-only plugin SDK artifacts excluded by package files", () => {
     const pkg = JSON.parse(readFileSync("package.json", "utf8")) as { files?: string[] };
 
-    for (const entry of privateLocalOnlyPluginSdkPackPaths) {
+    for (const entry of forbiddenPrivatePluginSdkPackPaths) {
       expect(pkg.files).toContain(`!${entry}`);
     }
+  });
+
+  it("ships the owner-scoped Codex runtime without publishing it as an SDK export", () => {
+    const pkg = JSON.parse(readFileSync("package.json", "utf8")) as {
+      exports?: Record<string, unknown>;
+      files?: string[];
+    };
+
+    expect(packagedPrivatePluginSdkRuntimePaths).toEqual([
+      "dist/plugin-sdk/codex-native-task-runtime.js",
+    ]);
+    expect(pkg.files).not.toContain("!dist/plugin-sdk/codex-native-task-runtime.js");
+    expect(pkg.files).toContain("!dist/plugin-sdk/codex-native-task-runtime.d.ts");
+    expect(pkg.exports?.["./plugin-sdk/codex-native-task-runtime"]).toBeUndefined();
+    expect(collectForbiddenPackPaths(packagedPrivatePluginSdkRuntimePaths)).toEqual([]);
   });
 
   it("blocks legacy runtime dependency stamps from npm pack output", () => {
@@ -731,6 +748,7 @@ describe("collectMissingPackPaths", () => {
         "dist/extensions/acpx/mcp-proxy.mjs",
         ...requiredBundledPluginPackPaths,
         ...requiredPluginSdkPackPaths,
+        ...packagedPrivatePluginSdkRuntimePaths,
         ...WORKSPACE_TEMPLATE_PACK_PATHS,
         "scripts/npm-runner.mjs",
         "scripts/prepare-git-hooks.mjs",

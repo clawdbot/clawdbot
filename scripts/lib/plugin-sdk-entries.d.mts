@@ -1,6 +1,7 @@
 export const pluginSdkEntrypoints: string[];
 export const pluginSdkSubpaths: string[];
 export const privateLocalOnlyPluginSdkEntrypoints: string[];
+export const packagedPrivatePluginSdkRuntimeEntrypoints: string[];
 export const publicPluginSdkEntrypoints: string[];
 export const publicPluginSdkSubpaths: string[];
 export const deprecatedPublicPluginSdkEntrypoints: string[];
@@ -16,3 +17,5 @@ export function buildPluginSdkPackageExports(): Record<
 >;
 export function listPluginSdkDistArtifacts(): string[];
 export function listPrivateLocalOnlyPluginSdkDistArtifacts(): string[];
+export function listPackagedPrivatePluginSdkRuntimeArtifacts(): string[];
+export function listForbiddenPrivatePluginSdkPackArtifacts(): string[];

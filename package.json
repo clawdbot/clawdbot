@@ -42,7 +42,6 @@
     "!dist/plugin-sdk/channel-target-testing.d.ts",
     "!dist/plugin-sdk/channel-test-helpers.js",
     "!dist/plugin-sdk/channel-test-helpers.d.ts",
-    "!dist/plugin-sdk/codex-native-task-runtime.js",
     "!dist/plugin-sdk/codex-native-task-runtime.d.ts",
     "!dist/plugin-sdk/plugin-test-api.js",
     "!dist/plugin-sdk/plugin-test-api.d.ts",
