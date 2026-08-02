@@ -1,6 +1,7 @@
 // Doctor-only import for the retired exec approvals JSON store.
 import { isDeepStrictEqual } from "node:util";
 import { root, type Root } from "@openclaw/fs-safe";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import {
   resolveExecApprovalsPath,
@@ -42,6 +43,41 @@ type MigrationDecision =
   | "legacy-imported"
   | "malformed-legacy-preserved"
   | "receipt-authoritative";
+
+function normalizeLegacyNullableUsageMetadata(raw: string): string {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return raw;
+  }
+  if (!isRecord(parsed) || !isRecord(parsed.agents)) {
+    return raw;
+  }
+
+  let changed = false;
+  for (const agent of Object.values(parsed.agents)) {
+    if (!isRecord(agent) || !Array.isArray(agent.allowlist)) {
+      continue;
+    }
+    for (const entry of agent.allowlist) {
+      if (!isRecord(entry)) {
+        continue;
+      }
+      // Older writers stored never-used optional metadata as null. Repair it only at
+      // Doctor import so canonical persisted-policy validation remains fail-closed.
+      if (entry.lastUsedAt === null) {
+        delete entry.lastUsedAt;
+        changed = true;
+      }
+      if (entry.lastUsedCommand === null) {
+        delete entry.lastUsedCommand;
+        changed = true;
+      }
+    }
+  }
+  return changed ? JSON.stringify(parsed) : raw;
+}
 
 /** Detect retired approvals only when an explicit Doctor flow opts in. */
 export function detectLegacyExecApprovals(params: {
@@ -87,7 +123,9 @@ function decideAndRecordMigration(params: {
   const runId = `${sourceKey}:${params.snapshot.sha256.slice(0, 16)}`;
   const now = Date.now();
   const legacyFile =
-    params.snapshot.raw === null ? null : tryParsePersistedExecApprovals(params.snapshot.raw);
+    params.snapshot.raw === null
+      ? null
+      : tryParsePersistedExecApprovals(normalizeLegacyNullableUsageMetadata(params.snapshot.raw));
 
   return runOpenClawStateWriteTransaction(
     ({ db }) => {

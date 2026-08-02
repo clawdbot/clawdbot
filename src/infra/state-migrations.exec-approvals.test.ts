@@ -132,6 +132,44 @@ describe("legacy exec approvals migration", () => {
     expect(runReceipt(env)).toMatchObject({ status: "completed" });
   });
 
+  it("imports historical null allowlist usage metadata and releases the runtime gate", async () => {
+    const { env, stateDir, sourcePath } = useStateDir();
+    await writeLegacy(sourcePath, {
+      version: 1,
+      defaults: { security: "allowlist" },
+      agents: {
+        main: {
+          allowlist: [
+            {
+              pattern: "/usr/bin/rg",
+              lastUsedAt: null,
+              lastUsedCommand: null,
+            },
+          ],
+        },
+      },
+    });
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+    execApprovalsStoreTesting.reset();
+    expect(() => loadExecApprovals()).toThrow(ExecApprovalsMigrationRequiredError);
+
+    const result = await migrate({ env, stateDir });
+
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toEqual(["Imported legacy exec approvals into shared SQLite state."]);
+    expect(result.notices).toEqual([
+      "Removed retired exec approvals JSON after recording its migration decision.",
+    ]);
+    const imported = loadExecApprovals();
+    expect(imported.agents?.main?.allowlist).toEqual([
+      expect.objectContaining({ pattern: "/usr/bin/rg" }),
+    ]);
+    expect(imported.agents?.main?.allowlist?.[0]).not.toHaveProperty("lastUsedAt");
+    expect(imported.agents?.main?.allowlist?.[0]).not.toHaveProperty("lastUsedCommand");
+    expect(fs.existsSync(sourcePath)).toBe(false);
+    expect(receipt(env)).toMatchObject({ removed_source: 1, status: "completed" });
+  });
+
   it("is idempotent after successful source removal", async () => {
     const { env, stateDir, sourcePath } = useStateDir();
     await writeLegacy(sourcePath, { version: 1, agents: {} });
@@ -152,6 +190,23 @@ describe("legacy exec approvals migration", () => {
     expect(JSON.stringify(result)).not.toContain("secret-marker");
     expect(fs.readFileSync(sourcePath, "utf8")).toContain("secret-marker");
     expect(receipt(env)).toMatchObject({ removed_source: 0, source_record_count: 0 });
+    expect(readExecApprovalsConfigRow(database(env))).toBeUndefined();
+  });
+
+  it("keeps null metadata outside the historical fields invalid", async () => {
+    const { env, stateDir, sourcePath } = useStateDir();
+    await writeLegacy(sourcePath, {
+      version: 1,
+      agents: {
+        main: { allowlist: [{ pattern: "/usr/bin/rg", lastResolvedPath: null }] },
+      },
+    });
+
+    const result = await migrate({ env, stateDir });
+
+    expect(result.changes).toEqual([]);
+    expect(result.warnings[0]).toContain("Preserved malformed legacy exec approvals");
+    expect(fs.existsSync(sourcePath)).toBe(true);
     expect(readExecApprovalsConfigRow(database(env))).toBeUndefined();
   });
 
