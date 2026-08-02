@@ -71,19 +71,36 @@ function mergeRemoteModelWithTrustedTransport(
   remoteModel: ModelCatalogModel,
   trustedModel: ModelCatalogModel | undefined,
 ): ModelCatalogModel {
+  const protectedLifecycleModel =
+    trustedModel?.status === "deprecated" || trustedModel?.status === "disabled"
+      ? trustedModel
+      : undefined;
+  const {
+    status: _remoteStatus,
+    statusReason: _remoteStatusReason,
+    replaces: _remoteReplaces,
+    replacedBy: _remoteReplacedBy,
+    ...remoteModelWithoutLifecycle
+  } = remoteModel;
   // Spread keeps an untrusted own `__proto__` key as data instead of invoking
-  // Object.prototype's setter. Manifest-owned transport and lifecycle policy
-  // must survive same-ID remote refreshes.
+  // Object.prototype's setter. Trusted transport always wins; only terminal
+  // manifest lifecycles resist stale remote revival or replacement metadata.
   return {
-    ...remoteModel,
+    ...(protectedLifecycleModel ? remoteModelWithoutLifecycle : remoteModel),
     ...(trustedModel?.baseUrl ? { baseUrl: trustedModel.baseUrl } : {}),
     ...(trustedModel?.headers ? { headers: trustedModel.headers } : {}),
-    ...(trustedModel?.status !== undefined ? { status: trustedModel.status } : {}),
-    ...(trustedModel?.statusReason !== undefined
-      ? { statusReason: trustedModel.statusReason }
+    ...(protectedLifecycleModel?.status !== undefined
+      ? { status: protectedLifecycleModel.status }
       : {}),
-    ...(trustedModel?.replaces !== undefined ? { replaces: trustedModel.replaces } : {}),
-    ...(trustedModel?.replacedBy !== undefined ? { replacedBy: trustedModel.replacedBy } : {}),
+    ...(protectedLifecycleModel?.statusReason !== undefined
+      ? { statusReason: protectedLifecycleModel.statusReason }
+      : {}),
+    ...(protectedLifecycleModel?.replaces !== undefined
+      ? { replaces: protectedLifecycleModel.replaces }
+      : {}),
+    ...(protectedLifecycleModel?.replacedBy !== undefined
+      ? { replacedBy: protectedLifecycleModel.replacedBy }
+      : {}),
   };
 }
 
