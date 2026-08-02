@@ -1237,8 +1237,13 @@ export function startDiagnosticHeartbeat(
     const recoveryObservationNow = now - heartbeatOverdueMs;
     const shouldDeferRecovery = heartbeatOverdueMs >= DEFAULT_LIVENESS_EVENT_LOOP_DELAY_WARN_MS;
     if (shouldDeferRecovery) {
+      // Report the OVERDUE time, not raw elapsed: elapsed includes the full
+      // 30s interval, so printing it made ordinary 1-2s event-loop jitter read
+      // as a 31-32s freeze and repeatedly misdirected stall investigations.
       diag.warn(
-        `liveness heartbeat delayed ${Math.round(heartbeatElapsedMs)}ms; deferring recovery decisions`,
+        `liveness heartbeat overdue ${Math.round(heartbeatOverdueMs)}ms ` +
+          `(interval ${DIAGNOSTIC_HEARTBEAT_INTERVAL_MS}ms, elapsed ${Math.round(heartbeatElapsedMs)}ms); ` +
+          `deferring recovery decisions`,
       );
     }
     pruneDiagnosticSessionStates(now, true);
