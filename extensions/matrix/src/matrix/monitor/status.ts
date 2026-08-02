@@ -81,6 +81,15 @@ export function createMatrixMonitorStatusController(params: {
     error?: unknown;
   }) => {
     const at = paramsLocal.at ?? Date.now();
+    const tokenInvalidated = isMatrixAccessTokenInvalidatedError(paramsLocal.error);
+    if (status.lifecycle === "blocked" && status.terminalDisconnect === true && !tokenInvalidated) {
+      // The invalidated-token diagnosis is authoritative until a ready sync proves recovery.
+      // Late startup timeouts must not re-enable supervisor restarts or hide the auth failure.
+      status.connected = false;
+      status.lastEventAt = at;
+      emit();
+      return;
+    }
     const error = formatSyncError(paramsLocal.error);
     status.connected = false;
     status.lastEventAt = at;
@@ -90,7 +99,6 @@ export function createMatrixMonitorStatusController(params: {
     };
     status.lastError = error;
     status.healthState = paramsLocal.state.toLowerCase();
-    const tokenInvalidated = isMatrixAccessTokenInvalidatedError(paramsLocal.error);
     status.lifecycle = tokenInvalidated ? "blocked" : "recovering";
     status.terminalDisconnect = tokenInvalidated || undefined;
     emit();

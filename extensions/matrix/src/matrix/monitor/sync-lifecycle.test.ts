@@ -73,6 +73,13 @@ describe("createMatrixMonitorSyncLifecycle", () => {
       terminalDisconnect: true,
     });
 
+    statusController.noteUnexpectedError(new Error("startup readiness timed out"));
+    expectLastStatusFields(setStatus, {
+      lifecycle: "blocked",
+      terminalDisconnect: true,
+      lastError: "Unknown token",
+    });
+
     statusController.markStopped();
     expectLastStatusFields(setStatus, {
       lifecycle: "blocked",
