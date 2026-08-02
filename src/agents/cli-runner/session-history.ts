@@ -5,6 +5,7 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { parseSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
@@ -14,7 +15,6 @@ import {
   hasTranscriptEventsSync,
   loadTranscriptTailEventsByJsonlBytes,
 } from "../../config/sessions/session-accessor.js";
-import { parseSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
   parseSessionTranscriptTreeEntry,
   scanSessionTranscriptTree,

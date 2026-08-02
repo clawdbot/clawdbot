@@ -14,8 +14,6 @@ import { registerContextEngineForOwner } from "../../context-engine/registry.js"
 import type { ContextEngine } from "../../context-engine/types.js";
 import type { CliBackendPlugin } from "../../plugins/cli-backend.types.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
-import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import {
   clearMemoryPluginState,
   registerTestMemoryPromptBuilder,
@@ -23,6 +21,8 @@ import {
 import { createPluginRegistry } from "../../plugins/registry.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,

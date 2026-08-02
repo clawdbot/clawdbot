@@ -3,11 +3,11 @@ import path from "node:path";
 import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
   loadTranscriptTailEventsByJsonlBytes,
   replaceTranscriptEvents,
 } from "../../config/sessions/session-accessor.js";
-import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import { serializeJsonlLines } from "../../config/sessions/transcript-jsonl.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { cliBackendLog } from "./log.js";
@@ -248,10 +248,7 @@ describe("SQLite CLI session history", () => {
 
     await replaceTranscriptEvents(scope, [header, older, newest]);
 
-    const belowBoundary = await loadTranscriptTailEventsByJsonlBytes(
-      scope,
-      twoRowJsonlBytes - 1,
-    );
+    const belowBoundary = await loadTranscriptTailEventsByJsonlBytes(scope, twoRowJsonlBytes - 1);
     expect(belowBoundary.truncated).toBe(true);
     expect(belowBoundary.events.map((event) => requireRecord(event, "event").id)).toEqual([
       sessionId,
