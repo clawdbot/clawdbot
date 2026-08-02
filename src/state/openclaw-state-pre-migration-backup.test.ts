@@ -6,6 +6,7 @@ import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import {
   createPreMigrationStateBackup,
   PRE_MIGRATION_BACKUP_RETENTION,
+  prunePreMigrationStateBackups,
 } from "./openclaw-state-pre-migration-backup.js";
 
 /**
@@ -112,9 +113,11 @@ describe("createPreMigrationStateBackup", () => {
           return;
         }
         created.push(result.backupPath);
-        // Nothing to prune until the cap is exceeded, and exactly one after that:
-        // every migration prunes back down to the cap, so they never pile up.
-        expect(result.prunedPaths.length).toBe(i + 1 > PRE_MIGRATION_BACKUP_RETENTION ? 1 : 0);
+        // Creation never prunes; the caller does that once the migration has
+        // committed. Nothing to prune until the cap is exceeded, and exactly one
+        // after that, so snapshots never pile up across successful migrations.
+        const pruned = prunePreMigrationStateBackups(dbPath);
+        expect(pruned.length).toBe(i + 1 > PRE_MIGRATION_BACKUP_RETENTION ? 1 : 0);
       }
 
       const backupDir = path.join(dir, PRE_MIGRATION_BACKUP_DIRNAME);
@@ -125,6 +128,40 @@ describe("createPreMigrationStateBackup", () => {
       }
       for (const evicted of created.slice(0, total - PRE_MIGRATION_BACKUP_RETENTION)) {
         expect(fs.existsSync(evicted)).toBe(false);
+      }
+    } finally {
+      db.close();
+    }
+  });
+
+  it("does not prune when the migration is never committed", () => {
+    const dir = makeStateDir();
+    const dbPath = path.join(dir, "openclaw.sqlite");
+    seedStateDb(dbPath, 5);
+    const db = new DatabaseSync(dbPath);
+    try {
+      // Fill the directory to the cap through committed migrations.
+      const base = Date.parse("2026-07-25T09:00:00Z");
+      const settled: string[] = [];
+      for (let i = 0; i < PRE_MIGRATION_BACKUP_RETENTION; i += 1) {
+        const result = createPreMigrationStateBackup(db, dbPath, 5, 6, base + i * 60_000);
+        if (result.status !== "created") {
+          throw new Error(`expected a snapshot, got ${result.status}`);
+        }
+        settled.push(result.backupPath);
+        prunePreMigrationStateBackups(dbPath);
+      }
+
+      // Now a repair that gets rejected: the snapshot is taken, but the caller
+      // never reaches the prune because the transaction rolled back.
+      const attempted = createPreMigrationStateBackup(db, dbPath, 5, 6, base + 60 * 60_000);
+      expect(attempted.status).toBe("created");
+
+      // The operator keeps every recovery copy they arrived with. Losing the
+      // oldest here would trade a real older snapshot for a duplicate of a
+      // database the failed repair left untouched.
+      for (const survivor of settled) {
+        expect(fs.existsSync(survivor)).toBe(true);
       }
     } finally {
       db.close();
@@ -146,6 +183,7 @@ describe("createPreMigrationStateBackup", () => {
         expect(createPreMigrationStateBackup(db, dbPath, 5, 6, base + i * 60_000).status).toBe(
           "created",
         );
+        prunePreMigrationStateBackups(dbPath);
       }
       // Pruning only ever considers files this module wrote.
       expect(fs.existsSync(parked)).toBe(true);

@@ -3,7 +3,7 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 
 export type PreMigrationBackupResult =
-  | { status: "created"; backupPath: string; prunedPaths: string[] }
+  | { status: "created"; backupPath: string }
   | { status: "skipped"; reason: string }
   | { status: "failed"; reason: string };
 
@@ -48,7 +48,7 @@ export const PRE_MIGRATION_BACKUP_RETENTION = 3;
  * deleted (permissions, a file lock) must never turn a successful backup into a
  * failed migration, and must never abort startup.
  */
-function prunePreMigrationBackups(backupDir: string, keep: number): string[] {
+function pruneBackupDir(backupDir: string, keep: number): string[] {
   const removed: string[] = [];
   let entries: string[];
   try {
@@ -72,6 +72,28 @@ function prunePreMigrationBackups(backupDir: string, keep: number): string[] {
 }
 
 /**
+ * Cap the snapshot directory at `PRE_MIGRATION_BACKUP_RETENTION` copies, newest
+ * first, and return the paths removed.
+ *
+ * Deliberately separate from creation, and deliberately run only after the
+ * migration has committed. Pruning at creation time would delete an older
+ * recovery copy on the way into a repair that can still be rejected: the
+ * canonical-shape and integrity checks run inside the transaction, so a refused
+ * database rolls back with its version untouched, and the fresh snapshot taken
+ * moments earlier is merely a duplicate of that unchanged file. Trading a real
+ * older copy for a redundant new one is a straight loss of rollback depth.
+ *
+ * Best effort, like creation: failures are swallowed, and the next successful
+ * migration prunes again.
+ */
+export function prunePreMigrationStateBackups(pathname: string): string[] {
+  return pruneBackupDir(
+    path.join(path.dirname(pathname), PRE_MIGRATION_BACKUP_DIRNAME),
+    PRE_MIGRATION_BACKUP_RETENTION,
+  );
+}
+
+/**
  * Create a consistent, best-effort copy of the shared state database before a
  * forward schema migration bumps its on-disk version.
  *
@@ -90,9 +112,9 @@ function prunePreMigrationBackups(backupDir: string, keep: number): string[] {
  * it as a warning) rather than aborting startup, so a read-only or full backup
  * directory cannot brick a gateway that would otherwise migrate cleanly.
  *
- * Snapshots are written 0600 inside a 0700 directory, and the directory is capped
- * at `PRE_MIGRATION_BACKUP_RETENTION` copies, so this cannot accumulate shared
- * state on disk without bound.
+ * Snapshots are written 0600 inside a 0700 directory. Creation does NOT prune:
+ * see `prunePreMigrationStateBackups`, which the caller runs once the migration
+ * has actually committed.
  */
 export function createPreMigrationStateBackup(
   db: DatabaseSync,
@@ -118,10 +140,7 @@ export function createPreMigrationStateBackup(
     // name unique. Escape single quotes for the SQL string literal.
     db.exec(`VACUUM INTO '${backupPath.replace(/'/g, "''")}';`); // sqlite-allow-raw -- Offline snapshot maintenance boundary; VACUUM INTO has no Kysely form.
     fs.chmodSync(backupPath, 0o600);
-    // Prune only AFTER the new snapshot exists, so a failure above never leaves
-    // the directory emptier than it started.
-    const prunedPaths = prunePreMigrationBackups(backupDir, PRE_MIGRATION_BACKUP_RETENTION);
-    return { status: "created", backupPath, prunedPaths };
+    return { status: "created", backupPath };
   } catch (error) {
     return {
       status: "failed",

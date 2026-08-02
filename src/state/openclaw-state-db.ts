@@ -78,6 +78,7 @@ import {
   createPreMigrationStateBackup,
   PRE_MIGRATION_BACKUP_RETENTION,
   type PreMigrationBackupResult,
+  prunePreMigrationStateBackups,
 } from "./openclaw-state-pre-migration-backup.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
@@ -344,15 +345,21 @@ export function repairOpenClawStateDatabaseSchema(options: OpenClawStateDatabase
     );
     const quarantineCleared = clearOpenClawDatabaseQuarantine(pathname, { env });
     clearOpenClawStateDatabaseOpenFailure(pathname);
+    // Only now, past the transaction and its canonical-shape and integrity
+    // checks, is it safe to drop an older recovery copy: a repair that rejects
+    // the database rolls back and never reaches this line, so the operator
+    // keeps the rollback set they arrived with.
+    const prunedPaths =
+      preMigrationBackup.status === "created" ? prunePreMigrationStateBackups(pathname) : [];
     const preMigrationChanges =
       preMigrationBackup.status === "created"
         ? [
             `Backed up shared state database before schema migration → ${preMigrationBackup.backupPath}`,
             // Deleting a recovery copy is worth saying out loud, so an operator
             // looking for an older snapshot knows why it is not there.
-            ...(preMigrationBackup.prunedPaths.length > 0
+            ...(prunedPaths.length > 0
               ? [
-                  `Pruned ${preMigrationBackup.prunedPaths.length} older pre-migration backup(s), keeping the newest ${PRE_MIGRATION_BACKUP_RETENTION}`,
+                  `Pruned ${prunedPaths.length} older pre-migration backup(s), keeping the newest ${PRE_MIGRATION_BACKUP_RETENTION}`,
                 ]
               : []),
           ]
