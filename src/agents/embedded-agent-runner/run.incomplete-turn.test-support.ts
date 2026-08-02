@@ -240,7 +240,7 @@ export async function runIncompleteTurnOwnerHarness(params: OwnerHarnessParams) 
     mergeUsageIntoAccumulator(usageAccumulator, attempt.attemptUsage);
     mergeAttemptRunStatsIntoAccumulator(usageAccumulator, attempt);
     replayInvalid ||= !attempt.replayMetadata.replaySafe;
-    hadPotentialSideEffects ||= Boolean(attempt.replayMetadata.hadPotentialSideEffects);
+    hadPotentialSideEffects ||= attempt.replayMetadata.hadPotentialSideEffects ?? false;
     const assistant = attempt.currentAttemptAssistant ?? attempt.lastAssistant;
     const terminalAssistant = attempt.currentAttemptAssistant;
     const errorMessage = assistant?.errorMessage ?? "";
