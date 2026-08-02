@@ -285,8 +285,9 @@ async function resolveCompletionProfileWritePath(profilePath: string): Promise<s
       throw error;
     }
   }
-  const linkTarget = await fs.readlink(profilePath).catch((error: NodeJS.ErrnoException) => {
-    if (error.code === "ENOENT" || error.code === "EINVAL") {
+  const linkTarget = await fs.readlink(profilePath).catch((error: unknown) => {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "EINVAL") {
       return undefined;
     }
     throw error;
