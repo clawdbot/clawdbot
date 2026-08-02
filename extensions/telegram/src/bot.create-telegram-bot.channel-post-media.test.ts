@@ -761,6 +761,40 @@ describe("createTelegramBot channel_post media", () => {
     expectTelegramIngestHook([]);
   });
 
+  it("does not download unauthorized group command media when ingestion is enabled (#92067)", async () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+          groupAllowFrom: ["999"],
+          groups: { "-100456": telegramIngestGroupForTest(true) },
+        },
+      },
+    });
+    const getFile = vi.fn(async () => ({ file_path: "photos/unauthorized-command.jpg" }));
+    const fetchSpy = createImageFetchSpy();
+
+    try {
+      createTelegramBot({ token: "tok" });
+      await dispatchTelegramGroupPhoto({
+        messageId: 92079,
+        caption: "/reset",
+        extraMessage: {
+          caption_entities: [{ type: "bot_command", offset: 0, length: 6 }],
+        },
+        getFile,
+      });
+
+      expect(getFile).not.toHaveBeenCalled();
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(triggerInternalHookMock).not.toHaveBeenCalled();
+      expect(sendMessageSpy).not.toHaveBeenCalled();
+      expect(replySpy).not.toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
   it.each([
     { name: "all", messageIds: [92068, 92069], partial: false, deniedMention: false },
     { name: "partial", messageIds: [92071, 92072], partial: true, deniedMention: false },

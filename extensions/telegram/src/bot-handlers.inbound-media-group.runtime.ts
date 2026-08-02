@@ -226,6 +226,7 @@ export function createTelegramInboundMediaGroupRuntime(
     });
     if (decision.shouldSkip) {
       if (
+        !commandGate.shouldBlockControlCommand &&
         resolveTelegramGroupIngestEnabled({
           cfg: authorization.authorizationCfg,
           chatId,
