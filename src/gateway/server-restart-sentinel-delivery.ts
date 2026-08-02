@@ -254,6 +254,13 @@ export async function deliverQueuedSessionDelivery(params: {
         "managed delegate return is awaiting durable recipient adoption",
       );
     }
+    if (params.entry.awaitPromptAdoption) {
+      // Same contract for opt-in plain events: the in-memory queue is not
+      // durable, so completing the row here would drop the notice if the process
+      // died before the prompt consumed it. The prompt-drain path acks the row
+      // via the event's sessionDeliveryAckId once it is actually adopted.
+      throw new SessionDeliveryDeferredError("system event is awaiting durable prompt adoption");
+    }
     return;
   }
 

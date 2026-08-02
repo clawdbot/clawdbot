@@ -1,19 +1,21 @@
 // Covers durable restart recovery of the terminal continue_work outcome against
-// the real SQLite task-flow registry and the real session-delivery queue.
+// the real SQLite task-flow registry, the real session-delivery queue, and the
+// real gateway delivery path.
 //
 // The in-memory system-event queue is explicitly non-durable, so these tests
-// deliberately avoid mocking either store: they persist a terminal row, discard
-// all process-local state, reload from disk, and then assert through the
-// production recovery path.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+// deliberately avoid mocking either store or the delivery executor: they persist
+// a terminal row, discard all process-local state, reload from disk, and then
+// assert through the production recovery/delivery/acknowledgement path.
+import { describe, expect, it, vi } from "vitest";
+import { deliverQueuedSessionDelivery } from "../../gateway/server-restart-sentinel.js";
+import { requestHeartbeatNow } from "../../infra/heartbeat-wake.js";
+import { scheduleSessionDelivery } from "../../infra/session-delivery-queue-runtime.js";
 import {
   ackSessionDelivery,
   enqueueSessionDelivery,
-} from "../../infra/session-delivery-queue-storage.js";
-import {
   loadPendingSessionDeliveries,
-  recoverPendingSessionDeliveries,
-} from "../../infra/session-delivery-queue.js";
+} from "../../infra/session-delivery-queue-storage.js";
+import { recoverPendingSessionDeliveries } from "../../infra/session-delivery-queue.js";
 import {
   drainSystemEventEntries,
   enqueueSystemEvent,
@@ -29,20 +31,27 @@ import {
 } from "./work-store.js";
 import {
   CONTINUATION_WORK_RETRY_EXHAUSTED_NOTICE,
+  deliverPendingTerminalNotice,
   drainPendingTerminalNotices,
 } from "./work-terminal-notice.js";
+
+const SESSION_KEY = "agent:main:terminal-notice-durability";
+const RAW_DRIVER_ERROR =
+  "provider rejected token sk-live-9f3c1d2b7a at https://api.example/v1/messages";
 
 /**
  * Real production collaborators, pinned to the temp state dir. Nothing here is
  * mocked: the point of these tests is that the durable stores carry the notice.
  */
 function realDeps(stateDir: string) {
-  return { enqueueSessionDelivery, ackSessionDelivery, enqueueSystemEvent, stateDir };
+  return {
+    enqueueSessionDelivery,
+    scheduleSessionDelivery,
+    enqueueSystemEvent,
+    requestHeartbeatNow,
+    stateDir,
+  };
 }
-
-const SESSION_KEY = "agent:main:terminal-notice-durability";
-const RAW_DRIVER_ERROR =
-  "provider rejected token sk-live-9f3c1d2b7a at https://api.example/v1/messages";
 
 async function withDurableState<T>(run: (stateDir: string) => Promise<T>): Promise<T> {
   return await withOpenClawTestState(
@@ -89,17 +98,36 @@ function simulateGatewayRestart(): void {
   reloadTaskFlowRegistryFromStore();
 }
 
-describe("continuation_work terminal notice durability", () => {
-  beforeEach(() => {
-    vi.restoreAllMocks();
-  });
+function silentLog() {
+  return { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+}
 
+/**
+ * Drive the REAL gateway delivery executor over every pending row, exactly as
+ * startup recovery does. `deps` is unused by the systemEvent branch.
+ */
+async function runProductionDeliveryRecovery(stateDir: string): Promise<void> {
+  await recoverPendingSessionDeliveries({
+    deliver: (entry, context = {}) =>
+      deliverQueuedSessionDelivery({
+        deps: {} as never,
+        entry,
+        ...(context.stateDir !== undefined ? { stateDir: context.stateDir } : {}),
+      }),
+    stateDir,
+    log: silentLog(),
+  });
+}
+
+async function pendingDeliveryTexts(stateDir: string): Promise<string[]> {
+  const pending = await loadPendingSessionDeliveries(stateDir);
+  return pending.map((entry) => (entry.kind === "systemEvent" ? entry.text : entry.kind));
+}
+
+describe("continuation_work terminal notice durability", () => {
   it("persists the terminal failure and its pending notice across a restart", async () => {
     await withDurableState(async () => {
       terminalizeWithPendingNotice();
-
-      // Nothing has been handed to the delivery queue yet; the obligation lives
-      // only in the durable row.
       simulateGatewayRestart();
 
       const pending = listPendingTerminalNoticeWork();
@@ -109,37 +137,113 @@ describe("continuation_work terminal notice durability", () => {
     });
   });
 
-  it("delivers the actionable outcome through the production recovery path after a restart", async () => {
+  it("keeps the durable row pending through the real delivery path until the prompt adopts it", async () => {
     await withDurableState(async (stateDir) => {
       terminalizeWithPendingNotice();
+      expect(await drainPendingTerminalNotices(realDeps(stateDir))).toBe(1);
 
-      // Hand the obligation to the durable queue, then lose ALL process state
-      // before the prompt ever drains the in-memory event.
-      const handed = await drainPendingTerminalNotices(realDeps(stateDir));
-      expect(handed).toBe(1);
+      // Crash after the handoff but before the prompt ever consumed the event.
+      simulateGatewayRestart();
+      expect(peekSystemEvents(SESSION_KEY)).toEqual([]);
+
+      // The REAL delivery executor re-enqueues the event in memory. It must NOT
+      // complete the durable row: process memory is not durable.
+      await runProductionDeliveryRecovery(stateDir);
+
+      expect(peekSystemEvents(SESSION_KEY)).toEqual([CONTINUATION_WORK_RETRY_EXHAUSTED_NOTICE]);
+      expect(await pendingDeliveryTexts(stateDir)).toEqual([
+        CONTINUATION_WORK_RETRY_EXHAUSTED_NOTICE,
+      ]);
+
+      // Crash again before consumption: the notice must still replay.
+      simulateGatewayRestart();
+      expect(peekSystemEvents(SESSION_KEY)).toEqual([]);
+      await runProductionDeliveryRecovery(stateDir);
+      expect(peekSystemEvents(SESSION_KEY)).toEqual([CONTINUATION_WORK_RETRY_EXHAUSTED_NOTICE]);
+    });
+  });
+
+  it("completes the durable row only after prompt adoption acknowledges it, then stops replaying", async () => {
+    await withDurableState(async (stateDir) => {
+      terminalizeWithPendingNotice();
+      await drainPendingTerminalNotices(realDeps(stateDir));
+      const [queued] = await loadPendingSessionDeliveries(stateDir);
+      const deliveryId = queued?.id;
+      expect(deliveryId).toBeDefined();
+
+      // The prompt path acks by delivery id once the event is actually adopted.
+      await ackSessionDelivery(deliveryId as string, stateDir);
+      expect(await loadPendingSessionDeliveries(stateDir)).toEqual([]);
+
+      // After adoption, restart + recovery must produce NO further outcome, and
+      // the completed tombstone must reject a re-enqueue of the same notice.
+      simulateGatewayRestart();
+      await runProductionDeliveryRecovery(stateDir);
+      expect(peekSystemEvents(SESSION_KEY)).toEqual([]);
+
+      expect(await drainPendingTerminalNotices(realDeps(stateDir))).toBe(0);
+      expect(await loadPendingSessionDeliveries(stateDir)).toEqual([]);
+    });
+  });
+
+  it("never lets a losing concurrent handoff complete the winner's shared row", async () => {
+    await withDurableState(async (stateDir) => {
+      terminalizeWithPendingNotice();
+      const [owed] = listPendingTerminalNoticeWork();
+      if (!owed) {
+        throw new Error("expected a pending terminal notice");
+      }
+
+      // Two handoffs race on the same flow. Both resolve the same deterministic
+      // delivery id, so the "loser" is looking at the winner's only row.
+      const [first, second] = await Promise.all([
+        deliverPendingTerminalNotice(owed, realDeps(stateDir)),
+        deliverPendingTerminalNotice(owed, realDeps(stateDir)),
+      ]);
+
+      expect([first, second].filter(Boolean)).toHaveLength(1);
+      // The shared row survives: the loser must not acknowledge or complete it.
+      expect(await pendingDeliveryTexts(stateDir)).toEqual([
+        CONTINUATION_WORK_RETRY_EXHAUSTED_NOTICE,
+      ]);
+      expect(listPendingTerminalNoticeWork()).toEqual([]);
+
+      // And it is still deliverable through the production path.
+      simulateGatewayRestart();
+      await runProductionDeliveryRecovery(stateDir);
+      expect(peekSystemEvents(SESSION_KEY)).toEqual([CONTINUATION_WORK_RETRY_EXHAUSTED_NOTICE]);
+    });
+  });
+
+  it("schedules a notice recovered after the startup queue scan instead of waiting for traffic", async () => {
+    await withDurableState(async (stateDir) => {
+      terminalizeWithPendingNotice();
       simulateGatewayRestart();
 
-      // The in-memory fast path is gone; only the durable row remains.
-      expect(peekSystemEvents(SESSION_KEY)).toEqual([]);
-      const durable = await loadPendingSessionDeliveries(stateDir);
-      expect(durable).toHaveLength(1);
-      expect(durable[0]).toMatchObject({ kind: "systemEvent", sessionKey: SESSION_KEY });
+      // Startup scans the delivery queue BEFORE continuation recovery runs, so
+      // at scan time this notice is flag-only with no queue row to arm.
+      expect(await loadPendingSessionDeliveries(stateDir)).toEqual([]);
+      expect(listPendingTerminalNoticeWork()).toHaveLength(1);
 
-      // Replay through the real session-delivery recovery path.
-      const delivered: string[] = [];
-      await recoverPendingSessionDeliveries({
-        deliver: async (entry) => {
-          if (entry.kind === "systemEvent") {
-            delivered.push(entry.text);
-          }
+      const scheduled: string[] = [];
+      const wakes: { sessionKey?: string }[] = [];
+      const handed = await drainPendingTerminalNotices({
+        ...realDeps(stateDir),
+        scheduleSessionDelivery: async (id: string) => {
+          scheduled.push(id);
+          return true;
         },
-        stateDir,
-        log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+        requestHeartbeatNow: ((opts?: { sessionKey?: string }) => {
+          wakes.push(opts ?? {});
+        }) as typeof requestHeartbeatNow,
       });
 
-      expect(delivered).toHaveLength(1);
-      expect(delivered[0]).toContain("continue_work permanently failed");
-      expect(delivered[0]).toContain("Reissue continue_work");
+      expect(handed).toBe(1);
+      const [queued] = await loadPendingSessionDeliveries(stateDir);
+      // The row created after the scan is actively armed and its target woken.
+      expect(scheduled).toEqual([queued?.id]);
+      expect(wakes).toHaveLength(1);
+      expect(wakes[0]?.sessionKey).toBe(SESSION_KEY);
     });
   });
 
@@ -148,17 +252,13 @@ describe("continuation_work terminal notice durability", () => {
       terminalizeWithPendingNotice();
       const deps = realDeps(stateDir);
 
-      const first = await drainPendingTerminalNotices(deps);
-      expect(first).toBe(1);
+      expect(await drainPendingTerminalNotices(deps)).toBe(1);
 
-      // Repeated restarts + drains must not enqueue a second durable notice.
       simulateGatewayRestart();
-      const second = await drainPendingTerminalNotices(deps);
+      expect(await drainPendingTerminalNotices(deps)).toBe(0);
       simulateGatewayRestart();
-      const third = await drainPendingTerminalNotices(deps);
+      expect(await drainPendingTerminalNotices(deps)).toBe(0);
 
-      expect(second).toBe(0);
-      expect(third).toBe(0);
       expect(listPendingTerminalNoticeWork()).toEqual([]);
       expect(await loadPendingSessionDeliveries(stateDir)).toHaveLength(1);
     });
@@ -168,13 +268,17 @@ describe("continuation_work terminal notice durability", () => {
     await withDurableState(async (stateDir) => {
       terminalizeWithPendingNotice();
       await drainPendingTerminalNotices(realDeps(stateDir));
+      simulateGatewayRestart();
+      await runProductionDeliveryRecovery(stateDir);
 
-      const durable = await loadPendingSessionDeliveries(stateDir);
-      const durableText = durable[0]?.kind === "systemEvent" ? durable[0].text : "";
-      expect(durableText).toBe(CONTINUATION_WORK_RETRY_EXHAUSTED_NOTICE);
-      expect(durableText).not.toContain("sk-live-9f3c1d2b7a");
-      expect(durableText).not.toContain("https://api.example");
-      expect(durableText).not.toContain("provider rejected token");
+      const durableText = (await pendingDeliveryTexts(stateDir))[0] ?? "";
+      const promptText = peekSystemEvents(SESSION_KEY)[0] ?? "";
+      for (const text of [durableText, promptText]) {
+        expect(text).toBe(CONTINUATION_WORK_RETRY_EXHAUSTED_NOTICE);
+        expect(text).not.toContain("sk-live-9f3c1d2b7a");
+        expect(text).not.toContain("https://api.example");
+        expect(text).not.toContain("provider rejected token");
+      }
     });
   });
 });

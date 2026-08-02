@@ -26,9 +26,11 @@
  */
 
 import {
-  ackSessionDelivery,
-  enqueueSessionDelivery,
-} from "../../infra/session-delivery-queue-storage.js";
+  markTrustedContinuationHeartbeatWake,
+  requestHeartbeatNow,
+} from "../../infra/heartbeat-wake.js";
+import { scheduleSessionDelivery } from "../../infra/session-delivery-queue-runtime.js";
+import { enqueueSessionDelivery } from "../../infra/session-delivery-queue-storage.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PendingContinuationWork } from "./work-flow-state.js";
@@ -55,15 +57,17 @@ export function continuationWorkTerminalNoticeIdempotencyKey(flowId: string): st
 
 export type ContinuationWorkTerminalNoticeDeps = {
   enqueueSessionDelivery: typeof enqueueSessionDelivery;
-  ackSessionDelivery: typeof ackSessionDelivery;
+  scheduleSessionDelivery: typeof scheduleSessionDelivery;
   enqueueSystemEvent: typeof enqueueSystemEvent;
+  requestHeartbeatNow: typeof requestHeartbeatNow;
   stateDir?: string;
 };
 
 const defaultDeps: ContinuationWorkTerminalNoticeDeps = {
   enqueueSessionDelivery,
-  ackSessionDelivery,
+  scheduleSessionDelivery,
   enqueueSystemEvent,
+  requestHeartbeatNow,
 };
 
 /**
@@ -92,13 +96,17 @@ export async function deliverPendingTerminalNotice(
       sessionKey: pending.sessionKey,
       text: CONTINUATION_WORK_RETRY_EXHAUSTED_NOTICE,
       idempotencyKey: continuationWorkTerminalNoticeIdempotencyKey(work.flowId),
+      // The row must outlive the in-memory event and survive until the prompt
+      // adopts it; see the delivery path's plain-event deferral.
+      awaitPromptAdoption: true,
     },
     deps.stateDir,
   );
   if (!clearPendingTerminalNotice(pending)) {
-    // Another drain took ownership between the re-read and the clear. Drop the
-    // duplicate durable row so its replay cannot surface the outcome twice.
-    await deps.ackSessionDelivery(deliveryId, deps.stateDir);
+    // Another drain won the clear. The deterministic idempotency key means it
+    // owns THIS row, not a duplicate — acknowledging here would complete the
+    // winner's only durable record before the prompt ever consumed it. Leave it
+    // alone; a completed tombstone already makes re-enqueue a no-op.
     return false;
   }
   deps.enqueueSystemEvent(CONTINUATION_WORK_RETRY_EXHAUSTED_NOTICE, {
@@ -107,6 +115,18 @@ export async function deliverPendingTerminalNotice(
     sessionDeliveryAckId: deliveryId,
     ...(deps.stateDir ? { sessionDeliveryAckStateDir: deps.stateDir } : {}),
   });
+  // Startup scans the delivery queue before continuation recovery runs, so a
+  // row created here would otherwise carry no timer and wait for unrelated
+  // traffic. Arm it explicitly and wake the target.
+  await deps.scheduleSessionDelivery(deliveryId);
+  deps.requestHeartbeatNow(
+    markTrustedContinuationHeartbeatWake({
+      sessionKey: pending.sessionKey,
+      source: "other" as const,
+      intent: "immediate" as const,
+      reason: "continuation-terminal-notice",
+    }),
+  );
   log.info(
     `[continuation:work-terminal-notice-handed-off] flowId=${work.flowId} session=${pending.sessionKey} deliveryId=${deliveryId}`,
   );

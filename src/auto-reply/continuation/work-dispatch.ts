@@ -792,14 +792,14 @@ export async function recoverPendingContinuationWork(): Promise<{
   reaped: number;
   terminalNotices: number;
 }> {
+  // An already-owed terminal notice is a debt from work that ran while
+  // continuation was enabled. Disabling the feature afterwards must not strand
+  // it, so the drain runs before the enablement gate.
+  const terminalNotices = await drainPendingTerminalNotices();
   const runtimeConfig = resolveContinuationRuntimeConfig();
   if (!runtimeConfig.enabled) {
-    return { sessions: 0, dispatched: 0, failed: 0, reaped: 0, terminalNotices: 0 };
+    return { sessions: 0, dispatched: 0, failed: 0, reaped: 0, terminalNotices };
   }
-  // Terminal rows are invisible to the pending-work scan below, so replay the
-  // notices they still owe before dispatching live work. Any notice whose
-  // handoff was interrupted by the restart is re-driven here.
-  const terminalNotices = await drainPendingTerminalNotices();
   const sessionKeys = listPendingWorkSessionKeysForRecovery();
   const includeRunningUpdatedAtOrBefore = Date.now() - RUNNING_WORK_RECOVERY_STALE_MS;
   let dispatched = 0;

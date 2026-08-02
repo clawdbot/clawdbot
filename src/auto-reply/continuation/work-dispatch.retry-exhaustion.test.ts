@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const turnGrants: unknown[] = [];
 const systemEvents: unknown[] = [];
 const sessionDeliveryEnqueues: { idempotencyKey?: string }[] = [];
+const scheduledDeliveries: string[] = [];
+const heartbeatWakes: { sessionKey?: string }[] = [];
 const sessionDeliveryAcks: string[] = [];
 const activeQueueDeliveries: unknown[] = [];
 const workTransitionEvents: string[] = [];
@@ -247,7 +249,10 @@ vi.mock("../../infra/heartbeat-runner.js", () => {
 
 vi.mock("../../infra/heartbeat-wake.js", () => ({
   isRetryableHeartbeatBusySkipReason: (reason: string) => reason === "requests-in-flight",
-  requestHeartbeatNow: vi.fn(),
+  markTrustedContinuationHeartbeatWake: <T>(request: T) => request,
+  requestHeartbeatNow: (opts?: { sessionKey?: string }) => {
+    heartbeatWakes.push(opts ?? {});
+  },
 }));
 
 vi.mock("../../infra/system-events.js", () => ({
@@ -259,6 +264,13 @@ vi.mock("../../infra/system-events.js", () => ({
 // The durable queue has its own real-store proof in
 // work-terminal-notice.durability.test.ts; here it is recorded so this unit
 // suite can assert the handoff without touching SQLite.
+vi.mock("../../infra/session-delivery-queue-runtime.js", () => ({
+  scheduleSessionDelivery: (id: string) => {
+    scheduledDeliveries.push(id);
+    return Promise.resolve(true);
+  },
+}));
+
 vi.mock("../../infra/session-delivery-queue-storage.js", () => ({
   enqueueSessionDelivery: (payload: { idempotencyKey?: string }) => {
     sessionDeliveryEnqueues.push(payload);
@@ -465,6 +477,7 @@ import {
   classifyContinuationWorkReason,
   computeBusySkipBackoffMs,
   partitionSupersededWork,
+  recoverPendingContinuationWork,
   resetContinuationWorkDispatchForTests,
   scheduleContinuationWork,
   scheduleContinuationWorkBatch,
@@ -563,6 +576,8 @@ describe("continuation_work transient-error retry exhaustion", () => {
     systemEvents.length = 0;
     sessionDeliveryEnqueues.length = 0;
     sessionDeliveryAcks.length = 0;
+    scheduledDeliveries.length = 0;
+    heartbeatWakes.length = 0;
     activeQueueDeliveries.length = 0;
     workTransitionEvents.length = 0;
     replyRegistryReceivers.clear();
@@ -728,6 +743,10 @@ describe("continuation_work transient-error retry exhaustion", () => {
       idempotencyKey: `continuation-work-terminal-notice:${workFlow()?.flowId}`,
     });
     expect(sessionDeliveryAcks).toEqual([]);
+    // The row is actively armed and the target woken, so the outcome does not
+    // wait for unrelated traffic.
+    expect(scheduledDeliveries).toHaveLength(1);
+    expect(heartbeatWakes).toEqual([expect.objectContaining({ sessionKey })]);
     expect(terminalEvent?.options).toMatchObject({
       sessionDeliveryAckId: expect.stringContaining("continuation-work-terminal-notice:"),
     });
@@ -804,5 +823,34 @@ describe("continuation_work transient-error retry exhaustion", () => {
     ]);
     expect(terminalExhaustionEvents()).toHaveLength(0);
     expect(terminalExhaustionLogs()).toHaveLength(0);
+  });
+  it("drains an already-owed terminal notice even while continuation is disabled", async () => {
+    // The obligation was incurred while continuation was enabled; turning the
+    // feature off afterwards must not strand a debt the agent is already owed.
+    const sessionKey = "agent:main:exhaustion-disabled-recovery";
+    replyError = new Error("provider unavailable");
+    enqueueErroringWork(sessionKey);
+    await driveTransientErrorRetries(sessionKey, () => workFlow()?.status === "failed");
+    expect(sessionDeliveryEnqueues).toHaveLength(1);
+
+    // Re-arm the obligation as a restart would observe it, then disable the
+    // feature before recovery runs.
+    const flow = workFlow();
+    const state = flow?.stateJson as Record<string, unknown> | undefined;
+    if (!flow?.flowId || !state) {
+      throw new Error("expected a terminalized flow");
+    }
+    flow.stateJson = { ...state, terminalNoticePending: "retry-exhausted" };
+    sessionDeliveryEnqueues.length = 0;
+    continuationEnabledForTest = false;
+
+    const summary = await recoverPendingContinuationWork();
+
+    expect(summary.terminalNotices).toBe(1);
+    expect(summary.sessions).toBe(0);
+    expect(sessionDeliveryEnqueues).toHaveLength(1);
+    expect(sessionDeliveryEnqueues[0]).toMatchObject({
+      idempotencyKey: `continuation-work-terminal-notice:${flow.flowId}`,
+    });
   });
 });

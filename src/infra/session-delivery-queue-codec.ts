@@ -82,6 +82,15 @@ type QueuedSessionDeliveryGenericPayload =
       managedDelegateArtifactDelivery?: never;
       deliveryContext?: SessionDeliveryContext;
       idempotencyKey?: string;
+      /**
+       * Keep the durable row pending until the prompt actually adopts the event
+       * and acknowledges it, instead of completing the row as soon as the
+       * in-memory enqueue makes the prompt eligible. Same contract the managed
+       * delegate-return path relies on; opt-in so existing producers, whose
+       * notices are reconstructible from their own durable state, keep the
+       * cheaper fire-and-complete behavior.
+       */
+      awaitPromptAdoption?: boolean;
     } & QueuedSessionDeliveryPayloadMetadata)
   | ({
       kind: "systemEvent";
@@ -298,6 +307,7 @@ const QueuedPlainSystemEventSchema = z
     managedDelegateArtifactDelivery: z.never().optional(),
     deliveryContext: QueuedGenericDeliveryContextSchema.optional(),
     idempotencyKey: z.string().optional(),
+    awaitPromptAdoption: z.boolean().optional(),
   })
   .strict();
 
