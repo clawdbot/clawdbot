@@ -244,8 +244,8 @@ describe("session lifecycle state", () => {
         livenessState: "paused",
         stopReason: "end_turn",
       },
-      status: "killed",
-      abortedLastRun: true,
+      status: "failed",
+      abortedLastRun: false,
     },
   ] as const)("persists $name terminal state", async ({ data, status, abortedLastRun }) => {
     const persisted = await persistLifecycle(
