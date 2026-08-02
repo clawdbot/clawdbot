@@ -1692,4 +1692,50 @@ test("sessions.patch preserves nested model ids under provider overrides", async
     expect(mainSession?.model).toBe("moonshotai/kimi-k2.5");
   });
 });
+
+test("sessions.compact refuses when pending follow-up queue items would be silently dropped", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const sessionId = "sess-compact-pending-queue";
+  await seedSessionEntry({
+    entry: sessionStoreEntry(sessionId),
+    sessionKey: "agent:main:main",
+    storePath,
+  });
+  await seedTranscriptRows({
+    sessionId,
+    sessionKey: "agent:main:main",
+    storePath,
+    totalLines: 3,
+  });
+
+  // Simulate pending items in the follow-up queue by spying on getFollowupQueueDepth.
+  // The queue is keyed by sessionKey (agent:main:main) during enqueue, so the check
+  // in the prepare step will see a non-zero depth and refuse compaction.
+  const queueModule = await import("../auto-reply/reply/queue.js");
+  const depthSpy = vi.spyOn(queueModule, "getFollowupQueueDepth");
+  try {
+    depthSpy.mockReturnValue(3);
+
+    const compacted = await directSessionReq(
+      "sessions.compact",
+      { key: "main" },
+      {
+        context: {
+          getRuntimeConfig: () => ({
+            agents: { list: [{ id: "main", default: true }] },
+            session: { store: storePath },
+          }),
+        },
+      },
+    );
+
+    expect(compacted.ok).toBe(false);
+    expect(compacted.error?.code).toBe("INVALID_REQUEST");
+    expect(compacted.error?.message).toContain("has an active run");
+    // The queue cleanup should never have been reached.
+    expectNoSessionQueueCleanup();
+  } finally {
+    depthSpy.mockRestore();
+  }
+});
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

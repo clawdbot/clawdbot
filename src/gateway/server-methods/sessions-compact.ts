@@ -6,6 +6,7 @@ import {
   validateSessionsCompactParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { getFollowupQueueDepth } from "../../auto-reply/reply/queue.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
 import {
   resolveSessionWorkStartError,
@@ -224,7 +225,12 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
           }
           // Drop work queued against the pre-compaction transcript before its
           // lifecycle fence commits and no longer exposes queue cleanup.
-          clearSessionQueues([key, target.canonicalKey, compactTarget.primaryKey, sessionId]);
+          const queueKeys = [key, target.canonicalKey, compactTarget.primaryKey, sessionId];
+          if (queueKeys.some((k) => typeof k === "string" && getFollowupQueueDepth(k) > 0)) {
+            blockedByActiveRun = true;
+            return;
+          }
+          clearSessionQueues(queueKeys);
         },
         run: async () => {
           if (!sessionStillCurrent) {
