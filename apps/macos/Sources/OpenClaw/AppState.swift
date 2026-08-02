@@ -653,7 +653,9 @@ final class AppState {
         }
         return false
     }
+}
 
+extension AppState {
     private func markGatewayConfigDirty(_ fields: Set<GatewayConfigField>) {
         guard !self.isInitializing, !self.isApplyingGatewayConfig else { return }
         self.dirtyGatewayConfigFields.formUnion(fields)
@@ -817,9 +819,7 @@ final class AppState {
         return fields
     }
 
-    private func applyConfigOverrides(_ root: [String: Any]) {
-        advanceGatewayRoutingGeneration()
-        let previousSelection = self.gatewaySelectionSnapshot()
+    private func reconcileGatewayConfigOwnership(_ root: [String: Any]) -> Set<GatewayConfigField> {
         let diskSnapshot = Self.gatewayConfigSnapshot(root)
         let desiredRoot = Self.syncedGatewayRoot(
             currentRoot: root,
@@ -842,7 +842,10 @@ final class AppState {
         self.conflictedGatewayConfigFields.subtract(externallyPersistedFields)
         self.conflictedGatewayConfigFields.formIntersection(self.dirtyGatewayConfigFields)
         self.lastObservedGatewayConfig = diskSnapshot
+        return priorConflicts
+    }
 
+    private func applyGatewayConfigView(_ root: [String: Any]) {
         let gateway = root["gateway"] as? [String: Any]
         let remote = gateway?["remote"] as? [String: Any]
         let modeRaw = (gateway?["mode"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -917,6 +920,13 @@ final class AppState {
             }
         }
         self.isApplyingGatewayConfig = false
+    }
+
+    private func applyConfigOverrides(_ root: [String: Any]) {
+        advanceGatewayRoutingGeneration()
+        let previousSelection = self.gatewaySelectionSnapshot()
+        let priorConflicts = self.reconcileGatewayConfigOwnership(root)
+        self.applyGatewayConfigView(root)
 
         if self.gatewaySelectionSnapshot() != previousSelection {
             // Discovery ids describe one concrete endpoint. An external config
