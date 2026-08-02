@@ -51,6 +51,11 @@ import {
   listVisiblePendingApprovalRequests,
 } from "./approval-shared.js";
 import { sanitizeSystemAgentChatParams } from "./system-agent-chat-params.js";
+import {
+  buildSystemAgentChatResult,
+  getSystemAgentChatInputError,
+  runSystemAgentChatInput,
+} from "./system-agent-chat-turn.js";
 import type { GatewayClient, GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -506,34 +511,9 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateSystemAgentChatParams, "openclaw.chat", respond)) {
       return;
     }
-    if (params.message !== undefined && params.wizardAnswer !== undefined) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "Send either message or wizardAnswer, not both."),
-      );
-      return;
-    }
-    if (params.wizardAnswer !== undefined && params.delegation !== undefined) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "Delegated OpenClaw sessions cannot submit structured wizard answers.",
-        ),
-      );
-      return;
-    }
-    if (params.wizardAnswer !== undefined && params.reset === true) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "A wizard answer cannot reset its OpenClaw chat session.",
-        ),
-      );
+    const inputError = getSystemAgentChatInputError(params);
+    if (inputError) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, inputError));
       return;
     }
     await runSystemAgentGatewayTask(async () => {
@@ -720,23 +700,19 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
         const historyStart = session.engine.historyLength();
         let reply: Awaited<ReturnType<SystemAgentChatEngine["handle"]>>;
         try {
-          if (params.wizardAnswer !== undefined) {
-            reply = await session.engine.answerWizard(params.wizardAnswer);
-          } else {
-            const message = params.message;
-            if (message === undefined) {
-              respond(
-                false,
-                undefined,
-                errorShape(ErrorCodes.INVALID_REQUEST, "OpenClaw chat input is missing."),
-              );
-              return;
-            }
-            reply =
-              params.delegation === undefined && params.context
-                ? await session.engine.handle(message, { uiContext: params.context })
-                : await session.engine.handle(message);
+          const turnReply = await runSystemAgentChatInput({
+            engine: session.engine,
+            input: params,
+          });
+          if (!turnReply) {
+            respond(
+              false,
+              undefined,
+              errorShape(ErrorCodes.INVALID_REQUEST, "OpenClaw chat input is missing."),
+            );
+            return;
           }
+          reply = turnReply;
         } catch (error) {
           persistEngineHistory(session.engine, historyStart);
           if (error instanceof SystemAgentWizardAnswerError) {
@@ -768,14 +744,6 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
           return;
         }
         persistEngineHistory(session.engine, historyStart);
-        // The TUI-only "open-tui" handoff becomes a client-visible "open-agent"
-        // signal: the app should move the user to their normal agent chat.
-        const action =
-          reply.action === "open-tui"
-            ? "open-agent"
-            : reply.action === "open-setup"
-              ? "none"
-              : reply.action;
         const delegation = params.delegation;
         let proposalId: string | undefined;
         if (delegation) {
@@ -791,32 +759,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
             });
           }
         }
-        respond(
-          true,
-          {
-            sessionId,
-            reply:
-              reply.text ||
-              (action === "open-agent"
-                ? "Setup here is done — continue with your agent."
-                : "Nothing to change."),
-            action,
-            ...(action === "open-agent" && reply.agentDraft
-              ? { agentDraft: reply.agentDraft }
-              : {}),
-            ...(action === "open-agent" &&
-            reply.handoff?.kind === "open-tui" &&
-            reply.handoff.agentId
-              ? { agentId: reply.handoff.agentId }
-              : {}),
-            ...(reply.sensitive === true ? { sensitive: true } : {}),
-            ...(reply.wizardInputPending === true ? { wizardInputPending: true } : {}),
-            ...(reply.question ? { question: reply.question } : {}),
-            ...(reply.step ? { step: reply.step } : {}),
-            ...(proposalId ? { needsApproval: true, proposalId } : {}),
-          },
-          undefined,
-        );
+        respond(true, buildSystemAgentChatResult({ sessionId, reply, proposalId }), undefined);
       });
     });
   },

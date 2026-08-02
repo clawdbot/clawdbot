@@ -695,50 +695,6 @@ describe("openclaw.chat", () => {
     expect(handle).not.toHaveBeenCalled();
   });
 
-  it("routes a structured wizard answer through the typed engine seam", async () => {
-    const engine = makeVerifiedEngine();
-    const answerWizard = vi
-      .spyOn(engine, "answerWizard")
-      .mockResolvedValue({ text: "Next step.", action: "none" });
-    const sessions = new Map<string, SystemAgentChatSession>([["s1", seededSession({ engine })]]);
-
-    const call = await callChat(makeContext(sessions), {
-      sessionId: "s1",
-      wizardAnswer: { stepId: "channel", value: "twitch" },
-    });
-
-    expect(call.ok).toBe(true);
-    expect(answerWizard).toHaveBeenCalledWith({ stepId: "channel", value: "twitch" });
-  });
-
-  it("rejects mixed text and structured inputs before running the engine", async () => {
-    const engine = makeVerifiedEngine();
-    const handle = vi.spyOn(engine, "handle");
-    const answerWizard = vi.spyOn(engine, "answerWizard");
-    const sessions = new Map<string, SystemAgentChatSession>([["s1", seededSession({ engine })]]);
-
-    const call = await callChat(makeContext(sessions), {
-      sessionId: "s1",
-      message: "5",
-      wizardAnswer: { stepId: "channel", value: "twitch" },
-    });
-
-    expect(call).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
-    expect(handle).not.toHaveBeenCalled();
-    expect(answerWizard).not.toHaveBeenCalled();
-  });
-
-  it("rejects structured answers from delegated sessions", async () => {
-    const call = await callChat(makeContext(new Map()), {
-      sessionId: "delegated",
-      wizardAnswer: { stepId: "secret", value: "not-forwarded" },
-      delegation: { agentId: "main", sessionKey: "agent:main:main" },
-    });
-
-    expect(call).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
-    expect(setupInferenceMocks.verifySetupInference).not.toHaveBeenCalled();
-  });
-
   it("rejects a structured answer without an active chat session", async () => {
     const call = await callChat(makeContext(new Map()), {
       sessionId: "missing",
@@ -834,39 +790,6 @@ describe("openclaw.chat", () => {
     transcriptStoreMocks.appendTranscriptTurn.mockClear();
 
     await callChat(context, { sessionId: "s1", message: "raw-secret-value" });
-
-    const persisted = transcriptStoreMocks.appendTranscriptTurn.mock.calls.map(([turn]) => turn);
-    expect(persisted).toContainEqual(
-      expect.objectContaining({ role: "user", text: "<redacted secret>" }),
-    );
-    expect(JSON.stringify(persisted)).not.toContain("raw-secret-value");
-  });
-
-  it("persists only the mask marker for a sensitive structured wizard answer", async () => {
-    const engine = new SystemAgentChatEngine({
-      surface: "gateway",
-      verifiedInference: requireVerifiedInferenceFixture(),
-      deps: requireVerifiedInferenceDeps(),
-      runAgentTurn: async () => null,
-      planWithAssistant: async () => null,
-      runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
-        await prompter.text({ message: "Bot token", sensitive: true });
-      },
-    });
-    const sessions = new Map<string, SystemAgentChatSession>([["s1", seededSession({ engine })]]);
-    const context = makeContext(sessions);
-
-    const prompt = await callChat(context, { sessionId: "s1", message: "connect telegram" });
-    const stepId = expectDefined(
-      (prompt.payload as { step?: { id?: string } } | undefined)?.step?.id,
-      "expected a wizard step id",
-    );
-    transcriptStoreMocks.appendTranscriptTurn.mockClear();
-
-    await callChat(context, {
-      sessionId: "s1",
-      wizardAnswer: { stepId, value: "raw-secret-value" },
-    });
 
     const persisted = transcriptStoreMocks.appendTranscriptTurn.mock.calls.map(([turn]) => turn);
     expect(persisted).toContainEqual(

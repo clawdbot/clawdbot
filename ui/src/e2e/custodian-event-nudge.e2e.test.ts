@@ -406,11 +406,9 @@ describeControlUiE2e("Control UI custodian event nudge mocked Gateway E2E", () =
           wizardAnswer: { stepId: "secret", value: "fake-client-secret" },
         }),
       ]);
-      expect(
-        requests
-          .slice(1)
-          .every((request) => !Object.prototype.hasOwnProperty.call(request.params, "message")),
-      ).toBe(true);
+      expect(requests.slice(1).every((request) => !Object.hasOwn(request.params, "message"))).toBe(
+        true,
+      );
       expect(await page.getByText("Sensitive reply sent").count()).toBe(1);
       expect(await page.getByText("fake-client-secret").count()).toBe(0);
       expect(await page.locator(".agent-chat__composer-shell").count()).toBe(1);

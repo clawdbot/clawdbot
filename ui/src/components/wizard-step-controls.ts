@@ -210,10 +210,10 @@ function renderTextStep(props: WizardStepControlsProps) {
       class="wizard-step__form"
       @submit=${(event: Event) => {
         event.preventDefault();
-        const input = (event.currentTarget as HTMLFormElement).elements.namedItem(
+        const formInput = (event.currentTarget as HTMLFormElement).elements.namedItem(
           "wizard-text",
         ) as HTMLInputElement | null;
-        props.onAnswer(props.presentation === "channels" ? (input?.value ?? "") : value);
+        props.onAnswer(props.presentation === "channels" ? (formInput?.value ?? "") : value);
       }}
     >
       ${step.message
@@ -221,8 +221,7 @@ function renderTextStep(props: WizardStepControlsProps) {
             <label for=${props.inputId}>${step.message}</label>
           </div>`
         : nothing}
-      ${input}
-      ${renderAnswerButton(props, t("modelSetup.wizard.submit"))}
+      ${input} ${renderAnswerButton(props, t("modelSetup.wizard.submit"))}
     </form>
   `;
 }
