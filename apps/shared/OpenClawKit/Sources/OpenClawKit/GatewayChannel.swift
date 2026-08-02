@@ -913,7 +913,8 @@ extension GatewayChannelActor {
         role: String,
         deviceAuthGatewayID: String?,
         deviceIdentityProfile: GatewayDeviceIdentityProfile,
-        connectionGeneration: UInt64) async throws -> (
+        connectionGeneration: UInt64) async throws
+        -> (
             offeredRoles: Set<String>,
             persistedRoles: Set<String>,
             hello: HelloOk)

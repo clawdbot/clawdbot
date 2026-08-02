@@ -4313,7 +4313,7 @@ extension NodeAppModel {
 
         // Bootstrap authentication is single-use. Do not keep a consumed bootstrap
         // route alive unless both replacement sessions can authenticate from secure storage.
-        let requiredRoles: Set<String> = ["node", "operator"]
+        let requiredRoles: Set = ["node", "operator"]
         let missingOfferedRoles = requiredRoles.subtracting(handoff.offeredRoles)
         if missingOfferedRoles.isEmpty {
             guard handoff.persistedRoles.isSuperset(of: requiredRoles) else {
@@ -4485,17 +4485,23 @@ extension NodeAppModel {
         handoff: GatewayDeviceAuthHandoff,
         pauseReconnect: Bool) -> GatewayConnectionProblem
     {
-        let requiredRoles: Set<String> = ["node", "operator"]
+        let requiredRoles: Set = ["node", "operator"]
         let missingRoles = requiredRoles.subtracting(handoff.offeredRoles)
         let technicalDetails = "Gateway access handoff incomplete; missing roles: " +
             missingRoles.sorted().joined(separator: ", ") + "."
+        let pausedMessage = """
+        This Gateway did not issue the access credentials this phone needs. \
+        Update the Gateway, then scan a new Full-Access code.
+        """
+        let restoredMessage = """
+        Full access was not issued. Your existing Limited connection was restored; \
+        update the Gateway, then scan a new Full-Access code.
+        """
         return GatewayConnectionProblem(
             kind: .protocolMismatch,
             owner: .gateway,
             title: "Gateway update required",
-            message: pauseReconnect
-                ? "This Gateway did not issue the access credentials this phone needs. Update the Gateway, then scan a new Full-Access code." // swiftlint:disable:this line_length
-                : "Full access was not issued. Your existing Limited connection was restored; update the Gateway, then scan a new Full-Access code.", // swiftlint:disable:this line_length
+            message: pauseReconnect ? pausedMessage : restoredMessage,
             actionLabel: "Copy update command",
             actionCommand: "openclaw update",
             retryable: false,
