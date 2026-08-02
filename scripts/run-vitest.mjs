@@ -1028,13 +1028,35 @@ export function spawnWatchedVitestProcess({
   forwardVitestOutput(child.stdout, process.stdout);
   forwardVitestOutput(child.stderr, process.stderr, shouldSuppressVitestStderrLine);
 
+  const teardown = () => {
+    teardownChildCleanup();
+    teardownNoOutputWatchdog();
+  };
+  const ownsDetachedGroup = spawnParams.detached === true && shouldUseDetachedVitestProcessGroup();
+  // POSIX detached groups remain addressable after the leader exits: reap any
+  // residual workers, then keep cleanup/watchdog ownership until their pipes close.
+  if (ownsDetachedGroup) {
+    child.once("exit", () => forceKillVitestProcessGroup(child));
+  }
+  // Windows has no equivalent group target after leader exit. Preserve the
+  // direct-child contract there until a Job Object owner can join the full tree.
+  const completionEvent = ownsDetachedGroup ? "close" : "exit";
+  const completion = new Promise((resolve, reject) => {
+    child.once(completionEvent, (code, signal) => {
+      teardown();
+      resolve({ code, signal });
+    });
+    child.once("error", (error) => {
+      teardown();
+      reject(error instanceof Error ? error : new Error(String(error)));
+    });
+  });
+
   return {
     child,
+    completion,
     getForwardedSignal: () => forwardedSignal,
-    teardown: () => {
-      teardownChildCleanup();
-      teardownNoOutputWatchdog();
-    },
+    teardown,
   };
 }
 
@@ -1074,7 +1096,7 @@ function spawnTestProjectsRunner(argv, env, options = {}) {
 
 export function runTestProjectsDelegation(argv, env, options = {}) {
   const { child, getForwardedSignal, teardown } = spawnTestProjectsRunner(argv, env, options);
-  child.on("exit", (code, signal) => {
+  child.on("close", (code, signal) => {
     teardown();
     const forwardedSignal = getForwardedSignal();
     if (forwardedSignal) {
@@ -1133,33 +1155,32 @@ function main(argv = process.argv.slice(2), env = process.env) {
     throw error;
   }
 
-  const { child, getForwardedSignal, teardown } = spawnWatchedVitestProcess({
+  const { child, completion, getForwardedSignal } = spawnWatchedVitestProcess({
     pnpmArgs: ["exec", "node", ...resolveVitestNodeArgs(env), vitestCliEntry, ...guardedVitestArgs],
     spawnParams: resolveVitestSpawnParams(spawnEnv),
     env: spawnEnv,
     label: guardedVitestArgs.join(" "),
   });
 
-  child.on("exit", (code, signal) => {
-    teardown();
-    const forwardedSignal = getForwardedSignal();
-    if (forwardedSignal) {
-      forceKillVitestProcessGroup(child);
-      process.kill(process.pid, forwardedSignal);
-      return;
-    }
-    if (signal) {
-      process.kill(process.pid, signal);
-      return;
-    }
-    process.exit(code ?? 1);
-  });
-
-  child.on("error", (error) => {
-    teardown();
-    console.error(error);
-    process.exit(1);
-  });
+  completion.then(
+    ({ code, signal }) => {
+      const forwardedSignal = getForwardedSignal();
+      if (forwardedSignal) {
+        forceKillVitestProcessGroup(child);
+        process.kill(process.pid, forwardedSignal);
+        return;
+      }
+      if (signal) {
+        process.kill(process.pid, signal);
+        return;
+      }
+      process.exit(code ?? 1);
+    },
+    /** @param {unknown} error */ (error) => {
+      console.error(error);
+      process.exit(1);
+    },
+  );
 }
 
 if (import.meta.main) {

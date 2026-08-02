@@ -31,6 +31,7 @@ import {
   spawnWatchedVitestProcess,
   shouldSuppressVitestStderrLine,
 } from "../../scripts/run-vitest.mjs";
+import { forceKillVitestProcessGroup } from "../../scripts/vitest-process-group.mjs";
 
 const posixIt = process.platform === "win32" ? it.skip : it;
 // These bounds only guard broken fixtures; readiness and exit are asserted via process signals.
@@ -784,9 +785,56 @@ describe("scripts/run-vitest", () => {
       expect(await waitForClose(watched.child)).toEqual({ code: null, signal: "SIGTERM" });
     } finally {
       watched.teardown();
-      if (watched.child.pid && isProcessAlive(watched.child.pid)) {
-        process.kill(-watched.child.pid, "SIGKILL");
+      forceKillVitestProcessGroup(watched.child);
+    }
+  });
+
+  posixIt("reaps residual process-group descendants before completing", async () => {
+    const descendantPidPath = nodePath.join(
+      os.tmpdir(),
+      `openclaw-run-vitest-residual-${process.pid}-${Date.now()}.pid`,
+    );
+    const watchedEnv = {
+      OPENCLAW_RESIDUAL_PID_PATH: descendantPidPath,
+      OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "5000",
+    };
+    const watched = spawnWatchedVitestProcess({
+      pnpmArgs: [
+        "exec",
+        "node",
+        "-e",
+        [
+          'const { spawn } = require("node:child_process");',
+          'const fs = require("node:fs");',
+          'const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {',
+          '  stdio: ["ignore", "inherit", "inherit"],',
+          "});",
+          "fs.writeFileSync(process.env.OPENCLAW_RESIDUAL_PID_PATH, String(child.pid));",
+          "child.unref();",
+        ].join("\n"),
+      ],
+      spawnParams: {
+        detached: true,
+        env: watchedEnv,
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+      env: watchedEnv,
+    });
+    let descendantPid = 0;
+
+    try {
+      await waitFor(() => fs.existsSync(descendantPidPath));
+      descendantPid = Number(fs.readFileSync(descendantPidPath, "utf8"));
+      expect(Number.isInteger(descendantPid)).toBe(true);
+      await expect(watched.completion).resolves.toEqual({ code: 0, signal: null });
+      await waitFor(() => !isProcessAlive(descendantPid));
+    } finally {
+      watched.teardown();
+      forceKillVitestProcessGroup(watched.child);
+      if (descendantPid && isProcessAlive(descendantPid)) {
+        process.kill(descendantPid, "SIGKILL");
       }
+      fs.rmSync(descendantPidPath, { force: true });
     }
   });
 
