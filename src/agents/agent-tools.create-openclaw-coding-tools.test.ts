@@ -1514,13 +1514,13 @@ describe("createOpenClawCodingTools", () => {
 
   it("preserves action enums in normalized schemas", () => {
     const defaultTools = createOpenClawCodingTools({ config: testConfig });
-    const toolNames = ["canvas", "nodes", "automations", "gateway", "message"];
-    const missingNames = toolNames.filter(
+    const actionToolNames = ["canvas", "nodes", "automations", "gateway", "message"];
+    const missingNames = actionToolNames.filter(
       (name) => !defaultTools.some((candidate) => candidate.name === name),
     );
     expect(missingNames).toStrictEqual([]);
 
-    for (const name of toolNames) {
+    for (const name of actionToolNames) {
       const tool = defaultTools.find((candidate) => candidate.name === name);
       const parameters = tool?.parameters as {
         properties?: Record<string, unknown>;

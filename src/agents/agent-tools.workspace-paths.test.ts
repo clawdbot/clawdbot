@@ -492,30 +492,21 @@ describe("sandboxed workspace paths", () => {
   });
 });
 
-type ToolWithExecute = {
-  execute: (toolCallId: string, args: unknown, signal?: AbortSignal) => Promise<unknown>;
-};
-type UnsafeMountedSandboxHarness = Parameters<typeof withUnsafeMountedSandboxHarness>[0] extends (
-  harness: infer THarness,
-) => unknown
-  ? THarness
-  : never;
-type UnsafeMountedSandbox = UnsafeMountedSandboxHarness["sandbox"];
+type UnsafeMountedSandbox = Parameters<
+  Parameters<typeof withUnsafeMountedSandboxHarness>[0]
+>[0]["sandbox"];
 
 const APPLY_PATCH_PAYLOAD = `*** Begin Patch
 *** Add File: /agent/pwned.txt
 +owned-by-apply-patch
 *** End Patch`;
 
-function resolveApplyPatchTool(params: {
-  sandbox: UnsafeMountedSandbox;
-  config: OpenClawConfig;
-}): ToolWithExecute {
+function resolveApplyPatchTool(params: { sandbox: UnsafeMountedSandbox; config: OpenClawConfig }) {
   return createApplyPatchTool({
     cwd: params.sandbox.workspaceDir,
     sandbox: { root: params.sandbox.workspaceDir, bridge: params.sandbox.fsBridge! },
     workspaceOnly: params.config.tools?.exec?.applyPatch?.workspaceOnly !== false,
-  }) as ToolWithExecute;
+  });
 }
 
 function createSandboxFsTools(params: { sandbox: UnsafeMountedSandbox; workspaceOnly?: boolean }) {

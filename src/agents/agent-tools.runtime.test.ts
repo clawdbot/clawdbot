@@ -219,14 +219,14 @@ describe("wrapToolWithAbortSignal", () => {
 
 vi.mock("./channel-tools.js", () => {
   const passthrough = <T>(tool: T) => tool;
-  const stubTool = (name: string) => ({
+  const channelStubTool = (name: string) => ({
     name,
     description: `${name} stub`,
     parameters: { type: "object", properties: {} },
     execute: vi.fn(),
   });
   return {
-    listChannelAgentTools: () => [stubTool("plugin_login")],
+    listChannelAgentTools: () => [channelStubTool("plugin_login")],
     copyChannelAgentToolMeta: passthrough,
     getChannelAgentToolMeta: () => undefined,
   };
