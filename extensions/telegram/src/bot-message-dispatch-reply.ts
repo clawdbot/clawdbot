@@ -336,10 +336,17 @@ export function createTelegramReplyDelivery(params: {
         !params.draft.isAnswerToolProgressOnly() &&
         !ownedByQueuedRotation &&
         segment.update.text.trimEnd() === params.draft.answerLane.lastPartialText.trimEnd();
+      const isDurableProgressCommentary =
+        params.streamMode === "progress" &&
+        info.kind === "block" &&
+        effectivePayload.isCommentary === true;
+      // CLI finals exclude separately classified commentary. Send that block outside
+      // the disposable progress stream or its collapse summary erases the text.
       const suppressProgressAnswerBlock =
         params.streamMode === "progress" &&
         info.kind === "block" &&
         segment.lane === "answer" &&
+        !isDurableProgressCommentary &&
         !reply.hasMedia &&
         !hasExecApprovalPayload(effectivePayload) &&
         telegramButtons === undefined;
@@ -381,6 +388,7 @@ export function createTelegramReplyDelivery(params: {
               payload: lanePayload,
               infoKind: info.kind,
               buttons: telegramButtons,
+              allowStream: !isDurableProgressCommentary,
             });
       if (
         segment.lane === "answer" &&
