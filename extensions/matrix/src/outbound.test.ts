@@ -71,10 +71,13 @@ describe("matrixOutbound cfg threading", () => {
 
     expect(chunker("ABCD", 0.5)).toEqual(["A", "B", "C", "D"]);
     expect(chunker("😀😀", 1.5)).toEqual(["😀", "😀"]);
+    expect(chunkTextForOutbound("ABCD", 0.5)).toEqual(["A", "B", "C", "D"]);
+    expect(chunkTextForOutbound("😀😀", 1.5)).toEqual(["😀", "😀"]);
   });
 
-  it("preserves Matrix compatibility behavior for non-fractional limits", () => {
+  it("preserves Matrix compatibility behavior", () => {
     expect(chunkTextForOutbound("", 5)).toEqual([""]);
+    expect(chunkTextForOutbound("", 0.5)).toEqual([""]);
     expect(chunkTextForOutbound("abcdef   ", 5)).toEqual(["abcde", "f   "]);
   });
 

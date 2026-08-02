@@ -56,6 +56,11 @@ export type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 export type { WizardPrompter } from "openclaw/plugin-sdk/setup";
 
 export function chunkTextForOutbound(text: string, limit: number): string[] {
+  // This facade shipped distinct empty and whitespace behavior. Preserve that
+  // contract while delegating fractional limits to the progress-safe SDK owner.
+  if (text.length === 0) {
+    return [""];
+  }
   if (Number.isFinite(limit) && limit > 0 && !Number.isInteger(limit)) {
     return chunkTextForOutboundSdk(text, limit);
   }
@@ -68,7 +73,7 @@ export function chunkTextForOutbound(text: string, limit: number): string[] {
     chunks.push(remaining.slice(0, breakAt).trimEnd());
     remaining = remaining.slice(breakAt).trimStart();
   }
-  if (remaining.length > 0 || text.length === 0) {
+  if (remaining.length > 0) {
     chunks.push(remaining);
   }
   return chunks;
