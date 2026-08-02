@@ -1,6 +1,5 @@
 // Codex plugin module implements conversation binding behavior.
 import {
-  embeddedAgentLog,
   formatErrorMessage,
   resolveSandboxContext,
 } from "openclaw/plugin-sdk/agent-harness-runtime";

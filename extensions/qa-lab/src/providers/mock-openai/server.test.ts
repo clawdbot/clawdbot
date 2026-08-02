@@ -3630,7 +3630,7 @@ describe("qa mock openai server", () => {
       "Delegate one bounded QA task to a subagent. Wait for the subagent to finish.";
     const fanoutPrompt =
       "Subagent fanout synthesis check: delegate two bounded subagents sequentially, then report both results together.";
-    const sessions = ["qa-session-alpha", "qa-session-beta"];
+    const sessions = ["qa-session-alpha", "qa-session-beta"] as const;
     const runtimePrompt = (sessionId: string) =>
       `Runtime: agent=main | sessionId=${sessionId} | channel=qa`;
     const postSession = (sessionId: string, input: unknown[], cacheBoundary = 0) =>
