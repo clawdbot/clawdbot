@@ -787,6 +787,48 @@ describe("grouped chat rendering", () => {
     expect(order).toEqual(["Reply to message", "Hide message", "Rewind", "name", "time"]);
   });
 
+  it("collapses assistant reasoning by default and keeps the answer visible", () => {
+    const container = document.createElement("div");
+    const message = {
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "private reasoning details" },
+        { type: "text", text: "Visible answer." },
+      ],
+      timestamp: 1000,
+    };
+
+    renderAssistantMessage(container, message);
+
+    const disclosure = expectElement(container, ".chat-thinking-disclosure", HTMLDetailsElement);
+    const summary = expectElement(disclosure, ".chat-thinking-summary", HTMLElement);
+    expect(disclosure.open).toBe(false);
+    expect(summary.textContent).toContain("Reasoning");
+    expect(disclosure.textContent).toContain("private reasoning details");
+    expect(container.textContent).toContain("Visible answer.");
+
+    summary.click();
+    expect(disclosure.open).toBe(true);
+    summary.click();
+    expect(disclosure.open).toBe(false);
+
+    renderAssistantMessage(container, message, { showReasoning: false });
+    expect(container.querySelector(".chat-thinking-disclosure")).toBeNull();
+    expect(container.textContent).toContain("Visible answer.");
+  });
+
+  it("renders reasoning-only messages without exposing reply actions", () => {
+    const container = document.createElement("div");
+    renderAssistantMessage(container, {
+      role: "assistant",
+      content: [{ type: "thinking", thinking: "private reasoning only" }],
+      timestamp: 1000,
+    });
+
+    expect(container.querySelector(".chat-thinking-disclosure")).not.toBeNull();
+    expect(container.querySelector('[aria-label="Reply to message"]')).toBeNull();
+  });
+
   it("keeps hidden assistant thinking out of inline reply context", () => {
     const container = document.createElement("div");
     const onReply = vi.fn();

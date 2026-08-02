@@ -152,6 +152,21 @@ function renderPairingQrExpiryNotices(notices: PairingQrExpiryNotice[]) {
   `;
 }
 
+function renderReasoningDisclosure(reasoningMarkdown: string | null) {
+  if (!reasoningMarkdown) {
+    return nothing;
+  }
+  return html`
+    <details class="chat-thinking-disclosure">
+      <summary class="chat-thinking-summary">
+        <span class="chat-thinking-summary__icon" aria-hidden="true">${icons.chevronRight}</span>
+        <span>${t("chat.view.reasoning")}</span>
+      </summary>
+      <div class="chat-thinking">${unsafeHTML(toSanitizedMarkdownHtml(reasoningMarkdown))}</div>
+    </details>
+  `;
+}
+
 export function renderGroupedMessage(
   message: unknown,
   messageKey: string,
@@ -254,6 +269,7 @@ export function renderGroupedMessage(
   const visibleToolCards = hasToolCards && (opts.showToolCalls ?? true);
   if (
     !markdown &&
+    !reasoningMarkdown &&
     !visibleToolCards &&
     !hasImages &&
     !hasPairingQrExpiryNotices &&
@@ -424,12 +440,7 @@ export function renderGroupedMessage(
                         opts.onOpenImage,
                         opts.resolveArtifactDownload,
                       )}
-                      ${assistantViewContent}
-                      ${reasoningMarkdown
-                        ? html`<div class="chat-thinking">
-                            ${unsafeHTML(toSanitizedMarkdownHtml(reasoningMarkdown))}
-                          </div>`
-                        : nothing}
+                      ${assistantViewContent} ${renderReasoningDisclosure(reasoningMarkdown)}
                       ${jsonResult
                         ? html`<details
                             class="chat-json-collapse"
@@ -491,12 +502,7 @@ export function renderGroupedMessage(
               opts.onOpenImage,
               opts.resolveArtifactDownload,
             )}
-            ${reasoningMarkdown
-              ? html`<div class="chat-thinking">
-                  ${unsafeHTML(toSanitizedMarkdownHtml(reasoningMarkdown))}
-                </div>`
-              : nothing}
-            ${assistantViewContent}
+            ${renderReasoningDisclosure(reasoningMarkdown)} ${assistantViewContent}
             ${jsonResult
               ? html`<details class="chat-json-collapse">
                   <summary class="chat-json-summary">
