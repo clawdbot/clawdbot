@@ -1,4 +1,5 @@
 // Github Copilot tests cover stream plugin behavior.
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Context } from "openclaw/plugin-sdk/llm";
 import { buildCopilotIdeHeaders } from "openclaw/plugin-sdk/provider-auth";
 import { describe, expect, it, vi } from "vitest";
@@ -77,7 +78,7 @@ describe("wrapCopilotAnthropicStream", () => {
     ] as Context["messages"];
     const persistedTranscript = structuredClone(messages);
     let observedPayload: { messages: Array<{ role: string; content: unknown }> } | undefined;
-    const baseStreamFn = vi.fn((streamModel, context, options) => {
+    const baseStreamFn = vi.fn<StreamFn>((streamModel, context, options) => {
       const payload = {
         messages: context.messages.map((message) => {
           if (message.role === "toolResult") {

@@ -87,10 +87,11 @@ function buildCopilotRequestHeaders(
 
 function patchCopilotAnthropicPayload(payload: Record<string, unknown>): void {
   if (Array.isArray(payload.messages)) {
-    payload.messages = stripCopilotAssistantThinkingMessages(payload.messages);
+    const messages = stripCopilotAssistantThinkingMessages(payload.messages);
+    payload.messages = messages;
     // Match canonical Anthropic normalization, including collision behavior;
     // only Copilot's wire payload changes, never stored history.
-    for (const message of payload.messages) {
+    for (const message of messages) {
       if (!message || typeof message !== "object") {
         continue;
       }
