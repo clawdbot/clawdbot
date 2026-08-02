@@ -2,6 +2,7 @@
 // Starts, stops, restarts, and snapshots plugin channel account runtimes.
 import { RetrySupervisor } from "../../packages/retry/src/index.js";
 import { getCredentialUnavailableDiagnostics } from "../channels/account-snapshot-fields.js";
+import { isChannelIngressUnavailableError } from "../channels/message/ingress-unavailable.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { type ChannelId, getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.js";
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
@@ -87,6 +88,7 @@ function sanitizeAbortedTaskStatusPatch(
   delete next.reconnectAttempts;
   delete next.lastStartAt;
   delete next.lastStopAt;
+  delete next.lifecycle;
 
   // A stale task may still emit a late "connected" heartbeat after the gateway
   // has already aborted it and marked restart recovery pending. Do not let that
@@ -385,7 +387,14 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
   ): ChannelAccountSnapshot => {
     const store = getStore(channelId);
     const current = getRuntime(channelId, accountId);
-    const next = { ...current, ...patch, accountId };
+    const lifecycle =
+      patch.lifecycle ??
+      (patch.restartPending === true
+        ? "recovering"
+        : patch.connected === true
+          ? "ready"
+          : undefined);
+    const next = { ...current, ...patch, ...(lifecycle ? { lifecycle } : {}), accountId };
     store.runtimes.set(accountId, next);
     return next;
   };
@@ -411,6 +420,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     return setRuntime(channelId, accountId, {
       accountId,
       running: false,
+      lifecycle: patch.restartPending === true ? "recovering" : "stopped",
       ...(typeof current.connected === "boolean" ? { connected: false } : {}),
       ...patch,
     });
@@ -706,9 +716,14 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             enabled: true,
             ...(linkState === "linked" ? { linked: true } : {}),
             running: true,
+            lifecycle: "starting",
             restartPending: false,
             lastStartAt: Date.now(),
             lastError: null,
+            // Runtime rows are patch-merged, so a dead-ingress verdict from the
+            // previous lifecycle would outlive the condition it described. Every
+            // start re-proves ingress, so every start must clear it first.
+            ingressUnavailable: undefined,
             reconnectAttempts: preserveRestartAttempts ? (restarts.get(rKey)?.attempts ?? 0) : 0,
           });
           const task = Promise.resolve().then(async () => {
@@ -796,6 +811,11 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               if (abort.signal.aborted || manuallyStopped.has(rKey) || !isCurrentTask()) {
                 return;
               }
+              if (getRuntime(channelId, id).terminalDisconnect) {
+                // Terminal status carries the operator-facing diagnosis and restart policy.
+                // Do not replace it with a generic clean-exit error before policy consumes it.
+                return;
+              }
               const message = "channel exited without an error";
               setRuntime(channelId, id, { accountId: id, lastError: message });
               log.error?.(`[${id}] ${message}`);
@@ -805,7 +825,14 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                 return;
               }
               const message = formatErrorMessage(err);
-              setRuntime(channelId, id, { accountId: id, lastError: message });
+              setRuntime(channelId, id, {
+                accountId: id,
+                lastError: message,
+                // A channel that never armed its ingress admission is not "crashed":
+                // outbound may work fine while inbound is silently dead. Record the
+                // distinct dimension so health stops reading a live socket as healthy.
+                ...(isChannelIngressUnavailableError(err) ? { ingressUnavailable: true } : {}),
+              });
               log.error?.(`[${id}] channel exited: ${message}`);
             })
             .then(async () => {
@@ -1193,17 +1220,11 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         cfg,
       });
     const current = getRuntime(channelId, resolvedId);
-    const next: ChannelAccountSnapshot = {
-      accountId: resolvedId,
+    setStoppedRuntime(channelId, resolvedId, {
       ...(cleared ? { linked: false } : {}),
-      running: false,
       restartPending: false,
       lastError: cleared ? "logged out" : current.lastError,
-    };
-    if (typeof current.connected === "boolean") {
-      next.connected = false;
-    }
-    setRuntime(channelId, resolvedId, next);
+    });
   };
 
   const getRuntimeSnapshot = (): ChannelRuntimeSnapshot => {

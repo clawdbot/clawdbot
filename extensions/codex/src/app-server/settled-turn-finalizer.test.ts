@@ -250,6 +250,70 @@ describe("runCodexSettledTurnFinalization", () => {
     },
   );
 
+  it("accepts the exact current-turn prompt echo once", async () => {
+    const attempt = createAttempt();
+    mocks.runBounded.mockResolvedValue({
+      text: "The update was sent successfully.",
+      items: [
+        {
+          id: "prompt-echo",
+          type: "userMessage",
+          content: [{ type: "text", text: attempt.prompt, text_elements: [] }],
+        },
+        { id: "answer", type: "agentMessage", text: "The update was sent successfully." },
+      ],
+      model: "gpt-5.4",
+    });
+
+    await expect(
+      runCodexSettledTurnFinalization({ attempt, settledAttempt: createSettledAttempt() }, {}),
+    ).resolves.toMatchObject({ assistantTranscriptOwned: true });
+    expect(mocks.mirror).toHaveBeenCalledOnce();
+  });
+
+  it("rejects a mismatched current-turn prompt echo before transcript mutation", async () => {
+    mocks.runBounded.mockResolvedValue({
+      text: "The update was sent successfully.",
+      items: [
+        {
+          id: "prompt-echo",
+          type: "userMessage",
+          content: [{ type: "text", text: "A different prompt.", text_elements: [] }],
+        },
+      ],
+      model: "gpt-5.4",
+    });
+
+    await expect(
+      runCodexSettledTurnFinalization(
+        { attempt: createAttempt(), settledAttempt: createSettledAttempt() },
+        {},
+      ),
+    ).rejects.toThrow("unexpected native item: userMessage");
+    expect(mocks.mirror).not.toHaveBeenCalled();
+  });
+
+  it("rejects a duplicate current-turn prompt echo before transcript mutation", async () => {
+    const attempt = createAttempt();
+    const promptEcho = {
+      type: "userMessage",
+      content: [{ type: "text", text: attempt.prompt, text_elements: [] }],
+    };
+    mocks.runBounded.mockResolvedValue({
+      text: "The update was sent successfully.",
+      items: [
+        { id: "prompt-echo-1", ...promptEcho },
+        { id: "prompt-echo-2", ...promptEcho },
+      ],
+      model: "gpt-5.4",
+    });
+
+    await expect(
+      runCodexSettledTurnFinalization({ attempt, settledAttempt: createSettledAttempt() }, {}),
+    ).rejects.toThrow("unexpected native item: userMessage");
+    expect(mocks.mirror).not.toHaveBeenCalled();
+  });
+
   it("rejects a missing frozen context before starting the isolated turn", async () => {
     const settledAttempt = createSettledAttempt();
     delete settledAttempt.settledTurnFinalizationContext;

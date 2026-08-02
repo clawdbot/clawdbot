@@ -165,6 +165,8 @@ describe("qa suite", () => {
       config: { expected: "value" },
       gateway: env.gateway,
       outputDir: "/tmp/qa-output",
+      scenarioId: "matrix-preparation-failure",
+      scenarioTitle: "matrix-preparation-failure",
       timeoutMs: 45_000,
       waitForConfigRestartSettle: expect.any(Function),
     });
@@ -800,69 +802,6 @@ describe("qa suite", () => {
     ).toEqual({
       OPENAI_API_KEY: "mock",
       NODE_OPTIONS: "--heapsnapshot-signal=SIGUSR2",
-    });
-  });
-
-  it("builds a codex mock runtime env patch that stays on the QA mock provider", () => {
-    expect(
-      qaSuiteProgressTesting.buildQaRuntimeEnvPatch({
-        providerMode: "mock-openai",
-        forcedRuntime: "codex",
-        mockBaseUrl: "http://127.0.0.1:44080",
-      }),
-    ).toEqual({
-      OPENCLAW_BUILD_PRIVATE_QA: "1",
-      OPENCLAW_QA_FORCE_RUNTIME: "codex",
-      OPENCLAW_CODEX_APP_SERVER_ARGS:
-        "app-server -c openai_base_url=http://127.0.0.1:44080/v1 -c sandbox_workspace_write.exclude_tmpdir_env_var=true -c sandbox_workspace_write.exclude_slash_tmp=true --listen stdio://",
-      OPENAI_API_KEY: "qa-mock-openai-key",
-      CODEX_API_KEY: "qa-mock-openai-key",
-    });
-  });
-
-  it("omits mock OpenAI rewiring for non-codex runtime overrides", () => {
-    expect(
-      qaSuiteProgressTesting.buildQaRuntimeEnvPatch({
-        providerMode: "mock-openai",
-        forcedRuntime: "openclaw",
-        mockBaseUrl: "http://127.0.0.1:44080",
-      }),
-    ).toEqual({
-      OPENCLAW_BUILD_PRIVATE_QA: "1",
-      OPENCLAW_QA_FORCE_RUNTIME: "openclaw",
-    });
-  });
-
-  it("confines live Codex QA without rewiring the native provider", () => {
-    expect(
-      qaSuiteProgressTesting.buildQaRuntimeEnvPatch({
-        providerMode: "live-frontier",
-        forcedRuntime: "codex",
-      }),
-    ).toEqual({
-      OPENCLAW_BUILD_PRIVATE_QA: "1",
-      OPENCLAW_QA_FORCE_RUNTIME: "codex",
-      OPENCLAW_CODEX_APP_SERVER_ARGS:
-        "app-server -c sandbox_workspace_write.exclude_tmpdir_env_var=true " +
-        "-c sandbox_workspace_write.exclude_slash_tmp=true --listen stdio://",
-    });
-  });
-
-  it("preserves custom live Codex arguments when confining a QA suite", () => {
-    expect(
-      qaSuiteProgressTesting.buildQaRuntimeEnvPatch({
-        providerMode: "live-frontier",
-        forcedRuntime: "codex",
-        nativeAppServerArgs:
-          'app-server -c openai_base_url="https://live.example/v1" --listen stdio://',
-      }),
-    ).toEqual({
-      OPENCLAW_BUILD_PRIVATE_QA: "1",
-      OPENCLAW_QA_FORCE_RUNTIME: "codex",
-      OPENCLAW_CODEX_APP_SERVER_ARGS:
-        'app-server -c openai_base_url="https://live.example/v1" --listen stdio:// ' +
-        "-c sandbox_workspace_write.exclude_tmpdir_env_var=true " +
-        "-c sandbox_workspace_write.exclude_slash_tmp=true",
     });
   });
 

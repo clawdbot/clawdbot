@@ -10,6 +10,8 @@ import type { OpenClawPluginApi } from "../plugins/plugin-api.types.js";
 import type { OpenClawPluginConfigSchema } from "../plugins/plugin-config-schema.types.js";
 import type { OpenClawPluginNodeInvokePolicy } from "../plugins/plugin-registration.types.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
+import type { MeetingPluginConfig as SharedMeetingPluginConfig } from "./plugin-config.js";
+import type { MeetingPluginJoinRequest } from "./session-types.js";
 import {
   createMeetingTranscriptSourceProvider,
   type MeetingTranscriptSourceRuntime,
@@ -19,22 +21,11 @@ type MeetingToolAction = "join" | "leave" | "status" | "transcript" | "speak";
 type MeetingMode = "agent" | "bidi" | "transcribe";
 type MeetingTransport = "chrome" | "chrome-node";
 
-type MeetingJoinRequest = {
-  agentId?: string;
-  message?: string;
-  mode?: MeetingMode;
-  requesterSessionKey?: string;
-  timeoutMs?: number;
-  transport?: MeetingTransport;
-  url: string;
-};
+export type MeetingJoinRequest = MeetingPluginJoinRequest<MeetingTransport, MeetingMode>;
 
-type MeetingPluginConfig = {
-  enabled: boolean;
-  chromeNode: { node?: string };
-};
+export type MeetingPluginConfig = Pick<SharedMeetingPluginConfig, "enabled" | "chromeNode">;
 
-type MeetingPluginRuntime<Request extends MeetingJoinRequest> =
+export type MeetingPluginRuntime<Request extends MeetingJoinRequest> =
   Partial<MeetingTranscriptSourceRuntime> & {
     join(request: Request): Promise<unknown>;
     leave(sessionId: string): Promise<unknown>;
@@ -48,7 +39,7 @@ type MeetingPluginRuntime<Request extends MeetingJoinRequest> =
     transcript(sessionId: string, options: { sinceIndex?: number }): Promise<unknown>;
   };
 
-type MeetingPluginEntryOptions<
+export type MeetingPluginEntryOptions<
   Config extends MeetingPluginConfig,
   Request extends MeetingJoinRequest,
   Runtime extends MeetingPluginRuntime<Request>,

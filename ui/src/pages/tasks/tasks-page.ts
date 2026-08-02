@@ -1,4 +1,5 @@
 import { consume } from "@lit/context";
+import { initialState, Task, TaskStatus } from "@lit/task";
 import { html } from "lit";
 import { state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -55,7 +56,6 @@ function taskMatchesAgentScope(task: TaskSummary, agentId: string | null): boole
 type TaskRefreshEvent = NonNullable<ReturnType<typeof normalizeTaskEventPayload>>;
 
 type TaskRefreshEventBuffer = {
-  generation: number;
   gateway: ApplicationContext["gateway"];
   client: GatewayBrowserClient;
   scopeId: string | null;
@@ -68,16 +68,71 @@ class TasksPage extends OpenClawLightDomElement {
 
   @state() private tasks: TaskSummary[] = [];
   @state() private connected = false;
-  @state() private loading = false;
   @state() private error: string | null = null;
   @state() private cancellingTaskIds = new Set<string>();
 
   private client: GatewayBrowserClient | null = null;
-  private loadGeneration = 0;
   private operationEpoch = 0;
   private observedAgentScopeId: string | null | undefined;
   private gatewaySource?: ApplicationContext["gateway"];
   private taskRefreshEvents: TaskRefreshEventBuffer | null = null;
+  private readonly listTask = new Task(this, {
+    autoRun: false,
+    // Gateway identity retires reconnect/source replacements even when they reuse a client.
+    args: () =>
+      [
+        this.connected ? (this.gatewaySource ?? null) : null,
+        this.connected ? this.client : null,
+        this.context?.agentSelection.state.scopeId ?? null,
+      ] as const,
+    task: async ([gateway, client, scopeId], { signal }) => {
+      if (!gateway || !client) {
+        return initialState;
+      }
+      const buffer: TaskRefreshEventBuffer = {
+        gateway,
+        client,
+        scopeId,
+        events: [],
+      };
+      this.taskRefreshEvents = buffer;
+      const agentId = scopeId ?? undefined;
+      const [activePayload, recentPayload] = await Promise.all([
+        client.request(
+          "tasks.list",
+          {
+            status: ["queued", "running"],
+            limit: 500,
+            ...(agentId ? { agentId } : {}),
+          },
+          { signal },
+        ),
+        client.request("tasks.list", { limit: 200, ...(agentId ? { agentId } : {}) }, { signal }),
+      ]);
+      const active = normalizeTasksListResult(activePayload);
+      const recent = normalizeTasksListResult(recentPayload);
+      if (!active || !recent) {
+        throw new Error(t("tasksPage.invalidResponse"));
+      }
+      return { active, recent, buffer };
+    },
+    onComplete: ({ active, recent, buffer }) => {
+      // The active query is issued first; a same-millisecond recent page
+      // must win running-progress ties when a pushed event is dropped.
+      let tasks = mergeTaskLists(active, recent);
+      for (const event of buffer.events) {
+        tasks = applyTaskEvent(tasks, event).tasks;
+      }
+      this.tasks = tasks;
+      if (this.taskRefreshEvents === buffer) {
+        this.taskRefreshEvents = null;
+      }
+    },
+    onError: (error) => {
+      this.taskRefreshEvents = null;
+      this.error = formatTaskError(error, t("tasksPage.loadFailed"));
+    },
+  });
   private readonly subscriptions = new SubscriptionsController(this)
     .effect(
       () => this.context?.gateway,
@@ -117,7 +172,6 @@ class TasksPage extends OpenClawLightDomElement {
             normalizedEvent &&
             normalizedEvent.action !== "restored" &&
             buffer &&
-            buffer.generation === this.loadGeneration &&
             buffer.gateway === gateway &&
             buffer.client === this.client &&
             buffer.scopeId === scopeId &&
@@ -195,10 +249,9 @@ class TasksPage extends OpenClawLightDomElement {
   private invalidateGatewayWork() {
     // Reconnects may reuse the client object; the epoch keeps pre-disconnect
     // cancellation responses from mutating the replacement task snapshot.
-    this.loadGeneration += 1;
     this.operationEpoch += 1;
     this.taskRefreshEvents = null;
-    this.loading = false;
+    void this.listTask.run([null, null, null]);
     this.cancellingTaskIds = new Set();
   }
 
@@ -217,79 +270,15 @@ class TasksPage extends OpenClawLightDomElement {
     );
   }
 
-  private isLoadScopeCurrent(
-    gateway: ApplicationContext["gateway"],
-    client: GatewayBrowserClient,
-    generation: number,
-  ): boolean {
-    return (
-      this.isConnected &&
-      this.connected &&
-      this.gatewaySource === gateway &&
-      this.context.gateway === gateway &&
-      this.client === client &&
-      this.loadGeneration === generation
-    );
-  }
-
-  private async refreshTasks() {
+  private refreshTasks(): Promise<void> {
     const gateway = this.gatewaySource;
     const client = this.client;
     if (!gateway || this.context.gateway !== gateway || !this.connected || !client) {
-      return;
+      return Promise.resolve();
     }
-    const generation = ++this.loadGeneration;
     const scopeId = this.context.agentSelection.state.scopeId;
-    // Replay only events received during this exact scoped request; otherwise
-    // late snapshot pages can undo concurrent completions, creations, or deletes.
-    const taskRefreshEvents: TaskRefreshEventBuffer = {
-      generation,
-      gateway,
-      client,
-      scopeId,
-      events: [],
-    };
-    this.taskRefreshEvents = taskRefreshEvents;
-    this.loading = true;
     this.error = null;
-    try {
-      const agentId = scopeId ?? undefined;
-      // Active tasks need their own query: the ledger pages newest-first, so a
-      // long-running task can hide behind newer terminal records on page one.
-      const [activePayload, recentPayload] = await Promise.all([
-        client.request("tasks.list", {
-          status: ["queued", "running"],
-          limit: 500,
-          ...(agentId ? { agentId } : {}),
-        }),
-        client.request("tasks.list", { limit: 200, ...(agentId ? { agentId } : {}) }),
-      ]);
-      const active = normalizeTasksListResult(activePayload);
-      const recent = normalizeTasksListResult(recentPayload);
-      if (!active || !recent) {
-        throw new Error(t("tasksPage.invalidResponse"));
-      }
-      if (this.isLoadScopeCurrent(gateway, client, generation)) {
-        // The active query is issued first; a same-millisecond recent page
-        // must win running-progress ties when a pushed event is dropped.
-        let tasks = mergeTaskLists(active, recent);
-        for (const event of taskRefreshEvents.events) {
-          tasks = applyTaskEvent(tasks, event).tasks;
-        }
-        this.tasks = tasks;
-      }
-    } catch (error) {
-      if (this.isLoadScopeCurrent(gateway, client, generation)) {
-        this.error = formatTaskError(error, t("tasksPage.loadFailed"));
-      }
-    } finally {
-      if (this.taskRefreshEvents === taskRefreshEvents) {
-        this.taskRefreshEvents = null;
-      }
-      if (this.isLoadScopeCurrent(gateway, client, generation)) {
-        this.loading = false;
-      }
-    }
+    return this.listTask.run([gateway, client, scopeId]);
   }
 
   private async cancelTask(taskId: string) {
@@ -319,7 +308,6 @@ class TasksPage extends OpenClawLightDomElement {
         if (
           event &&
           buffer &&
-          buffer.generation === this.loadGeneration &&
           buffer.gateway === gateway &&
           buffer.client === client &&
           buffer.scopeId === this.context.agentSelection.state.scopeId
@@ -363,10 +351,12 @@ class TasksPage extends OpenClawLightDomElement {
           <button
             class="btn"
             type="button"
-            ?disabled=${!this.connected || this.loading}
+            ?disabled=${!this.connected || this.listTask.status === TaskStatus.PENDING}
             @click=${() => void this.refreshTasks()}
           >
-            ${this.loading ? t("common.refreshing") : t("common.refresh")}
+            ${this.listTask.status === TaskStatus.PENDING
+              ? t("common.refreshing")
+              : t("common.refresh")}
           </button>
         </div>
       </section>
@@ -380,7 +370,7 @@ class TasksPage extends OpenClawLightDomElement {
         connected: this.connected,
         // tasks.cancel needs operator.write; read-only operators get no button.
         canCancel: hasOperatorWriteAccess(this.context.gateway.snapshot.hello?.auth ?? null),
-        loading: this.loading,
+        loading: this.listTask.status === TaskStatus.PENDING,
         error: this.error,
         tasks: this.tasks,
         cancellingTaskIds: this.cancellingTaskIds,

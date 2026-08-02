@@ -1,4 +1,5 @@
 // Mattermost plugin module owns native model-picker interactions.
+import { runDetachedWebhookWork } from "openclaw/plugin-sdk/webhook-request-guards";
 import type { MattermostPost } from "./client.js";
 import type { MattermostInteractionResponse } from "./interactions.js";
 import {
@@ -11,14 +12,11 @@ import {
 import { authorizeMattermostCommandInvocation } from "./monitor-auth.js";
 import {
   buildMattermostModelPickerSelectMessageSid,
-  resolveMattermostReplyRootId,
+  resolveMattermostInteractionReplyRootId,
 } from "./monitor-context.js";
 import { buildMattermostEventPlan, type MattermostEventPlan } from "./monitor-event-plan.js";
 import type { MattermostMonitorContext } from "./monitor-types.js";
-import {
-  deliverMattermostReplyPayload,
-  toMattermostChannelDeliveryResult,
-} from "./reply-delivery.js";
+import { deliverMattermostReplyPayload } from "./reply-delivery.js";
 import type { ReplyPayload } from "./runtime-api.js";
 import { buildModelsProviderData } from "./runtime-api.js";
 import { sendMessageMattermost } from "./send.js";
@@ -29,6 +27,7 @@ type RunModelPickerCommandParams = {
   eventPlan: MattermostEventPlan;
   senderName: string;
   messageSid: string;
+  sourcePostId: string;
 };
 
 export type MattermostModelPickerInteractionHandler = (params: {
@@ -82,32 +81,33 @@ export function createMattermostModelPickerInteractionHandler(
       },
       ctxPayload,
       delivery: {
+        observeMessageSent: true,
         // Picker-triggered confirmations should stay immediate.
         deliver: async (payload: ReplyPayload) => {
           const trimmedPayload = {
             ...payload,
             text: core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode).trim(),
           };
-          return toMattermostChannelDeliveryResult(
-            await deliverMattermostReplyPayload({
-              core,
-              cfg,
-              payload: trimmedPayload,
-              to,
-              accountId: account.accountId,
-              agentId: route.agentId,
-              replyToId: resolveMattermostReplyRootId({
-                kind,
-                threadRootId: thread.effectiveReplyToId,
-                replyToId: trimmedPayload.replyToId,
-              }),
-              textLimit,
-              // The picker path already converts and trims text before delivery.
-              tableMode: "off",
-              sendMessage: sendMessageMattermost,
-              onDmChannelResolution: deliveryBarrier.trackDmChannelResolution,
+          return await deliverMattermostReplyPayload({
+            core,
+            cfg,
+            payload: trimmedPayload,
+            to,
+            accountId: account.accountId,
+            agentId: route.agentId,
+            replyToId: resolveMattermostInteractionReplyRootId({
+              kind,
+              threadRootId: thread.effectiveReplyToId,
+              replyToId: trimmedPayload.replyToId,
+              interactionMessageSid: params.messageSid,
+              sourcePostId: params.sourcePostId,
             }),
-          );
+            textLimit,
+            // The picker path already converts and trims text before delivery.
+            tableMode: "off",
+            sendMessage: sendMessageMattermost,
+            onDmChannelResolution: deliveryBarrier.trackDmChannelResolution,
+          });
         },
         onError: (err, info) => {
           runtime.error?.(`mattermost model picker ${info.kind} reply failed: ${String(err)}`);
@@ -247,38 +247,40 @@ export function createMattermostModelPickerInteractionHandler(
     if (!buildMattermostAllowedModelRefs(data).has(targetModelRef)) {
       return { ephemeral_text: `That model is no longer available: ${targetModelRef}` };
     }
+    const messageSid = buildMattermostModelPickerSelectMessageSid({
+      postId: params.payload.post_id,
+      provider: pickerState.provider,
+      model: pickerState.model,
+    });
 
-    void (async () => {
-      try {
-        await runModelPickerCommand({
-          commandText: `/model ${targetModelRef}`,
-          commandAuthorized: auth.commandAuthorized,
-          eventPlan,
-          senderName: params.userName,
-          messageSid: buildMattermostModelPickerSelectMessageSid({
-            postId: params.payload.post_id,
-            provider: pickerState.provider,
-            model: pickerState.model,
-          }),
-        });
-        const currentModel = resolveMattermostModelPickerCurrentModel({
-          cfg,
-          route: modelSessionRoute,
-          data,
-          readConsistency: "latest",
-        });
-        const view = renderMattermostModelsPickerView({
-          ownerUserId: pickerState.ownerUserId,
-          data,
-          provider: pickerState.provider,
-          page: pickerState.page,
-          currentModel,
-        });
-        await updatePickerPost(view.text, view.buttons);
-      } catch (err) {
-        runtime.error?.(`mattermost model picker select failed: ${String(err)}`);
-      }
-    })();
+    // The HTTP response returns before the command finishes. Reserve a new root
+    // while the request is still admitted so session dispatch survives that ack.
+    void runDetachedWebhookWork(async () => {
+      await runModelPickerCommand({
+        commandText: `/model ${targetModelRef}`,
+        commandAuthorized: auth.commandAuthorized,
+        eventPlan,
+        senderName: params.userName,
+        messageSid,
+        sourcePostId: params.post.id || params.payload.post_id,
+      });
+      const currentModel = resolveMattermostModelPickerCurrentModel({
+        cfg,
+        route: modelSessionRoute,
+        data,
+        readConsistency: "latest",
+      });
+      const view = renderMattermostModelsPickerView({
+        ownerUserId: pickerState.ownerUserId,
+        data,
+        provider: pickerState.provider,
+        page: pickerState.page,
+        currentModel,
+      });
+      await updatePickerPost(view.text, view.buttons);
+    }).catch((err: unknown) => {
+      runtime.error?.(`mattermost model picker select failed: ${String(err)}`);
+    });
 
     return {};
   };

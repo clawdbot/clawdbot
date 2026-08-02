@@ -8,6 +8,7 @@ import {
   redactRegisteredSecretValues,
 } from "../logging/secret-redaction-registry.js";
 import { resolveDebugProxySettings, type DebugProxySettings } from "./env.js";
+import { redactedCaptureHeaders, REDACTED_CAPTURE_HEADER_VALUE } from "./header-redaction.js";
 import {
   closeDebugProxyCaptureStore,
   getDebugProxyCaptureStore,
@@ -22,7 +23,6 @@ import type {
 } from "./types.js";
 
 const DEBUG_PROXY_FETCH_PATCH_KEY = Symbol.for("openclaw.debugProxy.fetchPatch");
-const REDACTED_CAPTURE_HEADER_VALUE = "[REDACTED]";
 const REDACTED_CAPTURE_BINARY_PAYLOAD = Buffer.from("[REDACTED BINARY PAYLOAD]", "utf8");
 // Cap captured response bodies so debug proxy capture cannot be turned into an
 // out-of-memory vector. The patched global fetch tees every outbound response
@@ -91,28 +91,6 @@ async function readCapturedResponseBodyBounded(
     ? { status: "too-large" }
     : { status: "captured", buffer: Buffer.concat(chunks, total) };
 }
-const SENSITIVE_CAPTURE_HEADER_NAMES = new Set([
-  "authorization",
-  "proxy-authorization",
-  "cookie",
-  "set-cookie",
-  "x-api-key",
-  "api-key",
-  "apikey",
-  "x-auth-token",
-  "auth-token",
-  "x-access-token",
-  "access-token",
-]);
-const SENSITIVE_CAPTURE_HEADER_NAME_FRAGMENTS = [
-  "api-key",
-  "apikey",
-  "token",
-  "secret",
-  "password",
-  "credential",
-  "session",
-];
 
 function parseDeclaredCaptureContentLength(raw: string | null | undefined): bigint | undefined {
   if (raw === null || raw === undefined) {
@@ -193,36 +171,6 @@ function resolveUrlString(input: RequestInfo | URL): string | null {
     return input.url;
   }
   return null;
-}
-
-function isSensitiveCaptureHeaderName(name: string): boolean {
-  const normalized = name.trim().toLowerCase();
-  if (!normalized) {
-    return false;
-  }
-  if (SENSITIVE_CAPTURE_HEADER_NAMES.has(normalized)) {
-    return true;
-  }
-  return SENSITIVE_CAPTURE_HEADER_NAME_FRAGMENTS.some((fragment) => normalized.includes(fragment));
-}
-
-function redactedCaptureHeaders(
-  headers: Headers | Record<string, string> | undefined,
-): Record<string, string> | undefined {
-  if (!headers) {
-    return undefined;
-  }
-  const entries =
-    headers instanceof Headers ? Array.from(headers.entries()) : Object.entries(headers);
-  const redacted: Record<string, string> = {};
-  for (const [name, value] of entries) {
-    // Header names are matched exactly and by sensitive fragments because
-    // providers use many token/key naming variants.
-    redacted[name] = isSensitiveCaptureHeaderName(name)
-      ? REDACTED_CAPTURE_HEADER_VALUE
-      : redactRegisteredSecretValues(value, () => REDACTED_CAPTURE_HEADER_VALUE);
-  }
-  return redacted;
 }
 
 function redactCaptureUrl(rawUrl: string): string {
@@ -538,7 +486,16 @@ export function captureHttpExchange(
       method: params.method,
     }),
     contentType: requestContentType,
-    headersJson: runtime.safeJsonString(redactedCaptureHeaders(params.requestHeaders)),
+    headersJson: runtime.safeJsonString(
+      redactedCaptureHeaders(
+        params.requestHeaders,
+        Array.isArray(params.meta?.sensitiveRequestHeaderNames)
+          ? params.meta.sensitiveRequestHeaderNames.filter(
+              (name): name is string => typeof name === "string",
+            )
+          : undefined,
+      ),
+    ),
     metaJson: redactedCaptureJson(params.meta, runtime.safeJsonString),
     ...requestPayload,
   });

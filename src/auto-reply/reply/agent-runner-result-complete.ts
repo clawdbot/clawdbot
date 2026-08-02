@@ -395,11 +395,13 @@ export async function completeReplyAgentRun(input: {
         (entry) =>
           entry.sessionId === expectedSessionId
             ? {
-                pendingFinalDelivery: true,
-                pendingFinalDeliveryText: resolvedPendingText,
-                pendingFinalDeliveryIntentId,
-                pendingFinalDeliveryContext,
-                pendingFinalDeliveryCreatedAt: Date.now(),
+                pendingFinalDelivery: {
+                  kind: "replayable" as const,
+                  text: resolvedPendingText,
+                  intentId: pendingFinalDeliveryIntentId,
+                  context: pendingFinalDeliveryContext,
+                  createdAt: Date.now(),
+                },
                 updatedAt: Date.now(),
               }
             : null,
@@ -410,7 +412,8 @@ export async function completeReplyAgentRun(input: {
       );
       if (
         persistedPendingFinalDelivery?.sessionId !== expectedSessionId ||
-        persistedPendingFinalDelivery.pendingFinalDeliveryIntentId !== pendingFinalDeliveryIntentId
+        persistedPendingFinalDelivery.pendingFinalDelivery?.intentId !==
+          pendingFinalDeliveryIntentId
       ) {
         throw new Error("pending final delivery session changed or was deleted");
       }

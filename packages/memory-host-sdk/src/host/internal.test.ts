@@ -15,6 +15,7 @@ import {
   normalizeExtraMemoryPaths,
   remapChunkLines,
   runWithConcurrency,
+  stripMemoryAnnotationCarriers,
 } from "./internal.js";
 import { normalizeMemoryMultimodalSettings, type MemoryMultimodalSettings } from "./multimodal.js";
 
@@ -285,6 +286,81 @@ describe("memory host SDK package internals", () => {
     for (const chunk of chunks) {
       expect(() => encodeURIComponent(chunk.text)).not.toThrow();
     }
+  });
+
+  it("chunks top-level curated entries without carrying neighboring bullets", () => {
+    const text = [
+      "# Curated memory",
+      "",
+      "- Alpha entry",
+      "  alpha continuation",
+      "- Beta entry",
+      "  beta continuation",
+      "- Global entry",
+    ].join("\n");
+
+    const chunks = chunkMarkdown(text, { tokens: 400, overlap: 40, perEntry: true });
+
+    expect(chunks.map((chunk) => chunk.text)).toEqual([
+      "# Curated memory\n",
+      "- Alpha entry\n  alpha continuation",
+      "- Beta entry\n  beta continuation",
+      "- Global entry",
+    ]);
+    expect(chunks.map((chunk) => [chunk.startLine, chunk.endLine])).toEqual([
+      [1, 2],
+      [3, 4],
+      [5, 6],
+      [7, 7],
+    ]);
+    expect(chunks.map((chunk) => [chunk.entryStartLine, chunk.entryEndLine])).toEqual([
+      [undefined, undefined],
+      [3, 4],
+      [5, 6],
+      [7, 7],
+    ]);
+  });
+
+  it("strips recall annotation carriers while preserving source line positions", () => {
+    const text = [
+      "- Keep the gateway local. <!-- trigger: gateway setup --> <!-- importance: 9 -->",
+      "  <!-- project: github.com/openclaw/openclaw -->",
+      "  Keep this ordinary <!-- note: visible --> comment.",
+    ].join("\n");
+
+    const stripped = stripMemoryAnnotationCarriers(text);
+
+    expect(stripped).toBe(
+      [
+        "- Keep the gateway local.",
+        "",
+        "  Keep this ordinary <!-- note: visible --> comment.",
+      ].join("\n"),
+    );
+    expect(stripped.split("\n")).toHaveLength(text.split("\n").length);
+  });
+
+  it("keeps promotion headings and markers out of neighboring entries", () => {
+    const text = [
+      "- Alpha entry <!-- project: github.com/acme/alpha -->",
+      "### Project: github.com/acme/beta",
+      "",
+      "<!-- openclaw-memory-promotion:memory:beta -->",
+      "- Beta entry <!-- project: github.com/acme/beta -->",
+    ].join("\n");
+
+    const chunks = chunkMarkdown(text, { tokens: 400, overlap: 40, perEntry: true });
+
+    expect(chunks.map((chunk) => chunk.text)).toEqual([
+      "- Alpha entry <!-- project: github.com/acme/alpha -->",
+      "### Project: github.com/acme/beta\n\n<!-- openclaw-memory-promotion:memory:beta -->",
+      "- Beta entry <!-- project: github.com/acme/beta -->",
+    ]);
+    expect(chunks.map((chunk) => [chunk.entryStartLine, chunk.entryEndLine])).toEqual([
+      [1, 1],
+      [undefined, undefined],
+      [5, 5],
+    ]);
   });
 
   it("remaps chunk lines using JSONL source line maps", () => {

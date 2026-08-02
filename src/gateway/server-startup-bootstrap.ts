@@ -61,6 +61,13 @@ type WorkerEnvironmentStartupLoader = () => Promise<
   typeof import("./server-worker-environment-startup.js")
 >;
 
+function publishGatewayPluginRuntimeConfigAtStartup(params: {
+  runtimeConfig: OpenClawConfig;
+  sourceConfig: OpenClawConfig;
+}): void {
+  setAppliedRuntimeConfigSnapshot(params.runtimeConfig, params.sourceConfig);
+}
+
 export async function prepareGatewayServerBootstrap(input: {
   port: number;
   opts: GatewayServerOptions;
@@ -468,12 +475,20 @@ export async function prepareGatewayServerBootstrap(input: {
         const workerModule = await loadWorkerEnvironmentStartupModule();
         return await workerModule.loadGatewayWorkerEnvironmentStartupState();
       });
-  const { prepareGatewayPluginBootstrap } = await loadStartupPluginsModule();
+  const { prepareGatewayPluginBootstrap, runGatewayStartupMaintenance } =
+    await loadStartupPluginsModule();
+  await startupTrace.measure("startup.maintenance", () =>
+    runGatewayStartupMaintenance({
+      cfgAtStart,
+      startupRuntimeConfig,
+      minimalTestGateway,
+      log,
+    }),
+  );
   const pluginBootstrap = await startupTrace.measure("plugins.bootstrap", () =>
     prepareGatewayPluginBootstrap({
       cfgAtStart,
       activationSourceConfig: startupActivationSourceConfig,
-      startupRuntimeConfig,
       pluginMetadataSnapshot: startupConfigLoad.pluginMetadataSnapshot,
       workerProviderIds: workerEnvironmentStartup?.durableProviderIds ?? [],
       minimalTestGateway,
@@ -488,11 +503,19 @@ export async function prepareGatewayServerBootstrap(input: {
     defaultWorkspaceDir,
     deferredConfiguredChannelPluginIds,
     startupPluginIds,
+    pluginManifestRecords,
     pluginLookUpTable,
     baseMethods,
     runtimePluginsLoaded,
     ambientAutostartSuppressedChannelIds,
   } = pluginBootstrap;
+  // Plugin activation can return a new runtime config object. Publish that exact object before
+  // prepared owners are created so request-time exact-owner lookups cannot see the pre-activation
+  // snapshot and reject the Gateway's own model catalog.
+  publishGatewayPluginRuntimeConfigAtStartup({
+    runtimeConfig: gatewayPluginConfigAtStart,
+    sourceConfig: startupLastGoodSnapshot.sourceConfig,
+  });
   const coreGatewayMethodNames = listCoreGatewayMethodNames();
   setCurrentPluginMetadataSnapshot(pluginLookUpTable, {
     config: startupActivationSourceConfig,
@@ -549,6 +572,7 @@ export async function prepareGatewayServerBootstrap(input: {
     defaultWorkspaceDir,
     deferredConfiguredChannelPluginIds,
     startupPluginIds,
+    pluginManifestRecords,
     pluginLookUpTable,
     baseMethods,
     runtimePluginsLoaded,
@@ -557,3 +581,7 @@ export async function prepareGatewayServerBootstrap(input: {
     activateRuntimeSecrets,
   };
 }
+
+export const testing = {
+  publishGatewayPluginRuntimeConfigAtStartup,
+};

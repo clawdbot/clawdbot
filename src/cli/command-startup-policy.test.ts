@@ -27,6 +27,12 @@ describe("command-startup-policy", () => {
     expect(shouldBypassConfigGuardForCommandPath(["config", "schema"])).toBe(true);
     expect(shouldBypassConfigGuardForCommandPath(["docs"])).toBe(true);
     expect(shouldBypassConfigGuardForCommandPath(["agent", "exec"])).toBe(true);
+    expect(shouldBypassConfigGuardForCommandPath(["agent"], ["node", "openclaw", "agent"])).toBe(
+      true,
+    );
+    expect(
+      shouldBypassConfigGuardForCommandPath(["agent"], ["node", "openclaw", "agent", "--local"]),
+    ).toBe(false);
     expect(shouldBypassConfigGuardForCommandPath(["config", "set"])).toBe(false);
     expect(shouldBypassConfigGuardForCommandPath(["status"])).toBe(false);
   });
@@ -126,7 +132,7 @@ describe("command-startup-policy", () => {
         argv: ["node", "openclaw", "agent"],
         commandPath: ["agent"],
       }).loadPlugins,
-    ).toBe(true);
+    ).toBe(false);
     expect(
       resolvePolicy({
         commandPath: ["agents"],

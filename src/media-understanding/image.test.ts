@@ -761,6 +761,10 @@ describe("describeImageWithModel", () => {
         allowBundledStaticCatalogFallback: true,
         authStorage: preparedAuthStorage,
         modelRegistry: {},
+        preparedModelRuntime: expect.objectContaining({
+          agentDir: "/tmp/openclaw-agent",
+          workspaceDir: "/tmp/openclaw-workspace",
+        }),
         skipAgentDiscovery: true,
         skipProviderRuntimeHooks: true,
         workspaceDir: "/tmp/openclaw-workspace",
@@ -839,6 +843,7 @@ describe("describeImageWithModel", () => {
         allowBundledStaticCatalogFallback: true,
         authStorage: preparedAuthStorage,
         modelRegistry: {},
+        preparedModelRuntime: expect.objectContaining({ agentDir: "/tmp/openclaw-agent" }),
         skipAgentDiscovery: true,
         skipProviderRuntimeHooks: true,
       },
@@ -853,6 +858,7 @@ describe("describeImageWithModel", () => {
         allowBundledStaticCatalogFallback: true,
         authStorage: preparedAuthStorage,
         modelRegistry: {},
+        preparedModelRuntime: expect.objectContaining({ agentDir: "/tmp/openclaw-agent" }),
         skipAgentDiscovery: true,
       },
     );

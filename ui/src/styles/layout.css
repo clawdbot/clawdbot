@@ -601,7 +601,87 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
   color: var(--muted);
 }
 
-.settings-sidebar__footer-version {
+openclaw-settings-save-indicator {
+  min-width: 0;
+}
+
+.settings-save-indicator {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.settings-save-indicator--danger {
+  color: var(--danger);
+}
+
+.settings-save-indicator--saved {
+  animation: settingsSaveIndicatorFade 2s ease-out both;
+}
+
+.settings-save-indicator svg {
+  width: 15px;
+  height: 15px;
+}
+
+.settings-save-indicator__claw svg {
+  fill: currentColor;
+  stroke: none;
+  animation: chatWorkingClawFlex 2.4s ease-out infinite;
+}
+
+.settings-save-indicator__claw svg .claw-icon__jaw {
+  transform-box: view-box;
+  transform-origin: 8.6px 11px;
+  animation: chatWorkingClawSnip 2.4s ease-out infinite;
+}
+
+.settings-save-indicator__claw--saved svg,
+.settings-save-indicator__claw--saved svg .claw-icon__jaw {
+  animation-duration: 650ms;
+  animation-iteration-count: 1;
+}
+
+.settings-save-indicator__check {
+  color: var(--ok);
+}
+
+.settings-save-indicator__spinner svg {
+  animation: spin 0.7s linear infinite;
+}
+
+.settings-save-indicator__apply {
+  border-radius: 999px;
+}
+
+.settings-save-indicator__apply {
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
+  background: var(--accent-subtle);
+  color: var(--text);
+}
+
+@keyframes settingsSaveIndicatorFade {
+  0%,
+  88% {
+    opacity: 1;
+  }
+
+  100% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-save-indicator--saved,
+  .settings-save-indicator__claw svg,
+  .settings-save-indicator__claw svg .claw-icon__jaw,
+  .settings-save-indicator__spinner svg {
+    animation: none;
+  }
+}
+
+.settings-sidebar__footer .sidebar-footer-build {
   margin-left: auto;
   flex-shrink: 0;
   font-variant-numeric: tabular-nums;
@@ -786,10 +866,6 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
   overflow: visible;
   border-right: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
   transition: width var(--shell-focus-duration) var(--shell-focus-ease);
-}
-
-.shell-nav-backdrop {
-  display: none;
 }
 
 /* 1px overlay on the nav border edge; the divider paints its own centered
@@ -1338,6 +1414,12 @@ html.openclaw-native-macos
   stroke-width: 1.8px;
 }
 
+.sidebar-session-catalog-provider-icon {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 12px;
+}
+
 .sidebar-session-group-count {
   flex: 0 0 auto;
   color: var(--muted);
@@ -1650,7 +1732,7 @@ html.openclaw-native-macos
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
-  color: color-mix(in srgb, var(--muted) 90%, var(--text) 10%);
+  color: color-mix(in srgb, var(--muted) 35%, var(--text) 65%);
   font: inherit;
   cursor: pointer;
   text-align: left;
@@ -1692,19 +1774,14 @@ html.openclaw-native-macos
 .sidebar-session-catalog-project__count {
   width: 20px;
   flex: 0 0 20px;
-  color: var(--muted);
-  font-size: 9px;
+  color: color-mix(in srgb, var(--muted) 55%, var(--text) 45%);
+  font-size: 10px;
   font-variant-numeric: tabular-nums;
-  opacity: 0.58;
   text-align: center;
 }
 
 .sidebar-session-catalog-host__sessions .sidebar-recent-session__link {
   padding-left: 18px;
-}
-
-.sidebar-recent-session--catalog-project-child .sidebar-recent-session__name {
-  font-size: 10px;
 }
 
 .sidebar-session-pagination {
@@ -1735,6 +1812,11 @@ html.openclaw-native-macos
   font-size: 11px;
 }
 
+.sidebar-session-empty-placeholder {
+  /* Match the section title: 9px header inset + 8px drag handle + 8px gap. */
+  padding-left: 25px;
+}
+
 .sidebar-session--archived {
   opacity: 0.62;
 }
@@ -1763,13 +1845,13 @@ html.openclaw-native-macos
   opacity: 0.45;
 }
 
-/* Rows and row links are anchors (for middle-click/new-tab), but read as app
-   controls: override the UA link pointer back to the default arrow. */
+/* Every sidebar session source renders a thread. Keep density and text styling
+   here so gateway threads and native coding catalogs cannot drift apart. */
 .sidebar-recent-session {
   display: flex;
   align-items: center;
   min-width: 0;
-  min-height: 34px;
+  min-height: 30px;
   padding-right: 4px;
   border-radius: var(--radius-md);
   color: var(--muted);
@@ -1807,7 +1889,7 @@ html.openclaw-native-macos
   gap: 8px;
   flex: 1 1 auto;
   min-width: 0;
-  padding: 5px 4px 5px 9px;
+  padding: 3px 4px 3px 9px;
   color: inherit;
   cursor: default;
   text-decoration: none;
@@ -3317,22 +3399,6 @@ openclaw-tooltip.sidebar-hover-tooltip {
   background: var(--danger);
 }
 
-/* Groups zone: quiet compact rows. Coding zone: muted until expanded. */
-.sidebar-recent-sessions__group--zone-groups .sidebar-recent-session__link {
-  padding-top: 3px;
-  padding-bottom: 3px;
-}
-
-.sidebar-recent-sessions__group--zone-groups .sidebar-recent-session__name {
-  font-size: 12.5px;
-  color: var(--text);
-}
-
-.sidebar-recent-sessions__group--zone-coding .sidebar-recent-session__name,
-.sidebar-recent-sessions__group--zone-coding .sidebar-recent-session__subtitle {
-  color: var(--muted);
-}
-
 .sidebar-session-group-running {
   flex: none;
   margin-left: 4px;
@@ -3715,6 +3781,14 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   color: var(--accent);
 }
 
+.page-subtitle {
+  max-width: 52ch;
+  margin-top: 2px;
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.45;
+  color: var(--muted);
+}
+
 .page-meta {
   display: flex;
   gap: 8px;
@@ -3993,7 +4067,7 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 11px;
-  color: var(--muted);
+  color: color-mix(in srgb, var(--muted) 55%, var(--text) 45%);
 }
 
 .sidebar-session-attention__icon {

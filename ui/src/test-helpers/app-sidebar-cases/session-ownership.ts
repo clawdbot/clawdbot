@@ -36,7 +36,7 @@ async function selectCreator(sidebar: SidebarLifecycleState, creatorId: string |
 }
 
 describe("AppSidebar session ownership", () => {
-  it("renders self and presence avatars while unmatched actors keep initials", async () => {
+  it("renders durable actor avatars identically regardless of live presence", async () => {
     const gateway = createGatewayHarness({} as GatewayBrowserClient);
     gateway.publish({
       selfUser: {
@@ -61,8 +61,18 @@ describe("AppSidebar session ownership", () => {
     if (!ada || !bob || !carol) {
       throw new Error("expected creator rows");
     }
-    ada.createdActor = { type: "human", id: "profile-ada", label: "Ada" };
-    bob.createdActor = { type: "human", id: "profile-bob", label: "Bob" };
+    ada.createdActor = {
+      type: "human",
+      id: "profile-ada",
+      label: "Ada",
+      avatarUrl: "/api/users/profile-ada/avatar?v=1",
+    };
+    bob.createdActor = {
+      type: "human",
+      id: "profile-bob",
+      label: "Bob",
+      avatarUrl: "/api/users/profile-bob/avatar?v=2",
+    };
     carol.createdActor = { type: "human", id: "profile-carol", label: "Carol" };
     result.creators = [
       { id: "profile-ada", label: "Ada" },
@@ -71,18 +81,6 @@ describe("AppSidebar session ownership", () => {
     ];
 
     const { sidebar } = await mountSidebar(gateway.gateway, harness.sessions);
-    gateway.publishEvent("presence", {
-      presence: [
-        {
-          instanceId: "bob-browser",
-          user: {
-            id: "profile-bob",
-            name: "Bob",
-            avatarUrl: "/api/users/profile-bob/avatar?v=2",
-          },
-        },
-      ],
-    });
     harness.publishList({ result, agentId: "main" });
 
     await waitForFast(() => {
@@ -93,6 +91,28 @@ describe("AppSidebar session ownership", () => {
         sidebar.querySelector('[data-session-key="agent:main:bob"] openclaw-viewer-avatar img'),
       ).not.toBeNull();
     });
+    const bobAvatarBefore = sidebar
+      .querySelector('[data-session-key="agent:main:bob"] openclaw-viewer-avatar img')
+      ?.getAttribute("src");
+
+    gateway.publishEvent("presence", {
+      presence: [
+        {
+          instanceId: "bob-browser",
+          user: {
+            id: "profile-bob",
+            name: "Bob",
+            avatarUrl: "/api/users/profile-bob/avatar?v=99",
+          },
+        },
+      ],
+    });
+    await sidebar.updateComplete;
+    expect(
+      sidebar
+        .querySelector('[data-session-key="agent:main:bob"] openclaw-viewer-avatar img')
+        ?.getAttribute("src"),
+    ).toBe(bobAvatarBefore);
 
     const adaChip = sidebar.querySelector(
       '[data-session-key="agent:main:ada"] .session-owner-chip',
@@ -108,6 +128,38 @@ describe("AppSidebar session ownership", () => {
     );
     expect(carolChip?.querySelector("openclaw-viewer-avatar")).toBeNull();
     expect(carolChip?.textContent?.trim()).toBe("C");
+  });
+
+  it("keeps emoji display-name initials as whole grapheme clusters", async () => {
+    for (const { label, expected } of [
+      { label: "🦞小明", expected: "🦞" },
+      { label: "👨‍👩‍👧‍👦Family", expected: "👨‍👩‍👧‍👦" },
+    ]) {
+      const gateway = createGateway({} as GatewayBrowserClient);
+      const harness = createSessionsHarness("main", ["agent:main:main", "agent:main:lobster"]);
+      const result = harness.sessions.state.result;
+      if (!result) {
+        throw new Error("expected session list");
+      }
+      const lobster = result.sessions.find((row) => row.key.endsWith(":lobster"));
+      if (!lobster) {
+        throw new Error("expected creator row");
+      }
+      lobster.createdActor = { type: "human", id: "profile-lobster", label };
+      result.creators = [
+        { id: "profile-lobster", label },
+        { id: "profile-ada", label: "Ada" },
+      ];
+
+      const { sidebar } = await mountSidebar(gateway, harness.sessions);
+      harness.publishList({ result, agentId: "main" });
+      await sidebar.updateComplete;
+
+      const chip = sidebar.querySelector(
+        '[data-session-key="agent:main:lobster"] .session-owner-chip',
+      );
+      expect(chip?.textContent?.trim()).toBe(expected);
+    }
   });
 
   it("uses the complete facet and requests unloaded creators from the Gateway", async () => {
@@ -505,5 +557,68 @@ describe("AppSidebar session ownership", () => {
     expect(
       sidebar.querySelector(`[data-session-key="${childKey}"] [aria-label="Done"]`),
     ).not.toBeNull();
+  });
+
+  it("renders a controlled child once under its explicit dashboard parent", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const navigationParentKey = "agent:main:dashboard:navigation-parent";
+    const controlParentKey = "agent:main:main";
+    const childKey = "agent:main:subagent:controlled-child";
+    const child = {
+      key: childKey,
+      kind: "direct" as const,
+      label: "Controlled child",
+      updatedAt: 3,
+      parentSessionKey: navigationParentKey,
+      spawnedBy: controlParentKey,
+    };
+    const harness = createSessionsHarness("main", [navigationParentKey]);
+    harness.list.mockImplementation(async (options) => {
+      const sessions = options?.spawnedBy === navigationParentKey ? [child] : [];
+      return {
+        ts: 3,
+        path: "",
+        count: sessions.length,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions,
+      };
+    });
+    const { sidebar } = await mountSidebar(gateway, harness.sessions);
+    harness.publishList({
+      result: {
+        ts: 3,
+        path: "",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [
+          {
+            key: navigationParentKey,
+            kind: "direct",
+            label: "Dashboard parent",
+            updatedAt: 2,
+            childSessions: [childKey],
+          },
+        ],
+      },
+    });
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector(`[data-session-key="${childKey}"]`)).toBeNull();
+
+    sidebar
+      .querySelector<HTMLButtonElement>(`[data-child-session-toggle="${navigationParentKey}"]`)
+      ?.click();
+    await waitForFast(() =>
+      expect(harness.list).toHaveBeenCalledWith(
+        expect.objectContaining({ spawnedBy: navigationParentKey }),
+      ),
+    );
+    await waitForFast(() =>
+      expect(sidebar.querySelectorAll(`[data-session-key="${childKey}"]`)).toHaveLength(1),
+    );
+    expect(
+      sidebar
+        .querySelector(`[data-session-key="${childKey}"]`)
+        ?.classList.contains("sidebar-recent-session--child"),
+    ).toBe(true);
   });
 });

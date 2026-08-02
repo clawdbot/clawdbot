@@ -137,6 +137,15 @@ describe("tryRouteCli", () => {
     expect(captured).toEqual([true]);
   });
 
+  it("lets routed gateway health own its config read", async () => {
+    await expect(tryRouteCli(["node", "openclaw", "gateway", "health", "--json"])).resolves.toBe(
+      true,
+    );
+
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
+  });
+
   it("keeps logs routed to stderr for routed --json commands", async () => {
     findRoutedCommandMock.mockReturnValue({
       loadPlugins: true,

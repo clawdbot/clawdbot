@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import acpCorePackageJson from "../../packages/acp-core/package.json" with { type: "json" };
 import { pluginSdkSubpaths } from "../../scripts/lib/plugin-sdk-entries.mjs";
 import privateLocalOnlyPluginSdkSubpaths from "../../scripts/lib/plugin-sdk-private-local-only-subpaths.json" with { type: "json" };
+import { createStateSchemaInlinePlugin } from "../../scripts/lib/state-schema-inline-plugin.mjs";
 import {
   detectVitestHostInfo as detectVitestHostInfoImpl,
   isCiLikeEnv,
@@ -158,6 +159,7 @@ if (!isCI && localScheduling.throttledBySystem && shouldPrintVitestThrottle(proc
 export const sharedVitestConfig = {
   root: repoRoot,
   envDir: false as const,
+  plugins: [createStateSchemaInlinePlugin(repoRoot)],
   resolve: {
     alias: [
       {
@@ -449,6 +451,10 @@ export const sharedVitestConfig = {
         ),
       },
       {
+        find: "@openclaw/normalization-core/json-schema",
+        replacement: path.join(repoRoot, "packages", "normalization-core", "src", "json-schema.ts"),
+      },
+      {
         find: "@openclaw/normalization-core/number-coercion",
         replacement: path.join(
           repoRoot,
@@ -481,6 +487,16 @@ export const sharedVitestConfig = {
       {
         find: "@openclaw/normalization-core/result",
         replacement: path.join(repoRoot, "packages", "normalization-core", "src", "result.ts"),
+      },
+      {
+        find: "@openclaw/normalization-core/stable-node-path",
+        replacement: path.join(
+          repoRoot,
+          "packages",
+          "normalization-core",
+          "src",
+          "stable-node-path.ts",
+        ),
       },
       {
         find: "@openclaw/normalization-core/string-coerce",

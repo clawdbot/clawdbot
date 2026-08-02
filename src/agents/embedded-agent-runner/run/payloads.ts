@@ -874,6 +874,7 @@ export function buildEmbeddedRunPayloads(params: {
           ...(params.assistantMessageIndex !== undefined
             ? { assistantMessageIndex: params.assistantMessageIndex }
             : {}),
+          ...(item.media?.length ? { assistantTranscriptMediaUrls: [...item.media] } : {}),
           ...(params.assistantTranscriptOwned === true ? { assistantTranscriptOwned: true } : {}),
           ...(params.assistantTranscriptIdempotencyKey
             ? {

@@ -257,7 +257,8 @@ async function copyLegacyCronFileAcrossDevices(
   }
 }
 
-async function archiveLegacyCronFile(
+/** Archives an imported legacy cron artifact only after its source bytes are verified. */
+export async function archiveLegacyCronFile(
   filePath: string,
   expectedSha256?: string,
 ): Promise<ArchiveOutcome> {

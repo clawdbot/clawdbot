@@ -1,4 +1,7 @@
-import { normalizeToolParameterSchema } from "@openclaw/ai/internal/openai";
+import {
+  findLlamacppGbnfSchemaViolations,
+  normalizeToolParameterSchema,
+} from "@openclaw/ai/internal/openai";
 // Cron tool schema tests cover the provider-facing parameter shape and runtime
 // validation compatibility for cron jobs.
 import { Value } from "typebox/value";
@@ -38,6 +41,9 @@ describe("createCronToolSchema", () => {
     modelProvider: "jjcc",
     modelId: "gemini-3.1-pro-preview",
   }) as unknown as Record<string, unknown>;
+  const llamacppSchemaRecord = normalizeToolParameterSchema(schema, {
+    modelCompat: { toolSchemaProfile: "llamacpp" },
+  }) as unknown as Record<string, unknown>;
 
   // Regression: models like GPT-5.4 rely on these fields to populate job/patch.
   // If a field is removed from this list the test must be updated intentionally.
@@ -73,6 +79,19 @@ describe("createCronToolSchema", () => {
     // Runtime and gateway validation own the nonblank invariant. An unanchored
     // model-schema pattern prevents llama.cpp from compiling the entire tool.
     expect(declarationKey).not.toHaveProperty("pattern");
+  });
+
+  it("projects the complete cron schema into llama.cpp's GBNF subset", () => {
+    expect(propertyAt(schemaRecord, "job.trigger.script")).toMatchObject({
+      type: "string",
+      minLength: 1,
+      maxLength: 65_536,
+    });
+    expect(propertyAt(llamacppSchemaRecord, "job.trigger.script")).toEqual({
+      type: "string",
+      minLength: 1,
+    });
+    expect(findLlamacppGbnfSchemaViolations(llamacppSchemaRecord, "cron.parameters")).toEqual([]);
   });
 
   it("patch exposes the expected top-level fields", () => {

@@ -27,6 +27,7 @@ import {
 } from "./native-hook-relay-command.js";
 import {
   nativeHookRelayEventHasLocalWork,
+  nativeHookRelayEventToolMatcher,
   processNativeHookRelayInvocation,
 } from "./native-hook-relay-events.js";
 import {
@@ -64,8 +65,6 @@ import {
   snapshotNativeHookRelayPayload,
 } from "./native-hook-relay-utils.js";
 
-export { invokeNativeHookRelayBridge } from "./native-hook-relay-bridge.js";
-export { isNativeHookRelayBridgeStaleRegistrationError } from "./native-hook-relay-bridge.js";
 export { buildNativeHookRelayCommand } from "./native-hook-relay-command.js";
 export { resolveNativeHookRelayDeferredToolApproval } from "./native-hook-relay-permissions.js";
 export type {
@@ -117,6 +116,7 @@ export function registerNativeHookRelay(
     runId: params.runId,
     ...(params.channelId ? { channelId: params.channelId } : {}),
     ...(params.requester ? { requester: params.requester } : {}),
+    ...(params.approvalContext ? { approvalContext: params.approvalContext } : {}),
     allowedEvents,
     preToolUseLoopDetection: params.preToolUseLoopDetection !== false,
     expiresAtMs,
@@ -129,6 +129,7 @@ export function registerNativeHookRelay(
   const handle: ActiveNativeHookRelayRegistrationHandle = {
     ...registration,
     shouldRelayEvent: (event) => nativeHookRelayEventHasLocalWork(registration, event),
+    toolMatcherForEvent: (event) => nativeHookRelayEventToolMatcher(registration, event),
     commandForEvent: (event, options) =>
       buildNativeHookRelayCommandWithStateDatabase({
         provider: params.provider,
@@ -343,31 +344,6 @@ export function hasNativeHookRelayInvocation(params: {
       invocation.event === params.event &&
       invocation.toolUseId === toolUseId,
   );
-}
-
-export function renderNativeHookRelayUnavailableResponse(params: {
-  provider: unknown;
-  event: unknown;
-  preToolUseUnavailable?: unknown;
-  message?: string;
-}): NativeHookRelayProcessResponse {
-  const provider = readNativeHookRelayProvider(params.provider);
-  const event = readNativeHookRelayEvent(params.event);
-  const adapter = getNativeHookRelayProviderAdapter(provider);
-  const message = params.message?.trim() || "Native hook relay unavailable";
-  if (event === "pre_tool_use") {
-    // The standalone CLI cannot reconstruct the originating registration after
-    // relay lookup fails, so unavailable PreToolUse must fail closed unless the
-    // generated command explicitly recorded that no before-tool policy existed.
-    if (params.preToolUseUnavailable === "noop") {
-      return adapter.renderNoopResponse(event);
-    }
-    return adapter.renderPreToolUseBlockResponse(message);
-  }
-  if (event === "permission_request") {
-    return adapter.renderPermissionDecisionResponse("deny", message);
-  }
-  return adapter.renderNoopResponse(event);
 }
 
 function recordNativeHookRelayInvocation(invocation: NativeHookRelayInvocation): void {

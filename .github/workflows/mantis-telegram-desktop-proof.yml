@@ -556,6 +556,15 @@ jobs:
               "$runtime_parent/attestations/$lane.json" >/dev/null
           done
 
+      - name: Return proof artifacts to the runner
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -d "$MANTIS_OUTPUT_DIR" ]]; then
+            sudo chown -R "$(id -u):$(id -g)" "$MANTIS_OUTPUT_DIR"
+          fi
+
       - name: Inspect Mantis evidence manifest
         id: inspect
         if: ${{ always() }}

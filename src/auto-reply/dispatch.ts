@@ -492,6 +492,7 @@ export async function dispatchInboundMessage(params: {
             replyOptions: replyOptionsWithRunState,
             replyResolver: params.replyResolver,
             onSessionMetadataChanges: params.onSessionMetadataChanges,
+            usePublishedModelRuntime: true,
           }),
         {
           phase: "agent-turn",

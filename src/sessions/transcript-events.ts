@@ -17,14 +17,19 @@ type SessionTranscriptUpdateFields = {
   sessionKey?: string;
   agentId?: string;
   sessionId?: string;
+  /** Committed lifecycle owner; internal delivery must not expose it publicly. */
+  lifecycleRevision?: string;
   message?: unknown;
   messageId?: string;
   messageSeq?: number;
 };
 
 /** Normalized transcript update emitted after a session transcript changes. */
-export type SessionTranscriptUpdate = Omit<SessionTranscriptUpdateFields, "sessionFile"> & {
-  target: SessionTranscriptUpdateTarget;
+export type SessionTranscriptUpdate = Omit<
+  SessionTranscriptUpdateFields,
+  "sessionFile" | "lifecycleRevision" | "target"
+> & {
+  target: Omit<SessionTranscriptUpdateTarget, "storePath">;
 };
 
 /** Internal transcript update that may identify a transcript without a file path. */
@@ -77,6 +82,7 @@ function normalizeSessionTranscriptUpdate(
     sessionKey: update.sessionKey,
     agentId: update.agentId,
     sessionId: update.sessionId,
+    lifecycleRevision: update.lifecycleRevision,
     message: update.message,
     messageId: update.messageId,
     messageSeq: update.messageSeq,
@@ -90,12 +96,14 @@ function normalizeSessionTranscriptUpdate(
   const sessionKey = normalizeOptionalString(normalized.sessionKey) ?? target?.sessionKey;
   const agentId = normalizeOptionalString(normalized.agentId) ?? target?.agentId;
   const sessionId = normalizeOptionalString(normalized.sessionId) ?? target?.sessionId;
+  const lifecycleRevision = normalizeOptionalString(normalized.lifecycleRevision);
   return {
     ...(trimmed ? { sessionFile: trimmed } : {}),
     ...(target ? { target } : {}),
     ...(sessionKey ? { sessionKey } : {}),
     ...(agentId ? { agentId } : {}),
     ...(sessionId ? { sessionId } : {}),
+    ...(lifecycleRevision ? { lifecycleRevision } : {}),
     ...(normalized.message !== undefined ? { message: normalized.message } : {}),
     ...(normalizeOptionalString(normalized.messageId)
       ? { messageId: normalizeOptionalString(normalized.messageId) }
@@ -132,7 +140,11 @@ function projectPublicSessionTranscriptUpdate(
     return undefined;
   }
   return {
-    target,
+    target: {
+      agentId: target.agentId,
+      sessionId: target.sessionId,
+      sessionKey: target.sessionKey,
+    },
     ...(update.sessionKey ? { sessionKey: update.sessionKey } : {}),
     ...(update.agentId ? { agentId: update.agentId } : {}),
     ...(update.sessionId ? { sessionId: update.sessionId } : {}),
@@ -146,7 +158,7 @@ function normalizeUpdateTarget(update: {
   agentId?: string;
   sessionId?: string;
   sessionKey?: string;
-  target?: SessionTranscriptUpdate["target"];
+  target?: InternalSessionTranscriptUpdate["target"];
 }): SessionTranscriptUpdateTarget | undefined {
   const sessionKey =
     normalizeOptionalString(update.target?.sessionKey) ??

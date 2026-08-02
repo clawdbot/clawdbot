@@ -681,42 +681,20 @@ describe("Google speech provider", () => {
     );
   });
 
-  it("honors configured private-network opt-in for Google TTS", async () => {
-    installGoogleTtsRequestMock();
-
-    const provider = buildGoogleSpeechProvider();
-    await provider.synthesize({
-      text: "hello",
-      cfg: {
-        models: {
-          providers: {
-            google: {
-              baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-              request: { allowPrivateNetwork: true },
-              models: [],
-            },
-          },
-        },
-      },
-      providerConfig: { apiKey: "google-test-key" },
+  it.each([
+    {
+      name: "honors configured private-network opt-in for Google TTS",
       target: "audio-file",
-      timeoutMs: 12_345,
-    });
-
-    const requestConfig = expectRecordFields(
-      requireFirstRecordArg(resolveProviderHttpRequestConfigMock, "Google TTS HTTP config request"),
-      {
-        allowPrivateNetwork: true,
-      },
-    );
-    expectRecordFields(requestConfig.request, { allowPrivateNetwork: true });
-  });
-
-  it("honors configured private-network opt-in for Google telephony TTS", async () => {
+    },
+    {
+      name: "honors configured private-network opt-in for Google telephony TTS",
+      target: "telephony",
+    },
+  ] as const)("$name", async ({ target }) => {
     installGoogleTtsRequestMock();
 
     const provider = buildGoogleSpeechProvider();
-    await provider.synthesizeTelephony?.({
+    const request = {
       text: "hello",
       cfg: {
         models: {
@@ -731,7 +709,12 @@ describe("Google speech provider", () => {
       },
       providerConfig: { apiKey: "google-test-key" },
       timeoutMs: 12_345,
-    });
+    };
+    if (target === "telephony") {
+      await provider.synthesizeTelephony?.(request);
+    } else {
+      await provider.synthesize({ ...request, target });
+    }
 
     const requestConfig = expectRecordFields(
       requireFirstRecordArg(resolveProviderHttpRequestConfigMock, "Google TTS HTTP config request"),

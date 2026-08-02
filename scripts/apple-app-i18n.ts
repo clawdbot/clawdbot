@@ -38,10 +38,12 @@ const INFLECTED_COUNT_SEGMENT_RE =
 const INFLECTED_COUNT_MARKER = "](inflect: true)";
 const IOS_CATALOG_PATH = "apps/ios/Resources/Localizable.xcstrings";
 const MACOS_CATALOG_PATH = "apps/macos/Sources/OpenClaw/Resources/Localizable.xcstrings";
-const IOS_CONTRADICTIONS_PATH = "apps/.i18n/apple-translation-contradictions.json";
+const MACOS_INFO_PLIST_PATH = "apps/macos/Sources/OpenClaw/Resources/Info.plist";
 const NATIVE_SOURCE_PATH = "apps/.i18n/native-source.json";
 const NATIVE_TRANSLATIONS_DIR = "apps/.i18n/native";
 const SHARED_CHAT_UI_SOURCE_PREFIX = "apps/shared/OpenClawKit/Sources/OpenClawChatUI/";
+const SHARED_GATEWAY_DISCOVERY_STATUS_SOURCE =
+  "apps/shared/OpenClawKit/Sources/OpenClawKit/GatewayDiscoveryStatusText.swift";
 const IOS_SOURCE_PREFIXES = [
   "apps/ios/",
   SHARED_CHAT_UI_SOURCE_PREFIX,
@@ -65,6 +67,7 @@ const IOS_CATALOG_EXCLUSIONS = new Set([
 const MACOS_SOURCE_PREFIXES = [
   "apps/macos/Sources/OpenClaw/",
   SHARED_CHAT_UI_SOURCE_PREFIX,
+  SHARED_GATEWAY_DISCOVERY_STATUS_SOURCE,
 ] as const;
 const MACOS_CATALOG_EXCLUSIONS = new Set([
   // Product names are intentionally verbatim.
@@ -88,6 +91,7 @@ const IOS_INFO_PLIST_TARGETS = [
     sourcePath: "apps/ios/ActivityWidget/Info.plist",
   },
 ] as const;
+const INFO_PLIST_LOCALIZABLE_KEYS = new Set(["NSScreenCaptureDescription"]);
 const AMBIGUOUS_RUNTIME_INTERPOLATIONS = [
   {
     label: "interpolated localized resource",
@@ -474,10 +478,6 @@ function serializeCatalog(catalog: Catalog): string {
   return `${JSON.stringify(catalog, null, 2)}\n`;
 }
 
-function serializeContradictions(contradictions: AppleTranslationContradiction[]): string {
-  return `${JSON.stringify({ version: 1, contradictions }, null, 2)}\n`;
-}
-
 function decodeXml(value: string): string {
   return value
     .replaceAll("&quot;", '"')
@@ -493,7 +493,10 @@ function parseInfoPlistStrings(source: string): Array<{ key: string; source: str
       key: decodeXml(match[1] ?? ""),
       source: decodeXml(match[2] ?? ""),
     }))
-    .filter((entry) => entry.key.endsWith("UsageDescription"));
+    .filter(
+      (entry) =>
+        entry.key.endsWith("UsageDescription") || INFO_PLIST_LOCALIZABLE_KEYS.has(entry.key),
+    );
 }
 
 type InfoPlistTranslation = {
@@ -538,6 +541,36 @@ export function infoPlistTranslationCandidates(
       .filter((entry) => entry.id === sourceId && entry.source === source)
       .map((entry) => entry.translated) ?? []
   );
+}
+
+function infoPlistSourceIds(nativeSource: NativeSourceArtifact): Map<string, string> {
+  return new Map(
+    nativeSource.entries
+      .filter((entry) => entry.kind === "plist-string")
+      .map((entry) => [[entry.path, entry.source].join("\u0000"), entry.id]),
+  );
+}
+
+function renderInfoPlistStrings(
+  sourcePath: string,
+  sourceEntries: ReadonlyArray<{ key: string; source: string }>,
+  sourceIds: ReadonlyMap<string, string>,
+  artifact: NativeTranslationArtifact | undefined,
+  existing: ReadonlyMap<string, InfoPlistTranslation> = new Map(),
+): string {
+  const lines = sourceEntries.map(({ key, source }) => {
+    const sourceId = sourceIds.get([sourcePath, source].join("\u0000"));
+    if (!sourceId) {
+      throw new Error(`missing native InfoPlist source id for ${sourcePath}:${key}`);
+    }
+    const candidates = infoPlistTranslationCandidates(artifact, sourceId, source);
+    const value = selectInfoPlistTranslation(source, candidates, existing.get(key));
+    return [
+      `/* OpenClaw source: ${stringsLiteral(source)} */`,
+      `${stringsLiteral(key)} = ${stringsLiteral(value)};`,
+    ].join("\n");
+  });
+  return `${lines.join("\n")}\n`;
 }
 
 async function readOptionalFile(filePath: string): Promise<string | null> {
@@ -843,11 +876,7 @@ async function syncIosInfoPlist(write: boolean): Promise<number> {
   const nativeSource = JSON.parse(
     await readFile(path.join(ROOT, NATIVE_SOURCE_PATH), "utf8"),
   ) as NativeSourceArtifact;
-  const sourceIds = new Map(
-    nativeSource.entries
-      .filter((entry) => entry.kind === "plist-string")
-      .map((entry) => [[entry.path, entry.source].join("\u0000"), entry.id]),
-  );
+  const sourceIds = infoPlistSourceIds(nativeSource);
   let checked = 0;
   for (const target of IOS_INFO_PLIST_TARGETS) {
     const sourceEntries = parseInfoPlistStrings(
@@ -864,19 +893,13 @@ async function syncIosInfoPlist(write: boolean): Promise<number> {
       const existingSource = await readOptionalFile(outputPath);
       const existing = parseStringsFile(existingSource ?? "");
       const artifact = translations.find((candidate) => candidate.locale === locale);
-      const lines = sourceEntries.map(({ key, source }) => {
-        const sourceId = sourceIds.get([target.sourcePath, source].join("\u0000"));
-        if (!sourceId) {
-          throw new Error(`missing native InfoPlist source id for ${target.sourcePath}:${key}`);
-        }
-        const candidates = infoPlistTranslationCandidates(artifact, sourceId, source);
-        const value = selectInfoPlistTranslation(source, candidates, existing.get(key));
-        return [
-          `/* OpenClaw source: ${stringsLiteral(source)} */`,
-          `${stringsLiteral(key)} = ${stringsLiteral(value)};`,
-        ].join("\n");
-      });
-      const expected = `${lines.join("\n")}\n`;
+      const expected = renderInfoPlistStrings(
+        target.sourcePath,
+        sourceEntries,
+        sourceIds,
+        artifact,
+        existing,
+      );
       if (existingSource !== expected) {
         if (!write) {
           throw new Error(
@@ -905,17 +928,6 @@ export async function syncIosCatalog(write: boolean): Promise<AppleCatalogBuild>
     }
     await writeFile(catalogPath, expected, "utf8");
   }
-  const contradictionsPath = path.join(ROOT, IOS_CONTRADICTIONS_PATH);
-  const expectedContradictions = serializeContradictions(build.contradictions);
-  const actualContradictions = await readOptionalFile(contradictionsPath);
-  if (actualContradictions !== expectedContradictions) {
-    if (!write) {
-      throw new Error(
-        `Apple contradiction report ${IOS_CONTRADICTIONS_PATH} is stale; run apple-app-i18n.ts sync-ios --write`,
-      );
-    }
-    await writeFile(contradictionsPath, expectedContradictions, "utf8");
-  }
   return build;
 }
 
@@ -943,9 +955,9 @@ export function assertMacosCatalogCurrent(actual: string, build: AppleCatalogBui
 }
 
 /**
- * Regenerates every Apple derived artifact (app catalogs, contradiction report,
- * InfoPlist strings). Shared by this CLI and native-app-i18n's sync so the
- * inventory can never be rewritten without its derived catalogs.
+ * Regenerates every Apple derived artifact (app catalogs and InfoPlist strings).
+ * Shared by this CLI and native-app-i18n's sync so the inventory can never be
+ * rewritten without its derived catalogs.
  */
 export async function syncAppleAppI18n(): Promise<{
   build: AppleCatalogBuild;
@@ -1016,6 +1028,15 @@ export async function compileMacosLocalizations(outputDir: string) {
   if (!catalog.strings) {
     throw new Error(`invalid Apple string catalog: ${MACOS_CATALOG_PATH}`);
   }
+  const [nativeSource, translations, infoPlistSource] = await Promise.all([
+    readFile(path.join(ROOT, NATIVE_SOURCE_PATH), "utf8").then(
+      (source) => JSON.parse(source) as NativeSourceArtifact,
+    ),
+    readNativeTranslations(),
+    readFile(path.join(ROOT, MACOS_INFO_PLIST_PATH), "utf8"),
+  ]);
+  const sourceIds = infoPlistSourceIds(nativeSource);
+  const infoPlistEntries = parseInfoPlistStrings(infoPlistSource);
 
   for (const locale of REQUIRED_LOCALES) {
     const localeDir = APPLE_LOCALE_DIRECTORIES[locale] ?? locale;
@@ -1033,6 +1054,16 @@ export async function compileMacosLocalizations(outputDir: string) {
       });
     await mkdir(lprojDir, { recursive: true });
     await writeFile(path.join(lprojDir, "Localizable.strings"), `${lines.join("\n")}\n`, "utf8");
+    if (locale !== "en") {
+      const artifact = translations.find((candidate) => candidate.locale === locale);
+      const infoPlistStrings = renderInfoPlistStrings(
+        MACOS_INFO_PLIST_PATH,
+        infoPlistEntries,
+        sourceIds,
+        artifact,
+      );
+      await writeFile(path.join(lprojDir, "InfoPlist.strings"), infoPlistStrings, "utf8");
+    }
   }
 }
 

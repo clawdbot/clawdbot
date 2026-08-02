@@ -245,6 +245,10 @@ export type AdmittedWebInboundMessage = Omit<
   admission: WhatsAppInboundAdmission;
 };
 
+export type AdmittedWebInboundCallbackMessage = WebInboundMessage & {
+  admission: WhatsAppInboundAdmission;
+};
+
 export type LegacyFlatWebInboundMessage = DeprecatedWebInboundAdmissionTopLevelFields &
   Pick<WebInboundCallbackMessageCommon, "wasMentioned"> & {
     admission?: WhatsAppInboundAdmission;

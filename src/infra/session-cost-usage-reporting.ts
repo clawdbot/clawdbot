@@ -27,13 +27,13 @@ import {
   readTranscriptRecordsBestEffort,
   resolveExistingUsageSessionFile,
   resolveUsageCostTranscriptFile,
-  scanUsageFile,
 } from "./session-cost-usage-collection.js";
 import {
   computeUsageTokenTotals,
   createUsageCostResolver,
   extractCostBreakdown,
   parseTimestamp,
+  parseUsageCostTranscriptEntry,
   shouldRecomputeRecordedZeroCost,
 } from "./session-cost-usage-pricing.js";
 import { createUsageDayKeyFormatter } from "./session-cost-usage-projection.js";
@@ -234,32 +234,25 @@ export async function loadSessionUsageTimeSeries(params: {
   const agentDir = resolveUsageCostAgentDir(params.config, params.agentId);
   const resolveCost = createUsageCostResolver({ config: params.config, agentDir });
 
-  await scanUsageFile({
-    filePath: sessionFile,
-    config: params.config,
-    resolveCost,
-    onEntry: (entry) => {
-      const ts = entry.timestamp?.getTime();
-      if (!ts) {
-        return;
-      }
-
-      const { input, output, cacheRead, cacheWrite, totalTokens } = computeUsageTokenTotals(
-        entry.usage,
-      );
-      const cost = entry.costTotal ?? 0;
-
-      points.push({
-        timestamp: ts,
-        input,
-        output,
-        cacheRead,
-        cacheWrite,
-        totalTokens,
-        cost,
-      });
-    },
-  });
+  for await (const record of readTranscriptRecords(sessionFile)) {
+    const entry = parseUsageCostTranscriptEntry(record, resolveCost);
+    const timestamp = entry?.timestamp?.getTime();
+    if (!entry?.usage || !timestamp) {
+      continue;
+    }
+    const { input, output, cacheRead, cacheWrite, totalTokens } = computeUsageTokenTotals(
+      entry.usage,
+    );
+    points.push({
+      timestamp,
+      input,
+      output,
+      cacheRead,
+      cacheWrite,
+      totalTokens,
+      cost: entry.costTotal ?? 0,
+    });
+  }
 
   // Sort by timestamp
   let cumulativeTokens = 0;

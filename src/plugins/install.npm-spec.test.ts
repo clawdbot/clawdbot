@@ -34,6 +34,8 @@ vi.resetModules();
 
 const { installPluginFromNpmPackArchive, installPluginFromNpmSpec, PLUGIN_INSTALL_ERROR_CODE } =
   await import("./install.js");
+const { classifyNpmManagedOverrideCompatibilityError } =
+  await import("./install-managed-npm-state.js");
 
 const suiteTempRootTracker = createSuiteTempRootTracker("openclaw-plugin-install-npm-spec");
 let previousNpmGlobalConfig: string | undefined;
@@ -731,6 +733,22 @@ beforeAll(async () => {
 });
 
 describe("installPluginFromNpmSpec", () => {
+  it.each([
+    "npm ERR! Invalid comparator: npm:@nolyfill/domexception@1.0.28",
+    'npm error code EINVALIDTAGNAME\nnpm error Invalid tag name "0.2.2>ip" of package "werift-ice@0.2.2>ip"',
+    "npm error Override without name: @scope/parent>child",
+    'npm error code EINVALIDPACKAGENAME\nnpm error Invalid package name "parent>" of package "parent>@scope/child"',
+  ])("detects npm-incompatible managed override errors", (stderr) => {
+    expect(classifyNpmManagedOverrideCompatibilityError({ stdout: "", stderr })).toBeDefined();
+  });
+
+  it.each([
+    'npm error code EINVALIDTAGNAME\nnpm error Invalid tag name "next" of package "pkg@next"',
+    'npm error code EINVALIDPACKAGENAME\nnpm error Invalid package name "bad name" of package "bad name@1"',
+  ])("ignores unrelated npm package validation errors", (stderr) => {
+    expect(classifyNpmManagedOverrideCompatibilityError({ stdout: "", stderr })).toBeUndefined();
+  });
+
   it("classifies npm metadata command failures", async () => {
     runCommandWithTimeoutMock.mockResolvedValue(failedSpawn("registry unavailable"));
 
@@ -2968,7 +2986,7 @@ describe("installPluginFromNpmSpec", () => {
     }
   });
 
-  it("retries without npm alias overrides when npm rejects alias comparators", async () => {
+  it("retries without each npm-incompatible override kind while preserving valid rules", async () => {
     const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
     const hostRoot = suiteTempRootTracker.makeTempDir();
     fs.writeFileSync(
@@ -2988,6 +3006,8 @@ describe("installPluginFromNpmSpec", () => {
         "overrides:",
         "  axios: 1.18.0",
         '  node-domexception: "npm:@nolyfill/domexception@1.0.28"',
+        '  "range-target@>1": 2.0.0',
+        '  "werift-ice@0.2.2>ip": "npm:neoip@3.1.0"',
         "  nested:",
         '    alias: "npm:@scope/alias@1.0.0"',
         "    semver: 1.2.3",
@@ -3020,10 +3040,40 @@ describe("installPluginFromNpmSpec", () => {
             expect(manifest.overrides?.["node-domexception"]).toBe(
               "npm:@nolyfill/domexception@1.0.28",
             );
+            expect(manifest.overrides?.["range-target@>1"]).toBe("2.0.0");
+            expect(manifest.overrides?.["werift-ice@0.2.2>ip"]).toBe("npm:neoip@3.1.0");
             expect(manifest.openclaw?.managedOverrides).toEqual([
               "axios",
               "nested",
               "node-domexception",
+              "range-target@>1",
+              "werift-ice@0.2.2>ip",
+            ]);
+            return {
+              code: 1,
+              stdout: "",
+              stderr:
+                'npm error code EINVALIDTAGNAME\nnpm error Invalid tag name "0.2.2>ip" of package "werift-ice@0.2.2>ip"',
+              signal: null,
+              killed: false,
+              termination: "exit" as const,
+            };
+          }
+          if (installAttempts === 2) {
+            expect(manifest.overrides).toEqual({
+              axios: "1.18.0",
+              nested: {
+                alias: "npm:@scope/alias@1.0.0",
+                semver: "1.2.3",
+              },
+              "node-domexception": "npm:@nolyfill/domexception@1.0.28",
+              "range-target@>1": "2.0.0",
+            });
+            expect(manifest.openclaw?.managedOverrides).toEqual([
+              "axios",
+              "nested",
+              "node-domexception",
+              "range-target@>1",
             ]);
             return {
               code: 1,
@@ -3039,8 +3089,13 @@ describe("installPluginFromNpmSpec", () => {
             nested: {
               semver: "1.2.3",
             },
+            "range-target@>1": "2.0.0",
           });
-          expect(manifest.openclaw?.managedOverrides).toEqual(["axios", "nested"]);
+          expect(manifest.openclaw?.managedOverrides).toEqual([
+            "axios",
+            "nested",
+            "range-target@>1",
+          ]);
         }
         return await baseImplementation?.(argv, options);
       },
@@ -3054,10 +3109,11 @@ describe("installPluginFromNpmSpec", () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(installAttempts).toBe(2);
-    expect(warnings).toContain(
-      "npm rejected managed npm alias overrides; retrying plugin install without alias overrides for this npm version.",
-    );
+    expect(installAttempts).toBe(3);
+    expect(warnings).toEqual([
+      "npm rejected managed npm overrides; retrying plugin install without npm-incompatible overrides for this npm version.",
+      "npm rejected managed npm overrides; retrying plugin install without npm-incompatible overrides for this npm version.",
+    ]);
   });
 
   it("keeps installed npm package output when dangerous-looking plugin code is present", async () => {

@@ -49,6 +49,7 @@ export function listChangedPathsFromGit(params: {
   mergeHeadFirstParent?: boolean;
 }): string[];
 export function listStagedChangedPaths(cwd?: string): string[];
+export function hasDeadcodeScannedSource(changedPaths: string[]): boolean;
 export function isLiveDockerPackageScriptOnlyChange(before: string, after: string): boolean;
 export function isPackageScriptOnlyChange(before: string, after: string): boolean;
 

@@ -69,6 +69,18 @@ it("rejects locked key-as-session-id rows instead of treating them as pending", 
   ).toBeUndefined();
 });
 
+it("normalizes boolean-only pending delivery as transport-only", () => {
+  expect(
+    normalizePersistedSessionEntryShape({
+      sessionId: "session-1",
+      updatedAt: 42,
+      pendingFinalDelivery: true,
+    }),
+  ).toMatchObject({
+    pendingFinalDelivery: { kind: "transport-only", createdAt: 42 },
+  });
+});
+
 describe("session path safety", () => {
   it("rejects unsafe session IDs", () => {
     const unsafeSessionIds = [

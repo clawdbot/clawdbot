@@ -31,6 +31,27 @@ export function isOpenClawCommandArgv(args: string[], command: string): boolean 
   return exe.endsWith("/openclaw") || exe === "openclaw";
 }
 
+export function isOpenClawProcessArgv(args: string[]): boolean {
+  if (isGatewayArgv(args, { allowGatewayBinary: true })) {
+    return true;
+  }
+  const normalized = args.map(normalizeProcArg);
+  const exe = (normalized[0] ?? "").replace(/\.(bat|cmd|exe)$/i, "");
+  return (
+    exe === "openclaw" ||
+    exe.endsWith("/openclaw") ||
+    normalized.some(
+      (arg) =>
+        arg === "openclaw" ||
+        arg.endsWith("/openclaw") ||
+        arg === "openclaw.mjs" ||
+        arg.endsWith("/openclaw.mjs"),
+    ) ||
+    (normalized.includes("agent") &&
+      normalized.some((arg) => ENTRY_CANDIDATES.some((entry) => arg.endsWith(entry))))
+  );
+}
+
 export function isGatewayArgv(args: string[], opts?: { allowGatewayBinary?: boolean }): boolean {
   const normalized = args.map(normalizeProcArg);
   const exe = (normalized[0] ?? "").replace(/\.(bat|cmd|exe)$/i, "");

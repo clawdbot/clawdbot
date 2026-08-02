@@ -15,11 +15,6 @@ import type { CopilotClientPool, PooledClient } from "./runtime.js";
 import type { createCopilotToolBridge } from "./tool-bridge.js";
 export const BACKGROUND_COMPACTION_CANCEL_TIMEOUT_MS = 5_000;
 export const COPILOT_ASK_USER_AVAILABLE_TOOLS = ["builtin:ask_user"] as const;
-export const COPILOT_SETTLED_FINALIZATION_EXCLUDED_TOOLS = [
-  "builtin:*",
-  "mcp:*",
-  "custom:*",
-] as const;
 export const COPILOT_SETTLED_FINALIZATION_SYSTEM_MESSAGE =
   "You are OpenClaw's isolated final-answer stage. Produce exactly one concise final " +
   "user-facing answer that completes the latest user request using only the settled transcript " +

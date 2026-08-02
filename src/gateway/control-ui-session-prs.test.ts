@@ -1,8 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  loadControlUiSessionPullRequests,
-  parseControlUiSessionPullRequestsParams,
-} from "./control-ui-session-prs.js";
+import { loadControlUiSessionPullRequests } from "./control-ui-session-prs.js";
 import {
   evictPullRequestCache,
   githubJson,
@@ -30,41 +27,6 @@ describe("parseGitHubRemoteUrl", () => {
     expect(parseGitHubRemoteUrl("git@github.com:openclaw")).toBeNull();
     expect(parseGitHubRemoteUrl("https://github.com/openclaw/openclaw/extra")).toBeNull();
     expect(parseGitHubRemoteUrl("/local/path/repo.git")).toBeNull();
-  });
-});
-
-describe("parseControlUiSessionPullRequestsParams", () => {
-  it("requires a non-empty session key", () => {
-    expect(parseControlUiSessionPullRequestsParams({ sessionKey: "agent:main:main" })).toEqual({
-      sessionKey: "agent:main:main",
-    });
-    expect(parseControlUiSessionPullRequestsParams({ sessionKey: "  " })).toBeNull();
-    expect(parseControlUiSessionPullRequestsParams("agent:main:main")).toBeNull();
-    expect(parseControlUiSessionPullRequestsParams({})).toBeNull();
-  });
-
-  it("keeps the UI's scoped agent id for global-alias session keys", () => {
-    expect(
-      parseControlUiSessionPullRequestsParams({ sessionKey: "global", agentId: "work" }),
-    ).toEqual({ sessionKey: "global", agentId: "work" });
-    expect(parseControlUiSessionPullRequestsParams({ sessionKey: "global", agentId: " " })).toEqual(
-      { sessionKey: "global" },
-    );
-  });
-
-  it("accepts only an explicit refresh request", () => {
-    expect(
-      parseControlUiSessionPullRequestsParams({
-        sessionKey: "agent:main:main",
-        refresh: true,
-      }),
-    ).toEqual({ sessionKey: "agent:main:main", refresh: true });
-    expect(
-      parseControlUiSessionPullRequestsParams({
-        sessionKey: "agent:main:main",
-        refresh: false,
-      }),
-    ).toEqual({ sessionKey: "agent:main:main" });
   });
 });
 

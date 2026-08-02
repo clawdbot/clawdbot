@@ -1,4 +1,5 @@
 import { describe, expect, test, vi } from "vitest";
+import { WebSocket } from "ws";
 import {
   createSessionEventSubscriberRegistry,
   createSessionMessageSubscriberRegistry,
@@ -7,6 +8,7 @@ import { createGatewayNodeSessionRuntime } from "./server-node-session-runtime.j
 import type { GatewayWsClient } from "./server/ws-types.js";
 
 type TestSocket = {
+  readyState: number;
   bufferedAmount: number;
   send: (payload: string) => void;
   close: (code?: number, reason?: string) => void;
@@ -58,6 +60,7 @@ function registerNode(
   frames: string[],
 ) {
   const socket: TestSocket = {
+    readyState: WebSocket.OPEN,
     bufferedAmount: 0,
     send: vi.fn((payload: string) => frames.push(payload)),
     close: vi.fn(),
@@ -140,6 +143,7 @@ describe("gateway node session runtime", () => {
     });
     const frames: string[] = [];
     const socket: TestSocket = {
+      readyState: WebSocket.OPEN,
       bufferedAmount: 0,
       send: vi.fn((payload: string) => frames.push(payload)),
       close: vi.fn(),

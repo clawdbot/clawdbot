@@ -8,7 +8,6 @@ import type {
 } from "../../../app/native-gateways.runtime.ts";
 import { isNativeWebChromeHost } from "../../../app/native-web-chrome.ts";
 import { beginNativeWindowDrag } from "../../../app/native-window-drag.ts";
-import type { ActorIdentityUser } from "../../../app/user-profile.ts";
 import {
   COMMAND_PALETTE_OPEN_EVENT,
   SHELL_NAV_DRAWER_TOGGLE_EVENT,
@@ -33,7 +32,6 @@ type ChatPaneHeaderProps = {
   title: string;
   session: GatewaySessionRow | undefined;
   showOwnerChip?: boolean;
-  ownerUser?: ActorIdentityUser;
   catalog: boolean;
   editing: boolean;
   renameValue: string;
@@ -179,7 +177,7 @@ function renderGatewayPicker(props: ChatPaneHeaderProps) {
       ${snapshot.gateways.map((gateway) => {
         const selected = gateway.id === snapshot.currentId;
         return html`<wa-dropdown-item
-          class="chat-pane__gateway-item"
+          class="chat-pane__gateway-menu-item chat-pane__gateway-item"
           type="checkbox"
           role="menuitemradio"
           aria-checked=${String(selected)}
@@ -214,11 +212,14 @@ function renderGatewayPicker(props: ChatPaneHeaderProps) {
       })}
       <div class="chat-pane__gateway-divider" role="separator"></div>
       <wa-dropdown-item
+        class="chat-pane__gateway-menu-item"
         ?disabled=${setPrimaryDisabled}
         @click=${() => !setPrimaryDisabled && capability.setPrimary(current.id)}
         >${t("chat.sessionHeader.gatewayPicker.setPrimary")}</wa-dropdown-item
       >
-      <wa-dropdown-item @click=${() => capability.openSettings()}
+      <wa-dropdown-item
+        class="chat-pane__gateway-menu-item"
+        @click=${() => capability.openSettings()}
         >${t("chat.sessionHeader.gatewayPicker.openSettings")}</wa-dropdown-item
       >
     </wa-dropdown>
@@ -313,7 +314,6 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
         props.showOwnerChip ? props.session?.createdActor : undefined,
         "header",
         "created",
-        props.ownerUser,
       )}
       ${!props.catalog && props.workspaceLabel
         ? html`
@@ -360,24 +360,29 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
       ${props.sharingControl ?? nothing}
       ${!props.catalog && props.branches.length > 1
         ? html`
-            <wa-dropdown
-              class="chat-pane__branches-menu"
-              placement="bottom-end"
-              @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
-                const leafEntryId = event.detail.item.value;
-                const branch = props.branches.find(
-                  (candidate) => candidate.leafEntryId === leafEntryId,
-                );
-                if (leafEntryId && branch && !branch.active && !props.branchSwitchDisabledReason) {
-                  props.onBranchSelect(leafEntryId);
-                }
-              }}
+            <openclaw-tooltip
+              .content=${props.branchSwitchDisabledReason ?? t("chat.sessionHeader.branches")}
             >
-              <openclaw-tooltip
-                slot="trigger"
-                .content=${props.branchSwitchDisabledReason ?? t("chat.sessionHeader.branches")}
+              <wa-dropdown
+                class="chat-pane__branches-menu"
+                placement="bottom-end"
+                @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
+                  const leafEntryId = event.detail.item.value;
+                  const branch = props.branches.find(
+                    (candidate) => candidate.leafEntryId === leafEntryId,
+                  );
+                  if (
+                    leafEntryId &&
+                    branch &&
+                    !branch.active &&
+                    !props.branchSwitchDisabledReason
+                  ) {
+                    props.onBranchSelect(leafEntryId);
+                  }
+                }}
               >
                 <button
+                  slot="trigger"
                   class="btn btn--ghost btn--icon chat-icon-btn chat-pane__branches-trigger"
                   type="button"
                   ?disabled=${Boolean(props.branchSwitchDisabledReason)}
@@ -385,40 +390,40 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
                 >
                   ${icons.gitBranch}
                 </button>
-              </openclaw-tooltip>
-              ${props.branches.map((branch) => {
-                const relativeTime = branchRelativeTime(branch.updatedAt);
-                return html`
-                  <wa-dropdown-item
-                    class="chat-pane__branch-item"
-                    value=${branch.leafEntryId}
-                    ?disabled=${branch.active || Boolean(props.branchSwitchDisabledReason)}
-                    data-active=${branch.active ? "true" : "false"}
-                  >
-                    <span class="chat-pane__branch-copy">
-                      <span class="chat-pane__branch-headline"
-                        >${branch.headline || t("chat.sessionHeader.untitledBranch")}</span
-                      >
-                      <span class="chat-pane__branch-meta"
-                        >${t(
-                          branch.messageCount === 1
-                            ? "chat.sessionHeader.oneMessage"
-                            : "chat.sessionHeader.messages",
-                          { count: String(branch.messageCount) },
-                        )}${relativeTime ? ` · ${relativeTime}` : ""}</span
-                      >
-                    </span>
-                    ${branch.active
-                      ? html`<span
-                          class="chat-pane__branch-active"
-                          aria-label=${t("chat.sessionHeader.activeBranch")}
-                          >${icons.check}</span
-                        >`
-                      : nothing}
-                  </wa-dropdown-item>
-                `;
-              })}
-            </wa-dropdown>
+                ${props.branches.map((branch) => {
+                  const relativeTime = branchRelativeTime(branch.updatedAt);
+                  return html`
+                    <wa-dropdown-item
+                      class="chat-pane__branch-item"
+                      value=${branch.leafEntryId}
+                      ?disabled=${branch.active || Boolean(props.branchSwitchDisabledReason)}
+                      data-active=${branch.active ? "true" : "false"}
+                    >
+                      <span class="chat-pane__branch-copy">
+                        <span class="chat-pane__branch-headline"
+                          >${branch.headline || t("chat.sessionHeader.untitledBranch")}</span
+                        >
+                        <span class="chat-pane__branch-meta"
+                          >${t(
+                            branch.messageCount === 1
+                              ? "chat.sessionHeader.oneMessage"
+                              : "chat.sessionHeader.messages",
+                            { count: String(branch.messageCount) },
+                          )}${relativeTime ? ` · ${relativeTime}` : ""}</span
+                        >
+                      </span>
+                      ${branch.active
+                        ? html`<span
+                            class="chat-pane__branch-active"
+                            aria-label=${t("chat.sessionHeader.activeBranch")}
+                            >${icons.check}</span
+                          >`
+                        : nothing}
+                    </wa-dropdown-item>
+                  `;
+                })}
+              </wa-dropdown>
+            </openclaw-tooltip>
           `
         : nothing}
       ${renderGatewayPicker(props)}

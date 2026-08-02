@@ -1,14 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import {
-  getRegisteredAgentHarness,
-  registerAgentHarness as registerGlobalAgentHarness,
-} from "../agents/harness/registry.js";
 import type { AgentHarness } from "../agents/harness/types.js";
-import {
-  getRegisteredEmbeddingProvider,
-  registerEmbeddingProvider as registerGlobalEmbeddingProvider,
-  type EmbeddingProviderAdapter,
-} from "./embedding-providers.js";
+import { getCoreEmbeddingProvider } from "./core-embedding-providers.js";
+import type { EmbeddingProviderAdapter } from "./embedding-providers.js";
 import { normalizeRegisteredProvider } from "./provider-validation.js";
 import type { PluginRegistryState } from "./registry-state.js";
 import type { PluginRecord, PluginTextTransformsRegistration } from "./registry-types.js";
@@ -41,7 +34,6 @@ type PluginOwnedProviderRegistration<T extends { id: string }> = {
 export function createProviderRegistrars(state: PluginRegistryState) {
   const {
     registry,
-    registryParams,
     pushDiagnostic,
     registerSynthesizedTextModelCatalogProvider,
     registerSynthesizedMediaModelCatalogProvider,
@@ -102,17 +94,9 @@ export function createProviderRegistrars(state: PluginRegistryState) {
       });
       return;
     }
-    const existing =
-      registryParams.activateGlobalSideEffects === false
-        ? registry.agentHarnesses.find((entry) => entry.harness.id === id)
-        : getRegisteredAgentHarness(id);
+    const existing = registry.agentHarnesses.find((entry) => entry.harness.id === id);
     if (existing) {
-      const ownerPluginId =
-        "ownerPluginId" in existing
-          ? existing.ownerPluginId
-          : "pluginId" in existing
-            ? existing.pluginId
-            : undefined;
+      const ownerPluginId = "pluginId" in existing ? existing.pluginId : undefined;
       const ownerDetail = ownerPluginId ? ` (owner: ${ownerPluginId})` : "";
       pushDiagnostic({
         level: "error",
@@ -123,9 +107,6 @@ export function createProviderRegistrars(state: PluginRegistryState) {
       return;
     }
     const normalizedHarness = { ...harness, id, pluginId: harness.pluginId ?? record.id };
-    if (registryParams.activateGlobalSideEffects !== false) {
-      registerGlobalAgentHarness(normalizedHarness, { ownerPluginId: record.id });
-    }
     record.agentHarnessIds.push(id);
     registry.agentHarnesses.push({
       pluginId: record.id,
@@ -213,10 +194,9 @@ export function createProviderRegistrars(state: PluginRegistryState) {
       });
       return;
     }
+    const coreEntry = getCoreEmbeddingProvider(id);
     const existing =
-      registryParams.activateGlobalSideEffects === false
-        ? registry.embeddingProviders.find((entry) => entry.provider.id === id)
-        : getRegisteredEmbeddingProvider(id);
+      coreEntry ?? registry.embeddingProviders.find((entry) => entry.provider.id === id);
     if (existing) {
       const ownerPluginId =
         "ownerPluginId" in existing
@@ -232,9 +212,6 @@ export function createProviderRegistrars(state: PluginRegistryState) {
         message: `embedding provider already registered: ${id}${ownerDetail}`,
       });
       return;
-    }
-    if (registryParams.activateGlobalSideEffects !== false) {
-      registerGlobalEmbeddingProvider(adapter, { ownerPluginId: record.id });
     }
     registry.embeddingProviders.push({
       pluginId: record.id,

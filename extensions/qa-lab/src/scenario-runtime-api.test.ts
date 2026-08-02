@@ -20,8 +20,6 @@ function createDeps(overrides?: Partial<QaScenarioRuntimeDeps>): QaScenarioRunti
     randomUUID,
     runScenario: fn,
     waitForOutboundMessage: fn,
-    waitForTransportOutboundMessage: fn,
-    waitForChannelOutboundMessage: fn,
     waitForNoOutbound: fn,
     waitForNoTransportOutbound: fn,
     recentOutboundSummary: fn,

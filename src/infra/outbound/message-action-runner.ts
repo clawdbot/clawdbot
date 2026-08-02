@@ -57,6 +57,7 @@ import { resolvePollMaxSelections } from "../../polls.js";
 import { resolveFirstBoundAccountId } from "../../routing/bound-account-read.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { stripUnsupportedCitationControlMarkers } from "../../shared/text/citation-control-markers.js";
+import { findCodeRegions } from "../../shared/text/code-regions.js";
 import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
 import { parseInlineDirectives } from "../../utils/directive-tags.js";
 import {
@@ -80,7 +81,10 @@ import {
   type MessageBroadcastAccountPlan,
   validateExplicitMessageAccountSelection,
 } from "./message-account-selection.js";
-import { normalizeMessageActionInput } from "./message-action-normalization.js";
+import {
+  normalizeMessageActionInput,
+  resolveImplicitMessageActionTarget,
+} from "./message-action-normalization.js";
 import { hasPotentialPluginActionParam } from "./message-action-param-keys.js";
 import {
   collectActionMediaSourceHints,
@@ -122,7 +126,9 @@ import { ensureOutboundSessionEntry, resolveOutboundSessionRoute } from "./outbo
 import {
   beginTerminalSourceReplyDelivery,
   cancelTerminalSourceReplyDelivery,
+  isCurrentSourceReplyActionName,
   isDeliveredCurrentSourceReply,
+  isDeliveredCurrentSourceReplyAction,
   reconcileTerminalSourceReplyDelivery,
 } from "./source-reply-mirror.js";
 import { normalizeTargetForProvider } from "./target-normalization.js";
@@ -176,6 +182,8 @@ export type RunMessageActionParams = {
   gateway?: MessageActionRunnerGateway;
   deps?: OutboundSendDeps;
   sessionKey?: string;
+  /** @internal Durable session key for source-reply transcript and receipt state. */
+  sourceReplySessionKey?: string;
   agentId?: string;
   /** Caller owns durable outbound context and must avoid the generic delivery mirror. */
   suppressTranscriptMirror?: boolean;
@@ -286,26 +294,38 @@ function markDeliveredCurrentSourceReply<T extends MessageActionRunResult>(
     replyToIsExplicit: boolean;
   },
 ): T {
-  if (result.kind !== "send" || params.input.sourceReplyDeliveryMode !== "message_tool_only") {
+  // Current-source identity comes from the authorized route and delivery receipt,
+  // not the reply mode; automatic runs also use this marker to avoid false fallbacks.
+  // Reply-type actions and polls are visible source replies too: leaving them
+  // unmarked made dispatch send the no-visible-reply fallback after a delivered
+  // reply or poll.
+  const isReplyActionResult =
+    result.kind === "action" && isCurrentSourceReplyActionName(result.action);
+  if (result.kind !== "send" && result.kind !== "poll" && !isReplyActionResult) {
     return result;
   }
   const authorization = params.input.messageActionAuthorization;
+  if (!authorization?.toolContext) {
+    return result;
+  }
+  const mirrorParams = {
+    action: isReplyActionResult ? result.action : result.kind === "poll" ? "poll" : "send",
+    channel: params.channel,
+    actionParams: params.actionParams,
+    cfg: params.cfg,
+    accountId: params.accountId,
+    currentAccountId: authorization.requesterAccountId ?? params.input.defaultAccountId,
+    sessionKey: params.input.sessionKey,
+    sessionId: params.input.sessionId,
+    agentId: params.agentId,
+    toolContext: authorization.toolContext,
+    deliveredPayload: result.payload,
+    replyToIsExplicit: params.replyToIsExplicit,
+  };
   if (
-    !authorization?.toolContext ||
-    !isDeliveredCurrentSourceReply({
-      action: "send",
-      channel: params.channel,
-      actionParams: params.actionParams,
-      cfg: params.cfg,
-      accountId: params.accountId,
-      currentAccountId: authorization.requesterAccountId ?? params.input.defaultAccountId,
-      sessionKey: params.input.sessionKey,
-      sessionId: params.input.sessionId,
-      agentId: params.agentId,
-      toolContext: authorization.toolContext,
-      deliveredPayload: result.payload,
-      replyToIsExplicit: params.replyToIsExplicit,
-    })
+    isReplyActionResult
+      ? !isDeliveredCurrentSourceReplyAction(mirrorParams)
+      : !isDeliveredCurrentSourceReply(mirrorParams)
   ) {
     return result;
   }
@@ -800,8 +820,7 @@ function hasPotentialActionTargetInput(
 ): boolean {
   return Boolean(
     hasExplicitSingularTargetParam(params) ||
-    normalizeOptionalString(input.toolContext?.currentChannelId) ||
-    normalizeOptionalString(input.toolContext?.currentMessagingTarget) ||
+    resolveImplicitMessageActionTarget(input.toolContext) ||
     hasPotentialPluginActionParam(params),
   );
 }
@@ -934,7 +953,7 @@ async function runGatewayPluginMessageActionOrNull(params: {
     accountId: params.accountId,
     currentAccountId:
       params.input.messageActionAuthorization?.requesterAccountId ?? params.input.defaultAccountId,
-    sessionKey: params.input.sessionKey,
+    sessionKey: params.input.sourceReplySessionKey ?? params.input.sessionKey,
     sessionId: params.input.sessionId,
     agentId: params.agentId,
     toolContext: params.input.messageActionAuthorization?.toolContext,
@@ -1289,7 +1308,9 @@ async function buildSendPayloadParts(params: {
   mergedMediaUrls.length = 0;
   mergedMediaUrls.push(...normalizedMediaUrls);
 
-  message = stripPlainTextToolCallBlocks(stripUnsupportedCitationControlMarkers(parsed.text));
+  message = stripPlainTextToolCallBlocks(stripUnsupportedCitationControlMarkers(parsed.text), {
+    resolveProtectedRanges: findCodeRegions,
+  });
   if (message || !hasPresentation) {
     actionParams.message = message;
   } else {
@@ -1722,8 +1743,17 @@ async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActi
       dryRun,
     }),
   });
+  const pollReplyToIsExplicit = Boolean(readStringParam(params, "replyTo"));
   if (gatewayPluginAction) {
-    return gatewayPluginAction;
+    return markDeliveredCurrentSourceReply(gatewayPluginAction, {
+      cfg,
+      actionParams: params,
+      channel,
+      accountId,
+      input,
+      agentId,
+      replyToIsExplicit: pollReplyToIsExplicit,
+    });
   }
 
   const poll = await executePollAction({
@@ -1770,17 +1800,28 @@ async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActi
     },
   });
 
-  return {
-    kind: "poll",
-    channel,
-    action,
-    to,
-    handledBy: poll.handledBy,
-    payload: poll.payload,
-    toolResult: poll.toolResult,
-    pollResult: poll.pollResult,
-    dryRun,
-  };
+  return markDeliveredCurrentSourceReply(
+    {
+      kind: "poll",
+      channel,
+      action,
+      to,
+      handledBy: poll.handledBy,
+      payload: poll.payload,
+      toolResult: poll.toolResult,
+      pollResult: poll.pollResult,
+      dryRun,
+    },
+    {
+      cfg,
+      actionParams: params,
+      channel,
+      accountId,
+      input,
+      agentId,
+      replyToIsExplicit: pollReplyToIsExplicit,
+    },
+  );
 }
 
 async function handlePluginAction(ctx: ResolvedActionContext): Promise<MessageActionRunResult> {
@@ -1812,6 +1853,16 @@ async function handlePluginAction(ctx: ResolvedActionContext): Promise<MessageAc
 
   if (!channelPlugin?.actions?.handleAction) {
     throw new Error(`Channel ${channel} is unavailable for message actions (plugin not loaded).`);
+  }
+
+  // Plugin actions bypass buildSendPayloadParts, so model-authored text here
+  // never crossed the outbound text hygiene sends get: reply/edit deliveries
+  // leaked raw citation control markers to end users.
+  const rawActionMessage = params.message;
+  if (typeof rawActionMessage === "string" && rawActionMessage) {
+    params.message = stripPlainTextToolCallBlocks(
+      stripUnsupportedCitationControlMarkers(rawActionMessage),
+    );
   }
 
   // Plugin actions bypass send/poll, so inherit thread metadata before either
@@ -1850,9 +1901,18 @@ async function handlePluginAction(ctx: ResolvedActionContext): Promise<MessageAc
       dryRun,
     }),
   });
+  const replyToIsExplicit = Boolean(readStringParam(params, "replyTo"));
   if (gatewayPluginAction) {
     // Gateway-owned actions must execute where the live channel runtime exists.
-    return gatewayPluginAction;
+    return markDeliveredCurrentSourceReply(gatewayPluginAction, {
+      cfg,
+      actionParams: params,
+      channel,
+      accountId,
+      input,
+      agentId,
+      replyToIsExplicit,
+    });
   }
 
   const authorization = input.messageActionAuthorization;
@@ -1886,15 +1946,26 @@ async function handlePluginAction(ctx: ResolvedActionContext): Promise<MessageAc
   if (!handled) {
     throw new Error(`Message action ${action} not supported for channel ${channel}.`);
   }
-  return {
-    kind: "action",
-    channel,
-    action,
-    handledBy: "plugin",
-    payload: extractToolPayload(handled),
-    toolResult: handled,
-    dryRun,
-  };
+  return markDeliveredCurrentSourceReply(
+    {
+      kind: "action",
+      channel,
+      action,
+      handledBy: "plugin",
+      payload: extractToolPayload(handled),
+      toolResult: handled,
+      dryRun,
+    },
+    {
+      cfg,
+      actionParams: params,
+      channel,
+      accountId,
+      input,
+      agentId,
+      replyToIsExplicit,
+    },
+  );
 }
 
 export async function runMessageAction(

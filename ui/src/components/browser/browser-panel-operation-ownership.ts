@@ -18,6 +18,7 @@ export interface BrowserPanelControllerHost extends ReactiveControllerHost {
 }
 
 type BrowserPanelInvocation = {
+  readonly client: GatewayBrowserClient;
   epoch: number;
   readonly id: number;
   readonly mutationId: number;
@@ -88,6 +89,7 @@ export class BrowserPanelOperationOwnership {
     this.requestedCapture += 1;
     this.capturePending = false;
     const invocation: BrowserPanelInvocation = {
+      client,
       epoch: this.lifecycleEpoch,
       id: ++this.requestedMutation,
       mutationId: this.requestedMutation,
@@ -156,6 +158,7 @@ export class BrowserPanelOperationOwnership {
   beginSnapshot(client: GatewayBrowserClient): BrowserPanelInvocation {
     const mutationId = this.requestedMutation;
     const invocation: BrowserPanelInvocation = {
+      client,
       epoch: this.lifecycleEpoch,
       id: ++this.requestedSnapshot,
       mutationId,
@@ -173,7 +176,7 @@ export class BrowserPanelOperationOwnership {
     snapshotTargetId: string | null,
   ): boolean {
     if (
-      !this.isLive(invocation.epoch) ||
+      !this.isLive(invocation.epoch, invocation.client) ||
       invocation.id < this.acceptedSnapshot ||
       (!invocation.isCurrent() && snapshotTargetId !== currentTargetId)
     ) {
@@ -185,7 +188,10 @@ export class BrowserPanelOperationOwnership {
 
   /** Older snapshots may capture the same tab unless a user mutation owns it. */
   canCaptureSnapshot(invocation: BrowserPanelInvocation): boolean {
-    return this.isLive(invocation.epoch) && invocation.mutationId === this.requestedMutation;
+    return (
+      this.isLive(invocation.epoch, invocation.client) &&
+      invocation.mutationId === this.requestedMutation
+    );
   }
 
   /** A superseded open may reconcile its created tab, but never own the selected view. */

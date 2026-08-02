@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import readline from "node:readline";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   materializeSessionArchiveForRead,
@@ -29,18 +29,12 @@ import {
   readTranscriptStatsSync,
 } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import { streamSessionTranscriptLines } from "../config/sessions/transcript-stream.js";
 import { selectVisibleTranscriptEvents } from "../config/sessions/transcript-visible-events.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
-import {
-  createUsageCostResolver,
-  parseUsageCostTranscriptEntry,
-  type UsageCostResolver,
-} from "./session-cost-usage-pricing.js";
-import type { ParsedUsageEntry } from "./session-cost-usage.types.js";
 
 export const USAGE_COST_TRANSCRIPT_STAT_CONCURRENCY = 32;
 
@@ -146,7 +140,9 @@ function listUsageCountedSqliteTranscriptStats(
     ...(params?.sessionsDir ? { sessionsDir: params.sessionsDir } : {}),
   });
   const files: UsageCostTranscriptFile[] = [];
-  for (const instance of listSessionTranscriptInstances({ agentId, storePath })) {
+  // This scan reads transcript identity/timestamps only; clone:false avoids
+  // cloning every current entry before the history projection and SQL rollups.
+  for (const instance of listSessionTranscriptInstances({ agentId, storePath, clone: false })) {
     const marker = { agentId, sessionId: instance.sessionId, storePath };
     const mtimeMs = instance.updatedAtMs;
     if (params?.minMtimeMs !== undefined && mtimeMs < params.minMtimeMs) {
@@ -177,13 +173,6 @@ function formatCanonicalUsageCostSqliteMarker(marker: SqliteSessionFileMarker): 
     resolveSqliteTargetFromSessionStorePath(marker.storePath, { agentId: marker.agentId }).path ??
     resolveOpenClawAgentSqlitePath({ agentId: marker.agentId });
   return formatSqliteSessionFileMarker({ ...marker, storePath });
-}
-
-export async function listUsageCountedTranscriptFiles(
-  agentId: string,
-  params?: { sessionsDir?: string },
-): Promise<UsageCostTranscriptFile[]> {
-  return await listUsageCountedTranscriptStats(agentId, params);
 }
 
 export async function listUsageCountedTranscriptStats(
@@ -250,45 +239,6 @@ export async function resolveUsageCostTranscriptFile(
     : undefined;
 }
 
-async function* readJsonlRecords(
-  filePath: string,
-  startOffset = 0,
-  endOffset?: number,
-): AsyncGenerator<Record<string, unknown>> {
-  if (endOffset !== undefined && endOffset <= startOffset) {
-    return;
-  }
-  const streamOptions: Parameters<typeof fs.createReadStream>[1] = {
-    encoding: "utf-8",
-    start: Math.max(0, startOffset),
-  };
-  if (endOffset !== undefined) {
-    streamOptions.end = endOffset - 1;
-  }
-  const fileStream = fs.createReadStream(filePath, streamOptions);
-  const rl = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
-  try {
-    for await (const line of rl) {
-      const trimmed = line.trim();
-      if (!trimmed) {
-        continue;
-      }
-      try {
-        const parsed = JSON.parse(trimmed) as unknown;
-        if (!parsed || typeof parsed !== "object") {
-          continue;
-        }
-        yield parsed as Record<string, unknown>;
-      } catch {
-        // Ignore malformed lines
-      }
-    }
-  } finally {
-    rl.close();
-    fileStream.destroy();
-  }
-}
-
 function loadSqliteUsageTranscriptEvents(
   marker: SqliteSessionFileMarker,
 ): Record<string, unknown>[] {
@@ -298,16 +248,11 @@ function loadSqliteUsageTranscriptEvents(
       sessionId: marker.sessionId,
       storePath: marker.storePath,
     }),
-  ).filter(
-    (event): event is Record<string, unknown> =>
-      Boolean(event) && typeof event === "object" && !Array.isArray(event),
-  );
+  ).filter(isRecord);
 }
 
 export async function* readTranscriptRecords(
   filePath: string,
-  startOffset = 0,
-  endOffset?: number,
 ): AsyncGenerator<Record<string, unknown>> {
   const marker = parseSqliteSessionFileMarker(filePath);
   if (marker) {
@@ -316,14 +261,21 @@ export async function* readTranscriptRecords(
     }
     return;
   }
-  // Discovery normalizes compressed archives to their materialized cache, so
-  // this branch only serves direct callers that pass a raw .zst path; those
-  // callers never carry persisted offsets, keeping the range space coherent.
-  if (filePath.endsWith(SESSION_ARCHIVE_ZSTD_SUFFIX)) {
-    yield* readJsonlRecords(materializeSessionArchiveForRead(filePath), startOffset, endOffset);
-    return;
+  // Durable byte-offset scans own their checkpoint reader. Diagnostic history
+  // shares the canonical transcript stream and materializes archive bytes once.
+  const transcriptPath = filePath.endsWith(SESSION_ARCHIVE_ZSTD_SUFFIX)
+    ? materializeSessionArchiveForRead(filePath)
+    : filePath;
+  for await (const line of streamSessionTranscriptLines(transcriptPath)) {
+    try {
+      const parsed: unknown = JSON.parse(line);
+      if (isRecord(parsed)) {
+        yield parsed;
+      }
+    } catch {
+      // Historical transcripts can contain malformed records.
+    }
   }
-  yield* readJsonlRecords(filePath, startOffset, endOffset);
 }
 
 export async function* readTranscriptRecordsBestEffort(
@@ -334,35 +286,6 @@ export async function* readTranscriptRecordsBestEffort(
   } catch {
     // Diagnostic readers return the records available before a stream failure.
     // Durable cache scans use the strict reader so partial data is never marked fresh.
-  }
-}
-
-export async function scanUsageFile(params: {
-  filePath: string;
-  config?: OpenClawConfig;
-  resolveCost?: UsageCostResolver;
-  startOffset?: number;
-  endOffset?: number;
-  onEntry: (entry: ParsedUsageEntry) => void;
-}): Promise<void> {
-  const resolveCost = params.resolveCost ?? createUsageCostResolver({ config: params.config });
-  for await (const parsed of readTranscriptRecords(
-    params.filePath,
-    params.startOffset,
-    params.endOffset,
-  )) {
-    const entry = parseUsageCostTranscriptEntry(parsed, resolveCost);
-    if (!entry?.usage) {
-      continue;
-    }
-    params.onEntry({
-      usage: entry.usage,
-      costTotal: entry.costTotal,
-      costBreakdown: entry.costBreakdown,
-      provider: entry.provider,
-      model: entry.model,
-      timestamp: entry.timestamp,
-    });
   }
 }
 

@@ -11,28 +11,37 @@ export function sessionMessagesContainIdempotencyKey(
   );
 }
 
-export function detachPrePersistedCurrentUserTurn(params: {
+export function reconcilePrePersistedCurrentUserTurn(params: {
   activeSession: { agent: { state: { messages: AgentMessage[] } } };
+  durableUserTurnMessage: AgentMessage | undefined;
   preparedUserTurnMessage: AgentMessage | undefined;
-  suppressNextUserMessagePersistence: boolean | undefined;
   userTurnAlreadyPersisted: boolean;
 }): boolean {
-  if (!params.suppressNextUserMessagePersistence || !params.userTurnAlreadyPersisted) {
-    return false;
-  }
   const idempotencyKey = (
     params.preparedUserTurnMessage as { idempotencyKey?: unknown } | undefined
   )?.idempotencyKey;
   if (typeof idempotencyKey !== "string" || idempotencyKey.length === 0) {
     return false;
   }
-  const messages = params.activeSession.agent.state.messages;
-  const tail = messages.at(-1) as (AgentMessage & { idempotencyKey?: unknown }) | undefined;
-  if (tail?.role !== "user" || tail.idempotencyKey !== idempotencyKey) {
+  const durableIdempotencyKey = (
+    params.durableUserTurnMessage as { idempotencyKey?: unknown } | undefined
+  )?.idempotencyKey;
+  // Recorder state is process-local; after restart the durable keyed leaf is the
+  // authoritative proof that this exact admitted turn was already persisted.
+  const durableTurnMatches = durableIdempotencyKey === idempotencyKey;
+  if (!params.userTurnAlreadyPersisted && !durableTurnMatches) {
     return false;
   }
-  // The durable transcript remains authoritative. Remove only its exact active
-  // tail copy so Agent.prompt() submits the current user turn once to the model.
-  params.activeSession.agent.state.messages = messages.slice(0, -1);
+  const messages = params.activeSession.agent.state.messages;
+  const tail = messages.at(-1) as (AgentMessage & { idempotencyKey?: unknown }) | undefined;
+  const activeTailMatches = tail?.role === "user" && tail.idempotencyKey === idempotencyKey;
+  if (!activeTailMatches && !durableTurnMatches) {
+    return false;
+  }
+  if (activeTailMatches) {
+    // Persistence is recorder-owned; either synchronized representation can
+    // prove identity. Remove the active copy when present so the model sees it once.
+    params.activeSession.agent.state.messages = messages.slice(0, -1);
+  }
   return true;
 }

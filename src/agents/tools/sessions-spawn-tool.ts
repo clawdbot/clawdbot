@@ -49,6 +49,10 @@ import {
   ToolInputError,
 } from "./common.js";
 import {
+  resolveEffectiveSessionToolsVisibility,
+  resolveSandboxedSessionToolContext,
+} from "./sessions-helpers.js";
+import {
   maybeSpawnVisibleSession,
   type VisibleSessionsSpawnDeps,
   VISIBLE_SESSIONS_SPAWN_SCHEMA,
@@ -290,6 +294,16 @@ export function createSessionsSpawnTool(
   const requesterAgentId =
     opts?.requesterAgentIdOverride ?? parseAgentSessionKey(opts?.agentSessionKey)?.agentId;
   const swarmConfig = resolveSwarmConfig(opts?.config, requesterAgentId);
+  const visibilityCfg = opts?.config ?? getRuntimeConfig();
+  const sessionToolsVisibility = resolveEffectiveSessionToolsVisibility({
+    cfg: visibilityCfg,
+    sandboxed: opts?.sandboxed === true,
+  });
+  const { restrictToSpawned } = resolveSandboxedSessionToolContext({
+    cfg: visibilityCfg,
+    agentSessionKey: opts?.agentSessionKey,
+    sandboxed: opts?.sandboxed,
+  });
   return {
     label: "Sessions",
     name: "sessions_spawn",
@@ -300,6 +314,8 @@ export function createSessionsSpawnTool(
       acpAvailable,
       threadAvailable,
       swarmEnabled: swarmConfig.enabled,
+      sessionToolsVisibility,
+      spawnRestricted: restrictToSpawned,
     }),
     parameters: createSessionsSpawnToolSchema({
       acpAvailable,

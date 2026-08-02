@@ -98,7 +98,7 @@ function clearStaleCodexFallbackNotice(
   entry: SessionEntry,
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>,
 ): boolean {
-  const endpoints = [entry.fallbackNoticeSelectedModel, entry.fallbackNoticeActiveModel];
+  const endpoints = [entry.fallbackNotice?.selectedModel, entry.fallbackNotice?.activeModel];
   const hasBlockedEndpoint = endpoints.some(
     (modelRef) =>
       isOpenAICodexModelRef(modelRef) &&
@@ -107,9 +107,7 @@ function clearStaleCodexFallbackNotice(
   if (hasBlockedEndpoint || !endpoints.some(isOpenAICodexModelRef)) {
     return false;
   }
-  delete entry.fallbackNoticeSelectedModel;
-  delete entry.fallbackNoticeActiveModel;
-  delete entry.fallbackNoticeReason;
+  delete entry.fallbackNotice;
   return true;
 }
 
@@ -255,8 +253,8 @@ function scanCodexSessionStoreRoutes(
       );
     };
     const fallbackNoticeEndpoints = [
-      entry.fallbackNoticeSelectedModel,
-      entry.fallbackNoticeActiveModel,
+      entry.fallbackNotice?.selectedModel,
+      entry.fallbackNotice?.activeModel,
     ];
     const hasBlockedFallbackNoticeEndpoint = fallbackNoticeEndpoints.some(
       (modelRef) =>

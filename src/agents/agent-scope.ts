@@ -295,9 +295,7 @@ export function clearAutoFallbackPrimaryProbeSelection(
     delete entry.authProfileOverrideSource;
     delete entry.authProfileOverrideCompactionCount;
   }
-  delete entry.fallbackNoticeSelectedModel;
-  delete entry.fallbackNoticeActiveModel;
-  delete entry.fallbackNoticeReason;
+  delete entry.fallbackNotice;
   entry.updatedAt = now;
 }
 

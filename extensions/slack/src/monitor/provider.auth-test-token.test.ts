@@ -125,7 +125,7 @@ describe("auth.test boot call", () => {
   it("warns when auth.test returns a user id without bot_id", async () => {
     const runtimeLog = vi.fn();
     const client = getSlackClient();
-    client.auth.test.mockResolvedValueOnce({
+    client.auth.test.mockResolvedValue({
       app_id: "A1",
       user_id: "UUSER",
       user: "human-installer",
@@ -165,7 +165,7 @@ describe("auth.test boot call", () => {
       },
     });
     const client = getSlackClient();
-    client.auth.test.mockResolvedValueOnce({
+    client.auth.test.mockResolvedValue({
       app_id: "A1",
       user_id: "UUSER",
       user: "human-installer",
@@ -215,6 +215,10 @@ describe("auth.test boot call", () => {
         "required-mention channels will fail closed without another trusted activation signal",
       ),
     );
+    expect(runtimeLog).toHaveBeenCalledWith(
+      expect.stringContaining("while the bot identity is unresolved"),
+    );
+    expect(runtimeLog).not.toHaveBeenCalledWith(expect.stringContaining("until restart"));
   });
 
   it("continues startup after the startup auth client times out", async () => {
@@ -243,7 +247,7 @@ describe("auth.test boot call", () => {
         slackApiUrl: "https://slack.test/api/",
       }),
     );
-    expect(getSlackClient().auth.test).toHaveBeenCalledTimes(1);
+    expect(getSlackClient().auth.test).toHaveBeenCalledTimes(2);
     expect(appStartMock).toHaveBeenCalledTimes(1);
     expect(runtimeLog).toHaveBeenCalledWith(expect.stringContaining("timeout of 10000ms exceeded"));
   });
@@ -271,10 +275,10 @@ describe("auth.test boot call", () => {
       runtime: { log: runtimeLog, error: vi.fn(), exit: vi.fn() },
     });
     try {
-      await vi.waitFor(() => expect(appStartMock).toHaveBeenCalledTimes(1), { timeout: 12_000 });
+      await vi.waitFor(() => expect(appStartMock).toHaveBeenCalledTimes(1), { timeout: 35_000 });
       await vi.waitFor(() => expect(events).toContain("socket-closed"), { timeout: 1_000 });
 
-      expect(server.requestCount).toBe(1);
+      expect(server.requestCount).toBe(3);
       expect(server.requestUrl).toBe("/api/auth.test");
       expect(events).toContain("auth-settled");
       expect(events.indexOf("auth-settled")).toBeLessThan(events.indexOf("app-start"));
@@ -286,7 +290,7 @@ describe("auth.test boot call", () => {
       await monitor.run;
       await server.close();
     }
-  }, 20_000);
+  }, 40_000);
 
   it("preserves workspace startup when auth.test omits app_id", async () => {
     getSlackClient().auth.test.mockResolvedValueOnce({
@@ -569,7 +573,7 @@ describe("connected identity health", () => {
         is_enterprise_install: false,
       },
       config: undefined,
-      expected: { healthState: "healthy", lastError: null },
+      expected: { lifecycle: "ready", lastError: null },
     },
     {
       name: "user-token identity",
@@ -580,7 +584,7 @@ describe("connected identity health", () => {
       },
       config: undefined,
       expected: {
-        healthState: "degraded",
+        lifecycle: "blocked",
         lastError: expect.stringContaining("without bot_id"),
       },
     },
@@ -599,13 +603,13 @@ describe("connected identity health", () => {
           },
         },
       },
-      expected: { healthState: "healthy", lastError: null },
+      expected: { lifecycle: "ready", lastError: null },
     },
   ])("publishes $name through the provider status callback", async ({ auth, config, expected }) => {
     if (config) {
       resetSlackTestState(config);
     }
-    getSlackClient().auth.test.mockResolvedValueOnce(auth);
+    getSlackClient().auth.test.mockResolvedValue(auth);
     const setStatus = vi.fn();
 
     const monitor = startSlackMonitor(monitorSlackProvider, { setStatus });
@@ -618,7 +622,7 @@ describe("connected identity health", () => {
     });
   });
 
-  it("publishes auth.test failures as degraded", async () => {
+  it("recovers auth.test failures when socket startup re-resolves identity", async () => {
     getSlackClient().auth.test.mockRejectedValueOnce(new Error("request_timeout"));
     const setStatus = vi.fn();
 
@@ -628,8 +632,66 @@ describe("connected identity health", () => {
     expect(setStatus).toHaveBeenCalledWith({
       connected: true,
       lastConnectedAt: expect.any(Number),
-      healthState: "degraded",
+      lifecycle: "ready",
+      lastError: null,
+    });
+    expect(getSlackClient().auth.test).toHaveBeenCalledTimes(2);
+  });
+
+  it("adopts Bolt identity from the first HTTP event and restores mention detection", async () => {
+    resetSlackTestState({
+      channels: {
+        slack: {
+          mode: "http",
+          signingSecret: "test-signing-secret",
+          groupPolicy: "open",
+          requireMention: true,
+        },
+      },
+    });
+    const client = getSlackClient();
+    client.auth.test.mockRejectedValue(new Error("request_timeout"));
+    client.conversations.info.mockResolvedValueOnce({
+      channel: { name: "general", is_channel: true },
+    });
+    const { replyMock, sendMock } = getSlackTestState();
+    replyMock.mockResolvedValue({ text: "identity restored" });
+    const setStatus = vi.fn();
+    const monitor = startSlackMonitor(monitorSlackProvider, { setStatus });
+    const handler = await getSlackHandlerOrThrow("message");
+
+    expect(setStatus).toHaveBeenCalledWith({
+      connected: true,
+      lastConnectedAt: expect.any(Number),
+      lifecycle: "blocked",
       lastError: "request_timeout",
     });
+    expect(setStatus).not.toHaveBeenCalledWith(expect.objectContaining({ connected: false }));
+
+    await handler({
+      event: {
+        type: "message",
+        user: "U_OTHER",
+        text: "<@URECOVERED> status",
+        ts: "999999.123",
+        channel: "C12345678",
+        channel_type: "channel",
+      },
+      context: {
+        botUserId: "URECOVERED",
+        botId: "BRECOVERED",
+        isEnterpriseInstall: false,
+      },
+      body: {},
+    });
+
+    expect(setStatus).toHaveBeenCalledWith({
+      connected: true,
+      lastConnectedAt: expect.any(Number),
+      lifecycle: "ready",
+      lastError: null,
+    });
+    await vi.waitFor(() => expect(sendMock).toHaveBeenCalledTimes(1));
+    await stopSlackMonitor(monitor);
   });
 });

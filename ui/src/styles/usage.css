@@ -947,6 +947,69 @@ details.usage-filter-select summary::-webkit-details-marker,
   grid-column: 1 / -1;
 }
 
+.usage-heatmap {
+  overflow: hidden;
+}
+
+.usage-heatmap__legend {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  white-space: nowrap;
+}
+
+.usage-heatmap__swatch {
+  width: 11px;
+  height: 11px;
+  border-radius: 2.5px;
+  display: inline-block;
+}
+
+/* Short ranges keep natural 11px cells; longer ranges shrink to the panel
+   instead of adding a second horizontal scroll surface. */
+.usage-heatmap__svg {
+  display: block;
+  width: min(100%, var(--usage-heatmap-width));
+  height: auto;
+}
+
+.usage-heatmap__month,
+.usage-heatmap__weekday {
+  fill: var(--muted);
+  font-size: 10px;
+}
+
+.usage-heatmap__weekday {
+  text-anchor: end;
+}
+
+.usage-heatmap__cell--l0 {
+  fill: color-mix(in srgb, var(--text) 7%, var(--panel));
+  background: color-mix(in srgb, var(--text) 7%, var(--panel));
+}
+
+.usage-heatmap__cell--l1 {
+  fill: color-mix(in srgb, var(--accent) 25%, var(--panel));
+  background: color-mix(in srgb, var(--accent) 25%, var(--panel));
+}
+
+.usage-heatmap__cell--l2 {
+  fill: color-mix(in srgb, var(--accent) 50%, var(--panel));
+  background: color-mix(in srgb, var(--accent) 50%, var(--panel));
+}
+
+.usage-heatmap__cell--l3 {
+  fill: color-mix(in srgb, var(--accent) 75%, var(--panel));
+  background: color-mix(in srgb, var(--accent) 75%, var(--panel));
+}
+
+.usage-heatmap__cell--l4 {
+  fill: var(--accent);
+  background: var(--accent);
+}
+
 .usage-list,
 .usage-error-list,
 .context-breakdown-list {
@@ -1095,6 +1158,9 @@ details.usage-filter-select summary::-webkit-details-marker,
 
 .usage-hour-cell {
   min-height: 46px;
+  padding: 0;
+  cursor: pointer;
+  appearance: none;
   transition:
     transform 0.18s var(--ease-out),
     border-color 0.18s var(--ease-out),
@@ -1104,6 +1170,11 @@ details.usage-filter-select summary::-webkit-details-marker,
 .usage-hour-cell:hover {
   transform: translateY(-1px);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.usage-hour-cell:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  outline-offset: 2px;
 }
 
 .usage-hour-cell.selected {
@@ -1519,21 +1590,45 @@ details.usage-filter-select summary::-webkit-details-marker,
 }
 
 .session-bar-label,
+.session-bar-selection,
 .session-bar-actions,
 .session-detail-header-left {
   min-width: 0;
 }
 
+.session-bar-selection {
+  flex: 1 1 auto;
+  border: 0;
+  border-radius: var(--radius-sm);
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.session-bar-selection:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
 .session-bar-label {
+  display: block;
   flex: 1 1 auto;
 }
 
 .session-bar-title {
+  display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-weight: 600;
   color: var(--text-strong);
+}
+
+.session-bar-meta {
+  display: block;
 }
 
 .session-bar-actions {

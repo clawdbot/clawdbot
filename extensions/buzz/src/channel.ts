@@ -5,15 +5,26 @@ import {
   createChatChannelPlugin,
 } from "openclaw/plugin-sdk/channel-core";
 import { createChannelMessageAdapterFromOutbound } from "openclaw/plugin-sdk/channel-outbound";
+import { createChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
 import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
 import { BuzzConfigSchema } from "./config-schema.js";
-import { buzzOutboundAdapter, startBuzzGatewayAccount } from "./gateway.js";
+import {
+  listBuzzDirectoryGroupsFromConfig,
+  listBuzzDirectoryPeersFromConfig,
+} from "./directory-config.js";
+import {
+  getBuzzDirectorySelf,
+  listBuzzDirectoryGroupMembers,
+  listBuzzDirectoryGroupsLive,
+  listBuzzDirectoryPeersLive,
+} from "./directory.js";
+import { buzzOutboundAdapter, sendBuzzTyping, startBuzzGatewayAccount } from "./gateway.js";
 import { discoverBuzzRooms } from "./room-discovery.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
-import { buzzSetupAdapter, buzzSetupContract } from "./setup-core.js";
+import { buzzSetupContract } from "./setup-core.js";
 import { buzzSetupWizard } from "./setup-surface.js";
 import {
   buildBuzzTarget,
@@ -50,6 +61,7 @@ export const buzzPlugin = createChatChannelPlugin<ResolvedBuzzAccount, BuzzProbe
       docsPath: "/channels/buzz",
       docsLabel: "buzz",
       blurb: "Connect OpenClaw agents to Buzz team rooms.",
+      markdownCapable: true,
       order: 56,
     },
     capabilities: {
@@ -58,7 +70,6 @@ export const buzzPlugin = createChatChannelPlugin<ResolvedBuzzAccount, BuzzProbe
     },
     reload: { configPrefixes: ["channels.buzz"] },
     configSchema: BuzzConfigSchema,
-    setup: buzzSetupAdapter,
     setupContract: buzzSetupContract,
     setupWizard: buzzSetupWizard,
     config: {
@@ -165,6 +176,17 @@ export const buzzPlugin = createChatChannelPlugin<ResolvedBuzzAccount, BuzzProbe
     gateway: {
       startAccount: startBuzzGatewayAccount,
     },
+    heartbeat: {
+      sendTyping: sendBuzzTyping,
+    },
+    directory: createChannelDirectoryAdapter({
+      self: getBuzzDirectorySelf,
+      listPeers: listBuzzDirectoryPeersFromConfig,
+      listPeersLive: listBuzzDirectoryPeersLive,
+      listGroups: listBuzzDirectoryGroupsFromConfig,
+      listGroupsLive: listBuzzDirectoryGroupsLive,
+      listGroupMembers: listBuzzDirectoryGroupMembers,
+    }),
     message: buzzMessageAdapter,
   },
   outbound: buzzOutboundAdapter,

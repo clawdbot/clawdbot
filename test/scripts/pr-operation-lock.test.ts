@@ -96,6 +96,22 @@ function createRepo(nestedName?: string) {
   return dir;
 }
 
+function addTrackedUiConfig(repoDir: string) {
+  const configDir = join(repoDir, "ui", "config");
+  mkdirSync(configDir, { recursive: true });
+  writeFileSync(join(configDir, "control-ui-chunking.ts"), "export const chunking = true;\n");
+  execFileSync("git", ["add", "ui/config/control-ui-chunking.ts"], { cwd: repoDir });
+  execFileSync("git", ["commit", "-qm", "add ui config"], { cwd: repoDir });
+}
+
+function setSparseCheckout(repoDir: string) {
+  execFileSync("git", ["sparse-checkout", "init", "--no-cone"], { cwd: repoDir });
+  execFileSync("git", ["sparse-checkout", "set", "--no-cone", "--stdin"], {
+    cwd: repoDir,
+    input: "/*\n!/*/\n/base.txt\n",
+  });
+}
+
 function bashSource(repoDir: string, supervised = false) {
   return [
     "set -euo pipefail",
@@ -2191,6 +2207,54 @@ describePosix("scripts/pr per-PR operation lock", () => {
         encoding: "utf8",
       }).trim(),
     ).toBe("temp/pr-43");
+  });
+
+  it("materializes a new PR worktree inherited from a sparse checkout", () => {
+    const repoDir = createRepo();
+    addTrackedUiConfig(repoDir);
+    execFileSync("git", ["remote", "add", "origin", repoDir], { cwd: repoDir });
+    setSparseCheckout(repoDir);
+    const worktreeDir = join(repoDir, ".worktrees", "pr-44");
+
+    const result = runLockShell(repoDir, [
+      "ensure_gh_api_auth() { return 0; }",
+      "enter_worktree 44",
+    ]);
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(existsSync(join(worktreeDir, "ui", "config", "control-ui-chunking.ts"))).toBe(true);
+    expect(
+      execFileSync("git", ["config", "--bool", "core.sparseCheckout"], {
+        cwd: worktreeDir,
+        encoding: "utf8",
+      }).trim(),
+    ).toBe("false");
+  });
+
+  it("materializes an existing sparse PR worktree before reuse", () => {
+    const repoDir = createRepo();
+    addTrackedUiConfig(repoDir);
+    execFileSync("git", ["remote", "add", "origin", repoDir], { cwd: repoDir });
+    const worktreeDir = join(repoDir, ".worktrees", "pr-45");
+    execFileSync("git", ["worktree", "add", "-q", "-b", "temp/pr-45", worktreeDir], {
+      cwd: repoDir,
+    });
+    setSparseCheckout(worktreeDir);
+    expect(existsSync(join(worktreeDir, "ui", "config", "control-ui-chunking.ts"))).toBe(false);
+
+    const result = runLockShell(repoDir, [
+      "ensure_gh_api_auth() { return 0; }",
+      "enter_worktree 45",
+    ]);
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(existsSync(join(worktreeDir, "ui", "config", "control-ui-chunking.ts"))).toBe(true);
+    expect(
+      execFileSync("git", ["config", "--bool", "core.sparseCheckout"], {
+        cwd: worktreeDir,
+        encoding: "utf8",
+      }).trim(),
+    ).toBe("false");
   });
 
   it("refuses a symlink alias to another registered worktree", () => {

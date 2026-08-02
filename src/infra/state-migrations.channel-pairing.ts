@@ -105,9 +105,15 @@ function parseAllowFromFilename(
       continue;
     }
     const accountKey = stem.slice(channel.length + 1);
-    const matchingAccountIds = (accountIds[channel] ?? []).filter(
-      (accountId) => safeAccountKey(accountId) === accountKey,
-    );
+    const matchingAccountIds = (accountIds[channel] ?? []).filter((accountId) => {
+      try {
+        return safeAccountKey(accountId) === accountKey;
+      } catch {
+        // One invalid configured candidate must not abort every legacy migration.
+        // With no valid match, the source remains in place as unresolved below.
+        return false;
+      }
+    });
     if (matchingAccountIds.length === 1 && matchingAccountIds[0]) {
       targets.push({ channel: channel as PairingChannel, accountId: matchingAccountIds[0] });
     } else if (matchingAccountIds.length > 1) {

@@ -22,6 +22,7 @@ type ReusableSkillSnapshotParams = {
   config: OpenClawConfig;
   agentId?: string;
   skillFilter?: string[];
+  skillOverrides?: Record<string, boolean>;
   eligibility?: SkillEligibilityContext;
   existingSnapshot?: SkillSnapshot;
   snapshotVersion?: number;
@@ -69,16 +70,21 @@ export function resolveReusableWorkspaceSkillSnapshot(
   const nodeSkillsEligibilityChanged =
     stableStringify(params.existingSnapshot?.nodeSkillsEligibility) !==
     stableStringify(params.eligibility?.nodeSkills);
+  const skillOverridesChanged =
+    stableStringify(params.existingSnapshot?.skillOverrides) !==
+    stableStringify(params.skillOverrides);
   const shouldRefresh =
     promptFormatChanged ||
     skillVersionChanged ||
     nodeSkillsEligibilityChanged ||
-    !matchesSkillFilter(params.existingSnapshot?.skillFilter, params.skillFilter);
+    !matchesSkillFilter(params.existingSnapshot?.skillFilter, params.skillFilter) ||
+    skillOverridesChanged;
   const buildSnapshot = () => {
     return buildWorkspaceSkillSnapshot(params.workspaceDir, {
       config: params.config,
       agentId: params.agentId,
       skillFilter: params.skillFilter,
+      skillOverrides: params.skillOverrides,
       eligibility: params.eligibility,
       snapshotVersion,
     });
@@ -89,6 +95,7 @@ export function resolveReusableWorkspaceSkillSnapshot(
       params.workspaceDir,
       snapshotVersion,
       params.skillFilter,
+      params.skillOverrides,
       params.agentId,
       params.eligibility,
       fingerprintSkillSnapshotConfig(params.config),

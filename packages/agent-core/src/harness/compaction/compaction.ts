@@ -769,7 +769,25 @@ export function prepareCompaction(
   }
   const boundaryEnd = effectiveEntries.length;
 
-  const tokensBefore = estimateContextTokens(buildSessionContext(pathEntries).messages).tokens;
+  const contextMessages = buildSessionContext(pathEntries).messages;
+  const contextUsage = estimateContextTokens(contextMessages);
+  const tokensBefore = contextUsage.tokens;
+  const totalEstimatedTokens = contextMessages.reduce(
+    (total, message) => total + estimateTokens(message),
+    0,
+  );
+  // Provider usage includes prompt/schema tokens omitted by estimateTokens. Normalize its trigger
+  // units to the cut walk, capped at a one-token retained tail; otherwise a small transcript
+  // can leave the cut at the first entry and free nothing.
+  const triggerUnitScale =
+    totalEstimatedTokens > 0 &&
+    Number.isFinite(totalEstimatedTokens) &&
+    Number.isFinite(contextUsage.usageTokens)
+      ? Math.min(
+          Math.max(1, settings.keepRecentTokens),
+          Math.max(1, contextUsage.usageTokens / totalEstimatedTokens),
+        )
+      : 1;
   const resetPreludeTokens = resetPreludeMessages.reduce(
     (total, message) => total + estimateTokens(message),
     0,
@@ -778,7 +796,7 @@ export function prepareCompaction(
   // other model-visible boundary context so a large kept tail moves the cut earlier.
   const keepRecentTokens = Math.min(
     Number.MAX_SAFE_INTEGER,
-    settings.keepRecentTokens + resetPreludeTokens,
+    settings.keepRecentTokens / triggerUnitScale + resetPreludeTokens,
   );
 
   const cutPoint = findCutPoint(effectiveEntries, boundaryStart, boundaryEnd, keepRecentTokens);

@@ -1216,13 +1216,21 @@ describe("buildCachedChatItems working spark", () => {
       streamingItems.find((item) => item.kind === "stream" && item.isStreaming),
       "visible live stream",
     );
+    const streamingIndicator = expectDefined(
+      streamingItems.find((item) => item.kind === "reading-indicator"),
+      "streaming working indicator",
+    );
     const streamingRun = expectDefined(
       coalesceStreamRuns(streamingItems).find((item) => item.kind === "stream-run"),
       "streaming run",
     );
 
     expect(visibleStream.key).toBe(pendingIndicator.key);
-    expect(streamingRun.key).toBe(pendingRun.key);
+    expect(streamingIndicator.key).toBe(pendingIndicator.key);
+    expect(streamingRun).toMatchObject({
+      key: pendingRun.key,
+      parts: [{ kind: "stream" }, { kind: "reading-indicator" }],
+    });
 
     const nextRunIndicator = expectDefined(
       readingIndicator({
@@ -1305,21 +1313,24 @@ describe("buildCachedChatItems working spark", () => {
     expect(hasReadingIndicator({ runWorking: true, loading: true })).toBe(false);
   });
 
-  it("does not stack the spark under a visible running tool row", () => {
-    expect(hasReadingIndicator({ runWorking: true, toolMessages: [liveTool(false)] })).toBe(false);
+  it("keeps the non-null empty-stream fallback during initial history loading", () => {
+    expect(hasReadingIndicator({ stream: "", loading: true })).toBe(true);
   });
 
-  it("keeps the approval status row beside a visible running tool", () => {
-    expect(
-      hasReadingIndicator({
-        runWorking: true,
-        waitingApproval: true,
-        toolMessages: [liveTool(false)],
-      }),
-    ).toBe(true);
+  it("does not suppress active telemetry once a live stream exists", () => {
+    const items = buildCachedChatItems(
+      createProps({ runWorking: true, loading: true, stream: "The reply has started." }),
+    );
+
+    expect(items.filter((item) => item.kind === "stream")).toHaveLength(1);
+    expect(items.filter((item) => item.kind === "reading-indicator")).toHaveLength(1);
   });
 
-  it("returns the spark once the running tool resolves", () => {
+  it("keeps the telemetry row beside a visible running tool", () => {
+    expect(hasReadingIndicator({ runWorking: true, toolMessages: [liveTool(false)] })).toBe(true);
+  });
+
+  it("keeps the telemetry row once the running tool resolves", () => {
     expect(hasReadingIndicator({ runWorking: true, toolMessages: [liveTool(true)] })).toBe(true);
   });
 
@@ -2148,6 +2159,181 @@ describe("buildCachedChatItems", () => {
     expect(groupAt(groups, 0).messages).toHaveLength(2);
     expect(messageAt(groupAt(groups, 0), 0).duplicateCount).toBeUndefined();
     expect(messageAt(groupAt(groups, 0), 1).duplicateCount).toBeUndefined();
+  });
+
+  it("keeps identical user prompts separate when canonical transcript identities differ", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          __openclaw: {
+            id: "canonical-web-user",
+            idempotencyKey: "web-same-text-run:user",
+            seq: 1,
+          },
+          role: "user",
+          content: [{ type: "text", text: "Both clients independently sent the same prompt." }],
+          timestamp: 1,
+        },
+        {
+          __openclaw: {
+            id: "canonical-tui-user",
+            idempotencyKey: "tui-same-text-run:user",
+            seq: 2,
+          },
+          role: "user",
+          content: [{ type: "text", text: "Both clients independently sent the same prompt." }],
+          timestamp: 2,
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groupAt(groups, 0).role).toBe("user");
+    expect(groupAt(groups, 0).messages).toHaveLength(2);
+    expect(messageRecord(groupAt(groups, 0), 0)["__openclaw"]).toMatchObject({
+      id: "canonical-web-user",
+    });
+    expect(messageRecord(groupAt(groups, 0), 1)["__openclaw"]).toMatchObject({
+      id: "canonical-tui-user",
+    });
+    expect(messageAt(groupAt(groups, 0), 0).duplicateCount).toBeUndefined();
+    expect(messageAt(groupAt(groups, 0), 1).duplicateCount).toBeUndefined();
+  });
+
+  it("keeps imported prompts from distinct CLI sessions separate when provider IDs collide", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "Imported clients sent the same prompt." }],
+          timestamp: 1,
+          __openclaw: {
+            id: "provider-local-user",
+            externalId: "provider-local-user",
+            importedFrom: "claude-cli",
+            cliSessionId: "first-cli-session",
+            seq: 1,
+          },
+        },
+        {
+          role: "user",
+          content: [{ type: "text", text: "Imported clients sent the same prompt." }],
+          timestamp: 2,
+          __openclaw: {
+            id: "provider-local-user",
+            externalId: "provider-local-user",
+            importedFrom: "claude-cli",
+            cliSessionId: "second-cli-session",
+            seq: 2,
+          },
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groupAt(groups, 0).messages).toHaveLength(2);
+    expect(messageRecord(groupAt(groups, 0), 0)["__openclaw"]).toMatchObject({
+      cliSessionId: "first-cli-session",
+    });
+    expect(messageRecord(groupAt(groups, 0), 1)["__openclaw"]).toMatchObject({
+      cliSessionId: "second-cli-session",
+    });
+  });
+
+  it("keeps a native prompt separate from a colliding imported provider ID", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "Native and imported prompts coincide." }],
+          timestamp: 1,
+          __openclaw: { id: "colliding-user", seq: 1 },
+        },
+        {
+          role: "user",
+          content: [{ type: "text", text: "Native and imported prompts coincide." }],
+          timestamp: 2,
+          __openclaw: {
+            id: "colliding-user",
+            externalId: "colliding-user",
+            importedFrom: "claude-cli",
+            cliSessionId: "imported-cli-session",
+            seq: 2,
+          },
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groupAt(groups, 0).messages).toHaveLength(2);
+    expect(messageRecord(groupAt(groups, 0), 0)["__openclaw"]).toEqual({
+      id: "colliding-user",
+      seq: 1,
+    });
+    expect(messageRecord(groupAt(groups, 0), 1)["__openclaw"]).toMatchObject({
+      cliSessionId: "imported-cli-session",
+    });
+  });
+
+  it("does not guess that incomplete imported source identities are duplicate prompts", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "Incomplete imports can share provider IDs." }],
+          timestamp: 1,
+          __openclaw: {
+            id: "incomplete-provider-user",
+            externalId: "incomplete-provider-user",
+            importedFrom: "claude-cli",
+          },
+        },
+        {
+          role: "user",
+          content: [{ type: "text", text: "Incomplete imports can share provider IDs." }],
+          timestamp: 2,
+          __openclaw: {
+            id: "incomplete-provider-user",
+            externalId: "incomplete-provider-user",
+            importedFrom: "claude-cli",
+          },
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groupAt(groups, 0).messages).toHaveLength(2);
+    expect(messageAt(groupAt(groups, 0), 0).duplicateCount).toBeUndefined();
+    expect(messageAt(groupAt(groups, 0), 1).duplicateCount).toBeUndefined();
+  });
+
+  it("collapses a replay of the same canonical user prompt", () => {
+    const metadata = {
+      id: "canonical-replayed-user",
+      idempotencyKey: "replayed-user-run:user",
+      seq: 1,
+    };
+    const groups = messageGroups({
+      messages: [
+        {
+          __openclaw: metadata,
+          role: "user",
+          content: [{ type: "text", text: "This prompt was delivered twice." }],
+          timestamp: 1,
+        },
+        {
+          __openclaw: { ...metadata },
+          role: "user",
+          content: [{ type: "text", text: "This prompt was delivered twice." }],
+          timestamp: 2,
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groupAt(groups, 0).role).toBe("user");
+    expect(groupAt(groups, 0).messages).toHaveLength(1);
+    expect(messageAt(groupAt(groups, 0), 0).duplicateCount).toBe(2);
   });
 
   it("keeps same-id user relay copies separate so sender identity is preserved", () => {

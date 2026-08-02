@@ -8,10 +8,11 @@ import {
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { markInboundContextLabel } from "../../../../src/auto-reply/reply/inbound-context-marker.js";
+import { encodeSessionArchiveContent } from "../../../../src/config/sessions/archive-compression.js";
 import {
   appendTranscriptMessage,
   persistSessionTranscriptTurn,
-  replaceSessionEntry,
+  resetSessionEntryLifecycle,
   upsertSessionEntry,
 } from "../../../../src/config/sessions/session-accessor.js";
 import {
@@ -135,14 +136,12 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
       { agentId: "main", sessionId: "retained-old", sessionKey, storePath },
       { message: { role: "assistant", content: "retained transcript" } },
     );
-    await replaceSessionEntry(
-      { agentId: "main", sessionKey, storePath },
-      { sessionId: "retained-old", updatedAt: 15 },
-    );
-    await upsertSessionEntry(
-      { agentId: "main", sessionKey, storePath },
-      { sessionId: "retained-new", updatedAt: 20 },
-    );
+    await resetSessionEntryLifecycle({
+      agentId: "main",
+      buildNextEntry: () => ({ sessionId: "retained-new", updatedAt: 20 }),
+      storePath,
+      target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+    });
     await appendTranscriptMessage(
       { agentId: "main", sessionId: "retained-new", sessionKey, storePath },
       { message: { role: "assistant", content: "current transcript" } },
@@ -899,6 +898,24 @@ describe("buildSessionEntry", () => {
     expect(bakEntry.lineMap).toStrictEqual([]);
     expect(checkpointEntry.content).toBe("");
     expect(checkpointEntry.lineMap).toStrictEqual([]);
+  });
+
+  it("indexes compressed session archives through their materialized content", async () => {
+    const content = JSON.stringify({
+      type: "message",
+      message: { role: "user", content: "Compressed archive memory" },
+    });
+    const encoded = encodeSessionArchiveContent(content);
+    const archivePath = path.join(
+      tmpDir,
+      `compressed.jsonl.deleted.2026-07-11T00-00-00.000Z${encoded.suffix}`,
+    );
+    fsSync.writeFileSync(archivePath, encoded.bytes);
+
+    const entry = requireSessionEntry(await buildSessionEntry(archivePath));
+
+    expect(entry.content).toBe("User: Compressed archive memory");
+    expect(entry.lineMap).toStrictEqual([1]);
   });
 
   it.each([

@@ -29,9 +29,11 @@ export type SystemAgentOperation =
   | { kind: "channel-setup"; channel: string }
   | { kind: "skills-setup" }
   | { kind: "search-setup" }
+  | { kind: "gateway-config-setup" }
+  | { kind: "memory-import" }
   | {
       kind: "open-setup";
-      target: "guided" | "classic" | "channels" | "search";
+      target: "guided" | "classic" | "channels" | "search" | "gateway";
       channel?: string;
     }
   | { kind: "gateway-status" }

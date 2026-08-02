@@ -2,18 +2,15 @@ import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
 import { t } from "../../../i18n/index.ts";
 import type { MessageContentItem } from "../../../lib/chat/chat-types.ts";
 import { readTranscriptMediaEntries } from "../../../lib/chat/message-extract.ts";
-import { getMediaFileExtension } from "../../../lib/media-file-extension.ts";
+import {
+  getMediaFileExtension,
+  hasVideoMediaFileExtension,
+} from "../../../lib/media-file-extension.ts";
 
 export type PairingQrExpiryNotice = {
   title: string;
   reason: string;
 };
-type PairingQrExpiryRefreshTimer = {
-  expiresAtMs: number;
-  onRequestUpdate: () => void;
-  timer: ReturnType<typeof setTimeout>;
-};
-const pairingQrExpiryRefreshTimers = new Map<string, PairingQrExpiryRefreshTimer>();
 
 export type ImageBlock = {
   url: string;
@@ -45,100 +42,275 @@ export type RenderableImageBlock = ImageBlock & {
 
 export type AttachmentItem = Extract<MessageContentItem, { type: "attachment" }>;
 
-const managedImageBlobUrlResolvedCache = new Map<string, string>();
-const managedImageBlobUrlMissCache = new Map<string, number>();
-const managedImageBlobUrlRetainCounts = new Map<string, number>();
+type ChatMediaResourceKind =
+  | "assistant-attachment"
+  | "managed-image"
+  | "managed-media"
+  | "pairing-qr";
+
+export type ChatMediaResource<Value> = {
+  kind: ChatMediaResourceKind;
+  cacheKey: string;
+  value: Value | undefined;
+  pending: Promise<Value | null> | undefined;
+  subscribers: Set<() => void>;
+  retryAttempted: boolean;
+  unavailableAt: number | undefined;
+  abortController: AbortController | undefined;
+  refresh: { at: number; timer: ReturnType<typeof setTimeout> } | undefined;
+};
+
+type ChatMediaSubscriber = {
+  resources: Map<string, ChatMediaResource<unknown>>;
+  children: Set<() => void>;
+  owner?: () => void;
+};
+
+type ManagedImageBlobUrl = {
+  url: string;
+  retainCount: number;
+};
+
+const chatMediaResources = new Map<string, ChatMediaResource<unknown>>();
+const chatMediaSubscribers = new Map<() => void, ChatMediaSubscriber>();
+const managedImageBlobUrls = new Map<string, ManagedImageBlobUrl>();
 const MANAGED_IMAGE_BLOB_URL_CACHE_MAX_ENTRIES = 64;
-const MANAGED_IMAGE_BLOB_URL_MISS_RETRY_MS = 5_000;
+
+function chatMediaResourceKey(kind: ChatMediaResourceKind, cacheKey: string): string {
+  return `${kind}\0${cacheKey}`;
+}
+
+function getChatMediaSubscriber(subscriber: () => void): ChatMediaSubscriber {
+  let state = chatMediaSubscribers.get(subscriber);
+  if (!state) {
+    state = { resources: new Map(), children: new Set() };
+    chatMediaSubscribers.set(subscriber, state);
+  }
+  return state;
+}
+
+function pruneChatMediaSubscriber(subscriber: () => void, state: ChatMediaSubscriber): void {
+  if (!state.owner && state.children.size === 0 && state.resources.size === 0) {
+    chatMediaSubscribers.delete(subscriber);
+  }
+}
+
+function detachChatMediaResourceSubscriber(
+  resource: ChatMediaResource<unknown>,
+  subscriber: () => void,
+) {
+  resource.subscribers.delete(subscriber);
+  if (resource.subscribers.size > 0) {
+    return;
+  }
+  if (resource.refresh) {
+    clearTimeout(resource.refresh.timer);
+    resource.refresh = undefined;
+  }
+  const resourceKey = chatMediaResourceKey(resource.kind, resource.cacheKey);
+  if (chatMediaResources.get(resourceKey) === resource) {
+    chatMediaResources.delete(resourceKey);
+  }
+  resource.abortController?.abort();
+  resource.abortController = undefined;
+}
+
+export function observeChatMediaResource<Value>(
+  kind: ChatMediaResourceKind,
+  cacheKey: string,
+  subscriber?: () => void,
+  subscriberScope = cacheKey,
+): ChatMediaResource<Value> {
+  const resourceKey = chatMediaResourceKey(kind, cacheKey);
+  let resource = chatMediaResources.get(resourceKey) as ChatMediaResource<Value> | undefined;
+  if (!resource) {
+    resource = {
+      kind,
+      cacheKey,
+      value: undefined,
+      pending: undefined,
+      subscribers: new Set(),
+      retryAttempted: false,
+      unavailableAt: undefined,
+      abortController: undefined,
+      refresh: undefined,
+    };
+    chatMediaResources.set(resourceKey, resource as ChatMediaResource<unknown>);
+  }
+  if (subscriber) {
+    const subscriptions = getChatMediaSubscriber(subscriber).resources;
+    const subscriptionKey = chatMediaResourceKey(kind, subscriberScope);
+    const previous = subscriptions.get(subscriptionKey);
+    if (previous && previous !== resource) {
+      detachChatMediaResourceSubscriber(previous, subscriber);
+    }
+    subscriptions.set(subscriptionKey, resource as ChatMediaResource<unknown>);
+    resource.subscribers.add(subscriber);
+  }
+  return resource;
+}
+
+export function isChatMediaResourceCurrent<Value>(resource: ChatMediaResource<Value>): boolean {
+  return (
+    chatMediaResources.get(chatMediaResourceKey(resource.kind, resource.cacheKey)) === resource
+  );
+}
+
+export function notifyChatMediaResourceSubscribers<Value>(resource: ChatMediaResource<Value>) {
+  if (!isChatMediaResourceCurrent(resource)) {
+    return;
+  }
+  // A pane can change its subscription while another pane is being notified.
+  // Snapshot the current generation so a replacement never receives stale work.
+  for (const subscriber of Array.from(resource.subscribers)) {
+    if (resource.subscribers.has(subscriber)) {
+      subscriber();
+    }
+  }
+}
+
+export function scheduleChatMediaResourceRefresh<Value>(
+  resource: ChatMediaResource<Value>,
+  refreshAt: number | undefined,
+  onRefresh: () => void,
+) {
+  if (resource.refresh?.at === refreshAt) {
+    return;
+  }
+  if (resource.refresh) {
+    clearTimeout(resource.refresh.timer);
+    resource.refresh = undefined;
+  }
+  if (refreshAt === undefined || resource.subscribers.size === 0) {
+    return;
+  }
+  const refresh = {
+    at: refreshAt,
+    timer: setTimeout(
+      () => {
+        if (!isChatMediaResourceCurrent(resource) || resource.refresh !== refresh) {
+          return;
+        }
+        resource.refresh = undefined;
+        onRefresh();
+      },
+      Math.max(0, refreshAt - Date.now()),
+    ),
+  };
+  resource.refresh = refresh;
+}
+
+export function observeChatMediaResourceSubscriber(owner: () => void, subscriber: () => void) {
+  const state = getChatMediaSubscriber(subscriber);
+  if (state.owner === owner) {
+    return;
+  }
+  if (state.owner) {
+    const previousOwner = state.owner;
+    const previous = chatMediaSubscribers.get(previousOwner);
+    if (previous) {
+      previous.children.delete(subscriber);
+      pruneChatMediaSubscriber(previousOwner, previous);
+    }
+  }
+  getChatMediaSubscriber(owner).children.add(subscriber);
+  state.owner = owner;
+}
+
+export function releaseChatMediaResourceSubscriber(subscriber: (() => void) | undefined) {
+  const state = subscriber && chatMediaSubscribers.get(subscriber);
+  if (!subscriber || !state) {
+    return;
+  }
+  chatMediaSubscribers.delete(subscriber);
+  for (const child of state.children) {
+    releaseChatMediaResourceSubscriber(child);
+  }
+  if (state.owner) {
+    const owner = chatMediaSubscribers.get(state.owner);
+    if (owner) {
+      owner.children.delete(subscriber);
+      pruneChatMediaSubscriber(state.owner, owner);
+    }
+  }
+  for (const resource of new Set(state.resources.values())) {
+    detachChatMediaResourceSubscriber(resource, subscriber);
+  }
+}
+
+export function trimManagedImageMissResources() {
+  const misses = [...chatMediaResources.entries()].filter(
+    ([, resource]) =>
+      resource.kind === "managed-image" &&
+      resource.value === null &&
+      resource.subscribers.size === 0 &&
+      !resource.pending,
+  );
+  for (const [resourceKey] of misses.slice(0, -MANAGED_IMAGE_BLOB_URL_CACHE_MAX_ENTRIES)) {
+    chatMediaResources.delete(resourceKey);
+  }
+}
 
 export function readManagedImageBlobUrl(cacheKey: string): string | undefined {
-  const cached = managedImageBlobUrlResolvedCache.get(cacheKey);
+  const cached = managedImageBlobUrls.get(cacheKey);
   if (!cached) {
     return undefined;
   }
-  managedImageBlobUrlResolvedCache.delete(cacheKey);
-  managedImageBlobUrlResolvedCache.set(cacheKey, cached);
-  return cached;
+  managedImageBlobUrls.delete(cacheKey);
+  managedImageBlobUrls.set(cacheKey, cached);
+  return cached.url;
 }
 
 function trimManagedImageBlobUrlCache() {
-  while (managedImageBlobUrlResolvedCache.size > MANAGED_IMAGE_BLOB_URL_CACHE_MAX_ENTRIES) {
-    const evictable = [...managedImageBlobUrlResolvedCache.keys()].find(
-      (cacheKey) => (managedImageBlobUrlRetainCounts.get(cacheKey) ?? 0) === 0,
-    );
+  while (managedImageBlobUrls.size > MANAGED_IMAGE_BLOB_URL_CACHE_MAX_ENTRIES) {
+    const evictable = [...managedImageBlobUrls].find(([, cached]) => cached.retainCount === 0);
     if (!evictable) {
       return;
     }
-    const evicted = managedImageBlobUrlResolvedCache.get(evictable);
-    managedImageBlobUrlResolvedCache.delete(evictable);
-    if (evicted) {
-      URL.revokeObjectURL(evicted);
+    const [cacheKey, cached] = evictable;
+    managedImageBlobUrls.delete(cacheKey);
+    const resourceKey = chatMediaResourceKey("managed-image", cacheKey);
+    const resource = chatMediaResources.get(resourceKey);
+    // Subscriber-free successful resources share their blob's LRU lifetime.
+    // The promise finalizer may still be queued, but a matching value is settled.
+    if (resource?.value === cached.url && resource.subscribers.size === 0) {
+      chatMediaResources.delete(resourceKey);
     }
+    URL.revokeObjectURL(cached.url);
   }
 }
 
 export function retainManagedImageBlobUrl(cacheKey: string): (() => void) | undefined {
-  if (!managedImageBlobUrlResolvedCache.has(cacheKey)) {
+  const cached = managedImageBlobUrls.get(cacheKey);
+  if (!cached) {
     return undefined;
   }
-  managedImageBlobUrlRetainCounts.set(
-    cacheKey,
-    (managedImageBlobUrlRetainCounts.get(cacheKey) ?? 0) + 1,
-  );
+  cached.retainCount += 1;
   let released = false;
   return () => {
     if (released) {
       return;
     }
     released = true;
-    const remaining = (managedImageBlobUrlRetainCounts.get(cacheKey) ?? 1) - 1;
-    if (remaining <= 0) {
-      managedImageBlobUrlRetainCounts.delete(cacheKey);
-    } else {
-      managedImageBlobUrlRetainCounts.set(cacheKey, remaining);
+    const current = managedImageBlobUrls.get(cacheKey);
+    if (current && current.retainCount > 0) {
+      current.retainCount -= 1;
     }
     trimManagedImageBlobUrlCache();
   };
 }
 
 export function cacheManagedImageBlobUrl(cacheKey: string, blobUrl: string) {
-  const previous = managedImageBlobUrlResolvedCache.get(cacheKey);
-  managedImageBlobUrlResolvedCache.delete(cacheKey);
-  managedImageBlobUrlResolvedCache.set(cacheKey, blobUrl);
-  managedImageBlobUrlMissCache.delete(cacheKey);
-  if (previous && previous !== blobUrl) {
-    URL.revokeObjectURL(previous);
+  const previous = managedImageBlobUrls.get(cacheKey);
+  managedImageBlobUrls.delete(cacheKey);
+  managedImageBlobUrls.set(cacheKey, { url: blobUrl, retainCount: previous?.retainCount ?? 0 });
+  if (previous && previous.url !== blobUrl) {
+    URL.revokeObjectURL(previous.url);
   }
 
   // Blob URLs retain browser-managed image data. Keep recent previews reusable,
   // but protect an image while its lightbox still uses that object URL.
   trimManagedImageBlobUrlCache();
-}
-
-export function hasRecentManagedImageBlobUrlMiss(cacheKey: string): boolean {
-  const missAt = managedImageBlobUrlMissCache.get(cacheKey);
-  if (missAt === undefined) {
-    return false;
-  }
-  if (Date.now() - missAt >= MANAGED_IMAGE_BLOB_URL_MISS_RETRY_MS) {
-    managedImageBlobUrlMissCache.delete(cacheKey);
-    return false;
-  }
-  managedImageBlobUrlMissCache.delete(cacheKey);
-  managedImageBlobUrlMissCache.set(cacheKey, missAt);
-  return true;
-}
-
-export function cacheManagedImageBlobUrlMiss(cacheKey: string) {
-  managedImageBlobUrlMissCache.delete(cacheKey);
-  managedImageBlobUrlMissCache.set(cacheKey, Date.now());
-  while (managedImageBlobUrlMissCache.size > MANAGED_IMAGE_BLOB_URL_CACHE_MAX_ENTRIES) {
-    const oldest = managedImageBlobUrlMissCache.keys().next();
-    if (oldest.done) {
-      break;
-    }
-    managedImageBlobUrlMissCache.delete(oldest.value);
-  }
 }
 
 function appendImageBlock(images: ImageBlock[], block: ImageBlock) {
@@ -185,8 +357,7 @@ function isVideoTranscriptMediaPath(path: string, mediaType: unknown): boolean {
   if (typeof mediaType === "string" && mediaType.trim().toLowerCase().startsWith("video/")) {
     return true;
   }
-  const ext = getMediaFileExtension(path);
-  return ext !== undefined && ["m4v", "mov", "mp4", "webm"].includes(ext);
+  return hasVideoMediaFileExtension(path);
 }
 
 function labelForMediaPath(mediaPath: string): string {
@@ -357,41 +528,30 @@ function resolveNearestFuturePairingQrExpiresAtMs(
   return nearestExpiresAtMs;
 }
 
-function clearPairingQrExpiryRefreshTimer(messageKey: string) {
-  const existing = pairingQrExpiryRefreshTimers.get(messageKey);
-  if (!existing) {
-    return;
-  }
-  clearTimeout(existing.timer);
-  pairingQrExpiryRefreshTimers.delete(messageKey);
-}
-
 export function schedulePairingQrExpiryRefresh(
   messageKey: string,
   message: unknown,
   onRequestUpdate: (() => void) | undefined,
 ) {
-  const nowMs = Date.now();
-  const expiresAtMs = resolveNearestFuturePairingQrExpiresAtMs(message, nowMs);
-  const existing = pairingQrExpiryRefreshTimers.get(messageKey);
-  if (!expiresAtMs || !onRequestUpdate) {
-    if (existing) {
-      clearPairingQrExpiryRefreshTimer(messageKey);
+  if (!onRequestUpdate) {
+    return;
+  }
+  const refreshAt = resolveNearestFuturePairingQrExpiresAtMs(message);
+  if (refreshAt === undefined) {
+    const subscriber = chatMediaSubscribers.get(onRequestUpdate);
+    const resourceKey = chatMediaResourceKey("pairing-qr", messageKey);
+    const resource = subscriber?.resources.get(resourceKey);
+    if (subscriber && resource) {
+      subscriber.resources.delete(resourceKey);
+      detachChatMediaResourceSubscriber(resource, onRequestUpdate);
+      pruneChatMediaSubscriber(onRequestUpdate, subscriber);
     }
     return;
   }
-  if (existing?.expiresAtMs === expiresAtMs && existing.onRequestUpdate === onRequestUpdate) {
-    return;
-  }
-  clearPairingQrExpiryRefreshTimer(messageKey);
-  const timer = setTimeout(
-    () => {
-      pairingQrExpiryRefreshTimers.delete(messageKey);
-      onRequestUpdate();
-    },
-    Math.max(0, expiresAtMs - nowMs),
+  const resource = observeChatMediaResource<void>("pairing-qr", messageKey, onRequestUpdate);
+  scheduleChatMediaResourceRefresh(resource, refreshAt, () =>
+    notifyChatMediaResourceSubscribers(resource),
   );
-  pairingQrExpiryRefreshTimers.set(messageKey, { expiresAtMs, onRequestUpdate, timer });
 }
 
 export function extractTranscriptAttachments(message: unknown): AttachmentItem[] {

@@ -19,6 +19,8 @@ export type OpenClawPluginNodeHostCommandContext = {
   sendNodeEvent(event: string, payload: unknown): Promise<unknown>;
   /** Agent session that owns this invocation, when the caller supplied one. */
   sessionKey?: string;
+  /** Aborts when the Gateway cancels this specific node-host invocation. */
+  signal?: AbortSignal;
 };
 
 type OpenClawPluginNodeHostCommandBase = {

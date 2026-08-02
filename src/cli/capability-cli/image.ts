@@ -64,6 +64,7 @@ async function runImageGenerate(params: {
   output?: string;
   timeoutMs?: number;
 }) {
+  requireProviderModelOverride(params.model);
   const cfg = await resolveLocalCapabilityRuntimeConfig({
     commandName: `infer ${params.capability}`,
     targetIds: getModelsCommandSecretTargetIds(),

@@ -9,13 +9,13 @@ import {
   collectOpenAICodexAuthProfileStoreIdMap,
   maybeMigrateAuthProfileJsonStoresToSqlite,
   maybeRepairOpenAICodexAuthConfig,
-  maybeRepairOpenAICodexAuthProfileStores,
 } from "../doctor-auth-flat-profiles.js";
 import { maybeRepairLegacyOAuthSidecarProfiles } from "../doctor-auth-oauth-sidecar.js";
 import {
   maybeRepairManagedNpmOpenClawPeerLinks,
   maybeRepairStaleManagedNpmBundledPlugins,
 } from "../doctor-plugin-registry.js";
+import { migrateLegacySkillWorkshopProposals } from "../doctor-skill-workshop-sqlite.js";
 import { maybeRepairGroupAllowFromFallback } from "./shared/allowfrom-fallback-migration.js";
 import { maybeRepairAllowlistPolicyAllowFrom } from "./shared/allowlist-policy-repair.js";
 import { maybeRepairBundledPluginLoadPaths } from "./shared/bundled-plugin-load-paths.js";
@@ -39,6 +39,7 @@ import { maybeRepairLegacyToolsBySenderKeys } from "./shared/legacy-tools-by-sen
 import { repairMissingConfiguredPluginInstalls } from "./shared/missing-configured-plugin-install.js";
 import { maybeRepairOpenPolicyAllowFrom } from "./shared/open-policy-allowfrom.js";
 import { cleanupLegacyPluginDependencyState } from "./shared/plugin-dependency-cleanup.js";
+import { repairStaleAgentModelRefs } from "./shared/stale-agent-model-ref-repair.js";
 import { maybeRepairStaleConfiguredAuthOrders } from "./shared/stale-auth-order.js";
 import { repairStaleOAuthProfileShadows } from "./shared/stale-oauth-profile-shadows.js";
 import { maybeRepairStalePluginConfig } from "./shared/stale-plugin-config.js";
@@ -194,7 +195,15 @@ export async function runDoctorRepairSequence(params: {
   const failedPluginIds = missingConfiguredPluginInstallRepair.failedPluginIds ?? [];
   const hasUnscopedInstallRepairWarnings =
     missingConfiguredPluginInstallRepair.warnings.length > 0 && failedPluginIds.length === 0;
-  if (!isUpdatePackageSwapInProgress(env) && !hasUnscopedInstallRepairWarnings) {
+  const packageSwapInProgress = isUpdatePackageSwapInProgress(env);
+  const pluginInstallRepairConverged =
+    !packageSwapInProgress && failedPluginIds.length === 0 && !hasUnscopedInstallRepairWarnings;
+  if (pluginInstallRepairConverged) {
+    // Provider availability is authoritative only after configured plugin repair
+    // converges. Preserve model refs while package installation still needs a retry.
+    applyMutation(repairStaleAgentModelRefs(state.candidate, { env }));
+  }
+  if (!packageSwapInProgress && !hasUnscopedInstallRepairWarnings) {
     applyMutation(
       maybeRepairStalePluginConfig(state.candidate, env, {
         preservePluginIds: failedPluginIds,
@@ -219,6 +228,7 @@ export async function runDoctorRepairSequence(params: {
   appendNotes(warningNotes, emptyAllowlistWarnings);
 
   await applyRepairStages([maybeRepairLegacyToolsBySenderKeys, maybeRepairExecSafeBinProfiles]);
+  appendRepairNotes(await migrateLegacySkillWorkshopProposals({ config: state.candidate, env }));
   appendRepairNotes(await cleanupLegacyPluginDependencyState({ env }));
   appendRepairNotes(
     migrateLegacyOnboardingRecommendationsScope({
@@ -233,11 +243,6 @@ export async function runDoctorRepairSequence(params: {
     env,
   });
   appendRepairNotes(legacyOAuthSidecarRepair);
-  const openAIAuthProviderRepair = await maybeRepairOpenAICodexAuthProfileStores({
-    cfg: state.candidate,
-    env,
-  });
-  appendRepairNotes(openAIAuthProviderRepair);
   const staleOAuthShadowRepair = await repairStaleOAuthProfileShadows({
     cfg: state.candidate,
     env,
@@ -266,7 +271,6 @@ export async function runDoctorRepairSequence(params: {
   applyMutation(staleAuthOrderRepair);
   const authProfilesRepaired =
     legacyOAuthSidecarRepair.changes.length > 0 ||
-    openAIAuthProviderRepair.changes.length > 0 ||
     staleOAuthShadowRepair.changes.length > 0 ||
     authProfileSqliteMigration.changes.length > 0;
 

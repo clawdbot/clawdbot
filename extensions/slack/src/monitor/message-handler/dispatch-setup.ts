@@ -13,6 +13,7 @@ import {
   resolveChannelStreamingNativeTransport,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
@@ -269,7 +270,15 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
       messageTs,
       isThreadReply,
     });
+  const hookRunner = getGlobalHookRunner();
+  const modifyingHooksRegistered =
+    (hookRunner?.hasHooks("reply_payload_sending") ?? false) ||
+    (hookRunner?.hasHooks("message_sending") ?? false);
+  // Portable previews and native progress cards exist before outbound modifiers accept the
+  // payload. Native answer streaming stays enabled because it begins after both hook gates.
+  const allowPreHookProviderStreaming = !modifyingHooksRegistered;
   const previewStreamingEnabled =
+    allowPreHookProviderStreaming &&
     !sourceRepliesAreToolOnly &&
     shouldEnableSlackPreviewStreaming({
       mode: slackStreaming.mode,
@@ -279,6 +288,7 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
   );
   const streamingEnabled =
     !sourceRepliesAreToolOnly &&
+    (allowPreHookProviderStreaming || slackStreaming.mode !== "progress") &&
     isSlackStreamingEnabled({
       mode: slackStreaming.mode,
       nativeStreaming: slackStreaming.nativeStreaming,

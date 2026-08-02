@@ -1,14 +1,18 @@
 import {
   buildChannelInboundEventContext,
   resolveChannelInboundRouteEnvelope,
-  toInboundMediaFacts,
+  toInboundMediaFactsWithMetadata,
 } from "openclaw/plugin-sdk/channel-inbound";
 // Qa Channel plugin module implements inbound behavior.
 import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { resolveNativeCommandSessionTargets } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { saveMediaBuffer, saveMediaSource } from "openclaw/plugin-sdk/media-runtime";
+import {
+  getAgentScopedMediaLocalRoots,
+  saveMediaBuffer,
+  saveMediaSource,
+} from "openclaw/plugin-sdk/media-runtime";
 import {
   sanitizeQaBusToolCallArguments,
   type QaBusToolCall,
@@ -20,6 +24,7 @@ import {
   sendQaBusMessage,
   type QaBusMessage,
 } from "./bus-client.js";
+import { sendQaChannelMediaBatch } from "./outbound.js";
 import { getQaChannelRuntime } from "./runtime.js";
 import type { CoreConfig, ResolvedQaChannelAccount } from "./types.js";
 
@@ -86,7 +91,7 @@ async function resolveQaInboundMediaFacts(attachments: QaBusMessage["attachments
       });
     }
   }
-  return toInboundMediaFacts(mediaList);
+  return await toInboundMediaFactsWithMetadata(mediaList);
 }
 
 function resolveQaGroupConfig(params: {
@@ -407,10 +412,43 @@ export async function handleQaInbound(params: {
     ctxPayload,
     delivery: {
       deliver: async (payload, info) => {
-        const text =
-          payload && typeof payload === "object" && "text" in payload
-            ? ((payload as { text?: string }).text ?? "")
-            : "";
+        const reply =
+          payload && typeof payload === "object"
+            ? (payload as { text?: string; mediaUrl?: string; mediaUrls?: string[] })
+            : undefined;
+        const text = reply?.text ?? "";
+        const mediaUrls = Array.from(
+          new Set(
+            [reply?.mediaUrl, ...(reply?.mediaUrls ?? [])].filter(
+              (mediaUrl): mediaUrl is string =>
+                typeof mediaUrl === "string" && mediaUrl.trim().length > 0,
+            ),
+          ),
+        );
+        if (mediaUrls.length > 0) {
+          if (info?.kind && info.kind !== "final") {
+            if (text.trim()) {
+              await preview.update(text);
+            }
+            return;
+          }
+          // A streamed preview is never the durable generated-image delivery.
+          await preview.clear();
+          await sendQaChannelMediaBatch({
+            cfg: params.config,
+            accountId: params.account.accountId,
+            to: target,
+            text,
+            mediaUrls,
+            mediaLocalRoots: getAgentScopedMediaLocalRoots(
+              params.config as OpenClawConfig,
+              route.agentId,
+            ),
+            threadId: inbound.threadId,
+            replyToId: inbound.id,
+          });
+          return;
+        }
         if (!text.trim()) {
           return;
         }

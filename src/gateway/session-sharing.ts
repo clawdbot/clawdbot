@@ -32,7 +32,7 @@ import type {
   GatewaySessionStoreDiscoveryCache,
 } from "./session-utils-store-lookup.js";
 import {
-  resolveFreshestSessionStoreMatchFromStoreKeys,
+  resolveCanonicalSessionStoreMatchFromStoreKeys,
   resolveGatewaySessionStoreTargetWithStore,
 } from "./session-utils.js";
 
@@ -117,7 +117,7 @@ export function resolveSessionSharingTarget(params: {
     ...(params.storeCache ? { storeCache: params.storeCache } : {}),
     ...(params.targetDiscoveryCache ? { targetDiscoveryCache: params.targetDiscoveryCache } : {}),
   });
-  const match = resolveFreshestSessionStoreMatchFromStoreKeys(target.store, target.storeKeys);
+  const match = resolveCanonicalSessionStoreMatchFromStoreKeys(target.store, target.storeKeys);
   return match
     ? {
         agentId: target.agentId,
@@ -702,19 +702,16 @@ export function canReceiveSessionEvent(params: {
   });
 }
 
-export function filterDraftSessionsForClient(params: {
+export function createSessionListEntryFilter(params: {
   client: GatewayClient | null;
-  store: Record<string, SessionEntry>;
-}): Record<string, SessionEntry> {
+}): ((sessionKey: string, entry: SessionEntry) => boolean) | undefined {
   const identity = gatewayClientSessionCreator(params.client);
   if (isGatewayAdmin(params.client) || !identity) {
-    return params.store;
+    return undefined;
   }
-  return Object.fromEntries(
-    Object.entries(params.store).filter(([sessionKey, entry]) => {
-      const owner = entry.createdActor?.id === identity.id;
-      const incognito = entry.incognito === true || isIncognitoSessionKey(sessionKey);
-      return !incognito && (owner || resolveSessionVisibility(entry) !== "draft");
-    }),
-  );
+  return (sessionKey, entry) => {
+    const owner = entry.createdActor?.id === identity.id;
+    const incognito = entry.incognito === true || isIncognitoSessionKey(sessionKey);
+    return !incognito && (owner || resolveSessionVisibility(entry) !== "draft");
+  };
 }

@@ -6,6 +6,7 @@ import { LiveSessionModelSwitchError } from "../../live-model-switch-error.js";
 import { shouldSwitchToLiveModel, clearLiveModelSwitchPending } from "../../live-model-switch.js";
 import type { normalizeUsage } from "../../usage.js";
 import { log } from "../logger.js";
+import { getEmbeddedSessionPromptState } from "../session-prompt-state.js";
 import type { EmbeddedAgentRunResult, TraceAttempt } from "../types.js";
 import type { createUsageAccumulator } from "../usage-accumulator.js";
 import type { prepareAndDispatchEmbeddedRunAttempt } from "./attempt-dispatch-preparation.js";
@@ -176,6 +177,7 @@ export async function recoverEmbeddedRunAttempt(input: {
     contextTokenBudget: runtime.contextTokenBudget,
     genericCompactionRecoveryAllowed: preparedRuntime.genericCompactionRecoveryAllowed,
     attempt,
+    toolResultPromptProjectionState: getEmbeddedSessionPromptState(params.sessionId).toolResults,
     runtimeAuthPlan: runtimePlan.auth,
     resolvedSessionKey: runInput.resolvedSessionKey,
     sessionAgentId: input.sessionAgentId,

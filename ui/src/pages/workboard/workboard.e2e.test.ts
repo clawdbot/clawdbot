@@ -77,6 +77,35 @@ function workboardField(scope: Page | Locator, label: string) {
   });
 }
 
+type UpdatingElement = HTMLElement & {
+  requestUpdate?: () => void;
+  updateComplete: Promise<boolean>;
+};
+
+async function waitForWorkboardRender(page: Page, requestUpdate = false): Promise<void> {
+  await page.locator("openclaw-app").evaluate(async (element, shouldRequestUpdate) => {
+    const app = element as UpdatingElement;
+    if (shouldRequestUpdate) {
+      app.requestUpdate?.();
+    }
+    await app.updateComplete;
+  }, requestUpdate);
+}
+
+async function waitForWorkboardSelectValue(control: Locator, value: string): Promise<void> {
+  // Web Awesome updates `value` before its deferred `change` event. Wait for
+  // that event's update boundary and the parent render that consumes it.
+  await control.evaluate(async (element) => {
+    await (element as UpdatingElement).updateComplete;
+  });
+  await waitForWorkboardRender(control.page());
+  await expect
+    .poll(() =>
+      control.evaluate((select) => (select as HTMLElement & { value?: string }).value ?? ""),
+    )
+    .toBe(value);
+}
+
 async function chooseWorkboardSelectOption(
   scope: Page | Locator,
   label: string,
@@ -103,6 +132,7 @@ async function chooseWorkboardSelectFieldOption(
     (select as HTMLElement & { value: string }).value = String(value);
     select.dispatchEvent(new Event("change", { bubbles: true }));
   }, optionValue);
+  await waitForWorkboardSelectValue(control, optionValue ?? "");
 }
 
 async function setWorkboardDraftField(
@@ -112,6 +142,9 @@ async function setWorkboardDraftField(
 ): Promise<void> {
   const input = scope.getByLabel(label);
   await input.fill(value);
+  // Prove the delegated input handler reached canonical draft state. A DOM-only
+  // value check can pass even when the next parent render would restore stale data.
+  await waitForWorkboardRender(input.page(), true);
   await expect.poll(() => input.inputValue()).toBe(value);
 }
 
@@ -408,38 +441,21 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
 
       await writable.page.keyboard.press("End");
       await writable.page.keyboard.press("Enter");
-      await expect
-        .poll(() =>
-          prioritySelect.evaluate(
-            (select) => (select as HTMLElement & { value?: string }).value ?? "",
-          ),
-        )
-        .toBe("urgent");
+      await waitForWorkboardSelectValue(prioritySelect, "urgent");
       await expect.poll(() => priorityCombobox.getAttribute("aria-expanded")).toBe("false");
 
       await priorityCombobox.focus();
       await writable.page.keyboard.press("ArrowDown");
       await writable.page.keyboard.press("ArrowUp");
       await writable.page.keyboard.press("Enter");
-      await expect
-        .poll(() =>
-          prioritySelect.evaluate(
-            (select) => (select as HTMLElement & { value?: string }).value ?? "",
-          ),
-        )
-        .toBe("high");
+      await waitForWorkboardSelectValue(prioritySelect, "high");
+      await expect.poll(() => priorityCombobox.getAttribute("aria-expanded")).toBe("false");
 
       await priorityCombobox.focus();
       await writable.page.keyboard.press("ArrowDown");
       await writable.page.keyboard.press("Home");
       await writable.page.keyboard.press("Enter");
-      await expect
-        .poll(() =>
-          prioritySelect.evaluate(
-            (select) => (select as HTMLElement & { value?: string }).value ?? "",
-          ),
-        )
-        .toBe("all");
+      await waitForWorkboardSelectValue(prioritySelect, "all");
       await expect.poll(() => priorityCombobox.getAttribute("aria-expanded")).toBe("false");
 
       await writableGateway.deferNext("workboard.cards.create");

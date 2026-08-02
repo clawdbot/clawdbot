@@ -101,6 +101,7 @@
   "cli-runtime",
   "cli-backend",
   "codex-mcp-projection",
+  "codex-session-transcript-runtime",
   "agent-harness-task-runtime",
   "agent-harness",
   "agent-harness-exec-review-runtime",

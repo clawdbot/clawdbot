@@ -14,8 +14,8 @@ enum CommandResolver {
         return nil
     }
 
-    static func runtimeResolution(searchPaths: [String]?) -> Result<RuntimeResolution, RuntimeResolutionError> {
-        RuntimeLocator.resolve(searchPaths: searchPaths ?? self.preferredPaths())
+    static func runtimeResolution(searchPaths: [String]?) async -> Result<RuntimeResolution, RuntimeResolutionError> {
+        await RuntimeLocator.resolve(searchPaths: searchPaths ?? self.preferredPaths())
     }
 
     static func makeRuntimeCommand(
@@ -260,7 +260,7 @@ enum CommandResolver {
         defaults: UserDefaults = .standard,
         configRoot: [String: Any]? = nil,
         searchPaths: [String]? = nil,
-        projectRoot: URL? = nil) -> [String]
+        projectRoot: URL? = nil) async -> [String]
     {
         let settings = self.connectionSettings(defaults: defaults, configRoot: configRoot)
         if settings.mode == .remote, settings.transport == .ssh {
@@ -282,7 +282,7 @@ enum CommandResolver {
             return [openclawPath, subcommand] + extraArgs
         }
 
-        let runtimeResult = self.runtimeResolution(searchPaths: searchPaths)
+        let runtimeResult = await self.runtimeResolution(searchPaths: searchPaths)
         switch runtimeResult {
         case let .success(runtime):
             if let entry = gatewayEntrypoint(in: root) {
@@ -318,9 +318,9 @@ enum CommandResolver {
         defaults: UserDefaults = .standard,
         configRoot: [String: Any]? = nil,
         searchPaths: [String]? = nil,
-        projectRoot: URL? = nil) -> [String]
+        projectRoot: URL? = nil) async -> [String]
     {
-        self.openclawNodeCommand(
+        await self.openclawNodeCommand(
             subcommand: subcommand,
             extraArgs: extraArgs,
             defaults: defaults,

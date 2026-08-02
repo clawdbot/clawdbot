@@ -35,11 +35,32 @@ const MANAGED_NPM_PROJECT_REBUILD_ARTIFACTS = [
   "npm-shrinkwrap.json",
 ] as const;
 
-export function isNpmAliasOverrideComparatorError(result: {
+type NpmManagedOverrideCompatibility = {
+  npmAliases: boolean;
+  pnpmParentChildSelectors: boolean;
+};
+
+export function classifyNpmManagedOverrideCompatibilityError(result: {
   stdout: string;
   stderr: string;
-}): boolean {
-  return `${result.stderr}\n${result.stdout}`.includes("Invalid comparator: npm:");
+}): NpmManagedOverrideCompatibility | undefined {
+  const output = `${result.stderr}\n${result.stdout}`;
+  const selectorError =
+    output.includes("EINVALIDTAGNAME") ||
+    output.includes("EINVALIDPACKAGENAME") ||
+    output.includes("Override without name:");
+  const selectorFragments = [
+    ...output.matchAll(/"([^"]+)"/gu),
+    ...output.matchAll(/Override without name: ([^\r\n]+)/gu),
+  ].flatMap((match) => match.slice(1));
+  const compatibility = {
+    npmAliases: output.includes("Invalid comparator: npm:"),
+    pnpmParentChildSelectors:
+      selectorError && selectorFragments.some((fragment) => /[^ |@]>/u.test(fragment)),
+  };
+  return compatibility.npmAliases || compatibility.pnpmParentChildSelectors
+    ? compatibility
+    : undefined;
 }
 
 export async function rollbackManagedNpmPluginInstall(params: {

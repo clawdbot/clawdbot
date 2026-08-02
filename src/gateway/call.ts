@@ -14,12 +14,16 @@ import {
   MIN_CLIENT_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
 } from "../../packages/gateway-protocol/src/version.js";
-import { readGatewayDispatchConfig } from "../config/gateway-dispatch-config.js";
+import {
+  readGatewayDispatchConfig,
+  readGatewayDispatchConfigWithShellEnvFallback,
+} from "../config/gateway-dispatch-config.js";
 import {
   resolveConfigPath as resolveConfigPathFromPaths,
   resolveGatewayPort as resolveGatewayPortFromPaths,
   resolveStateDir as resolveStateDirFromPaths,
 } from "../config/paths.js";
+import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createAbortError } from "../infra/abort-signal.js";
 import { loadDeviceAuthToken } from "../infra/device-auth-store.js";
@@ -45,6 +49,7 @@ import {
 } from "./connection-details.js";
 import { resolveGatewayCredentialsWithSecretInputs } from "./credentials-secret-inputs.js";
 import {
+  isGatewaySecretRefUnavailableError,
   trimToUndefined,
   type ExplicitGatewayAuth,
   type GatewayCredentialMode,
@@ -220,6 +225,14 @@ export type GatewayClientRequestErrorJson = {
   };
 };
 
+export type GatewayAuthErrorJson = {
+  ok: false;
+  error: {
+    type: "gateway_credentials_required";
+    message: string;
+  };
+};
+
 export type GatewayProbeConnectionDetails = GatewayConnectionDetails & {
   tlsFingerprint?: string;
   preauthHandshakeTimeoutMs?: number;
@@ -295,6 +308,24 @@ export function formatGatewayClientRequestErrorJson(
   };
 }
 
+/** Preserve machine-readable output for auth failures raised before transport startup. */
+export function formatGatewayAuthErrorJson(value: unknown): GatewayAuthErrorJson | null {
+  if (
+    !isGatewayCredentialsRequiredError(value) &&
+    !isGatewayExplicitAuthRequiredError(value) &&
+    !isGatewaySecretRefUnavailableError(value)
+  ) {
+    return null;
+  }
+  return {
+    ok: false,
+    error: {
+      type: "gateway_credentials_required",
+      message: value.message,
+    },
+  };
+}
+
 export function isGatewayTransportError(value: unknown): value is GatewayTransportError {
   if (value instanceof GatewayTransportError) {
     return true;
@@ -331,8 +362,10 @@ export function isGatewayExplicitAuthRequiredError(
 
 const defaultCreateGatewayClient = (opts: GatewayClientOptions) => new GatewayClient(opts);
 type GatewayRuntimeConfigLoader = () => OpenClawConfig | Promise<OpenClawConfig>;
+// Gateway dispatch owns only connection, auth, TLS, and shell-env resolution.
+// Loading the full runtime config here makes every RPC pay unrelated plugin/state startup costs.
 const defaultGetRuntimeConfig = async (): Promise<OpenClawConfig> =>
-  (await import("../config/io.js")).getRuntimeConfig();
+  getRuntimeConfigSnapshot() ?? (await readGatewayDispatchConfigWithShellEnvFallback());
 const defaultGatewayCallDeps: {
   createGatewayClient: typeof defaultCreateGatewayClient;
   getRuntimeConfig: GatewayRuntimeConfigLoader;

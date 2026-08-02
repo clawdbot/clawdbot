@@ -39,6 +39,7 @@ import {
 } from "./validation-issues.js";
 import { isBuiltInModelProviderOverlayId } from "./zod-schema.core.js";
 import { OpenClawSchema } from "./zod-schema.js";
+import { McpServerNameSchema, NodeHostMcpServerNameSchema } from "./zod-schema.root-support.js";
 
 function materializeBundledModelProviderOverlays(config: OpenClawConfig): OpenClawConfig {
   const providers = config.models?.providers;
@@ -77,6 +78,46 @@ function stripPreservedLegacyRootKeysForValidation(
     delete next[key];
   }
   return next;
+}
+
+function collectMcpServerNameIssues(raw: unknown): ConfigValidationIssue[] {
+  if (!isRecord(raw)) {
+    return [];
+  }
+  const mcp = isRecord(raw.mcp) ? raw.mcp : undefined;
+  const nodeHost = isRecord(raw.nodeHost) ? raw.nodeHost : undefined;
+  const nodeHostMcp = isRecord(nodeHost?.mcp) ? nodeHost.mcp : undefined;
+  const locations = [
+    {
+      path: ["mcp", "servers"] as const,
+      servers: isRecord(mcp?.servers) ? mcp.servers : undefined,
+      schema: McpServerNameSchema,
+    },
+    {
+      path: ["nodeHost", "mcp", "servers"] as const,
+      servers: isRecord(nodeHostMcp?.servers) ? nodeHostMcp.servers : undefined,
+      schema: NodeHostMcpServerNameSchema,
+    },
+  ];
+  const issues: ConfigValidationIssue[] = [];
+  for (const location of locations) {
+    for (const serverName of Object.keys(location.servers ?? {})) {
+      const result = location.schema.safeParse(serverName);
+      if (result.success) {
+        continue;
+      }
+      const pathSegments = [...location.path, serverName];
+      for (const issue of result.error.issues) {
+        issues.push(
+          withConfigIssuePath(
+            { path: pathSegments.join("."), message: issue.message },
+            pathSegments,
+          ),
+        );
+      }
+    }
+  }
+  return issues;
 }
 
 function isWorkspaceAvatarPath(value: string, workspaceDir: string): boolean {
@@ -261,10 +302,22 @@ export function validateConfigObjectRaw(
     raw,
     opts?.preservedLegacyRootKeys,
   );
+  // Generic config transforms can rebuild records before schema validation, so
+  // validate authored MCP names from the parsed source when it is available.
+  const normalizedMcpServerNameIssueKeys = new Set(
+    collectMcpServerNameIssues(normalizedRaw).map((issue) =>
+      JSON.stringify([issue.path, issue.message]),
+    ),
+  );
+  const mcpServerNameIssues = collectMcpServerNameIssues(opts?.sourceRaw).filter(
+    (issue) => !normalizedMcpServerNameIssueKeys.has(JSON.stringify([issue.path, issue.message])),
+  );
   const policyIssues = collectUnsupportedSecretRefPolicyIssues(normalizedRaw);
   const validated = OpenClawSchema.safeParse(normalizedRaw);
-  if (!validated.success) {
-    const schemaIssues = validated.error.issues.map(mapZodIssueToConfigIssue);
+  if (!validated.success || mcpServerNameIssues.length > 0) {
+    const schemaIssues = validated.success
+      ? mcpServerNameIssues
+      : [...mcpServerNameIssues, ...validated.error.issues.map(mapZodIssueToConfigIssue)];
     return {
       ok: false,
       issues: mergeUnsupportedMutableSecretRefIssues(policyIssues, schemaIssues),

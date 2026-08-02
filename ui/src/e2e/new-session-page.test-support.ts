@@ -6,6 +6,7 @@ import {
   controlUiSessionPath,
   controlUiSessionUrl,
   installMockGateway,
+  waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -146,32 +147,7 @@ export async function navigateInApp(page: Page, routeId: string, search = "") {
  * the successful active match and browser location to agree before leaving.
  */
 export async function waitForCommittedChatRoute(page: Page) {
-  await page.waitForURL((url) => url.pathname.startsWith("/chat/"));
-  await expect
-    .poll(() =>
-      page.evaluate(() => {
-        const app = document.querySelector("openclaw-app") as HTMLElement & {
-          runtime?: {
-            router: {
-              getState: () => {
-                status: string;
-                resolvedLocation: { pathname: string } | null;
-                matches: { routeId: string }[];
-                pendingMatches: unknown[];
-              };
-            };
-          };
-        };
-        const state = app.runtime?.router.getState();
-        return (
-          state?.status === "success" &&
-          state.matches[0]?.routeId === "chat" &&
-          state.resolvedLocation?.pathname === window.location.pathname &&
-          state.pendingMatches.length === 0
-        );
-      }),
-    )
-    .toBe(true);
+  await waitForControlUiRoute(page, { pathnamePrefix: "/chat/", routeId: "chat" });
 }
 
 export async function choosePackagesFolder(page: Page) {

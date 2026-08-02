@@ -4,6 +4,7 @@
 import { formatCliCommand } from "../cli/command-format.js";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
+import type { StatusSummary } from "../status/types.js";
 import { VERSION } from "../version.js";
 import type { HealthSummary } from "./health.js";
 import {
@@ -28,7 +29,6 @@ import {
   type StatusMemoryStateResolvers,
 } from "./status.command-sections.js";
 import type { MemoryPluginStatus, MemoryStatusSnapshot } from "./status.scan.shared.js";
-import type { StatusSummary } from "./status.types.js";
 
 /** Builds the default `openclaw status` overview rows from scan, health, memory, and session inputs. */
 export function buildStatusCommandOverviewRows(

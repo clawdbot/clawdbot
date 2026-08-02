@@ -838,6 +838,37 @@ class TalkModeManagerTest {
     }
 
   @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun browserOnlyRealtimeConfigStartsNativeTalkInsteadOfRelay() =
+    runTest {
+      val app = RuntimeEnvironment.getApplication()
+      shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
+      val packageManager = shadowOf(app.packageManager)
+      val speechService = ComponentName(app, "TestSpeechRecognitionService")
+      packageManager.addServiceIfNotPresent(speechService)
+      packageManager.addIntentFilterForService(speechService, IntentFilter(RecognitionService.SERVICE_INTERFACE))
+      Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+      val manager =
+        createManager(
+          scope = this,
+        )
+      try {
+        setPrivateField(manager, "configLoaded", true)
+        setPrivateField(manager, "realtimeRelayModelSupported", false)
+        manager.setEnabled(true)
+        advanceUntilIdle()
+
+        assertTrue(manager.isEnabled.value)
+        assertTrue(manager.isListening.value)
+        assertNull(readPrivateField(manager, "realtimeSessionId"))
+        assertEquals("Listening", manager.statusText.value)
+      } finally {
+        manager.setEnabled(false)
+        Dispatchers.resetMain()
+      }
+    }
+
+  @Test
   fun textReadyDoesNotEnterSpeakingUntilAudioPlaybackStarts() =
     runTest {
       val talkSpeakClient = FakeTalkSpeechSynthesizer()

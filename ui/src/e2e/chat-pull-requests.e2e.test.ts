@@ -1,6 +1,8 @@
 // Control UI tests cover session pull request chips above the chat composer.
 import { chromium, type Browser, type BrowserContext } from "playwright";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
+import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -35,6 +37,30 @@ async function closeContexts(): Promise<void> {
   openContexts.clear();
 }
 
+async function waitForWatchedSessionKey(
+  gateway: Awaited<ReturnType<typeof installMockGateway>>,
+): Promise<string> {
+  let watchedKey = "";
+  await expect
+    .poll(async () => {
+      const requests = await gateway.getRequests(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD);
+      for (const request of requests.toReversed()) {
+        const params = request.params;
+        if (!params || typeof params !== "object" || !("sessionKeys" in params)) {
+          continue;
+        }
+        const keys = (params as { sessionKeys?: unknown }).sessionKeys;
+        if (Array.isArray(keys) && typeof keys[0] === "string") {
+          watchedKey = keys[0];
+          break;
+        }
+      }
+      return watchedKey;
+    })
+    .not.toBe("");
+  return watchedKey;
+}
+
 describeControlUiE2e("session pull request chips", () => {
   beforeAll(async () => {
     if (!chromiumAvailable) {
@@ -61,9 +87,16 @@ describeControlUiE2e("session pull request chips", () => {
     const context = await newBrowserContext();
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
-      featureMethods: ["chat.metadata", "chat.startup", "controlUi.sessionPullRequests"],
+      featureMethods: ["chat.metadata", "chat.startup", SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD],
       methodResponses: {
-        "controlUi.sessionPullRequests": {
+        [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },
+      },
+    });
+    await page.goto(`${server.baseUrl}chat`);
+    const watchedKey = await waitForWatchedSessionKey(gateway);
+    await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
+      sessions: {
+        [watchedKey]: {
           pullRequests: [
             {
               number: 103469,
@@ -98,11 +131,10 @@ describeControlUiE2e("session pull request chips", () => {
             },
           ],
           rateLimited: true,
+          status: "rate-limited",
         },
       },
     });
-    await page.goto(`${server.baseUrl}chat`);
-    await gateway.waitForRequest("controlUi.sessionPullRequests");
 
     // Three detected PRs collapse to two chips; merged history hides first.
     const chips = page.locator(".chat-pr");
@@ -172,9 +204,16 @@ describeControlUiE2e("session pull request chips", () => {
     const context = await newBrowserContext();
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
-      featureMethods: ["chat.metadata", "chat.startup", "controlUi.sessionPullRequests"],
+      featureMethods: ["chat.metadata", "chat.startup", SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD],
       methodResponses: {
-        "controlUi.sessionPullRequests": {
+        [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },
+      },
+    });
+    await page.goto(`${server.baseUrl}chat`);
+    const watchedKey = await waitForWatchedSessionKey(gateway);
+    await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
+      sessions: {
+        [watchedKey]: {
           pullRequests: [],
           branch: {
             owner: "openclaw",
@@ -186,11 +225,10 @@ describeControlUiE2e("session pull request chips", () => {
               "https://github.com/openclaw/openclaw/pull/new/claude/cloud-workers-live-events",
           },
           rateLimited: true,
+          status: "rate-limited",
         },
       },
     });
-    await page.goto(`${server.baseUrl}chat`);
-    await gateway.waitForRequest("controlUi.sessionPullRequests");
 
     const row = page.locator('.chat-pr[data-state="branch"]');
     await expect.poll(() => row.count()).toBe(1);

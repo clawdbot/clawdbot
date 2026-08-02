@@ -39,13 +39,29 @@ function overview(overrides: Partial<SystemAgentOverview["tools"]> = {}): System
 }
 
 describe("OpenClaw assistant", () => {
-  it("teaches both planner and agent-loop prompts about hosted skills and search setup", () => {
+  it("teaches both planner and agent-loop prompts about hosted setup flows", () => {
     expect(SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT).toContain("- configure skills");
     expect(SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT).toContain("- configure search");
     expect(SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT).toContain("- open search wizard");
+    expect(SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT).toContain("- configure gateway");
+    expect(SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT).toContain("- open gateway wizard");
+    expect(SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT).toContain("- memory import");
+    expect(SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT).toContain("copy-only hosted flow");
     expect(SYSTEM_AGENT_SYSTEM_PROMPT).toContain("call configure_skills");
     expect(SYSTEM_AGENT_SYSTEM_PROMPT).toContain("call configure_search");
-    expect(SYSTEM_AGENT_SYSTEM_PROMPT).toContain("never ask for or repeat the credential");
+    expect(SYSTEM_AGENT_SYSTEM_PROMPT).toContain("call configure_gateway");
+    expect(SYSTEM_AGENT_SYSTEM_PROMPT).toContain("call import_memory");
+    expect(SYSTEM_AGENT_SYSTEM_PROMPT).toContain("default agent's existing workspace");
+    expect(SYSTEM_AGENT_SYSTEM_PROMPT).toContain("Never ask for or repeat a credential");
+  });
+
+  it("keeps remote Gateway mode outside both hosted chat planners", () => {
+    for (const prompt of [SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT, SYSTEM_AGENT_SYSTEM_PROMPT]) {
+      expect(prompt).toContain("running the Gateway on another machine");
+      expect(prompt).toContain("`openclaw onboard` for fresh setup");
+      expect(prompt).toContain("`openclaw configure` for the mode question");
+      expect(prompt).toContain("LOCAL Gateway's port, bind, auth, and Tailscale exposure");
+    }
   });
 
   it("parses the first compact JSON command", () => {

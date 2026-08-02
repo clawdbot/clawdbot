@@ -6,14 +6,14 @@ scenario:
     primary:
       - channels.message-actions
   execution:
-    profiles: { "whatsapp:mock-default": 10 }
     kind: flow
     channel: whatsapp
     timeoutMs: 90000
     retryCount: 1
     suiteIsolation: isolated
-    config: { whatsappScenarioId: whatsapp-agent-message-action-react }
 flow:
   module: ./live-transports/whatsapp/scenario-runtime.js
-  call: runWhatsAppAgentMessageActionReactScenario
-  args: [{ expr: whatsappScenarioContext }]
+  call: runWhatsAppScenario
+  args:
+    - { expr: whatsappScenarioContext }
+    - { moduleExport: whatsappQaAgentMessageActionReactScenario }

@@ -29,6 +29,10 @@ vi.mock("../infra/exec-approvals.js", () => ({
     const priority: Record<ExecAsk, number> = { off: 0, "on-miss": 1, always: 2 };
     return priority[left] >= priority[right] ? left : right;
   },
+  minSecurity: (left: ExecSecurity, right: ExecSecurity) => {
+    const priority: Record<ExecSecurity, number> = { deny: 0, allowlist: 1, full: 2 };
+    return priority[left] <= priority[right] ? left : right;
+  },
   requiresExecApproval: mocks.requiresExecApproval,
   resolveExecApprovalAllowedDecisions: vi.fn(() => ["allow-once", "allow-always", "deny"]),
   resolveExecApprovalUnavailableDecisions: vi.fn(() => []),
@@ -44,6 +48,7 @@ vi.mock("../infra/exec-auto-review.js", () => ({
 vi.mock("./bash-tools.exec-approval-request.js", () => ({
   buildExecApprovalRequesterContext: vi.fn(() => ({})),
   buildExecApprovalTurnSourceContext: vi.fn(() => ({})),
+  isExecApprovalRunAbortedError: vi.fn(() => false),
   registerExecApprovalRequestForHostOrThrow: mocks.registerNodeApproval,
 }));
 
@@ -67,7 +72,8 @@ vi.mock("./bash-tools.exec-host-node-phases.js", () => ({
   resolveNodeExecutionTarget: vi.fn(async () => ({
     nodeId: "node-1",
     argv: ["tool", "--version"],
-    invokeTimeoutMs: 30_000,
+    invokeDeadlineMs: 30_000,
+    invokeWaitMs: 35_000,
     supportsSystemRunPrepare: true,
   })),
   shouldSkipNodeApprovalPrepare: vi.fn(
@@ -83,9 +89,7 @@ vi.mock("./bash-tools.exec-host-shared.js", () => ({
 vi.mock("./bash-process-registry.js", () => ({ tail: vi.fn((text: string) => text) }));
 
 vi.mock("./bash-tools.exec-runtime.js", () => ({
-  DEFAULT_NOTIFY_TAIL_CHARS: 1_000,
   createApprovalSlug: vi.fn(() => "approval"),
-  normalizeNotifyOutput: vi.fn((text: string) => text),
 }));
 
 vi.mock("./embedded-agent-runner/run/abortable.js", () => ({
@@ -220,7 +224,7 @@ describe("node-host dispatch cancellation", () => {
 
     expect(mocks.callGatewayTool).toHaveBeenCalledWith(
       "node.invoke",
-      { timeoutMs: 30_000 },
+      { timeoutMs: 35_000 },
       expect.objectContaining({ command: "system.run" }),
       { scopes: ["operator.write", "operator.approvals"], signal: controller.signal },
     );
@@ -240,7 +244,7 @@ describe("node-host dispatch cancellation", () => {
 
     expect(mocks.callGatewayTool).toHaveBeenCalledWith(
       "node.invoke",
-      { timeoutMs: 30_000 },
+      { timeoutMs: 35_000 },
       expect.objectContaining({ command: "system.run" }),
       { signal: controller.signal },
     );

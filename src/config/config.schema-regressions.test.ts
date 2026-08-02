@@ -126,52 +126,17 @@ describe("config schema regressions", () => {
     expect(validateConfigObject(config).ok).toBe(false);
   });
 
-  it('accepts memorySearch fallback "voyage"', () => {
-    const res = validateConfigObject({
-      memory: {
-        search: {
-          fallback: "voyage",
-        },
-      },
-
-      agents: {
-        defaults: {},
-      },
-    });
-
-    expect(res.ok).toBe(true);
-  });
-
-  it('accepts memorySearch provider "mistral"', () => {
-    const res = validateConfigObject({
-      memory: {
-        search: {
-          provider: "mistral",
-        },
-      },
-
-      agents: {
-        defaults: {},
-      },
-    });
-
-    expect(res.ok).toBe(true);
-  });
-
-  it('accepts memorySearch provider "bedrock"', () => {
-    const res = validateConfigObject({
-      memory: {
-        search: {
-          provider: "bedrock",
-        },
-      },
-
-      agents: {
-        defaults: {},
-      },
-    });
-
-    expect(res.ok).toBe(true);
+  it.each([
+    { field: "fallback", value: "voyage" },
+    { field: "provider", value: "mistral" },
+    { field: "provider", value: "bedrock" },
+  ])('accepts memorySearch $field "$value"', ({ field, value }) => {
+    expect(
+      validateConfigObject({
+        memory: { search: { [field]: value } },
+        agents: { defaults: {} },
+      }).ok,
+    ).toBe(true);
   });
 
   it("rejects local memorySearch GPU policy", () => {
@@ -310,47 +275,13 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
-  it("accepts agents.defaults.compaction.truncateAfterCompaction", () => {
-    const res = validateConfigObject({
-      agents: {
-        defaults: {
-          compaction: {
-            truncateAfterCompaction: true,
-            maxActiveTranscriptBytes: "20mb",
-          },
-        },
-      },
-    });
-
-    expect(res.ok).toBe(true);
-  });
-
-  it("accepts Matrix queue byChannel overrides", () => {
-    const res = validateConfigObject({
-      messages: {
-        queue: {
-          byChannel: {
-            matrix: "steer",
-          },
-        },
-      },
-    });
-
-    expect(res.ok).toBe(true);
-  });
-
-  it("accepts Matrix interrupt queue byChannel overrides", () => {
-    const res = validateConfigObject({
-      messages: {
-        queue: {
-          byChannel: {
-            matrix: "interrupt",
-          },
-        },
-      },
-    });
-
-    expect(res.ok).toBe(true);
+  it.each([
+    { name: "accepts Matrix queue byChannel overrides", mode: "steer" },
+    { name: "accepts Matrix interrupt queue byChannel overrides", mode: "interrupt" },
+  ])("$name", ({ mode }) => {
+    expect(validateConfigObject({ messages: { queue: { byChannel: { matrix: mode } } } }).ok).toBe(
+      true,
+    );
   });
 
   it("keeps queue byChannel schema and config type providers aligned", () => {
@@ -521,6 +452,60 @@ describe("config schema regressions", () => {
     });
 
     expect(res.ok).toBe(false);
+  });
+
+  it("accepts exact main bindings when agents.entries omits the implicit main agent", () => {
+    const res = validateConfigObject({
+      agents: {
+        entries: { alpha: { model: "anthropic/claude-3-5-sonnet" } },
+      },
+      bindings: [
+        {
+          type: "route",
+          agentId: "main",
+          match: { channel: "discord", peer: { kind: "direct", id: "user-1" } },
+        },
+      ],
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects normalized main binding variants when agents.entries omits them", () => {
+    const res = validateConfigObject({
+      agents: {
+        entries: { alpha: { model: "anthropic/claude-3-5-sonnet" } },
+      },
+      bindings: [
+        {
+          type: "route",
+          agentId: "MAIN",
+          match: { channel: "discord", peer: { kind: "direct", id: "user-1" } },
+        },
+      ],
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues.some((iss) => iss.message.includes('Unknown agent id "MAIN"'))).toBe(true);
+    }
+  });
+
+  it("accepts a normalized main binding variant when that agent is explicitly configured", () => {
+    const res = validateConfigObject({
+      agents: {
+        entries: { MAIN: { model: "anthropic/claude-3-5-sonnet" } },
+      },
+      bindings: [
+        {
+          type: "route",
+          agentId: "MAIN",
+          match: { channel: "discord", peer: { kind: "direct", id: "user-1" } },
+        },
+      ],
+    });
+
+    expect(res.ok).toBe(true);
   });
 
   it("rejects non-default bindings when the implicit-main roster is materialized", () => {

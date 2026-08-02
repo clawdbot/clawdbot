@@ -2,8 +2,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import "../../../test/helpers/session-manager-file-compat.js";
 import { afterEach, describe, expect, it } from "vitest";
+import { openFileBackedSessionManagerForTest } from "../../../test/helpers/session-manager-file-fixture.js";
 import {
   formatSqliteSessionFileMarker,
   parseSqliteSessionFileMarker,
@@ -112,6 +112,19 @@ describe("SessionManager persistence compatibility", () => {
     });
   });
 
+  it("keeps file fixture factories off the production SessionManager class", () => {
+    expect(SessionManager).not.toHaveProperty("create");
+    expect(SessionManager).not.toHaveProperty("openFile");
+  });
+
+  it("keeps the default fixture cwd independent from its transcript directory", async () => {
+    const dir = await makeTempDir();
+    const manager = openFileBackedSessionManagerForTest(path.join(dir, "session.jsonl"));
+
+    expect(manager.getCwd()).toBe(process.cwd());
+    expect(manager.getSessionDir()).toBe(dir);
+  });
+
   it("separates appended records from a final unterminated JSONL record", async () => {
     const dir = await makeTempDir();
     const sessionFile = path.join(dir, "unterminated.jsonl");
@@ -125,20 +138,20 @@ describe("SessionManager persistence compatibility", () => {
         cwd: dir,
       }),
     );
-    SessionManager.openFile(sessionFile, dir).appendMessage({
+    openFileBackedSessionManagerForTest(sessionFile, dir).appendMessage({
       role: "user",
       content: "appended",
       timestamp: 1,
     });
-    expect(SessionManager.openFile(sessionFile, dir).buildSessionContext().messages).toEqual([
-      expect.objectContaining({ content: "appended", role: "user" }),
-    ]);
+    expect(
+      openFileBackedSessionManagerForTest(sessionFile, dir).buildSessionContext().messages,
+    ).toEqual([expect.objectContaining({ content: "appended", role: "user" })]);
   });
 
   it("rotates new-session fixtures without rewriting the previous file", async () => {
     const dir = await makeTempDir();
     const sessionFile = path.join(dir, "original.jsonl");
-    const manager = SessionManager.openFile(sessionFile, dir);
+    const manager = openFileBackedSessionManagerForTest(sessionFile, dir);
     manager.appendMessage({ role: "user", content: "original", timestamp: 1 });
     const original = await fs.readFile(sessionFile, "utf8");
     manager.newSession({ id: "replacement" });

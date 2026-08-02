@@ -163,7 +163,7 @@ final class MacNodeModeCoordinator: NSObject {
         self.refreshContinuation = refreshEvents.continuation
         self.lastObservedPaused = initialPaused ?? UserDefaults.standard.bool(forKey: pauseDefaultsKey)
         self.lastObservedComputerControlEnabled = initialComputerControlEnabled ??
-            (UserDefaults.standard.object(forKey: computerControlEnabledKey) as? Bool ?? false)
+            isComputerControlEnabled()
         super.init()
 
         guard observeNotifications else { return }
@@ -269,8 +269,7 @@ final class MacNodeModeCoordinator: NSObject {
     func refresh() {
         self.refresh(
             isPaused: UserDefaults.standard.bool(forKey: pauseDefaultsKey),
-            computerControlEnabled: UserDefaults.standard.object(
-                forKey: computerControlEnabledKey) as? Bool ?? false)
+            computerControlEnabled: isComputerControlEnabled())
     }
 
     func currentCanvasPluginSurfaceRoute() async -> GatewayCanvasHostRoute? {
@@ -799,8 +798,7 @@ final class MacNodeModeCoordinator: NSObject {
         claudeSessionCatalogEnabled: Bool) -> [String]
     {
         let rawLocationMode = UserDefaults.standard.string(forKey: locationModeKey) ?? "off"
-        let computerControlEnabled =
-            UserDefaults.standard.object(forKey: computerControlEnabledKey) as? Bool ?? false
+        let computerControlEnabled = isComputerControlEnabled()
         return Self.resolvedCaps(
             browserControlEnabled: browserControlEnabled,
             cameraEnabled: cameraEnabled,

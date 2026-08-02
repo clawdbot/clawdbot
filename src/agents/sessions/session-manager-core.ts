@@ -39,6 +39,7 @@ export class SessionManagerCore {
   protected leafId: string | null = null;
   protected appendParentId: string | null = null;
   protected appendMode: "side" | undefined;
+  protected pendingDeliberateAppend = false;
   protected promptReleasedSideBranchParentId: string | null | undefined;
   protected persistenceTarget: SessionManagerPersistenceTarget | undefined;
   protected persistenceHeaderPending = false;
@@ -73,7 +74,9 @@ export class SessionManagerCore {
     entries: FileEntry[],
   ): void {
     const partitioned = partitionSessionFileEntries(entries);
-    if (partitioned.fileEntries.length === 0) {
+    // Only a physically empty transcript may initialize lazily. Opaque persisted rows still need
+    // a canonical header, or runtime would silently replace malformed history with a fresh session.
+    if (partitioned.fileEntries.length === 0 && partitioned.opaqueEntries.length === 0) {
       this.persistenceTarget = target ? { ...target } : undefined;
       this.initializeSession({ id: target?.sessionId });
       this.persistenceHeaderPending = target !== undefined;
@@ -135,6 +138,7 @@ export class SessionManagerCore {
     this.leafId = null;
     this.appendParentId = null;
     this.appendMode = undefined;
+    this.pendingDeliberateAppend = false;
     this.promptReleasedSideBranchParentId = undefined;
     return this.persistenceTarget ? this.sessionId : undefined;
   }
@@ -190,6 +194,7 @@ export class SessionManagerCore {
     this.leafId = null;
     this.appendParentId = null;
     this.appendMode = undefined;
+    this.pendingDeliberateAppend = false;
     this.promptReleasedSideBranchParentId = undefined;
     let opaqueIndex = 0;
     let latestResetId: string | undefined;
@@ -515,6 +520,7 @@ export class SessionManagerCore {
     this.invalidLeafControlIds.clear();
     this.appendParentId = null;
     this.appendMode = undefined;
+    this.pendingDeliberateAppend = false;
     this.promptReleasedSideBranchParentId = undefined;
   }
 

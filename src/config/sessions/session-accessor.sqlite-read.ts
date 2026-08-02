@@ -30,6 +30,10 @@ export type SqliteTranscriptSnapshotRow = {
   seq: number;
 };
 
+export type SqliteTranscriptStorageRow = SqliteTranscriptSnapshotRow & {
+  createdAt: number;
+};
+
 /** Loads raw transcript events from the additive SQLite transcript store. */
 export async function loadSqliteTranscriptEvents(
   scope: SessionTranscriptReadScope,
@@ -155,25 +159,14 @@ export function readSqliteTranscriptSnapshot(
   database: OpenClawAgentDatabase,
   sessionId: string,
 ): { events: TranscriptEvent[]; rows: SqliteTranscriptSnapshotRow[] } {
-  const db = getSessionKysely(database.db);
-  const rows = executeSqliteQuerySync(
-    database.db,
-    db
-      .selectFrom("transcript_events")
-      .select(["event_json", "seq"])
-      .where("session_id", "=", sessionId)
-      .orderBy("seq", "asc"),
-  ).rows;
+  const rows = readSqliteTranscriptEventRows(database, sessionId);
   return {
-    events: rows.map((row) => JSON.parse(row.event_json) as TranscriptEvent),
-    rows: rows.map((row) => ({
-      eventJson: row.event_json,
-      seq: normalizeSqliteNumber(row.seq),
-    })),
+    events: rows.map((row) => JSON.parse(row.eventJson) as TranscriptEvent),
+    rows,
   };
 }
 
-/** Reads transcript event rows without parsing JSON (tolerant of malformed rows). Used by migrations. */
+/** Reads transcript rows without decoding payloads for snapshot comparison. */
 export function readSqliteTranscriptEventRows(
   database: OpenClawAgentDatabase,
   sessionId: string,
@@ -188,6 +181,27 @@ export function readSqliteTranscriptEventRows(
       .orderBy("seq", "asc"),
   ).rows;
   return rows.map((row) => ({
+    eventJson: row.event_json,
+    seq: normalizeSqliteNumber(row.seq),
+  }));
+}
+
+/** Reads exact transcript storage rows for guarded doctor rewrites. */
+export function readSqliteTranscriptStorageRows(
+  database: OpenClawAgentDatabase,
+  sessionId: string,
+): SqliteTranscriptStorageRow[] {
+  const db = getSessionKysely(database.db);
+  const rows = executeSqliteQuerySync(
+    database.db,
+    db
+      .selectFrom("transcript_events")
+      .select(["created_at", "event_json", "seq"])
+      .where("session_id", "=", sessionId)
+      .orderBy("seq", "asc"),
+  ).rows;
+  return rows.map((row) => ({
+    createdAt: normalizeSqliteNumber(row.created_at),
     eventJson: row.event_json,
     seq: normalizeSqliteNumber(row.seq),
   }));

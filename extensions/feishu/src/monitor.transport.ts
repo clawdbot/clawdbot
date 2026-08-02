@@ -5,6 +5,7 @@ import * as Lark from "@larksuiteoapi/node-sdk";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { waitForAbortableDelay } from "./async.js";
 import { createFeishuWSClient } from "./client.js";
+import type { FeishuWebhookInvoker } from "./feishu-ingress.js";
 import { buildFeishuWebhookRateLimitKey } from "./monitor-rate-limit-key.js";
 import {
   applyBasicWebhookRequestGuards,
@@ -33,6 +34,7 @@ type MonitorTransportParams = {
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
   eventDispatcher: Lark.EventDispatcher;
+  invokeWebhookEvent?: FeishuWebhookInvoker;
   setSocketTerminator?: (terminate: (() => void) | undefined) => void;
   /**
    * Optional status sink for Feishu health tracking. Lifecycle callbacks
@@ -42,6 +44,8 @@ type MonitorTransportParams = {
   statusSink?: FeishuStatusSink;
 };
 
+const FEISHU_WEBHOOK_ACCEPTED_HEADER = "x-openclaw-delivery-accepted";
+const FEISHU_WEBHOOK_ACCEPTED_VALUE = "durable";
 const FEISHU_WS_RECONNECT_INITIAL_DELAY_MS = 1_000;
 const FEISHU_WS_RECONNECT_MAX_DELAY_MS = 30_000;
 const FEISHU_WS_LOG_ERROR_MAX_LENGTH = 500;
@@ -53,11 +57,26 @@ function isFeishuWebhookPayload(value: unknown): value is Record<string, unknown
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
+const BLOCKED_FEISHU_WEBHOOK_PAYLOAD_KEYS = new Set([
+  "__proto__",
+  "prototype",
+  "constructor",
+  "headers",
+]);
+
 function buildFeishuWebhookEnvelope(
   req: http.IncomingMessage,
   payload: Record<string, unknown>,
 ): Record<string, unknown> {
-  return Object.assign(Object.create({ headers: req.headers }), payload) as Record<string, unknown>;
+  // Lark's adapter exposes trusted request headers through this prototype.
+  // Preserve that SDK envelope while preventing payload keys from shadowing it.
+  const envelope = Object.create({ headers: req.headers }) as Record<string, unknown>;
+  for (const [key, value] of Object.entries(payload)) {
+    if (!BLOCKED_FEISHU_WEBHOOK_PAYLOAD_KEYS.has(key)) {
+      envelope[key] = value;
+    }
+  }
+  return envelope;
 }
 
 function parseFeishuWebhookPayload(rawBody: string): Record<string, unknown> | null {
@@ -330,6 +349,7 @@ export async function monitorWebhook({
   runtime,
   abortSignal,
   eventDispatcher,
+  invokeWebhookEvent,
   statusSink,
 }: MonitorTransportParams): Promise<void> {
   const log = runtime?.log ?? console.log;
@@ -435,13 +455,22 @@ export async function monitorWebhook({
           return;
         }
 
-        const value = await eventDispatcher.invoke(buildFeishuWebhookEnvelope(req, payload), {
-          needCheck: false,
-        });
+        const envelope = buildFeishuWebhookEnvelope(req, payload);
+        const invocation = invokeWebhookEvent
+          ? await invokeWebhookEvent(envelope, { needCheck: false })
+          : {
+              kind: "non-durable" as const,
+              value: await eventDispatcher.invoke(envelope, { needCheck: false }),
+            };
         if (!res.headersSent) {
+          if (invocation.kind === "durable") {
+            // The ingress owner records this fact at admission; challenges and
+            // non-durable event types ack without claiming durable acceptance.
+            res.setHeader(FEISHU_WEBHOOK_ACCEPTED_HEADER, FEISHU_WEBHOOK_ACCEPTED_VALUE);
+          }
           res.statusCode = 200;
           res.setHeader("Content-Type", "application/json; charset=utf-8");
-          res.end(JSON.stringify(value));
+          res.end(JSON.stringify(invocation.value));
         }
       } catch (err) {
         error(`feishu[${accountId}]: webhook handler error: ${String(err)}`);

@@ -4,7 +4,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getLobsterdex, getLobsterdexEntries } from "./lobster-dex.ts";
-import { LOBSTER_PALETTE_LORE } from "./lobster-pet-lore.ts";
 import {
   LOBSTER_BOTTLE_FORTUNES,
   pickLobsterEntrance,
@@ -14,58 +13,14 @@ import {
 } from "./lobster-pet-plans.ts";
 import {
   LOBSTER_PET_PALETTES,
+  canonicalLobsterLook,
   createLobsterPetLook,
-  lobsterPetSeed,
-  moonPhaseFraction,
   renderLobsterSvg,
   resolveLobsterPetMode,
   resolveLobsterRunOutcome,
 } from "./lobster-pet.ts";
 
-type LobsterPetPaletteId = ReturnType<typeof createLobsterPetLook>["palette"]["id"];
 type LobsterPetMode = ReturnType<typeof resolveLobsterPetMode>;
-
-const LOBSTER_PET_PALETTE_IDS: LobsterPetPaletteId[] = [
-  "crimson",
-  "coral",
-  "teal",
-  "violet",
-  "ink",
-  "blue",
-  "gold",
-  "tangerine",
-  "calico",
-  "abyss",
-  "lumen",
-  "magma",
-  "oilslick",
-  "aurora",
-  "nebula",
-  "banana",
-  "mood",
-  "bee",
-  "rubberduck",
-  "clawtron",
-  "selene",
-  "geode",
-  "ghost",
-  "glass",
-  "split",
-  "sourdough",
-  "zombie",
-  "plush",
-  "cottoncandy",
-  "disco",
-  "pixel",
-  "blueprint",
-  "phosphor",
-  "heisenbug",
-  "invisible",
-  "retro",
-  "goldenretro",
-];
-
-const SPOT_ZONES = { left: [12, 38], right: [60, 84] } as const;
 
 type LobsterPetElement = HTMLElement & {
   gatewayVersion: string | null;
@@ -159,154 +114,6 @@ afterEach(() => {
   vi.unstubAllGlobals();
   document.body.innerHTML = "";
   localStorage.clear();
-});
-
-describe("lobster pet look", () => {
-  it("is deterministic per seed", () => {
-    expect(createLobsterPetLook(1234)).toEqual(createLobsterPetLook(1234));
-  });
-
-  it("stays within the variant catalog for many seeds", () => {
-    const palettes = new Set<string>();
-    const personalities = new Set<string>();
-    const builds = new Set<string>();
-    const clawSizes = new Set<string>();
-    const tailFans = new Set<boolean>();
-    const crusherSides = new Set<string | null>();
-    const freckleRolls = new Set<boolean>();
-    const glints = new Set<string | null>();
-    const neutralDate = new Date("2026-07-15T12:00:00");
-    for (let seed = 0; seed < 300; seed++) {
-      const look = createLobsterPetLook(seed, neutralDate);
-      palettes.add(look.palette.id);
-      personalities.add(look.personality);
-      builds.add(look.build);
-      clawSizes.add(look.clawSize);
-      tailFans.add(look.tailFan);
-      crusherSides.add(look.crusherSide);
-      freckleRolls.add(look.freckles);
-      glints.add(look.glint);
-      expect(LOBSTER_PET_PALETTE_IDS).toContain(look.palette.id);
-      expect([1.7, 2, 2.5]).toContain(look.scale);
-      expect(["none", "crown", "sprout", "patch"]).toContain(look.accessory);
-      expect(["perky", "droopy"]).toContain(look.antennae);
-      expect(["round", "squat", "slender"]).toContain(look.build);
-      expect(["dainty", "regular", "mighty"]).toContain(look.clawSize);
-      expect([null, "left", "right"]).toContain(look.crusherSide);
-      expect([null, "#ffd166", "#ff8ac2", "#b79bff"]).toContain(look.glint);
-      const zone = SPOT_ZONES[look.side];
-      expect(look.spotPct).toBeGreaterThanOrEqual(zone[0]);
-      expect(look.spotPct).toBeLessThanOrEqual(zone[1]);
-    }
-    // Sessions should feel different: many seeds must not collapse onto one look.
-    expect(palettes.size).toBeGreaterThan(2);
-    expect(personalities.size).toBeGreaterThan(2);
-    expect(builds.size).toBe(3);
-    expect(clawSizes.size).toBe(3);
-    expect(tailFans.size).toBe(2);
-    expect(crusherSides).toContain(null);
-    expect(crusherSides.size).toBeGreaterThan(1);
-    expect(freckleRolls.size).toBe(2);
-    expect(glints).toContain(null);
-    expect(glints.size).toBeGreaterThan(1);
-  });
-
-  it("hatches every rarity tier, with rares staying rare", () => {
-    const counts = new Map<string, number>();
-    let shinies = 0;
-    const total = 20_000;
-    const neutralDate = new Date("2026-07-15T12:00:00");
-    for (let seed = 0; seed < total; seed++) {
-      const look = createLobsterPetLook(seed, neutralDate);
-      counts.set(look.palette.id, (counts.get(look.palette.id) ?? 0) + 1);
-      if (look.shiny) {
-        shinies++;
-      }
-    }
-    // Every palette, including the sub-1% grails, must be reachable.
-    for (const id of LOBSTER_PET_PALETTE_IDS) {
-      expect(counts.get(id) ?? 0).toBeGreaterThan(0);
-    }
-    // Exact catalog weights total 132.95. Every one-point-or-lower palette is
-    // below 1%, with enough tolerance here for the deterministic sample.
-    for (const grail of [
-      "clawtron",
-      "selene",
-      "geode",
-      "ghost",
-      "glass",
-      "split",
-      "sourdough",
-      "zombie",
-      "plush",
-      "cottoncandy",
-      "disco",
-      "pixel",
-      "blueprint",
-      "phosphor",
-      "heisenbug",
-      "invisible",
-      "retro",
-      "goldenretro",
-    ]) {
-      expect(counts.get(grail) ?? 0).toBeLessThan(total * 0.018);
-    }
-    const goldenRetroCount = counts.get("goldenretro") ?? 0;
-    const retroCount = counts.get("retro") ?? 0;
-    expect(goldenRetroCount).toBeLessThan(retroCount);
-    for (const paletteId of LOBSTER_PET_PALETTE_IDS.filter(
-      (candidate) => candidate !== "retro" && candidate !== "goldenretro",
-    )) {
-      expect(retroCount).toBeLessThan(counts.get(paletteId) ?? 0);
-    }
-    // The two common palettes own 52 / 132.95 of the expanded weight pool.
-    expect((counts.get("crimson") ?? 0) + (counts.get("coral") ?? 0)).toBeGreaterThan(total * 0.38);
-    // Shinies exist and stay near their 1-in-512 odds.
-    expect(shinies).toBeGreaterThan(0);
-    expect(shinies).toBeLessThan(total * 0.006);
-  });
-
-  it("keeps palette lore complete and exact", () => {
-    const paletteIds = LOBSTER_PET_PALETTES.map((palette) => palette.id).toSorted();
-    expect(Object.keys(LOBSTER_PALETTE_LORE).toSorted()).toEqual(paletteIds);
-    for (const id of paletteIds) {
-      expect(LOBSTER_PALETTE_LORE[id].flavor.trim()).not.toBe("");
-      expect(LOBSTER_PALETTE_LORE[id].hint.trim()).not.toBe("");
-    }
-  });
-
-  it("tracks known new and full moons", () => {
-    const newMoon = moonPhaseFraction(new Date("2024-01-11T11:57:00.000Z"));
-    const fullMoon = moonPhaseFraction(new Date("2024-01-25T17:54:00.000Z"));
-    expect(newMoon < 0.03 || newMoon >= 0.97).toBe(true);
-    expect(fullMoon).toBeGreaterThan(0.46);
-    expect(fullMoon).toBeLessThan(0.54);
-  });
-
-  it("keeps Clawtron's LED on the perky antenna", () => {
-    // Pinned date: on the anniversary every palette repaints retro and no
-    // Clawtron could ever be found.
-    const neutralDate = new Date("2026-07-15T12:00:00");
-    const clawtron = Array.from({ length: 20_000 }, (_, seed) =>
-      createLobsterPetLook(seed, neutralDate),
-    ).find((look) => look.palette.id === "clawtron");
-    expect(clawtron?.antennae).toBe("perky");
-  });
-
-  it("keeps zombies' antennae droopy", () => {
-    // Pinned date: on the anniversary every palette repaints retro and no
-    // zombie could ever be found.
-    const neutralDate = new Date("2026-07-15T12:00:00");
-    const zombie = Array.from({ length: 20_000 }, (_, seed) =>
-      createLobsterPetLook(seed, neutralDate),
-    ).find((look) => look.palette.id === "zombie");
-    expect(zombie?.antennae).toBe("droopy");
-  });
-
-  it("derives distinct salted seeds per session key, stable within a load", () => {
-    expect(lobsterPetSeed("agent:a:main")).toBe(lobsterPetSeed("agent:a:main"));
-    expect(lobsterPetSeed("agent:a:main")).not.toBe(lobsterPetSeed("agent:b:other"));
-  });
 });
 
 describe("seasonal wardrobe", () => {
@@ -860,6 +667,118 @@ describe("lobster pet element", () => {
     expect(container.querySelector(".lob-eye-peek")).toBeNull();
   });
 
+  it("props an open book against the claws while keeping both eyes open", () => {
+    const palette = expectDefined(
+      LOBSTER_PET_PALETTES.find((entry) => entry.id === "crimson"),
+      "crimson palette",
+    );
+    const container = document.createElement("div");
+    render(
+      renderLobsterSvg(canonicalLobsterLook(palette), { reading: true, standalone: true }),
+      container,
+    );
+
+    expect(container.querySelector(".lob-reading-book")).not.toBeNull();
+    expect(container.querySelectorAll(".lob-eye-open circle")).toHaveLength(4);
+    expect(container.querySelector(".lob-eye-closed")?.getAttribute("style")).toContain(
+      "display:none",
+    );
+  });
+
+  it("renders full replacement geometry without the standard dome", () => {
+    const flatpackPalette = expectDefined(
+      LOBSTER_PET_PALETTES.find((palette) => palette.id === "flatpack"),
+      "flatpack palette",
+    );
+    const flatpackContainer = document.createElement("div");
+    render(
+      renderLobsterSvg(
+        { ...canonicalLobsterLook(flatpackPalette), accessory: "crown" },
+        { standalone: true },
+      ),
+      flatpackContainer,
+    );
+    expect(flatpackContainer.querySelector(".lob-flatpack")).not.toBeNull();
+    expect(flatpackContainer.querySelector(".lob-flatpack__allen-key")).not.toBeNull();
+    expect(flatpackContainer.querySelector('[fill="#f6c945"]')).toBeNull();
+
+    const loadingPalette = expectDefined(
+      LOBSTER_PET_PALETTES.find((palette) => palette.id === "loading"),
+      "loading palette",
+    );
+    const loadingContainer = document.createElement("div");
+    render(
+      renderLobsterSvg(canonicalLobsterLook(loadingPalette), { standalone: true }),
+      loadingContainer,
+    );
+    expect(loadingContainer.querySelector(".lob-skeleton")).not.toBeNull();
+    expect(loadingContainer.querySelectorAll(".lob-eye-open circle")).toHaveLength(2);
+
+    const actualPalette = expectDefined(
+      LOBSTER_PET_PALETTES.find((palette) => palette.id === "actual"),
+      "actual palette",
+    );
+    const actualContainer = document.createElement("div");
+    render(
+      renderLobsterSvg(canonicalLobsterLook(actualPalette), { standalone: true }),
+      actualContainer,
+    );
+    expect(actualContainer.querySelector(".lob-actual")).not.toBeNull();
+    expect(actualContainer.querySelector(".lob-standard-dome")).toBeNull();
+
+    const balloonPalette = expectDefined(
+      LOBSTER_PET_PALETTES.find((palette) => palette.id === "balloon"),
+      "balloon palette",
+    );
+    const balloonContainer = document.createElement("div");
+    render(
+      renderLobsterSvg(canonicalLobsterLook(balloonPalette), { standalone: true }),
+      balloonContainer,
+    );
+    expect(balloonContainer.querySelector(".lob-balloon-frame")).not.toBeNull();
+    expect(balloonContainer.querySelector(".lob-standard-dome")).toBeNull();
+
+    const asciiPalette = expectDefined(
+      LOBSTER_PET_PALETTES.find((palette) => palette.id === "ascii"),
+      "ascii palette",
+    );
+    const asciiContainer = document.createElement("div");
+    render(
+      renderLobsterSvg(canonicalLobsterLook(asciiPalette), { standalone: true }),
+      asciiContainer,
+    );
+    expect(asciiContainer.querySelector(".lob-ascii")).not.toBeNull();
+    expect(asciiContainer.querySelector(".lob-eye-open")?.textContent).toContain("(o)");
+    expect(asciiContainer.querySelector(".lob-eye-closed")?.textContent).toContain("(-)");
+    expect(asciiContainer.querySelector(".lob-standard-dome")).toBeNull();
+
+    const portalPalette = expectDefined(
+      LOBSTER_PET_PALETTES.find((palette) => palette.id === "portal"),
+      "portal palette",
+    );
+    const portalContainer = document.createElement("div");
+    render(
+      renderLobsterSvg(canonicalLobsterLook(portalPalette), { standalone: true }),
+      portalContainer,
+    );
+    expect(portalContainer.querySelectorAll(".lob-portal-ring")).toHaveLength(2);
+    expect(portalContainer.querySelector(".lob-standard-dome")).toBeNull();
+  });
+
+  it("never stacks the sailor cap on the tinfoil hat", () => {
+    const tinfoilPalette = expectDefined(
+      LOBSTER_PET_PALETTES.find((palette) => palette.id === "tinfoil"),
+      "tinfoil palette",
+    );
+    const container = document.createElement("div");
+    render(
+      renderLobsterSvg(canonicalLobsterLook(tinfoilPalette), { standalone: true, sailorCap: true }),
+      container,
+    );
+    expect(container.querySelector(".lob-tinfoil-hat")).not.toBeNull();
+    expect(container.querySelector(".lob-cap")).toBeNull();
+  });
+
   it("stays static when reduced motion is preferred, including visibility resumes", async () => {
     vi.useFakeTimers();
     vi.stubGlobal(
@@ -942,7 +861,9 @@ describe("lobster plans", () => {
       "openclaw.control.lobsterdex.v1",
       JSON.stringify({
         gold: { firstSeenAt: 1, name: "Goldenrod" },
-        teal: { firstSeenAt: 2, name: "Minty" },
+        // Sorts after "gold" (as retired tangerine did) so probe seed 191 keeps
+        // picking index 0 = gold from the sorted candidate list.
+        watermelon: { firstSeenAt: 2, name: "Pips" },
       }),
     );
     const friend = identityOf(191);
@@ -961,6 +882,28 @@ describe("lobster plans", () => {
     expect(grail.look.palette.id).toBe("goldenretro");
     // A seed whose friend roll misses stays a fresh stranger.
     expect(identityOf(42).oldFriend).toBe(false);
+  });
+
+  it("ignores stale removed palettes in dex counts and old-friend planning", () => {
+    vi.stubGlobal("localStorage", window.localStorage);
+    localStorage.setItem(
+      "openclaw.control.lobsterdex.v1",
+      JSON.stringify({
+        coral: { firstSeenAt: 1, name: "Faded" },
+        teal: { firstSeenAt: 2, name: "Lagoon" },
+        tangerine: { firstSeenAt: 3, name: "Marmalade" },
+        calico: { firstSeenAt: 4, name: "Patches" },
+        abyss: { firstSeenAt: 5, name: "Lantern" },
+      }),
+    );
+    const seen = getLobsterdex();
+    expect(LOBSTER_PET_PALETTES.filter((palette) => seen.has(palette.id))).toHaveLength(0);
+
+    const neutralDate = new Date("2026-07-15T12:00:00");
+    const identity = resolveLobsterLoadIdentity(191, createLobsterPetLook(191, neutralDate));
+    expect(identity.oldFriend).toBe(false);
+    expect(identity.look.palette.id).not.toBe("coral");
+    expect(identity.look.palette.id).not.toBe("teal");
   });
 
   it("beaches bottles rarely, with fortunes and spots in range", () => {
@@ -984,7 +927,7 @@ describe("lobster plans", () => {
 
 describe("rare lobster loads", () => {
   // Probe seeds (deterministic per stream): 644 hosts the Elder; 191 rolls
-  // an old-friend return plus a balloon entrance; 4689 hatches a shiny lumen;
+  // an old-friend return plus a balloon entrance; 4689 hatches a shiny variant;
   // 104 is a shy load that beaches a bottle at ~194s; 37 is a shy load with
   // a snail crossing at ~407s.
   it("hosts the Elder: barnacled, renamed, and never molting", async () => {
@@ -1008,7 +951,9 @@ describe("rare lobster loads", () => {
       "openclaw.control.lobsterdex.v1",
       JSON.stringify({
         gold: { firstSeenAt: 1, name: "Goldenrod" },
-        teal: { firstSeenAt: 2, name: "Minty" },
+        // Sorts after "gold" (as retired tangerine did) so probe seed 191 keeps
+        // picking index 0 = gold from the sorted candidate list.
+        watermelon: { firstSeenAt: 2, name: "Pips" },
       }),
     );
     const element = createPet(191);
@@ -1034,17 +979,20 @@ describe("rare lobster loads", () => {
 
   it("hatches shiny lobsters that sparkle and log in the Lobsterdex", async () => {
     vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
+    const neutralDate = new Date("2026-07-09T12:00:00");
+    vi.setSystemTime(neutralDate);
     vi.stubGlobal("localStorage", window.localStorage);
-    const element = createPet(4_689);
+    const seed = 4_689;
+    const shinyLook = createLobsterPetLook(seed, neutralDate);
+    expect(shinyLook.shiny).toBe(true);
+    const element = createPet(seed);
     await arrive(element);
 
     expect(spriteClasses(element)).toContain("lobster-pet--shiny");
-    expect(spriteClasses(element)).toContain("lobster-pet--palette-lumen");
+    expect(spriteClasses(element)).toContain(`lobster-pet--palette-${shinyLook.palette.id}`);
     expect(element.querySelectorAll(".lobster-pet__sparkle").length).toBeGreaterThan(0);
-    expect(element.querySelector(".lob-lumen")).not.toBeNull();
     expect(element.querySelector(".lobster-pet")?.getAttribute("title")).toContain("✦");
-    expect(getLobsterdexEntries().get("lumen")?.shinySeenAt).not.toBeNull();
+    expect(getLobsterdexEntries().get(shinyLook.palette.id)?.shinySeenAt).not.toBeNull();
   });
 
   it("beaches a message in a bottle on its own clock, pet or no pet", async () => {

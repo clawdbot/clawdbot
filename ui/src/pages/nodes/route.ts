@@ -1,5 +1,6 @@
 import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
+import { routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import {
   createInitialNodesState,
@@ -31,9 +32,7 @@ async function loadNodesRouteData(context: ApplicationContext): Promise<NodesRou
 }
 
 export const page = definePage({
-  id: "nodes",
-  path: "/settings/devices",
-  aliases: ["/nodes"],
+  ...routePageSpec("nodes"),
   loader: loadNodesRouteData,
   component: () =>
     import("./nodes-page.ts").then(() => ({

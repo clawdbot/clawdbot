@@ -9,9 +9,11 @@ import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import { scheduleGatewayHandlerPrewarm } from "./server-startup-handler-prewarm.js";
 import { testState, writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq,
+  seedSessionTranscript,
   sessionStoreEntry,
   setupGatewaySessionsTestHarness,
 } from "./test/server-sessions.test-helpers.js";
@@ -90,6 +92,142 @@ test("sessions.list discovers store targets at most once per agent", async () =>
     expect(discoverySpy.mock.calls.filter((call) => call[1] === "main")).toHaveLength(1);
   } finally {
     discoverySpy.mockRestore();
+  }
+});
+
+test("startup prewarm fills session snapshot and title caches before the first list", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const sessionKey = "agent:main:warm-cache";
+  const sessionId = "warm-cache";
+  await writeSessionStore({
+    entries: {
+      [sessionKey]: sessionStoreEntry(sessionId),
+    },
+  });
+  await seedSessionTranscript({
+    agentId: "main",
+    messages: [
+      { role: "user", content: "Warm title" },
+      { role: "assistant", content: "Warm response" },
+    ],
+    sessionId,
+    sessionKey,
+    storePath,
+  });
+  const titlePageSpy = vi.spyOn(sessionAccessor, "readSessionTranscriptMessageEventPage");
+  let sidecar: ReturnType<typeof scheduleGatewayHandlerPrewarm> | undefined;
+  vi.useFakeTimers();
+  try {
+    const cfg = {
+      agents: { list: [{ id: "main", default: true }] },
+      session: { store: storePath },
+    } as never;
+    let resolveSessionPrewarm!: () => void;
+    const sessionPrewarm = new Promise<void>((resolve) => {
+      resolveSessionPrewarm = resolve;
+    });
+    sidecar = scheduleGatewayHandlerPrewarm({
+      cfgAtStart: cfg,
+      log: { warn: vi.fn() },
+      startupTrace: {
+        measure: async (name, run) => {
+          try {
+            return await run();
+          } finally {
+            if (name === "post-ready.gateway-data.sessions.main") {
+              resolveSessionPrewarm();
+            }
+          }
+        },
+      },
+    });
+    await vi.advanceTimersToNextTimerAsync();
+    await sessionPrewarm;
+    sidecar.stop();
+    expect(titlePageSpy).toHaveBeenCalled();
+    titlePageSpy.mockClear();
+    vi.useRealTimers();
+    const cachedEntries = sessionAccessor.listSessionEntriesReadOnly({
+      agentId: "main",
+      clone: false,
+      projection: "list",
+      storePath,
+    });
+
+    const result = await directSessionReq("sessions.list", {
+      ...LIST_PARAMS,
+      includeDerivedTitles: true,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(titlePageSpy).not.toHaveBeenCalled();
+    const afterListEntries = sessionAccessor.listSessionEntriesReadOnly({
+      agentId: "main",
+      clone: false,
+      projection: "list",
+      storePath,
+    });
+    expect(afterListEntries[0]?.entry).toBe(cachedEntries[0]?.entry);
+  } finally {
+    sidecar?.stop();
+    vi.useRealTimers();
+    titlePageSpy.mockRestore();
+  }
+});
+
+test("startup skips a large session prewarm while request-time listing remains available", async () => {
+  const { storePath } = await createSessionStoreDir();
+  await writeSessionStore({
+    entries: Object.fromEntries(
+      Array.from({ length: 2_001 }, (_, index) => [
+        `agent:main:large-${index}`,
+        sessionStoreEntry(`large-${index}`, { updatedAt: 1_781_000_000_000 - index }),
+      ]),
+    ),
+  });
+  const info = vi.fn();
+  const listSpy = vi.spyOn(sessionAccessor, "listSessionEntriesReadOnly");
+  let sidecar: ReturnType<typeof scheduleGatewayHandlerPrewarm> | undefined;
+  vi.useFakeTimers();
+  try {
+    let resolveSessionPrewarm!: () => void;
+    const sessionPrewarm = new Promise<void>((resolve) => {
+      resolveSessionPrewarm = resolve;
+    });
+    sidecar = scheduleGatewayHandlerPrewarm({
+      cfgAtStart: {
+        agents: { list: [{ id: "main", default: true }] },
+        session: { store: storePath },
+      } as never,
+      log: { info, warn: vi.fn() },
+      startupTrace: {
+        measure: async (name, run) => {
+          try {
+            return await run();
+          } finally {
+            if (name === "post-ready.gateway-data.sessions.main") {
+              resolveSessionPrewarm();
+            }
+          }
+        },
+      },
+    });
+
+    await vi.advanceTimersToNextTimerAsync();
+    await sessionPrewarm;
+    sidecar.stop();
+    expect(info).toHaveBeenCalledWith(
+      "skipping optional dashboard session prewarm: combined stores exceed 2000 rows",
+    );
+    expect(listSpy).not.toHaveBeenCalled();
+
+    vi.useRealTimers();
+    const result = await directSessionReq("sessions.list", LIST_PARAMS);
+    expect(result.ok).toBe(true);
+  } finally {
+    sidecar?.stop();
+    vi.useRealTimers();
+    listSpy.mockRestore();
   }
 });
 

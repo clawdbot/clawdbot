@@ -521,6 +521,46 @@ describe("runCopilotAttempt", () => {
     expect(result.lastToolError).toEqual(terminalError);
   });
 
+  it("reports code-mode engagement through the real tool bridge", async () => {
+    const sdk = makeFakeSdk({
+      onCreateSession: (session) => {
+        session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
+      },
+    });
+
+    // No `createToolBridge` override: this runs the production bridge, so the
+    // reported value is the gate `createAgentHarnessToolSurfaceRuntime`
+    // actually resolved for the run rather than a stubbed constant.
+    const result = await runCopilotAttempt(
+      makeParams({
+        disableTools: false,
+        config: { tools: { codeMode: true } },
+      } as never),
+      { pool: makeFakePool(sdk) },
+    );
+
+    expect(result.codeModeEngaged).toBe(true);
+  });
+
+  it("reports the tool bridge's code-mode engagement on the attempt result", async () => {
+    const sdk = makeFakeSdk({
+      onCreateSession: (session) => {
+        session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
+      },
+    });
+
+    const result = await runCopilotAttempt(makeParams(), {
+      createToolBridge: vi.fn(async () => ({
+        codeModeEngaged: true,
+        sdkTools: [],
+        sourceTools: [],
+      })),
+      pool: makeFakePool(sdk),
+    });
+
+    expect(result.codeModeEngaged).toBe(true);
+  });
+
   it("clears the host terminal error after matching tool recovery", async () => {
     const terminalError = {
       actionFingerprint: "message:send:room-1",
@@ -1629,6 +1669,65 @@ describe("runCopilotAttempt", () => {
       ((sdk.createSession.mock.calls[0] as unknown[] | undefined)![0] as { tools?: unknown[] })
         .tools,
     ).toBe(sdkTools);
+  });
+
+  it("applies before_prompt_build toolsAllow to the submitted SDK tool surface", async () => {
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_prompt_build",
+          handler: () => ({ toolsAllow: [] }),
+        },
+      ]),
+    );
+    const sdk = makeFakeSdk();
+    const sdkTools: SdkTool[] = [
+      {
+        description: "Fake SDK tool",
+        handler: async () => ({ resultType: "success", textResultForLlm: "ok" }),
+        name: "fake_sdk_tool",
+        parameters: { type: "object" },
+      },
+    ];
+
+    await runCopilotAttempt(makeParams(), {
+      createToolBridge: vi.fn(async () => ({ sdkTools, sourceTools: [] })),
+      pool: makeFakePool(sdk),
+    });
+
+    expect((requireCreateSessionConfig(sdk) as { tools?: SdkTool[] }).tools).toEqual([]);
+  });
+
+  it("preserves the required message tool through before_prompt_build toolsAllow", async () => {
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_prompt_build",
+          handler: () => ({ toolsAllow: [] }),
+        },
+      ]),
+    );
+    const sdk = makeFakeSdk();
+    const makeTool = (name: string): SdkTool => ({
+      description: name,
+      handler: async () => ({ resultType: "success", textResultForLlm: "ok" }),
+      name,
+      parameters: { type: "object" },
+    });
+
+    await runCopilotAttempt(makeParams({ sourceReplyDeliveryMode: "message_tool_only" }), {
+      createToolBridge: vi.fn(async () => ({
+        sdkTools: [makeTool("message"), makeTool("read")],
+        sourceTools: [],
+      })),
+      pool: makeFakePool(sdk),
+    });
+
+    expect(
+      ((requireCreateSessionConfig(sdk) as { tools?: SdkTool[] }).tools ?? []).map(
+        (tool) => tool.name,
+      ),
+    ).toEqual(["message"]);
   });
 
   it("F6: sessionRef is populated after createSession so the tool bridge's onYield can abort the live SDK session", async () => {

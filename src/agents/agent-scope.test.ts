@@ -705,9 +705,12 @@ describe("resolveAgentConfig", () => {
       authProfileOverride: "fallback-key",
       authProfileOverrideSource: "auto",
       authProfileOverrideCompactionCount: 1,
-      fallbackNoticeSelectedModel: "google/gemini-3-pro",
-      fallbackNoticeActiveModel: "google/gemini-3-pro",
-      fallbackNoticeReason: "rate_limit",
+      fallbackNotice: {
+        kind: "active",
+        selectedModel: "google/gemini-3-pro",
+        activeModel: "google/gemini-3-pro",
+        reason: "rate_limit",
+      },
     };
 
     clearAutoFallbackPrimaryProbeSelection(entry, 2);

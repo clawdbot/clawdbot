@@ -37,6 +37,7 @@ require the `node` role.
 | `operator.pairing`      | Device and node pairing management: list, approve, reject, remove, rotate, revoke.                                                                            |
 | `operator.approvals`    | Exec and plugin approval APIs.                                                                                                                                |
 | `operator.questions`    | Listing, reading, answering, and resolving interactive questions.                                                                                             |
+| `operator.talk`         | Creating, steering, and closing Talk sessions without general Gateway write access. `operator.write` also satisfies this scope.                               |
 | `operator.talk.secrets` | Reading Talk configuration with secrets included.                                                                                                             |
 
 Unknown future `operator.*` scopes require an exact match unless the caller
@@ -51,9 +52,12 @@ dispatch so authorization failures have one canonical structured response:
 - `agent` needs `operator.write` for ordinary turns and `operator.admin` for
   `/new` or `/reset` session lifecycle commands.
 - `node.invoke` needs `operator.write` for ordinary relay commands and
-  `operator.admin` for `browser.proxy`, `fs.listDir`, and `terminal.upload`.
+  `operator.admin` for `browser.proxy`, `browser.proxy.upload.v1`, `fs.listDir`,
+  and `terminal.upload`.
 - `talk.config` needs `operator.read`; `includeSecrets: true` also needs
   `operator.talk.secrets`.
+- `talk.client.*`, `talk.session.*`, `talk.speak`, and `talk.mode` need
+  `operator.talk` (or the compatible broader `operator.write`).
 
 Some handlers then apply stricter checks based on the concrete thing being
 approved or mutated:
@@ -88,7 +92,8 @@ Approving a device request:
   `operator.admin`, even though `device.pair.approve` itself only needs
   `operator.pairing`.
 - A request for `operator.read`, `operator.write`, `operator.approvals`,
-  `operator.questions`, `operator.pairing`, or `operator.talk.secrets` requires
+  `operator.questions`, `operator.pairing`, `operator.talk`, or
+  `operator.talk.secrets` requires
   the caller to already hold that scope, or `operator.admin`.
 - A request for `operator.admin` requires `operator.admin`.
 - A repair request with no explicit scopes can inherit the existing operator
@@ -114,11 +119,11 @@ stores relate.
 `node.pair.approve` derives extra required scopes from the pending request's
 command list:
 
-| Declared commands                                                                                                    | Required scopes                       |
-| -------------------------------------------------------------------------------------------------------------------- | ------------------------------------- |
-| none                                                                                                                 | `operator.pairing`                    |
-| ordinary node commands                                                                                               | `operator.pairing` + `operator.write` |
-| `system.run`, `system.run.prepare`, `system.which`, `browser.proxy`, `fs.listDir`, or `system.execApprovals.get/set` | `operator.pairing` + `operator.admin` |
+| Declared commands                                                                                                                               | Required scopes                       |
+| ----------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------- |
+| none                                                                                                                                            | `operator.pairing`                    |
+| ordinary node commands                                                                                                                          | `operator.pairing` + `operator.write` |
+| `system.run`, `system.run.prepare`, `system.which`, `browser.proxy`, `browser.proxy.upload.v1`, `fs.listDir`, or `system.execApprovals.get/set` | `operator.pairing` + `operator.admin` |
 
 Approving a node declaration records its command surface. For `computer.act`,
 the node advertises that surface only after Computer Control is enabled locally;

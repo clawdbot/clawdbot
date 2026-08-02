@@ -10,16 +10,11 @@ import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
 import {
   extractMessageRole,
   extractMessageText,
-  isSqliteReadTarget,
   resolveTranscriptReadTarget,
   sqliteMessageEventWithSeq,
   toTranscriptReadScope,
   type ResolvedTranscriptReadTarget,
 } from "./session-transcript-readers.js";
-import {
-  readSessionTitleFieldsFromTranscript as readSessionTitleFieldsFromTranscriptFile,
-  readSessionTitleFieldsFromTranscriptAsync as readSessionTitleFieldsFromTranscriptAsyncFile,
-} from "./session-utils.fs.js";
 
 type SessionTitleFields = {
   firstUserMessage: string | null;
@@ -167,17 +162,7 @@ export function readSessionTitleFieldsFromTranscript(
   scope: SessionTranscriptReadScope,
   opts?: { includeInterSession?: boolean },
 ): SessionTitleFields {
-  const target = resolveTranscriptReadTarget(scope);
-  if (isSqliteReadTarget(target)) {
-    return readSqliteTitleFields(target, opts);
-  }
-  return readSessionTitleFieldsFromTranscriptFile(
-    target.sessionId,
-    target.storePath,
-    target.sessionFile,
-    target.agentId,
-    opts,
-  );
+  return readSqliteTitleFields(resolveTranscriptReadTarget(scope), opts);
 }
 
 /** Reads title and preview text asynchronously through the reader seam. */
@@ -185,15 +170,5 @@ export async function readSessionTitleFieldsFromTranscriptAsync(
   scope: SessionTranscriptReadScope,
   opts?: { includeInterSession?: boolean },
 ): Promise<SessionTitleFields> {
-  const target = resolveTranscriptReadTarget(scope);
-  if (isSqliteReadTarget(target)) {
-    return readSqliteTitleFields(target, opts);
-  }
-  return await readSessionTitleFieldsFromTranscriptAsyncFile(
-    target.sessionId,
-    target.storePath,
-    target.sessionFile,
-    target.agentId,
-    opts,
-  );
+  return readSqliteTitleFields(resolveTranscriptReadTarget(scope), opts);
 }

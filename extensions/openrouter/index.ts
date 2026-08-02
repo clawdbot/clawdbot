@@ -14,10 +14,15 @@ import {
   getOpenRouterModelCapabilities,
   loadOpenRouterModelCapabilities,
 } from "openclaw/plugin-sdk/provider-stream-family";
+import { asOptionalRecord as readRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { buildOpenRouterImageGenerationProvider } from "./image-generation-provider.js";
 import { openrouterMediaUnderstandingProvider } from "./media-understanding-provider.js";
-import { isOpenRouterMistralModelId, normalizeOpenRouterApiModelId } from "./models.js";
+import {
+  isOpenRouterMistralModelId,
+  normalizeOpenRouterApiModelId,
+  normalizeOpenRouterModelFamilyId,
+} from "./models.js";
 import { buildOpenRouterMusicGenerationProvider } from "./music-generation-provider.js";
 import { createOpenRouterOAuthAuthMethod } from "./oauth.js";
 import { applyOpenrouterConfig, OPENROUTER_DEFAULT_MODEL_REF } from "./onboard.js";
@@ -42,13 +47,7 @@ import {
 const PROVIDER_ID = "openrouter";
 const OPENROUTER_DEFAULT_MAX_TOKENS = 8192;
 const OPENROUTER_FUSION_MODEL_ID = "openrouter/fusion";
-const OPENROUTER_CACHE_TTL_MODEL_PREFIXES = [
-  "anthropic/",
-  "deepseek/",
-  "moonshot/",
-  "moonshotai/",
-  "zai/",
-] as const;
+const OPENROUTER_CACHE_TTL_MODEL_FAMILY = /^(?:anthropic|deepseek|moonshot(?:ai)?|z-?ai)\//;
 const MAX_PROMPT_MODEL_ID_DISPLAY_CHARS = 256;
 
 type OpenRouterFusionPromptContext = {
@@ -86,12 +85,6 @@ function normalizeOpenRouterResolvedModel<T extends ProviderRuntimeModel>(model:
     ...(normalizedBaseUrl ? { baseUrl: normalizedBaseUrl } : {}),
     reasoning,
   };
-}
-
-function readRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
 }
 
 function sanitizePromptModelId(value: unknown): string | undefined {
@@ -258,10 +251,6 @@ export default defineSingleProviderPluginEntry({
       };
     }
 
-    function isOpenRouterCacheTtlModel(modelId: string): boolean {
-      return OPENROUTER_CACHE_TTL_MODEL_PREFIXES.some((prefix) => modelId.startsWith(prefix));
-    }
-
     const passthroughGeminiReplayHooks = buildProviderReplayFamilyHooks({
       family: "passthrough-gemini",
     });
@@ -340,7 +329,8 @@ export default defineSingleProviderPluginEntry({
       resolveSystemPromptContribution: resolveOpenRouterFusionPromptContribution,
       extraParamsForTransport: resolveOpenRouterExtraParamsForTransport,
       wrapStreamFn: wrapOpenRouterProviderStream,
-      isCacheTtlEligible: (ctx) => isOpenRouterCacheTtlModel(ctx.modelId),
+      isCacheTtlEligible: ({ modelId }) =>
+        OPENROUTER_CACHE_TTL_MODEL_FAMILY.test(normalizeOpenRouterModelFamilyId(modelId) ?? ""),
       resolveUsageAuth: async (ctx) => {
         const apiKey = ctx.resolveApiKeyFromConfigAndStore({
           envDirect: [ctx.env.OPENROUTER_API_KEY],

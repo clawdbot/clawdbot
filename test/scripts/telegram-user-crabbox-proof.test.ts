@@ -449,7 +449,7 @@ describe("telegram user Crabbox proof log polling", () => {
     const fixture = fs.readFileSync("scripts/e2e/mcp-app-conformance-server.mjs", "utf8");
     const uiPackage = JSON.parse(fs.readFileSync("ui/package.json", "utf8"));
 
-    expect(uiPackage.dependencies["@modelcontextprotocol/ext-apps"]).toBe("1.7.4");
+    expect(uiPackage.dependencies["@modelcontextprotocol/ext-apps"]).toBe("1.7.5");
     expect(fixture).toContain(
       `@modelcontextprotocol/ext-apps@${uiPackage.dependencies["@modelcontextprotocol/ext-apps"]}`,
     );

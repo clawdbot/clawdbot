@@ -19,7 +19,7 @@ describe("renderLobsterdex", () => {
     const container = document.createElement("div");
     render(renderLobsterdex(entries), container);
 
-    expect(container.querySelector(".lobsterdex-page__count")?.textContent).toBe("1/37 visited");
+    expect(container.querySelector(".lobsterdex-page__count")?.textContent).toBe("1/42 visited");
 
     const seen = container.querySelector(".lobster-pet--palette-crimson")?.closest("article");
     expect(seen?.id).toBe("lobsterdex-crimson");
@@ -37,11 +37,9 @@ describe("renderLobsterdex", () => {
     expect(seen?.querySelector(".lobsterdex-page__star")).not.toBeNull();
     expect(seen?.querySelector('button[aria-label="Copy link"]')).not.toBeNull();
 
-    const unseen = container.querySelector(".lobster-pet--palette-coral")?.closest("article");
+    const unseen = container.querySelector(".lobster-pet--palette-watermelon")?.closest("article");
     expect(unseen?.querySelector("h3")?.textContent).toBe("?");
-    expect(unseen?.querySelector(".lobsterdex-page__lore")?.textContent).toBe(
-      "Blends in at the beach.",
-    );
+    expect(unseen?.querySelector(".lobsterdex-page__lore")?.textContent).toBe("Ripe when thumped.");
     expect(unseen?.querySelector(".lobsterdex-page__date")).toBeNull();
   });
 });

@@ -1634,6 +1634,13 @@ describe("loadOpenClawPlugins", () => {
       plugin,
       pluginConfig: {
         allow: ["hook-policy-default"],
+        entries: {
+          "hook-policy-default": {
+            hooks: {
+              allowConversationAccess: true,
+            },
+          },
+        },
       },
     });
 
@@ -1834,6 +1841,8 @@ describe("loadOpenClawPlugins", () => {
       filename: "conversation-hooks.cjs",
       body: `module.exports = { id: "conversation-hooks", register(api) {
     api.on("before_model_resolve", () => undefined);
+    api.on("agent_turn_prepare", () => undefined);
+    api.on("before_prompt_build", () => undefined);
     api.on("before_agent_reply", () => undefined);
     api.on("llm_input", () => undefined);
     api.on("llm_output", () => undefined);
@@ -1856,7 +1865,7 @@ describe("loadOpenClawPlugins", () => {
         "non-bundled plugins must set plugins.entries.conversation-hooks.hooks.allowConversationAccess=true",
       ),
     );
-    expect(blockedDiagnostics).toHaveLength(7);
+    expect(blockedDiagnostics).toHaveLength(9);
   });
 
   it("allows conversation typed hooks for non-bundled plugins when explicitly enabled", () => {
@@ -1866,6 +1875,8 @@ describe("loadOpenClawPlugins", () => {
       filename: "conversation-hooks-allowed.cjs",
       body: `module.exports = { id: "conversation-hooks-allowed", register(api) {
     api.on("before_model_resolve", () => undefined);
+    api.on("agent_turn_prepare", () => undefined);
+    api.on("before_prompt_build", () => undefined);
     api.on("before_agent_reply", () => undefined);
     api.on("llm_input", () => undefined);
     api.on("llm_output", () => undefined);
@@ -1891,12 +1902,57 @@ describe("loadOpenClawPlugins", () => {
 
     expect(registry.typedHooks.map((entry) => entry.hookName)).toEqual([
       "before_model_resolve",
+      "agent_turn_prepare",
+      "before_prompt_build",
       "before_agent_reply",
       "llm_input",
       "llm_output",
       "before_agent_finalize",
       "agent_end",
       "before_agent_run",
+    ]);
+  });
+
+  it("stores only valid before_agent_reply trigger eligibility", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "reply-hook-trigger-eligibility",
+      filename: "reply-hook-trigger-eligibility.cjs",
+      body: `module.exports = { id: "reply-hook-trigger-eligibility", register(api) {
+    api.on("before_agent_reply", () => undefined, { eligibleTriggers: ["heartbeat", "cron", "heartbeat"] });
+    api.on("before_agent_reply", () => undefined);
+    api.on("before_agent_reply", () => undefined, { eligibleTriggers: [] });
+    api.on("before_agent_reply", () => undefined, { eligibleTriggers: ["heartbeat", "unknown"] });
+    api.on("before_agent_reply", () => undefined, { eligibleTriggers: ["manual"] });
+    api.on("before_agent_reply", () => undefined, { eligibleTriggers: "heartbeat" });
+    api.on("before_agent_reply", () => undefined, { eligibleTriggers: Array(1) });
+    api.on("before_agent_reply", () => undefined, { eligibleTriggers: [, "heartbeat"] });
+    api.on("before_tool_call", () => undefined, { eligibleTriggers: ["heartbeat"] });
+  } };`,
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["reply-hook-trigger-eligibility"],
+        entries: {
+          "reply-hook-trigger-eligibility": {
+            hooks: { allowConversationAccess: true },
+          },
+        },
+      },
+    });
+
+    expect(registry.typedHooks.map((entry) => entry.eligibleTriggers)).toEqual([
+      ["heartbeat", "cron"],
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
     ]);
   });
 

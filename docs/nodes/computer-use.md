@@ -14,8 +14,8 @@ The agent emits one uniform command, `computer.act`; it cannot tell how a node f
 ## Requirements
 
 - A paired, connected node advertising both `computer.act` and `screen.snapshot`, with `screen.snapshot` returning `displayFrameId`.
-- **macOS fulfiller:** app setting **Allow Computer Control** enabled (default: off).
-- **macOS fulfiller:** **Accessibility** permission granted to OpenClaw (for pointer/keyboard injection) and **Screen Recording** permission (for `screen.snapshot`).
+- **macOS fulfiller:** app setting **Allow Computer Control** enabled. It defaults on; an explicit off choice stays off.
+- **macOS fulfiller:** **Accessibility** and Event Posting access granted to OpenClaw (for pointer/keyboard injection), plus **Screen Recording** permission (for `screen.snapshot`).
 - **Windows/Linux fulfiller:** bundled `cua-computer` plugin enabled and a compatible `cua-driver` 0.10.x executable installed.
 - The pairing update that includes `computer.act` approved on the gateway.
 - A vision-capable agent model.
@@ -80,7 +80,7 @@ Reads reuse `screen.snapshot`; there is no second capture path. See [Camera and 
 
 ## Authorization
 
-1. Enable the platform fulfiller: on macOS, enable **Settings → Allow Computer Control**, then grant **Accessibility** and **Screen Recording** under **Settings → Permissions**; on Windows/Linux, follow the experimental `cua-computer` setup above.
+1. Enable the platform fulfiller: on macOS, **Settings → Allow Computer Control** starts enabled, then grant **Accessibility** and **Screen Recording** under **Settings → Permissions**; on Windows/Linux, follow the experimental `cua-computer` setup above.
 2. Approve the pairing update on the gateway (a new command forces re-pairing).
 3. Expose the tool to the vision-capable agent. For the default `coding` profile:
 
@@ -96,6 +96,8 @@ Reads reuse `screen.snapshot`; there is no second capture path. See [Camera and 
 
 Once the node-local control is enabled and the pairing update is approved, `computer.act` is durably available while the node continues to advertise it. There is no lease, expiry, or arm/disarm command. Disabling Computer Control locally removes the advertised command and the node rechecks the toggle at invocation time.
 
+On macOS, default-on means a paired gateway can drive pointer and keyboard input as soon as the required macOS grants exist. There is no per-action confirmation. Turn off **Allow Computer Control** before pairing, or at any later time, to stop advertising and accepting `computer.act`.
+
 `gateway.nodes.commands.deny` remains an explicit global revocation and always wins. `computer.act` does not need a `gateway.nodes.commands.allow` entry. An authenticated operator with `operator.write` can invoke an enabled, paired command through `node.invoke`; there is no per-action admin check.
 
 ## Safety
@@ -104,6 +106,12 @@ Once the node-local control is enabled and the pairing update is approved, `comp
 - The macOS fulfiller posts text one grapheme at a time, so cancellation, disconnect, pause, disable, or endpoint replacement stops it before the next grapheme. The experimental cua-driver fulfiller cannot cancel a `type_text` call mid-typing.
 - Screenshots are model-only and never auto-sent to chat (issue [#44759](https://github.com/openclaw/openclaw/issues/44759)).
 - Treat screen content as untrusted; it can carry prompt injection.
+
+## macOS permission troubleshooting
+
+The Computer Control status in **Settings → General → Capabilities** checks Accessibility, Event Posting, and Screen Recording separately. Screen capture can work while input remains denied because macOS stores those grants in separate TCC buckets.
+
+If the status says **Accessibility grant may be stale**, OpenClaw may already appear enabled under **System Settings → Privacy & Security → Accessibility** even though macOS rejects it. This happens when the Accessibility entry is pinned to an older app build. Select OpenClaw in that list, remove it with **−**, then re-add `/Applications/OpenClaw.app`. Quit and reopen OpenClaw after changing the grant because macOS can cache Accessibility trust for the lifetime of the process.
 
 ## Relationship to other desktop-control paths
 

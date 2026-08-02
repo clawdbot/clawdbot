@@ -3456,6 +3456,37 @@ describe("workboard controller", () => {
     );
   });
 
+  // Cards persist whatever agent id they were created with, so the worker key
+  // canonicalizes it: "Codex-Main" and "codex-main" name one session, not two.
+  it("canonicalizes a card's agent id in the worker session key", async () => {
+    const expectedSessionKey = "agent:codex-main:subagent:workboard-default-card-1";
+    const mixedCase = { ...sampleCard, agentId: "Codex-Main" } satisfies WorkboardCard;
+    const running = {
+      ...mixedCase,
+      status: "running",
+      sessionKey: expectedSessionKey,
+      runId: "run-1",
+    } satisfies WorkboardCard;
+    const client = createClient({
+      agent: { runId: "run-1" },
+      "tasks.list": { tasks: [] },
+      "workboard.cards.update": { card: running },
+    });
+
+    const sessionKey = await startWorkboardCard({
+      host,
+      client: client as never,
+      card: mixedCase,
+    });
+
+    expect(sessionKey).toBe(expectedSessionKey);
+    expect(client.request).toHaveBeenNthCalledWith(
+      2,
+      "agent",
+      expect.objectContaining({ sessionKey: expectedSessionKey }),
+    );
+  });
+
   it("waits briefly for task ledger registration after a started run", async () => {
     vi.useFakeTimers();
     const running = {

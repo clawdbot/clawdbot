@@ -9,6 +9,10 @@ import {
   resolveSessionEntryFromStore,
   resolveSessionEntrySelection,
 } from "./session-accessor.entry.js";
+import {
+  readCommittedSqliteTranscriptMessageSequence,
+  rememberCommittedSqliteTranscriptMessageSequences,
+} from "./session-accessor.sqlite-transcript-sequences.js";
 import { redactTranscriptMessageForStorage } from "./session-accessor.sqlite-transcript-store.js";
 import { appendSqliteExpectedSessionTranscriptTurn } from "./session-accessor.sqlite.js";
 import { appendTranscriptMessage, emitTranscriptUpdate } from "./session-accessor.transcript.js";
@@ -96,6 +100,7 @@ export async function persistSessionTranscriptTurn(
   });
   await publishTranscriptTurnUpdate({
     target,
+    sessionEntry,
     updateMode: options.updateMode ?? "inline",
     publishWhen: options.publishWhen ?? "when-appended",
     appendedMessages,
@@ -133,6 +138,8 @@ async function appendTranscriptTurnMessages(
       appendedMessages.push(result);
     }
   }
+  // Resolve cursors only after the last explicit parent has chosen the branch.
+  rememberCommittedSqliteTranscriptMessageSequences(target, appendedMessages);
   return appendedMessages;
 }
 
@@ -243,6 +250,7 @@ async function persistExpectedSessionTranscriptTurn(
 
   await publishTranscriptTurnUpdate({
     target,
+    sessionEntry: turn.sessionEntry,
     updateMode: options.updateMode ?? "inline",
     publishWhen: options.publishWhen ?? "when-appended",
     appendedMessages: turn.appendedMessages,
@@ -345,6 +353,7 @@ async function touchTranscriptTurnSessionEntry(params: {
 
 async function publishTranscriptTurnUpdate(params: {
   target: SessionTranscriptTurnWriteContext;
+  sessionEntry?: SessionEntry;
   updateMode: SessionTranscriptTurnUpdateMode;
   publishWhen: "always" | "when-appended";
   appendedMessages: TranscriptMessageAppendResult<unknown>[];
@@ -352,8 +361,8 @@ async function publishTranscriptTurnUpdate(params: {
   if (params.updateMode === "none") {
     return;
   }
-  const lastAppended = params.appendedMessages.findLast((message) => message.appended);
-  if (params.publishWhen === "when-appended" && !lastAppended) {
+  const appendedMessages = params.appendedMessages.filter((message) => message.appended);
+  if (params.publishWhen === "when-appended" && appendedMessages.length === 0) {
     return;
   }
   const target =
@@ -362,17 +371,40 @@ async function publishTranscriptTurnUpdate(params: {
           agentId: params.target.agentId,
           sessionId: params.target.sessionId,
           sessionKey: params.target.sessionKey,
+          ...(params.target.storePath ? { storePath: params.target.storePath } : {}),
         }
       : undefined;
-  emitTranscriptUpdate({
+  const update = {
     ...(params.target.sessionKey ? { sessionKey: params.target.sessionKey } : {}),
     ...(params.target.agentId ? { agentId: params.target.agentId } : {}),
     ...(target ? { target } : {}),
-    ...(params.updateMode === "inline" && lastAppended
-      ? {
-          message: lastAppended.message,
-          messageId: lastAppended.messageId,
-        }
+    ...(params.sessionEntry?.lifecycleRevision
+      ? { lifecycleRevision: params.sessionEntry.lifecycleRevision }
       : {}),
-  });
+  };
+  if (params.updateMode !== "inline" || appendedMessages.length === 0) {
+    emitTranscriptUpdate(update);
+    return;
+  }
+  const sequencedMessages = appendedMessages.map((message) => ({
+    message,
+    messageSeq: readCommittedSqliteTranscriptMessageSequence(message),
+  }));
+  if (
+    sequencedMessages.length > 1 &&
+    sequencedMessages.some(({ messageSeq }) => messageSeq === undefined)
+  ) {
+    // A legacy or rebuilding projection cannot prove each committed cursor.
+    // One history invalidation is safer than publishing duplicate final cursors.
+    emitTranscriptUpdate(update);
+    return;
+  }
+  for (const { message, messageSeq } of sequencedMessages) {
+    emitTranscriptUpdate({
+      ...update,
+      message: message.message,
+      messageId: message.messageId,
+      ...(messageSeq !== undefined ? { messageSeq } : {}),
+    });
+  }
 }

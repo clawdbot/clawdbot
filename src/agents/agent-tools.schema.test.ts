@@ -135,6 +135,34 @@ describe("normalizeToolParameterSchema", () => {
     });
   });
 
+  it("applies llama.cpp cleaning only for the explicit tool-schema profile", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        declarationKey: { type: "string", pattern: "^\\S+$", maxLength: 200 },
+        safe: { type: "string", maxLength: 1999 },
+        boundary: { type: "string", maxLength: 2000 },
+        script: { type: "string", minLength: 1, maxLength: 65_536 },
+      },
+    };
+
+    expect(normalizeToolParameterSchema(schema, { modelProvider: "openai" })).toEqual(schema);
+    expect(
+      normalizeToolParameterSchema(schema, {
+        modelProvider: "openai-compatible",
+        modelCompat: { toolSchemaProfile: "llamacpp" },
+      }),
+    ).toEqual({
+      type: "object",
+      properties: {
+        declarationKey: { type: "string", maxLength: 200 },
+        safe: { type: "string", maxLength: 1999 },
+        boundary: { type: "string" },
+        script: { type: "string", minLength: 1 },
+      },
+    });
+  });
+
   it("applies explicit unsupported keyword stripping after Gemini cleanup", () => {
     expect(
       normalizeToolParameterSchema(

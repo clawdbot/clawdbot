@@ -29,6 +29,11 @@ const OPTIONAL_LIVE_SHARD_FILE_ENVS = new Map([
   ["src/agents/subagent-announce.live.test.ts", ["OPENCLAW_LIVE_SUBAGENT_E2E"]],
   ["src/agents/tools/image-tool.ollama.live.test.ts", ["OPENCLAW_LIVE_OLLAMA_IMAGE"]],
   ["src/agents/tools/image-tool.providers.live.test.ts", ["OPENCLAW_LIVE_IMAGE_TOOL_TEST"]],
+  [
+    "extensions/openai/realtime-quicksilver-gateway-bridge.live.test.ts",
+    ["OPENCLAW_LIVE_GPT_LIVE"],
+  ],
+  ["extensions/openai/realtime-quicksilver.live.test.ts", ["OPENCLAW_LIVE_GPT_LIVE"]],
   ["src/skills/workshop/experience-review.live.test.ts", ["OPENCLAW_LIVE_SKILL_EXPERIENCE_REVIEW"]],
   ["src/system-agent/rescue-channel.live.test.ts", ["OPENCLAW_LIVE_SYSTEM_AGENT_RESCUE_CHANNEL"]],
   ["src/gateway/android-node.capabilities.live.test.ts", ["OPENCLAW_LIVE_ANDROID_NODE"]],

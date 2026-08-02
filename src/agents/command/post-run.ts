@@ -24,7 +24,7 @@ import {
   loadDeliveryRuntime,
   loadSessionStoreRuntime,
 } from "./runtime-loaders.js";
-import { clearPendingFinalDeliveryFields, persistSessionEntry } from "./session-helpers.js";
+import { clearPendingFinalDelivery, persistSessionEntry } from "./session-helpers.js";
 import type { EmbeddedSessionState } from "./session-preparation.js";
 import type { AgentCommandOpts } from "./types.js";
 
@@ -343,18 +343,18 @@ export async function finalizeEmbeddedAgentCommand(params: {
       if (!entry) {
         throw new Error("Cannot clear pending delivery without a session entry");
       }
-      const noPendingTextForThisRun =
+      // This command only creates replayable markers, so transport-only is stale from an earlier run.
+      const clearStaleTransportOnly =
         params.opts.deliver === true &&
-        pendingFinalDeliveryMarker.pendingFinalDeliveryTextForThisRun === undefined &&
-        entry.pendingFinalDelivery === true &&
-        !entry.pendingFinalDeliveryText;
-      if (deliveryResult?.deliverySucceeded === true || noPendingTextForThisRun) {
+        !pendingFinalDeliveryMarker.hasSendableFinalPayload &&
+        entry.pendingFinalDelivery?.kind === "transport-only";
+      if (deliveryResult?.deliverySucceeded === true || clearStaleTransportOnly) {
         sessionEntry = await persistSessionEntry({
           sessionStore,
           sessionKey,
           storePath,
           initialEntry: entry,
-          entry: clearPendingFinalDeliveryFields(entry, Date.now()),
+          entry: clearPendingFinalDelivery(entry, Date.now()),
           shouldPersist: (current) =>
             shouldPersistCurrentRunSessionCleanup(current, runOwnedSessionId),
         });

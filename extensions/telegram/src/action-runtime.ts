@@ -346,6 +346,7 @@ export async function handleTelegramAction(
   params: Record<string, unknown>,
   cfg: OpenClawConfig,
   options?: {
+    mediaAccess?: ChannelMessageActionContext["mediaAccess"];
     mediaLocalRoots?: readonly string[];
     mediaReadFile?: (filePath: string) => Promise<Buffer>;
     sessionKey?: string | null;
@@ -562,12 +563,13 @@ export async function handleTelegramAction(
       quoteText,
     });
     const mediaAccess =
-      options?.mediaLocalRoots || options?.mediaReadFile
+      options?.mediaAccess ??
+      (options?.mediaLocalRoots || options?.mediaReadFile
         ? {
             ...(options.mediaLocalRoots ? { localRoots: options.mediaLocalRoots } : {}),
             ...(options.mediaReadFile ? { readFile: options.mediaReadFile } : {}),
           }
-        : undefined;
+        : undefined);
     const outboundSession = buildOutboundSessionContext({
       cfg,
       sessionKey: options?.sessionKey,
@@ -739,7 +741,8 @@ export async function handleTelegramAction(
     const content =
       readStringParam(params, "content", { allowEmpty: false }) ??
       readStringParam(params, "message", { allowEmpty: false });
-    const caption = readStringParam(params, "caption", { allowEmpty: false });
+    // Telegram treats an explicit empty caption as a request to remove it.
+    const caption = readStringParam(params, "caption", { allowEmpty: true });
     const buttons = resolveTelegramButtonsFromParams(params, undefined, {
       allowWebAppButtons: resolveTelegramTargetChatType(chatId ?? "") === "direct",
     });

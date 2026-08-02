@@ -23,6 +23,7 @@ When sandboxing is enabled and `workspaceAccess` is not `"rw"`, tools operate in
 - Default: `~/.openclaw/workspace`
 - If `OPENCLAW_PROFILE` is set and not `"default"`, the default becomes `~/.openclaw/workspace-<profile>`.
 - `OPENCLAW_WORKSPACE_DIR` overrides both of the above when set.
+- `openclaw onboard --non-interactive` uses `<state-dir>/workspace` when `OPENCLAW_STATE_DIR` is non-default, including for the initial `main` agent entry.
 - Non-default agents (`agents.entries.*`) without an explicit workspace resolve to `<state-dir>/workspace-<agentId>`, not the shared default workspace.
 
 Override in `~/.openclaw/openclaw.json`:

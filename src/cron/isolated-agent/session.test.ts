@@ -352,9 +352,12 @@ describe("resolveCronSession", () => {
           cliSessionBindings: {},
           claudeCliSessionId: "old-claude-session",
           liveModelSwitchPending: true,
-          fallbackNoticeSelectedModel: "anthropic/claude-opus-4-6",
-          fallbackNoticeActiveModel: "anthropic/claude-sonnet-4-6",
-          fallbackNoticeReason: "rate limit",
+          fallbackNotice: {
+            kind: "active",
+            selectedModel: "anthropic/claude-opus-4-6",
+            activeModel: "anthropic/claude-sonnet-4-6",
+            reason: "rate limit",
+          },
           inputTokens: 1,
           outputTokens: 2,
           totalTokens: 3,
@@ -368,7 +371,7 @@ describe("resolveCronSession", () => {
           cacheWrite: 5,
           contextTokens: 200_000,
           compactionCount: 9,
-          memoryFlushAt: NOW_MS - 500,
+          memoryFlush: { kind: "succeeded", compactionCount: 9 },
           abortCutoffMessageSid: "old-message",
           spawnedBy: "agent:main:session:parent",
           skillsSnapshot: {
@@ -440,9 +443,7 @@ describe("resolveCronSession", () => {
       expect(result.sessionEntry.cliSessionBindings).toBeUndefined();
       expect(result.sessionEntry.claudeCliSessionId).toBeUndefined();
       expect(result.sessionEntry.liveModelSwitchPending).toBeUndefined();
-      expect(result.sessionEntry.fallbackNoticeSelectedModel).toBeUndefined();
-      expect(result.sessionEntry.fallbackNoticeActiveModel).toBeUndefined();
-      expect(result.sessionEntry.fallbackNoticeReason).toBeUndefined();
+      expect(result.sessionEntry.fallbackNotice).toBeUndefined();
       expect(result.sessionEntry.inputTokens).toBeUndefined();
       expect(result.sessionEntry.outputTokens).toBeUndefined();
       expect(result.sessionEntry.totalTokens).toBeUndefined();
@@ -456,7 +457,7 @@ describe("resolveCronSession", () => {
       expect(result.sessionEntry.cacheWrite).toBeUndefined();
       expect(result.sessionEntry.contextTokens).toBeUndefined();
       expect(result.sessionEntry.compactionCount).toBeUndefined();
-      expect(result.sessionEntry.memoryFlushAt).toBeUndefined();
+      expect(result.sessionEntry.memoryFlush).toBeUndefined();
       expect(result.sessionEntry.abortCutoffMessageSid).toBeUndefined();
       expect(result.sessionEntry.spawnedBy).toBeUndefined();
       expect(result.sessionEntry.skillsSnapshot).toBeUndefined();

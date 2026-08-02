@@ -71,7 +71,7 @@ export function createSubagentRegistryLifecycleController(params: SubagentRegist
       settleRequesterTurnAfterSessionSpawns({
         ...args,
         runs: params.runs,
-        persistOrThrow: () => params.persistOrThrow(),
+        persistOrThrow: (...runIds) => params.persistOrThrow(...runIds),
         schedule: (runId, entry) => {
           if (state.scheduledRequesterSettleWakeRuns.has(runId)) {
             state.pendingRequesterSettleWakeRearms.add(runId);

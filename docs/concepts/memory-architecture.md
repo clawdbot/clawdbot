@@ -246,6 +246,55 @@ weakest (LongMemEval, arXiv:2410.10813), so the expensive lane spends its
 latency where it plausibly buys recall quality. `mode: "always"` restores
 unconditional pre-reply recall; `mode: "off"` disables the lane.
 
+## Project-scoped memory
+
+Repository work adds a second retrieval boundary alongside provenance. When a
+turn runs inside a Git repository, memory written by that work carries a
+trailing project annotation:
+
+```markdown
+- Use the release helper for package validation. <!-- project: github.com/openclaw/openclaw -->
+```
+
+The identity comes from the normalized `origin` remote, so ordinary clones and
+linked worktrees of the same repository converge on one key. Forks intentionally
+remain separate because their remotes name different repositories. A repository
+without an `origin` uses its absolute root path instead. The resolved identity is
+cached for the process lifetime; semicolons are escaped so one key cannot become
+multiple list entries, and recall never starts Git once per message.
+
+Project scope changes ranking and automatic injection without partitioning the
+files. Each session keeps up to four recently active repository keys in
+most-recent-first order. Preparing a repository moves its key to the front and
+evicts the least-recent key beyond that cap. This set is ephemeral runtime
+state: it is not persisted or restored, so a new session or process starts with
+an empty set. The current repository identity remains a separate prepared fact
+used for write annotations; new repository-specific memories receive only that
+current key, not the whole active set. Ranked search boosts entries from any
+repository in the active set, mildly demotes entries from another repository,
+and leaves untagged memory neutral. Trigger injection is stricter: a tagged
+entry is eligible only while every project key on that entry is in the active
+set. Each full turn also gets a compact, separately budgeted project-memory
+block built from curated entries for the active repositories. All retained keys
+have the same boost; recency only controls promotion and eviction. `USER.md` and
+standing intents remain user-level and are never project-scoped.
+
+This matters most for a many-repository worker: a build workaround learned in
+one codebase should not silently steer work in another. In one continuous
+repository session, the annotation is mostly invisible; ranking and bootstrap
+refresh preserve the same learned context across compaction and dreaming. A
+session that moves to another repository keeps both repositories active until
+recency eviction, while a sub-agent derives its own active set rather than
+inheriting its parent's. A session that starts outside a repository retains the
+previous global behavior; leaving a repository does not clear keys already
+active in that session.
+
+The boundary follows the same research result as the rest of recall: selective,
+query-relevant context outperforms indiscriminate history as sessions and
+corpora grow (LongMemEval, arXiv:2410.10813). Project identity is therefore a
+deterministic eligibility and ranking signal, not another model judgment or a
+new configuration surface.
+
 ## The user model
 
 `USER.md` is a separate curated file for the user model: stable

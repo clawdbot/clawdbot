@@ -14,6 +14,8 @@ export type ModelCatalogEntry = {
   id: string;
   name: string;
   provider: string;
+  /** Provider-owned strongest-first picker order; internal and never projected to clients. */
+  providerOrder?: number;
   alias?: string;
   api?: ModelApi;
   /** Private transport provenance for route matching; never project directly to clients. */

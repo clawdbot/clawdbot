@@ -8,6 +8,7 @@ const runConfigUnsetMock = vi.hoisted(() => vi.fn(async () => {}));
 const modelsListCommandMock = vi.hoisted(() => vi.fn(async () => {}));
 const modelsStatusCommandMock = vi.hoisted(() => vi.fn(async () => {}));
 const runDaemonStatusMock = vi.hoisted(() => vi.fn(async () => {}));
+const runGatewayHealthJsonRouteMock = vi.hoisted(() => vi.fn(async () => {}));
 const statusJsonCommandMock = vi.hoisted(() => vi.fn(async () => {}));
 const tasksListJsonCommandMock = vi.hoisted(() => vi.fn(async () => {}));
 const tasksAuditJsonCommandMock = vi.hoisted(() => vi.fn(async () => {}));
@@ -31,6 +32,10 @@ vi.mock("../../commands/models/list.status-command.js", () => ({
 
 vi.mock("../daemon-cli/status.js", () => ({
   runDaemonStatus: runDaemonStatusMock,
+}));
+
+vi.mock("../gateway-cli/health-route.js", () => ({
+  runGatewayHealthJsonRoute: runGatewayHealthJsonRouteMock,
 }));
 
 vi.mock("../../commands/status-json.js", () => ({
@@ -190,6 +195,32 @@ describe("program routes", () => {
   it("matches gateway status route without plugin preload", () => {
     const route = expectRoute(["gateway", "status"]);
     expect(route.loadPlugins).toBeUndefined();
+  });
+
+  it("routes machine-readable gateway health without plugin preload", async () => {
+    const route = expectRoute(["gateway", "health"]);
+    expect(route.loadPlugins).toBeUndefined();
+    await expect(
+      route.run(["node", "openclaw", "gateway", "health", "--json", "--timeout", "5000"]),
+    ).resolves.toBe(true);
+    expect(runGatewayHealthJsonRouteMock).toHaveBeenCalledWith(
+      {
+        rpc: {
+          url: undefined,
+          token: undefined,
+          password: undefined,
+          timeout: "5000",
+          expectFinal: false,
+          json: true,
+        },
+        localPortOverride: undefined,
+      },
+      defaultRuntime,
+    );
+  });
+
+  it("falls back for text gateway health output", async () => {
+    await expectRunFalse(["gateway", "health"], ["node", "openclaw", "gateway", "health"]);
   });
 
   it("returns false for gateway status route when option values are missing", async () => {

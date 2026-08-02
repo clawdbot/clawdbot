@@ -3,7 +3,30 @@ import {
   formatRuntimeCacheHitPercent,
 } from "./agentic-parity-cache-usage.js";
 import type { QaRuntimeParityReport } from "./agentic-parity-runtime-report-contract.js";
+import type { RuntimeParityCacheDiagnostics } from "./runtime-parity-cache-diagnostics.js";
 import { formatRuntimeSpeedComparison, formatRuntimeWallClockMs } from "./runtime-parity-timing.js";
+
+function formatRuntimeCacheMisses(diagnostics: RuntimeParityCacheDiagnostics | undefined): string {
+  if (!diagnostics) {
+    return "N/A";
+  }
+  if (diagnostics.cacheTelemetryTurns === 0) {
+    return diagnostics.unmeasuredPostWarmTurns.length > 0
+      ? `N/A (unmeasured turns ${diagnostics.unmeasuredPostWarmTurns.join(", ")})`
+      : "N/A";
+  }
+  const measuredMisses =
+    diagnostics.cacheMisses.length === 0
+      ? "none"
+      : diagnostics.cacheMisses
+          .map((miss) => `turn ${miss.turn} (${miss.inputTokens} uncached input)`)
+          .join(", ");
+  if (diagnostics.unmeasuredPostWarmTurns.length === 0) {
+    return measuredMisses;
+  }
+  const unknownTurns = `unmeasured turns ${diagnostics.unmeasuredPostWarmTurns.join(", ")}`;
+  return measuredMisses === "none" ? `N/A (${unknownTurns})` : `${measuredMisses}; ${unknownTurns}`;
+}
 
 export function renderQaRuntimeParityMarkdownReport(report: QaRuntimeParityReport): string {
   const lines = [
@@ -90,6 +113,9 @@ export function renderQaRuntimeParityMarkdownReport(report: QaRuntimeParityRepor
     }
     lines.push(
       `- prompt cache: openclaw ${formatRuntimeCacheHitPercent(scenario.openclawUsage?.cacheHitPercent)} (${formatRuntimeCacheCount(scenario.openclawUsage?.cachedInputTokens)} cached, ${formatRuntimeCacheCount(scenario.openclawUsage?.uncachedInputTokens)} uncached input); codex ${formatRuntimeCacheHitPercent(scenario.codexUsage?.cacheHitPercent)} (${formatRuntimeCacheCount(scenario.codexUsage?.cachedInputTokens)} cached, ${formatRuntimeCacheCount(scenario.codexUsage?.uncachedInputTokens)} uncached input)`,
+    );
+    lines.push(
+      `- post-warm cache misses: openclaw ${formatRuntimeCacheMisses(scenario.openclawCacheDiagnostics)}; codex ${formatRuntimeCacheMisses(scenario.codexCacheDiagnostics)}`,
     );
     if (scenario.runtimeParityUsage.expectation === "not-applicable") {
       lines.push(`- assistant-message usage: N/A (${scenario.runtimeParityUsage.reason})`);

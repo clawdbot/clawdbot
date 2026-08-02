@@ -132,6 +132,7 @@ const ALL_ROUTES: RouteId[] = Array.from(
     // Hub tabs and settings subpages route without their own nav entry.
     "worktrees",
     "memory-import",
+    "ai-agents",
     "model-setup",
     "lobsterdex",
     ...SETTINGS_NAVIGATION_GROUPS.flatMap((group) => group.routes),
@@ -159,6 +160,7 @@ const SETTINGS_ROUTE_PATHS = [
   { routeId: "worktrees", path: "/worktrees", alias: "/settings/worktrees" },
   { routeId: "sessions", path: "/sessions", alias: "/settings/sessions" },
   { routeId: "nodes", path: "/settings/devices", alias: "/nodes" },
+  { routeId: "cron", path: "/automations", alias: "/cron" },
   { routeId: "agents", path: "/settings/agents", alias: "/agents" },
   {
     routeId: "memory-import",
@@ -202,7 +204,6 @@ describe("navigationIconForRoute", () => {
       plugins: "puzzle",
       "skill-workshop": "wrench",
       nodes: "monitorSmartphone",
-      config: "settings",
       profile: "circleUser",
       communications: "send",
       appearance: "palette",
@@ -210,6 +211,7 @@ describe("navigationIconForRoute", () => {
       automation: "terminal",
       mcp: "wrench",
       memory: "book",
+      talk: "mic",
       infrastructure: "globe",
       labs: "flaskConical",
       about: "fileText",
@@ -237,6 +239,15 @@ describe("settingsSearchTextMatches", () => {
     expect(settingsSearchTextMatches("CPU usage", "cp")).toBe(true);
     expect(settingsSearchTextMatches("MCP", "cp")).toBe(false);
     expect(settingsSearchTextMatches("外観設定", "設定")).toBe(true);
+  });
+
+  it.each([
+    ["Cámara", "Ca\u0301mara"],
+    ["Ca\u0301mara", "Cámara"],
+    ["Notificación", "Notificacio\u0301n"],
+    ["Notificacio\u0301n", "Notificación"],
+  ])("matches canonically equivalent setting text %j against %j", (value, query) => {
+    expect(settingsSearchTextMatches(value, query)).toBe(true);
   });
 });
 
@@ -313,7 +324,6 @@ describe("titleForRoute", () => {
       plugins: "Plugins",
       "skill-workshop": "Skill Workshop",
       nodes: "Devices",
-      config: "Settings",
       profile: "Profile",
       communications: "Communications",
       appearance: "Appearance",
@@ -321,6 +331,7 @@ describe("titleForRoute", () => {
       automation: "Automation",
       mcp: "MCP",
       memory: "Memory",
+      talk: "Talk",
       infrastructure: "Infrastructure",
       labs: "Labs",
       about: "About",
@@ -355,20 +366,20 @@ describe("subtitleForRoute", () => {
       sessions: "Active threads and defaults.",
       usage: "API usage and costs.",
       cron: "Scheduled tasks and recurring agent runs.",
-      tasks: "Background tasks: subagents, cron runs, CLI.",
+      tasks: "Background tasks: subagents, automation runs, CLI.",
       agents: "Workspaces, tools, identities.",
       skills: "Skills and API keys.",
       plugins: "Install and manage optional capabilities.",
       "skill-workshop": "Review, refine, and apply proposals before they become live skills.",
       nodes: "Paired devices, pairing approvals, and exec bindings.",
-      config: "Language and shortcuts to core settings.",
-      profile: "Your agent's stats, streaks, and life in the reef.",
-      communications: "Messages, talk, and voice settings.",
+      profile: "Your display name, avatar, and identity on this gateway.",
+      communications: "Messages and text-to-speech settings.",
       appearance: "Theme, UI, and setup wizard settings.",
       lobsterdex: "Every lobster palette that has visited this browser.",
-      automation: "Commands, hooks, cron, and plugins.",
+      automation: "Commands, hooks, automations, and plugins.",
       mcp: "MCP servers, auth, tools, and diagnostics.",
       memory: "Memory engine, backend, search, and dreaming.",
+      talk: "Realtime voice: provider, model, and speaker voice.",
       infrastructure: "Gateway, browser, node host, discovery, and ACP settings.",
       labs: "Experimental agent and tool capabilities.",
       about: "Control UI and connected Gateway build identity.",
@@ -722,7 +733,7 @@ describe("inferBasePathFromPathname", () => {
     expect(inferBasePathFromPathname("/skills/")).toBe("");
     // Real mount directories that merely contain a route-suffix keep working.
     expect(inferBasePathFromPathname("/ui/config")).toBe("/ui");
-    expect(inferBasePathFromPathname("/ui/settings/general")).toBe("/ui");
+    expect(inferBasePathFromPathname("/ui/settings/appearance")).toBe("/ui");
   });
 });
 
@@ -770,15 +781,14 @@ describe("SIDEBAR_NAV_ROUTES", () => {
     expect(settingsRoutes).toEqual([
       "custodian",
       "profile",
-      "config",
       "appearance",
       "notifications",
       "connection",
       "channels",
       "communications",
+      "talk",
       "nodes",
       "agents",
-      "ai-agents",
       "labs",
       "model-providers",
       "mcp",
@@ -794,12 +804,12 @@ describe("SIDEBAR_NAV_ROUTES", () => {
     ]);
   });
 
-  it("keeps settings sidebar groups unique and general first", () => {
+  it("keeps settings sidebar groups unique with personal settings first", () => {
     const settingsRoutes = SETTINGS_NAVIGATION_GROUPS.flatMap((group) => group.routes);
     expect(new Set(settingsRoutes).size).toBe(settingsRoutes.length);
     const [firstGroup] = SETTINGS_NAVIGATION_GROUPS;
     expect(firstGroup?.labelKey).toBeNull();
-    expect(firstGroup?.routes).toContain("config");
+    expect(firstGroup?.routes).toEqual(["custodian", "profile", "appearance", "notifications"]);
     for (const group of SETTINGS_NAVIGATION_GROUPS.slice(1)) {
       expect(group.labelKey).toBeTruthy();
     }

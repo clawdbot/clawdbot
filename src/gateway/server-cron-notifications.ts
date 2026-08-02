@@ -4,6 +4,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { resolveUserTimezone } from "../agents/date-time.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { CronFailureDestinationConfig } from "../config/types.cron.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -19,6 +20,8 @@ import { resolveCronDeliverySessionKey } from "../cron/session-target.js";
 import type { CronJob, CronMessageChannel } from "../cron/types.js";
 import { normalizeHttpWebhookUrl } from "../cron/webhook-url.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { formatZonedTimestamp } from "../infra/format-time/format-datetime.js";
+import { withTimeout } from "../infra/fs-safe.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
@@ -47,10 +50,12 @@ type CronFailureAlertParams = {
   webhookToken?: unknown;
   job: CronJob;
   text: string;
+  runAtMs?: number;
   channel: CronMessageChannel;
   to?: string;
   mode?: "announce" | "webhook";
   accountId?: string;
+  threadId?: string | number;
 };
 
 function redactWebhookUrl(url: string): string {
@@ -163,7 +168,7 @@ function buildCronWebhookHeaders(webhookToken?: string): Record<string, string> 
 }
 
 function buildCronFailureWebhookPayload(params: { evt: CronEvent; job: CronJob }) {
-  const failureMessage = `Cron job "${params.job.name}" failed: ${params.evt.error ?? "unknown error"}`;
+  const failureMessage = `Automation "${params.job.name}" failed: ${params.evt.error ?? "unknown error"}`;
   return {
     jobId: params.job.id,
     jobName: params.job.name,
@@ -174,6 +179,20 @@ function buildCronFailureWebhookPayload(params: { evt: CronEvent; job: CronJob }
     durationMs: params.evt.durationMs,
     nextRunAtMs: params.evt.nextRunAtMs,
   };
+}
+
+function appendCronRunStarted(
+  message: string,
+  runAtMs: number | undefined,
+  config: OpenClawConfig,
+): string {
+  if (typeof runAtMs !== "number" || !Number.isFinite(runAtMs)) {
+    return message;
+  }
+  const timestamp = formatZonedTimestamp(new Date(runAtMs), {
+    timeZone: resolveUserTimezone(config.agents?.defaults?.userTimezone),
+  });
+  return timestamp ? `${message}\nRun started: ${timestamp}` : message;
 }
 
 function buildCronFinishedWebhookPayload(evt: CronEvent) {
@@ -207,6 +226,7 @@ async function postCronWebhook(params: {
   logger: CronLogger;
 }): Promise<void> {
   const abortController = new AbortController();
+  const deadlineAtMs = Date.now() + CRON_WEBHOOK_TIMEOUT_MS;
   try {
     assertSecretOwnerAvailable("capability", "cron-webhook");
     const result = await fetchWithSsrFGuard({
@@ -224,6 +244,19 @@ async function postCronWebhook(params: {
         throw new Error(`Webhook request failed with HTTP ${result.response.status}`);
       }
     } finally {
+      // Guard release closes the dispatcher, not an unread response stream.
+      // Keep response cleanup inside the request deadline; a non-settling
+      // stream cancellation must not retain the dispatcher or Gateway root.
+      if (!result.response.bodyUsed) {
+        const cancellation = result.response.body?.cancel();
+        if (cancellation) {
+          await withTimeout(
+            cancellation,
+            Math.max(1, deadlineAtMs - Date.now()),
+            "cron webhook response cleanup",
+          ).catch(() => undefined);
+        }
+      }
       await result.release();
     }
   } catch (err) {
@@ -294,6 +327,7 @@ async function sendGatewayCronFailureAlertUnderAdmission(
           jobId: params.job.id,
           jobName: params.job.name,
           message: params.text,
+          runAtMs: params.runAtMs,
         },
         logContext: { jobId: params.job.id },
         blockedLog: "cron: failure alert webhook blocked by SSRF guard",
@@ -314,36 +348,31 @@ async function sendGatewayCronFailureAlertUnderAdmission(
 
   const abortController = new AbortController();
   const deliveryTimeoutError = new Error("cron: failure alert announcement timed out");
-  const deliveryTimeout = setTimeout(() => {
-    abortController.abort(deliveryTimeoutError);
-  }, CRON_WEBHOOK_TIMEOUT_MS);
-
-  try {
-    // Release Gateway admission on deadline even when a transport ignores abort.
-    await Promise.race([
-      sendCronAnnouncePayloadStrict({
-        deps: params.deps,
-        cfg: runtimeConfig,
-        agentId,
-        jobId: params.job.id,
-        target: {
-          channel: params.channel,
-          to: params.to,
-          accountId: params.accountId,
-          sessionKey: resolveCronDeliverySessionKey(params.job),
-        },
-        message: params.text,
-        abortSignal: abortController.signal,
-      }),
-      new Promise<never>((_resolve, reject) => {
-        abortController.signal.addEventListener("abort", () => reject(deliveryTimeoutError), {
-          once: true,
-        });
-      }),
-    ]);
-  } finally {
-    clearTimeout(deliveryTimeout);
-  }
+  // Release Gateway admission on deadline even when a transport ignores abort.
+  await withTimeout(
+    sendCronAnnouncePayloadStrict({
+      deps: params.deps,
+      cfg: runtimeConfig,
+      agentId,
+      jobId: params.job.id,
+      target: {
+        channel: params.channel,
+        to: params.to,
+        accountId: params.accountId,
+        threadId: params.threadId,
+        sessionKey: resolveCronDeliverySessionKey(params.job),
+      },
+      message: appendCronRunStarted(params.text, params.runAtMs, runtimeConfig),
+      abortSignal: abortController.signal,
+    }),
+    CRON_WEBHOOK_TIMEOUT_MS,
+    {
+      createError: () => {
+        abortController.abort(deliveryTimeoutError);
+        return deliveryTimeoutError;
+      },
+    },
+  );
 }
 
 /** Dispatches completion and failure-destination notifications after a cron run finishes. */
@@ -504,7 +533,7 @@ function dispatchCronFailureDestinationNotifications(params: {
               // session only for context, not for reattaching the primary topic.
               inheritSessionThread: false,
             },
-            `⚠️ ${failurePayload.message}`,
+            appendCronRunStarted(`⚠️ ${failurePayload.message}`, params.evt.runAtMs, runtimeConfig),
           ),
       });
     }
@@ -530,9 +559,10 @@ function dispatchCronFailureDestinationNotifications(params: {
           channel: primaryPlan.channel,
           to: primaryPlan.to,
           accountId: primaryPlan.accountId,
+          threadId: primaryPlan.threadId,
           sessionKey: deliverySessionKey,
         },
-        `⚠️ ${failurePayload.message}`,
+        appendCronRunStarted(`⚠️ ${failurePayload.message}`, params.evt.runAtMs, runtimeConfig),
       ),
   });
 }

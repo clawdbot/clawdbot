@@ -619,9 +619,9 @@ final class NodeAppModel {
         if self.isAppleReviewDemoModeEnabled {
             return AppleReviewDemoChatTransport()
         }
-        let imageArtifactLoader = IOSImageArtifactLoader { [weak self] in
+        let mediaArtifactLoader = IOSMediaArtifactLoader { [weak self] in
             guard let config = self?.activeGatewayConnectConfig else { return nil }
-            return IOSImageArtifactLoader.Connection(
+            return IOSMediaArtifactLoader.Connection(
                 config: config,
                 gatewayID: config.nodeOptions.deviceAuthGatewayID ?? config.effectiveStableID,
                 customHeaders: GatewaySettingsStore.loadGatewayCustomHeaders(
@@ -632,7 +632,7 @@ final class NodeAppModel {
             widgetGateway: self.nodeGateway,
             globalAgentId: self.chatDeliveryAgentId,
             outboxGatewayID: outboxGatewayID,
-            imageArtifactLoader: imageArtifactLoader)
+            mediaArtifactLoader: mediaArtifactLoader)
     }
 
     /// Gateway identity the transcript cache is scoped to: the active
@@ -3267,7 +3267,8 @@ extension NodeAppModel {
 
         func register(
             _ commands: [String],
-            handler: @escaping (NodeAppModel, BridgeInvokeRequest) async throws -> BridgeInvokeResponse)
+            handler: @escaping @MainActor @Sendable (NodeAppModel, BridgeInvokeRequest) async throws
+                -> BridgeInvokeResponse)
         {
             let invoke: NodeCapabilityRouter.Handler = { [weak self] request in
                 guard let self else { throw NodeCapabilityRouter.RouterError.handlerUnavailable }
@@ -6736,6 +6737,17 @@ extension NodeAppModel {
         event.messageKind ?? .chat
     }
 
+    nonisolated static func watchThinkingOverride(for messageKind: WatchMessageKind) -> String? {
+        // Free-form Watch chat has no one-turn thinking control, so it must not
+        // invent an override. Quick replies intentionally use a cheap level.
+        switch messageKind {
+        case .chat:
+            nil
+        case .quickReply:
+            "low"
+        }
+    }
+
     private func forwardWatchMessage(
         _ event: WatchAppCommandEvent,
         requeueOnFailure: Bool) async -> WatchMessageSendOutcome
@@ -6758,7 +6770,7 @@ extension NodeAppModel {
         if messageKind == .chat {
             self.focusChatSession(sessionKey)
         }
-        let thinking = messageKind == .quickReply ? "low" : "auto"
+        let thinkingOverride = Self.watchThinkingOverride(for: messageKind)
 
         do {
             let submittedAtMs = Int64(Date().timeIntervalSince1970 * 1000)
@@ -6766,7 +6778,8 @@ extension NodeAppModel {
                 let response = try await appleReviewDemoChatTransport.sendMessage(
                     sessionKey: sessionKey,
                     message: text,
-                    thinking: thinking,
+                    // Demo mode has no Gateway session from which to resolve an omitted level.
+                    thinking: thinkingOverride ?? "auto",
                     idempotencyKey: event.commandId,
                     attachments: [])
                 if messageKind == .quickReply {
@@ -6810,7 +6823,7 @@ extension NodeAppModel {
             let response = try await transport.sendMessage(
                 sessionKey: sessionKey,
                 message: text,
-                thinking: thinking,
+                thinking: thinkingOverride,
                 idempotencyKey: event.commandId,
                 attachments: [],
                 ifCurrentRoute: operatorRoute)

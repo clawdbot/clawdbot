@@ -21,6 +21,7 @@ export function createPluginRecord(params: {
   id: string;
   name?: string;
   description?: string;
+  packageVersion?: string;
   version?: string;
   builtWithOpenClawVersion?: string;
   packageName?: string;
@@ -47,6 +48,7 @@ export function createPluginRecord(params: {
     id: params.id,
     name: params.name ?? params.id,
     description: params.description,
+    packageVersion: params.packageVersion,
     version: params.version,
     builtWithOpenClawVersion: params.builtWithOpenClawVersion,
     packageName: params.packageName,

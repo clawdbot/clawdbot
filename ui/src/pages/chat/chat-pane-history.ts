@@ -1,29 +1,27 @@
+import type { SessionsCatalogContinueResult } from "../../../../packages/gateway-protocol/src/index.js";
+import {
+  COMMAND_PALETTE_TARGET_EVENT,
+  type CommandPaletteTargetDetail,
+} from "../../components/command-palette-contract.ts";
+import {
+  announceCatalogSessionContinued,
+  parseCatalogSessionKey,
+  type CatalogSessionKey,
+} from "../../lib/sessions/catalog-key.ts";
+import { scopedAgentParamsForSession, visibleSessionMatches } from "../../lib/sessions/index.ts";
 import {
   areUiSessionKeysEquivalent,
-  COMMAND_PALETTE_TARGET_EVENT,
-  announceCatalogSessionContinued,
-  captureChatSessionScrollPosition,
-  getChatSessionScrollPosition,
+  parseAgentSessionKey,
+} from "../../lib/sessions/session-key.ts";
+import { replaceChatAttachmentsFromEditor } from "./attachment-payload-store.ts";
+import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
+import {
   loadChatHistory,
   loadOlderChatHistoryPage,
-  parseAgentSessionKey,
-  parseCatalogSessionKey,
-  persistChatComposerState,
   resolveChatHistoryPagination,
-  replaceChatAttachmentsFromEditor,
-  restoreChatScroll,
   rewindChatHistory,
-  saveChatSessionScrollPosition,
-  scheduleChatScroll,
-  scopedAgentParamsForSession,
   switchChatHistoryBranch,
-  visibleSessionMatches,
-  type CatalogSessionKey,
-  type ChatHistoryPagination,
-  type ChatSessionScrollPosition,
-  type CommandPaletteTargetDetail,
-  type SessionsCatalogContinueResult,
-} from "./chat-pane-deps.ts";
+} from "./chat-history.ts";
 import { ChatPaneSession } from "./chat-pane-session.ts";
 import {
   CHAT_HISTORY_BOOTSTRAP_PAGE_LIMIT,
@@ -32,6 +30,15 @@ import {
   CHAT_HISTORY_TOUCH_INTENT_PX,
   CHAT_HISTORY_UPWARD_KEYS,
 } from "./chat-pane-shared.ts";
+import { persistChatComposerState } from "./composer-persistence.ts";
+import {
+  captureChatSessionScrollPosition,
+  getChatSessionScrollPosition,
+  restoreChatScroll,
+  saveChatSessionScrollPosition,
+  scheduleChatScroll,
+  type ChatSessionScrollPosition,
+} from "./scroll.ts";
 
 export abstract class ChatPaneHistory extends ChatPaneSession {
   private activeCatalogContinuation: symbol | null = null;

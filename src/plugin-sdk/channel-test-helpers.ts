@@ -15,12 +15,13 @@ export {
   createOutboundTestPlugin,
   createTestRegistry,
   initializeGlobalHookRunner,
-  releasePinnedPluginChannelRegistry,
+  resetPluginRuntimeStateForTest,
   resetGlobalHookRunner,
   setActivePluginRegistry,
   type PluginHookRegistration,
 } from "./test-helpers/outbound-delivery.js";
 export {
+  createTestInboundDebounceFlush,
   createPluginRuntimeMediaMock,
   createPluginRuntimeMock,
   type PluginRuntimeMediaMock,

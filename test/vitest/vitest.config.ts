@@ -1,5 +1,6 @@
 // Vitest config config wires the config test shard.
 import { defineConfig } from "vitest/config";
+import { agentVitestProjectConfigs } from "./vitest.agents-paths.mjs";
 import {
   resolveDefaultVitestPool,
   resolveLocalVitestMaxWorkers,
@@ -33,14 +34,7 @@ export const rootVitestProjects = [
   "test/vitest/vitest.commands-light.config.ts",
   "test/vitest/vitest.commands.config.ts",
   "test/vitest/vitest.auto-reply.config.ts",
-  "test/vitest/vitest.agents-core-isolated.config.ts",
-  "test/vitest/vitest.agents-core.config.ts",
-  "test/vitest/vitest.agents-embedded-agent.config.ts",
-  "test/vitest/vitest.agents-embedded-agent-incomplete-turn.config.ts",
-  "test/vitest/vitest.agents-embedded-agent-overflow-compaction.config.ts",
-  "test/vitest/vitest.agents-embedded-agent-run.config.ts",
-  "test/vitest/vitest.agents-support.config.ts",
-  "test/vitest/vitest.agents-tools.config.ts",
+  ...agentVitestProjectConfigs,
   "test/vitest/vitest.daemon.config.ts",
   "test/vitest/vitest.media.config.ts",
   "test/vitest/vitest.unit-fast.config.ts",

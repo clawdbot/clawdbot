@@ -5,14 +5,106 @@ import {
   createBrowserPanelTestMetrics,
   createBrowserPanelTestTab,
   createDeferred,
+  createView,
   flushBrowserResponses,
   setupBrowserPanelTestCleanup,
   stubScreenshotMedia,
+  TestBrowserPanelHost,
 } from "./browser-panel-controller-test-support.ts";
+import { BrowserPanelController } from "./browser-panel-controller.ts";
 
 setupBrowserPanelTestCleanup();
 
 describe("BrowserPanelController superseded tab snapshots", () => {
+  it.each([true, false])(
+    "never reselects a closed active tab when refreshing the remaining tabs fails (fallback: %s)",
+    async (hasFallback) => {
+      stubScreenshotMedia();
+      const activeUrl = "https://example.test/active";
+      const fallbackUrl = "https://example.test/fallback";
+      const { client, request } = createBrowserClient(async (envelope) => {
+        if (envelope.method === "DELETE" && envelope.path === "/tabs/active-tab") {
+          return { ok: true };
+        }
+        if (envelope.path === "/tabs") {
+          throw new Error("Tab refresh failed after the active tab was closed");
+        }
+        if (envelope.path === "/screenshot" && envelope.body?.targetId === "fallback-tab") {
+          return { path: "/fresh.png", targetId: "raw-fallback", url: fallbackUrl };
+        }
+        if (envelope.path === "/act") {
+          return createBrowserPanelTestMetrics(fallbackUrl, "Fallback");
+        }
+        throw new Error(`Unexpected browser route: ${envelope.method} ${envelope.path}`);
+      });
+      const controller = createBrowserPanelTestController(client, "active-tab", activeUrl);
+      controller.tabs = [
+        { id: "active-tab", targetId: "raw-active", title: "Active", url: activeUrl },
+        ...(hasFallback
+          ? [
+              {
+                id: "fallback-tab",
+                targetId: "raw-fallback",
+                title: "Fallback",
+                url: fallbackUrl,
+              },
+            ]
+          : []),
+      ];
+
+      await controller.closeTab("active-tab");
+
+      expect(controller.tabs.map((tab) => tab.id)).toEqual(hasFallback ? ["fallback-tab"] : []);
+      expect(controller.activeTargetId).toBe(hasFallback ? "fallback-tab" : null);
+      expect(controller.view?.targetId ?? null).toBe(hasFallback ? "fallback-tab" : null);
+      expect(controller.loading).toBe(false);
+      expect(
+        request.mock.calls.some(([, envelope]) => {
+          const browserRequest = envelope as { path?: string; body?: { targetId?: string } };
+          return (
+            browserRequest.path === "/screenshot" && browserRequest.body?.targetId === "active-tab"
+          );
+        }),
+      ).toBe(false);
+    },
+  );
+
+  it("rejects old-gateway snapshots before the replacement client synchronizes", async () => {
+    const activeUrl = "https://example.test/active";
+    const snapshot = createDeferred<{
+      running: boolean;
+      tabs: ReturnType<typeof createBrowserPanelTestTab>[];
+    }>();
+    const old = createBrowserClient(async (envelope) => {
+      if (envelope.path === "/tabs") {
+        return await snapshot.promise;
+      }
+      throw new Error(`Unexpected old browser route: ${envelope.path}`);
+    });
+    const replacement = createBrowserClient(async (envelope) => {
+      throw new Error(`Unexpected replacement browser route: ${envelope.path}`);
+    });
+    const host = new TestBrowserPanelHost(old.client);
+    const controller = new BrowserPanelController(host);
+    const originalView = createView("active-tab", activeUrl);
+    controller.activeTargetId = "active-tab";
+    controller.view = originalView;
+
+    const refresh = controller.refreshAll();
+    await flushBrowserResponses();
+    host.client = replacement.client;
+    snapshot.resolve({
+      running: true,
+      tabs: [createBrowserPanelTestTab("active-tab", activeUrl, "Active")],
+    });
+    await refresh;
+
+    expect(controller.running).toBeNull();
+    expect(controller.tabs).toEqual([]);
+    expect(controller.view).toBe(originalView);
+    expect(replacement.request).not.toHaveBeenCalled();
+  });
+
   it.each(["before", "after"] as const)(
     "settles loading when a superseded refresh fails %s a background-close snapshot",
     async (olderFailureOrder) => {

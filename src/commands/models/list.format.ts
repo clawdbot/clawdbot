@@ -5,6 +5,18 @@ import { isRich as isRichTerminal, theme } from "../../../packages/terminal-core
 
 const TRUNCATED_SUFFIX = "...";
 
+/** Formats token counts as compact decimal-K labels. */
+export const formatTokenK = (value?: number | null) => {
+  if (!value || !Number.isFinite(value)) {
+    return "-";
+  }
+  // Provider context windows use decimal K, so 200000 must stay "200k".
+  if (value < 1000) {
+    return `${Math.round(value)}`;
+  }
+  return `${Math.round(value / 1000)}k`;
+};
+
 /** Enables rich formatting only for non-machine-readable output. */
 export const isRich = (opts?: { json?: boolean; plain?: boolean }) =>
   isRichTerminal() && !opts?.json && !opts?.plain;

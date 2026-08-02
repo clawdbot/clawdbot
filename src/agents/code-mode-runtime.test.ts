@@ -1,11 +1,53 @@
 import { describe, expect, it } from "vitest";
 import {
+  enforceOutputLimit,
+  enforceResultLimit,
   isCodeModeEngagedForModel,
   prepareSource,
   resolveCodeModeConfig,
 } from "./code-mode-runtime.js";
 
 const config = resolveCodeModeConfig({ tools: { codeMode: true } } as never);
+
+describe("Code Mode output accounting", () => {
+  it("accepts Unicode output at its exact serialized byte limit", () => {
+    const output = [{ type: "text", text: "😀 café" }];
+    const maxOutputBytes = Buffer.byteLength(JSON.stringify(output), "utf8");
+
+    expect(() => enforceOutputLimit(output, { ...config, maxOutputBytes })).not.toThrow();
+    expect(() =>
+      enforceOutputLimit(output, { ...config, maxOutputBytes: maxOutputBytes - 1 }),
+    ).toThrow("code mode output limit exceeded");
+  });
+
+  it("counts serialized output only once against the returned value", () => {
+    const output = [{ type: "text", text: "😀" }];
+    const value = { result: "café" };
+    const maxOutputBytes =
+      Buffer.byteLength(JSON.stringify(output), "utf8") +
+      Buffer.byteLength(JSON.stringify(value), "utf8");
+
+    expect(() =>
+      enforceResultLimit({ output, value, config: { ...config, maxOutputBytes } }),
+    ).not.toThrow();
+    expect(() =>
+      enforceResultLimit({
+        output,
+        value,
+        config: { ...config, maxOutputBytes: maxOutputBytes - 1 },
+      }),
+    ).toThrow("code mode output limit exceeded");
+  });
+
+  it("does not charge an empty output array against the returned value", () => {
+    const value = "ok";
+    const maxOutputBytes = Buffer.byteLength(JSON.stringify(value), "utf8");
+
+    expect(() =>
+      enforceResultLimit({ output: [], value, config: { ...config, maxOutputBytes } }),
+    ).not.toThrow();
+  });
+});
 
 describe("Code Mode master switch resolution", () => {
   it.each([

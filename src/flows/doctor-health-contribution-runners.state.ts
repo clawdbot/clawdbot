@@ -87,7 +87,9 @@ export async function runChannelIngressDeadLettersHealth(): Promise<void> {
 
 export async function runStateIntegrityHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteStateIntegrity } = await loadDoctorStateIntegrityModule();
-  await noteStateIntegrity(ctx.cfg, ctx.prompter, ctx.configPath);
+  await noteStateIntegrity(ctx.cfg, ctx.prompter, ctx.configPath, {
+    stateDirExistedAtStart: ctx.stateDirExistedAtStart,
+  });
 }
 
 export async function runCodexSessionRouteHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -122,6 +124,18 @@ export async function runSessionLocksHealth(ctx: DoctorHealthFlowContext): Promi
 export async function runSessionTranscriptsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteSessionTranscriptHealth } = await import("../commands/doctor-session-transcripts.js");
   await noteSessionTranscriptHealth({
+    cfg: ctx.cfg,
+    env: ctx.env ?? process.env,
+    shouldRepair: ctx.prompter.shouldRepair,
+  });
+}
+
+export async function runSessionTranscriptHeadersHealth(
+  ctx: DoctorHealthFlowContext,
+): Promise<void> {
+  const { noteSessionTranscriptHeaderHealth } =
+    await import("../commands/doctor-session-transcript-headers.js");
+  await noteSessionTranscriptHeaderHealth({
     cfg: ctx.cfg,
     env: ctx.env ?? process.env,
     shouldRepair: ctx.prompter.shouldRepair,

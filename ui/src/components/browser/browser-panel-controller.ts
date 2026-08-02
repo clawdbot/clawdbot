@@ -127,7 +127,8 @@ export class BrowserPanelController implements ReactiveController {
   }
 
   private reportError(error: unknown): void {
-    this.setState("errorText", error instanceof Error ? error.message : String(error));
+    const detail = error instanceof Error ? error.message : String(error);
+    this.setState("errorText", t("browser.errors.requestFailed", { error: detail }));
   }
 
   async refreshAll(): Promise<void> {
@@ -435,6 +436,12 @@ export class BrowserPanelController implements ReactiveController {
         }
         return;
       }
+      // DELETE already committed; a failed tab snapshot must not resurrect its
+      // target or make the next screenshot address a tab that no longer exists.
+      this.setState(
+        "tabs",
+        this.tabs.filter((tab) => tab.id !== targetId),
+      );
       const snapshot = await this.refreshTabsOnly(client, () =>
         this.operations.isLive(epoch, client),
       );

@@ -7,6 +7,11 @@ import { createAgentsEmbeddedIncompleteTurnVitestConfig } from "./vitest/vitest.
 import { createAgentsEmbeddedOverflowCompactionVitestConfig } from "./vitest/vitest.agents-embedded-agent-overflow-compaction.config.ts";
 import { createAgentsEmbeddedRunVitestConfig } from "./vitest/vitest.agents-embedded-agent-run.config.ts";
 import { createAgentsEmbeddedVitestConfig } from "./vitest/vitest.agents-embedded-agent.config.ts";
+import {
+  agentVitestProjectConfigs,
+  agentVitestProjectOwners,
+  embeddedAgentVitestProjectOwners,
+} from "./vitest/vitest.agents-paths.mjs";
 import { createAgentsSupportVitestConfig } from "./vitest/vitest.agents-support.config.ts";
 import { createAgentsToolsVitestConfig } from "./vitest/vitest.agents-tools.config.ts";
 import { createAgentsVitestConfig } from "./vitest/vitest.agents.config.ts";
@@ -61,6 +66,28 @@ afterEach(() => {
 describe("projects vitest config", () => {
   it("defines the native root project list for all non-live Vitest lanes", () => {
     expect(requireTestConfig(baseConfig).projects).toEqual([...rootVitestProjects]);
+  });
+
+  it("keeps root and full-suite agent projects aligned with canonical owners", () => {
+    const agenticShard = fullSuiteVitestShards.find((shard) => shard.name === "agentic");
+    const agentConfigs = new Set(agentVitestProjectConfigs);
+
+    expect(rootVitestProjects.filter((config) => agentConfigs.has(config))).toEqual(
+      agentVitestProjectConfigs,
+    );
+    expect(agenticShard?.projects.filter((config) => agentConfigs.has(config))).toEqual(
+      agentVitestProjectConfigs,
+    );
+    expect(agentConfigs.size).toBe(agentVitestProjectConfigs.length);
+  });
+
+  it("keeps all embedded harnesses under their canonical embedded owner", () => {
+    expect(embeddedAgentVitestProjectOwners).toEqual([
+      agentVitestProjectOwners.embedded,
+      agentVitestProjectOwners.embeddedIncompleteTurn,
+      agentVitestProjectOwners.embeddedOverflowCompaction,
+      agentVitestProjectOwners.embeddedRun,
+    ]);
   });
 
   it("keeps root watch projects aligned with dedicated extension shard lanes", () => {

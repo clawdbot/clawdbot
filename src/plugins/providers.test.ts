@@ -432,10 +432,15 @@ function createAutoEnabledProviderConfig() {
 }
 
 function expectAutoEnabledProviderLoad(params: { rawConfig: unknown; autoEnabledConfig: unknown }) {
-  expect(applyPluginAutoEnableMock).toHaveBeenCalledWith({
-    config: params.rawConfig,
-    env: process.env,
-  });
+  expect(applyPluginAutoEnableMock).toHaveBeenCalledWith(
+    expect.objectContaining({
+      config: params.rawConfig,
+      env: process.env,
+      manifestRegistry: expect.objectContaining({
+        plugins: expect.arrayContaining([expect.objectContaining({ id: "google" })]),
+      }),
+    }),
+  );
   expectProviderRuntimeRegistryLoad({ config: params.autoEnabledConfig });
 }
 function expectOwningPluginIds(provider: string, expectedPluginIds?: readonly string[]) {

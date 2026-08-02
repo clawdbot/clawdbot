@@ -11,8 +11,12 @@ scenario:
       - agent-runtime.tool-capability-flags
       - agent-runtime.local-smoke-checks
       - agent-runtime.local-failure-handling
-  objective: Verify paired-node Ollama discovery and inference with the provider-owned deterministic local test server.
+  objective: Verify Ollama discovery and inference across a real authenticated Gateway, paired node connection, and provider-owned deterministic node-local server.
   successCriteria:
+    - A real Gateway authenticates and pairs the Ollama-capable node over WebSocket.
+    - Authenticated Gateway node.invoke requests cross the paired node request and response boundary.
+    - Unauthenticated Gateway tool requests are rejected.
+    - The Gateway provider endpoint does not replace the node's own Ollama endpoint.
     - Embedding and cloud models are excluded from local chat discovery.
     - A chat model after 200 embedding-only models remains discoverable.
     - Loaded local chat models sort first.
@@ -23,8 +27,9 @@ scenario:
     - docs/nodes/index.md
   codeRefs:
     - extensions/ollama/src/node-inference.ts
-    - extensions/ollama/src/node-inference.test.ts
+    - extensions/ollama/src/node-inference.paired-node.e2e.test.ts
+    - extensions/qa-lab/src/test-file-scenario-runner.ts
   execution:
     kind: vitest
-    path: extensions/ollama/src/node-inference.test.ts
-    summary: Run deterministic fake-Ollama paired-node discovery, authorization, model-selection, and bounded-chat regression tests.
+    path: extensions/ollama/src/node-inference.paired-node.e2e.test.ts
+    summary: Run actual Gateway authentication, WebSocket pairing, node command policy, provider-local discovery, and bounded inference against an isolated fake Ollama.

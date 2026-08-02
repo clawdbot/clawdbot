@@ -154,9 +154,9 @@ export function resolveFallbackTransition(params: {
   const selectedModelRef = formatProviderModelRef(params.selectedProvider, params.selectedModel);
   const activeModelRef = formatProviderModelRef(params.activeProvider, params.activeModel);
   const previousState = {
-    selectedModel: normalizeOptionalString(params.state?.fallbackNoticeSelectedModel),
-    activeModel: normalizeOptionalString(params.state?.fallbackNoticeActiveModel),
-    reason: normalizeOptionalString(params.state?.fallbackNoticeReason),
+    selectedModel: normalizeOptionalString(params.state?.fallbackNotice?.selectedModel),
+    activeModel: normalizeOptionalString(params.state?.fallbackNotice?.activeModel),
+    reason: normalizeOptionalString(params.state?.fallbackNotice?.reason),
   };
   const comparisonOptions = { config: params.cfg };
   const fallbackActive = !areRuntimeModelRefsEquivalent(

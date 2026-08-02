@@ -53,22 +53,12 @@ function countEnabledPlugins(plugins: readonly { enabled: boolean }[]): number {
 }
 
 function formatRegistryState(state: "missing" | "fresh" | "stale"): string {
-  if (state === "fresh") {
-    return theme.success(state);
-  }
-  if (state === "stale") {
-    return theme.warn(state);
-  }
-  return theme.warn(state);
+  return state === "fresh" ? theme.success(state) : theme.warn(state);
 }
 
 function reportMissingPlugin(id: string) {
   defaultRuntime.error(formatMissingPluginMessage({ id, includeSearch: true }));
   return defaultRuntime.exit(1);
-}
-
-function matchesPluginId(plugin: { id: string }, id: string) {
-  return plugin.id === id;
 }
 
 function isConfigSelectedShadowDiagnostic(entry: { level?: string; message?: string }): boolean {
@@ -207,7 +197,7 @@ async function runPluginsEnableCommandUnlocked(idInput: string): Promise<void> {
   const cfg = (snapshot.sourceConfig ?? snapshot.config) as OpenClawConfig;
   const report = buildPluginRegistrySnapshotReport({ config: cfg });
   id = normalizePluginId(id);
-  if (!report.plugins.some((plugin) => matchesPluginId(plugin, id))) {
+  if (!report.plugins.some((plugin) => plugin.id === id)) {
     return reportMissingPlugin(id);
   }
   const enableResult = enableExplicitlySelectedPluginInConfig(cfg, id, {
@@ -215,12 +205,10 @@ async function runPluginsEnableCommandUnlocked(idInput: string): Promise<void> {
   });
   // A blocked request must not displace the active slot or rewrite persisted state.
   if (!enableResult.enabled) {
-    defaultRuntime.log(
-      theme.warn(
-        `Plugin "${id}" could not be enabled (${enableResult.reason ?? "unknown reason"}).`,
-      ),
+    defaultRuntime.error(
+      `Plugin "${id}" could not be enabled (${enableResult.reason ?? "unknown reason"}).`,
     );
-    return;
+    return defaultRuntime.exit(1);
   }
 
   const { applySlotSelectionForPlugin } = await loadPluginSlotSelection();
@@ -272,7 +260,7 @@ async function runPluginsDisableCommandUnlocked(idInput: string): Promise<void> 
   const cfg = (snapshot.sourceConfig ?? snapshot.config) as OpenClawConfig;
   const report = buildPluginRegistrySnapshotReport({ config: cfg });
   id = normalizePluginId(id);
-  if (!report.plugins.some((plugin) => matchesPluginId(plugin, id))) {
+  if (!report.plugins.some((plugin) => plugin.id === id)) {
     return reportMissingPlugin(id);
   }
   const next = setPluginEnabledInConfig(cfg, id, false, {
@@ -385,7 +373,7 @@ export async function runPluginsDoctorCommand(): Promise<void> {
     | undefined;
   const report = buildPluginDiagnosticsReport({ config: cfg, effectiveOnly: true });
   const errors = report.plugins.filter((p) => p.status === "error");
-  const diags = report.diagnostics.filter((d) => d.level === "error");
+  const diags = report.diagnostics.filter((entry) => !isConfigSelectedShadowDiagnostic(entry));
   const shadowed = report.diagnostics.filter((entry) =>
     isErroredConfigSelectedShadowDiagnostic({ entry, plugins: report.plugins }),
   );
@@ -406,7 +394,10 @@ export async function runPluginsDoctorCommand(): Promise<void> {
   const pluginConfigWarnings = [...stalePluginConfigWarnings, ...configuredRuntimePluginWarnings];
 
   if (!hasInstallTreeIssues && pluginConfigWarnings.length === 0) {
-    defaultRuntime.log("No plugin issues detected.");
+    defaultRuntime.log(
+      "Plugin discovery, module loading, compatibility, and configuration checks passed. " +
+        'Run "openclaw health" to check the running Gateway, including runtime quarantines and fallbacks.',
+    );
     return;
   }
 
@@ -540,25 +531,15 @@ function classifyMarketplaceFeedFallback(error: string | undefined): string | un
   if (!text) {
     return undefined;
   }
-  if (text.includes("offline mode")) {
-    return "offline";
-  }
-  if (text.includes("checksum mismatch")) {
-    return "checksum_mismatch";
-  }
-  if (text.includes("schema")) {
-    return "schema";
-  }
-  if (/http\s+304/u.test(text)) {
-    return "not_modified";
-  }
-  if (/http\s+\d{3}/u.test(text)) {
-    return "http_error";
-  }
-  if (text.includes("timed out") || text.includes("timeout")) {
-    return "timeout";
-  }
-  return "error";
+  const categories = [
+    [/offline mode/u, "offline"],
+    [/checksum mismatch/u, "checksum_mismatch"],
+    [/schema/u, "schema"],
+    [/http\s+304/u, "not_modified"],
+    [/http\s+\d{3}/u, "http_error"],
+    [/timed out|timeout/u, "timeout"],
+  ] as const;
+  return categories.find(([pattern]) => pattern.test(text))?.[1] ?? "error";
 }
 
 function emitMarketplaceFeedTelemetry(params: {
@@ -678,10 +659,6 @@ function redactMarketplaceFeedUrl(value: string): string {
   }
 }
 
-function replaceAllLiteral(value: string, search: string, replacement: string): string {
-  return search ? value.split(search).join(replacement) : value;
-}
-
 function redactMarketplaceOutputText(
   value: string,
   rawUrls: readonly (string | undefined)[],
@@ -691,7 +668,7 @@ function redactMarketplaceOutputText(
     if (!rawUrl) {
       continue;
     }
-    redacted = replaceAllLiteral(redacted, rawUrl, redactMarketplaceFeedUrl(rawUrl));
+    redacted = redacted.replaceAll(rawUrl, () => redactMarketplaceFeedUrl(rawUrl));
   }
   return redacted;
 }
@@ -742,6 +719,37 @@ function formatMarketplaceFeedTrust(trust: MarketplaceFeedTrustPayload): string 
   return `${trust.mode} by ${trust.signedBy} (${trust.signatureCount}/${trust.threshold}) verified ${trust.verifiedAt}`;
 }
 
+function formatMarketplaceFeedLines(
+  payload: MarketplaceRefreshPayload,
+  options: { includeChecksum?: boolean } = {},
+): string[] {
+  const lines = [
+    `${theme.muted("Source:")} ${formatMarketplaceRefreshSource(payload.source)}`,
+    `${theme.muted("Entries:")} ${payload.entries}`,
+  ];
+  if (payload.feed) {
+    lines.push(
+      `${theme.muted("Feed:")} ${payload.feed.id} ${theme.muted(`sequence ${payload.feed.sequence}`)}`,
+    );
+  }
+  if (payload.metadata?.url) {
+    lines.push(`${theme.muted("URL:")} ${payload.metadata.url}`);
+  }
+  if (options.includeChecksum && payload.metadata?.checksum) {
+    lines.push(`${theme.muted("SHA-256:")} ${payload.metadata.checksum}`);
+  }
+  if (payload.snapshot?.savedAt) {
+    lines.push(`${theme.muted("Snapshot:")} ${payload.snapshot.savedAt}`);
+  }
+  if (payload.trust) {
+    lines.push(`${theme.muted("Trust:")} ${formatMarketplaceFeedTrust(payload.trust)}`);
+  }
+  if (payload.error) {
+    lines.push(`${theme.muted("Fallback reason:")} ${payload.error}`);
+  }
+  return lines;
+}
+
 function shouldFailPinnedMarketplaceRefresh(params: {
   expectedSha256?: string;
   source: MarketplaceRefreshPayload["source"];
@@ -767,6 +775,9 @@ function normalizeMarketplaceExpectedSha256(value: string | undefined): string |
 function formatPinnedMarketplaceRefreshFailure(payload: MarketplaceRefreshPayload): string {
   return `Pinned marketplace feed refresh did not accept a fresh hosted payload (source: ${payload.source}).`;
 }
+
+const MARKETPLACE_GATEWAY_RESTART_GUIDANCE =
+  'The running Gateway could not refresh its marketplace catalog. Run "openclaw gateway restart" to apply the current catalog state.';
 
 /** List entries from the configured OpenClaw marketplace feed. */
 export async function runPluginMarketplaceEntriesCommand(
@@ -818,31 +829,7 @@ export async function runPluginMarketplaceEntriesCommand(
     return;
   }
 
-  const lines = [
-    theme.muted("Source:") + " " + formatMarketplaceRefreshSource(summary.source),
-    theme.muted("Entries:") + " " + String(entries.length),
-  ];
-  if (summary.feed) {
-    lines.push(
-      theme.muted("Feed:") +
-        " " +
-        summary.feed.id +
-        " " +
-        theme.muted("sequence " + String(summary.feed.sequence)),
-    );
-  }
-  if (summary.metadata?.url) {
-    lines.push(theme.muted("URL:") + " " + summary.metadata.url);
-  }
-  if (summary.snapshot?.savedAt) {
-    lines.push(theme.muted("Snapshot:") + " " + summary.snapshot.savedAt);
-  }
-  if (summary.trust) {
-    lines.push(theme.muted("Trust:") + " " + formatMarketplaceFeedTrust(summary.trust));
-  }
-  if (summary.error) {
-    lines.push(theme.muted("Fallback reason:") + " " + summary.error);
-  }
+  const lines = formatMarketplaceFeedLines(summary);
   if (entries.length > 0) {
     lines.push("");
     lines.push(...entries.map(formatMarketplaceEntryLine));
@@ -867,6 +854,13 @@ export async function runPluginMarketplaceRefreshCommand(
   const { clearManagedPluginOfficialCatalogCache } =
     await import("../plugins/management-service.js");
   clearManagedPluginOfficialCatalogCache();
+  let gatewayRefreshed = true;
+  // Reused snapshots can lose install authority as they age, so their Gateway projection is stale too.
+  if (result.source !== "bundled-fallback") {
+    const { notifyGatewayPluginMetadataChanged } =
+      await import("./plugins-update-gateway-signal.js");
+    gatewayRefreshed = await notifyGatewayPluginMetadataChanged(cfg);
+  }
   const payload = sanitizeMarketplaceRefreshPayload(buildMarketplaceRefreshPayload(result), {
     feedUrl: opts.feedUrl,
   });
@@ -885,6 +879,9 @@ export async function runPluginMarketplaceRefreshCommand(
 
   if (opts.json) {
     defaultRuntime.writeJson(payload);
+    if (!gatewayRefreshed) {
+      defaultRuntime.error(MARKETPLACE_GATEWAY_RESTART_GUIDANCE);
+    }
     if (failedPinnedRefresh) {
       defaultRuntime.error(formatPinnedMarketplaceRefreshFailure(payload));
       return defaultRuntime.exit(1);
@@ -892,29 +889,9 @@ export async function runPluginMarketplaceRefreshCommand(
     return;
   }
 
-  const lines = [
-    `${theme.muted("Source:")} ${formatMarketplaceRefreshSource(payload.source)}`,
-    `${theme.muted("Entries:")} ${payload.entries}`,
-  ];
-  if (payload.feed) {
-    lines.push(
-      `${theme.muted("Feed:")} ${payload.feed.id} ${theme.muted(`sequence ${payload.feed.sequence}`)}`,
-    );
-  }
-  if (payload.metadata?.url) {
-    lines.push(`${theme.muted("URL:")} ${payload.metadata.url}`);
-  }
-  if (payload.metadata?.checksum) {
-    lines.push(`${theme.muted("SHA-256:")} ${payload.metadata.checksum}`);
-  }
-  if (payload.snapshot?.savedAt) {
-    lines.push(`${theme.muted("Snapshot:")} ${payload.snapshot.savedAt}`);
-  }
-  if (payload.trust) {
-    lines.push(`${theme.muted("Trust:")} ${formatMarketplaceFeedTrust(payload.trust)}`);
-  }
-  if (payload.error) {
-    lines.push(`${theme.muted("Fallback reason:")} ${payload.error}`);
+  const lines = formatMarketplaceFeedLines(payload, { includeChecksum: true });
+  if (!gatewayRefreshed) {
+    lines.push("", theme.warn(MARKETPLACE_GATEWAY_RESTART_GUIDANCE));
   }
   defaultRuntime.log(lines.join("\n"));
   if (failedPinnedRefresh) {
@@ -929,10 +906,10 @@ export async function runPluginMarketplaceListCommand(
   opts: PluginMarketplaceListOptions,
 ): Promise<void> {
   const { listMarketplacePlugins } = await import("../plugins/marketplace.js");
-  const { createPluginInstallLogger } = await loadPluginsCommandHelpers();
+  const { createPluginInstallLogger, quietPluginJsonLogger } = await loadPluginsCommandHelpers();
   const result = await listMarketplacePlugins({
     marketplace: source,
-    logger: createPluginInstallLogger(),
+    logger: opts.json ? quietPluginJsonLogger : createPluginInstallLogger(),
   });
   if (!result.ok) {
     defaultRuntime.error(result.error);

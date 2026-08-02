@@ -284,13 +284,6 @@ export function commitStagedDeliveryQueueEntry(
   return result === "created";
 }
 
-/** Atomically publishes a stable queue id while preserving prior ownership. */
-export function commitStagedDeliveryQueueEntryOnce(
-  params: CommitStagedDeliveryQueueEntryParams,
-): "created" | "existing" | "missing" {
-  return commitStagedDeliveryQueueEntryInternal(params);
-}
-
 /**
  * Expire abandoned staging rows and capture destination/staging ownership in
  * one write snapshot. A concurrent commit either lands before this snapshot or
@@ -298,7 +291,7 @@ export function commitStagedDeliveryQueueEntryOnce(
  */
 export function expireStagingAndLoadDeliveryQueueEntries(params: {
   expireBeforeMs: number;
-  queueName: string;
+  queueNames: readonly string[];
   stagingQueueName: string;
   stateDir?: string;
 }): {
@@ -318,7 +311,7 @@ export function expireStagingAndLoadDeliveryQueueEntries(params: {
           .where("status", "=", "pending")
           .where("enqueued_at", "<=", params.expireBeforeMs),
       );
-      const selectPending = (queueName: string) =>
+      const selectPending = (queueNames: readonly string[]) =>
         executeSqliteQuerySync(
           database.db,
           queueDb
@@ -333,14 +326,14 @@ export function expireStagingAndLoadDeliveryQueueEntries(params: {
               "platform_send_started_at",
               "recovery_state",
             ])
-            .where("queue_name", "=", queueName)
+            .where("queue_name", "in", queueNames)
             .where("status", "=", "pending")
             .orderBy("enqueued_at", "asc")
             .orderBy("id", "asc"),
         ).rows as QueueRow[];
       return {
-        entryRows: selectPending(params.queueName),
-        stagingRows: selectPending(params.stagingQueueName),
+        entryRows: selectPending(params.queueNames),
+        stagingRows: selectPending([params.stagingQueueName]),
       };
     },
     {
@@ -727,20 +720,26 @@ export function moveDeliveryQueueEntryToFailed(
   upsertDeliveryQueueEntry({ queueName, entry: current, status: "failed", stateDir });
 }
 
-/** Atomically fail a queue row only while its persisted status is still pending. */
+/** Atomically fail a queue row only while its pending value is unchanged. */
 export function failPendingDeliveryQueueEntry(params: {
   queueName: string;
   id: string;
   expectedStatus: "pending";
   lastError: string;
   entry: DeliveryQueueEntryState;
+  failedEntry?: DeliveryQueueEntryState;
   stateDir?: string;
 }): FailPendingDeliveryQueueEntryResult {
   if (params.entry.id !== params.id) {
     throw new Error(`Delivery queue entry id mismatch: ${params.entry.id} != ${params.id}`);
   }
+  if (params.failedEntry && params.failedEntry.id !== params.id) {
+    throw new Error(
+      `Failed delivery queue entry id mismatch: ${params.failedEntry.id} != ${params.id}`,
+    );
+  }
   const now = Date.now();
-  const failedEntry = { ...params.entry, lastError: params.lastError };
+  const failedEntry = { ...(params.failedEntry ?? params.entry), lastError: params.lastError };
   const database = openStateDatabase(params.stateDir);
   const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
   const result = executeSqliteQuerySync(
@@ -756,7 +755,8 @@ export function failPendingDeliveryQueueEntry(params: {
       })
       .where("queue_name", "=", params.queueName)
       .where("id", "=", params.id)
-      .where("status", "=", params.expectedStatus),
+      .where("status", "=", params.expectedStatus)
+      .where("entry_json", "=", JSON.stringify(params.entry)),
   );
   return result.numAffectedRows === 1n ? { status: "failed" } : { status: "not_pending" };
 }

@@ -4,14 +4,13 @@ import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-en
 import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
 import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
-import { buildNovitaProvider } from "./provider-catalog.js";
 
 const PROVIDER_ID = "novita";
 
 export default defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
   name: "NovitaAI Provider",
-  description: "Bundled NovitaAI provider plugin",
+  description: "Official OpenClaw NovitaAI provider plugin",
   manifest,
   provider: {
     label: "NovitaAI",
@@ -22,8 +21,6 @@ export default defineSingleProviderPluginEntry({
       noteMessage: "Manage API keys at https://novita.ai/settings/key-management",
     },
     catalog: {
-      buildProvider: buildNovitaProvider,
-      buildStaticProvider: buildNovitaProvider,
       allowExplicitBaseUrl: true,
       liveModelDiscovery: true,
     },

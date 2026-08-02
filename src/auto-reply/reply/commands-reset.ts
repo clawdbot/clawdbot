@@ -106,6 +106,7 @@ export async function maybeHandleResetCommand(
       storePath: params.storePath,
       sessionEntry: targetSessionEntry,
       previousSessionEntry,
+      onObservedReplyDelivery: params.opts?.onObservedReplyDelivery,
       workspaceDir: params.workspaceDir,
     });
     params.command.softResetTriggered = true;
@@ -181,6 +182,7 @@ export async function maybeHandleResetCommand(
     storePath: params.storePath,
     sessionEntry: targetSessionEntry,
     previousSessionEntry: params.previousSessionEntry,
+    onObservedReplyDelivery: params.opts?.onObservedReplyDelivery,
     workspaceDir: params.workspaceDir,
   });
   if (!resetTail) {

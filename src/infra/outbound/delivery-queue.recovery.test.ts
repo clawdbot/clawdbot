@@ -25,6 +25,7 @@ import {
 } from "./deliver-types.js";
 import { attachOutboundDeliveryCommitHook } from "./delivery-commit-hooks.js";
 import { pruneOrphanedDeliveryQueueMedia } from "./delivery-queue-media-spool.js";
+import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-media-staging.js";
 import {
   ackDelivery,
   claimDeliveryPlatformSendAttempt,
@@ -73,8 +74,8 @@ function readOutboundQueueStatus(tmpDir: string, id: string): string | undefined
     env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir },
   });
   const row = db
-    .prepare("SELECT status FROM delivery_queue_entries WHERE queue_name = 'outbound' AND id = ?")
-    .get(id) as { status?: string } | undefined;
+    .prepare("SELECT status FROM delivery_queue_entries WHERE queue_name = ? AND id = ?")
+    .get(OUTBOUND_DELIVERY_QUEUE_NAME, id) as { status?: string } | undefined;
   return row?.status;
 }
 
@@ -132,6 +133,57 @@ describe("delivery-queue recovery", () => {
     return { result, log };
   };
 
+  async function createConversationRecoveryFixture(operationId: string) {
+    const storePath = path.join(tmpDir(), "agent-sessions.json");
+    const scope = { agentId: "main", storePath };
+    const conversationRef = buildConversationRef({
+      channel: "reef",
+      accountId: "default",
+      kind: "direct",
+      peerId: "peer-agent",
+    });
+    await upsertSessionEntry(
+      { ...scope, sessionKey: "agent:main:reef:direct:peer-agent" },
+      {
+        sessionId: "reef-session",
+        updatedAt: 100,
+        chatType: "direct",
+        delivery: normalizeSessionDeliveryState({
+          context: { channel: "reef", accountId: "default", to: "reef:peer-agent" },
+          origin: {
+            provider: "reef",
+            accountId: "default",
+            nativeDirectUserId: "peer-agent",
+          },
+        }),
+      },
+    );
+    beginConversationDeliveryOperation(scope, {
+      operationId,
+      operationKind: "send",
+      conversationRef,
+      message: "hello",
+      preparedMessageId: "reef-prepared",
+    });
+    await enqueueDeliveryOnce(
+      {
+        channel: "reef",
+        to: "reef:peer-agent",
+        queuePolicy: "required",
+        payloads: [{ text: "hello" }],
+        deliveryCompletion: {
+          kind: "conversation",
+          agentId: "main",
+          operationId,
+          storePath,
+        },
+      },
+      operationId,
+      tmpDir(),
+    );
+    return scope;
+  }
+
   it("recovers entries from a simulated crash", async () => {
     await enqueueCrashRecoveryEntries();
     const deliver = vi.fn().mockResolvedValue([]);
@@ -161,53 +213,7 @@ describe("delivery-queue recovery", () => {
   });
 
   it("finalizes a persisted conversation operation during queue recovery", async () => {
-    const storePath = path.join(tmpDir(), "agent-sessions.json");
-    const scope = { agentId: "main", storePath };
-    const conversationRef = buildConversationRef({
-      channel: "reef",
-      accountId: "default",
-      kind: "direct",
-      peerId: "peer-agent",
-    });
-    await upsertSessionEntry(
-      { ...scope, sessionKey: "agent:main:reef:direct:peer-agent" },
-      {
-        sessionId: "reef-session",
-        updatedAt: 100,
-        chatType: "direct",
-        delivery: normalizeSessionDeliveryState({
-          context: { channel: "reef", accountId: "default", to: "reef:peer-agent" },
-          origin: {
-            provider: "reef",
-            accountId: "default",
-            nativeDirectUserId: "peer-agent",
-          },
-        }),
-      },
-    );
-    beginConversationDeliveryOperation(scope, {
-      operationId: "operation-recovery",
-      operationKind: "send",
-      conversationRef,
-      message: "hello",
-      preparedMessageId: "reef-prepared",
-    });
-    await enqueueDeliveryOnce(
-      {
-        channel: "reef",
-        to: "reef:peer-agent",
-        queuePolicy: "required",
-        payloads: [{ text: "hello" }],
-        deliveryCompletion: {
-          kind: "conversation",
-          agentId: "main",
-          operationId: "operation-recovery",
-          storePath,
-        },
-      },
-      "operation-recovery",
-      tmpDir(),
-    );
+    const scope = await createConversationRecoveryFixture("operation-recovery");
     const deliveryResult = { channel: "reef" as const, messageId: "reef-platform" };
     const deliver = vi.fn(async (params: { onDeliveryResult?: (result: unknown) => unknown }) => {
       await params.onDeliveryResult?.(deliveryResult);
@@ -230,53 +236,7 @@ describe("delivery-queue recovery", () => {
   });
 
   it("acks a persisted suppressed conversation operation without replaying it", async () => {
-    const storePath = path.join(tmpDir(), "agent-sessions.json");
-    const scope = { agentId: "main", storePath };
-    const conversationRef = buildConversationRef({
-      channel: "reef",
-      accountId: "default",
-      kind: "direct",
-      peerId: "peer-agent",
-    });
-    await upsertSessionEntry(
-      { ...scope, sessionKey: "agent:main:reef:direct:peer-agent" },
-      {
-        sessionId: "reef-session",
-        updatedAt: 100,
-        chatType: "direct",
-        delivery: normalizeSessionDeliveryState({
-          context: { channel: "reef", accountId: "default", to: "reef:peer-agent" },
-          origin: {
-            provider: "reef",
-            accountId: "default",
-            nativeDirectUserId: "peer-agent",
-          },
-        }),
-      },
-    );
-    beginConversationDeliveryOperation(scope, {
-      operationId: "operation-suppressed",
-      operationKind: "send",
-      conversationRef,
-      message: "hello",
-      preparedMessageId: "reef-prepared",
-    });
-    await enqueueDeliveryOnce(
-      {
-        channel: "reef",
-        to: "reef:peer-agent",
-        queuePolicy: "required",
-        payloads: [{ text: "hello" }],
-        deliveryCompletion: {
-          kind: "conversation",
-          agentId: "main",
-          operationId: "operation-suppressed",
-          storePath,
-        },
-      },
-      "operation-suppressed",
-      tmpDir(),
-    );
+    const scope = await createConversationRecoveryFixture("operation-suppressed");
     markConversationDeliverySuppressed(scope, "operation-suppressed");
     const deliver = vi.fn();
 
@@ -295,53 +255,7 @@ describe("delivery-queue recovery", () => {
   });
 
   it("acks a persisted rejected conversation operation without replaying it", async () => {
-    const storePath = path.join(tmpDir(), "agent-sessions.json");
-    const scope = { agentId: "main", storePath };
-    const conversationRef = buildConversationRef({
-      channel: "reef",
-      accountId: "default",
-      kind: "direct",
-      peerId: "peer-agent",
-    });
-    await upsertSessionEntry(
-      { ...scope, sessionKey: "agent:main:reef:direct:peer-agent" },
-      {
-        sessionId: "reef-session",
-        updatedAt: 100,
-        chatType: "direct",
-        delivery: normalizeSessionDeliveryState({
-          context: { channel: "reef", accountId: "default", to: "reef:peer-agent" },
-          origin: {
-            provider: "reef",
-            accountId: "default",
-            nativeDirectUserId: "peer-agent",
-          },
-        }),
-      },
-    );
-    beginConversationDeliveryOperation(scope, {
-      operationId: "operation-rejected",
-      operationKind: "send",
-      conversationRef,
-      message: "hello",
-      preparedMessageId: "reef-prepared",
-    });
-    await enqueueDeliveryOnce(
-      {
-        channel: "reef",
-        to: "reef:peer-agent",
-        queuePolicy: "required",
-        payloads: [{ text: "hello" }],
-        deliveryCompletion: {
-          kind: "conversation",
-          agentId: "main",
-          operationId: "operation-rejected",
-          storePath,
-        },
-      },
-      "operation-rejected",
-      tmpDir(),
-    );
+    const scope = await createConversationRecoveryFixture("operation-rejected");
     markConversationDeliveryRejected(scope, "operation-rejected", "atomic message limit");
     const deliver = vi.fn();
 
@@ -1300,6 +1214,7 @@ describe("delivery-queue recovery", () => {
     expect(reconcileInput.retryCount).toBe(0);
 
     const afterCommitInput = mockCallArg(afterCommit) as {
+      deliveryQueueId?: string;
       kind?: string;
       to?: string;
       accountId?: string;
@@ -1308,6 +1223,7 @@ describe("delivery-queue recovery", () => {
       silent?: boolean;
       result?: { messageId?: string };
     };
+    expect(afterCommitInput.deliveryQueueId).toBe(id);
     expect(afterCommitInput.kind).toBe("text");
     expect(afterCommitInput.to).toBe("+1");
     expect(afterCommitInput.accountId).toBe("acct-1");
@@ -1409,10 +1325,15 @@ describe("delivery-queue recovery", () => {
       error: "provider lookup timed out",
       retryable: true,
     });
+    const afterUnknownSendTerminal = vi.fn(async (ctx: { queueId: string }) => {
+      expect(ctx.queueId).toBe(id);
+      expect(readOutboundQueueStatus(tmpDir(), id)).toBe("failed");
+    });
     resolveOutboundChannelMessageAdapterMock.mockReturnValue({
       durableFinal: {
         capabilities: { reconcileUnknownSend: true },
         reconcileUnknownSend,
+        afterUnknownSendTerminal,
       },
     });
     const deliver = vi.fn().mockResolvedValue([]);
@@ -1424,6 +1345,7 @@ describe("delivery-queue recovery", () => {
     expect(result).toMatchObject({ failed: 1, skippedMaxRetries: 0 });
     expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
     expect(readOutboundQueueStatus(tmpDir(), id)).toBe("failed");
+    expect(afterUnknownSendTerminal).toHaveBeenCalledOnce();
   });
 
   it("does not reconcile unknown-after-send entries unless the adapter declares the capability", async () => {

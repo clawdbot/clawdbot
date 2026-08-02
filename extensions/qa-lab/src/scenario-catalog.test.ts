@@ -18,6 +18,7 @@ import {
   listScenarioMarkdownPaths,
   requireFlowScenario,
 } from "./scenario-catalog.test-utils.js";
+import { applyQaMergePatch } from "./suite-merge-patch.js";
 import { runQaTestFileScenarios } from "./test-file-scenario-runner.js";
 
 describe("qa scenario catalog", () => {
@@ -218,21 +219,97 @@ describe("qa scenario catalog", () => {
     ).toEqual([]);
   });
 
-  it("uses only graceful gateway restart for Matrix replay dedupe", () => {
+  it("uses graceful restart and isolation for Matrix replay dedupe", () => {
     const scenario = requireFlowScenario(readQaScenarioById("matrix-restart-replay-dedupe"));
+    const staleSync = requireFlowScenario(readQaScenarioById("matrix-stale-sync-replay-dedupe"));
 
     expect(flowContainsCall(scenario.execution.flow, "env.gateway.restart")).toBe(true);
     expect(flowContainsCall(scenario.execution.flow, "env.gateway.restartAfterStateMutation")).toBe(
       false,
     );
+    expect(staleSync.execution.suiteIsolation).toBe("isolated");
   });
 
   it("loads scenario-declared gateway runtime options from YAML", () => {
     const scenario = readQaScenarioById("control-ui-qa-channel-image-roundtrip");
     const otelStdout = readQaScenarioById("otel-stdout-log-smoke");
+    const blockedSlack = readQaScenarioById("slack-blocked-lifecycle-no-restart");
 
     expect(scenario.gatewayRuntime?.forwardHostHome).toBe(true);
     expect(otelStdout.gatewayRuntime?.preserveDebugArtifacts).toBe(true);
+    expect(blockedSlack.gatewayRuntime?.allowUnhealthyStartup).toBe(true);
+  });
+
+  it.each([
+    ["otel-trace-smoke", { diagnostics: { otel: { captureContent: false } } }, []],
+    ["otel-both-log-smoke", { diagnostics: { otel: { captureContent: false } } }, []],
+    ["otel-stdout-log-smoke", { diagnostics: { otel: { captureContent: false } } }, []],
+    [
+      "a2a-message-tool-mirror-dedupe",
+      {
+        messages: { groupChat: { visibleReplies: "message_tool" } },
+        tools: { sessions: { visibility: "all" }, agentToAgent: { enabled: true } },
+      },
+      ["session.agentToAgent"],
+    ],
+    [
+      "goal-context-survives-compaction",
+      { agents: { defaults: { compaction: { keepRecentTokens: 64 } } } },
+      ["agents.defaults.compaction.reserveTokens", "agents.defaults.compaction.reserveTokensFloor"],
+    ],
+    [
+      "commitments-heartbeat-target-none",
+      { agents: { defaults: { heartbeat: { every: "30m", target: "none" } } } },
+      ["commitments"],
+    ],
+    [
+      "active-memory-preprompt-recall",
+      { plugins: { entries: { "active-memory": { config: { mode: "always" } } } } },
+      [],
+    ],
+  ] as const)(
+    "keeps %s gateway config canonical and free of retired keys",
+    (scenarioId, expectedPatch, retiredPaths) => {
+      const gatewayConfigPatch = readQaScenarioById(scenarioId).gatewayConfigPatch;
+      const gatewayConfig = applyQaMergePatch(
+        { agents: { entries: { qa: { default: true } } } },
+        gatewayConfigPatch,
+      );
+
+      expect(gatewayConfigPatch).toMatchObject(expectedPatch);
+      expect(gatewayConfig).toMatchObject(expectedPatch);
+      for (const retiredPath of retiredPaths) {
+        expect(gatewayConfigPatch).not.toHaveProperty(retiredPath);
+      }
+    },
+  );
+
+  it("keeps session memory ranking's runtime config patch canonical", () => {
+    const scenario = readQaScenarioById("session-memory-ranking");
+    const patchConfigAction = scenario.execution.flow?.steps
+      .flatMap((step) => step.actions)
+      .find(
+        (action): action is { call: "patchConfig"; args: Array<{ patch: unknown }> } =>
+          typeof action === "object" &&
+          action !== null &&
+          "call" in action &&
+          action.call === "patchConfig" &&
+          "args" in action &&
+          Array.isArray(action.args),
+      );
+    const patch = patchConfigAction?.args[0]?.patch;
+
+    expect(patch).toMatchObject({
+      tools: { sessions: { visibility: "all" } },
+      memory: {
+        search: {
+          sources: ["memory", "sessions"],
+          experimental: { sessionMemory: true },
+          query: { minScore: 0 },
+        },
+      },
+    });
+    expect(patch).not.toHaveProperty("memory.search.query.hybrid");
   });
 
   it("loads native test execution scenarios from YAML", () => {
@@ -248,7 +325,7 @@ describe("qa scenario catalog", () => {
       "sends a chat turn through the GUI and renders the final Gateway event",
     );
     expect(scenario.execution.flow).toBeUndefined();
-    expect(scenario.coverage?.primary).toContain(`${browserUi}.gateway-hosted-ui-control`);
+    expect(scenario.coverage?.secondary).toContain(`${browserUi}.gateway-hosted-ui-control`);
     expect(otelSmoke.execution.kind).toBe("script");
     if (otelSmoke.execution.kind !== "script") {
       throw new Error(`expected script scenario, got ${otelSmoke.execution.kind}`);
@@ -260,6 +337,27 @@ describe("qa scenario catalog", () => {
       "both",
     ]);
     expect(otelSmoke.coverage?.secondary).not.toContain(`${otel}.otlp-http-traces-qa-lab`);
+  });
+
+  it("reserves Gateway-hosted Control UI proof for the real Gateway flow", () => {
+    const coverageId = `${browserUi}.gateway-hosted-ui-control`;
+    const primaryOwnerIds = readQaScenarioPack()
+      .scenarios.filter((scenario) => scenario.coverage?.primary.includes(coverageId))
+      .map((scenario) => scenario.id);
+    expect(primaryOwnerIds).toStrictEqual(["control-ui-qa-channel-image-roundtrip"]);
+
+    for (const scenario of [
+      readQaScenarioById("control-ui-chat-flow-playwright"),
+      readQaScenarioById("control-ui-plan-replay-reconnect"),
+    ]) {
+      expect(scenario.execution.kind, scenario.id).toBe("playwright");
+      expect(scenario.coverage?.primary, scenario.id).not.toContain(coverageId);
+      expect(scenario.coverage?.secondary, scenario.id).toContain(coverageId);
+    }
+
+    const hostedScenario = readQaScenarioById("control-ui-qa-channel-image-roundtrip");
+    expect(hostedScenario.execution).toMatchObject({ kind: "flow", channel: "qa-channel" });
+    expect(hostedScenario.coverage?.primary).toContain(coverageId);
   });
 
   it("loads helper-backed HTTP API scenarios as supporting taxonomy coverage", () => {
@@ -547,20 +645,6 @@ describe("qa scenario catalog", () => {
       requiredProvider: "openai",
       requiredModel: "gpt-5.4",
     });
-    const longContextFlow = JSON.stringify(
-      readQaScenarioById("long-context-progress-watchdog").execution.flow,
-    );
-    expect(longContextFlow).toContain("originalCodexPluginEnabled");
-    expect(longContextFlow).not.toContain(
-      "originalPluginAllow === undefined ? null : originalPluginAllow",
-    );
-    expect(longContextFlow).not.toContain("{ ...originalCodexPluginEntry, enabled:");
-    expect(readQaScenarioExecutionConfig("long-context-progress-watchdog")).toMatchObject({
-      requiredProviderMode: "live-frontier",
-      harnessRuntime: "codex",
-    });
-    expect(readQaScenarioById("long-context-progress-watchdog").plugins).toBeUndefined();
-    expect(readQaScenarioById("long-context-progress-watchdog").gatewayConfigPatch).toBeUndefined();
   });
 
   it("loads the QA bus tool trace visibility harness scenario", () => {
@@ -605,7 +689,7 @@ describe("qa scenario catalog", () => {
     expect(scenario.execution.flow).toBeUndefined();
   });
 
-  it("accepts the update.run producer's blocked evidence without destructive opt-in", async () => {
+  it("keeps the update.run producer blocked without destructive opt-in", async () => {
     const outputDir = await fs.promises.mkdtemp(
       path.join(os.tmpdir(), "openclaw-update-run-blocked-"),
     );
@@ -623,7 +707,7 @@ describe("qa scenario catalog", () => {
       });
 
       expect(result.results[0]).toMatchObject({
-        status: "pass",
+        status: "blocked",
         producerEvidence: {
           entries: [
             {
@@ -786,6 +870,40 @@ describe("qa scenario catalog", () => {
     ]);
   });
 
+  it("keeps Anthropic thinking recovery on its resolved replay-safe mock route", () => {
+    const scenario = requireFlowScenario(
+      readQaScenarioById("anthropic-thinking-error-recovery-replay-safe-read"),
+    );
+    const flow = JSON.stringify(scenario.execution.flow);
+
+    expect(scenario.execution.config).toMatchObject({
+      requiredProviderMode: "mock-openai",
+      anthropicModelRef: "anthropic/claude-opus-4-8",
+    });
+    expect(scenario.gatewayConfigPatch).toMatchObject({
+      agents: { defaults: { models: { "anthropic/claude-opus-4-8": { params: {} } } } },
+      tools: { codeMode: { enabled: false } },
+    });
+    expect(flow).toContain("modelAck.resolved?.modelProvider === 'anthropic'");
+    expect(flow).toContain("modelAck.resolved?.model === 'claude-opus-4-8'");
+    expect(flow).toContain('"set":"scenarioPrompt"');
+    expect(flow).toContain("`${config.prompt} QA scenario run: ${sessionKey}`");
+    expect(flow).toContain('"message":{"expr":"scenarioPrompt"}');
+    expect(flow).toContain("effectiveToolIds.includes('read')");
+    expect(flow).toContain('"call":"runAgentPrompt"');
+    expect(flow).toContain('"provider":"anthropic"');
+    expect(flow).toContain('"model":"claude-opus-4-8"');
+    expect(flow).toContain("/debug/requests?after=${requestCursorBefore}");
+    expect(flow).toContain("request.plannedToolName === 'read'");
+    expect(flow).toContain(").length >= 3");
+    expect(flow).toContain("!scenarioRequests.some((request)");
+    expect(flow).toContain("config.visibleAnswerRetryNeedle");
+    expect(flow).toContain('"sinceIndex":{"ref":"outboundStartIndex"}');
+    const requestEvidenceIndex = flow.indexOf('"set":"scenarioRequests"');
+    expect(requestEvidenceIndex).toBeGreaterThanOrEqual(0);
+    expect(requestEvidenceIndex).toBeLessThan(flow.indexOf('"call":"waitForOutboundMessage"'));
+  });
+
   it("includes the seeded mock-only broken-turn scenarios in the YAML pack", () => {
     const scenarioIds = [
       "reasoning-only-recovery-replay-safe-read",
@@ -896,14 +1014,12 @@ describe("qa scenario catalog", () => {
     }
   });
 
-  it("keeps portable thread relation flows free of a channel requirement", () => {
+  it("keeps portable thread relation flows on channels with native thread semantics", () => {
     for (const scenarioId of ["thread-follow-up", "thread-isolation"]) {
-      const scenario = readQaScenarioById(scenarioId);
+      const scenario = requireFlowScenario(readQaScenarioById(scenarioId));
 
       expect(scenario.execution.channel, scenarioId).toBeUndefined();
-      expect(Object.keys(scenario.execution.profiles ?? {}), scenarioId).toEqual(
-        expect.arrayContaining(["matrix:adapter", "slack:adapter"]),
-      );
+      expect(scenario.execution.channels, scenarioId).toEqual(["qa-channel", "slack", "matrix"]);
     }
   });
 
@@ -926,6 +1042,7 @@ describe("qa scenario catalog", () => {
     const config = readQaScenarioExecutionConfig("remember-across-conversations") as
       | { requiredChannelDriver?: string }
       | undefined;
+    const flow = JSON.stringify(scenario.execution.flow);
 
     expect(scenario.execution.suiteIsolation).toBe("isolated");
     expect(config?.requiredChannelDriver).toBe("qa-channel");
@@ -936,10 +1053,21 @@ describe("qa scenario catalog", () => {
         entries: {
           "active-memory": {
             enabled: true,
-            config: { enabled: true, agents: [] },
+            config: { enabled: true, mode: "always", agents: [] },
           },
         },
       },
     });
+    expect(flow).toContain("[sourceSessionKey, targetSessionKey, groupSessionKey]");
+    expect(flow).toContain("readSessionTranscriptSummary");
+    expect(flow).toContain("transcript.eventCursor > 0");
+    expect(flow).toContain(
+      "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length",
+    );
+    expect(flow).toContain('"saveAs":"pauseCommandOutbound"');
+    expect(flow).toContain("candidate.conversation.id === config.pausedConversationId");
+    expect(flow).toContain('"sinceIndex":{"ref":"pauseCommandStartIndex"}');
+    expect(flow).not.toContain('"call":"sleep"');
+    expect(flow).not.toContain(".sessionFile");
   });
 });

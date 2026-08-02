@@ -51,7 +51,7 @@ export function installEmbeddedRunnerBaseE2eMocks(options?: {
     resolveContextEngineOwnerPluginId: vi.fn(() => undefined),
   }));
   vi.doMock("../runtime-plugins.js", () => ({
-    ensureRuntimePluginsLoaded: vi.fn(),
+    loadAgentRuntimePluginRegistryHandle: vi.fn(() => ({ agentHarnesses: [] })),
   }));
   vi.doMock("../harness/runtime-plugin.js", () => ({
     ensureSelectedAgentHarnessPlugin: vi.fn(async () => {}),

@@ -43,6 +43,10 @@ describe("classifyCompactionReason", () => {
     expect(classifyCompactionReason("already under target")).toBe("below_threshold");
   });
 
+  it('classifies "already compacted" without implying recency', () => {
+    expect(classifyCompactionReason("already compacted")).toBe("already_compacted");
+  });
+
   it("classifies deferred background maintenance as a skip-like reason", () => {
     expect(classifyCompactionReason("deferred to background context-engine maintenance")).toBe(
       "deferred_background",
@@ -63,7 +67,7 @@ describe("classifyCompactionReason", () => {
 });
 
 describe("isBenignCompactionSkipReason", () => {
-  it.each(["already under target", "already compacted recently"])(
+  it.each(["already under target", "already compacted"])(
     "keeps the established %s skip contract",
     (reason) => {
       expect(isBenignCompactionSkipReason(reason)).toBe(true);

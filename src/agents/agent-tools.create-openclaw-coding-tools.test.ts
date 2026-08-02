@@ -19,6 +19,11 @@ import {
   resetGlobalHookRunner,
 } from "../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../plugins/hooks.test-fixtures.js";
+import {
+  clearMemoryPluginState,
+  registerMemoryCapability,
+  type MemoryFlushPlan,
+} from "../plugins/memory-state.js";
 import "./test-helpers/fast-bash-tools.js";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
@@ -160,6 +165,13 @@ function cronCreatorToolNames(
 }
 
 describe("createOpenClawCodingTools", () => {
+  it("forwards the session web-search gate to core tool materialization", () => {
+    vi.mocked(createOpenClawTools).mockClear();
+    createOpenClawCodingTools({ webSearchEnabled: false });
+
+    expect(latestCreateOpenClawToolsOptions().webSearchEnabled).toBe(false);
+  });
+
   it("reads node-hosted skill content through the assembled workspace-only read tool", async () => {
     const locator = "node://node-1/skills/pond/SKILL.md";
     const tools = createOpenClawCodingTools({
@@ -197,6 +209,7 @@ describe("createOpenClawCodingTools", () => {
   const testConfig: OpenClawConfig = {};
 
   afterEach(() => {
+    clearMemoryPluginState();
     resetGlobalHookRunner();
   });
 
@@ -409,7 +422,7 @@ describe("createOpenClawCodingTools", () => {
     });
     const names = new Set(tools.map((tool) => tool.name));
 
-    expect(names.has("cron")).toBe(true);
+    expect(names.has("automations")).toBe(true);
     expect(names.has("gateway")).toBe(true);
     expect(names.has("nodes")).toBe(true);
   });
@@ -419,13 +432,13 @@ describe("createOpenClawCodingTools", () => {
       createOpenClawCodingTools({
         config: testConfig,
       }),
-      ["cron"],
+      ["automations"],
     );
 
-    expect(allowed.map((tool) => tool.name)).toEqual(["cron"]);
+    expect(allowed.map((tool) => tool.name)).toEqual(["automations"]);
     expect(
       buildEmptyExplicitToolAllowlistError({
-        sources: [{ label: "runtime toolsAllow", entries: ["cron"] }],
+        sources: [{ label: "runtime toolsAllow", entries: ["automations"] }],
         callableToolNames: allowed.map((tool) => tool.name),
         toolsEnabled: true,
       }),
@@ -764,6 +777,137 @@ describe("createOpenClawCodingTools", () => {
     expect(latestCreateOpenClawToolsOptions().sourceReplyDeliveryMode).toBe("message_tool_only");
   });
 
+  it.each([
+    {
+      name: "trusted one-tool completion",
+      trustedInternalHandoff: true,
+      sourceTool: "subagent_announce",
+      sourceReplyDeliveryMode: "message_tool_only" as const,
+      runtimeToolAllowlist: ["message"],
+      expected: true,
+    },
+    {
+      name: "ordinary private reply",
+      trustedInternalHandoff: false,
+      sourceTool: "subagent_announce",
+      sourceReplyDeliveryMode: "message_tool_only" as const,
+      runtimeToolAllowlist: ["message"],
+      expected: false,
+    },
+    {
+      name: "different handoff owner",
+      trustedInternalHandoff: true,
+      sourceTool: "sessions_send",
+      sourceReplyDeliveryMode: "message_tool_only" as const,
+      runtimeToolAllowlist: ["message"],
+      expected: false,
+    },
+    {
+      name: "unverified forged completion flags",
+      trustedInternalHandoff: true,
+      sourceTool: "subagent_announce",
+      sourceReplyDeliveryMode: "message_tool_only" as const,
+      runtimeToolAllowlist: ["message"],
+      verifiedLineage: false,
+      expected: false,
+    },
+    {
+      name: "wider trusted completion",
+      trustedInternalHandoff: true,
+      sourceTool: "subagent_announce",
+      sourceReplyDeliveryMode: "message_tool_only" as const,
+      runtimeToolAllowlist: ["message", "read"],
+      expected: true,
+    },
+    {
+      name: "automatic completion delivery",
+      trustedInternalHandoff: true,
+      sourceTool: "subagent_announce",
+      sourceReplyDeliveryMode: "automatic" as const,
+      runtimeToolAllowlist: ["message"],
+      expected: false,
+    },
+  ])("limits $name to the source only for verified completion delivery", async (testCase) => {
+    const storeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-completion-grant-"));
+    const storeTemplate = path.join(storeDir, "{agentId}", "sessions.json");
+    const requesterSessionKey = "agent:main:discord:direct:alice";
+    const requesterSessionId = "requester-session";
+    const childSessionKey = "agent:main:subagent:child";
+    const childSessionId = "verified-child-session";
+    const modelProvider = "openai";
+    const modelId = "gpt-5.4";
+    const config: OpenClawConfig = { session: { store: storeTemplate } };
+    const inputProvenance = {
+      kind: "inter_session" as const,
+      sourceSessionKey: childSessionKey,
+      sourceTool: testCase.sourceTool,
+    };
+    const trustedInternalHandoff = testCase.trustedInternalHandoff
+      ? {
+          kind: "subagent-completion" as const,
+          sourceSessionKey: childSessionKey,
+          sourceSessionId: childSessionId,
+          targetSessionKey: requesterSessionKey,
+          targetSessionId: requesterSessionId,
+          provider: modelProvider,
+          model: modelId,
+        }
+      : undefined;
+    const verifiedLineage = !("verifiedLineage" in testCase) || testCase.verifiedLineage !== false;
+
+    try {
+      if (verifiedLineage) {
+        await writeSessionStore(storeTemplate, "main", {
+          [childSessionKey]: {
+            sessionId: childSessionId,
+            updatedAt: Date.now(),
+            spawnedBy: requesterSessionKey,
+            spawnDepth: 1,
+            subagentRole: "orchestrator",
+            subagentControlScope: "children",
+            inheritedToolPolicyVersion: 1,
+          },
+        });
+      }
+      const conversationCapabilityProfile = resolveConversationCapabilityProfile({
+        config,
+        agentId: "main",
+        sessionKey: requesterSessionKey,
+        sessionId: requesterSessionId,
+        modelProvider,
+        modelId,
+        runtimeToolAllowlist: testCase.runtimeToolAllowlist,
+        inputProvenance,
+        trustedInternalHandoff,
+      });
+      const isVerifiedHandoff =
+        verifiedLineage &&
+        testCase.trustedInternalHandoff &&
+        testCase.sourceTool === "subagent_announce";
+      expect(conversationCapabilityProfile.policy.requesterPolicySource).toBe(
+        isVerifiedHandoff ? "completion-handoff" : "current-request",
+      );
+
+      vi.mocked(createOpenClawTools).mockClear();
+      createOpenClawCodingTools({
+        config,
+        agentId: "main",
+        sessionKey: requesterSessionKey,
+        sessionId: requesterSessionId,
+        modelProvider,
+        modelId,
+        conversationCapabilityProfile,
+        sourceReplyDeliveryMode: testCase.sourceReplyDeliveryMode,
+        runtimeToolAllowlist: testCase.runtimeToolAllowlist,
+        ...(!verifiedLineage ? { inputProvenance, trustedInternalHandoff } : {}),
+      });
+
+      expect(latestCreateOpenClawToolsOptions().sourceReplyOnly).toBe(testCase.expected);
+    } finally {
+      await fs.rm(storeDir, { recursive: true, force: true });
+    }
+  });
+
   it("passes configured filesystem policy to OpenClaw tool construction", () => {
     const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
     createOpenClawToolsMock.mockClear();
@@ -956,7 +1100,16 @@ describe("createOpenClawCodingTools", () => {
 
     try {
       const tools = createOpenClawCodingTools({
-        config: testConfig,
+        config: {
+          ...testConfig,
+          channels: {
+            discord: {
+              accounts: {
+                creator: {},
+              },
+            },
+          },
+        },
         agentId: "main",
         sessionKey: "agent:main:telegram:direct:alice",
         messageProvider: "discord-voice",
@@ -1231,12 +1384,12 @@ describe("createOpenClawCodingTools", () => {
     createOpenClawCodingTools({
       sessionKey: "agent:main:whatsapp:group:restricted-room",
       config: {
-        tools: { allow: ["read", "exec", "process", "cron"] },
+        tools: { allow: ["read", "exec", "process", "automations"] },
         channels: {
           whatsapp: {
             groups: {
               "restricted-room": {
-                tools: { allow: ["read", "cron"] },
+                tools: { allow: ["read", "automations"] },
               },
             },
           },
@@ -1247,7 +1400,7 @@ describe("createOpenClawCodingTools", () => {
     expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
     const cronAllow = latestCreateOpenClawToolsOptions().cronCreatorToolAllowlist;
     const cronAllowNames = cronCreatorToolNames(cronAllow);
-    expectListIncludes(cronAllowNames, ["read", "cron"]);
+    expectListIncludes(cronAllowNames, ["read", "automations"]);
     expect(cronAllowNames?.includes("exec")).toBe(false);
     expect(cronAllowNames?.includes("process")).toBe(false);
   });
@@ -1262,7 +1415,7 @@ describe("createOpenClawCodingTools", () => {
     const cronAllowNames = cronCreatorToolNames(
       latestCreateOpenClawToolsOptions().cronCreatorToolAllowlist,
     );
-    expectListIncludes(cronAllowNames, ["read", "cron", "exec"]);
+    expectListIncludes(cronAllowNames, ["read", "automations", "exec"]);
   });
 
   it("lets embedded attempts refresh a caller-owned cron creator tool surface", () => {
@@ -1273,22 +1426,22 @@ describe("createOpenClawCodingTools", () => {
     > = [];
 
     createOpenClawCodingTools({
-      config: { tools: { allow: ["read", "cron"] } },
+      config: { tools: { allow: ["read", "automations"] } },
       cronCreatorToolAllowlistRef,
     });
 
     expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
     const cronAllow = latestCreateOpenClawToolsOptions().cronCreatorToolAllowlist;
     expect(cronAllow).toBe(cronCreatorToolAllowlistRef);
-    expect(cronCreatorToolNames(cronAllow)).toEqual(["read", "cron"]);
+    expect(cronCreatorToolNames(cronAllow)).toEqual(["read", "automations"]);
 
     replaceWithEffectiveCronCreatorToolAllowlist(cronCreatorToolAllowlistRef, [
       stubTool("read"),
-      stubTool("cron"),
+      stubTool("automations"),
       stubTool("bundle_mcp_search"),
     ]);
 
-    expect(cronCreatorToolNames(cronAllow)).toEqual(["read", "cron", "bundle_mcp_search"]);
+    expect(cronCreatorToolNames(cronAllow)).toEqual(["read", "automations", "bundle_mcp_search"]);
   });
 
   it("passes deny-restricted tool surface to cron-created agent turns", () => {
@@ -1298,7 +1451,7 @@ describe("createOpenClawCodingTools", () => {
     createOpenClawCodingTools({
       sessionKey: "agent:main:whatsapp:group:restricted-room",
       config: {
-        tools: { allow: ["read", "exec", "process", "cron"] },
+        tools: { allow: ["read", "exec", "process", "automations"] },
         channels: {
           whatsapp: {
             groups: {
@@ -1314,7 +1467,7 @@ describe("createOpenClawCodingTools", () => {
     expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
     const cronAllow = latestCreateOpenClawToolsOptions().cronCreatorToolAllowlist;
     const cronAllowNames = cronCreatorToolNames(cronAllow);
-    expectListIncludes(cronAllowNames, ["read", "cron"]);
+    expectListIncludes(cronAllowNames, ["read", "automations"]);
     expect(cronAllowNames?.includes("exec")).toBe(false);
     expect(cronAllowNames?.includes("process")).toBe(false);
   });
@@ -1352,7 +1505,7 @@ describe("createOpenClawCodingTools", () => {
 
   it("preserves action enums in normalized schemas", () => {
     const defaultTools = createOpenClawCodingTools({ config: testConfig });
-    const toolNames = ["canvas", "nodes", "cron", "gateway", "message"];
+    const toolNames = ["canvas", "nodes", "automations", "gateway", "message"];
     const missingNames = toolNames.filter(
       (name) => !defaultTools.some((candidate) => candidate.name === name),
     );
@@ -1669,7 +1822,7 @@ describe("createOpenClawCodingTools", () => {
     expect(names.has("browser")).toBe(true);
     expect(names.has("canvas")).toBe(true);
     expect(names.has("gateway")).toBe(true);
-    expect(names.has("cron")).toBe(true);
+    expect(names.has("automations")).toBe(true);
     expect(names.has("nodes")).toBe(true);
   });
 
@@ -2004,6 +2157,239 @@ describe("createOpenClawCodingTools", () => {
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
       await fs.rm(taskCwd, { recursive: true, force: true });
+    }
+  });
+
+  it("records ordinary write, edit, and apply_patch memory provenance from turn taint", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-write-taint-"));
+    const rollback = vi.fn(async () => {});
+    const recordWriteProvenance = vi.fn<NonNullable<MemoryFlushPlan["recordWriteProvenance"]>>(
+      async () => rollback,
+    );
+    registerMemoryCapability("memory-core", {
+      flushPlanResolver: () => ({
+        softThresholdTokens: 1,
+        forceFlushTranscriptBytes: 1,
+        reserveTokensFloor: 1,
+        prompt: "flush",
+        systemPrompt: "flush",
+        relativePath: "memory/2026-07-29.md",
+        recordWriteProvenance,
+      }),
+    });
+    let tainted = false;
+    try {
+      const tools = createOpenClawCodingTools({
+        workspaceDir,
+        config: { tools: { fs: { workspaceOnly: true } } },
+        senderIsOwner: true,
+        isTurnTainted: () => tainted,
+      });
+      const write = requireToolExecute(requireTool(tools, "write"));
+      const edit = requireToolExecute(requireTool(tools, "edit"));
+      const applyPatch = requireToolExecute(requireTool(tools, "apply_patch"));
+
+      await write("write-memory", {
+        path: "memory/2026-07-29.md",
+        content: "owner-requested note\n",
+      });
+      tainted = true;
+      await edit("edit-memory", {
+        path: "memory/2026-07-29.md",
+        edits: [{ oldText: "note", newText: "network-derived note" }],
+      });
+      await applyPatch("patch-memory", {
+        input: [
+          "*** Begin Patch",
+          "*** Add File: memory/project.md",
+          "+network project note",
+          "*** End Patch",
+        ].join("\n"),
+      });
+
+      expect(recordWriteProvenance.mock.calls.map(([entry]) => entry.originClass)).toEqual([
+        "agent",
+        "untrusted",
+        "untrusted",
+      ]);
+      expect(recordWriteProvenance).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          relativePath: "memory/project.md",
+          contentBefore: "",
+          contentAfter: "network project note\n",
+        }),
+      );
+      await expect(
+        applyPatch("patch-existing-memory", {
+          input: [
+            "*** Begin Patch",
+            "*** Add File: memory/project.md",
+            "+replacement",
+            "*** End Patch",
+          ].join("\n"),
+        }),
+      ).rejects.toThrow(/file already exists/i);
+      expect(rollback).toHaveBeenCalledOnce();
+      await expect(fs.readFile(path.join(workspaceDir, "memory/project.md"), "utf8")).resolves.toBe(
+        "network project note\n",
+      );
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("records agent provenance after an untainted same-turn delete and recreate", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-recreate-"));
+    let recordedOrigin: "agent" | "untrusted" | undefined;
+    registerMemoryCapability("memory-core", {
+      flushPlanResolver: () => ({
+        softThresholdTokens: 1,
+        forceFlushTranscriptBytes: 1,
+        reserveTokensFloor: 1,
+        prompt: "flush",
+        systemPrompt: "flush",
+        relativePath: "memory/recreated.md",
+        recordWriteProvenance: async (entry) => {
+          recordedOrigin = entry.originClass;
+        },
+        clearWriteProvenance: async () => {
+          recordedOrigin = undefined;
+        },
+      }),
+    });
+    try {
+      await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+      await fs.writeFile(path.join(workspaceDir, "memory/recreated.md"), "old\n", "utf8");
+      const applyPatch = requireToolExecute(
+        requireTool(
+          createOpenClawCodingTools({
+            workspaceDir,
+            senderIsOwner: true,
+            isTurnTainted: () => false,
+          }),
+          "apply_patch",
+        ),
+      );
+      await applyPatch("delete-memory", {
+        input: "*** Begin Patch\n*** Delete File: memory/recreated.md\n*** End Patch",
+      });
+      await applyPatch("recreate-memory", {
+        input: "*** Begin Patch\n*** Add File: memory/recreated.md\n+recreated\n*** End Patch",
+      });
+      expect(recordedOrigin).toBe("agent");
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("orders parallel apply_patch delete cleanup before a tainted recreate", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-race-"));
+    let recordedOrigin: "agent" | "untrusted" | undefined;
+    let releaseCleanup!: () => void;
+    let signalCleanupStarted!: () => void;
+    const cleanupRelease = new Promise<void>((resolve) => {
+      releaseCleanup = resolve;
+    });
+    const cleanupStarted = new Promise<void>((resolve) => {
+      signalCleanupStarted = resolve;
+    });
+    const recordWriteProvenance = vi.fn<NonNullable<MemoryFlushPlan["recordWriteProvenance"]>>(
+      async (entry) => {
+        recordedOrigin = entry.originClass;
+      },
+    );
+    registerMemoryCapability("memory-core", {
+      flushPlanResolver: () => ({
+        softThresholdTokens: 1,
+        forceFlushTranscriptBytes: 1,
+        reserveTokensFloor: 1,
+        prompt: "flush",
+        systemPrompt: "flush",
+        relativePath: "memory/raced.md",
+        recordWriteProvenance,
+        clearWriteProvenance: async () => {
+          signalCleanupStarted();
+          await cleanupRelease;
+          recordedOrigin = undefined;
+        },
+      }),
+    });
+    try {
+      await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+      await fs.writeFile(path.join(workspaceDir, "memory/raced.md"), "old\n", "utf8");
+      const applyPatch = requireToolExecute(
+        requireTool(
+          createOpenClawCodingTools({
+            workspaceDir,
+            senderIsOwner: true,
+            isTurnTainted: () => true,
+          }),
+          "apply_patch",
+        ),
+      );
+      const deleting = applyPatch("delete-raced-memory", {
+        input: "*** Begin Patch\n*** Delete File: memory/raced.md\n*** End Patch",
+      });
+      await cleanupStarted;
+      const recreating = applyPatch("recreate-raced-memory", {
+        input: "*** Begin Patch\n*** Add File: memory/raced.md\n+network note\n*** End Patch",
+      });
+      await Promise.resolve();
+      expect(recordWriteProvenance).not.toHaveBeenCalled();
+      releaseCleanup();
+      await Promise.all([deleting, recreating]);
+
+      expect(recordedOrigin).toBe("untrusted");
+      expect(recordWriteProvenance).toHaveBeenCalledOnce();
+    } finally {
+      releaseCleanup();
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("records sandbox-backed memory writes before mutation", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-sandbox-taint-"));
+    const recordWriteProvenance = vi.fn<NonNullable<MemoryFlushPlan["recordWriteProvenance"]>>(
+      async () => {},
+    );
+    registerMemoryCapability("memory-core", {
+      flushPlanResolver: () => ({
+        softThresholdTokens: 1,
+        forceFlushTranscriptBytes: 1,
+        reserveTokensFloor: 1,
+        prompt: "flush",
+        systemPrompt: "flush",
+        relativePath: "memory/2026-07-29.md",
+        recordWriteProvenance,
+      }),
+    });
+    try {
+      const sandbox = createAgentToolsSandboxContext({
+        workspaceDir,
+        fsBridge: createHostSandboxFsBridge(workspaceDir),
+        workspaceAccess: "rw",
+      });
+      const tools = createOpenClawCodingTools({
+        workspaceDir,
+        sandbox,
+        senderIsOwner: true,
+        isTurnTainted: () => true,
+      });
+      await requireToolExecute(requireTool(tools, "write"))("sandbox-memory", {
+        path: "memory/2026-07-29.md",
+        content: "sandbox network note\n",
+      });
+
+      expect(recordWriteProvenance).toHaveBeenCalledWith(
+        expect.objectContaining({
+          relativePath: "memory/2026-07-29.md",
+          originClass: "untrusted",
+          contentBefore: "",
+          contentAfter: "sandbox network note\n",
+        }),
+      );
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
     }
   });
 

@@ -314,13 +314,13 @@ enum TalkModeRealtimeVoiceSelection {
         "alloy",
         "ash",
         "ballad",
+        "cedar",
         "coral",
         "echo",
+        "marin",
         "sage",
         "shimmer",
         "verse",
-        "marin",
-        "cedar",
     ]
 
     static func resolvedOverride(_ raw: String?) -> String? {

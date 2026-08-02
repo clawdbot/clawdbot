@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   buildSubscriptionParams: vi.fn(),
   clearActiveRun: vi.fn(),
   notifyToolActivity: vi.fn(),
+  runBeforeFinalizeHook: vi.fn(),
   setActiveRun: vi.fn(),
   subscribe: vi.fn(),
 }));
@@ -21,6 +22,9 @@ vi.mock("./attempt.subscription-cleanup.js", () => ({
 }));
 vi.mock("./tool-activity-heartbeat.js", () => ({
   notifyToolActivity: mocks.notifyToolActivity,
+}));
+vi.mock("../../harness/lifecycle-hook-helpers.js", () => ({
+  runAgentHarnessBeforeAgentFinalizeHook: mocks.runBeforeFinalizeHook,
 }));
 
 import { prepareEmbeddedAttemptStream } from "./attempt-stream-prepare.js";
@@ -84,6 +88,159 @@ describe("prepareEmbeddedAttemptStream", () => {
       runToolLifecycle: vi.fn(async ({ execute }) => await execute()),
       isCompacting: vi.fn(() => false),
     });
+    mocks.runBeforeFinalizeHook.mockResolvedValue({ action: "continue" });
+  });
+
+  it("uses the persisted assistant entry id and closes steering during revision settlement", async () => {
+    let resolveHook: ((value: { action: "revise"; reason: string }) => void) | undefined;
+    mocks.runBeforeFinalizeHook.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveHook = resolve;
+        }),
+    );
+    const prepared = prepareEmbeddedAttemptStream({
+      attempt: {
+        runId: "run-finalize-id",
+        sessionId: "session-finalize-id",
+        sessionKey: "agent:main:main",
+        maxBeforeAgentFinalizeRevisions: 3,
+        beforeAgentFinalizeRevisionAttempts: 0,
+      } as never,
+      activeSession: {
+        agent: { hasQueuedMessages: () => false },
+        isStreaming: false,
+        messages: [],
+        pendingMessageCount: 0,
+      } as never,
+      hookRunner: { hasHooks: (name: string) => name === "before_agent_finalize" } as never,
+      hookAgentId: "main",
+      diagnosticTrace: {} as never,
+      clientToolCallSlots: [],
+      toolSearchTargetTranscriptProjections: [],
+      isReplaySafeTool: () => false,
+      runAbortController: new AbortController(),
+      abortRun: vi.fn(),
+      markExternalAbort: vi.fn(),
+      getRunState: () => ({
+        aborted: false,
+        promptError: undefined,
+        timedOut: false,
+        yieldDetected: false,
+      }),
+      hasDeliveredSourceReply: () => false,
+      markSourceReplyDelivered: vi.fn(),
+      onBlockReply: vi.fn(),
+      onBlockReplyFlush: vi.fn(),
+      sandboxSessionKey: "agent:main:main",
+      builtinToolNames: new Set(),
+      replaySafeToolNames: new Set(),
+    });
+    const subscriptionInput = mocks.buildSubscriptionParams.mock.calls.at(-1)?.[0] as {
+      onBeforeTerminalDelivery?: (event: unknown) => Promise<unknown>;
+    };
+    const decision = subscriptionInput.onBeforeTerminalDelivery?.({
+      messages: [],
+      willRetry: false,
+      assistantEntryId: "canonical-entry-id",
+      lastAssistant: {
+        role: "assistant",
+        content: [{ type: "text", text: "Draft answer" }],
+        stopReason: "stop",
+      },
+      assistantTexts: ["Draft answer"],
+      hasAssistantVisibleText: true,
+      isError: false,
+      incompleteTerminalAssistant: false,
+      hadDeterministicSideEffect: false,
+    });
+
+    await vi.waitFor(() => expect(mocks.runBeforeFinalizeHook).toHaveBeenCalledOnce());
+    expect(prepared.queueHandle.isStopped?.()).toBe(true);
+    await expect(prepared.queueHandle.queueMessage("too late")).rejects.toThrow(
+      "active session is finalizing",
+    );
+
+    resolveHook?.({ action: "revise", reason: "Tighten the answer" });
+    await expect(decision).resolves.toEqual({ suppressTerminalDelivery: true });
+    expect(prepared.getBeforeAgentFinalizeRevisionEntryId()).toBe("canonical-entry-id");
+    expect(prepared.queueHandle.isStopped?.()).toBe(true);
+  });
+
+  it("keeps already-started steering authoritative over finalization", async () => {
+    let resolveSteer: (() => void) | undefined;
+    const activeSession = {
+      agent: { hasQueuedMessages: () => false },
+      isStreaming: false,
+      messages: [],
+      pendingMessageCount: 0,
+      steer: vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            resolveSteer = resolve;
+          }),
+      ),
+      subscribe: vi.fn(() => () => {}),
+    };
+    const prepared = prepareEmbeddedAttemptStream({
+      attempt: {
+        runId: "run-finalize-steer",
+        sessionId: "session-finalize-steer",
+        sessionKey: "agent:main:main",
+        maxBeforeAgentFinalizeRevisions: 3,
+        beforeAgentFinalizeRevisionAttempts: 0,
+      } as never,
+      activeSession: activeSession as never,
+      hookRunner: { hasHooks: (name: string) => name === "before_agent_finalize" } as never,
+      hookAgentId: "main",
+      diagnosticTrace: {} as never,
+      clientToolCallSlots: [],
+      toolSearchTargetTranscriptProjections: [],
+      isReplaySafeTool: () => false,
+      runAbortController: new AbortController(),
+      abortRun: vi.fn(),
+      markExternalAbort: vi.fn(),
+      getRunState: () => ({
+        aborted: false,
+        promptError: undefined,
+        timedOut: false,
+        yieldDetected: false,
+      }),
+      hasDeliveredSourceReply: () => false,
+      markSourceReplyDelivered: vi.fn(),
+      onBlockReply: vi.fn(),
+      onBlockReplyFlush: vi.fn(),
+      sandboxSessionKey: "agent:main:main",
+      builtinToolNames: new Set(),
+      replaySafeToolNames: new Set(),
+    });
+    const queued = prepared.queueHandle.queueMessage("new user input");
+    const subscriptionInput = mocks.buildSubscriptionParams.mock.calls.at(-1)?.[0] as {
+      onBeforeTerminalDelivery?: (event: unknown) => Promise<unknown>;
+    };
+
+    await expect(
+      subscriptionInput.onBeforeTerminalDelivery?.({
+        messages: [],
+        willRetry: false,
+        assistantEntryId: "canonical-entry-id",
+        lastAssistant: {
+          role: "assistant",
+          content: [{ type: "text", text: "Draft answer" }],
+          stopReason: "stop",
+        },
+        assistantTexts: ["Draft answer"],
+        hasAssistantVisibleText: true,
+        isError: false,
+        incompleteTerminalAssistant: false,
+        hadDeterministicSideEffect: false,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(mocks.runBeforeFinalizeHook).not.toHaveBeenCalled();
+    expect(prepared.queueHandle.isStopped?.()).toBe(false);
+    resolveSteer?.();
+    await queued;
   });
 
   it("routes live events to the transcript session instead of the sandbox authority session", () => {

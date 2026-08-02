@@ -194,9 +194,14 @@ function buildAssistantOutputItem(spec: MockAssistantMessageSpec) {
   } as const;
 }
 
-function appendAssistantMessageEvents(events: StreamEvent[], spec: MockAssistantMessageSpec) {
+function appendAssistantMessageEvents(
+  events: StreamEvent[],
+  spec: MockAssistantMessageSpec,
+  outputIndex: number,
+) {
   events.push({
     type: "response.output_item.added",
+    output_index: outputIndex,
     item: {
       type: "message",
       id: spec.id,
@@ -210,7 +215,7 @@ function appendAssistantMessageEvents(events: StreamEvent[], spec: MockAssistant
     events.push({
       type: "response.output_text.delta",
       item_id: spec.id,
-      output_index: 0,
+      output_index: outputIndex,
       content_index: 0,
       delta,
     });
@@ -219,13 +224,14 @@ function appendAssistantMessageEvents(events: StreamEvent[], spec: MockAssistant
     events.push({
       type: "response.output_text.done",
       item_id: spec.id,
-      output_index: 0,
+      output_index: outputIndex,
       content_index: 0,
       text: spec.text,
     });
   }
   events.push({
     type: "response.output_item.done",
+    output_index: outputIndex,
     item: buildAssistantOutputItem(spec),
   });
 }
@@ -238,9 +244,10 @@ export function buildAssistantThenToolCallEvents(
   const call = buildMockFunctionCall(name, args);
   const message = buildAssistantOutputItem(spec);
   const events: StreamEvent[] = [];
-  appendAssistantMessageEvents(events, spec);
+  appendAssistantMessageEvents(events, spec, 0);
   events.push({
     type: "response.output_item.added",
+    output_index: 1,
     item: {
       type: "function_call",
       id: call.itemId,
@@ -249,9 +256,15 @@ export function buildAssistantThenToolCallEvents(
       arguments: "",
     },
   });
-  events.push({ type: "response.function_call_arguments.delta", delta: call.serialized });
+  events.push({
+    type: "response.function_call_arguments.delta",
+    item_id: call.itemId,
+    output_index: 1,
+    delta: call.serialized,
+  });
   events.push({
     type: "response.output_item.done",
+    output_index: 1,
     item: call.item,
   });
   events.push({
@@ -282,40 +295,8 @@ export function buildAssistantEvents(
   const output = renderedSpecs.map(({ item }) => item);
   const events: StreamEvent[] = [];
 
-  for (const [outputIndex, { spec, item }] of renderedSpecs.entries()) {
-    events.push({
-      type: "response.output_item.added",
-      item: {
-        type: "message",
-        id: spec.id,
-        role: "assistant",
-        ...(spec.phase ? { phase: spec.phase } : {}),
-        content: [],
-        status: "in_progress",
-      },
-    });
-    for (const delta of spec.streamDeltas ?? []) {
-      events.push({
-        type: "response.output_text.delta",
-        item_id: spec.id,
-        output_index: outputIndex,
-        content_index: 0,
-        delta,
-      });
-    }
-    if ((spec.streamDeltas ?? []).length > 0) {
-      events.push({
-        type: "response.output_text.done",
-        item_id: spec.id,
-        output_index: outputIndex,
-        content_index: 0,
-        text: spec.text,
-      });
-    }
-    events.push({
-      type: "response.output_item.done",
-      item,
-    });
+  for (const [outputIndex, { spec }] of renderedSpecs.entries()) {
+    appendAssistantMessageEvents(events, spec, outputIndex);
   }
 
   events.push({
@@ -339,6 +320,7 @@ export function buildReasoningOnlyEvents(summaryText: string, id: string): Strea
   return [
     {
       type: "response.output_item.added",
+      output_index: 0,
       item: {
         type: "reasoning",
         id,
@@ -347,6 +329,7 @@ export function buildReasoningOnlyEvents(summaryText: string, id: string): Strea
     },
     {
       type: "response.output_item.done",
+      output_index: 0,
       item: reasoningItem,
     },
     {
@@ -379,6 +362,7 @@ export function buildReasoningAndAssistantEvents(params: {
   return [
     {
       type: "response.output_item.added",
+      output_index: 0,
       item: {
         type: "reasoning",
         id: params.reasoningId,
@@ -387,10 +371,12 @@ export function buildReasoningAndAssistantEvents(params: {
     },
     {
       type: "response.output_item.done",
+      output_index: 0,
       item: reasoningItem,
     },
     {
       type: "response.output_item.added",
+      output_index: 1,
       item: {
         type: "message",
         id: answerItem.id,
@@ -416,6 +402,7 @@ export function buildReasoningAndAssistantEvents(params: {
     },
     {
       type: "response.output_item.done",
+      output_index: 1,
       item: answerItem,
     },
     {

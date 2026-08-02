@@ -18,8 +18,8 @@ import {
   type ApplicationContext,
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
-import { hasOperatorApprovalsAccess } from "../../app/operator-access.ts";
-import { renderSettingsPage } from "../../components/settings-ui.ts";
+import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
+import { renderDocsLink, renderSettingsPage } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
@@ -27,6 +27,7 @@ import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 
 const APPROVAL_HISTORY_PAGE_SIZE = 50;
 const APPROVAL_HISTORY_REQUIRED_SCOPE = "operator.approvals";
+const APPROVALS_DOCS_URL = "https://docs.openclaw.ai/tools/exec-approvals";
 
 function formatResolvedAt(timestampMs: number): string {
   return new Intl.DateTimeFormat(i18n.getLocale(), {
@@ -167,8 +168,7 @@ class ApprovalsPage extends OpenClawLightDomElement {
   private applyGatewaySnapshot(snapshot: ApplicationGatewaySnapshot) {
     const clientChanged = snapshot.client !== this.client;
     const connectionChanged = (snapshot.phase === "connected") !== this.connected;
-    const auth = snapshot.hello?.auth;
-    const nextApprovalsAccess = !auth || hasOperatorApprovalsAccess(auth);
+    const nextApprovalsAccess = readGatewayOperatorAccess(snapshot).canReviewApprovals;
     const approvalAccessChanged = nextApprovalsAccess !== this.approvalsAccess;
     this.connected = snapshot.phase === "connected";
     this.approvalsAccess = nextApprovalsAccess;
@@ -208,6 +208,7 @@ class ApprovalsPage extends OpenClawLightDomElement {
       !gateway ||
       !this.connected ||
       !this.approvalsAccess ||
+      !readGatewayOperatorAccess(gateway.snapshot).canReviewApprovals ||
       this.loading ||
       this.loadingMore
     ) {
@@ -231,6 +232,7 @@ class ApprovalsPage extends OpenClawLightDomElement {
       this.gatewaySource === gateway &&
       this.context.gateway === gateway &&
       gateway.snapshot.phase === "connected" &&
+      readGatewayOperatorAccess(gateway.snapshot).canReviewApprovals &&
       this.client === client &&
       this.requestGeneration === generation;
     try {
@@ -329,7 +331,10 @@ class ApprovalsPage extends OpenClawLightDomElement {
   override render() {
     const body = renderSettingsPage(
       html`
-        <p class="settings-page__intro">${t("approvalHistory.description")}</p>
+        <p class="settings-page__intro">
+          ${t("approvalHistory.description")}
+          ${renderDocsLink(APPROVALS_DOCS_URL, t("common.learnMore"))}
+        </p>
         ${!this.connected
           ? html`<div class="callout warn">${t("approvalHistory.offline")}</div>`
           : nothing}

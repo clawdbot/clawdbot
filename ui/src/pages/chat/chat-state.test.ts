@@ -12,16 +12,25 @@ import {
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { applyRemoteSlashCommandsResult } from "./chat-commands.ts";
 import {
+  clearChatComposerMemoryFallback,
+  retainChatComposerMemoryFallback,
+} from "./chat-composer-memory-fallback.ts";
+import {
   admitQueuedMessageForSession,
   removeQueuedMessage,
   subscribeChatOutboxProjection,
   updateQueuedMessageForSession,
 } from "./chat-queue.ts";
+import { createInitialChatRealtimeState } from "./chat-realtime.ts";
 import { ChatStateController } from "./chat-state-controller.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createPageState } from "./chat-state-page.ts";
-import { invalidateChatMetadataCache, refreshChatMetadata } from "./chat-state-refresh.ts";
+import {
+  invalidateChatMetadataCache,
+  refreshChatMetadata,
+  refreshChatModelAuthStatus,
+} from "./chat-state-refresh.ts";
 import {
   resetChatStateForRouteSession,
   retryChatComposerMemoryFallback,
@@ -52,6 +61,297 @@ afterEach(() => {
   replaceSlashCommands(buildFallbackSlashCommands());
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+});
+
+describe("canonical session message recovery", () => {
+  function createSessionEventState(overrides: Partial<ChatPageHost> = {}) {
+    const request = vi.fn().mockResolvedValue({
+      messages: [],
+      sessionId: "selected-session",
+      thinkingLevel: null,
+    });
+    const state = {
+      client: { request } as unknown as GatewayBrowserClient,
+      connected: true,
+      connectionEpoch: 1,
+      sessionKey: "agent:main:main",
+      currentSessionId: "selected-session",
+      chatLoading: false,
+      chatMessages: [],
+      chatMessagesBySession: new Map(),
+      chatThinkingLevel: null,
+      chatVerboseLevel: null,
+      chatSending: false,
+      chatMessage: "",
+      chatAttachments: [],
+      chatQueue: [],
+      chatRunId: null,
+      chatStream: null,
+      chatStreamStartedAt: null,
+      lastError: null,
+      hello: null,
+      sessions: {
+        reconcileChanged: vi.fn().mockReturnValue({ applied: false }),
+        refresh: vi.fn().mockResolvedValue(undefined),
+      },
+      requestUpdate: vi.fn(),
+      ...overrides,
+    } as unknown as ChatPageHost;
+    return { request, state };
+  }
+
+  it("rejects envelope-only sequence for an incomplete imported user identity", () => {
+    const { state } = createSessionEventState({ connected: false });
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "session.message",
+      payload: {
+        sessionKey: state.sessionKey,
+        messageId: "conflicting-native-envelope",
+        messageSeq: 90,
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "Incomplete imported prompt" }],
+          __openclaw: { importedFrom: "claude-cli", externalId: "source-local-user" },
+        },
+      },
+    });
+
+    expect(state.chatMessages).toEqual([]);
+  });
+
+  it("keeps the persisted sequence for an incomplete imported user identity", () => {
+    const { state } = createSessionEventState({ connected: false });
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "session.message",
+      payload: {
+        sessionKey: state.sessionKey,
+        messageId: "conflicting-native-envelope",
+        messageSeq: 90,
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "Persisted imported prompt" }],
+          __openclaw: { importedFrom: "claude-cli", externalId: "source-local-user", seq: 3 },
+        },
+      },
+    });
+
+    expect(state.chatMessages).toHaveLength(1);
+    expect(state.chatMessages[0]).toMatchObject({
+      __openclaw: { importedFrom: "claude-cli", externalId: "source-local-user", seq: 3 },
+    });
+  });
+
+  it("renders distinct live peers immediately and coalesces their stale history", async () => {
+    let resolveHistory!: (result: {
+      messages: unknown[];
+      sessionId: string;
+      thinkingLevel: null;
+    }) => void;
+    const history = new Promise<{
+      messages: unknown[];
+      sessionId: string;
+      thinkingLevel: null;
+    }>((resolve) => {
+      resolveHistory = resolve;
+    });
+    const { request, state } = createSessionEventState({ chatDisplayedLeafEntryId: undefined });
+    request.mockReturnValue(history);
+
+    for (const [index, client] of ["web", "tui"].entries()) {
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "session.message",
+        payload: {
+          sessionKey: state.sessionKey,
+          messageId: `conflicting-${client}-envelope`,
+          messageSeq: 100 + index,
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "shared prompt" }],
+            __openclaw: {
+              id: `canonical-${client}-same-text`,
+              idempotencyKey: `${client}-same-text-run:user`,
+              seq: index + 1,
+            },
+          },
+        },
+      });
+
+      expect(state.chatMessages).toHaveLength(index + 1);
+      expect(state.requestUpdate).toHaveBeenCalledTimes(index + 1);
+    }
+
+    expect(request).toHaveBeenCalledOnce();
+    resolveHistory({
+      messages: [],
+      sessionId: "selected-session",
+      thinkingLevel: null,
+    });
+
+    await vi.waitFor(() => expect(state.chatLoading).toBe(false));
+
+    expect(request).toHaveBeenCalledOnce();
+    expect(state.chatMessages).toMatchObject([
+      { __openclaw: { id: "canonical-web-same-text", seq: 1 } },
+      { __openclaw: { id: "canonical-tui-same-text", seq: 2 } },
+    ]);
+  });
+
+  it("drops pre-reset live and pending messages before accepting a new session turn", () => {
+    const pendingUser = {
+      role: "user",
+      content: [{ type: "text", text: "Pending before reset" }],
+      __openclaw: { idempotencyKey: "pre-reset-pending:user" },
+    };
+    const { state } = createSessionEventState({
+      connected: false,
+      chatMessages: [pendingUser],
+    });
+    const deliverUser = (id: string, text: string) =>
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "session.message",
+        payload: {
+          sessionKey: state.sessionKey,
+          message: {
+            role: "user",
+            content: [{ type: "text", text }],
+            __openclaw: { id, idempotencyKey: `${id}:user`, seq: 1 },
+          },
+        },
+      });
+
+    deliverUser("pre-reset-live", "Live before reset");
+    expect(state.chatMessages).toHaveLength(2);
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "sessions.changed",
+      payload: {
+        sessionKey: state.sessionKey,
+        agentId: "main",
+        reason: "reset",
+      },
+    });
+    expect(state.chatMessages).toEqual([]);
+
+    deliverUser("post-reset-live", "Live after reset");
+    expect(state.chatMessages).toHaveLength(1);
+    expect(state.chatMessages[0]).toMatchObject({
+      __openclaw: { id: "post-reset-live", seq: 1 },
+    });
+  });
+
+  it("does not clear the selected transcript when another agent resets", () => {
+    const selectedUser = {
+      role: "user",
+      content: [{ type: "text", text: "Keep this agent's conversation" }],
+      __openclaw: { id: "selected-user", seq: 1 },
+    };
+    const { state } = createSessionEventState({
+      connected: false,
+      chatMessages: [selectedUser],
+    });
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "sessions.changed",
+      payload: {
+        sessionKey: "agent:other:main",
+        agentId: "other",
+        reason: "reset",
+      },
+    });
+
+    expect(state.chatMessages).toEqual([selectedUser]);
+  });
+
+  it("does not mistake identity-only message invalidation for a session reset", () => {
+    const selectedUser = {
+      role: "user",
+      content: [{ type: "text", text: "Keep this pending transcript" }],
+      __openclaw: { idempotencyKey: "still-pending:user" },
+    };
+    const { state } = createSessionEventState({
+      connected: false,
+      chatMessages: [selectedUser],
+    });
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "sessions.changed",
+      payload: {
+        sessionKey: state.sessionKey,
+        agentId: "main",
+        phase: "message",
+      },
+    });
+
+    expect(state.chatMessages).toEqual([selectedUser]);
+  });
+
+  it("reloads selected history for an identity-only persisted message invalidation", async () => {
+    const { request, state } = createSessionEventState({ chatRunId: "active-run" });
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "sessions.changed",
+      payload: {
+        sessionKey: state.sessionKey,
+        agentId: "main",
+        phase: "message",
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(request).toHaveBeenCalledWith("chat.history", {
+        agentId: "main",
+        sessionKey: state.sessionKey,
+        limit: 100,
+      });
+    });
+    expect(state.chatRunId).toBe("active-run");
+  });
+
+  it("does not reload another session for an identity-only message invalidation", async () => {
+    const { request, state } = createSessionEventState();
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "sessions.changed",
+      payload: {
+        sessionKey: "agent:other:main",
+        agentId: "other",
+        phase: "message",
+      },
+    });
+
+    await Promise.resolve();
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("does not reload for an already identified session message", async () => {
+    const { request, state } = createSessionEventState();
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "sessions.changed",
+      payload: {
+        sessionKey: state.sessionKey,
+        agentId: "main",
+        phase: "message",
+        messageId: "already-authoritative-user",
+        messageSeq: 3,
+      },
+    });
+
+    await Promise.resolve();
+    expect(request).not.toHaveBeenCalled();
+  });
 });
 
 describe("ChatStateController render lifecycle", () => {
@@ -621,6 +921,68 @@ describe("ChatStateController render lifecycle", () => {
     expect(effect).not.toHaveBeenCalled();
   });
 
+  it("fully tears down realtime Talk when its state owner disconnects", () => {
+    const host = {
+      addController: () => undefined,
+      removeController: () => undefined,
+      requestUpdate: () => undefined,
+      updateComplete: Promise.resolve(true),
+    } satisfies ReactiveControllerHost;
+    const controller = new ChatStateController<ChatPageHost>(host);
+    controller.hostConnected();
+    const renderLifecycle = controller.createRenderLifecycle();
+    const context = {
+      agents: {
+        state: { agentsList: null },
+        adoptList: vi.fn(),
+      },
+      agentSelection: { state: { selectedId: "main" } },
+      basePath: "",
+      config: {
+        current: {
+          allowExternalEmbedUrls: false,
+          assistantIdentity: { name: "Assistant" },
+          embedSandboxMode: "scripts",
+          localMediaPreviewRoots: [],
+        },
+      },
+      initialUserMessage: createInitialUserMessageHandoff(),
+      sessions: {},
+    } as unknown as ApplicationContext;
+    const state = createPageState(context, renderLifecycle, { querySelector: () => null });
+    const stop = vi.fn(() => {
+      expect(state.realtimeTalkSession).toBeNull();
+    });
+    state.realtimeTalkSession = { stop } as unknown as ChatPageHost["realtimeTalkSession"];
+    state.realtimeTalkActive = true;
+    state.realtimeTalkStatus = "listening";
+    state.realtimeTalkDetail = "live";
+    state.realtimeTalkInputLevel.set(0.8);
+    state.realtimeTalkConversation = [
+      { id: "utterance", role: "user", text: "stale", isStreaming: true },
+    ];
+    state.realtimeTalkVideoStream = {} as MediaStream;
+    state.realtimeTalkCameraDevices = [{ deviceId: "camera", label: "Camera" }];
+    state.realtimeTalkVideoCapable = true;
+    state.realtimeTalkVideoPending = true;
+    state.realtimeTalkCameraError = true;
+    controller.attach(state);
+
+    controller.hostDisconnected();
+
+    expect(stop).toHaveBeenCalledOnce();
+    expect(state.realtimeTalkActive).toBe(false);
+    expect(state.realtimeTalkStatus).toBe("idle");
+    expect(state.realtimeTalkDetail).toBeNull();
+    expect(state.realtimeTalkInputLevel.value).toBe(0);
+    expect(state.realtimeTalkConversation).toEqual([]);
+    expect(state.realtimeTalkVideoStream).toBeNull();
+    expect(state.realtimeTalkCameraDevices).toEqual([]);
+    expect(state.realtimeTalkVideoCapable).toBe(false);
+    expect(state.realtimeTalkVideoPending).toBe(false);
+    expect(state.realtimeTalkCameraError).toBe(false);
+  });
+
   it("aborts attachment reads when a pane adopts a different session", () => {
     const host = {
       addController: () => undefined,
@@ -877,7 +1239,6 @@ describe("session pull request refresh", () => {
       chatMessages: [],
       chatMessagesBySession: new Map(),
       chatQueue: [],
-      chatQueueByScope: {},
       chatRunId: null,
       chatStream: null,
       chatStreamRenderFrame: null,
@@ -1016,7 +1377,6 @@ describe("route composer fallback", () => {
       chatMessage,
       chatComposerFallbackByScope: {},
       chatQueue: [],
-      chatQueueByScope: {},
       chatMessages: [],
       chatMessagesBySession: new Map(),
       imageLightbox: null,
@@ -1033,8 +1393,7 @@ describe("route composer fallback", () => {
       toolStreamById: new Map(),
       toolStreamOrder: [],
       sessionsResult: null,
-      realtimeTalkConversation: [],
-      realtimeTalkConversationState: { phase: "idle" },
+      ...createInitialChatRealtimeState(),
       resetChatInputHistoryNavigation,
       resetChatScroll,
       requestUpdate: vi.fn(),
@@ -1055,6 +1414,43 @@ describe("route composer fallback", () => {
 
     expect(release).toHaveBeenCalledTimes(1);
     expect(state.imageLightbox).toBeNull();
+  });
+
+  it("retires realtime Talk before adopting the next route", () => {
+    const { state } = createRouteState("");
+    const previousSessionKey = state.sessionKey;
+    const stop = vi.fn(() => {
+      expect(state.realtimeTalkSession).toBeNull();
+      expect(state.sessionKey).toBe(previousSessionKey);
+    });
+    state.realtimeTalkSession = { stop } as unknown as ChatPageHost["realtimeTalkSession"];
+    state.realtimeTalkActive = true;
+    state.realtimeTalkStatus = "listening";
+    state.realtimeTalkDetail = "live";
+    state.realtimeTalkInputLevel.set(0.6);
+    state.realtimeTalkConversation = [
+      { id: "utterance", role: "assistant", text: "stale", isStreaming: true },
+    ];
+    state.realtimeTalkVideoStream = {} as MediaStream;
+    state.realtimeTalkCameraDevices = [{ deviceId: "camera", label: "Camera" }];
+    state.realtimeTalkVideoCapable = true;
+    state.realtimeTalkVideoPending = true;
+    state.realtimeTalkCameraError = true;
+
+    resetChatStateForRouteSession(state, "agent:main:second");
+
+    expect(stop).toHaveBeenCalledOnce();
+    expect(state.sessionKey).toBe("agent:main:second");
+    expect(state.realtimeTalkActive).toBe(false);
+    expect(state.realtimeTalkStatus).toBe("idle");
+    expect(state.realtimeTalkDetail).toBeNull();
+    expect(state.realtimeTalkInputLevel.value).toBe(0);
+    expect(state.realtimeTalkConversation).toEqual([]);
+    expect(state.realtimeTalkVideoStream).toBeNull();
+    expect(state.realtimeTalkCameraDevices).toEqual([]);
+    expect(state.realtimeTalkVideoCapable).toBe(false);
+    expect(state.realtimeTalkVideoPending).toBe(false);
+    expect(state.realtimeTalkCameraError).toBe(false);
   });
 
   it("clears transient detail content on a route switch", () => {
@@ -1255,6 +1651,193 @@ describe("route composer fallback", () => {
     expect(state.chatError).toContain("remains available in this tab");
     expect(resetChatInputHistoryNavigation).toHaveBeenCalledTimes(2);
     expect(resetChatScroll).toHaveBeenCalledTimes(2);
+  });
+
+  it("restores a retained command after leaving and returning to its session", () => {
+    vi.stubGlobal("sessionStorage", createStorageMock());
+    const { state } = createRouteState("");
+    state.chatAttachments = [];
+    const scope = resolveStoredChatOutboxScope(state, state.sessionKey);
+    resetChatStateForRouteSession(state, "agent:main:second");
+
+    expect(
+      retainChatComposerMemoryFallback(state, scope, {
+        message: "/approve approval-123 allow-once",
+        attachments: [
+          {
+            id: "approval-command-attachment",
+            mimeType: "text/plain",
+            dataUrl: "data:text/plain;base64,YXBwcm92YWw=",
+          },
+        ],
+      }),
+    ).toBeDefined();
+
+    expect(resetChatStateForRouteSession(state, "agent:main:first")).toEqual({
+      restoredFallback: true,
+      restoredStorageFailure: false,
+    });
+    expect(state.chatMessage).toBe("/approve approval-123 allow-once");
+    expect(state.chatAttachments).toEqual([
+      expect.objectContaining({ id: "approval-command-attachment" }),
+    ]);
+  });
+
+  it("preserves matching storage-failure fallback metadata", () => {
+    vi.stubGlobal("sessionStorage", createStorageMock());
+    const { state } = createRouteState("retry this draft");
+    state.chatAttachments = [];
+    const scope = resolveStoredChatOutboxScope(state, state.sessionKey);
+    const scopeKey = storedChatOutboxScopeKey(scope);
+    state.chatComposerFallbackByScope = {
+      [scopeKey]: {
+        message: state.chatMessage,
+        attachments: [],
+        storageFailed: true,
+        draftRetry: { expectedDraftRevision: 4, draftRevision: 5 },
+        sequence: 42,
+      },
+    };
+
+    expect(
+      retainChatComposerMemoryFallback(state, scope, {
+        message: state.chatMessage,
+        attachments: [],
+      }),
+    ).toEqual({ sequence: 42 });
+    expect(state.chatComposerFallbackByScope[scopeKey]).toEqual({
+      message: "retry this draft",
+      attachments: [],
+      storageFailed: true,
+      draftRetry: { expectedDraftRevision: 4, draftRevision: 5 },
+      sequence: 42,
+    });
+  });
+
+  it("recovers into an empty storage-failure fallback without dropping retry metadata", () => {
+    vi.stubGlobal("sessionStorage", createStorageMock());
+    const { state } = createRouteState("");
+    state.chatAttachments = [];
+    const scope = resolveStoredChatOutboxScope(state, state.sessionKey);
+    const scopeKey = storedChatOutboxScopeKey(scope);
+    state.chatComposerFallbackByScope = {
+      [scopeKey]: {
+        message: "",
+        attachments: [],
+        storageFailed: true,
+        draftRetry: { expectedDraftRevision: 4, draftRevision: 5 },
+        sequence: 43,
+      },
+    };
+
+    expect(
+      retainChatComposerMemoryFallback(state, scope, {
+        message: "/approve approval-123 allow-once",
+        attachments: [
+          {
+            id: "failed-clear-attachment",
+            mimeType: "text/plain",
+          },
+        ],
+      }),
+    ).toEqual({ sequence: 43 });
+    expect(state.chatComposerFallbackByScope[scopeKey]).toEqual({
+      message: "/approve approval-123 allow-once",
+      attachments: [
+        {
+          id: "failed-clear-attachment",
+          mimeType: "text/plain",
+        },
+      ],
+      storageFailed: true,
+      draftRetry: { expectedDraftRevision: 4, draftRevision: 5 },
+      sequence: 43,
+    });
+  });
+
+  it("does not replace a newer alias-equivalent fallback", () => {
+    vi.stubGlobal("sessionStorage", createStorageMock());
+    const { state } = createRouteState("");
+    state.assistantAgentId = "work";
+    state.agentsList = {
+      agents: [],
+      defaultId: "work",
+      mainKey: "workspace",
+      scope: "global",
+    };
+    const unresolvedScopeKey = storedChatOutboxScopeKey({ sessionKey: "workspace" });
+    state.chatComposerFallbackByScope = {
+      [unresolvedScopeKey]: {
+        message: "newer alias draft",
+        attachments: [],
+        storageFailed: false,
+        sequence: 43,
+      },
+    };
+    const scope = resolveStoredChatOutboxScope(state, "agent:work:workspace");
+
+    expect(
+      retainChatComposerMemoryFallback(state, scope, {
+        message: "/redirect start over",
+        attachments: [],
+      }),
+    ).toBeUndefined();
+    const resolvedScopeKey = storedChatOutboxScopeKey(scope);
+    expect(state.chatComposerFallbackByScope[unresolvedScopeKey]).toBeUndefined();
+    expect(state.chatComposerFallbackByScope[resolvedScopeKey]?.message).toBe("newer alias draft");
+  });
+
+  it("clears only the fallback owned by a completed retry", () => {
+    const { state } = createRouteState("");
+    state.chatComposerFallbackByScope = {
+      first: {
+        message: "/redirect start over",
+        attachments: [],
+        storageFailed: false,
+        sequence: 44,
+      },
+      second: {
+        message: "newer draft",
+        attachments: [],
+        storageFailed: false,
+        sequence: 45,
+      },
+    };
+
+    expect(clearChatComposerMemoryFallback(state, { sequence: 44 })).toBe(true);
+    expect(state.chatComposerFallbackByScope).toEqual({
+      second: {
+        message: "newer draft",
+        attachments: [],
+        storageFailed: false,
+        sequence: 45,
+      },
+    });
+  });
+
+  it("keeps command recovery pane-local without overwriting a newer stored draft", () => {
+    vi.stubGlobal("sessionStorage", createStorageMock());
+    const { state } = createRouteState("");
+    state.chatAttachments = [];
+    const scope = resolveStoredChatOutboxScope(state, state.sessionKey);
+    resetChatStateForRouteSession(state, "agent:main:second");
+
+    const { state: peer } = createRouteState("newer split-pane draft");
+    peer.chatAttachments = [];
+    expect(persistChatComposerState(peer, "agent:main:first")).toBe(true);
+    expect(
+      retainChatComposerMemoryFallback(state, scope, {
+        message: "/redirect start over",
+        attachments: [],
+      }),
+    ).toBeDefined();
+
+    resetChatStateForRouteSession(state, "agent:main:first");
+
+    expect(state.chatMessage).toBe("/redirect start over");
+    expect(loadChatComposerSnapshot(state, "agent:main:first")?.draft).toBe(
+      "newer split-pane draft",
+    );
   });
 
   it("adopts an unresolved bare-main fallback when the default agent becomes known", () => {
@@ -2161,5 +2744,45 @@ describe("refreshChatMetadata", () => {
     expect(SLASH_COMMANDS.some((command) => command.name === "other-command")).toBe(true);
     expect(SLASH_COMMANDS.some((command) => command.name === "work-command")).toBe(false);
   });
+});
+
+describe("refreshChatModelAuthStatus", () => {
+  it.each(["success", "failure"] as const)(
+    "ignores a stale auth status %s after reconnecting the same client",
+    async (outcome) => {
+      let resolveStatus!: (value: { ts: number; providers: never[] }) => void;
+      let rejectStatus!: (error: unknown) => void;
+      const response = new Promise<{ ts: number; providers: never[] }>((resolve, reject) => {
+        resolveStatus = resolve;
+        rejectStatus = reject;
+      });
+      const request = vi.fn(() => response);
+      const currentStatus = { ts: 2, providers: [] };
+      const state = {
+        client: { request },
+        connected: true,
+        connectionEpoch: 1,
+        modelAuthStatusResult: currentStatus,
+        modelAuthStatusError: null,
+      } as unknown as ChatPageHost;
+
+      const refresh = refreshChatModelAuthStatus(state);
+      state.connected = false;
+      state.connectionEpoch += 1;
+      state.connected = true;
+      state.connectionEpoch += 1;
+
+      if (outcome === "success") {
+        resolveStatus({ ts: 1, providers: [] });
+      } else {
+        rejectStatus(new Error("stale connection auth status"));
+      }
+      await refresh;
+
+      expect(state.modelAuthStatusResult).toBe(currentStatus);
+      expect(state.modelAuthStatusError).toBeNull();
+      expect(request).toHaveBeenCalledOnce();
+    },
+  );
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

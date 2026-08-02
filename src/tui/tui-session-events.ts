@@ -1,5 +1,9 @@
 // Routes Gateway and embedded events to the exact selected TUI conversation.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  readSessionMessageIdentity,
+  readSessionMessageSequence,
+} from "../../packages/gateway-client/src/session-projection.js";
 import { agentSessionKeysMatchByRequestKey, parseAgentSessionKey } from "../routing/session-key.js";
 import { extractTextFromMessage } from "./tui-formatters.js";
 import type { SessionMessageEvent, TuiStateAccess } from "./tui-types.js";
@@ -8,21 +12,6 @@ type TuiSessionEvent = {
   sessionKey?: string;
   agentId?: string;
 };
-
-/** Reads the monotonic transcript position shared by persisted and live messages. */
-export function readTuiTranscriptMessageSequence(message: unknown): number | undefined {
-  if (!message || typeof message !== "object" || Array.isArray(message)) {
-    return undefined;
-  }
-  const marker = (message as Record<string, unknown>)["__openclaw"];
-  if (!marker || typeof marker !== "object" || Array.isArray(marker)) {
-    return undefined;
-  }
-  const sequence = (marker as Record<string, unknown>).seq;
-  return typeof sequence === "number" && Number.isSafeInteger(sequence) && sequence > 0
-    ? sequence
-    : undefined;
-}
 
 /** Reads the durable user identity without mistaking another run's prompt for this one. */
 export function readTuiSessionUserMessage(event: SessionMessageEvent): {
@@ -35,36 +24,25 @@ export function readTuiSessionUserMessage(event: SessionMessageEvent): {
     return null;
   }
   const record = message as Record<string, unknown>;
-  if (record.role !== "user") {
+  const identity = readSessionMessageIdentity(message, event);
+  if (identity?.role !== "user") {
     return null;
   }
-  const marker = record["__openclaw"];
-  const metadata =
-    marker && typeof marker === "object" && !Array.isArray(marker)
-      ? (marker as Record<string, unknown>)
-      : null;
-  const sequence = event.messageSeq ?? metadata?.seq;
-  const messageId =
-    (typeof event.messageId === "string" && event.messageId.trim() ? event.messageId : undefined) ??
-    (typeof metadata?.id === "string" && metadata.id.trim() ? metadata.id : undefined) ??
-    (typeof sequence === "number" && Number.isSafeInteger(sequence) && sequence > 0
-      ? `seq:${sequence}`
-      : undefined);
+  const persistedSequence = readSessionMessageSequence(message);
+  // Imported IDs are provider-local. Namespace their complete source tuple or
+  // persisted transcript position so incomplete imports cannot collide with native rows.
+  const messageId = identity.isImported
+    ? identity.externalSource
+      ? `external:${identity.externalSource}`
+      : persistedSequence !== null
+        ? `imported-seq:${persistedSequence}`
+        : null
+    : (identity.id ?? (identity.sequence !== null ? `seq:${identity.sequence}` : null));
   const text = extractTextFromMessage(record);
   if (!messageId || !text) {
     return null;
   }
-  const clientRunId =
-    typeof event.clientRunId === "string" && event.clientRunId.trim()
-      ? event.clientRunId
-      : undefined;
-  const idempotencyValue = clientRunId ?? metadata?.idempotencyKey ?? record.idempotencyKey;
-  const idempotencyKey =
-    typeof idempotencyValue === "string" && idempotencyValue.trim() ? idempotencyValue : undefined;
-  const runId = idempotencyKey?.endsWith(":user")
-    ? idempotencyKey.slice(0, -":user".length)
-    : idempotencyKey;
-  return { messageId, text, ...(runId ? { runId } : {}) };
+  return { messageId, text, ...(identity.runId ? { runId: identity.runId } : {}) };
 }
 
 /** Preserves opaque peer IDs while guarding canonical, global, and alias ownership. */

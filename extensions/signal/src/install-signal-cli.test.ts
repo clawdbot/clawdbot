@@ -2,19 +2,27 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { gzipSync } from "node:zlib";
 import JSZip from "jszip";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import * as tar from "tar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReleaseAsset } from "./install-signal-cli.js";
 
+type CapturedArchiveLimits = {
+  maxArchiveBytes?: number;
+  maxEntries?: number;
+  maxEntryBytes?: number;
+  maxExtractedBytes?: number;
+};
+
 const {
+  extractArchiveLimits,
   fetchWithSsrFGuardMock,
   resolveBrewExecutableMock,
   runPluginCommandWithTimeoutMock,
   tempDownloadPaths,
 } = vi.hoisted(() => ({
+  extractArchiveLimits: [] as CapturedArchiveLimits[],
   fetchWithSsrFGuardMock: vi.fn(),
   resolveBrewExecutableMock: vi.fn(),
   runPluginCommandWithTimeoutMock: vi.fn(),
@@ -29,6 +37,10 @@ vi.mock("openclaw/plugin-sdk/setup-tools", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/setup-tools")>();
   return {
     ...actual,
+    extractArchive: async (params: Parameters<typeof actual.extractArchive>[0]) => {
+      extractArchiveLimits.push(params.limits ?? {});
+      return await actual.extractArchive(params);
+    },
     resolveBrewExecutable: resolveBrewExecutableMock,
   };
 });
@@ -119,6 +131,7 @@ function setProcessPlatform(platform: NodeJS.Platform, arch: string) {
 }
 
 beforeEach(() => {
+  extractArchiveLimits.length = 0;
   fetchWithSsrFGuardMock.mockReset();
   resolveBrewExecutableMock.mockReset();
   runPluginCommandWithTimeoutMock.mockReset();
@@ -273,6 +286,25 @@ describe("downloadToFile", () => {
       await expect(downloadToFile("https://example.com/signal-cli.tgz", filePath)).rejects.toThrow(
         "HTTP 503",
       );
+    });
+
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it("cancels the response body when the declared length exceeds the download cap", async () => {
+    const response = new Response("archive", {
+      status: 200,
+      headers: { "content-length": "12" },
+    });
+    const cancel = vi.spyOn(response.body!, "cancel").mockRejectedValueOnce(new Error("closed"));
+    fetchWithSsrFGuardMock.mockResolvedValue({ response, release: vi.fn() });
+
+    await withTempFile(async (filePath) => {
+      await expect(
+        downloadToFile("https://example.com/signal-cli.tgz", filePath, 5, 8),
+      ).rejects.toThrow("declared 12");
+
+      await expectPathMissing(filePath);
     });
 
     expect(cancel).toHaveBeenCalledOnce();
@@ -651,7 +683,7 @@ describe("extractSignalCliArchive", () => {
     });
   });
 
-  it("extracts tar.gz archives", async () => {
+  it("extracts tar.gz archives with Signal-specific limits", async () => {
     await withArchiveWorkspace(async (workDir) => {
       const archivePath = path.join(workDir, "ok.tgz");
       const extractDir = path.join(workDir, "extract");
@@ -662,28 +694,14 @@ describe("extractSignalCliArchive", () => {
 
       await fs.mkdir(extractDir, { recursive: true });
       await expectExtractedSignalCli(archivePath, extractDir);
-    });
-  });
-
-  it("rejects native entries beyond the Signal-specific extraction limit", async () => {
-    await withArchiveWorkspace(async (workDir) => {
-      const archivePath = path.join(workDir, "oversized.tgz");
-      const extractDir = path.join(workDir, "extract");
-      const headerBlock = Buffer.alloc(512);
-      const header = new tar.Header({
-        path: "signal-cli",
-        type: "File",
-        mode: 0o755,
-        size: MAX_SIGNAL_CLI_EXTRACTED_BYTES + 1,
-      });
-      header.encode(headerBlock);
-      await fs.writeFile(archivePath, gzipSync(Buffer.concat([headerBlock, Buffer.alloc(1024)])));
-      await fs.mkdir(extractDir, { recursive: true });
-
-      await expect(extractSignalCliArchive(archivePath, extractDir, 5_000)).rejects.toThrow(
-        "archive entry extracted size exceeds limit",
-      );
-      await expectPathMissing(path.join(extractDir, "signal-cli"));
+      expect(extractArchiveLimits).toEqual([
+        {
+          maxArchiveBytes: 256 * 1024 * 1024,
+          maxEntries: 32,
+          maxEntryBytes: MAX_SIGNAL_CLI_EXTRACTED_BYTES,
+          maxExtractedBytes: MAX_SIGNAL_CLI_EXTRACTED_BYTES,
+        },
+      ]);
     });
   });
 });

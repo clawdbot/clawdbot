@@ -156,19 +156,33 @@ describe("minimal npm extended-stable workflow", () => {
   it("restores same-SHA preflight build outputs and keeps validation steps running", () => {
     const parsed = workflow();
     const preflight = parsed.jobs?.preflight_openclaw_npm;
+    const stepNames = preflight?.steps?.map((candidate) => candidate.name) ?? [];
 
+    const cleanup = step(preflight, "Clean preflight build outputs before cache restore");
     const restore = step(preflight, "Restore preflight build outputs");
+    expect(stepNames.indexOf(cleanup.name)).toBeLessThan(stepNames.indexOf(restore.name));
+    expect(cleanup.run).toContain("rm -rf -- dist dist-runtime packages/*/dist");
+    expect(cleanup.run).toContain("-path '*/src/host/*'");
+    expect(cleanup.run).toContain("-name '.bundle.hash'");
+    expect(cleanup.run).toContain("-name '*.bundle.js'");
     expect(restore.uses).toContain("actions/cache/restore@");
+    expect(restore.with?.path).toContain("dist/");
+    expect(restore.with?.path).toContain("dist-runtime/");
+    expect(restore.with?.path).toContain("packages/*/dist/");
+    expect(restore.with?.path).toContain("extensions/*/src/host/**/.bundle.hash");
+    expect(restore.with?.path).toContain("extensions/*/src/host/**/*.bundle.js");
     expect(restore.with?.key).toBe(
       "${{ runner.os }}-npm-preflight-dist-v1-${{ steps.preflight_cache_key.outputs.sha }}-${{ hashFiles('pnpm-lock.yaml') }}",
     );
 
     // Only the build producers skip on a cache hit; every validation step
     // still runs against the restored artifacts.
-    expect(step(preflight, "Build").if).toBe("steps.dist_build_cache.outputs.cache-hit != 'true'");
-    expect(step(preflight, "Build Control UI").if).toBe(
-      "steps.dist_build_cache.outputs.cache-hit != 'true'",
-    );
+    const build = step(preflight, "Build");
+    const buildControlUi = step(preflight, "Build Control UI");
+    expect(build.if).toBe("steps.dist_build_cache.outputs.cache-hit != 'true'");
+    expect(build.env?.OPENCLAW_CONTROL_UI_RELEASE_BUILD).toBe("1");
+    expect(buildControlUi.if).toBe("steps.dist_build_cache.outputs.cache-hit != 'true'");
+    expect(buildControlUi.env?.OPENCLAW_CONTROL_UI_RELEASE_BUILD).toBe("1");
     expect(step(preflight, "Check").if).toBeUndefined();
     expect(step(preflight, "Verify release contents").if).toBeUndefined();
     expect(step(preflight, "Verify prepared npm tarball install").if).toBeUndefined();

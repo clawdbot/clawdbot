@@ -78,7 +78,7 @@ import { runIMessageCatchup } from "./catchup-bridge.js";
 import { advanceIMessageCatchupCursor, resolveCatchupConfig } from "./catchup.js";
 import { combineIMessagePayloads } from "./coalesce.js";
 import { repairIMessageConversationAnchor } from "./conversation-repair.js";
-import { createIMessageEchoCachingSend, deliverReplies } from "./deliver.js";
+import { createIMessageEchoCachingSend, deliverIMessageReply } from "./deliver.js";
 import { resolveIMessageDmHistoryContext, resolveIMessageDmHistoryLimit } from "./dm-history.js";
 import { createIMessageThrottledDropDiagnosticCache } from "./drop-diagnostic-cache.js";
 import { createSentMessageCache } from "./echo-cache.js";
@@ -582,51 +582,48 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         ),
       });
     },
-    onFlush: async (entries) => {
-      if (entries.length === 0) {
-        return;
-      }
-      // Dispatch one unit (a single row or merged bucket). Every raw queue
-      // claim in that unit follows the merged turn's adoption lifecycle.
-      const dispatchUnit = async (
-        unitEntries: { message: IMessagePayload; ingressLifecycle?: IMessageIngressLifecycle }[],
-        message: IMessagePayload,
-      ) => {
-        const { lifecycle, settle, abandon } = fanInChannelIngressLifecycles(
-          unitEntries.flatMap((entry) => (entry.ingressLifecycle ? [entry.ingressLifecycle] : [])),
-        );
-        try {
-          if (lifecycle?.abortSignal.aborted) {
-            await abandon();
+    onFlush: (entries, createFlush) => {
+      const { lifecycle, settle, abandon } = fanInChannelIngressLifecycles(
+        entries.flatMap((entry) => (entry.ingressLifecycle ? [entry.ingressLifecycle] : [])),
+      );
+      return createFlush({
+        lifecycle,
+        dispatch: async (admissionLifecycle) => {
+          if (entries.length === 0) {
             return;
           }
-          await handleMessageNow(message, lifecycle);
-          await settle();
-        } catch (err) {
-          await abandon();
-          runtime.error?.(`imessage: inbound dispatch failed: ${String(err)}`);
-        }
-      };
+          try {
+            if (admissionLifecycle.abortSignal.aborted) {
+              await abandon();
+              return;
+            }
+            if (entries.length === 1) {
+              await handleMessageNow(
+                expectDefined(entries[0], "single iMessage dispatch entry").message,
+                admissionLifecycle,
+              );
+              await settle();
+              return;
+            }
 
-      if (entries.length === 1) {
-        await dispatchUnit(
-          entries,
-          expectDefined(entries[0], "single iMessage dispatch entry").message,
-        );
-        return;
-      }
-
-      const messages = entries.map((e) => e.message);
-      const combined = combineIMessagePayloads(messages);
-      if (shouldLogVerbose()) {
-        const text = combined.text ?? "";
-        const preview = sliceUtf16Safe(text, 0, 50);
-        const ellipsis = text.length > 50 ? "..." : "";
-        logVerbose(
-          `[imessage] merged ${entries.length} debounced messages: "${preview}${ellipsis}"`,
-        );
-      }
-      await dispatchUnit(entries, combined);
+            const messages = entries.map((entry) => entry.message);
+            const combined = combineIMessagePayloads(messages);
+            if (shouldLogVerbose()) {
+              const text = combined.text ?? "";
+              const preview = sliceUtf16Safe(text, 0, 50);
+              const ellipsis = text.length > 50 ? "..." : "";
+              logVerbose(
+                `[imessage] merged ${entries.length} debounced messages: "${preview}${ellipsis}"`,
+              );
+            }
+            await handleMessageNow(combined, admissionLifecycle);
+            await settle();
+          } catch (err) {
+            await abandon();
+            runtime.error?.(`imessage: inbound dispatch failed: ${String(err)}`);
+          }
+        },
+      });
     },
     onError: (err) => {
       runtime.error?.(`imessage debounce flush failed: ${String(err)}`);
@@ -1166,15 +1163,19 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
             },
           }
         : false,
-      deliver: async (payload: Parameters<typeof deliverReplies>[0]["replies"][number]) => {
+      observeMessageSent: true,
+      deliver: async (payload: Parameters<typeof deliverIMessageReply>[0]["payload"]) => {
         const target = ctxPayload.To;
         if (!target) {
           runtime.error?.(danger("imessage: missing delivery target"));
-          return;
+          return {
+            visibleReplySent: false,
+            suppression: { reason: "no_visible_result" },
+          } as const;
         }
-        await deliverReplies({
+        return await deliverIMessageReply({
           cfg,
-          replies: [payload],
+          payload,
           target,
           accountId: accountInfo.accountId,
           runtime,

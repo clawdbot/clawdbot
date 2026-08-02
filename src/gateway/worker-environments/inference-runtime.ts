@@ -552,6 +552,7 @@ async function resolveApprovedModel(params: {
           ...options,
           authStorage: preparedStores.authStorage,
           modelRegistry: preparedStores.modelRegistry,
+          preparedModelRuntime: runtimeSnapshot,
           ...(agentRuntimeId ? { agentRuntimeId } : {}),
           workspaceDir,
         }),

@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { controlNextRecoverySleep } from "../../../test/helpers/infra/delivery-recovery.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-media-staging.js";
 import {
   loadPendingDeliveries,
   markDeliveryPlatformOutcomeUnknown,
@@ -80,8 +81,8 @@ function readOutboundQueueStatus(tmpDir: string, id: string): string | undefined
     env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir },
   });
   const row = db
-    .prepare("SELECT status FROM delivery_queue_entries WHERE queue_name = 'outbound' AND id = ?")
-    .get(id) as { status?: string } | undefined;
+    .prepare("SELECT status FROM delivery_queue_entries WHERE queue_name = ? AND id = ?")
+    .get(OUTBOUND_DELIVERY_QUEUE_NAME, id) as { status?: string } | undefined;
   return row?.status;
 }
 

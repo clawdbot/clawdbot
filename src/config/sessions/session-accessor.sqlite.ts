@@ -1,5 +1,7 @@
 // Stable SQLite accessor surface. Domain owners live in the focused modules below.
 export {
+  countSqliteSessionEntryRowsReadOnly,
+  hasSqliteSessionEntriesByStatusReadOnly,
   listSqliteSessionEntries,
   listSqliteSessionChildEntriesReadOnly,
   listSqliteSessionEntriesReadOnly,
@@ -21,6 +23,13 @@ export {
   updateSqliteSessionLastRoute,
   upsertSqliteSessionEntry,
 } from "./session-accessor.sqlite-entry.js";
+export {
+  copySqliteSessionOwnedStateForCanonicalRepair,
+  listSqliteSessionEntriesForCanonicalRepair,
+  listSqliteSessionGenerationIdsForCanonicalRepair,
+  rehomeSqliteSessionDeliveryReferencesForCanonicalRepair,
+  rehomeSqliteSessionDeliveryReferencesForCanonicalRepairBatch,
+} from "./session-accessor.sqlite-canonical-repair.js";
 export {
   cleanupSqliteSessionLifecycleArtifacts,
   deleteSqliteSessionEntryLifecycle,
@@ -56,13 +65,14 @@ export {
   appendSqliteTranscriptEventSync,
   appendSqliteTranscriptMessage,
   appendSqliteTranscriptMessageSync,
-  importSqliteSessionRows,
   replaceSqliteTranscriptEvents,
   replaceSqliteTranscriptEventsSync,
+  rewriteSqliteTranscriptEventRowsExact,
   trimSqliteTranscriptForManualCompact,
   withSqliteTranscriptWriteLock,
   withSqliteTranscriptWriteTransaction,
 } from "./session-accessor.sqlite-transcript-write.js";
+export { importSqliteSessionRows } from "./session-accessor.sqlite-import.js";
 export { publishSqliteTranscriptUpdate } from "./session-accessor.sqlite-events.js";
 export { readSqliteTranscriptRawDelta } from "./session-accessor.sqlite-delta.js";
 export {

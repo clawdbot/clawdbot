@@ -99,7 +99,7 @@ describe("normalizeInitialApplicationLocation", () => {
 
   it("does not wait for gateway defaults on an explicit startup route", async () => {
     const subscribe = vi.fn(() => () => undefined);
-    const location = { pathname: "/settings/general", search: "", hash: "" };
+    const location = { pathname: "/settings/appearance", search: "", hash: "" };
 
     await expect(
       resolveInitialApplicationLocation({
@@ -338,11 +338,16 @@ describe("normalizeInitialApplicationLocation", () => {
       return () => undefined;
     });
     const replaceRoute = vi.fn();
+    const gateway = {
+      snapshot: {
+        phase: "connecting",
+        client: null,
+        hello: null,
+      } as Parameters<GatewayListener>[0],
+      subscribe,
+    };
     const context = {
-      gateway: {
-        snapshot: { phase: "connecting", client: null, hello: null },
-        subscribe,
-      },
+      gateway,
       replace: replaceRoute,
     } as unknown as ApplicationContext<RouteId>;
 
@@ -363,14 +368,15 @@ describe("normalizeInitialApplicationLocation", () => {
     if (!connectedListener) {
       throw new Error("expected first-run gateway listener");
     }
-    connectedListener({
+    gateway.snapshot = {
       phase: "connected",
       client,
       hello: {
         auth: { role: "operator", scopes: ["operator.admin"] },
         features: { methods: ["openclaw.setup.detect"] },
       },
-    } as Parameters<GatewayListener>[0]);
+    } as Parameters<GatewayListener>[0];
+    connectedListener(gateway.snapshot);
     await vi.waitFor(() => expect(replaceRoute).toHaveBeenCalledOnce(), STARTUP_STEP_WAIT);
     expect(replaceRoute).toHaveBeenCalledWith("model-setup", { search: "?firstRun=1" });
   });
@@ -505,14 +511,14 @@ describe("normalizeInitialApplicationLocation", () => {
     const gateway = runtime.context.gateway as ApplicationContext<RouteId>["gateway"] & {
       subscribe: (listener: GatewayListener) => () => void;
     };
-    const originalSubscribe = gateway.subscribe.bind(gateway);
     const activeSubscriptions = new Set<GatewayListener>();
     gateway.subscribe = (listener) => {
+      // Keep the released-link resolver genuinely cold. Forwarding to the live
+      // gateway lets a fast connection remove this transient subscription before
+      // stop() can prove its abort cleanup.
       activeSubscriptions.add(listener);
-      const unsubscribe = originalSubscribe(listener);
       return () => {
         activeSubscriptions.delete(listener);
-        unsubscribe();
       };
     };
     const routerStart = vi.spyOn(runtime.router, "start");

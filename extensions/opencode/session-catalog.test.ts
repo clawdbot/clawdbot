@@ -425,6 +425,37 @@ describe("OpenCode session catalog", () => {
   );
 
   it.runIf(process.platform !== "win32")(
+    "memoizes the CLI database query across cadence and invalidates by config identity",
+    async () => {
+      await installFakeOpenCode();
+      let now = 1_000;
+      const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+      const configIdentity = {};
+      try {
+        await listLocalOpenCodeSessionPage({ limit: 20 }, { configIdentity });
+        await listLocalOpenCodeSessionPage({ limit: 20 }, { configIdentity });
+        expect(childProcessMocks.spawn).toHaveBeenCalledOnce();
+
+        now += 31_999;
+        await listLocalOpenCodeSessionPage({ limit: 20 }, { configIdentity });
+        expect(childProcessMocks.spawn).toHaveBeenCalledOnce();
+
+        await listLocalOpenCodeSessionPage({ limit: 20 }, { configIdentity, forceRefresh: true });
+        expect(childProcessMocks.spawn).toHaveBeenCalledTimes(2);
+
+        await listLocalOpenCodeSessionPage({ limit: 20 }, { configIdentity: {} });
+        expect(childProcessMocks.spawn).toHaveBeenCalledTimes(3);
+
+        now += 32_001;
+        await listLocalOpenCodeSessionPage({ limit: 20 }, { configIdentity });
+        expect(childProcessMocks.spawn).toHaveBeenCalledTimes(4);
+      } finally {
+        nowSpy.mockRestore();
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
     "hides and rejects Continue when ACP cannot resume OpenCode",
     async () => {
       await installFakeOpenCode();

@@ -169,9 +169,12 @@ export function resolveExecutableFromPathEnv(
 ): string | undefined {
   const cacheKey = executablePathCacheKey(executable, pathEnv, env, options?.includeExtensionless);
   const cached = executablePathCache.get(cacheKey);
-  if (cached && cached.expiresAt > Date.now()) {
-    // PATH probes synchronously stat every candidate. Reuse hits and misses until config reload or
-    // this short TTL expires; otherwise catalog polling repeatedly blocks the Gateway event loop.
+  const now = Date.now();
+  if (cached && cached.expiresAt > now) {
+    // Hits and misses remain valid while the same PATH/PATHEXT/cwd key is used; config reload clears
+    // the map. Installs/removals under an unchanged key intentionally need reload or a 60s idle gap,
+    // because steady pollers must never fall back into synchronous PATH stat loops.
+    cached.expiresAt = now + EXECUTABLE_PATH_CACHE_TTL_MS;
     executablePathCache.delete(cacheKey);
     executablePathCache.set(cacheKey, cached);
     return cached.resolved ?? undefined;

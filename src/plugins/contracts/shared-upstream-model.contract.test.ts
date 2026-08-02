@@ -7,15 +7,17 @@ import { listGitTrackedFiles } from "../../test-utils/repo-files.js";
 const repoRoot = path.resolve(import.meta.dirname, "../../..");
 const MANIFEST_BASENAME = "openclaw.plugin.json";
 const CODE_MODE_TIER_LITERAL = /codeMode:\s*"(?:preferred|capable)"/;
-// Catalogs still built in plugin source instead of `modelCatalog` manifest rows.
-// The shared-model checks below read manifests, so these two stay invisible to
-// them; moving their rows into the manifest closes the gap.
+// Catalogs still built in plugin source instead of `modelCatalog` manifest rows,
+// so the manifest scan below cannot see their tiers. Moving them is not free:
+// `google` rows would newly feed model visibility and pre-discovery thinking
+// metadata through `loadManifestModelCatalog`, and `minimax` resolves cost per
+// provider surface, so its rows cannot live in one manifest catalog.
 const UNCONVERTED_SOURCE_CATALOG_PLUGINS = ["google", "minimax"];
 
 type CatalogEntry = {
   /** `provider/model` ref used in failure output. */
   ref: string;
-  /** Shared-model group: the declared upstream model id, else the row's own id. */
+  /** Shared-model group: the normalized upstream model id, else the row's own. */
   groupKey: string;
   /** Declared upstream ref, present only on non-canonical rows. */
   upstreamModel?: string;
@@ -41,6 +43,18 @@ function readBundledManifests(): Array<Record<string, unknown>> {
       (file) =>
         JSON.parse(fs.readFileSync(path.join(repoRoot, file), "utf8")) as Record<string, unknown>,
     );
+}
+
+/**
+ * Reduces a catalog model id to the vendor's own name for the weights.
+ * Aggregators republish first-party models under a namespaced id and varying
+ * case (`moonshotai/kimi-k3`, `zai-org/GLM-5.2`), so dropping one leading
+ * namespace segment groups those with the first-party row automatically instead
+ * of waiting for someone to declare `upstreamModel` on each one.
+ */
+function normalizeSharedModelId(modelId: string): string {
+  const separator = modelId.indexOf("/");
+  return (separator === -1 ? modelId : modelId.slice(separator + 1)).toLowerCase();
 }
 
 function readRecord(value: unknown): Record<string, unknown> | undefined {
@@ -76,7 +90,9 @@ function collectCatalogEntries(): CatalogEntry[] {
         const codeMode = readRecord(model?.compat)?.codeMode;
         entries.push({
           ref: `${providerId}/${id}`,
-          groupKey: upstreamModel ? upstreamModel.slice(upstreamModel.indexOf("/") + 1) : id,
+          groupKey: normalizeSharedModelId(
+            upstreamModel ? upstreamModel.slice(upstreamModel.indexOf("/") + 1) : id,
+          ),
           ...(upstreamModel ? { upstreamModel } : {}),
           ...(typeof codeMode === "string" ? { codeMode } : {}),
         });

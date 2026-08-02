@@ -22,6 +22,7 @@ type HybridVectorResult = {
   vectorScore: number;
   importance?: number;
   triggers?: string;
+  projectKey?: string;
   exactPathSpecificity?: ExactPathSpecificity;
   provenance?: MemoryEntryProvenance;
 };
@@ -36,6 +37,7 @@ type HybridKeywordResult = {
   textScore: number;
   importance?: number;
   triggers?: string;
+  projectKey?: string;
   rankingScore?: number;
   pathScore?: number;
   exactPathSpecificity?: ExactPathSpecificity;
@@ -91,6 +93,7 @@ export async function mergeHybridResults(params: {
     source: HybridSource;
     importance?: number;
     triggers?: string;
+    projectKey?: string;
     provenance?: MemoryEntryProvenance;
   }>
 > {
@@ -112,6 +115,7 @@ export async function mergeHybridResults(params: {
       hasKeyword: boolean;
       importance?: number;
       triggers?: string;
+      projectKey?: string;
       provenance?: MemoryEntryProvenance;
     }
   >();
@@ -133,6 +137,7 @@ export async function mergeHybridResults(params: {
       hasKeyword: false,
       importance: r.importance,
       triggers: r.triggers,
+      projectKey: r.projectKey,
       ...(r.provenance ? { provenance: r.provenance } : {}),
     });
   }
@@ -151,6 +156,7 @@ export async function mergeHybridResults(params: {
       existing.hasKeyword = true;
       existing.importance ??= r.importance;
       existing.triggers ??= r.triggers;
+      existing.projectKey ??= r.projectKey;
       if (!existing.provenance && r.provenance) {
         existing.provenance = r.provenance;
       }
@@ -174,6 +180,7 @@ export async function mergeHybridResults(params: {
         hasKeyword: true,
         importance: r.importance,
         triggers: r.triggers,
+        projectKey: r.projectKey,
         ...(r.provenance ? { provenance: r.provenance } : {}),
       });
     }
@@ -222,6 +229,7 @@ export async function mergeHybridResults(params: {
       source: entry.source,
       importance: entry.importance,
       triggers: entry.triggers,
+      projectKey: entry.projectKey,
     };
     if (entry.provenance) {
       Object.assign(result, { provenance: entry.provenance });

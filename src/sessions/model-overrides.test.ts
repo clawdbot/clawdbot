@@ -102,9 +102,12 @@ describe("applyModelOverrideToSessionEntry", () => {
         model: "claude-sonnet-4-6",
         contextTokenBudget: 200_000,
       }),
-      fallbackNoticeSelectedModel: "anthropic/claude-sonnet-4-6",
-      fallbackNoticeActiveModel: "anthropic/claude-sonnet-4-6",
-      fallbackNoticeReason: "provider temporary failure",
+      fallbackNotice: {
+        kind: "active",
+        selectedModel: "anthropic/claude-sonnet-4-6",
+        activeModel: "anthropic/claude-sonnet-4-6",
+        reason: "provider temporary failure",
+      },
     };
 
     const result = applyOpenAiSelection(entry);
@@ -113,9 +116,7 @@ describe("applyModelOverrideToSessionEntry", () => {
     expectRuntimeModelFieldsCleared(entry, before);
     expect(entry.contextTokens).toBeUndefined();
     expect(entry.contextBudgetStatus).toBeUndefined();
-    expect(entry.fallbackNoticeSelectedModel).toBeUndefined();
-    expect(entry.fallbackNoticeActiveModel).toBeUndefined();
-    expect(entry.fallbackNoticeReason).toBeUndefined();
+    expect(entry.fallbackNotice).toBeUndefined();
     expect(entry.modelOverrideSource).toBe("user");
     expect(entry.modelOverrideRouteResolution).toBe("resolved");
   });

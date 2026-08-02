@@ -7,7 +7,8 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createTelegramMessageCache, resolveTelegramMessageCacheScope } from "./message-cache.js";
+import { resolveTelegramMessageCacheScope } from "./message-cache-persistence.js";
+import { createTelegramMessageCache } from "./message-cache.js";
 import { resolveTelegramMessageMutationChatId } from "./message-topic-binding.js";
 import { setTelegramRuntime } from "./runtime.js";
 import {

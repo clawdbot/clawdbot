@@ -174,8 +174,8 @@ describeControlUiE2e("Control UI agent page scope", () => {
         .locator("wa-dropdown.sidebar-agent-menu")
         .locator('wa-dropdown-item[value="command:agent-settings"]')
         .click();
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/agents");
-      await expect.poll(() => new URL(page.url()).searchParams.get("agent")).toBe("writer");
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/agents/writer");
+      expect(new URL(page.url()).searchParams.get("agent")).toBeNull();
       await screenshot(page, "03-writer-settings.png");
     } finally {
       await context.close();

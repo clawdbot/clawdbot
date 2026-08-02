@@ -93,6 +93,39 @@ describe("executable path helpers", () => {
     });
   });
 
+  it("slides PATH hit and miss expiry for steady pollers", async () => {
+    await withTempDir({ prefix: "openclaw-exec-path-" }, async (base) => {
+      const binDir = path.join(base, "bin");
+      await fs.mkdir(binDir);
+      const executable = path.join(binDir, "runner");
+      await fs.writeFile(executable, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+      let now = 1_000;
+      const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+      const statSpy = vi.spyOn(nodeFs, "statSync");
+      try {
+        expect(resolveExecutableFromPathEnv("runner", binDir)).toBe(executable);
+        expect(resolveExecutableFromPathEnv("missing", binDir)).toBeUndefined();
+        const initialProbeCount = statSpy.mock.calls.length;
+
+        now += 59_000;
+        expect(resolveExecutableFromPathEnv("runner", binDir)).toBe(executable);
+        expect(resolveExecutableFromPathEnv("missing", binDir)).toBeUndefined();
+        now += 59_000;
+        expect(resolveExecutableFromPathEnv("runner", binDir)).toBe(executable);
+        expect(resolveExecutableFromPathEnv("missing", binDir)).toBeUndefined();
+        expect(statSpy).toHaveBeenCalledTimes(initialProbeCount);
+
+        now += 60_001;
+        expect(resolveExecutableFromPathEnv("runner", binDir)).toBe(executable);
+        expect(resolveExecutableFromPathEnv("missing", binDir)).toBeUndefined();
+        expect(statSpy.mock.calls.length).toBeGreaterThan(initialProbeCount);
+      } finally {
+        nowSpy.mockRestore();
+        statSpy.mockRestore();
+      }
+    });
+  });
+
   it("does not reuse relative PATH probes after cwd changes", async () => {
     await withTempDir({ prefix: "openclaw-exec-path-" }, async (base) => {
       const firstCwd = path.join(base, "first");
@@ -162,20 +195,18 @@ describe("executable path helpers", () => {
   );
 
   it("does not treat drive-less rooted windows paths as cwd-relative executables", () => {
-    if (process.platform !== "win32") {
-      return;
-    }
-
-    expect(
-      resolveExecutablePath(String.raw`:\Users\demo\AI\system\openclaw\git.exe`, {
-        cwd: String.raw`C:\Users\demo\AI\system\openclaw`,
-      }),
-    ).toBeUndefined();
-    expect(
-      resolveExecutablePath(String.raw`:/Users/demo/AI/system/openclaw/git.exe`, {
-        cwd: String.raw`C:\Users\demo\AI\system\openclaw`,
-      }),
-    ).toBeUndefined();
+    withMockedPlatform("win32", () => {
+      expect(
+        resolveExecutablePath(String.raw`:\Users\demo\AI\system\openclaw\git.exe`, {
+          cwd: String.raw`C:\Users\demo\AI\system\openclaw`,
+        }),
+      ).toBeUndefined();
+      expect(
+        resolveExecutablePath(String.raw`:/Users/demo/AI/system/openclaw/git.exe`, {
+          cwd: String.raw`C:\Users\demo\AI\system\openclaw`,
+        }),
+      ).toBeUndefined();
+    });
   });
 });
 

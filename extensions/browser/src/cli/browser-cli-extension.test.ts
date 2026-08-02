@@ -58,4 +58,29 @@ describe("browser extension pairing Gateway URL", () => {
     });
     expect(logSpy).not.toHaveBeenCalled();
   });
+
+  it("pairs with the allocated extension relay when another profile pins the default port", async () => {
+    vi.spyOn(cliCoreApiModule, "getRuntimeConfig").mockReturnValue({
+      browser: {
+        profiles: {
+          pinned: { cdpPort: 18799, color: "#00AA00" },
+        },
+      },
+    });
+    const writeJsonSpy = vi
+      .spyOn(cliCoreApiModule.defaultRuntime, "writeJson")
+      .mockImplementation(runtime.writeJson);
+    const { registerBrowserExtensionCommands } = await import("./browser-cli-extension.js");
+    const program = new Command();
+    const browser = program.command("browser");
+    registerBrowserExtensionCommands(browser, () => ({}));
+
+    await program.parseAsync(["browser", "extension", "pair", "--json"], { from: "user" });
+
+    expect(writeJsonSpy).toHaveBeenCalledWith({
+      pairingString: expect.stringContaining("127.0.0.1:18798/extension"),
+      relayPort: 18798,
+      remote: false,
+    });
+  });
 });

@@ -333,6 +333,30 @@ describe("session-entry compaction budgeting", () => {
     ).toEqual({ ok: true, value: undefined });
   });
 
+  it("plans provider-triggered cuts in provider token units", () => {
+    const entries = [
+      createMessageEntry({ role: "user", content: "first", timestamp: 1 }, 0),
+      createMessageEntry(createAssistant("ok", createUsage(2), 2), 1),
+      createMessageEntry({ role: "user", content: "second", timestamp: 3 }, 2),
+      createMessageEntry(createAssistant("ok", createUsage(2), 4), 3),
+      createMessageEntry({ role: "user", content: "latest", timestamp: 5 }, 4),
+      createMessageEntry(createAssistant("done", createUsage(170_000), 6), 5),
+    ];
+
+    const result = prepareCompaction(entries, {
+      enabled: true,
+      reserveTokens: 16_384,
+      keepRecentTokens: 20_000,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok || !result.value) {
+      throw new Error("expected provider usage to produce a compactable prefix");
+    }
+    expect(result.value.firstKeptEntryId).toBe("entry-4");
+    expect(result.value.messagesToSummarize.length).toBeGreaterThan(0);
+  });
+
   it("keeps reset-filtered tool rows out of later compaction input", () => {
     const entries: SessionTreeEntry[] = [
       createMessageEntry({ role: "user", content: "discarded", timestamp: 1 }, 0),

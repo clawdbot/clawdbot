@@ -23,6 +23,23 @@ import {
 } from "./agent-task-tracking.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
 
+function resolveResolvedAgentTimeoutStopReason(
+  meta: unknown,
+  signal: AbortSignal,
+): "timeout" | undefined {
+  if (!signal.aborted) {
+    return undefined;
+  }
+  const record =
+    meta && typeof meta === "object" && !Array.isArray(meta)
+      ? (meta as Record<string, unknown>)
+      : undefined;
+  if (record?.aborted !== true && record?.stopReason !== "toolUse") {
+    return undefined;
+  }
+  return resolveGatewayAgentAbortStopReason(signal) === "timeout" ? "timeout" : undefined;
+}
+
 function isGatewayAbortSignalReason(reason: unknown): boolean {
   return reason === undefined || isAbortError(reason) || readErrorName(reason) === "TimeoutError";
 }
@@ -135,8 +152,16 @@ export function dispatchAgentRunFromGateway(params: {
     restoreAdmittedRecovery: params.restoreAdmittedRecovery,
   })
     .then(async (result) => {
-      const aborted = result?.meta?.aborted === true;
-      const stopReason = aborted ? (result?.meta?.stopReason ?? "rpc") : undefined;
+      const signalStopReason = resolveResolvedAgentTimeoutStopReason(
+        result?.meta,
+        params.abortController.signal,
+      );
+      const aborted = result?.meta?.aborted === true || signalStopReason !== undefined;
+      const stopReason = signalStopReason
+        ? signalStopReason
+        : aborted
+          ? (result?.meta?.stopReason ?? "rpc")
+          : undefined;
       const timeoutPhase = normalizeAgentRunTimeoutPhase(result?.meta?.timeoutPhase);
       const terminalOutcome = buildAgentRunTerminalOutcome({
         status:
@@ -146,28 +171,47 @@ export function dispatchAgentRunFromGateway(params: {
               ? "error"
               : "ok",
         error: result?.meta?.error,
-        stopReason: result?.meta?.stopReason,
+        stopReason: stopReason ?? result?.meta?.stopReason,
         livenessState: result?.meta?.livenessState,
         timeoutPhase,
         providerStarted: result?.meta?.providerStarted,
       });
+      const responseStatus = aborted ? "timeout" : terminalOutcome.status;
       if (taskTracked) {
         tryFinalizeTrackedAgentTask({
           runId: params.runId,
-          status: aborted ? resolveAbortedAgentTaskStatus(stopReason) : "succeeded",
-          terminalSummary: aborted ? "aborted" : "completed",
+          status: aborted
+            ? resolveAbortedAgentTaskStatus(stopReason)
+            : responseStatus === "timeout"
+              ? "timed_out"
+              : responseStatus === "error"
+                ? "failed"
+                : "succeeded",
+          terminalSummary:
+            responseStatus === "timeout"
+              ? "aborted"
+              : responseStatus === "error"
+                ? "failed"
+                : "completed",
           log: params.context.logGateway,
         });
       }
       const payload = {
         runId: params.runId,
-        status: aborted ? ("timeout" as const) : ("ok" as const),
-        summary: aborted ? "aborted" : "completed",
-        ...(aborted ? { stopReason } : {}),
-        ...(aborted && terminalOutcome.timeoutPhase
+        status: responseStatus,
+        summary:
+          responseStatus === "timeout"
+            ? "aborted"
+            : responseStatus === "error"
+              ? "failed"
+              : "completed",
+        ...(responseStatus !== "ok" && terminalOutcome.stopReason
+          ? { stopReason: terminalOutcome.stopReason }
+          : {}),
+        ...(responseStatus === "timeout" && terminalOutcome.timeoutPhase
           ? { timeoutPhase: terminalOutcome.timeoutPhase }
           : {}),
-        ...(aborted && terminalOutcome.providerStarted !== undefined
+        ...(responseStatus === "timeout" && terminalOutcome.providerStarted !== undefined
           ? { providerStarted: terminalOutcome.providerStarted }
           : {}),
         result,

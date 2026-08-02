@@ -63,7 +63,7 @@ describe("killProcessTree", () => {
     readFileSyncMock.mockImplementation(() => {
       throw new Error("proc unavailable");
     });
-    spawnMock.mockClear();
+    spawnMock.mockReset();
     spawnSyncMock.mockClear();
     killSpy = vi.spyOn(process, "kill");
     vi.useFakeTimers();
@@ -110,6 +110,92 @@ describe("killProcessTree", () => {
       expect(spawnMock).toHaveBeenCalledTimes(2);
       expectTaskkillCall(0, ["/T", "/PID", "5252"]);
       expectTaskkillCall(1, ["/F", "/T", "/PID", "5252"]);
+    });
+  });
+
+  it("on Windows force-kills immediately when graceful taskkill refuses a live process tree", async () => {
+    const gracefulTaskkill = new EventEmitter();
+    spawnMock.mockReturnValueOnce(gracefulTaskkill);
+    killSpy.mockImplementation(() => true);
+
+    await withMockedPlatform("win32", async () => {
+      killProcessTree(4711, { graceMs: 30_000 });
+
+      expectTaskkillCall(0, ["/T", "/PID", "4711"]);
+      gracefulTaskkill.emit("close", 128);
+
+      expect(spawnMock).toHaveBeenCalledTimes(2);
+      expectTaskkillCall(1, ["/F", "/T", "/PID", "4711"]);
+    });
+  });
+
+  it("on Windows does not force-kill a disappeared or reused PID after taskkill fails", async () => {
+    const gracefulTaskkill = new EventEmitter();
+    spawnMock.mockReturnValueOnce(gracefulTaskkill);
+    let processWasReused = false;
+    killSpy.mockImplementation(((pid: number, signal?: NodeJS.Signals | number) => {
+      if (pid === 4712 && signal === 0 && !processWasReused) {
+        throw new Error("ESRCH");
+      }
+      return true;
+    }) as typeof process.kill);
+
+    await withMockedPlatform("win32", async () => {
+      killProcessTree(4712, { graceMs: 25 });
+      gracefulTaskkill.emit("close", 128);
+      expect(spawnMock).toHaveBeenCalledTimes(1);
+
+      processWasReused = true;
+      await vi.advanceTimersByTimeAsync(25);
+
+      expect(spawnMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("on Windows force-kills only once when taskkill failure races the grace timer", async () => {
+    const gracefulTaskkill = new EventEmitter();
+    spawnMock.mockReturnValueOnce(gracefulTaskkill);
+    killSpy.mockImplementation(() => true);
+
+    await withMockedPlatform("win32", async () => {
+      killProcessTree(4713, { graceMs: 20 });
+      gracefulTaskkill.emit("close", 128);
+      await vi.advanceTimersByTimeAsync(20);
+
+      expect(spawnMock).toHaveBeenCalledTimes(2);
+      expectTaskkillCall(1, ["/F", "/T", "/PID", "4713"]);
+    });
+  });
+
+  it("on Windows waits for the grace timer when graceful taskkill cannot start", async () => {
+    const gracefulTaskkill = new EventEmitter();
+    spawnMock.mockReturnValueOnce(gracefulTaskkill);
+    killSpy.mockImplementation(() => true);
+
+    await withMockedPlatform("win32", async () => {
+      killProcessTree(4714, { graceMs: 15 });
+      expect(() => gracefulTaskkill.emit("error", new Error("spawn ENOENT"))).not.toThrow();
+      gracefulTaskkill.emit("close", -4058);
+      expect(spawnMock).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(15);
+
+      expect(spawnMock).toHaveBeenCalledTimes(2);
+      expectTaskkillCall(1, ["/F", "/T", "/PID", "4714"]);
+    });
+  });
+
+  it("on Windows keeps an explicitly requested failed tree signal single-shot", async () => {
+    const gracefulTaskkill = new EventEmitter();
+    spawnMock.mockReturnValueOnce(gracefulTaskkill);
+
+    await withMockedPlatform("win32", async () => {
+      signalProcessTree(4715, "SIGTERM");
+      gracefulTaskkill.emit("close", 128);
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(spawnMock).toHaveBeenCalledTimes(1);
+      expectTaskkillCall(0, ["/T", "/PID", "4715"]);
     });
   });
 

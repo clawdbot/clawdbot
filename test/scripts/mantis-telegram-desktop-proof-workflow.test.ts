@@ -148,6 +148,9 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     const inspectIndex = steps.findIndex(
       (step) => step.name === "Inspect Mantis evidence manifest",
     );
+    const returnArtifactsIndex = steps.findIndex(
+      (step) => step.name === "Return proof artifacts to the runner",
+    );
 
     expect(codexStep.env?.OPENCLAW_QA_CREDENTIAL_OWNER_ID).toContain(
       "mantis-telegram-desktop-${{ github.run_id }}-${{ github.run_attempt }}",
@@ -155,7 +158,8 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(workflowStep("Prepare Codex user").run).toContain("OPENCLAW_QA_CREDENTIAL_OWNER_ID");
     expect(cleanupIndex).toBeGreaterThan(steps.findIndex((step) => step.name === codexStep.name));
     expect(cleanupIndex).toBeGreaterThanOrEqual(0);
-    expect(inspectIndex).toBeGreaterThan(cleanupIndex);
+    expect(returnArtifactsIndex).toBeGreaterThan(cleanupIndex);
+    expect(inspectIndex).toBeGreaterThan(returnArtifactsIndex);
 
     const cleanupStep = workflowStep("Release leaked Telegram proof leases");
     expect(cleanupStep.if).toBe("${{ always() }}");
@@ -185,6 +189,20 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(cleanupStep.run).not.toContain("*/telegram-user-crabbox/*/.session/lease.json");
     expect(cleanupStep.run).toContain('sudo -u codex "$MANTIS_NODE_BIN"');
     expect(cleanupStep.run).not.toContain("sudo -u codex node");
+
+    const returnArtifactsStep = workflowStep("Return proof artifacts to the runner");
+    expect(returnArtifactsStep.if).toBe("${{ always() }}");
+    expect(returnArtifactsStep.run).toContain(
+      'sudo chown -R "$(id -u):$(id -g)" "$MANTIS_OUTPUT_DIR"',
+    );
+
+    const sutWrapper = readFileSync(SUT_CONTAINER_WRAPPER, "utf8");
+    expect(sutWrapper).toContain(
+      'exec "$timeout_bin" --signal=TERM --kill-after=5s 30s /bin/bash "$0" "__${action}" "$@"',
+    );
+    expect(sutWrapper).toContain('"$(readlink -f "/proc/$PPID/exe")" == "$timeout_bin"');
+    expect(sutWrapper).toContain("__stop)");
+    expect(sutWrapper).toContain("__destroy)");
   });
 
   it("cleans partially started proof daemons when local SUT startup fails", () => {

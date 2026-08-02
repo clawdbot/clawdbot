@@ -17,11 +17,13 @@ import { scheduleOrphanRecovery } from "./subagent-orphan-recovery.js";
 import { persistSubagentSessionTiming } from "./subagent-registry-helpers.js";
 import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
 import {
+  canonicalSubagentRunFixtures,
   createSubagentRegistryTestDeps,
   readSubagentSessionStore,
   removeSubagentSessionEntry,
   writeSubagentSessionEntry,
 } from "./subagent-registry.persistence.test-support.js";
+import type { SubagentRunFixture } from "./subagent-registry.persistence.test-support.js";
 import {
   loadSubagentRegistryFromSqlite,
   saveSubagentRegistryToSqlite,
@@ -132,7 +134,7 @@ describe("subagent registry persistence", () => {
     tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
     setTestEnvValue("OPENCLAW_STATE_DIR", tempStateDir);
     const runs = (persisted.runs ?? {}) as Record<string, SubagentRunRecord>;
-    saveSubagentRegistryToSqlite(new Map(Object.entries(runs)));
+    saveCanonicalRunFixtures(new Map(Object.entries(runs)));
     if (opts?.seedChildSessions !== false) {
       await seedChildSessionsForPersistedRuns(persisted);
     }
@@ -195,6 +197,10 @@ describe("subagent registry persistence", () => {
   const fastPersistSubagentRunsToDisk = (runs: Map<string, SubagentRunRecord>) =>
     saveSubagentRegistryToSqlite(runs);
 
+  function saveCanonicalRunFixtures(runs: ReadonlyMap<string, SubagentRunFixture>) {
+    saveSubagentRegistryToSqlite(canonicalSubagentRunFixtures(runs));
+  }
+
   beforeEach(() => {
     announceSpy.mockReset();
     announceSpy.mockResolvedValue(true);
@@ -244,6 +250,7 @@ describe("subagent registry persistence", () => {
       task: "persist progress source",
       cleanup: "keep",
       createdAt: 1,
+      execution: { status: "running" },
     };
 
     await writePersistedRegistry(
@@ -277,12 +284,10 @@ describe("subagent registry persistence", () => {
       task: "persist timing",
       cleanup: "keep",
       createdAt: startedAt,
-      startedAt,
       sessionStartedAt: startedAt,
       accumulatedRuntimeMs: 0,
-      endedAt,
-      outcome: { status: "ok" },
-    } as never);
+      execution: { status: "terminal", startedAt, endedAt, outcome: { status: "ok" } },
+    });
 
     const store = await readSubagentSessionStore(storePath);
     const persisted = store["agent:main:subagent:timing"];
@@ -312,10 +317,13 @@ describe("subagent registry persistence", () => {
         task: "do not persist stale timing",
         cleanup: "keep",
         createdAt: startedAt,
-        startedAt,
-        endedAt: startedAt + 500,
-        outcome: { status: "ok" },
-      } as never,
+        execution: {
+          status: "terminal",
+          startedAt,
+          endedAt: startedAt + 500,
+          outcome: { status: "ok" },
+        },
+      },
       { isCurrentGeneration: () => false },
     );
 
@@ -360,11 +368,14 @@ describe("subagent registry persistence", () => {
       task: "preserve completion",
       cleanup: "keep",
       createdAt: startedAt,
-      startedAt,
-      endedAt: completedAt + 1,
       endedReason: "subagent-killed",
-      outcome: { status: "error", error: "manual kill" },
-    } as never);
+      execution: {
+        status: "terminal",
+        startedAt,
+        endedAt: completedAt + 1,
+        outcome: { status: "error", error: "manual kill" },
+      },
+    });
 
     const persisted = (await readSubagentSessionStore(storePath))["agent:main:subagent:kill-race"];
     expect(persisted).toMatchObject({
@@ -389,7 +400,7 @@ describe("subagent registry persistence", () => {
           requesterSessionKey: "agent:main:main",
           requesterDisplayKey: "main",
           task: "do the other thing",
-          cleanup: "keep",
+          cleanup: "keep" as const,
           createdAt: 1,
           startedAt: 1,
           endedAt: 2,
@@ -397,9 +408,7 @@ describe("subagent registry persistence", () => {
         },
       },
     };
-    saveSubagentRegistryToSqlite(
-      new Map(Object.entries(persisted.runs) as Array<[string, SubagentRunRecord]>),
-    );
+    saveCanonicalRunFixtures(new Map(Object.entries(persisted.runs)));
     await writeChildSessionEntry({
       sessionKey: "agent:main:subagent:two",
       sessionId: "sess-two",
@@ -500,7 +509,7 @@ describe("subagent registry persistence", () => {
       task: "persist collector result",
       cleanup: "keep",
       createdAt: 1,
-      endedAt: 2,
+      execution: { status: "terminal", endedAt: 2 },
       collect: true,
       swarmRequesterSessionKey: "agent:worker:subagent:owner",
       swarmWaitOwnerSessionKeys: ["agent:worker:subagent:owner", "agent:main:main"],
@@ -513,11 +522,11 @@ describe("subagent registry persistence", () => {
         usage: { inputTokens: 10, outputTokens: 3 },
       },
     };
-    saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
+    saveCanonicalRunFixtures(new Map([[run.runId, run]]));
     await writeChildSessionEntry({
       sessionKey: run.childSessionKey,
       sessionId: "session-swarm-restart",
-      updatedAt: run.endedAt,
+      updatedAt: run.execution.endedAt,
     });
 
     closeOpenClawStateDatabaseForTest();
@@ -588,7 +597,7 @@ describe("subagent registry persistence", () => {
         maxConcurrent: 8,
       },
     };
-    saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
+    saveCanonicalRunFixtures(new Map([[run.runId, run]]));
 
     closeOpenClawStateDatabaseForTest();
     expect(loadSubagentRegistryFromSqlite().get(run.runId)).toMatchObject({
@@ -938,9 +947,7 @@ describe("subagent registry persistence", () => {
       attachmentsDir,
     });
 
-    saveSubagentRegistryToSqlite(
-      new Map(Object.entries(persisted.runs) as Array<[string, SubagentRunRecord]>),
-    );
+    saveCanonicalRunFixtures(new Map(Object.entries(persisted.runs)));
 
     restartRegistry();
     await waitForRegistryWork(async () => {
@@ -1000,7 +1007,7 @@ describe("subagent registry persistence", () => {
       runId: "run-active",
       childSessionKey,
     });
-    expect(resolved?.endedAt).toBeUndefined();
+    expect(resolved?.execution.endedAt).toBeUndefined();
   });
 
   it("can resolve the newest child-session row even when an older stale row is still active", async () => {
@@ -1046,7 +1053,7 @@ describe("subagent registry persistence", () => {
       runId: "run-current-ended",
       childSessionKey,
     });
-    expect(resolved?.endedAt).toBe(220);
+    expect(resolved?.execution.endedAt).toBe(220);
   });
 
   it("resume guard prunes orphan runs before announce retry", async () => {
@@ -1071,6 +1078,9 @@ describe("subagent registry persistence", () => {
       createdAt: now - 50,
       startedAt: now - 25,
       endedAt: now,
+      execution: { status: "terminal", startedAt: now - 25, endedAt: now },
+      completion: { required: false },
+      delivery: { status: "pending" },
       suppressAnnounceReason: "steer-restart",
       cleanupHandled: false,
     });

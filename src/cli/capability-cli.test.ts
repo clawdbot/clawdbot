@@ -2979,6 +2979,34 @@ describe("capability cli", () => {
     expect(firstEmbeddingProviderCall()?.model).toBe("text-embedding-3-large");
   });
 
+  it.each([
+    {
+      name: "embedding create",
+      argv: ["capability", "embedding", "create", "--text", "hello"],
+    },
+    {
+      name: "image generate",
+      argv: ["capability", "image", "generate", "--prompt", "portrait"],
+    },
+    {
+      name: "image edit",
+      argv: ["capability", "image", "edit", "--file", "photo.png", "--prompt", "crop it"],
+    },
+    {
+      name: "video generate",
+      argv: ["capability", "video", "generate", "--prompt", "clip"],
+    },
+  ])("rejects malformed model refs before $name provider dispatch", async ({ argv }) => {
+    for (const model of ["openai/", "/gpt-4.1-mini"]) {
+      await expect(runCap(...argv, "--model", model, "--json")).rejects.toThrow("exit 1");
+      expectRuntimeErrorContains("Model overrides must use the form <provider/model>.");
+      expect(mocks.resolveCommandConfigWithSecrets).not.toHaveBeenCalled();
+      expect(mocks.createEmbeddingProvider).not.toHaveBeenCalled();
+      expect(mocks.generateImage).not.toHaveBeenCalled();
+      expect(mocks.generateVideo).not.toHaveBeenCalled();
+    }
+  });
+
   it("cleans provider auth profiles and usage stats on logout", async () => {
     mocks.loadAuthProfileStoreForRuntime.mockReturnValue({
       profiles: {
@@ -3381,6 +3409,32 @@ describe("capability cli", () => {
     expect(webSearchRuntime.runWebSearch).not.toHaveBeenCalled();
   });
 
+  it("reports structured web search failures in the envelope and exits nonzero", async () => {
+    const webSearchRuntime = await import("../web-search/runtime.js");
+    vi.mocked(webSearchRuntime.runWebSearch).mockResolvedValueOnce({
+      provider: "kitchen-sink-search",
+      result: {
+        ok: false,
+        statusCode: 429,
+        error: { code: "rate_limited", message: "Kitchen Sink rate limit." },
+        results: [],
+      },
+    });
+
+    await expect(
+      runCap("capability", "web", "search", "--query", "rate limit", "--json"),
+    ).rejects.toThrow("exit 1");
+
+    expect(firstJsonOutput()).toEqual(
+      expect.objectContaining({
+        ok: false,
+        capability: "web.search",
+        provider: "kitchen-sink-search",
+        error: "Kitchen Sink rate limit.",
+      }),
+    );
+  });
+
   it("uses the infer web search provider override when resolving SecretRefs", async () => {
     const unresolvedConfig = {
       tools: { web: { search: { provider: "exa", enabled: true } } },
@@ -3591,6 +3645,33 @@ describe("capability cli", () => {
       expect.objectContaining({
         config: resolvedConfig,
         providerId: "firecrawl",
+      }),
+    );
+  });
+
+  it("reports structured web fetch failures in the envelope and exits nonzero", async () => {
+    const webFetchRuntime = await import("../web-fetch/runtime.js");
+    vi.mocked(webFetchRuntime.resolveWebFetchDefinition).mockReturnValueOnce({
+      provider: { id: "kitchen-sink-fetch" },
+      definition: {
+        execute: vi.fn(async () => ({
+          ok: false,
+          statusCode: 504,
+          error: { code: "timeout", message: "Kitchen Sink fetch timed out." },
+        })),
+      },
+    } as never);
+
+    await expect(
+      runCap("capability", "web", "fetch", "--url", "kitchen://fixture/timeout", "--json"),
+    ).rejects.toThrow("exit 1");
+
+    expect(firstJsonOutput()).toEqual(
+      expect.objectContaining({
+        ok: false,
+        capability: "web.fetch",
+        provider: "kitchen-sink-fetch",
+        error: "Kitchen Sink fetch timed out.",
       }),
     );
   });

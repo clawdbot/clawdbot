@@ -19,9 +19,11 @@ import {
   validateSessionsCompanionAskParams,
   validateSessionsCompanionResetParams,
   validateSessionsCompanionStateParams,
+  validateSessionsCreateParams,
   validateSessionsObserverVisibilityParams,
   validateSessionsPatchParams,
   validateSessionsSearchParams,
+  validateSessionsSendParams,
   validateSessionsUsageParams,
   validateTasksCancelParams,
   validateTasksListParams,
@@ -48,6 +50,7 @@ import type {
 } from "./index.js";
 import * as schemaExportRegistry from "./schema-export-registry.js";
 import type * as Schema from "./schema.js";
+import { ProtocolSchemas } from "./schema/protocol-schemas.js";
 import * as validatorRegistry from "./validator-registry.js";
 
 /**
@@ -86,9 +89,42 @@ describe("protocol export registries", () => {
     expectTypeOf<SessionsCatalogListParams>().toEqualTypeOf<Schema.SessionsCatalogListParams>();
     expectTypeOf<TalkEvent>().toEqualTypeOf<Schema.TalkEvent>();
   });
+
+  it("registers Skill Workshop evaluation and lifecycle replay schemas", () => {
+    expect(ProtocolSchemas.SkillsProposalEvaluateParams).toBe(
+      schemaExportRegistry.SkillsProposalEvaluateParamsSchema,
+    );
+    expect(ProtocolSchemas.SkillsProposalEvaluateResult).toBe(
+      schemaExportRegistry.SkillsProposalEvaluateResultSchema,
+    );
+    expect(ProtocolSchemas.SkillsProposalEventsListParams).toBe(
+      schemaExportRegistry.SkillsProposalEventsListParamsSchema,
+    );
+    expect(ProtocolSchemas.SkillsProposalEventsListResult).toBe(
+      schemaExportRegistry.SkillsProposalEventsListResultSchema,
+    );
+  });
 });
 
 describe("lazy protocol validators", () => {
+  it("accepts bounded request-frame trace context metadata", () => {
+    const request = {
+      type: "req",
+      id: "request-1",
+      method: "status.summary",
+      params: {},
+    };
+
+    expect(protocol.validateRequestFrame(request)).toBe(true);
+    expect(
+      protocol.validateRequestFrame({
+        ...request,
+        traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+      }),
+    ).toBe(true);
+    expect(protocol.validateRequestFrame({ ...request, traceparent: "x".repeat(129) })).toBe(false);
+  });
+
   it("validates through exported lazy validators", () => {
     expect(validateCommandsListParams({})).toBe(true);
     expect(validateCommandsListParams({ includeArgs: true })).toBe(true);
@@ -134,6 +170,29 @@ describe("lazy protocol validators", () => {
         expectedLifecycleRevision: "",
       }),
     ).toBe(false);
+  });
+
+  it("validates sparse session tool overrides", () => {
+    const key = "agent:main:main";
+    expect(
+      validateSessionsPatchParams({
+        key,
+        toolOverrides: {
+          mcpServers: { docs: false },
+          mcpToolsDeny: { github: ["delete_issue"] },
+          skills: { release: true },
+          webSearch: false,
+        },
+      }),
+    ).toBe(true);
+    expect(validateSessionsPatchParams({ key, toolOverrides: null })).toBe(true);
+    expect(
+      validateSessionsPatchParams({ key, toolOverrides: { mcpServers: { docs: "no" } } }),
+    ).toBe(false);
+    expect(
+      validateSessionsPatchParams({ key, toolOverrides: { mcpToolsDeny: { github: [1] } } }),
+    ).toBe(false);
+    expect(validateSessionsPatchParams({ key, toolOverrides: { unknown: true } })).toBe(false);
   });
 
   it("keeps validation errors readable on the exported validator", () => {
@@ -385,6 +444,7 @@ describe("lazy protocol validators", () => {
     expect(
       protocol.validateSkillsProposalRequestRevisionParams({
         proposalId: "support-file-sampler-20260531-68207b7b7f",
+        expectedRevisionHash: "a".repeat(64),
         targetAgentId: "writer",
         instructions: "Make the support files 5",
         sessionKey: "agent:main:session:skill-workshop",
@@ -408,6 +468,52 @@ describe("lazy protocol validators", () => {
         hiddenPrompt: "do not accept caller-provided hidden prompts",
       }),
     ).toBe(false);
+  });
+
+  it("accepts support-file-only Skill Workshop revisions", () => {
+    expect(
+      protocol.validateSkillsProposalReviseParams({
+        proposalId: "support-file-sampler-20260531-68207b7b7f",
+        expectedRevisionHash: "a".repeat(64),
+        supportFiles: [{ path: "references/example.md", content: "Updated example.\n" }],
+      }),
+    ).toBe(true);
+  });
+
+  it("validates Skill Workshop evaluation and event replay params", () => {
+    expect(
+      protocol.validateSkillsProposalEvaluateParams({
+        proposalId: "support-file-sampler-20260531-68207b7b7f",
+        expectedRevisionHash: "b".repeat(64),
+        correlationId: "evaluation-1",
+      }),
+    ).toBe(true);
+    expect(
+      protocol.validateSkillsProposalEvaluateParams({
+        proposalId: "support-file-sampler-20260531-68207b7b7f",
+        expectedRevisionHash: "stale",
+      }),
+    ).toBe(false);
+    expect(
+      protocol.validateSkillsProposalEvaluateParams({
+        proposalId: "support-file-sampler-20260531-68207b7b7f",
+        correlationId: "x".repeat(257),
+      }),
+    ).toBe(false);
+    expect(
+      protocol.validateSkillsProposalEvaluateParams({
+        proposalId: "support-file-sampler-20260531-68207b7b7f",
+        correlationId: "😀".repeat(200),
+      }),
+    ).toBe(true);
+    expect(
+      protocol.validateSkillsProposalEventsListParams({
+        proposalId: "support-file-sampler-20260531-68207b7b7f",
+        afterSequence: 41,
+        limit: 200,
+      }),
+    ).toBe(true);
+    expect(protocol.validateSkillsProposalEventsListParams({ limit: 201 })).toBe(false);
   });
 
   it("can still compile every exported protocol validator", () => {
@@ -819,6 +925,43 @@ describe("validateChatSendParams", () => {
       expect(validateChatSendParams({ ...base, queueMode })).toBe(true);
     }
     expect(validateChatSendParams({ ...base, queueMode: "invalid" })).toBe(false);
+  });
+
+  it("accepts typed attachment metadata and legacy extra fields", () => {
+    const attachments = [
+      {
+        type: "audio",
+        mimeType: "audio/mpeg",
+        fileName: "theme.mp3",
+        content: "YXVkaW8=",
+        sizeBytes: 5,
+        durationMs: 1_250,
+        width: 0,
+        height: 0,
+        legacyPayload: { source: "older-client" },
+      },
+      { legacyBlob: { opaque: true } },
+    ];
+    const base = {
+      sessionKey: "agent:main:main",
+      message: "hello",
+      idempotencyKey: "run-attachments",
+      attachments,
+    };
+
+    expect(validateChatSendParams(base)).toBe(true);
+    expect(
+      validateSessionsCreateParams({ key: "agent:main:main", message: "hello", attachments }),
+    ).toBe(true);
+    expect(
+      validateSessionsSendParams({ key: "agent:main:main", message: "hello", attachments }),
+    ).toBe(true);
+    expect(
+      validateChatSendParams({
+        ...base,
+        attachments: [{ type: "audio", content: new Uint8Array([1, 2, 3]) }],
+      }),
+    ).toBe(true);
   });
 });
 

@@ -1,6 +1,7 @@
 // @vitest-environment node
+import { reduceSessionProjection } from "@openclaw/gateway-client/browser";
 import { describe, expect, it, vi } from "vitest";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import {
   loadChatHistory,
   rewindChatHistory,
@@ -9,6 +10,7 @@ import {
   type ChatHistoryResult,
   type ChatState,
 } from "./chat-history.ts";
+import { getChatSessionProjection, setChatSessionProjection } from "./history-merge.ts";
 import {
   cacheChatSessionSnapshot,
   readChatMessagesFromCache,
@@ -195,6 +197,51 @@ describe("syncSelectedSessionMessageSubscription", () => {
     expect(state.chatSessionMessageSubscriptionRequestedKey).toBe(subscribed.key);
     expect(state.chatSessionMessageSubscription).toBe(subscribed);
   });
+
+  it("retries a stale generation's rejected subscription release", async () => {
+    const stale = { key: "agent:main:stale", agentId: null };
+    const selected = { key: "agent:main:selected", agentId: null };
+    let resolveStale: (subscription: typeof stale) => void = () => undefined;
+    const staleSubscription = new Promise<typeof stale>((resolve) => {
+      resolveStale = resolve;
+    });
+    const unsubscribeMessages = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("stale release temporarily failed"))
+      .mockResolvedValueOnce(undefined);
+    const subscribeMessages = vi.fn(async (key: string) =>
+      key === stale.key ? await staleSubscription : selected,
+    );
+    const state = createState({ messages: [] }) as TestState & {
+      chatSessionMessageSubscriptionRequestedKey: string | null;
+      chatSessionMessageSubscription: typeof stale | null;
+    };
+    state.sessionKey = stale.key;
+    state.chatSessionMessageSubscriptionRequestedKey = null;
+    state.chatSessionMessageSubscription = null;
+    state.sessions = {
+      setModelOverride: vi.fn((_key: string, _value: string | null | undefined) => undefined),
+      subscribeMessages,
+      unsubscribeMessages,
+    };
+
+    const staleSync = syncSelectedSessionMessageSubscription(state as never);
+    await Promise.resolve();
+    state.sessionKey = selected.key;
+    await syncSelectedSessionMessageSubscription(state as never);
+
+    resolveStale(stale);
+    await staleSync;
+
+    expect(state.chatSessionMessageSubscription).toBe(selected);
+    expect(unsubscribeMessages).toHaveBeenNthCalledWith(1, stale);
+
+    await syncSelectedSessionMessageSubscription(state as never);
+
+    expect(unsubscribeMessages).toHaveBeenNthCalledWith(2, stale);
+    expect(state.chatSessionMessageSubscription).toBe(selected);
+    expect(subscribeMessages).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("rewindChatHistory", () => {
@@ -376,6 +423,354 @@ describe("switchChatHistoryBranch", () => {
 
     expect(state.sessions.listBranches).toHaveBeenCalledWith(state.sessionKey, expect.any(Object));
     expect(state.chatBranchesConnectionEpoch).toBe(state.connectionEpoch);
+  });
+
+  it("starts a fresh snapshot and rejects in-flight history after a same-key branch switch", async () => {
+    let resolvePreviousHistory!: (result: ChatHistoryResult) => void;
+    const previousHistory = new Promise<ChatHistoryResult>((resolve) => {
+      resolvePreviousHistory = resolve;
+    });
+    const previous = { role: "assistant", content: "private old branch" };
+    const selected = { role: "assistant", content: "selected branch" };
+    const state = createState({ messages: [selected] }) as TestState & {
+      sessions: {
+        listBranches: ReturnType<typeof vi.fn>;
+        switchBranch: ReturnType<typeof vi.fn>;
+      };
+    };
+    state.sessionKey = "agent:main:branches";
+    state.chatMessages = [previous];
+    const request = vi
+      .fn()
+      .mockReturnValueOnce(previousHistory)
+      .mockResolvedValueOnce({ messages: [selected] });
+    state.client = { request } as unknown as GatewayBrowserClient;
+    state.sessions = {
+      listBranches: vi.fn().mockResolvedValue([]),
+      switchBranch: vi.fn().mockResolvedValue({}),
+      setModelOverride: vi.fn(),
+    };
+
+    const staleHistory = loadChatHistory(state);
+    expect(request).toHaveBeenCalledOnce();
+
+    await expect(switchChatHistoryBranch(state as never, "selected-leaf")).resolves.toBe(true);
+
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(state.chatMessages).toEqual([selected]);
+
+    resolvePreviousHistory({ messages: [previous] });
+    await staleHistory;
+
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(state.chatMessages).toEqual([selected]);
+  });
+});
+
+describe("canonical history snapshot projection", () => {
+  function message(role: "assistant" | "user", text: string, metadata?: Record<string, unknown>) {
+    return {
+      role,
+      content: [{ type: "text", text }],
+      ...(metadata ? { __openclaw: metadata } : {}),
+    };
+  }
+
+  it("keeps a same-scope pending send when authoritative history is still stale", async () => {
+    const persisted = message("user", "first prompt", { id: "first-user", seq: 1 });
+    const pending = message("user", "second prompt", {
+      idempotencyKey: "second-run:user",
+    });
+    const state = createState({ messages: [persisted] });
+    state.chatMessages = [persisted, pending];
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([persisted, pending]);
+  });
+
+  it("adopts the persisted form of a pending send exactly once", async () => {
+    const first = message("user", "first prompt", { id: "first-user", seq: 1 });
+    const pending = message("user", "continue", { idempotencyKey: "second-run:user" });
+    const persisted = message("user", "continue", {
+      id: "second-user",
+      idempotencyKey: "second-run:user",
+      seq: 2,
+    });
+    const state = createState({ messages: [first, persisted] });
+    state.chatMessages = [first, pending];
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([first, persisted]);
+  });
+
+  it("does not collapse same-text pending and persisted sends from different runs", async () => {
+    const first = message("user", "continue", {
+      id: "first-user",
+      idempotencyKey: "first-run:user",
+      seq: 1,
+    });
+    const second = message("user", "continue", {
+      id: "second-user",
+      idempotencyKey: "second-run:user",
+      seq: 2,
+    });
+    const pending = message("user", "continue", { idempotencyKey: "third-run:user" });
+    const state = createState({ messages: [first, second] });
+    state.chatMessages = [first, pending];
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([first, second, pending]);
+  });
+
+  it("keeps a proven live prompt ahead of its stale-history reply", async () => {
+    const prompt = message("user", "shared prompt", { id: "live-user", seq: 1 });
+    const reply = message("assistant", "shared reply", { id: "persisted-reply", seq: 2 });
+    const state = createState({ messages: [reply] });
+    const scope = { sessionKey: state.sessionKey };
+    const projection = reduceSessionProjection(getChatSessionProjection(state, [], scope), {
+      type: "messagePersisted",
+      message: prompt,
+      scope,
+    });
+    setChatSessionProjection(state, projection);
+    state.chatMessages = [...projection.messages];
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([prompt, reply]);
+  });
+
+  it("preserves live rows when an unselected leaf is reported without branch metadata", async () => {
+    const prompt = message("user", "delayed shared prompt", {
+      id: "finalized-run-user",
+      idempotencyKey: "shared-session-finalized-run:user",
+      seq: 1,
+    });
+    const reply = message("assistant", "already finished reply", {
+      id: "finalized-run-assistant",
+      seq: 2,
+    });
+    const state = createState({ messages: [reply], sessionId: "control-ui-e2e-session" });
+    state.currentSessionId = "control-ui-e2e-session";
+    state.chatDisplayedLeafEntryId = undefined;
+    const scope = {
+      sessionKey: state.sessionKey,
+      sessionId: state.currentSessionId,
+      activeLeafEntryId: null,
+    };
+    const projection = reduceSessionProjection(getChatSessionProjection(state, [reply], scope), {
+      type: "messagePersisted",
+      message: prompt,
+      scope,
+    });
+    setChatSessionProjection(state, projection);
+    state.chatMessages = [...projection.messages];
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([prompt, reply]);
+  });
+
+  it("coalesces stale history while distinct live peer messages update the transcript", async () => {
+    let resolveHistory!: (history: ChatHistoryResult) => void;
+    const history = new Promise<ChatHistoryResult>((resolve) => {
+      resolveHistory = resolve;
+    });
+    const first = message("user", "shared prompt", {
+      id: "canonical-web-same-text",
+      idempotencyKey: "web-same-text-run:user",
+      seq: 1,
+    });
+    const second = message("user", "shared prompt", {
+      id: "canonical-tui-same-text",
+      idempotencyKey: "tui-same-text-run:user",
+      seq: 2,
+    });
+    const state = createState({ messages: [] });
+    const request = vi.fn().mockReturnValue(history);
+    state.client = { request } as unknown as GatewayBrowserClient;
+    const scope = { sessionKey: state.sessionKey };
+
+    const firstProjection = reduceSessionProjection(
+      getChatSessionProjection(state, state.chatMessages, scope),
+      { type: "messagePersisted", message: first, scope },
+    );
+    setChatSessionProjection(state, firstProjection);
+    state.chatMessages = [...firstProjection.messages];
+    const firstLoad = loadChatHistory(state);
+
+    const secondProjection = reduceSessionProjection(
+      getChatSessionProjection(state, state.chatMessages, scope),
+      { type: "messagePersisted", message: second, scope },
+    );
+    setChatSessionProjection(state, secondProjection);
+    state.chatMessages = [...secondProjection.messages];
+    const secondLoad = loadChatHistory(state);
+
+    expect(request).toHaveBeenCalledOnce();
+    expect(state.chatMessages).toEqual([first, second]);
+
+    resolveHistory({ messages: [] });
+    await Promise.all([firstLoad, secondLoad]);
+
+    expect(request).toHaveBeenCalledOnce();
+    expect(state.chatMessages).toEqual([first, second]);
+  });
+
+  it("preserves pending input appended while the authoritative request is in flight", async () => {
+    let resolveHistory!: (history: ChatHistoryResult) => void;
+    const history = new Promise<ChatHistoryResult>((resolve) => {
+      resolveHistory = resolve;
+    });
+    const first = message("user", "first prompt", { id: "first-user", seq: 1 });
+    const pending = message("user", "concurrent prompt", {
+      idempotencyKey: "concurrent-run:user",
+    });
+    const state = createState({ messages: [first] });
+    state.chatMessages = [first];
+    state.client = {
+      request: vi.fn().mockReturnValue(history),
+    } as unknown as GatewayBrowserClient;
+
+    const load = loadChatHistory(state);
+    state.chatMessages = [...state.chatMessages, pending];
+    resolveHistory({ messages: [first] });
+    await load;
+
+    expect(state.chatMessages).toEqual([first, pending]);
+  });
+
+  it("does not preserve old pending sends after the active branch changes", async () => {
+    const previous = message("user", "old branch history", { id: "old-user", seq: 4 });
+    const next = message("user", "next branch", { id: "next-user", seq: 5 });
+    const pending = message("user", "old branch pending", {
+      idempotencyKey: "old-branch-run:user",
+    });
+    const state = createState({
+      messages: [next],
+      hasMore: true,
+      nextOffset: 2,
+      totalMessages: 6,
+      sessionInfo: {
+        key: "main",
+        kind: "direct",
+        updatedAt: 1,
+        sessionId: "shared-session",
+        activeLeafEntryId: "next-leaf",
+      },
+    });
+    state.currentSessionId = "shared-session";
+    state.chatDisplayedLeafEntryId = "old-leaf";
+    state.chatHistoryPagination = { hasMore: true, nextOffset: 2, totalMessages: 5 };
+    state.chatMessages = [previous, pending];
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([next]);
+    expect(state.chatDisplayedLeafEntryId).toBe("next-leaf");
+  });
+
+  it.each([
+    { name: "unbranched to selected", previousLeaf: null, nextLeaf: "next-leaf" },
+    { name: "selected to unbranched", previousLeaf: "previous-leaf", nextLeaf: null },
+  ])("never leaks $name transcript rows across an explicit branch change", async (branch) => {
+    const previous = message("user", "private previous branch", {
+      id: "private-previous-user",
+      seq: 4,
+    });
+    const pending = message("user", "private pending prompt", {
+      idempotencyKey: "private-branch-run:user",
+    });
+    const live = message("assistant", "private live reply", {
+      id: "private-live-reply",
+      seq: 5,
+    });
+    const next = message("user", "selected branch history", {
+      id: "selected-branch-user",
+      seq: 5,
+    });
+    const state = createState({
+      messages: [next],
+      hasMore: true,
+      nextOffset: 2,
+      totalMessages: 6,
+      sessionInfo: {
+        key: "main",
+        kind: "direct",
+        updatedAt: 1,
+        sessionId: "shared-session",
+        activeLeafEntryId: branch.nextLeaf,
+      },
+    });
+    state.currentSessionId = "shared-session";
+    state.chatDisplayedLeafEntryId = branch.previousLeaf;
+    state.chatHistoryPagination = { hasMore: true, nextOffset: 2, totalMessages: 5 };
+    const scope = {
+      sessionKey: state.sessionKey,
+      sessionId: "shared-session",
+      activeLeafEntryId: branch.previousLeaf,
+    };
+    const projection = reduceSessionProjection(
+      getChatSessionProjection(state, [previous, pending], scope),
+      { type: "messagePersisted", message: live, scope },
+    );
+    setChatSessionProjection(state, projection);
+    state.chatMessages = [...projection.messages];
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([next]);
+    expect(state.chatDisplayedLeafEntryId).toBe(branch.nextLeaf);
+  });
+
+  it("does not restore a hidden live assistant from an older visible snapshot", async () => {
+    const hidden = message("assistant", "NO_REPLY", { id: "hidden-reply", seq: 1 });
+    const state = createState({ messages: [] });
+    const scope = { sessionKey: state.sessionKey };
+    const projection = reduceSessionProjection(getChatSessionProjection(state, [], scope), {
+      type: "messagePersisted",
+      message: hidden,
+      scope,
+    });
+    setChatSessionProjection(state, projection);
+    state.chatMessages = [...projection.messages];
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([]);
+  });
+
+  it("clears live projection ownership after history access is denied", async () => {
+    const live = message("user", "private prompt", { id: "private-user", seq: 1 });
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new GatewayRequestError({
+          code: "PERMISSION_DENIED",
+          message: "not allowed",
+          details: { code: "AUTH_UNAUTHORIZED" },
+        }),
+      )
+      .mockResolvedValueOnce({ messages: [] });
+    const state = createState({ messages: [] });
+    state.client = { request } as unknown as GatewayBrowserClient;
+    const scope = { sessionKey: state.sessionKey };
+    const projection = reduceSessionProjection(getChatSessionProjection(state, [], scope), {
+      type: "messagePersisted",
+      message: live,
+      scope,
+    });
+    setChatSessionProjection(state, projection);
+    state.chatMessages = [...projection.messages];
+
+    await loadChatHistory(state);
+    expect(state.chatMessages).toEqual([]);
+
+    await loadChatHistory(state);
+    expect(state.chatMessages).toEqual([]);
   });
 });
 

@@ -14,6 +14,7 @@ import {
   resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
 import { getRuntimeConfig } from "../config/config.js";
+import { resolveGatewayPort } from "../config/paths.js";
 import { CLAWHUB_TRUST_ERROR_CODE } from "../infra/clawhub-install-trust.js";
 import {
   CLAWHUB_SKILLS_SH_TRUST_LABEL,
@@ -56,6 +57,7 @@ import {
 } from "../skills/workshop/service.js";
 import type {
   SkillProposalApplyResult,
+  SkillProposalEvaluateResult,
   SkillProposalManifest,
   SkillProposalReadResult,
   SkillProposalSupportFileInput,
@@ -65,6 +67,7 @@ import { resolveClawHubRiskAcknowledgementCliOptions } from "./clawhub-risk-ackn
 import { resolveOptionFromCommand } from "./cli-utils.js";
 import { parseStrictPositiveIntOption } from "./program/helpers.js";
 import { setCommandJsonMode } from "./program/json-mode.js";
+import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 import { formatSkillInfo, formatSkillsCheck, formatSkillsList } from "./skills-cli.format.js";
 import { isSkillsMachineOutput } from "./skills-output-mode.js";
 
@@ -121,7 +124,10 @@ type ResolveSkillsWorkspaceOptions = {
 type ResolvedSkillsWorkspace = ReturnType<typeof resolveSkillsWorkspace>;
 
 const GATEWAY_SKILLS_STATUS_TIMEOUT_MS = 1_500;
-const GATEWAY_SKILLS_MUTATION_TIMEOUT_MS = 10_000;
+const GATEWAY_SKILLS_EVALUATION_TIMEOUT_MS = 650_000;
+const GATEWAY_SKILLS_OFFLINE_LOCK_TIMEOUT_MS = 250;
+// Apply can await evaluator, proposal-change, and skill-change hook phases.
+const GATEWAY_SKILLS_APPLY_TIMEOUT_MS = 1_850_000;
 
 function resolveSkillsWorkspace(options?: ResolveSkillsWorkspaceOptions): {
   config: ReturnType<typeof getRuntimeConfig>;
@@ -281,7 +287,8 @@ function formatSkillProposalList(manifest: SkillProposalManifest): string {
   }
   return `${manifest.proposals
     .map(
-      (entry) => `${entry.id}  ${entry.status}  ${entry.kind}  ${entry.skillKey}  ${entry.title}`,
+      (entry) =>
+        `${entry.id}  ${entry.status}  ${entry.kind}  ${entry.skillKey}  ${entry.title}${entry.workspaceMismatch ? "  [previous workspace]" : ""}`,
     )
     .join("\n")}\n`;
 }
@@ -310,6 +317,33 @@ function formatSkillProposalInspect(read: SkillProposalReadResult): string {
   ]
     .filter((line) => line !== undefined)
     .join("\n");
+}
+
+function formatSkillProposalEvaluation(result: SkillProposalEvaluateResult): string {
+  const lines = [
+    `Proposal: ${result.record.id}`,
+    `Proposed version: ${result.evaluation.proposedVersion}`,
+    `Revision hash: ${result.evaluation.revisionHash}`,
+    `Evaluators: ${result.evaluation.outcomes.length}`,
+  ];
+  for (const outcome of result.evaluation.outcomes) {
+    const plugin = outcome.pluginVersion
+      ? `${outcome.pluginId}@${outcome.pluginVersion}`
+      : outcome.pluginId;
+    const prefix = `${outcome.evaluatorId} (${plugin})`;
+    if (outcome.status === "completed") {
+      const decision = outcome.result.decision ? ` ${outcome.result.decision}` : "";
+      const summary = outcome.result.summary ? `: ${outcome.result.summary}` : "";
+      lines.push(`${prefix}  completed${decision}${summary}`);
+      continue;
+    }
+    if (outcome.status === "error") {
+      lines.push(`${prefix}  error: ${outcome.error}`);
+      continue;
+    }
+    lines.push(`${prefix}  skipped`);
+  }
+  return `${lines.join("\n")}\n`;
 }
 
 function formatSkillCuratorStatus(status: SkillCuratorStatus): string {
@@ -401,7 +435,8 @@ async function runSkillProposalApply(
   resolved: ResolvedSkillsWorkspace,
   proposalId: string,
 ): Promise<SkillProposalApplyResult> {
-  const { callGateway, isGatewayTransportError } = await import("../gateway/call.js");
+  const { callGateway, isGatewayCredentialsRequiredError, isGatewayTransportError } =
+    await import("../gateway/call.js");
   try {
     // Decide offline fallback before dispatching the non-idempotent mutation.
     // Once a Gateway answers, apply failures must never be replayed locally.
@@ -415,26 +450,78 @@ async function runSkillProposalApply(
       requiredMethods: ["skills.proposals.apply"],
     });
   } catch (err) {
-    if (
-      resolved.config.gateway?.mode === "remote" ||
-      !isGatewayTransportError(err) ||
-      err.kind !== "closed" ||
-      err.code !== 1006
-    ) {
+    const isOfflineCandidate =
+      isGatewayCredentialsRequiredError(err) ||
+      (isGatewayTransportError(err) && err.kind === "closed" && err.code === 1006);
+    if (resolved.config.gateway?.mode === "remote" || !isOfflineCandidate) {
       throw err;
     }
-    return await applySkillProposal({
-      workspaceDir: resolved.workspaceDir,
-      config: resolved.config,
-      proposalId,
-    });
+
+    // Hold the canonical Gateway ownership locks across local mutation. This
+    // makes offline apply atomic with Gateway startup, so a new process cannot
+    // inherit a stale process-local skill snapshot.
+    const { acquireGatewayLock } = await import("../infra/gateway-lock.js");
+    let lock: Awaited<ReturnType<typeof acquireGatewayLock>>;
+    try {
+      lock = await acquireGatewayLock({
+        allowInTests: true,
+        port: resolveGatewayPort(resolved.config, process.env),
+        role: "skill-workshop-apply",
+        timeoutMs: GATEWAY_SKILLS_OFFLINE_LOCK_TIMEOUT_MS,
+      });
+    } catch {
+      throw err;
+    }
+    if (!lock) {
+      throw err;
+    }
+    try {
+      return await applySkillProposal({
+        agentId: resolved.agentId,
+        eventActor: { type: "system", id: "cli" },
+        workspaceDir: resolved.workspaceDir,
+        config: resolved.config,
+        proposalId,
+      });
+    } finally {
+      await lock.release();
+    }
   }
 
   return await callGateway<SkillProposalApplyResult>({
     config: resolved.config,
     method: "skills.proposals.apply",
     params: { agentId: resolved.agentId, proposalId },
-    timeoutMs: GATEWAY_SKILLS_MUTATION_TIMEOUT_MS,
+    timeoutMs: GATEWAY_SKILLS_APPLY_TIMEOUT_MS,
+    clientName: GATEWAY_CLIENT_NAMES.CLI,
+    mode: GATEWAY_CLIENT_MODES.CLI,
+  });
+}
+
+async function runSkillProposalEvaluate(
+  resolved: ResolvedSkillsWorkspace,
+  proposalId: string,
+  correlationId?: string,
+): Promise<SkillProposalEvaluateResult> {
+  const { callGateway } = await import("../gateway/call.js");
+  const proposal = await callGateway<SkillProposalReadResult>({
+    config: resolved.config,
+    method: "skills.proposals.inspect",
+    params: { agentId: resolved.agentId, proposalId },
+    timeoutMs: GATEWAY_SKILLS_STATUS_TIMEOUT_MS,
+    clientName: GATEWAY_CLIENT_NAMES.CLI,
+    mode: GATEWAY_CLIENT_MODES.CLI,
+  });
+  return await callGateway<SkillProposalEvaluateResult>({
+    config: resolved.config,
+    method: "skills.proposals.evaluate",
+    params: {
+      agentId: resolved.agentId,
+      proposalId,
+      expectedRevisionHash: proposal.revisionHash,
+      ...(correlationId ? { correlationId } : {}),
+    },
+    timeoutMs: GATEWAY_SKILLS_EVALUATION_TIMEOUT_MS,
     clientName: GATEWAY_CLIENT_NAMES.CLI,
     mode: GATEWAY_CLIENT_MODES.CLI,
   });
@@ -866,8 +953,8 @@ export function registerSkillsCli(program: Command) {
     .option("--json", "Output as JSON", false)
     .action(async (opts: { json?: boolean; agent?: string }) => {
       try {
-        const { workspaceDir } = resolveSkillsWorkspaceForCommand(workshop, opts);
-        const manifest = await listSkillProposals({ workspaceDir });
+        const { agentId, workspaceDir } = resolveSkillsWorkspaceForCommand(workshop, opts);
+        const manifest = await listSkillProposals({ agentId, workspaceDir });
         if (opts.json) {
           defaultRuntime.writeJson(manifest);
           return;
@@ -886,8 +973,8 @@ export function registerSkillsCli(program: Command) {
     .option("--json", "Output as JSON", false)
     .action(async (proposalId: string, opts: { json?: boolean; agent?: string }) => {
       try {
-        const { workspaceDir } = resolveSkillsWorkspaceForCommand(workshop, opts);
-        const proposal = await inspectSkillProposal(proposalId, { workspaceDir });
+        const { agentId, workspaceDir } = resolveSkillsWorkspaceForCommand(workshop, opts);
+        const proposal = await inspectSkillProposal(proposalId, { agentId, workspaceDir });
         if (!proposal) {
           defaultRuntime.error(`Skill proposal not found: ${proposalId}`);
           defaultRuntime.exit(1);
@@ -932,10 +1019,15 @@ export function registerSkillsCli(program: Command) {
         command: Command,
       ) => {
         try {
-          const { config, workspaceDir } = resolveSkillsWorkspaceForCommand(command.parent, opts);
+          const { config, workspaceDir, agentId } = resolveSkillsWorkspaceForCommand(
+            command.parent,
+            opts,
+          );
           const draft = await readSkillProposalInput(opts);
           const proposal = await proposeCreateSkill({
             workspaceDir,
+            agentId,
+            eventActor: { type: "system", id: "cli" },
             config,
             name: opts.name,
             description: opts.description,
@@ -994,6 +1086,7 @@ export function registerSkillsCli(program: Command) {
             workspaceDir,
             config,
             agentId,
+            eventActor: { type: "system", id: "cli" },
             skillName: skill,
             description: opts.description,
             content: draft.content,
@@ -1042,10 +1135,15 @@ export function registerSkillsCli(program: Command) {
         command: Command,
       ) => {
         try {
-          const { config, workspaceDir } = resolveSkillsWorkspaceForCommand(command.parent, opts);
+          const { config, workspaceDir, agentId } = resolveSkillsWorkspaceForCommand(
+            command.parent,
+            opts,
+          );
           const draft = await readSkillProposalInput(opts);
           const proposal = await reviseSkillProposal({
             workspaceDir,
+            agentId,
+            eventActor: { type: "system", id: "cli" },
             config,
             proposalId,
             content: draft.content,
@@ -1061,6 +1159,37 @@ export function registerSkillsCli(program: Command) {
           defaultRuntime.writeStdout(
             `Revised ${proposal.record.id} ${proposal.record.proposedVersion}\n`,
           );
+        } catch (err) {
+          defaultRuntime.error(String(err));
+          defaultRuntime.exit(1);
+        }
+      },
+    );
+
+  workshop
+    .command("evaluate")
+    .description("Evaluate the exact current skill proposal through Gateway plugins")
+    .argument("<proposal-id>", "Skill proposal id")
+    .option("--correlation-id <id>", "External run or experiment correlation id")
+    .option("--json", "Output as JSON", false)
+    .action(
+      async (
+        proposalId: string,
+        opts: { correlationId?: string; json?: boolean; agent?: string },
+        command: Command,
+      ) => {
+        try {
+          const resolved = resolveSkillsWorkspaceForCommand(command.parent, opts);
+          const evaluated = await runSkillProposalEvaluate(
+            resolved,
+            proposalId,
+            normalizeOptionalString(opts.correlationId),
+          );
+          if (opts.json) {
+            defaultRuntime.writeJson(evaluated);
+            return;
+          }
+          defaultRuntime.writeStdout(formatSkillProposalEvaluation(evaluated));
         } catch (err) {
           defaultRuntime.error(String(err));
           defaultRuntime.exit(1);
@@ -1105,8 +1234,10 @@ export function registerSkillsCli(program: Command) {
         command: Command,
       ) => {
         try {
-          const { workspaceDir } = resolveSkillsWorkspaceForCommand(command.parent, opts);
+          const { agentId, workspaceDir } = resolveSkillsWorkspaceForCommand(command.parent, opts);
           const record = await rejectSkillProposal({
+            agentId,
+            eventActor: { type: "system", id: "cli" },
             workspaceDir,
             proposalId,
             reason: opts.reason,
@@ -1136,8 +1267,10 @@ export function registerSkillsCli(program: Command) {
         command: Command,
       ) => {
         try {
-          const { workspaceDir } = resolveSkillsWorkspaceForCommand(command.parent, opts);
+          const { agentId, workspaceDir } = resolveSkillsWorkspaceForCommand(command.parent, opts);
           const record = await quarantineSkillProposal({
+            agentId,
+            eventActor: { type: "system", id: "cli" },
             workspaceDir,
             proposalId,
             reason: opts.reason,
@@ -1153,6 +1286,8 @@ export function registerSkillsCli(program: Command) {
         }
       },
     );
+
+  applyParentDefaultHelpAction(workshop);
 
   skills
     .command("list")

@@ -51,9 +51,7 @@ type ResetSessionEntry = {
   model?: string;
   authProfileOverrideSource?: string;
   authProfileOverrideCompactionCount?: number;
-  fallbackNoticeSelectedModel?: string;
-  fallbackNoticeActiveModel?: string;
-  fallbackNoticeReason?: string;
+  fallbackNotice?: SessionEntry["fallbackNotice"];
   sendPolicy?: string;
   queueMode?: string;
   queueDebounceMs?: number;
@@ -544,9 +542,12 @@ test("sessions.reset clears fallback-pinned model overrides and restores the sel
       providerOverride: "anthropic",
       modelOverride: "claude-opus-4-1",
       modelOverrideSource: "auto",
-      fallbackNoticeSelectedModel: "openai/gpt-test-a",
-      fallbackNoticeActiveModel: "anthropic/claude-opus-4-1",
-      fallbackNoticeReason: "rate limit",
+      fallbackNotice: {
+        kind: "active",
+        selectedModel: "openai/gpt-test-a",
+        activeModel: "anthropic/claude-opus-4-1",
+        reason: "rate limit",
+      },
     },
     expected: {
       providerOverride: undefined,
@@ -564,9 +565,12 @@ test("sessions.reset follows the updated default after an auto fallback pinned a
       providerOverride: "anthropic",
       modelOverride: "claude-opus-4-1",
       modelOverrideSource: "auto",
-      fallbackNoticeSelectedModel: "openai/gpt-test-a",
-      fallbackNoticeActiveModel: "anthropic/claude-opus-4-1",
-      fallbackNoticeReason: "rate limit",
+      fallbackNotice: {
+        kind: "active",
+        selectedModel: "openai/gpt-test-a",
+        activeModel: "anthropic/claude-opus-4-1",
+        reason: "rate limit",
+      },
     },
     expected: {
       providerOverride: undefined,

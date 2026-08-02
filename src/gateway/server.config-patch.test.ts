@@ -402,13 +402,14 @@ describe("gateway config methods", () => {
     }
   });
 
-  it("returns the persisted config from config.set responses", async () => {
+  it("invalidates a warm config.get response when config.set commits", async () => {
     const current = await getCurrentConfigObject();
     const nextConfig = structuredClone(current.config);
     delete nextConfig.meta;
-
-    const gateway = (nextConfig.gateway ??= {}) as Record<string, unknown>;
-    gateway.port = 19001;
+    const ui = (nextConfig.ui ??= {}) as Record<string, unknown>;
+    const prefs = (ui.prefs ??= {}) as Record<string, unknown>;
+    const locale = prefs.locale === "de" ? "en" : "de";
+    prefs.locale = locale;
 
     const res = await rpcReq<{
       ok?: boolean;
@@ -424,6 +425,10 @@ describe("gateway config methods", () => {
     }>(requireWs(), "config.get", {});
     expect(after.ok).toBe(true);
     expect(res.payload?.config).toEqual(after.payload?.config);
+    expect(
+      ((after.payload?.config?.ui as Record<string, unknown>)?.prefs as Record<string, unknown>)
+        ?.locale,
+    ).toBe(locale);
     requireConfigObject(res.payload?.config, "response config");
   });
 

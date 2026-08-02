@@ -1,3 +1,5 @@
+import { initialState, Task, TaskStatus } from "@lit/task";
+import type { ReactiveController, ReactiveControllerHost } from "lit";
 import type { GatewayAgentRow, GatewaySessionRow, ModelCatalogEntry } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import {
@@ -50,13 +52,45 @@ function resolveDraftModelTarget(
   };
 }
 
-export class NewSessionModelControl {
-  private requestToken = 0;
+export class NewSessionModelControl implements ReactiveControllerHost {
   private selectionGeneration = 0;
   private agentId = "";
   private catalog: ModelCatalogEntry[] = [];
-  private loading = false;
   private restoringPreference = false;
+  private pendingPreference: NewSessionPreference | null | undefined;
+  private pendingAgent: GatewayAgentRow | undefined;
+  private pendingContext: ApplicationContext | undefined;
+  private pendingSelectionGeneration = 0;
+  private readonly catalogTask = new Task(this, {
+    autoRun: false,
+    args: () =>
+      [null as ApplicationContext["gateway"]["snapshot"]["client"], "" as string] as const,
+    task: ([client, agentId], { signal }) =>
+      client
+        ? client.request<{ models?: ModelCatalogEntry[] }>("chat.metadata", { agentId }, { signal })
+        : initialState,
+    onComplete: (result) => {
+      this.catalog = Array.isArray(result.models) ? result.models : [];
+      if (this.pendingSelectionGeneration === this.selectionGeneration) {
+        this.restorePreference(this.pendingPreference, this.pendingAgent, this.pendingContext);
+      }
+      this.restoringPreference = false;
+    },
+    onError: () => {
+      this.catalog = [];
+      if (
+        this.pendingSelectionGeneration === this.selectionGeneration &&
+        (this.pendingPreference?.model || this.pendingPreference?.thinkingLevel)
+      ) {
+        // A transport failure says nothing about current availability.
+        // Preserve the requested pair so sessions.create remains the
+        // authoritative validator instead of silently using defaults.
+        this.selected = this.pendingPreference.model ?? "";
+        this.thinkingLevel = this.pendingPreference.thinkingLevel ?? "";
+      }
+      this.restoringPreference = false;
+    },
+  });
   selected = "";
   thinkingLevel = "";
 
@@ -68,9 +102,18 @@ export class NewSessionModelControl {
     }) => void = () => undefined,
   ) {}
 
+  readonly updateComplete = Promise.resolve(true);
+
+  addController(_controller: ReactiveController): void {}
+
+  removeController(_controller: ReactiveController): void {}
+
+  requestUpdate(): void {
+    this.notify();
+  }
+
   invalidate(resetSelection = false) {
-    this.requestToken += 1;
-    this.loading = false;
+    void this.catalogTask.run([null, ""]);
     this.restoringPreference = false;
     this.catalog = [];
     if (resetSelection) {
@@ -99,54 +142,22 @@ export class NewSessionModelControl {
       this.selected = "";
       this.thinkingLevel = "";
     }
-    const requestId = ++this.requestToken;
     const selectionGeneration = this.selectionGeneration;
     this.catalog = [];
     if (snapshot?.phase !== "connected" || !client || !normalizedAgentId || !enabled) {
-      this.loading = false;
+      void this.catalogTask.run([null, ""]);
       this.restoringPreference = false;
       this.notify();
       return;
     }
-    this.loading = true;
+    this.pendingPreference = options.preference;
+    this.pendingAgent = options.agent;
+    this.pendingContext = context;
+    this.pendingSelectionGeneration = selectionGeneration;
     this.restoringPreference = Boolean(
       options.preference?.model || options.preference?.thinkingLevel,
     );
-    this.notify();
-    void client
-      .request<{ models?: ModelCatalogEntry[] }>("chat.metadata", {
-        agentId: normalizedAgentId,
-      })
-      .then((result) => {
-        if (requestId === this.requestToken) {
-          this.catalog = Array.isArray(result.models) ? result.models : [];
-          if (selectionGeneration === this.selectionGeneration) {
-            this.restorePreference(options.preference, options.agent, context);
-          }
-        }
-      })
-      .catch(() => {
-        if (requestId === this.requestToken) {
-          this.catalog = [];
-          if (
-            selectionGeneration === this.selectionGeneration &&
-            (options.preference?.model || options.preference?.thinkingLevel)
-          ) {
-            // A transport failure says nothing about current availability.
-            // Preserve the requested pair so sessions.create remains the
-            // authoritative validator instead of silently using defaults.
-            this.selected = options.preference?.model ?? "";
-            this.thinkingLevel = options.preference?.thinkingLevel ?? "";
-          }
-        }
-      })
-      .finally(() => {
-        if (requestId === this.requestToken) {
-          this.loading = false;
-          this.restoringPreference = false;
-          this.notify();
-        }
-      });
+    void this.catalogTask.run([client, normalizedAgentId]);
   }
 
   isRestoringPreference(): boolean {
@@ -293,7 +304,7 @@ export class NewSessionModelControl {
       modelCatalog: this.catalog,
       modelOverrides: { [sessionKey]: this.selected },
       modelSwitching: false,
-      modelsLoading: this.loading,
+      modelsLoading: this.catalogTask.status === TaskStatus.PENDING,
       sending: options.sending,
       sessionKey,
       sessionsResult: sourceResult,

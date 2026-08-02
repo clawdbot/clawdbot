@@ -36,6 +36,33 @@ describe("message-normalizer", () => {
         expect(isStandaloneToolMessageForDisplay(input)).toBe(false);
       },
     );
+
+    it.each([undefined, null, "malformed block", 42, true, []])(
+      "preserves valid assistant text after the malformed content block %o",
+      (block) => {
+        expect(
+          normalizeMessage({
+            role: "assistant",
+            content: [block, { type: "output_text", text: "The valid answer remains visible." }],
+          }),
+        ).toMatchObject({
+          role: "assistant",
+          content: [{ type: "text", text: "The valid answer remains visible." }],
+        });
+      },
+    );
+
+    it("preserves valid tool blocks after malformed content", () => {
+      expect(
+        normalizeMessage({
+          role: "assistant",
+          content: [null, { type: "tool_use", name: "read", args: { path: "notes.md" } }],
+        }),
+      ).toMatchObject({
+        role: "toolResult",
+        content: [{ type: "tool_use", name: "read", args: { path: "notes.md" } }],
+      });
+    });
   });
 
   describe("normalizeMessage", () => {
@@ -215,6 +242,42 @@ describe("message-normalizer", () => {
       ]);
     });
 
+    it("preserves managed media playback and artifact metadata", () => {
+      const result = normalizeMessage({
+        role: "assistant",
+        content: [
+          {
+            type: "audio",
+            artifactId: "artifact_managed_media_audio",
+            url: "/api/chat/media/outgoing/agent%3Amain%3Amain/audio/full",
+            fileName: "voice.caf",
+            mimeType: "audio/x-caf",
+            playback: "transcode",
+            sizeBytes: 4096,
+            durationMs: 2_345,
+            isVoiceNote: true,
+          },
+        ],
+      });
+
+      expect(result.content).toEqual([
+        {
+          type: "attachment",
+          attachment: {
+            artifactId: "artifact_managed_media_audio",
+            url: "/api/chat/media/outgoing/agent%3Amain%3Amain/audio/full",
+            kind: "audio",
+            label: "voice.caf",
+            mimeType: "audio/x-caf",
+            playback: "transcode",
+            sizeBytes: 4096,
+            durationMs: 2_345,
+            isVoiceNote: true,
+          },
+        },
+      ]);
+    });
+
     it("does not normalize non-assistant structured audio blocks as attachments", () => {
       const result = normalizeMessage({
         role: "user",
@@ -364,6 +427,86 @@ describe("message-normalizer", () => {
             label: "voice.ogg",
             mimeType: "audio/ogg",
             isVoiceNote: true,
+          },
+        },
+      ]);
+    });
+
+    it("preserves paragraph breaks and code indentation before an assistant attachment", () => {
+      const text = [
+        "Here is the code.",
+        "",
+        "```python",
+        "def run():",
+        "    if ready:",
+        "        return True",
+        "```",
+        "",
+        "The attachment is ready.",
+      ].join("\n");
+
+      expect(
+        normalizeMessage({
+          role: "assistant",
+          content: `${text}\nMEDIA:https://example.com/image.png`,
+        }).content,
+      ).toEqual([
+        { type: "text", text },
+        {
+          type: "attachment",
+          attachment: {
+            url: "https://example.com/image.png",
+            kind: "image",
+            label: "image.png",
+            mimeType: "image/png",
+          },
+        },
+      ]);
+    });
+
+    it.each(["", " ", "\t"])(
+      "preserves a %j paragraph separator around an assistant attachment",
+      (whitespace) => {
+        expect(
+          normalizeMessage({
+            role: "assistant",
+            content: `First paragraph\n${whitespace}\nMEDIA:https://example.com/image.png\n${whitespace}\nSecond paragraph`,
+          }).content,
+        ).toEqual([
+          { type: "text", text: "First paragraph\n" },
+          {
+            type: "attachment",
+            attachment: {
+              url: "https://example.com/image.png",
+              kind: "image",
+              label: "image.png",
+              mimeType: "image/png",
+            },
+          },
+          { type: "text", text: "Second paragraph" },
+        ]);
+      },
+    );
+
+    it("preserves canonical code fences after removing reply and audio directives", () => {
+      const code = ["```python", "value = 'a  b'", "``` not a close", "other = 'c  d'", "```"].join(
+        "\n",
+      );
+
+      expect(
+        normalizeMessage({
+          role: "assistant",
+          content: `[[reply_to_current]]\n[[audio_as_voice]]\n${code}\nMEDIA:https://example.com/image.png`,
+        }).content,
+      ).toEqual([
+        { type: "text", text: code },
+        {
+          type: "attachment",
+          attachment: {
+            url: "https://example.com/image.png",
+            kind: "image",
+            label: "image.png",
+            mimeType: "image/png",
           },
         },
       ]);
@@ -538,6 +681,8 @@ describe("message-normalizer", () => {
               kind: "image",
               label: "test image.png",
               mimeType: "image/png",
+              width: 1280,
+              height: 720,
             },
           },
         ],
@@ -551,6 +696,8 @@ describe("message-normalizer", () => {
             kind: "image",
             label: "test image.png",
             mimeType: "image/png",
+            width: 1280,
+            height: 720,
           },
         },
       ]);

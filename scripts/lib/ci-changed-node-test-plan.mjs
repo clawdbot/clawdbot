@@ -16,6 +16,10 @@ const MAX_CHANGED_NODE_TEST_TARGETS = 96;
 // Each target runs in its own child process (isolation contract), so bound the
 // serial tail per job; the shard runner overlaps two children at a time.
 const CHANGED_NODE_TEST_TARGETS_PER_JOB = 12;
+// Memory Core targets perform real SQLite/indexing work. Two concurrent Vitest
+// processes starve each other on 4-vCPU runners and push otherwise healthy
+// integration tests past the global timeout.
+const SERIAL_CHANGED_TARGET_RE = /^extensions\/memory-core\//u;
 const BOUNDARY_NODE_TEST_CONFIG = "test/vitest/vitest.boundary.config.ts";
 const publicPluginSdkEntrySources = Object.values(
   buildPluginSdkEntrySources(publicPluginSdkEntrypoints),
@@ -40,7 +44,7 @@ function isTestOnlyPath(changedPath) {
 // Paths outside this set — repo scripts, workflows, qa scenarios, docs mixes —
 // cannot change dist or bundled plugin asset bytes.
 const BUILD_INPUT_RE =
-  /^(?:src|extensions|packages)\/|^(?:openclaw\.mjs|package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml)$|^tsconfig[^/]*\.json$|^scripts\/(?:build-[^/]+|write-plugin-sdk-entry-dts\.ts|copy-export-html-templates\.ts)$|^scripts\/lib\/(?:copy-assets\.ts|plugin-sdk-entries\.mjs)$/u;
+  /^(?:src|extensions|packages)\/|^(?:openclaw\.mjs|package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml)$|^tsconfig[^/]*\.json$|^scripts\/(?:build-[^/]+|runtime-postbuild\.mjs|write-plugin-sdk-entry-dts\.ts)$|^scripts\/lib\/(?:copy-assets\.ts|plugin-sdk-entries\.mjs)$/u;
 
 /**
  * True when a changed path can influence built dist/packaging bytes: a
@@ -258,7 +262,7 @@ export function createChangedNodeTestShards(changedPaths, options = {}) {
   const shards = [
     ...targetChunks.map((chunk, index) => {
       const suffix = targetChunks.length === 1 ? "" : `-${index + 1}`;
-      return {
+      const shard = {
         checkName: `checks-node-changed${suffix}`,
         configs: [],
         requiresDist: false,
@@ -266,6 +270,10 @@ export function createChangedNodeTestShards(changedPaths, options = {}) {
         shardName: `changed${suffix}`,
         targets: chunk,
       };
+      if (chunk.some((target) => SERIAL_CHANGED_TARGET_RE.test(target))) {
+        shard.planConcurrency = 1;
+      }
+      return shard;
     }),
     ...(hasBuildArtifactAffectingChange(changedPaths) ? [] : [createBoundaryShard()]),
   ];

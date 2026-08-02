@@ -16,13 +16,7 @@ import type {
 import { createConfigIO } from "../config/io.js";
 import { hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import {
-  pinActivePluginChannelRegistry,
-  pinActivePluginHttpRouteRegistry,
-  releasePinnedPluginChannelRegistry,
-  resetPluginRuntimeStateForTest,
-  setActivePluginRegistry,
-} from "../plugins/runtime.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
@@ -498,17 +492,6 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.noopPaths).toStrictEqual([]);
   });
 
-  it("keeps Gateway reload policy when an agent activates a scoped registry", () => {
-    pinActivePluginHttpRouteRegistry(registry);
-    setActivePluginRegistry(emptyRegistry);
-
-    const path = "browser.profiles.sandbox.cdpUrl";
-    expect(buildGatewayReloadPlan([path])).toMatchObject({
-      restartGateway: false,
-      hotReasons: [path],
-    });
-  });
-
   it("prefers channel restart prefixes over a broad no-op prefix", () => {
     const changedPaths = [
       "channels.whatsapp.accounts.default.enabled",
@@ -542,7 +525,7 @@ describe("buildGatewayReloadPlan", () => {
       restartChannels: new Set(),
     });
 
-    pinActivePluginChannelRegistry(channelOnlyRegistry);
+    setActivePluginRegistry(channelOnlyRegistry);
     expect(buildGatewayReloadPlan(["channels.telegram.botToken"])).toMatchObject({
       restartGateway: false,
       restartChannels: new Set(["telegram"]),
@@ -2543,7 +2526,7 @@ describe("startGatewayConfigReloader", () => {
       { initialConfig },
     );
 
-    pinActivePluginChannelRegistry(channelRegistry);
+    setActivePluginRegistry(channelRegistry);
     try {
       await flushWatcherChange(harness);
 
@@ -2551,7 +2534,7 @@ describe("startGatewayConfigReloader", () => {
       expect(plan.restartChannelAccounts).toEqual(new Map([["mattermost", new Set(["alpha"])]]));
       expect(harness.onNoopConfigCommit).not.toHaveBeenCalled();
     } finally {
-      releasePinnedPluginChannelRegistry(channelRegistry);
+      resetPluginRuntimeStateForTest();
       await harness.reloader.stop();
     }
   });
@@ -3979,6 +3962,119 @@ describe("startGatewayConfigReloader", () => {
     expect(harness.log.info).toHaveBeenCalledWith(
       "config reload skipped by writer intent (newest B intent)",
     );
+
+    await harness.reloader.stop();
+  });
+
+  const expectPendingRestartSurvivesCoalescing = async (emitWatcherEcho: boolean) => {
+    let releasePluginRead = () => {};
+    let recordPluginReadStarted: (() => void) | undefined;
+    const pluginReadStarted = new Promise<void>((resolve) => {
+      recordPluginReadStarted = resolve;
+    });
+    const pluginReadGate = new Promise<void>((resolve) => {
+      releasePluginRead = resolve;
+    });
+    const readPluginInstallRecords = vi.fn(async () => {
+      recordPluginReadStarted?.();
+      await pluginReadGate;
+      return {};
+    });
+    const readSnapshot = vi.fn(async () => makeZeroDebounceHookSnapshot("latest-c"));
+    const harness = createReloaderHarness(readSnapshot, { readPluginInstallRecords });
+
+    harness.emitWrite({
+      ...makeZeroDebounceHookWrite("active-a"),
+      afterWrite: { mode: "none", reason: "active A intent" },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    await pluginReadStarted;
+
+    harness.emitWrite({
+      ...makeZeroDebounceHookWrite("pending-b"),
+      afterWrite: { mode: "restart", reason: "pending B requires restart" },
+    });
+    if (emitWatcherEcho) {
+      harness.watcher.emit("change");
+    }
+    const latestConfig = {
+      gateway: { reload: {} },
+      hooks: { enabled: false },
+    } satisfies OpenClawConfig;
+    harness.emitWrite({
+      ...makeZeroDebounceHookWrite("latest-c"),
+      sourceConfig: latestConfig,
+      runtimeConfig: latestConfig,
+      afterWrite: { mode: "none", reason: "latest C intent" },
+    });
+    releasePluginRead();
+    await vi.runAllTimersAsync();
+
+    const [restartPlan, restartedConfig] = getOnlyRestartCall(harness);
+    expect(restartedConfig).toEqual(latestConfig);
+    expect(restartPlan.restartReasons).toContain("pending B requires restart");
+    expect(harness.onHotReload).not.toHaveBeenCalled();
+
+    await harness.reloader.stop();
+  };
+
+  it("preserves a pending restart intent while coalescing a newer write", async () => {
+    await expectPendingRestartSurvivesCoalescing(false);
+  });
+
+  it("preserves a pending restart intent across a watcher echo", async () => {
+    await expectPendingRestartSurvivesCoalescing(true);
+  });
+
+  it("preserves a pending restart intent when a newer write arrives during missing-file retry", async () => {
+    let releasePluginRead = () => {};
+    let recordPluginReadStarted: (() => void) | undefined;
+    const pluginReadStarted = new Promise<void>((resolve) => {
+      recordPluginReadStarted = resolve;
+    });
+    const pluginReadGate = new Promise<void>((resolve) => {
+      releasePluginRead = resolve;
+    });
+    const readPluginInstallRecords = vi.fn(async () => {
+      recordPluginReadStarted?.();
+      await pluginReadGate;
+      return {};
+    });
+    const readSnapshot = vi.fn(async () => makeSnapshot({ exists: false, valid: false }));
+    const harness = createReloaderHarness(readSnapshot, { readPluginInstallRecords });
+
+    harness.emitWrite({
+      ...makeZeroDebounceHookWrite("active-a"),
+      afterWrite: { mode: "none", reason: "active A intent" },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    await pluginReadStarted;
+
+    harness.emitWrite({
+      ...makeZeroDebounceHookWrite("pending-b"),
+      afterWrite: { mode: "restart", reason: "pending B requires restart" },
+    });
+    harness.watcher.emit("change");
+    releasePluginRead();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(readSnapshot).toHaveBeenCalledOnce();
+    const latestConfig = {
+      gateway: { reload: {} },
+      hooks: { enabled: false },
+    } satisfies OpenClawConfig;
+    harness.emitWrite({
+      ...makeZeroDebounceHookWrite("latest-c"),
+      sourceConfig: latestConfig,
+      runtimeConfig: latestConfig,
+      afterWrite: { mode: "none", reason: "latest C intent" },
+    });
+    await vi.runAllTimersAsync();
+
+    const [restartPlan, restartedConfig] = getOnlyRestartCall(harness);
+    expect(restartedConfig).toEqual(latestConfig);
+    expect(restartPlan.restartReasons).toContain("pending B requires restart");
+    expect(harness.onHotReload).not.toHaveBeenCalled();
 
     await harness.reloader.stop();
   });

@@ -273,6 +273,72 @@ describe("openai transport stream", () => {
     }
   });
 
+  it("reports the managed Responses HTTP status before streaming events", async () => {
+    const server = createServer((req, res) => {
+      req.resume();
+      req.on("end", () => {
+        res.writeHead(202, {
+          "content-type": "text/event-stream; charset=utf-8",
+          "x-provider-test": "managed-response",
+        });
+        res.end(
+          `data: ${JSON.stringify({
+            type: "response.completed",
+            response: { id: "resp_status", status: "completed", output: [] },
+          })}\n\n`,
+        );
+      });
+    });
+
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("Missing loopback server address");
+      }
+      const onResponse = vi.fn();
+      const model = {
+        id: "gpt-status",
+        name: "GPT Status",
+        api: "openai-responses",
+        provider: "custom-openai",
+        baseUrl: `http://127.0.0.1:${address.port}/v1`,
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128_000,
+        maxTokens: 4_096,
+      } satisfies Model<"openai-responses">;
+
+      const stream = await createOpenAIResponsesTransportStreamFn()(
+        model,
+        {
+          messages: [{ role: "user", content: "Reply OK", timestamp: Date.now() }],
+          tools: [],
+        },
+        { apiKey: "test-key", onResponse },
+      );
+      for await (const event of stream) {
+        // Drain the stream so the terminal event and hook complete.
+        void event;
+      }
+
+      expect(onResponse).toHaveBeenCalledWith(
+        {
+          status: 202,
+          headers: expect.objectContaining({ "x-provider-test": "managed-response" }),
+        },
+        model,
+      );
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
   it.each(["reasoning_content", "reasoning"] as const)(
     "keeps hidden local %s streams alive beyond the model idle timeout",
     async (reasoningField) => {

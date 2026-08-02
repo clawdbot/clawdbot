@@ -1,5 +1,4 @@
-// Gateway plugin startup bootstrap.
-// Runs startup maintenance, loads plugin runtime, and prepares advertised methods.
+// Gateway plugin startup bootstrap and adjacent startup maintenance.
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { initSubagentRegistry } from "../agents/subagent-registry.js";
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
@@ -45,20 +44,13 @@ export function resolveGatewayStartupMaintenanceConfig(params: {
     : params.cfgAtStart;
 }
 
-/** Builds plugin startup state and gateway method lists before the server binds. */
-export async function prepareGatewayPluginBootstrap(params: {
+/** Runs channel, session, and pairing maintenance before plugin bootstrap. */
+export async function runGatewayStartupMaintenance(params: {
   cfgAtStart: OpenClawConfig;
-  activationSourceConfig?: OpenClawConfig;
   startupRuntimeConfig: OpenClawConfig;
-  pluginMetadataSnapshot?: PluginMetadataSnapshot;
-  workerProviderIds?: readonly string[];
   minimalTestGateway: boolean;
   log: GatewayPluginBootstrapLog;
-  loadRuntimePlugins?: boolean;
-  loadSetupRuntimePlugins?: boolean;
-  ambientEnvTriggers?: AmbientEnvTriggerPolicy;
-}) {
-  const activationSourceConfig = params.activationSourceConfig ?? params.cfgAtStart;
+}): Promise<void> {
   const startupMaintenanceConfig = resolveGatewayStartupMaintenanceConfig({
     cfgAtStart: params.cfgAtStart,
     startupRuntimeConfig: params.startupRuntimeConfig,
@@ -110,7 +102,21 @@ export async function prepareGatewayPluginBootstrap(params: {
     }
     await Promise.all(startupTasks);
   }
+}
 
+/** Builds plugin startup state and gateway method lists before the server binds. */
+export async function prepareGatewayPluginBootstrap(params: {
+  cfgAtStart: OpenClawConfig;
+  activationSourceConfig?: OpenClawConfig;
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
+  workerProviderIds?: readonly string[];
+  minimalTestGateway: boolean;
+  log: GatewayPluginBootstrapLog;
+  loadRuntimePlugins?: boolean;
+  loadSetupRuntimePlugins?: boolean;
+  ambientEnvTriggers?: AmbientEnvTriggerPolicy;
+}) {
+  const activationSourceConfig = params.activationSourceConfig ?? params.cfgAtStart;
   initSubagentRegistry();
 
   // Activation uses the pre-runtime source so auto-enable policy cannot be skewed by
@@ -142,6 +148,12 @@ export async function prepareGatewayPluginBootstrap(params: {
           workerProviderIds: params.workerProviderIds ?? [],
           ambientEnvTriggers: params.ambientEnvTriggers,
         });
+  // Startup logging consumes the same process-stable manifest snapshot used for
+  // activation planning. Minimal gateways deliberately have no plugin metadata.
+  const pluginManifestRecords =
+    pluginLookUpTable?.manifestRegistry.plugins ??
+    params.pluginMetadataSnapshot?.manifestRegistry.plugins ??
+    [];
   const deferredConfiguredChannelPluginIds = [
     ...(pluginLookUpTable?.startup.configuredDeferredChannelPluginIds ?? []),
   ];
@@ -154,9 +166,7 @@ export async function prepareGatewayPluginBootstrap(params: {
             activationSourceConfig,
             env: process.env,
             includePersistedAuthState: false,
-            ...(pluginLookUpTable?.manifestRegistry.plugins
-              ? { manifestRecords: pluginLookUpTable.manifestRegistry.plugins }
-              : {}),
+            manifestRecords: pluginManifestRecords,
           }),
         )
       : new Set<string>();
@@ -223,6 +233,7 @@ export async function prepareGatewayPluginBootstrap(params: {
     defaultWorkspaceDir,
     deferredConfiguredChannelPluginIds,
     startupPluginIds,
+    pluginManifestRecords,
     pluginLookUpTable,
     baseMethods,
     pluginRegistry,

@@ -62,7 +62,6 @@ function createFixture(options: { aborted?: boolean } = {}) {
   const timeoutResult = {
     getRunAbortDeadlineAtMs: vi.fn(() => 123),
     clearTimers: vi.fn(),
-    removeAbortSignalListener: vi.fn(),
   };
   const activeSession = {
     agent: { streamFn: vi.fn() },

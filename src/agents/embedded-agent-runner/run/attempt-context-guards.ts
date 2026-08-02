@@ -10,12 +10,16 @@ import type { SandboxContext } from "../../sandbox/types.js";
 import type { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { invalidateComputerFrameIfMissing } from "../../tools/computer-tool.js";
-import { readLastCacheTtlTimestamp } from "../cache-ttl.js";
+import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "../cache-ttl.js";
 import {
   installContextEngineLoopHook,
   installToolResultContextGuard,
 } from "../tool-result-context-guard.js";
-import { resolveLiveToolResultMaxChars } from "../tool-result-truncation.js";
+import {
+  pruneExpiredCacheTtlToolResults,
+  resolveCacheTtlPruningSettings,
+  resolveLiveToolResultMaxChars,
+} from "../tool-result-truncation.js";
 import { repairAttemptToolUseResultPairing } from "./attempt-transcript-helpers.js";
 import { buildLoopPromptCacheInfo } from "./attempt.context-engine-helpers.js";
 import { buildAfterTurnRuntimeContext } from "./attempt.prompt-helpers.js";
@@ -31,6 +35,7 @@ export function installEmbeddedAttemptContextGuards(input: {
   agentDir: string;
   attempt: EmbeddedRunAttemptParams;
   computerContextEpoch: { value: number };
+  dropThinkingBlocksForEstimate: boolean;
   effectiveCwd: string;
   effectiveFsWorkspaceOnly: boolean;
   effectiveWorkspace: string;
@@ -80,6 +85,41 @@ export function installEmbeddedAttemptContextGuards(input: {
           },
         }
       : {};
+
+  const contextPruning = attempt.config?.agents?.defaults?.contextPruning;
+  // Disabled pruning must not resolve provider hooks and cold-load plugin metadata.
+  const cacheTtlSettings =
+    contextPruning?.mode === "cache-ttl" &&
+    isCacheTtlEligibleProvider(attempt.provider, attempt.modelId, attempt.model.api)
+      ? resolveCacheTtlPruningSettings(contextPruning)
+      : undefined;
+  const previousCacheTtlTransform = activeSession.agent.transformContext;
+  let lastCacheTouchAt = cacheTtlSettings
+    ? readLastCacheTtlTimestamp(input.sessionManager, {
+        provider: attempt.provider,
+        modelId: attempt.modelId,
+      })
+    : null;
+  if (cacheTtlSettings) {
+    activeSession.agent.transformContext = async (messages, signal) => {
+      const transformed = previousCacheTtlTransform
+        ? await previousCacheTtlTransform.call(activeSession.agent, messages, signal)
+        : messages;
+      const sourceMessages = Array.isArray(transformed) ? transformed : messages;
+      const projected = pruneExpiredCacheTtlToolResults({
+        messages: sourceMessages,
+        settings: cacheTtlSettings,
+        contextWindowTokens: contextTokenBudget,
+        lastCacheTouchAt,
+        dropThinkingBlocksForEstimate: input.dropThinkingBlocksForEstimate,
+        now: Date.now(),
+      });
+      if (projected !== sourceMessages) {
+        lastCacheTouchAt = Date.now();
+      }
+      return projected;
+    };
+  }
 
   let removeLoopGuard: () => void;
   if (activeContextEngine?.info.ownsCompaction === true) {
@@ -187,6 +227,7 @@ export function installEmbeddedAttemptContextGuards(input: {
       activeSession.agent.transformContext = previousComputerFrameTransform;
       removeHistoryImagePruneContextTransform();
       removeLoopGuard();
+      activeSession.agent.transformContext = previousCacheTtlTransform;
     },
     takePendingMidTurnPrecheckRequest: () => {
       const request = pendingMidTurnPrecheckRequest;

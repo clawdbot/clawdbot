@@ -72,9 +72,9 @@ Recommended for most interactive installs on macOS/Linux/WSL.
   <Step title="Detect OS">
     Supports macOS and Linux (including WSL).
   </Step>
-  <Step title="Ensure Node.js 24 by default">
+  <Step title="Ensure Node.js 26 by default">
     Checks Node version and installs Node 26 if needed (Homebrew `node` on macOS, NodeSource setup scripts on Linux apt/dnf/yum). On macOS, Homebrew is installed only when the installer needs it for Node or Git. Node 22.22.3+, Node 24.15+, and Node 25.9+ are supported; Node 23 is unsupported.
-    On Alpine/musl Linux, the installer uses apk packages instead of NodeSource and verifies the actual linked SQLite version. Current stable Alpine package streams can provide a new-enough Node with vulnerable system SQLite; when that happens, use an official `node:24-alpine` container or a glibc-based host instead.
+    On Alpine/musl Linux, the installer uses apk packages instead of NodeSource and verifies the actual linked SQLite version. Current stable Alpine package streams can provide a new-enough Node with vulnerable system SQLite; when that happens, use an official `node:26-alpine` container or a glibc-based host instead.
   </Step>
   <Step title="Ensure Git">
     Installs Git if missing using the detected package manager, including Homebrew on macOS and apk on Alpine.
@@ -299,7 +299,7 @@ by default, plus git-checkout installs under the same prefix flow.
   <Step title="Ensure PowerShell + Windows environment">
     Requires PowerShell 5+.
   </Step>
-  <Step title="Ensure Node.js 24 by default">
+  <Step title="Ensure a supported Node.js runtime">
     If missing, attempts install via winget, then Chocolatey, then Scoop. If no package manager is available, the script downloads the official Node.js 26 Windows zip into `%LOCALAPPDATA%\OpenClaw\deps\portable-node` and adds it to the current process and user PATH. Node 22.22.3+, Node 24.15+, and Node 25.9+ are supported; Node 23 is unsupported.
   </Step>
   <Step title="Install OpenClaw">

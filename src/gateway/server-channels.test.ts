@@ -2,12 +2,17 @@
  * Server channel lifecycle tests.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ChannelIngressUnavailableError } from "../channels/message/ingress-unavailable.js";
 import type {
   ChannelAccountLinkState,
   ChannelGatewayContext,
 } from "../channels/plugins/types.adapters.js";
-import type { ChannelId, ChannelPlugin } from "../channels/plugins/types.public.js";
-import { formatGatewayChannelsStatusLines } from "../commands/channels/status.js";
+import type {
+  ChannelAccountSnapshot,
+  ChannelId,
+  ChannelPlugin,
+} from "../channels/plugins/types.public.js";
+import { formatGatewayChannelsStatusLines } from "../commands/channels/status.runtime.js";
 import type { GatewayNativeApprovalRuntime } from "../infra/approval-gateway-runtime.types.js";
 import {
   createSubsystemLogger,
@@ -87,6 +92,15 @@ const CHANNEL_APPROVAL_GATEWAY_RUNTIME_CONTEXT_CAPABILITY = "approval.gateway";
 type ApprovalGatewayRequestRuntime = Pick<GatewayNativeApprovalRuntime, "request">;
 
 const createdManagers: Array<{ manager: ChannelManager; channelIds: ChannelId[] }> = [];
+
+function healthOf(account: ChannelAccountSnapshot | undefined) {
+  return evaluateChannelHealth(account ?? {}, {
+    channelId: "discord",
+    now: Date.now() + 60 * 60_000,
+    channelConnectGraceMs: 120_000,
+    staleEventThresholdMs: 30 * 60_000,
+  });
+}
 
 function createTestPlugin(params?: {
   id?: ChannelId;
@@ -331,6 +345,62 @@ describe("server-channels auto restart", () => {
     expect(startAccount).toHaveBeenCalledTimes(11);
   });
 
+  it("records dead ingress when a channel start fails to arm its ingress monitor", async () => {
+    const startAccount = vi.fn(async () => {
+      throw new ChannelIngressUnavailableError("Channel ingress queue is unavailable: denied");
+    });
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager();
+
+    await manager.startChannels();
+    const readAccount = () =>
+      manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    await advanceTimersUntil(
+      () => readAccount()?.ingressUnavailable === true,
+      "expected the failed ingress start to be recorded on the account",
+      { stepMs: 10, maxMs: 500 },
+    );
+
+    // Health must name this dead inbound rather than one more anonymous crash.
+    expect(healthOf(readAccount())).toEqual({
+      healthy: false,
+      reason: "ingress-unavailable",
+    });
+  });
+
+  it("clears a previous lifecycle's dead-ingress verdict once ingress starts again", async () => {
+    let failIngress = true;
+    const startAccount = vi.fn(async () => {
+      if (failIngress) {
+        throw new ChannelIngressUnavailableError("Channel ingress queue is unavailable: denied");
+      }
+      await new Promise(() => {});
+    });
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager();
+    const readAccount = () =>
+      manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+
+    await manager.startChannels();
+    await advanceTimersUntil(
+      () => readAccount()?.ingressUnavailable === true,
+      "expected the first start to record dead ingress",
+      { stepMs: 10, maxMs: 500 },
+    );
+
+    // Runtime rows are patch-merged, so a sticky verdict would keep the channel
+    // unhealthy forever after the operator fixed the underlying capability. The
+    // supervisor's own backoff ladder supplies the next start here.
+    failIngress = false;
+    await advanceTimersUntil(
+      () => readAccount()?.running === true && readAccount()?.ingressUnavailable === undefined,
+      "expected a later start to clear the dead-ingress verdict",
+      { stepMs: 10, maxMs: 500 },
+    );
+
+    expect(healthOf(readAccount()).reason).not.toBe("ingress-unavailable");
+  });
+
   it("claims auto-restart ownership between crash-loop attempts", async () => {
     const startAccount = vi.fn(async () => {});
     installTestRegistry(createTestPlugin({ startAccount }));
@@ -463,6 +533,7 @@ describe("server-channels auto restart", () => {
     expect(startAccount).toHaveBeenCalled();
     expect(account?.running).toBe(false);
     expect(account?.restartPending).toBe(true);
+    expect(account?.lifecycle).toBe("recovering");
     expect(account?.lastError).toBe("channel exited without an error");
   });
 
@@ -509,6 +580,9 @@ describe("server-channels auto restart", () => {
 
     await manager.startChannels();
     await flushMicrotasks();
+    expect(
+      manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID]?.lifecycle,
+    ).toBe("ready");
     await manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
 
     const snapshot = manager.getRuntimeSnapshot();
@@ -516,7 +590,39 @@ describe("server-channels auto restart", () => {
     expect(stopAccount).toHaveBeenCalledTimes(1);
     expect(account?.running).toBe(false);
     expect(account?.connected).toBe(false);
+    expect(account?.lifecycle).toBe("stopped");
     expect(account?.lastError).toBeNull();
+  });
+
+  it("records starting on every start and preserves explicit blocked over connected ready", async () => {
+    const lifecycleAtHandoff: Array<ChannelAccountSnapshot["lifecycle"]> = [];
+    const startAccount = vi.fn(async (ctx: ChannelGatewayContext<TestAccount>) => {
+      lifecycleAtHandoff.push(ctx.getStatus().lifecycle);
+      ctx.setStatus({
+        accountId: DEFAULT_ACCOUNT_ID,
+        connected: true,
+        lifecycle: "blocked",
+        lastError: "identity unavailable",
+      });
+      await new Promise<void>((resolve) => {
+        ctx.abortSignal.addEventListener("abort", () => resolve(), { once: true });
+      });
+    });
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager();
+
+    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+    await flushMicrotasks();
+    expect(lifecycleAtHandoff).toEqual(["starting"]);
+    expect(manager.getRuntimeSnapshot().channelAccounts.discord?.default).toMatchObject({
+      connected: true,
+      lifecycle: "blocked",
+    });
+
+    await manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
+    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+    await flushMicrotasks();
+    expect(lifecycleAtHandoff).toEqual(["starting", "starting"]);
   });
 
   it("keeps a running channel without transport reporting free of a synthetic disconnect", async () => {
@@ -783,7 +889,12 @@ describe("server-channels auto restart", () => {
         setStatus: ChannelGatewayContext["setStatus"];
         accountId: string;
       }) => {
-        setStatus({ accountId, terminalDisconnect: true });
+        setStatus({
+          accountId,
+          terminalDisconnect: true,
+          lifecycle: "blocked",
+          lastError: "relink required",
+        });
       },
     );
     installTestRegistry(createTestPlugin({ startAccount }));
@@ -794,7 +905,12 @@ describe("server-channels auto restart", () => {
 
     expect(startAccount).toHaveBeenCalledTimes(1);
     const snapshot = manager.getRuntimeSnapshot();
-    expect(snapshot.channelAccounts.discord?.[DEFAULT_ACCOUNT_ID]?.terminalDisconnect).toBe(true);
+    expect(snapshot.channelAccounts.discord?.[DEFAULT_ACCOUNT_ID]).toMatchObject({
+      terminalDisconnect: true,
+      lifecycle: "stopped",
+      lastError: "relink required",
+      restartPending: false,
+    });
   });
 
   it("consumes rejected stop tasks during manual abort", async () => {
@@ -886,6 +1002,7 @@ describe("server-channels auto restart", () => {
     expect(startAccount).toHaveBeenCalledTimes(1);
     expect(account?.running).toBe(false);
     expect(account?.restartPending).toBe(true);
+    expect(account?.lifecycle).toBe("recovering");
     expect(account?.lastError).toContain("channel stop timed out");
     expect(manager.isManuallyStopped("discord", DEFAULT_ACCOUNT_ID)).toBe(false);
 
@@ -971,6 +1088,7 @@ describe("server-channels auto restart", () => {
     expect(account?.running).toBe(false);
     expect(account?.connected).toBe(false);
     expect(account?.restartPending).toBe(true);
+    expect(account?.lifecycle).toBe("recovering");
     expect(account?.reconnectAttempts).toBe(0);
     expect(account?.lastError).toContain("channel stop timed out");
   });
@@ -1345,6 +1463,7 @@ describe("server-channels auto restart", () => {
     expect(manager.getRuntimeSnapshot().channelAccounts.discord?.default).toMatchObject({
       linked: false,
       running: false,
+      lifecycle: "stopped",
       lastError: "logged out",
     });
     await manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);

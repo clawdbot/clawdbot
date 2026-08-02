@@ -216,6 +216,39 @@ describe("nodes-cli coverage", () => {
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith({ approved: true });
   });
 
+  it("explains unknown nodes reject request ids without leaking connection credentials", async () => {
+    callGateway.mockRejectedValueOnce(
+      Object.assign(new Error("unknown requestId"), {
+        name: "GatewayClientRequestError",
+        gatewayCode: "INVALID_REQUEST",
+      }),
+    );
+
+    await expect(
+      sharedProgram.parseAsync(
+        [
+          "nodes",
+          "reject",
+          "stale-request",
+          "--url",
+          "wss://gateway.example.test",
+          "--token",
+          "secret-token",
+        ],
+        { from: "user" },
+      ),
+    ).rejects.toThrow("__exit__:1");
+
+    const output = runtimeErrors.join("\n");
+    expect(output).toContain("Unknown node pairing requestId: stale-request");
+    expect(output).toContain("openclaw nodes pending");
+    expect(output).toContain("Reuse the same connection options when rerunning: --url, --token.");
+    expect(output).not.toContain("gateway.example.test");
+    expect(output).not.toContain("secret-token");
+    expect(output).not.toContain("GatewayClientRequestError: unknown requestId");
+    expect(callGateway.mock.calls.map(([call]) => call.method)).toEqual(["node.pair.reject"]);
+  });
+
   it("blocks system.run on nodes invoke", async () => {
     await expect(
       sharedProgram.parseAsync(["nodes", "invoke", "--node", "mac-1", "--command", "system.run"], {
@@ -269,6 +302,60 @@ describe("nodes-cli coverage", () => {
       callGateway.mock.calls.find(([call]) => call.method === "node.list")?.[0].timeoutMs,
     ).toBe(10_000);
   });
+
+  it.each([
+    ["--priority", "urgent"],
+    ["--priority", "timesensitive"],
+    ["--delivery", "desktop"],
+  ])("rejects unsupported %s %s before calling the gateway", async (flag, value) => {
+    await withSuppressedStderr(async () => {
+      await expect(
+        sharedProgram.parseAsync(
+          ["nodes", "notify", "--node", "mac-1", "--title", "Ping", flag, value],
+          { from: "user" },
+        ),
+      ).rejects.toMatchObject({ code: "commander.invalidArgument" });
+    });
+
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(lastNodeInvokeCall).toBeNull();
+  });
+
+  it.each(["passive", "active", "timeSensitive"])(
+    "forwards the supported %s notification priority",
+    async (priority) => {
+      const invoke = await runNodesCommand([
+        "nodes",
+        "notify",
+        "--node",
+        "mac-1",
+        "--title",
+        "Ping",
+        "--priority",
+        priority,
+      ]);
+
+      expect(invoke.params?.params).toMatchObject({ priority, delivery: "system" });
+    },
+  );
+
+  it.each(["system", "overlay", "auto"])(
+    "forwards the supported %s notification delivery mode",
+    async (delivery) => {
+      const invoke = await runNodesCommand([
+        "nodes",
+        "notify",
+        "--node",
+        "mac-1",
+        "--title",
+        "Ping",
+        "--delivery",
+        delivery,
+      ]);
+
+      expect(invoke.params?.params).toMatchObject({ delivery });
+    },
+  );
 
   it.each([
     {

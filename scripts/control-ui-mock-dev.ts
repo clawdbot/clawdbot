@@ -14,6 +14,7 @@ import type {
 } from "../packages/gateway-protocol/src/index.js";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { applySharedChannelFieldHelp } from "../src/config/schema.channel-field-help.js";
+import { buildBaseHints } from "../src/config/schema.hints.js";
 import { applyConfigTierHints, applyResolvedConfigTierHints } from "../src/config/schema.tiers.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../src/gateway/control-ui-contract.js";
 import {
@@ -693,6 +694,38 @@ function buildConfigMocks(options: { swarmEnabled?: boolean } = {}) {
           },
         },
       },
+      talk: {
+        type: "object",
+        title: "Talk",
+        properties: {
+          interruptOnSpeech: {
+            type: "boolean",
+            title: "Talk Interrupt on Speech",
+            description: "Stop speaking when the user talks over the assistant.",
+          },
+          realtime: {
+            type: "object",
+            title: "Talk Realtime",
+            properties: {
+              provider: {
+                type: "string",
+                title: "Talk Realtime Provider",
+                description: "Active realtime voice provider id, such as openai or google.",
+              },
+              model: {
+                type: "string",
+                title: "Talk Realtime Model",
+                description: "Realtime voice model for browser Talk sessions.",
+              },
+              speakerVoice: {
+                type: "string",
+                title: "Talk Realtime Speaker Voice",
+                description: "Built-in realtime voice id.",
+              },
+            },
+          },
+        },
+      },
       messages: {
         type: "object",
         title: "Messages",
@@ -801,16 +834,33 @@ function buildConfigMocks(options: { swarmEnabled?: boolean } = {}) {
       },
     },
   };
+  const get = {
+    path: "~/.openclaw/openclaw.json",
+    exists: true,
+    raw: `${JSON.stringify(config, null, 2)}\n`,
+    hash: "mock-config-hash",
+    appliedConfigHash: "mock-config-hash",
+    valid: true,
+    config,
+    issues: [],
+  };
+  const writeAck = { ok: true, path: get.path, hash: get.hash, config };
   return {
-    get: {
-      path: "~/.openclaw/openclaw.json",
-      exists: true,
-      raw: `${JSON.stringify(config, null, 2)}\n`,
-      hash: "mock-config-hash",
-      appliedConfigHash: "mock-config-hash",
-      valid: true,
-      config,
-      issues: [],
+    get,
+    set: writeAck,
+    apply: {
+      ...writeAck,
+      sentinel: {
+        persisted: true,
+        payload: {
+          kind: "config-apply",
+          status: "ok",
+          ts: 0,
+          message: null,
+          doctorHint: "openclaw doctor --non-interactive",
+          stats: { mode: "config.apply", root: get.path, requiresRestart: false },
+        },
+      },
     },
     schema: {
       schema,
@@ -819,7 +869,9 @@ function buildConfigMocks(options: { swarmEnabled?: boolean } = {}) {
       uiHints: applySharedChannelFieldHelp(
         applyResolvedConfigTierHints(
           schema,
-          applyConfigTierHints({}, { includePluginOwnedChannels: true }),
+          // Seed with base hints so the mock carries the gateway's labels,
+          // help, and docsUrl metadata instead of bare tier scaffolding.
+          applyConfigTierHints(buildBaseHints(), { includePluginOwnedChannels: true }),
         ),
       ),
       version: "mock-config-schema",
@@ -1430,6 +1482,61 @@ async function createChatPickerScenario(
       ...buildBackgroundTasksMock(baseTime),
       ...cronMocks,
       "users.self": { profile: selfProfile },
+      // Talk settings page pickers: realtime catalog with the model/voice
+      // suggestion lists the gateway emits for provider entries.
+      "talk.catalog": {
+        modes: ["realtime", "stt-tts", "transcription"],
+        transports: ["webrtc", "provider-websocket", "gateway-relay", "managed-room"],
+        brains: ["agent-consult", "direct-tools", "none"],
+        speech: { providers: [] },
+        transcription: { providers: [] },
+        realtime: {
+          ready: true,
+          activeProvider: "openai",
+          providers: [
+            {
+              id: "openai",
+              label: "OpenAI Realtime Voice",
+              configured: true,
+              defaultModel: "gpt-realtime-2.1",
+              transports: ["webrtc", "gateway-relay"],
+              models: [
+                "gpt-realtime-2.1",
+                "gpt-realtime-2.1-mini",
+                "gpt-realtime-2",
+                "gpt-live-1-codex",
+                "gpt-live-1-boulder-alpha",
+              ],
+              voices: [
+                "alloy",
+                "ash",
+                "ballad",
+                "cedar",
+                "coral",
+                "echo",
+                "marin",
+                "sage",
+                "shimmer",
+                "verse",
+              ],
+              modes: ["realtime"],
+              brains: ["agent-consult"],
+              supportsBrowserSession: true,
+            },
+            {
+              id: "xai",
+              label: "xAI Grok Voice",
+              configured: false,
+              defaultModel: "grok-voice-latest",
+              transports: ["gateway-relay"],
+              voices: ["eve", "ara", "rex", "sal", "leo"],
+              modes: ["realtime"],
+              brains: ["agent-consult"],
+              supportsBrowserSession: false,
+            },
+          ],
+        },
+      },
       // Custom session group catalog so the sidebar's category zone (and its
       // drag-reordering against built-in sections) is exercised in the mock.
       "sessions.groups.list": { groups: [{ name: "Research", position: 0 }] },
@@ -1530,6 +1637,8 @@ async function createChatPickerScenario(
       // config.set/config.apply are served statefully by the mock gateway
       // (raw persists, hash advances) because config.get ships a raw fixture.
       "config.get": configMocks.get,
+      "config.set": configMocks.set,
+      "config.apply": configMocks.apply,
       "config.schema": configMocks.schema,
       "openclaw.chat.history": custodianHistory,
       "openclaw.changes.list": custodianChanges,
@@ -2245,6 +2354,7 @@ const server = await createServer({
       commit: "0123456789abcdef0123456789abcdef01234567",
       commitAt: "2026-07-10T11:22:33.000Z",
       builtAt: "2026-07-10T12:34:56.000Z",
+      release: false,
       buildId: "mock",
     }),
   },

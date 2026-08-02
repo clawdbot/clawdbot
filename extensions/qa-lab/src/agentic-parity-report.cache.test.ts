@@ -4,6 +4,7 @@ import {
   buildQaRuntimeParityReport,
   renderQaRuntimeParityMarkdownReport,
 } from "./agentic-parity-report.js";
+import { buildRuntimeParityCacheDiagnostics } from "./runtime-parity-cache-diagnostics.js";
 
 function makeMeasuredRuntimeParitySummary() {
   const summary = makeRuntimeParitySummary();
@@ -18,6 +19,86 @@ function makeMeasuredRuntimeParitySummary() {
 }
 
 describe("qa runtime parity prompt-cache reporting", () => {
+  it("reports the exact turn of a measured cache miss without inventing missing telemetry", () => {
+    const summary = makeMeasuredRuntimeParitySummary();
+    const scenario = summary.scenarios[0];
+    if (!scenario?.runtimeParity) {
+      throw new Error("runtime parity fixture missing");
+    }
+    scenario.runtimeParity.cells.codex.cacheDiagnostics = buildRuntimeParityCacheDiagnostics([
+      {
+        inputTokens: 3,
+        outputTokens: 11,
+        totalTokens: 24_421,
+        cacheRead: 0,
+        cacheWrite: 24_407,
+      },
+      {
+        inputTokens: 24_448,
+        outputTokens: 11,
+        totalTokens: 24_459,
+        cacheRead: 0,
+        cacheWrite: 0,
+      },
+    ]);
+
+    const report = buildQaRuntimeParityReport({ summary });
+
+    expect(report.scenarios[0]?.codexCacheDiagnostics).toMatchObject({
+      cacheMisses: [{ turn: 2, inputTokens: 24_448, cacheRead: 0, cacheWrite: 0 }],
+      cacheMissInputTokens: 24_448,
+    });
+    expect(report.scenarios[0]?.openclawCacheDiagnostics).toBeUndefined();
+    expect(renderQaRuntimeParityMarkdownReport(report)).toContain(
+      "post-warm cache misses: openclaw N/A; codex turn 2 (24448 uncached input)",
+    );
+  });
+
+  it("reports unknown post-warm turns without hiding measured cache misses", () => {
+    const summary = makeMeasuredRuntimeParitySummary();
+    const scenario = summary.scenarios[0];
+    if (!scenario?.runtimeParity) {
+      throw new Error("runtime parity fixture missing");
+    }
+    scenario.runtimeParity.cells.codex.cacheDiagnostics = buildRuntimeParityCacheDiagnostics([
+      { inputTokens: 3, outputTokens: 11, totalTokens: 1_014, cacheRead: 0, cacheWrite: 1_000 },
+      { inputTokens: 1_050, outputTokens: 11, totalTokens: 1_061, cacheRead: 0, cacheWrite: 0 },
+      { inputTokens: 0, outputTokens: 11, totalTokens: 11 },
+    ]);
+
+    const report = buildQaRuntimeParityReport({ summary });
+
+    expect(report.scenarios[0]?.codexCacheDiagnostics).toMatchObject({
+      cacheMisses: [{ turn: 2, inputTokens: 1_050, cacheRead: 0, cacheWrite: 0 }],
+      unmeasuredPostWarmTurns: [3],
+    });
+    expect(renderQaRuntimeParityMarkdownReport(report)).toContain(
+      "post-warm cache misses: openclaw N/A; codex turn 2 (1050 uncached input); unmeasured turns 3",
+    );
+  });
+
+  it("preserves unknown warm turns when no turn has complete cache telemetry", () => {
+    const summary = makeMeasuredRuntimeParitySummary();
+    const scenario = summary.scenarios[0];
+    if (!scenario?.runtimeParity) {
+      throw new Error("runtime parity fixture missing");
+    }
+    scenario.runtimeParity.cells.codex.cacheDiagnostics = buildRuntimeParityCacheDiagnostics([
+      { inputTokens: 3, outputTokens: 11, totalTokens: 1_014, cacheWrite: 1_000 },
+      { inputTokens: 100, outputTokens: 11, totalTokens: 111 },
+    ]);
+
+    const report = buildQaRuntimeParityReport({ summary });
+
+    expect(report.scenarios[0]?.codexCacheDiagnostics).toMatchObject({
+      cacheTelemetryTurns: 0,
+      unmeasuredPostWarmTurns: [2],
+    });
+    expect(renderQaRuntimeParityMarkdownReport(report)).toContain(
+      "post-warm cache misses: openclaw N/A; codex N/A (unmeasured turns 2)",
+    );
+  });
+
   it("reports cached, uncached, and cache-write input without counting output as cacheable", () => {
     const summary = makeMeasuredRuntimeParitySummary();
     const scenario = summary.scenarios[0];

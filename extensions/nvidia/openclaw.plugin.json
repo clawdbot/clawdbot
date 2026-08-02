@@ -86,7 +86,8 @@
               "cacheWrite": 0
             },
             "compat": {
-              "requiresStringContent": true
+              "requiresStringContent": true,
+              "codeMode": "capable"
             }
           },
           {
@@ -145,7 +146,8 @@
               "cacheWrite": 0
             },
             "compat": {
-              "requiresStringContent": true
+              "requiresStringContent": true,
+              "codeMode": "capable"
             }
           },
           {
@@ -206,7 +208,8 @@
               "cacheWrite": 0
             },
             "compat": {
-              "requiresStringContent": true
+              "requiresStringContent": true,
+              "codeMode": "capable"
             },
             "status": "deprecated",
             "statusReason": "Still available by exact reference; use z-ai/glm-5.2 for new NVIDIA setups.",

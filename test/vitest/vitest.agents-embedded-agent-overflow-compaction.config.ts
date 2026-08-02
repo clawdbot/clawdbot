@@ -1,15 +1,16 @@
 // Vitest embedded agent overflow config isolates the expensive harness warmup.
-import { agentsEmbeddedOverflowCompactionTestFiles } from "./vitest.agents-paths.mjs";
+import { agentVitestProjectOwners } from "./vitest.agents-paths.mjs";
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 
 export function createAgentsEmbeddedOverflowCompactionVitestConfig(
   env?: Record<string, string | undefined>,
 ) {
-  return createScopedVitestConfig(agentsEmbeddedOverflowCompactionTestFiles, {
-    dir: "src/agents/embedded-agent-runner",
+  const owner = agentVitestProjectOwners.embeddedOverflowCompaction;
+  return createScopedVitestConfig(owner.include, {
+    dir: owner.dir,
     env,
     fileParallelism: false,
-    name: "agents-embedded-agent-overflow-compaction",
+    name: owner.name,
   });
 }
 

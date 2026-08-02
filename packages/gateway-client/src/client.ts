@@ -37,12 +37,12 @@ import {
 import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
 import {
   GatewayProtocolClient,
-  GatewayProtocolRequestError,
   type GatewayProtocolCloseContext,
   type GatewayProtocolRequestOptions,
   type GatewayProtocolSocket,
   type GatewayProtocolSocketHandlers,
 } from "./protocol-client.js";
+import { GatewayProtocolRequestError } from "./protocol-request.js";
 import { shouldPauseGatewayReconnect } from "./reconnect-policy.js";
 import {
   DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
@@ -248,6 +248,20 @@ export class GatewayClientRequestError extends GatewayProtocolRequestError {
   }
 }
 
+export class GatewayClientRequestTimeoutError extends Error {
+  readonly method: string;
+  readonly timeoutMs: number;
+  readonly requestSent: boolean;
+
+  constructor(params: { method: string; timeoutMs: number; requestSent: boolean }) {
+    super(`gateway request timeout for ${params.method}`);
+    this.name = "GatewayClientRequestTimeoutError";
+    this.method = params.method;
+    this.timeoutMs = params.timeoutMs;
+    this.requestSent = params.requestSent;
+  }
+}
+
 class GatewayClientTransientPreHelloCloseError extends Error {
   constructor() {
     super("gateway transient pre-hello clean close");
@@ -255,7 +269,9 @@ class GatewayClientTransientPreHelloCloseError extends Error {
   }
 }
 
-class GatewayClientTransportPolicyError extends Error {}
+class GatewayClientSocketFactoryConfigurationError extends Error {}
+
+class GatewayClientTransportPolicyError extends GatewayClientSocketFactoryConfigurationError {}
 
 const GATEWAY_CONNECT_ASSEMBLY_ERROR = Symbol("gateway.connectAssemblyError");
 
@@ -400,13 +416,21 @@ export class GatewayClient {
       createSocket: (handlers) => this.createSocket(handlers),
       createRequestId: randomUUID,
       createRequestError: (error) => new GatewayClientRequestError(error),
-      createRequestTimeoutError: (method) => new Error(`gateway request timeout for ${method}`),
+      createRequestTimeoutError: (method, timeoutMs, requestSent) =>
+        new GatewayClientRequestTimeoutError({ method, timeoutMs, requestSent }),
       createRequestAbortError: createGatewayRequestAbortError,
-      buildConnectPlan: ({ nonce }) => {
+      buildConnectPlan: ({ nonce, challengeTs }) => {
         if (!nonce) {
           throw new Error("gateway connect challenge missing nonce");
         }
-        return this.assembleConnectParams({ role: this.opts.role ?? "operator", nonce });
+        if (this.opts.deviceIdentity && challengeTs == null) {
+          throw new Error("gateway connect challenge timestamp invalid");
+        }
+        return this.assembleConnectParams({
+          role: this.opts.role ?? "operator",
+          nonce,
+          signedAtMs: challengeTs ?? Date.now(),
+        });
       },
       buildConnectParams: (assembled) => assembled.params,
       onConnectPlanError: (error) => {
@@ -454,6 +478,11 @@ export class GatewayClient {
       },
       reconnect: { initialMs: 1_000, multiplier: 2, maxMs: 30_000 },
       requestTimeoutMs: this.requestTimeoutMs,
+      shouldRetrySocketFactoryError: (error) =>
+        !(error instanceof GatewayClientSocketFactoryConfigurationError) &&
+        !(error instanceof SyntaxError) &&
+        !(error instanceof TypeError) &&
+        !(error instanceof RangeError),
       rethrowSocketFactoryError: (error) => error instanceof GatewayClientTransportPolicyError,
     });
   }
@@ -490,7 +519,9 @@ export class GatewayClient {
   private createSocket(handlers: GatewayProtocolSocketHandlers): GatewayProtocolSocket {
     const url = this.opts.url ?? DEFAULT_GATEWAY_CLIENT_URL;
     if (this.opts.tlsFingerprint && !url.startsWith("wss://")) {
-      throw new Error("gateway tls fingerprint requires wss:// gateway url");
+      throw new GatewayClientSocketFactoryConfigurationError(
+        "gateway tls fingerprint requires wss:// gateway url",
+      );
     }
 
     const allowPrivateWs =
@@ -505,7 +536,7 @@ export class GatewayClient {
       } catch {
         // Use raw URL if parsing fails
       }
-      throw new Error(
+      throw new GatewayClientSocketFactoryConfigurationError(
         `SECURITY ERROR: Cannot connect to "${displayHost}" over plaintext ws://. ` +
           "Both credentials and chat data would be exposed to network interception. " +
           "Use wss:// for remote URLs. Safe defaults: keep gateway.bind=loopback and connect via SSH tunnel " +
@@ -706,8 +737,12 @@ export class GatewayClient {
     this.deps.logError(this.deps.redactForLog(message));
   }
 
-  private assembleConnectParams(params: { role: string; nonce: string }): AssembledConnect {
-    const { role, nonce } = params;
+  private assembleConnectParams(params: {
+    role: string;
+    nonce: string;
+    signedAtMs: number;
+  }): AssembledConnect {
+    const { role, nonce, signedAtMs } = params;
     // Auth selection is intentionally centralized: retry decisions depend on
     // whether a token was explicit, cached, or compatibility-derived.
     const selectedAuth = this.selectConnectAuth(role);
@@ -727,7 +762,6 @@ export class GatewayClient {
     }
 
     const auth = buildGatewayConnectAuth(selectedAuth);
-    const signedAtMs = Date.now();
     const scopes = resolveGatewayConnectScopes({
       requestedScopes: this.opts.scopes,
       usingStoredDeviceToken,
