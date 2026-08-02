@@ -2904,6 +2904,74 @@ describe("capability cli", () => {
     expectRuntimeErrorContains("--output is not supported for remote gateway TTS yet");
   });
 
+  it.each(["local", "gateway"] as const)(
+    "preserves an existing %s TTS --output when the final copy fails",
+    async (transport) => {
+      const tempDir = tempDirs.make(`openclaw-tts-${transport}-copy-fail-`);
+      const sourcePath = path.join(tempDir, "source.mp3");
+      const outputDir = path.join(tempDir, "output");
+      const outputPath = path.join(outputDir, "speech.mp3");
+      await fs.mkdir(outputDir);
+      await fs.writeFile(sourcePath, Buffer.alloc(2_048, 0x41));
+      await fs.writeFile(outputPath, "existing-speech");
+      await fs.chmod(outputPath, 0o640);
+
+      if (transport === "gateway") {
+        mocks.callGateway.mockResolvedValueOnce({
+          audioPath: sourcePath,
+          provider: "openai",
+          outputFormat: "mp3",
+          voiceCompatible: false,
+        } as never);
+      } else {
+        mocks.textToSpeech.mockResolvedValueOnce({
+          success: true,
+          audioPath: sourcePath,
+          provider: "openai",
+          outputFormat: "mp3",
+          voiceCompatible: false,
+          attempts: [],
+        });
+      }
+
+      const copyFile = fs.copyFile.bind(fs);
+      const copyFileSpy = vi.spyOn(fs, "copyFile").mockImplementation(async (...args) => {
+        const [source, destination] = args;
+        if (typeof destination === "string" && path.dirname(destination) === outputDir) {
+          const bytes = await fs.readFile(source);
+          await fs.writeFile(destination, bytes.subarray(0, 17));
+          throw new Error("injected TTS copy failure");
+        }
+        await copyFile(...args);
+      });
+
+      try {
+        await expect(
+          runCapability(
+            "tts",
+            "convert",
+            `--${transport}`,
+            "--text",
+            "hello",
+            "--output",
+            outputPath,
+            "--json",
+          ),
+        ).rejects.toThrow("exit 1");
+
+        expectRuntimeErrorContains("injected TTS copy failure");
+        expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+        expect(await fs.readFile(outputPath, "utf8")).toBe("existing-speech");
+        if (process.platform !== "win32") {
+          expect((await fs.stat(outputPath)).mode & 0o777).toBe(0o640);
+        }
+        expect(await fs.readdir(outputDir)).toEqual(["speech.mp3"]);
+      } finally {
+        copyFileSpy.mockRestore();
+      }
+    },
+  );
+
   it("uses only embedding providers for embedding creation", async () => {
     await runCapability("embedding", "create", "--text", "hello", "--json");
 
