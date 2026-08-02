@@ -506,12 +506,31 @@ export async function prepareFormattedSystemEvents(params: {
       stateDir?: string;
     }
   >();
+  // Events that opted into adoption-scoped settlement are NOT acked here:
+  // prompt preparation is not adoption, and a crash or admission failure after
+  // this point would otherwise complete the durable row with nothing delivered.
+  // They ride out as managed deliveries and are acknowledged by
+  // settleManagedSystemEventsAfterTurnAdoption once the turn is durably adopted.
+  const adoptionScopedDeliveries: PreparedManagedSystemEventDelivery[] = [];
+  const seenAdoptionScopedIds = new Set<string>();
   for (const event of selected.filter((entry) => !entry.delegateArtifactReceipt)) {
     const id = normalizeOptionalString(event.sessionDeliveryAckId);
     if (!id) {
       continue;
     }
     const stateDir = normalizeOptionalString(event.sessionDeliveryAckStateDir);
+    if (event.sessionDeliveryAwaitsTurnAdoption) {
+      if (!seenAdoptionScopedIds.has(id)) {
+        seenAdoptionScopedIds.add(id);
+        adoptionScopedDeliveries.push({
+          id,
+          acknowledge: async () => {
+            await ackSessionDelivery(id, stateDir);
+          },
+        });
+      }
+      continue;
+    }
     const dedupeKey = `${id}\u0000${stateDir ?? ""}`;
     sessionDeliveryAcks.set(dedupeKey, {
       id,
@@ -581,10 +600,13 @@ export async function prepareFormattedSystemEvents(params: {
   }
   return {
     blocks,
-    managedDeliveries: pendingManagedSettlements.map((settlement) => ({
-      id: settlement.id,
-      acknowledge: () => settleManagedDelivery(params.sessionKey, settlement),
-    })),
+    managedDeliveries: [
+      ...pendingManagedSettlements.map((settlement) => ({
+        id: settlement.id,
+        acknowledge: () => settleManagedDelivery(params.sessionKey, settlement),
+      })),
+      ...adoptionScopedDeliveries,
+    ],
   };
 }
 

@@ -22,7 +22,7 @@ import {
   reconcileUndeliverableGrantedWork,
   requeuePendingWork,
 } from "./work-store.js";
-import { deliverPendingTerminalNotice } from "./work-terminal-notice.js";
+import { deliverPendingTerminalNoticeWithRetry } from "./work-terminal-notice.js";
 
 const log = createSubsystemLogger("continuation/work-dispatch");
 const TRANSIENT_ERROR_RETRY_MS = 5_000;
@@ -606,12 +606,9 @@ export async function executePendingContinuationWork(
         `[continuation:work-drive-error-exhausted] flowId=${work.flowId ?? "none"} session=${work.sessionKey} hop=${work.hop} attempts=${retryCount} maxRetries=${MAX_TRANSIENT_ERROR_RETRY_COUNT} error=${message}`,
       );
       // Hand the persisted obligation to the durable delivery queue. A failure
-      // here leaves the flag set for the startup drain to replay.
-      await deliverPendingTerminalNotice(work).catch((deliveryErr: unknown) => {
-        log.error(
-          `[continuation:work-terminal-notice-error] flowId=${work.flowId ?? "none"} session=${work.sessionKey} error=${formatErrorMessage(deliveryErr)}`,
-        );
-      });
+      // arms a bounded live retry and leaves the flag set, so the outcome never
+      // depends on unrelated traffic or another restart.
+      await deliverPendingTerminalNoticeWithRetry(work);
     }
     return { kind: "failed" };
   }

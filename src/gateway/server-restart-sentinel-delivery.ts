@@ -56,10 +56,14 @@ function enqueueRestartSentinelWake(
   delegateArtifactReceipt?: NonNullable<
     Extract<QueuedSessionDelivery, { kind: "systemEvent" }>["managedDelegateArtifactDelivery"]
   >["receipt"],
+  awaitsTurnAdoption?: boolean,
 ) {
   enqueueSystemEvent(message, {
     sessionKey,
     trusted: true,
+    // The durable row owns this contract; a replayed event must carry it too, or
+    // the re-created in-memory copy would be acked at prompt preparation.
+    ...(awaitsTurnAdoption ? { sessionDeliveryAwaitsTurnAdoption: true } : {}),
     ...(deliveryContext ? { deliveryContext } : {}),
     ...(traceparent ? { traceparent } : {}),
     ...(sessionDeliveryAckId ? { sessionDeliveryAckId } : {}),
@@ -246,6 +250,7 @@ export async function deliverQueuedSessionDelivery(params: {
       params.stateDir,
       params.entry.expectedSessionId,
       params.entry.managedDelegateArtifactDelivery?.receipt,
+      params.entry.awaitPromptAdoption,
     );
     if (managedDelivery) {
       // In-memory enqueue only makes the prompt eligible. The durable queue row

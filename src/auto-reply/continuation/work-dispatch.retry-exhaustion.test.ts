@@ -272,6 +272,13 @@ vi.mock("../../infra/session-delivery-queue-runtime.js", () => ({
 }));
 
 vi.mock("../../infra/session-delivery-queue-storage.js", () => ({
+  enqueueSessionDeliveryWithStatus: (payload: { idempotencyKey?: string }) => {
+    sessionDeliveryEnqueues.push(payload);
+    return Promise.resolve({
+      id: `delivery-${payload.idempotencyKey ?? sessionDeliveryEnqueues.length}`,
+      status: "pending" as const,
+    });
+  },
   enqueueSessionDelivery: (payload: { idempotencyKey?: string }) => {
     sessionDeliveryEnqueues.push(payload);
     return Promise.resolve(`delivery-${payload.idempotencyKey ?? sessionDeliveryEnqueues.length}`);

@@ -30,7 +30,7 @@ import {
   requestHeartbeatNow,
 } from "../../infra/heartbeat-wake.js";
 import { scheduleSessionDelivery } from "../../infra/session-delivery-queue-runtime.js";
-import { enqueueSessionDelivery } from "../../infra/session-delivery-queue-storage.js";
+import { enqueueSessionDeliveryWithStatus } from "../../infra/session-delivery-queue-storage.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PendingContinuationWork } from "./work-flow-state.js";
@@ -56,7 +56,7 @@ export function continuationWorkTerminalNoticeIdempotencyKey(flowId: string): st
 }
 
 export type ContinuationWorkTerminalNoticeDeps = {
-  enqueueSessionDelivery: typeof enqueueSessionDelivery;
+  enqueueSessionDeliveryWithStatus: typeof enqueueSessionDeliveryWithStatus;
   scheduleSessionDelivery: typeof scheduleSessionDelivery;
   enqueueSystemEvent: typeof enqueueSystemEvent;
   requestHeartbeatNow: typeof requestHeartbeatNow;
@@ -64,7 +64,7 @@ export type ContinuationWorkTerminalNoticeDeps = {
 };
 
 const defaultDeps: ContinuationWorkTerminalNoticeDeps = {
-  enqueueSessionDelivery,
+  enqueueSessionDeliveryWithStatus,
   scheduleSessionDelivery,
   enqueueSystemEvent,
   requestHeartbeatNow,
@@ -90,7 +90,7 @@ export async function deliverPendingTerminalNotice(
   if (!pending) {
     return false;
   }
-  const deliveryId = await deps.enqueueSessionDelivery(
+  const enqueued = await deps.enqueueSessionDeliveryWithStatus(
     {
       kind: "systemEvent",
       sessionKey: pending.sessionKey,
@@ -109,16 +109,29 @@ export async function deliverPendingTerminalNotice(
     // alone; a completed tombstone already makes re-enqueue a no-op.
     return false;
   }
+  if (enqueued.status === "completed") {
+    // A tombstone already settled this key: the outcome was delivered and
+    // adopted on an earlier pass, and the durable enqueue above was a no-op.
+    // Releasing the stale flag is the whole job — emitting another in-memory
+    // event or wake here would surface a second copy of a settled outcome.
+    log.info(
+      `[continuation:work-terminal-notice-already-settled] flowId=${work.flowId} session=${pending.sessionKey} deliveryId=${enqueued.id}`,
+    );
+    return false;
+  }
   deps.enqueueSystemEvent(CONTINUATION_WORK_RETRY_EXHAUSTED_NOTICE, {
     sessionKey: pending.sessionKey,
     trusted: true,
-    sessionDeliveryAckId: deliveryId,
+    sessionDeliveryAckId: enqueued.id,
+    // Prompt preparation is not adoption. Settle only once the prepared turn is
+    // durably adopted, so an admission failure or crash replays the notice.
+    sessionDeliveryAwaitsTurnAdoption: true,
     ...(deps.stateDir ? { sessionDeliveryAckStateDir: deps.stateDir } : {}),
   });
   // Startup scans the delivery queue before continuation recovery runs, so a
   // row created here would otherwise carry no timer and wait for unrelated
   // traffic. Arm it explicitly and wake the target.
-  await deps.scheduleSessionDelivery(deliveryId);
+  await deps.scheduleSessionDelivery(enqueued.id);
   deps.requestHeartbeatNow(
     markTrustedContinuationHeartbeatWake({
       sessionKey: pending.sessionKey,
@@ -128,9 +141,82 @@ export async function deliverPendingTerminalNotice(
     }),
   );
   log.info(
-    `[continuation:work-terminal-notice-handed-off] flowId=${work.flowId} session=${pending.sessionKey} deliveryId=${deliveryId}`,
+    `[continuation:work-terminal-notice-handed-off] flowId=${work.flowId} session=${pending.sessionKey} deliveryId=${enqueued.id}`,
   );
   return true;
+}
+
+/** Hard bound on live retries of a failed durable handoff. */
+export const TERMINAL_NOTICE_RETRY_DELAYS_MS = [1_000, 5_000, 15_000, 60_000] as const;
+
+const retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+/** Test-only: cancel armed retry timers. */
+export function resetTerminalNoticeRetriesForTests(): void {
+  for (const timer of retryTimers.values()) {
+    clearTimeout(timer);
+  }
+  retryTimers.clear();
+}
+
+/**
+ * Arm a bounded live retry for a handoff that failed before reaching the queue.
+ *
+ * A flag-only obligation is invisible to the delivery scheduler (it has no row
+ * yet), so without this it would wait for the next gateway restart. Retries are
+ * hard-capped; the durable flag is never cleared by a failure, so a restart
+ * remains the final backstop.
+ */
+function armTerminalNoticeRetry(
+  work: PendingContinuationWork,
+  attempt: number,
+  deps: ContinuationWorkTerminalNoticeDeps,
+): void {
+  const flowId = work.flowId;
+  const delayMs = TERMINAL_NOTICE_RETRY_DELAYS_MS[attempt];
+  if (!flowId || delayMs === undefined || retryTimers.has(flowId)) {
+    return;
+  }
+  const timer = setTimeout(() => {
+    retryTimers.delete(flowId);
+    void (async () => {
+      const owed = readPendingTerminalNoticeWork(flowId);
+      if (!owed) {
+        return;
+      }
+      try {
+        await deliverPendingTerminalNotice(owed, deps);
+      } catch (err) {
+        log.error(
+          `[continuation:work-terminal-notice-retry-error] flowId=${flowId} attempt=${attempt + 1}/${TERMINAL_NOTICE_RETRY_DELAYS_MS.length} error=${err instanceof Error ? err.message : String(err)}`,
+        );
+        armTerminalNoticeRetry(owed, attempt + 1, deps);
+      }
+    })();
+  }, delayMs);
+  timer.unref?.();
+  retryTimers.set(flowId, timer);
+}
+
+/**
+ * Hand off one notice, arming a bounded live retry if the durable enqueue fails.
+ *
+ * The flag survives every failure, so the obligation is never lost; the retry
+ * only removes the dependency on an unrelated restart.
+ */
+export async function deliverPendingTerminalNoticeWithRetry(
+  work: PendingContinuationWork,
+  deps: ContinuationWorkTerminalNoticeDeps = defaultDeps,
+): Promise<boolean> {
+  try {
+    return await deliverPendingTerminalNotice(work, deps);
+  } catch (err) {
+    log.error(
+      `[continuation:work-terminal-notice-error] flowId=${work.flowId ?? "none"} session=${work.sessionKey} error=${err instanceof Error ? err.message : String(err)}`,
+    );
+    armTerminalNoticeRetry(work, 0, deps);
+    return false;
+  }
 }
 
 /**
@@ -143,7 +229,7 @@ export async function drainPendingTerminalNotices(
   let delivered = 0;
   for (const work of listPendingTerminalNoticeWork()) {
     try {
-      if (await deliverPendingTerminalNotice(work, deps)) {
+      if (await deliverPendingTerminalNoticeWithRetry(work, deps)) {
         delivered += 1;
       }
     } catch (err) {

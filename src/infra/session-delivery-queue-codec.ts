@@ -100,6 +100,8 @@ type QueuedSessionDeliveryGenericPayload =
       managedDelegateArtifactDelivery: ManagedDelegateArtifactDelivery;
       deliveryContext?: SessionDeliveryContext;
       idempotencyKey?: string;
+      /** Always implied for managed rows; declared so the union stays readable. */
+      awaitPromptAdoption?: boolean;
     } & QueuedSessionDeliveryPayloadMetadata)
   | ({
       kind: "agentTurn";
@@ -326,6 +328,7 @@ const QueuedManagedSystemEventSchema = z
       .strict(),
     deliveryContext: QueuedGenericDeliveryContextSchema.optional(),
     idempotencyKey: z.string().optional(),
+    awaitPromptAdoption: z.boolean().optional(),
   })
   .strict()
   .superRefine((entry, ctx) => {

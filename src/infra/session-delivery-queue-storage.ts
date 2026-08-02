@@ -232,6 +232,28 @@ export async function enqueueSessionDelivery(
   params: QueuedSessionDeliveryPayload,
   stateDir?: string,
 ): Promise<string> {
+  return (await enqueueSessionDeliveryWithStatus(params, stateDir)).id;
+}
+
+/**
+ * Enqueue outcome for callers that must distinguish "this row is now mine to
+ * drive" from "a completed tombstone already settled this idempotency key".
+ *
+ * `enqueueSessionDelivery` only returns the deterministic id, so a caller that
+ * also owns an in-memory fast path cannot tell whether it created work or hit a
+ * tombstone — and would emit a duplicate notice for an outcome already
+ * delivered.
+ */
+export type SessionDeliveryEnqueueResult = {
+  id: string;
+  /** `completed` means a tombstone settled this key; no new work was created. */
+  status: "pending" | "completed" | "unknown";
+};
+
+export async function enqueueSessionDeliveryWithStatus(
+  params: QueuedSessionDeliveryPayload,
+  stateDir?: string,
+): Promise<SessionDeliveryEnqueueResult> {
   const payload = normalizeQueuedSessionDeliveryTraceparent(params);
   const id = buildEntryId(payload.idempotencyKey);
 
@@ -249,7 +271,16 @@ export async function enqueueSessionDelivery(
       ? { insertOnly: true }
       : { reviveFailedOrCorruptPending: Boolean(params.idempotencyKey) }),
   });
-  return id;
+  // The upsert deliberately never replaces valid pending/completed ownership,
+  // so read back the authoritative row state rather than assuming insertion.
+  let status: SessionDeliveryEnqueueResult["status"];
+  try {
+    const current = getDeliveryQueueEntryStatus(QUEUE_NAME, id, stateDir);
+    status = current === "completed" ? "completed" : current === "pending" ? "pending" : "unknown";
+  } catch {
+    status = "unknown";
+  }
+  return { id, status };
 }
 
 /** Enqueue a post-compaction delegate through the shared durable queue. */

@@ -25,6 +25,13 @@ export type SystemEvent = {
   deliveryContext?: DeliveryContext;
   sessionDeliveryAckId?: string;
   sessionDeliveryAckStateDir?: string;
+  /**
+   * Acknowledge the durable row only once the prepared turn is durably adopted,
+   * instead of during prompt preparation. Mirrors the managed delegate-return
+   * contract for events whose producer cannot reconstruct the notice after the
+   * durable row is gone.
+   */
+  sessionDeliveryAwaitsTurnAdoption?: boolean;
   expectedSessionId?: string;
   delegateArtifactReceipt?: DelegateArtifactDeliveryReceipt;
   /**
@@ -56,6 +63,8 @@ type SystemEventOptions = {
   deliveryContext?: DeliveryContext;
   sessionDeliveryAckId?: string;
   sessionDeliveryAckStateDir?: string;
+  /** Defer the durable ack to turn adoption; see the SystemEvent field. */
+  sessionDeliveryAwaitsTurnAdoption?: boolean;
   expectedSessionId?: string;
   delegateArtifactReceipt?: DelegateArtifactDeliveryReceipt;
   /**
@@ -188,6 +197,9 @@ export function enqueueSystemEventEntry(
     ...(options.sessionDeliveryAckId ? { sessionDeliveryAckId: options.sessionDeliveryAckId } : {}),
     ...(options.sessionDeliveryAckStateDir
       ? { sessionDeliveryAckStateDir: options.sessionDeliveryAckStateDir }
+      : {}),
+    ...(options.trusted === true && options.sessionDeliveryAwaitsTurnAdoption
+      ? { sessionDeliveryAwaitsTurnAdoption: true }
       : {}),
     ...(options.trusted === true && options.expectedSessionId
       ? { expectedSessionId: options.expectedSessionId }

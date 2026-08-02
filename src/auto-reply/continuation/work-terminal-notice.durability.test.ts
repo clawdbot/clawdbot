@@ -11,8 +11,7 @@ import { deliverQueuedSessionDelivery } from "../../gateway/server-restart-senti
 import { requestHeartbeatNow } from "../../infra/heartbeat-wake.js";
 import { scheduleSessionDelivery } from "../../infra/session-delivery-queue-runtime.js";
 import {
-  ackSessionDelivery,
-  enqueueSessionDelivery,
+  enqueueSessionDeliveryWithStatus,
   loadPendingSessionDeliveries,
 } from "../../infra/session-delivery-queue-storage.js";
 import { recoverPendingSessionDeliveries } from "../../infra/session-delivery-queue.js";
@@ -21,9 +20,18 @@ import {
   enqueueSystemEvent,
   peekSystemEvents,
 } from "../../infra/system-events.js";
-import { reloadTaskFlowRegistryFromStore } from "../../tasks/task-flow-registry.js";
+import {
+  listTaskFlowRecords,
+  reloadTaskFlowRegistryFromStore,
+  updateFlowRecordByIdExpectedRevision,
+} from "../../tasks/task-flow-registry.js";
 import { resetTaskFlowRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  prepareFormattedSystemEvents,
+  settleManagedSystemEventsAfterTurnAdoption,
+} from "../reply/session-system-events.js";
+import { CONTINUATION_WORK_CONTROLLER_ID } from "./work-flow-state.js";
 import {
   enqueuePendingWork,
   listPendingTerminalNoticeWork,
@@ -32,7 +40,10 @@ import {
 import {
   CONTINUATION_WORK_RETRY_EXHAUSTED_NOTICE,
   deliverPendingTerminalNotice,
+  deliverPendingTerminalNoticeWithRetry,
   drainPendingTerminalNotices,
+  resetTerminalNoticeRetriesForTests,
+  TERMINAL_NOTICE_RETRY_DELAYS_MS,
 } from "./work-terminal-notice.js";
 
 const SESSION_KEY = "agent:main:terminal-notice-durability";
@@ -45,12 +56,42 @@ const RAW_DRIVER_ERROR =
  */
 function realDeps(stateDir: string) {
   return {
-    enqueueSessionDelivery,
+    enqueueSessionDeliveryWithStatus,
     scheduleSessionDelivery,
     enqueueSystemEvent,
     requestHeartbeatNow,
     stateDir,
   };
+}
+
+/**
+ * Run the REAL prompt preparation, then the REAL adoption settlement, exactly
+ * as get-reply-run-admission + get-reply-run-execute compose them: preparation
+ * hands back managed deliveries, the recorder stamps the adopted ack ids onto
+ * the persisted user turn, and settlement acks only what that turn adopted.
+ */
+async function preparePrompt(stateDir: string) {
+  return await prepareFormattedSystemEvents({
+    cfg: { session: { store: stateDir } } as never,
+    sessionKey: SESSION_KEY,
+    isMainSession: true,
+    isNewSession: false,
+  });
+}
+
+async function adoptPreparedTurn(
+  prepared: Awaited<ReturnType<typeof preparePrompt>>,
+): Promise<void> {
+  // The persisted user turn records which delivery ids it adopted; settlement
+  // acks exactly those and nothing else.
+  await settleManagedSystemEventsAfterTurnAdoption({
+    deliveries: prepared.managedDeliveries,
+    persistedMessage: {
+      __openclaw: {
+        sessionDeliveryAckIds: prepared.managedDeliveries.map((delivery) => delivery.id),
+      },
+    },
+  });
 }
 
 async function withDurableState<T>(run: (stateDir: string) => Promise<T>): Promise<T> {
@@ -89,6 +130,28 @@ function terminalizeWithPendingNotice(): void {
   });
   if (!failed) {
     throw new Error("expected terminal CAS to commit");
+  }
+}
+
+/**
+ * Re-arm the durable obligation on an already-terminal row, simulating a stale
+ * flag observed after the delivery row was settled.
+ */
+function restorePendingNoticeFlag(): void {
+  const flow = listTaskFlowRecords().find(
+    (record) => record.controllerId === CONTINUATION_WORK_CONTROLLER_ID,
+  );
+  if (!flow) {
+    throw new Error("expected a continuation work flow");
+  }
+  const state = flow.stateJson as Record<string, unknown>;
+  const updated = updateFlowRecordByIdExpectedRevision({
+    flowId: flow.flowId,
+    expectedRevision: flow.revision,
+    patch: { stateJson: { ...state, terminalNoticePending: "retry-exhausted" } },
+  });
+  if (!updated.applied) {
+    throw new Error("expected stale-flag restore to commit");
   }
 }
 
@@ -163,16 +226,49 @@ describe("continuation_work terminal notice durability", () => {
     });
   });
 
-  it("completes the durable row only after prompt adoption acknowledges it, then stops replaying", async () => {
+  it("keeps the durable row pending through REAL prompt preparation until the turn is adopted", async () => {
     await withDurableState(async (stateDir) => {
       terminalizeWithPendingNotice();
       await drainPendingTerminalNotices(realDeps(stateDir));
-      const [queued] = await loadPendingSessionDeliveries(stateDir);
-      const deliveryId = queued?.id;
-      expect(deliveryId).toBeDefined();
+      simulateGatewayRestart();
+      await runProductionDeliveryRecovery(stateDir);
 
-      // The prompt path acks by delivery id once the event is actually adopted.
-      await ackSessionDelivery(deliveryId as string, stateDir);
+      // Real prompt preparation surfaces the notice to the model AND hands back
+      // an adoption-scoped delivery instead of acking during preparation.
+      const prepared = await preparePrompt(stateDir);
+      expect(
+        prepared.blocks.some((block) => block.text.includes("continue_work permanently failed")),
+      ).toBe(true);
+      expect(prepared.managedDeliveries.map((delivery) => delivery.id)).toEqual([
+        (await loadPendingSessionDeliveries(stateDir))[0]?.id,
+      ]);
+      // Preparation must NOT have completed the durable row.
+      expect(await pendingDeliveryTexts(stateDir)).toEqual([
+        CONTINUATION_WORK_RETRY_EXHAUSTED_NOTICE,
+      ]);
+
+      // Admission fails / process dies after preparation but before adoption.
+      simulateGatewayRestart();
+      await runProductionDeliveryRecovery(stateDir);
+      expect(peekSystemEvents(SESSION_KEY)).toEqual([CONTINUATION_WORK_RETRY_EXHAUSTED_NOTICE]);
+      expect(await pendingDeliveryTexts(stateDir)).toEqual([
+        CONTINUATION_WORK_RETRY_EXHAUSTED_NOTICE,
+      ]);
+    });
+  });
+
+  it("completes the durable row only once a prepared turn is durably adopted, then stops replaying", async () => {
+    await withDurableState(async (stateDir) => {
+      terminalizeWithPendingNotice();
+      await drainPendingTerminalNotices(realDeps(stateDir));
+      simulateGatewayRestart();
+      await runProductionDeliveryRecovery(stateDir);
+
+      const prepared = await preparePrompt(stateDir);
+      expect(prepared.managedDeliveries).toHaveLength(1);
+      await adoptPreparedTurn(prepared);
+
+      // Adoption is what settles the row.
       expect(await loadPendingSessionDeliveries(stateDir)).toEqual([]);
 
       // After adoption, restart + recovery must produce NO further outcome, and
@@ -183,6 +279,87 @@ describe("continuation_work terminal notice durability", () => {
 
       expect(await drainPendingTerminalNotices(realDeps(stateDir))).toBe(0);
       expect(await loadPendingSessionDeliveries(stateDir)).toEqual([]);
+    });
+  });
+
+  it("clears a stale work flag against a completed tombstone without a second event or wake", async () => {
+    await withDurableState(async (stateDir) => {
+      terminalizeWithPendingNotice();
+      await drainPendingTerminalNotices(realDeps(stateDir));
+      simulateGatewayRestart();
+      await runProductionDeliveryRecovery(stateDir);
+      await adoptPreparedTurn(await preparePrompt(stateDir));
+      expect(await loadPendingSessionDeliveries(stateDir)).toEqual([]);
+
+      // A stale obligation is observed after the row was already settled.
+      restorePendingNoticeFlag();
+      simulateGatewayRestart();
+      expect(listPendingTerminalNoticeWork()).toHaveLength(1);
+
+      const scheduled: string[] = [];
+      const wakes: unknown[] = [];
+      const handed = await drainPendingTerminalNotices({
+        ...realDeps(stateDir),
+        scheduleSessionDelivery: async (id: string) => {
+          scheduled.push(id);
+          return true;
+        },
+        requestHeartbeatNow: (() => {
+          wakes.push(true);
+        }) as typeof requestHeartbeatNow,
+      });
+
+      // The tombstone settled this key: release the flag, surface nothing.
+      expect(handed).toBe(0);
+      expect(listPendingTerminalNoticeWork()).toEqual([]);
+      expect(peekSystemEvents(SESSION_KEY)).toEqual([]);
+      expect(scheduled).toEqual([]);
+      expect(wakes).toEqual([]);
+      expect(await loadPendingSessionDeliveries(stateDir)).toEqual([]);
+    });
+  });
+
+  it("retries a transiently failed durable handoff without waiting for a restart", async () => {
+    await withDurableState(async (stateDir) => {
+      vi.useFakeTimers();
+      try {
+        terminalizeWithPendingNotice();
+        const [owed] = listPendingTerminalNoticeWork();
+        if (!owed) {
+          throw new Error("expected a pending terminal notice");
+        }
+
+        let attempts = 0;
+        const deps = {
+          ...realDeps(stateDir),
+          enqueueSessionDeliveryWithStatus: (async (payload, dir) => {
+            attempts += 1;
+            if (attempts === 1) {
+              throw new Error("transient sqlite failure");
+            }
+            return await enqueueSessionDeliveryWithStatus(payload, dir);
+          }) as typeof enqueueSessionDeliveryWithStatus,
+        };
+
+        // First handoff fails; the flag must survive and a live retry arm.
+        expect(await deliverPendingTerminalNoticeWithRetry(owed, deps)).toBe(false);
+        expect(listPendingTerminalNoticeWork()).toHaveLength(1);
+        expect(await loadPendingSessionDeliveries(stateDir)).toEqual([]);
+
+        // No gateway restart: the armed retry completes the handoff.
+        await vi.advanceTimersByTimeAsync(TERMINAL_NOTICE_RETRY_DELAYS_MS[0]);
+        await vi.waitFor(async () => {
+          expect(await loadPendingSessionDeliveries(stateDir)).toHaveLength(1);
+        });
+        expect(attempts).toBe(2);
+        expect(listPendingTerminalNoticeWork()).toEqual([]);
+        expect(await pendingDeliveryTexts(stateDir)).toEqual([
+          CONTINUATION_WORK_RETRY_EXHAUSTED_NOTICE,
+        ]);
+      } finally {
+        resetTerminalNoticeRetriesForTests();
+        vi.useRealTimers();
+      }
     });
   });
 
