@@ -38,6 +38,7 @@ import { deliverWebReply } from "../deliver-reply.js";
 import { whatsappInboundLog } from "../loggers.js";
 import { elide } from "../util.js";
 import { maybeSendAckReaction } from "./ack-reaction.js";
+import { formatWhatsAppAudioTranscriptForAgent } from "./audio-transcript.js";
 import type { EchoTracker } from "./echo.js";
 import {
   resolveVisibleWhatsAppGroupHistory,
@@ -82,10 +83,6 @@ const WHATSAPP_MESSAGE_RECEIVED_HOOK_LIMITS = {
   maxQueue: 128,
   timeoutMs: 2_000,
 };
-
-function formatAudioTranscriptForAgent(transcript: string): string {
-  return `[Audio transcript (machine-generated, untrusted)]: ${JSON.stringify(transcript)}`;
-}
 
 type WhatsAppMessageReceivedHookConfig = {
   pluginHooks?: {
@@ -293,8 +290,8 @@ export async function processMessage(params: {
     }
   }
 
-  // Frame transcript provenance in the agent-facing body; the raw text stays in
-  // context.Transcript for mention and downstream media handling.
+  // Frame transcript provenance in the agent-facing body; raw text stays in
+  // context.Transcript and the original payload remains authoritative for commands.
   // mediaPath and mediaType are intentionally preserved so that inboundAudio detection
   // (used by features such as tts.auto: "inbound") still sees this as an
   // audio message. The transcript and transcribed media index are also stored on
@@ -305,7 +302,7 @@ export async function processMessage(params: {
           ...params.msg,
           payload: {
             ...params.msg.payload,
-            body: formatAudioTranscriptForAgent(audioTranscript),
+            body: formatWhatsAppAudioTranscriptForAgent(audioTranscript),
           },
         }
       : params.msg;
