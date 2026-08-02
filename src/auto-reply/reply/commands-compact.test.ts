@@ -732,7 +732,7 @@ describe("handleCompactCommand", () => {
       expect(requireIncrementCompactionCountCall().newSessionId).toBe("successor-session");
     }
     expect(vi.mocked(formatContextUsageShort)).toHaveBeenLastCalledWith(null, null);
-    expect(result?.reply?.text).toContain("Compacted •");
+    expect(result?.reply?.text).toContain("Compaction finished (resulting context unknown) •");
     expect(result?.reply?.text).not.toContain("undefined");
   });
 

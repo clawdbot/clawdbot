@@ -318,9 +318,11 @@ export const handleCompactCommand: CommandHandler = async (params) => {
   const compactLabel =
     result.ok || isBenignCompactionSkipResult(result)
       ? didCompact
-        ? typeof tokensAfterCompaction === "number" && result.result?.tokensBefore != null
-          ? `Compacted (${runtime.formatTokenCount(result.result.tokensBefore)} → ${runtime.formatTokenCount(tokensAfterCompaction)})`
-          : "Compacted"
+        ? typeof tokensAfterCompaction !== "number"
+          ? "Compaction finished (resulting context unknown)"
+          : result.result?.tokensBefore != null
+            ? `Compacted (${runtime.formatTokenCount(result.result.tokensBefore)} → ${runtime.formatTokenCount(tokensAfterCompaction)})`
+            : "Compacted"
         : "Compaction skipped"
       : "Compaction failed";
   if (didCompact) {
