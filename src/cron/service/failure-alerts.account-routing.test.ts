@@ -18,6 +18,39 @@ describe("cron failure alert account routing", () => {
       },
     },
     {
+      name: "inherits the primary account and topic when an alert repeats its recipient",
+      globalAlert: { enabled: true, after: 1 },
+      jobAlert: { to: "telegram:19098680" },
+      expected: {
+        channel: "telegram",
+        to: "telegram:19098680",
+        accountId: "telegram-bot",
+        threadId: 42,
+      },
+    },
+    {
+      name: "does not inherit the primary account or topic for another recipient",
+      globalAlert: { enabled: true, after: 1 },
+      jobAlert: { to: "telegram:19098681" },
+      expected: {
+        channel: "telegram",
+        to: "telegram:19098681",
+        accountId: undefined,
+        threadId: undefined,
+      },
+    },
+    {
+      name: "does not inherit the primary topic when the repeated recipient uses another account",
+      globalAlert: { enabled: true, after: 1 },
+      jobAlert: { to: "telegram:19098680", accountId: "alert-bot" },
+      expected: {
+        channel: "telegram",
+        to: "telegram:19098680",
+        accountId: "alert-bot",
+        threadId: undefined,
+      },
+    },
+    {
       name: "prefers an explicit alert account over the primary account",
       globalAlert: { enabled: true, after: 1 },
       jobAlert: { accountId: "alert-bot" },
@@ -124,7 +157,10 @@ describe("cron failure alert account routing", () => {
     expect(job.state.lastFailureAlertAtMs).toBe(endedAt);
   });
 
-  it("keeps the primary topic on same-account failure alerts", () => {
+  it.each([
+    { name: "inherited", failureAlert: undefined },
+    { name: "explicitly repeated", failureAlert: { to: "telegram:19098680" } },
+  ])("keeps the primary account and topic on $name failure alerts", ({ failureAlert }) => {
     const sendCronFailureAlert = vi.fn(async () => undefined);
     const state = createCronServiceState({
       storePath: "/tmp/openclaw-cron-failure-alert-thread-routing.json",
@@ -153,6 +189,7 @@ describe("cron failure alert account routing", () => {
         accountId: "telegram-bot",
         threadId: 42,
       },
+      ...(failureAlert ? { failureAlert } : {}),
       state: {},
     };
 

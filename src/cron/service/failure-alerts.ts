@@ -74,8 +74,8 @@ function clampNonNegativeInt(value: unknown, fallback: number): number {
 
 /** Resolves effective failure-alert policy from job config, delivery defaults, and global cron config. */
 export function resolveFailureAlert(
-  state: CronServiceState,
-  job: CronJob,
+  state: { deps: Pick<CronServiceState["deps"], "cronConfig"> },
+  job: Pick<CronJob, "delivery" | "failureAlert">,
 ): ResolvedFailureAlert | null {
   const globalConfig = state.deps.cronConfig?.failureAlert;
   const jobConfig = job.failureAlert === false ? undefined : job.failureAlert;
@@ -108,10 +108,10 @@ export function resolveFailureAlert(
     channel === deliveryChannel || (channel === "last" && !deliveryChannel);
   const compatibleDeliveryTo = inheritsDeliveryChannel ? deliveryTo : undefined;
   const explicitTo = jobTo ?? globalTo;
+  const inheritsDeliveryRoute =
+    inheritsDeliveryChannel && (explicitTo === undefined || explicitTo === deliveryTo);
   const inheritedDeliveryAccountId =
-    mode !== "webhook" && !explicitTo && inheritsDeliveryChannel
-      ? job.delivery?.accountId
-      : undefined;
+    mode !== "webhook" && inheritsDeliveryRoute ? job.delivery?.accountId : undefined;
   const accountId =
     jobConfig?.accountId ??
     (inheritsGlobalRoute ? globalConfig?.accountId : undefined) ??
@@ -119,10 +119,7 @@ export function resolveFailureAlert(
   // A topic belongs to its channel, peer, and account; never attach the
   // primary topic to an independently routed failure destination.
   const inheritsDeliveryThread =
-    mode !== "webhook" &&
-    inheritsDeliveryChannel &&
-    (explicitTo === undefined || explicitTo === deliveryTo) &&
-    accountId === job.delivery?.accountId;
+    mode !== "webhook" && inheritsDeliveryRoute && accountId === job.delivery?.accountId;
 
   // Announce alerts inherit the job delivery target; webhook alerts require an
   // explicit alert target so chat recipients are not reused as URLs.
