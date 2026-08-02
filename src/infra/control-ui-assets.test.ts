@@ -132,19 +132,23 @@ describe("control UI assets helpers (fs-mocked)", () => {
       termination: "exit",
     });
     process.argv[1] = argv1;
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+    const onBuildStart = vi.fn();
 
     try {
-      const result = await ensureControlUiAssetsBuilt({
-        log: vi.fn(),
-        error: vi.fn(),
-        exit: vi.fn(),
-      });
+      const result = await ensureControlUiAssetsBuilt(runtime, { onBuildStart });
 
       expect(result).toEqual({
         ok: false,
         built: false,
         message: `Control UI build failed: ${"y".repeat(238)}…`,
       });
+      expect(onBuildStart).toHaveBeenCalledOnce();
+      expect(runtime.log).not.toHaveBeenCalled();
     } finally {
       if (originalArgv1 === undefined) {
         process.argv.splice(1, 1);
