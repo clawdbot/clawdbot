@@ -3,6 +3,7 @@ import { resolveLiveTransportQaScenarioIds } from "../shared/scenario-selection.
 
 export function resolveSlackQaScenarioIds(params: {
   profile?: string;
+  primaryModel?: string;
   providerMode?: QaProviderModeInput;
   scenarioIds?: readonly string[];
 }) {

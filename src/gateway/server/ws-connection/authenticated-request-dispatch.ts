@@ -14,10 +14,15 @@ import {
   parseDiagnosticTraceparent,
   runWithDiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
+import { createLazyPromise } from "../../../shared/lazy-runtime.js";
 import { formatForLog, logWs } from "../../ws-log.js";
 import type { GatewayWsClient } from "../ws-types.js";
 import type { GatewayWsMessageHandlerParams } from "./message-handler-types.js";
 import { isUnauthorizedRoleError, UnauthorizedFloodGuard } from "./unauthorized-flood-guard.js";
+
+const loadGatewayServerMethods = createLazyPromise(
+  () => import("./authenticated-request-dispatch.server-methods.runtime.js"),
+);
 
 const DEVICE_CREDENTIAL_INVALIDATING_METHODS = new Set([
   "device.pair.remove",
@@ -160,7 +165,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
         client.socket.once("close", cancelNodeInvocation);
       }
       try {
-        const { handleGatewayRequest } = await import("../../server-methods.js");
+        const { handleGatewayRequest } = await loadGatewayServerMethods();
         await handleGatewayRequest({
           req,
           respond,

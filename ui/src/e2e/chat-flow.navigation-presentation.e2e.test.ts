@@ -736,20 +736,35 @@ suite.define(() => {
         const state = (
           pane as HTMLElement & {
             state: {
-              chatQueueByScope: Record<string, unknown[]>;
+              settings?: { gatewayUrl?: string };
             };
           }
         ).state;
-        state.chatQueueByScope[`${targetKey}\u0000agent:main`] = [
-          {
-            id: "queued-before-switch",
-            text: "flush after idle reconciliation",
-            createdAt: Date.now(),
-            sendState: "waiting-idle",
-            sessionKey: targetKey,
-            agentId: "main",
-          },
-        ];
+        const gatewayOwner = state.settings?.gatewayUrl?.trim() || "default";
+        const key = `openclaw.control.chatComposer.v2:${encodeURIComponent(gatewayOwner)}`;
+        sessionStorage.setItem(
+          key,
+          JSON.stringify({
+            version: 2,
+            gatewayOwner,
+            sessions: {
+              [`${targetKey}\u0000agent:main`]: {
+                updatedAt: Date.now(),
+                queue: [
+                  {
+                    id: "queued-before-switch",
+                    text: "flush after idle reconciliation",
+                    createdAt: Date.now(),
+                    sendState: "waiting-idle",
+                    sessionKey: targetKey,
+                    agentId: "main",
+                  },
+                ],
+              },
+            },
+          }),
+        );
+        window.dispatchEvent(new StorageEvent("storage", { key }));
       }, firstKey);
       await page
         .locator(

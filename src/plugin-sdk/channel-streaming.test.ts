@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildChannelProgressDraftLine,
   createChannelProgressDraftGate,
+  DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS,
   DEFAULT_PROGRESS_DRAFT_LABELS,
   formatChannelProgressDraftLine,
   formatChannelProgressDraftLineForEntry,
@@ -620,7 +621,7 @@ describe("channel-streaming", () => {
     expect(recoveredUpdated[0]).not.toHaveProperty("detail");
   });
 
-  it("starts progress drafts after five seconds", async () => {
+  it("starts progress drafts after the initial delay", async () => {
     vi.useFakeTimers();
     const onStart = vi.fn(async () => {});
     const gate = createChannelProgressDraftGate({ onStart });
@@ -628,7 +629,7 @@ describe("channel-streaming", () => {
     await expect(gate.noteWork()).resolves.toBe(false);
     expect(onStart).not.toHaveBeenCalled();
 
-    await vi.advanceTimersByTimeAsync(4_999);
+    await vi.advanceTimersByTimeAsync(DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS - 1);
     expect(onStart).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(1);
@@ -646,7 +647,7 @@ describe("channel-streaming", () => {
 
     expect(gate.workEvents).toBe(2);
     expect(onStart).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(4_999);
+    await vi.advanceTimersByTimeAsync(DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS - 1);
     expect(onStart).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(1);

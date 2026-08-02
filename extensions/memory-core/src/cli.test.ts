@@ -199,7 +199,12 @@ describe("memory cli", () => {
   }
 
   function mockManager(manager: Record<string, unknown>) {
-    getMemorySearchManager.mockResolvedValueOnce({ manager });
+    getMemorySearchManager.mockResolvedValueOnce({
+      manager: {
+        ...(manager.search && !manager.status ? { status: () => makeMemoryStatus() } : {}),
+        ...manager,
+      },
+    });
   }
 
   function setupMemoryStatusWithInactiveSecretDiagnostics(close: ReturnType<typeof vi.fn>) {
@@ -507,6 +512,34 @@ describe("memory cli", () => {
     expect(close).toHaveBeenCalled();
   });
 
+  it("still aborts status when its own memory SecretRef cannot be resolved", async () => {
+    getRuntimeConfig.mockReturnValue({
+      memory: {
+        search: {
+          remote: {
+            apiKey: { source: "env", provider: "default", id: "MISSING_MEMORY_API_KEY" },
+          },
+        },
+      },
+    });
+    resolveCommandSecretRefsViaGateway.mockRejectedValueOnce(
+      Object.assign(
+        new Error(
+          "Secret owner capability:memory-provider:main is configured but unavailable: code=SECRET_SURFACE_UNAVAILABLE",
+        ),
+        {
+          code: "SECRET_SURFACE_UNAVAILABLE",
+          ownerKind: "capability",
+          ownerId: "memory-provider:main",
+          paths: ["memory.search.remote.apiKey"],
+        },
+      ),
+    );
+
+    await expect(runMemoryCli(["status", "--deep"])).rejects.toThrow("SECRET_SURFACE_UNAVAILABLE");
+    expect(getMemorySearchManager).not.toHaveBeenCalled();
+  });
+
   it("prints index identity mismatch reasons", async () => {
     const close = vi.fn(async () => {});
     mockManager({
@@ -603,12 +636,51 @@ describe("memory cli", () => {
     const secretRefsCall = firstMockCallArg(
       resolveCommandSecretRefsViaGateway,
       "resolve command secret refs",
-    ) as { config?: unknown; commandName?: unknown; targetIds?: unknown };
+    ) as { config?: unknown; commandName?: unknown; targetIds?: unknown; mode?: unknown };
     expect(secretRefsCall.config).toBe(config);
     expect(secretRefsCall.commandName).toBe("memory status");
     expect(secretRefsCall.targetIds).toStrictEqual(
       new Set(["memory.search.remote.apiKey", "agents.entries.*.memory.search.remote.apiKey"]),
     );
+    expect(secretRefsCall.mode).toBe("read_only_status");
+  });
+
+  it("keeps status available when a memory SecretRef owner is degraded", async () => {
+    const close = vi.fn(async () => {});
+    getRuntimeConfig.mockReturnValue({
+      memory: {
+        search: {
+          remote: {
+            apiKey: { source: "env", provider: "default", id: "HEALTHY_MEMORY_API_KEY" },
+          },
+        },
+      },
+    });
+    resolveCommandSecretRefsViaGateway.mockRejectedValueOnce(
+      Object.assign(
+        new Error(
+          "Secret owner agent:main:openai:manual is configured but unavailable: code=SECRET_SURFACE_UNAVAILABLE",
+        ),
+        { code: "SECRET_SURFACE_UNAVAILABLE" },
+      ),
+    );
+    mockManager({
+      probeVectorAvailability: vi.fn(async () => true),
+      probeEmbeddingAvailability: vi.fn(async () => ({
+        ok: false,
+        error: "embedding provider unavailable",
+      })),
+      status: () => makeMemoryStatus({ workspaceDir: undefined }),
+      close,
+    });
+
+    const log = spyRuntimeLogs(defaultRuntime);
+    await runMemoryCli(["status", "--deep"]);
+
+    expect(loggedOutput(log)).toContain("agent:main:openai:manual");
+    expect(loggedOutput(log)).toContain("healthy memory surfaces remain visible");
+    expect(loggedOutput(log)).toContain("Embeddings: unavailable");
+    expect(close).toHaveBeenCalled();
   });
 
   it("logs gateway secret diagnostics for non-json status output", async () => {
@@ -1383,6 +1455,34 @@ describe("memory cli", () => {
     });
   });
 
+  it("suggests reindexing instead of --fix when the qmd index is missing", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const close = vi.fn(async () => {});
+      const missingDbPath = path.join(qmdFixtureRoot, `missing-${qmdCaseId++}.sqlite`);
+      mockManager({
+        probeVectorAvailability: vi.fn(async () => true),
+        status: () =>
+          makeMemoryStatus({
+            backend: "qmd",
+            provider: "qmd",
+            model: "qmd",
+            requestedProvider: "qmd",
+            workspaceDir,
+            dbPath: missingDbPath,
+          }),
+        close,
+      });
+
+      const log = spyRuntimeLogs(defaultRuntime);
+      await runMemoryCli(["status"]);
+
+      expectLogged(log, "QMD index file is missing.");
+      expectLogged(log, "Fix: openclaw memory index --agent main");
+      expectNotLogged(log, "Fix: openclaw memory status --fix --agent main");
+      expect(close).toHaveBeenCalled();
+    });
+  });
+
   it("fails index when qmd db file is empty", async () => {
     const close = vi.fn(async () => {});
     const sync = vi.fn(async () => {});
@@ -1626,6 +1726,48 @@ describe("memory cli", () => {
     expect(Array.isArray(payload?.results)).toBe(true);
     expect(payload?.results).toHaveLength(1);
     expect(close).toHaveBeenCalled();
+  });
+
+  it("qualifies json search results when the index remains stale", async () => {
+    const close = vi.fn(async () => {});
+    const reason = "index was built for model old-embed, expected new-embed";
+    mockManager({
+      search: vi.fn(async () => []),
+      status: () =>
+        makeMemoryStatus({
+          dirty: true,
+          custom: { indexIdentity: { status: "mismatched", reason } },
+        }),
+      close,
+    });
+
+    const writeJson = spyRuntimeJson(defaultRuntime);
+    await runMemoryCli(["search", "hidden codeword", "--agent", "main", "--json"]);
+
+    expect(firstWrittenJsonArg(writeJson)).toEqual({
+      results: [],
+      stale: true,
+      warning: `Memory index is stale: ${reason}. Search results may be incomplete.`,
+      action: "Run: openclaw memory status --index --agent main",
+    });
+  });
+
+  it("warns before reporting no matches from a dirty index", async () => {
+    const close = vi.fn(async () => {});
+    mockManager({
+      search: vi.fn(async () => []),
+      status: () => makeMemoryStatus({ dirty: true }),
+      close,
+    });
+
+    const error = spyRuntimeErrors(defaultRuntime);
+    const log = spyRuntimeLogs(defaultRuntime);
+    await runMemoryCli(["search", "hidden codeword"]);
+
+    expect(error).toHaveBeenCalledWith(
+      "Memory index is dirty. Search results may be incomplete. Run: openclaw memory status --index --agent main",
+    );
+    expect(log).toHaveBeenCalledWith("No matches.");
   });
 
   it("prints no candidates when promote has no short-term recall data", async () => {

@@ -15,8 +15,10 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { compileConfigRegexes, type ConfigRegexRejectReason } from "../../security/config-regex.js";
 import { escapeRegExp } from "../../utils.js";
 import type { MsgContext } from "../templating.js";
+import { HISTORY_CONTEXT_MARKER } from "./history.js";
 import type { BuildMentionRegexesOptions, ExplicitMentionSignal } from "./mentions.types.js";
 export type { BuildMentionRegexesOptions } from "./mentions.types.js";
+export { CURRENT_MESSAGE_MARKER } from "./history.js";
 
 type ResolvedMentionPatterns = {
   patterns: string[];
@@ -53,8 +55,6 @@ const MAX_MENTION_REGEX_COMPILE_CACHE_KEYS = 512;
 const mentionPatternWarningCache = new Set<string>();
 const MAX_MENTION_PATTERN_WARNING_KEYS = 512;
 const log = createSubsystemLogger("mentions");
-
-export const CURRENT_MESSAGE_MARKER = "[Current message - respond to this]";
 
 function normalizeMentionPattern(pattern: string): string {
   if (!pattern.includes(BACKSPACE_CHAR)) {
@@ -204,10 +204,13 @@ export function stripStructuralPrefixes(text: string): string {
   }
   // Ignore wrapper labels, timestamps, and sender prefixes so directive-only
   // detection still works in group batches that include history/context.
-  const afterMarker = text.includes(CURRENT_MESSAGE_MARKER)
-    ? text.slice(text.indexOf(CURRENT_MESSAGE_MARKER) + CURRENT_MESSAGE_MARKER.length).trimStart()
-    : text;
-  const afterEnvelope = afterMarker.replace(/\[[^\]]+\]\s*/g, "");
+  if (text.trimStart().startsWith(HISTORY_CONTEXT_MARKER)) {
+    // Flat history has no trustworthy current-message range when users can quote
+    // marker text. Leave it non-command-shaped instead of guessing a boundary.
+    return text.trim();
+  }
+  const afterMarker = text;
+  const afterEnvelope = afterMarker.replace(/^(?:[ \t]*\[[^\]\n]+\][ \t]*)+/, "");
   const senderPrefixPattern =
     afterEnvelope === afterMarker
       ? /^[ \t]*(?!\/)[^\n:]{1,120}:\s+/gm

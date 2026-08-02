@@ -824,6 +824,48 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     expect(result.sessionEntry.responseUsage).toBe("full");
   });
 
+  it("preserves the exact multiline reset payload during fast bootstrap", () => {
+    const payload = "keep [Q3]\nline 2";
+    const result = initFastReplySessionState({
+      ctx: buildGetReplyCtx({
+        Body: `/new ${payload}`,
+        BodyForCommands: `/new ${payload}`,
+        RawBody: `[Telegram id:456] İpek: /NEW: ${payload}`,
+        SenderName: "İpek",
+        SessionKey: "agent:main:telegram:payload",
+      }),
+      cfg: {
+        session: { store: "/tmp/sessions.json", resetTriggers: ["/new"] },
+      } as OpenClawConfig,
+      agentId: "main",
+      commandAuthorized: true,
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(result.resetTriggered).toBe(true);
+    expect(result.bodyStripped).toBe(payload);
+    expect(result.sessionCtx.agentText).toBe(payload);
+  });
+
+  it("does not reset from a command projection when the raw projection is explicitly empty", () => {
+    const result = initFastReplySessionState({
+      ctx: buildGetReplyCtx({
+        Body: "/new payload",
+        BodyForCommands: "/new payload",
+        RawBody: "",
+        SessionKey: "agent:main:telegram:empty-raw",
+      }),
+      cfg: {
+        session: { store: "/tmp/sessions.json", resetTriggers: ["/new"] },
+      } as OpenClawConfig,
+      agentId: "main",
+      commandAuthorized: true,
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(result.resetTriggered).toBe(false);
+  });
+
   it("preserves node provenance and lineage during fast reset bootstrap", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-fast-reset-lineage-"));
     const storePath = path.join(home, "sessions.json");

@@ -12,13 +12,13 @@ function readToolName(value: unknown): string | undefined {
   if (!record) {
     return undefined;
   }
-  return readTrimmedStringAlias(record, [
-    "name",
-    "toolName",
-    "tool_name",
-    "functionName",
-    "function_name",
-  ]);
+  const aliases = ["name", "toolName", "tool_name", "functionName", "function_name"];
+  const direct = readTrimmedStringAlias(record, aliases);
+  if (direct) {
+    return direct;
+  }
+  const nestedFunction = asOptionalRecord(record.function);
+  return nestedFunction ? readTrimmedStringAlias(nestedFunction, aliases) : undefined;
 }
 
 function isToolCallBlock(value: unknown): boolean {
@@ -38,11 +38,21 @@ function isToolCallBlock(value: unknown): boolean {
 /** Returns true when an assistant message requested the sessions_yield tool. */
 export function assistantCallsSessionsYield(message: unknown): boolean {
   const record = asOptionalRecord(message);
-  if (!record || record.role !== "assistant" || !Array.isArray(record.content)) {
+  if (!record || record.role !== "assistant") {
     return false;
   }
-  return record.content.some(
-    (block) => isToolCallBlock(block) && readToolName(block) === "sessions_yield",
+  if (
+    Array.isArray(record.content) &&
+    record.content.some(
+      (block) => isToolCallBlock(block) && readToolName(block) === "sessions_yield",
+    )
+  ) {
+    return true;
+  }
+  return [record.toolCalls, record.tool_calls].some(
+    (toolCalls) =>
+      Array.isArray(toolCalls) &&
+      toolCalls.some((toolCall) => readToolName(toolCall) === "sessions_yield"),
   );
 }
 

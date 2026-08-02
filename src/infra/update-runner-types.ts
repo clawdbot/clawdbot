@@ -29,6 +29,17 @@ export type UpdateRunResult = {
   after?: { sha?: string | null; version?: string | null };
   steps: UpdateStepResult[];
   durationMs: number;
+  recovery?:
+    | { serviceRestartSafe: true }
+    | {
+        serviceRestartSafe: false;
+        reason:
+          | "source-rollback-failed"
+          | "manager-unavailable"
+          | "deps-install-failed"
+          | "build-failed"
+          | "runtime-verification-failed";
+      };
   postUpdate?: {
     plugins?: {
       status: "ok" | "warning" | "skipped" | "error";

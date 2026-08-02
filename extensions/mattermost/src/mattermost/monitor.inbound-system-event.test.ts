@@ -1,7 +1,9 @@
 // Mattermost tests cover monitor.inbound system event plugin behavior.
 import { once } from "node:events";
 import { createServer } from "node:http";
+import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { createInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound-debounce";
+import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
 import { createTestInboundDebounceFlush } from "openclaw/plugin-sdk/channel-test-helpers";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
@@ -89,10 +91,12 @@ const mockState = vi.hoisted(() => ({
   createReplyDispatcherWithTyping: vi.fn(),
   createMattermostClient: vi.fn(),
   createMattermostDraftStream: vi.fn(),
+  deliveryPlanObserver: vi.fn(),
   dispatchInboundMessage: vi.fn(),
   enqueueSystemEvent: vi.fn(),
   fetchMattermostMe: vi.fn(),
   getGlobalHookRunner: vi.fn(),
+  progressDrafts: [] as Array<{ getSnapshot: () => { lines: readonly unknown[] } }>,
   registerMattermostMonitorSlashCommands: vi.fn(),
   registerPluginHttpRoute: vi.fn(),
   recordMattermostThreadParticipation: vi.fn(),
@@ -108,6 +112,20 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/plugin-runtime")>()),
   getGlobalHookRunner: mockState.getGlobalHookRunner,
 }));
+
+vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-outbound")>();
+  return {
+    ...actual,
+    createChannelProgressDraftCompositor: (
+      ...args: Parameters<typeof actual.createChannelProgressDraftCompositor>
+    ) => {
+      const draft = actual.createChannelProgressDraftCompositor(...args);
+      mockState.progressDrafts.push(draft);
+      return draft;
+    },
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
@@ -289,6 +307,7 @@ function createRuntimeCore(
       ctxPayload: { SessionKey?: string };
       dispatcherOptions?: Record<string, unknown>;
       delivery: {
+        observeMessageSent?: true;
         deliver: (
           payload: ReplyPayload,
           info: { kind: "tool" | "block" | "final" },
@@ -303,6 +322,7 @@ function createRuntimeCore(
         onRecordError?: (err: unknown) => void;
       };
     }) => {
+      mockState.deliveryPlanObserver(turn.delivery.observeMessageSent);
       await recordInboundSession({
         storePath: "/tmp/openclaw-test-sessions.json",
         sessionKey: turn.ctxPayload.SessionKey ?? turn.route.sessionKey,
@@ -482,6 +502,7 @@ async function emitMattermostChannelPost(
     rootId?: string;
     senderId?: string;
     senderName?: string;
+    createAt?: number;
   },
 ) {
   const senderId = params.senderId ?? "user-1";
@@ -498,7 +519,7 @@ async function emitMattermostChannelPost(
         user_id: senderId,
         message: params.message,
         root_id: params.rootId,
-        create_at: 1_714_000_000_000,
+        create_at: params.createAt ?? 1_714_000_000_000,
       }),
     },
     broadcast: {
@@ -512,6 +533,7 @@ describe("mattermost inbound user posts", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockState.abortController = undefined;
+    mockState.progressDrafts.length = 0;
     mockState.getGlobalHookRunner.mockReturnValue(null);
     mockState.runtimeCore = createRuntimeCore(testConfig);
     mockState.createMattermostClient.mockReturnValue({});
@@ -521,7 +543,7 @@ describe("mattermost inbound user posts", () => {
       flush: vi.fn(async () => {}),
       stop: vi.fn(async () => {}),
       settleBoundaries: vi.fn(async () => {}),
-      resolveFinalText: (text: string) => ({ kind: "full" as const, text }),
+      resolveFinalText: (text: string) => ({ kind: "full" as const, text, publishedParts: [] }),
     });
     mockState.fetchMattermostMe.mockResolvedValue({
       id: "bot-user",
@@ -587,12 +609,75 @@ describe("mattermost inbound user posts", () => {
 
     expect(mockState.enqueueSystemEvent).not.toHaveBeenCalled();
     expect(mockState.dispatchInboundMessage).toHaveBeenCalledTimes(1);
+    expect(mockState.deliveryPlanObserver).toHaveBeenCalledExactlyOnceWith(true);
     const ctx = mockState.dispatchInboundMessage.mock.calls.at(0)?.[0].ctx;
     expect(ctx?.BodyForAgent).toBe("hello from mattermost");
     expect(ctx?.ConversationLabel).toBe("Town Square id:chan-1");
     expect(ctx?.MessageSid).toBe("post-inbound-system-event-regular");
     expect(ctx?.OriginatingChannel).toBe("mattermost");
     expect(ctx?.Provider).toBe("mattermost");
+  });
+
+  it("formats current and pending-history timestamps in the configured user timezone", async () => {
+    const socket = new FakeWebSocket();
+    const abortController = new AbortController();
+    mockState.abortController = abortController;
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: {
+          envelopeTimezone: "user",
+          userTimezone: "Asia/Jakarta",
+        },
+      },
+      messages: { groupChat: { historyLimit: 1 } },
+      channels: {
+        mattermost: {
+          enabled: true,
+          baseUrl: "https://mattermost.example.com",
+          botToken: "bot-token",
+          chatmode: "onmessage",
+          dmPolicy: "open",
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["allowed-user"],
+        },
+      },
+    };
+    mockState.runtimeCore = createRuntimeCore(config);
+
+    const monitor = monitorMattermostProvider({
+      config,
+      runtime: testRuntime(),
+      abortSignal: abortController.signal,
+      webSocketFactory: () => socket,
+    });
+
+    await vi.waitFor(() => {
+      expect(socket.openListenerCount).toBeGreaterThan(0);
+    });
+    socket.emitOpen();
+
+    await emitMattermostChannelPost(socket, {
+      id: "timezone-history",
+      message: "history in Jakarta",
+      senderId: "denied-user",
+      senderName: "mallory",
+      createAt: 1_714_000_000_000,
+    });
+    await emitMattermostChannelPost(socket, {
+      id: "timezone-current",
+      message: "current in Jakarta",
+      senderId: "allowed-user",
+      senderName: "alice",
+      createAt: 1_714_003_600_000,
+    });
+    socket.emitClose(1000);
+    await monitor;
+
+    const ctx = mockState.dispatchInboundMessage.mock.calls.at(0)?.[0].ctx;
+    expect(ctx?.Body).toContain("Thu 2024-04-25 06:06:40");
+    expect(ctx?.Body).toContain("Thu 2024-04-25 07:06:40");
+    expect(ctx?.Body).toContain("history in Jakarta");
+    expect(ctx?.Body).toContain("current in Jakarta");
   });
 
   it.each([
@@ -1767,7 +1852,7 @@ describe("mattermost inbound user posts", () => {
       seal: vi.fn(async () => {}),
       stop: vi.fn(async () => {}),
       settleBoundaries: vi.fn(async () => {}),
-      resolveFinalText: (text: string) => ({ kind: "full" as const, text }),
+      resolveFinalText: (text: string) => ({ kind: "full" as const, text, publishedParts: [] }),
     });
 
     const socket = new FakeWebSocket();
@@ -1951,8 +2036,8 @@ describe("mattermost inbound user posts", () => {
     const updateAssistantText = vi.fn();
     const resolveFinalText = vi.fn((text: string) =>
       text === "[bot] First block\n\nSecond block"
-        ? { kind: "remaining" as const, text: "Second block" }
-        : { kind: "full" as const, text },
+        ? { kind: "remaining" as const, text: "Second block", publishedParts: [] }
+        : { kind: "full" as const, text, publishedParts: [] },
     );
     mockState.createMattermostDraftStream.mockReturnValue({
       update: vi.fn(),
@@ -2045,7 +2130,10 @@ describe("mattermost inbound user posts", () => {
       seal: vi.fn(async () => {}),
       stop: vi.fn(async () => {}),
       settleBoundaries: vi.fn(async () => {}),
-      resolveFinalText: vi.fn(() => ({ kind: "already-delivered" as const })),
+      resolveFinalText: vi.fn(() => ({
+        kind: "already-delivered" as const,
+        publishedParts: [{ messageId: "preview-sealed", content: "Only block" }],
+      })),
     });
 
     const socket = new FakeWebSocket();
@@ -2087,6 +2175,176 @@ describe("mattermost inbound user posts", () => {
       "thread-root-confirmed-preview",
       { agentId: "main" },
     );
+  });
+
+  it("records participation when confirmed-preview cleanup fails", async () => {
+    const blockConfig: OpenClawConfig = {
+      channels: {
+        mattermost: {
+          enabled: true,
+          baseUrl: "https://mattermost.example.com",
+          botToken: "bot-token",
+          chatmode: "onmessage",
+          dmPolicy: "open",
+          groupPolicy: "open",
+          streaming: { mode: "block" },
+        },
+      },
+    };
+    mockState.runtimeCore = createRuntimeCore(blockConfig);
+    mockState.createMattermostDraftStream.mockReturnValue({
+      update: vi.fn(),
+      updateAssistantText: vi.fn(),
+      forceNewMessage: vi.fn(async () => {}),
+      flush: vi.fn(async () => {}),
+      postId: vi.fn(() => undefined),
+      clear: vi.fn(async () => {}),
+      discardPending: vi.fn(async () => {
+        throw new Error("preview cleanup failed");
+      }),
+      seal: vi.fn(async () => {}),
+      stop: vi.fn(async () => {}),
+      settleBoundaries: vi.fn(async () => {}),
+      resolveFinalText: vi.fn(() => ({
+        kind: "already-delivered" as const,
+        publishedParts: [{ messageId: "preview-sealed", content: "Only block" }],
+      })),
+    });
+
+    const socket = new FakeWebSocket();
+    const abortController = new AbortController();
+    mockState.abortController = abortController;
+    mockState.dispatchInboundMessage.mockImplementation(async (params) => {
+      try {
+        await params.replyOptions?.onAssistantMessageStart?.();
+        await params.replyOptions?.onPartialReply?.({ text: "Only block" });
+        await params.replyOptions?.onAssistantMessageStart?.();
+        const dispatcherOptions =
+          mockState.createReplyDispatcherWithTyping.mock.results.at(-1)?.value?.options;
+        await expect(
+          dispatcherOptions?.deliver({ text: "Only block" }, { kind: "final" }),
+        ).rejects.toThrow("preview cleanup failed");
+      } finally {
+        abortController.abort();
+      }
+    });
+
+    const monitor = monitorMattermostProvider({
+      config: blockConfig,
+      runtime: testRuntime(),
+      abortSignal: abortController.signal,
+      webSocketFactory: () => socket,
+    });
+
+    await vi.waitFor(() => {
+      expect(socket.openListenerCount).toBeGreaterThan(0);
+    });
+    socket.emitOpen();
+    await emitMattermostChannelPost(socket, {
+      id: "post-confirmed-preview-cleanup-failure",
+      message: "stream one block",
+      rootId: "thread-root-confirmed-preview-cleanup-failure",
+    });
+    socket.emitClose(1000);
+    await monitor;
+
+    expect(mockState.recordMattermostThreadParticipation).toHaveBeenCalledWith(
+      "default",
+      "chan-1",
+      "thread-root-confirmed-preview-cleanup-failure",
+      { agentId: "main" },
+    );
+  });
+
+  it("records participation when a later send step fails after a visible thread post", async () => {
+    const progressConfig: OpenClawConfig = {
+      channels: {
+        mattermost: {
+          enabled: true,
+          baseUrl: "https://mattermost.example.com",
+          botToken: "bot-token",
+          chatmode: "onmessage",
+          dmPolicy: "open",
+          groupPolicy: "open",
+          streaming: { mode: "progress" },
+        },
+      },
+    };
+    mockState.runtimeCore = createRuntimeCore(progressConfig);
+    const receipt = createMessageReceiptFromOutboundResults({
+      results: [{ channel: "mattermost", messageId: "partial-post-1", channelId: "chan-1" }],
+      kind: "text",
+      replyToId: "thread-root-partial",
+    });
+    mockState.sendMessageMattermost.mockRejectedValueOnce(
+      createChannelPartialDeliveryError(new Error("bookkeeping failed"), {
+        messageIds: ["partial-post-1"],
+        receipt,
+        visibleReplySent: true,
+        content: "Visible partial reply",
+      }),
+    );
+    mockState.createMattermostDraftStream.mockReturnValue({
+      update: vi.fn(),
+      updateAssistantText: vi.fn(),
+      forceNewMessage: vi.fn(async () => {}),
+      flush: vi.fn(async () => {}),
+      postId: vi.fn(() => undefined),
+      clear: vi.fn(async () => {}),
+      discardPending: vi.fn(async () => {}),
+      seal: vi.fn(async () => {}),
+      stop: vi.fn(async () => {}),
+      settleBoundaries: vi.fn(async () => {}),
+      resolveFinalText: (text: string) => ({ kind: "full" as const, text, publishedParts: [] }),
+    });
+    const socket = new FakeWebSocket();
+    const abortController = new AbortController();
+    mockState.abortController = abortController;
+    mockState.dispatchInboundMessage.mockImplementation(
+      async (dispatchParams: {
+        replyOptions?: {
+          onReasoningStream?: (payload: ReplyPayload) => void | Promise<void>;
+        };
+      }) => {
+        try {
+          const dispatcherOptions =
+            mockState.createReplyDispatcherWithTyping.mock.results.at(-1)?.value?.options;
+          await expect(
+            dispatcherOptions?.deliver({ text: "Visible partial reply" }, { kind: "final" }),
+          ).rejects.toThrow("bookkeeping failed");
+          await dispatchParams.replyOptions?.onReasoningStream?.({ text: "late reasoning" });
+        } finally {
+          abortController.abort();
+        }
+      },
+    );
+
+    const monitor = monitorMattermostProvider({
+      config: progressConfig,
+      runtime: testRuntime(),
+      abortSignal: abortController.signal,
+      webSocketFactory: () => socket,
+    });
+
+    await vi.waitFor(() => {
+      expect(socket.openListenerCount).toBeGreaterThan(0);
+    });
+    socket.emitOpen();
+    await emitMattermostChannelPost(socket, {
+      id: "post-partial-thread",
+      message: "reply in this thread",
+      rootId: "thread-root-partial",
+    });
+    socket.emitClose(1000);
+    await monitor;
+
+    expect(mockState.recordMattermostThreadParticipation).toHaveBeenCalledWith(
+      "default",
+      "chan-1",
+      "thread-root-partial",
+      { agentId: "main" },
+    );
+    expect(mockState.progressDrafts.at(-1)?.getSnapshot().lines).toEqual([]);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

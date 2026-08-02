@@ -16,6 +16,12 @@ declare module "*scripts/ui.js" {
       windowsVerbatimArguments?: boolean;
     };
   };
+  export function assertUiBuildOutputRoot(params?: {
+    rootDir?: string;
+    fs?: {
+      lstatSync(path: string): { isSymbolicLink(): boolean };
+    };
+  }): void;
   export function shouldUseCmdExeForCommand(cmd: string, platform?: NodeJS.Platform): boolean;
   export function resolveSpawnCall(
     cmd: string,
@@ -180,6 +186,7 @@ declare module "*openclaw-changelog-update/scripts/verify-release-notes.mjs" {
 declare module "*openclaw-live-updater/scripts/update-main.mjs" {
   type GatewayDeployment = Record<string, unknown> & {
     entrypoint: string;
+    exitTimeoutSeconds?: number;
     workingDirectory?: string | null;
   };
   type UpdateResult = Record<string, unknown> & {
@@ -195,12 +202,25 @@ declare module "*openclaw-live-updater/scripts/update-main.mjs" {
     home: string,
     entrypoint: string,
   ): boolean;
+  export function isGatewayProbeResponse(route: string, payload: unknown): boolean;
   export function parseLaunchctlArguments(output: string): string[];
   export function resolveManagedGatewayEntrypoint(
     programArguments: string[],
     home: string,
     stateDir?: string,
   ): string | null;
+  export function resolveLaunchAgentExitTimeoutSeconds(value: unknown): number;
+  export function assertNoSystemLaunchDaemonOwnership(
+    label: string,
+    dependencies?: {
+      readdirSync?: (path: string) => string[];
+      spawnSync?: (
+        command: string,
+        args: string[],
+        options?: Record<string, unknown>,
+      ) => { status: number | null; stdout?: string; stderr?: string };
+    },
+  ): void;
   export function replaceLaunchAgentProgramArgument(
     programArguments: unknown,
     index: number,
@@ -272,7 +292,17 @@ declare module "*openclaw-live-updater/scripts/update-main.mjs" {
     checkout: string,
     expectedSha: string,
     sleep?: (ms: number) => void,
-  ): void;
+    deployment?: GatewayDeployment | null,
+    options?: {
+      now?: () => number;
+      probeMilestones?: (deployment: GatewayDeployment) => {
+        listenerReady: boolean;
+        healthzReady: boolean;
+        readyzReady: boolean;
+      };
+      timing?: Record<string, unknown>;
+    },
+  ): Record<string, unknown>;
   export function findExactMacTarget(
     processes: string,
     executable: string,

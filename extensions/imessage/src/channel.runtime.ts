@@ -16,12 +16,15 @@ export async function sendIMessageOutbound(params: {
   to: string;
   text: string;
   mediaUrl?: string;
+  mediaAccess?: Parameters<IMessageSendFn>[2]["mediaAccess"];
   mediaLocalRoots?: readonly string[];
+  mediaReadFile?: Parameters<IMessageSendFn>[2]["mediaReadFile"];
   audioAsVoice?: boolean;
   accountId?: string;
   deps?: { [channelId: string]: unknown };
   replyToId?: string;
   conversationReadOrigin?: "delegated" | "direct-operator";
+  onDeliveryResult?: NonNullable<Parameters<IMessageSendFn>[2]["onDeliveryResult"]>;
 }) {
   const send =
     resolveOutboundSendDep<IMessageSendFn>(params.deps, "imessage", {
@@ -37,12 +40,15 @@ export async function sendIMessageOutbound(params: {
   const result = await send(params.to, params.text, {
     config: params.cfg,
     ...(params.mediaUrl ? { mediaUrl: params.mediaUrl } : {}),
+    ...(params.mediaAccess ? { mediaAccess: params.mediaAccess } : {}),
     ...(params.mediaLocalRoots?.length ? { mediaLocalRoots: params.mediaLocalRoots } : {}),
+    ...(params.mediaReadFile ? { mediaReadFile: params.mediaReadFile } : {}),
     ...(params.audioAsVoice ? { audioAsVoice: true } : {}),
     maxBytes,
     accountId: params.accountId ?? undefined,
     replyToId: params.replyToId ?? undefined,
     conversationReadOrigin: params.conversationReadOrigin,
+    ...(params.onDeliveryResult ? { onDeliveryResult: params.onDeliveryResult } : {}),
   });
   const meta = {
     ...(result as typeof result & { meta?: Record<string, unknown> }).meta,

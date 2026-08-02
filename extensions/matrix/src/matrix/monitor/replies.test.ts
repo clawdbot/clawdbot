@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime, RuntimeEnv } from "../../../runtime-api.js";
 import type { MatrixClient } from "../sdk.js";
 
-const sendMessageMatrixMock = vi.hoisted(() => vi.fn().mockResolvedValue({ messageId: "mx-1" }));
+const sendMessageMatrixMock = vi.hoisted(() => vi.fn());
 const chunkMatrixTextMock = vi.hoisted(() =>
   vi.fn((text: string, _opts?: unknown) => ({
     trimmedText: text.trim(),
@@ -22,6 +22,32 @@ vi.mock("../send.js", () => ({
 
 import { setMatrixRuntime } from "../../runtime.js";
 import { deliverMatrixReplies } from "./replies.js";
+
+let nextMessageId = 0;
+
+async function resolveMockMatrixSend(_to: string, message: string, opts?: Record<string, unknown>) {
+  nextMessageId += 1;
+  const messageId = `mx-${nextMessageId}`;
+  const mediaUrl = typeof opts?.mediaUrl === "string" ? opts.mediaUrl : "unknown";
+  const content = message || `media:${mediaUrl}`;
+  const result = {
+    messageId,
+    roomId: "room:1",
+    primaryMessageId: messageId,
+    receipt: {
+      primaryPlatformMessageId: messageId,
+      platformMessageIds: [messageId],
+      parts: [{ platformMessageId: messageId, kind: "text" as const, index: 0 }],
+      sentAt: 1,
+    },
+    content,
+  };
+  const onDeliveryResult = opts?.onDeliveryResult;
+  if (typeof onDeliveryResult === "function") {
+    await onDeliveryResult(result);
+  }
+  return result;
+}
 
 function sendCall(index: number) {
   const call = sendMessageMatrixMock.mock.calls.at(index);
@@ -74,6 +100,8 @@ describe("deliverMatrixReplies", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    nextMessageId = 0;
+    sendMessageMatrixMock.mockReset().mockImplementation(resolveMockMatrixSend);
     setMatrixRuntime(runtimeStub);
     chunkMatrixTextMock.mockReset().mockImplementation((text: string) => ({
       trimmedText: text.trim(),
@@ -163,10 +191,98 @@ describe("deliverMatrixReplies", () => {
     await expect(deliverMatrixReplies(delivery)).rejects.toThrow("Matrix unavailable");
     expect(hasRepliedRef.value).toBe(false);
 
-    await expect(deliverMatrixReplies(delivery)).resolves.toBe(true);
+    await expect(deliverMatrixReplies(delivery)).resolves.toMatchObject({
+      visibleReplySent: true,
+    });
     expect(sendOptions(0).replyToId).toBe("reply-1");
     expect(sendOptions(1).replyToId).toBe("reply-1");
     expect(hasRepliedRef.value).toBe(true);
+  });
+
+  it("returns ordered provider receipts and visible content for a chunked reply", async () => {
+    chunkMatrixTextMock.mockImplementation((text: string) => ({
+      trimmedText: text.trim(),
+      convertedText: text,
+      singleEventLimit: 4000,
+      fitsInSingleEvent: true,
+      chunks: text.split("|"),
+    }));
+
+    const result = await deliverMatrixReplies({
+      cfg,
+      replies: [{ text: "first|second" }],
+      roomId: "room:1",
+      client: {} as MatrixClient,
+      runtime: runtimeEnv,
+      textLimit: 4000,
+      replyToMode: "off",
+    });
+
+    expect(result).toMatchObject({
+      messageIds: ["mx-1", "mx-2"],
+      visibleReplySent: true,
+      content: "first\nsecond",
+    });
+    expect(result.receipt?.primaryPlatformMessageId).toBe("mx-1");
+  });
+
+  it("preserves the accepted prefix when a later Matrix event fails", async () => {
+    chunkMatrixTextMock.mockImplementation((text: string) => ({
+      trimmedText: text.trim(),
+      convertedText: text,
+      singleEventLimit: 4000,
+      fitsInSingleEvent: true,
+      chunks: text.split("|"),
+    }));
+    let sendCount = 0;
+    sendMessageMatrixMock.mockImplementation(async (...args: unknown[]) => {
+      sendCount += 1;
+      if (sendCount === 2) {
+        throw new Error("second event failed");
+      }
+      return await resolveMockMatrixSend(
+        String(args[0]),
+        String(args[1]),
+        args[2] as Record<string, unknown> | undefined,
+      );
+    });
+
+    const error = await deliverMatrixReplies({
+      cfg,
+      replies: [{ text: "first|second", replyToId: "reply-1" }],
+      roomId: "room:1",
+      client: {} as MatrixClient,
+      runtime: runtimeEnv,
+      textLimit: 4000,
+      replyToMode: "first",
+    }).catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({
+      code: "CHANNEL_PARTIAL_DELIVERY",
+      deliveryResult: {
+        messageIds: ["mx-1"],
+        visibleReplySent: true,
+        content: "first",
+      },
+    });
+  });
+
+  it("returns an explicit non-visible result when every reply is suppressed", async () => {
+    const result = await deliverMatrixReplies({
+      cfg,
+      replies: [{ text: "<think>hidden</think>" }],
+      roomId: "room:1",
+      client: {} as MatrixClient,
+      runtime: runtimeEnv,
+      textLimit: 4000,
+      replyToMode: "off",
+    });
+
+    expect(result).toEqual({
+      visibleReplySent: false,
+      suppression: { reason: "no_visible_result" },
+    });
+    expect(sendMessageMatrixMock).not.toHaveBeenCalled();
   });
 
   it("preserves native thread fallback after the first reply has been consumed", async () => {

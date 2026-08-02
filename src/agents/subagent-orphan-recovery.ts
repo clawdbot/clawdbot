@@ -44,20 +44,38 @@ const log = createSubsystemLogger("subagent-interrupted-resume");
 /** Delay before attempting recovery to let the gateway finish bootstrapping. */
 const DEFAULT_RECOVERY_DELAY_MS = 5_000;
 
+type OrphanRecoveryScheduleParams = {
+  getGatewayRuntime: () => GatewayRecoveryRuntime | undefined;
+  getActiveRuns: () => Map<string, SubagentRunRecord>;
+  readSessionMessages?: typeof readSessionMessagesAsync;
+  delayMs?: number;
+  maxRetries?: number;
+};
+
+let scheduledRecoveryPhase: "scheduled" | "running" | undefined;
+let scheduledRecoveryHasStarted = false;
+let pendingRecoverySchedule: OrphanRecoveryScheduleParams | undefined;
+
+export function resetOrphanRecoveryCoordinationForTest(): void {
+  scheduledRecoveryPhase = undefined;
+  scheduledRecoveryHasStarted = false;
+  pendingRecoverySchedule = undefined;
+}
+
 function isLegacyRestartInterruptedTimeout(
   runRecord: SubagentRunRecord,
   entry: SessionEntry | undefined,
 ): boolean {
   return (
     entry?.abortedLastRun === true &&
-    runRecord.outcome?.status === "timeout" &&
-    typeof runRecord.endedAt === "number" &&
-    runRecord.endedAt > 0
+    runRecord.execution.outcome?.status === "timeout" &&
+    typeof runRecord.execution.endedAt === "number" &&
+    runRecord.execution.endedAt > 0
   );
 }
 
 function reclassifyLegacyRestartInterruptedRun(runRecord: SubagentRunRecord): void {
-  const interruptedAt = runRecord.endedAt;
+  const interruptedAt = runRecord.execution.endedAt;
   runRecord.execution = {
     ...runRecord.execution,
     status: "interrupted",
@@ -66,9 +84,7 @@ function reclassifyLegacyRestartInterruptedRun(runRecord: SubagentRunRecord): vo
     endedAt: undefined,
     outcome: undefined,
   };
-  runRecord.endedAt = undefined;
   runRecord.endedReason = undefined;
-  runRecord.outcome = undefined;
   runRecord.terminalOwner = undefined;
 }
 
@@ -289,20 +305,20 @@ export async function recoverOrphanedSubagentSessions(params: {
       const now = scanNow;
       if (
         runRecord.terminalOwner === "interrupted-recovery" &&
-        Number.isFinite(runRecord.endedAt) &&
-        runRecord.outcome?.status === "error" &&
+        Number.isFinite(runRecord.execution.endedAt) &&
+        runRecord.execution.outcome?.status === "error" &&
         runRecord.endedReason === "subagent-error" &&
         runRecord.pauseReason !== "sessions_yield"
       ) {
         const recoveryError =
-          runRecord.outcome?.status === "error"
-            ? (runRecord.outcome.error ?? "subagent run interrupted by gateway restart")
+          runRecord.execution.outcome?.status === "error"
+            ? (runRecord.execution.outcome.error ?? "subagent run interrupted by gateway restart")
             : "subagent run interrupted by gateway restart";
         try {
           const updated = await finalizeInterruptedSubagentRun({
             runId,
             error: recoveryError,
-            endedAt: runRecord.endedAt,
+            endedAt: runRecord.execution.endedAt,
           });
           if (updated === 0) {
             result.failed++;
@@ -362,7 +378,7 @@ export async function recoverOrphanedSubagentSessions(params: {
         // Terminal child outcomes are immutable. Restart resume only applies to
         // non-terminal interrupted execution; delivery retry handles terminal
         // child results separately.
-        if (typeof runRecord.endedAt === "number" && runRecord.endedAt > 0) {
+        if (typeof runRecord.execution.endedAt === "number" && runRecord.execution.endedAt > 0) {
           result.skipped++;
           continue;
         }
@@ -605,21 +621,34 @@ async function finalizeInterruptedRunWithRetry(params: {
  * The delay gives the gateway time to fully bootstrap after restart.
  * If recovery fails (e.g. gateway not yet ready), retries with exponential backoff.
  */
-export function scheduleOrphanRecovery(params: {
-  getGatewayRuntime: () => GatewayRecoveryRuntime | undefined;
-  getActiveRuns: () => Map<string, SubagentRunRecord>;
-  /** Test seam for transcript reads; production uses the canonical reader. */
-  readSessionMessages?: typeof readSessionMessagesAsync;
-  delayMs?: number;
-  maxRetries?: number;
-}): void {
+export function scheduleOrphanRecovery(params: OrphanRecoveryScheduleParams): void {
+  if (scheduledRecoveryPhase) {
+    if (scheduledRecoveryHasStarted) {
+      pendingRecoverySchedule = params;
+    }
+    return;
+  }
+
+  scheduledRecoveryPhase = "scheduled";
   const initialDelay = params.delayMs ?? DEFAULT_RECOVERY_DELAY_MS;
   const maxRetries = params.maxRetries ?? MAX_RECOVERY_RETRIES;
 
   const resumedSessionKeys = new Set<string>();
   const pendingStaleFinalizations = new Map<string, string>();
+  const finishSchedule = () => {
+    const pending = pendingRecoverySchedule;
+    pendingRecoverySchedule = undefined;
+    scheduledRecoveryPhase = undefined;
+    scheduledRecoveryHasStarted = false;
+    if (pending) {
+      scheduleOrphanRecovery(pending);
+    }
+  };
   const attemptRecovery = (attempt: number, delay: number) => {
+    scheduledRecoveryPhase = "scheduled";
     setTimeout(() => {
+      scheduledRecoveryPhase = "running";
+      scheduledRecoveryHasStarted = true;
       // Every delayed/retry scan owns a fresh root lease. Keep terminal
       // mutation in the same lease so suspension cannot become ready mid-attempt.
       void runWithGatewayIndependentRootWorkAdmission(async () => {
@@ -629,6 +658,8 @@ export function scheduleOrphanRecovery(params: {
         if (!gatewayRuntime) {
           if (attempt < maxRetries) {
             attemptRecovery(attempt + 1, delay * RETRY_BACKOFF_MULTIPLIER);
+          } else {
+            finishSchedule();
           }
           return;
         }
@@ -648,6 +679,7 @@ export function scheduleOrphanRecovery(params: {
           return;
         }
         if (result.failedRuns.length === 0) {
+          finishSchedule();
           return;
         }
         const attempts = attempt + 1;
@@ -670,6 +702,7 @@ export function scheduleOrphanRecovery(params: {
             { runIds: incomplete },
           );
         }
+        finishSchedule();
       }).catch((err: unknown) => {
         if (attempt < maxRetries) {
           const nextDelay = delay * RETRY_BACKOFF_MULTIPLIER;
@@ -679,6 +712,7 @@ export function scheduleOrphanRecovery(params: {
           attemptRecovery(attempt + 1, nextDelay);
         } else {
           log.warn(`scheduled orphan recovery failed after ${maxRetries} retries: ${String(err)}`);
+          finishSchedule();
         }
       });
     }, delay).unref?.();

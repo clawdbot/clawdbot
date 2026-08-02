@@ -106,6 +106,20 @@ function createFakeClient(options?: {
     if (method === "thread/start") {
       return threadStartResult();
     }
+    if (method === "turn/interrupt") {
+      queueMicrotask(() => {
+        for (const notify of notifications) {
+          notify({
+            method: "turn/completed",
+            params: {
+              threadId: "thread-1",
+              turn: turnStartResult("interrupted").turn,
+            },
+          });
+        }
+      });
+      return {};
+    }
     if (method === "turn/start") {
       options?.onTurnStart?.();
       if (options?.approvalRequestMethod) {
@@ -181,6 +195,7 @@ function createFakeClient(options?: {
       requestHandlers.add(handler);
       return () => requestHandlers.delete(handler);
     },
+    addCloseHandler: () => () => undefined,
     close: vi.fn(),
   } as unknown as CodexAppServerClient;
 

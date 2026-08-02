@@ -196,23 +196,15 @@ export type AgentDefaultsConfig = {
    * - once: inject once per unique truncation signature
    * - always: inject on every run with truncation (default)
    */
-  /** Optional IANA timezone for the user (used in system prompt; defaults to host timezone). */
+  /**
+   * Optional IANA timezone for model-visible timestamps, prompt context, system events,
+   * and heartbeat active hours. Defaults to the host timezone.
+   */
   userTimezone?: string;
   /** Runtime-owned first-turn startup context for bare /new and /reset. */
   startupContext?: AgentStartupContextConfig;
   /** Focused context-budget overrides for high-volume injected/read surfaces. */
   contextLimits?: AgentContextLimitsConfig;
-  /** Time format in system prompt: auto (OS preference), 12-hour, or 24-hour. */
-  /**
-   * Envelope timestamp timezone: "utc" (default), "local", "user", or an IANA timezone string.
-   */
-  /**
-   * Include absolute timestamps in message envelopes, direct agent prompt prefixes,
-   * and embedded model-input prefixes ("on" | "off", default: "on").
-   */
-  /**
-   * Include elapsed time in message envelopes ("on" | "off", default: "on").
-   */
   /** Optional context window cap (used for runtime estimates + status %). */
   contextTokens?: number;
   /** Opt-in: prune old tool results from the LLM context to reduce token usage. */

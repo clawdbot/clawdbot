@@ -25,7 +25,7 @@ function createRunEntry(overrides: Partial<SubagentRunRecord> = {}): SubagentRun
     cleanup: "keep",
     retainAttachmentsOnKeep: true,
     createdAt: 500,
-    startedAt: 1_000,
+    execution: { status: "running", startedAt: 1_000 },
     ...overrides,
   };
 }
@@ -60,8 +60,12 @@ describe("resolveSubagentArchiveAtMs", () => {
   it("starts collector retention when terminal completion is frozen", () => {
     const entry = createRunEntry({
       collect: true,
-      endedAt: 2_000,
-      outcome: { status: "ok" },
+      execution: {
+        status: "terminal",
+        startedAt: 1_000,
+        endedAt: 2_000,
+        outcome: { status: "ok" },
+      },
       completion: { required: false, resultText: "done", capturedAt: 2_000 },
     });
 
@@ -75,8 +79,12 @@ describe("resolveSubagentArchiveAtMs", () => {
     vi.setSystemTime(10_000);
     const entry = createRunEntry({
       collect: true,
-      endedAt: 2_000,
-      outcome: { status: "ok" },
+      execution: {
+        status: "terminal",
+        startedAt: 1_000,
+        endedAt: 2_000,
+        outcome: { status: "ok" },
+      },
       completion: { required: false, resultText: "done" },
     });
 
@@ -89,7 +97,7 @@ describe("resolveSubagentArchiveAtMs", () => {
   it("backfills legacy collectors from their terminal time", () => {
     const entry = createRunEntry({
       collect: true,
-      endedAt: 2_000,
+      execution: { status: "terminal", startedAt: 1_000, endedAt: 2_000 },
       archiveAtMs: 10_000,
     });
 
@@ -106,13 +114,17 @@ describe("resolveSubagentArchiveAtMs", () => {
     const persistent = createRunEntry({
       collect: true,
       spawnMode: "session",
-      endedAt: 2_000,
+      execution: { status: "terminal", startedAt: 1_000, endedAt: 2_000 },
       archiveAtMs: 10_000,
     });
     expect(backfillCollectorArchiveAtMs(persistent, cfg)).toBe(true);
     expect(persistent.archiveAtMs).toBeUndefined();
 
-    const completed = createRunEntry({ collect: true, endedAt: 2_000, archiveAtMs: 10_000 });
+    const completed = createRunEntry({
+      collect: true,
+      execution: { status: "terminal", startedAt: 1_000, endedAt: 2_000 },
+      archiveAtMs: 10_000,
+    });
     expect(
       backfillCollectorArchiveAtMs(completed, {
         agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
@@ -147,7 +159,7 @@ describe("reconcileOrphanedRestoredRuns", () => {
     const entry = createRunEntry({
       collect: true,
       cleanup: "delete",
-      endedAt: 2_000,
+      execution: { status: "terminal", startedAt: 1_000, endedAt: 2_000 },
       completion: { required: false, resultText: "done", capturedAt: 2_000 },
       collectorCompletion: { status: "done" },
     });
@@ -182,7 +194,7 @@ describe("reconcileOrphanedRun", () => {
     vi.useRealTimers();
   });
 
-  it("preserves timing on orphaned error outcomes", () => {
+  it("removes orphaned runs without publishing a discarded terminal projection", () => {
     vi.useFakeTimers();
     vi.setSystemTime(4_000);
     const entry = createRunEntry();
@@ -200,14 +212,7 @@ describe("reconcileOrphanedRun", () => {
       }),
     ).toBe(true);
 
-    expect(entry.endedAt).toBe(4_000);
-    expect(entry.outcome).toEqual({
-      status: "error",
-      error: "orphaned subagent run (missing-session-id)",
-      startedAt: 1_000,
-      endedAt: 4_000,
-      elapsedMs: 3_000,
-    });
+    expect(entry.execution).toEqual({ status: "running", startedAt: 1_000 });
     expect(runs.has(entry.runId)).toBe(false);
     expect(resumedRuns.has(entry.runId)).toBe(false);
   });
@@ -223,7 +228,7 @@ describe("logAnnounceGiveUp", () => {
     vi.setSystemTime(9_000);
     const logSpy = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
     const entry = createRunEntry({
-      endedAt: 4_000,
+      execution: { status: "terminal", startedAt: 1_000, endedAt: 4_000 },
       delivery: {
         status: "failed",
         attemptCount: 3,

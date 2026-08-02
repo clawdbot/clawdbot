@@ -7,14 +7,15 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
   loadCronJobsStoreWithConfigJobs,
-  loadCronQuarantineFile,
+  loadCronQuarantinedJobs,
   loadCronStore,
-  resolveCronQuarantinePath,
+  saveCronQuarantinedJobs,
   saveCronStore,
 } from "../../../cron/store.js";
 import { cronStoreKey } from "../../../cron/store/key.js";
 import { readCronTaskRunHistoryPage } from "../../../cron/task-run-history.js";
 import { runOpenClawStateWriteTransaction } from "../../../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
 import { withRestoredMocks } from "../../../test-utils/vitest-spies.js";
 import {
   collectLegacyCronStoreHealthFindings,
@@ -36,6 +37,10 @@ let tempRoot: string | null = null;
 async function makeTempStorePath() {
   tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-doctor-cron-"));
   return path.join(tempRoot, "cron", "jobs.json");
+}
+
+function resolveLegacyCronQuarantinePath(storePath: string): string {
+  return storePath.replace(/\.json$/, "-quarantine.json");
 }
 
 afterEach(async () => {
@@ -246,7 +251,7 @@ describe("collectLegacyCronStoreHealthFindings", () => {
         expect.objectContaining({
           checkId: "core/doctor/legacy-cron-store",
           severity: "warning",
-          path: storePath,
+          path: resolveOpenClawStateSqlitePath(),
           requirement: "legacy-notify-fallback",
         }),
       ]),
@@ -259,26 +264,17 @@ describe("collectLegacyCronStoreHealthFindings", () => {
   it("reports quarantined cron rows while leaving the active store untouched", async () => {
     const storePath = await makeTempStorePath();
     await writeCurrentCronStore(storePath, []);
-    await fs.mkdir(path.dirname(resolveCronQuarantinePath(storePath)), { recursive: true });
-    await fs.writeFile(
-      resolveCronQuarantinePath(storePath),
-      JSON.stringify(
+    saveCronQuarantinedJobs({
+      storePath,
+      nowMs: Date.parse("2026-05-29T09:00:00.000Z"),
+      entries: [
         {
-          version: 1,
-          jobs: [
-            {
-              quarantinedAtMs: Date.parse("2026-05-29T09:00:00.000Z"),
-              sourceIndex: 1,
-              reason: "missing-schedule",
-              job: { id: "bad-cron", name: "Bad cron" },
-            },
-          ],
+          sourceIndex: 1,
+          reason: "missing-schedule",
+          job: { id: "bad-cron", name: "Bad cron" },
         },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+      ],
+    });
 
     const findings = await collectLegacyCronStoreHealthFindings({
       cfg: createCronConfig(storePath),
@@ -287,11 +283,26 @@ describe("collectLegacyCronStoreHealthFindings", () => {
     expect(findings).toEqual([
       expect.objectContaining({
         checkId: "core/doctor/legacy-cron-store",
-        path: resolveCronQuarantinePath(storePath),
+        path: resolveOpenClawStateSqlitePath(),
         requirement: "quarantined-cron-rows",
       }),
     ]);
     await expect(readPersistedJobs(storePath)).resolves.toEqual([]);
+  });
+
+  it("attributes SQLite-only cron findings to the canonical state database", async () => {
+    const storePath = await makeTempStorePath();
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.dirname(path.dirname(storePath)));
+    await writeCurrentCronStore(storePath, [createCurrentCronJob({ notify: true })]);
+
+    const findings = await collectLegacyCronStoreHealthFindings({ cfg: {} });
+
+    expect(findings).toEqual([
+      expect.objectContaining({
+        path: resolveOpenClawStateSqlitePath(),
+        requirement: "legacy-notify-fallback",
+      }),
+    ]);
   });
 
   it("returns no findings for an already-normalized empty cron store", async () => {
@@ -302,31 +313,50 @@ describe("collectLegacyCronStoreHealthFindings", () => {
       collectLegacyCronStoreHealthFindings({ cfg: createCronConfig(storePath) }),
     ).resolves.toEqual([]);
   });
+
+  it("reports a legacy quarantine sidecar without creating or modifying a SQLite database", async () => {
+    const storePath = await makeTempStorePath();
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.dirname(path.dirname(storePath)));
+    const quarantinePath = resolveLegacyCronQuarantinePath(storePath);
+    await fs.mkdir(path.dirname(quarantinePath), { recursive: true });
+    const historicalBytes = JSON.stringify({
+      version: 1,
+      jobs: [{ quarantinedAtMs: 123, sourceIndex: 0, reason: "invalid-schedule", raw: null }],
+    });
+    await fs.writeFile(quarantinePath, historicalBytes, "utf-8");
+
+    const findings = await collectLegacyCronStoreHealthFindings({
+      cfg: createCronConfig(storePath),
+    });
+
+    expect(findings).toEqual([
+      expect.objectContaining({
+        path: quarantinePath,
+        requirement: "legacy-cron-quarantine",
+      }),
+    ]);
+    await expect(fs.readFile(quarantinePath, "utf-8")).resolves.toBe(historicalBytes);
+    await expect(fs.stat(resolveOpenClawStateSqlitePath())).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
 });
 
 describe("maybeRepairLegacyCronStore", () => {
   it("reports quarantined cron rows even when the active store is already sanitized", async () => {
     const storePath = await makeTempStorePath();
-    await writeCronStore(storePath, []);
-    await fs.writeFile(
-      resolveCronQuarantinePath(storePath),
-      JSON.stringify(
+    await writeCurrentCronStore(storePath, []);
+    saveCronQuarantinedJobs({
+      storePath,
+      nowMs: Date.parse("2026-05-29T09:00:00.000Z"),
+      entries: [
         {
-          version: 1,
-          jobs: [
-            {
-              quarantinedAtMs: Date.parse("2026-05-29T09:00:00.000Z"),
-              sourceIndex: 1,
-              reason: "missing-schedule",
-              job: { id: "bad-cron", name: "Bad cron" },
-            },
-          ],
+          sourceIndex: 1,
+          reason: "missing-schedule",
+          job: { id: "bad-cron", name: "Bad cron" },
         },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+      ],
+    });
 
     await maybeRepairLegacyCronStore({
       cfg: createCronConfig(storePath),
@@ -336,6 +366,74 @@ describe("maybeRepairLegacyCronStore", () => {
 
     expectNoteContaining("Quarantined cron job rows found", "Cron");
     expectNoteContaining("1 row was removed from the active cron store", "Cron");
+  });
+
+  it("imports and archives standalone legacy quarantine files without losing recovery fields", async () => {
+    const storePath = await makeTempStorePath();
+    await writeCurrentCronStore(storePath, []);
+    const quarantinePath = resolveLegacyCronQuarantinePath(storePath);
+    await fs.mkdir(path.dirname(quarantinePath), { recursive: true });
+    const historicalJob = {
+      quarantinedAtMs: Date.parse("2026-05-29T09:00:00.000Z"),
+      sourceIndex: 7,
+      reason: "invalid-schedule",
+      job: { id: "historical-bad-cron", name: "Historical bad cron" },
+      raw: { observed: true },
+      state: { nextRunAtMs: 456 },
+      updatedAtMs: 789,
+      scheduleIdentity: "historical-schedule",
+    };
+    await fs.writeFile(quarantinePath, JSON.stringify({ version: 1, jobs: [historicalJob] }));
+    const prompter = makePrompter(true);
+
+    await maybeRepairLegacyCronStore({
+      cfg: createCronConfig(storePath),
+      options: {},
+      prompter,
+    });
+
+    expect(loadCronQuarantinedJobs(storePath)).toEqual([historicalJob]);
+    await expect(fs.stat(quarantinePath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(`${quarantinePath}.migrated`)).resolves.toBeDefined();
+    expect(prompter.confirm).toHaveBeenCalledTimes(1);
+    expectNoteContaining("Cron quarantine migrated to SQLite", "Doctor changes");
+  });
+
+  it("deduplicates migrated quarantine records when sidecar archival must be retried", async () => {
+    const storePath = await makeTempStorePath();
+    await writeCurrentCronStore(storePath, []);
+    const quarantinePath = resolveLegacyCronQuarantinePath(storePath);
+    await fs.mkdir(path.dirname(quarantinePath), { recursive: true });
+    const historicalJob = {
+      quarantinedAtMs: 123,
+      sourceIndex: 0,
+      reason: "invalid-schedule",
+      job: { id: "retry-bad-cron" },
+    };
+    await fs.writeFile(quarantinePath, JSON.stringify({ version: 1, jobs: [historicalJob] }));
+    const rename = vi
+      .spyOn(fs, "rename")
+      .mockRejectedValueOnce(createFsError("EACCES", "archive unavailable"));
+
+    await maybeRepairLegacyCronStore({
+      cfg: createCronConfig(storePath),
+      options: {},
+      prompter: makePrompter(true),
+    });
+
+    expect(loadCronQuarantinedJobs(storePath)).toEqual([historicalJob]);
+    await expect(fs.stat(quarantinePath)).resolves.toBeDefined();
+    expectNoteContaining("could not archive the legacy cron file", "Doctor warnings");
+    rename.mockRestore();
+
+    await maybeRepairLegacyCronStore({
+      cfg: createCronConfig(storePath),
+      options: {},
+      prompter: makePrompter(true),
+    });
+
+    expect(loadCronQuarantinedJobs(storePath)).toEqual([historicalJob]);
+    await expect(fs.stat(`${quarantinePath}.migrated`)).resolves.toBeDefined();
   });
 
   it("surfaces cron payload model overrides without rewriting current jobs", async () => {
@@ -389,6 +487,11 @@ describe("maybeRepairLegacyCronStore", () => {
         },
         state: {},
       },
+      createCurrentCronJob({
+        id: "disabled-pinned",
+        enabled: false,
+        payload: { kind: "agentTurn", message: "Dormant job", model: "ollama/qwen3" },
+      }),
     ]);
     const prompter = makePrompter(true);
 
@@ -406,10 +509,12 @@ describe("maybeRepairLegacyCronStore", () => {
     });
 
     expect(prompter.confirm).not.toHaveBeenCalled();
-    expectNoteContaining("Cron model overrides detected", "Cron");
+    expectNoteContaining("Automation model overrides detected", "Cron");
     expectNoteContaining("2 jobs set `payload.model`", "Cron");
     expectNoteContaining("Provider namespaces: anthropic=1, openai=1", "Cron");
     expectNoteContaining("2 jobs use a different model than `agents.defaults.model`", "Cron");
+    expectNoNoteContaining("ollama", "Cron");
+    expectNoNoteContaining("jobs.json", "Cron");
 
     const jobs = await readPersistedJobs(storePath);
     const job = requirePersistedJob(jobs, 0);
@@ -444,7 +549,7 @@ describe("maybeRepairLegacyCronStore", () => {
       prompter: makePrompter(true),
     });
 
-    expectNoNoteContaining("Cron model overrides detected", "Cron");
+    expectNoNoteContaining("Automation model overrides detected", "Cron");
   });
 
   it("counts alias model pins as default mismatches", async () => {
@@ -503,10 +608,10 @@ describe("maybeRepairLegacyCronStore", () => {
         prompter,
       });
 
-      expectNoteContaining("1 cron job is still marked in-flight", "Cron");
+      expectNoteContaining("1 automation is still marked in-flight", "Cron");
       expectNoteContaining("shows it as `running`", "Cron");
       expectNoteContaining("marks such runs interrupted the next time it starts", "Cron");
-      expectNoteContaining("openclaw cron show <id>", "Cron");
+      expectNoteContaining("openclaw automations show <id>", "Cron");
 
       // Observer-only: no repair prompt and the running marker is left untouched.
       expect(prompter.confirm).not.toHaveBeenCalled();
@@ -529,7 +634,7 @@ describe("maybeRepairLegacyCronStore", () => {
         prompter: makePrompter(true),
       });
 
-      expectNoteContaining("2 cron jobs are still marked in-flight", "Cron");
+      expectNoteContaining("2 automations are still marked in-flight", "Cron");
       expectNoteContaining("shows them as `running`", "Cron");
     });
 
@@ -564,11 +669,11 @@ describe("maybeRepairLegacyCronStore", () => {
         prompter,
       });
 
-      expectNoteContaining("1 cron job has failed 3+ runs in a row", "Cron");
+      expectNoteContaining("1 automation has failed 3+ runs in a row", "Cron");
       expectNoteContaining("re-fires it on error backoff", "Cron");
       expectNoteContaining("resets on the next successful run", "Cron");
       expectNoteContaining("interrupted by a gateway restart", "Cron");
-      expectNoteContaining("openclaw cron show <id>", "Cron");
+      expectNoteContaining("openclaw automations show <id>", "Cron");
 
       // Observer-only: no repair prompt and the failure counters stay untouched.
       expect(prompter.confirm).not.toHaveBeenCalled();
@@ -607,7 +712,7 @@ describe("maybeRepairLegacyCronStore", () => {
         prompter: makePrompter(true),
       });
 
-      expectNoteContaining("2 cron jobs have failed 3+ runs in a row", "Cron");
+      expectNoteContaining("2 automations have failed 3+ runs in a row", "Cron");
     });
 
     it("stays silent when failure streaks are below the threshold", async () => {
@@ -1400,6 +1505,7 @@ describe("maybeRepairLegacyCronStore", () => {
     expectNoNoteContaining("Legacy cron job storage detected", "Cron");
     expectNoteContaining("Cron store issues detected", "Cron");
     expectNoteContaining("1 job still uses legacy", "Cron");
+    expectNoNoteContaining("jobs.json", "Cron");
   });
 
   it("advises on isolated shell-prompt jobs without a non-actionable --fix repair note (#94655)", async () => {
@@ -1457,7 +1563,7 @@ describe("maybeRepairLegacyCronStore", () => {
     // isolated agentTurn job, so the misleading repair note must stay absent.
     expectNoNoteContaining("Cron store issues detected", "Cron");
     expectNoteContaining(
-      "3 isolated cron jobs drive shell/process tools from the agent prompt and keep running as-is: `Shell prompt job 1`, `Shell prompt job 2`, `Shell prompt job 3`.",
+      "3 isolated automations drive shell/process tools from the agent prompt and keep running as-is: `Shell prompt job 1`, `Shell prompt job 2`, `Shell prompt job 3`.",
       "Cron",
     );
     expectNoteContaining("informational only", "Cron");
@@ -1524,11 +1630,11 @@ describe("maybeRepairLegacyCronStore", () => {
 
     expectNoNoteContaining("Cron store issues detected", "Cron");
     expectNoteContaining(
-      "1 isolated cron job describes a shell command in the agent prompt but lacks shell/process tool access: `Restricted command prompt`.",
+      "1 isolated automation describes a shell command in the agent prompt but lacks shell/process tool access: `Restricted command prompt`.",
       "Cron",
     );
     expectNoteContaining("not the supported shell-tool prompt shape", "Cron");
-    expectNoteContaining("Recreate the job as a command cron job", "Cron");
+    expectNoteContaining("Recreate it as a command automation", "Cron");
     expectNoNoteContaining("informational only", "Cron");
     expectNoNoteContaining("keep running as-is", "Cron");
     expectNoNoteContaining("openclaw doctor --fix", "Cron");
@@ -1887,9 +1993,9 @@ describe("maybeRepairLegacyCronStore", () => {
     });
 
     expect(await readPersistedJobs(storePath)).toEqual([]);
-    const quarantine = await loadCronQuarantineFile(resolveCronQuarantinePath(storePath));
-    expect(quarantine.jobs[0]?.reason).toBe("invalid-schedule");
-    expect(quarantine.jobs[0]?.job?.id).toBe("invalid-legacy-cron");
+    const quarantine = loadCronQuarantinedJobs(storePath);
+    expect(quarantine[0]?.reason).toBe("invalid-schedule");
+    expect(quarantine[0]?.job?.id).toBe("invalid-legacy-cron");
   });
 
   it("repairs legacy root delivery threadId hints into delivery", async () => {

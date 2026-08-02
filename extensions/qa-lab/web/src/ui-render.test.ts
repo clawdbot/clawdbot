@@ -158,6 +158,172 @@ describe("QA Lab UI evidence render", () => {
     expect(html).toContain(
       `data-conversation-key="${selectedConversationKey.replaceAll('"', "&quot;")}"`,
     );
+
+    const crossAccountKindHtml = renderQaLabUi(
+      evidenceState({
+        activeTab: "chat",
+        snapshot: {
+          conversations: [
+            { accountId: "account-a", id: "shared", kind: "group" },
+            { accountId: "account-b", id: "shared", kind: "channel" },
+          ],
+          events: [],
+          messages: [],
+          threads: [],
+        },
+      }),
+    );
+    expect(crossAccountKindHtml).toContain("shared (group, account-a)");
+    expect(crossAccountKindHtml).toContain("shared (channel, account-b)");
+  });
+
+  it("shows group conversations in the sidebar and composer without leaking same-id rooms", () => {
+    const selectedConversationKey = JSON.stringify(["account-a", "group", "shared"]);
+    const html = renderQaLabUi(
+      evidenceState({
+        activeTab: "chat",
+        selectedConversationKey,
+        composer: {
+          conversationId: "shared",
+          conversationKind: "group",
+          senderId: "alice",
+          senderName: "Alice",
+          text: "",
+        },
+        snapshot: {
+          conversations: [
+            { accountId: "account-a", id: "shared", kind: "group" },
+            { accountId: "account-b", id: "shared", kind: "group" },
+            { accountId: "account-a", id: "shared", kind: "channel" },
+            { accountId: "account-a", id: "shared", kind: "direct" },
+          ],
+          events: [],
+          messages: [
+            {
+              accountId: "account-a",
+              conversation: { id: "shared", kind: "group" },
+              direction: "inbound",
+              id: "selected-group-message",
+              reactions: [],
+              senderId: "alice",
+              text: "selected group message",
+              timestamp: 1,
+            },
+            {
+              accountId: "account-b",
+              conversation: { id: "shared", kind: "group" },
+              direction: "inbound",
+              id: "foreign-group-message",
+              reactions: [],
+              senderId: "bob",
+              text: "foreign group message",
+              timestamp: 2,
+            },
+            {
+              accountId: "account-a",
+              conversation: { id: "shared", kind: "channel" },
+              direction: "outbound",
+              id: "same-id-channel-message",
+              reactions: [],
+              senderId: "openclaw",
+              text: "same-id channel message",
+              timestamp: 3,
+            },
+          ],
+          threads: [],
+        },
+      }),
+    );
+
+    expect(html).toContain("shared (group, account-a)");
+    expect(html).toContain("shared (group, account-b)");
+    expect(html).toContain("shared (channel, account-a)");
+    expect(html).toContain("selected group message");
+    expect(html).not.toContain("foreign group message");
+    expect(html).not.toContain("same-id channel message");
+    expect(html).toContain('<option value="group" selected>Group</option>');
+    expect(html).toContain(
+      `data-conversation-key="${selectedConversationKey.replaceAll('"', "&quot;")}"`,
+    );
+  });
+
+  it("keeps thread replies out of the root timeline when thread navigation exists", () => {
+    const selectedConversationKey = JSON.stringify(["default", "channel", "qa-room"]);
+    const snapshot: NonNullable<UiState["snapshot"]> = {
+      conversations: [{ accountId: "default", id: "qa-room", kind: "channel" }],
+      events: [],
+      messages: [
+        {
+          accountId: "default",
+          conversation: { id: "qa-room", kind: "channel" },
+          direction: "outbound",
+          id: "root-message",
+          reactions: [],
+          senderId: "openclaw",
+          text: "root timeline message",
+          timestamp: 1,
+        },
+        {
+          accountId: "default",
+          conversation: { id: "qa-room", kind: "channel" },
+          direction: "outbound",
+          id: "thread-message",
+          reactions: [],
+          senderId: "openclaw",
+          text: "thread-only reply",
+          threadId: "owned-thread",
+          timestamp: 2,
+        },
+        {
+          accountId: "default",
+          conversation: { id: "qa-room", kind: "channel" },
+          direction: "outbound",
+          id: "external-thread-message",
+          reactions: [],
+          senderId: "openclaw",
+          text: "externally observed thread reply",
+          threadId: "external-thread",
+          timestamp: 3,
+        },
+      ],
+      threads: [
+        {
+          accountId: "default",
+          conversationId: "qa-room",
+          id: "owned-thread",
+          title: "Owned thread",
+        },
+      ],
+    };
+
+    const rootHtml = renderQaLabUi(
+      evidenceState({ activeTab: "chat", selectedConversationKey, snapshot }),
+    );
+    expect(rootHtml).toContain("Main timeline");
+    expect(rootHtml).toContain("root timeline message");
+    expect(rootHtml).not.toContain("thread-only reply");
+    expect(rootHtml).toContain("externally observed thread reply");
+
+    const threadHtml = renderQaLabUi(
+      evidenceState({
+        activeTab: "chat",
+        selectedConversationKey,
+        selectedThreadId: "owned-thread",
+        snapshot,
+      }),
+    );
+    expect(threadHtml).not.toContain("root timeline message");
+    expect(threadHtml).toContain("thread-only reply");
+    expect(threadHtml).not.toContain("externally observed thread reply");
+
+    const externalThreadHtml = renderQaLabUi(
+      evidenceState({
+        activeTab: "chat",
+        selectedConversationKey,
+        snapshot: { ...snapshot, threads: [] },
+      }),
+    );
+    expect(externalThreadHtml).toContain("thread-only reply");
   });
 
   it("renders capture startup commands without personal home paths", () => {

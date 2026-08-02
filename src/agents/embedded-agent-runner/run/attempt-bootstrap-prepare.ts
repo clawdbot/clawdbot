@@ -51,8 +51,8 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
     warn: (message) => log.warn(message),
   });
   let completedBootstrapTurn: boolean | undefined;
-  const hasCompletedBootstrapTurnForAttempt = async (sessionFile: string) => {
-    completedBootstrapTurn ??= await hasCompletedBootstrapTurn(sessionFile);
+  const hasCompletedBootstrapTurnForAttempt = async () => {
+    completedBootstrapTurn ??= await hasCompletedBootstrapTurn(attempt.sessionTarget);
     return completedBootstrapTurn;
   };
   const resolveBootstrapRouting = (bootstrapFiles?: readonly WorkspaceBootstrapFile[]) =>
@@ -72,7 +72,7 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
     !suppressAmbientContext &&
     contextInjectionMode === "continuation-skip" &&
     !isHeartbeatLifecycleRunKind(attempt.bootstrapContextRunKind) &&
-    (await hasCompletedBootstrapTurnForAttempt(attempt.sessionFile));
+    (await hasCompletedBootstrapTurnForAttempt());
   let preloadedBootstrapFiles: WorkspaceBootstrapFile[] | undefined;
   let bootstrapRouting =
     shouldProbeContinuationSkip || suppressAmbientContext || contextInjectionMode === "never"
@@ -108,7 +108,6 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
     bootstrapContextMode: attempt.bootstrapContextMode,
     bootstrapContextRunKind: attempt.bootstrapContextRunKind ?? "default",
     bootstrapMode,
-    sessionFile: attempt.sessionFile,
     hasCompletedBootstrapTurn: hasCompletedBootstrapTurnForAttempt,
     resolveBootstrapContextForRun: async () => {
       const bootstrapFiles =

@@ -14,7 +14,6 @@ import {
   type InboundEventKind,
   type NormalizedLocation,
 } from "openclaw/plugin-sdk/channel-inbound";
-import { resolveChannelGroupPolicy } from "openclaw/plugin-sdk/channel-policy";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
 import { isAbortRequestText } from "openclaw/plugin-sdk/command-primitives-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -55,6 +54,7 @@ import {
 import { buildTelegramGroupPeerId, buildTelegramInboundOriginTarget } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
 import { isTelegramForumServiceMessage } from "./forum-service-message.js";
+import { resolveTelegramGroupIngestEnabled } from "./group-config-helpers.js";
 import { recordTelegramGroupHistoryEntry } from "./group-history-window.js";
 import { resolveTelegramCommandIngressAuthorization } from "./ingress.js";
 type TelegramMentionFacts = NonNullable<
@@ -388,17 +388,7 @@ export async function resolveTelegramInboundBody(params: {
         messageId: typeof msg.message_id === "number" ? String(msg.message_id) : undefined,
       },
     });
-    const telegramGroupPolicy = resolveChannelGroupPolicy({
-      cfg,
-      channel: "telegram",
-      groupId: String(chatId),
-      accountId,
-    });
-    const ingestEnabled =
-      topicConfig?.ingest ??
-      telegramGroupPolicy.groupConfig?.ingest ??
-      telegramGroupPolicy.defaultConfig?.ingest;
-    if (ingestEnabled === true && sessionKey) {
+    if (sessionKey && resolveTelegramGroupIngestEnabled({ cfg, chatId, accountId, topicConfig })) {
       fireAndForgetHook(
         triggerInternalHook(
           createInternalHookEvent(
@@ -408,7 +398,7 @@ export async function resolveTelegramInboundBody(params: {
             toInternalMessageReceivedContext({
               from: `telegram:group:${historyKey ?? chatId}`,
               to: originatingTo,
-              content: rawBody,
+              content: historyBody,
               timestamp: msg.date ? msg.date * 1000 : undefined,
               channelId: "telegram",
               accountId,
@@ -424,6 +414,12 @@ export async function resolveTelegramInboundBody(params: {
               originatingTo,
               isGroup: true,
               groupId: `telegram:${chatId}`,
+              media: materializedMedia.map(({ path, contentType, kind, sourceMessageId }) => ({
+                path,
+                contentType,
+                kind,
+                messageId: sourceMessageId ?? String(msg.message_id),
+              })),
             }),
           ),
         ),

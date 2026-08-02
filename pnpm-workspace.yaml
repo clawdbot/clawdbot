@@ -144,7 +144,7 @@ overrides:
   qs: 6.15.3
   sharp: 0.35.3
   node-domexception: "npm:@nolyfill/domexception@1.0.28"
-  typebox: 1.3.8
+  typebox: 1.3.6
   tar: 7.5.22
   tough-cookie: 5.1.2
   yauzl: 3.4.0

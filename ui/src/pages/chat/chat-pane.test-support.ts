@@ -18,6 +18,7 @@ import { createInitialUserMessageHandoff } from "../../app/initial-user-message-
 import type { CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import "./chat-pane.ts";
+import { attachChatRealtimeActions, createInitialChatRealtimeState } from "./chat-realtime.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
 import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
@@ -201,14 +202,15 @@ export function createTestChatPane(params: {
     sidebarFocusPanelId: "",
     sidebarFocusVersion: 0,
     sidebarLayout: { columns: [] },
+    ...createInitialChatRealtimeState(),
     // Minimal scroll host so scheduleChatScroll is a no-op instead of throwing.
     chatScrollGeneration: 0,
     chatScrollCommitCleanup: null,
     handleChatScroll: vi.fn(),
-    realtimeTalkInputLevel: { set: vi.fn() },
     resetToolStream: vi.fn(),
     renderLifecycle: { afterCommit: () => () => {}, invalidate: () => {} },
   } as unknown as ChatPageHost;
+  attachChatRealtimeActions(state);
   state.updateSidebarLayout = (layout) => {
     state.sidebarLayout = layout;
   };

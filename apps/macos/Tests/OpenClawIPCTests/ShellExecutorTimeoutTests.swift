@@ -13,7 +13,7 @@ struct ShellExecutorTimeoutTests {
             command: [
                 "/bin/sh",
                 "-c",
-                "echo $$ > \"$PID_FILE\"; trap '' TERM; while :; do :; done",
+                "echo $$ > \"$PID_FILE\"; trap '' TERM; exec /bin/sleep 30",
             ],
             cwd: nil,
             env: ["PID_FILE": pidFile.path],

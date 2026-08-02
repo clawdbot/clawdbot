@@ -32,8 +32,6 @@ type QaScenarioRuntimeDeps = {
   randomUUID: () => string;
   runScenario: QaScenarioRuntimeFunction;
   waitForOutboundMessage: QaScenarioRuntimeFunction;
-  waitForTransportOutboundMessage: QaScenarioRuntimeFunction;
-  waitForChannelOutboundMessage: QaScenarioRuntimeFunction;
   waitForNoOutbound: QaScenarioRuntimeFunction;
   waitForNoTransportOutbound: QaScenarioRuntimeFunction;
   recentOutboundSummary: QaScenarioRuntimeFunction;
@@ -127,8 +125,6 @@ type QaScenarioRuntimeApi<
   runScenario: TDeps["runScenario"];
   waitForCondition: TEnv["transport"]["waitForCondition"];
   waitForOutboundMessage: TDeps["waitForOutboundMessage"];
-  waitForTransportOutboundMessage: TDeps["waitForTransportOutboundMessage"];
-  waitForChannelOutboundMessage: TDeps["waitForChannelOutboundMessage"];
   waitForNoOutbound: TDeps["waitForNoOutbound"];
   waitForNoTransportOutbound: TDeps["waitForNoTransportOutbound"];
   recentOutboundSummary: TDeps["recentOutboundSummary"];
@@ -240,8 +236,6 @@ export function createQaScenarioRuntimeApi<
     runScenario: params.deps.runScenario,
     waitForCondition: transport.waitForCondition,
     waitForOutboundMessage: params.deps.waitForOutboundMessage,
-    waitForTransportOutboundMessage: params.deps.waitForTransportOutboundMessage,
-    waitForChannelOutboundMessage: params.deps.waitForChannelOutboundMessage,
     waitForNoOutbound: params.deps.waitForNoOutbound,
     waitForNoTransportOutbound: params.deps.waitForNoTransportOutbound,
     recentOutboundSummary: params.deps.recentOutboundSummary,

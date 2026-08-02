@@ -580,7 +580,7 @@ describe("session.message websocket events", () => {
       task: "finish recovered child work",
       cleanup: "keep",
       createdAt: 1_000,
-      startedAt: 2_000,
+      execution: { status: "running", startedAt: 2_000 },
     };
     await writeSessionStore({
       entries: {

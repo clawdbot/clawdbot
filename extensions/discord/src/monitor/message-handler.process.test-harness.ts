@@ -47,6 +47,8 @@ export function createMockDraftStream() {
     discardPending: vi.fn(async () => {}),
     seal: vi.fn(async () => {}),
     stop: vi.fn(async () => {}),
+    retarget: vi.fn(async () => {}),
+    cleanupRetargeted: vi.fn(async () => {}),
     forceNewMessage: vi.fn(() => {
       messageId = undefined;
     }),
@@ -213,6 +215,7 @@ export type DispatchInboundParams = {
     onCompactionEnd?: () => Promise<void> | void;
     onPartialReply?: (payload: { text?: string }) => Promise<void> | void;
     onAssistantMessageStart?: () => Promise<void> | void;
+    onQueuedFollowupAdmitted?: () => Promise<void> | void;
     allowProgressCallbacksWhenSourceDeliverySuppressed?: boolean;
     onTypingCleanup?: () => Promise<void> | void;
   };

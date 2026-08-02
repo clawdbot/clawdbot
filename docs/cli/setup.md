@@ -41,8 +41,9 @@ automatic pass. Detected local runtimes are auto-tested after CLI and API-key
 candidates; when several local models are available, OpenClaw prefers the
 strongest tool-calling instruct family. The selected candidate must answer a
 real completion before its provider and model configuration is saved.
-Installed Gemini, Antigravity, Pi, and OpenCode CLIs are also reported when
-they cannot serve as the reusable inference route for guided setup.
+Pi and OpenCode CLIs may also be reported for context when they cannot serve as
+the reusable inference route for guided setup. Gemini CLI and Antigravity are
+not offered as detected setup routes.
 
 `setup` accepts the same onboarding flags as `openclaw onboard`, including
 auth (`--auth-choice`, `--token`, provider key flags), Gateway

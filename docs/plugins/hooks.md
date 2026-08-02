@@ -167,16 +167,22 @@ observation-only.
 
 **Messages and delivery**
 
-| Hook                        | Purpose                                                           |
-| --------------------------- | ----------------------------------------------------------------- |
-| **`inbound_claim`**         | Claim an inbound message before agent routing (synthetic replies) |
-| `channel_pairing_requested` | Observe newly created DM pairing requests                         |
-| `message_received`          | Observe inbound content, sender, thread, and metadata             |
-| **`message_sending`**       | Rewrite outbound content or cancel delivery                       |
-| **`reply_payload_sending`** | Mutate or cancel normalized reply payloads before delivery        |
-| `message_sent`              | Observe outbound delivery success or failure                      |
-| **`before_dispatch`**       | Inspect or rewrite an outbound dispatch before channel handoff    |
-| **`reply_dispatch`**        | Participate in the final reply-dispatch pipeline                  |
+| Hook                        | Purpose                                                                    |
+| --------------------------- | -------------------------------------------------------------------------- |
+| **`inbound_claim`**         | Claim an inbound message for the plugin that owns its conversation binding |
+| `channel_pairing_requested` | Observe newly created DM pairing requests                                  |
+| `message_received`          | Observe inbound content, sender, thread, and metadata                      |
+| **`message_sending`**       | Rewrite outbound content or cancel delivery                                |
+| **`reply_payload_sending`** | Mutate or cancel normalized reply payloads before delivery                 |
+| `message_sent`              | Observe outbound delivery success or failure                               |
+| **`before_dispatch`**       | Inspect or rewrite an outbound dispatch before channel handoff             |
+| **`reply_dispatch`**        | Participate in the final reply-dispatch pipeline                           |
+
+`inbound_claim` is not a global pre-routing broadcast. OpenClaw invokes it only
+for the plugin that owns the message's core-managed conversation binding. To
+suppress an ordinary agent turn before model input without retaining the
+original prompt in transcript, use `before_agent_run`. To short-circuit an agent
+turn with a synthetic reply or silence, use `before_agent_reply`.
 
 **Sessions and compaction**
 
@@ -767,6 +773,9 @@ and `before_dispatch` contexts also expose reply metadata when the channel
 has visibility-filtered quoted message data: `replyToId`, `replyToIdFull`,
 `replyToBody`, `replyToSender`, and `replyToIsQuote`. Prefer these
 first-class fields before reading legacy metadata.
+
+`before_dispatch` receives the canonical inbound `messageId` in both its event
+and context.
 
 Prefer typed `threadId` and `replyToId` fields before using channel-specific
 metadata.

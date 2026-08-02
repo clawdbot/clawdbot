@@ -323,6 +323,86 @@ describe("hooks mapping", () => {
     }
   });
 
+  it("carries wake agent and session routing from mappings", async () => {
+    const mappings = resolveHookMappings({
+      mappings: [
+        {
+          id: "targeted-wake",
+          match: { path: "gmail" },
+          action: "wake",
+          textTemplate: "Subject: {{messages[0].subject}}",
+          agentId: "hooks",
+          sessionKey: "hook:gmail:{{messages[0].subject}}",
+        },
+      ],
+    });
+    const result = await applyHookMappings(mappings, {
+      payload: gmailPayload,
+      headers: {},
+      url: baseUrl,
+      path: "gmail",
+    });
+
+    expect(result?.ok).toBe(true);
+    if (result?.ok && result.action?.kind === "wake") {
+      expect(result.action).toMatchObject({
+        agentId: "hooks",
+        sessionKey: "hook:gmail:Hello",
+        sessionKeySource: "templated",
+      });
+    }
+  });
+
+  it.each(["wake", "agent"] as const)(
+    "rejects %s session key templates that render empty",
+    async (action) => {
+      const mappings = resolveHookMappings({
+        mappings: [
+          {
+            id: `empty-${action}-session-key`,
+            match: { path: "gmail" },
+            action,
+            ...(action === "wake"
+              ? { textTemplate: "Subject: {{messages[0].subject}}" }
+              : { messageTemplate: "Subject: {{messages[0].subject}}" }),
+            sessionKey: "{{messages[0].missing}}",
+          },
+        ],
+      });
+      const result = await applyHookMappings(mappings, {
+        payload: gmailPayload,
+        headers: {},
+        url: baseUrl,
+        path: "gmail",
+      });
+
+      expect(result).toEqual({
+        ok: false,
+        error: "hook mapping sessionKey template rendered empty",
+      });
+    },
+  );
+
+  it("rejects custom wake sessions that cannot be drained on the next heartbeat", async () => {
+    const result = await applyGmailMappings({
+      mappings: [
+        {
+          id: "deferred-targeted-wake",
+          match: { path: "gmail" },
+          action: "wake",
+          textTemplate: "Subject: {{messages[0].subject}}",
+          wakeMode: "next-heartbeat",
+          sessionKey: "hook:gmail:fixed",
+        },
+      ],
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: "hook mapping sessionKey requires wakeMode=now",
+    });
+  });
+
   it("runs transform module", async () => {
     const configDir = makeTempDir(hooksTempDirs, "openclaw-config-");
     const transformsRoot = path.join(configDir, "hooks", "transforms");

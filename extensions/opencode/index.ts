@@ -53,7 +53,7 @@ function isModernOpencodeModel(modelId: string): boolean {
 export default defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
   name: "OpenCode Zen Provider",
-  description: "Bundled OpenCode Zen provider plugin",
+  description: "OpenCode Zen provider plugin",
   manifest,
   provider: {
     label: "OpenCode Zen",

@@ -21,7 +21,8 @@ scenario:
   codeRefs:
     - packages/speech-core/src/tts.ts
     - src/gateway/server-methods/chat-webchat-media.ts
-    - src/gateway/control-ui.ts
+    - src/gateway/managed-image-attachments.ts
+    - src/gateway/server-methods/artifacts.ts
     - test/e2e/qa-lab/runtime/media-talk-gateway.ts
   execution:
     kind: script

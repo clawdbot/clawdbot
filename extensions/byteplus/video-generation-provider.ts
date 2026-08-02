@@ -8,6 +8,7 @@ import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
+  assertProviderBinaryResponseContent,
   createProviderOperationDeadline,
   createProviderOperationTimeoutResolver,
   fetchProviderDownloadResponse,
@@ -196,6 +197,13 @@ async function downloadBytePlusVideo(params: {
     provider: "byteplus",
     requestFailedMessage: "BytePlus generated video download failed",
   });
+  try {
+    assertProviderBinaryResponseContent(response, "BytePlus generated video download", "video");
+  } catch (error) {
+    // A rejected binary response still owns a live socket until its unread body is canceled.
+    await response.body?.cancel().catch(() => undefined);
+    throw error;
+  }
   const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
   const buffer = await readResponseWithLimit(response, params.maxBytes, {
     timeoutMs,
@@ -206,6 +214,9 @@ async function downloadBytePlusVideo(params: {
     onOverflow: ({ maxBytes }) =>
       new Error(`BytePlus generated video download exceeds ${maxBytes} bytes`),
   });
+  if (buffer.byteLength === 0) {
+    throw new Error("BytePlus generated video download: malformed video response");
+  }
   return {
     buffer,
     mimeType,

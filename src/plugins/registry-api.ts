@@ -286,7 +286,11 @@ export function createPluginApiFactory(
                 shouldCommitWorkflowSideEffect()
                   ? setPluginRunContext({ pluginId: record.id, patch })
                   : false,
-              getRunContext: (get) => getPluginRunContext({ pluginId: record.id, get }),
+              getRunContext: (get) =>
+                registryParams.activateGlobalSideEffects !== false &&
+                shouldCommitWorkflowSideEffect()
+                  ? getPluginRunContext({ pluginId: record.id, get })
+                  : undefined,
               clearRunContext: (paramsLocal) => {
                 if (
                   registryParams.activateGlobalSideEffects === false ||

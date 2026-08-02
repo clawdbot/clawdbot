@@ -2,6 +2,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { resolveMemorySearchStaleness } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveMemoryDreamingConfig } from "openclaw/plugin-sdk/memory-core-host-status";
 import {
   buildCliMemorySearchSessionKey,
@@ -40,27 +41,6 @@ import {
   resolveShortTermRecallStorePath,
 } from "./short-term-promotion.js";
 const { accent, heading, info, muted, success, warn } = theme;
-function formatMemoryIndexIdentityWarning(
-  status: ReturnType<MemoryManager["status"]>,
-  agentId: string,
-): {
-  reason: string;
-  fix: string;
-} | null {
-  const indexIdentity = asRecord(asRecord(status.custom)?.indexIdentity);
-  const reason =
-    (indexIdentity?.status === "mismatched" || indexIdentity?.status === "missing") &&
-    typeof indexIdentity.reason === "string"
-      ? indexIdentity.reason
-      : undefined;
-  if (!reason) {
-    return null;
-  }
-  return {
-    reason,
-    fix: `Run: openclaw memory status --index --agent ${agentId}`,
-  };
-}
 function formatSourceLabel(source: string, workspaceDir: string, agentId: string): string {
   if (source === "memory") {
     return shortenHomeInString(
@@ -284,10 +264,9 @@ export async function runMemorySearch(
         process.exitCode = 1;
         return;
       }
-      const workspaceDir =
-        typeof (manager as { status?: () => { workspaceDir?: string } }).status === "function"
-          ? manager.status().workspaceDir
-          : undefined;
+      const status = manager.status();
+      const staleness = resolveMemorySearchStaleness(status, agentId);
+      const workspaceDir = status.workspaceDir;
       if (dreamingEnabled) {
         await recordShortTermRecalls({
           workspaceDir,
@@ -300,17 +279,11 @@ export async function runMemorySearch(
         });
       }
       if (opts.json) {
-        defaultRuntime.writeJson({ results });
+        defaultRuntime.writeJson({ results, ...staleness });
         return;
       }
-      const identityWarning =
-        typeof manager.status === "function"
-          ? formatMemoryIndexIdentityWarning(manager.status(), agentId)
-          : null;
-      if (identityWarning) {
-        defaultRuntime.error(
-          `Memory index warning: ${identityWarning.reason}. Vector memory search is paused until the index is rebuilt. ${identityWarning.fix}`,
-        );
+      if (staleness) {
+        defaultRuntime.error(`${staleness.warning} ${staleness.action}`);
       }
       if (results.length === 0) {
         defaultRuntime.log("No matches.");

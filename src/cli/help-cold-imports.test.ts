@@ -20,10 +20,10 @@ vi.mock("./gateway-cli/run.js", () => {
   };
 });
 
-vi.mock("./gateway-cli/call.js", () => {
+vi.mock("./gateway-rpc.runtime.js", () => {
   loaded.mark("gateway-call-runtime");
   return {
-    callGatewayCli: vi.fn(async () => ({})),
+    callGatewayFromCliRuntime: vi.fn(async () => ({})),
   };
 });
 

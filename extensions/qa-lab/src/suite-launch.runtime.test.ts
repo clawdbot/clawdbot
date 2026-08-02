@@ -203,6 +203,26 @@ describe("qa suite runtime launcher", () => {
     expect(runQaTestFileScenarios).not.toHaveBeenCalled();
   });
 
+  it("forces the declared runtime for a single runtime-specific flow scenario", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-single-codex-runtime-");
+    const result = await runQaSuite({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/single-codex-runtime",
+      providerMode: "live-frontier",
+      scenarioIds: ["long-context-progress-watchdog"],
+    });
+
+    expect(result.executionKind).toBe("suite");
+    expect(runQaFlowSuite).toHaveBeenCalledTimes(1);
+    expect(runQaFlowSuite).toHaveBeenCalledWith(
+      expect.objectContaining({
+        forcedRuntime: "codex",
+        scenarioIds: ["long-context-progress-watchdog"],
+      }),
+    );
+    expect(runQaTestFileScenarios).not.toHaveBeenCalled();
+  });
+
   it("retries a flow-only suite once for retryable infrastructure failures", async () => {
     const attempts = mockFlowPartitionFailures(
       new Map([
@@ -355,7 +375,7 @@ describe("qa suite runtime launcher", () => {
       expect.objectContaining({
         adapterFactories,
         channelId: "matrix",
-        outputDir: path.join(outputDir, "flow", "matrix-isolated"),
+        outputDir: path.join(outputDir, "flow", "matrix-isolated-1"),
         scenarioIds: ["matrix-restart-resume"],
       }),
     );
@@ -370,7 +390,7 @@ describe("qa suite runtime launcher", () => {
       expect.objectContaining({
         adapterFactories,
         channelId: "matrix",
-        outputDir: path.join(outputDir, "flow", "matrix-shared"),
+        outputDir: path.join(outputDir, "flow", "matrix-isolated-2"),
         scenarioIds: ["thread-isolation"],
       }),
     );
@@ -733,14 +753,15 @@ describe("qa suite runtime launcher", () => {
     const repoRoot = await makeTempRepo("qa-suite-pluggable-same-channel-concurrency-");
     const maxActive = trackMaxActiveFlowRuns();
 
-    const scenarioIds = [
-      "matrix-approval-channel-target-both",
+    const isolatedScenarioId = "matrix-approval-channel-target-both";
+    const sharedScenarioIds = [
       "matrix-approval-deny-reaction",
       "matrix-approval-exec-metadata-chunked",
       "matrix-approval-exec-metadata-single-event",
       "matrix-approval-plugin-metadata-single-event",
       "matrix-approval-thread-target",
     ];
+    const scenarioIds = [isolatedScenarioId, ...sharedScenarioIds];
     await runQaSuite({
       repoRoot,
       outputDir: ".artifacts/qa-e2e/pluggable-same-channel-concurrency",
@@ -759,9 +780,10 @@ describe("qa suite runtime launcher", () => {
     });
 
     expect(runQaFlowSuite).toHaveBeenCalledTimes(6);
-    expect(runQaFlowSuite.mock.calls.map(([params]) => params?.scenarioIds)).toEqual(
-      scenarioIds.map((scenarioId) => [scenarioId]),
-    );
+    expect(runQaFlowSuite.mock.calls.map(([params]) => params?.scenarioIds)).toEqual([
+      ...sharedScenarioIds.map((scenarioId) => [scenarioId]),
+      [isolatedScenarioId],
+    ]);
     expect(maxActive()).toBe(6);
   });
 

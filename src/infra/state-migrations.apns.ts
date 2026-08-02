@@ -1,15 +1,9 @@
 // Doctor-only import for the retired APNs registration JSON store.
-import { createHash } from "node:crypto";
 import path from "node:path";
 import { root, type Root } from "@openclaw/fs-safe";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-} from "../state/openclaw-state-db.js";
-import { formatErrorMessage } from "./errors.js";
-import { acquireGatewayLock, GatewayLockError } from "./gateway-lock.js";
+import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -25,9 +19,18 @@ import {
   normalizeCanonicalApnsRegistration,
   type ApnsRegistration,
 } from "./push-apns-store.js";
+import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
 import {
+  markLegacyMigrationSourceRemoved,
+  readLegacyMigrationReceipt,
+  readLegacyMigrationReceiptFromDatabase,
+  recordLegacyMigrationReceipt,
+  resolveLegacyMigrationSourceKey,
+  type LegacyMigrationReceipt,
+} from "./state-migrations.receipts.js";
+import {
+  LegacyMigrationSourceClaim,
   legacyMigrationSourceOrClaimMayExist,
-  legacyMigrationSourceSnapshotsMatch as snapshotsMatch,
   resolveLegacyMigrationRelativePath,
   type LegacyMigrationSourceSnapshot,
 } from "./state-migrations.source-snapshot.js";
@@ -36,8 +39,6 @@ import type { LegacyStateDetection, MigrationMessages } from "./state-migrations
 const LEGACY_APNS_REGISTRATION_PATH = "push/apns-registrations.json";
 const APNS_DOCTOR_CLAIM_SUFFIX = ".doctor-importing";
 const MIGRATION_KIND = "legacy-apns-registrations-json";
-const MIGRATION_LOCK_TIMEOUT_MS = 250;
-const MIGRATION_LOCK_POLL_INTERVAL_MS = 25;
 // Legacy values are wall-clock timestamps. Bounding them to ECMAScript Date's
 // finite range rejects hostile counters with ~367 trillion successor values left.
 const MAX_LEGACY_APNS_UPDATED_AT_MS = 8_640_000_000_000_000;
@@ -65,18 +66,13 @@ const RELAY_REGISTRATION_KEYS = new Set([
 
 type ApnsMigrationDatabase = Pick<
   OpenClawStateKyselyDatabase,
-  "apns_registrations" | "apns_registration_tombstones" | "migration_runs" | "migration_sources"
+  "apns_registrations" | "apns_registration_tombstones"
 >;
 
 type LegacySourceSnapshot = Pick<
   LegacyMigrationSourceSnapshot,
   "sourcePath" | "dev" | "ino" | "mtimeMs" | "sha256" | "size"
 >;
-
-type MigrationReceipt = {
-  sourceKey: string;
-  removedSource: boolean;
-};
 
 function resolveLegacyApnsPath(stateDir: string): string {
   return path.join(stateDir, LEGACY_APNS_REGISTRATION_PATH);
@@ -184,23 +180,6 @@ function parseLegacyApnsRegistration(
   return [normalizedNodeId, registration];
 }
 
-function receiptSourceKey(sourcePath: string): string {
-  return `apns-json:${createHash("sha256").update(path.resolve(sourcePath)).digest("hex")}`;
-}
-
-function readMigrationReceipt(sourcePath: string, env: NodeJS.ProcessEnv): MigrationReceipt | null {
-  const sourceKey = receiptSourceKey(sourcePath);
-  const { db } = openOpenClawStateDatabase({ env });
-  const row = executeSqliteQueryTakeFirstSync(
-    db,
-    getNodeSqliteKysely<ApnsMigrationDatabase>(db)
-      .selectFrom("migration_sources")
-      .select("removed_source")
-      .where("source_key", "=", sourceKey),
-  );
-  return row ? { sourceKey, removedSource: row.removed_source === 1 } : null;
-}
-
 function importAndRecordReceipt(params: {
   env: NodeJS.ProcessEnv;
   sourcePath: string;
@@ -213,19 +192,13 @@ function importAndRecordReceipt(params: {
   suppressed: number;
   receiptAuthoritative: boolean;
 } {
-  const sourceKey = receiptSourceKey(params.sourcePath);
+  const sourceKey = resolveLegacyMigrationSourceKey("apns-json", params.sourcePath);
   const runId = `${sourceKey}:${params.snapshot.sha256.slice(0, 16)}`;
   const now = Date.now();
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
       const stateDb = getNodeSqliteKysely<ApnsMigrationDatabase>(db);
-      const existingReceipt = executeSqliteQueryTakeFirstSync(
-        db,
-        stateDb
-          .selectFrom("migration_sources")
-          .select("source_key")
-          .where("source_key", "=", sourceKey),
-      );
+      const existingReceipt = readLegacyMigrationReceiptFromDatabase(db, sourceKey);
       if (existingReceipt) {
         return {
           sourceKey,
@@ -293,72 +266,29 @@ function importAndRecordReceipt(params: {
         preservedSqliteRecordCount: preserved,
         suppressedDeletedRecordCount: suppressed,
       });
-      executeSqliteQuerySync(
-        db,
-        stateDb.insertInto("migration_runs").values({
-          id: runId,
-          started_at: now,
-          finished_at: now,
-          status: "completed",
-          report_json: reportJson,
-        }),
-      );
-      executeSqliteQuerySync(
-        db,
-        stateDb.insertInto("migration_sources").values({
-          source_key: sourceKey,
-          migration_kind: MIGRATION_KIND,
-          source_path: params.sourcePath,
-          target_table: "apns_registrations",
-          source_sha256: params.snapshot.sha256,
-          source_size_bytes: params.snapshot.size,
-          source_record_count: params.registrations.size,
-          last_run_id: runId,
-          status: "completed",
-          imported_at: now,
-          removed_source: 0,
-          report_json: reportJson,
-        }),
-      );
+      recordLegacyMigrationReceipt(db, {
+        sourceKey,
+        migrationKind: MIGRATION_KIND,
+        sourcePath: params.sourcePath,
+        targetTable: "apns_registrations",
+        sourceSha256: params.snapshot.sha256,
+        sourceSizeBytes: params.snapshot.size,
+        sourceRecordCount: params.registrations.size,
+        runId,
+        now,
+        reportJson,
+      });
       return { sourceKey, imported, preserved, suppressed, receiptAuthoritative: false };
     },
     { env: params.env },
   );
 }
 
-function markSourceRemoved(sourceKey: string, env: NodeJS.ProcessEnv): void {
-  runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      executeSqliteQuerySync(
-        db,
-        getNodeSqliteKysely<ApnsMigrationDatabase>(db)
-          .updateTable("migration_sources")
-          .set({ removed_source: 1 })
-          .where("source_key", "=", sourceKey),
-      );
-    },
-    { env },
-  );
-}
-
-async function removePath(params: {
-  stateRoot: Root;
-  stateDir: string;
-  sourcePath: string;
-  removeSource?: (sourcePath: string) => Promise<void> | void;
-}): Promise<void> {
-  if (params.removeSource) {
-    await params.removeSource(params.sourcePath);
-    return;
-  }
-  await params.stateRoot.remove(relativeLegacyPath(params.stateDir, params.sourcePath));
-}
-
 async function cleanupReceiptAuthoritativeSources(params: {
   stateRoot: Root;
   stateDir: string;
   sourcePath: string;
-  receipt: MigrationReceipt;
+  receipt: LegacyMigrationReceipt;
   env: NodeJS.ProcessEnv;
   removeSource?: (sourcePath: string) => Promise<void> | void;
 }): Promise<number> {
@@ -369,36 +299,17 @@ async function cleanupReceiptAuthoritativeSources(params: {
     }
     // Validate ownership and drain the pinned inode before deleting receipt-retired bytes.
     await readLegacySourceSnapshot(params.stateRoot, params.stateDir, candidate);
-    await removePath({ ...params, sourcePath: candidate });
+    if (params.removeSource) {
+      await params.removeSource(candidate);
+    } else {
+      await params.stateRoot.remove(relativeLegacyPath(params.stateDir, candidate));
+    }
     removed += 1;
   }
   if (!params.receipt.removedSource || removed > 0) {
-    markSourceRemoved(params.receipt.sourceKey, params.env);
+    markLegacyMigrationSourceRemoved(params.receipt.sourceKey, params.env);
   }
   return removed;
-}
-
-async function restoreClaim(params: {
-  stateRoot: Root;
-  stateDir: string;
-  sourcePath: string;
-}): Promise<string | null> {
-  const claimPath = `${params.sourcePath}${APNS_DOCTOR_CLAIM_SUFFIX}`;
-  try {
-    if (!(await params.stateRoot.exists(relativeLegacyPath(params.stateDir, claimPath)))) {
-      return null;
-    }
-    if (await params.stateRoot.exists(relativeLegacyPath(params.stateDir, params.sourcePath))) {
-      return `source path already exists: ${params.sourcePath}`;
-    }
-    await params.stateRoot.move(
-      relativeLegacyPath(params.stateDir, claimPath),
-      relativeLegacyPath(params.stateDir, params.sourcePath),
-    );
-    return null;
-  } catch (error) {
-    return String(error);
-  }
 }
 
 async function migrateWithExclusiveStateOwnership(params: {
@@ -416,7 +327,10 @@ async function migrateWithExclusiveStateOwnership(params: {
     return { changes, warnings };
   }
 
-  const receipt = readMigrationReceipt(params.detected.sourcePath, params.env);
+  const receipt = readLegacyMigrationReceipt(
+    resolveLegacyMigrationSourceKey("apns-json", params.detected.sourcePath),
+    params.env,
+  );
   if (receipt) {
     try {
       const removed = await cleanupReceiptAuthoritativeSources({
@@ -434,16 +348,25 @@ async function migrateWithExclusiveStateOwnership(params: {
   }
 
   const sourcePath = params.detected.sourcePath;
-  const claimPath = `${sourcePath}${APNS_DOCTOR_CLAIM_SUFFIX}`;
-  const hasSource = await params.stateRoot.exists(relativeLegacyPath(params.stateDir, sourcePath));
-  const hasClaim = await params.stateRoot.exists(relativeLegacyPath(params.stateDir, claimPath));
+  const source = new LegacyMigrationSourceClaim<LegacySourceSnapshot>({
+    stateRoot: params.stateRoot,
+    stateDir: params.stateDir,
+    sourcePath,
+    label: "APNs",
+    includeFilePath: false,
+    claimSuffix: APNS_DOCTOR_CLAIM_SUFFIX,
+    readSnapshot: (snapshotPath) =>
+      readLegacySourceSnapshot(params.stateRoot, params.stateDir, snapshotPath),
+  });
+  const hasSource = await source.exists();
+  const hasClaim = await source.exists(true);
   if (hasSource && hasClaim) {
     return {
       changes,
       warnings: ["Failed migrating legacy APNs state: source and interrupted claim both exist."],
     };
   }
-  const activePath = hasSource ? sourcePath : hasClaim ? claimPath : null;
+  const activePath = hasSource ? sourcePath : hasClaim ? source.claimPath : null;
   if (!activePath) {
     return { changes, warnings };
   }
@@ -474,22 +397,13 @@ async function migrateWithExclusiveStateOwnership(params: {
 
   if (activePath === sourcePath) {
     try {
-      params.beforeClaim?.();
-      await params.stateRoot.move(
-        relativeLegacyPath(params.stateDir, sourcePath),
-        relativeLegacyPath(params.stateDir, claimPath),
-      );
-      const claimed = await readLegacySourceSnapshot(params.stateRoot, params.stateDir, claimPath);
-      if (!snapshotsMatch(snapshot, claimed)) {
-        throw new Error("legacy APNs source changed before Doctor could claim it");
-      }
-      snapshot = claimed;
-    } catch (error) {
-      const restoreError = await restoreClaim({
-        stateRoot: params.stateRoot,
-        stateDir: params.stateDir,
-        sourcePath,
+      snapshot = await source.claim({
+        snapshot,
+        mismatchMessage: "legacy APNs source changed before Doctor could claim it",
+        beforeClaim: params.beforeClaim,
       });
+    } catch (error) {
+      const restoreError = await source.restore();
       warnings.push(
         `Failed migrating legacy APNs state: ${String(error)}${restoreError ? `; restore failure: ${restoreError}` : ""}`,
       );
@@ -506,11 +420,7 @@ async function migrateWithExclusiveStateOwnership(params: {
       registrations,
     });
   } catch (error) {
-    const restoreError = await restoreClaim({
-      stateRoot: params.stateRoot,
-      stateDir: params.stateDir,
-      sourcePath,
-    });
+    const restoreError = await source.restore();
     warnings.push(
       `Failed migrating legacy APNs state: ${String(error)}${restoreError ? `; restore failure: ${restoreError}` : ""}`,
     );
@@ -518,11 +428,11 @@ async function migrateWithExclusiveStateOwnership(params: {
   }
 
   try {
-    if (await params.stateRoot.exists(relativeLegacyPath(params.stateDir, sourcePath))) {
-      throw new Error("legacy APNs source reappeared during import");
-    }
-    await removePath({ ...params, sourcePath: claimPath });
-    markSourceRemoved(result.sourceKey, params.env);
+    await source.remove({
+      removeSource: params.removeSource,
+      sourceReappearedMessage: "legacy APNs source reappeared during import",
+    });
+    markLegacyMigrationSourceRemoved(result.sourceKey, params.env);
   } catch (error) {
     warnings.push(`APNs state is in SQLite, but legacy cleanup failed: ${String(error)}`);
     return { changes, warnings };
@@ -557,60 +467,22 @@ export async function migrateLegacyApnsRegistrations(params: {
     return { changes: [], warnings: [] };
   }
 
-  const env = { ...(params.env ?? process.env), OPENCLAW_STATE_DIR: params.stateDir };
-  let lock: Awaited<ReturnType<typeof acquireGatewayLock>>;
-  try {
-    lock = await acquireGatewayLock({
-      allowInTests: true,
-      env,
-      pollIntervalMs: MIGRATION_LOCK_POLL_INTERVAL_MS,
-      role: "sqlite-maintenance",
-      timeoutMs: MIGRATION_LOCK_TIMEOUT_MS,
-    });
-  } catch (error) {
-    const detail =
-      error instanceof GatewayLockError
-        ? "the Gateway or another SQLite maintenance command owns this state directory"
-        : String(error);
-    return {
-      changes: [],
-      warnings: [
-        `Failed migrating legacy APNs state: ${detail}. Stop the Gateway and run \`openclaw doctor --fix\` again.`,
-      ],
-    };
-  }
-  if (!lock) {
-    return {
-      changes: [],
-      warnings: ["Failed migrating legacy APNs state: exclusive state ownership unavailable."],
-    };
-  }
-
-  let result: MigrationMessages = { changes: [], warnings: [] };
-  let releaseError: unknown;
-  try {
-    try {
+  return await withLegacyMigrationStateLock({
+    stateDir: params.stateDir,
+    env: params.env,
+    label: "legacy APNs state",
+    releaseLabel: "APNs",
+    errorLabel: "Failed reading legacy APNs state",
+    run: async (env) => {
       const stateRoot = await root(params.stateDir, {
         hardlinks: "reject",
         symlinks: "reject",
       });
-      result = await migrateWithExclusiveStateOwnership({
+      return await migrateWithExclusiveStateOwnership({
         ...params,
         env,
         stateRoot,
       });
-    } catch (error) {
-      result.warnings.push(`Failed reading legacy APNs state: ${String(error)}`);
-    }
-  } finally {
-    try {
-      await lock.release();
-    } catch (error) {
-      releaseError = error;
-    }
-  }
-  if (releaseError) {
-    result.warnings.push(`APNs migration lock release failed: ${formatErrorMessage(releaseError)}`);
-  }
-  return result;
+    },
+  });
 }

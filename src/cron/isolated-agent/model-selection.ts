@@ -1,4 +1,11 @@
+import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { resolveConfiguredModelPolicyAllow } from "../../agents/model-selection-shared.js";
+import { resolveConfiguredThinkingDefault } from "../../agents/model-thinking-default.js";
+import {
+  hasResolvedThinkingCatalogEntry,
+  normalizeThinkingCatalogProviders,
+} from "../../agents/thinking-runtime.js";
+import { normalizeThinkLevel, type ThinkLevel } from "../../auto-reply/thinking.js";
 /** Resolves provider/model precedence for isolated cron runs. */
 import type { AgentConfig } from "../../config/types.agents.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -9,6 +16,7 @@ import {
   DEFAULT_PROVIDER,
   getModelRefStatus,
   loadResolvedPublishedModelCatalogOwner,
+  loadPreparedModelCatalogSnapshot,
   normalizeModelSelection,
   publishedModelCatalogOwnerMatchesAgent,
   resolveAgentConfig,
@@ -72,9 +80,9 @@ function formatCronPayloadModelRejection(params: {
     const modelRef = error.slice("model not allowed:".length).trim();
     const policy = resolveConfiguredModelPolicyAllow(params);
     const policyPath = policy.configPath ?? "agents.defaults.modelPolicy.allow";
-    return `cron payload.model '${modelOverride}' rejected by ${policyPath}: ${modelRef} is not in [${formatAllowedModelRefs(params)}]`;
+    return `automation model override '${modelOverride}' rejected by ${policyPath}: ${modelRef} is not in [${formatAllowedModelRefs(params)}]`;
   }
-  return `cron payload.model '${modelOverride}' rejected: ${error}`;
+  return `automation model override '${modelOverride}' rejected: ${error}`;
 }
 
 export async function resolveCronModelSelectionOwner(params: {
@@ -89,7 +97,7 @@ export async function resolveCronModelSelectionOwner(params: {
     ...(params.agentId ? { agentId: params.agentId } : {}),
     ...(params.agentDir ? { agentDir: params.agentDir } : {}),
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-    readOnly: true,
+    allowGatewaySubagentBinding: true,
   });
   if (
     params.requiredAgentId &&
@@ -100,6 +108,71 @@ export async function resolveCronModelSelectionOwner(params: {
     );
   }
   return owner;
+}
+
+async function resolveCronThinkingCatalog(params: {
+  owner: ResolvedPublishedModelCatalogOwner;
+  provider: string;
+  model: string;
+}): Promise<ModelCatalogEntry[]> {
+  const catalog = normalizeThinkingCatalogProviders(params.owner.modelCatalog.entries);
+  if (
+    hasResolvedThinkingCatalogEntry({
+      catalog,
+      provider: params.provider,
+      model: params.model,
+    })
+  ) {
+    return catalog;
+  }
+  return normalizeThinkingCatalogProviders(
+    (
+      await loadPreparedModelCatalogSnapshot({
+        config: params.owner.config,
+        agentId: params.owner.agentId,
+        agentDir: params.owner.agentDir,
+        workspaceDir: params.owner.workspaceDir,
+      })
+    ).entries,
+  );
+}
+
+export async function resolveCronThinkingSelection(params: {
+  cfg: OpenClawConfig;
+  owner: ResolvedPublishedModelCatalogOwner;
+  provider: string;
+  model: string;
+  jobThinking?: string;
+  hookThinking?: string;
+  sessionThinking?: string;
+}): Promise<{
+  catalog: ModelCatalogEntry[];
+  immutableThinkLevel: ThinkLevel | undefined;
+  loadThinkingCatalog: (provider: string, model: string) => Promise<ModelCatalogEntry[]>;
+  requestedThinkLevel: ThinkLevel | undefined;
+}> {
+  const immutableThinkLevel =
+    normalizeThinkLevel(params.jobThinking) ??
+    normalizeThinkLevel(params.hookThinking) ??
+    normalizeThinkLevel(params.sessionThinking);
+  const requestedThinkLevel =
+    immutableThinkLevel ??
+    resolveConfiguredThinkingDefault({
+      cfg: params.cfg,
+      provider: params.provider,
+      model: params.model,
+    });
+  const catalog =
+    requestedThinkLevel === "off"
+      ? params.owner.modelCatalog.entries
+      : await resolveCronThinkingCatalog(params);
+  return {
+    catalog,
+    immutableThinkLevel,
+    loadThinkingCatalog: async (provider, model) =>
+      await resolveCronThinkingCatalog({ owner: params.owner, provider, model }),
+    requestedThinkLevel,
+  };
 }
 
 /** Resolves the effective model for an isolated cron run across defaults, agents, hooks, payload, and session state. */

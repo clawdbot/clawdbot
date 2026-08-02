@@ -89,6 +89,37 @@ describe("compatibility binding repair migrate", () => {
     expect(res.changes).toContain("Removed 1 binding that referenced missing agents.list ids.");
   });
 
+  it("preserves exact main bindings because the implicit main agent always exists", () => {
+    const res = repairBindingsForTest({
+      agents: {
+        list: [{ id: "alpha" }],
+      },
+      bindings: [
+        { agentId: "main", match: { channel: "discord" } },
+        { agentId: "MAIN", match: { channel: "discord" } },
+        { agentId: "ghost", match: { channel: "discord" } },
+      ],
+    } as OpenClawConfig);
+
+    expect(res.config.bindings).toEqual([{ agentId: "main", match: { channel: "discord" } }]);
+    expect(res.changes).toContain("Removed 2 bindings that referenced missing agents.list ids.");
+  });
+
+  it("preserves normalized main bindings when the agent is explicitly listed", () => {
+    const res = repairBindingsForTest({
+      agents: {
+        list: [{ id: "MAIN" }],
+      },
+      bindings: [
+        { agentId: "MAIN", match: { channel: "discord" } },
+        { agentId: "ghost", match: { channel: "discord" } },
+      ],
+    } as OpenClawConfig);
+
+    expect(res.config.bindings).toEqual([{ agentId: "MAIN", match: { channel: "discord" } }]);
+    expect(res.changes).toContain("Removed 1 binding that referenced missing agents.list ids.");
+  });
+
   it("leaves bindings untouched when agents.list has malformed entries", () => {
     const cfg = {
       agents: {

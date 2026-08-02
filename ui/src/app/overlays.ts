@@ -42,17 +42,16 @@ import {
 import {
   isPendingUpdateHandoffSentinel,
   readUpdateAvailable,
+  requestUpdateRestartStatus,
+  resolveAmbiguousUpdateOutcomeBanner,
   resolvePendingUpdateHandoffTimeoutBanner,
   resolvePostRestartUpdateBanner,
+  resolveUnknownUpdateOutcomeBanner,
   resolveUpdateStatusBanner,
+  resolveUpdateVerificationWindow,
   resolveUpdateVerificationBanner,
-  UPDATE_HANDOFF_POLL_MS,
   UPDATE_HANDOFF_STARTED_REASON,
-  UPDATE_HANDOFF_TIMEOUT_MS,
-  UPDATE_RESTART_VERIFICATION_POLL_MS,
-  UPDATE_RESTART_VERIFICATION_TIMEOUT_MS,
   type ApplicationStatusBanner,
-  type UpdateRestartStatusResponse,
   type UpdateRunResponse,
 } from "./update-overlay-helpers.ts";
 
@@ -97,6 +96,8 @@ type UpdateVerificationWait = {
   resolve: (active: boolean) => void;
 };
 
+type PendingUpdate = { expected: string | null; kind: "ambiguous" | "handoff" | "restart" };
+
 export function createApplicationOverlays(
   gateway: ApplicationGateway,
   hooks: {
@@ -131,8 +132,7 @@ export function createApplicationOverlays(
   let operatorAccess = readGatewayOperatorAccess(gateway.snapshot);
   let approvalAccessGeneration = 0;
   let approvalGrantGeneration = 0;
-  let pendingUpdateExpectedVersion: string | null = null;
-  let pendingUpdateHandoff = false;
+  let pendingUpdate: PendingUpdate | null = null;
   let updateRunGeneration = 0;
   let updateVerificationGeneration = 0;
   let updateVerificationWait: UpdateVerificationWait | null = null;
@@ -161,7 +161,7 @@ export function createApplicationOverlays(
       ...snapshot,
       // The update RPC can finish before its restart handoff. Keep consumers
       // locked until the replacement Gateway reports the authoritative result.
-      updateReconciliationPending: pendingUpdateHandoff || pendingUpdateExpectedVersion !== null,
+      updateReconciliationPending: pendingUpdate !== null,
       approvalQueue: promptState.execApprovalQueue,
       approvalBusy: promptState.execApprovalBusy,
       approvalErrors: new Map(promptState.execApprovalErrors),
@@ -255,9 +255,17 @@ export function createApplicationOverlays(
     epoch: number,
   ) => {
     const generation = updateVerificationGeneration;
-    const expectedVersion = pendingUpdateExpectedVersion?.trim() || null;
-    const pendingHandoff = pendingUpdateHandoff;
-    if (!expectedVersion && !pendingHandoff) {
+    const reconciliation = pendingUpdate;
+    if (!reconciliation) {
+      return;
+    }
+    const expectedVersion = reconciliation.expected?.trim() || null;
+    if (reconciliation.kind === "ambiguous") {
+      // Only the replacement Gateway version can prove a response-lost request; status is cached.
+      pendingUpdate = null;
+      publishUpdateBanner(
+        resolveAmbiguousUpdateOutcomeBanner(expectedVersion, gateway.snapshot.hello),
+      );
       return;
     }
     const isCurrentVerification = () =>
@@ -267,30 +275,31 @@ export function createApplicationOverlays(
       activeClient === client &&
       gateway.snapshot.client === client &&
       gateway.snapshot.phase === "connected";
-    const deadline =
-      Date.now() +
-      (pendingHandoff ? UPDATE_HANDOFF_TIMEOUT_MS : UPDATE_RESTART_VERIFICATION_TIMEOUT_MS);
-    const pollMs = pendingHandoff ? UPDATE_HANDOFF_POLL_MS : UPDATE_RESTART_VERIFICATION_POLL_MS;
+    let { deadline, pollMs } = resolveUpdateVerificationWindow(reconciliation.kind);
     while (isCurrentVerification() && Date.now() < deadline) {
-      let response: UpdateRestartStatusResponse | null;
-      try {
-        response = await client.request<UpdateRestartStatusResponse>("update.status", {});
-      } catch {
-        response = null;
-      }
+      const response = await requestUpdateRestartStatus(client, Math.max(0, deadline - Date.now()));
       if (!isCurrentVerification()) {
         return;
       }
       const sentinel = response?.sentinel;
       if (isPendingUpdateHandoffSentinel(sentinel)) {
-        if (!(await waitForUpdateVerification(pollMs, generation))) {
+        if (reconciliation.kind !== "handoff") {
+          // Confirmed updates can become managed handoffs; preserve the longer lifecycle budget.
+          reconciliation.kind = "handoff";
+          ({ deadline, pollMs } = resolveUpdateVerificationWindow("handoff"));
+          publish();
+        }
+        const remainingMs = deadline - Date.now();
+        if (remainingMs <= 0) {
+          break;
+        }
+        if (!(await waitForUpdateVerification(Math.min(pollMs, remainingMs), generation))) {
           return;
         }
         continue;
       }
       if (sentinel?.kind === "update" && sentinel.status && sentinel.status !== "ok") {
-        pendingUpdateExpectedVersion = null;
-        pendingUpdateHandoff = false;
+        pendingUpdate = null;
         publishUpdateBanner(resolvePostRestartUpdateBanner(sentinel.stats?.reason));
         return;
       }
@@ -301,14 +310,12 @@ export function createApplicationOverlays(
         !actualVersion &&
         !expectedVersion
       ) {
-        pendingUpdateExpectedVersion = null;
-        pendingUpdateHandoff = false;
+        pendingUpdate = null;
         publish();
         return;
       }
       if (sentinel?.kind === "update" && actualVersion) {
-        pendingUpdateExpectedVersion = null;
-        pendingUpdateHandoff = false;
+        pendingUpdate = null;
         publishUpdateBanner(
           expectedVersion && actualVersion !== expectedVersion
             ? resolveUpdateVerificationBanner({ expectedVersion, actualVersion })
@@ -316,7 +323,11 @@ export function createApplicationOverlays(
         );
         return;
       }
-      if (!(await waitForUpdateVerification(pollMs, generation))) {
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) {
+        break;
+      }
+      if (!(await waitForUpdateVerification(Math.min(pollMs, remainingMs), generation))) {
         return;
       }
     }
@@ -324,12 +335,11 @@ export function createApplicationOverlays(
       return;
     }
     const currentVersion = gateway.snapshot.hello?.server?.version?.trim() || null;
-    pendingUpdateExpectedVersion = null;
-    pendingUpdateHandoff = false;
+    pendingUpdate = null;
     publishUpdateBanner(
       expectedVersion && currentVersion !== expectedVersion
         ? resolveUpdateVerificationBanner({ expectedVersion, actualVersion: currentVersion })
-        : pendingHandoff
+        : reconciliation.kind === "handoff"
           ? resolvePendingUpdateHandoffTimeoutBanner()
           : null,
     );
@@ -361,7 +371,12 @@ export function createApplicationOverlays(
       pairingPendingCount.invalidate({ clear: true });
       if (accessTransition.adminRevoked) {
         updateRunGeneration += 1;
-        snapshot = { ...snapshot, updateRunning: false };
+        cancelUpdateVerification();
+        const updateStatusBanner = pendingUpdate
+          ? resolveUnknownUpdateOutcomeBanner()
+          : snapshot.updateStatusBanner;
+        pendingUpdate = null;
+        snapshot = { ...snapshot, updateRunning: false, updateStatusBanner };
       }
     }
     if (accessTransition.pairingChanged) {
@@ -494,6 +509,7 @@ export function createApplicationOverlays(
         gateway.snapshot.phase !== "connected" ||
         disposed ||
         snapshot.updateRunning ||
+        pendingUpdate !== null ||
         !readGatewayOperatorAccess(gateway.snapshot).canAdmin
       ) {
         return;
@@ -513,6 +529,9 @@ export function createApplicationOverlays(
         ) {
           return;
         }
+        const announcedVersion = snapshot.updateAvailable?.latestVersion?.trim() || null;
+        pendingUpdate = { expected: announcedVersion, kind: "ambiguous" };
+        publish();
         const response = await client.request<UpdateRunResponse>("update.run", {});
         if (
           disposed ||
@@ -523,23 +542,18 @@ export function createApplicationOverlays(
           return;
         }
         const status = response.result?.status ?? (response.ok === true ? "ok" : "error");
-        const expectedVersion =
-          response.result?.after?.version?.trim() ||
-          snapshot.updateAvailable?.latestVersion?.trim() ||
-          null;
+        const expectedVersion = response.result?.after?.version?.trim() || announcedVersion;
         if (
           response.ok === true &&
           status === "skipped" &&
           response.result?.reason === UPDATE_HANDOFF_STARTED_REASON &&
           response.handoff?.status === "started"
         ) {
-          pendingUpdateExpectedVersion = expectedVersion;
-          pendingUpdateHandoff = true;
+          pendingUpdate = { expected: expectedVersion, kind: "handoff" };
           return;
         }
         if (response.ok === true && status === "ok") {
-          pendingUpdateExpectedVersion = expectedVersion;
-          pendingUpdateHandoff = false;
+          pendingUpdate = { expected: expectedVersion, kind: "restart" };
           if (response.restart?.coalesced === true) {
             snapshot = {
               ...snapshot,
@@ -551,8 +565,7 @@ export function createApplicationOverlays(
           }
           return;
         }
-        pendingUpdateExpectedVersion = null;
-        pendingUpdateHandoff = false;
+        pendingUpdate = null;
         if (response.ok !== true || status !== "ok") {
           snapshot = {
             ...snapshot,
@@ -571,6 +584,7 @@ export function createApplicationOverlays(
         ) {
           return;
         }
+        pendingUpdate = null;
         snapshot = {
           ...snapshot,
           updateStatusBanner: {

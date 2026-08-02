@@ -21,6 +21,7 @@ import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import { renderBoardDockMenu, renderBoardFaceToggle } from "./board-session-surface.ts";
 import { ChatPaneContext } from "./chat-pane-context.ts";
 import { headerPlatformByClient } from "./chat-pane-shared.ts";
+import { patchChatSessionLabel } from "./chat-state-route.ts";
 import { renderCatalogTerminalButton } from "./components/catalog-terminal-button.ts";
 import {
   renderBackgroundTasksToggle,
@@ -258,13 +259,13 @@ export abstract class ChatPaneHeader extends ChatPaneContext {
     const unchangedLabel = label === this.headerRenameInitialLabel;
     this.headerEditing = false;
     this.headerRenameSessionKey = "";
-    if (!key || unchangedDerivedTitle || unchangedLabel) {
+    const state = this.state;
+    if (!key || !state || unchangedDerivedTitle || unchangedLabel) {
       return;
     }
-    const agentId = parseAgentSessionKey(key)?.agentId;
-    void this.context.sessions
-      .patch(key, { label }, agentId ? { agentId } : undefined)
-      .catch((error: unknown) => this.publishHeaderError(error));
+    void patchChatSessionLabel(state, this.context.sessions, key, label).catch((error: unknown) =>
+      this.publishHeaderError(error),
+    );
   }
 
   protected async loadHeaderMenuData(

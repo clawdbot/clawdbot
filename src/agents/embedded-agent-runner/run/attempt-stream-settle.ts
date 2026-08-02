@@ -144,7 +144,12 @@ export async function settleEmbeddedAttemptStream(input: {
         abortSignal: input.runAbortSignal,
       });
     } catch (err) {
-      if (!input.readLifecycleState().timedOut || !isRunnerAbortError(err)) {
+      // Timeouts AND user aborts must still settle so the attempt reaches
+      // after-turn (transcript flush, agent-end side effects). Rethrowing here
+      // unwinds the whole lane task and silently starves every agent_end
+      // consumer for aborted runs.
+      const lifecycle = input.readLifecycleState();
+      if ((!lifecycle.timedOut && !lifecycle.aborted) || !isRunnerAbortError(err)) {
         throw err;
       }
       asyncTaskWait = await waitForCompletionRequiredAsyncTasks({
@@ -153,7 +158,9 @@ export async function settleEmbeddedAttemptStream(input: {
         deadlineAtMs: Date.now(),
       });
     }
-    if (asyncTaskWait.timedOutRunIds.length > 0) {
+    // An aborted run legitimately leaves async tasks unfinished; stamping a
+    // timeout failure here would reclassify the abort as an errored completion.
+    if (asyncTaskWait.timedOutRunIds.length > 0 && !input.readLifecycleState().aborted) {
       promptError = new Error(
         `Timed out waiting for async task completion: ${asyncTaskWait.timedOutRunIds.join(", ")}`,
       );

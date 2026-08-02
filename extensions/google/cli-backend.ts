@@ -113,6 +113,13 @@ export function buildGoogleGeminiCliBackend(): CliBackendPlugin {
       kind: "bundled-package-tree",
       packageName: "@google/gemini-cli",
       entrypoint: "command",
+      exactToolAvailabilityVersionPolicy: {
+        stableMinimum: "0.39.1",
+        prereleaseMinimums: {
+          preview: "0.40.0-preview.3",
+          nightly: "0.41.0-nightly.20260427.g42587de73",
+        },
+      },
     },
     bundleMcp: true,
     bundleMcpMode: "gemini-system-settings",
@@ -123,15 +130,30 @@ export function buildGoogleGeminiCliBackend(): CliBackendPlugin {
     resolveExecutionArgs: resolveGeminiCliExecutionArgs,
     prepareExecution: async (ctx) => {
       const { prepareGeminiCliExecution } = await import("./cli-backend-auth.runtime.js");
+      const privateContext = ctx as typeof ctx & {
+        authCredential?: unknown;
+        isolatedCompletionCwd?: string;
+        isolatedCompletionModelId?: string;
+        isolatedCompletionPrompt?: string;
+        isolatedCompletionSystemPrompt?: string;
+      };
       return await prepareGeminiCliExecution(
         {
           agentDir: ctx.agentDir,
           authProfileId: ctx.authProfileId,
+          workspaceDir: ctx.workspaceDir,
+          baseEnv: ctx.env,
+          isolatedCompletionCwd: privateContext.isolatedCompletionCwd,
           systemSettingsPath:
             ctx.env?.GEMINI_CLI_SYSTEM_SETTINGS_PATH ?? process.env.GEMINI_CLI_SYSTEM_SETTINGS_PATH,
           toolAvailability: ctx.toolAvailability,
+          // Gemini owns a native per-process system-prompt file. Consume the private
+          // core bridge without making isolated completion a public CLI SDK contract.
+          isolatedCompletionModelId: privateContext.isolatedCompletionModelId,
+          isolatedCompletionPrompt: privateContext.isolatedCompletionPrompt,
+          isolatedCompletionSystemPrompt: privateContext.isolatedCompletionSystemPrompt,
         },
-        (ctx as typeof ctx & { authCredential?: unknown }).authCredential,
+        privateContext.authCredential,
       );
     },
     config: {

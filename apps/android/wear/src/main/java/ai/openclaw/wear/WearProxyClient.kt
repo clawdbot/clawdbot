@@ -98,7 +98,7 @@ internal class WearProxyClient private constructor(
   ): WearRpcResult {
     var attemptedPreferredPhone: PreferredPhoneRegistration? = null
     val result =
-      withTimeoutOrNull(REQUEST_TIMEOUT_MS) {
+      withTimeoutOrNull(WearProtocol.RPC_REQUEST_TIMEOUT_MILLIS) {
         requestBeforeDeadline(method, params, expectedNodeId, requirePreferredNode) { registration ->
           attemptedPreferredPhone = registration
         }
@@ -337,7 +337,6 @@ internal class WearProxyClient private constructor(
   )
 
   companion object {
-    private const val REQUEST_TIMEOUT_MS = 10_000L
     private const val MAX_BUFFERED_EVENTS = 64
 
     fun create(context: Context): WearProxyClient {

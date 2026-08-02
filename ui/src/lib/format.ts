@@ -220,33 +220,12 @@ export function formatUnknownText(
   return Object.prototype.toString.call(value);
 }
 
-type UiTimeFormatPreference = "auto" | "12" | "24";
-
-// Resolved `agents.defaults.timeFormat`, threaded in once at bootstrap. "auto"
-// (or unset) keeps the browser locale default so existing deployments render
-// unchanged; only "12"/"24" force an hour cycle across Control UI timestamps.
-let uiTimeFormatPreference: UiTimeFormatPreference = "auto";
-
-export function setUiTimeFormatPreference(value: UiTimeFormatPreference | null | undefined): void {
-  uiTimeFormatPreference = value === "12" || value === "24" ? value : "auto";
-}
-
-export function resolveUiHourCycleOptions(): Intl.DateTimeFormatOptions {
-  if (uiTimeFormatPreference === "12") {
-    return { hour12: true };
-  }
-  if (uiTimeFormatPreference === "24") {
-    return { hour12: false };
-  }
-  return {};
-}
-
 export function formatMs(ms?: number | null): string {
   const timestampMs = asDateTimestampMs(ms);
   if (timestampMs === undefined) {
     return t("common.na");
   }
-  return new Date(timestampMs).toLocaleString(i18n.getLocale(), resolveUiHourCycleOptions());
+  return new Date(timestampMs).toLocaleString(i18n.getLocale());
 }
 
 export function formatDateMs(
@@ -268,10 +247,7 @@ export function formatTimeMs(
   const timestampMs = asDateTimestampMs(ms);
   return timestampMs === undefined
     ? fallback
-    : new Date(timestampMs).toLocaleTimeString(i18n.getLocale(), {
-        ...resolveUiHourCycleOptions(),
-        ...options,
-      });
+    : new Date(timestampMs).toLocaleTimeString(i18n.getLocale(), options);
 }
 
 export function formatDateTimeMs(
@@ -282,10 +258,7 @@ export function formatDateTimeMs(
   const timestampMs = asDateTimestampMs(ms);
   return timestampMs === undefined
     ? fallback
-    : new Date(timestampMs).toLocaleString(i18n.getLocale(), {
-        ...resolveUiHourCycleOptions(),
-        ...options,
-      });
+    : new Date(timestampMs).toLocaleString(i18n.getLocale(), options);
 }
 
 export function formatList(values?: Array<string | null | undefined>): string {

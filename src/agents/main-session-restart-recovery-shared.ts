@@ -4,10 +4,12 @@ import {
   type InternalSessionEntry as SessionEntry,
   resolveAllAgentSessionStoreTargetsSync,
 } from "../config/sessions.js";
-import type { SessionTranscriptTurnExpectedState } from "../config/sessions/session-accessor.js";
+import {
+  hasSessionEntriesByStatusReadOnly,
+  type SessionTranscriptTurnExpectedState,
+} from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { isMainRestartRecoveryCandidate } from "./main-session-recovery-state.js";
 import { resolveAgentSessionDirs } from "./session-dirs.js";
 
 export const log = createSubsystemLogger("main-session-restart-recovery");
@@ -32,14 +34,11 @@ export function buildRestartRecoveryExpectedState(
   entry: SessionEntry,
   mainRestartRecovery?: { cycleId: string; revision: number },
 ): SessionTranscriptTurnExpectedState {
+  const expectedMainRestartRecovery = mainRestartRecovery ?? entry.mainRestartRecovery;
   return {
     abortedLastRun: entry.abortedLastRun,
-    ...(mainRestartRecovery
-      ? {
-          mainRestartRecoveryCycleId: mainRestartRecovery.cycleId,
-          mainRestartRecoveryRevision: mainRestartRecovery.revision,
-        }
-      : {}),
+    mainRestartRecoveryCycleId: expectedMainRestartRecovery?.cycleId,
+    mainRestartRecoveryRevision: expectedMainRestartRecovery?.revision,
     restartRecoveryBeforeAgentReplyState: entry.restartRecoveryBeforeAgentReplyState,
     restartRecoveryDeliveryReceiptState: entry.restartRecoveryDeliveryReceiptState,
     restartRecoveryDeliveryToolCallId: entry.restartRecoveryDeliveryToolCallId,
@@ -53,12 +52,7 @@ export function buildRestartRecoveryExpectedState(
     restartRecoverySourceReplyDeliveryMode: entry.restartRecoverySourceReplyDeliveryMode,
     restartRecoveryTerminalRunIds: entry.restartRecoveryTerminalRunIds,
     status: entry.status,
-    updatedAt: entry.updatedAt,
   };
-}
-
-export function shouldSkipMainRecovery(entry: SessionEntry, sessionKey: string): boolean {
-  return !isMainRestartRecoveryCandidate(entry, sessionKey);
 }
 
 export function normalizeStringSet(values: Iterable<string> | undefined): Set<string> {
@@ -94,14 +88,18 @@ export async function resolveRestartRecoveryStorePaths(params: {
 }): Promise<string[]> {
   const storePaths = new Set<string>();
   const stateDir = params.stateDir ?? resolveStateDir(process.env);
+  const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
   for (const sessionsDir of await resolveAgentSessionDirs(stateDir)) {
     storePaths.add(path.join(sessionsDir, "sessions.json"));
   }
   if (params.cfg) {
-    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
     for (const target of resolveAllAgentSessionStoreTargetsSync(params.cfg, { env })) {
       storePaths.add(path.resolve(target.storePath));
     }
   }
-  return [...storePaths].toSorted((a, b) => a.localeCompare(b));
+  // Agent databases also hold auth and model-catalog state. Enter the writer
+  // lane only when the session owner proves that a running row may need repair.
+  return [...storePaths]
+    .filter((storePath) => hasSessionEntriesByStatusReadOnly({ env, storePath }, ["running"]))
+    .toSorted((a, b) => a.localeCompare(b));
 }

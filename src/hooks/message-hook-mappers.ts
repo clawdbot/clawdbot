@@ -188,11 +188,11 @@ export function deriveInboundMessageHookContext(
     sessionKey: ctx.SessionKey,
     agentId: ctx.AgentId,
     messageId:
-      overrides?.messageId ??
-      ctx.MessageSidFull ??
-      ctx.MessageSid ??
-      ctx.MessageSidFirst ??
-      ctx.MessageSidLast,
+      normalizeOptionalString(overrides?.messageId) ??
+      normalizeOptionalString(ctx.MessageSidFull) ??
+      normalizeOptionalString(ctx.MessageSid) ??
+      normalizeOptionalString(ctx.MessageSidFirst) ??
+      normalizeOptionalString(ctx.MessageSidLast),
     senderId: ctx.SenderId,
     senderName: ctx.SenderName,
     senderUsername: ctx.SenderUsername,

@@ -108,6 +108,7 @@ export type SlackActionContext = {
   hasRepliedRef?: { value: boolean };
   /** True when same-channel root posting would leak a thread-originated reply. */
   sameChannelThreadRequired?: boolean;
+  mediaAccess?: ChannelMessageActionContext["mediaAccess"];
   /** Allowed local media directories for file uploads. */
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
@@ -603,6 +604,7 @@ export async function handleSlackAction(
         );
         const baseSendOpts = {
           ...writeOpts,
+          mediaAccess: context?.mediaAccess,
           mediaLocalRoots: context?.mediaLocalRoots,
           mediaReadFile: context?.mediaReadFile,
           threadTs: threadTs ?? undefined,
@@ -716,6 +718,7 @@ export async function handleSlackAction(
         const result = await slackActionRuntime.sendSlackMessage(to, initialComment ?? "", {
           ...writeOpts,
           mediaUrl: filePath,
+          mediaAccess: context?.mediaAccess,
           mediaLocalRoots: context?.mediaLocalRoots,
           mediaReadFile: context?.mediaReadFile,
           threadTs: threadTs ?? undefined,

@@ -422,7 +422,7 @@ describe("createOpenClawCodingTools", () => {
     });
     const names = new Set(tools.map((tool) => tool.name));
 
-    expect(names.has("cron")).toBe(true);
+    expect(names.has("automations")).toBe(true);
     expect(names.has("gateway")).toBe(true);
     expect(names.has("nodes")).toBe(true);
   });
@@ -432,13 +432,13 @@ describe("createOpenClawCodingTools", () => {
       createOpenClawCodingTools({
         config: testConfig,
       }),
-      ["cron"],
+      ["automations"],
     );
 
-    expect(allowed.map((tool) => tool.name)).toEqual(["cron"]);
+    expect(allowed.map((tool) => tool.name)).toEqual(["automations"]);
     expect(
       buildEmptyExplicitToolAllowlistError({
-        sources: [{ label: "runtime toolsAllow", entries: ["cron"] }],
+        sources: [{ label: "runtime toolsAllow", entries: ["automations"] }],
         callableToolNames: allowed.map((tool) => tool.name),
         toolsEnabled: true,
       }),
@@ -777,6 +777,137 @@ describe("createOpenClawCodingTools", () => {
     expect(latestCreateOpenClawToolsOptions().sourceReplyDeliveryMode).toBe("message_tool_only");
   });
 
+  it.each([
+    {
+      name: "trusted one-tool completion",
+      trustedInternalHandoff: true,
+      sourceTool: "subagent_announce",
+      sourceReplyDeliveryMode: "message_tool_only" as const,
+      runtimeToolAllowlist: ["message"],
+      expected: true,
+    },
+    {
+      name: "ordinary private reply",
+      trustedInternalHandoff: false,
+      sourceTool: "subagent_announce",
+      sourceReplyDeliveryMode: "message_tool_only" as const,
+      runtimeToolAllowlist: ["message"],
+      expected: false,
+    },
+    {
+      name: "different handoff owner",
+      trustedInternalHandoff: true,
+      sourceTool: "sessions_send",
+      sourceReplyDeliveryMode: "message_tool_only" as const,
+      runtimeToolAllowlist: ["message"],
+      expected: false,
+    },
+    {
+      name: "unverified forged completion flags",
+      trustedInternalHandoff: true,
+      sourceTool: "subagent_announce",
+      sourceReplyDeliveryMode: "message_tool_only" as const,
+      runtimeToolAllowlist: ["message"],
+      verifiedLineage: false,
+      expected: false,
+    },
+    {
+      name: "wider trusted completion",
+      trustedInternalHandoff: true,
+      sourceTool: "subagent_announce",
+      sourceReplyDeliveryMode: "message_tool_only" as const,
+      runtimeToolAllowlist: ["message", "read"],
+      expected: true,
+    },
+    {
+      name: "automatic completion delivery",
+      trustedInternalHandoff: true,
+      sourceTool: "subagent_announce",
+      sourceReplyDeliveryMode: "automatic" as const,
+      runtimeToolAllowlist: ["message"],
+      expected: false,
+    },
+  ])("limits $name to the source only for verified completion delivery", async (testCase) => {
+    const storeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-completion-grant-"));
+    const storeTemplate = path.join(storeDir, "{agentId}", "sessions.json");
+    const requesterSessionKey = "agent:main:discord:direct:alice";
+    const requesterSessionId = "requester-session";
+    const childSessionKey = "agent:main:subagent:child";
+    const childSessionId = "verified-child-session";
+    const modelProvider = "openai";
+    const modelId = "gpt-5.4";
+    const config: OpenClawConfig = { session: { store: storeTemplate } };
+    const inputProvenance = {
+      kind: "inter_session" as const,
+      sourceSessionKey: childSessionKey,
+      sourceTool: testCase.sourceTool,
+    };
+    const trustedInternalHandoff = testCase.trustedInternalHandoff
+      ? {
+          kind: "subagent-completion" as const,
+          sourceSessionKey: childSessionKey,
+          sourceSessionId: childSessionId,
+          targetSessionKey: requesterSessionKey,
+          targetSessionId: requesterSessionId,
+          provider: modelProvider,
+          model: modelId,
+        }
+      : undefined;
+    const verifiedLineage = !("verifiedLineage" in testCase) || testCase.verifiedLineage !== false;
+
+    try {
+      if (verifiedLineage) {
+        await writeSessionStore(storeTemplate, "main", {
+          [childSessionKey]: {
+            sessionId: childSessionId,
+            updatedAt: Date.now(),
+            spawnedBy: requesterSessionKey,
+            spawnDepth: 1,
+            subagentRole: "orchestrator",
+            subagentControlScope: "children",
+            inheritedToolPolicyVersion: 1,
+          },
+        });
+      }
+      const conversationCapabilityProfile = resolveConversationCapabilityProfile({
+        config,
+        agentId: "main",
+        sessionKey: requesterSessionKey,
+        sessionId: requesterSessionId,
+        modelProvider,
+        modelId,
+        runtimeToolAllowlist: testCase.runtimeToolAllowlist,
+        inputProvenance,
+        trustedInternalHandoff,
+      });
+      const isVerifiedHandoff =
+        verifiedLineage &&
+        testCase.trustedInternalHandoff &&
+        testCase.sourceTool === "subagent_announce";
+      expect(conversationCapabilityProfile.policy.requesterPolicySource).toBe(
+        isVerifiedHandoff ? "completion-handoff" : "current-request",
+      );
+
+      vi.mocked(createOpenClawTools).mockClear();
+      createOpenClawCodingTools({
+        config,
+        agentId: "main",
+        sessionKey: requesterSessionKey,
+        sessionId: requesterSessionId,
+        modelProvider,
+        modelId,
+        conversationCapabilityProfile,
+        sourceReplyDeliveryMode: testCase.sourceReplyDeliveryMode,
+        runtimeToolAllowlist: testCase.runtimeToolAllowlist,
+        ...(!verifiedLineage ? { inputProvenance, trustedInternalHandoff } : {}),
+      });
+
+      expect(latestCreateOpenClawToolsOptions().sourceReplyOnly).toBe(testCase.expected);
+    } finally {
+      await fs.rm(storeDir, { recursive: true, force: true });
+    }
+  });
+
   it("passes configured filesystem policy to OpenClaw tool construction", () => {
     const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
     createOpenClawToolsMock.mockClear();
@@ -969,7 +1100,16 @@ describe("createOpenClawCodingTools", () => {
 
     try {
       const tools = createOpenClawCodingTools({
-        config: testConfig,
+        config: {
+          ...testConfig,
+          channels: {
+            discord: {
+              accounts: {
+                creator: {},
+              },
+            },
+          },
+        },
         agentId: "main",
         sessionKey: "agent:main:telegram:direct:alice",
         messageProvider: "discord-voice",
@@ -1244,12 +1384,12 @@ describe("createOpenClawCodingTools", () => {
     createOpenClawCodingTools({
       sessionKey: "agent:main:whatsapp:group:restricted-room",
       config: {
-        tools: { allow: ["read", "exec", "process", "cron"] },
+        tools: { allow: ["read", "exec", "process", "automations"] },
         channels: {
           whatsapp: {
             groups: {
               "restricted-room": {
-                tools: { allow: ["read", "cron"] },
+                tools: { allow: ["read", "automations"] },
               },
             },
           },
@@ -1260,7 +1400,7 @@ describe("createOpenClawCodingTools", () => {
     expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
     const cronAllow = latestCreateOpenClawToolsOptions().cronCreatorToolAllowlist;
     const cronAllowNames = cronCreatorToolNames(cronAllow);
-    expectListIncludes(cronAllowNames, ["read", "cron"]);
+    expectListIncludes(cronAllowNames, ["read", "automations"]);
     expect(cronAllowNames?.includes("exec")).toBe(false);
     expect(cronAllowNames?.includes("process")).toBe(false);
   });
@@ -1275,7 +1415,7 @@ describe("createOpenClawCodingTools", () => {
     const cronAllowNames = cronCreatorToolNames(
       latestCreateOpenClawToolsOptions().cronCreatorToolAllowlist,
     );
-    expectListIncludes(cronAllowNames, ["read", "cron", "exec"]);
+    expectListIncludes(cronAllowNames, ["read", "automations", "exec"]);
   });
 
   it("lets embedded attempts refresh a caller-owned cron creator tool surface", () => {
@@ -1286,22 +1426,22 @@ describe("createOpenClawCodingTools", () => {
     > = [];
 
     createOpenClawCodingTools({
-      config: { tools: { allow: ["read", "cron"] } },
+      config: { tools: { allow: ["read", "automations"] } },
       cronCreatorToolAllowlistRef,
     });
 
     expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
     const cronAllow = latestCreateOpenClawToolsOptions().cronCreatorToolAllowlist;
     expect(cronAllow).toBe(cronCreatorToolAllowlistRef);
-    expect(cronCreatorToolNames(cronAllow)).toEqual(["read", "cron"]);
+    expect(cronCreatorToolNames(cronAllow)).toEqual(["read", "automations"]);
 
     replaceWithEffectiveCronCreatorToolAllowlist(cronCreatorToolAllowlistRef, [
       stubTool("read"),
-      stubTool("cron"),
+      stubTool("automations"),
       stubTool("bundle_mcp_search"),
     ]);
 
-    expect(cronCreatorToolNames(cronAllow)).toEqual(["read", "cron", "bundle_mcp_search"]);
+    expect(cronCreatorToolNames(cronAllow)).toEqual(["read", "automations", "bundle_mcp_search"]);
   });
 
   it("passes deny-restricted tool surface to cron-created agent turns", () => {
@@ -1311,7 +1451,7 @@ describe("createOpenClawCodingTools", () => {
     createOpenClawCodingTools({
       sessionKey: "agent:main:whatsapp:group:restricted-room",
       config: {
-        tools: { allow: ["read", "exec", "process", "cron"] },
+        tools: { allow: ["read", "exec", "process", "automations"] },
         channels: {
           whatsapp: {
             groups: {
@@ -1327,7 +1467,7 @@ describe("createOpenClawCodingTools", () => {
     expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
     const cronAllow = latestCreateOpenClawToolsOptions().cronCreatorToolAllowlist;
     const cronAllowNames = cronCreatorToolNames(cronAllow);
-    expectListIncludes(cronAllowNames, ["read", "cron"]);
+    expectListIncludes(cronAllowNames, ["read", "automations"]);
     expect(cronAllowNames?.includes("exec")).toBe(false);
     expect(cronAllowNames?.includes("process")).toBe(false);
   });
@@ -1365,7 +1505,7 @@ describe("createOpenClawCodingTools", () => {
 
   it("preserves action enums in normalized schemas", () => {
     const defaultTools = createOpenClawCodingTools({ config: testConfig });
-    const toolNames = ["canvas", "nodes", "cron", "gateway", "message"];
+    const toolNames = ["canvas", "nodes", "automations", "gateway", "message"];
     const missingNames = toolNames.filter(
       (name) => !defaultTools.some((candidate) => candidate.name === name),
     );
@@ -1682,7 +1822,7 @@ describe("createOpenClawCodingTools", () => {
     expect(names.has("browser")).toBe(true);
     expect(names.has("canvas")).toBe(true);
     expect(names.has("gateway")).toBe(true);
-    expect(names.has("cron")).toBe(true);
+    expect(names.has("automations")).toBe(true);
     expect(names.has("nodes")).toBe(true);
   });
 

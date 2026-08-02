@@ -579,10 +579,12 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
             lastProbeAt: snapshot.lastProbeAt ?? null,
           }),
         probeAccount: async ({ account, timeoutMs }) => {
-          const baseUrl = account.baseUrl;
-          const { probeSignal } = await loadSignalProbeModule();
-          return await probeSignal(baseUrl, timeoutMs, {
+          const { probeSignalAccount } = await loadSignalProbeModule();
+          return await probeSignalAccount({
+            baseUrl: account.baseUrl,
+            timeoutMs,
             transportKind: account.transport.kind,
+            account: account.config.account,
           });
         },
         formatCapabilitiesProbe: ({ probe }) =>

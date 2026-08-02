@@ -11,6 +11,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { listDevicePairing, resolveNodePairingState } from "../../infra/device-pairing.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { projectNodePairing } from "../../infra/node-pairing.js";
+import { resolveLocalNodeId } from "../../node-host/local-id.js";
 import type { NodeListNode } from "../../shared/node-list-types.js";
 import { replaceRemoteNodeSkills } from "../../skills/runtime/remote-skills.js";
 import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../../skills/runtime/remote.js";
@@ -61,6 +62,7 @@ function listNodesForClient(params: {
   pairedNodes: ReturnType<typeof projectNodePairing>["paired"];
   pendingNodes: ReturnType<typeof projectNodePairing>["pending"];
   connectedNodes: readonly NodeSession[];
+  localNodeId: string | null;
 }): NodeListNode[] {
   const catalog = createKnownNodeCatalog({
     pairedDevices: params.pairedDevices,
@@ -68,7 +70,9 @@ function listNodesForClient(params: {
     pendingNodes: params.pendingNodes,
     connectedNodes: params.connectedNodes,
   });
-  const nodes = listKnownNodes(catalog);
+  const nodes = listKnownNodes(catalog).map((node) =>
+    node.nodeId === params.localNodeId ? Object.assign({}, node, { gatewayLocal: true }) : node,
+  );
   if (nodeInvokePolicy.canReadPendingNodePairing(params.client)) {
     return nodes;
   }
@@ -223,12 +227,19 @@ export const nodeReadHandlers: GatewayRequestHandlers = {
       const devicePairing = await listDevicePairing();
       const nodePairing = projectNodePairing(devicePairing.paired);
       const connectedNodes = listCurrentConnectedNodes(context, devicePairing.paired);
+      const localNodeId = await resolveLocalNodeId().catch((error: unknown) => {
+        context.logGateway.warn(
+          `failed to resolve same-install node-host identity: ${formatErrorMessage(error)}`,
+        );
+        return null;
+      });
       const nodes = listNodesForClient({
         client,
         pairedDevices: devicePairing.paired,
         pairedNodes: nodePairing.paired,
         pendingNodes: nodePairing.pending,
         connectedNodes,
+        localNodeId,
       });
       const activeNodeId = context.nodeRegistry.getActiveNode(connectedNodes)?.nodeId;
       const nodesWithPresence = activeNodeId

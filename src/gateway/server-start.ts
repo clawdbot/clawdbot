@@ -78,6 +78,7 @@ const logPlugins = log.child("plugins");
 const logWsControl = log.child("ws");
 const logSecrets = log.child("secrets");
 const gatewayRuntime = runtimeForLogger(log);
+const POST_READY_WORK_START_DELAY_MS = 500;
 
 function formatRuntimeGatewayAuthTokenWarning(): string {
   const base =
@@ -101,6 +102,10 @@ export async function startGatewayServer(
   port = 18789,
   opts: GatewayServerOptions = {},
 ): Promise<GatewayServer> {
+  let releasePostReadyWork: () => void = () => {};
+  const postReadyWorkBarrier = new Promise<void>((resolve) => {
+    releasePostReadyWork = resolve;
+  });
   const bootstrap = await prepareGatewayServerBootstrap({
     port,
     opts,
@@ -168,11 +173,16 @@ export async function startGatewayServer(
       logReload,
       logTailscale,
       loadGatewayStartupPostAttachModule,
+      waitForPostReadyWork: () => postReadyWorkBarrier,
     });
   } catch (err) {
     await closeOnStartupFailure();
     throw err;
   }
+  // The public server is fully initialized now. Leave a short I/O window before
+  // background prewarms and cleanup imports compete for the startup CPU.
+  const postReadyWorkTimer = setTimeout(releasePostReadyWork, POST_READY_WORK_START_DELAY_MS);
+  postReadyWorkTimer.unref?.();
 
   const close = createCloseHandler();
 

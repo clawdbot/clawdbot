@@ -563,7 +563,7 @@ describe("runtime tool fixture", () => {
         role: "tool",
         toolName: "read",
         tool_call_id: "call-read-happy",
-        content: "README contents",
+        content: "README documents invalid requests, errors, and denied inputs.",
       },
     ]);
     await writeQaSessionTranscript(env, "agent:qa:runtime-tool:read:failure", [

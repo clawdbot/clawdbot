@@ -1,5 +1,7 @@
 // Mattermost tests cover reply delivery plugin behavior.
 import path from "node:path";
+import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
+import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
 import type { ChunkMode } from "openclaw/plugin-sdk/reply-runtime";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { describe, expect, it, vi } from "vitest";
@@ -7,8 +9,8 @@ import type { OpenClawConfig, PluginRuntime } from "../../runtime-api.js";
 import {
   createMattermostReplyDeliveryBarrier,
   deliverMattermostReplyPayload,
-  toMattermostChannelDeliveryResult,
 } from "./reply-delivery.js";
+import type { MattermostSendResult } from "./send.js";
 
 type DeliverMattermostReplyPayloadParams = Parameters<typeof deliverMattermostReplyPayload>[0];
 type ReplyDeliveryMarkdownTableMode = Parameters<
@@ -41,21 +43,21 @@ function createReplyDeliveryCore(): DeliverMattermostReplyPayloadParams["core"] 
   } as unknown as PluginRuntime;
 }
 
-describe("toMattermostChannelDeliveryResult", () => {
-  it.each(["text", "media"] as const)("marks %s delivery as visible", (outcome) => {
-    expect(toMattermostChannelDeliveryResult(outcome)).toEqual({ visibleReplySent: true });
+function createSendMessageMock() {
+  let sendCount = 0;
+  return vi.fn(async (_to: string, content: string): Promise<MattermostSendResult> => {
+    const messageId = `post-${++sendCount}`;
+    return {
+      messageId,
+      channelId: "channel-1",
+      content: content.trim(),
+      receipt: createMessageReceiptFromOutboundResults({
+        results: [{ channel: "mattermost", messageId, channelId: "channel-1" }],
+        kind: "text",
+      }),
+    };
   });
-
-  it.each(["reasoning_skipped", "empty"] as const)(
-    "marks %s delivery as intentionally non-visible",
-    (outcome) => {
-      expect(toMattermostChannelDeliveryResult(outcome)).toEqual({
-        visibleReplySent: false,
-        suppression: { reason: "no_visible_result" },
-      });
-    },
-  );
-});
+}
 
 describe("createMattermostReplyDeliveryBarrier", () => {
   it("extends while direct deliveries or DM resolution remain unsettled", async () => {
@@ -121,7 +123,7 @@ describe("createMattermostReplyDeliveryBarrier", () => {
 
 describe("deliverMattermostReplyPayload", () => {
   it("suppresses payloads flagged as reasoning", async () => {
-    const sendMessage = vi.fn(async () => undefined);
+    const sendMessage = createSendMessageMock();
     const cfg = {} satisfies OpenClawConfig;
     const core = createReplyDeliveryCore();
 
@@ -139,11 +141,15 @@ describe("deliverMattermostReplyPayload", () => {
     });
 
     expect(sendMessage).not.toHaveBeenCalled();
-    expect(outcome).toBe("reasoning_skipped");
+    expect(outcome).toEqual({
+      outcome: "reasoning_skipped",
+      visibleReplySent: false,
+      suppression: { reason: "no_visible_result" },
+    });
   });
 
   it("returns 'empty' for substantive text that produced no send (regression: #80501)", async () => {
-    const sendMessage = vi.fn(async () => undefined);
+    const sendMessage = createSendMessageMock();
     const cfg = {} satisfies OpenClawConfig;
     const core = createReplyDeliveryCore();
     // Make the markdown table converter strip the text to empty so
@@ -165,11 +171,15 @@ describe("deliverMattermostReplyPayload", () => {
     });
 
     expect(sendMessage).not.toHaveBeenCalled();
-    expect(outcome).toBe("empty");
+    expect(outcome).toEqual({
+      outcome: "empty",
+      visibleReplySent: false,
+      suppression: { reason: "no_visible_result" },
+    });
   });
 
   it("suppresses reasoning-prefixed payloads even without an explicit flag", async () => {
-    const sendMessage = vi.fn(async () => undefined);
+    const sendMessage = createSendMessageMock();
     const cfg = {} satisfies OpenClawConfig;
     const core = createReplyDeliveryCore();
 
@@ -190,7 +200,7 @@ describe("deliverMattermostReplyPayload", () => {
   });
 
   it("suppresses reasoning payloads formatted as a Mattermost blockquote", async () => {
-    const sendMessage = vi.fn(async () => undefined);
+    const sendMessage = createSendMessageMock();
     const cfg = {} satisfies OpenClawConfig;
     const core = createReplyDeliveryCore();
 
@@ -211,7 +221,7 @@ describe("deliverMattermostReplyPayload", () => {
   });
 
   it("does not suppress messages that mention Reasoning: mid-text", async () => {
-    const sendMessage = vi.fn(async () => undefined);
+    const sendMessage = createSendMessageMock();
     const cfg = {} satisfies OpenClawConfig;
     const core = createReplyDeliveryCore();
 
@@ -248,7 +258,7 @@ describe("deliverMattermostReplyPayload", () => {
     const stateDir = openClawState.stateDir;
 
     try {
-      const sendMessage = vi.fn(async () => undefined);
+      const sendMessage = createSendMessageMock();
       const core = createReplyDeliveryCore();
 
       const agentId = "agent-1";
@@ -292,7 +302,7 @@ describe("deliverMattermostReplyPayload", () => {
   });
 
   it("forwards replyToId for text-only chunked replies", async () => {
-    const sendMessage = vi.fn(async () => undefined);
+    const sendMessage = createSendMessageMock();
     const cfg = {} satisfies OpenClawConfig;
     const core = createReplyDeliveryCore();
     core.channel.text.chunkMarkdownTextWithMode = vi.fn(() => ["hello"]);
@@ -320,6 +330,111 @@ describe("deliverMattermostReplyPayload", () => {
         replyToId: "root-post",
       }),
     );
-    expect(outcome).toBe("text");
+    expect(outcome).toMatchObject({
+      outcome: "text",
+      messageIds: ["post-1"],
+      visibleReplySent: true,
+      content: "hello",
+    });
+    expect(outcome.receipt?.primaryPlatformMessageId).toBe("post-1");
+  });
+
+  it("aggregates every provider post behind one chunked logical payload", async () => {
+    const sendMessage = createSendMessageMock();
+    const cfg = {} satisfies OpenClawConfig;
+    const core = createReplyDeliveryCore();
+    core.channel.text.chunkMarkdownTextWithMode = vi.fn(() => ["alpha", "beta"]);
+
+    const result = await deliverMattermostReplyPayload({
+      core,
+      cfg,
+      payload: { text: "alpha beta" },
+      to: "channel:town-square",
+      accountId: "default",
+      replyToId: "root-post",
+      textLimit: 6,
+      tableMode: "off",
+      sendMessage,
+    });
+
+    expect(result).toMatchObject({
+      outcome: "text",
+      messageIds: ["post-1", "post-2"],
+      visibleReplySent: true,
+      content: "alpha\nbeta",
+    });
+    expect(result.receipt?.parts.map((part) => part.platformMessageId)).toEqual([
+      "post-1",
+      "post-2",
+    ]);
+  });
+
+  it("returns provider-finalized visible content instead of the requested text", async () => {
+    const sendMessage = vi.fn(
+      async (): Promise<MattermostSendResult> => ({
+        messageId: "post-final",
+        channelId: "channel-1",
+        content: "provider-finalized",
+        receipt: createMessageReceiptFromOutboundResults({
+          results: [{ channel: "mattermost", messageId: "post-final", channelId: "channel-1" }],
+          kind: "text",
+        }),
+      }),
+    );
+
+    const result = await deliverMattermostReplyPayload({
+      core: createReplyDeliveryCore(),
+      cfg: {},
+      payload: { text: "requested text" },
+      to: "channel:town-square",
+      accountId: "default",
+      textLimit: 4000,
+      tableMode: "off",
+      sendMessage,
+    });
+
+    expect(result).toMatchObject({
+      messageIds: ["post-final"],
+      visibleReplySent: true,
+      content: "provider-finalized",
+    });
+  });
+
+  it("preserves the accepted post when a later chunk fails", async () => {
+    const firstResult = createSendMessageMock();
+    const sendMessage = vi
+      .fn<DeliverMattermostReplyPayloadParams["sendMessage"]>()
+      .mockImplementationOnce(firstResult)
+      .mockRejectedValueOnce(new Error("second chunk failed"));
+    const cfg = {} satisfies OpenClawConfig;
+    const core = createReplyDeliveryCore();
+    core.channel.text.chunkMarkdownTextWithMode = vi.fn(() => ["alpha", "beta"]);
+
+    let caught: unknown;
+    try {
+      await deliverMattermostReplyPayload({
+        core,
+        cfg,
+        payload: { text: "alpha beta" },
+        to: "channel:town-square",
+        accountId: "default",
+        replyToId: "root-post",
+        textLimit: 6,
+        tableMode: "off",
+        sendMessage,
+      });
+    } catch (error: unknown) {
+      caught = error;
+    }
+
+    expect(isChannelPartialDeliveryError(caught)).toBe(true);
+    if (!isChannelPartialDeliveryError(caught)) {
+      throw new Error("expected a partial Mattermost delivery error");
+    }
+    expect(caught.deliveryResult).toMatchObject({
+      messageIds: ["post-1"],
+      visibleReplySent: true,
+      content: "alpha",
+    });
   });
 });

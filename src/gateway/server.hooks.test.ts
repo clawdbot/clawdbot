@@ -504,14 +504,19 @@ describe("gateway server hooks", () => {
     testState.hooksConfig = {
       enabled: true,
       token: HOOK_TOKEN,
+      allowedAgentIds: ["hooks"],
+      allowedSessionKeyPrefixes: ["hook:"],
       mappings: [
         {
           match: { path: "mapped-wake" },
           action: "wake",
           textTemplate: "Mapped wake: {{payload.subject}}",
+          agentId: "hooks",
+          sessionKey: "hook:wake:fixed",
         },
       ],
     };
+    setMainAndHooksAgents();
 
     await withGatewayServer(async ({ port }) => {
       const direct = await postHook(port, "/hooks/wake", { text: "Direct wake" });
@@ -524,11 +529,18 @@ describe("gateway server hooks", () => {
 
       const mapped = await postHook(port, "/hooks/mapped-wake", { subject: "Email" });
       expect(mapped.status).toBe(200);
-      await waitForSystemEvent(5_000);
-      const mappedEvents = peekSystemEventEntries(resolveMainKey());
+      await waitForSystemEventTexts("agent:hooks:hook:wake:fixed");
+      const mappedEvents = peekSystemEventEntries("agent:hooks:hook:wake:fixed");
       expect(mappedEvents).toHaveLength(1);
       expect(mappedEvents[0]?.text).toBe("Mapped wake: Email");
-      drainSystemEvents(resolveMainKey());
+      drainSystemEvents("agent:hooks:hook:wake:fixed");
+    });
+
+    testState.sessionConfig = { scope: "global" };
+    await withGatewayServer(async ({ port }) => {
+      expect((await postHook(port, "/hooks/mapped-wake", { subject: "Global" })).status).toBe(200);
+      await waitForSystemEventTexts("global");
+      expect(peekSystemEvents("global")).toContain("Mapped wake: Global");
     });
   });
 

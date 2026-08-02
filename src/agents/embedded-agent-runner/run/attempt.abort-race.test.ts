@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { findAgentRunTerminalOutcome } from "../../agent-run-terminal-outcome.js";
+import { buildAgentRunTerminalOutcomeFromAttempt } from "../../agent-run-terminal-outcome.js";
 import {
   cleanupTempPaths,
   createContextEngineAttemptRunner,
@@ -89,16 +89,14 @@ describe("runEmbeddedAttempt abort races", () => {
       },
     });
 
-    const error = await attempt.catch((caught: unknown) => caught);
+    // The abort-blocked prompt release no longer unwinds the attempt: the run
+    // settles so after-turn side effects still fire, and the run-budget
+    // timeout attribution survives on the resolved terminal.
+    const result = await attempt;
 
-    expect(error).toMatchObject({
-      message: "attempt aborted before prompt submission",
-    });
-    expect(findAgentRunTerminalOutcome(error)).toMatchObject({
-      reason: "hard_timeout",
+    expect(result.terminal).toMatchObject({ kind: "timeout" });
+    expect(buildAgentRunTerminalOutcomeFromAttempt({ terminal: result.terminal })).toMatchObject({
       status: "timeout",
-      timeoutPhase: "provider",
-      providerStarted: true,
     });
   });
 });

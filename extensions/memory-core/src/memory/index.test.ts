@@ -3,12 +3,14 @@ import { mkdirSync, rmSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
+import { DatabaseSync } from "node:sqlite";
 import { clearMemoryEmbeddingProviders as clearRegistry } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import {
   hashText,
   INVALID_PROJECT_ANNOTATION_KEY,
   MEMORY_CHUNKING_VERSION,
+  type MemorySessionSyncTarget,
+  type MemorySyncParams,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
@@ -1730,6 +1732,506 @@ describe("memory index", () => {
       }
     } finally {
       restoreMemoryIndexStateDir();
+    }
+  });
+
+  it("drains retained queued targets through the next idle sync call", async () => {
+    const markers = {
+      blocker: "BLOCKER LOCKED SYNC 729",
+      retained: "RETAINED RETRY TARGET 729",
+      trigger: "IDLE TRIGGER TARGET 729",
+    };
+    const sessionKey = (sessionId: string) => `agent:main:proof:${sessionId}`;
+    const manager = await getFreshManager(
+      createCfg({
+        provider: "none",
+        sources: ["sessions"],
+        sessionMemory: true,
+      }),
+    );
+    let lock: DatabaseSync | null = null;
+    try {
+      await manager.sync({ reason: "test-baseline", force: true });
+      for (const [sessionId, marker] of Object.entries(markers)) {
+        await seedMemoryIndexSessionTranscript({
+          sessionId,
+          sessionKey: sessionKey(sessionId),
+          messages: [
+            {
+              role: "user",
+              timestamp: Date.now(),
+              content: marker,
+            },
+          ],
+        });
+      }
+
+      const dbPath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+      lock = new DatabaseSync(dbPath);
+      lock.exec("PRAGMA busy_timeout = 0");
+      lock.exec("BEGIN EXCLUSIVE");
+
+      const active = manager.sync({
+        reason: "test-locked-owner",
+        sessions: [
+          {
+            agentId: "main",
+            sessionId: "blocker",
+            sessionKey: sessionKey("blocker"),
+          },
+        ],
+      });
+      const failedQueued = manager.sync({
+        reason: "test-queued-retained",
+        sessions: [
+          {
+            agentId: "main",
+            sessionId: "retained",
+            sessionKey: sessionKey("retained"),
+          },
+        ],
+      });
+      const failures = await Promise.allSettled([active, failedQueued]);
+      lock.exec("ROLLBACK");
+      lock.close();
+      lock = null;
+      const describeSqliteFailure = (failure: unknown): string => {
+        const details = [String(failure)];
+        if (failure && typeof failure === "object") {
+          const record = failure as Record<string, unknown>;
+          for (const key of ["message", "code"] as const) {
+            if (typeof record[key] === "string") {
+              details.push(record[key]);
+            }
+          }
+          if (record.cause && typeof record.cause === "object") {
+            const cause = record.cause as Record<string, unknown>;
+            for (const key of ["message", "code"] as const) {
+              if (typeof cause[key] === "string") {
+                details.push(cause[key]);
+              }
+            }
+          }
+        }
+        return details.join(" ");
+      };
+      for (const result of failures) {
+        expect(result.status).toBe("rejected");
+        if (result.status !== "rejected") {
+          throw new Error("expected SQLite-locked sync to reject");
+        }
+        expect(describeSqliteFailure(result.reason)).toMatch(
+          /SQLITE_(?:BUSY|LOCKED)|database is (?:busy|locked)/i,
+        );
+      }
+
+      const ftsMatchCount = (marker: string): number => {
+        const observer = new DatabaseSync(dbPath, { readOnly: true });
+        try {
+          return (
+            observer
+              .prepare(
+                "SELECT COUNT(*) AS count FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH ?",
+              )
+              .get(`"${marker}"`) as { count: number }
+          ).count;
+        } finally {
+          observer.close();
+        }
+      };
+
+      expect(ftsMatchCount(markers.retained)).toBe(0);
+      expect(ftsMatchCount(markers.trigger)).toBe(0);
+      const recoveryState = manager as unknown as {
+        syncing: Promise<void> | null;
+        queuedSessions: Map<string, unknown>;
+        sessionsDirtyFiles: Set<string>;
+        sessionsFullRetryDirty: boolean;
+      };
+      expect(recoveryState.syncing).toBeNull();
+      expect(recoveryState.queuedSessions.size).toBe(1);
+      expect(recoveryState.sessionsDirtyFiles.size).toBe(0);
+      expect(recoveryState.sessionsFullRetryDirty).toBe(false);
+
+      const recoveryProgress = vi.fn();
+      const recovery = manager.sync({
+        reason: "test-recovery-trigger",
+        sessions: [
+          {
+            agentId: "main",
+            sessionId: "trigger",
+            sessionKey: sessionKey("trigger"),
+          },
+        ],
+        progress: recoveryProgress,
+      });
+      // A full sync can claim `syncing` before the retained queue owner resumes.
+      // Both owners must settle without the queue awaiting its own promise.
+      const competingFullSync = manager.sync({ reason: "test-competing-full-sync" });
+      const recoveryResults = await Promise.allSettled([recovery, competingFullSync]);
+      expect(recoveryResults.map((result) => result.status)).toEqual(["fulfilled", "fulfilled"]);
+
+      expect(ftsMatchCount(markers.retained)).toBeGreaterThan(0);
+      expect(ftsMatchCount(markers.trigger)).toBeGreaterThan(0);
+      expect(recoveryState.queuedSessions.size).toBe(0);
+      expect(recoveryProgress).toHaveBeenCalled();
+    } finally {
+      if (lock) {
+        try {
+          lock.exec("ROLLBACK");
+        } finally {
+          lock.close();
+        }
+      }
+      await manager.close?.();
+    }
+  });
+
+  it("drains retained queued targets from a live rejection transition", async () => {
+    const markers = {
+      retained: "LIVE REJECTION RETAINED TARGET 729",
+      transition: "LIVE REJECTION TRANSITION TARGET 729",
+      trigger: "LIVE REJECTION RECOVERY TARGET 729",
+    };
+    const sessionKey = (sessionId: string) => `agent:main:live-rejection:${sessionId}`;
+    const manager = await getFreshManager(
+      createCfg({
+        provider: "none",
+        sources: ["sessions"],
+        sessionMemory: true,
+      }),
+    );
+    let resolveActiveSync: (() => void) | undefined;
+    const activeSyncGate = new Promise<void>((resolve) => {
+      resolveActiveSync = resolve;
+    });
+    let rejectQueuedSync: ((error: Error) => void) | undefined;
+    const queuedSyncGate = new Promise<void>((_resolve, reject) => {
+      rejectQueuedSync = reject;
+    });
+    const owner = manager as unknown as {
+      syncing: Promise<void> | null;
+      queuedSessions: Map<string, MemorySessionSyncTarget>;
+      queuedSessionSync: Promise<void> | null;
+      runSyncWithReadonlyRecovery: (params?: MemorySyncParams) => Promise<void>;
+    };
+    const runSyncWithReadonlyRecovery = owner.runSyncWithReadonlyRecovery.bind(owner);
+    const runSync = vi
+      .spyOn(owner, "runSyncWithReadonlyRecovery")
+      .mockImplementationOnce(async (params) => await runSyncWithReadonlyRecovery(params))
+      .mockImplementationOnce(async () => await activeSyncGate)
+      .mockImplementationOnce(async () => await queuedSyncGate)
+      .mockImplementation(async (params) => await runSyncWithReadonlyRecovery(params));
+    const queuedError = new Error("controlled queued rejection");
+    try {
+      await manager.sync({ reason: "test-live-rejection-baseline", force: true });
+      for (const [sessionId, marker] of Object.entries(markers)) {
+        await seedMemoryIndexSessionTranscript({
+          sessionId,
+          sessionKey: sessionKey(sessionId),
+          messages: [
+            {
+              role: "user",
+              timestamp: Date.now(),
+              content: marker,
+            },
+          ],
+        });
+      }
+
+      const active = manager.sync({
+        reason: "test-live-rejection-owner",
+        sessions: [
+          {
+            agentId: "main",
+            sessionId: "active",
+            sessionKey: sessionKey("active"),
+          },
+        ],
+      });
+      const queuedProgress = vi.fn();
+      const failedQueued = manager.sync({
+        reason: "test-live-rejection-queued",
+        sessions: [
+          {
+            agentId: "main",
+            sessionId: "retained",
+            sessionKey: sessionKey("retained"),
+          },
+        ],
+        force: true,
+        progress: queuedProgress,
+      });
+      const failuresPromise = Promise.allSettled([active, failedQueued]);
+      resolveActiveSync?.();
+      await vi.waitFor(() => {
+        expect(runSync).toHaveBeenCalledTimes(3);
+        expect(owner.syncing).not.toBeNull();
+        expect(owner.queuedSessionSync).not.toBeNull();
+      });
+      const rejectingQueuedSync = owner.syncing;
+      if (!rejectingQueuedSync) {
+        throw new Error("expected a live queued sync");
+      }
+
+      let resolveTransitionResult!: (result: PromiseSettledResult<void>) => void;
+      const transitionResult = new Promise<PromiseSettledResult<void>>((resolve) => {
+        resolveTransitionResult = resolve;
+      });
+      let transitionState:
+        | { syncingNull: boolean; queueOwnerLive: boolean; queuedTargets: number }
+        | undefined;
+      const transitionProgress = vi.fn();
+      void rejectingQueuedSync.catch(() => {
+        transitionState = {
+          syncingNull: owner.syncing === null,
+          queueOwnerLive: owner.queuedSessionSync !== null,
+          queuedTargets: owner.queuedSessions.size,
+        };
+        const transitionCall = manager.sync({
+          reason: "test-live-rejection-transition",
+          sessions: [
+            {
+              agentId: "main",
+              sessionId: "transition",
+              sessionKey: sessionKey("transition"),
+            },
+          ],
+          progress: transitionProgress,
+        });
+        void transitionCall.then(
+          (value) => resolveTransitionResult({ status: "fulfilled", value }),
+          (reason: unknown) => resolveTransitionResult({ status: "rejected", reason }),
+        );
+      });
+
+      rejectQueuedSync?.(queuedError);
+      const failures = await failuresPromise;
+      const transitionFailure = await transitionResult;
+      expect(failures[0]?.status).toBe("fulfilled");
+      expect(failures[1]?.status).toBe("rejected");
+      expect(transitionFailure.status).toBe("rejected");
+      if (failures[1]?.status !== "rejected" || transitionFailure.status !== "rejected") {
+        throw new Error("expected shared queued rejection");
+      }
+      expect(failures[1].reason).toBe(queuedError);
+      expect(transitionFailure.reason).toBe(queuedError);
+      expect(transitionState).toEqual({
+        syncingNull: true,
+        queueOwnerLive: true,
+        queuedTargets: 0,
+      });
+      expect(Array.from(owner.queuedSessions.values())).toEqual([
+        {
+          agentId: "main",
+          sessionId: "transition",
+          sessionKey: sessionKey("transition"),
+        },
+        {
+          agentId: "main",
+          sessionId: "retained",
+          sessionKey: sessionKey("retained"),
+        },
+      ]);
+      expect(queuedProgress).not.toHaveBeenCalled();
+      expect(transitionProgress).not.toHaveBeenCalled();
+
+      const recoveryProgress = vi.fn();
+      await manager.sync({
+        reason: "test-live-rejection-recovery",
+        sessions: [
+          {
+            agentId: "main",
+            sessionId: "trigger",
+            sessionKey: sessionKey("trigger"),
+          },
+        ],
+        progress: recoveryProgress,
+      });
+
+      const dbPath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+      const observer = new DatabaseSync(dbPath, { readOnly: true });
+      try {
+        const indexedCount = (marker: string) =>
+          (
+            observer
+              .prepare("SELECT COUNT(*) AS count FROM memory_index_chunks WHERE text LIKE ?")
+              .get(`%${marker}%`) as { count: number }
+          ).count;
+        expect(indexedCount(markers.retained)).toBeGreaterThan(0);
+        expect(indexedCount(markers.transition)).toBeGreaterThan(0);
+        expect(indexedCount(markers.trigger)).toBeGreaterThan(0);
+      } finally {
+        observer.close();
+      }
+      expect(owner.queuedSessions.size).toBe(0);
+      expect(recoveryProgress).toHaveBeenCalled();
+      expect(transitionProgress).not.toHaveBeenCalled();
+    } finally {
+      resolveActiveSync?.();
+      rejectQueuedSync?.(queuedError);
+      await manager.close?.();
+      runSync.mockRestore();
+    }
+  });
+
+  it("clears retained queued targets when close interrupts a competing sync", async () => {
+    const manager = await getFreshManager(
+      createCfg({
+        provider: "none",
+        sources: ["sessions"],
+        sessionMemory: true,
+      }),
+    );
+    let resolveFullSync: (() => void) | undefined;
+    const fullSyncGate = new Promise<void>((resolve) => {
+      resolveFullSync = resolve;
+    });
+    const owner = manager as unknown as {
+      closing: boolean;
+      closed: boolean;
+      queuedSessions: Map<string, MemorySessionSyncTarget>;
+      queuedProgressCallbacks: Set<NonNullable<MemorySyncParams["progress"]>>;
+      queuedForce: boolean;
+      syncAdmitted: (params?: MemorySyncParams) => Promise<void>;
+      runSyncWithReadonlyRecovery: (params?: MemorySyncParams) => Promise<void>;
+    };
+    const syncAdmitted = vi.spyOn(owner, "syncAdmitted");
+    const runSyncWithReadonlyRecovery = vi
+      .spyOn(owner, "runSyncWithReadonlyRecovery")
+      .mockReturnValueOnce(fullSyncGate);
+    const progress = vi.fn();
+    owner.queuedSessions.set("retained", {
+      agentId: "main",
+      sessionId: "retained-close",
+      sessionKey: "agent:main:retained-close",
+    });
+
+    try {
+      const recovery = manager.sync({
+        reason: "test-close-recovery",
+        sessions: [
+          {
+            agentId: "main",
+            sessionId: "trigger-close",
+            sessionKey: "agent:main:trigger-close",
+          },
+        ],
+        force: true,
+        progress,
+      });
+      const competingFullSync = manager.sync({ reason: "test-close-competing-full-sync" });
+
+      await vi.waitFor(() => {
+        expect(syncAdmitted).toHaveBeenCalledTimes(2);
+      });
+      const closing = manager.close?.() ?? Promise.resolve();
+      expect(owner.closing).toBe(true);
+      resolveFullSync?.();
+
+      await expect(Promise.all([recovery, competingFullSync, closing])).resolves.toEqual([
+        undefined,
+        undefined,
+        undefined,
+      ]);
+      expect(runSyncWithReadonlyRecovery).toHaveBeenCalledTimes(1);
+      expect(syncAdmitted).toHaveBeenCalledTimes(2);
+      expect(owner.closed).toBe(true);
+      expect(owner.queuedSessions.size).toBe(0);
+      expect(owner.queuedProgressCallbacks.size).toBe(0);
+      expect(owner.queuedForce).toBe(false);
+      expect(progress).not.toHaveBeenCalled();
+    } finally {
+      resolveFullSync?.();
+      await manager.close?.();
+      runSyncWithReadonlyRecovery.mockRestore();
+      syncAdmitted.mockRestore();
+    }
+  });
+
+  it("clears retained queued targets after failure when the manager closes", async () => {
+    const manager = await getFreshManager(
+      createCfg({
+        provider: "none",
+        sources: ["sessions"],
+        sessionMemory: true,
+      }),
+    );
+    let resolveActiveSync: (() => void) | undefined;
+    const activeSyncGate = new Promise<void>((resolve) => {
+      resolveActiveSync = resolve;
+    });
+    const owner = manager as unknown as {
+      closed: boolean;
+      queuedArchiveFiles: Set<string>;
+      queuedSessions: Map<string, MemorySessionSyncTarget>;
+      queuedProgressCallbacks: Set<NonNullable<MemorySyncParams["progress"]>>;
+      queuedForce: boolean;
+      queuedSessionSync: Promise<void> | null;
+      runSyncWithReadonlyRecovery: (params?: MemorySyncParams) => Promise<void>;
+    };
+    const runSyncWithReadonlyRecovery = vi
+      .spyOn(owner, "runSyncWithReadonlyRecovery")
+      .mockReturnValueOnce(activeSyncGate)
+      .mockRejectedValueOnce(new Error("test queued failure"));
+    const progress = vi.fn();
+
+    try {
+      const active = manager.sync({
+        reason: "test-close-after-failure-owner",
+        sessions: [
+          {
+            agentId: "main",
+            sessionId: "active-close-after-failure",
+            sessionKey: "agent:main:active-close-after-failure",
+          },
+        ],
+      });
+      const failedQueued = manager.sync({
+        reason: "test-close-after-failure-queued",
+        sessions: [
+          {
+            agentId: "main",
+            sessionId: "retained-close-after-failure",
+            sessionKey: "agent:main:retained-close-after-failure",
+          },
+        ],
+        archiveFiles: ["/tmp/retained-close-after-failure.jsonl"],
+        force: true,
+        progress,
+      });
+      const queuedRejection = expect(failedQueued).rejects.toThrow("test queued failure");
+
+      resolveActiveSync?.();
+      await active;
+      await queuedRejection;
+
+      expect(runSyncWithReadonlyRecovery).toHaveBeenCalledTimes(2);
+      expect(owner.queuedArchiveFiles).toEqual(
+        new Set(["/tmp/retained-close-after-failure.jsonl"]),
+      );
+      expect(Array.from(owner.queuedSessions.values())).toEqual([
+        {
+          agentId: "main",
+          sessionId: "retained-close-after-failure",
+          sessionKey: "agent:main:retained-close-after-failure",
+        },
+      ]);
+      expect(owner.queuedForce).toBe(true);
+      expect(owner.queuedProgressCallbacks.size).toBe(0);
+      expect(owner.queuedSessionSync).toBeNull();
+
+      await manager.close?.();
+
+      expect(owner.closed).toBe(true);
+      expect(owner.queuedArchiveFiles.size).toBe(0);
+      expect(owner.queuedSessions.size).toBe(0);
+      expect(owner.queuedProgressCallbacks.size).toBe(0);
+      expect(owner.queuedForce).toBe(false);
+    } finally {
+      resolveActiveSync?.();
+      await manager.close?.();
+      runSyncWithReadonlyRecovery.mockRestore();
     }
   });
 

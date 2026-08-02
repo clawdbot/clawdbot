@@ -53,6 +53,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { escapeHtml } from "openclaw/plugin-sdk/text-utility-runtime";
 import { expandTelegramAllowFromWithAccessGroups } from "./access-groups.js";
 import { resolveTelegramAccount } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
@@ -121,6 +122,7 @@ const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
 const activeTelegramCodexLoginFlows = new Map<string, { expiresAt: number }>();
 
 type TelegramNativeCommandContext = Context & { match?: string };
+
 type TelegramChunkMode = ReturnType<
   typeof import("openclaw/plugin-sdk/reply-dispatch-runtime").resolveChunkMode
 >;
@@ -159,6 +161,27 @@ type TelegramNativeCommandThreadContext = {
   threadSpec: ReturnType<typeof resolveTelegramThreadSpec>;
   threadParams: ReturnType<typeof buildTelegramThreadParams>;
 };
+
+type TelegramLoginDeviceCode = {
+  title: string;
+  code: string;
+  expiresInMinutes?: number;
+  message?: string;
+};
+
+// Telegram's inline-code entity provides the tap-to-copy affordance needed for
+// short-lived device codes; plain text and literal backticks do not.
+function formatTelegramLoginDeviceCode(params: TelegramLoginDeviceCode): string {
+  return [
+    `<b>${escapeHtml(params.title)}</b>`,
+    "",
+    ...(params.message ? [escapeHtml(params.message)] : []),
+    `Code: <code>${escapeHtml(params.code)}</code>`,
+    ...(params.expiresInMinutes
+      ? [`Code expires in ${params.expiresInMinutes} minutes. Never share it.`]
+      : []),
+  ].join("\n");
+}
 
 function resolveTelegramCodexLoginProviderInput(commandArgs: CommandArgs | undefined): string {
   const providerValue = commandArgs?.values?.provider;
@@ -1268,6 +1291,17 @@ export const registerTelegramNativeCommands = ({
               fn: () => bot.api.sendMessage(chatId, text, threadParams),
             });
           };
+          const sendLoginDeviceCode = async (params: TelegramLoginDeviceCode) => {
+            await withTelegramApiErrorLogging({
+              operation: "sendMessage",
+              runtime,
+              fn: () =>
+                bot.api.sendMessage(chatId, formatTelegramLoginDeviceCode(params), {
+                  ...threadParams,
+                  parse_mode: "HTML",
+                }),
+            });
+          };
           if (
             !senderIsOwner ||
             !codexChannelLoginRuntime.hasConfiguredCommandOwnerAllowlist(runtimeCfg)
@@ -1336,6 +1370,7 @@ export const registerTelegramNativeCommands = ({
               config: runtimeCfg,
               runtime,
               sendMessage: sendLoginMessage,
+              sendDeviceCode: sendLoginDeviceCode,
               unsupportedPromptMessage:
                 "Telegram /login supports only fixed Codex device-code auth.",
             });

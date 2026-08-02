@@ -9,6 +9,7 @@ import {
   validateChatHistoryParams,
   validateChatMetadataParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { CHAT_HISTORY_MAX_ENTRIES } from "../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import {
   listAgentIds,
   resolveDefaultAgentId,
@@ -385,7 +386,7 @@ async function handleChatHistoryRequest({
     requestedSessionId && requestedSessionId !== entry?.sessionId ? undefined : entry;
   const resolvedSessionModel = resolveSessionModelRef(cfg, entry, sessionAgentId);
   const requested = typeof limit === "number" ? limit : 200;
-  const max = Math.min(1000, requested);
+  const max = Math.min(CHAT_HISTORY_MAX_ENTRIES, requested);
   const maxHistoryBytes = getMaxChatHistoryMessagesBytes();
   const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars(cfg, maxChars);
   let historyPage: Awaited<ReturnType<typeof readChatHistoryPage>>;

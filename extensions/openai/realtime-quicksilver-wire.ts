@@ -1,13 +1,16 @@
 // GPT-Live frameless session, call-creation, and sideband event wire contracts.
 import { randomBytes } from "node:crypto";
 import {
+  readProviderTextResponse,
   readResponseTextLimited,
   resolveProviderRequestHeaders,
 } from "openclaw/plugin-sdk/provider-http";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { z } from "zod";
 import { isOpenAIGptLiveModel } from "./realtime-quicksilver.js";
 
 const OPENAI_QUICKSILVER_APPEND_MAX_BYTES = 500;
+const OPENAI_QUICKSILVER_DELEGATION_RESULT_MAX_CHARS = 1_800;
 const OPENAI_QUICKSILVER_CONTEXT_MAX_ENTRIES = 16;
 const OPENAI_QUICKSILVER_CONTEXT_MAX_ITEM_CHARS = 800;
 const OPENAI_QUICKSILVER_CONTEXT_MAX_UTF8_BYTES = 8_000;
@@ -15,6 +18,7 @@ const OPENAI_QUICKSILVER_CALL_URL = "https://api.openai.com/v1/live";
 const OPENAI_REALTIME_CALL_URL = "https://api.openai.com/v1/realtime/calls";
 const OPENAI_REALTIME_ERROR_BODY_MAX_BYTES = 16 * 1024;
 const OPENAI_REALTIME_ERROR_DETAIL_MAX_CHARS = 500;
+const OPENAI_REALTIME_SDP_ANSWER_MAX_BYTES = 256 * 1024;
 const OPENAI_GPT_LIVE_WAITLIST_URL = "https://openai.com/form/gpt-live-1-in-the-api/";
 
 const OPENAI_QUICKSILVER_VOICES = [
@@ -428,7 +432,11 @@ export async function createOpenAIQuicksilverCall(params: {
       response.status,
     );
   }
-  const answerSdp = await response.text();
+  const answerSdp = await readProviderTextResponse(
+    response,
+    `${isGptLive ? "GPT-Live" : "OpenAI Realtime"} SDP answer`,
+    { maxBytes: OPENAI_REALTIME_SDP_ANSWER_MAX_BYTES },
+  );
   if (!answerSdp.trim()) {
     throw new OpenAIQuicksilverCallError(
       `${isGptLive ? "GPT-Live" : "OpenAI Realtime"} call creation returned an empty SDP answer`,
@@ -602,4 +610,15 @@ export function chunkOpenAIQuicksilverAppendText(text: string): string[] {
     chunks.push(current);
   }
   return chunks;
+}
+
+/** Bound completed delegation output while preserving under-limit text byte-for-byte. */
+export function boundOpenAIQuicksilverDelegationResult(text: string): string {
+  if (text.length <= OPENAI_QUICKSILVER_DELEGATION_RESULT_MAX_CHARS) {
+    return text;
+  }
+  return `${truncateUtf16Safe(
+    text,
+    OPENAI_QUICKSILVER_DELEGATION_RESULT_MAX_CHARS - 16,
+  ).trimEnd()} [truncated]`;
 }

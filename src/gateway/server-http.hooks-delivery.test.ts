@@ -141,11 +141,22 @@ describe("hook request delivery normalization", () => {
     const explicit = await dispatchPayload({
       handler,
       path: "/hooks/agent",
-      payload: { message: "Explicit", channel: "delivery-test", to: "123456" },
+      payload: {
+        message: "Explicit",
+        channel: "delivery-test",
+        to: "123456",
+        accountId: "work",
+      },
     });
     expect(explicit.res.statusCode).toBe(200);
     expect(dispatchAgentHook.mock.calls[2]?.[0]).toMatchObject({
-      delivery: { mode: "announce", channel: "delivery-test", to: "123456" },
+      accountId: "work",
+      delivery: {
+        mode: "announce",
+        channel: "delivery-test",
+        to: "123456",
+        accountId: "work",
+      },
     });
   });
 

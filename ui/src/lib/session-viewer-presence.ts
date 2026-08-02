@@ -1,12 +1,10 @@
 import { SESSION_VIEWER_PRESENCE_MAX_KEYS } from "../../../packages/gateway-protocol/src/schema/sessions-viewer-presence.js";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { isGatewayMethodAdvertised } from "./gateway-methods.ts";
+import { createGatewayRetryOwner } from "./gateway-retry.ts";
 import { resolveSessionKey } from "./sessions/index.ts";
 
 const SESSION_VIEWERS_SET_METHOD = "sessions.viewers.set";
-
-const RETRY_BASE_MS = 30_000;
-const RETRY_MAX_MS = 5 * 60_000;
 
 type SessionViewerPresenceStore = {
   watch: (owner: object, sessionKeys: readonly string[]) => void;
@@ -17,13 +15,12 @@ const stores = new WeakMap<ApplicationGateway, SessionViewerPresenceStore>();
 
 function createStore(gateway: ApplicationGateway): SessionViewerPresenceStore {
   const watchedByOwner = new Map<object, Set<string>>();
+  const retry = createGatewayRetryOwner();
   let knownClient = gateway.snapshot.client;
   let lastHello: object | null = null;
   let lastSignature: string | null = null;
   let acknowledgedSignature: string | null = null;
   let acknowledgedGeneration = 0;
-  let retryTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
-  let retryDelayMs = RETRY_BASE_MS;
   let requestGeneration = 0;
   let syncScheduled = false;
   let scheduleGeneration = 0;
@@ -32,16 +29,6 @@ function createStore(gateway: ApplicationGateway): SessionViewerPresenceStore {
   let visibilityDocument: Document | null = null;
 
   const isActive = () => watchedByOwner.size > 0;
-
-  const clearRetry = (resetDelay: boolean) => {
-    if (retryTimer !== null) {
-      globalThis.clearTimeout(retryTimer);
-      retryTimer = null;
-    }
-    if (resetDelay) {
-      retryDelayMs = RETRY_BASE_MS;
-    }
-  };
 
   const visibleSessionKeys = (): string[] => {
     const hello = gateway.snapshot.hello;
@@ -59,7 +46,7 @@ function createStore(gateway: ApplicationGateway): SessionViewerPresenceStore {
 
   const handleGatewaySnapshot = () => scheduleSync();
   const handleVisibilityChange = () => {
-    clearRetry(true);
+    retry.reset();
     scheduleSync();
   };
 
@@ -89,7 +76,7 @@ function createStore(gateway: ApplicationGateway): SessionViewerPresenceStore {
     stopGatewaySnapshots = null;
     visibilityDocument?.removeEventListener("visibilitychange", handleVisibilityChange);
     visibilityDocument = null;
-    clearRetry(true);
+    retry.reset();
     requestGeneration += 1;
     scheduleGeneration += 1;
     syncScheduled = false;
@@ -107,7 +94,7 @@ function createStore(gateway: ApplicationGateway): SessionViewerPresenceStore {
     const snapshot = gateway.snapshot;
     const client = snapshot.client;
     if (client !== knownClient) {
-      clearRetry(true);
+      retry.reset();
       knownClient = client;
       lastHello = null;
       lastSignature = null;
@@ -152,14 +139,14 @@ function createStore(gateway: ApplicationGateway): SessionViewerPresenceStore {
       currentGeneration === requestGeneration &&
       snapshot.hello === lastHello &&
       signature === lastSignature;
-    clearRetry(false);
+    retry.cancel();
     const request = client.request(SESSION_VIEWERS_SET_METHOD, { sessionKeys });
     void request
       .then(() => {
         if (isCurrentRequest()) {
           acknowledgedSignature = signature;
           acknowledgedGeneration = currentGeneration;
-          retryDelayMs = RETRY_BASE_MS;
+          retry.reset();
           if (!isActive()) {
             detach();
           }
@@ -170,14 +157,11 @@ function createStore(gateway: ApplicationGateway): SessionViewerPresenceStore {
           return;
         }
         lastSignature = null;
-        const delayMs = retryDelayMs;
-        retryDelayMs = Math.min(retryDelayMs * 2, RETRY_MAX_MS);
-        retryTimer = globalThis.setTimeout(() => {
-          retryTimer = null;
+        retry.schedule(() => {
           if (attached) {
             scheduleSync();
           }
-        }, delayMs);
+        });
       });
   }
 
@@ -209,7 +193,7 @@ function createStore(gateway: ApplicationGateway): SessionViewerPresenceStore {
     } else {
       watchedByOwner.set(owner, next);
     }
-    clearRetry(true);
+    retry.reset();
     if (isActive()) {
       attach();
       scheduleSync();

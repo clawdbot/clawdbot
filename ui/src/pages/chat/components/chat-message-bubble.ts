@@ -422,6 +422,7 @@ export function renderGroupedMessage(
                         opts.onAssistantAttachmentLoaded,
                         opts.onRequestOpenImage,
                         opts.onOpenImage,
+                        opts.resolveArtifactDownload,
                       )}
                       ${assistantViewContent}
                       ${reasoningMarkdown
@@ -488,6 +489,7 @@ export function renderGroupedMessage(
               opts.onAssistantAttachmentLoaded,
               opts.onRequestOpenImage,
               opts.onOpenImage,
+              opts.resolveArtifactDownload,
             )}
             ${reasoningMarkdown
               ? html`<div class="chat-thinking">

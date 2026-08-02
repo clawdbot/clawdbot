@@ -4,7 +4,18 @@ import type { PluginHookToolRequesterContext } from "../../plugins/hook-types.js
 import type {
   BeforeToolCallFailureDisposition,
   DeferredPluginToolApproval,
+  HookContext,
 } from "../agent-tools.before-tool-call.js";
+
+type NativeHookRelayApprovalContext = Pick<
+  HookContext,
+  | "approvalReviewerDeviceId"
+  | "trigger"
+  | "turnSourceAccountId"
+  | "turnSourceChannel"
+  | "turnSourceThreadId"
+  | "turnSourceTo"
+>;
 
 export type JsonValue =
   | null
@@ -67,6 +78,7 @@ export type NativeHookRelayRegistration = {
   runId: string;
   channelId?: string;
   requester?: PluginHookToolRequesterContext;
+  approvalContext?: NativeHookRelayApprovalContext;
   allowedEvents: readonly NativeHookRelayEvent[];
   expiresAtMs: number;
   signal?: AbortSignal;
@@ -102,6 +114,7 @@ export type RegisterNativeHookRelayParams = {
   runId: string;
   channelId?: string;
   requester?: PluginHookToolRequesterContext;
+  approvalContext?: NativeHookRelayApprovalContext;
   allowedEvents?: readonly NativeHookRelayEvent[];
   /** Whether this relay should run OpenClaw loop detection from native PreToolUse hooks. */
   preToolUseLoopDetection?: boolean;

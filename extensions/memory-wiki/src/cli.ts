@@ -915,10 +915,14 @@ function formatChatGptImportSummary(result: ChatGptImportResult): string {
 }
 
 function formatChatGptRollbackSummary(result: ChatGptRollbackResult): string {
+  const preservedNote =
+    result.preservedPaths.length > 0
+      ? ` Preserved ${result.preservedPaths.length} page${result.preservedPaths.length === 1 ? "" : "s"} edited after import: ${result.preservedPaths.map((entry) => entry.recoveryPath).join(", ")}.`
+      : "";
   if (result.alreadyRolledBack) {
-    return `ChatGPT import run ${result.runId} was already rolled back.`;
+    return `ChatGPT import run ${result.runId} was already rolled back.${preservedNote}`;
   }
-  return `Rolled back ChatGPT import run ${result.runId} (${result.removedCount} removed, ${result.restoredCount} restored). Refreshed ${result.indexUpdatedFiles.length} index file${result.indexUpdatedFiles.length === 1 ? "" : "s"}.`;
+  return `Rolled back ChatGPT import run ${result.runId} (${result.removedCount} removed, ${result.restoredCount} restored).${preservedNote} Refreshed ${result.indexUpdatedFiles.length} index file${result.indexUpdatedFiles.length === 1 ? "" : "s"}.`;
 }
 
 async function runWikiChatGptImport(params: {

@@ -231,12 +231,14 @@ type HookAgentPayload = {
   deliver: boolean;
   channel: HookMessageChannel;
   to?: string;
+  accountId?: string;
   delivery:
     | { mode: "none" }
     | {
         mode: "announce";
         channel: HookMessageChannel;
         to?: string;
+        accountId?: string;
       };
   model?: string;
   thinking?: string;
@@ -280,10 +282,15 @@ export function resolveHookDeliver(raw: unknown): boolean {
 }
 
 /** Normalize webhook delivery intent before any isolated cron work is scheduled. */
-function normalizeHookAgentDelivery(params: { deliver: unknown; channel: unknown; to: unknown }):
+function normalizeHookAgentDelivery(params: {
+  deliver: unknown;
+  channel: unknown;
+  to: unknown;
+  accountId: unknown;
+}):
   | {
       ok: true;
-      value: Pick<HookAgentPayload, "deliver" | "channel" | "to" | "delivery">;
+      value: Pick<HookAgentPayload, "deliver" | "channel" | "to" | "accountId" | "delivery">;
     }
   | { ok: false; error: string } {
   const deliver = resolveHookDeliver(params.deliver);
@@ -294,24 +301,28 @@ function normalizeHookAgentDelivery(params: { deliver: unknown; channel: unknown
         deliver,
         channel: "last",
         to: undefined,
+        accountId: undefined,
         delivery: { mode: "none" },
       },
     };
   }
   const to = normalizeOptionalString(params.to);
+  const accountId = normalizeOptionalString(params.accountId);
   const channel = resolveHookChannel(params.channel);
   if (!channel) {
     return { ok: false, error: getHookChannelError() };
   }
   const hasChannel = params.channel !== undefined;
   const hasTo = params.to !== undefined;
-  if (!hasChannel && !hasTo) {
+  const hasAccountId = params.accountId !== undefined;
+  if (!hasChannel && !hasTo && !hasAccountId) {
     return {
       ok: true,
       value: {
         deliver,
         channel,
         to,
+        accountId,
         delivery: { mode: "none" },
       },
     };
@@ -320,6 +331,18 @@ function normalizeHookAgentDelivery(params: { deliver: unknown; channel: unknown
     return {
       ok: false,
       error: "to must be a non-empty string for hook delivery",
+    };
+  }
+  if (hasAccountId && !accountId) {
+    return {
+      ok: false,
+      error: "accountId must be a non-empty string for hook delivery",
+    };
+  }
+  if (hasAccountId && (!hasChannel || !to)) {
+    return {
+      ok: false,
+      error: "accountId requires channel and to for hook delivery",
     };
   }
   if (!hasChannel || !to) {
@@ -340,10 +363,12 @@ function normalizeHookAgentDelivery(params: { deliver: unknown; channel: unknown
       deliver,
       channel,
       to,
+      accountId,
       delivery: {
         mode: "announce",
         channel,
         to,
+        ...(accountId ? { accountId } : {}),
       },
     },
   };
@@ -464,7 +489,7 @@ function hasEffectiveTemplatedHookSessionKeyMapping(mappings: HookMappingResolve
       continue;
     }
     effectiveMappings.push(mapping);
-    if (mapping.action === "agent" && hasTemplatedHookSessionKey(mapping.sessionKey)) {
+    if (hasTemplatedHookSessionKey(mapping.sessionKey)) {
       return true;
     }
   }
@@ -532,6 +557,7 @@ export function normalizeAgentPayload(payload: Record<string, unknown>):
     deliver: payload.deliver,
     channel: payload.channel,
     to: payload.to,
+    accountId: payload.accountId,
   });
   if (!delivery.ok) {
     return delivery;

@@ -142,13 +142,18 @@ describe("refreshQueuedFollowupSession", () => {
       nextProvider: "openai",
       nextModel: "gpt-5.6-luna",
       nextRouteResolution: "resolved",
-      nextThinking: { level: "ultra", agentRuntime: "codex" },
+      nextThinking: {
+        level: "ultra",
+        catalog: [{ provider: "openai", id: "gpt-5.6-luna", reasoning: true }],
+        agentRuntime: "codex",
+      },
     });
 
     expect(queue.items[0]?.run).toMatchObject({
       provider: "openai",
       model: "gpt-5.6-luna",
       thinkLevel: "max",
+      thinkingCatalog: [{ provider: "openai", id: "gpt-5.6-luna", reasoning: true }],
     });
   });
 

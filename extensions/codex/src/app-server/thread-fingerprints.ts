@@ -123,27 +123,9 @@ export function fingerprintEnvironmentSelection(
 }
 
 function fingerprintDynamicToolSpec(tool: JsonValue): JsonValue {
-  return stabilizeDynamicToolFingerprintValue(tool);
-}
-
-function stabilizeDynamicToolFingerprintValue(value: JsonValue): JsonValue {
-  if (Array.isArray(value)) {
-    return value.map(stabilizeDynamicToolFingerprintValue);
-  }
-  if (!isJsonObject(value)) {
-    return value;
-  }
-
-  const stable: JsonObject = {};
-  for (const [key, child] of Object.entries(value).toSorted(([left], [right]) =>
-    left.localeCompare(right),
-  )) {
-    if (key === "description") {
-      continue;
-    }
-    stable[key] = stabilizeDynamicToolFingerprintValue(child);
-  }
-  return stable;
+  // Codex persists the complete model-visible schema at thread/start; resume
+  // cannot refresh changed tool or nested input descriptions.
+  return stabilizeJsonValue(tool);
 }
 
 function stabilizeJsonValue(value: JsonValue): JsonValue {

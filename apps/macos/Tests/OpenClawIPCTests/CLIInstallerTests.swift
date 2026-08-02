@@ -67,6 +67,13 @@ struct CLIInstallerTests {
         ])
     }
 
+    @Test func `dev source installs allow a full cold build`() {
+        #expect(CLIInstaller.installWatchdogTimeout(for: .channel(.dev)) == 7200)
+        #expect(CLIInstaller.installWatchdogTimeout(for: .channel(.stable)) == 900)
+        #expect(CLIInstaller.installWatchdogTimeout(for: .channel(.beta)) == 900)
+        #expect(CLIInstaller.installWatchdogTimeout(for: .exact(String())) == 900)
+    }
+
     @Test func `managed update uses the canonical updater without accepting downgrades`() {
         let command = CLIInstaller.managedUpdateCommand(
             executable: "/Users/Test User/.openclaw/bin/openclaw",

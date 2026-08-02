@@ -150,6 +150,34 @@ function buildPluginApprovalFailureReason(params: {
   return `${params.fallbackReason}\n\n${setupText}`;
 }
 
+function resolveUnavailablePluginApprovalSurfaceReason(ctx?: HookContext): string | undefined {
+  const trigger = ctx?.trigger?.trim();
+  // Legacy/internal callers without run provenance still rely on the Gateway's
+  // live-client check. Embedded agent runs always carry an explicit trigger.
+  if (!trigger) {
+    return undefined;
+  }
+  const initiatingSurface = resolveApprovalInitiatingSurfaceState({
+    channel: ctx?.turnSourceChannel,
+    accountId: ctx?.turnSourceAccountId,
+    cfg: ctx?.config,
+    approvalKind: "plugin",
+  });
+  if (trigger !== "user") {
+    return `Plugin approval unavailable: ${trigger} runs have no approval-capable initiating surface.`;
+  }
+  if (!ctx?.turnSourceChannel?.trim() && !ctx?.approvalReviewerDeviceId?.trim()) {
+    return "Plugin approval unavailable: non-interactive CLI runs have no approval-capable initiating surface.";
+  }
+  if (initiatingSurface.kind === "disabled") {
+    return `Plugin approval unavailable: the ${initiatingSurface.channelLabel} initiating surface is disabled.`;
+  }
+  if (initiatingSurface.kind === "unsupported") {
+    return `Plugin approval unavailable: the ${initiatingSurface.channelLabel} initiating surface does not support approvals.`;
+  }
+  return undefined;
+}
+
 async function requestPluginToolApproval(params: {
   approval: PluginApprovalRequest;
   toolName: string;
@@ -227,6 +255,19 @@ async function requestPluginToolApproval(params: {
             reason: "Approval timed out",
             params: params.baseParams,
           };
+    }
+
+    const unavailableSurfaceReason = resolveUnavailablePluginApprovalSurfaceReason(params.ctx);
+    if (unavailableSurfaceReason) {
+      notifyPluginApprovalResolution(approval, PluginApprovalResolutions.CANCELLED);
+      return {
+        blocked: true,
+        kind: "failure",
+        disposition: "failed",
+        deniedReason: "plugin-approval-unavailable",
+        reason: unavailableSurfaceReason,
+        params: params.baseParams,
+      };
     }
 
     gatewayApprovalPhase = "request";

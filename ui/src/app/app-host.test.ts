@@ -389,20 +389,20 @@ describe("OpenClaw shell source initialization", () => {
     shell.routeState = { routeId: "usage" };
     const client = {} as GatewayBrowserClient;
     const snapshot = { client, phase: "connected" } as ApplicationGatewaySnapshot;
-    const firstAgents = {
-      state: { agentsList: null },
-      ensureList: vi.fn(() => Promise.resolve(null)),
-    } as unknown as ApplicationContext["agents"];
-    const secondAgents = {
-      state: { agentsList: null },
-      ensureList: vi.fn(() => Promise.resolve(null)),
-    } as unknown as ApplicationContext["agents"];
-    const firstRuntimeConfig = {
-      ensureLoaded: vi.fn(() => Promise.resolve()),
-    } as unknown as ApplicationContext["runtimeConfig"];
-    const secondRuntimeConfig = {
-      ensureLoaded: vi.fn(() => Promise.resolve()),
-    } as unknown as ApplicationContext["runtimeConfig"];
+    const createAgents = () =>
+      ({
+        state: { agentsList: null },
+        ensureList: vi.fn(() => Promise.resolve(null)),
+      }) as unknown as ApplicationContext["agents"];
+    const createRuntimeConfig = () =>
+      ({
+        state: { client, connected: true },
+        ensureLoaded: vi.fn(() => Promise.resolve()),
+      }) as unknown as ApplicationContext["runtimeConfig"];
+    const firstAgents = createAgents();
+    const secondAgents = createAgents();
+    const firstRuntimeConfig = createRuntimeConfig();
+    const secondRuntimeConfig = createRuntimeConfig();
 
     shell.ensureAgentsList(snapshot, firstAgents);
     shell.ensureAgentsList(snapshot, firstAgents);

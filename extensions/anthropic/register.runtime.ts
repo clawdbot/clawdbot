@@ -631,10 +631,11 @@ function supportsAnthropicNativeMaxEffort(modelId: string): boolean {
   return supportsClaudeNativeMaxEffort({ id: modelId }) || isAnthropicMythosPreviewModel(modelId);
 }
 
-function hasConfiguredModelContextOverride(
+function hasConfiguredModelOverride(
   config: ProviderNormalizeResolvedModelContext["config"],
   provider: string,
   modelId: string,
+  override: "context" | "cost",
 ): boolean {
   const providers = config?.models?.providers;
   if (!providers || typeof providers !== "object") {
@@ -657,8 +658,10 @@ function hasConfiguredModelContextOverride(
         continue;
       }
       if (
-        (typeof model?.contextTokens === "number" && model.contextTokens > 0) ||
-        (typeof model?.contextWindow === "number" && model.contextWindow > 0)
+        override === "cost"
+          ? model?.cost !== undefined
+          : (typeof model?.contextTokens === "number" && model.contextTokens > 0) ||
+            (typeof model?.contextWindow === "number" && model.contextWindow > 0)
       ) {
         return true;
       }
@@ -681,7 +684,7 @@ function applyAnthropicFixedContextWindow(params: {
   if (fixedContextWindow === undefined) {
     return undefined;
   }
-  if (hasConfiguredModelContextOverride(params.config, params.provider, params.modelId)) {
+  if (hasConfiguredModelOverride(params.config, params.provider, params.modelId, "context")) {
     return undefined;
   }
   const exactContextWindow = isAnthropicExact1MClaude5Model(params.contractModelId);
@@ -878,8 +881,10 @@ function normalizeAnthropicResolvedModel(
       contractModelId,
       model: thinkingLevelModel,
     }) ?? thinkingLevelModel;
+  // Provider catalog defaults must not replace explicit operator pricing.
   const pricingModel =
-    normalizeLowercaseStringOrEmpty(ctx.provider) === PROVIDER_ID
+    normalizeLowercaseStringOrEmpty(ctx.provider) === PROVIDER_ID &&
+    !hasConfiguredModelOverride(ctx.config, ctx.provider, ctx.modelId, "cost")
       ? (applyAnthropicOpus5Cost({
           modelId: contractModelId,
           model: contextWindowModel,

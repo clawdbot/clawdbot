@@ -42,7 +42,11 @@ export type RenderableImageBlock = ImageBlock & {
 
 export type AttachmentItem = Extract<MessageContentItem, { type: "attachment" }>;
 
-type ChatMediaResourceKind = "assistant-attachment" | "managed-image" | "pairing-qr";
+type ChatMediaResourceKind =
+  | "assistant-attachment"
+  | "managed-image"
+  | "managed-media"
+  | "pairing-qr";
 
 export type ChatMediaResource<Value> = {
   kind: ChatMediaResourceKind;

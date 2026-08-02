@@ -5,7 +5,6 @@ import {
   clearFastTestEnv,
   getCliSessionBindingMock,
   ensureAgentWorkspaceMock,
-  ensureRuntimePluginsLoadedMock,
   isCliProviderMock,
   loadRunCronIsolatedAgentTurn,
   makeCronSession,
@@ -171,16 +170,10 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
     expect(result.status).toBe("ok");
     expect(loadModelCatalogOwnerMock).toHaveBeenCalledWith({
       config: callerConfig,
-      readOnly: true,
+      allowGatewaySubagentBinding: true,
     });
     expect(ensureAgentWorkspaceMock).toHaveBeenCalledWith(
       expect.objectContaining({ dir: "/tmp/replacement-workspace" }),
-    );
-    expect(ensureRuntimePluginsLoadedMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: expect.objectContaining(ownerConfig),
-        workspaceDir: "/tmp/replacement-workspace",
-      }),
     );
     expect(resolveCronSessionMock).toHaveBeenCalledWith(
       expect.objectContaining({ cfg: ownerConfig, agentId: "main" }),
