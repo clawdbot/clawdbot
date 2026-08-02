@@ -85,6 +85,7 @@ describeControlUiE2e("Control UI Unicode build identity mocked Gateway E2E", () 
       builtAt: "2026-07-10T12:34:56.000Z",
       branch: RAW_BRANCH,
       dirty: true,
+      release: false,
       buildId: "build-info-unicode-e2e",
     });
     browser = await chromium.launch({ executablePath: chromiumExecutablePath });

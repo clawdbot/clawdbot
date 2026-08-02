@@ -1,7 +1,7 @@
 import {
   buildChannelInboundEventContext,
   resolveChannelInboundRouteEnvelope,
-  toInboundMediaFacts,
+  toInboundMediaFactsWithMetadata,
 } from "openclaw/plugin-sdk/channel-inbound";
 // Qa Channel plugin module implements inbound behavior.
 import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
@@ -53,7 +53,7 @@ async function resolveQaInboundMediaFacts(attachments: QaBusMessage["attachments
   if (!Array.isArray(attachments) || attachments.length === 0) {
     return [];
   }
-  const mediaList: Array<{ path: string; contentType?: string | null }> = [];
+  const mediaList: Array<{ path?: string; url?: string; contentType?: string | null }> = [];
   for (const attachment of attachments) {
     if (!attachment?.mimeType) {
       continue;
@@ -71,10 +71,17 @@ async function resolveQaInboundMediaFacts(attachments: QaBusMessage["attachments
         undefined,
         attachment.fileName,
       );
-      mediaList.push({
-        path: saved.path,
-        contentType: saved.contentType,
-      });
+      mediaList.push(
+        attachment.mediaFactCarrier === "media-store-url"
+          ? {
+              url: `media://inbound/${saved.id}`,
+              contentType: saved.contentType,
+            }
+          : {
+              path: saved.path,
+              contentType: saved.contentType,
+            },
+      );
       continue;
     }
     if (typeof attachment.url === "string" && attachment.url.trim()) {
@@ -91,7 +98,7 @@ async function resolveQaInboundMediaFacts(attachments: QaBusMessage["attachments
       });
     }
   }
-  return toInboundMediaFacts(mediaList);
+  return await toInboundMediaFactsWithMetadata(mediaList);
 }
 
 function resolveQaGroupConfig(params: {

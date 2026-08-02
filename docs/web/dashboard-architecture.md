@@ -325,7 +325,7 @@ capabilities? }` — create/update by name; `pin` places it on the board.
 - `dashboard { action, ... }` — board management verbs: `read`, `tab_create`,
   `tab_update`, `tab_delete`, `tabs_reorder`, `widget_move`, `widget_remove`,
   `unpin`, `focus_tab`, `set_chat_dock`.
-- Existing `cron` tools cover the automation tier; no new tool needed.
+- The existing `automations` tool covers the automation tier; no new tool needed.
 
 Tool descriptions teach the size/anchor vocabulary and the tier model. The
 agent is told about user tier-1 events via session notices, e.g.

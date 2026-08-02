@@ -306,6 +306,8 @@ export const TARGET_KEYS = [
   "plugins.entries.*.llm",
   "plugins.entries.*.llm.allowModelOverride",
   "plugins.entries.*.llm.allowedModels",
+  "plugins.entries.*.llm.allowedCompletionModels",
+  "plugins.entries.*.llm.allowAuthProfileOverride",
   "plugins.entries.*.llm.allowAgentIdOverride",
   "plugins.entries.*.apiKey",
   "plugins.entries.*.env",
@@ -348,6 +350,7 @@ export const TARGET_KEYS = [
 ] as const;
 
 export const ENUM_EXPECTATIONS: Record<string, string[]> = {
+  "skills.workshop.autonomous.mode": ['"off"', '"propose"', '"auto"'],
   "memory.citations": ['"auto"', '"on"', '"off"'],
   "memory.backend": ['"builtin"', '"qmd"'],
   "memory.qmd.searchMode": ['"query"', '"search"', '"vsearch"'],

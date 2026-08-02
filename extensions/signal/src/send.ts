@@ -8,8 +8,11 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
-import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
-import { resolveOutboundAttachmentFromUrl } from "openclaw/plugin-sdk/media-runtime";
+import {
+  kindFromMime,
+  type OutboundMediaAccess,
+  resolveOutboundAttachmentFromUrl,
+} from "openclaw/plugin-sdk/media-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -33,10 +36,7 @@ export type SignalSendOpts = {
   account?: string;
   accountId?: string;
   mediaUrl?: string;
-  mediaAccess?: {
-    localRoots?: readonly string[];
-    readFile?: (filePath: string) => Promise<Buffer>;
-  };
+  mediaAccess?: OutboundMediaAccess;
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
   maxBytes?: number;
@@ -259,6 +259,22 @@ function resolveSignalQuoteParams(opts: SignalSendOpts):
 function isSignalQuoteMetadataRejection(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   const normalized = normalizeLowercaseStringOrEmpty(message);
+  const rpcCode = /^signal rpc (-?\d+):/u.exec(normalized)?.[1];
+  if (rpcCode !== undefined) {
+    if (rpcCode !== "-32602") {
+      return false;
+    }
+  } else {
+    const restStatusText = /^signal rest (\d{3}):/u.exec(normalized)?.[1];
+    if (!restStatusText) {
+      return false;
+    }
+    const restStatus = Number(restStatusText);
+    // Only a definitive provider rejection makes replaying the send safe.
+    if (restStatus < 400 || restStatus >= 500 || restStatus === 408 || restStatus === 429) {
+      return false;
+    }
+  }
   if (!normalized.includes("quote")) {
     return false;
   }

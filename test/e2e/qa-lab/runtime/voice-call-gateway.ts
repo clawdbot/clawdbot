@@ -207,7 +207,7 @@ async function runVoiceCallProof(options: ProducerOptions): Promise<string> {
       to: "+15550002222",
       message: "Gateway RPC fixture",
       mode: "conversation",
-      sessionKey: "agent:main:voice-rpc",
+      sessionKey: "agent:qa:voice-rpc",
     });
     const rpcCallId = findStringByKey(rpc, "callId");
     if (!rpcCallId) {
@@ -215,14 +215,13 @@ async function runVoiceCallProof(options: ProducerOptions): Promise<string> {
     }
     const tool = await gateway.call("tools.invoke", {
       name: "voice_call",
-      sessionKey: "agent:main:requester",
+      sessionKey: "agent:qa:requester",
       args: {
         action: "initiate_call",
         to: "+15550003333",
         message: "Agent tool fixture",
         mode: "conversation",
-        sessionKey: "agent:main:voice-consult",
-        requesterSessionKey: "agent:main:requester",
+        sessionKey: "agent:qa:voice-consult",
       },
     });
     const toolCallId = findStringByKey(tool, "callId");
@@ -255,6 +254,10 @@ async function runVoiceCallProof(options: ProducerOptions): Promise<string> {
       streamUrl: stream.streamUrl,
     });
     const toolResults = await waitForFinalToolResult(fixture.toolResultsPath);
+    const finalToolResult = toolResults.final.result as Record<string, unknown>;
+    if (typeof finalToolResult.error === "string") {
+      throw new Error(`embedded consult failed: ${finalToolResult.error}`);
+    }
     const bridgeCalls = (await fs.readFile(fixture.bridgeCallsPath, "utf8"))
       .split("\n")
       .map((line) => line.trim())

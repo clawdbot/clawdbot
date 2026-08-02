@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 import { ANTHROPIC_CONTEXT_1M_TOKENS } from "../agents/context-resolution.js";
 import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
-import { statusSummaryRuntime } from "./status.summary.runtime.js";
+import { statusSummaryRuntime } from "../status/summary.runtime.js";
 
 function resolveSessionRuntimeLabel(
   params: Parameters<typeof statusSummaryRuntime.resolveSessionRuntimeLabel>[0],

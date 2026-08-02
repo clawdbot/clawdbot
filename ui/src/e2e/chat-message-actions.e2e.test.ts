@@ -135,7 +135,9 @@ describeControlUiE2e("Control UI chat message actions", () => {
     const messageText = "Reply and context menu action proof.";
     const privateThinking = "private reply reasoning";
     const visibleThinkingAnswer = "Visible reply context only.";
-    await installMockGateway(page, {
+    const truncatedPreview = "Truncated assistant preview\n...(truncated)...";
+    const fullAssistantContent = "Complete assistant content loaded inline.";
+    const gateway = await installMockGateway(page, {
       historyMessages: [
         {
           role: "assistant",
@@ -160,7 +162,25 @@ describeControlUiE2e("Control UI chat message actions", () => {
           timestamp: Date.now() + 2,
           __openclaw: { id: "assistant-thinking-proof", seq: 3 },
         },
+        {
+          role: "user",
+          content: [{ type: "text", text: "Keep the truncated message separate." }],
+          timestamp: Date.now() + 3,
+          __openclaw: { id: "user-truncated-separator", seq: 4 },
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: truncatedPreview }],
+          timestamp: Date.now() + 4,
+          __openclaw: { id: "assistant-truncated-proof", seq: 5 },
+        },
       ],
+      methodResponses: {
+        "chat.message.get": {
+          ok: true,
+          message: { role: "assistant", content: fullAssistantContent },
+        },
+      },
     });
 
     try {
@@ -234,7 +254,7 @@ describeControlUiE2e("Control UI chat message actions", () => {
       const inlineActions = group.locator(".chat-group-footer-actions button");
       expect(
         await inlineActions.evaluateAll((buttons) => buttons.map((button) => button.ariaLabel)),
-      ).toEqual(["Reply to message", "Hide message", "Open in canvas", "Copy as markdown"]);
+      ).toEqual(["Reply to message", "Hide message", "Copy as markdown"]);
       for (const button of await inlineActions.all()) {
         const label = await button.getAttribute("aria-label");
         await expectHoverColor(button, label === "Hide message" ? "--danger" : "--accent");
@@ -243,13 +263,42 @@ describeControlUiE2e("Control UI chat message actions", () => {
       await expectHoverTooltip(replyButton, "Reply");
       await screenshot(page, "01-inline-actions.png");
 
+      const hideButton = group.getByRole("button", { name: "Hide message" });
+      expect(
+        await hideButton.evaluate((element) => {
+          const row = element.closest<HTMLElement>(".chat-virtual-row");
+          return Boolean(row && getComputedStyle(row).transform !== "none");
+        }),
+      ).toBe(true);
+      await hideButton.click();
+      const hideConfirmation = page.locator(".chat-delete-confirm");
+      await hideConfirmation.waitFor({ state: "visible" });
+      expect(
+        await hideConfirmation.evaluate((element) => element.parentElement === document.body),
+      ).toBe(true);
+      const hideConfirmationBounds = await hideConfirmation.boundingBox();
+      const viewport = page.viewportSize();
+      expect(hideConfirmationBounds).not.toBeNull();
+      expect(viewport).not.toBeNull();
+      expect(hideConfirmationBounds!.x).toBeGreaterThanOrEqual(0);
+      expect(hideConfirmationBounds!.y).toBeGreaterThanOrEqual(0);
+      expect(hideConfirmationBounds!.x + hideConfirmationBounds!.width).toBeLessThanOrEqual(
+        viewport!.width,
+      );
+      expect(hideConfirmationBounds!.y + hideConfirmationBounds!.height).toBeLessThanOrEqual(
+        viewport!.height,
+      );
+      await screenshot(page, "02-hide-confirmation.png");
+      await hideConfirmation.getByRole("button", { name: "Cancel" }).click();
+
+      await group.hover();
       await replyButton.click();
       const replyPreview = page.locator(".chat-reply-preview");
       await replyPreview.waitFor({ state: "visible" });
       expect(await replyPreview.locator(".chat-reply-preview__text").textContent()).toBe(
         messageText,
       );
-      await screenshot(page, "02-reply-preview.png");
+      await screenshot(page, "03-reply-preview.png");
       await replyPreview.getByRole("button", { name: "Cancel reply" }).click();
 
       const menu = page.locator(".chat-reply-context-menu");
@@ -284,10 +333,9 @@ describeControlUiE2e("Control UI chat message actions", () => {
         "Copy",
         "Reply",
         "Hide message",
-        "Open in canvas",
         "Copy as markdown",
       ]);
-      await screenshot(page, "03-selected-text-context-menu.png");
+      await screenshot(page, "04-selected-text-context-menu.png");
       await menu.getByRole("menuitem", { name: "Copy", exact: true }).click();
       await expect
         .poll(() => page.evaluate(() => navigator.clipboard.readText()))
@@ -299,23 +347,94 @@ describeControlUiE2e("Control UI chat message actions", () => {
       expect(await menu.getByRole("menuitem").allTextContents()).toEqual([
         "Reply",
         "Hide message",
-        "Open in canvas",
         "Copy as markdown",
       ]);
       expect(
         await menu.getByRole("menuitem", { name: "Reply to message" }).locator("svg").count(),
       ).toBe(0);
-      await screenshot(page, "04-context-menu.png");
+      await screenshot(page, "05-context-menu.png");
 
       await menu.getByRole("menuitem", { name: "Copy as markdown" }).click();
       await expect
         .poll(() => page.evaluate(() => navigator.clipboard.readText()))
         .toBe(messageText);
 
-      await bubble.click({ button: "right" });
-      await page.getByRole("menuitem", { name: "Open in canvas" }).click();
-      const markdownSidebar = page.locator(".sidebar-markdown");
-      await markdownSidebar.getByText(messageText, { exact: true }).waitFor({ state: "visible" });
+      const expandableBubble = page.locator(
+        '.chat-bubble[data-entry-id="assistant-truncated-proof"]',
+      );
+      const expandableGroup = expandableBubble.locator(
+        "xpath=ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' chat-group ')]",
+      );
+      await expandableGroup.hover();
+      await expandableGroup.getByRole("button", { name: "Copy as markdown" }).click();
+      await expect
+        .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+        .toBe(truncatedPreview);
+      await expandableGroup.getByRole("button", { name: "Reply to message" }).click();
+      const expandableReplyPreview = page.locator(".chat-reply-preview");
+      await expect
+        .poll(() => expandableReplyPreview.locator(".chat-reply-preview__text").textContent())
+        .toBe(truncatedPreview);
+      await expandableReplyPreview.getByRole("button", { name: "Cancel reply" }).click();
+
+      await expandableBubble.getByRole("button", { name: "Show more" }).click();
+      const fullMessageRequest = await gateway.waitForRequest("chat.message.get");
+      expect(fullMessageRequest.params).toMatchObject({
+        sessionKey: "main",
+        messageId: "assistant-truncated-proof",
+        maxChars: 500_000,
+      });
+      await expandableBubble.getByText(fullAssistantContent, { exact: true }).waitFor({
+        state: "visible",
+      });
+      await expandableGroup.hover();
+      await expandableGroup.getByRole("button", { name: "Copy as markdown" }).click();
+      await expect
+        .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+        .toBe(fullAssistantContent);
+      await expandableGroup.getByRole("button", { name: "Reply to message" }).click();
+      await expect
+        .poll(() => expandableReplyPreview.locator(".chat-reply-preview__text").textContent())
+        .toBe(fullAssistantContent);
+      await expandableReplyPreview.getByRole("button", { name: "Cancel reply" }).click();
+
+      await expandableBubble.click({ button: "right" });
+      await menu.getByRole("menuitem", { name: "Copy as markdown" }).click();
+      await expect
+        .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+        .toBe(fullAssistantContent);
+      await expandableBubble.click({ button: "right" });
+      await menu.getByRole("menuitem", { name: "Reply to message" }).click();
+      await expect
+        .poll(() => expandableReplyPreview.locator(".chat-reply-preview__text").textContent())
+        .toBe(fullAssistantContent);
+      await expandableReplyPreview.getByRole("button", { name: "Cancel reply" }).click();
+
+      await expandableBubble.getByRole("button", { name: "Show less" }).click();
+      await expect
+        .poll(async () =>
+          (await expandableBubble.locator(".chat-message-disclosure__content").textContent())
+            ?.split("\n")
+            .map((line) => line.trim())
+            .filter(Boolean)
+            .join("\n"),
+        )
+        .toBe(truncatedPreview);
+      await expandableGroup.hover();
+      await expandableGroup.getByRole("button", { name: "Copy as markdown" }).click();
+      await expect
+        .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+        .toBe(truncatedPreview);
+      await expandableGroup.getByRole("button", { name: "Reply to message" }).click();
+      await expect
+        .poll(() => expandableReplyPreview.locator(".chat-reply-preview__text").textContent())
+        .toBe(truncatedPreview);
+      await expandableReplyPreview.getByRole("button", { name: "Cancel reply" }).click();
+      await expandableBubble.getByRole("button", { name: "Show more" }).click();
+      await expandableBubble.getByText(fullAssistantContent, { exact: true }).waitFor({
+        state: "visible",
+      });
+      expect(await gateway.getRequests("chat.message.get")).toHaveLength(1);
 
       await bubble.click({ button: "right" });
       await page.getByRole("menuitem", { name: "Hide message" }).click();

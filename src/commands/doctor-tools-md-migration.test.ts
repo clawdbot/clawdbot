@@ -304,116 +304,38 @@ describe("TOOLS.md migration", () => {
     },
   );
 
-  it.runIf(process.platform !== "win32")(
-    "refuses symlinked AGENTS.md files and interrupted claims",
-    async () => {
-      const linkedFixture = await createFixture();
-      const linkedTarget = path.join(linkedFixture.root, "outside-agents.md");
-      await fs.writeFile(linkedTarget, "Private external instructions.\n");
-      await fs.writeFile(linkedFixture.toolsPath, "Local tool notes.\n");
-      await fs.symlink(linkedTarget, linkedFixture.agentsPath);
+  it.runIf(process.platform !== "win32")("refuses symlinked AGENTS.md files", async () => {
+    const linkedFixture = await createFixture();
+    const linkedTarget = path.join(linkedFixture.root, "outside-agents.md");
+    await fs.writeFile(linkedTarget, "Private external instructions.\n");
+    await fs.writeFile(linkedFixture.toolsPath, "Local tool notes.\n");
+    await fs.symlink(linkedTarget, linkedFixture.agentsPath);
 
-      const linkedResult = await maybeMigrateToolsMd({
-        cfg: linkedFixture.cfg,
-        shouldRepair: true,
-        env: linkedFixture.env,
-      });
-
-      expect(linkedResult.changes).toEqual([]);
-      expect(linkedResult.warnings).toEqual([
-        expect.stringContaining("AGENTS.md must be an unlinked regular file"),
-      ]);
-      await expect(fs.readFile(linkedFixture.toolsPath, "utf8")).resolves.toBe(
-        "Local tool notes.\n",
-      );
-      await expect(fs.readFile(linkedTarget, "utf8")).resolves.toBe(
-        "Private external instructions.\n",
-      );
-
-      const claimFixture = await createFixture();
-      const claimTarget = path.join(claimFixture.root, "outside-claim.md");
-      const claimPath = `${claimFixture.agentsPath}.doctor-backup-999999-${Date.now() - 60_000}`;
-      await fs.writeFile(claimTarget, "Untrusted claim content.\n");
-      await fs.writeFile(claimFixture.toolsPath, "Local tool notes.\n");
-      await fs.symlink(claimTarget, claimPath);
-
-      const claimResult = await maybeMigrateToolsMd({
-        cfg: claimFixture.cfg,
-        shouldRepair: true,
-        env: claimFixture.env,
-      });
-
-      expect(claimResult.changes).toEqual([]);
-      expect(claimResult.warnings).toEqual([
-        expect.stringContaining("AGENTS.md migration claim must be an unlinked regular file"),
-      ]);
-      await expect(fs.readFile(claimFixture.toolsPath, "utf8")).resolves.toBe(
-        "Local tool notes.\n",
-      );
-      await expect(fs.readFile(claimTarget, "utf8")).resolves.toBe("Untrusted claim content.\n");
-      await expectMissing(claimFixture.agentsPath);
-    },
-  );
-
-  it("keeps live claims created from old source files fresh", async () => {
-    const ownerPid = process.ppid;
-    const oldTimestamp = new Date("2000-01-01T00:00:00.000Z");
-
-    const toolsFixture = await createFixture();
-    await fs.writeFile(toolsFixture.toolsPath, "old tool notes\n");
-    await fs.utimes(toolsFixture.toolsPath, oldTimestamp, oldTimestamp);
-    const toolsClaimPath = `${toolsFixture.toolsPath}.doctor-importing-${ownerPid}-${Date.now()}-claim`;
-    await fs.rename(toolsFixture.toolsPath, toolsClaimPath);
-
-    const toolsResult = await maybeMigrateToolsMd({
-      cfg: toolsFixture.cfg,
+    const linkedResult = await maybeMigrateToolsMd({
+      cfg: linkedFixture.cfg,
       shouldRepair: true,
-      env: toolsFixture.env,
+      env: linkedFixture.env,
     });
 
-    expect(toolsResult.warnings).toEqual([
-      expect.stringContaining(`TOOLS.md migration claim is held by running process ${ownerPid}`),
+    expect(linkedResult.changes).toEqual([]);
+    expect(linkedResult.warnings).toEqual([
+      expect.stringContaining("AGENTS.md must be an unlinked regular file"),
     ]);
-    await expect(fs.stat(toolsClaimPath)).resolves.toMatchObject({
-      mtimeMs: oldTimestamp.getTime(),
-    });
-
-    const agentsFixture = await createFixture();
-    await fs.writeFile(agentsFixture.toolsPath, "old tool notes\n");
-    await fs.writeFile(agentsFixture.agentsPath, "# Agent\n");
-    await fs.utimes(agentsFixture.agentsPath, oldTimestamp, oldTimestamp);
-    const agentsClaimPath = `${agentsFixture.agentsPath}.doctor-backup-${ownerPid}-${Date.now()}`;
-    await fs.rename(agentsFixture.agentsPath, agentsClaimPath);
-
-    const agentsResult = await maybeMigrateToolsMd({
-      cfg: agentsFixture.cfg,
-      shouldRepair: true,
-      env: agentsFixture.env,
-    });
-
-    expect(agentsResult.warnings).toEqual([
-      expect.stringContaining(`AGENTS.md migration claim is held by running process ${ownerPid}`),
-    ]);
-    await expect(fs.readFile(agentsFixture.toolsPath, "utf8")).resolves.toBe("old tool notes\n");
-    await expect(fs.stat(agentsClaimPath)).resolves.toMatchObject({
-      mtimeMs: oldTimestamp.getTime(),
-    });
+    await expect(fs.readFile(linkedFixture.toolsPath, "utf8")).resolves.toBe("Local tool notes.\n");
+    await expect(fs.readFile(linkedTarget, "utf8")).resolves.toBe(
+      "Private external instructions.\n",
+    );
   });
 
-  it("recovers an AGENTS.md publish interrupted after the hard link", async () => {
+  it("reruns after an interrupted AGENTS.md temp write and converges", async () => {
     const fixture = await createFixture();
     const agents = "# Agent\n\n## Tools\n\nExisting notes.\n";
     const tools = "### Cameras\n\n- kitchen → wide angle\n";
     const merged = `${agents}\n### Local notes (migrated from TOOLS.md)\n\n${tools}`;
-    const interruptedAt = Date.now() - 60_000;
-    const toolsClaimPath = `${fixture.toolsPath}.doctor-importing-999999-${interruptedAt}-claim`;
-    const agentsClaimPath = `${fixture.agentsPath}.doctor-backup-999999-${interruptedAt}`;
-    const tempPath = `${fixture.agentsPath}.doctor-writing-999999-${interruptedAt}`;
-    await fs.writeFile(toolsClaimPath, tools);
-    await fs.writeFile(agentsClaimPath, agents);
-    await fs.writeFile(tempPath, merged);
-    await fs.link(tempPath, fixture.agentsPath);
-    await expect(fs.stat(fixture.agentsPath)).resolves.toMatchObject({ nlink: 2 });
+    const tempPath = `${fixture.agentsPath}.doctor-writing-999999-interrupted`;
+    await fs.writeFile(fixture.toolsPath, tools);
+    await fs.writeFile(fixture.agentsPath, agents);
+    await fs.writeFile(tempPath, "partial merged content");
 
     const result = await maybeMigrateToolsMd({
       cfg: fixture.cfg,
@@ -424,8 +346,31 @@ describe("TOOLS.md migration", () => {
     expect(result.warnings).toEqual([]);
     expect(result.changes).toHaveLength(1);
     await expect(fs.readFile(fixture.agentsPath, "utf8")).resolves.toBe(merged);
-    await expect(fs.stat(fixture.agentsPath)).resolves.toMatchObject({ nlink: 1 });
     await expect(fs.readdir(fixture.workspace)).resolves.toEqual(["AGENTS.md"]);
+    await expect(readOnlyArchive(fixture.stateDir)).resolves.toEqual(Buffer.from(tools));
+  });
+
+  it("finishes cleanup without duplicating already-merged content", async () => {
+    const fixture = await createFixture();
+    const agents = "# Agent\n\n## Tools\n\nExisting notes.\n";
+    const tools = "### Cameras\n\n- kitchen → wide angle\n";
+    const merged = `${agents}\n### Local notes (migrated from TOOLS.md)\n\n${tools}`;
+    await fs.writeFile(fixture.agentsPath, merged);
+    await fs.writeFile(fixture.toolsPath, tools);
+
+    const result = await maybeMigrateToolsMd({
+      cfg: fixture.cfg,
+      shouldRepair: true,
+      env: fixture.env,
+    });
+
+    expect(result.warnings).toEqual([]);
+    await expect(fs.readFile(fixture.agentsPath, "utf8")).resolves.toBe(merged);
+    expect(
+      (await fs.readFile(fixture.agentsPath, "utf8")).match(/migrated from TOOLS\.md/gu),
+    ).toHaveLength(1);
+    await expectMissing(fixture.toolsPath);
+    await expect(readOnlyArchive(fixture.stateDir)).resolves.toEqual(Buffer.from(tools));
   });
 
   it("appends a Tools section when AGENTS.md has no Tools heading", async () => {

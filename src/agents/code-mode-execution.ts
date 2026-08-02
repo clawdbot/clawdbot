@@ -69,11 +69,14 @@ export async function runExec(params: {
     throw new ToolInputError("code mode is disabled.");
   }
   const runtime = new ToolSearchRuntime(params.ctx, toToolSearchConfig(config));
+  const bridgeDispatch = { started: false };
   if (params.signal?.aborted) {
     return {
       status: "failed" as const,
       error: "code mode execution aborted",
       code: "aborted" as const,
+      failurePhase: "host" as const,
+      bridgeDispatchStarted: false,
       output: [],
       replaySafe: params.restartSafe,
       telemetry: telemetry(runtime),
@@ -133,14 +136,22 @@ export async function runExec(params: {
       config,
       runtime,
       namespaceRuntime,
+      bridgeDispatch,
       signal: params.signal,
       onUpdate: params.onUpdate,
     });
   } catch (error) {
+    const code = params.signal?.aborted ? ("aborted" as const) : codeModeFailureCode(error);
     return {
       status: "failed" as const,
       error: params.signal?.aborted ? "code mode execution aborted" : codeModeFailureMessage(error),
-      code: params.signal?.aborted ? ("aborted" as const) : codeModeFailureCode(error),
+      code,
+      failurePhase: bridgeDispatch.started
+        ? ("bridge" as const)
+        : code === "invalid_input"
+          ? ("input" as const)
+          : ("host" as const),
+      bridgeDispatchStarted: bridgeDispatch.started,
       output: [],
       replaySafe: params.restartSafe,
       telemetry: telemetry(runtime),
@@ -219,6 +230,7 @@ async function settleCodeModeResult(params: {
   pending?: PendingBridgeState[];
   activeRunId?: string;
   reservedActiveRunSlot?: boolean;
+  bridgeDispatch: { started: boolean };
   signal?: AbortSignal;
   onUpdate?: AgentToolUpdateCallback;
 }) {
@@ -238,6 +250,8 @@ async function settleCodeModeResult(params: {
     status: "failed" as const,
     error: "code mode execution aborted",
     code: "aborted" as const,
+    failurePhase: params.bridgeDispatch.started ? ("bridge" as const) : ("host" as const),
+    bridgeDispatchStarted: params.bridgeDispatch.started,
     output: output.slice(deliveredOutputCount),
     replaySafe: params.replaySafe,
     telemetry: telemetry(params.runtime),
@@ -262,6 +276,8 @@ async function settleCodeModeResult(params: {
           status: "failed" as const,
           error: "restart-safe code mode cannot call namespace tools.",
           code: "invalid_input" as const,
+          failurePhase: params.bridgeDispatch.started ? ("bridge" as const) : ("input" as const),
+          bridgeDispatchStarted: params.bridgeDispatch.started,
           output: output.slice(deliveredOutputCount),
           replaySafe: true,
           telemetry: telemetry(params.runtime),
@@ -288,9 +304,17 @@ async function settleCodeModeResult(params: {
         releaseReservation = reserveActiveRunSlot();
       }
       const pendingIds = new Set(pending.map((entry) => entry.id));
+      const newPendingRequests = result.pendingRequests.filter(
+        (request) => !pendingIds.has(request.id),
+      );
+      if (newPendingRequests.length > 0) {
+        // createPendingBridgeStates starts host calls synchronously. Flip the
+        // evidence first so every later failure is permanently non-retryable.
+        params.bridgeDispatch.started = true;
+      }
       pending.push(
         ...createPendingBridgeStates({
-          pendingRequests: result.pendingRequests.filter((request) => !pendingIds.has(request.id)),
+          pendingRequests: newPendingRequests,
           runtime: params.runtime,
           namespaceRuntime: params.namespaceRuntime,
           parentToolCallId: params.parentToolCallId,
@@ -385,6 +409,8 @@ async function settleCodeModeResult(params: {
         status: "failed" as const,
         error: "restart-safe code mode cannot call side-effecting tools.",
         code: "invalid_input" as const,
+        failurePhase: params.bridgeDispatch.started ? ("bridge" as const) : ("input" as const),
+        bridgeDispatchStarted: params.bridgeDispatch.started,
         output: output.slice(deliveredOutputCount),
         replaySafe: true,
         telemetry: telemetry(params.runtime),
@@ -406,11 +432,15 @@ async function settleCodeModeResult(params: {
           releaseReservation = reserveActiveRunSlot();
         }
         const pendingIds = new Set(pending.map((entry) => entry.id));
+        const newPendingRequests = result.pendingRequests.filter(
+          (request) => !pendingIds.has(request.id),
+        );
+        if (newPendingRequests.length > 0) {
+          params.bridgeDispatch.started = true;
+        }
         pending.push(
           ...createPendingBridgeStates({
-            pendingRequests: result.pendingRequests.filter(
-              (request) => !pendingIds.has(request.id),
-            ),
+            pendingRequests: newPendingRequests,
             runtime: params.runtime,
             namespaceRuntime: params.namespaceRuntime,
             parentToolCallId: params.parentToolCallId,
@@ -443,6 +473,9 @@ async function settleCodeModeResult(params: {
         releaseReservation?.();
       }
     }
+    if (result.pendingRequests.length > 0) {
+      params.bridgeDispatch.started = true;
+    }
     return snapshotState({
       pendingRequests: result.pendingRequests,
       snapshotBytes: result.snapshotBytes,
@@ -471,6 +504,12 @@ async function settleCodeModeResult(params: {
   });
   return {
     ...result,
+    ...(result.status === "failed"
+      ? {
+          failurePhase: params.bridgeDispatch.started ? ("bridge" as const) : result.failurePhase,
+          bridgeDispatchStarted: params.bridgeDispatch.started,
+        }
+      : {}),
     output: output.slice(deliveredOutputCount),
     replaySafe: params.replaySafe,
     telemetry: telemetry(params.runtime),
@@ -524,6 +563,8 @@ export async function runWait(params: {
           status: "failed" as const,
           error: "code mode execution aborted",
           code: "aborted" as const,
+          failurePhase: "bridge" as const,
+          bridgeDispatchStarted: true,
           output: takeUndeliveredCodeModeRunOutput(state),
           replaySafe: state.replaySafe,
           telemetry: telemetry(state.runtime),
@@ -583,6 +624,7 @@ export async function runWait(params: {
       config: state.config,
       runtime: state.runtime,
       namespaceRuntime: state.namespaceRuntime,
+      bridgeDispatch: { started: true },
       deliveredOutputCount: state.deliveredOutputCount,
       pending,
       activeRunId: state.runId,
@@ -600,6 +642,8 @@ export async function runWait(params: {
       status: "failed" as const,
       error: codeModeFailureMessage(error),
       code: codeModeFailureCode(error),
+      failurePhase: "bridge" as const,
+      bridgeDispatchStarted: true,
       output: takeUndeliveredCodeModeRunOutput(state),
       replaySafe: state.replaySafe,
       telemetry: telemetry(state.runtime),

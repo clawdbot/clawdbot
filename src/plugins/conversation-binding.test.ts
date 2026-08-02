@@ -14,7 +14,7 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import {
-  resetPluginConversationBindingStateForTest,
+  resetPluginConversationBindingCachesForTest,
   seedPluginConversationBindingApprovalForTest,
 } from "./conversation-binding.test-fixtures.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
@@ -118,6 +118,7 @@ vi.mock("./runtime.js", async () => {
 });
 
 let buildPluginBindingApprovalCustomId: typeof import("./conversation-binding.js").buildPluginBindingApprovalCustomId;
+let clearPluginBindingPendingRequests: typeof import("./conversation-binding.js").clearPluginBindingPendingRequests;
 let bindPluginSessionConversation: typeof import("./session-conversation-binding.js").bindPluginSessionConversation;
 let detachPluginConversationBinding: typeof import("./conversation-binding.js").detachPluginConversationBinding;
 let getCurrentPluginConversationBinding: typeof import("./conversation-binding.js").getCurrentPluginConversationBinding;
@@ -175,6 +176,7 @@ afterAll(() => {
 beforeAll(async () => {
   ({
     buildPluginBindingApprovalCustomId,
+    clearPluginBindingPendingRequests,
     detachPluginConversationBinding,
     getCurrentPluginConversationBinding,
     parsePluginBindingApprovalCustomId,
@@ -287,7 +289,7 @@ async function approveBindingRequest(
 async function importDuplicateConversationBindingModules() {
   const first = await importConversationBindingModule(`first-${Date.now()}`);
   const second = await importConversationBindingModule(`second-${Date.now()}`);
-  resetPluginConversationBindingStateForTest();
+  resetPluginConversationBindingCachesForTest();
   return { first, second };
 }
 
@@ -458,10 +460,11 @@ function insertPluginBindingApprovalRow(params: {
 
 describe("plugin conversation binding approvals", () => {
   beforeEach(() => {
+    clearPluginBindingPendingRequests();
     process.env.OPENCLAW_STATE_DIR = tempRoot;
     clearPluginBindingApprovalRows();
     sessionBindingState.reset();
-    resetPluginConversationBindingStateForTest();
+    resetPluginConversationBindingCachesForTest();
     setActivePluginRegistry(createEmptyPluginRegistry());
     unregisterSessionBindingAdapter({ channel: "discord", accountId: "default" });
     unregisterSessionBindingAdapter({ channel: "discord", accountId: "work" });
@@ -727,33 +730,6 @@ describe("plugin conversation binding approvals", () => {
     ]);
   });
 
-  it("shares pending bind approvals across duplicate module instances", async () => {
-    const { first, second } = await importDuplicateConversationBindingModules();
-    const request = await requestPendingBinding(
-      createTelegramCodexBindRequest(
-        "-10099:topic:77",
-        "77",
-        "Bind this conversation to Codex thread abc.",
-      ),
-      first.requestPluginConversationBinding,
-    );
-
-    const approved = await approveBindingRequest(
-      request.approvalId,
-      "allow-once",
-      second.resolvePluginConversationBindingApproval,
-    );
-    expect(approved.status).toBe("approved");
-    if (approved.status !== "approved") {
-      throw new Error("expected approved bind result");
-    }
-    expect(approved.binding.pluginId).toBe("codex");
-    expect(approved.binding.pluginRoot).toBe("/plugins/codex-a");
-    expect(approved.binding.conversationId).toBe("-10099:topic:77");
-
-    resetPluginConversationBindingStateForTest();
-  });
-
   it("shares persistent approvals across duplicate module instances", async () => {
     const { first, second } = await importDuplicateConversationBindingModules();
     const request = await requestPendingBinding(
@@ -768,7 +744,7 @@ describe("plugin conversation binding approvals", () => {
     const approved = await approveBindingRequest(
       request.approvalId,
       "allow-always",
-      second.resolvePluginConversationBindingApproval,
+      first.resolvePluginConversationBindingApproval,
     );
     expect(approved.status).toBe("approved");
     if (approved.status !== "approved") {
@@ -776,7 +752,7 @@ describe("plugin conversation binding approvals", () => {
     }
     expect(approved.decision).toBe("allow-always");
 
-    const rebound = await first.requestPluginConversationBinding(
+    const rebound = await second.requestPluginConversationBinding(
       createTelegramCodexBindRequest(
         "-10099:topic:78",
         "78",
@@ -786,8 +762,24 @@ describe("plugin conversation binding approvals", () => {
 
     expect(rebound.status).toBe("bound");
 
-    resetPluginConversationBindingStateForTest();
+    resetPluginConversationBindingCachesForTest();
     clearPluginBindingApprovalRows();
+  });
+
+  it("expires pending approvals when their Gateway lifecycle closes", async () => {
+    const request = await requestPendingBinding(
+      createTelegramCodexBindRequest(
+        "-10099:topic:79",
+        "79",
+        "Bind this conversation to Codex thread ghi.",
+      ),
+    );
+
+    clearPluginBindingPendingRequests();
+
+    await expect(approveBindingRequest(request.approvalId, "allow-once")).resolves.toEqual({
+      status: "expired",
+    });
   });
 
   it("does not share persistent approvals across plugin roots even with the same plugin id", async () => {

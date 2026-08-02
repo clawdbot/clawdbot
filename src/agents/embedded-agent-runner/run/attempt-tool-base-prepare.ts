@@ -90,6 +90,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
     isRawModelRun,
     skillWorkshopProposalOnly: attempt.skillWorkshopProposalOnly,
     toolsAllow: attempt.toolsAllow,
+    forceCodeModeControls: attempt.forceCodeModeTools,
   });
   const effectiveToolsAllow =
     toolSearchControlsEnabledForRun && toolsAllowWithForcedRuntimeTools
@@ -246,12 +247,14 @@ export function prepareEmbeddedAttemptToolBase(params: {
           workspaceDir: params.effectiveWorkspace,
           spawnWorkspaceDir,
           config: toolSearchRuntimeConfig,
+          webSearchEnabled: attempt.toolOverrides?.webSearch !== false,
           abortSignal: params.runAbortController.signal,
           modelProvider: attempt.provider,
           modelId: attempt.modelId,
           skillWorkshop: {
             env: attempt.skillWorkshopProposalEnv,
             proposalOnly: attempt.skillWorkshopProposalOnly,
+            ...(attempt.skillWorkshopAutonomousCapture ? { autonomousCapture: true } : {}),
             origin: attempt.skillWorkshopOrigin,
             proposalMutationBudget: attempt.skillWorkshopProposalMutationBudget,
             proposalReviewCompletion: attempt.skillWorkshopProposalReviewCompletion,
@@ -300,6 +303,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
           authProfileStore: attempt.authProfileStore,
           recordToolPrepStage: params.markCoreToolStage,
           onToolOutcome: attempt.onToolOutcome,
+          isTurnTainted: attempt.isTurnTainted,
           allocateToolOutcomeOrdinal: attempt.allocateToolOutcomeOrdinal,
           skillsSnapshot: params.skillsSnapshot,
           skillUsagePaths: params.skillUsagePaths,

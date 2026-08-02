@@ -148,6 +148,70 @@ async function captureXaiResponsesPayloadWithThinking(
 }
 
 describe("xai stream wrappers", () => {
+  it("adds the Grok OAuth proxy request contract", () => {
+    let capturedHeaders: Record<string, string> | undefined;
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      capturedHeaders = options?.headers;
+      return {} as ReturnType<StreamFn>;
+    };
+    const wrapped = wrapXaiProviderStream(
+      {
+        streamFn: baseStreamFn,
+        extraParams: { tool_stream: false },
+      } as never,
+      { clientVersion: "2026.7.2" },
+    );
+
+    void wrapped?.(
+      {
+        api: "openai-responses",
+        provider: "xai",
+        id: "grok-4.5",
+        baseUrl: "https://cli-chat-proxy.grok.com/v1",
+      } as Model<"openai-responses">,
+      { messages: [] } as Context,
+      { headers: { "X-XAI-Token-Auth": "operator-value", "X-Existing": "kept" } },
+    );
+
+    expect(capturedHeaders).toEqual({
+      "x-existing": "kept",
+      "x-grok-client-version": "2026.7.2",
+      "x-grok-model-override": "grok-4.5",
+      "x-xai-token-auth": "xai-grok-cli",
+    });
+  });
+
+  it.each([
+    ["the public API-key endpoint", "xai", "https://api.x.ai/v1"],
+    ["a different provider", "other", "https://cli-chat-proxy.grok.com/v1"],
+  ])("does not add Grok OAuth headers for %s", (_label, provider, baseUrl) => {
+    let capturedHeaders: Record<string, string> | undefined;
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      capturedHeaders = options?.headers;
+      return {} as ReturnType<StreamFn>;
+    };
+    const wrapped = wrapXaiProviderStream(
+      {
+        streamFn: baseStreamFn,
+        extraParams: { tool_stream: false },
+      } as never,
+      { clientVersion: "2026.7.2" },
+    );
+
+    void wrapped?.(
+      {
+        api: "openai-responses",
+        provider,
+        id: "grok-4.5",
+        baseUrl,
+      } as Model<"openai-responses">,
+      { messages: [] } as Context,
+      { headers: { "X-Existing": "kept" } },
+    );
+
+    expect(capturedHeaders).toEqual({ "X-Existing": "kept" });
+  });
+
   it("rewrites supported Grok models to fast variants when fast mode is enabled", () => {
     expect(captureWrappedModelId({ modelId: "grok-3", fastMode: true })).toBe("grok-3-fast");
     expect(

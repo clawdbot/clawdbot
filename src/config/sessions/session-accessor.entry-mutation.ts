@@ -6,13 +6,11 @@ import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import {
   resolveAccessStorePath,
-  loadExactSessionEntry,
   loadSessionEntry,
   listSessionEntries,
   patchSessionEntry,
   resolveSessionEntryFromStore,
 } from "./session-accessor.entry.js";
-import type { SessionLifecycleStoreTarget } from "./session-accessor.lifecycle-types.js";
 import { applySessionEntryLifecycleMutation } from "./session-accessor.lifecycle.js";
 import {
   appendSqliteTranscriptEvent,
@@ -39,13 +37,7 @@ import type {
   SessionEntryCreateWithTranscriptResult,
   SessionEntryCreateWithTranscriptPrepareResult,
   SessionEntryCreateWithTranscriptOptions,
-  CanonicalizeSessionEntryAliasesResult,
 } from "./session-accessor.types.js";
-import {
-  cloneOptionalSessionEntry as cloneOptionalEntry,
-  normalizeTargetStoreKeys,
-  resolveFreshestTargetEntry,
-} from "./session-entry-selection.js";
 import { projectSessionStoreForPersistence } from "./skill-prompt-blobs.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
@@ -92,50 +84,6 @@ export async function resolveSessionParentForkDecision(params: {
   storePath: string;
 }): Promise<SessionParentForkDecision> {
   return await resolveSqliteSessionParentForkDecision(params);
-}
-
-/**
- * Promotes the freshest alias row to the canonical key, prunes legacy aliases,
- * and optionally patches the canonical entry under one accessor operation.
- */
-export async function canonicalizeSessionEntryAliases(params: {
-  agentId?: string;
-  storePath: string;
-  target: SessionLifecycleStoreTarget;
-  update?: (
-    entry: SessionEntry | undefined,
-  ) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null;
-}): Promise<CanonicalizeSessionEntryAliasesResult> {
-  const targetKeys = normalizeTargetStoreKeys(params.target);
-  const targetEntries = targetKeys.flatMap((sessionKey) => {
-    const entry = loadExactSessionEntry({
-      ...(params.agentId ? { agentId: params.agentId } : {}),
-      sessionKey,
-      storePath: params.storePath,
-    });
-    return entry ? [entry] : [];
-  });
-  const freshest = resolveFreshestTargetEntry(targetEntries, targetKeys);
-  const patch = params.update ? await params.update(cloneOptionalEntry(freshest?.entry)) : null;
-  const entry = patch
-    ? ({
-        ...freshest?.entry,
-        ...patch,
-      } as SessionEntry)
-    : cloneOptionalEntry(freshest?.entry);
-  await applySessionEntryLifecycleMutation({
-    agentId: params.agentId,
-    storePath: params.storePath,
-    removals: targetKeys
-      .filter((key) => key !== params.target.canonicalKey)
-      .map((sessionKey) => ({ sessionKey })),
-    upserts: entry ? [{ sessionKey: params.target.canonicalKey, entry }] : undefined,
-    skipMaintenance: true,
-  });
-  return {
-    canonicalKey: params.target.canonicalKey,
-    ...(entry ? { entry: cloneOptionalEntry(entry) } : {}),
-  };
 }
 
 /**

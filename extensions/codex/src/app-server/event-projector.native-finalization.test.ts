@@ -466,12 +466,7 @@ describe("CodexAppServerEventProjector native tool finalization", () => {
 
     expect(readAttemptTerminal(result).promptError).toBeNull();
     expect(readAttemptTerminal(result).promptErrorSource).toBeNull();
-    expect(result.lastToolError).toMatchObject({
-      toolName: "bash",
-      error: expect.stringContaining("without a matching tool.result"),
-      mutatingAction: true,
-    });
-    expect(result.lastToolError?.actionFingerprint).toContain("node scripts/report.js --publish");
+    expect(result.lastToolError).toBeUndefined();
     expect(result.assistantTexts).toEqual([
       "The requested publish command was denied before execution.",
     ]);

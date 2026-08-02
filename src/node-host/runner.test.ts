@@ -27,6 +27,7 @@ const mocks = vi.hoisted(() => ({
   normalizedPath: null as string | null,
   resolvedExecutables: new Map<string, string>(),
   closeMcpManager: vi.fn(async () => undefined),
+  runStartupMigrations: vi.fn(async () => undefined),
   configureNodeHost: vi.fn(async (params: Parameters<typeof configureNodeHost>[0]) => {
     mocks.capturedConfiguredGatewayConfigs.push(params.gateway);
     return {
@@ -46,7 +47,7 @@ const mocks = vi.hoisted(() => ({
     aborted: false,
     elapsedMs: 0,
   })),
-  resolveGatewayConnectionAuth: vi.fn(async () => ({})),
+  resolveGatewayCredentialsWithSecretInputs: vi.fn(async () => ({})),
   activeRuntime: {
     invoke: vi.fn(async () => {}),
     handleInput: vi.fn(),
@@ -77,8 +78,8 @@ vi.mock("../gateway/client.js", () => ({
   },
 }));
 
-vi.mock("../gateway/connection-auth.js", () => ({
-  resolveGatewayConnectionAuth: mocks.resolveGatewayConnectionAuth,
+vi.mock("../gateway/credentials-secret-inputs.js", () => ({
+  resolveGatewayCredentialsWithSecretInputs: mocks.resolveGatewayCredentialsWithSecretInputs,
 }));
 
 vi.mock("../infra/device-identity.js", () => ({
@@ -145,6 +146,10 @@ vi.mock("./skills.js", () => ({
   scanNodeHostedSkills: vi.fn(() => mocks.nodeSkillDescriptors),
 }));
 
+vi.mock("./startup-state-migrations.js", () => ({
+  runStartupMigrations: mocks.runStartupMigrations,
+}));
+
 vi.mock("./runtime.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./runtime.js")>();
   return {
@@ -198,6 +203,17 @@ describe("runNodeHost", () => {
     mocks.getRuntimeConfig.mockReturnValue({
       gateway: { handshakeTimeoutMs: 1_000 },
     });
+  });
+
+  it("runs startup state migrations before constructing node-host state", async () => {
+    await expect(runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789 })).rejects.toThrow(
+      "event loop readiness timeout",
+    );
+
+    expect(mocks.runStartupMigrations).toHaveBeenCalledTimes(1);
+    expect(mocks.runStartupMigrations.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.configureNodeHost.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
   });
 
   it.each([
@@ -278,7 +294,7 @@ describe("runNodeHost", () => {
       "event loop readiness timeout",
     );
 
-    expect(mocks.resolveGatewayConnectionAuth).toHaveBeenCalledWith({
+    expect(mocks.resolveGatewayCredentialsWithSecretInputs).toHaveBeenCalledWith({
       config: {
         gateway: {
           mode: "local",

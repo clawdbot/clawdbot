@@ -4,11 +4,8 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  errorMessage,
-  type CodeModeFailureCode,
-  type CodeModeWorkerResult,
-} from "./code-mode-runtime.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import type { CodeModeFailureCode, CodeModeWorkerResult } from "./code-mode-runtime.js";
 
 let quickJsWasmModulePromise: Promise<WebAssembly.Module> | undefined;
 
@@ -48,8 +45,10 @@ function failedCodeModeWorkerResult(
 ): Extract<CodeModeWorkerResult, { status: "failed" }> {
   return {
     status: "failed",
-    error: errorMessage(error),
+    error: formatErrorMessage(error),
     code,
+    failurePhase: "host",
+    bridgeDispatchStarted: false,
     output: [],
   };
 }
@@ -102,6 +101,8 @@ export async function runCodeModeWorker(
           status: "failed",
           error: "code mode worker timeout exceeded",
           code: "timeout",
+          failurePhase: "host",
+          bridgeDispatchStarted: false,
           output: [],
         });
       }, timeoutMs);
@@ -114,6 +115,8 @@ export async function runCodeModeWorker(
               ? "code mode timeout exceeded"
               : "code mode execution aborted",
           code: abortReason instanceof CodeModeHeadlessTimeoutError ? "timeout" : "aborted",
+          failurePhase: "host",
+          bridgeDispatchStarted: false,
           output: [],
         });
       };
@@ -147,6 +150,8 @@ export async function runCodeModeWorker(
                   status: "failed",
                   error: "invalid code mode worker response",
                   code: "internal_error",
+                  failurePhase: "host",
+                  bridgeDispatchStarted: false,
                   output: [],
                 } satisfies CodeModeWorkerResult);
             finish(normalizeCodeModeWorkerResult(result));

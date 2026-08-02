@@ -14,9 +14,10 @@ import {
   validateSessionsCatalogReadParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { getPluginRegistryRuntime } from "../../plugins/registry-runtime-binding.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
-import { getActivePluginSessionExtensionRegistry } from "../../plugins/runtime.js";
-import { gatewaySubagentState } from "../../plugins/runtime/gateway-bindings.js";
+import { getActivePluginRegistry } from "../../plugins/runtime.js";
+import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import type {
   SessionCatalogCreateTarget,
   SessionCatalogListProviderParams,
@@ -26,24 +27,37 @@ import { bindPluginSessionConversation } from "../../plugins/session-conversatio
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { recordSessionStateEvent } from "../../sessions/session-state-events.js";
 import { upsertSessionUpstreamLink } from "../../sessions/session-upstream-links.js";
+import type { GatewayBroadcastToConnIdsFn } from "../server-broadcast-types.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import { createSessionCatalogRequestEntrySnapshot } from "./session-catalog-entry-snapshot.js";
+import { SessionCatalogListAdmission } from "./session-catalog-list-admission.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 const SESSION_CATALOG_SEARCH_MAX_UTF16_UNITS = 500;
 const SESSION_CATALOG_SHARE_WINDOW_MS = 3_000;
 const SESSION_CATALOG_LIST_CACHE_MAX_ENTRIES = 128;
+const MAX_CONCURRENT_SESSION_CATALOG_LISTS = 4;
+const MAX_QUEUED_SESSION_CATALOG_LISTS = 32;
+
+// Catalog adapters may scan local databases or invoke external CLIs. Bound the
+// expensive provider operation itself so adding providers cannot multiply the cap.
+const sessionCatalogListAdmission = new SessionCatalogListAdmission(
+  MAX_CONCURRENT_SESSION_CATALOG_LISTS,
+  MAX_QUEUED_SESSION_CATALOG_LISTS,
+);
 
 function createSessionCatalogRequestNodeSnapshot(): NonNullable<
   SessionCatalogListProviderParams["listNodes"]
 > {
+  const registry = resolveSessionCatalogRegistry();
+  const nodes = registry ? getPluginRegistryRuntime(registry)?.nodes : undefined;
   let request: ReturnType<NonNullable<SessionCatalogListProviderParams["listNodes"]>> | undefined;
   return () => {
     // Every provider sees the same promise so one catalog request cannot multiply the
     // pairing-store scans performed by the Gateway node.list runtime.
     request ??=
-      gatewaySubagentState.nodes?.list() ??
+      nodes?.list() ??
       Promise.reject(new Error("Plugin node runtime is only available inside the Gateway."));
     return request;
   };
@@ -76,8 +90,12 @@ type CatalogRegistrationSnapshot = {
 
 let cachedCatalogRegistrations: CatalogRegistrationSnapshot | undefined;
 
+function resolveSessionCatalogRegistry(): PluginRegistry | null {
+  return getPluginRuntimeGatewayRequestScope()?.pluginRegistry ?? getActivePluginRegistry();
+}
+
 function catalogRegistrationSnapshot(): CatalogRegistrationSnapshot {
-  const registry = getActivePluginSessionExtensionRegistry();
+  const registry = resolveSessionCatalogRegistry();
   const source = registry?.sessionCatalogs;
   if (
     cachedCatalogRegistrations?.registry === registry &&
@@ -129,8 +147,15 @@ const providerCreateTargetsByConfig = new WeakMap<
 
 type CatalogListResult = { catalogs: SessionCatalog[] };
 
+type CatalogListProgressSubscriber = {
+  broadcastToConnIds: GatewayBroadcastToConnIdsFn;
+  connId: string;
+  progressId: string;
+};
+
 type CatalogListCacheEntry = {
   expiresAt?: number;
+  progressSubscribers: Map<string, CatalogListProgressSubscriber>;
   result: Promise<CatalogListResult>;
 };
 
@@ -350,8 +375,15 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
     const cache = catalogListCache(config, catalogRegistrations);
     const cached = cache.get(listKey);
     if (cached && (cached.expiresAt === undefined || cached.expiresAt > Date.now())) {
-      // progressId is connection-owned and excluded from the work key. Followers skip progressive
-      // frames and receive only the authoritative final result emitted for every caller below.
+      // progressId is connection-owned and excluded from the work key. Active followers register
+      // for the remaining host frames; settled followers receive only the authoritative result.
+      if (cached.expiresAt === undefined && progressConnId && progressId) {
+        cached.progressSubscribers.set(`${progressConnId}\0${progressId}`, {
+          broadcastToConnIds: context.broadcastToConnIds,
+          connId: progressConnId,
+          progressId,
+        });
+      }
       cache.delete(listKey);
       cache.set(listKey, cached);
       respond(true, await cached.result);
@@ -359,6 +391,14 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
     }
     if (cached) {
       cache.delete(listKey);
+    }
+    const progressSubscribers = new Map<string, CatalogListProgressSubscriber>();
+    if (progressConnId && progressId) {
+      progressSubscribers.set(`${progressConnId}\0${progressId}`, {
+        broadcastToConnIds: context.broadcastToConnIds,
+        connId: progressConnId,
+        progressId,
+      });
     }
     const operation = (async () => {
       const requestEntries = createSessionCatalogRequestEntrySnapshot({
@@ -370,37 +410,40 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
         selected.map(async (provider): Promise<SessionCatalog> => {
           const createTarget = resolveProviderCreateTarget(provider, resolvedAgent.agentId, config);
           const createSession = createTarget.ok ? { model: createTarget.target.model } : undefined;
-          const onHost = progressConnId
-            ? (host: SessionCatalog["hosts"][number]) => {
-                // Progressive frames are an optimization. The final RPC response remains
-                // authoritative when a slow client drops an intermediate host update.
-                context.broadcastToConnIds(
-                  "sessions.catalog.host",
-                  {
-                    progressId,
-                    agentId: resolvedAgent.agentId,
-                    catalog: catalogResult(
-                      provider,
-                      [requestEntries.projectHostCreatedActors(host)],
-                      undefined,
-                      createSession,
-                    ),
-                  },
-                  new Set([progressConnId]),
-                  { dropIfSlow: true },
-                );
-              }
-            : undefined;
+          const onHost = (host: SessionCatalog["hosts"][number]) => {
+            const catalog = catalogResult(
+              provider,
+              [requestEntries.projectHostCreatedActors(host)],
+              undefined,
+              createSession,
+            );
+            // Progressive frames are an optimization. The final RPC response remains
+            // authoritative when a slow client drops an intermediate host update.
+            for (const subscriber of progressSubscribers.values()) {
+              subscriber.broadcastToConnIds(
+                "sessions.catalog.host",
+                {
+                  progressId: subscriber.progressId,
+                  agentId: resolvedAgent.agentId,
+                  catalog,
+                },
+                new Set([subscriber.connId]),
+                { dropIfSlow: true },
+              );
+            }
+          };
           try {
-            const hosts = await provider.list({
-              search,
-              limitPerHost: request.limitPerHost,
-              hostIds: request.hostIds,
-              ...(request.cursors !== undefined ? { cursors: request.cursors } : {}),
-              sessionEntries: requestEntries.sessionEntries,
-              listNodes,
-              ...(onHost ? { onHost } : {}),
-            });
+            const hosts = await sessionCatalogListAdmission.run(() =>
+              provider.list({
+                search,
+                limitPerHost: request.limitPerHost,
+                hostIds: request.hostIds,
+                ...(request.cursors !== undefined ? { cursors: request.cursors } : {}),
+                sessionEntries: requestEntries.sessionEntries,
+                listNodes,
+                onHost,
+              }),
+            );
             return catalogResult(
               provider,
               hosts.map(requestEntries.projectHostCreatedActors),
@@ -414,7 +457,7 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
       );
       return { catalogs: catalogList };
     })();
-    const entry: CatalogListCacheEntry = { result: operation };
+    const entry: CatalogListCacheEntry = { progressSubscribers, result: operation };
     // Exact request/config/registration results remain shareable for 3s after settling. This catches
     // out-of-phase clients but expires before the UI's 5s fast follow, so changed rows surface there.
     // Expired and rejected work is removed; retaining it would mask provider recovery or new sessions.
@@ -437,6 +480,8 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
         cache.delete(listKey);
       }
       throw error;
+    } finally {
+      progressSubscribers.clear();
     }
   },
 
@@ -581,3 +626,40 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
     }
   },
 };
+
+/** Fill the same list single-flight and provider caches used by the Gateway RPC. */
+export async function prewarmSessionCatalogList(params: {
+  config: OpenClawConfig;
+  agentId: string;
+  limitPerHost: number;
+}): Promise<void> {
+  const handler = sessionCatalogHandlers["sessions.catalog.list"];
+  if (!handler) {
+    throw new Error("sessions.catalog.list handler is unavailable");
+  }
+  let responded = false;
+  let responseError: string | undefined;
+  const respond: RespondFn = (ok, _payload, error) => {
+    responded = true;
+    if (!ok) {
+      responseError = error?.message || "sessions.catalog.list prewarm failed";
+    }
+  };
+  await handler({
+    params: {
+      agentId: params.agentId,
+      limitPerHost: params.limitPerHost,
+    },
+    client: null,
+    // A headless leader intentionally has no progress id or connection subscription.
+    // Concurrent clients still share its authoritative final result through the normal cache.
+    context: { getRuntimeConfig: () => params.config },
+    respond,
+  } as never);
+  if (!responded) {
+    throw new Error("sessions.catalog.list prewarm returned no result");
+  }
+  if (responseError) {
+    throw new Error(responseError);
+  }
+}

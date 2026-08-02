@@ -9,18 +9,50 @@ import {
   scenarioDeclaresQaChannel,
 } from "../../profile-planning.js";
 import { readQaScenarioPack } from "../../scenario-catalog.js";
+import type { QaScorecardChannelDriver } from "../../scorecard-taxonomy.js";
+import { selectQaFlowSuiteScenarios } from "../../suite-planning.js";
+
+export function resolveCatalogLiveTransportQaScenarioIds(params: {
+  channelId: string;
+  channelDriver?: QaScorecardChannelDriver;
+  primaryModel?: string;
+  providerMode: QaProviderModeInput;
+  scenarioIds?: readonly string[];
+}) {
+  const channelId = params.channelId.trim().toLowerCase();
+  const catalog = readQaScenarioPack().scenarios;
+  const scenarios = params.scenarioIds?.length
+    ? catalog
+    : catalog.filter((scenario) => scenarioDeclaresQaChannel(scenario, channelId));
+  const providerMode = normalizeQaProviderMode(params.providerMode);
+  const selectedScenarios = selectQaFlowSuiteScenarios({
+    scenarios,
+    scenarioIds: params.scenarioIds?.length ? [...params.scenarioIds] : undefined,
+    providerMode,
+    primaryModel: params.primaryModel?.trim() || defaultQaModelForMode(providerMode),
+    channelDriver: params.channelDriver ?? "live",
+    channel: channelId,
+  });
+  if (selectedScenarios.length === 0) {
+    throw new Error(`${channelId} QA catalog selection resolved no scenarios.`);
+  }
+  return selectedScenarios.map((scenario) => scenario.id);
+}
 
 export function resolveLiveTransportQaScenarioIds(params: {
   channelId: string;
   profile?: string;
+  primaryModel?: string;
   providerMode: QaProviderModeInput;
   scenarioIds?: readonly string[];
 }) {
   return resolveQaProfileScenarios({
     profile: params.profile?.trim() || "release",
     providerMode: params.providerMode,
+    primaryModel: params.primaryModel,
     channelDriver: "live",
     channel: params.channelId,
+    executionKind: "flow",
     requireDeclaredChannel: true,
     scenarioIds: params.scenarioIds,
   }).scenarios.map((scenario) => scenario.id);
@@ -28,19 +60,22 @@ export function resolveLiveTransportQaScenarioIds(params: {
 
 export function listLiveTransportQaScenarios(params: {
   channelId: string;
+  primaryModel?: string;
   providerMode: QaProviderModeInput;
 }) {
   const defaultIds = new Set(resolveLiveTransportQaScenarioIds(params));
   const providerMode = normalizeQaProviderMode(params.providerMode);
+  const primaryModel = params.primaryModel?.trim() || defaultQaModelForMode(providerMode);
   const eligibleScenarios = readQaScenarioPack().scenarios.filter((scenario) =>
     scenarioDeclaresQaChannel(scenario, params.channelId),
   );
   const scenarios = resolveQaRunProfileExecutionSelection({
     scenarios: eligibleScenarios,
     providerMode,
-    primaryModel: defaultQaModelForMode(providerMode),
+    primaryModel,
     channelDriver: "live",
     channel: params.channelId,
+    executionKind: "flow",
   }).selectedScenarios;
   return scenarios.map((scenario) => {
     return {

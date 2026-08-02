@@ -407,4 +407,39 @@ describe("attributed sender avatars", () => {
     image?.dispatchEvent(new Event("load"));
     expect(slot?.classList.contains("is-fallback")).toBe(false);
   });
+
+  it("keeps a missing same-origin sender avatar on initials across rerenders", async () => {
+    const gatewayOrigin = globalThis.location.origin;
+    setAvatarGatewayOrigin(gatewayOrigin);
+    const fetchAvatar = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(null, { status: 404 }));
+    const container = document.createElement("div");
+    const sender = {
+      id: "dd7c98e2-f51d-4590-b588-fa0682e165b7",
+      name: "hrudolph",
+    };
+    const renderSender = () =>
+      render(renderChatAvatar("user", undefined, undefined, "", null, sender), container);
+
+    renderSender();
+    expect(container.querySelector(".chat-avatar-slot")?.classList.contains("is-fallback")).toBe(
+      true,
+    );
+    expect(container.querySelector(".chat-avatar--sender-initials")?.textContent?.trim()).toBe("H");
+    await vi.waitFor(() => {
+      expect(fetchAvatar).toHaveBeenCalledOnce();
+      expect(container.querySelector(".chat-avatar-slot img")?.hasAttribute("src")).toBe(false);
+    });
+    expect(fetchAvatar).toHaveBeenCalledWith(
+      `${gatewayOrigin}/api/users/${sender.id}/avatar`,
+      expect.objectContaining({ credentials: "include", signal: expect.any(AbortSignal) }),
+    );
+
+    renderSender();
+    expect(container.querySelector(".chat-avatar-slot")?.classList.contains("is-fallback")).toBe(
+      true,
+    );
+    expect(container.querySelector(".chat-avatar--sender-initials")?.textContent?.trim()).toBe("H");
+  });
 });

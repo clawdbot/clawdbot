@@ -19,6 +19,7 @@ import {
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
+import { runDoctorAgentDatabaseOperation } from "./doctor-agent-database-operation.js";
 
 const GENERAL_TOPIC_ID = "1";
 const LEGACY_GENERAL_TARGET = /^telegram:(-?\d+):topic:1$/u;
@@ -105,24 +106,30 @@ export function detectTelegramGeneralTopicConversationRepairs(params: {
 }): TelegramGeneralTopicConversationRepair[] {
   const env = params.env ?? process.env;
   return resolveRepairScopes(params.cfg, env).flatMap(({ scope, storePath }) => {
-    const result = withOpenClawAgentDatabaseReadOnly(
-      (database) =>
-        listLegacyRows(database.db).flatMap((row) => {
-          const canonical = canonicalIdentity(row);
-          return canonical && canonical.conversationId !== row.conversation_id
-            ? [
-                {
-                  agentId: scope.agentId,
-                  canonicalConversationId: canonical.conversationId,
-                  legacyConversationId: row.conversation_id,
-                  storePath,
-                },
-              ]
-            : [];
-        }),
-      toDatabaseOptions(scope),
-    );
-    return result.found ? result.value : [];
+    const databaseOptions = toDatabaseOptions(scope);
+    const inspected = runDoctorAgentDatabaseOperation({
+      agentId: scope.agentId,
+      path: databaseOptions.path ?? storePath,
+      run: () =>
+        withOpenClawAgentDatabaseReadOnly(
+          (database) =>
+            listLegacyRows(database.db).flatMap((row) => {
+              const canonical = canonicalIdentity(row);
+              return canonical && canonical.conversationId !== row.conversation_id
+                ? [
+                    {
+                      agentId: scope.agentId,
+                      canonicalConversationId: canonical.conversationId,
+                      legacyConversationId: row.conversation_id,
+                      storePath,
+                    },
+                  ]
+                : [];
+            }),
+          databaseOptions,
+        ),
+    });
+    return inspected.ok && inspected.value.found ? inspected.value.value : [];
   });
 }
 

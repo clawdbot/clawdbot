@@ -226,6 +226,15 @@ The backport flow covers mainline inventory, private-security reconciliation,
 approval, the staging PR, and proof handoff. After it lands, use the sequence
 below. Never route `.33+` through regular beta/stable release steps.
 
+Extended-stable requires a visible **SDK/config backport warning** whenever a
+candidate changes the public plugin SDK or a config/default/schema/migration
+surface. Prefer an adaptation that uses the SDK and configuration already
+shipped on that line. If a contract change remains necessary, record its
+published impact and the maintainer decision in the ledger and staging PR.
+Read `references/extended-stable-backports.md`; a clean cherry-pick, green
+release checks, or a regenerated baseline does not by itself explain the
+maintenance risk.
+
 ## Publish Gateway extended-stable releases
 
 Use this path only for the trailing completed month's `.33+` Gateway

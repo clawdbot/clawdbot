@@ -24,7 +24,10 @@ import type { CronServiceState, CronWakeMode } from "./state.js";
 import { emit } from "./state.js";
 import { ensureLoaded, persistOrRestore, snapshotStoreForRollback } from "./store.js";
 import { tryFinishCronTaskRunWithoutHistory } from "./task-runs.js";
-import { resolveCronRunScheduleOwnership } from "./timer-outcomes.js";
+import {
+  resolveCronRunScheduleOwnership,
+  resolveCronRunTriggerOwnership,
+} from "./timer-outcomes.js";
 import {
   applyJobResult,
   applyScriptRunResult,
@@ -160,12 +163,18 @@ async function finishPreparedManualRun(
         currentJob: job,
         activeJobMarker: prepared.activeJobMarker,
       });
+      const triggerOwnership = resolveCronRunTriggerOwnership({
+        admittedJob: prepared.admittedJob,
+        currentJob: job,
+        activeJobMarker: prepared.activeJobMarker,
+      });
       const scheduleMode =
         scheduleOwnership === "stale"
           ? "stale-preserve"
           : mode === "force"
             ? "force-preserve"
             : "advance";
+      const postPersistAutoDisableNotifications: Array<() => void> = [];
 
       let shouldDelete = false;
       if (coreResult.status === "ok" && coreResult.triggerEval?.fired === false) {
@@ -179,7 +188,11 @@ async function finishPreparedManualRun(
             endedAt,
             triggerEval: coreResult.triggerEval,
           },
-          { scheduleMode },
+          {
+            scheduleMode,
+            triggerOwnership,
+            deferredAutoDisableNotifications: postPersistAutoDisableNotifications,
+          },
         );
       } else {
         shouldDelete = applyJobResult(
@@ -196,6 +209,7 @@ async function finishPreparedManualRun(
             scheduleMode: scheduleMode === "force-preserve" ? "preserve" : "advance",
             scheduleOwnership,
             scheduleOwnershipAtMs: prepared.scheduleOwnershipAtMs,
+            deferredAutoDisableNotifications: postPersistAutoDisableNotifications,
           },
         );
         applyTriggerRunResult(
@@ -205,9 +219,9 @@ async function finishPreparedManualRun(
             endedAt,
             triggerEval: coreResult.triggerEval,
           },
-          { scheduleOwnership },
+          { scheduleOwnership, triggerOwnership },
         );
-        applyScriptRunResult(job, coreResult);
+        applyScriptRunResult(job, coreResult, { triggerOwnership });
 
         // Stream payloads are event-owned by their batch. Generic recurring
         // error backoff must not synthesize a later run without that batch.
@@ -279,13 +293,16 @@ async function finishPreparedManualRun(
       });
       recomputeNextRunsForMaintenance(state, {
         recomputeExpired: true,
+        deferredAutoDisableNotifications: postPersistAutoDisableNotifications,
         ...(mode === "force"
           ? {
               preserveExpiredPacedNextRunJobId: jobId,
             }
           : {}),
       });
-      await persistOrRestore(state, rollbackSnapshot);
+      await persistOrRestore(state, rollbackSnapshot, {
+        postPersistAutoDisableNotifications,
+      });
       if (removedJob) {
         emit(state, { jobId: removedJob.id, action: "removed", job: removedJob });
       }

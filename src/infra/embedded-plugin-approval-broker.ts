@@ -1,5 +1,6 @@
 // Provides the process-local plugin approval path used by embedded TUI runs.
 import { randomUUID } from "node:crypto";
+import { notifyListeners } from "../shared/listeners.js";
 import type { ExecApprovalDecision } from "./exec-approvals.js";
 import { resolveCanonicalPluginApprovalRequestAllowedDecisions } from "./plugin-approval-canonical-decisions.js";
 import type {
@@ -128,9 +129,7 @@ export class EmbeddedPluginApprovalBroker {
   }
 
   private emit(event: ApprovalEvent): void {
-    for (const listener of this.listeners) {
-      listener(event);
-    }
+    notifyListeners(this.listeners, event);
   }
 }
 

@@ -5865,9 +5865,9 @@ describe("QmdMemoryManager", () => {
       const readResult = await manager.readFile({ relPath: result.path });
       expect(readResult).toEqual({
         path: "qmd/sessions-main/session-1.md",
-        text: "# Session session-1\n\nsession canary\n",
+        text: "# Session session-1\n\nsession canary",
         from: 1,
-        lines: 4,
+        lines: 3,
       });
     } finally {
       lstatSpy.mockRestore();

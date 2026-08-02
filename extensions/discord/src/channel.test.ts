@@ -237,6 +237,26 @@ describe("discordPlugin outbound", () => {
     );
   });
 
+  it("requires trusted requester identity for registered privileged tool actions", () => {
+    expect(
+      discordPlugin.actions?.requiresTrustedRequesterSender?.({
+        action: "channel-delete",
+        toolContext: { currentChannelProvider: "discord" },
+      }),
+    ).toBe(true);
+    expect(
+      discordPlugin.actions?.requiresTrustedRequesterSender?.({
+        action: "channel-delete",
+      }),
+    ).toBe(false);
+    expect(
+      discordPlugin.actions?.requiresTrustedRequesterSender?.({
+        action: "read",
+        toolContext: { currentChannelProvider: "discord" },
+      }),
+    ).toBe(false);
+  });
+
   it("adds Discord mention formatting to agent prompt hints", () => {
     const hints = discordPlugin.agentPrompt?.messageToolHints?.({} as never) ?? [];
 

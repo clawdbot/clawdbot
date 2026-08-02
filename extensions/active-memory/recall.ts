@@ -11,6 +11,7 @@ import {
   isCircuitBreakerOpen,
   recordCircuitBreakerTimeout,
   resetCircuitBreaker,
+  resolveActiveRecallForRun,
   scheduleMemorySearchCleanupAfterTimeout,
   setCachedResult,
   shouldCacheResult,
@@ -90,7 +91,7 @@ function prepareRecallRunContext(params: {
   return { parentSessionKey, storePath, fastMode };
 }
 
-async function maybeResolveActiveRecall(params: {
+type ActiveRecallParams = {
   api: OpenClawPluginApi;
   runtimeConfig: OpenClawConfig;
   config: ResolvedActiveRecallPluginConfig;
@@ -105,7 +106,14 @@ async function maybeResolveActiveRecall(params: {
   currentModelId?: string;
   conversationRecall?: ConversationRecallContext;
   abortSignal?: AbortSignal;
-}): Promise<ActiveRecallResult> {
+  runId?: string;
+};
+
+async function resolveActiveRecall(
+  params: Omit<ActiveRecallParams, "runId"> & {
+    onTimeoutCleanup?: (cleanup: Promise<void>) => void;
+  },
+): Promise<ActiveRecallResult> {
   params.abortSignal?.throwIfAborted();
   const startedAt = Date.now();
   // Memory Core re-authorizes every conversation-recall request against live
@@ -169,7 +177,8 @@ async function maybeResolveActiveRecall(params: {
       return;
     }
     timeoutCleanupScheduled = true;
-    scheduleMemorySearchCleanupAfterTimeout(params.api, logPrefix, params.agentId);
+    const cleanup = scheduleMemorySearchCleanupAfterTimeout(params.api, logPrefix, params.agentId);
+    params.onTimeoutCleanup?.(cleanup);
   };
   let circuitBreakerTimeoutRecorded = false;
   const recordRecallTimeout = () => {
@@ -455,6 +464,16 @@ async function maybeResolveActiveRecall(params: {
     terminalMemorySearchWatch?.stop();
     clearTimeout(timeoutId);
   }
+}
+
+async function maybeResolveActiveRecall(params: ActiveRecallParams): Promise<ActiveRecallResult> {
+  const { runId, ...recallParams } = params;
+  if (!runId) {
+    return await resolveActiveRecall(recallParams);
+  }
+  return await resolveActiveRecallForRun(runId, (onTimeoutCleanup) =>
+    resolveActiveRecall({ ...recallParams, onTimeoutCleanup }),
+  );
 }
 
 export { maybeResolveActiveRecall };

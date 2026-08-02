@@ -3,9 +3,37 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
 
 vi.mock("../plugins/provider-runtime.js", () => ({
+  applyProviderNativeStreamingUsageCompatWithPlugin: () => undefined,
   normalizeProviderConfigWithPlugin: vi.fn(
-    (params: { context?: { providerConfig?: unknown } }) => params.context?.providerConfig,
+    (params: { provider: string; context?: { providerConfig?: { baseUrl?: string } } }) => {
+      const providerConfig = params.context?.providerConfig;
+      const baseUrl = providerConfig?.baseUrl?.trim();
+      if (params.provider !== "google" || !baseUrl || baseUrl.endsWith("/v1beta")) {
+        return providerConfig;
+      }
+      return {
+        ...providerConfig,
+        baseUrl:
+          baseUrl === "https://generativelanguage.googleapis.com"
+            ? `${baseUrl}/v1beta`
+            : providerConfig?.baseUrl,
+      };
+    },
   ),
+  resolveProviderConfigApiKeyWithPlugin: (params: {
+    provider: string;
+    context: { env: NodeJS.ProcessEnv };
+  }) => {
+    if (params.provider === "amazon-bedrock") {
+      return params.context.env.AWS_PROFILE?.trim() ? "AWS_PROFILE" : undefined;
+    }
+    if (params.provider === "anthropic-vertex") {
+      return params.context.env.ANTHROPIC_VERTEX_USE_GCP_METADATA === "true"
+        ? "gcp-vertex-credentials"
+        : undefined;
+    }
+    return undefined;
+  },
   resolveProviderSyntheticAuthWithPlugin: vi.fn(),
 }));
 
@@ -25,6 +53,11 @@ let createProviderAuthResolver: typeof import("./models-config.providers.secrets
 let mockedResolveProviderSyntheticAuthWithPlugin: ReturnType<
   typeof vi.mocked<ProviderRuntimeModule["resolveProviderSyntheticAuthWithPlugin"]>
 >;
+
+import {
+  normalizeProviderSpecificConfig,
+  resolveProviderConfigApiKeyResolver,
+} from "./models-config.providers.policy.js";
 
 async function loadProviderAuthModules() {
   vi.doUnmock("../plugins/manifest-registry.js");
@@ -351,5 +384,78 @@ describe("models-config provider auth provenance", () => {
       mode: "api_key",
       source: "none",
     });
+  });
+
+  it("keeps non-env SecretRef markers discovery-key-free when unresolved", () => {
+    const auth = createProviderApiKeyResolver(
+      {} as NodeJS.ProcessEnv,
+      {
+        version: 1,
+        profiles: {},
+      },
+      {
+        models: {
+          providers: {
+            vllm: {
+              baseUrl: "http://127.0.0.1:8000/v1",
+              apiKey: { source: "file", provider: "mounted-json", id: "/providers/vllm/apiKey" },
+              api: "openai-completions",
+              models: [],
+            },
+          },
+        },
+      },
+    );
+
+    expect(auth("vllm")).toEqual({
+      apiKey: NON_ENV_SECRETREF_MARKER,
+      discoveryApiKey: undefined,
+    });
+  });
+});
+
+describe("models-config.providers.policy", () => {
+  it("resolves config apiKey markers through provider plugin hooks", () => {
+    const resolver = resolveProviderConfigApiKeyResolver("amazon-bedrock");
+
+    expect(resolver).toBeTypeOf("function");
+    expect(resolver?.({ AWS_PROFILE: "default" } as NodeJS.ProcessEnv)).toBe("AWS_PROFILE");
+  });
+
+  it("resolves anthropic-vertex ADC markers through provider plugin hooks", () => {
+    const resolver = resolveProviderConfigApiKeyResolver("anthropic-vertex");
+
+    expect(resolver).toBeTypeOf("function");
+    expect(resolver?.({ ANTHROPIC_VERTEX_USE_GCP_METADATA: "true" } as NodeJS.ProcessEnv)).toBe(
+      "gcp-vertex-credentials",
+    );
+  });
+
+  it("normalizes Google provider config through provider plugin hooks", () => {
+    expect(
+      normalizeProviderSpecificConfig("google", {
+        api: "google-generative-ai",
+        baseUrl: "https://generativelanguage.googleapis.com",
+        models: [],
+      }),
+    ).toEqual({
+      api: "google-generative-ai",
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+      models: [],
+    });
+  });
+
+  it("does not treat generic transport APIs as provider plugin ids", () => {
+    const provider = {
+      api: "openai-completions" as const,
+      baseUrl: "https://example.invalid/v1",
+      apiKey: "GENERIC_TRANSPORT_MARKER",
+      models: [],
+    };
+
+    const resolver = resolveProviderConfigApiKeyResolver("dashscope-vision", provider);
+    expect(resolver).toBeTypeOf("function");
+    expect(resolver?.({} as NodeJS.ProcessEnv)).toBeUndefined();
+    expect(normalizeProviderSpecificConfig("dashscope-vision", provider)).toBe(provider);
   });
 });

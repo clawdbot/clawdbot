@@ -9,6 +9,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { listTaskRecordsUnsorted } from "../../tasks/runtime-internal.js";
 import { cancelDetachedTaskRunById } from "../../tasks/task-executor.js";
 import type { TaskRecord, TaskStatus } from "../../tasks/task-registry.types.js";
+import { TASK_STATUS_DETAIL_MAX_CHARS, sanitizeTaskStatusText } from "../../tasks/task-status.js";
 import { optionalPositiveIntegerSchema, optionalStringEnum } from "../schema/typebox.js";
 import {
   DEFAULT_RECENT_MINUTES,
@@ -74,13 +75,23 @@ function listTreeTasks(tasks: TaskRecord[], rootSessionKey: string): TaskRecord[
 }
 
 function mapTask(task: TaskRecord) {
+  // Task failures can contain hidden provider/runtime context; reuse the bounded status owner.
+  const error = sanitizeTaskStatusText(task.error, {
+    errorContext: true,
+    maxChars: TASK_STATUS_DETAIL_MAX_CHARS,
+  });
   return {
     taskId: task.taskId,
     runtime: task.runtime,
-    status: STATUS_MAP[task.status],
+    status:
+      task.status === "succeeded" && task.terminalOutcome === "blocked"
+        ? "blocked"
+        : STATUS_MAP[task.status],
     ...(task.label ? { label: task.label } : {}),
     ...(task.progressSummary ? { progressSummary: task.progressSummary } : {}),
     ...(task.terminalSummary ? { terminalSummary: task.terminalSummary } : {}),
+    ...(task.terminalOutcome ? { terminalOutcome: task.terminalOutcome } : {}),
+    ...(error ? { error } : {}),
   };
 }
 
@@ -89,7 +100,7 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
   return {
     label: "Subagents",
     name: "subagents",
-    description: "Background work: subagents, media gen, cron runs. list/cancel.",
+    description: "Background work: subagents, media gen, automation runs. list/cancel.",
     parameters: SubagentsToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;

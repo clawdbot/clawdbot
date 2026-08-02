@@ -13,6 +13,7 @@ import type {
   SessionTranscriptTurnWriteContext,
   SessionTranscriptWriteScope,
   TranscriptEvent,
+  TranscriptEventAppendOptions,
   TranscriptMessageAppendOptions,
   TranscriptMessageAppendResult,
 } from "./session-accessor.sqlite-contract.js";
@@ -28,31 +29,30 @@ import {
 } from "./session-accessor.sqlite-entry-store.js";
 import { emitCommittedSessionIdentityDiff } from "./session-accessor.sqlite-identity.js";
 import {
+  readSqliteTranscriptEventRows,
   readSqliteTranscriptSnapshot,
-  readTranscriptEventJsonSetInTransaction,
   type SqliteTranscriptSnapshotRow,
 } from "./session-accessor.sqlite-read.js";
 import {
   cloneSessionEntry,
-  formatSqliteSessionReferenceForScope,
-  resolveSqliteScope,
   resolveSqliteTranscriptArchiveDirectory,
   resolveSqliteTranscriptScope,
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
   type ResolvedTranscriptScope,
 } from "./session-accessor.sqlite-scope.js";
-import { rememberCommittedSqliteTranscriptMessageSequencesInTransaction } from "./session-accessor.sqlite-transcript-sequences.js";
+import { readTranscriptMirrorFacts } from "./session-accessor.sqlite-transcript-mirror.js";
+import { resolveTranscriptMessageAppendParent } from "./session-accessor.sqlite-transcript-parent.js";
 import {
-  advanceTranscriptMutationAtInTransaction,
-  readTranscriptGenerationInTransaction,
-  touchTranscriptMutationInTransaction,
-} from "./session-accessor.sqlite-transcript-state.js";
+  readCommittedSqliteTranscriptMessageSequence,
+  rememberCommittedSqliteTranscriptMessageSequencesInTransaction,
+} from "./session-accessor.sqlite-transcript-sequences.js";
+import { readTranscriptGenerationInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import {
   appendTranscriptEventInTransaction,
   ensureTranscriptHeader,
-  readActiveTranscriptAppendParentId,
   readMessageIdempotencyKey,
+  readTranscriptIdentityByEventId,
   readTranscriptMessageByEventId,
   readTranscriptMessageByScopedIdempotencyKey,
   redactTranscriptMessageForStorage,
@@ -60,7 +60,6 @@ import {
   rewriteSqliteTranscriptEventRowsInTransaction,
 } from "./session-accessor.sqlite-transcript-store.js";
 import type { SessionTranscriptWriteTransactionContext } from "./session-accessor.types.js";
-import { reconcileSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
 import type {
   SessionTranscriptTurnExpectedState,
   SessionTranscriptTurnLifecyclePatch,
@@ -82,24 +81,6 @@ class SqliteTranscriptMutationConflictError extends Error {
   }
 }
 
-/** Internal doctor/migration import target for one legacy session row. */
-type SqliteSessionImportRowsParams = {
-  agentId?: string;
-  env?: NodeJS.ProcessEnv;
-  storePath?: string;
-  sessionKey: string;
-  entry: SessionEntry;
-  readTranscriptEvents?: (append: (event: TranscriptEvent) => void) => void;
-  transcriptMtimeMs?: number;
-};
-
-/** Summary of rows written by an internal doctor/migration import. */
-type SqliteSessionImportRowsResult = {
-  sessionId: string;
-  sessionKey: string;
-  transcriptEvents: number;
-};
-
 type SqliteExpectedSessionTranscriptTurnResult = {
   appendedMessages: TranscriptMessageAppendResult<unknown>[];
   rejectedReason?: "session-rebound";
@@ -111,6 +92,16 @@ type SqliteTranscriptWriteLockContext = {
   appendMessage: <TMessage>(
     options: TranscriptMessageAppendOptions<TMessage>,
   ) => Promise<TranscriptMessageAppendResult<TMessage> | undefined>;
+  appendMessageWithMessageSequence: <TMessage>(
+    options: TranscriptMessageAppendOptions<TMessage>,
+  ) => Promise<{
+    messageSeq?: number;
+    result: TranscriptMessageAppendResult<TMessage> | undefined;
+  }>;
+  readMessageFacts: (params: { idempotencyKeys: readonly string[] }) => Promise<{
+    existingIdempotencyKeys: Set<string>;
+    messagesByIdempotencyKey: Map<string, unknown>;
+  }>;
   readEvents: () => Promise<TranscriptEvent[]>;
   replaceEvents: (events: readonly TranscriptEvent[]) => Promise<void>;
 };
@@ -190,13 +181,13 @@ export async function trimSqliteTranscriptForManualCompact(
   const resolved = resolveSqliteTranscriptScope(scope);
   return await runExclusiveSqliteSessionWrite(resolved, async () => {
     const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-    const snapshot = readSqliteTranscriptSnapshot(database, resolved.sessionId);
+    const snapshotRows = readSqliteTranscriptEventRows(database, resolved.sessionId);
     const sessionSnapshot = readSqliteSessionEntrySelectionSnapshot(
       database,
       resolved.sessionKey,
       true,
     );
-    const lines = snapshot.rows.map((row) => row.eventJson);
+    const lines = snapshotRows.map((row) => row.eventJson);
     const retainedLines = selectRetainedLines(lines);
     if (!retainedLines) {
       return { trimmed: false };
@@ -218,7 +209,7 @@ export async function trimSqliteTranscriptForManualCompact(
     let previousIdentity = new Map<string, SessionEntry>();
     let currentIdentity = new Map<string, SessionEntry>();
     runOpenClawAgentWriteTransaction((writeDatabase) => {
-      assertSqliteTranscriptSnapshotUnchanged(writeDatabase, resolved.sessionId, snapshot.rows);
+      assertSqliteTranscriptSnapshotUnchanged(writeDatabase, resolved.sessionId, snapshotRows);
       const freshSessionSnapshot = readSqliteSessionEntrySelectionSnapshot(
         writeDatabase,
         resolved.sessionKey,
@@ -255,91 +246,21 @@ export async function trimSqliteTranscriptForManualCompact(
   });
 }
 
-/** Imports one legacy session entry and its transcript rows for doctor migration. */
-export async function importSqliteSessionRows(
-  params: SqliteSessionImportRowsParams,
-): Promise<SqliteSessionImportRowsResult> {
-  const resolved = resolveSqliteScope({
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-    ...(params.env ? { env: params.env } : {}),
-    sessionKey: params.sessionKey,
-    ...(params.storePath ? { storePath: params.storePath } : {}),
-  });
-  return await runExclusiveSqliteSessionWrite(resolved, async () => {
-    let transcriptEvents = 0;
-    runOpenClawAgentWriteTransaction((database) => {
-      const currentEntry = readSessionEntryRow(database, resolved.sessionKey)?.entry;
-      const preservedHarnessId =
-        params.entry.agentHarnessId === undefined &&
-        currentEntry?.sessionId === params.entry.sessionId &&
-        currentEntry.lifecycleRevision === params.entry.lifecycleRevision
-          ? currentEntry.agentHarnessId?.trim()
-          : undefined;
-      // Plugin doctor migrations can claim a legacy session before the full
-      // session import runs. Preserve that same-generation canonical owner.
-      const importedEntry = {
-        ...params.entry,
-        ...(preservedHarnessId ? { agentHarnessId: preservedHarnessId } : {}),
-        sessionFile: formatSqliteSessionReferenceForScope({
-          ...resolved,
-          sessionId: params.entry.sessionId,
-        }),
-      };
-      writeSessionEntry(database, resolved.sessionKey, importedEntry);
-      if (params.readTranscriptEvents) {
-        const transcriptScope = {
-          ...resolved,
-          sessionId: params.entry.sessionId,
-        };
-        const existingEventJson = readTranscriptEventJsonSetInTransaction(
-          database,
-          params.entry.sessionId,
-        );
-        params.readTranscriptEvents((event) => {
-          const eventJson = JSON.stringify(event);
-          if (existingEventJson.has(eventJson)) {
-            return;
-          }
-          if (
-            appendTranscriptEventInTransaction(database, transcriptScope, event, {
-              scheduleProjectionReconcile: false,
-              touchMutation: false,
-            })
-          ) {
-            existingEventJson.add(eventJson);
-            transcriptEvents += 1;
-          }
-        });
-        reconcileSessionTranscriptIndexInTransaction(database.db, params.entry.sessionId);
-      }
-      if (params.transcriptMtimeMs !== undefined) {
-        advanceTranscriptMutationAtInTransaction(
-          database,
-          params.entry.sessionId,
-          params.transcriptMtimeMs,
-        );
-      } else if (transcriptEvents > 0) {
-        touchTranscriptMutationInTransaction(database, params.entry.sessionId);
-      }
-    }, toDatabaseOptions(resolved));
-    return {
-      sessionId: params.entry.sessionId,
-      sessionKey: resolved.sessionKey,
-      transcriptEvents,
-    };
-  });
-}
-
 /** Appends one raw transcript event to the additive SQLite transcript store. */
 export async function appendSqliteTranscriptEvent(
   scope: SessionTranscriptAccessScope,
   event: TranscriptEvent,
+  options: TranscriptEventAppendOptions = {},
 ): Promise<void> {
   assertNonMessageTranscriptEvent(event);
   const resolved = resolveSqliteTranscriptScope(scope);
   await runExclusiveSqliteSessionWrite(resolved, async () => {
     runOpenClawAgentWriteTransaction((database) => {
-      appendTranscriptEventInTransaction(database, resolved, event);
+      appendTranscriptEventInTransaction(
+        database,
+        resolved,
+        resolveTranscriptEventAppendParent(database, resolved.sessionId, event, options),
+      );
     }, toDatabaseOptions(resolved));
   });
 }
@@ -348,6 +269,7 @@ export async function appendSqliteTranscriptEvent(
 export function appendSqliteTranscriptEventSync(
   scope: SessionTranscriptAccessScope,
   event: TranscriptEvent,
+  options: TranscriptEventAppendOptions = {},
 ): boolean {
   assertNonMessageTranscriptEvent(event);
   const resolved = resolveSqliteTranscriptScope(scope);
@@ -357,9 +279,39 @@ export function appendSqliteTranscriptEventSync(
     if (!fresh || fresh.entry.sessionId !== resolved.sessionId) {
       return;
     }
-    appended = appendTranscriptEventInTransaction(database, resolved, event);
+    appended = appendTranscriptEventInTransaction(
+      database,
+      resolved,
+      resolveTranscriptEventAppendParent(database, resolved.sessionId, event, options),
+    );
   }, toDatabaseOptions(resolved));
   return appended;
+}
+
+function resolveTranscriptEventAppendParent(
+  database: OpenClawAgentDatabase,
+  sessionId: string,
+  event: TranscriptEvent,
+  options: TranscriptEventAppendOptions,
+): TranscriptEvent {
+  if (
+    options.appendIntent !== "active-branch" ||
+    !event ||
+    typeof event !== "object" ||
+    Array.isArray(event) ||
+    !("parentId" in event)
+  ) {
+    return event;
+  }
+  const parentId = event.parentId;
+  if (parentId !== null && typeof parentId !== "string") {
+    return event;
+  }
+  const effectiveParentId = resolveTranscriptMessageAppendParent(database, sessionId, {
+    appendIntent: "active-branch",
+    parentId,
+  });
+  return effectiveParentId === parentId ? event : { ...event, parentId: effectiveParentId };
 }
 
 /** Appends a guarded transcript turn and touches its session row in one queued write. */
@@ -552,6 +504,8 @@ export async function withSqliteTranscriptWriteLock<T>(
         transcriptSnapshot = { kind: "current", rows: snapshot.rows };
         return snapshot.events;
       },
+      readMessageFacts: async (params) =>
+        readTranscriptMirrorFacts(database, resolved.sessionId, params),
       replaceEvents: async (events) => {
         if (transcriptSnapshot?.kind === "stale") {
           throw new SqliteTranscriptMutationConflictError(resolved.sessionId);
@@ -568,7 +522,7 @@ export async function withSqliteTranscriptWriteLock<T>(
             );
           }
           replaceSqliteTranscriptEventsInTransaction(writeDatabase, resolved, events);
-          return readSqliteTranscriptSnapshot(writeDatabase, resolved.sessionId).rows;
+          return readSqliteTranscriptEventRows(writeDatabase, resolved.sessionId);
         }, toDatabaseOptions(resolved));
         transcriptSnapshot = { kind: "current", rows: nextSnapshot };
       },
@@ -590,13 +544,32 @@ export async function withSqliteTranscriptWriteLock<T>(
             nextSnapshotState = snapshotStillCurrent
               ? {
                   kind: "current",
-                  rows: readSqliteTranscriptSnapshot(writeDatabase, resolved.sessionId).rows,
+                  rows: readSqliteTranscriptEventRows(writeDatabase, resolved.sessionId),
                 }
               : { kind: "stale" };
           }
         }, toDatabaseOptions(resolved));
         transcriptSnapshot = nextSnapshotState;
         return result as TranscriptMessageAppendResult<typeof options.message> | undefined;
+      },
+      appendMessageWithMessageSequence: async (options) => {
+        let result: TranscriptMessageAppendResult<unknown> | undefined;
+        let messageSeq: number | undefined;
+        runOpenClawAgentWriteTransaction((writeDatabase) => {
+          result = appendSqliteTranscriptMessageInTransaction(writeDatabase, resolved, options);
+          if (result) {
+            rememberCommittedSqliteTranscriptMessageSequencesInTransaction(
+              writeDatabase,
+              resolved.sessionId,
+              [result],
+            );
+            messageSeq = readCommittedSqliteTranscriptMessageSequence(result);
+          }
+        }, toDatabaseOptions(resolved));
+        return {
+          ...(messageSeq !== undefined ? { messageSeq } : {}),
+          result: result as TranscriptMessageAppendResult<typeof options.message> | undefined,
+        };
       },
     });
   });
@@ -631,7 +604,7 @@ function isSqliteTranscriptSnapshotUnchanged(
   sessionId: string,
   expected: readonly SqliteTranscriptSnapshotRow[],
 ): boolean {
-  const current = readSqliteTranscriptSnapshot(database, sessionId).rows;
+  const current = readSqliteTranscriptEventRows(database, sessionId);
   return (
     current.length === expected.length &&
     current.every(
@@ -656,6 +629,16 @@ function appendSqliteTranscriptMessageInTransaction<TMessage>(
   resolved: ResolvedTranscriptScope,
   options: TranscriptMessageAppendOptions<TMessage> & { messageAlreadyRedacted?: boolean },
 ): TranscriptMessageAppendResult<TMessage> | undefined {
+  // Idempotent replays return the stored row with its persisted parent so callers
+  // adopt the durable tree instead of re-deriving one from a stale snapshot.
+  const existingAppendResult = (found: { message: unknown; messageId: string }) => ({
+    appended: false as const,
+    effectiveParentId:
+      readTranscriptIdentityByEventId(database, resolved.sessionId, found.messageId)?.parentId ??
+      null,
+    message: found.message as TMessage,
+    messageId: found.messageId,
+  });
   const idempotencyKey = readMessageIdempotencyKey(options.message);
   if (idempotencyKey && options.idempotencyLookup !== "caller-checked") {
     const existing = readTranscriptMessageByScopedIdempotencyKey(
@@ -665,11 +648,7 @@ function appendSqliteTranscriptMessageInTransaction<TMessage>(
       options.idempotencyLookup,
     );
     if (existing) {
-      return {
-        appended: false,
-        message: existing.message as TMessage,
-        messageId: existing.messageId,
-      };
+      return existingAppendResult(existing);
     }
   }
 
@@ -686,10 +665,7 @@ function appendSqliteTranscriptMessageInTransaction<TMessage>(
     ? prepared
     : redactTranscriptMessageForStorage(prepared, options);
   ensureTranscriptHeader(database, resolved, options.cwd, now);
-  const parentId =
-    options.parentId === undefined
-      ? readActiveTranscriptAppendParentId(database, resolved.sessionId)
-      : options.parentId;
+  const parentId = resolveTranscriptMessageAppendParent(database, resolved.sessionId, options);
   const event = {
     type: "message",
     id: messageId,
@@ -710,21 +686,13 @@ function appendSqliteTranscriptMessageInTransaction<TMessage>(
       options.idempotencyLookup,
     );
     if (existing) {
-      return {
-        appended: false,
-        message: existing.message as TMessage,
-        messageId: existing.messageId,
-      };
+      return existingAppendResult(existing);
     }
   }
   if (!appended) {
     const existing = readTranscriptMessageByEventId(database, resolved, messageId);
     if (existing) {
-      return {
-        appended: false,
-        message: existing.message as TMessage,
-        messageId: existing.messageId,
-      };
+      return existingAppendResult(existing);
     }
   }
   if (!appended) {
@@ -732,6 +700,7 @@ function appendSqliteTranscriptMessageInTransaction<TMessage>(
   }
   return {
     appended: true,
+    effectiveParentId: parentId ?? null,
     message: finalMessage,
     messageId,
   };

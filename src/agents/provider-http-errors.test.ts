@@ -403,4 +403,59 @@ describe("provider error utils", () => {
 
     expect(streamed.getReadCount()).toBeLessThan(20);
   });
+
+  it("rejects stalled JSON response body after chunk idle timeout", async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array([1]));
+      },
+    });
+    const response = new Response(stream, {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+
+    await expect(
+      readProviderJsonResponse(response, "stalled-provider", { chunkTimeoutMs: 20 }),
+    ).rejects.toThrow("stalled-provider: response body stalled for 20ms");
+  });
+
+  it("rejects stalled non-2xx error body read after chunk idle timeout", async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('{"error": {"message": "par'));
+      },
+    });
+    const response = new Response(stream, {
+      status: 502,
+      headers: { "content-type": "application/json" },
+    });
+
+    await expect(assertOkOrThrowProviderError(response, "stalled-error")).rejects.toThrow(
+      "stalled-error (502)",
+    );
+  });
+
+  it("proves idle timeout with a real TCP server that stalls mid-JSON-body", async () => {
+    const { createServer } = await import("node:http");
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.write('{"status": "par');
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, resolve);
+    });
+    const port = (server.address() as import("node:net").AddressInfo).port;
+
+    try {
+      const response = await fetch(`http://localhost:${port}/test`);
+      await expect(
+        readProviderJsonResponse(response, "tcp-stall", { chunkTimeoutMs: 100 }),
+      ).rejects.toThrow("tcp-stall: response body stalled for 100ms");
+    } finally {
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    }
+  });
 });

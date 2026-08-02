@@ -17,7 +17,7 @@ scenario:
         dm:
           enabled: true
         execApprovals:
-          enabled: true
+          enabled: auto
           target: channel
 
 flow:

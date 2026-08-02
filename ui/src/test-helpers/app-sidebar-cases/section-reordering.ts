@@ -38,16 +38,22 @@ describe("AppSidebar section reordering", () => {
   async function mountWithGroups(
     groups: string[],
     sectionOrder: string[] = [],
-    options: { withCatalog?: boolean } = {},
+    options: { withCatalog?: boolean; scopes?: string[] } = {},
   ) {
     const request = vi
       .fn()
       .mockResolvedValue(catalogPage([{ threadId: "thread-codex", name: "Codex thread" }]));
     const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
-    if (options.withCatalog) {
+    if (options.withCatalog || options.scopes) {
       gateway.publish({
         hello: {
-          features: { methods: ["sessions.catalog.list"] },
+          ...(options.scopes ? { auth: { role: "operator", scopes: options.scopes } } : {}),
+          features: {
+            methods: [
+              ...(options.withCatalog ? ["sessions.catalog.list"] : []),
+              "sessions.groups.put",
+            ],
+          },
         } as ApplicationGatewaySnapshot["hello"],
       });
     }
@@ -127,6 +133,30 @@ describe("AppSidebar section reordering", () => {
         groupHeader(sidebar, sectionId).querySelector(".sidebar-session-group-drag-handle"),
       ).not.toBeNull();
     }
+  });
+
+  it("disables section and row dragging without group write access", async () => {
+    const { sidebar, harness } = await mountWithGroups(["Alpha"], [], {
+      scopes: ["operator.read"],
+    });
+    const header = groupHeader(sidebar, "category:Alpha");
+    const row = sidebar.querySelector('[data-session-key="agent:main:plain"]');
+
+    expect(header.getAttribute("draggable")).toBe("false");
+    expect(header.getAttribute("title")).toBeTruthy();
+    expect(row?.getAttribute("draggable")).toBe("false");
+    expect(row?.getAttribute("title")).toBeTruthy();
+
+    const dataTransfer = createDataTransferStub();
+    dispatchDragEvent(header, "dragstart", dataTransfer);
+    const threadsSection = sidebar.querySelector('[data-session-section="ungrouped"]');
+    if (!threadsSection) {
+      throw new Error("expected Threads section");
+    }
+    dispatchDragEvent(threadsSection, "drop", dataTransfer);
+
+    expect(dataTransfer.types).toEqual([]);
+    expect(harness.groupsPut).not.toHaveBeenCalled();
   });
 
   it("does not start a section drag from a header action button", async () => {

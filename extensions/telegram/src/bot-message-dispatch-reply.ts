@@ -21,7 +21,11 @@ import type { TelegramProgressController } from "./bot-message-dispatch-progress
 import { deduplicateBlockSentMedia } from "./bot-message-dispatch.media-dedup.js";
 import type { TelegramDispatchTurnState } from "./bot-message-dispatch.types.js";
 import type { TelegramStreamMode } from "./bot/types.js";
-import { resolveTelegramInlineButtons, type TelegramInlineButtons } from "./button-types.js";
+import {
+  resolveTelegramInlineButtons,
+  resolveTelegramQuestionOptionIndices,
+  type TelegramInlineButtons,
+} from "./button-types.js";
 import {
   buildTelegramErrorScopeKey,
   isSilentErrorPolicy,
@@ -70,11 +74,14 @@ function resolvePayloadTelegramInlineButtons(
   const telegramData = payload.channelData?.telegram as
     | { buttons?: TelegramInlineButtons }
     | undefined;
-  return resolveTelegramInlineButtons({
-    buttons: telegramData?.buttons,
-    presentation: normalizeMessagePresentation(payload.presentation),
-    interactive: payload.interactive,
-  });
+  return resolveTelegramInlineButtons(
+    {
+      buttons: telegramData?.buttons,
+      presentation: normalizeMessagePresentation(payload.presentation),
+      interactive: payload.interactive,
+    },
+    { questionOptionIndices: resolveTelegramQuestionOptionIndices(payload) },
+  );
 }
 
 function hasExecApprovalPayload(payload: ReplyPayload): boolean {

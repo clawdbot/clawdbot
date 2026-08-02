@@ -1,3 +1,4 @@
+import { runWithoutOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../process/gateway-work-admission.js";
 import type { createSubagentRegistryLifecycleCommon } from "./subagent-registry-lifecycle-common.js";
 import type {
@@ -32,6 +33,9 @@ export function createSubagentRegistryLifecycleRequesterWake(
           Boolean(entry?.requesterSettleWake) &&
           entry?.requesterSettleWake?.rearmGeneration === state.rearmGeneration,
       );
+    if (entries.length === 0) {
+      return;
+    }
     const previousStates = entries.map((entry) => structuredClone(entry.requesterSettleWake));
     for (const entry of entries) {
       entry.requesterSettleWake = {
@@ -42,7 +46,7 @@ export function createSubagentRegistryLifecycleRequesterWake(
       };
     }
     try {
-      params.persistOrThrow();
+      params.persistOrThrow(...entries.map((entry) => entry.runId));
     } catch (error) {
       entries.forEach((entry, index) => {
         entry.requesterSettleWake = previousStates[index];
@@ -62,6 +66,9 @@ export function createSubagentRegistryLifecycleRequesterWake(
           Boolean(pair[1]?.requesterSettleWake) &&
           pair[1]?.requesterSettleWake?.rearmGeneration === rearmGeneration,
       );
+    if (entries.length === 0) {
+      return;
+    }
     const requesterSessionKeys = new Set(entries.map(([, entry]) => entry.requesterSessionKey));
     const previousStates = entries.map(([, entry]) => ({
       requesterSettleWake: structuredClone(entry.requesterSettleWake),
@@ -82,7 +89,7 @@ export function createSubagentRegistryLifecycleRequesterWake(
       }
     }
     try {
-      params.persistOrThrow();
+      params.persistOrThrow(...entries.map(([runId]) => runId));
     } catch (error) {
       entries.forEach(([runId, entry], index) => {
         const previous = previousStates[index];
@@ -144,7 +151,7 @@ export function createSubagentRegistryLifecycleRequesterWake(
     }
     markRequesterSettleWakePending(entry, options);
     try {
-      params.persistOrThrow();
+      params.persistOrThrow(entry.runId);
     } catch (error) {
       entry.cleanupCompletedAt = previousCleanupCompletedAt;
       entry.requesterSettleWake = previousWake;
@@ -197,36 +204,40 @@ export function createSubagentRegistryLifecycleRequesterWake(
       return;
     }
     scheduledRequesterSettleWakeRuns.add(runId);
-    void runWithGatewayIndependentRootWorkContinuation(() =>
-      params.maybeWakeRequesterAfterAllChildrenSettled({
-        requesterSessionKey,
-        requesterOrigin: entry.requesterOrigin,
-        settledEntry: entry,
-        transitionBatch: transitionRequesterSettleWakeBatch,
-        completeBatch: completeRequesterSettleWakeBatch,
-      }),
-    )
-      .catch((error: unknown) => {
-        params.warn("requester settle wake failed", {
-          error: buildSafeLifecycleErrorMeta(error),
-          runId: maskRunId(runId),
-          requesterSessionKey: maskSessionKey(requesterSessionKey),
-        });
-      })
-      .finally(() => {
-        scheduledRequesterSettleWakeRuns.delete(runId);
-        const wasRearmedWhileRunning = pendingRequesterSettleWakeRearms.delete(runId);
-        const current = params.runs.get(runId);
-        if (current === entry && current.requesterSettleWake) {
-          if (wasRearmedWhileRunning) {
-            // A requester yield can freeze a delivered batch while this run is
-            // resolving its earlier no-wake decision. Admit that durable update now.
-            scheduleRequesterSettleWake(runId, current);
-          } else {
-            scheduleRequesterSettleWakeRetry(runId, current);
+    // Wake turns outlive their spawning attempt; clear its owner before both
+    // dispatch and chained re-arms so transcript writes acquire a fresh lock.
+    runWithoutOwnedSessionTranscriptWrites(() => {
+      void runWithGatewayIndependentRootWorkContinuation(() =>
+        params.maybeWakeRequesterAfterAllChildrenSettled({
+          requesterSessionKey,
+          requesterOrigin: entry.requesterOrigin,
+          settledEntry: entry,
+          transitionBatch: transitionRequesterSettleWakeBatch,
+          completeBatch: completeRequesterSettleWakeBatch,
+        }),
+      )
+        .catch((error: unknown) => {
+          params.warn("requester settle wake failed", {
+            error: buildSafeLifecycleErrorMeta(error),
+            runId: maskRunId(runId),
+            requesterSessionKey: maskSessionKey(requesterSessionKey),
+          });
+        })
+        .finally(() => {
+          scheduledRequesterSettleWakeRuns.delete(runId);
+          const wasRearmedWhileRunning = pendingRequesterSettleWakeRearms.delete(runId);
+          const current = params.runs.get(runId);
+          if (current === entry && current.requesterSettleWake) {
+            if (wasRearmedWhileRunning) {
+              // A requester yield can freeze a delivered batch while this run is
+              // resolving its earlier no-wake decision. Admit that durable update now.
+              scheduleRequesterSettleWake(runId, current);
+            } else {
+              scheduleRequesterSettleWakeRetry(runId, current);
+            }
           }
-        }
-      });
+        });
+    });
   }
 
   return {

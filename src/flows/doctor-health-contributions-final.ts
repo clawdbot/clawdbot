@@ -282,7 +282,7 @@ export function resolveFinalDoctorHealthContributions(params: {
       id: "doctor:heartbeat-task-cron-migration",
       label: "Heartbeat task cron migration",
       healthChecks: {
-        description: "Heartbeat scratch task blocks must migrate into cron jobs.",
+        description: "Heartbeat scratch task blocks must migrate into automations.",
         defaultEnabled: true,
         async detect(ctx) {
           const { collectHeartbeatTaskMigrationFindings } =
@@ -314,7 +314,7 @@ export function resolveFinalDoctorHealthContributions(params: {
         async detect(ctx) {
           const { collectWhatsappResponsivenessHealthFindings } =
             await import("../commands/doctor-whatsapp-responsiveness.js");
-          let status: import("../commands/status.types.js").StatusSummary | undefined;
+          let status: import("../status/types.js").StatusSummary | undefined;
           if (
             !(
               (await hasActiveGatewayExecCredential({ cfg: ctx.cfg })) &&
@@ -322,7 +322,7 @@ export function resolveFinalDoctorHealthContributions(params: {
             )
           ) {
             const { callGateway } = await import("../gateway/call.js");
-            status = await callGateway<import("../commands/status.types.js").StatusSummary>({
+            status = await callGateway<import("../status/types.js").StatusSummary>({
               method: "status",
               params: { includeChannelSummary: false },
               timeoutMs: 3000,

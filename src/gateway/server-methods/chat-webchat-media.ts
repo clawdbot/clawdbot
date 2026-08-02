@@ -215,7 +215,7 @@ function resolveReplyDirectivePrefix(payload: ReplyPayload): string {
  * Build Control UI / transcript `content` blocks for local TTS (or other) audio files
  * referenced by slash-command / agent replies when the webchat path only had text aggregation.
  */
-export async function buildWebchatAudioContentBlocksFromReplyPayloads(
+async function buildWebchatAudioContentBlocksFromReplyPayloads(
   payloads: ReplyPayload[],
   options?: WebchatAudioEmbeddingOptions,
 ): Promise<Array<Record<string, unknown>>> {
@@ -315,3 +315,6 @@ export async function buildWebchatAssistantMessageFromReplyPayloads(
   }
   return { content, transcriptText };
 }
+
+const testing = { buildWebchatAudioContentBlocksFromReplyPayloads };
+export { testing as __testing };

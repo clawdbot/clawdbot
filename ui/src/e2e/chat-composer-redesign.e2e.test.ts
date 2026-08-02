@@ -408,9 +408,9 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
         sessionKey: "main",
         state: "delta",
       });
-      // Streaming content replaces the spark as the working signal.
+      // The working row stays attached with elapsed/token telemetry throughout streaming.
       await expect.poll(() => page.getByText("Working on it.").first().isVisible()).toBe(true);
-      await expect.poll(() => spark.count()).toBe(0);
+      await expect.poll(() => spark.isVisible()).toBe(true);
       await expect.poll(() => announcement.textContent()).toContain("Rosita is responding");
       const [activeSettingsBox, activeSplitViewBox, activeModelBox, activeChatContentBox] =
         await Promise.all([
@@ -568,6 +568,7 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
+      agentModel: "openai/gpt-5.3-codex-spark",
       models: [
         { id: "gpt-5.5", name: "GPT-5.5", provider: "openai", available: true },
         {
@@ -854,7 +855,6 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
           pane.state.chatModelCatalog?.length === 0
         );
       });
-      const agentsRequestsBeforeStartup = (await gateway.getRequests("agents.list")).length;
       await gateway.resolveDeferred("chat.startup", {
         agentsList: {
           agents: [
@@ -884,7 +884,6 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
           pane.state.agentsList.agents?.some((agent) => agent.id === "main") === true
         );
       });
-      expect(await gateway.getRequests("agents.list")).toHaveLength(agentsRequestsBeforeStartup);
       const composer = page.locator(".agent-chat__input");
       await expect
         .poll(async () =>

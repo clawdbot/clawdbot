@@ -354,7 +354,7 @@ describe("processDiscordMessage draft streaming final delivery", () => {
     await runProcessDiscordMessage(ctx);
 
     const updates = draftStream.update.mock.calls.map((call) => call[0]);
-    expect(updates).toContain("Reading the gateway config and restarting agents.");
+    expect(updates).toContain("Reading the gateway config and restarting agents.\n\n🛠️ Exec");
     expectFinalWithProgressReceipt("done", "🛠️ 1 tool call");
   });
 
@@ -459,6 +459,25 @@ describe("processDiscordMessage draft streaming final delivery", () => {
     await runProcessDiscordMessage(ctx);
 
     expect(callbackResult).toBe(false);
+    expect(draftStream.update).not.toHaveBeenCalled();
+  });
+
+  it("suppresses terminal progress callbacks without their terminal phase", async () => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onApprovalEvent?.({ command: "must stay hidden" });
+      await params?.replyOptions?.onCommandOutput?.({ title: "must stay hidden", exitCode: 0 });
+      await params?.replyOptions?.onPatchSummary?.({ summary: "must stay hidden" });
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: { streaming: { mode: "progress" } },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
     expect(draftStream.update).not.toHaveBeenCalled();
   });
 

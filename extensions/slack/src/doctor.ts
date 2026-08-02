@@ -5,6 +5,7 @@ import {
   createDangerousNameMatchingMutableAllowlistWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
 import type { GroupPolicy, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { asObjectRecord } from "openclaw/plugin-sdk/runtime-doctor";
 import { inspectSlackAccount } from "./account-inspect.js";
 import { listSlackAccountIds, mergeSlackAccountConfig } from "./accounts.js";
 import {
@@ -13,12 +14,6 @@ import {
 } from "./doctor-contract.js";
 import { probeSlack } from "./probe.js";
 import { isSlackMutableAllowEntry } from "./security-doctor.js";
-
-function asObjectRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
 
 const collectSlackMutableAllowlistWarnings =
   createDangerousNameMatchingMutableAllowlistWarningCollector({

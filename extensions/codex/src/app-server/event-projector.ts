@@ -24,6 +24,7 @@ import {
 } from "./event-projector-items.js";
 import { CodexGeneratedMediaProjection } from "./event-projector-media.js";
 import { CodexNativeToolLifecycleProjector } from "./event-projector-native-tool-lifecycle.js";
+import type { CodexAppServerEventProjectorOptions } from "./event-projector-options.js";
 import { CodexReasoningProjection } from "./event-projector-reasoning.js";
 import { buildCodexMessagesSnapshot } from "./event-projector-snapshot.js";
 import { CodexToolProgressProjection } from "./event-projector-tool-progress.js";
@@ -55,7 +56,6 @@ import {
   type JsonValue,
 } from "./protocol.js";
 import { formatCodexUsageLimitErrorMessage } from "./rate-limits.js";
-import type { CodexTrajectoryRecorder } from "./trajectory.js";
 import { createCodexUsageLimitPromptError } from "./usage-limit-error.js";
 
 export { shouldEmitTranscriptToolProgress } from "./event-projector-tool-progress.js";
@@ -73,17 +73,6 @@ type CodexAppServerToolTelemetry = {
   toolMediaUrls?: string[];
   toolAudioAsVoice?: boolean;
   successfulCronAdds?: number;
-};
-
-type CodexAppServerEventProjectorOptions = {
-  nativePostToolUseRelayEnabled?: boolean;
-  onNativeToolResultRecorded?: () => void | Promise<void>;
-  prepareNativeMcpAppResultDetails?: (item: CodexThreadItem) => Promise<unknown>;
-  readRecentRateLimits?: () => JsonValue | undefined;
-  runAbortSignal?: AbortSignal;
-  trajectoryRecorder?: CodexTrajectoryRecorder | null;
-  onContextCompacted?: () => void;
-  upstreamUserText?: string;
 };
 
 export class CodexAppServerEventProjector {
@@ -125,7 +114,12 @@ export class CodexAppServerEventProjector {
         runAbortSignal: options.runAbortSignal,
       },
     );
-    this.generatedMediaProjection = new CodexGeneratedMediaProjection(params.config);
+    this.generatedMediaProjection = new CodexGeneratedMediaProjection(params.config, {
+      remoteWorkspaceRoot: options.remoteWorkspaceRoot,
+      readFile: options.readRemoteWorkspaceFile,
+      requestTimeoutMs: options.remoteWorkspaceRequestTimeoutMs,
+      signal: options.runAbortSignal,
+    });
     this.toolProgressProjection = new CodexToolProgressProjection(params);
     this.toolTranscriptProjection = new CodexToolTranscriptProjection(
       params,
@@ -345,8 +339,13 @@ export class CodexAppServerEventProjector {
     const synthesizedMissingToolResultError =
       this.toolTranscriptProjection.synthesizeMissingToolResults({
         synthesize: legacyFailClosed,
-        recordPromptError:
-          legacyFailClosed && !hasDeliverableAssistantOnCompletedTurn && !this.aborted,
+        // Preserve audit synthesis on every path, but completed answers must not
+        // promote bookkeeping gaps into user-visible terminal failure evidence.
+        terminalDisposition: this.aborted
+          ? "tool_error"
+          : hasDeliverableAssistantOnCompletedTurn
+            ? "diagnostic_only"
+            : "prompt_error",
       });
     if (synthesizedMissingToolResultError) {
       this.synthesizedMissingToolResultError = synthesizedMissingToolResultError;
@@ -476,7 +475,8 @@ export class CodexAppServerEventProjector {
     details?: unknown;
   }): void {
     this.toolProgressProjection.recordDynamicToolResult(params);
-    this.toolTranscriptProjection.recordDynamicToolResult(params);
+    const source = this.options.resolveDynamicToolResultContentSource?.(params.tool);
+    this.toolTranscriptProjection.recordDynamicToolResult(params, source);
   }
 
   markTimedOut(): void {
@@ -552,7 +552,7 @@ export class CodexAppServerEventProjector {
     }
     this.assistantProjection.recordItemCompleted(item, itemId, this.activeItemIds);
     this.reasoningProjection.recordItem(item);
-    this.generatedMediaProjection.recordNative(item);
+    await this.generatedMediaProjection.recordNative(item);
     if (item?.type === "contextCompaction" && itemId) {
       this.activeCompactionItemIds.delete(itemId);
       this.completedCompactionCount += 1;
@@ -638,7 +638,7 @@ export class CodexAppServerEventProjector {
       this.diagnostics.warnUnknownItemStatus(item);
       this.assistantProjection.recordSnapshotItem(item);
       this.reasoningProjection.recordItem(item);
-      this.generatedMediaProjection.recordNative(item);
+      await this.generatedMediaProjection.recordNative(item);
       this.toolProgressProjection.recordToolMeta(item);
       this.toolProgressProjection.rememberCommandAggregateOutputEcho(item);
       await this.emitSnapshotOnlyNativeToolProgress(item);

@@ -3,7 +3,10 @@ import path from "node:path";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import type { OpenClawRegisteredAgentDatabase } from "./openclaw-agent-db-contract.js";
+import {
+  OPENCLAW_AGENT_SCHEMA_VERSION,
+  type OpenClawRegisteredAgentDatabase,
+} from "./openclaw-agent-db-contract.js";
 import { withOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
 import { detectOpenClawStateDatabaseSchemaMigrationsFromDatabase } from "./openclaw-state-db-schema-repair.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
@@ -79,11 +82,16 @@ function hasUnavailableMissingSqlitePath(pathname: string): boolean {
 
 /** List agent databases recorded in the shared OpenClaw state registry. */
 export function listOpenClawRegisteredAgentDatabases(
-  options: OpenClawStateDatabaseOptions = {},
+  options: OpenClawStateDatabaseOptions & {
+    includeIncompatibleSchemaVersions?: boolean;
+  } = {},
 ): OpenClawRegisteredAgentDatabase[] {
   const pathname = resolveAgentDatabaseRegistryPath(options);
   if (registeredAgentDatabasesMemo?.pathname === pathname) {
-    return cloneRegisteredAgentDatabases(registeredAgentDatabasesMemo.entries);
+    const entries = cloneRegisteredAgentDatabases(registeredAgentDatabasesMemo.entries);
+    return options.includeIncompatibleSchemaVersions
+      ? entries
+      : entries.filter((entry) => entry.schemaVersion === OPENCLAW_AGENT_SCHEMA_VERSION);
   }
   if (!existsSync(pathname)) {
     if (hasUnavailableMissingSqlitePath(pathname)) {
@@ -128,5 +136,8 @@ export function listOpenClawRegisteredAgentDatabases(
     }));
   }, options);
   registeredAgentDatabasesMemo = { pathname, entries };
-  return cloneRegisteredAgentDatabases(entries);
+  const cloned = cloneRegisteredAgentDatabases(entries);
+  return options.includeIncompatibleSchemaVersions
+    ? cloned
+    : cloned.filter((entry) => entry.schemaVersion === OPENCLAW_AGENT_SCHEMA_VERSION);
 }

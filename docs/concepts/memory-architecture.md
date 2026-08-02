@@ -264,20 +264,30 @@ cached for the process lifetime; semicolons are escaped so one key cannot become
 multiple list entries, and recall never starts Git once per message.
 
 Project scope changes ranking and automatic injection without partitioning the
-files. Ranked search boosts entries from the active repository, mildly demotes
-entries from another repository, and leaves untagged memory neutral. Trigger
-injection is stricter: a tagged entry is eligible only while its repository is
-active. Each full turn also gets a compact, separately budgeted project-memory
-block built from curated entries for that repository. `USER.md` and standing
-intents remain user-level and are never project-scoped.
+files. Each session keeps up to four recently active repository keys in
+most-recent-first order. Preparing a repository moves its key to the front and
+evicts the least-recent key beyond that cap. This set is ephemeral runtime
+state: it is not persisted or restored, so a new session or process starts with
+an empty set. The current repository identity remains a separate prepared fact
+used for write annotations; new repository-specific memories receive only that
+current key, not the whole active set. Ranked search boosts entries from any
+repository in the active set, mildly demotes entries from another repository,
+and leaves untagged memory neutral. Trigger injection is stricter: a tagged
+entry is eligible only while every project key on that entry is in the active
+set. Each full turn also gets a compact, separately budgeted project-memory
+block built from curated entries for the active repositories. All retained keys
+have the same boost; recency only controls promotion and eviction. `USER.md` and
+standing intents remain user-level and are never project-scoped.
 
 This matters most for a many-repository worker: a build workaround learned in
 one codebase should not silently steer work in another. In one continuous
 repository session, the annotation is mostly invisible; ranking and bootstrap
 refresh preserve the same learned context across compaction and dreaming. A
-session that moves to another repository updates its active identity on the next
-turn, and a sub-agent derives its own identity rather than inheriting its
-parent's. Sessions outside repositories retain the previous global behavior.
+session that moves to another repository keeps both repositories active until
+recency eviction, while a sub-agent derives its own active set rather than
+inheriting its parent's. A session that starts outside a repository retains the
+previous global behavior; leaving a repository does not clear keys already
+active in that session.
 
 The boundary follows the same research result as the rest of recall: selective,
 query-relevant context outperforms indiscriminate history as sessions and

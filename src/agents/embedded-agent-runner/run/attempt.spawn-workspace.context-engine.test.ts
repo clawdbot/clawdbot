@@ -337,8 +337,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       task: "inspect the parent flow",
       cleanup: "delete",
       createdAt: endedAt - 1_000,
-      endedAt,
-      outcome: { status: "ok" },
+      execution: { status: "terminal", endedAt, outcome: { status: "ok" } },
       expectsCompletionMessage: true,
       completion: { required: true, resultText: frozenResultText },
       delivery: {
@@ -524,7 +523,9 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       },
       createSession: () => {
         const session = createDefaultEmbeddedSession();
+        const setActiveToolsByName = session.setActiveToolsByName;
         session.setActiveToolsByName = (toolNames) => {
+          setActiveToolsByName(toolNames);
           activeToolNames.push([...toolNames]);
         };
         return session;

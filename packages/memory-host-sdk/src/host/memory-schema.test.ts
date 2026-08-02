@@ -4,16 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
-import {
-  readCuratedProjectMemoryCandidates,
-  readCuratedMemoryTriggerCandidates,
-  readMemoryRecallMetadata,
-} from "./memory-recall-metadata.js";
-import { ensureMemoryRecallMetadataColumns } from "./memory-schema-recall.js";
+import { readMemoryRecallMetadata } from "./memory-recall-metadata.js";
+import { ensureMemoryRecallMetadataSchema } from "./memory-schema-recall.js";
 import { ensureMemoryIndexSchema } from "./memory-schema.js";
 
 describe("memory index schema", () => {
-  it("lazily adds nullable recall metadata columns without a schema bump", () => {
+  it("migrates unreleased inline recall metadata without changing chunk rows", () => {
     const db = new DatabaseSync(":memory:");
     try {
       db.exec(`
@@ -21,139 +17,47 @@ describe("memory index schema", () => {
           id TEXT PRIMARY KEY, path TEXT NOT NULL, source TEXT NOT NULL DEFAULT 'memory',
           start_line INTEGER NOT NULL, end_line INTEGER NOT NULL, hash TEXT NOT NULL,
           model TEXT NOT NULL, text TEXT NOT NULL, embedding TEXT NOT NULL,
-          updated_at INTEGER NOT NULL
+          updated_at INTEGER NOT NULL,
+          importance INTEGER CHECK (importance IS NULL OR importance BETWEEN 1 AND 10),
+          triggers TEXT,
+          project_key TEXT
         ) STRICT;
+        INSERT INTO memory_index_chunks VALUES (
+          'legacy', 'MEMORY.md', 'memory', 1, 1, 'h', 'm', 'body', '[]', 7,
+          8, 'legacy trigger', 'project/key'
+        );
       `);
-      db.exec("BEGIN IMMEDIATE");
-      ensureMemoryRecallMetadataColumns(db);
-      db.exec("ROLLBACK");
+
+      ensureMemoryRecallMetadataSchema(db);
+
       expect(
         db
           .prepare("SELECT name FROM pragma_table_info('memory_index_chunks') ORDER BY cid")
           .all()
           .map((row) => (row as { name: string }).name),
-      ).not.toContain("importance");
-      ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: false });
-      const columns = db
-        .prepare("SELECT name FROM pragma_table_info('memory_index_chunks') ORDER BY cid")
-        .all()
-        .map((row) => (row as { name: string }).name);
-      expect(columns).toContain("importance");
-      expect(columns).toContain("triggers");
-      expect(columns).toContain("project_key");
-      expect(() =>
-        db
-          .prepare(
-            `INSERT INTO memory_index_chunks
-             (id, path, start_line, end_line, hash, model, text, embedding, updated_at, importance)
-             VALUES ('bad', 'MEMORY.md', 1, 1, 'h', 'm', 't', '[]', 1, 11)`,
-          )
-          .run(),
-      ).toThrow();
-      db.prepare(
-        `INSERT INTO memory_index_chunks
-         (id, path, start_line, end_line, hash, model, text, embedding, updated_at, importance, triggers, project_key)
-         VALUES ('good', 'MEMORY.md', 1, 1, 'h', 'm', 't', '[]', 1, 9, 'when flying', 'github.com/openclaw/openclaw')`,
-      ).run();
-      expect(readMemoryRecallMetadata(db, ["good"]).get("good")).toEqual({
-        id: "good",
-        importance: 9,
-        triggers: "when flying",
-        project_key: "github.com/openclaw/openclaw",
+      ).toEqual([
+        "id",
+        "path",
+        "source",
+        "start_line",
+        "end_line",
+        "hash",
+        "model",
+        "text",
+        "embedding",
+        "updated_at",
+      ]);
+      expect(db.prepare("SELECT id, text, updated_at FROM memory_index_chunks").get()).toEqual({
+        id: "legacy",
+        text: "body",
+        updated_at: 7,
       });
-      expect(readCuratedMemoryTriggerCandidates(db, 10)).toEqual([
-        {
-          id: "good",
-          path: "MEMORY.md",
-          source: "memory",
-          start_line: 1,
-          end_line: 1,
-          text: "t",
-          importance: 9,
-          triggers: "when flying",
-          project_key: "github.com/openclaw/openclaw",
-        },
-      ]);
-      const insertDaily = db.prepare(
-        `INSERT INTO memory_index_chunks
-         (id, path, start_line, end_line, hash, model, text, embedding, updated_at, project_key)
-         VALUES (?, ?, 1, 1, ?, 'm', 'daily', '[]', 2, 'github.com/openclaw/openclaw')`,
-      );
-      for (let index = 0; index < 80; index += 1) {
-        const id = `daily-${String(index).padStart(3, "0")}`;
-        insertDaily.run(id, `memory/2026-07-${String(index + 1).padStart(3, "0")}.md`, id);
-      }
-      expect(readCuratedProjectMemoryCandidates(db, 1, ["github.com/openclaw/openclaw"])).toEqual([
-        {
-          id: "good",
-          path: "MEMORY.md",
-          source: "memory",
-          start_line: 1,
-          end_line: 1,
-          text: "t",
-          importance: 9,
-          triggers: "when flying",
-          project_key: "github.com/openclaw/openclaw",
-        },
-      ]);
-      const insertBootstrapCandidate = db.prepare(
-        `INSERT INTO memory_index_chunks
-         (id, path, start_line, end_line, hash, model, text, embedding, updated_at, importance, project_key)
-         VALUES (?, 'MEMORY.md', ?, ?, ?, 'm', ?, '[]', 2, ?, 'github.com/openclaw/openclaw')`,
-      );
-      for (let index = 0; index < 64; index += 1) {
-        const id = `bootstrap-low-${String(index).padStart(3, "0")}`;
-        insertBootstrapCandidate.run(id, index + 2, index + 2, id, "low", 1);
-      }
-      insertBootstrapCandidate.run(
-        "bootstrap-high",
-        100,
-        100,
-        "bootstrap-high",
-        "high-priority bootstrap fact",
-        10,
-      );
-      expect(readCuratedProjectMemoryCandidates(db, 48, ["github.com/openclaw/openclaw"])).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            id: "bootstrap-high",
-            text: "high-priority bootstrap fact",
-            importance: 10,
-          }),
-        ]),
-      );
-      db.prepare(
-        `INSERT INTO memory_index_chunks
-         (id, path, start_line, end_line, hash, model, text, embedding, updated_at, importance, triggers, project_key)
-         VALUES ('a-foreign', 'MEMORY.md', 2, 2, 'h2', 'm', 'foreign', '[]', 2, 9, 'when flying', 'github.com/example/other')`,
-      ).run();
-      expect(readCuratedMemoryTriggerCandidates(db, 1, ["github.com/openclaw/openclaw"])).toEqual([
-        {
-          id: "good",
-          path: "MEMORY.md",
-          source: "memory",
-          start_line: 1,
-          end_line: 1,
-          text: "t",
-          importance: 9,
-          triggers: "when flying",
-          project_key: "github.com/openclaw/openclaw",
-        },
-      ]);
-      expect(readCuratedMemoryTriggerCandidates(db, 1, [])).toEqual([]);
-      db.prepare(
-        `INSERT INTO memory_index_chunks
-         (id, path, start_line, end_line, hash, model, text, embedding, updated_at, importance, triggers, project_key)
-         VALUES ('a-fourth', 'MEMORY.md', 3, 3, 'h3', 'm', 'fourth', '[]', 3, 8, 'when flying', 'project/d')`,
-      ).run();
-      expect(
-        readCuratedMemoryTriggerCandidates(db, 1, [
-          "project/a",
-          "project/b",
-          "project/c",
-          "project/d",
-        ])[0],
-      ).toMatchObject({ id: "a-fourth", project_key: "project/d" });
+      expect(readMemoryRecallMetadata(db, ["legacy"]).get("legacy")).toEqual({
+        id: "legacy",
+        importance: 8,
+        triggers: "legacy trigger",
+        project_key: "project/key",
+      });
     } finally {
       db.close();
     }
@@ -171,7 +75,7 @@ describe("memory index schema", () => {
 
     const readOnly = new DatabaseSync(databasePath, { readOnly: true });
     try {
-      expect(() => ensureMemoryRecallMetadataColumns(readOnly)).not.toThrow();
+      expect(() => ensureMemoryRecallMetadataSchema(readOnly)).not.toThrow();
     } finally {
       readOnly.close();
       fs.rmSync(rootDir, { recursive: true, force: true });
@@ -277,7 +181,23 @@ describe("memory index schema", () => {
            FROM memory_index_chunk_provenance WHERE chunk_id = ?`,
           )
           .get("chunk-2"),
-      ).toEqual({ origin_class: "agent", session_kind: "unknown", observed_at: 50 });
+      ).toBeUndefined();
+      expect(
+        db
+          .prepare(
+            "SELECT name FROM sqlite_schema WHERE type = 'trigger' AND name = 'memory_index_chunk_provenance_after_insert'",
+          )
+          .get(),
+      ).toBeUndefined();
+      ensureMemoryIndexSchema({ db, cacheEnabled: true, ftsEnabled: true });
+      expect(
+        db
+          .prepare(
+            `SELECT origin_class, session_kind, observed_at
+             FROM memory_index_chunk_provenance WHERE chunk_id = ?`,
+          )
+          .get("chunk-2"),
+      ).toEqual({ origin_class: "untrusted", session_kind: "unknown", observed_at: 50 });
       expect(db.prepare("SELECT id, text FROM memory_index_chunks_fts").all()).toEqual([
         { id: "chunk-1", text: "remember this" },
       ]);

@@ -12,6 +12,7 @@ import type { InternalChannelThreadingToolContext } from "../../channels/threadi
 import { resolveCommandSecretRefsViaGateway } from "../../cli/command-secret-gateway.js";
 import {
   getAgentRuntimeCommandSecretTargetIds,
+  getAgentRuntimeOptionalCommandSecretPaths,
   getScopedChannelsCommandSecretTargets,
 } from "../../cli/command-secret-targets.js";
 import { resolveMessageSecretScope } from "../../cli/message-secret-scope.js";
@@ -73,6 +74,7 @@ export async function resolveQueuedReplyExecutionConfig(
     config: runtimeConfig,
     commandName: "reply",
     targetIds: getAgentRuntimeCommandSecretTargetIds(),
+    optionalActivePaths: getAgentRuntimeOptionalCommandSecretPaths(runtimeConfig),
   });
   const baseResolvedConfig = resolvedConfig ?? runtimeConfig;
 

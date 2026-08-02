@@ -28,6 +28,13 @@ export type SessionScope = "per-sender" | "global";
 export type SessionChatType = ChatType;
 type SessionVisibility = "shared" | "read-only" | "suggest" | "draft";
 
+export type SessionToolOverrides = {
+  mcpServers?: Record<string, boolean>;
+  mcpToolsDeny?: Record<string, string[]>;
+  skills?: Record<string, boolean>;
+  webSearch?: boolean;
+};
+
 export type SessionOrigin = {
   label?: string;
   provider?: string;
@@ -80,6 +87,15 @@ export type CliSessionReseedReceipt = {
   promptHash: string;
   localSessionId: string;
   userTurnDisposition: "persisted" | "omitted";
+};
+
+export type SessionDiffBaseline = {
+  version: 1;
+  sessionId: string;
+  root: string;
+  files: Array<{ path: string; fingerprint: string }>;
+  /** Some checkout entries could not be fingerprinted without exceeding diff safety caps. */
+  truncated?: true;
 };
 
 export type CliSessionBinding = {
@@ -334,6 +350,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     spawnedWorkspaceDir?: string;
     /** Task working directory inherited by spawned sessions and reused on later turns. */
     spawnedCwd?: string;
+    /** Content-free fingerprints for checkout changes that predate this session generation. */
+    sessionDiffBaseline?: SessionDiffBaseline;
     /**
      * Managed worktree bound to this session; set with spawnedCwd at worktree
      * creation and cleared together when a plain New Chat detaches the checkout.
@@ -434,6 +452,7 @@ type SessionEntryCore = SessionRestartRecoveryState &
       };
     };
     fastMode?: FastMode;
+    toolOverrides?: SessionToolOverrides;
     /** Swarm group for collector-mode child sessions. */
     swarmGroupId?: string;
     /** Marks non-interactive collector-mode child sessions. */

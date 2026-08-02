@@ -45,7 +45,7 @@ describeControlUiE2e("Control UI terminal repaint", () => {
     await server?.close();
   });
 
-  it("keeps one interactive terminal clean across repeated hide and show cycles", async () => {
+  it("keeps one interactive terminal sized and clean across repeated hide and show cycles", async () => {
     const context = await browser.newContext({
       serviceWorkers: "block",
       viewport: { width: 1180, height: 520 },
@@ -81,7 +81,8 @@ describeControlUiE2e("Control UI terminal repaint", () => {
       await waitForControlUiGatewayReady(page);
       await waitForControlUiTerminalReady(page);
       await page.keyboard.press("Control+Backquote");
-      await gateway.waitForRequest("terminal.open");
+      const openRequest = await gateway.waitForRequest("terminal.open");
+      const openParams = openRequest.params as { cols?: unknown };
 
       const hideTerminal = page.getByRole("button", { name: "Hide terminal" });
       const terminalCanvas = page.locator(".tp-host canvas");
@@ -94,6 +95,14 @@ describeControlUiE2e("Control UI terminal repaint", () => {
       });
       await expect.poll(() => terminalCanvasDigest(terminalCanvas)).not.toBe(blankCanvasDigest);
       const renderedCanvasDigest = await terminalCanvasDigest(terminalCanvas);
+
+      if (screenshotPath) {
+        await fs.mkdir(path.dirname(screenshotPath), { recursive: true });
+        await page.screenshot({ path: screenshotPath });
+      }
+
+      expect(openParams.cols).toBeTypeOf("number");
+      expect(openParams.cols).toBeGreaterThanOrEqual(125);
 
       for (let cycle = 0; cycle < 3; cycle += 1) {
         await hideTerminal.click();
@@ -109,11 +118,6 @@ describeControlUiE2e("Control UI terminal repaint", () => {
         .poll(async () => (await gateway.getRequests("terminal.input")).length)
         .toBeGreaterThan(0);
       expect(await gateway.getRequests("terminal.open")).toHaveLength(1);
-
-      if (screenshotPath) {
-        await fs.mkdir(path.dirname(screenshotPath), { recursive: true });
-        await page.screenshot({ path: screenshotPath });
-      }
     } finally {
       await context.close();
     }

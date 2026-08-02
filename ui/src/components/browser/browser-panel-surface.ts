@@ -1,3 +1,4 @@
+import { t } from "../../i18n/index.ts";
 import {
   buildAnnotationPrompt,
   composeAnnotatedImage,
@@ -41,7 +42,9 @@ export function loadBrowserPanelImage(dataUrl: string): Promise<HTMLImageElement
   return new Promise((resolve, reject) => {
     const image = new Image();
     image.addEventListener("load", () => resolve(image));
-    image.addEventListener("error", () => reject(new Error("screenshot decode failed")));
+    image.addEventListener("error", () =>
+      reject(new Error(t("browser.errors.screenshotDecodeFailed"))),
+    );
     image.src = dataUrl;
   });
 }

@@ -242,7 +242,9 @@ function resetAgentCliCommandMocksForTest() {
   vi.stubEnv("OPENCLAW_GATEWAY_URL", "");
   agentViaGatewayTesting.resetLazyImportsForTests();
   agentViaGatewayTesting.setGatewayAbortRetryDelaysMsForTests([0, 0, 0, 0]);
-  loadAgentSessionModuleMock.mockImplementation(async () => await import("./agent/session.js"));
+  loadAgentSessionModuleMock.mockImplementation(
+    async () => await import("./agent/session.runtime.js"),
+  );
   agentViaGatewayTesting.setAgentSessionModuleLoaderForTests(loadAgentSessionModuleMock);
   originalForceConsoleToStderr = loggingState.forceConsoleToStderr;
   loggingState.forceConsoleToStderr = false;
@@ -313,6 +315,48 @@ describe("agentCliCommand", () => {
       expect(agentModuleLoadCount).not.toHaveBeenCalled();
       expect(runtime.log).toHaveBeenCalledWith("hello");
     });
+  });
+
+  it("keeps an agent-scoped gateway turn off session and delivery runtimes", async () => {
+    await withTempStore(
+      async () => {
+        mockGatewaySuccessReply();
+
+        await agentCliCommand(
+          {
+            message: "hi",
+            agent: "ops",
+            json: true,
+            deliver: true,
+            channel: "discord",
+            replyTo: "123456789",
+            replyChannel: "slack",
+            replyAccount: "reports",
+            bestEffortDeliver: true,
+          },
+          jsonRuntime,
+        );
+
+        const request = requireRecord(
+          requireFirstCallArg(callGateway, "gateway"),
+          "gateway request",
+        );
+        expect(request.params).toMatchObject({
+          agentId: "ops",
+          sessionKey: undefined,
+          deliver: true,
+          channel: "discord",
+          replyTo: "123456789",
+          replyChannel: "slack",
+          replyAccountId: "reports",
+          bestEffortDeliver: true,
+        });
+        expect(loadAgentSessionModuleMock).not.toHaveBeenCalled();
+        expect(agentCommand).not.toHaveBeenCalled();
+        expect(jsonRuntime.writeJson).toHaveBeenCalledOnce();
+      },
+      { agents: { list: [{ id: "main" }, { id: "ops" }] } },
+    );
   });
 
   it.each([
@@ -1836,6 +1880,44 @@ describe("agentCliCommand", () => {
       expect(localOpts.cleanupCliLiveSessionOnRunEnd).toBe(true);
       expect(localOpts.oneShotCliRun).toBe(true);
       expect(runtime.log).toHaveBeenCalledWith("local");
+    });
+  });
+
+  it("forwards an explicit local timeout and leaves omission to the configured default", async () => {
+    await withTempStore(async () => {
+      mockLocalAgentReply();
+
+      await agentCliCommand(
+        {
+          message: "hi",
+          to: "+1555",
+          local: true,
+          timeout: "21600",
+        },
+        runtime,
+      );
+
+      expect(
+        requireRecord(requireFirstCallArg(agentCommand, "embedded agent"), "embedded agent options")
+          .timeout,
+      ).toBe("21600");
+
+      agentCommand.mockClear();
+      mockLocalAgentReply();
+
+      await agentCliCommand(
+        {
+          message: "hi",
+          to: "+1555",
+          local: true,
+        },
+        runtime,
+      );
+
+      expect(
+        requireRecord(requireFirstCallArg(agentCommand, "embedded agent"), "embedded agent options")
+          .timeout,
+      ).toBeUndefined();
     });
   });
 

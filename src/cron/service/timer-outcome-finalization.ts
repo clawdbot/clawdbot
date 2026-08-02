@@ -134,8 +134,11 @@ export async function finalizeCompletedCronRunOutcomes(
 
       const rollbackSnapshot = snapshotStoreForRollback(state);
       const removedJobs: CronJob[] = [];
+      const postPersistAutoDisableNotifications: Array<() => void> = [];
       for (const outcome of finalizedOutcomes) {
-        const removedJob = applyOutcomeToStoredJob(state, outcome);
+        const removedJob = applyOutcomeToStoredJob(state, outcome, {
+          deferredAutoDisableNotifications: postPersistAutoDisableNotifications,
+        });
         if (removedJob) {
           removedJobs.push(removedJob);
         }
@@ -146,10 +149,17 @@ export async function finalizeCompletedCronRunOutcomes(
       recomputeNextRunsForMaintenance(
         state,
         opts?.repairFutureCronNextRunAtMs === false
-          ? { repairFutureCronNextRunAtMs: false }
-          : undefined,
+          ? {
+              repairFutureCronNextRunAtMs: false,
+              deferredAutoDisableNotifications: postPersistAutoDisableNotifications,
+            }
+          : { deferredAutoDisableNotifications: postPersistAutoDisableNotifications },
       );
-      await persistOrRestore(state, rollbackSnapshot);
+      // Auto-disable alerts describe durable state. Drain them only after the
+      // terminal write succeeds so a rolled-back run cannot publish a false transition.
+      await persistOrRestore(state, rollbackSnapshot, {
+        postPersistAutoDisableNotifications,
+      });
       finishPersistedQuietCronTaskRuns(state, finalizedOutcomes);
       for (const removedJob of removedJobs) {
         emit(state, { jobId: removedJob.id, action: "removed", job: removedJob });

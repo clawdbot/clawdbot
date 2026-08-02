@@ -157,10 +157,15 @@ describe("slack setup contract", () => {
       },
       {
         name: "user identity rejects relay mode",
-        cfg: {} as OpenClawConfig,
+        cfg: {
+          channels: {
+            slack: {
+              mode: "relay",
+            },
+          },
+        } as OpenClawConfig,
         input: {
           identity: "user",
-          mode: "relay",
           userToken: "test-user-token",
           appToken: "test-app-token",
         },

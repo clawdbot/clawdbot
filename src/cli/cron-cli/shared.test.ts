@@ -129,6 +129,33 @@ describe("printCronList", () => {
     expect(output).not.toContain(injectedMarker);
   });
 
+  it.each([
+    ["halfwidth voiced kana", `${"x".repeat(23)}ﾊﾞ`, `${"x".repeat(21)}...`],
+    ["halfwidth semi-voiced kana", `${"x".repeat(23)}ﾊﾟ`, `${"x".repeat(21)}...`],
+    ["zero-width space", `${"x".repeat(23)}\u200B`, `${"x".repeat(23)}\u200B `],
+    ["word joiner", `${"x".repeat(23)}\u2060`, `${"x".repeat(23)}\u2060 `],
+    ["zero-width no-break space", `${"x".repeat(23)}\uFEFF`, `${"x".repeat(23)}\uFEFF `],
+    ["leading zero-width non-joiner", `\u200C${"x".repeat(23)}`, `\u200C${"x".repeat(23)} `],
+    ["Hindi spacing mark", `${"x".repeat(23)}का`, `${"x".repeat(21)}...`],
+    ["repeated Hangul jamo", `${"x".repeat(22)}ᄀ가`, `${"x".repeat(21)}...`],
+    ["Hangul leading filler", `${"x".repeat(23)}\u115F`, `${"x".repeat(21)}...`],
+    ["Hangul compatibility filler", `${"x".repeat(23)}\u3164`, `${"x".repeat(21)}...`],
+    ["halfwidth Hangul filler", `${"x".repeat(23)}\uFFA0`, `${"x".repeat(23)}\uFFA0`],
+    ["zero-width Hangul vowel filler", `${"x".repeat(23)}\u1160`, `${"x".repeat(23)}\u1160 `],
+    ["lone high surrogate", `${"x".repeat(23)}\uD800`, `${"x".repeat(23)}\uD800`],
+    ["lone low surrogate", `${"x".repeat(23)}\uDC00`, `${"x".repeat(23)}\uDC00`],
+  ])("aligns the %s name cell without relying on its width helper", (_label, name, expected) => {
+    const { logs, runtime } = createRuntimeLogCapture();
+    printCronList([createBaseJob({ name })], runtime);
+
+    const [header = "", row = ""] = logs;
+    const nameColumn = header.indexOf("Name");
+    const scheduleColumn = row.indexOf("at ");
+    expect(nameColumn).toBeGreaterThan(-1);
+    expect(scheduleColumn).toBeGreaterThan(nameColumn);
+    expect(row.slice(nameColumn, scheduleColumn - 1)).toBe(expected);
+  });
+
   it("sanitizes and bounds named-session targets", () => {
     const { logs, runtime } = createRuntimeLogCapture();
     const injectedMarker = "cron-target-injection";
@@ -276,6 +303,51 @@ describe("printCronList", () => {
     const singleLine = logs.find((line) => line.includes("single-failure-job")) ?? "";
     expect(singleLine).toContain("error");
     expect(singleLine).not.toContain("(1x)");
+  });
+
+  it("shows why the scheduler auto-disabled a job without changing JSON status", () => {
+    const runFailures = createBaseJob({
+      id: "auto-disabled-runs",
+      name: "Auto-disabled runs",
+      enabled: false,
+      state: {
+        consecutiveErrors: 10,
+        autoDisabled: {
+          reason: "consecutive-failures",
+          atMs: Date.now(),
+          consecutiveErrors: 10,
+        },
+      },
+    });
+    const scheduleErrors = createBaseJob({
+      id: "auto-disabled-schedule",
+      name: "Auto-disabled schedule",
+      enabled: false,
+      state: {
+        scheduleErrorCount: 3,
+        autoDisabled: {
+          reason: "schedule-errors",
+          atMs: Date.now(),
+          consecutiveErrors: 3,
+        },
+      },
+    });
+
+    const list = createRuntimeLogCapture();
+    printCronList([runFailures, scheduleErrors], list.runtime);
+    expectLogsToInclude(list.logs, "disabled (10x)");
+    expectLogsToInclude(list.logs, "disabled (schedule)");
+
+    const show = createRuntimeLogCapture();
+    printCronShow(runFailures, show.runtime);
+    expectLogsToInclude(show.logs, "status: disabled (10x)");
+
+    expect(enrichCronJsonWithStatus(runFailures)).toMatchObject({
+      status: "disabled",
+      state: {
+        autoDisabled: { reason: "consecutive-failures", consecutiveErrors: 10 },
+      },
+    });
   });
 
   it("caps the failure count so the status column never overflows", () => {
@@ -449,6 +521,24 @@ describe("printCronList", () => {
 });
 
 describe("parseAt", () => {
+  it.each([
+    ["2026-03-23T00:00:00", "UTC", "2026-03-23T00:00:00.000Z"],
+    ["2026-03-23T00:30:00.250", "UTC", "2026-03-23T00:30:00.250Z"],
+    ["2026-03-23T00:30:00", "Europe/Oslo", "2026-03-22T23:30:00.000Z"],
+    ["2026-03-23t23:00:00", "Europe/Oslo", "2026-03-23T22:00:00.000Z"],
+    ["2026-03-23T23:00:00", "Europe/Oslo", "2026-03-23T22:00:00.000Z"],
+    ["2026-03-29T01:30:00", "Europe/Oslo", "2026-03-29T00:30:00.000Z"],
+    ["2026-03-29T02:30:00", "Europe/Oslo", null],
+    ["2027-02-28T24:00:00", "UTC", "2027-03-01T00:00:00.000Z"],
+    ["2027-02-28t24:00", "Europe/Oslo", "2027-02-28T23:00:00.000Z"],
+    ["2027-02-28t24:00:00.000", "America/New_York", "2027-03-01T05:00:00.000Z"],
+    ["2027-02-28t24:00:00+05:45", "Europe/Oslo", "2027-02-28T18:15:00.000Z"],
+    ["2027-02-28t24:00:00.001", "UTC", null],
+    ["2027-09-04t24:00", "America/Santiago", null],
+  ])("interprets offsetless one-shot %s in %s", (input, timezone, expected) => {
+    expect(parseAt(input, timezone)).toBe(expected);
+  });
+
   it("accepts leading plus relative durations for cron add --at", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-25T00:00:00.000Z"));

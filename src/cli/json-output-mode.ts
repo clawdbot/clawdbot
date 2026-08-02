@@ -18,7 +18,11 @@ export function hasJsonOutputFlag(argv: readonly string[]): boolean {
 export async function withConsoleLogsRoutedToStderrForJson<T>(
   argv: readonly string[],
   run: () => Promise<T>,
-  options: { machineOutput?: boolean; restoreChanges?: boolean } = {},
+  options: {
+    machineOutput?: boolean;
+    restoreChanges?: boolean;
+    retainRoutingUntilProcessExit?: boolean;
+  } = {},
 ): Promise<T> {
   const forceStderr = hasJsonOutputFlag(argv) || options.machineOutput;
   if (!forceStderr && !options.restoreChanges) {
@@ -33,9 +37,11 @@ export async function withConsoleLogsRoutedToStderrForJson<T>(
   try {
     return await run();
   } finally {
-    // Restore the process-wide logging switch so nested/serial CLI calls keep their own output mode.
-    loggingState.forceConsoleToStderr = previousForceStderr;
-    loggingState.earlyConsoleRoutingRestore = previousEarlyRestore;
+    if (!options.retainRoutingUntilProcessExit) {
+      // Restore the process-wide logging switch so nested/serial CLI calls keep their own output mode.
+      loggingState.forceConsoleToStderr = previousForceStderr;
+      loggingState.earlyConsoleRoutingRestore = previousEarlyRestore;
+    }
   }
 }
 

@@ -618,10 +618,10 @@ For an end-to-end authoring guide, see
 
 ### Exclusive slots
 
-| Method                                     | What it registers                                                                                                                                                                                  |
-| ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `api.registerContextEngine(id, factory)`   | Context engine (one active at a time). Lifecycle callbacks receive `runtimeSettings` when the host can provide model/provider/mode diagnostics; older strict engines are retried without that key. |
-| `api.registerMemoryCapability(capability)` | Unified memory capability                                                                                                                                                                          |
+| Method                                     | What it registers                                                                                                                                                                                                             |
+| ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `api.registerContextEngine(id, factory)`   | Context engine (one active at a time). Declare accepted host-added lifecycle fields with `info.acceptedHostParams`; undeclared engines receive the legacy field set through 2026-08-12, then receive all current host fields. |
+| `api.registerMemoryCapability(capability)` | Unified memory capability                                                                                                                                                                                                     |
 
 ### Deprecated memory embedding adapters
 
@@ -690,20 +690,20 @@ shutdown, see [Safe external cron projection](/plugins/hooks#safe-external-cron-
 
 ### API object fields
 
-| Field                    | Type                      | Description                                                                                 |
-| ------------------------ | ------------------------- | ------------------------------------------------------------------------------------------- |
-| `api.id`                 | `string`                  | Plugin id                                                                                   |
-| `api.name`               | `string`                  | Display name                                                                                |
-| `api.version`            | `string?`                 | Plugin version (optional)                                                                   |
-| `api.description`        | `string?`                 | Plugin description (optional)                                                               |
-| `api.source`             | `string`                  | Plugin source path                                                                          |
-| `api.rootDir`            | `string?`                 | Plugin root directory (optional)                                                            |
-| `api.config`             | `OpenClawConfig`          | Current config snapshot (active in-memory runtime snapshot when available)                  |
-| `api.pluginConfig`       | `Record<string, unknown>` | Plugin-specific config from `plugins.entries.<id>.config`                                   |
-| `api.runtime`            | `PluginRuntime`           | [Runtime helpers](/plugins/sdk-runtime)                                                     |
-| `api.logger`             | `PluginLogger`            | Scoped logger (`debug`, `info`, `warn`, `error`)                                            |
-| `api.registrationMode`   | `PluginRegistrationMode`  | Current load mode; `"setup-runtime"` is the lightweight pre-full-entry startup/setup window |
-| `api.resolvePath(input)` | `(string) => string`      | Resolve path relative to plugin root                                                        |
+| Field                    | Type                      | Description                                                                               |
+| ------------------------ | ------------------------- | ----------------------------------------------------------------------------------------- |
+| `api.id`                 | `string`                  | Plugin id                                                                                 |
+| `api.name`               | `string`                  | Display name                                                                              |
+| `api.version`            | `string?`                 | Plugin version (optional)                                                                 |
+| `api.description`        | `string?`                 | Plugin description (optional)                                                             |
+| `api.source`             | `string`                  | Plugin source path                                                                        |
+| `api.rootDir`            | `string?`                 | Plugin root directory (optional)                                                          |
+| `api.config`             | `OpenClawConfig`          | Current config snapshot (active in-memory runtime snapshot when available)                |
+| `api.pluginConfig`       | `Record<string, unknown>` | Plugin-specific config from `plugins.entries.<id>.config`                                 |
+| `api.runtime`            | `PluginRuntime`           | [Runtime helpers](/plugins/sdk-runtime)                                                   |
+| `api.logger`             | `PluginLogger`            | Scoped logger (`debug`, `info`, `warn`, `error`)                                          |
+| `api.registrationMode`   | `PluginRegistrationMode`  | Current load mode; `"setup-runtime"` is the lightweight setup flow with runtime available |
+| `api.resolvePath(input)` | `(string) => string`      | Resolve path relative to plugin root                                                      |
 
 ## Internal module convention
 

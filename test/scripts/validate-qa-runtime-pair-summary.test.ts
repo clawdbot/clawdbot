@@ -9,7 +9,7 @@ type CellStatus = "pass" | "fail" | "skip";
 
 type RuntimeCell = {
   runtime: "openclaw" | "codex";
-  status: CellStatus;
+  status?: CellStatus;
   details?: string;
   runtimeErrorClass?: string;
   toolCalls: Array<{ errorClass?: string }>;
@@ -147,6 +147,47 @@ describe("frozen QA runtime-pair summary validation", () => {
       failed: 0,
       skipped: 2,
     });
+  });
+
+  it("accepts statusless passing cells from an older frozen candidate", () => {
+    const legacyScenario = scenario({ name: "legacy passing", status: "pass" });
+    delete legacyScenario.runtimeParity.cells.openclaw.status;
+    delete legacyScenario.runtimeParity.cells.codex.status;
+
+    expect(validateQaRuntimePairSummary(summary([legacyScenario]))).toEqual({
+      total: 1,
+      passed: 1,
+      failed: 0,
+      skipped: 0,
+    });
+  });
+
+  it("accepts an older all-passing summary that omitted zero skipped count", () => {
+    const fixture = summary([scenario({ name: "legacy passing", status: "pass" })]);
+    delete (fixture.counts as { skipped?: number }).skipped;
+
+    expect(validateQaRuntimePairSummary(fixture)).toEqual({
+      total: 1,
+      passed: 1,
+      failed: 0,
+      skipped: 0,
+    });
+  });
+
+  it("requires skipped count when validated evidence contains skips", () => {
+    const fixture = summary([
+      scenario({
+        name: "tracked gap",
+        status: "skip",
+        codexStatus: "skip",
+        codexDetails: "known-harness-gap exec: tracked",
+      }),
+    ]);
+    delete (fixture.counts as { skipped?: number }).skipped;
+
+    expect(() => validateQaRuntimePairSummary(fixture)).toThrow(
+      "counts do not match validated scenario evidence",
+    );
   });
 
   it("accepts a tracked Codex harness gap kept advisory by the current classifier", () => {

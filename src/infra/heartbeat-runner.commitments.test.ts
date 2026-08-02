@@ -77,6 +77,7 @@ describe("runHeartbeatOnce commitments", () => {
     id: string;
     sessionKey: string;
     to: string;
+    accountId?: string | null;
     dueWindow?: CommitmentRecord["dueWindow"];
   }): CommitmentRecord {
     return {
@@ -84,7 +85,7 @@ describe("runHeartbeatOnce commitments", () => {
       agentId: "main",
       sessionKey: params.sessionKey,
       channel: "telegram",
-      accountId: "primary",
+      ...(params.accountId === null ? {} : { accountId: params.accountId ?? "primary" }),
       to: params.to,
       kind: "event_check_in",
       sensitivity: "routine",
@@ -120,6 +121,8 @@ describe("runHeartbeatOnce commitments", () => {
   async function setupCommitmentCase(params?: {
     replyText?: string;
     target?: "last" | "none";
+    heartbeatAccountId?: string;
+    commitmentAccountId?: string | null;
     dueWindow?: CommitmentRecord["dueWindow"];
     visibleReplies?: "automatic" | "message_tool";
     isolatedSession?: boolean;
@@ -135,12 +138,25 @@ describe("runHeartbeatOnce commitments", () => {
             heartbeat: {
               every: "5m",
               target: params?.target ?? "last",
+              ...(params?.heartbeatAccountId ? { accountId: params.heartbeatAccountId } : {}),
               ...(params?.isolatedSession ? { isolatedSession: true } : {}),
             },
           },
         },
         ...(params?.visibleReplies ? { messages: { visibleReplies: params.visibleReplies } } : {}),
-        channels: { telegram: { allowFrom: ["*"] } },
+        channels: {
+          telegram: {
+            allowFrom: ["*"],
+            ...(params?.heartbeatAccountId
+              ? {
+                  accounts: {
+                    primary: { botToken: "primary-token" },
+                    [params.heartbeatAccountId]: { botToken: "heartbeat-token" },
+                  },
+                }
+              : {}),
+          },
+        },
         session: { store: storePath },
       };
       await seedSessionStore(storePath, sessionKey, {
@@ -155,6 +171,7 @@ describe("runHeartbeatOnce commitments", () => {
             id: "cm_interview",
             sessionKey,
             to: "155462274",
+            accountId: params?.commitmentAccountId,
             dueWindow: params?.dueWindow,
           }),
         ],
@@ -469,6 +486,124 @@ describe("runHeartbeatOnce commitments", () => {
     });
   });
 
+  it.each([
+    { taskPreemptsCommitment: true, expectedRunCount: 2 },
+    { taskPreemptsCommitment: false, expectedRunCount: 1 },
+  ])(
+    "delivers a default-session commitment exactly once when task preemption is $taskPreemptsCommitment",
+    async ({ taskPreemptsCommitment, expectedRunCount }) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(nowMs);
+
+      await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+        setTestEnvValue("OPENCLAW_STATE_DIR", tmpDir);
+        const sessionKey = "agent:main:telegram:user-155462274";
+        const cfg: OpenClawConfig = {
+          agents: {
+            defaults: {
+              workspace: tmpDir,
+              heartbeat: { every: "5m", target: "last", session: sessionKey },
+            },
+          },
+          channels: { telegram: { allowFrom: ["*"] } },
+          session: { store: storePath },
+        };
+        await seedSessionStore(storePath, sessionKey, {
+          lastChannel: "telegram",
+          lastProvider: "telegram",
+          lastTo: "stale-target",
+        });
+        await saveCommitmentStore(undefined, {
+          version: 1,
+          commitments: [buildCommitment({ id: "cm_interview", sessionKey, to: "155462274" })],
+        });
+
+        const sendTelegram = vi.fn().mockResolvedValue({
+          messageId: "m1",
+          chatId: "155462274",
+        });
+        replySpy.mockImplementation(async (ctx, opts) => {
+          if (taskPreemptsCommitment && replySpy.mock.calls.length === 1) {
+            expect(ctx.Body).toContain("Run the following periodic tasks");
+            expect(ctx.Body).toContain("Check deployment status with the normal tools");
+            expect(ctx.Body).not.toContain("Due inferred follow-up commitments");
+            expect(opts?.disableTools).toBeUndefined();
+            return { text: HEARTBEAT_TOKEN };
+          }
+
+          expect(ctx.Body).toContain("Due inferred follow-up commitments");
+          expect(ctx.Body).toContain("How did the interview go?");
+          expect(ctx.Body).not.toContain("Check deployment status with the normal tools");
+          expect(ctx.OriginatingTo).toBe("155462274");
+          expect(opts?.disableTools).toBe(true);
+          expect(opts?.skillFilter).toStrictEqual([]);
+          return { text: "How did the interview go?" };
+        });
+
+        const runOnce = vi.fn<typeof runHeartbeatOnce>(async (opts) =>
+          runHeartbeatOnce({
+            ...opts,
+            ...(taskPreemptsCommitment && opts.runScope === "global"
+              ? {
+                  tasks: [
+                    {
+                      jobId: "job-deployment-status",
+                      name: "deployment-status",
+                      prompt: "Check deployment status with the normal tools",
+                    },
+                  ],
+                }
+              : {}),
+            deps: {
+              ...opts.deps,
+              getReplyFromConfig: replySpy,
+              telegram: sendTelegram,
+              getQueueSize: () => 0,
+              nowMs: () => nowMs,
+            },
+          }),
+        );
+        const runner = startHeartbeatRunner({
+          cfg,
+          runOnce,
+          stableSchedulerSeed: "same-session-commitment-monitor-tick",
+        });
+
+        requestHeartbeat({
+          source: "interval",
+          intent: "scheduled",
+          reason: "interval",
+          agentId: "main",
+          scheduledEveryMs: 5 * 60_000,
+          coalesceMs: 0,
+        });
+        await vi.advanceTimersByTimeAsync(1);
+        await vi.waitFor(() => expect(runOnce).toHaveBeenCalledTimes(expectedRunCount));
+        runner.stop();
+
+        expect(replySpy).toHaveBeenCalledTimes(expectedRunCount);
+        if (taskPreemptsCommitment) {
+          expect(runOnce.mock.calls[1]?.[0]).toMatchObject({
+            agentId: "main",
+            runScope: "commitment-only",
+            sessionKey,
+          });
+        }
+        expect(sendTelegram).toHaveBeenCalledTimes(1);
+        expect(sendTelegram).toHaveBeenCalledWith(
+          "155462274",
+          "How did the interview go?",
+          expect.any(Object),
+        );
+        expectCommitmentFields((await loadCommitmentStore()).commitments[0], {
+          id: "cm_interview",
+          status: "sent",
+          attempts: 1,
+        });
+      });
+    },
+  );
+
   it("delivers due commitments on a targeted cron-monitor interval tick", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(nowMs);
@@ -522,10 +657,52 @@ describe("runHeartbeatOnce commitments", () => {
   });
 
   it("delivers due commitments to the original scope when heartbeat target is last", async () => {
-    const { result, sendTelegram, store } = await setupCommitmentCase();
+    const { result, sendTelegram, store } = await setupCommitmentCase({
+      heartbeatAccountId: "configured",
+      commitmentAccountId: "primary",
+    });
 
     expect(result.status).toBe("ran");
-    expect(sendTelegram).toHaveBeenCalled();
+    expect(sendTelegram).toHaveBeenCalledWith(
+      "155462274",
+      "How did the interview go?",
+      expect.objectContaining({ accountId: "primary" }),
+    );
+    expectCommitmentFields(store.commitments[0], {
+      id: "cm_interview",
+      status: "sent",
+      attempts: 1,
+      sentAtMs: nowMs,
+    });
+  });
+
+  it("uses the configured heartbeat account when a due commitment has no account", async () => {
+    const { result, sendTelegram, store } = await setupCommitmentCase({
+      heartbeatAccountId: "configured",
+      commitmentAccountId: null,
+    });
+
+    expect(result.status).toBe("ran");
+    expect(sendTelegram).toHaveBeenCalledWith(
+      "155462274",
+      "How did the interview go?",
+      expect.objectContaining({ accountId: "configured" }),
+    );
+    expectCommitmentFields(store.commitments[0], {
+      id: "cm_interview",
+      status: "sent",
+      attempts: 1,
+      sentAtMs: nowMs,
+    });
+  });
+
+  it("delivers user commitments when automatic heartbeat replies are message-tool-only", async () => {
+    const { result, sendTelegram, store } = await setupCommitmentCase({
+      visibleReplies: "message_tool",
+    });
+
+    expect(result.status).toBe("ran");
+    expect(sendTelegram).toHaveBeenCalledTimes(1);
     expectCommitmentFields(store.commitments[0], {
       id: "cm_interview",
       status: "sent",

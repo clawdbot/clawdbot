@@ -34,7 +34,7 @@ describe("tool-policy", () => {
   it("resolves known profiles and ignores unknown ones", () => {
     const coding = resolveToolProfilePolicy("coding");
     expect(coding?.allow).toContain("read");
-    expect(coding?.allow).toContain("cron");
+    expect(coding?.allow).toContain("automations");
     expect(coding?.allow).not.toContain("gateway");
     expect(resolveToolProfilePolicy("nope")).toBeUndefined();
   });
@@ -52,6 +52,9 @@ describe("tool-policy", () => {
     expect(normalizeToolName(" BASH ")).toBe("exec");
     expect(normalizeToolName("apply-patch")).toBe("apply_patch");
     expect(normalizeToolName("READ")).toBe("read");
+    // Pre-rename scheduler tool name from persisted config (RFC 0026).
+    expect(normalizeToolName("cron")).toBe("automations");
+    expect(normalizeToolName("automations")).toBe("automations");
   });
 
   it("collects explicit allowlist entries", () => {
@@ -177,6 +180,16 @@ describe("resolveSandboxToolPolicyForAgent", () => {
     const resolved = resolveSandboxToolPolicyForAgent(cfg, undefined);
     expect(resolved.allow).toEqual(["read"]);
     expect(resolved.deny).toEqual(["image"]);
+  });
+});
+
+describe("isToolAllowedByPolicyName — legacy scheduler tool name (RFC 0026)", () => {
+  it("allows the renamed tool through persisted legacy allow lists", () => {
+    expect(isToolAllowedByPolicyName("automations", { allow: ["cron"] })).toBe(true);
+  });
+
+  it("denies the renamed tool through persisted legacy deny lists", () => {
+    expect(isToolAllowedByPolicyName("automations", { deny: ["cron"] })).toBe(false);
   });
 });
 

@@ -108,6 +108,26 @@ describe("msteamsPlugin", () => {
     expect(looksLikeId?.("a:1bfPersonalChat")).toBe(true);
     expect(looksLikeId?.("user:Jane Doe")).toBe(false);
   });
+
+  it("recognizes provider-prefixed explicit targets without claiming display names", () => {
+    const messaging = msteamsPlugin.messaging;
+    const aadUserId = "40a1a0ed-4ff2-4164-a219-55518990c197";
+
+    expect(
+      ["teams", "msteams"].map((provider) => {
+        const target = `${provider}:user:${aadUserId}`;
+        return {
+          explicit: messaging?.targetResolver?.looksLikeId?.(target),
+          normalized: messaging?.normalizeTarget?.(target),
+        };
+      }),
+    ).toEqual([
+      { explicit: true, normalized: `user:${aadUserId}` },
+      { explicit: true, normalized: `user:${aadUserId}` },
+    ]);
+    expect(messaging?.targetResolver?.looksLikeId?.("teams:user:Jane Doe")).toBe(false);
+    expect(messaging?.targetResolver?.looksLikeId?.("msteams:user:Jane Doe")).toBe(false);
+  });
 });
 
 describe("msteams config schema", () => {

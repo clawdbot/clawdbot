@@ -77,6 +77,45 @@ class RoomChatTranscriptCacheTest {
     }
 
   @Test
+  fun transcriptRoundTripKeepsManagedAudioAndVideoMetadata() =
+    runTest {
+      val store = cache()
+      val audio =
+        ChatMessageContent(
+          type = "audio",
+          mimeType = "audio/mpeg",
+          fileName = "reply.mp3",
+          artifactId = "artifact_managed_media_33333333-3333-4333-8333-333333333333",
+          durationMs = 2_100,
+        )
+      val video =
+        ChatMessageContent(
+          type = "video",
+          mimeType = "video/mp4",
+          fileName = "demo.mp4",
+          artifactId = "artifact_managed_media_44444444-4444-4444-8444-444444444444",
+          durationMs = 5_300,
+          playback = "transcode",
+          width = 1920,
+          height = 1080,
+        )
+      store.saveTranscript(
+        gatewayId = "gateway-a",
+        agentId = "main",
+        sessionKey = "main",
+        messages =
+          listOf(
+            ChatMessage(id = "audio", role = "assistant", content = listOf(audio), timestampMs = 10),
+            ChatMessage(id = "video", role = "assistant", content = listOf(video), timestampMs = 11),
+          ),
+      )
+
+      val loaded = store.loadTranscript("gateway-a", "main", "main")
+
+      assertEquals(listOf(audio, video), loaded.map { it.content.single() })
+    }
+
+  @Test
   fun legacyStringArrayTranscriptRowsRemainReadable() =
     runTest {
       database.dao().insertMessages(

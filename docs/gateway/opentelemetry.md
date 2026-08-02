@@ -90,6 +90,7 @@ stdout, or `both` for both.
       logsEndpoint: "http://otel-collector:4318/v1/logs",
       protocol: "http/protobuf", // grpc disables OTLP export
       serviceName: "openclaw-gateway", // unset falls back to OTEL_SERVICE_NAME, then "openclaw"
+      metricNamePrefix: "acme.", // optional; include the separator
       headers: { "x-collector-token": "..." },
       traces: true,
       metrics: true,
@@ -102,6 +103,18 @@ stdout, or `both` for both.
   },
 }
 ```
+
+`metricNamePrefix` replaces the default `openclaw.` prefix only on
+OpenClaw-owned metrics. For example, `"acme."` exports `openclaw.tokens` as
+`acme.tokens`; set it to `""` to export `tokens` with no prefix. Non-empty
+values must start with an ASCII letter, use only letters, digits, underscores,
+dots, hyphens, and slashes, and contain at most 128 characters. Set it to
+`"acme.openclaw."` if you want `acme.openclaw.tokens`. Standard
+semantic-convention metrics such as
+`gen_ai.client.token.usage` and `gen_ai.client.operation.duration` keep their
+original names. Leave the option unset to preserve every current metric name.
+Enabling or changing this option renames the affected metric series, so update
+dashboards, alerts, and recording rules that query the old names.
 
 ### Environment variables
 
@@ -130,10 +143,11 @@ each request frame:
 ```
 
 The Gateway creates a child request context that preserves the upstream trace
-ID and sampling flags. Agent, harness, model-call, and provider spans created
-inside the request remain on that trace. This allows a local experiment runner
-to create one Langfuse/OpenTelemetry trace per dataset item and correlate the
-corresponding OpenClaw execution.
+ID and sampling flags. Agent, harness, model-call, provider, tool-execution, and
+exec spans created inside the request remain on that trace, including spans
+recorded after their parent run has already finished. This allows a local
+experiment runner to create one Langfuse/OpenTelemetry trace per dataset item and
+correlate the corresponding OpenClaw execution.
 
 Trace context is request-scoped, not connection-scoped. On a long-lived
 WebSocket, generate or inject the appropriate `traceparent` independently for
@@ -171,7 +185,9 @@ Set `diagnostics.otel.captureContent` to `true` only when your collector and
 retention policy are approved for prompt, response, tool, and tool-definition
 text. This enables bounded, redacted input messages, output messages, tool
 inputs, tool outputs, tool definitions, and OTLP log bodies. System prompts
-remain excluded.
+remain excluded. Provider-internal `thinking` and `redacted_thinking` payloads
+are also excluded: compatibility attributes retain only a redacted structural
+marker, while GenAI message attributes omit those parts.
 
 `toolInputs`/`toolOutputs` content is captured for the built-in agent
 runtime's tool executions (`openclaw.content.tool_input` and
@@ -291,10 +307,10 @@ CLI boundary:
   Claude CLI stdout or stderr output. It is not network TTFB.
 
 With `captureContent` enabled, the span exports the effective prompt OpenClaw
-sends to Claude Code and visible assistant text/reasoning/tool-call identity
+sends to Claude Code and visible assistant text/tool-call identity
 through `gen_ai.input.messages` and `gen_ai.output.messages`. Tool arguments,
-opaque thinking signatures, tool results, and system prompts are omitted from
-the Claude assistant envelope. OpenClaw does not
+internal thinking, opaque thinking signatures, tool results, and system prompts
+are omitted from the Claude assistant envelope. OpenClaw does not
 claim access to Claude Code's private system prompt, hidden resumed or
 compacted request payload, native internal tool schemas, raw Anthropic HTTP
 request, internal retries, upstream request id, or true network TTFB. Because

@@ -186,7 +186,6 @@ async function tryRunGatewayRunFastPath(
     argv,
     commandPath,
     jsonOutputMode: hasJsonOutputFlag(argv),
-    routeMode: true,
   });
   if (!startupPolicy.hideBanner) {
     emitCliBanner(VERSION, { argv });
@@ -249,7 +248,9 @@ async function tryRunGatewayRunFastPath(
     { beforeRun },
   );
   try {
-    await startupTrace.measure("gateway-run-parse", () => program.parseAsync(argv));
+    await startupTrace.measure("gateway-run-parse", () => program.parseAsync(argv), {
+      timeline: false,
+    });
   } catch (error) {
     if (!isCommanderParseExit(error)) {
       throw error;
@@ -284,6 +285,20 @@ async function disposeCliAgentHarnesses(): Promise<void> {
   } catch {
     // Best-effort teardown for short-lived CLI commands. Harness plugins may
     // own subprocesses, but cleanup must not hide the command's real outcome.
+  }
+}
+
+async function closeCliMcpLoopbackServer(): Promise<void> {
+  try {
+    const { getActiveMcpLoopbackRuntime } = await import("../gateway/mcp-http.loopback-runtime.js");
+    if (!getActiveMcpLoopbackRuntime()) {
+      return;
+    }
+    const { closeMcpLoopbackServer } = await import("../gateway/mcp-http.js");
+    await closeMcpLoopbackServer();
+  } catch {
+    // Best-effort teardown for short-lived CLI commands. A command result is
+    // already final, so cleanup must not replace its outcome.
   }
 }
 
@@ -1026,6 +1041,7 @@ export async function runCli(
   argv: string[] = process.argv,
   options: {
     additionalStartupTrace?: ReturnType<typeof createGatewayStartupTrace>;
+    retainConsoleRoutingUntilProcessExit?: boolean;
   } = {},
 ) {
   const originalArgv = normalizeWindowsArgv(argv);
@@ -1033,7 +1049,11 @@ export async function runCli(
   return await withConsoleLogsRoutedToStderrForJson(
     originalArgv,
     () => runCliWithPreparedOutputMode(originalArgv, { ...options, builtInMachineOutput }),
-    { machineOutput: builtInMachineOutput, restoreChanges: true },
+    {
+      machineOutput: builtInMachineOutput,
+      restoreChanges: true,
+      retainRoutingUntilProcessExit: options.retainConsoleRoutingUntilProcessExit,
+    },
   );
 }
 
@@ -1164,13 +1184,25 @@ async function runCliWithPreparedOutputMode(
   const readBestEffortCliConfig = async (): Promise<OpenClawConfig> => {
     if (!bestEffortConfigPromise) {
       bestEffortConfigPromise = import("../config/io.js").then(({ readBestEffortConfig }) =>
-        readBestEffortConfig(
-          isolateProxyConfigEnv ? { isolateEnv: true, observe: false } : undefined,
-        ),
+        readBestEffortConfig({
+          ...(isolateProxyConfigEnv ? { isolateEnv: true, observe: false } : {}),
+          skipPluginValidation: true,
+        }),
       );
     }
     return await bestEffortConfigPromise;
   };
+  const startupTraces = [startupTrace, options.additionalStartupTrace].filter(
+    (trace): trace is ReturnType<typeof createGatewayStartupTrace> => Boolean(trace),
+  );
+  if (
+    (await Promise.all(startupTraces.map((trace) => trace.requiresDiagnosticsConfig()))).some(
+      Boolean,
+    )
+  ) {
+    const config = await withConsoleLogsRoutedToStderr(readBestEffortCliConfig);
+    await Promise.all(startupTraces.map((trace) => trace.configureDiagnosticsTimeline(config)));
+  }
   if (
     !isHelpOrVersionInvocation &&
     normalizedInvocation.primary &&
@@ -1399,10 +1431,13 @@ async function runCliWithPreparedOutputMode(
     }
 
     const { tryRouteCli } = await startupTrace.measure("route-import", () => import("./route.js"));
-    const routed = await startupTrace.measure("route", () =>
-      options.builtInMachineOutput
-        ? tryRouteCli(normalizedArgv, { machineOutput: true })
-        : tryRouteCli(normalizedArgv),
+    const routed = await startupTrace.measure(
+      "route",
+      () =>
+        options.builtInMachineOutput
+          ? tryRouteCli(normalizedArgv, { machineOutput: true })
+          : tryRouteCli(normalizedArgv),
+      { timeline: false },
     );
     if (routed) {
       return;
@@ -1437,7 +1472,7 @@ async function runCliWithPreparedOutputMode(
           isBenignUncaughtExceptionError,
           isUncaughtExceptionHandled,
         },
-        { restoreTerminalState },
+        { restoreRuntimeTerminalState },
       ] = await startupTrace.measure("core-imports", () =>
         Promise.all([
           import("./program.js"),
@@ -1445,7 +1480,7 @@ async function runCliWithPreparedOutputMode(
           import("./failure-output.js"),
           import("../infra/fatal-error-hooks.js"),
           import("../infra/unhandled-rejections.js"),
-          import("../../packages/terminal-core/src/restore.js"),
+          import("../runtime.js"),
         ]),
       );
       const program = await startupTrace.measure("build-program", () => buildProgram());
@@ -1475,7 +1510,7 @@ async function runCliWithPreparedOutputMode(
         for (const message of runFatalErrorHooks({ reason: "uncaught_exception", error })) {
           console.error("[openclaw]", message);
         }
-        restoreTerminalState("uncaught exception", { resumeStdinIfPaused: false });
+        restoreRuntimeTerminalState("uncaught exception", { resumeStdinIfPaused: false });
         process.exit(1);
       });
 
@@ -1508,11 +1543,17 @@ async function runCliWithPreparedOutputMode(
       });
       if (!shouldSkipPluginRegistration) {
         const config = await startupTrace.measure("register-plugin-commands", async () => {
-          const { registerPluginCliCommandsFromValidatedConfig } =
-            await import("../plugins/cli.js");
+          const [{ registerPluginCliCommandsFromValidatedConfig }, { resolveCliStartupPolicy }] =
+            await Promise.all([import("../plugins/cli.js"), import("./command-startup-policy.js")]);
+          const startupPolicy = resolveCliStartupPolicy({
+            argv: parseArgv,
+            commandPath: invocation.commandPath,
+            jsonOutputMode: suppressStartupProgress,
+          });
           return await registerPluginCliCommandsFromValidatedConfig(program, undefined, undefined, {
             mode: "lazy",
             primary,
+            skipPluginValidation: startupPolicy.skipConfigGuard,
           });
         });
         if (config) {
@@ -1552,7 +1593,9 @@ async function runCliWithPreparedOutputMode(
 
       let completedHelpOrVersion = false;
       try {
-        await startupTrace.measure("parse", () => program.parseAsync(parseArgv));
+        await startupTrace.measure("parse", () => program.parseAsync(parseArgv), {
+          timeline: false,
+        });
         completedHelpOrVersion = isHelpOrVersionInvocation;
       } catch (error) {
         if (!isCommanderParseExit(error)) {
@@ -1574,6 +1617,7 @@ async function runCliWithPreparedOutputMode(
     uninstallGatewayRunRuntimeHooks?.();
     await stopStartedProxy();
     await disposeCliAgentHarnesses();
+    await closeCliMcpLoopbackServer();
     await closeCliMemoryManagers();
     pauseNonTtyStdinForCliExit();
   }

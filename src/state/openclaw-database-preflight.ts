@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { formatErrorMessage } from "../infra/errors.js";
 import {
   clearNodeSqliteKyselyCacheForDatabase,
   executeSqliteQuerySync,
@@ -43,12 +44,30 @@ export type OpenClawDatabaseSchemaPreflight = {
 
 type AgentRegistryDatabase = Pick<OpenClawStateKyselyDatabase, "agent_databases">;
 
-/** Fatal Gateway refusal when persisted schemas were written by a newer build. */
+type OpenClawDatabaseSchemaPreflightOperation = "doctor" | "gateway-startup";
+
+function formatDoctorIncompatibleDatabase(database: IncompatibleOpenClawDatabase): string {
+  const agent = database.agentId ? ` for agent ${database.agentId}` : "";
+  const writer = database.writerAppVersion ? `; writer build ${database.writerAppVersion}` : "";
+  return `${database.kind} database${agent} ${database.path} uses schema ${database.foundVersion}; this build supports ${database.supportedVersion}${writer}.`;
+}
+
+/** Fatal refusal when persisted schemas were written by a newer build. */
 export class OpenClawDatabaseSchemaPreflightError extends Error {
-  constructor(readonly incompatibleDatabases: readonly IncompatibleOpenClawDatabase[]) {
+  constructor(
+    readonly incompatibleDatabases: readonly IncompatibleOpenClawDatabase[],
+    options: { operation?: OpenClawDatabaseSchemaPreflightOperation } = {},
+  ) {
+    const operation = options.operation ?? "gateway-startup";
+    const prefix =
+      operation === "doctor" ? "Doctor refused to continue" : "Gateway refused startup";
+    const doctorGuidance =
+      operation === "doctor"
+        ? ` ${incompatibleDatabases.map(formatDoctorIncompatibleDatabase).join(" ")} Run Doctor with the OpenClaw install that wrote this state (typically the active Gateway install), or another build that supports these schemas.`
+        : "";
     super(
-      `Gateway refused startup because ${incompatibleDatabases.length} OpenClaw database schema(s) are newer than this build. ` +
-        `Refused by ${describeRunningOpenClawBuild()}. See ${OPENCLAW_DATABASE_SCHEMA_DOCS_URL}.`,
+      `${prefix} because ${incompatibleDatabases.length} OpenClaw database schema(s) are newer than this build. ` +
+        `Refused by ${describeRunningOpenClawBuild()}.${doctorGuidance} See ${OPENCLAW_DATABASE_SCHEMA_DOCS_URL}.`,
     );
     this.name = "OpenClawDatabaseSchemaPreflightError";
   }
@@ -88,10 +107,6 @@ function readRegisteredAgentDatabases(database: DatabaseSync): Array<{
   );
 }
 
-function errorReason(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 /** Read schema headers; report unreadable existing files without diagnosing or repairing them. */
 export function preflightOpenClawDatabaseSchemas(options: {
   env: NodeJS.ProcessEnv;
@@ -128,7 +143,7 @@ export function preflightOpenClawDatabaseSchemas(options: {
       result.indeterminate.push({
         kind: "state",
         path: statePath,
-        reason: `agent database registry query failed: ${errorReason(error)}`,
+        reason: `agent database registry query failed: ${formatErrorMessage(error)}`,
       });
       return result;
     }
@@ -161,7 +176,7 @@ export function preflightOpenClawDatabaseSchemas(options: {
         result.indeterminate.push({
           kind: "agent",
           path: agentPath,
-          reason: errorReason(error),
+          reason: formatErrorMessage(error),
         });
       } finally {
         agentDatabase?.close();
@@ -169,7 +184,11 @@ export function preflightOpenClawDatabaseSchemas(options: {
     }
     return result;
   } catch (error) {
-    result.indeterminate.push({ kind: "state", path: statePath, reason: errorReason(error) });
+    result.indeterminate.push({
+      kind: "state",
+      path: statePath,
+      reason: formatErrorMessage(error),
+    });
     return result;
   } finally {
     if (stateDatabase) {

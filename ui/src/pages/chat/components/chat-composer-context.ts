@@ -517,7 +517,11 @@ export function renderContextNotice(
               }}
             >
               ${options.compactBusy ? icons.loader : icons.minimize}
-              <span>${options.compactBusy ? "Compacting" : "Compact"}</span>
+              <span
+                >${options.compactBusy
+                  ? t("chat.composer.compacting")
+                  : t("chat.composer.compact")}</span
+              >
             </button>
           `
         : nothing}

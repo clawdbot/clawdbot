@@ -8,7 +8,10 @@ import {
   resolvePreparedApprovalAccountId,
 } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { buildChannelApprovalNativeTargetKey } from "openclaw/plugin-sdk/approval-native-runtime";
-import { buildApprovalReactionPendingContent } from "openclaw/plugin-sdk/approval-reaction-runtime";
+import {
+  buildApprovalNativeControlsPromptText,
+  buildApprovalReactionPendingContent,
+} from "openclaw/plugin-sdk/approval-reaction-runtime";
 import type { ExecApprovalReplyDecision } from "openclaw/plugin-sdk/approval-reply-runtime";
 import type {
   ExecApprovalRequest,
@@ -32,6 +35,7 @@ import {
   unregisterIMessageApprovalReactionTarget,
   type IMessageApprovalConversationKey,
 } from "./approval-reactions.js";
+import { extractMarkdownFormatRuns } from "./markdown-format.js";
 import { normalizeIMessageMessagingTarget } from "./normalize.js";
 import { getCachedIMessagePrivateApiStatus } from "./probe.js";
 import { sendMessageIMessage } from "./send.js";
@@ -97,7 +101,9 @@ function buildPendingPayload(params: {
     text: pendingContent.reactionPayload.text ?? "",
     // The native poll owns the primary controls. Manual commands stay in the
     // details message because bridge capability cannot prove recipient support.
-    pollText: pendingContent.manualFallbackPayload.text ?? "",
+    // Same bold headers and labels as the tapback prompt (#85954): both are
+    // delivered through the attributed-body send path.
+    pollText: buildApprovalNativeControlsPromptText({ view: params.view, nowMs: params.nowMs }),
     allowedDecisions: pendingContent.reactionPayload.allowedDecisions,
   };
 }
@@ -242,7 +248,10 @@ async function deliverIMessageApprovalPoll(params: {
     const runtime = await loadIMessageActionsRuntime();
     const sent = await runtime.sendPoll({
       chatGuid,
-      question: params.question,
+      // `imsg poll send --question` has no attributed-body channel, so the
+      // question keeps the marker-free rendering of the same prompt copy the
+      // details message delivers with typed formatting ranges.
+      question: extractMarkdownFormatRuns(params.question).text,
       choices: options.map((option) => option.text),
       suppressComment: true,
       options: { ...cliOptions, chatGuid },

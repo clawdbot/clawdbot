@@ -1046,7 +1046,7 @@ describe("worker turn launcher", () => {
         output: 40,
         cacheRead: 60,
         cacheWrite: 5,
-        total: 270,
+        total: 405,
       },
       lastCallUsage: {
         input: 200,

@@ -5,13 +5,15 @@ import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentsListResult, SkillStatusReport } from "../../api/types.ts";
 import { titleForRoute } from "../../app-navigation.ts";
+import { pathForPluginsHubTab } from "../../app-route-paths.ts";
 import {
   applicationContext,
   type ApplicationContext,
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
-import { renderPluginsHubTabs, type PluginsHubTab } from "../../components/plugins-hub-tabs.ts";
+import { renderHubTabs } from "../../components/hub-tabs.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
+import { t } from "../../i18n/index.ts";
 import {
   closeClawHubDetail,
   installFromClawHub,
@@ -34,6 +36,11 @@ import {
 } from "../../lib/skills/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import {
+  PLUGINS_HUB_PANEL_ID,
+  pluginsHubTabs,
+  type PluginsHubTab,
+} from "../plugins/plugins-hub.ts";
 import { renderSkills, type SkillDetailTab, type SkillsStatusFilter } from "./view.ts";
 
 export type SkillsRouteData = {
@@ -88,6 +95,10 @@ class SkillsPage extends OpenClawLightDomElement {
   @state() skillCardContentKeys: Record<string, string> = {};
   @state() skillCardLoadingKey: string | null = null;
   @state() skillCardErrors: Record<string, string> = {};
+
+  get runtimeConfig(): ApplicationContext["runtimeConfig"] {
+    return this.context.runtimeConfig;
+  }
 
   private clawhubSearchTimer: ReturnType<typeof setTimeout> | null = null;
   private routeDataInitialized = false;
@@ -378,7 +389,9 @@ class SkillsPage extends OpenClawLightDomElement {
       this.context.navigate("skill-workshop");
       return;
     }
-    this.context.navigate("plugins", tab === "discover" ? { search: "?tab=discover" } : undefined);
+    this.context.navigate("plugins", {
+      pathname: pathForPluginsHubTab(tab, this.context.basePath),
+    });
   }
 
   override render() {
@@ -391,10 +404,18 @@ class SkillsPage extends OpenClawLightDomElement {
       </section>
       ${renderSettingsWorkspace(html`
         <div class="plugins-hub-tabs-row">
-          ${renderPluginsHubTabs({ active: "skills", onSelect: (tab) => this.selectHubTab(tab) })}
+          ${renderHubTabs({
+            id: "plugins",
+            active: "skills",
+            tabs: pluginsHubTabs(),
+            ariaLabel: t("pluginsPage.hubTablistLabel"),
+            panelId: PLUGINS_HUB_PANEL_ID,
+            className: "plugins-tabs",
+            onSelect: (tab) => this.selectHubTab(tab),
+          })}
         </div>
         <wa-tab-panel
-          id="plugins-hub-panel"
+          id=${PLUGINS_HUB_PANEL_ID}
           name="skills"
           active
           aria-labelledby="plugins-tab-skills"

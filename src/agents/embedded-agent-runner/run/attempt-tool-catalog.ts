@@ -100,6 +100,7 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
     codeModeControlsEnabled: codeModeControlsEnabledForRun,
     toolSearchConfig,
     forceDirectMessageTool: preparedToolBase.forceDirectMessageTool,
+    forceCodeModeControls: attempt.forceCodeModeTools,
     sessionId: attempt.sessionId,
     sessionKey: input.sandboxSessionKey,
     agentId: input.sessionAgentId,
@@ -169,6 +170,7 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
         callableToolNames: toolSearchRunPlan.emptyAllowlistCallableNames,
         toolsEnabled,
         disableTools: attempt.disableTools,
+        toolsAllowExplicitlyEmpty: preparedToolBase.effectiveToolsAllow?.length === 0,
       });
   logAgentRuntimeToolDiagnostics({
     runtimePlan: attempt.runtimePlan,

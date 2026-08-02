@@ -3,32 +3,11 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { outputTail } from "./output-tail.mjs";
 
 export const GENERATED_MODULE_FORMAT_TIMEOUT_MS = 30_000;
 export const GENERATED_MODULE_FORMAT_MAX_BUFFER_BYTES = 1024 * 1024;
 const FORMATTER_OUTPUT_TAIL_BYTES = 16 * 1024;
-
-function outputText(value) {
-  if (typeof value === "string") {
-    return value;
-  }
-  if (Buffer.isBuffer(value)) {
-    return value.toString("utf8");
-  }
-  return "";
-}
-
-function outputTail(value) {
-  const text = outputText(value).trim();
-  if (!text) {
-    return "";
-  }
-  const bytes = Buffer.from(text, "utf8");
-  if (bytes.byteLength <= FORMATTER_OUTPUT_TAIL_BYTES) {
-    return text;
-  }
-  return bytes.subarray(bytes.byteLength - FORMATTER_OUTPUT_TAIL_BYTES).toString("utf8");
-}
 
 function formatterFailureDetails(formatter) {
   const details = [];
@@ -46,11 +25,11 @@ function formatterFailureDetails(formatter) {
   if (formatter.signal) {
     details.push(`formatter exited with signal ${formatter.signal}`);
   }
-  const stderrTail = outputTail(formatter.stderr);
+  const stderrTail = outputTail(formatter.stderr, FORMATTER_OUTPUT_TAIL_BYTES);
   if (stderrTail) {
     details.push(`stderr tail:\n${stderrTail}`);
   }
-  const stdoutTail = outputTail(formatter.stdout);
+  const stdoutTail = outputTail(formatter.stdout, FORMATTER_OUTPUT_TAIL_BYTES);
   if (stdoutTail) {
     details.push(`stdout tail:\n${stdoutTail}`);
   }

@@ -12,13 +12,20 @@ import {
 } from "../../gateway/restart-trace.js";
 import type { startGatewayServer } from "../../gateway/server.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import type { GatewayBootLifecycleCompletion } from "../../infra/gateway-boot-lifecycle.js";
+import {
+  GATEWAY_BOOT_REASON_MAX_UTF16_CODE_UNITS,
+  type GatewayBootLifecycleCompletion,
+} from "../../infra/gateway-boot-lifecycle.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import type { GatewayRestartEmitter } from "../../infra/restart.js";
 import { flushLogger } from "../../logging/logger.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import {
+  findOpenClawAgentDatabaseMediaMigrationRequiredError,
+  GATEWAY_AGENT_MEDIA_MIGRATION_REQUIRED_REASON,
+} from "../../state/openclaw-agent-db-migration-required.js";
 import { formatActiveTaskRestartBlocker } from "../../tasks/task-restart-blocker.js";
 const gatewayLog = createSubsystemLogger("gateway");
 const LAUNCHD_SUPERVISED_RESTART_EXIT_DELAY_MS = 1500;
@@ -609,7 +616,13 @@ export async function runGatewayLoop(params: {
               };
               let activeRestartSessionKeysAtDrainStart = new Set<string>();
               let activeRestartSessionIdsAtDrainStart = new Set<string>();
+              let hasMarkedActiveMainSessionsForRestart = false;
               const markActiveMainSessionsForRestart = async (reason: string) => {
+                // A second successful mark races recovery claims; failed or empty
+                // attempts must remain retryable at the forced-restart boundary.
+                if (hasMarkedActiveMainSessionsForRestart) {
+                  return;
+                }
                 const sessionKeys = new Set<string>([
                   ...activeRestartSessionKeysAtDrainStart,
                   ...collectActiveRestartSessionKeys(),
@@ -622,12 +635,15 @@ export async function runGatewayLoop(params: {
                   return;
                 }
                 try {
-                  await markRestartAbortedMainSessions({
+                  const result = await markRestartAbortedMainSessions({
                     cfg: getRuntimeConfig(),
                     sessionKeys,
                     sessionIds,
                     reason,
                   });
+                  if (result.marked > 0) {
+                    hasMarkedActiveMainSessionsForRestart = true;
+                  }
                 } catch (err) {
                   gatewayLog.warn(
                     `failed to mark interrupted main sessions for restart recovery: ${String(err)}`,
@@ -746,6 +762,25 @@ export async function runGatewayLoop(params: {
           );
         }
 
+        if (!isRestart) {
+          // Keep reset-started finalizers alive without spending the shutdown
+          // reserve that server teardown and the supervisor watchdog need.
+          try {
+            const rootDrain = await eagerLifecycleRuntime.waitForActiveGatewayRootWork(
+              Math.max(0, SHUTDOWN_TIMEOUT_MS - RESTART_CLOSE_REPLY_DRAIN_SHUTDOWN_RESERVE_MS),
+            );
+            if (!rootDrain.drained) {
+              gatewayLog.warn(
+                `gateway root transaction drain timeout reached with ${rootDrain.active} root(s) still active; proceeding with shutdown`,
+              );
+            }
+          } catch (err) {
+            gatewayLog.warn(
+              `gateway root transaction drain failed; proceeding with shutdown: ${formatErrorMessage(err)}`,
+            );
+          }
+        }
+
         armCloseForceExitTimerForIndefiniteRestart();
         const closeDrainTimeoutMs = resolveRestartCloseDrainTimeoutMs();
         await server?.close({
@@ -831,9 +866,9 @@ export async function runGatewayLoop(params: {
       return;
     }
     const isRestart = action === "restart";
-    if (isRestart) {
-      markRestartDraining();
-    }
+    // Fence new roots synchronously for stops as well as restarts so admitted
+    // detached finalizers can drain before the signal tears down the gateway.
+    markRestartDraining();
     shuttingDown = true;
     gatewayLog.info(`received ${signal}; ${isRestart ? "restarting" : "shutting down"}`);
     if (isRestart) {
@@ -1031,9 +1066,16 @@ export async function runGatewayLoop(params: {
         startupFailedWithoutServerHandle = false;
         isFirstStart = false;
       } catch (err) {
+        const mediaMigrationRequired = findOpenClawAgentDatabaseMediaMigrationRequiredError(err);
         params.completeBoot?.({
           outcome: "startup_failed",
-          reason: truncateUtf16Safe(formatErrorMessage(err), 500),
+          reason: truncateUtf16Safe(
+            formatErrorMessage(err),
+            GATEWAY_BOOT_REASON_MAX_UTF16_CODE_UNITS,
+          ),
+          ...(mediaMigrationRequired
+            ? { startupReason: GATEWAY_AGENT_MEDIA_MIGRATION_REQUIRED_REASON }
+            : {}),
         });
         // On initial startup, let the error propagate so the outer handler
         // can report "Gateway failed to start" and exit non-zero. Only

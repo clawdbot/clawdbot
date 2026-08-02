@@ -11,7 +11,7 @@ import type {
   AcpRuntimeTurnInput,
 } from "../../plugin-sdk/acp-runtime.js";
 import { clearPluginCommands } from "../../plugins/commands.js";
-import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
@@ -562,7 +562,10 @@ export const describe0BeforeEach0 = () => {
   transcriptMocks.appendAssistantMessageToSessionTranscript.mockClear();
   stageSandboxMediaMocks.stageSandboxMedia.mockReset();
   stageSandboxMediaMocks.stageSandboxMedia.mockResolvedValue({ staged: new Map() });
-  runtimePluginMocks.ensureRuntimePluginsLoaded.mockClear();
+  runtimePluginMocks.loadAgentRuntimePluginRegistryHandle.mockReset();
+  runtimePluginMocks.loadAgentRuntimePluginRegistryHandle.mockImplementation(
+    () => getActivePluginRegistry() ?? runtimePluginMocks.pluginRegistry,
+  );
 };
 
 export const createHookCtx = (overrides: Partial<MsgContext> = {}) =>

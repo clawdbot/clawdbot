@@ -2,7 +2,6 @@
 
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { AgentSelectOption } from "../../components/agent-select.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import "./memory-memories.ts";
 
@@ -12,7 +11,6 @@ type MemoryMemoriesTestElement = HTMLElement & {
   connected: boolean;
   methodAdvertised: boolean;
   agentId: string | null;
-  agents: readonly AgentSelectOption[];
   updateComplete: Promise<unknown>;
 };
 
@@ -32,7 +30,6 @@ function createElement(request: Request, advertised = true) {
   element.connected = true;
   element.methodAdvertised = advertised;
   element.agentId = "main";
-  element.agents = [];
   document.body.append(element);
   return element;
 }

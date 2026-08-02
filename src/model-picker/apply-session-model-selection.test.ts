@@ -7,8 +7,11 @@ import type { SessionEntry } from "../config/sessions/types.js";
 
 const effects = vi.hoisted(() => ({
   enqueueSystemEvent: vi.fn(),
+  info: vi.fn(),
+  mutateConfigFileWithRetry: vi.fn(),
   refreshQueuedFollowupSession: vi.fn(),
   triggerSessionPatchHook: vi.fn(),
+  warn: vi.fn(),
 }));
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -22,6 +25,22 @@ vi.mock("../auto-reply/reply/queue.js", () => ({
 vi.mock("../gateway/session-patch-hooks.js", () => ({
   triggerSessionPatchHook: (...args: unknown[]) => effects.triggerSessionPatchHook(...args),
 }));
+vi.mock("../config/config.js", async () => {
+  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
+  return { ...actual, mutateConfigFileWithRetry: effects.mutateConfigFileWithRetry };
+});
+
+vi.mock("../logging/subsystem.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../logging/subsystem.js")>("../logging/subsystem.js");
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) =>
+      subsystem === "agents/sticky-model-selection"
+        ? { info: effects.info, warn: effects.warn }
+        : actual.createSubsystemLogger(subsystem),
+  };
+});
 
 import {
   applySessionModelSelection,
@@ -63,6 +82,7 @@ function createParams(overrides: Partial<ApplySessionModelSelectionParams> = {})
     allowedModelKeys: new Set(["anthropic/claude-opus-4-6", "openai/gpt-4o"]),
     modelCatalog: catalog,
     thinkingCatalog: catalog,
+    canPersistStickyModelSelection: false,
     request: {
       provider: "openai",
       model: "gpt-4o",
@@ -76,6 +96,12 @@ function createParams(overrides: Partial<ApplySessionModelSelectionParams> = {})
 
 beforeEach(() => {
   effects.enqueueSystemEvent.mockReset();
+  effects.info.mockReset();
+  effects.warn.mockReset();
+  effects.mutateConfigFileWithRetry.mockReset().mockResolvedValue({
+    nextConfig: {},
+    result: "defaults",
+  });
   effects.refreshQueuedFollowupSession.mockReset();
   effects.triggerSessionPatchHook.mockReset();
 });
@@ -91,6 +117,7 @@ describe("applySessionModelSelection", () => {
     const result = await applySessionModelSelection(
       createParams({
         sessionEntry,
+        canPersistStickyModelSelection: true,
         request: {
           provider: "openai",
           model: "gpt-4o",
@@ -124,6 +151,7 @@ describe("applySessionModelSelection", () => {
     expect(sessionEntry.contextTokens).toBeUndefined();
     expect(sessionEntry.contextBudgetStatus).toBeUndefined();
     expect(effects.triggerSessionPatchHook).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(effects.mutateConfigFileWithRetry).toHaveBeenCalledOnce());
     expect(effects.refreshQueuedFollowupSession).toHaveBeenCalledOnce();
     expect(effects.enqueueSystemEvent).toHaveBeenCalledWith(
       "Model switched to Fast (openai/gpt-4o).",
@@ -163,6 +191,42 @@ describe("applySessionModelSelection", () => {
     expect(sessionEntry.authProfileOverrideSource).toBeUndefined();
     expect(sessionEntry.agentRuntimeOverride).toBeUndefined();
     expect(sessionEntry.agentHarnessId).toBe("codex");
+    expect(effects.mutateConfigFileWithRetry).not.toHaveBeenCalled();
+  });
+
+  it("keeps an accepted selection session-scoped without config authority", async () => {
+    const sessionEntry = createEntry();
+
+    const result = await applySessionModelSelection(
+      createParams({ sessionEntry, canPersistStickyModelSelection: false }),
+    );
+
+    expect(result.status).toBe("applied");
+    expect(sessionEntry).toMatchObject({
+      providerOverride: "openai",
+      modelOverride: "gpt-4o",
+    });
+    expect(effects.mutateConfigFileWithRetry).not.toHaveBeenCalled();
+  });
+
+  it("returns session success and warns when the sticky config write fails", async () => {
+    const sessionEntry = createEntry();
+    effects.mutateConfigFileWithRetry.mockRejectedValueOnce(new Error("config write failed"));
+
+    const result = await applySessionModelSelection(
+      createParams({ sessionEntry, canPersistStickyModelSelection: true }),
+    );
+
+    expect(result.status).toBe("applied");
+    expect(sessionEntry).toMatchObject({
+      providerOverride: "openai",
+      modelOverride: "gpt-4o",
+    });
+    await vi.waitFor(() =>
+      expect(effects.warn).toHaveBeenCalledWith(
+        "failed sticky model persistence agentId=main model=openai/gpt-4o reason=config write failed",
+      ),
+    );
   });
 
   it.each([

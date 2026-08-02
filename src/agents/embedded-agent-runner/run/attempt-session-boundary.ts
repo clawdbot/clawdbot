@@ -9,7 +9,7 @@ import {
   resolveOrphanRepairPlan,
 } from "./attempt-orphan-repair.js";
 import { normalizeMessagesForLlmBoundary } from "./attempt.llm-boundary.js";
-import { detachPrePersistedCurrentUserTurn } from "./pre-persisted-user-turn.js";
+import { reconcilePrePersistedCurrentUserTurn } from "./pre-persisted-user-turn.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type SessionBoundaryAttempt = Pick<
@@ -50,21 +50,22 @@ export function prepareEmbeddedAttemptSessionBoundary(input: {
     input.setActiveSessionSystemPrompt("");
   }
 
-  const detachedCurrentUser =
+  const orphanRepairCandidate = preserveExactPrompt
+    ? undefined
+    : resolveOrphanRepairPlan({
+        sessionManager,
+        prompt: attempt.prompt,
+        trigger: attempt.trigger,
+      });
+  const reconciledCurrentUser =
     !preserveExactPrompt &&
-    detachPrePersistedCurrentUserTurn({
+    reconcilePrePersistedCurrentUserTurn({
       activeSession,
+      durableUserTurnMessage: orphanRepairCandidate?.messageEntry.message,
       preparedUserTurnMessage: input.preparedUserTurnMessage,
       userTurnAlreadyPersisted: attempt.userTurnTranscriptRecorder?.hasPersisted() === true,
     });
-  const orphanRepair =
-    preserveExactPrompt || detachedCurrentUser
-      ? undefined
-      : resolveOrphanRepairPlan({
-          sessionManager,
-          prompt: attempt.prompt,
-          trigger: attempt.trigger,
-        });
+  const orphanRepair = reconciledCurrentUser ? undefined : orphanRepairCandidate;
   if (orphanRepair?.removeLeaf) {
     if (orphanRepair.messageEntry.parentId) {
       sessionManager.branch(orphanRepair.messageEntry.parentId);

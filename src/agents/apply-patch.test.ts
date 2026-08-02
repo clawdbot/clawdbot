@@ -40,13 +40,24 @@ function buildAddFilePatch(targetPath: string): string {
 *** End Patch`;
 }
 
-function createMemoryPatchSandbox(initialFiles: Record<string, string | Buffer> = {}) {
+function createMemoryPatchSandbox(
+  initialFiles: Record<string, string | Buffer> = {},
+  options: { supportsExclusiveCreate?: boolean } = {},
+) {
   const files = new Map<string, string | Buffer>(
     Object.entries(initialFiles).map(([filePath, contents]) => [`/sandbox/${filePath}`, contents]),
   );
   const writeFile = vi.fn(async ({ filePath, data }) => {
     files.set(filePath, Buffer.isBuffer(data) ? Buffer.from(data) : data);
   });
+  const createFileExclusive = vi.fn(async ({ filePath, data }) => {
+    if (files.has(filePath)) {
+      return "exists" as const;
+    }
+    files.set(filePath, Buffer.isBuffer(data) ? Buffer.from(data) : data);
+    return "created" as const;
+  });
+  const mkdirp = vi.fn(async () => {});
   const bridge: SandboxFsBridge = {
     resolvePath: ({ filePath }) => ({
       relativePath: filePath,
@@ -59,6 +70,7 @@ function createMemoryPatchSandbox(initialFiles: Record<string, string | Buffer> 
         : Buffer.from(contents ?? "");
     },
     writeFile,
+    ...(options.supportsExclusiveCreate === false ? {} : { createFileExclusive }),
     remove: async ({ filePath }) => {
       files.delete(filePath);
     },
@@ -75,12 +87,14 @@ function createMemoryPatchSandbox(initialFiles: Record<string, string | Buffer> 
         ? null
         : { type: "file", size: Buffer.byteLength(contents), mtimeMs: 0 };
     },
-    mkdirp: async () => {},
+    mkdirp,
   };
   return {
     files,
     bridge,
     writeFile,
+    createFileExclusive,
+    mkdirp,
     options: {
       cwd: "/local/workspace",
       sandbox: {
@@ -187,6 +201,198 @@ describe("applyPatch", () => {
     expect(result.summary.added).toEqual(["hello.txt"]);
   });
 
+  it("rejects an add hunk that targets an existing file", async () => {
+    const memory = createMemoryPatchSandbox({ "notes.txt": "keep me\n" });
+    const patch = `*** Begin Patch
+*** Add File: notes.txt
++replacement
+*** End Patch`;
+
+    await expect(applyPatch(patch, memory.options)).rejects.toThrow(
+      /Cannot create notes\.txt: the file already exists/,
+    );
+    expect(memory.files.get("/sandbox/notes.txt")).toBe("keep me\n");
+    expect(memory.writeFile.mock.calls).toHaveLength(0);
+  });
+
+  it.each([
+    { name: "workspace-confined host", workspaceOnly: true },
+    { name: "unconfined host", workspaceOnly: false },
+  ])(
+    "keeps existing contents in $name when an add hunk targets them",
+    async ({ workspaceOnly }) => {
+      await withWorkspaceTempDir(async (dir) => {
+        const target = path.join(dir, "notes.txt");
+        await fs.writeFile(target, "IMPORTANT USER DATA\nsecond line\n", "utf8");
+        const tool = createApplyPatchTool({ cwd: dir, workspaceOnly });
+        const patch = `*** Begin Patch
+*** Add File: notes.txt
++replacement
+*** End Patch`;
+
+        await expect(
+          tool.execute("call-add-existing", { input: patch }, undefined),
+        ).rejects.toThrow(/Cannot create notes\.txt: the file already exists/);
+        expect(await fs.readFile(target, "utf8")).toBe("IMPORTANT USER DATA\nsecond line\n");
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "refuses existing symlinks in both host modes without changing their targets",
+    async () => {
+      for (const workspaceOnly of [true, false]) {
+        await withWorkspaceTempDir(async (dir) => {
+          const target = path.join(dir, "target.txt");
+          const link = path.join(dir, "notes.txt");
+          await fs.writeFile(target, "keep me\n", "utf8");
+          await fs.symlink("target.txt", link);
+          const patch = `*** Begin Patch
+*** Add File: notes.txt
++replacement
+*** End Patch`;
+
+          await expect(applyPatch(patch, { cwd: dir, workspaceOnly })).rejects.toThrow(
+            /Cannot create notes\.txt: the file already exists/,
+          );
+          await expect(fs.readFile(target, "utf8")).resolves.toBe("keep me\n");
+          await expect(fs.readlink(link)).resolves.toBe("target.txt");
+        });
+      }
+    },
+  );
+
+  it("refuses an add hunk when a competing writer creates the target mid-patch", async () => {
+    const memory = createMemoryPatchSandbox();
+    memory.mkdirp.mockImplementation(async () => {
+      memory.files.set("/sandbox/notes.txt", "written by another writer\n");
+    });
+    const patch = `*** Begin Patch
+*** Add File: notes.txt
++replacement
+*** End Patch`;
+
+    await expect(applyPatch(patch, memory.options)).rejects.toThrow(
+      /Cannot create notes\.txt: the file already exists/,
+    );
+    expect(memory.files.get("/sandbox/notes.txt")).toBe("written by another writer\n");
+    expect(memory.writeFile.mock.calls).toHaveLength(0);
+  });
+
+  it("refuses a move hunk when a competing writer creates the destination mid-patch", async () => {
+    const memory = createMemoryPatchSandbox({ "source.txt": "foo\nbar\n" });
+    memory.mkdirp.mockImplementation(async () => {
+      memory.files.set("/sandbox/dest.txt", "written by another writer\n");
+    });
+    const patch = `*** Begin Patch
+*** Update File: source.txt
+*** Move to: dest.txt
+@@
+ foo
+-bar
++baz
+*** End Patch`;
+
+    await expect(applyPatch(patch, memory.options)).rejects.toThrow(
+      /Cannot create dest\.txt: the file already exists/,
+    );
+    expect(memory.files.get("/sandbox/dest.txt")).toBe("written by another writer\n");
+    expect(memory.files.get("/sandbox/source.txt")).toBe("foo\nbar\n");
+  });
+
+  it("allows an add hunk after the same path is deleted in the patch", async () => {
+    const memory = createMemoryPatchSandbox({ "notes.txt": "old\n" });
+    const patch = `*** Begin Patch
+*** Delete File: notes.txt
+*** Add File: notes.txt
++new
+*** End Patch`;
+
+    const result = await applyPatch(patch, memory.options);
+
+    expect(memory.files.get("/sandbox/notes.txt")).toBe("new\n");
+    expect(result.summary.added).toEqual(["notes.txt"]);
+  });
+
+  it("rejects a move hunk that targets an existing file", async () => {
+    const memory = createMemoryPatchSandbox({
+      "source.txt": "foo\nbar\n",
+      "dest.txt": "keep me\n",
+    });
+    const patch = `*** Begin Patch
+*** Update File: source.txt
+*** Move to: dest.txt
+@@
+ foo
+-bar
++baz
+*** End Patch`;
+
+    await expect(applyPatch(patch, memory.options)).rejects.toThrow(
+      /Cannot create dest\.txt: the file already exists/,
+    );
+    expect(memory.files.get("/sandbox/dest.txt")).toBe("keep me\n");
+    expect(memory.files.get("/sandbox/source.txt")).toBe("foo\nbar\n");
+  });
+
+  it.each([
+    { name: "workspace-confined host", workspaceOnly: true },
+    { name: "unconfined host", workspaceOnly: false },
+  ])(
+    "preserves source and destination when a move target exists in $name",
+    async ({ workspaceOnly }) => {
+      await withWorkspaceTempDir(async (dir) => {
+        await fs.writeFile(path.join(dir, "source.txt"), "foo\nbar\n", "utf8");
+        await fs.writeFile(path.join(dir, "dest.txt"), "keep me\n", "utf8");
+        const patch = `*** Begin Patch
+*** Update File: source.txt
+*** Move to: dest.txt
+@@
+ foo
+-bar
++baz
+*** End Patch`;
+
+        await expect(applyPatch(patch, { cwd: dir, workspaceOnly })).rejects.toThrow(
+          /Cannot create dest\.txt: the file already exists/,
+        );
+        await expect(fs.readFile(path.join(dir, "source.txt"), "utf8")).resolves.toBe("foo\nbar\n");
+        await expect(fs.readFile(path.join(dir, "dest.txt"), "utf8")).resolves.toBe("keep me\n");
+      });
+    },
+  );
+
+  it("fails closed on sandbox adds when atomic create is unavailable", async () => {
+    const memory = createMemoryPatchSandbox({}, { supportsExclusiveCreate: false });
+    const patch = `*** Begin Patch
+*** Add File: notes.txt
++new
+*** End Patch`;
+
+    await expect(applyPatch(patch, memory.options)).rejects.toThrow(
+      /does not support atomic file creation/,
+    );
+    expect(memory.files.has("/sandbox/notes.txt")).toBe(false);
+  });
+
+  it("still permits sandbox updates when atomic create is unavailable", async () => {
+    const memory = createMemoryPatchSandbox(
+      { "source.txt": "before\n" },
+      { supportsExclusiveCreate: false },
+    );
+    const patch = `*** Begin Patch
+*** Update File: source.txt
+@@
+-before
++after
+*** End Patch`;
+
+    await expect(applyPatch(patch, memory.options)).resolves.toMatchObject({
+      summary: { modified: ["source.txt"] },
+    });
+    expect(memory.files.get("/sandbox/source.txt")).toBe("after\n");
+  });
+
   it("updates and moves a file", async () => {
     const memory = createMemoryPatchSandbox({
       "source.txt": "foo\nbar\n",
@@ -268,6 +474,146 @@ describe("applyPatch", () => {
       expect(memory.files.get("/sandbox/source.txt")).toBe(initial);
       expect(memory.writeFile.mock.calls).toHaveLength(0);
     }
+  });
+
+  it("preserves CRLF line endings for changed and context lines", async () => {
+    const initial =
+      'class Program {\r\n  static void Main() {\r\n    Console.WriteLine("hello");\r\n  }\r\n}\r\n';
+    const memory = createMemoryPatchSandbox({ "source.txt": initial });
+    const patch = `*** Begin Patch
+*** Update File: source.txt
+@@
+   static void Main() {
+-    Console.WriteLine("hello");
++    Console.WriteLine("world");
+   }
+*** End Patch`;
+
+    const result = await applyPatch(patch, memory.options);
+
+    expect(result.noOp).toBeUndefined();
+    expect(memory.files.get("/sandbox/source.txt")).toBe(
+      'class Program {\r\n  static void Main() {\r\n    Console.WriteLine("world");\r\n  }\r\n}\r\n',
+    );
+  });
+
+  it("preserves CRLF line endings when the hunk spans the whole file", async () => {
+    const memory = createMemoryPatchSandbox({ "source.txt": "foo\r\nbar\r\n" });
+    const patch = `*** Begin Patch
+*** Update File: source.txt
+@@
+ foo
+-bar
++baz
+*** End Patch`;
+
+    await applyPatch(patch, memory.options);
+
+    expect(memory.files.get("/sandbox/source.txt")).toBe("foo\r\nbaz\r\n");
+  });
+
+  it("preserves CRLF line endings for inserted lines", async () => {
+    const memory = createMemoryPatchSandbox({ "source.txt": "foo\r\nbar\r\n" });
+    const patch = `*** Begin Patch
+*** Update File: source.txt
+@@ foo
++middle
+*** End Patch`;
+
+    await applyPatch(patch, memory.options);
+
+    expect(memory.files.get("/sandbox/source.txt")).toBe("foo\r\nmiddle\r\nbar\r\n");
+  });
+
+  it("keeps LF files on LF after a real update hunk", async () => {
+    const memory = createMemoryPatchSandbox({ "source.txt": "foo\nbar\n" });
+    const patch = `*** Begin Patch
+*** Update File: source.txt
+@@
+ foo
+-bar
++baz
+*** End Patch`;
+
+    await applyPatch(patch, memory.options);
+
+    expect(memory.files.get("/sandbox/source.txt")).toBe("foo\nbaz\n");
+  });
+
+  it("keeps context line bytes when the hunk drops trailing whitespace", async () => {
+    const memory = createMemoryPatchSandbox({
+      "notes.md": "# Notes\nfirst line  \nsecond line  \nold value\ntail\n",
+    });
+    const patch = `*** Begin Patch
+*** Update File: notes.md
+@@
+ first line
+ second line
+-old value
++new value
+ tail
+*** End Patch`;
+
+    await applyPatch(patch, memory.options);
+
+    expect(memory.files.get("/sandbox/notes.md")).toBe(
+      "# Notes\nfirst line  \nsecond line  \nnew value\ntail\n",
+    );
+  });
+
+  it("keeps context line punctuation when the hunk uses normalized quotes", async () => {
+    const memory = createMemoryPatchSandbox({
+      "notes.md": "It\u2019s done\nold value\n",
+    });
+    const patch = `*** Begin Patch
+*** Update File: notes.md
+@@
+ It's done
+-old value
++new value
+*** End Patch`;
+
+    await applyPatch(patch, memory.options);
+
+    expect(memory.files.get("/sandbox/notes.md")).toBe("It\u2019s done\nnew value\n");
+  });
+
+  it("keeps tab indentation on context lines when the hunk uses spaces", async () => {
+    const memory = createMemoryPatchSandbox({
+      "run.py":
+        "def run(x):\n\tif x:\n\t\tprepare()\n\t\tvalue = 1\n\t\treturn value\n\treturn 0\n",
+    });
+    const patch = `*** Begin Patch
+*** Update File: run.py
+@@
+     if x:
+         prepare()
+-        value = 1
++        value = 2
+         return value
+*** End Patch`;
+
+    await applyPatch(patch, memory.options);
+
+    expect(memory.files.get("/sandbox/run.py")).toBe(
+      "def run(x):\n\tif x:\n\t\tprepare()\n        value = 2\n\t\treturn value\n\treturn 0\n",
+    );
+  });
+
+  it("does not normalize mixed line endings outside the changed hunk", async () => {
+    const memory = createMemoryPatchSandbox({
+      "source.txt": "first\r\nsecond\nthird\r\n",
+    });
+    const patch = `*** Begin Patch
+*** Update File: source.txt
+@@
+-second
++changed
+*** End Patch`;
+
+    await applyPatch(patch, memory.options);
+
+    expect(memory.files.get("/sandbox/source.txt")).toBe("first\r\nchanged\nthird\r\n");
   });
 
   it("applies a real deletion of the sole blank line", async () => {

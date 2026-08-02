@@ -1,8 +1,10 @@
 // Sandbox filesystem path tests cover bind parsing, host/container path mapping,
 // and writable-root detection.
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   buildSandboxFsMounts,
   hasSandboxBindContainerPathAliases,
@@ -12,6 +14,8 @@ import {
 } from "./fs-paths.js";
 import { createSandboxTestContext } from "./test-fixtures.js";
 import type { SandboxContext } from "./types.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function createSandbox(overrides?: Partial<SandboxContext>): SandboxContext {
   return createSandboxTestContext({ overrides });
@@ -201,5 +205,37 @@ describe("resolveSandboxFsPathWithMounts", () => {
 
     expect(resolved.hostPath).toBe(path.join(path.resolve("/tmp/override"), "docs", "AGENTS.md"));
     expect(resolved.writable).toBe(false);
+  });
+
+  it("omits binds that collide with protected skill mounts", () => {
+    const workspaceDir = tempDirs.make("openclaw-fs-mounts-");
+    const customRoot = tempDirs.make("openclaw-fs-mounts-");
+    fs.mkdirSync(path.join(workspaceDir, "skills", "demo"), { recursive: true });
+    const sandbox = createSandbox({
+      workspaceDir,
+      agentWorkspaceDir: workspaceDir,
+      containerWorkdir: "/workspace/.",
+      docker: {
+        ...createSandbox().docker,
+        workdir: "/workspace/.",
+        binds: [`${customRoot}:/workspace/skills:rw`],
+      },
+    });
+
+    const mounts = buildSandboxFsMounts(sandbox);
+
+    expect(mounts).toContainEqual({
+      hostRoot: path.join(workspaceDir, "skills"),
+      containerRoot: "/workspace/skills",
+      writable: false,
+      source: "protectedSkill",
+    });
+    expect(mounts).not.toContainEqual(
+      expect.objectContaining({
+        hostRoot: customRoot,
+        containerRoot: "/workspace/skills",
+        source: "bind",
+      }),
+    );
   });
 });

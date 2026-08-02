@@ -4,6 +4,7 @@ import type { QaProviderMode } from "./model-selection.js";
 import { readQaScenarioById, readQaScenarioPack } from "./scenario-catalog.js";
 import {
   describeQaProviderLaneMismatches,
+  resolveQaScenarioLaneChannels,
   scenarioMatchesQaProviderLane,
 } from "./scenario-lane.js";
 import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
@@ -70,6 +71,18 @@ describe("QA scenario lane matching", () => {
     },
   );
 
+  it("keeps multi-channel metadata as OR eligibility while exposing every supported lane", () => {
+    const scenario = readQaScenarioById("thread-isolation");
+
+    expect(
+      resolveQaScenarioLaneChannels({
+        scenario,
+        channelDriver: "live",
+        supportsChannel: (channel) => channel === "slack" || channel === "matrix",
+      }),
+    ).toEqual(["slack", "matrix"]);
+  });
+
   it("reports every declared mismatch in one decision", () => {
     const scenario = makeQaSuiteTestScenario("strict-live-lane", {
       channel: "matrix",
@@ -102,34 +115,40 @@ describe("QA scenario lane matching", () => {
     ]);
   });
 
-  it("keeps provider contracts independent from the selected channel driver", () => {
-    const scenario = makeQaSuiteTestScenario("portable-telegram", {
-      channel: "telegram",
-      config: {
-        requiredProvider: "openai",
-        requiredModel: "gpt-5.6-luna",
-      },
-    });
+  it.each(["crabline", "live"] as const)(
+    "keeps provider, model, and auth contracts independent from the $channelDriver driver",
+    (channelDriver) => {
+      const scenario = makeQaSuiteTestScenario("portable-telegram", {
+        channel: "telegram",
+        config: {
+          requiredProvider: "claude-cli",
+          requiredModel: "claude-sonnet-4-6",
+          authMode: "subscription",
+        },
+      });
 
-    expect(
-      scenarioMatchesQaProviderLane({
-        scenario,
-        providerMode: "live-frontier",
-        primaryModel: "openai/gpt-5.6-luna",
-        channelDriver: "crabline",
-        channel: "telegram",
-      }),
-    ).toBe(true);
-    expect(
-      scenarioMatchesQaProviderLane({
-        scenario,
-        providerMode: "mock-openai",
-        primaryModel: "openai/gpt-5.6-luna",
-        channelDriver: "live",
-        channel: "telegram",
-      }),
-    ).toBe(true);
-  });
+      expect(
+        scenarioMatchesQaProviderLane({
+          scenario,
+          providerMode: "live-frontier",
+          primaryModel: "claude-cli/claude-sonnet-4-6",
+          channelDriver,
+          channel: "telegram",
+          claudeCliAuthMode: "subscription",
+        }),
+      ).toBe(true);
+      expect(
+        describeQaProviderLaneMismatches({
+          scenario,
+          providerMode: "mock-openai",
+          primaryModel: "openai/gpt-5.6-luna",
+          channelDriver,
+          channel: "telegram",
+          claudeCliAuthMode: "api-key",
+        }),
+      ).toEqual(["provider=claude-cli", "model=claude-sonnet-4-6", "authMode=subscription"]);
+    },
+  );
 
   it("enforces an explicit channel driver contract", () => {
     const scenario = makeQaSuiteTestScenario("live-only", {

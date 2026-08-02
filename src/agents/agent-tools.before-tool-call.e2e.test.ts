@@ -495,6 +495,49 @@ describe("before_tool_call loop detection behavior", () => {
     expectToolLoopBlockedResult(result, "identical outcomes");
   });
 
+  it("blocks changing-argument terminal exec failures and escalates vetoes", async () => {
+    const output = "Traceback: missing package\n\n(Command exited with code 1)";
+    const execute = vi.fn().mockResolvedValue({
+      content: [{ type: "text", text: output }],
+      details: { status: "completed", exitCode: 1, aggregated: output },
+    });
+    const tool = createWrappedTool("exec", execute);
+
+    await withToolLoopEvents(async (emitted) => {
+      for (let index = 0; index <= GLOBAL_CIRCUIT_BREAKER_THRESHOLD; index += 1) {
+        const result = await tool.execute(
+          `exec-semantic-${index}`,
+          { command: `python job-${index}.py` },
+          undefined,
+          undefined,
+        );
+        if (index >= CRITICAL_THRESHOLD) {
+          expectToolLoopBlockedResult(
+            result,
+            index === GLOBAL_CIRCUIT_BREAKER_THRESHOLD
+              ? "global circuit breaker"
+              : "identical outcomes",
+          );
+        }
+      }
+
+      expect(execute).toHaveBeenCalledTimes(CRITICAL_THRESHOLD);
+      expect(emitted.find((event) => event.detector === "generic_repeat")).toMatchObject({
+        level: "critical",
+        action: "block",
+        count: CRITICAL_THRESHOLD,
+        toolName: "exec",
+      });
+      expect(emitted.at(-1)).toMatchObject({
+        detector: "global_circuit_breaker",
+        level: "critical",
+        action: "block",
+        count: GLOBAL_CIRCUIT_BREAKER_THRESHOLD,
+        toolName: "exec",
+      });
+    });
+  });
+
   it("warns on non-strict same-tool argument churn while preserving tool execution", async () => {
     const execute = vi.fn().mockImplementation(async (toolCallId: string, _params: unknown) => {
       const progressed = toolCallId === "write-churn-progress";
@@ -3110,6 +3153,80 @@ describe("before_tool_call requireApproval handling", () => {
     expect(requestParams.turnSourceTo).toBeUndefined();
     expect(requestParams.turnSourceAccountId).toBeUndefined();
     expect(requestParams.turnSourceThreadId).toBeUndefined();
+  });
+
+  it.each([
+    {
+      label: "cron",
+      trigger: "cron",
+      reason: "Plugin approval unavailable: cron runs have no approval-capable initiating surface.",
+    },
+    {
+      label: "heartbeat hook",
+      trigger: "heartbeat",
+      reason:
+        "Plugin approval unavailable: heartbeat runs have no approval-capable initiating surface.",
+    },
+    {
+      label: "non-interactive CLI",
+      trigger: "user",
+      reason:
+        "Plugin approval unavailable: non-interactive CLI runs have no approval-capable initiating surface.",
+    },
+  ])("fails fast when a $label run requires plugin approval", async ({ trigger, reason }) => {
+    const onResolution = vi.fn();
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      requireApproval: {
+        title: "Unattended approval",
+        description: "Command needs review",
+        onResolution,
+      },
+    });
+
+    const result = await runBeforeToolCallHook({
+      toolName: "bash",
+      params: { command: "gh run view 1" },
+      ctx: { agentId: "main", sessionKey: "main", trigger },
+    });
+
+    expect(result).toEqual({
+      blocked: true,
+      kind: "failure",
+      disposition: "failed",
+      deniedReason: "plugin-approval-unavailable",
+      reason,
+      params: { command: "gh run view 1" },
+    });
+    expect(mockCallGateway).not.toHaveBeenCalled();
+    expect(onResolution).toHaveBeenCalledWith("cancelled");
+  });
+
+  it("keeps waiting when an interactive approval surface is bound", async () => {
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      requireApproval: {
+        title: "Interactive approval",
+        description: "CLI command needs review",
+      },
+    });
+    mockCallGateway.mockResolvedValueOnce({ id: "interactive-id", status: "accepted" });
+    mockCallGateway.mockResolvedValueOnce({ id: "interactive-id", decision: "allow-once" });
+
+    const result = await runBeforeToolCallHook({
+      toolName: "bash",
+      params: { command: "gh run view 1" },
+      ctx: {
+        agentId: "main",
+        sessionKey: "main",
+        trigger: "user",
+        approvalReviewerDeviceId: "device-tui-reviewer",
+      },
+    });
+
+    expect(result).toMatchObject({ blocked: false, approvalResolution: "allow-once" });
+    expect(mockCallGateway.mock.calls.map(([method]) => method)).toEqual([
+      "plugin.approval.request",
+      "plugin.approval.waitDecision",
+    ]);
   });
 });
 

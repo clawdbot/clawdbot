@@ -102,6 +102,7 @@ function createBackendSandboxConfig(params?: { binds?: string[]; target?: string
     scope: "session",
     workspaceAccess: "rw" as const,
     workspaceRoot: "~/.openclaw/sandboxes",
+    dockerTmpfsSource: "configured",
     docker: {
       image: "img",
       containerPrefix: "prefix-",
@@ -183,6 +184,16 @@ describe("ssh sandbox backend", () => {
       await fs.rm(dir, { recursive: true, force: true });
     }
     vi.restoreAllMocks();
+  });
+
+  it("preserves shared runtime identity and hashes workspace-qualified scopes", () => {
+    expect(resolveSshRuntimePaths("/remote/openclaw", "shared").runtimeId).toBe(
+      "openclaw-ssh-shared-8198076c",
+    );
+    expect(
+      resolveSshRuntimePaths("/remote/openclaw", `agent:main:workspace:${"a".repeat(32)}`)
+        .runtimeId,
+    ).toMatch(/^openclaw-ssh-workspace-[a-f0-9]{32}$/);
   });
 
   it("describes runtimes via the configured ssh target", async () => {
@@ -404,6 +415,7 @@ describe("ssh sandbox backend", () => {
         scope: "session",
         workspaceAccess: "rw",
         workspaceRoot: "~/.openclaw/sandboxes",
+        dockerTmpfsSource: "configured",
         docker: {
           image: "openclaw-sandbox:bookworm-slim",
           containerPrefix: "openclaw-sbx-",

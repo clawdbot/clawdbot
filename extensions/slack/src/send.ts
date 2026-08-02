@@ -392,6 +392,19 @@ function resolveEnterpriseEventScope(params: {
   return scope;
 }
 
+function resolveSlackTextChunkLimit(params: {
+  cfg: OpenClawConfig;
+  accountId?: string;
+  textLimit?: number;
+}): number {
+  const configuredLimit =
+    params.textLimit ??
+    resolveTextChunkLimit(params.cfg, "slack", params.accountId, {
+      fallbackLimit: SLACK_TEXT_LIMIT,
+    });
+  return Math.min(configuredLimit, SLACK_TEXT_LIMIT);
+}
+
 function resolveSlackTextChunks(params: {
   cfg: OpenClawConfig;
   accountId?: string;
@@ -401,12 +414,7 @@ function resolveSlackTextChunks(params: {
   preservePlainText?: boolean;
 }): string[] {
   const text = params.preservePlainText ? params.text : params.text.trim();
-  const configuredLimit =
-    params.textLimit ??
-    resolveTextChunkLimit(params.cfg, "slack", params.accountId, {
-      fallbackLimit: SLACK_TEXT_LIMIT,
-    });
-  const chunkLimit = Math.min(configuredLimit, SLACK_TEXT_LIMIT);
+  const chunkLimit = resolveSlackTextChunkLimit(params);
   if (params.preservePlainText) {
     const chunks: string[] = [];
     let remaining = text;
@@ -1124,14 +1132,22 @@ async function sendMessageSlackQueuedInner(params: {
       ? (explicitNativeDataFallbackBase ?? trimmedMessage)
       : "";
   const hasNativeData = Boolean(blocks && hasSlackNativeDataBlock(blocks));
+  const textChunkLimit = resolveSlackTextChunkLimit({
+    cfg,
+    accountId: account.accountId,
+    ...(opts.textLimit !== undefined ? { textLimit: opts.textLimit } : {}),
+  });
   const usesOrderedBlockAccessibility = Boolean(
     blocks && (hasNativeData || opts.authoredTextPlacement !== undefined),
   );
+  // Slack may auto-split over-limit text while returning only one timestamp.
+  // Plan explicit chunks so every delivered part remains in the receipt.
   const orderedBlockDeliveryPlan =
     blocks && usesOrderedBlockAccessibility
       ? buildSlackNativeDataDeliveryPlan({
           baseText: nativeDataFallbackBase,
           blocks,
+          textLimit: textChunkLimit,
         })
       : undefined;
   const orderedBlockAccessibilityText =
@@ -1300,7 +1316,7 @@ async function sendMessageSlackQueuedInner(params: {
     cfg,
     accountId: account.accountId,
     text: trimmedMessage,
-    ...(opts.textLimit !== undefined ? { textLimit: opts.textLimit } : {}),
+    textLimit: textChunkLimit,
     ...(opts.textIsSlackMrkdwn ? { textIsSlackMrkdwn: true } : {}),
     ...(opts.textIsSlackPlainText ? { preservePlainText: true } : {}),
   });

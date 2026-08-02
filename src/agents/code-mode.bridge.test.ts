@@ -484,6 +484,40 @@ describe("Code Mode bridge settlement and cancellation", () => {
     expect(testing.activeRuns.size).toBe(0);
   });
 
+  it("marks failures after nested tool dispatch as non-retryable bridge failures", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const sideEffect = pluginToolWithExecute("fake_side_effect", "Side effect", async () =>
+      jsonResult({ ok: true }),
+    );
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, sideEffect],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = resultDetails(
+      await expectDefined(codeModeTools[0], "Code Mode exec test invariant").execute(
+        "code-call-post-dispatch-failure",
+        {
+          code: `
+            await tools.callValue("fake_side_effect", {});
+            throw new Error("after dispatch");
+          `,
+        },
+      ),
+    );
+
+    expect(sideEffect.execute).toHaveBeenCalledOnce();
+    expect(details).toMatchObject({
+      status: "failed",
+      failurePhase: "bridge",
+      bridgeDispatchStarted: true,
+    });
+  });
+
   it("fails fast without parking a suspended run when the exec call is aborted", async () => {
     const catalogRef = createToolSearchCatalogRef();
     // Long timeout so a missing abort short-circuit would block the whole test.

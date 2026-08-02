@@ -1,4 +1,4 @@
-import { stableStringify } from "../stable-stringify.js";
+import { stableStringify } from "@openclaw/normalization-core";
 import { normalizeToolName } from "../tool-policy.js";
 import { codexNativeHookRelayResponseCodec } from "./native-hook-relay-response-codec.js";
 import type {
@@ -16,8 +16,11 @@ import {
   shellQuoteArgs,
 } from "./native-hook-relay-utils.js";
 
-const NATIVE_HOOK_TOOL_NAME_ALIASES: Record<string, string> = {
+const CODEX_NATIVE_HOOK_TOOL_NAME_ALIASES: Record<string, string> = {
   exec_command: "exec",
+  write: "apply_patch",
+  edit: "apply_patch",
+  agent: "spawn_agent",
 };
 
 const nativeHookRelayProviderAdapters: Record<
@@ -184,5 +187,5 @@ export function readNativeHookRelayApprovalMode(rawPayload: JsonValue): "report"
 
 export function normalizeNativeHookToolName(toolName: string | undefined): string {
   const normalized = normalizeToolName(toolName ?? "tool");
-  return NATIVE_HOOK_TOOL_NAME_ALIASES[normalized] ?? normalized;
+  return CODEX_NATIVE_HOOK_TOOL_NAME_ALIASES[normalized] ?? normalized;
 }

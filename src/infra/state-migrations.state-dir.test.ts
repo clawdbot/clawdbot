@@ -140,7 +140,6 @@ describe("legacy state dir auto-migration", () => {
               startup: {
                 sidecar: false,
                 memory: false,
-                deferConfiguredChannelFullLoadUntilAfterListen: false,
                 agentHarnesses: [],
               },
               compat: [],

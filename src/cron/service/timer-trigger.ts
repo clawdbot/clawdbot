@@ -56,14 +56,6 @@ export function resolveCronNextRunWithLowerBound(params: {
   return Math.max(params.naturalNext, params.lowerBoundMs);
 }
 
-function resolveRetryConfig() {
-  return {
-    maxAttempts: DEFAULT_MAX_TRANSIENT_RETRIES,
-    backoffMs: DEFAULT_ERROR_BACKOFF_SCHEDULE_MS.slice(0, 3),
-    retryOn: undefined,
-  };
-}
-
 export function resolveTransientCronRetryDecision(params: {
   cronConfig?: CronConfig;
   error: string | undefined;
@@ -72,7 +64,6 @@ export function resolveTransientCronRetryDecision(params: {
   executionStarted?: boolean;
   consecutiveErrors: number | undefined;
 }): TransientCronRetryDecision {
-  const retryConfig = resolveRetryConfig();
   if (params.errorClassification?.kind === "permanent") {
     return {
       retryable: false,
@@ -82,7 +73,7 @@ export function resolveTransientCronRetryDecision(params: {
   }
   const retryHint = resolveCronExecutionRetryHint({
     error: params.error,
-    retryOn: retryConfig.retryOn,
+    retryOn: undefined,
     classifiedReason:
       params.errorClassification?.kind === "reason"
         ? params.errorClassification.reason
@@ -98,7 +89,7 @@ export function resolveTransientCronRetryDecision(params: {
       reason: "permanent error",
     };
   }
-  if (consecutiveErrors > retryConfig.maxAttempts) {
+  if (consecutiveErrors > DEFAULT_MAX_TRANSIENT_RETRIES) {
     return {
       retryable: false,
       consecutiveErrors,
@@ -110,7 +101,10 @@ export function resolveTransientCronRetryDecision(params: {
     retryable: true,
     consecutiveErrors,
     retryCategory: retryHint.category,
-    backoffMs: errorBackoffMs(consecutiveErrors, retryConfig.backoffMs),
+    backoffMs: errorBackoffMs(
+      consecutiveErrors,
+      DEFAULT_ERROR_BACKOFF_SCHEDULE_MS.slice(0, DEFAULT_MAX_TRANSIENT_RETRIES),
+    ),
     reason: "transient retry",
   };
 }
@@ -119,9 +113,8 @@ export function resolveDisabledHeartbeatOneShotRetryDecision(params: {
   cronConfig?: CronConfig;
   consecutiveSkipped: number | undefined;
 }): DisabledHeartbeatOneShotRetryDecision {
-  const retryConfig = resolveRetryConfig();
   const consecutiveSkipped = params.consecutiveSkipped ?? 0;
-  if (consecutiveSkipped > retryConfig.maxAttempts) {
+  if (consecutiveSkipped > DEFAULT_MAX_TRANSIENT_RETRIES) {
     return {
       retryable: false,
       consecutiveSkipped,
@@ -131,7 +124,10 @@ export function resolveDisabledHeartbeatOneShotRetryDecision(params: {
   return {
     retryable: true,
     consecutiveSkipped,
-    backoffMs: errorBackoffMs(consecutiveSkipped, retryConfig.backoffMs),
+    backoffMs: errorBackoffMs(
+      consecutiveSkipped,
+      DEFAULT_ERROR_BACKOFF_SCHEDULE_MS.slice(0, DEFAULT_MAX_TRANSIENT_RETRIES),
+    ),
     reason: "disabled heartbeat retry",
   };
 }
@@ -211,6 +207,7 @@ export function resolveDeliveryState(params: {
   job: CronJob;
   runStatus: CronRunStatus;
   delivered?: boolean;
+  deliveryAttempted?: boolean;
   error?: string;
   globalFailureDestination?: CronConfig["failureAlert"];
 }): {
@@ -219,7 +216,8 @@ export function resolveDeliveryState(params: {
   error?: string;
   failureNotification: CronFailureNotificationDelivery;
 } {
-  const primaryDeliveryRequested = resolveCronDeliveryPlan(params.job).requested;
+  const primaryDeliveryPlan = resolveCronDeliveryPlan(params.job);
+  const primaryDeliveryRequested = primaryDeliveryPlan.requested;
   // Failure destinations can receive alerts even when the primary delivery
   // path was disabled or failed before direct delivery produced an ack.
   const alternateFailureNotificationRequested =
@@ -227,6 +225,27 @@ export function resolveDeliveryState(params: {
     params.job.delivery?.bestEffort !== true &&
     resolveFailureDestination(params.job, params.globalFailureDestination) !== null;
   if (!primaryDeliveryRequested) {
+    if (primaryDeliveryPlan.mode === "webhook") {
+      if (params.delivered === true) {
+        return {
+          delivered: true,
+          status: "delivered",
+          failureNotification: {
+            status: alternateFailureNotificationRequested ? "unknown" : "not-requested",
+          },
+        };
+      }
+      if (params.deliveryAttempted === true) {
+        return {
+          delivered: false,
+          status: "not-delivered",
+          error: params.error,
+          failureNotification: {
+            status: alternateFailureNotificationRequested ? "unknown" : "not-requested",
+          },
+        };
+      }
+    }
     return {
       status: "not-requested",
       failureNotification: {

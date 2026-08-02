@@ -12,6 +12,7 @@ import type {
 import { assertSecretInputResolved } from "../config/types.secrets.js";
 import type { PinnedDispatcherPolicy } from "../infra/net/ssrf.js";
 import type { Api } from "../llm/types.js";
+import type { PluginMetadataSnapshotOwnerMaps } from "../plugins/plugin-metadata-snapshot.types.js";
 import type {
   ProviderRequestCapabilities,
   ProviderRequestCapability,
@@ -168,6 +169,7 @@ type ResolveProviderRequestPolicyConfigParams = {
   provider?: string;
   api?: RequestApi;
   baseUrl?: string;
+  providerMetadataOwners?: PluginMetadataSnapshotOwnerMaps;
   defaultBaseUrl?: string;
   capability?: ProviderRequestCapability;
   transport?: ProviderRequestTransport;
@@ -689,6 +691,9 @@ export function resolveProviderRequestPolicyConfig(
     provider: params.provider,
     api: params.api,
     baseUrl,
+    ...(params.providerMetadataOwners
+      ? { providerMetadataOwners: params.providerMetadataOwners }
+      : {}),
     capability,
     transport,
   } satisfies Parameters<typeof resolveProviderRequestPolicy>[0];
@@ -751,6 +756,7 @@ export function resolveProviderRequestConfig(params: {
   provider: string;
   api?: RequestApi;
   baseUrl?: string;
+  providerMetadataOwners?: PluginMetadataSnapshotOwnerMaps;
   capability?: ProviderRequestCapability;
   transport?: ProviderRequestTransport;
   discoveredHeaders?: Record<string, string>;
@@ -803,9 +809,13 @@ export function resolveProviderRequestHeaders(params: {
 const MODEL_PROVIDER_REQUEST_TRANSPORT_SYMBOL = Symbol.for(
   "openclaw.modelProviderRequestTransport",
 );
+const MODEL_PROVIDER_METADATA_OWNERS_SYMBOL = Symbol.for("openclaw.modelProviderMetadataOwners");
 
 type ModelWithProviderRequestTransport = {
   [MODEL_PROVIDER_REQUEST_TRANSPORT_SYMBOL]?: ModelProviderRequestTransportOverrides;
+};
+type ModelWithProviderMetadataOwners = {
+  [MODEL_PROVIDER_METADATA_OWNERS_SYMBOL]?: PluginMetadataSnapshotOwnerMaps;
 };
 
 /** Attaches model-scoped provider request transport metadata without mutating the model. */
@@ -826,5 +836,33 @@ export function getModelProviderRequestTransport(
   model: object,
 ): ModelProviderRequestTransportOverrides | undefined {
   return (model as ModelWithProviderRequestTransport)[MODEL_PROVIDER_REQUEST_TRANSPORT_SYMBOL];
+}
+
+/** Attaches the lifecycle-owned plugin metadata generation used for request policy. */
+export function attachModelProviderMetadataOwners<TModel extends object>(
+  model: TModel,
+  owners: PluginMetadataSnapshotOwnerMaps | undefined,
+): TModel {
+  if (!owners) {
+    return model;
+  }
+  const next = { ...model } as TModel & ModelWithProviderMetadataOwners;
+  next[MODEL_PROVIDER_METADATA_OWNERS_SYMBOL] = owners;
+  return next;
+}
+
+/** Reads the plugin metadata generation attached to a prepared model. */
+export function getModelProviderMetadataOwners(
+  model: object,
+): PluginMetadataSnapshotOwnerMaps | undefined {
+  return (model as ModelWithProviderMetadataOwners)[MODEL_PROVIDER_METADATA_OWNERS_SYMBOL];
+}
+
+/** Carries request-policy ownership across provider/transport model projections. */
+export function inheritModelProviderMetadataOwners<TModel extends object>(
+  source: object,
+  target: TModel,
+): TModel {
+  return attachModelProviderMetadataOwners(target, getModelProviderMetadataOwners(source));
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

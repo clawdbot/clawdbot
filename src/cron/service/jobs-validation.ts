@@ -1,4 +1,5 @@
 /** Validation helpers for cron schedules, targets, payloads, and delivery. */
+import { parseCodeModeScriptSyntax } from "../../agents/code-mode-script-syntax.js";
 import { resolveCronTriggerMinIntervalMs } from "../../config/cron-limits.js";
 import type { CronConfig } from "../../config/types.cron.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
@@ -53,13 +54,21 @@ export function assertSupportedJobSpec(
 
 export function assertScriptPayloadSupport(
   job: Pick<CronJob, "payload" | "trigger">,
-  opts?: { cronConfig?: CronConfig; requireEnabled?: boolean },
+  opts?: { cronConfig?: CronConfig; requireEnabled?: boolean; validateSyntax?: boolean },
 ) {
   if (job.payload.kind !== "script") {
     return;
   }
   if (!job.payload.script.trim()) {
     throw new Error("cron script payload must not be empty");
+  }
+  if (opts?.validateSyntax !== false) {
+    const parsed = parseCodeModeScriptSyntax(job.payload.script);
+    if (!parsed.ok) {
+      throw new Error(
+        `cron script payload has a syntax error: ${parsed.message} (line ${parsed.line}, column ${parsed.column})`,
+      );
+    }
   }
   if (job.trigger) {
     // Both script kinds expose trigger.state, so composing them would give one

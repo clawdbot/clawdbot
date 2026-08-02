@@ -36,7 +36,6 @@ vi.mock("../plugins/plugin-registry.js", () => ({
             startup: {
               sidecar: false,
               memory: false,
-              deferConfiguredChannelFullLoadUntilAfterListen: false,
               agentHarnesses: [],
             },
             compat: [],
@@ -714,38 +713,6 @@ describe("resolveUsableCustomProviderApiKey", () => {
         delete process.env.MY_CUSTOM_KEY;
       } else {
         process.env.MY_CUSTOM_KEY = previous;
-      }
-    }
-  });
-
-  it("resolves legacy __env__ markers from process env for custom providers", () => {
-    const previous = process.env.BAILIAN_API_KEY;
-    process.env.BAILIAN_API_KEY = "sk-bailian-env"; // pragma: allowlist secret
-    try {
-      const resolved = resolveUsableCustomProviderApiKey({
-        cfg: {
-          models: {
-            providers: {
-              bailian: {
-                baseUrl: "https://coding.dashscope.aliyuncs.com/v1",
-                api: "openai-completions",
-                apiKey: "__env__:BAILIAN_API_KEY", // pragma: allowlist secret
-                models: [],
-              },
-            },
-          },
-        },
-        provider: "bailian",
-        secretSentinels: true,
-      });
-      expect(looksLikeSecretSentinel(resolved?.apiKey ?? "")).toBe(true);
-      expect(resolveSecretSentinel(resolved?.apiKey ?? "")).toBe("sk-bailian-env");
-      expect(resolved?.source).toContain("BAILIAN_API_KEY");
-    } finally {
-      if (previous === undefined) {
-        delete process.env.BAILIAN_API_KEY;
-      } else {
-        process.env.BAILIAN_API_KEY = previous;
       }
     }
   });

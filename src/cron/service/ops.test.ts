@@ -16,7 +16,7 @@ import { loadCronJobsStoreWithConfigJobs, loadCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import type { CronJob } from "../types.js";
 import { start, stop } from "./ops-lifecycle.js";
-import { add, remove, update } from "./ops-mutations.js";
+import { add, remove, removeStaleJobFamily, update } from "./ops-mutations.js";
 import { list } from "./ops-read.js";
 import { run } from "./ops-run.js";
 import { createCronServiceState, type CronEvent } from "./state.js";
@@ -231,18 +231,20 @@ function insertCronJobRow(storePath: string, job: CronJob) {
   runOpenClawStateWriteTransaction(({ db }) => {
     db.prepare(
       `INSERT INTO cron_jobs (
-        store_key, job_id, name, enabled, created_at_ms, schedule_kind,
+        store_key, job_id, declaration_key, name, description, enabled, created_at_ms, schedule_kind,
         at, every_ms, anchor_ms, schedule_expr, session_target, wake_mode, payload_kind,
         payload_message, delivery_mode, delivery_to, job_json, state_json, updated_at
       ) VALUES (
-        $storeKey, $jobId, $name, $enabled, $createdAtMs, $scheduleKind,
+        $storeKey, $jobId, $declarationKey, $name, $description, $enabled, $createdAtMs, $scheduleKind,
         $at, $everyMs, $anchorMs, $scheduleExpr, $sessionTarget, $wakeMode, $payloadKind,
         $payloadMessage, $deliveryMode, $deliveryTo, $jobJson, $stateJson, $updatedAt
       )`,
     ).run({
       $storeKey: path.resolve(storePath),
       $jobId: job.id,
+      $declarationKey: job.declarationKey ?? null,
       $name: job.name,
+      $description: job.description ?? null,
       $enabled: job.enabled ? 1 : 0,
       $createdAtMs: job.createdAtMs,
       $scheduleKind: job.schedule.kind,
@@ -262,6 +264,67 @@ function insertCronJobRow(storePath: string, job: CronJob) {
     });
   });
 }
+
+describe("cron stale job-family adoption", () => {
+  it("removes owner-tagged legacy rows outside the active store", async () => {
+    const { storePath } = await makeStorePath();
+    const staleStorePath = path.join(path.dirname(storePath), "legacy-copy", "jobs.json");
+    const now = Date.parse("2026-07-29T12:00:00.000Z");
+    const state = createOkIsolatedCronState({ storePath, now });
+    const family = {
+      declarationKey: "memory-core:memory-dreaming-promotion",
+      name: "Memory Dreaming Promotion",
+      ownerPluginTag: "[managed-by=memory-core.short-term-promotion]",
+    };
+    await add(state, {
+      declarationKey: family.declarationKey,
+      name: family.name,
+      description: `${family.ownerPluginTag} current`,
+      enabled: true,
+      schedule: { kind: "cron", expr: "*/3 * * * *" },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "dream" },
+    });
+    const legacy = {
+      id: "75e182e6-8728-43ae-832b-01f50702feed",
+      name: family.name,
+      description: `${family.ownerPluginTag} legacy`,
+      enabled: true,
+      createdAtMs: now - 10_000,
+      updatedAtMs: now - 10_000,
+      schedule: { kind: "cron" as const, expr: "0 3 * * *" },
+      sessionTarget: "isolated" as const,
+      wakeMode: "now" as const,
+      payload: { kind: "agentTurn" as const, message: "dream" },
+      state: {},
+    } satisfies CronJob;
+    insertCronJobRow(staleStorePath, legacy);
+    insertCronJobRow(staleStorePath, {
+      ...legacy,
+      id: "operator-same-name",
+      description: "Operator-owned job with the same display name",
+    });
+
+    await expect(removeStaleJobFamily(state, family)).resolves.toBe(1);
+
+    const remaining = runOpenClawStateWriteTransaction(({ db }) =>
+      db
+        .prepare("SELECT store_key, job_id FROM cron_jobs WHERE name = ? ORDER BY job_id")
+        .all(family.name),
+    );
+    expect(remaining).toHaveLength(2);
+    expect(remaining).toEqual(
+      expect.arrayContaining([
+        { store_key: path.resolve(storePath), job_id: expect.any(String) },
+        { store_key: path.resolve(staleStorePath), job_id: "operator-same-name" },
+      ]),
+    );
+    if (state.timer) {
+      clearTimeout(state.timer);
+    }
+  });
+});
 
 async function expectDueIsolatedManualRunProgresses(storePath: string, now: number) {
   const state = createOkIsolatedCronState({ storePath, now, summary: "done" });
@@ -858,7 +921,7 @@ describe("cron service ops seam coverage", () => {
         runtime: "cron",
         status: "succeeded",
         sourceId: "isolated-timeout",
-        progressSummary: "Running cron job.",
+        progressSummary: "Running automation.",
       });
       expect(findTaskByRunId(manualRunId)).toBeUndefined();
     });
@@ -1144,7 +1207,7 @@ describe("cron service ops seam coverage", () => {
         runtime: "cron",
         status: "timed_out",
         sourceId: "startup-timeout",
-        progressSummary: "Running cron job.",
+        progressSummary: "Running automation.",
       });
     });
   });
@@ -1181,8 +1244,8 @@ describe("cron service ops seam coverage", () => {
         throw new Error("expected active manual cron task ledger record");
       }
       expect(task.status).toBe("running");
-      expect(task.progressSummary).toBe("Running cron job.");
-      expect(formatTaskStatusDetail(task)).toBe("Running cron job.");
+      expect(task.progressSummary).toBe("Running automation.");
+      expect(formatTaskStatusDetail(task)).toBe("Running automation.");
 
       resolveRun?.({ status: "ok", summary: "done" });
       await manualRun;
@@ -1290,6 +1353,54 @@ describe("cron service ops seam coverage", () => {
     }
 
     expect(updated.enabled).toBe(false);
+  });
+
+  it("clears auto-disable state and failure streaks when manually re-enabled", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-08-01T16:00:00.000Z");
+    await writeCronStoreSnapshot({
+      storePath,
+      jobs: [
+        {
+          id: "auto-disabled-recurring",
+          name: "auto-disabled recurring",
+          enabled: false,
+          createdAtMs: now - 60_000,
+          updatedAtMs: now - 60_000,
+          schedule: { kind: "cron", expr: "0 * * * *" },
+          sessionTarget: "isolated",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "agentTurn", message: "do work" },
+          state: {
+            consecutiveErrors: 10,
+            scheduleErrorCount: 3,
+            autoDisabled: {
+              reason: "consecutive-failures",
+              atMs: now - 1_000,
+              consecutiveErrors: 10,
+            },
+          },
+        },
+      ],
+    });
+    const state = createOkIsolatedCronState({ storePath, now });
+
+    const updated = await update(state, "auto-disabled-recurring", { enabled: true });
+    if (state.timer) {
+      clearTimeout(state.timer);
+    }
+
+    expect(updated).toMatchObject({
+      enabled: true,
+      state: { consecutiveErrors: 0, scheduleErrorCount: 0 },
+    });
+    expect(updated.state.autoDisabled).toBeUndefined();
+    const persisted = (await loadCronStore(storePath)).jobs[0];
+    expect(persisted).toMatchObject({
+      enabled: true,
+      state: { consecutiveErrors: 0, scheduleErrorCount: 0 },
+    });
+    expect(persisted?.state.autoDisabled).toBeUndefined();
   });
 
   it("rejects enabling a pre-existing never-matching job", async () => {

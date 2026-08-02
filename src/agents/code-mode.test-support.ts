@@ -41,7 +41,14 @@ type CodeModeWorkerResult =
       pendingRequests: Array<{ id: string; method: string; args: unknown[] }>;
       output: unknown[];
     }
-  | { status: "failed"; error: string; code: CodeModeFailureCode; output: unknown[] };
+  | {
+      status: "failed";
+      error: string;
+      code: CodeModeFailureCode;
+      failurePhase: "input" | "guest" | "bridge" | "host";
+      bridgeDispatchStarted: boolean;
+      output: unknown[];
+    };
 
 type CodeModeTestApi = {
   activeRuns: Map<

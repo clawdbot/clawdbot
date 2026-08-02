@@ -36,7 +36,6 @@ async function resolveBootstrapContext(params: {
     bootstrapContextMode: params.bootstrapContextMode ?? "full",
     bootstrapContextRunKind: params.bootstrapContextRunKind ?? "default",
     bootstrapMode: params.bootstrapMode ?? "none",
-    sessionFile: "/tmp/session.jsonl",
     hasCompletedBootstrapTurn,
     resolveBootstrapContextForRun,
   });
@@ -59,7 +58,7 @@ describe("embedded attempt context injection", () => {
     expect(result.isContinuationTurn).toBe(true);
     expect(result.bootstrapFiles).toStrictEqual([]);
     expect(result.contextFiles).toStrictEqual([]);
-    expect(hasCompletedBootstrapTurn).toHaveBeenCalledWith("/tmp/session.jsonl");
+    expect(hasCompletedBootstrapTurn).toHaveBeenCalledOnce();
     expect(resolveBootstrapContextForRun).not.toHaveBeenCalled();
   });
 
@@ -201,7 +200,7 @@ describe("embedded attempt context injection", () => {
       });
 
     expect(result.isContinuationTurn).toBe(true);
-    expect(hasCompletedBootstrapTurn).toHaveBeenCalledWith("/tmp/session.jsonl");
+    expect(hasCompletedBootstrapTurn).toHaveBeenCalledOnce();
     expect(resolveBootstrapContextForRun).not.toHaveBeenCalled();
     expect(result.shouldRecordCompletedBootstrapTurn).toBe(false);
   });

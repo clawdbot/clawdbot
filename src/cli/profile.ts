@@ -5,6 +5,11 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import {
+  resolveGatewayLaunchAgentLabel,
+  resolveGatewaySystemdServiceName,
+  resolveGatewayWindowsTaskName,
+} from "../daemon/constants.js";
 import { resolveHomeRelativePath, resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
 import { isValidProfileName } from "./profile-utils.js";
@@ -127,6 +132,24 @@ export function applyCliProfileEnv(params: {
 
   if (!existingConfigPath || replacesInheritedProfileConfig) {
     env.OPENCLAW_CONFIG_PATH = path.join(stateDir, "openclaw.json");
+  }
+
+  if (switchesInheritedProfile) {
+    const inheritedSystemdServiceName = resolveGatewaySystemdServiceName(inheritedProfile);
+    const inheritedServiceIdentities = {
+      OPENCLAW_LAUNCHD_LABEL: [resolveGatewayLaunchAgentLabel(inheritedProfile)],
+      OPENCLAW_SYSTEMD_UNIT: [
+        inheritedSystemdServiceName,
+        `${inheritedSystemdServiceName}.service`,
+      ],
+      OPENCLAW_WINDOWS_TASK_NAME: [resolveGatewayWindowsTaskName(inheritedProfile)],
+    };
+    for (const [key, inheritedValues] of Object.entries(inheritedServiceIdentities)) {
+      const activeValue = normalizeOptionalString(env[key]);
+      if (activeValue && inheritedValues.includes(activeValue)) {
+        delete env[key];
+      }
+    }
   }
 
   if (profile === "dev" && !env.OPENCLAW_GATEWAY_PORT?.trim()) {

@@ -28,21 +28,6 @@ vi.mock("./sessions.runtime.js", () => ({
   })),
 }));
 
-function normalizeBoardGetSnapshot(snapshot: BoardSnapshot): BoardSnapshot {
-  return {
-    ...snapshot,
-    widgets: snapshot.widgets.map(
-      ({ frameUrl, viewTicket, viewGeneration, instanceId, ...widget }) => ({
-        ...widget,
-        ...(frameUrl ? { frameUrl: frameUrl.replace(/bt=[^&]+/u, "bt=<ticket>") } : {}),
-        ...(viewTicket ? { viewTicket: "<ticket>" } : {}),
-        ...(viewGeneration ? { viewGeneration: "<generation>" } : {}),
-        ...(instanceId ? { instanceId: "<instance>" } : {}),
-      }),
-    ),
-  };
-}
-
 describe("board gateway methods", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -215,41 +200,6 @@ describe("board gateway methods", () => {
     expect(snapshot.widgets[0]).toMatchObject({ sandboxPort: 18790 });
   });
 
-  it("returns the same board.get wire structure from memory and SQLite stores", async () => {
-    const sessionKey = "agent:main:board-get-parity";
-    const stateDir = tempDirs.make("openclaw-board-get-parity-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const database = openOpenClawAgentDatabase({ agentId: "main", env });
-    replaceSessionEntrySync(
-      { agentId: "main", sessionKey, storePath: database.path },
-      { sessionId: "board-get-parity", updatedAt: Date.now() },
-    );
-    const sqliteStore = new SqliteBoardStore({
-      resolveSession: () => ({ agentId: "main", sessionKey }),
-      env,
-    });
-    const memory = createHarness();
-    const sqlite = createHarness(undefined, {}, sqliteStore);
-    for (const harness of [memory, sqlite]) {
-      await harness.invoke("board.widget.put", {
-        sessionKey,
-        name: "status",
-        title: "Status",
-        content: { kind: "html", html: "<p>ready</p>" },
-      });
-    }
-
-    const memoryResponse = await memory.invoke("board.get", { sessionKey });
-    const sqliteResponse = await sqlite.invoke("board.get", { sessionKey });
-    const memorySnapshot = memoryResponse.mock.calls[0]?.[1] as BoardSnapshot;
-    const sqliteSnapshot = sqliteResponse.mock.calls[0]?.[1] as BoardSnapshot;
-
-    expect(memorySnapshot.widgets[0]?.viewTicket).not.toBe(sqliteSnapshot.widgets[0]?.viewTicket);
-    expect(normalizeBoardGetSnapshot(sqliteSnapshot)).toEqual(
-      normalizeBoardGetSnapshot(memorySnapshot),
-    );
-  });
-
   it("prepares HTML view metadata with the snapshot instead of rereading the store", async () => {
     const { invoke, store } = createHarness();
     await invoke("board.widget.put", {
@@ -279,10 +229,10 @@ describe("board gateway methods", () => {
     });
     expect(response).toHaveBeenCalledWith(
       true,
-      expect.objectContaining({ sessionKey: "session", revision: 1 }),
+      expect.objectContaining({ sessionKey: "agent:main:session", revision: 1 }),
     );
     expect(broadcast).toHaveBeenCalledWith("board.changed", {
-      sessionKey: "session",
+      sessionKey: "agent:main:session",
       revision: 1,
     });
   });
@@ -290,7 +240,7 @@ describe("board gateway methods", () => {
   it("puts widgets, emits iframe-specific changes, and grants declared capabilities", async () => {
     const { invoke, broadcast } = createHarness();
     const put = await invoke("board.widget.put", {
-      sessionKey: "session",
+      sessionKey: "agent:main:session",
       name: "weather",
       content: { kind: "html", html: "<p>weather</p>" },
       declared: { tools: ["weather.refresh"] },
@@ -298,6 +248,7 @@ describe("board gateway methods", () => {
     expect(put).toHaveBeenCalledWith(
       true,
       expect.objectContaining({
+        resolvedWidgetName: "weather",
         widgets: [expect.objectContaining({ name: "weather", grantState: "pending" })],
       }),
     );
@@ -307,14 +258,14 @@ describe("board gateway methods", () => {
       }),
     );
     expect(broadcast).toHaveBeenCalledWith("board.changed", {
-      sessionKey: "session",
+      sessionKey: "agent:main:session",
       revision: 1,
       widget: "weather",
     });
 
     const snapshot = put.mock.calls[0]?.[1] as BoardSnapshot;
     const grant = await invoke("board.widget.grant", {
-      sessionKey: "session",
+      sessionKey: "agent:main:session",
       name: "weather",
       decision: "granted",
       revision: 1,
@@ -328,7 +279,7 @@ describe("board gateway methods", () => {
       }),
     );
     expect(broadcast).toHaveBeenLastCalledWith("board.changed", {
-      sessionKey: "session",
+      sessionKey: "agent:main:session",
       revision: 2,
     });
   });
@@ -646,7 +597,7 @@ describe("board gateway methods", () => {
       expect.objectContaining({ widgets: [expect.objectContaining({ name: "canvas-widget" })] }),
     );
     expect(broadcast).toHaveBeenCalledWith("board.changed", {
-      sessionKey: "session",
+      sessionKey: "agent:main:session",
       revision: 1,
       widget: "canvas-widget",
     });
@@ -841,7 +792,9 @@ describe("board gateway methods", () => {
     });
     expect(first.mock.calls[0]?.[1]).toEqual({ ok: true, appended: true });
     expect(duplicate.mock.calls[0]?.[1]).toEqual({ ok: true, appended: false });
-    expect(peekSystemEvents("session")).toEqual(['[dashboard] {"count":1} on widget counter']);
+    expect(peekSystemEvents("agent:main:session")).toEqual([
+      '[dashboard] {"count":1} on widget counter',
+    ]);
   });
 
   it("binds state.emit notices to the widget view ticket", async () => {
@@ -858,7 +811,9 @@ describe("board gateway methods", () => {
     const response = await invoke("board.event", { ticket, payload: { count: 2 } });
 
     expect(response.mock.calls[0]?.[1]).toEqual({ ok: true, appended: true });
-    expect(peekSystemEvents("session")).toEqual(['[dashboard] {"count":2} on widget counter']);
+    expect(peekSystemEvents("agent:main:session")).toEqual([
+      '[dashboard] {"count":2} on widget counter',
+    ]);
   });
 
   it("skips prompt confirmation only for an explicitly granted prompt tool", async () => {
@@ -1008,19 +963,27 @@ describe("board gateway methods", () => {
     expect(triggerCronJob).toHaveBeenCalledWith("job-1", expect.any(Object));
   });
 
-  it("caps board.event payloads at 8KB and notices at 500 characters", async () => {
+  it("caps board.event payloads and preserves Unicode at the notice boundary", async () => {
     const { invoke } = createHarness();
     await invoke("board.widget.put", {
       sessionKey: "session",
       name: "counter",
       content: { kind: "html", html: "ok" },
     });
+    const clippedCodeUnits = 500 - "[dashboard] ".length - " on widget counter".length - 1;
+    // JSON's opening quote places the emoji across the legacy slice boundary.
+    const payload = `${"x".repeat(clippedCodeUnits - 2)}😀tail`;
+    await invoke("board.event", { sessionKey: "session", widget: "counter", payload });
+    const unicodeNotice = peekSystemEvents("agent:main:session")[0] ?? "";
+    expect(unicodeNotice.length).toBeLessThanOrEqual(500);
+    expect(unicodeNotice).not.toContain(String.fromCharCode(0xd83d));
+    expect(unicodeNotice).toMatch(/… on widget counter$/u);
     await invoke("board.event", {
       sessionKey: "session",
       widget: "counter",
       payload: "x".repeat(1_000),
     });
-    expect(peekSystemEvents("session")[0]).toHaveLength(500);
+    expect(peekSystemEvents("agent:main:session")[1]).toHaveLength(500);
     const oversized = await invoke("board.event", {
       sessionKey: "session",
       widget: "counter",

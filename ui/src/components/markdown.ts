@@ -66,6 +66,7 @@ const allowedAttrs = [
   "open",
   "rel",
   "target",
+  "tabindex",
   "title",
   "start",
   "src",
@@ -76,6 +77,7 @@ const allowedAttrs = [
   "data-file-path",
   "type",
   "aria-label",
+  "role",
 ];
 const sanitizeOptions = {
   ALLOWED_TAGS: allowedTags,
@@ -483,7 +485,10 @@ function appendMarkdownTruncationNotice(truncated: {
   total: number;
 }): string {
   const notice = truncated.truncated
-    ? `\n\n… truncated (${truncated.total} chars, showing first ${truncated.text.length}).`
+    ? `\n\n${t("chat.markdown.truncated", {
+        total: String(truncated.total),
+        shown: String(truncated.text.length),
+      })}`
     : "";
   return `${truncated.text}${notice}`;
 }

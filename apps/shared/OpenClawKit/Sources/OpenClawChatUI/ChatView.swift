@@ -149,6 +149,7 @@ public struct OpenClawChatView: View {
     private let dictationControl: OpenClawChatDictationControl?
     private let voiceNoteControl: OpenClawChatVoiceNoteControl?
     private let speech: OpenClawChatSpeechController?
+    private let mediaPlaybackAllowed: @MainActor @Sendable () -> Bool
 
     private enum Layout {
         #if os(macOS)
@@ -203,7 +204,8 @@ public struct OpenClawChatView: View {
         talkControl: OpenClawChatTalkControl? = nil,
         dictationControl: OpenClawChatDictationControl? = nil,
         voiceNoteControl: OpenClawChatVoiceNoteControl? = nil,
-        speech: OpenClawChatSpeechController? = nil)
+        speech: OpenClawChatSpeechController? = nil,
+        mediaPlaybackAllowed: @escaping @MainActor @Sendable () -> Bool = { true })
     {
         _viewModel = State(initialValue: viewModel)
         self.drawsBackground = drawsBackground
@@ -226,6 +228,7 @@ public struct OpenClawChatView: View {
         self.dictationControl = dictationControl
         self.voiceNoteControl = voiceNoteControl
         self.speech = speech
+        self.mediaPlaybackAllowed = mediaPlaybackAllowed
     }
 
     public var body: some View {
@@ -492,7 +495,8 @@ public struct OpenClawChatView: View {
                 assistantAvatarTint: self.assistantAvatarTint,
                 showsAssistantAvatar: self.showsAssistantAvatars,
                 isClean: self.composerChrome == .clean,
-                runIdentity: self.viewModel.workingIndicatorIdentity)
+                runIdentity: self.viewModel.workingIndicatorIdentity,
+                outputTokens: self.viewModel.liveRunOutputTokens)
                 .equatable()
         }
 
@@ -545,12 +549,15 @@ public struct OpenClawChatView: View {
             inlineWidgetResourceResolver: { [weak viewModel] path, failedResource in
                 await viewModel?.resolveInlineWidgetResource(path: path, replacing: failedResource)
             },
-            imageArtifactResolverReady: self.viewModel.healthOK,
-            loadImageArtifact: { [weak viewModel] artifactId in
+            mediaArtifactResolverReady: self.viewModel.healthOK,
+            mediaPlaybackAllowed: self.mediaPlaybackAllowed,
+            loadMediaArtifact: { [weak viewModel] artifactId, kind, playback in
                 guard let viewModel else { return nil }
-                return try await viewModel.transport.loadImageArtifact(
+                return try await viewModel.transport.loadMediaArtifact(
                     sessionKey: viewModel.sessionKey,
-                    artifactId: artifactId)
+                    artifactId: artifactId,
+                    kind: kind,
+                    playback: playback)
             })
             .frame(
                 maxWidth: .infinity,
@@ -787,7 +794,8 @@ public struct OpenClawChatView: View {
     }
 
     private var showsWorkingIndicator: Bool {
-        self.viewModel.hasBlockingRunActivity && !self.hasVisibleStreamingAssistantText
+        self.viewModel.hasBlockingRunActivity &&
+            (!self.hasVisibleStreamingAssistantText || self.viewModel.liveUsageRunID != nil)
     }
 
     private var turnRecapObservation: ChatTurnRecapObservation {

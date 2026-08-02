@@ -45,6 +45,7 @@ import {
 } from "./provider-local-service.js";
 import {
   buildProviderRequestDispatcherPolicy,
+  getModelProviderMetadataOwners,
   getModelProviderRequestTransport,
   mergeModelProviderRequestOverrides,
   resolveProviderRequestPolicyConfig,
@@ -590,10 +591,12 @@ function resolveModelRequestPolicy(model: Model) {
         }
       : undefined,
   });
+  const providerMetadataOwners = getModelProviderMetadataOwners(model);
   return resolveProviderRequestPolicyConfig({
     provider: model.provider,
     api: model.api,
     baseUrl: model.baseUrl,
+    ...(providerMetadataOwners ? { providerMetadataOwners } : {}),
     capability: "llm",
     transport: "stream",
     request,

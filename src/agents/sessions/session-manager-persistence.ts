@@ -17,6 +17,8 @@ import type {
   SessionEntry,
 } from "./session-manager-types.js";
 
+type PersistRecordResult = string | null | undefined | { adoptedMessageId: string };
+
 export class SessionManagerPersistence extends SessionManagerCore {
   removeTrailingEntries(
     predicate: (entry: SessionEntry) => boolean,
@@ -128,19 +130,23 @@ export class SessionManagerPersistence extends SessionManagerCore {
     return removedEntries.length;
   }
 
-  protected persistRecord(entry: unknown, options?: AppendPersistenceOptions): void {
+  protected persistRecord(entry: unknown, options?: AppendPersistenceOptions): PersistRecordResult {
     if (this.persistenceTarget) {
-      this.persistSqliteRecord(entry, options);
+      return this.persistSqliteRecord(entry, options);
     }
+    return undefined;
   }
 
-  persist(entry: SessionEntry, options?: AppendPersistenceOptions): void {
-    this.persistRecord(entry, options);
+  persist(entry: SessionEntry, options?: AppendPersistenceOptions): PersistRecordResult {
+    return this.persistRecord(entry, options);
   }
 
-  private persistSqliteRecord(entry: unknown, options?: AppendPersistenceOptions): void {
+  private persistSqliteRecord(
+    entry: unknown,
+    options?: AppendPersistenceOptions,
+  ): PersistRecordResult {
     if (!this.persistenceTarget) {
-      return;
+      return undefined;
     }
     const scope = this.persistenceTarget;
     if (this.persistenceHeaderPending) {
@@ -155,16 +161,24 @@ export class SessionManagerPersistence extends SessionManagerCore {
       if (!appendTranscriptEventSync(scope, entry)) {
         throw new Error(`Session transcript leaf control was not persisted: ${leafEntry.id}`);
       }
-      return;
+      return undefined;
     }
     if (!isIndexedSessionEntry(entry)) {
-      return;
+      return undefined;
     }
     if (entry.type !== "message") {
-      if (!appendTranscriptEventSync(scope, entry)) {
+      if (
+        !appendTranscriptEventSync(
+          scope,
+          entry,
+          options?.appendIntent === "active-branch"
+            ? { appendIntent: options.appendIntent }
+            : undefined,
+        )
+      ) {
         throw new Error(`Session transcript entry was not persisted: ${entry.id}`);
       }
-      return;
+      return undefined;
     }
     const appendOptions = {
       cwd: this.cwd,
@@ -174,12 +188,25 @@ export class SessionManagerPersistence extends SessionManagerCore {
       message: entry.message,
       now: Date.parse(entry.timestamp),
       parentId: entry.parentId,
+      ...(options?.appendIntent === "active-branch" ? { appendIntent: options.appendIntent } : {}),
     } satisfies Parameters<typeof appendTranscriptMessageSync>[1];
     const result = appendTranscriptMessageSync(scope, appendOptions);
     if (!result) {
       throw new Error(`Session transcript message was not persisted: ${entry.id}`);
     }
     if (result.messageId !== entry.id) {
+      const idempotencyKey =
+        entry.message.role === "user" &&
+        "idempotencyKey" in entry.message &&
+        typeof entry.message.idempotencyKey === "string" &&
+        entry.message.idempotencyKey.length > 0
+          ? entry.message.idempotencyKey
+          : undefined;
+      if (idempotencyKey && options?.idempotencyLookup !== "caller-checked") {
+        // Ingress can commit the keyed user after this manager loaded. The
+        // caller reloads and adopts only when that canonical row is still active.
+        return { adoptedMessageId: result.messageId };
+      }
       throw new Error(`Session transcript parent entry was not persisted: ${entry.id}`);
     }
     if (
@@ -188,6 +215,10 @@ export class SessionManagerPersistence extends SessionManagerCore {
     ) {
       throw new Error(`Session transcript append was not persisted: ${entry.id}`);
     }
+    if (result.effectiveParentId === undefined) {
+      throw new Error(`Session transcript append parent was not returned: ${entry.id}`);
+    }
+    return result.effectiveParentId;
   }
 
   mergePromptReleasedSessionEntries(

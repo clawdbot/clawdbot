@@ -735,6 +735,93 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
     });
   });
 
+  it.each([
+    {
+      name: "global message-tool reply policy",
+      visibleReplies: "message_tool" as const,
+      target: "telegram" as const,
+      chatType: "direct" as const,
+    },
+    {
+      name: "group-specific message-tool reply policy",
+      groupVisibleReplies: "message_tool" as const,
+      target: "last" as const,
+      chatType: "group" as const,
+    },
+  ])("keeps a heartbeat's unmarked final private under $name", async (policy) => {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = createConfig({ tmpDir, storePath, ...policy });
+      await seedMainSessionStore(storePath, cfg, {
+        chatType: policy.chatType,
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: TELEGRAM_GROUP,
+      });
+      replySpy.mockResolvedValue({
+        text: "Private heartbeat reasoning with HEARTBEAT_OK inside the sentence.",
+      });
+      const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1" });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        deps: createDeps({ sendTelegram, getReplyFromConfig: replySpy }),
+      });
+
+      expect(result.status).toBe("ran");
+      expect(replyOptions(replySpy).sourceReplyDeliveryMode).toBe("message_tool_only");
+      expect(sendTelegram).not.toHaveBeenCalled();
+      expect(getLastHeartbeatEvent()).toMatchObject({
+        status: "ok-token",
+        channel: "telegram",
+        silent: true,
+      });
+    });
+  });
+
+  it("keeps marked operator notices visible in message-tool heartbeat mode", async () => {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = createConfig({ tmpDir, storePath, visibleReplies: "message_tool" });
+      await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: TELEGRAM_GROUP,
+      });
+      const notice = "The configured model backend needs operator attention.";
+      replySpy.mockResolvedValue(markReplyPayloadForSourceSuppressionDelivery({ text: notice }));
+      const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1" });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        deps: createDeps({ sendTelegram, getReplyFromConfig: replySpy }),
+      });
+
+      expect(result.status).toBe("ran");
+      expectTelegramSend(sendTelegram, { text: notice, cfg });
+    });
+  });
+
+  it("keeps ordinary heartbeat finals visible under automatic reply policy", async () => {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = createConfig({ tmpDir, storePath, visibleReplies: "automatic" });
+      await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: TELEGRAM_GROUP,
+      });
+      const text = "The heartbeat found a deployment requiring your attention.";
+      replySpy.mockResolvedValue({ text });
+      const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1" });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        deps: createDeps({ sendTelegram, getReplyFromConfig: replySpy }),
+      });
+
+      expect(result.status).toBe("ran");
+      expectTelegramSend(sendTelegram, { text, cfg });
+    });
+  });
+
   it("uses the heartbeat response tool prompt in message-tool mode", async () => {
     const result = await runPromptScenario({
       config: { visibleReplies: "message_tool" },

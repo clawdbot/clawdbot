@@ -356,6 +356,8 @@ describe("findSettingsSearchBlocks", () => {
   });
 
   it.each([
+    ["language", "Language", "#settings-language"],
+    ["locale", "Language", "#settings-language"],
     ["sidebar", "Sidebar", "#settings-appearance-sidebar"],
     ["live agent activity", "Sidebar", "#settings-appearance-sidebar"],
     ["session observer", "Sidebar", "#settings-appearance-sidebar"],

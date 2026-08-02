@@ -34,6 +34,9 @@ public struct OpenClawChatSessionsChangedEvent: Codable, Sendable, Equatable {
     public let parentSessionKey: String?
     public let spawnedBy: String?
     public let reason: String
+    public let phase: String?
+    public let runId: String?
+    public let session: OpenClawChatSessionEntry?
     public let updatedAt: Double?
     public let lastReadAt: Double?
     public let agentStatus: OpenClawChatSessionAgentStatus?
@@ -59,6 +62,9 @@ public struct OpenClawChatSessionsChangedEvent: Codable, Sendable, Equatable {
         parentSessionKey: String? = nil,
         spawnedBy: String? = nil,
         reason: String = "",
+        phase: String? = nil,
+        runId: String? = nil,
+        session: OpenClawChatSessionEntry? = nil,
         updatedAt: Double? = nil,
         lastReadAt: Double? = nil,
         agentStatus: OpenClawChatSessionAgentStatus? = nil,
@@ -83,6 +89,9 @@ public struct OpenClawChatSessionsChangedEvent: Codable, Sendable, Equatable {
         self.parentSessionKey = parentSessionKey
         self.spawnedBy = spawnedBy
         self.reason = reason
+        self.phase = phase
+        self.runId = runId
+        self.session = session
         self.updatedAt = updatedAt
         self.lastReadAt = lastReadAt
         self.agentStatus = agentStatus
@@ -105,6 +114,7 @@ public struct OpenClawChatSessionsChangedEvent: Codable, Sendable, Equatable {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.session = try container.decodeIfPresent(OpenClawChatSessionEntry.self, forKey: .session)
         let nested = try? container.nestedContainer(keyedBy: CodingKeys.self, forKey: .session)
 
         func decode<T: Decodable>(_ type: T.Type, forKey key: CodingKeys) throws -> T? {
@@ -127,6 +137,8 @@ public struct OpenClawChatSessionsChangedEvent: Codable, Sendable, Equatable {
         self.parentSessionKey = try decode(String.self, forKey: .parentSessionKey)
         self.spawnedBy = try decode(String.self, forKey: .spawnedBy)
         self.reason = try decode(String.self, forKey: .reason) ?? ""
+        self.phase = try decode(String.self, forKey: .phase)
+        self.runId = try decode(String.self, forKey: .runId)
         self.updatedAt = try decode(Double.self, forKey: .updatedAt)
         self.lastReadAt = try decode(Double.self, forKey: .lastReadAt)
         self.agentStatus = try decode(OpenClawChatSessionAgentStatus.self, forKey: .agentStatus)
@@ -154,6 +166,9 @@ public struct OpenClawChatSessionsChangedEvent: Codable, Sendable, Equatable {
         try container.encodeIfPresent(self.parentSessionKey, forKey: .parentSessionKey)
         try container.encodeIfPresent(self.spawnedBy, forKey: .spawnedBy)
         try container.encodeIfPresent(self.reason, forKey: .reason)
+        try container.encodeIfPresent(self.phase, forKey: .phase)
+        try container.encodeIfPresent(self.runId, forKey: .runId)
+        try container.encodeIfPresent(self.session, forKey: .session)
         try container.encodeIfPresent(self.updatedAt, forKey: .updatedAt)
         try container.encodeIfPresent(self.lastReadAt, forKey: .lastReadAt)
         try container.encodeIfPresent(self.agentStatus, forKey: .agentStatus)
@@ -178,6 +193,8 @@ public struct OpenClawChatSessionsChangedEvent: Codable, Sendable, Equatable {
         case parentSessionKey
         case spawnedBy
         case reason
+        case phase
+        case runId
         case updatedAt
         case lastReadAt
         case agentStatus
@@ -548,7 +565,27 @@ public struct OpenClawChatMetadataCapabilities: Codable, Sendable, Equatable {
     }
 }
 
-public struct OpenClawChatLoadedImage: Sendable {
+public enum OpenClawChatMediaKind: String, Sendable {
+    case image
+    case audio
+    case video
+
+    public var mimeTypePrefix: String {
+        "\(self.rawValue)/"
+    }
+
+    public func acceptsManagedArtifactID(_ artifactID: String) -> Bool {
+        let normalized = artifactID.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return switch self {
+        case .image:
+            normalized.hasPrefix("artifact_managed_image_")
+        case .audio, .video:
+            normalized.hasPrefix("artifact_managed_media_")
+        }
+    }
+}
+
+public struct OpenClawChatMediaData: Sendable {
     public let data: Data
     public let mimeType: String
 
@@ -556,6 +593,24 @@ public struct OpenClawChatLoadedImage: Sendable {
         self.data = data
         self.mimeType = mimeType
     }
+}
+
+public struct OpenClawChatMediaStream: Sendable {
+    public let url: URL
+    public let mimeType: String?
+    public let sizeBytes: Int?
+
+    public init(url: URL, mimeType: String? = nil, sizeBytes: Int? = nil) {
+        self.url = url
+        self.mimeType = mimeType
+        self.sizeBytes = sizeBytes
+    }
+}
+
+public enum OpenClawChatLoadedMedia: Sendable {
+    case data(OpenClawChatMediaData)
+    case stream(OpenClawChatMediaStream)
+    case preparing
 }
 
 /// One physical Gateway route for Swarm capability discovery and child paging.
@@ -681,7 +736,11 @@ public protocol OpenClawChatTransport: Sendable {
         path: String,
         replacing failedResource: OpenClawChatWidgetResource?) async -> OpenClawChatWidgetResource?
     func resolveInlineWidgetURL(path: String, replacing failedURL: URL?) async -> URL?
-    func loadImageArtifact(sessionKey: String, artifactId: String) async throws -> OpenClawChatLoadedImage?
+    func loadMediaArtifact(
+        sessionKey: String,
+        artifactId: String,
+        kind: OpenClawChatMediaKind,
+        playback: OpenClawChatPlaybackMode?) async throws -> OpenClawChatLoadedMedia?
 
     func setActiveSessionKey(_ sessionKey: String) async throws
     func resetSession(sessionKey: String) async throws
@@ -689,9 +748,11 @@ public protocol OpenClawChatTransport: Sendable {
 }
 
 extension OpenClawChatTransport {
-    public func loadImageArtifact(
+    public func loadMediaArtifact(
         sessionKey _: String,
-        artifactId _: String) async throws -> OpenClawChatLoadedImage?
+        artifactId _: String,
+        kind _: OpenClawChatMediaKind,
+        playback _: OpenClawChatPlaybackMode?) async throws -> OpenClawChatLoadedMedia?
     {
         nil
     }

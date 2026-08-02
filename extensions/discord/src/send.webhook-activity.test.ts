@@ -156,6 +156,7 @@ describe("sendWebhookMessageDiscord activity", () => {
         body: JSON.stringify({
           content: "hello <@123456789012345678>",
         }),
+        signal: expect.any(AbortSignal),
       },
     ]);
   });

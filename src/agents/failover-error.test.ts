@@ -3,6 +3,8 @@
  * Exercises raw error coercion, remediation hints, timeout/auth/billing/rate-limit cases.
  */
 import { describe, expect, it } from "vitest";
+import { createAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-error.js";
+import { GatewayDrainingError } from "../process/gateway-work-admission.js";
 import { classifyFailoverSignal } from "./embedded-agent-helpers/errors.js";
 import {
   buildFailoverRemediationHint,
@@ -1416,6 +1418,31 @@ describe("failover-error", () => {
       ).toBe(true);
     });
 
+    it("returns true for stale gateway lifecycle ownership loss", () => {
+      const staleLifecycle = createAgentRunStaleLifecycleError();
+      expect(isNonProviderRuntimeCoordinationError(staleLifecycle)).toBe(true);
+      expect(
+        isNonProviderRuntimeCoordinationError(new Error("wrapper", { cause: staleLifecycle })),
+      ).toBe(true);
+      const abortWrapper = new Error("request was aborted", { cause: staleLifecycle });
+      abortWrapper.name = "AbortError";
+      expect(isNonProviderRuntimeCoordinationError(abortWrapper)).toBe(true);
+    });
+
+    it("returns true for direct and nested gateway drain admission failures", () => {
+      const draining = new GatewayDrainingError();
+      const causeWrapper = new Error("session send failed", { cause: draining });
+      const aggregateWrapper = new AggregateError(
+        [new Error("cleanup failed"), { error: draining }],
+        "agent run failed",
+      );
+
+      for (const error of [draining, causeWrapper, aggregateWrapper]) {
+        expect(isNonProviderRuntimeCoordinationError(error)).toBe(true);
+        expect(resolveModelFallbackError(error)).toEqual({ kind: "coordination", error });
+      }
+    });
+
     it("returns true when the coordination error is nested via cause", () => {
       const wrapped = new Error("wrapper", { cause: makeSessionLockError() });
       expect(isNonProviderRuntimeCoordinationError(wrapped)).toBe(true);
@@ -1457,6 +1484,13 @@ describe("failover-error", () => {
           status: 503,
           message: "upstream overloaded",
           cause: { result: { reason: "missing_tool_result" } },
+        }),
+      ).toBe(false);
+      expect(
+        isNonProviderRuntimeCoordinationError({
+          status: 503,
+          message: "upstream overloaded",
+          cause: createAgentRunStaleLifecycleError(),
         }),
       ).toBe(false);
       expect(isNonProviderRuntimeCoordinationError(null)).toBe(false);
@@ -1547,14 +1581,14 @@ describe("buildFailoverRemediationHint", () => {
     );
   });
 
-  it("returns a hint for auth_permanent as well", () => {
+  it("routes Gemini CLI auth failures to supported recovery paths", () => {
     const err = new FailoverError("revoked", {
       reason: "auth_permanent",
       provider: "google-gemini-cli",
       model: "gemini-3.1-pro-preview",
     });
     expect(buildFailoverRemediationHint(err)).toBe(
-      "Re-authenticate with: openclaw models auth login --provider 'google-gemini-cli' --force",
+      "Authenticate in Gemini CLI directly, or configure a supported Google API key with: openclaw configure",
     );
   });
 

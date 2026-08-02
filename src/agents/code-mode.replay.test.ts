@@ -181,6 +181,47 @@ describe("Code Mode restart-safe replay", () => {
     expect(targetTool.execute).not.toHaveBeenCalled();
   });
 
+  it("preserves bridge evidence when a later restart-safe call is rejected", async () => {
+    const readTool = pluginTool("fake_safe_read", "Read");
+    setPluginToolMeta(readTool, {
+      pluginId: "fake-code-mode",
+      optional: true,
+      replaySafe: true,
+    });
+    const writeTool = pluginTool("fake_unsafe_write", "Write");
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, readTool, writeTool],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const failed = await runUntilCompleted({
+      execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
+      waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
+      restartSafe: true,
+      code: `
+        const reads = await tools.search("fake_safe_read");
+        await tools.call(reads[0].id, {});
+        const writes = await tools.search("fake_unsafe_write");
+        return await tools.call(writes[0].id, {});
+      `,
+    });
+
+    expect(failed).toMatchObject({
+      status: "failed",
+      failurePhase: "bridge",
+      bridgeDispatchStarted: true,
+      replaySafe: true,
+    });
+    expect(failed.error).toContain("cannot call side-effecting tools");
+    expect(readTool.execute).toHaveBeenCalledTimes(1);
+    expect(writeTool.execute).not.toHaveBeenCalled();
+  });
+
   it("keeps host-forced restart safety when the model clears the exec flag", async () => {
     const targetTool = pluginTool("fake_forced_write", "Write");
     const {

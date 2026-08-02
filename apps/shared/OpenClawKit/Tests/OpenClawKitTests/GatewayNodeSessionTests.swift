@@ -397,7 +397,7 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
         let frame: [String: Any] = [
             "type": "event",
             "event": "connect.challenge",
-            "payload": ["nonce": nonce],
+            "payload": ["nonce": nonce, "ts": 1_800_000_000_000],
         ]
         return (try? JSONSerialization.data(withJSONObject: frame)) ?? Data()
     }
@@ -1318,6 +1318,30 @@ struct GatewayNodeSessionTests {
             "connect-returned",
         ])
         await gateway.disconnect()
+    }
+
+    @Test
+    func `completed snapshot timeout cannot release a later route waiter`() async throws {
+        let gateway = GatewayNodeSession()
+        let firstWait = Task {
+            await gateway._test_waitForSnapshot(timeoutMs: 1000)
+        }
+        try await waitUntil("initial snapshot waiter registered") {
+            await gateway._test_snapshotWaiterCount() == 1
+        }
+        await gateway._test_markSnapshotReceived()
+        #expect(await firstWait.value)
+
+        await gateway._test_resetConnectionState()
+        let replacementWait = Task {
+            await gateway._test_waitForSnapshot(timeoutMs: 3000)
+        }
+        try await waitUntil("replacement snapshot waiter registered") {
+            await gateway._test_snapshotWaiterCount() == 1
+        }
+        try await Task.sleep(nanoseconds: 1_200_000_000)
+        await gateway._test_markSnapshotReceived()
+        #expect(await replacementWait.value)
     }
 
     @Test
@@ -3098,7 +3122,9 @@ struct GatewayNodeSessionTests {
         #expect(shareDeviceId != primaryIdentity.deviceId)
         #expect(DeviceAuthStore.loadToken(deviceId: primaryIdentity.deviceId, role: "node")?
             .token == "primary-node-token")
-        #expect(DeviceAuthStore.loadToken(deviceId: shareDeviceId, role: "node") == nil)
+        // Profile selects identity resolution, not a token namespace; (device_id, role) is the canonical key.
+        // Per-profile identities keep caches disjoint in practice, and Node reads the same table by that key.
+        #expect(DeviceAuthStore.loadToken(deviceId: shareDeviceId, role: "node")?.token == "share-node-token")
         #expect(
             DeviceAuthStore
                 .loadToken(deviceId: shareDeviceId, role: "node", profile: .shareExtension)?.token ==

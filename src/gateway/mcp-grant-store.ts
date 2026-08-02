@@ -29,6 +29,8 @@ export type McpLoopbackRequestContext = {
   accountId?: string;
   inboundEventKind?: InboundEventKind;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  /** Immutable completion-only authority; never sourced from MCP request headers. */
+  sourceReplyOnly?: boolean;
   taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   requireExplicitMessageTarget?: boolean;
   /**

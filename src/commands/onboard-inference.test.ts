@@ -187,8 +187,8 @@ describe("detectInferenceBackends", () => {
       "existing-model",
       "codex-cli",
       "openai-api-key",
-      "claude-cli",
       "gemini-cli",
+      "claude-cli",
     ]);
   });
 
@@ -260,7 +260,7 @@ describe("detectInferenceBackends", () => {
     );
   });
 
-  it("gives each logged-out CLI its sign-in remediation", async () => {
+  it("keeps Gemini private-store auth distinct from definitive CLI logouts", async () => {
     const candidates = await detectInferenceBackends({
       env: {},
       platform: "linux",
@@ -274,6 +274,10 @@ describe("detectInferenceBackends", () => {
 
     expect(candidates).toMatchObject([
       {
+        kind: "gemini-cli",
+        detail: "installed; login status unavailable",
+      },
+      {
         kind: "claude-cli",
         detail: "installed, not logged in — run `claude auth login`, then check again",
       },
@@ -281,11 +285,10 @@ describe("detectInferenceBackends", () => {
         kind: "codex-cli",
         detail: "installed, not logged in — run `codex login`, then check again",
       },
-      {
-        kind: "gemini-cli",
-        detail: "installed, not logged in — sign in to Gemini CLI, then check again",
-      },
     ]);
+    expect(
+      candidates.find((candidate) => candidate.kind === "gemini-cli")?.credentials,
+    ).toBeUndefined();
   });
 
   it("recognizes Codex login status across native credential stores", async () => {

@@ -11,7 +11,7 @@ import { isNativeWebChromeHost } from "../app/native-web-chrome.ts";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
 import { t } from "../i18n/index.ts";
 import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/display.ts";
-import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
+import { deriveAvatarInitial, resolveAgentAvatarUrl } from "../lib/avatar.ts";
 import { sessionHasBoard } from "../lib/board/provider.ts";
 import {
   resolveSessionPreferredFace,
@@ -83,7 +83,8 @@ export function renderAppSidebarBrand(host: AppSidebarRenderHost) {
   const approvalCount = host.sessionData.approvalBadgeSnapshot().agentCounts.get(cardAgentId) ?? 0;
   const cardAvatarText =
     (cardAgent ? resolveAgentTextAvatar(cardAgent, cardIdentity) : cardIdentity?.emoji) ??
-    (cardName || cardAgentId).slice(0, 1).toUpperCase();
+    (deriveAvatarInitial(cardName || cardAgentId) || "?");
+  const newSessionAccess = host.readNewSessionAccess();
   // The sidebar action follows gateway availability; collapsed native chrome
   // keeps its separate offline-tolerant ⌘N mirror.
   return html`
@@ -103,16 +104,16 @@ export function renderAppSidebarBrand(host: AppSidebarRenderHost) {
       ></openclaw-sidebar-agent-card>
       <div class="sidebar-brand__actions">
         <openclaw-tooltip
-          .content=${host.connected
+          .content=${newSessionAccess.allowed
             ? t("chat.runControls.newSession")
-            : t("chat.runControls.newSessionDisconnected")}
+            : newSessionAccess.reason}
         >
           <button
             class="sidebar-brand__icon sidebar-brand__new-thread"
             type="button"
-            @click=${() => host.onOpenNewSession?.(host.expandedAgentId())}
+            @click=${() => host.requestOpenNewSession(host.expandedAgentId())}
             aria-label=${t("chat.runControls.newSession")}
-            ?disabled=${!host.connected}
+            ?disabled=${!newSessionAccess.allowed}
           >
             ${icons.plus}
           </button>

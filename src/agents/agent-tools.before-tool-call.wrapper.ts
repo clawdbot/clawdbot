@@ -499,6 +499,7 @@ export function wrapToolWithBeforeToolCallHook(
           toolParams: executeParams,
           toolCallId,
           result,
+          resultContentSource: tool.resultContentSource,
           toolCallOrdinal,
           terminalPresentation,
         });
@@ -558,6 +559,7 @@ export function wrapToolWithBeforeToolCallHook(
           toolParams: executeParams,
           toolCallId,
           error: err,
+          resultContentSource: tool.resultContentSource,
           toolCallOrdinal,
         });
         throw err;

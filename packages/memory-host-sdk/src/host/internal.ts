@@ -63,7 +63,7 @@ export type MemoryChunk = {
 };
 
 // Persisted with index metadata so boundary changes rebuild unchanged files.
-export const MEMORY_CHUNKING_VERSION = 1;
+export const MEMORY_CHUNKING_VERSION = 2;
 
 type MultimodalMemoryChunk = {
   chunk: MemoryChunk;
@@ -407,6 +407,19 @@ export type CuratedMarkdownEntry = {
 };
 
 export const INVALID_PROJECT_ANNOTATION_KEY = "!invalid-project-annotation";
+
+// Carrier syntax is line-scoped like recall metadata parsing. Never cross a
+// newline from an unterminated marker into the next entry's valid annotation.
+const MEMORY_ANNOTATION_CARRIER_RE = /<!--\s*(?:trigger|importance|project)\s*:[^\r\n]*?-->/giu;
+
+export function stripMemoryAnnotationCarriers(text: string): string {
+  let stripped = false;
+  const withoutCarriers = text.replace(MEMORY_ANNOTATION_CARRIER_RE, () => {
+    stripped = true;
+    return "";
+  });
+  return stripped ? withoutCarriers.replace(/[ \t]+(?=\r?$)/gmu, "") : text;
+}
 
 export type CuratedProjectAnnotations = {
   annotated: boolean;

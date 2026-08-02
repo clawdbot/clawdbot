@@ -158,7 +158,6 @@ export type NodeConnectivityResult =
 
 /** Minimal websocket ping/pong surface used by connectivity checks. */
 type PingableSocket = {
-  readyState?: number;
   ping?: (data?: Buffer, mask?: boolean, cb?: (err?: Error) => void) => void;
   once?: (event: "pong" | "close" | "error", listener: (...args: unknown[]) => void) => unknown;
   off?: (event: "pong" | "close" | "error", listener: (...args: unknown[]) => void) => unknown;
@@ -303,7 +302,13 @@ export class NodeRegistry {
           },
         });
       } else {
-        pending.reject(new Error(`node disconnected (${pending.command})`));
+        pending.resolve({
+          ok: false,
+          error: {
+            code: "DISCONNECTED",
+            message: `node disconnected (${pending.command})`,
+          },
+        });
       }
     },
   });
@@ -820,19 +825,33 @@ export class NodeRegistry {
 
   /** Probe websocket liveness with ping/pong when the socket supports it. */
   async checkConnectivity(nodeId: string, timeoutMs = 2_000): Promise<NodeConnectivityResult> {
-    const node = this.nodesById.get(nodeId);
+    const node = this.getRegisteredSession(nodeId);
     if (!node) {
       return {
         ok: false,
         error: { code: "NOT_CONNECTED", message: "node not connected" },
       };
     }
+    // A successful old transport must never certify a replacement node.
+    const currentConnectionResult = (result: NodeConnectivityResult): NodeConnectivityResult =>
+      this.nodesById.get(nodeId) === node && node.client.invalidated !== true
+        ? result
+        : {
+            ok: false,
+            error: {
+              code: "NOT_CONNECTED",
+              message: "node connection changed during connectivity probe",
+            },
+          };
     const eventTransport = this.eventTransportsByConn.get(node.connId);
     if (eventTransport) {
-      return eventTransport.checkConnectivity?.(timeoutMs) ?? { ok: true };
+      const result = eventTransport.checkConnectivity
+        ? await eventTransport.checkConnectivity(timeoutMs)
+        : { ok: true as const };
+      return currentConnectionResult(result);
     }
     const socket = node.client.socket as PingableSocket;
-    if (socket.readyState !== WEBSOCKET_OPEN_READY_STATE) {
+    if (!this.isNodeWebSocketOpen(node)) {
       return {
         ok: false,
         error: { code: "NOT_CONNECTED", message: "node socket not open" },
@@ -860,7 +879,7 @@ export class NodeRegistry {
         settled = true;
         clearTimeout(timer);
         cleanup();
-        resolve(result);
+        resolve(currentConnectionResult(result));
       };
       const onPong = () => finish({ ok: true });
       const onClose = () =>
@@ -1054,8 +1073,8 @@ export class NodeRegistry {
     signal?: AbortSignal;
     idempotencyKey?: string;
     sessionKey?: string;
-    /** Receives the id synchronously after send; the terminal relay depends on this timing. */
-    onInvokeId?: (invokeId: string) => void;
+    /** Receives the id after pairing validation and a successful dispatch. */
+    onDispatchReady?: (invokeId: string) => void;
   }): Promise<NodeInvokeResult> {
     if (params.signal?.aborted) {
       return { ok: false, error: { code: "ABORTED", message: "node invoke cancelled" } };
@@ -1185,7 +1204,7 @@ export class NodeRegistry {
         ...systemRunEvent,
       });
     }
-    params.onInvokeId?.(requestId);
+    params.onDispatchReady?.(requestId);
     return await result;
   }
 
@@ -1459,6 +1478,9 @@ export class NodeRegistry {
     if (eventTransport) {
       return eventTransport.send(event, payload);
     }
+    if (!this.isNodeWebSocketOpen(node)) {
+      return false;
+    }
     if (this.rejectSlowNodeSocket(node)) {
       return false;
     }
@@ -1495,6 +1517,9 @@ export class NodeRegistry {
     if (eventTransport) {
       return eventTransport.sendRaw(event, payloadJSON);
     }
+    if (!this.isNodeWebSocketOpen(node)) {
+      return false;
+    }
     if (this.rejectSlowNodeSocket(node)) {
       return false;
     }
@@ -1511,6 +1536,12 @@ export class NodeRegistry {
 
   private sendEventToSession(node: NodeSession, event: string, payload: unknown): boolean {
     return this.sendEventInternal(node, event, payload);
+  }
+
+  private isNodeWebSocketOpen(node: NodeSession): boolean {
+    // ws.send() does not throw after entering CLOSING; it only accounts the
+    // unsent bytes. Keep the synchronous send-admission result truthful.
+    return node.client.socket.readyState === WEBSOCKET_OPEN_READY_STATE;
   }
 
   private rejectSlowNodeSocket(node: NodeSession): boolean {

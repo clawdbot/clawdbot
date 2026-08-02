@@ -103,6 +103,61 @@ describe("GPT-Live session shaping", () => {
 });
 
 describe("GPT-Live offer broker", () => {
+  it("brokers GA OAuth with raw SDP and no sideband while preserving single-use tokens", async () => {
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+    const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      requests.push({
+        url: typeof url === "string" ? url : url instanceof URL ? url.href : url.url,
+        init,
+      });
+      return new Response("v=ga-answer\r\n", { status: 201 });
+    }) as unknown as typeof fetch;
+    const { realtime, sockets } = createBroker({ fetchImpl });
+    try {
+      const reservation = await realtime.broker.createBrowserSession(
+        { providerConfig: {}, model: "gpt-realtime-2.1", voice: "cedar" },
+        { type: "oauth", token: "oauth-token", accountId: "account-123" },
+      );
+      expect(reservation).toMatchObject({
+        offerUrl: OPENAI_QUICKSILVER_OFFER_PATH,
+        model: "gpt-realtime-2.1",
+        voice: "cedar",
+      });
+      if (reservation.transport !== "webrtc") {
+        throw new Error("Expected WebRTC reservation");
+      }
+
+      const response = createResponseHarness();
+      await realtime.handler(
+        createRequest({ token: reservation.clientSecret, body: "v=ga-offer\r\n" }),
+        response.res,
+      );
+
+      expect(response.res.statusCode).toBe(201);
+      expect(response.readBody()).toBe("v=ga-answer\r\n");
+      expect(sockets).toEqual([]);
+      expect(requests[0]).toMatchObject({
+        url: "https://api.openai.com/v1/realtime/calls?model=gpt-realtime-2.1",
+        init: {
+          method: "POST",
+          body: "v=ga-offer\r\n",
+          headers: expect.objectContaining({
+            Authorization: "Bearer oauth-token",
+            "chatgpt-account-id": "account-123",
+            "Content-Type": "application/sdp",
+          }),
+        },
+      });
+      expect(requests[0]?.init?.headers).not.toHaveProperty("OpenAI-Alpha");
+
+      const replay = createResponseHarness();
+      await realtime.handler(createRequest({ token: reservation.clientSecret }), replay.res);
+      expect(replay.res.statusCode).toBe(401);
+    } finally {
+      await realtime.cleanup();
+    }
+  });
+
   it.each([
     {
       name: "OAuth",
@@ -290,6 +345,73 @@ describe("GPT-Live offer broker", () => {
 
       await vi.waitFor(() => expect(runAgentConsult).toHaveBeenCalledOnce());
       expect(sockets).toHaveLength(1);
+    } finally {
+      await realtime.cleanup();
+    }
+  });
+
+  it("keeps only the latest delegation when the superseded consult rejects on abort", async () => {
+    const resolvers: Array<(value: { text: string }) => void> = [];
+    const signals: AbortSignal[] = [];
+    const runAgentConsult = vi.fn(
+      async ({ signal }: { prompt: string; signal?: AbortSignal }) =>
+        await new Promise<{ text: string }>((resolve, reject) => {
+          signals.push(signal as AbortSignal);
+          resolvers.push(resolve);
+          signal?.addEventListener(
+            "abort",
+            () => {
+              reject(signal.reason instanceof Error ? signal.reason : new Error("aborted"));
+            },
+            { once: true },
+          );
+        }),
+    );
+    const { realtime, sockets } = createBroker({ runAgentConsult });
+    try {
+      const reservation = await realtime.broker.createBrowserSession(
+        { providerConfig: {}, model: "gpt-live-1-codex", runAgentConsult },
+        { type: "api-key", token: "platform-key" },
+      );
+      if (reservation.transport !== "webrtc") {
+        throw new Error("Expected WebRTC reservation");
+      }
+      await realtime.handler(
+        createRequest({ token: reservation.clientSecret }),
+        createResponseHarness().res,
+      );
+      const socket = sockets[0];
+      if (!socket) {
+        throw new Error("Expected sideband socket");
+      }
+
+      for (const [id, text] of [
+        ["delegation-1", "first task"],
+        ["delegation-2", "second task"],
+        ["delegation-3", "latest task"],
+      ]) {
+        emitSideband(socket, {
+          type: "delegation.created",
+          item: {
+            type: "delegation",
+            target: "client",
+            id,
+            content: [{ type: "input_text", text }],
+          },
+        });
+      }
+
+      expect(runAgentConsult).toHaveBeenCalledOnce();
+      expect(signals[0]?.aborted).toBe(true);
+      await vi.waitFor(() => expect(runAgentConsult).toHaveBeenCalledTimes(2));
+      expect(runAgentConsult.mock.calls[1]?.[0].prompt).toContain("latest task");
+      expect(runAgentConsult.mock.calls[1]?.[0].prompt).not.toContain("second task");
+
+      resolvers[1]?.({ text: "latest result" });
+      await vi.waitFor(() =>
+        expect(socket.sent.some((entry) => entry.includes("latest result"))).toBe(true),
+      );
+      expect(socket.closed).toBe(false);
     } finally {
       await realtime.cleanup();
     }
