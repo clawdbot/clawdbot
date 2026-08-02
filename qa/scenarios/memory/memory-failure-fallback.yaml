@@ -71,6 +71,7 @@ flow:
                 args:
                   - ref: env
                   - Memory fallback
+                  - agent:qa:memory-failure
               - call: readEffectiveTools
                 saveAs: tools
                 args:
