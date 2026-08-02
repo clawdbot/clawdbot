@@ -365,6 +365,7 @@ describe("dispatchOutbound", () => {
   });
 
   it("loads scoped media through host read callbacks", async () => {
+    // macOS tmpdir is a /var -> /private/var symlink; containment compares canonical roots.
     const tmpRoot = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "qqbot-host-read-")));
     try {
       const mediaPath = path.join(tmpRoot, "host-report.txt");
@@ -396,6 +397,7 @@ describe("dispatchOutbound", () => {
   });
 
   it("lets missing voice files inside scoped outbound roots reach the voice wait path", async () => {
+    // Missing-path resolution joins canonical roots, so keep macOS tmpdir canonical here.
     const tmpRoot = await fs.realpath(
       await fs.mkdtemp(path.join(os.tmpdir(), "qqbot-scoped-voice-")),
     );
@@ -418,19 +420,30 @@ describe("dispatchOutbound", () => {
     }
   });
 
-  // Dense tuples keep this behavior matrix auditable without repeating fixture boilerplate.
-  // oxfmt-ignore
+  const mediaTestNames = {
+    tagPath: "threads agent scoped media roots through gateway qqmedia block replies",
+    tagRelative: "resolves relative gateway qqmedia block replies against the agent workspace",
+    urlRelative: "resolves relative block mediaUrl payloads against the agent workspace",
+    main: "resolves default main route mediaUrl payloads against the main agent workspace",
+    defaultAgent:
+      "resolves missing route agent mediaUrl payloads against the configured default agent workspace",
+    tagVirtual: "maps sandbox /workspace qqmedia block replies to the agent workspace",
+    tool: "threads agent scoped media roots through gateway tool media forwarding",
+    payload: "threads agent scoped media roots through gateway QQBOT_PAYLOAD replies",
+    payloadVirtual: "maps sandbox /workspace QQBOT_PAYLOAD media paths to the agent workspace",
+    stream: "threads agent scoped media roots through official C2C streaming media tags",
+  } as const;
   const workspaceMediaCases = [
-    ["threads agent scoped media roots through gateway qqmedia block replies", "qqbot-agent-root-", "gateway-report.docx", "tag-path", "agent-1", true, false, false],
-    ["resolves relative gateway qqmedia block replies against the agent workspace", "qqbot-agent-workspace-", "relative-report.docx", "tag-relative", "agent-1", true, false, false],
-    ["resolves relative block mediaUrl payloads against the agent workspace", "qqbot-block-mediaurl-workspace-", "relative-report.docx", "url-relative", "agent-1", true, false, false],
-    ["resolves default main route mediaUrl payloads against the main agent workspace", "qqbot-main-workspace-", "main-report.docx", "url-relative", "main", false, false, false],
-    ["resolves missing route agent mediaUrl payloads against the configured default agent workspace", "qqbot-default-agent-workspace-", "default-report.docx", "url-relative", "assistant", false, true, false],
-    ["maps sandbox /workspace qqmedia block replies to the agent workspace", "qqbot-agent-virtual-workspace-", "sandbox-report.docx", "tag-virtual", "agent-1", true, false, false],
-    ["threads agent scoped media roots through gateway tool media forwarding", "qqbot-tool-root-", "tool-report.docx", "tool-path", "agent-1", true, false, false],
-    ["threads agent scoped media roots through gateway QQBOT_PAYLOAD replies", "qqbot-payload-root-", "payload-report.pdf", "payload-path", "agent-1", true, false, false],
-    ["maps sandbox /workspace QQBOT_PAYLOAD media paths to the agent workspace", "qqbot-payload-virtual-workspace-", "payload-workspace-report.pdf", "payload-virtual", "agent-1", true, false, false],
-    ["threads agent scoped media roots through official C2C streaming media tags", "qqbot-stream-root-", "stream-report.docx", "tag-path", "agent-1", true, false, true],
+    [mediaTestNames.tagPath, "gateway-report.docx", "tag-path", "agent"],
+    [mediaTestNames.tagRelative, "relative-report.docx", "tag-relative", "agent"],
+    [mediaTestNames.urlRelative, "relative-report.docx", "url-relative", "agent"],
+    [mediaTestNames.main, "main-report.docx", "url-relative", "main"],
+    [mediaTestNames.defaultAgent, "default-report.docx", "url-relative", "default"],
+    [mediaTestNames.tagVirtual, "sandbox-report.docx", "tag-virtual", "agent"],
+    [mediaTestNames.tool, "tool-report.docx", "tool-path", "agent"],
+    [mediaTestNames.payload, "payload-report.pdf", "payload-path", "agent"],
+    [mediaTestNames.payloadVirtual, "payload-workspace-report.pdf", "payload-virtual", "agent"],
+    [mediaTestNames.stream, "stream-report.docx", "tag-path", "agent-stream"],
   ] as const;
 
   async function deliverWorkspaceMedia(
@@ -463,40 +476,50 @@ describe("dispatchOutbound", () => {
     await deliver({ text }, { kind: "block" });
   }
 
-  it.each(workspaceMediaCases)(
-    "%s",
-    async (_, prefix, fileName, mode, agentId, routed, isDefault, streaming) => {
-      await withTempMedia(prefix, fileName, async (media) => {
-        let finalized: Record<string, unknown> | undefined;
-        const runtime = await runOutbound({
-          runtime: {
-            onFinalize: (ctx) => (finalized = ctx),
-            onDeliver: (deliver) => deliverWorkspaceMedia(mode, deliver, media.filePath),
+  it.each(workspaceMediaCases)("%s", async (_, fileName, mode, routeKind) => {
+    const agentId =
+      routeKind === "main" ? "main" : routeKind === "default" ? "assistant" : "agent-1";
+    const routed = routeKind === "agent" || routeKind === "agent-stream";
+    const isDefault = routeKind === "default";
+    const streaming = routeKind === "agent-stream";
+    await withTempMedia("qqbot-workspace-media-", fileName, async (media) => {
+      let finalized: Record<string, unknown> | undefined;
+      const runtime = await runOutbound({
+        runtime: {
+          onFinalize: (ctx) => (finalized = ctx),
+          onDeliver: (deliver) => deliverWorkspaceMedia(mode, deliver, media.filePath),
+        },
+        inbound: routed
+          ? makeInbound({
+              route: { sessionKey: "qqbot:c2c:user-openid", accountId: "qq-main", agentId },
+            })
+          : makeInbound(),
+        cfg: {
+          agents: {
+            list: [
+              {
+                id: agentId,
+                ...(isDefault ? { default: true } : {}),
+                workspace: media.tmpRoot,
+              },
+            ],
           },
-          inbound: routed
-            ? makeInbound({
-                route: { sessionKey: "qqbot:c2c:user-openid", accountId: "qq-main", agentId },
-              })
-            : makeInbound(),
-          cfg: {
-            agents: { list: [{ id: agentId, default: isDefault, workspace: media.tmpRoot }] },
-          },
-          account: streaming
-            ? { ...account, config: { streaming: { mode: "partial", nativeTransport: true } } }
-            : account,
-        });
-
-        expectLocalFileMediaSent(media.realFilePath);
-        if (isDefault) {
-          expect(runtime.channel.reply.resolveEffectiveMessagesConfig).toHaveBeenCalledWith(
-            expect.anything(),
-            agentId,
-          );
-          expect(finalized?.AgentId).toBe(agentId);
-        }
+        },
+        account: streaming
+          ? { ...account, config: { streaming: { mode: "partial", nativeTransport: true } } }
+          : account,
       });
-    },
-  );
+
+      expectLocalFileMediaSent(media.realFilePath);
+      if (isDefault) {
+        expect(runtime.channel.reply.resolveEffectiveMessagesConfig).toHaveBeenCalledWith(
+          expect.anything(),
+          agentId,
+        );
+        expect(finalized?.AgentId).toBe(agentId);
+      }
+    });
+  });
 
   it("blocks sandbox /workspace qqmedia paths that escape the agent workspace", async () => {
     const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qqbot-agent-virtual-root-"));
