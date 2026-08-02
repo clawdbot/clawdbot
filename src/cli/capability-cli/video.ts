@@ -30,7 +30,7 @@ import {
 import type { VideoGenerationResolution } from "../../video-generation/types.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { getModelsCommandSecretTargetIds } from "../command-secret-targets.js";
-import { publishOutputFileAtomically, writeOutputAsset } from "./media-output.js";
+import { publishOutputFileAtomically, writeOutputAsset } from "../media-output.js";
 import type { CapabilityEnvelope } from "./metadata.js";
 import {
   emitJsonOrText,

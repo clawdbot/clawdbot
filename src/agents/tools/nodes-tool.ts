@@ -119,7 +119,12 @@ const NodesToolSchema = Type.Object({
   // screen_record
   fps: optionalFiniteNumberSchema({ exclusiveMinimum: 0 }),
   screenIndex: optionalNonNegativeIntegerSchema(),
-  outPath: Type.Optional(Type.String()),
+  outPath: Type.Optional(
+    Type.String({
+      description:
+        "screen_record or screen_snapshot: optional output file path; existing files are replaced only after a complete media write.",
+    }),
+  ),
   // location_get
   maxAgeMs: optionalNonNegativeIntegerSchema(),
   locationTimeoutMs: optionalPositiveIntegerSchema(),

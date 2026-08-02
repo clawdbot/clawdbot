@@ -25,7 +25,7 @@ import {
   textToSpeech,
 } from "../../tts/tts.js";
 import { getTtsCommandSecretTargetIds } from "../command-secret-targets.js";
-import { publishOutputFileAtomically } from "./media-output.js";
+import { publishOutputFileAtomically } from "../media-output.js";
 import type { CapabilityEnvelope, CapabilityTransport } from "./metadata.js";
 import {
   pinRuntimeConfigSnapshot,
