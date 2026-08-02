@@ -55,7 +55,7 @@ function isIMessageApprovalTransportEnabled(params: {
 const imessageApproval = createApproverRestrictedNativeApprovalCapabilityFromForwardingRoutes({
   channel: "imessage",
   channelLabel: "iMessage",
-  authorizeActorAction: imessageApprovalAuth.authorizeActorAction,
+  authorizeActorAction: (params) => imessageApprovalAuth.authorizeActorAction(params),
   routing: {
     defaultForwardingMode: "session",
     isTransportEnabled: isIMessageApprovalTransportEnabled,

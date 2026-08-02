@@ -33,7 +33,7 @@ function isSignalApprovalTransportEnabled(params: {
 const signalApproval = createApproverRestrictedNativeApprovalCapabilityFromForwardingRoutes({
   channel: "signal",
   channelLabel: "Signal",
-  authorizeActorAction: signalApprovalAuth.authorizeActorAction,
+  authorizeActorAction: (params) => signalApprovalAuth.authorizeActorAction(params),
   routing: {
     defaultForwardingMode: "session",
     isTransportEnabled: isSignalApprovalTransportEnabled,

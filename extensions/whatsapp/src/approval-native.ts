@@ -28,7 +28,7 @@ function isWhatsAppApprovalTransportEnabled(params: {
 const whatsappApproval = createApproverRestrictedNativeApprovalCapabilityFromForwardingRoutes({
   channel: "whatsapp",
   channelLabel: "WhatsApp",
-  authorizeActorAction: whatsappApprovalAuth.authorizeActorAction,
+  authorizeActorAction: (params) => whatsappApprovalAuth.authorizeActorAction(params),
   routing: {
     defaultForwardingMode: "session",
     isTransportEnabled: isWhatsAppApprovalTransportEnabled,
