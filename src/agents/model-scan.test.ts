@@ -179,7 +179,10 @@ describe("scanOpenRouterModels", () => {
 
   it("applies the scan timeout before the OpenRouter catalog responds", async () => {
     vi.useFakeTimers();
-    const fetchImpl: typeof fetch = async () => await new Promise<Response>(() => undefined);
+    const fetchImpl: typeof fetch = async () =>
+      await new Promise<Response>(() => {
+        // Deliberately ignore cancellation to prove the timeout race settles independently.
+      });
 
     const scan = expect(
       scanOpenRouterModels({
