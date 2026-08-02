@@ -9,9 +9,9 @@ import type { OAuthCredential } from "./types.js";
 const oauthProviderRuntimeMocks = vi.hoisted(() => {
   vi.resetModules();
   return {
-    refreshProviderOAuthCredentialWithPluginMock: vi.fn(
-      async (_params?: { context?: unknown }): Promise<OAuthCredential | undefined> => undefined,
-    ),
+    refreshProviderOAuthCredentialWithPluginMock: vi.fn<
+      (_params?: { context?: unknown }) => Promise<OAuthCredential | undefined>
+    >(async () => undefined),
     formatProviderAuthProfileApiKeyWithPluginMock: vi.fn(() => undefined),
   };
 });
