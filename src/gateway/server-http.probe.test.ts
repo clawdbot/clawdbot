@@ -190,14 +190,16 @@ describe("startup plugin HTTP routing", () => {
             { name: "bare curl", accept: "*/*" },
             { name: "missing header", accept: undefined },
             { name: "empty header", accept: "" },
-            { name: "rejected HTML with wildcard", accept: "text/html;q=0, */*" },
             { name: "nonzero HTML quality", accept: "text/html;q=0.5" },
             { name: "text wildcard", accept: "text/*" },
+            { name: "quoted parameter delimiters", accept: 'text/html;note="x; q=0; y"' },
           ];
           const nonHtmlCases = [
             { name: "JSON", accept: "application/json" },
             { name: "event stream", accept: "text/event-stream" },
             { name: "zero-quality HTML", accept: "text/html;q=0" },
+            { name: "rejected HTML with wildcard", accept: "text/html;q=0, */*" },
+            { name: "rejected HTML with text wildcard", accept: "text/html;q=0, text/*" },
             { name: "zero-quality wildcard", accept: "*/*;q=0" },
             { name: "mixed-case zero quality", accept: "text/html;Q=0" },
             { name: "zero-quality text wildcard", accept: "text/*;q=0" },

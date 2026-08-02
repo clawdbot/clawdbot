@@ -103,11 +103,27 @@ describe("Control UI SPA fallback Accept routing", () => {
       expected: false,
     },
     {
-      name: "rejected HTML entry with an accepting wildcard",
+      name: "specific HTML rejection overrides an accepting wildcard",
       basePath: "",
       pathname: "/chat",
       method: "GET",
       accept: "text/html;q=0, */*",
+      expected: false,
+    },
+    {
+      name: "specific HTML rejection overrides an accepting text wildcard",
+      basePath: "/openclaw",
+      pathname: "/openclaw/chat",
+      method: "HEAD",
+      accept: "text/html;q=0, text/*;q=1",
+      expected: false,
+    },
+    {
+      name: "quoted media parameter delimiters do not create a quality value",
+      basePath: "",
+      pathname: "/chat",
+      method: "GET",
+      accept: 'text/html; note="x; q=0; y"',
       expected: true,
     },
     {

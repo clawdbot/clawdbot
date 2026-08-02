@@ -157,6 +157,71 @@ function matchesRepresentation(range: ParsedMediaType, representation: ParsedMed
   return true;
 }
 
+function mediaTypeSpecificity(range: ParsedMediaType, representation: ParsedMediaType): number {
+  if (range.type === "*" && range.subtype === "*") {
+    return 0;
+  }
+  if (range.type !== representation.type) {
+    return -1;
+  }
+  if (range.subtype === "*") {
+    return 1;
+  }
+  return range.subtype === representation.subtype ? 2 : -1;
+}
+
+function hasPositiveQualityAtBestSpecificity(
+  accept: string | undefined,
+  getSpecificity: (range: ParsedMediaType) => number,
+): boolean {
+  if (!accept) {
+    return false;
+  }
+  const ranges = splitOutsideQuotedStrings(accept, ",");
+  if (!ranges) {
+    return false;
+  }
+
+  let bestSpecificity = -1;
+  let bestQuality = 0;
+  for (const range of ranges) {
+    const parsedRange = parseMediaType(range, true);
+    if (!parsedRange) {
+      continue;
+    }
+    const specificity = getSpecificity(parsedRange);
+    if (specificity > bestSpecificity) {
+      bestSpecificity = specificity;
+      bestQuality = parsedRange.quality;
+    } else if (specificity === bestSpecificity) {
+      bestQuality = Math.max(bestQuality, parsedRange.quality);
+    }
+  }
+  return bestSpecificity >= 0 && bestQuality > 0;
+}
+
+/**
+ * Checks whether an Accept field permits any offered media type.
+ * Media parameters are intentionally ignored: callers use this for broad
+ * representation families, not for selecting a parameterized variant.
+ */
+export function acceptsAnyMediaType(
+  accept: string | undefined,
+  offeredMediaTypes: readonly string[],
+): boolean {
+  const representations = offeredMediaTypes
+    .map((mediaType) => parseMediaType(mediaType, false))
+    .filter((mediaType): mediaType is ParsedMediaType => mediaType !== null);
+  if (representations.length === 0) {
+    return false;
+  }
+  return hasPositiveQualityAtBestSpecificity(accept, (range) =>
+    Math.max(
+      ...representations.map((representation) => mediaTypeSpecificity(range, representation)),
+    ),
+  );
+}
+
 /**
  * Checks for an explicit, positive-quality media range in an Accept field.
  * Wildcards intentionally do not opt callers into long-lived streaming responses.
@@ -165,35 +230,11 @@ export function hasExplicitAcceptableMediaRange(
   accept: string | undefined,
   expectedRepresentation: string,
 ): boolean {
-  if (!accept) {
-    return false;
-  }
   const representation = parseMediaType(expectedRepresentation, false);
   if (!representation) {
     return false;
   }
-
-  const ranges = splitOutsideQuotedStrings(accept, ",");
-  if (!ranges) {
-    return false;
-  }
-  let bestSpecificity = -1;
-  let bestExplicitQuality = 0;
-  for (const range of ranges) {
-    if (!trimHttpOptionalWhitespace(range)) {
-      continue;
-    }
-    const parsedRange = parseMediaType(range, true);
-    if (!parsedRange || !matchesRepresentation(parsedRange, representation)) {
-      continue;
-    }
-    const specificity = parsedRange.parameters.size;
-    if (specificity > bestSpecificity) {
-      bestSpecificity = specificity;
-      bestExplicitQuality = parsedRange.quality;
-    } else if (specificity === bestSpecificity) {
-      bestExplicitQuality = Math.max(bestExplicitQuality, parsedRange.quality);
-    }
-  }
-  return bestSpecificity >= 0 && bestExplicitQuality > 0;
+  return hasPositiveQualityAtBestSpecificity(accept, (range) =>
+    matchesRepresentation(range, representation) ? range.parameters.size : -1,
+  );
 }
