@@ -74,8 +74,8 @@ function promptLiteral(value: string): string {
 function sortPendingSteeringItems(a: AgentSteeringQueueItem, b: AgentSteeringQueueItem): number {
   // Deliver oldest completed work first, then use creation time and run id for
   // deterministic prompt-cache-friendly ordering.
-  const aEnded = a.payload.endedAt ?? a.entry.endedAt ?? Number.MAX_SAFE_INTEGER;
-  const bEnded = b.payload.endedAt ?? b.entry.endedAt ?? Number.MAX_SAFE_INTEGER;
+  const aEnded = a.payload.endedAt ?? a.entry.execution.endedAt ?? Number.MAX_SAFE_INTEGER;
+  const bEnded = b.payload.endedAt ?? b.entry.execution.endedAt ?? Number.MAX_SAFE_INTEGER;
   if (aEnded !== bEnded) {
     return aEnded - bEnded;
   }

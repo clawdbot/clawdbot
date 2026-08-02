@@ -11,6 +11,7 @@ import type {
   PluginHookBeforeAgentFinalizeResult,
 } from "../../plugins/hook-types.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import { getActivePluginRegistry } from "../../plugins/runtime.js";
 import type {
   PluginHookAgentContext,
   PluginHookBeforeAgentReplyResult,
@@ -178,11 +179,32 @@ const mockedResolveContextEngineOwnerPluginId = vi.fn(() => undefined);
 export const mockedBuildAgentRuntimePlan = vi.fn<() => AgentRuntimePlan>(
   () => makeMockRuntimePlan() as AgentRuntimePlan,
 );
+export const mockedAcquireAgentRunPreparedModelRuntime = vi.fn(
+  async (input: Record<string, unknown>) => {
+    const pluginRegistry = getActivePluginRegistry();
+    return {
+      snapshot: {
+        agentId: input.agentId,
+        agentDir: input.agentDir,
+        config: input.config,
+        workspaceDir: input.workspaceDir,
+        pluginRegistry: pluginRegistry
+          ? {
+              ...pluginRegistry,
+              agentHarnesses: [...pluginRegistry.agentHarnesses],
+            }
+          : undefined,
+        metadataSnapshot: { ...emptyPluginMetadataSnapshot, workspaceDir: input.workspaceDir },
+        createStores: () => ({ authStorage: {}, modelRegistry: {} }),
+      },
+      release: vi.fn(),
+    };
+  },
+);
 export const mockedRunPostCompactionSideEffects = vi.fn(async () => {});
 export const mockedSleepWithAbort = vi.fn(
   async (_ms: number, _abortSignal?: AbortSignal) => undefined,
 );
-export const mockedEnsureRuntimePluginsLoaded = vi.fn<(params?: unknown) => void>();
 function createMockAgentDiscoveryStores(): MockAgentDiscoveryStores {
   return {
     authStorage: {
@@ -224,7 +246,9 @@ export const mockedResolveModelAsync = vi.fn(
   async (provider?: string, modelId?: string, _agentDir?: string, cfg?: unknown) =>
     createMockResolvedModel(provider, modelId, cfg),
 );
-const mockedPrepareProviderRuntimeAuth = vi.fn(async () => undefined);
+export const mockedPrepareProviderRuntimeAuth = vi.fn<
+  (params?: { context?: { apiKey?: string } }) => Promise<{ apiKey: string } | undefined>
+>(async () => undefined);
 export const mockedRunEmbeddedAttempt =
   vi.fn<(params: unknown) => Promise<EmbeddedRunAttemptResult>>();
 export const mockedBuildEmbeddedRunPayloads = vi.fn<
@@ -418,7 +442,7 @@ const mockedShouldPreferExplicitConfigApiKeyAuth = vi.fn(() => false);
 export const overflowBaseRunParams = {
   agentId: "main",
   sessionId: "test-session",
-  sessionKey: "test-key",
+  sessionKey: "agent:main:test-key",
   workspaceDir: "/tmp/workspace",
   prompt: "hello",
   timeoutMs: 30000,
@@ -450,7 +474,6 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
       return { assistant, ...(result.attemptUsage ? { usage: result.attemptUsage } : {}) };
     },
   });
-
   mockedGlobalHookRunner.hasHooks.mockReset();
   mockedGlobalHookRunner.hasHooks.mockReturnValue(false);
   mockedGlobalHookRunner.runBeforeAgentReply.mockReset();
@@ -470,6 +493,7 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
   mockedResolveContextEngine.mockReset();
   mockedResolveContextEngine.mockResolvedValue(mockedContextEngine);
   mockedBuildAgentRuntimePlan.mockReset();
+  mockedAcquireAgentRunPreparedModelRuntime.mockClear();
   mockedBuildAgentRuntimePlan.mockImplementation(() => makeMockRuntimePlan() as AgentRuntimePlan);
   mockedCompactDirect.mockReset();
   mockedCompactDirect.mockResolvedValue({
@@ -478,7 +502,6 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
     reason: "nothing to compact",
   });
 
-  mockedEnsureRuntimePluginsLoaded.mockReset();
   mockedCreateEmptyAgentDiscoveryStores.mockReset();
   mockedCreateEmptyAgentDiscoveryStores.mockImplementation(createMockAgentDiscoveryStores);
   mockedResolveModelAsync.mockReset();
@@ -663,10 +686,6 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
   vi.doMock("../../context-engine/registry.js", () => ({
     resolveContextEngine: mockedResolveContextEngine,
     resolveContextEngineOwnerPluginId: mockedResolveContextEngineOwnerPluginId,
-  }));
-
-  vi.doMock("../runtime-plugins.js", () => ({
-    ensureRuntimePluginsLoaded: mockedEnsureRuntimePluginsLoaded,
   }));
 
   vi.doMock("../harness/runtime-plugin.js", () => ({
@@ -921,20 +940,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
 
   vi.doMock("../prepared-model-runtime.js", () => ({
     activateStandalonePreparedModelRuntime: vi.fn(async () => {}),
-    acquireAgentRunPreparedModelRuntime: vi.fn(async (input: Record<string, unknown>) => ({
-      snapshot: {
-        agentId: input.agentId,
-        agentDir: input.agentDir,
-        config: input.config,
-        workspaceDir: input.workspaceDir,
-        metadataSnapshot: {
-          ...emptyPluginMetadataSnapshot,
-          workspaceDir: input.workspaceDir as string | undefined,
-        },
-        createStores: () => ({ authStorage: {}, modelRegistry: {} }),
-      },
-      release: vi.fn(),
-    })),
+    acquireAgentRunPreparedModelRuntime: mockedAcquireAgentRunPreparedModelRuntime,
     prepareModelRuntimeSnapshot: vi.fn(async () => ({
       createStores: () => ({ authStorage: {}, modelRegistry: {} }),
     })),

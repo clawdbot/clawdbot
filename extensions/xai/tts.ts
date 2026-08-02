@@ -2,6 +2,7 @@
 import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
 import {
   assertOkOrThrowProviderError,
+  assertProviderBinaryResponseContent,
   postJsonRequest,
   readProviderJsonResponse,
 } from "openclaw/plugin-sdk/provider-http";
@@ -505,10 +506,22 @@ export async function xaiTTS(params: {
   try {
     await assertOkOrThrowProviderError(response, "xAI TTS API error");
 
-    return await readResponseWithLimit(response, maxBytes, {
+    try {
+      assertProviderBinaryResponseContent(response, "xAI TTS API error", "audio");
+    } catch (error) {
+      // A debug-capture clone can keep the tee open, so waiting for cancel would hang
+      // before the rejected response and its dispatcher can be released.
+      void response.body?.cancel().catch(() => undefined);
+      throw error;
+    }
+    const audio = await readResponseWithLimit(response, maxBytes, {
       onOverflow: ({ maxBytes: maxBytesLocal }) =>
         new Error(`xAI TTS audio response exceeds ${maxBytesLocal} bytes`),
     });
+    if (audio.byteLength === 0) {
+      throw new Error("xAI TTS API error: malformed audio response");
+    }
+    return audio;
   } finally {
     await release();
   }

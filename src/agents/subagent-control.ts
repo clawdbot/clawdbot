@@ -27,12 +27,13 @@ import {
 } from "./run-wait.js";
 import { resolveStoredSubagentCapabilities } from "./subagent-capabilities.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
-import { buildLatestSubagentRunIndex, resolveSessionEntryForKey } from "./subagent-list.js";
+import { resolveSessionEntryForKey } from "./subagent-list.js";
 import {
   resolveFinalizedSubagentTaskState,
   resolveKilledSubagentTaskEndedAt,
 } from "./subagent-registry-completion.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
+import { buildSubagentRunReadIndexFromRuns } from "./subagent-registry-queries.js";
 import {
   getLatestSubagentRunByChildSessionKey,
   listSubagentRunsForController,
@@ -157,19 +158,34 @@ function isSubagentRunVisibleToSession(entry: SubagentRunRecord, sessionKey: str
   return controllerKey === sessionKey || requesterKey === sessionKey;
 }
 
-/** Lists latest child runs controlled by a session key. */
-export function listControlledSubagentRuns(controllerSessionKey: string): SubagentRunRecord[] {
+/** Builds one stable snapshot for controlled-run listing and descendant status reads. */
+export function buildControlledSubagentRunsReadContext(controllerSessionKey: string): {
+  runs: SubagentRunRecord[];
+  countPendingDescendantRuns(rootSessionKey: string): number;
+} {
   const key = controllerSessionKey.trim();
   if (!key) {
-    return [];
+    return {
+      runs: [],
+      countPendingDescendantRuns: () => 0,
+    };
   }
 
   const snapshot = getSubagentRunsSnapshotForRead(subagentRuns);
-  const latestByChildSessionKey = buildLatestSubagentRunIndex(snapshot).latestByChildSessionKey;
-  const filtered = Array.from(latestByChildSessionKey.values()).filter((entry) =>
+  const readIndex = buildSubagentRunReadIndexFromRuns({ runs: snapshot });
+  const filtered = Array.from(readIndex.latestRunsByChildSessionKey.values()).filter((entry) =>
     isSubagentRunVisibleToSession(entry, key),
   );
-  return sortSubagentRuns(filtered);
+  return {
+    runs: sortSubagentRuns(filtered),
+    countPendingDescendantRuns: (rootSessionKey) =>
+      readIndex.countPendingDescendantRuns(rootSessionKey),
+  };
+}
+
+/** Lists latest child runs controlled by a session key. */
+export function listControlledSubagentRuns(controllerSessionKey: string): SubagentRunRecord[] {
+  return buildControlledSubagentRunsReadContext(controllerSessionKey).runs;
 }
 
 function ensureControllerOwnsRun(params: {
@@ -184,7 +200,11 @@ function ensureControllerOwnsRun(params: {
 }
 
 function isFinishedForSteerControl(entry: SubagentRunRecord, hasPendingDescendants: boolean) {
-  return Boolean(entry.endedAt) && entry.pauseReason !== "sessions_yield" && !hasPendingDescendants;
+  return (
+    Boolean(entry.execution.endedAt) &&
+    entry.pauseReason !== "sessions_yield" &&
+    !hasPendingDescendants
+  );
 }
 
 type SubagentKillTargetState =
@@ -217,7 +237,7 @@ function resolveSubagentKillTargetState(
   if (terminal) {
     return { state: "terminal", task: terminal };
   }
-  return typeof entry.endedAt === "number" &&
+  return typeof entry.execution.endedAt === "number" &&
     entry.pauseReason !== "sessions_yield" &&
     (entry.endedReason !== SUBAGENT_ENDED_REASON_KILLED ||
       entry.suppressAnnounceReason === "steer-restart")
@@ -289,7 +309,7 @@ async function killSubagentRun(params: {
     }
     return { killed: false, targetState: initialTargetState };
   }
-  if (params.entry.endedAt && params.entry.pauseReason !== "sessions_yield") {
+  if (params.entry.execution.endedAt && params.entry.pauseReason !== "sessions_yield") {
     return { killed: false };
   }
   const childSessionKey = params.entry.childSessionKey;
@@ -391,7 +411,7 @@ async function killSubagentRunTree(params: {
     params.seenChildSessionKeys.add(childKey);
     const entry = params.controllerSessionKey ? run : latest;
 
-    if (!entry.endedAt || entry.pauseReason === "sessions_yield") {
+    if (!entry.execution.endedAt || entry.pauseReason === "sessions_yield") {
       const stopResult = await killSubagentRun({
         cfg: params.cfg,
         entry,

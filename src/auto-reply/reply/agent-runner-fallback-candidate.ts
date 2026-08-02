@@ -112,6 +112,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
           provider,
           modelId: model,
           level: turn.followupRun.run.thinkLevel,
+          catalog: turn.followupRun.run.thinkingCatalog,
           agentId: turn.followupRun.run.agentId,
           sessionKey: turn.followupRun.run.runtimePolicySessionKey ?? turn.sessionKey,
           sessionEntry: turn.getActiveSessionEntry(),

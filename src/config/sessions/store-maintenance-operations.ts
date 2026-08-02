@@ -177,15 +177,21 @@ async function cleanupRemovedSessionArtifacts(params: {
     archivedDirs.size > 0
       ? [...archivedDirs]
       : [path.dirname(path.resolve(params.operation.storePath))];
-  // Both retention reasons ride one cleanup call so each save enumerates the
-  // sessions dir at most once; a listing per reason would scan twice per save.
-  await params.operation.artifacts.cleanupArchivedSessionTranscripts({
-    directories: targetDirs,
-    rules: [
-      { reason: "deleted", olderThanMs: params.maintenance.resetArchiveRetentionMs },
-      { reason: "reset", olderThanMs: params.maintenance.resetArchiveRetentionMs },
-    ],
-  });
+  // Both reasons ride one advisory cleanup call: earlier artifact moves may
+  // have committed, so retention failure must not block the primary store save.
+  await params.operation.artifacts
+    .cleanupArchivedSessionTranscripts({
+      directories: targetDirs,
+      rules: [
+        { reason: "deleted", olderThanMs: params.maintenance.resetArchiveRetentionMs },
+        { reason: "reset", olderThanMs: params.maintenance.resetArchiveRetentionMs },
+      ],
+    })
+    .catch((error: unknown) => {
+      params.operation.log.warn("session transcript archive retention cleanup failed", {
+        error: String(error),
+      });
+    });
 }
 
 async function applyEnforcedMaintenance(params: {

@@ -43,11 +43,16 @@ function readStringRecord(value: unknown): Record<string, string> {
   return record;
 }
 
-async function readPackagePeerDependencies(packageDir: string): Promise<Record<string, string>> {
+async function readPackageOpenClawLinkDependencies(
+  packageDir: string,
+): Promise<Record<string, string>> {
   try {
     const raw = await fs.readFile(path.join(packageDir, "package.json"), "utf8");
-    const parsed = JSON.parse(raw) as { peerDependencies?: unknown };
-    return readStringRecord(parsed.peerDependencies);
+    const parsed = JSON.parse(raw) as { dependencies?: unknown; peerDependencies?: unknown };
+    const peerDependencies = readStringRecord(parsed.peerDependencies);
+    const dependencies = readStringRecord(parsed.dependencies);
+    const openclaw = peerDependencies.openclaw ?? dependencies.openclaw;
+    return openclaw ? { openclaw } : {};
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return {};
@@ -293,7 +298,7 @@ async function readPackageName(packageDir: string): Promise<string | undefined> 
 }
 
 /**
- * Symlink the host openclaw package for plugins that declare it as a peer.
+ * Symlink the host openclaw package for plugins that declare it as a dependency.
  * Plugin package managers still own third-party dependencies; this only wires
  * the host SDK package into the plugin-local Node graph.
  */
@@ -347,9 +352,9 @@ export async function relinkOpenClawPeerDependenciesInManagedNpmRoot(params: {
   let repaired = 0;
   let skipped = 0;
   for (const packageDir of await listManagedNpmRootPackageDirs(params.npmRoot)) {
-    let peerDependencies: Record<string, string>;
+    let openClawLinkDependencies: Record<string, string>;
     try {
-      peerDependencies = await readPackagePeerDependencies(packageDir);
+      openClawLinkDependencies = await readPackageOpenClawLinkDependencies(packageDir);
     } catch (error) {
       if (!params.onPackageReadError) {
         throw error;
@@ -358,13 +363,13 @@ export async function relinkOpenClawPeerDependenciesInManagedNpmRoot(params: {
       skipped += 1;
       continue;
     }
-    if (!Object.hasOwn(peerDependencies, "openclaw")) {
+    if (!Object.hasOwn(openClawLinkDependencies, "openclaw")) {
       continue;
     }
     checked += 1;
     const result = await linkOpenClawPeerDependencies({
       installedDir: packageDir,
-      peerDependencies,
+      peerDependencies: openClawLinkDependencies,
       logger: params.logger,
     });
     attempted += 1;
@@ -390,9 +395,9 @@ export async function auditOpenClawPeerDependenciesInManagedNpmRoot(params: {
   let checked = 0;
   const issues: OpenClawPeerLinkAuditIssue[] = [];
   for (const packageDir of await listManagedNpmRootPackageDirs(params.npmRoot)) {
-    let peerDependencies: Record<string, string>;
+    let openClawLinkDependencies: Record<string, string>;
     try {
-      peerDependencies = await readPackagePeerDependencies(packageDir);
+      openClawLinkDependencies = await readPackageOpenClawLinkDependencies(packageDir);
     } catch (error) {
       if (!params.onPackageReadError) {
         throw error;
@@ -400,7 +405,7 @@ export async function auditOpenClawPeerDependenciesInManagedNpmRoot(params: {
       params.onPackageReadError(error, packageDir);
       continue;
     }
-    if (!Object.hasOwn(peerDependencies, "openclaw")) {
+    if (!Object.hasOwn(openClawLinkDependencies, "openclaw")) {
       continue;
     }
     checked += 1;

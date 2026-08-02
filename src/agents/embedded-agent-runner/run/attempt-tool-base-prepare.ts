@@ -90,6 +90,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
     isRawModelRun,
     skillWorkshopProposalOnly: attempt.skillWorkshopProposalOnly,
     toolsAllow: attempt.toolsAllow,
+    forceCodeModeControls: attempt.forceCodeModeTools,
   });
   const effectiveToolsAllow =
     toolSearchControlsEnabledForRun && toolsAllowWithForcedRuntimeTools

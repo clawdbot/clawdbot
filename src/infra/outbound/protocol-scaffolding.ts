@@ -5,6 +5,7 @@ import {
   stripInternalRuntimeContext,
 } from "../../agents/internal-runtime-context.js";
 import { escapeRegExp } from "../../shared/regexp.js";
+import { findCodeRegions } from "../../shared/text/code-regions.js";
 
 const INTERNAL_RUNTIME_SCAFFOLDING_TAGS = ["system-reminder", "previous_response"] as const;
 const INTERNAL_RUNTIME_SCAFFOLDING_TAG_PATTERN = INTERNAL_RUNTIME_SCAFFOLDING_TAGS.join("|");
@@ -102,5 +103,5 @@ export function stripInternalRuntimeScaffolding(text: string): string {
   for (const marker of INTERNAL_RUNTIME_MARKER_LINES) {
     stripped = stripStandaloneMarkerLine(stripped, marker);
   }
-  return stripPlainTextToolCallBlocks(stripped);
+  return stripPlainTextToolCallBlocks(stripped, { resolveProtectedRanges: findCodeRegions });
 }

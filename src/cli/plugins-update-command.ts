@@ -248,7 +248,11 @@ async function runPluginUpdateCommandUnlocked(params: RunPluginUpdateCommandPara
       defaultRuntime.log("No tracked plugins or hook packs to update.");
       return;
     }
-    defaultRuntime.error("Provide a plugin or hook-pack id, or use --all.");
+    defaultRuntime.error(
+      params.id
+        ? `No tracked plugin or hook pack found for "${params.id}". Run "openclaw plugins list" or "openclaw hooks list" to inspect installed packages.`
+        : "Provide a plugin or hook-pack id, or use --all.",
+    );
     return defaultRuntime.exit(1);
   }
 

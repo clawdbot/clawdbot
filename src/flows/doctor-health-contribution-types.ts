@@ -15,6 +15,7 @@ type DoctorConfigResult = {
   sourceConfigValid?: boolean;
   sourceLastTouchedVersion?: string;
   skipPluginValidationOnWrite?: boolean;
+  explicitSetPaths?: readonly (readonly string[])[];
   skipWizardMetadataForIncludeWrite?: boolean;
   preservedLegacyRootKeys?: readonly string[];
   shouldRepairCronCodexModelRefsAfterConfigWrite?: boolean;
@@ -35,6 +36,8 @@ export type DoctorHealthFlowContext = {
   postConfigWriteRepairsCommitted?: boolean;
   sourceConfigValid: boolean;
   configPath: string;
+  /** Whether the selected state directory already existed before doctor startup work. */
+  stateDirExistedAtStart?: boolean;
   env?: NodeJS.ProcessEnv;
   gatewayDetails?: ReturnType<typeof buildGatewayConnectionDetails>;
   healthOk?: boolean;

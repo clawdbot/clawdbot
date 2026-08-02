@@ -133,6 +133,9 @@ function projectCodexUserItemText(item: Record<string, unknown>): string | undef
       parts.push("[Image attachment]");
       continue;
     }
+    if (input.type === "audio" || input.type === "localAudio" || input.type === "local_audio") {
+      parts.push("[Audio attachment]");
+    }
     if (input.type === "skill" || input.type === "mention") {
       const name = normalizeOptionalString(input.name);
       if (name) {
@@ -220,7 +223,15 @@ function projectCodexThreadHistory(params: {
                   CODEX_HISTORY_ASSISTANT_PROVIDER,
                 model: CODEX_HISTORY_ASSISTANT_MODEL,
                 usage: CODEX_HISTORY_ZERO_USAGE,
-                stopReason: "stop",
+                stopReason:
+                  turn.status === "interrupted"
+                    ? "aborted"
+                    : turn.status === "failed"
+                      ? "error"
+                      : "stop",
+                ...(turn.status === "failed" && turn.error?.message
+                  ? { errorMessage: turn.error.message }
+                  : {}),
                 timestamp,
               } satisfies AssistantMessage,
               identity,
@@ -287,7 +298,15 @@ export function projectBoundedCodexThreadHistory(params: {
   return {
     importedMessages: selected.length,
     omittedMessages: projected.length - selected.length,
-    responseItems: selected.map(({ responseItem }) => responseItem),
+    // Failed assistant fragments remain visible in operator transcripts, but
+    // injecting them would permanently replay incomplete model output.
+    responseItems: selected
+      .filter(
+        ({ message }) =>
+          message.role !== "assistant" ||
+          (message.stopReason !== "aborted" && message.stopReason !== "error"),
+      )
+      .map(({ responseItem }) => responseItem),
     transcriptMessages: selected.map(({ message }) => message),
   };
 }

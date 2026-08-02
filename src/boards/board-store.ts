@@ -6,6 +6,8 @@ import type {
   BoardWidgetMaterializedContent,
   BoardWidgetMaterializedPutParams,
   BoardWidgetDeclared,
+  BoardWidgetGeneratedIdentity,
+  BoardWidgetPutResult,
 } from "../../packages/gateway-protocol/src/index.js";
 import { boardDeclarationIsSubset, normalizeBoardWidgetDeclared } from "./board-capabilities.js";
 import {
@@ -44,7 +46,7 @@ export interface BoardStore {
   getSnapshot(sessionKey: string): BoardSnapshot;
   getSnapshotWithHtmlViewMetadata(sessionKey: string): BoardSnapshotWithHtmlViewMetadata;
   applyOps(sessionKey: string, ops: readonly BoardOp[]): BoardSnapshot;
-  putWidget(params: BoardWidgetMaterializedPutParams): BoardSnapshot;
+  putWidget(params: BoardWidgetMaterializedPutParams): BoardWidgetPutResult;
   grant(
     sessionKey: string,
     name: string,
@@ -60,11 +62,19 @@ export interface BoardStore {
 type StoredBoard = {
   snapshot: BoardSnapshot;
   documents: Map<string, BoardWidgetDocument>;
+  nameIdentities: Map<string, BoardWidgetNameIdentityMarker>;
 };
 
 const BOARD_MAX_WIDGETS = 48;
 const BOARD_MAX_WIDGET_HTML_BYTES = 256 * 1024;
 const BOARD_MAX_WIDGET_PLUGIN_PROPS_BYTES = 8 * 1024;
+type BoardWidgetGeneratedIdentityMarker = Pick<BoardWidgetGeneratedIdentity, "source" | "key"> & {
+  kind: "generated";
+};
+export type BoardWidgetNameIdentityMarker =
+  | { kind: "explicit" }
+  | BoardWidgetGeneratedIdentityMarker
+  | { kind: "invalid" };
 
 function emptyBoardSnapshot(sessionKey: string): BoardSnapshot {
   return { sessionKey, revision: 0, tabs: [], widgets: [] };
@@ -156,6 +166,76 @@ export function createBoardDeclaredSummary(
     ...(declared?.tools ?? []).map((tool) => `Tool access: ${tool}`),
   ];
   return lines.length > 0 ? lines : undefined;
+}
+
+function generatedIdentityMatches(
+  left: BoardWidgetNameIdentityMarker | undefined,
+  right: BoardWidgetGeneratedIdentityMarker,
+): boolean {
+  return left?.kind === "generated" && left.source === right.source && left.key === right.key;
+}
+
+export function resolveBoardWidgetPutParams(
+  prior: BoardSnapshot,
+  params: BoardWidgetMaterializedPutParams,
+  nameIdentities: ReadonlyMap<string, BoardWidgetNameIdentityMarker>,
+): BoardWidgetMaterializedPutParams {
+  const generatedIdentity = params.generatedIdentity;
+  if (!generatedIdentity) {
+    return params;
+  }
+  if (generatedIdentity.fallbackName === params.name) {
+    throw new BoardValidationError(
+      "invalid_operation",
+      "generated widget fallback name must differ from its preferred name",
+    );
+  }
+  const marker: BoardWidgetGeneratedIdentityMarker = {
+    kind: "generated",
+    source: generatedIdentity.source,
+    key: generatedIdentity.key,
+  };
+  const existingGenerated = prior.widgets.find((widget) =>
+    generatedIdentityMatches(nameIdentities.get(widget.name), marker),
+  );
+  if (existingGenerated) {
+    return { ...params, name: existingGenerated.name };
+  }
+
+  const preferred = prior.widgets.find((widget) => widget.name === params.name);
+  if (!preferred) {
+    return params;
+  }
+
+  const fallback = prior.widgets.find((widget) => widget.name === generatedIdentity.fallbackName);
+  if (fallback) {
+    throw new BoardValidationError(
+      "conflict",
+      `generated widget fallback name is already in use: ${generatedIdentity.fallbackName}`,
+    );
+  }
+  return { ...params, name: generatedIdentity.fallbackName };
+}
+
+export function normalizeBoardWidgetPutParams(
+  params: BoardWidgetMaterializedPutParams,
+  sessionKey = params.sessionKey,
+): BoardWidgetMaterializedPutParams {
+  const declared = normalizeBoardWidgetDeclared(params.declared);
+  const canonical = { ...params, sessionKey };
+  if (declared) {
+    canonical.declared = declared;
+  } else {
+    delete canonical.declared;
+  }
+  return canonical;
+}
+
+export function createBoardWidgetPutResult(
+  snapshot: BoardSnapshot,
+  resolvedWidgetName: string,
+): BoardWidgetPutResult {
+  return { ...cloneBoardSnapshot(snapshot), resolvedWidgetName };
 }
 
 type BoardWidgetGrantScope =
@@ -392,24 +472,27 @@ export class InMemoryBoardStore implements BoardStore {
     const documents = new Map(
       [...(current?.documents ?? [])].filter(([name]) => removedNames.has(name)),
     );
+    const nameIdentities = new Map(
+      [...(current?.nameIdentities ?? [])].filter(([name]) => removedNames.has(name)),
+    );
     if (next.tabs.length === 0 && next.widgets.length === 0) {
       this.boards.delete(sessionKey);
     } else {
-      this.boards.set(sessionKey, { snapshot: next, documents });
+      this.boards.set(sessionKey, { snapshot: next, documents, nameIdentities });
     }
     return cloneBoardSnapshot(next);
   }
 
-  putWidget(params: BoardWidgetMaterializedPutParams): BoardSnapshot {
-    const declared = normalizeBoardWidgetDeclared(params.declared);
-    const canonicalParams: BoardWidgetMaterializedPutParams = { ...params };
-    if (declared) {
-      canonicalParams.declared = declared;
-    } else {
-      delete canonicalParams.declared;
-    }
+  putWidget(params: BoardWidgetMaterializedPutParams): BoardWidgetPutResult {
+    let canonicalParams = normalizeBoardWidgetPutParams(params);
+    const declared = canonicalParams.declared;
     const current = this.boards.get(canonicalParams.sessionKey);
     const prior = current?.snapshot ?? emptyBoardSnapshot(canonicalParams.sessionKey);
+    canonicalParams = resolveBoardWidgetPutParams(
+      prior,
+      canonicalParams,
+      current?.nameIdentities ?? new Map(),
+    );
     const existingDocument = current?.documents.get(canonicalParams.name);
     const grantedSha256 =
       existingDocument && "html" in existingDocument && existingDocument.grantState === "granted"
@@ -438,8 +521,22 @@ export class InMemoryBoardStore implements BoardStore {
     } else {
       documents.delete(canonicalParams.name);
     }
-    this.boards.set(canonicalParams.sessionKey, { snapshot, documents });
-    return cloneBoardSnapshot(snapshot);
+    const nameIdentities = new Map(current?.nameIdentities ?? []);
+    if (canonicalParams.generatedIdentity) {
+      nameIdentities.set(canonicalParams.name, {
+        kind: "generated",
+        source: canonicalParams.generatedIdentity.source,
+        key: canonicalParams.generatedIdentity.key,
+      });
+    } else {
+      nameIdentities.set(canonicalParams.name, { kind: "explicit" });
+    }
+    this.boards.set(canonicalParams.sessionKey, {
+      snapshot,
+      documents,
+      nameIdentities,
+    });
+    return createBoardWidgetPutResult(snapshot, canonicalParams.name);
   }
 
   grant(
@@ -464,7 +561,11 @@ export class InMemoryBoardStore implements BoardStore {
     if (document) {
       document.grantState = decision;
     }
-    this.boards.set(sessionKey, { snapshot, documents: current.documents });
+    this.boards.set(sessionKey, {
+      snapshot,
+      documents: current.documents,
+      nameIdentities: current.nameIdentities,
+    });
     return cloneBoardSnapshot(snapshot);
   }
 

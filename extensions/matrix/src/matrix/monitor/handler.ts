@@ -526,7 +526,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             },
             dispatcherOptions: {
               ...turnDispatcherOptions,
-              onSettled: () => draftController.progressDraftGate.cancel(),
+              onSettled: () => draftController.cancelProgressDraft(),
             },
             replyOptions: {
               skillFilter: roomConfig?.skills,

@@ -236,6 +236,16 @@ describe("OpenClaw dual-published plugin metadata", () => {
         npmSpec: "@openclaw/gmi-provider",
       },
     },
+    {
+      extensionId: "novita",
+      packageName: "@openclaw/novita-provider",
+      install: {
+        clawhubSpec: "clawhub:@openclaw/novita-provider",
+        defaultChoice: "npm",
+        minHostVersion: ">=2026.7.2",
+        npmSpec: "@openclaw/novita-provider",
+      },
+    },
   ] as const;
 
   it("keeps dual-published plugins selectable through both ClawHub and npm release paths", () => {

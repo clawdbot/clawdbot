@@ -1,11 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
-import {
-  isMainSessionRecoveryExhausted,
-  transitionMainSessionRecovery,
-} from "../../agents/main-session-recovery-state.js";
+import { transitionMainSessionRecovery } from "../../agents/main-session-recovery-state.js";
 import type { MainSessionRecoveryOwnerLease } from "../../agents/main-session-recovery-store.js";
+import { MAX_RECOVERY_RETRIES } from "../../agents/main-session-restart-recovery-shared.js";
 import {
   mergeSessionEntry,
   resolveSessionLifecycleTimestamps,
@@ -188,7 +186,10 @@ export async function persistAgentSessionPhase(params: {
               !params.isRestartRecoveryResumeRun &&
               internalFreshEntry &&
               (internalFreshEntry.mainRestartRecovery?.tombstone ||
-                isMainSessionRecoveryExhausted(internalFreshEntry))
+                (internalFreshEntry.status === "running" &&
+                  internalFreshEntry.abortedLastRun === true &&
+                  (internalFreshEntry.mainRestartRecovery?.chargedAttempts ?? 0) >=
+                    MAX_RECOVERY_RETRIES))
             ) {
               restartRecoveryReservationConflict =
                 `Session "${params.canonicalSessionKey}" is quarantined after restart recovery ` +

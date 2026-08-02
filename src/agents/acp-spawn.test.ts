@@ -1579,6 +1579,7 @@ describe("spawnAcpDirect", () => {
         ? {
             childSessionKey,
             createdAt: Date.now(),
+            execution: { status: "running", startedAt: Date.now() },
           }
         : null,
     );

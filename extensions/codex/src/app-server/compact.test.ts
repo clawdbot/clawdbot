@@ -905,7 +905,7 @@ describe("maybeCompactCodexAppServerSession", () => {
     });
   });
 
-  it("accepts the terminal interrupt response when its notification is missing", async () => {
+  it("holds interrupted compaction until its matching terminal notification", async () => {
     const fake = createFakeCodexClient({ autoCompleteCompaction: false });
     const sessionFile = await writeTestBinding();
 
@@ -917,7 +917,11 @@ describe("maybeCompactCodexAppServerSession", () => {
         workspaceDir: tempDir,
         trigger: "manual",
       },
-      { clientFactory: async () => fake.client, nativeCompletionTimeoutMs: 10 },
+      {
+        clientFactory: async () => fake.client,
+        nativeCompletionTimeoutMs: 10,
+        nativeInterruptGraceMs: 250,
+      },
     );
     await vi.waitFor(() => expect(fake.request).toHaveBeenCalledOnce());
     fake.emit({
@@ -934,16 +938,30 @@ describe("maybeCompactCodexAppServerSession", () => {
           threadId: "thread-1",
           turnId: "compact-turn-stalled",
         },
-        { timeoutMs: 30_000 },
+        { timeoutMs: 250 },
       );
     });
     expect(fake.close).not.toHaveBeenCalled();
     expect(fake.closeAndWait).not.toHaveBeenCalled();
 
+    let settled = false;
+    void pendingResult.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    fake.emit({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: { id: "compact-turn-stalled", threadId: "thread-1", status: "interrupted" },
+      },
+    });
+
     await expect(pendingResult).resolves.toMatchObject({
       ok: false,
       compacted: false,
-      reason: "codex app-server confirmed native compaction interruption",
+      reason: "codex app-server compaction turn ended with status interrupted",
     });
   });
 
@@ -1233,10 +1251,19 @@ describe("maybeCompactCodexAppServerSession", () => {
       );
     });
 
+    expect(settled).toBe(false);
+    fake.emit({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: { id: "compact-turn-aborted", threadId: "thread-1", status: "interrupted" },
+      },
+    });
+
     await expect(pendingResult).resolves.toMatchObject({
       ok: false,
       compacted: false,
-      reason: "codex app-server confirmed native compaction interruption",
+      reason: "codex app-server compaction turn ended with status interrupted",
     });
   });
 

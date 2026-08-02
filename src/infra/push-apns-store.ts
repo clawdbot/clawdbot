@@ -358,7 +358,7 @@ export function apnsRegistrationFromRow(row: ApnsRegistrationRow): ApnsRegistrat
     normalizePersistedRelayOrigin,
   );
   if (!normalized) {
-    throw new Error(`invalid APNs registration row for node ${row.node_id}`);
+    throw new Error("invalid APNs registration row");
   }
   const canonical = apnsRegistrationToRow(normalized);
   if (
@@ -375,7 +375,7 @@ export function apnsRegistrationFromRow(row: ApnsRegistrationRow): ApnsRegistrat
     canonical.token_debug_suffix !== row.token_debug_suffix ||
     canonical.updated_at_ms !== row.updated_at_ms
   ) {
-    throw new Error(`non-canonical APNs registration row for node ${row.node_id}`);
+    throw new Error("non-canonical APNs registration row");
   }
   return normalized;
 }

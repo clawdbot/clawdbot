@@ -417,7 +417,7 @@ async function runCronJobAndWaitForFinished(ws: WebSocket, jobId: string) {
     (payload) => payload?.jobId === jobId && payload?.action === "finished",
   );
   await runCronJobForce(ws, jobId);
-  await finished;
+  return await finished;
 }
 
 function getWebhookCall(index: number) {
@@ -1729,7 +1729,7 @@ describe("gateway server cron", () => {
         name: "webhook enabled",
         delivery: { mode: "webhook", to: "https://example.invalid/cron-finished" },
       });
-      await runCronJobAndWaitForFinished(ws, notifyJobId);
+      const notifyFinished = await runCronJobAndWaitForFinished(ws, notifyJobId);
       const notifyCall = getWebhookCall(0);
       expect(notifyCall.url).toBe("https://example.invalid/cron-finished");
       expect(notifyCall.init.method).toBe("POST");
@@ -1739,6 +1739,19 @@ describe("gateway server cron", () => {
       expect(notifyBody.action).toBe("finished");
       expect(notifyBody.jobId).toBe(notifyJobId);
       expect(notifyBody.summary).toBe("send webhook");
+      expectRecordFields(notifyFinished, {
+        status: "ok",
+        delivered: true,
+        deliveryStatus: "delivered",
+      });
+
+      const notifyRuns = await rpcReq(ws, "cron.runs", { id: notifyJobId, limit: 10 });
+      expect(notifyRuns.ok).toBe(true);
+      const notifyEntries = (notifyRuns.payload as { entries?: unknown } | null)?.entries;
+      expect(Array.isArray(notifyEntries)).toBe(true);
+      expect((notifyEntries as Array<{ deliveryStatus?: unknown }>).at(-1)?.deliveryStatus).toBe(
+        "delivered",
+      );
 
       expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
 

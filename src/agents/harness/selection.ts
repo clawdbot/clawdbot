@@ -134,6 +134,7 @@ type AgentHarnessSelectionDecision = {
 type PluginHarnessToolPolicyContext = Pick<
   EmbeddedRunAttemptParams,
   | "config"
+  | "sessionId"
   | "sessionKey"
   | "sandboxSessionKey"
   | "agentId"
@@ -664,6 +665,7 @@ function resolvePluginHarnessToolPolicies(
   const sandboxSessionKey = params.sandboxSessionKey ?? params.sessionKey;
   const capabilityProfile = resolveConversationCapabilityProfile({
     config: params.config,
+    sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     sandboxSessionKey,
     agentId: params.agentId,

@@ -28,11 +28,7 @@ type ConversationReadInvocationOrigin = NonNullable<
 >;
 
 export type DiscordMessagingActionOptions = {
-  mediaAccess?: {
-    localRoots?: readonly string[];
-    readFile?: (filePath: string) => Promise<Buffer>;
-    workspaceDir?: string;
-  };
+  mediaAccess?: ChannelMessageActionContext["mediaAccess"];
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
   conversationReadOrigin?: ConversationReadInvocationOrigin;

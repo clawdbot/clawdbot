@@ -31,7 +31,7 @@ export type MigrateCommonOptions = {
   targetAgentId?: string;
   // Internal embedded scope. Providers may skip unrelated discovery when this is set.
   itemKinds?: string[];
-  // Internal exact item selection used by reviewed UI migration plans.
+  // Exact item selection used by reviewed UI plans and the standalone CLI.
   itemIds?: string[];
 };
 

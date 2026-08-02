@@ -218,6 +218,33 @@ describe("session transcript reader facade", () => {
     });
   });
 
+  test("keeps SQLite precedence by ignoring an obsolete active JSONL during archive fallback", async () => {
+    const sessionId = "reader-reset-archive-only";
+    const scope = {
+      agentId: "main",
+      sessionId,
+      sessionKey: `agent:main:${sessionId}`,
+      storePath,
+    };
+    const line = (content: string) =>
+      `${JSON.stringify({ type: "session", version: 1, id: sessionId })}\n${JSON.stringify({
+        message: { role: "assistant", content },
+      })}\n`;
+    fs.writeFileSync(path.join(tempDir, `${sessionId}.jsonl`), line("obsolete live file"));
+    fs.writeFileSync(
+      path.join(tempDir, `${sessionId}.jsonl.reset.2026-07-12T18-00-00.000Z`),
+      line("retained archive"),
+    );
+
+    await expect(
+      readSessionMessagesAsync(scope, {
+        mode: "full",
+        reason: "archive-only fallback test",
+        allowResetArchiveFallback: true,
+      }),
+    ).resolves.toMatchObject([{ content: "retained archive" }]);
+  });
+
   test("does not fall back to stored custom transcript paths after SQLite migration", async () => {
     const sessionId = "reader-legacy-custom-path";
     const sessionKey = `agent:main:telegram:group:1:topic:9`;

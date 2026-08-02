@@ -21,6 +21,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 import { shortenHomePath } from "../utils.js";
 import {
+  repairCanonicalSessionKeys,
+  type CanonicalSessionKeyRepairReport,
+} from "./doctor-session-canonical-keys.js";
+import {
   repairCanonicalSessionDeliveryStates,
   type SessionDeliveryStateRepairReport,
 } from "./doctor-session-delivery-state.js";
@@ -519,12 +523,25 @@ async function noteSessionSqliteMigrationHealth(params: {
     repaired: 0,
     scannedStores: 0,
   };
+  let canonicalKeyReport: CanonicalSessionKeyRepairReport = {
+    archivedTranscriptDirectories: [],
+    foundGroups: 0,
+    repairBatches: 0,
+    removedRows: 0,
+    repairedGroups: 0,
+    scannedStores: 0,
+  };
   const runSessionSqlite = async () => {
     const report = await runDoctorSessionSqlite({
       allAgents: true,
       ...(params.cfg ? { cfg: params.cfg } : {}),
       env: params.env,
       mode: params.shouldRepair ? "import" : "dry-run",
+    });
+    canonicalKeyReport = await repairCanonicalSessionKeys({
+      apply: params.shouldRepair,
+      cfg: params.cfg ?? {},
+      env: params.env,
     });
     // Import may create the first durable SQLite row for a colliding legacy key.
     reservedKeyReport = repairReservedIncognitoSessionKeys({
@@ -563,6 +580,14 @@ async function noteSessionSqliteMigrationHealth(params: {
       params.shouldRepair
         ? `- Renamed ${reservedKeyReport.repaired} durable session key(s) that collided with the reserved incognito namespace.`
         : `- Found ${reservedKeyReport.found} durable session key(s) that collide with the reserved incognito namespace. Run "openclaw doctor --fix" to rename them.`,
+      "Session SQLite",
+    );
+  }
+  if (canonicalKeyReport.foundGroups > 0) {
+    note(
+      params.shouldRepair
+        ? `- Canonicalized ${canonicalKeyReport.repairedGroups} session-key group(s) in ${canonicalKeyReport.repairBatches} transaction batch(es), removed ${canonicalKeyReport.removedRows} duplicate or alias row(s), and preserved cross-store history in ${canonicalKeyReport.archivedTranscriptDirectories.length} archive director${canonicalKeyReport.archivedTranscriptDirectories.length === 1 ? "y" : "ies"}.`
+        : `- Found ${canonicalKeyReport.foundGroups} non-canonical or duplicate session-key group(s). Run "openclaw doctor --fix" to preserve their history and canonicalize the rows.`,
       "Session SQLite",
     );
   }

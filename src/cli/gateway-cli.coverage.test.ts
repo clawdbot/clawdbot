@@ -15,6 +15,7 @@ type DiscoveredBeacon = Awaited<
 >[number];
 const defaultCallGateway = async (): Promise<unknown> => ({ ok: true });
 const callGateway = vi.fn<(opts: unknown) => Promise<unknown>>(defaultCallGateway);
+const formatGatewayAuthErrorJson = vi.fn();
 const formatGatewayClientRequestErrorJson = vi.fn();
 const formatGatewayTransportErrorJson = vi.fn();
 const startGatewayServer = vi.fn<
@@ -58,6 +59,7 @@ vi.mock(
       url: "ws://127.0.0.1:18789",
     }),
     callGateway: (opts: unknown) => callGateway(opts),
+    formatGatewayAuthErrorJson: (error: unknown) => formatGatewayAuthErrorJson(error),
     formatGatewayClientRequestErrorJson: (error: unknown) =>
       formatGatewayClientRequestErrorJson(error),
     formatGatewayTransportErrorJson: (error: unknown) => formatGatewayTransportErrorJson(error),
@@ -170,6 +172,8 @@ describe("gateway-cli coverage", () => {
     startGatewayServer.mockClear();
     inspectPortUsage.mockClear();
     formatPortDiagnostics.mockClear();
+    formatGatewayAuthErrorJson.mockReset();
+    formatGatewayAuthErrorJson.mockReturnValue(null);
     formatGatewayClientRequestErrorJson.mockReset();
     formatGatewayClientRequestErrorJson.mockReturnValue(null);
     formatGatewayTransportErrorJson.mockReset();
@@ -435,6 +439,58 @@ describe("gateway-cli coverage", () => {
     expect(runtimeErrors.join("\n")).not.toContain("unauthorized role");
   });
 
+  it("writes JSON for gateway call auth failures in JSON mode", async () => {
+    const error = new Error("gateway health requires credentials");
+    const payload = {
+      ok: false,
+      error: {
+        type: "gateway_credentials_required",
+        message: "gateway health requires credentials",
+      },
+    };
+    callGateway.mockRejectedValueOnce(error);
+    formatGatewayAuthErrorJson.mockReturnValueOnce(payload);
+
+    await expectGatewayExit(["gateway", "call", "health", "--json"]);
+
+    expect(formatGatewayAuthErrorJson).toHaveBeenCalledWith(error);
+    expect(formatGatewayClientRequestErrorJson).not.toHaveBeenCalled();
+    expect(formatGatewayTransportErrorJson).not.toHaveBeenCalled();
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(payload);
+    expect(runtimeErrors.join("\n")).not.toContain("gateway health requires credentials");
+  });
+
+  it.each([
+    {
+      name: "probe",
+      args: ["gateway", "probe", "--json"],
+      reject: (error: Error) => gatewayStatusCommand.mockRejectedValueOnce(error),
+    },
+    {
+      name: "discovery",
+      args: ["gateway", "discover", "--json"],
+      reject: (error: Error) => discoverGatewayBeacons.mockRejectedValueOnce(error),
+    },
+  ])("writes JSON for gateway $name transport failures", async ({ args, reject }) => {
+    const error = new Error("gateway transport unavailable");
+    const payload = {
+      ok: false,
+      error: {
+        type: "gateway_transport_error",
+        kind: "closed",
+        message: "gateway transport unavailable",
+      },
+    };
+    reject(error);
+    formatGatewayTransportErrorJson.mockReturnValueOnce(payload);
+
+    await expectGatewayExit(args);
+
+    expect(formatGatewayTransportErrorJson).toHaveBeenCalledWith(error);
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(payload);
+    expect(runtimeErrors).toHaveLength(0);
+  });
+
   it("prints the latest stability bundle without calling Gateway", async () => {
     callGateway.mockClear();
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-gateway-cli-bundle-"));
@@ -610,6 +666,39 @@ describe("gateway-cli coverage", () => {
     const out = runtimeLogs.join("\n");
     expect(out).toContain('"beacons"');
     expect(out).toContain("ws://");
+  });
+
+  it.each([
+    {
+      name: "uses the secure scheme advertised by a TLS gateway",
+      beacon: {
+        instanceName: "Secure gateway",
+        host: "secure.openclaw.internal",
+        port: 18789,
+        gatewayTls: true,
+      } satisfies DiscoveredBeacon,
+      wsUrl: "wss://secure.openclaw.internal:18789",
+    },
+    {
+      name: "does not construct a URL from unresolved TXT hints",
+      beacon: {
+        instanceName: "Unresolved gateway",
+        lanHost: "unresolved.openclaw.internal",
+        gatewayPort: 18789,
+      } satisfies DiscoveredBeacon,
+      wsUrl: null,
+    },
+  ])("gateway discovery JSON $name", async ({ beacon, wsUrl }) => {
+    discoverGatewayBeacons.mockResolvedValueOnce([beacon]);
+
+    await runGatewayCommand(["gateway", "discover", "--json"]);
+
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        count: 1,
+        beacons: [expect.objectContaining({ wsUrl })],
+      }),
+    );
   });
 
   it("validates gateway discover timeout", async () => {

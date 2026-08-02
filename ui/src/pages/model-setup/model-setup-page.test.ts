@@ -26,6 +26,26 @@ const detection: SystemAgentSetupDetectResult = {
   unavailableCandidates: [],
   manualProviders: [],
   authOptions: [],
+  prepareOptions: [
+    {
+      id: "ollama",
+      brandId: "ollama",
+      label: "Ollama",
+      hint: "Connect to an Ollama server and select a cloud or local model",
+    },
+    {
+      id: "llama-cpp",
+      brandId: "llama-cpp",
+      label: "Local model (llama.cpp)",
+      hint: "Download and run a private GGUF model",
+    },
+    {
+      id: "lmstudio",
+      brandId: "lmstudio",
+      label: "LM Studio",
+      hint: "Connect to a running LM Studio server and use an already loaded model",
+    },
+  ],
   recommendedInstalls: [
     {
       id: "ollama",
@@ -97,11 +117,12 @@ function createContext() {
 
 async function mountPage(
   context: ApplicationContext,
-  routeData: ModelSetupRouteData,
+  routeData: Omit<ModelSetupRouteData, "connection"> & { client: GatewayBrowserClient | null },
 ): Promise<{ page: TestModelSetupPage; provider: ApplicationContextProvider }> {
   const provider = createApplicationContextProvider(context);
   const page = document.createElement("openclaw-model-setup-page") as TestModelSetupPage;
-  page.routeData = routeData;
+  const { client, ...data } = routeData;
+  page.routeData = { ...data, connection: { client, hello: context.gateway.snapshot.hello } };
   provider.append(page);
   document.body.append(provider);
   await page.updateComplete;
@@ -277,7 +298,7 @@ describe("ModelSetupPage catalog icons", () => {
     });
   });
 
-  it("verifies a prepared llama.cpp model before showing success", async () => {
+  it("verifies a prepared local provider model before showing success", async () => {
     const { context: baseContext, client, request } = createContext();
     const runtimeConfig = {
       runExternalMutation: vi.fn(async (task) => ({
@@ -351,7 +372,7 @@ describe("ModelSetupPage catalog icons", () => {
     });
   });
 
-  it("keeps an incomplete llama.cpp setup visible instead of claiming success", async () => {
+  it("keeps an incomplete provider setup visible instead of claiming success", async () => {
     const { context, client, request } = createContext();
     request.mockImplementation(async (method: string) => {
       if (method === "openclaw.setup.prepare.start") {
@@ -361,7 +382,11 @@ describe("ModelSetupPage catalog icons", () => {
         return { done: true, status: "done" };
       }
       if (method === "openclaw.setup.detect") {
-        return detection;
+        return {
+          ...detection,
+          configuredModel: "llama-cpp/persisted-before-verification",
+          setupComplete: true,
+        };
       }
       return {};
     });
@@ -375,9 +400,11 @@ describe("ModelSetupPage catalog icons", () => {
 
     await vi.waitFor(() => {
       expect(page.textContent).toContain(
-        "llama.cpp did not produce a usable local model. Review the setup result, then retry.",
+        "Local model (llama.cpp) did not expose a usable local model. Review the setup result, then retry.",
       );
     });
+    expect(page.textContent).not.toContain("llama-cpp/persisted-before-verification");
+    expect(page.textContent).not.toContain("Connection verified");
     expect(request).not.toHaveBeenCalledWith(
       "openclaw.setup.activate",
       expect.anything(),

@@ -642,6 +642,48 @@ describe("handleSlackAction", () => {
     });
   });
 
+  it.each([
+    {
+      action: "sendMessage",
+      params: {
+        action: "sendMessage",
+        to: "channel:C123",
+        content: "render",
+        mediaUrl: "renders/chart.png",
+      },
+    },
+    {
+      action: "uploadFile",
+      params: {
+        action: "uploadFile",
+        to: "channel:C123",
+        filePath: "renders/chart.png",
+        initialComment: "render",
+      },
+    },
+  ] as const)("forwards trusted media access unchanged for $action", async ({ params }) => {
+    const cfg = slackConfig();
+    const mediaReadFile = vi.fn(async () => Buffer.from("image"));
+    const mediaAccess = {
+      localRoots: ["/tmp/workspace-agent"],
+      readFile: mediaReadFile,
+      workspaceDir: "/tmp/workspace-agent",
+    };
+
+    await handleSlackAction(params, cfg, {
+      mediaAccess,
+      mediaLocalRoots: mediaAccess.localRoots,
+    });
+
+    const sendOptions = expectSlackSendCall(0, "channel:C123", "render", {
+      cfg,
+      mediaAccess,
+      mediaLocalRoots: mediaAccess.localRoots,
+      mediaReadFile: undefined,
+    });
+    expect(sendOptions.mediaAccess).toBe(mediaAccess);
+  });
+
   it("rejects replyBroadcast for uploadFile", async () => {
     await expect(
       handleSlackAction(

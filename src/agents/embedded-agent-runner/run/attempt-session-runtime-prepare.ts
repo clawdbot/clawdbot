@@ -135,6 +135,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     sessionManager,
   });
   const { activeSession, setActiveSessionSystemPrompt, settingsManager } = preparedAgentSession;
+  await attempt.userTurnTranscriptRecorder?.waitForRuntimePersistence();
   const boundary = prepareEmbeddedAttemptSessionBoundary({
     activeSession,
     attempt,
@@ -169,6 +170,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     agentDir: input.agentDir,
     attempt,
     computerContextEpoch: input.contextGuards.computerContextEpoch,
+    dropThinkingBlocksForEstimate: transcriptPolicy.dropThinkingBlocks,
     effectiveCwd: input.effectiveCwd,
     effectiveFsWorkspaceOnly: input.effectiveFsWorkspaceOnly,
     effectiveWorkspace: input.effectiveWorkspace,

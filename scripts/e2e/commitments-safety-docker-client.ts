@@ -3,11 +3,12 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { enqueueCommitmentExtraction } from "../../dist/commitments/runtime.js";
+import { fileURLToPath } from "node:url";
 import {
   drainCommitmentExtractionQueue,
+  enqueueCommitmentExtraction,
   resetCommitmentExtractionRuntimeForTests,
-} from "../../dist/commitments/runtime.test-support.js";
+} from "../../dist/commitments/runtime.js";
 import {
   listCommitments,
   listDueCommitmentsForSession,
@@ -128,10 +129,33 @@ async function runPackagedDoctor(stateDir: string): Promise<void> {
   );
 }
 
+function verifyRuntimeIgnoresLegacyJsonInChild(nowMs: number): void {
+  // The shared state database caches handles for the process lifetime. Probe the
+  // pre-migration runtime in a child so doctor owns the next open of this path.
+  const result = spawnSync(
+    "tsx",
+    [fileURLToPath(import.meta.url), "--verify-legacy-unread", String(nowMs)],
+    {
+      cwd: process.cwd(),
+      env: process.env,
+      encoding: "utf8",
+      timeout: 120_000,
+    },
+  );
+  assert(
+    result.status === 0,
+    `legacy runtime probe failed\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
+  );
+}
+
+async function verifyRuntimeIgnoresLegacyJson(nowMs: number): Promise<void> {
+  const beforeDoctor = await listCommitments({ nowMs });
+  assert(beforeDoctor.length === 0, "runtime imported legacy JSON without doctor");
+}
+
 async function verifyDoctorImportAndRuntimeIsolation() {
   await withStateDir("commitments-doctor", async (stateDir) => {
     const nowMs = Date.parse("2026-04-29T17:00:00.000Z");
-    const cfg = { commitments: { enabled: true } };
     const sourcePath = path.join(stateDir, "commitments", "commitments.json");
     await fs.mkdir(path.dirname(sourcePath), { recursive: true });
     await fs.writeFile(
@@ -140,13 +164,7 @@ async function verifyDoctorImportAndRuntimeIsolation() {
       "utf8",
     );
 
-    const beforeDoctor = await listDueCommitmentsForSession({
-      cfg,
-      agentId: "main",
-      sessionKey: "agent:main:qa-channel:commitments",
-      nowMs,
-    });
-    assert(beforeDoctor.length === 0, "runtime imported legacy JSON without doctor");
+    verifyRuntimeIgnoresLegacyJsonInChild(nowMs);
     await fs.access(sourcePath);
 
     await runPackagedDoctor(stateDir);
@@ -161,16 +179,11 @@ async function verifyDoctorImportAndRuntimeIsolation() {
         }
       });
 
-    const due = await listDueCommitmentsForSession({
-      cfg,
-      agentId: "main",
-      sessionKey: "agent:main:qa-channel:commitments",
-      nowMs,
-    });
-    assert(due.length === 1, `unexpected imported due count ${due.length}`);
-    assert(!("sourceUserText" in due[0]), "legacy source user text surfaced after import");
+    const imported = await listCommitments({ nowMs });
+    assert(imported.length === 1, `unexpected imported commitment count ${imported.length}`);
+    assert(!("sourceUserText" in imported[0]), "legacy source user text surfaced after import");
     assert(
-      !("sourceAssistantText" in due[0]),
+      !("sourceAssistantText" in imported[0]),
       "legacy source assistant text surfaced after import",
     );
   });
@@ -223,7 +236,11 @@ async function verifyExpiryTransition() {
   });
 }
 
-await verifyExtractionRemainsRetired();
-await verifyDoctorImportAndRuntimeIsolation();
-await verifyExpiryTransition();
-console.log("OK");
+if (process.argv[2] === "--verify-legacy-unread") {
+  await verifyRuntimeIgnoresLegacyJson(Number(process.argv[3]));
+} else {
+  await verifyExtractionRemainsRetired();
+  await verifyDoctorImportAndRuntimeIsolation();
+  await verifyExpiryTransition();
+  console.log("OK");
+}

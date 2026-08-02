@@ -703,6 +703,44 @@ describe("config schema", () => {
     expect(result.success).toBe(false);
   });
 
+  it("accepts plain web fetch header strings but rejects non-string and SecretRef values", () => {
+    const parsed = ToolsSchema.parse({
+      web: {
+        fetch: {
+          headers: {
+            "X-Routing-Target": "staging",
+            "X-Presence-Flag": "",
+          },
+        },
+      },
+    });
+
+    expect(parsed?.web?.fetch?.headers).toEqual({
+      "X-Routing-Target": "staging",
+      "X-Presence-Flag": "",
+    });
+    expect(
+      ToolsSchema.safeParse({
+        web: { fetch: { headers: { "X-Routing-Target": 42 } } },
+      }).success,
+    ).toBe(false);
+    expect(
+      ToolsSchema.safeParse({
+        web: {
+          fetch: {
+            headers: {
+              "X-Routing-Target": {
+                source: "env",
+                provider: "default",
+                id: "WEB_FETCH_ROUTING_TARGET",
+              },
+            },
+          },
+        },
+      }).success,
+    ).toBe(false);
+  });
+
   it("keeps top-level subagent tools schema limited to tool policy", () => {
     expect(
       ToolsSchema.safeParse({

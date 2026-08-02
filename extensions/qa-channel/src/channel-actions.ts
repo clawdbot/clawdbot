@@ -163,6 +163,9 @@ export const qaChannelMessageActions: ChannelMessageActionAdapter = {
       // QA evidence must not validate a host target while the bus acts on a
       // foreign immutable message owner.
       assertQaMessageMatchesTarget(message, target);
+      if (message.deleted) {
+        throw new Error(`qa-channel message was deleted: ${message.id}`);
+      }
       return message;
     };
 

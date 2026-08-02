@@ -44,7 +44,7 @@ async function listenServer(
     });
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
-    if (code === "EPERM" || code === "EACCES") {
+    if (code === "EPERM" || code === "EACCES" || code === "EADDRNOTAVAIL") {
       return null;
     }
     throw err;
@@ -134,6 +134,121 @@ describe("ports helpers", () => {
 });
 
 describeUnix("inspectPortUsage", () => {
+  it("keeps only listener rows that can block a scoped bind", async () => {
+    const server = net.createServer();
+    const address = await listenServer(server, 0, "127.0.0.1");
+    if (!address) {
+      return;
+    }
+    const port = address.port;
+
+    runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
+      const command = argv[0];
+      if (typeof command === "string" && command.includes("lsof")) {
+        return {
+          stdout:
+            `p111\ncgateway\nnTCP 127.0.0.1:${port} (LISTEN)\n` +
+            `p222\ncother\nnTCP 127.0.0.2:${port} (LISTEN)\n`,
+          stderr: "",
+          code: 0,
+        };
+      }
+      return { stdout: "", stderr: "", code: 1 };
+    });
+
+    try {
+      const result = await inspectPortUsage(port, { probeHosts: ["127.0.0.1"] });
+
+      expect(result.status).toBe("busy");
+      expect(result.listeners).toHaveLength(1);
+      expect(result.listeners[0]).toMatchObject({
+        pid: 111,
+        address: `TCP 127.0.0.1:${port} (LISTEN)`,
+      });
+    } finally {
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    }
+  });
+
+  it.each([
+    { probeHost: "127.0.0.1", unrelatedWildcard: "[::]" },
+    { probeHost: "::1", unrelatedWildcard: "0.0.0.0" },
+  ])(
+    "does not attribute an opposite-family wildcard listener to $probeHost",
+    async ({ probeHost, unrelatedWildcard }) => {
+      const server = net.createServer();
+      const address = await listenServer(server, 0, probeHost);
+      if (!address) {
+        return;
+      }
+      const port = address.port;
+
+      runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
+        const command = argv[0];
+        if (typeof command === "string" && command.includes("lsof")) {
+          return {
+            stdout: `p222\ncother\nnTCP ${unrelatedWildcard}:${port} (LISTEN)\n`,
+            stderr: "",
+            code: 0,
+          };
+        }
+        return { stdout: "", stderr: "", code: 1 };
+      });
+
+      try {
+        const result = await inspectPortUsage(port, { probeHosts: [probeHost] });
+
+        expect(result.status).toBe("busy");
+        expect(result.listeners).toEqual([]);
+      } finally {
+        await new Promise<void>((resolve) => {
+          server.close(() => resolve());
+        });
+      }
+    },
+  );
+
+  it("ignores another interface when inspection is scoped to the gateway loopback", async () => {
+    const server = net.createServer();
+    const address = await listenServer(server, 0, "127.0.0.2");
+    if (!address) {
+      return;
+    }
+    const port = address.port;
+
+    runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
+      const command = argv[0];
+      if (typeof command === "string" && command.includes("lsof")) {
+        return {
+          stdout: `p${process.pid}\ncnode\nnTCP 127.0.0.2:${port} (LISTEN)\n`,
+          stderr: "",
+          code: 0,
+        };
+      }
+      return { stdout: "", stderr: "", code: 1 };
+    });
+
+    try {
+      const allInterfaces = await inspectPortUsage(port);
+      const gatewayLoopback = await inspectPortUsage(port, {
+        probeHosts: ["127.0.0.1"],
+      });
+
+      expect(allInterfaces.status).toBe("busy");
+      expect(gatewayLoopback).toMatchObject({
+        status: "free",
+        listeners: [],
+        hints: [],
+      });
+    } finally {
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    }
+  });
+
   it("reports busy when lsof is missing but loopback listener exists", async () => {
     const server = net.createServer();
     const address = await listenServer(server, 0, "127.0.0.1");

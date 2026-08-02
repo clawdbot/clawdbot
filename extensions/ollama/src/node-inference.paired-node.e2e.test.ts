@@ -607,13 +607,7 @@ async function handleFakeOllamaRequest(
   }
   if (requestPath === "/api/show") {
     const body = await readRequestJson(request);
-    // Ollama documents `model`; the current provider sends its supported `name` alias.
-    const modelName =
-      typeof body.model === "string"
-        ? body.model
-        : typeof body.name === "string"
-          ? body.name
-          : undefined;
+    const modelName = typeof body.model === "string" ? body.model : undefined;
     if (!modelName) {
       response.statusCode = 400;
       response.end(JSON.stringify({ error: "model is required" }));

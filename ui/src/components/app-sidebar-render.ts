@@ -11,7 +11,7 @@ import { isNativeWebChromeHost } from "../app/native-web-chrome.ts";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
 import { t } from "../i18n/index.ts";
 import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/display.ts";
-import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
+import { deriveAvatarInitial, resolveAgentAvatarUrl } from "../lib/avatar.ts";
 import { sessionHasBoard } from "../lib/board/provider.ts";
 import {
   resolveSessionPreferredFace,
@@ -83,7 +83,7 @@ export function renderAppSidebarBrand(host: AppSidebarRenderHost) {
   const approvalCount = host.sessionData.approvalBadgeSnapshot().agentCounts.get(cardAgentId) ?? 0;
   const cardAvatarText =
     (cardAgent ? resolveAgentTextAvatar(cardAgent, cardIdentity) : cardIdentity?.emoji) ??
-    (cardName || cardAgentId).slice(0, 1).toUpperCase();
+    (deriveAvatarInitial(cardName || cardAgentId) || "?");
   // The sidebar action follows gateway availability; collapsed native chrome
   // keeps its separate offline-tolerant ⌘N mirror.
   return html`

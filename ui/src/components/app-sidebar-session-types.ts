@@ -128,7 +128,6 @@ export function rowDemandsVisibility(
       : row.visuallyActive ||
         row.containsActiveDescendant ||
         row.hasActiveRun ||
-        row.status === "running" ||
         row.runningChildCount > 0 ||
         row.attention.kind !== "none";
 }

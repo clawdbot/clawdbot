@@ -323,6 +323,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.web.fetch.cacheTtlMinutes": "Web Fetch Cache TTL (min)",
   "tools.web.fetch.maxRedirects": "Web Fetch Max Redirects",
   "tools.web.fetch.userAgent": "Web Fetch User-Agent",
+  "tools.web.fetch.headers": "Web Fetch Request Headers",
   "tools.web.fetch.readability": "Web Fetch Readability Extraction",
   "tools.web.fetch.useTrustedEnvProxy": "Web Fetch Trusted Env Proxy",
   "tools.web.fetch.ssrfPolicy": "Web Fetch SSRF Policy",
@@ -937,6 +938,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "plugins.entries.*.llm": "Plugin LLM Policy",
   "plugins.entries.*.llm.allowModelOverride": "Allow Plugin LLM Model Override",
   "plugins.entries.*.llm.allowedModels": "Plugin LLM Allowed Models",
+  "plugins.entries.*.llm.allowedCompletionModels": "Plugin LLM Allowed Completion Models",
+  "plugins.entries.*.llm.allowAuthProfileOverride": "Allow Plugin LLM Auth Profile Override",
   "plugins.entries.*.llm.allowAgentIdOverride": "Allow Plugin LLM Agent Override",
   "plugins.entries.*.apiKey": "Plugin API Key", // pragma: allowlist secret
   "plugins.entries.*.env": "Plugin Environment Variables",

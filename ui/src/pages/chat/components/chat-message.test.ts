@@ -622,6 +622,21 @@ afterEach(() => {
 });
 
 describe("grouped chat rendering", () => {
+  it("preserves paragraph breaks around assistant attachments in rendered markdown", () => {
+    const container = document.createElement("div");
+
+    renderAssistantMessage(container, {
+      role: "assistant",
+      content: "First paragraph\n \nMEDIA:https://example.com/image.png\n\t\nSecond paragraph",
+      timestamp: 1000,
+    });
+
+    expect(markdownRenderMock).toHaveBeenCalledWith(
+      "First paragraph\n\nSecond paragraph",
+      expect.any(Object),
+    );
+  });
+
   it("renders a compact count for collapsed duplicate messages", () => {
     const container = document.createElement("div");
     renderAssistantMessageEntries(container, [

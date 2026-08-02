@@ -11,11 +11,11 @@ import { en } from "./locales/en.ts";
 // schedule {expr}", cron expression help) intentionally keep the word cron
 // and are excluded: that is syntax terminology, not the feature name.
 //
-// Non-English catalogs are generated: CI forbids committing locale bundles
+// Non-English catalogs are generated: CI forbids committing translation memory
 // alongside source changes, and the post-merge control-ui-locale-refresh
 // workflow retranslates renamed keys from this English source. These
 // assertions therefore pin the English source of truth; the workflow-owned
-// bundles inherit them on refresh.
+// catalogs inherit them on refresh.
 const RENAMED_FEATURE_KEYS = [
   "sessionsView.showCronSessions",
   "sessionsView.subagentPrefix",

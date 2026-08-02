@@ -102,6 +102,12 @@ function requireFirstMockArg<T>(mock: { mock: { calls: T[][] } }, label: string)
   return expectDefined(arg, "arg test invariant");
 }
 
+function encodeSequence(value: number): Buffer {
+  const frame = Buffer.allocUnsafe(2);
+  frame.writeUInt16BE(value);
+  return frame;
+}
+
 describe("createRealtimeTranscriptionWebSocketSession", () => {
   it("flushes queued binary audio after an open-ready connection", async () => {
     const frames: Buffer[] = [];
@@ -130,6 +136,136 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
     await framesReady.promise;
     expect(Buffer.concat(frames).toString()).toBe("queuedafter");
     expect(session.isConnected()).toBe(true);
+    session.close();
+  });
+
+  it("drops the oldest queued audio by bytes and flushes the retained tail in order", async () => {
+    const frames: Buffer[] = [];
+    const framesReady = createSignal();
+    const server = await createRealtimeServer({
+      onBinary: (payload) => {
+        frames.push(payload);
+        if (frames.length === 3) {
+          framesReady.resolve();
+        }
+      },
+    });
+    const session = createRealtimeTranscriptionWebSocketSession({
+      providerId: "test",
+      callbacks: {},
+      url: server.url,
+      maxQueuedBytes: 7,
+      readyOnOpen: true,
+      sendAudio: (audio, transport) => {
+        transport.sendBinary(audio);
+      },
+    });
+
+    const shiftSpy = vi.spyOn(Array.prototype, "shift");
+    let shiftCalls = 0;
+    try {
+      for (let index = 0; index < 13_000; index += 1) {
+        session.sendAudio(encodeSequence(index));
+      }
+      session.sendAudio(Buffer.from([0xaa, 0xbb, 0xcc]));
+      shiftCalls = shiftSpy.mock.calls.length;
+    } finally {
+      shiftSpy.mockRestore();
+    }
+    expect(shiftCalls).toBe(0);
+
+    await session.connect();
+    await framesReady.promise;
+    expect(frames).toEqual([
+      encodeSequence(12_998),
+      encodeSequence(12_999),
+      Buffer.from([0xaa, 0xbb, 0xcc]),
+    ]);
+    session.close();
+  });
+
+  it("flushes a large retained audio tail in order after reconnect", async () => {
+    const connections: WebSocket[] = [];
+    const frames: Buffer[] = [];
+    const framesReady = createSignal();
+    const server = await createRealtimeServer({
+      onConnection: (ws) => connections.push(ws),
+      onBinary: (payload) => {
+        frames.push(payload);
+        if (frames.length === 4) {
+          framesReady.resolve();
+        }
+      },
+    });
+    const session = createRealtimeTranscriptionWebSocketSession<{ type?: string }>({
+      providerId: "test",
+      callbacks: {},
+      url: server.url,
+      maxQueuedBytes: 8,
+      maxReconnectAttempts: 1,
+      reconnectDelayMs: 1,
+      onMessage: (event, transport) => {
+        if (event.type === "session.created") {
+          transport.markReady();
+        }
+      },
+      sendAudio: (audio, transport) => {
+        transport.sendBinary(audio);
+      },
+    });
+
+    const connecting = session.connect();
+    await vi.waitFor(() => expect(connections).toHaveLength(1));
+    connections[0]?.send(JSON.stringify({ type: "session.created" }));
+    await connecting;
+
+    connections[0]?.close(1011, "reconnect");
+    await vi.waitFor(() => expect(session.isConnected()).toBe(false));
+    await vi.waitFor(() => expect(connections).toHaveLength(2));
+    for (let index = 0; index < 13_000; index += 1) {
+      session.sendAudio(encodeSequence(index));
+    }
+    connections[1]?.send(JSON.stringify({ type: "session.created" }));
+
+    await framesReady.promise;
+    expect(frames).toEqual([
+      encodeSequence(12_996),
+      encodeSequence(12_997),
+      encodeSequence(12_998),
+      encodeSequence(12_999),
+    ]);
+    session.close();
+  });
+
+  it("discards a large queued audio tail when closed before connecting", async () => {
+    const frames: Buffer[] = [];
+    const framesReady = createSignal();
+    const server = await createRealtimeServer({
+      onBinary: (payload) => {
+        frames.push(payload);
+        framesReady.resolve();
+      },
+    });
+    const session = createRealtimeTranscriptionWebSocketSession({
+      providerId: "test",
+      callbacks: {},
+      url: server.url,
+      maxQueuedBytes: 8,
+      readyOnOpen: true,
+      sendAudio: (audio, transport) => {
+        transport.sendBinary(audio);
+      },
+    });
+
+    for (let index = 0; index < 13_000; index += 1) {
+      session.sendAudio(encodeSequence(index));
+    }
+    session.close();
+
+    await session.connect();
+    session.sendAudio(Buffer.from("live"));
+    await framesReady.promise;
+    expect(frames).toEqual([Buffer.from("live")]);
     session.close();
   });
 

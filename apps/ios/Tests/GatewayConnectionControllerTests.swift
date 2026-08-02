@@ -2183,7 +2183,7 @@ private func waitForActiveGateway(stableID: String, appModel: NodeAppModel) asyn
         }
     }
 
-    @Test @MainActor func `forget connected gateway disconnects and repeats device auth cleanup`() async throws {
+    @Test @MainActor func `forget connected gateway waits for disconnect before device auth cleanup`() async throws {
         let registryIsolation = GatewayRegistryTestIsolation()
         defer { registryIsolation.restore() }
         let service = GatewaySettingsStore._testGatewayService
@@ -2200,10 +2200,19 @@ private func waitForActiveGateway(stableID: String, appModel: NodeAppModel) asyn
         let connectedID = "manual|connected.example.com|443"
         let selectedID = "manual|selected.example.com|443"
         saveActiveManualGateway(host: "selected.example.com", port: 443, useTLS: true, stableID: selectedID)
+        #expect(GatewaySettingsStore.upsertGatewayRegistryEntry(.init(
+            stableID: connectedID,
+            kind: .manual,
+            name: "connected.example.com:443",
+            host: "connected.example.com",
+            port: 443,
+            useTLS: true,
+            lastConnectedAtMs: nil)))
         let appModel = NodeAppModel()
         try appModel.applyGatewayConnectConfig(Self.makeGatewayConnectConfig(
             url: #require(URL(string: "wss://connected.example.com")),
             stableID: connectedID))
+        defer { appModel.disconnectGateway() }
         let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
         let identity = DeviceIdentityStore.loadOrCreate()
         let resetRelease = AsyncStream<Void>.makeStream()

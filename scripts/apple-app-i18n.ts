@@ -39,7 +39,6 @@ const INFLECTED_COUNT_MARKER = "](inflect: true)";
 const IOS_CATALOG_PATH = "apps/ios/Resources/Localizable.xcstrings";
 const MACOS_CATALOG_PATH = "apps/macos/Sources/OpenClaw/Resources/Localizable.xcstrings";
 const MACOS_INFO_PLIST_PATH = "apps/macos/Sources/OpenClaw/Resources/Info.plist";
-const IOS_CONTRADICTIONS_PATH = "apps/.i18n/apple-translation-contradictions.json";
 const NATIVE_SOURCE_PATH = "apps/.i18n/native-source.json";
 const NATIVE_TRANSLATIONS_DIR = "apps/.i18n/native";
 const SHARED_CHAT_UI_SOURCE_PREFIX = "apps/shared/OpenClawKit/Sources/OpenClawChatUI/";
@@ -477,10 +476,6 @@ function compareCodeUnits(left: string, right: string): number {
 
 function serializeCatalog(catalog: Catalog): string {
   return `${JSON.stringify(catalog, null, 2)}\n`;
-}
-
-function serializeContradictions(contradictions: AppleTranslationContradiction[]): string {
-  return `${JSON.stringify({ version: 1, contradictions }, null, 2)}\n`;
 }
 
 function decodeXml(value: string): string {
@@ -933,17 +928,6 @@ export async function syncIosCatalog(write: boolean): Promise<AppleCatalogBuild>
     }
     await writeFile(catalogPath, expected, "utf8");
   }
-  const contradictionsPath = path.join(ROOT, IOS_CONTRADICTIONS_PATH);
-  const expectedContradictions = serializeContradictions(build.contradictions);
-  const actualContradictions = await readOptionalFile(contradictionsPath);
-  if (actualContradictions !== expectedContradictions) {
-    if (!write) {
-      throw new Error(
-        `Apple contradiction report ${IOS_CONTRADICTIONS_PATH} is stale; run apple-app-i18n.ts sync-ios --write`,
-      );
-    }
-    await writeFile(contradictionsPath, expectedContradictions, "utf8");
-  }
   return build;
 }
 
@@ -971,9 +955,9 @@ export function assertMacosCatalogCurrent(actual: string, build: AppleCatalogBui
 }
 
 /**
- * Regenerates every Apple derived artifact (app catalogs, contradiction report,
- * InfoPlist strings). Shared by this CLI and native-app-i18n's sync so the
- * inventory can never be rewritten without its derived catalogs.
+ * Regenerates every Apple derived artifact (app catalogs and InfoPlist strings).
+ * Shared by this CLI and native-app-i18n's sync so the inventory can never be
+ * rewritten without its derived catalogs.
  */
 export async function syncAppleAppI18n(): Promise<{
   build: AppleCatalogBuild;

@@ -664,7 +664,6 @@ async function wakeMediaGenerationTaskCompletion(params: {
     sourceTool: params.toolName,
     requesterIsSubagent: false,
     expectsCompletionMessage: true,
-    durableGeneratedMediaHandoff: true,
     bestEffortDeliver: true,
     directIdempotencyKey: announceId,
   });

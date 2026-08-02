@@ -186,6 +186,26 @@ describe("browser cli snapshot defaults", () => {
     expect(params?.query?.depth).toBe(0);
   });
 
+  it.each([
+    {
+      args: ["screenshot", "tab-1", "--type", "webp"],
+      error: "Invalid --type: expected png or jpeg",
+    },
+    {
+      args: ["snapshot", "--format", "html"],
+      error: "Invalid --format: expected aria or ai",
+    },
+    {
+      args: ["snapshot", "--mode", "full"],
+      error: "Invalid --mode: expected efficient",
+    },
+  ])("rejects unsupported inspect option values before dispatch", async ({ args, error }) => {
+    await expect(runBrowserInspect(args)).rejects.toThrow("__exit__:1");
+
+    expect(runtime.error.mock.calls.at(-1)?.[0]).toContain(error);
+    expect(sharedMocks.callBrowserRequest).not.toHaveBeenCalled();
+  });
+
   it("sends screenshot request with trimmed target id and jpeg type", async () => {
     const params = await runBrowserInspect(["screenshot", " tab-1 ", "--type", "jpeg"], true);
     expect(params?.path).toBe("/screenshot");

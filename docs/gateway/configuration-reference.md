@@ -32,7 +32,7 @@ Dedicated deep references:
 
 ## Channels
 
-Per-channel config keys live in [Configuration - channels](/gateway/config-channels): `channels.*` for Slack, Discord, Telegram, WhatsApp, Matrix, iMessage, and other bundled channels (auth, access control, multi-account, mention gating).
+Per-channel config keys live in [Configuration - channels](/gateway/config-channels): `channels.*` for Slack, Discord, Telegram, WhatsApp, Matrix, iMessage, and other channel plugins (auth, access control, multi-account, mention gating).
 
 ## Agent defaults, multi-agent, sessions, and messages
 
@@ -275,7 +275,9 @@ See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
 - `plugins.entries.<id>.subagent.allowModelOverride`: explicitly trust this plugin to request per-run `provider` and `model` overrides for background subagent runs.
 - `plugins.entries.<id>.subagent.allowedModels`: optional allowlist of canonical `provider/model` targets for trusted subagent overrides. Use `"*"` only when you intentionally want to allow any model.
 - `plugins.entries.<id>.llm.allowModelOverride`: explicitly trust this plugin to request model overrides for `api.runtime.llm.complete`.
-- `plugins.entries.<id>.llm.allowedModels`: optional allowlist of canonical `provider/model` targets for trusted plugin LLM completion overrides. Use `"*"` only when you intentionally want to allow any model.
+- `plugins.entries.<id>.llm.allowedModels`: optional allowlist of canonical `provider/model` targets for trusted model overrides. Use `"*"` only when you intentionally want to allow any model override.
+- `plugins.entries.<id>.llm.allowedCompletionModels`: optional allowlist applied to every plugin LLM completion, including host-resolved defaults and overrides. Use `"*"` only when you intentionally want to allow any model.
+- `plugins.entries.<id>.llm.allowAuthProfileOverride`: explicitly trust this plugin to select a non-default auth profile for isolated `api.runtime.llm.complete` execution. Direct `model@profile` calls remain governed by model-override policy.
 - `plugins.entries.<id>.llm.allowAgentIdOverride`: explicitly trust this plugin to run `api.runtime.llm.complete` against a non-default agent id.
 - `plugins.entries.<id>.config`: plugin-defined config object (validated by native OpenClaw plugin schema when available).
 - Channel plugin account/runtime settings live under `channels.<id>` and should be described by the owning plugin's manifest `channelConfigs` metadata, not by a central OpenClaw option registry.
@@ -759,9 +761,7 @@ See [Multiple Gateways](/gateway/multiple-gateways).
 {
   gateway: {
     reload: {
-      mode: "hybrid", // off | restart | hot | hybrid
-      debounceMs: 500,
-      deferralTimeoutMs: 300000,
+      mode: "hybrid", // off | hybrid
     },
   },
 }
@@ -769,11 +769,11 @@ See [Multiple Gateways](/gateway/multiple-gateways).
 
 - `mode`: controls how config edits are applied at runtime.
   - `"off"`: ignore live edits; changes require an explicit restart.
-  - `"restart"`: always restart the gateway process on config change.
-  - `"hot"`: apply changes in-process without restarting.
-  - `"hybrid"` (default): try hot reload first; fall back to restart if required.
-- `debounceMs`: debounce window in ms before config changes are applied (non-negative integer; default: `300`).
-- `deferralTimeoutMs`: optional maximum time in ms to wait for in-flight operations before forcing a restart or channel hot reload. Omit it to use the default bounded wait (`300000`); set `0` to wait indefinitely and log periodic still-pending warnings.
+  - `"hybrid"` (default): apply hot-safe changes in-process, then restart when a change requires it.
+
+The earlier `"restart"` and `"hot"` values are retired; [`openclaw doctor --fix`](/cli/doctor) maps both to `"hybrid"`.
+
+Reload debounce and in-flight operation deferral are no longer configurable and run behind built-in defaults. [`openclaw doctor --fix`](/cli/doctor) removes the retired `debounceMs` and `deferralTimeoutMs` keys from older config files.
 
 ---
 

@@ -16,6 +16,45 @@ import {
 const suite = createNewSessionPageE2eSuite();
 
 suite.define(() => {
+  it("keeps the mobile incognito and model controls separated", async () => {
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 568, width: 320 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      models: [{ id: "gpt-5.6-sol", name: "GPT 5.6 Sol", provider: "openai" }],
+    });
+    try {
+      await page.goto(`${suite.server.baseUrl}new`);
+      const footer = page.locator(".new-session-page__composer .agent-chat__composer-footer");
+      const incognito = page.getByRole("switch", { name: "Incognito" });
+      const model = page.locator(".new-session-page__composer .chat-composer-model-control");
+      await Promise.all([footer.waitFor(), incognito.waitFor(), model.waitFor()]);
+
+      const [footerBox, incognitoBox, modelBox] = await Promise.all([
+        footer.boundingBox(),
+        incognito.boundingBox(),
+        model.boundingBox(),
+      ]);
+      expect(footerBox).not.toBeNull();
+      expect(incognitoBox).not.toBeNull();
+      expect(modelBox).not.toBeNull();
+      expect((incognitoBox?.x ?? 0) + (incognitoBox?.width ?? 0)).toBeLessThanOrEqual(
+        modelBox?.x ?? 0,
+      );
+      for (const control of [incognitoBox, modelBox]) {
+        expect(control?.x ?? 0).toBeGreaterThanOrEqual(footerBox?.x ?? 0);
+        expect((control?.x ?? 0) + (control?.width ?? 0)).toBeLessThanOrEqual(
+          (footerBox?.x ?? 0) + (footerBox?.width ?? 0),
+        );
+      }
+    } finally {
+      await context.close();
+    }
+  });
+
   it("selects the model for a plain new session", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",

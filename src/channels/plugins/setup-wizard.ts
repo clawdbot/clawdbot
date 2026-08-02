@@ -135,8 +135,8 @@ async function buildStatus(
   };
 }
 
-// Legacy setup adapters still own the canonical config write path. Wizard
-// inputs funnel through them unless a field supplies a narrower writer.
+// Channel-owned contracts own config writes; released legacy adapters remain
+// supported through the single setup execution compatibility boundary.
 function applySetupInput(params: {
   plugin: ChannelSetupWizardPlugin;
   cfg: OpenClawConfig;
@@ -292,7 +292,9 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
             cfg,
             channelKey: plugin.id,
             accountId,
-            setupSurface: plugin.setup,
+            setupSurface: resolveChannelSetupExecutionAdapter(plugin) as
+              | ChannelSetupAdapter
+              | undefined,
           })
         : { cfg, restore: (currentCfg: OpenClawConfig) => currentCfg };
       let next = accountScope.cfg;

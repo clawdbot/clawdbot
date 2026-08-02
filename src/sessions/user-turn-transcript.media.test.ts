@@ -281,6 +281,7 @@ describe("buildPersistedUserTurnMessage media projection", () => {
       media: [
         {
           path: "media/inbound/a.png",
+          url: "https://example.test/original.png",
           contentType: "image/png",
           workspaceDir: "/tmp/workspace",
         },
@@ -293,11 +294,23 @@ describe("buildPersistedUserTurnMessage media projection", () => {
       },
       expectedMedia: [
         {
-          path: "media/inbound/a.png",
+          path: path.join("/tmp/workspace", "media/inbound/a.png"),
+          url: "https://example.test/original.png",
           contentType: "image/png",
           workspaceDir: "/tmp/workspace",
         },
       ],
+    },
+    {
+      name: "unanchored relative attachment",
+      media: [{ path: "media/inbound/unanchored.png", contentType: "image/png" }],
+      expectedLegacy: {
+        MediaPath: "media/inbound/unanchored.png",
+        MediaPaths: ["media/inbound/unanchored.png"],
+        MediaType: "image/png",
+        MediaTypes: ["image/png"],
+      },
+      expectedMedia: [{ path: "media/inbound/unanchored.png", contentType: "image/png" }],
     },
     {
       name: "hydration-suppressed attachment",

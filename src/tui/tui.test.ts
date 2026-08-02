@@ -696,6 +696,77 @@ describe("TUI shutdown safety", () => {
     expect(forceExit).not.toHaveBeenCalled();
   });
 
+  it("attempts terminal shutdown after transport teardown rejects", async () => {
+    vi.useFakeTimers();
+    const calls: string[] = [];
+    const transportError = new Error("transport stop failed");
+    let finishTuiStop: (() => void) | undefined;
+    const stopTui = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          calls.push("tui");
+          finishTuiStop = resolve;
+        }),
+    );
+    const clearTimeoutFn = vi.fn();
+    const requestFinish = vi.fn(() => calls.push("finish"));
+    const onError = vi.fn((error: unknown) => {
+      calls.push("error");
+      expect(error).toBe(transportError);
+    });
+
+    beginTestShutdown({
+      stopClient: async () => {
+        calls.push("client");
+        throw transportError;
+      },
+      stopTui,
+      requestFinish,
+      onError,
+      keepHardExitArmed: false,
+      clearTimeoutFn,
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls).toEqual(["client", "tui"]);
+    expect(clearTimeoutFn).not.toHaveBeenCalled();
+    expect(requestFinish).not.toHaveBeenCalled();
+
+    finishTuiStop?.();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls).toEqual(["client", "tui", "error", "finish"]);
+    expect(stopTui).toHaveBeenCalledOnce();
+    expect(clearTimeoutFn).toHaveBeenCalledOnce();
+    expect(onError).toHaveBeenCalledOnce();
+    expect(requestFinish).toHaveBeenCalledOnce();
+  });
+
+  it("reports transport and terminal shutdown errors in phase order", async () => {
+    vi.useFakeTimers();
+    const transportError = new Error("transport stop failed");
+    const terminalError = new Error("terminal stop failed");
+    const onError = vi.fn();
+    const requestFinish = vi.fn();
+
+    beginTestShutdown({
+      stopClient: async () => {
+        throw transportError;
+      },
+      stopTui: async () => {
+        throw terminalError;
+      },
+      onError,
+      requestFinish,
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(onError).toHaveBeenCalledOnce();
+    const error = onError.mock.calls[0]?.[0];
+    expect(error).toBeInstanceOf(AggregateError);
+    expect((error as AggregateError).errors).toEqual([transportError, terminalError]);
+    expect(requestFinish).toHaveBeenCalledOnce();
+  });
+
   it("cancels the hard-exit deadline for embedded TUI callers after clean shutdown", async () => {
     vi.useFakeTimers();
     const forceExit = vi.fn();

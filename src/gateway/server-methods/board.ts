@@ -292,7 +292,7 @@ export function createBoardHandlers(
         context.broadcast("board.changed", {
           sessionKey: snapshot.sessionKey,
           revision: snapshot.revision,
-          widget: boardParams.name,
+          widget: snapshot.resolvedWidgetName,
         });
         respond(true, snapshot);
       } catch (error) {
