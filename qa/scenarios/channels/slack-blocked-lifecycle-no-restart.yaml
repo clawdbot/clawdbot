@@ -40,16 +40,14 @@ flow:
   steps:
     - name: reports blocked without restarting
       actions:
-        - call: env.gateway.call
-          saveAs: initialStatus
+        - call: waitForCondition
+          saveAs: initialAccount
           args:
-            - channels.status
-            - probe: false
-              timeoutMs: 10000
-            - timeoutMs: 15000
-        - set: initialAccount
-          value:
-            expr: "(initialStatus.channelAccounts?.slack ?? []).find((account) => account.accountId === transport.accountId)"
+            - lambda:
+                async: true
+                expr: "((status) => { const account = (status.channelAccounts?.slack ?? []).find((candidate) => candidate.accountId === transport.accountId); return account?.lifecycle === 'blocked' && account?.healthState === 'blocked' ? account : undefined; })(await env.gateway.call('channels.status', { probe: false, timeoutMs: 10000 }, { timeoutMs: 15000 }))"
+            - 30000
+            - 250
         - assert:
             expr: "initialAccount?.lifecycle === 'blocked' && initialAccount?.healthState === 'blocked' && initialAccount?.running === true && initialAccount?.restartPending !== true && typeof initialAccount?.lastStartAt === 'number'"
             message:

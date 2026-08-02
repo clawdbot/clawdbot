@@ -17,7 +17,10 @@ describe("Slack blocked lifecycle scenario", () => {
     });
     const flow = JSON.stringify(scenario.execution.flow);
     expect(flow).toContain("transport.accountId");
+    expect(flow).toContain("await env.gateway.call('channels.status'");
+    expect(flow).toContain("account?.lifecycle === 'blocked'");
     expect(flow).not.toContain("account.accountId === 'default'");
+    expect(flowContainsCall(scenario.execution.flow, "waitForCondition")).toBe(true);
     expect(flowContainsCall(scenario.execution.flow, "waitForTransportReady")).toBe(false);
   });
 });
