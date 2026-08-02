@@ -514,4 +514,36 @@ describe("matrix sync helpers", () => {
       }),
     ).rejects.toThrow("invalid access token");
   });
+
+  it("preserves response-body failures raised after its long-poll deadline fires", async () => {
+    const deadline = new AbortController();
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(deadline.signal);
+    const bodyError = new Error("late Matrix response body failure");
+    const observer = createMatrixQaRoomObserver({
+      baseUrl: "http://127.0.0.1:28008/",
+      fetchImpl: async () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              deadline.abort();
+              controller.error(bodyError);
+            },
+          }),
+        ),
+      observedEvents: [],
+      since: "start-batch",
+    });
+
+    try {
+      await expect(
+        observer.waitForOptionalRoomEvent({
+          predicate: () => false,
+          roomId: "!room:matrix-qa.test",
+          timeoutMs: 1_000,
+        }),
+      ).rejects.toBe(bodyError);
+    } finally {
+      timeoutSpy.mockRestore();
+    }
+  });
 });

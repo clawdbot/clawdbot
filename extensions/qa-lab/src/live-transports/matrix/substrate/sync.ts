@@ -109,7 +109,7 @@ async function pollMatrixQaRoomObserver(
     } catch (error) {
       // An empty long-poll is expected at this observer-owned boundary. Other
       // request failures stay terminal so auth and protocol defects remain visible.
-      if (deadlineSignal.aborted) {
+      if (deadlineSignal.aborted && error === deadlineSignal.reason) {
         return;
       }
       throw error;
