@@ -142,7 +142,31 @@ function readSharedBatchState(batch: readonly SubagentRunRecord[]): RequesterSet
       : {}),
     ...(source?.rearmGeneration !== undefined ? { rearmGeneration: source.rearmGeneration } : {}),
     ...(source?.lastError !== undefined ? { lastError: source.lastError } : {}),
+    ...(source?.lifecycleMismatch !== undefined
+      ? { lifecycleMismatch: source.lifecycleMismatch }
+      : {}),
   };
+}
+
+function fenceRequesterSettleWakeBatch(params: {
+  batchRunIds: readonly string[];
+  state: RequesterSettleWakeBatchState;
+  mismatch: NonNullable<RequesterSettleWakeState["lifecycleMismatch"]>;
+  requesterSessionKey: string;
+  transitionBatch: (runIds: readonly string[], state: RequesterSettleWakeBatchState) => void;
+}): void {
+  const reason =
+    params.mismatch === "requester_replaced"
+      ? "requester lifecycle was replaced before the subagent completion settled; stale completion retained without delivery"
+      : "requester session entry is unavailable; completion retained without delivery";
+  params.transitionBatch(params.batchRunIds, {
+    ...params.state,
+    lifecycleMismatch: params.mismatch,
+    lastError: `${params.mismatch}: ${reason} (requester=${params.requesterSessionKey})`,
+  });
+  logWarn(
+    `requester settle wake fenced (${params.mismatch}); retaining ${params.batchRunIds.length} run(s) without delivery`,
+  );
 }
 
 function deferRequesterSettleWakeBatch(params: {
@@ -366,26 +390,11 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
   const mismatchedEntries = settledBatch.filter(
     (entry) => entry.expectedRequesterLifecycleRevision !== currentRequesterLifecycleRevision,
   );
-  const replacedEntries = mismatchedEntries.filter(
-    (entry) => entry.expectedRequesterLifecycleRevision !== undefined,
-  );
-  const legacyEntries = mismatchedEntries.filter(
-    (entry) => entry.expectedRequesterLifecycleRevision === undefined,
-  );
-  if (replacedEntries.length > 0) {
+  if (mismatchedEntries.length > 0) {
     fenceRequesterSettleWakeBatch({
-      batchRunIds: replacedEntries.map((entry) => entry.runId).toSorted(),
-      state: readSharedBatchState(replacedEntries),
+      batchRunIds: mismatchedEntries.map((entry) => entry.runId).toSorted(),
+      state: readSharedBatchState(mismatchedEntries),
       mismatch: "requester_replaced",
-      requesterSessionKey,
-      transitionBatch: params.transitionBatch,
-    });
-  }
-  if (legacyEntries.length > 0) {
-    fenceRequesterSettleWakeBatch({
-      batchRunIds: legacyEntries.map((entry) => entry.runId).toSorted(),
-      state: readSharedBatchState(legacyEntries),
-      mismatch: "legacy_unfenced",
       requesterSessionKey,
       transitionBatch: params.transitionBatch,
     });

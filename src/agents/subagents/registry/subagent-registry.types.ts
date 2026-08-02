@@ -192,7 +192,7 @@ export type RequesterSettleWakeState = {
   /** Monotonic process generation protecting a newer yield from stale completion. */
   rearmGeneration?: number;
   /** Fenced settlement: the requester lifecycle no longer matches handoff admission. */
-  lifecycleMismatch?: "requester_replaced" | "legacy_unfenced" | "requester_missing";
+  lifecycleMismatch?: "requester_replaced" | "requester_missing";
   lastError?: string | null;
   /** Cleanup wanted to retire this row; defer deletion until the outbox resolves. */
   retireAfterSettle?: boolean;

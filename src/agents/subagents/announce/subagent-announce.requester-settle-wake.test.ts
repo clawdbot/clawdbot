@@ -445,7 +445,8 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     expect(transitionBatchSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("fails closed for legacy persisted wakes without a captured lifecycle revision", async () => {
+  it("fences legacy persisted wakes when the requester lifecycle was replaced", async () => {
+    sessionStore = { [REQUESTER]: { sessionId: "sess-main", lifecycleRevision: "revision-2" } };
     const children = [
       makeSettledChild({ runId: "run-a", expectedRequesterLifecycleRevision: undefined }),
       makeSettledChild({ runId: "run-b", expectedRequesterLifecycleRevision: undefined }),
@@ -457,8 +458,22 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     expect(woke).toBe(false);
     expect(deliverSpy).not.toHaveBeenCalled();
     expect(completeBatchSpy).not.toHaveBeenCalled();
-    expect(children[0]?.requesterSettleWake?.lifecycleMismatch).toBe("legacy_unfenced");
-    expect(children[0]?.requesterSettleWake?.lastError).toContain("legacy_unfenced");
+    expect(children[0]?.requesterSettleWake?.lifecycleMismatch).toBe("requester_replaced");
+    expect(children[0]?.requesterSettleWake?.lastError).toContain("requester_replaced");
+  });
+
+  it("delivers for an initial lifecycle without a persisted revision", async () => {
+    sessionStore = { [REQUESTER]: { sessionId: "sess-main" } };
+    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([
+      makeSettledChild({ runId: "run-a", expectedRequesterLifecycleRevision: undefined }),
+      makeSettledChild({ runId: "run-b", expectedRequesterLifecycleRevision: undefined }),
+    ]);
+
+    const woke = await maybeWakeRequesterAfterAllChildrenSettled(wakeParams());
+
+    expect(woke).toBe(true);
+    expect(deliverSpy).toHaveBeenCalledTimes(1);
+    expect(completeBatchSpy).toHaveBeenCalledWith(["run-a", "run-b"]);
   });
 
   it.each([
@@ -526,7 +541,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     const message = String(deliveredCallArg().triggerMessage);
     expect(message).toContain("current findings");
     expect(message).not.toContain("legacy findings");
-    expect(legacy.requesterSettleWake?.lifecycleMismatch).toBe("legacy_unfenced");
+    expect(legacy.requesterSettleWake?.lifecycleMismatch).toBe("requester_replaced");
     expect(current.requesterSettleWake).toBeUndefined();
   });
 
