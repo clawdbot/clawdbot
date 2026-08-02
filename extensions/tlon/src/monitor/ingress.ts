@@ -144,6 +144,16 @@ function resolveTlonIngressNonRetryableFailure(error: unknown) {
   return null;
 }
 
+type TlonIngressMonitor = {
+  receive: (params: {
+    source: TlonIngressSource;
+    event: unknown;
+  }) => Promise<{ kind: "accepted" } | { kind: "ignored" }>;
+  start: () => void;
+  stop: () => Promise<void>;
+  waitForIdle: () => Promise<void>;
+};
+
 export function createTlonIngressMonitor(options: {
   accountId: string;
   queue?: ChannelIngressQueue<TlonIngressPayload>;
@@ -152,7 +162,7 @@ export function createTlonIngressMonitor(options: {
   pollIntervalMs?: number;
   adoptionStallTimeoutMs?: number;
   abortSignal?: AbortSignal;
-}) {
+}): TlonIngressMonitor {
   const monitor = createChannelIngressMonitor<TlonIngressRaw, TlonIngressBody, TlonIngressPayload>({
     queue:
       options.queue ??
