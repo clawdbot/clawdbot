@@ -45,7 +45,7 @@ export interface CuaDriverSession {
 // This is an OpenClaw-owned ceiling, not plugin configuration or tool input.
 // The model can request only computer.act actions; it cannot select a session
 // or widen this authorization after the node host starts.
-const CUA_OPENCLAW_AUTHORIZATION = {
+const CUA_DRIVER_AUTHORIZATION = {
   allowedModes: [SessionPermissionMode.Unrestricted],
   compatibilityMode: SessionPermissionMode.Unrestricted,
   unrestrictedAcknowledged: true,
@@ -71,13 +71,13 @@ class DirectCuaDriverSession implements CuaDriverSession {
     // ceiling before a single trusted OpenClaw session is admitted.
     this.runtime = CuaDriver.createConfigured({
       claudeCodeCompatibility: false,
-      authorization: { ...CUA_OPENCLAW_AUTHORIZATION },
+      authorization: { ...CUA_DRIVER_AUTHORIZATION },
     });
     this.session = createTrustedSession(this.runtime, {
       publicSession: this.publicSession,
       mode: SessionPermissionMode.Unrestricted,
-      ttlSeconds: CUA_OPENCLAW_AUTHORIZATION.maxSessionTtlSeconds,
-      idleTtlSeconds: CUA_OPENCLAW_AUTHORIZATION.maxIdleTtlSeconds,
+      ttlSeconds: CUA_DRIVER_AUTHORIZATION.maxSessionTtlSeconds,
+      idleTtlSeconds: CUA_DRIVER_AUTHORIZATION.maxIdleTtlSeconds,
     });
   }
 
