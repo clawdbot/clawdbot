@@ -6,7 +6,6 @@ import { getMatrixRuntime } from "../../runtime.js";
 import type { RoomMessageEventContent } from "./types.js";
 
 const MATRIX_HTML_ENTITY_RE = /&(?:#x?[0-9a-f]+|amp|apos|gt|lt|nbsp|quot);/gi;
-const MATRIX_MENTION_TOKEN_CHARS = String.raw`\p{L}\p{N}\p{M}\p{Pc}\p{S}\p{Extended_Pictographic}\p{Default_Ignorable_Code_Point}/\-`;
 
 function decodeVisibleHtmlEntities(value: string): string {
   return value.replace(MATRIX_HTML_ENTITY_RE, (entity) => {
@@ -45,10 +44,10 @@ function hasVisibleNativeMatrixUserMention(text: string | undefined, userId: str
     return false;
   }
 
-  // Native metadata must name the exact account; visible shorthand cannot hide
-  // another homeserver, extended localpart, or invisible Unicode separators.
+  // Historical localparts can end in any punctuation, so shorthand must stay
+  // bare; colon plus visible whitespace is safe because localparts forbid colon.
   const pattern = new RegExp(
-    String.raw`(?<![${MATRIX_MENTION_TOKEN_CHARS}.@])(?:${escapeRegExp(userId)}|${escapeRegExp(`@${localpart}`)})(?![${MATRIX_MENTION_TOKEN_CHARS}]|[.:](?=\S))`,
+    String.raw`(?:^|\p{White_Space})(?:${escapeRegExp(userId)}(?=$|\p{White_Space}|[,!?;](?=$|\p{White_Space}))|${escapeRegExp(`@${localpart}`)}(?=$|\p{White_Space}|:\p{White_Space}))`,
     "u",
   );
   return pattern.test(text);

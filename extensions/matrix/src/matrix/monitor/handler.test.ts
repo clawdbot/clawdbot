@@ -983,6 +983,12 @@ describe("matrix monitor handler pairing account scope", () => {
   it.each([
     { label: "another homeserver", body: "hello @bot:evil.example" },
     { label: "a longer Unicode localpart", body: "hello @boté" },
+    { label: "a historical exclamation localpart", body: "hello @bot!evil:evil.example" },
+    { label: "a historical percent localpart", body: "hello @bot%evil:evil.example" },
+    { label: "an exclamation-only historical account", body: "hello @bot!" },
+    { label: "a percent-only historical account", body: "hello @bot%" },
+    { label: "a Markdown-only historical account", body: "hello @bot**" },
+    { label: "an attached Markdown-wrapped account", body: "hello evil**@bot" },
   ])("rejects forged plain-text native mentions targeting $label", async ({ body }) => {
     const { handler, recordInboundSession } = createMatrixHandlerTestHarness({
       isDirectMessage: false,

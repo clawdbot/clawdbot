@@ -52,29 +52,14 @@ describe("resolveMentions", () => {
         body: "@bot: hello",
       },
       {
-        label: "parenthesized shorthand",
+        label: "Unicode-whitespace-delimited shorthand",
         mentionedUserId: "@bot:matrix.org",
-        body: "hello (@bot)",
-      },
-      {
-        label: "Markdown-delimited shorthand",
-        mentionedUserId: "@bot:matrix.org",
-        body: "hello *@bot*, thanks",
-      },
-      {
-        label: "hash-delimited shorthand",
-        mentionedUserId: "@bot:matrix.org",
-        body: "hello #@bot#",
-      },
-      {
-        label: "Unicode-punctuation-delimited shorthand",
-        mentionedUserId: "@bot:matrix.org",
-        body: "hello （@bot），thanks",
+        body: "hello\u2003@bot\u2003thanks",
       },
       {
         label: "sentence-ending full Matrix user ID",
         mentionedUserId: "@bot:matrix.org",
-        body: "hello @bot:matrix.org.",
+        body: "hello @bot:matrix.org,",
       },
       {
         label: "special localpart characters",
@@ -87,9 +72,19 @@ describe("resolveMentions", () => {
         body: "hello @böt中",
       },
       {
+        label: "historical punctuation localpart",
+        mentionedUserId: "@b!o%t&=x:matrix.org",
+        body: "hello @b!o%t&=x",
+      },
+      {
+        label: "historical punctuation in a full Matrix user ID",
+        mentionedUserId: "@b!o%t&=x:matrix.org",
+        body: "hello @b!o%t&=x:matrix.org",
+      },
+      {
         label: "bracketed IPv6 homeserver and port",
         mentionedUserId: "@bot:[2001:db8::1]:8448",
-        body: "hello @bot:[2001:db8::1]:8448.",
+        body: "hello @bot:[2001:db8::1]:8448",
       },
     ])(
       "detects native plain-text $label without configured mention patterns",
@@ -121,6 +116,26 @@ describe("resolveMentions", () => {
       { label: "extended plus localpart", body: "hello @bot+evil" },
       { label: "extended hyphenated localpart", body: "hello @bot-evil" },
       { label: "extended slash localpart", body: "hello @bot/evil" },
+      { label: "historical exclamation localpart", body: "hello @bot!evil:evil.example" },
+      { label: "historical percent localpart", body: "hello @bot%evil:evil.example" },
+      { label: "historical ampersand localpart", body: "hello @bot&evil:evil.example" },
+      { label: "historical question-mark localpart", body: "hello @bot?evil:evil.example" },
+      { label: "historical closing-bracket localpart", body: "hello @bot)evil:evil.example" },
+      { label: "historical Markdown localpart", body: "hello @bot**evil:evil.example" },
+      { label: "historical exclamation-only localpart", body: "hello @bot!" },
+      { label: "historical percent-only localpart", body: "hello @bot%" },
+      { label: "historical comma-only localpart", body: "hello @bot," },
+      { label: "historical period-only localpart", body: "hello @bot." },
+      { label: "historical parenthesis-only localpart", body: "hello @bot)" },
+      { label: "historical Markdown-only localpart", body: "hello @bot**" },
+      { label: "historical hash-only localpart", body: "hello @bot#" },
+      { label: "ambiguous parenthesized shorthand", body: "hello (@bot)" },
+      { label: "ambiguous Markdown-wrapped shorthand", body: "hello **@bot**" },
+      { label: "ambiguous hash-wrapped shorthand", body: "hello #@bot#" },
+      { label: "Matrix room-alias account collision", body: "hello #@bot:matrix.org" },
+      { label: "Matrix room-ID account collision", body: "hello !@bot:matrix.org" },
+      { label: "Matrix event-ID account collision", body: "hello $@bot:matrix.org" },
+      { label: "unseparated Unicode punctuation", body: "hello （@bot），thanks" },
       { label: "extended accented localpart", body: "hello @boté" },
       { label: "extended CJK localpart", body: "hello @bot中" },
       { label: "extended combining-mark localpart", body: "hello @bot\u0301" },
@@ -136,6 +151,10 @@ describe("resolveMentions", () => {
       { label: "extended joined-emoji localpart", body: "hello @bot\u200d\u{1f4bb}" },
       { label: "extended Unicode homeserver", body: "hello @bot:matrix.orgé" },
       { label: "embedded email token", body: "hello contact@bot" },
+      { label: "embedded opening-punctuation token", body: "hello evil(@bot" },
+      { label: "embedded Markdown token", body: "hello evil**@bot" },
+      { label: "embedded zero-width prefix", body: "hello \u200b@bot" },
+      { label: "embedded BOM prefix", body: "hello \ufeff@bot" },
       { label: "embedded accented token", body: "hello é@bot" },
       { label: "embedded CJK token", body: "hello 中@bot" },
       { label: "embedded combining-mark token", body: "hello \u0301@bot" },
@@ -167,6 +186,46 @@ describe("resolveMentions", () => {
           mentionRegexes: [],
         }),
       ).toEqual({ wasMentioned: false, hasExplicitMention: false });
+    });
+
+    it.each([
+      ...Array.from({ length: 94 }, (_, index) => String.fromCharCode(33 + index)).filter(
+        (character) => character !== ":",
+      ),
+      "！",
+      "％",
+      "，",
+      "。",
+      "؛",
+      "‽",
+      "・",
+      "、",
+      "…",
+      "—",
+      "（",
+      "）",
+      "«",
+      "»",
+    ])("rejects historical-account continuation or prefix %s", (character) => {
+      for (const body of [
+        `hello @bot${character}`,
+        `hello @bot${character}${character}`,
+        `hello @bot${character}evil:evil.example`,
+        `hello evil${character}@bot`,
+      ]) {
+        expect(
+          resolveMentions({
+            content: {
+              msgtype: "m.text",
+              body,
+              "m.mentions": { user_ids: [userId] },
+            },
+            userId,
+            text: body,
+            mentionRegexes: [],
+          }),
+        ).toEqual({ wasMentioned: false, hasExplicitMention: false });
+      }
     });
 
     it("requires metadata to name the exact account even when that account is visibly mentioned", () => {
