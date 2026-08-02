@@ -56,7 +56,7 @@ type ApproverRestrictedNativeApprovalCommonParams = {
   nativeRuntime?: ChannelApprovalCapability["nativeRuntime"];
 };
 
-type ApproverRestrictedNativeApprovalLegacyParams = {
+type ApproverRestrictedNativeApprovalFlatParams = {
   /** Lists configured account ids so DM-route availability can scan every account. */
   listAccountIds: (cfg: OpenClawConfig) => string[];
   /** Whether an account has approvers configured. */
@@ -267,8 +267,7 @@ function createStandardNativeApprovalRouting(
 
 /** Build the canonical approval capability for channels that restrict approvals to configured approvers. */
 function buildApproverRestrictedNativeApprovalCapability(
-  params: ApproverRestrictedNativeApprovalCommonParams &
-    ApproverRestrictedNativeApprovalLegacyParams,
+  params: ApproverRestrictedNativeApprovalCommonParams & ApproverRestrictedNativeApprovalFlatParams,
 ): ChannelApprovalCapability {
   const pluginSenderAuth = params.isPluginAuthorizedSender ?? params.isExecAuthorizedSender;
   const availabilityState = (enabled: boolean) =>
@@ -401,10 +400,9 @@ function buildApproverRestrictedNativeApprovalCapability(
   });
 }
 
-/** Build the legacy split approval adapter shape for approver-restricted native channels. */
+/** Build the split approval adapter shape for approver-restricted native channels. */
 export function createApproverRestrictedNativeApprovalAdapter(
-  params: ApproverRestrictedNativeApprovalCommonParams &
-    ApproverRestrictedNativeApprovalLegacyParams,
+  params: ApproverRestrictedNativeApprovalCommonParams & ApproverRestrictedNativeApprovalFlatParams,
 ) {
   return splitChannelApprovalCapability(buildApproverRestrictedNativeApprovalCapability(params));
 }
@@ -485,8 +483,7 @@ export function splitChannelApprovalCapability(capability: ChannelApprovalCapabi
 
 /** Build the canonical approval capability for approver-restricted native delivery channels. */
 export function createApproverRestrictedNativeApprovalCapability(
-  params: ApproverRestrictedNativeApprovalCommonParams &
-    ApproverRestrictedNativeApprovalLegacyParams,
+  params: ApproverRestrictedNativeApprovalCommonParams & ApproverRestrictedNativeApprovalFlatParams,
 ): ChannelApprovalCapability {
   return buildApproverRestrictedNativeApprovalCapability(params);
 }
