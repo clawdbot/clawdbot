@@ -141,6 +141,7 @@ export async function startBuzzGatewayAccount(ctx: ChannelGatewayContext<Resolve
       ctx.setStatus({
         accountId: account.accountId,
         running: true,
+        lifecycle: "ready",
         configured: true,
         enabled: account.enabled,
         baseUrl: account.relayUrl,
@@ -170,6 +171,7 @@ export async function startBuzzGatewayAccount(ctx: ChannelGatewayContext<Resolve
       ctx.setStatus({
         accountId: account.accountId,
         running: false,
+        ...(cycleError ? { lifecycle: "recovering" as const } : {}),
         ...(cycleError ? { lastError: cycleError.message } : {}),
       });
     }
