@@ -1,4 +1,3 @@
-// Control UI module implements gateway behavior.
 import {
   buildGatewayConnectAuth,
   buildDeviceAuthPayload,
@@ -31,6 +30,9 @@ import {
   MIN_CLIENT_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
 } from "@openclaw/gateway-client/browser";
+// Control UI module implements gateway behavior.
+import { formatErrorMessage } from "@openclaw/normalization-core";
+import { redactToolDetail } from "../lib/browser-redact.ts";
 import {
   clearDeviceAuthToken,
   loadDeviceAuthToken,
@@ -209,10 +211,6 @@ const BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR_CODE = "BROWSER_WEBSOCKET_CONSTRUCTOR_
 const BROWSER_WEBSOCKET_SECURITY_ERROR_CODE = "BROWSER_WEBSOCKET_SECURITY_ERROR";
 const DEFAULT_GATEWAY_TICK_INTERVAL_MS = 30_000;
 const MIN_GATEWAY_TICK_WATCH_INTERVAL_MS = 1_000;
-function getErrorMessage(err: unknown): string {
-  return err instanceof Error && err.message ? err.message : String(err);
-}
-
 function toGatewayErrorInfo(error: GatewayRequestError): GatewayErrorInfo {
   const { gatewayCode: code, message, details, retryable, retryAfterMs } = error;
   return { code, message, details, retryable, retryAfterMs };
@@ -226,7 +224,7 @@ function getErrorName(err: unknown): string | undefined {
 
 function isBrowserWebSocketSecurityError(err: unknown): boolean {
   const name = getErrorName(err)?.toLowerCase();
-  const message = getErrorMessage(err).toLowerCase();
+  const message = formatErrorMessage(err, { redact: redactToolDetail }).toLowerCase();
   return (
     name === "securityerror" ||
     message.includes("security error") ||
@@ -237,7 +235,7 @@ function isBrowserWebSocketSecurityError(err: unknown): boolean {
 
 function formatBrowserWebSocketConstructorError(err: unknown, url: string): GatewayErrorInfo {
   const securityError = isBrowserWebSocketSecurityError(err);
-  const browserMessage = getErrorMessage(err);
+  const browserMessage = formatErrorMessage(err, { redact: redactToolDetail });
   const isPlaintextWs = url.trim().toLowerCase().startsWith("ws://");
   const details = {
     code: securityError

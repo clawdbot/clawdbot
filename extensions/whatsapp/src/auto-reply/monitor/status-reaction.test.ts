@@ -25,6 +25,7 @@ function createMessage(overrides: TestMsgOverrides = {}): AdmittedWebInboundMess
     platform: {
       chatJid: "15551234567@s.whatsapp.net",
       recipientJid: "15559876543",
+      fromMe: false,
     },
     admission: {
       accountId: "default",
@@ -160,6 +161,66 @@ describe("createWhatsAppStatusReactionController", () => {
       );
     });
     await controller?.clear();
+  });
+
+  it("preserves self-authored direction for status set and clear", async () => {
+    const cfg = {
+      messages: {
+        ackReaction: "👀",
+        ackReactionScope: "all",
+        statusReactions: {
+          enabled: true,
+        },
+      },
+      channels: {
+        whatsapp: {
+          reactionLevel: "ack",
+        },
+      },
+    } as OpenClawConfig;
+
+    const controller = await createWhatsAppStatusReactionController({
+      cfg,
+      msg: createMessage({
+        platform: {
+          chatJid: "15551234567@s.whatsapp.net",
+          recipientJid: "15559876543",
+          fromMe: true,
+        },
+      }),
+      agentId: "agent",
+      sessionKey: "whatsapp:default:15551234567",
+      verbose: false,
+    });
+
+    void controller?.setQueued();
+    await vi.waitFor(() => {
+      expect(hoisted.sendReactionWhatsApp).toHaveBeenCalledWith(
+        "15551234567@s.whatsapp.net",
+        "msg-1",
+        "👀",
+        {
+          verbose: false,
+          fromMe: true,
+          accountId: "default",
+          cfg,
+        },
+      );
+    });
+
+    await controller?.clear();
+
+    expect(hoisted.sendReactionWhatsApp).toHaveBeenLastCalledWith(
+      "15551234567@s.whatsapp.net",
+      "msg-1",
+      "",
+      {
+        verbose: false,
+        fromMe: true,
+        accountId: "default",
+        cfg,
+      },
+    );
   });
 
   it("uses the active account reactionLevel override from admission", async () => {
