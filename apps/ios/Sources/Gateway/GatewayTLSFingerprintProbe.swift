@@ -19,7 +19,7 @@ typealias GatewayTLSFingerprintProbeFunction = @Sendable (URL) async -> GatewayT
 
 enum GatewayTLSFingerprintProbeBudget {
     static let tcpConnectTimeoutSeconds = 3.0
-    fileprivate static let tlsHandshakeTimeoutSeconds = 10.0
+    fileprivate static let tlsHandshakeTimeoutSeconds = 30.0
 }
 
 func defaultGatewayTLSFingerprintProbe(url: URL) async -> GatewayTLSFingerprintProbeResult {
@@ -40,7 +40,7 @@ private final class GatewayTLSFingerprintProbe: NSObject, URLSessionDelegate, UR
     private struct ProbeState {
         var didFinish = false
         var session: URLSession?
-        var task: URLSessionWebSocketTask?
+        var task: URLSessionTask?
     }
 
     private let url: URL
@@ -63,7 +63,7 @@ private final class GatewayTLSFingerprintProbe: NSObject, URLSessionDelegate, UR
         config.timeoutIntervalForRequest = self.timeoutSeconds
         config.timeoutIntervalForResource = self.timeoutSeconds
         let session = URLSession(configuration: config, delegate: self, delegateQueue: nil)
-        let task = session.webSocketTask(with: self.url)
+        let task = session.dataTask(with: Self.httpProbeURL(from: self.url) ?? self.url)
         self.state.withLock { s in
             s.session = session
             s.task = task
@@ -116,9 +116,27 @@ private final class GatewayTLSFingerprintProbe: NSObject, URLSessionDelegate, UR
             return (true, task, session)
         }
         guard shouldComplete else { return }
-        taskToCancel?.cancel(with: .goingAway, reason: nil)
+        taskToCancel?.cancel()
         sessionToInvalidate?.invalidateAndCancel()
         self.onComplete(result)
+    }
+
+    private static func httpProbeURL(from url: URL) -> URL? {
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            return nil
+        }
+        switch components.scheme?.lowercased() {
+        case "wss":
+            components.scheme = "https"
+        case "ws":
+            components.scheme = "http"
+        default:
+            break
+        }
+        if components.path.isEmpty {
+            components.path = "/"
+        }
+        return components.url
     }
 
     private static func failure(for error: Error) -> GatewayTLSFingerprintProbeFailure {

@@ -1025,6 +1025,17 @@ extension RootTabsSourceGuardTests {
         #expect(rootSource.contains("self.selectSettingsRoute(.gateway)"))
     }
 
+    @Test func `gateway tls fingerprint probe does not depend on websocket upgrade`() throws {
+        let sourceDirectory = Self.gatewayConnectionControllerSourceURL().deletingLastPathComponent()
+        let probeSource = try String(
+            contentsOf: sourceDirectory.appendingPathComponent("GatewayTLSFingerprintProbe.swift"),
+            encoding: .utf8)
+
+        #expect(probeSource.contains("tlsHandshakeTimeoutSeconds = 30.0"))
+        #expect(probeSource.contains("session.dataTask(with: Self.httpProbeURL(from: self.url) ?? self.url)"))
+        #expect(!probeSource.contains("session.webSocketTask(with: self.url)"))
+    }
+
     @Test func `gateway credential fields update before endpoint persistence is available`() throws {
         let onboardingSource = try Self.onboardingWizardSource()
         let settingsSource = try String(contentsOf: Self.settingsProTabActionsSourceURL(), encoding: .utf8)
