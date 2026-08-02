@@ -1144,6 +1144,9 @@ describe("killSubagentRunAdmin", () => {
     if (!result.found) {
       throw new Error("expected finalizing subagent run");
     }
+    if (!("targetState" in result)) {
+      throw new Error("expected finalizing target state");
+    }
     expect(result.targetState).toEqual({ state: "finalizing" });
     expect(result.runId).toBe("run-current-admin");
     expect(result.sessionKey).toBe(childSessionKey);
