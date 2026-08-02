@@ -1708,8 +1708,8 @@ describe("runMemoryFlushIfNeeded", () => {
   it.each([
     ["failed 400", false, "Provider returned 400", { reason: "format", status: 400 }],
     ["failed 401", false, "Provider returned 401", { reason: "auth", status: 401 }],
-    ["successful 403 no-op", true, "Provider returned 403"],
-    ["text-only transient", false, "Provider returned 503 from model"],
+    ["successful 403 no-op", true, "Provider returned 403", undefined],
+    ["text-only transient", false, "Provider returned 503 from model", undefined],
   ])(
     "still fails required preflight compaction for non-retryable %s result",
     async (_caseName, ok, reason, failure) => {
