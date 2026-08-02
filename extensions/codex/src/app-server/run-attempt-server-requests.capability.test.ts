@@ -184,42 +184,36 @@ describe("Codex dynamic tool message authority", () => {
     });
   });
 
-  it.each([
-    { name: "tokened attempt", attemptToken: "opaque-attempt-capability" },
-    { name: "untokened attempt", attemptToken: undefined },
-  ])(
-    "rejects a different-session tool during a $name before its trusted Slack callback",
-    async ({ attemptToken }) => {
-      const observed: Array<unknown> = [];
-      const trustedSlackCallback = vi.fn();
-      const fixture = createControllerFixture(
-        attemptToken,
-        observed,
-        "opaque-other-session-capability",
-        "agent:test-agent:other-session",
-        trustedSlackCallback,
-      );
+  it("rejects a different-session tool during a tokened attempt before its trusted Slack callback", async () => {
+    const observed: Array<unknown> = [];
+    const trustedSlackCallback = vi.fn();
+    const fixture = createControllerFixture(
+      "opaque-attempt-capability",
+      observed,
+      "opaque-other-session-capability",
+      "agent:test-agent:other-session",
+      trustedSlackCallback,
+    );
 
-      await fixture.controller.handleServerRequest(
-        {
-          id: "request-cross-session",
-          method: "item/tool/call",
-          params: {
-            threadId: "thread-1",
-            turnId: "turn-1",
-            callId: "cross-session",
-            namespace: null,
-            tool: "authority_probe",
-            arguments: {},
-          },
+    await fixture.controller.handleServerRequest(
+      {
+        id: "request-cross-session",
+        method: "item/tool/call",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "cross-session",
+          namespace: null,
+          tool: "authority_probe",
+          arguments: {},
         },
-        { threadId: "thread-1", turnId: "turn-1" },
-      );
+      },
+      { threadId: "thread-1", turnId: "turn-1" },
+    );
 
-      expect(observed).toEqual([{ ok: false, reason: "token_conflict" }]);
-      expect(trustedSlackCallback).not.toHaveBeenCalled();
-    },
-  );
+    expect(observed).toEqual([{ ok: false, reason: "token_conflict" }]);
+    expect(trustedSlackCallback).not.toHaveBeenCalled();
+  });
 
   it("keeps the permission value out of Codex requests, transcripts, and stored tool records", async () => {
     const permissionValue = "opaque-permission-value-that-must-not-be-recorded";

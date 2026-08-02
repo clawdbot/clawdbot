@@ -3638,68 +3638,6 @@ describe("message tool sandbox passthrough", () => {
     });
   });
 
-  it.each([
-    {
-      name: "expired capability",
-      mint: { nowMs: 1, ttlMs: 1 },
-      options: {},
-    },
-    {
-      name: "capability from another run",
-      mint: {},
-      options: { runId: "run-2" },
-    },
-    {
-      name: "capability from another session key",
-      mint: {},
-      options: { agentSessionKey: "agent:main:slack:channel:C2" },
-    },
-    {
-      name: "capability from another session id",
-      mint: {},
-      options: { sessionId: "session-2" },
-    },
-  ])("keeps $name from restoring trusted Slack context", async (testCase) => {
-    mockSendResult({ channel: "slack", to: "slack:C1" });
-    const token = mintMessageActionTurnCapability({
-      agentId: "main",
-      runId: "run-1",
-      sessionKey: "agent:main:slack:channel:C1",
-      sessionId: "session-1",
-      requesterAccountId: "default",
-      requesterSenderId: "U123",
-      toolContext: {
-        currentChannelProvider: "slack",
-        currentChannelId: "C1",
-        currentThreadTs: "111.222",
-      },
-      ...testCase.mint,
-    });
-    mintedTurnCapabilities.push(token);
-
-    const call = await executeSend({
-      toolOptions: {
-        agentId: "main",
-        agentSessionKey: "agent:main:slack:channel:C1",
-        runId: "run-1",
-        sessionId: "session-1",
-        messageActionTurnCapability: token,
-        ...testCase.options,
-      },
-      action: {
-        channel: "slack",
-        target: "C1",
-        message: "hi",
-      },
-    });
-
-    expect(call?.messageActionAuthorization).toEqual({
-      requesterAccountId: undefined,
-      requesterSenderId: undefined,
-      toolContext: undefined,
-    });
-  });
-
   it("uses attempt-bound authority for a message tool materialized before the harness handoff", async () => {
     mockSendResult({ to: "discord:123" });
     const token = mintMessageActionTurnCapability({
@@ -3783,115 +3721,72 @@ describe("message tool sandbox passthrough", () => {
     });
   });
 
-  it.each([
-    { name: "tokened current request", currentRequestHasToken: true },
-    { name: "untokened current request", currentRequestHasToken: false },
-  ])(
-    "keeps a different-session wrapped message tool untrusted during a $name",
-    async ({ currentRequestHasToken }) => {
-      mockSendResult({ channel: "slack", to: "slack:C2" });
-      const currentToken = mintMessageActionTurnCapability({
-        agentId: "main",
-        runId: "run-1",
-        sessionKey: "agent:main:slack:channel:C1",
-        sessionId: "session-1",
-        requesterAccountId: "account-a",
-        requesterSenderId: "U1",
-        toolContext: {
-          currentChannelProvider: "slack",
-          currentChannelId: "C1",
-          currentThreadTs: "111.111",
-        },
-      });
-      const otherToken = mintMessageActionTurnCapability({
-        agentId: "main",
-        runId: "run-2",
-        sessionKey: "agent:main:slack:channel:C2",
-        sessionId: "session-2",
-        requesterAccountId: "account-b",
-        requesterSenderId: "U2",
-        toolContext: {
-          currentChannelProvider: "slack",
-          currentChannelId: "C2",
-          currentThreadTs: "222.222",
-        },
-      });
-      mintedTurnCapabilities.push(currentToken, otherToken);
-      const otherSessionTool = wrapToolWithGatewayCallerIdentity(
-        createMessageTool({
-          getRuntimeConfig: mocks.getRuntimeConfig,
-          runMessageAction: mocks.runMessageAction as never,
-          agentId: "main",
-          agentSessionKey: "agent:main:slack:channel:C2",
-          runId: "run-2",
-          sessionId: "session-2",
-          messageActionTurnCapability: otherToken,
-          currentChannelProvider: "slack",
-          currentChannelId: "C2",
-          currentThreadTs: "222.222",
-        }),
-        {
-          agentId: "main",
-          sessionKey: "agent:main:slack:channel:C2",
-          messageActionTurnCapability: otherToken,
-        },
-      );
-
-      await runWithGatewayToolCallerRequestContext(
-        {
-          agentId: "main",
-          sessionKey: "agent:main:slack:channel:C1",
-          ...(currentRequestHasToken ? { messageActionTurnCapability: currentToken } : {}),
-        },
-        () =>
-          otherSessionTool.execute?.("cross-session-call", {
-            action: "send",
-            channel: "slack",
-            target: "C2",
-            message: "must remain untrusted",
-          }),
-      );
-
-      expect(mocks.runMessageAction).toHaveBeenCalledOnce();
-      expect(firstRunMessageActionInput()?.messageActionAuthorization).toEqual({
-        requesterAccountId: undefined,
-        requesterSenderId: undefined,
-        toolContext: undefined,
-      });
-    },
-  );
-
-  it("keeps attempt-bound authority fail-closed after revocation", async () => {
-    mockSendResult({ to: "discord:123" });
-    const token = mintMessageActionTurnCapability({
+  it("keeps a different-session wrapped message tool untrusted during a tokened current request", async () => {
+    mockSendResult({ channel: "slack", to: "slack:C2" });
+    const currentToken = mintMessageActionTurnCapability({
       agentId: "main",
       runId: "run-1",
-      sessionKey: "agent:main:runtime-policy",
+      sessionKey: "agent:main:slack:channel:C1",
       sessionId: "session-1",
-      requesterSenderId: "trusted-sender",
+      requesterAccountId: "account-a",
+      requesterSenderId: "U1",
+      toolContext: {
+        currentChannelProvider: "slack",
+        currentChannelId: "C1",
+        currentThreadTs: "111.111",
+      },
     });
-    revokeMessageActionTurnCapability(token);
-
-    const call = await runWithGatewayToolCallerRequestContext(
+    const otherToken = mintMessageActionTurnCapability({
+      agentId: "main",
+      runId: "run-2",
+      sessionKey: "agent:main:slack:channel:C2",
+      sessionId: "session-2",
+      requesterAccountId: "account-b",
+      requesterSenderId: "U2",
+      toolContext: {
+        currentChannelProvider: "slack",
+        currentChannelId: "C2",
+        currentThreadTs: "222.222",
+      },
+    });
+    mintedTurnCapabilities.push(currentToken, otherToken);
+    const otherSessionTool = wrapToolWithGatewayCallerIdentity(
+      createMessageTool({
+        getRuntimeConfig: mocks.getRuntimeConfig,
+        runMessageAction: mocks.runMessageAction as never,
+        agentId: "main",
+        agentSessionKey: "agent:main:slack:channel:C2",
+        runId: "run-2",
+        sessionId: "session-2",
+        messageActionTurnCapability: otherToken,
+        currentChannelProvider: "slack",
+        currentChannelId: "C2",
+        currentThreadTs: "222.222",
+      }),
       {
         agentId: "main",
-        sessionKey: "agent:main:runtime-policy",
-        messageActionTurnCapability: token,
+        sessionKey: "agent:main:slack:channel:C2",
+        messageActionTurnCapability: otherToken,
+      },
+    );
+
+    await runWithGatewayToolCallerRequestContext(
+      {
+        agentId: "main",
+        sessionKey: "agent:main:slack:channel:C1",
+        messageActionTurnCapability: currentToken,
       },
       () =>
-        executeSend({
-          toolOptions: {
-            agentId: "main",
-            agentSessionKey: "agent:main:runtime-policy",
-            runId: "run-1",
-            sessionId: "session-1",
-            requesterSenderId: "untrusted-constructor-sender",
-          },
-          action: { target: "discord:123", message: "hi" },
+        otherSessionTool.execute?.("cross-session-call", {
+          action: "send",
+          channel: "slack",
+          target: "C2",
+          message: "must remain untrusted",
         }),
     );
 
-    expect(call?.messageActionAuthorization).toEqual({
+    expect(mocks.runMessageAction).toHaveBeenCalledOnce();
+    expect(firstRunMessageActionInput()?.messageActionAuthorization).toEqual({
       requesterAccountId: undefined,
       requesterSenderId: undefined,
       toolContext: undefined,

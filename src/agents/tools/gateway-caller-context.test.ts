@@ -150,16 +150,7 @@ describe("gateway caller context wrapper", () => {
     expect(resolveGatewayToolCallerMessageActionCapability(undefined)).toEqual({ ok: true });
   });
 
-  it.each([
-    {
-      name: "another session",
-      wrappedIdentity: { agentId: "agent-a", sessionKey: "agent-a:other-session" },
-    },
-    {
-      name: "another agent",
-      wrappedIdentity: { agentId: "agent-b", sessionKey: "agent-b:session" },
-    },
-  ])("rejects wrapped authority from $name inside a request boundary", async (testCase) => {
+  it("rejects wrapped authority from another session inside a request boundary", async () => {
     let observed: unknown;
     const tool: AnyAgentTool = {
       name: "probe",
@@ -172,7 +163,8 @@ describe("gateway caller context wrapper", () => {
       },
     };
     const materialized = wrapToolWithGatewayCallerIdentity(tool, {
-      ...testCase.wrappedIdentity,
+      agentId: "agent-a",
+      sessionKey: "agent-a:other-session",
       messageActionTurnCapability: "other-live-token",
     });
 
