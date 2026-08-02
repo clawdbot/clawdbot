@@ -9,6 +9,17 @@ import SwiftUI
 import UIKit
 import UserNotifications
 
+private enum GatewayCredentialHandoffError: LocalizedError {
+    case deviceAuthPersistenceFailed(missingRoles: Set<String>)
+
+    var errorDescription: String? {
+        switch self {
+        case let .deviceAuthPersistenceFailed(missingRoles):
+            "Could not save device authentication for: \(missingRoles.sorted().joined(separator: ", "))"
+        }
+    }
+}
+
 private let clientDatabaseLogger = Logger(
     subsystem: "ai.openclawfoundation.app",
     category: "ClientDatabases")
@@ -482,6 +493,8 @@ final class NodeAppModel {
     @ObservationIgnored private var operatorTalkConnectionGeneration: UInt64 = 0
     @ObservationIgnored private var operatorTalkHydrationGeneration: UInt64?
     @ObservationIgnored private var credentialHandoffFailureGeneration: UInt64?
+    @ObservationIgnored private var credentialHandoffIncompleteGeneration: UInt64?
+    @ObservationIgnored private var credentialHandoffMissingRoles = Set<String>()
     @ObservationIgnored private(set) var gatewayConnectGeneration: UInt64 = 0
     private var forceOperatorTalkPermissionUpgradeRequest = false
     @ObservationIgnored private var talkPermissionUpgradeTask: Task<Void, Never>?
@@ -4069,6 +4082,8 @@ extension NodeAppModel {
             self.clearGatewayConnectionProblem()
         }
         self.credentialHandoffFailureGeneration = nil
+        self.credentialHandoffIncompleteGeneration = nil
+        self.credentialHandoffMissingRoles = []
         self.nodeGatewayTask?.cancel()
         self.operatorGatewayTask?.cancel()
         self.gatewayHealthMonitor.stop()
@@ -4291,15 +4306,29 @@ extension NodeAppModel {
     private func completeSuccessfulGatewayAuthHandoff(
         stableID: String,
         routeGeneration: UInt64,
-        issuedRoles: Set<String>,
+        handoff: GatewayDeviceAuthHandoff,
         nodeOptions: GatewayConnectOptions) throws -> GatewayConnectOptions?
     {
         guard self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID) else { return nil }
 
         // Bootstrap authentication is single-use. Do not keep a consumed bootstrap
         // route alive unless both replacement sessions can authenticate from secure storage.
-        guard issuedRoles.isSuperset(of: ["node", "operator"]) else {
-            return nodeOptions.allowStoredDeviceAuth ? nodeOptions : nil
+        let requiredRoles: Set<String> = ["node", "operator"]
+        let missingOfferedRoles = requiredRoles.subtracting(handoff.offeredRoles)
+        if missingOfferedRoles.isEmpty {
+            guard handoff.persistedRoles.isSuperset(of: requiredRoles) else {
+                throw GatewayCredentialHandoffError.deviceAuthPersistenceFailed(
+                    missingRoles: requiredRoles.subtracting(handoff.persistedRoles))
+            }
+            self.credentialHandoffIncompleteGeneration = nil
+            self.credentialHandoffMissingRoles = []
+        } else {
+            let deviceAuthGatewayID = nodeOptions.deviceAuthGatewayID ?? stableID
+            guard self.hasStoredGatewayRoleToken("node", gatewayID: deviceAuthGatewayID),
+                  self.hasStoredGatewayRoleToken("operator", gatewayID: deviceAuthGatewayID)
+            else { return nil }
+            self.credentialHandoffIncompleteGeneration = routeGeneration
+            self.credentialHandoffMissingRoles = missingOfferedRoles
         }
         guard let config = activeGatewayConnectConfig,
               GatewayStableIdentifier.matches(config.effectiveStableID, stableID)
@@ -4364,14 +4393,14 @@ extension NodeAppModel {
         else {
             return nodeOptions
         }
-        let issuedRoles = await nodeGateway.currentIssuedDeviceAuthRoles()
+        let handoff = await nodeGateway.currentDeviceAuthHandoff()
         guard self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID) else { return nil }
         let reconnectOptions: GatewayConnectOptions?
         do {
             reconnectOptions = try self.completeSuccessfulGatewayAuthHandoff(
                 stableID: stableID,
                 routeGeneration: routeGeneration,
-                issuedRoles: issuedRoles,
+                handoff: handoff,
                 nodeOptions: nodeOptions)
         } catch {
             await self.handleGatewayCredentialHandoffPersistenceFailure(
@@ -4381,9 +4410,10 @@ extension NodeAppModel {
             return nil
         }
         guard let reconnectOptions else {
-            await self.handleGatewayCredentialHandoffPersistenceFailure(
+            await self.handleGatewayCredentialHandoffRoleFailure(
                 stableID: stableID,
-                routeGeneration: routeGeneration)
+                routeGeneration: routeGeneration,
+                handoff: handoff)
             return nil
         }
         return reconnectOptions
@@ -4417,6 +4447,60 @@ extension NodeAppModel {
             retryable: true,
             pauseReconnect: true,
             technicalDetails: technicalDetails))
+    }
+
+    private func handleGatewayCredentialHandoffRoleFailure(
+        stableID: String,
+        routeGeneration: UInt64,
+        handoff: GatewayDeviceAuthHandoff) async
+    {
+        guard self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID) else { return }
+        guard self.credentialHandoffFailureGeneration != routeGeneration else { return }
+        self.credentialHandoffFailureGeneration = routeGeneration
+        self.disableGatewayAutoReconnect()
+        self.nodeGatewayTask?.cancel()
+        self.nodeGatewayTask = nil
+        self.operatorGatewayTask?.cancel()
+        self.operatorGatewayTask = nil
+        await self.nodeGateway.disconnect()
+        await self.operatorGateway.disconnect()
+        guard self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID) else { return }
+        self.applyGatewayAccessHandoffProblem(
+            handoff: handoff,
+            pauseReconnect: true)
+    }
+
+    private func applyGatewayAccessHandoffProblem(
+        handoff: GatewayDeviceAuthHandoff,
+        pauseReconnect: Bool)
+    {
+        let problem = self.gatewayAccessHandoffProblem(
+            handoff: handoff,
+            pauseReconnect: pauseReconnect)
+        GatewayDiagnostics.log(problem.technicalDetails ?? problem.message)
+        self.applyGatewayConnectionProblem(problem)
+    }
+
+    private func gatewayAccessHandoffProblem(
+        handoff: GatewayDeviceAuthHandoff,
+        pauseReconnect: Bool) -> GatewayConnectionProblem
+    {
+        let requiredRoles: Set<String> = ["node", "operator"]
+        let missingRoles = requiredRoles.subtracting(handoff.offeredRoles)
+        let technicalDetails = "Gateway access handoff incomplete; missing roles: " +
+            missingRoles.sorted().joined(separator: ", ") + "."
+        return GatewayConnectionProblem(
+            kind: .protocolMismatch,
+            owner: .gateway,
+            title: "Gateway update required",
+            message: pauseReconnect
+                ? "This Gateway did not issue the access credentials this phone needs. Update the Gateway, then scan a new Full-Access code."
+                : "Full access was not issued. Your existing Limited connection was restored; update the Gateway, then scan a new Full-Access code.",
+            actionLabel: "Copy update command",
+            actionCommand: "openclaw update",
+            retryable: false,
+            pauseReconnect: pauseReconnect,
+            technicalDetails: technicalDetails)
     }
 
     private func refreshBackgroundReconnectSuppressionIfNeeded(source: String) {
@@ -4556,18 +4640,19 @@ extension NodeAppModel {
             bootstrapToken: auth.bootstrapToken,
             password: auth.password)
         if usedBootstrapToken {
-            let issuedRoles = await nodeGateway.currentIssuedDeviceAuthRoles()
+            let handoff = await nodeGateway.currentDeviceAuthHandoff()
             guard self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID) else { return }
             do {
                 guard try self.completeSuccessfulGatewayAuthHandoff(
                     stableID: stableID,
                     routeGeneration: routeGeneration,
-                    issuedRoles: issuedRoles,
+                    handoff: handoff,
                     nodeOptions: nodeOptions) != nil
                 else {
-                    await self.handleGatewayCredentialHandoffPersistenceFailure(
+                    await self.handleGatewayCredentialHandoffRoleFailure(
                         stableID: stableID,
-                        routeGeneration: routeGeneration)
+                        routeGeneration: routeGeneration,
+                        handoff: handoff)
                     return
                 }
             } catch {
@@ -4583,6 +4668,14 @@ extension NodeAppModel {
         self.gatewayStatusText = "Connected"
         self.gatewayServerName = url.host ?? "gateway"
         self.gatewayConnected = true
+        if self.credentialHandoffIncompleteGeneration == routeGeneration {
+            self.applyGatewayAccessHandoffProblem(
+                handoff: GatewayDeviceAuthHandoff(
+                    offeredRoles: Set(["node", "operator"])
+                        .subtracting(self.credentialHandoffMissingRoles),
+                    persistedRoles: []),
+                pauseReconnect: false)
+        }
         _ = GatewaySettingsStore.markGatewayConnected(
             stableID: stableID,
             atMs: Int(Date().timeIntervalSince1970 * 1000))
@@ -11195,7 +11288,36 @@ extension NodeAppModel {
         return try self.completeSuccessfulGatewayAuthHandoff(
             stableID: stableID,
             routeGeneration: self.gatewayRouteGeneration,
-            issuedRoles: issuedRoles,
+            handoff: GatewayDeviceAuthHandoff(
+                offeredRoles: issuedRoles,
+                persistedRoles: issuedRoles),
+            nodeOptions: nodeOptions)
+    }
+
+    func _test_gatewayAccessHandoffProblem(
+        offeredRoles: Set<String>,
+        persistedRoles: Set<String>,
+        pauseReconnect: Bool) -> GatewayConnectionProblem
+    {
+        self.gatewayAccessHandoffProblem(
+            handoff: GatewayDeviceAuthHandoff(
+                offeredRoles: offeredRoles,
+                persistedRoles: persistedRoles),
+            pauseReconnect: pauseReconnect)
+    }
+
+    func _test_completeSuccessfulGatewayAuthHandoff(
+        offeredRoles: Set<String>,
+        persistedRoles: Set<String>,
+        nodeOptions: GatewayConnectOptions) throws -> GatewayConnectOptions?
+    {
+        guard let stableID = activeGatewayConnectConfig?.effectiveStableID else { return nil }
+        return try self.completeSuccessfulGatewayAuthHandoff(
+            stableID: stableID,
+            routeGeneration: self.gatewayRouteGeneration,
+            handoff: GatewayDeviceAuthHandoff(
+                offeredRoles: offeredRoles,
+                persistedRoles: persistedRoles),
             nodeOptions: nodeOptions)
     }
 

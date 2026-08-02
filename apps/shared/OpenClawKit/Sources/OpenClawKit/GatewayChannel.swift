@@ -6,6 +6,16 @@ import OSLog
 /// Avoid ambiguity with the app's own AnyCodable type.
 private typealias ProtoAnyCodable = OpenClawProtocol.AnyCodable
 
+public struct GatewayDeviceAuthHandoff: Equatable, Sendable {
+    public let offeredRoles: Set<String>
+    public let persistedRoles: Set<String>
+
+    public init(offeredRoles: Set<String> = [], persistedRoles: Set<String> = []) {
+        self.offeredRoles = offeredRoles
+        self.persistedRoles = persistedRoles
+    }
+}
+
 private func gatewayErrorDetails(_ error: ErrorShape?) -> [String: ProtoAnyCodable] {
     var details: [String: ProtoAnyCodable] = [:]
     if let nested = error?.details?.value as? [String: ProtoAnyCodable] {
@@ -94,7 +104,7 @@ public actor GatewayChannelActor {
     private var keepaliveTask: Task<Void, Never>?
     private var pendingDeviceTokenRetry = false
     private var deviceTokenRetryBudgetUsed = false
-    private var issuedDeviceAuthRoles = Set<String>()
+    private var deviceAuthHandoff = GatewayDeviceAuthHandoff()
     private var reconnectPausedForAuthFailure = false
     private let defaultRequestTimeoutMs: Double = 15000
     private let extraHeadersProvider: (@Sendable () -> [String: String])?
@@ -558,8 +568,10 @@ public actor GatewayChannelActor {
                 deviceAuthGatewayID: deviceAuthGatewayID,
                 deviceIdentityProfile: deviceIdentityProfile,
                 connectionGeneration: connectionGeneration)
-            self.issuedDeviceAuthRoles.formUnion(outcome.issuedRoles)
-            if outcome.issuedRoles.contains(role) {
+            self.deviceAuthHandoff = GatewayDeviceAuthHandoff(
+                offeredRoles: self.deviceAuthHandoff.offeredRoles.union(outcome.offeredRoles),
+                persistedRoles: self.deviceAuthHandoff.persistedRoles.union(outcome.persistedRoles))
+            if outcome.persistedRoles.contains(role) {
                 // Only a token persisted from this endpoint may unlock stored auth for its role.
                 self.connectOptions?.allowStoredDeviceAuth = true
             }
@@ -897,7 +909,10 @@ extension GatewayChannelActor {
         role: String,
         deviceAuthGatewayID: String?,
         deviceIdentityProfile: GatewayDeviceIdentityProfile,
-        connectionGeneration: UInt64) async throws -> (issuedRoles: Set<String>, hello: HelloOk)
+        connectionGeneration: UInt64) async throws -> (
+            offeredRoles: Set<String>,
+            persistedRoles: Set<String>,
+            hello: HelloOk)
     {
         if res.ok == false {
             let error = res.error
@@ -954,10 +969,12 @@ extension GatewayChannelActor {
             self.tickIntervalMs = Double(tick)
         }
         let auth = ok.auth
-        var issuedRoles = Set<String>()
+        var offeredRoles = Set<String>()
+        var persistedRoles = Set<String>()
         if let identity {
             if let deviceToken = auth["deviceToken"]?.value as? String {
                 let authRole = auth["role"]?.value as? String ?? role
+                offeredRoles.insert(authRole)
                 let scopes = (auth["scopes"]?.value as? [ProtoAnyCodable])?
                     .compactMap { $0.value as? String } ?? []
                 if self.persistIssuedDeviceToken(
@@ -969,7 +986,7 @@ extension GatewayChannelActor {
                     deviceAuthGatewayID: deviceAuthGatewayID,
                     deviceIdentityProfile: deviceIdentityProfile)
                 {
-                    issuedRoles.insert(authRole)
+                    persistedRoles.insert(authRole)
                 }
             }
             if self.shouldPersistBootstrapHandoffTokens(),
@@ -982,6 +999,7 @@ extension GatewayChannelActor {
                     else {
                         continue
                     }
+                    offeredRoles.insert(authRole)
                     let scopes = (rawEntry["scopes"]?.value as? [ProtoAnyCodable])?
                         .compactMap { $0.value as? String } ?? []
                     if self.persistBootstrapHandoffToken(
@@ -992,7 +1010,7 @@ extension GatewayChannelActor {
                         deviceAuthGatewayID: deviceAuthGatewayID,
                         deviceIdentityProfile: deviceIdentityProfile)
                     {
-                        issuedRoles.insert(authRole)
+                        persistedRoles.insert(authRole)
                     }
                 }
             }
@@ -1005,7 +1023,7 @@ extension GatewayChannelActor {
         {
             await self.connectSnapshotAdmissionHandler?(ok, connectionGeneration)
         }
-        return (issuedRoles, ok)
+        return (offeredRoles, persistedRoles, ok)
     }
 
     private func deliverPushIfCurrent(
@@ -1019,7 +1037,11 @@ extension GatewayChannelActor {
     }
 
     public func currentIssuedDeviceAuthRoles() -> Set<String> {
-        self.issuedDeviceAuthRoles
+        self.deviceAuthHandoff.persistedRoles
+    }
+
+    public func currentDeviceAuthHandoff() -> GatewayDeviceAuthHandoff {
+        self.deviceAuthHandoff
     }
 }
 

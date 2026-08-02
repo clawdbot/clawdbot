@@ -9,8 +9,15 @@ enum GatewayOnboardingReset {
         instanceId: String,
         gatewayStableID: String,
         disconnectGateway: Bool = true,
+        preserveExistingAccess: Bool = false,
         defaults: UserDefaults = .standard) async -> Bool
     {
+        if preserveExistingAccess {
+            // A same-target access upgrade uses the bootstrap token only for this
+            // connection attempt. Keep the working Limited route intact until the
+            // Gateway proves that replacement node and operator auth were issued.
+            return true
+        }
         await self.prepare(
             appModel: appModel,
             instanceId: instanceId,

@@ -386,7 +386,7 @@ extension SettingsProTab {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     Button {
-                        self.openGatewayQRScanner()
+                        self.openGatewayQRScanner(preservingExistingAccess: true)
                     } label: {
                         Label("Scan Full-Access Code", systemImage: "qrcode.viewfinder")
                             .font(OpenClawType.body)

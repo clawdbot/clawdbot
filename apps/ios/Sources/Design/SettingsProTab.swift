@@ -62,6 +62,7 @@ struct SettingsProTab: View {
     @State var pendingManualAuthOverride: GatewayConnectionController.ManualAuthOverride?
     @State var scannerResultHandoff = QRScannerResultHandoff()
     @State var scannerScanID: UInt64 = 0
+    @State var preserveExistingGatewayAccessForScan = false
     @State var pendingTargetSuppression = GatewayPendingTargetSuppression()
     @State var defaultShareInstruction = ""
     @State var showQRScanner = false

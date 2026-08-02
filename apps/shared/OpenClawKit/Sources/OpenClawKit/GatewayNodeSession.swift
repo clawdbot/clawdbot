@@ -524,6 +524,11 @@ public actor GatewayNodeSession {
         return await channel.currentIssuedDeviceAuthRoles()
     }
 
+    public func currentDeviceAuthHandoff() async -> GatewayDeviceAuthHandoff {
+        guard let channel else { return GatewayDeviceAuthHandoff() }
+        return await channel.currentDeviceAuthHandoff()
+    }
+
     public func currentCanvasHostUrl() -> String? {
         self.pluginSurfaceUrls["canvas"]
     }

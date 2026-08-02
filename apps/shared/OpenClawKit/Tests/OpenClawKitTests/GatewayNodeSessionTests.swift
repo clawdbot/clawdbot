@@ -3332,6 +3332,9 @@ struct GatewayNodeSessionTests {
             "operator.write",
         ])
         #expect(await gateway.currentIssuedDeviceAuthRoles() == ["node", "operator"])
+        #expect(await gateway.currentDeviceAuthHandoff() == GatewayDeviceAuthHandoff(
+            offeredRoles: ["node", "operator"],
+            persistedRoles: ["node", "operator"]))
 
         await gateway.disconnect()
     }
@@ -3375,6 +3378,9 @@ struct GatewayNodeSessionTests {
             })
 
         #expect(await gateway.currentIssuedDeviceAuthRoles().isEmpty)
+        #expect(await gateway.currentDeviceAuthHandoff() == GatewayDeviceAuthHandoff(
+            offeredRoles: ["node"],
+            persistedRoles: []))
         await gateway.disconnect()
     }
 

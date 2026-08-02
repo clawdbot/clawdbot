@@ -1199,6 +1199,140 @@ private func waitUntil(
         #expect(GatewayTLSStore.loadFingerprint(stableID: gatewayB) == nil)
     }
 
+    @Test @MainActor func `access upgrade preserves the working target gateway`() async throws {
+        let temporaryState = try TemporaryOpenClawState()
+        defer { temporaryState.restore() }
+        let stableID = "manual|limited-gateway-\(UUID().uuidString)|443"
+        defer { GatewayTLSStore.clearFingerprint(stableID: stableID) }
+        let primaryIdentity = DeviceIdentityStore.loadOrCreate()
+        let shareIdentity = DeviceIdentityStore.loadOrCreate(profile: .shareExtension)
+        let authenticationOwnerID = GatewaySettingsStore.authenticationOwnerID(routeStableID: stableID)
+        for (identity, profile) in [
+            (primaryIdentity, GatewayDeviceIdentityProfile.primary),
+            (shareIdentity, GatewayDeviceIdentityProfile.shareExtension),
+        ] {
+            for role in ["node", "operator"] {
+                _ = DeviceAuthStore.storeToken(
+                    deviceId: identity.deviceId,
+                    role: role,
+                    token: "\(profile)-\(role)-token",
+                    gatewayID: authenticationOwnerID,
+                    profile: profile)
+            }
+        }
+        GatewayTLSStore.saveFingerprint("trusted-fingerprint", stableID: stableID)
+
+        let appModel = NodeAppModel()
+        let prepared = await GatewayOnboardingReset.prepareForBootstrapPairing(
+            appModel: appModel,
+            instanceId: "",
+            gatewayStableID: stableID,
+            disconnectGateway: false,
+            preserveExistingAccess: true)
+
+        #expect(prepared)
+        for (identity, profile) in [
+            (primaryIdentity, GatewayDeviceIdentityProfile.primary),
+            (shareIdentity, GatewayDeviceIdentityProfile.shareExtension),
+        ] {
+            for role in ["node", "operator"] {
+                #expect(DeviceAuthStore.loadToken(
+                    deviceId: identity.deviceId,
+                    role: role,
+                    gatewayID: authenticationOwnerID,
+                    profile: profile) != nil)
+            }
+        }
+        #expect(GatewayTLSStore.loadFingerprint(stableID: stableID) == "trusted-fingerprint")
+    }
+
+    @Test @MainActor func `incomplete access upgrade restores preserved limited auth`() throws {
+        let stableID = "manual|limited-gateway.example.com|443"
+        let instanceID = "limited-upgrade-\(UUID().uuidString)"
+        let temporaryState = try TemporaryOpenClawState(instanceID: instanceID)
+        defer { temporaryState.restore() }
+        let identity = DeviceIdentityStore.loadOrCreate()
+        for role in ["node", "operator"] {
+            _ = DeviceAuthStore.storeToken(
+                deviceId: identity.deviceId,
+                role: role,
+                token: "existing-\(role)-token",
+                gatewayID: stableID)
+        }
+        GatewaySettingsStore.saveGatewayCredentials(
+            token: "existing-shared-token",
+            bootstrapToken: nil,
+            password: nil,
+            gatewayStableID: stableID,
+            suppressStoredDeviceAuth: false,
+            instanceId: instanceID)
+        let nodeOptions = Self.makeNodeOptions(
+            allowStoredDeviceAuth: false,
+            deviceAuthGatewayID: stableID)
+        let config = try GatewayConnectConfig(
+            url: #require(URL(string: "wss://127.0.0.1:1")),
+            stableID: stableID,
+            tls: nil,
+            token: nil,
+            bootstrapToken: "one-time-bootstrap",
+            password: nil,
+            nodeOptions: nodeOptions)
+        let appModel = NodeAppModel()
+        defer { appModel.disconnectGateway() }
+        appModel.applyGatewayConnectConfig(config)
+
+        let restoredOptions = try #require(appModel._test_completeSuccessfulGatewayAuthHandoff(
+            offeredRoles: ["node"],
+            persistedRoles: ["node"],
+            nodeOptions: nodeOptions))
+
+        #expect(restoredOptions.allowStoredDeviceAuth)
+        #expect(appModel.activeGatewayConnectConfig?.bootstrapToken == nil)
+        #expect(appModel.activeGatewayConnectConfig?.nodeOptions.allowStoredDeviceAuth == true)
+        #expect(GatewaySettingsStore.loadGatewayCredentials(
+            instanceId: instanceID,
+            gatewayStableID: stableID).token == "existing-shared-token")
+        #expect(DeviceAuthStore.loadToken(
+            deviceId: identity.deviceId,
+            role: "operator",
+            gatewayID: stableID)?.token == "existing-operator-token")
+
+        let problem = appModel._test_gatewayAccessHandoffProblem(
+            offeredRoles: ["node"],
+            persistedRoles: ["node"],
+            pauseReconnect: false)
+        #expect(problem.kind == .protocolMismatch)
+        #expect(problem.owner == .gateway)
+        #expect(!problem.retryable)
+        #expect(!problem.pauseReconnect)
+        #expect(problem.message.contains("Limited connection was restored"))
+    }
+
+    @Test @MainActor func `offered auth that cannot persist remains an iphone failure`() throws {
+        let stableID = "manual|persistence-failure.example.com|443"
+        let nodeOptions = Self.makeNodeOptions(
+            allowStoredDeviceAuth: false,
+            deviceAuthGatewayID: stableID)
+        let config = try GatewayConnectConfig(
+            url: #require(URL(string: "wss://127.0.0.1:1")),
+            stableID: stableID,
+            tls: nil,
+            token: nil,
+            bootstrapToken: "one-time-bootstrap",
+            password: nil,
+            nodeOptions: nodeOptions)
+        let appModel = NodeAppModel()
+        defer { appModel.disconnectGateway() }
+        appModel.applyGatewayConnectConfig(config)
+
+        #expect(throws: Error.self) {
+            _ = try appModel._test_completeSuccessfulGatewayAuthHandoff(
+                offeredRoles: ["node", "operator"],
+                persistedRoles: ["node"],
+                nodeOptions: nodeOptions)
+        }
+    }
+
     @Test @MainActor func `explicit auth starts operator loop while stored auth is disabled`() throws {
         let stableID = "manual|gateway.example.com|443"
         let appModel = NodeAppModel()

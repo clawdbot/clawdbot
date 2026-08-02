@@ -320,6 +320,7 @@ extension SettingsProTab {
         // Only the root-selected Gateway destination may destructively claim a
         // setup link; other Settings views can remain mounted behind onboarding.
         self.showQRScanner = false
+        self.preserveExistingGatewayAccessForScan = false
         self.scannerResultHandoff.cancel()
         let lease = self.gatewayController.cancelPendingConnectionAttempts()
         self.pendingTargetSuppression.replace(owner: .setupLink, lease: lease)
@@ -366,7 +367,10 @@ extension SettingsProTab {
         return true
     }
 
-    func applyGatewayLink(_ link: GatewayConnectDeepLink) async {
+    func applyGatewayLink(
+        _ link: GatewayConnectDeepLink,
+        preservingExistingAccess requestedPreservation: Bool = false) async
+    {
         self.manualGatewayHost = link.host
         self.manualGatewayPort = link.port
         self.manualGatewayPortText = String(link.port)
@@ -374,13 +378,17 @@ extension SettingsProTab {
         let instanceId = GatewaySettingsStore.currentInstanceID()
         let setupAuth = GatewayConnectionController.ManualAuthOverride.setupAuth(from: link)
         self.gatewayCredentialFieldStableID = setupAuth.targetStableID
+        let preserveExistingAccess = requestedPreservation && setupAuth.hasBootstrapToken &&
+            self.hasStoredGatewayAccess(gatewayStableID: setupAuth.targetStableID)
+        self.preserveExistingGatewayAccessForScan = preserveExistingAccess
         if setupAuth.hasBootstrapToken {
             await GatewayOnboardingReset.prepareForBootstrapPairing(
                 appModel: self.appModel,
                 instanceId: instanceId,
-                gatewayStableID: setupAuth.targetStableID)
+                gatewayStableID: setupAuth.targetStableID,
+                preserveExistingAccess: preserveExistingAccess)
         }
-        if !instanceId.isEmpty {
+        if !instanceId.isEmpty, !preserveExistingAccess {
             GatewaySettingsStore.saveGatewayCredentials(
                 token: setupAuth.token,
                 bootstrapToken: setupAuth.bootstrapToken,
@@ -395,9 +403,14 @@ extension SettingsProTab {
     }
 
     func openGatewayQRScanner() {
+        self.openGatewayQRScanner(preservingExistingAccess: false)
+    }
+
+    func openGatewayQRScanner(preservingExistingAccess: Bool) {
         self.invalidateGatewaySetupAttempt()
         let lease = self.gatewayController.cancelPendingConnectionAttempts(suspendCurrentGateway: true)
         self.stagedGatewaySetupLink = nil
+        self.preserveExistingGatewayAccessForScan = preservingExistingAccess
         self.pendingTargetSuppression.replace(owner: .qrScanner, lease: lease)
         self.scannerScanID = self.scannerResultHandoff.beginScan()
         self.connectingGateway = nil
@@ -421,18 +434,23 @@ extension SettingsProTab {
             }
         }
         if delivery == nil {
+            self.preserveExistingGatewayAccessForScan = false
             self.pendingTargetSuppression.resumeAutoConnect(.qrScanner, controller: self.gatewayController)
         }
     }
 
     func handleScannedGatewayLink(_ link: GatewayConnectDeepLink) {
         self.showQRScanner = false
-        guard let attemptID = self.beginGatewaySetupAttempt() else { return }
+        guard let attemptID = self.beginGatewaySetupAttempt() else {
+            self.preserveExistingGatewayAccessForScan = false
+            return
+        }
         self.setupCode = ""
         Task { await self.connectAfterScannedGatewayLink(link, attemptID: attemptID) }
     }
 
     func handleScannedSetupCode(_ code: String) {
+        self.preserveExistingGatewayAccessForScan = false
         guard AppleReviewDemoMode.isSetupCode(code) else { return }
         self.showQRScanner = false
         self.setupCode = ""
@@ -455,12 +473,15 @@ extension SettingsProTab {
 
     func connectAfterScannedGatewayLink(_ parsedLink: GatewayConnectDeepLink, attemptID: UUID) async {
         defer {
+            self.preserveExistingGatewayAccessForScan = false
             self.finishGatewaySetupAttempt(attemptID)
             self.pendingTargetSuppression.resumeAutoConnect(.qrScanner, controller: self.gatewayController)
         }
         let link = await self.gatewayController.selectReachableSetupLink(parsedLink)
         guard self.setupAttemptID == attemptID else { return }
-        await self.applyGatewayLink(link)
+        await self.applyGatewayLink(
+            link,
+            preservingExistingAccess: self.preserveExistingGatewayAccessForScan)
         self.setupStatusText = String(
             format: String(localized: "QR loaded. Connecting to %@:%@..."),
             link.host,
@@ -508,7 +529,15 @@ extension SettingsProTab {
         let stableID = GatewayConnectionController.ManualAuthOverride.manualStableID(
             host: host,
             port: port)
+        let preservedSetupOverride = self.preserveExistingGatewayAccessForScan
+            ? self.pendingManualAuthOverride
+            : nil
         self.selectGatewayCredentialTarget(stableID, allowManualOverride: true)
+        if GatewayStableIdentifier.matches(preservedSetupOverride?.targetStableID, stableID) {
+            // Upgrade bootstrap credentials are intentionally memory-only so a crash or
+            // rejected handoff cannot replace the working Limited credential bundle.
+            self.pendingManualAuthOverride = preservedSetupOverride
+        }
         if GatewayStableIdentifier.matches(
             self.appModel.activeGatewayConnectConfig?.effectiveStableID,
             stableID),
@@ -530,7 +559,10 @@ extension SettingsProTab {
             password: fieldsMatchTarget ? self.gatewayPassword : nil,
             targetStableID: stableID)
         let instanceId = GatewaySettingsStore.currentInstanceID()
-        if !instanceId.isEmpty, fieldsMatchTarget || pendingOverride != nil {
+        if !instanceId.isEmpty,
+           !self.preserveExistingGatewayAccessForScan,
+           fieldsMatchTarget || pendingOverride != nil
+        {
             GatewaySettingsStore.saveGatewayCredentials(
                 token: authOverride?.token,
                 bootstrapToken: authOverride?.bootstrapToken,
@@ -547,6 +579,20 @@ extension SettingsProTab {
         // The controller now owns this attempt's immutable override. A later retry must reload
         // durable state so a spent bootstrap token cannot be resurrected from the live view.
         self.pendingManualAuthOverride = nil
+    }
+
+    private func hasStoredGatewayAccess(gatewayStableID: String) -> Bool {
+        guard let identity = DeviceIdentityStore.loadOrCreatePersisted() else { return false }
+        let authenticationOwnerID = GatewaySettingsStore.authenticationOwnerID(
+            routeStableID: gatewayStableID)
+        return DeviceAuthStore.loadToken(
+            deviceId: identity.deviceId,
+            role: "node",
+            gatewayID: authenticationOwnerID) != nil &&
+            DeviceAuthStore.loadToken(
+                deviceId: identity.deviceId,
+                role: "operator",
+                gatewayID: authenticationOwnerID) != nil
     }
 
     func preflightGateway(host: String) async -> Bool {
