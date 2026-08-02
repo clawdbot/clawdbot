@@ -300,6 +300,11 @@ describe("subagent registry seam flow", () => {
       cleanup: overrides.cleanup ?? "delete",
       agentId: "worker",
       reason: "ambiguous dispatch failure",
+      ...(overrides.attachmentsDir ? { attachmentsDir: overrides.attachmentsDir } : {}),
+      ...(overrides.attachmentsRootDir ? { attachmentsRootDir: overrides.attachmentsRootDir } : {}),
+      ...(overrides.retainAttachmentsOnKeep !== undefined
+        ? { retainAttachmentsOnKeep: overrides.retainAttachmentsOnKeep }
+        : {}),
     });
   const getLifecycleHandler = () => {
     const handler = mocks.onAgentEvent.mock.calls.at(-1)?.[0] as unknown as
@@ -432,6 +437,96 @@ describe("subagent registry seam flow", () => {
       expect.any(Map),
       childSessionKey,
     );
+  });
+
+  it("persists attachment ownership on failed-spawn quarantine rows", () => {
+    const attachmentsRootDir = path.join(os.tmpdir(), "openclaw-quarantine-root");
+    const attachmentsDir = path.join(attachmentsRootDir, "child-attachments");
+    expect(
+      quarantineFailedSpawn({
+        runId: "failed-spawn-attachments-run",
+        childSessionKey: "agent:worker:subagent:failed-spawn-attachments-child",
+        attachmentsDir,
+        attachmentsRootDir,
+        retainAttachmentsOnKeep: false,
+      }),
+    ).toBe("recorded");
+
+    expect(mod.getSubagentRunByRunId("failed-spawn-attachments-run")).toMatchObject({
+      attachmentsDir,
+      attachmentsRootDir,
+      retainAttachmentsOnKeep: false,
+      spawnFailureCleanup: { status: "pending" },
+    });
+  });
+
+  it("does not delete replacement-owned attachments when archiving reused-key quarantine", async () => {
+    const attachmentsRootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-quarantine-"));
+    const attachmentsDir = path.join(attachmentsRootDir, "child-attachments");
+    await fs.mkdir(attachmentsDir);
+    await fs.writeFile(path.join(attachmentsDir, "owned-by-replacement.txt"), "replacement");
+    try {
+      const childSessionKey = "agent:worker:subagent:failed-spawn-reused-attachments-child";
+      const runId = "failed-spawn-reused-attachments-run";
+      const sessionIdentity = {
+        expectedSessionId: "original-provisional-session",
+        expectedLifecycleRevision: "original-provisional-lifecycle",
+      };
+      mocks.loadSessionStore.mockReturnValue(
+        createSessionStore(
+          {
+            sessionId: "replacement-session",
+            lifecycleRevision: "replacement-lifecycle",
+            updatedAt: Date.now(),
+            status: "running",
+          },
+          childSessionKey,
+        ),
+      );
+      mockGatewayMethods(mocks.callGateway, {
+        "sessions.delete": new Error("must not delete replacement session"),
+      });
+
+      expect(
+        mod.quarantineFailedSubagentSpawn({
+          runId,
+          childSessionKey,
+          controllerSessionKey: "agent:main:main",
+          requesterSessionKey: "agent:main:main",
+          requesterDisplayKey: "main",
+          requesterAgentId: "main",
+          task: "failed spawn with reused attachment key",
+          cleanup: "delete",
+          agentId: "worker",
+          reason: "ambiguous dispatch failure",
+          sessionIdentity,
+          attachmentsDir,
+          attachmentsRootDir,
+        }),
+      ).toBe("recorded");
+
+      await mod.testing.sweepOnceForTests();
+      const replaced = expectDefined(mod.getSubagentRunByRunId(runId), "replaced quarantine run");
+      expect(replaced.spawnFailureCleanup).toMatchObject({ status: "replaced" });
+
+      vi.setSystemTime(replaced.archiveAtMs ?? Date.now());
+      await mod.testing.sweepOnceForTests();
+
+      expect(mod.getSubagentRunByRunId(runId)).toBeUndefined();
+      const replacementAttachment = await fs.stat(
+        path.join(attachmentsDir, "owned-by-replacement.txt"),
+      );
+      expect(replacementAttachment.isFile()).toBe(true);
+      expect(
+        mocks.callGateway.mock.calls.some(
+          ([request]) =>
+            request.method === "sessions.delete" &&
+            (request.params as { key?: string } | undefined)?.key === childSessionKey,
+        ),
+      ).toBe(false);
+    } finally {
+      await fs.rm(attachmentsRootDir, { recursive: true, force: true });
+    }
   });
 
   it("keeps exhausted failed-spawn cleanup quarantined and counted active", async () => {

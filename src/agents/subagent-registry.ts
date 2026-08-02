@@ -521,6 +521,9 @@ export function quarantineFailedSubagentSpawn(params: {
   spawnMode?: SubagentRunRecord["spawnMode"];
   reason: string;
   sessionIdentity?: ProvisionalSessionCleanupIdentity;
+  attachmentsDir?: string;
+  attachmentsRootDir?: string;
+  retainAttachmentsOnKeep?: boolean;
   createdAt?: number;
 }): "recorded" | "existing" {
   const runId = params.runId.trim();
@@ -567,6 +570,11 @@ export function quarantineFailedSubagentSpawn(params: {
       ? { runTimeoutSeconds: params.runTimeoutSeconds }
       : {}),
     ...(params.spawnMode ? { spawnMode: params.spawnMode } : {}),
+    ...(params.attachmentsDir ? { attachmentsDir: params.attachmentsDir } : {}),
+    ...(params.attachmentsRootDir ? { attachmentsRootDir: params.attachmentsRootDir } : {}),
+    ...(params.retainAttachmentsOnKeep !== undefined
+      ? { retainAttachmentsOnKeep: params.retainAttachmentsOnKeep }
+      : {}),
     createdAt,
     expectsCompletionMessage: false,
     execution: {

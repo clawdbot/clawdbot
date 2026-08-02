@@ -10,10 +10,12 @@ import {
   normalizeInheritedToolAllowlist,
   normalizeInheritedToolDenylist,
 } from "./inherited-tool-deny.js";
+import type { ProvisionalSessionCleanupIdentity } from "./subagent-spawn-cleanup-types.js";
 import { getSubagentSpawnDeps } from "./subagent-spawn-deps.js";
 import { splitModelRef } from "./subagent-spawn-plan.js";
 import {
   loadSessionEntry,
+  patchSessionEntry,
   resolveGatewaySessionStoreTarget,
   upsertSessionEntry,
 } from "./subagent-spawn.runtime.js";
@@ -39,6 +41,13 @@ function isReservedSubagentReplayMarker(value: unknown): value is ReservedSubage
   );
 }
 
+function reservedDirectSpawnInFlightKey(params: {
+  preallocatedRunId: string;
+  preallocatedChildSessionKey: string;
+}): string {
+  return JSON.stringify([params.preallocatedRunId, params.preallocatedChildSessionKey]);
+}
+
 export function claimReservedDirectSpawnInFlight(params: {
   preallocatedRunId?: string;
   preallocatedChildSessionKey?: string;
@@ -49,7 +58,10 @@ export function claimReservedDirectSpawnInFlight(params: {
   const globalRecord = globalThis as Record<PropertyKey, unknown>;
   const claims = (globalRecord[RESERVED_DIRECT_SPAWN_IN_FLIGHT_KEY] ??=
     new Set<string>()) as Set<string>;
-  const key = `${params.preallocatedRunId}\0${params.preallocatedChildSessionKey}`;
+  const key = reservedDirectSpawnInFlightKey({
+    preallocatedRunId: params.preallocatedRunId,
+    preallocatedChildSessionKey: params.preallocatedChildSessionKey,
+  });
   if (claims.has(key)) {
     throw new Error("reserved childSessionKey already exists");
   }
@@ -174,6 +186,60 @@ function buildDirectChildSessionPatch(patch: Record<string, unknown>): Partial<S
   return entry;
 }
 
+function isConfigOwnedModelOverride(entry: SessionEntry): boolean {
+  return entry.modelOverrideSource === undefined || entry.modelOverrideSource === "auto";
+}
+
+function refreshConfigOwnedModelReplayFields(
+  existing: SessionEntry,
+  modelPatch: Partial<SessionEntry>,
+): SessionEntry {
+  if (
+    modelPatch.modelOverrideSource !== "auto" ||
+    !isConfigOwnedModelOverride(existing) ||
+    !modelPatch.model
+  ) {
+    return existing;
+  }
+  const next: SessionEntry = {
+    ...existing,
+    model: modelPatch.model,
+    modelOverride: modelPatch.modelOverride,
+    modelOverrideSource: "auto",
+    modelOverrideRouteResolution: modelPatch.modelOverrideRouteResolution,
+  };
+  delete next.modelProvider;
+  delete next.providerOverride;
+  if (modelPatch.modelProvider) {
+    next.modelProvider = modelPatch.modelProvider;
+  }
+  if (modelPatch.providerOverride) {
+    next.providerOverride = modelPatch.providerOverride;
+  }
+  delete next.modelOverrideFallbackOriginProvider;
+  delete next.modelOverrideFallbackOriginModel;
+  if (modelPatch.modelOverrideFallbackOriginProvider) {
+    next.modelOverrideFallbackOriginProvider = modelPatch.modelOverrideFallbackOriginProvider;
+  }
+  if (modelPatch.modelOverrideFallbackOriginModel) {
+    next.modelOverrideFallbackOriginModel = modelPatch.modelOverrideFallbackOriginModel;
+  }
+  return next;
+}
+
+function provisionalSessionIdentityMatches(
+  entry: SessionEntry,
+  identity?: ProvisionalSessionCleanupIdentity,
+): boolean {
+  return (
+    (identity?.expectedSessionId === undefined || entry.sessionId === identity.expectedSessionId) &&
+    (identity?.expectedLifecycleRevision === undefined ||
+      entry.lifecycleRevision === identity.expectedLifecycleRevision) &&
+    (identity?.expectedSessionUpdatedAt === undefined ||
+      entry.updatedAt === identity.expectedSessionUpdatedAt)
+  );
+}
+
 export function loadSubagentConfig() {
   return getSubagentSpawnDeps().getRuntimeConfig();
 }
@@ -247,6 +313,7 @@ export async function createInitialSubagentSession(params: {
         actor: { type: "agent", id: params.requesterInternalKey },
       }),
     };
+    const modelPatch = buildDirectChildSessionPatch(params.modelPatch);
     const createEntry = async () =>
       await upsertSessionEntry(
         {
@@ -281,7 +348,16 @@ export async function createInitialSubagentSession(params: {
                 existing.spawnedBy === params.requesterInternalKey &&
                 existing.parentSessionKey === params.requesterInternalKey;
               if (exactReplay) {
-                return existing;
+                const refreshed = refreshConfigOwnedModelReplayFields(existing, modelPatch);
+                return refreshed === existing
+                  ? existing
+                  : await upsertSessionEntry(
+                      {
+                        storePath: target.storePath,
+                        sessionKey: target.canonicalKey,
+                      },
+                      refreshed,
+                    );
               }
               throw new Error("reserved childSessionKey already exists");
             }
@@ -300,6 +376,7 @@ export async function persistInitialChildSessionRuntimeModel(params: {
   cfg: OpenClawConfig;
   childSessionKey: string;
   resolvedModel?: string;
+  expectedIdentity?: ProvisionalSessionCleanupIdentity;
 }): Promise<string | undefined> {
   const { provider, model } = splitModelRef(params.resolvedModel);
   if (!model) {
@@ -310,16 +387,29 @@ export async function persistInitialChildSessionRuntimeModel(params: {
       cfg: params.cfg,
       key: params.childSessionKey,
     });
-    await upsertSessionEntry(
+    const patched = await patchSessionEntry(
       {
         storePath: target.storePath,
         sessionKey: target.canonicalKey,
       },
+      (entry) => {
+        if (!provisionalSessionIdentityMatches(entry, params.expectedIdentity)) {
+          throw new Error("child session identity changed before runtime model patch");
+        }
+        return {
+          ...entry,
+          model,
+          ...(provider ? { modelProvider: provider } : {}),
+        };
+      },
       {
-        model,
-        ...(provider ? { modelProvider: provider } : {}),
+        requireWriteSuccess: true,
+        replaceEntry: true,
       },
     );
+    if (!patched) {
+      return "child session identity changed before runtime model patch";
+    }
     return undefined;
   } catch (err) {
     return err instanceof Error ? err.message : typeof err === "string" ? err : "error";

@@ -635,6 +635,22 @@ describe("plugin registry runtime config scope", () => {
       }),
     ).rejects.toThrow("pluginOwnerId is immutable");
     await expect(
+      ownerApi.runtime.agent.session.patchSessionEntry({
+        sessionKey: ordinaryKey,
+        update: () => ({ agentHarnessId: "codex", modelSelectionLocked: true }),
+      }),
+    ).rejects.toThrow("agent harness ownership is immutable");
+    await expect(
+      ownerApi.runtime.agent.session.upsertSessionEntry({
+        sessionKey: ordinaryKey,
+        entry: {
+          ...ordinaryEntry,
+          agentHarnessId: "codex",
+          modelSelectionLocked: true,
+        },
+      }),
+    ).rejects.toThrow("agent harness ownership is immutable");
+    await expect(
       ownerApi.runtime.agent.session.upsertSessionEntry({
         sessionKey: "agent:main:plugin-owned-through-upsert",
         entry: {
@@ -831,7 +847,7 @@ describe("plugin registry runtime config scope", () => {
         sessionKey: legacyPrefixedKey,
         update: () => ({ agentHarnessId: "codex", modelSelectionLocked: true }),
       }),
-    ).rejects.toThrow("does not match its reserved session key");
+    ).rejects.toThrow("agent harness ownership is immutable");
     await expect(
       otherApi.runtime.agent.session.upsertSessionEntry({
         sessionKey: legacyPrefixedKey,
@@ -847,7 +863,7 @@ describe("plugin registry runtime config scope", () => {
           modelSelectionLocked: true,
         },
       }),
-    ).rejects.toThrow("does not match its reserved session key");
+    ).rejects.toThrow("agent harness ownership is immutable");
     await expect(
       otherApi.runtime.agent.session.runWithWorkAdmission(
         { storePath: "/tmp/sessions.json", sessionKey: legacyPrefixedKey },

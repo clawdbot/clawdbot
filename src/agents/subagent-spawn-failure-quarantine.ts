@@ -244,6 +244,9 @@ function recordIndeterminateFailedSubagentSpawn(
     spawnMode: SpawnSubagentMode;
     reason: string;
     sessionIdentity?: ProvisionalSessionCleanupIdentity | undefined;
+    attachmentsDir?: string | undefined;
+    attachmentsRootDir?: string | undefined;
+    retainAttachmentsOnKeep?: boolean | undefined;
     createdAt?: number | undefined;
   },
 ): boolean {
@@ -285,6 +288,9 @@ export function recordSpawnPipelineIndeterminateFailedSubagentSpawn(
     spawnMode: SpawnSubagentMode;
     reason: string;
     sessionIdentity?: ProvisionalSessionCleanupIdentity;
+    attachmentsDir?: string;
+    attachmentsRootDir?: string;
+    retainAttachmentsOnKeep?: boolean;
     createdAt?: number;
   },
 ): boolean {
@@ -309,6 +315,11 @@ export function recordSpawnPipelineIndeterminateFailedSubagentSpawn(
     spawnMode: params.spawnMode,
     reason: params.reason,
     ...(params.sessionIdentity ? { sessionIdentity: params.sessionIdentity } : {}),
+    ...(params.attachmentsDir ? { attachmentsDir: params.attachmentsDir } : {}),
+    ...(params.attachmentsRootDir ? { attachmentsRootDir: params.attachmentsRootDir } : {}),
+    ...(params.retainAttachmentsOnKeep !== undefined
+      ? { retainAttachmentsOnKeep: params.retainAttachmentsOnKeep }
+      : {}),
     ...(params.createdAt !== undefined ? { createdAt: params.createdAt } : {}),
   });
 }

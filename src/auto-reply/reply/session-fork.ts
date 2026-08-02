@@ -72,6 +72,9 @@ type ForkSessionEntryFromParentParams = Omit<ForkSessionFromParentParams, "paren
   sessionKey: string;
   sessionStoreKeys?: readonly string[];
   storePath?: string;
+  expectedSessionId?: string;
+  expectedLifecycleRevision?: string;
+  expectedUpdatedAt?: number;
   fallbackEntry?: SessionEntry;
   patch?: (params: {
     entry: SessionEntry;
@@ -164,6 +167,13 @@ export async function forkSessionEntryFromParent(
       canonicalKey: params.sessionKey,
       storeKeys: params.sessionStoreKeys,
     }),
+    ...(params.expectedSessionId ? { expectedSessionId: params.expectedSessionId } : {}),
+    ...(params.expectedLifecycleRevision
+      ? { expectedLifecycleRevision: params.expectedLifecycleRevision }
+      : {}),
+    ...(typeof params.expectedUpdatedAt === "number"
+      ? { expectedUpdatedAt: params.expectedUpdatedAt }
+      : {}),
     skipForkWhen: params.skipForkWhen,
     skipPatch: params.skipPatch,
     storePath,

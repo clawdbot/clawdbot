@@ -13,6 +13,7 @@ import {
 } from "../agents/subagent-spawn-cleanup.js";
 import type { SpawnSubagentResult } from "../agents/subagent-spawn-contract.js";
 import { resolveSubagentTargetPolicy } from "../agents/subagent-target-policy.js";
+import { normalizeSubagentTaskName } from "../agents/subagent-task-name.js";
 import { getAgentRunContext } from "../infra/agent-events.js";
 import { isFastTestRuntimeEnv } from "../infra/env.js";
 import {
@@ -55,7 +56,7 @@ function reservedSubagentCleanupHolderKey(params: {
   runId: string;
   childSessionKey: string;
 }): string {
-  return `${params.runId}\0${params.childSessionKey}`;
+  return JSON.stringify([params.runId, params.childSessionKey]);
 }
 
 function retainReservedSubagentCleanupHolder(params: {
@@ -216,6 +217,14 @@ function assertReservedSubagentOptions(params: {
   if (params.lightContext !== undefined && typeof params.lightContext !== "boolean") {
     throw new Error("spawnReserved lightContext must be a boolean.");
   }
+}
+
+function normalizeReservedSubagentTaskName(value: unknown): string | undefined {
+  const result = normalizeSubagentTaskName(value);
+  if (result.error) {
+    throw new Error(`spawnReserved ${result.error}`);
+  }
+  return result.taskName;
 }
 
 function throwIfReservedSpawnAborted(signal: AbortSignal): void {
@@ -450,6 +459,10 @@ export const spawnReservedSubagent: PluginRuntime["subagent"]["spawnReserved"] =
   if (parseExecApprovalFollowupApprovalId(runId)) {
     throw new Error("spawnReserved runId uses a backend-reserved namespace.");
   }
+  if (runId.startsWith("chat:") || runId.startsWith("agent:")) {
+    throw new Error("spawnReserved runId uses a backend-reserved namespace.");
+  }
+  const taskName = normalizeReservedSubagentTaskName(params.taskName);
   assertReservedSubagentTaskWithinLimit(params.task);
   assertReservedSubagentLabelWithinLimit(params.label);
   if (!task) {
@@ -486,6 +499,7 @@ export const spawnReservedSubagent: PluginRuntime["subagent"]["spawnReserved"] =
         childSessionKey,
         runId,
         task,
+        taskName,
         gatewayContext,
         requesterSessionId: admittedRequester.requesterSessionId,
         signal,
@@ -502,6 +516,7 @@ async function spawnReservedSubagentWithRequesterAdmission(params: {
   childSessionKey: string;
   runId: string;
   task: string;
+  taskName?: string;
   gatewayContext: GatewayRequestContext;
   requesterSessionId?: string;
   signal: AbortSignal;
@@ -515,7 +530,7 @@ async function spawnReservedSubagentWithRequesterAdmission(params: {
     runId: params.runId,
     childSessionKey: params.childSessionKey,
     task: params.task,
-    ...(reservationParams.taskName !== undefined ? { taskName: reservationParams.taskName } : {}),
+    ...(params.taskName !== undefined ? { taskName: params.taskName } : {}),
     ...(reservationParams.label !== undefined ? { label: reservationParams.label } : {}),
     ...(reservationParams.cleanup !== undefined ? { cleanup: reservationParams.cleanup } : {}),
     ...(reservationParams.context !== undefined ? { context: reservationParams.context } : {}),
@@ -544,9 +559,7 @@ async function spawnReservedSubagentWithRequesterAdmission(params: {
       {
         task: params.task,
         agentId: params.targetAgentId,
-        ...(reservationParams.taskName !== undefined
-          ? { taskName: reservationParams.taskName }
-          : {}),
+        ...(params.taskName !== undefined ? { taskName: params.taskName } : {}),
         ...(reservationParams.label !== undefined ? { label: reservationParams.label } : {}),
         mode: "run",
         ...(reservationParams.cleanup !== undefined ? { cleanup: reservationParams.cleanup } : {}),

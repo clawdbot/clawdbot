@@ -241,6 +241,12 @@ describe("terminal ansi helpers", () => {
     expect(visibleWidth("🇬\u0001🇧")).toBe(2);
   });
 
+  it("preserves default-ignorable shaping boundaries while measuring graphemes", () => {
+    expect(visibleWidth("❤\u200B\uFE0F")).toBe(1);
+    expect(visibleWidth("❤\u200C\u200D🔥")).toBe(3);
+    expect(visibleWidth("🇬\u200B🇧")).toBe(2);
+  });
+
   it("keeps malformed ANSI ownership with OpenClaw's canonical scanner", () => {
     expect(visibleWidth("\u001B")).toBe(0);
     expect(visibleWidth("\u009B")).toBe(0);
@@ -330,7 +336,7 @@ describe("terminal ansi helpers", () => {
     expect(visibleWidth(truncateToVisibleWidth(`a${sequence}B`, 1))).toBe(1);
 
     const reset = truncateToVisibleWidth("\x1b[31mA\x1b[0\tmB", 1);
-    expect(reset).toBe("\x1b[31mA");
+    expect(reset).toBe("\x1b[31mA\x1b[0m");
     expect(visibleWidth(reset)).toBe(1);
   });
 

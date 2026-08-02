@@ -72,16 +72,28 @@ function isZeroWidthDefaultIgnorable(code: number): boolean {
   );
 }
 
-function removeZeroWidthDefaultIgnorables(input: string): string {
-  let output = "";
+function widthAcrossDefaultIgnorableBoundaries(input: string): number {
+  let width = 0;
+  let chunk = "";
+  const flush = (): void => {
+    if (chunk) {
+      width += stringWidth(chunk);
+      chunk = "";
+    }
+  };
   for (const char of input) {
     const code = char.codePointAt(0);
-    if (code === undefined || isZeroWidthDefaultIgnorable(code)) {
+    if (code === undefined) {
       continue;
     }
-    output += char;
+    if (isZeroWidthDefaultIgnorable(code)) {
+      flush();
+      continue;
+    }
+    chunk += char;
   }
-  return output;
+  flush();
+  return width;
 }
 
 /**
@@ -236,8 +248,7 @@ function printableTextWidth(text: string): number {
     .replace(/([0-9#*])\uFE0F(?!\u20E3)/gu, "$1")
     .replace(/\u200D$/gu, "")
     .replace(REGIONAL_INDICATOR_REGEX, "a");
-  const normalizedWidthInput = removeZeroWidthDefaultIgnorables(widthInput);
-  return stringWidth(normalizedWidthInput);
+  return widthAcrossDefaultIgnorableBoundaries(widthInput);
 }
 
 function textWidth(text: string): number {
@@ -290,6 +301,30 @@ export function truncateToVisibleWidth(input: string, maxWidth: number): string 
   // copying zero-width ANSI sequences, so trailing resets/link-closes still
   // land without letting embedded executable controls exceed the budget.
   let budgetSpent = false;
+  const resetSgrWithoutWidthControls = (value: string): string | undefined => {
+    const introducerLength =
+      value.charCodeAt(0) === 0x9b
+        ? 1
+        : value.charCodeAt(0) === 0x1b && value.charCodeAt(1) === 0x5b
+          ? 2
+          : 0;
+    if (introducerLength === 0 || value.charAt(value.length - 1) !== "m") {
+      return undefined;
+    }
+    let body = "";
+    for (let index = introducerLength; index < value.length - 1; index += 1) {
+      const code = value.charCodeAt(index);
+      if (code <= 0x1f || code === 0x7f) {
+        continue;
+      }
+      body += value.charAt(index);
+    }
+    const params = body.replace(/[ -/]+$/u, "");
+    const resets =
+      params === "" ||
+      params.split(/[;:]/u).some((part) => part === "" || Number.parseInt(part, 10) === 0);
+    return resets ? `${value.slice(0, introducerLength)}${body}m` : undefined;
+  };
   const appendVisible = (segment: string): void => {
     if (budgetSpent) {
       return;
@@ -381,6 +416,10 @@ export function truncateToVisibleWidth(input: string, maxWidth: number): string 
         out += segment.value;
         used += controlWidth;
       } else if (controlWidth > 0) {
+        const reset = resetSgrWithoutWidthControls(segment.value);
+        if (reset) {
+          out += reset;
+        }
         budgetSpent = true;
       } else {
         out += segment.value;

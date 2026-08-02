@@ -17,6 +17,7 @@ import {
 } from "./subagent-registry-queries.js";
 import { markRequesterTurnYieldedInRuns } from "./subagent-registry-requester-yield.js";
 import type { SubagentRunRecord, SwarmStructuredOutputState } from "./subagent-registry.types.js";
+import { releaseSwarmRun } from "./swarm-scheduler.js";
 
 export function createSubagentRegistryPublicApi(config: {
   runs: Map<string, SubagentRunRecord>;
@@ -135,10 +136,12 @@ export function createSubagentRegistryPublicApi(config: {
     if (!entry?.collectorLaunchCleanupPending) {
       return;
     }
+    const schedulerSlotId = entry.schedulerSlotId ?? entry.runId;
     entry.collectorLaunchCleanupPending = false;
     entry.cleanupCompletedAt = Date.now();
     entry.contextEngineCleanupCompletedAt ??= entry.cleanupCompletedAt;
     persist(entry.runId);
+    releaseSwarmRun(schedulerSlotId);
   }
 
   function recordSwarmStructuredOutput(

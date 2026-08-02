@@ -191,20 +191,16 @@ export async function spawnSubagentDirect(
       incognito,
       requesterInternalKey,
       completionOwnerSessionKey: ownership.completionRequesterSessionKey,
-      ...(ctx.pluginOwnerId ? { pluginOwnerId: ctx.pluginOwnerId } : {}),
+      pluginOwnerId: ctx.pluginOwnerId,
       spawnedWorkspaceDir,
       spawnedCwd,
       admissionPatch: admission.childSessionPatch,
       inheritedToolAllowlist: ctx.inheritedToolAllowlist,
       inheritedToolDenylist: ctx.inheritedToolDenylist,
       modelPatch: plan.initialSessionPatch,
-      ...(ctx.preallocatedRunId ? { reservedSubagentRunId: ctx.preallocatedRunId } : {}),
-      ...(ctx.requesterSessionId
-        ? { reservedSubagentRequesterSessionId: ctx.requesterSessionId }
-        : {}),
-      ...(ctx.reservedSubagentClaimToken
-        ? { reservedSubagentClaimToken: ctx.reservedSubagentClaimToken }
-        : {}),
+      reservedSubagentRunId: ctx.preallocatedRunId,
+      reservedSubagentRequesterSessionId: ctx.requesterSessionId,
+      reservedSubagentClaimToken: ctx.reservedSubagentClaimToken,
       swarmGroupId,
       collect: params.collect === true,
       outputSchema: params.outputSchema,
@@ -223,7 +219,7 @@ export async function spawnSubagentDirect(
     ) => {
       const cleanupResult = await cleanupFailedSpawnBeforeAgentStart({
         childSessionKey,
-        ...(options?.attachmentAbsDir ? { attachmentAbsDir: options.attachmentAbsDir } : {}),
+        attachmentAbsDir: options?.attachmentAbsDir,
         emitLifecycleHooks: options?.emitLifecycleHooks,
         deleteTranscript: options?.deleteTranscript,
         ...cleanupIdentityOption(provisionalSessionCleanupIdentity),
@@ -245,6 +241,7 @@ export async function spawnSubagentDirect(
       targetAgentId,
       requesterInternalKey,
       childSessionKey,
+      expectedChildIdentity: provisionalSessionCleanupIdentity,
     });
     provisionalSessionCleanupIdentity = refreshProvisionalSessionCleanupIdentity(
       provisionalSessionCleanupIdentity,
@@ -266,6 +263,7 @@ export async function spawnSubagentDirect(
         cfg,
         childSessionKey,
         resolvedModel,
+        expectedIdentity: provisionalSessionCleanupIdentity,
       });
       if (runtimeModelPersistError) {
         await cleanupProvisionedSessionForFailedSpawn({
@@ -611,6 +609,9 @@ export async function spawnSubagentDirect(
           spawnMode,
           reason: failure.summary,
           sessionIdentity: provisionalSessionCleanupIdentity,
+          attachmentsDir: attachmentAbsDir,
+          attachmentsRootDir: attachmentRootDir,
+          retainAttachmentsOnKeep: retainOnSessionKeep,
           createdAt: provisionalSessionCreatedAt,
         });
       return withReservedCleanupResult({
@@ -649,12 +650,11 @@ export async function spawnSubagentDirect(
         onStartFailure: async (error) => {
           return await handleCollectorLaunchStartFailure({
             error,
-            ...(pipelineResult.state.contextEnginePreparation
-              ? { contextEnginePreparation: pipelineResult.state.contextEnginePreparation }
-              : {}),
+            contextEnginePreparation: pipelineResult.state.contextEnginePreparation,
             childSessionKey,
             childRunId,
-            ...(attachmentAbsDir ? { attachmentAbsDir } : {}),
+            attachmentAbsDir,
+            sessionIdentity: provisionalSessionCleanupIdentity,
             threadBindingReady,
             launchTerminationConfirmed,
             requesterInternalKey,
@@ -666,15 +666,12 @@ export async function spawnSubagentDirect(
     } else {
       await emitSpawnLifecycleHooks(childRunId);
     }
-
-    // Emit lifecycle event so the gateway can broadcast sessions.changed to SSE subscribers.
     emitSessionLifecycleEvent({
       sessionKey: childSessionKey,
       reason: "create",
       parentSessionKey: requesterInternalKey,
       label: label || undefined,
     });
-
     const acceptedNote = resolveSubagentSpawnAcceptedNote({
       spawnMode,
       agentSessionKey: ctx.agentSessionKey,
@@ -703,11 +700,8 @@ export async function spawnSubagentDirect(
     }
   }
 }
-
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.subagentSpawnTestApi")] = {
-    setDepsForTest(overrides?: Parameters<typeof setSubagentSpawnDepsForTest>[0]) {
-      setSubagentSpawnDepsForTest(overrides);
-    },
+    setDepsForTest: setSubagentSpawnDepsForTest,
   };
 }

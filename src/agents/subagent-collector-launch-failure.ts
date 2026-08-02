@@ -7,9 +7,11 @@ import {
   completeCollectorLaunchCleanup,
   settleFailedQueuedSubagentLaunch,
 } from "./subagent-registry.js";
+import type { ProvisionalSessionCleanupIdentity } from "./subagent-spawn-cleanup-types.js";
 import { cleanupFailedSpawnBeforeAgentStart } from "./subagent-spawn-cleanup.js";
 import { rollbackPreparedContextEngine } from "./subagent-spawn-context.js";
 import { emitSessionLifecycleEvent } from "./subagent-spawn.runtime.js";
+import type { SwarmStartFailureDisposition } from "./swarm-scheduler.js";
 
 const log = createSubsystemLogger("agents/subagent-collector-launch-failure");
 const COLLECTOR_LAUNCH_SETTLEMENT_MAX_ATTEMPTS = isFastTestRuntimeEnv() ? 3 : 30;
@@ -20,12 +22,13 @@ export async function handleCollectorLaunchStartFailure(params: {
   childSessionKey: string;
   childRunId: string;
   attachmentAbsDir?: string;
+  sessionIdentity?: ProvisionalSessionCleanupIdentity;
   threadBindingReady: boolean;
   launchTerminationConfirmed: boolean;
   requesterInternalKey: string;
-}): Promise<boolean> {
+}): Promise<SwarmStartFailureDisposition> {
   if (params.error instanceof GatewayDrainingError) {
-    return false;
+    return "retry";
   }
   const launchError = summarizeSpawnError(params.error);
   const [contextRollback, sessionCleanup] = await Promise.allSettled([
@@ -33,6 +36,7 @@ export async function handleCollectorLaunchStartFailure(params: {
     cleanupFailedSpawnBeforeAgentStart({
       childSessionKey: params.childSessionKey,
       ...(params.attachmentAbsDir ? { attachmentAbsDir: params.attachmentAbsDir } : {}),
+      ...(params.sessionIdentity ? { expectedIdentity: params.sessionIdentity } : {}),
       emitLifecycleHooks: params.threadBindingReady,
       deleteTranscript: true,
       waitForSessionDeletion: !params.launchTerminationConfirmed,
@@ -80,6 +84,10 @@ export async function handleCollectorLaunchStartFailure(params: {
       parentSessionKey: params.requesterInternalKey,
     });
     completeCollectorLaunchCleanup(params.childRunId);
+    return "release";
   }
-  return settledLaunch;
+  if (settledLaunch && params.launchTerminationConfirmed) {
+    return "release";
+  }
+  return "hold";
 }

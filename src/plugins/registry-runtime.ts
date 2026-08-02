@@ -457,6 +457,27 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
           `Plugin "${pluginId}" cannot ${params.action} session "${params.sessionKey}" because pluginOwnerId is immutable through runtime session mutations.`,
         );
       }
+      if (params.before) {
+        const beforeHarnessId = normalizeOptionalAgentRuntimeId(params.before.agentHarnessId);
+        const nextHarnessId = normalizeOptionalAgentRuntimeId(params.entry.agentHarnessId);
+        if (
+          params.before.modelSelectionLocked !== true &&
+          (params.entry.modelSelectionLocked === true ||
+            (nextHarnessId !== undefined && nextHarnessId !== beforeHarnessId))
+        ) {
+          throw new Error(
+            `Plugin "${pluginId}" cannot ${params.action} session "${params.sessionKey}" because agent harness ownership is immutable through runtime session mutations.`,
+          );
+        }
+        if (
+          params.before.modelSelectionLocked === true &&
+          (params.entry.modelSelectionLocked !== true || nextHarnessId !== beforeHarnessId)
+        ) {
+          throw new Error(
+            `Plugin "${pluginId}" cannot ${params.action} session "${params.sessionKey}" because agent harness ownership is immutable through runtime session mutations.`,
+          );
+        }
+      }
       if (params.entry.modelSelectionLocked === true) {
         assertLockedSessionEntryOwned(params.sessionKey, params.entry, params.action);
         return;

@@ -307,16 +307,16 @@ describe("spawnSubagentDirect seam flow", () => {
     hoisted.configOverride = createConfigOverride();
     hoisted.hookRunner = null;
     installAcceptedSubagentGatewayMock(hoisted.callGatewayMock);
-    hoisted.loadSessionStoreMock.mockReturnValue({});
+    const sessionStore: Record<string, Record<string, unknown>> = {};
+    hoisted.loadSessionStoreMock.mockReturnValue(sessionStore);
 
     hoisted.updateSessionStoreMock.mockImplementation(
       async (
         _storePath: string,
         mutator: (store: Record<string, Record<string, unknown>>) => unknown,
       ) => {
-        const store: Record<string, Record<string, unknown>> = {};
-        await mutator(store);
-        return store;
+        await mutator(sessionStore);
+        return sessionStore;
       },
     );
   });
@@ -413,7 +413,10 @@ describe("spawnSubagentDirect seam flow", () => {
   it("keeps reserved target authorization inside the configured allowlist", async () => {
     hoisted.configOverride = createConfigOverride({
       agents: {
-        defaults: { workspace: os.tmpdir(), subagents: { allowAgents: ["worker"] } },
+        defaults: {
+          workspace: os.tmpdir(),
+          subagents: { allowAgents: ["worker"] },
+        },
         list: [
           {
             id: "main",
@@ -1194,6 +1197,14 @@ describe("spawnSubagentDirect seam flow", () => {
       pluginOwnerId: "agentic-os",
       spawnedBy: "agent:main:main",
       parentSessionKey: "agent:main:main",
+      model: "stale-model",
+      modelProvider: "stale-provider",
+      modelOverride: "stale-model",
+      providerOverride: "stale-provider",
+      modelOverrideSource: "auto",
+      modelOverrideRouteResolution: "resolved",
+      modelOverrideFallbackOriginProvider: "stale-provider",
+      modelOverrideFallbackOriginModel: "stale-model",
       pluginExtensions: {
         "agentic-os": {
           openclawReservedSubagent: {
@@ -1209,7 +1220,10 @@ describe("spawnSubagentDirect seam flow", () => {
     };
     hoisted.configOverride = createConfigOverride({
       agents: {
-        defaults: { workspace: os.tmpdir(), subagents: { allowAgents: ["worker"] } },
+        defaults: {
+          workspace: os.tmpdir(),
+          subagents: { allowAgents: ["worker"], model: "openai/gpt-5.4" },
+        },
         list: [
           { id: "main", workspace: "/tmp/workspace-main" },
           { id: "worker", workspace: "/tmp/workspace-worker" },
@@ -1252,6 +1266,14 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(store[childSessionKey]).toMatchObject({
       ...existingEntry,
       pluginExtensions: existingEntry.pluginExtensions,
+      model: "gpt-5.4",
+      modelProvider: "openai",
+      modelOverride: "gpt-5.4",
+      providerOverride: "openai",
+      modelOverrideSource: "auto",
+      modelOverrideRouteResolution: "resolved",
+      modelOverrideFallbackOriginProvider: "openai",
+      modelOverrideFallbackOriginModel: "gpt-5.4",
     });
     expect(
       hoisted.dispatchGatewayMethodInProcessMock.mock.calls.filter(
@@ -1635,13 +1657,13 @@ describe("spawnSubagentDirect seam flow", () => {
     const requesterSessionKey = "agent:main:dashboard:incognito-parent";
     const sessionPatches: Record<string, unknown>[] = [];
     const sessionStorePaths: string[] = [];
+    const store: Record<string, Record<string, unknown>> = {};
     hoisted.updateSessionStoreMock.mockImplementation(
       async (
         storePath: string,
         mutator: (store: Record<string, Record<string, unknown>>) => unknown,
       ) => {
         sessionStorePaths.push(storePath);
-        const store: Record<string, Record<string, unknown>> = {};
         await mutator(store);
         sessionPatches.push(...Object.values(store));
         return store;
@@ -1664,12 +1686,12 @@ describe("spawnSubagentDirect seam flow", () => {
   it("defaults collector group id from requester session and requesting run", async () => {
     hoisted.configOverride = createConfigOverride({ tools: { swarm: true } });
     const sessionPatches: Record<string, unknown>[] = [];
+    const store: Record<string, Record<string, unknown>> = {};
     hoisted.updateSessionStoreMock.mockImplementation(
       async (
         _storePath: string,
         mutator: (store: Record<string, Record<string, unknown>>) => unknown,
       ) => {
-        const store: Record<string, Record<string, unknown>> = {};
         await mutator(store);
         sessionPatches.push(...Object.values(store));
         return store;
@@ -1993,7 +2015,7 @@ describe("spawnSubagentDirect seam flow", () => {
     });
 
     await vi.advanceTimersByTimeAsync(10);
-    await expect(settled).resolves.toBe(false);
+    await expect(settled).resolves.toBe("hold");
     expect(hoisted.settleFailedQueuedSubagentLaunchMock).toHaveBeenCalledTimes(3);
     expect(hoisted.completeCollectorLaunchCleanupMock).not.toHaveBeenCalled();
     expect(hoisted.emitSessionLifecycleEventMock).not.toHaveBeenCalledWith(

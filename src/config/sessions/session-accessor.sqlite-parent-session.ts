@@ -53,6 +53,31 @@ import { mergeSessionEntry, resolveFreshSessionTotalTokens } from "./types.js";
 
 // Parent-session fork owner: decision, transcript copy, and child entry commit.
 
+function hasExpectedChildForkIdentity(params: ForkSessionEntryFromParentTargetParams): boolean {
+  return (
+    params.expectedSessionId !== undefined ||
+    params.expectedLifecycleRevision !== undefined ||
+    params.expectedUpdatedAt !== undefined
+  );
+}
+
+function assertExpectedChildForkIdentity(
+  entry: SessionEntry,
+  params: ForkSessionEntryFromParentTargetParams,
+): void {
+  if (!hasExpectedChildForkIdentity(params)) {
+    return;
+  }
+  if (
+    (params.expectedSessionId !== undefined && entry.sessionId !== params.expectedSessionId) ||
+    (params.expectedLifecycleRevision !== undefined &&
+      entry.lifecycleRevision !== params.expectedLifecycleRevision) ||
+    (params.expectedUpdatedAt !== undefined && entry.updatedAt !== params.expectedUpdatedAt)
+  ) {
+    throw new Error("child session identity changed while preparing forked context");
+  }
+}
+
 export async function forkSqliteSessionTranscriptFromParent(
   params: ForkSessionFromParentTranscriptParams,
 ): Promise<ForkSessionFromParentTranscriptResult> {
@@ -202,6 +227,7 @@ export async function forkSqliteSessionEntryFromParentTarget(
         result = { status: "missing-entry" };
         return;
       }
+      assertExpectedChildForkIdentity(freshBase, params);
       const fork = forkSqliteParentTranscriptInTransaction(writeDatabase, resolved, {
         parentEntry: freshParent,
         parentSessionKey: parentTarget.canonicalKey,
@@ -275,19 +301,27 @@ async function persistSqliteParentForkSkipPatch(params: {
   if (!params.patch) {
     return cloneSessionEntry(params.entry);
   }
-  const merged = mergeSessionEntry(params.entry, params.patch);
-  const next = preserveSqliteSameKeySessionRolloverLineage({
-    next: merged,
-    previous: params.entry,
-    sessionKey: params.sessionTarget.canonicalKey,
-  });
+  const patch = params.patch;
   const maintenancePlans: SqliteSessionEntryMaintenancePlan[] = [];
   let previousIdentity = new Map<string, SessionEntry>();
   let currentIdentity = new Map<string, SessionEntry>();
+  let next: SessionEntry = params.entry;
   runOpenClawAgentWriteTransaction((database) => {
+    const fresh = resolveSqliteLifecyclePrimaryEntry(database, params.sessionTarget);
+    const freshEntry = fresh?.entry ?? params.params.fallbackEntry;
+    if (!freshEntry) {
+      throw new Error("child session disappeared while preparing forked context");
+    }
+    assertExpectedChildForkIdentity(freshEntry, params.params);
+    const merged = mergeSessionEntry(freshEntry, patch);
+    next = preserveSqliteSameKeySessionRolloverLineage({
+      next: merged,
+      previous: freshEntry,
+      sessionKey: params.sessionTarget.canonicalKey,
+    });
     previousIdentity = readSqliteSessionIdentitySnapshot(database, params.sessionTarget.storeKeys);
     writeSessionEntry(database, params.sessionTarget.canonicalKey, next, {
-      previousEntry: params.entry,
+      previousEntry: freshEntry,
     });
     rehomeSqliteSessionWindows(
       database,
@@ -298,7 +332,7 @@ async function persistSqliteParentForkSkipPatch(params: {
       database,
       params.sessionTarget.storeKeys,
       params.sessionTarget.canonicalKey,
-      { rehomeMembers: params.entry.sessionId === next.sessionId },
+      { rehomeMembers: freshEntry.sessionId === next.sessionId },
     );
     maintenancePlans.push(
       applySqliteSessionEntryMaintenance(database, {

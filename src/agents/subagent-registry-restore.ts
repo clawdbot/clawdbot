@@ -18,7 +18,7 @@ import {
   type SubagentSessionStoreCache,
 } from "./subagent-session-reconciliation.js";
 import { resolveSwarmConfig } from "./swarm-config.js";
-import { enqueueSwarmRun } from "./swarm-scheduler.js";
+import { enqueueSwarmRun, type SwarmStartFailureDisposition } from "./swarm-scheduler.js";
 
 export function createSubagentRegistryRestorer(config: {
   runs: Map<string, SubagentRunRecord>;
@@ -189,9 +189,11 @@ export function createSubagentRegistryRestorer(config: {
                 }
               });
             },
-            onStartFailure: (error) => {
+            onStartFailure: (
+              error,
+            ): SwarmStartFailureDisposition | Promise<SwarmStartFailureDisposition> => {
               if (error instanceof GatewayDrainingError) {
-                return false;
+                return "retry";
               }
               return failAndCleanupRestoredQueuedRun(
                 runId,
@@ -234,7 +236,7 @@ export function createSubagentRegistryRestorer(config: {
     entry: SubagentRunRecord,
     error: string,
     launchTerminationConfirmed: boolean,
-  ): Promise<boolean> {
+  ): Promise<SwarmStartFailureDisposition> {
     const cleanupComplete = await runWithGatewayIndependentRootWorkAdmission(async () => {
       for (;;) {
         try {
@@ -298,8 +300,9 @@ export function createSubagentRegistryRestorer(config: {
         parentSessionKey: entry.swarmRequesterSessionKey ?? entry.requesterSessionKey,
       });
       completeCollectorLaunchCleanup(runId);
+      return "release";
     }
-    return true;
+    return launchTerminationConfirmed ? "release" : "hold";
   }
 
   return {

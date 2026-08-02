@@ -647,6 +647,10 @@ export type ForkSessionEntryFromParentTargetParams = {
     decision: Extract<SessionParentForkDecision, { status: "fork" }>;
   }) => Partial<SessionEntry>;
   sessionTarget: SessionLifecycleStoreTarget;
+  /** Reject child preparation writes when the provisional child row was reused. */
+  expectedSessionId?: string;
+  expectedLifecycleRevision?: string;
+  expectedUpdatedAt?: number;
   skipForkWhen?: (entry: SessionEntry) => boolean;
   skipPatch?: (entry: SessionEntry) => Partial<SessionEntry> | null;
   storePath: string;

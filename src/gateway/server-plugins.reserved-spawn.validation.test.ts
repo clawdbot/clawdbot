@@ -131,6 +131,26 @@ describe("createGatewaySubagentRuntime.spawnReserved validation", () => {
       expected: "backend-reserved namespace",
     },
     {
+      name: "chat namespace run ID",
+      params: { ...reservation, runId: "chat:reserved-run" },
+      expected: "backend-reserved namespace",
+    },
+    {
+      name: "agent namespace run ID",
+      params: { ...reservation, runId: "agent:reserved-run" },
+      expected: "backend-reserved namespace",
+    },
+    {
+      name: "malformed task name",
+      params: { ...reservation, taskName: "Bad Name" },
+      expected: "Invalid taskName",
+    },
+    {
+      name: "reserved task name",
+      params: { ...reservation, taskName: "last" },
+      expected: "Reserved subagent targets",
+    },
+    {
       name: "invalid cleanup",
       params: { ...reservation, cleanup: "Delete" } as never,
       expected: 'cleanup must be "delete" or "keep"',

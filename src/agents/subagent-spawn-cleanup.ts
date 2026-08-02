@@ -26,6 +26,9 @@ function normalizeProvisionalSessionCleanupIdentity(
   const expectedSessionId = identity?.expectedSessionId?.trim();
   const expectedLifecycleRevision = identity?.expectedLifecycleRevision?.trim();
   const expectedSessionUpdatedAt = identity?.expectedSessionUpdatedAt;
+  if (!expectedSessionId && !expectedLifecycleRevision) {
+    return undefined;
+  }
   const normalized: ProvisionalSessionCleanupIdentity = {
     ...(expectedSessionId ? { expectedSessionId } : {}),
     ...(expectedLifecycleRevision ? { expectedLifecycleRevision } : {}),
@@ -37,17 +40,18 @@ function normalizeProvisionalSessionCleanupIdentity(
 }
 
 export function captureProvisionalSessionCleanupIdentity(
-  entry?: Pick<SessionEntry, "sessionId" | "lifecycleRevision">,
+  entry?: Pick<SessionEntry, "sessionId" | "lifecycleRevision" | "updatedAt">,
 ): ProvisionalSessionCleanupIdentity | undefined {
   return normalizeProvisionalSessionCleanupIdentity({
     expectedSessionId: entry?.sessionId,
     expectedLifecycleRevision: entry?.lifecycleRevision,
+    expectedSessionUpdatedAt: entry?.updatedAt,
   });
 }
 
 export function refreshProvisionalSessionCleanupIdentity(
   current: ProvisionalSessionCleanupIdentity | undefined,
-  entry?: Pick<SessionEntry, "sessionId" | "lifecycleRevision">,
+  entry?: Pick<SessionEntry, "sessionId" | "lifecycleRevision" | "updatedAt">,
 ): ProvisionalSessionCleanupIdentity | undefined {
   return captureProvisionalSessionCleanupIdentity(entry) ?? current;
 }
@@ -217,34 +221,67 @@ export async function cleanupFailedSpawnBeforeAgentStart(params: {
   sessionDeleted: boolean;
   sessionDeletion: ProvisionalSessionDeletionOutcome;
 }> {
-  let attachmentsRemoved = true;
-  if (params.attachmentAbsDir) {
+  const expectedIdentity = normalizeProvisionalSessionCleanupIdentity(params.expectedIdentity);
+  const removeAttachments = async (): Promise<boolean> => {
+    if (!params.attachmentAbsDir) {
+      return true;
+    }
     try {
       await fs.rm(params.attachmentAbsDir, { recursive: true, force: true });
+      return true;
     } catch {
-      attachmentsRemoved = false;
+      return false;
     }
-  }
+  };
   const sessionCleanupOptions = {
     emitLifecycleHooks: params.emitLifecycleHooks,
     deleteTranscript: params.deleteTranscript,
-    expectedIdentity: params.expectedIdentity,
+    expectedIdentity,
   };
   const waitOptions = normalizeSessionDeletionWaitOptions(params.waitForSessionDeletion);
+  if (!expectedIdentity) {
+    const attachmentsRemoved = await removeAttachments();
+    if (waitOptions.enabled) {
+      const sessionDeletion = await deleteProvisionalSessionWithBound({
+        childSessionKey: params.childSessionKey,
+        cleanupOptions: sessionCleanupOptions,
+        waitOptions,
+      });
+      return {
+        attachmentsRemoved,
+        sessionDeleted: sessionDeletion === "deleted",
+        sessionDeletion,
+      };
+    }
+    const sessionDeleted = await cleanupProvisionalSession(
+      params.childSessionKey,
+      sessionCleanupOptions,
+    );
+    return {
+      attachmentsRemoved,
+      sessionDeleted,
+      sessionDeletion: sessionDeleted ? "deleted" : "not_deleted",
+    };
+  }
   if (waitOptions.enabled) {
     const sessionDeletion = await deleteProvisionalSessionWithBound({
       childSessionKey: params.childSessionKey,
       cleanupOptions: sessionCleanupOptions,
       waitOptions,
     });
-    return { attachmentsRemoved, sessionDeleted: sessionDeletion === "deleted", sessionDeletion };
+    const sessionDeleted = sessionDeletion === "deleted";
+    return {
+      attachmentsRemoved: sessionDeleted ? await removeAttachments() : false,
+      sessionDeleted,
+      sessionDeletion,
+    };
   }
   const sessionDeleted = await cleanupProvisionalSession(
     params.childSessionKey,
     sessionCleanupOptions,
   );
   return {
-    attachmentsRemoved,
+    attachmentsRemoved: sessionDeleted ? await removeAttachments() : false,
     sessionDeleted,
     sessionDeletion: sessionDeleted ? "deleted" : "not_deleted",
   };

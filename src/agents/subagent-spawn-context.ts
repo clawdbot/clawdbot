@@ -4,6 +4,7 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SubagentSpawnPreparation } from "../context-engine/types.js";
 import { summarizeSpawnError } from "./spawn-pipeline.js";
+import type { ProvisionalSessionCleanupIdentity } from "./subagent-spawn-cleanup-types.js";
 import { getSubagentSpawnDeps } from "./subagent-spawn-deps.js";
 import { resolveGatewaySessionStoreTarget } from "./subagent-spawn.runtime.js";
 import type { SpawnSubagentContextMode } from "./subagent-spawn.types.js";
@@ -33,6 +34,7 @@ export async function prepareSubagentSessionContext(params: {
   targetAgentId: string;
   requesterInternalKey: string;
   childSessionKey: string;
+  expectedChildIdentity?: ProvisionalSessionCleanupIdentity;
 }): Promise<PreparedSpawnContext> {
   if (params.contextMode === "isolated") {
     return { status: "ok", mode: "isolated" };
@@ -64,6 +66,15 @@ export async function prepareSubagentSessionContext(params: {
       sessionKey: childTarget.canonicalKey,
       sessionStoreKeys: childTarget.storeKeys,
       fallbackEntry: { sessionId: "", updatedAt: Date.now() },
+      ...(params.expectedChildIdentity?.expectedSessionId
+        ? { expectedSessionId: params.expectedChildIdentity.expectedSessionId }
+        : {}),
+      ...(params.expectedChildIdentity?.expectedLifecycleRevision
+        ? { expectedLifecycleRevision: params.expectedChildIdentity.expectedLifecycleRevision }
+        : {}),
+      ...(typeof params.expectedChildIdentity?.expectedSessionUpdatedAt === "number"
+        ? { expectedUpdatedAt: params.expectedChildIdentity.expectedSessionUpdatedAt }
+        : {}),
       agentId: params.requesterAgentId,
     });
     if (forkedResult.status === "missing-parent") {

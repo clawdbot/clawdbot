@@ -1,10 +1,14 @@
 import { isFastTestRuntimeEnv } from "../infra/env.js";
 
+export type SwarmStartFailureDisposition = "retry" | "hold" | "release";
+
 type QueuedSwarmRun = {
   runId: string;
   start?: () => Promise<void>;
-  /** True once failure is durable or the row no longer owns queued work. */
-  onStartFailure?: (error: unknown) => boolean | Promise<boolean>;
+  /** Explicit settlement state after a launch failure. Booleans are legacy-compatible. */
+  onStartFailure?: (
+    error: unknown,
+  ) => SwarmStartFailureDisposition | boolean | Promise<SwarmStartFailureDisposition | boolean>;
   ready: boolean;
   retryReady: boolean;
 };
@@ -23,6 +27,18 @@ const runLocations = new Map<
   | { lane: SwarmGroupLane; state: "queued"; item: QueuedSwarmRun }
 >();
 
+function normalizeStartFailureDisposition(
+  value: SwarmStartFailureDisposition | boolean,
+): SwarmStartFailureDisposition {
+  if (value === true) {
+    return "release";
+  }
+  if (value === false) {
+    return "retry";
+  }
+  return value;
+}
+
 function startQueuedRun(lane: SwarmGroupLane, item: QueuedSwarmRun) {
   const start = item.start;
   const onStartFailure = item.onStartFailure;
@@ -33,9 +49,9 @@ function startQueuedRun(lane: SwarmGroupLane, item: QueuedSwarmRun) {
   runLocations.set(item.runId, { lane, state: "active", item });
   queueMicrotask(() => {
     void start().catch(async (error: unknown) => {
-      let failurePersisted = false;
+      let disposition: SwarmStartFailureDisposition = "retry";
       try {
-        failurePersisted = await onStartFailure(error);
+        disposition = normalizeStartFailureDisposition(await onStartFailure(error));
       } catch {
         // A durable queued row still owns this work; retry after a short backoff.
       }
@@ -48,8 +64,11 @@ function startQueuedRun(lane: SwarmGroupLane, item: QueuedSwarmRun) {
       ) {
         return;
       }
-      if (failurePersisted) {
+      if (disposition === "release") {
         releaseSwarmRun(item.runId);
+        return;
+      }
+      if (disposition === "hold") {
         return;
       }
       lane.active.delete(item.runId);
@@ -133,7 +152,7 @@ export function activateSwarmRun(params: {
   groupId: string;
   runId: string;
   start: () => Promise<void>;
-  onStartFailure: (error: unknown) => boolean | Promise<boolean>;
+  onStartFailure: QueuedSwarmRun["onStartFailure"];
 }): "started" | "queued" {
   const location = runLocations.get(params.runId);
   if (!location || location.state !== "queued" || location.lane.groupId !== params.groupId) {
@@ -153,7 +172,7 @@ export function enqueueSwarmRun(params: {
   maxConcurrent: number;
   activeRunIds: readonly string[];
   start: () => Promise<void>;
-  onStartFailure: (error: unknown) => boolean | Promise<boolean>;
+  onStartFailure: QueuedSwarmRun["onStartFailure"];
 }): "started" | "queued" {
   if (
     !reserveSwarmRun({

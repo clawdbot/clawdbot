@@ -35,6 +35,7 @@ import {
   type SubagentSessionStoreCache,
 } from "./subagent-session-reconciliation.js";
 import type { ProvisionalSessionCleanupIdentity } from "./subagent-spawn-cleanup-types.js";
+import { releaseSwarmRun } from "./swarm-scheduler.js";
 const SESSION_RUN_TTL_MS = 5 * 60_000;
 const STALE_ACTIVE_SUBAGENT_GRACE_MS = isFastTestRuntimeEnv() ? 1_000 : 60_000;
 const SUSPENDED_DELIVERY_CRON_EXPIRY_MS = 2 * 60 * 60_000;
@@ -438,6 +439,7 @@ export function createSubagentRegistrySweeper(params: {
             });
             entry.collectorLaunchCleanupPending = false;
             entry.cleanupCompletedAt = now;
+            releaseSwarmRun(entry.schedulerSlotId ?? entry.runId);
             mutated = true;
             mutatedRunIds.add(runId);
           }
@@ -498,7 +500,9 @@ export function createSubagentRegistrySweeper(params: {
         runs.delete(runId);
         mutated = true;
         mutatedRunIds.add(runId);
-        await safeRemoveAttachmentsDir(entry);
+        if (entry.spawnFailureCleanup?.status !== "replaced") {
+          await safeRemoveAttachmentsDir(entry);
+        }
         runCleanupTail(runId, "context-engine cleanup", async () => {
           return entry.spawnFailureCleanup?.status === "replaced"
             ? undefined

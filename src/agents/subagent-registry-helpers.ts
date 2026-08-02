@@ -352,7 +352,7 @@ export function reconcileOrphanedRestoredRuns(params: {
       // Their bounded reconciliation runs even when the session vanished.
       continue;
     }
-    if (entry.spawnFailureCleanup && typeof entry.cleanupCompletedAt !== "number") {
+    if (entry.spawnFailureCleanup) {
       continue;
     }
     const orphanReason = resolveSubagentRunOrphanReason({

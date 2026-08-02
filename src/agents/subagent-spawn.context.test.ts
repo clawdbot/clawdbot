@@ -224,6 +224,51 @@ describe("sessions_spawn context modes", () => {
     expect(prepareContext.childSessionFile).toBe("/tmp/forked-session.jsonl");
   });
 
+  it("guards fork preparation with the provisional child identity", async () => {
+    const store: SessionStore = {
+      main: {
+        sessionId: "parent-session-id",
+        sessionFile: "/tmp/parent-session.jsonl",
+        updatedAt: 1,
+      },
+    };
+    usePersistentStoreMock(store);
+    updateSessionStoreMock.mockImplementation(async (_storePath: unknown, mutator: unknown) => {
+      if (typeof mutator !== "function") {
+        throw new Error("missing session store mutator");
+      }
+      const result = await mutator(store);
+      for (const [sessionKey, entry] of Object.entries(store)) {
+        if (sessionKey === "main" || typeof entry.sessionId === "string") {
+          continue;
+        }
+        entry.sessionId = "provisional-child-session";
+        entry.lifecycleRevision = "provisional-child-lifecycle";
+        entry.updatedAt = 123;
+      }
+      return result;
+    });
+    forkSessionFromParentMock.mockResolvedValue({
+      sessionId: "forked-session-id",
+      sessionFile: "/tmp/forked-session.jsonl",
+    });
+
+    await expect(
+      spawnSubagentDirect(
+        { task: "fork with guarded provisional identity", context: "fork" },
+        { agentSessionKey: "main" },
+      ),
+    ).resolves.toMatchObject({ status: "accepted" });
+
+    expect(forkSessionEntryFromParentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        expectedSessionId: "provisional-child-session",
+        expectedLifecycleRevision: "provisional-child-lifecycle",
+        expectedUpdatedAt: 123,
+      }),
+    );
+  });
+
   it("keeps the default spawn context isolated", async () => {
     const store: SessionStore = {
       main: { sessionId: "parent-session-id", updatedAt: 1 },

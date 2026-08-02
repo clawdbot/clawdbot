@@ -213,6 +213,17 @@ export async function loadSubagentSpawnModuleForTest(params: {
   }
 
   const resetSubagentRegistryForTests = vi.fn();
+  const defaultSessionStore: SessionStore = {};
+  const callUpdateSessionStore = async (storePath: string, mutator: SessionStoreMutator) => {
+    const mocked = params.updateSessionStoreMock?.(storePath, mutator);
+    if (mocked !== undefined) {
+      return await Promise.resolve(mocked);
+    }
+    await mutator(defaultSessionStore);
+    return defaultSessionStore;
+  };
+  const callLoadSessionStore = (storePath?: string) =>
+    (params.loadSessionStoreMock?.(storePath) as SessionStore | undefined) ?? defaultSessionStore;
 
   vi.doMock("./provider-model-normalization.runtime.js", () => ({
     normalizeProviderModelIdWithRuntime: () => undefined,
@@ -233,7 +244,14 @@ export async function loadSubagentSpawnModuleForTest(params: {
     },
     forkSessionEntryFromParent:
       params.forkSessionEntryFromParentMock ??
-      (async () => {
+      (async (forkParams: {
+        agentId: string;
+        fallbackEntry?: Record<string, unknown>;
+        parentSessionKey: string;
+        parentStoreKeys?: string[];
+        sessionKey: string;
+        storePath: string;
+      }) => {
         const fork = (
           params.forkSessionFromParentMock
             ? await params.forkSessionFromParentMock()
@@ -242,6 +260,17 @@ export async function loadSubagentSpawnModuleForTest(params: {
         if (!fork) {
           return { status: "failed" };
         }
+        let sessionEntry: Record<string, unknown> | undefined;
+        await callUpdateSessionStore(forkParams.storePath, (store: SessionStore) => {
+          sessionEntry = {
+            ...forkParams.fallbackEntry,
+            ...store[forkParams.sessionKey],
+            sessionId: fork.sessionId,
+            sessionFile: fork.sessionFile,
+            forkedFromParent: true,
+          };
+          store[forkParams.sessionKey] = sessionEntry;
+        });
         return {
           status: "forked",
           fork,
@@ -250,11 +279,7 @@ export async function loadSubagentSpawnModuleForTest(params: {
             sessionFile: "/tmp/parent-session.jsonl",
             updatedAt: Date.now(),
           },
-          sessionEntry: {
-            sessionId: fork.sessionId,
-            sessionFile: fork.sessionFile,
-            forkedFromParent: true,
-          },
+          sessionEntry,
           decision: {
             status: "fork",
             maxTokens: 100_000,
@@ -279,8 +304,8 @@ export async function loadSubagentSpawnModuleForTest(params: {
     loadPreparedModelCatalog: (...args: unknown[]) =>
       params.loadPreparedModelCatalogMock?.(...args) ?? [],
     loadSessionEntry: (scope: { storePath?: string; sessionKey: string }) =>
-      ((params.loadSessionStoreMock?.(scope.storePath) ?? {}) as SessionStore)[scope.sessionKey],
-    loadSessionStore: params.loadSessionStoreMock ?? (() => ({})),
+      callLoadSessionStore(scope.storePath)[scope.sessionKey],
+    loadSessionStore: callLoadSessionStore,
     ensureContextEnginesInitialized:
       params.ensureContextEnginesInitializedMock ?? (() => undefined),
     resolveContextEngine: params.resolveContextEngineMock ?? (async () => ({})),
@@ -315,13 +340,7 @@ export async function loadSubagentSpawnModuleForTest(params: {
       ...current,
       ...next,
     }),
-    updateSessionStore:
-      params.updateSessionStoreMock ??
-      (async (_storePath: string, mutator: SessionStoreMutator) => {
-        const store: SessionStore = {};
-        await mutator(store);
-        return store;
-      }),
+    updateSessionStore: callUpdateSessionStore,
     // Real scope resolver: spawn's admin-tier pinning depends on params-aware
     // sessions.patch policy, so a stub here would hide policy regressions.
     resolveLeastPrivilegeOperatorScopesForMethod,
@@ -329,21 +348,36 @@ export async function loadSubagentSpawnModuleForTest(params: {
       scope: { storePath?: string; sessionKey: string },
       patch: Record<string, unknown>,
     ) => {
-      const updateSessionStore =
-        params.updateSessionStoreMock ??
-        (async (_storePath: string, mutator: SessionStoreMutator) => {
-          const store: SessionStore = {};
-          await mutator(store);
-          return store;
-        });
       let updated: Record<string, unknown> | undefined;
       const storePath =
         scope.storePath ?? params.sessionStorePath ?? "/tmp/subagent-spawn-model-session.json";
-      await updateSessionStore(storePath, (store: SessionStore) => {
+      await callUpdateSessionStore(storePath, (store: SessionStore) => {
         updated = Object.assign({}, store[scope.sessionKey], patch);
         store[scope.sessionKey] = updated;
       });
       return updated ?? null;
+    },
+    patchSessionEntry: async (
+      scope: { storePath?: string; sessionKey: string },
+      update: (entry: Record<string, unknown>) => Record<string, unknown> | null,
+    ) => {
+      let updated: Record<string, unknown> | null = null;
+      const storePath =
+        scope.storePath ?? params.sessionStorePath ?? "/tmp/subagent-spawn-model-session.json";
+      await callUpdateSessionStore(storePath, (store: SessionStore) => {
+        const current = store[scope.sessionKey];
+        if (!current) {
+          return;
+        }
+        const patch = update({ ...current });
+        if (!patch) {
+          updated = current;
+          return;
+        }
+        updated = patch;
+        store[scope.sessionKey] = updated;
+      });
+      return updated;
     },
     getSessionBindingService:
       params.getSessionBindingService ??
