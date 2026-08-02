@@ -888,6 +888,30 @@ describe("reply run registry", () => {
     expect(isReplyRunAbortableForSignal(upstreamAbort.signal)).toBe(false);
   });
 
+  it("answers abortability for the source signals of a composed upstream signal", () => {
+    const upstreamAbort = new AbortController();
+    const queueAbort = new AbortController();
+    // Mirror the followup admission path (followup-turn-admission.ts → queue/types.ts):
+    // the registry key is a fresh AbortSignal.any() composite per admission, while
+    // the chat.abort gate asks with the raw controller signal
+    // (gateway/server-methods/chat-send-admission.ts:287).
+    const composite = AbortSignal.any([upstreamAbort.signal, queueAbort.signal]);
+    const operation = createTestReplyOperation({
+      sessionKey: "agent:main:followup-composed",
+      sessionId: "session-followup-composed",
+      upstreamAbortSignal: composite,
+      upstreamAbortSignalAliases: [upstreamAbort.signal, queueAbort.signal],
+    });
+    operation.freezeAbort();
+
+    expect(isReplyRunAbortableForSignal(composite)).toBe(false);
+    expect(isReplyRunAbortableForSignal(upstreamAbort.signal)).toBe(false);
+    expect(isReplyRunAbortableForSignal(queueAbort.signal)).toBe(false);
+    expect(isReplyRunAbortableForSignal(new AbortController().signal)).toBe(true);
+
+    operation.complete();
+  });
+
   it("expires finalization when its owner stops making progress", async () => {
     vi.useFakeTimers();
     try {

@@ -560,6 +560,7 @@ export function createReplyOperation(params: {
   resetTriggered: boolean;
   routeThreadId?: string | number;
   upstreamAbortSignal?: AbortSignal;
+  upstreamAbortSignalAliases?: readonly AbortSignal[];
   respectFollowupAdmissionBarrier?: boolean;
 }): ReplyOperation {
   const sessionKey = normalizeOptionalString(params.sessionKey);
@@ -1057,6 +1058,15 @@ export function createReplyOperation(params: {
   });
   if (upstreamAbortSignal) {
     operationsByUpstreamAbortSignal.set(upstreamAbortSignal, operation);
+    // Admission may compose the upstream signal (AbortSignal.any), creating a
+    // fresh identity each time. Register the original source signals too, so
+    // identity-based lookups (e.g. the chat.abort gate, which only knows the
+    // raw controller signal) resolve to this same operation.
+    for (const alias of params.upstreamAbortSignalAliases ?? []) {
+      if (alias !== upstreamAbortSignal) {
+        operationsByUpstreamAbortSignal.set(alias, operation);
+      }
+    }
     const abortFromUpstream = () => {
       if (result) {
         return;

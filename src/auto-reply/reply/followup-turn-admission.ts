@@ -150,6 +150,11 @@ export async function admitFollowupTurn(params: {
     resetTriggered: false,
     routeThreadId: params.queued.originatingThreadId,
     upstreamAbortSignal: resolveFollowupAbortSignal(params.queued),
+    // The composed signal above is a fresh object per admission; pass its sources
+    // so the registry can also answer identity lookups made with the raw signals.
+    upstreamAbortSignalAliases: [params.queued.abortSignal, params.queued.queueAbortSignal].filter(
+      (signal): signal is AbortSignal => signal !== undefined,
+    ),
     onReplyAdmissionWaitChange: params.queued.onReplyAdmissionWaitChange,
   });
   if (admission.status === "skipped") {

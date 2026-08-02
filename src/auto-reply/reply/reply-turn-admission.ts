@@ -130,6 +130,8 @@ type ReplyTurnAdmissionParams = {
    */
   adoptOperation?: ReplyOperation;
   upstreamAbortSignal?: AbortSignal;
+  /** Source signals `upstreamAbortSignal` was composed from; registered as lookup aliases. */
+  upstreamAbortSignalAliases?: readonly AbortSignal[];
   waitTimeoutMs?: number;
   waitForActive?: boolean;
   retainLifecycleAdmissionOnActive?: boolean;
@@ -297,6 +299,7 @@ async function admitReplyTurnWithWaitSignal(
             resetTriggered: params.resetTriggered,
             routeThreadId: params.routeThreadId,
             upstreamAbortSignal: params.upstreamAbortSignal,
+            upstreamAbortSignalAliases: params.upstreamAbortSignalAliases,
             respectFollowupAdmissionBarrier:
               params.kind === "queued_followup" || params.kind === "heartbeat",
           });
