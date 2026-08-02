@@ -2,6 +2,7 @@
 // registered Commander commands. Keep those user-facing descriptions aligned.
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { registerPluginCliCommands } from "../../plugins/cli.js";
 import { cliCommandCatalog } from "../command-catalog.js";
 import { isReservedNonPluginCommandRoot } from "../command-registration-policy.js";
 import { collectShellCompletionCommandTree } from "../completion-command-tree.js";
@@ -303,8 +304,15 @@ describe("root command descriptions", () => {
 
   it("keeps startup policy catalog paths registered or explicitly reserved", async () => {
     const program = await registerAllBuiltInCommands();
-    const { registerMemoryCli } = await import("../../../extensions/memory-core/cli.js");
-    registerMemoryCli(program);
+    await registerPluginCliCommands(
+      program,
+      {},
+      undefined,
+      { pluginSdkResolution: "src" },
+      {
+        primary: "memory",
+      },
+    );
 
     // Private QA is a lazy source-checkout command. Its root placeholder proves
     // registration without importing the private build omitted from normal dist.
