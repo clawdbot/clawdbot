@@ -51,7 +51,10 @@ class TlonIngressShutdownError extends Error {
   }
 }
 
-function inspectChannelsEvent(event: unknown): { eventId: string; laneKey: string } | null {
+function inspectChannelsEvent(
+  event: unknown,
+  claimedId: string | undefined,
+): { eventId: string; laneKey: string } | null {
   const envelope = isRecord(event) ? event : null;
   const nest = nonEmptyString(envelope?.nest);
   const response = isRecord(envelope?.response) ? envelope.response : null;
@@ -65,10 +68,17 @@ function inspectChannelsEvent(event: unknown): { eventId: string; laneKey: strin
     return null;
   }
   const postId = nonEmptyString(isRecord(replySet?.memo) ? reply?.id : post?.id);
-  return postId ? { eventId: `channels:${nest}:${postId}`, laneKey: `group:${nest}` } : null;
+  if (!postId) {
+    return null;
+  }
+  const eventId = claimedId === postId ? postId : `channels:${nest}:${postId}`;
+  return { eventId, laneKey: `group:${nest}` };
 }
 
-function inspectChatEvent(event: unknown): { eventId: string; laneKey: string } | null {
+function inspectChatEvent(
+  event: unknown,
+  claimedId: string | undefined,
+): { eventId: string; laneKey: string } | null {
   const envelope = isRecord(event) ? event : null;
   const response = isRecord(envelope?.response) ? envelope.response : null;
   const add = isRecord(response?.add) ? response.add : null;
@@ -79,16 +89,20 @@ function inspectChatEvent(event: unknown): { eventId: string; laneKey: string } 
   }
   const whom = isRecord(envelope?.whom) ? nonEmptyString(envelope.whom.ship) : null;
   const peer = nonEmptyString(envelope?.whom) ?? whom ?? nonEmptyString(essay.author);
-  return { eventId: `chat:${messageId}`, laneKey: peer ? `direct:${peer}` : `event:${messageId}` };
+  const eventId = claimedId === messageId ? messageId : `chat:${messageId}`;
+  return { eventId, laneKey: peer ? `direct:${peer}` : `event:${messageId}` };
 }
 
 function inspectTlonIngressEvent(
   source: TlonIngressSource,
   event: unknown,
+  claimedId: string | undefined,
 ): { eventId: string; laneKey: string } | null {
   // Urbit SSE ids belong to a disposable HTTP channel. The message id inside
   // each firehose envelope survives resubscription and preserves the retired guard key.
-  return source === "channels" ? inspectChannelsEvent(event) : inspectChatEvent(event);
+  return source === "channels"
+    ? inspectChannelsEvent(event, claimedId)
+    : inspectChatEvent(event, claimedId);
 }
 
 function decodeTlonIngressPayload(
@@ -170,7 +184,12 @@ export function createTlonIngressMonitor(options: {
         getTlonRuntime().state.openChannelIngressQueue<TlonIngressPayload>({
           accountId: options.accountId,
         })),
-    inspect: (raw) => inspectTlonIngressEvent(raw.source, raw.event),
+    inspect: (raw, context) =>
+      inspectTlonIngressEvent(
+        raw.source,
+        raw.event,
+        context.phase === "claim" ? context.claimedId : undefined,
+      ),
     payload: {
       version: TLON_INGRESS_PAYLOAD_VERSION,
       serialize: (raw, { receivedAt }) => ({

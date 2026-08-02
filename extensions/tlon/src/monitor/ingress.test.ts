@@ -283,6 +283,78 @@ describe("Tlon durable ingress", () => {
     });
   });
 
+  it("drains a channel row persisted under the legacy bare post id", async () => {
+    await withQueue(async (queue) => {
+      const group = channelEvent({ id: "170.141.184.507", nest: "chat/~zod/general" });
+      await queue.enqueue(
+        "170.141.184.507",
+        { version: 1, receivedAt: 1, source: "channels", rawEvent: JSON.stringify(group) },
+        { receivedAt: 1, laneKey: "group:chat/~zod/general" },
+      );
+      const dispatch = vi.fn<TlonIngressDispatch>(async (_source, _event, lifecycle) => {
+        await lifecycle.onAdopted();
+      });
+      const monitor = startMonitor(queue, dispatch);
+      try {
+        await monitor.waitForIdle();
+        expect(dispatch).toHaveBeenCalledTimes(1);
+        expect(await queue.listFailed?.({ limit: "all" })).toEqual([]);
+      } finally {
+        await monitor.stop();
+      }
+    });
+  });
+
+  it("drains a chat row persisted under the legacy bare message id", async () => {
+    await withQueue(async (queue) => {
+      const dm = chatEvent({ id: "170.141.184.507", peer: "~nec" });
+      await queue.enqueue(
+        "170.141.184.507",
+        { version: 1, receivedAt: 1, source: "chat", rawEvent: JSON.stringify(dm) },
+        { receivedAt: 1, laneKey: "direct:~nec" },
+      );
+      const dispatch = vi.fn<TlonIngressDispatch>(async (_source, _event, lifecycle) => {
+        await lifecycle.onAdopted();
+      });
+      const monitor = startMonitor(queue, dispatch);
+      try {
+        await monitor.waitForIdle();
+        expect(dispatch).toHaveBeenCalledTimes(1);
+        expect(await queue.listFailed?.({ limit: "all" })).toEqual([]);
+      } finally {
+        await monitor.stop();
+      }
+    });
+  });
+
+  it("keeps a legacy row from blocking a colliding post in another channel", async () => {
+    await withQueue(async (queue) => {
+      const legacy = channelEvent({ id: "170.141.184.507", nest: "chat/~zod/general" });
+      await queue.enqueue(
+        "170.141.184.507",
+        { version: 1, receivedAt: 1, source: "channels", rawEvent: JSON.stringify(legacy) },
+        { receivedAt: 1, laneKey: "group:chat/~zod/general" },
+      );
+      const delivered: string[] = [];
+      const dispatch = vi.fn<TlonIngressDispatch>(async (_source, event, lifecycle) => {
+        delivered.push(String((event as { nest?: unknown }).nest));
+        await lifecycle.onAdopted();
+      });
+      const monitor = startMonitor(queue, dispatch);
+      try {
+        await monitor.waitForIdle();
+        await monitor.receive({
+          source: "channels",
+          event: channelEvent({ id: "170.141.184.507", nest: "chat/~nec/other" }),
+        });
+        await monitor.waitForIdle();
+        expect(delivered).toEqual(["chat/~zod/general", "chat/~nec/other"]);
+      } finally {
+        await monitor.stop();
+      }
+    });
+  });
+
   it("retains completed logical ids by count rather than age", async () => {
     await withQueue(async (queue) => {
       let now = 1_700_000_000_000;
