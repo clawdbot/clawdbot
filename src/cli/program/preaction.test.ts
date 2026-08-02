@@ -203,6 +203,12 @@ describe("registerPreActionHooks", () => {
       .command("health")
       .option("--json")
       .action(() => {});
+    for (const gatewayCommand of ["stability", "usage-cost"]) {
+      gateway
+        .command(gatewayCommand)
+        .option("--json")
+        .action(() => {});
+    }
     programLocal
       .command("backup")
       .command("create")
@@ -215,6 +221,13 @@ describe("registerPreActionHooks", () => {
     programLocal.command("completion").action(() => {});
     programLocal.command("secrets").action(() => {});
     const skills = programLocal.command("skills");
+    skills.option("--json").action(() => {});
+    for (const skillCommand of ["list", "check"]) {
+      skills
+        .command(skillCommand)
+        .option("--json")
+        .action(() => {});
+    }
     for (const skillCommand of ["install", "verify"]) {
       skills
         .command(skillCommand)
@@ -226,9 +239,22 @@ describe("registerPreActionHooks", () => {
       .command("qa")
       .command("suite")
       .action(() => {});
-    programLocal
-      .command("agents")
+    const agents = programLocal.command("agents");
+    agents
       .command("list")
+      .option("--json")
+      .action(() => {});
+    agents
+      .command("bindings")
+      .option("--json")
+      .action(() => {});
+    programLocal
+      .command("approvals")
+      .command("pending")
+      .option("--json")
+      .action(() => {});
+    programLocal
+      .command("commitments")
       .option("--json")
       .action(() => {});
     programLocal.command("configure").action(() => {});
@@ -328,6 +354,25 @@ describe("registerPreActionHooks", () => {
     expect(ensureConfigReadyMock).not.toHaveBeenCalled();
     expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
     processTitleSetSpy.mockRestore();
+  });
+
+  it.each([
+    ["approvals", "pending"],
+    ["commitments"],
+    ["skills"],
+    ["skills", "list"],
+    ["skills", "check"],
+    ["agents", "bindings"],
+    ["gateway", "stability"],
+    ["gateway", "usage-cost"],
+  ])("keeps the real Commander preAction cold for %s", async (...commandPath) => {
+    await runPreAction({
+      parseArgv: commandPath,
+      processArgv: ["node", "openclaw", ...commandPath, "--json"],
+    });
+
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
   });
 
   it("runs gateway pre-bootstrap before full-CLI gateway bootstrap", async () => {

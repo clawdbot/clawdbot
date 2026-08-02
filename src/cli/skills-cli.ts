@@ -119,6 +119,7 @@ function isClawHubSkillBlockedCliFailure(result: { code?: string; warning?: stri
 type ResolveSkillsWorkspaceOptions = {
   agentId?: string;
   cwd?: string;
+  skipPluginValidation?: boolean;
 };
 
 type ResolvedSkillsWorkspace = ReturnType<typeof resolveSkillsWorkspace>;
@@ -135,7 +136,9 @@ function resolveSkillsWorkspace(options?: ResolveSkillsWorkspaceOptions): {
   agentId: string;
 } {
   // Prefer explicit --agent, then infer from cwd, then fall back to configured default agent.
-  const config = getRuntimeConfig();
+  const config = getRuntimeConfig(
+    options?.skipPluginValidation ? { skipPluginValidation: true } : undefined,
+  );
   const explicitAgentId = normalizeOptionalString(options?.agentId);
   const inferredAgentId = explicitAgentId
     ? undefined
@@ -176,7 +179,7 @@ async function loadGatewaySkillsStatusReport(
 async function loadSkillsStatusReport(
   options?: ResolveSkillsWorkspaceOptions,
 ): Promise<SkillStatusReport> {
-  const resolved = resolveSkillsWorkspace(options);
+  const resolved = resolveSkillsWorkspace({ ...options, skipPluginValidation: true });
   const gatewayReport = await loadGatewaySkillsStatusReport(resolved);
   if (gatewayReport) {
     return gatewayReport;

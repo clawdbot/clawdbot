@@ -15,9 +15,7 @@ const mocks = vi.hoisted(() => ({
   listReadOnlyChannelPluginsForConfig: vi.fn<() => ChannelPlugin[]>(() => []),
   buildChannelAccountSnapshot: vi.fn(),
   listTrustedChannelPluginCatalogEntries: vi.fn<() => ChannelPluginCatalogEntry[]>(() => []),
-  isCatalogChannelInstalled: vi.fn<(params: { entry: ChannelPluginCatalogEntry }) => boolean>(
-    () => true,
-  ),
+  listManifestInstalledChannelIds: vi.fn<() => Set<string>>(() => new Set()),
   resolveMissingOfficialExternalChannelPluginRepairHint: vi.fn(),
   callGateway: vi.fn(),
   resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
@@ -53,7 +51,7 @@ vi.mock("./channel-setup/trusted-catalog.js", () => ({
 }));
 
 vi.mock("./channel-setup/discovery.js", () => ({
-  isCatalogChannelInstalled: mocks.isCatalogChannelInstalled,
+  listManifestInstalledChannelIds: mocks.listManifestInstalledChannelIds,
 }));
 
 vi.mock("../plugins/official-external-plugin-repair-hints.js", () => ({
@@ -125,8 +123,8 @@ describe("channels list", () => {
     mocks.buildChannelAccountSnapshot.mockReset();
     mocks.listTrustedChannelPluginCatalogEntries.mockReset();
     mocks.listTrustedChannelPluginCatalogEntries.mockReturnValue([]);
-    mocks.isCatalogChannelInstalled.mockReset();
-    mocks.isCatalogChannelInstalled.mockReturnValue(true);
+    mocks.listManifestInstalledChannelIds.mockReset();
+    mocks.listManifestInstalledChannelIds.mockReturnValue(new Set());
     mocks.resolveMissingOfficialExternalChannelPluginRepairHint.mockReset();
     mocks.resolveMissingOfficialExternalChannelPluginRepairHint.mockReturnValue(null);
     mocks.callGateway.mockReset();
@@ -169,9 +167,8 @@ describe("channels list", () => {
 
     await channelsListCommand({ json: true }, runtime);
 
-    expect(mocks.listReadOnlyChannelPluginsForConfig).toHaveBeenCalledWith(config, {
-      includeSetupFallbackPlugins: true,
-    });
+    expect(mocks.listReadOnlyChannelPluginsForConfig).toHaveBeenCalledWith(config);
+    expect(mocks.readConfigFileSnapshot).toHaveBeenCalledWith({ skipPluginValidation: true });
     const payload = JSON.parse(loggedText(runtime)) as {
       chat?: Record<string, { accounts: string[]; installed: boolean; origin: string }>;
     };
@@ -349,7 +346,7 @@ describe("channels list", () => {
     mocks.listTrustedChannelPluginCatalogEntries.mockReturnValue([
       createCatalogEntry("qqbot", "QQ Bot"),
     ]);
-    mocks.isCatalogChannelInstalled.mockReturnValue(false);
+    mocks.listManifestInstalledChannelIds.mockReturnValue(new Set());
     mocks.readConfigFileSnapshot.mockResolvedValue({
       ...baseConfigSnapshot,
       config: {},
@@ -370,7 +367,7 @@ describe("channels list", () => {
     mocks.listTrustedChannelPluginCatalogEntries.mockReturnValue([
       createCatalogEntry("discord", "Discord"),
     ]);
-    mocks.isCatalogChannelInstalled.mockReturnValue(false);
+    mocks.listManifestInstalledChannelIds.mockReturnValue(new Set());
     mocks.resolveMissingOfficialExternalChannelPluginRepairHint.mockReturnValue({
       pluginId: "discord",
       channelId: "discord",
@@ -418,7 +415,7 @@ describe("channels list", () => {
     mocks.listTrustedChannelPluginCatalogEntries.mockReturnValue([
       createCatalogEntry("discord", "Discord"),
     ]);
-    mocks.isCatalogChannelInstalled.mockReturnValue(false);
+    mocks.listManifestInstalledChannelIds.mockReturnValue(new Set());
     mocks.resolveMissingOfficialExternalChannelPluginRepairHint.mockReturnValue({
       pluginId: "discord",
       channelId: "discord",
@@ -456,7 +453,7 @@ describe("channels list", () => {
     mocks.listTrustedChannelPluginCatalogEntries.mockReturnValue([
       createCatalogEntry("qqbot", "QQ Bot"),
     ]);
-    mocks.isCatalogChannelInstalled.mockReturnValue(false);
+    mocks.listManifestInstalledChannelIds.mockReturnValue(new Set());
     mocks.readConfigFileSnapshot.mockResolvedValue({
       ...baseConfigSnapshot,
       config: {},
@@ -515,7 +512,7 @@ describe("channels list", () => {
     mocks.listTrustedChannelPluginCatalogEntries.mockReturnValue([
       createCatalogEntry("qqbot", "QQ Bot"),
     ]);
-    mocks.isCatalogChannelInstalled.mockImplementation(({ entry }) => entry.id !== "qqbot");
+    mocks.listManifestInstalledChannelIds.mockReturnValue(new Set());
     mocks.readConfigFileSnapshot.mockResolvedValue({
       ...baseConfigSnapshot,
       config: {
@@ -538,6 +535,32 @@ describe("channels list", () => {
     expect(payload.chat.qqbot?.installed).toBe(false);
   });
 
+  it("resolves installed manifest channels once for the whole catalog", async () => {
+    const runtime = createTestRuntime();
+    mocks.listTrustedChannelPluginCatalogEntries.mockReturnValue([
+      createCatalogEntry("wecom", "WeCom"),
+      createCatalogEntry("qqbot", "QQ Bot"),
+    ]);
+    mocks.listManifestInstalledChannelIds.mockReturnValue(new Set(["wecom"]));
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+      config: {},
+    });
+
+    await channelsListCommand({ all: true, json: true }, runtime);
+
+    expect(mocks.listManifestInstalledChannelIds).toHaveBeenCalledOnce();
+    expect(mocks.listManifestInstalledChannelIds).toHaveBeenCalledWith({
+      cfg: {},
+      workspaceDir: "/tmp/workspace",
+    });
+    const payload = JSON.parse(loggedText(runtime)) as {
+      chat: Record<string, { installed: boolean }>;
+    };
+    expect(payload.chat.wecom?.installed).toBe(true);
+    expect(payload.chat.qqbot?.installed).toBe(false);
+  });
+
   it(
     "--all still surfaces catalog channels that are installed on disk but have no " +
       "plugin object loaded and no config entry (regression: WeCom-like channels " +
@@ -547,12 +570,12 @@ describe("channels list", () => {
       // Read-only loader returns nothing for wecom because the user has no
       // configured wecom channel, so the loader never activates it.
       mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([]);
-      // But catalog knows about wecom, and isCatalogChannelInstalled sees
+      // But catalog knows about wecom, and manifest discovery sees
       // the wecom npm package on disk.
       mocks.listTrustedChannelPluginCatalogEntries.mockReturnValue([
         createCatalogEntry("wecom", "WeCom"),
       ]);
-      mocks.isCatalogChannelInstalled.mockReturnValue(true);
+      mocks.listManifestInstalledChannelIds.mockReturnValue(new Set(["wecom"]));
       mocks.readConfigFileSnapshot.mockResolvedValue({
         ...baseConfigSnapshot,
         config: {},
