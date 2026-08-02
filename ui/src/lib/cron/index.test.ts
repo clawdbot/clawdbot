@@ -1,6 +1,10 @@
 // @vitest-environment node
 // Control UI tests cover cron behavior.
 import { describe, expect, it, vi } from "vitest";
+import {
+  validateCronAddParams,
+  validateCronUpdateParams,
+} from "../../../../packages/gateway-protocol/src/index.js";
 import type { CronJob, CronRunsResult } from "../../api/types.ts";
 import { parseCronEveryMs } from "../../lib/cron/decimal.ts";
 import {
@@ -1562,6 +1566,51 @@ describe("cron controller", () => {
     expect(addCall[1]).toEqual(
       expect.objectContaining({ name: "Daily ping copy", agentId: "writer" }),
     );
+  });
+
+  it("round-trips hidden delivery destinations through clone and edit", async () => {
+    const sourceJob = createCronJob({
+      id: "job-routing",
+      name: "Routed job",
+      delivery: {
+        mode: "announce",
+        threadId: 42,
+        bestEffort: true,
+        completionDestination: { mode: "webhook", to: "https://example.test/complete" },
+        failureDestination: {
+          mode: "announce",
+          channel: "telegram",
+          to: "ops",
+          accountId: "alerts",
+        },
+      },
+    });
+
+    const addRequest = createCronRequest("job-copy");
+    const cloneState = createState({
+      client: { request: addRequest } as unknown as CronState["client"],
+      cronJobs: [sourceJob],
+    });
+    startCronClone(cloneState, sourceJob);
+    await addCronJob(cloneState);
+    const addPayload = requestPayload(findRequestCall(addRequest.mock.calls, "cron.add"));
+    expect(addPayload.delivery).toEqual(sourceJob.delivery);
+    expect(validateCronAddParams(addPayload)).toBe(true);
+
+    const updateRequest = createCronRequest(sourceJob.id, { existing: true });
+    const editState = createState({
+      client: { request: updateRequest } as unknown as CronState["client"],
+      cronJobs: [sourceJob],
+    });
+    startCronEdit(editState, sourceJob);
+    editState.cronForm.deliveryThreadId = "thread-42";
+    await addCronJob(editState);
+    const updatePayload = requestPayload(findRequestCall(updateRequest.mock.calls, "cron.update"));
+    expect(requireRecord(updatePayload.patch, "cron.update patch").delivery).toEqual({
+      ...sourceJob.delivery,
+      threadId: "thread-42",
+    });
+    expect(validateCronUpdateParams(updatePayload)).toBe(true);
   });
 
   it("loads paged jobs with query/filter/sort params", async () => {

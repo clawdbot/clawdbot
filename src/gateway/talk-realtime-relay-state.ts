@@ -53,6 +53,7 @@ export type TalkRealtimeRelayEventPayload =
       args: unknown;
       forced?: boolean;
     }
+  | { relaySessionId: string; type: "toolCallCancelled"; callId: string }
   | { relaySessionId: string; type: "toolResult"; callId: string }
   | { relaySessionId: string; type: "toolProgress"; result: RealtimeVoiceAgentControlResult }
   | {
@@ -192,6 +193,7 @@ export function relayEventDeliveryOptions(event: TalkRealtimeRelayEventPayload):
     case "error":
     case "close":
     case "mark":
+    case "toolCallCancelled":
       return { dropIfSlow: false };
     default:
       return { dropIfSlow: true };

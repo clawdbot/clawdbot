@@ -2643,13 +2643,13 @@ describe("cron method validation", () => {
   });
 
   it("rejects a provider-prefixed failureAlert.to for an unconfigured channel", async () => {
-    // No explicit channel, but `slack:...` resolves to slack, which is not
-    // configured here, so it must be rejected up front rather than at delivery.
+    // The alert owns its prefixed channel even when primary delivery is valid;
+    // reject that independently selected channel when it is not configured.
     setRuntimeConfig(telegramConfig());
 
     const { context, respond } = await invokeCronUpdate(
       { id: "cron-1", patch: { failureAlert: { to: "slack:C123" } } },
-      createCronJob(),
+      createCronJob({ delivery: { mode: "announce", channel: "telegram", to: "telegram:1" } }),
     );
 
     expect(context.cron.update).not.toHaveBeenCalled();
@@ -2807,18 +2807,68 @@ describe("cron method validation", () => {
     expectCronSuccess(respond);
   });
 
-  it("rejects a failureAlert.to whose prefix conflicts with the inherited delivery channel", async () => {
-    // The alert omits its own channel, so runtime sends via the delivery channel
-    // (telegram); a `slack:`-prefixed target would route to the wrong place, so
-    // reject it up front instead of letting it fail at delivery.
+  it.each([
+    {
+      name: "provider-prefixed recipient",
+      delivery: { mode: "announce", channel: "telegram", to: "telegram:1" },
+      alertTo: "slack:C123",
+    },
+    {
+      name: "provider-alias recipient",
+      delivery: { mode: "announce", channel: "slack", to: "slack:C123" },
+      alertTo: "tg:123",
+    },
+  ] as const)("lets a $name select its own alert channel", async ({ delivery, alertTo }) => {
     setRuntimeConfig(telegramSlackConfig());
 
     const { context, respond } = await invokeCronUpdate(
-      { id: "cron-1", patch: { failureAlert: { to: "slack:C123" } } },
+      { id: "cron-1", patch: { failureAlert: { to: alertTo } } },
+      createCronJob({ delivery }),
+    );
+
+    expect(context.cron.update).toHaveBeenCalled();
+    expectCronSuccess(respond);
+  });
+
+  it("accepts a provider-prefixed alert on another channel when creating a job", async () => {
+    setRuntimeConfig(telegramSlackConfig());
+
+    const { context, respond } = await invokeCronAdd(
+      agentTurnCronParams({
+        delivery: { mode: "announce", channel: "telegram", to: "telegram:1" },
+        failureAlert: { to: "slack:C123" },
+      }),
+    );
+
+    expect(context.cron.add).toHaveBeenCalled();
+    expectCronSuccess(respond);
+  });
+
+  it("does not inherit a primary recipient for another explicit failure-alert channel", async () => {
+    setRuntimeConfig(telegramSlackConfig());
+
+    const { context, respond } = await invokeCronUpdate(
+      { id: "cron-1", patch: { failureAlert: { channel: "slack" } } },
       createCronJob({ delivery: { mode: "announce", channel: "telegram", to: "telegram:1" } }),
     );
 
-    expect(context.cron.update).not.toHaveBeenCalled();
+    expect(context.cron.update).toHaveBeenCalled();
+    expectCronSuccess(respond);
+  });
+
+  it("rejects an unconfigured inherited global failure-alert channel", async () => {
+    setRuntimeConfig({
+      ...telegramConfig(),
+      cron: { failureAlert: { enabled: true, channel: "slack", to: "slack:C123" } },
+    });
+
+    const { context, respond } = await invokeCronAdd(
+      agentTurnCronParams({
+        delivery: { mode: "announce", channel: "telegram", to: "telegram:1" },
+      }),
+    );
+
+    expect(context.cron.add).not.toHaveBeenCalled();
     expectResponseError(respond, {
       code: "INVALID_REQUEST",
       messageIncludes: "failureAlert.channel",
@@ -2893,10 +2943,9 @@ describe("cron method validation", () => {
     expectCronSuccess(respond);
   });
 
-  it("revalidates an inherited failureAlert when a delivery-only patch changes the channel", async () => {
-    // The alert has no own channel, so it inherits delivery. Switching delivery
-    // from slack to telegram makes its slack-prefixed target route wrong, so the
-    // delivery-only edit must re-check the alert even though the patch omits it.
+  it("keeps a provider-prefixed failure alert when primary delivery changes channels", async () => {
+    // A provider-prefixed alert owns its channel even without `channel`, so a
+    // primary-delivery change cannot invalidate that independent destination.
     setRuntimeConfig(telegramSlackConfig());
 
     const { context, respond } = await invokeCronUpdate(
@@ -2907,11 +2956,8 @@ describe("cron method validation", () => {
       }),
     );
 
-    expect(context.cron.update).not.toHaveBeenCalled();
-    expectResponseError(respond, {
-      code: "INVALID_REQUEST",
-      messageIncludes: "failureAlert.channel",
-    });
+    expect(context.cron.update).toHaveBeenCalled();
+    expectCronSuccess(respond);
   });
 
   it("does not block a non-routing delivery edit on a job with a stale explicit alert channel", async () => {

@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { statSync } from "node:fs";
 import path from "node:path";
 import { resolveSafeTimeoutDelayMs } from "../../../gateway-client/src/timeouts.js";
+import { formatErrorMessage } from "./error-utils.js";
 import { materializeWindowsSpawnProgram, resolveWindowsSpawnProgram } from "./windows-spawn.js";
 
 type CliSpawnInvocation = {
@@ -76,7 +77,7 @@ export async function checkQmdBinaryAvailability(params: {
       packageName: "qmd",
     });
   } catch (err) {
-    return { available: false, reason: "binary", error: formatQmdAvailabilityError(err) };
+    return { available: false, reason: "binary", error: formatErrorMessage(err) };
   }
 
   const cwd = params.cwd ?? process.cwd();
@@ -118,7 +119,7 @@ export async function checkQmdBinaryAvailability(params: {
     }, timeoutMs);
 
     child.once("error", (err) => {
-      finish({ available: false, reason: "binary", error: formatQmdAvailabilityError(err) });
+      finish({ available: false, reason: "binary", error: formatErrorMessage(err) });
     });
     child.once("spawn", () => {
       didSpawn = true;
@@ -156,7 +157,7 @@ function validateQmdProbeCwd(cwd: string): QmdBinaryAvailability | null {
     return {
       available: false,
       reason: "workspace-cwd",
-      error: `workspace directory unavailable: ${cwd} (${formatQmdAvailabilityError(err)})`,
+      error: `workspace directory unavailable: ${cwd} (${formatErrorMessage(err)})`,
     };
   }
 }
@@ -502,11 +503,4 @@ function appendOutputWithCap(
     return { text: appended, truncated: false };
   }
   return { text: chars.slice(-maxChars).join(""), truncated: true };
-}
-
-function formatQmdAvailabilityError(err: unknown): string {
-  if (err instanceof Error && err.message) {
-    return err.message;
-  }
-  return String(err);
 }

@@ -299,7 +299,11 @@ describe("OpenClaw performance workflow", () => {
   it("keeps the source performance gateway fixture network-hermetic", () => {
     const run = findStep("Run OpenClaw source performance probes", "source_performance").run ?? "";
 
-    expect(run).toContain('"models": { "catalogRefresh": { "enabled": false } },');
+    expect(run).toContain("catalog_refresh_config");
+    expect(run).toContain("rg -q 'catalogRefresh:' src/config/zod-schema.core.ts");
+    expect(run).toContain(
+      'catalog_refresh_config=\'    "models": { "catalogRefresh": { "enabled": false } },\'',
+    );
     expect(run).toContain('"update": { "checkOnStart": false },');
   });
 

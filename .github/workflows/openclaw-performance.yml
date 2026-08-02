@@ -754,10 +754,16 @@ jobs:
           gateway_readiness_log="$SOURCE_PERF_DIR/cli-gateway-readiness.log"
           gateway_pid=""
           mkdir -p "$gateway_state" "$gateway_readiness_state"
+          catalog_refresh_config=""
+          # Frozen release candidates can predate this config key. Inspect the
+          # target schema so the trusted harness never writes invalid config.
+          if rg -q 'catalogRefresh:' src/config/zod-schema.core.ts; then
+            catalog_refresh_config='    "models": { "catalogRefresh": { "enabled": false } },'
+          fi
           cat > "$gateway_config" <<EOF
           {
             "browser": { "enabled": false },
-            "models": { "catalogRefresh": { "enabled": false } },
+          ${catalog_refresh_config}
             "update": { "checkOnStart": false },
             "gateway": {
               "mode": "local",

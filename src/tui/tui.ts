@@ -1280,6 +1280,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     updateFooter,
     updateAutocompleteProvider,
     setActivityStatus,
+    invalidateRunOwnership: () => invalidateSessionRunOwnership(),
     clearLocalRunIds: localRunIds.clear,
     rememberSessionKey: rememberCurrentSessionKey,
   });
