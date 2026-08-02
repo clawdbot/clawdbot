@@ -33,7 +33,7 @@ type CoreGatewayMethodSpecRow = readonly [
 
 // This is the canonical core method policy table: every core handler must appear here so
 // listing, authorization, startup availability, and write throttling stay in sync.
-const CORE_GATEWAY_METHOD_ROWS = [
+const CORE_GATEWAY_METHOD_SPECS = [
   ["health", "health", "operator.read", "<=2026.7"],
   ["diagnostics.stability", "diagnostics", "operator.read", "<=2026.7"],
   ["doctor.memory.status", "doctor", "operator.read", "<=2026.7"],
@@ -481,16 +481,25 @@ const CORE_GATEWAY_METHOD_ROWS = [
   ["skills.proposals.evaluate", "skills", "operator.admin", "2026.7", { controlPlaneWrite: true }],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];
 
-export type CoreGatewayHandlerFamily = Exclude<(typeof CORE_GATEWAY_METHOD_ROWS)[number][1], null>;
+export type CoreGatewayHandlerFamily = Exclude<(typeof CORE_GATEWAY_METHOD_SPECS)[number][1], null>;
 
 const CORE_GATEWAY_METHOD_SPEC_LIST: readonly CoreGatewayMethodSpec[] =
-  CORE_GATEWAY_METHOD_ROWS.map(([name, family, scope, since, policy]) => ({
-    name,
-    ...(family ? { family } : {}),
-    scope,
-    since,
-    ...policy,
-  }));
+  CORE_GATEWAY_METHOD_SPECS.map(([name, family, scope, since, policy]) => {
+    const spec: CoreGatewayMethodSpec = { name, scope, since };
+    if (family) {
+      spec.family = family;
+    }
+    if (policy?.advertise === false) {
+      spec.advertise = false;
+    }
+    if (policy?.startup === true) {
+      spec.startup = true;
+    }
+    if (policy?.controlPlaneWrite === true) {
+      spec.controlPlaneWrite = true;
+    }
+    return spec;
+  });
 
 const CORE_GATEWAY_METHOD_SPEC_BY_NAME: ReadonlyMap<string, CoreGatewayMethodSpec> = new Map(
   CORE_GATEWAY_METHOD_SPEC_LIST.map((spec) => [spec.name, spec]),
