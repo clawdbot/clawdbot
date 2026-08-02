@@ -916,6 +916,79 @@ describe("qa mock openai server", () => {
     expect(body).toContain(command);
   });
 
+  it("dispatches structured Slack commentary, exec, and final phases", async () => {
+    const server = await startMockServer();
+    const suffix = "A1B2C3D4";
+    const commentaryMarker = `SLACK-QA-COMMENTARY-${suffix}`;
+    const toolMarker = `SLACK-QA-TOOL-${suffix}`;
+    const finalMarker = `SLACK-QA-COMMENTARY-DONE-${suffix}`;
+    const command = `grep '${toolMarker}' /dev/null || sleep 5`;
+    const prompt = `${commentaryMarker} ${command} ${finalMarker}`;
+    const stalePrompt =
+      "SLACK-QA-COMMENTARY-11112222 grep 'SLACK-QA-TOOL-11112222' /dev/null || sleep 5 SLACK-QA-COMMENTARY-DONE-11112222";
+    const currentEnvelope = `${stalePrompt}\n${prompt}`;
+
+    const planResponse = await postStreamingResponses(server, {
+      tools: [{ type: "function", name: "exec" }],
+      input: [
+        makeUserInput(stalePrompt),
+        makeToolOutputWithCallId("call_stale_slack_progress", ""),
+        makeUserInput(currentEnvelope),
+      ],
+    });
+    expect(planResponse.status).toBe(200);
+    const events = (await planResponse.text())
+      .split("\n")
+      .filter((line) => line.startsWith("data: {"))
+      .map((line) => requireRecord(JSON.parse(line.slice("data: ".length)), "Slack SSE event"));
+    const completedItems = events
+      .filter((event) => event.type === "response.output_item.done")
+      .map((event) => requireRecord(event.item, "Slack completed item"));
+    expect(completedItems).toHaveLength(2);
+    expect(completedItems[0]).toMatchObject({
+      type: "message",
+      phase: "commentary",
+      content: [{ type: "output_text", text: commentaryMarker }],
+    });
+    const exec = completedItems[1];
+    if (!exec) {
+      throw new Error("expected Slack progress exec output item");
+    }
+    expect(exec).toMatchObject({ type: "function_call", name: "exec" });
+    expect(outputToolArgsFromItem(exec)).toEqual({ command });
+    expect(JSON.stringify(events)).not.toContain(finalMarker);
+
+    const final = await expectNonStreamingResponsesJson(server, {
+      tools: [{ type: "function", name: "exec" }],
+      input: [
+        makeUserInput(stalePrompt),
+        makeToolOutputWithCallId("call_stale_slack_progress", ""),
+        makeUserInput(currentEnvelope),
+        makeToolOutputWithCallId(outputToolCallId(exec, "call_slack_progress"), ""),
+      ],
+    });
+    expect(outputItem(final)).toMatchObject({ type: "message", phase: "final_answer" });
+    expect(outputText(final)).toBe(finalMarker);
+    expect(outputItems(final)).toHaveLength(1);
+    expect(JSON.stringify(final)).not.toContain(commentaryMarker);
+  });
+
+  it("does not dispatch Slack progress when structured marker suffixes disagree", async () => {
+    const server = await startMockServer();
+    const payload = await expectNonStreamingResponsesJson(server, {
+      tools: [{ type: "function", name: "exec" }],
+      input: [
+        makeUserInput(
+          "SLACK-QA-COMMENTARY-A1B2C3D4 grep 'SLACK-QA-TOOL-11112222' /dev/null || sleep 5 SLACK-QA-COMMENTARY-DONE-A1B2C3D4",
+        ),
+      ],
+    });
+
+    expect(outputItems(payload)).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ name: "exec" })]),
+    );
+  });
+
   it("honors exact replies after QA kickoff reads without marker wording", async () => {
     const server = await startMockServer();
     const prompt =
