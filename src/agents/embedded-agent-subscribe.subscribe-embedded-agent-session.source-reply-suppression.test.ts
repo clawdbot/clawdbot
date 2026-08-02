@@ -1,5 +1,4 @@
-// Message-tool suppression tests cover delivery tracking, source-reply mirrors,
-// and duplicate reply prevention after message tool sends.
+// Source-reply suppression after message-tool delivery.
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
 import {
