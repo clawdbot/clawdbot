@@ -1,8 +1,8 @@
+import { hasValidIsoCalendarComponents } from "../../shared/iso-time.js";
+
 // Offsetless zoned datetime parsing interprets local wall-clock ISO strings in
 // an explicit IANA time zone and rejects impossible DST times.
-const OFFSETLESS_ISO_DATETIME_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?(\.\d+)?$/;
-const OFFSETLESS_ISO_DATETIME_PARTS_RE =
-  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?$/;
+const OFFSETLESS_ISO_DATETIME_RE = /^\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}(:\d{2})?(\.\d+)?$/;
 
 type OffsetlessIsoDateTimeParts = {
   year: number;
@@ -19,17 +19,28 @@ export function isOffsetlessIsoDateTime(raw: string): boolean {
 }
 
 export function parseOffsetlessIsoDateTimeInTimeZone(raw: string, timeZone: string): string | null {
-  const expectedParts = parseOffsetlessIsoDateTimeParts(raw);
-  if (!expectedParts) {
+  if (!isOffsetlessIsoDateTime(raw) || !hasValidIsoCalendarComponents(raw)) {
     return null;
   }
   try {
     getZonedDateTimeParts(Date.now(), timeZone);
 
-    const naiveMs = new Date(`${raw}Z`).getTime();
+    const naiveDate = new Date(`${raw}Z`);
+    const naiveMs = naiveDate.getTime();
     if (Number.isNaN(naiveMs)) {
       return null;
     }
+
+    // UTC Date rolls valid ISO 24:00 into the next local calendar day.
+    const expectedParts: OffsetlessIsoDateTimeParts = {
+      year: naiveDate.getUTCFullYear(),
+      month: naiveDate.getUTCMonth() + 1,
+      day: naiveDate.getUTCDate(),
+      hour: naiveDate.getUTCHours(),
+      minute: naiveDate.getUTCMinutes(),
+      second: naiveDate.getUTCSeconds(),
+      millisecond: naiveDate.getUTCMilliseconds(),
+    };
 
     // Re-check the offset at the first candidate instant so DST boundaries
     // land on the intended wall-clock time instead of drifting by one hour.
@@ -44,23 +55,6 @@ export function parseOffsetlessIsoDateTimeInTimeZone(raw: string, timeZone: stri
   } catch {
     return null;
   }
-}
-
-function parseOffsetlessIsoDateTimeParts(raw: string): OffsetlessIsoDateTimeParts | null {
-  const match = OFFSETLESS_ISO_DATETIME_PARTS_RE.exec(raw);
-  if (!match) {
-    return null;
-  }
-  const fractionalMs = (match[7] ?? "").padEnd(3, "0").slice(0, 3);
-  return {
-    year: Number.parseInt(match[1] ?? "0", 10),
-    month: Number.parseInt(match[2] ?? "0", 10),
-    day: Number.parseInt(match[3] ?? "0", 10),
-    hour: Number.parseInt(match[4] ?? "0", 10),
-    minute: Number.parseInt(match[5] ?? "0", 10),
-    second: Number.parseInt(match[6] ?? "0", 10),
-    millisecond: Number.parseInt(fractionalMs || "0", 10),
-  };
 }
 
 function matchesOffsetlessIsoDateTimeParts(
