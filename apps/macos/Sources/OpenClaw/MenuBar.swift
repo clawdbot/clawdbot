@@ -19,12 +19,12 @@ struct OpenClawApp: App {
     @State private var statusItem: NSStatusItem?
     @State private var statusItemMouseRouter = StatusItemMouseRouter()
     @State private var isMenuPresented = false
-    @State private var isPanelVisible = false
+    @State private var isChatWindowVisible = false
     @State private var tailscaleService = TailscaleService.shared
 
     @MainActor
     private func updateStatusHighlight() {
-        self.statusItem?.button?.highlight(self.isPanelVisible)
+        self.statusItem?.button?.highlight(self.isChatWindowVisible)
     }
 
     init() {
@@ -136,9 +136,6 @@ struct OpenClawApp: App {
                 .keyboardShortcut("k", modifiers: .command)
             }
         }
-        .onChange(of: self.isMenuPresented) { _, _ in
-            self.updateStatusHighlight()
-        }
     }
 
     private func applyStatusItemAppearance(paused _: Bool, sleeping _: Bool) {
@@ -188,8 +185,8 @@ struct OpenClawApp: App {
 
     @MainActor
     private func installStatusItemMouseHandler(for item: NSStatusItem) {
-        WebChatManager.shared.onPanelVisibilityChanged = { [self] visible in
-            self.isPanelVisible = visible
+        WebChatManager.shared.onChatWindowVisibilityChanged = { [self] visible in
+            self.isChatWindowVisible = visible
             self.updateStatusHighlight()
         }
         CanvasManager.shared.onPanelVisibilityChanged = { [self] visible in
@@ -203,9 +200,7 @@ struct OpenClawApp: App {
                 self.openDashboardWindow()
             },
             onRightClick: { [self] in
-                WebChatManager.shared.closePanel()
                 self.isMenuPresented = true
-                self.updateStatusHighlight()
             })
     }
 
