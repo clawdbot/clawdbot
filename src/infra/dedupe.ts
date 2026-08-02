@@ -71,7 +71,7 @@ export function createDedupeCache(options: DedupeCacheOptions): DedupeCache {
   };
 
   return {
-    check: (key, now = Date.now(), ownerToken) => {
+    check: (key, now = Date.now(), ownerToken = undefined) => {
       if (!key) {
         return false;
       }
