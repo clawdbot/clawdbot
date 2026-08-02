@@ -120,6 +120,15 @@ struct OnboardingRemoteAuthPromptTests {
         #expect(issue.footnote?.contains("`openclaw devices approve`") == true)
     }
 
+    @Test func `gateway token copy points to explicit interactive recovery`() {
+        for issue in [RemoteGatewayAuthIssue.tokenRequired, .tokenMismatch] {
+            #expect(issue.body.contains("`openclaw gateway auth-token --show`"))
+            #expect(issue.body.contains("interactive terminal"))
+            #expect(!issue.body.contains("config get gateway.auth.token"))
+            #expect(issue.statusMessage.contains("openclaw gateway auth-token --show"))
+        }
+    }
+
     @Test func `paired device success copy explains auth source`() {
         let pairedDevice = RemoteGatewayProbeSuccess(authSource: .deviceToken)
         let bootstrap = RemoteGatewayProbeSuccess(authSource: .bootstrapToken)

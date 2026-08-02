@@ -4313,7 +4313,7 @@ export const en: TranslationMap = {
         summary:
           "The Gateway is reachable, but it needs a matching token or password before this browser can connect.",
         stepPaste:
-          "Paste the token from openclaw dashboard --no-open or enter the configured password.",
+          "Paste the token from openclaw gateway auth-token --show or enter the configured password.",
         stepGenerate:
           "If no token is configured, run openclaw doctor --generate-gateway-token on the gateway host.",
         stepConnect: "Click Connect again after updating the credential.",
@@ -4323,7 +4323,7 @@ export const en: TranslationMap = {
         summary:
           "The supplied credential was rejected. The most common cause is a stale token or a token copied from another Gateway URL.",
         stepDashboard:
-          "Run openclaw dashboard --no-open and open the fresh URL or paste its token.",
+          "Run openclaw dashboard --no-open for a fresh URL, or openclaw gateway auth-token --show to recover the token.",
         stepReplace:
           "Replace stale token/password values; do not reuse a token from another Gateway URL.",
         stepMode:
