@@ -112,6 +112,7 @@ export async function runAcpAgentCommand(params: {
       signal: params.opts.abortSignal,
       onLifecycle: (event) => {
         if (event.type === "prompt_submitted") {
+          params.opts.onExecutionStarted?.();
           attemptExecutionRuntime.emitAcpPromptSubmitted({
             runId: params.runId,
             sessionKey: params.sessionKey,

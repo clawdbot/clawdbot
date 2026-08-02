@@ -85,6 +85,7 @@ type RegisteredChatAbortController = {
   controller: AbortController;
   registered: boolean;
   entry?: ChatAbortControllerEntry;
+  markExecutionStarted: () => void;
   cleanup: (opts?: { force?: boolean }) => void;
 };
 
@@ -169,6 +170,21 @@ export function registerChatAbortController(params: {
   expiresAtMs?: number;
 }): RegisteredChatAbortController {
   const controller = new AbortController();
+  let executionStarted = false;
+  const markExecutionStarted = () => {
+    if (executionStarted) {
+      return;
+    }
+    const entry = params.chatAbortControllers.get(params.runId);
+    if (entry?.controller !== controller || controller.signal.aborted || entry.kind !== "agent") {
+      return;
+    }
+    executionStarted = true;
+    entry.expiresAtMs = resolveAgentRunExpiresAtMs({
+      now: Date.now(),
+      timeoutMs: params.timeoutMs,
+    });
+  };
   const cleanup = (opts?: { force?: boolean }) => {
     const entry = params.chatAbortControllers.get(params.runId);
     if (entry?.controller === controller) {
@@ -204,7 +220,7 @@ export function registerChatAbortController(params: {
   if (!params.sessionKey || params.chatAbortControllers.has(params.runId)) {
     // Duplicate run ids keep their fresh controller for caller cancellation, but
     // do not replace the registered entry that owns active-run projection.
-    return { controller, registered: false, cleanup };
+    return { controller, registered: false, markExecutionStarted, cleanup };
   }
 
   const rawNow = params.now ?? Date.now();
@@ -233,7 +249,7 @@ export function registerChatAbortController(params: {
     turnKind: params.turnKind,
   };
   params.chatAbortControllers.set(params.runId, entry);
-  return { controller, registered: true, entry, cleanup };
+  return { controller, registered: true, entry, markExecutionStarted, cleanup };
 }
 
 function normalizeProviderIdForActiveRun(providerId: string | undefined): string | undefined {
