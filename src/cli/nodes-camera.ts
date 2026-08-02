@@ -7,7 +7,6 @@ import { toErrorObject } from "../infra/errors.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { normalizeHostname } from "../infra/net/hostname.js";
 import { resolveCliName } from "./cli-name.js";
-import { publishOutputFileAtomically } from "./media-output.js";
 import {
   asBoolean,
   asNumber,
@@ -15,6 +14,7 @@ import {
   asString,
   resolveTempPathParts,
 } from "./nodes-media-utils.js";
+import { publishOutputFileAtomically } from "./output-file.runtime.js";
 
 const MAX_CAMERA_URL_DOWNLOAD_BYTES = 250 * 1024 * 1024;
 const MAX_CAMERA_BASE64_BYTES = MAX_CAMERA_URL_DOWNLOAD_BYTES;
