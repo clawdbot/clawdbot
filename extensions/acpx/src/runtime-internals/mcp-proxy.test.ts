@@ -48,6 +48,10 @@ describe("mcp-proxy", () => {
     });
     expect(createTargetSpawnOptions("darwin")).not.toHaveProperty("windowsHide");
     expect(createTargetSpawnOptions("linux")).not.toHaveProperty("windowsHide");
+    // Off Windows the target owns its process group so teardown can reap the
+    // whole tree, descendants included.
+    expect(createTargetSpawnOptions("darwin")).toHaveProperty("detached", true);
+    expect(createTargetSpawnOptions("linux")).toHaveProperty("detached", true);
   });
 
   it("injects configured MCP servers into ACP session bootstrap requests", async () => {
@@ -187,6 +191,121 @@ setTimeout(() => {}, 300_000);
     expect(exitCode).toBe(0);
     // The grace-period kill must reap the stdin-ignoring target too.
     expect(() => process.kill(targetPid, 0)).toThrow();
+  }, 15_000);
+
+  it("force-kills a SIGTERM-resistant target after the host disconnects", async () => {
+    const termResistantPath = await makeTempScript(
+      "term-resistant-server.cjs",
+      String.raw`#!/usr/bin/env node
+process.on("SIGTERM", () => {});
+process.stdout.write("ready " + process.pid + "\n");
+setTimeout(() => {}, 300_000);
+`,
+    );
+
+    const payload = encodePayload({
+      targetCommand: `${process.execPath} ${termResistantPath}`,
+      mcpServers: [],
+    });
+
+    const child = spawn(process.execPath, [proxyPath, "--payload", payload], {
+      stdio: ["pipe", "pipe", "inherit"],
+      cwd: process.cwd(),
+    });
+
+    let stdout = "";
+    const targetPid = await new Promise<number>((resolve) => {
+      child.stdout.on("data", (chunk) => {
+        stdout += String(chunk);
+        const match = stdout.match(/ready (\d+)\n/);
+        if (match) {
+          resolve(Number(match[1]));
+        }
+      });
+    });
+
+    child.stdin.end();
+
+    const exitCode = await new Promise<number | null>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        child.kill("SIGKILL");
+        try {
+          process.kill(targetPid, "SIGKILL");
+        } catch {
+          // target already gone
+        }
+        reject(new Error("proxy did not exit after host stdin EOF (TERM-resistant target leak)"));
+      }, 8_000);
+      child.once("close", (code) => {
+        clearTimeout(timer);
+        resolve(code);
+      });
+    });
+
+    expect(exitCode).toBe(0);
+    // SIGTERM was ignored, so the bounded SIGKILL escalation must reap it.
+    expect(() => process.kill(targetPid, 0)).toThrow();
+  }, 15_000);
+
+  it("reaps a target descendant after the host disconnects", async () => {
+    const parentServerPath = await makeTempScript(
+      "parent-server.cjs",
+      String.raw`#!/usr/bin/env node
+const { spawn } = require("node:child_process");
+const grandchild = spawn(process.execPath, ["-e", "setTimeout(() => {}, 300000)"], {
+  stdio: "ignore",
+});
+process.stdout.write("ready " + process.pid + " " + grandchild.pid + "\n");
+setTimeout(() => {}, 300_000);
+`,
+    );
+
+    const payload = encodePayload({
+      targetCommand: `${process.execPath} ${parentServerPath}`,
+      mcpServers: [],
+    });
+
+    const child = spawn(process.execPath, [proxyPath, "--payload", payload], {
+      stdio: ["pipe", "pipe", "inherit"],
+      cwd: process.cwd(),
+    });
+
+    let stdout = "";
+    const pids = await new Promise<{ targetPid: number; grandchildPid: number }>((resolve) => {
+      child.stdout.on("data", (chunk) => {
+        stdout += String(chunk);
+        const match = stdout.match(/ready (\d+) (\d+)\n/);
+        if (match) {
+          resolve({ targetPid: Number(match[1]), grandchildPid: Number(match[2]) });
+        }
+      });
+    });
+
+    child.stdin.end();
+
+    const exitCode = await new Promise<number | null>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        child.kill("SIGKILL");
+        for (const pid of [pids.targetPid, pids.grandchildPid]) {
+          try {
+            process.kill(pid, "SIGKILL");
+          } catch {
+            // already gone
+          }
+        }
+        reject(new Error("proxy did not exit after host stdin EOF (descendant leak)"));
+      }, 8_000);
+      child.once("close", (code) => {
+        clearTimeout(timer);
+        resolve(code);
+      });
+    });
+
+    expect(exitCode).toBe(0);
+    // The descendant stays in the target's process group, so the tree signal
+    // must reap it together with the direct target.
+    expect(() => process.kill(pids.targetPid, 0)).toThrow();
+    expect(() => process.kill(pids.grandchildPid, 0)).toThrow();
   }, 15_000);
 
   it("reports target stdin pipe failures without an unhandled stream error", async () => {

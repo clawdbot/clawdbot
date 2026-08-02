@@ -47,6 +47,31 @@ function shouldInject(method) {
 /** Grace period for a cooperative target to exit on forwarded stdin EOF. */
 const STDIN_EOF_GRACE_MS = 2_000;
 
+/** Bounded window between SIGTERM and the forced SIGKILL of the target tree. */
+const FORCED_REAP_WINDOW_MS = 750;
+
+/** Signal the whole target process tree (the target owns its group off win32). */
+function killTargetTree(child, signal) {
+  if (process.platform === "win32" || child.pid === undefined) {
+    // No process-group signaling on Windows; signal the direct child only.
+    try {
+      child.kill(signal);
+    } catch {
+      // Already gone.
+    }
+    return;
+  }
+  try {
+    process.kill(-child.pid, signal);
+  } catch {
+    try {
+      child.kill(signal);
+    } catch {
+      // Already gone.
+    }
+  }
+}
+
 function rewriteLine(line, mcpServers) {
   if (!line.trim()) {
     return line;
@@ -85,6 +110,10 @@ export function createTargetSpawnOptions(platform = process.platform) {
   };
   if (platform === "win32") {
     options.windowsHide = true;
+  } else {
+    // Give the target its own process group so teardown can signal the whole
+    // tree (target plus any descendants) instead of the direct child only.
+    options.detached = true;
   }
   return options;
 }
@@ -115,7 +144,7 @@ function main() {
     }
     exiting = true;
     input.close();
-    child.kill();
+    killTargetTree(child, "SIGTERM");
     process.stderr.write(`${formatErrorMessage(error)}\n`);
     process.exit(1);
   };
@@ -139,17 +168,24 @@ function main() {
     }
     child.stdin.end();
     // The host closed stdin: a cooperative target exits on the forwarded EOF.
-    // Give it a short grace period, then kill it and exit so a hung or
-    // stdin-ignoring target cannot leak both processes.
-    const killTimer = setTimeout(() => {
+    // Give it a short grace period, then reap the whole target tree — SIGTERM,
+    // a bounded window, then SIGKILL — so a hung, TERM-resistant, or
+    // stdin-ignoring target cannot leak the proxy or any descendant.
+    const termTimer = setTimeout(() => {
       if (exiting) {
         return;
       }
       exiting = true;
-      child.kill();
-      process.exit(0);
+      killTargetTree(child, "SIGTERM");
+      const killTimer = setTimeout(() => {
+        if (child.exitCode === null && child.signalCode === null) {
+          killTargetTree(child, "SIGKILL");
+        }
+        process.exit(0);
+      }, FORCED_REAP_WINDOW_MS);
+      killTimer.unref();
     }, STDIN_EOF_GRACE_MS);
-    killTimer.unref();
+    termTimer.unref();
   });
 
   child.stdout.pipe(process.stdout);
