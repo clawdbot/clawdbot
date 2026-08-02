@@ -2572,6 +2572,111 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(deleteAttempts).toBe(3);
   });
 
+  it("cleans up an accepted reserved launch cancelled before registry registration", async () => {
+    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+    hoisted.configOverride = createConfigOverride({
+      agents: {
+        defaults: {
+          workspace: os.tmpdir(),
+          subagents: { allowAgents: ["worker"], maxChildrenPerAgent: 1 },
+        },
+        list: [
+          { id: "main", workspace: "/tmp/workspace-main" },
+          { id: "worker", workspace: "/tmp/workspace-worker" },
+        ],
+      },
+    });
+    installActiveCountFromRegisteredRuns();
+    hoisted.hasInProcessGatewayContextMock.mockReturnValue(true);
+    hoisted.quarantineFailedSubagentSpawnMock.mockImplementation(() => {
+      throw new Error("registry unavailable");
+    });
+    const abortController = new AbortController();
+    const childSessionKey = "agent:worker:subagent:accepted-then-cancelled-child";
+    const runId = "accepted-then-cancelled-reserved-run";
+    const acceptedGatewayRunId = "accepted-then-cancelled-gateway-run";
+    const sessionIdentity = {
+      expectedSessionId: "accepted-then-cancelled-session",
+      expectedLifecycleRevision: "accepted-then-cancelled-lifecycle",
+    };
+    const store: Record<string, Record<string, unknown>> = {};
+    hoisted.loadSessionStoreMock.mockImplementation(() => store);
+    hoisted.updateSessionStoreMock.mockImplementation(async (_storePath, mutator) => {
+      await mutator(store);
+      const child = store[childSessionKey];
+      if (child) {
+        child.sessionId = sessionIdentity.expectedSessionId;
+        child.lifecycleRevision = sessionIdentity.expectedLifecycleRevision;
+      }
+      return store;
+    });
+    let deleteAttempts = 0;
+    hoisted.dispatchGatewayMethodInProcessMock.mockImplementation(async (method: string) => {
+      if (method === "agent") {
+        abortController.abort(new Error("requester cancelled after accepted launch"));
+        return { runId: acceptedGatewayRunId };
+      }
+      if (method === "sessions.delete") {
+        deleteAttempts += 1;
+        throw new Error("cleanup unavailable");
+      }
+      return { ok: true };
+    });
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "cancel after the reserved child launch is accepted",
+        agentId: "worker",
+        expectsCompletionMessage: false,
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        authorizedTargetAgentId: "worker",
+        preallocatedChildSessionKey: childSessionKey,
+        preallocatedRunId: runId,
+        pluginOwnerId: "agentic-os",
+        reservedSubagentClaimToken: "accepted-then-cancelled-claim",
+        signal: abortController.signal,
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "error",
+      error: "requester cancelled after accepted launch",
+      childSessionKey,
+      runId: acceptedGatewayRunId,
+      reservedCleanup: {
+        sessionDeletion: "indeterminate",
+        sessionIdentity,
+      },
+    });
+    expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
+    expect(hoisted.emitSessionLifecycleEventMock).not.toHaveBeenCalled();
+    const capturedSessionIdentity = requireRecord(
+      requireRecord(result.reservedCleanup).sessionIdentity,
+    );
+    const sessionDeleteCalls = hoisted.dispatchGatewayMethodInProcessMock.mock.calls.filter(
+      ([method]) => method === "sessions.delete",
+    );
+    expect(sessionDeleteCalls.map(([, params]) => params)).toEqual([
+      expect.objectContaining(capturedSessionIdentity),
+      expect.objectContaining(capturedSessionIdentity),
+      expect.objectContaining(capturedSessionIdentity),
+    ]);
+    expect(deleteAttempts).toBe(3);
+    expect(spawnFailureQuarantine.inspectRetainedFailedSpawnAdmissions()).toEqual([
+      expect.objectContaining({
+        childSessionKey,
+        status: "retrying",
+        retryScheduled: true,
+      }),
+    ]);
+
+    const blockedResult = await spawnOrdinaryWorker("while-accepted-abort-cleanup-retained");
+    expect(blockedResult.status).toBe("forbidden");
+    expect(blockedResult.error).toContain("max active children");
+  });
+
   it("reports confirmed reserved cleanup when deletion succeeds within the bound", async () => {
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     hoisted.configOverride = createConfigOverride({

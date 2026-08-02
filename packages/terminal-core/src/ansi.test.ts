@@ -206,6 +206,9 @@ describe("terminal ansi helpers", () => {
     ["Hindi spacing mark", "का", 2],
     ["repeated leading Hangul jamo", "ᄀᄀ", 4],
     ["repeated Hangul jamo with a vowel", "ᄀ가", 4],
+    ["decomposed Hangul L/V syllable", "\u1100\u1161", 2],
+    ["decomposed Hangul L/V/T syllable", "\u1100\u1161\u11A8", 2],
+    ["mixed decomposed Hangul L/V/T text", "A\u1100\u1161\u11A8B", 4],
     ["Hangul leading filler", "\u115F", 2],
     ["Hangul vowel filler", "\u1160", 0],
     ["Hangul compatibility filler", "\u3164", 2],
@@ -297,6 +300,15 @@ describe("terminal ansi helpers", () => {
     expect(truncateToVisibleWidth("ﾊﾞ", 1)).toBe("");
     expect(truncateToVisibleWidth("ﾊﾞ", 2)).toBe("ﾊﾞ");
     expect(truncateToVisibleWidth("का", 1)).toBe("");
+    expect(truncateToVisibleWidth("\u1100\u1161", 1)).toBe("");
+    expect(truncateToVisibleWidth("\u1100\u1161", 2)).toBe("\u1100\u1161");
+    expect(truncateToVisibleWidth("\u1100\u1161", 3)).toBe("\u1100\u1161");
+    expect(truncateToVisibleWidth("\u1100\u1161\u11A8", 1)).toBe("");
+    expect(truncateToVisibleWidth("\u1100\u1161\u11A8", 2)).toBe("\u1100\u1161\u11A8");
+    expect(truncateToVisibleWidth("\u1100\u1161\u11A8", 3)).toBe("\u1100\u1161\u11A8");
+    expect(truncateToVisibleWidth("A\u1100\u1161\u11A8B", 1)).toBe("A");
+    expect(truncateToVisibleWidth("A\u1100\u1161\u11A8B", 2)).toBe("A");
+    expect(truncateToVisibleWidth("A\u1100\u1161\u11A8B", 3)).toBe("A\u1100\u1161\u11A8");
     expect(truncateToVisibleWidth("ᄀᄀ", 3)).toBe("");
     expect(truncateToVisibleWidth("👨‍👩‍👧‍👦", 1)).toBe("");
     expect(truncateToVisibleWidth("🇬🇧", 1)).toBe("");

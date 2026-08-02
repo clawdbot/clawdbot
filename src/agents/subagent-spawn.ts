@@ -416,8 +416,9 @@ export async function spawnSubagentDirect(
       requesterSessionKey: requesterInternalKey,
       agentId: targetAgentId,
     });
-    const launchChildRun = async () => {
-      return await callSubagentGateway(
+    let acceptedDispatchRunId: string | undefined;
+    const launchChildRun = () =>
+      callSubagentGateway(
         {
           method: "agent",
           params: childLaunch.request,
@@ -431,7 +432,6 @@ export async function spawnSubagentDirect(
             : {}),
         },
       );
-    };
 
     const emitSpawnLifecycleHooks = createSubagentSpawnLifecycleEmitter({
       hookRunner,
@@ -470,7 +470,9 @@ export async function spawnSubagentDirect(
           return { runId: childIdem };
         }
         const response = await launchChildRun();
-        return { runId: readGatewayRunId(response) ?? childIdem };
+        acceptedDispatchRunId = readGatewayRunId(response) ?? childIdem;
+        throwIfSpawnAborted(ctx.signal);
+        return { runId: acceptedDispatchRunId };
       },
       async cleanupOnFailure({ phase, state }) {
         if (phase === "initialize") {
@@ -501,12 +503,12 @@ export async function spawnSubagentDirect(
                   reason: "spawn-failed",
                   sendFarewell: true,
                   accountId: childSessionOrigin?.accountId,
-                  runId: childIdem,
+                  runId: acceptedDispatchRunId ?? childIdem,
                   outcome: "error",
                   error: "Session failed to start",
                 },
                 {
-                  runId: childIdem,
+                  runId: acceptedDispatchRunId ?? childIdem,
                   childSessionKey,
                   requesterSessionKey: requesterInternalKey,
                 },
@@ -583,7 +585,7 @@ export async function spawnSubagentDirect(
       },
     });
     if (!pipelineResult.ok) {
-      const runId = pipelineResult.runId ?? childIdem;
+      const runId = pipelineResult.runId ?? acceptedDispatchRunId ?? childIdem;
       const failure = resolveSpawnPipelineFailure(pipelineResult.error, pipelineResult.phase);
       retainAdmissionSlotAfterReturn =
         admissionSlot !== undefined &&

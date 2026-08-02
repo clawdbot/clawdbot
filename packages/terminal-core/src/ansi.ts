@@ -59,7 +59,7 @@ function isZeroWidthDefaultIgnorable(code: number): boolean {
     code === 0x00ad ||
     code === 0x034f ||
     code === 0x061c ||
-    (code >= 0x1160 && code <= 0x11a7) ||
+    code === 0x1160 ||
     code === 0x180e ||
     code === 0x200b ||
     code === 0x200c ||
@@ -72,12 +72,16 @@ function isZeroWidthDefaultIgnorable(code: number): boolean {
   );
 }
 
+function normalizePrintableWidthChunk(input: string): string {
+  return /[\u1100-\u11FF]/u.test(input) ? input.normalize("NFC") : input;
+}
+
 function widthAcrossDefaultIgnorableBoundaries(input: string): number {
   let width = 0;
   let chunk = "";
   const flush = (): void => {
     if (chunk) {
-      width += stringWidth(chunk);
+      width += stringWidth(normalizePrintableWidthChunk(chunk));
       chunk = "";
     }
   };
