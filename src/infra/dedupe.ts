@@ -71,15 +71,16 @@ export function createDedupeCache(options: DedupeCacheOptions): DedupeCache {
   };
 
   return {
-    check: (key, now = Date.now(), ownerToken = undefined) => {
+    check: (key, now, ownerToken) => {
       if (!key) {
         return false;
       }
-      if (hasUnexpired(key, now, true)) {
+      const checkedAt = now ?? Date.now();
+      if (hasUnexpired(key, checkedAt, true)) {
         return true;
       }
-      record(key, now, ownerToken);
-      prune(now);
+      record(key, checkedAt, ownerToken);
+      prune(checkedAt);
       return false;
     },
     peek: (key, now = Date.now()) => {
