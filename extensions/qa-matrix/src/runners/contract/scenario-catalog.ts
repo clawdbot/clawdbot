@@ -515,6 +515,7 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
       audio: {
         enabled: true,
         models: [{ model: "gpt-4o-transcribe", provider: "openai" }],
+        prompt: "MATRIX_QA_VOICE_PREFLIGHT_TRIGGER",
       },
       groupMentionPatterns: [MATRIX_QA_VOICE_PREFLIGHT_MENTION],
     },

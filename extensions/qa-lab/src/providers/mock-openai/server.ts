@@ -191,11 +191,7 @@ const QA_AUDIO_TRANSCRIPTION_TEXT =
 const QA_GROUP_AUDIO_TRANSCRIPTION_TEXT =
   "openclawqa reply with only this exact marker after group audio preflight: WHATSAPP_QA_GROUP_AUDIO_TRANSCRIPT_OK";
 const QA_GROUP_AUDIO_MIN_MULTIPART_BODY_CHARS = 48_000;
-const QA_MATRIX_VOICE_PREFLIGHT_FILENAME = "matrix-qa-voice-preflight.wav";
-const QA_MATRIX_VOICE_PREFLIGHT_FILENAME_STEM = QA_MATRIX_VOICE_PREFLIGHT_FILENAME.replace(
-  /\.wav$/,
-  "",
-);
+const QA_MATRIX_VOICE_PREFLIGHT_TRIGGER = "MATRIX_QA_VOICE_PREFLIGHT_TRIGGER";
 const QA_MATRIX_VOICE_PREFLIGHT_TRANSCRIPTION_TEXT =
   "MATRIX_QA_VOICE_PREFLIGHT_MENTION reply with only this exact marker: MATRIX_QA_VOICE_PREFLIGHT_OK";
 const QA_MCP_CODE_MODE_API_FILE_PROMPT_RE = /mcp code mode api file qa check/i;
@@ -259,9 +255,7 @@ function writeOpenAiMalformedJsonError(res: ServerResponse, label: string) {
 }
 
 function transcriptionTextForAudioRequest(rawBody: string) {
-  // Matrix stages inbound media as <original-stem>---<uuid>.<ext>, so the
-  // original filename is not present verbatim in the OpenAI multipart upload.
-  if (rawBody.includes(QA_MATRIX_VOICE_PREFLIGHT_FILENAME_STEM)) {
+  if (rawBody.includes(QA_MATRIX_VOICE_PREFLIGHT_TRIGGER)) {
     return QA_MATRIX_VOICE_PREFLIGHT_TRANSCRIPTION_TEXT;
   }
   if (rawBody.length >= QA_GROUP_AUDIO_MIN_MULTIPART_BODY_CHARS) {
