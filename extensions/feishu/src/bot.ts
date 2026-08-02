@@ -1061,7 +1061,9 @@ export async function handleFeishuMessage(params: {
       transcribed: (_media, index) => index === preflightAudioIndex,
     });
     const requiredMentionTargets =
-      isGroup && ctx.senderType === "bot" && ctx.senderOpenId
+      isGroup &&
+      ctx.senderOpenId &&
+      (ctx.senderType === "bot" || feishuCfg?.mentionSenderOnReply === true)
         ? [
             {
               openId: ctx.senderOpenId,

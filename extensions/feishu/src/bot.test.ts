@@ -1753,6 +1753,51 @@ describe("handleFeishuMessage command authorization", () => {
     expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
   });
 
+  it("requires a native mention of the human sender when group reply mentions are enabled", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    await dispatchMessage({
+      cfg: createFeishuTestConfig({
+        groupPolicy: "open",
+        mentionSenderOnReply: true,
+        resolveSenderNames: false,
+        groups: { "oc-group": { requireMention: false } },
+      }),
+      event: createFeishuTestEvent({
+        messageId: "msg-human-sender-mention",
+        senderOpenId: "ou-human-sender",
+        chatId: "oc-group",
+        chatType: "group",
+      }),
+    });
+
+    expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requiredMentionTargets: [{ openId: "ou-human-sender", name: "ou-human-sender", key: "" }],
+      }),
+    );
+  });
+
+  it("does not mention a direct-message sender when group reply mentions are enabled", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    await dispatchMessage({
+      cfg: createFeishuTestConfig({
+        dmPolicy: "open",
+        mentionSenderOnReply: true,
+        resolveSenderNames: false,
+      }),
+      event: createFeishuTestEvent({
+        messageId: "msg-dm-no-sender-mention",
+        senderOpenId: "ou-dm-sender",
+      }),
+    });
+
+    expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({ requiredMentionTargets: undefined }),
+    );
+  });
+
   it("fails closed for bot ingress when the local bot identity is unavailable", async () => {
     const cfg = createFeishuTestConfig({
       allowBots: true,
