@@ -84,6 +84,7 @@ import type { GatewayCronServiceContract } from "./server-cron-contract.js";
 import { reconcileHeartbeatMonitorJobs } from "./server-cron-heartbeat-jobs.js";
 import {
   dispatchGatewayCronFinishedNotifications,
+  sendGatewayCronWebhook,
   sendGatewayCronFailureAlert,
 } from "./server-cron-notifications.js";
 import {
@@ -845,6 +846,15 @@ export function buildGatewayCronService(params: {
           },
         };
       }
+    },
+    sendCronWebhook: async ({ job, event, abortSignal, deadlineAtMs }) => {
+      await sendGatewayCronWebhook({
+        job,
+        event,
+        abortSignal,
+        ...(deadlineAtMs !== undefined ? { deadlineAtMs } : {}),
+        webhookToken: params.cfg.cron?.webhookToken,
+      });
     },
     runScriptJob: async ({ job, streamBatch, abortSignal }) => {
       if (!scriptRuntime || job.payload.kind !== "script") {
