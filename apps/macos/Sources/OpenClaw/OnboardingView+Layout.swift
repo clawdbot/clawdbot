@@ -285,17 +285,28 @@ extension OnboardingView {
                 {
                     self.aiSetup.startIfNeeded()
                 }
-            case .unavailable:
-                // Transport/protocol failure is not evidence that inference is
-                // absent. Preserve every lease and wait for reconnect/retry.
-                self.aiSetup.showConfiguredGatewayProbeUnavailable()
-            case let .authIssue(issue):
-                // Authentication is actionable at the Gateway page and never
-                // evidence that Gateway-owned inference setup is missing.
-                self.aiSetup.showConfiguredGatewayAuthIssue(issue)
+            case .unavailable, .authIssue:
+                self.showConfiguredGatewayProbeBlocker(outcome)
             case .superseded:
                 break
             }
+        }
+    }
+
+    private func showConfiguredGatewayProbeBlocker(
+        _ outcome: OnboardingConfiguredGatewayProbe.Outcome)
+    {
+        switch outcome {
+        case .unavailable:
+            // Transport/protocol failure is not evidence that inference is
+            // absent. Preserve every lease and wait for reconnect/retry.
+            self.aiSetup.showConfiguredGatewayProbeUnavailable()
+        case let .authIssue(issue):
+            // Authentication is actionable at the Gateway page and never
+            // evidence that Gateway-owned inference setup is missing.
+            self.aiSetup.showConfiguredGatewayAuthIssue(issue)
+        case .configured, .missing, .superseded:
+            assertionFailure("Expected a configured Gateway probe blocker")
         }
     }
 

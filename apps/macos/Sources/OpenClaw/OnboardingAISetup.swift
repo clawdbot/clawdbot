@@ -15,11 +15,6 @@ import OpenClawProtocol
 @MainActor
 @Observable
 final class OnboardingAISetupModel {
-    enum ConfiguredGatewayBlocker: Equatable {
-        case unavailable
-        case authentication(RemoteGatewayAuthIssue)
-    }
-
     /// Device-code providers advertise windows up to 15 minutes. Keep transport
     /// alive long enough for approval plus the post-login inference probe.
     static let providerAuthRequestTimeoutMs: Double = 1_200_000
@@ -103,15 +98,6 @@ final class OnboardingAISetupModel {
 
     var connected: Bool {
         self.phase == .connected
-    }
-
-    var configuredGatewayProbeUnavailable: Bool {
-        self.configuredGatewayBlocker == .unavailable
-    }
-
-    var configuredGatewayAuthIssue: RemoteGatewayAuthIssue? {
-        guard case let .authentication(issue) = self.configuredGatewayBlocker else { return nil }
-        return issue
     }
 
     var isBusy: Bool {
@@ -250,41 +236,6 @@ final class OnboardingAISetupModel {
         scheduleDetection()
     }
 
-    func showConfiguredGatewayProbeUnavailable() {
-        guard !self.ownsInferenceTransition ||
-            self.configuredGatewayBlocker != nil ||
-            self.waitingForPendingActivationDeadline
-        else { return }
-        // Retire stale candidates and `started` state. A later successful
-        // missing-model probe must be able to run a fresh detect/activate flow.
-        self.resetForGatewayChange(clearPendingHandoff: false)
-        self.configuredGatewayBlocker = .unavailable
-        self.phase = .ready
-        self.detectError = Failure(
-            summary: "The Gateway did not answer the inference check. Nothing was changed.",
-            detail: nil)
-    }
-
-    func showConfiguredGatewayAuthIssue(_ issue: RemoteGatewayAuthIssue) {
-        guard !self.ownsInferenceTransition ||
-            self.configuredGatewayBlocker != nil ||
-            self.waitingForPendingActivationDeadline
-        else { return }
-        self.enterGatewayAuthBlocker(issue)
-    }
-
-    func beginConfiguredGatewayProbeRetry() {
-        guard self.configuredGatewayBlocker != nil else { return }
-        self.phase = .detecting
-        self.detectError = nil
-    }
-
-    private func enterGatewayAuthBlocker(_ issue: RemoteGatewayAuthIssue) {
-        self.resetForGatewayChange(clearPendingHandoff: false)
-        self.configuredGatewayBlocker = .authentication(issue)
-        self.phase = .ready
-    }
-
     func waitForPendingActivationDeadline() {
         guard !self.connected,
               self.phase != .testing,
@@ -299,6 +250,16 @@ final class OnboardingAISetupModel {
         self.beginPendingActivationDeadlineWait(
             deadline: deadline,
             routeIdentity: routeIdentity)
+    }
+
+    func updateConfiguredGatewayBlockerState(
+        _ blocker: ConfiguredGatewayBlocker?,
+        phase: Phase,
+        detectError: Failure?)
+    {
+        self.configuredGatewayBlocker = blocker
+        self.phase = phase
+        self.detectError = detectError
     }
 
     /// Restore only the pending handoff state. A configured model label is not
