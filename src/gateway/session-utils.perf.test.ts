@@ -12,19 +12,12 @@ import * as thinking from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
-import {
-  appendTranscriptMessageSync,
-  replaceSessionEntry,
-} from "../config/sessions/session-accessor.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
-} from "../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import * as usageFormat from "../utils/usage-format.js";
+import * as titleReader from "./session-transcript-title-reader.js";
 import { listSessionsFromStore, listSessionsFromStoreAsync } from "./session-utils.js";
 
 /**
@@ -272,8 +265,8 @@ describe("listSessionsFromStore resolver cache", () => {
     });
   });
 
-  test("batches transcript title reads to O(stores) instead of O(rows)", async () => {
-    await withStateDirEnv("openclaw-perf-title-batch-", async ({ stateDir }) => {
+  test("batches transcript title hydration once instead of O(rows)", async () => {
+    await withStateDirEnv("openclaw-perf-title-batch-", async () => {
       resetPluginRuntimeStateForTest();
       setActivePluginRegistry(createEmptyPluginRegistry());
       const cfg = {
@@ -281,37 +274,23 @@ describe("listSessionsFromStore resolver cache", () => {
       } as OpenClawConfig;
       resetConfigRuntimeState();
       setRuntimeConfigSnapshot(cfg);
-      const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+      const storePath = "/tmp/sessions.json";
       const store: Record<string, SessionEntry> = {};
       for (let index = 0; index < 30; index += 1) {
         const sessionId = `title-batch-${index}`;
         const sessionKey = `agent:main:${sessionId}`;
         const entry = { sessionId, updatedAt: 1_000 - index } satisfies SessionEntry;
         store[sessionKey] = entry;
-        await replaceSessionEntry({ agentId: "main", sessionKey, storePath }, entry);
-        for (const message of [
-          { role: "user", content: `title ${index}` },
-          { role: "assistant", content: `last ${index}` },
-        ]) {
-          appendTranscriptMessageSync(
-            { agentId: "main", sessionId, sessionKey, storePath },
-            { message },
-          );
-        }
       }
 
-      const database = openOpenClawAgentDatabase({ agentId: "main" });
-      const originalPrepare = database.db.prepare.bind(database.db);
-      let titleProbeSelects = 0;
-      const prepareSpy = vi.spyOn(database.db, "prepare").mockImplementation((sql: string) => {
-        if (
-          sql.includes("latest_boundary_json") &&
-          sql.includes("session_transcript_active_events")
-        ) {
-          titleProbeSelects += 1;
-        }
-        return originalPrepare(sql);
-      });
+      const titleBatchSpy = vi
+        .spyOn(titleReader, "readSessionTitleFieldsFromTranscriptBatch")
+        .mockImplementation((scopes) =>
+          scopes.map((scope) => ({
+            firstUserMessage: `title ${scope.sessionId.slice("title-batch-".length)}`,
+            lastMessagePreview: `last ${scope.sessionId.slice("title-batch-".length)}`,
+          })),
+        );
       try {
         const result = await listSessionsFromStoreAsync({
           cfg,
@@ -321,18 +300,19 @@ describe("listSessionsFromStore resolver cache", () => {
         });
 
         expect(result.sessions).toHaveLength(30);
-        expect(result.sessions[0]).toMatchObject({
+        expect(titleBatchSpy).toHaveBeenCalledOnce();
+        expect(titleBatchSpy.mock.calls[0]?.[0]).toHaveLength(30);
+        const sessionsByKey = new Map(result.sessions.map((session) => [session.key, session]));
+        expect(sessionsByKey.get("agent:main:title-batch-0")).toMatchObject({
           derivedTitle: "title 0",
           lastMessagePreview: "last 0",
         });
-        expect(result.sessions.at(-1)).toMatchObject({
+        expect(sessionsByKey.get("agent:main:title-batch-29")).toMatchObject({
           derivedTitle: "title 29",
           lastMessagePreview: "last 29",
         });
-        expect(titleProbeSelects).toBe(1);
       } finally {
-        prepareSpy.mockRestore();
-        closeOpenClawAgentDatabasesForTest();
+        titleBatchSpy.mockRestore();
       }
     });
   });
