@@ -707,7 +707,7 @@ describe("overflow compaction in run loop", () => {
     expect(result.meta.error).toBeUndefined();
   });
 
-  it("falls back to sessionId when sessionKey is empty on overflow path", async () => {
+  it("uses the canonical session identity when sessionKey is empty on overflow path", async () => {
     mockOverflowRetrySuccess({
       runEmbeddedAttempt: mockedRunEmbeddedAttempt,
       compactDirect: mockedCompactDirect,
@@ -717,7 +717,7 @@ describe("overflow compaction in run loop", () => {
 
     expectLogIncludes(
       mockedLog.warn,
-      "[context-pressure:fire] mid-turn trigger=overflow attempt=1/3 tokens=?k/200k sessionKey=test-session",
+      "[context-pressure:fire] mid-turn trigger=overflow attempt=1/3 tokens=?k/200k sessionKey=agent:main:test-session",
     );
     expectLogExcludes(mockedLog.warn, "[session-key:missing] site=pi-runner.overflow-compaction");
   });

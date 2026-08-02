@@ -62,7 +62,7 @@ describe("runEmbeddedAgent continuation opts forwarding", () => {
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
     expect(resetContinueDelegateTurnBudgetMock).toHaveBeenCalledOnce();
-    expect(resetContinueDelegateTurnBudgetMock).toHaveBeenCalledWith("test-key");
+    expect(resetContinueDelegateTurnBudgetMock).toHaveBeenCalledWith("agent:main:test-key");
   });
 
   it("resets continue_delegate admission even when continuation config only sets caps", async () => {
@@ -80,7 +80,7 @@ describe("runEmbeddedAgent continuation opts forwarding", () => {
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
     expect(resetContinueDelegateTurnBudgetMock).toHaveBeenCalledOnce();
-    expect(resetContinueDelegateTurnBudgetMock).toHaveBeenCalledWith("test-key");
+    expect(resetContinueDelegateTurnBudgetMock).toHaveBeenCalledWith("agent:main:test-key");
   });
 
   it("does not reset continue_delegate admission before entering the session lane", async () => {
@@ -106,7 +106,7 @@ describe("runEmbeddedAgent continuation opts forwarding", () => {
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
     expect(enqueueCalls).toBeGreaterThanOrEqual(1);
-    expect(resetContinueDelegateTurnBudgetMock).toHaveBeenCalledWith("test-key");
+    expect(resetContinueDelegateTurnBudgetMock).toHaveBeenCalledWith("agent:main:test-key");
   });
 
   it("forwards continueWorkOpts to runEmbeddedAttempt", async () => {
