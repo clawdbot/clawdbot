@@ -5,8 +5,7 @@ import {
   formatLocationText,
   type MediaPlaceholderTextFact,
 } from "openclaw/plugin-sdk/channel-inbound";
-import { getChildLogger } from "openclaw/plugin-sdk/logging-core";
-import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
+import { getChildLogger, redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   describeReplyContext,
