@@ -34,16 +34,12 @@ function bootstrapFilesEqual(
   });
 }
 
-function pruneOldestBootstrapSnapshots(): void {
-  pruneMapToMaxSize(cache, MAX_BOOTSTRAP_SNAPSHOTS);
-}
-
 /** Load bootstrap files for a session, reusing the prior snapshot when content is unchanged. */
 export async function getOrLoadBootstrapFiles(params: {
   workspaceDir: string;
   sessionKey: string;
 }): Promise<WorkspaceBootstrapFile[]> {
-  pruneOldestBootstrapSnapshots();
+  pruneMapToMaxSize(cache, MAX_BOOTSTRAP_SNAPSHOTS);
   const existing = cache.get(params.sessionKey);
   // Refresh per turn so long-lived sessions pick up edits; loadWorkspaceBootstrapFiles
   // handles unchanged file content through its guarded inode/mtime cache.
@@ -59,7 +55,7 @@ export async function getOrLoadBootstrapFiles(params: {
   }
 
   cache.set(params.sessionKey, { workspaceDir: params.workspaceDir, files });
-  pruneOldestBootstrapSnapshots();
+  pruneMapToMaxSize(cache, MAX_BOOTSTRAP_SNAPSHOTS);
   return files;
 }
 

@@ -344,9 +344,6 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
   // concurrent cold evaluations for one job single-flight.
   const runtimeCache = new Map<string, TriggerRuntimeCacheEntry>();
 
-  const trimRuntimeCache = () => {
-    pruneMapToMaxSize(runtimeCache, MAX_CACHED_TRIGGER_RUNTIMES);
-  };
   const resolveCachedRuntime = async (request: {
     runtimeConfig: OpenClawConfig;
     jobId: string;
@@ -399,7 +396,7 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
     };
     runtimeCache.delete(request.jobId);
     runtimeCache.set(request.jobId, entry);
-    trimRuntimeCache();
+    pruneMapToMaxSize(runtimeCache, MAX_CACHED_TRIGGER_RUNTIMES);
     // Failed preparations evict themselves so the next tick retries cold.
     void promise.catch(() => {
       if (runtimeCache.get(request.jobId) === entry) {

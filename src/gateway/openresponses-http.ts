@@ -177,10 +177,6 @@ function pruneExpiredResponseSessions(now: number) {
   }
 }
 
-function evictOverflowResponseSessions() {
-  pruneMapToMaxSize(responseSessionMap, MAX_RESPONSE_SESSION_ENTRIES);
-}
-
 function storeResponseSession(
   responseId: string,
   sessionKey: string,
@@ -191,7 +187,7 @@ function storeResponseSession(
   responseSessionMap.delete(responseId);
   responseSessionMap.set(responseId, { ...scope, sessionKey, ts: now });
   pruneExpiredResponseSessions(now);
-  evictOverflowResponseSessions();
+  pruneMapToMaxSize(responseSessionMap, MAX_RESPONSE_SESSION_ENTRIES);
 }
 
 function lookupResponseSession(
