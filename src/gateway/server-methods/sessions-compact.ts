@@ -53,7 +53,10 @@ function hasQueuedFollowup(keys: Array<string | undefined>): boolean {
     const queue = getExistingFollowupQueue(cleaned);
     if (
       queue &&
-      (queue.items.length > 0 || queue.summaryLines.length > 0 || queue.summarySources.length > 0)
+      (queue.items.length > 0 ||
+        queue.summaryLines.length > 0 ||
+        queue.summarySources.length > 0 ||
+        queue.summaryElisions.length > 0)
     ) {
       return true;
     }

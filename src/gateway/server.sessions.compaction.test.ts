@@ -6,7 +6,11 @@ import os from "node:os";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
 import { enqueueFollowupRun, type FollowupRun } from "../auto-reply/reply/queue.js";
-import { clearFollowupQueue, getExistingFollowupQueue } from "../auto-reply/reply/queue/state.js";
+import {
+  clearFollowupQueue,
+  getExistingFollowupQueue,
+  getFollowupQueue,
+} from "../auto-reply/reply/queue/state.js";
 import type { SessionCompactionCheckpoint } from "../config/sessions.js";
 import { readSessionArchiveContentSync } from "../config/sessions/archive-compression.js";
 import {
@@ -1423,6 +1427,53 @@ test("sessions.compact preserves accepted queued follow-up work", async () => {
       message: "Session main has queued work; retry after it finishes.",
     });
     expect(getExistingFollowupQueue(sessionKey)?.items).toHaveLength(1);
+    expect(embeddedRunMock.compactEmbeddedAgentSession).not.toHaveBeenCalled();
+    expectNoSessionQueueCleanup();
+  } finally {
+    clearFollowupQueue(sessionKey);
+    ws.close();
+  }
+});
+
+test("sessions.compact preserves summary-elided queued follow-up work", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const sessionId = "sess-compact-elided-followup-queue";
+  const sessionKey = "agent:main:main";
+  await seedSessionEntry({
+    entry: sessionStoreEntry(sessionId),
+    sessionKey,
+    storePath,
+  });
+  await seedTranscriptRows({
+    sessionId,
+    sessionKey,
+    storePath,
+    totalLines: 3,
+  });
+  const queue = getFollowupQueue(sessionKey, { mode: "followup" });
+  const elidedRun = {
+    prompt: "please also update the changelog",
+    enqueuedAt: Date.now(),
+    run: {},
+  } as unknown as FollowupRun;
+  queue.droppedCount = 1;
+  queue.summaryElisions.push({
+    contextKey: "test",
+    count: 1,
+    sources: [elidedRun],
+    sourceRefs: new WeakMap(),
+  });
+
+  const { ws } = await openClient();
+  try {
+    const compacted = await rpcReq(ws, "sessions.compact", { key: "main" });
+
+    expect(compacted.ok).toBe(false);
+    expect(compacted.error).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: "Session main has queued work; retry after it finishes.",
+    });
+    expect(getExistingFollowupQueue(sessionKey)?.summaryElisions).toHaveLength(1);
     expect(embeddedRunMock.compactEmbeddedAgentSession).not.toHaveBeenCalled();
     expectNoSessionQueueCleanup();
   } finally {
