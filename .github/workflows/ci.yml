@@ -806,11 +806,20 @@ jobs:
       PRE_COMMIT_HOME: .cache/pre-commit-security-fast
     steps:
       - name: Checkout
+        if: github.event_name != 'workflow_dispatch' || inputs.target_ref == ''
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      # Manual target validation has a distinct fallback contract: a missing branch/tag
+      # falls back to the workflow SHA, while transport timeouts still fail closed.
+      - name: Checkout manual target
+        if: github.event_name == 'workflow_dispatch' && inputs.target_ref != ''
         env:
           CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_REF: ${{ inputs.target_ref || github.sha }}
+          CHECKOUT_REF: ${{ inputs.target_ref }}
           CHECKOUT_FALLBACK_REF: ${{ github.sha }}
-          GITHUB_EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
           git init "$GITHUB_WORKSPACE"
@@ -843,7 +852,7 @@ jobs:
               echo "::error::checkout fetch for '$CHECKOUT_REF' timed out"
               exit "$fetch_status"
             fi
-            if [ "$GITHUB_EVENT_NAME" != "workflow_dispatch" ] || [ "$CHECKOUT_REF" = "$CHECKOUT_FALLBACK_REF" ]; then
+            if [ "$CHECKOUT_REF" = "$CHECKOUT_FALLBACK_REF" ]; then
               exit "$fetch_status"
             fi
             echo "::warning::workflow_dispatch target_ref '$CHECKOUT_REF' is unavailable; falling back to head SHA '$CHECKOUT_FALLBACK_REF'"

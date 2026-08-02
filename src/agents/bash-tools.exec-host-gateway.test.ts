@@ -419,6 +419,23 @@ describe("processGatewayAllowlist", () => {
     });
   }
 
+  function mockApprovedDetachedExec(params: {
+    outcome: ExecApprovalFollowupOutcome;
+    sessionId?: string;
+  }) {
+    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue("allow-once");
+    createExecApprovalDecisionStateMock.mockReturnValue({
+      baseDecision: { timedOut: false },
+      approvedByAsk: true,
+      deniedReason: null,
+    });
+    runExecProcessMock.mockResolvedValue({
+      session: { id: params.sessionId ?? "sess-1" },
+      promise: Promise.resolve(params.outcome),
+    });
+    buildExecApprovalFollowupTargetMock.mockImplementation((value) => value);
+  }
+
   async function useRealUnavailableApprovalGate() {
     const actualShared = await vi.importActual<typeof import("./bash-tools.exec-host-shared.js")>(
       "./bash-tools.exec-host-shared.js",
@@ -2035,27 +2052,19 @@ EOF`,
   });
 
   it("uses async agent followups for explicit webchat approval mode", async () => {
-    buildExecApprovalFollowupTargetMock.mockImplementation((value) => value);
     resolveExecHostApprovalContextMock.mockReturnValue({
       approvals: { allowlist: [], file: { version: 1, agents: {} } },
       hostSecurity: "allowlist",
       hostAsk: "always",
       askFallback: "deny",
     });
-    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue("allow-once");
-    createExecApprovalDecisionStateMock.mockReturnValue({
-      baseDecision: { timedOut: false },
-      approvedByAsk: true,
-      deniedReason: null,
-    });
-    runExecProcessMock.mockResolvedValue({
-      session: { id: "sess-1" },
-      promise: Promise.resolve({
+    mockApprovedDetachedExec({
+      outcome: {
         status: "completed",
         exitCode: 0,
         timedOut: false,
         aggregated: "done",
-      }),
+      },
     });
 
     const result = await runGatewayAllowlist({
@@ -2080,28 +2089,20 @@ EOF`,
   });
 
   it("keeps multiline gateway approval follow-up output intact", async () => {
-    buildExecApprovalFollowupTargetMock.mockImplementation((value) => value);
     resolveExecHostApprovalContextMock.mockReturnValue({
       approvals: { allowlist: [], file: { version: 1, agents: {} } },
       hostSecurity: "allowlist",
       hostAsk: "always",
       askFallback: "deny",
     });
-    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue("allow-once");
-    createExecApprovalDecisionStateMock.mockReturnValue({
-      baseDecision: { timedOut: false },
-      approvedByAsk: true,
-      deniedReason: null,
-    });
     const aggregated = "first line\r\n\tindented\n\nlast line  \t\n";
-    runExecProcessMock.mockResolvedValue({
-      session: { id: "sess-1" },
-      promise: Promise.resolve({
+    mockApprovedDetachedExec({
+      outcome: {
         status: "completed",
         exitCode: 0,
         timedOut: false,
         aggregated,
-      }),
+      },
     });
 
     const result = await runGatewayAllowlist({
@@ -2450,22 +2451,14 @@ EOF`,
   });
 
   it("keeps the fire-and-forget path for channels without native approval clients", async () => {
-    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue("allow-once");
-    createExecApprovalDecisionStateMock.mockReturnValue({
-      baseDecision: { timedOut: false },
-      approvedByAsk: true,
-      deniedReason: null,
-    });
-    runExecProcessMock.mockResolvedValue({
-      session: { id: "sess-1" },
-      promise: Promise.resolve({
+    mockApprovedDetachedExec({
+      outcome: {
         status: "completed",
         exitCode: 0,
         timedOut: false,
         aggregated: "done",
-      }),
+      },
     });
-    buildExecApprovalFollowupTargetMock.mockImplementation((value) => value);
 
     const result = await runGatewayAllowlist({
       command: "find . -maxdepth 1",
@@ -2480,12 +2473,6 @@ EOF`,
   });
 
   it("warns detached approval followups after a supervisor timeout", async () => {
-    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue("allow-once");
-    createExecApprovalDecisionStateMock.mockReturnValue({
-      baseDecision: { timedOut: false },
-      approvedByAsk: true,
-      deniedReason: null,
-    });
     const outcome = {
       status: "failed" as const,
       exitCode: null,
@@ -2494,11 +2481,7 @@ EOF`,
       aggregated: "",
       reason: "Command timed out.",
     } satisfies ExecApprovalFollowupOutcome;
-    runExecProcessMock.mockResolvedValue({
-      session: { id: "sess-timeout" },
-      promise: Promise.resolve(outcome),
-    });
-    buildExecApprovalFollowupTargetMock.mockImplementation((value) => value);
+    mockApprovedDetachedExec({ outcome, sessionId: "sess-timeout" });
 
     const result = await runGatewayAllowlist({
       command: "side-effecting-command",
@@ -2573,22 +2556,14 @@ EOF`,
   });
 
   it("keeps the fire-and-forget path for headless cron approval followups", async () => {
-    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue("allow-once");
-    createExecApprovalDecisionStateMock.mockReturnValue({
-      baseDecision: { timedOut: false },
-      approvedByAsk: true,
-      deniedReason: null,
-    });
-    runExecProcessMock.mockResolvedValue({
-      session: { id: "sess-1" },
-      promise: Promise.resolve({
+    mockApprovedDetachedExec({
+      outcome: {
         status: "completed",
         exitCode: 0,
         timedOut: false,
         aggregated: "done",
-      }),
+      },
     });
-    buildExecApprovalFollowupTargetMock.mockImplementation((value) => value);
 
     const result = await runGatewayAllowlist({
       command: "find . -maxdepth 1",

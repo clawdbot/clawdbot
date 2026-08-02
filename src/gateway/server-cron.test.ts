@@ -2655,6 +2655,7 @@ describe("buildGatewayCronService", () => {
       const job = await state.cron.add({
         name: "ssrf-webhook-blocked",
         enabled: true,
+        deleteAfterRun: false,
         schedule: { kind: "at", at: new Date(1).toISOString() },
         sessionTarget: "main",
         wakeMode: "next-heartbeat",
@@ -2677,7 +2678,13 @@ describe("buildGatewayCronService", () => {
       expect(init.method).toBe("POST");
       expect(init.headers).toEqual({ "Content-Type": "application/json" });
       expect(String(init.body)).toContain('"action":"finished"');
-      expect(init.signal).toBeInstanceOf(AbortSignal);
+      expect(request.signal).toBeInstanceOf(AbortSignal);
+      expect(state.cron.getJob(job.id)?.state).toMatchObject({
+        lastRunStatus: "ok",
+        lastDelivered: false,
+        lastDeliveryStatus: "not-delivered",
+        lastDeliveryError: "Blocked: resolves to private/internal/special-use IP address",
+      });
     } finally {
       state.cron.stop();
     }

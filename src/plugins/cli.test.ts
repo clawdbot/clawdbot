@@ -21,6 +21,8 @@ vi.mock("./loader.js", () => ({
   loadOpenClawPluginCliRegistry: (...args: unknown[]) =>
     mocks.loadOpenClawPluginCliRegistry(...args),
   loadOpenClawPlugins: (...args: unknown[]) => mocks.loadOpenClawPlugins(...args),
+  loadPluginRegistryHandle: (options: Record<string, unknown> = {}) =>
+    mocks.loadOpenClawPlugins({ ...options, activate: false }),
 }));
 
 vi.mock("./activation-planner.js", () => ({
@@ -385,9 +387,8 @@ describe("registerPluginCliCommands", () => {
     expect(loadOptions.autoEnabledReasons).toEqual({
       demo: ["demo configured"],
     });
-    expect(loadOptions.activate).toBe(false);
     expect(loadOptions.cache).toBe(false);
-    expect(loadOptions.forceFullRuntimeForChannelPlugins).toBe(true);
+    expect(loadOptions.channelPluginLoadIntent).toBe("full");
     expect(mocks.loadOpenClawPluginCliRegistry).not.toHaveBeenCalled();
   });
 

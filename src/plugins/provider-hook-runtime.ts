@@ -22,6 +22,7 @@ import {
   getActivePluginRegistryWorkspaceDirFromState,
   getPluginRegistryState,
 } from "./runtime-state.js";
+import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
 import type {
   ProviderPlugin,
   ProviderExtraParamsForTransportContext,
@@ -34,7 +35,6 @@ import type {
 
 let providerRuntimePluginCache: ConfigScopedRuntimeCache<ProviderPlugin | null> = new WeakMap();
 const defaultProviderRuntimePluginCache = new PluginLruCache<ProviderPlugin | null>(128);
-const PREPARED_PROVIDER_RUNTIME_SURFACES = ["channel"] as const;
 
 type ProviderRuntimePluginLookupParams = {
   provider: string;
@@ -126,6 +126,17 @@ function findProviderRuntimePluginInLoadedRegistries(params: {
   lookup: ProviderRuntimePluginLookupParams;
   apiOwnerHint?: string;
 }): ProviderPlugin | undefined {
+  const scopedRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
+  const scopedPlugin = scopedRegistry
+    ? findProviderRuntimePluginInRegistry({
+        registry: scopedRegistry,
+        provider: params.lookup.provider,
+        apiOwnerHint: params.apiOwnerHint,
+      })
+    : undefined;
+  if (scopedPlugin) {
+    return scopedPlugin;
+  }
   const activeRegistry = getLoadedRuntimePluginRegistry({
     env: params.lookup.env,
     workspaceDir: params.lookup.workspaceDir,
@@ -139,23 +150,6 @@ function findProviderRuntimePluginInLoadedRegistries(params: {
     : undefined;
   if (activePlugin) {
     return activePlugin;
-  }
-  for (const surface of PREPARED_PROVIDER_RUNTIME_SURFACES) {
-    const registry = getLoadedRuntimePluginRegistry({
-      env: params.lookup.env,
-      workspaceDir: params.lookup.workspaceDir,
-      surface,
-    });
-    const plugin = registry
-      ? findProviderRuntimePluginInRegistry({
-          registry,
-          provider: params.lookup.provider,
-          apiOwnerHint: params.apiOwnerHint,
-        })
-      : undefined;
-    if (plugin) {
-      return plugin;
-    }
   }
   return undefined;
 }

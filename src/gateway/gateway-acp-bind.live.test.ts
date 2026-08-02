@@ -11,11 +11,7 @@ import { isLiveTestEnabled, readLiveTestConfig } from "../agents/live-test-helpe
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { clearPluginLoaderCache } from "../plugins/loader.test-fixtures.js";
-import {
-  pinActivePluginChannelRegistry,
-  releasePinnedPluginChannelRegistry,
-  resetPluginRuntimeStateForTest,
-} from "../plugins/runtime.js";
+import { getActivePluginRegistry, resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { setTestEnvValue } from "../test-utils/env.js";
@@ -591,9 +587,6 @@ describeLive("gateway live (ACP bind)", () => {
       const memoryToken = createAcpProbePhrase("quiet cedar", randomBytes(4).toString("hex"));
       let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
       let client: GatewayClient | undefined;
-      let pinnedChannelRegistry:
-        | ReturnType<typeof createSlackCurrentConversationBindingRegistry>
-        | undefined;
 
       clearRuntimeConfigSnapshot();
       setTestEnvValue("OPENCLAW_STATE_DIR", tempStateDir);
@@ -707,9 +700,11 @@ describeLive("gateway live (ACP bind)", () => {
           timeoutMs: CONNECT_TIMEOUT_MS,
         });
         logLiveStep("gateway websocket connected");
-        const channelRegistry = createSlackCurrentConversationBindingRegistry();
-        pinActivePluginChannelRegistry(channelRegistry);
-        pinnedChannelRegistry = channelRegistry;
+        const activeRegistry = getActivePluginRegistry();
+        if (!activeRegistry) {
+          throw new Error("expected gateway root plugin registry");
+        }
+        activeRegistry.channels.push(...createSlackCurrentConversationBindingRegistry().channels);
 
         const bindResult = await bindConversationAndWait({
           client,
@@ -1073,9 +1068,6 @@ describeLive("gateway live (ACP bind)", () => {
         logLiveStep("bound session created cron via MCP and CLI verification passed");
       } finally {
         try {
-          if (pinnedChannelRegistry) {
-            releasePinnedPluginChannelRegistry(pinnedChannelRegistry);
-          }
           clearConfigCache();
           clearRuntimeConfigSnapshot();
           await client?.stopAndWait({ timeoutMs: 2_000 }).catch(() => {});

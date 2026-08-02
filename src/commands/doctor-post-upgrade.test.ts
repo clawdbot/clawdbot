@@ -282,7 +282,6 @@ describe("runPostUpgradeProbes — plugin.entry_unresolved", () => {
             startup: {
               sidecar: false,
               memory: false,
-              deferConfiguredChannelFullLoadUntilAfterListen: false,
               agentHarnesses: [],
             },
             compat: [],

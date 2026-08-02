@@ -439,6 +439,7 @@ describe("Tool Search input schemas", () => {
       const catalogRef = createToolSearchCatalogRef();
       catalogRef.current = {
         entries: [entry],
+        counterScope: "scope-1",
         searchCount: 0,
         describeCount: 0,
         callCount: 0,

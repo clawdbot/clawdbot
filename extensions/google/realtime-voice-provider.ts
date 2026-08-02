@@ -38,6 +38,7 @@ import type {
 } from "openclaw/plugin-sdk/realtime-voice";
 import {
   convertPcmToMulaw8k,
+  createRealtimeVoiceAudioQueue,
   mulawToPcm,
   REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
   REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
@@ -52,7 +53,6 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createGoogleGenAI } from "./google-genai-runtime.js";
-import { createGoogleRealtimeAudioQueue } from "./realtime-audio-queue.js";
 import { resolveGoogleGemini3ThinkingLevel } from "./thinking.js";
 
 const GOOGLE_REALTIME_DEFAULT_MODEL = "gemini-3.1-flash-live-preview";
@@ -472,7 +472,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private sessionConfigured = false;
   private intentionallyClosed = false;
   // Native reconnect keeps the already accepted FIFO prefix stable.
-  private readonly pendingAudio = createGoogleRealtimeAudioQueue("reject-newest");
+  private readonly pendingAudio = createRealtimeVoiceAudioQueue("reject-newest");
   private sessionReadyFired = false;
   private consecutiveSilenceMs = 0;
   private audioStreamEnded = false;
@@ -1199,7 +1199,7 @@ async function createGoogleRealtimeBrowserSession(
     initialMessage: buildBrowserInitialSetup(model),
     model,
     voice,
-    expiresAt: Math.floor(expiresAtMs / 1000),
+    expiresAt: newSessionExpiresAtMs,
   };
 }
 

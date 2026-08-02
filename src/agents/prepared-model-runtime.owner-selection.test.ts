@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
     find: vi.fn(() => null),
   },
   configuredAgentIds: [] as string[],
+  configuredAgentIdsError: undefined as Error | undefined,
   configuredAgentDirs: new Map<string, string>(),
   configuredWorkspaces: new Map<string, string>(),
   buildPreparedModelCatalogSnapshot: vi.fn(async (..._args: unknown[]) => ({
@@ -73,7 +74,13 @@ vi.mock("../plugins/synthetic-auth.runtime.js", () => ({
 }));
 
 vi.mock("./agent-scope.js", () => ({
-  listAgentIds: () => mocks.configuredAgentIds,
+  listAgentEntries: (config: { agents?: { list?: unknown[] } }) => config.agents?.list ?? [],
+  listAgentIds: () => {
+    if (mocks.configuredAgentIdsError) {
+      throw mocks.configuredAgentIdsError;
+    }
+    return mocks.configuredAgentIds;
+  },
   resolveAgentDir: (_config: unknown, agentId: string) =>
     mocks.configuredAgentDirs.get(agentId) ??
     (agentId === "default" ? "/tmp/unused-agent" : `/tmp/configured-${agentId}`),
@@ -82,6 +89,8 @@ vi.mock("./agent-scope.js", () => ({
     (agentId === "default" ? "/tmp/unused-workspace" : `/tmp/workspace-${agentId}`),
   resolveDefaultAgentDir: () => "/tmp/unused-agent",
   resolveDefaultAgentId: () => "default",
+  resolveAgentEffectiveModelPrimary: () => undefined,
+  resolveRunModelFallbacksOverride: () => undefined,
   resolveSessionAgentIds: ({ agentId }: { agentId?: string }) => ({
     defaultAgentId: "default",
     sessionAgentId: agentId ?? "default",
@@ -125,6 +134,7 @@ vi.mock("../logging/subsystem.js", () => ({
 }));
 
 import {
+  acquireAgentRunPreparedModelRuntime,
   getPreparedModelRuntimeSnapshot,
   prepareModelRuntimeSnapshot,
   publishPreparedModelRuntimeSnapshot,
@@ -136,12 +146,14 @@ describe("prepared model runtime owner selection", () => {
     (globalThis as Record<PropertyKey, unknown>)[
       Symbol.for("openclaw.preparedModelRuntimeTestApi")
     ] as {
+      getPreparedModelRuntimeOwnerCountForTest: () => number;
       resetPreparedModelRuntimeSnapshotsForTest: () => void;
     };
 
   beforeEach(() => {
     getTesting().resetPreparedModelRuntimeSnapshotsForTest();
     mocks.configuredAgentIds = [];
+    mocks.configuredAgentIdsError = undefined;
     mocks.configuredAgentDirs.clear();
     mocks.configuredWorkspaces.clear();
     mocks.buildPreparedModelCatalogSnapshot.mockClear();
@@ -235,7 +247,7 @@ describe("prepared model runtime owner selection", () => {
     expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledOnce();
   });
 
-  it("reuses the configured owner for selections that need no plugin harness", async () => {
+  it("reuses the configured owner for its prepared plugin harness selections", async () => {
     mocks.configuredAgentIds = ["default"];
     const config = { agents: { defaults: { model: "openai/gpt-5.5" } } };
     await refreshPreparedModelRuntimeSnapshots(config, {
@@ -251,26 +263,115 @@ describe("prepared model runtime owner selection", () => {
       workspaceDir: "/tmp/unused-workspace",
     });
 
-    await expect(
-      prepareModelRuntimeSnapshot({
+    const runInput = {
+      agentId: "default",
+      agentDir: "/tmp/unused-agent",
+      allowGatewaySubagentBinding: true,
+      config,
+      runtimePluginSelections: [{ provider: "openai", modelId: "gpt-5.5", runtime: "codex" }],
+      workspaceDir: "/tmp/unused-workspace",
+    };
+    const first = await acquireAgentRunPreparedModelRuntime(runInput);
+    first.release();
+    const second = await acquireAgentRunPreparedModelRuntime(runInput);
+    second.release();
+
+    expect(first.snapshot).toBe(configured);
+    expect(second.snapshot).toBe(first.snapshot);
+    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledOnce();
+    expect(mocks.prepareStaticCatalog).toHaveBeenCalledOnce();
+    expect(mocks.discoverModels).toHaveBeenCalledOnce();
+    expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
+  });
+
+  it("bounds retained gateway run owners while reusing recent selections", async () => {
+    mocks.configuredAgentIds = ["default"];
+    const config = { agents: { defaults: { model: "openai/gpt-5.5" } } };
+    await refreshPreparedModelRuntimeSnapshots(config, {
+      catalogMode: "static",
+      gatewayLifecycle: true,
+    });
+    const acquire = async (modelId: string) => {
+      const lease = await acquireAgentRunPreparedModelRuntime({
         agentId: "default",
         agentDir: "/tmp/unused-agent",
-        allowGatewaySubagentBinding: true,
         config,
-        runtimePluginSelections: [{ provider: "openai", modelId: "gpt-5.5", runtime: "openclaw" }],
+        runtimePluginSelections: [{ provider: "openai", modelId, runtime: "codex" }],
         workspaceDir: "/tmp/unused-workspace",
-      }),
-    ).resolves.toBe(configured);
-    await expect(
-      prepareModelRuntimeSnapshot({
+      });
+      lease.release();
+      return lease.snapshot;
+    };
+
+    const first = await acquire("run-model-0");
+    for (let index = 1; index < 9; index += 1) {
+      await acquire(`run-model-${index}`);
+    }
+    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(10);
+
+    const rebuilt = await acquire("run-model-0");
+    expect(rebuilt).not.toBe(first);
+    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(11);
+  });
+
+  it("never evicts a configured owner acquired through the gateway run path", async () => {
+    mocks.configuredAgentIds = ["default"];
+    const config = { agents: { defaults: { model: "openai/gpt-5.5" } } };
+    await refreshPreparedModelRuntimeSnapshots(config, {
+      catalogMode: "static",
+      gatewayLifecycle: true,
+    });
+    const configuredInput = {
+      agentId: "default",
+      agentDir: "/tmp/unused-agent",
+      config,
+      runtimePluginSelections: [{ provider: "openai", modelId: "gpt-5.5", runtime: "codex" }],
+      workspaceDir: "/tmp/unused-workspace",
+    };
+    const configured = getPreparedModelRuntimeSnapshot(configuredInput);
+    const configuredLease = await acquireAgentRunPreparedModelRuntime(configuredInput);
+    expect(configuredLease.snapshot).toBe(configured);
+    configuredLease.release();
+
+    for (let index = 0; index < 9; index += 1) {
+      const lease = await acquireAgentRunPreparedModelRuntime({
+        ...configuredInput,
+        runtimePluginSelections: [
+          { provider: "openai", modelId: `run-model-${index}`, runtime: "codex" },
+        ],
+      });
+      lease.release();
+    }
+
+    expect(getPreparedModelRuntimeSnapshot(configuredInput)).toBe(configured);
+  });
+
+  it("retires released retained run owners when gateway refresh clears the lifecycle", async () => {
+    mocks.configuredAgentIds = ["default"];
+    const config = { agents: { defaults: { model: "openai/gpt-5.5" } } };
+    await refreshPreparedModelRuntimeSnapshots(config, {
+      catalogMode: "static",
+      gatewayLifecycle: true,
+    });
+    for (let index = 0; index < 3; index += 1) {
+      const lease = await acquireAgentRunPreparedModelRuntime({
         agentId: "default",
         agentDir: "/tmp/unused-agent",
-        allowGatewaySubagentBinding: true,
         config,
-        runtimePluginSelections: [{ provider: "openai", modelId: "gpt-5.5", runtime: "codex" }],
+        runtimePluginSelections: [
+          { provider: "openai", modelId: `retained-model-${index}`, runtime: "codex" },
+        ],
         workspaceDir: "/tmp/unused-workspace",
-      }),
-    ).rejects.toThrow("prepared model runtime owner was not published");
+      });
+      lease.release();
+    }
+    expect(getTesting().getPreparedModelRuntimeOwnerCountForTest()).toBe(4);
+
+    const refreshError = new Error("configured owner discovery failed");
+    mocks.configuredAgentIdsError = refreshError;
+    await expect(refreshPreparedModelRuntimeSnapshots(config)).rejects.toBe(refreshError);
+
+    expect(getTesting().getPreparedModelRuntimeOwnerCountForTest()).toBe(1);
   });
 
   it("does not substitute a configured owner captured from another environment", async () => {
