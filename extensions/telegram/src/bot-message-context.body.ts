@@ -388,10 +388,7 @@ export async function resolveTelegramInboundBody(params: {
         messageId: typeof msg.message_id === "number" ? String(msg.message_id) : undefined,
       },
     });
-    if (
-      sessionKey &&
-      resolveTelegramGroupIngestEnabled({ cfg, chatId, accountId, topicConfig })
-    ) {
+    if (sessionKey && resolveTelegramGroupIngestEnabled({ cfg, chatId, accountId, topicConfig })) {
       fireAndForgetHook(
         triggerInternalHook(
           createInternalHookEvent(

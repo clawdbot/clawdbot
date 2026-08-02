@@ -161,12 +161,16 @@ export function createTelegramInboundMediaGroupRuntime(
       return "process";
     }
     const botUsername = ctx.me?.username?.trim().toLowerCase();
-    const mentionRegexes = buildMentionRegexes(authorization.authorizationCfg, sessionState.agentId, {
-      provider: "telegram",
-      conversationId: buildTelegramGroupPeerId(chatId, resolvedThreadId),
-      providerPolicy:
-        authorization.authorizationCfg.channels?.telegram?.accounts?.[accountId]?.mentionPatterns,
-    });
+    const mentionRegexes = buildMentionRegexes(
+      authorization.authorizationCfg,
+      sessionState.agentId,
+      {
+        provider: "telegram",
+        conversationId: buildTelegramGroupPeerId(chatId, resolvedThreadId),
+        providerPolicy:
+          authorization.authorizationCfg.channels?.telegram?.accounts?.[accountId]?.mentionPatterns,
+      },
+    );
     const hasAnyMention = textParts.entities.some((entity) => entity.type === "mention");
     const explicitlyMentioned = botUsername ? hasBotMention(msg, botUsername) : false;
     const wasMentioned = matchesMentionWithExplicit({
