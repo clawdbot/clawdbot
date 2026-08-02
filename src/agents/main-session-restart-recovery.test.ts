@@ -73,6 +73,7 @@ import {
   scheduleRestartAbortedMainSessionRecoveryAfterOwnerRelease,
   scheduleRestartAbortedMainSessionRecovery as scheduleRestartAbortedMainSessionRecoveryBase,
 } from "./main-session-restart-recovery.js";
+import { resolveRestartRecoveryStorePaths } from "./main-session-restart-recovery-shared.js";
 import { AGENT_RUN_RESTART_ABORT_ERROR_CODE } from "./run-termination.js";
 import {
   createAssistantToolCallMessage,
@@ -405,6 +406,24 @@ describe("main-session-restart-recovery", () => {
       { runId: "key-only-run", lifecycleGeneration },
       { runId: "restart-run", lifecycleGeneration },
     ]);
+  });
+
+  it("does not scan stale stores for agents absent from the configured roster", async () => {
+    const configuredSessionsDir = await makeSessionsDir("main");
+    await writeMainSession({ sessionsDir: configuredSessionsDir });
+    const staleSessionsDir = await makeSessionsDir("amnesia-probe");
+    await writeMainSession({
+      sessionsDir: staleSessionsDir,
+      sessionKey: "agent:amnesia-probe:main",
+    });
+
+    const cfg = {
+      agents: { list: [{ id: "main", default: true }] },
+    } as OpenClawConfig;
+    const storePaths = await resolveRestartRecoveryStorePaths({ cfg, stateDir: tmpDir });
+
+    expect(storePaths).toContain(path.join(configuredSessionsDir, "sessions.json"));
+    expect(storePaths).not.toContain(path.join(staleSessionsDir, "sessions.json"));
   });
 
   it("marks active sessions in a configured custom session store", async () => {
