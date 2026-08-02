@@ -987,6 +987,7 @@ describe("failover-error", () => {
     expect(resolveFailoverReasonFromError({ code: "ENETRESET" })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ code: "ENETUNREACH" })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ code: "EPIPE" })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ code: "ERR_STREAM_PREMATURE_CLOSE" })).toBe("timeout");
   });
 
   it("infers rate-limit and overload from symbolic error codes", () => {
@@ -1025,6 +1026,28 @@ describe("failover-error", () => {
     ).toBe("rate_limit");
     expect(resolveFailoverReasonFromError({ message: "Connection error." })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ message: "fetch failed" })).toBe("timeout");
+    expect(
+      resolveFailoverReasonFromError({
+        message: "stream disconnected before completion: response.completed was not received",
+      }),
+    ).toBe("timeout");
+    expect(
+      resolveFailoverReasonFromError({
+        message:
+          "Premature close of server response while trying to fetch https://api.example.test",
+      }),
+    ).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ message: "Premature close" })).toBeNull();
+    expect(
+      resolveFailoverReasonFromError({
+        message: "stream disconnected while copying a local archive",
+      }),
+    ).toBeNull();
+    expect(
+      resolveFailoverReasonFromError({
+        message: "worker reported a premature close while compressing logs",
+      }),
+    ).toBeNull();
     expect(resolveFailoverReasonFromError({ message: "Network error: ECONNREFUSED" })).toBe(
       "timeout",
     );

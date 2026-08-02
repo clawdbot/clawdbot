@@ -3178,6 +3178,37 @@ describe("cron service timer regressions", () => {
     expect(job.enabled).toBe(true);
   });
 
+  it("classifies interrupted agent transport before applying bounded retry", () => {
+    const startedAt = Date.parse("2026-07-21T12:00:00.000Z");
+    const endedAt = startedAt + 500;
+    const job = createIsolatedRegressionJob({
+      id: "transient-agent-transport",
+      name: "transient-agent-transport",
+      scheduledAt: startedAt,
+      schedule: { kind: "at", at: new Date(startedAt).toISOString() },
+      payload: { kind: "agentTurn", message: "ping" },
+      state: { runningAtMs: startedAt },
+    });
+    const state = createRunningCronServiceState({
+      storePath: "/tmp/cron-transient-agent-transport.json",
+      log: noopLogger,
+      nowMs: () => endedAt,
+      jobs: [job],
+    });
+
+    applyJobResult(state, job, {
+      status: "error",
+      error: "stream disconnected before completion: upstream reset",
+      executionStarted: true,
+      startedAt,
+      endedAt,
+    });
+
+    expect(job.state.lastErrorReason).toBe("timeout");
+    expect(job.state.nextRunAtMs).toBe(endedAt + 30_000);
+    expect(job.enabled).toBe(true);
+  });
+
   it("force run preserves 'every' anchor while recording manual lastRunAtMs", () => {
     const nowMs = Date.now();
     const everyMs = 24 * 60 * 60 * 1_000;
