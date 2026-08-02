@@ -138,8 +138,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: full-release-validation-${{ inputs.ref }}-${{ inputs.rerun_group }}
-  cancel-in-progress: ${{ (inputs.ref == 'main' && inputs.rerun_group == 'all') || startsWith(inputs.ref, 'tideclaw/alpha/') || startsWith(inputs.ref, 'release/') }}
+  group: full-release-validation-${{ inputs.target_context_ref || inputs.ref }}-${{ inputs.rerun_group }}
+  cancel-in-progress: ${{ (inputs.ref == 'main' && inputs.rerun_group == 'all') || startsWith(inputs.ref, 'tideclaw/alpha/') || startsWith(inputs.ref, 'release/') || startsWith(inputs.target_context_ref, 'release/') }}
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
