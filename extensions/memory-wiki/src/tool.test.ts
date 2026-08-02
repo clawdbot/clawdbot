@@ -65,6 +65,25 @@ describe("memory-wiki tools", () => {
     expect(evidenceProperties.confidence).toEqual({ type: "number", minimum: 0, maximum: 1 });
   });
 
+  it("reports a semantic wiki_apply no-op without requiring a compile result", async () => {
+    const { config } = await harness.createVault({ initialize: true });
+    const tool = createWikiApplyTool(config);
+    const mutation = {
+      op: "create_synthesis",
+      title: "Stable Tool Synthesis",
+      body: "Stable tool summary.",
+      sourceIds: ["source.stable-tool"],
+    };
+    await tool.execute("apply-first", mutation);
+
+    const repeated = await tool.execute("apply-repeated", mutation);
+    const text = repeated.content.find((part) => part.type === "text")?.text ?? "";
+
+    expect(text).toContain("No changes for syntheses/stable-tool-synthesis.md");
+    expect(text).toContain("Index compilation skipped.");
+    expect(asSchemaObject(repeated.details)).not.toHaveProperty("compile");
+  });
+
   it("returns tool-safe relative report paths from wiki_lint", async () => {
     const { rootDir, config } = await harness.createVault({ initialize: true });
     await fs.mkdir(path.join(rootDir, "syntheses"), { recursive: true });

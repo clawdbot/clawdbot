@@ -516,12 +516,15 @@ openclaw wiki lint
 openclaw wiki search "alpha"
 openclaw wiki get entity.alpha
 openclaw wiki apply synthesis "Alpha Summary" --body "..." --source-id source.alpha
+openclaw wiki apply-batch --input ./wiki-apply-batch.json --dry-run --json
+openclaw wiki search-batch --input ./wiki-search-batch.json --json
 openclaw wiki bridge import
 openclaw wiki obsidian status
 ```
 
 See [CLI: wiki](/cli/wiki) for the full command reference, including
-`wiki okf import`, `wiki apply metadata`, `wiki unsafe-local import`,
+`wiki okf import`, `wiki apply metadata`, bounded `wiki apply-batch` and
+`wiki search-batch` automation, `wiki unsafe-local import`,
 `wiki chatgpt import` / `wiki chatgpt rollback`, and the full `wiki obsidian`
 subcommand set.
 
