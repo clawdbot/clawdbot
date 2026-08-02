@@ -3,7 +3,7 @@ const USAGE_PAYLOAD_TTL_MS = 5 * 60_000;
 type UsageRefreshReason = "focus" | "manual" | "poll" | "reconnect";
 type UsageRefreshDecision = "defer" | "fetch" | "skip";
 
-export function decideUsageRefresh(params: {
+function decideUsageRefresh(params: {
   reason: UsageRefreshReason;
   visible: boolean;
   interrupted: boolean;
