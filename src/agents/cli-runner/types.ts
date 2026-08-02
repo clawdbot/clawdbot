@@ -157,6 +157,8 @@ export type RunCliAgentParams = {
   channelContext?: PluginHookChannelContext;
   currentThreadTs?: string;
   currentMessageId?: string | number;
+  /** Opaque host-owned capability for exact-current message actions in loopback tools. */
+  messageActionTurnCapability?: string;
   currentInboundAudio?: boolean;
   agentAccountId?: string;
   /** Sender identity for channel-originated runs when available. */

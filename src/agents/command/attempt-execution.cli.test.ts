@@ -947,6 +947,7 @@ describe("CLI attempt execution", () => {
 
     expect(runCliAgentMock).toHaveBeenCalledTimes(1);
     expect(firstRunCliAgentArg().authProfileId).toBe("openai:work");
+    expect(firstRunCliAgentArg().messageActionTurnCapability).toBeUndefined();
   });
 
   it("skips auto auth-profile resolution for CLI-owned transport", async () => {
@@ -1897,7 +1898,27 @@ describe("CLI attempt execution", () => {
     };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
     await writeSessionStoreSeed(sessionStore);
-    runCliAgentMock.mockResolvedValueOnce(makeCliResult("channel aware"));
+    let capability: string | undefined;
+    runCliAgentMock.mockImplementationOnce(async (input: Record<string, unknown>) => {
+      capability = input.messageActionTurnCapability as string | undefined;
+      expect(
+        resolveMessageActionTurnCapability({
+          token: capability,
+          agentId: "main",
+          runId: "run-cli-channel-context",
+          sessionKey,
+          sessionId: sessionEntry.sessionId,
+        }),
+      ).toMatchObject({
+        requesterSenderId: "U028EKM2A",
+        toolContext: {
+          currentChannelProvider: "slack",
+          currentChannelId: "C0AUSU28ND7",
+          currentMessageId: "1784900605.553019",
+        },
+      });
+      return makeCliResult("channel aware");
+    });
 
     await runAgentAttempt({
       providerOverride: "claude-cli",
@@ -1956,6 +1977,16 @@ describe("CLI attempt execution", () => {
       },
       senderId: "U028EKM2A",
     });
+    expect(capability).toEqual(expect.any(String));
+    expect(
+      resolveMessageActionTurnCapability({
+        token: capability,
+        agentId: "main",
+        runId: "run-cli-channel-context",
+        sessionKey,
+        sessionId: sessionEntry.sessionId,
+      }),
+    ).toBeUndefined();
   });
 
   it("forwards message-tool-only policy and requires explicit subagent targets", async () => {

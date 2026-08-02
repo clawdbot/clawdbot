@@ -45,6 +45,8 @@ type ScopedToolsCall = {
   runtimePolicySessionKey?: string;
   agentId?: string;
   sessionId?: string;
+  runId?: string;
+  messageActionTurnCapability?: string;
   modelProvider?: string;
   modelId?: string;
   yieldContextCacheKey?: string;
@@ -1162,6 +1164,7 @@ describe("mcp loopback server", () => {
         agentId: "worker",
         sessionId: "session-bound",
         runId: "run-bound",
+        messageActionTurnCapability: "message-action-capability-bound",
         modelProvider: "anthropic",
         modelId: "claude-opus-4-7",
         messageProvider: "discord",
@@ -1243,6 +1246,8 @@ describe("mcp loopback server", () => {
       runtimePolicySessionKey: "agent:worker:discord:default:direct:bound-user",
       agentId: "worker",
       sessionId: "session-bound",
+      runId: "run-bound",
+      messageActionTurnCapability: "message-action-capability-bound",
       modelProvider: "anthropic",
       modelId: "claude-opus-4-7",
       messageProvider: "discord",

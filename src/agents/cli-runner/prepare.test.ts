@@ -3085,6 +3085,8 @@ describe("prepareCliRunContext", () => {
         sessionKey: "agent:worker:main",
         runtimePolicySessionKey: undefined,
         agentId: "worker",
+        runId: "run-test-loopback-prompt-tools",
+        messageActionTurnCapability: undefined,
         messageProvider: undefined,
         clientCaps: undefined,
         currentChannelId: undefined,
@@ -3273,6 +3275,7 @@ describe("prepareCliRunContext", () => {
         model: "test-model",
         timeoutMs: 1_000,
         runId: "run-test-room-event-tools",
+        messageActionTurnCapability: "turn-capability-secret",
         config: createCliBackendConfig(),
         sessionEntry: {
           execHost: "node",
@@ -3324,6 +3327,7 @@ describe("prepareCliRunContext", () => {
         OPENCLAW_MCP_TOKEN: "loopback-token",
         OPENCLAW_MCP_CLI_CAPTURE_KEY: "",
       });
+      expect(JSON.stringify(context.preparedBackend)).not.toContain("turn-capability-secret");
       expect(mintMcpLoopbackClientGrant).toHaveBeenCalledWith({
         context: {
           sessionKey: "agent:main:telegram:group:chat123",
@@ -3331,6 +3335,7 @@ describe("prepareCliRunContext", () => {
           agentId: "worker",
           sessionId: "session-test",
           runId: "run-test-room-event-tools",
+          messageActionTurnCapability: "turn-capability-secret",
           modelProvider: "anthropic",
           modelId: "test-model",
           messageProvider: "discord",
@@ -3402,6 +3407,8 @@ describe("prepareCliRunContext", () => {
           senderIsOwner: false,
           runtimePolicySessionKey: "agent:worker:discord:default:direct:canonical-sender",
           agentId: "worker",
+          runId: "run-test-room-event-tools",
+          messageActionTurnCapability: "turn-capability-secret",
           modelProvider: "anthropic",
           modelId: "test-model",
           execOverrides: {

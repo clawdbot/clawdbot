@@ -14,6 +14,8 @@ export type McpLoopbackRequestContext = {
   agentId?: string;
   sessionId?: string;
   runId?: string;
+  /** Process-local turn capability; never projected into child headers or env. */
+  messageActionTurnCapability?: string;
   modelProvider?: string;
   modelId?: string;
   messageProvider?: string;

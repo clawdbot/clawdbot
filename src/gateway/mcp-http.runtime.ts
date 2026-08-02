@@ -37,6 +37,8 @@ type McpLoopbackScopeParams = {
   runtimePolicySessionKey?: string;
   agentId?: string;
   sessionId?: string;
+  runId?: string;
+  messageActionTurnCapability?: string;
   modelProvider?: string;
   modelId?: string;
   yieldContextCacheKey?: string;
@@ -103,6 +105,8 @@ export class McpLoopbackToolCache {
       params.runtimePolicySessionKey ?? "",
       params.agentId ?? "",
       params.sessionId ?? "",
+      params.runId ?? "",
+      params.messageActionTurnCapability ?? "",
       params.modelProvider ?? "",
       params.modelId ?? "",
       params.yieldContextCacheKey ?? "",

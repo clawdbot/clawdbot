@@ -653,6 +653,29 @@ export function runAgentAttempt(params: {
     (agentHarnessPolicy.runtime === "openclaw" && agentHarnessPolicy.runtimeSource !== "implicit"
       ? "openclaw"
       : undefined);
+  const requestMessageId = params.opts.requestMessageId?.trim();
+  const messageActionTurnCapability =
+    requestMessageId &&
+    params.sessionKey &&
+    isTrustedMessageActionTurnIngress(params.messageChannel)
+      ? mintMessageActionTurnCapability({
+          agentId: params.sessionAgentId,
+          runId: params.runId,
+          sessionKey: params.sessionKey,
+          sessionId: params.sessionId,
+          requesterAccountId: params.runContext.accountId,
+          requesterSenderId: params.runContext.senderId ?? undefined,
+          toolContext: {
+            currentChannelId: params.runContext.currentChannelId,
+            currentChannelProvider: params.messageChannel,
+            currentThreadTs: params.runContext.currentThreadTs,
+            currentMessageId: requestMessageId,
+            replyToMode: params.runContext.replyToMode,
+            hasRepliedRef: params.runContext.hasRepliedRef,
+          },
+          ttlMs: params.timeoutMs + 60_000,
+        })
+      : undefined;
   if (!isRawModelRun && isCliExecutionProvider) {
     const cliSessionBinding = getCliSessionBinding(params.sessionEntry, cliExecutionProvider);
     const cliProcessCwd = params.cwd ? resolveUserPath(params.cwd) : params.workspaceDir;
@@ -821,6 +844,7 @@ export function runAgentAttempt(params: {
             channelContext: params.runContext.channelContext,
             currentThreadTs: params.runContext.currentThreadTs,
             currentMessageId: params.opts.requestMessageId,
+            messageActionTurnCapability,
             currentInboundAudio: params.runContext.currentInboundAudio,
             approvalReviewerDeviceId: params.opts.approvalReviewerDeviceId,
             agentAccountId: params.runContext.accountId,
@@ -869,7 +893,7 @@ export function runAgentAttempt(params: {
           }),
       );
     };
-    return resolveReusableCliSessionBinding().then(async (activeCliSessionBinding) => {
+    const cliRun = resolveReusableCliSessionBinding().then(async (activeCliSessionBinding) => {
       try {
         return await runCliWithSession(activeCliSessionBinding?.sessionId, activeCliSessionBinding);
       } catch (err) {
@@ -894,31 +918,10 @@ export function runAgentAttempt(params: {
         throw err;
       }
     });
+    return cliRun.finally(() => {
+      revokeMessageActionTurnCapability(messageActionTurnCapability);
+    });
   }
-
-  const requestMessageId = params.opts.requestMessageId?.trim();
-  const messageActionTurnCapability =
-    requestMessageId &&
-    params.sessionKey &&
-    isTrustedMessageActionTurnIngress(params.messageChannel)
-      ? mintMessageActionTurnCapability({
-          agentId: params.sessionAgentId,
-          runId: params.runId,
-          sessionKey: params.sessionKey,
-          sessionId: params.sessionId,
-          requesterAccountId: params.runContext.accountId,
-          requesterSenderId: params.runContext.senderId ?? undefined,
-          toolContext: {
-            currentChannelId: params.runContext.currentChannelId,
-            currentChannelProvider: params.messageChannel,
-            currentThreadTs: params.runContext.currentThreadTs,
-            currentMessageId: requestMessageId,
-            replyToMode: params.runContext.replyToMode,
-            hasRepliedRef: params.runContext.hasRepliedRef,
-          },
-          ttlMs: params.timeoutMs + 60_000,
-        })
-      : undefined;
   const runEmbeddedAgentForTurn = createEmbeddedAgentTurnRunner(messageActionTurnCapability);
   return runEmbeddedAgentForTurn({
     sessionId: params.sessionId,

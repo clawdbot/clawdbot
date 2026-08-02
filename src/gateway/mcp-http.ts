@@ -273,6 +273,8 @@ async function startMcpLoopbackServer(port = 0): Promise<{
           runtimePolicySessionKey: requestContext.runtimePolicySessionKey,
           agentId: requestContext.agentId,
           sessionId: requestContext.sessionId,
+          runId: requestContext.runId,
+          messageActionTurnCapability: requestContext.messageActionTurnCapability,
           modelProvider: requestContext.modelProvider,
           modelId: requestContext.modelId,
           yieldContextCacheKey: yieldContext?.cacheKey,
