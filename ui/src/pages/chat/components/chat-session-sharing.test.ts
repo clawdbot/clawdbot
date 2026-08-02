@@ -260,4 +260,34 @@ describe("chat session sharing menu", () => {
     expect(onOpen).toHaveBeenCalledOnce();
     expect(onVisibilityChange).toHaveBeenCalledWith("read-only");
   });
+
+  it.each([
+    { name: "visibility-only", membersAvailable: false },
+    { name: "member-enabled", membersAvailable: true },
+  ])("shows rejected sharing changes for $name Gateways", ({ membersAvailable }) => {
+    const root = mount(
+      renderChatSessionSharing({
+        session: {
+          key: "agent:main:main",
+          kind: "direct",
+          updatedAt: 1,
+          visibility: "shared",
+          sharingRole: "owner",
+        },
+        state: { loading: false, error: "Visibility update rejected" },
+        allowedVisibilities: ["shared", "read-only"],
+        membersAvailable,
+        onOpen: vi.fn(),
+        onVisibilityChange: vi.fn(),
+        onMemberChange: vi.fn(),
+      }),
+    );
+
+    expect(root.querySelector(".chat-pane__sharing-status--error")?.textContent).toContain(
+      "Visibility update rejected",
+    );
+    expect(root.querySelectorAll(".chat-pane__sharing-title")).toHaveLength(
+      membersAvailable ? 2 : 1,
+    );
+  });
 });

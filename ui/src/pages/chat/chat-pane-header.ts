@@ -468,7 +468,8 @@ export abstract class ChatPaneHeader extends ChatPaneContext {
     if (!this.state) {
       return;
     }
-    this.state.chatError = error instanceof Error ? error.message : String(error);
+    this.state.lastError = error instanceof Error ? error.message : String(error);
+    this.state.chatError = this.state.lastError;
     this.state.requestUpdate?.();
   }
 

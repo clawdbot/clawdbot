@@ -4,6 +4,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { createAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-error.js";
+import { GatewayDrainingError } from "../process/gateway-work-admission.js";
 import { classifyFailoverSignal } from "./embedded-agent-helpers/errors.js";
 import {
   buildFailoverRemediationHint,
@@ -1426,6 +1427,20 @@ describe("failover-error", () => {
       const abortWrapper = new Error("request was aborted", { cause: staleLifecycle });
       abortWrapper.name = "AbortError";
       expect(isNonProviderRuntimeCoordinationError(abortWrapper)).toBe(true);
+    });
+
+    it("returns true for direct and nested gateway drain admission failures", () => {
+      const draining = new GatewayDrainingError();
+      const causeWrapper = new Error("session send failed", { cause: draining });
+      const aggregateWrapper = new AggregateError(
+        [new Error("cleanup failed"), { error: draining }],
+        "agent run failed",
+      );
+
+      for (const error of [draining, causeWrapper, aggregateWrapper]) {
+        expect(isNonProviderRuntimeCoordinationError(error)).toBe(true);
+        expect(resolveModelFallbackError(error)).toEqual({ kind: "coordination", error });
+      }
     });
 
     it("returns true when the coordination error is nested via cause", () => {

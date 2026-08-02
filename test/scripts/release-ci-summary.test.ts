@@ -236,10 +236,14 @@ function rawManifest({
     runReleaseSoak: "false",
     targetSha,
     validationInputs: {
+      allowUnreleasedChangelog: "false",
       codexPluginSpec: "",
       crossOsSuiteFilter: "",
       liveSuiteFilter: "",
       mode: "direct",
+      npmTelegramPackageSpec: "",
+      npmTelegramProviderMode: "mock-openai",
+      npmTelegramScenario: "",
       packageAcceptancePackageSpec: "",
       provider: "openai",
       releasePackageSpec: "",
@@ -1308,6 +1312,35 @@ describe("release CI summary child correlation", () => {
     );
   });
 
+  it("requires the npm Telegram child for all-validation with an effective package spec", () => {
+    const raw = rawManifest({});
+    raw.childRuns.npmTelegram = "505";
+    raw.validationInputs.npmTelegramPackageSpec = "openclaw@beta";
+    const manifest = validateParentManifest(raw, {
+      runAttempt: 2,
+      runId: "29090000000",
+    });
+    const selected = requiredChildKeysForRerunGroup(manifest.rerunGroup, manifest.validationInputs);
+    expect([...selected].sort()).toEqual([
+      "normalCi",
+      "npmTelegram",
+      "pluginPrerelease",
+      "productPerformance",
+      "releaseChecks",
+    ]);
+    const missing = {
+      ...manifest,
+      childRunIds: { ...manifest.childRunIds, npmTelegram: "" },
+    };
+    expect(() =>
+      manifestChildEntries(
+        missing,
+        expectedChildDispatches(manifest.runId, manifest.runAttempt, "main"),
+        selected,
+      ),
+    ).toThrow("selected child is missing from manifest: NPM Telegram Beta E2E");
+  });
+
   it("keeps historical non-reuse v2 manifests readable without validation inputs", () => {
     const legacy = rawManifest({});
     delete (legacy as { validationInputs?: unknown }).validationInputs;
@@ -1573,7 +1606,10 @@ describe("release CI summary child correlation", () => {
     );
     const mismatchedRoot = {
       ...root,
-      validationInputs: { ...root.validationInputs, provider: "anthropic" },
+      validationInputs: {
+        ...root.validationInputs,
+        npmTelegramScenario: "telegram-status-command",
+      },
     };
 
     expect(() => validateEvidenceReuseChain(current, mismatchedRoot, mismatchedRoot)).toThrow(

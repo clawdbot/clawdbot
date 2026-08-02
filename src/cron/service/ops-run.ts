@@ -174,6 +174,7 @@ async function finishPreparedManualRun(
           : mode === "force"
             ? "force-preserve"
             : "advance";
+      const postPersistAutoDisableNotifications: Array<() => void> = [];
 
       let shouldDelete = false;
       if (coreResult.status === "ok" && coreResult.triggerEval?.fired === false) {
@@ -187,7 +188,11 @@ async function finishPreparedManualRun(
             endedAt,
             triggerEval: coreResult.triggerEval,
           },
-          { scheduleMode, triggerOwnership },
+          {
+            scheduleMode,
+            triggerOwnership,
+            deferredAutoDisableNotifications: postPersistAutoDisableNotifications,
+          },
         );
       } else {
         shouldDelete = applyJobResult(
@@ -204,6 +209,7 @@ async function finishPreparedManualRun(
             scheduleMode: scheduleMode === "force-preserve" ? "preserve" : "advance",
             scheduleOwnership,
             scheduleOwnershipAtMs: prepared.scheduleOwnershipAtMs,
+            deferredAutoDisableNotifications: postPersistAutoDisableNotifications,
           },
         );
         applyTriggerRunResult(
@@ -287,13 +293,16 @@ async function finishPreparedManualRun(
       });
       recomputeNextRunsForMaintenance(state, {
         recomputeExpired: true,
+        deferredAutoDisableNotifications: postPersistAutoDisableNotifications,
         ...(mode === "force"
           ? {
               preserveExpiredPacedNextRunJobId: jobId,
             }
           : {}),
       });
-      await persistOrRestore(state, rollbackSnapshot);
+      await persistOrRestore(state, rollbackSnapshot, {
+        postPersistAutoDisableNotifications,
+      });
       if (removedJob) {
         emit(state, { jobId: removedJob.id, action: "removed", job: removedJob });
       }

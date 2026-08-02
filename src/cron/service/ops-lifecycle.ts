@@ -26,6 +26,7 @@ export async function start(state: CronServiceState) {
   const interruptedRuns: InterruptedStartupRun[] = [];
   const completedJobIdsToDelete = new Set<string>();
   let repairedAnyStartupRun = false;
+  const postPersistAutoDisableNotifications: Array<() => void> = [];
   await locked(state, async () => {
     await ensureLoaded(state, { skipRecompute: true });
     if (state.stopped) {
@@ -56,6 +57,7 @@ export async function start(state: CronServiceState) {
             entry: finalized.entry,
             ...(finalized.scriptResult ? { scriptResult: finalized.scriptResult } : {}),
             ...(finalized.triggerEval ? { triggerEval: finalized.triggerEval } : {}),
+            deferredAutoDisableNotifications: postPersistAutoDisableNotifications,
           });
           // Skip only the old invocation; a distinct overdue replacement
           // must remain eligible for normal one-shot startup catch-up.
@@ -75,6 +77,7 @@ export async function start(state: CronServiceState) {
           taskRunId,
           runningAtMs,
           nowMs,
+          deferredAutoDisableNotifications: postPersistAutoDisableNotifications,
         });
         if (interrupted.replacementAtMs === undefined) {
           interruptedJobIds.add(job.id);
@@ -87,7 +90,17 @@ export async function start(state: CronServiceState) {
       state.store.jobs = jobs.filter((job) => !completedJobIdsToDelete.has(job.id));
     }
     if (repairedAnyStartupRun || jobs.length > 0) {
-      await persist(state, repairedAnyStartupRun ? undefined : { stateOnly: true });
+      const persisted = await persist(
+        state,
+        repairedAnyStartupRun ? undefined : { stateOnly: true },
+      );
+      // Recovery alerts describe the repaired durable row, so never publish
+      // them until the startup write has committed successfully.
+      if (persisted) {
+        for (const notify of postPersistAutoDisableNotifications) {
+          notify();
+        }
+      }
     }
   });
 
@@ -107,9 +120,18 @@ export async function start(state: CronServiceState) {
     if (state.stopped) {
       return;
     }
-    const changed = recomputeNextRunsForMaintenance(state, { recomputeExpired: true });
+    const postPersistMaintenanceNotifications: Array<() => void> = [];
+    const changed = recomputeNextRunsForMaintenance(state, {
+      recomputeExpired: true,
+      deferredAutoDisableNotifications: postPersistMaintenanceNotifications,
+    });
     if (changed) {
-      await persist(state);
+      const persisted = await persist(state);
+      if (persisted) {
+        for (const notify of postPersistMaintenanceNotifications) {
+          notify();
+        }
+      }
     }
     for (const interrupted of interruptedRuns) {
       const job = state.store?.jobs.find((entry) => entry.id === interrupted.jobId);

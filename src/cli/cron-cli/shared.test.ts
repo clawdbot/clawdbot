@@ -305,6 +305,51 @@ describe("printCronList", () => {
     expect(singleLine).not.toContain("(1x)");
   });
 
+  it("shows why the scheduler auto-disabled a job without changing JSON status", () => {
+    const runFailures = createBaseJob({
+      id: "auto-disabled-runs",
+      name: "Auto-disabled runs",
+      enabled: false,
+      state: {
+        consecutiveErrors: 10,
+        autoDisabled: {
+          reason: "consecutive-failures",
+          atMs: Date.now(),
+          consecutiveErrors: 10,
+        },
+      },
+    });
+    const scheduleErrors = createBaseJob({
+      id: "auto-disabled-schedule",
+      name: "Auto-disabled schedule",
+      enabled: false,
+      state: {
+        scheduleErrorCount: 3,
+        autoDisabled: {
+          reason: "schedule-errors",
+          atMs: Date.now(),
+          consecutiveErrors: 3,
+        },
+      },
+    });
+
+    const list = createRuntimeLogCapture();
+    printCronList([runFailures, scheduleErrors], list.runtime);
+    expectLogsToInclude(list.logs, "disabled (10x)");
+    expectLogsToInclude(list.logs, "disabled (schedule)");
+
+    const show = createRuntimeLogCapture();
+    printCronShow(runFailures, show.runtime);
+    expectLogsToInclude(show.logs, "status: disabled (10x)");
+
+    expect(enrichCronJsonWithStatus(runFailures)).toMatchObject({
+      status: "disabled",
+      state: {
+        autoDisabled: { reason: "consecutive-failures", consecutiveErrors: 10 },
+      },
+    });
+  });
+
   it("caps the failure count so the status column never overflows", () => {
     const { logs, runtime } = createRuntimeLogCapture();
     printCronList(

@@ -365,6 +365,7 @@ describe("chat pane header state", () => {
     } satisfies GatewaySessionRow;
     pane.handleHeaderMenuAction("reveal", session, "/src/openclaw", null);
     await vi.waitFor(() => expect(state.chatError).toBe("No desktop available."));
+    expect(state.lastError).toBe(state.chatError);
   });
 });
 

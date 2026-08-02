@@ -495,6 +495,49 @@ describe("before_tool_call loop detection behavior", () => {
     expectToolLoopBlockedResult(result, "identical outcomes");
   });
 
+  it("blocks changing-argument terminal exec failures and escalates vetoes", async () => {
+    const output = "Traceback: missing package\n\n(Command exited with code 1)";
+    const execute = vi.fn().mockResolvedValue({
+      content: [{ type: "text", text: output }],
+      details: { status: "completed", exitCode: 1, aggregated: output },
+    });
+    const tool = createWrappedTool("exec", execute);
+
+    await withToolLoopEvents(async (emitted) => {
+      for (let index = 0; index <= GLOBAL_CIRCUIT_BREAKER_THRESHOLD; index += 1) {
+        const result = await tool.execute(
+          `exec-semantic-${index}`,
+          { command: `python job-${index}.py` },
+          undefined,
+          undefined,
+        );
+        if (index >= CRITICAL_THRESHOLD) {
+          expectToolLoopBlockedResult(
+            result,
+            index === GLOBAL_CIRCUIT_BREAKER_THRESHOLD
+              ? "global circuit breaker"
+              : "identical outcomes",
+          );
+        }
+      }
+
+      expect(execute).toHaveBeenCalledTimes(CRITICAL_THRESHOLD);
+      expect(emitted.find((event) => event.detector === "generic_repeat")).toMatchObject({
+        level: "critical",
+        action: "block",
+        count: CRITICAL_THRESHOLD,
+        toolName: "exec",
+      });
+      expect(emitted.at(-1)).toMatchObject({
+        detector: "global_circuit_breaker",
+        level: "critical",
+        action: "block",
+        count: GLOBAL_CIRCUIT_BREAKER_THRESHOLD,
+        toolName: "exec",
+      });
+    });
+  });
+
   it("warns on non-strict same-tool argument churn while preserving tool execution", async () => {
     const execute = vi.fn().mockImplementation(async (toolCallId: string, _params: unknown) => {
       const progressed = toolCallId === "write-churn-progress";

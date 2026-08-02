@@ -12,6 +12,7 @@ import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { closePluginStateDatabase } from "../plugin-state/plugin-state-store.js";
+import { clearPluginBindingPendingRequests } from "../plugins/conversation-binding.js";
 import { clearActivePluginRegistry } from "../plugins/runtime.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import {
@@ -1053,6 +1054,7 @@ export function createGatewayCloseHandler(
         warnings,
       });
     } finally {
+      await shutdownStep("plugin-binding-requests", clearPluginBindingPendingRequests, warnings);
       await shutdownStep("plugin-host-registry", clearActivePluginRegistry, warnings);
       // Channel and plugin teardown still resolve account credentials. Keep the
       // active snapshot until every teardown owner is done, then always scrub it.

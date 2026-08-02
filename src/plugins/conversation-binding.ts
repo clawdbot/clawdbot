@@ -12,7 +12,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { ConversationRef } from "../infra/outbound/session-binding-service.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { resolveGlobalMap, resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
@@ -71,7 +71,6 @@ type PendingPluginBindingRequest = {
   pluginName?: string;
   pluginRoot: string;
   conversation: PluginBindingConversation;
-  requestedAt: number;
   requestedBySenderId?: string;
   summary?: string;
   detachHint?: string;
@@ -115,11 +114,10 @@ type PluginBindingResolveResult =
       status: "expired";
     };
 
-const PLUGIN_BINDING_PENDING_REQUESTS_KEY = Symbol.for("openclaw.pluginBindingPendingRequests");
+// Rent: approvals cross request roots through deep SDK paths; unified emission makes this ambient slot safe, and Gateway close bounds its lifetime.
+const pendingRequests = new Map<string, PendingPluginBindingRequest>();
 
-const pendingRequests = resolveGlobalMap<string, PendingPluginBindingRequest>(
-  PLUGIN_BINDING_PENDING_REQUESTS_KEY,
-);
+export const clearPluginBindingPendingRequests = () => pendingRequests.clear();
 
 type PluginBindingGlobalState = {
   fallbackNoticeBindingIds: Set<string>;
@@ -831,7 +829,6 @@ export async function requestPluginConversationBinding(params: {
     pluginName: params.pluginName,
     pluginRoot: params.pluginRoot,
     conversation,
-    requestedAt: Date.now(),
     requestedBySenderId: normalizeOptionalString(params.requestedBySenderId),
     summary: normalizeOptionalString(params.binding?.summary),
     detachHint: normalizeOptionalString(params.binding?.detachHint),
