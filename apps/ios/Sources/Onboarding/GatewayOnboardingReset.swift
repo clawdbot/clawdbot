@@ -18,7 +18,7 @@ enum GatewayOnboardingReset {
             // Gateway proves that replacement node and operator auth were issued.
             return true
         }
-        await self.prepare(
+        return await self.prepare(
             appModel: appModel,
             instanceId: instanceId,
             gatewayStableID: gatewayStableID,
