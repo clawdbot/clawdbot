@@ -93,6 +93,7 @@ import {
   type HeartbeatWakeIntent,
   type HeartbeatWakeSource,
 } from "./heartbeat-wake.js";
+import { normalizeDeliverableOutboundChannel } from "./outbound/channel-resolution.js";
 import type { OutboundSendDeps } from "./outbound/deliver.js";
 import {
   resolveHeartbeatDeliveryTargetWithSessionRoute,
@@ -391,14 +392,15 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
     canHeartbeatDeliverCommitments(heartbeat) && scheduledTasks.length === 0
       ? preflight.dueCommitments[0]
       : undefined;
+  const heartbeatDeliveryChannel =
+    heartbeat?.target === "last"
+      ? deliveryContextFromSession(entry)?.channel
+      : normalizeDeliverableOutboundChannel(heartbeat?.target);
   // A configured heartbeat account belongs only to its normal route. Do not
   // carry it into an accountless commitment that owns a different channel.
   const commitmentAccountId =
     firstDueCommitment?.accountId ??
-    (firstDueCommitment &&
-    (heartbeat?.target === firstDueCommitment.channel ||
-      (heartbeat?.target === "last" &&
-        deliveryContextFromSession(entry)?.channel === firstDueCommitment.channel))
+    (firstDueCommitment && heartbeatDeliveryChannel === firstDueCommitment.channel
       ? heartbeat?.accountId
       : undefined);
   const commitmentDeliveryContext = firstDueCommitment

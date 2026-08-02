@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 
 type CreateStaticCatalogResolver =
   typeof import("./embedded-agent-runner/model.static-catalog.js").createBundledStaticCatalogModelResolver;
@@ -57,7 +58,7 @@ const mocks = vi.hoisted(() => {
       }),
     ),
     buildPreparedModelCatalogSnapshot: vi.fn(async () => ({ entries: [], routeVariants: [] })),
-    ensureRuntimePluginsLoaded: vi.fn(),
+    loadAgentRuntimePluginRegistryHandle: vi.fn(),
     loadStaticCatalog: vi.fn(async () => []),
     prepareStaticCatalog: vi.fn(async (..._args: unknown[]) => ({
       providers: [
@@ -119,11 +120,18 @@ vi.mock("../plugins/synthetic-auth.runtime.js", () => ({
 }));
 
 vi.mock("./agent-scope.js", () => ({
+  listAgentEntries: (config: { agents?: { list?: unknown[] } }) => config.agents?.list ?? [],
   listAgentIds: () => ["default"],
   resolveAgentDir: () => "/tmp/prepared-static-agent",
   resolveAgentWorkspaceDir: () => "/tmp/prepared-static-workspace",
   resolveDefaultAgentDir: () => "/tmp/prepared-static-agent",
   resolveDefaultAgentId: () => "default",
+  resolveAgentEffectiveModelPrimary: () => undefined,
+  resolveRunModelFallbacksOverride: () => undefined,
+  resolveSessionAgentIds: ({ agentId }: { agentId?: string }) => ({
+    defaultAgentId: "default",
+    sessionAgentId: agentId ?? "default",
+  }),
 }));
 
 vi.mock("./auth-profiles/runtime-snapshots.js", () => ({
@@ -149,7 +157,7 @@ vi.mock("./models-config.providers.implicit.js", () => ({
 }));
 
 vi.mock("./runtime-plugins.js", () => ({
-  ensureRuntimePluginsLoaded: mocks.ensureRuntimePluginsLoaded,
+  loadAgentRuntimePluginRegistryHandle: mocks.loadAgentRuntimePluginRegistryHandle,
 }));
 
 vi.mock("./embedded-agent-runner/model.static-catalog.js", () => ({
@@ -170,6 +178,9 @@ const { resetPreparedModelRuntimeSnapshotsForTest } =
 
 beforeEach(() => {
   resetPreparedModelRuntimeSnapshotsForTest();
+  mocks.loadAgentRuntimePluginRegistryHandle
+    .mockReset()
+    .mockReturnValue(createEmptyPluginRegistry());
   vi.clearAllMocks();
   mocks.resolveStaticCatalogModel.mockReturnValue(undefined);
 });
@@ -312,7 +323,7 @@ describe("prepared model runtime Gateway catalog mode", () => {
     });
 
     expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
-    expect(mocks.ensureRuntimePluginsLoaded).not.toHaveBeenCalled();
+    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledOnce();
     expect(mocks.prepareStaticCatalog).toHaveBeenCalledWith(
       expect.objectContaining({
         providerDiscoveryProviderIds: ["openai"],
@@ -348,7 +359,7 @@ describe("prepared model runtime Gateway catalog mode", () => {
     );
     expect(mocks.buildPreparedModelCatalogSnapshot).not.toHaveBeenCalled();
     expect(mocks.loadStaticCatalog).not.toHaveBeenCalled();
-    expect(mocks.resolvePluginMetadataSnapshot).toHaveBeenCalledOnce();
+    expect(mocks.resolvePluginMetadataSnapshot).toHaveBeenCalledTimes(2);
     expect(configuredRuntimeModelCount).toBe(1);
     expect(generatedCatalogReadCount).toBe(0);
     const snapshot = getPreparedModelRuntimeSnapshot({
@@ -359,8 +370,9 @@ describe("prepared model runtime Gateway catalog mode", () => {
       workspaceDir: "/tmp/prepared-static-workspace",
     });
     expect(snapshot?.configuredRuntimeModels).toHaveLength(1);
+    expect(snapshot?.pluginRegistry).toBeDefined();
     expect(snapshot?.messageToolCatalog).toBeUndefined();
-    expect(snapshot?.mediaCapabilityProviders).toBeUndefined();
+    expect(snapshot?.mediaCapabilityProviders).toBeDefined();
     const fullCatalog = await snapshot?.loadFullModelCatalog?.();
     expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
     expect(mocks.planOpenClawModelsJsonSource).toHaveBeenCalledWith(
@@ -376,8 +388,8 @@ describe("prepared model runtime Gateway catalog mode", () => {
     expect(mocks.buildPreparedModelCatalogSnapshot).toHaveBeenCalledWith(
       expect.objectContaining({ includeProviderPluginAugmentation: true }),
     );
-    expect(mocks.ensureRuntimePluginsLoaded).toHaveBeenCalledOnce();
-    expect(mocks.ensureRuntimePluginsLoaded.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(2);
+    expect(mocks.loadAgentRuntimePluginRegistryHandle.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.buildPreparedModelCatalogSnapshot.mock.invocationCallOrder[0]!,
     );
     expect(mocks.loadStaticCatalog).toHaveBeenCalledWith(

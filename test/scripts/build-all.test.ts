@@ -225,11 +225,6 @@ describe("resolveBuildAllStep", () => {
       expectedEnv: { FOO: "bar" },
     },
     {
-      label: "copy-export-html-templates",
-      scriptPath: "scripts/copy-export-html-templates.ts",
-      expectedEnv: { FOO: "bar" },
-    },
-    {
       label: "write-build-info",
       scriptPath: "scripts/write-build-info.ts",
       expectedEnv: { FOO: "bar" },
@@ -273,12 +268,6 @@ describe("resolveBuildAllStep", () => {
         env: { OPENCLAW_BUILD_ALL_NO_PNPM: "1" },
       },
     });
-  });
-
-  it("keeps export-html build output aligned with runtime template lookup", () => {
-    const step = getBuildAllStep("copy-export-html-templates");
-
-    expect(step.cache?.outputs).toEqual(["dist/export-html"]);
   });
 
   it("restores startup metadata as a validator seed and refreshes it after validation", () => {
@@ -352,7 +341,6 @@ describe("resolveBuildAllSteps", () => {
       "write-plugin-sdk-entry-dts",
       "check-plugin-sdk-exports",
       "copy-hook-metadata",
-      "copy-export-html-templates",
       "ui:build",
       "write-build-info",
       "write-cli-startup-metadata",
@@ -395,7 +383,6 @@ describe("resolveBuildAllSteps", () => {
         }),
       ]),
     );
-    expect(resolveBuildAllStepOnCacheHit(getBuildAllStep("copy-export-html-templates"))).toBeNull();
   });
 
   it("uses a runtime artifact plus plugin SDK export profile for ci artifacts", () => {
@@ -410,7 +397,6 @@ describe("resolveBuildAllSteps", () => {
       "write-plugin-sdk-entry-dts",
       "check-plugin-sdk-exports",
       "copy-hook-metadata",
-      "copy-export-html-templates",
       "ui:build",
       "write-build-info",
       "write-cli-startup-metadata",

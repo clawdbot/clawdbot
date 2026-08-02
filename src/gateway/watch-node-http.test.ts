@@ -476,7 +476,6 @@ describe("watch node HTTP transport", () => {
       command: "device.info",
       timeoutMs: 2_000,
     });
-    const invokeAfterDisconnect = invoke.catch((error: unknown) => error);
     const pollResponse = await fetch(`${baseUrl}/poll`, {
       method: "POST",
       headers: { authorization: `Bearer ${String(connected.sessionToken)}` },
@@ -517,7 +516,13 @@ describe("watch node HTTP transport", () => {
       nodeId: identity.deviceId,
       reason: "node pairing changed",
     });
-    await expect(invokeAfterDisconnect).resolves.toBeInstanceOf(Error);
+    await expect(invoke).resolves.toEqual({
+      ok: false,
+      error: {
+        code: "DISCONNECTED",
+        message: "node disconnected (device.info)",
+      },
+    });
     runtime.close();
   });
 

@@ -1,9 +1,11 @@
+import { formatErrorMessage } from "@openclaw/normalization-core";
 import { html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { AgentsWorkspaceGetResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { MemorySearchResponse } from "../../../../src/gateway/server-methods/memory-search.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
+import { redactToolDetail } from "../../lib/browser-redact.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import "../../styles/memory-memories.css";
 
@@ -17,10 +19,6 @@ type DetailState =
   | { kind: "loading" }
   | { kind: "ready"; content: string }
   | { kind: "error"; message: string };
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 function resultKey(result: SearchResult, index: number): string {
   return `${index}:${result.path}:${result.startLine}:${result.endLine}`;
@@ -113,7 +111,11 @@ class MemoryMemoriesElement extends OpenClawLightDomElement {
       if (this.searchRequest !== request || this.agentId !== agentId || this.client !== client) {
         return;
       }
-      this.searchState = { kind: "error", query: normalizedQuery, message: errorMessage(error) };
+      this.searchState = {
+        kind: "error",
+        query: normalizedQuery,
+        message: formatErrorMessage(error, { redact: redactToolDetail }),
+      };
     }
   }
 
@@ -157,7 +159,7 @@ class MemoryMemoriesElement extends OpenClawLightDomElement {
       }
       this.details = new Map(this.details).set(key, {
         kind: "error",
-        message: errorMessage(error),
+        message: formatErrorMessage(error, { redact: redactToolDetail }),
       });
     } finally {
       if (this.detailRequests.get(key) === request) {

@@ -84,7 +84,6 @@ export async function prepareGatewayLifecycle(params: {
     gatewayInstanceRuntimeRef,
     startupState,
     readinessEventLoopHealth,
-    releasePluginRouteRegistry,
     browserAuthRateLimiter,
     wss,
     httpServer,
@@ -384,7 +383,6 @@ export async function prepareGatewayLifecycle(params: {
     await createGatewayCloseHandler({
       bonjourStop: runtimeState.bonjourStop,
       tailscaleCleanup: runtimeState.tailscaleCleanup,
-      releasePluginRouteRegistry,
       clearSecretsRuntimeSnapshot,
       channelIds,
       stopChannel,

@@ -23,6 +23,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -262,6 +263,14 @@ internal fun SidebarSessionRow(
         color = palette.muted,
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
+      )
+    }
+    if (session.pinned == true) {
+      Icon(
+        imageVector = Icons.Default.PushPin,
+        contentDescription = nativeString("Pinned"),
+        modifier = Modifier.size(13.dp),
+        tint = palette.muted,
       )
     }
   }

@@ -38,6 +38,7 @@ export class LegacyMigrationSourceClaim<
       claimSuffix?: string;
       readSnapshot: (sourcePath: string) => Promise<TSnapshot>;
       formatError?: (error: unknown) => string;
+      includeFilePath?: boolean;
     },
   ) {
     this.sourcePath = params.sourcePath;
@@ -46,11 +47,13 @@ export class LegacyMigrationSourceClaim<
       params.stateDir,
       this.sourcePath,
       params.label,
+      params.includeFilePath,
     );
     this.claimRelativePath = resolveLegacyMigrationRelativePath(
       params.stateDir,
       this.claimPath,
       params.label,
+      params.includeFilePath,
     );
   }
 
@@ -113,6 +116,8 @@ export class LegacyMigrationSourceClaim<
       removeSource?: (sourcePath: string) => Promise<void> | void;
       sourceReappearedMessage?: string;
       remainingMessage?: string;
+      sourceRemainingMessage?: string;
+      claimRemainingMessage?: string;
       skipSourceCheck?: boolean;
     } = {},
   ): Promise<void> {
@@ -127,8 +132,13 @@ export class LegacyMigrationSourceClaim<
     } else {
       await this.params.stateRoot.remove(this.claimRelativePath);
     }
-    if (params.remainingMessage && ((await this.exists()) || (await this.exists(true)))) {
-      throw new Error(params.remainingMessage);
+    const sourceRemainingMessage = params.sourceRemainingMessage ?? params.remainingMessage;
+    if (sourceRemainingMessage && (await this.exists())) {
+      throw new Error(sourceRemainingMessage);
+    }
+    const claimRemainingMessage = params.claimRemainingMessage ?? params.remainingMessage;
+    if (claimRemainingMessage && (await this.exists(true))) {
+      throw new Error(claimRemainingMessage);
     }
   }
 }

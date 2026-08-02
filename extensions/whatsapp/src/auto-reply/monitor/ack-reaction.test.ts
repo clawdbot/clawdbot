@@ -25,6 +25,7 @@ function createMessage(overrides: TestMsgOverrides = {}): AdmittedWebInboundMess
     platform: {
       chatJid: "15551234567@s.whatsapp.net",
       recipientJid: "15559876543",
+      fromMe: false,
     },
     admission: {
       accountId: "default",
@@ -176,6 +177,47 @@ describe("maybeSendAckReaction", () => {
       {
         verbose: false,
         fromMe: false,
+        accountId: "default",
+        cfg,
+      },
+    );
+  });
+
+  it("preserves self-authored direction for ack send and removal", async () => {
+    const cfg = createConfig("ack");
+    const ackReaction = await runAckReaction({
+      cfg,
+      msg: createMessage({
+        platform: {
+          chatJid: "15551234567@s.whatsapp.net",
+          recipientJid: "15559876543",
+          fromMe: true,
+        },
+      }),
+    });
+
+    await expect(ackReaction?.ackReactionPromise).resolves.toBe(true);
+    expect(hoisted.sendReactionWhatsApp).toHaveBeenCalledWith(
+      "15551234567@s.whatsapp.net",
+      "msg-1",
+      "👀",
+      {
+        verbose: false,
+        fromMe: true,
+        accountId: "default",
+        cfg,
+      },
+    );
+
+    await ackReaction?.remove();
+
+    expect(hoisted.sendReactionWhatsApp).toHaveBeenLastCalledWith(
+      "15551234567@s.whatsapp.net",
+      "msg-1",
+      "",
+      {
+        verbose: false,
+        fromMe: true,
         accountId: "default",
         cfg,
       },

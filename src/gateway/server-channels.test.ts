@@ -12,7 +12,7 @@ import type {
   ChannelId,
   ChannelPlugin,
 } from "../channels/plugins/types.public.js";
-import { formatGatewayChannelsStatusLines } from "../commands/channels/status.js";
+import { formatGatewayChannelsStatusLines } from "../commands/channels/status.runtime.js";
 import type { GatewayNativeApprovalRuntime } from "../infra/approval-gateway-runtime.types.js";
 import {
   createSubsystemLogger,

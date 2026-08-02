@@ -874,7 +874,7 @@ export function buildAgentSystemPrompt(params: {
     conversations_list: "List exact external conversation addresses",
     conversations_send: "Send directly to an external conversation",
     conversations_turn: "Send and wait for one correlated external reply",
-    openclaw: "System setup/config expert; writes need human approval",
+    openclaw: "Gateway restart/system setup/config; changes need human approval",
     gateway: "Read gateway config/schema",
     agents_list: acpSpawnRuntimeEnabled
       ? "List allowed OpenClaw subagent ids; not ACP ids"
@@ -1275,7 +1275,7 @@ export function buildAgentSystemPrompt(params: {
       "Do not invent commands.",
       ...(hasOpenClaw
         ? [
-            "Config, channels, plugins, new agents, model/provider, updates: ask `openclaw`. Never write own config; OpenClaw is system expert.",
+            "Gateway restart, config, channels, plugins, agents, models/providers, updates: ask `openclaw`. Never restart the Gateway through shell commands or write your own config.",
           ]
         : [
             "Config read: `gateway` (`config.get|config.schema.lookup`). Write/restart unavailable; ask human.",

@@ -3,7 +3,9 @@ import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
 import { readCommitmentsForTest, seedCommitmentsForTest } from "../commitments/store.test-utils.js";
 import type { CommitmentRecord } from "../commitments/types.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { runHeartbeatOnce, setHeartbeatsEnabled } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
@@ -37,6 +39,101 @@ describe("runHeartbeatOnce cross-channel commitments", () => {
     vi.unstubAllEnvs();
     envSnapshot.restore();
   });
+
+  it.each(["gchat", "google-chat", " GCHAT "])(
+    "retains the configured account for a same-channel heartbeat alias (%s)",
+    async (heartbeatTarget) => {
+      await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+        setTestEnvValue("OPENCLAW_STATE_DIR", tmpDir);
+        const sessionKey = "agent:main:googlechat:spaces-room";
+        const sendGoogleChat = vi.fn();
+        const plugin = createOutboundTestPlugin({
+          id: "googlechat",
+          outbound: {
+            deliveryMode: "direct",
+            sendText: async ({ to, text, accountId }) => {
+              sendGoogleChat(to, text, { accountId });
+              return { channel: "googlechat", messageId: "m1" };
+            },
+          },
+        });
+        setActivePluginRegistry(
+          createTestRegistry([{ pluginId: "googlechat", plugin, source: "test" }]),
+        );
+        const cfg: OpenClawConfig = {
+          agents: {
+            defaults: {
+              workspace: tmpDir,
+              heartbeat: {
+                every: "5m",
+                target: heartbeatTarget,
+                accountId: "configured",
+              },
+            },
+          },
+          channels: {
+            googlechat: {
+              accounts: { default: {}, configured: {} },
+            },
+          },
+          session: { store: storePath },
+        };
+        await seedSessionStore(storePath, sessionKey, {
+          lastChannel: "googlechat",
+          lastProvider: "googlechat",
+          lastTo: "spaces/room",
+        });
+        const commitment: CommitmentRecord = {
+          id: "cm_same_channel_alias",
+          agentId: "main",
+          sessionKey,
+          channel: "googlechat",
+          to: "spaces/room",
+          kind: "event_check_in",
+          sensitivity: "routine",
+          source: "inferred_user_context",
+          status: "pending",
+          reason: "The user asked for a follow-up.",
+          suggestedText: "How did the interview go?",
+          dedupeKey: "same-channel-alias-account",
+          confidence: 0.92,
+          dueWindow: { earliestMs: nowMs - 60_000, latestMs: nowMs + 60_000, timezone: "UTC" },
+          createdAtMs: nowMs - 120_000,
+          updatedAtMs: nowMs - 120_000,
+          attempts: 0,
+        };
+        seedCommitmentsForTest([commitment]);
+        replySpy.mockImplementation(async (ctx) => {
+          expect(ctx.Body).toContain(HEARTBEAT_TOKEN);
+          expect(ctx.OriginatingChannel).toBe("googlechat");
+          expect(ctx.OriginatingTo).toBe("spaces/room");
+          return { text: "How did the interview go?" };
+        });
+
+        const result = await runHeartbeatOnce({
+          cfg,
+          agentId: "main",
+          sessionKey,
+          deps: {
+            getReplyFromConfig: replySpy,
+            getQueueSize: () => 0,
+            nowMs: () => nowMs,
+          },
+        });
+
+        expect(result.status).toBe("ran");
+        expect(sendGoogleChat).toHaveBeenCalledWith("spaces/room", "How did the interview go?", {
+          accountId: "configured",
+        });
+        expect(readCommitmentsForTest()[0]).toMatchObject({
+          id: commitment.id,
+          status: "sent",
+          attempts: 1,
+          sentAtMs: nowMs,
+        });
+      });
+    },
+  );
 
   it("does not apply a configured heartbeat account to an accountless commitment on another channel", async () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {

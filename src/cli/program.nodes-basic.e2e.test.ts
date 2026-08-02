@@ -978,10 +978,10 @@ describe("cli program (nodes basics)", () => {
   });
 
   it("rejects unsupported node approval backend methods at runtime", async () => {
-    const { callNodePairApprovalGatewayCliRuntime } = await import("./nodes-cli/rpc.runtime.js");
+    const { callNodePairApprovalGatewayCli } = await import("./nodes-cli/rpc.js");
 
     await expect(
-      callNodePairApprovalGatewayCliRuntime(
+      callNodePairApprovalGatewayCli(
         "node.invoke" as never,
         { json: true },
         {},

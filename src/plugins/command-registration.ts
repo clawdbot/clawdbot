@@ -120,7 +120,7 @@ function validateCommandName(
  * Returns an error message if invalid, or null if valid.
  * Shared by both the global registration path and snapshot (non-activating) loads.
  */
-export function validatePluginCommandDefinition(
+function validatePluginCommandDefinition(
   command: OpenClawPluginCommandDefinition,
   opts?: { allowReservedCommandNames?: boolean },
 ): string | null {
