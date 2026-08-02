@@ -25,6 +25,7 @@ import {
 } from "./tools-effective.ts";
 
 export type { AgentsPanel } from "./panels.ts";
+export { watchAgentScope } from "./watch-agent-scope.ts";
 
 export type AgentsState = {
   client: GatewayBrowserClient | null;
