@@ -123,8 +123,14 @@ function resolveDelegatedPolicy(
         return { delegated: false };
       }
       visited.add(currentSessionKey);
+      // The signed handoff authorizes the one store lookup needed for dashboard
+      // children; the persisted envelope still has to prove lineage and depth.
+      const completionStore = resolveSubagentCapabilityStore(currentSessionKey, {
+        cfg: params.config,
+      });
       const envelope = resolvePersistedSubagentToolPolicyEnvelope(currentSessionKey, {
         cfg: params.config,
+        store: completionStore,
       });
       if (!envelope) {
         return { delegated: false };
@@ -186,7 +192,6 @@ export function resolveRequesterToolPolicies(
   const subagentSessionKey = params.subagentSessionKey ?? params.sessionKey;
   const subagentStore = resolveSubagentCapabilityStore(subagentSessionKey, {
     cfg: params.config,
-    spawnedBy: params.spawnedBy,
   });
   const delegatedPolicy = resolveDelegatedPolicy({ ...params, subagentSessionKey }, subagentStore);
   const subagentPolicy =

@@ -32,6 +32,7 @@ export type AgentRuntimeIdentity = {
 };
 
 export type AgentRuntimeSessionSpawnContext = {
+  completionOwnerSessionKey?: string;
   inheritedToolPolicy: {
     version: 1;
     allow: string[];
@@ -66,7 +67,14 @@ function decodeSessionSpawnContext(value: unknown): AgentRuntimeSessionSpawnCont
   if (policy.version !== 1 || !allow || !deny) {
     return undefined;
   }
-  return { inheritedToolPolicy: { version: 1, allow, deny } };
+  const completionOwnerSessionKey = normalizeOptionalString(value.completionOwnerSessionKey);
+  if (value.completionOwnerSessionKey !== undefined && !completionOwnerSessionKey) {
+    return undefined;
+  }
+  return {
+    ...(completionOwnerSessionKey ? { completionOwnerSessionKey } : {}),
+    inheritedToolPolicy: { version: 1, allow, deny },
+  };
 }
 
 async function readSharedAgentRuntimeIdentitySecret(): Promise<string | null> {

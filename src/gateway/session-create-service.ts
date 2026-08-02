@@ -296,6 +296,7 @@ export async function createGatewaySession(params: {
   /** Trusted effective policy captured by an in-process visible spawn. */
   spawnToolPolicy?: {
     version: 1;
+    completionOwnerSessionKey?: string;
     allow: string[];
     deny: string[];
   };
@@ -724,6 +725,9 @@ export async function createGatewaySession(params: {
   const spawnToolPolicy =
     params.spawnToolPolicy && canonicalParentSessionKey
       ? {
+          completionOwnerSessionKey: normalizeOptionalString(
+            params.spawnToolPolicy.completionOwnerSessionKey,
+          ),
           allow: normalizeInheritedToolAllowlist(params.spawnToolPolicy.allow),
           deny: normalizeInheritedToolDenylist(params.spawnToolPolicy.deny),
           parentSessionKey: canonicalParentSessionKey,
@@ -1066,6 +1070,9 @@ export async function createGatewaySession(params: {
           ...(existingEntry === undefined && spawnToolPolicy
             ? {
                 spawnedBy: spawnToolPolicy.parentSessionKey,
+                ...(spawnToolPolicy.completionOwnerSessionKey
+                  ? { completionOwnerSessionKey: spawnToolPolicy.completionOwnerSessionKey }
+                  : {}),
                 inheritedToolPolicyVersion: 1 as const,
                 ...(spawnToolPolicy.allow.length > 0
                   ? { inheritedToolAllow: spawnToolPolicy.allow }

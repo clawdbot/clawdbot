@@ -26,6 +26,7 @@ import {
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
 import { logError } from "../logger.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import {
   isAcpSessionKey,
   isSubagentSessionKey,
@@ -448,9 +449,9 @@ export function createAgentEventHandler({
     }
   };
 
-  // Only subagent/acp keys can carry spawnedBy (mirrors supportsSpawnLineage in
-  // sessions-patch.ts). Short-circuit everyone else so high-volume chat streams
-  // do not touch the session store. Results are cached per sessionKey because
+  // Native, ACP, and spawn-owned dashboard sessions can carry spawnedBy.
+  // Short-circuit everyone else so high-volume chat streams do not touch the
+  // session store. Results are cached per sessionKey because
   // spawnedBy is immutable once set and resolveSpawnedBy sits on the hot event
   // path (delta, flush, final, agent, seq-gap).
   const spawnedByCache = new Map<string, string | null>();
@@ -458,9 +459,11 @@ export function createAgentEventHandler({
     if (spawnedByCache.has(sessionKey)) {
       return spawnedByCache.get(sessionKey)!;
     }
-    // Non-lineage keys return null without polluting the cache; only
-    // subagent/ACP results (positive or null) are worth memoising.
-    if (!isSubagentSessionKey(sessionKey) && !isAcpSessionKey(sessionKey)) {
+    // Non-lineage keys return null without polluting the cache; only eligible
+    // child-session results (positive or null) are worth memoising.
+    const isDashboardSession =
+      parseAgentSessionKey(sessionKey)?.rest.startsWith("dashboard:") === true;
+    if (!isSubagentSessionKey(sessionKey) && !isAcpSessionKey(sessionKey) && !isDashboardSession) {
       return null;
     }
     let result: string | null = null;

@@ -447,6 +447,61 @@ describe("resolveRequesterToolPolicies", () => {
     expect(controllerResult.requesterPolicySource).toBe("current-request");
   });
 
+  it("restores a visible dashboard child completion to its immutable owner", async () => {
+    const controllerSessionKey = "agent:main:discord:direct:alice";
+    const completionOwnerSessionKey = "agent:main:main";
+    const childSessionKey = "agent:main:dashboard:visible-child";
+    await writeSession(childSessionKey, {
+      spawnedBy: controllerSessionKey,
+      completionOwnerSessionKey,
+      spawnDepth: 1,
+      inheritedToolPolicyVersion: 1,
+      inheritedToolAllow: ["read", "message"],
+      inheritedToolDeny: ["exec"],
+    });
+
+    const result = resolveRequesterToolPolicies({
+      config: config(),
+      agentId: "main",
+      sessionKey: completionOwnerSessionKey,
+      ...completionHandoffFacts(childSessionKey, completionOwnerSessionKey),
+      inputProvenance: {
+        kind: "inter_session",
+        sourceSessionKey: childSessionKey,
+        sourceTool: "subagent_announce",
+      },
+    });
+
+    expect(result).toMatchObject({
+      delegated: true,
+      requesterPolicySource: "completion-handoff",
+      inheritedToolPolicy: {
+        allow: ["read", "message"],
+        deny: ["exec"],
+      },
+    });
+  });
+
+  it("does not treat an ordinary dashboard key as a completion authority", async () => {
+    const childSessionKey = "agent:main:dashboard:operator-thread";
+    await writeSession(childSessionKey, { spawnDepth: 0 });
+
+    const result = resolveRequesterToolPolicies({
+      config: config(),
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      ...completionHandoffFacts(childSessionKey, "agent:main:main"),
+      inputProvenance: {
+        kind: "inter_session",
+        sourceSessionKey: childSessionKey,
+        sourceTool: "subagent_announce",
+      },
+    });
+
+    expect(result.delegated).toBe(false);
+    expect(result.requesterPolicySource).toBe("current-request");
+  });
+
   it("walks nested lineage to the projection captured from the target requester", async () => {
     const requesterSessionKey = "agent:main:discord:direct:alice";
     const parentChildSessionKey = "agent:main:subagent:parent-child";

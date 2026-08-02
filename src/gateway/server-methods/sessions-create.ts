@@ -472,7 +472,14 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       parentSessionKey: p.parentSessionKey,
       spawnDepth: p.spawnDepth,
       spawnToolPolicy:
-        sessionCreation.via === "spawn" ? sessionCreation.inheritedToolPolicy : undefined,
+        sessionCreation.via === "spawn" && sessionCreation.inheritedToolPolicy
+          ? {
+              ...sessionCreation.inheritedToolPolicy,
+              ...(sessionCreation.completionOwnerSessionKey
+                ? { completionOwnerSessionKey: sessionCreation.completionOwnerSessionKey }
+                : {}),
+            }
+          : undefined,
       spawnedCwd: sessionCwd,
       worktree: sessionWorktree
         ? {

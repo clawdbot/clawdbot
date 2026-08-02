@@ -4237,6 +4237,26 @@ describe("agent event handler", () => {
       );
     });
 
+    it("includes spawnedBy in chat broadcasts for spawn-owned dashboard sessions", () => {
+      mockSessionLineage("agent:main:dashboard:visible-child", "agent:main:discord:direct:alice");
+      const { broadcast, handler, chatRunState } = createHarness({
+        resolveSessionKeyForRun: () => "agent:main:dashboard:visible-child",
+      });
+      registerChatRun(
+        chatRunState,
+        "run-dashboard-child",
+        "agent:main:dashboard:visible-child",
+        "client-dashboard-child",
+      );
+
+      emitAgentEvent(handler, "run-dashboard-child", "assistant", { text: "visible child" });
+
+      expectPayloadFields(chatBroadcastCalls(broadcast)[0]?.[1], {
+        sessionKey: "agent:main:dashboard:visible-child",
+        spawnedBy: "agent:main:discord:direct:alice",
+      });
+    });
+
     it("skips session row load entirely for session keys that cannot carry lineage", () => {
       const { broadcast, handler, chatRunState } = createHarness({
         resolveSessionKeyForRun: () => "agent:main:main",
@@ -4254,10 +4274,9 @@ describe("agent event handler", () => {
         );
       }
 
-      // The chat delta path invokes resolveSpawnedBy only. Non-subagent,
-      // non-acp keys cannot carry spawnedBy (see supportsSpawnLineage in
-      // sessions-patch.ts), so resolveSpawnedBy must short-circuit without
-      // ever calling loadGatewaySessionRow on this hot path.
+      // The chat delta path invokes resolveSpawnedBy only. Main/channel keys
+      // cannot carry spawn lineage, so resolveSpawnedBy must short-circuit
+      // without calling loadGatewaySessionRow on this hot path.
       expect(loadGatewaySessionRow).not.toHaveBeenCalled();
 
       const chatCalls = chatBroadcastCalls(broadcast);

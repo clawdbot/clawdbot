@@ -145,7 +145,6 @@ export function resolveSubagentCapabilityStore(
   opts?: {
     cfg?: OpenClawConfig;
     store?: SessionCapabilityStore;
-    spawnedBy?: string | null;
   },
 ): SessionCapabilityStore | undefined {
   const normalizedSessionKey = normalizeOptionalString(sessionKey);
@@ -155,12 +154,12 @@ export function resolveSubagentCapabilityStore(
   if (opts?.store) {
     return opts.store;
   }
-  const spawnedDashboard =
-    Boolean(normalizeOptionalString(opts?.spawnedBy)) &&
-    isDashboardSessionKey(normalizedSessionKey);
+  // Dashboard key shape permits only a store lookup. Callers still require a
+  // persisted spawn envelope before granting subagent authority.
   if (
     !opts?.cfg ||
-    (!shouldInspectStoredSubagentEnvelope(normalizedSessionKey) && !spawnedDashboard)
+    (!shouldInspectStoredSubagentEnvelope(normalizedSessionKey) &&
+      !isDashboardSessionKey(normalizedSessionKey))
   ) {
     return undefined;
   }

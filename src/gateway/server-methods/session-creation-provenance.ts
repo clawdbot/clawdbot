@@ -7,6 +7,8 @@ import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 export type TrustedSessionCreation = {
   via: SessionCreatedVia;
   actor?: SessionCreatedActor;
+  /** Immutable completion recipient for a spawn-owned visible session. */
+  completionOwnerSessionKey?: string;
   /** Effective caller tool-policy snapshot for an in-process visible spawn. */
   inheritedToolPolicy?: {
     version: 1;
@@ -40,6 +42,12 @@ export function resolveOperatorSessionCreation(
     return {
       via: "spawn",
       actor: { type: "agent", id: agentRuntimeIdentity.sessionKey },
+      ...(agentRuntimeIdentity.sessionSpawnContext.completionOwnerSessionKey
+        ? {
+            completionOwnerSessionKey:
+              agentRuntimeIdentity.sessionSpawnContext.completionOwnerSessionKey,
+          }
+        : {}),
       inheritedToolPolicy: agentRuntimeIdentity.sessionSpawnContext.inheritedToolPolicy,
     };
   }

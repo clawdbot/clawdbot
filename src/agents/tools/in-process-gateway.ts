@@ -7,6 +7,7 @@ import {
   getInProcessGatewayRequestContext,
   hasInProcessGatewayContext,
 } from "../../gateway/server-plugins.js";
+import { runWithGatewaySessionSpawnContext } from "./gateway-session-spawn-context.js";
 import { callGatewayTool } from "./gateway.js";
 
 export type InProcessGatewayCaller = <T = Record<string, unknown>>(
@@ -51,13 +52,20 @@ export async function callInProcessGatewayToolWithCreation<T = Record<string, un
   }
   // The fallback is a real local Gateway request. Carry spawn policy only in
   // the signed agent-runtime identity token, never in model-authored params.
-  return await callGatewayTool<T>(method, {}, params, {
-    scopes,
-    ...(creation.via === "spawn" && creation.inheritedToolPolicy
-      ? {
-          requireAgentRuntimeIdentity: true,
-          sessionSpawnContext: { inheritedToolPolicy: creation.inheritedToolPolicy },
-        }
-      : {}),
-  });
+  if (creation.via !== "spawn" || !creation.inheritedToolPolicy) {
+    return await callGatewayTool<T>(method, {}, params, { scopes });
+  }
+  return await runWithGatewaySessionSpawnContext(
+    {
+      ...(creation.completionOwnerSessionKey
+        ? { completionOwnerSessionKey: creation.completionOwnerSessionKey }
+        : {}),
+      inheritedToolPolicy: creation.inheritedToolPolicy,
+    },
+    () =>
+      callGatewayTool<T>(method, {}, params, {
+        scopes,
+        requireAgentRuntimeIdentity: true,
+      }),
+  );
 }

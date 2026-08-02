@@ -1580,6 +1580,7 @@ test("sessions.create atomically persists trusted visible-spawn tool policy", as
     entry?: {
       label?: string;
       spawnedBy?: string;
+      completionOwnerSessionKey?: string;
       parentSessionKey?: string;
       spawnDepth?: number;
       inheritedToolPolicyVersion?: number;
@@ -1602,6 +1603,7 @@ test("sessions.create atomically persists trusted visible-spawn tool policy", as
           sessionCreation: {
             via: "spawn",
             actor: { type: "agent", id: parentSessionKey },
+            completionOwnerSessionKey: "agent:main:discord:direct:alice",
             inheritedToolPolicy: {
               version: 1,
               allow: ["read", "sessions_spawn"],
@@ -1618,6 +1620,7 @@ test("sessions.create atomically persists trusted visible-spawn tool policy", as
   expect(created.payload?.entry).toMatchObject({
     label: "Restricted visible child",
     spawnedBy: parentSessionKey,
+    completionOwnerSessionKey: "agent:main:discord:direct:alice",
     parentSessionKey,
     spawnDepth: 1,
     inheritedToolPolicyVersion: 1,
@@ -1627,6 +1630,7 @@ test("sessions.create atomically persists trusted visible-spawn tool policy", as
   const key = requireNonEmptyString(created.payload?.key, "visible child key");
   expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toMatchObject({
     spawnedBy: parentSessionKey,
+    completionOwnerSessionKey: "agent:main:discord:direct:alice",
     inheritedToolPolicyVersion: 1,
     inheritedToolAllow: ["read", "sessions_spawn"],
     inheritedToolDeny: ["exec"],
@@ -1648,6 +1652,7 @@ test("sessions.create accepts a signed agent-runtime visible-spawn policy", asyn
       createdVia?: string;
       createdActor?: unknown;
       spawnedBy?: string;
+      completionOwnerSessionKey?: string;
       inheritedToolAllow?: string[];
       inheritedToolDeny?: string[];
     };
@@ -1668,6 +1673,7 @@ test("sessions.create accepts a signed agent-runtime visible-spawn policy", asyn
             agentId: "main",
             sessionKey: parentSessionKey,
             sessionSpawnContext: {
+              completionOwnerSessionKey: "agent:main:discord:direct:bob",
               inheritedToolPolicy: {
                 version: 1,
                 allow: ["read", "sessions_spawn"],
@@ -1686,12 +1692,14 @@ test("sessions.create accepts a signed agent-runtime visible-spawn policy", asyn
     createdVia: "spawn",
     createdActor: { type: "agent", id: parentSessionKey },
     spawnedBy: parentSessionKey,
+    completionOwnerSessionKey: "agent:main:discord:direct:bob",
     inheritedToolAllow: ["read", "sessions_spawn"],
     inheritedToolDeny: ["exec"],
   });
   const key = requireNonEmptyString(created.payload?.key, "runtime visible child key");
   expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toMatchObject({
     spawnedBy: parentSessionKey,
+    completionOwnerSessionKey: "agent:main:discord:direct:bob",
     inheritedToolPolicyVersion: 1,
   });
 });

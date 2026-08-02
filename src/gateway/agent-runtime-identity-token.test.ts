@@ -91,6 +91,7 @@ describe("agent runtime identity token", () => {
       agentId: "main",
       sessionKey: "agent:main:main",
       sessionSpawnContext: {
+        completionOwnerSessionKey: " agent:main:discord:direct:alice ",
         inheritedToolPolicy: {
           version: 1,
           allow: [" read ", "sessions_spawn"],
@@ -104,6 +105,7 @@ describe("agent runtime identity token", () => {
       agentId: "main",
       sessionKey: "agent:main:main",
       sessionSpawnContext: {
+        completionOwnerSessionKey: "agent:main:discord:direct:alice",
         inheritedToolPolicy: {
           version: 1,
           allow: ["read", "sessions_spawn"],

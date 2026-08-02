@@ -278,6 +278,7 @@ export async function maybeSpawnVisibleSession(params: {
         callInProcessGatewayToolWithCreation(method, requestParams, {
           via: "spawn",
           actor: { type: "agent", id: requesterKey },
+          completionOwnerSessionKey: ownership.completionRequesterSessionKey,
           inheritedToolPolicy: {
             version: 1,
             allow: [...(params.options?.inheritedToolAllowlist ?? [])],
