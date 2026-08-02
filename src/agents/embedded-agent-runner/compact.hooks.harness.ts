@@ -321,6 +321,21 @@ export const rotateTranscriptAfterCompactionMock: Mock<
 }));
 export const enqueueCommandInLaneMock = vi.fn((_lane: unknown, task: () => unknown) => task());
 export const waitForDeferredTurnMaintenanceForSessionMock = vi.fn(async () => undefined);
+async function runContextEngineMaintenanceMockImpl(params?: {
+  contextEngine?: { info?: { turnMaintenanceMode?: string } };
+  reason?: string;
+  onDeferredMaintenance?: (promise: Promise<void>) => void;
+  onDeferredMaintenanceFailure?: (error: unknown) => void;
+}): Promise<undefined> {
+  if (
+    params?.reason === "turn" &&
+    params.contextEngine?.info?.turnMaintenanceMode === "background"
+  ) {
+    params.onDeferredMaintenance?.(Promise.resolve());
+  }
+  return undefined;
+}
+export const runContextEngineMaintenanceMock = vi.fn(runContextEngineMaintenanceMockImpl);
 
 function createCompactHooksRuntimePlan(params: BuildAgentRuntimePlanParams): AgentRuntimePlan {
   const modelApi = params.modelApi ?? params.model?.api ?? undefined;
@@ -552,6 +567,8 @@ export function resetCompactSessionStateMocks(): void {
   enqueueCommandInLaneMock.mockImplementation((_lane: unknown, task: () => unknown) => task());
   waitForDeferredTurnMaintenanceForSessionMock.mockReset();
   waitForDeferredTurnMaintenanceForSessionMock.mockResolvedValue(undefined);
+  runContextEngineMaintenanceMock.mockReset();
+  runContextEngineMaintenanceMock.mockImplementation(runContextEngineMaintenanceMockImpl);
   listRegisteredPluginAgentPromptGuidanceMock.mockReset();
   listRegisteredPluginAgentPromptGuidanceMock.mockImplementation((params?: { surface?: string }) =>
     params?.surface === "subagent"
@@ -706,15 +723,10 @@ export async function loadCompactHooksHarness(): Promise<{
     return { ...actual, resolveCliBackendConfig: resolveCliBackendConfigMock };
   });
 
-  vi.doMock("./context-engine-maintenance.js", async () => {
-    const actual = await vi.importActual<typeof import("./context-engine-maintenance.js")>(
-      "./context-engine-maintenance.js",
-    );
-    return {
-      ...actual,
-      waitForDeferredTurnMaintenanceForSession: waitForDeferredTurnMaintenanceForSessionMock,
-    };
-  });
+  vi.doMock("./context-engine-maintenance.js", () => ({
+    runContextEngineMaintenance: runContextEngineMaintenanceMock,
+    waitForDeferredTurnMaintenanceForSession: waitForDeferredTurnMaintenanceForSessionMock,
+  }));
 
   vi.doMock("../harness/policy.js", () => ({
     resolveAgentHarnessPolicy: resolveAgentHarnessPolicyMock,

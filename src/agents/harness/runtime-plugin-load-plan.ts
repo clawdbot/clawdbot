@@ -5,6 +5,7 @@ import { resolveManifestActivationPlan } from "../../plugins/activation-planner.
 import {
   isTestDefaultMemorySlotDisabled,
   resolveEffectivePluginActivationState,
+  resolveSelectedContextEnginePluginIdFromConfig,
 } from "../../plugins/config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "../../plugins/default-enablement.js";
 import {
@@ -27,7 +28,6 @@ import {
   resolveBundledProviderCompatPluginIds,
   resolveOwningPluginIdsForProviderRef,
 } from "../../plugins/providers.js";
-import { defaultSlotIdForKey } from "../../plugins/slots.js";
 import {
   isDefaultAgentRuntimeId,
   OPENCLAW_AGENT_RUNTIME_ID,
@@ -228,17 +228,11 @@ function resolveSelectedContextEnginePluginIds(params: {
 }): string[] {
   const registry = loadPluginRegistrySnapshot(params);
   const plugins = normalizePluginsConfigWithRegistry(params.config?.plugins, registry);
-  const contextEngineSlot = plugins.slots.contextEngine;
-  if (
-    !plugins.enabled ||
-    typeof contextEngineSlot !== "string" ||
-    contextEngineSlot === defaultSlotIdForKey("contextEngine") ||
-    plugins.deny.includes(contextEngineSlot) ||
-    plugins.entries[contextEngineSlot]?.enabled === false
-  ) {
-    return [];
-  }
-  return [contextEngineSlot];
+  const pluginId = resolveSelectedContextEnginePluginIdFromConfig(
+    plugins,
+    plugins.slots.contextEngine,
+  );
+  return pluginId ? [pluginId] : [];
 }
 
 /** Resolve manifest owners required by one selected non-core harness runtime. */

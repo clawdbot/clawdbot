@@ -23,6 +23,7 @@ import {
   GatewayDrainingError,
   isGatewayDraining,
 } from "../../process/command-queue.js";
+import { createDeferred } from "../../shared/deferred.js";
 import {
   completeTaskRunByRunId,
   createQueuedTaskRun,
@@ -85,20 +86,7 @@ type DeferredTurnMaintenanceScheduleParams = ContextEngineMaintenanceParams & {
   onScheduleFailure?: (error: unknown) => void;
 };
 
-type DeferredTurnMaintenanceRunState = {
-  phase: "running" | "preempting" | "blocked" | "quarantined" | "settled";
-  barrier: Promise<void>;
-  releaseBarrier: () => void;
-  foregroundBarrier: Promise<void>;
-  releaseForegroundBarrier: () => void;
-  waitError?: Error;
-  preemptionTimer?: ReturnType<typeof setTimeout>;
-  requestForegroundPreemption: () => void;
-  rerunRequested: boolean;
-  latestParams: DeferredTurnMaintenanceScheduleParams;
-};
-
-const activeDeferredTurnMaintenanceRuns = new Map<string, DeferredTurnMaintenanceRunState>();
+const activeDeferredTurnMaintenanceRuns = new Map<string, DeferredTurnMaintenanceRun>();
 
 type DeferredTurnMaintenanceSignal = "SIGINT" | "SIGTERM";
 type DeferredTurnMaintenanceProcessLike = Pick<NodeJS.Process, "on" | "off"> &
@@ -190,10 +178,8 @@ function createDeferredTurnMaintenanceAbortSignal(params?: {
 }
 
 function resetDeferredTurnMaintenanceStateForTest(): void {
-  for (const state of activeDeferredTurnMaintenanceRuns.values()) {
-    if (state.preemptionTimer) {
-      clearTimeout(state.preemptionTimer);
-    }
+  for (const run of activeDeferredTurnMaintenanceRuns.values()) {
+    run.dispose();
   }
   activeDeferredTurnMaintenanceRuns.clear();
   const processLike = process as DeferredTurnMaintenanceProcessLike;
@@ -224,11 +210,7 @@ export async function waitForDeferredTurnMaintenanceForSession(sessionKey?: stri
   if (!activeRun) {
     return;
   }
-  activeRun.requestForegroundPreemption();
-  await activeRun.foregroundBarrier;
-  if (activeRun.waitError) {
-    throw activeRun.waitError;
-  }
+  await activeRun.preemptForForeground();
 }
 
 function buildTurnMaintenanceTaskDescriptor(params: {
@@ -256,6 +238,201 @@ function buildTurnMaintenanceTaskDescriptor(params: {
     deliveryStatus: params.deliveryStatus ?? "not_applicable",
     preferMetadata: true,
   });
+}
+
+function makeTurnMaintenanceTaskVisible(params: {
+  sessionKey: string;
+  runId: string;
+  notifyPolicy: "done_only" | "state_changes";
+}): void {
+  buildTurnMaintenanceTaskDescriptor({
+    ...params,
+    deliveryStatus: "pending",
+  });
+}
+
+class DeferredTurnMaintenancePreemptedError extends Error {
+  constructor() {
+    super("Deferred context-engine maintenance did not yield to a waiting foreground turn.");
+    this.name = "DeferredTurnMaintenancePreemptedError";
+  }
+}
+
+function isForegroundMaintenancePreemption(signal: AbortSignal): boolean {
+  return signal.reason instanceof DeferredTurnMaintenancePreemptedError;
+}
+
+class DeferredTurnMaintenanceRun {
+  private readonly completionDeferred = createDeferred();
+  private readonly physicalSettlement = createDeferred();
+  readonly completion = this.completionDeferred.promise;
+  private readonly schedulerAbort = createDeferredTurnMaintenanceAbortSignal();
+  private readonly writeFence = createDeferredMaintenanceWriteFence();
+  private pendingRerun?: DeferredTurnMaintenanceScheduleParams;
+  private preemption?: Promise<void>;
+  private preemptionTimer?: ReturnType<typeof setTimeout>;
+  private writeDrain: Promise<void> = Promise.resolve();
+
+  constructor(
+    private readonly params: DeferredTurnMaintenanceScheduleParams,
+    private readonly sessionKey: string,
+    private readonly lane: string,
+    private readonly runId: string,
+    private readonly taskId: string,
+  ) {}
+
+  coalesce(next: DeferredTurnMaintenanceScheduleParams): void {
+    const superseded = this.pendingRerun;
+    this.pendingRerun = { ...next, sessionKey: this.sessionKey };
+    if (
+      superseded?.disposeContextEngineAfterMaintenance &&
+      superseded.contextEngine !== next.contextEngine
+    ) {
+      void disposeDeferredMaintenanceContextEngine(superseded.contextEngine);
+    }
+  }
+
+  start(): boolean {
+    let worker: Promise<void>;
+    try {
+      worker = enqueueCommandInLane(this.lane, () =>
+        runDeferredTurnMaintenanceWorker({
+          ...this.params,
+          sessionKey: this.sessionKey,
+          runId: this.runId,
+          abortSignal: this.schedulerAbort.abortSignal,
+          writeFence: this.writeFence,
+        }),
+      );
+    } catch (error) {
+      activeDeferredTurnMaintenanceRuns.delete(this.sessionKey);
+      this.dispose();
+      this.cancelFailedTask(error);
+      this.physicalSettlement.resolve();
+      this.completionDeferred.resolve();
+      return false;
+    }
+    void this.track(worker);
+    return true;
+  }
+
+  preemptForForeground(): Promise<void> {
+    this.preemption ??= this.runForegroundPreemption();
+    return this.preemption;
+  }
+
+  dispose(): void {
+    if (this.preemptionTimer) {
+      clearTimeout(this.preemptionTimer);
+      this.preemptionTimer = undefined;
+    }
+    this.schedulerAbort.dispose();
+  }
+
+  private async runForegroundPreemption(): Promise<void> {
+    const preemptionError = new DeferredTurnMaintenancePreemptedError();
+    this.schedulerAbort.abort(preemptionError);
+    this.writeDrain = this.writeFence.close(preemptionError);
+    if (await this.settlesWithinPreemptionGrace()) {
+      return;
+    }
+
+    const quarantined = quarantineResolvedContextEngine({
+      contextEngine: this.params.contextEngine,
+      operation: "maintain",
+      error: preemptionError,
+    });
+    const blockedError = new DeferredContextEngineMaintenanceBlockedError({ quarantined });
+    makeTurnMaintenanceTaskVisible({
+      sessionKey: this.sessionKey,
+      runId: this.runId,
+      notifyPolicy: "state_changes",
+    });
+    const endedAt = Date.now();
+    failTaskRunByRunId({
+      runId: this.runId,
+      runtime: "acp",
+      sessionKey: this.sessionKey,
+      status: "timed_out",
+      endedAt,
+      lastEventAt: endedAt,
+      error: preemptionError.message,
+      progressSummary: "Deferred maintenance did not yield to a waiting turn.",
+      terminalSummary: blockedError.message,
+    });
+    throw blockedError;
+  }
+
+  private async settlesWithinPreemptionGrace(): Promise<boolean> {
+    const timeout = createDeferred<boolean>();
+    this.preemptionTimer = setTimeout(() => {
+      this.preemptionTimer = undefined;
+      timeout.resolve(false);
+    }, TURN_MAINTENANCE_PREEMPT_GRACE_MS);
+    this.preemptionTimer.unref?.();
+    try {
+      return await Promise.race([
+        this.physicalSettlement.promise.then(() => true),
+        timeout.promise,
+      ]);
+    } finally {
+      if (this.preemptionTimer) {
+        clearTimeout(this.preemptionTimer);
+        this.preemptionTimer = undefined;
+      }
+    }
+  }
+
+  private async track(worker: Promise<void>): Promise<void> {
+    try {
+      await worker;
+    } catch (error) {
+      this.params.onScheduleFailure?.(error);
+      this.cancelFailedTask(error);
+    }
+
+    try {
+      // Do not await the initially settled drain: that yield would let a new
+      // preemption install a real drain after we had already snapshotted it.
+      if (this.preemption) {
+        await this.writeDrain;
+      }
+      this.dispose();
+      if (activeDeferredTurnMaintenanceRuns.get(this.sessionKey) !== this) {
+        this.physicalSettlement.resolve();
+        return;
+      }
+
+      activeDeferredTurnMaintenanceRuns.delete(this.sessionKey);
+      this.physicalSettlement.resolve();
+      const interrupted = this.schedulerAbort.abortSignal.aborted;
+      const pendingRerun = this.pendingRerun;
+      if (pendingRerun && !interrupted) {
+        await scheduleDeferredTurnMaintenance(pendingRerun);
+      } else if (pendingRerun?.disposeContextEngineAfterMaintenance) {
+        await disposeDeferredMaintenanceContextEngine(pendingRerun.contextEngine);
+      }
+    } catch (error) {
+      this.params.onScheduleFailure?.(error);
+      log.warn(
+        `failed to settle deferred context engine maintenance: ${formatErrorMessage(error)}`,
+      );
+    } finally {
+      this.physicalSettlement.resolve();
+      this.completionDeferred.resolve();
+    }
+  }
+
+  private cancelFailedTask(error: unknown): void {
+    const errorMessage = formatErrorMessage(error);
+    log.warn(`failed to schedule deferred context engine maintenance: ${errorMessage}`);
+    cancelTaskByIdForOwner({
+      taskId: this.taskId,
+      callerOwnerKey: this.sessionKey,
+      endedAt: Date.now(),
+      terminalSummary: `Deferred maintenance could not be scheduled: ${errorMessage}`,
+    });
+  }
 }
 
 /**
@@ -376,7 +553,6 @@ async function runDeferredTurnMaintenanceWorker(
     runId: string;
     abortSignal: AbortSignal;
     writeFence: DeferredMaintenanceWriteFence;
-    wasForegroundPreempted: () => boolean;
   },
 ): Promise<void> {
   let surfacedUserNotice = false;
@@ -389,11 +565,10 @@ async function runDeferredTurnMaintenanceWorker(
   };
   const taskRun = { runId: params.runId, runtime: "acp" as const, sessionKey: params.sessionKey };
   const makeTaskVisible = (notifyPolicy: "done_only" | "state_changes") =>
-    buildTurnMaintenanceTaskDescriptor({
+    makeTurnMaintenanceTaskVisible({
       sessionKey: params.sessionKey,
       runId: params.runId,
       notifyPolicy,
-      deliveryStatus: "pending",
     });
 
   try {
@@ -449,17 +624,13 @@ async function runDeferredTurnMaintenanceWorker(
       const task = findTaskByRunIdForOwner({
         runId: params.runId,
         callerOwnerKey: params.sessionKey,
-        callerAgentId: params.agentId,
-        config: params.config,
       });
       if (task?.status === "queued" || task?.status === "running") {
         cancelTaskByIdForOwner({
           taskId: task.taskId,
           callerOwnerKey: params.sessionKey,
-          callerAgentId: params.agentId,
-          config: params.config,
           endedAt: Date.now(),
-          terminalSummary: params.wasForegroundPreempted()
+          terminalSummary: isForegroundMaintenancePreemption(params.abortSignal)
             ? "Deferred maintenance yielded to a waiting foreground turn."
             : "Deferred maintenance cancelled during shutdown.",
         });
@@ -503,16 +674,8 @@ function scheduleDeferredTurnMaintenance(
 
   const activeRun = activeDeferredTurnMaintenanceRuns.get(sessionKey);
   if (activeRun) {
-    const supersededParams = activeRun.rerunRequested ? activeRun.latestParams : undefined;
-    activeRun.rerunRequested = true;
-    activeRun.latestParams = { ...params, sessionKey };
-    if (
-      supersededParams?.disposeContextEngineAfterMaintenance &&
-      supersededParams.contextEngine !== params.contextEngine
-    ) {
-      void disposeDeferredMaintenanceContextEngine(supersededParams.contextEngine);
-    }
-    return activeRun.barrier;
+    activeRun.coalesce({ ...params, sessionKey });
+    return activeRun.completion;
   }
 
   const existingTask = findActiveSessionTask({
@@ -525,15 +688,11 @@ function scheduleDeferredTurnMaintenance(
     updateTaskNotifyPolicyForOwner({
       taskId: existingTask.taskId,
       callerOwnerKey: sessionKey,
-      callerAgentId: params.agentId,
-      config: params.config,
       notifyPolicy: "silent",
     });
     cancelTaskByIdForOwner({
       taskId: existingTask.taskId,
       callerOwnerKey: sessionKey,
-      callerAgentId: params.agentId,
-      config: params.config,
       endedAt: Date.now(),
       terminalSummary: "Superseded by refreshed deferred maintenance task.",
     });
@@ -555,154 +714,14 @@ function scheduleDeferredTurnMaintenance(
       `taskId=${task.taskId} sessionKey=${sessionKey} lane=${lane}`,
   );
 
-  const cancelFailedTask = (error: unknown) => {
-    const errorMessage = formatErrorMessage(error);
-    log.warn(`failed to schedule deferred context engine maintenance: ${errorMessage}`);
-    cancelTaskByIdForOwner({
-      taskId: task.taskId,
-      callerOwnerKey: sessionKey,
-      callerAgentId: params.agentId,
-      config: params.config,
-      endedAt: Date.now(),
-      terminalSummary: `Deferred maintenance could not be scheduled: ${errorMessage}`,
-    });
-  };
-  const schedulerAbort = createDeferredTurnMaintenanceAbortSignal();
-  const writeFence = createDeferredMaintenanceWriteFence();
-  let foregroundPreempted = false;
-  let preemptionWriteDrain: Promise<void> | undefined;
-  let releaseBarrier = () => {};
-  const barrier = new Promise<void>((resolve) => {
-    releaseBarrier = resolve;
-  });
-  let releaseForegroundBarrier = () => {};
-  const foregroundBarrier = new Promise<void>((resolve) => {
-    releaseForegroundBarrier = resolve;
-  });
-  const terminalizePreemption = (error: Error, terminalSummary: string) => {
-    buildTurnMaintenanceTaskDescriptor({
-      sessionKey,
-      runId: task.runId,
-      notifyPolicy: "state_changes",
-      deliveryStatus: "pending",
-    });
-    const endedAt = Date.now();
-    failTaskRunByRunId({
-      runId: task.runId!,
-      runtime: "acp",
-      sessionKey,
-      status: "timed_out",
-      endedAt,
-      lastEventAt: endedAt,
-      error: error.message,
-      progressSummary: "Deferred maintenance did not yield to a waiting turn.",
-      terminalSummary,
-    });
-  };
-  let runPromise: Promise<void>;
-  try {
-    runPromise = enqueueCommandInLane(lane, () =>
-      runDeferredTurnMaintenanceWorker({
-        ...params,
-        sessionKey,
-        runId: task.runId!,
-        abortSignal: schedulerAbort.abortSignal,
-        writeFence,
-        wasForegroundPreempted: () => foregroundPreempted,
-      }),
-    );
-  } catch (err) {
-    schedulerAbort.dispose();
-    cancelFailedTask(err);
+  const run = new DeferredTurnMaintenanceRun(params, sessionKey, lane, task.runId!, task.taskId);
+  // Registration precedes queue admission so a foreground waiter can never
+  // miss a physical run that has already been handed to the lane.
+  activeDeferredTurnMaintenanceRuns.set(sessionKey, run);
+  if (!run.start()) {
     return undefined;
   }
-  const cleanupDeferredTurnMaintenance = async () => {
-    let current = activeDeferredTurnMaintenanceRuns.get(sessionKey);
-    if (current !== state) {
-      return;
-    }
-    if (preemptionWriteDrain) {
-      await preemptionWriteDrain;
-      current = activeDeferredTurnMaintenanceRuns.get(sessionKey);
-      if (current !== state) {
-        return;
-      }
-    }
-    schedulerAbort.dispose();
-    current.phase = "settled";
-    if (current.preemptionTimer) {
-      clearTimeout(current.preemptionTimer);
-      current.preemptionTimer = undefined;
-    }
-    const shutdownTriggered = schedulerAbort.abortSignal.aborted;
-    const rerunParams =
-      current.rerunRequested && !shutdownTriggered ? current.latestParams : undefined;
-    const discardedRerunParams =
-      current.rerunRequested && shutdownTriggered ? current.latestParams : undefined;
-    activeDeferredTurnMaintenanceRuns.delete(sessionKey);
-    if (rerunParams) {
-      await scheduleDeferredTurnMaintenance(rerunParams);
-    } else if (discardedRerunParams?.disposeContextEngineAfterMaintenance) {
-      await disposeDeferredMaintenanceContextEngine(discardedRerunParams.contextEngine);
-    }
-    current.releaseBarrier();
-    current.releaseForegroundBarrier();
-  };
-  const trackedPromise = runPromise
-    .catch((err: unknown) => {
-      params.onScheduleFailure?.(err);
-      cancelFailedTask(err);
-    })
-    .then(cleanupDeferredTurnMaintenance, async (error: unknown) => {
-      await cleanupDeferredTurnMaintenance();
-      throw error;
-    });
-  const state: DeferredTurnMaintenanceRunState = {
-    phase: "running",
-    barrier,
-    releaseBarrier,
-    foregroundBarrier,
-    releaseForegroundBarrier,
-    requestForegroundPreemption: () => {
-      if (state.phase !== "running") {
-        return;
-      }
-      state.phase = "preempting";
-      foregroundPreempted = true;
-      const preemptionError = new Error(
-        "Deferred context-engine maintenance did not yield to a waiting foreground turn.",
-      );
-      schedulerAbort.abort(preemptionError);
-      const writeDrain = writeFence.close(preemptionError);
-      preemptionWriteDrain = writeDrain;
-      state.preemptionTimer = setTimeout(() => {
-        state.preemptionTimer = undefined;
-        if (
-          state.phase !== "preempting" ||
-          activeDeferredTurnMaintenanceRuns.get(sessionKey) !== state
-        ) {
-          return;
-        }
-        const quarantined = quarantineResolvedContextEngine({
-          contextEngine: params.contextEngine,
-          operation: "maintain",
-          error: preemptionError,
-        });
-        state.phase = quarantined ? "quarantined" : "blocked";
-        state.waitError = new DeferredContextEngineMaintenanceBlockedError({ quarantined });
-        terminalizePreemption(preemptionError, state.waitError.message);
-        // Fail the waiting turn, but keep the run barrier closed until the
-        // original plugin call and every admitted host write have settled.
-        state.releaseForegroundBarrier();
-      }, TURN_MAINTENANCE_PREEMPT_GRACE_MS);
-      state.preemptionTimer.unref?.();
-    },
-    rerunRequested: false,
-    latestParams: { ...params, sessionKey },
-  };
-  activeDeferredTurnMaintenanceRuns.set(sessionKey, state);
-  void trackedPromise;
-  return barrier;
+  return run.completion;
 }
 
 /**
