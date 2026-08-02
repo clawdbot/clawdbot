@@ -551,6 +551,5 @@ export async function startGatewayCoreRuntime(input: {
     reloadAttachedGatewayPlugins,
     loadGatewayModelCatalog,
     loadGatewayModelCatalogSnapshot,
-    loadGatewayPluginBootstrapModule,
   };
 }

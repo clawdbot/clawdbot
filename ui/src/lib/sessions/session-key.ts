@@ -49,6 +49,15 @@ export function parseAgentSessionKey(
   return { agentId, rest };
 }
 
+export function parseSessionKeyParts(
+  key: string,
+): { agentId: string; channel: string; accountId: string } | null {
+  const match = /^agent:([^:]+):([^:]+):(.+)$/.exec(key);
+  return match
+    ? { agentId: match[1] as string, channel: match[2] as string, accountId: match[3] as string }
+    : null;
+}
+
 export function resolveUiSessionNavigationParentKey(
   row: { parentSessionKey?: string | null; spawnedBy?: string | null } | null | undefined,
 ): string | undefined {

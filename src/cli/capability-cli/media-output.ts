@@ -1,7 +1,40 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { detectMime, extensionForMime, normalizeMimeType } from "@openclaw/media-core/mime";
+import { writeSiblingTempFile } from "../../infra/sibling-temp-file.js";
 import { saveMediaBuffer } from "../../media/store.js";
+
+const GENERATED_MEDIA_OUTPUT_TEMP_PREFIX = ".openclaw-media-output";
+
+async function resolveExistingOutputMode(filePath: string): Promise<number | undefined> {
+  try {
+    return (await fs.stat(filePath)).mode & 0o7777;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+export async function publishOutputFileAtomically<T>(params: {
+  filePath: string;
+  writeTemp: (tempPath: string) => Promise<T>;
+}): Promise<T> {
+  const dir = path.dirname(params.filePath);
+  await fs.mkdir(dir, { recursive: true });
+  const mode = await resolveExistingOutputMode(params.filePath);
+  // Stage beside the destination so producer failures never destroy prior user bytes.
+  const { result } = await writeSiblingTempFile({
+    dir,
+    chmodDir: false,
+    tempPrefix: GENERATED_MEDIA_OUTPUT_TEMP_PREFIX,
+    ...(mode === undefined ? {} : { mode }),
+    writeTemp: params.writeTemp,
+    resolveFinalPath: () => params.filePath,
+  });
+  return result;
+}
 
 export async function writeOutputAsset(params: {
   buffer: Buffer;
@@ -42,8 +75,12 @@ export async function writeOutputAsset(params: {
     params.outputCount <= 1
       ? path.join(parsed.dir, `${parsed.name}${ext}`)
       : path.join(parsed.dir, `${parsed.name}-${String(params.outputIndex + 1)}${ext}`);
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.writeFile(filePath, params.buffer);
+  await publishOutputFileAtomically({
+    filePath,
+    writeTemp: async (tempPath) => {
+      await fs.writeFile(tempPath, params.buffer, { flag: "wx" });
+    },
+  });
   return {
     path: filePath,
     mimeType: detectedNormalized ?? params.mimeType,

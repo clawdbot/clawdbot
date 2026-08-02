@@ -239,7 +239,8 @@ export class ShellChromeOwner {
   };
 
   readonly handleNativeNavigate = (event: Event): void => {
-    const path = (event as CustomEvent<{ path?: unknown }>).detail?.path;
+    const detail = (event as CustomEvent<{ path?: unknown; search?: unknown }>).detail;
+    const path = detail?.path;
     const schemeCandidate = typeof path === "string" ? path.slice(1) : "";
     if (
       typeof path !== "string" ||
@@ -255,6 +256,13 @@ export class ShellChromeOwner {
       return;
     }
     event.preventDefault();
+    // Native callers may request route chrome via a query (e.g. the macOS
+    // onboarding handoff lands on /custodian?onboarding=1).
+    const search = detail?.search;
+    if (typeof search === "string" && search.startsWith("?") && !search.includes("#")) {
+      this.host.navigate(routeId, { search });
+      return;
+    }
     this.host.navigate(routeId);
   };
 

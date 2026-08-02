@@ -157,10 +157,44 @@ export function createTelegramInboundMediaGroupRuntime(
       authorization.groupConfig?.requireMention,
       resolveGroupRequireMention(chatId, authorization.authorizationCfg),
     );
+    const botUsername = ctx.me?.username?.trim().toLowerCase();
+    const hasControlCommandInMessage = hasControlCommand(
+      textParts.text,
+      authorization.authorizationCfg,
+      { botUsername },
+    );
+    if (!requireMention && !hasControlCommandInMessage) {
+      return "process";
+    }
+    const commandGate = await resolveTelegramCommandIngressAuthorization({
+      accountId,
+      cfg: authorization.authorizationCfg,
+      dmPolicy: "pairing",
+      isGroup,
+      chatId,
+      resolvedThreadId,
+      senderId,
+      effectiveDmAllow: authorization.effectiveDmAllow,
+      effectiveGroupAllow: authorization.effectiveGroupAllow,
+      ownerAccess: { ownerList: [], senderIsOwner: false },
+      eventKind: "message",
+      allowTextCommands: true,
+      hasControlCommand: hasControlCommandInMessage,
+      modeWhenAccessGroupsOff: "allow",
+      includeDmAllowForGroupCommands: false,
+    });
+    // Command authorization protects both singleton and album downloads;
+    // requiring a mention must never determine whether unauthorized media is fetched.
+    if (commandGate.shouldBlockControlCommand) {
+      logger.info(
+        { chatId, reason: "unauthorized-control-command" },
+        "skipping group command media before download",
+      );
+      return "skip";
+    }
     if (!requireMention) {
       return "process";
     }
-    const botUsername = ctx.me?.username?.trim().toLowerCase();
     const mentionRegexes = buildMentionRegexes(
       authorization.authorizationCfg,
       sessionState.agentId,
@@ -187,28 +221,6 @@ export function createTelegramInboundMediaGroupRuntime(
       "reply_to_bot",
       replyToBotMessage && !isTelegramForumServiceMessage(msg.reply_to_message),
     );
-    const hasControlCommandInMessage = hasControlCommand(
-      textParts.text,
-      authorization.authorizationCfg,
-      { botUsername },
-    );
-    const commandGate = await resolveTelegramCommandIngressAuthorization({
-      accountId,
-      cfg: authorization.authorizationCfg,
-      dmPolicy: "pairing",
-      isGroup,
-      chatId,
-      resolvedThreadId,
-      senderId,
-      effectiveDmAllow: authorization.effectiveDmAllow,
-      effectiveGroupAllow: authorization.effectiveGroupAllow,
-      ownerAccess: { ownerList: [], senderIsOwner: false },
-      eventKind: "message",
-      allowTextCommands: true,
-      hasControlCommand: hasControlCommandInMessage,
-      modeWhenAccessGroupsOff: "allow",
-      includeDmAllowForGroupCommands: false,
-    });
     const decision = resolveInboundMentionDecision({
       facts: {
         canDetectMention: Boolean(botUsername) || mentionRegexes.length > 0,

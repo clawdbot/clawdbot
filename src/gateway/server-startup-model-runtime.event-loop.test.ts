@@ -2,7 +2,6 @@ import { mkdtemp, rm } from "node:fs/promises";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { performance } from "node:perf_hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderPlugin } from "../plugins/types.js";
@@ -41,8 +40,8 @@ vi.mock("../plugins/provider-discovery.js", async (importOriginal) => {
     pluginId: "openai",
     label: "OpenAI",
     auth: [],
-    catalog: { order: "simple", run: async () => null },
-    staticCatalog: { order: "simple", run: async () => null },
+    catalog: { order: "simple", run: providerMocks.liveCatalog },
+    staticCatalog: { order: "simple", run: providerMocks.staticCatalog },
   };
   return {
     ...actual,
@@ -52,15 +51,29 @@ vi.mock("../plugins/provider-discovery.js", async (importOriginal) => {
   };
 });
 
+// Session orphan recovery has separate owner coverage; avoid loading its broad
+// cold startup graph inside this timed model-runtime responsiveness proof.
+vi.mock("../agents/main-session-restart-recovery-marking.js", () => ({
+  markStartupOrphanedMainSessionsForRecovery: vi.fn(async () => ({ marked: 0, skipped: 0 })),
+}));
+
 const { resetPreparedModelRuntimeSnapshotsForTest } =
   await import("../agents/prepared-model-runtime.test-support.js");
 const { writePersistedAuthProfileStoreRaw } = await import("../agents/auth-profiles/sqlite.js");
 const { resolveAgentDir } = await import("../agents/agent-scope.js");
+const { createPluginMetadataSnapshot, makeRegistry } =
+  await import("../config/plugin-auto-enable.test-helpers.js");
+const { setCurrentPluginMetadataSnapshot } =
+  await import("../plugins/current-plugin-metadata-snapshot.js");
+const pluginDiscovery = await import("../plugins/discovery.js");
 const { startGatewaySidecars } = await import("./server-startup-post-attach.js");
 
-async function listenHealthz(): Promise<{ port: number; close: () => Promise<void> }> {
+async function listenHealthz(
+  onHealthzServed: () => void,
+): Promise<{ port: number; close: () => Promise<void> }> {
   const server = http.createServer((req, res) => {
     if (req.url === "/healthz") {
+      onHealthzServed();
       res.statusCode = 200;
       res.end(JSON.stringify({ ok: true, status: "live" }));
       return;
@@ -86,15 +99,6 @@ async function listenHealthz(): Promise<{ port: number; close: () => Promise<voi
   };
 }
 
-async function requestHealthzAfter(port: number, delayMs: number) {
-  const startedAt = performance.now();
-  await new Promise<void>((resolve) => {
-    setTimeout(resolve, delayMs);
-  });
-  const response = await fetch(`http://127.0.0.1:${port}/healthz`);
-  return { elapsedMs: performance.now() - startedAt, response };
-}
-
 afterEach(() => {
   resetPreparedModelRuntimeSnapshotsForTest();
   closeOpenClawAgentDatabasesForTest();
@@ -114,9 +118,55 @@ describe("Gateway prepared model runtime startup", () => {
         },
       },
       gateway: { mode: "local", bind: "loopback", auth: { mode: "none" } },
-      plugins: { enabled: false },
     } satisfies OpenClawConfig;
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const manifestRegistry = makeRegistry([
+      { id: "openai", channels: [], providers: ["openai"], origin: "bundled" },
+    ]);
+    const providerManifest = manifestRegistry.plugins[0];
+    if (!providerManifest) {
+      throw new Error("expected bundled OpenAI provider manifest");
+    }
+    providerManifest.enabledByDefault = true;
+    providerManifest.modelCatalog = { ...providerConfig, discovery: { openai: "runtime" } };
+    const metadataSnapshot = createPluginMetadataSnapshot({
+      config: cfg,
+      manifestRegistry,
+      workspaceDir,
+    });
+    const startupMetadataSnapshot = {
+      ...metadataSnapshot,
+      index: {
+        ...metadataSnapshot.index,
+        plugins: [
+          {
+            pluginId: providerManifest.id,
+            manifestPath: providerManifest.manifestPath,
+            manifestHash: "openai-test-manifest",
+            rootDir: providerManifest.rootDir,
+            origin: providerManifest.origin,
+            enabled: true,
+            enabledByDefault: true,
+            startup: {
+              sidecar: false,
+              memory: false,
+              deferConfiguredChannelFullLoadUntilAfterListen: false,
+              agentHarnesses: [],
+            },
+            compat: [],
+          },
+        ],
+      },
+      owners: {
+        ...metadataSnapshot.owners,
+        providers: new Map([["openai", ["openai"]]]),
+        modelCatalogProviders: new Map([["openai", ["openai"]]]),
+      },
+      metrics: { ...metadataSnapshot.metrics, indexPluginCount: 1 },
+      startup: { channelPluginIds: [], configuredDeferredChannelPluginIds: [], pluginIds: [] },
+    };
+    setCurrentPluginMetadataSnapshot(startupMetadataSnapshot, { config: cfg, env, workspaceDir });
+    const discoverPlugins = vi.spyOn(pluginDiscovery, "discoverOpenClawPlugins");
     const agentDir = resolveAgentDir(cfg, "main", env);
     writePersistedAuthProfileStoreRaw(
       {
@@ -132,16 +182,10 @@ describe("Gateway prepared model runtime startup", () => {
       },
       agentDir,
     );
-    const blockEventLoop = async () => {
-      const stopAt = performance.now() + 1_500;
-      while (performance.now() < stopAt) {
-        // Deliberately model synchronous provider/plugin catalog work that starves timers.
-      }
-      return providerConfig;
-    };
-    providerMocks.staticCatalog.mockImplementation(blockEventLoop);
-    providerMocks.liveCatalog.mockImplementation(blockEventLoop);
-    const healthServer = await listenHealthz();
+    const startupEvents: string[] = [];
+    const healthServer = await listenHealthz(() => {
+      startupEvents.push("health-served");
+    });
 
     try {
       await withEnvAsync(
@@ -150,24 +194,58 @@ describe("Gateway prepared model runtime startup", () => {
           OPENCLAW_STATE_DIR: stateDir,
         },
         async () => {
-          const probe = requestHealthzAfter(healthServer.port, 25);
+          let releaseStartup = () => {};
+          const startupGate = new Promise<void>((resolve) => {
+            releaseStartup = resolve;
+          });
+          let markStartupBarrierEntered = () => {};
+          const startupBarrierEntered = new Promise<void>((resolve) => {
+            markStartupBarrierEntered = resolve;
+          });
+          let startupCompleted = false;
           const sidecars = startGatewaySidecars({
             cfg,
             pluginRegistry: { plugins: [], typedHooks: [] } as never,
             defaultWorkspaceDir: workspaceDir,
             deps: {} as never,
             startChannels: vi.fn(async () => {}),
+            onChannelsStarted: async () => {
+              startupEvents.push("barrier-entered");
+              markStartupBarrierEntered();
+              await startupGate;
+            },
             shouldStartPluginServices: () => false,
             log: { warn: vi.fn() },
             logHooks: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
             logChannels: { info: vi.fn(), error: vi.fn() },
+          }).then((result) => {
+            startupCompleted = true;
+            startupEvents.push("startup-complete");
+            return result;
           });
 
-          const [{ elapsedMs, response }] = await Promise.all([probe, sidecars]);
-          expect(response.status).toBe(200);
-          // The configured model is already resolved from manifest facts. Either provider hook
-          // would deliberately block the event loop well beyond this responsiveness guard.
-          expect(elapsedMs).toBeLessThan(1_000);
+          try {
+            await Promise.race([startupBarrierEntered, sidecars]);
+            const response = await fetch(`http://127.0.0.1:${healthServer.port}/healthz`);
+            expect(response.status).toBe(200);
+            startupEvents.push("HTTP200");
+            expect(startupEvents).toEqual(["barrier-entered", "health-served", "HTTP200"]);
+            expect(startupCompleted).toBe(false);
+          } finally {
+            startupEvents.push("release");
+            releaseStartup();
+            await sidecars;
+          }
+
+          expect(startupEvents).toEqual([
+            "barrier-entered",
+            "health-served",
+            "HTTP200",
+            "release",
+            "startup-complete",
+          ]);
+          console.info(`[gateway-startup-proof] ${startupEvents.join(" -> ")}`);
+          expect(discoverPlugins).not.toHaveBeenCalled();
           expect(providerMocks.staticCatalog).not.toHaveBeenCalled();
           expect(providerMocks.liveCatalog).not.toHaveBeenCalled();
         },
@@ -177,5 +255,5 @@ describe("Gateway prepared model runtime startup", () => {
       closeOpenClawAgentDatabasesForTest();
       await rm(root, { recursive: true, force: true });
     }
-  });
+  }, 300_000);
 });

@@ -36,10 +36,10 @@ import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { createTelegramBot } from "./bot.js";
 import { resolveTelegramTransport } from "./fetch.js";
 import { isRetryableTelegramApiError } from "./network-errors.js";
-import { getTelegramSequentialKey } from "./sequential-key.js";
 import { createTelegramTransportIngressMonitor } from "./telegram-ingress-drain-factory.js";
 import {
   resolveTelegramIngressSpoolDir,
+  telegramSpooledUpdateLaneKey,
   writeTelegramSpooledUpdate,
 } from "./telegram-ingress-spool.js";
 import { createTelegramWebhookStatusPublisher } from "./webhook-status.js";
@@ -295,12 +295,6 @@ function resolveTelegramWebhookRateLimitKey(
   return `${path}:${resolveTelegramWebhookClientIp(req, config)}`;
 }
 
-function resolveWebhookSpooledUpdateLaneKey(update: unknown): string {
-  return getTelegramSequentialKey({
-    update: update as Parameters<typeof getTelegramSequentialKey>[0]["update"],
-  });
-}
-
 export async function startTelegramWebhook(opts: {
   token: string;
   accountId?: string;
@@ -376,6 +370,7 @@ export async function startTelegramWebhook(opts: {
     await closeTransportOnce();
     throw err;
   }
+  const botInfo = bot.botInfo;
   const telegramWebhookRateLimiter = createFixedWindowRateLimiter({
     windowMs: WEBHOOK_RATE_LIMIT_DEFAULTS.windowMs,
     maxRequests: WEBHOOK_RATE_LIMIT_DEFAULTS.maxRequests,
@@ -400,6 +395,7 @@ export async function startTelegramWebhook(opts: {
     webhookIngressMonitor = createTelegramTransportIngressMonitor({
       spoolDir,
       bot,
+      botInfo,
       cfg: opts.config ?? {},
       accountId: opts.accountId ?? "default",
       // Pre-migration product default: 25m claim→adoption stall for webhook.
@@ -483,7 +479,7 @@ export async function startTelegramWebhook(opts: {
       await writeTelegramSpooledUpdate({
         spoolDir,
         update: body.value,
-        laneKey: resolveWebhookSpooledUpdateLaneKey(body.value),
+        laneKey: telegramSpooledUpdateLaneKey(body.value, botInfo),
       });
       // Enqueue duplicate detection makes Telegram webhook retries idempotent:
       // re-posted update_ids map to the same spool row and still ack fast.

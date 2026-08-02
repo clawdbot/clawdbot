@@ -1,4 +1,4 @@
-import type { TaskSummary } from "../../../lib/tasks/data.ts";
+import type { TaskSummary } from "../../../lib/tasks/task-summary.ts";
 
 export type BackgroundTasksProps = {
   sessionKey: string;

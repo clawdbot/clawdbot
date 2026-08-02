@@ -775,6 +775,7 @@ describe("ensureChannelSetupPluginInstalled", () => {
       cache: false,
       onlyPluginIds: ["@vendor/external-chat-plugin"],
       includeSetupOnlyChannelPlugins: true,
+      channelPluginLoadIntent: "setup",
     });
     expect(getChannelPluginCatalogEntry).toHaveBeenCalledWith("external-chat", {
       workspaceDir: "/tmp/openclaw-workspace",
@@ -878,6 +879,7 @@ describe("ensureChannelSetupPluginInstalled", () => {
       cache: false,
       onlyPluginIds: ["custom-external-chat-plugin"],
       includeSetupOnlyChannelPlugins: true,
+      channelPluginLoadIntent: "setup",
     });
   });
 
@@ -1086,6 +1088,7 @@ describe("ensureChannelSetupPluginInstalled", () => {
       cache: false,
       onlyPluginIds: ["@vendor/external-chat-plugin"],
       includeSetupOnlyChannelPlugins: true,
+      channelPluginLoadIntent: "setup",
     });
   });
 });

@@ -1,7 +1,12 @@
+import { mkdtempSync, rmSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { InMemoryBoardStore } from "../boards/board-store.js";
+import { createTestBoardStore } from "../boards/board-store.test-support.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { handleBoardHttpRequest } from "./board-http.js";
 import {
   BOARD_VIEW_TICKET_TTL_MS,
@@ -9,7 +14,8 @@ import {
   verifyBoardViewTicket,
 } from "./board-view-ticket.js";
 
-const store = new InMemoryBoardStore();
+const stateDir = mkdtempSync(path.join(tmpdir(), "openclaw-board-http-"));
+const store = createTestBoardStore({ stateDir });
 const nowMs = 1_800_000_000_000;
 let server: Server;
 let baseUrl: string;
@@ -91,6 +97,9 @@ afterAll(async () => {
       resolve();
     });
   });
+  closeOpenClawAgentDatabasesForTest();
+  closeOpenClawStateDatabaseForTest();
+  rmSync(stateDir, { recursive: true, force: true });
 });
 
 function ticketFor(name: string, revision = 1, issuedAtMs = nowMs): string {

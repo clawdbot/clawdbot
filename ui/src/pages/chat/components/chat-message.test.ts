@@ -700,7 +700,6 @@ describe("grouped chat rendering", () => {
   it("adds Reply to the inline message actions and forwards persisted reply context", () => {
     const container = document.createElement("div");
     const onReply = vi.fn();
-    const onOpenSidebar = vi.fn();
     renderAssistantMessage(
       container,
       {
@@ -709,7 +708,7 @@ describe("grouped chat rendering", () => {
         timestamp: 1000,
         __openclaw: { id: "assistant-entry-1" },
       },
-      { onDelete: vi.fn(), onOpenSidebar, onReply },
+      { onDelete: vi.fn(), onReply },
     );
 
     const actions = container.querySelectorAll<HTMLButtonElement>(
@@ -718,7 +717,6 @@ describe("grouped chat rendering", () => {
     expect([...actions].map((button) => button.getAttribute("aria-label"))).toEqual([
       "Reply to message",
       "Hide message",
-      "Open in canvas",
       "Copy as markdown",
     ]);
 
@@ -828,30 +826,6 @@ describe("grouped chat rendering", () => {
     expect(expectElement(container, ".chat-group", HTMLElement).dataset.chatRowKey).toBeTruthy();
   });
 
-  it("uses the displayed answer for assistant message actions", () => {
-    const container = document.createElement("div");
-    const onOpenSidebar = vi.fn();
-    renderAssistantMessage(
-      container,
-      {
-        role: "assistant",
-        content: "<think>internal reasoning</think>\nVisible answer",
-        timestamp: 1000,
-      },
-      {
-        onOpenSidebar,
-        showReasoning: false,
-      },
-    );
-
-    container.querySelector<HTMLButtonElement>(".chat-expand-btn")?.click();
-
-    expect(requireFirstMockArg(onOpenSidebar, "sidebar open")).toMatchObject({
-      kind: "markdown",
-      content: "Visible answer",
-    });
-  });
-
   it("renders user markdown without code-block copy chrome", () => {
     const container = document.createElement("div");
     const markdownContent = "```bash\npython3 - <<'PY'\nprint('ok')\nPY\n```";
@@ -895,16 +869,11 @@ describe("grouped chat rendering", () => {
       },
     );
 
-    const disclosure = expectElement(container, ".chat-user-message-disclosure", HTMLDivElement);
-    const toggle = expectElement(
-      disclosure,
-      ".chat-user-message-disclosure__toggle",
-      HTMLButtonElement,
-    );
+    const disclosure = expectElement(container, ".chat-message-disclosure", HTMLDivElement);
+    const toggle = expectElement(disclosure, ".chat-message-disclosure__toggle", HTMLButtonElement);
     expect(disclosure.classList.contains("is-expanded")).toBe(false);
     expect(
-      expectElement(disclosure, ".chat-user-message-disclosure__preview", HTMLDivElement)
-        .textContent,
+      expectElement(disclosure, ".chat-message-disclosure__preview", HTMLDivElement).textContent,
     ).toBe(Array.from({ length: 12 }, (_, index) => `Prompt line ${index}`).join("\n") + "…");
     expect(toggle.textContent?.trim()).toBe("Show more");
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
@@ -926,18 +895,14 @@ describe("grouped chat rendering", () => {
       },
     );
 
-    const expandedDisclosure = expectElement(
-      container,
-      ".chat-user-message-disclosure",
-      HTMLDivElement,
-    );
+    const expandedDisclosure = expectElement(container, ".chat-message-disclosure", HTMLDivElement);
     const collapseToggle = expectElement(
       expandedDisclosure,
-      ".chat-user-message-disclosure__toggle",
+      ".chat-message-disclosure__toggle",
       HTMLButtonElement,
     );
     expect(expandedDisclosure.classList.contains("is-expanded")).toBe(true);
-    expect(expandedDisclosure.querySelector(".chat-user-message-disclosure__preview")).toBeNull();
+    expect(expandedDisclosure.querySelector(".chat-message-disclosure__preview")).toBeNull();
     expect(collapseToggle.textContent?.trim()).toBe("Show less");
     expect(collapseToggle.getAttribute("aria-expanded")).toBe("true");
   });
@@ -954,8 +919,7 @@ describe("grouped chat rendering", () => {
     );
 
     expect(
-      expectElement(container, ".chat-user-message-disclosure__preview", HTMLDivElement)
-        .textContent,
+      expectElement(container, ".chat-message-disclosure__preview", HTMLDivElement).textContent,
     ).toBe(`${"a".repeat(699)}…`);
   });
 
@@ -969,7 +933,7 @@ describe("grouped chat rendering", () => {
       "user",
       { onToggleUserMessageExpanded },
     );
-    expect(container.querySelector(".chat-user-message-disclosure")).toBeNull();
+    expect(container.querySelector(".chat-message-disclosure")).toBeNull();
 
     renderAssistantMessage(
       container,
@@ -980,7 +944,7 @@ describe("grouped chat rendering", () => {
       },
       { onToggleUserMessageExpanded },
     );
-    expect(container.querySelector(".chat-user-message-disclosure")).toBeNull();
+    expect(container.querySelector(".chat-message-disclosure")).toBeNull();
   });
 
   it("keeps assistant markdown code-block copy chrome enabled", () => {
@@ -5210,40 +5174,45 @@ describe("grouped chat rendering", () => {
     expect(requireFirstMockArg(onOpenSidebar, "sidebar open").kind).toBe("markdown");
   });
 
-  it("adds a full-message request when opening a truncated assistant message", () => {
-    const container = document.createElement("div");
-    const onOpenSidebar = vi.fn();
-    renderAssistantMessage(
-      container,
-      {
+  it.each([
+    {
+      label: "marker",
+      message: {
         role: "assistant",
         content: [{ type: "text", text: "abcde\n...(truncated)..." }],
-        __openclaw: { id: "msg-truncated-1", seq: 1 },
+        __openclaw: { id: "msg-truncated-marker", seq: 1 },
       },
-      {
-        sessionKey: "global",
-        agentId: "work",
-        onOpenSidebar,
+      messageId: "msg-truncated-marker",
+    },
+    {
+      label: "metadata",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "abcde" }],
+        __openclaw: { id: "msg-truncated-metadata", seq: 2, truncated: true },
       },
-    );
-
-    const expandButton = container.querySelector<HTMLButtonElement>(".chat-expand-btn");
-    expect(expandButton).toBeInstanceOf(HTMLButtonElement);
-    expandButton!.click();
-
-    const sidebar = requireFirstMockArg(onOpenSidebar, "sidebar open");
-    expect(sidebar.kind).toBe("markdown");
-    expect(sidebar.fullMessageRequest).toEqual({
+      messageId: "msg-truncated-metadata",
+    },
+  ])("renders Show more for assistant truncation detected by $label", ({ message, messageId }) => {
+    const container = document.createElement("div");
+    const onToggleAssistantMessageExpanded = vi.fn();
+    renderAssistantMessage(container, message, {
       sessionKey: "global",
       agentId: "work",
-      messageId: "msg-truncated-1",
-      kind: "assistant_message",
+      loadFullAssistantMessage: async () => null,
+      onToggleAssistantMessageExpanded,
     });
+
+    const toggle = expectElement(container, ".chat-message-disclosure__toggle", HTMLButtonElement);
+    expect(toggle.textContent?.trim()).toBe("Show more");
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    toggle.click();
+    expect(onToggleAssistantMessageExpanded).toHaveBeenCalledWith(messageId);
+    expect(container.querySelector(".chat-expand-btn")).toBeNull();
   });
 
-  it("does not add a full-message request for non-truncated assistant messages", () => {
+  it("does not add disclosure or canvas actions to non-truncated assistant messages", () => {
     const container = document.createElement("div");
-    const onOpenSidebar = vi.fn();
     renderAssistantMessage(
       container,
       {
@@ -5253,23 +5222,28 @@ describe("grouped chat rendering", () => {
       },
       {
         sessionKey: "global",
-        agentId: "work",
-        onOpenSidebar,
+        loadFullAssistantMessage: async () => null,
+        onToggleAssistantMessageExpanded: vi.fn(),
       },
     );
 
-    const expandButton = container.querySelector<HTMLButtonElement>(".chat-expand-btn");
-    expect(expandButton).toBeInstanceOf(HTMLButtonElement);
-    expandButton!.click();
-
-    const sidebar = requireFirstMockArg(onOpenSidebar, "sidebar open");
-    expect(sidebar.kind).toBe("markdown");
-    expect(sidebar.fullMessageRequest).toBeUndefined();
+    expect(container.querySelector(".chat-message-disclosure__toggle")).toBeNull();
+    expect(container.querySelector(".chat-expand-btn")).toBeNull();
   });
 
-  it("does not add a full-message request for mirrored message-tool replies", () => {
+  it("does not render Show more without a full-message loader", () => {
     const container = document.createElement("div");
-    const onOpenSidebar = vi.fn();
+    renderAssistantMessage(container, {
+      role: "assistant",
+      content: [{ type: "text", text: "abcde\n...(truncated)..." }],
+      __openclaw: { id: "msg-no-loader", seq: 1 },
+    });
+
+    expect(container.querySelector(".chat-message-disclosure__toggle")).toBeNull();
+  });
+
+  it("does not render Show more for mirrored message-tool replies", () => {
+    const container = document.createElement("div");
     renderAssistantMessage(
       container,
       {
@@ -5280,18 +5254,12 @@ describe("grouped chat rendering", () => {
       },
       {
         sessionKey: "global",
-        agentId: "work",
-        onOpenSidebar,
+        loadFullAssistantMessage: async () => null,
+        onToggleAssistantMessageExpanded: vi.fn(),
       },
     );
 
-    const expandButton = container.querySelector<HTMLButtonElement>(".chat-expand-btn");
-    expect(expandButton).toBeInstanceOf(HTMLButtonElement);
-    expandButton!.click();
-
-    const sidebar = requireFirstMockArg(onOpenSidebar, "sidebar open");
-    expect(sidebar.kind).toBe("markdown");
-    expect(sidebar.fullMessageRequest).toBeUndefined();
+    expect(container.querySelector(".chat-message-disclosure__toggle")).toBeNull();
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
