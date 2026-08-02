@@ -1,4 +1,5 @@
 /** Validation helpers for cron schedules, targets, payloads, and delivery. */
+import { parseCodeModeScriptSyntax } from "../../agents/code-mode-script-syntax.js";
 import { resolveCronTriggerMinIntervalMs } from "../../config/cron-limits.js";
 import type { CronConfig } from "../../config/types.cron.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
@@ -60,6 +61,12 @@ export function assertScriptPayloadSupport(
   }
   if (!job.payload.script.trim()) {
     throw new Error("cron script payload must not be empty");
+  }
+  const parsed = parseCodeModeScriptSyntax(job.payload.script);
+  if (!parsed.ok) {
+    throw new Error(
+      `cron script payload has a syntax error: ${parsed.message} (line ${parsed.line}, column ${parsed.column})`,
+    );
   }
   if (job.trigger) {
     // Both script kinds expose trigger.state, so composing them would give one

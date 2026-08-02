@@ -697,7 +697,10 @@ describe("cron tool authority defaults", () => {
 
 describe("script payload validation", () => {
   const now = Date.parse("2026-07-18T12:00:00.000Z");
-  const input = (sessionTarget: CronJob["sessionTarget"] = "isolated") => ({
+  const input = (
+    sessionTarget: CronJob["sessionTarget"] = "isolated",
+    script = "return { state: { count: 1 } }",
+  ) => ({
     name: "script-job",
     enabled: true,
     schedule: { kind: "every" as const, everyMs: 60_000 },
@@ -705,7 +708,7 @@ describe("script payload validation", () => {
     wakeMode: "now" as const,
     payload: {
       kind: "script" as const,
-      script: "return { state: { count: 1 } }",
+      script,
       timeoutSeconds: 4_000,
       toolBudget: 4_000,
     },
@@ -715,6 +718,36 @@ describe("script payload validation", () => {
     expect(() =>
       createJob(createMockState(now, { scriptPayloadsEnabled: false }), input()),
     ).toThrow("cron.triggers.enabled=true");
+  });
+
+  it("rejects malformed scripts on creation with a user-relative location", () => {
+    expect(() =>
+      createJob(
+        createMockState(now, { scriptPayloadsEnabled: true }),
+        input("isolated", "const x = ;"),
+      ),
+    ).toThrow("cron script payload has a syntax error: Unexpected token (line 1, column 10)");
+  });
+
+  it("rejects malformed scripts on patch", () => {
+    const job = createJob(createMockState(now, { scriptPayloadsEnabled: true }), input());
+
+    expect(() =>
+      applyJobPatch(
+        job,
+        { payload: { kind: "script", script: "const x = ;" } },
+        { cronConfig: { triggers: { enabled: true } } },
+      ),
+    ).toThrow("cron script payload has a syntax error");
+  });
+
+  it.each([
+    ["top-level await", "await tools.wait(1); return 1"],
+    ["top-level return", "return 1"],
+  ])("accepts %s", (_name, script) => {
+    expect(() =>
+      createJob(createMockState(now, { scriptPayloadsEnabled: true }), input("isolated", script)),
+    ).not.toThrow();
   });
 
   it.each(["current", "session:reporting"] as const)(
