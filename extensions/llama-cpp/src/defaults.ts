@@ -8,7 +8,7 @@ import type {
 export const LLAMA_CPP_PROVIDER_ID = "llama-cpp";
 export const LLAMA_CPP_PROVIDER_LABEL = "llama.cpp";
 const LLAMA_CPP_LOCAL_AUTH_MARKER = "llama-cpp-local";
-const LLAMA_CPP_LOCAL_BASE_URL = "local://llama-cpp";
+export const LLAMA_CPP_LOCAL_BASE_URL = "local://llama-cpp";
 
 export function resolveLlamaCppSyntheticApiKey(): string {
   return LLAMA_CPP_LOCAL_AUTH_MARKER;

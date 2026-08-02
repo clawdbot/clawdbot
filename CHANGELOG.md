@@ -60,6 +60,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **llama.cpp custom HTTP routing:** keep explicitly configured OpenAI-compatible HTTP endpoints on their authored transport even when the provider id is `llama-cpp`, reserving native in-process inference for `local://llama-cpp`. Fixes #118212.
 - **Control UI operator session permissions:** honor Gateway-advertised operator scopes for new-thread creation, thread management, checkpoints, and sharing controls while preserving read-only navigation and legacy Gateway compatibility. Fixes #117786. Thanks @shakkernerd.
 - **Control UI archived session deletion:** send archive-gated delete requests from Sessions-page row and mixed-selection actions so write-scoped operators can remove archived threads while active-session deletion remains admin-only. Thanks @shakkernerd.
 - **Control UI command recovery:** keep delayed detached and immediate command failures scoped to their submitting session, preserving failed drafts and attachments for that pane without overwriting the active session. Fixes #116846. Thanks @shakkernerd.
