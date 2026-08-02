@@ -132,30 +132,33 @@ describe("text_end snapshot reconciliation", () => {
       replies: ["Checking:", "Checking: found X"],
       toolCallId: "tool-post-check-colon",
     },
-  ])("$name", async ({ replies, toolCallId }) => {
-    const onBlockReply = vi.fn();
-    const { emit, subscription } = createTextEndBlockReplyHarness({ onBlockReply });
-    const emitAssistantSnapshot = (content: string) => {
-      emit({ type: "message_start", message: { role: "assistant" } });
-      emitAssistantTextEnd({ emit, content });
-    };
+  ] satisfies Array<{ name: string; replies: [string, string]; toolCallId?: string }>)(
+    "$name",
+    async ({ replies, toolCallId }) => {
+      const onBlockReply = vi.fn();
+      const { emit, subscription } = createTextEndBlockReplyHarness({ onBlockReply });
+      const emitAssistantSnapshot = (content: string) => {
+        emit({ type: "message_start", message: { role: "assistant" } });
+        emitAssistantTextEnd({ emit, content });
+      };
 
-    emitAssistantSnapshot(replies[0]);
-    await vi.waitFor(() => {
-      expect(onBlockReply).toHaveBeenCalledTimes(1);
-    });
-    if (toolCallId) {
-      emit({ type: "tool_execution_start", toolName: "browser", toolCallId, args: {} });
-      await Promise.resolve();
-    }
-    emitAssistantSnapshot(replies[1]);
-    await vi.waitFor(() => {
-      expect(onBlockReply).toHaveBeenCalledTimes(2);
-    });
+      emitAssistantSnapshot(replies[0]);
+      await vi.waitFor(() => {
+        expect(onBlockReply).toHaveBeenCalledTimes(1);
+      });
+      if (toolCallId) {
+        emit({ type: "tool_execution_start", toolName: "browser", toolCallId, args: {} });
+        await Promise.resolve();
+      }
+      emitAssistantSnapshot(replies[1]);
+      await vi.waitFor(() => {
+        expect(onBlockReply).toHaveBeenCalledTimes(2);
+      });
 
-    expect(extractTextPayloads(onBlockReply.mock.calls)).toEqual(replies);
-    expect(subscription.assistantTexts).toEqual(replies);
-  });
+      expect(extractTextPayloads(onBlockReply.mock.calls)).toEqual(replies);
+      expect(subscription.assistantTexts).toEqual(replies);
+    },
+  );
 
   it("does not safety-send a cumulative text_end reply when the suffix was sent by a messaging tool", async () => {
     const onBlockReply = vi.fn();
