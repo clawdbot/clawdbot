@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   CronJob,
@@ -63,6 +64,8 @@ export type CronFormState = {
   deliveryMode: "none" | "announce" | "webhook";
   deliveryChannel: string;
   deliveryTo: string;
+  deliveryThreadId?: NonNullable<CronJob["delivery"]>["threadId"];
+  deliveryCompletionDestination?: NonNullable<CronJob["delivery"]>["completionDestination"];
   deliveryAccountId: string;
   deliveryBestEffort: boolean;
   failureAlertMode: "inherit" | "disabled" | "custom";
@@ -74,10 +77,6 @@ export type CronFormState = {
   failureAlertAccountId: string;
   timeoutSeconds: string;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object");
-}
 
 function isCronPayload(value: unknown): value is CronPayload {
   if (!isRecord(value)) {
@@ -800,6 +799,8 @@ function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
     deliveryMode: job.delivery?.mode ?? "none",
     deliveryChannel: job.delivery?.channel ?? CRON_CHANNEL_LAST,
     deliveryTo: job.delivery?.to ?? "",
+    deliveryThreadId: job.delivery?.threadId,
+    deliveryCompletionDestination: job.delivery?.completionDestination,
     deliveryAccountId: job.delivery?.accountId ?? "",
     deliveryBestEffort: job.delivery?.bestEffort ?? false,
     failureAlertMode:
@@ -1067,6 +1068,9 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
                   })
                 : undefined,
             to: form.deliveryTo.trim() || undefined,
+            threadId: selectedDeliveryMode === "announce" ? form.deliveryThreadId : undefined,
+            completionDestination:
+              selectedDeliveryMode === "announce" ? form.deliveryCompletionDestination : undefined,
             accountId: deliveryAccountId,
             bestEffort: form.deliveryBestEffort,
           }

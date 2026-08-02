@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { requestSessionCreate } from "../sessions/index.ts";
@@ -8,7 +9,7 @@ import {
   workboardCardRunId,
   workboardCardSessionKey,
 } from "./card-state.ts";
-import { formatError, isRecord } from "./normalization-utils.ts";
+import { formatError } from "./normalization-utils.ts";
 import { normalizeCardPayload, normalizeTaskSummary } from "./normalization.ts";
 import {
   getWorkboardState,

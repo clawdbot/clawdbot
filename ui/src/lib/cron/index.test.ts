@@ -724,7 +724,14 @@ describe("cron controller", () => {
       enabled: false,
       schedule: { kind: "every", everyMs: 7_200_000 },
       payload: { kind: "agentTurn", message: "ship it", timeoutSeconds: 45 },
-      delivery: { mode: "announce", channel: "telegram", to: "123", accountId: "bot-2" },
+      delivery: {
+        mode: "announce",
+        channel: "telegram",
+        to: "123",
+        threadId: 42,
+        completionDestination: { mode: "webhook", to: "https://example.test/completed" },
+        accountId: "bot-2",
+      },
     });
 
     startCronEdit(state, job);
@@ -743,6 +750,11 @@ describe("cron controller", () => {
     expect(state.cronForm.deliveryMode).toBe("announce");
     expect(state.cronForm.deliveryChannel).toBe("telegram");
     expect(state.cronForm.deliveryTo).toBe("123");
+    expect(state.cronForm.deliveryThreadId).toBe(42);
+    expect(state.cronForm.deliveryCompletionDestination).toEqual({
+      mode: "webhook",
+      to: "https://example.test/completed",
+    });
     expect(state.cronForm.deliveryAccountId).toBe("bot-2");
   });
 
@@ -1536,15 +1548,22 @@ describe("cron controller", () => {
     expect(state.cronForm.payloadText).toBe("ping");
   });
 
-  it("submits cron.add after cloning", async () => {
+  it("submits cron.add after cloning without dropping threaded destinations", async () => {
     const request = createCronRequest("job-new");
     const sourceJob = createCronJob({
       id: "job-1",
       name: "Daily ping",
       agentId: "writer",
       schedule: { kind: "cron", expr: "0 9 * * *" },
-      sessionTarget: "main",
-      payload: { kind: "systemEvent", text: "ping" },
+      sessionTarget: "isolated",
+      payload: { kind: "agentTurn", message: "ping" },
+      delivery: {
+        mode: "announce",
+        channel: "telegram",
+        to: "123",
+        threadId: "topic-7",
+        completionDestination: { mode: "webhook", to: "https://example.test/completed" },
+      },
     });
     const state = createState({
       client: { request } as unknown as CronState["client"],
@@ -1560,7 +1579,20 @@ describe("cron controller", () => {
     const updateCall = request.mock.calls.find(([method]) => method === "cron.update");
     expect(updateCall).toBeUndefined();
     expect(addCall[1]).toEqual(
-      expect.objectContaining({ name: "Daily ping copy", agentId: "writer" }),
+      expect.objectContaining({
+        name: "Daily ping copy",
+        agentId: "writer",
+        delivery: expect.objectContaining({
+          mode: "announce",
+          channel: "telegram",
+          to: "123",
+          threadId: "topic-7",
+          completionDestination: {
+            mode: "webhook",
+            to: "https://example.test/completed",
+          },
+        }),
+      }),
     );
   });
 

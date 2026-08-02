@@ -1,10 +1,15 @@
 export type UpdateAvailable = import("../../../src/infra/update-startup.js").UpdateAvailable;
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
+import type { ChannelsStatusResult } from "../../../packages/gateway-protocol/src/schema/channels.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { SessionAgentStatus } from "../../../packages/gateway-protocol/src/session-icon.js";
 import type { SessionGoal } from "../../../src/config/sessions/types.js";
-import type { CronJobBase } from "../../../src/cron/types-shared.js";
-import type { CronPayload as CoreCronPayload } from "../../../src/cron/types.js";
+import type {
+  CronDeliveryStatus,
+  CronJob,
+  CronPayload,
+  CronRunStatus,
+} from "../../../src/cron/types.js";
 import type { ConfigUiHints } from "../../../src/shared/config-ui-hints-types.js";
 import type { FastModeSource } from "../../../src/shared/fast-mode.js";
 import type {
@@ -16,6 +21,7 @@ import type {
 } from "../../../src/shared/session-types.js";
 export type { ConfigUiHint, ConfigUiHints } from "../../../src/shared/config-ui-hints-types.js";
 export type { SessionGoal } from "../../../src/config/sessions/types.js";
+export type { CronDeliveryStatus, CronJob, CronPayload, CronRunStatus };
 export type { FastMode } from "@openclaw/normalization-core/string-coerce";
 export type ChannelsPairingAccount =
   import("../../../packages/gateway-protocol/src/index.js").ChannelsPairingAccount;
@@ -31,63 +37,9 @@ type SessionSharingRole =
   import("../../../packages/gateway-protocol/src/index.js").SessionSharingRole;
 export type SessionMembersListResult =
   import("../../../packages/gateway-protocol/src/index.js").SessionMembersListResult;
-export type ChannelsStatusSnapshot = {
-  ts: number;
-  channelOrder: string[];
-  channelLabels: Record<string, string>;
-  channelDetailLabels?: Record<string, string>;
-  channelSystemImages?: Record<string, string>;
-  channelMeta?: ChannelUiMetaEntry[];
-  channels: Record<string, unknown>;
-  channelAccounts: Record<string, ChannelAccountSnapshot[]>;
-  channelDefaultAccountId: Record<string, string>;
-  partial?: boolean;
-  warnings?: string[];
-};
-
-export type ChannelUiMetaEntry = {
-  id: string;
-  label: string;
-  detailLabel: string;
-  systemImage?: string;
-};
-
-export type ChannelAccountSnapshot = {
-  accountId: string;
-  name?: string | null;
-  enabled?: boolean | null;
-  configured?: boolean | null;
-  linked?: boolean | null;
-  running?: boolean | null;
-  connected?: boolean | null;
-  reconnectAttempts?: number | null;
-  lastConnectedAt?: number | null;
-  lastError?: string | null;
-  lastStartAt?: number | null;
-  lastStopAt?: number | null;
-  lastInboundAt?: number | null;
-  lastOutboundAt?: number | null;
-  lastProbeAt?: number | null;
-  mode?: string | null;
-  dmPolicy?: string | null;
-  allowFrom?: string[] | null;
-  tokenSource?: string | null;
-  botTokenSource?: string | null;
-  appTokenSource?: string | null;
-  credentialSource?: string | null;
-  audienceType?: string | null;
-  audience?: string | null;
-  webhookPath?: string | null;
-  webhookUrl?: string | null;
-  baseUrl?: string | null;
-  allowUnmentionedGroups?: boolean | null;
-  cliPath?: string | null;
-  dbPath?: string | null;
-  port?: number | null;
-  probe?: unknown;
-  audit?: unknown;
-  application?: unknown;
-};
+export type ChannelsStatusSnapshot = ChannelsStatusResult;
+export type ChannelUiMetaEntry = NonNullable<ChannelsStatusResult["channelMeta"]>[number];
+export type ChannelAccountSnapshot = ChannelsStatusResult["channelAccounts"][string][number];
 
 type WhatsAppSelf = {
   e164?: string | null;
@@ -675,98 +627,12 @@ export type {
   SessionUsageTimeSeries,
 } from "../pages/usage/data-types.ts";
 
-export type CronRunStatus = "ok" | "error" | "skipped";
-export type CronDeliveryStatus = "delivered" | "not-delivered" | "unknown" | "not-requested";
 export type CronJobsEnabledFilter = "all" | "enabled" | "disabled";
 export type CronJobsSortBy = "nextRunAtMs" | "updatedAtMs" | "name";
 export type CronRunScope = "job" | "all";
 export type CronRunsStatusValue = CronRunStatus;
 export type CronRunsStatusFilter = "all" | CronRunStatus;
 export type CronSortDir = "asc" | "desc";
-
-type CronSchedule =
-  | { kind: "at"; at: string }
-  | { kind: "every"; everyMs: number; anchorMs?: number }
-  | { kind: "cron"; expr: string; tz?: string; staggerMs?: number }
-  | { kind: "on-exit"; command: string; cwd?: string }
-  | {
-      kind: "stream";
-      command: string[];
-      cwd?: string;
-      mode?: "line" | "match";
-      match?: string;
-      batchMs?: number;
-      maxBatchBytes?: number;
-    };
-
-type CronSessionTarget = "main" | "isolated" | "current" | `session:${string}`;
-type CronWakeMode = "next-heartbeat" | "now";
-
-export type CronPayload = CoreCronPayload;
-
-type CronDelivery = {
-  mode: "none" | "announce" | "webhook";
-  channel?: string;
-  to?: string;
-  accountId?: string;
-  bestEffort?: boolean;
-  failureDestination?: CronFailureDestination;
-};
-
-type CronFailureDestination = {
-  channel?: string;
-  to?: string;
-  mode?: "announce" | "webhook";
-  accountId?: string;
-};
-
-type CronFailureAlert = {
-  after?: number;
-  channel?: string;
-  to?: string;
-  cooldownMs?: number;
-  mode?: "announce" | "webhook";
-  accountId?: string;
-};
-
-type CronJobState = {
-  nextRunAtMs?: number;
-  runningAtMs?: number;
-  lastRunAtMs?: number;
-  lastRunStatus?: CronRunStatus;
-  lastStatus?: CronRunStatus;
-  lastError?: string;
-  lastErrorReason?: string;
-  lastDurationMs?: number;
-  consecutiveErrors?: number;
-  lastDelivered?: boolean;
-  lastDeliveryStatus?: CronDeliveryStatus;
-  lastDeliveryError?: string;
-  lastFailureNotificationDelivered?: boolean;
-  lastFailureNotificationDeliveryStatus?: CronDeliveryStatus;
-  lastFailureNotificationDeliveryError?: string;
-  lastFailureAlertAtMs?: number;
-  streamStatus?: "starting" | "running" | "restarting" | "stopped" | "disabled" | "error";
-  streamError?: string;
-  streamConsecutiveFailures?: number;
-  streamRestartExhausted?: boolean;
-  streamSourceIdentity?: string;
-  streamDroppedBatches?: number;
-  streamCoalescedBatches?: number;
-  streamLastStartedAtMs?: number;
-  streamLastExitAtMs?: number;
-};
-
-export type CronJob = CronJobBase<
-  CronSchedule,
-  CronSessionTarget,
-  CronWakeMode,
-  CronPayload,
-  CronDelivery,
-  CronFailureAlert | false
-> & {
-  state?: CronJobState;
-};
 
 export type CronStatus = {
   enabled: boolean;
