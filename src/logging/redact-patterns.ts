@@ -80,6 +80,9 @@ export const AWS_SECRET_ACCESS_KEY_VALUE_PATTERN = String.raw`(?=[A-Za-z0-9/+=]{
 const AWS_SECRET_ACCESS_KEY_VALUE_REDACT_PATTERN = String.raw`/${AWS_SECRET_ACCESS_KEY_VALUE_BOUNDARY}(${AWS_SECRET_ACCESS_KEY_VALUE_PATTERN})(?!_)/g`;
 const TELEGRAM_BOT_TOKEN_REDACT_PATTERN = String.raw`\bbot(\d{6,}:[A-Za-z0-9_-]{20,})\b`;
 const TELEGRAM_TOKEN_REDACT_PATTERN = String.raw`\b(\d{6,}:[A-Za-z0-9_-]{20,})\b`;
+// Shopify access tokens are a fixed 38-char whole token (prefix + 32 hex) with no left boundary,
+// so they must run against the full string; a chunk slice can split the token and leak it.
+const SHOPIFY_ACCESS_TOKEN_REDACT_PATTERN = String.raw`(shp(?:at|ca|pa|ss)_[A-Fa-f0-9]{32})`;
 const CREDENTIAL_STYLE_HEADER_KEYS = "x-goog-api-key|api-key|apikey|x-api-token|x-access-token";
 const GATEWAY_SECURITY_HEADER_KEYS =
   "X-OpenClaw-Token|x-pomerium-jwt-assertion|X-Api-Key|X-Auth-Token";
@@ -120,6 +123,7 @@ export const CHUNK_UNSAFE_PATTERN_SOURCES = new Set([
   AUTHORIZATION_BOT_REDACT_PATTERN,
   STANDALONE_BEARER_REDACT_PATTERN,
   AWS_SECRET_ACCESS_KEY_VALUE_REDACT_PATTERN,
+  SHOPIFY_ACCESS_TOKEN_REDACT_PATTERN,
   ...HTTP_AUTH_HEADER_REDACT_PATTERNS,
 ]);
 
@@ -193,6 +197,7 @@ export const DEFAULT_REDACT_PATTERNS: readonly string[] = [
   String.raw`(SG\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})`,
   String.raw`(npm_[A-Za-z0-9]{10,})`,
   String.raw`(pypi-[A-Za-z0-9_-]{10,})`,
+  SHOPIFY_ACCESS_TOKEN_REDACT_PATTERN,
   String.raw`(dop_v1_[A-Za-z0-9]{10,})`,
   String.raw`(doo_v1_[A-Za-z0-9]{10,})`,
   String.raw`(dor_v1_[A-Za-z0-9]{10,})`,

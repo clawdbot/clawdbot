@@ -1404,6 +1404,15 @@ describe("redactSensitiveText", () => {
     expect(output).toBe("r8_ABC…stuv");
   });
 
+  it("masks Shopify access tokens (shp*_ prefixes)", () => {
+    for (const prefix of ["shpat", "shpca", "shppa", "shpss"]) {
+      const token = `${prefix}_${"a".repeat(32)}`;
+      const output = redactSensitiveText(token, { mode: "tools" });
+      expect(output, token).toBe(`${prefix}_…aaaa`);
+      expect(output).not.toContain(token);
+    }
+  });
+
   it("masks expanded vendor-prefix token corpus", () => {
     const fireworksTokens = [
       { token: `fw-${"C".repeat(40)}`, redacted: "fw-CCC…CCCC" },
@@ -1437,6 +1446,10 @@ describe("redactSensitiveText", () => {
       "SG.abcdefghijklmnopqrstuvwxyz.0123456789abcdefghijklmnopqrstuvwxyz",
       "npm_abcdefghijklmnopqrstuvwxyz",
       "pypi-abcdefghijklmnopqrstuvwxyz",
+      `shpat_${"a".repeat(32)}`,
+      `shpca_${"b".repeat(32)}`,
+      `shppa_${"c".repeat(32)}`,
+      `shpss_${"d".repeat(32)}`,
       "dop_v1_abcdefghijklmnopqrstuvwxyz",
       "doo_v1_abcdefghijklmnopqrstuvwxyz",
       "dor_v1_abcdefghijklmnopqrstuvwxyz",
@@ -1548,7 +1561,7 @@ describe("redactSensitiveText", () => {
 
   it("does not redact ordinary identifiers containing short token-prefix substrings", () => {
     const input = [
-      "npm_telegram_package_spec ask_openclaw_query_patterns team_management risk_assessment glpat-docs gloas-docs gldt-docs glcbt-docs glptt-docs glft-docs glimt-docs glagent-docs glwt-docs glsoat-docs glffct-docs glrt-docs glrtr-docs GR1348941-docs _gitlab_session=short dapi-example sbp_short nfp_site CCIPAT_docs ATATT-example fw-tooshort fw_tooshort fpk_tooshort",
+      "npm_telegram_package_spec ask_openclaw_query_patterns team_management risk_assessment glpat-docs gloas-docs gldt-docs glcbt-docs glptt-docs glft-docs glimt-docs glagent-docs glwt-docs glsoat-docs glffct-docs glrt-docs glrtr-docs GR1348941-docs _gitlab_session=short dapi-example sbp_short nfp_site CCIPAT_docs ATATT-example fw-tooshort fw_tooshort fpk_tooshort shpat_tooshort shpca_notavalidshopifyaccesstoken",
       `fixturefw-${"C".repeat(40)}`,
       `fixture_fw_${"A".repeat(40)}`,
       `fixture_fpk_${"B".repeat(40)}`,
@@ -1562,6 +1575,24 @@ describe("redactSensitiveText", () => {
     const prefix = `${"x".repeat(chunkSize - 2)} `;
     const suffix = "y".repeat(chunkSize);
     const tokens = [`fw-${"C".repeat(40)}`, `fw_${"A".repeat(40)}`, `fpk_${"B".repeat(40)}`];
+
+    for (const token of tokens) {
+      expect(redactSensitiveText(`${prefix}${token}${suffix}`, { mode: "tools" })).not.toContain(
+        token,
+      );
+    }
+  });
+
+  it("masks Shopify access tokens that cross bounded-replacement chunk boundaries", () => {
+    const chunkSize = 16_384;
+    const prefix = `${"x".repeat(chunkSize - 2)} `;
+    const suffix = "y".repeat(chunkSize);
+    const tokens = [
+      `shpat_${"a".repeat(32)}`,
+      `shpca_${"b".repeat(32)}`,
+      `shppa_${"c".repeat(32)}`,
+      `shpss_${"d".repeat(32)}`,
+    ];
 
     for (const token of tokens) {
       expect(redactSensitiveText(`${prefix}${token}${suffix}`, { mode: "tools" })).not.toContain(
