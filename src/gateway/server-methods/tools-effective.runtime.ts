@@ -10,6 +10,7 @@ export {
 export {
   resolveEffectiveToolInventory,
   resolveEffectiveToolInventoryRuntimeModelContext,
+  resolveEffectiveToolInventoryRuntimeModelContextAsync,
 } from "../../agents/tools-effective-inventory.js";
 export { getRegisteredAgentHarness } from "../../agents/harness/registry.js";
 export {

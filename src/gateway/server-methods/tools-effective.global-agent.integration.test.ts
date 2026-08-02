@@ -40,6 +40,9 @@ const inventoryMocks = vi.hoisted(() => ({
       baseUrl: "https://api.openai.com/v1",
     },
   })),
+  resolveEffectiveToolInventoryRuntimeModelContextAsync: vi.fn(async (params: unknown) =>
+    inventoryMocks.resolveEffectiveToolInventoryRuntimeModelContext(params),
+  ),
 }));
 
 vi.mock("./tools-effective.runtime.js", async (importOriginal) => {
@@ -49,6 +52,8 @@ vi.mock("./tools-effective.runtime.js", async (importOriginal) => {
     resolveEffectiveToolInventory: inventoryMocks.resolveEffectiveToolInventory,
     resolveEffectiveToolInventoryRuntimeModelContext:
       inventoryMocks.resolveEffectiveToolInventoryRuntimeModelContext,
+    resolveEffectiveToolInventoryRuntimeModelContextAsync:
+      inventoryMocks.resolveEffectiveToolInventoryRuntimeModelContextAsync,
     peekSessionMcpRuntime: vi.fn(() => undefined),
     resolveSessionMcpConfigSummary: vi.fn(() => ({ fingerprint: "mcp:0", serverNames: [] })),
     buildBundleMcpToolsFromCatalog: vi.fn(() => []),

@@ -34,6 +34,7 @@ import {
   resolveAgentWorkspaceDir,
   resolveEffectiveToolInventory,
   resolveEffectiveToolInventoryRuntimeModelContext,
+  resolveEffectiveToolInventoryRuntimeModelContextAsync,
   resolveReplyToMode,
   resolveRuntimeConfigCacheKey,
   resolveSessionAgentId,
@@ -192,9 +193,9 @@ function scheduleBaseToolsEffectiveRefresh(
   }
   const startedAt = nowForToolsEffectiveCache();
   const task = new Promise<EffectiveToolInventoryResult>((resolve, reject) => {
-    setImmediate(() => {
+    setImmediate(async () => {
       try {
-        const value = resolveBaseToolsEffectiveInventory(context);
+        const value = await resolveBaseToolsEffectiveInventory(context);
         cacheToolsEffectiveResult(key, value);
         const durationMs = nowForToolsEffectiveCache() - startedAt;
         if (durationMs >= TOOLS_EFFECTIVE_SLOW_LOG_MS) {
@@ -352,11 +353,11 @@ function maybeAppendMcpNotice(
   return notice ? appendToolInventoryNotice(base, notice) : base;
 }
 
-function resolveBaseToolsEffectiveInventory(
+async function resolveBaseToolsEffectiveInventory(
   context: TrustedToolsEffectiveContext,
-): EffectiveToolInventoryResult {
+): Promise<EffectiveToolInventoryResult> {
   const agentDir = resolveAgentDir(context.cfg, context.agentId);
-  const runtimeModelContext = resolveEffectiveToolInventoryRuntimeModelContext({
+  const runtimeModelContext = await resolveEffectiveToolInventoryRuntimeModelContextAsync({
     cfg: context.cfg,
     agentId: context.agentId,
     agentDir,

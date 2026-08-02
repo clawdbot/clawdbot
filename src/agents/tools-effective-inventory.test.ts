@@ -6,6 +6,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { createOpenClawCodingTools } from "./agent-tools.js";
+import { PreparedModelRuntimeOwnerNotPublishedError } from "./prepared-model-runtime.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 type TestPluginMeta = Record<
@@ -40,6 +41,8 @@ const effectiveInventoryState = vi.hoisted(() => ({
   normalizeToolsMock: vi.fn((options: { tools: AnyAgentTool[] }) => options.tools),
   staticCatalogModelMock: vi.fn((_options: unknown) => undefined as unknown),
   dynamicModelMock: vi.fn((_options: unknown) => undefined as unknown),
+  dynamicModelAsyncMock: vi.fn(async (_options: unknown) => undefined as unknown),
+  dynamicModelOwnerMissing: false,
   normalizeTransportMock: vi.fn((_options: unknown) => undefined as unknown),
   createToolsMock: vi.fn<typeof createOpenClawCodingTools>(
     (_options) =>
@@ -98,15 +101,34 @@ vi.mock("./embedded-agent-runner/model.js", () => ({
     cfg: unknown,
     options: unknown,
   ) =>
-    ({
-      model: effectiveInventoryState.dynamicModelMock({
-        provider,
-        modelId,
-        agentDir,
-        cfg,
-        options,
-      }),
-    }) as unknown,
+    effectiveInventoryState.dynamicModelOwnerMissing
+      ? (() => {
+          throw new PreparedModelRuntimeOwnerNotPublishedError("owner missing");
+        })()
+      : ({
+          model: effectiveInventoryState.dynamicModelMock({
+            provider,
+            modelId,
+            agentDir,
+            cfg,
+            options,
+          }),
+        } as unknown),
+  resolveModelAsync: async (
+    provider: unknown,
+    modelId: unknown,
+    agentDir: unknown,
+    cfg: unknown,
+    options: unknown,
+  ) => ({
+    model: await effectiveInventoryState.dynamicModelAsyncMock({
+      provider,
+      modelId,
+      agentDir,
+      cfg,
+      options,
+    }),
+  }),
 }));
 
 vi.mock("../plugins/provider-runtime.js", () => ({
@@ -115,6 +137,7 @@ vi.mock("../plugins/provider-runtime.js", () => ({
 }));
 
 let resolveEffectiveToolInventory: typeof import("./tools-effective-inventory.js").resolveEffectiveToolInventory;
+let resolveEffectiveToolInventoryRuntimeModelContextAsync: typeof import("./tools-effective-inventory.js").resolveEffectiveToolInventoryRuntimeModelContextAsync;
 
 async function loadHarness(options?: {
   tools?: AnyAgentTool[];
@@ -148,6 +171,8 @@ async function loadHarness(options?: {
 describe("resolveEffectiveToolInventory", () => {
   beforeAll(async () => {
     ({ resolveEffectiveToolInventory } = await import("./tools-effective-inventory.js"));
+    ({ resolveEffectiveToolInventoryRuntimeModelContextAsync } =
+      await import("./tools-effective-inventory.js"));
   });
 
   beforeEach(() => {
@@ -161,6 +186,8 @@ describe("resolveEffectiveToolInventory", () => {
     effectiveInventoryState.normalizeToolsMock = vi.fn((options) => options.tools);
     effectiveInventoryState.staticCatalogModelMock = vi.fn((_options: unknown) => undefined);
     effectiveInventoryState.dynamicModelMock = vi.fn((_options: unknown) => undefined);
+    effectiveInventoryState.dynamicModelAsyncMock = vi.fn(async (_options: unknown) => undefined);
+    effectiveInventoryState.dynamicModelOwnerMissing = false;
     effectiveInventoryState.normalizeTransportMock = vi.fn((_options: unknown) => undefined);
     effectiveInventoryState.createToolsMock = vi.fn<typeof createOpenClawCodingTools>(
       (_options) => effectiveInventoryState.tools,
@@ -846,6 +873,42 @@ describe("resolveEffectiveToolInventory", () => {
           id: "chat-latest",
           api: "openai-responses",
           provider: "openai",
+        }),
+      }),
+    );
+  });
+
+  it("publishes dynamic model context asynchronously when no lifecycle owner exists", async () => {
+    effectiveInventoryState.dynamicModelOwnerMissing = true;
+    effectiveInventoryState.dynamicModelAsyncMock.mockResolvedValue({
+      id: "chat-latest",
+      name: "chat-latest",
+      provider: "openai",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+    });
+
+    await expect(
+      resolveEffectiveToolInventoryRuntimeModelContextAsync({
+        cfg: {},
+        agentId: "main",
+        agentDir: "/tmp/agents/main/agent",
+        workspaceDir: "/tmp/workspace-main",
+        modelProvider: "openai",
+        modelId: "chat-latest",
+      }),
+    ).resolves.toMatchObject({
+      modelApi: "openai-responses",
+      runtimeModel: { id: "chat-latest", provider: "openai" },
+    });
+    expect(effectiveInventoryState.dynamicModelAsyncMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai",
+        modelId: "chat-latest",
+        agentDir: "/tmp/agents/main/agent",
+        options: expect.objectContaining({
+          agentId: "main",
+          workspaceDir: "/tmp/workspace-main",
         }),
       }),
     );

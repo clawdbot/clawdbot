@@ -18,9 +18,10 @@ import { normalizeProviderTransportWithPlugin } from "../plugins/provider-runtim
 import { resolveAgentDir, resolveAgentWorkspaceDir, resolveSessionAgentId } from "./agent-scope.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { resolveEffectiveToolPolicy } from "./agent-tools.policy.js";
-import { resolveModel } from "./embedded-agent-runner/model.js";
+import { resolveModel, resolveModelAsync } from "./embedded-agent-runner/model.js";
 import { resolveBundledStaticCatalogModel } from "./embedded-agent-runner/model.static-catalog.js";
 import { normalizeStaticProviderModelId } from "./model-ref-shared.js";
+import { PreparedModelRuntimeOwnerNotPublishedError } from "./prepared-model-runtime.js";
 import { normalizeToolName } from "./tool-policy.js";
 import { buildRuntimeCompatibleToolInventory } from "./tools-effective-inventory-build.js";
 import { buildEffectiveToolInventoryGroups } from "./tools-effective-inventory-groups.js";
@@ -258,6 +259,33 @@ export function resolveEffectiveToolInventoryRuntimeModelContext(params: {
     modelApi: runtimeModel.api,
     runtimeModel,
   };
+}
+
+/** Resolves dynamic model metadata after publishing a request-owned read snapshot when needed. */
+export async function resolveEffectiveToolInventoryRuntimeModelContextAsync(
+  params: Parameters<typeof resolveEffectiveToolInventoryRuntimeModelContext>[0],
+): Promise<ReturnType<typeof resolveEffectiveToolInventoryRuntimeModelContext>> {
+  try {
+    return resolveEffectiveToolInventoryRuntimeModelContext(params);
+  } catch (error) {
+    if (!(error instanceof PreparedModelRuntimeOwnerNotPublishedError)) {
+      throw error;
+    }
+  }
+
+  const provider = normalizeProviderId(params.modelProvider ?? "");
+  const modelId = params.modelId?.trim() ?? "";
+  if (!provider || !modelId) {
+    return {};
+  }
+  const agentId = params.agentId?.trim() || resolveSessionAgentId({ config: params.cfg });
+  const workspaceDir = params.workspaceDir ?? resolveAgentWorkspaceDir(params.cfg, agentId);
+  const resolved = await resolveModelAsync(provider, modelId, params.agentDir, params.cfg, {
+    agentId,
+    workspaceDir,
+  });
+  const runtimeModel = resolved.model as ProviderRuntimeModel | undefined;
+  return runtimeModel ? { modelApi: runtimeModel.api, runtimeModel } : {};
 }
 
 /** Resolves compatibility metadata explicitly configured for a provider/model pair. */

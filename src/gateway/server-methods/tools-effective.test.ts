@@ -68,6 +68,9 @@ const runtimeMocks = vi.hoisted(() => ({
       baseUrl: "https://api.openai.com/v1",
     },
   })),
+  resolveEffectiveToolInventoryRuntimeModelContextAsync: vi.fn(async (params: unknown) =>
+    runtimeMocks.resolveEffectiveToolInventoryRuntimeModelContext(params),
+  ),
 }));
 
 vi.mock("./tools-effective.runtime.js", () => ({
