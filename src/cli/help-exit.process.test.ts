@@ -7,6 +7,7 @@ import { pathToFileURL } from "node:url";
 import { Command, CommanderError } from "commander";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { DEFAULT_VITEST_TEST_TIMEOUT_MS } from "../../test/vitest/vitest.timeouts.js";
 import { registerCoreCliByName } from "./program/command-registry.js";
 import { createProgramContext } from "./program/context.js";
 import { registerSubCliByName } from "./program/register.subclis.js";
@@ -14,8 +15,11 @@ import { registerSubCliByName } from "./program/register.subclis.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 // This is a deadlock guard, not a startup SLO. Fork CI can take over a minute
 // to cold-load the CLI graph on shared hosted runners, while still exiting correctly.
-const CHILD_PROCESS_TIMEOUT_MS = 240_000;
-const CHILD_PROCESS_TEST_TIMEOUT_MS = CHILD_PROCESS_TIMEOUT_MS + 10_000;
+// Keep the default guard below the shared Vitest deadline so it always reports
+// captured child output before the framework can replace it with an opaque timeout.
+const DEFAULT_CHILD_PROCESS_TIMEOUT_MS = DEFAULT_VITEST_TEST_TIMEOUT_MS - 20_000;
+const SLOW_DOTENV_CHILD_PROCESS_TIMEOUT_MS = 240_000;
+const SLOW_DOTENV_TEST_TIMEOUT_MS = SLOW_DOTENV_CHILD_PROCESS_TIMEOUT_MS + 10_000;
 const LAZY_GROUP_HELP_CASES = [
   { group: "backup", usageCommand: "backup", registry: "core" },
   { group: "capability", usageCommand: "infer|capability", registry: "subcli" },
@@ -139,6 +143,7 @@ async function runCliProcess(params: {
   loggingViaInclude?: boolean;
   loggingViaRootInclude?: boolean;
   stateEnv?: (stateDir: string) => Record<string, string>;
+  timeoutMs?: number;
 }) {
   const fixture = await createHelpProcessFixture(
     params.config,
@@ -178,7 +183,7 @@ async function runCliProcess(params: {
         // CI shard runners export NODE_COMPILE_CACHE; in a source checkout entry.ts
         // then respawns a detached grandchild that shares this child's stdio pipes.
         // If the deadlock guard SIGKILLs the parent, the orphan keeps the pipes open
-        // and execFile never settles, turning any slow child into a blind vitest
+        // and the process wait never settles, turning any slow child into a blind vitest
         // timeout with no diagnostics. Keep these children single-process; the
         // compile-cache respawn contract has dedicated entry.compile-cache coverage.
         NODE_DISABLE_COMPILE_CACHE: "1",
@@ -225,7 +230,7 @@ async function runCliProcess(params: {
             stdout,
           }),
         );
-      }, CHILD_PROCESS_TIMEOUT_MS);
+      }, params.timeoutMs ?? DEFAULT_CHILD_PROCESS_TIMEOUT_MS);
       timeout.unref();
     }),
   ]).finally(() => {
@@ -645,7 +650,7 @@ describe("JSON console style process output", () => {
   });
 
   it(
-    "loads dotenv before formatting entry validation diagnostics",
+    "captures exact exit code 2 after loading dotenv for entry validation diagnostics",
     async () => {
       let failure: CliProcessFailure | undefined;
       try {
@@ -659,6 +664,7 @@ describe("JSON console style process output", () => {
           },
           env: { OPENCLAW_TEST_CONSOLE_STYLE: undefined },
           stateEnv: () => ({ OPENCLAW_TEST_CONSOLE_STYLE: "json" }),
+          timeoutMs: SLOW_DOTENV_CHILD_PROCESS_TIMEOUT_MS,
         });
       } catch (error) {
         failure = error as CliProcessFailure;
@@ -672,7 +678,7 @@ describe("JSON console style process output", () => {
         }),
       ]);
     },
-    CHILD_PROCESS_TEST_TIMEOUT_MS,
+    SLOW_DOTENV_TEST_TIMEOUT_MS,
   );
 
   it("loads eligible dotenv before formatting a run-main import failure", async () => {
