@@ -166,6 +166,73 @@ describe("startup plugin HTTP routing", () => {
       });
     });
   });
+
+  it("uses Accept to route only the unclaimed Control UI SPA fallback", async () => {
+    await withMarkedControlUiRoot(async (controlUiRoot) => {
+      let sidecarsReady = false;
+      await withGatewayServer({
+        prefix: "startup-plugin-get-accept-root-control-ui",
+        resolvedAuth: AUTH_NONE,
+        overrides: {
+          controlUiEnabled: true,
+          controlUiBasePath: "",
+          controlUiRoot: { kind: "resolved", path: controlUiRoot },
+          handlePluginRequest: async () => false,
+          shouldEnforcePluginGatewayAuth: () => false,
+          isStartupPluginRuntimeReady: () => sidecarsReady,
+        },
+        run: async (server) => {
+          const htmlCases = [
+            {
+              name: "browser",
+              accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            },
+            { name: "bare curl", accept: "*/*" },
+            { name: "missing header", accept: undefined },
+            { name: "empty header", accept: "" },
+          ];
+          for (const ready of [false, true]) {
+            sidecarsReady = ready;
+            for (const testCase of htmlCases) {
+              const { res, getBody } = await sendGatewayRequest(server, {
+                path: "/unclaimed-spa-route",
+                method: "GET",
+                headers: testCase.accept === undefined ? undefined : { accept: testCase.accept },
+              });
+
+              expect(res.statusCode, `${testCase.name} ready=${ready}`).toBe(200);
+              expect(getBody(), `${testCase.name} ready=${ready}`).toContain("spa fallback");
+            }
+
+            for (const accept of ["application/json", "text/event-stream"]) {
+              const response = createResponse();
+              await dispatchRequest(
+                server,
+                createRequest({
+                  path: "/unclaimed-spa-route",
+                  method: "GET",
+                  headers: { accept },
+                }),
+                response.res,
+              );
+
+              expect(response.res.statusCode, `${accept} ready=${ready}`).toBe(ready ? 404 : 503);
+              expect(response.setHeader).toHaveBeenCalledWith(
+                "Content-Type",
+                "text/plain; charset=utf-8",
+              );
+              expect(response.getBody()).toBe(ready ? "Not Found" : "Plugin runtime is starting");
+              if (ready) {
+                expect(response.setHeader).not.toHaveBeenCalledWith("Retry-After", "1");
+              } else {
+                expect(response.setHeader).toHaveBeenCalledWith("Retry-After", "1");
+              }
+            }
+          }
+        },
+      });
+    });
+  });
 });
 
 describe("standalone MCP App HTTP routing", () => {

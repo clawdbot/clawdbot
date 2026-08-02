@@ -9,6 +9,20 @@ export function isReadHttpMethod(method: string | undefined): boolean {
   return method === "GET" || method === "HEAD";
 }
 
+/** Returns whether an Accept header permits an HTML document response. */
+export function acceptsControlUiHtmlResponse(accept: string | undefined): boolean {
+  const normalized = accept?.trim();
+  if (!normalized) {
+    return true;
+  }
+  return normalized.split(",").some((entry) => {
+    const mediaType = entry.split(";", 1)[0]?.trim().toLowerCase();
+    return (
+      mediaType === "*/*" || mediaType === "text/html" || mediaType === "application/xhtml+xml"
+    );
+  });
+}
+
 /** Sends a plain-text response with the standard UTF-8 content type. */
 export function respondPlainText(res: ServerResponse, statusCode: number, body: string): void {
   res.statusCode = statusCode;
