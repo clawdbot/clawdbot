@@ -544,6 +544,7 @@ describe("tools.effective handler", () => {
         name: "GPT 4.1",
         provider: "openai",
         api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
       },
     });
 

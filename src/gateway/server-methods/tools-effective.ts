@@ -33,7 +33,6 @@ import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
   resolveEffectiveToolInventory,
-  resolveEffectiveToolInventoryRuntimeModelContext,
   resolveEffectiveToolInventoryRuntimeModelContextAsync,
   resolveReplyToMode,
   resolveRuntimeConfigCacheKey,
