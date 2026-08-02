@@ -226,6 +226,10 @@ vi.mock("./session.js", async () => {
 let monitorWebInbox: typeof import("./inbound.js").monitorWebInbox;
 let resetWebInboundDedupe: typeof import("./inbound.js").resetWebInboundDedupe;
 let createWaSocket: typeof import("./session.js").createWaSocket;
+let resetLogger: typeof import("openclaw/plugin-sdk/runtime-env").resetLogger;
+let setLoggerOverride: typeof import("openclaw/plugin-sdk/runtime-env").setLoggerOverride;
+
+const LOG_PATH = path.join(os.tmpdir(), `openclaw-inbound-media-${crypto.randomUUID()}.log`);
 
 async function waitForMessage(onMessage: ReturnType<typeof vi.fn>) {
   await vi.waitFor(() => expect(onMessage).toHaveBeenCalledTimes(1), {
@@ -250,6 +254,26 @@ function requireMediaPath(value: unknown): string {
   return value;
 }
 
+async function waitForLogLine(messageId: string): Promise<string> {
+  let matchingLine = "";
+  await vi.waitFor(
+    async () => {
+      const content = await fs.readFile(LOG_PATH, "utf8").catch(() => "");
+      matchingLine =
+        content
+          .split("\n")
+          .find(
+            (line) =>
+              line.includes("WhatsApp inbound media materialization failed") &&
+              line.includes(messageId),
+          ) ?? "";
+      expect(matchingLine).not.toBe("");
+    },
+    { timeout: 2_000, interval: 5 },
+  );
+  return matchingLine;
+}
+
 describe("web inbound media saves with extension", () => {
   async function getMockSocket() {
     return (await createWaSocket(false, false)) as unknown as {
@@ -267,11 +291,16 @@ describe("web inbound media saves with extension", () => {
 
   beforeAll(async () => {
     await fs.rm(HOME, { recursive: true, force: true });
+    ({ resetLogger, setLoggerOverride } = await import("openclaw/plugin-sdk/runtime-env"));
+    setLoggerOverride({ level: "trace", file: LOG_PATH });
     ({ monitorWebInbox, resetWebInboundDedupe } = await import("./inbound.js"));
     ({ createWaSocket } = await import("./session.js"));
   });
 
   afterAll(async () => {
+    resetLogger();
+    setLoggerOverride(null);
+    await fs.rm(LOG_PATH, { force: true });
     await fs.rm(HOME, { recursive: true, force: true });
     if (ORIGINAL_HOME === undefined) {
       delete process.env.HOME;
@@ -557,7 +586,11 @@ describe("web inbound media saves with extension", () => {
   });
 
   it("keeps a failed image fact with an unavailable notice", async () => {
-    downloadMediaMessageMock.mockRejectedValueOnce(new Error("expired media reference"));
+    downloadMediaMessageMock.mockRejectedValueOnce(
+      new Error(
+        "expired media reference https://media.example/private +15551234567 111@s.whatsapp.net",
+      ),
+    );
     const onMessage = vi.fn();
     const listener = await monitorWebInbox({
       cfg: {
@@ -596,6 +629,67 @@ describe("web inbound media saves with extension", () => {
       type: "media",
       payload: { contentType: "image/jpeg", kind: "image" },
     });
+    const diagnostic = await waitForLogLine("img-failed");
+    expect(diagnostic).toContain('"channel":"whatsapp"');
+    expect(diagnostic).toContain('"mediaKind":"image"');
+    expect(diagnostic).toContain('"mimeType":"image/jpeg"');
+    expect(diagnostic).toContain('"failureStage":"direct"');
+    expect(diagnostic).toContain('"errorClass":"Error"');
+    expect(diagnostic).toContain("expired media reference");
+    expect(diagnostic).toContain("[redacted-url]");
+    expect(diagnostic).toContain("[redacted-phone]");
+    expect(diagnostic).toContain("[redacted-jid]");
+    expect(diagnostic).not.toContain("media.example/private");
+    expect(diagnostic).not.toContain("+15551234567");
+    expect(diagnostic).not.toContain("111@s.whatsapp.net");
+
+    await listener.close();
+  });
+
+  it("logs quoted media failures without verbose logging", async () => {
+    downloadMediaMessageMock.mockRejectedValueOnce(new Error("quoted media reference expired"));
+    const onMessage = vi.fn();
+    const listener = await monitorWebInbox({
+      cfg: {
+        channels: { whatsapp: { allowFrom: ["*"] } },
+      } as never,
+      verbose: false,
+      onMessage,
+      accountId: "default",
+      authDir: path.join(HOME, "wa-auth"),
+    });
+    const realSock = await getMockSocket();
+
+    realSock.ev.emit("messages.upsert", {
+      type: "notify",
+      messages: [
+        {
+          key: { id: "quoted-failed", fromMe: false, remoteJid: "111@s.whatsapp.net" },
+          message: {
+            extendedTextMessage: {
+              text: "inspect this",
+              contextInfo: {
+                stanzaId: "quoted-image-failed",
+                participant: "222@s.whatsapp.net",
+                quotedMessage: { imageMessage: { mimetype: "image/jpeg" } },
+              },
+            },
+          },
+          messageTimestamp: 1_700_000_011,
+        },
+      ],
+    });
+
+    const inbound = await waitForMessage(onMessage);
+    expect(inbound.payload.body).toBe("inspect this\n\n[whatsapp quoted attachment unavailable]");
+    expect(inbound.payload.commandBody).toBe("inspect this");
+    const diagnostic = await waitForLogLine("quoted-failed");
+    expect(diagnostic).toContain('"channel":"whatsapp"');
+    expect(diagnostic).toContain('"mediaKind":"image"');
+    expect(diagnostic).toContain('"mimeType":"image/jpeg"');
+    expect(diagnostic).toContain('"failureStage":"quoted"');
+    expect(diagnostic).toContain('"errorClass":"Error"');
+    expect(diagnostic).toContain("quoted media reference expired");
 
     await listener.close();
   });
