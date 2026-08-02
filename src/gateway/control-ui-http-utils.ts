@@ -1,7 +1,7 @@
 // Control UI HTTP utilities provide tiny plain-text helpers for static routes
 // before requests enter the larger Gateway JSON/auth stack.
 import type { ServerResponse } from "node:http";
-import { acceptsAnyMediaType } from "./http-media-range.js";
+import { acceptsMediaType, hasExplicitAcceptableMediaRange } from "./http-media-range.js";
 
 // Small HTTP response helpers used by Control UI routes before they enter the
 // larger gateway JSON/auth stack.
@@ -16,7 +16,12 @@ export function acceptsControlUiHtmlResponse(accept: string | undefined): boolea
   if (!normalized) {
     return true;
   }
-  return acceptsAnyMediaType(normalized, ["text/html", "application/xhtml+xml"]);
+  // The server offers text/html. XHTML remains an explicit browser-document
+  // signal, but wildcards must not let that alias bypass an HTML rejection.
+  return (
+    acceptsMediaType(normalized, "text/html") ||
+    hasExplicitAcceptableMediaRange(normalized, "application/xhtml+xml")
+  );
 }
 
 /** Sends a plain-text response with the standard UTF-8 content type. */

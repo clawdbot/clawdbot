@@ -119,6 +119,22 @@ describe("Control UI SPA fallback Accept routing", () => {
       expected: false,
     },
     {
+      name: "text wildcard remains acceptable when XHTML is rejected",
+      basePath: "",
+      pathname: "/chat",
+      method: "GET",
+      accept: "application/xhtml+xml;q=0, text/*;q=1",
+      expected: true,
+    },
+    {
+      name: "explicit XHTML remains a browser document signal",
+      basePath: "",
+      pathname: "/chat",
+      method: "GET",
+      accept: "application/xhtml+xml",
+      expected: true,
+    },
+    {
       name: "quoted media parameter delimiters do not create a quality value",
       basePath: "",
       pathname: "/chat",

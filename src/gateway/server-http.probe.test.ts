@@ -192,6 +192,11 @@ describe("startup plugin HTTP routing", () => {
             { name: "empty header", accept: "" },
             { name: "nonzero HTML quality", accept: "text/html;q=0.5" },
             { name: "text wildcard", accept: "text/*" },
+            {
+              name: "text wildcard with rejected XHTML",
+              accept: "application/xhtml+xml;q=0, text/*",
+            },
+            { name: "explicit XHTML", accept: "application/xhtml+xml" },
             { name: "quoted parameter delimiters", accept: 'text/html;note="x; q=0; y"' },
           ];
           const nonHtmlCases = [

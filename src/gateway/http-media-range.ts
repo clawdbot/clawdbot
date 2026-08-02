@@ -200,25 +200,14 @@ function hasPositiveQualityAtBestSpecificity(
   return bestSpecificity >= 0 && bestQuality > 0;
 }
 
-/**
- * Checks whether an Accept field permits any offered media type.
- * Media parameters are intentionally ignored: callers use this for broad
- * representation families, not for selecting a parameterized variant.
- */
-export function acceptsAnyMediaType(
-  accept: string | undefined,
-  offeredMediaTypes: readonly string[],
-): boolean {
-  const representations = offeredMediaTypes
-    .map((mediaType) => parseMediaType(mediaType, false))
-    .filter((mediaType): mediaType is ParsedMediaType => mediaType !== null);
-  if (representations.length === 0) {
+/** Checks whether an Accept field permits an offered media type. */
+export function acceptsMediaType(accept: string | undefined, offeredMediaType: string): boolean {
+  const representation = parseMediaType(offeredMediaType, false);
+  if (!representation) {
     return false;
   }
   return hasPositiveQualityAtBestSpecificity(accept, (range) =>
-    Math.max(
-      ...representations.map((representation) => mediaTypeSpecificity(range, representation)),
-    ),
+    mediaTypeSpecificity(range, representation),
   );
 }
 
