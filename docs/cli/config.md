@@ -24,9 +24,11 @@ Guided sections: `workspace`, `model`, `web`, `gateway`, `daemon`, `channels`, `
 
 ```bash
 openclaw config file
+openclaw config file --json
 openclaw config --section model
 openclaw config --section gateway --section daemon
 openclaw config schema
+openclaw config schema --json
 openclaw config get browser.executablePath
 openclaw config set browser.executablePath "/usr/bin/google-chrome"
 openclaw config set browser.profiles.work.executablePath "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
@@ -68,6 +70,8 @@ openclaw config get agents.defaults.model --json
 
 Prints the active config file path, resolved from `OPENCLAW_CONFIG_PATH` or the default location. The path names a regular file, not a symlink; see [Write safety](#write-safety).
 
+With `--json`, stdout contains an object with the resolved path under `path`.
+
 ### `config schema`
 
 Prints the generated JSON schema for `openclaw.json` to stdout.
@@ -89,8 +93,12 @@ Prints the generated JSON schema for `openclaw.json` to stdout.
 
 ```bash
 openclaw config schema
+openclaw config schema --json
 openclaw config schema > openclaw.schema.json
 ```
+
+The schema is JSON in both modes. `--json` is accepted as the explicit
+machine-output spelling and keeps stdout reserved for the schema document.
 
 ### `config validate`
 

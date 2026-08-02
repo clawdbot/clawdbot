@@ -1282,7 +1282,7 @@ describe("skills cli commands", () => {
     expect(fetchClawHubSkillCardMock).not.toHaveBeenCalled();
   });
 
-  it("does not register a redundant --json option for verify", () => {
+  it("registers explicit --json output for verify", () => {
     const skills = createProgram().commands.find((command) => command.name() === "skills");
     const verify = skills?.commands.find((command) => command.name() === "verify");
 
@@ -1290,12 +1290,22 @@ describe("skills cli commands", () => {
       "--version",
       "--tag",
       "--card",
+      "--json",
       "--global",
       "--agent",
     ]);
   });
 
   it.each([
+    {
+      label: "default list",
+      argv: ["skills", "--json"],
+      assert: (payload: Record<string, unknown>) => {
+        const skills = payload.skills as Array<Record<string, unknown>>;
+        expect(skills).toHaveLength(1);
+        expect(skills[0]?.name).toBe("calendar");
+      },
+    },
     {
       label: "list",
       argv: ["skills", "list", "--json"],
