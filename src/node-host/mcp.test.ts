@@ -49,7 +49,9 @@ function createClient(params?: {
 const transport = {
   transport: {} as never,
   connectionTimeoutMs: 100,
-  requestTimeoutMs: 50,
+  // The catalog-bound tests synthesize megabyte descriptors; the timeout-specific
+  // regression below overrides this back to 50ms.
+  requestTimeoutMs: 1_000,
 };
 
 async function startManagerWithTools(listed: ReadonlyArray<{ serverName: string; tools: Tool[] }>) {
