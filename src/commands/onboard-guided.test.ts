@@ -252,6 +252,34 @@ describe("runGuidedOnboarding", () => {
     expect(prompter.outro).toHaveBeenCalledWith("Your browser is ready — I'll be in Settings.");
   });
 
+  it("uses a configured Control UI root without preparing default assets", async () => {
+    const config = {
+      gateway: { controlUi: { root: "/srv/openclaw-control-ui" } },
+    } satisfies OpenClawConfig;
+    readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      path: "/tmp/openclaw.json",
+      issues: [],
+      config,
+    });
+    const prompter = createWizardPrompter();
+    const probeBrowserHandoffGateway = vi.fn(async () => ({ ok: true }));
+    const runBrowserHandoff = vi.fn(async () => ({ handedOff: true as const }));
+    const deps = setupDeps({
+      prompter,
+      probeBrowserHandoffGateway,
+      runBrowserHandoff,
+    });
+
+    await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps);
+
+    expect(deps.ensureControlUiAssetsBuilt).not.toHaveBeenCalled();
+    expect(probeBrowserHandoffGateway).toHaveBeenCalledWith({ config });
+    expect(runBrowserHandoff).toHaveBeenCalledWith({ config, prompter });
+    expect(deps.launchHatchTui).not.toHaveBeenCalled();
+  });
+
   it("falls through to the terminal hatch when browser handoff does not connect", async () => {
     const prompter = createWizardPrompter();
     const runBrowserHandoff = vi.fn(async () => ({

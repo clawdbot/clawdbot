@@ -432,7 +432,8 @@ async function runGuidedOnboardingFlow(
     opts.tui !== true &&
     opts.skipUi !== true &&
     persistedConfig.gateway?.mode !== "remote" &&
-    persistedConfig.gateway?.controlUi?.enabled !== false
+    persistedConfig.gateway?.controlUi?.enabled !== false &&
+    !persistedConfig.gateway?.controlUi?.root?.trim()
   ) {
     const ensureControlUiAssetsBuilt =
       deps.ensureControlUiAssetsBuilt ??
