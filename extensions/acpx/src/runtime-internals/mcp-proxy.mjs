@@ -44,6 +44,9 @@ function shouldInject(method) {
   return method === "session/new" || method === "session/load" || method === "session/fork";
 }
 
+/** Grace period for a cooperative target to exit on forwarded stdin EOF. */
+const STDIN_EOF_GRACE_MS = 2_000;
+
 function rewriteLine(line, mcpServers) {
   if (!line.trim()) {
     return line;
@@ -135,6 +138,18 @@ function main() {
       return;
     }
     child.stdin.end();
+    // The host closed stdin: a cooperative target exits on the forwarded EOF.
+    // Give it a short grace period, then kill it and exit so a hung or
+    // stdin-ignoring target cannot leak both processes.
+    const killTimer = setTimeout(() => {
+      if (exiting) {
+        return;
+      }
+      exiting = true;
+      child.kill();
+      process.exit(0);
+    }, STDIN_EOF_GRACE_MS);
+    killTimer.unref();
   });
 
   child.stdout.pipe(process.stdout);

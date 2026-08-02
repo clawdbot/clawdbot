@@ -135,6 +135,60 @@ rl.on("line", (line) => process.stdout.write(line + "\n"));
     expect(prompt.params.mcpServers).toBeUndefined();
   });
 
+  it("kills a target that ignores forwarded stdin EOF after the host disconnects", async () => {
+    const hungServerPath = await makeTempScript(
+      "hung-server.cjs",
+      String.raw`#!/usr/bin/env node
+process.stdout.write("ready " + process.pid + "\n");
+setTimeout(() => {}, 300_000);
+`,
+    );
+
+    const payload = encodePayload({
+      targetCommand: `${process.execPath} ${hungServerPath}`,
+      mcpServers: [],
+    });
+
+    const child = spawn(process.execPath, [proxyPath, "--payload", payload], {
+      stdio: ["pipe", "pipe", "inherit"],
+      cwd: process.cwd(),
+    });
+
+    let stdout = "";
+    const targetPid = await new Promise<number>((resolve) => {
+      child.stdout.on("data", (chunk) => {
+        stdout += String(chunk);
+        const match = stdout.match(/ready (\d+)\n/);
+        if (match) {
+          resolve(Number(match[1]));
+        }
+      });
+    });
+
+    // Host disconnects: closing proxy stdin forwards EOF to the target.
+    child.stdin.end();
+
+    const exitCode = await new Promise<number | null>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        child.kill("SIGKILL");
+        try {
+          process.kill(targetPid, "SIGKILL");
+        } catch {
+          // target already gone
+        }
+        reject(new Error("proxy did not exit after host stdin EOF (target leak)"));
+      }, 6_000);
+      child.once("close", (code) => {
+        clearTimeout(timer);
+        resolve(code);
+      });
+    });
+
+    expect(exitCode).toBe(0);
+    // The grace-period kill must reap the stdin-ignoring target too.
+    expect(() => process.kill(targetPid, 0)).toThrow();
+  }, 15_000);
+
   it("reports target stdin pipe failures without an unhandled stream error", async () => {
     const closedStdinServerPath = await makeTempScript(
       "closed-stdin-server.cjs",
