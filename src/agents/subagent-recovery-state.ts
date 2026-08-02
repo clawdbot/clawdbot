@@ -1,4 +1,26 @@
 import type { SessionEntry } from "../config/sessions.js";
+import { isAgentEventLifecycleGenerationCurrent } from "../infra/agent-events.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
+
+export function shouldSuppressSubagentRecoverySessionEffects(entry: SubagentRunRecord): boolean {
+  if (entry.killIntent) {
+    const killLifecycleGeneration = entry.killIntent.lifecycleGeneration;
+    return (
+      typeof killLifecycleGeneration !== "string" ||
+      killLifecycleGeneration.length === 0 ||
+      !isAgentEventLifecycleGenerationCurrent(killLifecycleGeneration)
+    );
+  }
+  if (entry.execution.suppressSessionEffects === true) {
+    return true;
+  }
+  const lifecycleGeneration = entry.execution.restartRecovery?.lifecycleGeneration;
+  return (
+    typeof lifecycleGeneration === "string" &&
+    lifecycleGeneration.length > 0 &&
+    !isAgentEventLifecycleGenerationCurrent(lifecycleGeneration)
+  );
+}
 
 export function isSubagentRecoveryWedgedEntry(entry: unknown): boolean {
   const recovery =

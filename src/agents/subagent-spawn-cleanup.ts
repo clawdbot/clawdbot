@@ -1,10 +1,38 @@
 import { promises as fs } from "node:fs";
+import { SESSION_LIFECYCLE_CHANGED_ERROR_REASON } from "../config/sessions/lifecycle.js";
 import type { callGateway } from "../gateway/call.js";
 import { isFastTestRuntimeEnv } from "../infra/env.js";
 import { callSubagentGateway } from "./subagent-spawn-gateway.js";
 
 const SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS = 60_000;
 type GatewayCall = (options: Parameters<typeof callGateway>[0]) => Promise<unknown>;
+type SessionCleanupOutcome = "deleted" | "changed" | "failed";
+
+function isSessionLifecycleChangedGatewayError(error: unknown): boolean {
+  if (!(error instanceof Error) || error.name !== "GatewayClientRequestError") {
+    return false;
+  }
+  const requestError = error as Error & { gatewayCode?: unknown; details?: unknown };
+  const details = requestError.details;
+  return (
+    requestError.gatewayCode === "INVALID_REQUEST" &&
+    typeof details === "object" &&
+    details !== null &&
+    (details as { reason?: unknown }).reason === SESSION_LIFECYCLE_CHANGED_ERROR_REASON
+  );
+}
+
+function isMatchingAbortResponse(response: unknown, gatewayRunId: string): boolean {
+  if (!response || typeof response !== "object") {
+    return false;
+  }
+  const result = response as { aborted?: unknown; runIds?: unknown };
+  return (
+    result.aborted === true &&
+    Array.isArray(result.runIds) &&
+    result.runIds.some((runId) => runId === gatewayRunId)
+  );
+}
 
 export async function retrySubagentCleanup(
   attempt: () => boolean | Promise<boolean>,
@@ -31,14 +59,19 @@ export async function retrySubagentCleanup(
 type SessionCleanupOptions = {
   emitLifecycleHooks?: boolean;
   deleteTranscript?: boolean;
+  expectedSessionId?: string;
+  expectedLifecycleRevision?: string;
   callGateway?: GatewayCall;
   timeoutMs?: number;
 };
 
-export async function cleanupProvisionalSession(
+async function requestProvisionalSessionCleanup(
   childSessionKey: string,
   options?: SessionCleanupOptions,
-): Promise<boolean> {
+): Promise<SessionCleanupOutcome> {
+  if (!options?.expectedSessionId || !options.expectedLifecycleRevision) {
+    return "failed";
+  }
   try {
     await (options?.callGateway ?? callSubagentGateway)({
       method: "sessions.delete",
@@ -46,21 +79,41 @@ export async function cleanupProvisionalSession(
         key: childSessionKey,
         emitLifecycleHooks: options?.emitLifecycleHooks === true,
         deleteTranscript: options?.deleteTranscript === true,
+        ...(options?.expectedSessionId ? { expectedSessionId: options.expectedSessionId } : {}),
+        ...(options?.expectedLifecycleRevision
+          ? { expectedLifecycleRevision: options.expectedLifecycleRevision }
+          : {}),
       },
       timeoutMs: options?.timeoutMs ?? SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS,
     });
-    return true;
-  } catch {
+    return "deleted";
+  } catch (error) {
+    if (isSessionLifecycleChangedGatewayError(error)) {
+      return "changed";
+    }
     // Best-effort cleanup only.
-    return false;
+    return "failed";
   }
+}
+
+export async function cleanupProvisionalSession(
+  childSessionKey: string,
+  options?: SessionCleanupOptions,
+): Promise<boolean> {
+  return (await requestProvisionalSessionCleanup(childSessionKey, options)) === "deleted";
 }
 
 async function waitForProvisionalSessionDeletion(
   childSessionKey: string,
   options?: SessionCleanupOptions,
-): Promise<void> {
-  await retrySubagentCleanup(() => cleanupProvisionalSession(childSessionKey, options));
+): Promise<boolean> {
+  let deleted = false;
+  await retrySubagentCleanup(async () => {
+    const outcome = await requestProvisionalSessionCleanup(childSessionKey, options);
+    deleted = outcome === "deleted";
+    return outcome !== "failed";
+  });
+  return deleted;
 }
 
 export async function cleanupFailedSpawnBeforeAgentStart(params: {
@@ -69,6 +122,8 @@ export async function cleanupFailedSpawnBeforeAgentStart(params: {
   emitLifecycleHooks?: boolean;
   deleteTranscript?: boolean;
   waitForSessionDeletion?: boolean;
+  expectedSessionId?: string;
+  expectedLifecycleRevision?: string;
 }): Promise<{ attachmentsRemoved: boolean; sessionDeleted: boolean }> {
   let attachmentsRemoved = true;
   if (params.attachmentAbsDir) {
@@ -81,10 +136,15 @@ export async function cleanupFailedSpawnBeforeAgentStart(params: {
   const sessionCleanupOptions = {
     emitLifecycleHooks: params.emitLifecycleHooks,
     deleteTranscript: params.deleteTranscript,
+    expectedSessionId: params.expectedSessionId,
+    expectedLifecycleRevision: params.expectedLifecycleRevision,
   };
   if (params.waitForSessionDeletion) {
-    await waitForProvisionalSessionDeletion(params.childSessionKey, sessionCleanupOptions);
-    return { attachmentsRemoved, sessionDeleted: true };
+    const sessionDeleted = await waitForProvisionalSessionDeletion(
+      params.childSessionKey,
+      sessionCleanupOptions,
+    );
+    return { attachmentsRemoved, sessionDeleted };
   }
   return {
     attachmentsRemoved,
@@ -95,6 +155,8 @@ export async function cleanupFailedSpawnBeforeAgentStart(params: {
 export async function terminateAcceptedCollectorRun(params: {
   childSessionKey: string;
   gatewayRunId: string;
+  expectedSessionId?: string;
+  expectedLifecycleRevision?: string;
   callGateway?: GatewayCall;
   timeoutMs?: number;
 }): Promise<void> {
@@ -102,18 +164,25 @@ export async function terminateAcceptedCollectorRun(params: {
   const timeoutMs = params.timeoutMs ?? SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS;
   await retrySubagentCleanup(async () => {
     try {
-      await call({
+      const response = await call({
         method: "chat.abort",
         params: { sessionKey: params.childSessionKey, runId: params.gatewayRunId },
         timeoutMs,
       });
-      return true;
+      if (isMatchingAbortResponse(response, params.gatewayRunId)) {
+        return true;
+      }
     } catch {
-      return await cleanupProvisionalSession(params.childSessionKey, {
-        deleteTranscript: true,
-        callGateway: call,
-        timeoutMs,
-      });
+      // Fall through to exact-session deletion.
     }
+    const cleanup = await requestProvisionalSessionCleanup(params.childSessionKey, {
+      deleteTranscript: true,
+      expectedSessionId: params.expectedSessionId,
+      expectedLifecycleRevision: params.expectedLifecycleRevision,
+      callGateway: call,
+      timeoutMs,
+    });
+    // A changed lifecycle proves the accepted run no longer owns this session.
+    return cleanup !== "failed";
   });
 }

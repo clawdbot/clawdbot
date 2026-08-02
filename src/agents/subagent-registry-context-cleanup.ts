@@ -31,6 +31,7 @@ export function createSubagentRegistryContextCleanup(config: {
 
   async function runContextEngineSubagentEnded(
     params: ContextEngineSubagentEndedParams,
+    options?: { isCurrent?: () => boolean },
   ): Promise<void> {
     const cfg = deps().getRuntimeConfig();
     const registry = await loadSubagentRegistryPluginRuntimeHandle({
@@ -43,6 +44,9 @@ export function createSubagentRegistryContextCleanup(config: {
         agentDir: params.agentDir,
         workspaceDir: params.workspaceDir,
       });
+      if (options?.isCurrent?.() === false) {
+        return;
+      }
       await engine.onSubagentEnded?.(params);
     });
   }
@@ -50,9 +54,10 @@ export function createSubagentRegistryContextCleanup(config: {
   async function tryContextEngineSubagentEnded(
     params: ContextEngineSubagentEndedParams,
     warning: string,
+    options?: { isCurrent?: () => boolean },
   ): Promise<boolean> {
     try {
-      await runContextEngineSubagentEnded(params);
+      await runContextEngineSubagentEnded(params, options);
       return true;
     } catch (err) {
       warn(warning, { err });
@@ -62,45 +67,55 @@ export function createSubagentRegistryContextCleanup(config: {
 
   async function notifyContextEngineSubagentEnded(
     params: ContextEngineSubagentEndedParams,
+    options?: { isCurrent?: () => boolean },
   ): Promise<void> {
     await tryContextEngineSubagentEnded(
       params,
       "context-engine onSubagentEnded failed (best-effort)",
+      options,
     );
   }
 
-  async function cleanupCollectorLaunchResources(entry: SubagentRunRecord): Promise<boolean> {
+  async function cleanupCollectorLaunchResources(
+    entry: SubagentRunRecord,
+    options?: { isCurrent?: () => boolean },
+  ): Promise<boolean> {
+    const isCurrent = () => options?.isCurrent?.() !== false;
     let internalEffectsRemoved = true;
-    try {
-      await removeInternalSessionEffectsSession(entry.execution.transcriptTarget);
-    } catch (err) {
-      internalEffectsRemoved = false;
-      warn("failed to remove collector internal session effects", {
-        runId: entry.runId,
-        childSessionKey: entry.childSessionKey,
-        err,
-      });
+    if (isCurrent()) {
+      try {
+        await removeInternalSessionEffectsSession(entry.execution.transcriptTarget);
+      } catch (err) {
+        internalEffectsRemoved = false;
+        warn("failed to remove collector internal session effects", {
+          runId: entry.runId,
+          childSessionKey: entry.childSessionKey,
+          err,
+        });
+      }
     }
     const contextAlreadyEnded = typeof entry.contextEngineCleanupCompletedAt === "number";
-    const [attachmentsRemoved, contextEnded] = await Promise.all([
-      safeRemoveAttachmentsDir(entry),
-      contextAlreadyEnded
-        ? true
-        : tryContextEngineSubagentEnded(
-            {
-              childSessionKey: entry.childSessionKey,
-              reason: "deleted",
-              agentDir: entry.agentDir,
-              workspaceDir: entry.workspaceDir,
-            },
-            "context-engine collector cleanup failed",
-          ),
-    ]);
-    if (!contextAlreadyEnded && contextEnded) {
+    const attachmentsRemoved = await safeRemoveAttachmentsDir(entry);
+    if (!isCurrent()) {
+      return false;
+    }
+    const contextEnded = contextAlreadyEnded
+      ? true
+      : await tryContextEngineSubagentEnded(
+          {
+            childSessionKey: entry.childSessionKey,
+            reason: "deleted",
+            agentDir: entry.agentDir,
+            workspaceDir: entry.workspaceDir,
+          },
+          "context-engine collector cleanup failed",
+          options,
+        );
+    if (!contextAlreadyEnded && contextEnded && isCurrent()) {
       entry.contextEngineCleanupCompletedAt = Date.now();
       persist(entry.runId);
     }
-    return internalEffectsRemoved && attachmentsRemoved && contextEnded;
+    return internalEffectsRemoved && attachmentsRemoved && contextEnded && isCurrent();
   }
 
   function shouldEmitEndedHookForRun(params: {

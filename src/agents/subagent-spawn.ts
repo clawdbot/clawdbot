@@ -192,6 +192,10 @@ export async function spawnSubagentDirect(
         childSessionKey,
       };
     }
+    const provisionalSessionIdentity = {
+      expectedSessionId: initialSession.entry?.sessionId,
+      expectedLifecycleRevision: initialSession.entry?.lifecycleRevision,
+    };
     const preparedSpawnContext = await prepareSubagentSessionContext({
       cfg,
       contextMode,
@@ -204,6 +208,7 @@ export async function spawnSubagentDirect(
       await cleanupProvisionalSession(childSessionKey, {
         emitLifecycleHooks: false,
         deleteTranscript: true,
+        ...provisionalSessionIdentity,
       });
       return {
         status: "error",
@@ -221,6 +226,7 @@ export async function spawnSubagentDirect(
         await cleanupProvisionalSession(childSessionKey, {
           emitLifecycleHooks: false,
           deleteTranscript: true,
+          ...provisionalSessionIdentity,
         });
         return {
           status: "error",
@@ -249,6 +255,7 @@ export async function spawnSubagentDirect(
         await cleanupProvisionalSession(childSessionKey, {
           emitLifecycleHooks: false,
           deleteTranscript: true,
+          ...provisionalSessionIdentity,
         });
         return {
           status: "error",
@@ -306,6 +313,7 @@ export async function spawnSubagentDirect(
       await cleanupProvisionalSession(childSessionKey, {
         emitLifecycleHooks: threadBindingReady,
         deleteTranscript: true,
+        ...provisionalSessionIdentity,
       });
       return {
         status: materializedAttachments.status,
@@ -418,6 +426,7 @@ export async function spawnSubagentDirect(
             attachmentAbsDir,
             emitLifecycleHooks: threadBindingReady,
             deleteTranscript: true,
+            ...provisionalSessionIdentity,
           });
           return;
         }
@@ -461,6 +470,7 @@ export async function spawnSubagentDirect(
         await cleanupProvisionalSession(childSessionKey, {
           emitLifecycleHooks,
           deleteTranscript: true,
+          ...provisionalSessionIdentity,
         });
       },
     };
@@ -549,7 +559,11 @@ export async function spawnSubagentDirect(
                 );
               }
             } catch (error) {
-              await terminateAcceptedCollectorRun({ childSessionKey, gatewayRunId });
+              await terminateAcceptedCollectorRun({
+                childSessionKey,
+                gatewayRunId,
+                ...provisionalSessionIdentity,
+              });
               launchTerminationConfirmed = true;
               throw error;
             }
@@ -568,6 +582,7 @@ export async function spawnSubagentDirect(
               attachmentAbsDir,
               emitLifecycleHooks: threadBindingReady,
               deleteTranscript: true,
+              ...provisionalSessionIdentity,
               // A launch RPC can fail after acceptance. Keep the FIFO slot until
               // deleting the child session proves no accepted run remains active.
               waitForSessionDeletion: !launchTerminationConfirmed,

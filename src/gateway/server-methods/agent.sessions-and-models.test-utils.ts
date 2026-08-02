@@ -370,7 +370,7 @@ describe("gateway agent handler", () => {
     });
   });
 
-  it("keeps plugin SDK subagent runs best-effort when registry persistence fails", async () => {
+  it("rejects plugin SDK subagent runs when registry persistence fails", async () => {
     await withTempDir(
       { prefix: "openclaw-gateway-plugin-subagent-registry-fail-" },
       async (root) => {
@@ -414,6 +414,7 @@ describe("gateway agent handler", () => {
         const context = makeContext();
         const baseClient = requireValue(backendGatewayClient(), "expected backend client");
         const commandCallCount = mocks.agentCommand.mock.calls.length;
+        const respond = vi.fn();
 
         await invokeAgent(
           {
@@ -424,6 +425,7 @@ describe("gateway agent handler", () => {
           {
             context,
             reqId: runId,
+            respond,
             client: {
               connect: baseClient.connect,
               internal: {
@@ -436,18 +438,12 @@ describe("gateway agent handler", () => {
         );
 
         expect(persistSubagentRunsToDiskOrThrow).toHaveBeenCalledTimes(1);
-        expect(mocks.agentCommand).toHaveBeenCalledTimes(commandCallCount + 1);
-        await waitForAssertion(() => {
-          const task = requireValue(findTaskByRunId(runId), "expected fallback cli task");
-          expectRecordFields(task, {
-            runtime: "cli",
-            childSessionKey,
-            status: "succeeded",
-            terminalSummary: "completed",
-          });
-        });
+        expect(mocks.agentCommand).toHaveBeenCalledTimes(commandCallCount);
+        expect(findTaskByRunId(runId)).toBeUndefined();
+        const error = expectRespondError(respond, { code: ErrorCodes.UNAVAILABLE });
+        expectStringFieldContains(error, "message", "run was not started");
         expect(context.logGateway.warn).toHaveBeenCalledWith(
-          expect.stringContaining("falling back to cli task tracking"),
+          expect.stringContaining("rejecting untracked dispatch"),
         );
       },
     );

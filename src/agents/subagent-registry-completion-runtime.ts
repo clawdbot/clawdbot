@@ -145,8 +145,10 @@ export function createSubagentRegistryCompletionRuntime(config: {
 
   async function finalizeInterruptedSubagentRun(params: {
     runId: string;
+    expectedEntry?: SubagentRunRecord;
     error: string;
     endedAt?: number;
+    suppressSessionEffects?: boolean;
   }): Promise<number> {
     const runId = params.runId.trim();
     if (!runId) {
@@ -157,11 +159,11 @@ export function createSubagentRegistryCompletionRuntime(config: {
       typeof params.endedAt === "number" && Number.isFinite(params.endedAt)
         ? params.endedAt
         : Date.now();
-    pendingLifecycle.clear(runId);
     const entry = runs.get(runId);
-    if (!entry) {
+    if (!entry || (params.expectedEntry && entry !== params.expectedEntry)) {
       return 0;
     }
+    pendingLifecycle.clear(runId);
     if (
       typeof entry.cleanupCompletedAt === "number" &&
       entry.terminalOwner !== "interrupted-recovery"
@@ -170,6 +172,7 @@ export function createSubagentRegistryCompletionRuntime(config: {
     }
     const completionParams: SubagentCompletionRequest = {
       runId,
+      expectedEntry: entry,
       endedAt,
       outcome: {
         status: "error",
@@ -180,6 +183,7 @@ export function createSubagentRegistryCompletionRuntime(config: {
       accountId: entry.requesterOrigin?.accountId,
       triggerCleanup: true,
       recoverInterrupted: true,
+      suppressSessionEffects: params.suppressSessionEffects,
     };
     try {
       await completeSubagentRun(completionParams);

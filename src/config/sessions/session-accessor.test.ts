@@ -1617,6 +1617,27 @@ describe("session accessor seam", () => {
     expect(loadSessionEntry(scope)?.model).toBeUndefined();
   });
 
+  it("rejects a patch when its commit-edge ownership guard retires", async () => {
+    const scope = {
+      sessionKey: "agent:main:main",
+      storePath,
+    };
+    await upsertSessionEntry(scope, {
+      sessionId: "session-1",
+      updatedAt: 10,
+    });
+
+    await expect(
+      patchSessionEntry(scope, () => ({ model: "gpt-5.5" }), {
+        assertCommitAllowed: () => {
+          throw new Error("owner retired");
+        },
+      }),
+    ).rejects.toThrow("owner retired");
+
+    expect(loadSessionEntry(scope)?.model).toBeUndefined();
+  });
+
   it("can patch metadata without refreshing session activity", async () => {
     const scope = {
       sessionKey: "agent:main:main",

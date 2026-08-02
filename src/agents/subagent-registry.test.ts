@@ -201,6 +201,7 @@ const mocks = vi.hoisted(() => ({
     waitForAgent: vi.fn(),
     sendRecoveryNotice: vi.fn(),
   })),
+  lifecycleGeneration: "test-generation",
 }));
 
 vi.mock("../gateway/call.js", () => ({
@@ -208,9 +209,10 @@ vi.mock("../gateway/call.js", () => ({
 }));
 
 vi.mock("../infra/agent-events.js", () => ({
-  getAgentEventLifecycleGeneration: () => "test-generation",
+  getAgentEventLifecycleGeneration: () => mocks.lifecycleGeneration,
   getAgentRunContext: mocks.getAgentRunContext,
-  isAgentEventLifecycleGenerationCurrent: (generation: string) => generation === "test-generation",
+  isAgentEventLifecycleGenerationCurrent: (generation: string) =>
+    generation === mocks.lifecycleGeneration,
   onAgentEvent: mocks.onAgentEvent,
   registerAgentEventLifecycleRotationHandler: vi.fn(),
 }));
@@ -316,8 +318,22 @@ describe("subagent registry seam flow", () => {
     resetGatewayWorkAdmission();
     resetDetachedTaskLifecycleRuntimeForTests();
     vi.clearAllMocks();
+    mocks.callGateway.mockReset();
+    mocks.captureSubagentCompletionReply.mockReset().mockResolvedValue("final completion reply");
+    mocks.cleanupBrowserSessionsForLifecycleEnd.mockReset().mockResolvedValue(undefined);
+    mocks.persistSubagentRunsToDisk.mockReset();
+    mocks.persistSubagentRunsToDiskOrThrow.mockReset();
+    mocks.restoreSubagentRunsFromDisk.mockReset().mockReturnValue(0);
+    mocks.runSubagentAnnounceFlow.mockReset().mockResolvedValue(true);
+    mocks.maybeWakeRequesterAfterAllChildrenSettled
+      .mockReset()
+      .mockImplementation(async (params) => {
+        params.completeBatch([params.settledEntry.runId]);
+        return false;
+      });
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-24T12:00:00Z"));
+    mocks.lifecycleGeneration = "test-generation";
     mocks.onAgentEvent.mockReturnValue(noop);
     mocks.getAgentRunContext.mockReturnValue(undefined);
     mocks.getRuntimeConfig.mockReturnValue({
@@ -328,9 +344,10 @@ describe("subagent registry seam flow", () => {
       return sessionKey.match(/^agent:([^:]+)/)?.[1] ?? "main";
     });
     mocks.resolveStorePath.mockReturnValue("/tmp/test-session-store.json");
-    mocks.loadSessionStore.mockReturnValue(createSessionStore());
+    mocks.loadSessionStore.mockReturnValue(
+      createSessionStore({ lifecycleRevision: "revision-child" }),
+    );
     mocks.getGlobalHookRunner.mockReturnValue(null);
-    mocks.cleanupBrowserSessionsForLifecycleEnd.mockResolvedValue(undefined);
     mocks.resolveContextEngine.mockResolvedValue({
       onSubagentEnded: mocks.onSubagentEnded,
     });
@@ -341,7 +358,6 @@ describe("subagent registry seam flow", () => {
     });
     mocks.dispatchRecoveryAgent.mockReset().mockResolvedValue({ runId: "recovered-run" });
     mocks.resolveAgentTimeoutMs.mockReturnValue(1_000);
-    mocks.restoreSubagentRunsFromDisk.mockReturnValue(0);
     mocks.getSubagentRunsSnapshotForChildSession
       .mockReset()
       .mockImplementation((runs) => new Map(runs));
@@ -419,6 +435,15 @@ describe("subagent registry seam flow", () => {
 
   it("keeps a sweeper archive mutation root-admitted until deletion settles", async () => {
     const now = Date.now();
+    mocks.loadSessionStore.mockReturnValue(
+      createSessionStore(
+        {
+          lifecycleRevision: "revision-sweep-admission",
+          sessionId: "session-sweep-admission",
+        },
+        "agent:main:subagent:sweep-admission",
+      ),
+    );
     let releaseDelete: (() => void) | undefined;
     mocks.callGateway.mockImplementation((request: { method?: string }) => {
       if (request.method !== "sessions.delete") {
@@ -450,6 +475,18 @@ describe("subagent registry seam flow", () => {
 
   it("archives completed collector groups only after every member reaches TTL", async () => {
     const now = Date.now();
+    mocks.loadSessionStore.mockReturnValue({
+      "agent:main:subagent:collector-one": {
+        lifecycleRevision: "revision-collector-one",
+        sessionId: "session-collector-one",
+        updatedAt: now,
+      },
+      "agent:main:subagent:collector-two": {
+        lifecycleRevision: "revision-collector-two",
+        sessionId: "session-collector-two",
+        updatedAt: now,
+      },
+    });
     for (const [suffix, archiveAtMs] of [
       ["one", now - 1],
       ["two", now + 1_000],
@@ -546,6 +583,15 @@ describe("subagent registry seam flow", () => {
 
   it("refreshes collector membership after awaited sweep work", async () => {
     const now = Date.now();
+    mocks.loadSessionStore.mockReturnValue(
+      createSessionStore(
+        {
+          lifecycleRevision: "revision-archive-blocker",
+          sessionId: "session-archive-blocker",
+        },
+        "agent:main:subagent:archive-blocker",
+      ),
+    );
     let releaseFirstDelete: (() => void) | undefined;
     let shouldBlockDelete = true;
     mocks.callGateway.mockImplementation((request: { method?: string }) => {
@@ -598,6 +644,15 @@ describe("subagent registry seam flow", () => {
 
   it("revalidates collector membership after collector cleanup awaits", async () => {
     const now = Date.now();
+    mocks.loadSessionStore.mockReturnValue(
+      createSessionStore(
+        {
+          lifecycleRevision: "revision-collector-cleanup-snapshot",
+          sessionId: "session-collector-cleanup-snapshot",
+        },
+        "agent:main:subagent:collector-cleanup-snapshot",
+      ),
+    );
     let releaseCollectorDelete: (() => void) | undefined;
     mocks.callGateway.mockImplementation((request: { method?: string }) => {
       if (request.method !== "sessions.delete" || releaseCollectorDelete) {
@@ -638,6 +693,15 @@ describe("subagent registry seam flow", () => {
 
   it("keeps a collector replaced during collector cleanup awaits", async () => {
     const now = Date.now();
+    mocks.loadSessionStore.mockReturnValue(
+      createSessionStore(
+        {
+          lifecycleRevision: "revision-collector-before-replacement",
+          sessionId: "session-collector-before-replacement",
+        },
+        "agent:main:subagent:collector-before-replacement",
+      ),
+    );
     let releaseCollectorDelete: (() => void) | undefined;
     mocks.callGateway.mockImplementation((request: { method?: string }) => {
       if (request.method !== "sessions.delete" || releaseCollectorDelete) {
@@ -682,6 +746,18 @@ describe("subagent registry seam flow", () => {
 
   it("keeps collector groups while any member owes failed-launch cleanup", async () => {
     const now = Date.now();
+    mocks.loadSessionStore.mockReturnValue({
+      "agent:main:subagent:collector-clean": {
+        lifecycleRevision: "revision-collector-clean",
+        sessionId: "session-collector-clean",
+        updatedAt: now,
+      },
+      "agent:main:subagent:collector-cleanup-pending": {
+        lifecycleRevision: "revision-collector-cleanup-pending",
+        sessionId: "session-collector-cleanup-pending",
+        updatedAt: now,
+      },
+    });
     mod.addSubagentRunForTests({
       runId: "run-collector-clean",
       childSessionKey: "agent:main:subagent:collector-clean",
@@ -1084,6 +1160,53 @@ describe("subagent registry seam flow", () => {
     );
   });
 
+  it("does not relaunch a restored queued collector with durable kill intent", async () => {
+    const now = Date.now();
+    mocks.restoreSubagentRunsFromDisk.mockImplementation(((params: {
+      runs: Map<string, unknown>;
+    }) => {
+      params.runs.set(
+        "run-queued-kill-intent",
+        createSubagentRunRecord({
+          runId: "run-queued-kill-intent",
+          childSessionKey: "agent:main:subagent:queued-kill-intent",
+          requesterSessionKey: "agent:main:main",
+          requesterDisplayKey: "main",
+          task: "do not relaunch",
+          cleanup: "keep",
+          collect: true,
+          groupId: "kill-intent",
+          createdAt: now,
+          execution: { status: "queued" },
+          completion: { required: false },
+          killIntent: {
+            requestedAt: now + 1,
+            reason: "killed",
+            sessionId: "session-queued-kill-intent",
+          },
+          queuedLaunch: {
+            request: {
+              sessionKey: "agent:main:subagent:queued-kill-intent",
+              idempotencyKey: "run-queued-kill-intent",
+            },
+            timeoutMs: 1_000,
+            schedulerGroupKey: '["agent:main:main","kill-intent"]',
+            maxConcurrent: 1,
+          },
+        }),
+      );
+      return 1;
+    }) as never);
+
+    mod.initSubagentRegistry();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(mocks.callGateway.mock.calls.filter(([request]) => request.method === "agent")).toEqual(
+      [],
+    );
+  });
+
   it("rehydrates persisted collector FIFO queues after admission reopens", async () => {
     const now = Date.now();
     mocks.getRuntimeConfig.mockReturnValue({
@@ -1206,6 +1329,33 @@ describe("subagent registry seam flow", () => {
     });
   });
 
+  it("rejects queued collector acceptance from a retired Gateway lifecycle", () => {
+    mod.registerSubagentRun({
+      runId: "run-retired-acceptance",
+      childSessionKey: "agent:main:subagent:retired-acceptance",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "reject stale acceptance",
+      cleanup: "keep",
+      collect: true,
+      groupId: "retired-acceptance",
+      queued: true,
+      expectsCompletionMessage: false,
+    });
+
+    expect(
+      mod.startQueuedSubagentRun(
+        "run-retired-acceptance",
+        "gateway-retired-acceptance",
+        "retired-generation",
+      ),
+    ).toBe(false);
+    expect(mod.getSubagentRunByRunId("run-retired-acceptance")).toMatchObject({
+      execution: { status: "queued" },
+    });
+    expect(mod.getSubagentRunByRunId("gateway-retired-acceptance")).toBeUndefined();
+  });
+
   it("remaps a collector that completed before its acceptance response", () => {
     mod.addSubagentRunForTests({
       runId: "run-terminal-race",
@@ -1305,7 +1455,11 @@ describe("subagent registry seam flow", () => {
       return 2;
     }) as never);
     mocks.loadSessionStore.mockReturnValue({
-      "agent:main:subagent:run-restored-stop-one": { sessionId: "one", updatedAt: now },
+      "agent:main:subagent:run-restored-stop-one": {
+        sessionId: "one",
+        lifecycleRevision: "revision-one",
+        updatedAt: now,
+      },
       "agent:main:subagent:run-restored-stop-two": { sessionId: "two", updatedAt: now },
     });
     mocks.persistSubagentRunsToDiskOrThrow.mockImplementationOnce(() => {
@@ -1313,6 +1467,7 @@ describe("subagent registry seam flow", () => {
     });
     let agentCalls = 0;
     let releaseAbort: (() => void) | undefined;
+    const deleteReleases: Array<() => void> = [];
     mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
       if (request.method === "agent") {
         agentCalls += 1;
@@ -1324,7 +1479,9 @@ describe("subagent registry seam flow", () => {
         });
       }
       if (request.method === "sessions.delete") {
-        throw new Error("delete unavailable");
+        return await new Promise<Record<string, unknown>>((resolve) => {
+          deleteReleases.push(() => resolve({}));
+        });
       }
       return request.method === "agent.wait" ? { status: "pending" } : {};
     });
@@ -1334,6 +1491,24 @@ describe("subagent registry seam flow", () => {
     expect(agentCalls).toBe(1);
 
     releaseAbort?.();
+    await waitForFast(() => expect(deleteReleases).toHaveLength(1));
+    expect(agentCalls).toBe(1);
+    await waitForFast(() =>
+      expect(mocks.callGateway).toHaveBeenCalledWith(
+        expect.objectContaining({
+          method: "sessions.delete",
+          params: expect.objectContaining({
+            key: "agent:main:subagent:run-restored-stop-one",
+            expectedSessionId: "one",
+            expectedLifecycleRevision: "revision-one",
+          }),
+        }),
+      ),
+    );
+    deleteReleases[0]?.();
+    await waitForFast(() => expect(deleteReleases).toHaveLength(2));
+    expect(agentCalls).toBe(1);
+    deleteReleases[1]?.();
     await waitForFast(() => expect(agentCalls).toBe(2));
   });
 
@@ -1372,8 +1547,16 @@ describe("subagent registry seam flow", () => {
       return 2;
     }) as never);
     mocks.loadSessionStore.mockReturnValue({
-      "agent:main:subagent:run-restored-delete-one": { sessionId: "one", updatedAt: now },
-      "agent:main:subagent:run-restored-delete-two": { sessionId: "two", updatedAt: now },
+      "agent:main:subagent:run-restored-delete-one": {
+        lifecycleRevision: "revision-one",
+        sessionId: "one",
+        updatedAt: now,
+      },
+      "agent:main:subagent:run-restored-delete-two": {
+        lifecycleRevision: "revision-two",
+        sessionId: "two",
+        updatedAt: now,
+      },
     });
     let agentCalls = 0;
     let releaseDelete: (() => void) | undefined;
@@ -1399,6 +1582,96 @@ describe("subagent registry seam flow", () => {
 
     releaseDelete?.();
     await waitForFast(() => expect(agentCalls).toBe(2));
+  });
+
+  it("releases restored FIFO ownership when lifecycle rotates during failure persistence", async () => {
+    vi.useRealTimers();
+    const now = Date.now();
+    mocks.getRuntimeConfig.mockReturnValue({
+      tools: { swarm: { enabled: true, maxConcurrent: 1 } },
+      agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
+      session: { mainKey: "main", scope: "per-sender" as const },
+    });
+    const makeQueuedRun = (runId: string, createdAt: number) => ({
+      runId,
+      childSessionKey: `agent:main:subagent:${runId}`,
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: runId,
+      cleanup: "keep" as const,
+      collect: true,
+      groupId: "restore-lifecycle-rotation",
+      createdAt,
+      execution: { status: "queued" as const },
+      completion: { required: false },
+      queuedLaunch: {
+        request: { sessionKey: `agent:main:subagent:${runId}`, idempotencyKey: runId },
+        timeoutMs: 1_000,
+        schedulerGroupKey: '["agent:main:main","restore-lifecycle-rotation"]',
+        maxConcurrent: 1,
+      },
+    });
+    mocks.restoreSubagentRunsFromDisk.mockImplementation(((params: {
+      runs: Map<string, unknown>;
+    }) => {
+      params.runs.set("run-restored-rotation-one", makeQueuedRun("run-restored-rotation-one", now));
+      params.runs.set(
+        "run-restored-rotation-two",
+        makeQueuedRun("run-restored-rotation-two", now + 1),
+      );
+      return 2;
+    }) as never);
+    mocks.loadSessionStore.mockReturnValue({
+      "agent:main:subagent:run-restored-rotation-one": {
+        sessionId: "one",
+        lifecycleRevision: "revision-one",
+        updatedAt: now,
+      },
+      "agent:main:subagent:run-restored-rotation-two": {
+        sessionId: "two",
+        lifecycleRevision: "revision-two",
+        updatedAt: now,
+      },
+    });
+    let persistenceCalls = 0;
+    let concurrentSweep: Promise<void> | undefined;
+    mocks.persistSubagentRunsToDiskOrThrow.mockImplementation(() => {
+      persistenceCalls += 1;
+      if (persistenceCalls === 1) {
+        throw new Error("sqlite unavailable after Gateway acceptance");
+      }
+      if (persistenceCalls === 2) {
+        mocks.lifecycleGeneration = "rotated-generation";
+        concurrentSweep = mod.testing.sweepOnceForTests();
+        throw new Error("sqlite unavailable during failure settlement");
+      }
+    });
+    let agentCalls = 0;
+    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent") {
+        agentCalls += 1;
+        return { runId: `gateway-restored-rotation-${agentCalls}` };
+      }
+      return request.method === "agent.wait" ? { status: "pending" } : {};
+    });
+
+    mod.initSubagentRegistry();
+
+    await waitForFast(() => expect(persistenceCalls).toBeGreaterThanOrEqual(3));
+    await concurrentSweep;
+    await waitForFast(() => expect(agentCalls).toBe(2));
+    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    expect(mod.getSubagentRunByRunId("run-restored-rotation-one")).toMatchObject({
+      execution: {
+        status: "terminal",
+        suppressSessionEffects: true,
+        outcome: { status: "error" },
+      },
+      collectorCompletion: { status: "failed" },
+    });
+    expect(mod.getSubagentRunByRunId("gateway-restored-rotation-2")).toMatchObject({
+      execution: { status: "running", lifecycleGeneration: "rotated-generation" },
+    });
   });
 
   it("cleans prepared resources after a restored collector launch fails", async () => {
@@ -1429,7 +1702,11 @@ describe("subagent registry seam flow", () => {
       return 1;
     }) as never);
     mocks.loadSessionStore.mockReturnValue({
-      "agent:main:subagent:queued-failure": { sessionId: "queued-failure", updatedAt: now },
+      "agent:main:subagent:queued-failure": {
+        lifecycleRevision: "revision-queued-failure",
+        sessionId: "queued-failure",
+        updatedAt: now,
+      },
     });
     mockGatewayMethods(mocks.callGateway, {
       agent: new Error("launch failed"),
@@ -1505,6 +1782,7 @@ describe("subagent registry seam flow", () => {
     }) as never);
     mocks.loadSessionStore.mockReturnValue({
       "agent:main:subagent:queued-cleanup-retry": {
+        lifecycleRevision: "revision-queued-cleanup-retry",
         sessionId: "queued-cleanup-retry",
         updatedAt: now,
       },
@@ -3685,6 +3963,7 @@ describe("subagent registry seam flow", () => {
       const childSessionKey = "agent:main:subagent:stable-cancellation";
       mocks.loadSessionStore.mockReturnValue({
         [childSessionKey]: {
+          lifecycleRevision: "revision-stable-cancellation",
           sessionId: "sess-stable-cancellation",
           updatedAt: completedAt,
           status: "done",
@@ -3752,6 +4031,8 @@ describe("subagent registry seam flow", () => {
             key: childSessionKey,
             deleteTranscript: true,
             emitLifecycleHooks: false,
+            expectedLifecycleRevision: "revision-stable-cancellation",
+            expectedSessionId: "sess-stable-cancellation",
           },
           timeoutMs: 10_000,
         });
@@ -5359,10 +5640,12 @@ describe("subagent registry seam flow", () => {
   it("finalizes expired delete-mode parents when descendant cleanup retriggers deferred announce handling", async () => {
     mocks.loadSessionStore.mockReturnValue({
       "agent:main:subagent:parent": {
+        lifecycleRevision: "revision-parent",
         sessionId: "sess-parent",
         updatedAt: 1,
       },
       "agent:main:subagent:child": {
+        lifecycleRevision: "revision-child",
         sessionId: "sess-child",
         updatedAt: 1,
       },
@@ -5990,6 +6273,13 @@ describe("subagent registry seam flow", () => {
 
   it("passes stored agentDir through swept context-engine cleanup paths", async () => {
     const now = Date.parse("2026-03-24T12:00:00Z");
+    mocks.loadSessionStore.mockReturnValue({
+      "agent:alt:session:child-archive": {
+        lifecycleRevision: "revision-child-archive",
+        sessionId: "session-child-archive",
+        updatedAt: now,
+      },
+    });
     mod.addSubagentRunForTests({
       runId: "run-session-swept-context-engine",
       childSessionKey: "agent:alt:session:child-session",
@@ -6146,6 +6436,70 @@ describe("subagent registry seam flow", () => {
       });
     });
     expect(mocks.persistSubagentRunsToDisk).toHaveBeenCalled();
+  });
+
+  it("does not emit ended hooks before suspended delete retirement is durable", async () => {
+    const now = Date.parse("2026-03-24T12:00:00Z");
+    const runId = "run-suspended-delete-persist-failure";
+    const childSessionKey = "agent:main:subagent:suspended-delete-persist-failure";
+    mocks.getGlobalHookRunner.mockReturnValue({
+      hasHooks: (hookName: string) => hookName === "subagent_ended",
+      runSubagentEnded: mocks.runSubagentEnded,
+    } as never);
+    mocks.persistSubagentRunsToDiskOrThrow.mockImplementationOnce(() => {
+      throw new Error("registry deletion failed");
+    });
+    mod.addSubagentRunForTests({
+      runId,
+      childSessionKey,
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "discard suspended delete delivery",
+      cleanup: "delete",
+      expectsCompletionMessage: true,
+      spawnMode: "run",
+      createdAt: now - 25 * 60 * 60_000,
+      startedAt: now - 25 * 60 * 60_000,
+      endedAt: now - 25 * 60 * 60_000,
+      outcome: { status: "ok" },
+      delivery: {
+        status: "suspended",
+        createdAt: now - 25 * 60 * 60_000,
+        lastAttemptAt: now - 24 * 60 * 60_000 - 1,
+        attemptCount: 3,
+        lastError: "gateway request timeout for agent",
+        payload: {
+          requesterSessionKey: "agent:main:main",
+          requesterDisplayKey: "main",
+          childSessionKey,
+          childRunId: runId,
+          task: "discard suspended delete delivery",
+          endedAt: now - 25 * 60 * 60_000,
+          outcome: { status: "ok" },
+          expectsCompletionMessage: true,
+          frozenResultText: "final payload",
+        },
+        suspendedAt: now - 24 * 60 * 60_000 - 1,
+        suspendedReason: "retry-limit",
+      },
+    });
+    const original = structuredClone(mod.getSubagentRunByChildSessionKey(childSessionKey));
+
+    await expect(mod.testing.sweepOnceForTests()).rejects.toThrow("registry deletion failed");
+
+    expect(mod.getSubagentRunByChildSessionKey(childSessionKey)).toEqual(original);
+    expect(mocks.runSubagentEnded).not.toHaveBeenCalled();
+    expect(mocks.onSubagentEnded).not.toHaveBeenCalled();
+    expect(mocks.removeInternalSessionEffectsSession).not.toHaveBeenCalled();
+
+    await mod.testing.sweepOnceForTests();
+
+    expect(mod.getSubagentRunByChildSessionKey(childSessionKey)).toBeNull();
+    expect(mocks.runSubagentEnded).toHaveBeenCalledTimes(1);
+    await waitForFast(() => {
+      expect(mocks.removeInternalSessionEffectsSession).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("pressure-prunes oldest suspended final deliveries when backlog exceeds hard cap", async () => {

@@ -142,18 +142,34 @@ export function createSubagentRegistryLifecycleRequesterWake(
 
   const persistRequesterSettleWakePending = (
     entry: SubagentRunRecord,
-    options?: { cleanupCompletedAt?: number; retireAfterSettle?: boolean },
+    options?: {
+      cleanupCompletedAt?: number;
+      retireAfterSettle?: boolean;
+      retireInterruptedRecovery?: boolean;
+    },
   ) => {
     const previousCleanupCompletedAt = entry.cleanupCompletedAt;
+    const previousExecution = entry.execution;
+    const previousTerminalOwner = entry.terminalOwner;
     const previousWake = structuredClone(entry.requesterSettleWake);
     if (options?.cleanupCompletedAt !== undefined) {
       entry.cleanupCompletedAt = options.cleanupCompletedAt;
+    }
+    if (options?.retireInterruptedRecovery) {
+      entry.execution = {
+        ...entry.execution,
+        restartRecovery: undefined,
+        suppressSessionEffects: true,
+      };
+      entry.terminalOwner = undefined;
     }
     markRequesterSettleWakePending(entry, options);
     try {
       params.persistOrThrow(entry.runId);
     } catch (error) {
       entry.cleanupCompletedAt = previousCleanupCompletedAt;
+      entry.execution = previousExecution;
+      entry.terminalOwner = previousTerminalOwner;
       entry.requesterSettleWake = previousWake;
       throw error;
     }
