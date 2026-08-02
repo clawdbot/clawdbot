@@ -11,6 +11,7 @@ import {
 import { resolveCronStaggerMs } from "../stagger.js";
 import { createCronStreamSourceIdentity, resolveCronStreamBatching } from "../stream-schedule.js";
 import type { CronJob, CronSchedule } from "../types.js";
+import { autoDisableCronJob, type DeferredAutoDisableNotifications } from "./auto-disable.js";
 import { normalizePayloadToSystemText } from "./normalize.js";
 import { isQueuedCronRun, isQueuedForceCronRun } from "./run-admission.js";
 import type { CronServiceState } from "./state.js";
@@ -358,7 +359,7 @@ export function recordScheduleComputeError(params: {
   state: CronServiceState;
   job: CronJob;
   err: unknown;
-  deferredAutoDisableNotifications?: Array<() => void>;
+  deferredAutoDisableNotifications?: DeferredAutoDisableNotifications;
 }): boolean {
   const { state, job, err } = params;
   const errorCount = (job.state.scheduleErrorCount ?? 0) + 1;
@@ -369,33 +370,19 @@ export function recordScheduleComputeError(params: {
   job.state.lastError = `schedule error: ${errText}`;
 
   if (errorCount >= MAX_SCHEDULE_ERRORS) {
-    job.enabled = false;
+    autoDisableCronJob({
+      state,
+      job,
+      reason: "schedule-errors",
+      atMs: state.deps.nowMs(),
+      consecutiveErrors: errorCount,
+      error: errText,
+      deferredNotifications: params.deferredAutoDisableNotifications,
+    });
     state.deps.log.error(
       { jobId: job.id, name: job.name, errorCount, err: errText },
       "cron: auto-disabled job after repeated schedule errors",
     );
-
-    const notifyText = `⚠️ Automation "${job.name}" has been auto-disabled after ${errorCount} consecutive schedule errors. Last error: ${errText}`;
-    const notify = () => {
-      state.deps.enqueueSystemEvent(notifyText, {
-        agentId: job.agentId,
-        sessionKey: job.sessionKey,
-        contextKey: `cron:${job.id}:auto-disabled`,
-      });
-      state.deps.requestHeartbeat({
-        source: "cron",
-        intent: "event",
-        reason: `cron:${job.id}:auto-disabled`,
-        agentId: job.agentId,
-        sessionKey: job.sessionKey,
-      });
-    };
-    if (params.deferredAutoDisableNotifications) {
-      params.deferredAutoDisableNotifications.push(notify);
-    } else {
-      // Notify the user so the auto-disable is not silent (#28861).
-      notify();
-    }
   } else {
     state.deps.log.warn(
       { jobId: job.id, name: job.name, errorCount, err: errText },
@@ -552,7 +539,7 @@ function recomputeJobNextRunAtMs(params: {
   state: CronServiceState;
   job: CronJob;
   nowMs: number;
-  deferredAutoDisableNotifications?: Array<() => void>;
+  deferredAutoDisableNotifications?: DeferredAutoDisableNotifications;
 }) {
   let changed = false;
   try {
@@ -628,7 +615,7 @@ export function recomputeNextRunsForMaintenance(
     nowMs?: number;
     repairFutureCronNextRunAtMs?: boolean;
     preserveExpiredPacedNextRunJobId?: string;
-    deferredAutoDisableNotifications?: Array<() => void>;
+    deferredAutoDisableNotifications?: DeferredAutoDisableNotifications;
   },
 ): boolean {
   const recomputeExpired = opts?.recomputeExpired ?? false;

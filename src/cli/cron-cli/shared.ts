@@ -174,8 +174,7 @@ function computeStatus(job: CronJob): string {
 }
 
 // Human-facing decoration only: enrichCronJsonWithStatus() emits computeStatus()
-// verbatim as the --json `status` field, so the failure count must stay out of it.
-// consecutiveErrors resets to 0 on the next successful run, so the count is live.
+// verbatim as the --json `status` field, so failure and disable detail stays out of it.
 function decorateStatusWithFailures(status: string, consecutiveErrors: number | undefined): string {
   const failures = consecutiveErrors ?? 0;
   if (status !== "error" || failures <= 1) {
@@ -188,6 +187,11 @@ function decorateStatusWithFailures(status: string, consecutiveErrors: number | 
 
 function formatCronStatusForDisplay(job: CronJob): string {
   const state = job.state ?? {};
+  if (computeStatus(job) === "disabled" && state.autoDisabled) {
+    return state.autoDisabled.reason === "schedule-errors"
+      ? "disabled (schedule)"
+      : `disabled (${state.autoDisabled.consecutiveErrors}x)`;
+  }
   return decorateStatusWithFailures(computeStatus(job), state.consecutiveErrors);
 }
 
@@ -323,7 +327,7 @@ const CRON_NAME_PAD = 24;
 const CRON_SCHEDULE_PAD = 32;
 const CRON_NEXT_PAD = 10;
 const CRON_LAST_PAD = 10;
-const CRON_STATUS_PAD = 12;
+const CRON_STATUS_PAD = 19;
 const CRON_TARGET_PAD = 9;
 const CRON_DELIVERY_PAD = 64;
 const CRON_AGENT_PAD = 10;

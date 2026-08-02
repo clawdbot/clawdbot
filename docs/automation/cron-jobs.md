@@ -347,6 +347,8 @@ Failure notifications follow a separate destination path:
 
 Chat failure notifications include the run start time in the agent's configured user timezone. Webhook message text stays stable; integrations can read the same instant from the structured `runAtMs` field.
 
+Failure alerts are opt-in, but the scheduler also provides an unconditional safety backstop. A time-based recurring job is auto-disabled after 10 consecutive execution failures; a successful run resets that streak. Repeated schedule-computation failures auto-disable after 3 errors. The job records `state.autoDisabled.reason` as `consecutive-failures` or `schedule-errors`, and the owning agent receives a notification with the last error and recovery command. After fixing the cause, run `openclaw automations enable <jobId>`; enabling clears the recorded reason and failure streaks. Because disabled jobs are hidden by the default list, use `openclaw automations list --all` to inspect them.
+
 ### Output language
 
 Automation jobs do not infer a reply language from channel, locale, or previous messages. Put the language rule in the scheduled message or template:

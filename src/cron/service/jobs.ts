@@ -384,7 +384,13 @@ export function applyJobPatch(
     // Runtime state patches may report execution progress, but the scheduler
     // alone owns the boundary that decides whether restart catch-up can run.
     delete statePatch.scheduleActivatedAtMs;
+    delete statePatch.autoDisabled;
     job.state = { ...job.state, ...statePatch };
+  }
+  if (patch.enabled === true) {
+    delete job.state.autoDisabled;
+    job.state.consecutiveErrors = 0;
+    job.state.scheduleErrorCount = 0;
   }
   if ("agentId" in patch) {
     job.agentId = normalizeOptionalAgentId((patch as { agentId?: unknown }).agentId);
