@@ -8,7 +8,7 @@ import type { ApplicationContext, ApplicationGatewaySnapshot } from "../app/cont
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import type { SessionsRouteData } from "./sessions/sessions-page.ts";
 import type { SkillsRouteData } from "./skills/skills-page.ts";
-import type { UsageRefreshReason } from "./usage/refresh-policy.ts";
+import type { UsageRefreshPolicy } from "./usage/refresh-policy.ts";
 import type { UsageRouteData } from "./usage/usage-page.ts";
 import "./cron/cron-page.ts";
 import "./debug/debug-page.ts";
@@ -323,7 +323,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
       routeData: UsageRouteData;
       usageResult: UsageRouteData["result"];
       gateway: TestGatewayController;
-      requestUsageRefresh: (reason: UsageRefreshReason) => void;
+      refreshPolicy: UsageRefreshPolicy;
     };
     page.routeData = {
       gateway: context.gateway,
@@ -344,7 +344,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
 
     document.body.append(page);
     await page.updateComplete;
-    page.requestUsageRefresh("manual");
+    page.refreshPolicy.request("manual");
     await waitForFast(() => expect(usageRequestCount).toBe(1));
     applyPageGatewaySnapshot(page, {
       ...context.gateway.snapshot,
@@ -380,8 +380,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
     const page = createPage("openclaw-usage-page", harness.context) as TestPage & {
       routeData: UsageRouteData;
       readonly usageLoading: boolean;
-      lastLoadedAtMs: number | null;
-      requestUsageRefresh: (reason: UsageRefreshReason) => void;
+      refreshPolicy: UsageRefreshPolicy;
     };
     page.routeData = {
       gateway: harness.context.gateway,
@@ -407,7 +406,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
     harness.emitConnected(true);
     expect(request).not.toHaveBeenCalled();
 
-    page.lastLoadedAtMs = Date.now() - USAGE_PAYLOAD_TTL_MS;
+    page.refreshPolicy.setLastLoadedAtMs(Date.now() - USAGE_PAYLOAD_TTL_MS);
     visibility.mockReturnValue("hidden");
     harness.emitConnected(false);
     harness.emitConnected(true);
@@ -423,16 +422,16 @@ describe("gateway source replacement across reconnect with a reused client", () 
       "usage.status",
     ]);
 
-    page.requestUsageRefresh("manual");
+    page.refreshPolicy.request("manual");
     await waitForFast(() => expect(page.usageLoading).toBe(false));
     expect(request).toHaveBeenCalledTimes(6);
 
     const failedRefresh = deferred<never>();
     request.mockImplementationOnce(() => failedRefresh.promise);
-    page.lastLoadedAtMs = Date.now() - USAGE_PAYLOAD_TTL_MS;
-    page.requestUsageRefresh("manual");
+    page.refreshPolicy.setLastLoadedAtMs(Date.now() - USAGE_PAYLOAD_TTL_MS);
+    page.refreshPolicy.request("manual");
     expect(request).toHaveBeenCalledTimes(9);
-    page.requestUsageRefresh("focus");
+    page.refreshPolicy.request("focus");
     failedRefresh.reject(new Error("connection interrupted"));
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(12));
     await waitForFast(() => expect(page.usageLoading).toBe(false));

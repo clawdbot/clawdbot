@@ -47,7 +47,7 @@ import {
   toUsageErrorMessage,
 } from "./helpers.ts";
 import { renderUsagePageShell } from "./page-shell.ts";
-import { decideUsageRefresh, type UsageRefreshReason } from "./refresh-policy.ts";
+import { UsageRefreshPolicy } from "./refresh-policy.ts";
 import {
   DEFAULT_VISIBLE_COLUMNS,
   type SessionLogEntry,
@@ -138,11 +138,10 @@ class UsagePage extends OpenClawLightDomElement {
   private usageTaskActiveClient: GatewayBrowserClient | null = null;
   private routeDataInitialized = false;
   private routeDataEnabled = true;
-  private lastLoadedAtMs: number | null = null;
-  private pendingAutomaticRefresh = false;
-  // Disconnects invalidate active work; keep this set until policy permits a
-  // visible-page retry, even while the prior payload remains fresh.
-  private reloadPending = false;
+  private readonly refreshPolicy = new UsageRefreshPolicy({
+    isLoading: () => this.usageLoading,
+    reload: () => this.performUsageReload(),
+  });
   private readonly gateway = new GatewayPageController(this, {
     getGateway: () => this.context?.gateway,
     onIdentityChange: () => this.resetForClientChange(),
@@ -150,20 +149,20 @@ class UsagePage extends OpenClawLightDomElement {
       if (change.snapshot.phase === "connected") {
         return;
       }
-      this.reloadPending ||= this.usageLoading;
+      this.refreshPolicy.interrupt();
       this.usageTaskActiveClient = null;
       void this.usageTask.run(this.usageTaskArgs(null));
       void this.usageTimeSeriesTask.run([null, ""]);
       void this.usageSessionLogsTask.run([null, ""]);
     },
     onSnapshot: (change) => this.handleGatewaySnapshot(change),
-    onPageActivation: () => this.requestUsageRefresh("focus"),
+    onPageActivation: () => this.refreshPolicy.request("focus"),
   });
   private readonly observeAgentScope = watchAgentScope((scopeId) => {
     if (this.routeDataInitialized && this.usageAgentId !== scopeId) {
       this.usageAgentId = scopeId;
       this.clearSelectionsAndDetails();
-      this.reloadUsage();
+      this.refreshPolicy.reload();
     }
     this.requestUpdate();
   });
@@ -189,7 +188,7 @@ class UsagePage extends OpenClawLightDomElement {
       if (this.routeDataEnabled) {
         return initialState;
       }
-      this.reloadPending = false;
+      this.refreshPolicy.beginLoad();
       const agentId = normalizedAgentId || undefined;
       const agentScopeParams = agentId ? { agentId } : { agentScope: "all" as const };
       const [result, costSummary, providerUsageSummary] = await Promise.all([
@@ -216,8 +215,8 @@ class UsagePage extends OpenClawLightDomElement {
       this.usageCostSummary = value.costSummary;
       this.providerUsageSummary = value.providerUsageSummary;
       this.usageError = null;
-      this.lastLoadedAtMs = Date.now();
-      this.flushPendingUsageRefresh();
+      this.refreshPolicy.markLoaded();
+      this.refreshPolicy.flushPending();
     },
     onError: (error) => {
       this.usageTaskActiveClient = null;
@@ -228,7 +227,7 @@ class UsagePage extends OpenClawLightDomElement {
       } else {
         this.usageError = toUsageErrorMessage(error);
       }
-      this.flushPendingUsageRefresh();
+      this.refreshPolicy.flushPending();
     },
   });
 
@@ -323,7 +322,7 @@ class UsagePage extends OpenClawLightDomElement {
     if (data.query.agentId !== currentAgentId) {
       this.usageAgentId = currentAgentId;
       this.clearSelectionsAndDetails();
-      this.reloadUsage();
+      this.refreshPolicy.reload();
       return;
     }
 
@@ -337,7 +336,7 @@ class UsagePage extends OpenClawLightDomElement {
     this.usageResult = data.result;
     this.usageCostSummary = data.costSummary;
     this.providerUsageSummary = data.providerUsageSummary;
-    this.lastLoadedAtMs = data.loadedAtMs;
+    this.refreshPolicy.setLastLoadedAtMs(data.loadedAtMs);
     this.usageError = data.error;
   }
 
@@ -364,8 +363,7 @@ class UsagePage extends OpenClawLightDomElement {
     this.usageResult = null;
     this.usageCostSummary = null;
     this.providerUsageSummary = null;
-    this.lastLoadedAtMs = null;
-    this.reloadPending = false;
+    this.refreshPolicy.resetPayload();
     this.usageError = null;
     this.usageAgentId = this.context.agentSelection.state.scopeId;
     this.clearSelectionsAndDetails();
@@ -386,7 +384,7 @@ class UsagePage extends OpenClawLightDomElement {
   private loadUsage(): Promise<void> {
     const client = this.gateway.client;
     if (!client || !this.gateway.connected) {
-      this.reloadPending = true;
+      this.refreshPolicy.markLoadDeferred();
       return Promise.resolve();
     }
     if (this.usageLoading) {
@@ -475,39 +473,8 @@ class UsagePage extends OpenClawLightDomElement {
     }
     void this.context.agents.ensureList();
     if (this.routeDataInitialized && (change.identityChanged || change.becameConnected)) {
-      this.requestUsageRefresh("reconnect");
+      this.refreshPolicy.request("reconnect");
     }
-  }
-
-  private reloadUsage() {
-    this.pendingAutomaticRefresh = false;
-    this.performUsageReload();
-  }
-
-  private requestUsageRefresh(reason: UsageRefreshReason) {
-    if (this.usageLoading && reason !== "manual") {
-      this.pendingAutomaticRefresh = true;
-      return;
-    }
-    this.pendingAutomaticRefresh = false;
-    const decision = decideUsageRefresh({
-      reason,
-      visible: document.visibilityState === "visible" && document.hasFocus(),
-      interrupted: this.reloadPending,
-      nowMs: Date.now(),
-      lastLoadedAtMs: this.lastLoadedAtMs,
-    });
-    if (decision === "fetch") {
-      this.reloadUsage();
-    }
-  }
-
-  private flushPendingUsageRefresh() {
-    if (!this.pendingAutomaticRefresh) {
-      return;
-    }
-    this.pendingAutomaticRefresh = false;
-    this.requestUsageRefresh("focus");
   }
 
   private clearQueryDebounce() {
@@ -617,16 +584,16 @@ class UsagePage extends OpenClawLightDomElement {
           onScopeChange: (scope) => {
             this.usageScope = scope;
             this.clearSelectionsAndDetails();
-            this.reloadUsage();
+            this.refreshPolicy.reload();
           },
           onAgentChange: (agentId) => {
             this.context.agentSelection.setScope(agentId);
           },
-          onRefresh: () => this.requestUsageRefresh("manual"),
+          onRefresh: () => this.refreshPolicy.request("manual"),
           onTimeZoneChange: (timeZone) => {
             this.usageTimeZone = timeZone;
             this.clearSelectionsAndDetails();
-            this.reloadUsage();
+            this.refreshPolicy.reload();
           },
           onToggleHeaderPinned: () => {
             this.usageHeaderPinned = !this.usageHeaderPinned;

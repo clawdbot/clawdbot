@@ -130,8 +130,8 @@ class NodesPage extends OpenClawLightDomElement {
     this,
     NODES_ACTIVE_POLL_INTERVAL_MS,
     () => {
-      void this.runNodeTask((state) => loadNodes(state, { quiet: true }));
-      void this.runNodeTask((state) => loadDevices(state, { quiet: true }));
+      void this.runNodeTask((nodeState) => loadNodes(nodeState, { quiet: true }));
+      void this.runNodeTask((nodeState) => loadDevices(nodeState, { quiet: true }));
     },
     false,
   );
@@ -155,15 +155,15 @@ class NodesPage extends OpenClawLightDomElement {
             void this.presenceTask.run([null, null]);
             this.presence = presence;
             if (connectivityChanged) {
-              void this.runNodeTask((state) => loadDevices(state, { quiet: true }));
-              void this.runNodeTask((state) => loadNodes(state, { quiet: true }));
+              void this.runNodeTask((nodeState) => loadDevices(nodeState, { quiet: true }));
+              void this.runNodeTask((nodeState) => loadNodes(nodeState, { quiet: true }));
             }
           }
           if (event.event === "device.pair.requested" || event.event === "device.pair.resolved") {
-            void this.runNodeTask((state) => loadDevices(state, { quiet: true }));
+            void this.runNodeTask((nodeState) => loadDevices(nodeState, { quiet: true }));
           }
           if (event.event === "node.pair.requested" || event.event === "node.pair.resolved") {
-            void this.runNodeTask((state) => loadNodes(state, { quiet: true }));
+            void this.runNodeTask((nodeState) => loadNodes(nodeState, { quiet: true }));
           }
         }),
     );
@@ -257,37 +257,39 @@ class NodesPage extends OpenClawLightDomElement {
     this.presence = [];
   }
 
-  private async runNodeTask<T>(task: (state: NodesPageDataState) => T | Promise<T>): Promise<T> {
-    const state = this.nodeState;
+  private async runNodeTask<T>(
+    task: (nodeState: NodesPageDataState) => T | Promise<T>,
+  ): Promise<T> {
+    const nodeState = this.nodeState;
     try {
-      const result = task(state);
-      if (this.nodeState === state) {
+      const result = task(nodeState);
+      if (this.nodeState === nodeState) {
         this.requestUpdate();
       }
       return await result;
     } finally {
-      if (this.nodeState === state) {
+      if (this.nodeState === nodeState) {
         this.requestUpdate();
       }
     }
   }
 
   private ensureInitialData() {
-    const state = this.nodeState;
-    if (!state.connected || !state.client || !this.routeDataInitialized) {
+    const nodeState = this.nodeState;
+    if (!nodeState.connected || !nodeState.client || !this.routeDataInitialized) {
       return;
     }
-    if (!state.nodes.length && !state.nodesLoading) {
+    if (!nodeState.nodes.length && !nodeState.nodesLoading) {
       void this.runNodeTask((current) => loadNodes(current));
     }
-    if (!state.devicesList && !state.devicesLoading) {
+    if (!nodeState.devicesList && !nodeState.devicesLoading) {
       void this.runNodeTask((current) => loadDevices(current));
     }
     const config = this.context.runtimeConfig.state;
     if (!config.configSnapshot && !config.configLoading) {
       void this.context.runtimeConfig.refresh();
     }
-    if (!state.execApprovalsSnapshot && !state.execApprovalsLoading) {
+    if (!nodeState.execApprovalsSnapshot && !nodeState.execApprovalsLoading) {
       void this.runNodeTask((current) =>
         loadExecApprovals(current, this.resolveExecApprovalsTarget()),
       );
@@ -361,10 +363,10 @@ class NodesPage extends OpenClawLightDomElement {
       return;
     }
     if (prompt.kind === "entry") {
-      void this.runNodeTask((state) => removeInventoryEntry(state, prompt.entry));
+      void this.runNodeTask((nodeState) => removeInventoryEntry(nodeState, prompt.entry));
       return;
     }
-    void this.runNodeTask((state) => removeStaleInventoryEntries(state, prompt.entries));
+    void this.runNodeTask((nodeState) => removeStaleInventoryEntries(nodeState, prompt.entries));
   }
 
   private resolveExecApprovalsTarget(): ExecApprovalsTarget {
@@ -416,13 +418,13 @@ class NodesPage extends OpenClawLightDomElement {
           execApprovalsTargetNodeId: this.execApprovalsTargetNodeId,
           onDevicePairSetupOpen: () => void this.context.overlays.openDevicePairSetup(),
           onDeviceApprove: (requestId) =>
-            void this.runNodeTask((state) => approveDevicePairing(state, requestId)),
+            void this.runNodeTask((nodeState) => approveDevicePairing(nodeState, requestId)),
           onDeviceReject: (requestId) =>
-            void this.runNodeTask((state) => rejectDevicePairing(state, requestId)),
+            void this.runNodeTask((nodeState) => rejectDevicePairing(nodeState, requestId)),
           onNodeApprove: (requestId) =>
-            void this.runNodeTask((state) => approveNodePairingRequest(state, requestId)),
+            void this.runNodeTask((nodeState) => approveNodePairingRequest(nodeState, requestId)),
           onNodeReject: (requestId) =>
-            void this.runNodeTask((state) => rejectNodePairingRequest(state, requestId)),
+            void this.runNodeTask((nodeState) => rejectNodePairingRequest(nodeState, requestId)),
           onInventoryRemove: (entry) => void this.confirmInventoryRemoval({ kind: "entry", entry }),
           onInventoryCleanup: (entries) => {
             if (entries.length > 0) {
@@ -430,8 +432,8 @@ class NodesPage extends OpenClawLightDomElement {
             }
           },
           onDeviceRotate: (deviceId, role, scopes) =>
-            void this.runNodeTask((state) =>
-              rotateDeviceToken(state, {
+            void this.runNodeTask((nodeState) =>
+              rotateDeviceToken(nodeState, {
                 deviceId,
                 gatewayUrl: this.context.gateway.connection.gatewayUrl,
                 role,
@@ -439,8 +441,8 @@ class NodesPage extends OpenClawLightDomElement {
               }),
             ),
           onDeviceRevoke: (deviceId, role) =>
-            void this.runNodeTask((state) =>
-              revokeDeviceToken(state, {
+            void this.runNodeTask((nodeState) =>
+              revokeDeviceToken(nodeState, {
                 deviceId,
                 gatewayUrl: this.context.gateway.connection.gatewayUrl,
                 role,
@@ -449,8 +451,8 @@ class NodesPage extends OpenClawLightDomElement {
           onLoadConfig: () =>
             void this.context.runtimeConfig.refresh({ discardPendingChanges: true }),
           onLoadExecApprovals: () =>
-            void this.runNodeTask((state) =>
-              loadExecApprovals(state, this.resolveExecApprovalsTarget()),
+            void this.runNodeTask((nodeState) =>
+              loadExecApprovals(nodeState, this.resolveExecApprovalsTarget()),
             ),
           onBindDefault: (nodeId) => {
             if (nodeId) {
@@ -488,12 +490,14 @@ class NodesPage extends OpenClawLightDomElement {
             this.requestUpdate();
           },
           onExecApprovalsPatch: (path, value) =>
-            void this.runNodeTask((state) => updateExecApprovalsFormValue(state, path, value)),
+            void this.runNodeTask((nodeState) =>
+              updateExecApprovalsFormValue(nodeState, path, value),
+            ),
           onExecApprovalsRemove: (path) =>
-            void this.runNodeTask((state) => removeExecApprovalsFormValue(state, path)),
+            void this.runNodeTask((nodeState) => removeExecApprovalsFormValue(nodeState, path)),
           onSaveExecApprovals: () =>
-            void this.runNodeTask((state) =>
-              saveExecApprovals(state, this.resolveExecApprovalsTarget()),
+            void this.runNodeTask((nodeState) =>
+              saveExecApprovals(nodeState, this.resolveExecApprovalsTarget()),
             ),
         }),
       )}
