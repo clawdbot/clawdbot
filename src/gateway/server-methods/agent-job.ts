@@ -59,7 +59,6 @@ type AgentJobState = {
   pendingErrors: Map<string, PendingAgentRunTerminal>;
   pendingTimeouts: Map<string, PendingAgentRunTerminal>;
   waiters: Map<string, Set<AgentJobWaiter>>;
-  listenerStarted: boolean;
   version: number;
 };
 
@@ -71,7 +70,6 @@ const agentJobState = resolveGlobalSingleton<AgentJobState>(
     pendingErrors: new Map(),
     pendingTimeouts: new Map(),
     waiters: new Map(),
-    listenerStarted: false,
     version: 0,
   }),
   (state) => {
@@ -97,6 +95,7 @@ const agentRunStarts = agentJobState.runStarts;
 const pendingAgentRunErrors = agentJobState.pendingErrors;
 const pendingAgentRunTimeouts = agentJobState.pendingTimeouts;
 const agentRunWaiters = agentJobState.waiters;
+let agentRunListenerStarted = false;
 
 function nextAgentRunVersion(): number {
   agentJobState.version += 1;
@@ -314,10 +313,10 @@ function createSnapshotFromLifecycleEvent(params: {
 }
 
 function ensureAgentRunListener() {
-  if (agentJobState.listenerStarted) {
+  if (agentRunListenerStarted) {
     return;
   }
-  agentJobState.listenerStarted = true;
+  agentRunListenerStarted = true;
   onAgentEvent((evt) => {
     if (!evt || evt.stream !== "lifecycle") {
       return;
