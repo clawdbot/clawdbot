@@ -1281,10 +1281,11 @@ private func waitUntil(
         defer { appModel.disconnectGateway() }
         appModel.applyGatewayConnectConfig(config)
 
-        let restoredOptions = try #require(appModel._test_completeSuccessfulGatewayAuthHandoff(
+        let incompleteOptions = try appModel._test_completeSuccessfulGatewayAuthHandoff(
             offeredRoles: ["node"],
             persistedRoles: ["node"],
-            nodeOptions: nodeOptions))
+            nodeOptions: nodeOptions)
+        let restoredOptions = try #require(incompleteOptions)
 
         #expect(restoredOptions.allowStoredDeviceAuth)
         #expect(appModel.activeGatewayConnectConfig?.bootstrapToken == nil)
