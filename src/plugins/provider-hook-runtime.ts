@@ -22,6 +22,7 @@ import {
   getActivePluginRegistryWorkspaceDirFromState,
   getPluginRegistryState,
 } from "./runtime-state.js";
+import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
 import type {
   ProviderPlugin,
   ProviderExtraParamsForTransportContext,
@@ -126,6 +127,17 @@ function findProviderRuntimePluginInLoadedRegistries(params: {
   lookup: ProviderRuntimePluginLookupParams;
   apiOwnerHint?: string;
 }): ProviderPlugin | undefined {
+  const scopedRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
+  const scopedPlugin = scopedRegistry
+    ? findProviderRuntimePluginInRegistry({
+        registry: scopedRegistry,
+        provider: params.lookup.provider,
+        apiOwnerHint: params.apiOwnerHint,
+      })
+    : undefined;
+  if (scopedPlugin) {
+    return scopedPlugin;
+  }
   const activeRegistry = getLoadedRuntimePluginRegistry({
     env: params.lookup.env,
     workspaceDir: params.lookup.workspaceDir,

@@ -250,8 +250,8 @@ async function runEmbeddedAgentInternal(
         ...(params.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
         runtimePluginSelections,
       };
-      // Configless direct hosts reuse one bounded idle generation. Gateway and explicitly
-      // configured runs release dynamic workspaces so one-off paths cannot accumulate owners.
+      // Configless direct hosts reuse one idle generation. The prepared-runtime lifecycle keeps
+      // gateway run generations in its own bounded cache so one-off paths cannot accumulate.
       // Cold plugin loading and provider discovery can exceed the lane no-progress budget.
       // Active runtime acquisition is progress, not a hung lane task.
       const preparedModelRuntimeLease = await withEmbeddedRunLaneProgressHeartbeat(

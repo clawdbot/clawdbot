@@ -141,7 +141,10 @@ function withRuntimePluginIdsAllowed(
   };
 }
 
-function resolveSelectedRuntime(selection: AgentHarnessPluginSelection, config?: OpenClawConfig) {
+export function resolveSelectedAgentHarnessRuntime(
+  selection: AgentHarnessPluginSelection,
+  config?: OpenClawConfig,
+) {
   const requestedRuntime = normalizeOptionalAgentRuntimeId(selection.runtime);
   return requestedRuntime && !isDefaultAgentRuntimeId(requestedRuntime)
     ? requestedRuntime
@@ -158,10 +161,14 @@ export function requiresAgentHarnessPluginSelection(
   selection: AgentHarnessPluginSelection,
   config?: OpenClawConfig,
 ): boolean {
-  const runtime = resolveSelectedRuntime(selection, config);
+  const runtime = resolveSelectedAgentHarnessRuntime(selection, config);
+  if (isDefaultAgentRuntimeId(runtime) || runtime === OPENCLAW_AGENT_RUNTIME_ID) {
+    return false;
+  }
+  // Codex is a native plugin harness, never a CLI backend alias. Keep this hot-path decision
+  // independent of setup-registry discovery for every model candidate on every turn.
   return (
-    !isDefaultAgentRuntimeId(runtime) &&
-    runtime !== OPENCLAW_AGENT_RUNTIME_ID &&
+    runtime === "codex" ||
     !isCliRuntimeAliasForProvider({ runtime, provider: selection.provider, cfg: config })
   );
 }
@@ -184,7 +191,7 @@ export function resolveAgentRuntimePluginLoadPlan(params: {
   const pluginIds = [...basePluginIds, ...memoryPluginIds];
   const forceActivatedPluginIds = [...memoryPluginIds];
   for (const selection of params.selections) {
-    const runtime = resolveSelectedRuntime(selection, config);
+    const runtime = resolveSelectedAgentHarnessRuntime(selection, config);
     if (!requiresAgentHarnessPluginSelection(selection, config)) {
       continue;
     }

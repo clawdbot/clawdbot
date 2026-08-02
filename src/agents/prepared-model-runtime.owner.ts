@@ -5,11 +5,18 @@ import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import {
   listAgentIds,
   resolveAgentDir,
+  resolveRunModelFallbacksOverride,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentDir,
   resolveDefaultAgentId,
 } from "./agent-scope.js";
-import { requiresAgentHarnessPluginSelection } from "./harness/runtime-plugin-load-plan.js";
+import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
+import {
+  requiresAgentHarnessPluginSelection,
+  resolveSelectedAgentHarnessRuntime,
+} from "./harness/runtime-plugin-load-plan.js";
+import { resolveModelCandidateChain } from "./model-fallback-candidates.js";
+import { resolveDefaultModelForAgent } from "./model-selection-config.js";
 import {
   startSerializedSnapshotBuild,
   startSerializedSnapshotBuildBatch,
@@ -53,6 +60,54 @@ export function createPreparedModelRuntimeOwner(
     generation: 0,
     needsRefresh: true,
   };
+}
+
+export class PreparedModelRuntimeOwnerRetention {
+  readonly #retained = new Map<string, PreparedModelRuntimeOwner>();
+
+  constructor(private readonly maxSize: number) {}
+
+  clear(owners: Map<string, PreparedModelRuntimeOwner>): void {
+    // Released run owners retire with this lifecycle; active leases retire on release.
+    // Configured publication owners never belong to this retention layer.
+    for (const [key, owner] of this.#retained) {
+      if (
+        owner.provenance === "run" &&
+        (owner.leaseCount ?? 0) === 0 &&
+        owners.get(key) === owner
+      ) {
+        owners.delete(key);
+      }
+    }
+    this.#retained.clear();
+  }
+
+  has(key: string, owner: PreparedModelRuntimeOwner): boolean {
+    return this.#retained.get(key) === owner;
+  }
+
+  retain(
+    key: string,
+    owner: PreparedModelRuntimeOwner,
+    owners: Map<string, PreparedModelRuntimeOwner>,
+  ): void {
+    if (owner.provenance !== "run") {
+      return;
+    }
+    this.#retained.delete(key);
+    this.#retained.set(key, owner);
+    while (this.#retained.size > this.maxSize) {
+      const oldest = this.#retained.entries().next().value;
+      if (!oldest) {
+        return;
+      }
+      const [oldestKey, oldestOwner] = oldest;
+      this.#retained.delete(oldestKey);
+      if ((oldestOwner.leaseCount ?? 0) === 0 && owners.get(oldestKey) === oldestOwner) {
+        owners.delete(oldestKey);
+      }
+    }
+  }
 }
 
 export {
@@ -123,7 +178,7 @@ export function rebindInputToCommittedConfiguredOwner(
     preserveWorkspaceDirOnRefresh: preserveWorkspaceDir,
     allowGatewaySubagentBinding:
       input.allowGatewaySubagentBinding ?? owner.input.allowGatewaySubagentBinding,
-    runtimePluginSelections: input.runtimePluginSelections,
+    runtimePluginSelections: input.runtimePluginSelections ?? owner.input.runtimePluginSelections,
   });
 }
 
@@ -166,7 +221,11 @@ export function normalizePreparedModelRuntimeInput(
     ? Object.freeze(
         [...input.runtimePluginSelections]
           .filter((selection) => requiresAgentHarnessPluginSelection(selection, input.config))
-          .map((selection) => Object.freeze({ ...selection }))
+          .map((selection) => {
+            const runtime = resolveSelectedAgentHarnessRuntime(selection, input.config);
+            const { agentId: _agentId, ...normalized } = selection;
+            return Object.freeze({ ...normalized, runtime });
+          })
           .toSorted((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))),
       )
     : undefined;
@@ -229,8 +288,9 @@ export function resolvePublishedOwner(
       owner.input.readOnly === input.readOnly &&
       owner.input.skipCredentials === input.skipCredentials &&
       owner.input.allowGatewaySubagentBinding === input.allowGatewaySubagentBinding &&
-      JSON.stringify(owner.input.runtimePluginSelections) ===
-        JSON.stringify(input.runtimePluginSelections) &&
+      (input.runtimePluginSelections === undefined ||
+        JSON.stringify(owner.input.runtimePluginSelections) ===
+          JSON.stringify(input.runtimePluginSelections)) &&
       (input.env === undefined ||
         owner.environmentFingerprint === environmentFingerprint(input.env)) &&
       (input.workspaceDir === undefined || owner.input.workspaceDir === input.workspaceDir),
@@ -290,6 +350,7 @@ export function listConfiguredOwnerInputs(
       workspaceDir: preserveWorkspaceDirOnRefresh
         ? defaultWorkspaceDir
         : resolveAgentWorkspaceDir(config, agentId),
+      runtimePluginSelections: resolveConfiguredRuntimePluginSelections(config, agentId),
     };
     if (allowGatewaySubagentBinding === true) {
       input.allowGatewaySubagentBinding = true;
@@ -299,6 +360,25 @@ export function listConfiguredOwnerInputs(
     }
     return input;
   });
+}
+
+function resolveConfiguredRuntimePluginSelections(
+  config: OpenClawConfig,
+  agentId: string,
+): PreparedModelRuntimeInput["runtimePluginSelections"] {
+  const configured = resolveDefaultModelForAgent({ cfg: config, agentId });
+  return resolveModelCandidateChain({
+    cfg: config,
+    manifestPlugins: [],
+    provider: configured.provider || DEFAULT_PROVIDER,
+    model: configured.model || DEFAULT_MODEL,
+    requestedRouteResolution: "resolved",
+    fallbacksOverride: resolveRunModelFallbacksOverride({ cfg: config, agentId }),
+  }).map((candidate) => ({
+    provider: candidate.provider,
+    modelId: candidate.model,
+    agentId,
+  }));
 }
 
 export async function publishPreparedModelRuntimeOwnerBatch(params: {
