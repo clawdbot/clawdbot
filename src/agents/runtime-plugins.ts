@@ -1,12 +1,8 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { loadPluginRegistryHandle } from "../plugins/loader.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
-import { getActivePluginRuntimeSubagentMode } from "../plugins/runtime.js";
-import {
-  installRuntimePluginRegistryAtProcessRoot,
-  loadRuntimePluginRegistryHandle,
-} from "../plugins/runtime/standalone-runtime-registry-loader.js";
 import { resolveUserPath } from "../utils.js";
 import { collectConfiguredAgentHarnessRuntimes } from "./harness-runtimes.js";
 import {
@@ -100,20 +96,7 @@ function resolveAgentRuntimePluginRegistryLoad(params: AgentRuntimePluginRegistr
 /** Loads the registry handle owned by an agent prepared-runtime generation. */
 export function loadAgentRuntimePluginRegistryHandle(
   params: AgentRuntimePluginRegistryParams,
-): PluginRegistry | undefined {
+): PluginRegistry {
   const load = resolveAgentRuntimePluginRegistryLoad(params);
-  return load ? loadRuntimePluginRegistryHandle(load) : undefined;
-}
-
-/** Installs agent runtime plugins from a standalone/gateway process composition root. */
-export function installAgentRuntimePluginRegistryAtProcessRoot(
-  params: AgentRuntimePluginRegistryParams,
-): PluginRegistry | undefined {
-  const load = resolveAgentRuntimePluginRegistryLoad({
-    ...params,
-    allowGatewaySubagentBinding:
-      params.allowGatewaySubagentBinding === true ||
-      getActivePluginRuntimeSubagentMode() === "gateway-bindable",
-  });
-  return load ? installRuntimePluginRegistryAtProcessRoot(load) : undefined;
+  return loadPluginRegistryHandle({ ...load.loadOptions, activate: false });
 }

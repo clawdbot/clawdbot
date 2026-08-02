@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { chunkMarkdownText } from "openclaw/plugin-sdk/reply-runtime";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../api.js";
 import { lineOutboundAdapter } from "./outbound.js";
 import { setLineRuntime } from "./runtime.js";
@@ -37,9 +37,14 @@ async function readRequestBody(request: IncomingMessage): Promise<string> {
 }
 
 async function listenLoopback(
-  requestHandler: (req: IncomingMessage, res: ServerResponse) => void,
+  requestHandler: (req: IncomingMessage, res: ServerResponse) => Promise<void>,
 ): Promise<{ server: Server; port: number; close: () => Promise<void> }> {
-  const server = createServer(requestHandler);
+  const server = createServer((request, response) => {
+    void requestHandler(request, response).catch((error: unknown) => {
+      response.writeHead(500, { "content-type": "text/plain" });
+      response.end(String(error));
+    });
+  });
   server.on("clientError", (_err, socket) => socket.destroy());
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);

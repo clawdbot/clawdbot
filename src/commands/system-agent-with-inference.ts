@@ -1,6 +1,7 @@
 // OpenClaw command gate: prove inference before starting conversational setup.
 
 import { requestExitAfterOneShotOutput } from "../cli/one-shot-exit.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { withConsoleSubsystemsSuppressed } from "../logging/console.js";
 import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
 import type { BoundVerifySetupInferenceResult } from "../system-agent/setup-inference.js";
@@ -32,16 +33,12 @@ function isOneShotRequest(opts: SystemAgentCommandOptions): boolean {
   return Boolean(opts.json || opts.message?.trim() || opts.interactive === false);
 }
 
-function formatOneShotExecutionError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 function failOneShotExecution(
   opts: SystemAgentCommandOptions,
   runtime: RuntimeEnv,
   error: unknown,
 ): void {
-  const message = formatOneShotExecutionError(error);
+  const message = formatErrorMessage(error);
   if (opts.json) {
     writeRuntimeJson(runtime, { ok: false, error: message });
   } else {

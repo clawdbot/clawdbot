@@ -3,8 +3,8 @@
  */
 
 import crypto from "node:crypto";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { ChatScope } from "../types.js";
-import { formatErrorMessage } from "../utils/format.js";
 import { debugLog, debugError } from "../utils/log.js";
 import { openQQBotSyncKeyedStore } from "../utils/sqlite-state.js";
 

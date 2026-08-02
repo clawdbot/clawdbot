@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import {
@@ -6,7 +7,7 @@ import {
   workboardCardRunId,
   workboardCardSessionKey,
 } from "./card-state.ts";
-import { formatError, isRecord } from "./normalization-utils.ts";
+import { formatError } from "./normalization-utils.ts";
 import { normalizeTaskSummary, normalizeTasksPage } from "./normalization.ts";
 import { getWorkboardRuntime, type WorkboardHost } from "./runtime.ts";
 import type { WorkboardCard, WorkboardTaskLinkState, WorkboardTaskSummary } from "./types.ts";

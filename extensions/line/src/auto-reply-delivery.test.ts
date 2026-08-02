@@ -940,12 +940,20 @@ describe("deliverLineAutoReply", () => {
         ...pushMessagesLine.mock.calls.flatMap(([, msgs]) => msgs),
       ];
       expect(allMessages.some((m) => m.type === "flex" && m.altText === "Table")).toBe(false);
-      const allText = allMessages
+      const deliveredLines = allMessages
         .filter((m) => m.type === "text")
-        .map((m) => m.text)
-        .join(" ");
-      for (let i = 1; i <= 11; i++) {
-        expect(allText).toContain(`Item${i}`);
+        .flatMap((message) => message.text.split(/\r?\n/u).map((line) => line.trim()));
+      const expectedLabels = [
+        "code bold",
+        ...Array.from({ length: 10 }, (_, index) => `Item${index + 2}`),
+      ];
+
+      expect(deliveredLines.filter((line) => expectedLabels.includes(line))).toEqual(
+        expectedLabels,
+      );
+      expect(deliveredLines).toContain("• Price: Val1");
+      for (let item = 2; item <= 11; item += 1) {
+        expect(deliveredLines).toContain(`• Price: $${item}.00`);
       }
     });
   });

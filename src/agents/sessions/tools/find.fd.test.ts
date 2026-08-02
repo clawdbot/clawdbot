@@ -43,6 +43,13 @@ function createChild(): MockChild {
   return child;
 }
 
+function textContent(
+  result: Awaited<ReturnType<ReturnType<typeof createFindToolDefinition>["execute"]>>,
+): string {
+  const first = result.content[0];
+  return first?.type === "text" ? (first.text ?? "") : "";
+}
+
 it("rejects partial fd output when fd exits with an error", async () => {
   const child = createChild();
   vi.mocked(spawnCommand).mockReturnValue(child as never);
@@ -123,4 +130,43 @@ it.each([
 
   const args = vi.mocked(spawnCommand).mock.calls[0]?.[0] as string[];
   expect(args.includes("--no-require-git")).toBe(expected);
+});
+
+it.each([
+  {
+    name: "keeps an exact-size fd result complete",
+    paths: ["/workspace/a.ts", "/workspace/b.ts"],
+    expectedText: "a.ts\nb.ts",
+    expectedLimitReached: undefined,
+  },
+  {
+    name: "uses one extra fd result as the truncation sentinel",
+    paths: ["/workspace/a.ts", "/workspace/b.ts", "/workspace/c.ts"],
+    expectedText:
+      "a.ts\nb.ts\n\n[2 results limit reached. Use limit=4 for more, or refine pattern]",
+    expectedLimitReached: 2,
+  },
+])("$name", async ({ paths, expectedText, expectedLimitReached }) => {
+  const child = createChild();
+  vi.mocked(spawnCommand).mockReturnValue(child as never);
+  vi.mocked(ensureTool).mockResolvedValue("fd");
+
+  const tool = createFindToolDefinition("/workspace");
+  const resultPromise = tool.execute(
+    "call-limit",
+    { pattern: "*.ts", limit: 2 },
+    undefined,
+    undefined,
+    {} as never,
+  );
+  await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledOnce());
+  child.stdout.end(`${paths.join("\n")}\n`);
+  child.stderr.end();
+  child.emit("close", 0, null);
+
+  const result = await resultPromise;
+  const args = vi.mocked(spawnCommand).mock.calls[0]?.[0] as string[];
+  expect(args).toEqual(expect.arrayContaining(["--max-results", "3"]));
+  expect(textContent(result)).toBe(expectedText);
+  expect(result.details?.resultLimitReached).toBe(expectedLimitReached);
 });

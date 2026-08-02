@@ -328,13 +328,13 @@ function scheduleAgentRuntimePluginPrewarm(params: {
                 return;
               }
               const started = performance.now();
-              const { installAgentRuntimePluginRegistryAtProcessRoot } =
+              const { loadAgentRuntimePluginRegistryHandle } =
                 await import("../agents/runtime-plugins.js");
               const cfg = params.getConfig();
               if (isStopped()) {
                 return;
               }
-              installAgentRuntimePluginRegistryAtProcessRoot({
+              loadAgentRuntimePluginRegistryHandle({
                 config: cfg,
                 workspaceDir: params.workspaceDir,
                 allowGatewaySubagentBinding: true,

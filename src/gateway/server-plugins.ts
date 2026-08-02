@@ -542,6 +542,19 @@ export function createGatewayNodesRuntime(): PluginRuntime["nodes"] {
   };
 }
 
+const GATEWAY_PLUGIN_RUNTIME_BINDINGS_KEY: unique symbol = Symbol.for(
+  "openclaw.gatewayPluginRuntimeBindings",
+);
+
+function getGatewayPluginRuntimeBindings(): Pick<PluginRuntime, "nodes" | "subagent"> {
+  // These delegates resolve the current request/fallback Gateway context per call.
+  // Keeping their identities process-stable preserves exact-key root load reuse.
+  return resolveGlobalSingleton(GATEWAY_PLUGIN_RUNTIME_BINDINGS_KEY, () => ({
+    nodes: createGatewayNodesRuntime(),
+    subagent: createGatewaySubagentRuntime(),
+  }));
+}
+
 // ── Plugin loading ──────────────────────────────────────────────────
 
 function createGatewayPluginRegistrationLogger(params?: {
@@ -652,6 +665,7 @@ export function loadGatewayPlugins(params: {
   }
   const beforeLoad = performance.now();
   const loaderStatsBefore = getPluginModuleLoaderStats();
+  const gatewayRuntimeBindings = getGatewayPluginRuntimeBindings();
   const pluginRegistry = loadAndActivateRootPluginRegistry({
     config: resolvedConfig,
     activationSourceConfig: params.activationSourceConfig ?? params.cfg,
@@ -672,6 +686,7 @@ export function loadGatewayPlugins(params: {
     }),
     runtimeOptions: {
       allowGatewaySubagentBinding: true,
+      ...gatewayRuntimeBindings,
     },
     preferSetupRuntimeForChannelPlugins: params.preferSetupRuntimeForChannelPlugins,
     preferBuiltPluginArtifacts: true,

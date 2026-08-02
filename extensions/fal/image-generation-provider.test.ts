@@ -1,5 +1,6 @@
 // Fal tests cover image generation provider plugin behavior.
 import type { ImageGenerationRequest } from "openclaw/plugin-sdk/image-generation";
+import { generateImage } from "openclaw/plugin-sdk/image-generation-runtime";
 import * as providerAuth from "openclaw/plugin-sdk/provider-auth-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -112,6 +113,121 @@ describe("fal image-generation provider", () => {
     expect(geometry?.resolutionsByModel?.["xai/grok-imagine-image/quality"]).toEqual(
       grokResolutions,
     );
+  });
+
+  it.each([
+    {
+      model: "krea/v2/medium/text-to-image",
+      supported: "2.35:1",
+      unsupported: "21:9",
+    },
+    {
+      model: "krea/v2/large/text-to-image",
+      supported: "2.35:1",
+      unsupported: "21:9",
+    },
+    {
+      model: "fal-ai/nano-banana-2",
+      supported: "21:9",
+      unsupported: "2.35:1",
+    },
+    {
+      model: "fal-ai/nano-banana-2/edit",
+      supported: "21:9",
+      unsupported: "2.35:1",
+    },
+  ])(
+    "publishes the native aspect-ratio contract for $model",
+    ({ model, supported, unsupported }) => {
+      const aspectRatios = provider.capabilities.geometry?.aspectRatiosByModel?.[model];
+
+      expect(aspectRatios).toContain(supported);
+      expect(aspectRatios).not.toContain(unsupported);
+    },
+  );
+
+  it.each([
+    {
+      model: "krea/v2/medium/text-to-image",
+      requested: "21:9",
+      applied: "2.35:1",
+      mode: "generate",
+    },
+    {
+      model: "krea/v2/large/text-to-image",
+      requested: "21:9",
+      applied: "2.35:1",
+      mode: "style",
+    },
+    {
+      model: "fal-ai/nano-banana-2",
+      requested: "2.35:1",
+      applied: "21:9",
+      mode: "generate",
+    },
+    {
+      model: "fal-ai/nano-banana-2/edit",
+      requested: "2.35:1",
+      applied: "21:9",
+      mode: "edit",
+    },
+  ])("normalizes unsupported $model geometry before provider submission", async (testCase) => {
+    const image = sourceImage("reference");
+    const inputImages = testCase.mode === "generate" ? undefined : [image];
+    try {
+      fetchWithSsrFGuardMock
+        .mockResolvedValueOnce(releasedJson({ images: [{ url: "https://v3.fal.media/out.png" }] }))
+        .mockResolvedValueOnce(releasedImage(Buffer.from("png-data")));
+
+      const result = await generateImage(
+        {
+          cfg: {
+            agents: {
+              defaults: {
+                mediaModels: { image: { primary: `fal/${testCase.model}` } },
+              },
+            },
+          },
+          prompt: "preserve the closest native image shape",
+          aspectRatio: testCase.requested,
+          ...(inputImages ? { inputImages } : {}),
+        },
+        {
+          getProvider: () => provider,
+          listProviders: () => [provider],
+        },
+      );
+
+      expect(result.normalization?.aspectRatio).toEqual({
+        requested: testCase.requested,
+        applied: testCase.applied,
+      });
+      expectFalJsonPost({
+        url: `https://fal.run/${testCase.model}`,
+        body: {
+          prompt: "preserve the closest native image shape",
+          aspect_ratio: testCase.applied,
+          ...(testCase.mode === "style"
+            ? {
+                creativity: "medium",
+                image_style_references: [
+                  { image_url: `data:image/png;base64,${image.buffer.toString("base64")}` },
+                ],
+              }
+            : testCase.mode === "edit"
+              ? {
+                  num_images: 1,
+                  output_format: "png",
+                  image_urls: [`data:image/png;base64,${image.buffer.toString("base64")}`],
+                }
+              : testCase.model.startsWith("krea/")
+                ? { creativity: "medium" }
+                : { num_images: 1, output_format: "png" }),
+        },
+      });
+    } finally {
+      fetchWithSsrFGuardMock.mockReset();
+    }
   });
 
   it("generates image buffers from the fal sync API", async () => {

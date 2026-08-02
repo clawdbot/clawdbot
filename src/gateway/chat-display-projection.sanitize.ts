@@ -97,12 +97,21 @@ export function sanitizeChatHistoryContentBlock(
     changed = true;
   }
   const type = typeof entry.type === "string" ? entry.type : "";
-  if (type === "image" && typeof entry.data === "string") {
-    const bytes = estimateBase64DecodedBytes(entry.data);
-    delete entry.data;
-    entry.omitted = true;
-    entry.bytes = bytes;
-    changed = true;
+  if (type === "image") {
+    let imageData = typeof entry.data === "string" ? entry.data : undefined;
+    const source = readRecord(entry.source);
+    if (source?.type === "base64" && typeof source.data === "string") {
+      imageData ??= source.data;
+      const projectedSource = { ...source };
+      delete projectedSource.data;
+      entry.source = projectedSource;
+    }
+    if (imageData !== undefined) {
+      delete entry.data;
+      entry.omitted = true;
+      entry.bytes = estimateBase64DecodedBytes(imageData);
+      changed = true;
+    }
   }
   if (type === "audio" && entry.source && typeof entry.source === "object") {
     const source = { ...(entry.source as Record<string, unknown>) };

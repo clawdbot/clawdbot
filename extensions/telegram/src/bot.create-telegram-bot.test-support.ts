@@ -1,3 +1,4 @@
+import { setTimeout as delay } from "node:timers/promises";
 import type { TelegramBotInfo } from "./bot-info.js";
 
 type DispatchReplyWithBufferedBlockDispatcher =
@@ -20,6 +21,50 @@ export const telegramBotInfoForTest = {
   has_topics_enabled: false,
   allows_users_to_create_topics: false,
 } satisfies TelegramBotInfo;
+
+export type TelegramMentionPolicyForTest = {
+  mode: "allow" | "deny";
+  allowIn?: string[];
+  denyIn?: string[];
+};
+
+export type TelegramIngestGroupForTest = {
+  requireMention: boolean;
+  ingest?: boolean;
+  topics?: Record<string, { ingest: boolean }>;
+};
+
+export function telegramIngestGroupForTest(
+  ingest?: boolean,
+  topics?: Record<string, { ingest: boolean }>,
+): TelegramIngestGroupForTest {
+  return {
+    requireMention: true,
+    ...(ingest === undefined ? {} : { ingest }),
+    ...(topics ? { topics } : {}),
+  };
+}
+
+export type TelegramMentionCaseForTest = [
+  string,
+  TelegramMentionPolicyForTest,
+  TelegramMentionPolicyForTest | undefined,
+  number | undefined,
+  boolean,
+  number,
+];
+
+export async function waitForTelegramMockCalls(
+  mock: { mock: { calls: unknown[] } },
+  count: number,
+) {
+  for (let index = 0; index < 80; index++) {
+    if (mock.mock.calls.length >= count) {
+      return;
+    }
+    await delay(25);
+  }
+}
 
 export function createTelegramNativeCommandTestDeps(
   dispatchReply: DispatchReplyWithBufferedBlockDispatcher,
