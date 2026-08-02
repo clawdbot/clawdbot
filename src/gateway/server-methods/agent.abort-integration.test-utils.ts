@@ -1812,6 +1812,54 @@ describe("gateway agent handler chat.abort integration", () => {
     }
   });
 
+  it("keeps an elapsed queue deadline terminal before the maintenance sweep", async () => {
+    prime();
+    const runId = "idem-agent-expired-queue-deadline";
+    let nowMs = 1_000_000;
+    const dateNow = vi.spyOn(Date, "now").mockImplementation(() => nowMs);
+    let onExecutionStarted: (() => void) | undefined;
+    mocks.agentCommand.mockImplementation(
+      (opts: { onExecutionStarted?: () => void }) =>
+        new Promise(() => {
+          onExecutionStarted = opts.onExecutionStarted;
+        }),
+    );
+    const context = makeContext();
+
+    try {
+      await invokeAgent(
+        {
+          message: "do not revive an expired queue deadline",
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          idempotencyKey: runId,
+          timeout: 120,
+        },
+        { context, respond: vi.fn(), reqId: runId },
+      );
+
+      const abortEntry = requireValue(
+        context.chatAbortControllers.get(runId),
+        "chat abort entry missing",
+      );
+      const startedAtMs = abortEntry.startedAtMs;
+      const queueExpiresAtMs = abortEntry.expiresAtMs;
+      nowMs = queueExpiresAtMs + 1;
+      const executionStarted = requireValue(onExecutionStarted, "execution-start callback missing");
+      executionStarted();
+
+      expect(abortEntry.startedAtMs).toBe(startedAtMs);
+      expect(abortEntry.expiresAtMs).toBe(queueExpiresAtMs);
+      expect(abortEntry.controller.signal.aborted).toBe(false);
+
+      nowMs = queueExpiresAtMs - 1;
+      executionStarted();
+      expect(abortEntry.expiresAtMs).toBe(queueExpiresAtMs);
+    } finally {
+      dateNow.mockRestore();
+    }
+  });
+
   it("sets the maintenance expiry to the configured agent timeout, not the 24h chat default", async () => {
     prime();
     const pending = new Promise(() => {});

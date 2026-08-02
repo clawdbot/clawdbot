@@ -2,6 +2,7 @@
 // Registers active run abort controllers and projects in-flight chat state.
 import {
   asDateTimestampMs,
+  isFutureDateTimestampMs,
   resolveDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
@@ -179,9 +180,13 @@ export function registerChatAbortController(params: {
     if (entry?.controller !== controller || controller.signal.aborted || entry.kind !== "agent") {
       return;
     }
+    const now = Date.now();
     executionStarted = true;
+    if (!isFutureDateTimestampMs(entry.expiresAtMs, { nowMs: now })) {
+      return;
+    }
     entry.expiresAtMs = resolveAgentRunExpiresAtMs({
-      now: Date.now(),
+      now,
       timeoutMs: params.timeoutMs,
     });
   };

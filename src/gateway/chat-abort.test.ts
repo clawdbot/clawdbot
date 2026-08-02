@@ -250,6 +250,36 @@ describe("registerChatAbortController", () => {
     expect(registration.entry?.expiresAtMs).toBe(executionExpiresAtMs);
   });
 
+  it("does not re-arm an agent after its unswept queue deadline", () => {
+    vi.useFakeTimers();
+    for (const [runId, offsetMs] of [
+      ["run-agent-at-queue-deadline", 0],
+      ["run-agent-after-queue-deadline", 1],
+    ] as const) {
+      vi.setSystemTime(1_800_000_000_000);
+      const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
+      const registration = registerChatAbortController({
+        chatAbortControllers,
+        runId,
+        sessionId: "sess-1",
+        sessionKey: "main",
+        timeoutMs: 120_000,
+        kind: "agent",
+      });
+      const queueExpiresAtMs = registration.entry?.expiresAtMs;
+      const startedAtMs = registration.entry?.startedAtMs;
+      expect(queueExpiresAtMs).toBeTypeOf("number");
+
+      vi.setSystemTime((queueExpiresAtMs as number) + offsetMs);
+      registration.markExecutionStarted();
+      registration.markExecutionStarted();
+
+      expect(registration.entry?.startedAtMs).toBe(startedAtMs);
+      expect(registration.entry?.expiresAtMs).toBe(queueExpiresAtMs);
+      expect(registration.controller.signal.aborted).toBe(false);
+    }
+  });
+
   it("does not re-arm stale, aborted, or non-agent registrations", () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_800_000_000_000);
