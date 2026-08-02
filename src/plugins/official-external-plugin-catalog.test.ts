@@ -14,6 +14,7 @@ import {
   getOfficialExternalPluginCatalogEntry,
   getOfficialExternalPluginCatalogManifest,
   isOfficialExternalPluginCatalogFeed,
+  listOfficialExternalChannelEnvVars,
   listOfficialExternalPluginCatalogEntries,
   loadConfiguredHostedOfficialExternalPluginCatalogEntries,
   resolveOfficialExternalProviderContractPluginIds,
@@ -2243,6 +2244,15 @@ describe("official external plugin catalog", () => {
       minHostVersion: ">=2026.7.2",
       allowInvalidConfigRecovery: true,
     });
+  });
+
+  it("projects channel environment variables from generated configured-state metadata", () => {
+    const envVarsByChannel = new Map(
+      listOfficialExternalChannelEnvVars().map((entry) => [entry.channelId, entry.envVars]),
+    );
+
+    expect(envVarsByChannel.get("clickclack")).toEqual(["CLICKCLACK_BOT_TOKEN"]);
+    expect(envVarsByChannel.get("mattermost")).toEqual(["MATTERMOST_BOT_TOKEN", "MATTERMOST_URL"]);
   });
 
   it.each([

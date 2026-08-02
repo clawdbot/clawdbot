@@ -25,6 +25,14 @@ const releaseTasks = [
     check: nodeCommand("--import", "tsx", "scripts/sync-plugin-versions.ts", "--check"),
   },
   {
+    id: "channel-catalog",
+    name: "official channel catalog",
+    scopes: ["plugins", "version"],
+    fix: pnpmCommand("channels:catalog:gen"),
+    fixAfter: ["plugin-versions"],
+    check: pnpmCommand("channels:catalog:check"),
+  },
+  {
     id: "npm-package-locks",
     name: "npm package locks",
     scopes: ["dependencies", "plugins", "version"],

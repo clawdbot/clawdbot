@@ -10,6 +10,7 @@ const CHECK_COMMANDS = [
   "pnpm deps:root-ownership:check",
   "node scripts/generate-npm-package-lock.mjs --all",
   "node --import tsx scripts/sync-plugin-versions.ts --check",
+  "pnpm channels:catalog:check",
   "node scripts/generate-plugin-inventory-doc.mjs --check",
   "pnpm config:schema:check",
   "pnpm config:channels:check",
@@ -22,6 +23,7 @@ const CHECK_COMMANDS = [
 ];
 const FIX_COMMANDS = [
   "node --import tsx scripts/sync-plugin-versions.ts",
+  "pnpm channels:catalog:gen",
   "node scripts/generate-plugin-inventory-doc.mjs --write",
   "pnpm config:schema:gen",
   "pnpm config:channels:gen",
@@ -191,6 +193,9 @@ describe("scripts/release-preflight.mjs", () => {
     expect(events.indexOf("end node --import tsx scripts/sync-plugin-versions.ts")).toBeLessThan(
       events.indexOf("start pnpm plugin-sdk:sync-exports"),
     );
+    expect(events.indexOf("end node --import tsx scripts/sync-plugin-versions.ts")).toBeLessThan(
+      events.indexOf("start pnpm channels:catalog:gen"),
+    );
     expect(events.indexOf("end pnpm plugin-sdk:sync-exports")).toBeLessThan(
       events.indexOf("start node scripts/generate-plugin-inventory-doc.mjs --write"),
     );
@@ -205,9 +210,11 @@ describe("scripts/release-preflight.mjs", () => {
     expect(readPnpmLog(fakePnpm.logPath).toSorted()).toEqual(
       [
         "node --import tsx scripts/sync-plugin-versions.ts",
+        "pnpm channels:catalog:gen",
         "node scripts/generate-plugin-inventory-doc.mjs --write",
         "pnpm ui:i18n:sync",
         "node --import tsx scripts/sync-plugin-versions.ts --check",
+        "pnpm channels:catalog:check",
         "node scripts/generate-npm-package-lock.mjs --all",
         "node scripts/generate-plugin-inventory-doc.mjs --check",
         "pnpm ui:i18n:check",
@@ -226,8 +233,10 @@ describe("scripts/release-preflight.mjs", () => {
     expect(readPnpmLog(fakePnpm.logPath).toSorted()).toEqual(
       [
         "node --import tsx scripts/sync-plugin-versions.ts",
+        "pnpm channels:catalog:gen",
         "node scripts/generate-plugin-inventory-doc.mjs --write",
         "node --import tsx scripts/sync-plugin-versions.ts --check",
+        "pnpm channels:catalog:check",
         "node scripts/generate-npm-package-lock.mjs --all",
         "node scripts/generate-plugin-inventory-doc.mjs --check",
       ].toSorted(),
