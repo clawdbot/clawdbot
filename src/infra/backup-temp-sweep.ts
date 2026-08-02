@@ -11,7 +11,7 @@ import path from "node:path";
 const BACKUP_TEMP_ORPHAN_MIN_AGE_MS = 24 * 60 * 60_000;
 
 // Derived so the heartbeat can never drift past the window it defends.
-export const BACKUP_TEMP_KEEPALIVE_INTERVAL_MS = BACKUP_TEMP_ORPHAN_MIN_AGE_MS / 48;
+const BACKUP_TEMP_KEEPALIVE_INTERVAL_MS = BACKUP_TEMP_ORPHAN_MIN_AGE_MS / 48;
 
 /**
  * Marks `directoryPath` as owned by the running backup until the returned stop
