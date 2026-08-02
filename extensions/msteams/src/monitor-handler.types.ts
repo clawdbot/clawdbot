@@ -6,12 +6,12 @@ import type { MSTeamsMonitorLogger } from "./monitor-types.js";
 import type { MSTeamsPollStore } from "./polls.js";
 import type { MSTeamsApp } from "./sdk.js";
 
-export type MSTeamsApprovalGatewayRuntime = {
+type MSTeamsApprovalGatewayRuntime = {
   request: (
     method: "approval.resolve",
     params: {
       id: string;
-      kind: "exec" | "plugin";
+      kind: "exec" | "plugin" | "system-agent";
       decision: "allow-once" | "allow-always" | "deny";
     },
     options?: { clientDisplayName?: string },

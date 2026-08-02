@@ -7,7 +7,7 @@ import {
   getMSTeamsTestRuntimeState,
   installMSTeamsTestRuntime,
 } from "./monitor-handler.test-helpers.js";
-import type { MSTeamsApprovalGatewayRuntime } from "./monitor-handler.types.js";
+import type { MSTeamsMessageHandlerDeps } from "./monitor-handler.types.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 
 const APPROVER_ID = "5e4b4b6f-c242-45de-b0de-bf44eb233145";
@@ -24,26 +24,26 @@ describe("msteams approval control mock-gateway proof", () => {
       releaseWaitingTurn = resolve;
     });
     const pendingApprovals = new Map([[APPROVAL_ID, releaseWaitingTurn]]);
-    const gatewayRequest = vi.fn<MSTeamsApprovalGatewayRuntime["request"]>(
-      async (method, params) => {
-        expect(method).toBe("approval.resolve");
-        const pending = pendingApprovals.get(params.id);
-        if (!pending) {
-          throw new Error("unknown or expired approval id");
-        }
-        pendingApprovals.delete(params.id);
-        pending(params.decision);
-        return {
-          applied: true,
-          approval: {
-            id: params.id,
-            presentation: { kind: params.kind },
-            status: "allowed",
-            decision: params.decision,
-          },
-        } as ApprovalResolveResult;
-      },
-    );
+    const gatewayRequest = vi.fn<
+      NonNullable<MSTeamsMessageHandlerDeps["approvalGatewayRuntime"]>["request"]
+    >(async (method, params) => {
+      expect(method).toBe("approval.resolve");
+      const pending = pendingApprovals.get(params.id);
+      if (!pending) {
+        throw new Error("unknown or expired approval id");
+      }
+      pendingApprovals.delete(params.id);
+      pending(params.decision);
+      return {
+        applied: true,
+        approval: {
+          id: params.id,
+          presentation: { kind: params.kind },
+          status: "allowed",
+          decision: params.decision,
+        },
+      } as ApprovalResolveResult;
+    });
     const deps = createMSTeamsMessageHandlerDeps({
       cfg: {
         channels: { msteams: { allowFrom: [APPROVER_ID] } },

@@ -61,7 +61,7 @@ export async function maybeHandleMSTeamsApprovalControl(params: {
     approvalKind,
   });
   const explicitlyAuthorized =
-    authorization?.authorized === true && !isImplicitSameChatApprovalAuthorization(authorization);
+    Boolean(authorization?.authorized) && !isImplicitSameChatApprovalAuthorization(authorization);
   const commandAuthorized = access.commandAccess.authorized;
   if (!senderAdmitted || (!commandAuthorized && !explicitlyAuthorized)) {
     params.deps.log.debug?.("dropping approval control from unauthorized sender", {

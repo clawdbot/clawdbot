@@ -55,7 +55,7 @@ function createContext(senderId: string): MSTeamsTurnContext {
       },
     },
     sendActivity: vi.fn(async () => ({ id: "status-activity" })),
-  } as MSTeamsTurnContext;
+  } as unknown as MSTeamsTurnContext;
 }
 
 describe("msteams approval control", () => {
