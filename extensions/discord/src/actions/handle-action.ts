@@ -525,6 +525,7 @@ export async function handleDiscordMessageAction(
     ctx,
     resolveChannelId,
     readPolicyOptions,
+    actionOptions,
   });
   if (adminResult !== undefined) {
     if (action === "thread-reply") {

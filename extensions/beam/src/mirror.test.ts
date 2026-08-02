@@ -189,6 +189,13 @@ describe("buildBeamMirrorItems", () => {
     const reduced = buildBeamMirrorItems([{ type: "userMessage", text: "x".repeat(10_000) }]);
     expect(reduced.items[0]?.text.length).toBe(6_000);
   });
+
+  it("does not split a surrogate pair when clipping message text", () => {
+    const reduced = buildBeamMirrorItems([
+      { type: "userMessage", text: `${"x".repeat(5_999)}🙂tail` },
+    ]);
+    expect(reduced.items[0]?.text).toBe("x".repeat(5_999));
+  });
 });
 
 describe("fitBeamMirrorUpload", () => {
@@ -246,6 +253,24 @@ describe("createBeamMirrorRunner", () => {
     });
     expect(parseBeamUpload(structuredClone(sent[0]?.payload)).ok).toBe(true);
     expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it("does not split a surrogate pair when clipping the session title", async () => {
+    const sent: SentRequest[] = [];
+    const catalog = fakeCatalog({
+      id: "claude",
+      sessions: [{ threadId: "t-emoji", name: `${"x".repeat(159)}🙂`, recencyAt: NOW - 60_000 }],
+    });
+    const runner = createBeamMirrorRunner({
+      runtime: fakeRuntime(mirrorConfig()),
+      logger: silentLogger,
+      fetchFn: captureFetch(sent),
+      now: () => NOW,
+      listCatalogs: () => [catalog],
+    });
+    await runner.tick();
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.payload.title).toBe("x".repeat(159));
   });
 
   it("keeps successful uploads successful when response cancellation rejects", async () => {

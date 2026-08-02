@@ -3,8 +3,14 @@ import { isTruthyEnvValue } from "../infra/env.js";
 import type { CliCommandPluginLoadPolicy } from "./command-catalog.js";
 import { resolveCliCommandPathPolicy } from "./command-path-policy.js";
 
-export function shouldBypassConfigGuardForCommandPath(commandPath: string[]): boolean {
-  return resolveCliCommandPathPolicy(commandPath).bypassConfigGuard;
+export function shouldBypassConfigGuardForCommandPath(
+  commandPath: string[],
+  argv: string[] = [],
+): boolean {
+  const bypassConfigGuard = resolveCliCommandPathPolicy(commandPath).bypassConfigGuard;
+  return typeof bypassConfigGuard === "function"
+    ? bypassConfigGuard({ argv, commandPath })
+    : bypassConfigGuard;
 }
 
 function shouldLoadPlugins(params: {

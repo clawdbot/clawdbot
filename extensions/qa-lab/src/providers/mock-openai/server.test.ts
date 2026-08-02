@@ -1,5 +1,7 @@
 // Qa Lab tests cover server plugin behavior.
+import { once } from "node:events";
 import { afterEach, describe, expect, it } from "vitest";
+import { WebSocket } from "ws";
 import { readQaMockRequestCursor } from "../shared/debug-request-cursor.js";
 import { readTargetFromPrompt } from "./mock-openai-tooling.js";
 import { startQaMockOpenAiServer } from "./server.js";
@@ -249,6 +251,16 @@ const CODEX_SUBAGENT_TOOL_NAMESPACE = {
   type: "namespace",
   name: "openclaw",
   tools: [SESSIONS_SPAWN_TOOL, SESSIONS_YIELD_TOOL],
+} as const;
+const CODEX_CUSTOM_PATCH_TOOL = {
+  type: "custom",
+  name: "apply_patch",
+  format: { type: "grammar", syntax: "lark", definition: "start: /.+/" },
+} as const;
+const CODEX_CUSTOM_PATCH_NAMESPACE = {
+  type: "namespace",
+  name: "openclaw_direct",
+  tools: [CODEX_CUSTOM_PATCH_TOOL],
 } as const;
 const READ_TOOL = { type: "function", name: "read" } as const;
 const MESSAGE_TOOL = { type: "function", name: "message" } as const;
@@ -4349,13 +4361,7 @@ describe("qa mock openai server", () => {
   ])("plans an actual $label native freeform patch", async (testCase) => {
     const server = await startMockServer();
     const response = await postNonStreamingResponses(server, {
-      tools: [
-        {
-          type: "custom",
-          name: "apply_patch",
-          format: { type: "grammar", syntax: "lark", definition: "start: /.+/" },
-        },
-      ],
+      tools: [CODEX_CUSTOM_PATCH_TOOL],
       input: [makeUserInput(testCase.prompt)],
     });
 
@@ -4380,16 +4386,62 @@ describe("qa mock openai server", () => {
     expect(debug.plannedToolArgs).toEqual({ input: item.input });
   });
 
-  it("streams native Codex patch input as custom-tool SSE", async () => {
+  it.each([
+    {
+      label: "namespaced tools",
+      declarations: { tools: [CODEX_CUSTOM_PATCH_NAMESPACE] },
+      additionalTools: undefined,
+    },
+    {
+      label: "namespaced dynamic tools",
+      declarations: { dynamicTools: [CODEX_CUSTOM_PATCH_NAMESPACE] },
+      additionalTools: undefined,
+    },
+    {
+      label: "developer additional tools",
+      declarations: {},
+      additionalTools: [CODEX_CUSTOM_PATCH_NAMESPACE],
+    },
+    {
+      label: "direct custom tools before tool search",
+      declarations: {
+        tools: [{ type: "function", name: "tool_search_code" }, CODEX_CUSTOM_PATCH_NAMESPACE],
+      },
+      additionalTools: undefined,
+    },
+  ])("preserves custom-tool identity through $label", async ({ declarations, additionalTools }) => {
+    const server = await startMockServer();
+    const input: Array<Record<string, unknown>> = [];
+    if (additionalTools) {
+      input.push({ type: "additional_tools", role: "developer", tools: additionalTools });
+    }
+    input.push(
+      makeUserInput(
+        "tool search qa check target=apply_patch. Call apply_patch exactly once and then summarize.",
+      ),
+    );
+
+    const response = await postNonStreamingResponses(server, { ...declarations, input });
+
+    expect(response.status).toBe(200);
+    expect(outputItem(await response.json())).toMatchObject({
+      type: "custom_tool_call",
+      name: "apply_patch",
+      namespace: "openclaw_direct",
+    });
+  });
+
+  it.each([
+    { label: "flat", tools: [CODEX_CUSTOM_PATCH_TOOL], namespace: undefined },
+    {
+      label: "namespaced",
+      tools: [CODEX_CUSTOM_PATCH_NAMESPACE],
+      namespace: "openclaw_direct",
+    },
+  ])("streams $label native Codex patch input as custom-tool SSE", async ({ tools, namespace }) => {
     const server = await startMockServer();
     const response = await postStreamingResponses(server, {
-      tools: [
-        {
-          type: "custom",
-          name: "apply_patch",
-          format: { type: "grammar", syntax: "lark", definition: "start: /.+/" },
-        },
-      ],
+      tools,
       input: [
         makeUserInput(
           "tool search qa check target=apply_patch. Call apply_patch exactly once and then summarize.",
@@ -4439,6 +4491,67 @@ describe("qa mock openai server", () => {
     expect(delta?.delta).toBe(done?.item?.input);
     expect(delta?.delta).toContain("runtime-tool-fixture-patch.txt");
     expect(completed?.response?.output).toEqual([done?.item]);
+    for (const item of [added?.item, done?.item, completed?.response?.output?.[0]]) {
+      if (namespace) {
+        expect(item).toMatchObject({ namespace });
+      } else {
+        expect(item).not.toHaveProperty("namespace");
+      }
+    }
+  });
+
+  it("preserves namespaced native custom-tool identity over Responses WebSocket", async () => {
+    const server = await startMockServer();
+    const socket = new WebSocket(`${server.baseUrl.replace(/^http/u, "ws")}/v1/responses`);
+    cleanups.push(async () => socket.terminate());
+    await once(socket, "open");
+
+    const completed = new Promise<Array<Record<string, unknown>>>((resolve, reject) => {
+      const events: Array<Record<string, unknown>> = [];
+      socket.on("error", reject);
+      socket.on("message", (message) => {
+        const event = JSON.parse(Buffer.from(message as Buffer).toString("utf8")) as Record<
+          string,
+          unknown
+        >;
+        events.push(event);
+        if (event.type === "response.completed") {
+          resolve(events);
+        }
+      });
+    });
+    socket.send(
+      JSON.stringify({
+        type: "response.create",
+        tools: [CODEX_CUSTOM_PATCH_NAMESPACE],
+        input: [
+          makeUserInput(
+            "tool search qa check target=apply_patch. Call apply_patch exactly once and then summarize.",
+          ),
+        ],
+      }),
+    );
+
+    const events = await completed;
+    const added = requireRecord(
+      events.find((event) => event.type === "response.output_item.added")?.item,
+      "WebSocket custom-tool added item",
+    );
+    const done = requireRecord(
+      events.find((event) => event.type === "response.output_item.done")?.item,
+      "WebSocket custom-tool completed item",
+    );
+    const response = requireRecord(
+      events.find((event) => event.type === "response.completed")?.response,
+      "WebSocket completed response",
+    );
+    for (const item of [added, done, outputItem(response)]) {
+      expect(item).toMatchObject({
+        type: "custom_tool_call",
+        name: "apply_patch",
+        namespace: "openclaw_direct",
+      });
+    }
   });
 
   it.each([

@@ -17,6 +17,7 @@ import {
   listTaskFlowRecords,
   resolveTaskFlowForLookupToken,
 } from "../tasks/task-flow-runtime-internal.js";
+import { isTerminalFlowStatus } from "../tasks/task-registry-common.js";
 import { formatTaskStatusDetail } from "../tasks/task-status.js";
 
 const ID_PAD = 10;
@@ -109,7 +110,9 @@ function formatFlowListSummary(flows: TaskFlowRecord[]) {
     (flow) => flow.status === "queued" || flow.status === "running",
   ).length;
   const blocked = flows.filter((flow) => flow.status === "blocked").length;
-  const cancelRequested = flows.filter((flow) => flow.cancelRequestedAt != null).length;
+  const cancelRequested = flows.filter(
+    (flow) => flow.cancelRequestedAt != null && !isTerminalFlowStatus(flow.status),
+  ).length;
   return `${active} active · ${blocked} blocked · ${cancelRequested} cancel-requested · ${flows.length} total`;
 }
 

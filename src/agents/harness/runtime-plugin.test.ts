@@ -73,6 +73,69 @@ describe("harness runtime plugins", () => {
     expect(plan.config?.plugins?.entries?.codex).toEqual({ enabled: true });
   });
 
+  const memorySelectionCases: Array<{
+    name: string;
+    config: OpenClawConfig;
+    expectedPluginIds: string[];
+  }> = [
+    {
+      name: "implicit plugin configuration",
+      config: {},
+      expectedPluginIds: [],
+    },
+    {
+      name: "explicit unrelated plugin configuration",
+      config: {
+        plugins: {
+          entries: { "custom-context-engine": { enabled: true } },
+        },
+      },
+      expectedPluginIds: [],
+    },
+    {
+      name: "an explicitly selected default memory slot",
+      config: { plugins: { slots: { memory: "memory-core" } } },
+      expectedPluginIds: ["memory-core"],
+    },
+    {
+      name: "an explicitly enabled default memory plugin",
+      config: { plugins: { entries: { "memory-core": { enabled: true } } } },
+      expectedPluginIds: ["memory-core"],
+    },
+    {
+      name: "an explicitly disabled memory slot",
+      config: { plugins: { slots: { memory: "none" } } },
+      expectedPluginIds: [],
+    },
+    {
+      name: "an explicitly selected alternative memory slot",
+      config: { plugins: { slots: { memory: "memory-lancedb" } } },
+      expectedPluginIds: ["memory-lancedb"],
+    },
+    {
+      name: "an explicitly disabled default memory plugin",
+      config: { plugins: { entries: { "memory-core": { enabled: false } } } },
+      expectedPluginIds: [],
+    },
+  ];
+
+  it.each(memorySelectionCases)(
+    "preserves config-owned memory selection for $name",
+    ({ config, expectedPluginIds }) => {
+      const plan = resolveAgentRuntimePluginLoadPlan({
+        config,
+        workspaceDir: "/tmp/workspace",
+        selections: [],
+      });
+
+      expect(plan.pluginIds ?? []).toEqual(expectedPluginIds);
+      expect(plan.config).toMatchObject(config);
+      for (const pluginId of expectedPluginIds) {
+        expect(plan.config?.plugins?.entries?.[pluginId]).toEqual({ enabled: true });
+      }
+    },
+  );
+
   it("keeps standalone activation unrestricted when no complete startup base exists", () => {
     const plan = resolveAgentRuntimePluginLoadPlan({
       config: {
@@ -109,7 +172,7 @@ describe("harness runtime plugins", () => {
 
   it("preserves startup-scoped plugins when selected owners synthesize an allowlist", () => {
     const plan = resolveAgentRuntimePluginLoadPlan({
-      config: {},
+      config: { plugins: { slots: { memory: "memory-core" } } },
       workspaceDir: "/tmp/workspace",
       basePluginIds: ["telegram"],
       selections: [{ provider: "openai", modelId: "gpt-5.5", runtime: "codex" }],

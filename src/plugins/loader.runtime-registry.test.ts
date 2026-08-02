@@ -25,6 +25,7 @@ import { buildMemoryPromptSection, registerMemoryCapability } from "./memory-sta
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { createEmptyPluginRegistry } from "./registry.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "./runtime.js";
+import type { PluginRuntime } from "./runtime/types.js";
 
 afterEach(() => {
   resetPluginLoaderTestStateForTest();
@@ -80,6 +81,32 @@ function setLoaderMetadataSnapshot(params: { pluginIds?: readonly string[] } = {
 }
 
 describe("resolvePluginLoadCacheContext", () => {
+  it("keys concrete runtime bindings by identity", () => {
+    const firstNodes = {} as PluginRuntime["nodes"];
+    const firstSubagent = {} as PluginRuntime["subagent"];
+    const firstOptions = {
+      config: {},
+      runtimeOptions: {
+        allowGatewaySubagentBinding: true,
+        nodes: firstNodes,
+        subagent: firstSubagent,
+      },
+    };
+    const firstKey = resolvePluginLoadCacheContext(firstOptions).cacheKey;
+
+    expect(resolvePluginLoadCacheContext(firstOptions).cacheKey).toBe(firstKey);
+    expect(
+      resolvePluginLoadCacheContext({
+        ...firstOptions,
+        runtimeOptions: {
+          ...firstOptions.runtimeOptions,
+          nodes: {} as PluginRuntime["nodes"],
+          subagent: {} as PluginRuntime["subagent"],
+        },
+      }).cacheKey,
+    ).not.toBe(firstKey);
+  });
+
   it("reuses prepared install records from the compatible metadata generation", () => {
     const { config, env, installRecords, snapshot, workspaceDir } = setLoaderMetadataSnapshot();
 

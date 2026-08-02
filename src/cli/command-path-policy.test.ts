@@ -26,6 +26,10 @@ type LoadPluginsResolver = Extract<
   CliCommandPathPolicy["loadPlugins"],
   (ctx: { argv: string[]; commandPath: string[]; jsonOutputMode: boolean }) => unknown
 >;
+type ConfigGuardBypassResolver = Extract<
+  CliCommandPathPolicy["bypassConfigGuard"],
+  (ctx: { argv: string[]; commandPath: string[] }) => unknown
+>;
 
 function expectResolvedPolicy(
   commandPath: string[],
@@ -47,6 +51,12 @@ function expectLoadPluginsResolver(
   policy: CliCommandPathPolicy,
 ): asserts policy is CliCommandPathPolicy & { loadPlugins: LoadPluginsResolver } {
   expect(typeof policy.loadPlugins).toBe("function");
+}
+
+function expectConfigGuardBypassResolver(
+  policy: CliCommandPathPolicy,
+): asserts policy is CliCommandPathPolicy & { bypassConfigGuard: ConfigGuardBypassResolver } {
+  expect(typeof policy.bypassConfigGuard).toBe("function");
 }
 
 describe("command-path-policy", () => {
@@ -86,6 +96,8 @@ describe("command-path-policy", () => {
     const channelsStatusPolicy = resolveCliCommandPathPolicy(["channels", "status"]);
     expect(channelsStatusPolicy).toEqual({
       ...DEFAULT_EXPECTED_POLICY,
+      bypassConfigGuard: true,
+      routeConfigGuard: "always",
       loadPlugins: "never",
       pluginRegistry: { scope: "configured-channels" },
       networkProxy: channelsStatusPolicy.networkProxy,
@@ -129,11 +141,13 @@ describe("command-path-policy", () => {
     const agentPolicy = resolveCliCommandPathPolicy(["agent"]);
     expect(agentPolicy).toEqual({
       ...DEFAULT_EXPECTED_POLICY,
+      bypassConfigGuard: agentPolicy.bypassConfigGuard,
       loadPlugins: agentPolicy.loadPlugins,
       pluginRegistry: { scope: "all" },
       networkProxy: agentPolicy.networkProxy,
     });
     expectLoadPluginsResolver(agentPolicy);
+    expectConfigGuardBypassResolver(agentPolicy);
     expectNetworkProxyResolver(agentPolicy);
     expect(
       agentPolicy.loadPlugins({
@@ -141,7 +155,7 @@ describe("command-path-policy", () => {
         commandPath: ["agent"],
         jsonOutputMode: false,
       }),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       agentPolicy.loadPlugins({
         argv: ["node", "openclaw", "agent", "--json"],
@@ -156,6 +170,18 @@ describe("command-path-policy", () => {
         jsonOutputMode: true,
       }),
     ).toBe(true);
+    expect(
+      agentPolicy.bypassConfigGuard({
+        argv: ["node", "openclaw", "agent"],
+        commandPath: ["agent"],
+      }),
+    ).toBe(true);
+    expect(
+      agentPolicy.bypassConfigGuard({
+        argv: ["node", "openclaw", "agent", "--local"],
+        commandPath: ["agent"],
+      }),
+    ).toBe(false);
     expect(
       agentPolicy.networkProxy({
         argv: ["node", "openclaw", "agent"],

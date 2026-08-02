@@ -59,7 +59,6 @@ describe("gateway startup websocket readiness", () => {
       expect(runtimeState.httpBindHosts).toEqual([]);
       expect(runtimeState.httpServer.listenerCount("upgrade")).toBeGreaterThan(0);
     } finally {
-      runtimeState.releasePluginRouteRegistry();
       runtimeState.wss.close();
     }
   });

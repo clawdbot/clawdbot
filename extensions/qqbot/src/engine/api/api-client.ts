@@ -9,6 +9,7 @@
  * - `redactBodyKeys` replaces the hardcoded `file_data` redaction.
  */
 
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   readProviderTextResponse,
   readResponseTextLimited,
@@ -16,7 +17,6 @@ import {
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { ApiError, type ApiClientConfig, type EngineLogger } from "../types.js";
-import { formatErrorMessage } from "../utils/format.js";
 
 const DEFAULT_BASE_URL = "https://api.sgroup.qq.com";
 const DEFAULT_TIMEOUT_MS = 30_000;

@@ -249,7 +249,9 @@ async function tryRunGatewayRunFastPath(
     { beforeRun },
   );
   try {
-    await startupTrace.measure("gateway-run-parse", () => program.parseAsync(argv));
+    await startupTrace.measure("gateway-run-parse", () => program.parseAsync(argv), {
+      timeline: false,
+    });
   } catch (error) {
     if (!isCommanderParseExit(error)) {
       throw error;
@@ -1190,6 +1192,17 @@ async function runCliWithPreparedOutputMode(
     }
     return await bestEffortConfigPromise;
   };
+  const startupTraces = [startupTrace, options.additionalStartupTrace].filter(
+    (trace): trace is ReturnType<typeof createGatewayStartupTrace> => Boolean(trace),
+  );
+  if (
+    (await Promise.all(startupTraces.map((trace) => trace.requiresDiagnosticsConfig()))).some(
+      Boolean,
+    )
+  ) {
+    const config = await withConsoleLogsRoutedToStderr(readBestEffortCliConfig);
+    await Promise.all(startupTraces.map((trace) => trace.configureDiagnosticsTimeline(config)));
+  }
   if (
     !isHelpOrVersionInvocation &&
     normalizedInvocation.primary &&
@@ -1418,10 +1431,13 @@ async function runCliWithPreparedOutputMode(
     }
 
     const { tryRouteCli } = await startupTrace.measure("route-import", () => import("./route.js"));
-    const routed = await startupTrace.measure("route", () =>
-      options.builtInMachineOutput
-        ? tryRouteCli(normalizedArgv, { machineOutput: true })
-        : tryRouteCli(normalizedArgv),
+    const routed = await startupTrace.measure(
+      "route",
+      () =>
+        options.builtInMachineOutput
+          ? tryRouteCli(normalizedArgv, { machineOutput: true })
+          : tryRouteCli(normalizedArgv),
+      { timeline: false },
     );
     if (routed) {
       return;
@@ -1571,7 +1587,9 @@ async function runCliWithPreparedOutputMode(
 
       let completedHelpOrVersion = false;
       try {
-        await startupTrace.measure("parse", () => program.parseAsync(parseArgv));
+        await startupTrace.measure("parse", () => program.parseAsync(parseArgv), {
+          timeline: false,
+        });
         completedHelpOrVersion = isHelpOrVersionInvocation;
       } catch (error) {
         if (!isCommanderParseExit(error)) {

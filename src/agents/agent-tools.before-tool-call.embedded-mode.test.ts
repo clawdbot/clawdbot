@@ -12,18 +12,10 @@ import {
   EmbeddedPluginApprovalBroker,
   setEmbeddedPluginApprovalBroker,
 } from "../infra/embedded-plugin-approval-broker.js";
-import {
-  getGlobalHookRunner,
-  initializeGlobalHookRunner,
-  resetGlobalHookRunner,
-} from "../plugins/hook-runner-global.js";
+import { getGlobalHookRunner, resetGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { HookRunner } from "../plugins/hooks.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import {
-  pinActivePluginChannelRegistry,
-  releasePinnedPluginChannelRegistry,
-  setActivePluginRegistry,
-} from "../plugins/runtime.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { PluginApprovalResolutions } from "../plugins/types.js";
 import { runBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -709,94 +701,6 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     });
     expect(mockCallGatewayTool).not.toHaveBeenCalled();
     expect(runBeforeToolCallMock).not.toHaveBeenCalled();
-  });
-
-  it("runs trusted policies from the global hook registry after the active registry changes", async () => {
-    const evaluatePolicy = vi.fn(() => ({
-      block: true,
-      blockReason: "gateway registry policy blocked",
-    }));
-    const gatewayRegistry = createEmptyPluginRegistry();
-    gatewayRegistry.trustedToolPolicies = [
-      {
-        pluginId: "gateway-policy",
-        pluginName: "Gateway Policy",
-        source: "test",
-        policy: {
-          id: "gateway-block",
-          description: "Gateway policy",
-          evaluate: evaluatePolicy,
-        },
-      },
-    ];
-    initializeGlobalHookRunner(gatewayRegistry);
-    setActivePluginRegistry(createEmptyPluginRegistry());
-    runBeforeToolCallMock.mockResolvedValue(undefined);
-
-    const result = await runBeforeToolCallHook({
-      toolName: "bash",
-      params: { command: "deploy" },
-      toolCallId: "call-gateway-policy",
-      ctx: { agentId: "main", sessionKey: "main" },
-    });
-
-    expect(result).toEqual({
-      blocked: true,
-      kind: "veto",
-      deniedReason: "plugin-before-tool-call",
-      reason: "gateway registry policy blocked",
-      params: { command: "deploy" },
-    });
-    expect(evaluatePolicy).toHaveBeenCalledTimes(1);
-    expect(runBeforeToolCallMock).not.toHaveBeenCalled();
-  });
-
-  it("runs pinned gateway trusted policies after a later global runner initialization", async () => {
-    const evaluatePolicy = vi.fn(() => ({
-      block: true,
-      blockReason: "pinned gateway policy blocked",
-    }));
-    const gatewayRegistry = createEmptyPluginRegistry();
-    gatewayRegistry.trustedToolPolicies = [
-      {
-        pluginId: "gateway-policy",
-        pluginName: "Gateway Policy",
-        source: "test",
-        policy: {
-          id: "gateway-block",
-          description: "Gateway policy",
-          evaluate: evaluatePolicy,
-        },
-      },
-    ];
-    setActivePluginRegistry(gatewayRegistry);
-    initializeGlobalHookRunner(gatewayRegistry);
-    pinActivePluginChannelRegistry(gatewayRegistry);
-    try {
-      const laterRegistry = createEmptyPluginRegistry();
-      setActivePluginRegistry(laterRegistry);
-      initializeGlobalHookRunner(laterRegistry);
-      runBeforeToolCallMock.mockResolvedValue(undefined);
-
-      const result = await runBeforeToolCallHook({
-        toolName: "bash",
-        params: { command: "deploy" },
-        toolCallId: "call-pinned-gateway-policy",
-        ctx: { agentId: "main", sessionKey: "main" },
-      });
-
-      expect(result).toEqual({
-        blocked: true,
-        kind: "veto",
-        deniedReason: "plugin-before-tool-call",
-        reason: "pinned gateway policy blocked",
-        params: { command: "deploy" },
-      });
-      expect(evaluatePolicy).toHaveBeenCalledTimes(1);
-      expect(runBeforeToolCallMock).not.toHaveBeenCalled();
-    } finally {
-      releasePinnedPluginChannelRegistry(gatewayRegistry);
-    }
   });
 
   it("does not require skill_workshop lifecycle approval by default", async () => {

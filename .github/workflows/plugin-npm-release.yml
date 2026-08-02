@@ -9,6 +9,7 @@ on:
       - ".github/workflows/plugin-npm-release.yml"
       - "extensions/**"
       - "package.json"
+      - "scripts/generate-npm-package-lock.mjs"
       - "scripts/lib/npm-publish-plan.mjs"
       - "scripts/lib/release-version.mjs"
       - "scripts/lib/plugin-npm-package-manifest.mjs"
@@ -335,12 +336,17 @@ jobs:
           ref: ${{ github.workflow_sha }}
           path: .release-tooling
           fetch-depth: 1
-          sparse-checkout: scripts/lib/plugin-npm-package-manifest.mjs
+          sparse-checkout: |
+            scripts/generate-npm-package-lock.mjs
+            scripts/lib/plugin-npm-package-manifest.mjs
           sparse-checkout-cone-mode: false
 
       - name: Overlay trusted packaging helper
         run: |
           set -euo pipefail
+          cp \
+            .release-tooling/scripts/generate-npm-package-lock.mjs \
+            scripts/generate-npm-package-lock.mjs
           cp \
             .release-tooling/scripts/lib/plugin-npm-package-manifest.mjs \
             scripts/lib/plugin-npm-package-manifest.mjs
@@ -1229,6 +1235,9 @@ jobs:
         if: steps.publication_evidence.outputs.publish_route == 'npm-oidc'
         run: |
           set -euo pipefail
+          cp \
+            scripts/generate-npm-package-lock.mjs \
+            .publication-target/scripts/generate-npm-package-lock.mjs
           cp \
             scripts/lib/plugin-npm-package-manifest.mjs \
             .publication-target/scripts/lib/plugin-npm-package-manifest.mjs

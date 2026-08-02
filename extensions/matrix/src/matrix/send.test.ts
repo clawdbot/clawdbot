@@ -510,15 +510,32 @@ describe("sendMessageMatrix media", () => {
 
   it("uploads media with url payloads", async () => {
     const { client, sendMessage, uploadContent } = makeClient();
+    const mediaAccess = {
+      localRoots: ["/tmp/openclaw"],
+      workspaceDir: "/tmp/openclaw",
+    };
 
     await sendMessageMatrix("room:!room:example", "caption", {
       client,
       cfg: {} as never,
-      mediaUrl: "file:///tmp/photo.png",
+      mediaUrl: "chart.png",
+      mediaAccess,
+      mediaLocalRoots: mediaAccess.localRoots,
     });
+
+    expect(mockCallArg(loadOutboundMediaFromUrlMock, "loadOutboundMediaFromUrl", 0)).toBe(
+      "chart.png",
+    );
+    const mediaOptions = requireRecord(
+      mockCallArg(loadOutboundMediaFromUrlMock, "loadOutboundMediaFromUrl", 1),
+      "outbound media options",
+    );
+    expect(mediaOptions.mediaAccess).toBe(mediaAccess);
+    expect(mediaOptions.mediaLocalRoots).toBe(mediaAccess.localRoots);
 
     const uploadArg = mockCallArg(uploadContent, "uploadContent", 0);
     expect(Buffer.isBuffer(uploadArg)).toBe(true);
+    expect(uploadArg).toEqual(Buffer.from("media"));
 
     const content = sentContent(sendMessage) as {
       url?: string;

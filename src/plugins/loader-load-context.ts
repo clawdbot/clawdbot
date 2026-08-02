@@ -24,11 +24,7 @@ import {
   fingerprintPluginDiscoveryContext,
   resolvePluginDiscoveryContext,
 } from "./plugin-control-plane-context.js";
-import {
-  hasExplicitPluginIdScope,
-  normalizePluginIdScope,
-  serializePluginIdScope,
-} from "./plugin-scope.js";
+import { normalizePluginIdScope, serializePluginIdScope } from "./plugin-scope.js";
 import type { PluginSdkResolutionPreference } from "./sdk-alias.js";
 
 function safeRealpathOrResolve(value: string): string {
@@ -75,6 +71,30 @@ type BundledPackageCacheIdentity = {
 };
 
 const bundledPackageCacheIdentityByStockRoot = new Map<string, BundledPackageCacheIdentity>();
+const runtimeBindingCacheIds = new WeakMap<object, number>();
+let nextRuntimeBindingCacheId = 1;
+
+function resolveRuntimeBindingCacheId(value: object | undefined): number | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const existing = runtimeBindingCacheIds.get(value);
+  if (existing !== undefined) {
+    return existing;
+  }
+  const id = nextRuntimeBindingCacheId++;
+  runtimeBindingCacheIds.set(value, id);
+  return id;
+}
+
+function resolveRuntimeBindingCacheIdentity(
+  runtimeOptions: PluginLoadOptions["runtimeOptions"],
+): string {
+  return JSON.stringify({
+    nodes: resolveRuntimeBindingCacheId(runtimeOptions?.nodes),
+    subagent: resolveRuntimeBindingCacheId(runtimeOptions?.subagent),
+  });
+}
 
 function resolveBundledPackageCacheIdentity(
   stockRoot?: string,
@@ -170,6 +190,7 @@ function buildCacheKey(params: {
   toolDiscovery?: boolean;
   loadModules?: boolean;
   runtimeSubagentMode?: PluginRuntimeSubagentMode;
+  runtimeBindingIdentity?: string;
   pluginSdkResolution?: PluginSdkResolutionPreference;
   coreGatewayMethodNames?: string[];
   activate?: boolean;
@@ -227,7 +248,7 @@ function buildCacheKey(params: {
       loadPaths,
       activationMetadataKey: params.activationMetadataKey ?? "",
     },
-  )}::${serializePluginIdScope(params.onlyPluginIds)}::${setupOnlyKey}::${setupOnlyModeKey}::${setupOnlyRequirementKey}::${startupChannelMode}::${bundledArtifactMode}::${rawConfigEnvMode}::${moduleLoadMode}::${discoveryMode}::${params.runtimeSubagentMode ?? "default"}::${params.pluginSdkResolution ?? "auto"}::${JSON.stringify(params.coreGatewayMethodNames ?? [])}::${activationMode}`;
+  )}::${serializePluginIdScope(params.onlyPluginIds)}::${setupOnlyKey}::${setupOnlyModeKey}::${setupOnlyRequirementKey}::${startupChannelMode}::${bundledArtifactMode}::${rawConfigEnvMode}::${moduleLoadMode}::${discoveryMode}::${params.runtimeSubagentMode ?? "default"}::${params.runtimeBindingIdentity ?? "{}"}::${params.pluginSdkResolution ?? "auto"}::${JSON.stringify(params.coreGatewayMethodNames ?? [])}::${activationMode}`;
   return createHash("sha256").update(cacheIdentity).digest("hex");
 }
 
@@ -238,27 +259,6 @@ export function resolveRuntimeSubagentMode(
     return "gateway-bindable";
   }
   return runtimeOptions?.subagent ? "explicit" : "default";
-}
-
-export function hasExplicitCompatibilityInputs(options: PluginLoadOptions): boolean {
-  return (
-    options.config !== undefined ||
-    options.activationSourceConfig !== undefined ||
-    options.autoEnabledReasons !== undefined ||
-    options.workspaceDir !== undefined ||
-    options.env !== undefined ||
-    options.resolveRawConfigEnvVars !== undefined ||
-    hasExplicitPluginIdScope(options.onlyPluginIds) ||
-    options.runtimeOptions !== undefined ||
-    options.pluginSdkResolution !== undefined ||
-    options.coreGatewayHandlers !== undefined ||
-    options.includeSetupOnlyChannelPlugins === true ||
-    options.forceSetupOnlyChannelPlugins === true ||
-    options.requireSetupEntryForSetupOnlyChannelPlugins === true ||
-    options.preferSetupRuntimeForChannelPlugins === true ||
-    options.preferBuiltPluginArtifacts === true ||
-    options.loadModules === false
-  );
 }
 
 function resolveCoreGatewayMethodNames(options: PluginLoadOptions): string[] {
@@ -396,6 +396,7 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     toolDiscovery: options.toolDiscovery,
     loadModules: options.loadModules,
     runtimeSubagentMode,
+    runtimeBindingIdentity: resolveRuntimeBindingCacheIdentity(options.runtimeOptions),
     pluginSdkResolution: options.pluginSdkResolution,
     coreGatewayMethodNames,
     activate: options.activate,

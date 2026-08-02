@@ -6,6 +6,7 @@ import {
 } from "../../agents/tools/sessions-helpers.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { isNativeCommandTurn, resolveCommandTurnContext } from "../command-turn-context.js";
 import { applyCommandTextToParams } from "./command-context-rewrite.js";
 import { commandReply, defineAuthorizedTextCommand } from "./command-gates.js";
@@ -92,10 +93,6 @@ function resolveSteerSessionId(params: {
   return undefined;
 }
 
-function formatSteerError(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
-
 function continueWithSteerFallback(
   params: HandleCommandsParams,
   message: string,
@@ -143,7 +140,7 @@ export const handleSteerCommand: CommandHandler = defineAuthorizedTextCommand(
       return continueWithSteerFallback(
         params,
         message,
-        `steer: active session ${sessionId} threw while steering: ${formatSteerError(err)}; continuing with /steer payload as a normal prompt`,
+        `steer: active session ${sessionId} threw while steering: ${formatErrorMessage(err)}; continuing with /steer payload as a normal prompt`,
       );
     });
     if ("shouldContinue" in queueOutcome) {

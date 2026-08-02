@@ -103,7 +103,7 @@ type AgentGatewayCallIdentity = Pick<
   Parameters<typeof callGateway>[0],
   "clientName" | "mode" | "scopes"
 >;
-type AgentSessionModule = typeof import("./agent/session.js");
+type AgentSessionModule = typeof import("./agent/session.runtime.js");
 type AgentSessionModuleLoader = () => Promise<AgentSessionModule>;
 
 const AGENT_CLI_SIGNALS: readonly AgentCliSignal[] = ["SIGINT", "SIGTERM"];
@@ -116,7 +116,7 @@ const AGENT_CLI_SIGNAL_EXIT_CODES: Record<AgentCliSignal, number> = {
 const MESSAGE_FILE_DECODER = new TextDecoder("utf-8", { fatal: true });
 
 const defaultAgentSessionModuleLoader: AgentSessionModuleLoader = () =>
-  import("./agent/session.js");
+  import("./agent/session.runtime.js");
 let agentSessionModuleLoader: AgentSessionModuleLoader = defaultAgentSessionModuleLoader;
 const embeddedAgentCommandLoader = createLazyPromiseLoader(
   () => import("./agent.js").then((module) => module.agentCommand),
@@ -703,13 +703,15 @@ async function agentViaGatewayCommand(
     ? undefined
     : classifySessionKeyShape(explicitSessionKey) === "agent"
       ? explicitSessionKey
-      : (await loadAgentSessionModule()).resolveSessionKeyForRequest({
-          cfg,
-          agentId,
-          to: opts.to,
-          sessionId: opts.sessionId,
-          sessionKey: explicitSessionKey,
-        }).sessionKey;
+      : explicitSessionKey || opts.to || opts.sessionId
+        ? (await loadAgentSessionModule()).resolveSessionKeyForRequest({
+            cfg,
+            agentId,
+            to: opts.to,
+            sessionId: opts.sessionId,
+            sessionKey: explicitSessionKey,
+          }).sessionKey
+        : undefined;
   const abortSessionKey = deferExplicitRecipientSession
     ? (await loadAgentSessionModule()).resolveSessionKeyForRequest({ cfg, agentId }).sessionKey
     : sessionKey;

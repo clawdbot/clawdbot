@@ -8,10 +8,7 @@ import type {
 } from "../../channels/plugins/types.adapters.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
-import {
-  releasePinnedPluginChannelRegistry,
-  setActivePluginRegistry,
-} from "../../plugins/runtime.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { PlatformMessageNotDispatchedError } from "./deliver-types.js";
 import { collectEntrySpoolPaths } from "./delivery-queue-media-spool.js";
@@ -101,7 +98,7 @@ describe("delivery-queue MEDIA-directive durability (end-to-end)", () => {
   });
 
   afterEach(() => {
-    releasePinnedPluginChannelRegistry();
+    resetPluginRuntimeStateForTest();
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
 

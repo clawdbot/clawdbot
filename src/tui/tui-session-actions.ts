@@ -53,6 +53,7 @@ type SessionActionContext = {
   updateFooter: () => void;
   updateAutocompleteProvider: () => void;
   setActivityStatus: (text: string) => void;
+  invalidateRunOwnership?: () => void;
   clearLocalRunIds?: () => void;
   rememberSessionKey?: (sessionKey: string) => void | Promise<void>;
 };
@@ -73,6 +74,7 @@ export function createSessionActions(context: SessionActionContext) {
     updateFooter,
     updateAutocompleteProvider,
     setActivityStatus,
+    invalidateRunOwnership,
     clearLocalRunIds,
     rememberSessionKey,
   } = context;
@@ -614,6 +616,9 @@ export function createSessionActions(context: SessionActionContext) {
       agentSessionKeysMatchByRequestKey(nextKey, previousSelection.sessionKey)
     );
     if (selectionChanged) {
+      // Retire the previous session's runs before history can adopt a new
+      // in-flight owner; otherwise its completion can promote an old run.
+      invalidateRunOwnership?.();
       reduceTuiSessionProjection(state, {
         type: "sessionReset",
         scope: readTuiSessionProjectionScope(state),

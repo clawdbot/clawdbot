@@ -97,7 +97,6 @@ extensions/discord/src/send.sends-basic-channel-messages.test.ts
 extensions/discord/src/voice/manager.e2e.test.ts
 extensions/discord/src/voice/manager.ts
 extensions/discord/src/voice/realtime.ts
-extensions/fal/image-generation-provider.test.ts
 extensions/fal/image-generation-provider.ts
 extensions/feishu/src/bot.test.ts
 extensions/feishu/src/bot.ts
@@ -134,7 +133,6 @@ extensions/lmstudio/src/setup.test.ts
 extensions/lmstudio/src/setup.ts
 extensions/matrix/src/cli.test.ts
 extensions/matrix/src/matrix/actions/verification.test.ts
-extensions/matrix/src/matrix/client/config.ts
 extensions/matrix/src/matrix/monitor/events.test.ts
 extensions/matrix/src/matrix/monitor/handler.test.ts
 extensions/matrix/src/matrix/sdk.test.ts
