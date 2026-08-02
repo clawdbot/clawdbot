@@ -4494,8 +4494,8 @@ extension NodeAppModel {
             owner: .gateway,
             title: "Gateway update required",
             message: pauseReconnect
-                ? "This Gateway did not issue the access credentials this phone needs. Update the Gateway, then scan a new Full-Access code."
-                : "Full access was not issued. Your existing Limited connection was restored; update the Gateway, then scan a new Full-Access code.",
+                ? "This Gateway did not issue the access credentials this phone needs. Update the Gateway, then scan a new Full-Access code." // swiftlint:disable:this line_length
+                : "Full access was not issued. Your existing Limited connection was restored; update the Gateway, then scan a new Full-Access code.", // swiftlint:disable:this line_length
             actionLabel: "Copy update command",
             actionCommand: "openclaw update",
             retryable: false,

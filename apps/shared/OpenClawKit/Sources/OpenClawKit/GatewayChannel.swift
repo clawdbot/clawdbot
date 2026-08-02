@@ -3,6 +3,10 @@ import Foundation
 import OpenClawProtocol
 import OSLog
 
+// This transport actor intentionally keeps socket ownership and connect-handshake
+// state together so generation guards remain auditable.
+// swiftlint:disable file_length
+
 /// Avoid ambiguity with the app's own AnyCodable type.
 private typealias ProtoAnyCodable = OpenClawProtocol.AnyCodable
 
