@@ -103,6 +103,9 @@ export async function runCodexSessionRouteHealth(ctx: DoctorHealthFlowContext): 
     ...(ctx.configResult.blockedCodexModelIdentities?.length
       ? { blockedModelIdentities: new Set(ctx.configResult.blockedCodexModelIdentities) }
       : {}),
+    ...(ctx.configResult.openAICodexAuthProfileIdMap?.size
+      ? { authProfileIdMap: ctx.configResult.openAICodexAuthProfileIdMap }
+      : {}),
   });
   if (result.changes.length > 0) {
     note(result.changes.join("\n"), "Doctor changes");
