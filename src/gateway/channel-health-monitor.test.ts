@@ -284,7 +284,12 @@ describe("channel-health-monitor", () => {
 
   it("treats crash-loop suppressed accounts as expected stopped", async () => {
     let suppressed = true;
+    let allowRecovery = false;
     const suppression = { reason: "crash-loop-breaker" as const, message: "safe mode" };
+    const recoverAutostartSuppression = vi.fn(async () => {
+      suppressed = !allowRecovery;
+      return allowRecovery;
+    });
     const manager = createSnapshotManager(
       {
         discord: {
@@ -293,6 +298,7 @@ describe("channel-health-monitor", () => {
       },
       {
         getAutostartSuppression: vi.fn(() => (suppressed ? suppression : null)),
+        recoverAutostartSuppression,
       },
     );
     const monitor = startDefaultMonitor(manager, {
@@ -306,39 +312,12 @@ describe("channel-health-monitor", () => {
     expect(manager.resetRestartAttempts).not.toHaveBeenCalled();
     expect(manager.startChannel).not.toHaveBeenCalled();
 
-    suppressed = false;
+    allowRecovery = true;
     await vi.advanceTimersByTimeAsync(101);
 
+    expect(recoverAutostartSuppression).toHaveBeenCalled();
     expect(manager.resetRestartAttempts).toHaveBeenCalledWith("discord", "default");
     expect(manager.startChannel).toHaveBeenCalledWith("discord", "default");
-    monitor.stop();
-  });
-
-  it("rechecks crash-loop suppression before evaluating stopped accounts", async () => {
-    let suppression: ReturnType<ChannelManager["getAutostartSuppression"]> = {
-      reason: "crash-loop-breaker",
-      message: "safe mode",
-    };
-    const recoverAutostartSuppression = vi.fn(async () => {
-      suppression = null;
-      return true;
-    });
-    const manager = createSnapshotManager(
-      {
-        whatsapp: {
-          default: managedStoppedAccount("safe mode"),
-        },
-      },
-      {
-        getAutostartSuppression: vi.fn(() => suppression),
-        recoverAutostartSuppression,
-      },
-    );
-
-    const monitor = await startAndRunCheck(manager);
-
-    expect(recoverAutostartSuppression).toHaveBeenCalledOnce();
-    expect(manager.startChannel).toHaveBeenCalledWith("whatsapp", "default");
     monitor.stop();
   });
 
