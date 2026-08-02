@@ -7,7 +7,7 @@ import {
   loadTranscriptTailEventsByJsonlBytes,
   replaceTranscriptEvents,
 } from "../../config/sessions/session-accessor.js";
-import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
+import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import { serializeJsonlLines } from "../../config/sessions/transcript-jsonl.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { cliBackendLog } from "./log.js";

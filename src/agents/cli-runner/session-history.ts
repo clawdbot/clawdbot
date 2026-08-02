@@ -14,7 +14,7 @@ import {
   hasTranscriptEventsSync,
   loadTranscriptTailEventsByJsonlBytes,
 } from "../../config/sessions/session-accessor.js";
-import { parseSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
+import { parseSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
   parseSessionTranscriptTreeEntry,
   scanSessionTranscriptTree,
