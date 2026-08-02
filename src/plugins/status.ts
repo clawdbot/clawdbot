@@ -557,7 +557,7 @@ export function buildPluginCompatibilitySnapshotNotices(params?: {
   const report = buildPluginSnapshotReport(params);
   const context = resolvePluginRuntimeLoadContext(params);
   const runtimeRegistry = resolveCompatibleRuntimePluginRegistry(
-    buildPluginRuntimeLoadOptions(context, { activate: false }),
+    buildPluginRuntimeLoadOptions(context),
   );
   const registeredPlugins = new Map(runtimeRegistry?.plugins.map((plugin) => [plugin.id, plugin]));
   // Hook shape is a runtime registration fact. Reuse compatible live registrations without
