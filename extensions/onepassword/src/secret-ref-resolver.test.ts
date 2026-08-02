@@ -25,7 +25,7 @@ const secretRefRuntimeSourceUrl = pathToFileURL(
 ).href;
 // The manifest test reads the production source; the timeout-only staged executable needs a
 // shorter deadline to prove cleanup without sleeping for the production seven seconds.
-const TEST_OP_READ_TIMEOUT_MS = process.platform === "win32" ? 5_000 : 500;
+const TEST_OP_READ_TIMEOUT_MS = process.platform === "win32" ? 5_000 : 1_500;
 const TEST_DESCENDANT_MARKER_DELAY_MS = TEST_OP_READ_TIMEOUT_MS + 500;
 const TEST_DESCENDANT_SETTLE_MARGIN_MS = 2_000;
 const tempDirs: string[] = [];
