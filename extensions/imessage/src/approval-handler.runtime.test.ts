@@ -302,8 +302,8 @@ describe("imessageApprovalNativeRuntime", () => {
         sendResult: sendResult("ok", { sentText: POLL_TEXT }),
         expected: null,
       },
-    ])("$title", async ({ sendResult, expected }) => {
-      sendMock.sendMessageIMessage.mockResolvedValue(sendResult);
+    ])("$title", async ({ sendResult: result, expected }) => {
+      sendMock.sendMessageIMessage.mockResolvedValue(result);
 
       await expect(deliverBase()).resolves.toEqual(expected);
     });
