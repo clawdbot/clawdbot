@@ -151,6 +151,7 @@ function laneMatches(
 export async function runDockerE2eBatch(params: {
   commandTimeoutMs: number;
   env: NodeJS.ProcessEnv;
+  onCommandOutput?: QaScenarioCommandExecution["onOutput"];
   outputDir: string;
   repoRoot: string;
   runCommand: typeof runQaScenarioCommandLifecycle;
@@ -183,6 +184,7 @@ export async function runDockerE2eBatch(params: {
         OPENCLAW_DOCKER_ALL_PROFILE: "all",
         OPENCLAW_DOCKER_ALL_TIMINGS_FILE: path.join(dockerOutputDir, "lane-timings.json"),
       },
+      ...(params.onCommandOutput ? { onOutput: params.onCommandOutput } : {}),
       // The scheduler owns each resolved lane deadline. Parent signals and the
       // enclosing QA workflow bound the aggregate run without alias-count guesses.
     });
