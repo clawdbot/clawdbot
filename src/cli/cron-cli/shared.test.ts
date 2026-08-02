@@ -91,6 +91,37 @@ describe("printCronList", () => {
     expectLogsToInclude(logs, "isolated");
   });
 
+  it.each([
+    [59_999, "<1m"],
+    [60_000, "1m"],
+    [3_569_000, "59m"],
+    [3_570_000, "1h"],
+    [84_599_000, "23h"],
+    [84_600_000, "1d"],
+  ])("renders %i ms as %s across cron list and show", (deltaMs, expected) => {
+    vi.useFakeTimers();
+    const now = new Date("2026-08-02T12:00:00.000Z");
+    vi.setSystemTime(now);
+    const job = createBaseJob({
+      id: "rounding-job",
+      state: {
+        nextRunAtMs: now.getTime() + deltaMs,
+        lastRunAtMs: now.getTime() - deltaMs,
+      },
+    });
+
+    const list = createRuntimeLogCapture();
+    printCronList([job], list.runtime);
+    const row = list.logs.find((line) => line.includes(job.id)) ?? "";
+    expect(row).toContain(`in ${expected}`);
+    expect(row).toContain(`${expected} ago`);
+
+    const show = createRuntimeLogCapture();
+    printCronShow(job, show.runtime);
+    expect(show.logs).toContain(`next: in ${expected}`);
+    expect(show.logs).toContain(`last: ${expected} ago`);
+  });
+
   it("truncates and aligns names by sanitized terminal display width", () => {
     const { logs, runtime } = createRuntimeLogCapture();
     const prefix19 = "x".repeat(19);
