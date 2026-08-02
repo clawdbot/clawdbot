@@ -543,7 +543,7 @@ describe("server-channels auto restart", () => {
 
   it("does not record a clean-exit error for manual abort stops", async () => {
     const startAccount = vi.fn(
-      async ({ abortSignal }: { abortSignal: AbortSignal }) =>
+      async ({ abortSignal }: ChannelGatewayContext<TestAccount>) =>
         await new Promise<void>((resolve) => {
           abortSignal.addEventListener("abort", () => resolve(), { once: true });
         }),
