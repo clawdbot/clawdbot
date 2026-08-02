@@ -4,6 +4,7 @@
  * Installs targeted Vitest module mocks for tests that do not need live plugin/runtime boot.
  */
 import { vi } from "vitest";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 
@@ -51,7 +52,7 @@ export function installEmbeddedRunnerBaseE2eMocks(options?: {
     resolveContextEngineOwnerPluginId: vi.fn(() => undefined),
   }));
   vi.doMock("../runtime-plugins.js", () => ({
-    loadAgentRuntimePluginRegistryHandle: vi.fn(() => ({ agentHarnesses: [] })),
+    loadAgentRuntimePluginRegistryHandle: vi.fn(() => createEmptyPluginRegistry()),
   }));
   vi.doMock("../harness/runtime-plugin.js", () => ({
     ensureSelectedAgentHarnessPlugin: vi.fn(async () => {}),
