@@ -17,6 +17,7 @@ import type { ProviderSystemPromptContribution } from "../agents/system-prompt-c
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { UsageProviderId } from "../infra/provider-usage.types.js";
+import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { normalizeProviderModelIdWithManifest } from "./manifest-model-id-normalization.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import { resolvePluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
@@ -998,11 +999,22 @@ export function resolveExternalAuthProfilesWithPlugins(params: {
 }): ProviderExternalAuthProfile[] {
   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
   const env = params.env ?? process.env;
-  const { manifestRegistry } = resolvePluginMetadataSnapshot({
-    config: params.config ?? {},
-    workspaceDir,
+  const config = params.config ?? {};
+  const currentMetadataSnapshot = getCurrentPluginMetadataSnapshot({
+    config,
     env,
+    ...(workspaceDir === undefined ? { allowWorkspaceScopedSnapshot: true } : { workspaceDir }),
   });
+  const { manifestRegistry } =
+    currentMetadataSnapshot ?? resolvePluginMetadataSnapshot({ config, workspaceDir, env });
+  // A lifecycle-owned manifest is authoritative: no external-auth contracts means
+  // no provider registry discovery or runtime activation is needed for this overlay.
+  if (
+    currentMetadataSnapshot &&
+    !manifestRegistry.plugins.some((plugin) => plugin.contracts?.externalAuthProviders?.length)
+  ) {
+    return [];
+  }
   const externalAuthPluginIds = resolveExternalAuthProfileProviderPluginIds({
     config: params.config,
     workspaceDir,

@@ -15,8 +15,14 @@ extension OnboardingView {
     /// has completed a live round-trip.
     func aiSetupPage(contentHeight: CGFloat) -> some View {
         VStack(spacing: 12) {
-            Text(self.aiSetupTitle)
-                .font(.largeTitle.weight(.semibold))
+            Group {
+                if self.aiSetup.configuredGatewayAuthIssue != nil {
+                    Text("Authenticate with your Gateway")
+                } else {
+                    Text("Connect your AI")
+                }
+            }
+            .font(.largeTitle.weight(.semibold))
             Text(self.aiSetupSubtitle)
                 .font(.body)
                 .foregroundStyle(.secondary)
@@ -39,13 +45,6 @@ extension OnboardingView {
         .padding(.horizontal, 28)
         .padding(.top, 48)
         .frame(width: self.pageWidth, height: contentHeight, alignment: .top)
-    }
-
-    private var aiSetupTitle: String {
-        if self.aiSetup.configuredGatewayAuthIssue != nil {
-            return "Authenticate with your Gateway"
-        }
-        return "Connect your AI"
     }
 
     private var aiSetupSubtitle: String {

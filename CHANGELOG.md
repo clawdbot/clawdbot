@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- **Browser extension relay CDP compat:** answer `Target.getBrowserContexts` so Puppeteer-based clients (chrome-devtools-mcp) can drive the paired Chrome without the remote-debugging permission prompt, serve DevTools-style `/json/list` target descriptors, and add `openclaw browser extension cdp` to print the relay endpoint plus auth header for external CDP clients.
 - **Local model setup:** advertise provider-owned Ollama, llama.cpp, and LM Studio setup choices to Control UI and macOS, retry unavailable LM Studio services in place, and verify the exact prepared model before showing success.
 - **Control UI first-run setup:** continue verified model setup into Custodian, explain that the web app is ready without a channel, and offer an optional dismissible path to Channels.
 - **Fish Audio speech:** add hosted S2.1 synthesis with streaming, voice notes, voice discovery, and telephony, plus local Fish S2 Pro reference-voice streaming in native macOS Talk. Thanks @Conan-Scott for the earlier community-plugin implementation.
@@ -22,6 +23,7 @@ Docs: https://docs.openclaw.ai
 - **Buzz message fidelity:** preserve Markdown output and accept Buzz normal, rich-content, and structured-diff room messages through the existing authorized inbound path. Thanks @shakkernerd.
 - **Buzz typing indicators:** show room- and thread-scoped typing during agent replies and heartbeat deliveries, refresh through the active authenticated connection without waiting for relay acknowledgement, and drop ephemeral updates safely during disconnects or shutdown. Thanks @shakkernerd.
 - **Buzz sender directory:** expose current bot, member, room, and room-member directory entries from bounded relay state; use current Buzz profile and room names in inbound context while preserving public keys and UUIDs as stable authorization and routing identities. Thanks @shakkernerd.
+- **Buzz native mentions:** resolve unique current room-member names and explicit NIP-27 identities into native `p` tags for replies, proactive sends, and bounded standalone delivery; reject out-of-room identities and unresolved labels without an explicit identity, and preserve Buzz reply-thread session parsing during maintenance and heartbeat runs. Thanks @shakkernerd.
 - **ClickClack guided setup:** configure ClickClack from `openclaw onboard` or `openclaw channels add clickclack` with URL, token, and workspace prompts, default-account env fallback, nonfatal live connection validation, and gateway-aware next steps that connect automatically when OpenClaw is already running. Thanks @shakkernerd.
 - **ClickClack command menus:** publish each bot's native OpenClaw commands to ClickClack composer autocomplete at gateway startup, with per-account opt-out and nonfatal compatibility handling for older tokens and servers. Thanks @shakkernerd.
 - **Skill Workshop approvals:** run agent-initiated apply, reject, and quarantine actions without an additional approval prompt by default while preserving `skills.workshop.approvalPolicy: "pending"` as an opt-in approval gate. Thanks @shakkernerd.

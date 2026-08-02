@@ -16,8 +16,6 @@ extension OnboardingView {
             self.cliPage()
         case 3:
             self.aiSetupPage(contentHeight: contentHeight)
-        case 4:
-            self.memoryImportPage(contentHeight: contentHeight)
         case 5:
             self.permissionsPage()
         case 9:
@@ -618,6 +616,8 @@ extension OnboardingView {
 
     func probeRemoteConnection(advanceOnSuccess: Bool) async {
         let input = self.remoteGatewayProbeInput
+        let attemptID = UUID()
+        self.remoteProbeAttemptID = attemptID
         let originalMode = state.connectionMode
         let shouldRestoreMode = originalMode != .remote
         if shouldRestoreMode {
@@ -636,9 +636,16 @@ extension OnboardingView {
             }
         }
         let result = await RemoteGatewayProbe.run()
-        guard self.remoteProbeState == .checking(input), self.remoteGatewayProbeInput == input else {
+        guard Self.shouldAcceptRemoteGatewayProbeResult(
+            attemptID: attemptID,
+            currentAttemptID: self.remoteProbeAttemptID,
+            probeState: self.remoteProbeState,
+            expectedInput: input,
+            currentInput: self.remoteGatewayProbeInput)
+        else {
             return
         }
+        self.remoteProbeAttemptID = nil
         switch result {
         case let .ready(success):
             remoteProbeState = .ok(input, success)
@@ -657,8 +664,21 @@ extension OnboardingView {
     }
 
     func resetRemoteProbeFeedback() {
+        remoteProbeAttemptID = nil
         remoteProbeState = .idle
         remoteAuthIssue = nil
+    }
+
+    static func shouldAcceptRemoteGatewayProbeResult(
+        attemptID: UUID,
+        currentAttemptID: UUID?,
+        probeState: RemoteOnboardingProbeState,
+        expectedInput: RemoteGatewayProbeInput,
+        currentInput: RemoteGatewayProbeInput) -> Bool
+    {
+        currentAttemptID == attemptID &&
+            probeState == .checking(expectedInput) &&
+            currentInput == expectedInput
     }
 
     static func remoteAuthPromptStyle(

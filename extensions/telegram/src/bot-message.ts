@@ -32,6 +32,7 @@ import {
 import type { TelegramBotOptions } from "./bot.types.js";
 import { buildTelegramThreadParams, resolveTelegramStreamMode } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
+import { resolveTelegramDmHistoryLimit } from "./dm-history.js";
 import type { TelegramReplyChainEntry } from "./message-cache.js";
 import { TELEGRAM_TEXT_CHUNK_LIMIT } from "./outbound-adapter.js";
 import { TELEGRAM_RICH_TEXT_LIMIT } from "./rich-message.js";
@@ -58,6 +59,7 @@ type TelegramMessageProcessorDeps = Omit<
   | "options"
   | "cfg"
   | "historyLimit"
+  | "dmHistoryLimit"
   | "dmPolicy"
   | "allowFrom"
   | "groupAllowFrom"
@@ -86,6 +88,7 @@ export type TelegramMessageProcessorTurnContext = {
 
 export function resolveTelegramMessageTurnSettings(params: {
   accountId: string;
+  senderId?: string | number;
   cfg: OpenClawConfig;
   telegramCfg: TelegramAccountConfig;
   opts: Pick<TelegramBotOptions, "allowFrom" | "groupAllowFrom" | "replyToMode">;
@@ -97,6 +100,10 @@ export function resolveTelegramMessageTurnSettings(params: {
     ackReactionScope: params.cfg.messages?.ackReactionScope ?? "group-mentions",
     allowFrom,
     dmPolicy: params.telegramCfg.dmPolicy ?? "pairing",
+    dmHistoryLimit: resolveTelegramDmHistoryLimit({
+      config: params.telegramCfg,
+      senderId: params.senderId,
+    }),
     groupAllowFrom:
       params.opts.groupAllowFrom ??
       params.telegramCfg.groupAllowFrom ??
@@ -177,6 +184,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
     const turnTelegramCfg = turnContext.telegramCfg;
     const turnSettings = resolveTelegramMessageTurnSettings({
       accountId: account.accountId,
+      senderId: primaryCtx.message.from?.id,
       cfg: turnCfg,
       telegramCfg: turnTelegramCfg,
       opts,
@@ -206,6 +214,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
       cfg: turnCfg,
       account,
       historyLimit: turnSettings.historyLimit,
+      dmHistoryLimit: turnSettings.dmHistoryLimit,
       groupHistories,
       dmPolicy: turnSettings.dmPolicy,
       allowFrom: turnSettings.allowFrom,

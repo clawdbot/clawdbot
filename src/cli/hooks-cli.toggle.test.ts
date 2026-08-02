@@ -231,4 +231,15 @@ describe("hooks CLI metadata config keys", () => {
     expect(mocks.requestExitAfterOneShotOutput).toHaveBeenCalledWith(capture.defaultRuntime, 1);
     expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
   });
+
+  it("emits the default hooks report as JSON", async () => {
+    await createHooksProgram().parseAsync(["hooks", "--json"], { from: "user" });
+
+    const payload = JSON.parse(String(capture.runtimeLogs.at(-1))) as {
+      hooks?: Array<{ name?: string }>;
+    };
+    expect(payload.hooks).toEqual([expect.objectContaining({ name: "display-name" })]);
+    expect(capture.runtimeLogs).toHaveLength(1);
+    expect(mocks.requestExitAfterOneShotOutput).toHaveBeenCalledWith(capture.defaultRuntime, 0);
+  });
 });

@@ -90,6 +90,28 @@ export async function createBuzzRoomMembershipTracker(params: {
   const refreshes = new Map<string, RefreshState>();
   let membershipQueryTail = Promise.resolve();
   const memberships = await queryBuzzRoomMemberships(params);
+  const effectiveMemberships = (): ReadonlyMap<string, BuzzRoomMembership> => {
+    if (blockedRooms.size === 0 && deniedMembers.size === 0) {
+      return memberships;
+    }
+    const effective = new Map<string, BuzzRoomMembership>();
+    for (const [channelId, membership] of memberships) {
+      if (blockedRooms.has(channelId)) {
+        continue;
+      }
+      const denied = deniedMembers.get(channelId);
+      if (!denied || denied.size === 0) {
+        effective.set(channelId, membership);
+        continue;
+      }
+      effective.set(channelId, {
+        ...membership,
+        members: new Set([...membership.members].filter((publicKey) => !denied.has(publicKey))),
+        roles: new Map([...membership.roles].filter(([publicKey]) => !denied.has(publicKey))),
+      });
+    }
+    return effective;
+  };
   const isMember = (channelId: string, publicKey: string) =>
     !blockedRooms.has(channelId) &&
     !deniedMembers.get(channelId)?.has(publicKey.trim().toLowerCase()) &&
@@ -181,7 +203,7 @@ export async function createBuzzRoomMembershipTracker(params: {
       pendingMemberships.delete(channelId);
       deniedMembers.delete(channelId);
       blockedRooms.delete(channelId);
-      params.onMembershipsChanged?.(memberships);
+      params.onMembershipsChanged?.(effectiveMemberships());
       return;
     }
     if (state.generation !== state.lastAttemptedGeneration) {
@@ -255,6 +277,7 @@ export async function createBuzzRoomMembershipTracker(params: {
     if (change.targetPublicKey === params.botPublicKey) {
       blockedRooms.add(channelId);
     }
+    params.onMembershipsChanged?.(effectiveMemberships());
     return refreshMembershipOnce(channelId);
   };
   const handleRoomEvent = (event: Event, reservation?: BuzzReplayDispatchReservation) => {
@@ -358,7 +381,7 @@ export async function createBuzzRoomMembershipTracker(params: {
   }
 
   return {
-    memberships: () => memberships,
+    memberships: effectiveMemberships,
     catchUpHistory: async () => {
       for (const channelId of params.channelIds) {
         const page = historyPages.get(channelId);

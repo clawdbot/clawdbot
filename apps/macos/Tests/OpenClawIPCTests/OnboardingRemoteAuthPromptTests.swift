@@ -1,3 +1,4 @@
+import Foundation
 import OpenClawKit
 import Testing
 @testable import OpenClaw
@@ -203,6 +204,25 @@ struct OnboardingRemoteAuthPromptTests {
                 state: verified,
                 input: input) == .init(canAdvance: false, shouldProbe: true))
         }
+    }
+
+    @Test func `probe attempt identity rejects ABA stale completion`() {
+        let firstAttempt = UUID()
+        let replacementAttempt = UUID()
+        let checking = RemoteOnboardingProbeState.checking(self.directInput)
+
+        #expect(OnboardingView.shouldAcceptRemoteGatewayProbeResult(
+            attemptID: firstAttempt,
+            currentAttemptID: replacementAttempt,
+            probeState: checking,
+            expectedInput: self.directInput,
+            currentInput: self.directInput) == false)
+        #expect(OnboardingView.shouldAcceptRemoteGatewayProbeResult(
+            attemptID: replacementAttempt,
+            currentAttemptID: replacementAttempt,
+            probeState: checking,
+            expectedInput: self.directInput,
+            currentInput: self.directInput))
     }
 
     private func decision(

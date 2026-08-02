@@ -5,8 +5,8 @@ import type {
   WorkboardStatus,
   WorkboardTemplateId,
 } from "@openclaw/workboard-contract";
-import type { TaskSummary } from "../../../../packages/gateway-protocol/src/schema/tasks.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import type { TaskSummary } from "../tasks/task-summary.ts";
 
 export * from "@openclaw/workboard-contract";
 export type { WorkboardBoardSummary } from "@openclaw/workboard-contract";
@@ -27,7 +27,7 @@ export type WorkboardLifecycle = {
   sourceUpdatedAt?: number;
 };
 
-export type WorkboardTaskSummary = TaskSummary & { taskId: string };
+export type WorkboardTaskSummary = TaskSummary;
 
 type WorkboardDependencyParent = {
   id: string;

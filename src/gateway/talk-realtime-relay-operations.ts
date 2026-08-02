@@ -335,12 +335,23 @@ export function registerTalkRealtimeRelayAgentRun(params: {
   callId?: string;
 }): void {
   const session = getRelaySession(params.relaySessionId, params.connId);
+  const callId = params.callId?.trim();
+  if (callId && session.completedAgentToolCalls.has(callId)) {
+    // Provider cancellation can win while chat.send is still acknowledging. Abort
+    // the late run before it can escape the relay's call-ownership tombstone.
+    abortChatRunById(session.context, {
+      runId: params.runId,
+      sessionKey: params.sessionKey,
+      stopReason: "realtime provider cancelled tool call",
+    });
+    throw new Error("Realtime provider cancelled the tool call before run registration");
+  }
   if (!session.sessionKey) {
     bindRelaySessionKey(session, params.sessionKey);
   }
   session.activeAgentRuns.set(params.runId, params.sessionKey);
-  if (params.callId?.trim()) {
-    session.activeAgentToolCalls.set(params.callId.trim(), params.runId);
+  if (callId) {
+    session.activeAgentToolCalls.set(callId, params.runId);
   }
   if (!ensureRelayVoiceSession(session)) {
     throw new Error("Realtime relay voice session could not be created for agent consult");
@@ -355,6 +366,48 @@ export function registerTalkRealtimeRelayAgentRun(params: {
     voiceSessionId: session.id,
     runId: params.runId,
   });
+}
+
+/** Retires one provider-owned tool call and aborts its exact relay consult, if started. */
+export function cancelTalkRealtimeRelayProviderToolCall(
+  session: RelaySession,
+  providerCallId: string,
+): string | undefined {
+  const mappedRelayCallId = session.relayToolCallIdsByProviderId.get(providerCallId);
+  if (!mappedRelayCallId) {
+    return undefined;
+  }
+  const forcedConsult = session.harness.forcedConsults
+    .handles()
+    .find((handle) =>
+      session.harness.forcedConsults.nativeCallIds(handle).includes(providerCallId),
+    );
+  // A native call can alias an already-started forced consult. Cancellation owns
+  // the forced handle because that is where the browser run was registered.
+  const relayCallId = forcedConsult?.id ?? mappedRelayCallId;
+  if (forcedConsult) {
+    session.harness.forcedConsults.markCancelled(forcedConsult);
+    session.cancelledAgentToolCalls.set(relayCallId, ensureRelayTurn(session));
+  } else {
+    session.cancelledAgentToolCalls.delete(relayCallId);
+  }
+  session.completedAgentToolCalls.add(relayCallId);
+  session.completedAgentToolCalls.add(mappedRelayCallId);
+  session.completedProviderToolResults.add(providerCallId);
+
+  const runId = session.activeAgentToolCalls.get(relayCallId);
+  const sessionKey = runId ? session.activeAgentRuns.get(runId) : undefined;
+  if (runId && sessionKey) {
+    abortChatRunById(session.context, {
+      runId,
+      sessionKey,
+      stopReason: "realtime provider cancelled tool call",
+    });
+  }
+  clearRelayAgentToolCall(session, relayCallId);
+  session.providerToolCallIds.delete(mappedRelayCallId);
+  session.relayToolCallIdsByProviderId.delete(providerCallId);
+  return relayCallId;
 }
 
 /** Wait for server-owned final transcript appends before a relay consult is authorized. */

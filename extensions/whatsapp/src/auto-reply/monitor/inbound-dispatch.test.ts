@@ -653,6 +653,53 @@ async function runWhatsAppReplyPlan(
   return plan.finalize(dispatchResult);
 }
 
+const DEFERRED_TOOL_MEDIA = {
+  text: "tool image",
+  mediaUrls: ["/tmp/generated.jpg"],
+};
+const CAPTIONED_MEDIA_REPLACEMENT = {
+  text: "captioned replacement",
+  mediaUrls: ["/tmp/generated.jpg"],
+};
+
+function requireCapturedDeliver(params: CapturedDispatchParams) {
+  const deliver = params.dispatcherOptions?.deliver;
+  if (!deliver) {
+    throw new Error("expected captured deliver callback");
+  }
+  return deliver;
+}
+
+async function dispatchDeferredMediaReplacement(overrides: BufferedReplyOverrides): Promise<{
+  finalization: Promise<unknown>;
+  replacement: PromiseSettledResult<unknown>;
+}> {
+  let finalization: Promise<unknown> | undefined;
+  let replacement: PromiseSettledResult<unknown> | undefined;
+  dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(
+    async (params: CapturedDispatchParams) => {
+      capturedDispatchParams = params;
+      const deliver = requireCapturedDeliver(params);
+      const deferred = requireRecord(
+        await deliver(DEFERRED_TOOL_MEDIA, { kind: "tool" }),
+        "deferred media result",
+      );
+      finalization = deferred.finalization as Promise<unknown>;
+      [replacement] = await Promise.allSettled([
+        deliver(CAPTIONED_MEDIA_REPLACEMENT, { kind: "block" }),
+      ]);
+      await params.dispatcherOptions?.onSettled?.();
+      return { queuedFinal: false, counts: { tool: 1, block: 1, final: 0 } };
+    },
+  );
+
+  await dispatchBufferedReply(overrides);
+  if (!finalization || !replacement) {
+    throw new Error("expected deferred media replacement lifecycle");
+  }
+  return { finalization, replacement };
+}
+
 describe("whatsapp inbound dispatch", () => {
   beforeEach(() => {
     capturedDispatchParams = undefined;
@@ -1055,42 +1102,19 @@ describe("whatsapp inbound dispatch", () => {
 
   it("retains approved deferred media when its captioned replacement is cancelled", async () => {
     const deliverReply = vi.fn(async () => acceptedDeliveryResult());
-    let deferredFinalization: Promise<unknown> | undefined;
-    dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(
-      async (params: CapturedDispatchParams) => {
-        capturedDispatchParams = params;
-        const deliver = params.dispatcherOptions?.deliver;
-        if (!deliver) {
-          throw new Error("expected captured deliver callback");
-        }
-        const deferred = requireRecord(
-          await deliver(
-            { text: "tool image", mediaUrls: ["/tmp/generated.jpg"] },
-            { kind: "tool" },
-          ),
-          "deferred media result",
-        );
-        deferredFinalization = deferred.finalization as Promise<unknown>;
-        await expect(
-          deliver(
-            { text: "captioned replacement", mediaUrls: ["/tmp/generated.jpg"] },
-            { kind: "block" },
-          ),
-        ).resolves.toMatchObject({
-          visibleReplySent: false,
-          suppression: { reason: "cancelled_by_message_sending_hook" },
-        });
-        await params.dispatcherOptions?.onSettled?.();
-        return { queuedFinal: false, counts: { tool: 1, block: 1, final: 0 } };
-      },
-    );
-
-    await dispatchBufferedReply({
+    const { finalization, replacement } = await dispatchDeferredMediaReplacement({
       deliverReply,
       cancelAfterPrepare: (payload) => payload.text === "captioned replacement",
     });
 
-    await expect(deferredFinalization).resolves.toMatchObject({ visibleReplySent: true });
+    expect(replacement).toMatchObject({
+      status: "fulfilled",
+      value: {
+        visibleReplySent: false,
+        suppression: { reason: "cancelled_by_message_sending_hook" },
+      },
+    });
+    await expect(finalization).resolves.toMatchObject({ visibleReplySent: true });
     expect(deliverReply).toHaveBeenCalledTimes(1);
     expectReplyResultFields(deliverReply, {
       mediaUrls: ["/tmp/generated.jpg"],
@@ -1104,39 +1128,10 @@ describe("whatsapp inbound dispatch", () => {
       visibleReplySent: true,
     });
     const deliverReply = vi.fn().mockRejectedValueOnce(error);
-    let deferredFinalization: Promise<unknown> | undefined;
-    let replacementFailure: unknown;
-    dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(
-      async (params: CapturedDispatchParams) => {
-        capturedDispatchParams = params;
-        const deliver = params.dispatcherOptions?.deliver;
-        if (!deliver) {
-          throw new Error("expected captured deliver callback");
-        }
-        const deferred = requireRecord(
-          await deliver(
-            { text: "tool image", mediaUrls: ["/tmp/generated.jpg"] },
-            { kind: "tool" },
-          ),
-          "deferred media result",
-        );
-        deferredFinalization = deferred.finalization as Promise<unknown>;
-        try {
-          await deliver(
-            { text: "captioned replacement", mediaUrls: ["/tmp/generated.jpg"] },
-            { kind: "block" },
-          );
-        } catch (deliveryError: unknown) {
-          replacementFailure = deliveryError;
-        }
-        await params.dispatcherOptions?.onSettled?.();
-        return { queuedFinal: false, counts: { tool: 1, block: 1, final: 0 } };
-      },
-    );
+    const { finalization, replacement } = await dispatchDeferredMediaReplacement({ deliverReply });
+    const replacementFailure = replacement.status === "rejected" ? replacement.reason : undefined;
 
-    await dispatchBufferedReply({ deliverReply });
-
-    await expect(deferredFinalization).resolves.toEqual({ visibleReplySent: false });
+    await expect(finalization).resolves.toEqual({ visibleReplySent: false });
     expect(deliverReply).toHaveBeenCalledTimes(1);
     expect(replacementFailure).toMatchObject({
       code: "CHANNEL_PARTIAL_DELIVERY",
@@ -1156,39 +1151,13 @@ describe("whatsapp inbound dispatch", () => {
     const rememberSentText = vi.fn(() => {
       throw error;
     });
-    let deferredFinalization: Promise<unknown> | undefined;
-    let replacementFailure: unknown;
-    dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(
-      async (params: CapturedDispatchParams) => {
-        capturedDispatchParams = params;
-        const deliver = params.dispatcherOptions?.deliver;
-        if (!deliver) {
-          throw new Error("expected captured deliver callback");
-        }
-        const deferred = requireRecord(
-          await deliver(
-            { text: "tool image", mediaUrls: ["/tmp/generated.jpg"] },
-            { kind: "tool" },
-          ),
-          "deferred media result",
-        );
-        deferredFinalization = deferred.finalization as Promise<unknown>;
-        try {
-          await deliver(
-            { text: "captioned replacement", mediaUrls: ["/tmp/generated.jpg"] },
-            { kind: "block" },
-          );
-        } catch (deliveryError: unknown) {
-          replacementFailure = deliveryError;
-        }
-        await params.dispatcherOptions?.onSettled?.();
-        return { queuedFinal: false, counts: { tool: 1, block: 1, final: 0 } };
-      },
-    );
+    const { finalization, replacement } = await dispatchDeferredMediaReplacement({
+      deliverReply,
+      rememberSentText,
+    });
+    const replacementFailure = replacement.status === "rejected" ? replacement.reason : undefined;
 
-    await dispatchBufferedReply({ deliverReply, rememberSentText });
-
-    await expect(deferredFinalization).resolves.toEqual({ visibleReplySent: false });
+    await expect(finalization).resolves.toEqual({ visibleReplySent: false });
     expect(deliverReply).toHaveBeenCalledTimes(1);
     expect(replacementFailure).toMatchObject({
       code: "CHANNEL_PARTIAL_DELIVERY",

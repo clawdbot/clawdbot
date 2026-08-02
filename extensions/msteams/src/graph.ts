@@ -90,30 +90,41 @@ async function requestGraph(params: {
 }
 
 async function readOptionalGraphJson<T>(res: Response, label: string): Promise<T> {
-  // Use optional chaining to stay resilient to partial test mocks that do not
-  // provide a status or Headers instance (they only shim `ok` + `json()`).
-  if (res.status === 204 || res.headers?.get?.("content-length") === "0") {
+  if (res.status === 204 || res.headers.get("content-length") === "0") {
     return undefined as T;
   }
   return await readProviderJsonResponse<T>(res, label);
+}
+
+export async function mutateGraphJson<T>(params: {
+  token: string;
+  path: string;
+  method: "POST" | "PATCH";
+  body?: unknown;
+  beta?: boolean;
+}): Promise<T> {
+  const errorPrefix = `Graph${params.beta ? " beta" : ""} ${params.method}`;
+  const response = await requestGraph({
+    token: params.token,
+    path: params.path,
+    method: params.method,
+    body: params.body,
+    root: params.beta ? GRAPH_BETA : undefined,
+    errorPrefix,
+  });
+  return readOptionalGraphJson<T>(response, `${errorPrefix} ${params.path} failed`);
 }
 
 export async function fetchGraphJson<T>(params: {
   token: string;
   path: string;
   headers?: Record<string, string>;
-  /** HTTP method; defaults to "GET" */
-  method?: string;
-  /** Request body (serialized as JSON). Only used for non-GET methods. */
-  body?: unknown;
   /** Optional shared operation deadline; actively aborts the guarded fetch when spent. */
   deadline?: MSTeamsRequestDeadline;
 }): Promise<T> {
   const res = await requestGraph({
     token: params.token,
     path: params.path,
-    method: params.method as "GET" | "POST" | "DELETE" | undefined,
-    body: params.body,
     headers: params.headers,
     deadline: params.deadline,
   });
@@ -269,37 +280,6 @@ export async function listTeamsByNameWithPageInfo(
   return await fetchAllGraphPages<GraphGroup>({ token, path });
 }
 
-export async function postGraphJson<T>(params: {
-  token: string;
-  path: string;
-  body?: unknown;
-}): Promise<T> {
-  const res = await requestGraph({
-    token: params.token,
-    path: params.path,
-    method: "POST",
-    body: params.body,
-    errorPrefix: "Graph POST",
-  });
-  return readOptionalGraphJson<T>(res, `Graph POST ${params.path} failed`);
-}
-
-export async function postGraphBetaJson<T>(params: {
-  token: string;
-  path: string;
-  body?: unknown;
-}): Promise<T> {
-  const res = await requestGraph({
-    token: params.token,
-    path: params.path,
-    method: "POST",
-    root: GRAPH_BETA,
-    body: params.body,
-    errorPrefix: "Graph beta POST",
-  });
-  return readOptionalGraphJson<T>(res, `Graph beta POST ${params.path} failed`);
-}
-
 export async function deleteGraphRequest(params: { token: string; path: string }): Promise<void> {
   const response = await requestGraph({
     token: params.token,
@@ -308,21 +288,6 @@ export async function deleteGraphRequest(params: { token: string; path: string }
     errorPrefix: "Graph DELETE",
   });
   await response.body?.cancel().catch(() => undefined);
-}
-
-export async function patchGraphJson<T>(params: {
-  token: string;
-  path: string;
-  body?: unknown;
-}): Promise<T> {
-  const res = await requestGraph({
-    token: params.token,
-    path: params.path,
-    method: "PATCH",
-    body: params.body,
-    errorPrefix: "Graph PATCH",
-  });
-  return readOptionalGraphJson<T>(res, `Graph PATCH ${params.path} failed`);
 }
 
 export async function listChannelsForTeam(token: string, teamId: string): Promise<GraphChannel[]> {
