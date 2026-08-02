@@ -72,7 +72,7 @@ type HistoryEntry = {
 
 type CliSessionTranscriptParams = Pick<
   RunCliAgentParams,
-  "sessionId" | "sessionFile" | "sessionKey" | "agentId" | "config" | "storePath"
+  "sessionId" | "sessionFile" | "sessionKey" | "sessionTarget" | "agentId" | "config" | "storePath"
 > & {
   excludeMessageIdempotencyKey?: string;
 };
@@ -477,6 +477,9 @@ export function resolveCliSessionSqliteTranscriptScope(params: CliSessionTranscr
       storePath: string;
     }
   | undefined {
+  if (params.sessionTarget) {
+    return params.sessionTarget;
+  }
   const sessionFile = params.sessionFile.trim();
   const sessionKey = params.sessionKey?.trim();
   const marker = parseSqliteSessionFileMarker(sessionFile);
@@ -550,7 +553,7 @@ async function loadCliSessionEntries(params: CliSessionTranscriptParams): Promis
   try {
     const transcriptScope = resolveCliSessionSqliteTranscriptScope(params);
     if (transcriptScope) {
-      const transcript = await loadTranscriptTailEventsByJsonlBytes(
+      const transcript = loadTranscriptTailEventsByJsonlBytes(
         transcriptScope,
         MAX_CLI_SESSION_HISTORY_FILE_BYTES,
       );

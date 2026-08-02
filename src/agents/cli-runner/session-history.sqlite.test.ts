@@ -348,14 +348,14 @@ describe("SQLite CLI session history", () => {
 
     await replaceTranscriptEvents(scope, [header, older, newest]);
 
-    const belowBoundary = await loadTranscriptTailEventsByJsonlBytes(scope, twoRowJsonlBytes - 1);
+    const belowBoundary = loadTranscriptTailEventsByJsonlBytes(scope, twoRowJsonlBytes - 1);
     expect(belowBoundary.truncated).toBe(true);
     expect(belowBoundary.events.map((event) => requireRecord(event, "event").id)).toEqual([
       sessionId,
       "msg-newest",
     ]);
 
-    const exactBoundary = await loadTranscriptTailEventsByJsonlBytes(scope, twoRowJsonlBytes);
+    const exactBoundary = loadTranscriptTailEventsByJsonlBytes(scope, twoRowJsonlBytes);
     expect(exactBoundary.truncated).toBe(true);
     expect(exactBoundary.events.map((event) => requireRecord(event, "event").id)).toEqual([
       sessionId,

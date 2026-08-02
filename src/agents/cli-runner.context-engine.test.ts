@@ -268,6 +268,7 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
       sessionId: "openclaw-session-1",
       sessionFile: "session.jsonl",
       sessionKey: "agent:main:main",
+      sessionTarget: undefined,
       agentId: "main",
       config: undefined,
     });
@@ -458,6 +459,7 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
       sessionId: "openclaw-session-1",
       sessionFile: "session.jsonl",
       sessionKey: "agent:main:main",
+      sessionTarget: undefined,
       agentId: "main",
       config: undefined,
       excludeMessageIdempotencyKey: "cli-user:current-turn",
