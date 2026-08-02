@@ -112,12 +112,7 @@ async function resolveGeneratedImagePath(params: {
       }
     }
 
-    const mediaDir = path.join(
-      params.env.gateway.tempRoot,
-      "state",
-      "media",
-      "tool-image-generation",
-    );
+    const mediaDir = path.join(params.env.gateway.tempRoot, "state", "media", "outbound");
     const entries = await fs.readdir(mediaDir).catch(() => []);
     const candidates = await Promise.all(
       entries.map(async (entry) => {
