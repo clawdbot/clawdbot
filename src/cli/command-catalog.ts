@@ -383,6 +383,11 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   { commandPath: ["exec-approvals"], policy: { networkProxy: "bypass" } },
   { commandPath: ["exec-policy"], policy: { networkProxy: "bypass" } },
   { commandPath: ["hooks"], policy: { networkProxy: "bypass" } },
+  {
+    commandPath: ["hooks"],
+    exact: true,
+    policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
+  },
   { commandPath: ["logs"], policy: { networkProxy: "bypass" } },
   { commandPath: ["mcp"], policy: { networkProxy: "bypass" } },
   {
@@ -538,14 +543,36 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     exact: true,
     policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
   },
-  { commandPath: ["skills", "info"], exact: true, policy: { networkProxy: "bypass" } },
+  {
+    commandPath: ["skills", "info"],
+    exact: true,
+    policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
+  },
   { commandPath: ["skills", "install"], exact: true },
   {
     commandPath: ["skills", "list"],
     exact: true,
     policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
   },
-  { commandPath: ["skills", "search"], exact: true },
+  {
+    commandPath: ["skills", "search"],
+    exact: true,
+    policy: { configGuard: "skip", loadPlugins: "never" },
+  },
+  {
+    commandPath: ["memory", "search"],
+    exact: true,
+    policy: { configGuard: "skip", loadPlugins: "never" },
+  },
+  {
+    commandPath: ["memory", "status"],
+    exact: true,
+    policy: {
+      configGuard: ({ argv }) =>
+        hasFlag(argv, "--index") || hasFlag(argv, "--fix") ? "run" : "skip",
+      loadPlugins: "never",
+    },
+  },
   { commandPath: ["skills", "update"], exact: true },
   { commandPath: ["skills", "verify"], exact: true },
 ];

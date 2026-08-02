@@ -6210,12 +6210,10 @@ describe("right-click Reply", () => {
   it("keeps inline actions in the context menu alongside user rewind and fork", () => {
     const onRewindMessage = vi.fn().mockResolvedValue(true);
     const onForkMessage = vi.fn();
-    const onOpenSidebar = vi.fn();
     const onCopy = vi.fn();
     const container = renderChatView({
       onRewindMessage,
       onForkMessage,
-      onOpenSidebar,
       onSetReply: vi.fn(),
     });
     const { bubble, group } = appendChatBubble(container, {
@@ -6236,38 +6234,24 @@ describe("right-click Reply", () => {
     expect(onForkMessage).toHaveBeenCalledWith("persisted-user");
 
     group.className = "chat-group assistant";
-    const onSiblingExpand = vi.fn();
     const siblingActionOwner = document.createElement("div");
     siblingActionOwner.dataset.messageActionsFor = "message-0";
-    const siblingExpandButton = document.createElement("button");
-    siblingExpandButton.className = "chat-expand-btn";
-    siblingExpandButton.addEventListener("click", onSiblingExpand);
-    siblingActionOwner.append(siblingExpandButton);
-    const expandButton = document.createElement("button");
-    expandButton.className = "chat-expand-btn";
-    expandButton.addEventListener("click", () =>
-      onOpenSidebar({ kind: "markdown", content: "hello" }),
-    );
     const copyButton = document.createElement("button");
     copyButton.className = "chat-copy-btn";
     copyButton.addEventListener("click", onCopy);
     const actionOwner = document.createElement("div");
     actionOwner.dataset.messageActionsFor = "message-1";
-    actionOwner.append(expandButton, copyButton);
+    actionOwner.append(copyButton);
     group.append(siblingActionOwner, actionOwner);
     bubble.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
     expect(
       [...document.querySelectorAll(".chat-reply-context-menu button")].map((button) =>
         button.textContent?.trim(),
       ),
-    ).toEqual(["Reply", "Hide message", "Open in canvas", "Copy as markdown"]);
+    ).toEqual(["Reply", "Hide message", "Copy as markdown"]);
     expect(
       document.querySelector('.chat-reply-context-menu [aria-label="Reply to message"] svg'),
     ).toBeNull();
-
-    document.querySelector<HTMLButtonElement>('[aria-label="Open in canvas"]')!.click();
-    expect(onOpenSidebar).toHaveBeenCalledWith({ kind: "markdown", content: "hello" });
-    expect(onSiblingExpand).not.toHaveBeenCalled();
 
     bubble.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
     document.querySelector<HTMLButtonElement>('[aria-label="Copy as markdown"]')!.click();
