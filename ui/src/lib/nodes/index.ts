@@ -319,14 +319,19 @@ export type InventoryRemovalRequest = {
 type InventoryState = NodesState & DevicesState;
 
 async function removeInventoryEntryRpc(
+  state: InventoryState,
   client: GatewayRequestClient,
+  generation: number,
   entry: InventoryRemovalRequest,
 ) {
   // Node removal first: it revokes the node role (deleting node-only device rows)
   // and clears any legacy node pairing under the same id. A mixed-role record
-  // then loses its remaining roles via the device-level removal.
+  // then loses its remaining roles only while the original Gateway still owns it.
   if (entry.removeNode) {
     await client.request("node.pair.remove", { nodeId: entry.id });
+    if (!isCurrentNodesRequest(state, client, generation)) {
+      return;
+    }
   }
   if (entry.removeDevice) {
     await client.request("device.pair.remove", { deviceId: entry.id });
@@ -334,11 +339,20 @@ async function removeInventoryEntryRpc(
 }
 
 // Reload quietly and assign the failure afterwards: a non-quiet loadDevices
-// clears devicesError first, which would erase the message before it renders.
-async function reloadInventory(state: InventoryState, opts?: { error?: string }) {
+// clears devicesError first. Keep both the refresh and delayed error tied to
+// the original Gateway so neither can leak across a connection reset.
+async function reloadInventory(
+  state: InventoryState,
+  client: GatewayRequestClient,
+  generation: number,
+  opts?: { error?: string },
+) {
+  if (!isCurrentNodesRequest(state, client, generation)) {
+    return;
+  }
   const quiet = opts?.error !== undefined;
   await Promise.all([loadDevices(state, { quiet }), loadNodes(state, { quiet })]);
-  if (opts?.error !== undefined) {
+  if (opts?.error !== undefined && isCurrentNodesRequest(state, client, generation)) {
     state.devicesError = opts.error;
   }
 }
@@ -350,11 +364,12 @@ export async function removeInventoryEntry(state: InventoryState, entry: Invento
   if (!client || !state.connected) {
     return;
   }
+  const generation = state.requestGeneration;
   try {
-    await removeInventoryEntryRpc(client, entry);
-    await reloadInventory(state);
+    await removeInventoryEntryRpc(state, client, generation, entry);
+    await reloadInventory(state, client, generation);
   } catch (err) {
-    await reloadInventory(state, { error: String(err) });
+    await reloadInventory(state, client, generation, { error: String(err) });
   }
 }
 
@@ -366,16 +381,25 @@ export async function removeStaleInventoryEntries(
   if (!client || !state.connected || entries.length === 0) {
     return;
   }
+  const generation = state.requestGeneration;
   const failures: string[] = [];
   for (const entry of entries) {
+    if (!isCurrentNodesRequest(state, client, generation)) {
+      return;
+    }
     try {
-      await removeInventoryEntryRpc(client, entry);
+      await removeInventoryEntryRpc(state, client, generation, entry);
     } catch (err) {
+      if (!isCurrentNodesRequest(state, client, generation)) {
+        return;
+      }
       failures.push(`${entry.name}: ${String(err)}`);
     }
   }
   await reloadInventory(
     state,
+    client,
+    generation,
     failures.length > 0
       ? {
           error: `Failed to remove ${failures.length} entr${failures.length === 1 ? "y" : "ies"}: ${failures[0]}`,
@@ -385,30 +409,34 @@ export async function removeStaleInventoryEntries(
 }
 
 export async function approveNodePairingRequest(state: InventoryState, requestId: string) {
-  if (!state.client || !state.connected) {
+  const client = state.client;
+  if (!client || !state.connected) {
     return;
   }
+  const generation = state.requestGeneration;
   try {
-    await state.client.request("node.pair.approve", { requestId });
-    await reloadInventory(state);
+    await client.request("node.pair.approve", { requestId });
+    await reloadInventory(state, client, generation);
   } catch (err) {
-    await reloadInventory(state, { error: String(err) });
+    await reloadInventory(state, client, generation, { error: String(err) });
   }
 }
 
 export async function rejectNodePairingRequest(state: InventoryState, requestId: string) {
-  if (!state.client || !state.connected) {
+  const client = state.client;
+  if (!client || !state.connected) {
     return;
   }
   const confirmed = window.confirm("Reject this node pairing request?");
   if (!confirmed) {
     return;
   }
+  const generation = state.requestGeneration;
   try {
-    await state.client.request("node.pair.reject", { requestId });
-    await reloadInventory(state);
+    await client.request("node.pair.reject", { requestId });
+    await reloadInventory(state, client, generation);
   } catch (err) {
-    await reloadInventory(state, { error: String(err) });
+    await reloadInventory(state, client, generation, { error: String(err) });
   }
 }
 
