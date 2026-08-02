@@ -42,6 +42,7 @@ import {
   promptAndConfigureOllama,
   queryOllamaModelShowInfo,
   resolveOllamaApiBase,
+  resolveOllamaSetupDefaultBaseUrl,
 } from "./api.js";
 import { resolveThinkingProfile as resolveOllamaThinkingProfile } from "./provider-policy-api.js";
 import {
@@ -50,7 +51,6 @@ import {
   OLLAMA_CLOUD_PROVIDER_ID,
   OLLAMA_DEFAULT_BASE_URL,
   OLLAMA_DEFAULT_MODEL,
-  OLLAMA_DOCKER_HOST_BASE_URL,
   OLLAMA_GLM52_CLOUD_MODEL_ID,
 } from "./src/defaults.js";
 import {
@@ -125,12 +125,7 @@ async function validateOllamaNonInteractive(
 ): Promise<boolean> {
   const configuredBaseUrl =
     typeof ctx.opts.customBaseUrl === "string" ? ctx.opts.customBaseUrl.trim() : undefined;
-  const dockerSetup = ["1", "true", "yes", "on"].includes(
-    process.env.OPENCLAW_DOCKER_SETUP?.trim().toLowerCase() ?? "",
-  );
-  const baseUrl = resolveOllamaApiBase(
-    configuredBaseUrl || (dockerSetup ? OLLAMA_DOCKER_HOST_BASE_URL : OLLAMA_DEFAULT_BASE_URL),
-  );
+  const baseUrl = resolveOllamaApiBase(configuredBaseUrl || resolveOllamaSetupDefaultBaseUrl());
   // Reset must only inspect existing models: pulling or storing credentials
   // here could mutate a healthy installation before its reset is approved.
   const discovery = await fetchOllamaModels(baseUrl);
@@ -226,7 +221,7 @@ function orderAppGuidedOllamaModels(models: ModelDefinitionConfig[]): ModelDefin
   return ordered;
 }
 
-async function discoverAppGuidedOllamaModel(ctx: ProviderAppGuidedSetupContext) {
+async function resolveAppGuidedOllamaConnection(ctx: ProviderAppGuidedSetupContext) {
   const pluginConfig = resolvePluginConfigObject(ctx.config, OLLAMA_PROVIDER_ID) as
     | OllamaPluginConfig
     | undefined;
@@ -239,9 +234,36 @@ async function discoverAppGuidedOllamaModel(ctx: ProviderAppGuidedSetupContext) 
   });
   const accessValue = await resolveAppGuidedOllamaApiKey(ctx, existing);
   const discoveryAccess = accessValue ? { apiKey: accessValue } : {};
-  const provider = await buildOllamaProvider(readProviderBaseUrl(existing), {
+  return {
+    existing,
+    accessValue,
+    discoveryAccess,
+    baseUrl: readProviderBaseUrl(existing) ?? resolveOllamaSetupDefaultBaseUrl(ctx.env),
+  };
+}
+
+async function detectAppGuidedOllamaAvailability(
+  ctx: ProviderAppGuidedSetupContext,
+): Promise<boolean> {
+  const connection = await resolveAppGuidedOllamaConnection(ctx);
+  if (!connection) {
+    return false;
+  }
+  const result = await fetchOllamaModels(connection.baseUrl, {
+    ...connection.discoveryAccess,
+    ...(ctx.signal ? { signal: ctx.signal } : {}),
+  });
+  return result.reachable;
+}
+
+async function discoverAppGuidedOllamaModel(ctx: ProviderAppGuidedSetupContext) {
+  const connection = await resolveAppGuidedOllamaConnection(ctx);
+  if (!connection) {
+    return null;
+  }
+  const provider = await buildOllamaProvider(connection.baseUrl, {
     quiet: true,
-    ...discoveryAccess,
+    ...connection.discoveryAccess,
   });
   const toolModels =
     provider.models?.filter((candidate) => candidate.compat?.supportsTools === true) ?? [];
@@ -252,7 +274,7 @@ async function discoverAppGuidedOllamaModel(ctx: ProviderAppGuidedSetupContext) 
     const showInfo = await queryOllamaModelShowInfo(
       provider.baseUrl,
       candidate.id,
-      accessValue ? { apiKey: accessValue } : undefined,
+      connection.accessValue ? { apiKey: connection.accessValue } : undefined,
     );
     const contextWindow = showInfo.contextWindow;
     if (
@@ -277,16 +299,16 @@ async function discoverAppGuidedOllamaModel(ctx: ProviderAppGuidedSetupContext) 
     ...provider,
     models: provider.models?.map((candidate) => (candidate.id === model.id ? model : candidate)),
   });
-  let ownerValue = existing?.apiKey;
+  let ownerValue = connection.existing?.apiKey;
   if (ownerValue === undefined) {
-    if (accessValue) {
+    if (connection.accessValue) {
       ownerValue = "OLLAMA_API_KEY";
     } else {
       ownerValue = OLLAMA_DEFAULT_API_KEY;
     }
   }
   return {
-    existing,
+    existing: connection.existing,
     provider: preparedProvider,
     model,
     ownerValue,
@@ -866,6 +888,7 @@ export default definePluginEntry({
           hint: "Connect to an Ollama server and select a cloud or local model",
           kind: "custom",
           appGuidedSetup: {
+            detectAvailability: detectAppGuidedOllamaAvailability,
             detect: async (ctx) => {
               const discovered = await discoverAppGuidedOllamaModel(ctx);
               if (!discovered) {

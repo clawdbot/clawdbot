@@ -398,11 +398,13 @@ export async function buildTestPlan(params: {
         !choice ||
         !supportsSetupTextInference(choice.onboardingScopes) ||
         (!interactive && !supportsSetupManualSecret(choice)) ||
-        (interactive && (choice.assistantVisibility === "manual-only" || !choice.appGuidedAuth))
+        (interactive &&
+          (choice.assistantVisibility === "manual-only" ||
+            (!choice.appGuidedAuth && choice.appGuidedDiscovery !== true)))
       ) {
         return {
           error: interactive
-            ? "That provider login is not available on this Gateway."
+            ? "That provider setup is not available on this Gateway."
             : "That key-based provider is not available on this Gateway.",
         };
       }
@@ -436,11 +438,14 @@ export async function buildTestPlan(params: {
       if (
         !resolved ||
         !supportsSetupTextInference(resolved.method.wizard?.onboardingScopes) ||
-        (interactive && resolved.method.kind !== "oauth" && resolved.method.kind !== "device_code")
+        (interactive &&
+          choice.appGuidedDiscovery !== true &&
+          resolved.method.kind !== "oauth" &&
+          resolved.method.kind !== "device_code")
       ) {
         return {
           error: interactive
-            ? "That provider login is not available on this Gateway."
+            ? "That provider setup is not available on this Gateway."
             : "That key-based provider is not available on this Gateway.",
         };
       }
@@ -470,6 +475,49 @@ export async function buildTestPlan(params: {
             config: enableResult.config,
             result,
           });
+          if (choice.appGuidedDiscovery === true) {
+            const guidedSetup = resolved.method.appGuidedSetup;
+            if (!guidedSetup) {
+              return { error: "That provider setup is not available on this Gateway." };
+            }
+            const candidate = await guidedSetup.detect({
+              config: preparedConfig,
+              env: process.env,
+              workspaceDir: params.pluginWorkspaceDir,
+              ...(params.signal ? { signal: params.signal } : {}),
+            });
+            if (!candidate) {
+              return {
+                error: `${resolved.provider.label} setup completed, but no compatible model was found. Add a compatible model and try again.`,
+              };
+            }
+            const prepared = await guidedSetup.prepare({
+              config: preparedConfig,
+              env: process.env,
+              workspaceDir: params.pluginWorkspaceDir,
+              modelRef: candidate.modelRef,
+              ...(params.signal ? { signal: params.signal } : {}),
+            });
+            const preparedModelRef = prepared?.defaultModel
+              ? normalizeAgentModelRefForConfig(prepared.defaultModel)
+              : "";
+            if (!prepared || preparedModelRef !== candidate.modelRef) {
+              return {
+                error: `${resolved.provider.label} could not prepare its detected model. Try setup again.`,
+              };
+            }
+            preparedConfig = applyProviderPluginAuthMethodResultConfig({
+              config: preparedConfig,
+              result: prepared,
+            });
+            const profiles = new Map(
+              [...result.profiles, ...prepared.profiles].map((profile) => [
+                profile.profileId,
+                profile,
+              ]),
+            );
+            result = { ...prepared, profiles: [...profiles.values()] };
+          }
         } else if (resolved.method.kind === "api_key" || resolved.method.kind === "token") {
           result = await runProviderPluginAuthMethodUnpersisted({
             config: enableResult.config,

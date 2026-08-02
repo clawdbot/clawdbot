@@ -151,15 +151,28 @@ export async function runSetupModelAuthStep(params: {
     | (typeof import("../commands/auth-choice-prompt.js"))["promptAuthChoiceGrouped"]
     | undefined;
   let keepCurrentAuthChoice: KeepCurrentAuthChoice | undefined;
+  let detectedProviderIds: ReadonlySet<string> | undefined;
   if (authChoiceFromPrompt) {
-    const { ensureAuthProfileStore } = await import("../agents/auth-profiles.runtime.js");
-    const authChoicePromptModule = await import("../commands/auth-choice-prompt.js");
+    const [
+      { ensureAuthProfileStore },
+      authChoicePromptModule,
+      { detectAvailableSetupProviderIds },
+    ] = await Promise.all([
+      import("../agents/auth-profiles.runtime.js"),
+      import("../commands/auth-choice-prompt.js"),
+      import("../plugins/provider-setup-availability.js"),
+    ]);
     promptAuthChoiceGrouped = authChoicePromptModule.promptAuthChoiceGrouped;
     keepCurrentAuthChoice = authChoicePromptModule.KEEP_CURRENT_AUTH_CHOICE;
     const target = resolveOnboardingAgentTarget(nextConfig);
     authStore = ensureAuthProfileStore(params.agentDir ?? target.agentDir, {
       allowKeychainPrompt: false,
       readOnly: true,
+    });
+    detectedProviderIds = await detectAvailableSetupProviderIds({
+      config: nextConfig,
+      workspaceDir: target.workspaceDir,
+      env,
     });
   }
   while (true) {
@@ -172,6 +185,7 @@ export async function runSetupModelAuthStep(params: {
         config: nextConfig,
         workspaceDir: target.workspaceDir,
         allowKeepCurrentProvider: true,
+        detectedProviderIds,
       });
     }
     if (authChoice === undefined) {

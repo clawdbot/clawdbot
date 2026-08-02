@@ -12,6 +12,7 @@ const promptDefaultModel = vi.hoisted(() => vi.fn());
 const applyPrimaryModel = vi.hoisted(() => vi.fn((config: unknown) => config));
 const promptAuthChoiceGrouped = vi.hoisted(() => vi.fn());
 const ensureAuthProfileStore = vi.hoisted(() => vi.fn(() => ({ profiles: {} })));
+const detectAvailableSetupProviderIds = vi.hoisted(() => vi.fn());
 
 vi.mock("../commands/auth-choice.js", () => ({
   applyAuthChoice,
@@ -32,6 +33,10 @@ vi.mock("../commands/auth-choice-prompt.js", () => ({
 
 vi.mock("../agents/auth-profiles.runtime.js", () => ({
   ensureAuthProfileStore,
+}));
+
+vi.mock("../plugins/provider-setup-availability.js", () => ({
+  detectAvailableSetupProviderIds,
 }));
 
 function createPrompter(): WizardPrompter {
@@ -72,6 +77,7 @@ describe("runSetupModelAuthStep", () => {
     vi.clearAllMocks();
     promptDefaultModel.mockResolvedValue({});
     warnIfModelConfigLooksOff.mockResolvedValue(undefined);
+    detectAvailableSetupProviderIds.mockResolvedValue(new Set(["ollama"]));
   });
 
   it("targets the configured default agent for auth and model setup", async () => {
@@ -95,7 +101,10 @@ describe("runSetupModelAuthStep", () => {
       readOnly: true,
     });
     expect(promptAuthChoiceGrouped).toHaveBeenCalledWith(
-      expect.objectContaining({ workspaceDir: "/tmp/ops-workspace" }),
+      expect.objectContaining({
+        workspaceDir: "/tmp/ops-workspace",
+        detectedProviderIds: new Set(["ollama"]),
+      }),
     );
     expect(applyAuthChoice).toHaveBeenCalledWith(
       expect.objectContaining({

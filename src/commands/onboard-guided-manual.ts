@@ -103,6 +103,7 @@ export async function runManualStage(params: {
   const allowedChoices = new Set([
     ...params.detection.manualProviders.map((provider) => provider.id),
     ...params.detection.authOptions.map((option) => option.id),
+    ...(params.detection.prepareOptions ?? []).map((option) => option.id),
   ]);
   const detectedOptions = params.detection.candidates.map((candidate) => ({
     value: `candidate:${candidate.kind}`,
@@ -134,11 +135,20 @@ export async function runManualStage(params: {
         },
       ]
     : [];
-  const [{ ensureAuthProfileStore }, { promptAuthChoiceGrouped }] = await Promise.all([
+  const [
+    { ensureAuthProfileStore },
+    { detectAvailableSetupProviderIds },
+    { promptAuthChoiceGrouped },
+  ] = await Promise.all([
     import("../agents/auth-profiles.runtime.js"),
+    import("../plugins/provider-setup-availability.js"),
     import("./auth-choice-prompt.js"),
   ]);
   const store = ensureAuthProfileStore(undefined, { allowKeychainPrompt: false });
+  const detectedProviderIds = await detectAvailableSetupProviderIds({
+    config: params.config,
+    workspaceDir: params.workspace,
+  });
   while (true) {
     const choice = await promptAuthChoiceGrouped({
       prompter: params.prompter,
@@ -149,6 +159,7 @@ export async function runManualStage(params: {
       additionalGroups,
       config: params.config,
       workspaceDir: params.workspace,
+      detectedProviderIds,
     });
 
     if (choice === "skip") {
@@ -184,12 +195,15 @@ export async function runManualStage(params: {
       continue;
     }
 
-    const authOption = params.detection.authOptions.find((item) => item.id === choice);
-    if (authOption) {
+    const providerAuthOption = [
+      ...params.detection.authOptions,
+      ...(params.detection.prepareOptions ?? []),
+    ].find((item) => item.id === choice);
+    if (providerAuthOption) {
       const result = await withConsoleSubsystemsSuppressed(() =>
         params.activate({
           kind: "provider-auth",
-          authChoice: authOption.id,
+          authChoice: providerAuthOption.id,
           workspace: params.workspace,
           surface: "cli",
           runtime: params.runtime,
@@ -201,7 +215,7 @@ export async function runManualStage(params: {
       }
       await noteActivationFailure({
         prompter: params.prompter,
-        label: authOption.label,
+        label: providerAuthOption.label,
         result,
       });
       continue;

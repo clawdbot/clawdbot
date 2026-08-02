@@ -86,6 +86,11 @@ describe("promptAuthChoiceGrouped", () => {
       .mockImplementation((a: AuthChoiceGroup, b: AuthChoiceGroup) =>
         a.label.localeCompare(b.label),
       );
+    isFeaturedAuthChoiceGroup
+      .mockReset()
+      .mockImplementation((group: AuthChoiceGroup) =>
+        ["openai", "anthropic", "xai", "google", "openrouter"].includes(group.value),
+      );
   });
 
   it("marks the configured provider and offers keep current config first", async () => {
@@ -390,5 +395,31 @@ describe("promptAuthChoiceGrouped", () => {
 
     expect(messages).toEqual(["Model/auth provider", "Use which detected AI?"]);
     expect(result).toBe("candidate:codex-cli");
+  });
+
+  it("marks a detected provider in the provider picker", async () => {
+    const ollama = authChoiceGroup("ollama", "Ollama", [["ollama", "Ollama"]]);
+    buildAuthChoiceGroups.mockReturnValue({
+      groups: [ollama],
+      skipOption: { value: "skip", label: "Skip for now" },
+    });
+    let providerOptions: Array<{ value: unknown; label: string }> = [];
+    const prompter = createPromptHarness(async (params) => {
+      providerOptions = params.options;
+      return "skip";
+    });
+
+    await promptAuthChoiceGrouped({
+      prompter,
+      store: EMPTY_STORE,
+      includeSkip: true,
+      detectedProviderIds: new Set(["ollama"]),
+    });
+
+    expect(providerOptions).toContainEqual({
+      value: "ollama",
+      label: "Ollama (detected)",
+      hint: undefined,
+    });
   });
 });

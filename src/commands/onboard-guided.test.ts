@@ -21,6 +21,7 @@ const promptAuthChoiceGrouped = vi.hoisted(() => vi.fn());
 const ensureAuthProfileStore = vi.hoisted(() =>
   vi.fn(() => ({ version: 1 as const, profiles: {} })),
 );
+const detectAvailableSetupProviderIds = vi.hoisted(() => vi.fn());
 
 vi.mock("../../packages/terminal-core/src/restore.js", () => ({ restoreTerminalState }));
 
@@ -30,6 +31,9 @@ vi.mock("./auth-choice-prompt.js", async (importActual) => ({
 }));
 
 vi.mock("../agents/auth-profiles.runtime.js", () => ({ ensureAuthProfileStore }));
+vi.mock("../plugins/provider-setup-availability.js", () => ({
+  detectAvailableSetupProviderIds,
+}));
 
 vi.mock("./onboard-interactive-runner.js", async (importActual) => {
   const actual = await importActual<typeof import("./onboard-interactive-runner.js")>();
@@ -125,6 +129,7 @@ function setupDeps(params: {
   persistRiskAcknowledgement?: GuidedOnboardingDeps["persistRiskAcknowledgement"];
   runSetupMemoryImportStep?: GuidedOnboardingDeps["runSetupMemoryImportStep"];
   runAppRecommendations?: GuidedOnboardingDeps["runAppRecommendations"];
+  ensureControlUiAssetsBuilt?: GuidedOnboardingDeps["ensureControlUiAssetsBuilt"];
   runBrowserHandoff?: GuidedOnboardingDeps["runBrowserHandoff"];
   probeBrowserHandoffGateway?: GuidedOnboardingDeps["probeBrowserHandoffGateway"];
   applySetup?: GuidedOnboardingDeps["applySetup"];
@@ -161,6 +166,8 @@ function setupDeps(params: {
     runSetupMemoryImportStep,
     runAppRecommendations:
       params.runAppRecommendations ?? vi.fn(async ({ config }) => recommendationOutcome(config)),
+    ensureControlUiAssetsBuilt:
+      params.ensureControlUiAssetsBuilt ?? vi.fn(async () => ({ ok: true, built: false })),
     runBrowserHandoff:
       params.runBrowserHandoff ??
       (vi.fn(async () => ({
@@ -185,6 +192,8 @@ describe("runGuidedOnboarding", () => {
     restoreTerminalState.mockClear();
     promptAuthChoiceGrouped.mockReset();
     ensureAuthProfileStore.mockClear();
+    detectAvailableSetupProviderIds.mockReset();
+    detectAvailableSetupProviderIds.mockResolvedValue(new Set(["ollama"]));
     readConfigFileSnapshot.mockReset();
     readConfigFileSnapshot.mockResolvedValue({
       exists: false,
@@ -651,6 +660,53 @@ describe("runGuidedOnboarding", () => {
     expect(text).not.toHaveBeenCalled();
   });
 
+  it("routes detected local provider setup through its provider-owned flow", async () => {
+    promptAuthChoiceGrouped.mockResolvedValueOnce("ollama");
+    const prompter = createWizardPrompter();
+    const activate = vi.fn(async () => ({
+      ok: true as const,
+      modelRef: "ollama/qwen3.5:4b",
+      latencyMs: 500,
+      lines: ["Default model: ollama/qwen3.5:4b"],
+    })) as GuidedOnboardingDeps["activate"];
+    const deps = setupDeps({
+      prompter,
+      detect: vi.fn(async () =>
+        detection({
+          candidates: [],
+          prepareOptions: [
+            {
+              id: "ollama",
+              brandId: "ollama",
+              label: "Ollama",
+              actionLabel: "Choose connection",
+            },
+          ],
+        }),
+      ),
+      activate,
+    });
+    const runtime = makeRuntime();
+
+    await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, runtime, deps);
+
+    expect(promptAuthChoiceGrouped).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowedChoices: new Set(["ollama"]),
+        detectedProviderIds: new Set(["ollama"]),
+      }),
+    );
+    expect(activate).toHaveBeenCalledWith({
+      kind: "provider-auth",
+      authChoice: "ollama",
+      workspace: "/tmp/work",
+      surface: "cli",
+      runtime,
+      prompter,
+    });
+    expect(prompter.text).not.toHaveBeenCalled();
+  });
+
   it("lets the grouped provider picker skip without opening AI chat", async () => {
     promptAuthChoiceGrouped.mockResolvedValueOnce("skip");
     const prompter = createWizardPrompter();
@@ -667,7 +723,10 @@ describe("runGuidedOnboarding", () => {
     await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps);
 
     expect(promptAuthChoiceGrouped).toHaveBeenCalledWith(
-      expect.objectContaining({ includeSkip: true }),
+      expect.objectContaining({
+        includeSkip: true,
+        detectedProviderIds: new Set(["ollama"]),
+      }),
     );
     expect(deps.activate).not.toHaveBeenCalled();
     expect(deps.runSystemAgentChat).not.toHaveBeenCalled();

@@ -24,6 +24,7 @@ export {
   configureOllamaNonInteractive,
   ensureOllamaModelPulled,
   promptAndConfigureOllama,
+  resolveOllamaSetupDefaultBaseUrl,
 } from "./src/setup.js";
 export {
   buildOllamaChatRequest,
