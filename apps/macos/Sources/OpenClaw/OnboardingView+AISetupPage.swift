@@ -1,13 +1,13 @@
 import SwiftUI
 
 extension OnboardingView {
-    /// Structured AI setup: detect what's already on this machine, test the
+    /// Structured AI setup: detect what's already available on the Gateway, test the
     /// best option live, fall through automatically, offer an API-key form
     /// when nothing works. OpenClaw becomes available only after inference
     /// has completed a live round-trip.
     func aiSetupPage(contentHeight: CGFloat) -> some View {
         VStack(spacing: 12) {
-            Text("Connect your AI")
+            Text(self.aiSetupTitle)
                 .font(.largeTitle.weight(.semibold))
             Text(self.aiSetupSubtitle)
                 .font(.body)
@@ -21,6 +21,7 @@ extension OnboardingView {
                     model: self.aiSetup,
                     systemAgentChat: self.systemAgentState.chat,
                     showSystemAgentChat: self.$systemAgentState.isPresented,
+                    returnToGatewayAuthentication: { self.returnToGatewayAuthentication() },
                     retryConfiguredGatewayProbe: { self.retryConfiguredGatewayProbe() })
                     .padding(.vertical, 4)
                     .padding(.trailing, 12)
@@ -32,9 +33,22 @@ extension OnboardingView {
         .frame(width: self.pageWidth, height: contentHeight, alignment: .top)
     }
 
+    private var aiSetupTitle: String {
+        if self.aiSetup.configuredGatewayAuthIssue != nil {
+            return "Authenticate with your Gateway"
+        }
+        return "Connect your AI"
+    }
+
     private var aiSetupSubtitle: String {
+        if self.aiSetup.configuredGatewayAuthIssue != nil {
+            return "Finish the remote Gateway connection before continuing."
+        }
         if aiSetup.connected {
             return "All good — your assistant has a working AI connection."
+        }
+        if state.connectionMode == .remote {
+            return "AI access is configured on the remote Gateway. OpenClaw will use that existing setup."
         }
         return "OpenClaw needs an AI account to think. " +
             "It reuses what you already have — nothing new to sign up for if " +
@@ -114,6 +128,18 @@ extension OnboardingView {
             startAISetupWhenMissing: true,
             knownVisible: true,
             knownAISetupPage: true)
+    }
+
+    func returnToGatewayAuthentication() {
+        guard state.connectionMode == .remote,
+              let issue = aiSetup.configuredGatewayAuthIssue,
+              let connectionPage = pageOrder.firstIndex(of: connectionPageIndex)
+        else { return }
+        remoteAuthIssue = issue
+        remoteProbeState = .failed(remoteGatewayProbeInput, issue.statusMessage)
+        showRemoteChoices = true
+        showAdvancedConnection = true
+        withAnimation { currentPage = connectionPage }
     }
 
     func resumePendingInferenceSetup() {

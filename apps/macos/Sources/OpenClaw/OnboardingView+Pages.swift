@@ -350,7 +350,7 @@ extension OnboardingView {
     }
 
     private var canProbeRemoteConnection: Bool {
-        self.remoteProbePreflightMessage == nil && remoteProbeState != .checking
+        self.remoteProbePreflightMessage == nil && !self.remoteProbeState.isChecking
     }
 
     private func remoteConnectionSection() -> some View {
@@ -368,9 +368,9 @@ extension OnboardingView {
                 }
                 Spacer(minLength: 0)
                 Button {
-                    Task { await self.probeRemoteConnection() }
+                    Task { await self.probeRemoteConnection(advanceOnSuccess: false) }
                 } label: {
-                    if self.remoteProbeState == .checking {
+                    if self.remoteProbeState.isChecking {
                         ProgressView()
                             .controlSize(.small)
                             .frame(minWidth: 120)
@@ -385,7 +385,7 @@ extension OnboardingView {
 
             // Probe feedback sits with the Check connection button it explains,
             // above the form rows, so grid growth never pushes it out of view.
-            if let message = self.remoteProbePreflightMessage, self.remoteProbeState != .checking {
+            if let message = self.remoteProbePreflightMessage, !self.remoteProbeState.isChecking {
                 Text(message)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -561,7 +561,7 @@ extension OnboardingView {
             Text("Checking remote gateway…")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-        case let .ok(success):
+        case let .ok(_, success):
             VStack(alignment: .leading, spacing: 2) {
                 Label(success.title, systemImage: "checkmark.circle.fill")
                     .font(.caption)
@@ -573,7 +573,7 @@ extension OnboardingView {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
-        case let .failed(message):
+        case let .failed(_, message):
             if remoteAuthIssue == nil {
                 Text(message)
                     .font(.caption)
@@ -609,7 +609,15 @@ extension OnboardingView {
     }
 
     @MainActor
-    private func probeRemoteConnection() async {
+    var remoteGatewayProbeInput: RemoteGatewayProbeInput {
+        RemoteGatewayProbeInput(
+            transport: state.remoteTransport,
+            target: state.remoteTransport == .direct ? state.remoteUrl : state.remoteTarget,
+            token: state.remoteToken)
+    }
+
+    func probeRemoteConnection(advanceOnSuccess: Bool) async {
+        let input = self.remoteGatewayProbeInput
         let originalMode = state.connectionMode
         let shouldRestoreMode = originalMode != .remote
         if shouldRestoreMode {
@@ -617,7 +625,7 @@ extension OnboardingView {
             configuredGatewayProbe.beginTemporaryConnectionCheck()
             state.connectionMode = .remote
         }
-        remoteProbeState = .checking
+        remoteProbeState = .checking(input)
         remoteAuthIssue = nil
         defer {
             if shouldRestoreMode {
@@ -627,15 +635,24 @@ extension OnboardingView {
                 self.configuredGatewayProbe.endTemporaryConnectionCheck()
             }
         }
-
-        switch await RemoteGatewayProbe.run() {
+        let result = await RemoteGatewayProbe.run()
+        guard self.remoteProbeState == .checking(input), self.remoteGatewayProbeInput == input else {
+            return
+        }
+        switch result {
         case let .ready(success):
-            remoteProbeState = .ok(success)
+            remoteProbeState = .ok(input, success)
+            if advanceOnSuccess,
+               state.connectionMode == .remote,
+               activePageIndex == connectionPageIndex
+            {
+                self.handleNext()
+            }
         case let .authIssue(issue):
             remoteAuthIssue = issue
-            remoteProbeState = .failed(issue.statusMessage)
+            remoteProbeState = .failed(input, issue.statusMessage)
         case let .failed(message):
-            remoteProbeState = .failed(message)
+            remoteProbeState = .failed(input, message)
         }
     }
 
@@ -1074,5 +1091,12 @@ extension OnboardingView {
                 .frame(maxHeight: 160)
             }
         }
+    }
+}
+
+extension RemoteOnboardingProbeState {
+    var isChecking: Bool {
+        if case .checking = self { return true }
+        return false
     }
 }

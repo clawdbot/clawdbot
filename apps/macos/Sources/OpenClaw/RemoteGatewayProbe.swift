@@ -142,9 +142,9 @@ struct RemoteGatewayProbeSuccess: Equatable {
     var detail: String? {
         switch self.authSource {
         case .some(.deviceToken):
-            "This Mac used a stored device token. New or unpaired devices may still need the gateway token."
+            "This app used a stored device token. New or unpaired devices may still need the gateway token."
         case .some(.bootstrapToken):
-            "This Mac is still using the temporary setup code. "
+            "This app is still using the temporary setup code. "
                 + "Approve pairing to finish provisioning device-scoped auth."
         case .some(.sharedToken), .some(.password), .some(GatewayAuthSource.none), nil:
             nil
