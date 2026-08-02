@@ -187,7 +187,7 @@ describe("subagent registry steer restarts", () => {
     lifecycleHandler = undefined;
     mod.testing.setDepsForTest({
       ensureContextEnginesInitialized: () => {},
-      ensureRuntimePluginsLoaded: () => {},
+      loadAgentRuntimePluginRegistryHandle: () => undefined,
       resolveContextEngine: async () => noopContextEngine,
     });
     announceSpy.mockReset();

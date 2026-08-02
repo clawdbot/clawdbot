@@ -49,12 +49,33 @@ describe("splitMediaFromOutput", () => {
   it.each([
     ["/Users/pete/My File.png", "MEDIA:/Users/pete/My File.png"],
     ["/Users/pete/My File.png", 'MEDIA:"/Users/pete/My File.png"'],
+    [
+      "/Users/pete/My Files/Project Assets/render final.png",
+      "MEDIA:/Users/pete/My Files/Project Assets/render final.png",
+    ],
+    [
+      "/Users/pete/My Files/Project Assets/render final.png",
+      'MEDIA:"/Users/pete/My Files/Project Assets/render final.png"',
+    ],
+    ["/tmp/album.v1/photo.png copy.png", "MEDIA:/tmp/album.v1/photo.png copy.png"],
     ["./screenshots/image.png", "MEDIA:./screenshots/image.png"],
     ["media/inbound/image.png", "MEDIA:media/inbound/image.png"],
     ["./screenshot.png", "  MEDIA:./screenshot.png"],
     ["~/Pictures/My File.png", "MEDIA:~/Pictures/My File.png"],
     ["~/.openclaw/media/browser/snap.png", "MEDIA:~/.openclaw/media/browser/snap.png"],
     ["C:\\Users\\pete\\Pictures\\snap.png", "MEDIA:C:\\Users\\pete\\Pictures\\snap.png"],
+    [
+      "C:\\Users\\First Last\\workspace\\shot.png",
+      "MEDIA:C:\\Users\\First Last\\workspace\\shot.png",
+    ],
+    [
+      "C:\\Users\\First  Last\\workspace\\shot.png",
+      "MEDIA:C:\\Users\\First  Last\\workspace\\shot.png",
+    ],
+    [
+      "\\\\server\\My Files\\Project Assets\\render final.png",
+      "MEDIA:\\\\server\\My Files\\Project Assets\\render final.png",
+    ],
     ["/tmp/tts-fAJy8C/voice-1770246885083.opus", "MEDIA:/tmp/tts-fAJy8C/voice-1770246885083.opus"],
     ["image.png", "MEDIA:image.png"],
     [
@@ -75,13 +96,53 @@ describe("splitMediaFromOutput", () => {
   });
 
   it.each([
+    ["MEDIA:/tmp/a.png /tmp/b.png", ["/tmp/a.png", "/tmp/b.png"]],
+    ["MEDIA:media/a.png media/b.png", ["media/a.png", "media/b.png"]],
+    ["MEDIA:/tmp/a.png media/b.png", ["/tmp/a.png", "media/b.png"]],
+    ["MEDIA:./a.png ./b.png", ["./a.png", "./b.png"]],
+    ["MEDIA:/tmp/a.png https://example.com/b.png", ["/tmp/a.png", "https://example.com/b.png"]],
+    [
+      "MEDIA:C:\\Users\\First Last\\workspace\\shot.png D:\\Other User\\second.png",
+      ["C:\\Users\\First Last\\workspace\\shot.png", "D:\\Other User\\second.png"],
+    ],
+    [
+      "MEDIA:C:\\Users\\First Last\\workspace\\shot.png media/second.png",
+      ["C:\\Users\\First Last\\workspace\\shot.png", "media/second.png"],
+    ],
+    [
+      "MEDIA:/tmp/project screenshots/shot.png media\\second.png",
+      ["/tmp/project screenshots/shot.png", "media\\second.png"],
+    ],
+    [
+      "MEDIA:/tmp/project screenshots/shot.png file:///tmp/second.png",
+      ["/tmp/project screenshots/shot.png", "/tmp/second.png"],
+    ],
+    ["MEDIA:C:\\Users\\First Last\\..\\secret.png D:\\safe\\second.png", ["D:\\safe\\second.png"]],
+    ["MEDIA:/tmp/project screenshots/../../.env /tmp/safe/second.png", ["/tmp/safe/second.png"]],
+  ] as const)("keeps separate media items on one directive line: %s", (input, mediaUrls) => {
+    expectParsedMediaOutputCase(input, { mediaUrls: [...mediaUrls] });
+  });
+
+  it.each([
     "MEDIA:../../../etc/passwd",
     "MEDIA:../../.env",
     "MEDIA:~user/Pictures/My File.png",
     "MEDIA:~/Pictures/../../.ssh/id_rsa",
     "MEDIA:./foo/../../../etc/shadow",
+    "MEDIA:C:\\Users\\First Last\\..\\secret.png",
+    "MEDIA:/tmp/project screenshots/../../.env",
   ] as const)("rejects traversal and unsupported home-dir path: %s", (input) => {
     expectRejectedMediaPathCase(input);
+  });
+
+  it("does not absorb an unsafe remote URL into a spaced local media path", () => {
+    expectParsedMediaOutputCase(
+      "MEDIA:C:\\Users\\First Last\\workspace\\shot.png https://127.0.0.1/secret.png",
+      {
+        mediaUrls: ["C:\\Users\\First Last\\workspace\\shot.png"],
+        text: "https://127.0.0.1/secret.png",
+      },
+    );
   });
 
   it.each([

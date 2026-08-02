@@ -106,8 +106,6 @@ function buildProps(overrides?: Partial<DreamingProps>): DreamingProps {
     active: true,
     selectedAgentId: "main",
     shortTermCount: 47,
-    groundedSignalCount: 9,
-    totalSignalCount: 182,
     promotedCount: 12,
     phases: {
       light: { enabled: true, cron: "0 * * * *", nextRunAtMs: Date.parse("2026-04-05T11:30:00Z") },
@@ -150,7 +148,6 @@ function buildProps(overrides?: Partial<DreamingProps>): DreamingProps {
     dreamingOf: null,
     nextCycle: "4:00 AM",
     timezone: "America/Los_Angeles",
-    statusLoading: false,
     statusError: null,
     modeSaving: false,
     dreamDiaryLoading: false,
@@ -158,7 +155,6 @@ function buildProps(overrides?: Partial<DreamingProps>): DreamingProps {
     dreamDiaryActionMessage: null,
     dreamDiaryActionArchivePath: null,
     dreamDiaryError: null,
-    dreamDiaryPath: "DREAMS.md",
     dreamDiaryContent:
       "# Dream Diary\n\n<!-- openclaw:dreaming:diary:start -->\n\n---\n\n*April 5, 2026, 3:00 AM*\n\nThe repository whispered of forgotten endpoints tonight.\n\n<!-- openclaw:dreaming:diary:end -->",
     memoryWikiEnabled: true,
@@ -275,7 +271,6 @@ function buildProps(overrides?: Partial<DreamingProps>): DreamingProps {
         },
       ],
     },
-    onRefresh: () => {},
     onRefreshDiary: () => {},
     onRefreshImports: () => {},
     onRefreshWikiOverview: () => {},

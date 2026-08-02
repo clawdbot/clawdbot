@@ -10,7 +10,6 @@ import {
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { isMainRestartRecoveryCandidate } from "./main-session-recovery-state.js";
 import { resolveAgentSessionDirs } from "./session-dirs.js";
 
 export const log = createSubsystemLogger("main-session-restart-recovery");
@@ -54,10 +53,6 @@ export function buildRestartRecoveryExpectedState(
     restartRecoveryTerminalRunIds: entry.restartRecoveryTerminalRunIds,
     status: entry.status,
   };
-}
-
-export function shouldSkipMainRecovery(entry: SessionEntry, sessionKey: string): boolean {
-  return !isMainRestartRecoveryCandidate(entry, sessionKey);
 }
 
 export function normalizeStringSet(values: Iterable<string> | undefined): Set<string> {

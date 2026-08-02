@@ -1709,17 +1709,46 @@ describe("sendMessageIMessage receipts", () => {
     );
   });
 
-  it("uses the dedicated send timeout (covers macOS 26 stalls), not the 10s probe default", async () => {
-    const client = createClient({ guid: "p:0/imsg-1" });
+  it("floors a configured probe timeout so one delayed imsg fallback can resolve", async () => {
+    vi.useFakeTimers();
+    const delayedFallbackMs = 158_000;
+    const client = {
+      request: vi.fn(
+        (_method: string, _params: Record<string, unknown>, opts?: { timeoutMs?: number }) =>
+          new Promise<Record<string, unknown>>((resolve, reject) => {
+            const timeout = setTimeout(
+              () => reject(new Error("imsg rpc timeout (send)")),
+              opts?.timeoutMs,
+            );
+            setTimeout(() => {
+              clearTimeout(timeout);
+              resolve({ guid: "p:0/imsg-delayed-fallback" });
+            }, delayedFallbackMs);
+          }),
+      ),
+      stop: vi.fn(async () => {}),
+    } as unknown as IMessageRpcClient;
 
-    await sendMessageIMessage("chat_id:42", "hello", {
-      config: IMESSAGE_TEST_CFG,
+    const send = sendMessageIMessage("chat_id:42", "hello", {
+      config: {
+        channels: {
+          imessage: {
+            ...IMESSAGE_TEST_CFG.channels.imessage,
+            probeTimeoutMs: 10_000,
+          },
+        },
+      },
       client,
     });
+    await vi.advanceTimersByTimeAsync(delayedFallbackMs);
 
-    expect(getClientMocks(client).request).toHaveBeenCalledWith("send", expect.any(Object), {
-      timeoutMs: 150_000,
-    });
+    await expect(send).resolves.toMatchObject({ messageId: "p:0/imsg-delayed-fallback" });
+    expect(getClientMocks(client).request).toHaveBeenCalledTimes(1);
+    expect(getClientMocks(client).request).toHaveBeenCalledWith(
+      "send",
+      expect.any(Object),
+      expect.objectContaining({ timeoutMs: 180_000 }),
+    );
   });
 
   it("sends explicit chat media-only payloads through send-attachment auto transport", async () => {

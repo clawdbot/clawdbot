@@ -1439,9 +1439,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
   });
 
   it("does not force policy-off marker in fallback exact identifiers section", () => {
-    const summary = buildStructuredFallbackSummary(undefined, {
-      identifierPolicy: "off",
-    });
+    const summary = buildStructuredFallbackSummary(undefined);
     expect(summary).toContain("## Exact identifiers");
     expect(summary).toContain("None captured.");
     expect(summary).not.toContain("N/A (identifier policy off).");
@@ -2143,6 +2141,9 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(summary).toContain("latest ask status");
     expect(summary).toContain("latest assistant reply");
     expect(mockSummarizeInStages).toHaveBeenCalledTimes(3);
+    expect(requireRecord(mockCallArg(mockSummarizeInStages, 1)).customInstructions).toContain(
+      "Additional requirements:",
+    );
   });
 
   it("keeps required headings when all turns are preserved and history is carried forward", async () => {
@@ -2845,70 +2846,86 @@ describe("compaction-safeguard double-compaction guard", () => {
     ).toBe(true);
   });
 
-  it("does not replay inter-session sessions_send branch turns as fallback history", async () => {
-    mockSummarizeInStages.mockReset();
-    mockSummarizeInStages.mockResolvedValue(summaryResult("branch summary"));
+  it.each([
+    { assistantText: "bee reply", completed: true },
+    { assistantText: " \t\n ", completed: false },
+  ])(
+    "drops delegated branch turns only after meaningful terminal output ($completed)",
+    async ({ assistantText, completed }) => {
+      mockSummarizeInStages.mockReset();
+      mockSummarizeInStages.mockResolvedValue(summaryResult("branch summary"));
 
-    const now = Date.now();
-    const sessionManager = {
-      ...stubSessionManager(),
-      getBranch: () => [
-        {
-          type: "message",
-          id: "user-1",
-          parentId: null,
-          timestamp: new Date(now).toISOString(),
-          message: {
-            role: "user",
-            content: "say bee",
-            provenance: {
-              kind: "inter_session",
-              sourceSessionKey: "agent:pm",
-              sourceTool: "sessions_send",
+      const now = Date.now();
+      const sessionManager = {
+        ...stubSessionManager(),
+        getBranch: () => [
+          {
+            type: "message",
+            id: "user-1",
+            parentId: null,
+            timestamp: new Date(now).toISOString(),
+            message: {
+              role: "user",
+              content: "say bee",
+              provenance: {
+                kind: "inter_session",
+                sourceSessionKey: "agent:pm",
+                sourceTool: "sessions_send",
+              },
+              timestamp: now,
             },
-            timestamp: now,
           },
-        },
-        {
-          type: "message",
-          id: "assistant-1",
-          parentId: "user-1",
-          timestamp: new Date(now + 1).toISOString(),
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: "bee reply" }],
-            timestamp: now + 1,
+          {
+            type: "message",
+            id: "assistant-1",
+            parentId: "user-1",
+            timestamp: new Date(now + 1).toISOString(),
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: assistantText }],
+              timestamp: now + 1,
+            },
           },
+        ],
+      } as ExtensionContext["sessionManager"];
+      const model = createAnthropicModelFixture();
+      setCompactionSafeguardRuntime(sessionManager, { model, recentTurnsPreserve: 0 });
+
+      const mockEvent = {
+        preparation: {
+          messagesToSummarize: [] as AgentMessage[],
+          turnPrefixMessages: [] as AgentMessage[],
+          firstKeptEntryId: "entry-7",
+          tokensBefore: 38085,
+          fileOps: { read: [], edited: [], written: [] },
+          settings: { reserveTokens: 4000 },
+          isSplitTurn: true,
         },
-      ],
-    } as ExtensionContext["sessionManager"];
-    const model = createAnthropicModelFixture();
-    setCompactionSafeguardRuntime(sessionManager, { model, recentTurnsPreserve: 0 });
+        customInstructions: "",
+        signal: new AbortController().signal,
+      };
+      const { result, getApiKeyAndHeadersMock } = await runCompactionScenario({
+        sessionManager,
+        event: mockEvent,
+        apiKey: "dummy",
+      });
 
-    const mockEvent = {
-      preparation: {
-        messagesToSummarize: [] as AgentMessage[],
-        turnPrefixMessages: [] as AgentMessage[],
-        firstKeptEntryId: "entry-7",
-        tokensBefore: 38085,
-        fileOps: { read: [], edited: [], written: [] },
-        settings: { reserveTokens: 4000 },
-        isSplitTurn: true,
-      },
-      customInstructions: "",
-      signal: new AbortController().signal,
-    };
-    const { result, getApiKeyAndHeadersMock } = await runCompactionScenario({
-      sessionManager,
-      event: mockEvent,
-      apiKey: "dummy",
-    });
-
-    const compaction = expectCompactionResult(result);
-    expect(compaction.summary).toContain("No prior history.");
-    expect(mockSummarizeInStages).not.toHaveBeenCalled();
-    expect(getApiKeyAndHeadersMock).not.toHaveBeenCalled();
-  });
+      const compaction = expectCompactionResult(result);
+      if (completed) {
+        expect(compaction.summary).toContain("No prior history.");
+        expect(mockSummarizeInStages).not.toHaveBeenCalled();
+        expect(getApiKeyAndHeadersMock).not.toHaveBeenCalled();
+        return;
+      }
+      expect(compaction.summary).toContain("branch summary");
+      expect(mockSummarizeInStages).toHaveBeenCalledTimes(1);
+      expect(getApiKeyAndHeadersMock).toHaveBeenCalledTimes(1);
+      const summarizeCall = requireRecord(mockCallArg(mockSummarizeInStages));
+      expect(
+        requireArray(summarizeCall.messages).map((message) => requireRecord(message).role),
+      ).toEqual(["user", "assistant"]);
+    },
+  );
 
   it.each([
     { toolName: "read", expectedRoles: ["user", "assistant", "toolResult"] },

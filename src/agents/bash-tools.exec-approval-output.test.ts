@@ -113,6 +113,43 @@ describe("buildExecApprovalContinuationPrompt", () => {
     expect(built.resultRange.end).toBeLessThan(built.message.indexOf(OUTPUT_END));
   });
 
+  it.each([
+    {
+      name: "outcome-unknown",
+      resultText:
+        "Exec outcome unknown (node=node-1 id=req-1, outcome-unknown)\nThe command may have executed.",
+      expected: [
+        "The command may have executed.",
+        "Do not run the command again automatically.",
+        "Do not claim it was denied, not dispatched, or safe to retry.",
+      ],
+      rejected: "was not dispatched and did not run",
+    },
+    {
+      name: "not-dispatched",
+      resultText:
+        "Exec not dispatched (node=node-1 id=req-1, not-dispatched)\nThe command did not run.",
+      expected: [
+        "was not dispatched and did not run",
+        "Retry only after resolving the connection failure",
+        "Do not claim the command completed, was denied, or may have executed.",
+      ],
+      rejected: "unknown execution outcome",
+    },
+  ])("preserves $name guidance across authenticated continuation handoff", (testCase) => {
+    const built = buildExecApprovalContinuationPrompt(testCase.resultText);
+
+    for (const expected of testCase.expected) {
+      expect(built.message).toContain(expected);
+    }
+    expect(built.message).not.toContain(testCase.rejected);
+    expect(built.message).toContain(OUTPUT_BEGIN);
+    expect(built.message).toContain(OUTPUT_END);
+    expect(built.message.slice(built.resultRange.start, built.resultRange.end)).toBe(
+      testCase.resultText,
+    );
+  });
+
   it("keeps a self-contained 16k fallback when the runtime handoff is unavailable", () => {
     const fallback = buildExecApprovalContinuationFallbackPrompt(
       `HEAD_SENTINEL\n${"x".repeat(30_000)}\nTAIL_SENTINEL`,

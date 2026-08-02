@@ -4,10 +4,7 @@ import type {
   MainRestartRecoveryState,
 } from "../config/sessions.js";
 import { buildMainSessionRecoveryClearPatch } from "./main-session-recovery-clear.js";
-import {
-  inspectMainSessionRecoveryHealth,
-  projectMainSessionRecoveryLifecycle,
-} from "./main-session-recovery-lifecycle.js";
+import { projectMainSessionRecoveryLifecycle } from "./main-session-recovery-lifecycle.js";
 import { transitionMainSessionRecovery } from "./main-session-recovery-state.js";
 
 const sessionKey = "agent:main:main";
@@ -701,18 +698,10 @@ describe("main session recovery state", () => {
         reason: view.reason,
       }),
     ).toEqual({ kind: "tombstoned" });
-    expect(inspectMainSessionRecoveryHealth(entry)).toEqual({
-      status: "tombstoned",
-      reason: view.reason,
-      repair: null,
-    });
+    expect(entry.mainRestartRecovery?.tombstone?.reason).toBe(view.reason);
     expect(observe(entry, "generation-1")).toEqual({ status: "tombstoned" });
 
     entry.abortedLastRun = true;
-    expect(inspectMainSessionRecoveryHealth(entry)).toMatchObject({
-      status: "tombstoned",
-      repair: "clear_stale_abort",
-    });
     expect(transitionMainSessionRecovery(entry, { kind: "doctor_repair", now: 500 })).toEqual({
       kind: "doctor_repaired",
     });

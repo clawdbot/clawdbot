@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import acpCorePackageJson from "../../packages/acp-core/package.json" with { type: "json" };
 import { pluginSdkSubpaths } from "../../scripts/lib/plugin-sdk-entries.mjs";
 import privateLocalOnlyPluginSdkSubpaths from "../../scripts/lib/plugin-sdk-private-local-only-subpaths.json" with { type: "json" };
+import { createStateSchemaInlinePlugin } from "../../scripts/lib/state-schema-inline-plugin.mjs";
 import {
   detectVitestHostInfo as detectVitestHostInfoImpl,
   isCiLikeEnv,
@@ -158,6 +159,7 @@ if (!isCI && localScheduling.throttledBySystem && shouldPrintVitestThrottle(proc
 export const sharedVitestConfig = {
   root: repoRoot,
   envDir: false as const,
+  plugins: [createStateSchemaInlinePlugin(repoRoot)],
   resolve: {
     alias: [
       {

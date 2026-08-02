@@ -36,12 +36,12 @@ function resolveMSTeamsEffectiveTextChunkLimit(configuredLimit?: number): number
 
 type MSTeamsSendConfig = Parameters<typeof sendMessageMSTeams>[0]["cfg"];
 type MSTeamsSendResult = { messageId: string; conversationId: string };
-type MSTeamsMediaSendOptions = {
+type MSTeamsMediaSendOptions = Pick<
+  Parameters<typeof sendMessageMSTeams>[0],
+  "mediaUrl" | "mediaAccess" | "mediaLocalRoots" | "mediaReadFile"
+> & {
   cfg?: MSTeamsSendConfig;
   accountId?: string | null;
-  mediaUrl?: string;
-  mediaLocalRoots?: readonly string[];
-  mediaReadFile?: (filePath: string) => Promise<Buffer>;
 };
 type MSTeamsTextSendOptions = {
   cfg: MSTeamsSendConfig;
@@ -132,6 +132,7 @@ function resolveMSTeamsMediaSend(params: {
       to,
       text,
       mediaUrl: opts?.mediaUrl,
+      mediaAccess: opts?.mediaAccess,
       mediaLocalRoots: opts?.mediaLocalRoots,
       mediaReadFile: opts?.mediaReadFile,
     });
@@ -179,6 +180,7 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
     to,
     text,
     mediaUrl,
+    mediaAccess,
     mediaLocalRoots,
     mediaReadFile,
     payload,
@@ -221,6 +223,7 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
           send: async ({ text: textLocal, mediaUrl: mediaUrlLocal }) =>
             await send(deliveryTarget, textLocal, {
               mediaUrl: mediaUrlLocal,
+              mediaAccess,
               mediaLocalRoots,
               mediaReadFile,
             }),
@@ -278,6 +281,7 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
       to,
       text,
       mediaUrl,
+      mediaAccess,
       mediaLocalRoots,
       mediaReadFile,
       accountId,
@@ -288,6 +292,7 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
         const send = resolveMSTeamsMediaSend({ cfg, accountId, deps });
         return await send(resolveMSTeamsThreadTarget(to, threadId), text, {
           mediaUrl,
+          mediaAccess,
           mediaLocalRoots,
           mediaReadFile,
         });

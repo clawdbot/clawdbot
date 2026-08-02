@@ -40,7 +40,6 @@ import { drainSystemEvents, peekSystemEvents } from "../infra/system-events.js";
 import { rawDataToString } from "../infra/ws.js";
 import { resetLogger, setLoggerOverride } from "../logging.js";
 import type { ChannelRouteRef } from "../plugin-sdk/channel-route.js";
-import { clearGatewaySubagentRuntime } from "../plugins/runtime/gateway-bindings.test-fixtures.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import {
   LEGACY_IMPLICIT_AGENT_ID as DEFAULT_AGENT_ID,
@@ -416,7 +415,6 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   resetConfigRuntimeState();
   invalidateSessionSharingSnapshot();
   resetTestPluginRegistry();
-  clearGatewaySubagentRuntime();
   testTailnetIPv4.value = undefined;
   testTailscaleWhois.value = null;
   testState.gatewayBind = DEFAULT_GATEWAY_TEST_BIND;
@@ -482,7 +480,6 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
 async function cleanupGatewayTestHome(options: { restoreEnv: boolean }) {
   vi.useRealTimers();
   resetGatewayLifecycleTestState({ preserveRuntimeBindings: activeSuiteGatewayServerCount > 0 });
-  clearGatewaySubagentRuntime();
   resetLogger();
   resetTaskRegistryForTests({ persist: false });
   resetTaskFlowRegistryForTests({ persist: false });
@@ -515,7 +512,6 @@ async function resetGatewayTestRuntimeOnly() {
   resetConfigRuntimeState();
   invalidateSessionSharingSnapshot();
   resetTestPluginRegistry();
-  clearGatewaySubagentRuntime();
   testTailnetIPv4.value = undefined;
   testTailscaleWhois.value = null;
   testState.gatewayBind = DEFAULT_GATEWAY_TEST_BIND;

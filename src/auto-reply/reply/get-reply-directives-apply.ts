@@ -1,4 +1,8 @@
 // Applies parsed directives to session state, config overrides, and run options.
+import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
+import { modelKey } from "../../agents/model-selection.js";
+import { resolveContextConfigProviderForRuntime } from "../../agents/openai-routing.js";
 import type { SessionEntry, SessionScope } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
@@ -15,9 +19,10 @@ import { isDirectiveOnly } from "./directive-handling.directive-only.js";
 import { resolveModelRuntimeDirective } from "./directive-handling.model-runtime.js";
 import { resolveModelSelectionFromDirective } from "./directive-handling.model-selection.js";
 import { maybeHandleUnexpectedNativeDirectiveArguments } from "./directive-handling.native.js";
-import type { ApplyInlineDirectivesFastLaneParams } from "./directive-handling.params.js";
+import type { HandleDirectiveOnlyParams } from "./directive-handling.params.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
+import { resolveContextTokens } from "./model-selection-context.js";
 import type { createModelSelectionState } from "./model-selection.js";
 import type { TypingController } from "./typing.js";
 
@@ -29,9 +34,6 @@ const directiveLevelsLoader = createLazyImportLoader(
   () => import("./directive-handling.levels.js"),
 );
 const directiveImplLoader = createLazyImportLoader(() => import("./directive-handling.impl.js"));
-const directiveFastLaneLoader = createLazyImportLoader(
-  () => import("./directive-handling.fast-lane.js"),
-);
 const directivePersistLoader = createLazyImportLoader(
   () => import("./directive-handling.persist.runtime.js"),
 );
@@ -46,10 +48,6 @@ function loadDirectiveLevels() {
 
 function loadDirectiveImpl() {
   return directiveImplLoader.load();
-}
-
-function loadDirectiveFastLane() {
-  return directiveFastLaneLoader.load();
 }
 
 function loadDirectivePersist() {
@@ -139,7 +137,7 @@ export async function applyInlineDirectiveOverrides(params: {
   elevatedFailures: Array<{ gate: string; key: string }>;
   defaultProvider: string;
   defaultModel: string;
-  aliasIndex: ApplyInlineDirectivesFastLaneParams["aliasIndex"];
+  aliasIndex: HandleDirectiveOnlyParams["aliasIndex"];
   provider: string;
   model: string;
   modelState: Awaited<ReturnType<typeof createModelSelectionState>>;
@@ -288,34 +286,6 @@ export async function applyInlineDirectiveOverrides(params: {
     };
   }
 
-  const directivePersistenceContext = {
-    directives,
-    effectiveModelDirective,
-    cfg,
-    agentDir,
-    sessionEntry,
-    sessionStore,
-    sessionKey,
-    storePath,
-    elevatedEnabled,
-    elevatedAllowed,
-    defaultProvider,
-    defaultModel,
-    aliasIndex,
-    allowedModelKeys: modelState.allowedModelKeys,
-    modelCatalog: modelState.allowedModelCatalog,
-    thinkingCatalog: modelState.allowedModelCatalog,
-    initialModelLabel,
-    formatModelSwitchEvent,
-    canPersistStickyModelSelection,
-    agentCfg,
-    messageProvider: ctx.Provider,
-    surface: ctx.Surface,
-    gatewayClientScopes: ctx.GatewayClientScopes,
-    commandAuthorized: command.isAuthorizedSender,
-    senderIsOwner: command.senderIsOwner,
-  };
-
   // Model-only directives have a focused persistence service; reject leftovers before that mutation.
   if (directives.nativeCommand?.name === "model") {
     const unexpectedNativeArguments = maybeHandleUnexpectedNativeDirectiveArguments(directives);
@@ -325,16 +295,49 @@ export async function applyInlineDirectiveOverrides(params: {
     }
   }
 
-  if (
-    isDirectiveOnly({
-      directives,
-      cleanedBody: directives.cleaned,
+  const directiveOnly = isDirectiveOnly({
+    directives,
+    cleanedBody: directives.cleaned,
+    ctx,
+    cfg,
+    agentId,
+    isGroup,
+  });
+
+  const handleDirectives = async (
+    persistenceState?: NonNullable<HandleDirectiveOnlyParams["persistenceState"]>,
+  ) => {
+    const currentLevels = await (
+      await loadDirectiveLevels()
+    ).resolveCurrentDirectiveLevels({
+      sessionEntry,
+      agentEntry: persistenceState ? undefined : agentEntry,
+      agentCfg,
+      resolveDefaultThinkingLevel:
+        !persistenceState || directives.hasThinkDirective
+          ? () => modelState.resolveDefaultThinkingLevel()
+          : async () => undefined,
+    });
+    const thinkingCatalog = await modelState.resolveThinkingCatalog();
+    const reply = await (
+      await loadDirectiveImpl()
+    ).handleDirectiveOnly({
+      ...createDirectiveHandlingBase(),
+      ...currentLevels,
+      thinkingCatalog,
       ctx,
-      cfg,
-      agentId,
-      isGroup,
-    })
-  ) {
+      messageProvider: ctx.Provider,
+      surface: ctx.Surface,
+      gatewayClientScopes: ctx.GatewayClientScopes,
+      commandAuthorized: command.isAuthorizedSender,
+      senderIsOwner: command.senderIsOwner,
+      workspaceDir,
+      ...(persistenceState ? { persistenceState } : {}),
+    });
+    return { reply, currentLevels, thinkingCatalog };
+  };
+
+  if (directiveOnly) {
     if (!command.isAuthorizedSender) {
       typing.cleanup();
       return { kind: "reply", reply: undefined };
@@ -430,40 +433,12 @@ export async function applyInlineDirectiveOverrides(params: {
         return { kind: "reply", reply: { text: parts.join(" ") } };
       }
     }
+    const { reply: directiveReply, currentLevels, thinkingCatalog } = await handleDirectives();
     const {
       currentThinkLevel: resolvedDefaultThinkLevel,
-      currentFastMode,
       currentVerboseLevel,
       currentReasoningLevel,
-      currentElevatedLevel,
-    } = await (
-      await loadDirectiveLevels()
-    ).resolveCurrentDirectiveLevels({
-      sessionEntry,
-      agentEntry,
-      agentCfg,
-      resolveDefaultThinkingLevel: () => modelState.resolveDefaultThinkingLevel(),
-    });
-    const currentThinkLevel = resolvedDefaultThinkLevel;
-    const thinkingCatalog = await modelState.resolveThinkingCatalog();
-    const directiveReply = await (
-      await loadDirectiveImpl()
-    ).handleDirectiveOnly({
-      ...createDirectiveHandlingBase(),
-      thinkingCatalog,
-      currentThinkLevel,
-      currentFastMode,
-      currentVerboseLevel,
-      currentReasoningLevel,
-      currentElevatedLevel,
-      ctx,
-      messageProvider: ctx.Provider,
-      surface: ctx.Surface,
-      gatewayClientScopes: ctx.GatewayClientScopes,
-      commandAuthorized: command.isAuthorizedSender,
-      senderIsOwner: command.senderIsOwner,
-      workspaceDir,
-    });
+    } = currentLevels;
     let statusReply: ReplyPayload | undefined;
     if (directives.hasStatusDirective && allowTextCommands && command.isAuthorizedSender) {
       const { buildStatusReply } = await loadCommandsStatus();
@@ -502,80 +477,41 @@ export async function applyInlineDirectiveOverrides(params: {
   }
 
   if (hasAnyDirective && command.isAuthorizedSender) {
-    const fastLane = await (
-      await loadDirectiveFastLane()
-    ).applyInlineDirectivesFastLane({
-      directives,
-      commandAuthorized: command.isAuthorizedSender,
-      senderIsOwner: command.senderIsOwner,
-      ctx,
-      workspaceDir,
-      cfg,
-      agentId,
-      isGroup,
-      sessionEntry,
-      sessionStore,
-      sessionKey,
-      storePath,
-      elevatedEnabled,
-      elevatedAllowed,
-      elevatedFailures,
-      messageProviderKey,
-      defaultProvider,
-      defaultModel,
-      aliasIndex,
-      ...directiveModelState,
-      provider,
-      model,
-      initialModelLabel,
-      formatModelSwitchEvent,
-      canPersistStickyModelSelection,
-      agentCfg,
-      modelState: {
-        resolveDefaultThinkingLevel: modelState.resolveDefaultThinkingLevel,
-        resolveThinkingCatalog: modelState.resolveThinkingCatalog,
-        ...directiveModelState,
-      },
-    });
-    directiveAck = fastLane.directiveAck;
-    provider = fastLane.provider;
-    model = fastLane.model;
-    if (!fastLane.sessionChangesApplied) {
+    const persistenceState: NonNullable<HandleDirectiveOnlyParams["persistenceState"]> = {
+      outcome: { kind: "pending", provider, model },
+    };
+    directiveAck = (await handleDirectives(persistenceState)).reply;
+    if (persistenceState.outcome.kind === "rejected") {
       typing.cleanup();
       return {
         kind: "reply",
-        reply:
-          directiveAck ??
-          ({
-            text: "Session settings were not applied because the session changed. Retry.",
-          } satisfies ReplyPayload),
+        reply: { text: persistenceState.outcome.errorText },
       };
     }
+    ({ provider, model } = persistenceState.outcome);
   }
 
-  const persisted = await (
-    await loadDirectivePersist()
-  ).persistInlineDirectives({
-    ...directivePersistenceContext,
-    provider,
+  const selectedCatalogEntry = modelState.allowedModelCatalog.find(
+    (entry) => modelKey(entry.provider, entry.id) === modelKey(provider, model),
+  );
+  contextTokens = resolveContextTokens({
+    cfg,
+    agentCfg,
+    provider: resolveContextConfigProviderForRuntime({
+      provider,
+      runtimeId: resolveAgentHarnessPolicy({
+        provider,
+        modelId: model,
+        config: cfg,
+        agentId: resolveSessionAgentId({ sessionKey, config: cfg }),
+        sessionKey,
+      }).runtime,
+      config: cfg,
+    }),
     model,
+    modelContextWindow: selectedCatalogEntry?.contextWindow,
+    modelContextTokens: selectedCatalogEntry?.contextTokens,
   });
-  provider = persisted.provider;
-  model = persisted.model;
-  contextTokens = persisted.contextTokens;
-  if (persisted.errorText) {
-    typing.cleanup();
-    return { kind: "reply", reply: { text: persisted.errorText } };
-  }
-  if (!persisted.sessionChangesApplied) {
-    typing.cleanup();
-    return {
-      kind: "reply",
-      reply: {
-        text: "Session settings were not applied because the session changed. Retry.",
-      },
-    };
-  }
 
   const perMessageQueueMode =
     directives.hasQueueDirective && !directives.queueReset ? directives.queueMode : undefined;

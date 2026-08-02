@@ -188,7 +188,9 @@ describe("discoverKilocodeModels (fetch path)", () => {
       const guardedFetch = requireRecord(guardedFetchParams, "guarded fetch params");
       expect(guardedFetch.url).toBe(KILOCODE_MODELS_URL);
       const guardedInit = requireRecord(guardedFetch.init, "guarded fetch init");
-      expect(guardedInit.headers).toEqual({ Accept: "application/json" });
+      expect(Object.fromEntries(new Headers(guardedInit.headers as HeadersInit))).toEqual({
+        accept: "application/json",
+      });
       expect(guardedFetch.policy).toEqual({ allowedHostnames: ["api.kilo.ai"] });
       expect(guardedFetch.timeoutMs).toBe(5000);
       expect(guardedFetch.auditContext).toBe("kilocode.model_discovery");
@@ -197,7 +199,9 @@ describe("discoverKilocodeModels (fetch path)", () => {
       const [fetchUrl, fetchOptions] = requireFirstMockCall(mockFetch, "mock fetch call");
       expect(fetchUrl).toBe(KILOCODE_MODELS_URL);
       const fetchInit = requireRecord(fetchOptions, "mock fetch init");
-      expect(fetchInit.headers).toEqual({ Accept: "application/json" });
+      expect(Object.fromEntries(new Headers(fetchInit.headers as HeadersInit))).toEqual({
+        accept: "application/json",
+      });
 
       expect(models.length).toBe(2);
 

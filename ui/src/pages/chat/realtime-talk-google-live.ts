@@ -216,11 +216,6 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
         const inputMeter = new RealtimeTalkMediaStreamMeter(this.ctx.callbacks.onInputLevel);
         this.inputMeter = inputMeter;
         inputMeter.start(this.media, this.inputContext);
-        if (this.closed || !this.lifecycle.isActive || this.inputMeter !== inputMeter) {
-          // start() publishes synchronously before installing its interval. A
-          // reentrant stop must reclaim the interval that start() installs next.
-          inputMeter.stop(false);
-        }
         this.assertActivationCurrent();
       }
       this.startMicrophonePump();

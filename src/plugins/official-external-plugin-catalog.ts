@@ -4,6 +4,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import { normalizeClawHubSha256Integrity } from "../infra/clawhub.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { readResponseWithLimit } from "../infra/http-body.js";
 import { isRecord } from "../utils.js";
 import type {
@@ -694,10 +695,6 @@ function resolveOfficialExternalPluginCatalogEntryKey(
   return undefined;
 }
 
-function formatHostedCatalogError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 function bundledFallbackResult(
   error: unknown,
   metadata?: HostedOfficialExternalPluginCatalogLoadResult["metadata"],
@@ -705,7 +702,7 @@ function bundledFallbackResult(
   return {
     source: "bundled-fallback",
     entries: listOfficialExternalPluginCatalogEntries(),
-    error: formatHostedCatalogError(error),
+    error: formatErrorMessage(error),
     ...(metadata ? { metadata } : {}),
   };
 }
@@ -714,7 +711,7 @@ function emptyBundledFallbackResult(error: unknown): HostedOfficialExternalPlugi
   return {
     source: "bundled-fallback",
     entries: [],
-    error: formatHostedCatalogError(error),
+    error: formatErrorMessage(error),
   };
 }
 
@@ -912,8 +909,8 @@ async function loadHostedCatalogSnapshotResult(params: {
     snapshot: params.snapshot,
     ...(parsed.trust ? { trust: parsed.trust } : {}),
     error: parsed.expired
-      ? `${formatHostedCatalogError(params.error)}; ${parsed.feed.expiresAt ? `hosted catalog signed feed expired at ${parsed.feed.expiresAt}` : "hosted catalog signed feed has no expiresAt"}`
-      : formatHostedCatalogError(params.error),
+      ? `${formatErrorMessage(params.error)}; ${parsed.feed.expiresAt ? `hosted catalog signed feed expired at ${parsed.feed.expiresAt}` : "hosted catalog signed feed has no expiresAt"}`
+      : formatErrorMessage(params.error),
   };
 }
 
@@ -999,11 +996,11 @@ async function snapshotOrBundledFallbackResult(params: {
     } catch (snapshotErr) {
       if (params.verification?.mode === "signed") {
         return emptyBundledFallbackResult(
-          `${formatHostedCatalogError(params.error)}; snapshot fallback failed: ${formatHostedCatalogError(snapshotErr)}`,
+          `${formatErrorMessage(params.error)}; snapshot fallback failed: ${formatErrorMessage(snapshotErr)}`,
         );
       }
       return bundledFallbackResult(
-        `${formatHostedCatalogError(params.error)}; snapshot fallback failed: ${formatHostedCatalogError(snapshotErr)}`,
+        `${formatErrorMessage(params.error)}; snapshot fallback failed: ${formatErrorMessage(snapshotErr)}`,
         params.metadata,
       );
     }

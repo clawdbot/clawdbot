@@ -2,6 +2,7 @@
 import { completeSimple, type Model } from "openclaw/plugin-sdk/llm";
 import { resolveFfmpegBin } from "openclaw/plugin-sdk/media-runtime";
 import {
+  createCapturedPluginRegistration,
   registerProviderPlugin,
   requireRegisteredProvider,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -101,6 +102,16 @@ const registerGooglePlugin = () =>
     id: "google",
     name: "Google Provider",
   });
+
+function registerGoogleRealtimeVoiceProvider() {
+  const captured = createCapturedPluginRegistration({
+    id: "google",
+    name: "Google Provider",
+    source: "test",
+  });
+  plugin.register(captured.api);
+  return requireRegisteredProvider(captured.realtimeVoiceProviders, "google");
+}
 
 describeLive("google plugin live", () => {
   it.each(["gemini-3.6-flash", "gemini-3.5-flash-lite"])(
@@ -288,6 +299,94 @@ describeLive("google plugin live", () => {
       describeState,
     );
     expect(finalAssistantTranscripts.some((text) => text.trim().length > 0)).toBe(true);
+    expect(closeReasons).toEqual(["completed"]);
+  }, 120_000);
+
+  it("delivers a queued prompt through the registered lazy realtime bridge", async () => {
+    const provider = registerGoogleRealtimeVoiceProvider();
+    const finalAssistantTranscripts: string[] = [];
+    const errors: Error[] = [];
+    const closeReasons: string[] = [];
+    let outputAudioBytes = 0;
+    let assistantPartialCount = 0;
+    let lastAssistantOutputAt = 0;
+    let readyCount = 0;
+    const bridge: RealtimeVoiceBridge = provider.createBridge({
+      providerConfig: { apiKey: GOOGLE_API_KEY },
+      instructions: "Reply briefly and plainly.",
+      onAudio: (audio) => {
+        outputAudioBytes += audio.byteLength;
+        lastAssistantOutputAt = Date.now();
+      },
+      onClearAudio: () => {},
+      onTranscript: (role, text, isFinal) => {
+        if (role !== "assistant") {
+          return;
+        }
+        if (isFinal) {
+          finalAssistantTranscripts.push(text);
+        } else {
+          assistantPartialCount += 1;
+        }
+        lastAssistantOutputAt = Date.now();
+      },
+      onReady: () => {
+        readyCount += 1;
+      },
+      onError: (error) => errors.push(error),
+      onClose: (reason) => closeReasons.push(reason),
+    });
+    const describeState = () => ({
+      readyCount,
+      connected: bridge.isConnected(),
+      outputAudioBytes,
+      assistantPartialCount,
+      assistantIdleMs: lastAssistantOutputAt === 0 ? 0 : Date.now() - lastAssistantOutputAt,
+      assistantFinalCount: finalAssistantTranscripts.length,
+      errors: errors.map(shortGoogleLiveError),
+      closeReasons,
+    });
+
+    bridge.sendUserMessage?.("Reply with exactly: OpenClaw lazy bridge ready.");
+    try {
+      await bridge.connect();
+      // Gemini 3.1 can omit transcription.finished. Wait for output to go idle
+      // before close terminalizes the buffered transcript.
+      await waitForGoogleLive(
+        "queued assistant response drain",
+        () =>
+          outputAudioBytes > 0 &&
+          assistantPartialCount > 0 &&
+          Date.now() - lastAssistantOutputAt >= 1_000,
+        45_000,
+        describeState,
+      );
+      expect(readyCount).toBe(1);
+      expect(bridge.isConnected()).toBe(true);
+      expect(outputAudioBytes).toBeGreaterThan(0);
+      expect(assistantPartialCount).toBeGreaterThan(0);
+      expect(errors).toStrictEqual([]);
+    } finally {
+      bridge.close();
+      bridge.close();
+    }
+
+    await waitForGoogleLive(
+      "queued final transcript and clean close",
+      () => finalAssistantTranscripts.length > 0 && closeReasons.length === 1,
+      5_000,
+      describeState,
+    );
+    expect(
+      finalAssistantTranscripts.some((text) => {
+        const normalized = normalizeTranscriptForMatch(text);
+        return (
+          normalized.includes("openclaw") &&
+          normalized.includes("lazy") &&
+          normalized.includes("bridge")
+        );
+      }),
+    ).toBe(true);
     expect(closeReasons).toEqual(["completed"]);
   }, 120_000);
 

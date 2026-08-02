@@ -1,6 +1,10 @@
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
-import type { ProviderUsageSnapshot } from "openclaw/plugin-sdk/provider-usage";
-import { buildUsageHttpErrorSnapshot } from "openclaw/plugin-sdk/provider-usage";
+import {
+  buildUsageHttpErrorSnapshot,
+  parseProviderUsageNonNegativeNumber,
+  type ProviderUsageSnapshot,
+} from "openclaw/plugin-sdk/provider-usage";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const OPENROUTER_USAGE_RESPONSE_MAX_BYTES = 1024 * 1024;
 const OPENROUTER_API_ROOT = "https://openrouter.ai/api/v1";
@@ -33,22 +37,6 @@ type EndpointResult =
 
 type OpenRouterLimitReset = "daily" | "weekly" | "monthly";
 
-function nonNegativeNumber(value: unknown): number | undefined {
-  const parsed =
-    typeof value === "number"
-      ? value
-      : typeof value === "string" && value.trim()
-        ? Number(value)
-        : Number.NaN;
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
-}
-
-function objectRecord(value: unknown): Record<string, unknown> | undefined {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
 function resolveLimitReset(value: unknown): OpenRouterLimitReset | undefined {
   return value === "daily" || value === "weekly" || value === "monthly" ? value : undefined;
 }
@@ -56,30 +44,30 @@ function resolveLimitReset(value: unknown): OpenRouterLimitReset | undefined {
 function resolveKeyBudget(
   data: OpenRouterKeyData | undefined,
 ): { used: number; limit: number; period?: OpenRouterLimitReset } | undefined {
-  const limit = nonNegativeNumber(data?.limit);
+  const limit = parseProviderUsageNonNegativeNumber(data?.limit);
   if (limit === undefined) {
     return undefined;
   }
   const period = resolveLimitReset(data?.limit_reset);
   const periodUsage =
     period === "daily"
-      ? nonNegativeNumber(data?.usage_daily)
+      ? parseProviderUsageNonNegativeNumber(data?.usage_daily)
       : period === "weekly"
-        ? nonNegativeNumber(data?.usage_weekly)
+        ? parseProviderUsageNonNegativeNumber(data?.usage_weekly)
         : period === "monthly"
-          ? nonNegativeNumber(data?.usage_monthly)
-          : nonNegativeNumber(data?.usage);
+          ? parseProviderUsageNonNegativeNumber(data?.usage_monthly)
+          : parseProviderUsageNonNegativeNumber(data?.usage);
   const byokUsage =
     data?.include_byok_in_limit !== true
       ? undefined
       : period === "daily"
-        ? nonNegativeNumber(data.byok_usage_daily)
+        ? parseProviderUsageNonNegativeNumber(data.byok_usage_daily)
         : period === "weekly"
-          ? nonNegativeNumber(data.byok_usage_weekly)
+          ? parseProviderUsageNonNegativeNumber(data.byok_usage_weekly)
           : period === "monthly"
-            ? nonNegativeNumber(data.byok_usage_monthly)
-            : nonNegativeNumber(data.byok_usage);
-  const remaining = nonNegativeNumber(data?.limit_remaining);
+            ? parseProviderUsageNonNegativeNumber(data.byok_usage_monthly)
+            : parseProviderUsageNonNegativeNumber(data.byok_usage);
+  const remaining = parseProviderUsageNonNegativeNumber(data?.limit_remaining);
   // `limit_remaining` already incorporates BYOK usage when the key is configured to count it.
   const usage =
     periodUsage === undefined && byokUsage === undefined
@@ -121,8 +109,8 @@ async function fetchEndpoint(params: {
     return { ok: false, status: response.status };
   }
   try {
-    const root = objectRecord(await readJson(response, params.timeoutMs));
-    const data = objectRecord(root?.data);
+    const root = asOptionalRecord(await readJson(response, params.timeoutMs));
+    const data = asOptionalRecord(root?.data);
     return data ? { ok: true, data } : { ok: false, reason: "malformed" };
   } catch {
     return { ok: false, reason: "malformed" };
@@ -161,9 +149,9 @@ export async function fetchOpenRouterUsage(params: {
 
   const credits = creditsResult.ok ? (creditsResult.data as OpenRouterCreditsData) : undefined;
   const key = keyResult.ok ? (keyResult.data as OpenRouterKeyData) : undefined;
-  const totalCredits = nonNegativeNumber(credits?.total_credits);
-  const totalUsage = nonNegativeNumber(credits?.total_usage);
-  const keyUsage = nonNegativeNumber(key?.usage);
+  const totalCredits = parseProviderUsageNonNegativeNumber(credits?.total_credits);
+  const totalUsage = parseProviderUsageNonNegativeNumber(credits?.total_usage);
+  const keyUsage = parseProviderUsageNonNegativeNumber(key?.usage);
   const keyBudget = resolveKeyBudget(key);
   const windows = [];
   if (keyBudget) {
@@ -212,9 +200,9 @@ export async function fetchOpenRouterUsage(params: {
 
   const keyLabel = typeof key?.label === "string" ? key.label.trim() : "";
   const periodUsage = [
-    ["today", nonNegativeNumber(key?.usage_daily)],
-    ["this week", nonNegativeNumber(key?.usage_weekly)],
-    ["this month", nonNegativeNumber(key?.usage_monthly)],
+    ["today", parseProviderUsageNonNegativeNumber(key?.usage_daily)],
+    ["this week", parseProviderUsageNonNegativeNumber(key?.usage_weekly)],
+    ["this month", parseProviderUsageNonNegativeNumber(key?.usage_monthly)],
   ] as const;
   const summary = periodUsage
     .flatMap(([period, amount]) =>

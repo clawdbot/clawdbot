@@ -1,5 +1,6 @@
 // Msteams plugin module implements send behavior.
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
+import type { OutboundMediaLoadOptions } from "openclaw/plugin-sdk/outbound-media";
 import { loadOutboundMediaFromUrl, type OpenClawConfig } from "../runtime-api.js";
 import { resolveMSTeamsAccountConfig } from "./accounts.js";
 import {
@@ -45,6 +46,7 @@ type SendMSTeamsMessageParams = {
   mediaUrl?: string;
   /** Optional filename override for uploaded media/files */
   filename?: string;
+  mediaAccess?: OutboundMediaLoadOptions["mediaAccess"];
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
 };
@@ -109,7 +111,17 @@ type SendMSTeamsCardResult = {
 export async function sendMessageMSTeams(
   params: SendMSTeamsMessageParams,
 ): Promise<SendMSTeamsMessageResult> {
-  const { cfg, accountId, to, text, mediaUrl, filename, mediaLocalRoots, mediaReadFile } = params;
+  const {
+    cfg,
+    accountId,
+    to,
+    text,
+    mediaUrl,
+    filename,
+    mediaAccess,
+    mediaLocalRoots,
+    mediaReadFile,
+  } = params;
   const scopedCfg = {
     ...cfg,
     channels: {
@@ -141,6 +153,7 @@ export async function sendMessageMSTeams(
     const mediaMaxBytes = ctx.mediaMaxBytes ?? MSTEAMS_MAX_MEDIA_BYTES;
     const media = await loadOutboundMediaFromUrl(mediaUrl, {
       maxBytes: mediaMaxBytes,
+      mediaAccess,
       mediaLocalRoots,
       mediaReadFile,
     });

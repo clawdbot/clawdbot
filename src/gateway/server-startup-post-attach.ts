@@ -55,6 +55,10 @@ type GatewayMemoryStartupPolicy =
 const loadMainSessionRestartRecoveryModule = createLazyRuntimeModule(
   () => import("../agents/main-session-restart-recovery.js"),
 );
+// Startup only needs orphan marking; keep resume and delivery runtime out of the pre-channel path.
+const loadMainSessionRestartRecoveryMarkingModule = createLazyRuntimeModule(
+  () => import("../agents/main-session-restart-recovery-marking.js"),
+);
 
 const loadAgentDefaultsModule = createLazyRuntimeModule(() => import("../agents/defaults.js"));
 
@@ -324,12 +328,13 @@ function scheduleAgentRuntimePluginPrewarm(params: {
                 return;
               }
               const started = performance.now();
-              const { ensureRuntimePluginsLoaded } = await import("../agents/runtime-plugins.js");
+              const { loadAgentRuntimePluginRegistryHandle } =
+                await import("../agents/runtime-plugins.js");
               const cfg = params.getConfig();
               if (isStopped()) {
                 return;
               }
-              ensureRuntimePluginsLoaded({
+              loadAgentRuntimePluginRegistryHandle({
                 config: cfg,
                 workspaceDir: params.workspaceDir,
                 allowGatewaySubagentBinding: true,
@@ -550,6 +555,7 @@ async function publishConfiguredModelRuntimeSnapshots(params: {
   await refreshPreparedModelRuntimeSnapshots(params.cfg, {
     gatewayLifecycle: true,
     catalogMode: "static",
+    allowGatewaySubagentBinding: true,
     ...(params.workspaceDir ? { defaultWorkspaceDir: params.workspaceDir } : {}),
     ...(params.startupTrace
       ? {
@@ -658,6 +664,24 @@ export async function startGatewaySidecars(params: {
   const skipChannels =
     isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
     isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS);
+  // These runs were orphaned by the previous Gateway lifecycle. Record that fact
+  // even if this process later fails model preparation and never starts channels.
+  await measureStartup(params.startupTrace, "sidecars.main-session-recovery", async () => {
+    try {
+      const { markStartupOrphanedMainSessionsForRecovery } = await measureStartup(
+        params.startupTrace,
+        "sidecars.main-session-recovery-load",
+        loadMainSessionRestartRecoveryMarkingModule,
+      );
+      await measureStartup(params.startupTrace, "sidecars.main-session-recovery-scan", () =>
+        markStartupOrphanedMainSessionsForRecovery({ cfg: params.cfg }),
+      );
+    } catch (err) {
+      params.log.warn(
+        `main-session startup orphan marking failed before channel startup: ${String(err)}`,
+      );
+    }
+  });
   // Agent RPC remains available when transports are disabled. Publish configured/static facts before
   // accepting work; live provider catalogs stay advisory and never enter the Gateway lifecycle.
   await measureStartup(params.startupTrace, "sidecars.model-runtime", () =>
@@ -671,17 +695,6 @@ export async function startGatewaySidecars(params: {
       params.prewarmPrimaryModel,
     ),
   );
-  await measureStartup(params.startupTrace, "sidecars.main-session-recovery", async () => {
-    try {
-      const { markStartupOrphanedMainSessionsForRecovery } =
-        await loadMainSessionRestartRecoveryModule();
-      await markStartupOrphanedMainSessionsForRecovery({ cfg: params.cfg });
-    } catch (err) {
-      params.log.warn(
-        `main-session startup orphan marking failed before channel startup: ${String(err)}`,
-      );
-    }
-  });
   await measureStartup(params.startupTrace, "sidecars.channels", async () => {
     if (!skipChannels) {
       try {

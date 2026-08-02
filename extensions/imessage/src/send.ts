@@ -17,6 +17,7 @@ import {
   extractOriginalFilename,
   kindFromMime,
   resolveOutboundAttachmentFromUrl,
+  type OutboundMediaAccess,
 } from "openclaw/plugin-sdk/media-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { sleep as delay } from "openclaw/plugin-sdk/runtime-env";
@@ -71,6 +72,7 @@ type IMessageSendOpts = {
   conversationReadOrigin?: "delegated" | "direct-operator";
   replyToId?: string;
   mediaUrl?: string;
+  mediaAccess?: OutboundMediaAccess;
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
   audioAsVoice?: boolean;
@@ -84,10 +86,7 @@ type IMessageSendOpts = {
   resolveAttachmentImpl?: (
     mediaUrl: string,
     maxBytes: number,
-    options?: {
-      localRoots?: readonly string[];
-      readFile?: (filePath: string) => Promise<Buffer>;
-    },
+    options?: Parameters<typeof resolveOutboundAttachmentFromUrl>[2],
   ) => Promise<{ path: string; contentType?: string }>;
   createClient?: (params: { cliPath: string; dbPath?: string }) => Promise<IMessageRpcClient>;
   runCliJson?: (args: readonly string[]) => Promise<Record<string, unknown>>;
@@ -768,11 +767,12 @@ export async function sendMessageIMessage(
     replyToId: opts.replyToId,
     conversationReadOrigin: opts.conversationReadOrigin,
   });
-  // Sends use a dedicated longer default (not the 10s probe timeout) so macOS 26
-  // bridge stalls aren't aborted mid-send. Explicit opts/probeTimeoutMs still win
-  // for callers that tuned them. See DEFAULT_IMESSAGE_SEND_TIMEOUT_MS.
+  // Sends use a dedicated longer floor (not the 10s probe timeout) so macOS 26
+  // bridge stalls aren't aborted mid-send. A configured probe timeout may extend
+  // sends, but only an explicit per-call timeout may shorten them.
   const timeoutMs =
-    opts.timeoutMs ?? account.config.probeTimeoutMs ?? DEFAULT_IMESSAGE_SEND_TIMEOUT_MS;
+    opts.timeoutMs ??
+    Math.max(account.config.probeTimeoutMs ?? 0, DEFAULT_IMESSAGE_SEND_TIMEOUT_MS);
   const pendingEchoTtlMs = resolvePendingPersistedEchoTtlMs(timeoutMs);
   const region = opts.region?.trim() || account.config.region?.trim() || "US";
   const maxBytes =
@@ -791,6 +791,7 @@ export async function sendMessageIMessage(
   if (opts.mediaUrl?.trim()) {
     const resolveAttachmentFn = opts.resolveAttachmentImpl ?? resolveOutboundAttachmentFromUrl;
     const resolved = await resolveAttachmentFn(opts.mediaUrl.trim(), maxBytes, {
+      mediaAccess: opts.mediaAccess,
       localRoots: opts.mediaLocalRoots,
       readFile: opts.mediaReadFile,
     });

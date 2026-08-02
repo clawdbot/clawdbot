@@ -42,6 +42,17 @@ async function putUrbitChannel(
 
 const TLON_ERROR_BODY_LIMIT_BYTES = 16 * 1024;
 
+async function releaseChannelResponse(response: Response, release: () => Promise<void>) {
+  // Guard release closes the dispatcher, not an unread response stream. Error
+  // branches that throw without reading the body must cancel it first so the
+  // connection cannot dangle. Start cancellation without awaiting it: awaiting
+  // can deadlock when debug capture tees the stream (same shape as #115873).
+  if (!response.bodyUsed) {
+    void response.body?.cancel().catch(() => undefined);
+  }
+  await release();
+}
+
 export async function pokeUrbitChannel(
   deps: UrbitChannelDeps,
   params: { app: string; mark: string; json: unknown; auditContext: string },
@@ -108,7 +119,7 @@ export async function scryUrbitPath(
     // Keep the shared JSON ceiling while retaining the path needed to identify the endpoint.
     return await readProviderJsonResponse(response, `Tlon scry response for path ${params.path}`);
   } finally {
-    await release();
+    await releaseChannelResponse(response, release);
   }
 }
 
@@ -123,7 +134,7 @@ async function createUrbitChannel(
       throw new UrbitHttpError({ operation: "Channel creation", status: response.status });
     }
   } finally {
-    await release();
+    await releaseChannelResponse(response, release);
   }
 }
 
@@ -147,7 +158,7 @@ async function wakeUrbitChannel(deps: UrbitChannelDeps): Promise<void> {
       throw new UrbitHttpError({ operation: "Channel activation", status: response.status });
     }
   } finally {
-    await release();
+    await releaseChannelResponse(response, release);
   }
 }
 

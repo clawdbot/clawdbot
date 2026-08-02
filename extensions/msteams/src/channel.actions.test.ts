@@ -138,6 +138,7 @@ async function runAction(params: {
   requesterAccountId?: string;
   params?: Record<string, unknown>;
   toolContext?: Record<string, unknown>;
+  mediaAccess?: Parameters<ReturnType<typeof requireMSTeamsHandleAction>>[0]["mediaAccess"];
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
   requesterSenderId?: string | null;
@@ -152,6 +153,7 @@ async function runAction(params: {
     accountId: params.accountId,
     requesterAccountId: params.requesterAccountId,
     params: params.params ?? {},
+    mediaAccess: params.mediaAccess,
     mediaLocalRoots: params.mediaLocalRoots,
     mediaReadFile: params.mediaReadFile,
     toolContext: params.toolContext,
@@ -218,6 +220,7 @@ async function expectSuccessfulAction(params: {
   requesterAccountId?: Parameters<typeof runAction>[0]["requesterAccountId"];
   actionParams?: Parameters<typeof runAction>[0]["params"];
   toolContext?: Parameters<typeof runAction>[0]["toolContext"];
+  mediaAccess?: Parameters<typeof runAction>[0]["mediaAccess"];
   mediaLocalRoots?: Parameters<typeof runAction>[0]["mediaLocalRoots"];
   mediaReadFile?: Parameters<typeof runAction>[0]["mediaReadFile"];
   requesterSenderId?: Parameters<typeof runAction>[0]["requesterSenderId"];
@@ -234,6 +237,7 @@ async function expectSuccessfulAction(params: {
     accountId: params.accountId,
     requesterAccountId: params.requesterAccountId,
     params: params.actionParams,
+    mediaAccess: params.mediaAccess,
     mediaLocalRoots: params.mediaLocalRoots,
     mediaReadFile: params.mediaReadFile,
     toolContext: params.toolContext,
@@ -597,6 +601,16 @@ describe("msteamsPlugin message actions", () => {
 
   it("routes upload-file through sendMessageMSTeams with filename override", async () => {
     const mediaReadFile = vi.fn(async () => Buffer.from("pdf"));
+    const mediaAccess = {
+      localRoots: ["/approved/workspace"],
+      readFile: mediaReadFile,
+      workspaceDir: "/approved/workspace",
+    };
+    const forgedMediaAccess = {
+      localRoots: ["/forged/workspace"],
+      readFile: vi.fn(async () => Buffer.from("forged")),
+      workspaceDir: "/forged/workspace",
+    };
     await expectSuccessfulAction({
       mockFn: sendMessageMSTeamsMock,
       mockResult: {
@@ -609,7 +623,16 @@ describe("msteamsPlugin message actions", () => {
         path: " /tmp/report.pdf ",
         message: "Quarterly report",
         filename: "Q1-report.pdf",
+        mediaAccess: forgedMediaAccess,
+        mediaLocalRoots: ["/forged/workspace"],
+        mediaReadFile: forgedMediaAccess.readFile,
       },
+      toolContext: {
+        mediaAccess: forgedMediaAccess,
+        mediaLocalRoots: ["/forged/workspace"],
+        mediaReadFile: forgedMediaAccess.readFile,
+      },
+      mediaAccess,
       mediaLocalRoots: ["/tmp"],
       mediaReadFile,
       runtimeParams: {
@@ -617,6 +640,7 @@ describe("msteamsPlugin message actions", () => {
         text: "Quarterly report",
         mediaUrl: " /tmp/report.pdf ",
         filename: "Q1-report.pdf",
+        mediaAccess,
         mediaLocalRoots: ["/tmp"],
         mediaReadFile,
       },
@@ -632,6 +656,42 @@ describe("msteamsPlugin message actions", () => {
         messageId: "msg-upload-1",
         conversationId: "conv-upload-1",
       },
+    });
+    expect(sendMessageMSTeamsMock.mock.calls[0]?.[0]?.mediaAccess).toBe(mediaAccess);
+  });
+
+  it("does not grant forged upload-file media authority when the host grants none", async () => {
+    const forgedMediaAccess = {
+      localRoots: ["/forged/workspace"],
+      readFile: vi.fn(async () => Buffer.from("forged")),
+      workspaceDir: "/forged/workspace",
+    };
+    sendMessageMSTeamsMock.mockResolvedValue({
+      messageId: "msg-upload-1",
+      conversationId: "conv-upload-1",
+    });
+
+    await runAction({
+      action: "upload-file",
+      params: {
+        to: targetChannelId,
+        path: "report.pdf",
+        mediaAccess: forgedMediaAccess,
+        mediaLocalRoots: forgedMediaAccess.localRoots,
+        mediaReadFile: forgedMediaAccess.readFile,
+      },
+      toolContext: { mediaAccess: forgedMediaAccess },
+    });
+
+    expect(sendMessageMSTeamsMock).toHaveBeenCalledWith({
+      cfg: {},
+      to: targetChannelId,
+      text: "",
+      mediaUrl: "report.pdf",
+      filename: undefined,
+      mediaAccess: undefined,
+      mediaLocalRoots: undefined,
+      mediaReadFile: undefined,
     });
   });
 

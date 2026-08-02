@@ -6140,7 +6140,7 @@ describe("update-cli", () => {
       "Commit, stash, or discard the local changes, then rerun `openclaw update`.",
     );
     expect(serviceStop).not.toHaveBeenCalled();
-    expect(defaultRuntime.exit).toHaveBeenCalledWith(0);
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
   });
   it.each([
     {

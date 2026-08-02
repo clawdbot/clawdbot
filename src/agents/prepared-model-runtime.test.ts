@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { requireActivePluginRegistry } from "../plugins/runtime.js";
 
 type LoadStaticCatalog =
   typeof import("./embedded-agent-runner/model.static-catalog.js").loadBundledProviderStaticCatalogContextModels;
@@ -32,7 +34,7 @@ const mocks = vi.hoisted(() => ({
     entries: [],
     routeVariants: [],
   })),
-  ensureRuntimePluginsLoaded: vi.fn(),
+  loadAgentRuntimePluginRegistryHandle: vi.fn(),
   loadStaticCatalog: vi.fn<LoadStaticCatalog>(async () => []),
   resolveStaticCatalogModel: vi.fn<StaticCatalogResolver>(() => undefined),
   createStaticCatalogResolver: vi.fn<CreateStaticCatalogResolver>(),
@@ -72,6 +74,7 @@ vi.mock("../plugins/synthetic-auth.runtime.js", () => ({
 }));
 
 vi.mock("./agent-scope.js", () => ({
+  listAgentEntries: (config: { agents?: { list?: unknown[] } }) => config.agents?.list ?? [],
   listAgentIds: () => mocks.configuredAgentIds,
   resolveAgentDir: (_config: unknown, agentId: string) =>
     agentId === "default" ? "/tmp/unused-agent" : `/tmp/configured-${agentId}`,
@@ -79,6 +82,12 @@ vi.mock("./agent-scope.js", () => ({
     agentId === "default" ? "/tmp/unused-workspace" : `/tmp/workspace-${agentId}`,
   resolveDefaultAgentDir: () => "/tmp/unused-agent",
   resolveDefaultAgentId: () => "default",
+  resolveAgentEffectiveModelPrimary: () => undefined,
+  resolveRunModelFallbacksOverride: () => undefined,
+  resolveSessionAgentIds: ({ agentId }: { agentId?: string }) => ({
+    defaultAgentId: "default",
+    sessionAgentId: agentId ?? "default",
+  }),
 }));
 
 vi.mock("./auth-profiles/runtime-snapshots.js", () => ({
@@ -100,7 +109,8 @@ vi.mock("./models-config.js", () => ({
 }));
 
 vi.mock("./runtime-plugins.js", () => ({
-  ensureRuntimePluginsLoaded: (...args: unknown[]) => mocks.ensureRuntimePluginsLoaded(...args),
+  loadAgentRuntimePluginRegistryHandle: (...args: unknown[]) =>
+    mocks.loadAgentRuntimePluginRegistryHandle(...args),
 }));
 
 vi.mock("./embedded-agent-runner/model.static-catalog.js", () => ({
@@ -143,7 +153,9 @@ describe("prepared model runtime snapshots", () => {
     mocks.discoverModels.mockClear();
     mocks.ensureOpenClawModelsJson.mockClear();
     mocks.buildPreparedModelCatalogSnapshot.mockClear();
-    mocks.ensureRuntimePluginsLoaded.mockClear();
+    mocks.loadAgentRuntimePluginRegistryHandle
+      .mockReset()
+      .mockReturnValue(createEmptyPluginRegistry());
     mocks.loadStaticCatalog.mockClear();
     mocks.resolveStaticCatalogModel.mockReset();
     mocks.createStaticCatalogResolver.mockReset();
@@ -240,17 +252,24 @@ describe("prepared model runtime snapshots", () => {
   });
 
   it("loads runtime plugins before discovering an immutable generation", async () => {
-    await publishPreparedModelRuntimeSnapshot({
+    const pluginRegistry = createEmptyPluginRegistry();
+    mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValueOnce(pluginRegistry);
+    mocks.discoverAuthStorage.mockImplementationOnce(() => {
+      expect(requireActivePluginRegistry()).toBe(pluginRegistry);
+    });
+    const snapshot = await publishPreparedModelRuntimeSnapshot({
       config: {},
       agentDir: "/tmp/prepared-model-runtime-plugin-order",
       workspaceDir: "/tmp/prepared-model-runtime-plugin-workspace",
     });
 
-    expect(mocks.ensureRuntimePluginsLoaded).toHaveBeenCalledWith({
+    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledWith({
       config: {},
       workspaceDir: "/tmp/prepared-model-runtime-plugin-workspace",
+      selections: undefined,
     });
-    expect(mocks.ensureRuntimePluginsLoaded.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(snapshot.pluginRegistry).toBe(pluginRegistry);
+    expect(mocks.loadAgentRuntimePluginRegistryHandle.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.discoverAuthStorage.mock.invocationCallOrder[0]!,
     );
   });
@@ -627,7 +646,7 @@ describe("prepared model runtime snapshots", () => {
     expect(mocks.discoverModels).toHaveBeenCalledOnce();
     expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
     expect(mocks.planOpenClawModelsJsonSource).not.toHaveBeenCalled();
-    expect(mocks.ensureRuntimePluginsLoaded).not.toHaveBeenCalled();
+    expect(mocks.loadAgentRuntimePluginRegistryHandle).not.toHaveBeenCalled();
   });
 
   it("builds credential-free command owners separately from runtime owners", async () => {

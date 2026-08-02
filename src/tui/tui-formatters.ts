@@ -10,6 +10,7 @@ import { formatRawAssistantErrorForUi } from "../shared/assistant-error-format.j
 import { extractAssistantVisibleText } from "../shared/chat-message-content.js";
 import { chunkTextByBreakResolver } from "../shared/text-chunking.js";
 import { formatTokenCount } from "../utils/usage-format.js";
+import type { SessionInfo } from "./tui-types.js";
 
 const REPLACEMENT_CHAR_RE = /\uFFFD/g;
 const MAX_TOKEN_CHARS = 32;
@@ -35,13 +36,46 @@ const FENCED_CODE_RE = /(```|~~~)[^\n]*\n[\s\S]*?\n\1[^\n]*/g;
 const INLINE_CODE_RE = /(`+)(?:(?!\1).)+?\1/g;
 
 /** Keep routing/provider/profile details in session state, not the compact footer. */
-export function formatModelFooter(params: {
+function formatModelFooter(params: {
   model?: string | null;
   thinkingLevel?: string | null;
 }): string {
   const model = splitTrailingAuthProfile(params.model ?? "").model || "unknown";
   const thinkingLevel = params.thinkingLevel?.trim();
   return thinkingLevel && thinkingLevel !== "off" ? `${model} ${thinkingLevel}` : model;
+}
+
+/** Format the compact TUI footer from authoritative session and process state. */
+export function formatTuiFooter(params: {
+  agentLabel: string;
+  sessionLabel: string;
+  sessionInfo: SessionInfo;
+  thinkingLevel?: string | null;
+  deliver: boolean;
+}): string {
+  const { sessionInfo } = params;
+  const fastLabel =
+    sessionInfo.fastMode === "auto" ? "fast:auto" : sessionInfo.fastMode === true ? "fast" : null;
+  const verbose = sessionInfo.verboseLevel ?? "off";
+  const trace = sessionInfo.traceLevel ?? "off";
+  const reasoning = sessionInfo.reasoningLevel ?? "off";
+  const traceLabel = trace === "raw" ? "trace:raw" : trace === "on" ? "trace" : null;
+  const reasoningLabel =
+    reasoning === "on" ? "reasoning" : reasoning === "stream" ? "reasoning:stream" : null;
+  return [
+    `agent ${params.agentLabel}`,
+    `session ${params.sessionLabel}`,
+    formatModelFooter({ model: sessionInfo.model, thinkingLevel: params.thinkingLevel }),
+    formatGoalFooter(sessionInfo.goal),
+    fastLabel,
+    verbose !== "off" ? `verbose ${verbose}` : null,
+    traceLabel,
+    reasoningLabel,
+    `deliver:${params.deliver ? "on" : "off"}`,
+    formatTokens(sessionInfo.totalTokens ?? null, sessionInfo.contextTokens ?? null),
+  ]
+    .filter(Boolean)
+    .join(" | ");
 }
 
 function hasControlChars(text: string): boolean {
@@ -615,7 +649,7 @@ export function isCommandMessage(message: unknown): boolean {
   return (message as Record<string, unknown>).command === true;
 }
 
-export function formatTokens(total?: number | null, context?: number | null) {
+function formatTokens(total?: number | null, context?: number | null) {
   if (total == null && context == null) {
     return "tokens ?";
   }
@@ -637,7 +671,7 @@ function formatGoalUsage(goal: SessionGoal): string | null {
   return `${formatTokenCount(goal.tokensUsed)}/${formatTokenCount(goal.tokenBudget)}`;
 }
 
-export function formatGoalFooter(goal?: SessionGoal): string | null {
+function formatGoalFooter(goal?: SessionGoal): string | null {
   if (!goal) {
     return null;
   }

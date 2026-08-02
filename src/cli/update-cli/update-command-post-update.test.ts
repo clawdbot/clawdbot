@@ -44,6 +44,45 @@ async function finishFailedUpdate(result: UpdateRunResult): Promise<void> {
   } as unknown as FinishUpdateParams);
 }
 
+async function finishSkippedUpdate(reason: string): Promise<void> {
+  await finishUpdate({
+    result: {
+      status: "skipped",
+      mode: reason === "dirty" ? "git" : "unknown",
+      reason,
+      steps: [],
+      durationMs: 1,
+    },
+    opts: {},
+    showProgress: false,
+    controlPlaneUpdateSentinelMeta: undefined,
+  } as unknown as FinishUpdateParams);
+}
+
+describe("skipped update exit status", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined as never);
+    vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
+    vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
+  });
+
+  it("exits nonzero when local changes block a Git update", async () => {
+    await finishSkippedUpdate("dirty");
+
+    expect(defaultRuntime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Update blocked: local files are edited"),
+    );
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("keeps a non-Git install skip successful", async () => {
+    await finishSkippedUpdate("not-git-install");
+
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(0);
+  });
+});
+
 describe("failed Git update recovery restart", () => {
   beforeEach(() => {
     vi.clearAllMocks();

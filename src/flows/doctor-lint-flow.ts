@@ -53,7 +53,7 @@ export async function runDoctorLintChecks(
     let message: string;
     if (!allIds.has(id)) {
       message = `Unknown health check id selected by --only: ${id}.`;
-    } else if (skip.has(id)) {
+    } else if (selected.length === 0 && skip.has(id)) {
       message = `Health check ${id} cannot be selected by --only and excluded by --skip.`;
     } else {
       continue;
