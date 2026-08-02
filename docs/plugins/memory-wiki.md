@@ -220,6 +220,19 @@ vault or install file watchers.
 After rollback quarantine, a compile in the running process clears the owner
 immediately; a separate compiler process requires plugin lifecycle refresh so
 the daemon can confirm the new durable publication.
+ChatGPT import rollback records post-import edits before compile and keeps
+their recovery paths in plugin state, so an interrupted rollback can reconcile
+the recovery directory and report the same preserved pages on retry. Target
+recovery finishes before a persisted process-restart fence. After that point,
+retries rebuild derived indexes, dashboards, and compiled caches without
+rewriting source pages or moving or deleting recovery artifacts. A later normal
+compile may refresh machine-managed Related blocks. This covers in-process
+failure and process restart after ordinary filesystem calls return. It does not
+guarantee write ordering across kernel or host power loss. A pathname write
+racing fence persistence either remains after a successful fence or is
+preserved under `recovered/` by a pre-fence retry. Writes through a file
+descriptor opened before an import-owned inode is classified and unlinked are
+not guaranteed and may be lost.
 Compiled caches are rebuildable: cache rows from before publication epochs are
 treated as misses and replaced by the next compile; they are not migrated.
 

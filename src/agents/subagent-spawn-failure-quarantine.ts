@@ -1,5 +1,6 @@
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
+import { summarizeSpawnError } from "./spawn-pipeline.js";
 import {
   getLatestSubagentRunByChildSessionKey,
   hasSubagentRunIdentity,
@@ -205,7 +206,63 @@ export function hasDurableReservedSubagentIdentity(params: {
   );
 }
 
+export function resolveSpawnPipelineFailure(error: unknown, phase: string) {
+  const spawnStatus =
+    error && typeof error === "object"
+      ? (error as { spawnStatus?: unknown }).spawnStatus
+      : undefined;
+  const summary = summarizeSpawnError(error);
+  const forbidden = spawnStatus === "forbidden";
+  return {
+    status: forbidden ? ("forbidden" as const) : ("error" as const),
+    summary,
+    message:
+      phase === "register" && !forbidden ? `Failed to register subagent run: ${summary}` : summary,
+  };
+}
+
 export function recordIndeterminateFailedSubagentSpawn(
+  admissionSlot: SubagentSpawnAdmissionSlot | undefined,
+  params: {
+    runId: string;
+    childSessionKey: string;
+    controllerSessionKey?: string | undefined;
+    requesterSessionKey: string;
+    requesterOrigin?: DeliveryContext | undefined;
+    progressOrigin?: SubagentProgressOrigin | undefined;
+    requesterDisplayKey: string;
+    requesterAgentId: string;
+    task: string;
+    taskName?: string | undefined;
+    agentId: string;
+    cleanup: "delete" | "keep";
+    label?: string | undefined;
+    model?: string | undefined;
+    agentDir?: string | undefined;
+    workspaceDir?: string | undefined;
+    runTimeoutSeconds: number;
+    spawnMode: SpawnSubagentMode;
+    reason: string;
+    sessionIdentity?: ProvisionalSessionCleanupIdentity | undefined;
+    createdAt?: number | undefined;
+  },
+): boolean {
+  try {
+    quarantineFailedSubagentSpawn(params);
+    return true;
+  } catch {
+    if (admissionSlot) {
+      retainFailedSpawnAdmissionSlotUntilDeletion({
+        slot: admissionSlot,
+        childSessionKey: params.childSessionKey,
+        ...(params.sessionIdentity ? { sessionIdentity: params.sessionIdentity } : {}),
+      });
+    }
+    return false;
+  }
+}
+
+export function recordSpawnPipelineIndeterminateFailedSubagentSpawn(
   admissionSlot: SubagentSpawnAdmissionSlot | undefined,
   params: {
     runId: string;
@@ -228,19 +285,30 @@ export function recordIndeterminateFailedSubagentSpawn(
     spawnMode: SpawnSubagentMode;
     reason: string;
     sessionIdentity?: ProvisionalSessionCleanupIdentity;
+    createdAt?: number;
   },
 ): boolean {
-  try {
-    quarantineFailedSubagentSpawn(params);
-    return true;
-  } catch {
-    if (admissionSlot) {
-      retainFailedSpawnAdmissionSlotUntilDeletion({
-        slot: admissionSlot,
-        childSessionKey: params.childSessionKey,
-        ...(params.sessionIdentity ? { sessionIdentity: params.sessionIdentity } : {}),
-      });
-    }
-    return false;
-  }
+  return recordIndeterminateFailedSubagentSpawn(admissionSlot, {
+    runId: params.runId,
+    childSessionKey: params.childSessionKey,
+    ...(params.controllerSessionKey ? { controllerSessionKey: params.controllerSessionKey } : {}),
+    requesterSessionKey: params.requesterSessionKey,
+    ...(params.requesterOrigin ? { requesterOrigin: params.requesterOrigin } : {}),
+    ...(params.progressOrigin ? { progressOrigin: params.progressOrigin } : {}),
+    requesterDisplayKey: params.requesterDisplayKey,
+    requesterAgentId: params.requesterAgentId,
+    task: params.task,
+    ...(params.taskName ? { taskName: params.taskName } : {}),
+    agentId: params.agentId,
+    cleanup: params.cleanup,
+    ...(params.label ? { label: params.label } : {}),
+    ...(params.model ? { model: params.model } : {}),
+    ...(params.agentDir ? { agentDir: params.agentDir } : {}),
+    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+    runTimeoutSeconds: params.runTimeoutSeconds,
+    spawnMode: params.spawnMode,
+    reason: params.reason,
+    ...(params.sessionIdentity ? { sessionIdentity: params.sessionIdentity } : {}),
+    ...(params.createdAt !== undefined ? { createdAt: params.createdAt } : {}),
+  });
 }

@@ -34,3 +34,11 @@ export { loadPreparedModelCatalog } from "./prepared-model-catalog.js";
 export { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
 export { buildSubagentSystemPrompt } from "./subagent-system-prompt.js";
 export { resolveInternalSessionKey, resolveMainSessionAlias } from "./tools/sessions-helpers.js";
+
+export function throwIfSpawnAborted(signal: AbortSignal | undefined): void {
+  if (!signal?.aborted) {
+    return;
+  }
+  const reason = (signal as { reason?: unknown }).reason;
+  throw reason instanceof Error ? reason : new Error("subagent spawn interrupted.");
+}

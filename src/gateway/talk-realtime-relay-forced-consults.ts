@@ -22,6 +22,7 @@ import {
   ensureRelayTurn,
   noFallbackRelayOutputFlush,
   relaySessions,
+  resolveRelayProviderToolCallId,
   type ForcedTerminalProviderResult,
   type RelayAgentControlProviderSubmission,
   type RelaySession,
@@ -275,7 +276,7 @@ export function submitRealtimeAgentConsultWorkingResponse(
   }
   const epoch = session.toolResultEpoch;
   const submission = session.bridge.submitToolResult(
-    callId,
+    resolveRelayProviderToolCallId(session, callId),
     buildRealtimeVoiceAgentConsultWorkingResponse("person"),
     { willContinue: true },
   );

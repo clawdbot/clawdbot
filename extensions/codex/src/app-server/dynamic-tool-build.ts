@@ -643,10 +643,16 @@ export function resolveCodexExternalSandboxPolicyForOpenClawSandbox(
     networkAccess: codexNetworkAccessForOpenClawSandbox(sandbox) ? "enabled" : "restricted",
   };
 }
+
+function usesDockerNetworkConfig(sandbox: OpenClawSandboxContext | undefined): boolean {
+  const backendId = sandbox?.backendId.trim().toLowerCase();
+  return backendId === "docker" || backendId === "podman";
+}
+
 function codexNetworkAccessForOpenClawSandbox(
   sandbox: OpenClawSandboxContext | undefined,
 ): boolean {
-  if (sandbox?.backendId !== "docker") {
+  if (!usesDockerNetworkConfig(sandbox)) {
     return true;
   }
   const network = sandbox?.docker?.network?.trim().toLowerCase();

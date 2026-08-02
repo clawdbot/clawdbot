@@ -322,6 +322,14 @@ struct OnboardingAISetupView: View {
                 .buttonStyle(.link)
                 .font(.caption)
             }
+
+            Button {
+                self.model.chooseDifferentAI()
+            } label: {
+                Label("Choose a different AI…", systemImage: "arrow.triangle.2.circlepath")
+            }
+            .buttonStyle(.link)
+            .font(.caption)
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -510,7 +518,7 @@ struct OnboardingAISetupView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Set up a local model")
                     .font(.headline)
-                Text("Download or prepare a local model on this Gateway.")
+                Text("Connect a local model service, or prepare a model on this Gateway.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 ForEach(self.model.prepareOptions) { option in
@@ -534,7 +542,7 @@ struct OnboardingAISetupView: View {
                                 }
                             }
                             Spacer(minLength: 0)
-                            Text("Set up / Download model")
+                            Text(option.actionLabel ?? String(localized: "Connect / Set up"))
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(Color.accentColor)
                         }
@@ -660,7 +668,7 @@ struct OnboardingAISetupView: View {
                     Text(self.model.activeAuthOption?.label ?? "Provider setup")
                         .font(.title3.weight(.semibold))
                     Text(self.model.isPreparingModel
-                        ? "The model is downloaded and prepared on this Gateway."
+                        ? "OpenClaw will detect and verify the prepared model before using it."
                         : "Credentials stay on this Gateway and are saved only after the live test succeeds.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -858,7 +866,10 @@ struct OnboardingAISetupView: View {
                     }
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(self.model.manualTesting ||
+                // isBusy, not just manualTesting: submitManualKey drops the tap
+                // while another test runs, so an enabled button would be a
+                // silent no-op.
+                .disabled(self.model.isBusy ||
                     self.model.manualKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
             Text(self.manualProviderHelp)

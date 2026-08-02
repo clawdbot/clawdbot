@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => ({
   runSubagentAnnounceFlow: vi.fn().mockResolvedValue(false),
   captureSubagentCompletionReply: vi.fn(),
   loadSubagentRegistryFromSqlite: vi.fn(() => new Map()),
+  saveSubagentRegistryChangesToSqlite: vi.fn(),
   saveSubagentRegistryToSqlite: vi.fn(),
   resolveAgentTimeoutMs: vi.fn(() => 60_000),
   scheduleOrphanRecovery: vi.fn(),
@@ -68,6 +69,7 @@ vi.mock("../infra/agent-events.js", () => ({
 
 vi.mock("./subagent-registry.store.sqlite.js", () => ({
   loadSubagentRegistryFromSqlite: mocks.loadSubagentRegistryFromSqlite,
+  saveSubagentRegistryChangesToSqlite: mocks.saveSubagentRegistryChangesToSqlite,
   saveSubagentRegistryToSqlite: mocks.saveSubagentRegistryToSqlite,
 }));
 
@@ -131,6 +133,7 @@ describe("announce loop guard (#18264)", () => {
     mocks.runSubagentAnnounceFlow.mockReset();
     mocks.runSubagentAnnounceFlow.mockResolvedValue(false);
     mocks.scheduleOrphanRecovery.mockClear();
+    mocks.saveSubagentRegistryChangesToSqlite.mockClear();
     mocks.saveSubagentRegistryToSqlite.mockClear();
     mocks.updateSessionStore.mockClear();
     registry.resetSubagentRegistryForTests({ persist: false });
@@ -161,8 +164,11 @@ describe("announce loop guard (#18264)", () => {
       task: "test task",
       cleanup: "keep",
       createdAt: now - 60_000,
-      startedAt: now - 55_000,
-      endedAt: now - 50_000,
+      execution: {
+        status: "terminal",
+        startedAt: now - 55_000,
+        endedAt: now - 50_000,
+      },
       delivery: { status: "pending", attemptCount: 3, lastAttemptAt: now - 10_000 },
     });
 
@@ -184,8 +190,11 @@ describe("announce loop guard (#18264)", () => {
         task: "expired test task",
         cleanup: "keep" as const,
         createdAt: now - 15 * 60_000,
-        startedAt: now - 14 * 60_000,
-        endedAt: now - 10 * 60_000,
+        execution: {
+          status: "terminal" as const,
+          startedAt: now - 14 * 60_000,
+          endedAt: now - 10 * 60_000,
+        },
         cleanupCompletedAt: undefined,
         delivery: { status: "pending" as const, attemptCount: 3, lastAttemptAt: now - 9 * 60_000 },
       }),
@@ -200,8 +209,11 @@ describe("announce loop guard (#18264)", () => {
         task: "retry budget test",
         cleanup: "keep" as const,
         createdAt: now - 2 * 60_000,
-        startedAt: now - 90_000,
-        endedAt: now - 60_000,
+        execution: {
+          status: "terminal" as const,
+          startedAt: now - 90_000,
+          endedAt: now - 60_000,
+        },
         cleanupCompletedAt: undefined,
         delivery: { status: "pending" as const, attemptCount: 3, lastAttemptAt: now - 30_000 },
       }),
@@ -221,6 +233,9 @@ describe("announce loop guard (#18264)", () => {
 
     expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
     expect(entry.cleanupCompletedAt).toBeGreaterThanOrEqual(beforeInit);
+    expect(mocks.saveSubagentRegistryChangesToSqlite).toHaveBeenCalledWith(expect.any(Map), [
+      entry.runId,
+    ]);
   });
 
   test("expired completion-message entries are still resumed for announce", async () => {
@@ -242,8 +257,11 @@ describe("announce loop guard (#18264)", () => {
             task: "completion announce after long descendants",
             cleanup: "keep" as const,
             createdAt: now - 20 * 60_000,
-            startedAt: now - 19 * 60_000,
-            endedAt: now - 10 * 60_000,
+            execution: {
+              status: "terminal" as const,
+              startedAt: now - 19 * 60_000,
+              endedAt: now - 10 * 60_000,
+            },
             cleanupHandled: false,
             expectsCompletionMessage: true,
           },
@@ -276,8 +294,11 @@ describe("announce loop guard (#18264)", () => {
             task: "rejection test",
             cleanup: "keep" as const,
             createdAt: now - 30_000,
-            startedAt: now - 20_000,
-            endedAt: now - 10_000,
+            execution: {
+              status: "terminal" as const,
+              startedAt: now - 20_000,
+              endedAt: now - 10_000,
+            },
             cleanupHandled: false,
           },
         ],

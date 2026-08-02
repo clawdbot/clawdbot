@@ -2,10 +2,7 @@
 import * as fs from "node:fs/promises";
 import path from "node:path";
 import { FILE_TYPE_SNIFF_MAX_BYTES } from "@openclaw/media-core/mime";
-import {
-  createPluginRegistryFixture,
-  registerTestPlugin,
-} from "openclaw/plugin-sdk/plugin-test-contracts";
+import { registerTestPlugin } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -17,16 +14,7 @@ import { sendPluginSessionAttachment } from "../host-hook-attachments.js";
 import { clearPluginLoaderCache } from "../loader.test-fixtures.js";
 import { createEmptyPluginRegistry } from "../registry-empty.js";
 import { createPluginRegistry } from "../registry.js";
-import {
-  pinActivePluginChannelRegistry,
-  pinActivePluginHttpRouteRegistry,
-  pinActivePluginSessionExtensionRegistry,
-  releasePinnedPluginChannelRegistry,
-  releasePinnedPluginHttpRouteRegistry,
-  releasePinnedPluginSessionExtensionRegistry,
-  resetPluginRuntimeStateForTest,
-  setActivePluginRegistry,
-} from "../runtime.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../runtime.js";
 import type { PluginRuntime } from "../runtime/types.js";
 import { createPluginRecord } from "../status.test-helpers.js";
 import type { OpenClawPluginApi } from "../types.js";
@@ -148,9 +136,6 @@ describe("plugin session attachments", () => {
   afterEach(() => {
     workflowMocks.getChannelPlugin.mockReset();
     workflowMocks.sendMessage.mockReset();
-    releasePinnedPluginChannelRegistry();
-    releasePinnedPluginHttpRouteRegistry();
-    releasePinnedPluginSessionExtensionRegistry();
     resetPluginRuntimeStateForTest();
     clearPluginLoaderCache();
     delete (globalThis as { proofAttachmentApi?: OpenClawPluginApi }).proofAttachmentApi;
@@ -487,55 +472,6 @@ describe("plugin session attachments", () => {
         error: "attachment delivery setup failed: channel registry unavailable",
       });
       expect(workflowMocks.sendMessage).not.toHaveBeenCalled();
-    });
-  });
-
-  it("keeps pinned attachment APIs live until their registry retires", async () => {
-    await withSessionStore(async ({ storePath, filePath }) => {
-      await writeSessionEntry(storePath);
-      mockSuccessfulAttachmentDelivery();
-
-      const { config, registry } = createPluginRegistryFixture({ session: { store: storePath } });
-      let capturedApi: OpenClawPluginApi | undefined;
-      registerTestPlugin({
-        registry,
-        config,
-        record: createPluginRecord({
-          id: "attachment-plugin",
-          name: "Attachment Plugin",
-          origin: "bundled",
-        }),
-        register(api) {
-          capturedApi = api;
-        },
-      });
-      setActivePluginRegistry(registry.registry);
-
-      const firstResult = await capturedApi?.sendSessionAttachment({
-        sessionKey: MAIN_SESSION_KEY,
-        files: [{ path: filePath }],
-      });
-      expectTelegramAttachmentResult(firstResult, 1);
-
-      pinActivePluginChannelRegistry(registry.registry);
-      pinActivePluginHttpRouteRegistry(registry.registry);
-      pinActivePluginSessionExtensionRegistry(registry.registry);
-      setActivePluginRegistry(createEmptyPluginRegistry());
-      const pinnedResult = await capturedApi?.sendSessionAttachment({
-        sessionKey: MAIN_SESSION_KEY,
-        files: [{ path: filePath }],
-      });
-      expectTelegramAttachmentResult(pinnedResult, 1);
-
-      releasePinnedPluginChannelRegistry(registry.registry);
-      releasePinnedPluginHttpRouteRegistry(registry.registry);
-      releasePinnedPluginSessionExtensionRegistry(registry.registry);
-      await expect(
-        capturedApi?.sendSessionAttachment({
-          sessionKey: MAIN_SESSION_KEY,
-          files: [{ path: filePath }],
-        }),
-      ).resolves.toEqual({ ok: false, error: "plugin is not loaded" });
     });
   });
 

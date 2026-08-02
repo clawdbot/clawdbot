@@ -293,7 +293,7 @@ export async function installClawCronJobs(
   if (!options.gateway) {
     throw new ClawCronInstallError(
       "cron_gateway_required",
-      "Claw cron jobs require the gateway-owned cron.add API.",
+      "Claw automations require the gateway-owned cron.add API.",
       [],
     );
   }

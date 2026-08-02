@@ -11,8 +11,9 @@ scenario:
     timeoutMs: 60000
     retryCount: 1
     suiteIsolation: isolated
-    config: { whatsappScenarioId: whatsapp-reply-to-message }
 flow:
   module: ./live-transports/whatsapp/scenario-runtime.js
-  call: runWhatsAppReplyToMessageScenario
-  args: [{ expr: whatsappScenarioContext }]
+  call: runWhatsAppScenario
+  args:
+    - { expr: whatsappScenarioContext }
+    - { moduleExport: whatsappQaReplyToMessageScenario }

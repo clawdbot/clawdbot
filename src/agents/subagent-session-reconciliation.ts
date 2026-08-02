@@ -15,6 +15,8 @@ import {
   loadSessionEntryReadOnly,
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isIncognitoSessionKey } from "../routing/session-key.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import type { SubagentRunOutcome } from "./subagent-announce-output.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
@@ -88,6 +90,7 @@ export function loadSubagentSessionEntry(params: {
   childSessionKey: string;
   storeCache?: SubagentSessionStoreCache;
   cfg?: OpenClawConfig;
+  storePath?: string;
 }): SessionEntry | undefined {
   const key = params.childSessionKey.trim();
   if (!key) {
@@ -95,7 +98,11 @@ export function loadSubagentSessionEntry(params: {
   }
   const agentId = resolveAgentIdFromSessionKey(key);
   const cfg = params.cfg ?? getRuntimeConfig();
-  const storePath = resolveStorePath(cfg.session?.store, { agentId });
+  const storePath =
+    params.storePath ??
+    (isIncognitoSessionKey(key)
+      ? resolveIncognitoOpenClawAgentSqlitePath({ agentId })
+      : resolveStorePath(cfg.session?.store, { agentId }));
   let store = params.storeCache?.get(storePath);
   if (!store) {
     store = Object.fromEntries(

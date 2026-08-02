@@ -143,6 +143,30 @@ describe("provider failover hook structured signals", () => {
     expect(classifyProviderRuntimeFailureKind(raw)).toBe("schema");
   });
 
+  it("classifies replay-invalid carriers as terminal format failures", () => {
+    providerRuntimeMocks.classifyProviderPluginError.mockReturnValue(undefined);
+    const carriers = [
+      '{"type":"error","error":{"type":"invalid_request_error","message":"messages.1.content.1: Invalid `signature` in `thinking` block"}}',
+      'Validation error: The model returned the following errors: {"type":"error","error":{"type":"invalid_request_error","message":"messages.1.content.1: Invalid `signature` in `thinking` block"}}',
+    ];
+
+    for (const errorMessage of carriers) {
+      expect(classifyFailoverSignal({ provider: "anthropic", message: errorMessage })).toEqual({
+        kind: "reason",
+        reason: "format",
+      });
+      expect(
+        classifyAssistantFailoverReason(
+          makeAssistantMessageFixture({
+            provider: "anthropic",
+            errorMessage,
+          }),
+        ),
+      ).toBe("format");
+      expect(classifyProviderRuntimeFailureKind(errorMessage)).toBe("replay_invalid");
+    }
+  });
+
   it("keeps specific raw API error classifications ahead of invalid-request format", () => {
     providerRuntimeMocks.classifyProviderPluginError.mockReturnValue(undefined);
 

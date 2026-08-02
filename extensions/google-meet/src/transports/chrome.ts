@@ -233,7 +233,7 @@ export async function launchChromeMeet(params: {
 function parseNodeStartResult(raw: unknown): {
   launched?: boolean;
   bridgeId?: string;
-  audioBridge?: { type?: string };
+  audioBridge?: { type?: string; outputGeneration?: boolean };
   browser?: GoogleMeetChromeHealth;
 } {
   const value =
@@ -246,7 +246,7 @@ function parseNodeStartResult(raw: unknown): {
   return value as {
     launched?: boolean;
     bridgeId?: string;
-    audioBridge?: { type?: string };
+    audioBridge?: { type?: string; outputGeneration?: boolean };
     browser?: GoogleMeetChromeHealth;
   };
 }
@@ -566,6 +566,11 @@ export async function launchChromeMeetOnNode(params: {
       logScope: GOOGLE_MEET_PLATFORM_ADAPTER.logScope,
       logPrefix: params.mode === "agent" ? "node agent" : "node",
     });
+    Reflect.set(
+      transport,
+      Symbol.for("openclaw.internal.meeting-node-output-generation.v1"),
+      result.audioBridge.outputGeneration === true,
+    );
     const bindings = createMeetingRealtimeEngineBindings({
       platform: GOOGLE_MEET_PLATFORM_ADAPTER,
       ...params,

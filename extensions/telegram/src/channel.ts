@@ -83,7 +83,7 @@ import {
   resolveTelegramSessionConversation,
   resolveTelegramSessionTarget,
 } from "./session-conversation.js";
-import { telegramSetupAdapter, telegramSetupContract } from "./setup-core.js";
+import { telegramSetupContract } from "./setup-core.js";
 import { telegramSetupWizard } from "./setup-surface.js";
 import {
   createTelegramPluginBase,
@@ -736,7 +736,6 @@ export const telegramPlugin = createChatChannelPlugin({
   base: {
     ...createTelegramPluginBase({
       setupWizard: telegramSetupWizard,
-      setup: telegramSetupAdapter,
       setupContract: telegramSetupContract,
     }),
     allowlist: buildDmGroupAccountAllowlistAdapter({

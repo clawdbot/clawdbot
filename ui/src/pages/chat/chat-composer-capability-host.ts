@@ -1,3 +1,4 @@
+import { formatErrorMessage } from "@openclaw/normalization-core";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -17,6 +18,7 @@ import {
   buildToolsEffectiveRequestKey,
   loadToolsEffective,
 } from "../../lib/agents/tools-effective.ts";
+import { redactToolDetail } from "../../lib/browser-redact.ts";
 import {
   buildAddMcpServerPatch,
   MCP_SERVER_NAME_PATTERN,
@@ -58,10 +60,6 @@ type ComposerMcpServerScope = "session" | "everywhere";
 type CapabilityMutationResult =
   | { ok: true }
   | { ok: false; error: string; stage: "config" | "session" };
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 function webSearchBaseEnabled(config: Record<string, unknown> | null): boolean {
   return asRecord(asRecord(asRecord(config?.tools)?.web)?.search)?.enabled !== false;
@@ -129,7 +127,11 @@ export class ChatComposerCapabilityHost {
     try {
       globalResult = await options.patchGlobal(globalConfig);
     } catch (error) {
-      return { ok: false, error: errorMessage(error), stage: "config" };
+      return {
+        ok: false,
+        error: formatErrorMessage(error, { redact: redactToolDetail }),
+        stage: "config",
+      };
     }
     if (!globalResult.ok) {
       return { ...globalResult, stage: "config" };
@@ -141,7 +143,11 @@ export class ChatComposerCapabilityHost {
     try {
       loaded = await options.loadSessionOverrides();
     } catch (error) {
-      return { ok: false, error: errorMessage(error), stage: "session" };
+      return {
+        ok: false,
+        error: formatErrorMessage(error, { redact: redactToolDetail }),
+        stage: "session",
+      };
     }
     if (!loaded.ok) {
       return { ...loaded, stage: "session" };
@@ -157,7 +163,11 @@ export class ChatComposerCapabilityHost {
     try {
       sessionResult = await options.patchSession(next);
     } catch (error) {
-      return { ok: false, error: errorMessage(error), stage: "session" };
+      return {
+        ok: false,
+        error: formatErrorMessage(error, { redact: redactToolDetail }),
+        stage: "session",
+      };
     }
     return sessionResult.ok ? sessionResult : { ...sessionResult, stage: "session" };
   }
@@ -395,7 +405,7 @@ export class ChatComposerCapabilityHost {
     } catch (error) {
       return {
         ok: false as const,
-        error: errorMessage(error),
+        error: formatErrorMessage(error, { redact: redactToolDetail }),
       };
     }
     if (!identityMatches()) {

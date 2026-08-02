@@ -39,6 +39,7 @@ import {
   shouldRetrySilentErrorAssistantTurn,
   shouldTreatEmptyAssistantReplyAsSilent,
 } from "./run/incomplete-turn.js";
+import { normalizeEmbeddedRunAttemptResult } from "./run/run-attempt-result.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
 const REASONING_ONLY_RETRY_INSTRUCTION =
@@ -525,7 +526,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         toolName: "cron",
         argsHash: "args",
         resultHash: "result",
-        terminalPresentation: "Cron scheduler status.\nEnabled: yes",
+        terminalPresentation: "Automations scheduler status.\nEnabled: yes",
       });
       return makeAttemptResult({
         assistantTexts: [],
@@ -554,7 +555,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(result.payloads).toEqual([
       {
         text:
-          "Cron scheduler status.\nEnabled: yes\n\n" +
+          "Automations scheduler status.\nEnabled: yes\n\n" +
           "⚠️ Agent couldn't generate a response. Please try again.",
         isError: true,
       },
@@ -3000,7 +3001,13 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     const attempt = makeAttemptResult();
     delete (attempt as Partial<EmbeddedRunAttemptResult>).replayMetadata;
 
-    expect(resolveReplayInvalidFlag({ attempt })).toBe(true);
+    const normalizedAttempt = normalizeEmbeddedRunAttemptResult(attempt);
+
+    expect(normalizedAttempt.replayMetadata).toEqual({
+      hadPotentialSideEffects: true,
+      replaySafe: false,
+    });
+    expect(resolveReplayInvalidFlag({ attempt: normalizedAttempt })).toBe(true);
   });
 
   it("detects reasoning-only GPT turns from signed thinking blocks", () => {

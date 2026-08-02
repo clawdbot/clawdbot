@@ -29,7 +29,7 @@ Options:
   --device <serial>          adb device serial
   --package <pkg>            package name (default: ai.openclaw.app)
   --activity <activity>      launch activity (default: .MainActivity)
-  --skip-install             skip :app:installDebug
+  --skip-install             skip :app:installPlayDebug
   --launch-runs <n>          launch-to-connected runs (default: 4)
   --screen-loops <n>         screen benchmark loops (default: 6)
   --chat-loops <n>           chat benchmark loops (default: 8)
@@ -145,7 +145,7 @@ trap cleanup EXIT
 if [[ "$INSTALL_APP" == "1" ]]; then
   (
     cd "$ANDROID_DIR"
-    ./gradlew :app:installDebug --console=plain >"$run_dir/install.log" 2>&1
+    ./gradlew :app:installPlayDebug --console=plain >"$run_dir/install.log" 2>&1
   )
 fi
 

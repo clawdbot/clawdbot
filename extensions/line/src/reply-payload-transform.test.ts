@@ -1,6 +1,7 @@
 // Line tests cover reply payload transform plugin behavior.
 import { describe, expect, it } from "vitest";
 import { hasLineDirectives, parseLineDirectives } from "./reply-payload-transform.js";
+import { buildTemplateMessageFromPayload } from "./template-messages.js";
 
 const getLineData = (result: ReturnType<typeof parseLineDirectives>) =>
   (result.channelData?.line as Record<string, unknown> | undefined) ?? {};
@@ -163,6 +164,18 @@ describe("parseLineDirectives", () => {
         expect(result.text, testCase.name).toBe(testCase.expectedText);
       }
     });
+
+    it("preserves the full provider-valid confirm alternative text through template delivery", () => {
+      const question = "q".repeat(1200);
+      const parsed = parseLineDirectives({ text: `[[confirm: ${question} | Yes | No]]` });
+      const payload = getLineData(parsed).templateMessage as Parameters<
+        typeof buildTemplateMessageFromPayload
+      >[0];
+      const message = buildTemplateMessageFromPayload(payload);
+
+      expect(message?.altText).toBe(question);
+      expect((message?.template as { text?: string } | undefined)?.text).toHaveLength(240);
+    });
   });
 
   describe("buttons", () => {
@@ -228,6 +241,18 @@ describe("parseLineDirectives", () => {
           );
         }
       }
+    });
+
+    it("preserves the full provider-valid button alternative text through template delivery", () => {
+      const text = "b".repeat(1200);
+      const parsed = parseLineDirectives({ text: `[[buttons: Menu | ${text} | Open:ok]]` });
+      const payload = getLineData(parsed).templateMessage as Parameters<
+        typeof buildTemplateMessageFromPayload
+      >[0];
+      const message = buildTemplateMessageFromPayload(payload);
+
+      expect(message?.altText).toBe(`Menu: ${text}`);
+      expect((message?.template as { text?: string } | undefined)?.text).toHaveLength(60);
     });
   });
 

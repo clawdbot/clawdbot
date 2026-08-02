@@ -90,7 +90,7 @@ actor GatewayEndpointStore {
         let remoteRouteIsCurrent: @Sendable (RemoteTunnelManager.Route) async -> Bool
         let canStartRemoteTunnel: @Sendable () -> Bool
         let ensureRemoteTunnel: @Sendable () async throws -> RemoteTunnelManager.Route
-        let routingGenerationIsCurrent: @Sendable (UInt64) async -> Bool
+        let liveSourceIsCurrent: @Sendable (SourceSnapshot) async -> Bool
         let sourceSnapshot: @Sendable () async -> SourceSnapshot
 
         static let live = Deps(
@@ -117,9 +117,19 @@ actor GatewayEndpointStore {
             remoteRouteIsCurrent: { await RemoteTunnelManager.shared.isCurrentRoute($0) },
             canStartRemoteTunnel: { GatewayEndpointStore.primaryAppLaunchAdmitted.withValue { $0 } },
             ensureRemoteTunnel: { try await RemoteTunnelManager.shared.ensureControlTunnelRoute() },
-            routingGenerationIsCurrent: { generation in
+            liveSourceIsCurrent: { source in
                 await MainActor.run {
-                    AppStateStore.shared.gatewayRoutingGeneration == generation
+                    let currentTailnetIP: String? = if source.mode == .local,
+                                                       source.bindMode == "tailnet"
+                    {
+                        TailscaleService.shared.tailscaleIP ?? TailscaleService.fallbackTailnetIPv4()
+                    } else {
+                        nil
+                    }
+                    return GatewayEndpointStore.liveSourceIsCurrent(
+                        source,
+                        currentRoutingGeneration: AppStateStore.shared.gatewayRoutingGeneration,
+                        currentTailnetIP: currentTailnetIP)
                 }
             },
             sourceSnapshot: { await GatewayEndpointStore.liveSourceSnapshot() })
@@ -471,15 +481,17 @@ actor GatewayEndpointStore {
               generation == self.resolutionGeneration,
               self.activeSource == source
         else { return false }
+        if source.routingGeneration != nil {
+            // Live snapshots are anchored to the MainActor routing generation plus
+            // volatile route facts. Re-reading config here would multiply disk work.
+            let liveSourceIsCurrent = await deps.liveSourceIsCurrent(source)
+            return liveSourceIsCurrent &&
+                !Task.isCancelled &&
+                generation == self.resolutionGeneration &&
+                self.activeSource == source
+        }
         let current = await deps.sourceSnapshot()
-        guard !Task.isCancelled,
-              generation == self.resolutionGeneration,
-              self.activeSource == source,
-              current == source
-        else { return false }
-        guard let routingGeneration = source.routingGeneration else { return true }
-        let routingGenerationIsCurrent = await deps.routingGenerationIsCurrent(routingGeneration)
-        return routingGenerationIsCurrent &&
+        return current == source &&
             !Task.isCancelled &&
             generation == self.resolutionGeneration &&
             self.activeSource == source
@@ -944,6 +956,19 @@ extension GatewayEndpointStore {
             beforeConfigRead: {})
     }
 
+    private static func liveSourceIsCurrent(
+        _ source: SourceSnapshot,
+        currentRoutingGeneration: UInt64,
+        currentTailnetIP: String?) -> Bool
+    {
+        guard source.routingGeneration == currentRoutingGeneration else { return false }
+        guard source.mode == .local, source.bindMode == "tailnet" else { return true }
+        return source.localHost == self.resolveLocalGatewayHost(
+            bindMode: source.bindMode,
+            customBindHost: nil,
+            tailscaleIP: currentTailnetIP)
+    }
+
     private static func liveSourceSnapshot(
         appSnapshot: @escaping @MainActor @Sendable () -> LiveAppSnapshot,
         generationIsCurrent: @escaping @MainActor @Sendable (UInt64) -> Bool,
@@ -1288,6 +1313,17 @@ extension GatewayEndpointStore {
             appMode: appMode,
             configMode: configMode,
             configIsCurrent: configIsCurrent)
+    }
+
+    static func _testLiveSourceIsCurrent(
+        _ source: SourceSnapshot,
+        currentRoutingGeneration: UInt64,
+        currentTailnetIP: String?) -> Bool
+    {
+        self.liveSourceIsCurrent(
+            source,
+            currentRoutingGeneration: currentRoutingGeneration,
+            currentTailnetIP: currentTailnetIP)
     }
 
     static func _testResolveGatewayPassword(

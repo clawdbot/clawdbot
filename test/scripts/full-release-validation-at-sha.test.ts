@@ -35,6 +35,7 @@ describe("full-release-validation-at-sha", () => {
         mode: "linux",
         provider: "anthropic",
         reuse_evidence: "true",
+        fail_fast: "false",
       },
       sha: "abc123",
       targetRef: "release/2026.7.1",
@@ -124,6 +125,8 @@ describe("full-release-validation-at-sha", () => {
     expect(() => parseArgs(["-f", "reuse_evidence=maybe"])).toThrow(
       "reuse_evidence must be true or false",
     );
+    expect(parseArgs(["-f", "fail_fast=true"]).inputs.fail_fast).toBe("true");
+    expect(() => parseArgs(["-f", "fail_fast=maybe"])).toThrow("fail_fast must be true or false");
     expect(() => parseArgs(["-f", "release_profile=minimum"])).toThrow(
       "release_profile must be beta, stable, or full",
     );

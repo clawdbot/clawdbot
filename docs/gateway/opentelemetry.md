@@ -130,10 +130,11 @@ each request frame:
 ```
 
 The Gateway creates a child request context that preserves the upstream trace
-ID and sampling flags. Agent, harness, model-call, and provider spans created
-inside the request remain on that trace. This allows a local experiment runner
-to create one Langfuse/OpenTelemetry trace per dataset item and correlate the
-corresponding OpenClaw execution.
+ID and sampling flags. Agent, harness, model-call, provider, tool-execution, and
+exec spans created inside the request remain on that trace, including spans
+recorded after their parent run has already finished. This allows a local
+experiment runner to create one Langfuse/OpenTelemetry trace per dataset item and
+correlate the corresponding OpenClaw execution.
 
 Trace context is request-scoped, not connection-scoped. On a long-lived
 WebSocket, generate or inject the appropriate `traceparent` independently for

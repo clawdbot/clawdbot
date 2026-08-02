@@ -341,15 +341,6 @@ export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | und
   return isFiniteTimestamp(next) ? next : undefined;
 }
 
-/** Computes the previous effective cron timestamp, including per-job staggering. */
-export function computeJobPreviousRunAtMs(job: CronJob, nowMs: number): number | undefined {
-  if (!isJobEnabled(job) || job.schedule.kind !== "cron") {
-    return undefined;
-  }
-  const previous = computeStaggeredCronPreviousRunAtMs(job, nowMs);
-  return isFiniteTimestamp(previous) ? previous : undefined;
-}
-
 /** Computes the latest effective cron timestamp at or before the supplied time. */
 export function computeJobPreviousRunAtOrBeforeMs(job: CronJob, nowMs: number): number | undefined {
   if (!isJobEnabled(job) || job.schedule.kind !== "cron") {
@@ -384,7 +375,7 @@ export function recordScheduleComputeError(params: {
       "cron: auto-disabled job after repeated schedule errors",
     );
 
-    const notifyText = `⚠️ Cron job "${job.name}" has been auto-disabled after ${errorCount} consecutive schedule errors. Last error: ${errText}`;
+    const notifyText = `⚠️ Automation "${job.name}" has been auto-disabled after ${errorCount} consecutive schedule errors. Last error: ${errText}`;
     const notify = () => {
       state.deps.enqueueSystemEvent(notifyText, {
         agentId: job.agentId,

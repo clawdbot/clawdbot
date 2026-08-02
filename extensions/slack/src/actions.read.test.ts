@@ -63,10 +63,40 @@ describe("Slack read actions", () => {
       ts: "171234.567",
       limit: undefined,
       latest: undefined,
-      oldest: undefined,
+      oldest: "171234.567",
     });
     expect(client.conversations.history).not.toHaveBeenCalled();
     expect(result.messages.map((message) => message.ts)).toEqual(["171234.890", "171235.000"]);
+  });
+
+  it("excludes the parent before applying the thread page limit", async () => {
+    const client = createClient();
+    const threadMessages = [
+      { ts: "171234.567", text: "parent" },
+      { ts: "171234.890", text: "first reply" },
+      { ts: "171235.000", text: "second reply" },
+    ];
+    client.conversations.replies.mockImplementationOnce(
+      ({ oldest, limit }: { oldest?: string; limit?: number }) => {
+        const eligible = threadMessages.filter((message) => !oldest || message.ts > oldest);
+        return {
+          messages: eligible.slice(0, limit),
+          has_more: limit !== undefined && eligible.length > limit,
+        };
+      },
+    );
+
+    await expect(
+      readSlackMessages("C1", {
+        client,
+        threadId: "171234.567",
+        limit: 1,
+        token: "xoxb-test",
+      }),
+    ).resolves.toEqual({
+      messages: [{ ts: "171234.890", text: "first reply" }],
+      hasMore: true,
+    });
   });
 
   it("filters a specific thread reply by messageId", async () => {
@@ -90,10 +120,51 @@ describe("Slack read actions", () => {
       limit: 1,
       inclusive: true,
       latest: "171234.890",
-      oldest: undefined,
+      oldest: "171234.890",
     });
     expect(result).toEqual({
       messages: [{ ts: "171234.890", text: "reply" }],
+      hasMore: false,
+    });
+  });
+
+  it("reads an exact reply directly after more than a full thread page", async () => {
+    const client = createClient();
+    const threadMessages = Array.from({ length: 102 }, (_, index) => ({
+      ts: `171234.${String(index).padStart(6, "0")}`,
+      text: index === 101 ? "requested reply" : `message ${String(index)}`,
+    }));
+    const messageId = "171234.000101";
+    client.conversations.replies.mockImplementationOnce(
+      ({
+        oldest,
+        latest,
+        inclusive,
+        limit,
+      }: {
+        oldest?: string;
+        latest?: string;
+        inclusive?: boolean;
+        limit?: number;
+      }) => {
+        const eligible = threadMessages.filter(
+          (message) =>
+            (!oldest || message.ts > oldest || (inclusive && message.ts === oldest)) &&
+            (!latest || message.ts < latest || (inclusive && message.ts === latest)),
+        );
+        return { messages: eligible.slice(0, limit), has_more: eligible.length > (limit ?? 0) };
+      },
+    );
+
+    await expect(
+      readSlackMessages("C1", {
+        client,
+        threadId: "171234.000000",
+        messageId,
+        token: "xoxb-test",
+      }),
+    ).resolves.toEqual({
+      messages: [{ ts: messageId, text: "requested reply" }],
       hasMore: false,
     });
   });
@@ -206,7 +277,7 @@ describe("Slack read actions", () => {
       limit: 1,
       inclusive: true,
       latest: "171234.890",
-      oldest: undefined,
+      oldest: "171234.890",
     });
     expect(result).toEqual({
       messages: [{ ts: "171234.890", text: "exact" }],
@@ -302,9 +373,28 @@ describe("Slack read actions", () => {
       ts: "1712345678.000001",
       limit: undefined,
       latest: "1712320496",
-      oldest: "1712340000.000001",
+      oldest: "1712345678.000001",
     });
     expect(client.conversations.history).not.toHaveBeenCalled();
+  });
+
+  it("preserves an explicit thread lower bound after the parent timestamp", async () => {
+    const client = createClient();
+
+    await readSlackMessages("C1", {
+      client,
+      threadId: "1712345678.000001",
+      after: "1712345678.000002",
+      token: "xoxb-test",
+    });
+
+    expect(client.conversations.replies).toHaveBeenCalledWith({
+      channel: "C1",
+      ts: "1712345678.000001",
+      limit: undefined,
+      latest: undefined,
+      oldest: "1712345678.000002",
+    });
   });
 
   it("routes read-mode actions through the bounded lookup client", async () => {

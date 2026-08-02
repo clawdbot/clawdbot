@@ -224,6 +224,13 @@ export async function loadSubagentSpawnModuleForTest(params: {
       params.dispatchGatewayMethodInProcessMock?.(...args),
     hasInProcessGatewayContext: () => Boolean(params.hasInProcessGatewayContextMock?.()),
     buildSubagentSystemPrompt: () => "system-prompt",
+    throwIfSpawnAborted: (signal?: AbortSignal) => {
+      if (!signal?.aborted) {
+        return;
+      }
+      const reason = (signal as { reason?: unknown }).reason;
+      throw reason instanceof Error ? reason : new Error("subagent spawn interrupted.");
+    },
     forkSessionEntryFromParent:
       params.forkSessionEntryFromParentMock ??
       (async () => {

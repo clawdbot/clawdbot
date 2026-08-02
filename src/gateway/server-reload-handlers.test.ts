@@ -25,10 +25,7 @@ import {
   setGatewaySigusr1RestartPolicy,
   setPreRestartDeferralCheck,
 } from "../infra/restart.js";
-import {
-  pinActivePluginChannelRegistry,
-  releasePinnedPluginChannelRegistry,
-} from "../plugins/runtime.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import {
   enqueueCommandInLane,
   getCommandLaneSnapshot,
@@ -1300,6 +1297,7 @@ describe("gateway hot reload model state", () => {
       { waitForReplacement: true },
     );
     expect(hoisted.refreshPreparedModelRuntimeSnapshots).toHaveBeenCalledWith(nextConfig, {
+      allowGatewaySubagentBinding: true,
       catalogMode: "static",
     });
     expect(hoisted.warmCurrentProviderAuthStateOffMainThread).toHaveBeenCalledWith(nextConfig);
@@ -2694,11 +2692,11 @@ describe("gateway channel hot reload handlers", () => {
         source: "test",
       },
     ]);
-    pinActivePluginChannelRegistry(registry);
+    setActivePluginRegistry(registry);
     try {
       await run();
     } finally {
-      releasePinnedPluginChannelRegistry(registry);
+      resetPluginRuntimeStateForTest();
     }
   }
 
@@ -3039,7 +3037,7 @@ describe("gateway channel hot reload handlers", () => {
       }),
     };
 
-    pinActivePluginChannelRegistry(registry);
+    setActivePluginRegistry(registry);
     try {
       const plan = buildGatewayReloadPlan(["channels.whatsapp.selfChatMode"]);
       const { applyHotReload } = createReloadHandlersForTest(undefined, channels);
@@ -3050,7 +3048,7 @@ describe("gateway channel hot reload handlers", () => {
 
       expect(events).toEqual(["stop:whatsapp", "start:whatsapp"]);
     } finally {
-      releasePinnedPluginChannelRegistry(registry);
+      resetPluginRuntimeStateForTest();
     }
   });
 
@@ -5589,7 +5587,7 @@ describe("deferred channel reload abort generation", () => {
       warn: vi.fn(),
       error: vi.fn(),
     };
-    pinActivePluginChannelRegistry(registry);
+    setActivePluginRegistry(registry);
     const reloader = startManagedGatewayConfigReloader({
       initialConfig,
       readSnapshot: vi.fn() as never,
@@ -5636,7 +5634,7 @@ describe("deferred channel reload abort generation", () => {
       if (!reloaderStopped) {
         await reloader.stop();
       }
-      releasePinnedPluginChannelRegistry(registry);
+      resetPluginRuntimeStateForTest();
     }
   });
 

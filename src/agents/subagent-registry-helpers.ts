@@ -13,13 +13,11 @@ import { patchSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { defaultRuntime } from "../runtime.js";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
-import { withSubagentOutcomeTiming } from "./subagent-announce-output.js";
 import { getDeliveryAttemptCount, getDeliveryLastError } from "./subagent-delivery-state.js";
 import {
   SUBAGENT_ENDED_REASON_ERROR,
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
-import { shouldUpdateRunOutcome } from "./subagent-registry-completion.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
   getSubagentSessionRuntimeMs,
@@ -79,8 +77,8 @@ function formatAnnounceGiveUpLogField(value: string): string {
 /** Logs a sanitized final give-up line for failed subagent announce delivery. */
 export function logAnnounceGiveUp(entry: SubagentRunRecord, reason: "retry-limit" | "expiry") {
   const retryCount = getDeliveryAttemptCount(entry);
-  const endedAgoMs =
-    typeof entry.endedAt === "number" ? Math.max(0, Date.now() - entry.endedAt) : undefined;
+  const endedAt = entry.execution.endedAt;
+  const endedAgoMs = typeof endedAt === "number" ? Math.max(0, Date.now() - endedAt) : undefined;
   const endedAgoLabel = endedAgoMs != null ? `${Math.round(endedAgoMs / 1000)}s` : "n/a";
   const lastDeliveryError = getDeliveryLastError(entry);
   const deliveryError = lastDeliveryError
@@ -101,8 +99,7 @@ export function markSpawnFailureCleanupTerminalState(
     entry.spawnFailureCleanup.nextAttemptAt = undefined;
     entry.spawnFailureCleanup.lastError = null;
   }
-  entry.endedAt = params.now;
-  entry.outcome = { status: "error", error: params.error };
+  const outcome = { status: "error" as const, error: params.error };
   entry.endedReason = SUBAGENT_ENDED_REASON_ERROR;
   entry.cleanupHandled = true;
   entry.cleanupCompletedAt = params.now;
@@ -110,12 +107,17 @@ export function markSpawnFailureCleanupTerminalState(
     ...(entry.execution ?? { status: "interrupted" as const }),
     status: "terminal",
     endedAt: params.now,
-    outcome: entry.outcome,
+    outcome,
   };
 }
 
 export function isTerminalSpawnFailureCleanupStatus(status: unknown): boolean {
-  return status === "deleted" || status === "missing" || status === "replaced";
+  return (
+    status === "deleted" ||
+    status === "missing" ||
+    status === "replaced" ||
+    status === "terminal_registered"
+  );
 }
 
 export function failedSpawnCleanupTerminalError(status: "missing" | "replaced"): string {
@@ -146,7 +148,9 @@ export async function persistSubagentSessionTiming(
   const storePath = resolveStorePath(cfg.session?.store, { agentId });
   const startedAt = getSubagentSessionStartedAt(entry);
   const endedAt =
-    typeof entry.endedAt === "number" && Number.isFinite(entry.endedAt) ? entry.endedAt : undefined;
+    typeof entry.execution.endedAt === "number" && Number.isFinite(entry.execution.endedAt)
+      ? entry.execution.endedAt
+      : undefined;
   const runtimeMs =
     endedAt !== undefined
       ? getSubagentSessionRuntimeMs(entry, endedAt)
@@ -163,7 +167,7 @@ export async function persistSubagentSessionTiming(
       }
       if (status === "killed") {
         const existingCompletion = resolveCompletionFromSessionEntry(sessionEntry, Date.now(), {
-          notBeforeMs: entry.startedAt ?? entry.createdAt,
+          notBeforeMs: entry.execution.startedAt ?? entry.createdAt,
         });
         if (existingCompletion && existingCompletion.reason !== SUBAGENT_ENDED_REASON_KILLED) {
           // A provider result already reached durable session state. The kill
@@ -300,38 +304,6 @@ export function reconcileOrphanedRun(params: {
   runs: Map<string, SubagentRunRecord>;
   resumedRuns: Set<string>;
 }) {
-  const now = Date.now();
-  let changed = false;
-  if (typeof params.entry.endedAt !== "number") {
-    params.entry.endedAt = now;
-    changed = true;
-  }
-  const orphanOutcome = withSubagentOutcomeTiming(
-    {
-      status: "error",
-      error: `orphaned subagent run (${params.reason})`,
-    },
-    {
-      startedAt: params.entry.startedAt,
-      endedAt: params.entry.endedAt,
-    },
-  );
-  if (shouldUpdateRunOutcome(params.entry.outcome, orphanOutcome)) {
-    params.entry.outcome = orphanOutcome;
-    changed = true;
-  }
-  if (params.entry.endedReason !== SUBAGENT_ENDED_REASON_ERROR) {
-    params.entry.endedReason = SUBAGENT_ENDED_REASON_ERROR;
-    changed = true;
-  }
-  if (params.entry.cleanupHandled !== true) {
-    params.entry.cleanupHandled = true;
-    changed = true;
-  }
-  if (typeof params.entry.cleanupCompletedAt !== "number") {
-    params.entry.cleanupCompletedAt = now;
-    changed = true;
-  }
   const shouldDeleteAttachments =
     params.entry.cleanup === "delete" || !params.entry.retainAttachmentsOnKeep;
   if (shouldDeleteAttachments) {
@@ -339,7 +311,7 @@ export function reconcileOrphanedRun(params: {
   }
   const removed = params.runs.delete(params.runId);
   params.resumedRuns.delete(params.runId);
-  if (!removed && !changed) {
+  if (!removed) {
     return false;
   }
   defaultRuntime.log(
@@ -433,7 +405,9 @@ export function backfillCollectorArchiveAtMs(
     return false;
   }
   const endedAt =
-    typeof entry.endedAt === "number" && Number.isFinite(entry.endedAt) ? entry.endedAt : undefined;
+    typeof entry.execution.endedAt === "number" && Number.isFinite(entry.execution.endedAt)
+      ? entry.execution.endedAt
+      : undefined;
   const capturedAt =
     endedAt === undefined && !entry.collectorCompletion
       ? undefined

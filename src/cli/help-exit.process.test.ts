@@ -215,6 +215,10 @@ type CliProcessFailure = Error & {
   stdout?: string;
 };
 describe("CLI help process exit", () => {
+  it("disables esbuild worker IPC for source CLI children", () => {
+    expect(process.env.ESBUILD_WORKER_THREADS).toBe("0");
+  });
+
   it("exits promptly after root --help", async () => {
     // Keep this precomputed-help case off plugin discovery; plugin-sensitive root help is covered
     // separately, so the shared child timeout remains a deadlock guard rather than a startup SLO.
@@ -247,6 +251,19 @@ describe("CLI help process exit", () => {
         }),
       ]),
     );
+  });
+
+  it("treats --help as a required option value when Commander does", async () => {
+    let failure: CliProcessFailure | undefined;
+    try {
+      await runCliProcess({ args: ["secrets", "apply", "--from", "--help"], config: {} });
+    } catch (error) {
+      failure = error as CliProcessFailure;
+    }
+
+    expect(failure?.code).toBe(1);
+    expect(failure?.stdout ?? "").not.toContain("Usage:");
+    expect(failure?.stderr).toContain("plan file not found: --help");
   });
 
   it.each(LAZY_GROUP_HELP_CASES)(
@@ -348,6 +365,13 @@ describe("JSON console style process output", () => {
     expect(output).not.toHaveProperty("message");
   });
 
+  it("keeps config file output as one raw path", async () => {
+    const result = await runCliProcess({ args: ["config", "file"], config: loggingConfig });
+
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toBe(`${result.fixture.configPath}\n`);
+  });
+
   it("keeps typed recommendation machine output as a raw array", async () => {
     const result = await runCliProcess({
       args: ["onboard", "recommendations", "--json"],
@@ -356,6 +380,19 @@ describe("JSON console style process output", () => {
 
     expect(result.stderr).toBe("");
     expect(JSON.parse(result.stdout)).toEqual([]);
+  });
+
+  it("emits one JSON object for baseline setup", async () => {
+    const result = await runCliProcess({ args: ["setup", "--baseline", "--json"], config: {} });
+
+    expect(result.stderr).toBe("");
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      ok: true,
+      configPath: expect.any(String),
+      configStatus: "updated",
+      workspaceDir: expect.any(String),
+      sessionsDir: expect.any(String),
+    });
   });
 
   it("structures invalid log-level environment warnings", async () => {

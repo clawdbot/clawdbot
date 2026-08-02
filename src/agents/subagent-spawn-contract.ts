@@ -73,6 +73,7 @@ export type SpawnSubagentContext = {
   inheritedToolAllowlist?: string[];
   inheritedToolDenylist?: string[];
   requesterRunId?: string;
+  signal?: AbortSignal;
 };
 
 export type SpawnSubagentResult = {

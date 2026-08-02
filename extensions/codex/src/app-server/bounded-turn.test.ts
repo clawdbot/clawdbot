@@ -132,6 +132,20 @@ function createClientFactory(
     if (method === "thread/inject_items") {
       return {};
     }
+    if (method === "turn/interrupt") {
+      queueMicrotask(() => {
+        for (const handler of notificationHandlers) {
+          handler({
+            method: "turn/completed",
+            params: {
+              threadId: "thread-finalizer",
+              turn: { ...inProgressTurnResult().turn, status: "interrupted" },
+            },
+          });
+        }
+      });
+      return {};
+    }
     if (method === "turn/start") {
       if (options.completeTurn === false) {
         return inProgressTurnResult();
@@ -206,6 +220,7 @@ function createClientFactory(
       };
     }),
     addRequestHandler: vi.fn(() => () => undefined),
+    addCloseHandler: vi.fn(() => () => undefined),
     close: vi.fn(),
   } as unknown as CodexAppServerClient;
   const factory = vi.fn(async () => client) as unknown as CodexAppServerClientFactory;

@@ -1,14 +1,26 @@
 // Slack plugin module implements thread resolution behavior.
-import type { WebClient as SlackWebClient } from "@slack/web-api";
+import {
+  type WebClient as SlackWebClient,
+  WebAPIHTTPError,
+  WebAPIRateLimitedError,
+  WebAPIRequestError,
+} from "@slack/web-api";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
+import {
+  collectErrorGraphCandidates,
+  extractErrorCode,
+  readErrorName,
+} from "openclaw/plugin-sdk/error-runtime";
 import {
   asDateTimestampMs,
   parseFiniteNumber,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
+import { classifyTransientNetworkErrorCode } from "openclaw/plugin-sdk/retry-runtime";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { formatSlackError } from "../errors.js";
 import type { SlackMessageEvent } from "../types.js";
+import type { SlackIngressTurnLifecycle } from "./ingress.js";
 
 type ThreadTsCacheEntry = {
   threadTs: string | null;
@@ -28,30 +40,46 @@ const markAmbiguousThreadReply = (message: SlackMessageEvent): SlackMessageEvent
   _ambiguousThreadReply: true,
 });
 
+function isTransientSlackThreadLookupError(error: unknown): boolean {
+  if (error instanceof WebAPIRateLimitedError) {
+    return true;
+  }
+  if (error instanceof WebAPIHTTPError) {
+    return (
+      error.statusCode === 408 ||
+      error.statusCode === 429 ||
+      (error.statusCode >= 500 && error.statusCode < 600)
+    );
+  }
+  if (!(error instanceof WebAPIRequestError)) {
+    return false;
+  }
+  return collectErrorGraphCandidates(error.original, (current) => [
+    current.cause,
+    current.error,
+    current.original,
+  ]).some(
+    (candidate) =>
+      classifyTransientNetworkErrorCode(extractErrorCode(candidate)) ||
+      readErrorName(candidate) === "TimeoutError",
+  );
+}
+
 async function resolveThreadTsFromHistory(params: {
   client: SlackWebClient;
   channelId: string;
   messageTs: string;
 }) {
-  try {
-    const response = (await params.client.conversations.history({
-      channel: params.channelId,
-      latest: params.messageTs,
-      oldest: params.messageTs,
-      inclusive: true,
-      limit: 1,
-    })) as { messages?: Array<{ ts?: string; thread_ts?: string }> };
-    const message =
-      response.messages?.find((entry) => entry.ts === params.messageTs) ?? response.messages?.[0];
-    return normalizeThreadTs(message?.thread_ts);
-  } catch (err) {
-    if (shouldLogVerbose()) {
-      logVerbose(
-        `slack inbound: failed to resolve thread_ts via conversations.history for channel=${params.channelId} ts=${params.messageTs}: ${formatSlackError(err)}`,
-      );
-    }
-    return undefined;
-  }
+  const response = (await params.client.conversations.history({
+    channel: params.channelId,
+    latest: params.messageTs,
+    oldest: params.messageTs,
+    inclusive: true,
+    limit: 1,
+  })) as { messages?: Array<{ ts?: string; thread_ts?: string }> };
+  const message =
+    response.messages?.find((entry) => entry.ts === params.messageTs) ?? response.messages?.[0];
+  return normalizeThreadTs(message?.thread_ts);
 }
 
 export function createSlackThreadTsResolver(params: {
@@ -103,6 +131,7 @@ export function createSlackThreadTsResolver(params: {
     resolve: async (request: {
       message: SlackMessageEvent;
       source: "message" | "app_mention";
+      turnAdoptionLifecycle?: SlackIngressTurnLifecycle;
     }): Promise<SlackMessageEvent> => {
       const { message } = request;
       if (!message.parent_user_id || message.thread_ts || !message.ts) {
@@ -135,6 +164,19 @@ export function createSlackThreadTsResolver(params: {
       let resolved: string | undefined;
       try {
         resolved = await pending;
+      } catch (err) {
+        if (shouldLogVerbose()) {
+          logVerbose(
+            `slack inbound: failed to resolve thread_ts via conversations.history for channel=${message.channel} ts=${message.ts}: ${formatSlackError(err)}`,
+          );
+        }
+        if (isTransientSlackThreadLookupError(err)) {
+          if (request.turnAdoptionLifecycle) {
+            // The already-acknowledged durable ingress owner retries without dropping the turn.
+            throw err;
+          }
+          return markAmbiguousThreadReply(message);
+        }
       } finally {
         inflight.delete(cacheKey);
       }

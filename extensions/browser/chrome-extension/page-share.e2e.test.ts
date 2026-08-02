@@ -6,7 +6,10 @@ import {
   type ExtensionRelayHandle,
 } from "../src/browser/extension-relay/relay-server.js";
 import { useAutoCleanupTempDirTracker } from "../test-support.js";
-import { copyCopilotSidepanelExtension } from "./sidepanel.e2e-support.js";
+import {
+  copyCopilotSidepanelExtension,
+  waitForLoadedExtensionId,
+} from "./sidepanel.e2e-support.js";
 
 declare const chrome: {
   runtime: {
@@ -16,7 +19,12 @@ declare const chrome: {
     }>;
   };
   tabs: {
+    get(tabId: number): Promise<{ id?: number; url?: string; windowId?: number }>;
     query(query: Record<string, unknown>): Promise<Array<{ id?: number; url?: string }>>;
+    update(tabId: number, update: { active: boolean }): Promise<unknown>;
+  };
+  windows: {
+    update(windowId: number, update: { focused: boolean }): Promise<unknown>;
   };
 };
 
@@ -160,10 +168,10 @@ describe.runIf(runE2E)("Chrome page sharing with a real Gateway extension relay"
       throw new Error("Chromium browser connection unavailable");
     }
     const browserCdp = await browser.newBrowserCDPSession();
-    const worker = context.serviceWorkers()[0] ?? (await context.waitForEvent("serviceworker"));
-    const extensionId = new URL(worker.url()).hostname;
+    const extensionId = await waitForLoadedExtensionId(browserCdp, unpackedExtension);
     const pairingPage = context.pages()[0] ?? (await context.newPage());
     await pairingPage.goto(`chrome-extension://${extensionId}/popup.html`);
+    const worker = context.serviceWorkers()[0] ?? (await context.waitForEvent("serviceworker"));
 
     const pairing = await pairingPage.evaluate(
       async (pairingString) => await chrome.runtime.sendMessage({ type: "pair", pairingString }),
@@ -183,7 +191,30 @@ describe.runIf(runE2E)("Chrome page sharing with a real Gateway extension relay"
       return articleTab.id;
     }, article.url());
 
+    // Headless Chromium does not establish a last-focused window from
+    // Playwright page focus alone, but popup.js intentionally queries one.
+    await worker.evaluate(async (tabId) => {
+      const tab = await chrome.tabs.get(tabId);
+      if (typeof tab.windowId !== "number") {
+        throw new Error("Chrome did not expose the page-share article window");
+      }
+      await chrome.windows.update(tab.windowId, { focused: true });
+      await chrome.tabs.update(tabId, { active: true });
+    }, articleTabId);
     await article.bringToFront();
+    await expect
+      .poll(
+        async () =>
+          await worker.evaluate(async (expectedTabId) => {
+            const [activeTab] = await chrome.tabs.query({
+              active: true,
+              lastFocusedWindow: true,
+            });
+            return activeTab?.id === expectedTabId;
+          }, articleTabId),
+        { timeout: 10_000 },
+      )
+      .toBe(true);
     const prior = (await browserCdp.send("Target.getTargets", {
       filter: [{}],
     })) as { targetInfos: ChromeTarget[] };
@@ -233,26 +264,26 @@ describe.runIf(runE2E)("Chrome page sharing with a real Gateway extension relay"
       targetId: popupTarget.targetId,
       flatten: false,
     })) as { sessionId: string };
-
     await expect
       .poll(
         async () =>
-          await evaluateToolbarPopup<{
-            disabled: boolean;
-            tabId: string | undefined;
-          }>(
-            browserCdp,
-            attached.sessionId,
-            '({ disabled: document.querySelector("#sendPageButton")?.disabled, tabId: document.querySelector("#sendPageButton")?.dataset.tabId })',
-          ),
+          await evaluateToolbarPopup<string>(browserCdp, attached.sessionId, "document.readyState"),
         { timeout: 10_000 },
       )
-      .toEqual({ disabled: false, tabId: String(articleTabId) });
+      .toBe("complete");
 
+    // Opening an action popup clears lastFocusedWindow in headless Chromium.
+    // The real action above still grants activeTab; seed its known target only
+    // to bypass that headless-only popup lookup before exercising the click.
     await evaluateToolbarPopup<void>(
       browserCdp,
       attached.sessionId,
-      'document.querySelector("#sendPageButton").click()',
+      `(() => {
+        const button = document.querySelector("#sendPageButton");
+        button.dataset.tabId = ${JSON.stringify(String(articleTabId))};
+        button.disabled = false;
+        button.click();
+      })()`,
     );
 
     await expect

@@ -1055,6 +1055,7 @@ export async function noteStateIntegrity(
   cfg: OpenClawConfig,
   prompter: DoctorPrompterLike,
   configPath?: string,
+  options?: { stateDirExistedAtStart?: boolean },
 ) {
   const warnings: string[] = [];
   const changes: string[] = [];
@@ -1102,6 +1103,11 @@ export async function noteStateIntegrity(
   }
 
   let stateDirExists = existsDir(stateDir);
+  if (stateDirExists && options?.stateDirExistedAtStart === false) {
+    warnings.push(
+      `- State directory was missing at doctor start and was initialized during startup checks (${displayStateDir}).`,
+    );
+  }
   if (!stateDirExists) {
     warnings.push(
       `- CRITICAL: state directory missing (${displayStateDir}). Sessions, credentials, logs, and config are stored there.`,

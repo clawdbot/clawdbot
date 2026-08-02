@@ -32,7 +32,7 @@ overrides:
   qs: 6.15.3
   sharp: 0.35.3
   node-domexception: npm:@nolyfill/domexception@1.0.28
-  typebox: 1.3.8
+  typebox: 1.3.6
   tar: 7.5.22
   tough-cookie: 5.1.2
   yauzl: 3.4.0
@@ -211,8 +211,8 @@ importers:
         specifier: 4.11.0
         version: 4.11.0
       typebox:
-        specifier: 1.3.8
-        version: 1.3.8
+        specifier: 1.3.6
+        version: 1.3.6
       typescript:
         specifier: 6.0.3
         version: 6.0.3
@@ -316,6 +316,9 @@ importers:
       markdown-it:
         specifier: 14.3.0
         version: 14.3.0
+      marked:
+        specifier: 18.0.7
+        version: 18.0.7
       oxfmt:
         specifier: 0.60.0
         version: 0.60.0
@@ -524,8 +527,8 @@ importers:
         specifier: 1.62.0
         version: 1.62.0
       typebox:
-        specifier: 1.3.8
-        version: 1.3.8
+        specifier: 1.3.6
+        version: 1.3.6
       ws:
         specifier: 8.21.1
         version: 8.21.1
@@ -577,8 +580,8 @@ importers:
         specifier: 3.3.3
         version: 3.3.3
       typebox:
-        specifier: 1.3.8
-        version: 1.3.8
+        specifier: 1.3.6
+        version: 1.3.6
       ws:
         specifier: 8.21.1
         version: 8.21.1
@@ -636,8 +639,8 @@ importers:
         specifier: 1.7.1
         version: 1.7.1
       typebox:
-        specifier: 1.3.8
-        version: 1.3.8
+        specifier: 1.3.6
+        version: 1.3.6
       ws:
         specifier: 8.21.1
         version: 8.21.1
@@ -775,8 +778,8 @@ importers:
         specifier: 1.62.0
         version: 1.62.0
       typebox:
-        specifier: 1.3.8
-        version: 1.3.8
+        specifier: 1.3.6
+        version: 1.3.6
       zod:
         specifier: 4.4.3
         version: 4.4.3
@@ -812,8 +815,8 @@ importers:
         specifier: 7.0.6
         version: 7.0.6
       typebox:
-        specifier: 1.3.8
-        version: 1.3.8
+        specifier: 1.3.6
+        version: 1.3.6
       undici:
         specifier: 8.9.0
         version: 8.9.0
@@ -886,8 +889,8 @@ importers:
         specifier: 2.1.1
         version: 2.1.1
       typebox:
-        specifier: 1.3.8
-        version: 1.3.8
+        specifier: 1.3.6
+        version: 1.3.6
       zod:
         specifier: 4.4.3
         version: 4.4.3
@@ -905,8 +908,8 @@ importers:
         specifier: 10.2.5
         version: 10.2.5
       typebox:
-        specifier: 1.3.8
-        version: 1.3.8
+        specifier: 1.3.6
+        version: 1.3.6
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -915,8 +918,8 @@ importers:
   extensions/firecrawl:
     dependencies:
       typebox:
-        specifier: 1.3.8
-        version: 1.3.8
+        specifier: 1.3.6
+        version: 1.3.6
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -955,6 +958,9 @@ importers:
       '@google/genai':
         specifier: 2.13.0
         version: 2.13.0(@modelcontextprotocol/sdk@1.30.0(supports-color@10.2.2)(zod@4.4.3))(supports-color@10.2.2)
+      dotenv:
+        specifier: 17.4.2
+        version: 17.4.2
       google-auth-library:
         specifier: 10.9.1
         version: 10.9.1(supports-color@10.2.2)
@@ -972,8 +978,8 @@ importers:
         specifier: 9.3.0
         version: 9.3.0
       typebox:
-        specifier: 1.3.8
-        version: 1.3.8
+        specifier: 1.3.6
+        version: 1.3.6
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1025,8 +1031,8 @@ importers:
   extensions/imessage:
     dependencies:
       typebox:
-        specifier: 1.3.8
-        version: 1.3.8
+        specifier: 1.3.6
+        version: 1.3.6
       zod:
         specifier: 4.4.3
         version: 4.4.3
@@ -1034,6 +1040,9 @@ importers:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/inworld:
     devDependencies:
@@ -1118,8 +1127,8 @@ importers:
   extensions/llm-task:
     dependencies:
       typebox:
-        specifier: 1.3.8
-        version: 1.3.8
+        specifier: 1.3.6
+        version: 1.3.6
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1133,8 +1142,8 @@ importers:
         specifier: 2026.6.11
         version: 2026.6.11
       typebox:
-        specifier: 1.3.8
-        version: 1.3.8
+        specifier: 1.3.6
+        version: 1.3.6
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1176,8 +1185,8 @@ importers:
         specifier: 11.14.0
         version: 11.14.0(supports-color@10.2.2)
       typebox:
-        specifier: 1.3.8
-        version: 1.3.8
+        specifier: 1.3.6
+        version: 1.3.6
       zod:
         specifier: 4.4.3
         version: 4.4.3
@@ -1223,8 +1232,8 @@ importers:
         specifier: 7.3.1
         version: 7.3.1
       typebox:
-        specifier: 1.3.8
-        version: 1.3.8
+        specifier: 1.3.6
+        version: 1.3.6
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1245,8 +1254,8 @@ importers:
         specifier: 6.49.0
         version: 6.49.0(@aws-sdk/credential-provider-node@3.972.72)(@smithy/hash-node@4.4.14)(@smithy/signature-v4@5.6.10)(ws@8.21.1)(zod@4.4.3)
       typebox:
-        specifier: 1.3.8
-        version: 1.3.8
+        specifier: 1.3.6
+        version: 1.3.6
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1261,8 +1270,8 @@ importers:
         specifier: 7.0.6
         version: 7.0.6
       typebox:
-        specifier: 1.3.8
-        version: 1.3.8
+        specifier: 1.3.6
+        version: 1.3.6
       yaml:
         specifier: 2.9.0
         version: 2.9.0
@@ -1357,8 +1366,8 @@ importers:
         specifier: 5.2.1
         version: 5.2.1(supports-color@10.2.2)
       typebox:
-        specifier: 1.3.8
-        version: 1.3.8
+        specifier: 1.3.6
+        version: 1.3.6
       zod:
         specifier: 4.4.3
         version: 4.4.3
@@ -1455,8 +1464,8 @@ importers:
   extensions/ollama:
     dependencies:
       typebox:
-        specifier: 1.3.8
-        version: 1.3.8
+        specifier: 1.3.6
+        version: 1.3.6
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1568,8 +1577,8 @@ importers:
   extensions/qa-channel:
     dependencies:
       typebox:
-        specifier: 1.3.8
-        version: 1.3.8
+        specifier: 1.3.6
+        version: 1.3.6
       zod:
         specifier: 4.4.3
         version: 4.4.3
@@ -1592,9 +1601,6 @@ importers:
       '@openclaw/crabline':
         specifier: 0.1.11
         version: 0.1.11
-      '@openclaw/matrix':
-        specifier: workspace:*
-        version: link:../matrix
       p-limit:
         specifier: 7.3.1
         version: 7.3.1
@@ -1623,6 +1629,9 @@ importers:
       '@openclaw/discord':
         specifier: workspace:*
         version: link:../discord
+      '@openclaw/matrix':
+        specifier: workspace:*
+        version: link:../matrix
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
@@ -1778,8 +1787,8 @@ importers:
         specifier: 7.0.6
         version: 7.0.6
       typebox:
-        specifier: 1.3.8
-        version: 1.3.8
+        specifier: 1.3.6
+        version: 1.3.6
       undici:
         specifier: 7.28.0
         version: 7.28.0
@@ -1832,8 +1841,8 @@ importers:
   extensions/tavily:
     dependencies:
       typebox:
-        specifier: 1.3.8
-        version: 1.3.8
+        specifier: 1.3.6
+        version: 1.3.6
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1842,8 +1851,8 @@ importers:
   extensions/teams-meetings:
     dependencies:
       typebox:
-        specifier: 1.3.8
-        version: 1.3.8
+        specifier: 1.3.6
+        version: 1.3.6
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1864,8 +1873,8 @@ importers:
         specifier: 1.45.1
         version: 1.45.1(supports-color@10.2.2)
       typebox:
-        specifier: 1.3.8
-        version: 1.3.8
+        specifier: 1.3.6
+        version: 1.3.6
       undici:
         specifier: 8.9.0
         version: 8.9.0
@@ -1985,8 +1994,8 @@ importers:
   extensions/voice-call:
     dependencies:
       typebox:
-        specifier: 1.3.8
-        version: 1.3.8
+        specifier: 1.3.6
+        version: 1.3.6
       ws:
         specifier: 8.21.1
         version: 8.21.1
@@ -2051,8 +2060,8 @@ importers:
         specifier: 7.0.0-rc13
         version: 7.0.0-rc13(audio-decode@2.2.3)(sharp@0.35.3(@types/node@26.1.2))(supports-color@10.2.2)
       typebox:
-        specifier: 1.3.8
-        version: 1.3.8
+        specifier: 1.3.6
+        version: 1.3.6
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -2064,8 +2073,8 @@ importers:
   extensions/workboard:
     dependencies:
       typebox:
-        specifier: 1.3.8
-        version: 1.3.8
+        specifier: 1.3.6
+        version: 1.3.6
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -2080,8 +2089,8 @@ importers:
   extensions/xai:
     dependencies:
       typebox:
-        specifier: 1.3.8
-        version: 1.3.8
+        specifier: 1.3.6
+        version: 1.3.6
       ws:
         specifier: 8.21.1
         version: 8.21.1
@@ -2118,8 +2127,8 @@ importers:
   extensions/zalouser:
     dependencies:
       typebox:
-        specifier: 1.3.8
-        version: 1.3.8
+        specifier: 1.3.6
+        version: 1.3.6
       zca-js:
         specifier: 2.1.2
         version: 2.1.2
@@ -2137,8 +2146,8 @@ importers:
   extensions/zoom-meetings:
     dependencies:
       typebox:
-        specifier: 1.3.8
-        version: 1.3.8
+        specifier: 1.3.6
+        version: 1.3.6
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -2165,8 +2174,8 @@ importers:
         specifier: workspace:*
         version: link:../normalization-core
       typebox:
-        specifier: 1.3.8
-        version: 1.3.8
+        specifier: 1.3.6
+        version: 1.3.6
 
   packages/ai:
     dependencies:
@@ -2186,8 +2195,8 @@ importers:
         specifier: 0.1.7
         version: 0.1.7
       typebox:
-        specifier: 1.3.8
-        version: 1.3.8
+        specifier: 1.3.6
+        version: 1.3.6
 
   packages/gateway-client:
     dependencies:
@@ -2204,14 +2213,14 @@ importers:
   packages/gateway-protocol:
     dependencies:
       typebox:
-        specifier: 1.3.8
-        version: 1.3.8
+        specifier: 1.3.6
+        version: 1.3.6
 
   packages/llm-core:
     dependencies:
       typebox:
-        specifier: 1.3.8
-        version: 1.3.8
+        specifier: 1.3.6
+        version: 1.3.6
 
   packages/markdown-core:
     dependencies:
@@ -2290,6 +2299,9 @@ importers:
       libphonenumber-js:
         specifier: 1.13.9
         version: 1.13.9
+      typebox:
+        specifier: 1.3.6
+        version: 1.3.6
 
   packages/plugin-package-contract: {}
 
@@ -2322,6 +2334,9 @@ importers:
       chalk:
         specifier: 6.0.0
         version: 6.0.0
+      string-width:
+        specifier: 8.2.2
+        version: 8.2.2
 
   packages/tool-call-repair:
     dependencies:
@@ -8882,8 +8897,8 @@ packages:
     resolution: {integrity: sha512-faYHw0anBbc/kWF3zFTEnxSFOAGUX9GFbOBthvDdLsIlEoWOFOtS0zgCiQYwIskL9iGXZL3kAXD8OoZ4GmMATA==}
     engines: {node: '>= 18'}
 
-  typebox@1.3.8:
-    resolution: {integrity: sha512-xYaJgF0KMvBViKWRaKTAtfR6sDt/yH6xAjGAHXYJxKxUF4pVyPXZZhIlwOg6cDIE81N7L0pyIHs136RHBm6rLQ==}
+  typebox@1.3.6:
+    resolution: {integrity: sha512-Sc8RA0NCMEFmApHNU9ZMzqcpQj46She44J8ffpLM/bdhLNUZKq7DJumcLcsFx1gRmDfQPgCgOmFFJ7rcnfWNyA==}
 
   typescript@5.2.2:
     resolution: {integrity: sha512-mI4WrpHsbCIcwT9cF4FZvr80QUeKvsUsUvKDoR+X/7XHQH98xYD8YHZg7ANtz2GtZt/CBq2QJ0thkGJMHfqc1w==}
@@ -16499,7 +16514,7 @@ snapshots:
       media-typer: 1.1.1
       mime-types: 3.0.2
 
-  typebox@1.3.8: {}
+  typebox@1.3.6: {}
 
   typescript@5.2.2: {}
 

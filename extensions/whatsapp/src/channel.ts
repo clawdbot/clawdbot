@@ -39,7 +39,7 @@ import {
 import { getWhatsAppRuntime } from "./runtime.js";
 import { sendTypingWhatsApp } from "./send.js";
 import { resolveWhatsAppOutboundSessionRoute } from "./session-route.js";
-import { whatsappSetupAdapter, whatsappSetupContract } from "./setup-core.js";
+import { whatsappSetupContract } from "./setup-core.js";
 import { createWhatsAppPluginBase, whatsappSetupWizardProxy } from "./shared.js";
 import { detectWhatsAppLegacyStateMigrations } from "./state-migrations.js";
 import { collectWhatsAppStatusIssues } from "./status-issues.js";
@@ -89,7 +89,6 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
           resolveToolPolicy: resolveWhatsAppGroupToolPolicy,
         },
         setupWizard: whatsappSetupWizardProxy,
-        setup: whatsappSetupAdapter,
         setupContract: whatsappSetupContract,
         isConfigured: (account) => Boolean(account.authDir),
         isLinked: async (account) => await readWhatsAppAccountLinkState(account.authDir),
@@ -252,11 +251,13 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
                 selfId: { e164: null, jid: null, lid: null },
               };
           const linked =
-            typeof snapshot.linked === "boolean"
-              ? snapshot.linked
-              : auth.state === "unstable"
-                ? undefined
-                : auth.state === "linked";
+            snapshot.healthState === "logged-out"
+              ? false
+              : typeof snapshot.linked === "boolean"
+                ? snapshot.linked
+                : auth.state === "unstable"
+                  ? undefined
+                  : auth.state === "linked";
           const summaryAuthState =
             auth.state === "unstable"
               ? auth.state
@@ -295,12 +296,14 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
           };
         },
         resolveAccountSnapshot: ({ account, runtime }) => {
+          const locallyRevoked = runtime?.healthState === "logged-out";
           return {
             accountId: account.accountId,
             name: account.name,
             enabled: account.enabled,
             configured: Boolean(account.authDir),
             extra: {
+              ...(locallyRevoked ? { statusState: "not-linked", linked: false } : {}),
               connected: runtime?.connected ?? false,
               reconnectAttempts: runtime?.reconnectAttempts,
               lastConnectedAt: runtime?.lastConnectedAt ?? null,

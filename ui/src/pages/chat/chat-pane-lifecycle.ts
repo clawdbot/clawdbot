@@ -55,7 +55,33 @@ import { exportChatMarkdown } from "./export.ts";
 import { admitInitialTurnHandoff, admitInitialUserMessageHandoff } from "./initial-turn-handoff.ts";
 import { readChatSessionSnapshot } from "./session-message-cache.ts";
 
+const COMPOSER_PREFILL_ATTENTION_DURATION_MS = 1_200;
+const COMPOSER_PREFILL_ATTENTION_CLASS = "agent-chat__input--prefill-attention";
+
 export abstract class ChatPaneLifecycle extends ChatPaneBoard {
+  private clearComposerPrefillAttention(): void {
+    if (this.composerPrefillAttentionTimer !== null) {
+      window.clearTimeout(this.composerPrefillAttentionTimer);
+      this.composerPrefillAttentionTimer = null;
+    }
+    this.composerPrefillAttentionTarget?.classList.remove(COMPOSER_PREFILL_ATTENTION_CLASS);
+    this.composerPrefillAttentionTarget = null;
+  }
+
+  private showComposerPrefillAttention(input: HTMLElement): void {
+    this.clearComposerPrefillAttention();
+    // Force a fresh animation frame when the same mounted composer is prompted again.
+    void input.offsetWidth;
+    input.classList.add(COMPOSER_PREFILL_ATTENTION_CLASS);
+    this.composerPrefillAttentionTarget = input;
+    // Reduced motion disables animation events, so timer cleanup owns both modes.
+    this.composerPrefillAttentionTimer = window.setTimeout(() => {
+      if (this.composerPrefillAttentionTarget === input) {
+        this.clearComposerPrefillAttention();
+      }
+    }, COMPOSER_PREFILL_ATTENTION_DURATION_MS);
+  }
+
   protected confirmConversationReset(): Promise<boolean> {
     const board = this.resolveBoardView();
     const sessionKey = this.resolveBoardSessionKey(board.snapshot.sessionKey);
@@ -609,7 +635,15 @@ export abstract class ChatPaneLifecycle extends ChatPaneBoard {
     }
   }
 
-  override updated() {
+  override updated(changedProperties: Map<PropertyKey, unknown> = new Map()) {
+    if (changedProperties.has("focusComposer") && this.focusComposer) {
+      const textarea = this.querySelector<HTMLTextAreaElement>(CHAT_COMPOSER_TEXTAREA_SELECTOR);
+      const input = textarea?.closest<HTMLElement>(".agent-chat__input");
+      textarea?.focus({ preventScroll: true });
+      if (input) {
+        this.showComposerPrefillAttention(input);
+      }
+    }
     this.cancelResetConfirmationForSessionChange();
     this.syncHistoryObserver();
     const board = this.resolveBoardView();
@@ -641,6 +675,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneBoard {
   }
 
   override disconnectedCallback() {
+    this.clearComposerPrefillAttention();
     this.boardProviderLifecycleConnected = false;
     this.releaseBoardProviderLease();
     this.settleResetConfirmation(false);

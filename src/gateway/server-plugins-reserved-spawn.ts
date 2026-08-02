@@ -180,6 +180,30 @@ function assertReservedSubagentIdentitiesWithinLimit(params: {
   );
 }
 
+function assertReservedSubagentOptions(params: {
+  cleanup?: unknown;
+  context?: unknown;
+  lightContext?: unknown;
+}): void {
+  if (params.cleanup !== undefined && params.cleanup !== "delete" && params.cleanup !== "keep") {
+    throw new Error('spawnReserved cleanup must be "delete" or "keep".');
+  }
+  if (params.context !== undefined && params.context !== "isolated" && params.context !== "fork") {
+    throw new Error('spawnReserved context must be "isolated" or "fork".');
+  }
+  if (params.lightContext !== undefined && typeof params.lightContext !== "boolean") {
+    throw new Error("spawnReserved lightContext must be a boolean.");
+  }
+}
+
+function throwIfReservedSpawnAborted(signal: AbortSignal): void {
+  if (!signal.aborted) {
+    return;
+  }
+  const reason = (signal as { reason?: unknown }).reason;
+  throw reason instanceof Error ? reason : new Error("spawnReserved interrupted.");
+}
+
 function buildReservedSubagentClaimToken(params: {
   pluginId: string;
   requesterSessionKey: string;
@@ -373,6 +397,7 @@ export const spawnReservedSubagent: PluginRuntime["subagent"]["spawnReserved"] =
   if (!pluginId) {
     throw new Error("spawnReserved requires an active plugin runtime scope.");
   }
+  assertReservedSubagentOptions(params);
   const requesterSessionKey = params.requesterSessionKey.trim();
   const targetAgentId = params.targetAgentId.trim();
   const childSessionKey = params.childSessionKey.trim();
@@ -425,7 +450,8 @@ export const spawnReservedSubagent: PluginRuntime["subagent"]["spawnReserved"] =
       storePath: requesterAdmission.requesterStorePath,
       sessionKey: requesterSessionKey,
     },
-    async () => {
+    async (signal) => {
+      throwIfReservedSpawnAborted(signal);
       const admittedRequester = assertReservedSubagentRequesterOwned({
         pluginId,
         requesterSessionKey,
@@ -442,6 +468,7 @@ export const spawnReservedSubagent: PluginRuntime["subagent"]["spawnReserved"] =
         task,
         gatewayContext,
         requesterSessionId: admittedRequester.requesterSessionId,
+        signal,
       });
     },
   );
@@ -457,6 +484,7 @@ async function spawnReservedSubagentWithRequesterAdmission(params: {
   task: string;
   gatewayContext: GatewayRequestContext;
   requesterSessionId?: string;
+  signal: AbortSignal;
 }): ReturnType<PluginRuntime["subagent"]["spawnReserved"]> {
   const reservationParams = params.params;
   const identityClaim = claimReservedSubagentIdentities({
@@ -489,7 +517,9 @@ async function spawnReservedSubagentWithRequesterAdmission(params: {
       pluginRuntimeOwnerId: params.pluginId,
       claimToken: identityClaim.claimToken,
     });
+    throwIfReservedSpawnAborted(params.signal);
     const { spawnSubagentDirect } = await import("../agents/subagent-spawn.js");
+    throwIfReservedSpawnAborted(params.signal);
     const result = await spawnSubagentDirect(
       {
         task: params.task,
@@ -514,6 +544,7 @@ async function spawnReservedSubagentWithRequesterAdmission(params: {
         pluginOwnerId: params.pluginId,
         requesterSessionId: params.requesterSessionId,
         reservedSubagentClaimToken: identityClaim.claimToken,
+        signal: params.signal,
       },
     );
     if (result.status !== "accepted") {

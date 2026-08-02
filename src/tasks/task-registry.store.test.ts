@@ -42,7 +42,7 @@ import {
   loadTaskRegistryStateFromSqlite,
   saveTaskRegistryStateToSqlite,
 } from "./task-registry.store.sqlite.js";
-import type { TaskDeliveryState, TaskRecord } from "./task-registry.types.js";
+import type { TaskDeliveryState, TaskNotifyPolicy, TaskRecord } from "./task-registry.types.js";
 import {
   parseOptionalTaskTerminalOutcome,
   parseTaskDeliveryStatus,
@@ -354,6 +354,112 @@ describe("task-registry store runtime", () => {
       "Invalid persisted task terminal outcome",
     );
   });
+
+  it.each(["verbose", "", "state-change", "DONE_ONLY"])(
+    "rejects an invalid notification policy before it can poison a SQLite restart (%s)",
+    async (invalidPolicy) => {
+      await withOpenClawTestState(
+        { layout: "state-only", prefix: "openclaw-task-invalid-notify-" },
+        async () => {
+          resetTaskRegistryForTests();
+          const created = createTaskRecord({
+            runtime: "acp",
+            ownerKey: "agent:main:main",
+            scopeKind: "session",
+            childSessionKey: "agent:main:acp:notify-policy",
+            runId: "run-invalid-notify-policy",
+            task: "Keep the task registry readable",
+            status: "running",
+            deliveryStatus: "pending",
+            notifyPolicy: "done_only",
+          });
+          const database = openOpenClawStateDatabase();
+          const db = getNodeSqliteKysely<TaskRegistryTestDatabase>(database.db);
+
+          let mutationError: string | null = null;
+          try {
+            updateTaskNotifyPolicyById({
+              taskId: created.taskId,
+              notifyPolicy: invalidPolicy as TaskNotifyPolicy,
+            });
+          } catch (error) {
+            mutationError = error instanceof Error ? error.message : String(error);
+          }
+
+          const persisted = executeSqliteQueryTakeFirstSync(
+            database.db,
+            db
+              .selectFrom("task_runs")
+              .select("notify_policy")
+              .where("task_id", "=", created.taskId),
+          );
+
+          let restoredPolicy: TaskNotifyPolicy | null = null;
+          let restoreError: string | null = null;
+          try {
+            reloadTaskRegistryFromStore();
+            restoredPolicy = getTaskById(created.taskId)?.notifyPolicy ?? null;
+          } catch (error) {
+            restoreError = error instanceof Error ? error.message : String(error);
+          }
+
+          try {
+            expect({
+              mutationError,
+              persistedPolicy: persisted?.notify_policy,
+              restoredPolicy,
+              restoreError,
+            }).toEqual({
+              mutationError: `Invalid persisted task notify policy: ${JSON.stringify(invalidPolicy)}`,
+              persistedPolicy: "done_only",
+              restoredPolicy: "done_only",
+              restoreError: null,
+            });
+          } finally {
+            if (persisted?.notify_policy !== "done_only") {
+              executeSqliteQuerySync(
+                database.db,
+                db
+                  .updateTable("task_runs")
+                  .set({ notify_policy: "done_only" })
+                  .where("task_id", "=", created.taskId),
+              );
+            }
+            resetTaskRegistryForTests({ persist: false });
+          }
+        },
+      );
+    },
+  );
+
+  it.each(["done_only", "state_changes", "silent"] as const)(
+    "persists valid notification policy %s across a fresh SQLite restart",
+    async (notifyPolicy) => {
+      await withOpenClawTestState(
+        { layout: "state-only", prefix: "openclaw-task-valid-notify-" },
+        async () => {
+          resetTaskRegistryForTests();
+          const created = createTaskRecord({
+            runtime: "acp",
+            ownerKey: "agent:main:main",
+            scopeKind: "session",
+            childSessionKey: "agent:main:acp:notify-policy",
+            runId: "run-valid-notify-policy",
+            task: "Preserve valid notification policies",
+            status: "running",
+            deliveryStatus: "pending",
+            notifyPolicy: "done_only",
+          });
+
+          expect(
+            updateTaskNotifyPolicyById({ taskId: created.taskId, notifyPolicy })?.notifyPolicy,
+          ).toBe(notifyPolicy);
+          reloadTaskRegistryFromStore();
+          expect(getTaskById(created.taskId)?.notifyPolicy).toBe(notifyPolicy);
+        },
+      );
+    },
+  );
 
   it("rejects corrupt persisted task rows during sqlite restore", async () => {
     await withOpenClawTestState(

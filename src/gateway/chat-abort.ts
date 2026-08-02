@@ -413,17 +413,7 @@ export function abortTrackedChatRunById(
   ops: TrackedChatRunAbortOps,
   params: Parameters<typeof abortChatRunById>[1],
 ) {
-  return abortChatRunById(
-    {
-      chatAbortControllers: ops.chatAbortControllers,
-      chatRunState: ops.chatRunState,
-      removeChatRun: ops.removeChatRun,
-      agentRunSeq: ops.agentRunSeq,
-      broadcast: ops.broadcast,
-      nodeSendToSession: ops.nodeSendToSession,
-    },
-    params,
-  );
+  return abortChatRunById(ops, params);
 }
 
 function resolveChatAbortDeliverySessionKeys(
@@ -579,6 +569,7 @@ export function abortChatRunById(
     runId,
     ...(active.lifecycleGeneration ? { lifecycleGeneration: active.lifecycleGeneration } : {}),
     sessionKey,
+    sessionId: active.sessionId,
     agentId: active.agentId,
     stream: "lifecycle",
     data: {

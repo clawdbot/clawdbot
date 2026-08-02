@@ -30,7 +30,7 @@ Config is layered in three parts, entirely in memory: exec composes the run conf
 
 Use `--state-dir <dir>` to retain sessions and other run state. The directory must already exist and is never created or deleted by the command.
 
-The state directory is also where installed plugins live, so the default ephemeral one cannot discover plugins you installed with `openclaw plugins install`. If your config selects a provider, channel, or harness from a non-bundled plugin, point the run at your real state directory with `--state-dir ~/.openclaw`.
+When exec uses the ambient or a pinned config, installed plugins continue to resolve from the operator's ordinary plugin roots while sessions and other run state use the ephemeral directory. In those modes, `--state-dir` controls run state only; it is not required for configured providers, channels, or harnesses supplied by installed plugins.
 
 For reproducible runs, pin the config instead of inheriting it. `--config <path>` runs against exactly that config file, read through the normal loader so JSON5 syntax and `$include` resolve relative to it; a missing or invalid file fails the run rather than falling back to defaults, as does an ambient config that exists but cannot be parsed. `--isolated` ignores the ambient config entirely and uses only the exec defaults above. Both are the right choice for CI, where inheriting operator state would make runs machine-dependent.
 

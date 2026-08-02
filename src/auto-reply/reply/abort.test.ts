@@ -28,6 +28,13 @@ import { createReplyOperation, replyRunRegistry } from "./reply-run-registry.js"
 import { testing as replyRunRegistryTesting } from "./reply-run-registry.test-support.js";
 import { buildTestCtx } from "./test-ctx.js";
 
+type SubagentRunFixture = Omit<SubagentRunRecord, "execution"> & {
+  execution?: SubagentRunRecord["execution"];
+  startedAt?: number;
+  endedAt?: number;
+  outcome?: SubagentRunRecord["execution"]["outcome"];
+};
+
 vi.mock("../../agents/embedded-agent.js", () => ({
   abortEmbeddedAgentRun: vi.fn().mockReturnValue(true),
   resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
@@ -39,21 +46,46 @@ const commandQueueMocks = vi.hoisted(() => ({
 
 vi.mock("../../process/command-queue.js", () => commandQueueMocks);
 
-const subagentRegistryMocks = vi.hoisted(() => ({
-  listSubagentRunsForRequester: vi.fn<(requesterSessionKey: string) => SubagentRunRecord[]>(
+const { subagentRegistryMocks, subagentRegistryDeps } = vi.hoisted(() => {
+  const canonicalize = (run: SubagentRunFixture): SubagentRunRecord => {
+    const { startedAt, endedAt, outcome, execution, ...record } = run;
+    return {
+      ...record,
+      execution:
+        execution ??
+        (endedAt === undefined
+          ? { status: "running", startedAt }
+          : { status: "terminal", startedAt, endedAt, outcome }),
+    };
+  };
+  const listSubagentRunsForRequester = vi.fn<(requesterSessionKey: string) => SubagentRunFixture[]>(
     () => [],
-  ),
-  getLatestSubagentRunByChildSessionKey: vi.fn<
-    (childSessionKey: string) => SubagentRunRecord | null
-  >(() => null),
-  markSubagentRunTerminated: vi.fn(() => 1),
-}));
+  );
+  const getLatestSubagentRunByChildSessionKey = vi.fn<
+    (childSessionKey: string) => SubagentRunFixture | null
+  >(() => null);
+  const markSubagentRunTerminated = vi.fn(() => 1);
+  return {
+    subagentRegistryMocks: {
+      listSubagentRunsForRequester,
+      getLatestSubagentRunByChildSessionKey,
+      markSubagentRunTerminated,
+    },
+    subagentRegistryDeps: {
+      listSubagentRunsForRequester: (requesterSessionKey: string) =>
+        listSubagentRunsForRequester(requesterSessionKey).map(canonicalize),
+      getLatestSubagentRunByChildSessionKey: (childSessionKey: string) => {
+        const run = getLatestSubagentRunByChildSessionKey(childSessionKey);
+        return run ? canonicalize(run) : null;
+      },
+    },
+  };
+});
 
 vi.mock("../../agents/subagent-registry.js", () => ({
-  getLatestSubagentRunByChildSessionKey:
-    subagentRegistryMocks.getLatestSubagentRunByChildSessionKey,
-  listSubagentRunsForRequester: subagentRegistryMocks.listSubagentRunsForRequester,
-  listSubagentRunsForController: subagentRegistryMocks.listSubagentRunsForRequester,
+  getLatestSubagentRunByChildSessionKey: subagentRegistryDeps.getLatestSubagentRunByChildSessionKey,
+  listSubagentRunsForRequester: subagentRegistryDeps.listSubagentRunsForRequester,
+  listSubagentRunsForController: subagentRegistryDeps.listSubagentRunsForRequester,
   markSubagentRunTerminated: subagentRegistryMocks.markSubagentRunTerminated,
 }));
 
@@ -230,8 +262,8 @@ describe("abort detection", () => {
       abortEmbeddedAgentRun: runtimeAbortMocks.abortEmbeddedAgentRun,
       resolveActiveEmbeddedRunSessionId: runtimeAbortMocks.resolveActiveEmbeddedRunSessionId,
       getLatestSubagentRunByChildSessionKey:
-        subagentRegistryMocks.getLatestSubagentRunByChildSessionKey,
-      listSubagentRunsForController: subagentRegistryMocks.listSubagentRunsForRequester,
+        subagentRegistryDeps.getLatestSubagentRunByChildSessionKey,
+      listSubagentRunsForController: subagentRegistryDeps.listSubagentRunsForRequester,
       markSubagentRunTerminated: subagentRegistryMocks.markSubagentRunTerminated,
     });
     queueCleanupTesting.setDepsForTests({
@@ -526,8 +558,8 @@ describe("abort detection", () => {
         throw new Error("simulated persistence failure");
       }),
       getLatestSubagentRunByChildSessionKey:
-        subagentRegistryMocks.getLatestSubagentRunByChildSessionKey,
-      listSubagentRunsForController: subagentRegistryMocks.listSubagentRunsForRequester,
+        subagentRegistryDeps.getLatestSubagentRunByChildSessionKey,
+      listSubagentRunsForController: subagentRegistryDeps.listSubagentRunsForRequester,
       markSubagentRunTerminated: subagentRegistryMocks.markSubagentRunTerminated,
     });
     enqueueQueuedFollowupRun({ root, cfg, sessionId, sessionKey });
@@ -578,8 +610,8 @@ describe("abort detection", () => {
         sessionKey: canonicalKey,
       })),
       getLatestSubagentRunByChildSessionKey:
-        subagentRegistryMocks.getLatestSubagentRunByChildSessionKey,
-      listSubagentRunsForController: subagentRegistryMocks.listSubagentRunsForRequester,
+        subagentRegistryDeps.getLatestSubagentRunByChildSessionKey,
+      listSubagentRunsForController: subagentRegistryDeps.listSubagentRunsForRequester,
       markSubagentRunTerminated: subagentRegistryMocks.markSubagentRunTerminated,
     });
     enqueueQueuedFollowupRun({ root, cfg, sessionId, sessionKey: canonicalKey });
@@ -612,8 +644,8 @@ describe("abort detection", () => {
       markSessionAbortTarget: vi.fn(async () => null),
       resolveSessionAbortTarget: vi.fn(() => null),
       getLatestSubagentRunByChildSessionKey:
-        subagentRegistryMocks.getLatestSubagentRunByChildSessionKey,
-      listSubagentRunsForController: subagentRegistryMocks.listSubagentRunsForRequester,
+        subagentRegistryDeps.getLatestSubagentRunByChildSessionKey,
+      listSubagentRunsForController: subagentRegistryDeps.listSubagentRunsForRequester,
       markSubagentRunTerminated: subagentRegistryMocks.markSubagentRunTerminated,
     });
 
@@ -675,8 +707,8 @@ describe("abort detection", () => {
           sessionKey,
         })),
         getLatestSubagentRunByChildSessionKey:
-          subagentRegistryMocks.getLatestSubagentRunByChildSessionKey,
-        listSubagentRunsForController: subagentRegistryMocks.listSubagentRunsForRequester,
+          subagentRegistryDeps.getLatestSubagentRunByChildSessionKey,
+        listSubagentRunsForController: subagentRegistryDeps.listSubagentRunsForRequester,
         markSubagentRunTerminated: subagentRegistryMocks.markSubagentRunTerminated,
       });
     });
@@ -1217,7 +1249,7 @@ describe("abort detection", () => {
     const sessionKey = "telegram:persistence-failure-parent";
     const firstChildKey = "agent:main:subagent:persistence-failure-first";
     const secondChildKey = "agent:main:subagent:persistence-failure-second";
-    const run = (runId: string, childSessionKey: string): SubagentRunRecord => ({
+    const run = (runId: string, childSessionKey: string): SubagentRunFixture => ({
       runId,
       childSessionKey,
       requesterSessionKey: sessionKey,
@@ -1478,7 +1510,7 @@ describe("abort detection", () => {
             startedAt: now - 900,
             endedAt: now - 500,
             outcome: { status: "ok" },
-          } as SubagentRunRecord;
+          } as SubagentRunFixture;
         }
         if (childSessionKey === depth2Key) {
           return {
@@ -1489,7 +1521,7 @@ describe("abort detection", () => {
             task: "leaf worker",
             cleanup: "keep",
             createdAt: now - 400,
-          } as SubagentRunRecord;
+          } as SubagentRunFixture;
         }
         return null;
       },
@@ -1564,7 +1596,7 @@ describe("abort detection", () => {
           task: "shared child current parent",
           cleanup: "keep",
           createdAt: now - 250,
-        } as SubagentRunRecord;
+        } as SubagentRunFixture;
       }
       if (sessionKey === leafKey) {
         return {
@@ -1576,7 +1608,7 @@ describe("abort detection", () => {
           task: "leaf worker",
           cleanup: "keep",
           createdAt: now - 500,
-        } as SubagentRunRecord;
+        } as SubagentRunFixture;
       }
       return null;
     });

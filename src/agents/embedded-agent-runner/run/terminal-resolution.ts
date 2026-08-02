@@ -22,7 +22,6 @@ import type { EmbeddedRunContextRecoveryState } from "./context-recovery-state.j
 import {
   hasAttemptTerminalState,
   hasYieldContinuationEvidence,
-  resolveAttemptReplayMetadata,
   resolveEmptyResponseRetryInstruction,
   resolveIncompleteTurnPayloadText,
   resolveReasoningOnlyRetryInstruction,
@@ -361,7 +360,6 @@ export async function resolveEmbeddedRunTerminal(input: {
     );
   }
   if (incompleteTurnText) {
-    const replayMetadata = resolveAttemptReplayMetadata(attempt);
     const incompleteStopReason =
       attempt.currentAttemptAssistant?.stopReason ?? attempt.lastAssistant?.stopReason;
     log.warn(
@@ -369,7 +367,7 @@ export async function resolveEmbeddedRunTerminal(input: {
         `provider=${input.activeErrorContext.provider}/${input.activeErrorContext.model} ` +
         `stopReason=${incompleteStopReason ?? "missing"} hasLastAssistant=${attempt.lastAssistant ? "yes" : "no"} ` +
         `hasCurrentAttemptAssistant=${attempt.currentAttemptAssistant ? "yes" : "no"} payloads=${payloadCount} ` +
-        `tools=${attempt.toolMetas?.length ?? 0} replaySafe=${replayMetadata.replaySafe ? "yes" : "no"} ` +
+        `tools=${attempt.toolMetas?.length ?? 0} replaySafe=${attempt.replayMetadata.replaySafe ? "yes" : "no"} ` +
         `compactions=${input.attemptCompactionCount} reasoningRetries=${retryState.reasoningOnlyAttempts}/${input.maxReasoningOnlyRetryAttempts} ` +
         `emptyRetries=${retryState.emptyResponseAttempts}/${input.maxEmptyResponseRetryAttempts} ` +
         `missingAssistantRetries=${retryState.missingAssistantAttempts}/${MAX_MISSING_ASSISTANT_RETRIES} — ` +

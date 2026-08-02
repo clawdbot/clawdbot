@@ -654,21 +654,22 @@ function assertFollowthroughTranscript({ transcriptEvents, progressMarker, compl
     );
     return text === progressMarker || text === completeMarker ? [{ ...entry, args, text }] : [];
   });
-  const expected = [
-    { text: progressMarker, final: undefined },
-    { text: completeMarker, final: true },
-  ];
+  const expected = [progressMarker, completeMarker];
   if (
     markerCalls.length !== expected.length ||
     markerCalls.some(
       (call, index) =>
-        call.text !== expected[index].text ||
+        call.text !== expected[index] ||
         call.args.action !== "send" ||
-        call.args.final !== expected[index].final,
+        // Extended-stable candidates can predate this optional Codex control.
+        // A successful ordered completion send is valid evidence; `false` is not.
+        (index === 0
+          ? call.args.final !== undefined
+          : call.args.final !== undefined && call.args.final !== true),
     )
   ) {
     throw new Error(
-      `expected exact message final controls ${JSON.stringify(expected)}, got ${JSON.stringify(markerCalls.map((call) => ({ text: call.text, action: call.args.action, final: call.args.final })))}`,
+      `expected ordered message sends with an optional final completion marker ${JSON.stringify(expected)}, got ${JSON.stringify(markerCalls.map((call) => ({ text: call.text, action: call.args.action, final: call.args.final })))}`,
     );
   }
   const [progressCall, completeCall] = markerCalls;

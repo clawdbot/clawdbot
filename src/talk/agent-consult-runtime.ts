@@ -35,6 +35,14 @@ export type RealtimeVoiceAgentConsultRuntime = PluginRuntimeCore["agent"];
 export type RealtimeVoiceAgentConsultResult = { text: string };
 
 /**
+ * Sender-auth contract revision for official realtime voice plugins.
+ *
+ * Revision 1 forwards ingress-authenticated `senderId` and `senderIsOwner` unchanged. Ingress
+ * owns authentication; consumers that require this handoff must fail closed on other revisions.
+ */
+export const REALTIME_VOICE_AGENT_CONSULT_SENDER_AUTH_VERSION = 1;
+
+/**
  * Controls whether voice consults run in a fresh session or fork context from the requester.
  */
 type RealtimeVoiceAgentConsultContextMode = "isolated" | "fork";
@@ -258,6 +266,10 @@ export async function consultRealtimeVoiceAgent(params: {
   questionSourceLabel?: string;
   agentId?: string;
   spawnedBy?: string | null;
+  /** Sender identity established by the caller's ingress authorization boundary. */
+  senderId?: string | null;
+  /** Trusted owner bit established by the caller's ingress authorization boundary. */
+  senderIsOwner?: boolean;
   contextMode?: RealtimeVoiceAgentConsultContextMode;
   provider?: RunEmbeddedAgentParams["provider"];
   model?: RunEmbeddedAgentParams["model"];
@@ -379,6 +391,8 @@ export async function consultRealtimeVoiceAgent(params: {
         sandboxSessionKey: resolveRealtimeVoiceAgentSandboxSessionKey(agentId, params.sessionKey),
         agentId,
         spawnedBy: params.spawnedBy,
+        senderId: params.senderId,
+        senderIsOwner: params.senderIsOwner,
         messageProvider: consultDeliveryContext?.channel ?? params.messageProvider,
         agentAccountId: consultDeliveryContext?.accountId,
         messageTo: consultDeliveryContext?.to,

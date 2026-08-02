@@ -1,6 +1,8 @@
 import { resolveAllowlistMatchByCandidates } from "openclaw/plugin-sdk/allow-from";
 import {
+  formatAgentEnvelope,
   implicitMentionKindWhen,
+  resolveEnvelopeFormatOptions,
   resolveInboundMentionDecision,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
@@ -442,4 +444,27 @@ export function isSummarizationRequest(messageText: string): boolean {
     /tldr/i,
   ];
   return patterns.some((pattern) => pattern.test(messageText));
+}
+
+/**
+ * Formats channel history for a summarization request. Each entry is rendered
+ * through the shared inbound envelope so timestamps honor the configured user
+ * timezone instead of the host process zone (matches Mattermost/Feishu).
+ */
+export function formatSummarizationHistoryText(
+  history: ReadonlyArray<{ author: string; content: string; timestamp: number }>,
+  cfg?: OpenClawConfig,
+): string {
+  const envelopeOptions = resolveEnvelopeFormatOptions(cfg);
+  return history
+    .map((msg) =>
+      formatAgentEnvelope({
+        channel: "Tlon",
+        from: msg.author,
+        timestamp: msg.timestamp,
+        body: msg.content,
+        envelope: envelopeOptions,
+      }),
+    )
+    .join("\n");
 }

@@ -26,9 +26,7 @@ import {
 import {
   collectOpenAICodexAuthProfileStoreIdMap,
   maybeMigrateAuthProfileJsonStoresToSqlite,
-  maybeRepairLegacyFlatAuthProfileStores,
   maybeRepairOpenAICodexAuthConfig,
-  maybeRepairOpenAICodexAuthProfileStores,
 } from "./doctor-auth-flat-profiles.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
@@ -1308,8 +1306,8 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
   });
 });
 
-describe("maybeRepairLegacyFlatAuthProfileStores", () => {
-  it("migrates legacy flat auth-profiles.json stores with a backup", async () => {
+describe("legacy flat profiles through the canonical auth migration owner", () => {
+  it("migrates legacy flat auth-profiles.json stores with a receipted archive", async () => {
     const state = await makeTestState();
     const legacy = {
       "ollama-windows": {
@@ -1319,16 +1317,14 @@ describe("maybeRepairLegacyFlatAuthProfileStores", () => {
     };
     const authPath = await writeLegacyAuthProfilesJson(state, legacy);
 
-    const result = await maybeRepairLegacyFlatAuthProfileStores({
+    const result = await maybeMigrateAuthProfileJsonStoresToSqlite({
       cfg: {},
       prompter: makePrompter(true),
       now: () => 123,
     });
 
     expect(result.detected).toEqual([authPath]);
-    expect(result.changes).toStrictEqual([
-      `Migrated ${authPath} to the SQLite auth profile store (backup: ${authPath}.legacy-flat.123.bak).`,
-    ]);
+    expect(result.changes).toEqual([expect.stringContaining("Migrated auth profile JSON")]);
     expect(result.warnings).toStrictEqual([]);
     expect(loadPersistedAuthProfileStore(state.agentDir())).toEqual({
       version: 1,
@@ -1341,7 +1337,8 @@ describe("maybeRepairLegacyFlatAuthProfileStores", () => {
       },
     });
     expect(fs.existsSync(authPath)).toBe(false);
-    expect(JSON.parse(fs.readFileSync(`${authPath}.legacy-flat.123.bak`, "utf8"))).toEqual(legacy);
+    const [archive] = listMigratedArchives(authPath);
+    expect(JSON.parse(fs.readFileSync(archive!, "utf8"))).toEqual(legacy);
   });
 
   it("preserves existing SQLite auth profiles when migrating a legacy flat store", async () => {
@@ -1364,16 +1361,14 @@ describe("maybeRepairLegacyFlatAuthProfileStores", () => {
     const legacy = { openai: { apiKey: "sk-openai-flat" } };
     const authPath = await writeLegacyAuthProfilesJson(state, legacy);
 
-    const result = await maybeRepairLegacyFlatAuthProfileStores({
+    const result = await maybeMigrateAuthProfileJsonStoresToSqlite({
       cfg: {},
       prompter: makePrompter(true),
       now: () => 123,
     });
 
     expect(result.warnings).toStrictEqual([]);
-    expect(result.changes).toStrictEqual([
-      `Migrated ${authPath} to the SQLite auth profile store (backup: ${authPath}.legacy-flat.123.bak).`,
-    ]);
+    expect(result.changes).toEqual([expect.stringContaining("Migrated auth profile JSON")]);
     expect(loadPersistedAuthProfileStore(state.agentDir())?.profiles).toEqual({
       "anthropic:default": {
         type: "oauth",
@@ -1400,7 +1395,7 @@ describe("maybeRepairLegacyFlatAuthProfileStores", () => {
     };
     const authPath = await writeLegacyAuthProfilesJson(state, legacy);
 
-    const result = await maybeRepairLegacyFlatAuthProfileStores({
+    const result = await maybeMigrateAuthProfileJsonStoresToSqlite({
       cfg: {},
       prompter: makePrompter(false),
     });
@@ -1430,15 +1425,16 @@ describe("maybeRepairLegacyFlatAuthProfileStores", () => {
     const authPath = await writeLegacyAuthProfilesJson(state, legacy);
     const cfg = {};
 
-    const result = await maybeRepairLegacyFlatAuthProfileStores({
+    const result = await maybeMigrateAuthProfileJsonStoresToSqlite({
       cfg,
       prompter: makePrompter(true),
       now: () => 456,
     });
 
     expect(result.detected).toEqual([authPath]);
-    expect(result.changes).toStrictEqual([
-      `Moved aws-sdk profile metadata from ${authPath} to auth.profiles (backup: ${authPath}.aws-sdk-profile.456.bak).`,
+    expect(result.changes).toEqual([
+      expect.stringContaining("Migrated auth profile JSON"),
+      expect.stringContaining("Moved aws-sdk profile metadata"),
     ]);
     expect(result.warnings).toStrictEqual([]);
     expect(cfg).toEqual({
@@ -1451,19 +1447,16 @@ describe("maybeRepairLegacyFlatAuthProfileStores", () => {
         },
       },
     });
-    expect(JSON.parse(fs.readFileSync(authPath, "utf8"))).toEqual({
-      version: 1,
-      profiles: {
-        "openrouter:default": {
-          type: "api_key",
-          provider: "openrouter",
-          key: "sk-openrouter",
-        },
+    expect(loadPersistedAuthProfileStore(state.agentDir())?.profiles).toEqual({
+      "openrouter:default": {
+        type: "api_key",
+        provider: "openrouter",
+        key: "sk-openrouter",
       },
     });
-    expect(JSON.parse(fs.readFileSync(`${authPath}.aws-sdk-profile.456.bak`, "utf8"))).toEqual(
-      legacy,
-    );
+    expect(fs.existsSync(authPath)).toBe(false);
+    const [archive] = listMigratedArchives(authPath);
+    expect(JSON.parse(fs.readFileSync(archive!, "utf8"))).toEqual(legacy);
   });
 });
 
@@ -1780,7 +1773,7 @@ describe("maybeRepairOpenAICodexAuthConfig", () => {
   });
 });
 
-describe("maybeRepairOpenAICodexAuthProfileStores", () => {
+describe("legacy OpenAI auth profiles through the canonical migration owner", () => {
   it("collects the store-derived legacy OpenAI Codex profile id map", async () => {
     const state = await makeTestState();
     await writeLegacyAuthProfilesJson(state, {
@@ -1811,7 +1804,7 @@ describe("maybeRepairOpenAICodexAuthProfileStores", () => {
     ).toEqual([["openai-codex:default", "openai:chatgpt-default"]]);
   });
 
-  it("renames legacy OpenAI Codex auth store profiles with a backup", async () => {
+  it("renames legacy OpenAI Codex auth profiles while archiving the untouched source", async () => {
     const state = await makeTestState();
     const legacy = {
       version: 1,
@@ -1839,18 +1832,20 @@ describe("maybeRepairOpenAICodexAuthProfileStores", () => {
     };
     const authPath = await writeLegacyAuthProfilesJson(state, legacy);
 
-    const result = await maybeRepairOpenAICodexAuthProfileStores({
+    const result = await maybeMigrateAuthProfileJsonStoresToSqlite({
       cfg: {},
       env: state.env,
+      prompter: makePrompter(true),
       now: () => 789,
     });
 
     expect(result.detected).toEqual([authPath]);
-    expect(result.changes).toStrictEqual([
-      `Migrated 1 OpenAI Codex auth profile(s) in ${authPath} to provider "openai" (backup: ${authPath}.openai-provider-unification.789.bak).`,
+    expect(result.changes).toEqual([
+      expect.stringContaining("Migrated auth profile JSON"),
+      `Migrated 1 OpenAI Codex auth profile(s) in ${authPath} to provider "openai".`,
     ]);
     expect(result.warnings).toStrictEqual([]);
-    expect(JSON.parse(fs.readFileSync(authPath, "utf8"))).toEqual({
+    expect(loadPersistedAuthProfileStore(state.agentDir())).toEqual({
       version: 1,
       profiles: {
         "openai:work": {
@@ -1874,9 +1869,9 @@ describe("maybeRepairOpenAICodexAuthProfileStores", () => {
         },
       },
     });
-    expect(
-      JSON.parse(fs.readFileSync(`${authPath}.openai-provider-unification.789.bak`, "utf8")),
-    ).toEqual(legacy);
+    expect(fs.existsSync(authPath)).toBe(false);
+    const [archive] = listMigratedArchives(authPath);
+    expect(JSON.parse(fs.readFileSync(archive!, "utf8"))).toEqual(legacy);
   });
 
   it("canonicalizes a mixed Codex store before importing it into SQLite", async () => {
@@ -1903,13 +1898,6 @@ describe("maybeRepairOpenAICodexAuthProfileStores", () => {
         "openai-codex": ["openai-codex:qa-oauth"],
       },
     });
-
-    const providerRepair = await maybeRepairOpenAICodexAuthProfileStores({
-      cfg: {},
-      env: state.env,
-      now: () => 790,
-    });
-    expect(providerRepair.warnings).toStrictEqual([]);
 
     const sqliteMigration = await maybeMigrateAuthProfileJsonStoresToSqlite({
       cfg: {},

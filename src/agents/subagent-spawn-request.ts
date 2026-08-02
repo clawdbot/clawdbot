@@ -354,7 +354,7 @@ export function resolveSubagentSpawnRequest(
         runId: childIdem,
         maxConcurrent: swarmConfig.maxConcurrent,
         activeRunIds: groupRuns
-          .filter((entry) => entry.execution?.status === "running")
+          .filter((entry) => entry.execution.status === "running")
           .map((entry) => entry.schedulerSlotId ?? entry.runId),
       })
     ) {

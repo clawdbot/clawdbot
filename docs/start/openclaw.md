@@ -168,7 +168,7 @@ Example:
 ## Heartbeats (proactive mode)
 
 By default, OpenClaw runs a heartbeat every 30 minutes with the prompt:
-`Follow the heartbeat monitor scratch context when provided. Recurring tasks are cron jobs; create or change their schedules with cron tools or the openclaw cron CLI, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`
+`Follow the heartbeat monitor scratch context when provided. Recurring tasks are automations; create or change their schedules with the automations tool, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`
 Set `agents.defaults.heartbeat.every: "0m"` to disable. Heartbeat checklists live in the monitor's cron scratch (see [Heartbeat](/gateway/heartbeat)); `openclaw doctor --fix` migrates a legacy workspace `HEARTBEAT.md` into it.
 
 - If the monitor scratch exists but is effectively empty (only blank lines, Markdown/HTML comments, Markdown headings like `# Heading`, fence markers, or empty checklist stubs), OpenClaw skips the heartbeat run to save API calls.
@@ -211,6 +211,12 @@ Outbound attachments from the agent use structured media fields on the message t
 ```
 
 OpenClaw sends structured media alongside the text. Legacy final assistant replies may still be normalized for compatibility, but tool output, browser output, streaming blocks, and message actions do not parse text as attachment commands.
+
+If you must use a legacy final-reply `MEDIA:` line, keep it as standalone plain
+text. Markdown wrappers, code fences, and inline prose such as
+`**MEDIA:/path.png**`, `` `MEDIA:/path.png` ``, or
+`Here is the image: MEDIA:/path.png` stay text and do not attach media. See
+[Rich output protocol](/reference/rich-output-protocol#legacy-media-lines).
 
 Local-path behavior follows the same file-read trust model as the agent:
 

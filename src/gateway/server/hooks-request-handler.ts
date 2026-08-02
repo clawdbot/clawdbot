@@ -61,7 +61,7 @@ type HookDispatchers = {
 
 export type HookAgentDispatchResult =
   | { ok: true; runId: string }
-  | { ok: false; statusCode: 409 | 502 | 503; error: string; runId?: string };
+  | { ok: false; statusCode: 400 | 409 | 502 | 503; error: string; runId?: string };
 
 type HookReplayEntry = {
   ts: number;

@@ -417,7 +417,7 @@ async function runCronJobAndWaitForFinished(ws: WebSocket, jobId: string) {
     (payload) => payload?.jobId === jobId && payload?.action === "finished",
   );
   await runCronJobForce(ws, jobId);
-  await finished;
+  return await finished;
 }
 
 function getWebhookCall(index: number) {
@@ -1729,7 +1729,7 @@ describe("gateway server cron", () => {
         name: "webhook enabled",
         delivery: { mode: "webhook", to: "https://example.invalid/cron-finished" },
       });
-      await runCronJobAndWaitForFinished(ws, notifyJobId);
+      const notifyFinished = await runCronJobAndWaitForFinished(ws, notifyJobId);
       const notifyCall = getWebhookCall(0);
       expect(notifyCall.url).toBe("https://example.invalid/cron-finished");
       expect(notifyCall.init.method).toBe("POST");
@@ -1739,6 +1739,19 @@ describe("gateway server cron", () => {
       expect(notifyBody.action).toBe("finished");
       expect(notifyBody.jobId).toBe(notifyJobId);
       expect(notifyBody.summary).toBe("send webhook");
+      expectRecordFields(notifyFinished, {
+        status: "ok",
+        delivered: true,
+        deliveryStatus: "delivered",
+      });
+
+      const notifyRuns = await rpcReq(ws, "cron.runs", { id: notifyJobId, limit: 10 });
+      expect(notifyRuns.ok).toBe(true);
+      const notifyEntries = (notifyRuns.payload as { entries?: unknown } | null)?.entries;
+      expect(Array.isArray(notifyEntries)).toBe(true);
+      expect((notifyEntries as Array<{ deliveryStatus?: unknown }>).at(-1)?.deliveryStatus).toBe(
+        "delivered",
+      );
 
       expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
 
@@ -1811,7 +1824,7 @@ describe("gateway server cron", () => {
       expect(failureDestCall.url).toBe("https://example.invalid/failure-destination");
       const failureDestBody = failureDestCall.body;
       expect(failureDestBody.message).toBe(
-        'Cron job "failure destination webhook" failed: unknown error',
+        'Automation "failure destination webhook" failed: unknown error',
       );
 
       fetchWithSsrFGuardMock.mockClear();
@@ -2002,7 +2015,7 @@ describe("gateway server cron", () => {
         jobId,
         channel: "last",
         sessionKey: "agent:main:telegram:direct:123:thread:99",
-        message: '⚠️ Cron job "primary delivery fallback" failed: unknown error',
+        message: '⚠️ Automation "primary delivery fallback" failed: unknown error',
         includeRunStarted: true,
       });
     } finally {
@@ -2061,7 +2074,7 @@ describe("gateway server cron", () => {
         to: "#alerts",
         sessionKey: undefined,
         inheritSessionThread: false,
-        message: '⚠️ Cron job "channel fd no mode" failed: unknown error',
+        message: '⚠️ Automation "channel fd no mode" failed: unknown error',
         includeRunStarted: true,
       });
       expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
@@ -2114,7 +2127,7 @@ describe("gateway server cron", () => {
         jobId,
         channel: "last",
         sessionKey: "agent:avery:feishu:direct:ou_founder",
-        message: '⚠️ Cron job "session target failure fallback" failed: unknown error',
+        message: '⚠️ Automation "session target failure fallback" failed: unknown error',
         includeRunStarted: true,
       });
     } finally {

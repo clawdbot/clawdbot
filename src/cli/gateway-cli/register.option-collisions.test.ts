@@ -46,8 +46,9 @@ vi.mock("../../commands/gateway-status.js", () => ({
     mocks.gatewayStatusCommand(opts, runtime),
 }));
 
-vi.mock("./call.js", () => ({
-  callGatewayCli: (method: string, opts: unknown, params?: unknown) =>
+vi.mock("../gateway-rpc.js", async () => ({
+  ...(await vi.importActual<typeof import("../gateway-rpc.js")>("../gateway-rpc.js")),
+  callGatewayFromCliWithTransport: (method: string, opts: unknown, params?: unknown) =>
     mocks.callGatewayCli(method, opts, params),
 }));
 

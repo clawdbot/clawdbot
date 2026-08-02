@@ -39,6 +39,9 @@ export function createCliEventHandlers(params: {
   let signaledAssistantOutputStarted = false;
   let commentaryCounter = 0;
   const toolSummaryById = new Map<string, { name: string; failed: boolean }>();
+  // CLI results report an outcome without repeating the request, so the terminal
+  // progress event would otherwise describe the output instead of the command.
+  const toolArgsByCallId = new Map<string, Record<string, unknown>>();
   const toolSummaryNames: string[] = [];
   const toolSummaryNameSet = new Set<string>();
   const activeParsedTools = new Map<
@@ -53,6 +56,9 @@ export function createCliEventHandlers(params: {
     toolSummaryNames.push(name);
   };
   const recordToolStart = (event: CliToolUseStartDelta) => {
+    if (event.args && Object.keys(event.args).length > 0) {
+      toolArgsByCallId.set(event.toolCallId, event.args);
+    }
     const current = toolSummaryById.get(event.toolCallId);
     if (!current) {
       toolSummaryById.set(event.toolCallId, { name: event.name, failed: false });
@@ -112,6 +118,8 @@ export function createCliEventHandlers(params: {
       const resultContentSource = context.resultContentSourceByToolName?.get(
         stripOpenClawMcpToolPrefix(event.name),
       );
+      const startedArgs = toolArgsByCallId.get(event.toolCallId);
+      toolArgsByCallId.delete(event.toolCallId);
       emitAgentEvent({
         runId: runParams.runId,
         stream: "tool",
@@ -121,6 +129,7 @@ export function createCliEventHandlers(params: {
           toolCallId: event.toolCallId,
           isError: event.isError,
           result: sanitizeToolResult(event.result),
+          ...(startedArgs ? { args: startedArgs } : {}),
           ...(resultContentSource ? { resultContentSource } : {}),
         },
       });

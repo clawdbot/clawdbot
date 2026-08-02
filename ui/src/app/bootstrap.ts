@@ -34,6 +34,7 @@ import type {
   ApplicationNavigationPreferencesSnapshot,
   ApplicationSkillWorkshopRevisionHandoff,
   ApplicationTheme,
+  ApplicationThemeServerSelection,
 } from "./context.ts";
 import { syncCustomThemeStyleTag } from "./custom-theme.ts";
 import { createApplicationGateway } from "./gateway-store.ts";
@@ -78,6 +79,7 @@ function createApplicationTheme(
   initialSettings: UiSettings,
 ): ApplicationTheme & { dispose: () => void } {
   let settings = initialSettings;
+  let serverSelection: ApplicationThemeServerSelection | null = null;
   let systemThemeCleanup: (() => void) | undefined;
   const listeners = new Set<() => void>();
 
@@ -118,6 +120,13 @@ function createApplicationTheme(
   return {
     get mode() {
       return settings.themeMode;
+    },
+    get serverSelection() {
+      return serverSelection;
+    },
+    recordServerSelection(theme, scope) {
+      serverSelection = { revision: (serverSelection?.revision ?? 0) + 1, scope, theme };
+      publish();
     },
     setMode(mode: ThemeMode, element) {
       const currentSettings = loadSettings();

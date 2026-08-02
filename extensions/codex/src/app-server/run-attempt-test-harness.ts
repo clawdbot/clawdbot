@@ -85,7 +85,7 @@ export function setCodexAppServerClientFactoryForTest(
   codexAppServerClientFactoryForTest = adaptCodexTestClientFactory(async (...args) => {
     const client = await factory(...args);
     const testClient = client as unknown as {
-      addCloseHandler?: (handler: () => void) => () => void;
+      addCloseHandler?: (handler: (client: CodexAppServerClient) => void) => () => void;
     };
     // Narrow test doubles still need the client lifecycle hook installed by
     // the keyed router, even when the test never simulates transport closure.
@@ -413,10 +413,34 @@ export function createAppServerHarness(
     (notification: CodexServerNotification) => Promise<void> | void
   >();
   const serverRequestHandlers = new Set<AppServerRequestHandler>();
-  const closeHandlers = new Set<() => void>();
+  const closeHandlers = new Set<(client: CodexAppServerClient) => void>();
+  let closeError: Error | undefined;
   const request = vi.fn(async (method: string, params?: unknown, requestOptions?: unknown) => {
     requests.push({ method, params });
-    return requestImpl(method, params, requestOptions as { signal?: AbortSignal } | undefined);
+    const result = await requestImpl(
+      method,
+      params,
+      requestOptions as { signal?: AbortSignal } | undefined,
+    );
+    if (method === "turn/interrupt") {
+      const { threadId, turnId } = params as { threadId?: string; turnId?: string };
+      if (threadId && turnId) {
+        // Codex publishes this terminal after acknowledging interruption;
+        // test clients must preserve the same lifecycle instead of orphaning turns.
+        queueMicrotask(() => {
+          for (const handler of notificationHandlers) {
+            void handler({
+              method: "turn/completed",
+              params: {
+                threadId,
+                turn: { id: turnId, status: "interrupted" },
+              },
+            });
+          }
+        });
+      }
+    }
+    return result;
   });
 
   const client = {
@@ -432,10 +456,11 @@ export function createAppServerHarness(
       serverRequestHandlers.add(handler);
       return () => serverRequestHandlers.delete(handler);
     },
-    addCloseHandler: (handler: () => void) => {
+    addCloseHandler: (handler: (client: CodexAppServerClient) => void) => {
       closeHandlers.add(handler);
       return () => closeHandlers.delete(handler);
     },
+    getCloseError: () => closeError,
   } as unknown as CodexAppServerClient;
   setCodexAppServerClientFactoryForTest(
     async (_startOptions, authProfileId, agentDir, _config, clientOptions) => {
@@ -520,9 +545,10 @@ export function createAppServerHarness(
         },
       });
     },
-    close: () => {
+    close: (error?: Error) => {
+      closeError = error;
       for (const handler of closeHandlers) {
-        handler();
+        handler(client);
       }
     },
   };

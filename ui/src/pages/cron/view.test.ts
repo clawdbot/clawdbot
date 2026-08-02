@@ -602,19 +602,38 @@ describe("cron view editor", () => {
     expect(onClosePanel).toHaveBeenCalledTimes(1);
   });
 
-  it("wires form changes from prompt and name inputs", () => {
+  it("wires shared text and select controls without changing their field ownership", () => {
     const onFormChange = vi.fn();
-    const container = renderView({ createOpen: true, onFormChange });
+    const container = renderView({
+      createOpen: true,
+      channels: ["telegram"],
+      channelMeta: [{ id: "telegram", label: "", detailLabel: "Telegram" }],
+      channelLabels: { telegram: "Telegram fallback" },
+      form: { ...DEFAULT_CRON_FORM, scheduleKind: "cron", failureAlertMode: "custom" },
+      onFormChange,
+    });
 
     const prompt = getElement(container, "#cron-payload-text", HTMLTextAreaElement);
     prompt.value = "do the thing";
     prompt.dispatchEvent(new Event("input", { bubbles: true }));
     expect(onFormChange).toHaveBeenCalledWith({ payloadText: "do the thing" });
 
-    const name = getElement(container, "#cron-name", HTMLInputElement);
-    name.value = "Thing";
-    name.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(onFormChange).toHaveBeenCalledWith({ name: "Thing" });
+    for (const field of ["name", "sessionKey", "deliveryAccountId", "payloadModel"] as const) {
+      const id = `cron-${field.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)}`;
+      const input = getElement(container, `#${id}`, HTMLInputElement);
+      if (field === "sessionKey" || field === "deliveryAccountId") {
+        expect(input.placeholder).toBe(field === "sessionKey" ? "agent:main:main" : "default");
+      }
+      input.value = field;
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      expect(onFormChange).toHaveBeenLastCalledWith({ [field]: field });
+    }
+
+    const channel = getElement(container, "#cron-failure-alert-channel", HTMLSelectElement);
+    channel.value = "telegram";
+    expect(channel.selectedOptions[0]?.textContent).toBe("Telegram fallback");
+    channel.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(onFormChange).toHaveBeenLastCalledWith({ failureAlertChannel: "telegram" });
   });
 
   it("switches schedule inputs by segmented kind and wires kind changes", () => {

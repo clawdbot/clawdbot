@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { resolveLiveTransportQaScenarioIds } from "./live-transports/shared/scenario-selection.js";
-import { resolveQaProfileScenarios } from "./profile-planning.js";
-import { readQaScenarioPack } from "./scenario-catalog.js";
+import {
+  resolveQaProfileScenarios,
+  resolveQaRunProfileExecutionSelection,
+} from "./profile-planning.js";
+import { readQaScenarioById, readQaScenarioPack } from "./scenario-catalog.js";
 import { readQaScorecardTaxonomyReport } from "./scorecard-taxonomy.js";
 
 describe("taxonomy profile scenario selection", () => {
@@ -63,5 +66,21 @@ describe("taxonomy profile scenario selection", () => {
     expect(liveTelegram).not.toContain("telegram-assistant-transcript-role-boundary");
     expect(mockTelegram).toContain("telegram-assistant-transcript-role-boundary");
     expect(mockTelegram).not.toContain("discord-canary");
+  });
+
+  it("lets flow-only consumers exclude a channel-declared script without changing membership", () => {
+    const scenario = readQaScenarioById("telegram-startup-getme-live");
+    const lane = {
+      scenarios: [scenario],
+      providerMode: "mock-openai" as const,
+      primaryModel: "mock-openai/gpt-5.6-luna",
+      channelDriver: "live" as const,
+      channel: "telegram",
+    };
+
+    expect(resolveQaRunProfileExecutionSelection(lane).selectedScenarios).toEqual([scenario]);
+    expect(
+      resolveQaRunProfileExecutionSelection({ ...lane, executionKind: "flow" }).excludedScenarios,
+    ).toEqual([{ scenario, reasons: ["execution.kind=flow"] }]);
   });
 });

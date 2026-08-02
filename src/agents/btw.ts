@@ -775,6 +775,7 @@ export async function runBtwSideQuestion(
       workspaceDir,
       ...(agentHarnessId ? { agentHarnessId } : {}),
       ...(agentHarnessRuntimeOverride ? { agentHarnessRuntimeOverride } : {}),
+      pluginRegistry: preparedModelRuntime.pluginRegistry!,
     });
     const selectionParams = {
       provider,
@@ -835,6 +836,7 @@ export async function runBtwSideQuestion(
   ): Promise<BtwHarnessSideQuestionDispatch> => {
     const toolsAllow = resolvePluginHarnessPolicyToolsAllow({
       config: params.cfg,
+      sessionId,
       sessionKey: params.sessionKey,
       sandboxSessionKey: params.sandboxSessionKey,
       agentId: sessionAgentId,

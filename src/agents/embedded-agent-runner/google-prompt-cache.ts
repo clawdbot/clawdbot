@@ -7,6 +7,7 @@ import {
   stripSystemPromptCacheBoundary,
 } from "@openclaw/ai/internal/shared";
 import { mergeTransportHeaders, sanitizeTransportPayloadText } from "@openclaw/ai/transports";
+import { stableStringify } from "@openclaw/normalization-core";
 import {
   asDateTimestampMs,
   isFutureDateTimestampMs,
@@ -28,7 +29,6 @@ import { resolveProviderRequestHeaders } from "../provider-request-config.js";
 import { buildGuardedModelFetch } from "../provider-transport-fetch.js";
 import type { StreamFn } from "../runtime/index.js";
 import { isSessionWriteLockAcquireError } from "../session-write-lock-error.js";
-import { stableStringify } from "../stable-stringify.js";
 import { log } from "./logger.js";
 import { isGooglePromptCacheEligible, resolveCacheRetention } from "./prompt-cache-retention.js";
 import { EmbeddedAttemptSessionTakeoverError } from "./run/attempt.session-lock.js";

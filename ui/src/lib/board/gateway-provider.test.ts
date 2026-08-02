@@ -1,7 +1,8 @@
 // @vitest-environment node
 import type { EventFrame } from "@openclaw/gateway-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { GatewayBoardProvider, type BoardProvider } from "./provider.ts";
+import { GatewayBoardProvider } from "./gateway-provider.ts";
+import type { BoardProvider } from "./provider.ts";
 
 afterEach(() => {
   vi.useRealTimers();

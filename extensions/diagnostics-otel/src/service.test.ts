@@ -191,6 +191,7 @@ import {
   runWithDiagnosticTraceContext,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { emitDiagnosticEvent } from "../api.js";
+import { MAX_RETAINED_TRUSTED_SPAN_CONTEXTS } from "./service-constants.js";
 import { createDiagnosticsOtelService } from "./service.js";
 import {
   CHILD_SPAN_ID,
@@ -214,6 +215,8 @@ import {
 function numberedSpanId(index: number) {
   return (index + 0x1000).toString(16).padStart(16, "0");
 }
+// Longer than the default 30-minute background exec timeout.
+const LATE_CHILD_ELAPSED_MS = 30 * 60_000 + 1_000;
 const PROTO_KEY = "__proto__";
 const MAX_TEST_OTEL_CONTENT_ATTRIBUTE_CHARS = 128 * 1024;
 const OTEL_TRUNCATED_SUFFIX_MAX_CHARS = 20;
@@ -3648,24 +3651,92 @@ describe("diagnostics-otel service", () => {
     );
   });
 
-  test("removes retained run contexts after queued diagnostics drain", async () => {
+  // Background commands can finish long after run.completed ended the parent span.
+  // A missed parent lookup makes OTel mint a fresh trace id, silently splitting the
+  // turn into one-span traces, so the link must not depend on elapsed time.
+  test.each([
+    [
+      "openclaw.model.call",
+      {
+        type: "model.call.completed",
+        ...MODEL_CALL_FIXTURE,
+        durationMs: 80,
+        trace: createTestTrace(MODEL_CALL_SPAN_ID, CHILD_SPAN_ID),
+      },
+    ],
+    [
+      "openclaw.tool.execution",
+      {
+        type: "tool.execution.completed",
+        runId: "run-1",
+        toolName: "read",
+        durationMs: 20,
+        trace: createTestTrace(TOOL_SPAN_ID, CHILD_SPAN_ID),
+      },
+    ],
+  ] as const)(
+    "parents late %s spans into the run trace after more than 30 minutes",
+    async (spanName, childEvent) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        await startOtelService({ traces: true, metrics: true });
+
+        emitRunStarted();
+        const runSpanContext = spanByName("openclaw.run").spanContext();
+        emitRunCompleted();
+
+        vi.setSystemTime(Date.now() + LATE_CHILD_ELAPSED_MS);
+        await flushDiagnosticEvents();
+        await waitForDiagnosticEventsDrained();
+        await flushDiagnosticEvents();
+
+        emitTrustedDiagnosticEvent(childEvent);
+        await flushDiagnosticEvents();
+
+        const parentContext = startedSpanParentContexts(spanName)[0];
+        expect(parentContext?.traceId).toBe(TRACE_ID);
+        expect(parentContext?.spanId).toBe(runSpanContext.spanId);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  // Retained contexts outlive the turn, so this bound is what keeps a long-lived
+  // gateway from growing the map without limit.
+  test("bounds retained run contexts by evicting the oldest completed runs", async () => {
     await startOtelService({ traces: true, metrics: true });
 
-    emitQueuedRunWithModelCalls();
-
-    await waitForDiagnosticEventsDrained();
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0);
-    });
-    await waitForDiagnosticEventsDrained();
-    await Promise.resolve();
-    telemetryState.tracer.setSpanContext.mockClear();
+    // Each completed run retains its own span id plus its upstream alias, so
+    // this comfortably overflows the bound and evicts the earliest run.
+    for (let index = 0; index < MAX_RETAINED_TRUSTED_SPAN_CONTEXTS; index += 1) {
+      const runId = `run-${index}`;
+      const runTrace = createTestTrace(numberedSpanId(index), SPAN_ID);
+      emitRunStarted({ runId, trace: runTrace });
+      emitRunCompleted({ runId, trace: runTrace });
+    }
+    const newestRunSpanId = numberedSpanId(MAX_RETAINED_TRUSTED_SPAN_CONTEXTS - 1);
+    const newestRunSpan = telemetryState.spans.findLast((span) => span.name === "openclaw.run");
     telemetryState.tracer.startSpan.mockClear();
 
-    emitDefaultModelUsage();
+    emitTrustedDiagnosticEvent({
+      type: "model.usage",
+      ...MODEL_FIXTURE,
+      usage: { input: 3, output: 2, total: 5 },
+      durationMs: 10,
+      trace: createTestTrace(GRANDCHILD_SPAN_ID, newestRunSpanId),
+    });
+    emitTrustedDiagnosticEvent({
+      type: "model.usage",
+      ...MODEL_FIXTURE,
+      usage: { input: 3, output: 2, total: 5 },
+      durationMs: 10,
+      trace: createTestTrace(MODEL_USAGE_SPAN_ID, numberedSpanId(0)),
+    });
 
-    expect(telemetryState.tracer.setSpanContext).not.toHaveBeenCalled();
-    expect(startedSpanCall("openclaw.model.usage")?.[2]).toBeUndefined();
+    const usageParents = startedSpanParentContexts("openclaw.model.usage");
+    expect(usageParents[0]?.spanId).toBe(newestRunSpan?.spanContext().spanId);
+    expect(usageParents[1]).toBeUndefined();
   });
 
   test("clears retained run contexts when the service stops", async () => {
@@ -3825,6 +3896,35 @@ describe("diagnostics-otel service", () => {
         (call) => call[0] === "openclaw.harness.run",
       ),
     ).toHaveLength(1);
+  });
+
+  // Exec spans used to always be roots, which stranded every shell command in its
+  // own single-span trace instead of nesting it under the run that spawned it.
+  test("nests exec spans under the run when the trace context is OpenClaw-owned", async () => {
+    await startOtelService({ traces: true, metrics: true });
+
+    emitRunStarted();
+    const runSpanContext = spanByName("openclaw.run").spanContext();
+    const execEvent = {
+      type: "exec.process.completed",
+      target: "host",
+      mode: "child",
+      outcome: "completed",
+      durationMs: 30,
+      commandLength: 12,
+      // Exec carries the ambient run scope, so its own span id is the run's.
+      trace: createTestTrace(CHILD_SPAN_ID, SPAN_ID),
+    } as const;
+
+    emitDiagnosticEventWithTrustedTraceContext(execEvent);
+    emitDiagnosticEvent(execEvent);
+    await flushDiagnosticEvents();
+
+    const execParents = startedSpanParentContexts("openclaw.exec");
+    expect(execParents[0]?.traceId).toBe(TRACE_ID);
+    expect(execParents[0]?.spanId).toBe(runSpanContext.spanId);
+    // A plain untrusted emitter must not be able to inject a parent link.
+    expect(execParents[1]).toBeUndefined();
   });
 
   test("exports exec process spans without command text", async () => {

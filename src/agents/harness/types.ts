@@ -112,6 +112,35 @@ export type AgentHarnessSettledTurnFinalizationResult = {
   assistantMessageIndex?: number;
   diagnosticTrace?: import("../../infra/diagnostic-trace-context.js").DiagnosticTraceContext;
 };
+type AgentHarnessIsolatedCompletionParams = {
+  /** Logical provider selected by the caller before harness dispatch. */
+  provider: string;
+  /** Logical model id selected by the caller before harness dispatch. */
+  modelId: string;
+  /** Exact prepared transport model; harnesses must not resolve another route. */
+  model: import("../../llm/types.js").Model;
+  /** Exact prepared credential; harnesses must not rotate or substitute it. */
+  auth: import("../model-auth-runtime-shared.js").ResolvedProviderAuth;
+  /** Non-reversible proof of the prepared credential owner when available. */
+  sourceAuthFingerprint?: string;
+  config: import("../../config/types.openclaw.js").OpenClawConfig;
+  agentId: string;
+  agentDir: string;
+  workspaceDir: string;
+  systemPrompt: string;
+  prompt: string;
+  timeoutMs: number;
+  abortSignal?: AbortSignal;
+  thinkLevel?: import("../../auto-reply/thinking.js").ThinkLevel;
+  streamParams?: {
+    maxTokens?: number;
+    temperature?: number;
+  };
+};
+type AgentHarnessIsolatedCompletionResult = {
+  /** The single assistant completion. Core rejects tool-shaped or failed results. */
+  assistant: import("../../llm/types.js").AssistantMessage;
+};
 export type AgentHarnessAuthBindingFingerprintParams = {
   authProfileId: string;
   authProfileStore: import("../auth-profiles/types.js").AuthProfileStore;
@@ -268,6 +297,13 @@ type AgentHarnessRunCapability = {
   finalizeSettledTurn?(
     params: AgentHarnessSettledTurnFinalizationParams,
   ): Promise<AgentHarnessSettledTurnFinalizationResult>;
+  /**
+   * Runs one fresh prompt-only completion with a literal zero-tool model surface.
+   * The harness must fail closed when it cannot enforce that native boundary.
+   */
+  runIsolatedCompletion?(
+    params: AgentHarnessIsolatedCompletionParams,
+  ): Promise<AgentHarnessIsolatedCompletionResult>;
 };
 
 type AgentHarnessSideQuestionCapability = {

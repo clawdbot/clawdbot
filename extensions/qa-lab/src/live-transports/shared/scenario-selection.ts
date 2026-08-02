@@ -42,14 +42,17 @@ export function resolveCatalogLiveTransportQaScenarioIds(params: {
 export function resolveLiveTransportQaScenarioIds(params: {
   channelId: string;
   profile?: string;
+  primaryModel?: string;
   providerMode: QaProviderModeInput;
   scenarioIds?: readonly string[];
 }) {
   return resolveQaProfileScenarios({
     profile: params.profile?.trim() || "release",
     providerMode: params.providerMode,
+    primaryModel: params.primaryModel,
     channelDriver: "live",
     channel: params.channelId,
+    executionKind: "flow",
     requireDeclaredChannel: true,
     scenarioIds: params.scenarioIds,
   }).scenarios.map((scenario) => scenario.id);
@@ -57,19 +60,22 @@ export function resolveLiveTransportQaScenarioIds(params: {
 
 export function listLiveTransportQaScenarios(params: {
   channelId: string;
+  primaryModel?: string;
   providerMode: QaProviderModeInput;
 }) {
   const defaultIds = new Set(resolveLiveTransportQaScenarioIds(params));
   const providerMode = normalizeQaProviderMode(params.providerMode);
+  const primaryModel = params.primaryModel?.trim() || defaultQaModelForMode(providerMode);
   const eligibleScenarios = readQaScenarioPack().scenarios.filter((scenario) =>
     scenarioDeclaresQaChannel(scenario, params.channelId),
   );
   const scenarios = resolveQaRunProfileExecutionSelection({
     scenarios: eligibleScenarios,
     providerMode,
-    primaryModel: defaultQaModelForMode(providerMode),
+    primaryModel,
     channelDriver: "live",
     channel: params.channelId,
+    executionKind: "flow",
   }).selectedScenarios;
   return scenarios.map((scenario) => {
     return {

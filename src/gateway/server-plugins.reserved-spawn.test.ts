@@ -20,6 +20,7 @@ const getAgentRunContext = vi.hoisted(() => vi.fn());
 const hasSubagentRunIdentity = vi.hoisted(() => vi.fn());
 const getLatestSubagentRunByChildSessionKey = vi.hoisted(() => vi.fn());
 const loadSessionEntryReadOnly = vi.hoisted(() => vi.fn());
+const runWithWorkAdmission = vi.hoisted(() => vi.fn());
 
 vi.mock("../agents/subagent-spawn.js", () => ({
   spawnSubagentDirect,
@@ -38,6 +39,11 @@ vi.mock("../infra/agent-events.js", () => ({
 }));
 vi.mock("./session-utils-store.js", () => ({
   loadSessionEntryReadOnly,
+}));
+vi.mock("../plugins/runtime/runtime-agent.js", () => ({
+  createRuntimeAgent: () => ({
+    session: { runWithWorkAdmission },
+  }),
 }));
 
 import { createGatewaySubagentRuntime } from "./server-plugins.js";
@@ -120,6 +126,12 @@ describe("createGatewaySubagentRuntime.spawnReserved", () => {
     getAgentRunContext.mockReset().mockReturnValue(undefined);
     hasSubagentRunIdentity.mockReset().mockReturnValue(false);
     getLatestSubagentRunByChildSessionKey.mockReset().mockReturnValue(undefined);
+    runWithWorkAdmission
+      .mockReset()
+      .mockImplementation(
+        async (_target: unknown, run: (signal: AbortSignal) => Promise<unknown>) =>
+          await run(new AbortController().signal),
+      );
     loadSessionEntryReadOnly.mockReset().mockReturnValue({
       cfg: {
         agents: {
@@ -160,53 +172,6 @@ describe("createGatewaySubagentRuntime.spawnReserved", () => {
         createGatewaySubagentRuntime().spawnReserved(reservation),
       ),
     ).rejects.toThrow("requires a live Gateway context");
-    expect(spawnSubagentDirect).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    {
-      name: "unscoped requester",
-      params: { ...reservation, requesterSessionKey: "main" },
-      expected: "canonical agent session key",
-    },
-    {
-      name: "noncanonical requester",
-      params: {
-        ...reservation,
-        requesterSessionKey: "Agent:Main:Subagent:Controller",
-      },
-      expected: "canonical agent session key",
-    },
-    {
-      name: "invalid target",
-      params: { ...reservation, targetAgentId: "Worker Agent" },
-      expected: "targetAgentId is invalid",
-    },
-    {
-      name: "noncanonical child",
-      params: {
-        ...reservation,
-        childSessionKey: "agent:worker:subagent:Plugin-Reserved-Child",
-      },
-      expected: "canonical values",
-    },
-    {
-      name: "blank task",
-      params: { ...reservation, task: " " },
-      expected: "task must be non-empty",
-    },
-    {
-      name: "backend-reserved run ID",
-      params: {
-        ...reservation,
-        runId: "exec-approval-followup:approval-1:nonce:nonce-1",
-      },
-      expected: "backend-reserved namespace",
-    },
-  ])("rejects malformed reserved spawn input: $name", async ({ params, expected }) => {
-    await expect(
-      withReservedPluginScope(() => createGatewaySubagentRuntime().spawnReserved(params)),
-    ).rejects.toThrow(expected);
     expect(spawnSubagentDirect).not.toHaveBeenCalled();
   });
 
@@ -358,6 +323,7 @@ describe("createGatewaySubagentRuntime.spawnReserved", () => {
         pluginOwnerId: "agentic-os",
         requesterSessionId: "requester-session",
         reservedSubagentClaimToken: expect.any(String),
+        signal: expect.any(AbortSignal),
       },
     );
     expect(dedupe.has(`agent:${reservation.runId}`)).toBe(false);

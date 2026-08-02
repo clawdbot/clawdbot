@@ -163,6 +163,92 @@ describe("realtime voice agent talkback queue", () => {
     expect(deliver).toHaveBeenCalledWith("guest-answer");
   });
 
+  it("bounds merged pending question text while a consult is active", async () => {
+    vi.useFakeTimers();
+    const logger = makeLogger();
+    let finishFirst: ((value: { text: string }) => void) | undefined;
+    const consult = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise<{ text: string }>((resolve) => {
+            finishFirst = resolve;
+          }),
+      )
+      .mockResolvedValue({ text: "queued-answer" });
+    const queue = createRealtimeVoiceAgentTalkbackQueue({
+      debounceMs: 1,
+      isStopped: () => false,
+      logger,
+      logPrefix: "[test]",
+      responseStyle: "brief",
+      fallbackText: "fallback",
+      consult,
+      deliver: vi.fn(),
+    });
+
+    queue.enqueue("first");
+    await vi.advanceTimersByTimeAsync(1);
+    const fragment = "x".repeat(4096);
+    for (let index = 0; index < 10; index += 1) {
+      queue.enqueue(fragment);
+    }
+    finishFirst?.({ text: "first-answer" });
+    await vi.runAllTimersAsync();
+
+    expectConsultCall(consult, 1, {
+      metadata: undefined,
+      question: Array.from({ length: 7 }, () => fragment).join("\n"),
+      responseStyle: "brief",
+    });
+    expect(consult).toHaveBeenCalledTimes(2);
+    expect(logger.warn).toHaveBeenCalledExactlyOnceWith(
+      "[test] consult queue full: droppedChars=4096 queued=1 queuedChars=28678",
+    );
+  });
+
+  it("bounds pending question count while preserving retained order", async () => {
+    vi.useFakeTimers();
+    const logger = makeLogger();
+    let finishFirst: ((value: { text: string }) => void) | undefined;
+    const consult = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise<{ text: string }>((resolve) => {
+            finishFirst = resolve;
+          }),
+      )
+      .mockResolvedValue({ text: "queued-answer" });
+    const queue = createRealtimeVoiceAgentTalkbackQueue({
+      debounceMs: 1,
+      isStopped: () => false,
+      logger,
+      logPrefix: "[test]",
+      responseStyle: "brief",
+      fallbackText: "fallback",
+      consult,
+      deliver: vi.fn(),
+    });
+
+    queue.enqueue("first");
+    await vi.advanceTimersByTimeAsync(1);
+    const metadata = Array.from({ length: 40 }, (_, index) => ({ index }));
+    metadata.forEach((entry, index) => queue.enqueue(`question-${index}`, entry));
+    finishFirst?.({ text: "first-answer" });
+    await vi.runAllTimersAsync();
+
+    expect(consult).toHaveBeenCalledTimes(33);
+    expect(
+      consult.mock.calls.slice(1).map(([request]) => {
+        return (request as { metadata?: unknown }).metadata;
+      }),
+    ).toStrictEqual(metadata.slice(0, 32));
+    expect(logger.warn).toHaveBeenCalledExactlyOnceWith(
+      "[test] consult queue full: droppedChars=11 queued=32 queuedChars=342",
+    );
+  });
+
   it("delivers fallback text when consult fails", async () => {
     vi.useFakeTimers();
     const logger = makeLogger();
@@ -238,12 +324,15 @@ describe("realtime voice agent talkback queue", () => {
     queue.enqueue("question");
     await vi.advanceTimersByTimeAsync(1);
     queue.close();
+    queue.close();
+    queue.enqueue("late question");
     await vi.runAllTimersAsync();
 
     if (!signal) {
       throw new Error("Expected talkback consult abort signal");
     }
     expect(signal.aborted).toBe(true);
+    expect(consult).toHaveBeenCalledOnce();
     expect(deliver).not.toHaveBeenCalled();
     expect(logger.warn).not.toHaveBeenCalled();
   });

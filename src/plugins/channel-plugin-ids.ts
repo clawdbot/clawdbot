@@ -21,8 +21,6 @@ export {
   collectUnregisteredConfiguredMemoryEmbeddingProviders,
   resolveChannelPluginIds,
   resolveChannelPluginIdsFromRegistry,
-  resolveConfiguredDeferredChannelPluginIds,
-  resolveConfiguredDeferredChannelPluginIdsFromRegistry,
   createConfigValidationMetadataPluginIdScope,
   createGatewayStartupMetadataPluginIdScope,
   isMetadataSnapshotScopedForGatewayStartup,

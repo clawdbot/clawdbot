@@ -1,6 +1,8 @@
 // Discord plugin module implements outbound adapter behavior.
-import type { OutboundIdentity } from "openclaw/plugin-sdk/channel-outbound";
-import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  type OutboundIdentity,
+  resolveOutboundSendDep,
+} from "openclaw/plugin-sdk/channel-outbound";
 import {
   attachChannelToResult,
   type ChannelOutboundAdapter,
@@ -35,6 +37,7 @@ import {
   type DiscordVoiceSendFn,
 } from "./outbound-send-context.js";
 import { resolveDiscordReplyReference } from "./reply-reference.js";
+import { createDiscordSendReceiptFromResults } from "./send.receipt.js";
 
 export const DISCORD_TEXT_CHUNK_LIMIT = 2000;
 const loadDiscordThreadBindings = createLazyRuntimeModule(
@@ -196,6 +199,9 @@ export const discordOutbound: ChannelOutboundAdapter = {
           reply: options.reply,
           accountId: ctx.accountId ?? undefined,
           silent: ctx.silent ?? undefined,
+          mediaAccess: ctx.mediaAccess,
+          mediaLocalRoots: ctx.mediaLocalRoots,
+          mediaReadFile: ctx.mediaReadFile,
         });
       }
       const mediaOptions = {
@@ -206,11 +212,26 @@ export const discordOutbound: ChannelOutboundAdapter = {
         mediaReadFile: ctx.mediaReadFile,
       };
       if (ctx.text.trim() && ctx.mediaUrl && isLikelyDiscordVideoMedia(ctx.mediaUrl)) {
-        await send(target, ctx.text, options);
-        return await send(target, "", {
+        const captionResult = await send(target, ctx.text, options);
+        // Forum sends create their thread on the first message; the video belongs in that thread.
+        const mediaTarget = captionResult.receipt?.threadId
+          ? `channel:${captionResult.receipt.threadId}`
+          : target;
+        const mediaResult = await send(mediaTarget, "", {
           ...mediaOptions,
           reply: options.reply?.scope === "all" ? options.reply : undefined,
         });
+        const threadId = captionResult.receipt?.threadId;
+        if (!threadId) {
+          return mediaResult;
+        }
+        return {
+          ...captionResult,
+          receipt: createDiscordSendReceiptFromResults({
+            results: [captionResult, mediaResult],
+            threadId,
+          }),
+        };
       }
       return await send(target, ctx.text, mediaOptions);
     },

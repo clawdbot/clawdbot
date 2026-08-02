@@ -1358,6 +1358,37 @@ describePosix("scripts/pr per-PR operation lock", () => {
     }
   });
 
+  it("joins worktree-list producers before releasing a successful operation lock", async () => {
+    const repoDir = createRepo();
+    const producerExited = join(repoDir, "worktree-producer-exited");
+    const fixture = writeOperationFixture(repoDir, "joined-worktree-operation.sh", [
+      "acquire_pr_operation_lock 42",
+      "git() {",
+      '  if [ "$1" = worktree ] && [ "$2" = list ]; then',
+      "    printf 'worktree %s\\0branch refs/heads/pr-42\\0\\0' \"$PWD\"",
+      "    exec 1>&-",
+      "    sleep 0.1",
+      "    : >worktree-producer-exited",
+      "    return 0",
+      "  fi",
+      '  command git "$@"',
+      "}",
+      'worktree_is_registered "$PWD"',
+      "test -f worktree-producer-exited",
+      "rm worktree-producer-exited",
+      'resolved="$(worktree_path_for_branch pr-42)"',
+      'test "$resolved" = "$PWD"',
+      "test -f worktree-producer-exited",
+    ]);
+
+    const result = await runSupervisedFixture(repoDir, fixture);
+
+    expect(result.status, result.stdout + "\n" + result.stderr).toBe(0);
+    expect(existsSync(producerExited)).toBe(true);
+    expect(refExists(repoDir)).toBe(false);
+    expect(result.stderr).not.toContain("process group remained active after wrapper exit");
+  });
+
   it("retains a failed operation lock when a detached child outlives its launcher", async () => {
     const repoDir = createRepo();
     const nestedPidFile = join(repoDir, "failed-nested-pgid");
@@ -2083,8 +2114,8 @@ describePosix("scripts/pr per-PR operation lock", () => {
     expect(existsSync(worktreeDir)).toBe(true);
   });
 
-  it("removes a registered relative worktree under a repo path with escapes", () => {
-    const repoDir = createRepo("repo with space \\ backslash");
+  it("removes a registered relative worktree under a NUL-framed escaped Unicode path", () => {
+    const repoDir = createRepo("repo with space \\ backslash\n雪");
     const worktreeDir = join(repoDir, ".worktrees", "pr-42");
     mkdirSync(dirname(worktreeDir), { recursive: true });
     execFileSync("git", ["worktree", "add", "-q", "-b", "pr-42", worktreeDir], {
@@ -2111,6 +2142,45 @@ describePosix("scripts/pr per-PR operation lock", () => {
         cwd: repoDir,
       }).status,
     ).toBe(1);
+  });
+
+  it("propagates producer failures from NUL-framed worktree listings", () => {
+    const repoDir = createRepo();
+    const result = runLockShell(repoDir, [
+      "git() {",
+      '  if [ "$1" = worktree ] && [ "$2" = list ]; then',
+      "    printf 'worktree %s\\0branch refs/heads/pr-42\\0\\0' \"$PWD\"",
+      "    return 23",
+      "  fi",
+      '  command git "$@"',
+      "}",
+      "set +e",
+      'worktree_is_registered "$PWD"',
+      'registered_status="$?"',
+      "worktree_path_for_branch pr-42 >/dev/null",
+      'branch_status="$?"',
+      'printf "%s %s\\n" "$registered_status" "$branch_status"',
+    ]);
+
+    expect(result.status, result.stdout + "\n" + result.stderr).toBe(0);
+    expect(result.stdout.trim()).toBe("23 23");
+  });
+
+  it("accepts only nonempty docs-only file lists", () => {
+    const repoDir = createRepo();
+    const result = runLockShell(repoDir, [
+      "set +e",
+      "file_list_is_docsish_only ''",
+      'empty_status="$?"',
+      "file_list_is_docsish_only $'docs/guide.md\\nREADME.md'",
+      'docs_status="$?"',
+      "file_list_is_docsish_only $'docs/guide.md\\nsrc/index.ts'",
+      'mixed_status="$?"',
+      'printf "%s %s %s\\n" "$empty_status" "$docs_status" "$mixed_status"',
+    ]);
+
+    expect(result.status, result.stdout + "\n" + result.stderr).toBe(0);
+    expect(result.stdout.trim()).toBe("1 0 1");
   });
 
   it("prunes a registered worktree whose directory is already gone", () => {

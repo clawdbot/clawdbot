@@ -95,7 +95,7 @@ describe("processDiscordMessage draft streaming progress", () => {
     expect(draftStream.retarget).toHaveBeenCalledWith("thread-1");
     expect(draftStream.update).toHaveBeenLastCalledWith(
       expect.stringMatching(
-        /^Investigating\n\n🛠️ Exec\n.*Checked the pipeline\.\n-# .*🛠️ 1 tool call.*⏱️ 5s$/,
+        /^Investigating\n\n🛠️ Exec\n.*Checked the pipeline\.\n-# .*🛠️ 1 tool call.*⏱️ 2s$/,
       ),
     );
     expect(draftStream.stop).toHaveBeenCalledTimes(1);
@@ -143,7 +143,7 @@ describe("processDiscordMessage draft streaming progress", () => {
         kind: "block",
         replies: [
           expect.objectContaining({
-            text: expect.stringMatching(/🛠️ 1 tool call.*⏱️ 5s$/),
+            text: expect.stringMatching(/🛠️ 1 tool call.*⏱️ 2s$/),
           }),
         ],
       }),
@@ -185,7 +185,7 @@ describe("processDiscordMessage draft streaming progress", () => {
         kind: "block",
         replies: [
           expect.objectContaining({
-            text: expect.stringMatching(/🛠️ 1 tool call.*⏱️ 5s$/),
+            text: expect.stringMatching(/🛠️ 1 tool call.*⏱️ 2s$/),
           }),
         ],
       }),
@@ -610,7 +610,7 @@ describe("processDiscordMessage draft streaming progress", () => {
       await elapseProgressDraftStartDelay();
       await params?.dispatcher.sendFinalReply({ text: "first answer" });
       await params?.dispatcher.waitForIdle();
-      await params?.replyOptions?.onAssistantMessageStart?.();
+      await params?.replyOptions?.onQueuedFollowupAdmitted?.();
       await params?.replyOptions?.onToolStart?.({ name: "read", phase: "start" });
       await params?.replyOptions?.onItemEvent?.({ progressText: "second tool done" });
       await elapseProgressDraftStartDelay();
@@ -645,7 +645,7 @@ describe("processDiscordMessage draft streaming progress", () => {
       await elapseProgressDraftStartDelay();
       await params?.dispatcher.sendFinalReply({ text: "first answer" });
       await params?.dispatcher.waitForIdle();
-      await params?.replyOptions?.onAssistantMessageStart?.();
+      await params?.replyOptions?.onQueuedFollowupAdmitted?.();
       await params?.dispatcher.sendFinalReply({ text: "text-only answer" });
       await params?.dispatcher.waitForIdle();
       return { queuedFinal: true, counts: { final: 2, tool: 0, block: 0 } };
@@ -676,7 +676,7 @@ describe("processDiscordMessage draft streaming progress", () => {
       await elapseProgressDraftStartDelay();
       await params?.dispatcher.sendFinalReply({ text: "first answer" });
       await params?.dispatcher.waitForIdle();
-      await params?.replyOptions?.onAssistantMessageStart?.();
+      await params?.replyOptions?.onQueuedFollowupAdmitted?.();
       await params?.replyOptions?.onToolStart?.({ name: "read", phase: "start" });
       await params?.replyOptions?.onItemEvent?.({ progressText: "queued work" });
       await elapseProgressDraftStartDelay();

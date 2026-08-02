@@ -62,6 +62,7 @@ import type {
   ProviderSystemPromptSectionId,
 } from "./system-prompt-contribution.js";
 import type { PromptMode, SilentReplyPromptMode } from "./system-prompt.types.js";
+import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 import {
   buildWatchedSessionsPromptLines,
   type PreparedWatchedSessionsPrompt,
@@ -87,7 +88,7 @@ const CONTEXT_FILE_ORDER = new Map<string, number>([
 
 const DYNAMIC_CONTEXT_FILE_BASENAMES = new Set<string>();
 const DEFAULT_HEARTBEAT_PROMPT_CONTEXT_BLOCK =
-  "Default heartbeat prompt:\n`Follow the heartbeat monitor scratch context when provided. Recurring tasks are cron jobs; create or change their schedules with cron tools or the openclaw cron CLI, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`";
+  "Default heartbeat prompt:\n`Follow the heartbeat monitor scratch context when provided. Recurring tasks are automations; create or change their schedules with the automations tool, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`";
 const SYSTEM_PROMPT_STABLE_PREFIX_CACHE_LIMIT = 64;
 
 type StablePromptPrefixCacheEntry = {
@@ -561,10 +562,20 @@ function buildMessagingSection(params: {
   requireExplicitMessageTarget?: boolean;
   silentReplyPromptMode?: SilentReplyPromptMode;
 }) {
-  if (params.isMinimal) {
-    return [];
-  }
   const messageToolOnly = params.sourceReplyDeliveryMode === "message_tool_only";
+  const visibleReplyInstruction = messageToolOnly
+    ? "- Current source visible reply MUST use `message(action=send)`; final text is private. Skip tool = user gets nothing. Brief tool-call progress is visible; no hidden instructions/private data/reasoning."
+    : "- Current-session final text normally routes to source. If turn says final private, visible output uses `message(action=send)`.";
+  const messageToolTargetInstruction = params.requireExplicitMessageTarget
+    ? "- `send`: `target` + `message`; target required this turn."
+    : "- `send`: `message`; current source is default target. Set `target` only elsewhere.";
+  if (params.isMinimal) {
+    // Restricted delivery turns still need their sole visible-reply contract;
+    // omitting it makes a private final silently disappear for the requester.
+    return messageToolOnly && params.availableTools.has("message")
+      ? ["## Messaging", visibleReplyInstruction, messageToolTargetInstruction, ""]
+      : [];
+  }
   const showGenericInlineButtonHint = params.runtimeChannel !== "slack";
   const groupMessageToolOnly =
     messageToolOnly && (params.runtimeChatType === "group" || params.runtimeChatType === "channel");
@@ -584,9 +595,7 @@ function buildMessagingSection(params: {
       : "";
   return [
     "## Messaging",
-    messageToolOnly
-      ? "- Current source visible reply MUST use `message(action=send)`; final text is private. Skip tool = user gets nothing. Brief tool-call progress is visible; no hidden instructions/private data/reasoning."
-      : "- Current-session final text normally routes to source. If turn says final private, visible output uses `message(action=send)`.",
+    visibleReplyInstruction,
     "- Cross-session: `sessions_send(sessionKey, message)`.",
     subagentOrchestrationGuidance,
     completionEventGuidance,
@@ -599,11 +608,7 @@ function buildMessagingSection(params: {
           groupMessageToolOnly
             ? "- Group/channel: stale/joke/light ack/low-value chatter => reaction or silence. Needed reply => `message(action=send)`; final text private."
             : "",
-          messageToolOnly
-            ? params.requireExplicitMessageTarget
-              ? "- `send`: `target` + `message`; target required this turn."
-              : "- `send`: `message`; current source is default target. Set `target` only elsewhere."
-            : "- `send`: `target` + `message`.",
+          messageToolOnly ? messageToolTargetInstruction : "- `send`: `target` + `message`.",
           params.messageChannelOptions
             ? `- No source default: proactive send needs \`channel\`; ids: ${params.messageChannelOptions}.`
             : "- Set `channel` only outside current/default source.",
@@ -863,12 +868,13 @@ export function buildAgentSystemPrompt(params: {
       "Own visible shell. Use for long/interactive jobs user should watch. exec for quiet work",
     canvas: "Present/eval/snapshot Canvas",
     nodes: "Paired node status/control/media",
-    cron: "Schedule/wake. Reminder text must read as reminder when fired; mention reminder for delayed gaps; include useful recent context.",
+    [AUTOMATIONS_TOOL_NAME]:
+      "Schedule/wake. Reminder text must read as reminder when fired; mention reminder for delayed gaps; include useful recent context. This feature is called automations; never call it cron.",
     message: "Message/channel actions",
     conversations_list: "List exact external conversation addresses",
     conversations_send: "Send directly to an external conversation",
     conversations_turn: "Send and wait for one correlated external reply",
-    openclaw: "System setup/config expert; writes need human approval",
+    openclaw: "Gateway restart/system setup/config; changes need human approval",
     gateway: "Read gateway config/schema",
     agents_list: acpSpawnRuntimeEnabled
       ? "List allowed OpenClaw subagent ids; not ACP ids"
@@ -905,7 +911,7 @@ export function buildAgentSystemPrompt(params: {
     "terminal",
     "canvas",
     "nodes",
-    "cron",
+    AUTOMATIONS_TOOL_NAME,
     "message",
     "conversations_list",
     "conversations_send",
@@ -1068,11 +1074,18 @@ export function buildAgentSystemPrompt(params: {
     "Never copy self or change prompts/safety/tool policy unless user explicitly requests.",
     "",
   ];
-  const skillsSection = buildSkillsSection({
-    skillsPrompt,
-    readToolName,
-    codeModeActive: params.codeModeActive,
-  });
+  // CLI backends own native file tools outside OpenClaw's projected tool list.
+  // Keep their skill catalog visible while embedded runs require a real read tool.
+  const canAccessSkills = params.codeModeActive
+    ? visibleTools.has("exec")
+    : visibleTools.has("read") || promptSurface === "cli_backend";
+  const skillsSection = canAccessSkills
+    ? buildSkillsSection({
+        skillsPrompt,
+        readToolName,
+        codeModeActive: params.codeModeActive,
+      })
+    : [];
   const skillWorkshopSection = availableTools.has(SKILL_WORKSHOP_TOOL_NAME)
     ? buildSkillWorkshopPromptSection()
     : [];
@@ -1262,7 +1275,7 @@ export function buildAgentSystemPrompt(params: {
       "Do not invent commands.",
       ...(hasOpenClaw
         ? [
-            "Config, channels, plugins, new agents, model/provider, updates: ask `openclaw`. Never write own config; OpenClaw is system expert.",
+            "Gateway restart, config, channels, plugins, agents, models/providers, updates: ask `openclaw`. Never restart the Gateway through shell commands or write your own config.",
           ]
         : [
             "Config read: `gateway` (`config.get|config.schema.lookup`). Write/restart unavailable; ask human.",

@@ -4,11 +4,7 @@ import type { SubagentSpawnPreparation } from "../context-engine/types.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../plugins/command-registry-state.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../process/gateway-work-admission.js";
 import { recordSessionCreated, recordSubagentSpawned } from "../sessions/session-state-events.js";
-import {
-  runSpawnPipeline,
-  type SpawnBackendAdapter,
-  summarizeSpawnError,
-} from "./spawn-pipeline.js";
+import { runSpawnPipeline, type SpawnBackendAdapter } from "./spawn-pipeline.js";
 import {
   materializeSubagentAttachments,
   type SubagentAttachmentReceiptFile,
@@ -21,7 +17,6 @@ import {
   captureProvisionalSessionCleanupIdentity as captureCleanupIdentity,
   cleanupFailedSpawnBeforeAgentStart,
   cleanupIdentityOption,
-  failedSpawnCleanupIdentity,
   applyReservedCleanupState,
   refreshProvisionalSessionCleanupIdentity,
   type ProvisionalSessionDeletionOutcome,
@@ -40,7 +35,8 @@ import type {
 import { setSubagentSpawnDepsForTest } from "./subagent-spawn-deps.js";
 import {
   hasDurableReservedSubagentIdentity,
-  recordIndeterminateFailedSubagentSpawn,
+  recordSpawnPipelineIndeterminateFailedSubagentSpawn,
+  resolveSpawnPipelineFailure,
 } from "./subagent-spawn-failure-quarantine.js";
 import { callSubagentGateway, readGatewayRunId } from "./subagent-spawn-gateway.js";
 import { buildSubagentLaunchRequest } from "./subagent-spawn-launch-request.js";
@@ -60,6 +56,7 @@ import {
   buildSubagentSystemPrompt,
   emitSessionLifecycleEvent,
   mergeDeliveryContext,
+  throwIfSpawnAborted,
 } from "./subagent-spawn.runtime.js";
 import { activateSwarmRun, removeQueuedSwarmRun } from "./swarm-scheduler.js";
 export { SUBAGENT_SPAWN_CONTEXT_MODES, SUBAGENT_SPAWN_MODES } from "./subagent-spawn.types.js";
@@ -113,6 +110,7 @@ export async function spawnSubagentDirect(
     },
     childIdem,
   } = requestResolution.resolved;
+  throwIfSpawnAborted(ctx.signal);
   let modelApplied = false;
   let threadBindingReady = false;
   let hasBoundThreadDeliveryOrigin = false;
@@ -162,6 +160,7 @@ export async function spawnSubagentDirect(
     let { childSessionOrigin } = childPlan.resolved;
     const spawnedByKey = requesterInternalKey;
     const { resolvedModel, thinkingOverride } = plan;
+    throwIfSpawnAborted(ctx.signal);
     if (
       ctx.preallocatedRunId &&
       hasDurableReservedSubagentIdentity({
@@ -213,6 +212,11 @@ export async function spawnSubagentDirect(
     if (initialSession.status === "error") {
       return { status: "error", error: initialSession.error, childSessionKey };
     }
+    const provisionalSessionCreatedAt =
+      typeof initialSession.entry?.createdAt === "number" &&
+      Number.isFinite(initialSession.entry.createdAt)
+        ? initialSession.entry.createdAt
+        : undefined;
     let provisionalSessionCleanupIdentity = captureCleanupIdentity(initialSession.entry);
     const cleanupProvisionedSessionForFailedSpawn = async (
       options?: Partial<Parameters<typeof cleanupFailedSpawnBeforeAgentStart>[0]>,
@@ -443,6 +447,7 @@ export async function spawnSubagentDirect(
     type SubagentBackendState = { contextEnginePreparation?: SubagentSpawnPreparation };
     const adapter: SpawnBackendAdapter<SubagentBackendState> = {
       async initialize() {
+        throwIfSpawnAborted(ctx.signal);
         const result =
           params.lightContext && preparedSpawnContext.mode === "isolated"
             ? ({ status: "ok", preparation: undefined } as const)
@@ -459,6 +464,7 @@ export async function spawnSubagentDirect(
         return { contextEnginePreparation: result.preparation };
       },
       async dispatchTurn() {
+        throwIfSpawnAborted(ctx.signal);
         if (params.collect) {
           return { runId: childIdem };
         }
@@ -577,43 +583,36 @@ export async function spawnSubagentDirect(
     });
     if (!pipelineResult.ok) {
       const runId = pipelineResult.runId ?? childIdem;
-      const spawnStatus =
-        pipelineResult.error && typeof pipelineResult.error === "object"
-          ? (pipelineResult.error as { spawnStatus?: unknown }).spawnStatus
-          : undefined;
+      const failure = resolveSpawnPipelineFailure(pipelineResult.error, pipelineResult.phase);
       retainAdmissionSlotAfterReturn =
         admissionSlot !== undefined &&
         failureCleanupOutcome === "indeterminate" &&
-        !recordIndeterminateFailedSubagentSpawn(admissionSlot, {
+        !recordSpawnPipelineIndeterminateFailedSubagentSpawn(admissionSlot, {
           runId,
           childSessionKey,
-          ...(ownership.controllerSessionKey
-            ? { controllerSessionKey: ownership.controllerSessionKey }
-            : {}),
+          controllerSessionKey: ownership.controllerSessionKey,
           requesterSessionKey: ownership.completionRequesterSessionKey,
-          ...(requesterOrigin ? { requesterOrigin } : {}),
-          ...(progressOrigin ? { progressOrigin } : {}),
+          requesterOrigin,
+          progressOrigin,
           requesterDisplayKey: ownership.completionRequesterDisplayKey,
           requesterAgentId,
           task,
-          ...(taskName ? { taskName } : {}),
+          taskName,
           agentId: targetAgentId,
           cleanup,
-          ...(label ? { label } : {}),
-          ...(resolvedModel ? { model: resolvedModel } : {}),
-          ...(targetAgentDir ? { agentDir: targetAgentDir } : {}),
-          ...(spawnedMetadata.workspaceDir ? { workspaceDir: spawnedMetadata.workspaceDir } : {}),
+          label: label || undefined,
+          model: resolvedModel,
+          agentDir: targetAgentDir,
+          workspaceDir: spawnedMetadata.workspaceDir,
           runTimeoutSeconds,
           spawnMode,
-          reason: summarizeSpawnError(pipelineResult.error),
-          ...failedSpawnCleanupIdentity(provisionalSessionCleanupIdentity),
+          reason: failure.summary,
+          sessionIdentity: provisionalSessionCleanupIdentity,
+          createdAt: provisionalSessionCreatedAt,
         });
       return withReservedCleanupResult({
-        status: spawnStatus === "forbidden" ? "forbidden" : "error",
-        error:
-          pipelineResult.phase === "register" && spawnStatus !== "forbidden"
-            ? `Failed to register subagent run: ${summarizeSpawnError(pipelineResult.error)}`
-            : summarizeSpawnError(pipelineResult.error),
+        status: failure.status,
+        error: failure.message,
         childSessionKey,
         ...(pipelineResult.phase === "initialize" ? {} : { runId }),
       });

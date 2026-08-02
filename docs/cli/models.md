@@ -19,6 +19,7 @@ Related:
 ## Common commands
 
 ```bash
+openclaw models --json
 openclaw models status
 openclaw models list
 openclaw models refresh
@@ -30,6 +31,9 @@ openclaw models scan
 `status` and `auth` subcommands accept `--agent <id>` to target a configured agent; `list`, `scan`, `aliases`, and `fallbacks`/`image-fallbacks` always use the configured default agent, and `set`/`set-image` reject `--agent` outright. When omitted, `--agent`-aware commands use `OPENCLAW_AGENT_DIR` if set, otherwise the configured default agent.
 
 ### Status
+
+Bare `openclaw models` is equivalent to `openclaw models status`.
+`openclaw models --json` returns the same object as `openclaw models status --json`.
 
 `openclaw models status` shows the resolved default/fallbacks plus an auth overview. For plugin-owned agent runtimes such as Codex, it also checks whether the owning plugin is enabled and passed startup payload verification. A route with valid credentials but an unavailable runtime reports `status: unavailable` instead of `usable`; JSON output includes separate `authStatus`, `runtimeStatus`, and bounded runtime diagnostics. When provider usage snapshots are available, the OAuth/API-key status section includes provider usage windows and quota snapshots. Current usage-window providers: Anthropic, GitHub Copilot, Gemini CLI, OpenAI, MiniMax, Xiaomi, and z.ai. Usage auth comes from provider-specific hooks when available; otherwise OpenClaw falls back to matching OAuth/API-key credentials from auth profiles, env, or config.
 

@@ -6,6 +6,7 @@ import { isIncognitoSessionKey } from "../incognito-session.js";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
 import {
+  isMessageOnlyCodexSourceReply,
   isSystemAgentOnlyCodexDynamicToolAllowlist,
   shouldDisableCodexToolSearchForModel,
 } from "./dynamic-tool-profile.js";
@@ -78,6 +79,7 @@ const CODEX_RING_ZERO_THREAD_CONFIG: JsonObject = {
   "orchestrator.mcp.enabled": false,
   "orchestrator.skills.enabled": false,
   "tools.experimental_request_user_input.enabled": false,
+  "tools.update_plan.enabled": false,
   hooks: {
     PreToolUse: [],
     PermissionRequest: [],
@@ -371,14 +373,22 @@ export function buildCodexRuntimeThreadConfigForRun(
   const ringZeroActive =
     (options.hostSystemAgentActive ?? isHostScopedAgentToolActive("openclaw")) &&
     isSystemAgentOnlyCodexDynamicToolAllowlist(params.toolsAllow);
+  const messageOnlySourceReply = isMessageOnlyCodexSourceReply(params);
+  const restrictedToolSurface = ringZeroActive || messageOnlySourceReply;
   const configMcpServers = config?.mcp_servers;
-  if (ringZeroActive && configMcpServers !== undefined && !isJsonObject(configMcpServers)) {
+  if (restrictedToolSurface && configMcpServers !== undefined && !isJsonObject(configMcpServers)) {
     throw new Error("Codex ring-zero received invalid thread mcp_servers config");
   }
   const ringZeroMcpServerNames = [
     ...(options.ringZeroInheritedMcpServerNames ?? []),
     ...(isJsonObject(configMcpServers) ? Object.keys(configMcpServers) : []),
   ];
+  // Per-thread configs deep-merge; drop server launch details before the
+  // final disabled-server patch so a delivery turn cannot retain MCP access.
+  const restrictedRunConfig =
+    restrictedToolSurface && isJsonObject(configMcpServers)
+      ? { ...config, mcp_servers: {} }
+      : config;
   const webSearchConfig = resolveCodexWebSearchPlan({
     config: params.config,
     disableTools: params.disableTools,
@@ -387,7 +397,7 @@ export function buildCodexRuntimeThreadConfigForRun(
     webSearchAllowed: options.webSearchAllowed,
   }).threadConfig;
   const baseConfig = buildCodexRuntimeThreadConfig(
-    mergeCodexThreadConfigs(config, webSearchConfig),
+    mergeCodexThreadConfigs(restrictedRunConfig, webSearchConfig),
     options,
   );
   const runtimeConfig =
@@ -400,11 +410,13 @@ export function buildCodexRuntimeThreadConfigForRun(
       params.delegationCapability === "report_only"
         ? CODEX_DELEGATION_DISABLED_THREAD_CONFIG
         : undefined,
-      buildCodexRingZeroThreadConfigPatch(
-        params,
-        options.hostSystemAgentActive,
-        ringZeroMcpServerNames,
-      ),
+      messageOnlySourceReply
+        ? buildCodexRestrictedToolThreadConfigPatch(ringZeroMcpServerNames)
+        : buildCodexRingZeroThreadConfigPatch(
+            params,
+            options.hostSystemAgentActive,
+            ringZeroMcpServerNames,
+          ),
     ) ?? baseConfig;
   if (params.bootstrapContextMode !== "lightweight") {
     return runtimeConfig;
@@ -425,9 +437,15 @@ export function buildCodexRingZeroThreadConfigPatch(
   if (!hostSystemAgentActive || !isSystemAgentOnlyCodexDynamicToolAllowlist(params.toolsAllow)) {
     return undefined;
   }
+  return buildCodexRestrictedToolThreadConfigPatch(inheritedMcpServerNames);
+}
+
+function buildCodexRestrictedToolThreadConfigPatch(
+  inheritedMcpServerNames: readonly string[],
+): JsonObject {
   // Narrow OpenClaw allowlists already send environments: [] and disable
-  // native code mode. Also remove every configurable Codex-owned tool source;
-  // upstream still adds its inert update_plan utility unconditionally.
+  // native code mode. Remove every other configurable Codex-owned source so
+  // native delegation, installed MCP tools, and utilities cannot escape the cap.
   const mcpServers = Object.fromEntries(
     [...new Set(inheritedMcpServerNames)].toSorted().map((name) => [name, { enabled: false }]),
   );

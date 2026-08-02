@@ -26,8 +26,8 @@ export function normalizeSubagentRunState(entry: SubagentRunRecord): SubagentRun
   entry.suppressCompletionDelivery = entry.suppressCompletionDelivery === true ? true : undefined;
   entry.terminalOwner =
     entry.terminalOwner === "interrupted-recovery" &&
-    Number.isFinite(entry.endedAt) &&
-    entry.outcome?.status === "error" &&
+    Number.isFinite(entry.execution.endedAt) &&
+    entry.execution.outcome?.status === "error" &&
     entry.endedReason === "subagent-error" &&
     entry.pauseReason !== "sessions_yield"
       ? "interrupted-recovery"
@@ -84,7 +84,7 @@ export function clearDeliveryState(entry: SubagentRunRecord): void {
 }
 
 /** Returns true when delivery is suspended with a durable timestamp. */
-export function isDeliverySuspended(entry: SubagentRunRecord): boolean {
+export function isDeliverySuspended(entry: Pick<SubagentRunRecord, "delivery">): boolean {
   return entry.delivery?.status === "suspended" && typeof entry.delivery.suspendedAt === "number";
 }
 
