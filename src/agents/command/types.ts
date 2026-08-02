@@ -133,6 +133,8 @@ export type AgentCommandOpts = {
   runId?: string;
   /** Immutable host-owned transport request id used for delivery and prompt-hook correlation. */
   requestMessageId?: string;
+  /** Immutable host-owned transport actor paired with requestMessageId for prompt-hook auth. */
+  requestSenderId?: string;
   /** Immutable gateway lifecycle ownership captured when this run was admitted. */
   lifecycleGeneration?: string;
   extraSystemPrompt?: string;

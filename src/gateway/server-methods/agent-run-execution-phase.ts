@@ -313,6 +313,7 @@ export function startAgentRunExecution(params: {
           messageChannel: params.delivery.originMessageChannel,
           runId: params.runId,
           requestMessageId: params.requestMessageId,
+          requestSenderId: params.requestSenderId,
           lane: params.request.lane,
           modelRun: params.request.modelRun === true,
           promptMode: params.request.promptMode,

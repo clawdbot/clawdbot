@@ -1682,9 +1682,11 @@ describe("gateway agent handler", () => {
 
     const call = await waitForAgentCommandCall<{
       requestMessageId?: string;
+      requestSenderId?: string;
       runContext?: { senderId?: string };
     }>();
     expect(call.requestMessageId).toBe("1784768109.234419");
+    expect(call.requestSenderId).toBe("U028EKM2A");
     expect(call.runContext?.senderId).toBe("U028EKM2A");
   });
 
