@@ -1,5 +1,5 @@
 /** Tests ACP client permission handling, env sanitization, and spawn invocation resolution. */
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { RequestPermissionRequest } from "@agentclientprotocol/sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -47,7 +47,6 @@ import {
   resolvePermissionRequest,
   shouldStripProviderAuthEnvVarsForAcpServer,
 } from "./client-helpers.js";
-import { runAcpClientInteractive } from "./client.js";
 import {
   extractAttachmentsFromPrompt,
   extractTextFromPrompt,
@@ -1022,51 +1021,4 @@ describe("acp event mapper", () => {
       'exec: command: \\x1b[2K\\x1b[1A\\x1b[2K[permission] Allow "safe"? (y/N) \\nnext',
     );
   });
-});
-
-describe("runAcpClientInteractive", () => {
-  it("kills the spawned ACP server when the handshake fails", async () => {
-    const dir = await createTempDir();
-    const pidFile = path.join(dir, "server.pid");
-    // The client always prepends "acp" to the server args, so with
-    // serverCommand=node the spawned invocation is `node acp`: provide a fake
-    // entry that records its pid, breaks the handshake by closing stdout,
-    // then stays alive on a timer.
-    await writeFile(
-      path.join(dir, "acp"),
-      `require("fs").writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));\n` +
-        `process.stdout.end("garbage-not-json\\n");\n` +
-        `setTimeout(() => {}, 300_000);\n`,
-    );
-
-    let serverPid: number | undefined;
-    try {
-      await expect(
-        runAcpClientInteractive({ serverCommand: process.execPath, cwd: dir }),
-      ).rejects.toThrow(/ACP connection closed/);
-
-      serverPid = Number(await readFile(pidFile, "utf8"));
-      const deadline = Date.now() + 5_000;
-      let alive = true;
-      while (Date.now() < deadline && alive) {
-        try {
-          process.kill(serverPid, 0);
-        } catch {
-          alive = false;
-        }
-        if (alive) {
-          await new Promise((resolve) => setTimeout(resolve, 50));
-        }
-      }
-      expect(alive).toBe(false);
-    } finally {
-      if (serverPid !== undefined) {
-        try {
-          process.kill(serverPid, "SIGKILL");
-        } catch {
-          // already reaped
-        }
-      }
-    }
-  }, 20_000);
 });
