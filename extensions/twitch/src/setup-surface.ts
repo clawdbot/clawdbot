@@ -206,15 +206,12 @@ async function promptRefreshCredential(params: {
       return existingValue;
     }
   }
-  return (
-    (
-      await params.prompter.text({
-        message: params.inputMessage,
-        sensitive: true,
-        validate: (value) => (value?.trim() ? undefined : "Required"),
-      })
-    ).trim() || undefined
-  );
+  const value = await params.prompter.text({
+    message: params.inputMessage,
+    sensitive: true,
+    validate: (input) => (input?.trim() ? undefined : "Required"),
+  });
+  return value.trim() || undefined;
 }
 
 export async function promptRefreshTokenSetup(

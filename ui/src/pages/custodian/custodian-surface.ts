@@ -180,8 +180,7 @@ class CustodianSurface extends OpenClawLightDomElement {
               wizardDisabled: store.sending || !store.chatAvailable,
               wizardSecretVisible: store.wizardSecretVisible,
               onWizardValueChange: (value) => store.setWizardValue(value),
-              onWizardAnswer: (value, includeValue) =>
-                store.answerWizardStep(message, value, includeValue),
+              onWizardAnswer: (value) => store.answerWizardStep(message, value),
               onToggleWizardSecretVisibility: () => store.toggleWizardSecretVisibility(),
             });
           })}

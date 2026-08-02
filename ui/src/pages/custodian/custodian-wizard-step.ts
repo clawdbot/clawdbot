@@ -7,17 +7,16 @@ type CustodianWizardSubmission = {
   display: string;
 };
 
-function findOptionIndex(step: WizardStep, value: unknown): number {
-  return (step.options ?? []).findIndex((option) => Object.is(option.value, value));
+function findOption(step: WizardStep, value: unknown) {
+  return step.options?.find((option) => Object.is(option.value, value));
 }
 
 /** Build the typed answer sent by a client rendering the current wizard step. */
 export function custodianWizardSubmission(
   step: WizardStep,
   value: unknown,
-  includeValue = true,
 ): CustodianWizardSubmission | null {
-  if (!includeValue || step.type === "note" || step.type === "action" || step.type === "progress") {
+  if (step.type === "note" || step.type === "action" || step.type === "progress") {
     return { answer: { stepId: step.id }, display: t("common.continue") };
   }
   if (step.type === "text") {
@@ -35,11 +34,8 @@ export function custodianWizardSubmission(
     };
   }
   if (step.type === "select") {
-    const index = findOptionIndex(step, value);
-    const option = step.options?.[index];
-    return index >= 0 && option
-      ? { answer: { stepId: step.id, value }, display: option.label }
-      : null;
+    const option = findOption(step, value);
+    return option ? { answer: { stepId: step.id, value }, display: option.label } : null;
   }
   if (!Array.isArray(value)) {
     return null;
@@ -47,13 +43,13 @@ export function custodianWizardSubmission(
   if (value.length === 0) {
     return { answer: { stepId: step.id, value: [] }, display: t("common.none") };
   }
-  const indexes = value.map((entry) => findOptionIndex(step, entry));
-  if (indexes.some((index) => index < 0)) {
+  const labels = value.map((entry) => findOption(step, entry)?.label);
+  if (!labels.every((label): label is string => label !== undefined)) {
     return null;
   }
   return {
     answer: { stepId: step.id, value },
-    display: indexes.map((index) => step.options?.[index]?.label ?? "").join(", "),
+    display: labels.join(", "),
   };
 }
 

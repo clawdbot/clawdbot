@@ -39,7 +39,7 @@ describe("Custodian rich wizard answers", () => {
       answer: { stepId: "step", value: "secret" },
       display: "secret",
     });
-    expect(custodianWizardSubmission(step({ type: "action" }), undefined, false)).toEqual({
+    expect(custodianWizardSubmission(step({ type: "action" }), undefined)).toEqual({
       answer: { stepId: "step" },
       display: "Continue",
     });

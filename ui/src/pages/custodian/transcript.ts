@@ -153,7 +153,7 @@ export function renderCustodianTranscriptEntry(params: {
   onSelect: (label: string) => void;
   onSkip: () => void;
   onWizardValueChange: (value: unknown) => void;
-  onWizardAnswer: (value: unknown, includeValue?: boolean) => void;
+  onWizardAnswer: (value: unknown) => void;
   onToggleWizardSecretVisibility: () => void;
 }) {
   const question = params.message.question;

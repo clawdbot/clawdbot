@@ -232,6 +232,21 @@ async function applyWizardTextInputValue(params: {
       }).cfg;
 }
 
+function resolveTextInputKeepMessage(
+  input: ChannelSetupWizardTextInput,
+  currentValue: string,
+): string {
+  if (input.sensitive === true) {
+    // Never pass a configured secret to plugin-owned presentation code.
+    return typeof input.keepPrompt === "string"
+      ? input.keepPrompt
+      : `${input.message} already configured. Keep it?`;
+  }
+  return typeof input.keepPrompt === "function"
+    ? input.keepPrompt(currentValue)
+    : (input.keepPrompt ?? `${input.message} set (${currentValue}). Keep it?`);
+}
+
 export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
   plugin: ChannelSetupWizardPlugin;
   wizard: ChannelSetupWizard;
@@ -510,15 +525,8 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
           }
 
           if (currentValue && textInput.confirmCurrentValue !== false) {
-            const configuredValueMessage = textInput.sensitive
-              ? typeof textInput.keepPrompt === "string"
-                ? textInput.keepPrompt
-                : `${textInput.message} already configured. Keep it?`
-              : typeof textInput.keepPrompt === "function"
-                ? textInput.keepPrompt(currentValue)
-                : (textInput.keepPrompt ?? `${textInput.message} set (${currentValue}). Keep it?`);
             const keep = await prompter.confirm({
-              message: configuredValueMessage,
+              message: resolveTextInputKeepMessage(textInput, currentValue),
               initialValue: true,
             });
             if (keep) {

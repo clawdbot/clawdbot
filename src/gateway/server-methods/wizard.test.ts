@@ -28,6 +28,17 @@ function readSuccessfulResponse(respond: ReturnType<typeof vi.fn>): Record<strin
   return result as Record<string, unknown>;
 }
 
+async function invokeWizard(
+  method: "wizard.start" | "wizard.next",
+  params: Record<string, unknown>,
+  context: ReturnType<typeof createWizardContext>,
+): Promise<Record<string, unknown>> {
+  const respond = vi.fn();
+  const handler = expectDefined(wizardHandlers[method], `wizardHandlers[${method}] test invariant`);
+  await handler({ params, respond, context } as never);
+  return readSuccessfulResponse(respond);
+}
+
 describe("wizard session lookup", () => {
   it.each([
     { method: "wizard.next", params: { sessionId: "expired" } },
@@ -241,22 +252,7 @@ describe("wizard step serialization", () => {
         initialValue: "123456:REAL-SECRET",
       });
     });
-    const respond = vi.fn();
-    const handler = expectDefined(
-      wizardHandlers["wizard.start"],
-      "wizardHandlers[wizard.start] test invariant",
-    );
-
-    await handler({
-      req: { type: "req", id: "wizard-sensitive-start", method: "wizard.start", params: {} },
-      params: {},
-      client: null,
-      isWebchatConnect: () => false,
-      respond,
-      context,
-    } as unknown as GatewayRequestHandlerOptions);
-
-    const result = readSuccessfulResponse(respond);
+    const result = await invokeWizard("wizard.start", {}, context);
     expect(result.step).toMatchObject({ sensitive: true });
     expect(result.step).not.toHaveProperty("initialValue");
     for (const session of context.wizardSessions.values()) {
@@ -276,31 +272,11 @@ describe("wizard step serialization", () => {
         initialValue: "123456:REAL-SECRET",
       });
     });
-    const startRespond = vi.fn();
-    const startHandler = expectDefined(
-      wizardHandlers["wizard.start"],
-      "wizardHandlers[wizard.start] test invariant",
-    );
-
-    await startHandler({
-      req: { type: "req", id: "wizard-plain-start", method: "wizard.start", params: {} },
-      params: {},
-      client: null,
-      isWebchatConnect: () => false,
-      respond: startRespond,
-      context,
-    } as unknown as GatewayRequestHandlerOptions);
-
-    const startResult = readSuccessfulResponse(startRespond);
+    const startResult = await invokeWizard("wizard.start", {}, context);
     expect(startResult.step).toMatchObject({ initialValue: "OpenClaw" });
     const sessionId = startResult.sessionId;
     expect(typeof sessionId).toBe("string");
 
-    const nextRespond = vi.fn();
-    const nextHandler = expectDefined(
-      wizardHandlers["wizard.next"],
-      "wizardHandlers[wizard.next] test invariant",
-    );
     const params = {
       sessionId,
       answer: {
@@ -308,16 +284,7 @@ describe("wizard step serialization", () => {
         value: "Renamed",
       },
     };
-    await nextHandler({
-      req: { type: "req", id: "wizard-sensitive-next", method: "wizard.next", params },
-      params,
-      client: null,
-      isWebchatConnect: () => false,
-      respond: nextRespond,
-      context,
-    } as unknown as GatewayRequestHandlerOptions);
-
-    const nextResult = readSuccessfulResponse(nextRespond);
+    const nextResult = await invokeWizard("wizard.next", params, context);
     expect(nextResult.step).toMatchObject({ sensitive: true });
     expect(nextResult.step).not.toHaveProperty("initialValue");
     for (const session of context.wizardSessions.values()) {

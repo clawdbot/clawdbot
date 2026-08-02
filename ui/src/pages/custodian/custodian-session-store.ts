@@ -178,14 +178,7 @@ export class CustodianSessionStore {
     // Trim decides emptiness only; sensitive values may carry meaningful whitespace.
     const message = this.sensitive ? text : text.trim();
     const client = this.activeClient;
-    const allowsEmptyWizardReply = questionReply && this.wizardInputPending;
-    if (
-      (!message.trim() && !allowsEmptyWizardReply) ||
-      !client ||
-      !this.chatAvailable ||
-      this.sending ||
-      this.setupRequired
-    ) {
+    if (!message.trim() || !client || !this.chatAvailable || this.sending || this.setupRequired) {
       this.emit();
       return "rejected";
     }
@@ -303,11 +296,11 @@ export class CustodianSessionStore {
     void this.send(option?.reply ?? label, label, true);
   }
 
-  answerWizardStep(message: CustodianMessage, value: unknown, includeValue = true): void {
+  answerWizardStep(message: CustodianMessage, value: unknown): void {
     if (!message.step || !this.wizardInputPending) {
       return;
     }
-    const submission = custodianWizardSubmission(message.step, value, includeValue);
+    const submission = custodianWizardSubmission(message.step, value);
     const client = this.activeClient;
     if (!submission || !client || !this.chatAvailable || this.sending || this.setupRequired) {
       this.emit();

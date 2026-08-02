@@ -17,7 +17,7 @@ type WizardStepControlsProps = {
   // so two step controls in one document cannot capture each other's label.
   inputId: string;
   onValueChange: (value: unknown) => void;
-  onAnswer: (value: unknown, includeValue?: boolean) => void;
+  onAnswer: (value: unknown) => void;
   presentation?: "channels";
   answerLabel?: string;
   confirmAffirmativeLabel?: string;
@@ -159,9 +159,7 @@ function renderContinueStep(props: WizardStepControlsProps) {
         </a>`
       : nothing}
     ${renderDeviceCode(step)}
-    ${renderAnswerButton(props, t("modelSetup.wizard.continue"), () =>
-      props.onAnswer(undefined, false),
-    )}
+    ${renderAnswerButton(props, t("modelSetup.wizard.continue"), () => props.onAnswer(undefined))}
   `;
 }
 
