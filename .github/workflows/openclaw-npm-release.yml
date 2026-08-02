@@ -885,6 +885,21 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "false"
 
+      - name: Verify matching plugin releases are published
+        run: |
+          set -euo pipefail
+          PLAN_FILE="$RUNNER_TEMP/plugin-npm-release-plan.json"
+          node --import tsx scripts/plugin-npm-release-plan.ts \
+            --selection-mode all-publishable > "$PLAN_FILE"
+          MISSING_PLUGINS="$(
+            jq -r '.candidates[]? | "- \(.packageName)@\(.version)"' "$PLAN_FILE"
+          )"
+          if [[ -n "$MISSING_PLUGINS" ]]; then
+            echo "OpenClaw npm publish is blocked because matching plugin releases are missing:" >&2
+            printf '%s\n' "$MISSING_PLUGINS" >&2
+            exit 1
+          fi
+
       - name: Ensure version is not already published
         run: |
           set -euo pipefail
