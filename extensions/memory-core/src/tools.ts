@@ -610,7 +610,9 @@ export function createMemorySearchTool(options: {
             let fallback: unknown;
             let searchMode: string | undefined;
             let pausedIndexIdentityReason: string | undefined;
-            let staleness: ReturnType<typeof resolveMemorySearchStaleness> = null;
+            let staleness:
+              | Exclude<ReturnType<typeof resolveMemorySearchStaleness>, null>
+              | undefined;
             let managerMs: number | undefined;
             let managerCacheState: string | undefined;
             let searchDebug:
@@ -759,7 +761,7 @@ export function createMemorySearchTool(options: {
                   rawResults = rawResults.filter((hit) => hit.source === "memory");
                 }
                 const status = activeMemory.manager.status();
-                staleness = resolveMemorySearchStaleness(status, agentId);
+                staleness = resolveMemorySearchStaleness(status, agentId) ?? undefined;
                 const payloadResults = rawResults.map((result) => ({
                   ...result,
                   snippet: stripMemoryAnnotationCarriers(result.snippet),
