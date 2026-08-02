@@ -26,9 +26,6 @@ export {
   persistInboundImagesForTranscript,
 } from "./chat-attachments.js";
 export { normalizeRpcAttachmentsToChatAttachments } from "./server-methods/attachment-normalize.js";
-export {
-  loadSessionEntry,
-  resolveGatewayModelSupportsImages,
-  resolveSessionModelRef,
-} from "./session-utils.js";
+export { resolveGatewayModelSupportsImages, resolveSessionModelRef } from "./session-utils.js";
+export { loadResolvedSessionEntry } from "../config/sessions/session-entry-loader.js";
 export { formatForLog } from "./ws-log.js";

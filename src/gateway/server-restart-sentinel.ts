@@ -10,6 +10,7 @@ import { recordInboundSession } from "../channels/session.js";
 import { dispatchAssembledChannelTurn } from "../channels/turn/kernel.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
+import { loadResolvedSessionEntry } from "../config/sessions/session-entry-loader.js";
 import { parseSessionThreadInfo } from "../config/sessions/thread-info.js";
 import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
@@ -55,7 +56,6 @@ import {
   deliverRestartSentinelNotice,
   enqueueRestartSentinelNotice,
 } from "./server-restart-sentinel-notice.js";
-import { loadSessionEntry } from "./session-utils.js";
 import { runStartupTasks, type StartupTask } from "./startup-tasks.js";
 
 const log = createSubsystemLogger("gateway/restart-sentinel");
@@ -183,7 +183,7 @@ export async function deliverQueuedSessionDelivery(params: {
   entry: QueuedSessionDelivery;
   stateDir?: string;
 }) {
-  const { cfg, entry, storePath, canonicalKey } = loadSessionEntry(params.entry.sessionKey);
+  const { cfg, entry, storePath, canonicalKey } = loadResolvedSessionEntry(params.entry.sessionKey);
   const queuedDeliveryContext = resolveQueuedSessionDeliveryContext(params.entry);
 
   if (params.entry.kind === "systemEvent") {
@@ -518,7 +518,7 @@ async function loadRestartSentinelStartupTask(params: {
 
     const { baseSessionKey, threadId: sessionThreadId } = parseSessionThreadInfo(sessionKey);
 
-    const { cfg, entry, canonicalKey } = loadSessionEntry(sessionKey);
+    const { cfg, entry, canonicalKey } = loadResolvedSessionEntry(sessionKey);
 
     const sentinelContext = payload.deliveryContext;
     let sessionDeliveryContext = deliveryContextFromSession(entry);
@@ -528,7 +528,7 @@ async function loadRestartSentinelStartupTask(params: {
       baseSessionKey &&
       baseSessionKey !== sessionKey
     ) {
-      const { entry: baseEntry } = loadSessionEntry(baseSessionKey);
+      const { entry: baseEntry } = loadResolvedSessionEntry(baseSessionKey);
       chatType =
         sessionDeliveryOrigin(entry)?.chatType ??
         sessionDeliveryOrigin(baseEntry)?.chatType ??

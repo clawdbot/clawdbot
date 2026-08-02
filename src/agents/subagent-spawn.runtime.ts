@@ -21,7 +21,7 @@ export {
   resolveLeastPrivilegeOperatorScopesForMethod,
 } from "../gateway/method-scopes.js";
 export { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
-export { resolveGatewaySessionStoreTarget } from "../gateway/session-utils.js";
+export { resolveSessionStoreTarget } from "../config/sessions/session-store-target.js";
 export { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 export { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 export {

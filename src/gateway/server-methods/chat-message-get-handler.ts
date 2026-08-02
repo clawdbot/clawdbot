@@ -5,6 +5,7 @@ import {
   validateChatMessageGetParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { loadResolvedSessionEntryReadOnly } from "../../config/sessions/session-entry-loader.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   augmentChatHistoryWithCanvasBlocks,
@@ -16,7 +17,6 @@ import {
   readSessionMessageByIdAsync,
   readSessionMessagesAsync,
 } from "../session-transcript-readers.js";
-import { loadSessionEntryReadOnly } from "../session-utils.js";
 import { readChatHistoryMessageId } from "./chat-history-pages.js";
 import { resolveRequestedChatAgentId, validateChatSelectedAgent } from "./chat-origin-routing.js";
 import { normalizeOptionalChatText as normalizeOptionalText } from "./chat-text-normalization.js";
@@ -73,7 +73,10 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
       agentId: agentIdOverride,
     });
     const sessionLoadOptions = requestedAgentId ? { agentId: requestedAgentId } : undefined;
-    const { cfg, storePath, entry } = loadSessionEntryReadOnly(sessionKey, sessionLoadOptions);
+    const { cfg, storePath, entry } = loadResolvedSessionEntryReadOnly(
+      sessionKey,
+      sessionLoadOptions,
+    );
     const selectedAgent = validateChatSelectedAgent({
       cfg,
       requestedSessionKey: sessionKey,

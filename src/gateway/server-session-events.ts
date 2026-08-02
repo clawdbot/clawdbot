@@ -11,6 +11,7 @@ import {
   loadSessionEntryReadOnly as loadAccessorSessionEntryReadOnly,
   resolveTranscriptSessionKeyBySessionId,
 } from "../config/sessions/session-accessor.js";
+import { loadResolvedSessionEntryReadOnly } from "../config/sessions/session-entry-loader.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import type { SessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import type { InternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
@@ -31,11 +32,7 @@ import {
   attachOpenClawTranscriptMeta,
   readSessionMessageCountAsync,
 } from "./session-transcript-readers.js";
-import {
-  loadGatewaySessionRow,
-  loadSessionEntryReadOnly,
-  type GatewaySessionRow,
-} from "./session-utils.js";
+import { loadGatewaySessionRow, type GatewaySessionRow } from "./session-utils.js";
 
 type SessionEventSubscribers = Pick<SessionEventSubscriberRegistry, "getAll">;
 type SessionMessageSubscribers = Pick<SessionMessageSubscriberRegistry, "get">;
@@ -82,7 +79,7 @@ function readTranscriptUpdateLifecycleOwner(
   const storePath = normalizeOptionalString(update.target?.storePath) ?? marker?.storePath;
   const entry = storePath
     ? loadAccessorSessionEntryReadOnly({ agentId, sessionKey, storePath })
-    : loadSessionEntryReadOnly(sessionKey, agentId ? { agentId } : undefined)?.entry;
+    : loadResolvedSessionEntryReadOnly(sessionKey, agentId ? { agentId } : undefined)?.entry;
   if (!entry || (sessionId && entry.sessionId !== sessionId)) {
     return undefined;
   }
@@ -287,7 +284,7 @@ async function handleTranscriptUpdateBroadcast(
           }),
           storePath: updateStorePath,
         }
-      : loadSessionEntryReadOnly(sessionKey, { agentId: routingAgentId });
+      : loadResolvedSessionEntryReadOnly(sessionKey, { agentId: routingAgentId });
     const entry = fallbackTarget?.entry;
     const messageSessionId =
       compatibleLegacyMarker?.sessionId ??

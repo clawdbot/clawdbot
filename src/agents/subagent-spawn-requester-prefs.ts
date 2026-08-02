@@ -11,7 +11,7 @@ import { resolveThinkingDefault } from "./model-thinking-default.js";
 import {
   loadSessionEntry,
   resolveAgentConfig,
-  resolveGatewaySessionStoreTarget,
+  resolveSessionStoreTarget,
 } from "./subagent-spawn.runtime.js";
 
 export function readRequesterThinkingLevel(params: {
@@ -21,7 +21,7 @@ export function readRequesterThinkingLevel(params: {
 }): string | undefined {
   let entry: SessionEntry | undefined;
   try {
-    const target = resolveGatewaySessionStoreTarget({
+    const target = resolveSessionStoreTarget({
       cfg: params.cfg,
       key: params.requesterInternalKey,
     });
@@ -80,7 +80,7 @@ export function readRequesterFastMode(params: {
 }): FastMode {
   let entry: SessionEntry | undefined;
   try {
-    const target = resolveGatewaySessionStoreTarget({
+    const target = resolveSessionStoreTarget({
       cfg: params.cfg,
       key: params.requesterInternalKey,
     });

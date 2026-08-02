@@ -25,4 +25,5 @@ export {
   getActivePluginRegistryVersion,
 } from "../../plugins/runtime.js";
 export { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
-export { loadSessionEntryReadOnly, resolveSessionModelRef } from "../session-utils.js";
+export { resolveSessionModelRef } from "../session-utils.js";
+export { loadResolvedSessionEntryReadOnly } from "../../config/sessions/session-entry-loader.js";

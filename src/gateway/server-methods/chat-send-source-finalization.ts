@@ -3,12 +3,12 @@ import {
   isReplyPayloadStatusNotice,
   type ReplyPayload,
 } from "../../auto-reply/reply-payload.js";
+import { loadResolvedSessionEntry } from "../../config/sessions/session-entry-loader.js";
 import {
   appendLocalMediaParentRoots,
   getAgentScopedMediaLocalRoots,
 } from "../../media/local-roots.js";
 import { attachManagedOutgoingMediaToMessage } from "../managed-image-attachments.js";
-import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import {
   buildAssistantDisplayContentFromReplyPayloads,
@@ -92,7 +92,7 @@ export async function finalizeChatSendSourceReplies(params: {
     accountId,
     payloads: agentRunReplyPayloads,
   });
-  const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(
+  const { storePath: latestStorePath, entry: latestEntry } = loadResolvedSessionEntry(
     sessionKey,
     sessionLoadOptions,
   );

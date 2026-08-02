@@ -3,6 +3,7 @@ import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-pay
 import { getReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ReplyDispatcherOptions } from "../../auto-reply/reply/reply-dispatcher.js";
 import { readSessionTranscriptWatermark } from "../../config/sessions/session-accessor.js";
+import { loadResolvedSessionEntry } from "../../config/sessions/session-entry-loader.js";
 import {
   appendLocalMediaParentRoots,
   getAgentScopedMediaLocalRoots,
@@ -17,7 +18,6 @@ import {
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { isSuppressedControlReplyText } from "../control-reply-text.js";
 import { attachManagedOutgoingMediaToMessage } from "../managed-image-attachments.js";
-import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import {
   buildAssistantDisplayContentFromReplyPayloads,
@@ -112,7 +112,7 @@ export function createChatSendReplyDispatch(params: {
     afterSeq: 0,
   };
   const captureAgentTranscriptStart = () => {
-    const current = loadSessionEntry(sessionKey, sessionLoadOptions);
+    const current = loadResolvedSessionEntry(sessionKey, sessionLoadOptions);
     const sessionId = current.entry?.sessionId ?? backingSessionId;
     const watermark = sessionId
       ? readSessionTranscriptWatermark({
@@ -173,7 +173,7 @@ export function createChatSendReplyDispatch(params: {
     if (!transcriptPayload) {
       return;
     }
-    const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(
+    const { storePath: latestStorePath, entry: latestEntry } = loadResolvedSessionEntry(
       sessionKey,
       sessionLoadOptions,
     );

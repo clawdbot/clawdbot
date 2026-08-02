@@ -1,3 +1,5 @@
+// Cancellation orchestration across active, queued, pending, and worker runs.
+import { loadResolvedSessionEntry } from "../../config/sessions/session-entry-loader.js";
 import {
   abortChatRunById,
   type ChatAbortControllerEntry,
@@ -9,8 +11,6 @@ import {
   type QueuedChatTurnMap,
 } from "../chat-queued-turns.js";
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX } from "../server-shared.js";
-// Cancellation orchestration across active, queued, pending, and worker runs.
-import { loadSessionEntry } from "../session-utils.js";
 import { asWorkerInferenceControl } from "../worker-environments/inference-control.js";
 import {
   canRequesterAbortQueuedChatTurn,
@@ -76,7 +76,10 @@ export async function persistAbortedPartials(params: {
       params.sessionKey === "global" && snapshot.agentId
         ? { agentId: snapshot.agentId }
         : undefined;
-    const { cfg, storePath, entry } = loadSessionEntry(params.sessionKey, sessionLoadOptions);
+    const { cfg, storePath, entry } = loadResolvedSessionEntry(
+      params.sessionKey,
+      sessionLoadOptions,
+    );
     const sessionId = entry?.sessionId ?? snapshot.sessionId ?? snapshot.runId;
     const appended = await appendAssistantTranscriptMessage({
       sessionKey: params.sessionKey,

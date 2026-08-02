@@ -5,6 +5,7 @@ import {
   createAgentRunRestartAbortError,
 } from "../../agents/run-termination.js";
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
+import { loadResolvedSessionEntry } from "../../config/sessions/session-entry-loader.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import {
@@ -12,7 +13,6 @@ import {
   type SessionWorkAdmissionLease,
 } from "../../sessions/session-lifecycle-admission.js";
 import { registerChatAbortController } from "../chat-abort.js";
-import { loadSessionEntry } from "../session-utils.js";
 import type { AgentDedupeLifecycle } from "./agent-dedupe-lifecycle.js";
 import {
   isAcceptedAgentDedupePayload,
@@ -148,12 +148,12 @@ export function createAgentAdmissionController(params: {
       return;
     }
     const admissionAgent = admissionAgentId();
-    let latestEntry = loadSessionEntry(resolvedSessionKey, {
+    let latestEntry = loadResolvedSessionEntry(resolvedSessionKey, {
       agentId: admissionAgent,
       clone: false,
     }).entry;
     if (!latestEntry && requestedSessionKey && requestedSessionKey !== resolvedSessionKey) {
-      latestEntry = loadSessionEntry(requestedSessionKey, {
+      latestEntry = loadResolvedSessionEntry(requestedSessionKey, {
         agentId: admissionAgent,
         clone: false,
       }).entry;

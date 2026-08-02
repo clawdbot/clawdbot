@@ -7,8 +7,8 @@ import {
   resolveAllAgentSessionStoreTargetsSync,
 } from "../config/sessions.js";
 import { applySessionEntryReplacements } from "../config/sessions/session-accessor.js";
+import { resolveSessionStoreTarget } from "../config/sessions/session-store-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveGatewaySessionStoreTarget } from "../gateway/session-utils.js";
 import {
   getAgentEventLifecycleGeneration,
   listAgentRunsForSession,
@@ -131,7 +131,7 @@ export async function markRestartAbortedMainSessions(params: {
     }
     for (const sessionKey of sessionKeys) {
       try {
-        const target = resolveGatewaySessionStoreTarget({
+        const target = resolveSessionStoreTarget({
           cfg,
           key: sessionKey,
         });

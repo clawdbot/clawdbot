@@ -16,13 +16,14 @@ import { managedWorktrees } from "../agents/worktrees/service.js";
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { initSessionState } from "../auto-reply/reply/session.js";
 import { getRuntimeConfig } from "../config/io.js";
-import { loadCombinedSessionStoreForGateway } from "../config/sessions/combined-store-gateway.js";
+import { loadCombinedSessionStore } from "../config/sessions/combined-store.js";
 import {
   loadSessionEntry,
   loadTranscriptEvents,
   upsertSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import { resolveSessionStoreTarget } from "../config/sessions/session-store-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -36,7 +37,6 @@ import {
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
-import { resolveGatewaySessionStoreTarget } from "./session-utils.js";
 import {
   agentCommand,
   agentDiscoveryMock,
@@ -218,7 +218,7 @@ test("sessions.create keeps incognito rows process-local through list, spawn, re
         .get(key),
     ).toEqual({ session_key: key });
     expect(loadSessionEntry({ agentId: "main", sessionKey: key })?.incognito).toBe(true);
-    expect(loadCombinedSessionStoreForGateway(getRuntimeConfig()).store[key]?.incognito).toBe(true);
+    expect(loadCombinedSessionStore(getRuntimeConfig()).store[key]?.incognito).toBe(true);
     expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })?.incognito).toBe(true);
     const persistentDatabase = openOpenClawAgentDatabase({
       agentId: "main",
@@ -313,7 +313,7 @@ test("sessions.create keeps incognito rows process-local through list, spawn, re
 
     const reset = await directSessionReq<{ deleted?: boolean }>("sessions.reset", { key });
     expect(reset.payload).toMatchObject({ deleted: true });
-    expect(resolveGatewaySessionStoreTarget({ cfg: getRuntimeConfig(), key }).storePath).toBe(
+    expect(resolveSessionStoreTarget({ cfg: getRuntimeConfig(), key }).storePath).toBe(
       resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
     );
     const incognitoDatabase = openOpenClawAgentDatabase({

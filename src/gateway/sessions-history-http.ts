@@ -6,6 +6,8 @@ import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfig } from "../config/io.js";
 import { isSessionTranscriptProjectionUnavailableError } from "../config/sessions/session-accessor.js";
+import { resolveCanonicalSessionEntryFromStoreKeys } from "../config/sessions/session-entry-loader.js";
+import { resolveSessionStoreTargetWithStore } from "../config/sessions/session-store-target.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
@@ -37,11 +39,7 @@ import {
   readRecentSessionMessagesWithStatsAsync,
   readSessionMessagesWithSourceAsync,
 } from "./session-transcript-readers.js";
-import {
-  resolveCanonicalSessionEntryFromStoreKeys,
-  resolveGatewaySessionStoreTargetWithStore,
-  resolveSessionTranscriptCandidates,
-} from "./session-utils.js";
+import { resolveSessionTranscriptCandidates } from "./session-utils.js";
 
 const log = createSubsystemLogger("gateway/sessions-history-sse");
 
@@ -132,10 +130,10 @@ export async function handleSessionHistoryHttpRequest(
   }
   const { cfg } = authResult;
 
-  let target: ReturnType<typeof resolveGatewaySessionStoreTargetWithStore>;
+  let target: ReturnType<typeof resolveSessionStoreTargetWithStore>;
   let entry: ReturnType<typeof resolveCanonicalSessionEntryFromStoreKeys>;
   try {
-    target = resolveGatewaySessionStoreTargetWithStore({ cfg, key: sessionKey });
+    target = resolveSessionStoreTargetWithStore({ cfg, key: sessionKey });
     entry = resolveCanonicalSessionEntryFromStoreKeys(target.store, target.storeKeys);
   } catch (error) {
     if ((error as { code?: unknown })?.code !== "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED") {

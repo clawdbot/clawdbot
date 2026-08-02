@@ -7,8 +7,8 @@
 import { readAcpSessionMeta } from "../acp/runtime/session-meta.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.js";
+import { resolveStoredSessionKeyForAgentStore } from "../config/sessions/session-store-key.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import { resolveStoredSessionKeyForAgentStore } from "../gateway/session-store-key.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";

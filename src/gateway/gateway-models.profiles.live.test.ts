@@ -85,6 +85,7 @@ type ProviderThinkingModelCompat = {
   thinkingFormat?: string;
   supportedReasoningEfforts?: readonly string[] | null;
 };
+import { loadResolvedSessionEntry } from "../config/sessions/session-entry-loader.js";
 import {
   hasExpectedSingleNonce,
   hasExpectedToolNonce,
@@ -94,7 +95,6 @@ import {
 } from "./live-tool-probe.test-helpers.js";
 import { startGatewayServer } from "./server.impl.js";
 import { readSessionMessagesAsync } from "./session-transcript-readers.js";
-import { loadSessionEntry } from "./session-utils.js";
 
 const ZAI_FALLBACK = isTruthyEnvValue(process.env.OPENCLAW_LIVE_GATEWAY_ZAI_FALLBACK);
 const REQUIRE_PROFILE_KEYS = isLiveProfileKeyModeEnabled();
@@ -3018,7 +3018,7 @@ describe("retryLiveTranscriptProjectionRead", () => {
 });
 
 async function readSessionMessagesForLiveProbe(sessionKey: string): Promise<unknown[]> {
-  const { storePath, entry } = loadSessionEntry(sessionKey);
+  const { storePath, entry } = loadResolvedSessionEntry(sessionKey);
   if (!entry?.sessionId) {
     return [];
   }

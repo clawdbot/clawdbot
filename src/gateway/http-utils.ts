@@ -11,6 +11,7 @@ import { modelKey, parseModelRef, resolveDefaultModelForAgent } from "../agents/
 import { createModelVisibilityPolicy } from "../agents/model-visibility-policy.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveSessionEntryAccessTarget } from "../config/sessions/session-accessor.js";
+import { canonicalizeSessionKeyForAgent } from "../config/sessions/session-store-key.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { getActivePluginRegistryWorkspaceDirFromState } from "../plugins/runtime-state.js";
 import {
@@ -28,7 +29,6 @@ import {
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { getHeader } from "./http-auth-utils.js";
 import { loadGatewayModelCatalog } from "./server-model-catalog.js";
-import { canonicalizeSessionKeyForAgent } from "./session-store-key.js";
 
 export {
   authorizeOpenAiCompatibleHttpModelOverride,

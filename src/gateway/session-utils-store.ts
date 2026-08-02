@@ -22,23 +22,17 @@ import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import { insideGitCheckout } from "../agents/worktrees/git.js";
 import { listThinkingLevelOptions } from "../auto-reply/thinking.js";
-import { getRuntimeConfig } from "../config/io.js";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import {
   resolveAgentMainSessionKey,
   type SessionEntry,
   type SessionScope,
 } from "../config/sessions.js";
-import { canonicalSessionKeyMigrationRequiredError } from "../config/sessions/session-canonical-key.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { isAcpSessionKey } from "../sessions/session-key-utils.js";
 import { listGatewayAgentsBasic } from "./agent-list.js";
 import { resolveGatewaySessionThinkingDefault } from "./session-utils-model.js";
-import {
-  resolveGatewaySessionStoreTarget,
-  resolveGatewaySessionStoreTargetWithStore,
-} from "./session-utils-store-lookup.js";
 import type { GatewayAgentRow } from "./session-utils.types.js";
 
 /**
@@ -119,107 +113,6 @@ function readAcpMetaForDeletedAgentCheck(params: {
     sessionKey: params.sessionKey,
     entry: params.entry ?? undefined,
   });
-}
-
-function loadSessionEntryWithMode(
-  sessionKey: string,
-  opts: { agentId?: string; clone?: boolean; includeStoreChildEntries?: boolean } | undefined,
-  readOnly: boolean,
-) {
-  const cfg = getRuntimeConfig();
-  const key = normalizeOptionalString(sessionKey) ?? "";
-  const target = resolveGatewaySessionStoreTargetWithStore({
-    cfg,
-    key,
-    ...(opts?.clone === false ? { clone: false } : {}),
-    ...(opts?.agentId ? { agentId: opts.agentId } : {}),
-    ...(readOnly
-      ? {
-          exactRead: true,
-          readOnly: true,
-          ...(opts?.includeStoreChildEntries ? { includeStoreChildEntries: true } : {}),
-        }
-      : {}),
-  });
-  const storePath = target.storePath;
-  const store = target.store;
-  const canonicalMatch = resolveCanonicalSessionStoreMatchFromStoreKeys(store, target.storeKeys);
-  const legacyKey = canonicalMatch?.key !== target.canonicalKey ? canonicalMatch?.key : undefined;
-  const entry =
-    readOnly && opts?.clone !== false && canonicalMatch?.entry
-      ? structuredClone(canonicalMatch.entry)
-      : canonicalMatch?.entry;
-  return {
-    cfg,
-    storePath,
-    store,
-    entry,
-    canonicalKey: target.canonicalKey,
-    storeKeys: target.storeKeys,
-    legacyKey,
-  };
-}
-
-export function loadSessionEntry(sessionKey: string, opts?: { agentId?: string; clone?: boolean }) {
-  return loadSessionEntryWithMode(sessionKey, opts, false);
-}
-
-export function loadSessionEntryReadOnly(
-  sessionKey: string,
-  opts?: { agentId?: string; clone?: boolean; includeStoreChildEntries?: boolean },
-) {
-  return loadSessionEntryWithMode(sessionKey, opts, true);
-}
-
-/** Returns the one canonical entry and the exact persisted key that owns it. */
-export function resolveCanonicalSessionStoreMatchFromStoreKeys(
-  store: Record<string, SessionEntry>,
-  storeKeys: string[],
-): { key: string; entry: SessionEntry } | undefined {
-  let selected: { key: string; entry: SessionEntry } | undefined;
-  for (const key of storeKeys) {
-    const entry = store[key];
-    if (!entry) {
-      continue;
-    }
-    const match = { key, entry };
-    if (selected) {
-      throw canonicalSessionKeyMigrationRequiredError(
-        `duplicate rows resolve to canonical session key ${storeKeys[0] ?? key}`,
-      );
-    }
-    selected = match;
-  }
-  if (selected && selected.key !== storeKeys[0]) {
-    throw canonicalSessionKeyMigrationRequiredError(
-      `non-canonical persisted row resolves to session key ${storeKeys[0] ?? selected.key}`,
-    );
-  }
-  return selected;
-}
-
-export function resolveCanonicalSessionEntryFromStoreKeys(
-  store: Record<string, SessionEntry>,
-  storeKeys: string[],
-): SessionEntry | undefined {
-  return resolveCanonicalSessionStoreMatchFromStoreKeys(store, storeKeys)?.entry;
-}
-
-export function resolveCanonicalGatewaySessionStoreKey(params: {
-  cfg: OpenClawConfig;
-  key: string;
-  store: Record<string, SessionEntry>;
-  agentId?: string;
-}) {
-  const target = resolveGatewaySessionStoreTarget({
-    cfg: params.cfg,
-    key: params.key,
-    store: params.store,
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-  });
-  const primaryKey = target.canonicalKey;
-  resolveCanonicalSessionStoreMatchFromStoreKeys(params.store, target.storeKeys);
-  return { target, primaryKey, entry: params.store[primaryKey] };
 }
 
 export function parseGroupKey(

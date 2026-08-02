@@ -2,13 +2,13 @@
  * Child-session aggregation tests.
  */
 import { expect, test, vi } from "vitest";
-import { loadCombinedSessionStoreForGateway } from "../config/sessions/combined-store-gateway.js";
+import { loadCombinedSessionStore } from "../config/sessions/combined-store.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { findDirectChildSessionsForParent } from "./session-child-sessions.js";
 
-vi.mock("../config/sessions/combined-store-gateway.js", () => ({
-  loadCombinedSessionStoreForGateway: vi.fn(),
+vi.mock("../config/sessions/combined-store.js", () => ({
+  loadCombinedSessionStore: vi.fn(),
 }));
 
 const cfg = {} as unknown as OpenClawConfig;
@@ -22,7 +22,7 @@ function entry(patch: Partial<SessionEntry>): SessionEntry {
 }
 
 test("findDirectChildSessionsForParent matches direct lineage only", () => {
-  vi.mocked(loadCombinedSessionStoreForGateway).mockReturnValue({
+  vi.mocked(loadCombinedSessionStore).mockReturnValue({
     storePath: "(combined)",
     store: {
       "agent:main:main": entry({

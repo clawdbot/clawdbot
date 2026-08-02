@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "vitest";
 import { installSessionPlacementResetGuard } from "../agents/session-placement-admission.js";
+import { loadResolvedSessionEntry } from "../config/sessions/session-entry-loader.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { loadSessionEntry } from "./session-utils.js";
 import { embeddedRunMock, writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq,
@@ -133,7 +133,7 @@ test("sessions.reset rechecks worker placement inside the lifecycle fence", asyn
   expect(reset.ok).toBe(false);
   expect(reset.error?.message).toContain("cloud worker placement is active");
   expect(resetGuardReadCount).toBe(2);
-  expect(loadSessionEntry("main").entry?.sessionId).toBe("sess-main");
+  expect(loadResolvedSessionEntry("main").entry?.sessionId).toBe("sess-main");
   expect(embeddedRunMock.abortCalls).toEqual([]);
 });
 
@@ -157,7 +157,7 @@ test("sessions.delete rechecks worker placement before destructive cleanup", asy
 
   expect(deleted.ok).toBe(false);
   expect(deleted.error?.message).toContain("cloud worker placement is active");
-  expect(loadSessionEntry(sessionKey).entry?.sessionId).toBe(sessionId);
+  expect(loadResolvedSessionEntry(sessionKey).entry?.sessionId).toBe(sessionId);
   expect(embeddedRunMock.abortCalls).toEqual([]);
 });
 
@@ -184,7 +184,7 @@ test("sessions.delete rejects failed placement with unresolved worker ownership"
 
   expect(deleted.ok).toBe(false);
   expect(deleted.error?.message).toContain("cloud worker placement is failed");
-  expect(loadSessionEntry(sessionKey).entry?.sessionId).toBe(sessionId);
+  expect(loadResolvedSessionEntry(sessionKey).entry?.sessionId).toBe(sessionId);
   expect(embeddedRunMock.abortCalls).toEqual([]);
 });
 
@@ -215,7 +215,7 @@ test("sessions.delete allows failed placement after its worker is destroyed", as
 
   expect(deleted.ok).toBe(true);
   expect(deleted.payload).toMatchObject({ ok: true, deleted: true });
-  expect(loadSessionEntry(sessionKey).entry).toBeUndefined();
+  expect(loadResolvedSessionEntry(sessionKey).entry).toBeUndefined();
 });
 
 test("sessions.delete allows failed placement that never acquired a worker", async () => {
@@ -239,7 +239,7 @@ test("sessions.delete allows failed placement that never acquired a worker", asy
 
   expect(deleted.ok).toBe(true);
   expect(deleted.payload).toMatchObject({ ok: true, deleted: true });
-  expect(loadSessionEntry(sessionKey).entry).toBeUndefined();
+  expect(loadResolvedSessionEntry(sessionKey).entry).toBeUndefined();
 });
 
 test("sessions.delete allows reclaimed placement with no live worker owner", async () => {
@@ -261,7 +261,7 @@ test("sessions.delete allows reclaimed placement with no live worker owner", asy
 
   expect(deleted.ok).toBe(true);
   expect(deleted.payload).toMatchObject({ ok: true, deleted: true });
-  expect(loadSessionEntry(sessionKey).entry).toBeUndefined();
+  expect(loadResolvedSessionEntry(sessionKey).entry).toBeUndefined();
 });
 
 test("sessions.compaction.restore rechecks worker placement inside the lifecycle fence", async () => {
@@ -301,6 +301,6 @@ test("sessions.compaction.restore rechecks worker placement inside the lifecycle
 
   expect(restored.ok).toBe(false);
   expect(restored.error?.message).toContain("cloud worker placement is active");
-  expect(loadSessionEntry(sessionKey).entry?.sessionId).toBe(sessionId);
+  expect(loadResolvedSessionEntry(sessionKey).entry?.sessionId).toBe(sessionId);
   expect(embeddedRunMock.abortCalls).toEqual([]);
 });

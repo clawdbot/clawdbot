@@ -29,6 +29,7 @@ import {
   getRuntimeConfigSourceSnapshot,
   selectApplicableRuntimeConfig,
 } from "../../config/runtime-snapshot.js";
+import { loadResolvedSessionEntry } from "../../config/sessions/session-entry-loader.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveOutboundChannelPlugin } from "../../infra/outbound/channel-resolution.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
@@ -78,7 +79,6 @@ import { resolveGatewayConversationReadOrigin } from "../conversation-read-origi
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { resolveGatewayPluginConfig } from "../runtime-plugin-config.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS } from "../server-constants.js";
-import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import {
   resolveGatewayInflightRequest as resolveIdempotentGatewayRequest,
@@ -1260,7 +1260,7 @@ export const sendHandlers: GatewayRequestHandlers = {
             : null;
           const outboundSessionKey = outboundRoute?.sessionKey ?? providedSessionKey;
           if (outboundSessionKey && isAgentHarnessSessionKey(outboundSessionKey)) {
-            const { canonicalKey, entry } = loadSessionEntry(outboundSessionKey);
+            const { canonicalKey, entry } = loadResolvedSessionEntry(outboundSessionKey);
             const missingHarnessSessionError = resolveMissingAgentHarnessSessionError(
               canonicalKey,
               entry,

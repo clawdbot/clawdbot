@@ -8,6 +8,7 @@ import {
   resolveAgentMainSessionKey,
   resolveExplicitAgentSessionKey,
 } from "../../config/sessions.js";
+import { loadResolvedSessionEntry } from "../../config/sessions/session-entry-loader.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   loadVoiceWakeRoutingConfig,
@@ -36,11 +37,7 @@ import {
   parseMessageWithAttachments,
   type ChatAttachment,
 } from "../chat-attachments.js";
-import {
-  loadSessionEntry,
-  resolveGatewayModelSupportsImages,
-  resolveSessionModelRef,
-} from "../session-utils.js";
+import { resolveGatewayModelSupportsImages, resolveSessionModelRef } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import type { AgentRunRequest } from "./agent-request-types.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
@@ -101,7 +98,7 @@ export async function prepareAgentContentPhase(params: {
     let catalogAgentId = agentId;
     let requestedAcpMeta: ReturnType<typeof readAcpSessionMeta>;
     if (params.requestedSessionKeyRaw) {
-      const { cfg, entry, canonicalKey } = loadSessionEntry(params.requestedSessionKeyRaw, {
+      const { cfg, entry, canonicalKey } = loadResolvedSessionEntry(params.requestedSessionKeyRaw, {
         ...(agentId ? { agentId } : {}),
         clone: false,
       });
@@ -184,7 +181,7 @@ export async function prepareAgentContentPhase(params: {
   const explicitVoiceWakeSessionTarget =
     !agentId && params.requestedSessionKeyRaw
       ? (() => {
-          const { cfg, canonicalKey } = loadSessionEntry(params.requestedSessionKeyRaw!, {
+          const { cfg, canonicalKey } = loadResolvedSessionEntry(params.requestedSessionKeyRaw!, {
             clone: false,
           });
           const routedAgentId = resolveAgentIdFromSessionKey(canonicalKey);
@@ -214,7 +211,9 @@ export async function prepareAgentContentPhase(params: {
         }
       } else if ("sessionKey" in route) {
         if (classifySessionKeyShape(route.sessionKey) !== "malformed_agent") {
-          const canonicalKey = loadSessionEntry(route.sessionKey, { clone: false }).canonicalKey;
+          const canonicalKey = loadResolvedSessionEntry(route.sessionKey, {
+            clone: false,
+          }).canonicalKey;
           const routedAgentId = resolveAgentIdFromSessionKey(canonicalKey);
           if (params.knownAgents.includes(routedAgentId)) {
             requestedSessionKey = canonicalKey;

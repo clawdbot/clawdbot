@@ -7,19 +7,17 @@ import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js
 
 const loader = vi.hoisted(() => ({ calls: vi.fn(), failNext: false }));
 
-vi.mock("../session-utils.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../session-utils.js")>();
+vi.mock("../../config/sessions/combined-store.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../config/sessions/combined-store.js")>();
   return {
     ...actual,
-    loadCombinedSessionStoreForGateway: (
-      ...args: Parameters<typeof actual.loadCombinedSessionStoreForGateway>
-    ) => {
+    loadCombinedSessionStore: (...args: Parameters<typeof actual.loadCombinedSessionStore>) => {
       loader.calls(...args);
       if (loader.failNext) {
         loader.failNext = false;
         throw new Error("synthetic store load failure");
       }
-      return actual.loadCombinedSessionStoreForGateway(...args);
+      return actual.loadCombinedSessionStore(...args);
     },
   };
 });

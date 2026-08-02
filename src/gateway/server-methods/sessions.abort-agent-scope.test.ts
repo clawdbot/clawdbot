@@ -10,7 +10,7 @@ import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js
 const chatAbortMock = vi.fn();
 const resolveSessionKeyForRunMock = vi.fn();
 const listSessionsFromStoreAsyncMock = vi.fn();
-const loadCombinedSessionStoreForGatewayMock = vi.fn();
+const loadCombinedSessionStoreMock = vi.fn();
 const isEmbeddedAgentRunInProgressMock = vi.fn();
 const abortEmbeddedAgentRunMock = vi.fn();
 const clearSessionQueuesMock = vi.fn();
@@ -45,13 +45,30 @@ vi.mock("../session-utils.js", async () => {
   return {
     ...actual,
     listSessionsFromStoreAsync: (...args: unknown[]) => listSessionsFromStoreAsyncMock(...args),
-    loadCombinedSessionStoreForGateway: (...args: unknown[]) =>
-      loadCombinedSessionStoreForGatewayMock(...args),
-    loadSessionEntry: (...args: unknown[]) =>
-      loadSessionEntryMock(...(args as [string, { agentId?: string }?])),
-    loadSessionEntryReadOnly: (...args: unknown[]) =>
-      loadSessionEntryMock(...(args as [string, { agentId?: string }?])),
     loadGatewaySessionRow: (...args: unknown[]) => loadGatewaySessionRowMock(...args),
+  };
+});
+
+vi.mock("../../config/sessions/combined-store.js", async () => {
+  const actual = await vi.importActual<typeof import("../../config/sessions/combined-store.js")>(
+    "../../config/sessions/combined-store.js",
+  );
+  return {
+    ...actual,
+    loadCombinedSessionStore: (...args: unknown[]) => loadCombinedSessionStoreMock(...args),
+  };
+});
+
+vi.mock("../../config/sessions/session-entry-loader.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../../config/sessions/session-entry-loader.js")
+  >("../../config/sessions/session-entry-loader.js");
+  return {
+    ...actual,
+    loadResolvedSessionEntry: (...args: unknown[]) =>
+      loadSessionEntryMock(...(args as [string, { agentId?: string }?])),
+    loadResolvedSessionEntryReadOnly: (...args: unknown[]) =>
+      loadSessionEntryMock(...(args as [string, { agentId?: string }?])),
   };
 });
 
@@ -218,8 +235,8 @@ describe("sessions.abort agent scope", () => {
     resolveSessionKeyForRunMock.mockReset();
     listSessionsFromStoreAsyncMock.mockReset();
     listSessionsFromStoreAsyncMock.mockResolvedValue({ sessions: [] });
-    loadCombinedSessionStoreForGatewayMock.mockReset();
-    loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+    loadCombinedSessionStoreMock.mockReset();
+    loadCombinedSessionStoreMock.mockReturnValue({
       storePath: "/tmp/openclaw-sessions.json",
       store: {},
     });

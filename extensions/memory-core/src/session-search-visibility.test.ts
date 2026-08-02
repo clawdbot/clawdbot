@@ -35,7 +35,7 @@ vi.mock("openclaw/plugin-sdk/session-transcript-hit", async (importOriginal) => 
     await importOriginal<typeof import("openclaw/plugin-sdk/session-transcript-hit")>();
   return {
     ...actual,
-    loadCombinedSessionStoreForGateway: vi.fn(() => ({
+    loadCombinedSessionStore: vi.fn(() => ({
       storePath: "(test)",
       store: combinedSessionStore,
     })),
@@ -44,7 +44,7 @@ vi.mock("openclaw/plugin-sdk/session-transcript-hit", async (importOriginal) => 
 
 describe("filterMemorySearchHitsBySessionVisibility", () => {
   afterEach(async () => {
-    vi.mocked(sessionTranscriptHit.loadCombinedSessionStoreForGateway).mockClear();
+    vi.mocked(sessionTranscriptHit.loadCombinedSessionStore).mockClear();
     combinedSessionStore = crossAgentStore;
     while (tempRoots.length > 0) {
       const root = tempRoots.pop();
@@ -948,8 +948,8 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
       sandboxed: false,
       hits,
     });
-    expect(sessionTranscriptHit.loadCombinedSessionStoreForGateway).toHaveBeenCalledTimes(1);
-    expect(sessionTranscriptHit.loadCombinedSessionStoreForGateway).toHaveBeenCalledWith(cfg, {
+    expect(sessionTranscriptHit.loadCombinedSessionStore).toHaveBeenCalledTimes(1);
+    expect(sessionTranscriptHit.loadCombinedSessionStore).toHaveBeenCalledWith(cfg, {
       agentId: "main",
     });
   });

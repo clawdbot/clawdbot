@@ -20,7 +20,7 @@ const runtime = vi.hoisted(() => ({
   searchSessionTranscripts: vi.fn(() => ({ hits: [], indexing: false, truncated: false })),
   resolveSessionKeyFromResolveParams: vi.fn(),
   resolveSessionAgentId: vi.fn(() => "main"),
-  loadSessionEntry: vi.fn(() => ({
+  loadResolvedSessionEntryReadOnly: vi.fn(() => ({
     cfg: {},
     storePath: "/tmp/openclaw-sessions.json",
     entry: { sessionId: "sess-main" },
@@ -50,7 +50,7 @@ const runtime = vi.hoisted(() => ({
   })),
   capArrayByJsonBytes: vi.fn((items: unknown[]) => ({ items })),
   enforceChatHistoryFinalBudget: vi.fn(({ messages }: { messages: unknown[] }) => ({ messages })),
-  loadCombinedSessionStoreForGateway: vi.fn(() => ({
+  loadCombinedSessionStore: vi.fn(() => ({
     storePath: "/tmp/openclaw-sessions.json",
     store: {},
   })),
@@ -70,12 +70,12 @@ describe("embedded gateway stub", () => {
     runtime.readSessionMessagesAsync.mockClear();
     runtime.readRecentSessionMessagesWithStatsAsync.mockClear();
     runtime.readSessionMessagesPageWithStatsAsync.mockClear();
-    runtime.loadSessionEntry.mockClear();
+    runtime.loadResolvedSessionEntryReadOnly.mockClear();
     runtime.resolveSessionAgentId.mockClear();
     runtime.resolveSessionStoreKey.mockClear();
     runtime.resolveStoredSessionKeyForAgentStore.mockClear();
     runtime.searchSessionTranscripts.mockClear();
-    runtime.loadCombinedSessionStoreForGateway.mockClear();
+    runtime.loadCombinedSessionStore.mockClear();
     runtime.listSessionsFromStoreAsync.mockClear();
   });
 
@@ -86,7 +86,7 @@ describe("embedded gateway stub", () => {
       params: { agentId: "work", includeGlobal: true, search: "global" },
     });
 
-    expect(runtime.loadCombinedSessionStoreForGateway).toHaveBeenCalledWith(
+    expect(runtime.loadCombinedSessionStore).toHaveBeenCalledWith(
       { agents: { list: [{ id: "main", default: true }] } },
       { agentId: "work", projection: "list" },
     );
@@ -230,7 +230,9 @@ describe("embedded gateway stub", () => {
       params: { sessionKey: "global", agentId: "work" },
     });
 
-    expect(runtime.loadSessionEntry).toHaveBeenCalledWith("global", { agentId: "work" });
+    expect(runtime.loadResolvedSessionEntryReadOnly).toHaveBeenCalledWith("global", {
+      agentId: "work",
+    });
     expect(runtime.resolveSessionAgentId).toHaveBeenCalledWith({
       sessionKey: "global",
       config: {},
@@ -247,7 +249,9 @@ describe("embedded gateway stub", () => {
       params: { sessionKey: "agent:work:main" },
     });
 
-    expect(runtime.loadSessionEntry).toHaveBeenCalledWith("agent:work:main", { agentId: "work" });
+    expect(runtime.loadResolvedSessionEntryReadOnly).toHaveBeenCalledWith("agent:work:main", {
+      agentId: "work",
+    });
     expect(runtime.resolveSessionAgentId).toHaveBeenCalledWith({
       sessionKey: "agent:work:main",
       config: {},
@@ -379,7 +383,7 @@ describe("embedded gateway stub", () => {
       { role: "assistant", content: "stale reply", __openclaw: { seq: 2 } },
     ];
     const filteredMessages: unknown[] = [];
-    runtime.loadSessionEntry.mockReturnValueOnce({
+    runtime.loadResolvedSessionEntryReadOnly.mockReturnValueOnce({
       cfg: {},
       storePath: "/tmp/openclaw-sessions.json",
       entry: { sessionId: "sess-main", sessionStartedAt: 1234 } as {

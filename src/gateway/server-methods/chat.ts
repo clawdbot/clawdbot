@@ -7,17 +7,15 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
+import { loadResolvedSessionEntry } from "../../config/sessions/session-entry-loader.js";
+import { loadResolvedSessionEntryReadOnly } from "../../config/sessions/session-entry-loader.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import {
   projectChatDisplayMessage,
   resolveEffectiveChatHistoryMaxChars,
 } from "../chat-display-projection.js";
-import {
-  loadSessionEntry,
-  loadSessionEntryReadOnly,
-  resolveSessionModelRef,
-} from "../session-utils.js";
+import { resolveSessionModelRef } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import { handleChatAbortRequest } from "./chat-abort-handler.js";
 import { sendGlobalAwareNodeChatPayload } from "./chat-broadcast.js";
@@ -84,7 +82,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       // Session entry carries per-session model overrides; utility routing must
       // derive its small-model default from the provider this session actually
       // uses, not the agent's configured default.
-      const { cfg: sessionCfg, entry } = loadSessionEntryReadOnly(
+      const { cfg: sessionCfg, entry } = loadResolvedSessionEntryReadOnly(
         params.sessionKey,
         selectedAgent.agentId ? { agentId: selectedAgent.agentId } : undefined,
       );
@@ -130,7 +128,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       storePath,
       entry,
       canonicalKey: sessionKey,
-    } = loadSessionEntry(rawSessionKey, sessionLoadOptions);
+    } = loadResolvedSessionEntry(rawSessionKey, sessionLoadOptions);
     const selectedAgent = validateChatSelectedAgent({
       cfg,
       requestedSessionKey: rawSessionKey,
@@ -157,7 +155,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         scope: storePath,
         identities: [sessionKey, sessionId],
         assertAllowed: () => {
-          const latestEntry = loadSessionEntry(rawSessionKey, sessionLoadOptions).entry;
+          const latestEntry = loadResolvedSessionEntry(rawSessionKey, sessionLoadOptions).entry;
           if (!latestEntry) {
             throw new Error(`Session "${sessionKey}" was deleted while starting work. Retry.`);
           }

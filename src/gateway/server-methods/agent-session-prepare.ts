@@ -19,12 +19,12 @@ import {
 } from "../../config/sessions.js";
 import { hasProviderOwnedSession } from "../../config/sessions/entry-freshness.js";
 import { readTranscriptStatsSync } from "../../config/sessions/session-accessor.js";
+import { loadResolvedSessionEntry } from "../../config/sessions/session-entry-loader.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import { isRecoverableTerminalSessionStatus } from "../../config/sessions/terminal-status.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { parseCronRunScopeSuffix } from "../../sessions/session-key-utils.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
-import { loadSessionEntry } from "../session-utils.js";
 import {
   respondDeletedAgentSession,
   type RestoredCronContinuation,
@@ -73,7 +73,7 @@ export function prepareAgentSession(params: {
   preAttachmentSession?: { canonicalKey: string; sessionId?: string };
   respond: GatewayRequestHandlerOptions["respond"];
 }): PreparedAgentSession | undefined {
-  const { cfg, storePath, entry, canonicalKey, legacyKey, storeKeys } = loadSessionEntry(
+  const { cfg, storePath, entry, canonicalKey, legacyKey, storeKeys } = loadResolvedSessionEntry(
     params.requestedSessionKey,
     { ...(params.agentId ? { agentId: params.agentId } : {}), clone: false },
   );

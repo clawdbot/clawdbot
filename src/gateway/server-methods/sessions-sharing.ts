@@ -13,9 +13,9 @@ import {
 import {
   addSessionMember,
   listSessionMembers,
-  loadCombinedSessionStoreForGateway,
   removeSessionMember,
 } from "../../config/sessions.js";
+import { loadCombinedSessionStore } from "../../config/sessions/combined-store.js";
 import { patchSessionEntry } from "../../config/sessions/session-accessor.js";
 import { runQueuedStoreWrite, type StoreWriterQueue } from "../../shared/store-writer-queue.js";
 import { listProfiles } from "../../state/user-profiles.js";
@@ -132,7 +132,7 @@ function knownSessionIdentities(params: {
     });
   };
   remember(params.actor);
-  for (const entry of Object.values(loadCombinedSessionStoreForGateway(params.cfg).store)) {
+  for (const entry of Object.values(loadCombinedSessionStore(params.cfg).store)) {
     remember(entry.createdActor ?? null);
   }
   for (const profile of listProfiles()) {

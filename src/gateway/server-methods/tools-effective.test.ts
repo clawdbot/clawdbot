@@ -72,7 +72,7 @@ const runtimeMocks = vi.hoisted(() => ({
 
 vi.mock("./tools-effective.runtime.js", () => ({
   ...runtimeMocks,
-  loadSessionEntryReadOnly: runtimeMocks.loadSessionEntry,
+  loadResolvedSessionEntryReadOnly: runtimeMocks.loadSessionEntry,
 }));
 
 const nodePluginToolSnapshotMocks = vi.hoisted(() => ({

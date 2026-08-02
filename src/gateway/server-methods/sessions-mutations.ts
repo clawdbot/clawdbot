@@ -14,6 +14,8 @@ import {
   applySessionPatchProjection,
   type SessionPatchProjectionSnapshot,
 } from "../../config/sessions/session-accessor.js";
+import { loadResolvedSessionEntry } from "../../config/sessions/session-entry-loader.js";
+import { resolveSessionStoreTarget } from "../../config/sessions/session-store-target.js";
 import { disableCronJobsBoundToSession } from "../../cron/job-session-bindings.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { patchPluginSessionExtension } from "../../plugins/host-hook-state.js";
@@ -31,8 +33,6 @@ import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from 
 import { ensureSessionGroupRegistered } from "../session-groups.js";
 import { triggerSessionPatchHook } from "../session-patch-hooks.js";
 import {
-  loadSessionEntry,
-  resolveCanonicalGatewaySessionStoreKey,
   resolveGatewaySessionThinkingProjection,
   resolveSessionDisplayModelIdentityRef,
   resolveSessionModelRef,
@@ -78,7 +78,7 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       agentId: requestedAgentId,
     });
     const canonicalKey = target.canonicalKey ?? key;
-    const lifecycleEntry = loadSessionEntry(key, { agentId: requestedAgentId }).entry;
+    const lifecycleEntry = loadResolvedSessionEntry(key, { agentId: requestedAgentId }).entry;
     if (
       rejectPluginRuntimeSessionOwnershipMismatch({
         action: "patch",
@@ -130,16 +130,21 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
     let wasArchivedBeforePatch = false;
     const resolvePatchTarget = ({ entries }: SessionPatchProjectionSnapshot) => {
       const store = Object.fromEntries(entries.map(({ sessionKey, entry }) => [sessionKey, entry]));
-      const { target: migratedTarget, primaryKey } = resolveCanonicalGatewaySessionStoreKey({
+      const resolvedTarget = resolveSessionStoreTarget({
         cfg,
         key,
         store,
         agentId: requestedAgentId,
       });
-      return { primaryKey, candidateKeys: migratedTarget.storeKeys };
+      return {
+        primaryKey: resolvedTarget.canonicalKey,
+        candidateKeys: resolvedTarget.storeKeys,
+      };
     };
     const applyPatch = async () => {
-      const currentLifecycleEntry = loadSessionEntry(key, { agentId: requestedAgentId }).entry;
+      const currentLifecycleEntry = loadResolvedSessionEntry(key, {
+        agentId: requestedAgentId,
+      }).entry;
       // Recheck inside the lifecycle lock so a replaced row cannot switch
       // plugin ownership between authorization and the committed patch.
       if (
@@ -188,7 +193,7 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
           );
           return null;
         }
-        const { entry } = loadSessionEntry(key, { agentId: requestedAgentId });
+        const { entry } = loadResolvedSessionEntry(key, { agentId: requestedAgentId });
         const activeIdentities = [canonicalKey, key, entry?.sessionId];
         if (
           isSessionWorkAdmissionActive(storePath, activeIdentities) ||

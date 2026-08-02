@@ -18,6 +18,9 @@ import { slugifyWorktreeTitle } from "../../agents/worktrees/name.js";
 import { managedWorktrees, WorktreeRepositoryError } from "../../agents/worktrees/service.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import { sessionEntryForkedFromParent } from "../../config/sessions/session-entry-lineage.js";
+import { loadResolvedSessionEntryReadOnly } from "../../config/sessions/session-entry-loader.js";
+import { resolveSessionStoreAgentId } from "../../config/sessions/session-store-key.js";
+import { resolveSessionStoreTarget } from "../../config/sessions/session-store-target.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -33,9 +36,7 @@ import {
   createGatewaySession,
   resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId,
 } from "../session-create-service.js";
-import { resolveSessionStoreAgentId } from "../session-store-key.js";
 import { readSessionMessageCountAsync } from "../session-transcript-readers.js";
-import { loadSessionEntryReadOnly, resolveGatewaySessionStoreTarget } from "../session-utils.js";
 import { resolveSessionPatchModelSelection } from "../sessions-patch.js";
 import { chatHandlers } from "./chat.js";
 import { resolveSessionCatalogCreateTarget } from "./session-catalog.js";
@@ -248,7 +249,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         !hasInitialTurn &&
         cfg.session?.dmScope === "main"
       ) {
-        const parent = loadSessionEntryReadOnly(
+        const parent = loadResolvedSessionEntryReadOnly(
           parentSessionKey,
           requestedAgent.agentId ? { agentId: requestedAgent.agentId } : undefined,
         );
@@ -264,7 +265,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         }
       }
       targetKey ??= buildDashboardSessionKey(agentId);
-      const target = resolveGatewaySessionStoreTarget({ cfg, key: targetKey, agentId });
+      const target = resolveSessionStoreTarget({ cfg, key: targetKey, agentId });
       sessionKey = preservesUnspecifiedKey ? undefined : targetKey;
       sessionAgentId = target.agentId;
       const workspace = requestedCwd ?? resolveAgentWorkspaceDir(cfg, target.agentId);
@@ -550,7 +551,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         key: created.key,
         agentId: created.agentId,
         entry: created.entry,
-        storePath: resolveGatewaySessionStoreTarget({
+        storePath: resolveSessionStoreTarget({
           cfg,
           key: created.key,
           agentId: created.agentId,

@@ -1,12 +1,8 @@
-// Builds the gateway-visible combined session store across agent-specific stores.
-// Gateway callers need canonical per-agent keys even when stores are split by `{agentId}`.
+// Builds the combined session store across agent-specific stores.
+// Callers need canonical per-agent keys even when stores are split by `{agentId}`.
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { listAgentEntries, resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import {
-  resolveSessionStoreKey,
-  resolveStoredSessionKeyForAgentStore,
-} from "../../gateway/session-store-key.js";
 import {
   isIncognitoSessionKey,
   LEGACY_IMPLICIT_AGENT_ID,
@@ -23,6 +19,10 @@ import {
 } from "./session-accessor.js";
 import type { SessionEntryListScope } from "./session-accessor.types.js";
 import { canonicalSessionKeyMigrationRequiredError } from "./session-canonical-key.js";
+import {
+  resolveSessionStoreKey,
+  resolveStoredSessionKeyForAgentStore,
+} from "./session-store-key.js";
 import { resolveDeliveryProvenCanonicalSessionKey } from "./store-entry.js";
 import {
   dedupeSessionStoreTargetsBySqliteTarget,
@@ -34,16 +34,16 @@ import {
 } from "./targets.js";
 import type { SessionEntry } from "./types.js";
 
-type GatewaySessionEntryProjection = NonNullable<SessionEntryListScope["projection"]>;
+type SessionEntryProjection = NonNullable<SessionEntryListScope["projection"]>;
 
-type GatewaySessionStoreOptions = {
+type CombinedSessionStoreOptions = {
   agentId?: string;
   configuredAgentsOnly?: boolean;
   includeIncognito?: boolean;
   projection?: SessionEntryListScope["projection"];
 };
 
-type ResolvedGatewaySessionStoreTargets = {
+type ResolvedCombinedSessionStoreTargets = {
   configuredAgentIds?: ReadonlySet<string>;
   defaultAgentId: string;
   diagnostics: string[];
@@ -53,7 +53,7 @@ type ResolvedGatewaySessionStoreTargets = {
   storeConfig?: string;
 };
 
-// Template-backed stores need per-agent scans before they can be merged for Gateway views.
+// Template-backed stores need per-agent scans before they can be merged into a combined view.
 function isStorePathTemplate(store?: string): boolean {
   return typeof store === "string" && store.includes("{agentId}");
 }
@@ -66,10 +66,10 @@ function resolveCombinedStorePath(paths: string[], storeConfig?: string): string
       : "(multiple)";
 }
 
-function loadGatewayStoreEntries(params: {
+function loadStoreEntries(params: {
   agentId: string;
   includeOpenDatabases?: boolean;
-  projection: GatewaySessionEntryProjection;
+  projection: SessionEntryProjection;
   storePath: string;
 }) {
   const listEntries = params.includeOpenDatabases ? listSessionEntries : listSessionEntriesReadOnly;
@@ -120,12 +120,12 @@ function mergeSessionEntryIntoCombined(params: {
 function mergeOpenIncognitoStores(params: {
   cfg: OpenClawConfig;
   combined: Record<string, SessionEntry>;
-  projection: GatewaySessionEntryProjection;
+  projection: SessionEntryProjection;
   targets: Array<{ agentId: string; storePath: string }>;
 }): string[] {
   const storePaths: string[] = [];
   for (const target of params.targets) {
-    const store = loadGatewayStoreEntries({
+    const store = loadStoreEntries({
       agentId: target.agentId,
       includeOpenDatabases: true,
       projection: params.projection,
@@ -152,10 +152,10 @@ function mergeOpenIncognitoStores(params: {
   return storePaths;
 }
 
-function resolveGatewaySessionStoreTargets(
+function resolveCombinedSessionStoreTargets(
   cfg: OpenClawConfig,
-  opts: GatewaySessionStoreOptions,
-): ResolvedGatewaySessionStoreTargets {
+  opts: CombinedSessionStoreOptions,
+): ResolvedCombinedSessionStoreTargets {
   const storeConfig = cfg.session?.store;
   const diagnostics: string[] = [];
   const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(cfg));
@@ -232,7 +232,7 @@ export function canPrewarmCombinedSessionStoresForGateway(
   const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(cfg));
   let totalRows = 0;
   for (const agentId of params.agentIds) {
-    const resolved = resolveGatewaySessionStoreTargets(cfg, { agentId });
+    const resolved = resolveCombinedSessionStoreTargets(cfg, { agentId });
     const projectionTargets = dedupeSessionStoreTargetsBySqliteTarget(
       [...resolved.durableTargets, ...resolved.incognitoTargets],
       { defaultAgentId },
@@ -247,10 +247,10 @@ export function canPrewarmCombinedSessionStoresForGateway(
   return true;
 }
 
-/** Loads and canonicalizes session entries for gateway views across one or more agent stores. */
-export function loadCombinedSessionStoreForGateway(
+/** Loads and canonicalizes session entries for session views across one or more agent stores. */
+export function loadCombinedSessionStore(
   cfg: OpenClawConfig,
-  opts: GatewaySessionStoreOptions = {},
+  opts: CombinedSessionStoreOptions = {},
 ): {
   diagnostics?: string[];
   durableStorePath?: string;
@@ -268,11 +268,11 @@ export function loadCombinedSessionStoreForGateway(
     incognitoTargets,
     requestedAgentId,
     storeConfig,
-  } = resolveGatewaySessionStoreTargets(cfg, opts);
+  } = resolveCombinedSessionStoreTargets(cfg, opts);
   if (storeConfig && !isStorePathTemplate(storeConfig)) {
     const combined: Record<string, SessionEntry> = {};
     for (const { agentId, storePath } of durableTargets) {
-      const store = loadGatewayStoreEntries({ agentId, projection, storePath });
+      const store = loadStoreEntries({ agentId, projection, storePath });
       for (const { sessionKey: key, entry } of store) {
         const canonicalKey = resolveStoredSessionKeyForAgentStore({
           cfg,
@@ -320,7 +320,7 @@ export function loadCombinedSessionStoreForGateway(
   for (const target of durableTargets) {
     const agentId = target.agentId;
     const storePath = target.storePath;
-    const store = loadGatewayStoreEntries({ agentId, projection, storePath });
+    const store = loadStoreEntries({ agentId, projection, storePath });
     for (const { sessionKey: key, entry } of store) {
       const canonicalKey = resolveStoredSessionKeyForAgentStore({
         cfg,

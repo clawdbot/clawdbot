@@ -15,6 +15,7 @@ import {
   getRestartRecoveryTerminalDeliveryEvidence,
   hasRestartRecoveryTerminalRun,
 } from "../config/sessions/restart-recovery-state.js";
+import { loadResolvedSessionEntry } from "../config/sessions/session-entry-loader.js";
 import { appendAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import {
@@ -34,7 +35,6 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeMediaReferenceForComparison } from "../media/media-reference-comparison.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import { dispatchGatewayMethodInProcess } from "./server-plugins.js";
-import { loadSessionEntry } from "./session-utils.js";
 
 const log = createSubsystemLogger("gateway/restart-sentinel");
 const AGENT_DELIVERY_OWNERSHIP_RETRY_MS = 1_000;
@@ -469,7 +469,7 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
       response && typeof response === "object"
         ? (response as { status?: unknown }).status
         : undefined;
-    const latestEntry = loadSessionEntry(entry.sessionKey).entry;
+    const latestEntry = loadResolvedSessionEntry(entry.sessionKey).entry;
     if (responseStatus === "accepted") {
       accepted = true;
     }

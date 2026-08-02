@@ -7,8 +7,8 @@ import { resolveDefaultModel } from "../auto-reply/reply/directive-handling.defa
 import { resolveCurrentDirectiveLevels } from "../auto-reply/reply/directive-handling.levels.js";
 import { createModelSelectionState } from "../auto-reply/reply/model-selection.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
+import { loadResolvedSessionEntryReadOnly } from "../config/sessions/session-entry-loader.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { loadSessionEntryReadOnly } from "../gateway/session-utils.js";
 
 /** Inputs for rendering direct-session status replies outside the active channel turn. */
 export type ResolveDirectStatusReplyForSessionParams = {
@@ -43,7 +43,7 @@ export async function resolveDirectStatusReplyForSession(
     return undefined;
   }
 
-  const statusLoaded = loadSessionEntryReadOnly(requestedSessionKey);
+  const statusLoaded = loadResolvedSessionEntryReadOnly(requestedSessionKey);
   const statusCfg = statusLoaded.cfg ?? params.cfg;
   const statusSessionKey = statusLoaded.canonicalKey;
   const statusEntry = statusLoaded.entry;

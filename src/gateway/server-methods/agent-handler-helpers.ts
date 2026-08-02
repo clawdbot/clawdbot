@@ -10,6 +10,7 @@ import {
   resolveSessionWorkStartError,
   type SessionEntry,
 } from "../../config/sessions.js";
+import { loadResolvedSessionEntry } from "../../config/sessions/session-entry-loader.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CronScheduledToolPolicy } from "../../cron/scheduled-tool-policy.js";
 import type { PluginHookSessionEndReason } from "../../plugins/hook-types.js";
@@ -25,7 +26,7 @@ import {
   emitGatewaySessionEndPluginHook,
   emitGatewaySessionStartPluginHook,
 } from "../session-reset-service.js";
-import { loadSessionEntry, resolveDeletedAgentIdFromSessionKey } from "../session-utils.js";
+import { resolveDeletedAgentIdFromSessionKey } from "../session-utils.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 export const CRON_CONTINUATION_RELEASE_RECOVERY_DELAYS_MS = [250, 1_000, 4_000, 15_000] as const;
@@ -85,7 +86,7 @@ export function respondUnavailableAgentSessionForKey(params: {
   agentId?: string;
   respond: GatewayRequestHandlerOptions["respond"];
 }): boolean {
-  const { cfg, entry, canonicalKey, legacyKey } = loadSessionEntry(params.sessionKey, {
+  const { cfg, entry, canonicalKey, legacyKey } = loadResolvedSessionEntry(params.sessionKey, {
     ...(params.agentId ? { agentId: params.agentId } : {}),
     clone: false,
   });

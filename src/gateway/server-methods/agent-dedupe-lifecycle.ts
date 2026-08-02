@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { AGENT_RUN_RESTART_ABORT_STOP_REASON } from "../../agents/run-termination.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
+import { resolveSessionStoreKey } from "../../config/sessions/session-store-key.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { resolveAgentRunExpiresAtMs } from "../chat-abort.js";
-import { resolveSessionStoreKey } from "../session-utils.js";
 import {
   isAcceptedAgentDedupePayload,
   isPreRegistrationAbortedAgentDedupeEntryForSession,

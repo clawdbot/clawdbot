@@ -27,6 +27,7 @@ import {
 } from "../../auto-reply/reply/source-turn-id.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveAgentIdFromSessionKey } from "../../config/sessions.js";
+import { loadResolvedSessionEntry } from "../../config/sessions/session-entry-loader.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
@@ -40,7 +41,6 @@ import {
   createUserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
-import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import { setAbortedAgentDedupeEntries, setGatewayDedupeEntries } from "./agent-dedupe.js";
 import type { AgentDeliveryPhaseResult } from "./agent-delivery-phase.js";
@@ -261,7 +261,7 @@ export function startAgentRunExecution(params: {
                 ...(params.inputProvenance ? { provenance: params.inputProvenance } : {}),
               },
               target: () => {
-                const loaded = loadSessionEntry(params.resolvedSessionKey!, {
+                const loaded = loadResolvedSessionEntry(params.resolvedSessionKey!, {
                   ...(params.activeSessionAgentId ? { agentId: params.activeSessionAgentId } : {}),
                   clone: false,
                 });

@@ -33,18 +33,6 @@ export type SessionListRowContext = {
 
 export type SessionListRowContextProvider = () => SessionListRowContext;
 
-export type GatewaySessionStoreTarget = {
-  agentId: string;
-  storePath: string;
-  canonicalKey: string;
-  storeKeys: string[];
-};
-
-export type GatewaySessionStoreTargetWithStore = GatewaySessionStoreTarget & {
-  canonicalValidationError?: Error;
-  store: Record<string, SessionEntry>;
-};
-
 export function createSessionRowModelCacheKey(
   provider: string | undefined,
   model: string | undefined,

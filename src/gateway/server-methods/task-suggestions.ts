@@ -13,10 +13,10 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { managedWorktrees } from "../../agents/worktrees/service.js";
+import { loadResolvedSessionEntryReadOnly } from "../../config/sessions/session-entry-loader.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { buildDashboardSessionKey } from "../session-create-service.js";
-import { loadSessionEntryReadOnly } from "../session-utils.js";
 import {
   abandonTaskSuggestionAcceptance,
   beginTaskSuggestionAcceptance,
@@ -73,7 +73,7 @@ async function rollbackSuggestedTaskSession(params: {
   try {
     if (
       !deletionConfirmed &&
-      loadSessionEntryReadOnly(params.key, { agentId: params.agentId }).entry
+      loadResolvedSessionEntryReadOnly(params.key, { agentId: params.agentId }).entry
     ) {
       return false;
     }

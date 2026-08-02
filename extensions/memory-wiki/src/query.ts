@@ -6,7 +6,7 @@ import { resolveDefaultAgentId, resolveSessionAgentId } from "openclaw/plugin-sd
 import { getActiveMemorySearchManager } from "openclaw/plugin-sdk/memory-host-search";
 import {
   extractTranscriptIdentityFromSessionsMemoryHit,
-  loadCombinedSessionStoreForGateway,
+  loadCombinedSessionStore,
   resolveTranscriptStemToSessionKeys,
 } from "openclaw/plugin-sdk/session-transcript-hit";
 import {
@@ -1267,7 +1267,7 @@ async function createSessionMemoryPathVisibilityChecker(params: {
       })
     : null;
 
-  const { store: combinedSessionStore } = loadCombinedSessionStoreForGateway(
+  const { store: combinedSessionStore } = loadCombinedSessionStore(
     params.cfg,
     scopedAgentId ? { agentId: scopedAgentId } : {},
   );

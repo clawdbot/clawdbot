@@ -9,6 +9,7 @@ import {
   readSessionTranscriptActiveLeafEvents,
   resolveSessionTranscriptActiveLeafEntryId,
 } from "../../config/sessions/session-accessor.js";
+import { loadResolvedSessionEntry } from "../../config/sessions/session-entry-loader.js";
 import {
   claimAgentRunContext,
   clearAgentRunContext,
@@ -17,7 +18,6 @@ import {
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { registerChatAbortController, resolveChatRunExpiresAtMs } from "../chat-abort.js";
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX, type DedupeEntry } from "../server-shared.js";
-import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import { setGatewayDedupeEntry } from "./agent-job.js";
 import {
@@ -188,7 +188,7 @@ export async function admitChatSend(params: {
       }
       return;
     }
-    const latestSession = loadSessionEntry(sessionLoadKey, sessionLoadOptions);
+    const latestSession = loadResolvedSessionEntry(sessionLoadKey, sessionLoadOptions);
     if (sessionRoutingChanged(latestSession.cfg)) {
       throw new Error(SESSION_ROUTING_CHANGED_ERROR_REASON);
     }

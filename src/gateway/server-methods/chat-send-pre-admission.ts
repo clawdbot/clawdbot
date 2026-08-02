@@ -2,11 +2,11 @@ import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/i
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
 import { SESSION_ROUTING_CHANGED_ERROR_REASON } from "../../config/sessions/main-session.js";
+import { loadResolvedSessionEntry } from "../../config/sessions/session-entry-loader.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
 import { chatAbortMarkerTimestampMs } from "../server-chat-state.js";
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX } from "../server-shared.js";
-import { loadSessionEntry } from "../session-utils.js";
 import { setGatewayDedupeEntry } from "./agent-job.js";
 import {
   buildAbortedChatSendPayload,
@@ -160,7 +160,7 @@ export async function runChatSendPreAdmission(params: {
     clientRunId,
     entry,
     persistedSessionKey: legacyKey ?? sessionKey,
-    reloadEntry: () => loadSessionEntry(sessionLoadKey, sessionLoadOptions).entry,
+    reloadEntry: () => loadResolvedSessionEntry(sessionLoadKey, sessionLoadOptions).entry,
     storePath,
     recoveryRuntime: context.recoveryRuntime,
     warn: (message) =>

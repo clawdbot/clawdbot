@@ -6,6 +6,8 @@ import {
   resolveAgentIdFromSessionKey,
   resolveExplicitAgentSessionKey,
 } from "../../config/sessions.js";
+import { loadResolvedSessionEntry } from "../../config/sessions/session-entry-loader.js";
+import { resolveSessionStoreKey } from "../../config/sessions/session-store-key.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitDiagnosticEvent } from "../../infra/diagnostic-events.js";
 import { resolveAgentExplicitRecipientSession } from "../../infra/outbound/agent-delivery.js";
@@ -18,7 +20,6 @@ import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
-import { loadSessionEntry, resolveSessionStoreKey } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import { setGatewayDedupeEntries } from "./agent-dedupe.js";
 import {
@@ -235,7 +236,7 @@ export async function prepareAgentRequestRouting(params: {
     params.reserveDedupe(preAcceptedReservedSessionKey, agentId);
   }
   const loaded = requestedSessionKey
-    ? loadSessionEntry(requestedSessionKey, {
+    ? loadResolvedSessionEntry(requestedSessionKey, {
         ...(agentId ? { agentId } : {}),
         clone: false,
       })
@@ -280,7 +281,7 @@ function dropReboundExecApprovalFollowup(params: {
   let currentSessionId: string | undefined;
   try {
     currentSessionId = normalizeOptionalString(
-      loadSessionEntry(params.requestedSessionKeyRaw).entry?.sessionId,
+      loadResolvedSessionEntry(params.requestedSessionKeyRaw).entry?.sessionId,
     );
   } catch {
     currentSessionId = undefined;

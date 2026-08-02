@@ -27,11 +27,11 @@ import {
   restoreSqliteCompactionCheckpointSession,
 } from "../config/sessions/session-accessor.sqlite.js";
 import type { SessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.types.js";
+import { resolveSessionStoreTarget } from "../config/sessions/session-store-target.js";
 import { streamSessionTranscriptLines } from "../config/sessions/transcript-stream.js";
 import { scanSessionTranscriptTree } from "../config/sessions/transcript-tree.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { resolveGatewaySessionStoreTarget } from "./session-utils.js";
 
 const log = createSubsystemLogger("gateway/session-compaction-checkpoints");
 const MAX_COMPACTION_CHECKPOINTS_PER_SESSION = 25;
@@ -710,7 +710,7 @@ async function persistSessionCompactionCheckpoint(
     return null;
   }
 
-  const target = resolveGatewaySessionStoreTarget({
+  const target = resolveSessionStoreTarget({
     cfg: params.cfg,
     key: params.sessionKey,
   });

@@ -20,12 +20,11 @@ type GatewayHandlerPrewarmHandle = {
 };
 
 async function prewarmGatewaySessionListData(cfg: OpenClawConfig, agentId: string): Promise<void> {
-  const [{ loadCombinedSessionStoreForGateway }, { listSessionsFromStoreAsync }] =
-    await Promise.all([
-      import("../config/sessions/combined-store-gateway.js"),
-      import("./session-utils-list.js"),
-    ]);
-  const { durableStorePath, storePath, store } = loadCombinedSessionStoreForGateway(cfg, {
+  const [{ loadCombinedSessionStore }, { listSessionsFromStoreAsync }] = await Promise.all([
+    import("../config/sessions/combined-store.js"),
+    import("./session-utils-list.js"),
+  ]);
+  const { durableStorePath, storePath, store } = loadCombinedSessionStore(cfg, {
     agentId,
     projection: "list",
   });
@@ -58,7 +57,7 @@ function dashboardDataPrewarmItems(
     }
     sessionDataPrewarmChecked = true;
     const { canPrewarmCombinedSessionStoresForGateway } =
-      await import("../config/sessions/combined-store-gateway.js");
+      await import("../config/sessions/combined-store.js");
     sessionDataPrewarmAllowed = canPrewarmCombinedSessionStoresForGateway(cfg, {
       agentIds,
       maxRows: SIDEBAR_PREWARM_MAX_SESSION_ENTRIES,

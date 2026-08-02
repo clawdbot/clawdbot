@@ -49,7 +49,7 @@ const getSessionDefaultsMock = vi.fn(() => ({
   model: null,
   contextTokens: null,
 }));
-const loadCombinedSessionStoreForGatewayMock = vi.fn((_options?: unknown) => ({
+const loadCombinedSessionStoreMock = vi.fn((_options?: unknown) => ({
   storePath: "/tmp/openclaw-sessions.json",
   store: {},
 }));
@@ -231,21 +231,33 @@ vi.mock("../gateway/session-utils.js", () => ({
   getSessionDefaults: () => getSessionDefaultsMock(),
   listAgentsForGateway: () => [],
   listSessionsFromStoreAsync: (...args: unknown[]) => listSessionsFromStoreAsyncMock(...args),
-  loadCombinedSessionStoreForGateway: (...args: unknown[]) =>
-    loadCombinedSessionStoreForGatewayMock(...args),
-  loadSessionEntry: (sessionKey: string, opts?: { agentId?: string }) =>
+  resolveSessionModelRef: () => ({ provider: "openai", model: "gpt-5.4" }),
+}));
+
+vi.mock("../config/sessions/combined-store.js", () => ({
+  loadCombinedSessionStore: (...args: unknown[]) => loadCombinedSessionStoreMock(...args),
+}));
+
+vi.mock("../config/sessions/session-entry-loader.js", () => ({
+  loadResolvedSessionEntry: (sessionKey: string, opts?: { agentId?: string }) =>
     loadSessionEntryMock(sessionKey, opts),
-  loadSessionEntryReadOnly: (sessionKey: string, opts?: { agentId?: string }) =>
+  loadResolvedSessionEntryReadOnly: (sessionKey: string, opts?: { agentId?: string }) =>
     loadSessionEntryMock(sessionKey, opts),
-  resolveCanonicalGatewaySessionStoreKey: ({ key }: { key: string }) => ({
-    primaryKey: key,
-    target: { storeKeys: [key] },
-  }),
-  resolveGatewaySessionStoreTarget: ({ key }: { key: string }) => ({
+}));
+
+vi.mock("../config/sessions/session-store-target.js", () => ({
+  resolveSessionStoreTarget: ({
+    key,
+    store,
+  }: {
+    key: string;
+    store?: Record<string, unknown>;
+  }) => ({
     canonicalKey: key,
     storePath: "/tmp/openclaw-sessions.json",
+    storeKeys: [key],
+    store,
   }),
-  resolveSessionModelRef: () => ({ provider: "openai", model: "gpt-5.4" }),
 }));
 
 vi.mock("../gateway/server-model-catalog.js", () => ({
@@ -356,8 +368,8 @@ describe("EmbeddedTuiBackend", () => {
     });
     listSessionsFromStoreAsyncMock.mockReset();
     listSessionsFromStoreAsyncMock.mockResolvedValue({ sessions: [] });
-    loadCombinedSessionStoreForGatewayMock.mockReset();
-    loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+    loadCombinedSessionStoreMock.mockReset();
+    loadCombinedSessionStoreMock.mockReturnValue({
       storePath: "/tmp/openclaw-sessions.json",
       store: {},
     });
@@ -987,7 +999,7 @@ describe("EmbeddedTuiBackend", () => {
 
     await backend.listSessions({ agentId: "work", includeGlobal: true, search: "global" });
 
-    expect(loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledWith(
+    expect(loadCombinedSessionStoreMock).toHaveBeenCalledWith(
       {},
       { agentId: "work", projection: "list" },
     );
@@ -2358,8 +2370,12 @@ describe("EmbeddedTuiBackend", () => {
         runId: "canonical-terminal",
       });
       const queuedRunReady = (
-        backend as unknown as { runs: Map<string, { queuedRunReady: Promise<void> }> }
-      ).runs.get("canonical-terminal")?.queuedRunReady;
+        backend as unknown as {
+          localAgentHost: {
+            get: (runId: string) => { adapterState: { queuedRunReady: Promise<void> } } | undefined;
+          };
+        }
+      ).localAgentHost.get("canonical-terminal")?.adapterState.queuedRunReady;
       let queueReady = false;
       void queuedRunReady?.then(() => {
         queueReady = true;

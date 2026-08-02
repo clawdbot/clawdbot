@@ -4,7 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import { uniqueStrings } from "../../packages/normalization-core/src/string-normalization.js";
 import { parseUsageCountedSessionIdFromFileName } from "../config/sessions/artifacts.js";
-import { loadCombinedSessionStoreForGateway as loadGatewaySessionStore } from "../config/sessions/combined-store-gateway.js";
+import { loadCombinedSessionStore as loadSessionStore } from "../config/sessions/combined-store.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isIncognitoSessionKey, normalizeAgentId } from "../routing/session-key.js";
@@ -23,11 +23,11 @@ export type {
 } from "./session-transcript-memory-hit.js";
 
 /** Loads the cross-session plugin view without process-only incognito rows. */
-export function loadCombinedSessionStoreForGateway(
+export function loadCombinedSessionStore(
   cfg: OpenClawConfig,
   opts: { agentId?: string; configuredAgentsOnly?: boolean } = {},
 ) {
-  const result = loadGatewaySessionStore(cfg, { ...opts, includeIncognito: false });
+  const result = loadSessionStore(cfg, { ...opts, includeIncognito: false });
   return {
     storePath: result.storePath,
     // Plugin search hits can be re-persisted into durable transcripts, so the
@@ -37,6 +37,9 @@ export function loadCombinedSessionStoreForGateway(
     ),
   };
 }
+
+/** @deprecated Use `loadCombinedSessionStore`. Removal: 2026-10-31. */
+export const loadCombinedSessionStoreForGateway = loadCombinedSessionStore;
 
 const QMD_ARCHIVE_STEM_RE = /^(.+)-jsonl-(reset|deleted)-(.+)$/;
 const QMD_ARCHIVE_TIMESTAMP_RE =

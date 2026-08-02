@@ -2,7 +2,7 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
-import { loadCombinedSessionStoreForGateway } from "../config/sessions/combined-store-gateway.js";
+import { loadCombinedSessionStore } from "../config/sessions/combined-store.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import {
   listKnownSessionStoreAgentIds,
@@ -215,10 +215,7 @@ describe("sweepCronRunSessions", () => {
     expect(resolveExistingAgentSessionStoreTargetsSync(cfg, "ops")).toEqual([
       { agentId: "ops", storePath: exactStorePath },
     ]);
-    expect(Object.keys(loadCombinedSessionStoreForGateway(cfg).store).toSorted()).toEqual([
-      mainKey,
-      opsKey,
-    ]);
+    expect(Object.keys(loadCombinedSessionStore(cfg).store).toSorted()).toEqual([mainKey, opsKey]);
     expect(
       sessionAccessor.loadSessionEntry({
         agentId: "ops",

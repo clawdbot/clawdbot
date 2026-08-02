@@ -20,6 +20,8 @@ import {
   isSessionTranscriptProjectionUnavailableError,
   resolveTranscriptSessionKeyBySessionId,
 } from "../../config/sessions/session-accessor.js";
+import { loadResolvedSessionEntryReadOnly } from "../../config/sessions/session-entry-loader.js";
+import { resolveSessionStoreKey } from "../../config/sessions/session-store-key.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   measureDiagnosticsTimelineSpan,
@@ -38,10 +40,8 @@ import { capArrayByJsonBytes } from "../session-transcript-readers.js";
 import {
   buildGatewaySessionInfo,
   getSessionDefaults,
-  loadSessionEntryReadOnly,
   listAgentsForGateway,
   resolveSessionModelRef,
-  resolveSessionStoreKey,
 } from "../session-utils.js";
 import { scheduleChatHistoryManagedMediaCleanup } from "./chat-assistant-content.js";
 import {
@@ -153,7 +153,7 @@ async function buildChatStartupModelCatalogProjection(params: {
   cfg: OpenClawConfig;
   snapshot: ModelCatalogSnapshot;
   sessionAgentId: string;
-  sessionEntry: ReturnType<typeof loadSessionEntryReadOnly>["entry"];
+  sessionEntry: ReturnType<typeof loadResolvedSessionEntryReadOnly>["entry"];
   defaultAgentId: string;
   includeAgentsList: boolean;
 }) {
@@ -319,7 +319,7 @@ async function handleChatHistoryRequest({
   const { cfg, storePath, store, entry, canonicalKey } = measureDiagnosticsTimelineSpanSync(
     `gateway.${method}.session_entry`,
     () =>
-      loadSessionEntryReadOnly(sessionKey, {
+      loadResolvedSessionEntryReadOnly(sessionKey, {
         ...sessionLoadOptions,
         includeStoreChildEntries: true,
       }),

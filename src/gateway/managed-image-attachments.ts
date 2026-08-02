@@ -15,6 +15,7 @@ import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import type { ReplyMediaAttachment } from "../auto-reply/reply-payload.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
+import { loadResolvedSessionEntryReadOnly } from "../config/sessions/session-entry-loader.js";
 import { openLocalFileSafely, readLocalFileSafely } from "../infra/fs-safe.js";
 import { assertLocalMediaAllowed, resolveLocalMediaRoots } from "../media/local-media-access.js";
 import { resolveLocalMediaPath } from "../media/local-media-path.js";
@@ -57,10 +58,7 @@ import {
 } from "./managed-image-record-store.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { readSessionMessagesWithSourceAsync } from "./session-transcript-readers.js";
-import {
-  loadSessionEntryReadOnly,
-  resolveSessionHistoryTranscriptPathAsync,
-} from "./session-utils.js";
+import { resolveSessionHistoryTranscriptPathAsync } from "./session-utils.js";
 
 const OUTGOING_IMAGE_ROUTE_PREFIX = "/api/chat/media/outgoing";
 const DEFAULT_TRANSIENT_OUTGOING_IMAGE_TTL_MS = 15 * 60 * 1000;
@@ -863,7 +861,7 @@ async function getSessionManagedOutgoingAttachmentIndex(
   if (cache?.has(cacheKey)) {
     return cache.get(cacheKey) ?? null;
   }
-  const { storePath, entry } = loadSessionEntryReadOnly(
+  const { storePath, entry } = loadResolvedSessionEntryReadOnly(
     sessionKey,
     sessionKey === "global" && agentId ? { agentId } : undefined,
   );

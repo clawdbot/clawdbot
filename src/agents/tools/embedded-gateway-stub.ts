@@ -79,7 +79,7 @@ interface EmbeddedGatewayRuntime {
     store: unknown;
     opts: SessionsListParams;
   }) => Promise<SessionsListResult>;
-  loadCombinedSessionStoreForGateway: (
+  loadCombinedSessionStore: (
     cfg: OpenClawConfig,
     opts?: { agentId?: string; projection?: "full" | "list" },
   ) => {
@@ -90,7 +90,7 @@ interface EmbeddedGatewayRuntime {
     cfg: OpenClawConfig;
     p: SessionsResolveParams;
   }) => Promise<SessionsResolveResult>;
-  loadSessionEntry: (
+  loadResolvedSessionEntryReadOnly: (
     sessionKey: string,
     opts?: { agentId?: string },
   ) => {
@@ -198,7 +198,7 @@ async function handleSessionsList(params: Record<string, unknown>) {
   const rt = await getRuntime();
   const cfg = rt.getRuntimeConfig();
   const opts = params as SessionsListParams;
-  const { storePath, store } = rt.loadCombinedSessionStoreForGateway(cfg, {
+  const { storePath, store } = rt.loadCombinedSessionStore(cfg, {
     agentId: opts.agentId,
     projection: "list",
   });
@@ -306,7 +306,10 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
   const offset = readOffsetParam(params) ?? 0;
 
   const sessionLoadOptions = requestedAgentId ? { agentId: requestedAgentId } : undefined;
-  const { cfg, storePath, entry } = rt.loadSessionEntry(sessionKey, sessionLoadOptions);
+  const { cfg, storePath, entry } = rt.loadResolvedSessionEntryReadOnly(
+    sessionKey,
+    sessionLoadOptions,
+  );
   const sessionId = entry?.sessionId as string | undefined;
   const sessionAgentId = rt.resolveSessionAgentId({
     sessionKey,

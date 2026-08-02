@@ -17,6 +17,7 @@ import {
   preflightSessionTranscriptForManualCompact,
   trimSessionTranscriptForManualCompact,
 } from "../../config/sessions/session-accessor.js";
+import { resolveSessionStoreTarget } from "../../config/sessions/session-store-target.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   isCompetingSessionWorkAdmissionActive,
@@ -24,7 +25,6 @@ import {
 } from "../../sessions/session-lifecycle-admission.js";
 import { recordSessionCompacted } from "../../sessions/session-state-events.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-create-service.js";
-import { resolveCanonicalGatewaySessionStoreKey } from "../session-utils.js";
 import { asWorkerInferenceControl } from "../worker-environments/inference-control.js";
 import { hasVisibleActiveSessionRun } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
@@ -67,8 +67,8 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
       agentId: requestedAgentId,
     });
     // Lock + read in a short critical section; transcript work happens outside.
-    // The projection resolver re-runs gateway key migration on the writer
-    // snapshot so alias promotion/pruning persists through the accessor.
+    // Canonical validation runs against the writer snapshot and fails closed
+    // until doctor repairs any non-canonical persisted rows.
     let compactPrimaryKey = target.canonicalKey;
     const compactRead = await applySessionPatchProjection({
       agentId: target.agentId,
@@ -77,17 +77,19 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
         const snapshot = Object.fromEntries(
           entries.map(({ sessionKey, entry }) => [sessionKey, entry]),
         );
-        const { target: migratedTarget, primaryKey } = resolveCanonicalGatewaySessionStoreKey({
+        const resolvedTarget = resolveSessionStoreTarget({
           cfg,
           key,
           store: snapshot,
           agentId: requestedAgentId,
         });
-        compactPrimaryKey = primaryKey;
-        return { primaryKey, candidateKeys: migratedTarget.storeKeys };
+        compactPrimaryKey = resolvedTarget.canonicalKey;
+        return {
+          primaryKey: resolvedTarget.canonicalKey,
+          candidateKeys: resolvedTarget.storeKeys,
+        };
       },
-      // Read-only projection: persist the resolved row unchanged so the alias
-      // migration above is saved even when compaction bails out below.
+      // Read-only projection: preserve the resolved row unchanged.
       project: ({ existingEntry }) =>
         existingEntry ? { ok: true, entry: existingEntry } : { ok: false },
     });

@@ -19,11 +19,13 @@ vi.mock("../../config/config.js", () => {
   };
 });
 
-vi.mock("../session-utils.js", async () => {
-  const actual = await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
+vi.mock("../../config/sessions/combined-store.js", async () => {
+  const actual = await vi.importActual<typeof import("../../config/sessions/combined-store.js")>(
+    "../../config/sessions/combined-store.js",
+  );
   return {
     ...actual,
-    loadCombinedSessionStoreForGateway: vi.fn(() => ({ storePath: "(multiple)", store: {} })),
+    loadCombinedSessionStore: vi.fn(() => ({ storePath: "(multiple)", store: {} })),
   };
 });
 
@@ -95,13 +97,13 @@ vi.mock("../../infra/session-cost-usage.js", async () => {
   };
 });
 
+import { loadCombinedSessionStore } from "../../config/sessions/combined-store.js";
 import {
   discoverAllSessions,
   loadSessionCostSummariesFromCache,
   loadSessionLogs,
   loadSessionUsageTimeSeries,
 } from "../../infra/session-cost-usage.js";
-import { loadCombinedSessionStoreForGateway } from "../session-utils.js";
 import { testApi, usageHandlers } from "./usage.js";
 
 const TEST_RUNTIME_CONFIG = {
@@ -213,10 +215,9 @@ describe("sessions.usage", () => {
   it("defaults list-style usage queries without agentId to the default agent", async () => {
     const respond = await runSessionsUsage(BASE_USAGE_RANGE);
 
-    expect(vi.mocked(loadCombinedSessionStoreForGateway)).toHaveBeenCalledWith(
-      TEST_RUNTIME_CONFIG,
-      { agentId: "main" },
-    );
+    expect(vi.mocked(loadCombinedSessionStore)).toHaveBeenCalledWith(TEST_RUNTIME_CONFIG, {
+      agentId: "main",
+    });
     expect(vi.mocked(discoverAllSessions)).toHaveBeenCalledTimes(1);
     expect((mockArg(vi.mocked(discoverAllSessions), 0, 0) as { agentId?: string }).agentId).toBe(
       "main",
@@ -231,10 +232,7 @@ describe("sessions.usage", () => {
   it("uses explicit all-agent scope for list-style usage queries", async () => {
     const respond = await runSessionsUsage({ ...BASE_USAGE_RANGE, agentScope: "all" });
 
-    expect(vi.mocked(loadCombinedSessionStoreForGateway)).toHaveBeenCalledWith(
-      TEST_RUNTIME_CONFIG,
-      {},
-    );
+    expect(vi.mocked(loadCombinedSessionStore)).toHaveBeenCalledWith(TEST_RUNTIME_CONFIG, {});
     expect(vi.mocked(discoverAllSessions)).toHaveBeenCalledTimes(2);
     expect(
       vi
@@ -270,10 +268,9 @@ describe("sessions.usage", () => {
   it("uses the requested agent for list-style usage queries", async () => {
     const respond = await runSessionsUsage({ ...BASE_USAGE_RANGE, agentId: "opus" });
 
-    expect(vi.mocked(loadCombinedSessionStoreForGateway)).toHaveBeenCalledWith(
-      TEST_RUNTIME_CONFIG,
-      { agentId: "opus" },
-    );
+    expect(vi.mocked(loadCombinedSessionStore)).toHaveBeenCalledWith(TEST_RUNTIME_CONFIG, {
+      agentId: "opus",
+    });
     expect(vi.mocked(discoverAllSessions)).toHaveBeenCalledTimes(1);
     expect((mockArg(vi.mocked(discoverAllSessions), 0, 0) as { agentId?: string }).agentId).toBe(
       "opus",
@@ -458,10 +455,9 @@ describe("sessions.usage", () => {
   it("discovers usage for requested disk-only agents not listed in config", async () => {
     const respond = await runSessionsUsage({ ...BASE_USAGE_RANGE, agentId: "codex" });
 
-    expect(vi.mocked(loadCombinedSessionStoreForGateway)).toHaveBeenCalledWith(
-      TEST_RUNTIME_CONFIG,
-      { agentId: "codex" },
-    );
+    expect(vi.mocked(loadCombinedSessionStore)).toHaveBeenCalledWith(TEST_RUNTIME_CONFIG, {
+      agentId: "codex",
+    });
     expect(vi.mocked(discoverAllSessions)).toHaveBeenCalledTimes(1);
     expect((mockArg(vi.mocked(discoverAllSessions), 0, 0) as { agentId?: string }).agentId).toBe(
       "codex",
@@ -476,7 +472,7 @@ describe("sessions.usage", () => {
   });
 
   it("does not attach out-of-scope store entries to list-style usage results", async () => {
-    vi.mocked(loadCombinedSessionStoreForGateway).mockReturnValue({
+    vi.mocked(loadCombinedSessionStore).mockReturnValue({
       storePath: "(multiple)",
       store: {
         "agent:main:s-opus": {
@@ -506,7 +502,7 @@ describe("sessions.usage", () => {
     await withUsageState(async (writeSessionFile) => {
       const sessionFile = writeSessionFile("main.jsonl");
 
-      vi.mocked(loadCombinedSessionStoreForGateway).mockReturnValue({
+      vi.mocked(loadCombinedSessionStore).mockReturnValue({
         storePath: "(multiple)",
         store: {
           "agent:opus:main": {
@@ -558,7 +554,7 @@ describe("sessions.usage", () => {
         label: "Opus global",
         updatedAt: 999,
       };
-      vi.mocked(loadCombinedSessionStoreForGateway).mockReturnValue({
+      vi.mocked(loadCombinedSessionStore).mockReturnValue({
         storePath: "(multiple)",
         store: {
           global: sessionEntry,
@@ -596,7 +592,7 @@ describe("sessions.usage", () => {
     await withUsageState(async (writeSessionFile) => {
       const sessionFile = writeSessionFile("shared.jsonl");
 
-      vi.mocked(loadCombinedSessionStoreForGateway).mockReturnValue({
+      vi.mocked(loadCombinedSessionStore).mockReturnValue({
         storePath: "(multiple)",
         store: {
           "agent:main:shared": {
@@ -640,7 +636,7 @@ describe("sessions.usage", () => {
 
       // Swap the store mock for this test: the canonical key differs from the discovered key
       // but points at the same sessionId.
-      vi.mocked(loadCombinedSessionStoreForGateway).mockReturnValue({
+      vi.mocked(loadCombinedSessionStore).mockReturnValue({
         storePath: "(multiple)",
         store: {
           [storeKey]: {
@@ -673,7 +669,7 @@ describe("sessions.usage", () => {
       writeSessionFile("current.jsonl");
       writeSessionFile("old.jsonl.reset.2026-02-01T00-00-00.000Z");
 
-      vi.mocked(loadCombinedSessionStoreForGateway).mockReturnValue({
+      vi.mocked(loadCombinedSessionStore).mockReturnValue({
         storePath: "(multiple)",
         store: {
           [storeKey]: {
@@ -751,7 +747,7 @@ describe("sessions.usage", () => {
     await withUsageState(async (writeSessionFile) => {
       writeSessionFile("run-dup.jsonl");
 
-      vi.mocked(loadCombinedSessionStoreForGateway).mockReturnValue({
+      vi.mocked(loadCombinedSessionStore).mockReturnValue({
         storePath: "(multiple)",
         store: {
           [preferredKey]: {

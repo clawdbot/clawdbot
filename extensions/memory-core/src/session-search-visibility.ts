@@ -6,7 +6,7 @@ import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry
 import { sessionDeliveryOrigin } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   extractTranscriptIdentityFromSessionsMemoryHit,
-  loadCombinedSessionStoreForGateway,
+  loadCombinedSessionStore,
   resolveSessionTranscriptMemoryHitKeyToSessionKeys,
   resolveTranscriptStemToSessionKeys,
 } from "openclaw/plugin-sdk/session-transcript-hit";
@@ -27,7 +27,7 @@ function isGlobalSessionKeyForSharedScope(cfg: OpenClawConfig, key: string): boo
 
 type ConversationRecallContext = NonNullable<OpenClawPluginToolContext["conversationRecall"]>;
 
-type SessionStore = ReturnType<typeof loadCombinedSessionStoreForGateway>["store"];
+type SessionStore = ReturnType<typeof loadCombinedSessionStore>["store"];
 
 function isSameStoredTranscript(
   anchor: SessionStore[string] | undefined,
@@ -186,7 +186,7 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
       })
     : null;
 
-  const { store: combinedSessionStore } = loadCombinedSessionStoreForGateway(
+  const { store: combinedSessionStore } = loadCombinedSessionStore(
     params.cfg,
     scopedAgentId ? { agentId: scopedAgentId } : {},
   );

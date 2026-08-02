@@ -5,7 +5,7 @@ vi.unmock("./session-key.js");
 import {
   resolveSessionStoreAgentId,
   resolveSessionStoreKey,
-} from "../gateway/session-store-key.js";
+} from "../config/sessions/session-store-key.js";
 import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
 import {
   getSubagentDepth,

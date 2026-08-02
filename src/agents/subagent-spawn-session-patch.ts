@@ -11,7 +11,7 @@ import {
 } from "./inherited-tool-deny.js";
 import { getSubagentSpawnDeps } from "./subagent-spawn-deps.js";
 import { splitModelRef } from "./subagent-spawn-plan.js";
-import { resolveGatewaySessionStoreTarget, upsertSessionEntry } from "./subagent-spawn.runtime.js";
+import { resolveSessionStoreTarget, upsertSessionEntry } from "./subagent-spawn.runtime.js";
 
 function buildDirectChildSessionPatch(patch: Record<string, unknown>): Partial<SessionEntry> {
   const entry: Partial<SessionEntry> = {};
@@ -143,7 +143,7 @@ export async function createInitialSubagentSession(params: {
           storeKeys: [params.childSessionKey],
           storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: params.targetAgentId }),
         }
-      : resolveGatewaySessionStoreTarget({
+      : resolveSessionStoreTarget({
           cfg: params.cfg,
           key: params.childSessionKey,
         });
@@ -177,7 +177,7 @@ export async function persistInitialChildSessionRuntimeModel(params: {
     return undefined;
   }
   try {
-    const target = resolveGatewaySessionStoreTarget({
+    const target = resolveSessionStoreTarget({
       cfg: params.cfg,
       key: params.childSessionKey,
     });

@@ -9,15 +9,15 @@ import {
   type SessionsResolveParams,
 } from "../../packages/gateway-protocol/src/index.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { loadCombinedSessionStore } from "../config/sessions/combined-store.js";
+import { resolveSessionStoreTargetWithStore } from "../config/sessions/session-store-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSessionIdMatchSelection } from "../sessions/session-id-resolution.js";
 import { parseSessionLabel } from "../sessions/session-label.js";
 import {
   filterAndSortSessionEntries,
   listSessionsFromStore,
-  loadCombinedSessionStoreForGateway,
   resolveDeletedAgentIdFromSessionKey,
-  resolveGatewaySessionStoreTargetWithStore,
 } from "./session-utils.js";
 
 export type SessionsResolveResult =
@@ -128,7 +128,7 @@ export async function resolveSessionKeyFromResolveParams(params: {
   }
 
   if (hasKey) {
-    const target = resolveGatewaySessionStoreTargetWithStore({ cfg, key, clone: false });
+    const target = resolveSessionStoreTargetWithStore({ cfg, key, clone: false });
     const store = target.store;
     if (store[target.canonicalKey]) {
       if (
@@ -158,7 +158,7 @@ export async function resolveSessionKeyFromResolveParams(params: {
   if (hasSessionId) {
     // sessionId can collide across stores; delegate selection so exact key
     // matches and ambiguity rules stay shared with other session-id callers.
-    const { store } = loadCombinedSessionStoreForGateway(cfg, { agentId: p.agentId });
+    const { store } = loadCombinedSessionStore(cfg, { agentId: p.agentId });
     const matches = findVisibleSessionIdMatches({ cfg, store, p, sessionId });
     const selection = resolveSessionIdMatchSelection(matches, sessionId);
     if (selection.kind === "none") {
@@ -194,7 +194,7 @@ export async function resolveSessionKeyFromResolveParams(params: {
     };
   }
 
-  const { storePath, store } = loadCombinedSessionStoreForGateway(cfg, { agentId: p.agentId });
+  const { storePath, store } = loadCombinedSessionStore(cfg, { agentId: p.agentId });
   const list = listSessionsFromStore({
     cfg,
     storePath,

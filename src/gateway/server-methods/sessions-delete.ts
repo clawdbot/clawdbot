@@ -14,6 +14,8 @@ import {
   type SessionEntry,
 } from "../../config/sessions.js";
 import { rollbackPluginOwnedSessionEntryLifecycle } from "../../config/sessions/session-accessor.js";
+import { loadResolvedSessionEntry } from "../../config/sessions/session-entry-loader.js";
+import { resolveSessionStoreAgentId } from "../../config/sessions/session-store-key.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { isAgentHarnessSessionKey } from "../../sessions/agent-harness-session-key.js";
@@ -25,8 +27,6 @@ import {
 } from "../../sessions/session-lifecycle-admission.js";
 import { handleSessionStateSessionDeleted } from "../../sessions/session-state-events.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-create-service.js";
-import { resolveSessionStoreAgentId } from "../session-store-key.js";
-import { loadSessionEntry } from "../session-utils.js";
 import { chatHandlers } from "./chat.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import {
@@ -91,7 +91,7 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
       emitSessionUnboundLifecycleEvent,
     } = await loadSessionsRuntimeModule();
 
-    const initialDeleteEntry = loadSessionEntry(key, {
+    const initialDeleteEntry = loadResolvedSessionEntry(key, {
       agentId: requestedAgentId,
     }).entry;
     const rejectModelSelectionLockedDelete = (
@@ -236,7 +236,7 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
       identities: deleteLifecycleIdentities,
       prepare: async () => {
         sessionMutationAuthorization?.assertCurrent();
-        const preparedEntry = loadSessionEntry(key, { agentId: requestedAgentId }).entry;
+        const preparedEntry = loadResolvedSessionEntry(key, { agentId: requestedAgentId }).entry;
         deleteBlockedByModelLock = rejectModelSelectionLockedDelete(
           preparedEntry,
           target.canonicalKey,
@@ -282,7 +282,7 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
           return undefined;
         }
         sessionMutationAuthorization?.assertCurrent();
-        const { entry, legacyKey, canonicalKey } = loadSessionEntry(key, {
+        const { entry, legacyKey, canonicalKey } = loadResolvedSessionEntry(key, {
           agentId: requestedAgentId,
         });
         if (rejectModelSelectionLockedDelete(entry, canonicalKey ?? target.canonicalKey)) {

@@ -11,6 +11,7 @@ import {
 } from "../../config/sessions.js";
 import { hasProviderOwnedSession } from "../../config/sessions/entry-freshness.js";
 import { resolveSessionEntryAccessTarget } from "../../config/sessions/session-accessor.js";
+import { resolveSessionStoreKey } from "../../config/sessions/session-store-key.js";
 import { isRecoverableTerminalSessionStatus } from "../../config/sessions/terminal-status.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -21,7 +22,6 @@ import {
   sessionDeliveryRoute,
   type DeliveryContext,
 } from "../../utils/delivery-context.shared.js";
-import { resolveSessionStoreKey } from "../session-store-key.js";
 import {
   normalizeTrustedGroupMetadata,
   requestGroupMatchesTrusted,

@@ -8,6 +8,7 @@ import {
   terminalHealthFor,
 } from "../agents/session-activity-notes.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
+import { resolveStoredSessionKeyForAgentStore as resolveStoreKey } from "../config/sessions/session-store-key.js";
 import { getAgentRunContext } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createSessionObserverAudience } from "./session-observer-audience.js";
@@ -40,7 +41,6 @@ import type {
 } from "./session-observer-model.js";
 import { createSessionObserverDigestPersister } from "./session-observer-persistence.js";
 import { createSessionObserverPreamblePublisher } from "./session-observer-preamble.js";
-import { resolveStoredSessionKeyForAgentStore as resolveStoreKey } from "./session-store-key.js";
 
 const observerLog = createSubsystemLogger("gateway/session-observer");
 

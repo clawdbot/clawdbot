@@ -3,6 +3,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { killSubagentRunAdmin } from "../agents/subagent-control.js";
 import { getRuntimeConfig } from "../config/io.js";
+import { loadResolvedSessionEntry } from "../config/sessions/session-entry-loader.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import {
@@ -16,7 +17,6 @@ import {
   resolveTrustedHttpOperatorScopes,
 } from "./http-utils.js";
 import { ADMIN_SCOPE, authorizeOperatorScopesForRequiredScope } from "./method-scopes.js";
-import { loadSessionEntry } from "./session-utils.js";
 
 type SessionKeyPathResolution =
   | { matched: false }
@@ -87,7 +87,7 @@ export async function handleSessionKillHttpRequest(
     return true;
   }
 
-  const { entry, canonicalKey } = loadSessionEntry(sessionKey);
+  const { entry, canonicalKey } = loadResolvedSessionEntry(sessionKey);
   if (!entry) {
     sendJson(res, 404, {
       ok: false,

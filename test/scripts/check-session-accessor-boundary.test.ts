@@ -82,7 +82,7 @@ describe("session accessor boundary guard", () => {
         "src/commands/status.agent-local.ts",
         "src/status/summary.ts",
         "src/commands/tasks.ts",
-        "src/config/sessions/combined-store-gateway.ts",
+        "src/config/sessions/combined-store.ts",
         "src/config/sessions/delivery-info.ts",
         "src/config/sessions/goals.ts",
         "src/cron/isolated-agent/delivery-target.ts",

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { loadResolvedSessionEntry } from "../../config/sessions/session-entry-loader.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
@@ -7,7 +8,6 @@ import {
   isDashboardSessionTitleCandidate,
   maybeGenerateDashboardSessionTitle,
 } from "../dashboard-session-title.js";
-import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -39,10 +39,10 @@ export function scheduleChatDashboardSessionTitle(params: {
   agentId: string;
   cfg: OpenClawConfig;
   context: GatewayRequestContext;
-  entry: ReturnType<typeof loadSessionEntry>["entry"];
+  entry: ReturnType<typeof loadResolvedSessionEntry>["entry"];
   rawMessage: string;
   sessionKey: string;
-  sessionLoadOptions: Parameters<typeof loadSessionEntry>[1];
+  sessionLoadOptions: Parameters<typeof loadResolvedSessionEntry>[1];
   storePath: string;
 }): void {
   const titleSource = stripInlineDirectiveTagsForDisplay(params.rawMessage).text;
@@ -55,7 +55,7 @@ export function scheduleChatDashboardSessionTitle(params: {
     const titleEntry =
       params.entry?.sessionId === params.admittedSessionId
         ? params.entry
-        : loadSessionEntry(params.sessionKey, params.sessionLoadOptions).entry;
+        : loadResolvedSessionEntry(params.sessionKey, params.sessionLoadOptions).entry;
     const titleSessionId = titleEntry?.sessionId;
     if (!titleSessionId) {
       return;

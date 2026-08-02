@@ -15,17 +15,17 @@ import {
   isConfiguredSessionStoreAgentId,
   resolveExistingAgentSessionStoreTargetsSync,
 } from "../../config/sessions.js";
+import { loadResolvedSessionEntry } from "../../config/sessions/session-entry-loader.js";
+import { resolveSessionStoreKey } from "../../config/sessions/session-store-key.js";
+import {
+  resolveSessionStoreAgentId,
+  resolveStoredSessionKeyForAgentStore,
+  resolveStoredSessionOwnerAgentId,
+} from "../../config/sessions/session-store-key.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveSessionKeyForRun } from "../server-session-key.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-create-service.js";
-import {
-  resolveSessionStoreAgentId,
-  resolveSessionStoreKey,
-  resolveStoredSessionKeyForAgentStore,
-  resolveStoredSessionOwnerAgentId,
-} from "../session-store-key.js";
-import { loadSessionEntry } from "../session-utils.js";
 import { asWorkerInferenceControl } from "../worker-environments/inference-control.js";
 import { resolveWorkerSessionTarget } from "../worker-environments/session-target.js";
 import { setGatewayDedupeEntry } from "./agent-job.js";
@@ -225,7 +225,7 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
     // neither config nor persistence owns it; that edge is the only one that could create state.
     const loadedSession =
       configuredTarget || existingTargets.length > 0
-        ? loadSessionEntry(key, { agentId: requestedGlobalAgentId })
+        ? loadResolvedSessionEntry(key, { agentId: requestedGlobalAgentId })
         : undefined;
     const canonicalKey =
       loadedSession?.canonicalKey ??

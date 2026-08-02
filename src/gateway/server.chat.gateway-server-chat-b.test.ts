@@ -1947,12 +1947,11 @@ describe("gateway server chat", () => {
     let mutation: Promise<void> | undefined;
     try {
       await writeStoredMainSession({});
-      const [{ deleteSessionEntryLifecycle }, { loadSessionEntry: loadGatewaySessionEntry }] =
-        await Promise.all([
-          import("../config/sessions/session-accessor.js"),
-          import("./session-utils.js"),
-        ]);
-      const seededSession = loadGatewaySessionEntry("main");
+      const [{ deleteSessionEntryLifecycle }, { loadResolvedSessionEntry }] = await Promise.all([
+        import("../config/sessions/session-accessor.js"),
+        import("../config/sessions/session-entry-loader.js"),
+      ]);
+      const seededSession = loadResolvedSessionEntry("main");
       const seededSessionId = seededSession.entry?.sessionId;
       expect(seededSessionId).toBe("sess-main");
       const mutationStarted = createDeferred();
@@ -1965,7 +1964,7 @@ describe("gateway server chat", () => {
           // Read the authoritative row inside the mutation. Admission startup
           // may refresh metadata before it blocks, but this test deletes that
           // same session generation rather than a stale pre-admission snapshot.
-          const deletionSession = loadGatewaySessionEntry("main");
+          const deletionSession = loadResolvedSessionEntry("main");
           const deletionEntry = expectDefined(
             deletionSession.entry,
             "session deletion test invariant",

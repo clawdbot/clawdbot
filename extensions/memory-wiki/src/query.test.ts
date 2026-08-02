@@ -12,12 +12,12 @@ import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
 const {
   getActiveMemorySearchManagerMock,
-  loadCombinedSessionStoreForGatewayMock,
+  loadCombinedSessionStoreMock,
   resolveDefaultAgentIdMock,
   resolveSessionAgentIdMock,
 } = vi.hoisted(() => ({
   getActiveMemorySearchManagerMock: vi.fn(),
-  loadCombinedSessionStoreForGatewayMock: vi.fn(),
+  loadCombinedSessionStoreMock: vi.fn(),
   resolveDefaultAgentIdMock: vi.fn(() => "main"),
   resolveSessionAgentIdMock: vi.fn(({ sessionKey }: { sessionKey?: string }) => {
     const match = /^agent:([^:]+):/.exec(sessionKey ?? "");
@@ -39,7 +39,7 @@ vi.mock("openclaw/plugin-sdk/session-transcript-hit", async (importOriginal) => 
     await importOriginal<typeof import("openclaw/plugin-sdk/session-transcript-hit")>();
   return {
     ...actual,
-    loadCombinedSessionStoreForGateway: loadCombinedSessionStoreForGatewayMock,
+    loadCombinedSessionStore: loadCombinedSessionStoreMock,
   };
 });
 
@@ -71,8 +71,8 @@ function expectFields(value: unknown, expected: Record<string, unknown>): Record
 beforeEach(() => {
   getActiveMemorySearchManagerMock.mockReset();
   getActiveMemorySearchManagerMock.mockResolvedValue({ manager: null, error: "unavailable" });
-  loadCombinedSessionStoreForGatewayMock.mockReset();
-  loadCombinedSessionStoreForGatewayMock.mockReturnValue({ storePath: "(test)", store: {} });
+  loadCombinedSessionStoreMock.mockReset();
+  loadCombinedSessionStoreMock.mockReturnValue({ storePath: "(test)", store: {} });
   resolveDefaultAgentIdMock.mockClear();
   resolveSessionAgentIdMock.mockClear();
 });
@@ -127,7 +127,7 @@ function createAgentSessionVisibilityAppConfig(): OpenClawConfig {
 }
 
 function mockSessionTranscriptStore() {
-  loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+  loadCombinedSessionStoreMock.mockReturnValue({
     storePath: "(test)",
     store: {
       "agent:main:child-session": {
@@ -188,7 +188,7 @@ describe("getMemoryWikiPage", () => {
       "qmd\\sessions-main\\child-session.md",
       "qmd/sessions",
     ]) {
-      loadCombinedSessionStoreForGatewayMock.mockClear();
+      loadCombinedSessionStoreMock.mockClear();
       await getMemoryWikiPage({
         config,
         appConfig: createSessionVisibilityAppConfig(),
@@ -196,7 +196,7 @@ describe("getMemoryWikiPage", () => {
         sandboxed: true,
         lookup: relPath,
       });
-      expect(loadCombinedSessionStoreForGatewayMock).toHaveBeenCalled();
+      expect(loadCombinedSessionStoreMock).toHaveBeenCalled();
     }
 
     for (const relPath of [
@@ -205,7 +205,7 @@ describe("getMemoryWikiPage", () => {
       "wiki/sessions/foo.md",
       "wiki\\sessions\\foo.md",
     ]) {
-      loadCombinedSessionStoreForGatewayMock.mockClear();
+      loadCombinedSessionStoreMock.mockClear();
       await getMemoryWikiPage({
         config,
         appConfig: createSessionVisibilityAppConfig(),
@@ -213,7 +213,7 @@ describe("getMemoryWikiPage", () => {
         sandboxed: true,
         lookup: relPath,
       });
-      expect(loadCombinedSessionStoreForGatewayMock).not.toHaveBeenCalled();
+      expect(loadCombinedSessionStoreMock).not.toHaveBeenCalled();
     }
   });
 });
@@ -939,7 +939,7 @@ describe("searchMemoryWiki", () => {
         search: { backend: "shared", corpus: "memory" },
       },
     });
-    loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+    loadCombinedSessionStoreMock.mockReturnValue({
       storePath: "(test)",
       store: {
         "agent:main:abc-uuid": {
@@ -992,7 +992,7 @@ describe("searchMemoryWiki", () => {
         search: { backend: "shared", corpus: "memory" },
       },
     });
-    loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+    loadCombinedSessionStoreMock.mockReturnValue({
       storePath: "(test)",
       store: {
         "agent:secondary:visible-session": {
@@ -1040,7 +1040,7 @@ describe("searchMemoryWiki", () => {
       maxResults: 10,
     });
 
-    expect(loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledWith(createAppConfig(), {
+    expect(loadCombinedSessionStoreMock).toHaveBeenCalledWith(createAppConfig(), {
       agentId: "secondary",
     });
     expect(results.map((result) => result.path)).toEqual([
@@ -1062,7 +1062,7 @@ describe("searchMemoryWiki", () => {
         list: [{ id: "main", default: true }, { id: "secondary" }],
       },
     } as OpenClawConfig;
-    loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+    loadCombinedSessionStoreMock.mockReturnValue({
       storePath: "(test)",
       store: {
         global: {
@@ -1115,7 +1115,7 @@ describe("searchMemoryWiki", () => {
         search: { backend: "shared", corpus: "memory" },
       },
     });
-    loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+    loadCombinedSessionStoreMock.mockReturnValue({
       storePath: "(test)",
       store: {},
     });
@@ -1286,7 +1286,7 @@ describe("searchMemoryWiki", () => {
         search: { backend: "shared", corpus: "memory" },
       },
     });
-    loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+    loadCombinedSessionStoreMock.mockReturnValue({
       storePath: "(test)",
       store: {
         "agent:secondary:main": {
@@ -1336,7 +1336,7 @@ describe("searchMemoryWiki", () => {
         search: { backend: "shared", corpus: "memory" },
       },
     });
-    loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+    loadCombinedSessionStoreMock.mockReturnValue({
       storePath: "(test)",
       store: {
         "agent:other:visible-session": {
@@ -1842,7 +1842,7 @@ describe("getMemoryWikiPage", () => {
         search: { backend: "shared", corpus: "memory" },
       },
     });
-    loadCombinedSessionStoreForGatewayMock.mockReturnValue({ storePath: "(test)", store: {} });
+    loadCombinedSessionStoreMock.mockReturnValue({ storePath: "(test)", store: {} });
     const manager = createMemoryManager({
       readResult: {
         path: "qmd/sessions-main/deleted-uuid-jsonl-deleted-2026-02-16t22-26-33-000z.md",

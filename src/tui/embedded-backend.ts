@@ -40,7 +40,13 @@ import {
 import type { QueueSettings } from "../auto-reply/reply/queue/types.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { getRuntimeConfig } from "../config/config.js";
+import { loadCombinedSessionStore } from "../config/sessions/combined-store.js";
 import { applySessionPatchProjection } from "../config/sessions/session-accessor.js";
+import {
+  loadResolvedSessionEntry,
+  loadResolvedSessionEntryReadOnly,
+} from "../config/sessions/session-entry-loader.js";
+import { resolveSessionStoreTarget } from "../config/sessions/session-store-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isChatStopCommandText } from "../gateway/chat-abort.js";
 import { resolveEffectiveChatHistoryMaxChars } from "../gateway/chat-display-projection.js";
@@ -70,11 +76,6 @@ import {
   getSessionDefaults,
   listAgentsForGateway,
   listSessionsFromStoreAsync,
-  loadCombinedSessionStoreForGateway,
-  loadSessionEntry,
-  loadSessionEntryReadOnly,
-  resolveCanonicalGatewaySessionStoreKey,
-  resolveGatewaySessionStoreTarget,
   resolveSessionModelRef,
 } from "../gateway/session-utils.js";
 import { projectSessionsPatchEntry } from "../gateway/sessions-patch.js";
@@ -146,6 +147,7 @@ type EmbeddedBackendLifecycle = "stopped" | "started" | "stopping";
 type QueuedSessionRun = {
   runId: string;
   run: LocalRunState;
+  signal: AbortSignal;
   promise: Promise<void>;
 };
 
@@ -313,7 +315,7 @@ async function waitForLocalRunShutdown(promises: Promise<void>[]): Promise<boole
 
 async function waitForQueuedLocalRun(previousRun: QueuedSessionRun, runId: string): Promise<void> {
   await previousRun.run.queuedRunReady;
-  if (previousRun.run.controller.signal.aborted && previousRun.run.queuedAfter) {
+  if (previousRun.signal.aborted && previousRun.run.queuedAfter) {
     // Preserve canceled-slot ancestry and the live run's bounded maintenance wait.
     return await waitForQueuedLocalRun(previousRun.run.queuedAfter, runId);
   }
@@ -515,7 +517,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     let pendingQueue: LocalRunState["pendingQueue"];
     if (queuedAfter) {
       const loadOptions = opts.agentId ? { agentId: opts.agentId } : undefined;
-      const { cfg, canonicalKey, entry } = loadSessionEntry(opts.sessionKey, loadOptions);
+      const { cfg, canonicalKey, entry } = loadResolvedSessionEntry(opts.sessionKey, loadOptions);
       let queueSettings = resolveQueueSettings({
         cfg,
         channel: INTERNAL_MESSAGE_CHANNEL,
@@ -652,7 +654,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
   async loadHistory(opts: { sessionKey: string; agentId?: string; limit?: number }) {
     await this.ready;
     const loadOptions = opts.agentId ? { agentId: opts.agentId } : undefined;
-    const { cfg, storePath, store, entry, canonicalKey } = loadSessionEntryReadOnly(
+    const { cfg, storePath, store, entry, canonicalKey } = loadResolvedSessionEntryReadOnly(
       opts.sessionKey,
       { ...loadOptions, includeStoreChildEntries: true },
     );
@@ -756,7 +758,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
   async listSessions(opts?: Parameters<TuiBackend["listSessions"]>[0]): Promise<TuiSessionList> {
     await this.ready;
     const cfg = getRuntimeConfig();
-    const { storePath, store } = loadCombinedSessionStoreForGateway(cfg, {
+    const { storePath, store } = loadCombinedSessionStore(cfg, {
       agentId: opts?.agentId,
       projection: "list",
     });
@@ -777,7 +779,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
   ): Promise<SessionsPatchResult> {
     await this.ready;
     const cfg = getRuntimeConfig();
-    const target = resolveGatewaySessionStoreTarget({
+    const target = resolveSessionStoreTarget({
       cfg,
       key: opts.key,
       agentId: opts.agentId,
@@ -788,13 +790,16 @@ export class EmbeddedTuiBackend implements TuiBackend {
         const store = Object.fromEntries(
           entries.map(({ sessionKey, entry }) => [sessionKey, entry]),
         );
-        const { target: migratedTarget, primaryKey } = resolveCanonicalGatewaySessionStoreKey({
+        const resolvedTarget = resolveSessionStoreTarget({
           cfg,
           key: opts.key,
           store,
           agentId: opts.agentId,
         });
-        return { primaryKey, candidateKeys: migratedTarget.storeKeys };
+        return {
+          primaryKey: resolvedTarget.canonicalKey,
+          candidateKeys: resolvedTarget.storeKeys,
+        };
       },
       project: async ({ primaryKey, existingEntry, entries }) =>
         await projectSessionsPatchEntry({
@@ -832,7 +837,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
 
   async resetSession(key: string, reason?: "new" | "reset", opts?: { agentId?: string }) {
     await this.ready;
-    if (loadSessionEntryReadOnly(key, opts).entry?.incognito === true) {
+    if (loadResolvedSessionEntryReadOnly(key, opts).entry?.incognito === true) {
       throw new Error("Incognito sessions cannot reset in place.");
     }
     const result = await performGatewaySessionReset({
@@ -882,7 +887,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     signal: AbortSignal;
   }) {
     const loadOptions = params.agentId ? { agentId: params.agentId } : undefined;
-    const { cfg, canonicalKey, storePath, store, entry } = loadSessionEntry(
+    const { cfg, canonicalKey, storePath, store, entry } = loadResolvedSessionEntry(
       params.sessionKey,
       loadOptions,
     );
@@ -964,7 +969,10 @@ export class EmbeddedTuiBackend implements TuiBackend {
   async runGoalCommand(opts: Parameters<NonNullable<TuiBackend["runGoalCommand"]>>[0]) {
     await this.ready;
     const loadOptions = opts.agentId ? { agentId: opts.agentId } : undefined;
-    const { canonicalKey, storePath, entry } = loadSessionEntry(opts.sessionKey, loadOptions);
+    const { canonicalKey, storePath, entry } = loadResolvedSessionEntry(
+      opts.sessionKey,
+      loadOptions,
+    );
     const sessionKey = canonicalKey ?? opts.sessionKey;
     const parsed = parseGoalCommand(opts.command.trim());
     if (!parsed) {
@@ -1101,7 +1109,12 @@ export class EmbeddedTuiBackend implements TuiBackend {
     for (const turn of this.localAgentHost.list()) {
       const run = turn.adapterState;
       if (this.isSameRunScope(run, params) && !run.isBtw) {
-        queuedAfter = { runId: turn.runId, run, promise: turn.result };
+        queuedAfter = {
+          runId: turn.runId,
+          run,
+          signal: turn.signal,
+          promise: turn.result,
+        };
       }
     }
     return queuedAfter;
@@ -1242,7 +1255,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     const aborted =
       typeof metadata.aborted === "boolean"
         ? metadata.aborted
-        : this.turns.get(runId)?.signal.aborted === true;
+        : this.localAgentHost.get(runId)?.signal.aborted === true;
     const stopReason = metadata.stopReason ?? (aborted ? "aborted" : undefined);
     const terminalError =
       metadata.error && typeof metadata.error === "object" && "message" in metadata.error
@@ -1475,7 +1488,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
         return;
       }
       const loadOptions = params.agentId ? { agentId: params.agentId } : undefined;
-      const { canonicalKey, entry } = loadSessionEntry(params.sessionKey, loadOptions);
+      const { canonicalKey, entry } = loadResolvedSessionEntry(params.sessionKey, loadOptions);
       const result = await agentCommandFromIngress(
         {
           // The per-message timestamp prefix is applied at the single LLM

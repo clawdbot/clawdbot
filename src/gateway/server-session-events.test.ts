@@ -16,7 +16,7 @@ const sessionRow = vi.hoisted(() => ({
 const isEmbeddedAgentRunInProgressMock = vi.hoisted(() => vi.fn());
 const projectChatDisplayMessageMock = vi.hoisted(() => vi.fn((message: unknown) => message));
 const loadAccessorSessionEntryReadOnlyMock = vi.hoisted(() => vi.fn());
-const loadGatewaySessionEntryReadOnlyMock = vi.hoisted(() => vi.fn());
+const loadResolvedSessionEntryReadOnlyMock = vi.hoisted(() => vi.fn());
 const readSessionMessageCountAsyncMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../config/io.js", () => ({ getRuntimeConfig: () => ({}) }));
@@ -27,14 +27,15 @@ vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => {
     loadSessionEntryReadOnly: loadAccessorSessionEntryReadOnlyMock,
   };
 });
+vi.mock("../config/sessions/session-entry-loader.js", () => ({
+  loadResolvedSessionEntryReadOnly: loadResolvedSessionEntryReadOnlyMock,
+}));
 vi.mock("./chat-display-projection.js", () => ({
   projectChatDisplayMessage: projectChatDisplayMessageMock,
 }));
 vi.mock("./session-utils.js", () => ({
   attachOpenClawTranscriptMeta: (message: unknown) => message,
   loadGatewaySessionRow: () => sessionRow,
-  loadSessionEntry: () => ({ entry: undefined, storePath: "" }),
-  loadSessionEntryReadOnly: loadGatewaySessionEntryReadOnlyMock,
 }));
 vi.mock("./session-transcript-readers.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./session-transcript-readers.js")>();
@@ -101,7 +102,7 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
     vi.clearAllMocks();
     isEmbeddedAgentRunInProgressMock.mockReturnValue(false);
     loadAccessorSessionEntryReadOnlyMock.mockReturnValue(undefined);
-    loadGatewaySessionEntryReadOnlyMock.mockReturnValue({ entry: undefined, storePath: "" });
+    loadResolvedSessionEntryReadOnlyMock.mockReturnValue({ entry: undefined, storePath: "" });
     readSessionMessageCountAsyncMock.mockResolvedValue(undefined);
     sessionRow.thinkingLevel = "ultra";
   });
@@ -251,7 +252,7 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
         updatedAt: 1,
       };
       loadAccessorSessionEntryReadOnlyMock.mockImplementation(() => currentEntry);
-      loadGatewaySessionEntryReadOnlyMock.mockReturnValue({
+      loadResolvedSessionEntryReadOnlyMock.mockReturnValue({
         entry: {
           sessionId: "sess-main",
           lifecycleRevision: "revision-before-reset",
@@ -293,7 +294,7 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
       await vi.waitFor(() =>
         expect(loadAccessorSessionEntryReadOnlyMock).toHaveBeenCalledTimes(expectedEntryReads),
       );
-      expect(loadGatewaySessionEntryReadOnlyMock).not.toHaveBeenCalled();
+      expect(loadResolvedSessionEntryReadOnlyMock).not.toHaveBeenCalled();
       expect(broadcastToConnIds).not.toHaveBeenCalled();
     },
   );
@@ -304,7 +305,7 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
       lifecycleRevision: "current-revision",
       updatedAt: 1,
     });
-    loadGatewaySessionEntryReadOnlyMock.mockReturnValue({
+    loadResolvedSessionEntryReadOnlyMock.mockReturnValue({
       entry: {
         sessionId: "sess-main",
         lifecycleRevision: "unrelated-default-revision",
@@ -333,7 +334,7 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
       sessionKey: "agent:main:main",
       storePath: "/tmp/current-lifecycle-sessions.json",
     });
-    expect(loadGatewaySessionEntryReadOnlyMock).not.toHaveBeenCalled();
+    expect(loadResolvedSessionEntryReadOnlyMock).not.toHaveBeenCalled();
     expect(broadcastToConnIds).toHaveBeenCalledWith(
       "session.message",
       expect.objectContaining({

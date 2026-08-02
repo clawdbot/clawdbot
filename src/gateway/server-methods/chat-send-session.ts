@@ -6,17 +6,14 @@ import {
   resolveAgentMainSessionKey,
   resolveSessionRoutingContract,
 } from "../../config/sessions/main-session.js";
+import { loadResolvedSessionEntry } from "../../config/sessions/session-entry-loader.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { measureDiagnosticsTimelineSpanSync } from "../../infra/diagnostics-timeline.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { resolveMissingAgentHarnessSessionError } from "../../sessions/agent-harness-session-key.js";
 import { isBrowserOperatorUiClient } from "../../utils/message-channel.js";
 import { pendingChatSendDedupeKey } from "../server-shared.js";
-import {
-  loadSessionEntry,
-  resolveDeletedAgentIdFromSessionKey,
-  resolveSessionModelRef,
-} from "../session-utils.js";
+import { resolveDeletedAgentIdFromSessionKey, resolveSessionModelRef } from "../session-utils.js";
 import {
   hasGatewayAdminScope,
   resolveChatSendActiveScopeKey,
@@ -59,7 +56,7 @@ function loadChatSendSessionContext(params: {
   const sessionLoadStartedAtMs = performance.now();
   const sessionLoadResult = measureDiagnosticsTimelineSpanSync(
     "gateway.chat_send.load_session",
-    () => loadSessionEntry(sessionLoadKey, sessionLoadOptions),
+    () => loadResolvedSessionEntry(sessionLoadKey, sessionLoadOptions),
     {
       phase: "agent-turn",
       attributes: {

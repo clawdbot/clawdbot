@@ -10,8 +10,8 @@ import {
 
 export function createWorkerWorkspaceConflictTranscriptHandlers(
   loadSessionRuntime: () => Promise<{
-    resolveCanonicalSessionEntryFromStoreKeys: typeof import("./session-utils.js").resolveCanonicalSessionEntryFromStoreKeys;
-    resolveGatewaySessionStoreTargetWithStore: typeof import("./session-utils.js").resolveGatewaySessionStoreTargetWithStore;
+    resolveCanonicalSessionEntryFromStoreKeys: typeof import("../config/sessions/session-entry-loader.js").resolveCanonicalSessionEntryFromStoreKeys;
+    resolveSessionStoreTargetWithStore: typeof import("../config/sessions/session-store-target.js").resolveSessionStoreTargetWithStore;
   }>,
 ) {
   return {
@@ -20,11 +20,9 @@ export function createWorkerWorkspaceConflictTranscriptHandlers(
       sessionKey: string;
       agentId: string;
     }) => {
-      const {
-        resolveCanonicalSessionEntryFromStoreKeys,
-        resolveGatewaySessionStoreTargetWithStore,
-      } = await loadSessionRuntime();
-      const target = resolveGatewaySessionStoreTargetWithStore({
+      const { resolveCanonicalSessionEntryFromStoreKeys, resolveSessionStoreTargetWithStore } =
+        await loadSessionRuntime();
+      const target = resolveSessionStoreTargetWithStore({
         cfg: getRuntimeConfig(),
         key: identity.sessionKey,
         agentId: identity.agentId,
@@ -88,11 +86,9 @@ export function createWorkerWorkspaceConflictTranscriptHandlers(
         | { cleared: true }
       ),
     ) => {
-      const {
-        resolveCanonicalSessionEntryFromStoreKeys,
-        resolveGatewaySessionStoreTargetWithStore,
-      } = await loadSessionRuntime();
-      const target = resolveGatewaySessionStoreTargetWithStore({
+      const { resolveCanonicalSessionEntryFromStoreKeys, resolveSessionStoreTargetWithStore } =
+        await loadSessionRuntime();
+      const target = resolveSessionStoreTargetWithStore({
         cfg: getRuntimeConfig(),
         key: conflict.sessionKey,
         agentId: conflict.agentId,

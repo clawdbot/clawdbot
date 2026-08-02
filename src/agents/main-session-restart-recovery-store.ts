@@ -9,10 +9,10 @@ import {
   listSessionEntriesByStatus,
   loadExactSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import { resolveSessionStoreTarget } from "../config/sessions/session-store-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayRecoveryRuntime } from "../gateway/server-instance-runtime.types.js";
 import { readSessionMessagesAsync } from "../gateway/session-transcript-readers.js";
-import { resolveGatewaySessionStoreTarget } from "../gateway/session-utils.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { resolveDefaultAgentId } from "./agent-scope-config.js";
@@ -80,7 +80,7 @@ function resolveRecoveryDispatchSessionKey(params: {
     return params.sessionKey;
   }
   try {
-    const target = resolveGatewaySessionStoreTarget({
+    const target = resolveSessionStoreTarget({
       cfg: params.cfg,
       key: params.sessionKey,
     });

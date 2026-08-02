@@ -5,7 +5,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SubagentSpawnPreparation } from "../context-engine/types.js";
 import { summarizeSpawnError } from "./spawn-pipeline.js";
 import { getSubagentSpawnDeps } from "./subagent-spawn-deps.js";
-import { resolveGatewaySessionStoreTarget } from "./subagent-spawn.runtime.js";
+import { resolveSessionStoreTarget } from "./subagent-spawn.runtime.js";
 import type { SpawnSubagentContextMode } from "./subagent-spawn.types.js";
 
 type PreparedSpawnContext =
@@ -37,11 +37,11 @@ export async function prepareSubagentSessionContext(params: {
   if (params.contextMode === "isolated") {
     return { status: "ok", mode: "isolated" };
   }
-  const childTarget = resolveGatewaySessionStoreTarget({
+  const childTarget = resolveSessionStoreTarget({
     cfg: params.cfg,
     key: params.childSessionKey,
   });
-  const parentTarget = resolveGatewaySessionStoreTarget({
+  const parentTarget = resolveSessionStoreTarget({
     cfg: params.cfg,
     key: params.requesterInternalKey,
   });

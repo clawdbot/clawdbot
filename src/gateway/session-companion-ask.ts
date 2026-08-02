@@ -10,6 +10,7 @@ import { resolveSimpleCompletionSelectionForAgent } from "../agents/simple-compl
 import { extractAssistantText, stripToolMessages } from "../agents/tools/chat-history-text.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import { resolveStorePath } from "../config/sessions.js";
+import { loadResolvedSessionEntryReadOnly } from "../config/sessions/session-entry-loader.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Message, Usage } from "../llm/types.js";
 import { redactToolPayloadText } from "../logging/redact.js";
@@ -24,7 +25,6 @@ import {
   type SessionCompanionThread,
 } from "./session-companion-state.js";
 import type { SessionObserverCompanionSnapshot } from "./session-observer-contract.js";
-import { loadSessionEntryReadOnly } from "./session-utils.js";
 
 const companionLog = createSubsystemLogger("gateway/session-companion");
 
@@ -183,7 +183,7 @@ async function defaultReadSeedMessages(params: {
   agentId: string;
   sessionKey: string;
 }): Promise<SessionCompanionSeedMessage[]> {
-  const loaded = loadSessionEntryReadOnly(params.sessionKey, { agentId: params.agentId });
+  const loaded = loadResolvedSessionEntryReadOnly(params.sessionKey, { agentId: params.agentId });
   const sessionId = loaded.entry?.sessionId?.trim();
   if (!sessionId) {
     return [];

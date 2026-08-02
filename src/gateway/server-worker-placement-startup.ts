@@ -30,11 +30,13 @@ const WORKER_PLACEMENT_RECONCILE_INTERVAL_MS = 60_000;
 const workerPlacementLog = createSubsystemLogger("gateway/worker-placement");
 
 const loadWorkerPlacementSessionRuntimeModule = createLazyRuntimeModule(async () => {
-  const [placementSessionRuntime, { managedWorktrees }, sessionUtils] = await Promise.all([
-    import("./worker-environments/placement-session-runtime.js"),
-    import("../agents/worktrees/service.js"),
-    import("./session-utils.js"),
-  ]);
+  const [placementSessionRuntime, { managedWorktrees }, sessionEntryLoader, sessionStoreTarget] =
+    await Promise.all([
+      import("./worker-environments/placement-session-runtime.js"),
+      import("../agents/worktrees/service.js"),
+      import("../config/sessions/session-entry-loader.js"),
+      import("../config/sessions/session-store-target.js"),
+    ]);
   return {
     isWorkerPlacementSessionRuntimeSupported:
       placementSessionRuntime.isWorkerPlacementSessionRuntimeSupported,
@@ -42,9 +44,8 @@ const loadWorkerPlacementSessionRuntimeModule = createLazyRuntimeModule(async ()
     resolveWorkerPlacementSessionRuntime:
       placementSessionRuntime.resolveWorkerPlacementSessionRuntime,
     resolveCanonicalSessionEntryFromStoreKeys:
-      sessionUtils.resolveCanonicalSessionEntryFromStoreKeys,
-    resolveGatewaySessionStoreTargetWithStore:
-      sessionUtils.resolveGatewaySessionStoreTargetWithStore,
+      sessionEntryLoader.resolveCanonicalSessionEntryFromStoreKeys,
+    resolveSessionStoreTargetWithStore: sessionStoreTarget.resolveSessionStoreTargetWithStore,
   };
 });
 
@@ -168,9 +169,9 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
     const {
       managedWorktrees,
       resolveCanonicalSessionEntryFromStoreKeys,
-      resolveGatewaySessionStoreTargetWithStore,
+      resolveSessionStoreTargetWithStore,
     } = await loadWorkerPlacementSessionRuntimeModule();
-    const target = resolveGatewaySessionStoreTargetWithStore({
+    const target = resolveSessionStoreTargetWithStore({
       cfg: getRuntimeConfig(),
       key: sessionKey,
       agentId,
@@ -199,10 +200,10 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
           isWorkerPlacementSessionRuntimeSupported,
           managedWorktrees,
           resolveCanonicalSessionEntryFromStoreKeys,
-          resolveGatewaySessionStoreTargetWithStore,
+          resolveSessionStoreTargetWithStore,
           resolveWorkerPlacementSessionRuntime,
         } = await loadWorkerPlacementSessionRuntimeModule();
-        const target = resolveGatewaySessionStoreTargetWithStore({
+        const target = resolveSessionStoreTargetWithStore({
           cfg: getRuntimeConfig(),
           key: sessionKey,
           agentId,
@@ -220,7 +221,7 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
           identities: lifecycleIdentities,
           prepare: async () => {
             const currentConfig = getRuntimeConfig();
-            const currentTarget = resolveGatewaySessionStoreTargetWithStore({
+            const currentTarget = resolveSessionStoreTargetWithStore({
               cfg: currentConfig,
               key: sessionKey,
               agentId,
@@ -301,10 +302,10 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
           isWorkerPlacementSessionRuntimeSupported,
           managedWorktrees,
           resolveCanonicalSessionEntryFromStoreKeys,
-          resolveGatewaySessionStoreTargetWithStore,
+          resolveSessionStoreTargetWithStore,
           resolveWorkerPlacementSessionRuntime,
         } = await loadWorkerPlacementSessionRuntimeModule();
-        const target = resolveGatewaySessionStoreTargetWithStore({
+        const target = resolveSessionStoreTargetWithStore({
           cfg: getRuntimeConfig(),
           key: sessionKey,
           agentId,
@@ -322,7 +323,7 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
           identities: lifecycleIdentities,
           run: async () => {
             const currentConfig = getRuntimeConfig();
-            const currentTarget = resolveGatewaySessionStoreTargetWithStore({
+            const currentTarget = resolveSessionStoreTargetWithStore({
               cfg: currentConfig,
               key: sessionKey,
               agentId,
@@ -378,9 +379,9 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
         const {
           managedWorktrees,
           resolveCanonicalSessionEntryFromStoreKeys,
-          resolveGatewaySessionStoreTargetWithStore,
+          resolveSessionStoreTargetWithStore,
         } = await loadWorkerPlacementSessionRuntimeModule();
-        const target = resolveGatewaySessionStoreTargetWithStore({
+        const target = resolveSessionStoreTargetWithStore({
           cfg: getRuntimeConfig(),
           key: sessionKey,
           agentId,
@@ -398,7 +399,7 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
           scope: target.storePath,
           identities: lifecycleIdentities,
           prepare: async () => {
-            const currentTarget = resolveGatewaySessionStoreTargetWithStore({
+            const currentTarget = resolveSessionStoreTargetWithStore({
               cfg: getRuntimeConfig(),
               key: sessionKey,
               agentId,

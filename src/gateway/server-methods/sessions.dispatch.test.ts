@@ -15,11 +15,13 @@ vi.mock("../../agents/worktrees/service.js", () => ({
   },
 }));
 
-vi.mock("../session-utils.js", async () => {
-  const actual = await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
+vi.mock("../../config/sessions/session-store-target.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../../config/sessions/session-store-target.js")
+  >("../../config/sessions/session-store-target.js");
   return {
     ...actual,
-    resolveGatewaySessionStoreTargetWithStore: mocks.resolveTarget,
+    resolveSessionStoreTargetWithStore: mocks.resolveTarget,
   };
 });
 

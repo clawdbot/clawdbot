@@ -28,7 +28,7 @@ import {
   getActivePluginRegistryVersion,
   getRegisteredAgentHarness,
   listAgentIds,
-  loadSessionEntryReadOnly,
+  loadResolvedSessionEntryReadOnly,
   peekSessionMcpRuntime,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
@@ -524,7 +524,7 @@ function resolveTrustedToolsEffectiveContext(params: {
 }) {
   // The effective tools request is read-only but security-sensitive. Derive
   // routing/account/model context from the persisted session, not client params.
-  const loaded = loadSessionEntryReadOnly(
+  const loaded = loadResolvedSessionEntryReadOnly(
     params.sessionKey,
     params.requestedAgentId ? { agentId: params.requestedAgentId } : undefined,
   );

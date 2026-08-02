@@ -1,5 +1,6 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveSessionTranscriptActiveLeafEntryId } from "../../config/sessions/session-accessor.js";
+import type { loadResolvedSessionEntry } from "../../config/sessions/session-entry-loader.js";
 import {
   dropPreSessionStartAnnouncePairs,
   isHeartbeatHistoryTurnBoundaryMessage,
@@ -19,7 +20,6 @@ import {
   readSessionMessagesPageWithStatsAsync,
   type ReadRecentSessionMessagesResult,
 } from "../session-transcript-readers.js";
-import type { loadSessionEntry } from "../session-utils.js";
 
 export function readChatHistoryMessageId(message: unknown): string | undefined {
   const metadata = asOptionalRecord(asOptionalRecord(message)?.["__openclaw"]);
@@ -63,7 +63,7 @@ function resolveChatHistoryActiveLeafEntryId(
 /** Add checkpoint token metrics to the synthetic transcript compaction marker. */
 export function enrichChatHistoryCompactionMarkers(
   messages: unknown[],
-  entry: ReturnType<typeof loadSessionEntry>["entry"],
+  entry: ReturnType<typeof loadResolvedSessionEntry>["entry"],
 ): unknown[] {
   const checkpoints = entry?.compactionCheckpoints;
   if (!Array.isArray(checkpoints) || checkpoints.length === 0) {
@@ -204,7 +204,7 @@ function dropLocalHistoryOverreadContextMessage(
 }
 
 export async function readChatHistoryPage(params: {
-  entry: ReturnType<typeof loadSessionEntry>["entry"];
+  entry: ReturnType<typeof loadResolvedSessionEntry>["entry"];
   provider: string | undefined;
   sessionId: string | undefined;
   storePath: string | undefined;

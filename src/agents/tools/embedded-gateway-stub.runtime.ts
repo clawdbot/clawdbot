@@ -10,7 +10,7 @@ export { searchSessionTranscripts } from "../../config/sessions/session-transcri
 export {
   resolveSessionStoreKey,
   resolveStoredSessionKeyForAgentStore,
-} from "../../gateway/session-store-key.js";
+} from "../../config/sessions/session-store-key.js";
 export {
   dropPreSessionStartAnnouncePairs,
   projectChatDisplayMessages,
@@ -31,11 +31,8 @@ export {
   readSessionMessagesPageWithStatsAsync,
   readSessionMessagesAsync,
 } from "../../gateway/session-transcript-readers.js";
-export {
-  listSessionsFromStoreAsync,
-  loadCombinedSessionStoreForGateway,
-  loadSessionEntryReadOnly as loadSessionEntry,
-  resolveSessionModelRef,
-} from "../../gateway/session-utils.js";
+export { listSessionsFromStoreAsync, resolveSessionModelRef } from "../../gateway/session-utils.js";
+export { loadCombinedSessionStore } from "../../config/sessions/combined-store.js";
+export { loadResolvedSessionEntryReadOnly } from "../../config/sessions/session-entry-loader.js";
 export { resolveSessionKeyFromResolveParams } from "../../gateway/sessions-resolve.js";
 export type { SessionsListResult } from "../../gateway/session-utils.types.js";

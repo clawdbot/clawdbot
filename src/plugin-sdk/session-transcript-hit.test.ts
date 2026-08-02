@@ -6,19 +6,20 @@ import {
   extractTranscriptIdentityFromSessionsMemoryHit,
   extractTranscriptStemFromSessionsMemoryHit,
   formatSessionTranscriptMemoryHitKey,
+  loadCombinedSessionStore,
   loadCombinedSessionStoreForGateway,
   parseSessionTranscriptMemoryHitKey,
   resolveSessionTranscriptMemoryHitKeyToSessionKeys,
   resolveTranscriptStemToSessionKeys,
 } from "./session-transcript-hit.js";
 
-const loadGatewaySessionStore = vi.hoisted(() => vi.fn());
-vi.mock("../config/sessions/combined-store-gateway.js", () => ({
-  loadCombinedSessionStoreForGateway: loadGatewaySessionStore,
+const loadSessionStore = vi.hoisted(() => vi.fn());
+vi.mock("../config/sessions/combined-store.js", () => ({
+  loadCombinedSessionStore: loadSessionStore,
 }));
 
 it("filters incognito rows from the plugin cross-session store view", () => {
-  loadGatewaySessionStore.mockReturnValue({
+  loadSessionStore.mockReturnValue({
     storePath: "(multiple)",
     store: {
       "agent:main:dashboard:visible": { sessionId: "visible", updatedAt: 1 },
@@ -30,9 +31,13 @@ it("filters incognito rows from the plugin cross-session store view", () => {
     },
   });
 
-  expect(loadCombinedSessionStoreForGateway({}).store).toEqual({
+  expect(loadCombinedSessionStore({}).store).toEqual({
     "agent:main:dashboard:visible": { sessionId: "visible", updatedAt: 1 },
   });
+});
+
+it("keeps the shipped Gateway-named store loader as a deprecated alias", () => {
+  expect(loadCombinedSessionStoreForGateway).toBe(loadCombinedSessionStore);
 });
 
 describe("extractTranscriptStemFromSessionsMemoryHit", () => {

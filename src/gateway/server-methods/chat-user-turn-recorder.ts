@@ -1,4 +1,5 @@
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
+import { loadResolvedSessionEntry } from "../../config/sessions/session-entry-loader.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
@@ -8,7 +9,6 @@ import {
   type UserTurnInput,
   type UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
-import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import {
   buildRestartSafeChatTranscriptState,
@@ -57,7 +57,7 @@ export function createGatewayChatUserTurnController(params: {
     input: baseInput,
     resolveInput: () => inputPromise,
     target: () => {
-      const { storePath, store, entry } = loadSessionEntry(
+      const { storePath, store, entry } = loadResolvedSessionEntry(
         params.sessionKey,
         params.sessionLoadOptions,
       );

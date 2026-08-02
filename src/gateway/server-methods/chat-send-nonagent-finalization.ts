@@ -1,12 +1,12 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { getReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
+import { loadResolvedSessionEntry } from "../../config/sessions/session-entry-loader.js";
 import {
   appendLocalMediaParentRoots,
   getAgentScopedMediaLocalRoots,
 } from "../../media/local-roots.js";
 import { stripInlineDirectiveTagsForDisplay } from "../../utils/directive-tags.js";
 import { attachManagedOutgoingMediaToMessage } from "../managed-image-attachments.js";
-import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import {
   buildAssistantDisplayContentFromReplyPayloads,
@@ -194,7 +194,7 @@ export async function finalizeChatSendNonAgentReplies(params: {
     payloads: rawFinalPayloads,
   });
   const requestedTranscriptSession = transcriptMirrorOwner
-    ? loadSessionEntry(transcriptMirrorOwner.sessionKey, {
+    ? loadResolvedSessionEntry(transcriptMirrorOwner.sessionKey, {
         ...sessionLoadOptions,
         ...(transcriptMirrorOwner.agentId ? { agentId: transcriptMirrorOwner.agentId } : {}),
       })
@@ -235,7 +235,7 @@ export async function finalizeChatSendNonAgentReplies(params: {
   const resolvedTranscriptSession =
     useTranscriptMirrorOwner && requestedTranscriptSession
       ? requestedTranscriptSession
-      : loadSessionEntry(sessionKey, sessionLoadOptions);
+      : loadResolvedSessionEntry(sessionKey, sessionLoadOptions);
   const { storePath: latestStorePath, entry: latestEntry } = resolvedTranscriptSession;
   const sessionId = latestEntry?.sessionId ?? backingSessionId ?? clientRunId;
   const mediaLocalRoots = appendLocalMediaParentRoots(

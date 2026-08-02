@@ -14,8 +14,8 @@ vi.mock("../config/sessions/session-accessor.js", () => ({
   updateSessionEntry: persistenceMocks.updateSessionEntry,
 }));
 
-vi.mock("./session-utils.js", () => ({
-  loadSessionEntry: persistenceMocks.loadSessionEntry,
+vi.mock("../config/sessions/session-entry-loader.js", () => ({
+  loadResolvedSessionEntry: persistenceMocks.loadSessionEntry,
 }));
 
 import {

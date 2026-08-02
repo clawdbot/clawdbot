@@ -37,14 +37,9 @@ vi.mock("../../agents/agent-scope.js", () => ({
   resolveDefaultAgentId: hoisted.resolveDefaultAgentId,
 }));
 
-vi.mock("../session-utils.js", async () => {
-  const actual = await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
-  return {
-    ...actual,
-    loadSessionEntry: hoisted.loadSessionEntry,
-    loadSessionEntryReadOnly: hoisted.loadSessionEntry,
-  };
-});
+vi.mock("../../config/sessions/session-entry-loader.js", () => ({
+  loadResolvedSessionEntryReadOnly: hoisted.loadSessionEntry,
+}));
 
 vi.mock("../session-transcript-readers.js", async () => {
   const actual = await vi.importActual<typeof import("../session-transcript-readers.js")>(

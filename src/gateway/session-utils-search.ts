@@ -8,6 +8,7 @@ import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { resolveSessionModelIdentityRef } from "../agents/session-model-ref.js";
 import { getSessionDisplaySubagentRunByChildSessionKey } from "../agents/subagent-registry-read.js";
 import { buildGroupDisplayName, type SessionEntry } from "../config/sessions.js";
+import { loadResolvedSessionEntryReadOnly } from "../config/sessions/session-entry-loader.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { sessionDeliveryChannel, sessionDeliveryOrigin } from "../utils/delivery-context.shared.js";
@@ -21,11 +22,7 @@ import {
   resolveSessionSelectedModelRef,
 } from "./session-utils-projection.js";
 import { buildGatewaySessionRow } from "./session-utils-row.js";
-import {
-  isGroupOrChannelDisplaySession,
-  loadSessionEntryReadOnly,
-  parseGroupKey,
-} from "./session-utils-store.js";
+import { isGroupOrChannelDisplaySession, parseGroupKey } from "./session-utils-store.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
 
 export function resolveSessionListSearchDisplayName(
@@ -158,11 +155,14 @@ export function loadGatewaySessionRow(
   },
 ): GatewaySessionRow | null {
   const now = options?.now ?? Date.now();
-  const { cfg, storePath, store, entry, canonicalKey } = loadSessionEntryReadOnly(sessionKey, {
-    clone: false,
-    includeStoreChildEntries: true,
-    ...(options?.agentId ? { agentId: options.agentId } : {}),
-  });
+  const { cfg, storePath, store, entry, canonicalKey } = loadResolvedSessionEntryReadOnly(
+    sessionKey,
+    {
+      clone: false,
+      includeStoreChildEntries: true,
+      ...(options?.agentId ? { agentId: options.agentId } : {}),
+    },
+  );
   if (!entry) {
     return null;
   }

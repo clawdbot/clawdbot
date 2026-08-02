@@ -306,11 +306,11 @@ function cliBoundSessionEntry(
 }
 
 async function resolveGatewaySessionStorePathForKey(key: string) {
-  const [{ getRuntimeConfig }, { resolveGatewaySessionStoreTarget }] = await Promise.all([
+  const [{ getRuntimeConfig }, { resolveSessionStoreTarget }] = await Promise.all([
     import("../config/config.js"),
-    import("./session-utils.js"),
+    import("../config/sessions/session-store-target.js"),
   ]);
-  return resolveGatewaySessionStoreTarget({
+  return resolveSessionStoreTarget({
     cfg: getRuntimeConfig(),
     key,
   }).storePath;
@@ -446,7 +446,8 @@ test("sessions.reset infers selected global agent from agent-prefixed aliases", 
     await writeGlobalSessionFile(globalConfig.mainStorePath, "sess-main-global");
     await writeGlobalSessionFile(globalConfig.workStorePath, "sess-work-global");
     const { getRuntimeConfig } = await import("../config/config.js");
-    const { resolveGatewaySessionStoreTarget } = await import("./session-utils.js");
+    const { resolveSessionStoreTarget } =
+      await import("../config/sessions/session-store-target.js");
     const { performGatewaySessionReset } = await import("./session-reset-service.js");
     const reset = await performGatewaySessionReset({
       key: "agent:work:main",
@@ -459,7 +460,7 @@ test("sessions.reset infers selected global agent from agent-prefixed aliases", 
       throw new Error("expected reset to succeed");
     }
     expect(reset.key).toBe("global");
-    const resetTarget = resolveGatewaySessionStoreTarget({
+    const resetTarget = resolveSessionStoreTarget({
       cfg: getRuntimeConfig(),
       key: "agent:work:main",
       agentId: "work",

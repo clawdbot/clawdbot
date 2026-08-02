@@ -36,12 +36,18 @@ import {
   listSessionEntriesReadOnly,
   resolveSessionEntryAccessTarget,
 } from "../config/sessions/session-accessor.js";
+import { loadResolvedSessionEntryReadOnly } from "../config/sessions/session-entry-loader.js";
 import {
   buildSessionCreationStamp,
   type SessionCreatedActor,
   type SessionCreatedVia,
 } from "../config/sessions/session-entry-provenance.js";
 import { inheritSessionSelection } from "../config/sessions/session-entry-selection.js";
+import {
+  resolveSessionStoreAgentId,
+  resolveSessionStoreKey,
+} from "../config/sessions/session-store-key.js";
+import { resolveSessionStoreTarget } from "../config/sessions/session-store-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   createInternalHookEvent,
@@ -74,8 +80,6 @@ import { buildForkedGatewaySessionEntry } from "./session-create-fork-entry.js";
 import { shouldPreserveSessionAuthProfileOverride } from "./session-model-patch-origin.js";
 import { resolvePluginSessionOwnershipError } from "./session-plugin-ownership.js";
 import { isSessionVisibilityAllowed, resolveSessionVisibility } from "./session-sharing.js";
-import { resolveSessionStoreAgentId, resolveSessionStoreKey } from "./session-store-key.js";
-import { loadSessionEntryReadOnly, resolveGatewaySessionStoreTarget } from "./session-utils.js";
 import { applySessionsPatchToStore, resolveSessionPatchModelSelection } from "./sessions-patch.js";
 
 type TrustedCatalogSessionTarget = {
@@ -414,7 +418,7 @@ export async function createGatewaySession(params: {
       agentId,
       storePath: durableStorePath,
     }).some(({ sessionKey }) => sessionKey === explicitTargetKey);
-    if (durableEntryExists || loadSessionEntryReadOnly(explicitTargetKey).entry) {
+    if (durableEntryExists || loadResolvedSessionEntryReadOnly(explicitTargetKey).entry) {
       return {
         ok: false,
         error: errorShape(
@@ -498,7 +502,7 @@ export async function createGatewaySession(params: {
   let canonicalParentSessionKey: string | undefined;
   let parentSessionEntry: SessionEntry | undefined;
   let parentSelectedAgentId: string | undefined;
-  let parentSessionTarget: ReturnType<typeof resolveGatewaySessionStoreTarget> | undefined;
+  let parentSessionTarget: ReturnType<typeof resolveSessionStoreTarget> | undefined;
   if (parentSessionKey) {
     const parentCanonicalKey = resolveSessionStoreKey({
       cfg: params.cfg,
@@ -515,7 +519,7 @@ export async function createGatewaySession(params: {
       }
       parentSelectedAgentId = parentRequestedAgent.agentId;
     }
-    const parent = loadSessionEntryReadOnly(
+    const parent = loadResolvedSessionEntryReadOnly(
       parentSessionKey,
       parentSelectedAgentId ? { agentId: parentSelectedAgentId } : undefined,
     );
@@ -545,7 +549,7 @@ export async function createGatewaySession(params: {
     }
     canonicalParentSessionKey = parent.canonicalKey;
     parentSessionEntry = parent.entry;
-    parentSessionTarget = resolveGatewaySessionStoreTarget({
+    parentSessionTarget = resolveSessionStoreTarget({
       cfg: params.cfg,
       key: parentSessionKey,
       ...(canonicalParentSessionKey === "global" && parentSelectedAgentId
@@ -588,8 +592,8 @@ export async function createGatewaySession(params: {
   if (
     canonicalParentSessionKey &&
     explicitTargetKey &&
-    resolveGatewaySessionStoreTarget({ cfg: params.cfg, key: explicitTargetKey, agentId })
-      .canonicalKey === canonicalParentSessionKey
+    resolveSessionStoreTarget({ cfg: params.cfg, key: explicitTargetKey, agentId }).canonicalKey ===
+      canonicalParentSessionKey
   ) {
     return {
       ok: false,
@@ -601,7 +605,7 @@ export async function createGatewaySession(params: {
   }
 
   const targetSessionKey = explicitTargetKey ?? buildDashboardSessionKey(agentId, { incognito });
-  const creationTarget = resolveGatewaySessionStoreTarget({
+  const creationTarget = resolveSessionStoreTarget({
     cfg: params.cfg,
     key: targetSessionKey,
     agentId,
@@ -714,7 +718,7 @@ export async function createGatewaySession(params: {
         params.fork === true ||
         params.authorizedPluginId !== undefined)
     ) {
-      const currentParent = loadSessionEntryReadOnly(
+      const currentParent = loadResolvedSessionEntryReadOnly(
         canonicalParentSessionKey,
         parentSelectedAgentId ? { agentId: parentSelectedAgentId } : undefined,
       );

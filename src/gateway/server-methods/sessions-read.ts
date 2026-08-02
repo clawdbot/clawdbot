@@ -22,7 +22,20 @@ import {
   serializeSessionCleanupResult,
   type SessionEntry,
 } from "../../config/sessions.js";
+import { loadCombinedSessionStore } from "../../config/sessions/combined-store.js";
 import { listSessionEntriesReadOnly } from "../../config/sessions/session-accessor.js";
+import { resolveCanonicalSessionEntryFromStoreKeys } from "../../config/sessions/session-entry-loader.js";
+import {
+  resolveSessionStoreAgentId,
+  resolveSessionStoreKey,
+  resolveStoredSessionKeyForAgentStore,
+} from "../../config/sessions/session-store-key.js";
+import {
+  resolveSessionStoreTarget,
+  resolveSessionStoreTargetWithStore,
+  type SessionStoreCache,
+  type SessionStoreDiscoveryCache,
+} from "../../config/sessions/session-store-target.js";
 import { searchSessionTranscripts } from "../../config/sessions/session-transcript-search.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildProjectedAgentRunIndex } from "../../infra/agent-events.js";
@@ -46,25 +59,12 @@ import {
   resolveSessionVisibility,
 } from "../session-sharing.js";
 import {
-  resolveSessionStoreAgentId,
-  resolveSessionStoreKey,
-  resolveStoredSessionKeyForAgentStore,
-} from "../session-store-key.js";
-import {
   readRecentSessionMessagesWithStatsAsync,
   readSessionPreviewItemsFromTranscript,
 } from "../session-transcript-readers.js";
-import type {
-  GatewaySessionStoreCache,
-  GatewaySessionStoreDiscoveryCache,
-} from "../session-utils-store-lookup.js";
 import {
   buildGatewaySessionRow,
   listSessionsFromStoreAsync,
-  loadCombinedSessionStoreForGateway,
-  resolveCanonicalSessionEntryFromStoreKeys,
-  resolveGatewaySessionStoreTarget,
-  resolveGatewaySessionStoreTargetWithStore,
   type SessionsPreviewEntry,
   type SessionsPreviewResult,
 } from "../session-utils.js";
@@ -295,7 +295,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
           const { durableStorePath, storePath, store } = measureDiagnosticsTimelineSpanSync(
             "gateway.sessions.list.store_load",
             () =>
-              loadCombinedSessionStoreForGateway(cfg, {
+              loadCombinedSessionStore(cfg, {
                 agentId: p.agentId,
                 projection: "list",
               }),
@@ -335,8 +335,8 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
             () => {
               // One cache for the whole listing: sharing resolution otherwise
               // materialized every entry of a candidate store once per row.
-              const sharingStoreCache: GatewaySessionStoreCache = new Map();
-              const targetDiscoveryCache: GatewaySessionStoreDiscoveryCache = new Map();
+              const sharingStoreCache: SessionStoreCache = new Map();
+              const targetDiscoveryCache: SessionStoreDiscoveryCache = new Map();
               const resolvedSharingTargets = result.sessions.map((session) =>
                 resolveSessionSharingTarget({
                   cfg,
@@ -581,7 +581,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
 
     for (const key of keys) {
       try {
-        const cachedStoreTarget = resolveGatewaySessionStoreTargetWithStore({
+        const cachedStoreTarget = resolveSessionStoreTargetWithStore({
           cfg,
           key,
         });
@@ -590,7 +590,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
         const storeCacheKey = `${cachedStoreTarget.agentId}\u0000${cachedStoreTarget.storePath}`;
         const store = storeCache.get(storeCacheKey) ?? cachedStoreTarget.store;
         storeCache.set(storeCacheKey, store);
-        const target = resolveGatewaySessionStoreTarget({
+        const target = resolveSessionStoreTarget({
           cfg,
           key,
           store,

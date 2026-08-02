@@ -14,6 +14,12 @@ import {
   validateArtifactsListParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { loadResolvedSessionEntryReadOnly } from "../../config/sessions/session-entry-loader.js";
+import { resolveSessionStoreKey } from "../../config/sessions/session-store-key.js";
+import {
+  resolveSessionStoreAgentId,
+  resolveStoredSessionKeyForAgentStore,
+} from "../../config/sessions/session-store-key.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   normalizeAgentId,
@@ -28,13 +34,7 @@ import {
   resolveManagedOutgoingMediaUrlDownload,
 } from "../managed-image-attachments.js";
 import { resolveSessionKeyForRun } from "../server-session-key.js";
-import {
-  resolveSessionStoreAgentId,
-  resolveSessionStoreKey,
-  resolveStoredSessionKeyForAgentStore,
-} from "../session-store-key.js";
 import { visitSessionMessagesAsync } from "../session-transcript-readers.js";
-import { loadSessionEntryReadOnly } from "../session-utils.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -526,8 +526,8 @@ async function loadArtifacts(
   const scopedGlobalAgentId =
     cfg?.session?.scope === "global" && sessionKey === "global" ? resolved.agentId : undefined;
   const { storePath, entry } = scopedGlobalAgentId
-    ? loadSessionEntryReadOnly(sessionKey, { agentId: scopedGlobalAgentId })
-    : loadSessionEntryReadOnly(sessionKey);
+    ? loadResolvedSessionEntryReadOnly(sessionKey, { agentId: scopedGlobalAgentId })
+    : loadResolvedSessionEntryReadOnly(sessionKey);
   const sessionId = entry?.sessionId;
   if (!sessionId || !storePath) {
     return { sessionKey, artifacts: [] };

@@ -40,11 +40,14 @@ import { rebindCliSessionReseedReceiptsForReset } from "../config/sessions/cli-s
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { resolveResetPreservedSelection } from "../config/sessions/reset-preserved-selection.js";
 import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-lineage.js";
+import { loadResolvedSessionEntry } from "../config/sessions/session-entry-loader.js";
 import {
   buildSessionCreationStamp,
   type SessionCreatedActor,
   type SessionCreatedVia,
 } from "../config/sessions/session-entry-provenance.js";
+import { resolveSessionStoreKey } from "../config/sessions/session-store-key.js";
+import { resolveSessionStoreTarget } from "../config/sessions/session-store-target.js";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logVerbose } from "../globals.js";
@@ -96,11 +99,6 @@ import {
   type ArchivedSessionTranscript,
 } from "./session-transcript-files.fs.js";
 import { readSessionMessagesAsync } from "./session-transcript-readers.js";
-import {
-  loadSessionEntry,
-  resolveGatewaySessionStoreTarget,
-  resolveSessionStoreKey,
-} from "./session-utils.js";
 
 const mcpRunEndWatchers = new Map<string, Promise<void>>();
 
@@ -378,7 +376,7 @@ export async function emitSessionUnboundLifecycleEvent(params: {
 async function ensureSessionRuntimeCleanup(params: {
   cfg: OpenClawConfig;
   key: string;
-  target: ReturnType<typeof resolveGatewaySessionStoreTarget>;
+  target: ReturnType<typeof resolveSessionStoreTarget>;
   sessionId?: string;
   assertCurrent?: () => void;
 }) {
@@ -795,7 +793,7 @@ async function closeChildAcpRuntimesForParent(params: {
 export async function cleanupSessionBeforeMutation(params: {
   cfg: OpenClawConfig;
   key: string;
-  target: ReturnType<typeof resolveGatewaySessionStoreTarget>;
+  target: ReturnType<typeof resolveSessionStoreTarget>;
   entry: SessionEntry | undefined;
   legacyKey?: string;
   canonicalKey?: string;
@@ -869,7 +867,7 @@ export async function emitGatewayBeforeResetPluginHook(params: {
   cfg: OpenClawConfig;
   key: string;
   messages?: unknown[];
-  target: ReturnType<typeof resolveGatewaySessionStoreTarget>;
+  target: ReturnType<typeof resolveSessionStoreTarget>;
   storePath: string;
   entry?: SessionEntry;
   reason: "new" | "reset";
@@ -1016,7 +1014,7 @@ export async function performGatewaySessionReset(params: {
         error: errorShape(ErrorCodes.INVALID_REQUEST, "session key agent does not match agentId"),
       };
     }
-    const target = resolveGatewaySessionStoreTarget({
+    const target = resolveSessionStoreTarget({
       cfg,
       key: params.key,
       ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
@@ -1026,7 +1024,7 @@ export async function performGatewaySessionReset(params: {
   if (!resetTarget.ok) {
     return resetTarget;
   }
-  const initialResetEntry = loadSessionEntry(
+  const initialResetEntry = loadResolvedSessionEntry(
     params.key,
     resetTarget.requestedAgentId ? { agentId: resetTarget.requestedAgentId } : undefined,
   ).entry;
@@ -1102,7 +1100,7 @@ export async function performGatewaySessionReset(params: {
     prepare: async () => {
       params.assertCurrent?.();
       params.assertAuthorizedInstance?.();
-      const currentEntry = loadSessionEntry(
+      const currentEntry = loadResolvedSessionEntry(
         params.key,
         resetTarget.requestedAgentId ? { agentId: resetTarget.requestedAgentId } : undefined,
       ).entry;
@@ -1137,7 +1135,7 @@ export async function performGatewaySessionReset(params: {
           ),
         };
       }
-      const { entry, legacyKey, canonicalKey } = loadSessionEntry(
+      const { entry, legacyKey, canonicalKey } = loadResolvedSessionEntry(
         params.key,
         requestedAgentId ? { agentId: requestedAgentId } : undefined,
       );
@@ -1336,7 +1334,7 @@ export async function performGatewaySessionReset(params: {
 
       let createdNewEntry = false;
       params.assertAuthorizedInstance?.();
-      const boundaryEntry = loadSessionEntry(
+      const boundaryEntry = loadResolvedSessionEntry(
         params.key,
         requestedAgentId ? { agentId: requestedAgentId } : undefined,
       ).entry;

@@ -16,15 +16,13 @@ import {
 import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
 import { resolveSessionWorkStartError, type SessionEntry } from "../../config/sessions.js";
 import { isSessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-accessor.js";
+import { loadResolvedSessionEntry } from "../../config/sessions/session-entry-loader.js";
+import { loadResolvedSessionEntryReadOnly } from "../../config/sessions/session-entry-loader.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-create-service.js";
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import { readSessionMessageCountAsync } from "../session-transcript-readers.js";
-import {
-  loadSessionEntry,
-  loadSessionEntryReadOnly,
-  resolveDeletedAgentIdFromSessionKey,
-} from "../session-utils.js";
+import { resolveDeletedAgentIdFromSessionKey } from "../session-utils.js";
 import { asWorkerInferenceControl } from "../worker-environments/inference-control.js";
 import { formatForLog } from "../ws-log.js";
 import { handleChatAbortRequestWithLifecycle } from "./chat-abort-handler.js";
@@ -193,7 +191,7 @@ async function createAgentMainSessionForSend(params: {
   }
 
   const createdKey = normalizeOptionalString(createResult.payload?.key) ?? params.canonicalKey;
-  const loaded = loadSessionEntryReadOnly(createdKey);
+  const loaded = loadResolvedSessionEntryReadOnly(createdKey);
   if (!loaded.entry?.sessionId) {
     return {
       ok: false,
@@ -335,7 +333,7 @@ async function handleSessionSend(params: {
     return;
   }
   const requestedAgentId = requestedAgent.agentId;
-  const loaded = loadSessionEntry(key, { agentId: requestedAgentId });
+  const loaded = loadResolvedSessionEntry(key, { agentId: requestedAgentId });
   const { legacyKey } = loaded;
   let { entry, canonicalKey, storePath } = loaded;
   // Reject sends/steers targeting sessions whose owning agent was deleted (#65524).

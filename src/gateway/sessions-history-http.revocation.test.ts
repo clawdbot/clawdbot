@@ -79,18 +79,24 @@ vi.mock("./http-utils.js", () => ({
   },
 }));
 
-vi.mock("./session-utils.js", () => ({
-  resolveGatewaySessionStoreTargetWithStore: () => ({
+vi.mock("../config/sessions/session-store-target.js", () => ({
+  resolveSessionStoreTargetWithStore: () => ({
     storePath: "/tmp",
     storeKeys: ["agent:main"],
     canonicalKey: "agent:main",
     agentId: "main",
     store: {},
   }),
+}));
+
+vi.mock("../config/sessions/session-entry-loader.js", () => ({
   resolveCanonicalSessionEntryFromStoreKeys: () => ({
     sessionId: "session-1",
     sessionFile: "/tmp/session-1.jsonl",
   }),
+}));
+
+vi.mock("./session-utils.js", () => ({
   resolveSessionTranscriptCandidates: () => ["/tmp/session-1.jsonl"],
 }));
 

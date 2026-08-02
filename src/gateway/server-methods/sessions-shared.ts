@@ -9,6 +9,15 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { listConfiguredSessionStoreAgentIds, type SessionEntry } from "../../config/sessions.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
+import { resolveCanonicalSessionEntryFromStoreKeys } from "../../config/sessions/session-entry-loader.js";
+import {
+  resolveSessionStoreAgentId,
+  resolveSessionStoreKey,
+} from "../../config/sessions/session-store-key.js";
+import {
+  resolveSessionStoreTarget,
+  resolveSessionStoreTargetWithStore,
+} from "../../config/sessions/session-store-target.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
@@ -17,12 +26,6 @@ import {
   resolvePluginSessionOwnershipError,
   type PluginSessionOwnershipAction,
 } from "../session-plugin-ownership.js";
-import { resolveSessionStoreAgentId, resolveSessionStoreKey } from "../session-store-key.js";
-import {
-  resolveCanonicalSessionEntryFromStoreKeys,
-  resolveGatewaySessionStoreTarget,
-  resolveGatewaySessionStoreTargetWithStore,
-} from "../session-utils.js";
 import {
   isWorkerPlacementSessionRuntimeSupported,
   resolveWorkerPlacementSessionRuntime,
@@ -190,7 +193,7 @@ export function resolveGatewaySessionTargetFromKey(
   cfg: OpenClawConfig,
   opts?: { agentId?: string },
 ) {
-  const target = resolveGatewaySessionStoreTarget({
+  const target = resolveSessionStoreTarget({
     cfg,
     key,
     ...(opts?.agentId ? { agentId: opts.agentId } : {}),
@@ -203,7 +206,7 @@ export function loadAccessorSessionEntryForGatewayTarget(params: {
   cfg: OpenClawConfig;
   agentId?: string;
 }) {
-  const target = resolveGatewaySessionStoreTargetWithStore({
+  const target = resolveSessionStoreTargetWithStore({
     cfg: params.cfg,
     key: params.key,
     clone: false,
@@ -246,7 +249,7 @@ export function loadSessionEntriesForTarget(params: {
   cfg: OpenClawConfig;
   agentId?: string;
 }) {
-  const target = resolveGatewaySessionStoreTargetWithStore({
+  const target = resolveSessionStoreTargetWithStore({
     cfg: params.cfg,
     key: params.key,
     clone: false,

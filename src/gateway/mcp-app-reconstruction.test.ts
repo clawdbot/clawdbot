@@ -28,9 +28,8 @@ vi.mock("../routing/session-key.js", () => ({
 vi.mock("./session-transcript-readers.js", () => ({
   visitSessionMessagesAsync: mocks.visitSessionMessagesAsync,
 }));
-vi.mock("./session-utils.js", () => ({
-  loadSessionEntry: mocks.loadSessionEntry,
-  loadSessionEntryReadOnly: mocks.loadSessionEntry,
+vi.mock("../config/sessions/session-entry-loader.js", () => ({
+  loadResolvedSessionEntryReadOnly: mocks.loadSessionEntry,
 }));
 
 import { mintMcpAppViewFromTranscript, restoreMcpAppView } from "./mcp-app-reconstruction.js";

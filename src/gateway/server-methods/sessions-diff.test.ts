@@ -23,9 +23,8 @@ const hoisted = vi.hoisted(() => ({
   resolveDefaultAgentId: vi.fn(),
 }));
 
-vi.mock("../session-utils.js", () => ({
-  loadSessionEntry: hoisted.loadSessionEntry,
-  loadSessionEntryReadOnly: hoisted.loadSessionEntry,
+vi.mock("../../config/sessions/session-entry-loader.js", () => ({
+  loadResolvedSessionEntryReadOnly: hoisted.loadSessionEntry,
 }));
 
 vi.mock("../../agents/agent-scope.js", () => ({

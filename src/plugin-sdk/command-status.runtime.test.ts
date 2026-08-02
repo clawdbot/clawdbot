@@ -4,7 +4,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const buildStatusReply = vi.fn(async (params: unknown) => params);
-const loadSessionEntry = vi.fn();
+const loadResolvedSessionEntryReadOnly = vi.fn();
 const resolveSessionAgentId = vi.fn();
 const listAgentEntries = vi.fn();
 const resolveDefaultModelForAgent = vi.fn();
@@ -16,8 +16,8 @@ vi.mock("../auto-reply/reply/commands-status.js", () => ({
   buildStatusReply,
 }));
 
-vi.mock("../gateway/session-utils.js", () => ({
-  loadSessionEntryReadOnly: loadSessionEntry,
+vi.mock("../config/sessions/session-entry-loader.js", () => ({
+  loadResolvedSessionEntryReadOnly,
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({
@@ -58,7 +58,7 @@ function requireBuildStatusReplyParams(index = 0): unknown {
 describe("resolveDirectStatusReplyForSession", () => {
   beforeEach(() => {
     buildStatusReply.mockReset();
-    loadSessionEntry.mockReset();
+    loadResolvedSessionEntryReadOnly.mockReset();
     resolveSessionAgentId.mockReset();
     listAgentEntries.mockReset();
     resolveDefaultModelForAgent.mockReset();
@@ -67,7 +67,7 @@ describe("resolveDirectStatusReplyForSession", () => {
     resolveCurrentDirectiveLevels.mockReset();
 
     buildStatusReply.mockImplementation(async (params: unknown) => params);
-    loadSessionEntry.mockReturnValue({
+    loadResolvedSessionEntryReadOnly.mockReturnValue({
       cfg: {
         agents: {
           defaults: {
@@ -117,7 +117,7 @@ describe("resolveDirectStatusReplyForSession", () => {
   });
 
   it("allows configured reasoning defaults for authorized direct /status senders", async () => {
-    loadSessionEntry.mockReturnValue({
+    loadResolvedSessionEntryReadOnly.mockReturnValue({
       cfg: {
         agents: {
           defaults: {
@@ -154,7 +154,7 @@ describe("resolveDirectStatusReplyForSession", () => {
   });
 
   it("hides configured reasoning defaults from unauthorized direct /status senders", async () => {
-    loadSessionEntry.mockReturnValue({
+    loadResolvedSessionEntryReadOnly.mockReturnValue({
       cfg: {
         agents: {
           defaults: {
@@ -191,7 +191,7 @@ describe("resolveDirectStatusReplyForSession", () => {
   });
 
   it("hides session reasoning state from unauthorized direct /status senders", async () => {
-    loadSessionEntry.mockReturnValue({
+    loadResolvedSessionEntryReadOnly.mockReturnValue({
       cfg: {},
       canonicalKey: "main",
       entry: {
@@ -223,7 +223,7 @@ describe("resolveDirectStatusReplyForSession", () => {
   });
 
   it("allows session reasoning state for authorized direct /status senders", async () => {
-    loadSessionEntry.mockReturnValue({
+    loadResolvedSessionEntryReadOnly.mockReturnValue({
       cfg: {},
       canonicalKey: "main",
       entry: {

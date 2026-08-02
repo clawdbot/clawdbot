@@ -5,12 +5,13 @@ import {
   validateChatAbortParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { loadResolvedSessionEntry } from "../../config/sessions/session-entry-loader.js";
+import { resolveSessionStoreKey } from "../../config/sessions/session-store-key.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { abortChatRunById } from "../chat-abort.js";
 import { abortQueuedChatTurnById } from "../chat-queued-turns.js";
 import { pendingChatSendDedupeKey } from "../server-shared.js";
-import { loadSessionEntry, resolveSessionStoreKey } from "../session-utils.js";
 import { asWorkerInferenceControl } from "../worker-environments/inference-control.js";
 import {
   canRequesterAbortChatRun,
@@ -96,7 +97,7 @@ export async function handleChatAbortRequestWithLifecycle(
   const requester = resolveChatAbortRequester(client);
 
   const sessionLoadOptions = abortAgentId ? { agentId: abortAgentId } : undefined;
-  const { entry: abortSessionEntry } = loadSessionEntry(rawSessionKey, sessionLoadOptions);
+  const { entry: abortSessionEntry } = loadResolvedSessionEntry(rawSessionKey, sessionLoadOptions);
   const cancelWorkerRun = (sessionId = abortSessionEntry?.sessionId): string[] =>
     requester.isAdmin
       ? cancelWorkerInferenceForSession({ context, sessionId, ...(runId ? { runId } : {}) })

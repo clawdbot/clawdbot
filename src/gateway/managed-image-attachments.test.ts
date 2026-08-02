@@ -50,6 +50,10 @@ vi.mock("../config/config.js", () => ({
   getRuntimeConfig: getRuntimeConfigMock,
 }));
 
+vi.mock("../config/sessions/session-entry-loader.js", () => ({
+  loadResolvedSessionEntryReadOnly: loadSessionEntryMock,
+}));
+
 vi.mock("./http-utils.js", () => ({
   authorizeGatewayHttpRequestOrReply: authorizeGatewayHttpRequestOrReplyMock,
   resolveOpenAiCompatibleHttpOperatorScopes: resolveOpenAiCompatibleHttpOperatorScopesMock,
@@ -57,8 +61,6 @@ vi.mock("./http-utils.js", () => ({
 }));
 
 vi.mock("./session-utils.js", () => ({
-  loadSessionEntry: loadSessionEntryMock,
-  loadSessionEntryReadOnly: loadSessionEntryMock,
   resolveSessionHistoryTranscriptPathAsync: resolveSessionHistoryTranscriptPathMock,
 }));
 

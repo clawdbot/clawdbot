@@ -38,11 +38,13 @@ vi.mock("../../infra/session-cost-usage.js", async () => {
   };
 });
 
-vi.mock("../session-utils.js", async () => {
-  const actual = await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
+vi.mock("../../config/sessions/combined-store.js", async () => {
+  const actual = await vi.importActual<typeof import("../../config/sessions/combined-store.js")>(
+    "../../config/sessions/combined-store.js",
+  );
   return {
     ...actual,
-    loadCombinedSessionStoreForGateway: vi.fn(() => ({ storePath: "(multiple)", store: {} })),
+    loadCombinedSessionStore: vi.fn(() => ({ storePath: "(multiple)", store: {} })),
   };
 });
 
