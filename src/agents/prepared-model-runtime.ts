@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import { registerRuntimeAuthProfileStoreMutationListener } from "./auth-profiles/runtime-snapshots.js";
+import { formatRuntimeRefreshError } from "./prepared-model-runtime-refresh-error.js";
 import {
   PreparedModelRuntimeOwnerNotPublishedError,
   PreparedModelRuntimeOwnerRetention,
@@ -741,7 +742,7 @@ function invalidateForAuthMutation(event: AuthMutationEvent): void {
     if (error instanceof PreparedModelRuntimePublicationSupersededError) {
       return;
     }
-    log.warn(`auth-triggered model runtime refresh failed: ${String(error)}`);
+    log.warn(`auth-triggered model runtime refresh failed: ${formatRuntimeRefreshError(error)}`);
   });
 }
 

@@ -269,7 +269,7 @@ function loadSqliteAuthStorageStore(
   if (inspection.status === "missing") {
     const stateInspection = inspectPersistedAuthProfileStateRaw(agentDir, database);
     if (stateInspection.status === "unreadable") {
-      throw new AuthProfileStoreUnreadableError(agentDir);
+      throw new AuthProfileStoreUnreadableError(agentDir, { cause: stateInspection.cause });
     }
     return {
       version: AUTH_STORE_VERSION,
@@ -279,7 +279,12 @@ function loadSqliteAuthStorageStore(
   }
   const store = loadPersistedAuthProfileStore(agentDir, database ? { database } : undefined);
   if (inspection.status === "unreadable" || !store) {
-    throw new AuthProfileStoreUnreadableError(agentDir);
+    throw new AuthProfileStoreUnreadableError(agentDir, {
+      cause:
+        inspection.status === "unreadable"
+          ? inspection.cause
+          : new Error("Auth profile store row does not match the canonical persisted shape."),
+    });
   }
   return store;
 }

@@ -153,9 +153,10 @@ export class AuthProfileStoreUnreadableError extends Error {
   readonly code = "AUTH_PROFILE_STORE_UNREADABLE" as const;
   readonly action = AUTH_PROFILE_MIGRATION_COMMAND;
 
-  constructor(agentDir?: string) {
+  constructor(agentDir?: string, options?: { cause?: unknown }) {
     super(
       `Auth profile store ${shortenHomePath(resolveAuthProfileDatabasePath(agentDir))} is unreadable; run ${AUTH_PROFILE_MIGRATION_COMMAND}.`,
+      options?.cause === undefined ? undefined : { cause: options.cause },
     );
     this.name = "AuthProfileStoreUnreadableError";
   }

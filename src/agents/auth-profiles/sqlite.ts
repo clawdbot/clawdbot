@@ -95,7 +95,7 @@ function parseJsonCell(raw: string | null | undefined): unknown {
 type PersistedAuthProfileStoreInspection =
   | { status: "missing"; reason: "database" | "table" | "row" }
   | { status: "readable"; raw: unknown }
-  | { status: "unreadable" };
+  | { status: "unreadable"; cause: unknown };
 
 function getAuthProfileKysely(db: DatabaseSync) {
   return getNodeSqliteKysely<AuthProfileDatabase>(db);
@@ -135,7 +135,12 @@ function inspectAuthProfileJsonCell(
   try {
     return { status: "readable", raw: JSON.parse(raw) as unknown };
   } catch {
-    return { status: "unreadable" };
+    // Node JSON parser errors can include excerpts of the credential payload.
+    // Preserve the structural failure without moving stored secrets into logs.
+    return {
+      status: "unreadable",
+      cause: new SyntaxError(`Auth profile ${target} row contains malformed JSON.`),
+    };
   }
 }
 
@@ -150,8 +155,14 @@ function inspectAuthProfileJsonCellReadOnly(
     // must share its busy policy so brief rollback-journal locks do not look
     // like missing credentials.
     db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
-    if (readSqliteUserVersion(db) > OPENCLAW_AGENT_SCHEMA_VERSION) {
-      return { status: "unreadable" };
+    const schemaVersion = readSqliteUserVersion(db);
+    if (schemaVersion > OPENCLAW_AGENT_SCHEMA_VERSION) {
+      return {
+        status: "unreadable",
+        cause: new Error(
+          `Auth profile database schema version ${schemaVersion} is newer than supported version ${OPENCLAW_AGENT_SCHEMA_VERSION}.`,
+        ),
+      };
     }
     const tableName = target === "store" ? "auth_profile_store" : "auth_profile_state";
     const schemaObject = db
@@ -163,11 +174,14 @@ function inspectAuthProfileJsonCellReadOnly(
       return { status: "missing", reason: "table" };
     }
     if (schemaObject.type !== "table") {
-      return { status: "unreadable" };
+      return {
+        status: "unreadable",
+        cause: new Error(`Auth profile schema object ${tableName} is not a table.`),
+      };
     }
     return inspectAuthProfileJsonCell(db, target);
-  } catch {
-    return { status: "unreadable" };
+  } catch (error) {
+    return { status: "unreadable", cause: error };
   } finally {
     if (db) {
       clearNodeSqliteKyselyCacheForDatabase(db);

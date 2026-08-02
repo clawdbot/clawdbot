@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { clearAuthProfileMigrationDiagnostics } from "../auth-profiles/legacy-source-diagnostic.js";
@@ -85,6 +86,37 @@ describe("SQLite auth storage", () => {
     storage.reload();
 
     await expect(storage.getApiKey("openai")).rejects.toThrow("is unreadable");
+  });
+
+  it("preserves the SQLite cause behind unreadable auth state", () => {
+    const agentDir = makeAgentDir();
+    writePersistedAuthProfileStateRaw({ order: { openai: ["openai:default"] } }, agentDir);
+    closeOpenClawAgentDatabasesForTest();
+    const failure = Object.assign(new Error("simulated auth state read failure"), {
+      code: "SQLITE_IOERR",
+    });
+    // oxlint-disable-next-line typescript/unbound-method -- invoked with the intercepted database receiver below.
+    const originalPrepare = DatabaseSync.prototype.prepare;
+    let schemaProbeCount = 0;
+    const prepareSpy = vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (
+      this: DatabaseSync,
+      sql: string,
+    ) {
+      if (sql.includes("sqlite_master") && ++schemaProbeCount === 2) {
+        throw failure;
+      }
+      return originalPrepare.call(this, sql);
+    });
+    try {
+      expect(() => AuthStorage.forAgent(agentDir)).toThrow(
+        expect.objectContaining({
+          name: "AuthProfileStoreUnreadableError",
+          cause: failure,
+        }),
+      );
+    } finally {
+      prepareSpy.mockRestore();
+    }
   });
 
   it("never overwrites a store that becomes unreadable during an OAuth refresh", async () => {
