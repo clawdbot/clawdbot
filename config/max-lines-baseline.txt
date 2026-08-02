@@ -703,7 +703,6 @@ src/gateway/server-close.ts
 src/gateway/server-cron.test.ts
 src/gateway/server-cron.ts
 src/gateway/server-http.ts
-src/gateway/server-methods.ts
 src/gateway/server-methods/agent.abort-integration.test-utils.ts
 src/gateway/server-methods/agent.base.test-utils.ts
 src/gateway/server-methods/agent.events-and-subagents.test-utils.ts
