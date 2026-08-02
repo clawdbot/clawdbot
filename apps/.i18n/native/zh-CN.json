@@ -21954,6 +21954,11 @@
       "translated": "复制设置详情"
     },
     {
+      "id": "native.apple.c90ec3f0f60d21bc",
+      "source": "Choose a different AI…",
+      "translated": "选择其他 AI…"
+    },
+    {
       "id": "native.apple.e0458fcb8c0536ea",
       "source": "No usable AI access found on this Gateway",
       "translated": "此网关上未找到可用的 AI 访问方式"
@@ -22184,26 +22189,6 @@
       "translated": "复制错误"
     },
     {
-      "id": "native.apple.7dee24e5bf088dd5",
-      "source": "\\(incomplete) \\(Self.memoryNoun(incomplete)) could not be imported.",
-      "translated": "无法导入 \\(incomplete) 个\\(Self.memoryNoun(incomplete))。"
-    },
-    {
-      "id": "native.apple.84189c39ea5803c6",
-      "source": "The Gateway returned an inconsistent provider plan. Try planning again.",
-      "translated": "Gateway 返回的提供商计划不一致。请尝试重新规划。"
-    },
-    {
-      "id": "native.apple.4c9e75d64cbc5cc2",
-      "source": "The Gateway did not return a usable import plan. Try planning again.",
-      "translated": "Gateway 未返回可用的导入计划。请尝试重新规划。"
-    },
-    {
-      "id": "native.apple.2070bf43a67680ee",
-      "source": "The Gateway could not plan \\(plan.summary.errors) \\(Self.memoryNoun(plan.summary.errors)). Try again.",
-      "translated": "Gateway 无法规划 \\(plan.summary.errors) 个\\(Self.memoryNoun(plan.summary.errors))。请重试。"
-    },
-    {
       "id": "native.apple.ba758aa97c24ffe6",
       "source": "Wake up, my friend!",
       "translated": "醒醒，我的朋友！"
@@ -22254,114 +22239,19 @@
       "translated": "推荐"
     },
     {
-      "id": "native.apple.78d1ad73762a7ce8",
+      "id": "native.apple.6ed12b86d399b69d",
+      "source": "Authenticate with your Gateway",
+      "translated": "使用您的 Gateway 进行身份验证"
+    },
+    {
+      "id": "native.apple.e319780979ae71d1",
       "source": "Connect your AI",
-      "translated": "连接你的 AI"
+      "translated": "连接您的 AI"
     },
     {
       "id": "native.apple.c8a2f8dc424fe447",
       "source": "Back",
       "translated": "返回"
-    },
-    {
-      "id": "native.apple.7ca0977d5f73356d",
-      "source": "Bring your memories along",
-      "translated": "带上你的记忆"
-    },
-    {
-      "id": "native.apple.b57ee4f83cff23f3",
-      "source": "OpenClaw can bring useful context from AI tools you already use into your new assistant.",
-      "translated": "OpenClaw 可以将你已在使用的 AI 工具中的有用上下文导入新助手。"
-    },
-    {
-      "id": "native.apple.46cab71d748860b8",
-      "source": "Looking for memories…",
-      "translated": "正在查找记忆…"
-    },
-    {
-      "id": "native.apple.c9e5f1aebe85e201",
-      "source": "Checking supported AI tools on this Mac.",
-      "translated": "正在检查此 Mac 上支持的 AI 工具。"
-    },
-    {
-      "id": "native.apple.77290f36f36f00e5",
-      "source": "No memories to import",
-      "translated": "没有可导入的记忆"
-    },
-    {
-      "id": "native.apple.e5cca7b9f082ace9",
-      "source": "You can import memories later from the dashboard.",
-      "translated": "你可以稍后从仪表板导入记忆。"
-    },
-    {
-      "id": "native.apple.963add2f12fd18cb",
-      "source": "Import memories",
-      "translated": "导入记忆"
-    },
-    {
-      "id": "native.apple.9db369e036a38a29",
-      "source": "Importing memories…",
-      "translated": "正在导入记忆…"
-    },
-    {
-      "id": "native.apple.71b8e38a5e7040ef",
-      "source": "Refresh plan",
-      "translated": "刷新计划"
-    },
-    {
-      "id": "native.apple.e87bec72cb9c9dbf",
-      "source": "Retry pending imports before refreshing the plan.",
-      "translated": "刷新计划前，请重试待处理的导入。"
-    },
-    {
-      "id": "native.apple.f678888102fded6e",
-      "source": "You can skip this and import later from the dashboard’s Memory import page.",
-      "translated": "你可以跳过此步骤，稍后从仪表板的记忆导入页面进行导入。"
-    },
-    {
-      "id": "native.apple.36108528c6acc448",
-      "source": "\\(provider.alreadyImportedCount) already imported",
-      "translated": "已导入 \\(provider.alreadyImportedCount) 个"
-    },
-    {
-      "id": "native.apple.9b3444de8c9b2acc",
-      "source": "Imported \\(result.migrated) \\(self.memoryLabel(result.migrated)).",
-      "translated": "已导入 \\(result.migrated) 个\\(self.memoryLabel(result.migrated))。"
-    },
-    {
-      "id": "native.apple.3252fea4dac8669a",
-      "source": "Couldn’t check for memories",
-      "translated": "无法检查记忆"
-    },
-    {
-      "id": "native.apple.d371deb696de9e6b",
-      "source": "Retry",
-      "translated": "重试"
-    },
-    {
-      "id": "native.apple.406ae454540725d0",
-      "source": "You can do this later from the dashboard’s Memory import page.",
-      "translated": "你可以稍后从仪表板的记忆导入页面执行此操作。"
-    },
-    {
-      "id": "native.apple.d1b5d99f67dae42e",
-      "source": "Your memories are ready",
-      "translated": "你的记忆已准备就绪"
-    },
-    {
-      "id": "native.apple.6dbe5b174271b62a",
-      "source": "Imported \\(imported) \\(self.memoryLabel(imported)) into OpenClaw.",
-      "translated": "已将 \\(imported) 条 \\(self.memoryLabel(imported)) 导入 OpenClaw。"
-    },
-    {
-      "id": "native.apple.d47b887f98e13e24",
-      "source": "\\(result.migrated) imported",
-      "translated": "已导入 \\(result.migrated) 条"
-    },
-    {
-      "id": "native.apple.6ac3d513f0ec5da7",
-      "source": "You can manage imported memories anytime from the dashboard.",
-      "translated": "你可以随时从仪表板管理已导入的记忆。"
     },
     {
       "id": "native.apple.ea8beaeecef15e54",
