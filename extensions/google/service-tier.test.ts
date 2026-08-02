@@ -3,15 +3,15 @@ import { applyGoogleServiceTierToPayload, resolveGoogleServiceTier } from "./ser
 
 describe("resolveGoogleServiceTier", () => {
   it.each([
-    { label: "lowercase flex", params: { serviceTier: "flex" }, expected: "FLEX" },
-    { label: "uppercase FLEX", params: { serviceTier: "FLEX" }, expected: "FLEX" },
-    { label: "padded priority", params: { serviceTier: " priority " }, expected: "PRIORITY" },
-    { label: "standard", params: { serviceTier: "standard" }, expected: "STANDARD" },
-    { label: "snake_case alias", params: { service_tier: "flex" }, expected: "FLEX" },
+    { label: "lowercase flex", params: { serviceTier: "flex" }, expected: "flex" },
+    { label: "uppercase FLEX", params: { serviceTier: "FLEX" }, expected: "flex" },
+    { label: "padded priority", params: { serviceTier: " priority " }, expected: "priority" },
+    { label: "standard", params: { serviceTier: "standard" }, expected: "standard" },
+    { label: "snake_case alias", params: { service_tier: "flex" }, expected: "flex" },
     {
       label: "camelCase wins",
       params: { serviceTier: "priority", service_tier: "flex" },
-      expected: "PRIORITY",
+      expected: "priority",
     },
     { label: "invalid value", params: { serviceTier: "turbo" }, expected: undefined },
     { label: "empty value", params: { serviceTier: "" }, expected: undefined },
@@ -26,13 +26,13 @@ describe("resolveGoogleServiceTier", () => {
 describe("applyGoogleServiceTierToPayload", () => {
   it("sets serviceTier when the payload does not define one", () => {
     const payload: Record<string, unknown> = {};
-    applyGoogleServiceTierToPayload(payload, "FLEX");
-    expect(payload.serviceTier).toBe("FLEX");
+    applyGoogleServiceTierToPayload(payload, "flex");
+    expect(payload.serviceTier).toBe("flex");
   });
 
   it("keeps an explicit payload serviceTier", () => {
-    const payload: Record<string, unknown> = { serviceTier: "PRIORITY" };
-    applyGoogleServiceTierToPayload(payload, "FLEX");
-    expect(payload.serviceTier).toBe("PRIORITY");
+    const payload: Record<string, unknown> = { serviceTier: "priority" };
+    applyGoogleServiceTierToPayload(payload, "flex");
+    expect(payload.serviceTier).toBe("priority");
   });
 });

@@ -132,7 +132,7 @@ describe("GOOGLE_GEMINI_PROVIDER_HOOKS.wrapStreamFn serviceTier", () => {
       api: "google-generative-ai",
       extraParams: { serviceTier: "flex" },
     });
-    expect(payload?.serviceTier).toBe("FLEX");
+    expect(payload?.serviceTier).toBe("flex");
   });
 
   it("does not set serviceTier on Vertex payloads", () => {
@@ -147,9 +147,9 @@ describe("GOOGLE_GEMINI_PROVIDER_HOOKS.wrapStreamFn serviceTier", () => {
     const payload = captureServiceTierCall({
       api: "google-generative-ai",
       extraParams: { serviceTier: "flex" },
-      initialPayload: { serviceTier: "PRIORITY" },
+      initialPayload: { serviceTier: "priority" },
     });
-    expect(payload?.serviceTier).toBe("PRIORITY");
+    expect(payload?.serviceTier).toBe("priority");
   });
 
   it("ignores invalid serviceTier params", () => {

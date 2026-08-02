@@ -1,7 +1,10 @@
 // Google AI Studio (direct Gemini API) accepts a top-level `serviceTier`
-// request field. Vertex ignores a request-body serviceTier, so this mapping
-// must only be applied to the direct `google-generative-ai` transport.
-const GOOGLE_SERVICE_TIERS = ["FLEX", "PRIORITY", "STANDARD"] as const;
+// request field. The wire values are the documented lower-case enums
+// ("flex" | "priority" | "standard"); see the API discovery document
+// (GenerateContentRequest.serviceTier). Vertex ignores a request-body
+// serviceTier, so this mapping must only be applied to the direct
+// `google-generative-ai` transport.
+const GOOGLE_SERVICE_TIERS = ["flex", "priority", "standard"] as const;
 
 type GoogleServiceTier = (typeof GOOGLE_SERVICE_TIERS)[number];
 
@@ -12,7 +15,7 @@ export function resolveGoogleServiceTier(
   if (typeof raw !== "string") {
     return undefined;
   }
-  const normalized = raw.trim().toUpperCase();
+  const normalized = raw.trim().toLowerCase();
   return (GOOGLE_SERVICE_TIERS as readonly string[]).includes(normalized)
     ? (normalized as GoogleServiceTier)
     : undefined;
