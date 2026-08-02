@@ -563,6 +563,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
             errorShape(
               ErrorCodes.INVALID_REQUEST,
               "No active OpenClaw chat session is awaiting that wizard answer.",
+              { details: buildSystemAgentSessionInvalidatedErrorDetails() },
             ),
           );
           return;

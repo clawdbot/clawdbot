@@ -701,7 +701,13 @@ describe("openclaw.chat", () => {
       wizardAnswer: { stepId: "channel", value: "twitch" },
     });
 
-    expect(call).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
+    expect(call).toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        details: { code: "system_agent_session_invalidated" },
+      },
+    });
     expect(setupInferenceMocks.verifySetupInference).not.toHaveBeenCalled();
   });
 
