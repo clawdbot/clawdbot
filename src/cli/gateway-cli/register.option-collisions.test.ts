@@ -8,7 +8,7 @@ const mocks = vi.hoisted(() => ({
     ok: true,
   })),
   emitReachableGatewayAuthDiagnostic: vi.fn(async (_params: unknown) => false),
-  formatHealthChannelLines: vi.fn(() => []),
+  formatHealthChannelLines: vi.fn((_summary: unknown): string[] => []),
   gatewayStatusCommand: vi.fn(async (_opts: unknown, _runtime: unknown) => {}),
   defaultRuntime: {
     log: vi.fn(),
@@ -67,7 +67,7 @@ vi.mock("../daemon-cli/register-service-commands.js", () => ({
 vi.mock("../../commands/health.js", () => ({
   emitReachableGatewayAuthDiagnostic: (params: unknown) =>
     mocks.emitReachableGatewayAuthDiagnostic(params),
-  formatHealthChannelLines: () => mocks.formatHealthChannelLines(),
+  formatHealthChannelLines: (summary: unknown) => mocks.formatHealthChannelLines(summary),
 }));
 
 vi.mock("../../config/read-best-effort-config.runtime.js", () => ({
@@ -249,6 +249,34 @@ describe("gateway register option collisions", () => {
     assert();
   });
 
+  it("prints actionable plugin failures in gateway health text output", async () => {
+    const snapshot = {
+      ok: true,
+      channels: {},
+      plugins: {
+        loaded: [],
+        errors: [
+          {
+            id: "openclaw-qqbot",
+            origin: "global",
+            activated: false,
+            activationSource: "explicit",
+            error: "missing buffered reply dispatcher",
+          },
+        ],
+      },
+    };
+    const warning = "Plugin: failed - openclaw-qqbot: missing buffered reply dispatcher";
+    callGatewayCli.mockResolvedValueOnce(snapshot);
+    mocks.formatHealthChannelLines.mockReturnValueOnce([warning]);
+
+    await sharedProgram.parseAsync(["gateway", "health"], { from: "user" });
+
+    expect(mocks.formatHealthChannelLines).toHaveBeenCalledWith(snapshot);
+    expect(defaultRuntime.log).toHaveBeenCalledWith(warning);
+    expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
+  });
+
   it("uses the effective local port config for gateway health auth diagnostics", async () => {
     const authError = new Error("gateway auth required");
     callGatewayCli.mockRejectedValueOnce(authError);
@@ -287,6 +315,23 @@ describe("gateway register option collisions", () => {
       loadGatewayHealthModule: loadGatewayHealthModule as never,
       loadHealthStyleModule: loadHealthStyleModule as never,
     });
+    const snapshot = {
+      ok: true,
+      channels: {},
+      plugins: {
+        loaded: [],
+        errors: [
+          {
+            id: "openclaw-qqbot",
+            origin: "global",
+            activated: false,
+            activationSource: "explicit",
+            error: "missing required runtime\nretry after repair",
+          },
+        ],
+      },
+    };
+    callGatewayCli.mockResolvedValueOnce(snapshot);
 
     await program.parseAsync(["node", "openclaw", "gateway", "health", "--json"]);
 
@@ -297,6 +342,6 @@ describe("gateway register option collisions", () => {
     );
     expect(loadGatewayHealthModule).not.toHaveBeenCalled();
     expect(loadHealthStyleModule).not.toHaveBeenCalled();
-    expect(defaultRuntime.writeJson).toHaveBeenCalledWith({ ok: true });
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(snapshot);
   });
 });

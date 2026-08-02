@@ -193,4 +193,141 @@ describe("formatHealthChannelLines", () => {
       "iMessage: failed (unknown) - imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.",
     );
   });
+
+  it("surfaces configured plugin failures in owner order without warning for disabled plugins", () => {
+    const summary = createHealthSummary({
+      channels: {
+        telegram: { accountId: "default", configured: true },
+      },
+      channelOrder: ["telegram"],
+      channelLabels: { telegram: "Telegram" },
+    });
+    summary.plugins = {
+      loaded: ["telegram"],
+      errors: [
+        {
+          id: "zeta",
+          origin: "global",
+          activated: true,
+          error: "registration failed",
+        },
+        {
+          id: "shared",
+          origin: "config",
+          activated: false,
+          activationSource: "explicit",
+          error: "configured owner failed",
+        },
+        {
+          id: "ignored",
+          origin: "workspace",
+          activated: false,
+          activationSource: "disabled",
+          error: "disabled plugin ignored",
+        },
+      ],
+      unavailable: [
+        {
+          id: "shared",
+          state: "configured-unavailable",
+          diagnostic: {
+            kind: "plugin-verification",
+            reason: "missing-main-entry",
+            detail: "main entry missing",
+          },
+        },
+        {
+          id: "alpha",
+          state: "configured-unavailable",
+          diagnostic: {
+            kind: "plugin-verification",
+            reason: "missing-package-json",
+            detail: "package metadata missing",
+          },
+        },
+      ],
+    };
+
+    expect(formatHealthChannelLines(summary)).toStrictEqual([
+      "Telegram: configured",
+      "Plugin: failed - alpha: configured-unavailable (missing-package-json): package metadata missing",
+      "Plugin: failed - shared: configured owner failed",
+      "Plugin: failed - shared: configured-unavailable (missing-main-entry): main entry missing",
+      "Plugin: failed - zeta: registration failed",
+    ]);
+  });
+
+  it("keeps untrusted plugin ids and diagnostics inside one fixed failed health line", () => {
+    const summary = createHealthSummary({
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+    });
+    summary.plugins = {
+      loaded: [],
+      errors: [
+        {
+          id: "\u001b[32msp\u202eoof:\u2066ok\u2069\u001b[0m\n\u200bnext\u2028",
+          origin: "global",
+          activated: false,
+          activationSource: "explicit",
+          error: "\u001b]52;c;YWJj\u0007fa\u{E0061}iled\nretry\t\u2029la\ufeffter\uD800",
+        },
+      ],
+    };
+
+    const [line] = formatHealthChannelLines(summary);
+
+    expect(line).toBe("Plugin: failed - spoof:ok\\nnext: failed\\nretry\\tlater");
+    expect(line?.split(":", 1)).toStrictEqual(["Plugin"]);
+    expect(line).not.toContain("\u001b");
+    expect(line).not.toContain("\n");
+    expect(line).not.toMatch(/[\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/u);
+  });
+
+  it("bounds plugin ids and diagnostics without splitting Unicode code points", () => {
+    const summary = createHealthSummary({
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+    });
+    summary.plugins = {
+      loaded: [],
+      errors: [
+        {
+          id: "📦".repeat(90),
+          origin: "global",
+          activated: true,
+          error: "🦀".repeat(170),
+        },
+      ],
+    };
+
+    expect(formatHealthChannelLines(summary)).toStrictEqual([
+      `Plugin: failed - ${"📦".repeat(79)}…: ${"🦀".repeat(159)}…`,
+    ]);
+  });
+
+  it("does not add warnings for healthy loaded or explicitly disabled plugins", () => {
+    const summary = createHealthSummary({
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+    });
+    summary.plugins = {
+      loaded: ["healthy"],
+      errors: [
+        {
+          id: "ignored",
+          origin: "workspace",
+          activated: false,
+          activationSource: "disabled",
+          error: "disabled plugin ignored",
+        },
+      ],
+      unavailable: [],
+    };
+
+    expect(formatHealthChannelLines(summary)).toStrictEqual([]);
+  });
 });

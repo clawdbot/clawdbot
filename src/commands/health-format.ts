@@ -6,6 +6,7 @@ import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.
 import { formatChannelStatusState } from "../channels/plugins/status-state.js";
 import { isGatewayTransportError } from "../gateway/call.js";
 import type { ChannelAccountHealthSummary, HealthSummary } from "../gateway/health/types.js";
+import { shortenText } from "./text-format.js";
 
 export function formatGatewayClosedDiagnostic(err: unknown): string | undefined {
   if (!isGatewayTransportError(err) || err.kind !== "closed") {
@@ -140,7 +141,12 @@ const isProbeFailure = (summary: ChannelAccountHealthSummary): boolean => {
   return ok === false;
 };
 
-/** Formats one terse health line per channel, optionally including every account. */
+// Plugin diagnostics cross terminal/table trust boundaries; invisible Unicode
+// direction, surrogate, and line controls must not spoof the rendered status.
+const sanitizePluginHealthText = (value: string, maxLength: number): string =>
+  shortenText(sanitizeTerminalText(value).replace(/[\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/gu, ""), maxLength);
+
+/** Formats channel health and actionable plugin failures for human CLI output. */
 export const formatHealthChannelLines = (
   summary: HealthSummary,
   opts: {
@@ -256,6 +262,23 @@ export const formatHealthChannelLines = (
             ? "configured"
             : "unknown";
     lines.push(`${label}: ${passiveState}`);
+  }
+
+  const pluginFailures = [
+    ...(summary.plugins?.errors ?? [])
+      .filter((plugin) => plugin.activationSource !== "disabled")
+      .map(({ id, error }) => ({ id, detail: error })),
+    ...(summary.plugins?.unavailable ?? []).map(({ id, diagnostic }) => ({
+      id,
+      detail: `configured-unavailable (${diagnostic.reason}): ${diagnostic.detail}`,
+    })),
+  ].toSorted((left, right) => left.id.localeCompare(right.id));
+  for (const { id, detail } of pluginFailures) {
+    const safeId = sanitizePluginHealthText(id, 80);
+    const safeDetail = sanitizePluginHealthText(detail, 160);
+    // Plugin ids can contain colons; keep the first-colon health label fixed so
+    // status tables cannot mistake an untrusted id for a successful state.
+    lines.push(`Plugin: failed - ${safeId}: ${safeDetail}`);
   }
   return lines;
 };

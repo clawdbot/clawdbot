@@ -177,6 +177,18 @@ describe("healthCommand", () => {
       },
       sessions: agentSessions,
     });
+    snapshot.plugins = {
+      loaded: [],
+      errors: [
+        {
+          id: "openclaw-qqbot",
+          origin: "global",
+          activated: false,
+          activationSource: "explicit",
+          error: "missing required runtime\nretry after repair",
+        },
+      ],
+    };
     callGatewayMock.mockResolvedValueOnce(snapshot);
 
     await healthCommand({ json: true, timeoutMs: 5000, config: {} }, runtime as never);
@@ -187,6 +199,7 @@ describe("healthCommand", () => {
     expect(parsed.channels.whatsapp?.linked).toBe(true);
     expect(parsed.channels.telegram?.configured).toBe(true);
     expect(parsed.sessions.count).toBe(1);
+    expect(parsed.plugins).toStrictEqual(snapshot.plugins);
   });
 
   it("prints the gateway probe duration in text output", async () => {
@@ -201,6 +214,55 @@ describe("healthCommand", () => {
 
     const output = stripAnsi(runtime.log.mock.calls.map((call) => String(call[0])).join("\n"));
     expect(output).toContain("Gateway probe duration: 5ms");
+  });
+
+  it("prints actionable plugin failures without treating disabled records as failures", async () => {
+    const snapshot = createHealthSummary({
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+    });
+    snapshot.plugins = {
+      loaded: [],
+      errors: [
+        {
+          id: "openclaw-qqbot",
+          origin: "global",
+          activated: false,
+          activationSource: "explicit",
+          error: "missing buffered reply dispatcher",
+        },
+        {
+          id: "optional-broken",
+          origin: "workspace",
+          activated: false,
+          activationSource: "disabled",
+          error: "disabled plugin ignored",
+        },
+      ],
+      unavailable: [
+        {
+          id: "memory-owner",
+          state: "configured-unavailable",
+          diagnostic: {
+            kind: "plugin-verification",
+            reason: "missing-main-entry",
+            detail: "main entry missing",
+          },
+        },
+      ],
+    };
+    callGatewayMock.mockResolvedValueOnce(snapshot);
+
+    await healthCommand({ json: false, timeoutMs: 1000, config: {} }, runtime as never);
+
+    const output = stripAnsi(runtime.log.mock.calls.map((call) => String(call[0])).join("\n"));
+    expect(output).toContain(
+      "Plugin: failed - memory-owner: configured-unavailable (missing-main-entry): main entry missing",
+    );
+    expect(output).toContain("Plugin: failed - openclaw-qqbot: missing buffered reply dispatcher");
+    expect(output).not.toContain("optional-broken");
+    expect(runtime.exit).not.toHaveBeenCalled();
   });
 
   it("omits the probe duration for legacy gateway snapshots", async () => {
