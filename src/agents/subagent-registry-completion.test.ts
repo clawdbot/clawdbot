@@ -3,7 +3,10 @@
  * Verifies outcome comparison and exactly-once lifecycle hook emission.
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { SUBAGENT_ENDED_REASON_COMPLETE } from "./subagent-lifecycle-events.js";
+import {
+  SUBAGENT_ENDED_REASON_COMPLETE,
+  SUBAGENT_ENDED_REASON_KILLED,
+} from "./subagent-lifecycle-events.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const lifecycleMocks = vi.hoisted(() => ({
@@ -52,6 +55,148 @@ describe("emitSubagentEndedHookOnce", () => {
   beforeEach(() => {
     lifecycleMocks.getGlobalHookRunner.mockClear();
     lifecycleMocks.runSubagentEnded.mockClear();
+  });
+
+  it.each([
+    {
+      name: "uses captured fallback when the primary completion is empty",
+      resultText: null,
+      fallbackResultText: "parent finished with the child results",
+      expectedResultText: "parent finished with the child results",
+      expectedTerminalOutcome: undefined,
+      expectedTerminalSummary: null,
+    },
+    {
+      name: "uses captured fallback when a resumed completion returns NO_REPLY",
+      resultText: "NO_REPLY",
+      fallbackResultText: "parent finished with the child results",
+      expectedResultText: "parent finished with the child results",
+      expectedTerminalOutcome: undefined,
+      expectedTerminalSummary: null,
+    },
+    ...["ANNOUNCE_SKIP", "REPLY_SKIP", "HEARTBEAT_OK"].map((resultText) => ({
+      name: `preserves intentional ${resultText} completion instead of using fallback`,
+      resultText,
+      fallbackResultText: "stale result that must not be delivered",
+      expectedResultText: resultText,
+      expectedTerminalOutcome: undefined,
+      expectedTerminalSummary: null,
+    })),
+    {
+      name: "keeps progress-only completion blocked despite a captured fallback",
+      resultText: "I'll inspect the repo now.",
+      fallbackResultText: "stale result that must not replace progress",
+      expectedResultText: "I'll inspect the repo now.",
+      expectedTerminalOutcome: "blocked" as const,
+      expectedTerminalSummary:
+        "Required completion ended with progress-only text, not a final deliverable.",
+    },
+    {
+      name: "keeps missing required completion blocked when no fallback exists",
+      resultText: null,
+      fallbackResultText: undefined,
+      expectedResultText: undefined,
+      expectedTerminalOutcome: "blocked" as const,
+      expectedTerminalSummary: "Required completion did not produce a final deliverable.",
+    },
+  ])(
+    "$name",
+    ({
+      resultText,
+      fallbackResultText,
+      expectedResultText,
+      expectedTerminalOutcome,
+      expectedTerminalSummary,
+    }) => {
+      const entry: SubagentRunRecord = {
+        ...createRunEntry(),
+        expectsCompletionMessage: true,
+        execution: {
+          status: "terminal",
+          endedAt: 2_000,
+          outcome: { status: "ok" },
+        },
+        completion: {
+          required: true,
+          resultText,
+          capturedAt: 2_000,
+          ...(fallbackResultText ? { fallbackResultText } : {}),
+        },
+      };
+
+      expect(mod.resolveFinalizedSubagentTaskState(entry)).toMatchObject({
+        status: "succeeded",
+        progressSummary: expectedResultText,
+        terminalSummary: expectedTerminalSummary,
+        terminalOutcome: expectedTerminalOutcome,
+      });
+    },
+  );
+
+  it("does not finalize a completion whose primary capture is still pending", () => {
+    const entry: SubagentRunRecord = {
+      ...createRunEntry(),
+      expectsCompletionMessage: true,
+      execution: {
+        status: "terminal",
+        endedAt: 2_000,
+        outcome: { status: "ok" },
+      },
+      completion: {
+        required: true,
+        fallbackResultText: "captured result from a prior generation",
+      },
+    };
+
+    expect(mod.resolveFinalizedSubagentTaskState(entry)).toBeUndefined();
+  });
+
+  it("does not promote a fallback into an errored task completion", () => {
+    const entry: SubagentRunRecord = {
+      ...createRunEntry(),
+      expectsCompletionMessage: true,
+      execution: {
+        status: "terminal",
+        endedAt: 2_000,
+        outcome: { status: "error", error: "parent failed" },
+      },
+      completion: {
+        required: true,
+        resultText: null,
+        capturedAt: 2_000,
+        fallbackResultText: "stale successful result",
+      },
+    };
+
+    expect(mod.resolveFinalizedSubagentTaskState(entry)).toMatchObject({
+      status: "failed",
+      error: "parent failed",
+      progressSummary: undefined,
+    });
+  });
+
+  it("does not promote a fallback into a cancelled task completion", () => {
+    const entry: SubagentRunRecord = {
+      ...createRunEntry(),
+      expectsCompletionMessage: true,
+      endedReason: SUBAGENT_ENDED_REASON_KILLED,
+      execution: {
+        status: "terminal",
+        endedAt: 2_000,
+        outcome: { status: "ok" },
+      },
+      completion: {
+        required: true,
+        resultText: null,
+        capturedAt: 2_000,
+        fallbackResultText: "stale successful result",
+      },
+    };
+
+    expect(mod.resolveFinalizedSubagentTaskState(entry)).toMatchObject({
+      status: "cancelled",
+      progressSummary: undefined,
+    });
   });
 
   it("records ended hook marker even when no subagent_ended hooks are registered", async () => {

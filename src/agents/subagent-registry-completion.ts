@@ -21,6 +21,7 @@ import {
   type SubagentLifecycleEndedReason,
 } from "./subagent-lifecycle-events.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { selectDeliverableSessionsReply } from "./tools/sessions-send-tokens.js";
 
 const log = createSubsystemLogger("agents/subagent-registry-completion");
 
@@ -54,15 +55,20 @@ export function resolveFinalizedSubagentTaskState(
     };
   }
   if (outcome.status === "ok") {
+    const resultText =
+      entry.expectsCompletionMessage === true
+        ? (selectDeliverableSessionsReply(completion.resultText, completion.fallbackResultText) ??
+          completion.resultText)
+        : completion.resultText;
     const terminal =
       entry.expectsCompletionMessage === true
-        ? resolveRequiredCompletionTerminalResult(completion.resultText)
+        ? resolveRequiredCompletionTerminalResult(resultText)
         : {};
     return {
       status: "succeeded",
       endedAt,
       lastEventAt: endedAt,
-      progressSummary,
+      progressSummary: resultText ?? undefined,
       terminalSummary: terminal.terminalSummary ?? null,
       terminalOutcome: terminal.terminalOutcome,
     };
