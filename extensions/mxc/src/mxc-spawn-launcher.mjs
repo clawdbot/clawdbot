@@ -35,9 +35,9 @@ export function forwardSignals(spawned, options = {}) {
     if (exitTimer) {
       return;
     }
-    const setTimeoutFn = options.setTimeout ?? setTimeout;
+    const setTimeoutFn = options.setTimeout?.bind(undefined) ?? setTimeout;
     exitTimer = setTimeoutFn(() => {
-      const exit = options.exit ?? process.exit;
+      const exit = options.exit?.bind(undefined) ?? ((code) => process.exit(code));
       exit(signalExitCode(signal));
     }, exitGraceMs);
     exitTimer?.unref?.();
@@ -86,7 +86,7 @@ function bridgeChildProcess(child) {
 
 export function exitOnChildProcessClose(child, options = {}) {
   child.on("close", (exitCode, signal) => {
-    const exit = options.exit ?? process.exit;
+    const exit = options.exit?.bind(undefined) ?? ((code) => process.exit(code));
     exit(typeof exitCode === "number" ? exitCode : signalExitCode(signal));
   });
 }
@@ -123,7 +123,9 @@ export async function main() {
   try {
     const { config, options } = decodePayload(process.argv.slice(2));
     const { spawnSandboxFromConfig } = await import("@microsoft/mxc-sdk");
-    const spawned = await spawnSandboxFromConfig(config, options ?? {});
+    const spawned = spawnSandboxFromConfig(config, options ?? {});
+    // Keep listener attachment one microtask after spawning, matching the prior await boundary.
+    await Promise.resolve();
 
     if (typeof spawned.onData === "function") {
       bridgeStdio(spawned);
