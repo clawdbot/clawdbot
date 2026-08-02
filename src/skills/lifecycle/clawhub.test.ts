@@ -2258,8 +2258,8 @@ describe("skills-clawhub", () => {
     const lock = JSON.parse(
       await fs.readFile(path.join(workspaceDir, ".clawhub", "lock.json"), "utf8"),
     ) as { skills: Record<string, { skillFile?: unknown; fileTreeSha256?: unknown }> };
-    expect(lock.skills.weather.skillFile).toMatchObject({ path: "SKILL.md" });
-    expect(lock.skills.weather.fileTreeSha256).toBe(`sha256:${"a".repeat(64)}`);
+    expect(lock.skills.weather?.skillFile).toMatchObject({ path: "SKILL.md" });
+    expect(lock.skills.weather?.fileTreeSha256).toBe(`sha256:${"a".repeat(64)}`);
 
     const verified = await updateSkillsFromClawHub({ workspaceDir, slug: "weather" });
     expect(verified).toEqual([
