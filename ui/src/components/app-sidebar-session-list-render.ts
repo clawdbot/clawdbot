@@ -347,15 +347,15 @@ function renderSessionCatalog(params: {
       onSectionDrop: (event, sectionId) => host.sectionDrop(event, sectionId),
       onStartSectionDrag: (sectionId) => host.startSidebarSectionDrag(sectionId),
       onFinishSectionDrag: () => host.finishSidebarSectionDrag(),
-      // aria-expanded must land on the one header whose menu is open, so the
-      // catalog id rides on the trigger's data attribute instead of a global flag.
-      viewMenuOpenCatalogId: host.sidebarMenus.catalogViewMenuPosition
-        ? (host.sidebarMenus.catalogViewMenuTrigger?.getAttribute(
-            "data-session-catalog-view-menu",
-          ) ?? null)
-        : null,
+      viewMenuOpenCatalogId: host.sidebarMenus.catalogViewMenuPosition?.catalogId ?? null,
       creatorFilterActive: host.sessionCreatorFilterActive,
-      onOpenViewMenu: (trigger) => host.sidebarMenus.toggleCatalogViewMenu(trigger),
+      onOpenViewMenu: (catalogId, trigger, position) => {
+        if (position) {
+          host.sidebarMenus.openCatalogViewMenu(catalogId, position.x, position.y, trigger);
+          return;
+        }
+        host.sidebarMenus.toggleCatalogViewMenu(catalogId, trigger);
+      },
       onLoadMore: (catalogId) => void host.sessionData.loadMoreSessionCatalog(catalogId),
       onOpenNewSession: (agentId, target) => host.requestOpenNewSession(agentId, target),
       newSessionDisabledReason: newSessionAccess.allowed ? undefined : newSessionAccess.reason,
