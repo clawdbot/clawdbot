@@ -717,6 +717,84 @@ Append-only lane record. This file will be removed in a final normal commit; its
 - Conflict markers: 0.
 - Focused validation: 58 cron tests, 17 flow tests, and 123 compaction tests passed; all three resolved files passed `oxfmt --check`.
 - Topology note: the Gate 0 journal was pushed before the topology commit. To honor both no-rewrite/no-force policy and the exact-parent requirement, this merge object is being created from a temporary ref rooted directly at `009e455...`; the published branch will integrate it only by an additive merge.
+
+## 2026-08-02T05:14:00Z - Gate results and declare-done substrate
+
+- Exact topology merge: `8cad5c7aa3b048ecd27394336c3959e104db97c5`.
+- Exact merge parents: `009e4554627451313acab5e39d895beaae155be7` and `862339134a9bd19da30a3dc6343898a4cb63c766`.
+- Additive candidate before journal closeout: `1fdf95027fdeb4882da11aebaeff5e8a20d4bb13`; tree `9dcd9a9370d5c4e24cb75ec64b06501b94c21a6e`.
+- PR #1215 still resolves exactly to `009e4554627451313acab5e39d895beaae155be7`.
+- Gate 2: RED. 34/35 primitive cores report `PASS`, `PASS-UPSTREAM`, or `PASS-TOMBSTONE`; `src/agents/embedded-agent-runner/compact.ts` reports `FAIL` because the frozen upstream patch overlaps predecessor's explicit-provider correction and cannot apply mechanically. The selected resolution is explained in the conflict table. A byte-identical predecessor control fails 2/123 frozen-upstream compaction tests, proving that a direct `PASS` would drop required upstream runtime-plugin planning.
+- Gate 2.7: zero `FROZEN-STALE`; 251 `MIXED-CLOBBER` rows remain a disclosed review queue. They were not laundered as resolved.
+- Gate 2.5: 283 upstream-touched test paths; 86 intersect the predecessor/fork delta. 25 intersecting tests were executed in the focused run; 61 are explicitly unexecuted below.
+- Focused continuation validation: 1,920 tests passed across 14 shards; the GitNexus direct caller added 2 passing abort-signal tests. This includes compaction, TaskFlow cancellation, cron, session lifecycle/SQLite-facing recovery, transcript/delivery queue recovery, subagent continuation, generated-media continuation, plugin runtime, gateway chat/restart, and TUI backend surfaces.
+- Static/build: production, scripts, and test-root typechecks passed; oxlint passed; full build passed. The combined `pnpm check` remains red only because this temporary append-only journal is not `oxfmt`-formatted. It will be removed in the required final normal commit and `pnpm check` rerun.
+- GitNexus exact-predecessor graph: completed with 671,808 nodes, 1,334,700 edges, 19,777 clusters, and 300 flows. Optional Swift parsing was skipped because its native grammar was unavailable. Exact symbol impact for `compactEmbeddedAgentSessionDirect`: LOW graph risk, one direct test caller, no indexed process; text fallback found 48 call/test sites and drove the broader focused suite.
+- Proof recommendation: `proofs-rerun-required`. Gate 2 remains red, Gate 2.7 retains 251 mixed rows, and the frozen increment intersects proof-sensitive continuation behavior.
+
+### Explicitly unexecuted Gate 2.5 intersection tests
+
+- `extensions/buzz/src/inbound.test.ts`
+- `extensions/codex/src/app-server/run-attempt.test.ts`
+- `extensions/codex/src/app-server/turn-router.test.ts`
+- `extensions/discord/src/voice/manager.e2e.test.ts`
+- `extensions/google/index.test.ts`
+- `extensions/google/realtime-voice-provider.test.ts`
+- `extensions/line/src/message-cards.test.ts`
+- `extensions/matrix/src/matrix/monitor/handler.test.ts`
+- `extensions/matrix/src/matrix/send.test.ts`
+- `extensions/matrix/src/outbound.test.ts`
+- `extensions/memory-core/src/cli.test.ts`
+- `extensions/memory-core/src/memory/manager-sync-ops.startup-catchup.test.ts`
+- `extensions/mistral/realtime-transcription-provider.test.ts`
+- `extensions/qa-lab/src/providers/mock-openai/server.test.ts`
+- `extensions/slack/src/monitor/message-handler/prepare.test.ts`
+- `extensions/telegram/src/action-runtime.test.ts`
+- `extensions/telegram/src/bot.create-telegram-bot.channel-post-media.test.ts`
+- `extensions/telegram/src/channel-actions.test.ts`
+- `extensions/telegram/src/send.test.ts`
+- `extensions/whatsapp/src/auto-reply/deliver-reply.test.ts`
+- `src/agents/agent-bundle-mcp-runtime.test.ts`
+- `src/agents/bash-tools.exec-approval-followup.test.ts`
+- `src/agents/bash-tools.exec-approval-output.test.ts`
+- `src/agents/bash-tools.exec-host-node.cancellation.test.ts`
+- `src/agents/bash-tools.exec-host-node.test.ts`
+- `src/cli/command-path-policy.test.ts`
+- `src/cli/gateway-rpc.runtime.test.ts`
+- `src/cli/program/config-guard.test.ts`
+- `src/cli/program/message/helpers.test.ts`
+- `src/commands/channel-setup/plugin-install.test.ts`
+- `src/daemon/service.test.ts`
+- `src/gateway/embeddings-http.test.ts`
+- `src/gateway/node-registry.test.ts`
+- `src/gateway/openai-http.test.ts`
+- `src/gateway/openresponses-http.test.ts`
+- `src/gateway/server-channels.test.ts`
+- `src/gateway/server-plugins.test.ts`
+- `src/gateway/server-startup-plugins.test.ts`
+- `src/gateway/talk-realtime-relay.test.ts`
+- `src/plugins/manifest-model-id-normalization.test.ts`
+- `src/system-agent/setup-inference.test.ts`
+- `src/tui/tui-formatters.test.ts`
+- `src/tui/tui-pty-harness.e2e.test.ts`
+- `src/tui/tui-session-actions.test.ts`
+- `test/package-scripts.test.ts`
+- `test/scripts/build-all.test.ts`
+- `test/scripts/check-database-first-legacy-stores.test.ts`
+- `test/scripts/ci-workflow-guards.test.ts`
+- `test/scripts/copy-export-html-templates.test.ts`
+- `test/scripts/crabbox-wrapper.test.ts`
+- `test/scripts/openclaw-performance-workflow.test.ts`
+- `test/scripts/runtime-postbuild.test.ts`
+- `ui/src/lib/agents/display.test.ts`
+- `ui/src/lib/cron/index.test.ts`
+- `ui/src/pages/chat/chat-pane-lifecycle.test.ts`
+- `ui/src/pages/chat/chat-send.test.ts`
+- `ui/src/pages/chat/components/chat-thread.measure.test.ts`
+- `ui/src/pages/chat/realtime-talk-webrtc-control.test.ts`
+- `ui/src/pages/chat/realtime-talk-webrtc.test.ts`
+- `ui/src/pages/chat/route.test.ts`
+- `ui/src/pages/usage/view-overview.test.ts`
 - `ui/src/pages/usage/view-overview.ts`
 - `ui/src/styles/chat/layout.css`
 - `ui/src/test-helpers/app-sidebar-cases/agent-menu.ts`
