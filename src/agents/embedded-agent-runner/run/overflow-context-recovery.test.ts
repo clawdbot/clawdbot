@@ -13,9 +13,11 @@ vi.mock("../tool-result-truncation.js", () => ({
 }));
 
 describe("recoverEmbeddedRunOverflow", () => {
-  it("passes the frozen prompt projection into append-only fallback truncation", async () => {
+  it("passes the frozen prompt projection into append-only truncation before compaction", async () => {
     const { recoverEmbeddedRunOverflow } = await import("./overflow-context-recovery.js");
     const promptError = new Error("Context window exceeded for this request");
+    const compact = vi.fn(async () => ({ ok: true, compacted: false }));
+    const prepareCompactedTranscriptRetry = vi.fn(async () => {});
     const projectionState: ToolResultPromptProjectionState = {
       replacements: new Map(),
       frozen: new Set(["tool:call_1:1"]),
@@ -50,7 +52,7 @@ describe("recoverEmbeddedRunOverflow", () => {
         autoCompactionCount: 0,
         lastCompactionTokensAfter: undefined,
         lastContextBudgetStatus: undefined,
-        overflowCompactionAttempts: 3,
+        overflowCompactionAttempts: 0,
         timeoutCompactionAttempts: 0,
         toolResultTruncationAttempted: false,
       },
@@ -65,7 +67,7 @@ describe("recoverEmbeddedRunOverflow", () => {
           messages,
           estimatedTokens: 0,
         }),
-        compact: async () => ({ ok: true, compacted: false }),
+        compact,
       },
       contextTokenBudget: 200_000,
       genericCompactionRecoveryAllowed: true,
@@ -93,11 +95,13 @@ describe("recoverEmbeddedRunOverflow", () => {
       adoptCompactionTranscript: async () => undefined,
       getActiveSession: () => ({ id: "session-1", file: "agent:main:session-1" }),
       prepareCurrentTranscriptRetry: () => {},
-      prepareCompactedTranscriptRetry: async () => {},
+      prepareCompactedTranscriptRetry,
       armPostCompactionGuard: () => {},
     } as unknown as Parameters<typeof recoverEmbeddedRunOverflow>[0]);
 
     expect(result).toEqual({ action: "retry" });
+    expect(compact).not.toHaveBeenCalled();
+    expect(prepareCompactedTranscriptRetry).toHaveBeenCalledOnce();
     expect(truncateOversizedToolResultsInActiveTargetMock).toHaveBeenCalledWith(
       expect.objectContaining({
         projectionState,

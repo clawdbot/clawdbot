@@ -95,6 +95,7 @@ export async function recoverEmbeddedRunOverflow(
     return { action: "none" };
   }
 
+  const contextTokenBudget = input.contextTokenBudget;
   const providerPromptRejection =
     contextOverflowError.source === "assistantError" ||
     projectAgentRunAttemptTerminal(input.attempt.terminal).promptErrorSource === "prompt"
@@ -130,6 +131,49 @@ export async function recoverEmbeddedRunOverflow(
   );
 
   const isCompactionFailure = isCompactionFailureError(errorText);
+  const attemptToolResultTruncation = async (params: {
+    phase: "before compaction" | "fallback";
+    protectTrailingToolResults: boolean;
+  }) => {
+    if (input.state.toolResultTruncationAttempted) {
+      return undefined;
+    }
+    const toolResultMaxChars = resolveLiveToolResultMaxChars({
+      contextWindowTokens: contextTokenBudget,
+    });
+    const hasToolResultPressure = input.attempt.messagesSnapshot
+      ? sessionLikelyHasOversizedToolResults({
+          messages: input.attempt.messagesSnapshot,
+          contextWindowTokens: contextTokenBudget,
+          maxCharsOverride: toolResultMaxChars,
+        })
+      : false;
+    if (!hasToolResultPressure) {
+      return undefined;
+    }
+
+    input.state.toolResultTruncationAttempted = true;
+    log.warn(
+      `[context-overflow-recovery] Attempting tool result truncation ${params.phase} for ${input.provider}/${input.modelId} ` +
+        `(contextWindow=${contextTokenBudget} tokens)`,
+    );
+    const session = input.getActiveSession();
+    // Recovery must preserve stored rows and branch from the frozen provider projection.
+    // Rewriting in place erases audit history and can persist bytes the provider never saw.
+    return await truncateOversizedToolResultsInActiveTarget({
+      scope: {
+        sessionId: session.id,
+        sessionKey: runParams.sessionKey ?? session.id,
+        sessionFile: session.file,
+        agentId: input.sessionAgentId,
+      },
+      contextWindowTokens: contextTokenBudget,
+      maxCharsOverride: toolResultMaxChars,
+      protectTrailingToolResults: params.protectTrailingToolResults,
+      projectionState: input.toolResultPromptProjectionState,
+    });
+  };
+
   if (
     !isCompactionFailure &&
     input.attemptCompactionCount > 0 &&
@@ -143,6 +187,25 @@ export async function recoverEmbeddedRunOverflow(
       input.prepareCurrentTranscriptRetry();
     }
     return { action: "retry" };
+  }
+
+  if (!isCompactionFailure && input.attemptCompactionCount === 0 && !preflightRecovery) {
+    const truncResult = await attemptToolResultTruncation({
+      phase: "before compaction",
+      protectTrailingToolResults: false,
+    });
+    if (truncResult?.truncated) {
+      log.info(
+        `[context-overflow-recovery] Truncated ${truncResult.truncatedCount} tool result(s); retrying prompt before compaction`,
+      );
+      await input.prepareCompactedTranscriptRetry();
+      return { action: "retry" };
+    }
+    if (truncResult) {
+      log.warn(
+        `[context-overflow-recovery] Pre-compaction tool result truncation did not help: ${truncResult.reason ?? "unknown"}`,
+      );
+    }
   }
 
   if (
@@ -265,51 +328,23 @@ export async function recoverEmbeddedRunOverflow(
     );
   }
 
-  if (!input.state.toolResultTruncationAttempted) {
-    const toolResultMaxChars = resolveLiveToolResultMaxChars({
-      contextWindowTokens: input.contextTokenBudget,
-    });
-    const hasOversized = input.attempt.messagesSnapshot
-      ? sessionLikelyHasOversizedToolResults({
-          messages: input.attempt.messagesSnapshot,
-          contextWindowTokens: input.contextTokenBudget,
-          maxCharsOverride: toolResultMaxChars,
-        })
-      : false;
-    if (hasOversized) {
-      input.state.toolResultTruncationAttempted = true;
-      log.warn(
-        `[context-overflow-recovery] Attempting tool result truncation for ${input.provider}/${input.modelId} ` +
-          `(contextWindow=${input.contextTokenBudget} tokens)`,
-      );
-      const session = input.getActiveSession();
-      // Recovery must preserve stored rows and branch from the frozen provider projection.
-      // Rewriting in place erases audit history and can persist bytes the provider never saw.
-      const truncResult = await truncateOversizedToolResultsInActiveTarget({
-        scope: {
-          sessionId: session.id,
-          sessionKey: runParams.sessionKey ?? session.id,
-          sessionFile: session.file,
-          agentId: input.sessionAgentId,
-        },
-        contextWindowTokens: input.contextTokenBudget,
-        maxCharsOverride: toolResultMaxChars,
-        protectTrailingToolResults: preflightRecovery?.route === "compact_then_truncate",
-        projectionState: input.toolResultPromptProjectionState,
-      });
-      if (truncResult.truncated) {
-        log.info(
-          `[context-overflow-recovery] Truncated ${truncResult.truncatedCount} tool result(s); retrying prompt`,
-        );
-        if (preflightRecovery?.source === "mid-turn") {
-          input.prepareCurrentTranscriptRetry();
-        }
-        return { action: "retry" };
-      }
-      log.warn(
-        `[context-overflow-recovery] Tool result truncation did not help: ${truncResult.reason ?? "unknown"}`,
-      );
+  const truncResult = await attemptToolResultTruncation({
+    phase: "fallback",
+    protectTrailingToolResults: preflightRecovery?.route === "compact_then_truncate",
+  });
+  if (truncResult?.truncated) {
+    log.info(
+      `[context-overflow-recovery] Truncated ${truncResult.truncatedCount} tool result(s); retrying prompt`,
+    );
+    if (preflightRecovery?.source === "mid-turn") {
+      input.prepareCurrentTranscriptRetry();
     }
+    return { action: "retry" };
+  }
+  if (truncResult) {
+    log.warn(
+      `[context-overflow-recovery] Tool result truncation did not help: ${truncResult.reason ?? "unknown"}`,
+    );
   }
 
   if (
