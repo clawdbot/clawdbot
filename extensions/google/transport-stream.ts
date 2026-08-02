@@ -88,6 +88,7 @@ type GoogleGenerateContentRequest = {
   cachedContent?: string;
   contents: Array<Record<string, unknown>>;
   generationConfig?: Record<string, unknown>;
+  serviceTier?: string;
   systemInstruction?: Record<string, unknown>;
   tools?: Array<Record<string, unknown>>;
   toolConfig?: Record<string, unknown>;

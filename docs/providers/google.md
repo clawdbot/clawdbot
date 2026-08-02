@@ -467,6 +467,35 @@ roundtrip; pass `--openai-audio-cycles 3` for a short repeated lifecycle soak.
 
   </Accordion>
 
+  <Accordion title="Gemini service tier (Flex / Priority)">
+    For direct Gemini API runs (`api: "google-generative-ai"`), OpenClaw maps a
+    configured `serviceTier` (or `service_tier`) param to the top-level
+    `serviceTier` request field.
+
+    - Accepted values: `FLEX`, `PRIORITY`, `STANDARD` (case-insensitive).
+    - Configure per-model or global params with either `serviceTier` or
+      `service_tier`; within the same scope, `serviceTier` wins.
+    - Vertex (`api: "google-vertex"`) ignores a request-body service tier, so
+      the param is only applied to direct Gemini API requests.
+
+    ```json5
+    {
+      agents: {
+        defaults: {
+          models: {
+            "google/gemini-2.5-pro": {
+              params: {
+                serviceTier: "FLEX",
+              },
+            },
+          },
+        },
+      },
+    }
+    ```
+
+  </Accordion>
+
   <Accordion title="Gemini CLI usage notes">
     The optional `google-gemini-cli` runtime uses Gemini CLI `stream-json`
     output by default and normalizes usage from the final `stats` payload.
