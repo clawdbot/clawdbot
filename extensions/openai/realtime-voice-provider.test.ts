@@ -1673,6 +1673,50 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     bridge.close();
   });
 
+  it("fails terminally when the readiness callback throws", async () => {
+    vi.useFakeTimers();
+    const readyError = new Error("readiness callback failed");
+    const onClose = vi.fn();
+    const onError = vi.fn();
+    const onReady = vi.fn(() => {
+      throw readyError;
+    });
+    const bridge = createNativeBridge({ onClose, onError, onReady });
+    const { connecting, socket } = beginBridgeConnection(bridge);
+    let connectError: unknown;
+    const observedConnect = connecting.catch((error: unknown) => {
+      connectError = error;
+    });
+
+    openSocket(socket);
+    bridge.sendAudio(Buffer.from("queued-before-ready"));
+    emitSessionUpdated(socket);
+    await vi.advanceTimersByTimeAsync(0);
+    const immediateConnectError = connectError;
+
+    bridge.close();
+    await observedConnect;
+
+    expect(immediateConnectError).toBe(readyError);
+    expect(onReady).toHaveBeenCalledOnce();
+    expect(onError).toHaveBeenCalledOnce();
+    expect(onError).toHaveBeenCalledWith(readyError);
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(onClose).toHaveBeenCalledWith("error");
+    expect(socket.closed).toBe(true);
+    expect(bridge.isConnected()).toBe(false);
+    expect(
+      parseSent(socket).filter((event) => event.type === "input_audio_buffer.append"),
+    ).toHaveLength(0);
+
+    emitSessionUpdated(socket);
+    await expect(bridge.connect()).rejects.toBe(readyError);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(onReady).toHaveBeenCalledOnce();
+    expect(onError).toHaveBeenCalledOnce();
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
   it("suppresses auto responses before draining queued initial greeting audio", async () => {
     const bridgeRef: { current?: RealtimeVoiceBridge } = {};
     const onReady = vi.fn(() => {
@@ -1763,12 +1807,14 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     vi.useFakeTimers();
     const onError = vi.fn();
     const onEvent = vi.fn();
-    const bridge = createNativeBridge({ onError, onEvent });
+    const onReady = vi.fn();
+    const bridge = createNativeBridge({ onError, onEvent, onReady });
     const { connecting, socket: firstSocket } = beginBridgeConnection(bridge);
 
     openSocket(firstSocket);
     emitSessionUpdated(firstSocket);
     await connecting;
+    expect(onReady).toHaveBeenCalledOnce();
 
     firstSocket.emit(
       "message",
@@ -1814,8 +1860,70 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       }),
     );
     expect(bridge.isConnected()).toBe(true);
+    expect(onReady).toHaveBeenCalledOnce();
 
     bridge.close();
+  });
+
+  it("clears canceled rotation metadata before an explicit reconnect", async () => {
+    vi.useFakeTimers();
+    const onClose = vi.fn();
+    const onError = vi.fn();
+    const onEvent = vi.fn();
+    const onReady = vi.fn();
+    const bridge = createNativeBridge({ onClose, onError, onEvent, onReady });
+    const { connecting, socket: firstSocket } = beginBridgeConnection(bridge);
+
+    firstSocket.deferClose = true;
+    openSocket(firstSocket);
+    emitSessionUpdated(firstSocket);
+    await connecting;
+    expect(onReady).toHaveBeenCalledOnce();
+
+    emitServerEvent(firstSocket, {
+      type: "error",
+      error: { message: "Your session hit the maximum duration of 60 minutes." },
+    });
+    expect(firstSocket.closed).toBe(true);
+
+    bridge.close();
+    bridge.close();
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(onClose).toHaveBeenCalledWith("completed");
+
+    const { connecting: reconnecting, socket: secondSocket } = beginBridgeConnection(bridge, 1);
+    firstSocket.emitDeferredClose();
+    openSocket(secondSocket);
+    emitSessionUpdated(secondSocket);
+    await reconnecting;
+
+    expect(onReady).toHaveBeenCalledTimes(2);
+    expect(onEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: "session.rotation.ready" }),
+    );
+    expect(onError).not.toHaveBeenCalled();
+
+    secondSocket.readyState = FakeWebSocket.CLOSED;
+    secondSocket.emit("close", 1006, Buffer.from("ordinary drop"));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(onEvent).toHaveBeenCalledWith({
+      direction: "client",
+      type: "session.reconnect.scheduled",
+      detail: "reason=websocket-close attempt=1 delayMs=1000",
+    });
+    expect(onEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "session.reconnect.scheduled",
+        detail: expect.stringContaining("reason=max-duration"),
+      }),
+    );
+
+    bridge.close();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(onClose).toHaveBeenCalledTimes(2);
+    expect(onClose).toHaveBeenLastCalledWith("completed");
   });
 
   it("cancels a pending reconnect and allows a later explicit connect", async () => {

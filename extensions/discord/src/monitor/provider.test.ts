@@ -1172,8 +1172,12 @@ describe("monitorDiscordProvider", () => {
       setStatus,
     });
 
-    const statuses = setStatus.mock.calls.map((call) => call[0] as { connected?: boolean });
-    expect(statuses.some((status) => status.connected === true)).toBe(true);
+    const statuses = setStatus.mock.calls.map(
+      (call) => call[0] as { connected?: boolean; lifecycle?: string },
+    );
+    expect(
+      statuses.some((status) => status.connected === true && status.lifecycle === "ready"),
+    ).toBe(true);
     expect(statuses.some((status) => status.connected === false)).toBe(true);
   });
 

@@ -115,6 +115,21 @@ describe("Reef conversation directory", () => {
   });
 });
 
+describe("Reef channel status", () => {
+  it("preserves the channel-authored lifecycle in account snapshots", async () => {
+    const cfg = { channels: { reef: { handle: "clawd" } } };
+    const account = reefPlugin.config.resolveAccount(cfg);
+
+    const snapshot = await reefPlugin.status?.buildAccountSnapshot?.({
+      account,
+      cfg,
+      runtime: { accountId: "default", lifecycle: "recovering" },
+    });
+
+    expect(snapshot).toMatchObject({ lifecycle: "recovering" });
+  });
+});
+
 describe("Reef channel lifecycle", () => {
   function hangingInbox() {
     const seen: AbortSignal[] = [];

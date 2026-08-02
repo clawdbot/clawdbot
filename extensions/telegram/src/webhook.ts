@@ -35,7 +35,7 @@ import { resolveTelegramAllowedUpdates } from "./allowed-updates.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { createTelegramBot } from "./bot.js";
 import { resolveTelegramTransport } from "./fetch.js";
-import { isRetryableTelegramApiError } from "./network-errors.js";
+import { isRetryableTelegramApiError, isTelegramAuthenticationError } from "./network-errors.js";
 import { createTelegramTransportIngressMonitor } from "./telegram-ingress-drain-factory.js";
 import {
   resolveTelegramIngressSpoolDir,
@@ -130,6 +130,7 @@ async function initializeTelegramWebhookBotOnce(params: {
 async function initializeTelegramWebhookBot(params: {
   abortSignal?: AbortSignal;
   bot: ReturnType<typeof createTelegramBot>;
+  onRetry: () => void;
   retryPolicy: BackoffPolicy;
   runtime: RuntimeEnv;
 }) {
@@ -150,6 +151,7 @@ async function initializeTelegramWebhookBot(params: {
         throw err;
       }
       attempt += 1;
+      params.onRetry();
       const delayMs = computeBackoff(params.retryPolicy, attempt);
       params.runtime.log?.(
         `telegram getMe retry ${attempt} scheduled in ${formatDurationPrecise(delayMs)}`,
@@ -362,9 +364,16 @@ export async function startTelegramWebhook(opts: {
       bot,
       runtime,
       abortSignal: opts.abortSignal,
+      onRetry: () => status.noteWebhookRecovery(),
       retryPolicy: webhookRegistrationRetryPolicy,
     });
   } catch (err) {
+    if (!opts.abortSignal?.aborted) {
+      status.noteWebhookRegistrationFailure(
+        formatErrorMessage(err),
+        isTelegramAuthenticationError(err) ? "blocked" : undefined,
+      );
+    }
     botAbortController.abort();
     await bot.stop();
     await closeTransportOnce();
@@ -584,7 +593,14 @@ export async function startTelegramWebhook(opts: {
           }),
       });
     } catch (err) {
-      status.noteWebhookRegistrationFailure(formatErrorMessage(err));
+      status.noteWebhookRegistrationFailure(
+        formatErrorMessage(err),
+        isTelegramAuthenticationError(err)
+          ? "blocked"
+          : isRetryableTelegramApiError(err, { context: "webhook" })
+            ? "recovering"
+            : undefined,
+      );
       throw err;
     }
     if (shutDown) {

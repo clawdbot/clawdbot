@@ -1,4 +1,5 @@
 import { mergeAllowlist, summarizeMapping } from "openclaw/plugin-sdk/allow-from";
+import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import {
   createChannelInboundEnvelopeBuilder,
   createChannelPartialDeliveryError,
@@ -67,7 +68,11 @@ type ZalouserMonitorOptions = {
   config: OpenClawConfig;
   runtime: RuntimeEnv;
   abortSignal: AbortSignal;
-  statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
+  statusSink?: (patch: {
+    lastInboundAt?: number;
+    lastOutboundAt?: number;
+    lifecycle?: ChannelAccountSnapshot["lifecycle"];
+  }) => void;
   ingressQueue?: Parameters<typeof createZalouserIngressMonitor>[0]["queue"];
 };
 
@@ -958,6 +963,8 @@ export async function monitorZalouserProvider(
   if (stopped) {
     listenerStop();
     listenerStop = null;
+  } else if (!abortSignal.aborted) {
+    statusSink?.({ lifecycle: "ready" });
   }
 
   if (abortSignal.aborted) {

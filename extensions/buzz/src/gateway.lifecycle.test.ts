@@ -165,6 +165,16 @@ describe("Buzz gateway lifecycle", () => {
 
     await vi.waitFor(() => expect(gatewayMocks.startBuzzBus).toHaveBeenCalledOnce());
     expect(gatewayMocks.startBuzzBus.mock.calls[0]?.[0].profileName).toBe("Molt");
+    expect(setStatus).toHaveBeenCalledWith({
+      accountId: account.accountId,
+      running: true,
+      lifecycle: "ready",
+      configured: true,
+      enabled: account.enabled,
+      baseUrl: account.relayUrl,
+      publicKey: BOT_PUBLIC_KEY,
+      lastError: null,
+    });
     gatewayMocks.onFatalError?.(new Error("relay failed"));
 
     await vi.waitFor(() => expect(gatewayMocks.startBuzzBus).toHaveBeenCalledTimes(2), {
@@ -174,6 +184,7 @@ describe("Buzz gateway lifecycle", () => {
     expect(setStatus).toHaveBeenCalledWith({
       accountId: account.accountId,
       running: false,
+      lifecycle: "recovering",
       lastError: "relay failed",
     });
 
