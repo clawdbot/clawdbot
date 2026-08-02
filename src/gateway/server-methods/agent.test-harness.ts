@@ -213,7 +213,7 @@ vi.mock("../../infra/agent-events.js", () => ({
     generation === mocks.lifecycleGeneration,
   registerAgentEventLifecycleRotationHandler: vi.fn(),
   registerAgentRunContext: mocks.registerAgentRunContext,
-  onAgentEvent: vi.fn(),
+  onAgentEvent: vi.fn(() => () => undefined),
 }));
 
 vi.mock("../../agents/subagent-registry-read.js", () => ({

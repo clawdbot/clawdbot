@@ -2,7 +2,15 @@
 import type { TaskDeliveryState, TaskRecord } from "./task-registry.types.js";
 
 /** Process-local indexes backing task lookup, owner access, and pending delivery scans. */
+type TaskRegistryAgentEventListenerState =
+  | { status: "idle" }
+  | { status: "starting" }
+  | { status: "active"; stop: () => void };
+
 type TaskRegistryProcessState = {
+  // Listener ownership follows the global maps so module reloads cannot attach
+  // duplicate consumers that mutate the same task records twice.
+  agentEventListener: TaskRegistryAgentEventListenerState;
   tasks: Map<string, TaskRecord>;
   taskDeliveryStates: Map<string, TaskDeliveryState>;
   taskIdsByRunId: Map<string, Set<string>>;
@@ -20,6 +28,7 @@ export function getTaskRegistryProcessState(): TaskRegistryProcessState {
     [TASK_REGISTRY_PROCESS_STATE_KEY]?: TaskRegistryProcessState;
   };
   globalState[TASK_REGISTRY_PROCESS_STATE_KEY] ??= {
+    agentEventListener: { status: "idle" },
     tasks: new Map<string, TaskRecord>(),
     taskDeliveryStates: new Map<string, TaskDeliveryState>(),
     taskIdsByRunId: new Map<string, Set<string>>(),
