@@ -121,8 +121,8 @@ function createStandardMediaPlugins(
 }
 
 function createImageAndPdfPlugins(): [PluginManifestRecord, PluginManifestRecord] {
-  const [imagePlugin, , , mediaPlugin] = createStandardMediaPlugins("anthropic");
-  return [imagePlugin, mediaPlugin];
+  const plugins = createStandardMediaPlugins("anthropic");
+  return [plugins[0], plugins[3]];
 }
 
 function createComfyPlugin(
