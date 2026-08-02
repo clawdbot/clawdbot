@@ -257,6 +257,58 @@ describe("runDoctorConfigPreflight state migration", () => {
     expect(readConfigFileSnapshot).toHaveBeenCalledWith(expect.objectContaining({ measure }));
   });
 
+  it("measures doctor-owned migration stages", async () => {
+    const measuredStages: string[] = [];
+    const measure: ConfigSnapshotReadMeasure = async (name, run) => {
+      measuredStages.push(name);
+      return await run();
+    };
+
+    await runDoctorConfigPreflight({
+      migrateState: true,
+      migrateLegacyConfig: false,
+      invalidConfigNote: false,
+      measure,
+    });
+
+    expect(measuredStages).toEqual([
+      "doctor.config-preflight.state-migrations-import",
+      "doctor.config-preflight.state-dir-migrations",
+      "doctor.config-preflight.config-snapshot",
+      "doctor.config-preflight.cron-repair-import",
+      "doctor.config-preflight.cron-repair",
+      "doctor.config-preflight.legacy-state-migrations",
+    ]);
+  });
+
+  it("measures current-checkpoint plugin verification stages", async () => {
+    const measuredStages: string[] = [];
+    const measure: ConfigSnapshotReadMeasure = async (name, run) => {
+      measuredStages.push(name);
+      return await run();
+    };
+    needsStartupMigrationCheckpoint.mockReturnValue(false);
+
+    await runDoctorConfigPreflight({
+      migrateState: true,
+      migrateLegacyConfig: false,
+      invalidConfigNote: false,
+      requireStartupMigrationCheckpoint: true,
+      measure,
+    });
+
+    expect(measuredStages).toEqual([
+      "doctor.config-preflight.startup-checkpoint-import",
+      "doctor.config-preflight.pristine-state-plan-import",
+      "doctor.config-preflight.pristine-state-plan",
+      "doctor.config-preflight.config-snapshot",
+      "doctor.config-preflight.plugin-plan-import",
+      "doctor.config-preflight.plugin-plan",
+      "doctor.config-preflight.plugin-payload-verification-import",
+      "doctor.config-preflight.plugin-payload-verification",
+    ]);
+  });
+
   it("runs the startup guard immediately before the first state mutation", async () => {
     const beforeStateMigrations = vi.fn<(_snapshot?: unknown) => Promise<boolean>>(
       async () => true,
