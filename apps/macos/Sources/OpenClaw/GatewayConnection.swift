@@ -1418,14 +1418,6 @@ extension GatewayConnection {
 
     // MARK: - Health
 
-    func healthSnapshot(timeoutMs: Double? = nil) async throws -> HealthSnapshot {
-        let data = try await requestRaw(method: .health, timeoutMs: timeoutMs)
-        if let snap = decodeHealthSnapshot(from: data) {
-            return snap
-        }
-        throw GatewayDecodingError(method: Method.health.rawValue, message: "failed to decode health snapshot")
-    }
-
     func healthOK(timeoutMs: Int = 8000) async throws -> Bool {
         let data = try await requestRaw(method: .health, timeoutMs: Double(timeoutMs))
         return (try? self.decoder.decode(OpenClawGatewayHealthOK.self, from: data))?.ok ?? true
