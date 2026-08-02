@@ -1566,14 +1566,14 @@ describe("buildFailoverRemediationHint", () => {
     );
   });
 
-  it("returns a hint for auth_permanent as well", () => {
+  it("routes Gemini CLI auth failures to supported recovery paths", () => {
     const err = new FailoverError("revoked", {
       reason: "auth_permanent",
       provider: "google-gemini-cli",
       model: "gemini-3.1-pro-preview",
     });
     expect(buildFailoverRemediationHint(err)).toBe(
-      "Re-authenticate with: openclaw models auth login --provider 'google-gemini-cli' --force",
+      "Authenticate in Gemini CLI directly, or configure a supported Google API key with: openclaw configure",
     );
   });
 
