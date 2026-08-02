@@ -486,6 +486,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     exact: true,
     policy: {
       bypassConfigGuard: true,
+      routeConfigGuard: "always",
       loadPlugins: "never",
       networkProxy: ({ argv }) => (hasFlag(argv, "--probe") ? "default" : "bypass"),
     },

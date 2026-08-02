@@ -97,6 +97,7 @@ describe("command-path-policy", () => {
     expect(channelsStatusPolicy).toEqual({
       ...DEFAULT_EXPECTED_POLICY,
       bypassConfigGuard: true,
+      routeConfigGuard: "always",
       loadPlugins: "never",
       pluginRegistry: { scope: "configured-channels" },
       networkProxy: channelsStatusPolicy.networkProxy,
