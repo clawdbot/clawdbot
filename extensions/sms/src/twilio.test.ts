@@ -118,6 +118,92 @@ describe("Twilio SMS helpers", () => {
       body: "hello there",
       messageSid: "SM123",
       accountSid: "",
+      media: [],
+    });
+  });
+
+  it("parses media-only Twilio MMS callbacks in provider order", async () => {
+    const form = await readTestTwilioForm(
+      [
+        "From=%2B15551234567",
+        "To=%2B15557654321",
+        "Body=",
+        "MessageSid=MM123",
+        "NumMedia=2",
+        "MediaUrl0=https%3A%2F%2Fapi.twilio.com%2Fmedia%2Ffirst",
+        "MediaContentType0=image%2Fjpeg",
+        "MediaUrl1=https%3A%2F%2Fapi.twilio.com%2Fmedia%2Fsecond",
+        "MediaContentType1=video%2Fmp4",
+      ].join("&"),
+    );
+
+    expect(buildTwilioInboundMessage(form)).toEqual({
+      from: "+15551234567",
+      to: "+15557654321",
+      body: "",
+      messageSid: "MM123",
+      accountSid: "",
+      media: [
+        { url: "https://api.twilio.com/media/first", contentType: "image/jpeg" },
+        { url: "https://api.twilio.com/media/second", contentType: "video/mp4" },
+      ],
+    });
+  });
+
+  it("preserves the signed Messaging Service identity on inbound messages", () => {
+    expect(
+      buildTwilioInboundMessage({
+        AccountSid: "AC123",
+        MessagingServiceSid: "MG123",
+        From: "+15551234567",
+        To: "+15557654321",
+        Body: "hello",
+        MessageSid: "SM123",
+      }),
+    ).toMatchObject({
+      accountSid: "AC123",
+      messagingServiceSid: "MG123",
+      messageSid: "SM123",
+    });
+  });
+
+  it("rejects malformed counts and marks missing Twilio MMS media as unavailable", () => {
+    const base = {
+      From: "+15551234567",
+      To: "+15557654321",
+      Body: "",
+      MessageSid: "MM123",
+      MediaUrl0: "https://api.twilio.com/media/first",
+    };
+    expect(buildTwilioInboundMessage({ ...base, NumMedia: "not-a-number" })).toBeNull();
+    expect(buildTwilioInboundMessage({ ...base, NumMedia: "1", MediaUrl0: "" })).toMatchObject({
+      media: [],
+      unavailableMediaCount: 1,
+    });
+  });
+
+  it("bounds inbound downloads without discarding a signed message with more media", () => {
+    const mediaFields = Object.fromEntries(
+      Array.from({ length: 11 }, (_value, index) => [
+        `MediaUrl${index}`,
+        `https://api.twilio.com/media/${index}`,
+      ]),
+    );
+
+    expect(
+      buildTwilioInboundMessage({
+        From: "+15551234567",
+        To: "+15557654321",
+        Body: "",
+        MessageSid: "MM123",
+        NumMedia: "11",
+        ...mediaFields,
+      }),
+    ).toMatchObject({
+      media: Array.from({ length: 10 }, (_value, index) => ({
+        url: `https://api.twilio.com/media/${index}`,
+      })),
+      unavailableMediaCount: 1,
     });
   });
 
@@ -255,6 +341,110 @@ describe("Twilio SMS helpers", () => {
     expect(body.get("From")).toBe("+15557654321");
     expect(body.get("To")).toBe("+15551234567");
     expect(body.get("Body")).toBe("hello");
+  });
+
+  it("marks dispatch immediately before the Twilio POST", async () => {
+    const events: string[] = [];
+    const fetchImpl = vi.fn<typeof fetch>(async () => {
+      events.push("post");
+      return new Response(JSON.stringify({ sid: "SM-dispatched" }), {
+        status: 201,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    const onPlatformSendDispatch = vi.fn(async () => {
+      events.push("dispatch");
+    });
+
+    await sendSmsViaTwilio({
+      account: createAccount(),
+      to: "+15551234567",
+      text: "hello",
+      onPlatformSendDispatch,
+      fetchImpl,
+    });
+
+    expect(events).toEqual(["dispatch", "post"]);
+    expect(onPlatformSendDispatch).toHaveBeenCalledOnce();
+  });
+
+  it("does not mark dispatch for an invalid Twilio send", async () => {
+    const onPlatformSendDispatch = vi.fn(async () => {});
+
+    await expect(
+      sendSmsViaTwilio({
+        account: createAccount(),
+        to: "+15551234567",
+        onPlatformSendDispatch,
+      }),
+    ).rejects.toThrow("Twilio SMS/MMS send requires text or media.");
+
+    expect(onPlatformSendDispatch).not.toHaveBeenCalled();
+  });
+
+  it("sends MMS with repeated MediaUrl fields and no required text body", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(
+      async () =>
+        new Response(JSON.stringify({ sid: "MM456" }), {
+          status: 201,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+
+    await sendSmsViaTwilio({
+      account: createAccount(),
+      to: "+15551234567",
+      mediaUrls: [
+        "https://gateway.example.com/media/first",
+        "https://gateway.example.com/media/second",
+      ],
+      fetchImpl,
+    });
+
+    const body = readUrlEncodedRequestBody(fetchImpl.mock.calls[0]?.[1]);
+    expect(body.get("Body")).toBeNull();
+    expect(body.getAll("MediaUrl")).toEqual([
+      "https://gateway.example.com/media/first",
+      "https://gateway.example.com/media/second",
+    ]);
+  });
+
+  it("rejects outbound MMS requests above Twilio's media count limit", async () => {
+    await expect(
+      sendSmsViaTwilio({
+        account: createAccount(),
+        to: "+15551234567",
+        mediaUrls: Array.from({ length: 11 }, (_, index) => `https://example.com/${index}.jpg`),
+      }),
+    ).rejects.toThrow("Twilio MMS send supports at most 10 media URLs");
+  });
+
+  it("enforces Twilio's provider-owned Message Body limit", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(
+      async () =>
+        new Response(JSON.stringify({ sid: "SM1600" }), {
+          status: 201,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+
+    await expect(
+      sendSmsViaTwilio({
+        account: createAccount(),
+        to: "+15551234567",
+        text: "x".repeat(1600),
+        fetchImpl,
+      }),
+    ).resolves.toMatchObject({ sid: "SM1600" });
+    await expect(
+      sendSmsViaTwilio({
+        account: createAccount(),
+        to: "+15551234567",
+        text: "x".repeat(1601),
+        fetchImpl,
+      }),
+    ).rejects.toThrow("Twilio SMS/MMS Body supports at most 1600 characters");
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
   it("lists Twilio phone-number webhook settings", async () => {

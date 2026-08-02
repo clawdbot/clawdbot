@@ -309,15 +309,178 @@ describe("createSmsIngressSpool", () => {
     expect(reloadedDeliver).not.toHaveBeenCalled();
   });
 
+  it("dispatches callbacks bound to the configured Messaging Service", async () => {
+    const stateDir = await createStateDir();
+    const serviceAccount = {
+      ...account,
+      fromNumber: "",
+      messagingServiceSid: "MG123",
+    };
+    const deliver = vi.fn<SmsIngressDeliver>(async (_message, lifecycle) => {
+      await lifecycle.onAdopted();
+    });
+    const spool = createSmsIngressSpool({
+      cfg: {},
+      account: serviceAccount,
+      channelRuntime: {} as SmsChannelRuntime,
+      queue: createQueue(stateDir),
+      deliver,
+    });
+    disposers.push(spool.stop);
+
+    await spool.enqueue({
+      ...form("SM-service"),
+      MessagingServiceSid: "MG123",
+    });
+    await drainSpool(spool);
+
+    expect(deliver).toHaveBeenCalledWith(
+      expect.objectContaining({ messagingServiceSid: "MG123" }),
+      expect.any(Object),
+      expect.any(Number),
+    );
+  });
+
   it.each([
-    ["invalid payload", { MessageSid: "SM-invalid", From: "+15551234567" }],
-    ["account mismatch", { ...form("SM-account"), AccountSid: "AC-other" }],
-  ])("dead-letters a permanent %s failure", async (_label, rawForm) => {
+    {
+      name: "fromNumber-only RCS compatibility",
+      ingressAccount: account,
+      rawForm: {
+        ...form("SM-rcs-number"),
+        From: "rcs:+15551234567",
+        To: "rcs:example-agent",
+      },
+    },
+    {
+      name: "Messaging Service RCS identity",
+      ingressAccount: { ...account, fromNumber: "", messagingServiceSid: "MG123" },
+      rawForm: {
+        ...form("SM-rcs-service"),
+        From: "rcs:+15551234567",
+        To: "rcs:example-agent",
+        MessagingServiceSid: "MG123",
+      },
+    },
+  ])("preserves $name", async ({ ingressAccount, rawForm }) => {
+    const stateDir = await createStateDir();
+    const deliver = vi.fn<SmsIngressDeliver>(async (_message, lifecycle) => {
+      await lifecycle.onAdopted();
+    });
+    const spool = createSmsIngressSpool({
+      cfg: {},
+      account: ingressAccount,
+      channelRuntime: {} as SmsChannelRuntime,
+      queue: createQueue(stateDir),
+      deliver,
+    });
+    disposers.push(spool.stop);
+
+    await spool.enqueue(rawForm);
+    await drainSpool(spool);
+
+    expect(deliver).toHaveBeenCalledOnce();
+  });
+
+  it("preserves shipped RCS text while ignoring unsupported media fields", async () => {
+    const stateDir = await createStateDir();
+    const deliver = vi.fn<SmsIngressDeliver>(async (_message, lifecycle) => {
+      await lifecycle.onAdopted();
+    });
+    const spool = createSmsIngressSpool({
+      cfg: {},
+      account,
+      channelRuntime: {} as SmsChannelRuntime,
+      queue: createQueue(stateDir),
+      deliver,
+    });
+    disposers.push(spool.stop);
+
+    await spool.enqueue({
+      ...form("SM-rcs-text-media"),
+      Body: "keep this RCS text",
+      From: "rcs:+15551234567",
+      To: "rcs:example-agent",
+      NumMedia: "1",
+      MediaUrl0: "https://api.twilio.com/media/photo",
+    });
+    await drainSpool(spool);
+
+    expect(deliver).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: "keep this RCS text",
+        media: [],
+      }),
+      expect.any(Object),
+      expect.any(Number),
+    );
+  });
+
+  it.each([
+    {
+      name: "invalid payload",
+      ingressAccount: account,
+      rawForm: { MessageSid: "SM-invalid", From: "+15551234567" },
+    },
+    {
+      name: "missing account",
+      ingressAccount: account,
+      rawForm: { ...form("SM-account-missing"), AccountSid: "" },
+    },
+    {
+      name: "account mismatch",
+      ingressAccount: account,
+      rawForm: { ...form("SM-account"), AccountSid: "AC-other" },
+    },
+    {
+      name: "recipient mismatch",
+      ingressAccount: account,
+      rawForm: {
+        ...form("MM-recipient"),
+        To: "+15550000000",
+        NumMedia: "1",
+        MediaUrl0: "https://api.twilio.com/media/photo",
+      },
+    },
+    {
+      name: "Messaging Service mismatch",
+      ingressAccount: { ...account, fromNumber: "", messagingServiceSid: "MG123" },
+      rawForm: {
+        ...form("SM-service-mismatch"),
+        MessagingServiceSid: "MG-other",
+      },
+    },
+    {
+      name: "missing Messaging Service",
+      ingressAccount: { ...account, fromNumber: "", messagingServiceSid: "MG123" },
+      rawForm: form("SM-service-missing"),
+    },
+    {
+      name: "fromNumber precedence",
+      ingressAccount: { ...account, messagingServiceSid: "MG123" },
+      rawForm: {
+        ...form("SM-number-precedence"),
+        To: "+15550000000",
+        MessagingServiceSid: "MG123",
+      },
+    },
+    {
+      name: "RCS media-only",
+      ingressAccount: account,
+      rawForm: {
+        ...form("MM-rcs-media"),
+        Body: "",
+        From: "rcs:+15551234567",
+        To: "rcs:example-agent",
+        NumMedia: "1",
+        MediaUrl0: "https://api.twilio.com/media/photo",
+      },
+    },
+  ])("dead-letters a permanent $name failure", async ({ ingressAccount, rawForm }) => {
     const stateDir = await createStateDir();
     const deliver = vi.fn<SmsIngressDeliver>(async () => undefined);
     const spool = createSmsIngressSpool({
       cfg: {},
-      account,
+      account: ingressAccount,
       channelRuntime: {} as SmsChannelRuntime,
       queue: createQueue(stateDir),
       deliver,

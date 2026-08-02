@@ -74,12 +74,15 @@ export type HostedOutboundMediaChunkRecord = {
   dataBase64: string;
 };
 
+export type HostedOutboundMediaOverflowPolicy = "evict-oldest" | "reject-new";
+
 export type HostedOutboundMediaStore = {
   prepareUrl: (params: {
     mediaUrl: string;
     routePath: string;
     publicBaseUrl: string;
     maxBytes: number;
+    mediaAccess?: OutboundMediaAccess;
     proxyUrl?: string;
   }) => Promise<string>;
   read: (id: string, nowMs?: number) => Promise<HostedOutboundMediaEntry | null>;
@@ -99,6 +102,7 @@ export type CreateHostedOutboundMediaStoreOptions = {
   maxEntries?: number;
   maxChunkRows?: number;
   chunkRowsPerEntryBudget?: number;
+  overflowPolicy?: HostedOutboundMediaOverflowPolicy;
 };
 
 const DEFAULT_HOSTED_OUTBOUND_MEDIA_RAW_CHUNK_BYTES = 36 * 1024;
@@ -120,6 +124,16 @@ function buildHostedOutboundMediaMetaKey(id: string): string {
 
 function buildHostedOutboundMediaChunkKey(id: string, index: number): string {
   return `media:${id}:chunk:${String(index).padStart(4, "0")}`;
+}
+
+function parseHostedOutboundMediaMetaKey(key: string): string | undefined {
+  const prefix = "media:";
+  const suffix = ":meta";
+  if (!key.startsWith(prefix) || !key.endsWith(suffix)) {
+    return undefined;
+  }
+  const id = key.slice(prefix.length, -suffix.length);
+  return id || undefined;
 }
 
 function resolveHostedOutboundMediaMetadataTtlMs(ttlMs: number): number {
@@ -187,14 +201,28 @@ export function createHostedOutboundMediaStore(
   const chunkRowsPerEntryBudget =
     options.chunkRowsPerEntryBudget ?? DEFAULT_HOSTED_OUTBOUND_MEDIA_CHUNK_ROWS_PER_ENTRY_BUDGET;
   const maxChunkRows = options.maxChunkRows ?? maxEntries * chunkRowsPerEntryBudget;
+  const overflowPolicy = options.overflowPolicy ?? "evict-oldest";
   if (!Number.isSafeInteger(maxEntries) || maxEntries < 1) {
     throw new Error("hosted outbound media maxEntries must be a positive integer");
   }
   if (!Number.isSafeInteger(maxChunkRows) || maxChunkRows < 1) {
     throw new Error("hosted outbound media maxChunkRows must be a positive integer");
   }
+  if (overflowPolicy !== "evict-oldest" && overflowPolicy !== "reject-new") {
+    throw new Error("hosted outbound media overflowPolicy must be evict-oldest or reject-new");
+  }
   const createId = options.createId ?? createHostedOutboundMediaId;
   const createToken = options.createToken ?? createHostedOutboundMediaToken;
+  let capacityMutation = Promise.resolve();
+
+  async function withCapacityMutation<T>(operation: () => Promise<T>): Promise<T> {
+    const result = capacityMutation.then(operation, operation);
+    capacityMutation = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return await result;
+  }
 
   async function deleteEntry(id: string): Promise<void> {
     await deleteHostedOutboundMediaRows(id, options.metadataStore, options.chunkStore);
@@ -204,35 +232,75 @@ export function createHostedOutboundMediaStore(
     await deleteHostedOutboundMediaRows(id, options.metadataStore, options.chunkStore, chunkCount);
   }
 
+  async function deleteStoredRow(
+    row: Awaited<ReturnType<typeof options.metadataStore.entries>>[number],
+  ): Promise<void> {
+    const id = parseHostedOutboundMediaMetaKey(row.key);
+    await options.metadataStore.delete(row.key);
+    if (
+      !id ||
+      !Number.isSafeInteger(row.value.chunkCount) ||
+      row.value.chunkCount < 1 ||
+      row.value.chunkCount > maxChunkRows
+    ) {
+      return;
+    }
+    for (let index = 0; index < row.value.chunkCount; index += 1) {
+      await options.chunkStore.delete(buildHostedOutboundMediaChunkKey(id, index));
+    }
+  }
+
   async function cleanupExpired(nowMs = Date.now()): Promise<void> {
     for (const row of await options.metadataStore.entries()) {
       if (!isFutureHostedOutboundMediaExpiry(row.value.expiresAt, nowMs)) {
-        await deleteEntry(row.value.id);
+        await deleteStoredRow(row);
       }
     }
   }
 
-  async function pruneForCapacity(incomingChunkCount: number): Promise<void> {
+  async function pruneForCapacity(incomingChunkCount: number, nowMs = Date.now()): Promise<void> {
     const rows = await options.metadataStore.entries();
-    const validRows = rows.filter(
-      (row) => Number.isSafeInteger(row.value.chunkCount) && row.value.chunkCount > 0,
-    );
+    const validRows = rows.filter((row) => {
+      const id = parseHostedOutboundMediaMetaKey(row.key);
+      return (
+        id !== undefined &&
+        row.value.id === id &&
+        Number.isSafeInteger(row.value.chunkCount) &&
+        row.value.chunkCount > 0 &&
+        row.value.chunkCount <= maxChunkRows &&
+        isFutureHostedOutboundMediaExpiry(row.value.expiresAt, nowMs)
+      );
+    });
     const validKeys = new Set(validRows.map((row) => row.key));
     const orderedRows = validRows.toSorted(
       (a, b) => a.createdAt - b.createdAt || a.key.localeCompare(b.key),
     );
     const invalidRows = rows.filter((row) => !validKeys.has(row.key));
     for (const row of invalidRows) {
-      await deleteEntry(row.value.id);
+      await deleteStoredRow(row);
     }
 
     let entryCount = orderedRows.length;
     let chunkCount = orderedRows.reduce((total, row) => total + row.value.chunkCount, 0);
+    if (
+      overflowPolicy === "reject-new" &&
+      (entryCount >= maxEntries || chunkCount + incomingChunkCount > maxChunkRows)
+    ) {
+      throw new Error(
+        `hosted outbound media capacity is full (${entryCount}/${maxEntries} entries, ${
+          chunkCount + incomingChunkCount
+        }/${maxChunkRows} chunk rows)`,
+      );
+    }
     for (const row of orderedRows) {
       if (entryCount < maxEntries && chunkCount + incomingChunkCount <= maxChunkRows) {
         break;
       }
-      await deleteEntry(row.value.id);
+      const id = parseHostedOutboundMediaMetaKey(row.key);
+      if (!id) {
+        continue;
+      }
+      await deleteEntry(id);
       entryCount -= 1;
       chunkCount -= row.value.chunkCount;
     }
@@ -240,13 +308,13 @@ export function createHostedOutboundMediaStore(
 
   return {
     async prepareUrl(params) {
-      await cleanupExpired();
       const expiresAt = options.resolveExpiresAtMs(options.ttlMs);
       if (expiresAt === undefined) {
         throw new Error("hosted outbound media expiry could not be resolved");
       }
       const media = await loadOutboundMediaFromUrl(params.mediaUrl, {
         maxBytes: params.maxBytes,
+        mediaAccess: params.mediaAccess,
         ...(params.proxyUrl ? { proxyUrl: params.proxyUrl } : {}),
       });
       const id = createId();
@@ -258,38 +326,42 @@ export function createHostedOutboundMediaStore(
           `hosted outbound media exceeds SQLite chunk row limit (${chunkCount}/${maxChunkRows})`,
         );
       }
-      await pruneForCapacity(chunkCount);
-      try {
-        for (let index = 0; index < chunkCount; index += 1) {
-          const chunk = media.buffer.subarray(index * rawChunkBytes, (index + 1) * rawChunkBytes);
-          await options.chunkStore.register(
-            buildHostedOutboundMediaChunkKey(id, index),
-            {
+      // Capacity check and writes stay serialized per helper instance. Cross-process
+      // callers rely on reject-new backing stores so a race cannot evict live URLs.
+      return await withCapacityMutation(async () => {
+        await pruneForCapacity(chunkCount);
+        try {
+          for (let index = 0; index < chunkCount; index += 1) {
+            const chunk = media.buffer.subarray(index * rawChunkBytes, (index + 1) * rawChunkBytes);
+            await options.chunkStore.register(
+              buildHostedOutboundMediaChunkKey(id, index),
+              {
+                id,
+                index,
+                dataBase64: chunk.toString("base64"),
+              },
+              { ttlMs: options.ttlMs },
+            );
+          }
+          await options.metadataStore.register(
+            buildHostedOutboundMediaMetaKey(id),
+            createHostedOutboundMediaMetaRecord({
               id,
-              index,
-              dataBase64: chunk.toString("base64"),
-            },
-            { ttlMs: options.ttlMs },
+              routePath: params.routePath,
+              token,
+              contentType: media.contentType,
+              expiresAt,
+              chunkCount,
+              byteLength: media.buffer.byteLength,
+            }),
+            { ttlMs: metadataTtlMs },
           );
+        } catch (error) {
+          await deleteEntryRows(id, chunkCount);
+          throw error;
         }
-        await options.metadataStore.register(
-          buildHostedOutboundMediaMetaKey(id),
-          createHostedOutboundMediaMetaRecord({
-            id,
-            routePath: params.routePath,
-            token,
-            contentType: media.contentType,
-            expiresAt,
-            chunkCount,
-            byteLength: media.buffer.byteLength,
-          }),
-          { ttlMs: metadataTtlMs },
-        );
-      } catch (error) {
-        await deleteEntryRows(id, chunkCount);
-        throw error;
-      }
-      return `${params.publicBaseUrl}${params.routePath}${id}?token=${token}`;
+        return `${params.publicBaseUrl}${params.routePath}${id}?token=${token}`;
+      });
     },
     async read(id, nowMs = Date.now()) {
       const meta = await options.metadataStore.lookup(buildHostedOutboundMediaMetaKey(id));
