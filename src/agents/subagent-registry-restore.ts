@@ -119,7 +119,7 @@ export function createSubagentRegistryRestorer(config: {
             requesterTurnRunId,
             requesterYielded: entries.every((entry) => entry.requesterTurnYielded === true),
             acceptedSessionSpawns: entries.map((entry) => ({
-              runId: entry.runId,
+              runId: entry.taskRunId ?? entry.runId,
               childSessionKey: entry.childSessionKey,
             })),
           });

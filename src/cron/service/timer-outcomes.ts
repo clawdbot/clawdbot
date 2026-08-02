@@ -8,6 +8,10 @@ import { computeNextRunAtMs } from "../schedule.js";
 import { createCronStreamSourceIdentity } from "../stream-schedule.js";
 import type { CronJob, CronRunStatus } from "../types.js";
 import {
+  type DeferredAutoDisableNotifications,
+  maybeAutoDisableCronJobAfterRunFailure,
+} from "./auto-disable.js";
+import {
   failureNotificationDeliveryFromJobState,
   maybeEmitFailureAlert,
   resolveFailureAlert,
@@ -77,6 +81,7 @@ export function applyJobResult(
     scheduleOwnershipAtMs?: number;
     // Startup replay restores alert cooldown bookkeeping without redelivery.
     replayFailureAlertAtMs?: number;
+    deferredAutoDisableNotifications?: DeferredAutoDisableNotifications;
   },
 ): boolean {
   const previousScheduleState = {
@@ -292,6 +297,28 @@ export function applyJobResult(
       job.state.nextRunAtMs = previousScheduleState.nextRunAtMs;
       job.state.pacedNextRunAtMs = previousScheduleState.pacedNextRunAtMs;
       job.state.forcePreservedNextRunAtMs = previousScheduleState.nextRunAtMs;
+    } else if (
+      result.status === "error" &&
+      isJobEnabled(job) &&
+      maybeAutoDisableCronJobAfterRunFailure({
+        state,
+        job,
+        atMs: result.endedAt,
+        error: result.error ?? "unknown run failure",
+        deferredNotifications: opts?.deferredAutoDisableNotifications,
+      })
+    ) {
+      // Keep this after the ownership and force-preserve gates: those paths
+      // restore schedule state and would otherwise silently undo the disable.
+      state.deps.log.error(
+        {
+          jobId: job.id,
+          name: job.name,
+          consecutiveErrors: job.state.consecutiveErrors,
+          error: result.error,
+        },
+        "cron: auto-disabled job after consecutive run failures",
+      );
     } else if (result.status === "error" && isJobEnabled(job)) {
       const retryDecision = resolveTransientCronRetryDecision({
         cronConfig: state.deps.cronConfig,
@@ -315,7 +342,12 @@ export function applyJobResult(
             // If the schedule expression/timezone throws (croner edge cases),
             // record the schedule error (auto-disables after repeated failures)
             // and fall back to backoff-only schedule so the state update is not lost.
-            recordScheduleComputeError({ state, job, err });
+            recordScheduleComputeError({
+              state,
+              job,
+              err,
+              deferredAutoDisableNotifications: opts?.deferredAutoDisableNotifications,
+            });
           }
           normalNextComputed = true;
         }
@@ -407,7 +439,12 @@ export function applyJobResult(
         // If the schedule expression/timezone throws (croner edge cases),
         // record the schedule error (auto-disables after repeated failures)
         // so a persistent throw doesn't cause a MIN_REFIRE_GAP_MS hot loop.
-        recordScheduleComputeError({ state, job, err });
+        recordScheduleComputeError({
+          state,
+          job,
+          err,
+          deferredAutoDisableNotifications: opts?.deferredAutoDisableNotifications,
+        });
       }
       if (job.schedule.kind === "cron") {
         // Safety net: ensure the next fire is at least MIN_REFIRE_GAP_MS
@@ -518,6 +555,7 @@ export function applyTriggerNoFireResult(
   opts?: {
     scheduleMode?: "advance" | "force-preserve" | "stale-preserve";
     triggerOwnership?: CronTriggerOwnership;
+    deferredAutoDisableNotifications?: DeferredAutoDisableNotifications;
   },
 ): void {
   const previousNextRunAtMs = job.state.nextRunAtMs;
@@ -557,13 +595,19 @@ export function applyTriggerNoFireResult(
     job.state.nextRunAtMs =
       naturalNext === undefined ? undefined : Math.max(naturalNext, result.endedAt + floorMs);
   } catch (err) {
-    recordScheduleComputeError({ state, job, err });
+    recordScheduleComputeError({
+      state,
+      job,
+      err,
+      deferredAutoDisableNotifications: opts?.deferredAutoDisableNotifications,
+    });
   }
 }
 
 export function applyOutcomeToStoredJob(
   state: CronServiceState,
   result: TimedCronRunOutcome,
+  opts?: { deferredAutoDisableNotifications?: DeferredAutoDisableNotifications },
 ): CronJob | undefined {
   const store = state.store;
   if (!store) {
@@ -579,7 +623,7 @@ export function applyOutcomeToStoredJob(
     }
     // A run may finish after its job disappears; finalize the admitted job
     // snapshot so operator history survives without reviving the stored job.
-    applyJobResult(state, result.job, result);
+    applyJobResult(state, result.job, result, { scheduleOwnership: "stale" });
     emitJobFinished(state, result.job, result, result.startedAt);
     state.deps.log.info(
       { jobId: result.jobId, status: result.status },
@@ -613,6 +657,7 @@ export function applyOutcomeToStoredJob(
       {
         scheduleMode: scheduleOwnership === "stale" ? "stale-preserve" : "advance",
         triggerOwnership,
+        deferredAutoDisableNotifications: opts?.deferredAutoDisableNotifications,
       },
     );
     job.state.startupCatchupAtMs = undefined;
@@ -624,7 +669,10 @@ export function applyOutcomeToStoredJob(
     return undefined;
   }
 
-  const shouldDelete = applyJobResult(state, job, result, { scheduleOwnership });
+  const shouldDelete = applyJobResult(state, job, result, {
+    scheduleOwnership,
+    deferredAutoDisableNotifications: opts?.deferredAutoDisableNotifications,
+  });
   applyTriggerRunResult(job, result, { scheduleOwnership, triggerOwnership });
   applyScriptRunResult(job, result, { triggerOwnership });
   job.state.startupCatchupAtMs = undefined;

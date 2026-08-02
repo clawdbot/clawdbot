@@ -228,7 +228,7 @@ The filtering order is:
     - Each level can further restrict tools, but cannot grant back denied tools from earlier levels.
     - If `agents.entries.*.tools.sandbox.tools` is set, it replaces `tools.sandbox.tools` for that agent.
     - If `agents.entries.*.tools.profile` is set, it overrides `tools.profile` for that agent.
-    - Provider tool keys accept either `provider` (e.g. `google-antigravity`) or `provider/model` (e.g. `openai/gpt-5.4`).
+    - Provider tool keys accept either `provider` (e.g. `anthropic`) or `provider/model` (e.g. `openai/gpt-5.4`).
 
   </Accordion>
   <Accordion title="Empty allowlist behavior">

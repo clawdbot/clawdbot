@@ -709,6 +709,33 @@ describe("gateway server cron", () => {
     }
   });
 
+  test("returns INVALID_REQUEST for malformed cron scripts", async () => {
+    const { prevSkipCron } = await setupCronTestRun({
+      tempPrefix: "openclaw-gw-cron-script-syntax-",
+      cronEnabled: true,
+    });
+    const cronState = await createDirectCronState();
+
+    try {
+      const response = await directCronReq(cronState, "cron.add", {
+        name: "malformed script",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        wakeMode: "now",
+        payload: { kind: "script", script: "const x = ;" },
+      });
+
+      expect(response.ok).toBe(false);
+      expect(response.error?.code).toBe("INVALID_REQUEST");
+      expect(response.error?.message).toContain(
+        "cron script payload has a syntax error: Unexpected token (line 1, column 10)",
+      );
+    } finally {
+      await cleanupCronTestRun({ cronState, prevSkipCron });
+    }
+  });
+
   test("cron.add leaves legacy top-level array stores for doctor migration", async () => {
     const { prevSkipCron } = await setupCronTestRun({
       tempPrefix: "openclaw-gw-cron-legacy-array-",

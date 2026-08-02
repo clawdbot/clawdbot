@@ -524,355 +524,189 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     }
   });
 
-  it("keeps Codex direct source delivery message-tool-only when config is unset", async () => {
+  type HarnessDeliveryCase = {
+    name: string;
+    harnessId?: string;
+    supportsProvider?: string;
+    currentEntry: typeof sessionStoreMocks.currentEntry;
+    ctx: Partial<MsgContext>;
+    cfg: OpenClawConfig;
+    replyOptions?: GetReplyOptions;
+    expectedMode: "automatic" | "message_tool_only";
+    text: string;
+  };
+
+  async function runHarnessDeliveryCase(testCase: HarnessDeliveryCase) {
     setNoAbort();
+    const harnessId = testCase.harnessId ?? "codex";
     registerAgentHarness({
-      id: "codex",
-      label: "Codex",
+      id: harnessId,
+      label: harnessId === "codex" ? "Codex" : "Custom",
       deliveryDefaults: { visibleReplies: "message_tool" },
-      supports: () => ({ supported: true, priority: 100 }),
+      supports: (ctx) =>
+        !testCase.supportsProvider || ctx.provider === testCase.supportsProvider
+          ? { supported: true, priority: harnessId === "codex" ? 100 : 200 }
+          : { supported: false, reason: `${testCase.supportsProvider} provider only` },
       runAttempt: vi.fn(async () => ({}) as never),
     });
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      agentHarnessId: "codex",
-      sendPolicy: "allow",
-    };
+    sessionStoreMocks.currentEntry = structuredClone(testCase.currentEntry);
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      expect(opts?.sourceReplyDeliveryMode).toBe("message_tool_only");
-      return { text: "private final reply" } satisfies ReplyPayload;
+      expect(opts?.sourceReplyDeliveryMode).toBe(testCase.expectedMode);
+      return { text: testCase.text } satisfies ReplyPayload;
     });
 
     const result = await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        ChatType: "direct",
-        CommandSource: undefined,
-        SessionKey: "agent:main:main",
-      }),
-      cfg: emptyConfig,
+      ctx: buildTestCtx(testCase.ctx),
+      cfg: testCase.cfg,
       dispatcher,
+      replyOptions: testCase.replyOptions,
       replyResolver,
     });
 
     expect(replyResolver).toHaveBeenCalledTimes(1);
-    expect(result.queuedFinal).toBe(false);
-    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-  });
+    expect(result.queuedFinal).toBe(testCase.expectedMode === "automatic");
+    if (testCase.expectedMode === "automatic") {
+      expect(firstFinalReplyPayload(dispatcher)?.text).toBe(testCase.text);
+    } else {
+      expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
+      expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    }
+  }
 
-  it("keeps locked supervised Codex delivery defaults across outer model overrides", async () => {
-    setNoAbort();
-    registerAgentHarness({
-      id: "codex",
-      label: "Codex",
-      deliveryDefaults: { visibleReplies: "message_tool" },
-      supports: (ctx) =>
-        ctx.provider === "codex"
-          ? { supported: true, priority: 100 }
-          : { supported: false, reason: "codex provider only" },
-      runAttempt: vi.fn(async () => ({}) as never),
-    });
-    sessionStoreMocks.currentEntry = {
-      sessionId: "catalog-adopted-session",
-      updatedAt: 0,
-      agentHarnessId: "codex",
-      modelSelectionLocked: true,
-      pluginExtensions: {
-        codex: {
-          supervision: {
-            sourceThreadId: "019f-codex-thread",
-            modelLocked: true,
-          },
+  const directCtx = {
+    ChatType: "direct",
+    CommandSource: undefined,
+    SessionKey: "agent:main:main",
+  } satisfies Partial<MsgContext>;
+  const telegramDirectCtx = {
+    ...directCtx,
+    Provider: "telegram",
+    Surface: "telegram",
+    SessionKey: "agent:main:telegram:direct:U1",
+  } satisfies Partial<MsgContext>;
+  const codexEntry = {
+    sessionId: "s1",
+    updatedAt: 0,
+    agentHarnessId: "codex",
+    sendPolicy: "allow",
+  } as const;
+  const cachedCodexEntry = {
+    ...codexEntry,
+    modelProvider: "codex",
+    model: "gpt-5.5",
+  } as const;
+  const channelModelConfig = {
+    channels: { modelByChannel: { telegram: { "*": "anthropic/claude-sonnet-4.6" } } },
+  } as OpenClawConfig;
+
+  it.each([
+    {
+      name: "keeps Codex direct source delivery message-tool-only when config is unset",
+      currentEntry: codexEntry,
+      ctx: directCtx,
+      cfg: emptyConfig,
+      expectedMode: "message_tool_only",
+      text: "private final reply",
+    },
+    {
+      name: "keeps locked supervised Codex delivery defaults across outer model overrides",
+      supportsProvider: "codex",
+      currentEntry: {
+        ...codexEntry,
+        sessionId: "catalog-adopted-session",
+        modelSelectionLocked: true,
+        pluginExtensions: {
+          codex: { supervision: { sourceThreadId: "019f-codex-thread", modelLocked: true } },
         },
+        providerOverride: "anthropic",
+        modelOverride: "claude-sonnet-4.6",
       },
-      providerOverride: "anthropic",
-      modelOverride: "claude-sonnet-4.6",
-      sendPolicy: "allow",
-    };
-    const dispatcher = createDispatcher();
-    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      expect(opts?.sourceReplyDeliveryMode).toBe("message_tool_only");
-      return { text: "private supervised reply" } satisfies ReplyPayload;
-    });
-
-    const result = await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        ChatType: "direct",
-        CommandSource: undefined,
-        SessionKey: "agent:main:main",
-      }),
+      ctx: directCtx,
       cfg: emptyConfig,
-      dispatcher,
-      replyResolver,
-    });
-
-    expect(result.queuedFinal).toBe(false);
-    expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
-    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-  });
-
-  it("uses Codex direct source delivery defaults before a session entry exists", async () => {
-    setNoAbort();
-    registerAgentHarness({
-      id: "codex",
-      label: "Codex",
-      deliveryDefaults: { visibleReplies: "message_tool" },
-      supports: () => ({ supported: true, priority: 100 }),
-      runAttempt: vi.fn(async () => ({}) as never),
-    });
-    sessionStoreMocks.currentEntry = undefined;
-    const dispatcher = createDispatcher();
-    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      expect(opts?.sourceReplyDeliveryMode).toBe("message_tool_only");
-      return { text: "private first reply" } satisfies ReplyPayload;
-    });
-
-    const result = await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        ChatType: "direct",
-        CommandSource: undefined,
-        Provider: "telegram",
-        Surface: "telegram",
-        SessionKey: "agent:main:telegram:direct:U1",
-      }),
+      expectedMode: "message_tool_only",
+      text: "private supervised reply",
+    },
+    {
+      name: "uses Codex direct source delivery defaults before a session entry exists",
+      currentEntry: undefined,
+      ctx: telegramDirectCtx,
       cfg: emptyConfig,
-      dispatcher,
-      replyResolver,
-    });
-
-    expect(replyResolver).toHaveBeenCalledTimes(1);
-    expect(result.queuedFinal).toBe(false);
-    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-  });
-
-  it("uses channel model overrides before Codex first-turn direct source delivery defaults", async () => {
-    setNoAbort();
-    registerAgentHarness({
-      id: "codex",
-      label: "Codex",
-      deliveryDefaults: { visibleReplies: "message_tool" },
-      supports: (ctx) =>
-        ctx.provider === "codex"
-          ? { supported: true, priority: 100 }
-          : { supported: false, reason: "codex provider only" },
-      runAttempt: vi.fn(async () => ({}) as never),
-    });
-    sessionStoreMocks.currentEntry = undefined;
-    const dispatcher = createDispatcher();
-    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      expect(opts?.sourceReplyDeliveryMode).toBe("automatic");
-      return { text: "visible channel-model reply" } satisfies ReplyPayload;
-    });
-
-    const result = await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        ChatType: "direct",
-        CommandSource: undefined,
-        Provider: "telegram",
-        Surface: "telegram",
-        SessionKey: "agent:main:telegram:direct:U1",
-      }),
+      expectedMode: "message_tool_only",
+      text: "private first reply",
+    },
+    {
+      name: "uses channel model overrides before Codex first-turn direct source delivery defaults",
+      supportsProvider: "codex",
+      currentEntry: undefined,
+      ctx: telegramDirectCtx,
+      cfg: channelModelConfig,
+      expectedMode: "automatic",
+      text: "visible channel-model reply",
+    },
+    {
+      name: "uses channel model overrides before cached Codex runtime defaults",
+      supportsProvider: "codex",
+      currentEntry: { ...cachedCodexEntry, channel: "telegram" },
+      ctx: telegramDirectCtx,
+      cfg: channelModelConfig,
+      expectedMode: "automatic",
+      text: "visible existing-channel-model reply",
+    },
+    {
+      name: "uses configured defaults before cached Codex runtime metadata",
+      supportsProvider: "codex",
+      currentEntry: cachedCodexEntry,
+      ctx: telegramDirectCtx,
       cfg: {
-        channels: {
-          modelByChannel: {
-            telegram: {
-              "*": "anthropic/claude-sonnet-4.6",
-            },
-          },
-        },
+        agents: { defaults: { model: { primary: "anthropic/claude-sonnet-4.6" } } },
       } as OpenClawConfig,
-      dispatcher,
-      replyResolver,
-    });
-
-    expect(replyResolver).toHaveBeenCalledTimes(1);
-    expect(result.queuedFinal).toBe(true);
-    expect(firstFinalReplyPayload(dispatcher)?.text).toBe("visible channel-model reply");
-  });
-
-  it("uses channel model overrides before cached Codex runtime defaults", async () => {
-    setNoAbort();
-    registerAgentHarness({
-      id: "codex",
-      label: "Codex",
-      deliveryDefaults: { visibleReplies: "message_tool" },
-      supports: (ctx) =>
-        ctx.provider === "codex"
-          ? { supported: true, priority: 100 }
-          : { supported: false, reason: "codex provider only" },
-      runAttempt: vi.fn(async () => ({}) as never),
-    });
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      agentHarnessId: "codex",
-      modelProvider: "codex",
-      model: "gpt-5.5",
-      channel: "telegram",
-      sendPolicy: "allow",
-    };
-    const dispatcher = createDispatcher();
-    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      expect(opts?.sourceReplyDeliveryMode).toBe("automatic");
-      return { text: "visible existing-channel-model reply" } satisfies ReplyPayload;
-    });
-
-    const result = await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        ChatType: "direct",
-        CommandSource: undefined,
-        Provider: "telegram",
-        Surface: "telegram",
-        SessionKey: "agent:main:telegram:direct:U1",
-      }),
-      cfg: {
-        channels: {
-          modelByChannel: {
-            telegram: {
-              "*": "anthropic/claude-sonnet-4.6",
-            },
-          },
-        },
-      } as OpenClawConfig,
-      dispatcher,
-      replyResolver,
-    });
-
-    expect(replyResolver).toHaveBeenCalledTimes(1);
-    expect(result.queuedFinal).toBe(true);
-    expect(firstFinalReplyPayload(dispatcher)?.text).toBe("visible existing-channel-model reply");
-  });
-
-  it("uses configured defaults before cached Codex runtime metadata", async () => {
-    setNoAbort();
-    registerAgentHarness({
-      id: "codex",
-      label: "Codex",
-      deliveryDefaults: { visibleReplies: "message_tool" },
-      supports: (ctx) =>
-        ctx.provider === "codex"
-          ? { supported: true, priority: 100 }
-          : { supported: false, reason: "codex provider only" },
-      runAttempt: vi.fn(async () => ({}) as never),
-    });
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      agentHarnessId: "codex",
-      modelProvider: "codex",
-      model: "gpt-5.5",
-      sendPolicy: "allow",
-    };
-    const dispatcher = createDispatcher();
-    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      expect(opts?.sourceReplyDeliveryMode).toBe("automatic");
-      return { text: "visible configured-default reply" } satisfies ReplyPayload;
-    });
-
-    const result = await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        ChatType: "direct",
-        CommandSource: undefined,
-        Provider: "telegram",
-        Surface: "telegram",
-        SessionKey: "agent:main:telegram:direct:U1",
-      }),
-      cfg: {
-        agents: {
-          defaults: {
-            model: { primary: "anthropic/claude-sonnet-4.6" },
-          },
-        },
-      } as OpenClawConfig,
-      dispatcher,
-      replyResolver,
-    });
-
-    expect(replyResolver).toHaveBeenCalledTimes(1);
-    expect(result.queuedFinal).toBe(true);
-    expect(firstFinalReplyPayload(dispatcher)?.text).toBe("visible configured-default reply");
-  });
-
-  it("lets config restore automatic Codex direct source delivery", async () => {
-    setNoAbort();
-    registerAgentHarness({
-      id: "codex",
-      label: "Codex",
-      deliveryDefaults: { visibleReplies: "message_tool" },
-      supports: () => ({ supported: true, priority: 100 }),
-      runAttempt: vi.fn(async () => ({}) as never),
-    });
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      agentHarnessId: "codex",
-      sendPolicy: "allow",
-    };
-    const dispatcher = createDispatcher();
-    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      expect(opts?.sourceReplyDeliveryMode).toBe("automatic");
-      return { text: "visible final reply" } satisfies ReplyPayload;
-    });
-
-    const result = await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        ChatType: "direct",
-        CommandSource: undefined,
-        SessionKey: "agent:main:main",
-      }),
+      expectedMode: "automatic",
+      text: "visible configured-default reply",
+    },
+    {
+      name: "lets config restore automatic Codex direct source delivery",
+      currentEntry: codexEntry,
+      ctx: directCtx,
       cfg: { messages: { visibleReplies: "automatic" } } as OpenClawConfig,
-      dispatcher,
-      replyResolver,
-    });
-
-    expect(replyResolver).toHaveBeenCalledTimes(1);
-    expect(result.queuedFinal).toBe(true);
-    expect(firstFinalReplyPayload(dispatcher)?.text).toBe("visible final reply");
-  });
-
-  it("honors model overrides before cached Codex direct source delivery defaults", async () => {
-    setNoAbort();
-    registerAgentHarness({
-      id: "codex",
-      label: "Codex",
-      deliveryDefaults: { visibleReplies: "message_tool" },
-      supports: (ctx) =>
-        ctx.provider === "codex"
-          ? { supported: true, priority: 100 }
-          : { supported: false, reason: "codex provider only" },
-      runAttempt: vi.fn(async () => ({}) as never),
-    });
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      agentHarnessId: "codex",
-      agentRuntimeOverride: "codex",
-      providerOverride: "anthropic",
-      modelOverride: "claude-sonnet-4.6",
-      sendPolicy: "allow",
-    };
-    const dispatcher = createDispatcher();
-    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      expect(opts?.sourceReplyDeliveryMode).toBe("automatic");
-      return { text: "visible switched-model reply" } satisfies ReplyPayload;
-    });
-
-    const result = await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        ChatType: "direct",
-        CommandSource: undefined,
-        SessionKey: "agent:main:main",
-      }),
+      expectedMode: "automatic",
+      text: "visible final reply",
+    },
+    {
+      name: "honors model overrides before cached Codex direct source delivery defaults",
+      supportsProvider: "codex",
+      currentEntry: {
+        ...codexEntry,
+        agentRuntimeOverride: "codex",
+        providerOverride: "anthropic",
+        modelOverride: "claude-sonnet-4.6",
+      },
+      ctx: directCtx,
       cfg: emptyConfig,
-      dispatcher,
-      replyResolver,
-    });
-
-    expect(replyResolver).toHaveBeenCalledTimes(1);
-    expect(result.queuedFinal).toBe(true);
-    expect(firstFinalReplyPayload(dispatcher)?.text).toBe("visible switched-model reply");
-  });
+      expectedMode: "automatic",
+      text: "visible switched-model reply",
+    },
+    {
+      name: "honors heartbeat model overrides before Codex direct source delivery defaults",
+      supportsProvider: "codex",
+      currentEntry: codexEntry,
+      ctx: telegramDirectCtx,
+      cfg: emptyConfig,
+      replyOptions: { isHeartbeat: true, heartbeatModelOverride: "anthropic/claude-sonnet-4.6" },
+      expectedMode: "automatic",
+      text: "visible heartbeat-model reply",
+    },
+    {
+      name: "preserves non-Codex harness direct source delivery defaults",
+      harnessId: "custom",
+      supportsProvider: "custom",
+      currentEntry: { ...codexEntry, agentHarnessId: "custom" },
+      ctx: { ...directCtx, Provider: "custom" },
+      cfg: emptyConfig,
+      expectedMode: "message_tool_only",
+      text: "private final reply",
+    },
+  ] satisfies HarnessDeliveryCase[])("$name", runHarnessDeliveryCase);
 
   it("honors parent model overrides before Codex direct source delivery defaults", async () => {
     setNoAbort();
@@ -943,137 +777,60 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     sessionStoreMocks.loadSessionStoreEntry.mockImplementation(defaultLoadSessionStoreEntry);
   });
 
-  it("honors heartbeat model overrides before Codex direct source delivery defaults", async () => {
+  async function expectAutomaticDelivery(params: {
+    ctx: Partial<MsgContext>;
+    cfg: OpenClawConfig;
+    text: string;
+    replyOptions?: GetReplyOptions;
+    checkTyping?: boolean;
+  }) {
     setNoAbort();
-    registerAgentHarness({
-      id: "codex",
-      label: "Codex",
-      deliveryDefaults: { visibleReplies: "message_tool" },
-      supports: (ctx) =>
-        ctx.provider === "codex"
-          ? { supported: true, priority: 100 }
-          : { supported: false, reason: "codex provider only" },
-      runAttempt: vi.fn(async () => ({}) as never),
-    });
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      agentHarnessId: "codex",
-      sendPolicy: "allow",
-    };
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
       expect(opts?.sourceReplyDeliveryMode).toBe("automatic");
-      return { text: "visible heartbeat-model reply" } satisfies ReplyPayload;
+      if (params.checkTyping) {
+        expect(opts?.suppressTyping).toBe(false);
+      }
+      return { text: params.text } satisfies ReplyPayload;
     });
-
     const result = await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        ChatType: "direct",
-        CommandSource: undefined,
-        Provider: "telegram",
-        Surface: "telegram",
-        SessionKey: "agent:main:telegram:direct:U1",
-      }),
-      cfg: emptyConfig,
+      ctx: buildTestCtx(params.ctx),
+      cfg: params.cfg,
       dispatcher,
-      replyOptions: {
-        isHeartbeat: true,
-        heartbeatModelOverride: "anthropic/claude-sonnet-4.6",
-      },
+      replyOptions: params.replyOptions,
       replyResolver,
     });
 
     expect(replyResolver).toHaveBeenCalledTimes(1);
     expect(result.queuedFinal).toBe(true);
-    expect(firstFinalReplyPayload(dispatcher)?.text).toBe("visible heartbeat-model reply");
-  });
-
-  it("preserves non-Codex harness direct source delivery defaults", async () => {
-    setNoAbort();
-    registerAgentHarness({
-      id: "custom",
-      label: "Custom",
-      deliveryDefaults: { visibleReplies: "message_tool" },
-      supports: (ctx) =>
-        ctx.provider === "custom"
-          ? { supported: true, priority: 200 }
-          : { supported: false, reason: "custom provider only" },
-      runAttempt: vi.fn(async () => ({}) as never),
-    });
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      agentHarnessId: "custom",
-      sendPolicy: "allow",
-    };
-    const dispatcher = createDispatcher();
-    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      expect(opts?.sourceReplyDeliveryMode).toBe("message_tool_only");
-      return { text: "private final reply" } satisfies ReplyPayload;
-    });
-
-    const result = await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        ChatType: "direct",
-        CommandSource: undefined,
-        Provider: "custom",
-        SessionKey: "agent:main:main",
-      }),
-      cfg: emptyConfig,
-      dispatcher,
-      replyResolver,
-    });
-
-    expect(replyResolver).toHaveBeenCalledTimes(1);
-    expect(result.queuedFinal).toBe(false);
-    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-  });
+    expect(firstFinalReplyPayload(dispatcher)?.text).toBe(params.text);
+  }
 
   it("falls back to automatic group/channel delivery when the message tool is unavailable", async () => {
-    setNoAbort();
-    const dispatcher = createDispatcher();
-    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      expect(opts?.sourceReplyDeliveryMode).toBe("automatic");
-      return { text: "visible fallback" } satisfies ReplyPayload;
-    });
-
-    const result = await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
+    await expectAutomaticDelivery({
+      ctx: {
         ChatType: "channel",
         SessionKey: "test:discord:channel:C1",
-      }),
+      },
       cfg: {
         messages: {
           groupChat: { visibleReplies: "message_tool" },
         },
         tools: { allow: ["read"] },
       } as OpenClawConfig,
-      dispatcher,
-      replyResolver,
+      text: "visible fallback",
     });
-
-    expect(replyResolver).toHaveBeenCalledTimes(1);
-    expect(result.queuedFinal).toBe(true);
-    expect(firstFinalReplyPayload(dispatcher)?.text).toBe("visible fallback");
   });
 
   it("falls back to automatic group/channel delivery when group tools remove the message tool", async () => {
-    setNoAbort();
-    const dispatcher = createDispatcher();
-    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      expect(opts?.sourceReplyDeliveryMode).toBe("automatic");
-      return { text: "group policy fallback" } satisfies ReplyPayload;
-    });
-
-    const result = await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
+    await expectAutomaticDelivery({
+      ctx: {
         ChatType: "channel",
         From: "discord:channel:C1",
         Provider: "discord",
         Surface: "discord",
         SessionKey: "agent:main:discord:channel:C1",
-      }),
+      },
       cfg: {
         messages: {
           groupChat: { visibleReplies: "message_tool" },
@@ -1086,90 +843,49 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
           },
         },
       } as OpenClawConfig,
-      dispatcher,
-      replyResolver,
+      text: "group policy fallback",
     });
-
-    expect(replyResolver).toHaveBeenCalledTimes(1);
-    expect(result.queuedFinal).toBe(true);
-    expect(firstFinalReplyPayload(dispatcher)?.text).toBe("group policy fallback");
   });
 
   it("falls back when a channel precomputed message-tool-only delivery but the message tool is unavailable", async () => {
-    setNoAbort();
-    const dispatcher = createDispatcher();
-    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      expect(opts?.sourceReplyDeliveryMode).toBe("automatic");
-      return { text: "requested fallback" } satisfies ReplyPayload;
-    });
-
-    const result = await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
+    await expectAutomaticDelivery({
+      ctx: {
         ChatType: "channel",
         SessionKey: "test:discord:channel:C1",
-      }),
+      },
       cfg: { tools: { allow: ["read"] } } as OpenClawConfig,
-      dispatcher,
-      replyResolver,
       replyOptions: {
         sourceReplyDeliveryMode: "message_tool_only",
       },
+      text: "requested fallback",
     });
-
-    expect(replyResolver).toHaveBeenCalledTimes(1);
-    expect(result.queuedFinal).toBe(true);
-    expect(firstFinalReplyPayload(dispatcher)?.text).toBe("requested fallback");
   });
 
   it("keeps native command replies visible in group/channel events", async () => {
-    setNoAbort();
-    const dispatcher = createDispatcher();
-    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      expect(opts?.sourceReplyDeliveryMode).toBe("automatic");
-      expect(opts?.suppressTyping).toBe(false);
-      return { text: "status reply" } satisfies ReplyPayload;
-    });
-
-    const result = await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
+    await expectAutomaticDelivery({
+      ctx: {
         ChatType: "group",
         CommandSource: "native",
         CommandAuthorized: true,
         WasMentioned: true,
         SessionKey: "test:telegram:group:G1",
-      }),
+      },
       cfg: emptyConfig,
-      dispatcher,
-      replyResolver,
+      text: "status reply",
+      checkTyping: true,
     });
-
-    expect(replyResolver).toHaveBeenCalledTimes(1);
-    expect(result.queuedFinal).toBe(true);
-    expect(firstFinalReplyPayload(dispatcher)?.text).toBe("status reply");
   });
 
   it("keeps default group/channel source delivery automatic", async () => {
-    setNoAbort();
-    const dispatcher = createDispatcher();
-    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      expect(opts?.sourceReplyDeliveryMode).toBe("automatic");
-      return { text: "final reply" } satisfies ReplyPayload;
-    });
-
-    const result = await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
+    await expectAutomaticDelivery({
+      ctx: {
         ChatType: "group",
         WasMentioned: true,
         SessionKey: "test:telegram:group:G1",
-      }),
+      },
       cfg: emptyConfig,
-      dispatcher,
-      replyResolver,
+      text: "final reply",
     });
-
-    expect(replyResolver).toHaveBeenCalledTimes(1);
-    expect(result.queuedFinal).toBe(true);
-    expect(firstFinalReplyPayload(dispatcher)?.text).toBe("final reply");
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

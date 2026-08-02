@@ -1,4 +1,5 @@
 // Doctor cron repair orchestration for legacy stores, run logs, payloads, and warnings.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { note } from "../../../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../../../cli/command-format.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -83,6 +84,44 @@ function countChronicallyFailingCronJobs(jobs: Array<Record<string, unknown>>): 
       consecutiveErrors >= CHRONIC_FAILURE_MIN_CONSECUTIVE_ERRORS
     );
   }).length;
+}
+
+type AutoDisabledCronJob = {
+  id: string;
+  name: string;
+  reason: "consecutive-failures" | "schedule-errors";
+  consecutiveErrors: number;
+};
+
+function collectAutoDisabledCronJobs(jobs: Array<Record<string, unknown>>): AutoDisabledCronJob[] {
+  const autoDisabledJobs: AutoDisabledCronJob[] = [];
+  for (const job of jobs) {
+    if (job.enabled !== false || typeof job.id !== "string") {
+      continue;
+    }
+    const state = job.state;
+    if (!isRecord(state)) {
+      continue;
+    }
+    const autoDisabled = state.autoDisabled;
+    if (!isRecord(autoDisabled)) {
+      continue;
+    }
+    if (
+      (autoDisabled.reason !== "consecutive-failures" &&
+        autoDisabled.reason !== "schedule-errors") ||
+      typeof autoDisabled.consecutiveErrors !== "number"
+    ) {
+      continue;
+    }
+    autoDisabledJobs.push({
+      id: job.id,
+      name: typeof job.name === "string" && job.name.trim() ? job.name.trim() : job.id,
+      reason: autoDisabled.reason,
+      consecutiveErrors: autoDisabled.consecutiveErrors,
+    });
+  }
+  return autoDisabledJobs;
 }
 
 const LEGACY_CRON_STORE_CHECK_ID = "core/doctor/legacy-cron-store";
@@ -403,6 +442,20 @@ export async function maybeRepairLegacyCronStore(params: {
         `${pluralize(chronicFailureCount, "automation")} ${chronicFailureCount === 1 ? "has" : "have"} failed ${CHRONIC_FAILURE_MIN_CONSECUTIVE_ERRORS}+ runs in a row (\`state.consecutiveErrors\`), so the scheduler only re-fires ${chronicFailureCount === 1 ? "it" : "them"} on error backoff.`,
         `- The count resets on the next successful run and also counts runs interrupted by a gateway restart, so a lasting streak means repeated task failures, repeatedly interrupted runs, or a mix. Failure alerts are opt-in, so this may be the only notice.`,
         `- Review with ${formatCliCommand("openclaw automations list")} or ${formatCliCommand("openclaw automations show <id>")}.`,
+      ].join("\n"),
+      "Cron",
+    );
+  }
+
+  const autoDisabledJobs = collectAutoDisabledCronJobs(rawJobs);
+  if (autoDisabledJobs.length > 0) {
+    note(
+      [
+        `${pluralize(autoDisabledJobs.length, "automation")} ${autoDisabledJobs.length === 1 ? "is" : "are"} auto-disabled after repeated failures.`,
+        ...autoDisabledJobs.map(
+          (job) =>
+            `- ${job.name} (${job.id}): recorded reason \`${job.reason}\` after ${job.consecutiveErrors} consecutive errors. Fix the cause, then re-enable with ${formatCliCommand(`openclaw automations enable ${job.id}`)}.`,
+        ),
       ].join("\n"),
       "Cron",
     );

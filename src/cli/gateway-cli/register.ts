@@ -532,6 +532,7 @@ export function registerGatewayCli(program: Command, deps: GatewayCliDependencie
           `\n${theme.heading("Examples:")}\n${formatHelpExamples([
             ["openclaw gateway run", "Run the gateway in the foreground."],
             ["openclaw gateway status", "Show service status plus connectivity/capability."],
+            ["openclaw gateway auth-token --show", "Reveal the shared token interactively."],
             ["openclaw gateway discover", "Find local and wide-area gateway beacons."],
             ["openclaw gateway stability", "Show recent stability diagnostics."],
             ["openclaw gateway call health", "Call a gateway RPC method directly."],
@@ -548,6 +549,22 @@ export function registerGatewayCli(program: Command, deps: GatewayCliDependencie
   });
   addGatewayRestartHandoffCommands(gateway);
   setCommandJsonMode(gateway, "output", ({ argv }) => isGatewayMachineOutput(argv));
+
+  gateway
+    .command("auth-token")
+    .description("Reveal the configured shared Gateway token")
+    .option("--show", "Print the token to an interactive terminal", false)
+    .action(async (opts) => {
+      await runGatewayCommand(async () => {
+        if (!opts.show) {
+          throw new Error(
+            "Pass --show to confirm that you want to print the Gateway token to this terminal.",
+          );
+        }
+        const { gatewayAuthTokenCommand } = await import("../../commands/gateway-auth-token.js");
+        await gatewayAuthTokenCommand(defaultRuntime);
+      }, "Gateway auth token failed");
+    });
 
   gatewayCallOpts(
     gateway

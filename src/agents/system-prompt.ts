@@ -1288,7 +1288,7 @@ export function buildAgentSystemPrompt(params: {
         ? "## Model Aliases"
         : "",
       params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal
-        ? "Model override: prefer alias; provider/model also accepted."
+        ? "Model override: aliases are shortcuts for unqualified model requests. Use explicit provider/model references verbatim; do not substitute an alias or another provider."
         : "",
       params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal
         ? params.modelAliasLines.join("\n")

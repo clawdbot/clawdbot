@@ -2240,14 +2240,48 @@ describe("qa mock openai server", () => {
         makeUserInput(
           "Compaction retry mutating tool check: read COMPACTION_RETRY_CONTEXT.md, then create compaction-retry-summary.txt and keep replay safety explicit.",
         ),
-        makeToolOutput("Successfully wrote 41 bytes to compaction-retry-summary.txt."),
+        makeToolOutput("Successfully wrote 41 bytes to compaction-retry-summary.txt"),
       ],
     });
     expect(finalReply.status).toBe(200);
     const finalPayload = (await finalReply.json()) as {
       output?: Array<{ content?: Array<{ text?: string }> }>;
     };
-    expect(finalPayload.output?.[0]?.content?.[0]?.text).toContain("replay unsafe after write");
+    expect(finalPayload.output?.[0]?.content?.[0]?.text).toBe(
+      "Protocol note: replay unsafe after write.",
+    );
+  });
+
+  it("finishes a compacted retry after the canonical successful write result", async () => {
+    const server = await startMockServer();
+
+    const finalReply = await postNonStreamingResponses(server, {
+      model: "gpt-5.6-luna",
+      input: [
+        makeToolOutput("Successfully wrote 41 bytes to compaction-retry-summary.txt"),
+        makeUserInput("Continue after compaction."),
+      ],
+    });
+
+    expect(finalReply.status).toBe(200);
+    expect(outputText(await finalReply.json())).toBe("Protocol note: replay unsafe after write.");
+  });
+
+  it("does not finish a compacted retry when failure text quotes the write success marker", async () => {
+    const server = await startMockServer();
+
+    const failedReply = await postNonStreamingResponses(server, {
+      model: "gpt-5.6-luna",
+      input: [
+        makeToolOutput(
+          'Write failed after reporting "Successfully wrote 41 bytes to compaction-retry-summary.txt."',
+        ),
+        makeUserInput("Continue after compaction."),
+      ],
+    });
+
+    expect(failedReply.status).toBe(200);
+    expect(outputText(await failedReply.json())).toBe("");
   });
 
   it("keeps compaction retry planning across continuation prompts", async () => {
@@ -2284,7 +2318,7 @@ describe("qa mock openai server", () => {
       model: "gpt-5.6-luna",
       input: [
         makeUserInput(prompt),
-        makeToolOutput("Successfully wrote 41 bytes to compaction-retry-summary.txt."),
+        makeToolOutput("Successfully wrote 41 bytes to compaction-retry-summary.txt"),
         makeUserInput("Continue after compaction."),
       ],
     });

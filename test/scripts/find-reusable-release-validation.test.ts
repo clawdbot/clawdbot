@@ -26,6 +26,10 @@ const DEFAULT_INPUTS = {
   releasePackageSpec: "",
   packageAcceptancePackageSpec: "",
   codexPluginSpec: "",
+  npmTelegramPackageSpec: "",
+  npmTelegramProviderMode: "mock-openai",
+  npmTelegramScenario: "",
+  allowUnreleasedChangelog: "false",
 };
 
 interface ParentTuple {
@@ -210,6 +214,10 @@ function normalizedEvidence(options: {
   const shaPinned = workflowRef.startsWith("release-ci/");
   const validationInputs =
     options.validationInputs === undefined ? DEFAULT_INPUTS : options.validationInputs;
+  const npmTelegramRequired =
+    validationInputs !== null &&
+    (validationInputs.npmTelegramPackageSpec.length > 0 ||
+      validationInputs.releasePackageSpec.length > 0);
   const manifest = {
     version: shaPinned ? 3 : 2,
     workflowName: "Full Release Validation",
@@ -232,7 +240,7 @@ function normalizedEvidence(options: {
     },
     childRuns: {
       normalCi: "201",
-      npmTelegram: "",
+      npmTelegram: npmTelegramRequired ? "205" : "",
       pluginPrerelease: "202",
       releaseChecks: "203",
       productPerformance: {
@@ -292,6 +300,19 @@ function normalizedEvidence(options: {
       "openclaw-release-checks.yml",
       "-release-checks",
     ],
+    ...(npmTelegramRequired
+      ? ([
+          [
+            "npmTelegram",
+            "205",
+            1,
+            2,
+            "NPM Telegram Beta E2E",
+            "npm-telegram-beta-e2e.yml",
+            "-npm-telegram",
+          ],
+        ] as const)
+      : []),
     ["productPerformance", "204", 3, 2, "OpenClaw Performance", "openclaw-performance.yml", ""],
   ] as const;
   const children = roles.map(
@@ -542,6 +563,33 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
       targetSha: priorSha,
       validatorPath,
       workflowRef: `release-ci/${VERIFIER_SHA.slice(0, 12)}-123`,
+    });
+
+    expect(result.status).toBe(0);
+    expect(parseOutput(result.stdout)).toMatchObject({
+      evidence_run_id: "111",
+      reuse: "true",
+    });
+  });
+
+  it("reuses npm Telegram evidence only when its selectors match exactly", () => {
+    const { clone, priorSha } = getSharedRepo();
+    const validationInputs = {
+      ...DEFAULT_INPUTS,
+      npmTelegramPackageSpec: "openclaw@2026.7.2-beta.7",
+      npmTelegramProviderMode: "live-frontier",
+      npmTelegramScenario: "telegram-status-command",
+    };
+    const record = normalizedEvidence({ targetSha: priorSha, validationInputs });
+    const { binDir, fixtures, validatorPath } = setUpFixtures([{ record, runId: "111" }]);
+
+    const result = runResolver({
+      binDir,
+      fixtures,
+      inputs: validationInputs,
+      repoDir: clone,
+      targetSha: priorSha,
+      validatorPath,
     });
 
     expect(result.status).toBe(0);
@@ -825,6 +873,38 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
       expected: "validation inputs differ",
       label: "different lane inputs",
       recordOptions: { validationInputs: { ...DEFAULT_INPUTS, provider: "anthropic" } },
+      resolverOptions: {},
+    },
+    {
+      expected: "validation inputs differ",
+      label: "different npm Telegram package",
+      recordOptions: {
+        validationInputs: { ...DEFAULT_INPUTS, npmTelegramPackageSpec: "openclaw@old" },
+      },
+      resolverOptions: {},
+    },
+    {
+      expected: "validation inputs differ",
+      label: "different npm Telegram provider mode",
+      recordOptions: {
+        validationInputs: { ...DEFAULT_INPUTS, npmTelegramProviderMode: "live-frontier" },
+      },
+      resolverOptions: {},
+    },
+    {
+      expected: "validation inputs differ",
+      label: "different npm Telegram scenario",
+      recordOptions: {
+        validationInputs: { ...DEFAULT_INPUTS, npmTelegramScenario: "telegram-status-command" },
+      },
+      resolverOptions: {},
+    },
+    {
+      expected: "validation inputs differ",
+      label: "different unreleased changelog policy",
+      recordOptions: {
+        validationInputs: { ...DEFAULT_INPUTS, allowUnreleasedChangelog: "true" },
+      },
       resolverOptions: {},
     },
     {

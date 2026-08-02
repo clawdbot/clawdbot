@@ -389,6 +389,12 @@ export type CronJobState = {
   lastDurationMs?: number;
   /** Number of consecutive execution errors (reset on success). Used for backoff. */
   consecutiveErrors?: number;
+  /** Durable explanation for a scheduler-owned automatic disable transition. */
+  autoDisabled?: {
+    reason: "consecutive-failures" | "schedule-errors";
+    atMs: number;
+    consecutiveErrors: number;
+  };
   /** Number of consecutive skipped executions (reset on success or error). */
   consecutiveSkipped?: number;
   /** Last failure alert timestamp (ms since epoch) for cooldown gating. */
@@ -487,7 +493,7 @@ export type CronStoreFile = {
 };
 
 type CronJobStateInput = Partial<
-  Omit<CronJobState, "scheduleActivatedAtMs" | "streamSourceIdentity">
+  Omit<CronJobState, "autoDisabled" | "scheduleActivatedAtMs" | "streamSourceIdentity">
 >;
 
 /** Create input accepted by cron APIs before id/timestamps/state are assigned. */

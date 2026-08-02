@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   fingerprintAuthProfileCredential,
   fingerprintOpaqueRuntimeOwner,
@@ -25,7 +25,11 @@ import {
   type SystemAgentConfiguredRoute,
 } from "./inference-route.js";
 import { verifyConfigAfterSystemAgentWrite } from "./post-write-verification.js";
-import { createSystemAgentVerifiedInferenceTestFixture } from "./system-agent.test-helpers.js";
+import {
+  createSystemAgentVerifiedInferenceTestFixture,
+  installSystemAgentPluginMetadataTestSnapshot,
+  type SystemAgentPluginMetadataTestSnapshot,
+} from "./system-agent.test-helpers.js";
 import {
   createSystemAgentVerifiedInferenceBinding,
   type SystemAgentVerifiedInferenceBinding,
@@ -117,11 +121,13 @@ const sharedVerifiedInferenceConfig = {
 
 let sharedVerifiedInference: SystemAgentVerifiedInferenceBinding | undefined;
 let sharedVerifiedInferenceDeps: SystemAgentVerifiedInferenceDeps | undefined;
+let pluginMetadataSnapshot: SystemAgentPluginMetadataTestSnapshot | undefined;
 
 function useTempStateDir(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-engine-"));
   tempDirs.push(dir);
   vi.stubEnv("OPENCLAW_STATE_DIR", dir);
+  pluginMetadataSnapshot?.rebindForCurrentEnv();
   return dir;
 }
 
@@ -298,6 +304,9 @@ async function advanceGatewayWizardToToken(engine: SystemAgentChatEngine) {
 }
 
 beforeAll(async () => {
+  pluginMetadataSnapshot = installSystemAgentPluginMetadataTestSnapshot(
+    sharedVerifiedInferenceConfig,
+  );
   const fixture = await createSystemAgentVerifiedInferenceTestFixture(
     sharedVerifiedInferenceConfig,
   );
@@ -308,8 +317,13 @@ beforeAll(async () => {
   );
 });
 
+afterAll(() => {
+  pluginMetadataSnapshot?.restore();
+});
+
 afterEach(() => {
   vi.unstubAllEnvs();
+  pluginMetadataSnapshot?.rebindForCurrentEnv();
   vi.clearAllMocks();
   mocks.readConfigFileSnapshot.mockResolvedValue(
     configSnapshot(structuredClone(sharedVerifiedInferenceConfig)) as never,

@@ -3,6 +3,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
+import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import {
   createContext,
@@ -31,9 +32,15 @@ describe("sessions page archived deletion", () => {
         preservedWorktrees: [],
       })),
     });
-    const { gateway } = createGateway({} as GatewayBrowserClient);
+    const mutableGateway = createGateway({} as GatewayBrowserClient);
+    mutableGateway.emit({
+      hello: {
+        auth: { role: "operator", scopes: ["operator.read", "operator.write"] },
+        features: { methods: ["sessions.delete"] },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
     const page = await createRenderedPage(
-      createContext(gateway, sessions),
+      createContext(mutableGateway.gateway, sessions),
       {
         count: 2,
         sessions: [
@@ -66,6 +73,28 @@ describe("sessions page archived deletion", () => {
         archivedOnly: true,
       },
     ]);
+  });
+
+  it("does not let write-scoped operators delete an active session", async () => {
+    const key = "agent:main:active";
+    const sessions = createSessions();
+    const mutableGateway = createGateway({} as GatewayBrowserClient);
+    mutableGateway.emit({
+      hello: {
+        auth: { role: "operator", scopes: ["operator.read", "operator.write"] },
+        features: { methods: ["sessions.delete"] },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+    const page = await createRenderedPage(createContext(mutableGateway.gateway, sessions), {
+      count: 1,
+      sessions: [{ key, archived: false }],
+    } as SessionsListResult);
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    await page.deleteSessionFromMenu({ key, archived: false } as SessionsListResult["sessions"][0]);
+
+    expect(sessions.deleteMany).not.toHaveBeenCalled();
+    expect(page.error).toBe("This action requires operator.admin access.");
   });
 
   it("aborts delete-all when an enumeration page fails", async () => {

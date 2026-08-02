@@ -64,23 +64,40 @@ type MatrixClientResolveOpts = {
   accountId?: string | null;
 };
 
-function createMatrixSendReceipt(params: {
-  roomId: string;
-  platformMessageIds: readonly string[];
+type MatrixReceiptEvent = {
+  messageId: string;
   kind: MessageReceiptPartKind;
   replyToId?: string;
+};
+
+function createMatrixSendReceipt(params: {
+  roomId: string;
+  events: readonly MatrixReceiptEvent[];
   threadId?: string | null;
 }) {
-  return createMessageReceiptFromOutboundResults({
-    kind: params.kind,
-    ...(params.replyToId ? { replyToId: params.replyToId } : {}),
+  const firstEvent = params.events[0];
+  const receipt = createMessageReceiptFromOutboundResults({
+    kind: firstEvent?.kind ?? "text",
+    ...(firstEvent?.replyToId ? { replyToId: firstEvent.replyToId } : {}),
     ...(params.threadId ? { threadId: params.threadId } : {}),
-    results: params.platformMessageIds.map((messageId) => ({
+    results: params.events.map(({ messageId }) => ({
       channel: "matrix",
       messageId,
       roomId: params.roomId,
     })),
   });
+  // Caption overflow is not a native reply; never copy the first event's relation onto later parts.
+  receipt.parts = receipt.parts.map((part, index) => {
+    const event = params.events[index]!;
+    const actualPart = { ...part, kind: event.kind };
+    if (event.replyToId) {
+      actualPart.replyToId = event.replyToId;
+    } else {
+      delete actualPart.replyToId;
+    }
+    return actualPart;
+  });
+  return receipt;
 }
 
 function isMatrixClient(value: MatrixClient | MatrixClientResolveOpts): value is MatrixClient {
@@ -332,7 +349,7 @@ export async function sendMessageMatrix(
         await opts.onPlatformSendDispatch?.();
         platformDispatchStarted = true;
       }
-      const platformMessageIds: string[] = [];
+      const acceptedEvents: MatrixReceiptEvent[] = [];
       const acceptedContents: string[] = [];
       let lastMessageId = "";
       for (const planned of plannedEvents) {
@@ -362,7 +379,14 @@ export async function sendMessageMatrix(
         if (!eventId) {
           continue;
         }
-        platformMessageIds.push(eventId);
+        // Media captions and text follow-ups can intentionally have different reply relations.
+        const eventReplyToId = planned.content["m.relates_to"]?.["m.in_reply_to"]?.event_id;
+        const acceptedEvent: MatrixReceiptEvent = {
+          messageId: eventId,
+          kind: planned.receiptKind,
+          ...(eventReplyToId ? { replyToId: eventReplyToId } : {}),
+        };
+        acceptedEvents.push(acceptedEvent);
         const visibleContent = planned.content.body ?? "";
         acceptedContents.push(visibleContent);
         await opts.onDeliveryResult?.({
@@ -371,9 +395,7 @@ export async function sendMessageMatrix(
           primaryMessageId: eventId,
           receipt: createMatrixSendReceipt({
             roomId,
-            platformMessageIds: [eventId],
-            kind: planned.receiptKind,
-            replyToId: opts.replyToId,
+            events: [acceptedEvent],
             threadId,
           }),
           content: visibleContent,
@@ -383,12 +405,10 @@ export async function sendMessageMatrix(
       return {
         messageId: lastMessageId || "unknown",
         roomId,
-        primaryMessageId: platformMessageIds[0] ?? (lastMessageId || "unknown"),
+        primaryMessageId: acceptedEvents[0]?.messageId ?? (lastMessageId || "unknown"),
         receipt: createMatrixSendReceipt({
           roomId,
-          platformMessageIds,
-          kind: plannedEvents[0]?.receiptKind ?? "text",
-          replyToId: opts.replyToId,
+          events: acceptedEvents,
           threadId,
         }),
         content: acceptedContents.join("\n"),
@@ -547,16 +567,16 @@ export async function sendSingleTextMessageMatrix(
         (content as Record<string, unknown>)[MSC4357_LIVE_KEY] = {};
       }
       const eventId = await client.sendMessage(resolvedRoom, content);
-      const platformMessageIds = eventId ? [eventId] : [];
+      const replyToId = content["m.relates_to"]?.["m.in_reply_to"]?.event_id;
       return {
         messageId: eventId ?? "unknown",
         roomId: resolvedRoom,
         primaryMessageId: eventId ?? "unknown",
         receipt: createMatrixSendReceipt({
           roomId: resolvedRoom,
-          platformMessageIds,
-          kind: "text",
-          replyToId: opts.replyToId,
+          events: eventId
+            ? [{ messageId: eventId, kind: "text", ...(replyToId ? { replyToId } : {}) }]
+            : [],
           threadId: normalizedThreadId,
         }),
         content: content.body,

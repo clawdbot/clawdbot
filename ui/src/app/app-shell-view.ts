@@ -12,6 +12,7 @@ import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
 import { t } from "../i18n/index.ts";
 import { copyToClipboard } from "../lib/clipboard.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
+import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import { findSettingsSearchBlocks } from "../pages/config/settings-search.ts";
@@ -160,6 +161,19 @@ export function renderApplicationShell(host: ShellViewHost) {
     host.draftSessionAgentId() ||
       (context.agentSelection.state.selectedId ?? gatewaySnapshot.assistantAgentId),
   );
+  const newSessionAccess = readSessionMethodAccess(gatewaySnapshot, {
+    method: "sessions.create",
+    params: {},
+  });
+  const openNewSession = (agentId: string, target?: NewSessionTarget) => {
+    const access = readSessionMethodAccess(context.gateway.snapshot, {
+      method: "sessions.create",
+      params: {},
+    });
+    if (access.allowed) {
+      host.openNewSession(agentId, target);
+    }
+  };
   // One storage read per render; theme.refresh() re-renders on pref changes.
   const uiSettings = loadSettings();
   // The new-session draft shares the chat layout: full-height pane that owns
@@ -201,8 +215,7 @@ export function renderApplicationShell(host: ShellViewHost) {
       onUpdate: () => void context.overlays.runUpdate(),
       onOpenApprovals: () => host.openApprovals(),
       onRetryConnect: () => context.gateway.connect(),
-      onOpenNewSession: (agentId: string, target?: NewSessionTarget) =>
-        host.openNewSession(agentId, target),
+      onOpenNewSession: openNewSession,
       draftSessionAgentId: host.draftSessionAgentId(),
       onUpdateSidebarEntries: (entries: string[]) =>
         context.navigation.update({ sidebarEntries: entries }),
@@ -284,6 +297,9 @@ export function renderApplicationShell(host: ShellViewHost) {
               .historyOnly=${settingsTakeover}
               .canGoBack=${host.nativeHistoryState.canGoBack}
               .canGoForward=${host.nativeHistoryState.canGoForward}
+              .newSessionDisabledReason=${newSessionAccess.allowed
+                ? undefined
+                : newSessionAccess.reason}
               .onToggleSidebar=${() => host.toggleNavigationSurface()}
               .onOpenPalette=${() => host.openPalette()}
               .onOpenNewSession=${() => host.handleNativeNewSession()}
@@ -316,16 +332,16 @@ export function renderApplicationShell(host: ShellViewHost) {
               </openclaw-tooltip>
               ${navCollapsed
                 ? html`<openclaw-tooltip
-                    .content=${gatewaySnapshot.phase === "connected"
+                    .content=${newSessionAccess.allowed
                       ? t("chat.runControls.newSession")
-                      : t("chat.runControls.newSessionDisconnected")}
+                      : newSessionAccess.reason}
                   >
                     <button
                       type="button"
                       class="shell-chrome-controls__button shell-chrome-controls__new-thread"
                       aria-label=${t("chat.runControls.newSession")}
-                      ?disabled=${gatewaySnapshot.phase !== "connected"}
-                      @click=${() => host.openNewSession(selectedAgentId)}
+                      ?disabled=${!newSessionAccess.allowed}
+                      @click=${() => openNewSession(selectedAgentId)}
                     >
                       ${icons.plus}
                     </button>

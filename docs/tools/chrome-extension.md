@@ -115,6 +115,13 @@ headers }` for scripting. The token is the same host-local relay secret the
 pairing string carries: treat it as private, and rotate it by deleting
 `credentials/browser-extension-relay.secret` and pairing again.
 
+[mcporter](https://github.com/openclaw/mcporter) needs no wiring at all: when a
+paired relay answers on this host, it transparently rewrites
+`chrome-devtools-mcp --autoConnect` server commands to the relay endpoint, so
+agents calling Chrome DevTools through mcporter skip the remote-debugging
+prompt automatically (set `MCPORTER_DISABLE_CHROME_DEVTOOLS_RELAY=1` there to
+opt out).
+
 ### Tab copilot side panel
 
 After pairing the extension, click **Open tab copilot** in its toolbar popup.

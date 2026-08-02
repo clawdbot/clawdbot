@@ -80,6 +80,11 @@ function renderSessionSection(params: {
   const collapsedAttentionDot =
     collapsed &&
     section.rows.some((row) => rowDemandsVisibility(row, RowVisibilityReason.Attention));
+  const newSessionAccess = host.readNewSessionAccess();
+  const groupWriteAccess = host.readSessionMutationAccess({
+    method: "sessions.groups.put",
+    requiredScope: "operator.write",
+  });
   const sectionClass = [
     "sidebar-recent-sessions__group",
     `sidebar-recent-sessions__group--zone-${zone}`,
@@ -100,12 +105,19 @@ function renderSessionSection(params: {
     <div
       class=${sectionClass}
       data-session-section=${section.id}
-      @dragover=${(event: DragEvent) => host.sectionDragOver(event, section.id, group)}
-      @dragleave=${(event: DragEvent) => host.sectionDragLeave(event, section.id, group)}
-      @drop=${(event: DragEvent) => host.sectionDrop(event, section.id, group)}
+      @dragover=${groupWriteAccess.allowed
+        ? (event: DragEvent) => host.sectionDragOver(event, section.id, group)
+        : nothing}
+      @dragleave=${groupWriteAccess.allowed
+        ? (event: DragEvent) => host.sectionDragLeave(event, section.id, group)
+        : nothing}
+      @drop=${groupWriteAccess.allowed
+        ? (event: DragEvent) => host.sectionDrop(event, section.id, group)
+        : nothing}
     >
       ${renderSidebarSessionSectionHeader({
         sectionId: section.id,
+        disabledReason: groupWriteAccess.allowed ? undefined : groupWriteAccess.reason,
         onStartDrag: (sectionId) => host.startSidebarSectionDrag(sectionId),
         onFinishDrag: () => host.finishSidebarSectionDrag(),
         onContextMenu: group
@@ -167,11 +179,11 @@ function renderSessionSection(params: {
                 <button
                   type="button"
                   class="sidebar-session-group-actions sidebar-new-session"
-                  title=${host.connected
+                  title=${newSessionAccess.allowed
                     ? t("chat.runControls.newSession")
-                    : t("chat.runControls.newSessionDisconnected")}
+                    : newSessionAccess.reason}
                   aria-label=${t("chat.runControls.newSession")}
-                  ?disabled=${!host.connected}
+                  ?disabled=${!newSessionAccess.allowed}
                   @click=${(event: MouseEvent) => {
                     event.stopPropagation();
                     host.openNewSession();
@@ -303,6 +315,11 @@ function renderSessionCatalog(params: {
   renderer: SessionCatalogGroupsRenderer;
 }) {
   const { host, snapshot, catalog, renderer } = params;
+  const newSessionAccess = host.readNewSessionAccess();
+  const groupWriteAccess = host.readSessionMutationAccess({
+    method: "sessions.groups.put",
+    requiredScope: "operator.write",
+  });
   return html`
     ${renderer({
       catalogs: [catalog],
@@ -340,7 +357,9 @@ function renderSessionCatalog(params: {
       creatorFilterActive: host.sessionCreatorFilterActive,
       onOpenViewMenu: (trigger) => host.sidebarMenus.toggleCatalogViewMenu(trigger),
       onLoadMore: (catalogId) => void host.sessionData.loadMoreSessionCatalog(catalogId),
-      onOpenNewSession: host.onOpenNewSession,
+      onOpenNewSession: (agentId, target) => host.requestOpenNewSession(agentId, target),
+      newSessionDisabledReason: newSessionAccess.allowed ? undefined : newSessionAccess.reason,
+      sectionDragDisabledReason: groupWriteAccess.allowed ? undefined : groupWriteAccess.reason,
       onNavigate: host.onNavigate,
       catalogOpenTarget: snapshot.catalogOpenTarget,
       terminalAvailable: snapshot.terminalAvailable,

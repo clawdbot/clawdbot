@@ -275,6 +275,14 @@ struct GeneralSettings: View {
             self.connectionStatusPanel
             self.gatewayModeGroup
 
+            if self.state.connectionMode != .remote,
+               self.state.gatewayConfigConflict != nil
+            {
+                SettingsCardGroup("Remote Access") {
+                    GatewayConfigConflictRecoveryView(state: self.state)
+                }
+            }
+
             switch self.state.connectionMode {
             case .unconfigured:
                 EmptyView()
@@ -472,6 +480,7 @@ struct GeneralSettings: View {
                     self.remoteDirectRow
                 }
                 self.remoteTokenRow
+                GatewayConfigConflictRecoveryView(state: self.state)
             }
 
             SettingsCardGroup("Discovery & Status") {
@@ -657,7 +666,7 @@ struct GeneralSettings: View {
             SettingsCardRow(
                 title: "Gateway token",
                 subtitle: "Used when the remote gateway requires token auth.",
-                showsDivider: false)
+                showsDivider: self.state.gatewayConfigConflict != nil)
             {
                 SecureField("remote gateway auth token (gateway.remote.token)", text: self.$state.remoteToken)
                     .textFieldStyle(.roundedBorder)

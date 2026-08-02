@@ -384,7 +384,13 @@ export function applyJobPatch(
     // Runtime state patches may report execution progress, but the scheduler
     // alone owns the boundary that decides whether restart catch-up can run.
     delete statePatch.scheduleActivatedAtMs;
+    delete statePatch.autoDisabled;
     job.state = { ...job.state, ...statePatch };
+  }
+  if (patch.enabled === true) {
+    delete job.state.autoDisabled;
+    job.state.consecutiveErrors = 0;
+    job.state.scheduleErrorCount = 0;
   }
   if ("agentId" in patch) {
     job.agentId = normalizeOptionalAgentId((patch as { agentId?: unknown }).agentId);
@@ -417,6 +423,10 @@ export function applyJobPatch(
   assertScriptPayloadSupport(job, {
     cronConfig: opts?.cronConfig,
     requireEnabled: patch.payload?.kind === "script",
+    // Enabled-only/rename patches must keep working on jobs stored with a
+    // malformed script (pre-validation persistence); re-check syntax only
+    // when this patch rewrites the payload, or disable becomes a dead end.
+    validateSyntax: patch.payload !== undefined,
   });
   assertStreamScheduleSupport(job, {
     cronConfig: opts?.cronConfig,

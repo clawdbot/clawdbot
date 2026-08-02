@@ -552,6 +552,25 @@ describe("cron store", () => {
     await expectPathMissing(`${store.storePath}.bak`);
   });
 
+  it("round-trips the auto-disable reason through runtime state JSON", async () => {
+    const store = await makeStorePath();
+    const payload = makeStore("auto-disabled-job", false);
+    const job = expectDefined(payload.jobs[0], "payload.jobs[0] test invariant");
+    await saveCronStore(store.storePath, payload);
+
+    job.state = {
+      consecutiveErrors: 10,
+      autoDisabled: {
+        reason: "consecutive-failures",
+        atMs: job.updatedAtMs,
+        consecutiveErrors: 10,
+      },
+    };
+    await saveCronStore(store.storePath, payload, { stateOnly: true });
+
+    expect((await loadCronStore(store.storePath)).jobs[0]?.state).toMatchObject(job.state);
+  });
+
   it("stores queued reservations separately from active run markers", async () => {
     const store = await makeStorePath();
     const payload = makeStore("job-queued-phase", true);

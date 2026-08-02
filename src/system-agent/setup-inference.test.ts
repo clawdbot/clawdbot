@@ -53,6 +53,10 @@ import {
   verifySetupInferenceConfig as verifySetupInferenceConfigImpl,
 } from "./setup-inference.js";
 import {
+  installSystemAgentPluginMetadataTestSnapshot,
+  type SystemAgentPluginMetadataTestSnapshot,
+} from "./system-agent.test-helpers.js";
+import {
   createSystemAgentVerifiedInferenceBinding,
   type SystemAgentVerifiedInferenceBinding,
 } from "./verified-inference.js";
@@ -126,13 +130,25 @@ const testCodexRuntimeArtifact = {
 const suiteTempRootTracker = createSuiteTempRootTracker({
   prefix: "setup-inference-test-",
 });
+let pluginMetadataSnapshot: SystemAgentPluginMetadataTestSnapshot | undefined;
 
 beforeAll(async () => {
+  pluginMetadataSnapshot = installSystemAgentPluginMetadataTestSnapshot(
+    materializedMainRuntimeConfig,
+  );
   await suiteTempRootTracker.setup();
 });
 
 afterAll(async () => {
-  await suiteTempRootTracker.cleanup();
+  try {
+    await suiteTempRootTracker.cleanup();
+  } finally {
+    pluginMetadataSnapshot?.restore();
+  }
+});
+
+beforeEach(() => {
+  pluginMetadataSnapshot?.rebindForCurrentEnv();
 });
 
 async function makeTempDir(): Promise<string> {
