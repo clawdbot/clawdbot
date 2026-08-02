@@ -12,12 +12,20 @@ import * as thinking from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
+import {
+  appendTranscriptMessageSync,
+  replaceSessionEntry,
+} from "../config/sessions/session-accessor.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import * as usageFormat from "../utils/usage-format.js";
-import { listSessionsFromStore } from "./session-utils.js";
+import { listSessionsFromStore, listSessionsFromStoreAsync } from "./session-utils.js";
 
 /**
  * Regression smoke for the per-list rowContext resolver cache. The bug we are
@@ -260,6 +268,71 @@ describe("listSessionsFromStore resolver cache", () => {
         expect(acpSelects).toBe(1);
       } finally {
         prepareSpy.mockRestore();
+      }
+    });
+  });
+
+  test("batches transcript title reads to O(stores) instead of O(rows)", async () => {
+    await withStateDirEnv("openclaw-perf-title-batch-", async ({ stateDir }) => {
+      resetPluginRuntimeStateForTest();
+      setActivePluginRegistry(createEmptyPluginRegistry());
+      const cfg = {
+        agents: { defaults: { model: { primary: "openai/gpt-5" } } },
+      } as OpenClawConfig;
+      resetConfigRuntimeState();
+      setRuntimeConfigSnapshot(cfg);
+      const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+      const store: Record<string, SessionEntry> = {};
+      for (let index = 0; index < 30; index += 1) {
+        const sessionId = `title-batch-${index}`;
+        const sessionKey = `agent:main:${sessionId}`;
+        const entry = { sessionId, updatedAt: 1_000 - index } satisfies SessionEntry;
+        store[sessionKey] = entry;
+        await replaceSessionEntry({ agentId: "main", sessionKey, storePath }, entry);
+        for (const message of [
+          { role: "user", content: `title ${index}` },
+          { role: "assistant", content: `last ${index}` },
+        ]) {
+          appendTranscriptMessageSync(
+            { agentId: "main", sessionId, sessionKey, storePath },
+            { message },
+          );
+        }
+      }
+
+      const database = openOpenClawAgentDatabase({ agentId: "main" });
+      const originalPrepare = database.db.prepare.bind(database.db);
+      let titleProbeSelects = 0;
+      const prepareSpy = vi.spyOn(database.db, "prepare").mockImplementation((sql: string) => {
+        if (
+          sql.includes("latest_boundary_json") &&
+          sql.includes("session_transcript_active_events")
+        ) {
+          titleProbeSelects += 1;
+        }
+        return originalPrepare(sql);
+      });
+      try {
+        const result = await listSessionsFromStoreAsync({
+          cfg,
+          storePath,
+          store,
+          opts: { includeDerivedTitles: true, includeLastMessage: true, limit: 30 },
+        });
+
+        expect(result.sessions).toHaveLength(30);
+        expect(result.sessions[0]).toMatchObject({
+          derivedTitle: "title 0",
+          lastMessagePreview: "last 0",
+        });
+        expect(result.sessions.at(-1)).toMatchObject({
+          derivedTitle: "title 29",
+          lastMessagePreview: "last 29",
+        });
+        expect(titleProbeSelects).toBe(1);
+      } finally {
+        prepareSpy.mockRestore();
+        closeOpenClawAgentDatabasesForTest();
       }
     });
   });

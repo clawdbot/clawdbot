@@ -5,7 +5,12 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
-const loader = vi.hoisted(() => ({ calls: vi.fn(), failNext: false }));
+const loader = vi.hoisted(() => ({
+  calls: vi.fn(),
+  failNext: false,
+  rowCalls: vi.fn(),
+  rowGate: undefined as Promise<void> | undefined,
+}));
 
 vi.mock("../session-utils.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../session-utils.js")>();
@@ -21,10 +26,18 @@ vi.mock("../session-utils.js", async (importOriginal) => {
       }
       return actual.loadCombinedSessionStoreForGateway(...args);
     },
+    listSessionsFromStoreAsync: async (
+      ...args: Parameters<typeof actual.listSessionsFromStoreAsync>
+    ) => {
+      loader.rowCalls(...args);
+      await loader.rowGate;
+      return await actual.listSessionsFromStoreAsync(...args);
+    },
   };
 });
 
 const { sessionReadHandlers } = await import("./sessions-read.js");
+const { emitSessionsChanged } = await import("./session-change-event.js");
 
 function identifiedClient(profileId: string): GatewayClient {
   return {
@@ -48,6 +61,7 @@ function requestContext(config: OpenClawConfig): GatewayRequestContext {
   return {
     chatAbortControllers: new Map(),
     getRuntimeConfig: () => config,
+    getSessionEventSubscriberConnIds: () => new Set(),
     loadGatewayModelCatalog: async () => [],
     logGateway: { debug: vi.fn() },
   } as unknown as GatewayRequestContext;
@@ -67,7 +81,11 @@ async function listSessions(params: {
   } as never);
   expect(responses).toHaveLength(1);
   expect(responses[0]?.[0]).toBe(true);
-  return responses[0]?.[1] as { sessions: Array<{ key: string }> };
+  return responses[0]?.[1] as {
+    count: number;
+    nextOffset: number | null;
+    sessions: Array<{ key: string }>;
+  };
 }
 
 async function seedSessions(): Promise<OpenClawConfig> {
@@ -118,6 +136,8 @@ afterEach(() => {
   vi.restoreAllMocks();
   loader.calls.mockClear();
   loader.failNext = false;
+  loader.rowCalls.mockClear();
+  loader.rowGate = undefined;
 });
 
 describe("sessions.list single-flight", () => {
@@ -164,6 +184,24 @@ describe("sessions.list single-flight", () => {
     });
   });
 
+  it("reuses a completed result until the session mutation version advances", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const config = await seedSessions();
+      const context = requestContext(config);
+      const client = identifiedClient("owner@example.com");
+      const request = { archived: "all" as const, limit: 100 };
+
+      const first = await listSessions({ client, context, request });
+      const cached = await listSessions({ client, context, request });
+      expect(cached).toBe(first);
+      expect(loader.calls).toHaveBeenCalledTimes(1);
+
+      emitSessionsChanged(context, { reason: "test", sessionKey: "agent:main:active" });
+      await listSessions({ client, context, request });
+      expect(loader.calls).toHaveBeenCalledTimes(2);
+    });
+  });
+
   it("does not share filtered results across client identities", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const config = await seedSessions();
@@ -185,6 +223,63 @@ describe("sessions.list single-flight", () => {
       expect(owner.sessions.map((session) => session.key)).toContain("agent:main:draft");
       expect(viewer.sessions.map((session) => session.key)).not.toContain("agent:main:draft");
       expect(loader.calls).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("refills a page from the loaded store when a selected row becomes hidden", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const config = await seedSessions();
+      for (const [name, updatedAt] of [
+        ["third", 500],
+        ["second", 600],
+        ["first", 700],
+      ] as const) {
+        await upsertSessionEntry(
+          { agentId: "main", sessionKey: `agent:main:page-${name}` },
+          {
+            sessionId: `page-${name}`,
+            updatedAt,
+            createdActor: { type: "human", id: "owner@example.com" },
+            visibility: "shared",
+          },
+        );
+      }
+      const context = requestContext(config);
+      const client = identifiedClient("viewer@example.com");
+      let releaseRows!: () => void;
+      loader.rowGate = new Promise<void>((resolve) => {
+        releaseRows = resolve;
+      });
+
+      const firstPage = listSessions({
+        client,
+        context,
+        request: { agentId: "main", archived: "all", limit: 1 },
+      });
+      await vi.waitFor(() => expect(loader.rowCalls).toHaveBeenCalledOnce());
+      await upsertSessionEntry(
+        { agentId: "main", sessionKey: "agent:main:page-first" },
+        { visibility: "draft", updatedAt: 800 },
+      );
+      emitSessionsChanged(context, {
+        reason: "sharing",
+        sessionKey: "agent:main:page-first",
+      });
+      releaseRows();
+
+      const repaired = await firstPage;
+      expect(repaired.sessions.map((session) => session.key)).toEqual(["agent:main:page-second"]);
+      expect(repaired).toMatchObject({ count: 1, nextOffset: 1 });
+      expect(loader.calls).toHaveBeenCalledTimes(1);
+      expect(loader.rowCalls).toHaveBeenCalledTimes(2);
+
+      loader.rowGate = undefined;
+      const next = await listSessions({
+        client,
+        context,
+        request: { agentId: "main", archived: "all", limit: 1, offset: 1 },
+      });
+      expect(next.sessions.map((session) => session.key)).toEqual(["agent:main:page-third"]);
     });
   });
 
@@ -210,29 +305,32 @@ describe("sessions.list single-flight", () => {
   it("does not share work that started before an intervening session mutation", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const config = await seedSessions();
-      let releaseCatalog!: () => void;
-      const catalog = new Promise<[]>((resolve) => {
-        releaseCatalog = () => resolve([]);
+      let releaseRows!: () => void;
+      loader.rowGate = new Promise<void>((resolve) => {
+        releaseRows = resolve;
       });
-      const loadGatewayModelCatalog = vi.fn(async () => await catalog);
-      const context = {
-        ...requestContext(config),
-        loadGatewayModelCatalog,
-      } as GatewayRequestContext;
+      const context = requestContext(config);
       const client = identifiedClient("owner@example.com");
       const request = { archived: "all" as const, limit: 100 };
 
       const beforeMutation = listSessions({ client, context, request });
-      await vi.waitFor(() => expect(loadGatewayModelCatalog).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() => expect(loader.rowCalls).toHaveBeenCalledTimes(1));
       await upsertSessionEntry(
         { agentId: "main", sessionKey: "agent:main:created-mid-list" },
         { sessionId: "created-mid-list", updatedAt: 500, visibility: "shared" },
       );
+      emitSessionsChanged(context, {
+        reason: "test",
+        sessionKey: "agent:main:created-mid-list",
+      });
       const afterMutation = listSessions({ client, context, request });
-      await vi.waitFor(() => expect(loadGatewayModelCatalog).toHaveBeenCalledTimes(2));
-      releaseCatalog();
+      await vi.waitFor(() => expect(loader.rowCalls).toHaveBeenCalledTimes(2));
+      releaseRows();
 
-      const [, fresh] = await Promise.all([beforeMutation, afterMutation]);
+      const [stale, fresh] = await Promise.all([beforeMutation, afterMutation]);
+      expect(stale.sessions.map((session) => session.key)).not.toContain(
+        "agent:main:created-mid-list",
+      );
       expect(fresh.sessions.map((session) => session.key)).toContain("agent:main:created-mid-list");
       expect(loader.calls).toHaveBeenCalledTimes(2);
     });

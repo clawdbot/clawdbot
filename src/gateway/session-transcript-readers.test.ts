@@ -24,7 +24,10 @@ import {
   readLatestSessionUsageFromTranscriptAsync,
   type SessionTranscriptReadScope,
 } from "./session-transcript-readers.js";
-import { readSessionTitleFieldsFromTranscript } from "./session-transcript-title-reader.js";
+import {
+  readSessionTitleFieldsFromTranscript,
+  readSessionTitleFieldsFromTranscriptBatch,
+} from "./session-transcript-title-reader.js";
 
 vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/sessions/session-accessor.js")>();
@@ -398,6 +401,46 @@ describe("session transcript reader facade", () => {
 
     expect(readSessionTitleFieldsFromTranscript(scope)).toEqual(reference);
     expect(sessionAccessor.readSessionTranscriptMessageEvents).not.toHaveBeenCalled();
+  });
+
+  test("falls back to the canonical visible window for reset transcripts", async () => {
+    const sessionId = "reader-title-reset-window";
+    const scope = await writeTranscript(sessionId, [
+      { type: "session", version: 3, id: sessionId },
+      {
+        type: "message",
+        id: "old",
+        parentId: null,
+        message: { role: "user", content: "hidden old prompt" },
+      },
+      {
+        type: "message",
+        id: "kept-user",
+        parentId: "old",
+        message: { role: "user", content: "kept prompt" },
+      },
+      {
+        type: "message",
+        id: "kept-assistant",
+        parentId: "kept-user",
+        message: { role: "assistant", content: "kept answer" },
+      },
+      {
+        type: "reset",
+        id: "reset-boundary",
+        parentId: "kept-assistant",
+        firstKeptEntryId: "kept-user",
+      },
+      {
+        type: "message",
+        id: "post-reset",
+        parentId: "reset-boundary",
+        message: { role: "assistant", content: "newest answer" },
+      },
+    ]);
+    expect(readSessionTitleFieldsFromTranscriptBatch([scope])).toEqual([
+      { firstUserMessage: "kept prompt", lastMessagePreview: "newest answer" },
+    ]);
   });
 
   test("bounds title probe reads independently of transcript length", async () => {
