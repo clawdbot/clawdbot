@@ -128,7 +128,12 @@ export function assignSignalManagedNativePort(
     throw new Error("Signal managed native port must be an integer between 1 and 65535.");
   }
   const connectionUrlValue = transport.url;
-  if (!connectionUrlValue || !isSignalManagedNativeConnectionUrlForBind(transport)) {
+  const preferredBindPort = preferredManagedNativePortFromConnectionUrl(transport);
+  const bindTransport =
+    transport.httpPort === undefined && preferredBindPort !== undefined
+      ? { ...transport, httpPort: preferredBindPort }
+      : transport;
+  if (!connectionUrlValue || !isSignalManagedNativeConnectionUrlForBind(bindTransport)) {
     return { ...transport, httpPort };
   }
   const connectionUrl = new URL(connectionUrlValue);

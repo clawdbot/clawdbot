@@ -238,6 +238,31 @@ describe("resolveSignalAccount", () => {
     expect(() => resolveSignalAccount({ cfg, accountId: "work" })).toThrow(message);
   });
 
+  it("keeps colliding inferred managed native ports aligned with fallback binds", () => {
+    const cfg = {
+      channels: {
+        signal: {
+          accounts: {
+            personal: {
+              account: "+15555550123",
+              transport: { kind: "managed-native", url: "http://127.0.0.1:8181" },
+            },
+            work: {
+              account: "+15555550124",
+              transport: { kind: "managed-native", url: "http://127.0.0.1:8181" },
+            },
+          },
+        },
+      },
+    } as never;
+
+    expect(resolveSignalAccount({ cfg, accountId: "work" }).transport).toMatchObject({
+      kind: "managed-native",
+      baseUrl: "http://127.0.0.1:8080",
+      httpPort: 8080,
+    });
+  });
+
   it("rejects an explicit managed port used by its own independent local endpoint", () => {
     const cfg = {
       channels: {
