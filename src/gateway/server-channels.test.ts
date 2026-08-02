@@ -881,14 +881,18 @@ describe("server-channels auto restart", () => {
   });
 
   it("does not auto-restart a channel task exit marked as terminal disconnect", async () => {
+    const lifecycleAtHandoff: Array<ChannelAccountSnapshot["lifecycle"]> = [];
     const startAccount = vi.fn(
       async ({
+        getStatus,
         setStatus,
         accountId,
       }: {
+        getStatus: ChannelGatewayContext["getStatus"];
         setStatus: ChannelGatewayContext["setStatus"];
         accountId: string;
       }) => {
+        lifecycleAtHandoff.push(getStatus().lifecycle);
         setStatus({
           accountId,
           terminalDisconnect: true,
@@ -907,10 +911,16 @@ describe("server-channels auto restart", () => {
     const snapshot = manager.getRuntimeSnapshot();
     expect(snapshot.channelAccounts.discord?.[DEFAULT_ACCOUNT_ID]).toMatchObject({
       terminalDisconnect: true,
-      lifecycle: "stopped",
+      running: false,
+      lifecycle: "blocked",
       lastError: "relink required",
       restartPending: false,
     });
+
+    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(startAccount).toHaveBeenCalledTimes(2);
+    expect(lifecycleAtHandoff).toEqual(["starting", "starting"]);
   });
 
   it("consumes rejected stop tasks during manual abort", async () => {
