@@ -1,5 +1,7 @@
 import type { Command } from "commander";
 import { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
+import { generateHexPkceVerifierChallenge } from "openclaw/plugin-sdk/provider-auth";
+import { generateOAuthState } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   buildGoogleMeetCalendarDayWindow,
   findGoogleMeetCalendarEvent,
@@ -33,8 +35,6 @@ import {
 import { resolveGoogleMeetGatewayOperationTimeoutMs, type GoogleMeetConfig } from "./config.js";
 import {
   buildGoogleMeetAuthUrl,
-  createGoogleMeetOAuthState,
-  createGoogleMeetPkce,
   exchangeGoogleMeetAuthCode,
   waitForGoogleMeetAuthCode,
 } from "./oauth.js";
@@ -220,8 +220,8 @@ export function registerGoogleMeetCli(params: {
           "Missing Google Meet OAuth client id. Configure oauth.clientId or pass --client-id.",
         );
       }
-      const { verifier, challenge } = createGoogleMeetPkce();
-      const state = createGoogleMeetOAuthState();
+      const { verifier, challenge } = generateHexPkceVerifierChallenge();
+      const state = generateOAuthState();
       const authUrl = buildGoogleMeetAuthUrl({
         clientId,
         challenge,
