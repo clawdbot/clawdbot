@@ -212,6 +212,77 @@ describe("Tlon durable ingress", () => {
     });
   });
 
+  it("dispatches colliding post ids from different channels", async () => {
+    await withQueue(async (queue) => {
+      const delivered: string[] = [];
+      const dispatch = vi.fn<TlonIngressDispatch>(async (_source, event, lifecycle) => {
+        delivered.push(String((event as { nest?: unknown }).nest));
+        await lifecycle.onAdopted();
+      });
+      const monitor = startMonitor(queue, dispatch);
+      try {
+        await monitor.receive({
+          source: "channels",
+          event: channelEvent({ id: "170.141.184.507", nest: "chat/~zod/general" }),
+        });
+        await monitor.waitForIdle();
+        const second = await monitor.receive({
+          source: "channels",
+          event: channelEvent({ id: "170.141.184.507", nest: "chat/~nec/other" }),
+        });
+        await monitor.waitForIdle();
+        expect(second).toEqual({ kind: "accepted" });
+        expect(delivered).toEqual(["chat/~zod/general", "chat/~nec/other"]);
+      } finally {
+        await monitor.stop();
+      }
+    });
+  });
+
+  it("dispatches a chat message whose id matches a completed channel post", async () => {
+    await withQueue(async (queue) => {
+      const delivered: string[] = [];
+      const dispatch = vi.fn<TlonIngressDispatch>(async (source, _event, lifecycle) => {
+        delivered.push(source);
+        await lifecycle.onAdopted();
+      });
+      const monitor = startMonitor(queue, dispatch);
+      try {
+        await monitor.receive({
+          source: "channels",
+          event: channelEvent({ id: "170.141.184.507" }),
+        });
+        await monitor.waitForIdle();
+        await monitor.receive({ source: "chat", event: chatEvent({ id: "170.141.184.507" }) });
+        await monitor.waitForIdle();
+        expect(delivered).toEqual(["channels", "chat"]);
+      } finally {
+        await monitor.stop();
+      }
+    });
+  });
+
+  it("still suppresses a redelivered post id within the same channel", async () => {
+    await withQueue(async (queue) => {
+      const dispatch = vi.fn<TlonIngressDispatch>(async (_source, _event, lifecycle) => {
+        await lifecycle.onAdopted();
+      });
+      const monitor = startMonitor(queue, dispatch);
+      try {
+        for (const text of ["first delivery", "redelivery"]) {
+          await monitor.receive({
+            source: "channels",
+            event: channelEvent({ id: "170.141.184.507", nest: "chat/~zod/general", text }),
+          });
+          await monitor.waitForIdle();
+        }
+        expect(dispatch).toHaveBeenCalledTimes(1);
+      } finally {
+        await monitor.stop();
+      }
+    });
+  });
+
   it("retains completed logical ids by count rather than age", async () => {
     await withQueue(async (queue) => {
       let now = 1_700_000_000_000;
@@ -251,7 +322,7 @@ describe("Tlon durable ingress", () => {
         await monitor.waitForIdle();
         expect(await queue.listClaims()).toEqual([
           expect.objectContaining({
-            id: "message-raw",
+            id: "channels:chat/~zod/ops:message-raw",
             laneKey: "group:chat/~zod/ops",
             payload: expect.objectContaining({ rawEvent: JSON.stringify(group) }),
           }),
@@ -271,7 +342,10 @@ describe("Tlon durable ingress", () => {
         await monitor.receive({ source: "channels", event: reply });
         await monitor.waitForIdle();
         expect(await queue.listClaims()).toEqual([
-          expect.objectContaining({ id: "reply-stable", laneKey: "group:chat/~zod/ops" }),
+          expect.objectContaining({
+            id: "channels:chat/~zod/ops:reply-stable",
+            laneKey: "group:chat/~zod/ops",
+          }),
         ]);
       } finally {
         await monitor.stop();
@@ -301,7 +375,9 @@ describe("Tlon durable ingress", () => {
           event: chatEvent({ id: "message-auth" }),
         });
         await monitor.waitForIdle();
-        expect((await queue.enqueue("message-auth", {} as TlonIngressPayload)).kind).toBe("failed");
+        expect((await queue.enqueue("chat:message-auth", {} as TlonIngressPayload)).kind).toBe(
+          "failed",
+        );
       } finally {
         await monitor.stop();
       }
@@ -321,7 +397,7 @@ describe("Tlon durable ingress", () => {
         });
         await monitor.waitForIdle();
         expect((await queue.listPending({ limit: "all" })).map((record) => record.id)).toEqual([
-          "message-provider-auth",
+          "chat:message-provider-auth",
         ]);
       } finally {
         await monitor.stop();
@@ -367,8 +443,8 @@ describe("Tlon durable ingress", () => {
       await Promise.all([admission, queuedAdmission, stopping, stoppingAgain]);
       expect(dispatch).not.toHaveBeenCalled();
       expect((await queue.listPending({ limit: "all" })).map((record) => record.id)).toEqual([
-        "message-stop-1",
-        "message-stop-2",
+        "channels:chat/~zod/general:message-stop-1",
+        "channels:chat/~zod/general:message-stop-2",
       ]);
     });
   });

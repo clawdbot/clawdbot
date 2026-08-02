@@ -64,8 +64,8 @@ function inspectChannelsEvent(event: unknown): { eventId: string; laneKey: strin
   if (!nest || (!isRecord(set?.essay) && !isRecord(replySet?.memo))) {
     return null;
   }
-  const eventId = nonEmptyString(isRecord(replySet?.memo) ? reply?.id : post?.id);
-  return eventId ? { eventId, laneKey: `group:${nest}` } : null;
+  const postId = nonEmptyString(isRecord(replySet?.memo) ? reply?.id : post?.id);
+  return postId ? { eventId: `channels:${nest}:${postId}`, laneKey: `group:${nest}` } : null;
 }
 
 function inspectChatEvent(event: unknown): { eventId: string; laneKey: string } | null {
@@ -73,13 +73,13 @@ function inspectChatEvent(event: unknown): { eventId: string; laneKey: string } 
   const response = isRecord(envelope?.response) ? envelope.response : null;
   const add = isRecord(response?.add) ? response.add : null;
   const essay = isRecord(add?.essay) ? add.essay : null;
-  const eventId = nonEmptyString(envelope?.id);
-  if (!essay || !eventId) {
+  const messageId = nonEmptyString(envelope?.id);
+  if (!essay || !messageId) {
     return null;
   }
   const whom = isRecord(envelope?.whom) ? nonEmptyString(envelope.whom.ship) : null;
   const peer = nonEmptyString(envelope?.whom) ?? whom ?? nonEmptyString(essay.author);
-  return { eventId, laneKey: peer ? `direct:${peer}` : `event:${eventId}` };
+  return { eventId: `chat:${messageId}`, laneKey: peer ? `direct:${peer}` : `event:${messageId}` };
 }
 
 function inspectTlonIngressEvent(
