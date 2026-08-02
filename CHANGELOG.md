@@ -60,6 +60,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Gateway crash-loop recovery:** re-evaluate safe-mode suppression after the full unclean-boot window drains, record a fresh recovery lifecycle before resuming configured channels, and preserve manual or development-mode stops so healthy gateways no longer require a restart to restore channel autostart. Fixes #115326.
 - **Control UI operator session permissions:** honor Gateway-advertised operator scopes for new-thread creation, thread management, checkpoints, and sharing controls while preserving read-only navigation and legacy Gateway compatibility. Fixes #117786. Thanks @shakkernerd.
 - **Control UI archived session deletion:** send archive-gated delete requests from Sessions-page row and mixed-selection actions so write-scoped operators can remove archived threads while active-session deletion remains admin-only. Thanks @shakkernerd.
 - **Control UI command recovery:** keep delayed detached and immediate command failures scoped to their submitting session, preserving failed drafts and attachments for that pane without overwriting the active session. Fixes #116846. Thanks @shakkernerd.

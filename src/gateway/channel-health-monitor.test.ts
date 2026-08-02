@@ -17,6 +17,7 @@ function createMockChannelManager(overrides?: Partial<ChannelManager>): ChannelM
     stopChannel: vi.fn(async () => {}),
     setAutostartSuppression: vi.fn(),
     getAutostartSuppression: vi.fn(() => null),
+    recoverAutostartSuppression: vi.fn(async () => false),
     setAmbientAutostartSuppressedChannelIds: vi.fn(),
     isAmbientAutostartSuppressed: vi.fn(() => false),
     markChannelLoggedOut: vi.fn(),
@@ -310,6 +311,34 @@ describe("channel-health-monitor", () => {
 
     expect(manager.resetRestartAttempts).toHaveBeenCalledWith("discord", "default");
     expect(manager.startChannel).toHaveBeenCalledWith("discord", "default");
+    monitor.stop();
+  });
+
+  it("rechecks crash-loop suppression before evaluating stopped accounts", async () => {
+    let suppression: ReturnType<ChannelManager["getAutostartSuppression"]> = {
+      reason: "crash-loop-breaker",
+      message: "safe mode",
+    };
+    const recoverAutostartSuppression = vi.fn(async () => {
+      suppression = null;
+      return true;
+    });
+    const manager = createSnapshotManager(
+      {
+        whatsapp: {
+          default: managedStoppedAccount("safe mode"),
+        },
+      },
+      {
+        getAutostartSuppression: vi.fn(() => suppression),
+        recoverAutostartSuppression,
+      },
+    );
+
+    const monitor = await startAndRunCheck(manager);
+
+    expect(recoverAutostartSuppression).toHaveBeenCalledOnce();
+    expect(manager.startChannel).toHaveBeenCalledWith("whatsapp", "default");
     monitor.stop();
   });
 
