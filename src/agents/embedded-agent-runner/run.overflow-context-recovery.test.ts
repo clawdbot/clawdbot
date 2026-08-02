@@ -54,6 +54,9 @@ vi.mock("./run/session-bootstrap.js", () => ({
 }));
 
 type RecoveryInput = Parameters<typeof recoverEmbeddedRunOverflow>[0];
+type RecoveryInputOverrides = Omit<Partial<RecoveryInput>, "attempt"> & {
+  attempt?: Partial<EmbeddedRunAttemptResult>;
+};
 type CompactionResult = Awaited<ReturnType<RecoveryInput["contextEngine"]["compact"]>>;
 
 const overflowError = () => new Error("request_too_large: Request size exceeds context window");
@@ -93,7 +96,7 @@ function makeAssistantMessage(
   };
 }
 
-function makeInput(overrides: Partial<RecoveryInput> = {}): RecoveryInput {
+function makeInput(overrides: RecoveryInputOverrides = {}): RecoveryInput {
   const promptError = Object.hasOwn(overrides, "promptError")
     ? overrides.promptError
     : overflowError();
@@ -286,7 +289,7 @@ describe("recoverEmbeddedRunOverflow", () => {
         terminal: { kind: "failed", source: "prompt", error: overflowError() },
         sessionIdUsed: "session-1",
         messagesSnapshot,
-      } as EmbeddedRunAttemptResult,
+      },
       toolResultPromptProjectionState: projectionState,
     });
 
@@ -327,7 +330,7 @@ describe("recoverEmbeddedRunOverflow", () => {
           terminal: { kind: "failed", source: "prompt", error: overflowError() },
           sessionIdUsed: "session-1",
           messagesSnapshot,
-        } as EmbeddedRunAttemptResult,
+        },
       }),
     );
 
@@ -345,7 +348,7 @@ describe("recoverEmbeddedRunOverflow", () => {
         sessionIdUsed: "session-1",
         messagesSnapshot: [],
         preflightRecovery: { route: "compact_only" },
-      } as EmbeddedRunAttemptResult,
+      },
     });
 
     expect(await recoverEmbeddedRunOverflow(input)).toEqual({ action: "retry" });
@@ -360,7 +363,7 @@ describe("recoverEmbeddedRunOverflow", () => {
         sessionIdUsed: "session-1",
         messagesSnapshot: [],
         preflightRecovery: { route: "compact_only", source: "mid-turn" },
-      } as EmbeddedRunAttemptResult,
+      },
     });
 
     expect(await recoverEmbeddedRunOverflow(input)).toEqual({ action: "retry" });
@@ -379,7 +382,7 @@ describe("recoverEmbeddedRunOverflow", () => {
         sessionIdUsed: "session-1",
         messagesSnapshot: [],
         preflightRecovery: { route: "compact_then_truncate" },
-      } as EmbeddedRunAttemptResult,
+      },
     });
 
     expect(await recoverEmbeddedRunOverflow(input)).toEqual({ action: "retry" });
