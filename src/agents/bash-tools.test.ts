@@ -946,21 +946,20 @@ describe("exec PATH handling", () => {
 });
 
 describe("findPathKey", () => {
-  it.each([
-    { name: "uses the uppercase key", env: { PATH: "/usr/bin" }, expected: "PATH" },
-    {
-      name: "preserves a mixed-case key",
-      env: { Path: "C:\\Windows\\System32" },
-      expected: "Path",
-    },
-    { name: "defaults when no path key exists", env: { HOME: "/home/user" }, expected: "PATH" },
-    {
-      name: "prefers uppercase when both forms exist",
-      env: { PATH: "/usr/bin", Path: "C:\\Windows" },
-      expected: "PATH",
-    },
-  ])("$name", ({ env, expected }) => {
-    expect(findPathKey(env)).toBe(expected);
+  it("returns PATH when key is uppercase", () => {
+    expect(findPathKey({ PATH: "/usr/bin" })).toBe("PATH");
+  });
+
+  it("returns Path when key is mixed-case (Windows style)", () => {
+    expect(findPathKey({ Path: "C:\\Windows\\System32" })).toBe("Path");
+  });
+
+  it("returns PATH as default when no PATH-like key exists", () => {
+    expect(findPathKey({ HOME: "/home/user" })).toBe("PATH");
+  });
+
+  it("prefers uppercase PATH when both PATH and Path exist", () => {
+    expect(findPathKey({ PATH: "/usr/bin", Path: "C:\\Windows" })).toBe("PATH");
   });
 });
 

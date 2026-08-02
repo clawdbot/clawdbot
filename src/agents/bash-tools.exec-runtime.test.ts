@@ -1059,7 +1059,9 @@ describe("runExecProcess PTY fallback", () => {
       });
 
       await handle.promise;
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
 
       const event = events.find(
         (item): item is DiagnosticExecProcessCompletedEvent =>
