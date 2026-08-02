@@ -559,7 +559,7 @@ function getSessionStatusTool(
   return tool;
 }
 
-async function renderTaskStatus(tasks: TaskRecord[], callId: string) {
+async function renderTaskStatus(tasks: Array<Record<string, unknown>>, callId: string) {
   resetSessionStore({
     "agent:main:main": { sessionId: "sess-main", updatedAt: Date.now() },
   });
