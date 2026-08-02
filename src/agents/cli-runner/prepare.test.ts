@@ -8,6 +8,8 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildGroupChatContext, buildGroupIntro } from "../../auto-reply/reply/groups.js";
+import { buildInboundUserContextPrefix } from "../../auto-reply/reply/inbound-meta.js";
+import type { TemplateContext } from "../../auto-reply/templating.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { registerLegacyContextEngine } from "../../context-engine/legacy.registration.js";
@@ -1927,6 +1929,86 @@ describe("prepareCliRunContext", () => {
       localSessionId: "session-test",
       deliveredMessageKeys: ["telegram:10"],
     });
+  });
+
+  it("does not let one conversation's delivered watermark suppress another conversation's identical message id", async () => {
+    // Compositional regression spanning the real producer (buildInboundUserContextPrefix
+    // in src/auto-reply/reply/inbound-meta.ts) and the real consumer (the resume filter
+    // above). Telegram message_id is chat-local, so two different chats/topics sharing a
+    // reusable native CLI session can legitimately deliver a message with the same raw
+    // numeric id. Each chat's producer attaches a distinct conversation_scope, and the
+    // consumer must fold that into the delivered-key set rather than trusting the bare
+    // id, or chat B's message would look "already delivered" once chat A's is recorded.
+    const buildScopedProjection = (conversationScope: string, body: string) => {
+      const target: Parameters<typeof buildInboundUserContextPrefix>[3] = {};
+      buildInboundUserContextPrefix(
+        {
+          ChatType: "group",
+          ChannelStructuredContext: [
+            {
+              label: "Conversation context",
+              source: "telegram",
+              type: "chat_window",
+              payload: {
+                order: "chronological",
+                relation: "selected_for_current_message",
+                messages: [
+                  {
+                    message_id: "10",
+                    conversation_scope: conversationScope,
+                    sender: "Pat",
+                    body,
+                  },
+                ],
+              },
+            },
+          ],
+        } as TemplateContext,
+        undefined,
+        undefined,
+        target,
+      );
+      return expectDefined(target.conversationContext, "projected conversation context");
+    };
+
+    const chatAProjection = buildScopedProjection(
+      "telegram:default:group:-1001111111111",
+      "chat A message ten",
+    );
+    const chatBProjection = buildScopedProjection(
+      "telegram:default:group:-1002222222222",
+      "chat B message ten",
+    );
+    expect(chatAProjection.messages[0]?.key).not.toBe(chatBProjection.messages[0]?.key);
+
+    const chatATurn = await fixture.prepare({
+      sessionKey: "agent:main:test",
+      agentId: "main",
+      trigger: "user",
+      prompt: "chat A turn",
+      currentInboundContext: {
+        text: "chat A message ten",
+        conversationContext: chatAProjection,
+      },
+      cliSessionBinding: { sessionId: "cli-session" },
+    });
+
+    const chatBTurn = await fixture.prepare({
+      sessionKey: "agent:main:test",
+      agentId: "main",
+      trigger: "user",
+      prompt: "chat B turn",
+      currentInboundContext: {
+        text: "chat B message ten",
+        conversationContext: chatBProjection,
+      },
+      cliSessionBinding: {
+        sessionId: "cli-session",
+        inboundContextWatermark: chatATurn.inboundContextWatermark,
+      },
+    });
+
+    expect(chatBTurn.params.prompt).toContain("chat B message ten");
   });
 
   it("marks inter-session prompts after CLI prompt-build hook context is applied", async () => {

@@ -376,10 +376,23 @@ function renderChatWindowStructuredContext(
     const messageId = isRecord(message)
       ? normalizePromptMetadataString(message["message_id"])
       : undefined;
+    // message_id alone is not a safe cross-turn dedupe key: producers such as Telegram
+    // assign it per chat/topic, so the same id can legitimately name different messages
+    // once a native CLI session resume watermark (src/agents/cli-runner/prepare.ts)
+    // persists it across chats sharing one reusable session. Producers that can collide
+    // attach conversation_scope; fold it into the key instead of trusting the bare id.
+    const conversationScope = isRecord(message)
+      ? normalizePromptMetadataString(message["conversation_scope"])
+      : undefined;
+    const key = messageId
+      ? conversationScope
+        ? `${conversationScope}:${messageId}`
+        : messageId
+      : undefined;
     return [
       {
         text,
-        ...(messageId ? { key: messageId } : {}),
+        ...(key ? { key } : {}),
         ...(isRecord(message) && message["is_reply_target"] === true
           ? { retainOnResume: true as const }
           : {}),

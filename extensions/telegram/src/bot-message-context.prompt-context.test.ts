@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { buildGroupHistoryKey } from "openclaw/plugin-sdk/routing";
 import {
   getSessionEntry,
   readAmbientTranscriptWatermark,
@@ -11,6 +12,16 @@ import {
 import { afterEach, describe, expect, it } from "vitest";
 import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
 import type { TelegramPromptContextEntry } from "./bot-message-context.types.js";
+
+function firstChatWindowMessages(
+  ctx: Awaited<ReturnType<typeof buildTelegramMessageContextForTest>>,
+): Array<Record<string, unknown>> {
+  const entry = ctx?.ctxPayload.ChannelStructuredContext?.find(
+    (item) => item.type === "chat_window",
+  );
+  const payload = entry?.payload as { messages: Array<Record<string, unknown>> } | undefined;
+  return payload?.messages ?? [];
+}
 
 const telegramChatWindowContext: TelegramPromptContextEntry = {
   label: "Conversation context",
@@ -148,6 +159,12 @@ describe("buildTelegramMessageContext prompt context", () => {
       ],
     });
 
+    // The freshly-derived scoped history message and the richer pre-existing message
+    // share the same message_id key; mergeTelegramGroupHistoryPromptContext must merge
+    // them field-by-field instead of letting whichever side is processed last overwrite
+    // the other wholesale, or the conversation_scope needed by the CLI resume watermark
+    // (src/agents/cli-runner/prepare.ts) silently disappears whenever richer prior
+    // context (reply targets, media) already occupies that key.
     expect(ctx?.ctxPayload.ChannelStructuredContext).toEqual([
       expect.objectContaining({
         type: "chat_window",
@@ -155,6 +172,12 @@ describe("buildTelegramMessageContext prompt context", () => {
           messages: [
             expect.objectContaining({
               message_id: "10",
+              conversation_scope: buildGroupHistoryKey({
+                channel: "telegram",
+                accountId: "default",
+                peerKind: "group",
+                peerId: "-1001234567890:topic:99",
+              }),
               is_reply_target: true,
               media_type: "image/png",
               media_path: "media://inbound/screenshot.png",
@@ -163,6 +186,93 @@ describe("buildTelegramMessageContext prompt context", () => {
         }),
       }),
     ]);
+  });
+
+  it("scopes group history message keys by chat/topic so cross-chat message ids never collide", async () => {
+    // Telegram message_id is chat-local. A reusable native CLI session can be shared by
+    // more than one configured route, so message #10 in one chat and message #10 in a
+    // different chat must project distinct conversation_scope values; otherwise the CLI
+    // resume watermark (src/agents/cli-runner/prepare.ts) would treat chat B's message as
+    // already delivered once chat A's message #10 is recorded.
+    const buildGroupTurn = (chatId: number, historyKeyEntry: string) =>
+      buildTelegramMessageContextForTest({
+        message: {
+          message_id: 20,
+          chat: { id: chatId, type: "supergroup", title: "Group" },
+          from: { id: 1234, first_name: "Pat" },
+          text: "@bot continue",
+          entities: [{ type: "mention", offset: 0, length: 4 }],
+        },
+        historyLimit: 10,
+        groupHistories: new Map([
+          [
+            historyKeyEntry,
+            [
+              {
+                messageId: "10",
+                sender: "Pat",
+                timestamp: 1_700_000_000_000,
+                body: "shared numeric id",
+              },
+            ],
+          ],
+        ]),
+      });
+
+    const chatA = await buildGroupTurn(-1001111111111, "-1001111111111");
+    const chatB = await buildGroupTurn(-1002222222222, "-1002222222222");
+
+    const chatAScope = firstChatWindowMessages(chatA)[0]?.["conversation_scope"];
+    const chatBScope = firstChatWindowMessages(chatB)[0]?.["conversation_scope"];
+    expect(firstChatWindowMessages(chatA)[0]?.["message_id"]).toBe("10");
+    expect(firstChatWindowMessages(chatB)[0]?.["message_id"]).toBe("10");
+    expect(chatAScope).toBeDefined();
+    expect(chatBScope).toBeDefined();
+    expect(chatAScope).not.toBe(chatBScope);
+  });
+
+  it("scopes group history message keys by topic so one chat's topics never collide", async () => {
+    // Same regression as the cross-chat case, but within a single forum chat: two topics
+    // sharing Telegram's chat-local message_id "10" must still project distinct
+    // conversation_scope values, since buildTelegramGroupPeerId scopes historyKey by
+    // chat+topic and that historyKey feeds the conversation_scope fold in
+    // src/auto-reply/reply/inbound-meta.ts.
+    const buildTopicTurn = (topicId: number) =>
+      buildTelegramMessageContextForTest({
+        message: {
+          message_id: 30,
+          chat: { id: -1003333333333, type: "supergroup", title: "Forum", is_forum: true },
+          from: { id: 1234, first_name: "Pat" },
+          text: "@bot continue",
+          entities: [{ type: "mention", offset: 0, length: 4 }],
+          message_thread_id: topicId,
+        },
+        historyLimit: 10,
+        groupHistories: new Map([
+          [
+            `-1003333333333:topic:${topicId}`,
+            [
+              {
+                messageId: "10",
+                sender: "Pat",
+                timestamp: 1_700_000_000_000,
+                body: "shared numeric id",
+              },
+            ],
+          ],
+        ]),
+      });
+
+    const topicOne = await buildTopicTurn(101);
+    const topicTwo = await buildTopicTurn(202);
+
+    const topicOneScope = firstChatWindowMessages(topicOne)[0]?.["conversation_scope"];
+    const topicTwoScope = firstChatWindowMessages(topicTwo)[0]?.["conversation_scope"];
+    expect(firstChatWindowMessages(topicOne)[0]?.["message_id"]).toBe("10");
+    expect(firstChatWindowMessages(topicTwo)[0]?.["message_id"]).toBe("10");
+    expect(topicOneScope).toBeDefined();
+    expect(topicTwoScope).toBeDefined();
+    expect(topicOneScope).not.toBe(topicTwoScope);
   });
 
   it("excludes ambient transcript rows from the group history window", async () => {

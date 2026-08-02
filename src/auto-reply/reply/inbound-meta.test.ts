@@ -1261,6 +1261,86 @@ describe("buildInboundUserContextPrefix", () => {
     expect(text).toContain(projection.conversationContext?.header);
   });
 
+  it("scopes projected conversation keys by conversation so cross-chat message ids never collide", () => {
+    // Telegram message_id is chat-local (extensions/telegram/src/bot-message-context.session.ts
+    // builds it from the bare Bot API message_id). A shared reusable native CLI session can serve
+    // more than one chat/topic, and the CLI resume watermark (src/agents/cli-runner/prepare.ts)
+    // persists projection keys across turns regardless of which chat produced them. Without a
+    // conversation-scoped key, chat B's message #10 collides with an already-delivered chat A
+    // message #10 and gets silently filtered out of chat B's prompt.
+    const chatAProjection: Parameters<typeof buildInboundUserContextPrefix>[3] = {};
+    buildInboundUserContextPrefix(
+      createChatWindowContext({
+        chatType: "group",
+        label: "Conversation context",
+        payload: {
+          order: "chronological",
+          relation: "selected_for_current_message",
+          messages: [
+            {
+              message_id: "10",
+              conversation_scope: "telegram:default:group:-1001",
+              sender: "Pat",
+              body: "chat A message ten",
+            },
+          ],
+        },
+      }),
+      undefined,
+      undefined,
+      chatAProjection,
+    );
+
+    const chatBProjection: Parameters<typeof buildInboundUserContextPrefix>[3] = {};
+    buildInboundUserContextPrefix(
+      createChatWindowContext({
+        chatType: "group",
+        label: "Conversation context",
+        payload: {
+          order: "chronological",
+          relation: "selected_for_current_message",
+          messages: [
+            {
+              message_id: "10",
+              conversation_scope: "telegram:default:group:-2002",
+              sender: "Lee",
+              body: "chat B message ten",
+            },
+          ],
+        },
+      }),
+      undefined,
+      undefined,
+      chatBProjection,
+    );
+
+    const chatAKey = chatAProjection.conversationContext?.messages[0]?.key;
+    const chatBKey = chatBProjection.conversationContext?.messages[0]?.key;
+    expect(chatAKey).toBeDefined();
+    expect(chatBKey).toBeDefined();
+    expect(chatAKey).not.toBe(chatBKey);
+  });
+
+  it("falls back to the bare message id when no conversation scope is supplied", () => {
+    const projection: Parameters<typeof buildInboundUserContextPrefix>[3] = {};
+    buildInboundUserContextPrefix(
+      createChatWindowContext({
+        chatType: "group",
+        label: "Conversation context",
+        payload: {
+          order: "chronological",
+          relation: "selected_for_current_message",
+          messages: [{ message_id: "42", sender: "Pat", body: "unscoped" }],
+        },
+      }),
+      undefined,
+      undefined,
+      projection,
+    );
+
+    expect(projection.conversationContext?.messages[0]?.key).toBe("42");
+  });
+
   it("refreshes goal context inside the resumed conversation projection", () => {
     const oldGoal = "Active goal: old";
     const context = {

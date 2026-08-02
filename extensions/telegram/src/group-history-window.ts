@@ -154,12 +154,17 @@ export function retainTelegramGroupHistoryPromptContext(params: {
 export function mergeTelegramGroupHistoryPromptContext(params: {
   promptContext: TelegramPromptContextEntry[];
   entries: HistoryEntry[];
+  // Scopes each message's dedupe key to the owning chat/topic. Telegram message_id is
+  // chat-local, so a shared reusable native CLI session resuming across chats must not
+  // let chat A's delivered id suppress chat B's message of the same numeric id.
+  conversationScope?: string;
 }): TelegramPromptContextEntry[] {
   if (params.entries.length === 0) {
     return params.promptContext;
   }
   const historyMessages = params.entries.map((entry) => ({
     ...(entry.messageId ? { message_id: entry.messageId } : {}),
+    ...(params.conversationScope ? { conversation_scope: params.conversationScope } : {}),
     sender: entry.sender,
     ...(entry.timestamp !== undefined ? { timestamp_ms: entry.timestamp } : {}),
     body: entry.body,
@@ -171,9 +176,14 @@ export function mergeTelegramGroupHistoryPromptContext(params: {
   const messagesByKey = new Map<string, Record<string, unknown>>();
   for (const message of [...historyMessages, ...existingMessages]) {
     const key = telegramPromptMessageKey(message);
-    if (key) {
-      messagesByKey.set(key, message);
+    if (!key) {
+      continue;
     }
+    // Merge onto the prior entry for this key instead of overwriting it wholesale: a
+    // richer existing message (reply target, media) processed after the freshly-scoped
+    // history message must not drop conversation_scope, and vice versa for any field the
+    // richer side omits.
+    messagesByKey.set(key, { ...messagesByKey.get(key), ...message });
   }
   const mergedMessages = [...messagesByKey.values()].toSorted((left, right) => {
     const leftTimestamp = typeof left["timestamp_ms"] === "number" ? left["timestamp_ms"] : 0;

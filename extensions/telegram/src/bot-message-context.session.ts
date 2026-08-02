@@ -20,7 +20,7 @@ import type {
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
 import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
 import { createChannelHistoryWindow, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
-import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
+import { buildGroupHistoryKey, type ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -530,9 +530,21 @@ export async function buildTelegramInboundContextPayload(params: {
         entries: groupHistoryPromptEntries,
       })
     : baseVisiblePromptContext;
+  // historyKey is already chat/topic-scoped (buildTelegramGroupPeerId); fold in the
+  // account so the projected dedupe key stays unique when a reusable native CLI
+  // session spans chats, accounts, or both.
+  const groupHistoryConversationScope = historyKey
+    ? buildGroupHistoryKey({
+        channel: "telegram",
+        accountId: route.accountId,
+        peerKind: "group",
+        peerId: historyKey,
+      })
+    : undefined;
   const visiblePromptContext = mergeTelegramGroupHistoryPromptContext({
     promptContext: historyBoundPromptContext,
     entries: groupHistoryPromptEntries,
+    conversationScope: groupHistoryConversationScope,
   });
 
   const { skillFilter, groupSystemPrompt } = resolveTelegramGroupPromptSettings({
