@@ -13,15 +13,18 @@ const promptAuthChoiceGrouped = vi.hoisted(() => vi.fn());
 const ensureAuthProfileStore = vi.hoisted(() =>
   vi.fn(() => ({ version: 1 as const, profiles: {} })),
 );
+const detectAvailableSetupProviderIds = vi.hoisted(() => vi.fn());
 
 vi.mock("../../packages/terminal-core/src/restore.js", () => ({ restoreTerminalState }));
 
-vi.mock("./auth-choice-prompt.js", async (importActual) => ({
-  ...(await importActual<typeof import("./auth-choice-prompt.js")>()),
+vi.mock("./auth-choice-prompt.js", () => ({
   promptAuthChoiceGrouped,
 }));
 
 vi.mock("../agents/auth-profiles.runtime.js", () => ({ ensureAuthProfileStore }));
+vi.mock("../plugins/provider-setup-availability.js", () => ({
+  detectAvailableSetupProviderIds,
+}));
 
 vi.mock("./onboard-interactive-runner.js", async (importActual) => {
   const actual = await importActual<typeof import("./onboard-interactive-runner.js")>();
@@ -110,6 +113,8 @@ function setupDeps(params: {
   persistRiskAcknowledgement?: GuidedOnboardingDeps["persistRiskAcknowledgement"];
   runSetupMemoryImportStep?: GuidedOnboardingDeps["runSetupMemoryImportStep"];
   runAppRecommendations?: GuidedOnboardingDeps["runAppRecommendations"];
+  runBrowserHandoff?: GuidedOnboardingDeps["runBrowserHandoff"];
+  probeBrowserHandoffGateway?: GuidedOnboardingDeps["probeBrowserHandoffGateway"];
   applySetup?: GuidedOnboardingDeps["applySetup"];
   handoffMode?: GuidedOnboardingDeps["handoffMode"];
 }) {
@@ -152,7 +157,17 @@ function setupDeps(params: {
     runAppRecommendations:
       params.runAppRecommendations ??
       vi.fn(async ({ config }) => ({ config, commitResult: vi.fn() })),
+    runBrowserHandoff:
+      params.runBrowserHandoff ??
+      (vi.fn(async () => ({
+        handedOff: false as const,
+        reason: "timeout" as const,
+      })) as GuidedOnboardingDeps["runBrowserHandoff"]),
+    probeBrowserHandoffGateway:
+      params.probeBrowserHandoffGateway ??
+      (vi.fn(async () => ({ ok: false })) as GuidedOnboardingDeps["probeBrowserHandoffGateway"]),
     runSystemAgentChat,
+    platform: "linux",
     ...(params.handoffMode ? { handoffMode: params.handoffMode } : {}),
   } satisfies GuidedOnboardingDeps;
 }
@@ -166,6 +181,8 @@ describe("runGuidedOnboarding custodian flow", () => {
     restoreTerminalState.mockClear();
     promptAuthChoiceGrouped.mockReset();
     ensureAuthProfileStore.mockClear();
+    detectAvailableSetupProviderIds.mockReset();
+    detectAvailableSetupProviderIds.mockResolvedValue(new Set());
     readConfigFileSnapshot.mockReset();
     readConfigFileSnapshot.mockResolvedValue({
       exists: false,
