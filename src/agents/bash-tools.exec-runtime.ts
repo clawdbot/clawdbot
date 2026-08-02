@@ -480,7 +480,7 @@ function formatExecFailureReason(params: {
       ) {
         return signalReason;
       }
-      return `${signalReason}\n\nOpenClaw configured this Linux child as a preferred OOM victim. This does not prove memory pressure caused the SIGKILL. Narrow the command or adjust memory, concurrency, or resource limits. Set OPENCLAW_CHILD_OOM_SCORE_ADJ=0 to disable this preference.`;
+      return `${signalReason}\n\nOpenClaw attempted to configure this Linux child as a preferred OOM victim. This does not prove memory pressure caused the SIGKILL. Narrow the command or adjust memory, concurrency, or resource limits. Set OPENCLAW_CHILD_OOM_SCORE_ADJ=0 to disable this preference.`;
     }
     case "aborted":
       return "Command aborted before exit code was captured";

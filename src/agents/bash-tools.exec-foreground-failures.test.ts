@@ -295,7 +295,8 @@ describe("exec foreground failures", () => {
     expect(supervisorMock.spawn.mock.calls[0]?.[0]?.mode).toBe(pty ? "pty" : "child");
     const text = requireTextContent(result);
     expect(text).toContain(`Command aborted by signal ${exitSignal}`);
-    expect(text).toContain("configured this Linux child as a preferred OOM victim");
+    expect(text).toContain("attempted to configure this Linux child as a preferred OOM victim");
+    expect(text).not.toContain("configured this Linux child as a preferred OOM victim");
     expect(text).toContain("does not prove memory pressure caused the SIGKILL");
     expect(text).toContain("adjust memory, concurrency, or resource limits");
     expect(text).toContain("OPENCLAW_CHILD_OOM_SCORE_ADJ=0");
