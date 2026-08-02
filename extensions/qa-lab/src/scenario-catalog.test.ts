@@ -428,13 +428,7 @@ describe("qa scenario catalog", () => {
       .map((scenario) => scenario.id)
       .toSorted();
 
-    expect(notApplicable).toStrictEqual(
-      [
-        "codex-plugin-cold-install",
-        "codex-plugin-pinned-new",
-        "codex-plugin-pinned-old",
-      ].toSorted(),
-    );
+    expect(notApplicable).toStrictEqual(["codex-plugin-cold-install"]);
     for (const scenarioId of notApplicable) {
       const scenario = readQaScenarioById(scenarioId);
       expect(scenario.runtimePairLane).toBeDefined();
@@ -676,25 +670,23 @@ describe("qa scenario catalog", () => {
     }
   });
 
-  it("loads Codex plugin lifecycle scenarios into the core runtime-pair lane", () => {
+  it("keeps Codex cold install separate from generic package compatibility evidence", () => {
     const coldInstall = readQaScenarioById("codex-plugin-cold-install");
     expect(coldInstall.runtimePairLane).toBe("core");
     expect(coldInstall.coverage?.primary).toEqual(["plugins.lifecycle-hot-install"]);
     expect(coldInstall.coverage?.secondary).toBeUndefined();
     expect(coldInstall.execution.kind).toBe("script");
 
-    const fixtureScenarioIds = ["codex-plugin-pinned-old", "codex-plugin-pinned-new"];
-
-    for (const scenarioId of fixtureScenarioIds) {
-      const scenario = readQaScenarioById(scenarioId);
-      expect(scenario.runtimePairLane).toBe("core");
-      expect(scenario.coverage?.primary.length).toBeGreaterThan(0);
-      expect(scenario.execution.flow?.steps.length).toBe(1);
-    }
-    expect(readQaScenarioExecutionConfig("codex-plugin-pinned-old")).toMatchObject({
-      pluginVersion: "2026.5.19",
-      hostVersion: "2026.5.21",
-      pluginRelation: "older",
+    const compatibility = readQaScenarioById("plugin-package-runtime-compatibility");
+    expect(compatibility.runtimePairLane).toBeUndefined();
+    expect(compatibility.runtimeParityUsage).toBeUndefined();
+    expect(compatibility.coverage).toEqual({
+      primary: ["plugins.runtime-compatibility"],
+      secondary: ["plugins.validation-feedback"],
+    });
+    expect(compatibility.execution).toMatchObject({
+      kind: "vitest",
+      path: "src/plugins/install-compatibility.test.ts",
     });
   });
 
