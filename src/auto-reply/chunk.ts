@@ -2,6 +2,7 @@
 // unintentionally breaking on newlines. Using [\s\S] keeps newlines inside
 // the chunk so messages are only split when they truly exceed the limit.
 
+import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import {
   findFenceSpanAt,
   isSafeFenceBreak,
@@ -31,6 +32,11 @@ export type ChunkMode = "length" | "newline";
 
 const DEFAULT_CHUNK_LIMIT = 4000;
 const DEFAULT_CHUNK_MODE: ChunkMode = "length";
+
+function normalizeChunkLimit(limit: number): number {
+  // String slicing truncates fractional indexes, so positive limits need an integer progress step.
+  return Number.isFinite(limit) && limit > 0 ? resolveIntegerOption(limit, 1, { min: 1 }) : limit;
+}
 
 type ProviderChunkConfig = {
   textChunkLimit?: number;
@@ -293,21 +299,24 @@ export function chunkTextWithMode(text: string, limit: number, mode: ChunkMode):
 }
 
 export function chunkMarkdownTextWithMode(text: string, limit: number, mode: ChunkMode): string[] {
+  const normalizedLimit = normalizeChunkLimit(limit);
   if (mode === "newline") {
     // Paragraph chunking is fence-safe because we never split at arbitrary indices.
     // If a paragraph must be split by length, defer to the markdown-aware chunker.
-    const paragraphChunks = chunkByParagraph(text, limit, { splitLongParagraphs: false });
+    const paragraphChunks = chunkByParagraph(text, normalizedLimit, {
+      splitLongParagraphs: false,
+    });
     const out: string[] = [];
     for (const chunk of paragraphChunks.flatMap((paragraphChunk) =>
-      paragraphChunk.length > limit
+      paragraphChunk.length > normalizedLimit
         ? splitPackedFenceParagraphChunk(paragraphChunk)
         : paragraphChunk,
     )) {
-      out.push(...chunkMarkdownText(chunk, limit));
+      out.push(...chunkMarkdownText(chunk, normalizedLimit));
     }
     return out;
   }
-  return chunkMarkdownText(text, limit);
+  return chunkMarkdownText(text, normalizedLimit);
 }
 
 function splitByNewline(
@@ -381,7 +390,8 @@ export function chunkText(text: string, limit: number): string[] {
 }
 
 export function chunkMarkdownText(text: string, limit: number): string[] {
-  const early = resolveChunkEarlyReturn(text, limit);
+  const normalizedLimit = normalizeChunkLimit(limit);
+  const early = resolveChunkEarlyReturn(text, normalizedLimit);
   if (early) {
     return early;
   }
@@ -393,7 +403,7 @@ export function chunkMarkdownText(text: string, limit: number): string[] {
 
   while (start < text.length) {
     const reopenPrefix = reopenFence ? `${reopenFence.openLine}\n` : "";
-    const contentLimit = Math.max(1, limit - reopenPrefix.length);
+    const contentLimit = Math.max(1, normalizedLimit - reopenPrefix.length);
     if (text.length - start <= contentLimit) {
       const finalChunk = `${reopenPrefix}${text.slice(start)}`;
       if (finalChunk.length > 0) {
