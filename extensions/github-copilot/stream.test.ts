@@ -39,6 +39,179 @@ function buildExpectedCopilotHeaders(
 }
 
 describe("wrapCopilotAnthropicStream", () => {
+  it("normalizes Copilot Claude wire tool IDs without mutating the persisted transcript", () => {
+    const model = {
+      provider: "github-copilot",
+      api: "anthropic-messages",
+      id: "claude-sonnet-4.6",
+    } as never;
+    const sourceIds = [
+      "toolu_native_123",
+      "already-valid_id-456",
+      "pipe|value",
+      "dot.value",
+      "colon:value",
+      "slash/value",
+      "space value",
+      "functions.read:0",
+      `toolu_${"x".repeat(80)}`,
+    ];
+    const messages = [
+      { role: "user", content: "Use each tool" },
+      {
+        role: "assistant",
+        provider: "github-copilot",
+        api: "anthropic-messages",
+        model: "claude-sonnet-4.6",
+        content: [
+          { type: "thinking", thinking: "private", thinkingSignature: "signature" },
+          ...sourceIds.map((id) => ({ type: "toolCall", id, name: "read", arguments: {} })),
+        ],
+      },
+      ...sourceIds.map((id) => ({
+        role: "toolResult",
+        toolCallId: id,
+        toolName: "read",
+        content: [{ type: "text", text: `result for ${id}` }],
+      })),
+    ] as Context["messages"];
+    const persistedTranscript = structuredClone(messages);
+    let observedPayload: { messages: Array<{ role: string; content: unknown }> } | undefined;
+    const baseStreamFn = vi.fn((streamModel, context, options) => {
+      const payload = {
+        messages: context.messages.map((message) => {
+          if (message.role === "toolResult") {
+            return {
+              role: "user",
+              content: [
+                {
+                  type: "tool_result",
+                  tool_use_id: message.toolCallId,
+                  content: message.content,
+                },
+              ],
+            };
+          }
+          if (message.role !== "assistant") {
+            return { role: message.role, content: message.content };
+          }
+          return {
+            role: "assistant",
+            content: message.content.map((block) =>
+              block.type === "toolCall"
+                ? { type: "tool_use", id: block.id, name: block.name, input: block.arguments }
+                : block,
+            ),
+          };
+        }),
+      };
+      options?.onPayload?.(payload, streamModel);
+      observedPayload = payload;
+      return { async *[Symbol.asyncIterator]() {} } as never;
+    });
+
+    void requireStreamFn(wrapCopilotAnthropicStream(baseStreamFn))(model, { messages }, {});
+
+    const outbound = observedPayload?.messages ?? [];
+    const assistant = outbound.find((message) => message.role === "assistant");
+    const assistantBlocks = Array.isArray(assistant?.content) ? assistant.content : [];
+    const outboundIds = assistantBlocks
+      .filter((block): block is { type: "tool_use"; id: string } => block.type === "tool_use")
+      .map((block) => block.id);
+    const resultIds = outbound.flatMap((message) =>
+      Array.isArray(message.content)
+        ? message.content
+            .filter(
+              (block): block is { type: "tool_result"; tool_use_id: string } =>
+                block.type === "tool_result",
+            )
+            .map((block) => block.tool_use_id)
+        : [],
+    );
+
+    expect(outboundIds).toEqual([
+      "toolu_native_123",
+      "already-valid_id-456",
+      "pipe_value",
+      "dot_value",
+      "colon_value",
+      "slash_value",
+      "space_value",
+      "functions_read_0",
+      `toolu_${"x".repeat(58)}`,
+    ]);
+    expect(resultIds).toEqual(outboundIds);
+    expect(assistantBlocks.some((block) => block.type === "thinking")).toBe(false);
+    expect(messages).toEqual(persistedTranscript);
+  });
+
+  it.each(["sync", "async", "sync in-place", "async in-place"] as const)(
+    "normalizes Copilot Claude payloads returned by a %s caller hook",
+    async (hookType) => {
+      let returnedPayload: unknown;
+      const baseStreamFn = vi.fn(async (model, _context, options) => {
+        const initialPayload = { messages: [{ role: "user", content: "initial request" }] };
+        const replacement = await options?.onPayload?.(initialPayload, model);
+        returnedPayload = replacement ?? initialPayload;
+        return { async *[Symbol.asyncIterator]() {} } as never;
+      });
+      const replacement = {
+        messages: [
+          { role: "system", content: "replacement system prompt" },
+          {
+            role: "assistant",
+            content: [
+              { type: "thinking", thinking: "private" },
+              { type: "tool_use", id: "functions.read:0", name: "read", input: {} },
+            ],
+          },
+          {
+            role: "user",
+            content: [{ type: "tool_result", tool_use_id: "functions.read:0", content: "done" }],
+          },
+        ],
+      };
+
+      await requireStreamFn(wrapCopilotAnthropicStream(baseStreamFn))(
+        { provider: "github-copilot", api: "anthropic-messages", id: "claude-sonnet-4.6" } as never,
+        { messages: [{ role: "user", content: "hi" }] } as never,
+        {
+          onPayload: (payload) => {
+            const inPlace = hookType.endsWith("in-place");
+            if (inPlace && payload && typeof payload === "object") {
+              Object.assign(payload, replacement);
+            }
+            const result = inPlace ? undefined : replacement;
+            return hookType.startsWith("async") ? Promise.resolve(result) : result;
+          },
+        },
+      );
+
+      expect(returnedPayload).toEqual({
+        messages: [
+          {
+            role: "system",
+            content: [
+              {
+                type: "text",
+                text: "replacement system prompt",
+                cache_control: { type: "ephemeral" },
+              },
+            ],
+          },
+          {
+            role: "assistant",
+            content: [{ type: "tool_use", id: "functions_read_0", name: "read", input: {} }],
+          },
+          {
+            role: "user",
+            content: [{ type: "tool_result", tool_use_id: "functions_read_0", content: "done" }],
+          },
+        ],
+      });
+    },
+  );
+
   it("adds Copilot headers, strips thinking replay, and marks cache for Claude payloads", () => {
     const payloads: Array<{
       messages: Array<Record<string, unknown>>;
@@ -171,6 +344,39 @@ describe("wrapCopilotAnthropicStream", () => {
     void wrapped(model, context, options as never);
 
     expect(baseStreamFn.mock.calls).toEqual([[model, context, options]]);
+  });
+
+  it.each([
+    { provider: "anthropic", id: "claude-sonnet-4-6", toolId: "toolu_native_123" },
+    { provider: "kimi", id: "k2p5", toolId: "functions.read:0" },
+  ])("does not patch unrelated $provider Anthropic streams", (model) => {
+    const payload = {
+      messages: [
+        { role: "assistant", content: [{ type: "tool_use", id: model.toolId }] },
+        { role: "user", content: [{ type: "tool_result", tool_use_id: model.toolId }] },
+      ],
+    };
+    const baseStreamFn = vi.fn((streamModel, _context, streamOptions) => {
+      streamOptions?.onPayload?.(payload, streamModel);
+      return { async *[Symbol.asyncIterator]() {} } as never;
+    });
+    const wrapped = requireStreamFn(wrapCopilotAnthropicStream(baseStreamFn));
+    const streamModel = {
+      provider: model.provider,
+      id: model.id,
+      api: "anthropic-messages",
+    } as never;
+    const context = { messages: [{ role: "user", content: "hi" }] } as never;
+    const options = { headers: { Existing: "1" }, onPayload: vi.fn() };
+
+    void wrapped(streamModel, context, options as never);
+
+    expect(baseStreamFn.mock.calls).toEqual([[streamModel, context, options]]);
+    expect(payload.messages[0]?.content[0]).toEqual({ type: "tool_use", id: model.toolId });
+    expect(payload.messages[1]?.content[0]).toEqual({
+      type: "tool_result",
+      tool_use_id: model.toolId,
+    });
   });
 
   it("adds Copilot headers, sanitizes reasoning replay, and rewrites message IDs before payload send", () => {

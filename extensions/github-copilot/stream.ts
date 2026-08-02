@@ -57,14 +57,18 @@ function buildCopilotDynamicHeaders(params: {
   };
 }
 
-function patchOnPayloadResult(result: unknown): unknown {
+function patchOnPayloadResult(
+  result: unknown,
+  patchPayload: (payload: unknown) => unknown = sanitizeCopilotReplayResponsePayload,
+  fallbackPayload?: unknown,
+): unknown {
   if (result && typeof result === "object" && "then" in result) {
     return Promise.resolve(result).then((next) => {
-      sanitizeCopilotReplayResponsePayload(next);
+      patchPayload(next === undefined ? fallbackPayload : next);
       return next;
     });
   }
-  sanitizeCopilotReplayResponsePayload(result);
+  patchPayload(result === undefined ? fallbackPayload : result);
   return result;
 }
 
@@ -84,6 +88,29 @@ function buildCopilotRequestHeaders(
 function patchCopilotAnthropicPayload(payload: Record<string, unknown>): void {
   if (Array.isArray(payload.messages)) {
     payload.messages = stripCopilotAssistantThinkingMessages(payload.messages);
+    // Match canonical Anthropic normalization, including collision behavior;
+    // only Copilot's wire payload changes, never stored history.
+    for (const message of payload.messages) {
+      if (!message || typeof message !== "object") {
+        continue;
+      }
+      const content = (message as { content?: unknown }).content;
+      if (!Array.isArray(content)) {
+        continue;
+      }
+      for (const block of content) {
+        if (!block || typeof block !== "object") {
+          continue;
+        }
+        const record = block as Record<string, unknown>;
+        const idKey =
+          record.type === "tool_use" ? "id" : record.type === "tool_result" ? "tool_use_id" : null;
+        const id = idKey ? record[idKey] : undefined;
+        if (idKey && typeof id === "string") {
+          record[idKey] = id.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64);
+        }
+      }
+    }
   }
   applyAnthropicEphemeralCacheControlMarkers(payload);
 }
@@ -100,6 +127,7 @@ export function wrapCopilotAnthropicStream(
       return underlying(model, context, options);
     }
 
+    const originalOnPayload = options?.onPayload;
     return streamWithPayloadPatch(
       underlying,
       model,
@@ -107,6 +135,16 @@ export function wrapCopilotAnthropicStream(
       {
         ...options,
         headers: buildCopilotRequestHeaders(context, options?.headers),
+        onPayload: (payload, payloadModel) =>
+          patchOnPayloadResult(
+            originalOnPayload?.(payload, payloadModel),
+            (replacement) => {
+              if (replacement && typeof replacement === "object") {
+                patchCopilotAnthropicPayload(replacement as Record<string, unknown>);
+              }
+            },
+            payload,
+          ),
       },
       patchCopilotAnthropicPayload,
     );
