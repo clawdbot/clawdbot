@@ -513,10 +513,13 @@ describe("session transcript reader facade", () => {
     expect(readSessionTitleFieldsFromTranscriptBatch([scope])[0]?.lastMessagePreview).toBe(
       "first batch reply",
     );
-    await persistSessionTranscriptTurn(scope, {
-      messages: [{ message: { role: "assistant", content: "appended batch reply" } }],
-      touchSessionEntry: false,
-    });
+    await persistSessionTranscriptTurn(
+      { agentId: "main", sessionId, sessionKey: `agent:main:${sessionId}`, storePath },
+      {
+        messages: [{ message: { role: "assistant", content: "appended batch reply" } }],
+        touchSessionEntry: false,
+      },
+    );
     vi.clearAllMocks();
 
     expect(readSessionTitleFieldsFromTranscriptBatch([scope])[0]?.lastMessagePreview).toBe(
