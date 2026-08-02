@@ -27,7 +27,6 @@ export type WorkboardLifecycle = {
   sourceUpdatedAt?: number;
 };
 
-export type WorkboardTaskStatus = TaskSummary["status"];
 export type WorkboardTaskSummary = TaskSummary & { taskId: string };
 
 type WorkboardDependencyParent = {

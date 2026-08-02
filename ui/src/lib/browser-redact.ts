@@ -9,8 +9,10 @@ const SECRET_DETAIL_PATTERNS = DEFAULT_REDACT_PATTERNS.map((source) => {
   if (!literal) {
     return new RegExp(source, "gi");
   }
-  const flags = literal[2]?.includes("g") ? literal[2] : `${literal[2]}g`;
-  return new RegExp(literal[1], flags);
+  const patternSource = literal[1] ?? "";
+  const patternFlags = literal[2] ?? "";
+  const flags = patternFlags.includes("g") ? patternFlags : `${patternFlags}g`;
+  return new RegExp(patternSource, flags);
 });
 
 function redactToken(value: string): string {
@@ -66,8 +68,10 @@ export function redactToolDetail(detail: string): string {
   for (const pattern of SECRET_DETAIL_PATTERNS) {
     redacted = redacted.replace(pattern, (...args: unknown[]) => {
       const match = typeof args[0] === "string" ? args[0] : "";
-      const offset = typeof args[args.length - 2] === "number" ? args[args.length - 2] : -1;
-      const input = typeof args[args.length - 1] === "string" ? args[args.length - 1] : "";
+      const offsetCandidate = args[args.length - 2];
+      const inputCandidate = args[args.length - 1];
+      const offset = typeof offsetCandidate === "number" ? offsetCandidate : -1;
+      const input = typeof inputCandidate === "string" ? inputCandidate : "";
       const groups = args
         .slice(1, -2)
         .map((value) => (typeof value === "string" ? value : undefined));

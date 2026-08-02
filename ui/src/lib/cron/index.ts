@@ -64,8 +64,6 @@ export type CronFormState = {
   deliveryMode: "none" | "announce" | "webhook";
   deliveryChannel: string;
   deliveryTo: string;
-  deliveryThreadId?: NonNullable<CronJob["delivery"]>["threadId"];
-  deliveryCompletionDestination?: NonNullable<CronJob["delivery"]>["completionDestination"];
   deliveryAccountId: string;
   deliveryBestEffort: boolean;
   failureAlertMode: "inherit" | "disabled" | "custom";
@@ -799,8 +797,6 @@ function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
     deliveryMode: job.delivery?.mode ?? "none",
     deliveryChannel: job.delivery?.channel ?? CRON_CHANNEL_LAST,
     deliveryTo: job.delivery?.to ?? "",
-    deliveryThreadId: job.delivery?.threadId,
-    deliveryCompletionDestination: job.delivery?.completionDestination,
     deliveryAccountId: job.delivery?.accountId ?? "",
     deliveryBestEffort: job.delivery?.bestEffort ?? false,
     failureAlertMode:
@@ -1068,9 +1064,6 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
                   })
                 : undefined,
             to: form.deliveryTo.trim() || undefined,
-            threadId: selectedDeliveryMode === "announce" ? form.deliveryThreadId : undefined,
-            completionDestination:
-              selectedDeliveryMode === "announce" ? form.deliveryCompletionDestination : undefined,
             accountId: deliveryAccountId,
             bestEffort: form.deliveryBestEffort,
           }
