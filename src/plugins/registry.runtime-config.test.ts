@@ -637,7 +637,11 @@ describe("plugin registry runtime config scope", () => {
     await expect(
       ownerApi.runtime.agent.session.upsertSessionEntry({
         sessionKey: "agent:main:plugin-owned-through-upsert",
-        entry: { sessionId: "plugin-owned-through-upsert", pluginOwnerId: "codex-owner" },
+        entry: {
+          sessionId: "plugin-owned-through-upsert",
+          updatedAt: 1,
+          pluginOwnerId: "codex-owner",
+        },
       }),
     ).rejects.toThrow("pluginOwnerId is immutable");
     await expect(ownerApi.runtime.agent.runEmbeddedAgent(runParams)).resolves.toEqual({ ok: true });
