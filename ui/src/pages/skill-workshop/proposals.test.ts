@@ -172,6 +172,32 @@ describe("Skill Workshop proposal RPCs", () => {
     });
   });
 
+  it("preserves capped support-file size formatting through the shared helper", async () => {
+    const { state, context, request } = createFixture();
+    const baseInspect = inspectResult();
+    const inspected = {
+      ...baseInspect,
+      record: {
+        ...baseInspect.record,
+        supportFiles: [{ path: "reference.md", sizeBytes: 1024 * 1024 }],
+      },
+      supportFiles: [{ path: "reference.md", content: "reference" }],
+    };
+    request.mockImplementation(async (method: string) => {
+      if (method === "skills.proposals.list") {
+        return manifest();
+      }
+      if (method === "skills.proposals.inspect") {
+        return inspected;
+      }
+      return {};
+    });
+
+    await loadSkillWorkshopProposals(state, context);
+
+    expect(state.skillWorkshopProposals[0]?.supportFiles[0]?.size).toBe("1024.0 KB");
+  });
+
   it("inspects a selected proposal with the agent from the current session", async () => {
     const { state, context, request } = createFixture(
       { skillWorkshopProposals: [proposal({ body: "" })] },

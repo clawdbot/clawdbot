@@ -840,10 +840,15 @@ export const en: TranslationMap = {
     restoreSession: "Restore thread",
     stopCloudWorker: "Stop cloud worker…",
     stopCloudWorkerConfirm: 'Stop the cloud worker for "{session}"?',
+    stopCloudWorkerConfirmAction: "Stop worker",
     deleteSessionMenu: "Delete…",
     deleteSessionCount: "Delete {count}…",
     deleteSessionConfirm: 'Delete "{session}" and its transcript?',
     deleteSessionsConfirm: "Delete {count} threads and their transcripts?",
+    deleteSelectedConfirmOne:
+      "Delete 1 thread?\n\nThis will delete the thread entry and archive its transcript.",
+    deleteSelectedConfirm:
+      "Delete {count} threads?\n\nThis will delete the thread entries and archive their transcripts.",
     groupBy: "Group by",
     groupByNone: "None",
     groupByCategory: "Custom groups",
@@ -877,7 +882,10 @@ export const en: TranslationMap = {
     noCheckpoints: "No compaction checkpoints recorded for this thread.",
     noSummary: "No summary captured.",
     branchFromCheckpoint: "Branch from checkpoint",
+    branchCheckpointConfirm: "Create a new child thread from this compacted checkpoint?",
     restoreCheckpoint: "Restore checkpoint",
+    restoreCheckpointConfirm:
+      "Restore this thread to the selected compacted checkpoint?\n\nThis replaces the current active transcript for the session key.",
   },
   agents: {
     noAgents: "No agents",
@@ -3105,12 +3113,6 @@ export const en: TranslationMap = {
       workflowHeading: "How the agent will use it",
       applicabilityHeading: "When the agent should use it",
     },
-    relative: {
-      secondsAgo: "{count}s ago",
-      minutesAgo: "{count} minutes ago",
-      hoursAgo: "{count}h ago",
-      daysAgo: "{count}d ago",
-    },
   },
   activity: {
     title: "Activity",
@@ -3762,10 +3764,10 @@ export const en: TranslationMap = {
       resetDiaryComplete: "Removed {count} backfilled dream diary entries.",
       clearReplayedComplete: "Cleared {count} replayed short-term entries.",
       complete: "Dream diary action complete.",
-      confirmRepair:
-        "Repair Dream Cache? This archives derived dream cache files and rebuilds them from clean inputs. Your dream diary stays untouched.",
-      confirmDedupe:
-        "Dedupe Dream Diary? This rewrites DREAMS.md and removes only exact duplicate diary entries.",
+      confirmRepairDescription:
+        "This archives derived dream cache files and rebuilds them from clean inputs. Your dream diary stays untouched.",
+      confirmDedupeDescription:
+        "This rewrites DREAMS.md and removes only exact duplicate diary entries.",
       archivePathCopied: "Archive path copied.",
       archivePathCopyFailed: "Could not copy archive path.",
       updateFailed: "Could not update dreaming settings.",

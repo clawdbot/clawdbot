@@ -13,6 +13,7 @@ import { selectApplicationSession } from "../../app/agent-selection.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
+import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { fetchSessionMenuWork } from "../../components/session-menu-work.ts";
 import type {
   SessionMenuAction,
@@ -777,10 +778,23 @@ class SessionsPage extends OpenClawLightDomElement {
     if (keys.length === 0 || this.loading || this.sessionMutationPending) {
       return;
     }
+    const scope = this.captureRequestScope();
+    if (!scope) {
+      return;
+    }
+    const message = t(
+      keys.length === 1
+        ? "sessionsView.deleteSelectedConfirmOne"
+        : "sessionsView.deleteSelectedConfirm",
+      { count: String(keys.length) },
+    );
     if (
-      !window.confirm(
-        `Delete ${keys.length} ${keys.length === 1 ? "thread" : "threads"}?\n\nThis will delete the thread entries and archive their transcripts.`,
-      )
+      !(await showConfirmDialog({
+        message,
+        confirmLabel: t("common.delete"),
+        danger: true,
+      })) ||
+      !this.isRequestScopeCurrent(scope)
     ) {
       return;
     }
@@ -924,11 +938,18 @@ class SessionsPage extends OpenClawLightDomElement {
       return;
     }
     const archivedRows = rows.filter((row) => row.archived === true);
+    if (archivedRows.length === 0) {
+      return;
+    }
     if (
-      archivedRows.length === 0 ||
-      !window.confirm(
-        t("sessionsView.deleteAllArchivedConfirm", { count: String(archivedRows.length) }),
-      )
+      !(await showConfirmDialog({
+        message: t("sessionsView.deleteAllArchivedConfirm", {
+          count: String(archivedRows.length),
+        }),
+        confirmLabel: t("common.delete"),
+        danger: true,
+      })) ||
+      !this.isRequestScopeCurrent(scope)
     ) {
       return;
     }
@@ -937,7 +958,16 @@ class SessionsPage extends OpenClawLightDomElement {
 
   private async deleteSessionFromMenu(row: GatewaySessionRow) {
     const label = normalizeOptionalString(row.label) ?? row.key;
-    if (!window.confirm(t("sessionsView.deleteSessionConfirm", { session: label }))) {
+    const scope = this.captureRequestScope();
+    if (
+      !scope ||
+      !(await showConfirmDialog({
+        message: t("sessionsView.deleteSessionConfirm", { session: label }),
+        confirmLabel: t("common.delete"),
+        danger: true,
+      })) ||
+      !this.isRequestScopeCurrent(scope)
+    ) {
       return;
     }
     await this.deleteSessions([row]);
@@ -945,16 +975,18 @@ class SessionsPage extends OpenClawLightDomElement {
 
   private async stopCloudWorker(row: GatewaySessionRow) {
     const label = normalizeOptionalString(row.label) ?? row.key;
-    if (
-      !isStoppableCloudWorkerPlacement(row.placement) ||
-      row.hasActiveRun === true ||
-      !window.confirm(t("sessionsView.stopCloudWorkerConfirm", { session: label }))
-    ) {
+    if (!isStoppableCloudWorkerPlacement(row.placement) || row.hasActiveRun === true) {
       return;
     }
     const scope = this.captureRequestScope();
     if (
       !scope ||
+      !(await showConfirmDialog({
+        message: t("sessionsView.stopCloudWorkerConfirm", { session: label }),
+        confirmLabel: t("sessionsView.stopCloudWorkerConfirmAction"),
+        danger: true,
+      })) ||
+      !this.isRequestScopeCurrent(scope) ||
       !this.requireMutationAccess(scope, {
         method: "sessions.reclaim",
         requiredScope: "operator.admin",
@@ -1213,12 +1245,18 @@ class SessionsPage extends OpenClawLightDomElement {
   }
 
   private async branchCheckpoint(sessionKey: string, checkpointId: string) {
-    if (!window.confirm("Create a new child thread from this compacted checkpoint?")) {
-      return;
-    }
     const scope = this.captureRequestScope();
     if (
       !scope ||
+      !(await showConfirmDialog({
+        message: t("sessionsView.branchCheckpointConfirm"),
+        confirmLabel: t("common.create"),
+      })) ||
+      !this.isRequestScopeCurrent(scope)
+    ) {
+      return;
+    }
+    if (
       !this.requireMutationAccess(scope, {
         method: "sessions.compaction.branch",
         requiredScope: "operator.write",
@@ -1254,16 +1292,19 @@ class SessionsPage extends OpenClawLightDomElement {
   }
 
   private async restoreCheckpoint(sessionKey: string, checkpointId: string) {
-    if (
-      !window.confirm(
-        "Restore this thread to the selected compacted checkpoint?\n\nThis replaces the current active transcript for the session key.",
-      )
-    ) {
-      return;
-    }
     const scope = this.captureRequestScope();
     if (
       !scope ||
+      !(await showConfirmDialog({
+        message: t("sessionsView.restoreCheckpointConfirm"),
+        confirmLabel: t("common.restore"),
+        danger: true,
+      })) ||
+      !this.isRequestScopeCurrent(scope)
+    ) {
+      return;
+    }
+    if (
       !this.requireMutationAccess(scope, {
         method: "sessions.compaction.restore",
         requiredScope: "operator.admin",

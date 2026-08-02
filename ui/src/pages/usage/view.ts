@@ -13,9 +13,9 @@ import {
   buildAggregatesFromSessions,
   buildPeakErrorHours,
   buildUsageInsightStats,
-  formatCost,
+  formatUsageCost,
   formatIsoDate,
-  formatTokens,
+  formatUsageTokens,
   renderUsageMosaic,
   sessionTouchesSelectedHours,
 } from "./metrics.ts";
@@ -492,11 +492,11 @@ export function renderUsage(props: UsageProps) {
                 ${displayTotals
                   ? html`
                       <span class="usage-metric-badge">
-                        <strong>${formatTokens(displayTotals.totalTokens)}</strong>
+                        <strong>${formatUsageTokens(displayTotals.totalTokens)}</strong>
                         ${t("usage.metrics.tokens")}
                       </span>
                       <span class="usage-metric-badge">
-                        <strong>${formatCost(displayTotals.totalCost)}</strong>
+                        <strong>${formatUsageCost(displayTotals.totalCost)}</strong>
                         ${t("usage.metrics.cost")}
                       </span>
                       <span class="usage-metric-badge">
