@@ -326,6 +326,23 @@ describe("applyCustomApiConfig", () => {
     expect(provider?.baseUrl).toBe("https://my-resource.openai.azure.com/openai/v1");
   });
 
+  it("normalizes query-bearing regional Azure URLs before appending paths", () => {
+    const result = applyCustomApiConfig({
+      config: {},
+      baseUrl: "https://eastus.api.cognitive.microsoft.com/openai/v1?api-version=2024-10-21",
+      modelId: "gpt-5.6-prod",
+      compatibility: "openai",
+      apiKey: "key123",
+    });
+    const providerId = result.providerId!;
+    const provider = result.config.models?.providers?.[providerId];
+
+    // Query string should be preserved, path should be normalized to /openai/v1
+    expect(provider?.baseUrl).toBe(
+      "https://eastus.api.cognitive.microsoft.com/openai/v1?api-version=2024-10-21",
+    );
+  });
+
   it("re-onboard updates existing Azure provider instead of creating a duplicate", () => {
     const oldProviderId = "custom-my-resource-openai-azure-com";
     const result = applyCustomApiConfig({

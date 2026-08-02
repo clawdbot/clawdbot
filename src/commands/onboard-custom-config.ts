@@ -154,20 +154,48 @@ function transformAzureUrl(baseUrl: string, modelId: string): string {
 
 /**
  * Transforms an Azure URL into the base URL stored in config.
+ * Handles query-bearing URLs by parsing pathname and search separately.
  *
  * Example:
  *   https://my-resource.openai.azure.com
  *   => https://my-resource.openai.azure.com/openai/v1
+ *
+ *   https://eastus.api.cognitive.microsoft.com/openai/v1?api-version=2024-10-21
+ *   => https://eastus.api.cognitive.microsoft.com/openai/v1?api-version=2024-10-21
  */
 function transformAzureConfigUrl(baseUrl: string): string {
-  const normalizedUrl = baseUrl.endsWith("/") ? baseUrl.slice(0, -1) : baseUrl;
-  if (normalizedUrl.endsWith("/openai/v1")) {
-    return normalizedUrl;
+  let normalizedUrl = baseUrl.endsWith("/") ? baseUrl.slice(0, -1) : baseUrl;
+
+  try {
+    const url = new URL(normalizedUrl);
+    const pathname = url.pathname;
+
+    // Check if pathname already ends with /openai/v1
+    if (pathname.endsWith("/openai/v1")) {
+      return normalizedUrl;
+    }
+
+    // Strip a full deployment path back to the base origin
+    const deploymentIdx = pathname.indexOf("/openai/deployments/");
+    let basePath = deploymentIdx !== -1 ? pathname.slice(0, deploymentIdx) : pathname;
+
+    // Ensure basePath has trailing content for proper joining
+    if (!basePath || basePath === "/" || basePath === "") {
+      basePath = "";
+    }
+
+    // Reconstruct URL by building the full string with base + path + search
+    const origin = `${url.protocol}//${url.hostname}${url.port ? `:${url.port}` : ""}`;
+    return `${origin}${basePath}/openai/v1${url.search}`;
+  } catch {
+    // Fallback for non-URL strings
+    if (normalizedUrl.endsWith("/openai/v1")) {
+      return normalizedUrl;
+    }
+    const deploymentIdx = normalizedUrl.indexOf("/openai/deployments/");
+    const base = deploymentIdx !== -1 ? normalizedUrl.slice(0, deploymentIdx) : normalizedUrl;
+    return `${base}/openai/v1`;
   }
-  // Strip a full deployment path back to the base origin
-  const deploymentIdx = normalizedUrl.indexOf("/openai/deployments/");
-  const base = deploymentIdx !== -1 ? normalizedUrl.slice(0, deploymentIdx) : normalizedUrl;
-  return `${base}/openai/v1`;
 }
 
 function hasSameHost(a: string, b: string): boolean {
