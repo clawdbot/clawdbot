@@ -3951,8 +3951,8 @@ describe("prepareCliRunContext", () => {
   });
 
   it("does not duplicate a persisted retry turn in raw-transcript reseed history", async () => {
-    const { dir, sessionFile } = createSessionFile();
-    appendTranscriptEntry(sessionFile, {
+    const { dir, sessionFile } = fixture.session;
+    fixture.appendTranscript({
       id: "msg-prior",
       parentId: null,
       timestamp: new Date(1).toISOString(),
@@ -3969,7 +3969,7 @@ describe("prepareCliRunContext", () => {
       timestamp: 2,
       idempotencyKey: "cli-user:current-turn",
     };
-    appendTranscriptEntry(sessionFile, {
+    fixture.appendTranscript({
       id: "msg-current",
       parentId: "msg-prior",
       timestamp: new Date(2).toISOString(),
