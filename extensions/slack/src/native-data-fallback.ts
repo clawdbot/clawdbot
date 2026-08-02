@@ -156,12 +156,18 @@ export function buildSlackNativeDataDeliveryPlan(params: {
   baseText?: string;
   blocks: readonly (Block | KnownBlock)[];
   textLimit?: number;
+  transport?: "chat" | "response-url";
 }): SlackNativeDataDeliveryPlan {
   const baseText = params.baseText?.trim() ?? "";
+  // response_url has only five attempts; packing to Slack's hard cap avoids dropping visible data.
+  const transportTextLimit =
+    params.transport === "response-url"
+      ? SLACK_MESSAGE_TEXT_HARD_LIMIT
+      : SLACK_MESSAGE_TEXT_RECOMMENDED_LIMIT;
   const textLimit = Math.min(
-    SLACK_MESSAGE_TEXT_RECOMMENDED_LIMIT,
+    transportTextLimit,
     SLACK_MESSAGE_TEXT_HARD_LIMIT,
-    Math.max(1, Math.floor(params.textLimit ?? SLACK_MESSAGE_TEXT_HARD_LIMIT)),
+    Math.max(1, Math.floor(params.textLimit ?? transportTextLimit)),
   );
   const hasNativeData = hasSlackNativeDataBlock(params.blocks);
   const accessibilityText =

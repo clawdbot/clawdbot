@@ -6,17 +6,13 @@ import { SLACK_EDIT_TEXT_MAX_BYTES } from "./limits.js";
 import { countSlackTextUtf8Bytes } from "./truncate.js";
 
 const getSlackWriteClientMock = vi.hoisted(() => vi.fn());
+const resolveSlackAccountMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./accounts.js", async () => {
   const actual = await vi.importActual<typeof import("./accounts.js")>("./accounts.js");
   return {
     ...actual,
-    resolveSlackAccount: () => ({
-      accountId: "default",
-      botToken: "xoxb-test",
-      botTokenSource: "config",
-      config: {},
-    }),
+    resolveSlackAccount: resolveSlackAccountMock,
   };
 });
 
@@ -46,6 +42,46 @@ const statusBlocks: (Block | KnownBlock)[] = [
 describe("updateMessageSlack", () => {
   beforeEach(() => {
     getSlackWriteClientMock.mockReset();
+    resolveSlackAccountMock.mockReset();
+    resolveSlackAccountMock.mockReturnValue({
+      accountId: "default",
+      identity: "bot",
+      botToken: "xoxb-test",
+      botTokenSource: "config",
+      userTokenSource: "none",
+      config: {},
+    });
+  });
+
+  it.each([
+    { name: "user-only credentials", botToken: undefined },
+    { name: "mixed bot and user credentials", botToken: "xoxb-companion" },
+  ])("edits as the original user identity with $name", async ({ botToken }) => {
+    const client = createUpdateClient();
+    getSlackWriteClientMock.mockReturnValue(client);
+    resolveSlackAccountMock.mockReturnValue({
+      accountId: "work",
+      identity: "user",
+      ...(botToken ? { botToken } : {}),
+      botTokenSource: botToken ? "config" : "none",
+      userToken: "xoxp-authoring-user",
+      userTokenSource: "config",
+      config: { postAs: "user" },
+    });
+
+    await updateMessageSlack({
+      cfg: SLACK_TEST_CFG,
+      accountId: "work",
+      channelId: "C123",
+      messageTs: "171234.567",
+      text: "Resolved",
+      blocks: statusBlocks,
+    });
+
+    expect(getSlackWriteClientMock).toHaveBeenCalledWith("xoxp-authoring-user");
+    expect(client.chat.update).toHaveBeenCalledWith(
+      expect.objectContaining({ channel: "C123", ts: "171234.567" }),
+    );
   });
 
   it("caps chat.update text at the 4000-byte edit limit, not the 8000 send limit", async () => {

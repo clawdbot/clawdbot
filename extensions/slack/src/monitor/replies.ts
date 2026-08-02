@@ -4,6 +4,7 @@ import type { Block, KnownBlock } from "@slack/web-api";
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
 import {
   chunkMarkdownTextWithMode,
   isSilentReplyText,
@@ -19,6 +20,7 @@ import {
 import { createReplyReferencePlanner } from "openclaw/plugin-sdk/reply-reference";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { buildSlackBlocksFallbackText } from "../blocks-fallback.js";
+import { getSlackWriteClient } from "../client.js";
 import { markdownToSlackMrkdwnChunks } from "../format.js";
 import { SLACK_TEXT_LIMIT } from "../limits.js";
 import { emitSlackMessageSentHooks } from "../message-sent-hook.js";
@@ -33,6 +35,7 @@ import {
   chunkSlackTextAtHardLimit,
   type SlackFormattingDisabledMessage,
 } from "../native-data-fallback.js";
+import { registerSlackQuestionDelivery } from "../question-delivery.js";
 import {
   hasSlackReplyStructuredContent,
   resolveSlackReplyBlockResolution,
@@ -109,6 +112,9 @@ export async function deliverReplies(params: {
     nativeDataFallbackBaseText?: string;
     textIsSlackMrkdwn?: boolean;
     textIsSlackPlainText?: boolean;
+    onQuestionControlDelivery?: NonNullable<
+      Parameters<typeof sendMessageSlack>[2]
+    >["onQuestionControlDelivery"];
   }): Promise<SlackSendResult> => {
     return await sendMessageSlack(params.target, input.text, {
       cfg: params.cfg,
@@ -125,6 +131,9 @@ export async function deliverReplies(params: {
         : {}),
       ...(input.textIsSlackMrkdwn ? { textIsSlackMrkdwn: true } : {}),
       ...(input.textIsSlackPlainText ? { textIsSlackPlainText: true } : {}),
+      ...(input.onQuestionControlDelivery
+        ? { onQuestionControlDelivery: input.onQuestionControlDelivery }
+        : {}),
       ...(params.eventScope
         ? {
             client: params.eventScope.client,
@@ -155,6 +164,7 @@ export async function deliverReplies(params: {
     const { authoredTextPlacement, segments } = resolveSlackReplyBlockResolution(payload, {
       materializeAuthoredText,
     });
+    const questionId = questionGatewayRuntime.readAskUserQuestionId(payload);
     if (!textRaw && !reply.hasMedia && segments.length === 0) {
       continue;
     }
@@ -252,6 +262,26 @@ export async function deliverReplies(params: {
           blocks: segment.blocks,
           authoredTextPlacement: segmentPlacement,
           ...(baseText ? { nativeDataFallbackBaseText: baseText } : {}),
+          ...(questionId
+            ? {
+                onQuestionControlDelivery: (delivery) => {
+                  registerSlackQuestionDelivery({
+                    questionId,
+                    accountId: params.accountId,
+                    ...delivery,
+                    update: async ({ channelId, messageTs, text, blocks }) => {
+                      const client = params.eventScope?.client ?? getSlackWriteClient(params.token);
+                      await client.chat.update({
+                        channel: channelId,
+                        ts: messageTs,
+                        text,
+                        blocks,
+                      });
+                    },
+                  });
+                },
+              }
+            : {}),
         });
         delivered = true;
       }
@@ -406,6 +436,7 @@ export async function deliverSlackSlashReplies(params: {
     const plan = buildSlackNativeDataDeliveryPlan({
       blocks: input.blocks,
       baseText: input.baseText,
+      transport: "response-url",
     });
     return {
       message: {

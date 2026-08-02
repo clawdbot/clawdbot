@@ -138,6 +138,13 @@ type SlackSendOpts = {
   onPlatformSendDispatch?: () => Promise<void>;
   /** Persist each concrete platform send before any later chunk can fail. */
   onDeliveryResult?: (result: SlackSendResult) => Promise<void> | void;
+  /** Record the exact posted Block Kit controls before fallback fanout changes the aggregate. */
+  onQuestionControlDelivery?: (delivery: {
+    channelId: string;
+    messageId: string;
+    text: string;
+    blocks: (Block | KnownBlock)[];
+  }) => void;
 };
 
 type SlackWebApiErrorData = {
@@ -275,8 +282,8 @@ export async function updateMessageSlack(params: {
   const account = resolveSlackAccount({ cfg, accountId: params.accountId });
   const token = resolveToken({
     accountId: account.accountId,
-    fallbackToken: account.botToken,
-    fallbackSource: account.botTokenSource,
+    fallbackToken: resolveSlackOperationToken(account, "write"),
+    fallbackSource: account.identity === "user" ? account.userTokenSource : account.botTokenSource,
   });
   const client = getSlackWriteClient(token);
   await client.chat.update({
@@ -1115,6 +1122,27 @@ async function sendMessageSlackQueuedInner(params: {
     await opts.onDeliveryResult?.(result);
     return result;
   };
+  const reportQuestionControlDelivery = (
+    result: SlackSendResult,
+    deliveredBlocks: (Block | KnownBlock)[],
+    text: string,
+  ) => {
+    if (
+      !opts.onQuestionControlDelivery ||
+      !result.channelId ||
+      !result.messageId ||
+      result.messageId === "unknown" ||
+      !deliveredBlocks.some((block) => block.type === "actions")
+    ) {
+      return;
+    }
+    opts.onQuestionControlDelivery({
+      channelId: result.channelId,
+      messageId: result.messageId,
+      text,
+      blocks: deliveredBlocks,
+    });
+  };
   let didDispatch = false;
   const dispatchOnce = async () => {
     if (didDispatch) {
@@ -1198,6 +1226,7 @@ async function sendMessageSlackQueuedInner(params: {
         partCount: 1,
       });
       await dispatchOnce();
+      let acceptedCardResult: SlackSendResult | undefined;
       try {
         const { response } = await postSlackMessageBestEffort({
           client,
@@ -1222,7 +1251,7 @@ async function sendMessageSlackQueuedInner(params: {
         deliveredChannelId = resolvePostedMessageChannelId(response, channelId);
         const deliveredThreadTs =
           resolvePostedMessageThreadTs(response) ?? normalizeSlackThreadTsCandidate(opts.threadTs);
-        return await reportDelivery({
+        acceptedCardResult = {
           messageId,
           channelId: deliveredChannelId,
           threadTs: deliveredThreadTs,
@@ -1232,13 +1261,18 @@ async function sendMessageSlackQueuedInner(params: {
             kind: "card",
             threadTs: deliveredThreadTs,
           }),
-        });
+        };
       } catch (error) {
         if (!hasNativeData || !isSlackInvalidBlocksError(error)) {
           throw error;
         }
         logVerbose("slack send: native data rejected, delivering complete text fallback");
         pendingBlockFallback = orderedBlockDeliveryPlan;
+      }
+      if (acceptedCardResult) {
+        // Provider rejection owns the catch above; durable observers must not trigger a repost.
+        reportQuestionControlDelivery(acceptedCardResult, blocks, accessibilityText);
+        return await reportDelivery(acceptedCardResult);
       }
     }
     if (pendingBlockFallback) {
@@ -1284,7 +1318,7 @@ async function sendMessageSlackQueuedInner(params: {
         sentMessageIds.push(response.ts);
         const deliveredThreadTs =
           resolvePostedMessageThreadTs(response) ?? normalizeSlackThreadTsCandidate(opts.threadTs);
-        await reportDelivery({
+        const result: SlackSendResult = {
           messageId: response.ts,
           channelId: deliveredChannelId,
           threadTs: deliveredThreadTs,
@@ -1294,7 +1328,12 @@ async function sendMessageSlackQueuedInner(params: {
             kind: fallback.blocks ? "card" : "text",
             threadTs: deliveredThreadTs,
           }),
-        });
+        };
+        if (fallback.blocks) {
+          // The provider already accepted these controls even if receipt persistence now fails.
+          reportQuestionControlDelivery(result, fallback.blocks, fallback.text);
+        }
+        await reportDelivery(result);
       }
       const messageId = lastMessageId || "unknown";
       const deliveredThreadTs =

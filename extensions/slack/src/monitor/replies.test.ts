@@ -589,6 +589,7 @@ describe("deliverSlackSlashReplies chunking", () => {
     expect(respond).toHaveBeenCalledTimes(2);
     const messages = respond.mock.calls.map((_call, index) => requireSlashMessage(respond, index));
     expect(messages.every((message) => message.text.length <= 40_000)).toBe(true);
+    expect(messages[0]?.text.length).toBeGreaterThan(4_000);
     expect(messages.every((message) => message.mrkdwn === false)).toBe(true);
     expect(messages.flatMap((message) => message.blocks ?? [])).toEqual(blocks);
   });
@@ -752,9 +753,61 @@ describe("deliverSlackSlashReplies chunking", () => {
     expect(messages.every((message) => message.blocks === undefined)).toBe(true);
     expect(messages.every((message) => message.mrkdwn === false)).toBe(true);
     expect(messages.every((message) => message.text.length <= 40_000)).toBe(true);
+    expect(messages[0]?.text).toHaveLength(40_000);
     expect(messages.map((message) => message.text).join("")).toBe(
       `${caption} (table)\nAccount\nAcme`,
     );
+  });
+
+  it("fits native fallback and three visible replies into five response_url calls", async () => {
+    const respond = vi.fn(async () => undefined);
+    const caption = "c".repeat(41_000);
+    const settlements: Array<{ replyIndex: number; visibleReplySent: boolean }> = [];
+
+    await deliverSlackSlashReplies({
+      replies: [
+        {
+          channelData: {
+            slack: {
+              blocks: [
+                {
+                  type: "data_table",
+                  caption,
+                  rows: [
+                    [{ type: "raw_text", text: "Account" }],
+                    [{ type: "raw_text", text: "Acme" }],
+                  ],
+                },
+              ],
+            },
+          },
+        },
+        { text: "second" },
+        { text: "third" },
+        { text: "fourth" },
+      ],
+      respond,
+      ephemeral: true,
+      textLimit: 8000,
+      onReplySettled: (settlement) => settlements.push(settlement),
+    });
+
+    expect(respond).toHaveBeenCalledTimes(5);
+    const messages = respond.mock.calls.map((_call, index) => requireSlashMessage(respond, index));
+    expect(messages[0]?.text).toHaveLength(40_000);
+    expect(
+      messages
+        .slice(0, 2)
+        .map((message) => message.text)
+        .join(""),
+    ).toBe(`${caption} (table)\nAccount\nAcme`);
+    expect(messages.slice(2).map((message) => message.text)).toEqual(["second", "third", "fourth"]);
+    expect(settlements).toEqual([
+      { replyIndex: 0, visibleReplySent: true },
+      { replyIndex: 1, visibleReplySent: true },
+      { replyIndex: 2, visibleReplySent: true },
+      { replyIndex: 3, visibleReplySent: true },
+    ]);
   });
 
   it("batches in-place native fallback at 50 blocks without losing content", async () => {

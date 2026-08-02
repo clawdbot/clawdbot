@@ -1,7 +1,9 @@
 // Slack tests cover send.blocks plugin behavior.
+import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { createSlackSendTestClient } from "./blocks.test-helpers.js";
 import { SLACK_MESSAGE_TEXT_RECOMMENDED_LIMIT } from "./limits.js";
+import { registerSlackQuestionDelivery } from "./question-delivery.js";
 import {
   clearSlackThreadParticipationCache,
   hasSlackThreadParticipation,
@@ -12,6 +14,15 @@ const SLACK_TEST_CFG = { channels: { slack: { botToken: "xoxb-test" } } };
 const SLACK_TEXT_LIMIT = 8000;
 
 type MockCallSource = { mock: { calls: Array<Array<unknown>> } };
+type SlackGatewayQuestionDelivery = Parameters<
+  typeof questionGatewayRuntime.registerChannelDelivery
+>[0];
+type SlackQuestionControlDelivery = Parameters<
+  NonNullable<Parameters<typeof sendMessageSlack>[2]["onQuestionControlDelivery"]>
+>[0];
+type SlackQuestionFinalizationUpdate = Parameters<
+  Parameters<typeof registerSlackQuestionDelivery>[0]["update"]
+>[0];
 
 function mockObjectArg(
   source: MockCallSource,
@@ -451,6 +462,239 @@ describe("sendMessageSlack blocks", () => {
     for (const index of [0, 1]) {
       expect(postedMessage(client, index).text).not.toMatch(/private|Secret option/u);
     }
+  });
+
+  it("records the actual controls card before a later native-data fallback receipt", async () => {
+    const client = createSlackSendTestClient();
+    client.chat.postMessage
+      .mockRejectedValueOnce({ data: { error: "invalid_blocks" } })
+      .mockResolvedValueOnce({ ts: "55", channel: "C123" })
+      .mockResolvedValueOnce({ ts: "66", channel: "C123" });
+    const onQuestionControlDelivery = vi.fn();
+    const onDeliveryResult = vi.fn();
+    const blocks = [
+      {
+        type: "actions",
+        elements: [
+          {
+            type: "button",
+            action_id: "question",
+            text: { type: "plain_text", text: "Approve" },
+            value: "approve",
+          },
+        ],
+      },
+      {
+        type: "data_table",
+        caption: "x".repeat(4_100),
+        rows: [[{ type: "raw_text", text: "Account" }], [{ type: "raw_text", text: "Acme" }]],
+      },
+    ];
+
+    const result = await sendMessageSlack("channel:C123", "", {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+      blocks: blocks as never,
+      onDeliveryResult,
+      onQuestionControlDelivery,
+    });
+
+    expect(result.messageId).toBe("66");
+    expect(onDeliveryResult.mock.calls.map((call) => call[0]?.messageId)).toEqual(["55", "66"]);
+    expect(onQuestionControlDelivery).toHaveBeenCalledOnce();
+    expect(onQuestionControlDelivery).toHaveBeenCalledWith({
+      channelId: "C123",
+      messageId: "55",
+      text: postedMessage(client, 1).text,
+      blocks: postedMessage(client, 1).blocks,
+    });
+    expect(
+      (postedMessage(client, 1).blocks as Array<{ type?: string }>).some(
+        (block) => block.type === "actions",
+      ),
+    ).toBe(true);
+    expect(
+      (postedMessage(client, 2).blocks as Array<{ type?: string }>).some(
+        (block) => block.type === "actions",
+      ),
+    ).toBe(false);
+  });
+
+  it.each([
+    {
+      name: "directly accepted",
+      nativeFallback: false,
+      hasNativeData: false,
+      terminalStatus: "Cancelled",
+      observerFailure: "queued post-send persistence failed",
+      observerInvalidBlocks: false,
+    },
+    {
+      name: "accepted native-data",
+      nativeFallback: false,
+      hasNativeData: true,
+      terminalStatus: "Answered: Production",
+      observerFailure: "queued observer rejected with invalid_blocks",
+      observerInvalidBlocks: true,
+    },
+    {
+      name: "native-data fallback",
+      nativeFallback: true,
+      hasNativeData: true,
+      terminalStatus: "Expired",
+      observerFailure: "queued delivery-result observer failed",
+      observerInvalidBlocks: false,
+    },
+  ])(
+    "keeps $name question controls finalizable when durable delivery persistence rejects",
+    async ({
+      nativeFallback,
+      hasNativeData,
+      terminalStatus,
+      observerFailure,
+      observerInvalidBlocks,
+    }) => {
+      const client = createSlackSendTestClient();
+      if (nativeFallback) {
+        client.chat.postMessage.mockRejectedValueOnce({ data: { error: "invalid_blocks" } });
+      }
+      client.chat.postMessage.mockResolvedValueOnce({ ts: "55", channel: "C456" });
+      const controls = {
+        type: "actions",
+        elements: [
+          {
+            type: "button",
+            action_id: "question",
+            text: { type: "plain_text", text: "Approve" },
+            value: "approve",
+          },
+        ],
+      };
+      const blocks = hasNativeData
+        ? [
+            controls,
+            {
+              type: "data_table",
+              caption: "x".repeat(4_100),
+              rows: [[{ type: "raw_text", text: "Account" }], [{ type: "raw_text", text: "Acme" }]],
+            },
+          ]
+        : [controls];
+      const registrations: SlackGatewayQuestionDelivery[] = [];
+      const registerChannelDelivery = vi
+        .spyOn(questionGatewayRuntime, "registerChannelDelivery")
+        .mockImplementation((registration) => {
+          registrations.push(registration);
+        });
+      const terminalUpdate = vi.fn(async (_message: SlackQuestionFinalizationUpdate) => undefined);
+      const deliveryOrder: string[] = [];
+      const onQuestionControlDelivery = vi.fn((delivery: SlackQuestionControlDelivery) => {
+        deliveryOrder.push(`controls:${delivery.messageId}`);
+        registerSlackQuestionDelivery({
+          questionId: "ask_0123456789abcdef0123456789abcdef",
+          accountId: "work",
+          ...delivery,
+          update: terminalUpdate,
+        });
+      });
+      const onDeliveryResult = vi.fn(async (result: { messageId: string }) => {
+        deliveryOrder.push(`observer:${result.messageId}`);
+        throw observerInvalidBlocks
+          ? Object.assign(new Error(observerFailure), { data: { error: "invalid_blocks" } })
+          : new Error(observerFailure);
+      });
+
+      try {
+        await expect(
+          sendMessageSlack("channel:C123", "", {
+            token: "xoxb-test",
+            cfg: SLACK_TEST_CFG,
+            client,
+            blocks: blocks as never,
+            deliveryQueueId: "question-delivery-queue",
+            onDeliveryResult,
+            onQuestionControlDelivery,
+          }),
+        ).rejects.toThrow(observerFailure);
+
+        expect(client.chat.postMessage).toHaveBeenCalledTimes(nativeFallback ? 2 : 1);
+        expect(deliveryOrder).toEqual(["controls:55", "observer:55"]);
+        expect(onQuestionControlDelivery).toHaveBeenCalledOnce();
+        const acceptedPost = postedMessage(client, nativeFallback ? 1 : 0);
+        expect(onQuestionControlDelivery).toHaveBeenCalledWith({
+          channelId: "C456",
+          messageId: "55",
+          text: acceptedPost.text,
+          blocks: acceptedPost.blocks,
+        });
+        expect(onDeliveryResult).toHaveBeenCalledWith(
+          expect.objectContaining({
+            messageId: "55",
+            channelId: "C456",
+            receipt: expect.objectContaining({ platformMessageIds: ["55"] }),
+          }),
+        );
+        expect(registerChannelDelivery).toHaveBeenCalledOnce();
+        const registration = registrations[0];
+        if (!registration) {
+          throw new Error("accepted Slack question controls were not registered with the Gateway");
+        }
+        expect(registration.deliveryId).toBe("slack:work:C456:55");
+
+        await registration.finalize(terminalStatus);
+
+        expect(terminalUpdate).toHaveBeenCalledOnce();
+        const update = terminalUpdate.mock.calls[0]?.[0];
+        if (!update) {
+          throw new Error("the accepted Slack controls were not finalized");
+        }
+        expect(update.channelId).toBe("C456");
+        expect(update.messageTs).toBe("55");
+        expect(update.text).toContain(terminalStatus);
+        expect(update.blocks.some((block) => block.type === "actions")).toBe(false);
+      } finally {
+        registerChannelDelivery.mockRestore();
+      }
+    },
+  );
+
+  it("does not register controls when Slack rejects the provider post", async () => {
+    const client = createSlackSendTestClient();
+    client.chat.postMessage.mockRejectedValueOnce(
+      Object.assign(new Error("An API error occurred: invalid_auth"), {
+        data: { error: "invalid_auth" },
+      }),
+    );
+    const onQuestionControlDelivery = vi.fn();
+    const onDeliveryResult = vi.fn();
+
+    await expect(
+      sendMessageSlack("channel:C123", "", {
+        token: "xoxb-test",
+        cfg: SLACK_TEST_CFG,
+        client,
+        blocks: [
+          {
+            type: "actions",
+            elements: [
+              {
+                type: "button",
+                action_id: "question",
+                text: { type: "plain_text", text: "Approve" },
+                value: "approve",
+              },
+            ],
+          },
+        ],
+        onDeliveryResult,
+        onQuestionControlDelivery,
+      }),
+    ).rejects.toThrow("invalid_auth");
+
+    expect(client.chat.postMessage).toHaveBeenCalledOnce();
+    expect(onQuestionControlDelivery).not.toHaveBeenCalled();
+    expect(onDeliveryResult).not.toHaveBeenCalled();
   });
 
   it("retries rejected native charts as accessible text", async () => {

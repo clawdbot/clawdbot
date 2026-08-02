@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { SLACK_MESSAGE_TEXT_RECOMMENDED_LIMIT } from "./limits.js";
+import { SLACK_MESSAGE_TEXT_HARD_LIMIT, SLACK_MESSAGE_TEXT_RECOMMENDED_LIMIT } from "./limits.js";
 import {
   buildSlackNativeDataDeliveryPlan,
   chunkSlackTextAtHardLimit,
@@ -53,6 +53,72 @@ describe("buildSlackNativeDataDeliveryPlan", () => {
     expect(plan.fallbackMessages.map((message) => message.text).join("")).toBe(
       `${caption} (table)\nAccount\nAcme`,
     );
+  });
+
+  it("packs response_url native-only fallback to Slack's 40,000-character hard limit", () => {
+    const caption = "x".repeat(41_000);
+    const plan = buildSlackNativeDataDeliveryPlan({
+      blocks: [tableBlock(caption)],
+      transport: "response-url",
+    });
+
+    expect(plan.skipOriginalBlocks).toBe(true);
+    expect(plan.fallbackMessages).toHaveLength(2);
+    expect(plan.fallbackMessages[0]?.text).toHaveLength(SLACK_MESSAGE_TEXT_HARD_LIMIT);
+    expect(plan.fallbackMessages.every((message) => message.blocks === undefined)).toBe(true);
+    expect(plan.fallbackMessages.map((message) => message.text).join("")).toBe(
+      `${caption} (table)\nAccount\nAcme`,
+    );
+  });
+
+  it("batches response_url survivor sections under Slack's hard limit", () => {
+    const blocks = Array.from({ length: 20 }, (_block, index) => ({
+      type: "section" as const,
+      text: { type: "plain_text" as const, text: `${String(index)}-${"x".repeat(2_990)}` },
+    }));
+    const plan = buildSlackNativeDataDeliveryPlan({
+      blocks,
+      transport: "response-url",
+    });
+
+    expect(plan.skipOriginalBlocks).toBe(true);
+    expect(plan.fallbackMessages).toHaveLength(2);
+    expect(
+      plan.fallbackMessages.every(
+        (message) => message.text.length <= SLACK_MESSAGE_TEXT_HARD_LIMIT,
+      ),
+    ).toBe(true);
+    expect(plan.fallbackMessages[0]?.text.length).toBeGreaterThan(
+      SLACK_MESSAGE_TEXT_RECOMMENDED_LIMIT,
+    );
+    expect(plan.fallbackMessages.flatMap((message) => message.blocks ?? [])).toEqual(blocks);
+  });
+
+  it("preserves response_url controls and 50-block batching during native fallback", () => {
+    const caption = "x".repeat(9_000);
+    const controls = actionBlock("Refresh", "hidden-refresh");
+    const plan = buildSlackNativeDataDeliveryPlan({
+      blocks: [
+        ...Array.from({ length: 48 }, () => ({ type: "divider" as const })),
+        controls,
+        tableBlock(caption),
+      ],
+      transport: "response-url",
+    });
+
+    expect(plan.fallbackMessages).toHaveLength(2);
+    expect(plan.fallbackMessages.every((message) => (message.blocks?.length ?? 0) <= 50)).toBe(
+      true,
+    );
+    expect(plan.fallbackMessages[0]?.blocks?.[48]).toBe(controls);
+    const fallbackText = plan.fallbackMessages.flatMap((message) =>
+      (message.blocks ?? []).flatMap((block) => {
+        const text = (block as { text?: { type?: string; text?: string } }).text;
+        return text?.type === "plain_text" && text.text ? [text.text] : [];
+      }),
+    );
+    expect(fallbackText.join("")).toBe(`${caption} (table)\nAccount\nAcme`);
+    expect(plan.fallbackMessages.map((message) => message.text).join(" ")).not.toContain("hidden-");
   });
 
   it("batches survivor controls and replacement sections without changing block order", () => {
