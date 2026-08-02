@@ -18,8 +18,13 @@ runs:
 
         base_ref="${TESTBOX_BASE_REF:-HEAD}"
         if ! base_sha="$(git rev-parse --verify "${base_ref}^{commit}")"; then
-          echo "Testbox base commit is missing from the maintained checkout: $base_ref" >&2
-          exit 1
+          # PR checkouts are shallow synthetic merges, so their base parent is
+          # not necessarily present until we fetch the exact immutable base.
+          git fetch --no-tags --depth=1 origin "$base_ref"
+          if ! base_sha="$(git rev-parse --verify "${base_ref}^{commit}")"; then
+            echo "Testbox base commit is missing from the maintained checkout: $base_ref" >&2
+            exit 1
+          fi
         fi
         git update-ref refs/remotes/origin/main "$base_sha"
 
