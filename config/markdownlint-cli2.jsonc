@@ -1,10 +1,5 @@
 {
-  "globs": [
-    "docs/**/*.md",
-    "docs/**/*.mdx",
-    "src/agents/templates/HEARTBEAT.md",
-    "README.md",
-  ],
+  "globs": ["docs/**/*.md", "docs/**/*.mdx", "src/agents/templates/HEARTBEAT.md", "README.md"],
   "ignores": [
     "docs/zh-CN/**",
     "docs/.i18n/**",
