@@ -155,8 +155,11 @@ export function hasPreparedAuthAttemptModelMetadata(params: {
  * Generation-owned, value-keyed memo of materialized route models. Lives on
  * the prepared-model-runtime snapshot so every run of a generation shares it
  * (per-run wrappers spread the snapshot, carrying this reference through).
- * Invalidation is generation replacement: auth-profile mutations and config
- * publications rebuild the snapshot, so no expiry logic is needed here.
+ * Invalidation is generation replacement: OpenClaw-published auth-profile
+ * mutations and config publications rebuild the snapshot. Out-of-process
+ * credential edits (e.g. an external CLI rewriting its own auth file) do not
+ * publish, so only model METADATA can pin until the next publication —
+ * credentials themselves are resolved fresh each turn.
  */
 export type PreparedRuntimeRouteModelMemo = {
   get(key: string): Promise<RuntimeRouteModel> | undefined;
@@ -198,22 +201,19 @@ function routeModelMemoKey(
     requestedProfileId?: string;
     providerUsesProfileScopedModelMetadata: boolean;
   },
-): string | undefined {
+): string {
   const route = plan.modelRoute;
-  if (!route) {
-    return undefined;
-  }
   return [
     params.provider,
     params.modelId,
     plan.forwardedAuthProfileId ?? "",
     plan.selectedAuthMode ?? "",
-    route.api,
-    route.baseUrl,
-    route.authRequirement,
-    params.requestedProfileId ?? "",
+    route?.api ?? "",
+    route?.baseUrl ?? "",
+    route?.authRequirement ?? "",
+    params.requestedProfileId?.trim() ?? "",
     params.providerUsesProfileScopedModelMetadata ? "1" : "0",
-  ].join("");
+  ].join("\u0001");
 }
 
 export function createPreparedRuntimeModelMaterializer<Model extends RuntimeRouteModel>(params: {
@@ -264,37 +264,57 @@ export function createPreparedRuntimeModelMaterializer<Model extends RuntimeRout
     );
   };
   const materialize = (plan: AgentRuntimeAuthPlan): Promise<Model> => {
-    if (!plan.modelRoute) {
+    // Memoize ONLY guaranteed resolver output: when willResolve is true,
+    // materialize-model either throws or returns resolveModel's result —
+    // never the per-run base model, which must not be shared across runs.
+    // Native-owned sessions always resolve to the per-run base, so they
+    // never touch the memo either.
+    const willResolve = shouldForceCredentialScopedModelResolve(
+      plan,
+      params.requestedProfileId,
+      params.providerUsesProfileScopedModelMetadata,
+    );
+    const memo =
+      params.nativeModelOwned || !willResolve ? undefined : params.generationRouteModelMemo;
+    if (!plan.modelRoute && !memo) {
       return materializeUncached(plan);
     }
-    const cached = materializedRouteModels.get(plan);
-    if (cached) {
-      return cached;
+    if (plan.modelRoute) {
+      const cached = materializedRouteModels.get(plan);
+      if (cached) {
+        return cached;
+      }
     }
-    // Native-owned sessions resolve to the per-run base model, which must
-    // never be shared across runs (and costs nothing to rebuild).
-    const memo = params.nativeModelOwned ? undefined : params.generationRouteModelMemo;
     const memoKey = memo ? routeModelMemoKey(plan, params) : undefined;
     if (memo && memoKey) {
       const generationHit = memo.get(memoKey);
       if (generationHit) {
-        // Same generation, same decision inputs → same resolved model. The
-        // cast is sound because the key includes provider/modelId and the
-        // memo lives on one prepared-model-runtime generation.
+        // One generation, one config, same decision inputs → same resolver
+        // output. The Model-type cast is sound only because auth-plan is the
+        // sole memo-passing call site; a second caller with a narrower Model
+        // must not share this memo instance.
         const hit = generationHit as Promise<Model>;
-        materializedRouteModels.set(plan, hit);
+        if (plan.modelRoute) {
+          materializedRouteModels.set(plan, hit);
+        }
         return hit;
       }
     }
     // Prepared plans are immutable within one run. Carry their exact model
     // tuple into auth initialization instead of repeating provider discovery.
     const materialized = materializeUncached(plan);
-    materializedRouteModels.set(plan, materialized);
+    if (plan.modelRoute) {
+      materializedRouteModels.set(plan, materialized);
+    }
     if (memo && memoKey) {
       memo.set(memoKey, materialized as Promise<RuntimeRouteModel>);
       // Resolution failures throw (materialize-model.ts); never pin a
-      // rejection for the rest of the generation.
-      materialized.catch(() => memo.delete(memoKey));
+      // rejection for the generation — but never evict a newer healthy entry.
+      materialized.catch(() => {
+        if (memo.get(memoKey) === (materialized as Promise<RuntimeRouteModel>)) {
+          memo.delete(memoKey);
+        }
+      });
     }
     return materialized;
   };

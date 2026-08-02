@@ -85,6 +85,49 @@ describe("generation route-model memo", () => {
     expect(resolveModel).toHaveBeenCalledTimes(2);
   });
 
+  it("covers route-less plans so non-OpenAI providers share resolutions too", async () => {
+    const memo = createPreparedRuntimeRouteModelMemo();
+    const resolveModel = vi.fn(async () => ({ model: routedModel }));
+    const runA = buildMaterializer({ memo, resolveModel });
+    const runB = buildMaterializer({ memo, resolveModel });
+    // Generic (route-less) plans with a forwarded profile force resolution
+    // every turn; the memo must cover them or Anthropic/Google agents pay
+    // the full resolve on every message.
+    const routeless = () => buildPlan({ modelRoute: undefined });
+
+    await expect(runA.materialize(routeless())).resolves.toBe(routedModel);
+    await expect(runB.materialize(routeless())).resolves.toBe(routedModel);
+    expect(resolveModel).toHaveBeenCalledTimes(1);
+  });
+
+  it("never serves one run's base model to another run", async () => {
+    const memo = createPreparedRuntimeRouteModelMemo();
+    const resolveModel = vi.fn(async () => ({ model: routedModel }));
+    // No forwarded/requested profile and no profile-scoped metadata:
+    // willResolve is false, so materialization may return the per-run base
+    // model — which must never enter the generation memo.
+    const buildBaseReturningMaterializer = (base: typeof routedModel) =>
+      createPreparedRuntimeModelMaterializer({
+        provider: "openai",
+        modelId: "gpt-5.5",
+        getModel: () => base,
+        nativeModelOwned: false,
+        providerUsesProfileScopedModelMetadata: false,
+        generationRouteModelMemo: memo,
+        resolveModel,
+      });
+    const baseA = { ...routedModel };
+    const baseB = { ...routedModel };
+    const runA = buildBaseReturningMaterializer(baseA);
+    const runB = buildBaseReturningMaterializer(baseB);
+    const plainPlan = () =>
+      buildPlan({ forwardedAuthProfileId: undefined, selectedAuthMode: undefined });
+
+    await expect(runA.materialize(plainPlan())).resolves.toBe(baseA);
+    await expect(runB.materialize(plainPlan())).resolves.toBe(baseB);
+    expect(resolveModel).not.toHaveBeenCalled();
+  });
+
   it("keeps run-local behavior unchanged when no memo is provided", async () => {
     const resolveModel = vi.fn(async () => ({ model: routedModel }));
     const runA = buildMaterializer({ resolveModel });
