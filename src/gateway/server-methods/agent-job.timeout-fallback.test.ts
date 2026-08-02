@@ -246,6 +246,101 @@ describe("waitForAgentJob timeout fallback", () => {
     });
   });
 
+  it.each([
+    {
+      label: "restart cancellation before a provider timeout",
+      initial: {
+        aborted: true,
+        stopReason: AGENT_RUN_RESTART_ABORT_STOP_REASON,
+        error: "Restart interrupted the run",
+      },
+      final: {
+        aborted: true,
+        stopReason: "timeout",
+        timeoutPhase: "provider",
+        providerStarted: true,
+      },
+      expected: {
+        status: "error",
+        stopReason: AGENT_RUN_RESTART_ABORT_STOP_REASON,
+        error: "Restart interrupted the run",
+      },
+    },
+    {
+      label: "restart cancellation before an exhausted failure",
+      initial: {
+        aborted: true,
+        stopReason: AGENT_RUN_RESTART_ABORT_STOP_REASON,
+        error: "Restart interrupted the run",
+      },
+      final: {},
+      expected: {
+        status: "error",
+        stopReason: AGENT_RUN_RESTART_ABORT_STOP_REASON,
+        error: "Restart interrupted the run",
+      },
+    },
+    {
+      label: "provider timeout before an exhausted failure",
+      initial: {
+        aborted: true,
+        stopReason: "timeout",
+        timeoutPhase: "provider",
+        providerStarted: true,
+        error: "Provider timed out",
+      },
+      final: {},
+      expected: {
+        status: "timeout",
+        stopReason: "timeout",
+        timeoutPhase: "provider",
+        providerStarted: true,
+        error: "Provider timed out",
+      },
+    },
+  ])("preserves pending error-phase $label", async ({ initial, final, expected }) => {
+    const runId = `run-timeout-fallback-pending-error-${runSequence++}`;
+
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: 1_000 },
+    });
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: {
+        phase: "error",
+        startedAt: 1_000,
+        endedAt: 1_100,
+        ...initial,
+      },
+    });
+
+    const waitPromise = waitForAgentJob({
+      runId,
+      timeoutMs: 1_000,
+      ignoreCachedSnapshot: true,
+    });
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: {
+        phase: "error",
+        startedAt: 1_000,
+        endedAt: 1_200,
+        error: "All model fallback candidates failed",
+        ...final,
+        fallbackExhaustedFailure: true,
+      },
+    });
+
+    const terminalOutcome = { ...expected, startedAt: 1_000, endedAt: 1_100 };
+    await expect(waitForAgentJob({ runId, timeoutMs: 0 })).resolves.toMatchObject(terminalOutcome);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await expect(waitPromise).resolves.toMatchObject(terminalOutcome);
+  });
+
   it("preserves earlier cancellation over an exhausted fallback provider timeout", async () => {
     const runId = `run-timeout-fallback-exhausted-cancelled-${runSequence++}`;
 

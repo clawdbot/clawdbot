@@ -307,13 +307,17 @@ function ensureAgentRunListener() {
       schedulePendingAgentRunTimeout(snapshot);
       return;
     }
-    const pendingTimeout = pendingAgentRunTimeouts.get(evt.runId);
-    if (pendingTimeout && shouldPreserveTerminalSnapshot(pendingTimeout.snapshot, snapshot)) {
-      return;
-    }
+    // Both pending owners may hold sticky outcomes that finalization must not discard.
+    const terminalSnapshot = [pendingAgentRunErrors, pendingAgentRunTimeouts].reduce(
+      (current, pendingRuns) => {
+        const pending = pendingRuns.get(evt.runId)?.snapshot;
+        return pending && shouldPreserveTerminalSnapshot(pending, current) ? pending : current;
+      },
+      snapshot,
+    );
     clearPendingAgentRunError(evt.runId);
     clearPendingAgentRunTimeout(evt.runId);
-    recordAgentRunSnapshot(snapshot, snapshot.version);
+    recordAgentRunSnapshot(terminalSnapshot, snapshot.version);
   });
 }
 
