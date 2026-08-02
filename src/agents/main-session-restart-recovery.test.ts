@@ -32,6 +32,7 @@ import {
 import { addTestHook } from "../plugins/hooks.test-fixtures.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
@@ -87,8 +88,9 @@ const transcriptMocks = vi.hoisted(() => ({
   appendAssistantMessageToSessionTranscript: vi.fn(),
 }));
 const runtimePluginMocks = vi.hoisted(() => ({
-  ensureRuntimePluginsLoaded: vi.fn(),
+  loadAgentRuntimePluginRegistryHandle: vi.fn(),
   findRestartRecoveryUnsafeReplyHook: vi.fn<(ctx: { trigger?: string }) => string | undefined>(),
+  pluginRegistry: undefined as ReturnType<typeof createEmptyPluginRegistry> | undefined,
 }));
 const discordDeliveryContext = {
   channel: "discord",
@@ -148,12 +150,12 @@ vi.mock("../config/sessions/transcript.js", async (importOriginal) => {
   };
 });
 
-vi.mock("./runtime-plugins.js", () => ({
-  ensureRuntimePluginsLoaded: runtimePluginMocks.ensureRuntimePluginsLoaded,
-}));
-
 vi.mock("../plugins/restart-recovery-hook-safety.js", () => ({
   findRestartRecoveryUnsafeReplyHook: runtimePluginMocks.findRestartRecoveryUnsafeReplyHook,
+}));
+
+vi.mock("./runtime-plugins.js", () => ({
+  loadAgentRuntimePluginRegistryHandle: runtimePluginMocks.loadAgentRuntimePluginRegistryHandle,
 }));
 
 let tmpDir: string;
@@ -168,6 +170,10 @@ beforeEach(async () => {
   vi.clearAllMocks();
   vi.mocked(callGateway).mockReset();
   vi.mocked(callGateway).mockImplementation(async () => ({ runId: "run-resumed" }));
+  runtimePluginMocks.pluginRegistry = createEmptyPluginRegistry();
+  runtimePluginMocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(
+    runtimePluginMocks.pluginRegistry,
+  );
   runtimePluginMocks.findRestartRecoveryUnsafeReplyHook.mockReturnValue(undefined);
   resetAgentEventsForTest();
   resetGatewayWorkAdmission();
@@ -3494,17 +3500,55 @@ describe("main-session-restart-recovery", () => {
       },
     ]);
 
+    runtimePluginMocks.findRestartRecoveryUnsafeReplyHook.mockImplementationOnce(() => {
+      expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(
+        runtimePluginMocks.pluginRegistry,
+      );
+      return undefined;
+    });
+
     await expectRecovery({ recovered: 1, failed: 0, skipped: 0 }, {});
 
-    expect(runtimePluginMocks.ensureRuntimePluginsLoaded).toHaveBeenCalledWith(
-      expect.objectContaining({ config: {}, allowGatewaySubagentBinding: true }),
-    );
+    expect(runtimePluginMocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledWith({
+      config: {},
+      workspaceDir: expect.any(String),
+      allowGatewaySubagentBinding: true,
+    });
     expect(runtimePluginMocks.findRestartRecoveryUnsafeReplyHook).toHaveBeenCalledOnce();
     expect(vi.mocked(callGateway).mock.calls[0]?.[0]).toMatchObject({ method: "agent" });
     expect(gatewayParams()).toMatchObject({
       deliver: false,
       sessionKey,
     });
+  });
+
+  it("fails closed when the restart recovery registry handle is unavailable", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const sessionKey = "agent:main:main";
+    runtimePluginMocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(undefined);
+    await writeMainSession({
+      sessionsDir,
+      sessionKey,
+      restartRecoveryBeforeAgentReplyState: "admitted",
+      restartRecoveryDeliveryRequestFingerprint: "request-fingerprint",
+      restartRecoveryDeliveryRunId: "control-ui-run",
+      restartRecoveryDeliverySourceRunId: "control-ui-run",
+      restartRecoverySourceIngress: "control-ui",
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      {
+        role: "user",
+        content: "do the thing",
+        idempotencyKey: "control-ui-run:user",
+      },
+    ]);
+
+    await expectRecovery({ recovered: 0, failed: 1, skipped: 0 }, {});
+
+    expect(runtimePluginMocks.findRestartRecoveryUnsafeReplyHook).not.toHaveBeenCalled();
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(loadSessionEntry({ sessionKey, storePath })?.status).toBe("failed");
   });
 
   it("fails a pre-hook Control UI recovery when a runtime hook is active", async () => {

@@ -2,6 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { parse, tokenizer } from "acorn";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { createLazyPromiseLoader } from "../shared/lazy-runtime.js";
 import { clampNumber } from "../utils.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
@@ -280,7 +281,7 @@ class CodeModeLimitError extends ToolInputError {
 }
 
 function isRuntimeInterruptedError(error: unknown): boolean {
-  return errorMessage(error) === "interrupted";
+  return (error instanceof Error ? error.message : error) === "interrupted";
 }
 
 export function codeModeFailureCode(error: unknown): CodeModeFailureCode {
@@ -294,7 +295,9 @@ export function codeModeFailureCode(error: unknown): CodeModeFailureCode {
 }
 
 export function codeModeFailureMessage(error: unknown): string {
-  return isRuntimeInterruptedError(error) ? "code mode timeout exceeded" : errorMessage(error);
+  return isRuntimeInterruptedError(error)
+    ? "code mode timeout exceeded"
+    : formatErrorMessage(error);
 }
 
 export function enforceOutputLimit(output: unknown[], config: CodeModeConfig): void {
@@ -621,13 +624,6 @@ export async function prepareSource(input: {
     throw new ToolInputError(CODE_MODE_SHELL_SOURCE_ERROR);
   }
   return transformed.outputText;
-}
-
-export function errorMessage(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message || String(error);
-  }
-  return String(error);
 }
 
 export function createCodeModeApiFilesForRun(

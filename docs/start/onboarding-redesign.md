@@ -260,6 +260,12 @@ extraction); event-reactive commentary and channel summon/agent-down recovery
 (phase 6 PR2); automatic `localModelLean` for weak models; whether existing
 users' saved sidebar pins should adopt the OpenClaw entry.
 
+The macOS app now follows the same browser-first principle: native onboarding
+ends once inference verifies (install + AI setup pages), and Finish opens the
+dashboard at `/custodian?onboarding=1`. The native memory-import and
+permissions pages left the first-run flow (Settings → Permissions remains);
+deleting the now-unreachable native memory-import module is a follow-up.
+
 ## Testing and landing playbook (hard-won; read before phases 4-6)
 
 - **`OPENCLAW_STATE_DIR` does not isolate the Gateway service.** The

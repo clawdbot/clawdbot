@@ -68,10 +68,6 @@ export function formatUnknownError(error: unknown): string {
   return String(error);
 }
 
-export function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object";
-}
-
 export function normalizeToolName(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;

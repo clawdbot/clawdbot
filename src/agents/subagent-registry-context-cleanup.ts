@@ -1,4 +1,5 @@
 import { isFastTestRuntimeEnv } from "../infra/env.js";
+import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { removeInternalSessionEffectsSession } from "./internal-session-effects.js";
 import {
   SUBAGENT_ENDED_OUTCOME_KILLED,
@@ -11,7 +12,7 @@ import {
   resolveLifecycleOutcomeFromRunOutcome,
 } from "./subagent-registry-completion.js";
 import {
-  ensureSubagentRegistryPluginRuntimeLoaded,
+  loadSubagentRegistryPluginRuntimeHandle,
   resolveSubagentRegistryContextEngine,
   type SubagentRegistryDeps,
 } from "./subagent-registry-deps.js";
@@ -33,16 +34,18 @@ export function createSubagentRegistryContextCleanup(config: {
     params: ContextEngineSubagentEndedParams,
   ): Promise<void> {
     const cfg = deps().getRuntimeConfig();
-    await ensureSubagentRegistryPluginRuntimeLoaded({
+    const registry = await loadSubagentRegistryPluginRuntimeHandle({
       config: cfg,
-      workspaceDir: params.workspaceDir,
+      ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
       allowGatewaySubagentBinding: true,
     });
-    const engine = await resolveSubagentRegistryContextEngine(cfg, {
-      agentDir: params.agentDir,
-      workspaceDir: params.workspaceDir,
+    await withPluginRuntimeRegistryScope(registry, async () => {
+      const engine = await resolveSubagentRegistryContextEngine(cfg, {
+        agentDir: params.agentDir,
+        workspaceDir: params.workspaceDir,
+      });
+      await engine.onSubagentEnded?.(params);
     });
-    await engine.onSubagentEnded?.(params);
   }
 
   async function notifyContextEngineSubagentEnded(
@@ -167,35 +170,37 @@ export function createSubagentRegistryContextCleanup(config: {
       return;
     }
     const cfg = deps().getRuntimeConfig();
-    await ensureSubagentRegistryPluginRuntimeLoaded({
+    const registry = await loadSubagentRegistryPluginRuntimeHandle({
       config: cfg,
-      workspaceDir: params.entry.workspaceDir,
+      ...(params.entry.workspaceDir ? { workspaceDir: params.entry.workspaceDir } : {}),
       allowGatewaySubagentBinding: true,
     });
-    if (params.entry.endedHookEmittedAt || params.isCurrent?.() === false) {
-      return;
-    }
-    // Plugin loading yields after the terminal lock is released. Resolve the
-    // event from the canonical row only after that boundary so an older callback
-    // cannot claim the exactly-once hook with a superseded timeout or error.
-    const reason = params.entry.endedReason ?? params.reason ?? SUBAGENT_ENDED_REASON_COMPLETE;
-    const outcome =
-      reason === SUBAGENT_ENDED_REASON_KILLED
-        ? SUBAGENT_ENDED_OUTCOME_KILLED
-        : resolveLifecycleOutcomeFromRunOutcome(params.entry.execution.outcome);
-    const error =
-      params.entry.execution.outcome?.status === "error"
-        ? params.entry.execution.outcome.error
-        : undefined;
-    await emitSubagentEndedHookOnce({
-      entry: params.entry,
-      reason,
-      sendFarewell: params.sendFarewell,
-      accountId: params.accountId ?? params.entry.requesterOrigin?.accountId,
-      outcome,
-      error,
-      inFlightRunIds: endedHookInFlightRunIds,
-      persist,
+    await withPluginRuntimeRegistryScope(registry, async () => {
+      if (params.entry.endedHookEmittedAt || params.isCurrent?.() === false) {
+        return;
+      }
+      // Plugin loading yields after the terminal lock is released. Resolve the
+      // event from the canonical row only after that boundary so an older callback
+      // cannot claim the exactly-once hook with a superseded timeout or error.
+      const reason = params.entry.endedReason ?? params.reason ?? SUBAGENT_ENDED_REASON_COMPLETE;
+      const outcome =
+        reason === SUBAGENT_ENDED_REASON_KILLED
+          ? SUBAGENT_ENDED_OUTCOME_KILLED
+          : resolveLifecycleOutcomeFromRunOutcome(params.entry.execution.outcome);
+      const error =
+        params.entry.execution.outcome?.status === "error"
+          ? params.entry.execution.outcome.error
+          : undefined;
+      await emitSubagentEndedHookOnce({
+        entry: params.entry,
+        reason,
+        sendFarewell: params.sendFarewell,
+        accountId: params.accountId ?? params.entry.requesterOrigin?.accountId,
+        outcome,
+        error,
+        inFlightRunIds: endedHookInFlightRunIds,
+        persist,
+      });
     });
   }
 

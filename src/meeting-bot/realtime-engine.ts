@@ -26,6 +26,7 @@ import {
   resolveMeetingRealtimeProvider,
 } from "./realtime-engine-support.js";
 import { createMeetingRealtimeOutputOwner } from "./realtime-output-owner.js";
+import { createMeetingRealtimeToolContinuity } from "./realtime-tool-continuity.js";
 
 export {
   formatMeetingAgentAudioModelLog,
@@ -35,7 +36,6 @@ export {
   normalizeMeetingTtsPromptText,
   resolveMeetingRealtimeTranscriptionProvider,
 } from "./realtime-engine-support.js";
-
 export type MeetingRuntimePlatform = {
   /** Adapter-owned identity keeps platform names and log prefixes out of core. */
   displayName: string;
@@ -98,7 +98,6 @@ const MEETING_REALTIME_OUTPUT_MAX_PENDING_MS = 2_000;
 const MEETING_REALTIME_OUTPUT_MAX_WRITE_MS = 500;
 const MEETING_REALTIME_OUTPUT_MAX_PENDING_FRAMES = 256;
 const MEETING_REALTIME_CANCELLATION_RACE_DETAIL = "Cancellation failed: no active response found";
-
 export async function startMeetingRealtimeEngine(params: {
   config: MeetingRealtimeEngineConfig;
   fullConfig: OpenClawConfig;
@@ -135,9 +134,11 @@ export async function startMeetingRealtimeEngine(params: {
   let outputPendingBytes = 0;
   let outputPendingFrames = 0;
   let outputGenerationActive = false;
+  let continuityResetActive = false;
   let outputClearTail = Promise.resolve();
   const outputQueue: Array<{ audio: Buffer; generation: number }> = [];
   const outputOwner = createMeetingRealtimeOutputOwner();
+  const toolContinuity = createMeetingRealtimeToolContinuity(params.handleToolCall);
   const outputMaxPendingBytes =
     meetingOutputBytesPerMs(params.config.chrome.audioFormat) *
     MEETING_REALTIME_OUTPUT_MAX_PENDING_MS;
@@ -160,6 +161,7 @@ export async function startMeetingRealtimeEngine(params: {
       outputOwner.reset();
       outputClearAfterActive = false;
       invalidateOutputQueue();
+      toolContinuity.reset("meeting realtime stopped");
     }
     if (stopPromise) {
       await stopPromise;
@@ -549,6 +551,30 @@ export async function startMeetingRealtimeEngine(params: {
         }
       },
       onEvent: (event) => {
+        if (event.direction === "server" && event.type === "session.created") {
+          continuityResetActive = false;
+        }
+        if (event.direction === "client" && event.type === "session.continuity.reset") {
+          if (continuityResetActive) {
+            return;
+          }
+          continuityResetActive = true;
+          realtimeReady = false;
+          outputOwner.reset();
+          outputGenerationActive = false;
+          toolContinuity.reset(event.type);
+          const turnId = harness.talk.activeTurnId;
+          invalidateOutputPlayback();
+          harness.flushOutput(clearOutputPlayback);
+          harness.finishOutputAudio(event.type);
+          if (turnId) {
+            harness.talk.cancelTurn({
+              turnId,
+              payload: { ...outputTalkPayload, reason: event.type },
+            });
+          }
+          return;
+        }
         outputOwner.noteEvent(event);
         if (event.type === "input_audio_buffer.speech_started") {
           harness.ensureTurn();
@@ -600,26 +626,18 @@ export async function startMeetingRealtimeEngine(params: {
           );
         }
       },
-      onToolCall: (event, session) => {
-        harness.emit({
-          type: "tool.call",
-          turnId: harness.ensureTurn(),
-          itemId: event.itemId,
-          callId: event.callId,
-          payload: { name: event.name, args: event.args },
-        });
-        const turnId = harness.ensureTurn();
-        return params.handleToolCall({
-          strategy,
+      onToolCall: (event, session) =>
+        toolContinuity.run({
           session,
-          event,
-          meetingSessionId: params.meetingSessionId,
-          requesterSessionKey: params.requesterSessionKey,
-          transcript: harness.transcript,
-          onTalkEvent: (inputLocal) =>
-            harness.emit({ ...inputLocal, turnId: inputLocal.turnId ?? turnId }),
-        });
-      },
+          call: {
+            strategy,
+            event,
+            meetingSessionId: params.meetingSessionId,
+            requesterSessionKey: params.requesterSessionKey,
+            transcript: harness.transcript,
+          },
+          harness,
+        }),
       onError: (error) => {
         harness.emit({
           type: "session.error",
@@ -644,6 +662,7 @@ export async function startMeetingRealtimeEngine(params: {
       },
       onReady: () => {
         realtimeReady = true;
+        continuityResetActive = false;
         harness.emit({
           type: "session.ready",
           payload: outputTalkPayload,

@@ -2839,6 +2839,73 @@ describe("handleFeishuMessage command authorization", () => {
 
   it.each([
     {
+      action: "created",
+      scope: "group_topic",
+      expectedPeerId: "oc-group:topic:omt_native_reaction",
+    },
+    {
+      action: "deleted",
+      scope: "group_topic",
+      expectedPeerId: "oc-group:topic:omt_native_reaction",
+    },
+    {
+      action: "created",
+      scope: "group_topic_sender",
+      expectedPeerId: "oc-group:topic:omt_native_reaction:sender:ou-reaction-actor",
+    },
+    {
+      action: "deleted",
+      scope: "group_topic_sender",
+      expectedPeerId: "oc-group:topic:omt_native_reaction:sender:ou-reaction-actor",
+    },
+  ] as const)(
+    "hydrates topic threads from the real message ID for synthetic $action reactions in $scope sessions",
+    async ({ action, scope, expectedPeerId }) => {
+      mockShouldComputeCommandAuthorized.mockReturnValue(false);
+      const reactedMessageId = `om_reacted_${action}_${scope}`;
+      mockGetMessageFeishu.mockResolvedValueOnce({
+        messageId: reactedMessageId,
+        chatId: "oc-group",
+        chatType: "topic_group",
+        content: "reacted message",
+        contentType: "text",
+        threadId: "omt_native_reaction",
+      });
+
+      await dispatchMessage({
+        cfg: createFeishuTestConfig({
+          groups: {
+            "oc-group": {
+              requireMention: false,
+              groupSessionScope: scope,
+              replyInThread: "enabled",
+            },
+          },
+        }),
+        event: createFeishuTestEvent({
+          messageId: `${reactedMessageId}:reaction:THUMBSUP:synthetic`,
+          senderOpenId: "ou-reaction-actor",
+          chatId: "oc-group",
+          chatType: "topic_group",
+          text:
+            action === "deleted"
+              ? `[removed reaction THUMBSUP from message ${reactedMessageId}]`
+              : `[reacted with THUMBSUP to message ${reactedMessageId}]`,
+          message: {
+            reply_target_message_id: reactedMessageId,
+            typing_target_message_id: reactedMessageId,
+          },
+        }),
+      });
+
+      const getMessageRequest = mockCallArg<{ messageId?: string }>(mockGetMessageFeishu, 0, 0);
+      expect(getMessageRequest.messageId).toBe(reactedMessageId);
+      expectResolvedRouteCall(0, { kind: "group", id: expectedPeerId });
+    },
+  );
+
+  it.each([
+    {
       name: "replies to the topic root when handling a message inside an existing topic",
       cfg: createFeishuTestConfig({
         groups: { "oc-group": { requireMention: false, replyInThread: "enabled" } },

@@ -61,7 +61,6 @@ export {
   findJobOrThrow,
   isJobEnabled,
   computeJobNextRunAtMs,
-  computeJobPreviousRunAtMs,
   computeJobPreviousRunAtOrBeforeMs,
   recordScheduleComputeError,
   recomputeNextRuns,

@@ -17,6 +17,7 @@ import type { ProviderSystemPromptContribution } from "../agents/system-prompt-c
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { UsageProviderId } from "../infra/provider-usage.types.js";
+import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { normalizeProviderModelIdWithManifest } from "./manifest-model-id-normalization.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import { resolvePluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
@@ -52,6 +53,7 @@ import {
   resolveUsageHookProviderPluginContracts,
 } from "./providers.js";
 import { getActivePluginRegistryWorkspaceDirFromState } from "./runtime-state.js";
+import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
 import { resolveRuntimeTextTransforms } from "./text-transforms.runtime.js";
 import type {
   ProviderAuthDoctorHintContext,
@@ -685,20 +687,31 @@ export async function resolveProviderUsageSnapshotWithPlugin(params: {
     return undefined;
   }
 
-  let harness = getRegisteredAgentHarness(params.provider)?.harness;
+  const harness = getRegisteredAgentHarness(params.provider)?.harness;
   if (!harness) {
     const workspaceDir =
       params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState() ?? process.cwd();
+    const { loadAgentRuntimePluginRegistryHandle } = await import("../agents/runtime-plugins.js");
     const { ensureSelectedAgentHarnessPlugin } =
       await import("../agents/harness/runtime-plugin.js");
-    await ensureSelectedAgentHarnessPlugin({
-      provider: params.context.provider,
-      modelId: "",
+    const pluginRegistry = loadAgentRuntimePluginRegistryHandle({
       config: params.config,
-      agentHarnessId: params.provider,
       workspaceDir,
+      selections: [{ provider: params.context.provider, modelId: "", runtime: params.provider }],
     });
-    harness = getRegisteredAgentHarness(params.provider)?.harness;
+    return await withPluginRuntimeRegistryScope(pluginRegistry, async () => {
+      await ensureSelectedAgentHarnessPlugin({
+        provider: params.context.provider,
+        modelId: "",
+        config: params.config,
+        agentHarnessId: params.provider,
+        workspaceDir,
+        pluginRegistry,
+      });
+      return await getRegisteredAgentHarness(params.provider)?.harness.fetchUsageSnapshot?.(
+        params.context,
+      );
+    });
   }
   return await harness?.fetchUsageSnapshot?.(params.context);
 }
@@ -986,11 +999,22 @@ export function resolveExternalAuthProfilesWithPlugins(params: {
 }): ProviderExternalAuthProfile[] {
   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
   const env = params.env ?? process.env;
-  const { manifestRegistry } = resolvePluginMetadataSnapshot({
-    config: params.config ?? {},
-    workspaceDir,
+  const config = params.config ?? {};
+  const currentMetadataSnapshot = getCurrentPluginMetadataSnapshot({
+    config,
     env,
+    ...(workspaceDir === undefined ? { allowWorkspaceScopedSnapshot: true } : { workspaceDir }),
   });
+  const { manifestRegistry } =
+    currentMetadataSnapshot ?? resolvePluginMetadataSnapshot({ config, workspaceDir, env });
+  // A lifecycle-owned manifest is authoritative: no external-auth contracts means
+  // no provider registry discovery or runtime activation is needed for this overlay.
+  if (
+    currentMetadataSnapshot &&
+    !manifestRegistry.plugins.some((plugin) => plugin.contracts?.externalAuthProviders?.length)
+  ) {
+    return [];
+  }
   const externalAuthPluginIds = resolveExternalAuthProfileProviderPluginIds({
     config: params.config,
     workspaceDir,

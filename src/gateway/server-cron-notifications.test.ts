@@ -88,6 +88,13 @@ function createWebhookJob(delivery: NonNullable<CronJob["delivery"]>): CronJob {
   };
 }
 
+function createCompletionWebhookJob(url = "https://example.invalid/cron"): CronJob {
+  return createWebhookJob({
+    mode: "announce",
+    completionDestination: { mode: "webhook", to: url },
+  });
+}
+
 describe("dispatchGatewayCronFinishedNotifications", () => {
   beforeEach(() => {
     resetGatewayWorkAdmission();
@@ -116,10 +123,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
         release: vi.fn(async () => {}),
       };
     });
-    const job = createWebhookJob({
-      mode: "webhook",
-      to: "https://example.invalid/cron",
-    });
+    const job = createCompletionWebhookJob();
     const parentAdmission = tryBeginGatewayRootWorkAdmission();
     expect(parentAdmission).not.toBeNull();
     if (!parentAdmission) {
@@ -150,10 +154,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
 
   it("keeps webhook delivery cold when its token owner is unavailable", async () => {
     const logger = { warn: vi.fn() };
-    const job = createWebhookJob({
-      mode: "webhook",
-      to: "https://example.invalid/cron",
-    });
+    const job = createCompletionWebhookJob();
     setActiveDegradedSecretOwners([
       {
         ownerKind: "capability",
@@ -196,10 +197,9 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
         release,
       });
       const logger = { warn: vi.fn() };
-      const job = createWebhookJob({
-        mode: "webhook",
-        to: "https://example.invalid/cron?token=must-not-be-logged",
-      });
+      const job = createCompletionWebhookJob(
+        "https://example.invalid/cron?token=must-not-be-logged",
+      );
 
       dispatchGatewayCronFinishedNotifications({
         evt: { jobId: job.id, action: "finished", status: "ok", summary: "done" },
@@ -213,7 +213,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
         expect(logger.warn).toHaveBeenCalledWith(
           expect.objectContaining({
             jobId: job.id,
-            source: "delivery",
+            source: "completionDestination",
             err: expect.stringContaining(String(status)),
             webhookUrl: "https://example.invalid/cron",
           }),
@@ -368,10 +368,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
 
   it("keeps immediate failure webhook messages stable and adds structured runAtMs", async () => {
     const runAtMs = Date.parse("2026-01-15T15:30:00.000Z");
-    const job = createWebhookJob({
-      mode: "webhook",
-      to: "https://example.invalid/cron",
-    });
+    const job = createCompletionWebhookJob();
 
     await sendGatewayCronFailureAlert({
       deps: {} as CliDeps,
@@ -398,10 +395,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
 
   it("delivers a failed cron webhook even when the run produced no summary", async () => {
     const logger = { warn: vi.fn() };
-    const job = createWebhookJob({
-      mode: "webhook",
-      to: "https://example.invalid/cron",
-    });
+    const job = createCompletionWebhookJob();
 
     dispatchGatewayCronFinishedNotifications({
       evt: {
@@ -427,10 +421,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
   });
 
   it("applies the webhook timeout to guarded network preflight", async () => {
-    const job = createWebhookJob({
-      mode: "webhook",
-      to: "https://example.invalid/cron",
-    });
+    const job = createCompletionWebhookJob();
 
     dispatchGatewayCronFinishedNotifications({
       evt: { jobId: job.id, action: "finished", status: "ok", summary: "done" },
@@ -571,10 +562,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
   );
 
   it("defers detached completion delivery while suspension is prepared", async () => {
-    const job = createWebhookJob({
-      mode: "webhook",
-      to: "https://example.invalid/cron",
-    });
+    const job = createCompletionWebhookJob();
     const suspensionAdmission = tryBeginGatewaySuspendAdmission(() => {});
     expect(suspensionAdmission?.commit()).toBe(true);
 
@@ -945,8 +933,11 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
       wakeMode: "next-heartbeat",
       payload: { kind: "command", argv: ["echo", "ok"] },
       delivery: {
-        mode: "webhook",
-        to: "https://example.invalid/cron",
+        mode: "announce",
+        completionDestination: {
+          mode: "webhook",
+          to: "https://example.invalid/cron",
+        },
       },
       state: {
         lastDiagnosticSummary: sensitiveSummary,

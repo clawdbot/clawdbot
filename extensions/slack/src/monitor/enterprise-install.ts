@@ -9,6 +9,7 @@ export type SlackInstallationIdentity =
       kind: "workspace";
       apiAppId?: string;
       teamId: string;
+      teamName?: string;
       enterpriseId?: string;
     }
   | {
@@ -33,6 +34,7 @@ export type SlackIdentityHealth =
 
 export type SlackAuthTestIdentity = {
   app_id?: unknown;
+  team?: unknown;
   team_id?: unknown;
   enterprise_id?: unknown;
   is_enterprise_install?: unknown;
@@ -244,9 +246,11 @@ export function resolveSlackInstallationIdentity(params: {
   if (!teamId) {
     throw new Error("Slack workspace auth.test returned no team_id");
   }
+  const teamName = normalizeOptionalString(auth.team);
   return {
     kind: "workspace",
     teamId,
+    ...(teamName ? { teamName } : {}),
     ...(apiAppId ? { apiAppId } : {}),
     ...(enterpriseId ? { enterpriseId } : {}),
   };

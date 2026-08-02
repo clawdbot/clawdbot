@@ -26,7 +26,9 @@ export function resolveMemorySessionStartupDirtyFiles(params: {
       dirtyFiles.push(file.absPath);
       continue;
     }
-    if (file.size !== indexedSize || file.mtimeMs > indexedMtimeMs) {
+    // File mtimes and SQLite session updatedAt values can move backward after
+    // restore/reset. The downstream content-hash gate suppresses unchanged rewrites.
+    if (file.size !== indexedSize || file.mtimeMs !== indexedMtimeMs) {
       dirtyFiles.push(file.absPath);
     }
   }

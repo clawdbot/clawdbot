@@ -89,7 +89,7 @@ export async function cleanupCodexAttempt(
     terminalState.turnSucceeded &&
     !isIncognitoSessionKey(params.sessionKey) &&
     params.cleanupBundleMcpOnRunEnd !== true &&
-    !params.contextEngine &&
+    !connection.activeContextEngine &&
     resourceState.thread.liveThreadConfigFingerprint !== undefined &&
     resourceState.thread.clientId === resolveCodexAppServerClientInstanceId(resourceState.client) &&
     resourceState.thread.preserveNativeModel !== true &&

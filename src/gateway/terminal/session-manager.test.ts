@@ -704,6 +704,96 @@ describe("TerminalSessionManager agent ownership", () => {
     }
   });
 
+  it.each(["disconnect", "close"] as const)(
+    "immediately resumes a shared terminal when its slow viewer leaves via %s",
+    async (removal) => {
+      vi.useFakeTimers();
+      const fake = makeFakePty();
+      const emit = vi.fn();
+      const bufferedAmounts = new Map([
+        ["viewer-slow", Number.MAX_SAFE_INTEGER],
+        ["viewer-healthy", 0],
+      ]);
+      const manager = new TerminalSessionManager({
+        emit,
+        getBufferedAmount: (connId) => bufferedAmounts.get(connId),
+        spawn: async () => fake,
+      });
+
+      try {
+        const outcome = await manager.open(baseRequest({ owner: agentOwner }));
+        if (!outcome.ok) {
+          throw new Error("expected open");
+        }
+        manager.attach("viewer-slow", outcome.sessionId);
+        manager.attach("viewer-healthy", outcome.sessionId);
+
+        fake.emitData("pressure");
+        await vi.advanceTimersByTimeAsync(4);
+        expect(fake.paused).toBe(true);
+
+        if (removal === "disconnect") {
+          manager.handleDisconnect("viewer-slow");
+        } else {
+          expect(manager.close("viewer-slow", outcome.sessionId)).toBe(true);
+        }
+
+        expect(fake.paused).toBe(false);
+        emit.mockClear();
+        fake.emitData("resumed");
+        await vi.advanceTimersByTimeAsync(4);
+        expect(emit).toHaveBeenCalledWith(
+          "viewer-healthy",
+          TERMINAL_EVENT_DATA,
+          expect.objectContaining({ data: "resumed" }),
+        );
+        expect(emit).not.toHaveBeenCalledWith(
+          "viewer-slow",
+          TERMINAL_EVENT_DATA,
+          expect.anything(),
+        );
+      } finally {
+        manager.disposeAll();
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("keeps a shared terminal paused when its remaining viewer is still slow", async () => {
+    vi.useFakeTimers();
+    const fake = makeFakePty();
+    const bufferedAmounts = new Map([
+      ["viewer-slow", Number.MAX_SAFE_INTEGER],
+      ["viewer-healthy", 0],
+    ]);
+    const manager = new TerminalSessionManager({
+      emit: vi.fn(),
+      getBufferedAmount: (connId) => bufferedAmounts.get(connId),
+      spawn: async () => fake,
+    });
+
+    try {
+      const outcome = await manager.open(baseRequest({ owner: agentOwner }));
+      if (!outcome.ok) {
+        throw new Error("expected open");
+      }
+      manager.attach("viewer-slow", outcome.sessionId);
+      manager.attach("viewer-healthy", outcome.sessionId);
+
+      fake.emitData("pressure");
+      await vi.advanceTimersByTimeAsync(4);
+      expect(fake.paused).toBe(true);
+
+      manager.handleDisconnect("viewer-healthy");
+
+      expect(fake.paused).toBe(true);
+      expect(fake.resumeCalls).toBe(0);
+    } finally {
+      manager.disposeAll();
+      vi.useRealTimers();
+    }
+  });
+
   it("resumes a pressured PTY immediately when its last viewer disconnects", async () => {
     const fake = makeFakePty();
     const manager = new TerminalSessionManager({

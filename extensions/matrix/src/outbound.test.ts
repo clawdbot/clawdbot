@@ -1,6 +1,6 @@
 // Matrix tests cover outbound plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../runtime-api.js";
+import { chunkTextForOutbound, type OpenClawConfig } from "../runtime-api.js";
 
 const mocks = vi.hoisted(() => ({
   sendMessageMatrix: vi.fn(),
@@ -63,6 +63,24 @@ describe("matrixOutbound cfg threading", () => {
     expect(chunker("hello world", 5)).toEqual(["hello", "world"]);
   });
 
+  it("makes progress for fractional BMP and astral limits", () => {
+    const chunker = matrixOutbound.chunker;
+    if (!chunker) {
+      throw new Error("matrixOutbound.chunker missing");
+    }
+
+    expect(chunker("ABCD", 0.5)).toEqual(["A", "B", "C", "D"]);
+    expect(chunker("😀😀", 1.5)).toEqual(["😀", "😀"]);
+    expect(chunkTextForOutbound("ABCD", 0.5)).toEqual(["A", "B", "C", "D"]);
+    expect(chunkTextForOutbound("😀😀", 1.5)).toEqual(["😀", "😀"]);
+  });
+
+  it("preserves Matrix compatibility behavior", () => {
+    expect(chunkTextForOutbound("", 5)).toEqual([""]);
+    expect(chunkTextForOutbound("", 0.5)).toEqual([""]);
+    expect(chunkTextForOutbound("abcdef   ", 5)).toEqual(["abcde", "f   "]);
+  });
+
   it("passes resolved cfg to sendMessageMatrix for text sends", async () => {
     const cfg = {
       channels: {
@@ -99,13 +117,18 @@ describe("matrixOutbound cfg threading", () => {
         },
       },
     } as OpenClawConfig;
+    const mediaAccess = {
+      localRoots: ["/tmp/openclaw"],
+      workspaceDir: "/tmp/openclaw",
+    };
 
     await matrixOutbound.sendMedia!({
       cfg,
       to: "room:!room:example",
       text: "caption",
-      mediaUrl: "file:///tmp/cat.png",
-      mediaLocalRoots: ["/tmp/openclaw"],
+      mediaUrl: "chart.png",
+      mediaAccess,
+      mediaLocalRoots: mediaAccess.localRoots,
       accountId: "default",
       audioAsVoice: true,
     });
@@ -115,7 +138,8 @@ describe("matrixOutbound cfg threading", () => {
     expect(call[1]).toBe("caption");
     const options = mockOptions(mocks.sendMessageMatrix, "sendMessageMatrix");
     expect(options.cfg).toBe(cfg);
-    expect(options.mediaUrl).toBe("file:///tmp/cat.png");
+    expect(options.mediaUrl).toBe("chart.png");
+    expect(options.mediaAccess).toBe(mediaAccess);
     expect(options.mediaLocalRoots).toEqual(["/tmp/openclaw"]);
     expect(options.audioAsVoice).toBe(true);
   });

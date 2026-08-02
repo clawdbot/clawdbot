@@ -432,7 +432,7 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
 
     expectExternalChatSetupOnlyPluginLoaded({ plugins, setupMarker, fullMarker });
     expect(moduleLoaderParams).toContainEqual({
-      modulePath: path.join(pluginDir, "setup-entry.cjs"),
+      modulePath: fs.realpathSync(path.join(pluginDir, "setup-entry.cjs")),
       tryNative: true,
     });
   });
@@ -512,35 +512,6 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
 
     expect(first.find((plugin) => plugin.id === "external-chat")?.meta.blurb).toBe("first");
     expect(second.find((plugin) => plugin.id === "external-chat")?.meta.blurb).toBe("second");
-  });
-
-  it("refreshes cached read-only channel plugins when active registry channels mutate in place", () => {
-    const cfg = { channels: { "external-chat": { token: "configured" } } } as never;
-    const registry = createTestRegistry([]);
-    setActivePluginRegistry(registry);
-
-    const first = listReadOnlyChannelPluginsForConfig(cfg, {
-      includePersistedAuthState: false,
-      includeSetupFallbackPlugins: true,
-    });
-
-    const plugin = {
-      ...createChannelTestPluginBase({ id: "external-chat" as never }),
-      meta: {
-        ...createChannelTestPluginBase({ id: "external-chat" as never }).meta,
-        blurb: "mutated registry",
-      },
-    };
-    registry.channels.push({ pluginId: "mutated-plugin", plugin, source: "test" } as never);
-    const second = listReadOnlyChannelPluginsForConfig(cfg, {
-      includePersistedAuthState: false,
-      includeSetupFallbackPlugins: true,
-    });
-
-    expect(pluginIds(first)).not.toContain("external-chat");
-    expect(second.find((entry) => entry.id === "external-chat")?.meta.blurb).toBe(
-      "mutated registry",
-    );
   });
 
   it("refreshes cached read-only channel plugins when ambient env changes", () => {

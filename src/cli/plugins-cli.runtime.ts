@@ -20,6 +20,7 @@ import { defaultRuntime } from "../runtime.js";
 import { shortenHomeInString } from "../utils.js";
 import { formatMissingPluginMessage } from "./error-format.js";
 import type {
+  PluginDoctorOptions,
   PluginMarketplaceEntriesOptions,
   PluginMarketplaceListOptions,
   PluginMarketplaceRefreshOptions,
@@ -205,12 +206,10 @@ async function runPluginsEnableCommandUnlocked(idInput: string): Promise<void> {
   });
   // A blocked request must not displace the active slot or rewrite persisted state.
   if (!enableResult.enabled) {
-    defaultRuntime.log(
-      theme.warn(
-        `Plugin "${id}" could not be enabled (${enableResult.reason ?? "unknown reason"}).`,
-      ),
+    defaultRuntime.error(
+      `Plugin "${id}" could not be enabled (${enableResult.reason ?? "unknown reason"}).`,
     );
-    return;
+    return defaultRuntime.exit(1);
   }
 
   const { applySlotSelectionForPlugin } = await loadPluginSlotSelection();
@@ -357,7 +356,7 @@ export async function runPluginsRegistryCommand(opts: PluginRegistryOptions): Pr
 }
 
 /** Print plugin install-tree, compatibility, and plugin-owned config diagnostics. */
-export async function runPluginsDoctorCommand(): Promise<void> {
+export async function runPluginsDoctorCommand(opts: PluginDoctorOptions = {}): Promise<void> {
   const {
     buildPluginCompatibilityNotices,
     buildPluginDiagnosticsReport,
@@ -394,6 +393,54 @@ export async function runPluginsDoctorCommand(): Promise<void> {
   const hasInstallTreeIssues =
     errors.length > 0 || diags.length > 0 || shadowed.length > 0 || compatibility.length > 0;
   const pluginConfigWarnings = [...stalePluginConfigWarnings, ...configuredRuntimePluginWarnings];
+
+  if (opts.json) {
+    defaultRuntime.writeJson({
+      ok: !hasInstallTreeIssues && pluginConfigWarnings.length === 0,
+      pluginErrors: errors.map((entry) => ({
+        id: entry.id,
+        ...(entry.failurePhase ? { failurePhase: entry.failurePhase } : {}),
+        error: shortenHomeInString(entry.error ?? "failed to load"),
+        source: shortenHomeInString(entry.source),
+      })),
+      diagnostics: diags.map((entry) => ({
+        level: entry.level,
+        ...(entry.pluginId ? { pluginId: entry.pluginId } : {}),
+        message: shortenHomeInString(entry.message),
+        ...(entry.source ? { source: shortenHomeInString(entry.source) } : {}),
+      })),
+      sourceShadowing: shadowed.map((entry) => {
+        const active = report.plugins.find((plugin) => plugin.id === entry.pluginId);
+        return {
+          ...(entry.pluginId ? { pluginId: entry.pluginId } : {}),
+          message: shortenHomeInString(entry.message),
+          ...(active
+            ? {
+                active: {
+                  source: shortenHomeInString(active.source),
+                  origin: active.origin,
+                  status: active.status,
+                  ...(active.error ? { error: shortenHomeInString(active.error) } : {}),
+                },
+              }
+            : {}),
+          ...(entry.source ? { shadowedSource: shortenHomeInString(entry.source) } : {}),
+          repair: [
+            `openclaw plugins inspect ${entry.pluginId ?? "<plugin-id>"}`,
+            "edit or remove the config-selected plugin source",
+            "openclaw plugins registry --refresh",
+            "openclaw gateway restart --force",
+          ],
+        };
+      }),
+      compatibility: compatibility.map((notice) => ({
+        ...notice,
+        message: shortenHomeInString(notice.message),
+      })),
+      configurationWarnings: pluginConfigWarnings.map(shortenHomeInString),
+    });
+    return;
+  }
 
   if (!hasInstallTreeIssues && pluginConfigWarnings.length === 0) {
     defaultRuntime.log(
@@ -778,6 +825,9 @@ function formatPinnedMarketplaceRefreshFailure(payload: MarketplaceRefreshPayloa
   return `Pinned marketplace feed refresh did not accept a fresh hosted payload (source: ${payload.source}).`;
 }
 
+const MARKETPLACE_GATEWAY_RESTART_GUIDANCE =
+  'The running Gateway could not refresh its marketplace catalog. Run "openclaw gateway restart" to apply the current catalog state.';
+
 /** List entries from the configured OpenClaw marketplace feed. */
 export async function runPluginMarketplaceEntriesCommand(
   opts: PluginMarketplaceEntriesOptions,
@@ -853,6 +903,13 @@ export async function runPluginMarketplaceRefreshCommand(
   const { clearManagedPluginOfficialCatalogCache } =
     await import("../plugins/management-service.js");
   clearManagedPluginOfficialCatalogCache();
+  let gatewayRefreshed = true;
+  // Reused snapshots can lose install authority as they age, so their Gateway projection is stale too.
+  if (result.source !== "bundled-fallback") {
+    const { notifyGatewayPluginMetadataChanged } =
+      await import("./plugins-update-gateway-signal.js");
+    gatewayRefreshed = await notifyGatewayPluginMetadataChanged(cfg);
+  }
   const payload = sanitizeMarketplaceRefreshPayload(buildMarketplaceRefreshPayload(result), {
     feedUrl: opts.feedUrl,
   });
@@ -871,6 +928,9 @@ export async function runPluginMarketplaceRefreshCommand(
 
   if (opts.json) {
     defaultRuntime.writeJson(payload);
+    if (!gatewayRefreshed) {
+      defaultRuntime.error(MARKETPLACE_GATEWAY_RESTART_GUIDANCE);
+    }
     if (failedPinnedRefresh) {
       defaultRuntime.error(formatPinnedMarketplaceRefreshFailure(payload));
       return defaultRuntime.exit(1);
@@ -879,6 +939,9 @@ export async function runPluginMarketplaceRefreshCommand(
   }
 
   const lines = formatMarketplaceFeedLines(payload, { includeChecksum: true });
+  if (!gatewayRefreshed) {
+    lines.push("", theme.warn(MARKETPLACE_GATEWAY_RESTART_GUIDANCE));
+  }
   defaultRuntime.log(lines.join("\n"));
   if (failedPinnedRefresh) {
     defaultRuntime.error(formatPinnedMarketplaceRefreshFailure(payload));

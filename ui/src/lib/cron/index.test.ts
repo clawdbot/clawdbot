@@ -1,11 +1,16 @@
 // @vitest-environment node
 // Control UI tests cover cron behavior.
 import { describe, expect, it, vi } from "vitest";
+import {
+  validateCronAddParams,
+  validateCronUpdateParams,
+} from "../../../../packages/gateway-protocol/src/index.js";
 import type { CronJob, CronRunsResult } from "../../api/types.ts";
 import { parseCronEveryMs } from "../../lib/cron/decimal.ts";
 import {
   addCronJob,
   cancelCronEdit,
+  createInitialCronState,
   loadCronFailingCount,
   loadCronModelSuggestions,
   toggleCronJob,
@@ -27,47 +32,37 @@ import { DEFAULT_CRON_FORM } from "../../test-helpers/cron.ts";
 
 function createState(overrides: Partial<CronState> = {}): CronState {
   return {
-    client: null,
-    connected: true,
-    cronLoading: false,
-    cronJobsLoadingMore: false,
-    cronJobsReloadPending: false,
-    cronJobsReloadPendingTableFilters: false,
-    cronJobs: [],
-    cronJobsTotal: 0,
-    cronJobsHasMore: false,
-    cronJobsNextOffset: null,
-    cronJobsLimit: 50,
-    cronJobsQuery: "",
-    cronJobsEnabledFilter: "all",
-    cronJobsScheduleKindFilter: "all",
-    cronJobsLastStatusFilter: "all",
-    cronJobsSortBy: "nextRunAtMs",
-    cronJobsSortDir: "asc",
-    cronAgentId: null,
-    cronStatus: null,
-    cronScopedTotal: null,
-    cronScopedNextWakeAtMs: null,
-    cronFailingCount: null,
-    cronError: null,
-    cronForm: { ...DEFAULT_CRON_FORM },
-    cronCreateOpen: false,
-    cronFieldErrors: {},
-    cronEditingJobId: null,
-    cronRunsJobId: null,
-    cronRunsLoadingMore: false,
-    cronRuns: [],
-    cronRunsTotal: 0,
-    cronRunsHasMore: false,
-    cronRunsNextOffset: null,
-    cronRunsLimit: 50,
-    cronRunsScope: "all",
-    cronRunsStatuses: [],
-    cronRunsDeliveryStatuses: [],
-    cronRunsStatusFilter: "all",
-    cronRunsQuery: "",
-    cronRunsSortDir: "desc",
-    cronBusy: false,
+    ...createInitialCronState({ connected: true }),
+    ...overrides,
+  };
+}
+
+function createCronRequest(jobId: string, options: { existing?: boolean } = {}) {
+  const jobs = options.existing ? [{ id: jobId }] : [];
+  return vi.fn(async (method: string, _payload?: unknown) => {
+    if (method === "cron.add" || method === "cron.update") {
+      return { id: jobId };
+    }
+    if (method === "cron.list") {
+      return { jobs };
+    }
+    if (method === "cron.status") {
+      return { enabled: true, jobs: jobs.length, nextWakeAtMs: null };
+    }
+    return {};
+  });
+}
+
+function createCronJob(overrides: Partial<CronJob> & Pick<CronJob, "id" | "name">): CronJob {
+  return {
+    enabled: true,
+    createdAtMs: 0,
+    updatedAtMs: 0,
+    schedule: { kind: "cron", expr: "0 * * * *" },
+    sessionTarget: "isolated",
+    wakeMode: "next-heartbeat",
+    payload: { kind: "agentTurn", message: "run" },
+    state: {},
     ...overrides,
   };
 }
@@ -254,18 +249,7 @@ describe("cron controller", () => {
   });
 
   it.each(["", "   "])("omits an inherited timeout from cron.add: %j", async (timeoutSeconds) => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "cron.add") {
-        return { id: "inherited-timeout-job" };
-      }
-      if (method === "cron.list") {
-        return { jobs: [] };
-      }
-      if (method === "cron.status") {
-        return { enabled: true, jobs: 0, nextWakeAtMs: null };
-      }
-      return {};
-    });
+    const request = createCronRequest("inherited-timeout-job");
     const state = createState({
       client: { request } as unknown as CronState["client"],
       cronForm: {
@@ -285,18 +269,7 @@ describe("cron controller", () => {
   });
 
   it("forwards webhook delivery in cron.add payload", async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "cron.add") {
-        return { id: "job-1" };
-      }
-      if (method === "cron.list") {
-        return { jobs: [] };
-      }
-      if (method === "cron.status") {
-        return { enabled: true, jobs: 0, nextWakeAtMs: null };
-      }
-      return {};
-    });
+    const request = createCronRequest("job-1");
 
     const state = createState({
       client: {
@@ -369,18 +342,7 @@ describe("cron controller", () => {
   });
 
   it("forwards sessionKey and delivery accountId in cron.add payload", async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "cron.add") {
-        return { id: "job-3" };
-      }
-      if (method === "cron.list") {
-        return { jobs: [] };
-      }
-      if (method === "cron.status") {
-        return { enabled: true, jobs: 0, nextWakeAtMs: null };
-      }
-      return {};
-    });
+    const request = createCronRequest("job-3");
 
     const state = createState({
       client: { request } as unknown as CronState["client"],
@@ -412,18 +374,7 @@ describe("cron controller", () => {
   });
 
   it("omits a blank delivery accountId from cron.add payloads", async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "cron.add") {
-        return { id: "job-blank-account-id" };
-      }
-      if (method === "cron.list") {
-        return { jobs: [] };
-      }
-      if (method === "cron.status") {
-        return { enabled: true, jobs: 0, nextWakeAtMs: null };
-      }
-      return {};
-    });
+    const request = createCronRequest("job-blank-account-id");
     const state = createState({
       client: { request } as unknown as CronState["client"],
       cronForm: {
@@ -446,18 +397,7 @@ describe("cron controller", () => {
   });
 
   it('omits delivery.channel when the form still uses the "last" sentinel', async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "cron.add") {
-        return { id: "job-last-add" };
-      }
-      if (method === "cron.list") {
-        return { jobs: [] };
-      }
-      if (method === "cron.status") {
-        return { enabled: true, jobs: 0, nextWakeAtMs: null };
-      }
-      return {};
-    });
+    const request = createCronRequest("job-last-add");
 
     const state = createState({
       client: { request } as unknown as CronState["client"],
@@ -487,18 +427,7 @@ describe("cron controller", () => {
   });
 
   it("forwards lightContext in cron payload", async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "cron.add") {
-        return { id: "job-light" };
-      }
-      if (method === "cron.list") {
-        return { jobs: [] };
-      }
-      if (method === "cron.status") {
-        return { enabled: true, jobs: 0, nextWakeAtMs: null };
-      }
-      return {};
-    });
+    const request = createCronRequest("job-light");
 
     const state = createState({
       client: { request } as unknown as CronState["client"],
@@ -524,18 +453,7 @@ describe("cron controller", () => {
   });
 
   it('sends delivery: { mode: "none" } explicitly in cron.add payload', async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "cron.add") {
-        return { id: "job-none-add" };
-      }
-      if (method === "cron.list") {
-        return { jobs: [] };
-      }
-      if (method === "cron.status") {
-        return { enabled: true, jobs: 0, nextWakeAtMs: null };
-      }
-      return {};
-    });
+    const request = createCronRequest("job-none-add");
 
     const state = createState({
       client: {
@@ -564,18 +482,7 @@ describe("cron controller", () => {
   });
 
   it('sends delivery: { mode: "none" } explicitly in cron.update patch', async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "cron.update") {
-        return { id: "job-none-update" };
-      }
-      if (method === "cron.list") {
-        return { jobs: [{ id: "job-none-update" }] };
-      }
-      if (method === "cron.status") {
-        return { enabled: true, jobs: 1, nextWakeAtMs: null };
-      }
-      return {};
-    });
+    const request = createCronRequest("job-none-update", { existing: true });
 
     const state = createState({
       client: {
@@ -607,18 +514,7 @@ describe("cron controller", () => {
   });
 
   it("sends explicit null model/thinking clears when blanking stored overrides on edit", async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "cron.update") {
-        return { id: "job-clear-overrides" };
-      }
-      if (method === "cron.list") {
-        return { jobs: [{ id: "job-clear-overrides" }] };
-      }
-      if (method === "cron.status") {
-        return { enabled: true, jobs: 1, nextWakeAtMs: null };
-      }
-      return {};
-    });
+    const request = createCronRequest("job-clear-overrides", { existing: true });
 
     const state = createState({
       client: {
@@ -663,18 +559,7 @@ describe("cron controller", () => {
   });
 
   it("does not send null model/thinking for a new job with blank fields", async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "cron.add") {
-        return { id: "job-new-blank" };
-      }
-      if (method === "cron.list") {
-        return { jobs: [{ id: "job-new-blank" }] };
-      }
-      if (method === "cron.status") {
-        return { enabled: true, jobs: 1, nextWakeAtMs: null };
-      }
-      return {};
-    });
+    const request = createCronRequest("job-new-blank", { existing: true });
 
     const state = createState({
       client: {
@@ -709,18 +594,7 @@ describe("cron controller", () => {
   });
 
   it("does not submit stale announce delivery when unsupported", async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "cron.add") {
-        return { id: "job-2" };
-      }
-      if (method === "cron.list") {
-        return { jobs: [] };
-      }
-      if (method === "cron.status") {
-        return { enabled: true, jobs: 0, nextWakeAtMs: null };
-      }
-      return {};
-    });
+    const request = createCronRequest("job-2");
 
     const state = createState({
       client: {
@@ -757,18 +631,7 @@ describe("cron controller", () => {
   });
 
   it("submits cron.update when editing an existing job", async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "cron.update") {
-        return { id: "job-1" };
-      }
-      if (method === "cron.list") {
-        return { jobs: [{ id: "job-1" }] };
-      }
-      if (method === "cron.status") {
-        return { enabled: true, jobs: 1, nextWakeAtMs: null };
-      }
-      return {};
-    });
+    const request = createCronRequest("job-1", { existing: true });
 
     const state = createState({
       client: {
@@ -809,18 +672,7 @@ describe("cron controller", () => {
   });
 
   it("sends null delivery.accountId in cron.update to clear persisted account routing", async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "cron.update") {
-        return { id: "job-clear-account-id" };
-      }
-      if (method === "cron.list") {
-        return { jobs: [{ id: "job-clear-account-id" }] };
-      }
-      if (method === "cron.status") {
-        return { enabled: true, jobs: 1, nextWakeAtMs: null };
-      }
-      return {};
-    });
+    const request = createCronRequest("job-clear-account-id", { existing: true });
 
     const state = createState({
       client: { request } as unknown as CronState["client"],
@@ -868,21 +720,16 @@ describe("cron controller", () => {
 
   it("maps a cron job into editable form fields", () => {
     const state = createState();
-    const job = {
+    const job = createCronJob({
       id: "job-9",
       name: "Weekly report",
       description: "desc",
       sessionKey: "agent:ops:main",
       enabled: false,
-      createdAtMs: 0,
-      updatedAtMs: 0,
-      schedule: { kind: "every" as const, everyMs: 7_200_000 },
-      sessionTarget: "isolated" as const,
-      wakeMode: "next-heartbeat" as const,
-      payload: { kind: "agentTurn" as const, message: "ship it", timeoutSeconds: 45 },
-      delivery: { mode: "announce" as const, channel: "telegram", to: "123", accountId: "bot-2" },
-      state: {},
-    };
+      schedule: { kind: "every", everyMs: 7_200_000 },
+      payload: { kind: "agentTurn", message: "ship it", timeoutSeconds: 45 },
+      delivery: { mode: "announce", channel: "telegram", to: "123", accountId: "bot-2" },
+    });
 
     startCronEdit(state, job);
 
@@ -905,18 +752,13 @@ describe("cron controller", () => {
 
   it("preserves an explicit zero timeout when opening an existing job", () => {
     const state = createState();
-    const job: CronJob = {
+    const job = createCronJob({
       id: "no-timeout-job",
       name: "No timeout",
-      enabled: true,
-      createdAtMs: 0,
-      updatedAtMs: 0,
       schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "isolated",
       wakeMode: "now",
       payload: { kind: "agentTurn", message: "Run until complete", timeoutSeconds: 0 },
-      state: {},
-    };
+    });
 
     startCronEdit(state, job);
 
@@ -924,31 +766,14 @@ describe("cron controller", () => {
   });
 
   it("preserves command payloads when editing Control UI metadata", async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "cron.update") {
-        return { id: "job-command" };
-      }
-      if (method === "cron.list") {
-        return { jobs: [{ id: "job-command" }] };
-      }
-      if (method === "cron.status") {
-        return { enabled: true, jobs: 1, nextWakeAtMs: null };
-      }
-      return {};
-    });
-    const job = {
+    const request = createCronRequest("job-command", { existing: true });
+    const job = createCronJob({
       id: "job-command",
       name: "Command",
-      enabled: true,
-      createdAtMs: 0,
-      updatedAtMs: 0,
-      schedule: { kind: "every" as const, everyMs: 600_000 },
-      sessionTarget: "isolated" as const,
-      wakeMode: "next-heartbeat" as const,
-      payload: { kind: "command" as const, argv: ["sh", "-lc", "echo ok"] },
-      delivery: { mode: "announce" as const, channel: "telegram", to: "123" },
-      state: {},
-    };
+      schedule: { kind: "every", everyMs: 600_000 },
+      payload: { kind: "command", argv: ["sh", "-lc", "echo ok"] },
+      delivery: { mode: "announce", channel: "telegram", to: "123" },
+    });
     const state = createState({
       client: { request } as unknown as CronState["client"],
       cronJobs: [job],
@@ -1015,31 +840,14 @@ describe("cron controller", () => {
   });
 
   it("preserves on-exit schedules when editing Control UI metadata", async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "cron.update") {
-        return { id: "job-on-exit" };
-      }
-      if (method === "cron.list") {
-        return { jobs: [{ id: "job-on-exit" }] };
-      }
-      if (method === "cron.status") {
-        return { enabled: true, jobs: 1, nextWakeAtMs: null };
-      }
-      return {};
-    });
-    const job = {
+    const request = createCronRequest("job-on-exit", { existing: true });
+    const job = createCronJob({
       id: "job-on-exit",
       name: "On exit",
-      enabled: true,
-      createdAtMs: 0,
-      updatedAtMs: 0,
-      schedule: { kind: "on-exit" as const, command: "make build", cwd: "/repo" },
-      sessionTarget: "isolated" as const,
-      wakeMode: "next-heartbeat" as const,
-      payload: { kind: "agentTurn" as const, message: "report" },
-      delivery: { mode: "none" as const },
-      state: {},
-    };
+      schedule: { kind: "on-exit", command: "make build", cwd: "/repo" },
+      payload: { kind: "agentTurn", message: "report" },
+      delivery: { mode: "none" },
+    });
     const state = createState({
       client: { request } as unknown as CronState["client"],
       cronJobs: [job],
@@ -1058,31 +866,14 @@ describe("cron controller", () => {
   });
 
   it("preserves stream schedules when editing Control UI metadata", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "cron.update") {
-        return { id: "job-stream" };
-      }
-      if (method === "cron.list") {
-        return { jobs: [{ id: "job-stream" }] };
-      }
-      if (method === "cron.status") {
-        return { enabled: true, jobs: 1, nextWakeAtMs: null };
-      }
-      return {};
-    });
-    const job = {
+    const request = createCronRequest("job-stream", { existing: true });
+    const job = createCronJob({
       id: "job-stream",
       name: "Stream",
-      enabled: true,
-      createdAtMs: 0,
-      updatedAtMs: 0,
-      schedule: { kind: "stream" as const, command: ["node", "events.mjs"] },
-      sessionTarget: "isolated" as const,
-      wakeMode: "next-heartbeat" as const,
-      payload: { kind: "agentTurn" as const, message: "report" },
-      delivery: { mode: "none" as const },
-      state: {},
-    };
+      schedule: { kind: "stream", command: ["node", "events.mjs"] },
+      payload: { kind: "agentTurn", message: "report" },
+      delivery: { mode: "none" },
+    });
     const state = createState({
       client: { request } as unknown as CronState["client"],
       cronJobs: [job],
@@ -1099,31 +890,14 @@ describe("cron controller", () => {
   });
 
   it("applies schedule edits when changing an on-exit job to a regular schedule", async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "cron.update") {
-        return { id: "job-on-exit" };
-      }
-      if (method === "cron.list") {
-        return { jobs: [{ id: "job-on-exit" }] };
-      }
-      if (method === "cron.status") {
-        return { enabled: true, jobs: 1, nextWakeAtMs: null };
-      }
-      return {};
-    });
-    const job = {
+    const request = createCronRequest("job-on-exit", { existing: true });
+    const job = createCronJob({
       id: "job-on-exit",
       name: "On exit",
-      enabled: true,
-      createdAtMs: 0,
-      updatedAtMs: 0,
-      schedule: { kind: "on-exit" as const, command: "make build", cwd: "/repo" },
-      sessionTarget: "isolated" as const,
-      wakeMode: "next-heartbeat" as const,
-      payload: { kind: "agentTurn" as const, message: "report" },
-      delivery: { mode: "none" as const },
-      state: {},
-    };
+      schedule: { kind: "on-exit", command: "make build", cwd: "/repo" },
+      payload: { kind: "agentTurn", message: "report" },
+      delivery: { mode: "none" },
+    });
     const state = createState({
       client: { request } as unknown as CronState["client"],
       cronJobs: [job],
@@ -1141,31 +915,12 @@ describe("cron controller", () => {
   });
 
   it('keeps implicit announce delivery implicit when editing a job that shows "last" in the form', async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "cron.update") {
-        return { id: "job-implicit-delivery" };
-      }
-      if (method === "cron.list") {
-        return { jobs: [{ id: "job-implicit-delivery" }] };
-      }
-      if (method === "cron.status") {
-        return { enabled: true, jobs: 1, nextWakeAtMs: null };
-      }
-      return {};
-    });
-    const job = {
+    const request = createCronRequest("job-implicit-delivery", { existing: true });
+    const job = createCronJob({
       id: "job-implicit-delivery",
       name: "Implicit delivery",
-      enabled: true,
-      createdAtMs: 0,
-      updatedAtMs: 0,
-      schedule: { kind: "cron" as const, expr: "0 * * * *" },
-      sessionTarget: "isolated" as const,
-      wakeMode: "next-heartbeat" as const,
-      payload: { kind: "agentTurn" as const, message: "run" },
-      delivery: { mode: "announce" as const, to: "123" },
-      state: {},
-    };
+      delivery: { mode: "announce", to: "123" },
+    });
     const state = createState({
       client: { request } as unknown as CronState["client"],
       cronJobs: [job],
@@ -1189,31 +944,12 @@ describe("cron controller", () => {
   });
 
   it('sends delivery.channel="last" when editing clears an explicit channel back to implicit-last', async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "cron.update") {
-        return { id: "job-clear-delivery-channel" };
-      }
-      if (method === "cron.list") {
-        return { jobs: [{ id: "job-clear-delivery-channel" }] };
-      }
-      if (method === "cron.status") {
-        return { enabled: true, jobs: 1, nextWakeAtMs: null };
-      }
-      return {};
-    });
-    const job = {
+    const request = createCronRequest("job-clear-delivery-channel", { existing: true });
+    const job = createCronJob({
       id: "job-clear-delivery-channel",
       name: "Clear delivery channel",
-      enabled: true,
-      createdAtMs: 0,
-      updatedAtMs: 0,
-      schedule: { kind: "cron" as const, expr: "0 * * * *" },
-      sessionTarget: "isolated" as const,
-      wakeMode: "next-heartbeat" as const,
-      payload: { kind: "agentTurn" as const, message: "run" },
-      delivery: { mode: "announce" as const, channel: "telegram", to: "123" },
-      state: {},
-    };
+      delivery: { mode: "announce", channel: "telegram", to: "123" },
+    });
     const state = createState({
       client: { request } as unknown as CronState["client"],
       cronJobs: [job],
@@ -1231,18 +967,7 @@ describe("cron controller", () => {
   });
 
   it("includes model/thinking/stagger/bestEffort in cron.update patch", async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "cron.update") {
-        return { id: "job-2" };
-      }
-      if (method === "cron.list") {
-        return { jobs: [{ id: "job-2" }] };
-      }
-      if (method === "cron.status") {
-        return { enabled: true, jobs: 1, nextWakeAtMs: null };
-      }
-      return {};
-    });
+    const request = createCronRequest("job-2", { existing: true });
     const state = createState({
       client: { request } as unknown as CronState["client"],
       cronEditingJobId: "job-2",
@@ -1285,18 +1010,7 @@ describe("cron controller", () => {
   });
 
   it("sends lightContext=false in cron.update when clearing prior light-context setting", async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "cron.update") {
-        return { id: "job-clear-light" };
-      }
-      if (method === "cron.list") {
-        return { jobs: [{ id: "job-clear-light" }] };
-      }
-      if (method === "cron.status") {
-        return { enabled: true, jobs: 1, nextWakeAtMs: null };
-      }
-      return {};
-    });
+    const request = createCronRequest("job-clear-light", { existing: true });
     const state = createState({
       client: { request } as unknown as CronState["client"],
       cronEditingJobId: "job-clear-light",
@@ -1338,18 +1052,7 @@ describe("cron controller", () => {
   });
 
   it("includes custom failureAlert fields in cron.update patch", async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "cron.update") {
-        return { id: "job-alert" };
-      }
-      if (method === "cron.list") {
-        return { jobs: [{ id: "job-alert" }] };
-      }
-      if (method === "cron.status") {
-        return { enabled: true, jobs: 1, nextWakeAtMs: null };
-      }
-      return {};
-    });
+    const request = createCronRequest("job-alert", { existing: true });
     const state = createState({
       client: { request } as unknown as CronState["client"],
       cronEditingJobId: "job-alert",
@@ -1383,18 +1086,7 @@ describe("cron controller", () => {
   });
 
   it("includes failure alert mode/accountId in cron.update patch", async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "cron.update") {
-        return { id: "job-alert-mode" };
-      }
-      if (method === "cron.list") {
-        return { jobs: [{ id: "job-alert-mode" }] };
-      }
-      if (method === "cron.status") {
-        return { enabled: true, jobs: 1, nextWakeAtMs: null };
-      }
-      return {};
-    });
+    const request = createCronRequest("job-alert-mode", { existing: true });
     const state = createState({
       client: { request } as unknown as CronState["client"],
       cronEditingJobId: "job-alert-mode",
@@ -1424,32 +1116,13 @@ describe("cron controller", () => {
   });
 
   it('keeps implicit failure alert delivery implicit when editing a job that shows "last" in the form', async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "cron.update") {
-        return { id: "job-alert-implicit-channel" };
-      }
-      if (method === "cron.list") {
-        return { jobs: [{ id: "job-alert-implicit-channel" }] };
-      }
-      if (method === "cron.status") {
-        return { enabled: true, jobs: 1, nextWakeAtMs: null };
-      }
-      return {};
-    });
-    const job = {
+    const request = createCronRequest("job-alert-implicit-channel", { existing: true });
+    const job = createCronJob({
       id: "job-alert-implicit-channel",
       name: "Implicit failure alert",
-      enabled: true,
-      createdAtMs: 0,
-      updatedAtMs: 0,
-      schedule: { kind: "cron" as const, expr: "0 * * * *" },
-      sessionTarget: "isolated" as const,
-      wakeMode: "next-heartbeat" as const,
-      payload: { kind: "agentTurn" as const, message: "run" },
-      delivery: { mode: "announce" as const, channel: "telegram", to: "123" },
+      delivery: { mode: "announce", channel: "telegram", to: "123" },
       failureAlert: { after: 2, to: "123" },
-      state: {},
-    };
+    });
     const state = createState({
       client: { request } as unknown as CronState["client"],
       cronJobs: [job],
@@ -1474,32 +1147,13 @@ describe("cron controller", () => {
   });
 
   it('sends failureAlert.channel="last" when editing clears an explicit failure channel back to implicit-last', async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "cron.update") {
-        return { id: "job-clear-failure-channel" };
-      }
-      if (method === "cron.list") {
-        return { jobs: [{ id: "job-clear-failure-channel" }] };
-      }
-      if (method === "cron.status") {
-        return { enabled: true, jobs: 1, nextWakeAtMs: null };
-      }
-      return {};
-    });
-    const job = {
+    const request = createCronRequest("job-clear-failure-channel", { existing: true });
+    const job = createCronJob({
       id: "job-clear-failure-channel",
       name: "Clear failure channel",
-      enabled: true,
-      createdAtMs: 0,
-      updatedAtMs: 0,
-      schedule: { kind: "cron" as const, expr: "0 * * * *" },
-      sessionTarget: "isolated" as const,
-      wakeMode: "next-heartbeat" as const,
-      payload: { kind: "agentTurn" as const, message: "run" },
-      delivery: { mode: "announce" as const, channel: "telegram", to: "123" },
+      delivery: { mode: "announce", channel: "telegram", to: "123" },
       failureAlert: { after: 2, channel: "telegram", to: "123" },
-      state: {},
-    };
+    });
     const state = createState({
       client: { request } as unknown as CronState["client"],
       cronJobs: [job],
@@ -1517,18 +1171,7 @@ describe("cron controller", () => {
   });
 
   it("omits failureAlert.cooldownMs when custom cooldown is left blank", async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "cron.update") {
-        return { id: "job-alert-no-cooldown" };
-      }
-      if (method === "cron.list") {
-        return { jobs: [{ id: "job-alert-no-cooldown" }] };
-      }
-      if (method === "cron.status") {
-        return { enabled: true, jobs: 1, nextWakeAtMs: null };
-      }
-      return {};
-    });
+    const request = createCronRequest("job-alert-no-cooldown", { existing: true });
     const state = createState({
       client: { request } as unknown as CronState["client"],
       cronEditingJobId: "job-alert-no-cooldown",
@@ -1563,29 +1206,11 @@ describe("cron controller", () => {
   });
 
   it("clears persisted failure alert routing fields when their edit inputs are blanked", async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "cron.update") {
-        return { id: "job-clear-alert-fields" };
-      }
-      if (method === "cron.list") {
-        return { jobs: [{ id: "job-clear-alert-fields" }] };
-      }
-      if (method === "cron.status") {
-        return { enabled: true, jobs: 1, nextWakeAtMs: null };
-      }
-      return {};
-    });
-    const job = {
+    const request = createCronRequest("job-clear-alert-fields", { existing: true });
+    const job = createCronJob({
       id: "job-clear-alert-fields",
       name: "Clear failure alert fields",
-      enabled: true,
-      createdAtMs: 0,
-      updatedAtMs: 0,
-      schedule: { kind: "cron" as const, expr: "0 * * * *" },
-      sessionTarget: "isolated" as const,
-      wakeMode: "next-heartbeat" as const,
-      payload: { kind: "agentTurn" as const, message: "run" },
-      delivery: { mode: "announce" as const },
+      delivery: { mode: "announce" },
       failureAlert: {
         after: 2,
         channel: "telegram",
@@ -1593,8 +1218,7 @@ describe("cron controller", () => {
         cooldownMs: 60_000,
         accountId: "bot-a",
       },
-      state: {},
-    };
+    });
     const state = createState({
       client: { request } as unknown as CronState["client"],
       cronJobs: [job],
@@ -1632,19 +1256,11 @@ describe("cron controller", () => {
       }
       return {};
     });
-    const job = {
+    const job = createCronJob({
       id: "job-inherit-alert",
       name: "Inherit failure alerts",
-      enabled: true,
-      createdAtMs: 0,
-      updatedAtMs: 0,
-      schedule: { kind: "cron" as const, expr: "0 * * * *" },
-      sessionTarget: "isolated" as const,
-      wakeMode: "next-heartbeat" as const,
-      payload: { kind: "agentTurn" as const, message: "run" },
       failureAlert: { after: 2, channel: "telegram" },
-      state: {},
-    };
+    });
     const state = createState({
       client: { request } as unknown as CronState["client"],
       cronJobs: [job],
@@ -1659,18 +1275,7 @@ describe("cron controller", () => {
   });
 
   it("includes failureAlert=false when disabled per job", async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "cron.update") {
-        return { id: "job-no-alert" };
-      }
-      if (method === "cron.list") {
-        return { jobs: [{ id: "job-no-alert" }] };
-      }
-      if (method === "cron.status") {
-        return { enabled: true, jobs: 1, nextWakeAtMs: null };
-      }
-      return {};
-    });
+    const request = createCronRequest("job-no-alert", { existing: true });
     const state = createState({
       client: { request } as unknown as CronState["client"],
       cronEditingJobId: "job-no-alert",
@@ -1694,25 +1299,20 @@ describe("cron controller", () => {
 
   it("maps cron stagger, model, thinking, and best effort into form", () => {
     const state = createState();
-    const job = {
+    const job = createCronJob({
       id: "job-10",
       name: "Advanced job",
-      enabled: true,
       deleteAfterRun: true,
-      createdAtMs: 0,
-      updatedAtMs: 0,
-      schedule: { kind: "cron" as const, expr: "0 7 * * *", tz: "UTC", staggerMs: 60_000 },
-      sessionTarget: "isolated" as const,
-      wakeMode: "now" as const,
+      schedule: { kind: "cron", expr: "0 7 * * *", tz: "UTC", staggerMs: 60_000 },
+      wakeMode: "now",
       payload: {
-        kind: "agentTurn" as const,
+        kind: "agentTurn",
         message: "hi",
         model: "opus",
         thinking: "high",
       },
-      delivery: { mode: "announce" as const, bestEffort: true },
-      state: {},
-    };
+      delivery: { mode: "announce", bestEffort: true },
+    });
     startCronEdit(state, job);
 
     expect(state.cronForm.deleteAfterRun).toBe(true);
@@ -1727,24 +1327,18 @@ describe("cron controller", () => {
 
   it("maps failureAlert overrides into form fields", () => {
     const state = createState();
-    const job = {
+    const job = createCronJob({
       id: "job-11",
       name: "Failure alerts",
-      enabled: true,
-      createdAtMs: 0,
-      updatedAtMs: 0,
-      schedule: { kind: "every" as const, everyMs: 60_000 },
-      sessionTarget: "isolated" as const,
-      wakeMode: "next-heartbeat" as const,
-      payload: { kind: "agentTurn" as const, message: "hello" },
+      schedule: { kind: "every", everyMs: 60_000 },
+      payload: { kind: "agentTurn", message: "hello" },
       failureAlert: {
         after: 4,
         cooldownMs: 30_000,
         channel: "telegram",
         to: "999",
       },
-      state: {},
-    };
+    });
 
     startCronEdit(state, job);
 
@@ -1807,18 +1401,7 @@ describe("cron controller", () => {
   it.each(["0x10", "1e3", "+1", String(Number.MAX_SAFE_INTEGER), "0.000001"])(
     "rejects invalid recurring amounts before submit: %s",
     async (everyAmount) => {
-      const request = vi.fn(async (method: string) => {
-        if (method === "cron.add") {
-          return { id: "job-nondecimal" };
-        }
-        if (method === "cron.list") {
-          return { jobs: [] };
-        }
-        if (method === "cron.status") {
-          return { enabled: true, jobs: 0, nextWakeAtMs: null };
-        }
-        return {};
-      });
+      const request = createCronRequest("job-nondecimal");
       const state = createState({
         client: { request } as unknown as CronState["client"],
         cronForm: {
@@ -1848,18 +1431,7 @@ describe("cron controller", () => {
   ] as const)(
     "converts %s %s to safe integer milliseconds",
     async (everyAmount, everyUnit, expectedEveryMs) => {
-      const request = vi.fn(async (method: string) => {
-        if (method === "cron.add") {
-          return { id: "job-decimal" };
-        }
-        if (method === "cron.list") {
-          return { jobs: [] };
-        }
-        if (method === "cron.status") {
-          return { enabled: true, jobs: 0, nextWakeAtMs: null };
-        }
-        return {};
-      });
+      const request = createCronRequest("job-decimal");
       const state = createState({
         client: { request } as unknown as CronState["client"],
         cronForm: {
@@ -1920,19 +1492,13 @@ describe("cron controller", () => {
     { scenario: "a selected agent", cronAgentId: "writer", expectedAgentId: "writer" },
   ])("canceling edit resets form for $scenario and clears edit mode", (scenario) => {
     const state = createState({ cronAgentId: scenario.cronAgentId });
-    const job = {
+    const job = createCronJob({
       id: "job-cancel",
       name: "Editable",
-      enabled: true,
-      createdAtMs: 0,
-      updatedAtMs: 0,
-      schedule: { kind: "cron" as const, expr: "0 6 * * *" },
-      sessionTarget: "isolated" as const,
-      wakeMode: "now" as const,
-      payload: { kind: "agentTurn" as const, message: "run" },
-      delivery: { mode: "announce" as const, to: "123" },
-      state: {},
-    };
+      schedule: { kind: "cron", expr: "0 6 * * *" },
+      wakeMode: "now",
+      delivery: { mode: "announce", to: "123" },
+    });
     startCronEdit(state, job);
     state.cronForm.name = "changed";
     state.cronFieldErrors = { name: "Name is required." };
@@ -1951,18 +1517,13 @@ describe("cron controller", () => {
   it("cloning a job switches to create mode and applies copy naming", () => {
     const state = createState({
       cronJobs: [
-        {
+        createCronJob({
           id: "job-1",
           name: "Daily ping",
-          enabled: true,
-          createdAtMs: 0,
-          updatedAtMs: 0,
           schedule: { kind: "cron", expr: "0 9 * * *" },
           sessionTarget: "main",
-          wakeMode: "next-heartbeat",
           payload: { kind: "systemEvent", text: "ping" },
-          state: {},
-        },
+        }),
       ],
       cronEditingJobId: "job-1",
     });
@@ -1980,31 +1541,15 @@ describe("cron controller", () => {
   });
 
   it("submits cron.add after cloning", async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "cron.add") {
-        return { id: "job-new" };
-      }
-      if (method === "cron.list") {
-        return { jobs: [] };
-      }
-      if (method === "cron.status") {
-        return { enabled: true, jobs: 0, nextWakeAtMs: null };
-      }
-      return {};
-    });
-    const sourceJob = {
+    const request = createCronRequest("job-new");
+    const sourceJob = createCronJob({
       id: "job-1",
       name: "Daily ping",
       agentId: "writer",
-      enabled: true,
-      createdAtMs: 0,
-      updatedAtMs: 0,
-      schedule: { kind: "cron" as const, expr: "0 9 * * *" },
-      sessionTarget: "main" as const,
-      wakeMode: "next-heartbeat" as const,
-      payload: { kind: "systemEvent" as const, text: "ping" },
-      state: {},
-    };
+      schedule: { kind: "cron", expr: "0 9 * * *" },
+      sessionTarget: "main",
+      payload: { kind: "systemEvent", text: "ping" },
+    });
     const state = createState({
       client: { request } as unknown as CronState["client"],
       cronJobs: [sourceJob],
@@ -2021,6 +1566,51 @@ describe("cron controller", () => {
     expect(addCall[1]).toEqual(
       expect.objectContaining({ name: "Daily ping copy", agentId: "writer" }),
     );
+  });
+
+  it("round-trips hidden delivery destinations through clone and edit", async () => {
+    const sourceJob = createCronJob({
+      id: "job-routing",
+      name: "Routed job",
+      delivery: {
+        mode: "announce",
+        threadId: 42,
+        bestEffort: true,
+        completionDestination: { mode: "webhook", to: "https://example.test/complete" },
+        failureDestination: {
+          mode: "announce",
+          channel: "telegram",
+          to: "ops",
+          accountId: "alerts",
+        },
+      },
+    });
+
+    const addRequest = createCronRequest("job-copy");
+    const cloneState = createState({
+      client: { request: addRequest } as unknown as CronState["client"],
+      cronJobs: [sourceJob],
+    });
+    startCronClone(cloneState, sourceJob);
+    await addCronJob(cloneState);
+    const addPayload = requestPayload(findRequestCall(addRequest.mock.calls, "cron.add"));
+    expect(addPayload.delivery).toEqual(sourceJob.delivery);
+    expect(validateCronAddParams(addPayload)).toBe(true);
+
+    const updateRequest = createCronRequest(sourceJob.id, { existing: true });
+    const editState = createState({
+      client: { request: updateRequest } as unknown as CronState["client"],
+      cronJobs: [sourceJob],
+    });
+    startCronEdit(editState, sourceJob);
+    editState.cronForm.deliveryThreadId = "thread-42";
+    await addCronJob(editState);
+    const updatePayload = requestPayload(findRequestCall(updateRequest.mock.calls, "cron.update"));
+    expect(requireRecord(updatePayload.patch, "cron.update patch").delivery).toEqual({
+      ...sourceJob.delivery,
+      threadId: "thread-42",
+    });
+    expect(validateCronUpdateParams(updatePayload)).toBe(true);
   });
 
   it("loads paged jobs with query/filter/sort params", async () => {
@@ -2163,17 +1753,13 @@ describe("cron controller", () => {
     const state = createState({
       client: { request } as unknown as CronState["client"],
       cronJobs: [
-        {
+        createCronJob({
           id: "existing",
           name: "Existing",
-          enabled: true,
-          createdAtMs: 0,
-          updatedAtMs: 0,
           schedule: { kind: "every", everyMs: 60_000 },
           sessionTarget: "main",
-          wakeMode: "next-heartbeat",
           payload: { kind: "systemEvent", text: "ping" },
-        },
+        }),
       ],
       cronJobsHasMore: true,
       cronJobsNextOffset: 1,
@@ -2616,34 +2202,17 @@ describe("cron controller", () => {
 
 describe("cron every-interval lossless round-trip", () => {
   function everyJob(everyMs: number): CronJob {
-    return {
+    return createCronJob({
       id: "job-interval",
       name: "Interval",
-      enabled: true,
-      createdAtMs: 0,
-      updatedAtMs: 0,
       schedule: { kind: "every", everyMs },
-      sessionTarget: "isolated",
-      wakeMode: "next-heartbeat",
       payload: { kind: "agentTurn", message: "tick" },
       delivery: { mode: "none" },
-      state: {},
-    } as unknown as CronJob;
+    });
   }
 
   function captureUpdateState(job: CronJob) {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "cron.update") {
-        return { id: job.id };
-      }
-      if (method === "cron.list") {
-        return { jobs: [{ id: job.id }] };
-      }
-      if (method === "cron.status") {
-        return { enabled: true, jobs: 1, nextWakeAtMs: null };
-      }
-      return {};
-    });
+    const request = createCronRequest(job.id, { existing: true });
     const state = createState({
       client: { request } as unknown as CronState["client"],
       cronJobs: [job],
@@ -2712,18 +2281,7 @@ describe("cron every-interval lossless round-trip", () => {
   });
 
   it("clones a sub-minute job without rounding its interval", async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "cron.add") {
-        return { id: "job-clone" };
-      }
-      if (method === "cron.list") {
-        return { jobs: [] };
-      }
-      if (method === "cron.status") {
-        return { enabled: true, jobs: 0, nextWakeAtMs: null };
-      }
-      return {};
-    });
+    const request = createCronRequest("job-clone");
     const sourceJob = everyJob(30_000);
     const state = createState({
       client: { request } as unknown as CronState["client"],

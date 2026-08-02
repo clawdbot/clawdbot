@@ -87,6 +87,7 @@ export type TuiSessionList = {
       | "thinkingLevels"
       | "fastMode"
       | "verboseLevel"
+      | "traceLevel"
       | "reasoningLevel"
       | "model"
       | "contextTokens"

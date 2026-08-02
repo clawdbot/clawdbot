@@ -2785,7 +2785,7 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
 
 docker_e2e_run_with_harness image-name bash -lc true
 docker_e2e_run_detached_with_harness image-name
-test "$(wc -l <"$TMPDIR/docker-run-seen")" = 2
+[[ $(wc -l <"$TMPDIR/docker-run-seen") -eq 2 ]]
 `;
 
       execFileSync("bash", ["-lc", script], { encoding: "utf8" });
@@ -4422,10 +4422,14 @@ heartbeat_elapsed="\${BASH_REMATCH[1]}"
       'if [ -z "$account_home" ]; then',
       'export HOME="$account_home"',
       'export USERPROFILE="$account_home"',
+      "unset OPENCLAW_HOME",
       'export OPENCLAW_STATE_DIR="$account_home/.openclaw"',
       'export OPENCLAW_CONFIG_PATH="$OPENCLAW_STATE_DIR/openclaw.json"',
     ]);
 
+    expect(runner.indexOf("unset OPENCLAW_HOME")).toBeLessThan(
+      runner.indexOf('export OPENCLAW_STATE_DIR="$account_home/.openclaw"'),
+    );
     expect(
       runner.indexOf('export OPENCLAW_CONFIG_PATH="$OPENCLAW_STATE_DIR/openclaw.json"'),
     ).toBeLessThan(runner.indexOf("node scripts/e2e/lib/upgrade-survivor/assertions.mjs seed"));

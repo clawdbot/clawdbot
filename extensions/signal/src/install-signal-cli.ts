@@ -194,6 +194,7 @@ export async function downloadToFile(
         ? Number(trimmedLength)
         : Number.NaN;
       if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+        await cancelUnusedResponseBody(response);
         throw new Error(
           `signal-cli archive exceeds the ${maxBytes}-byte download cap (declared ${declaredLength}).`,
         );
