@@ -1204,7 +1204,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     const outcome =
       options.terminalOutcome ??
       buildAgentRunTerminalOutcomeFromLifecycleEvent({
-        phase: metadata.phase === "error" ? "error" : "end",
+        phase: metadata.phase === "error" || terminalError ? "error" : "end",
         data: {
           ...metadata,
           error: terminalError ? formatTuiErrorMessage(terminalError) : undefined,

@@ -250,15 +250,19 @@ function createSnapshotFromLifecycleEvent(params: {
     startedAt,
     endedAt,
   });
+  // agent.wait historically treats a bare abort flag as a retryable timeout.
+  // Modern explicit stop reasons keep the canonical cancellation projection.
+  const legacyBareAbort =
+    terminalOutcome.reason === "aborted" && data?.stopReason == null && data?.status == null;
   return {
     runId,
     source: "lifecycle",
     recordedAt: Date.now(),
-    status: terminalOutcome.status,
+    status: legacyBareAbort ? "timeout" : terminalOutcome.status,
     startedAt,
     endedAt,
-    error: terminalOutcome.error,
-    stopReason: terminalOutcome.stopReason,
+    error: legacyBareAbort ? undefined : terminalOutcome.error,
+    stopReason: legacyBareAbort ? undefined : terminalOutcome.stopReason,
     livenessState: terminalOutcome.livenessState,
     ...(data?.yielded === true ? { yielded: true } : {}),
     ...(terminalOutcome.timeoutPhase ? { timeoutPhase: terminalOutcome.timeoutPhase } : {}),

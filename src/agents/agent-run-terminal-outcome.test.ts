@@ -41,7 +41,7 @@ describe("agent run terminal outcome", () => {
     ).toMatchObject({ reason: "hard_timeout", status: "timeout" });
     expect(
       buildAgentRunTerminalOutcomeFromLifecycleEvent({
-        phase: "end",
+        phase: "error",
         data: { error: "provider failed" },
       }),
     ).toMatchObject({ reason: "failed", status: "error", error: "provider failed" });

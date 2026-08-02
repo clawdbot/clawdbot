@@ -403,7 +403,7 @@ export function projectAgentRunAttemptTerminal(terminal: AgentRunAttemptTerminal
 }
 
 /** Normalized terminal reason for an agent run. */
-export type AgentRunTerminalReason =
+type AgentRunTerminalReason =
   | "completed"
   | "hard_timeout"
   | "timed_out"
@@ -413,7 +413,7 @@ export type AgentRunTerminalReason =
   | "abandoned"
   | "failed";
 
-export type AgentRunTerminalClassification = "success" | "timeout" | "cancellation" | "failure";
+type AgentRunTerminalClassification = "success" | "timeout" | "cancellation" | "failure";
 
 const AGENT_RUN_TERMINAL_CLASSIFICATION = {
   completed: "success",
@@ -599,10 +599,6 @@ export function buildAgentRunTerminalOutcome(
   };
 }
 
-function normalizeAgentRunLifecycleStatus(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim().toLowerCase() : undefined;
-}
-
 /** Builds the canonical outcome directly from a terminal lifecycle event. */
 export function buildAgentRunTerminalOutcomeFromLifecycleEvent(input: {
   phase: "end" | "error";
@@ -618,7 +614,7 @@ export function buildAgentRunTerminalOutcomeFromLifecycleEvent(input: {
       : resolveAgentRunAbortLifecycleFields(input.abortSignal);
   const stopReason = asNonEmptyString(data?.stopReason) ?? abortFields.stopReason;
   const timeoutPhase = normalizeAgentRunTimeoutPhase(data?.timeoutPhase);
-  const lifecycleStatus = normalizeAgentRunLifecycleStatus(data?.status);
+  const lifecycleStatus = asNonEmptyString(data?.status)?.toLowerCase();
   // Bare `aborted` is cancellation; timeout needs a structured status, stop
   // reason, or phase so legacy lifecycle gaps cannot turn user stops into timeouts.
   const timedOut =
@@ -628,18 +624,22 @@ export function buildAgentRunTerminalOutcomeFromLifecycleEvent(input: {
     lifecycleStatus === "timed_out";
   const aborted =
     data?.aborted === true || abortFields.aborted === true || lifecycleStatus === "aborted";
-  const cancelled = lifecycleStatus === "cancelled" || lifecycleStatus === "canceled" || aborted;
+  const cancellationStatus =
+    lifecycleStatus === "cancelled" ||
+    lifecycleStatus === "canceled" ||
+    lifecycleStatus === "aborted";
+  const cancelled = cancellationStatus || aborted;
   const failed =
     input.phase === "error" ||
     lifecycleStatus === "error" ||
     lifecycleStatus === "failed" ||
-    stopReason === "error" ||
-    Boolean(data?.error);
+    stopReason === "error";
   const normalizedStopReason =
     !timedOut &&
     cancelled &&
     !isAbortedAgentStopReason(stopReason) &&
-    !isCancellationStopReason(stopReason)
+    !isCancellationStopReason(stopReason) &&
+    (stopReason === undefined || cancellationStatus)
       ? aborted
         ? "aborted"
         : "stop"
