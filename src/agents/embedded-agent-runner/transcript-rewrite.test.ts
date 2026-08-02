@@ -357,5 +357,4 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
       { type: "text", text: "[runtime rewrite]" },
     ]);
   });
-
 });
