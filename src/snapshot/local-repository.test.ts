@@ -720,8 +720,10 @@ describe("local SQLite snapshot repository", () => {
   });
 
   it("uses caller-owned verification scratch and stages restore beside the target", async () => {
-    const { provider, restorePath, snapshot, tempDir, validationRootPath } =
-      await createGenericSnapshotFixture("protected-scratch", { useValidationRoot: true });
+    const { provider, restorePath, snapshot, tempDir } = await createGenericSnapshotFixture(
+      "protected-scratch",
+      { useValidationRoot: true },
+    );
     const canonicalTempDir = await fs.realpath(tempDir);
     const originalMkdtemp = fs.mkdtemp.bind(fs);
     const prefixes: string[] = [];
