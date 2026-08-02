@@ -483,8 +483,7 @@ export function resolveCliSessionSqliteTranscriptScope(params: CliSessionTranscr
   const sessionFile = params.sessionFile.trim();
   const sessionKey = params.sessionKey?.trim();
   const marker = parseSqliteSessionFileMarker(sessionFile);
-  const hasCanonicalSessionKeyTarget = Boolean(sessionKey && sessionFile === sessionKey);
-  if (!marker && !hasCanonicalSessionKeyTarget) {
+  if (!marker && (!sessionKey || sessionFile !== sessionKey)) {
     return undefined;
   }
   const { sessionAgentId } = resolveSessionAgentIds({
