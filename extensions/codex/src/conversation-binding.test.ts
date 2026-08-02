@@ -107,6 +107,7 @@ import {
   type CodexAppServerThreadBinding,
   writeCodexAppServerBinding,
 } from "./app-server/session-binding.test-helpers.js";
+import { createClientHarness } from "./app-server/test-support.js";
 import { getCodexAppServerTurnRouter } from "./app-server/turn-router.js";
 import { legacyCodexConversationBindingId } from "./conversation-binding-data.js";
 import { codexConversationBindingRuntime } from "./conversation-binding.js";
@@ -2349,6 +2350,89 @@ describe("codex conversation binding", () => {
       threadId: "thread-1",
     });
   });
+
+  it.each([
+    { label: "ordinary", sessionKey: undefined, interruptFails: false },
+    {
+      label: "incognito",
+      sessionKey: "agent:main:dashboard:incognito-start-timeout",
+      interruptFails: false,
+    },
+    { label: "ordinary with a failed interrupt", sessionKey: undefined, interruptFails: true },
+    {
+      label: "incognito with a failed interrupt",
+      sessionKey: "agent:main:dashboard:incognito-start-interrupt-failure",
+      interruptFails: true,
+    },
+  ])(
+    "interrupts an indeterminate $label native turn before cleanup",
+    async ({ sessionKey, interruptFails }) => {
+      const sessionFile = path.join(tempDir, "session.jsonl");
+      const harness = createClientHarness();
+      await writeTestConversationBinding(sessionFile, {
+        threadId: "thread-1",
+        clientId: harness.client.getInstanceId(),
+        cwd: tempDir,
+      });
+      sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue(harness.client);
+      if (interruptFails) {
+        sharedClientMocks.retireSharedCodexAppServerClientIfCurrent.mockReturnValueOnce({
+          activeLeases: 2,
+          closed: false,
+        });
+      }
+      const waitForRequest = async (method: string) =>
+        await vi.waitFor(
+          () => {
+            const request = harness.writes
+              .map((write) => JSON.parse(write) as { id: number; method: string; params: unknown })
+              .find((message) => message.method === method);
+            if (!request) {
+              throw new Error(`Codex conversation harness did not write ${method}`);
+            }
+            return request;
+          },
+          { interval: 1, timeout: 5_000 },
+        );
+      const { event, ctx } = boundConversationClaim(sessionFile, sessionKey);
+      const result = handleCodexConversationInboundClaim(event, ctx, {
+        pluginConfig: { appServer: { requestTimeoutMs: 100 } },
+      });
+      const turnStart = await waitForRequest("turn/start");
+      const interrupt = await waitForRequest("turn/interrupt");
+      expect(interrupt.params).toEqual({ threadId: "thread-1", turnId: "" });
+      harness.send({ id: turnStart.id, result: { turn: { id: "turn-1" } } });
+      harness.send(
+        interruptFails
+          ? { id: interrupt.id, error: { code: -32_000, message: "startup interrupt failed" } }
+          : { id: interrupt.id, result: {} },
+      );
+      if (sessionKey && !interruptFails) {
+        const unsubscribe = await waitForRequest("thread/unsubscribe");
+        harness.send({ id: unsubscribe.id, result: {} });
+      }
+
+      await expect(result).resolves.toEqual({
+        handled: true,
+        reply: { text: "Codex app-server turn failed: turn/start timed out" },
+      });
+      expect(harness.writes.map((write) => JSON.parse(write).method)).toEqual([
+        "turn/start",
+        "turn/interrupt",
+        ...(sessionKey && !interruptFails ? ["thread/unsubscribe"] : []),
+      ]);
+      expect(sharedClientMocks.retireSharedCodexAppServerClientIfCurrent).toHaveBeenCalledTimes(
+        interruptFails ? 1 : 0,
+      );
+      expect(
+        readCodexConversationActiveTurn(testConversationIdentity(sessionFile)),
+      ).toBeUndefined();
+      if (sessionKey) {
+        await expect(readTestConversationBinding(sessionFile)).resolves.toBeUndefined();
+      }
+      harness.client.close();
+    },
+  );
 
   it.each([
     { label: "ordinary", sessionKey: undefined },
