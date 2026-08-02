@@ -65,11 +65,14 @@ class ChatControllerBranchCoordinationTest {
     )
   }
 
-  private suspend fun enqueue(text: String = "queued"): ChatOutboxItem =
+  private suspend fun enqueue(
+    text: String = "queued",
+    sessionKey: String = "main",
+  ): ChatOutboxItem =
     (
       outbox.enqueue(
         gatewayId = "gateway-a",
-        sessionKey = "main",
+        sessionKey = sessionKey,
         text = text,
         thinkingLevel = "off",
         nowMs = System.currentTimeMillis(),
@@ -788,54 +791,59 @@ class ChatControllerBranchCoordinationTest {
   @Test
   fun reconcileOwnerDrainsRequestsQueuedDuringAnActivePass() =
     runTest {
-      val branchScope = ChatOutboxScope("main", "main")
-      val initial = requireNotNull(outbox.branchState("gateway-a", branchScope))
-      assertTrue(outbox.updateLastActiveLeafEntryId("gateway-a", branchScope, "leaf-current", initial.epoch, initial.revision))
-      enqueue("first queued")
-      assertTrue(outbox.demoteSessionMutationToReconciliation("gateway-a", branchScope, lease = null))
+      val backgroundScope = ChatOutboxScope("background", "main")
+      val backgroundState = requireNotNull(outbox.branchState("gateway-a", backgroundScope))
+      assertTrue(
+        outbox.updateLastActiveLeafEntryId(
+          "gateway-a",
+          backgroundScope,
+          "leaf-current",
+          backgroundState.epoch,
+          backgroundState.revision,
+        ),
+      )
+      val visibleScope = ChatOutboxScope("main", "main")
+      val visibleState = requireNotNull(outbox.branchState("gateway-a", visibleScope))
+      assertTrue(
+        outbox.updateLastActiveLeafEntryId(
+          "gateway-a",
+          visibleScope,
+          "leaf-current",
+          visibleState.epoch,
+          visibleState.revision,
+        ),
+      )
+      enqueue("first queued", sessionKey = "background")
+      assertTrue(outbox.demoteSessionMutationToReconciliation("gateway-a", backgroundScope, lease = null))
 
       val gateway = ScriptedGateway(json)
       val branchesEntered = CompletableDeferred<Unit>()
       val releaseBranches = CompletableDeferred<Unit>()
       val requestsDrained = CompletableDeferred<Unit>()
       val sendCalls = AtomicInteger()
-      var lastRunId: String? = null
-      gateway.respondWith(
-        "chat.history",
+      gateway.respond("chat.history") { paramsJson ->
         historyResponse(
-          sessionId = "main",
+          sessionId = gateway.sessionKeyOf(paramsJson) ?: "main",
           messages = listOf(ReplayHistoryMessage("user", "current", 1, entryId = "leaf-current")),
-        ),
-      )
+        )
+      }
       gateway.respond("sessions.branches.list") {
-        branchesEntered.complete(Unit)
-        releaseBranches.await()
+        if (!branchesEntered.isCompleted) {
+          branchesEntered.complete(Unit)
+          releaseBranches.await()
+        }
         """{"branches":[{"leafEntryId":"leaf-current","headline":"Current","messageCount":1,"active":true}]}"""
       }
       gateway.respond("chat.send") { paramsJson ->
         val runId =
-          paramsJson?.let { value ->
-            json.parseToJsonElement(value).jsonObject["idempotencyKey"]?.jsonPrimitive?.content
-          }
-        lastRunId = runId
+          requireNotNull(paramsJson)
+            .let(json::parseToJsonElement)
+            .jsonObject
+            .getValue("idempotencyKey")
+            .jsonPrimitive
+            .content
         if (sendCalls.incrementAndGet() == 2) requestsDrained.complete(Unit)
-        if (runId == null) """{"status":"started"}""" else """{"runId":"$runId","status":"started"}"""
-      }
-      gateway.respond("chat.history") {
-        val idempotencyKey = lastRunId?.let { "$it:user" }
-        historyResponse(
-          sessionId = "main",
-          messages =
-            listOf(
-              ReplayHistoryMessage(
-                "user",
-                "current",
-                1,
-                idempotencyKey = idempotencyKey,
-                entryId = "leaf-current",
-              ),
-            ),
-        )
+        """{"runId":"$runId","status":"started"}"""
       }
       val controller = controller(gateway, StandardTestDispatcher(testScheduler))
       runCurrent()
