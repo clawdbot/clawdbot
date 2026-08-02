@@ -35,6 +35,7 @@ import {
   findTaskByRunIdForOwner,
   updateTaskNotifyPolicyForOwner,
 } from "../../tasks/task-owner-access.js";
+import { DeferredContextEngineMaintenanceBlockedError } from "../context-engine-maintenance-error.js";
 import { findActiveSessionTask } from "../session-async-task-status.js";
 import { SessionManager } from "../sessions/index.js";
 import { resolveContextEngineCapabilities } from "./context-engine-capabilities.js";
@@ -688,11 +689,7 @@ function scheduleDeferredTurnMaintenance(
           error: preemptionError,
         });
         state.phase = quarantined ? "quarantined" : "blocked";
-        state.waitError = new Error(
-          quarantined
-            ? "Deferred maintenance did not stop. The context engine was quarantined, but this turn was stopped to avoid overlapping engine operations. Retry after maintenance finishes or restart the gateway."
-            : "Deferred maintenance did not stop. The active context engine cannot be quarantined, so this turn was stopped to avoid overlapping engine operations. Retry after maintenance finishes or restart the gateway.",
-        );
+        state.waitError = new DeferredContextEngineMaintenanceBlockedError({ quarantined });
         terminalizePreemption(preemptionError, state.waitError.message);
         // Fail the waiting turn, but keep the run barrier closed until the
         // original plugin call and every admitted host write have settled.

@@ -6,6 +6,7 @@ import {
   classifyOAuthRefreshFailureError,
   formatOAuthRefreshFailureLoginCommandMarkdown,
 } from "../../agents/auth-profiles/oauth-refresh-failure.js";
+import { resolveDeferredContextEngineMaintenanceBlockedMessage } from "../../agents/context-engine-maintenance-error.js";
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 import { renderUserFacingText } from "../../agents/embedded-agent-helpers/user-facing-text.js";
 import { classifyCompactionReason } from "../../agents/embedded-agent-runner/compact-reasons.js";
@@ -216,6 +217,11 @@ export function buildExternalRunFailureReply(
   const message = typeof input === "string" ? input : input.message;
   const error = typeof input === "string" ? undefined : input.error;
   const normalizedMessage = collapseRepeatedFailureDetail(message);
+  const deferredMaintenanceBlockedMessage =
+    resolveDeferredContextEngineMaintenanceBlockedMessage(error);
+  if (deferredMaintenanceBlockedMessage) {
+    return { text: deferredMaintenanceBlockedMessage, isGenericRunnerFailure: false };
+  }
   const failoverFacts =
     options?.failoverFacts ??
     resolveReplyFailoverFacts(error ?? normalizedMessage, normalizedMessage);

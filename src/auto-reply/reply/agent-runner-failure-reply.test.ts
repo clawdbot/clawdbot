@@ -1,12 +1,23 @@
 import { describe, expect, it } from "vitest";
+import { DeferredContextEngineMaintenanceBlockedError } from "../../agents/context-engine-maintenance-error.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import {
   buildEmptyInteractiveReplyPayload,
+  buildExternalRunFailureReply,
   buildPreflightCompactionFailureText,
 } from "./agent-runner-failure-reply.js";
 
 const EMPTY_INTERACTIVE_REPLY_TEXT =
   "I finished the turn, but it did not produce a visible reply. Please try again, or start a new session if this keeps happening.";
+
+it("preserves deferred maintenance recovery guidance without verbose errors", () => {
+  const error = new DeferredContextEngineMaintenanceBlockedError({ quarantined: true });
+
+  expect(buildExternalRunFailureReply({ message: error.message, error })).toEqual({
+    text: error.userMessage,
+    isGenericRunnerFailure: false,
+  });
+});
 
 describe("buildEmptyInteractiveReplyPayload", () => {
   const baseParams = {
