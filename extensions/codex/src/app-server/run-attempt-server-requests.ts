@@ -1,3 +1,4 @@
+import { runWithCodexNativeGatewayToolRequestContext } from "openclaw/plugin-sdk/codex-native-task-runtime";
 import { onInternalDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { isCodexAppServerApprovalRequest } from "./client.js";
 import { shouldAutoApproveCodexAppServerApprovals } from "./config.js";
@@ -41,7 +42,14 @@ export function createCodexAttemptServerRequestController(
   const { context } = prompt;
   const { runtime, attemptTools } = context;
   const { connection } = runtime;
-  const { params, computerUseConfig, runAbortController, appServer, sessionAgentId } = connection;
+  const {
+    params,
+    computerUseConfig,
+    runAbortController,
+    appServer,
+    sessionAgentId,
+    sandboxSessionKey,
+  } = connection;
   const {
     toolBridge,
     toolOutcomeOrdinals,
@@ -206,28 +214,38 @@ export function createCodexAttemptServerRequestController(
       });
       try {
         const { execution } = openClawDynamicToolExecutions.claim(call, () =>
-          handleDynamicToolCallWithTimeout({
-            call,
-            toolBridge,
-            signal: runAbortController.signal,
-            timeoutMs: dynamicToolTimeoutMs,
-            toolCallOrdinal,
-            onAgentToolResult: params.onAgentToolResult,
-            onFallbackSelected: () => {
-              if (toolCallOrdinal !== undefined) {
-                suppressedDynamicToolOutcomeOrdinals.add(toolCallOrdinal);
-              }
-            },
-            onTimeout: () => {
-              trajectoryRecorder?.recordEvent("tool.timeout", {
-                threadId: call.threadId,
-                turnId: call.turnId,
-                toolCallId: call.callId,
-                name: call.tool,
+          runWithCodexNativeGatewayToolRequestContext(
+            sandboxSessionKey
+              ? {
+                  agentId: sessionAgentId,
+                  sessionKey: sandboxSessionKey,
+                  messageActionTurnCapability: params.messageActionTurnCapability,
+                }
+              : undefined,
+            () =>
+              handleDynamicToolCallWithTimeout({
+                call,
+                toolBridge,
+                signal: runAbortController.signal,
                 timeoutMs: dynamicToolTimeoutMs,
-              });
-            },
-          }),
+                toolCallOrdinal,
+                onAgentToolResult: params.onAgentToolResult,
+                onFallbackSelected: () => {
+                  if (toolCallOrdinal !== undefined) {
+                    suppressedDynamicToolOutcomeOrdinals.add(toolCallOrdinal);
+                  }
+                },
+                onTimeout: () => {
+                  trajectoryRecorder?.recordEvent("tool.timeout", {
+                    threadId: call.threadId,
+                    turnId: call.turnId,
+                    toolCallId: call.callId,
+                    name: call.tool,
+                    timeoutMs: dynamicToolTimeoutMs,
+                  });
+                },
+              }),
+          ),
         );
         const response = await execution;
         const protocolResponse = toCodexDynamicToolProtocolResponse(response);

@@ -252,6 +252,41 @@ function isCurrentSlackReadTarget(params: {
   );
 }
 
+function resolveDelegatedSlackDownloadThread(params: {
+  account: ResolvedSlackAccount;
+  channelId: string;
+  requestedThreadId?: string;
+  context?: SlackActionContext;
+}): string | undefined {
+  if (params.context?.conversationReadOrigin === "direct-operator") {
+    return params.requestedThreadId;
+  }
+  if (
+    !isCurrentSlackReadTarget({
+      account: params.account,
+      channelId: params.channelId,
+      context: params.context,
+    })
+  ) {
+    throw new Error(
+      "Delegated Slack file download requires the exact current conversation and account.",
+    );
+  }
+  const currentThreadId = params.context?.currentThreadTs?.trim();
+  const requestedThreadId = params.requestedThreadId?.trim();
+  if (params.context?.sameChannelThreadRequired && !currentThreadId) {
+    throw new Error(
+      "Delegated Slack file download requires the exact current conversation and account.",
+    );
+  }
+  if (requestedThreadId && requestedThreadId !== currentThreadId) {
+    throw new Error(
+      "Delegated Slack file download requires the exact current conversation and account.",
+    );
+  }
+  return requestedThreadId || currentThreadId;
+}
+
 function assertSlackMemberInfoAllowed(params: {
   account: ResolvedSlackAccount;
   context?: SlackActionContext;
@@ -815,8 +850,14 @@ export async function handleSlackAction(
           );
         }
         const channelId = resolveSlackChannelId(channelTarget);
+        const threadId = resolveDelegatedSlackDownloadThread({
+          account,
+          channelId,
+          requestedThreadId:
+            readStringParam(params, "threadId") ?? readStringParam(params, "replyTo"),
+          context,
+        });
         await assertReadTargetAllowed(channelId);
-        const threadId = readStringParam(params, "threadId") ?? readStringParam(params, "replyTo");
         const maxBytes = account.config?.mediaMaxMb
           ? account.config.mediaMaxMb * 1024 * 1024
           : 20 * 1024 * 1024;
@@ -826,7 +867,8 @@ export async function handleSlackAction(
           ...(readToken && !readOpts?.token ? { token: readToken } : {}),
           maxBytes,
           channelId,
-          threadId: threadId ?? undefined,
+          threadId,
+          requireScopeEvidence: context?.conversationReadOrigin !== "direct-operator",
         });
         if (!downloaded) {
           return jsonResult({

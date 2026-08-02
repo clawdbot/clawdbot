@@ -3,6 +3,21 @@
 // task registry without promoting detached task mutation helpers to the public
 // plugin SDK.
 
+import { runWithGatewayToolCallerRequestContext } from "../agents/tools/gateway-caller-context.js";
+
+export type CodexNativeGatewayToolRequestContext = {
+  agentId: string;
+  sessionKey: string;
+  messageActionTurnCapability?: string;
+};
+
+export async function runWithCodexNativeGatewayToolRequestContext<T>(
+  context: CodexNativeGatewayToolRequestContext | undefined,
+  run: () => Promise<T> | T,
+): Promise<T> {
+  return await runWithGatewayToolCallerRequestContext(context, run);
+}
+
 export {
   CODEX_NATIVE_SUBAGENT_RUN_ID_PREFIX,
   CODEX_NATIVE_SUBAGENT_RUNTIME,

@@ -6,7 +6,7 @@ import { copyChannelAgentToolMeta } from "../channel-tools.js";
 import { copyToolTerminalPresentation } from "../tool-terminal-presentation.js";
 import type { AnyAgentTool } from "./common.js";
 
-type GatewayToolCallerIdentity = {
+export type GatewayToolCallerIdentity = {
   agentId: string;
   sessionKey: string;
   // Trusted run context, carried separately from model-authored tool arguments.
@@ -14,6 +14,8 @@ type GatewayToolCallerIdentity = {
   turnSourceTo?: string;
   turnSourceAccountId?: string;
   turnSourceThreadId?: string | number;
+  messageActionTurnCapability?: string;
+  messageActionTurnCapabilityConflict?: boolean;
 };
 
 type GatewayToolCallerSource = {
@@ -25,34 +27,119 @@ type GatewayToolCallerSource = {
   agentAccountId?: string;
   currentThreadTs?: string;
   agentThreadId?: string | number;
+  messageActionTurnCapability?: string;
 };
 
-const gatewayToolCallerStorage = new AsyncLocalStorage<GatewayToolCallerIdentity>();
+export type GatewayToolCallerMessageActionCapabilityResolution =
+  | { ok: true; token?: string }
+  | { ok: false; reason: "token_conflict" };
+
+type GatewayToolCallerContext = GatewayToolCallerIdentity & {
+  messageActionTurnCapabilityBoundary?: boolean;
+};
+
+const gatewayToolCallerStorage = new AsyncLocalStorage<GatewayToolCallerContext | undefined>();
 
 export function getGatewayToolCallerIdentity(): GatewayToolCallerIdentity | undefined {
   return gatewayToolCallerStorage.getStore();
+}
+
+export function resolveGatewayToolCallerMessageActionCapability(
+  explicitToken: string | undefined,
+): GatewayToolCallerMessageActionCapabilityResolution {
+  const identity = gatewayToolCallerStorage.getStore();
+  if (identity?.messageActionTurnCapabilityConflict) {
+    return { ok: false, reason: "token_conflict" };
+  }
+  const explicit = explicitToken?.trim();
+  const active = identity?.messageActionTurnCapability?.trim();
+  if (explicit && active && explicit !== active) {
+    return { ok: false, reason: "token_conflict" };
+  }
+  return { ok: true, token: explicit || active };
+}
+
+function normalizeGatewayToolCallerIdentity(
+  identity: GatewayToolCallerIdentity,
+): GatewayToolCallerIdentity | undefined {
+  const agentId = identity.agentId?.trim();
+  const sessionKey = identity.sessionKey?.trim();
+  if (!agentId || !sessionKey) {
+    return undefined;
+  }
+  return {
+    agentId,
+    sessionKey,
+    ...(identity.turnSourceChannel?.trim()
+      ? { turnSourceChannel: identity.turnSourceChannel.trim() }
+      : {}),
+    ...(identity.turnSourceTo?.trim() ? { turnSourceTo: identity.turnSourceTo.trim() } : {}),
+    ...(identity.turnSourceAccountId?.trim()
+      ? { turnSourceAccountId: identity.turnSourceAccountId.trim() }
+      : {}),
+    ...(identity.turnSourceThreadId !== undefined
+      ? { turnSourceThreadId: identity.turnSourceThreadId }
+      : {}),
+    ...(identity.messageActionTurnCapability?.trim()
+      ? { messageActionTurnCapability: identity.messageActionTurnCapability.trim() }
+      : {}),
+    ...(identity.messageActionTurnCapabilityConflict
+      ? { messageActionTurnCapabilityConflict: true }
+      : {}),
+  };
+}
+
+/** Establish a fresh attempt boundary, explicitly clearing inherited authority when absent. */
+export async function runWithGatewayToolCallerRequestContext<T>(
+  identity: GatewayToolCallerIdentity | undefined,
+  run: () => Promise<T> | T,
+): Promise<T> {
+  const normalized = identity ? normalizeGatewayToolCallerIdentity(identity) : undefined;
+  return await gatewayToolCallerStorage.run(
+    normalized ? { ...normalized, messageActionTurnCapabilityBoundary: true } : undefined,
+    run,
+  );
 }
 
 export async function withGatewayToolCallerIdentity<T>(
   identity: GatewayToolCallerIdentity | undefined,
   run: () => Promise<T> | T,
 ): Promise<T> {
-  if (!identity?.agentId?.trim() || !identity.sessionKey?.trim()) {
-    return await run();
+  const normalized = identity ? normalizeGatewayToolCallerIdentity(identity) : undefined;
+  if (!normalized) {
+    return await gatewayToolCallerStorage.run(undefined, run);
   }
+  const active = gatewayToolCallerStorage.getStore();
+  const sameIdentity =
+    active?.agentId === normalized.agentId && active.sessionKey === normalized.sessionKey;
+  const boundaryIdentityConflict =
+    active?.messageActionTurnCapabilityBoundary === true && !sameIdentity;
+  const explicit = normalized.messageActionTurnCapability;
+  const inherited = sameIdentity ? active?.messageActionTurnCapability : undefined;
+  const conflict =
+    normalized.messageActionTurnCapabilityConflict === true ||
+    boundaryIdentityConflict ||
+    (sameIdentity && active?.messageActionTurnCapabilityConflict === true) ||
+    (sameIdentity &&
+      active?.messageActionTurnCapabilityBoundary === true &&
+      !inherited &&
+      Boolean(explicit)) ||
+    Boolean(explicit && inherited && explicit !== inherited);
+  const contextIdentity = boundaryIdentityConflict ? active : normalized;
+  const {
+    messageActionTurnCapability: _discardedCapability,
+    messageActionTurnCapabilityConflict: _discardedConflict,
+    ...contextWithoutAuthority
+  } = contextIdentity;
   return await gatewayToolCallerStorage.run(
     {
-      agentId: identity.agentId.trim(),
-      sessionKey: identity.sessionKey.trim(),
-      ...(identity.turnSourceChannel?.trim()
-        ? { turnSourceChannel: identity.turnSourceChannel.trim() }
+      ...contextWithoutAuthority,
+      ...(!conflict && (explicit || inherited)
+        ? { messageActionTurnCapability: explicit || inherited }
         : {}),
-      ...(identity.turnSourceTo?.trim() ? { turnSourceTo: identity.turnSourceTo.trim() } : {}),
-      ...(identity.turnSourceAccountId?.trim()
-        ? { turnSourceAccountId: identity.turnSourceAccountId.trim() }
-        : {}),
-      ...(identity.turnSourceThreadId !== undefined
-        ? { turnSourceThreadId: identity.turnSourceThreadId }
+      ...(conflict ? { messageActionTurnCapabilityConflict: true } : {}),
+      ...((sameIdentity || boundaryIdentityConflict) && active?.messageActionTurnCapabilityBoundary
+        ? { messageActionTurnCapabilityBoundary: true }
         : {}),
     },
     run,
@@ -91,6 +178,7 @@ export function createGatewayToolCallerWrapper(
           turnSourceTo: source.currentMessagingTarget ?? source.currentChannelId ?? source.agentTo,
           turnSourceAccountId: source.agentAccountId,
           turnSourceThreadId: source.currentThreadTs ?? source.agentThreadId,
+          messageActionTurnCapability: source.messageActionTurnCapability,
         }
       : undefined;
   return (tool) => wrapToolWithGatewayCallerIdentity(tool, identity);

@@ -12,7 +12,11 @@ import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "openclaw/plugin-sdk/hook-runtime";
-import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  createMockPluginRegistry,
+  inspectGatewayToolCallerMessageActionCapabilityForTest,
+  wrapToolWithGatewayCallerIdentityForTest,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveCodexSupervisionAppServerRuntimeOptions } from "./config.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
@@ -2284,6 +2288,82 @@ describe("runCodexAppServerSideQuestion", () => {
     await vi.waitFor(() => expect(afterToolCall).toHaveBeenCalledTimes(1));
     expect(afterToolCall.mock.calls[0]?.[1]).toMatchObject({
       accountId: "slack-account-1",
+    });
+  });
+
+  it("binds current attempt authority for a pre-materialized side-thread tool", async () => {
+    const runSessionKey = "agent:main:side-run";
+    const sandboxSessionKey = "agent:main:side-sandbox";
+    const capability = "opaque-side-capability";
+    let observed: unknown;
+    toolExecuteMock.mockImplementationOnce(async () => {
+      await Promise.resolve();
+      observed = inspectGatewayToolCallerMessageActionCapabilityForTest(capability);
+      return { content: [{ type: "text", text: "tool output" }] };
+    });
+    createOpenClawCodingToolsMock.mockReturnValue([
+      wrapToolWithGatewayCallerIdentityForTest(
+        {
+          name: "wiki_status",
+          label: "Wiki status",
+          description: "Check wiki status",
+          parameters: { type: "object", properties: {} },
+          execute: toolExecuteMock,
+        },
+        { agentId: "main", sessionKey: sandboxSessionKey },
+      ),
+    ]);
+    const client = createFakeClient();
+    client.request.mockImplementation(async (method: string) => {
+      if (method === "thread/fork") {
+        return threadResult("side-thread");
+      }
+      if (method === "thread/inject_items") {
+        return {};
+      }
+      if (method === "turn/start") {
+        setTimeout(() => {
+          void (async () => {
+            await client.handleRequest({
+              id: 44,
+              method: "item/tool/call",
+              params: {
+                threadId: "side-thread",
+                turnId: "turn-1",
+                callId: "authority-1",
+                tool: "wiki_status",
+                arguments: {},
+              },
+            });
+            client.emit(agentDelta("side-thread", "turn-1", "Side answer."));
+            client.emit(turnCompleted("side-thread", "turn-1", "Side answer."));
+          })();
+        }, 0);
+        return turnStartResult("turn-1");
+      }
+      if (method === "thread/unsubscribe" || method === "turn/interrupt") {
+        return {};
+      }
+      throw new Error(`unexpected request: ${method}`);
+    });
+    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+
+    await expect(
+      runCodexAppServerSideQuestion(
+        sideParams({
+          opts: { runId: "side-run" },
+          sessionKey: runSessionKey,
+          sandboxSessionKey,
+          messageActionTurnCapability: capability,
+        }),
+      ),
+    ).resolves.toEqual({ text: "Side answer." });
+
+    expect(observed).toEqual({ ok: true, present: true, matchesExpected: true });
+    expect(inspectGatewayToolCallerMessageActionCapabilityForTest()).toEqual({
+      ok: true,
+      present: false,
+      matchesExpected: true,
     });
   });
 

@@ -636,6 +636,7 @@ function hasSlackScopeMismatch(params: {
   file: SlackFileInfoSummary;
   channelId?: string;
   threadId?: string;
+  requireScopeEvidence?: boolean;
 }): boolean {
   const channelId = normalizeSlackScopeValue(params.channelId);
   if (!channelId) {
@@ -646,6 +647,9 @@ function hasSlackScopeMismatch(params: {
   const directIds = collectSlackDirectShareChannelIds(params.file);
   const sharedIds = collectSlackSharedChannelIds(params.file);
   const hasChannelEvidence = directIds.size > 0 || sharedIds.size > 0;
+  if (params.requireScopeEvidence && !hasChannelEvidence) {
+    return true;
+  }
   const inChannel = directIds.has(channelId) || sharedIds.has(channelId);
   if (hasChannelEvidence && !inChannel) {
     return true;
@@ -656,11 +660,11 @@ function hasSlackScopeMismatch(params: {
   }
   const threadShares = collectSlackThreadShares(params.file, channelId);
   if (threadShares.length === 0) {
-    return false;
+    return params.requireScopeEvidence === true;
   }
   const threadEvidence = threadShares.filter((entry) => entry.threadTs || entry.ts);
   if (threadEvidence.length === 0) {
-    return false;
+    return params.requireScopeEvidence === true;
   }
   return !threadEvidence.some((entry) => entry.threadTs === threadId || entry.ts === threadId);
 }
@@ -672,7 +676,12 @@ function hasSlackScopeMismatch(params: {
  */
 export async function downloadSlackFile(
   fileId: string,
-  opts: SlackActionClientOpts & { maxBytes: number; channelId?: string; threadId?: string },
+  opts: SlackActionClientOpts & {
+    maxBytes: number;
+    channelId?: string;
+    threadId?: string;
+    requireScopeEvidence?: boolean;
+  },
 ): Promise<SlackMediaResult | null> {
   const token = resolveToken(opts.token, opts.accountId, opts.cfg);
   const client = await getClient(opts);
@@ -684,7 +693,14 @@ export async function downloadSlackFile(
   if (!file?.url_private_download && !file?.url_private) {
     return null;
   }
-  if (hasSlackScopeMismatch({ file, channelId: opts.channelId, threadId: opts.threadId })) {
+  if (
+    hasSlackScopeMismatch({
+      file,
+      channelId: opts.channelId,
+      threadId: opts.threadId,
+      requireScopeEvidence: opts.requireScopeEvidence,
+    })
+  ) {
     return null;
   }
 

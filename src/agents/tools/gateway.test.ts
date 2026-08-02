@@ -501,7 +501,11 @@ describe("gateway tool defaults", () => {
     });
     mintedTurnCapabilities.push(turnCapability);
     await withGatewayToolCallerIdentity(
-      { agentId: "ops", sessionKey: "agent:ops:telegram:group:room-1" },
+      {
+        agentId: "ops",
+        sessionKey: "agent:ops:telegram:group:room-1",
+        messageActionTurnCapability: turnCapability,
+      },
       async () => {
         const token = await resolveMessageActionAgentRuntimeIdentityToken({
           opts: {},
@@ -522,12 +526,19 @@ describe("gateway tool defaults", () => {
             },
           },
         });
-        expect(
-          await resolveMessageActionAgentRuntimeIdentityToken({
-            opts: {},
-            target: "local",
-          }),
-        ).toBeUndefined();
+        const ambientToken = await resolveMessageActionAgentRuntimeIdentityToken({
+          opts: {},
+          target: "local",
+          runId: "run-1",
+          sessionId: "session-1",
+        });
+        expect(ambientToken).toEqual(expect.any(String));
+        await expect(verifyAgentRuntimeIdentityToken(ambientToken)).resolves.toMatchObject({
+          messageActionContext: {
+            requesterAccountId: "default",
+            toolContext: { currentChannelId: "room-1" },
+          },
+        });
         expect(
           await resolveMessageActionAgentRuntimeIdentityToken({
             opts: {},

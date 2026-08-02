@@ -185,11 +185,59 @@ describe("handleBtwCommand", () => {
       requesterSenderId: "sender-1",
       toolContext: {
         currentChannelProvider: "whatsapp",
+        currentThreadTs: "thread-1",
       },
     });
     expect(result).toEqual({
       shouldContinue: false,
       reply: { text: "nothing important", btw: { question: "what changed?" } },
+    });
+  });
+
+  it.each([
+    { name: "message thread", threadContext: { MessageThreadId: "111.222" } },
+    { name: "transport thread", threadContext: { TransportThreadId: "333.444" } },
+  ])("binds the Slack $name to the side-question permission", async (testCase) => {
+    const params = buildParams("/btw inspect the attachment");
+    params.ctx.Provider = "slack";
+    params.ctx.AccountId = "default";
+    params.ctx.NativeChannelId = "C1";
+    params.ctx.RuntimePolicySessionKey = "agent:main:runtime-policy";
+    Object.assign(params.ctx, testCase.threadContext);
+    params.command.channel = "slack";
+    params.agentDir = "/tmp/agent";
+    params.sessionEntry = {
+      sessionId: "session-1",
+      updatedAt: Date.now(),
+    };
+    let resolvedTurnContext: ReturnType<typeof resolveMessageActionTurnCapability> | undefined;
+    runBtwSideQuestionMock.mockImplementation(async (input: Record<string, unknown>) => {
+      const opts = input.opts as { runId?: string } | undefined;
+      resolvedTurnContext = resolveMessageActionTurnCapability({
+        token:
+          typeof input.messageActionTurnCapability === "string"
+            ? input.messageActionTurnCapability
+            : undefined,
+        agentId: "main",
+        runId: opts?.runId,
+        sessionKey: "agent:main:runtime-policy",
+        sessionId: "session-1",
+      });
+      return { text: "attachment inspected" };
+    });
+
+    await handleBtwCommand(params, true);
+
+    const expectedThread = Object.values(testCase.threadContext)[0];
+    expect(mockFirstObjectArg(runBtwSideQuestionMock).messageThreadId).toBe(expectedThread);
+    expect(resolvedTurnContext).toMatchObject({
+      requesterAccountId: "default",
+      toolContext: {
+        currentChannelProvider: "slack",
+        currentChannelId: "C1",
+        currentThreadTs: expectedThread,
+        sameChannelThreadRequired: true,
+      },
     });
   });
 

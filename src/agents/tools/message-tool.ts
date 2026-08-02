@@ -82,6 +82,7 @@ import {
 } from "../schema/typebox.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringArrayParam, readStringParam } from "./common.js";
+import { resolveGatewayToolCallerMessageActionCapability } from "./gateway-caller-context.js";
 import { gatewayCallOptionSchemaProperties } from "./gateway-schema.js";
 import {
   readGatewayCallOptions,
@@ -1475,10 +1476,14 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       const action = readStringParam(params, "action", {
         required: true,
       }) as ChannelMessageActionName;
-      const turnCapabilityResolution =
-        resolvedAgentId && options?.agentSessionKey
+      const activeTurnCapability = resolveGatewayToolCallerMessageActionCapability(
+        options?.messageActionTurnCapability,
+      );
+      const turnCapabilityResolution = !activeTurnCapability.ok
+        ? activeTurnCapability
+        : resolvedAgentId && options?.agentSessionKey
           ? resolveMessageActionTurnCapabilityDiagnostic({
-              token: options.messageActionTurnCapability,
+              token: activeTurnCapability.token,
               agentId: resolvedAgentId,
               runId: options.runId,
               sessionKey: options.agentSessionKey,
@@ -1491,7 +1496,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       if (
         turnCapabilityResolution &&
         !turnCapabilityResolution.ok &&
-        (options?.messageActionTurnCapability || options?.requesterSenderId)
+        (!activeTurnCapability.ok || activeTurnCapability.token || options?.requesterSenderId)
       ) {
         // Capability tokens and bound identities are secret or sensitive. Emit
         // only the categorical rejection needed to diagnose missing authority.

@@ -31,7 +31,10 @@ import {
 } from "../../infra/device-identity.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { readPositiveIntegerParam, readStringParam } from "./common.js";
-import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
+import {
+  getGatewayToolCallerIdentity,
+  resolveGatewayToolCallerMessageActionCapability,
+} from "./gateway-caller-context.js";
 
 /** Optional gateway connection overrides accepted by agent tools. */
 export type GatewayCallOptions = {
@@ -397,8 +400,12 @@ export async function resolveMessageActionAgentRuntimeIdentityToken(params: {
   if (hasGatewayUrlOverride || hasGatewayTokenOverride || params.target !== "local") {
     return undefined;
   }
+  const capability = resolveGatewayToolCallerMessageActionCapability(params.turnCapability);
+  if (!capability.ok) {
+    return undefined;
+  }
   const messageActionContext = resolveMessageActionTurnCapability({
-    token: params.turnCapability,
+    token: capability.token,
     agentId: identity.agentId,
     runId: params.runId,
     sessionKey: identity.sessionKey,
