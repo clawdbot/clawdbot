@@ -12,6 +12,7 @@
     "zod": "4.4.3"
   },
   "devDependencies": {
+    "@openclaw/memory-core": "workspace:*",
     "@openclaw/plugin-sdk": "workspace:*",
     "openclaw": "workspace:*"
   },
