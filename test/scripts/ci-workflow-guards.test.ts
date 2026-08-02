@@ -3506,6 +3506,15 @@ describe("ci workflow guards", () => {
       expect(prepareStep?.with?.["base-ref"], workflowPath).toBe(
         "${{ github.event.pull_request.base.sha || 'refs/remotes/origin/main' }}",
       );
+      const ensureBaseStep = job.steps.find(
+        (step: WorkflowStep) => step.name === "Ensure Testbox base commit",
+      );
+      expect(ensureBaseStep?.if, workflowPath).toBe("github.event_name == 'pull_request'");
+      expect(ensureBaseStep?.uses, workflowPath).toBe("./.github/actions/ensure-base-commit");
+      expect(ensureBaseStep?.with, workflowPath).toEqual({
+        "base-sha": "${{ github.event.pull_request.base.sha }}",
+        "fetch-ref": "${{ github.event.pull_request.base.ref }}",
+      });
       expect(JSON.stringify(job.steps), workflowPath).not.toContain(
         "+refs/heads/main:refs/remotes/origin/main",
       );
