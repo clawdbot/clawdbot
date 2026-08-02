@@ -74,6 +74,7 @@ vi.mock("../plugins/synthetic-auth.runtime.js", () => ({
 }));
 
 vi.mock("./agent-scope.js", () => ({
+  listAgentEntries: (config: { agents?: { list?: unknown[] } }) => config.agents?.list ?? [],
   listAgentIds: () => mocks.configuredAgentIds,
   resolveAgentDir: (_config: unknown, agentId: string) =>
     agentId === "default" ? "/tmp/unused-agent" : `/tmp/configured-${agentId}`,
@@ -81,6 +82,12 @@ vi.mock("./agent-scope.js", () => ({
     agentId === "default" ? "/tmp/unused-workspace" : `/tmp/workspace-${agentId}`,
   resolveDefaultAgentDir: () => "/tmp/unused-agent",
   resolveDefaultAgentId: () => "default",
+  resolveAgentEffectiveModelPrimary: () => undefined,
+  resolveRunModelFallbacksOverride: () => undefined,
+  resolveSessionAgentIds: ({ agentId }: { agentId?: string }) => ({
+    defaultAgentId: "default",
+    sessionAgentId: agentId ?? "default",
+  }),
 }));
 
 vi.mock("./auth-profiles/runtime-snapshots.js", () => ({

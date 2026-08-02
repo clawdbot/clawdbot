@@ -29,18 +29,22 @@ import type { FileEditorViewHandle } from "./file-editor-view.ts";
 import type { SessionDiffLoader } from "./session-diff-panel.ts";
 
 type DetailUnavailableReason = "not_found" | "oversized" | "not_visible";
-export type DetailFullMessageResult = {
+type DetailFullMessageResult = {
   ok?: boolean;
   message?: unknown;
   unavailableReason?: DetailUnavailableReason;
 };
 
-export type SidebarFullMessageRequest = {
+type SidebarFullMessageRequest = {
   sessionKey: string;
   agentId?: string;
   messageId: string;
   kind: "assistant_message" | "tool_output";
 };
+
+export type SidebarFullMessageLoader = (
+  request: SidebarFullMessageRequest,
+) => Promise<DetailFullMessageResult | null | undefined>;
 
 type MarkdownSidebarContent = {
   kind: "markdown";
@@ -675,9 +679,7 @@ function renderMarkdownSidebar(props: MarkdownSidebarProps) {
 
 class ChatDetailPanel extends OpenClawLightDomElement {
   @property({ attribute: false }) content: SidebarContent | null = null;
-  @property({ attribute: false }) loadFullMessage?:
-    | ((request: SidebarFullMessageRequest) => Promise<DetailFullMessageResult | null | undefined>)
-    | null = null;
+  @property({ attribute: false }) loadFullMessage?: SidebarFullMessageLoader | null = null;
   @property() canvasPluginSurfaceUrl: string | null = null;
   @property() embedSandboxMode: EmbedSandboxMode = "scripts";
   @property({ type: Boolean }) allowExternalEmbedUrls = false;

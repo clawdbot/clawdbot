@@ -456,6 +456,8 @@ function readNpmLockOverrides() {
 
 function packageJsonForNpmLock(packageJson, npmLockOverrides) {
   const normalized = { ...packageJson };
+  delete normalized.bundleDependencies;
+  delete normalized.bundledDependencies;
   delete normalized.devDependencies;
   for (const field of ["dependencies", "optionalDependencies", "peerDependencies"]) {
     const dependencies = normalized[field];

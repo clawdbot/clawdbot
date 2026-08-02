@@ -105,6 +105,33 @@ describe("plugin npm extended-stable workflow", () => {
     }
   });
 
+  it("overlays the complete trusted packaging helper dependency pair", () => {
+    const parsed = workflow();
+    const preflightCheckout = step(
+      parsed.jobs?.preview_plugin_pack,
+      "Checkout trusted packaging helper",
+    );
+    expect(preflightCheckout.with?.["sparse-checkout"]).toContain(
+      "scripts/generate-npm-package-lock.mjs",
+    );
+    expect(preflightCheckout.with?.["sparse-checkout"]).toContain(
+      "scripts/lib/plugin-npm-package-manifest.mjs",
+    );
+
+    const expectedCopies = [
+      "scripts/generate-npm-package-lock.mjs",
+      "scripts/lib/plugin-npm-package-manifest.mjs",
+    ];
+    for (const helperPath of expectedCopies) {
+      expect(
+        step(parsed.jobs?.preview_plugin_pack, "Overlay trusted packaging helper").run,
+      ).toContain(helperPath);
+      expect(
+        step(parsed.jobs?.publish_plugins_npm, "Overlay trusted OIDC packaging helper").run,
+      ).toContain(helperPath);
+    }
+  });
+
   it("trusts only the canonical monthly branch at the exact checked-out SHA", () => {
     const trusted = step(
       workflow().jobs?.preview_plugins_npm,
@@ -404,7 +431,6 @@ describe("plugin npm extended-stable workflow", () => {
     ).toMatchObject({
       ref: "${{ github.workflow_sha }}",
       path: ".release-tooling",
-      "sparse-checkout": "scripts/lib/plugin-npm-package-manifest.mjs",
     });
     expect(
       step(parsed.jobs?.preview_plugin_pack, "Overlay trusted packaging helper").run,

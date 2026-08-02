@@ -13,7 +13,6 @@ import {
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import {
   captureActivePluginRegistrySnapshot,
-  collectLivePluginRegistries,
   getActivePluginRegistry,
   getPluginRegistrationContext,
   listImportedRuntimePluginIds,
@@ -152,7 +151,6 @@ describe("loadBundledCapabilityRuntimeRegistry", () => {
     const active = createEmptyPluginRegistry();
     setActivePluginRegistry(active, "existing-registry");
     const activeSnapshotBefore = captureActivePluginRegistrySnapshot();
-    const liveRegistriesBefore = collectLivePluginRegistries();
     const registrationContextBefore = getPluginRegistrationContext();
 
     const registry = loadBundledCapabilityRuntimeRegistry({
@@ -165,7 +163,6 @@ describe("loadBundledCapabilityRuntimeRegistry", () => {
     expect(registry.providers.map((entry) => entry.provider.id)).toEqual([target.id]);
     expect(getActivePluginRegistry()).toBe(active);
     expect(captureActivePluginRegistrySnapshot()).toEqual(activeSnapshotBefore);
-    expect(collectLivePluginRegistries()).toEqual(liveRegistriesBefore);
     expect(getPluginRegistrationContext()).toBe(registrationContextBefore);
     expect(listImportedRuntimePluginIds()).toContain(target.id);
   });

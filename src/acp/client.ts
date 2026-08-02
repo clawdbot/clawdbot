@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import * as readline from "node:readline";
 import { Readable, Writable } from "node:stream";
+import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import {
   ClientSideConnection,
@@ -14,6 +15,7 @@ import {
 } from "@agentclientprotocol/sdk";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
+import { killProcessTree, signalProcessTree } from "../process/kill-tree.js";
 import {
   buildAcpClientStripKeys,
   resolveAcpClientSpawnEnv,
@@ -35,6 +37,50 @@ type AcpClientHandle = {
   agent: ChildProcess;
   sessionId: string;
 };
+
+const ACP_SERVER_KILL_GRACE_MS = 1000;
+const ACP_SERVER_FORCE_KILL_TIMEOUT_MS = 1000;
+const ACP_SERVER_EXIT_POLL_MS = 25;
+
+function hasChildExited(child: ChildProcess): boolean {
+  return child.exitCode !== null || child.signalCode !== null;
+}
+
+async function waitForChildExit(child: ChildProcess, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (!hasChildExited(child) && Date.now() < deadline) {
+    await delay(ACP_SERVER_EXIT_POLL_MS);
+  }
+  return hasChildExited(child);
+}
+
+async function terminateAcpServer(child: ChildProcess): Promise<void> {
+  if (hasChildExited(child)) {
+    return;
+  }
+
+  if (child.pid) {
+    // This child is not detached, so Unix cleanup must stay on its direct PID.
+    // Windows still reaps descendants; both paths escalate if SIGTERM is ignored.
+    killProcessTree(child.pid, {
+      detached: false,
+      graceMs: ACP_SERVER_KILL_GRACE_MS,
+    });
+  } else {
+    child.kill("SIGTERM");
+  }
+
+  if (await waitForChildExit(child, ACP_SERVER_KILL_GRACE_MS + ACP_SERVER_FORCE_KILL_TIMEOUT_MS)) {
+    return;
+  }
+
+  if (child.pid) {
+    signalProcessTree(child.pid, "SIGKILL", { detached: false });
+  } else {
+    child.kill("SIGKILL");
+  }
+  await waitForChildExit(child, ACP_SERVER_FORCE_KILL_TIMEOUT_MS);
+}
 
 function toArgs(value: string[] | string | undefined): string[] {
   if (!value) {
@@ -143,51 +189,56 @@ async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpClientHa
     windowsHide: spawnInvocation.windowsHide,
   });
 
-  if (!agent.stdin || !agent.stdout) {
-    throw new Error("Failed to create ACP stdio pipes");
-  }
-
   agent.on("error", (err) => {
     log(`agent error: ${String(err)}`);
   });
 
-  const input = Writable.toWeb(agent.stdin);
-  const output = Readable.toWeb(agent.stdout) as unknown as ReadableStream<Uint8Array>;
-  const stream = ndJsonStream(input, output);
+  try {
+    if (!agent.stdin || !agent.stdout) {
+      throw new Error("Failed to create ACP stdio pipes");
+    }
 
-  const client = new ClientSideConnection(
-    () => ({
-      sessionUpdate: async (params: SessionNotification) => {
-        printSessionUpdate(params);
+    const input = Writable.toWeb(agent.stdin);
+    const output = Readable.toWeb(agent.stdout) as unknown as ReadableStream<Uint8Array>;
+    const stream = ndJsonStream(input, output);
+
+    const client = new ClientSideConnection(
+      () => ({
+        sessionUpdate: async (params: SessionNotification) => {
+          printSessionUpdate(params);
+        },
+        requestPermission: async (params: RequestPermissionRequest) => {
+          return resolvePermissionRequest(params, { cwd });
+        },
+      }),
+      stream,
+    );
+
+    log("initializing");
+    await client.initialize({
+      protocolVersion: PROTOCOL_VERSION,
+      clientCapabilities: {
+        fs: { readTextFile: true, writeTextFile: true },
+        terminal: true,
       },
-      requestPermission: async (params: RequestPermissionRequest) => {
-        return resolvePermissionRequest(params, { cwd });
-      },
-    }),
-    stream,
-  );
+      clientInfo: { name: "openclaw-acp-client", version: "1.0.0" },
+    });
 
-  log("initializing");
-  await client.initialize({
-    protocolVersion: PROTOCOL_VERSION,
-    clientCapabilities: {
-      fs: { readTextFile: true, writeTextFile: true },
-      terminal: true,
-    },
-    clientInfo: { name: "openclaw-acp-client", version: "1.0.0" },
-  });
+    log("creating session");
+    const session = await client.newSession({
+      cwd,
+      mcpServers: [],
+    });
 
-  log("creating session");
-  const session = await client.newSession({
-    cwd,
-    mcpServers: [],
-  });
-
-  return {
-    client,
-    agent,
-    sessionId: session.sessionId,
-  };
+    return {
+      client,
+      agent,
+      sessionId: session.sessionId,
+    };
+  } catch (error) {
+    await terminateAcpServer(agent);
+    throw error;
+  }
 }
 
 /** Starts the terminal prompt loop for a local ACP client session. */
@@ -212,7 +263,7 @@ export async function runAcpClientInteractive(opts: AcpClientOptions = {}): Prom
           return;
         }
         if (text === "exit" || text === "quit") {
-          agent.kill();
+          await terminateAcpServer(agent);
           rl.close();
           process.exit(0);
         }

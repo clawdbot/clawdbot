@@ -1,6 +1,7 @@
 // Implements the embedded backend used by local TUI sessions.
 import { randomUUID } from "node:crypto";
 import type { SessionsPatchResult } from "../../packages/gateway-protocol/src/index.js";
+import { CHAT_HISTORY_MAX_ENTRIES } from "../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { agentCommandFromIngress } from "../agents/agent-command.js";
 import { isAgentLifecycleYieldedWaiting } from "../agents/agent-lifecycle-parent-state.js";
 import {
@@ -621,7 +622,10 @@ export class EmbeddedTuiBackend implements TuiBackend {
     this.runtimePluginRegistry =
       runtimePluginsPrewarm.status === "warmed" ? runtimePluginsPrewarm.registry : undefined;
     const resolvedSessionModel = resolveSessionModelRef(cfg, entry, sessionAgentId);
-    const max = Math.min(1000, typeof opts.limit === "number" ? opts.limit : 200);
+    const max = Math.min(
+      CHAT_HISTORY_MAX_ENTRIES,
+      typeof opts.limit === "number" ? opts.limit : 200,
+    );
     const maxHistoryBytes = getMaxChatHistoryMessagesBytes();
     const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars(cfg);
     const historyPage = await readChatHistoryPage({

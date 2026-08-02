@@ -14,9 +14,10 @@ import {
   validateSessionsCatalogReadParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { getPluginRegistryRuntime } from "../../plugins/registry-runtime-binding.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
-import { getActivePluginSessionExtensionRegistry } from "../../plugins/runtime.js";
-import { gatewaySubagentState } from "../../plugins/runtime/gateway-bindings.js";
+import { getActivePluginRegistry } from "../../plugins/runtime.js";
+import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import type {
   SessionCatalogCreateTarget,
   SessionCatalogListProviderParams,
@@ -49,12 +50,14 @@ const sessionCatalogListAdmission = new SessionCatalogListAdmission(
 function createSessionCatalogRequestNodeSnapshot(): NonNullable<
   SessionCatalogListProviderParams["listNodes"]
 > {
+  const registry = resolveSessionCatalogRegistry();
+  const nodes = registry ? getPluginRegistryRuntime(registry)?.nodes : undefined;
   let request: ReturnType<NonNullable<SessionCatalogListProviderParams["listNodes"]>> | undefined;
   return () => {
     // Every provider sees the same promise so one catalog request cannot multiply the
     // pairing-store scans performed by the Gateway node.list runtime.
     request ??=
-      gatewaySubagentState.nodes?.list() ??
+      nodes?.list() ??
       Promise.reject(new Error("Plugin node runtime is only available inside the Gateway."));
     return request;
   };
@@ -87,8 +90,12 @@ type CatalogRegistrationSnapshot = {
 
 let cachedCatalogRegistrations: CatalogRegistrationSnapshot | undefined;
 
+function resolveSessionCatalogRegistry(): PluginRegistry | null {
+  return getPluginRuntimeGatewayRequestScope()?.pluginRegistry ?? getActivePluginRegistry();
+}
+
 function catalogRegistrationSnapshot(): CatalogRegistrationSnapshot {
-  const registry = getActivePluginSessionExtensionRegistry();
+  const registry = resolveSessionCatalogRegistry();
   const source = registry?.sessionCatalogs;
   if (
     cachedCatalogRegistrations?.registry === registry &&

@@ -71,6 +71,34 @@ describe("telegram bot message processor", () => {
     telegramCfg: {},
   } satisfies import("./bot-message.js").TelegramMessageProcessorTurnContext;
 
+  it("passes the effective per-DM history limit into message context", async () => {
+    buildTelegramMessageContext.mockResolvedValue(null);
+    const processMessage = createTelegramMessageProcessor(baseDeps);
+
+    await processSampleMessage(
+      processMessage,
+      {
+        telegramCfg: {
+          dmHistoryLimit: 5,
+          dms: {
+            "42": { historyLimit: 0 },
+          },
+        },
+      },
+      {
+        message: {
+          chat: { id: 123, type: "private", title: "chat" },
+          message_id: 456,
+          from: { id: 42, first_name: "Pat" },
+        },
+      },
+    );
+
+    expect(buildTelegramMessageContext).toHaveBeenCalledWith(
+      expect.objectContaining({ dmHistoryLimit: 0 }),
+    );
+  });
+
   const baseDeps = {
     bot: {},
     account: {},

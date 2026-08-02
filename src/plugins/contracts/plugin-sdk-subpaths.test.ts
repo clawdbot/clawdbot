@@ -1184,6 +1184,7 @@ describe("plugin-sdk subpath exports", () => {
     expectSourceContract("provider-setup", {
       mentions: [
         "applyProviderDefaultModel",
+        "defineSelfHostedOpenAICompatibleProvider",
         "discoverOpenAICompatibleLocalModels",
         "discoverOpenAICompatibleSelfHostedProvider",
       ],

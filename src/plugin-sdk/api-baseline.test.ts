@@ -113,6 +113,12 @@ describe("Plugin SDK API baseline", () => {
     expect(findDeclaration("LiveModelCatalogHttpError")).toContain(
       "constructor(providerId: string, status: number);",
     );
+    expect(findDeclaration("AgentHarnessPreflightError")).toContain('readonly scope?: "harness";');
+    expect(findDeclaration("AgentHarnessPreflightError")).toContain(
+      "constructor(message: string, options?: ErrorOptions & {",
+    );
+    expect(findDeclaration("AgentHarnessPreflightError")).toContain('scope?: "harness";');
+    expect(findDeclaration("AgentHarnessPreflightError")).not.toContain("harnessId");
     expect(findDeclaration("LiveModelCatalogHttpError")).not.toContain("super(");
     expect(findDeclaration("LiveModelRowProjection")).toContain(
       "export type LiveModelRowProjection",

@@ -52,11 +52,24 @@ describe("doctor legacy migration source contract", () => {
     expect(legacyMigrationSourceOrClaimMayExist(sourcePath)).toBe(false);
   });
 
-  it("rejects source paths outside the trusted migration root", () => {
+  it("rejects source paths outside the trusted migration root without exposing redacted paths", async () => {
     const { stateDir } = createSource();
-    expect(() =>
-      resolveLegacyMigrationRelativePath(stateDir, path.join(stateDir, "..", "escape"), "test"),
-    ).toThrow("outside the state directory");
+    const outsidePath = path.join(stateDir, "..", "private-marker");
+    expect(() => resolveLegacyMigrationRelativePath(stateDir, outsidePath, "test")).toThrow(
+      "outside the state directory",
+    );
+    const stateRoot = await root(stateDir, { hardlinks: "reject", symlinks: "reject" });
+    expect(
+      () =>
+        new LegacyMigrationSourceClaim({
+          stateRoot,
+          stateDir,
+          sourcePath: outsidePath,
+          label: "test",
+          includeFilePath: false,
+          readSnapshot: () => Promise.reject(new Error("unreachable")),
+        }),
+    ).toThrowError(/^legacy test path is outside the state directory$/u);
   });
 
   it("shares the same pinned source identity across root-bound and sync readers", async () => {

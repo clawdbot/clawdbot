@@ -330,6 +330,8 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Additional HTTP/gRPC metadata headers sent with OpenTelemetry export requests, often used for tenant auth or routing. Keep secrets in env-backed values and avoid unnecessary header sprawl.",
   "diagnostics.otel.serviceName":
     "Service name reported in telemetry resource attributes to identify this gateway instance in observability backends. Use stable names so dashboards and alerts remain consistent over deployments.",
+  "diagnostics.otel.metricNamePrefix":
+    'Replaces the default "openclaw." prefix on OpenClaw-owned metric names. Use an empty string to remove the prefix, or up to 128 ASCII letters, digits, underscores, dots, hyphens, and slashes starting with a letter. Include any separator you need, for example "acme."; standard gen_ai.* metric names are unchanged. Changing this value requires updating dashboards and alerts that query the old names.',
   "diagnostics.otel.traces":
     "Enable trace signal export to the configured OpenTelemetry collector endpoint. Keep enabled when latency/debug tracing is needed, and disable if you only want metrics/logs.",
   "diagnostics.otel.metrics":

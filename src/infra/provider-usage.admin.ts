@@ -63,6 +63,11 @@ export function parseProviderUsageNumber(value: unknown): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
+export function parseProviderUsageNonNegativeNumber(value: unknown): number | undefined {
+  const parsed = parseProviderUsageNumber(value);
+  return parsed !== undefined && parsed >= 0 ? parsed : undefined;
+}
+
 export function parseProviderUsageNonNegativeInteger(value: unknown): number {
   const parsed = parseProviderUsageNumber(value);
   return parsed === undefined ? 0 : Math.max(0, Math.trunc(parsed));

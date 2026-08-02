@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { formatErrorMessage } from "../infra/errors.js";
 import {
   clearNodeSqliteKyselyCacheForDatabase,
   executeSqliteQuerySync,
@@ -88,10 +89,6 @@ function readRegisteredAgentDatabases(database: DatabaseSync): Array<{
   );
 }
 
-function errorReason(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 /** Read schema headers; report unreadable existing files without diagnosing or repairing them. */
 export function preflightOpenClawDatabaseSchemas(options: {
   env: NodeJS.ProcessEnv;
@@ -128,7 +125,7 @@ export function preflightOpenClawDatabaseSchemas(options: {
       result.indeterminate.push({
         kind: "state",
         path: statePath,
-        reason: `agent database registry query failed: ${errorReason(error)}`,
+        reason: `agent database registry query failed: ${formatErrorMessage(error)}`,
       });
       return result;
     }
@@ -161,7 +158,7 @@ export function preflightOpenClawDatabaseSchemas(options: {
         result.indeterminate.push({
           kind: "agent",
           path: agentPath,
-          reason: errorReason(error),
+          reason: formatErrorMessage(error),
         });
       } finally {
         agentDatabase?.close();
@@ -169,7 +166,11 @@ export function preflightOpenClawDatabaseSchemas(options: {
     }
     return result;
   } catch (error) {
-    result.indeterminate.push({ kind: "state", path: statePath, reason: errorReason(error) });
+    result.indeterminate.push({
+      kind: "state",
+      path: statePath,
+      reason: formatErrorMessage(error),
+    });
     return result;
   } finally {
     if (stateDatabase) {

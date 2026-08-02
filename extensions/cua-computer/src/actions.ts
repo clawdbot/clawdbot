@@ -119,12 +119,10 @@ function normalizeKey(value: string): string {
   if (named) {
     return named;
   }
-  // cua-driver 0.10 resolves single characters through VkKeyScanW/keysym lookups
-  // and keeps only the base virtual key, dropping the shift/AltGr state the
-  // active layout needs (keyboard.rs key_name_to_vk). ASCII letters are unshifted
-  // in every Latin layout, so they stay valid chord keys (e.g. ctrl+c). Digits
-  // and punctuation are shifted on some layouts (AZERTY digits, US symbols), so
-  // they are rejected toward the `type` action rather than mis-sent.
+  // CUA Driver's key contract carries a base key, not the layout-specific
+  // shift/AltGr state required for arbitrary characters. ASCII letters remain
+  // valid chord keys (for example ctrl+c); send digits and punctuation through
+  // `type` rather than risk a layout-dependent misfire.
   if (/^[a-z]$/i.test(raw)) {
     return lowered;
   }

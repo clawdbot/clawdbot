@@ -6,8 +6,16 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  onInternalDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  type DiagnosticEventMetadata,
+  type DiagnosticExecProcessCompletedEvent,
+  type DiagnosticEventPayload,
+} from "../infra/diagnostic-events.js";
 import type { GatewayActiveWorkInspectors } from "../infra/gateway-active-work.js";
-import type { RunExit } from "../process/supervisor/types.js";
+import type { ManagedRun } from "../process/supervisor/index.js";
+import type { RunExit, SpawnInput } from "../process/supervisor/types.js";
 import { MAX_SAFE_TIMEOUT_DELAY_MS } from "../utils/timer-delay.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 
@@ -33,6 +41,7 @@ vi.mock("../process/supervisor/index.js", () => ({
 
 let markBackgrounded: typeof import("./bash-process-registry.js").markBackgrounded;
 let getActiveBackgroundExecSessionCount: typeof import("./bash-process-registry.js").getActiveBackgroundExecSessionCount;
+let listRunningSessions: typeof import("./bash-process-registry.js").listRunningSessions;
 let resetProcessRegistryForTests: typeof import("./bash-process-registry.test-support.js").resetProcessRegistryForTests;
 let resolveExecTarget: typeof import("./bash-tools.exec-runtime.js").resolveExecTarget;
 let runExecProcess: typeof import("./bash-tools.exec-runtime.js").runExecProcess;
@@ -41,7 +50,7 @@ let resetGatewaySuspendCoordinatorForLifecycleRestart: typeof import("../infra/g
 let resumeGatewaySuspend: typeof import("../infra/gateway-suspend-coordinator.js").resumeGatewaySuspend;
 
 beforeAll(async () => {
-  ({ getActiveBackgroundExecSessionCount, markBackgrounded } =
+  ({ getActiveBackgroundExecSessionCount, listRunningSessions, markBackgrounded } =
     await import("./bash-process-registry.js"));
   ({ resetProcessRegistryForTests } = await import("./bash-process-registry.test-support.js"));
   ({ resolveExecTarget, runExecProcess } = await import("./bash-tools.exec-runtime.js"));
@@ -106,6 +115,47 @@ async function runExecWithExit(params: {
     timeoutSec: params.timeoutSec ?? null,
   });
   return { run, outcome: await run.promise };
+}
+
+function successfulSupervisorRun() {
+  return {
+    runId: "mock-run",
+    startedAtMs: Date.now(),
+    wait: async () => ({
+      reason: "exit" as const,
+      exitCode: 0,
+      exitSignal: null,
+      durationMs: 0,
+      stdout: "",
+      stderr: "",
+      timedOut: false,
+      noOutputTimedOut: false,
+    }),
+    cancel: vi.fn(),
+  };
+}
+
+function runtimeManagedRun(input: SpawnInput, stdout = ""): ManagedRun {
+  if (stdout) {
+    input.onStdout?.(stdout);
+  }
+  return {
+    runId: input.runId ?? "test-run",
+    pid: 1234,
+    startedAtMs: Date.now(),
+    stdin: { write: vi.fn(), end: vi.fn(), destroy: vi.fn() },
+    cancel: vi.fn(),
+    wait: vi.fn(async () => ({
+      reason: "exit" as const,
+      exitCode: 0,
+      exitSignal: null,
+      durationMs: 1,
+      stdout: "",
+      stderr: "",
+      timedOut: false,
+      noOutputTimedOut: false,
+    })),
+  };
 }
 
 function prepareSuspension(requestId: string) {
@@ -768,21 +818,7 @@ describe("runExecProcess exit outcomes", () => {
 
 describe("runExecProcess POSIX command wrapper", () => {
   it("normalizes non-finite and oversized exec timeouts before spawning", async () => {
-    supervisorMock.spawn.mockResolvedValue({
-      runId: "mock-run",
-      startedAtMs: Date.now(),
-      wait: async () => ({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 0,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      }),
-      cancel: vi.fn(),
-    });
+    supervisorMock.spawn.mockResolvedValue(successfulSupervisorRun());
 
     const baseParams = {
       command: "echo test",
@@ -814,21 +850,7 @@ describe("runExecProcess POSIX command wrapper", () => {
       return;
     }
 
-    supervisorMock.spawn.mockResolvedValueOnce({
-      runId: "mock-run",
-      startedAtMs: Date.now(),
-      wait: async () => ({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 0,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      }),
-      cancel: vi.fn(),
-    });
+    supervisorMock.spawn.mockResolvedValueOnce(successfulSupervisorRun());
 
     const ignoredRun = await runExecProcess({
       command: "echo test",
@@ -861,21 +883,7 @@ describe("runExecProcess POSIX command wrapper", () => {
       return;
     }
 
-    supervisorMock.spawn.mockResolvedValueOnce({
-      runId: "mock-run",
-      startedAtMs: Date.now(),
-      wait: async () => ({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 0,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      }),
-      cancel: vi.fn(),
-    });
+    supervisorMock.spawn.mockResolvedValueOnce(successfulSupervisorRun());
 
     const ignoredRun = await runExecProcess({
       command: "echo test",
@@ -900,5 +908,186 @@ describe("runExecProcess POSIX command wrapper", () => {
     const commandStr = spawnCall.argv.join(" ");
     expect(commandStr).not.toContain("export PATH=");
     expect(commandStr).toContain("echo test");
+  });
+});
+
+describe("runExecProcess stream sanitization", () => {
+  function runStyledExec() {
+    return runExecProcess({
+      command: "printf styled",
+      workdir: process.cwd(),
+      env: {},
+      usePty: false,
+      warnings: [],
+      maxOutput: 20_000,
+      pendingMaxOutput: 20_000,
+      notifyOnExit: false,
+      timeoutSec: 5,
+    });
+  }
+
+  it("sanitizes ANSI and OSC sequences split across stdout chunks", async () => {
+    supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) => {
+      for (const chunk of [
+        "A\u001B]0;title",
+        "\u0007B",
+        "C\u001B[31",
+        "mD",
+        "E\u009D0;title",
+        "\u001B\\F",
+        "G\u009B31",
+        "mH",
+      ]) {
+        input.onStdout?.(chunk);
+      }
+      return runtimeManagedRun(input);
+    });
+
+    const outcome = await (await runStyledExec()).promise;
+
+    expect(outcome.aggregated).toContain("ABCDEFGH");
+    expect(outcome.aggregated).not.toContain("\\x1b");
+  });
+
+  it("sanitizes escape sequences split across stderr chunks", async () => {
+    supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) => {
+      input.onStderr?.("warn: \u001B[");
+      input.onStderr?.("31mred");
+      return runtimeManagedRun(input);
+    });
+
+    const outcome = await (await runStyledExec()).promise;
+
+    expect(outcome.aggregated).toContain("warn: red");
+    expect(outcome.aggregated).not.toContain("\\x1b");
+  });
+
+  it("keeps stdout and stderr parser state independent", async () => {
+    supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) => {
+      // Both streams leave a sequence dangling; neither may consume the other's tail.
+      input.onStdout?.("out\u001B[");
+      input.onStderr?.("err\u001B[");
+      input.onStdout?.("32mOUT");
+      input.onStderr?.("31mERR");
+      return runtimeManagedRun(input);
+    });
+
+    const outcome = await (await runStyledExec()).promise;
+
+    // Interleaved across both streams, but each stream consumed its own sequence:
+    // no escape leaks, and neither colour parameter survives as visible text.
+    expect(outcome.aggregated).toBe("outerrOUTERR");
+  });
+});
+
+describe("runExecProcess PTY fallback", () => {
+  afterEach(() => {
+    resetDiagnosticEventsForTest();
+  });
+
+  function runPtyFallback(warnings: string[] = []) {
+    return runExecProcess({
+      command: "printf ok",
+      workdir: process.cwd(),
+      env: {},
+      usePty: true,
+      warnings,
+      maxOutput: 20_000,
+      pendingMaxOutput: 20_000,
+      notifyOnExit: false,
+      timeoutSec: 5,
+    });
+  }
+
+  function spawnInput(index: number): SpawnInput {
+    const call = supervisorMock.spawn.mock.calls[index] as [SpawnInput] | undefined;
+    if (!call) {
+      throw new Error(`expected supervisor spawn call ${index}`);
+    }
+    return call[0];
+  }
+
+  it("falls back when PTY spawn fails", async () => {
+    supervisorMock.spawn
+      .mockRejectedValueOnce(new Error("pty spawn failed"))
+      .mockImplementationOnce(async (input: SpawnInput) => runtimeManagedRun(input, "ok"));
+
+    const warnings: string[] = [];
+    const handle = await runPtyFallback(warnings);
+    const outcome = await handle.promise;
+
+    expect(outcome.status).toBe("completed");
+    expect(outcome.aggregated).toContain("ok");
+    expect(warnings.join("\n")).toContain("PTY spawn failed");
+    expect(spawnInput(0).mode).toBe("pty");
+    expect(spawnInput(1).mode).toBe("child");
+  });
+
+  it("cleans session state when PTY fallback spawn also fails", async () => {
+    supervisorMock.spawn
+      .mockRejectedValueOnce(new Error("pty spawn failed"))
+      .mockRejectedValueOnce(new Error("child fallback failed"));
+
+    await expect(runPtyFallback()).rejects.toThrow("child fallback failed");
+
+    expect(listRunningSessions()).toHaveLength(0);
+  });
+
+  it("emits bounded process diagnostics without command text", async () => {
+    supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) =>
+      runtimeManagedRun(input, "ok"),
+    );
+    const events: DiagnosticEventPayload[] = [];
+    const metadataByEvent = new Map<DiagnosticEventPayload, DiagnosticEventMetadata>();
+    const unsubscribe = onInternalDiagnosticEvent((event, metadata) => {
+      events.push(event);
+      metadataByEvent.set(event, metadata);
+    });
+    try {
+      const command = "printf super-secret-value";
+      const handle = await runExecProcess({
+        command,
+        workdir: process.cwd(),
+        env: {},
+        usePty: false,
+        warnings: [],
+        maxOutput: 20_000,
+        pendingMaxOutput: 20_000,
+        notifyOnExit: false,
+        sessionKey: "session-1",
+        timeoutSec: 5,
+      });
+
+      await handle.promise;
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+
+      const event = events.find(
+        (item): item is DiagnosticExecProcessCompletedEvent =>
+          item.type === "exec.process.completed",
+      );
+      if (!event) {
+        throw new Error("Expected exec process completed event");
+      }
+      expect(event.type).toBe("exec.process.completed");
+      // The payload stays untrusted, but exporters need the ambient trace context marked
+      // OpenClaw-owned or the exec span cannot be nested under the run that spawned it.
+      expect(metadataByEvent.get(event)?.trusted).toBe(false);
+      expect(metadataByEvent.get(event)?.trustedTraceContext).toBe(true);
+      expect(event.target).toBe("host");
+      expect(event.mode).toBe("child");
+      expect(event.outcome).toBe("completed");
+      expect(typeof event.durationMs).toBe("number");
+      expect(event.commandLength).toBe(command.length);
+      expect(event.exitCode).toBe(0);
+      expect(event.sessionKey).toBe("session-1");
+      const serialized = JSON.stringify(event);
+      expect(serialized).not.toContain("printf");
+      expect(serialized).not.toContain("super-secret-value");
+      expect(serialized).not.toContain(process.cwd());
+    } finally {
+      unsubscribe();
+    }
   });
 });

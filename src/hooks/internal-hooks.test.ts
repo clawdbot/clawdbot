@@ -1,11 +1,7 @@
 // Internal hook tests cover dispatch for command, session, agent, and gateway hooks.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import {
-  pinActivePluginChannelRegistry,
-  resetPluginRuntimeStateForTest,
-  setActivePluginRegistry,
-} from "../plugins/runtime.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   clearInternalHooks,
@@ -517,29 +513,19 @@ describe("hooks", () => {
       expect(keys).toStrictEqual([]);
     });
 
-    it("removes legacy hooks from active and pinned plugin registries", () => {
-      const pinned = createEmptyPluginRegistry();
+    it("removes legacy hooks from the active plugin registry", () => {
       const active = createEmptyPluginRegistry();
-      pinned.legacyInternalHooks.push({
-        pluginId: "pinned-plugin",
-        name: "pinned-plugin",
-        event: "command:new",
-        handler: vi.fn(),
-      });
       active.legacyInternalHooks.push({
         pluginId: "active-plugin",
         name: "active-plugin",
         event: "command:stop",
         handler: vi.fn(),
       });
-      setActivePluginRegistry(pinned);
-      pinActivePluginChannelRegistry(pinned);
       setActivePluginRegistry(active);
 
       clearInternalHooks();
 
       expect(active.legacyInternalHooks).toStrictEqual([]);
-      expect(pinned.legacyInternalHooks).toStrictEqual([]);
       expect(getRegisteredEventKeys()).toStrictEqual([]);
     });
   });

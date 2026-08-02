@@ -202,6 +202,41 @@ export function emitDiagnosticsTimelineEvent(
   }
 }
 
+/** Replays a completed span after its activation config becomes available. */
+export function emitCompletedDiagnosticsTimelineSpan(
+  name: string,
+  durationMs: number,
+  options: DiagnosticsTimelineSpanOptions = {},
+): void {
+  if (!isDiagnosticsTimelineEnabled(options)) {
+    return;
+  }
+  const spanId = randomUUID();
+  emitDiagnosticsTimelineEvent(
+    {
+      type: "span.start",
+      name,
+      phase: options.phase,
+      spanId,
+      parentSpanId: options.parentSpanId,
+      attributes: options.attributes,
+    },
+    options,
+  );
+  emitDiagnosticsTimelineEvent(
+    {
+      type: "span.end",
+      name,
+      phase: options.phase,
+      spanId,
+      parentSpanId: options.parentSpanId,
+      durationMs,
+      attributes: options.attributes,
+    },
+    options,
+  );
+}
+
 /** Returns the currently active span so callers can preserve parentage across memoized work. */
 export function getActiveDiagnosticsTimelineSpan(): ActiveDiagnosticsTimelineSpan | undefined {
   return activeDiagnosticsTimelineSpan.getStore();

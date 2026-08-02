@@ -192,12 +192,6 @@ function resolveDiagnosticLivenessRecordLevel(
   return hasBlockingWork || (event.active > 0 && hasSustainedEventLoopDelay) ? "warning" : "info";
 }
 
-function isRecord(
-  record: DiagnosticStabilityEventRecord | undefined,
-): record is DiagnosticStabilityEventRecord {
-  return record !== undefined;
-}
-
 function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabilityEventRecord {
   const record: DiagnosticStabilityEventRecord = {
     seq: event.seq,
@@ -585,12 +579,14 @@ function listRecords(): DiagnosticStabilityEventRecord[] {
     return [];
   }
   if (state.count < state.capacity) {
-    return state.records.slice(0, state.count).filter(isRecord);
+    return state.records
+      .slice(0, state.count)
+      .filter((record): record is DiagnosticStabilityEventRecord => record !== undefined);
   }
   return [
     ...state.records.slice(state.nextIndex),
     ...state.records.slice(0, state.nextIndex),
-  ].filter(isRecord);
+  ].filter((record): record is DiagnosticStabilityEventRecord => record !== undefined);
 }
 
 function summarizeRecords(

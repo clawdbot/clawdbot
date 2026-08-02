@@ -1059,6 +1059,75 @@ struct OnboardingAISetupTests {
             defaults: defaults) == .none)
     }
 
+    @Test func `choose a different AI relists routes without auto-activating`() async throws {
+        let suiteName = "OnboardingChooseDifferentAITests-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let recorder = AISetupRequestRecorder()
+        let session = GatewayTestWebSocketSession(taskFactory: {
+            GatewayTestWebSocketTask(sendHook: { task, message, sendIndex in
+                guard sendIndex > 0, let request = aiSetupRequest(from: message) else { return }
+                if respondToAISetupHealth(task: task, request: request) {
+                    return
+                }
+                await recorder.record(message)
+                switch request.method {
+                case "openclaw.setup.detect":
+                    // credentials:true would auto-activate; the choose-different
+                    // pass must end at the picker even for actionable candidates.
+                    task.emitReceiveSuccess(.data(actionableDetectedSetupResponse(id: request.id)))
+                case "openclaw.setup.activate":
+                    task.emitReceiveSuccess(.data(verifiedSetupResponse(id: request.id)))
+                default:
+                    break
+                }
+            })
+        })
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let gateway = GatewayConnection(
+            configProvider: { (url: url, token: nil, password: nil) },
+            sessionBox: WebSocketSessionBox(session: session))
+        let model = OnboardingAISetupModel(
+            gateway: gateway,
+            defaults: defaults,
+            routeIdentityProvider: { "local" })
+
+        await model.detectAndAutoConnect()
+        #expect(model.connected)
+
+        #expect(model.beginChooseDifferentAI())
+        await model.detectAndAutoConnect()
+
+        #expect(!model.connected)
+        #expect(!model.isBusy)
+        #expect(model.candidates.count == 1)
+        #expect(model.statuses["claude-cli"] == .untried)
+        #expect(model.showManualEntry)
+        // Exactly one activation: the initial auto-connect. The re-detect pass
+        // must not redo the choice the user just asked to change.
+        let snapshot = await recorder.snapshot()
+        #expect(snapshot.methods.filter { $0 == "openclaw.setup.activate" }.count == 1)
+        #expect(snapshot.methods.last == "openclaw.setup.detect")
+    }
+
+    @Test func `choose a different AI requires a connected setup`() throws {
+        let suiteName = "OnboardingChooseDifferentAIGuardTests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName) ?? .standard
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let gateway = GatewayConnection(
+            configProvider: { (url: url, token: nil, password: nil) },
+            sessionBox: WebSocketSessionBox(session: GatewayTestWebSocketSession(taskFactory: {
+                GatewayTestWebSocketTask(sendHook: { _, _, _ in })
+            })))
+        let model = OnboardingAISetupModel(
+            gateway: gateway,
+            defaults: defaults,
+            routeIdentityProvider: { "local" })
+
+        #expect(!model.beginChooseDifferentAI())
+    }
+
     @Test func `adopts pending activation stored under the retired crestodian key`() throws {
         let suiteName = "OnboardingRetiredKeyMigrationTests-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
@@ -1381,8 +1450,16 @@ struct OnboardingAISetupTests {
             setupOwnsInferenceTransition: false))
     }
 
-    @Test func `configured model label stays pending until live verification`() async {
-        let model = OnboardingAISetupModel()
+    @Test func `configured model label stays pending until live verification`() async throws {
+        // Isolated defaults + fixed route: the default init reads the machine's
+        // real resume store, whose leftover activation leases fail this test on
+        // any Mac that completed onboarding.
+        let suiteName = "OnboardingConfiguredLabelTests-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let model = OnboardingAISetupModel(
+            defaults: defaults,
+            routeIdentityProvider: { "local" })
 
         model.resumeConfiguredInference(modelRef: " openai/gpt-5.5 ")
 
@@ -2101,6 +2178,100 @@ struct OnboardingAISetupTests {
         #expect(view.aiSetup.configuredGatewayProbeUnavailable)
         #expect(view.aiSetup.detectError != nil)
         #expect(!OnboardingSystemAgentResumeStore.isPending(for: "local", defaults: defaults))
+    }
+
+    @Test func `remote configured gateway auth routes back without AI detection`() async throws {
+        let session = GatewayTestWebSocketSession(taskFactory: {
+            GatewayTestWebSocketTask(receiveHook: { task, receiveIndex in
+                if receiveIndex == 0 {
+                    return .data(GatewayWebSocketTestSupport.connectChallengeData())
+                }
+                return .data(GatewayWebSocketTestSupport.connectAuthFailureData(
+                    id: task.snapshotConnectRequestID() ?? "connect",
+                    detailCode: GatewayConnectAuthDetailCode.authTokenMissing.rawValue))
+            })
+        })
+        let url = try #require(URL(string: "wss://gateway.example.test"))
+        let gateway = GatewayConnection(
+            configProvider: { (url: url, token: nil, password: nil) },
+            sessionBox: WebSocketSessionBox(session: session))
+        let appState = AppState(preview: true)
+        appState.connectionMode = .remote
+        appState.remoteTransport = .direct
+        appState.remoteUrl = url.absoluteString
+        let view = OnboardingView(
+            state: appState,
+            aiSetupGateway: gateway,
+            aiSetupRouteIdentityProvider: { "remote:direct:gateway" },
+            gatewaySelectionPersister: { true })
+        view.onboardingVisible = true
+        view.currentPage = try #require(view.pageOrder.firstIndex(of: view.aiPageIndex))
+
+        let probe = try #require(view.probeConfiguredGatewayForDashboard(
+            startAISetupWhenMissing: true,
+            knownVisible: true))
+        await probe.value
+        await settleQueuedAISetupTasks()
+
+        #expect(view.aiSetup.configuredGatewayAuthIssue == .tokenRequired)
+        #expect(!view.aiSetup.configuredGatewayProbeUnavailable)
+        #expect(view.aiSetup.detectError == nil)
+        #expect(view.aiSetup.candidates.isEmpty)
+        #expect(session.latestTask()?.snapshotSendCount() == 1)
+        let card = OnboardingAISetupView.gatewayAuthCard(for: .tokenRequired)
+        #expect(card.title == "Gateway authentication required")
+        #expect(card.primaryTitle == "Back to Gateway")
+        #expect(card.secondaryTitle == "Try again")
+        #expect(!card.title.localizedCaseInsensitiveContains("AI account"))
+
+        let decision = try #require(OnboardingView.gatewayAuthenticationReturnDecision(
+            connectionMode: appState.connectionMode,
+            authIssue: view.aiSetup.configuredGatewayAuthIssue,
+            pageOrder: view.pageOrder,
+            connectionPageIndex: view.connectionPageIndex,
+            probeInput: view.remoteGatewayProbeInput))
+        #expect(decision.connectionPage == view.pageOrder.firstIndex(of: view.connectionPageIndex))
+        #expect(decision.authIssue == .tokenRequired)
+        #expect(decision.probeState == .failed(
+            view.remoteGatewayProbeInput,
+            RemoteGatewayAuthIssue.tokenRequired.statusMessage))
+        #expect(decision.showRemoteChoices)
+        #expect(decision.showAdvancedConnection)
+        #expect(OnboardingView.shouldShowRemoteTokenField(
+            showAdvancedConnection: decision.showAdvancedConnection,
+            remoteToken: appState.remoteToken,
+            remoteTokenUnsupported: appState.remoteTokenUnsupported,
+            authIssue: decision.authIssue))
+    }
+
+    @Test func `remote AI detection auth blocks without candidate fallthrough`() async throws {
+        let session = GatewayTestWebSocketSession(taskFactory: {
+            GatewayTestWebSocketTask(receiveHook: { task, receiveIndex in
+                if receiveIndex == 0 {
+                    return .data(GatewayWebSocketTestSupport.connectChallengeData())
+                }
+                return .data(GatewayWebSocketTestSupport.connectAuthFailureData(
+                    id: task.snapshotConnectRequestID() ?? "connect",
+                    detailCode: GatewayConnectAuthDetailCode.pairingRequired.rawValue))
+            })
+        })
+        let url = try #require(URL(string: "wss://gateway.example.test"))
+        let gateway = GatewayConnection(
+            configProvider: { (url: url, token: nil, password: nil) },
+            sessionBox: WebSocketSessionBox(session: session))
+        let model = OnboardingAISetupModel(
+            gateway: gateway,
+            routeIdentityProvider: { "remote:direct:gateway" },
+            connectionModeProvider: { .remote })
+
+        await model.detectAndAutoConnect()
+
+        #expect(model.configuredGatewayAuthIssue == .pairingRequired)
+        #expect(!model.configuredGatewayProbeUnavailable)
+        #expect(model.detectError == nil)
+        #expect(model.candidates.isEmpty)
+        #expect(!model.showManualEntry)
+        #expect(session.latestTask()?.snapshotSendCount() == 1)
     }
 
     @Test func `configured gateway probe refuses an unpersisted endpoint selection`() async throws {

@@ -73,7 +73,7 @@ const mocks = vi.hoisted(() => {
   });
   return {
     callGatewayMock: vi.fn(),
-    loadConfigMock: vi.fn(() => ({})),
+    loadConfigMock: vi.fn((_options?: unknown) => ({})),
     resolveDefaultAgentIdMock: vi.fn((_configForTest: unknown) => "main"),
     resolveAgentIdByWorkspacePathMock: vi.fn(
       (_configForTest: unknown, _workspacePath: string): string | undefined => undefined,
@@ -204,7 +204,7 @@ vi.mock("../utils.js", async (importOriginal) => ({
 }));
 
 vi.mock("../config/config.js", () => ({
-  getRuntimeConfig: () => mocks.loadConfigMock(),
+  getRuntimeConfig: (...args: unknown[]) => mocks.loadConfigMock(...args),
   loadConfig: () => mocks.loadConfigMock(),
 }));
 
@@ -1282,7 +1282,7 @@ describe("skills cli commands", () => {
     expect(fetchClawHubSkillCardMock).not.toHaveBeenCalled();
   });
 
-  it("does not register a redundant --json option for verify", () => {
+  it("registers explicit --json output for verify", () => {
     const skills = createProgram().commands.find((command) => command.name() === "skills");
     const verify = skills?.commands.find((command) => command.name() === "verify");
 
@@ -1290,12 +1290,22 @@ describe("skills cli commands", () => {
       "--version",
       "--tag",
       "--card",
+      "--json",
       "--global",
       "--agent",
     ]);
   });
 
   it.each([
+    {
+      label: "default list",
+      argv: ["skills", "--json"],
+      assert: (payload: Record<string, unknown>) => {
+        const skills = payload.skills as Array<Record<string, unknown>>;
+        expect(skills).toHaveLength(1);
+        expect(skills[0]?.name).toBe("calendar");
+      },
+    },
     {
       label: "list",
       argv: ["skills", "list", "--json"],
@@ -1442,6 +1452,7 @@ describe("skills cli commands", () => {
   it("keeps non-JSON skills list output on stdout with human-readable formatting", async () => {
     await runCommand(["skills", "list"]);
 
+    expect(loadConfigMock).toHaveBeenCalledWith({ skipPluginValidation: true });
     expect(defaultRuntime.writeStdout).toHaveBeenCalledTimes(1);
     expect(defaultRuntime.log).not.toHaveBeenCalled();
     expect(runtimeErrors).toStrictEqual([]);

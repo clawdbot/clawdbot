@@ -5,6 +5,7 @@ import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import { registerRuntimeAuthProfileStoreMutationListener } from "./auth-profiles/runtime-snapshots.js";
 import {
   PreparedModelRuntimeOwnerNotPublishedError,
+  PreparedModelRuntimeOwnerRetention,
   PreparedModelRuntimePublicationSupersededError,
   createPreparedModelRuntimeOwner,
   createPreparedModelRuntimeReplacement,
@@ -54,7 +55,8 @@ let modelRuntimeBuildTimeoutMs = DEFAULT_MODEL_RUNTIME_BUILD_TIMEOUT_MS;
 const owners = new Map<string, PreparedModelRuntimeOwner>();
 const agentBuildCompletions = new Map<string, Promise<void>>();
 const standaloneActivationTails = new Map<string, Promise<void>>();
-let retainedDirectRunOwner: { key: string; owner: PreparedModelRuntimeOwner } | undefined;
+const retainedDirectRunOwners = new PreparedModelRuntimeOwnerRetention(1);
+const retainedGatewayRunOwners = new PreparedModelRuntimeOwnerRetention(8);
 let gatewayLifecycleActive = false;
 let refreshTail: Promise<void> = Promise.resolve();
 let refreshRequestEpoch = 0;
@@ -132,7 +134,9 @@ export function getPreparedModelRuntimeSnapshot(
   const input = normalizePreparedModelRuntimeInput(rawInput);
   const owner = resolvePublishedOwner(owners, input, {
     allowConfiguredWorkspaceFallback:
-      rawInput.workspaceDir === undefined || rawInput.agentId === undefined,
+      rawInput.workspaceDir === undefined ||
+      rawInput.agentId === undefined ||
+      rawInput.runtimePluginSelections === undefined,
   });
   if (!owner?.snapshot || owner.needsRefresh || owner.pending) {
     return undefined;
@@ -349,16 +353,9 @@ async function acquirePreparedModelRuntimeLease(
     return { snapshot, release: () => {} };
   }
   if (provenance === "run" && options.retainIdleRunOwner) {
-    const previous = retainedDirectRunOwner;
-    retainedDirectRunOwner = { key, owner };
-    if (
-      previous &&
-      previous.owner !== owner &&
-      (previous.owner.leaseCount ?? 0) === 0 &&
-      owners.get(previous.key) === previous.owner
-    ) {
-      owners.delete(previous.key);
-    }
+    retainedDirectRunOwners.retain(key, owner, owners);
+  } else if (provenance === "run" && gatewayLifecycleActive) {
+    retainedGatewayRunOwners.retain(key, owner, owners);
   }
   owner.leaseCount = (owner.leaseCount ?? 0) + 1;
   let released = false;
@@ -370,11 +367,10 @@ async function acquirePreparedModelRuntimeLease(
       }
       released = true;
       owner.leaseCount = Math.max(0, (owner.leaseCount ?? 1) - 1);
-      // Configless direct runs retain one bounded idle generation; dynamic gateway and metadata
-      // generations live exactly as long as their lease. The identity checks prevent an old
-      // release from deleting a replacement at the same key.
+      // Direct runs retain one idle generation; gateways retain a bounded LRU so repeated selections
+      // reuse workspace facts. Identity checks keep old releases from deleting replacements.
       if (owner.leaseCount === 0 && owners.get(key) === owner) {
-        if (retainedDirectRunOwner?.owner !== owner) {
+        if (!retainedDirectRunOwners.has(key, owner) && !retainedGatewayRunOwners.has(key, owner)) {
           owners.delete(key);
         }
       }
@@ -411,7 +407,9 @@ export async function prepareModelRuntimeSnapshot(
   const input = normalizePreparedModelRuntimeInput(rawInput);
   const existing = resolvePublishedOwner(owners, input, {
     allowConfiguredWorkspaceFallback:
-      rawInput.workspaceDir === undefined || rawInput.agentId === undefined,
+      rawInput.workspaceDir === undefined ||
+      rawInput.agentId === undefined ||
+      rawInput.runtimePluginSelections === undefined,
   });
   if (
     input.readOnly &&
@@ -494,6 +492,7 @@ async function refreshPreparedModelRuntimeSnapshotsNow(
   options: PreparedModelRuntimeRefreshOptions,
   publicationEpoch: number,
 ): Promise<void> {
+  retainedGatewayRunOwners.clear(owners);
   const { defaultWorkspaceDir: workspace, allowGatewaySubagentBinding: bindings } = options;
   const catalogMode = options.catalogMode ?? "live";
   gatewayLifecycleActive ||= options.gatewayLifecycle === true;
@@ -628,7 +627,7 @@ export function refreshPreparedModelRuntimeSnapshots(
   markPreparedModelRuntimeSnapshotsStale(undefined, { waitForReplacement: true });
   const requestEpoch = refreshRequestEpoch;
   const replacement = pendingModelRuntimeReplacement;
-  const publication = enqueuePreparedModelRuntimePublication(async () => {
+  return enqueuePreparedModelRuntimePublication(async () => {
     if (requestEpoch !== refreshRequestEpoch) {
       return;
     }
@@ -637,8 +636,7 @@ export function refreshPreparedModelRuntimeSnapshots(
       return;
     }
     await drainPendingAuthMutations();
-  });
-  return publication.then(
+  }).then(
     () => {
       if (
         requestEpoch === refreshRequestEpoch &&
@@ -755,7 +753,7 @@ function resetPreparedModelRuntimeSnapshotsForTest(): void {
   owners.clear();
   agentBuildCompletions.clear();
   standaloneActivationTails.clear();
-  retainedDirectRunOwner = undefined;
+  retainedGatewayRunOwners.clear(owners);
   gatewayLifecycleActive = false;
   refreshTail = Promise.resolve();
   refreshRequestEpoch = 0;
@@ -767,6 +765,7 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.preparedModelRuntimeTestApi")] =
     {
       resetPreparedModelRuntimeSnapshotsForTest,
+      getPreparedModelRuntimeOwnerCountForTest: () => owners.size,
       setModelRuntimeBuildTimeoutMsForTest: (timeoutMs: number) => {
         modelRuntimeBuildTimeoutMs = timeoutMs;
       },

@@ -7,6 +7,7 @@ import {
   optionalPositiveIntegerSchema,
 } from "openclaw/plugin-sdk/channel-actions";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { readFiniteNumberParam, readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
@@ -24,7 +25,6 @@ import {
 import {
   buildMemoryRecallUnavailableResult,
   createEmbeddings,
-  formatMemoryRecallError,
   isMemoryRecallTimeoutError,
   MemoryRecallEmbeddingError,
   runWithTimeout,
@@ -250,7 +250,7 @@ export default definePluginEntry({
               if (!(error instanceof MemoryRecallEmbeddingError)) {
                 throw error;
               }
-              const message = formatMemoryRecallError(error.originalError);
+              const message = formatErrorMessage(error.originalError);
               if (isMemoryRecallTimeoutError(error.originalError)) {
                 recordMemoryRecallCooldown(agentId, message);
               }
@@ -587,7 +587,7 @@ export default definePluginEntry({
           err instanceof MemoryRecallEmbeddingError &&
           isMemoryRecallTimeoutError(err.originalError)
         ) {
-          recordMemoryRecallCooldown(agentId, formatMemoryRecallError(err.originalError));
+          recordMemoryRecallCooldown(agentId, formatErrorMessage(err.originalError));
         }
         api.logger.warn(`memory-lancedb: recall failed: ${String(err)}`);
       }

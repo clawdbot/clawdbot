@@ -2,10 +2,15 @@
 // abort fanout, history snapshots, and cleanup of buffered streaming state.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
-import { onAgentEvent } from "../infra/agent-events.js";
+import {
+  clearAgentRunContext,
+  onAgentEvent,
+  registerAgentRunContext,
+} from "../infra/agent-events.js";
 import {
   abortChatRunById,
   abortChatRunsForProvider,
+  abortTrackedChatRunById,
   boundInFlightRunSnapshotForChatHistory,
   isChatStopCommandText,
   registerChatAbortController,
@@ -335,6 +340,30 @@ describe("abortChatRunById", () => {
     }
   });
 
+  it("preserves the owning session identity when synchronous abort cleanup clears run context", () => {
+    const { runId, sessionKey, entry, ops } = createAbortRunFixture({
+      runId: "run-pre-reset-abort",
+    });
+    registerAgentRunContext(runId, { sessionKey, sessionId: entry.sessionId });
+    entry.controller.signal.addEventListener("abort", () => clearAgentRunContext(runId));
+    const events: Array<{ sessionId?: string }> = [];
+    const unsubscribe = onAgentEvent((event) => {
+      if (event.runId === runId && event.stream === "lifecycle") {
+        events.push({ sessionId: event.sessionId });
+      }
+    });
+
+    try {
+      expect(abortChatRunById(ops, { runId, sessionKey, stopReason: "rpc" })).toEqual({
+        aborted: true,
+      });
+      expect(events).toEqual([{ sessionId: entry.sessionId }]);
+    } finally {
+      unsubscribe();
+      clearAgentRunContext(runId);
+    }
+  });
+
   it("broadcasts aborted payload with partial message when buffered text exists", () => {
     const now = new Date("2026-01-02T03:04:05.000Z");
     const { runId, sessionKey, entry, ops } = createAbortRunFixture({
@@ -447,18 +476,26 @@ describe("abortChatRunById", () => {
       name: "fans out default-agent global aborts to scoped and legacy global subscribers",
       runId: "run-main-global",
       createEntry: () => ({ ...createActiveEntry("global"), agentId: "main" }),
+      abort: abortChatRunById,
     },
     {
       name: "resolves unscoped global aborts to the default agent subscribers",
       runId: "run-unscoped-global",
       createEntry: () => createActiveEntry("global"),
+      abort: abortChatRunById,
+    },
+    {
+      name: "preserves default-agent global delivery through tracked maintenance aborts",
+      runId: "run-tracked-global",
+      createEntry: () => ({ ...createActiveEntry("global"), agentId: "main" }),
+      abort: abortTrackedChatRunById,
     },
   ]) {
     it(testCase.name, () => {
       const ops = createOps({ runId: testCase.runId, entry: testCase.createEntry() });
       ops.getRuntimeConfig = () => ({ agents: { list: [{ id: "main", default: true }] } });
 
-      const result = abortChatRunById(ops, { runId: testCase.runId, sessionKey: "global" });
+      const result = testCase.abort(ops, { runId: testCase.runId, sessionKey: "global" });
 
       expect(result).toEqual({ aborted: true });
       const payload = firstBroadcastPayload(ops) as ChatAbortPayload;
