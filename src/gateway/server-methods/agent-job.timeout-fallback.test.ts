@@ -120,6 +120,44 @@ describe("waitForAgentJob timeout fallback", () => {
     await expect(waitPromise).resolves.toMatchObject(terminalFailure);
   });
 
+  it("publishes exhausted fallback provider timeouts without waiting for retry grace", async () => {
+    const runId = `run-timeout-fallback-exhausted-provider-${runSequence++}`;
+    const waitPromise = waitForAgentJob({ runId, timeoutMs: 1_000 });
+
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: 1_000 },
+    });
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: {
+        phase: "error",
+        startedAt: 1_000,
+        endedAt: 1_100,
+        aborted: true,
+        stopReason: "timeout",
+        timeoutPhase: "provider",
+        providerStarted: true,
+        error: "All model fallback candidates failed",
+        fallbackExhaustedFailure: true,
+      },
+    });
+
+    const terminalTimeout = {
+      status: "timeout",
+      startedAt: 1_000,
+      endedAt: 1_100,
+      stopReason: "timeout",
+      timeoutPhase: "provider",
+      providerStarted: true,
+      error: "All model fallback candidates failed",
+    };
+    await expect(waitForAgentJob({ runId, timeoutMs: 0 })).resolves.toMatchObject(terminalTimeout);
+    await expect(waitPromise).resolves.toMatchObject(terminalTimeout);
+  });
+
   it("keeps retryable lifecycle failures pending for the full retry grace", async () => {
     const runId = `run-timeout-fallback-retryable-${runSequence++}`;
     const waitPromise = waitForAgentJob({ runId, timeoutMs: 1_000 });
@@ -155,7 +193,18 @@ describe("waitForAgentJob timeout fallback", () => {
     });
   });
 
-  it("preserves pending hard timeouts over exhausted fallback failures", async () => {
+  it.each([
+    { label: "failure", metadata: {} },
+    {
+      label: "provider timeout",
+      metadata: {
+        aborted: true,
+        stopReason: "timeout",
+        timeoutPhase: "provider",
+        providerStarted: true,
+      },
+    },
+  ])("preserves pending hard timeouts over an exhausted fallback $label", async ({ metadata }) => {
     const runId = `run-timeout-fallback-exhausted-hard-timeout-${runSequence++}`;
     const waitPromise = waitForAgentJob({ runId, timeoutMs: 5_000 });
 
@@ -183,6 +232,7 @@ describe("waitForAgentJob timeout fallback", () => {
         startedAt: 1_000,
         endedAt: 1_200,
         error: "All model fallback candidates failed",
+        ...metadata,
         fallbackExhaustedFailure: true,
       },
     });
@@ -193,6 +243,48 @@ describe("waitForAgentJob timeout fallback", () => {
       startedAt: 1_000,
       endedAt: 1_100,
       timeoutPhase: "provider",
+    });
+  });
+
+  it("preserves earlier cancellation over an exhausted fallback provider timeout", async () => {
+    const runId = `run-timeout-fallback-exhausted-cancelled-${runSequence++}`;
+
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: 1_000 },
+    });
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        startedAt: 1_000,
+        endedAt: 1_050,
+        aborted: true,
+        stopReason: "rpc",
+      },
+    });
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: {
+        phase: "error",
+        startedAt: 1_000,
+        endedAt: 1_100,
+        aborted: true,
+        stopReason: "timeout",
+        timeoutPhase: "provider",
+        providerStarted: true,
+        error: "All model fallback candidates failed",
+        fallbackExhaustedFailure: true,
+      },
+    });
+
+    await expect(waitForAgentJob({ runId, timeoutMs: 0 })).resolves.toMatchObject({
+      status: "error",
+      endedAt: 1_050,
+      stopReason: "rpc",
     });
   });
 

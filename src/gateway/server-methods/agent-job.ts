@@ -303,7 +303,7 @@ function ensureAgentRunListener() {
       schedulePendingAgentRunError(snapshot);
       return;
     }
-    if (snapshot.status === "timeout") {
+    if (phase === "end" && snapshot.status === "timeout") {
       schedulePendingAgentRunTimeout(snapshot);
       return;
     }
