@@ -67,9 +67,9 @@ export type CronFormState = {
   deliveryTo: string;
   deliveryAccountId: string;
   deliveryBestEffort: boolean;
-  deliveryThreadId?: CronDelivery["threadId"];
-  deliveryCompletionDestination?: CronDelivery["completionDestination"];
-  deliveryFailureDestination?: CronDelivery["failureDestination"];
+  deliveryThreadId: CronDelivery["threadId"] | undefined;
+  deliveryCompletionDestination: CronDelivery["completionDestination"] | undefined;
+  deliveryFailureDestination: CronDelivery["failureDestination"] | undefined;
   failureAlertMode: "inherit" | "disabled" | "custom";
   failureAlertAfter: string;
   failureAlertCooldownSeconds: string;
@@ -141,6 +141,9 @@ const DEFAULT_CRON_FORM: CronFormState = {
   deliveryTo: "",
   deliveryAccountId: "",
   deliveryBestEffort: false,
+  deliveryThreadId: undefined,
+  deliveryCompletionDestination: undefined,
+  deliveryFailureDestination: undefined,
   failureAlertMode: "inherit",
   failureAlertAfter: "2",
   failureAlertCooldownSeconds: "3600",
