@@ -37683,7 +37683,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 47,
+      "line": 55,
       "path": "apps/macos/Sources/OpenClaw/RemoteGatewayProbe.swift",
       "source": "This gateway requires an auth token",
       "surface": "apple",
@@ -37691,7 +37691,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 49,
+      "line": 57,
       "path": "apps/macos/Sources/OpenClaw/RemoteGatewayProbe.swift",
       "source": "That token did not match the gateway",
       "surface": "apple",
@@ -37699,7 +37699,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 51,
+      "line": 59,
       "path": "apps/macos/Sources/OpenClaw/RemoteGatewayProbe.swift",
       "source": "This gateway host needs token setup",
       "surface": "apple",
@@ -37707,7 +37707,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 53,
+      "line": 61,
       "path": "apps/macos/Sources/OpenClaw/RemoteGatewayProbe.swift",
       "source": "This setup code is no longer valid",
       "surface": "apple",
@@ -37715,7 +37715,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 55,
+      "line": 63,
       "path": "apps/macos/Sources/OpenClaw/RemoteGatewayProbe.swift",
       "source": "This gateway is using unsupported auth",
       "surface": "apple",
@@ -37723,7 +37723,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 57,
+      "line": 65,
       "path": "apps/macos/Sources/OpenClaw/RemoteGatewayProbe.swift",
       "source": "This device needs pairing approval",
       "surface": "apple",
@@ -37731,7 +37731,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 64,
+      "line": 72,
       "path": "apps/macos/Sources/OpenClaw/RemoteGatewayProbe.swift",
       "source": "Paste the token configured on the gateway host. On the gateway host, run `openclaw config get gateway.auth.token`. If the gateway uses an environment variable instead, use `OPENCLAW_GATEWAY_TOKEN`.",
       "surface": "apple",
@@ -37739,7 +37739,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 68,
+      "line": 76,
       "path": "apps/macos/Sources/OpenClaw/RemoteGatewayProbe.swift",
       "source": "Check `gateway.auth.token` or `OPENCLAW_GATEWAY_TOKEN` on the gateway host and try again.",
       "surface": "apple",
@@ -37747,7 +37747,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 70,
+      "line": 78,
       "path": "apps/macos/Sources/OpenClaw/RemoteGatewayProbe.swift",
       "source": "This gateway is set to token auth, but no `gateway.auth.token` is configured on the gateway host. If the gateway uses an environment variable instead, set `OPENCLAW_GATEWAY_TOKEN` before starting the gateway.",
       "surface": "apple",
@@ -37755,7 +37755,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 74,
+      "line": 82,
       "path": "apps/macos/Sources/OpenClaw/RemoteGatewayProbe.swift",
       "source": "Scan or paste a fresh setup code from an already-paired OpenClaw client, then try again.",
       "surface": "apple",
@@ -37763,7 +37763,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 76,
+      "line": 84,
       "path": "apps/macos/Sources/OpenClaw/RemoteGatewayProbe.swift",
       "source": "This onboarding flow does not support password auth yet. Reconfigure the gateway to use token auth, then retry.",
       "surface": "apple",
@@ -37771,7 +37771,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 79,
+      "line": 87,
       "path": "apps/macos/Sources/OpenClaw/RemoteGatewayProbe.swift",
       "source": "Approve this device from an already-paired OpenClaw client. In your OpenClaw chat, run `/pair approve`, then click **Check connection** again.",
       "surface": "apple",
@@ -37779,7 +37779,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 102,
+      "line": 110,
       "path": "apps/macos/Sources/OpenClaw/RemoteGatewayProbe.swift",
       "source": "This gateway requires an auth token from the gateway host.",
       "surface": "apple",
@@ -37787,7 +37787,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 104,
+      "line": 112,
       "path": "apps/macos/Sources/OpenClaw/RemoteGatewayProbe.swift",
       "source": "Gateway token mismatch. Check gateway.auth.token or OPENCLAW_GATEWAY_TOKEN on the gateway host.",
       "surface": "apple",
@@ -37795,7 +37795,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 106,
+      "line": 114,
       "path": "apps/macos/Sources/OpenClaw/RemoteGatewayProbe.swift",
       "source": "This gateway has token auth enabled, but no gateway.auth.token is configured on the host.",
       "surface": "apple",
@@ -37803,7 +37803,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 108,
+      "line": 116,
       "path": "apps/macos/Sources/OpenClaw/RemoteGatewayProbe.swift",
       "source": "Setup code expired or already used. Scan a fresh setup code, then try again.",
       "surface": "apple",
@@ -37811,7 +37811,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 110,
+      "line": 118,
       "path": "apps/macos/Sources/OpenClaw/RemoteGatewayProbe.swift",
       "source": "This gateway uses password auth. Remote onboarding on macOS cannot collect gateway passwords yet.",
       "surface": "apple",
@@ -37819,7 +37819,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 112,
+      "line": 120,
       "path": "apps/macos/Sources/OpenClaw/RemoteGatewayProbe.swift",
       "source": "Pairing required. In an already-paired OpenClaw client, run /pair approve, then check the connection again.",
       "surface": "apple",
@@ -37827,7 +37827,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 130,
+      "line": 138,
       "path": "apps/macos/Sources/OpenClaw/RemoteGatewayProbe.swift",
       "source": "Connected via paired device",
       "surface": "apple",
@@ -37835,7 +37835,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 132,
+      "line": 140,
       "path": "apps/macos/Sources/OpenClaw/RemoteGatewayProbe.swift",
       "source": "Connected with setup code",
       "surface": "apple",
@@ -37843,7 +37843,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 134,
+      "line": 142,
       "path": "apps/macos/Sources/OpenClaw/RemoteGatewayProbe.swift",
       "source": "Connected with gateway token",
       "surface": "apple",
@@ -37851,7 +37851,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 136,
+      "line": 144,
       "path": "apps/macos/Sources/OpenClaw/RemoteGatewayProbe.swift",
       "source": "Connected with password",
       "surface": "apple",
@@ -37859,7 +37859,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 138,
+      "line": 146,
       "path": "apps/macos/Sources/OpenClaw/RemoteGatewayProbe.swift",
       "source": "Remote gateway ready",
       "surface": "apple",

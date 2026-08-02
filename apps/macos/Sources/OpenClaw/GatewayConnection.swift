@@ -1418,15 +1418,8 @@ extension GatewayConnection {
 
     // MARK: - Health
 
-    func healthSnapshot(
-        timeoutMs: Double? = nil,
-        retryTransportFailures: Bool = true) async throws -> HealthSnapshot
-    {
-        let data = try await self.request(
-            method: Method.health.rawValue,
-            params: nil,
-            timeoutMs: timeoutMs,
-            retryTransportFailures: retryTransportFailures)
+    func healthSnapshot(timeoutMs: Double? = nil) async throws -> HealthSnapshot {
+        let data = try await requestRaw(method: .health, timeoutMs: timeoutMs)
         if let snap = decodeHealthSnapshot(from: data) {
             return snap
         }
