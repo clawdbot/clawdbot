@@ -427,9 +427,11 @@ describe("RealtimeCallHandler lifecycle", () => {
     handler.registerToolHandler("openclaw_agent_consult", async (_args, _callId, context) => {
       consultSignal = context.abortSignal;
       return await new Promise<unknown>((_resolve, reject) => {
-        context.abortSignal?.addEventListener("abort", () => reject(context.abortSignal?.reason), {
-          once: true,
-        });
+        context.abortSignal?.addEventListener(
+          "abort",
+          () => reject(new Error("native consult aborted", { cause: context.abortSignal?.reason })),
+          { once: true },
+        );
       });
     });
     const { streamUrl } = handler.issueStreamSession();

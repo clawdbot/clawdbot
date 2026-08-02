@@ -1665,7 +1665,8 @@ describe("RealtimeCallHandler path routing", () => {
         return await new Promise<{ text: string }>((_resolve, reject) => {
           context.abortSignal?.addEventListener(
             "abort",
-            () => reject(context.abortSignal?.reason),
+            () =>
+              reject(new Error("forced consult aborted", { cause: context.abortSignal?.reason })),
             { once: true },
           );
         });
