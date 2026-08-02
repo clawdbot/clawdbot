@@ -245,7 +245,8 @@ describe("NodesPage gateway lifecycle", () => {
   });
 
   it("cancels a pending removal confirmation when the connection resets", async () => {
-    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
+    const request = vi.fn();
+    const client = { request } as unknown as GatewayBrowserClient;
     const confirmation = deferred<boolean>();
     vi.mocked(showConfirmDialog).mockReturnValueOnce(confirmation.promise);
     const page = document.createElement("openclaw-nodes-page") as TestNodesPage;
@@ -266,6 +267,6 @@ describe("NodesPage gateway lifecycle", () => {
     await pending;
 
     expect(signal?.aborted).toBe(true);
-    expect(client.request).not.toHaveBeenCalled();
+    expect(request).not.toHaveBeenCalled();
   });
 });
