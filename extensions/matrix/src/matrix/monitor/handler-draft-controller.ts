@@ -238,6 +238,18 @@ export async function createMatrixDraftController(params: {
     resetPreviewToolProgress();
   };
 
+  const finalizeAcceptedPartialDraft = async () => {
+    if (streaming !== "partial" || draftDisposition !== "active" || !draftStream?.eventId()) {
+      return;
+    }
+    // Only an already-visible partial may become the terminal reply. Drafts accepted
+    // during shutdown stay active so the handler's final cleanup removes them.
+    const draftEventId = await draftStream.stop().catch(() => undefined);
+    if (draftEventId && (await draftStream.finalizeLive())) {
+      draftDisposition = "retained";
+    }
+  };
+
   return {
     draftStream,
     cancelProgressDraft: () => progressDraft.cancel(),
@@ -248,6 +260,7 @@ export async function createMatrixDraftController(params: {
     resetPreviewToolProgress,
     resetDraftDeliveryState,
     updateDraftFromLatestFullText,
+    finalizeAcceptedPartialDraft,
     draftDisposition: () => draftDisposition,
     beginDraftGeneration: () => {
       draftDisposition = "active";

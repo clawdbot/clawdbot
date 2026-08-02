@@ -4837,7 +4837,7 @@ describe("matrix monitor handler draft streaming", () => {
     }
   });
 
-  it("retains visible live drafts when generation aborts mid-stream", async () => {
+  it("finalizes and retains visible live drafts when generation aborts mid-stream", async () => {
     sendSingleTextMessageMatrixMock
       .mockReset()
       .mockResolvedValue({ messageId: "$draft1", roomId: "!room" });
@@ -4871,6 +4871,100 @@ describe("matrix monitor handler draft streaming", () => {
       createMatrixTextMessageEvent({ eventId: "$msg1", body: "hello" }),
     );
 
+    expectEditLiveFlag("$draft1", "partial", false);
+    expect(redactEventMock).not.toHaveBeenCalled();
+  });
+
+  it("redacts partial live drafts when abort finalization fails", async () => {
+    sendSingleTextMessageMatrixMock
+      .mockReset()
+      .mockResolvedValue({ messageId: "$draft1", roomId: "!room" });
+    editMessageMatrixMock.mockReset().mockRejectedValueOnce(new Error("finalize failed"));
+    deliverMatrixRepliesMock.mockReset().mockResolvedValue(createMockMatrixDeliveryResult());
+
+    const redactEventMock = vi.fn(async () => "$redacted");
+    let capturedReplyOpts: ReplyOpts | undefined;
+
+    const { handler } = createMatrixHandlerTestHarness({
+      streaming: "partial",
+      client: { redactEvent: redactEventMock },
+      createReplyDispatcherWithTyping: () => ({
+        dispatcher: { markComplete: () => {}, waitForIdle: async () => {} },
+        replyOptions: {},
+        markDispatchIdle: () => {},
+        markRunComplete: () => {},
+      }),
+      dispatchInboundMessage: vi.fn(async (args: { replyOptions?: ReplyOpts }) => {
+        capturedReplyOpts = args?.replyOptions;
+        capturedReplyOpts?.onPartialReply?.({ text: "partial" });
+        await waitForMatrixState(() => {
+          expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+        });
+        throw new Error("model timeout");
+      }) as never,
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({ eventId: "$msg1", body: "hello" }),
+    );
+
+    expect(editMessageMatrixMock).toHaveBeenCalledTimes(1);
+    expect(redactEventMock).toHaveBeenCalledWith("!room:example.org", "$draft1");
+  });
+
+  it("finalizes a receipt-cancelled draft even when legacy counters report a final", async () => {
+    sendSingleTextMessageMatrixMock
+      .mockReset()
+      .mockResolvedValue({ messageId: "$draft1", roomId: "!room" });
+    editMessageMatrixMock.mockReset().mockResolvedValue("$edited");
+
+    const redactEventMock = vi.fn(async () => "$redacted");
+    let capturedReplyOpts: ReplyOpts | undefined;
+    const emptyCounts = {
+      delivered: 0,
+      deliveredNotVisible: 0,
+      cancelled: 0,
+      failedBeforeSend: 0,
+      failedAfterSend: 0,
+    };
+
+    const { handler } = createMatrixHandlerTestHarness({
+      streaming: "partial",
+      client: { redactEvent: redactEventMock },
+      createReplyDispatcherWithTyping: () => ({
+        dispatcher: { markComplete: () => {}, waitForIdle: async () => {} },
+        replyOptions: {},
+        markDispatchIdle: () => {},
+        markRunComplete: () => {},
+      }),
+      dispatchInboundMessage: vi.fn(async (args: { replyOptions?: ReplyOpts }) => {
+        capturedReplyOpts = args?.replyOptions;
+        capturedReplyOpts?.onPartialReply?.({ text: "partial" });
+        await waitForMatrixState(() => {
+          expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+        });
+        return {
+          queuedFinal: true,
+          counts: { final: 1, block: 0, tool: 0 },
+          settledReceipt: {
+            anyVisibleDelivered: false,
+            counts: {
+              tool: { ...emptyCounts },
+              block: { ...emptyCounts },
+              final: { ...emptyCounts, cancelled: 1 },
+            },
+          },
+        };
+      }) as never,
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({ eventId: "$msg1", body: "hello" }),
+    );
+
+    expectEditLiveFlag("$draft1", "partial", false);
     expect(redactEventMock).not.toHaveBeenCalled();
   });
 

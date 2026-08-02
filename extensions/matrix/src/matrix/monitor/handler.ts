@@ -637,6 +637,10 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       }
       const { dispatchResult } = turnResult;
       const { queuedFinal } = dispatchResult;
+      const hasFinalDispatch = hasFinalInboundReplyDispatch(dispatchResult);
+      if (!hasFinalDispatch) {
+        await draftController.finalizeAcceptedPartialDraft();
+      }
       if (replyDispatcher.finalReplyDeliveryFailed()) {
         logVerboseMessage(
           `matrix: final reply delivery failed room=${roomId} id=${messageId}; keeping replay committed`,
@@ -663,7 +667,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           threadRootId ? thread.threadId : undefined,
         );
       }
-      if (!hasFinalInboundReplyDispatch(dispatchResult)) {
+      if (!hasFinalDispatch) {
         await commitInboundEventIfClaimed();
         return;
       }
@@ -673,14 +677,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       );
       await commitInboundEventIfClaimed();
     } catch (err) {
-      const draftController = draftControllerRef;
-      if (
-        draftController?.draftStream?.eventId() &&
-        draftController.draftDisposition() === "active"
-      ) {
-        // A Matrix-accepted preview is the only visible reply after an abort.
-        draftController.markDraftRetained();
-      }
+      await draftControllerRef?.finalizeAcceptedPartialDraft();
       runtime.error?.(`matrix handler failed: ${String(err)}`);
     } finally {
       // Stop the draft stream timer so partial drafts don't leak if the
