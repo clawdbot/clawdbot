@@ -53,7 +53,7 @@ function swiftFunctionBody(source: string, name: string): string {
   }
 
   const rest = source.slice(start + startMarker.length);
-  const nextFunction = rest.search(/\n    (?:private )?func /);
+  const nextFunction = rest.search(/\n {4}(?:private )?func /);
   return nextFunction < 0 ? rest : rest.slice(0, nextFunction);
 }
 

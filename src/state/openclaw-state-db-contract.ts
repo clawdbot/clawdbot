@@ -10,6 +10,7 @@ export const OPENCLAW_STATE_STRICT_SCHEMA_VERSION = 3;
 export const LAZY_ADDITIVE_STATE_TABLES = [
   "model_catalog_remote",
   "sidebar_sections",
+  "skill_workshop_proposal_events",
   "skill_workshop_proposal_origin_runs",
   "skill_workshop_proposal_rollbacks",
   "skill_workshop_proposals",

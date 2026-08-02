@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
 import {
   setupAgentRunnerExecutionTestState,
@@ -16,8 +15,17 @@ import type {
   FallbackRunnerParams,
   EmbeddedAgentParams,
 } from "./agent-runner-execution.test-support.js";
+import type { AgentTurnParams } from "./agent-runner-execution.types.js";
 
 const state = setupAgentRunnerExecutionTestState();
+
+async function executeTestTurn(
+  params?: Parameters<typeof createMinimalRunAgentTurnParams>[0],
+  overrides?: Partial<AgentTurnParams>,
+) {
+  const executeAgentTurn = await getExecuteAgentTurnForTest();
+  return executeAgentTurn({ ...createMinimalRunAgentTurnParams(params), ...overrides });
+}
 
 describe("executeAgentTurn: lifecycle progress", () => {
   it("forwards item lifecycle events to reply options", async () => {
@@ -38,33 +46,11 @@ describe("executeAgentTurn: lifecycle progress", () => {
       return { payloads: [{ text: "final" }], meta: {} };
     });
 
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
     const pendingToolTasks = new Set<Promise<void>>();
-    const typingSignals = createMockTypingSignaler();
-    const result = await executeAgentTurn({
-      commandBody: "hello",
-      followupRun: createFollowupRun(),
-      sessionCtx: {
-        Provider: "whatsapp",
-        MessageSid: "msg",
-      } as unknown as TemplateContext,
-      opts: {
-        onItemEvent,
-      } satisfies GetReplyOptions,
-      typingSignals,
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks,
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
-    });
+    const result = await executeTestTurn(
+      { opts: { onItemEvent } satisfies GetReplyOptions },
+      { commandBody: "hello", pendingToolTasks },
+    );
 
     await Promise.all(pendingToolTasks);
 
@@ -110,14 +96,8 @@ describe("executeAgentTurn: lifecycle progress", () => {
       return { payloads: [{ text: "final" }], meta: {} };
     });
 
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn({
-      ...createMinimalRunAgentTurnParams({
-        opts: {
-          onItemEvent,
-          onToolStart,
-        } satisfies GetReplyOptions,
-      }),
+    const result = await executeTestTurn({
+      opts: { onItemEvent, onToolStart } satisfies GetReplyOptions,
     });
 
     expect(result.kind).toBe("success");
@@ -161,13 +141,8 @@ describe("executeAgentTurn: lifecycle progress", () => {
       return { payloads: [{ text: "final" }], meta: {} };
     });
 
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn({
-      ...createMinimalRunAgentTurnParams({
-        opts: {
-          onItemEvent,
-        } satisfies GetReplyOptions,
-      }),
+    const result = await executeTestTurn({
+      opts: { onItemEvent } satisfies GetReplyOptions,
     });
 
     expect(result.kind).toBe("success");
@@ -237,11 +212,8 @@ describe("executeAgentTurn: lifecycle progress", () => {
       return { payloads: [{ text: "final" }], meta: {} };
     });
 
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn({
-      ...createMinimalRunAgentTurnParams({
-        opts: { onItemEvent, onToolStart } satisfies GetReplyOptions,
-      }),
+    const result = await executeTestTurn({
+      opts: { onItemEvent, onToolStart } satisfies GetReplyOptions,
     });
 
     expect(result.kind).toBe("success");
@@ -272,15 +244,10 @@ describe("executeAgentTurn: lifecycle progress", () => {
       return { payloads: [{ text: "final" }], meta: {} };
     });
 
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn({
-      ...createMinimalRunAgentTurnParams({
-        opts: {
-          onToolStart,
-        } satisfies GetReplyOptions,
-      }),
-      toolProgressDetail: "raw",
-    });
+    const result = await executeTestTurn(
+      { opts: { onToolStart } satisfies GetReplyOptions },
+      { toolProgressDetail: "raw" },
+    );
 
     expect(result.kind).toBe("success");
     expect(onToolStart).toHaveBeenCalledWith({
@@ -317,13 +284,8 @@ describe("executeAgentTurn: lifecycle progress", () => {
       return { payloads: [{ text: "final" }], meta: {} };
     });
 
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn({
-      ...createMinimalRunAgentTurnParams({
-        opts: {
-          onToolStart,
-        } satisfies GetReplyOptions,
-      }),
+    const result = await executeTestTurn({
+      opts: { onToolStart } satisfies GetReplyOptions,
       typingSignals,
     });
 
@@ -373,28 +335,25 @@ describe("executeAgentTurn: lifecycle progress", () => {
       return { payloads: [{ text: "final" }], meta: {} };
     });
 
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn({
-      ...createMinimalRunAgentTurnParams({
-        opts: {
-          preserveProgressCallbackStartOrder: true,
-          onAssistantMessageStart: () => {
-            callbackOrder.push("message-start");
-          },
-          onPartialReply: () => {
-            callbackOrder.push("partial");
-          },
-          onReasoningStream: () => {
-            callbackOrder.push("reasoning");
-          },
-          onReasoningEnd: () => {
-            callbackOrder.push("reasoning-end");
-          },
-          onToolStart: () => {
-            callbackOrder.push("tool");
-          },
-        } satisfies GetReplyOptions,
-      }),
+    const result = await executeTestTurn({
+      opts: {
+        preserveProgressCallbackStartOrder: true,
+        onAssistantMessageStart: () => {
+          callbackOrder.push("message-start");
+        },
+        onPartialReply: () => {
+          callbackOrder.push("partial");
+        },
+        onReasoningStream: () => {
+          callbackOrder.push("reasoning");
+        },
+        onReasoningEnd: () => {
+          callbackOrder.push("reasoning-end");
+        },
+        onToolStart: () => {
+          callbackOrder.push("tool");
+        },
+      } satisfies GetReplyOptions,
       typingSignals,
     });
 
@@ -421,17 +380,13 @@ describe("executeAgentTurn: lifecycle progress", () => {
       return { payloads: [{ text: "final" }], meta: {} };
     });
     const typingSignals = createMockTypingSignaler();
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-
-    const result = await executeAgentTurn({
-      ...createMinimalRunAgentTurnParams({
-        opts: {
-          preserveProgressCallbackStartOrder: true,
-          onPartialReply: () => {
-            throw new Error("presentation failed");
-          },
+    const result = await executeTestTurn({
+      opts: {
+        preserveProgressCallbackStartOrder: true,
+        onPartialReply: () => {
+          throw new Error("presentation failed");
         },
-      }),
+      },
       typingSignals,
     });
 
@@ -454,29 +409,10 @@ describe("executeAgentTurn: lifecycle progress", () => {
       return { payloads: [{ text: "final" }], meta: {} };
     });
 
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn({
-      commandBody: "hello",
-      followupRun: createFollowupRun(),
-      sessionCtx: {
-        Provider: "whatsapp",
-        MessageSid: "msg",
-      } as unknown as TemplateContext,
-      opts: { runId: "run-codex" } as GetReplyOptions,
-      typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
-    });
+    const result = await executeTestTurn(
+      { opts: { runId: "run-codex" } as GetReplyOptions },
+      { commandBody: "hello" },
+    );
 
     expect(result.kind).toBe("success");
     expectNoMockCallWithFields(emitAgentEvent, {
@@ -499,29 +435,10 @@ describe("executeAgentTurn: lifecycle progress", () => {
       };
     });
 
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn({
-      commandBody: "hello",
-      followupRun: createFollowupRun(),
-      sessionCtx: {
-        Provider: "whatsapp",
-        MessageSid: "msg",
-      } as unknown as TemplateContext,
-      opts: { runId: "run-timeout" } as GetReplyOptions,
-      typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
-    });
+    const result = await executeTestTurn(
+      { opts: { runId: "run-timeout" } as GetReplyOptions },
+      { commandBody: "hello" },
+    );
 
     expect(result.kind).toBe("success");
     const lifecycleEvent = requireRecord(
@@ -579,29 +496,10 @@ describe("executeAgentTurn: lifecycle progress", () => {
       };
     });
 
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn({
-      commandBody: "hello",
-      followupRun: createFollowupRun(),
-      sessionCtx: {
-        Provider: "whatsapp",
-        MessageSid: "msg",
-      } as unknown as TemplateContext,
-      opts: { runId: "run-recovered" } as GetReplyOptions,
-      typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
-    });
+    const result = await executeTestTurn(
+      { opts: { runId: "run-recovered" } as GetReplyOptions },
+      { commandBody: "hello" },
+    );
 
     expect(result.kind).toBe("success");
     const lifecycleEvent = requireRecord(
@@ -633,29 +531,10 @@ describe("executeAgentTurn: lifecycle progress", () => {
       throw new Error("rebound failure");
     });
 
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn({
-      commandBody: "hello",
-      followupRun: createFollowupRun(),
-      sessionCtx: {
-        Provider: "whatsapp",
-        MessageSid: "msg",
-      } as unknown as TemplateContext,
-      opts: { runId: "run-rebound" } as GetReplyOptions,
-      typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
-    });
+    const result = await executeTestTurn(
+      { opts: { runId: "run-rebound" } as GetReplyOptions },
+      { commandBody: "hello" },
+    );
 
     expect(result.kind).toBe("final");
     const lifecycleEvents = emitAgentEvent.mock.calls
@@ -694,29 +573,10 @@ describe("executeAgentTurn: lifecycle progress", () => {
       return { payloads: [{ text: "final" }], meta: {} };
     });
 
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn({
-      commandBody: "hello",
-      followupRun: createFollowupRun(),
-      sessionCtx: {
-        Provider: "whatsapp",
-        MessageSid: "msg",
-      } as unknown as TemplateContext,
-      opts: { runId: "run-complete" } as GetReplyOptions,
-      typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
-    });
+    const result = await executeTestTurn(
+      { opts: { runId: "run-complete" } as GetReplyOptions },
+      { commandBody: "hello" },
+    );
 
     expect(result.kind).toBe("success");
     expectNoMockCallWithFields(emitAgentEvent, {
@@ -747,32 +607,10 @@ describe("executeAgentTurn: lifecycle progress", () => {
       meta: {},
     }));
 
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
     const followupRun = createFollowupRun();
     followupRun.run.provider = "openai";
     followupRun.run.model = "gpt-5.4";
-    const result = await executeAgentTurn({
-      commandBody: "ok do it",
-      followupRun,
-      sessionCtx: {
-        Provider: "whatsapp",
-        MessageSid: "msg",
-      } as unknown as TemplateContext,
-      opts: {},
-      typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
-    });
+    const result = await executeTestTurn({ followupRun }, { commandBody: "ok do it" });
 
     expect(result.kind).toBe("success");
     if (result.kind === "success") {
@@ -807,32 +645,13 @@ describe("executeAgentTurn: lifecycle progress", () => {
       meta: {},
     }));
 
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
     const followupRun = createFollowupRun();
     followupRun.run.provider = "openai";
     followupRun.run.model = "gpt-5.4";
-    const result = await executeAgentTurn({
-      commandBody: "explain in detail what changed",
-      followupRun,
-      sessionCtx: {
-        Provider: "whatsapp",
-        MessageSid: "msg",
-      } as unknown as TemplateContext,
-      opts: {},
-      typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
-    });
+    const result = await executeTestTurn(
+      { followupRun },
+      { commandBody: "explain in detail what changed" },
+    );
 
     expect(result.kind).toBe("success");
     if (result.kind === "success") {

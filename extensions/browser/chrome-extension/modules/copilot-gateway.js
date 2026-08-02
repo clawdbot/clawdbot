@@ -158,7 +158,7 @@ export class CopilotGatewayClient {
     const protocol = new GatewayProtocolClient({
       createSocket: (handlers) => createBrowserSocket(gatewayScope, handlers, this.WebSocketImpl),
       createRequestId: () => crypto.randomUUID(),
-      buildConnectPlan: ({ nonce }) =>
+      buildConnectPlan: ({ nonce, challengeTs }) =>
         lifecycle.buildPlan({
           client: {
             id: CLIENT_ID,
@@ -170,6 +170,7 @@ export class CopilotGatewayClient {
           role: ROLE,
           defaultScopes: SCOPES,
           nonce,
+          challengeTs,
         }),
       buildConnectParams: (plan) => ({
         minProtocol: MIN_CLIENT_PROTOCOL_VERSION,

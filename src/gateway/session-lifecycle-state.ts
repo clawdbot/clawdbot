@@ -250,18 +250,24 @@ export function isRestartRecoveryLifecycleEvent(params: {
 }
 
 /**
- * A pre-`sessions.reset` run's lifecycle event must not mutate a session row
- * whose sessionId was rotated by the reset. True only when both the owning
- * run's sessionId and the current row's sessionId are known and differ.
+ * Reject pre-reset runs and explicitly older runs sharing one session so late
+ * lifecycle events cannot overwrite a newer run's authoritative state.
  */
 export function isStaleLifecycleEventForSession(params: {
   owningSessionId?: string;
   currentSessionId?: string;
+  eventStartedAt?: unknown;
+  currentStartedAt?: number;
 }): boolean {
-  return Boolean(
-    params.owningSessionId &&
-    params.currentSessionId &&
-    params.owningSessionId !== params.currentSessionId,
+  return (
+    Boolean(
+      params.owningSessionId &&
+      params.currentSessionId &&
+      params.owningSessionId !== params.currentSessionId,
+    ) ||
+    (isFiniteTimestamp(params.eventStartedAt) &&
+      isFiniteTimestamp(params.currentStartedAt) &&
+      params.eventStartedAt < params.currentStartedAt)
   );
 }
 
@@ -314,10 +320,14 @@ export async function persistGatewaySessionLifecycleEvent(params: {
         // one claimed continuation. Ready or replaced claims reject late events.
         return null;
       }
-      // Reject a pre-reset run's lifecycle event: sessions.reset rotates the row
-      // to a new sessionId under the same sessionKey, so an old in-flight run's
-      // late start/end/error must not overwrite the fresh row's status (#88538).
-      if (isStaleLifecycleEventForSession({ owningSessionId, currentSessionId: entry.sessionId })) {
+      if (
+        isStaleLifecycleEventForSession({
+          owningSessionId,
+          currentSessionId: entry.sessionId,
+          eventStartedAt: params.event.data?.startedAt,
+          currentStartedAt: entry.startedAt,
+        })
+      ) {
         return null;
       }
       const patch = derivePersistedSessionLifecyclePatch({

@@ -273,7 +273,7 @@ describe("browser copilot Gateway custody", () => {
       first?.message({
         type: "event",
         event: "connect.challenge",
-        payload: { nonce: "first-nonce" },
+        payload: { nonce: "first-nonce", ts: 1_777_777_777_000 },
       });
       await vi.waitFor(() => expect(first?.sent).toHaveLength(1));
       const firstConnect = first?.sent[0] as {
@@ -303,7 +303,7 @@ describe("browser copilot Gateway custody", () => {
       second?.message({
         type: "event",
         event: "connect.challenge",
-        payload: { nonce: "second-nonce" },
+        payload: { nonce: "second-nonce", ts: 1_777_777_778_000 },
       });
       await vi.waitFor(() => expect(second?.sent).toHaveLength(1));
       const secondConnect = second?.sent[0] as { params?: { auth?: { token?: string } } };
@@ -347,6 +347,37 @@ describe("browser copilot Gateway custody", () => {
       client.stop();
       FakeWebSocket.autoOpen = true;
       vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("rejects a device challenge with a malformed Gateway timestamp", async () => {
+    FakeWebSocket.instances = [];
+    vi.stubGlobal("chrome", { runtime: { getManifest: () => ({ version: "test" }) } });
+    vi.stubGlobal("navigator", { language: "en", userAgent: "copilot-test" });
+    const client = new CopilotGatewayClient({
+      storage: storageArea(),
+      WebSocketImpl: FakeWebSocket as never,
+    });
+
+    try {
+      client.start("ws://127.0.0.1:28789/");
+      await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+      const socket = FakeWebSocket.instances[0];
+      socket?.message({
+        type: "event",
+        event: "connect.challenge",
+        payload: { nonce: "invalid-time", ts: "not-a-number" },
+      });
+      await vi.waitFor(() =>
+        expect(socket?.closeCalls).toContainEqual({
+          code: 4008,
+          reason: "connect failed",
+        }),
+      );
+      expect(socket?.sent).toHaveLength(0);
+    } finally {
+      client.stop();
       vi.unstubAllGlobals();
     }
   });

@@ -4,6 +4,7 @@ import { EventEmitter, once } from "node:events";
 import { lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { Writable } from "node:stream";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -1358,6 +1359,25 @@ describe("buildQaRuntimeEnv", () => {
       gracefulTimeoutMs: 1,
       forceTimeoutMs: 2,
     });
+  });
+
+  it("force-closes a gateway log stream whose final flush never settles", async () => {
+    const stream = new Writable({
+      write(_chunk, _encoding, callback) {
+        callback();
+      },
+      final() {
+        // Simulate the stalled filesystem flush observed in the release profile.
+      },
+    });
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+    await testing.closeWriteStream(stream as never, "stdout", 1);
+
+    expect(stream.destroyed).toBe(true);
+    expect(stderr).toHaveBeenCalledWith(
+      "[qa-suite] stdout gateway log flush exceeded 1ms; forcing close\n",
+    );
   });
 
   it.runIf(process.platform !== "win32")(

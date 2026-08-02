@@ -1,8 +1,6 @@
 import {
   readSessionMessageIdentity,
   readSessionMessageSequence,
-  reduceSessionProjection,
-  type SessionProjectionScope,
 } from "@openclaw/gateway-client/browser";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { GatewayEventFrame } from "../../api/gateway.ts";
@@ -43,7 +41,7 @@ import type { ChatPageHost } from "./chat-state-host.ts";
 import { requestChatPageUpdate } from "./chat-state-render.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import { handleBackgroundTasksEvent } from "./components/chat-background-tasks.ts";
-import { getChatSessionProjection, setChatSessionProjection } from "./history-merge.ts";
+import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";
 import {
   reconcileChatRunFromCurrentSessionRow,
   reconcileChatRunFromSessionRow,
@@ -59,17 +57,6 @@ function sessionMessageMatchesChat(
   event: NonNullable<ReturnType<typeof readSessionChangedEvent>>,
 ): boolean {
   return chatScopedEventSessionMatches(state, event.key, event.agentId ?? undefined);
-}
-
-function readChatSessionProjectionScope(state: ChatPageHost): SessionProjectionScope {
-  return {
-    sessionKey: state.sessionKey,
-    agentId: resolveChatAgentId(state),
-    ...(state.currentSessionId ? { sessionId: state.currentSessionId } : {}),
-    ...(Object.hasOwn(state, "chatDisplayedLeafEntryId")
-      ? { activeLeafEntryId: state.chatDisplayedLeafEntryId ?? null }
-      : {}),
-  };
 }
 
 function applyLiveUserMessage(state: ChatPageHost, payload: unknown): void {
@@ -114,13 +101,12 @@ function applyLiveUserMessage(state: ChatPageHost, payload: unknown): void {
       ...(incoming.sequence !== null ? { seq: incoming.sequence } : {}),
     },
   };
-  const scope = readChatSessionProjectionScope(state);
-  const projection = reduceSessionProjection(
-    getChatSessionProjection(state, state.chatMessages, scope),
-    { type: "messagePersisted", message, envelope: event, scope },
+  const scope = readChatSessionProjectionScope(state, { agentId: resolveChatAgentId(state) });
+  reduceChatSessionProjection(
+    state,
+    { type: "messagePersisted", message, envelope: event },
+    { scope },
   );
-  setChatSessionProjection(state, projection);
-  state.chatMessages = [...projection.messages];
 }
 
 function selectedGlobalEventAgentId(state: ChatPageHost, agentId: string | null): string {
@@ -264,15 +250,10 @@ function handleSessionsChangedEvent(state: ChatPageHost, payload: unknown) {
   const resetsSelectedSession =
     matchesChat && (source?.reason === "reset" || source?.phase === "reset");
   if (resetsSelectedSession) {
-    const scope = readChatSessionProjectionScope(state);
-    const projection = reduceSessionProjection(
-      getChatSessionProjection(state, state.chatMessages, scope),
-      { type: "sessionReset", scope },
-    );
+    const scope = readChatSessionProjectionScope(state, { agentId: resolveChatAgentId(state) });
     // Reset keeps the public session ID; the explicit reducer event is the
     // only proof that its old live and pending transcript no longer exists.
-    setChatSessionProjection(state, projection);
-    state.chatMessages = [...projection.messages];
+    reduceChatSessionProjection(state, { type: "sessionReset" }, { scope });
   }
   if (matchesChat) {
     void loadChatBranches(state);

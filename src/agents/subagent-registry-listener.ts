@@ -20,7 +20,7 @@ export function createSubagentRegistryListener(config: {
   runs: Map<string, SubagentRunRecord>;
   pendingLifecycle: ReturnType<typeof createPendingLifecycleScheduler>;
   onAgentEvent: (listener: (event: AgentEventPayload) => void) => () => void;
-  persist: () => void;
+  persist: (...runIds: string[]) => void;
   refreshFrozenResultFromSession: (sessionKey: string) => Promise<unknown>;
   completeSubagentRunWithRecovery: (
     params: SubagentCompletionRequest,
@@ -68,12 +68,11 @@ export function createSubagentRegistryListener(config: {
           const startedAt =
             typeof evt.data?.startedAt === "number" ? evt.data.startedAt : undefined;
           if (startedAt) {
-            entry.startedAt = startedAt;
             if (typeof entry.sessionStartedAt !== "number") {
               entry.sessionStartedAt = startedAt;
             }
             entry.execution = { ...entry.execution, status: "running", startedAt };
-            persist();
+            persist(entry.runId);
           }
           return;
         }
@@ -98,10 +97,10 @@ export function createSubagentRegistryListener(config: {
             markSubagentRunPausedAfterYield({
               entry,
               endedAt,
-              startedAt: startedAt ?? entry.startedAt,
+              startedAt: startedAt ?? entry.execution.startedAt,
             })
           ) {
-            persist();
+            persist(entry.runId);
           }
           return;
         }

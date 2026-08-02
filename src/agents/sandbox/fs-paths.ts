@@ -18,7 +18,10 @@ import {
   normalizeContainerPath,
   relativePathEscapesContainerRoot,
 } from "./path-utils.js";
-import { resolveReadOnlyWorkspaceSkillMounts } from "./workspace-mounts.js";
+import {
+  resolveProtectedSkillMountContainerPaths,
+  resolveReadOnlyWorkspaceSkillMounts,
+} from "./workspace-mounts.js";
 
 export type SandboxFsMount = {
   hostRoot: string;
@@ -88,13 +91,15 @@ export function buildSandboxFsMounts(sandbox: SandboxFsBridgeContext): SandboxFs
     });
   }
 
-  for (const mount of resolveReadOnlyWorkspaceSkillMounts({
+  const protectedSkillMounts = resolveReadOnlyWorkspaceSkillMounts({
     workspaceDir: sandbox.workspaceDir,
     agentWorkspaceDir: sandbox.agentWorkspaceDir,
     skillsWorkspaceDir: sandbox.skillsWorkspaceDir,
     workdir: sandbox.containerWorkdir,
     workspaceAccess: sandbox.workspaceAccess,
-  })) {
+  });
+
+  for (const mount of protectedSkillMounts) {
     mounts.push({
       hostRoot: path.resolve(mount.hostPath),
       containerRoot: normalizeContainerPath(mount.containerPath),
@@ -103,9 +108,15 @@ export function buildSandboxFsMounts(sandbox: SandboxFsBridgeContext): SandboxFs
     });
   }
 
+  // Protected skill mounts are authoritative; skip user binds that target the
+  // same container path to avoid duplicate entries in the mount table.
+  const protectedPaths = resolveProtectedSkillMountContainerPaths(protectedSkillMounts);
   for (const bind of sandbox.docker.binds ?? []) {
     const parsed = parseSandboxBindMount(bind);
     if (!parsed) {
+      continue;
+    }
+    if (protectedPaths.has(parsed.containerRoot)) {
       continue;
     }
     mounts.push({

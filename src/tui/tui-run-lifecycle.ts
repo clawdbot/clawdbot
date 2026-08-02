@@ -250,12 +250,20 @@ export function createTuiRunLifecycle(context: TuiRunLifecycleContext) {
     flushPendingHistoryRefreshIfIdle();
   };
 
-  const reconnectStreamingWatchdog = () => {
+  const reconnectStreamingWatchdog = (historyInFlightRunId?: string | null) => {
     clearStreamingWatchdog();
     const activeRunId = state.activeChatRunId;
     if (!activeRunId) {
       reconnectPendingRunId = null;
       clearStaleStreamingIfNoTrackedRunRemains();
+      return;
+    }
+    if (historyInFlightRunId === null) {
+      runCoordinator.noteFinalizedRun(activeRunId, { displayedFinal: true });
+      state.activeChatRunId = null;
+      clearPendingTerminalLifecycleError(activeRunId);
+      setActivityStatus("idle");
+      flushPendingHistoryRefreshIfIdle();
       return;
     }
     if (!sessionRuns.has(activeRunId)) {
@@ -392,9 +400,7 @@ export function createTuiRunLifecycle(context: TuiRunLifecycleContext) {
   };
 
   const dispose = () => {
-    runCoordinator.clear();
-    clearStreamingWatchdog();
-    clearPendingTerminalLifecycleErrors();
+    clearTrackedRunState();
   };
 
   return {

@@ -102,6 +102,16 @@ export function resolveFollowupDeliveryDecision(params: {
         !isInternalMessageChannel(
           turn.queued.originatingChannel ?? turn.queued.run.messageProvider,
         )));
+  const deliveryContext = {
+    cfg: turn.config,
+    messageProvider: turn.queued.run.messageProvider,
+    originatingAccountId: turn.queued.originatingAccountId ?? turn.queued.run.agentAccountId,
+    originatingChannel: turn.queued.originatingChannel,
+    originatingChatType: turn.queued.originatingChatType,
+    originatingReplyToMode: turn.queued.originatingReplyToMode,
+    originatingTo: turn.queued.originatingTo,
+    originatingThreadId: turn.queued.originatingThreadId,
+  };
   if (execution.outcome.kind === "rejected") {
     if (!isInteractive) {
       return { kind: "suppress", reason: "silent" };
@@ -114,15 +124,8 @@ export function resolveFollowupDeliveryDecision(params: {
       return { kind: "suppress", reason: "message-tool-only" };
     }
     const payloads = resolveFollowupDeliveryPayloads({
-      cfg: turn.config,
+      ...deliveryContext,
       payloads: [execution.outcome.payload],
-      messageProvider: turn.queued.run.messageProvider,
-      originatingAccountId: turn.queued.originatingAccountId ?? turn.queued.run.agentAccountId,
-      originatingChannel: turn.queued.originatingChannel,
-      originatingChatType: turn.queued.originatingChatType,
-      originatingReplyToMode: turn.queued.originatingReplyToMode,
-      originatingTo: turn.queued.originatingTo,
-      originatingThreadId: turn.queued.originatingThreadId,
       reasoningPayloadsEnabled: opts?.reasoningPayloadsEnabled === true,
       commentaryPayloadsEnabled: opts?.commentaryPayloadsEnabled === true,
     });
@@ -149,15 +152,8 @@ export function resolveFollowupDeliveryDecision(params: {
       : "",
   );
   let payloads = resolveFollowupDeliveryPayloads({
-    cfg: turn.config,
+    ...deliveryContext,
     payloads: accounting.payloadArray,
-    messageProvider: turn.queued.run.messageProvider,
-    originatingAccountId: turn.queued.originatingAccountId ?? turn.queued.run.agentAccountId,
-    originatingChannel: turn.queued.originatingChannel,
-    originatingChatType: turn.queued.originatingChatType,
-    originatingReplyToMode: turn.queued.originatingReplyToMode,
-    originatingTo: turn.queued.originatingTo,
-    originatingThreadId: turn.queued.originatingThreadId,
     reasoningPayloadsEnabled: opts?.reasoningPayloadsEnabled === true,
     commentaryPayloadsEnabled: opts?.commentaryPayloadsEnabled === true,
     sentMediaUrls: result.messagingToolSentMediaUrls,
@@ -189,15 +185,8 @@ export function resolveFollowupDeliveryDecision(params: {
   }
   if (recovery.kind === "diagnostic") {
     const [payload] = resolveFollowupDeliveryPayloads({
-      cfg: turn.config,
+      ...deliveryContext,
       payloads: [recovery.payload],
-      messageProvider: turn.queued.run.messageProvider,
-      originatingAccountId: turn.queued.originatingAccountId ?? turn.queued.run.agentAccountId,
-      originatingChannel: turn.queued.originatingChannel,
-      originatingChatType: turn.queued.originatingChatType,
-      originatingReplyToMode: turn.queued.originatingReplyToMode,
-      originatingTo: turn.queued.originatingTo,
-      originatingThreadId: turn.queued.originatingThreadId,
     });
     if (!payload) {
       return { kind: "suppress", reason: "silent" };
@@ -248,29 +237,15 @@ export function resolveFollowupDeliveryDecision(params: {
     payloads = [
       ...payloads,
       ...resolveFollowupDeliveryPayloads({
-        cfg: turn.config,
+        ...deliveryContext,
         payloads: [fallbackPayload],
-        messageProvider: turn.queued.run.messageProvider,
-        originatingAccountId: turn.queued.originatingAccountId ?? turn.queued.run.agentAccountId,
-        originatingChannel: turn.queued.originatingChannel,
-        originatingChatType: turn.queued.originatingChatType,
-        originatingReplyToMode: turn.queued.originatingReplyToMode,
-        originatingTo: turn.queued.originatingTo,
-        originatingThreadId: turn.queued.originatingThreadId,
       }),
     ];
   }
   if (accounting.compactionNotice) {
     const compactionNotices = resolveFollowupDeliveryPayloads({
-      cfg: turn.config,
+      ...deliveryContext,
       payloads: [accounting.compactionNotice],
-      messageProvider: turn.queued.run.messageProvider,
-      originatingAccountId: turn.queued.originatingAccountId ?? turn.queued.run.agentAccountId,
-      originatingChannel: turn.queued.originatingChannel,
-      originatingChatType: turn.queued.originatingChatType,
-      originatingReplyToMode: turn.queued.originatingReplyToMode,
-      originatingTo: turn.queued.originatingTo,
-      originatingThreadId: turn.queued.originatingThreadId,
     });
     payloads = [...compactionNotices, ...payloads];
   }
@@ -388,8 +363,9 @@ async function sendFollowupPayloads(params: {
         replyKind: params.kind,
         runId: params.runId,
       });
-      if (!result.ok) {
-        logVerbose(`followup queue: route-reply failed: ${result.error ?? "unknown error"}`);
+      if (!result.delivered && !result.suppressed) {
+        const routeError = result.error ?? "no visible delivery";
+        logVerbose(`followup queue: route-reply failed: ${routeError}`);
         const provider = resolveOriginMessageProvider({
           provider: turn.queued.run.messageProvider,
         });
@@ -399,11 +375,16 @@ async function sendFollowupPayloads(params: {
         } else if (defaults.opts?.onBlockReply) {
           crossChannelFailure = true;
         } else {
-          defaultRuntime.error?.(
-            `followup queue: route-reply failed: ${result.error ?? "unknown error"}`,
+          defaultRuntime.error?.(`followup queue: route-reply failed: ${routeError}`);
+        }
+      } else if (result.delivered) {
+        if (!result.ok) {
+          logVerbose(
+            `followup queue: route-reply partially failed after delivery: ${
+              result.error ?? "unknown error"
+            }`,
           );
         }
-      } else if (!result.suppressed) {
         const provider = resolveOriginMessageProvider({
           provider: turn.queued.run.messageProvider,
         });

@@ -1,12 +1,15 @@
 // @vitest-environment node
 import {
-  isLocallyOptimisticSessionMessage,
-  readSessionMessageSequence,
   reduceSessionProjection,
   type SessionProjectionScope,
 } from "@openclaw/gateway-client/browser";
 import { describe, expect, it } from "vitest";
-import { getChatSessionProjection, setChatSessionProjection } from "./history-merge.ts";
+import {
+  getChatSessionProjection,
+  readChatSessionProjectionScope,
+  reduceChatSessionProjection,
+  setChatSessionProjection,
+} from "./history-merge.ts";
 
 function createHistoryMessage(
   role: "assistant" | "user",
@@ -31,6 +34,48 @@ function projectLiveMessage(owner: object, message: unknown, scope: SessionProje
 }
 
 describe("pane-owned canonical session projection", () => {
+  it("uses one canonical identity for an explicitly unbranched pane", () => {
+    const owner = {
+      sessionKey: "agent:main:shared",
+      currentSessionId: "shared-session",
+      chatDisplayedLeafEntryId: undefined,
+      chatMessages: [],
+    };
+
+    expect(readChatSessionProjectionScope(owner)).toEqual({
+      sessionKey: "agent:main:shared",
+      sessionId: "shared-session",
+      activeLeafEntryId: null,
+    });
+    expect(
+      readChatSessionProjectionScope(owner, {
+        agentId: "main",
+        sessionId: null,
+        activeLeafEntryId: "selected-leaf",
+      }),
+    ).toEqual({
+      sessionKey: "agent:main:shared",
+      agentId: "main",
+      activeLeafEntryId: "selected-leaf",
+    });
+  });
+
+  it("publishes each pane reducer transition and displayed transcript together", () => {
+    const owner = { sessionKey: "agent:main:shared", chatMessages: [] as unknown[] };
+    const liveUser = createHistoryMessage("user", "shared prompt", {
+      id: "shared-user",
+      seq: 1,
+    });
+
+    const projection = reduceChatSessionProjection(owner, {
+      type: "messagePersisted",
+      message: liveUser,
+    });
+
+    expect(owner.chatMessages).toEqual([liveUser]);
+    expect(getChatSessionProjection(owner, owner.chatMessages, projection.scope)).toBe(projection);
+  });
+
   it("keeps each split pane's live projection independent", () => {
     const scope = { sessionKey: "agent:main:shared", sessionId: "shared-session" };
     const firstPane = {};
@@ -389,30 +434,4 @@ describe("pane-owned canonical session projection", () => {
       }).messages,
     ).toEqual([persisted]);
   });
-
-  it("delegates optimistic classification and persisted sequence to the reducer", () => {
-    const pending = createHistoryMessage("user", "pending", {
-      idempotencyKey: "pending-run:user",
-    });
-    const canonical = createHistoryMessage("user", "canonical", {
-      id: "canonical-user",
-      idempotencyKey: "pending-run:user",
-      seq: 7,
-    });
-    const marker = { content: [{ type: "status" }], __openclaw: { seq: 8 } };
-
-    expect(isLocallyOptimisticSessionMessage(pending)).toBe(true);
-    expect(isLocallyOptimisticSessionMessage(canonical)).toBe(false);
-    expect(readSessionMessageSequence(canonical)).toBe(7);
-    expect(readSessionMessageSequence(marker)).toBe(8);
-  });
-
-  it.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1])(
-    "rejects unsafe persisted transcript sequence %s",
-    (sequence) => {
-      expect(
-        readSessionMessageSequence(createHistoryMessage("user", "prompt", { seq: sequence })),
-      ).toBe(null);
-    },
-  );
 });

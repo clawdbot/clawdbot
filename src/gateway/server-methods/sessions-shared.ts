@@ -19,7 +19,7 @@ import {
 } from "../session-plugin-ownership.js";
 import { resolveSessionStoreAgentId, resolveSessionStoreKey } from "../session-store-key.js";
 import {
-  resolveFreshestSessionEntryFromStoreKeys,
+  resolveCanonicalSessionEntryFromStoreKeys,
   resolveGatewaySessionStoreTarget,
   resolveGatewaySessionStoreTargetWithStore,
 } from "../session-utils.js";
@@ -253,7 +253,7 @@ export function loadSessionEntriesForTarget(params: {
     ...(params.agentId ? { agentId: params.agentId } : {}),
   });
   const store = target.store;
-  const entry = resolveFreshestSessionEntryFromStoreKeys(store, target.storeKeys);
+  const entry = resolveCanonicalSessionEntryFromStoreKeys(store, target.storeKeys);
   return { target, storePath: target.storePath, store, entry };
 }
 

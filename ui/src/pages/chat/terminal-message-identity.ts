@@ -69,12 +69,11 @@ export function rememberAuthoritativeTerminal(options: {
 }
 
 export function reconcileAuthoritativeTerminalHistory<T>(options: {
-  currentMessages: T[];
   host: object;
   previousMessages: T[];
   sessionKey: string;
   visibleMessages: T[];
-}): { currentMessages: T[]; previousMessages: T[] } {
+}): T[] {
   const terminal = authoritativeTerminals.get(options.host);
   const historyContainsTerminal = Boolean(
     terminal &&
@@ -87,17 +86,12 @@ export function reconcileAuthoritativeTerminalHistory<T>(options: {
     }),
   );
   if (!terminal || !historyContainsTerminal) {
-    return options;
+    return options.previousMessages;
   }
   authoritativeTerminals.set(options.host, { ...terminal, historyApplied: true });
-  return {
-    currentMessages: options.currentMessages.filter(
-      (message) => !isLiveTerminalForRun(message, terminal.runId),
-    ),
-    previousMessages: options.previousMessages.filter(
-      (message) => !isLiveTerminalForRun(message, terminal.runId),
-    ),
-  };
+  return options.previousMessages.filter(
+    (message) => !isLiveTerminalForRun(message, terminal.runId),
+  );
 }
 
 export function authoritativeHistoryAppliedForRun(host: object, runId: string): boolean {

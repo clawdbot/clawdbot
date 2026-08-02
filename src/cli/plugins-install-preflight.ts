@@ -72,6 +72,14 @@ function resolveSourceOptionError(
   if (sourcePlan.request.source === "git" && opts.pin) {
     return `--pin is not supported with git: installs. Pin the ref in the spec instead, for example ${formatCliCommand(`openclaw plugins install git:<repo>@<ref> ${NON_CLAWHUB_INSTALL_FORCE_FLAG}`)}.`;
   }
+  if (
+    opts.pin &&
+    sourcePlan.request.source !== "npm" &&
+    sourcePlan.request.source !== "official" &&
+    sourcePlan.request.source !== "bundled"
+  ) {
+    return "--pin is only supported with npm registry installs.";
+  }
   if (opts.link && sourcePlan.request.source !== "local") {
     return `--link requires a local path. Run ${formatCliCommand(`openclaw plugins install --link <path> ${NON_CLAWHUB_INSTALL_FORCE_FLAG}`)}.`;
   }

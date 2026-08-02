@@ -193,6 +193,7 @@ describe("sidebar attention refresh ownership", () => {
         password: "",
       },
       subscribe: () => () => undefined,
+      subscribeEvents: () => () => undefined,
     } as unknown as ApplicationGateway;
     const overlays = {
       snapshot: { approvalQueue: [] },
@@ -239,6 +240,59 @@ describe("sidebar attention refresh ownership", () => {
     expect(element.modelAuthStatus).toBe(currentAuth);
     expect(element.loadedAtMs).toBe(200_000);
     expect(localStorage.getItem(dismissalStoreKey(gateway.connection.gatewayUrl))).not.toBeNull();
+  });
+
+  it("clears a stale failure alert when the gateway reports an automation change", async () => {
+    const responses = {
+      "cron.list": [{ jobs: [cronJob("failed")] }, { jobs: [] }],
+      "models.authStatus": [{ ts: 1, providers: [] }],
+    };
+    const request = vi.fn((method: keyof typeof responses) => {
+      const response = responses[method].shift();
+      if (!response) {
+        throw new Error(`Unexpected request: ${method}`);
+      }
+      return Promise.resolve(response);
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const snapshot = {
+      client,
+      phase: "connected",
+      hello: null,
+      assistantAgentId: "main",
+      sessionKey: "agent:main:main",
+      lastError: null,
+      lastErrorCode: null,
+    };
+    let eventListener: Parameters<ApplicationGateway["subscribeEvents"]>[0] | undefined;
+    const gateway = {
+      snapshot,
+      connection: {
+        gatewayUrl: "ws://gateway.test",
+        token: "",
+        bootstrapToken: "",
+        password: "",
+      },
+      subscribe: () => () => undefined,
+      subscribeEvents: (listener: NonNullable<typeof eventListener>) => {
+        eventListener = listener;
+        return () => undefined;
+      },
+    } as unknown as ApplicationGateway;
+    const overlays = {
+      snapshot: { approvalQueue: [] },
+      subscribe: () => () => undefined,
+    } as unknown as ApplicationContext["overlays"];
+    vi.stubGlobal("localStorage", createTestStorageMock());
+
+    const provider = createApplicationContextProvider({ gateway, overlays } as ApplicationContext);
+    const element = document.createElement("openclaw-sidebar-attention") as SidebarAttentionElement;
+    provider.append(element);
+    document.body.append(provider);
+    await waitForFast(() => expect(element.textContent).toContain("1 automation(s) failed"));
+
+    eventListener?.({ type: "event", event: "cron", payload: {} });
+    await waitForFast(() => expect(element.textContent).not.toContain("automation(s) failed"));
   });
 });
 

@@ -6,6 +6,7 @@
  * only need to change their import path.
  */
 
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { SignalTransportConfig } from "./account-types.js";
 import { containerCheck, containerRpcRequest, streamContainerEvents } from "./client-container.js";
 import type { SignalRpcOptions } from "./client.js";
@@ -23,10 +24,6 @@ export type SignalSseEvent = {
 };
 
 export type SignalTransportKind = SignalTransportConfig["kind"];
-
-function formatErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 function usesContainer(kind: SignalTransportKind | undefined): boolean {
   return kind === "container";
@@ -56,11 +53,11 @@ export async function signalRpcRequest<T = unknown>(
 export async function signalCheck(
   baseUrl: string,
   timeoutMs = DEFAULT_TIMEOUT_MS,
-  options: { transportKind?: SignalTransportKind } = {},
+  options: { transportKind?: SignalTransportKind; account?: string } = {},
 ): Promise<{ ok: boolean; status?: number | null; error?: string | null }> {
   try {
     return usesContainer(options.transportKind)
-      ? await containerCheck(baseUrl, timeoutMs)
+      ? await containerCheck(baseUrl, timeoutMs, options.account)
       : await nativeCheck(baseUrl, timeoutMs);
   } catch (error) {
     return { ok: false, status: null, error: formatErrorMessage(error) };

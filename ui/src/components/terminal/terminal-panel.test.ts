@@ -122,6 +122,7 @@ describe("OpenClawTerminalPanel", () => {
         params: { agentId: "ops", cols: 100, rows: 30 },
       });
     });
+    expect(createOptions?.terminalOptions?.fontSize).toBe(11);
     expect(createOptions?.terminalOptions?.fontFamily).toContain("MesloLGLDZ Nerd Font Mono");
     expect(getComputedStyle(createOptions!.parent).caretColor).toBe("rgba(0, 0, 0, 0)");
     const styleResults = Array.isArray(OpenClawTerminalPanel.styles)

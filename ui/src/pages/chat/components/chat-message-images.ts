@@ -110,15 +110,19 @@ export function resolveRenderableMessageImages(
 ): RenderableImageBlock[] {
   return images.flatMap((img) => {
     const isLocalImage = isLocalAssistantAttachmentSource(img.url);
+    const localMediaPreviewRoots = opts?.localMediaPreviewRoots ?? [];
+    // Until bootstrap supplies roots, let authenticated Gateway metadata decide.
     const canProxyLocalImage =
-      isLocalImage && isLocalAttachmentPreviewAllowed(img.url, opts?.localMediaPreviewRoots ?? []);
+      isLocalImage &&
+      (localMediaPreviewRoots.length === 0 ||
+        isLocalAttachmentPreviewAllowed(img.url, localMediaPreviewRoots));
     if (isLocalImage && !canProxyLocalImage) {
       return [];
     }
     const availability = canProxyLocalImage
       ? resolveAssistantAttachmentAvailability(
           img.url,
-          opts?.localMediaPreviewRoots ?? [],
+          localMediaPreviewRoots,
           opts?.basePath,
           opts?.authToken,
           opts?.onRequestUpdate,

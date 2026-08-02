@@ -172,6 +172,10 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
         provider,
         modelId,
         model: effectiveModel,
+        agentId: sessionAgentId,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey ?? sandboxSessionKey,
+        runId,
       });
       const resourceLoader = createEmbeddedAgentResourceLoader({
         cwd: effectiveCwd,
@@ -280,6 +284,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             senderName: params.senderName,
             senderUsername: params.senderUsername,
             senderE164: params.senderE164,
+            webSearchEnabled: params.toolOverrides?.webSearch !== false,
           });
           session.agent.streamFn = wrapStreamFnWithDiagnosticModelCallEvents(
             session.agent.streamFn,

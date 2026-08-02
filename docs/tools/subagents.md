@@ -255,7 +255,7 @@ their latest assistant turn back to the requester; external delivery stays with
 the parent/requester agent.
 </Warning>
 
-With `visible: true`, `model`, `cwd`, and a same-agent `context: "fork"` are supported. A sandboxed target restricts `cwd` to that agent's workspace. Thread binding, `mode`, thinking overrides, `lightContext`, `attachments`, and `attachAs` are unavailable on this path because visible sessions are persistent dashboard sessions created through `sessions.create`. Visible spawning is rejected when the requester was itself spawned with an inherited tool allowlist or denylist; that restriction is fixed at spawn time and has no config override. Session listing and addressing obey `tools.sessions.visibility`; the default `tree` scope covers the current session and its own spawn subtree. See [Managed worktrees](/concepts/managed-worktrees) for checkout naming, setup, cleanup, and restore behavior.
+With `visible: true`, `model`, `cwd`, and a same-agent `context: "fork"` are supported. Use this mode when the user asks to create or open a thread that should appear in the sidebar. A sandboxed target restricts `cwd` to that agent's workspace. Thread binding, `mode`, thinking overrides, `lightContext`, `attachments`, and `attachAs` are unavailable on this path because visible sessions are persistent dashboard sessions created through `sessions.create`. The new dashboard child inherits the requester's effective tool-policy ceiling before its first turn. Session listing and addressing obey `tools.sessions.visibility`; the default `tree` scope covers the current session and its own spawn subtree. See [Managed worktrees](/concepts/managed-worktrees) for checkout naming, setup, cleanup, and restore behavior.
 
 ### Task names and targeting
 
@@ -284,6 +284,11 @@ answer until those completions arrive.
 `sessions_yield` is the waiting primitive. Do not replace it with polling
 loops over `subagents`, `sessions_list`, `sessions_history`, shell
 `sleep`, or process polling just to detect child completion.
+
+On native Codex harness turns, `wait_agent` keeps the current turn active and
+is reserved for an intentional same-turn wait when the immediate next step is
+blocked on the child. Use `sessions_yield` instead when a native child's result
+should resume the parent in a later turn.
 
 Only use `sessions_yield` when the session's effective tool list includes
 it. Some minimal or custom tool profiles may expose `sessions_spawn` and

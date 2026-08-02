@@ -8,7 +8,7 @@ import type {
   UsersSetDisplayNameResult,
 } from "../../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { titleForRoute } from "../../app-navigation.ts";
+import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import {
   applicationContext,
   type ApplicationContext,
@@ -18,6 +18,7 @@ import type { AuthenticatedUser } from "../../app/user-profile.ts";
 import { resolveCurrentSelfUser, userProfileAvatarUrl } from "../../app/user-profile.ts";
 import { icons } from "../../components/icons.ts";
 import {
+  renderDocsLink,
   renderSettingsEmpty,
   renderSettingsGroup,
   renderSettingsNavRow,
@@ -32,6 +33,8 @@ import { PROFILE_SETTINGS_TARGET_IDS } from "../config/settings-targets.ts";
 import "../../styles/profile.css";
 import { processProfileAvatar, ProfileAvatarError } from "./avatar-processing.ts";
 import { renderIdentitySection } from "./identity-section.ts";
+
+const PROFILE_DOCS_URL = "https://docs.openclaw.ai/concepts/user-model";
 
 function toIdentityErrorMessage(error: unknown): string {
   if (error instanceof Error && error.message.trim()) {
@@ -52,6 +55,7 @@ export class ProfilePage extends OpenClawLightDomElement {
   @state() private identityLoading = false;
   @state() private identityBusy: "display-name" | "avatar" | null = null;
   @state() private identityError: string | null = null;
+  @state() private failedHeroAvatarUrl: string | null = null;
 
   private client: GatewayBrowserClient | null = null;
   private connected = false;
@@ -81,19 +85,21 @@ export class ProfilePage extends OpenClawLightDomElement {
 
   private applyGatewaySnapshot(snapshot: ApplicationGatewaySnapshot) {
     const clientChanged = snapshot.client !== this.client;
-    const nextSelfUser =
-      snapshot.phase === "connected"
-        ? resolveCurrentSelfUser({ snapshotUser: snapshot.selfUser })
-        : null;
+    const nextConnected = snapshot.phase === "connected";
+    const connectionChanged = nextConnected !== this.connected;
+    const nextSelfUser = nextConnected
+      ? resolveCurrentSelfUser({ snapshotUser: snapshot.selfUser })
+      : null;
     const selfProfileChanged = nextSelfUser?.id !== this.selfUser?.id;
+    const identitySourceChanged = clientChanged || connectionChanged || selfProfileChanged;
     this.client = snapshot.client;
-    this.connected = snapshot.phase === "connected";
+    this.connected = nextConnected;
     this.selfUser = nextSelfUser;
     // connected/client are plain fields; an unidentified (token-auth) connect or
     // disconnect changes no @state, so the render branch must be invalidated
     // explicitly or the page sticks on the stale offline/connected view.
     this.requestUpdate();
-    if (clientChanged || selfProfileChanged) {
+    if (identitySourceChanged) {
       this.identityRequestId += 1;
       this.ownProfile = null;
       this.displayName = "";
@@ -101,10 +107,10 @@ export class ProfilePage extends OpenClawLightDomElement {
       this.identityBusy = null;
       this.identityError = null;
     }
-    if (snapshot.phase !== "connected" || !snapshot.client) {
+    if (!nextConnected || !snapshot.client) {
       return;
     }
-    if (nextSelfUser && (clientChanged || selfProfileChanged)) {
+    if (nextSelfUser && identitySourceChanged) {
       void this.loadIdentity();
     }
     void this.context.agents.ensureList().then((list) => {
@@ -116,7 +122,9 @@ export class ProfilePage extends OpenClawLightDomElement {
 
   private async loadIdentity() {
     const client = this.client;
-    if (!client || !this.connected) {
+    // One active request owns the generation; reconnects clear loading before
+    // starting their replacement so stale responses cannot win out of order.
+    if (!client || !this.connected || this.identityLoading) {
       return;
     }
     const requestId = ++this.identityRequestId;
@@ -296,7 +304,7 @@ export class ProfilePage extends OpenClawLightDomElement {
   }
 
   private refreshManually() {
-    if (this.selfUser && !this.identityBusy) {
+    if (this.selfUser && !this.identityBusy && !this.identityLoading) {
       void this.loadIdentity();
     }
   }
@@ -317,8 +325,15 @@ export class ProfilePage extends OpenClawLightDomElement {
   }
 
   private renderAvatar(avatarUrl: string | null, textAvatar: string | null, name: string) {
-    if (avatarUrl) {
-      return html`<img class="profile-hero__avatar-image" src=${avatarUrl} alt=${name} />`;
+    if (avatarUrl && avatarUrl !== this.failedHeroAvatarUrl) {
+      return html`<img
+        class="profile-hero__avatar-image"
+        src=${avatarUrl}
+        alt=${name}
+        @error=${() => {
+          this.failedHeroAvatarUrl = avatarUrl;
+        }}
+      />`;
     }
     if (textAvatar) {
       return html`<span class="profile-hero__avatar-text">${textAvatar}</span>`;
@@ -363,9 +378,17 @@ export class ProfilePage extends OpenClawLightDomElement {
       <section class="content-header">
         <div>
           <div class="page-title">${titleForRoute("profile")}</div>
+          <div class="page-subtitle">
+            ${subtitleForRoute("profile")}
+            ${renderDocsLink(PROFILE_DOCS_URL, t("common.learnMore"))}
+          </div>
         </div>
         ${this.selfUser
-          ? html`<button class="btn profile-refresh" @click=${() => this.refreshManually()}>
+          ? html`<button
+              class="btn profile-refresh"
+              ?disabled=${this.identityLoading || this.identityBusy !== null}
+              @click=${() => this.refreshManually()}
+            >
               ${this.identityLoading ? t("common.refreshing") : t("common.refresh")}
             </button>`
           : nothing}

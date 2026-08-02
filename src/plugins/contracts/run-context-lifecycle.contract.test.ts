@@ -21,6 +21,7 @@ import {
   listPluginSessionSchedulerJobs,
   PLUGIN_TERMINAL_EVENT_CLEANUP_WAIT_MS,
 } from "../host-hook-runtime.test-fixtures.js";
+import { runPluginRegisterSyncInRegistry } from "../loader-module-runtime.js";
 import { createEmptyPluginRegistry } from "../registry-empty.js";
 import { setActivePluginRegistry } from "../runtime.js";
 import { createPluginRecord } from "../status.test-helpers.js";
@@ -57,7 +58,57 @@ describe("plugin run context lifecycle", () => {
     resetAgentEventsForTest();
   });
 
-  it("blocks stale plugin API run-context mutations after registry replacement", () => {
+  it("keeps run-context APIs callable after registration closes", () => {
+    const { config, registry } = createPluginRegistryFixture();
+    let capturedApi: OpenClawPluginApi | undefined;
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "late-run-context-plugin",
+        name: "Late Run Context Plugin",
+      }),
+      register(api) {
+        runPluginRegisterSyncInRegistry(
+          (guardedApi) => {
+            capturedApi = guardedApi;
+          },
+          api,
+          registry.registry,
+          "late-run-context-plugin",
+        );
+      },
+    });
+    setActivePluginRegistry(registry.registry);
+
+    capturedApi?.registerGatewayMethod("late-run-context.blocked", () => {});
+    expect(Object.keys(registry.registry.gatewayHandlers)).not.toContain(
+      "late-run-context.blocked",
+    );
+    expect(
+      capturedApi?.runContext.setRunContext({
+        runId: "late-run",
+        namespace: "state",
+        value: { available: true },
+      }),
+    ).toBe(true);
+    expect(
+      capturedApi?.runContext.getRunContext({
+        runId: "late-run",
+        namespace: "state",
+      }),
+    ).toEqual({ available: true });
+
+    capturedApi?.runContext.clearRunContext({ runId: "late-run", namespace: "state" });
+    expect(
+      capturedApi?.runContext.getRunContext({
+        runId: "late-run",
+        namespace: "state",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("blocks stale plugin API run-context access after registry replacement", () => {
     const { config, registry } = createPluginRegistryFixture();
     let capturedApi: OpenClawPluginApi | undefined;
     registerTestPlugin({
@@ -94,6 +145,10 @@ describe("plugin run context lifecycle", () => {
         patch: { runId: "stale-run", namespace: "state", value: { live: true } },
       }),
     ).toBe(true);
+    expect(capturedApi?.getRunContext({ runId: "stale-run", namespace: "state" })).toBeUndefined();
+    expect(
+      capturedApi?.runContext.getRunContext({ runId: "stale-run", namespace: "state" }),
+    ).toBeUndefined();
     capturedApi?.runContext?.clearRunContext({ runId: "stale-run", namespace: "state" });
     expect(
       getPluginRunContext({

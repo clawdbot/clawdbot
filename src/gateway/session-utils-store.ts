@@ -17,6 +17,7 @@ import {
 } from "../agents/agent-scope.js";
 import { resolveAgentAvatarUrlFromSource } from "../agents/identity-avatar-file.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
+import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import { insideGitCheckout } from "../agents/worktrees/git.js";
@@ -28,6 +29,7 @@ import {
   type SessionEntry,
   type SessionScope,
 } from "../config/sessions.js";
+import { canonicalSessionKeyMigrationRequiredError } from "../config/sessions/session-canonical-key.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { isAcpSessionKey } from "../sessions/session-key-utils.js";
@@ -141,12 +143,12 @@ function loadSessionEntryWithMode(
   });
   const storePath = target.storePath;
   const store = target.store;
-  const freshestMatch = resolveFreshestSessionStoreMatchFromStoreKeys(store, target.storeKeys);
-  const legacyKey = freshestMatch?.key !== target.canonicalKey ? freshestMatch?.key : undefined;
+  const canonicalMatch = resolveCanonicalSessionStoreMatchFromStoreKeys(store, target.storeKeys);
+  const legacyKey = canonicalMatch?.key !== target.canonicalKey ? canonicalMatch?.key : undefined;
   const entry =
-    readOnly && opts?.clone !== false && freshestMatch?.entry
-      ? structuredClone(freshestMatch.entry)
-      : freshestMatch?.entry;
+    readOnly && opts?.clone !== false && canonicalMatch?.entry
+      ? structuredClone(canonicalMatch.entry)
+      : canonicalMatch?.entry;
   return {
     cfg,
     storePath,
@@ -169,57 +171,41 @@ export function loadSessionEntryReadOnly(
   return loadSessionEntryWithMode(sessionKey, opts, true);
 }
 
-/** Returns both the freshest entry and the exact persisted key that owns it. */
-export function resolveFreshestSessionStoreMatchFromStoreKeys(
+/** Returns the one canonical entry and the exact persisted key that owns it. */
+export function resolveCanonicalSessionStoreMatchFromStoreKeys(
   store: Record<string, SessionEntry>,
   storeKeys: string[],
 ): { key: string; entry: SessionEntry } | undefined {
-  let freshest: { key: string; entry: SessionEntry } | undefined;
+  let selected: { key: string; entry: SessionEntry } | undefined;
   for (const key of storeKeys) {
     const entry = store[key];
     if (!entry) {
       continue;
     }
     const match = { key, entry };
-    if (!freshest || (match.entry.updatedAt ?? 0) > (freshest.entry.updatedAt ?? 0)) {
-      freshest = match;
+    if (selected) {
+      throw canonicalSessionKeyMigrationRequiredError(
+        `duplicate rows resolve to canonical session key ${storeKeys[0] ?? key}`,
+      );
     }
+    selected = match;
   }
-  return freshest;
+  if (selected && selected.key !== storeKeys[0]) {
+    throw canonicalSessionKeyMigrationRequiredError(
+      `non-canonical persisted row resolves to session key ${storeKeys[0] ?? selected.key}`,
+    );
+  }
+  return selected;
 }
 
-export function resolveFreshestSessionEntryFromStoreKeys(
+export function resolveCanonicalSessionEntryFromStoreKeys(
   store: Record<string, SessionEntry>,
   storeKeys: string[],
 ): SessionEntry | undefined {
-  return resolveFreshestSessionStoreMatchFromStoreKeys(store, storeKeys)?.entry;
+  return resolveCanonicalSessionStoreMatchFromStoreKeys(store, storeKeys)?.entry;
 }
 
-/**
- * Remove legacy key variants for one canonical session key.
- * Candidates can include aliases (for example, "agent:ops:main" when canonical is "agent:ops:work").
- */
-function pruneLegacyStoreKeys(params: {
-  store: Record<string, unknown>;
-  canonicalKey: string;
-  candidates: Iterable<string>;
-}) {
-  const keysToDelete = new Set<string>();
-  for (const candidate of params.candidates) {
-    const trimmed = normalizeOptionalString(candidate ?? "") ?? "";
-    if (!trimmed) {
-      continue;
-    }
-    if (trimmed !== params.canonicalKey) {
-      keysToDelete.add(trimmed);
-    }
-  }
-  for (const key of keysToDelete) {
-    delete params.store[key];
-  }
-}
-
-export function migrateAndPruneGatewaySessionStoreKey(params: {
+export function resolveCanonicalGatewaySessionStoreKey(params: {
   cfg: OpenClawConfig;
   key: string;
   store: Record<string, SessionEntry>;
@@ -232,21 +218,7 @@ export function migrateAndPruneGatewaySessionStoreKey(params: {
     ...(params.agentId ? { agentId: params.agentId } : {}),
   });
   const primaryKey = target.canonicalKey;
-  const freshestMatch = resolveFreshestSessionStoreMatchFromStoreKeys(
-    params.store,
-    target.storeKeys,
-  );
-  if (freshestMatch) {
-    const currentPrimary = params.store[primaryKey];
-    if (!currentPrimary || (freshestMatch.entry.updatedAt ?? 0) > (currentPrimary.updatedAt ?? 0)) {
-      params.store[primaryKey] = freshestMatch.entry;
-    }
-  }
-  pruneLegacyStoreKeys({
-    store: params.store,
-    canonicalKey: primaryKey,
-    candidates: target.storeKeys,
-  });
+  resolveCanonicalSessionStoreMatchFromStoreKeys(params.store, target.storeKeys);
   return { target, primaryKey, entry: params.store[primaryKey] };
 }
 
@@ -312,10 +284,16 @@ function resolveGatewayAgentModel(
   cfg: OpenClawConfig,
   agentId: string,
 ): GatewayAgentRow["model"] | undefined {
-  const primary = resolveAgentEffectiveModelPrimary(cfg, agentId)?.trim();
+  // Agent rows expose model identity to clients; credential-profile binding stays in
+  // canonical config and is consumed only by execution-time model selection.
+  const primary = splitTrailingAuthProfile(
+    resolveAgentEffectiveModelPrimary(cfg, agentId) ?? "",
+  ).model;
   const fallbackOverride = resolveAgentModelFallbacksOverride(cfg, agentId);
   const defaultFallbacks = resolveAgentModelFallbackValues(cfg.agents?.defaults?.model);
-  const fallbacks = normalizeFallbackList(fallbackOverride ?? defaultFallbacks);
+  const fallbacks = normalizeFallbackList(
+    (fallbackOverride ?? defaultFallbacks).map((value) => splitTrailingAuthProfile(value).model),
+  );
   if (!primary && fallbacks.length === 0) {
     return undefined;
   }

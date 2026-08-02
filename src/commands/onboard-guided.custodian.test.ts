@@ -373,6 +373,25 @@ describe("runGuidedOnboarding custodian flow", () => {
     );
   });
 
+  it("renders detected candidates without leaking interpolation placeholders", async () => {
+    const prompter = createWizardPrompter();
+    const deps = setupDeps({
+      prompter,
+      detect: vi.fn(async () =>
+        detection({
+          candidates: [candidate("claude-cli", "Claude Code"), candidate("codex-cli", "Codex")],
+        }),
+      ),
+    });
+
+    await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps);
+
+    expect(prompter.note).toHaveBeenCalledWith(
+      "Claude Code — logged in\nCodex — logged in",
+      "AI found",
+    );
+  });
+
   it("never re-applies setup or bounces the gateway on a configured install", async () => {
     readConfigFileSnapshot.mockResolvedValue({
       exists: true,

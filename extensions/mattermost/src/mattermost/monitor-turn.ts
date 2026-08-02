@@ -1,10 +1,15 @@
 // Mattermost plugin module owns one accepted message's reply turn and delivery.
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
-import type { ChannelInboundTurnPlan } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  isChannelPartialDeliveryError,
+  type ChannelInboundTurnPlan,
+} from "openclaw/plugin-sdk/channel-inbound";
 import {
   bindIngressLifecycleToReplyOptions,
   buildChannelProgressDraftLineForEntry,
+  createMessageReceiptFromOutboundResults,
   createChannelProgressDraftCompositor,
+  listMessageReceiptPlatformIds,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import type { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
@@ -23,12 +28,13 @@ import {
 } from "./monitor-context.js";
 import {
   deliverMattermostReplyWithDraftPreview,
+  type MattermostPreviewFinalResolution,
   type MattermostDraftPreviewState,
 } from "./monitor-draft-delivery.js";
 import type { MattermostEventPlan } from "./monitor-event-plan.js";
 import type { MattermostIngressLifecycle } from "./monitor-ingress.js";
 import type { MattermostMonitorContext } from "./monitor-types.js";
-import { deliverMattermostReplyPayload } from "./reply-delivery.js";
+import { deliverMattermostReplyPayload, joinMattermostVisibleContent } from "./reply-delivery.js";
 import type { HistoryEntry, ReplyPayload } from "./runtime-api.js";
 import { createChannelMessageReplyPipeline } from "./runtime-api.js";
 import { sendMessageMattermost } from "./send.js";
@@ -59,7 +65,7 @@ function createDisabledMattermostDraftStream(): ReturnType<typeof createMattermo
     stop: noopAsync,
     forceNewMessage: noopAsync,
     settleBoundaries: noopAsync,
-    resolveFinalText: (text) => ({ kind: "full", text }),
+    resolveFinalText: (text) => ({ kind: "full", text, publishedParts: [] }),
   };
 }
 
@@ -183,11 +189,31 @@ export async function dispatchMattermostInboundTurn(
   };
   const previewState: MattermostDraftPreviewState = { finalizedViaPreviewPost: false };
 
-  const resolvePreviewFinalText = (text?: string) => {
-    if (typeof text !== "string") {
-      return undefined;
-    }
-    const resolution = draftStream.resolveFinalText(text);
+  const resolvePreviewFinalText = (text?: string): MattermostPreviewFinalResolution | undefined => {
+    const resolution = draftStream.resolveFinalText(typeof text === "string" ? text : "");
+    const confirmedDelivery =
+      resolution.publishedParts.length > 0
+        ? (() => {
+            const receipt = createMessageReceiptFromOutboundResults({
+              results: resolution.publishedParts.map((part) => ({
+                channel: "mattermost",
+                messageId: part.messageId,
+                channelId,
+              })),
+              kind: "preview",
+              ...(effectiveReplyToId ? { replyToId: effectiveReplyToId } : {}),
+            });
+            return {
+              outcome: "text" as const,
+              messageIds: listMessageReceiptPlatformIds(receipt),
+              receipt,
+              visibleReplySent: true,
+              content: joinMattermostVisibleContent(
+                resolution.publishedParts.map((part) => part.content),
+              ),
+            };
+          })()
+        : undefined;
     const deliveryText = resolution.kind === "already-delivered" ? "" : resolution.text;
     const formatted = core.channel.text.convertMarkdownTables(deliveryText, tableMode);
     const chunks = core.channel.text.chunkMarkdownTextWithMode(formatted, textLimit, chunkMode);
@@ -195,20 +221,33 @@ export async function dispatchMattermostInboundTurn(
       chunks.push(formatted);
     }
     if (chunks.length !== 1) {
-      return undefined;
+      return {
+        deliveryText,
+        confirmedDelivery,
+        alreadyDelivered: resolution.kind === "already-delivered",
+      };
     }
     const trimmed = chunks[0]?.trim();
     if (!trimmed) {
-      return undefined;
+      return {
+        deliveryText,
+        confirmedDelivery,
+        alreadyDelivered: resolution.kind === "already-delivered",
+      };
     }
     if (
       lastPartialText &&
       lastPartialText.startsWith(trimmed) &&
       trimmed.length < lastPartialText.length
     ) {
-      return undefined;
+      return { deliveryText, confirmedDelivery, alreadyDelivered: false };
     }
-    return trimmed;
+    return {
+      editText: trimmed,
+      deliveryText,
+      confirmedDelivery,
+      alreadyDelivered: false,
+    };
   };
 
   const updateDraftFromPartial = (text?: string) => {
@@ -249,6 +288,7 @@ export async function dispatchMattermostInboundTurn(
     typingCallbacks,
   };
   const delivery: ChannelInboundTurnPlan["delivery"] = {
+    observeMessageSent: true,
     deliver: async (payloadEntry: ReplyPayload, info) => {
       if (info.kind === "final") {
         await enterBlockPreviewActivity("text");
@@ -257,14 +297,16 @@ export async function dispatchMattermostInboundTurn(
         progressDraft.markFinalReplyStarted();
       }
       // A visible same-thread final can be a send or an in-place draft edit; either path records participation.
+      let threadParticipationRecorded = false;
       const markThreadParticipation = () => {
-        if (kind !== "direct" && effectiveReplyToId) {
+        if (!threadParticipationRecorded && kind !== "direct" && effectiveReplyToId) {
+          threadParticipationRecorded = true;
           recordMattermostThreadParticipation(account.accountId, channelId, effectiveReplyToId, {
             agentId: route.agentId,
           });
         }
       };
-      await deliverMattermostReplyWithDraftPreview({
+      const result = await deliverMattermostReplyWithDraftPreview({
         payload: payloadEntry,
         info,
         kind,
@@ -289,7 +331,7 @@ export async function dispatchMattermostInboundTurn(
                   finalTextResolution.kind === "already-delivered" ? "" : finalTextResolution.text,
               }
             : payloadToDeliver;
-          const outcome = await deliverMattermostReplyPayload({
+          const deliveryResult = await deliverMattermostReplyPayload({
             core,
             cfg,
             payload: resolvedPayload,
@@ -305,17 +347,25 @@ export async function dispatchMattermostInboundTurn(
             tableMode,
             sendMessage: sendMessageMattermost,
             onDmChannelResolution: deliveryBarrier.trackDmChannelResolution,
+          }).catch((error: unknown) => {
+            if (isChannelPartialDeliveryError(error)) {
+              markThreadParticipation();
+            }
+            throw error;
           });
           // Record only visible sends so reasoning-only, empty, or suppressed threads do not auto-engage later.
-          if (outcome === "text" || outcome === "media") {
+          if (deliveryResult.outcome === "text" || deliveryResult.outcome === "media") {
             markThreadParticipation();
-          } else if (outcome === "empty" && finalTextResolution?.kind === "already-delivered") {
+          } else if (
+            deliveryResult.outcome === "empty" &&
+            finalTextResolution?.kind === "already-delivered"
+          ) {
             // The terminal payload confirms the already-published assistant block as
             // the visible final reply even though this delivery has no remaining text.
             markThreadParticipation();
           }
           const deliveryLog = formatMattermostFinalDeliveryOutcomeLog({
-            outcome,
+            outcome: deliveryResult.outcome,
             payload: resolvedPayload,
             to,
             accountId: account.accountId,
@@ -324,11 +374,26 @@ export async function dispatchMattermostInboundTurn(
           if (deliveryLog) {
             runtime.log?.(deliveryLog);
           }
+          return deliveryResult;
         },
+      }).catch((error: unknown) => {
+        if (isChannelPartialDeliveryError(error)) {
+          markThreadParticipation();
+          if (info.kind === "final") {
+            // The provider final is already visible even though later bookkeeping failed.
+            // Settle progress before rethrowing so late callbacks cannot revive stale draft state.
+            progressDraft.markFinalReplyDelivered();
+          }
+        }
+        throw error;
       });
+      if (result.visibleReplySent) {
+        markThreadParticipation();
+      }
       if (info.kind === "final") {
         progressDraft.markFinalReplyDelivered();
       }
+      return result;
     },
     onError: (err, info) => {
       runtime.error?.(`mattermost ${info.kind} reply failed: ${String(err)}`);

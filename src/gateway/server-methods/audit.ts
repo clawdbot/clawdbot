@@ -1,4 +1,5 @@
 // Metadata-only operator audit queries over the canonical shared SQLite ledger.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -90,13 +91,16 @@ export const auditHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    const agentId = normalizeOptionalString(params.agentId);
+    const sessionKey = normalizeOptionalString(params.sessionKey);
+    const runId = normalizeOptionalString(params.runId);
     const page = listAuditEvents({
       limit: Math.min(params.limit ?? DEFAULT_AUDIT_LIST_LIMIT, MAX_AUDIT_LIST_LIMIT),
       ...(parsed.cursor !== undefined ? { cursor: parsed.cursor } : {}),
       filters: {
-        ...(params.agentId ? { agentId: params.agentId } : {}),
-        ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-        ...(params.runId ? { runId: params.runId } : {}),
+        ...(agentId ? { agentId } : {}),
+        ...(sessionKey ? { sessionKey } : {}),
+        ...(runId ? { runId } : {}),
         ...(params.kind ? { kind: params.kind } : {}),
         ...(params.status ? { status: params.status } : {}),
         ...(params.after !== undefined ? { after: params.after } : {}),
@@ -128,14 +132,17 @@ export const auditHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    const agentId = normalizeOptionalString(params.agentId);
+    const sessionKey = normalizeOptionalString(params.sessionKey);
+    const runId = normalizeOptionalString(params.runId);
     const page = listAuditEvents({
       limit: Math.min(params.limit ?? DEFAULT_AUDIT_LIST_LIMIT, MAX_AUDIT_LIST_LIMIT),
       ...(parsed.cursor !== undefined ? { cursor: parsed.cursor } : {}),
       filters: {
         includeMessages: true,
-        ...(params.agentId ? { agentId: params.agentId } : {}),
-        ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-        ...(params.runId ? { runId: params.runId } : {}),
+        ...(agentId ? { agentId } : {}),
+        ...(sessionKey ? { sessionKey } : {}),
+        ...(runId ? { runId } : {}),
         ...(params.kind ? { kind: params.kind } : {}),
         ...(params.status ? { status: params.status } : {}),
         ...(params.direction ? { direction: params.direction } : {}),

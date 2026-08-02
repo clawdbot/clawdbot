@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import { sessionRefFromPath } from "../../app-session-route-paths.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
-import type { TaskStatus, TaskSummary } from "../../lib/tasks/data.ts";
+import type { TaskStatus, TaskSummary } from "../../lib/tasks/task-summary.ts";
 import "./tasks-page.ts";
 
 type TasksPageTestElement = HTMLElement & {

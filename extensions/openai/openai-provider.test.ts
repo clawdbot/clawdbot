@@ -379,6 +379,9 @@ describe("buildOpenAIProvider", () => {
       throw new Error("expected OpenAI static provider catalog");
     }
     const gpt55 = result.providers.openai?.models.find((model) => model.id === "gpt-5.5");
+    const gpt54Models = result.providers.openai?.models.filter((model) =>
+      model.id.startsWith("gpt-5.4"),
+    );
     const gpt56Models = result.providers.openai?.models.filter((model) =>
       model.id.startsWith("gpt-5.6"),
     );
@@ -403,6 +406,44 @@ describe("buildOpenAIProvider", () => {
     expect(gpt56Models?.map((model) => model.compat?.supportedReasoningEfforts)).toEqual(
       Array.from({ length: 4 }, () => ["none", "low", "medium", "high", "xhigh", "max"]),
     );
+    expect(gpt54Models).toMatchObject([
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        reasoning: true,
+        input: ["text", "image"],
+        contextWindow: 1_050_000,
+        maxTokens: 128_000,
+        cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 },
+      },
+      {
+        id: "gpt-5.4-pro",
+        name: "GPT-5.4 Pro",
+        reasoning: true,
+        input: ["text", "image"],
+        contextWindow: 1_050_000,
+        maxTokens: 128_000,
+        cost: { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 },
+      },
+      {
+        id: "gpt-5.4-mini",
+        name: "GPT-5.4 Mini",
+        reasoning: true,
+        input: ["text", "image"],
+        contextWindow: 400_000,
+        maxTokens: 128_000,
+        cost: { input: 0.75, output: 4.5, cacheRead: 0.075, cacheWrite: 0 },
+      },
+      {
+        id: "gpt-5.4-nano",
+        name: "GPT-5.4 Nano",
+        reasoning: true,
+        input: ["text", "image"],
+        contextWindow: 400_000,
+        maxTokens: 128_000,
+        cost: { input: 0.2, output: 1.25, cacheRead: 0.02, cacheWrite: 0 },
+      },
+    ]);
     expect(OPENAI_DEFAULT_MODEL).toBe("openai/gpt-5.6");
     expect(OPENAI_CODEX_DEFAULT_MODEL).toBe("openai/gpt-5.6-sol");
   });
@@ -2004,6 +2045,45 @@ describe("buildOpenAIProvider", () => {
     expect(codexSolFromDirectCatalog?.levels.map((level) => level.id)).toContain("ultra");
     expect(codexSolFromNativeCatalog?.levels.map((level) => level.id)).toContain("ultra");
   });
+
+  it.each([
+    { modelId: "gpt-5.4", contextWindow: 1_050_000 },
+    { modelId: "gpt-5.4-pro", contextWindow: 1_050_000 },
+    { modelId: "gpt-5.4-mini", contextWindow: 400_000 },
+    { modelId: "gpt-5.4-nano", contextWindow: 400_000 },
+  ])(
+    "restores native image capability to an existing $modelId catalog row",
+    ({ modelId, contextWindow }) => {
+      const provider = buildOpenAIProvider();
+      const existingRoute = {
+        provider: "openai",
+        id: modelId,
+        name: `Stale ${modelId}`,
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        input: ["text"],
+        contextWindow: 8_192,
+        cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 },
+      };
+
+      const entries = provider.augmentModelCatalog?.({
+        env: process.env,
+        entries: [existingRoute],
+      } as never);
+
+      expectCatalogEntry(entries, modelId, {
+        provider: "openai",
+        id: modelId,
+        name: modelId,
+        api: existingRoute.api,
+        baseUrl: existingRoute.baseUrl,
+        reasoning: true,
+        input: ["text", "image"],
+        contextWindow,
+        cost: existingRoute.cost,
+      });
+    },
+  );
 
   it("keeps chat-latest and gpt-5.5 out of synthetic catalog metadata", () => {
     const provider = buildOpenAIProvider();

@@ -1,6 +1,5 @@
 import {
   hasSessionProjectionAcceptedFinal,
-  reduceSessionProjection,
   reduceSessionProjectionRunEvent,
 } from "@openclaw/gateway-client/browser";
 import { isAssistantHeartbeatAckForDisplay } from "../../lib/chat/heartbeat-display.ts";
@@ -17,7 +16,12 @@ import {
   type ChatEventPayload,
   type ChatState,
 } from "./chat-history.ts";
-import { getChatSessionProjection, setChatSessionProjection } from "./history-merge.ts";
+import {
+  getChatSessionProjection,
+  readChatSessionProjectionScope,
+  reduceChatSessionProjection,
+  setChatSessionProjection,
+} from "./history-merge.ts";
 import { reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 import { appendChatMessageToCache } from "./session-message-cache.ts";
 import { retireSteeredChipsForTerminalRun } from "./steer-lifecycle.ts";
@@ -230,21 +234,15 @@ function handleChatEvent(
     }
     return null;
   }
-  const scope = {
-    sessionKey: state.sessionKey,
-    ...(state.currentSessionId ? { sessionId: state.currentSessionId } : {}),
-    ...(state.chatDisplayedLeafEntryId !== undefined
-      ? { activeLeafEntryId: state.chatDisplayedLeafEntryId }
-      : {}),
-  };
+  const scope = readChatSessionProjectionScope(state);
   const publishVisibleFinal = (
     message: Record<string, unknown>,
     visibleMessages: unknown[],
     runId: string | null | undefined,
   ): void => {
     const event = payload as ChatEventPayload & { messageId?: unknown; messageSeq?: unknown };
-    const projection = reduceSessionProjection(
-      getChatSessionProjection(state, visibleMessages.slice(0, -1), scope),
+    reduceChatSessionProjection(
+      state,
       {
         type: "messagePersisted",
         message,
@@ -253,11 +251,9 @@ function handleChatEvent(
           ...(event.messageId === undefined ? {} : { messageId: event.messageId }),
           ...(event.messageSeq === undefined ? {} : { messageSeq: event.messageSeq }),
         },
-        scope,
       },
+      { scope, messages: visibleMessages.slice(0, -1) },
     );
-    setChatSessionProjection(state, projection);
-    state.chatMessages = [...projection.messages];
   };
   const projectedRun =
     payload.runId && payload.state !== "status"
@@ -275,16 +271,24 @@ function handleChatEvent(
     if (payload.state === "delta") {
       return null;
     }
-    if (payload.state === "error") {
+    if (payload.state === "error" || payload.state === "aborted") {
+      const pendingRunId = state.chatQueue.find(
+        (item) => item.sendState === "sending" && item.sendRunId,
+      )?.sendRunId;
+      const diagnosticOwnerRunId =
+        state.chatRunId ?? pendingRunId ?? state.lastLocalTerminalReconcile?.runId;
       if (
+        diagnosticOwnerRunId === payload.runId &&
         payload.errorMessage?.trim() &&
         projectedRun.currentRun?.errorMessage !== previousTerminalRun.errorMessage
       ) {
-        // A completed transcript is immutable; retain provider guidance without
-        // adopting its old run or interrupting a newer in-flight response.
+        // Late diagnostics belong to the active, pending, or latest locally terminal run;
+        // publishing them over a newer response falsely marks the new run failed.
         setChatRunError(state, resolveGatewayErrorText(payload, null));
       }
-      return "error";
+      if (payload.state === "error") {
+        return "error";
+      }
     }
     const incomingFinal = normalizedFinalMessage;
     if (
@@ -333,7 +337,7 @@ function handleChatEvent(
     });
   const reconcileTerminalRun = (
     outcome: "done" | "interrupted",
-    sessionStatus: "done" | "failed" | "killed",
+    sessionStatus: "done" | "failed" | "killed" | "timeout",
   ) =>
     reconcileChatRunLifecycle(state as unknown as Parameters<typeof reconcileChatRunLifecycle>[0], {
       outcome,
@@ -422,6 +426,9 @@ function handleChatEvent(
     } else {
       state.chatMessages = materializeVisibleStream();
     }
+    if (payload.errorMessage?.trim()) {
+      setChatRunError(state, resolveGatewayErrorText(payload, null));
+    }
     reconcileTerminalRun("interrupted", "killed");
   } else if (payload.state === "error") {
     const payloadMessage = normalizeFinalAssistantMessage(payload.message);
@@ -463,7 +470,12 @@ function handleChatEvent(
         state.chatMessages = materializeVisibleStream({ includeCurrent: true });
       }
     }
-    reconcileTerminalRun("interrupted", "failed");
+    // The shared Gateway projection owns timeout classification; preserve it
+    // when publishing selected-session and sidebar terminal status.
+    reconcileTerminalRun(
+      "interrupted",
+      projectedRun?.currentRun?.status === "timeout" ? "timeout" : "failed",
+    );
     setChatRunError(
       state,
       resolveGatewayErrorText(payload, projectedErrorMessage ? visiblePayloadMessage : null),

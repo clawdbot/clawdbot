@@ -250,6 +250,8 @@ unavailable instead of triggering a network request.
 
 When set, `OPENCLAW_HOME` replaces the system home directory (`$HOME` / `os.homedir()`) for internal OpenClaw path defaults. This includes the default state directory, config path, agent directories, credentials, installer onboarding workspace, and the default dev checkout used by `openclaw update --channel dev`.
 
+`OPENCLAW_HOME` does not grant ownership of the OS account's native Gateway service. Gateway service-management commands treat a relocated home as isolated state; use the OS account home and a named profile when a separate native service identity is required.
+
 **Precedence:** `OPENCLAW_HOME` > `$HOME` > `USERPROFILE` > Termux `PREFIX` home fallback on Android > `os.homedir()`
 
 **Example** (macOS LaunchDaemon):

@@ -1,5 +1,8 @@
 // Memory Core tests cover manager reindex state plugin behavior.
-import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import {
+  MEMORY_CHUNKING_VERSION,
+  type MemorySource,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { describe, expect, it } from "vitest";
 import {
   MEMORY_INDEX_PROVENANCE_VERSION,
@@ -19,6 +22,7 @@ function createMeta(overrides: Partial<MemoryIndexMeta> = {}): MemoryIndexMeta {
     scopeHash: "scope-v1",
     chunkTokens: 4000,
     chunkOverlap: 0,
+    chunkingVersion: MEMORY_CHUNKING_VERSION,
     ftsTokenizer: "unicode61",
     provenanceVersion: MEMORY_INDEX_PROVENANCE_VERSION,
     ...overrides,
@@ -71,6 +75,17 @@ describe("memory reindex state", () => {
     ).toEqual({
       status: "mismatched",
       reason: "index provenance classifier changed",
+    });
+  });
+
+  it("invalidates indexes written before curated entry chunking was versioned", () => {
+    expect(
+      resolveMemoryIndexIdentityState(
+        createIdentityParams({ meta: createMeta({ chunkingVersion: undefined }) }),
+      ),
+    ).toEqual({
+      status: "mismatched",
+      reason: "index chunking implementation changed",
     });
   });
 

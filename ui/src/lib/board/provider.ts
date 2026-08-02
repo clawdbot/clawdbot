@@ -26,7 +26,6 @@ export type { BoardCommandEvent };
 export type { BoardProvider } from "./provider-types.ts";
 export type { BoardViewCallbacks, BoardWidgetAppViewState } from "./view-types.ts";
 export { canvasWidgetNameForDocument, mcpAppWidgetNameForViewId } from "./widget-names.ts";
-export { GatewayBoardProvider } from "./gateway-provider.ts";
 
 type BoardGatewayClient = Pick<GatewayBrowserClient, "request" | "addEventListener">;
 
@@ -164,42 +163,21 @@ class MockBoardProvider implements BoardProvider {
   }
 
   async pinWidget(input: BoardPinWidgetInput): Promise<void> {
-    const snapshot = this.snapshotSignal.value;
     const name = input.name ?? canvasWidgetNameForDocument(input.docId);
-    const title = normalizeBoardWidgetTitle(input.title);
-    const tabId = input.tabId ?? snapshot.tabs[0]?.tabId ?? "main";
-    const tabs = snapshot.tabs.length
-      ? snapshot.tabs
-      : [
-          {
-            tabId: "main",
-            title: t("chat.board.defaultTab"),
-            position: 0,
-            chatDock: "right" as const,
-          },
-        ];
-    const existing = snapshot.widgets.find((widget) => widget.name === name);
-    const widgets = snapshot.widgets.filter((widget) => widget.name !== name);
-    widgets.push({
-      name,
-      tabId,
-      ...(title ? { title } : {}),
-      contentKind: "html",
-      sizeW: existing?.sizeW ?? 6,
-      sizeH: existing?.sizeH ?? 4,
-      position: existing?.position ?? widgets.filter((widget) => widget.tabId === tabId).length,
-      grantState: "none",
-      revision: (existing?.revision ?? 0) + 1,
-      frameUrl: `about:blank#board-widget=${encodeURIComponent(name)}`,
-    });
-    this.snapshotSignal.set(
-      normalizeMockBoardSnapshot({ ...snapshot, revision: snapshot.revision + 1, tabs, widgets }),
-    );
+    this.pinMockBoardWidget(input, name, "html");
   }
 
   async pinMcpApp(input: BoardPinMcpAppInput): Promise<void> {
-    const snapshot = this.snapshotSignal.value;
     const name = input.name ?? mcpAppWidgetNameForViewId(input.viewId);
+    this.pinMockBoardWidget(input, name, "mcp-app");
+  }
+
+  private pinMockBoardWidget(
+    input: BoardPinWidgetInput | BoardPinMcpAppInput,
+    name: string,
+    contentKind: "html" | "mcp-app",
+  ): void {
+    const snapshot = this.snapshotSignal.value;
     const title = normalizeBoardWidgetTitle(input.title);
     const tabId = input.tabId ?? snapshot.tabs[0]?.tabId ?? "main";
     const tabs = snapshot.tabs.length
@@ -218,20 +196,18 @@ class MockBoardProvider implements BoardProvider {
       name,
       tabId,
       ...(title ? { title } : {}),
-      contentKind: "mcp-app",
+      contentKind,
       sizeW: existing?.sizeW ?? 6,
       sizeH: existing?.sizeH ?? 4,
       position: existing?.position ?? widgets.filter((widget) => widget.tabId === tabId).length,
       grantState: "none",
       revision: (existing?.revision ?? 0) + 1,
+      ...(contentKind === "html"
+        ? { frameUrl: `about:blank#board-widget=${encodeURIComponent(name)}` }
+        : {}),
     });
     this.snapshotSignal.set(
-      normalizeMockBoardSnapshot({
-        ...snapshot,
-        revision: snapshot.revision + 1,
-        tabs,
-        widgets,
-      }),
+      normalizeMockBoardSnapshot({ ...snapshot, revision: snapshot.revision + 1, tabs, widgets }),
     );
   }
 
@@ -384,16 +360,9 @@ export function boardProviderCacheKey(sessionKey: string): string {
   return normalized === "main" ? buildAgentMainSessionKey({ agentId: "main" }) : normalized;
 }
 
-export function boardProviderForSession(
-  sessionKey: string,
-  client?: BoardGatewayClient | null,
-  available = true,
-  connected = true,
-  canPinWidgets = available,
-  canPinMcpApps = false,
-  canMutate = available,
-  canGrant = available,
-): BoardProvider {
+// Session lookups are read-only: only a lifecycle-owned lease may create and
+// subscribe a gateway transport, so hidden panes cannot orphan subscriptions.
+export function boardProviderForSession(sessionKey: string, available = true): BoardProvider {
   const key = boardProviderCacheKey(sessionKey);
   const mockScope = resolveMockBoardScope();
   if (mockScope && isMockBoardSession(key)) {
@@ -408,34 +377,7 @@ export function boardProviderForSession(
     }
     return provider;
   }
-  if (!available) {
-    let provider = nullProviders.get(key);
-    if (!provider) {
-      provider = new NullProvider(key);
-      nullProviders.set(key, provider);
-    }
-    return provider;
-  }
-  if (client) {
-    let entry = gatewayProviders.get(key);
-    if (!entry) {
-      const provider = new GatewayBoardProvider(
-        key,
-        client,
-        connected,
-        canPinWidgets,
-        canPinMcpApps,
-        canMutate,
-        canGrant,
-      );
-      entry = { provider, consumers: 0 };
-      gatewayProviders.set(key, entry);
-    } else {
-      entry.provider.attachClient(client, connected);
-    }
-    return entry.provider;
-  }
-  const gatewayProvider = gatewayProviders.get(key)?.provider;
+  const gatewayProvider = available ? gatewayProviders.get(key)?.provider : undefined;
   if (gatewayProvider) {
     return gatewayProvider;
   }
@@ -467,19 +409,16 @@ export function acquireBoardProviderForSession(
   canGrant = true,
 ): BoardProviderLease {
   const key = boardProviderCacheKey(sessionKey);
-  const provider = boardProviderForSession(
-    key,
-    client,
-    true,
-    connected,
-    canPinWidgets,
-    canPinMcpApps,
-    canMutate,
-    canGrant,
-  );
-  const entry = gatewayProviders.get(key);
-  if (!entry || entry.provider !== provider) {
+  const provider = boardProviderForSession(key);
+  if (provider instanceof MockBoardProvider) {
     return { provider, update: () => undefined, release: () => undefined };
+  }
+  let entry = gatewayProviders.get(key);
+  if (!entry) {
+    entry = { provider: new GatewayBoardProvider(key, client, connected), consumers: 0 };
+    gatewayProviders.set(key, entry);
+  } else {
+    entry.provider.attachClient(client, connected);
   }
   const scopedProvider = new ScopedGatewayBoardProvider(entry.provider, {
     canPinWidgets,

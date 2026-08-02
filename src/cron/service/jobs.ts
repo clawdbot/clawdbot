@@ -24,6 +24,7 @@ import type {
   CronJob,
   CronJobCreate,
   CronJobPatch,
+  CronJobState,
 } from "../types.js";
 import { resolveInitialCronDelivery } from "./initial-delivery.js";
 import {
@@ -60,7 +61,6 @@ export {
   findJobOrThrow,
   isJobEnabled,
   computeJobNextRunAtMs,
-  computeJobPreviousRunAtMs,
   computeJobPreviousRunAtOrBeforeMs,
   recordScheduleComputeError,
   recomputeNextRuns,
@@ -172,6 +172,10 @@ export function createJob(
   const ownerAgentId = normalizeOptionalAgentId(input.owner?.agentId);
   const ownerSessionKey = normalizeOptionalString(input.owner?.sessionKey);
   const ownerAccountId = normalizeOptionalAccountId(input.owner?.accountId);
+  const initialState = { ...input.state } as Partial<CronJobState>;
+  // Schedule activation is stamped only by committed scheduling mutations.
+  // Accepting caller state here would let imports spoof restart catch-up ownership.
+  delete initialState.scheduleActivatedAtMs;
   const job: CronJob = {
     id,
     ...(declarationKey ? { declarationKey } : {}),
@@ -205,7 +209,7 @@ export function createJob(
     failureAlert: input.failureAlert,
     ...(input.trigger ? { trigger: structuredClone(input.trigger) } : {}),
     state: {
-      ...input.state,
+      ...initialState,
       ...(schedule.kind === "stream"
         ? { streamSourceIdentity: createCronStreamSourceIdentity() }
         : {}),
@@ -297,9 +301,9 @@ export function applyJobPatch(
       const explicitStaggerMs = normalizeCronStaggerMs(patch.schedule.staggerMs);
       if (explicitStaggerMs !== undefined) {
         job.schedule = { ...patch.schedule, staggerMs: explicitStaggerMs };
-      } else if (job.schedule.kind === "cron") {
-        // Preserve an existing explicit stagger when editing only the cron
-        // expression; otherwise a patch could silently change fire timing.
+      } else if (job.schedule.kind === "cron" && job.schedule.expr === patch.schedule.expr) {
+        // Metadata-only resaves keep the existing stagger, but a replacement
+        // expression owns a fresh default and must not inherit stale timing.
         job.schedule = { ...patch.schedule, staggerMs: job.schedule.staggerMs };
       } else {
         const defaultStaggerMs = resolveDefaultCronStaggerMs(patch.schedule.expr);
@@ -376,7 +380,17 @@ export function applyJobPatch(
         : undefined;
   }
   if (patch.state) {
-    job.state = { ...job.state, ...patch.state };
+    const statePatch = { ...patch.state } as Partial<CronJobState>;
+    // Runtime state patches may report execution progress, but the scheduler
+    // alone owns the boundary that decides whether restart catch-up can run.
+    delete statePatch.scheduleActivatedAtMs;
+    delete statePatch.autoDisabled;
+    job.state = { ...job.state, ...statePatch };
+  }
+  if (patch.enabled === true) {
+    delete job.state.autoDisabled;
+    job.state.consecutiveErrors = 0;
+    job.state.scheduleErrorCount = 0;
   }
   if ("agentId" in patch) {
     job.agentId = normalizeOptionalAgentId((patch as { agentId?: unknown }).agentId);
@@ -409,6 +423,10 @@ export function applyJobPatch(
   assertScriptPayloadSupport(job, {
     cronConfig: opts?.cronConfig,
     requireEnabled: patch.payload?.kind === "script",
+    // Enabled-only/rename patches must keep working on jobs stored with a
+    // malformed script (pre-validation persistence); re-check syntax only
+    // when this patch rewrites the payload, or disable becomes a dead end.
+    validateSyntax: patch.payload !== undefined,
   });
   assertStreamScheduleSupport(job, {
     cronConfig: opts?.cronConfig,

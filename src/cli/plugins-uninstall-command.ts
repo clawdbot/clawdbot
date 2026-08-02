@@ -1,15 +1,13 @@
 // Plugin uninstall command implementation and confirmation-driven removal plan execution.
-import os from "node:os";
-import path from "node:path";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import {
   assertConfigWriteAllowedInCurrentMode,
   readConfigFileSnapshotForWrite,
   replaceConfigFile,
 } from "../config/config.js";
-import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub.js";
+import { resolveDefaultPluginExtensionsDir } from "../plugins/install-paths.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import {
   tracePluginLifecyclePhase,
@@ -109,19 +107,25 @@ async function runPluginUninstallCommandUnlocked(
     () => buildPluginSnapshotReport({ config: cfg }),
     { command: "uninstall" },
   );
-  const extensionsDir = path.join(resolveStateDir(process.env, os.homedir), "extensions");
+  const extensionsDir = resolveDefaultPluginExtensionsDir();
   const keepFiles = Boolean(opts.keepFiles || opts.keepConfig);
 
   if (opts.keepConfig) {
     runtime.log(theme.warn("`--keep-config` is deprecated, use `--keep-files`."));
   }
 
-  const { plugin, pluginId } = resolvePluginUninstallId({
+  const selection = resolvePluginUninstallId({
     rawId: id,
     config: cfg,
     plugins: report.plugins,
   });
-  const channelIds = plugin?.status === "loaded" ? plugin.channelIds : undefined;
+  if (!selection.ok) {
+    runtime.error(selection.error);
+    runtime.exit(1);
+    return;
+  }
+  const { plugin, pluginId } = selection.value;
+  const channelIds = plugin?.channelIds;
   const initialPlan = planPluginUninstall({
     config: cfg,
     pluginId,

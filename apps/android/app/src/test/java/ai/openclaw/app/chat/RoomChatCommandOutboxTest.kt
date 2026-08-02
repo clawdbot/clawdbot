@@ -802,6 +802,59 @@ class RoomChatCommandOutboxTest {
     }
 
   @Test
+  fun videoCommandsUseServerAttachmentCapWithoutRaisingOtherMediaCaps() =
+    runTest {
+      val aboveDefaultCap = ByteArray((OUTBOX_MAX_COMMAND_ATTACHMENT_BYTES + 1L).toInt())
+      val video =
+        store.enqueue(
+          gatewayId = "gateway-a",
+          sessionKey = "main",
+          text = "video",
+          thinkingLevel = "off",
+          nowMs = 10,
+          ownerAgentId = "main",
+          attachments = listOf(payload(aboveDefaultCap, type = "video", mimeType = "video/mp4")),
+        )
+      val document =
+        store.enqueue(
+          gatewayId = "gateway-a",
+          sessionKey = "main",
+          text = "document",
+          thinkingLevel = "off",
+          nowMs = 11,
+          ownerAgentId = "main",
+          attachments = listOf(payload(aboveDefaultCap, type = "file", mimeType = "application/pdf")),
+        )
+
+      assertTrue(video is ChatOutboxEnqueueResult.Queued)
+      assertEquals(ChatOutboxEnqueueResult.AttachmentsTooLarge, document)
+      assertEquals(20L * 1024L * 1024L, OUTBOX_MAX_VIDEO_COMMAND_ATTACHMENT_BYTES)
+    }
+
+  @Test
+  fun mixedVideoCommandKeepsNonVideoAggregateCap() =
+    runTest {
+      val document = ByteArray(5 * 1024 * 1024)
+      val refused =
+        store.enqueue(
+          gatewayId = "gateway-a",
+          sessionKey = "main",
+          text = "mixed",
+          thinkingLevel = "off",
+          nowMs = 10,
+          ownerAgentId = "main",
+          attachments =
+            listOf(
+              payload(document, fileName = "one.pdf", type = "file", mimeType = "application/pdf"),
+              payload(document, fileName = "two.pdf", type = "file", mimeType = "application/pdf"),
+              payload(byteArrayOf(1), fileName = "clip.mp4", type = "video", mimeType = "video/mp4"),
+            ),
+        )
+
+      assertEquals(ChatOutboxEnqueueResult.AttachmentsTooLarge, refused)
+    }
+
+  @Test
   fun gatewayAttachmentByteBudgetRefusesWhenExhaustedAndRecoversAfterDelete() =
     runTest {
       val chunk = ByteArray(OUTBOX_MAX_COMMAND_ATTACHMENT_BYTES.toInt())

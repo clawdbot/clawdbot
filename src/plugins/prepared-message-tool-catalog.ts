@@ -22,19 +22,13 @@ export type PreparedMessageToolCatalog = Readonly<{
 const catalogsByRegistry = new WeakMap<PluginRegistry, Map<number, PreparedMessageToolCatalog>>();
 const latestCatalogByRegistry = new WeakMap<PluginRegistry, PreparedMessageToolCatalog>();
 
-export const EMPTY_PREPARED_MESSAGE_TOOL_CATALOG: PreparedMessageToolCatalog = Object.freeze({
-  version: 0,
-  channels: Object.freeze([]),
-  getChannel: () => undefined,
-});
-
 function selectedRegistry(
   snapshot: ActivePluginChannelRegistrySnapshot,
 ): PluginRegistry | undefined {
   return (snapshot.registry as PluginRegistry | null | undefined) ?? undefined;
 }
 
-/** Settles the catalog after the channel registry surface changes. */
+/** Settles the catalog after the process-root registry changes. */
 export function settlePreparedMessageToolCatalog(
   preparedRegistry?: PluginRegistry,
   preparedVersion?: number,

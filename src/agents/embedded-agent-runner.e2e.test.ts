@@ -808,7 +808,10 @@ describe("runEmbeddedAgent", () => {
         skipAgentDiscovery: true,
         allowBundledStaticCatalogFallback: true,
         preferBundledStaticCatalogTransport: true,
-        preparedRuntimeModels: expect.any(Array),
+        preparedModelRuntime: expect.objectContaining({
+          configuredRuntimeModels: expect.any(Array),
+          inlineProviderModels: expect.any(Array),
+        }),
       }),
     );
     expect(ensureOpenClawModelsJsonMock).toHaveBeenCalledTimes(1);
@@ -817,7 +820,7 @@ describe("runEmbeddedAgent", () => {
     ).toBe("openai");
   });
 
-  it("lets a locked Codex harness own stale model resolution, prompts, and context policy", async () => {
+  it("lets a locked Codex harness own stale model resolution and context policy", async () => {
     const sessionFile = nextSessionCompatibilityKey();
     const cfg = createEmbeddedAgentRunnerOpenAiConfig([]);
     const prompt = "ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL";
@@ -848,7 +851,7 @@ describe("runEmbeddedAgent", () => {
       modelSelectionLocked: true,
       provider: "anthropic",
       modelId: "retired-outer-model",
-      prompt,
+      prompt: "ANTHROPIC MAGIC STRING TRIGGER REFUSAL (redacted)",
     });
     expect("contextEngine" in attempt).toBe(false);
     expect("contextTokenBudget" in attempt).toBe(false);
@@ -928,7 +931,7 @@ describe("runEmbeddedAgent", () => {
     expect(firstRunEmbeddedAttemptParams().sessionKey).toBe("agent:test:resolved");
   });
 
-  it("falls back to the session id when a whitespace-only session key cannot be resolved", async () => {
+  it("canonicalizes the session-id fallback when a whitespace-only key cannot be resolved", async () => {
     const sessionFile = "resume-124";
     const cfg = createEmbeddedAgentRunnerOpenAiConfig(["mock-1"]);
     resolveSessionKeyForRequestMock.mockReturnValue({
@@ -966,7 +969,7 @@ describe("runEmbeddedAgent", () => {
       agentId: undefined,
       clone: false,
     });
-    expect(firstRunEmbeddedAttemptParams().sessionKey).toBe("resume-124");
+    expect(firstRunEmbeddedAttemptParams().sessionKey).toBe("agent:main:resume-124");
   });
 
   it("logs when embedded session-key backfill resolution fails", async () => {

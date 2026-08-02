@@ -1,5 +1,9 @@
 // Openrouter tests cover music generation provider plugin behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
+import {
+  getProviderHttpMocks,
+  installProviderHttpMockCleanup,
+} from "openclaw/plugin-sdk/provider-http-test-mocks";
 import { expectExplicitMusicGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenRouterMusicGenerationProvider } from "./music-generation-provider.js";
@@ -9,35 +13,9 @@ const {
   postJsonRequestMock,
   resolveApiKeyForProviderMock,
   resolveProviderHttpRequestConfigMock,
-} = vi.hoisted(() => ({
-  assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
-  postJsonRequestMock: vi.fn(),
-  resolveApiKeyForProviderMock: vi.fn(async () => ({
-    apiKey: "openrouter-key",
-    source: "env",
-    mode: "api-key",
-  })),
-  resolveProviderHttpRequestConfigMock: vi.fn((params: Record<string, unknown>) => ({
-    baseUrl: params.baseUrl ?? params.defaultBaseUrl,
-    allowPrivateNetwork: false,
-    headers: new Headers(params.defaultHeaders as HeadersInit | undefined),
-    dispatcherPolicy: undefined,
-  })),
-}));
+} = getProviderHttpMocks();
 
-vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
-  resolveApiKeyForProvider: resolveApiKeyForProviderMock,
-}));
-
-vi.mock("openclaw/plugin-sdk/provider-http", async (importOriginal) => {
-  const original = await importOriginal<typeof import("openclaw/plugin-sdk/provider-http")>();
-  return {
-    ...original,
-    assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
-    postJsonRequest: postJsonRequestMock,
-    resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
-  };
-});
+installProviderHttpMockCleanup();
 
 function sseResponse(
   lines: Array<string | Uint8Array>,
@@ -139,12 +117,8 @@ function postRequest(): Record<string, unknown> {
 function resetOpenRouterMusicMocks() {
   assertOkOrThrowHttpErrorMock.mockResolvedValue(undefined);
   postJsonRequestMock.mockReset();
-  resolveApiKeyForProviderMock.mockResolvedValue({
-    apiKey: "openrouter-key",
-    source: "env",
-    mode: "api-key",
-  });
-  resolveProviderHttpRequestConfigMock.mockImplementation((params: Record<string, unknown>) => ({
+  resolveApiKeyForProviderMock.mockResolvedValue({ apiKey: "openrouter-key" });
+  resolveProviderHttpRequestConfigMock.mockImplementation((params) => ({
     baseUrl: params.baseUrl ?? params.defaultBaseUrl,
     allowPrivateNetwork: false,
     headers: new Headers(params.defaultHeaders as HeadersInit | undefined),

@@ -12,6 +12,10 @@ import {
 } from "./subagent-registry-queries.js";
 import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import {
+  createSubagentRunRecord,
+  type SubagentRunRecordOverrides,
+} from "./subagent-test-fixtures.test-helpers.js";
 export {
   getSubagentSessionRuntimeMs,
   getSubagentSessionStartedAt,
@@ -52,7 +56,7 @@ type RegistryDeps = {
   runSubagentAnnounceFlow: typeof import("./subagent-announce.js").runSubagentAnnounceFlow;
   maybeWakeRequesterAfterAllChildrenSettled: typeof import("./subagent-announce.requester-settle-wake.js").maybeWakeRequesterAfterAllChildrenSettled;
   ensureContextEnginesInitialized?: () => void;
-  ensureRuntimePluginsLoaded?: typeof import("./runtime-plugins.js").ensureRuntimePluginsLoaded;
+  loadAgentRuntimePluginRegistryHandle?: import("./subagent-registry-deps.js").SubagentRegistryDeps["loadAgentRuntimePluginRegistryHandle"];
   resolveContextEngine?: typeof import("../context-engine/registry.js").resolveContextEngine;
 };
 
@@ -66,8 +70,14 @@ export function resetSubagentRegistryForTests(opts?: { persist?: boolean }) {
   getRegistryTestApi().resetSubagentRegistryForTests(opts);
 }
 
-export function addSubagentRunForTests(entry: SubagentRunRecord) {
-  getRegistryTestApi().addSubagentRunForTests(entry);
+export function addSubagentRunForTests(entry: SubagentRunRecordOverrides) {
+  const canonical = createSubagentRunRecord(entry);
+  const target = entry as Record<string, unknown>;
+  for (const key of Object.keys(target)) {
+    delete target[key];
+  }
+  Object.assign(target, canonical);
+  getRegistryTestApi().addSubagentRunForTests(entry as SubagentRunRecord);
 }
 
 export function releaseSubagentRun(runId: string) {

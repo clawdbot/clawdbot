@@ -46,6 +46,7 @@ describe("sendWebhookMessageDiscord proxy support", () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
+    vi.useRealTimers();
   });
 
   it("falls back to global fetch when the Discord proxy URL is invalid", async () => {
@@ -267,12 +268,107 @@ describe("sendWebhookMessageDiscord proxy support", () => {
     globalFetchMock.mockRestore();
   });
 
-  it("throws typed rate limit errors for webhook 429 responses", async () => {
-    const globalFetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(JSON.stringify({ message: "Slow down", retry_after: 0.25, global: false }), {
-        status: 429,
-      }),
+  it("retries rate-limited webhook sends after the Discord retry-after delay", async () => {
+    vi.useFakeTimers();
+    const globalFetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ message: "Slow down", retry_after: 0.75, global: false }), {
+          status: 429,
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ id: "msg-retried", channel_id: "thread-1" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+
+    const sent = sendWebhookMessageDiscord("hello", {
+      cfg: { channels: { discord: { token: "Bot test-token" } } } as OpenClawConfig,
+      accountId: "default",
+      webhookId: "123",
+      webhookToken: "abc",
+      threadId: "thread-1",
+      wait: true,
+    });
+    const outcome = sent.then(
+      (value) => ({ ok: true as const, value }),
+      (error: unknown) => ({ ok: false as const, error }),
     );
+
+    await vi.advanceTimersByTimeAsync(749);
+    expect(globalFetchMock).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    await expect(outcome).resolves.toMatchObject({
+      ok: true,
+      value: { messageId: "msg-retried", channelId: "thread-1" },
+    });
+    expect(globalFetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries proven pre-connect webhook failures", async () => {
+    vi.useFakeTimers();
+    const globalFetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockRejectedValueOnce(Object.assign(new Error("connect refused"), { code: "ECONNREFUSED" }))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ id: "msg-connected", channel_id: "thread-1" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+
+    const sent = sendWebhookMessageDiscord("hello", {
+      cfg: { channels: { discord: { token: "Bot test-token" } } } as OpenClawConfig,
+      accountId: "default",
+      webhookId: "123",
+      webhookToken: "abc",
+      wait: true,
+    });
+    const outcome = sent.then(
+      (value) => ({ ok: true as const, value }),
+      (error: unknown) => ({ ok: false as const, error }),
+    );
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    await expect(outcome).resolves.toMatchObject({
+      ok: true,
+      value: { messageId: "msg-connected" },
+    });
+    expect(globalFetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("never retries ambiguous webhook server failures that could duplicate a message", async () => {
+    const globalFetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response("bad gateway", { status: 502 }))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ id: "unexpected-duplicate" }), { status: 200 }),
+      );
+
+    await expect(
+      sendWebhookMessageDiscord("hello", {
+        cfg: { channels: { discord: { token: "Bot test-token" } } } as OpenClawConfig,
+        accountId: "default",
+        webhookId: "123",
+        webhookToken: "abc",
+        wait: true,
+      }),
+    ).rejects.toMatchObject({ status: 502 });
+    expect(globalFetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("throws typed rate limit errors for webhook 429 responses", async () => {
+    const globalFetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+      return new Response(
+        JSON.stringify({ message: "Slow down", retry_after: 0.25, global: false }),
+        {
+          status: 429,
+        },
+      );
+    });
 
     const cfg = {
       channels: {

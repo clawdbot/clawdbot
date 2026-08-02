@@ -4,7 +4,6 @@ import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-en
 import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
 import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
-import { buildGmiProvider } from "./provider-catalog.js";
 
 const PROVIDER_ID = "gmi";
 
@@ -22,8 +21,6 @@ export default defineSingleProviderPluginEntry({
       noteMessage: "Manage API keys at https://www.gmicloud.ai/",
     },
     catalog: {
-      buildProvider: buildGmiProvider,
-      buildStaticProvider: buildGmiProvider,
       allowExplicitBaseUrl: true,
       liveModelDiscovery: true,
     },

@@ -58,26 +58,35 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
     autoRun: false,
     // Gateway identity matters when a replacement source reuses the same client object.
     args: () =>
-      [null as ApplicationContext["gateway"] | null, null as GatewayBrowserClient | null] as const,
-    task: async ([gateway, client], { signal }) => {
+      [
+        null as ApplicationContext["gateway"] | null,
+        null as GatewayBrowserClient | null,
+        true as boolean,
+      ] as const,
+    task: async ([gateway, client, refreshModelAuth], { signal }) => {
       if (!gateway || !client) {
         return initialState;
       }
       const cron = createInitialCronState({ client, connected: true });
-      await Promise.allSettled([
+      const loads: Promise<unknown>[] = [
         loadCronJobsPage(cron).then(() => {
           if (!signal.aborted) {
             this.cronJobs = cron.cronJobs;
           }
         }),
-        loadModelAuthStatus(client, { signal })
-          .catch(() => null)
-          .then((modelAuthStatus) => {
-            if (!signal.aborted) {
-              this.modelAuthStatus = modelAuthStatus;
-            }
-          }),
-      ]);
+      ];
+      if (refreshModelAuth) {
+        loads.push(
+          loadModelAuthStatus(client, { signal })
+            .catch(() => null)
+            .then((modelAuthStatus) => {
+              if (!signal.aborted) {
+                this.modelAuthStatus = modelAuthStatus;
+              }
+            }),
+        );
+      }
+      await Promise.allSettled(loads);
       return true;
     },
     onComplete: () => {
@@ -93,6 +102,19 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
         this.synchronize(gateway);
         return gateway.subscribe(() => this.synchronize(gateway));
       },
+    )
+    .effect(
+      () => this.context?.gateway,
+      (gateway) =>
+        gateway.subscribeEvents((event) => {
+          if (this.context?.gateway !== gateway || event.event !== "cron") {
+            return;
+          }
+          // The Automations page refreshes from the same event. Refresh this
+          // independent snapshot too so its ambient alert cannot contradict it.
+          this.loadedClient = null;
+          this.synchronize(gateway, { refreshModelAuth: false });
+        }),
     )
     .watch(
       () => this.context?.overlays,
@@ -136,13 +158,16 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
       this.idleRefreshTimer = null;
     }
     this.subscriptions.clear();
-    void this.loadTask.run([null, null]);
+    void this.loadTask.run([null, null, false]);
     this.loadedClient = null;
     this.loadedGateway = null;
     super.disconnectedCallback();
   }
 
-  private synchronize(gateway: ApplicationContext["gateway"]) {
+  private synchronize(
+    gateway: ApplicationContext["gateway"],
+    options: { refreshModelAuth?: boolean } = {},
+  ) {
     const snapshot = gateway.snapshot;
     const gatewayUrl = gateway.connection.gatewayUrl;
     if (gatewayUrl && gatewayUrl !== this.dismissedScope) {
@@ -150,7 +175,7 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
       this.dismissed = loadDismissals(gatewayUrl);
     }
     if (snapshot.phase !== "connected" || !snapshot.client) {
-      void this.loadTask.run([null, null]);
+      void this.loadTask.run([null, null, false]);
       this.loadedClient = null;
       this.loadedGateway = null;
       this.cronJobs = [];
@@ -162,7 +187,7 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
     }
     this.loadedGateway = gateway;
     this.loadedClient = snapshot.client;
-    void this.loadTask.run([gateway, snapshot.client]);
+    void this.loadTask.run([gateway, snapshot.client, options.refreshModelAuth !== false]);
   }
 
   // Re-arm stale snoozes only right after this tab's own data refresh: fresh

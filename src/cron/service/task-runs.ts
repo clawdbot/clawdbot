@@ -1,11 +1,7 @@
 /** Detached task-ledger integration for cron runs. */
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import {
-  normalizeAgentId,
-  parseAgentSessionKey,
-  resolveAgentIdFromSessionKey,
-} from "../../routing/session-key.js";
+import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { isCronTimeoutErrorText } from "../execution-error-constants.js";
 
@@ -19,15 +15,16 @@ function requireCronAgentId(agentId: string | undefined): string {
 function resolveCurrentDefaultAgentId(state: CronServiceState): string | undefined {
   return state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId;
 }
+import { CRON_TASK_KIND } from "../../tasks/cron-task-contract.js";
 import {
   createRunningTaskRun,
   finalizeTaskRunById,
   finalizeTaskRunByRunId,
   findTaskByRunId,
   listTaskRecordsUnsorted,
+  recordTaskRunProgressByRunId,
 } from "../../tasks/task-executor.js";
 import type { JsonValue, TaskRecord, TaskStatus } from "../../tasks/task-registry.types.js";
-import { resolveCronAgentSessionKey } from "../isolated-agent/session-key.js";
 import { createCronExecutionId } from "../run-id.js";
 import type { CronRunLogEntry } from "../run-log-types.js";
 import { cronStoreKey } from "../store/key.js";
@@ -72,36 +69,40 @@ function resolveCronTaskChildSessionKey(params: {
   job: CronJob;
   startedAt: number;
 }): string | undefined {
-  const explicitAgentId = params.job.agentId?.trim() || undefined;
-  if (params.job.sessionTarget === "main") {
+  if (params.job.sessionTarget === "main" && params.job.payload.kind === "systemEvent") {
     return resolveMainSessionCronRunSessionKey(
       params.job,
       params.startedAt,
       resolveCurrentDefaultAgentId(params.state),
     );
   }
-  if (params.job.sessionTarget === "current") {
-    const scopedAgentId = parseAgentSessionKey(params.job.sessionKey)?.agentId;
-    return resolveCronAgentSessionKey({
-      sessionKey: `cron:${params.job.id}`,
-      agentId: requireCronAgentId(
-        explicitAgentId ?? scopedAgentId ?? resolveCurrentDefaultAgentId(params.state),
-      ),
+  // Agent turns publish their exact transcript key after setup. This also
+  // avoids inventing links for headless command/script/heartbeat work.
+  return undefined;
+}
+
+/** Updates an active cron task with the exact transcript identity reported by its runner. */
+export function tryUpdateCronTaskRunSession(
+  state: CronServiceState,
+  taskRunId: string | undefined,
+  sessionKey: string | undefined,
+): void {
+  const childSessionKey = sessionKey?.trim();
+  if (!taskRunId || !childSessionKey) {
+    return;
+  }
+  try {
+    const updated = recordTaskRunProgressByRunId({
+      runId: taskRunId,
+      runtime: "cron",
+      childSessionKey,
     });
+    if (updated.length === 0) {
+      state.deps.log.warn({ runId: taskRunId }, "cron: task ledger session was not updated");
+    }
+  } catch (error) {
+    state.deps.log.warn({ runId: taskRunId, error }, "cron: failed to update task ledger session");
   }
-  const explicitSessionKey = params.job.sessionKey?.trim();
-  if (explicitSessionKey) {
-    // Explicit session bindings must win over generated cron session keys so
-    // task drill-down opens the same transcript the cron run actually used.
-    return explicitSessionKey;
-  }
-  if (params.job.sessionTarget !== "isolated") {
-    return undefined;
-  }
-  return resolveCronAgentSessionKey({
-    sessionKey: `cron:${params.job.id}`,
-    agentId: resolveCronJobEffectiveAgentId(params.job, resolveCurrentDefaultAgentId(params.state)),
-  });
 }
 
 /** Creates a best-effort detached task row keyed to the persisted execution start. */
@@ -237,6 +238,7 @@ function tryCreateCronTaskRunRecord(params: {
       : undefined;
     const task = createRunningTaskRun({
       runtime: "cron",
+      taskKind: CRON_TASK_KIND,
       sourceId: params.jobId,
       ownerKey: "",
       scopeKind: "system",
@@ -287,6 +289,7 @@ export function tryFinishCronTaskRunWithoutHistory(
     endedAt: number;
     summary?: string;
     childSessionKey?: string;
+    sessionKey?: string;
   },
 ): void {
   if (!result.taskRunId) {
@@ -307,7 +310,7 @@ export function tryFinishCronTaskRunWithoutHistory(
       lastEventAt: result.endedAt,
       error,
       terminalSummary: result.summary,
-      childSessionKey: result.childSessionKey,
+      childSessionKey: result.childSessionKey ?? result.sessionKey ?? null,
     });
   } catch (cause) {
     state.deps.log.warn(

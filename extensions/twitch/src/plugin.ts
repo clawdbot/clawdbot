@@ -38,7 +38,7 @@ import {
 import { twitchMessageAdapter, twitchOutbound } from "./outbound.js";
 import { probeTwitch } from "./probe.js";
 import { resolveTwitchTargets } from "./resolver.js";
-import { twitchSetupAdapter, twitchSetupContract, twitchSetupWizard } from "./setup-surface.js";
+import { twitchSetupContract, twitchSetupWizard } from "./setup-surface.js";
 import { collectTwitchStatusIssues } from "./status.js";
 import type {
   ChannelLogSink,
@@ -88,7 +88,6 @@ export const twitchPlugin: ChannelPlugin<ResolvedTwitchAccount> =
         blurb: "Twitch chat integration",
         aliases: ["twitch-chat"],
       },
-      setup: twitchSetupAdapter,
       setupContract: twitchSetupContract,
       setupWizard: twitchSetupWizard,
       capabilities: {

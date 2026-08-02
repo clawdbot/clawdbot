@@ -389,7 +389,7 @@ export class WorkboardCoreStore {
         templateId: normalizeTemplateId(input.templateId),
         ...(childAutomation ? { automation: childAutomation } : {}),
       },
-      { allowDependencyLinks: false },
+      { allowDependencyLinks: false, allowArchivedAt: false },
     );
     const syncedMetadata = trimMetadataToBudget(
       syncExecutionAttemptMetadata(metadata, execution, now),

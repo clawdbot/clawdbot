@@ -1,4 +1,7 @@
-import type { AgentMessage } from "../../../packages/agent-core/src/types.js";
+import type {
+  AgentMessage,
+  ToolResultContentSource,
+} from "../../../packages/agent-core/src/types.js";
 /**
  * Shared types for preparing and executing CLI-backed agent runs.
  */
@@ -10,7 +13,11 @@ import type { ReplyOperation } from "../../auto-reply/reply/reply-run-registry.j
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { FastMode } from "../../auto-reply/thinking.shared.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
-import type { CliSessionBinding, SessionEntry } from "../../config/sessions.js";
+import type {
+  CliSessionBinding,
+  SessionEntry,
+  SessionToolOverrides,
+} from "../../config/sessions.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
 import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -36,6 +43,7 @@ import type { EmbeddedAgentExecutionPhase } from "../embedded-agent-runner/execu
 import type {
   CurrentInboundPromptContext,
   EmbeddedRunTrigger,
+  ResolvedToolPromptFinalizer,
 } from "../embedded-agent-runner/run/params.js";
 import type { ExecPolicyOverrides } from "../exec-defaults.js";
 import type { FastModeAutoProgressState } from "../fast-mode.js";
@@ -70,8 +78,11 @@ export type RunCliAgentParams = {
   /** Start a fresh CLI process so per-turn MCP authority is reloaded from this run. */
   disableCliLiveSession?: boolean;
   config?: OpenClawConfig;
+  toolOverrides?: SessionToolOverrides;
   prompt: string;
   transcriptPrompt?: string;
+  /** Finalizes caller-owned guidance after backend tool projection is known. */
+  finalizePromptForResolvedTools?: ResolvedToolPromptFinalizer;
   /** Undecorated current-turn prompt used to merge inline and offloaded images. */
   imagePrompt?: string;
   /**
@@ -79,6 +90,8 @@ export type RunCliAgentParams = {
    * background answers and must not reuse or mutate normal agent sessions.
    */
   executionMode?: CliBackendExecutionMode;
+  /** Internal one-shot inference path: suppress transcript, hook, context-engine, and delivery work. */
+  isolatedCompletion?: true;
   /** Persist the successful CLI assistant reply into the OpenClaw session transcript. */
   persistAssistantTranscript?: boolean;
   /** Session store path used when assistant transcript persistence is enabled. */
@@ -308,6 +321,7 @@ export type PreparedCliRunContext = {
   extraSystemPromptHash?: string;
   messageToolPolicyHash?: string;
   promptToolNamesHash?: string;
+  resultContentSourceByToolName?: ReadonlyMap<string, ToolResultContentSource>;
   cwdHash?: string;
   mcpDeliveryCapture?: true;
 };

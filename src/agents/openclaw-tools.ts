@@ -129,6 +129,7 @@ export function createOpenClawTools(
     fsPolicy?: ToolFsPolicy;
     sandboxed?: boolean;
     config?: OpenClawConfig;
+    webSearchEnabled?: boolean;
     /** Capabilities declared by the gateway client that originated this run. */
     clientCaps?: string[];
     pluginToolAllowlist?: string[];
@@ -171,6 +172,8 @@ export function createOpenClawTools(
     requireExplicitMessageTarget?: boolean;
     /** Visible source replies must be sent through the message tool when set to message_tool_only. */
     sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+    /** Process-local completion authority restricted to the current source conversation. */
+    sourceReplyOnly?: boolean;
     /** Action sink available for model-proposed follow-up tasks. */
     taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
     inboundEventKind?: InboundEventKind;
@@ -220,6 +223,7 @@ export function createOpenClawTools(
     ModelAwareToolContext,
 ): AnyAgentTool[] {
   const resolvedConfig = options?.config;
+  const activeProjectKeys = options?.preparedModelRuntime?.activeProjectKeys ?? [];
   const runtimeSnapshot = getActiveSecretsRuntimeConfigSnapshot();
   const availabilityConfig = selectApplicableRuntimeConfig({
     inputConfig: resolvedConfig,
@@ -292,7 +296,8 @@ export function createOpenClawTools(
           });
         };
   const taskKey = normalizeOptionalString(options?.runSessionKey ?? options?.agentSessionKey);
-  const { agentSessionKey: requesterSessionKey, runId: requesterTurnRunId } = options ?? {};
+  const requesterSessionKey = trimmedRunSessionKey || options?.agentSessionKey;
+  const requesterTurnRunId = options?.runId;
   const imageTool =
     options?.agentDir &&
     resolveImageToolFactoryAvailable({
@@ -361,6 +366,7 @@ export function createOpenClawTools(
   options?.recordToolPrepStage?.("openclaw-tools:pdf-tool");
   const webSearchTool = createWebSearchTool({
     config: options?.config,
+    enabled: options?.webSearchEnabled,
     agentDir: options?.agentDir,
     sandboxed: options?.sandboxed,
     runtimeWebSearch: runtimeWebTools?.search,
@@ -388,7 +394,9 @@ export function createOpenClawTools(
         preparedMessageToolCatalog: options?.preparedModelRuntime?.messageToolCatalog,
         currentChannelId: options?.currentChannelId,
         currentChatType: options?.currentChatType,
-        currentMessagingTarget: options?.currentMessagingTarget,
+        currentMessagingTarget:
+          options?.currentMessagingTarget ??
+          (options?.sourceReplyOnly ? options.agentTo : undefined),
         currentChannelProvider: options?.agentChannel,
         currentThreadTs: options?.currentThreadTs,
         currentInboundAudio: options?.currentInboundAudio,
@@ -401,6 +409,7 @@ export function createOpenClawTools(
         sandboxRoot: options?.sandboxRoot,
         requireExplicitTarget: options?.requireExplicitMessageTarget,
         sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,
+        sourceReplyOnly: options?.sourceReplyOnly,
         inboundEventKind: options?.inboundEventKind,
         requesterSenderId: options?.requesterSenderId ?? undefined,
         senderIsOwner: options?.senderIsOwner,
@@ -717,7 +726,7 @@ export function createOpenClawTools(
     allTools = [
       ...tools,
       ...resolveOpenClawPluginToolsForOptions({
-        options,
+        options: { ...options, activeProjectKeys },
         resolvedConfig,
         existingToolNames,
       }),

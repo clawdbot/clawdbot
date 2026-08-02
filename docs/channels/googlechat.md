@@ -143,7 +143,7 @@ Configure the tunnel ingress rules to route only the webhook path:
 
 ### Inbound durability
 
-After request authentication, OpenClaw removes the add-on authorization object from storage and durably queues Google Chat `MESSAGE` events before returning `200`. A persistence failure returns `503`, allowing Google Chat to retry instead of acknowledging an event that could be lost.
+After request authentication, OpenClaw removes the add-on authorization object from storage and durably queues Google Chat `MESSAGE` events before returning `200`. A persistence failure returns `503`, allowing Google Chat to retry instead of acknowledging an event that could be lost. A durably queued `200` carries `x-openclaw-delivery-accepted: durable`; non-message action acks and error responses omit the marker, so reverse proxies can require it to distinguish durable acceptance from a generic `200`.
 
 Pending or retryable messages survive a Gateway restart, remain serialized per space, and use the Google Chat message resource name to suppress duplicate queue entries while the active or retained completion record exists. Non-message actions keep their existing detached webhook path and do not receive this durable-queue guarantee. Delivery remains at least once across the queue-to-agent boundary, so a crash during handoff can replay a turn.
 

@@ -3,6 +3,9 @@ package ai.openclaw.app.ui.chat
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.i18n.nativeStringResource
 import ai.openclaw.app.ui.rememberSystemAnimationsEnabled
+import android.icu.text.MeasureFormat
+import android.icu.util.Measure
+import android.icu.util.MeasureUnit
 import android.os.SystemClock
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.foundation.Canvas
@@ -25,10 +28,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.PathParser
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
+import java.util.Locale
 import kotlin.math.roundToLong
 import kotlin.random.Random
 
@@ -315,29 +320,32 @@ internal enum class ChatDurationUnit {
   Second,
 }
 
+private val chatDurationUnits =
+  listOf(
+    86_400L to ChatDurationUnit.Day,
+    3_600L to ChatDurationUnit.Hour,
+    60L to ChatDurationUnit.Minute,
+    1L to ChatDurationUnit.Second,
+  )
+
+private fun chatDurationParts(durationMs: Long): List<Pair<Long, ChatDurationUnit>> {
+  var remaining = (durationMs.coerceAtLeast(1_000L) / 1_000.0).roundToLong().coerceAtLeast(1L)
+  return buildList {
+    for ((seconds, unit) in chatDurationUnits) {
+      if (size == 2) break
+      val count = remaining / seconds
+      if (count > 0L) {
+        add(count to unit)
+        remaining %= seconds
+      }
+    }
+  }
+}
+
 internal fun formatChatDurationCompact(
   durationMs: Long,
   formatPart: (Long, ChatDurationUnit) -> String = ::formatEnglishChatDurationPart,
-): String {
-  var remaining = (durationMs.coerceAtLeast(1_000L) / 1_000.0).roundToLong().coerceAtLeast(1L)
-  val units =
-    listOf(
-      86_400L to ChatDurationUnit.Day,
-      3_600L to ChatDurationUnit.Hour,
-      60L to ChatDurationUnit.Minute,
-      1L to ChatDurationUnit.Second,
-    )
-  val parts = mutableListOf<String>()
-  units.forEach { (seconds, unit) ->
-    if (parts.size == 2) return@forEach
-    val count = remaining / seconds
-    if (count > 0L) {
-      parts += formatPart(count, unit)
-      remaining %= seconds
-    }
-  }
-  return parts.joinToString(" ")
-}
+): String = chatDurationParts(durationMs).joinToString(" ") { (count, unit) -> formatPart(count, unit) }
 
 private fun formatEnglishChatDurationPart(
   count: Long,
@@ -349,6 +357,27 @@ private fun formatEnglishChatDurationPart(
     ChatDurationUnit.Minute -> "${count}m"
     ChatDurationUnit.Second -> "${count}s"
   }
+
+internal fun formatChatDurationFull(
+  durationMs: Long,
+  locale: Locale,
+): String {
+  val formatter = MeasureFormat.getInstance(locale, MeasureFormat.FormatWidth.WIDE)
+  val measures =
+    chatDurationParts(durationMs)
+      .map { (count, unit) ->
+        Measure(
+          count,
+          when (unit) {
+            ChatDurationUnit.Day -> MeasureUnit.DAY
+            ChatDurationUnit.Hour -> MeasureUnit.HOUR
+            ChatDurationUnit.Minute -> MeasureUnit.MINUTE
+            ChatDurationUnit.Second -> MeasureUnit.SECOND
+          },
+        )
+      }.toTypedArray()
+  return formatter.formatMeasures(*measures)
+}
 
 internal fun formatLocalizedChatDurationCompact(durationMs: Long): String =
   formatChatDurationCompact(durationMs) { count, unit ->
@@ -371,6 +400,12 @@ internal fun formatLocalizedChatDurationCompact(durationMs: Long): String =
       }
     }
   }
+
+@Composable
+internal fun formatLocalizedChatDurationFull(durationMs: Long): String {
+  val locale = LocalConfiguration.current.locales.get(0) ?: Locale.ROOT
+  return remember(durationMs, locale) { formatChatDurationFull(durationMs, locale) }
+}
 
 internal fun workingPhraseIndex(
   seed: String,

@@ -1,6 +1,7 @@
 // Control UI component implements the resizable divider element.
 import { css, nothing } from "lit";
 import { property } from "lit/decorators.js";
+import { t } from "../i18n/index.ts";
 import { OpenClawLitElement } from "../lit/openclaw-element.ts";
 
 /**
@@ -11,7 +12,7 @@ class ResizableDivider extends OpenClawLitElement {
   @property({ type: Number }) splitRatio = 0.6;
   @property({ type: Number }) minRatio = 0.4;
   @property({ type: Number }) maxRatio = 0.7;
-  @property({ type: String }) label = "Resize split view";
+  @property({ type: String }) label = "";
   @property({ type: String, reflect: true }) orientation: "vertical" | "horizontal" = "vertical";
   @property({ attribute: false }) measureRatio?: () => number;
   @property({ attribute: false }) measureSize?: () => number;
@@ -117,11 +118,7 @@ class ResizableDivider extends OpenClawLitElement {
     this.setAttribute("aria-valuemin", String(this.toAriaValue(this.minRatio)));
     this.setAttribute("aria-valuemax", String(this.toAriaValue(this.maxRatio)));
     this.setAttribute("aria-valuenow", String(this.toAriaValue(this.splitRatio)));
-    if (this.label) {
-      this.setAttribute("aria-label", this.label);
-    } else {
-      this.removeAttribute("aria-label");
-    }
+    this.setAttribute("aria-label", this.label || t("common.resizeSplitView"));
     this.setAttribute("aria-orientation", this.orientation);
   }
 

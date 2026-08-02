@@ -86,6 +86,7 @@ export function actionResult(
       targetSkillFile: options.targetSkillFile ?? record.target.skillFile,
       scanState: record.scan.state,
       proposedVersion: record.proposedVersion,
+      draftHash: record.draftHash,
     },
   };
 }
@@ -107,6 +108,9 @@ export function proposalResult(
       targetSkillFile: proposal.record.target.skillFile,
       scanState: proposal.record.scan.state,
       proposedVersion: proposal.record.proposedVersion,
+      draftHash: proposal.record.draftHash,
+      revisionHash: proposal.revisionHash,
+      ...(proposal.record.evaluation ? { evaluation: proposal.record.evaluation } : {}),
       ...(options.includeContent ? { proposalContent: proposal.content } : {}),
       ...(options.includeContent && proposal.supportFiles
         ? { supportFiles: proposal.supportFiles }

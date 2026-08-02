@@ -9,6 +9,7 @@ import {
   resolveCronStorePath,
   saveCronStore,
 } from "openclaw/plugin-sdk/cron-store-runtime";
+import { asObjectRecord } from "openclaw/plugin-sdk/runtime-doctor";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -22,13 +23,6 @@ import {
 
 const writebackLogger = createSubsystemLogger("telegram/target-writeback");
 const TELEGRAM_ADMIN_SCOPE = "operator.admin";
-
-function asObjectRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  return value as Record<string, unknown>;
-}
 
 function normalizeTelegramLookupTargetForMatch(raw: string): string | undefined {
   const normalized = normalizeTelegramLookupTarget(raw);

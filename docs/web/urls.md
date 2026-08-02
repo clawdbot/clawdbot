@@ -131,10 +131,10 @@ no route-specific URL parameters.
 | New session         | `/new`                      | -                         | `?agent=<agentId>`, `?catalog=<catalogId>`       |
 | Activity            | `/activity`                 | -                         | -                                                |
 | Apps                | `/apps`                     | -                         | -                                                |
-| Agents              | `/settings/agents`          | `/agents`                 | `?agent=<agentId>`                               |
+| Agents              | `/settings/agents`          | `/agents`                 | `/settings/agents/<agentId>[/<panel>]`           |
 | Channels            | `/settings/channels`        | `/channels`               | Shared settings parameters below                 |
 | Connection          | `/settings/connection`      | -                         | Shared settings parameters below                 |
-| General settings    | `/settings/general`         | `/config`                 | Shared settings parameters below                 |
+| Legacy General      | `/settings/general`         | `/config`                 | Redirects to Appearance → Language               |
 | Profile             | `/settings/profile`         | `/profile`                | Shared settings parameters below                 |
 | Communications      | `/settings/communications`  | `/communications`         | Shared settings parameters below                 |
 | Appearance          | `/settings/appearance`      | `/appearance`             | Shared settings parameters below                 |
@@ -144,6 +144,7 @@ no route-specific URL parameters.
 | Approvals           | `/settings/approvals`       | -                         | Shared settings parameters below                 |
 | Automation settings | `/settings/automation`      | `/automation`             | Shared settings parameters below                 |
 | MCP                 | `/settings/mcp`             | `/mcp`                    | Shared settings parameters below                 |
+| Memory              | `/settings/memory`          | -                         | `/settings/memory/memories\|dreams\|settings`    |
 | Infrastructure      | `/settings/infrastructure`  | `/infrastructure`         | Shared settings parameters below                 |
 | Labs                | `/settings/labs`            | -                         | Shared settings parameters below                 |
 | About               | `/settings/about`           | -                         | Shared settings parameters below                 |
@@ -159,7 +160,7 @@ no route-specific URL parameters.
 | Logs                | `/logs`                     | -                         | -                                                |
 | Skill Workshop      | `/skills/workshop`          | -                         | -                                                |
 | Skills              | `/skills`                   | -                         | -                                                |
-| Plugins             | `/settings/plugins`         | -                         | `?tab=discover\|installed`                       |
+| Plugins             | `/settings/plugins`         | -                         | `/settings/plugins/discover`                     |
 | Automations         | `/cron`                     | -                         | -                                                |
 | Tasks               | `/tasks`                    | -                         | -                                                |
 | Devices             | `/settings/devices`         | `/nodes`                  | Shared settings parameters below                 |
@@ -168,6 +169,23 @@ no route-specific URL parameters.
 Settings routes that use schema-backed deep links accept `?section=<section>`,
 `?advanced=1`, and `#<setting-id>`. These values select content within the page;
 they do not change the route identity.
+
+The retired General route and its `/config` alias are replaced once with
+`/settings/appearance?section=__appearance__#settings-language`. The historical
+`#settings-general-model` target instead lands on the Models behavior section.
+
+Memory tabs use the paths in the table instead of `?tab=`. Older Memory links
+with `?tab=memories|dreams|settings`, `?tab=dreaming`, `?tab=search`, or
+`?section=memory` are replaced once with the corresponding path while keeping
+any setting anchor.
+
+Plugin catalog tabs also use paths instead of `?tab=`. Older links with
+`?tab=discover|installed` are replaced once with the corresponding path while
+keeping other query parameters and the fragment.
+
+Agent selection and its `overview|files|tools|skills|channels|cron|memory`
+panels use paths. Older links with `?agent=<agentId>` are replaced once with
+the agent path while keeping other query parameters and the fragment.
 
 ## Special documents and startup modes
 

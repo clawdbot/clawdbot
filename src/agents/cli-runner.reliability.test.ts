@@ -3296,7 +3296,7 @@ describe("runCliAgent reliability", () => {
           skills: {
             workshop: {
               autonomous: {
-                enabled: true,
+                mode: "propose",
               },
             },
           },

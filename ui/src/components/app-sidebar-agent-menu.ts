@@ -4,6 +4,7 @@ import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import type { AgentIdentityResult } from "../api/types.ts";
 import { titleForRoute, type NavigationRouteId } from "../app-navigation.ts";
+import { pathForAgentPanel } from "../app-route-paths.ts";
 import type { ApplicationNavigationOptions } from "../app/context.ts";
 import type { ThemeMode } from "../app/theme.ts";
 import { t } from "../i18n/index.ts";
@@ -55,6 +56,7 @@ type AgentMenuAgent = {
 
 type SidebarAgentMenuParams = {
   position: { x: number; top: number } | null;
+  basePath: string;
   activeId: string;
   activeName: string;
   agents: readonly AgentMenuAgent[];
@@ -265,7 +267,9 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
               params.onAskCapabilities(activeId);
               break;
             case `${COMMAND_VALUE_PREFIX}agent-settings`:
-              params.onNavigate("agents", { search: `?agent=${encodeURIComponent(activeId)}` });
+              params.onNavigate("agents", {
+                pathname: pathForAgentPanel(activeId, null, params.basePath),
+              });
               break;
             case `${COMMAND_VALUE_PREFIX}new-agent`:
               params.onNavigate("custodian", { search: "?intent=new-agent" });
@@ -403,7 +407,7 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams) {
               params.onNavigate("profile", { hash: "#settings-profile-identity" });
               break;
             case `${COMMAND_VALUE_PREFIX}settings`:
-              params.onNavigate("config");
+              params.onNavigate("appearance");
               break;
             case `${COMMAND_VALUE_PREFIX}usage`:
               params.onNavigate("usage");

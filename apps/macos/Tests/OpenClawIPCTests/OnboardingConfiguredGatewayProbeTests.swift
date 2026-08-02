@@ -286,6 +286,29 @@ struct OnboardingConfiguredGatewayProbeTests {
         #expect(await isMissing(runOnboardingProbe(probe, connectionMode: .local)))
     }
 
+    @Test func `remote gateway auth failure stays classified`() async throws {
+        let session = GatewayTestWebSocketSession(taskFactory: {
+            GatewayTestWebSocketTask(receiveHook: { task, receiveIndex in
+                if receiveIndex == 0 {
+                    return .data(GatewayWebSocketTestSupport.connectChallengeData())
+                }
+                return .data(GatewayWebSocketTestSupport.connectAuthFailureData(
+                    id: task.snapshotConnectRequestID() ?? "connect",
+                    detailCode: GatewayConnectAuthDetailCode.authTokenMissing.rawValue))
+            })
+        })
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let gateway = GatewayConnection(
+            configProvider: { (url: url, token: nil, password: nil) },
+            sessionBox: WebSocketSessionBox(session: session))
+        let probe = OnboardingConfiguredGatewayProbe(gateway: gateway)
+
+        let outcome = await runOnboardingProbe(probe, connectionMode: .remote)
+
+        #expect(outcome == .authIssue(.tokenRequired))
+        #expect(session.latestTask()?.snapshotSendCount() == 1)
+    }
+
     @Test func `current route read failure is unavailable rather than missing`() async throws {
         let session = GatewayTestWebSocketSession(taskFactory: {
             GatewayTestWebSocketTask(sendHook: { task, _, sendIndex in

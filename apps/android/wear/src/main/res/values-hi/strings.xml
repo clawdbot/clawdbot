@@ -11,10 +11,12 @@
     <string name="dictate" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"बोलकर लिखें"</string>
     <string name="live" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"लाइव"</string>
     <string name="thread" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"थ्रेड"</string>
+    <string name="open_thread" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"थ्रेड खोलें"</string>
     <string name="swipe_between_voice_modes" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"← स्वाइप करें →"</string>
     <string name="hold" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"दबाकर रखें"</string>
     <string name="tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"टैप करें"</string>
     <string name="double_tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"दो बार टैप करें"</string>
+    <string name="show_new_messages" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"नए संदेश दिखाएँ"</string>
     <string name="no_live_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"बातचीत यहाँ देखने के लिए Live शुरू करें।"</string>
     <string name="new_messages" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"नया"</string>
     <string name="type" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"टाइप करें"</string>

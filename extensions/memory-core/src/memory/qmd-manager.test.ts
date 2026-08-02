@@ -1325,6 +1325,31 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+  it("logs qmd watcher errors instead of throwing", async () => {
+    configureQmd(
+      { update: { interval: "0s", debounceMs: 0, onBoot: false } },
+      {
+        search: {
+          provider: "openai",
+          model: "mock-embed",
+          store: { vector: { enabled: false } },
+          sync: { watch: true, onSessionStart: false, onSearch: false },
+        },
+      },
+    );
+
+    const { manager } = await createManager({ mode: "full" });
+    expect(watchMock).toHaveBeenCalledTimes(1);
+    const watcher = watchMock.mock.results[0]?.value as EventEmitter;
+
+    expect(() => {
+      watcher.emit("error", new Error("ENOSPC: watcher limit reached"));
+    }).not.toThrow();
+    expectMockMessageContains(logWarnMock, "qmd watcher error: ENOSPC: watcher limit reached");
+
+    await manager.close();
+  });
+
   it("runs qmd sync when watched collection files change", async () => {
     vi.useFakeTimers();
     configureQmd(
@@ -3664,7 +3689,8 @@ describe("QmdMemoryManager", () => {
                 collection: "workspace-main",
                 start_line: 8,
                 end_line: 10,
-                snippet: "@@ -20,3\nline one\nline two\nline three",
+                snippet:
+                  "@@ -20,3\nline one\nline two\nline three <!-- project: github.com/acme/Alpha -->",
               },
             ],
           }),
@@ -3699,7 +3725,7 @@ describe("QmdMemoryManager", () => {
         startLine: 8,
         endLine: 10,
         score: 0.91,
-        snippet: "@@ -20,3\nline one\nline two\nline three",
+        snippet: "@@ -20,3\nline one\nline two\nline three <!-- project: github.com/acme/Alpha -->",
         source: "memory",
         provenance: expectedQmdProvenance("untrusted"),
       },
@@ -5864,9 +5890,9 @@ describe("QmdMemoryManager", () => {
       const readResult = await manager.readFile({ relPath: result.path });
       expect(readResult).toEqual({
         path: "qmd/sessions-main/session-1.md",
-        text: "# Session session-1\n\nsession canary\n",
+        text: "# Session session-1\n\nsession canary",
         from: 1,
-        lines: 4,
+        lines: 3,
       });
     } finally {
       lstatSpy.mockRestore();

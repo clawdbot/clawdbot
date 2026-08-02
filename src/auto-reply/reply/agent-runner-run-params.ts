@@ -95,6 +95,7 @@ export function buildEmbeddedRunBaseParams(params: {
     cwd: params.run.cwd,
     agentDir: params.run.agentDir,
     config,
+    toolOverrides: params.run.toolOverrides,
     skillsSnapshot: params.run.skillsSnapshot,
     ownerNumbers: params.run.ownerNumbers,
     inputProvenance: params.run.inputProvenance,

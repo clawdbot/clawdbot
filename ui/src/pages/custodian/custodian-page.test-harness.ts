@@ -4,6 +4,7 @@ import type {
   GatewayEventFrame,
   GatewayEventListener,
 } from "../../api/gateway.ts";
+import type { ChannelsStatusSnapshot } from "../../api/types.ts";
 import type {
   ApplicationContext,
   ApplicationGateway,
@@ -26,12 +27,18 @@ type ContextHarness = {
   context: ApplicationContext;
   setGatewaySnapshot: (patch: Partial<ApplicationGatewaySnapshot>) => void;
   setGatewayToken: (token: string) => void;
+  setChannelsConnected: (connected: boolean) => void;
+  setChannelsSnapshot: (snapshot: ChannelsStatusSnapshot | null) => void;
   emitGatewayEvent: (event: Pick<GatewayEventFrame, "event" | "payload">) => void;
 };
 
 export function createContext(
   request: ReturnType<typeof vi.fn>,
   methods: string[] = ["openclaw.chat"],
+  options: {
+    agentsList?: ApplicationContext["agents"]["state"]["agentsList"];
+    channelsSnapshot?: ChannelsStatusSnapshot | null;
+  } = {},
 ): ContextHarness {
   const client = { request } as unknown as GatewayBrowserClient;
   let snapshot: ApplicationGatewaySnapshot = {
@@ -72,15 +79,57 @@ export function createContext(
       return () => eventListeners.delete(listener);
     },
   } as unknown as ApplicationGateway;
+  const agentListeners = new Set<() => void>();
+  const channelListeners = new Set<(state: ApplicationContext["channels"]["state"]) => void>();
+  const channelState = {
+    client,
+    connected: true,
+    channelsLoading: false,
+    channelsLoadingProbe: null,
+    channelsRefreshSeq: 0,
+    channelsSnapshot: options.channelsSnapshot ?? null,
+    channelsError: null,
+    channelsLastSuccess: options.channelsSnapshot ? Date.now() : null,
+    pairingLoading: false,
+    pairingRefreshSeq: 0,
+    pairingSnapshot: null,
+    pairingError: null,
+    pairingLastSuccess: null,
+    pairingBusyRequestId: null,
+    whatsappLoginMessage: null,
+    whatsappLoginQrDataUrl: null,
+    whatsappLoginConnected: null,
+    whatsappBusy: false,
+  };
   const context = {
     gateway,
     agents: {
-      state: { agentsList: { mainKey: "main" } },
+      state: {
+        agentsList: options.agentsList ?? {
+          defaultId: "main",
+          mainKey: "main",
+          scope: "agent",
+          agents: [{ id: "main", model: { primary: "openai/gpt-5.5" } }],
+        },
+      },
+      subscribe: (listener: () => void) => {
+        agentListeners.add(listener);
+        return () => agentListeners.delete(listener);
+      },
       refreshList: vi.fn(),
     },
     agentSelection: { state: { selectedId: "main" } },
+    channels: {
+      state: channelState,
+      refresh: vi.fn().mockResolvedValue(undefined),
+      subscribe: (listener: (state: ApplicationContext["channels"]["state"]) => void) => {
+        channelListeners.add(listener);
+        return () => channelListeners.delete(listener);
+      },
+    },
     basePath: "",
     navigate: vi.fn(),
+    replace: vi.fn(),
   } as unknown as ApplicationContext;
   return {
     context,
@@ -93,6 +142,19 @@ export function createContext(
     setGatewayToken: (value) => {
       const credentials = { token: value };
       connection.token = credentials.token;
+    },
+    setChannelsConnected: (connected) => {
+      channelState.connected = connected;
+      for (const listener of channelListeners) {
+        listener(channelState);
+      }
+    },
+    setChannelsSnapshot: (nextSnapshot) => {
+      channelState.channelsSnapshot = nextSnapshot;
+      channelState.channelsLastSuccess = nextSnapshot ? Date.now() : null;
+      for (const listener of channelListeners) {
+        listener(channelState);
+      }
     },
     emitGatewayEvent: (event) => {
       for (const listener of eventListeners) {

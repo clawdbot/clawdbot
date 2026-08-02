@@ -14,6 +14,7 @@ import { prepareEmbeddedAttemptPromptContext } from "./attempt-prompt-context.js
 import { dispatchEmbeddedAttemptPrompt } from "./attempt-prompt-dispatch.js";
 import { handleEmbeddedAttemptPromptError } from "./attempt-prompt-error.js";
 import { handleEmbeddedAttemptMidTurnPrecheck } from "./attempt-prompt-preflight.js";
+import { applyPromptBuildToolsAllow } from "./attempt-prompt-tool-policy.js";
 import { removeTrailingMidTurnPrecheckAssistantError } from "./attempt-transcript-helpers.js";
 import type { MidTurnPrecheckRequest } from "./midturn-precheck.js";
 
@@ -30,7 +31,11 @@ type PromptPhaseState = Omit<PromptDispatchInput["state"], "skipPromptSubmission
 
 type PromptAssemblyPhaseInput = Omit<
   PromptAssemblyInput,
-  "attempt" | "activeSession" | "sessionManager" | "setLeasedSteering"
+  | "attempt"
+  | "activeSession"
+  | "sessionManager"
+  | "applyPromptBuildToolsAllow"
+  | "setLeasedSteering"
 >;
 type PromptContextPhaseInput = Omit<
   PromptContextInput,
@@ -38,6 +43,7 @@ type PromptContextPhaseInput = Omit<
 >;
 type PromptExecutionPhaseInput = Omit<PromptDispatchInput["execution"], "sessionLockController">;
 type PromptObservationPhaseInput = Omit<PromptDispatchInput["observation"], "transcriptLeafId">;
+type PromptToolSurface = ReturnType<typeof applyPromptBuildToolsAllow>;
 type PromptPreflightPhaseInput = PromptDispatchInput["preflight"] & {
   activeContextEngine?: PromptDispatchInput["activeContextEngine"];
 };
@@ -66,6 +72,15 @@ export async function runEmbeddedAttemptPromptPhase(input: {
     signal: AbortSignal;
   };
   observation: PromptObservationPhaseInput;
+  toolPolicy: {
+    baseline: Parameters<typeof applyPromptBuildToolsAllow>[0]["baseline"];
+    effectiveTools: Array<{ name: string }>;
+    uncompactedEffectiveTools: Array<{ name: string }>;
+    tools: Array<{ name: string }>;
+    toolSearchCatalogRef?: Parameters<typeof applyPromptBuildToolsAllow>[0]["catalogRef"];
+    codeModeControlsEnabled: boolean;
+    forceToolNames?: readonly string[];
+  };
   preflight: PromptPreflightPhaseInput;
   submission: PromptSubmissionPhaseInput;
   lifecycle: {
@@ -142,11 +157,26 @@ export async function runEmbeddedAttemptPromptPhase(input: {
     log.warn(`[tools] ${input.emptyExplicitToolAllowlistError.message}`);
   }
 
+  let promptToolSurface: PromptToolSurface | undefined;
   const promptAssembly = await prepareEmbeddedAttemptPromptAssembly({
     attempt,
     activeSession,
     sessionManager,
     ...input.assembly,
+    applyPromptBuildToolsAllow: (toolsAllow) => {
+      promptToolSurface = applyPromptBuildToolsAllow({
+        session: activeSession,
+        toolsAllow,
+        baseline: input.toolPolicy.baseline,
+        effectiveTools: input.toolPolicy.effectiveTools,
+        uncompactedEffectiveTools: input.toolPolicy.uncompactedEffectiveTools,
+        tools: input.toolPolicy.tools,
+        catalogRef: input.toolPolicy.toolSearchCatalogRef,
+        codeModeControlsEnabled: input.toolPolicy.codeModeControlsEnabled,
+        forceToolNames: input.toolPolicy.forceToolNames,
+      });
+      return promptToolSurface.activeToolNames;
+    },
     setLeasedSteering: (lease) => {
       leasedSteering = lease;
     },
@@ -252,6 +282,13 @@ export async function runEmbeddedAttemptPromptPhase(input: {
       },
       observation: {
         ...input.observation,
+        ...(promptToolSurface
+          ? {
+              effectiveTools: promptToolSurface.effectiveTools,
+              tools: promptToolSurface.tools,
+              uncompactedEffectiveTools: promptToolSurface.uncompactedEffectiveTools,
+            }
+          : {}),
         transcriptLeafId,
       },
       preflight,

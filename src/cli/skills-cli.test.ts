@@ -1,5 +1,5 @@
 // Skills CLI tests cover skill listing, install, and command output behavior.
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SkillStatusEntry, SkillStatusReport } from "../skills/discovery/status.js";
 import { createEmptyInstallChecks } from "./requirements-test-fixtures.js";
 import { formatSkillInfo, formatSkillsCheck, formatSkillsList } from "./skills-cli.format.js";
@@ -51,6 +51,66 @@ function createMockReport(skills: SkillStatusEntry[]): SkillStatusReport {
 }
 
 describe("skills-cli", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  describe("ClawHub command hints", () => {
+    it.each([
+      {
+        name: "named profile",
+        profile: "work",
+        container: "",
+        prefix: "openclaw --profile work",
+      },
+      {
+        name: "managed container",
+        profile: "",
+        container: "demo",
+        prefix: "openclaw --container demo",
+      },
+      {
+        name: "default profile",
+        profile: "default",
+        container: "",
+        prefix: "openclaw",
+      },
+    ])("preserves the $name on every human skill surface", ({ profile, container, prefix }) => {
+      vi.stubEnv("OPENCLAW_PROFILE", profile);
+      vi.stubEnv("OPENCLAW_CONTAINER_HINT", container);
+      const report = createMockReport([]);
+      const outputs = [
+        formatSkillsList(report, {}),
+        formatSkillInfo(report, "missing-skill", {}),
+        formatSkillsCheck(report, {}),
+      ];
+
+      for (const output of outputs) {
+        for (const action of ["search", "install", "update"]) {
+          expect(output).toContain(`${prefix} skills ${action}`);
+        }
+      }
+    });
+
+    it("keeps profile and container guidance out of machine-readable skill output", () => {
+      vi.stubEnv("OPENCLAW_PROFILE", "work");
+      vi.stubEnv("OPENCLAW_CONTAINER_HINT", "demo");
+      const report = createMockReport([]);
+      const outputs = [
+        formatSkillsList(report, { json: true }),
+        formatSkillInfo(report, "missing-skill", { json: true }),
+        formatSkillsCheck(report, { json: true }),
+      ];
+
+      for (const output of outputs) {
+        expect(() => JSON.parse(output)).not.toThrow();
+        expect(output).not.toContain("Tip:");
+        expect(output).not.toContain("openclaw --profile");
+        expect(output).not.toContain("openclaw --container");
+      }
+    });
+  });
+
   describe("formatSkillsList", () => {
     it("formats empty skills list", () => {
       const report = createMockReport([]);
@@ -339,7 +399,7 @@ describe("skills-cli", () => {
       expect(output).toContain("not-assigned");
       expect(output).toContain("What this means");
       expect(output).toContain("the agent may still exclude it");
-      expect(output).toContain("people, scripts, or cron jobs can call the skill explicitly");
+      expect(output).toContain("people, scripts, or automations can call the skill explicitly");
       expect(output).toContain("kept out of normal chat");
       expect(output).toContain("commands/cron may still use it");
     });

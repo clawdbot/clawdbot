@@ -3,6 +3,7 @@
  * runtimes.
  */
 import { normalizeConfiguredMcpServers } from "../config/mcp-config-normalize.js";
+import type { SessionToolOverrides } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   loadEnabledBundleMcpConfig,
@@ -54,6 +55,7 @@ export function loadMergedBundleMcpConfig(params: {
   cfg?: OpenClawConfig;
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
   mapConfiguredServer?: BundleMcpServerMapper;
+  toolOverrides?: Pick<SessionToolOverrides, "mcpServers">;
 }): MergedBundleMcpConfig {
   const bundleMcp = loadEnabledBundleMcpConfig({
     workspaceDir: params.workspaceDir,
@@ -61,17 +63,24 @@ export function loadMergedBundleMcpConfig(params: {
     manifestRegistry: params.manifestRegistry,
   });
   const configuredMcp = normalizeConfiguredMcpServers(params.cfg?.mcp?.servers);
+  const serverOverrides = params.toolOverrides?.mcpServers;
+  const readServerOverride = (name: string) =>
+    serverOverrides && Object.hasOwn(serverOverrides, name) ? serverOverrides[name] : undefined;
   const disabledConfiguredNames = new Set(
     Object.entries(configuredMcp)
-      .filter(([, server]) => server.enabled === false)
+      .filter(([name, server]) => readServerOverride(name) !== true && server.enabled === false)
       .map(([name]) => name),
   );
   const enabledConfiguredMcp = Object.fromEntries(
-    Object.entries(configuredMcp).filter(([, server]) => server.enabled !== false),
+    Object.entries(configuredMcp).filter(
+      ([name, server]) =>
+        readServerOverride(name) !== false &&
+        (readServerOverride(name) === true || server.enabled !== false),
+    ),
   );
   const enabledBundleMcp = Object.fromEntries(
     Object.entries(bundleMcp.config.mcpServers).filter(
-      ([name]) => !disabledConfiguredNames.has(name),
+      ([name]) => readServerOverride(name) !== false && !disabledConfiguredNames.has(name),
     ),
   );
   const mapConfiguredServer = params.mapConfiguredServer ?? ((server) => server);

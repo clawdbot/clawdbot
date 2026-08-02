@@ -1709,12 +1709,13 @@ describe("Claude session catalog", () => {
       entries: [],
       transcripts: { [sessionId]: [sdkCliMessage(sessionId, "Recovered")] },
     });
+    const canonicalTranscriptPath = await fs.realpath(transcriptPath);
     const open = fs.open.bind(fs);
     let transcriptAttempts = 0;
     let now = 1_000;
     vi.spyOn(Date, "now").mockImplementation(() => now);
     vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-      if (args[0] === transcriptPath && transcriptAttempts++ === 0) {
+      if (args[0] === canonicalTranscriptPath && transcriptAttempts++ === 0) {
         throw new Error("transient transcript open failure");
       }
       return await open(...args);
@@ -2566,6 +2567,51 @@ describe("Claude session catalog", () => {
       expect.objectContaining({ hostId: "node:failed", error: expect.any(Object) }),
       expect.objectContaining({ hostId: "node:healthy", sessions: [] }),
     ]);
+  });
+
+  it("omits the Gateway's same-install node host from native discovery", async () => {
+    const home = await createHome();
+    process.env.HOME = home;
+    const invoke = vi.fn(async ({ nodeId }: { nodeId: string }) => ({
+      payloadJSON: JSON.stringify({
+        sessions: [
+          {
+            threadId: `remote-${nodeId}`,
+            status: "stored",
+            source: "claude-cli",
+            archived: false,
+          },
+        ],
+      }),
+    }));
+    const provider = captureCatalogProvider({
+      nodes: {
+        list: vi.fn().mockResolvedValue({
+          nodes: [
+            {
+              nodeId: "gateway-node",
+              displayName: "Gateway node",
+              gatewayLocal: true,
+              connected: true,
+              commands: [CLAUDE_SESSIONS_LIST_COMMAND],
+            },
+            {
+              nodeId: "remote-node",
+              displayName: "Remote node",
+              connected: true,
+              commands: [CLAUDE_SESSIONS_LIST_COMMAND],
+            },
+          ],
+        }),
+        invoke,
+      },
+    } as unknown as PluginRuntime);
+
+    const hosts = await provider.list({});
+
+    expect(hosts.map((host) => host.hostId)).toEqual(["gateway:local", "node:remote-node"]);
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(invoke).toHaveBeenCalledWith(expect.objectContaining({ nodeId: "remote-node" }));
   });
 
   it("bounds how long a hung paired-node catalog can delay the caller", async () => {

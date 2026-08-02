@@ -10,6 +10,8 @@ const SQLITE_LOCK_ERROR_CODES = new Set(["SQLITE_BUSY", "SQLITE_LOCKED"]);
 // SQLite result in `errcode`; the low byte identifies BUSY or LOCKED.
 const SQLITE_BUSY_RESULT_CODE = 5;
 const SQLITE_LOCKED_RESULT_CODE = 6;
+const SQLITE_CORRUPT_RESULT_CODE = 11;
+const SQLITE_NOTADB_RESULT_CODE = 26;
 const SQLITE_PRIMARY_RESULT_CODE_MASK = 0xff;
 const DEFAULT_SLOW_BUSY_WAIT_MS = 1_000;
 const DEFAULT_SLOW_TRANSACTION_HOLD_MS = 1_000;
@@ -70,11 +72,17 @@ export function isSqliteLockError(error: unknown): boolean {
   return primaryCode === SQLITE_BUSY_RESULT_CODE || primaryCode === SQLITE_LOCKED_RESULT_CODE;
 }
 
+/** Report proven file damage (corrupt page or non-database header), not transient failure. */
+export function isSqliteCorruptionError(error: unknown): boolean {
+  const primaryCode = sqlitePrimaryResultCode(error);
+  return primaryCode === SQLITE_CORRUPT_RESULT_CODE || primaryCode === SQLITE_NOTADB_RESULT_CODE;
+}
+
 function slowBusyWaitThresholdMs(options: SqliteTransactionOptions | undefined): number {
-  if (options?.busyTimeoutMs === undefined) {
+  if (options?.busyTimeoutMs === undefined || options.busyTimeoutMs <= 0) {
     return DEFAULT_SLOW_BUSY_WAIT_MS;
   }
-  return Math.min(DEFAULT_SLOW_BUSY_WAIT_MS, Math.max(1, options.busyTimeoutMs));
+  return Math.min(DEFAULT_SLOW_BUSY_WAIT_MS, options.busyTimeoutMs);
 }
 
 function slowTransactionHoldThresholdMs(options: SqliteTransactionOptions | undefined): number {

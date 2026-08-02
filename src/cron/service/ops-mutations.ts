@@ -8,9 +8,11 @@ import {
   isCronJobActive,
   noteActiveCronJobRemoval,
   noteActiveCronJobScheduleMutation,
+  noteActiveCronJobTriggerMutation,
 } from "../active-jobs.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import { deleteCronJobScratch } from "../scratch-store.js";
+import { removeStaleCronJobFamilyRows } from "../store.js";
 import { createCronStreamSourceIdentity, cronStreamScheduleKey } from "../stream-schedule.js";
 import { normalizeCronTaskRunJobId } from "../task-run-history.js";
 import type { CronJob, CronJobCreate, CronJobPatch } from "../types.js";
@@ -33,6 +35,7 @@ import type {
   CronServiceState,
   CronUpdateOptions,
   CronUpdatePrecondition,
+  DeferredCronNotifications,
 } from "./state.js";
 import { emit } from "./state.js";
 import {
@@ -115,6 +118,10 @@ function finalizeUpdatedJob(params: {
 
   nextJob.updatedAtMs = now;
   if (schedulingInputsChanged) {
+    // Anchor restart catch-up to the new inputs. Without this, startup replays a
+    // slot the previous schedule never had, because lastRunAtMs still belongs to
+    // the old one and looks perpetually stale against the new slots (#91944).
+    nextJob.state.scheduleActivatedAtMs = now;
     nextJob.state.startupCatchupAtMs = undefined;
     // A paced timestamp is owned by the exact schedule, pacing bounds, and
     // trigger mode that produced it. Configuration changes release both the
@@ -156,6 +163,16 @@ async function persistUpdatedJob(params: {
     // Mark only committed edits; a failed SQLite write cannot retire the run's
     // schedule ownership, and idempotent re-saves must not create a new claim.
     noteActiveCronJobScheduleMutation(nextJob.id);
+  }
+  if (
+    !isDeepStrictEqual(previousJob.trigger, nextJob.trigger) ||
+    !isDeepStrictEqual(previousJob.state.triggerState, nextJob.state.triggerState) ||
+    ((previousJob.payload.kind === "script" || nextJob.payload.kind === "script") &&
+      !isDeepStrictEqual(previousJob.payload, nextJob.payload))
+  ) {
+    // Trigger/script definitions and shared-state edits retire the admitted
+    // state writer; otherwise an obsolete evaluation or script wins later.
+    noteActiveCronJobTriggerMutation(nextJob.id);
   }
   armTimer(state);
   emit(state, {
@@ -260,15 +277,15 @@ export async function add(state: CronServiceState, input: CronJobCreate, opts?: 
     });
     state.store?.jobs.push(job);
 
-    // Auto-disable notifications describe durable state, so publish them only
+    // Mutation notifications describe durable state, so publish them only
     // after the write succeeds instead of leaking a rolled-back transition.
-    const postPersistAutoDisableNotifications: Array<() => void> = [];
+    const postPersistNotifications: DeferredCronNotifications = [];
     recomputeNextRunsForMaintenance(state, {
-      deferredAutoDisableNotifications: postPersistAutoDisableNotifications,
+      deferredNotifications: postPersistNotifications,
     });
 
     await persistOrRestore(state, snapshot, {
-      postPersistAutoDisableNotifications,
+      postPersistNotifications,
       suppressScheduledJobId: job.id,
     });
     armTimer(state);
@@ -292,6 +309,17 @@ export async function add(state: CronServiceState, input: CronJobCreate, opts?: 
       nextRunAtMs: job.state.nextRunAtMs,
     });
     return declarationKey ? { ...job, created: true, job } : job;
+  });
+}
+
+/** Prunes an owned job family from obsolete store partitions after active-store convergence. */
+export async function removeStaleJobFamily(
+  state: CronServiceState,
+  family: { declarationKey: string; name: string; ownerPluginTag: string },
+): Promise<number> {
+  return await locked(state, async () => {
+    await ensureLoaded(state, { skipRecompute: true });
+    return removeStaleCronJobFamilyRows(state.deps.storePath, family);
   });
 }
 
@@ -401,13 +429,13 @@ export async function remove(
     state.store.jobs = state.store.jobs.filter((j) => j.id !== id);
     const removed = (state.store.jobs.length ?? 0) !== before;
 
-    const postPersistAutoDisableNotifications: Array<() => void> = [];
+    const postPersistNotifications: DeferredCronNotifications = [];
     recomputeNextRunsForMaintenance(state, {
-      deferredAutoDisableNotifications: postPersistAutoDisableNotifications,
+      deferredNotifications: postPersistNotifications,
     });
 
     await persistOrRestore(state, snapshot, {
-      postPersistAutoDisableNotifications,
+      postPersistNotifications,
       suppressScheduledJobId: id,
     });
     if (removed) {

@@ -130,6 +130,24 @@ class ShareLaunchTest {
   }
 
   @Test
+  fun acceptsVideoShareFromProviderMimeType() {
+    val video = Uri.parse("content://media/shared/video")
+    val parsed =
+      parseShare(
+        intent =
+          Intent(Intent.ACTION_SEND)
+            .setType("video/*")
+            .putExtra(Intent.EXTRA_STREAM, video),
+        mimeTypes = mapOf(video to "video/mp4"),
+      )
+
+    requireNotNull(parsed)
+    assertEquals(SharedAttachmentKind.Video, parsed.attachments.single().kind)
+    assertEquals("video/mp4", parsed.attachments.single().mimeType)
+    assertTrue("video/*" in SHARED_ATTACHMENT_MIME_ALLOWLIST)
+  }
+
+  @Test
   fun acceptsCuratedDocumentShare() {
     val document = Uri.parse("content://docs/shared/report")
     val parsed =

@@ -14,6 +14,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { captureEnv } from "../test-utils/env.js";
+import { runDirectSessionAnnounceScenario } from "./server.sessions-send.direct-announce.test-support.js";
 import {
   agentCommand,
   getFreePort,
@@ -35,6 +36,7 @@ let envSnapshot: ReturnType<typeof captureEnv>;
 
 type SessionSendTool = ReturnType<typeof createOpenClawTools>[number];
 const SESSION_SEND_E2E_TIMEOUT_MS = 10_000;
+const SESSION_SEND_DM_ROUTING_E2E_TIMEOUT_MS = 30_000;
 let cachedSessionsSendTool: SessionSendTool | null = null;
 
 function getSessionsSendTool(): SessionSendTool {
@@ -186,6 +188,35 @@ describe("sessions_send gateway loopback", () => {
     expect(firstCall?.inputProvenance?.kind).toBe("inter_session");
     expect(firstCall?.inputProvenance?.sourceTool).toBe("sessions_send");
   });
+
+  it.each([
+    {
+      label: "direct",
+      sessionKey: "agent:main:feishu:direct:ou_announce_recipient",
+      expectedAccountId: undefined,
+    },
+    {
+      label: "dm alias",
+      sessionKey: "agent:main:feishu:dm:ou_announce_recipient",
+      expectedAccountId: undefined,
+    },
+    {
+      label: "account-scoped direct",
+      sessionKey: "agent:main:feishu:work:direct:ou_announce_recipient",
+      expectedAccountId: "work",
+    },
+    {
+      label: "account-scoped dm alias",
+      sessionKey: "agent:main:feishu:work:dm:ou_announce_recipient",
+      expectedAccountId: "work",
+    },
+  ])(
+    "delivers a $label session announcement through the authenticated Gateway without stored delivery context",
+    { timeout: SESSION_SEND_DM_ROUTING_E2E_TIMEOUT_MS },
+    async ({ sessionKey, expectedAccountId }) => {
+      await runDirectSessionAnnounceScenario({ sessionKey, expectedAccountId });
+    },
+  );
 
   it(
     "announces through gateway send using external deliveryContext over stale webchat session fields",
@@ -619,6 +650,368 @@ describe("sessions_send agent targeting", () => {
         });
         expect(stored?.sessionId).toBe(orionCall?.sessionId);
       } finally {
+        testState.agentsConfig = undefined;
+        testState.sessionStorePath = undefined;
+        await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+      }
+    },
+  );
+});
+
+type DirectMessageRequesterRoutingCase = {
+  label: string;
+  requesterSessionKey: string;
+  dmScope: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
+  bindingDmScope?: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
+  defaultBindingDmScope?: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
+  bindingAccountId?: string;
+  bindingAgentId?: string;
+  bindingPeerId?: string;
+  bindingTeamId?: string;
+  expectedReplySessionKey: string;
+};
+
+describe("sessions_send direct-message requester routing", () => {
+  it.each<DirectMessageRequesterRoutingCase>([
+    {
+      label: "legacy peer direct route",
+      requesterSessionKey: "agent:main:direct:legacy-peer",
+      dmScope: "main",
+      expectedReplySessionKey: "agent:main:main",
+    },
+    {
+      label: "legacy peer dm route",
+      requesterSessionKey: "agent:main:dm:legacy-peer",
+      dmScope: "main",
+      expectedReplySessionKey: "agent:main:main",
+    },
+    {
+      label: "legacy channel direct route",
+      requesterSessionKey: "agent:main:feishu:direct:legacy-peer",
+      dmScope: "main",
+      expectedReplySessionKey: "agent:main:main",
+    },
+    {
+      label: "legacy channel dm route",
+      requesterSessionKey: "agent:main:feishu:dm:legacy-peer",
+      dmScope: "main",
+      expectedReplySessionKey: "agent:main:main",
+    },
+    {
+      label: "legacy account direct route",
+      requesterSessionKey: "agent:main:feishu:default:direct:legacy-peer",
+      dmScope: "main",
+      expectedReplySessionKey: "agent:main:main",
+    },
+    {
+      label: "legacy account dm route",
+      requesterSessionKey: "agent:main:feishu:default:dm:legacy-peer",
+      dmScope: "main",
+      expectedReplySessionKey: "agent:main:main",
+    },
+    {
+      label: "isolated peer route",
+      requesterSessionKey: "agent:main:direct:legacy-peer",
+      dmScope: "per-peer",
+      expectedReplySessionKey: "agent:main:direct:legacy-peer",
+    },
+    {
+      label: "isolated channel route",
+      requesterSessionKey: "agent:main:feishu:direct:legacy-peer",
+      dmScope: "per-channel-peer",
+      expectedReplySessionKey: "agent:main:feishu:direct:legacy-peer",
+    },
+    {
+      label: "isolated account route",
+      requesterSessionKey: "agent:main:feishu:default:direct:legacy-peer",
+      dmScope: "per-account-channel-peer",
+      expectedReplySessionKey: "agent:main:feishu:default:direct:legacy-peer",
+    },
+    {
+      label: "binding-isolated peer route",
+      requesterSessionKey: "agent:main:direct:legacy-peer",
+      dmScope: "main",
+      bindingDmScope: "per-peer",
+      expectedReplySessionKey: "agent:main:direct:legacy-peer",
+    },
+    {
+      label: "binding-isolated channel route",
+      requesterSessionKey: "agent:main:feishu:direct:legacy-peer",
+      dmScope: "main",
+      bindingDmScope: "per-channel-peer",
+      expectedReplySessionKey: "agent:main:feishu:direct:legacy-peer",
+    },
+    {
+      label: "binding-isolated account route",
+      requesterSessionKey: "agent:main:feishu:default:direct:legacy-peer",
+      dmScope: "main",
+      bindingDmScope: "per-account-channel-peer",
+      expectedReplySessionKey: "agent:main:feishu:default:direct:legacy-peer",
+    },
+    {
+      label: "main binding overriding globally isolated peer route",
+      requesterSessionKey: "agent:main:direct:legacy-peer",
+      dmScope: "per-peer",
+      bindingDmScope: "main",
+      expectedReplySessionKey: "agent:main:main",
+    },
+    {
+      label: "unresolved named-account isolated peer route",
+      requesterSessionKey: "agent:main:direct:legacy-peer",
+      dmScope: "main",
+      bindingDmScope: "per-peer",
+      bindingAccountId: "work",
+      expectedReplySessionKey: "agent:main:direct:legacy-peer",
+    },
+    {
+      label: "unresolved named-account isolated channel route",
+      requesterSessionKey: "agent:main:feishu:direct:legacy-peer",
+      dmScope: "main",
+      bindingDmScope: "per-channel-peer",
+      bindingAccountId: "work",
+      expectedReplySessionKey: "agent:main:feishu:direct:legacy-peer",
+    },
+    {
+      label: "thread-scoped direct route",
+      requesterSessionKey: "agent:main:feishu:direct:legacy-peer:thread:reply-root",
+      dmScope: "main",
+      expectedReplySessionKey: "agent:main:feishu:direct:legacy-peer:thread:reply-root",
+    },
+    {
+      label: "direct route owned by another agent",
+      requesterSessionKey: "agent:main:feishu:direct:legacy-peer",
+      dmScope: "main",
+      bindingAgentId: "stranger",
+      expectedReplySessionKey: "agent:main:feishu:direct:legacy-peer",
+    },
+    {
+      label: "erased named-account route owned by another agent",
+      requesterSessionKey: "agent:main:feishu:direct:legacy-peer",
+      dmScope: "main",
+      bindingAgentId: "stranger",
+      bindingAccountId: "work",
+      expectedReplySessionKey: "agent:main:feishu:direct:legacy-peer",
+    },
+    {
+      label: "named-account route inheriting globally isolated DM scope",
+      requesterSessionKey: "agent:main:feishu:direct:legacy-peer",
+      dmScope: "per-peer",
+      defaultBindingDmScope: "main",
+      bindingAccountId: "work",
+      expectedReplySessionKey: "agent:main:feishu:direct:legacy-peer",
+    },
+    {
+      label: "named-account route with a trimmed wildcard peer",
+      requesterSessionKey: "agent:main:feishu:direct:legacy-peer",
+      dmScope: "main",
+      bindingDmScope: "per-peer",
+      bindingAccountId: "work",
+      bindingPeerId: " * ",
+      expectedReplySessionKey: "agent:main:feishu:direct:legacy-peer",
+    },
+    {
+      label: "isolated route with a case-preserving peer binding",
+      requesterSessionKey: "agent:main:feishu:direct:legacy-peer",
+      dmScope: "main",
+      bindingDmScope: "per-peer",
+      bindingPeerId: "LEGACY-PEER",
+      expectedReplySessionKey: "agent:main:feishu:direct:legacy-peer",
+    },
+    {
+      label: "isolated route with session-erased team metadata",
+      requesterSessionKey: "agent:main:feishu:direct:legacy-peer",
+      dmScope: "main",
+      bindingDmScope: "per-peer",
+      bindingTeamId: "T123",
+      expectedReplySessionKey: "agent:main:feishu:direct:legacy-peer",
+    },
+    {
+      label: "group route with an opaque direct segment",
+      requesterSessionKey: "agent:main:feishu:group:direct:legacy-peer",
+      dmScope: "main",
+      expectedReplySessionKey: "agent:main:feishu:group:direct:legacy-peer",
+    },
+  ] as const)(
+    "returns a real cross-agent reply to the $label",
+    { timeout: SESSION_SEND_DM_ROUTING_E2E_TIMEOUT_MS },
+    async ({
+      label,
+      requesterSessionKey,
+      dmScope,
+      bindingDmScope,
+      defaultBindingDmScope,
+      bindingAccountId,
+      bindingAgentId,
+      bindingPeerId,
+      bindingTeamId,
+      expectedReplySessionKey,
+    }) => {
+      const configPath = process.env.OPENCLAW_CONFIG_PATH;
+      if (!configPath) {
+        throw new Error("OPENCLAW_CONFIG_PATH missing in gateway test environment");
+      }
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-send-dm-scope-"));
+      // A2A follow-ups outlive tool.execute. Give every real Gateway case its
+      // own agent so a preceding case can never satisfy this case's spy.
+      const targetAgentId = `orion-${label.toLowerCase().replaceAll(" ", "-")}`;
+      const targetSessionKey = `agent:${targetAgentId}:main`;
+      const config: OpenClawConfig = {
+        ...(bindingDmScope || defaultBindingDmScope || bindingAccountId || bindingAgentId
+          ? {
+              bindings: [
+                ...(defaultBindingDmScope
+                  ? [
+                      {
+                        type: "route" as const,
+                        agentId: "main",
+                        match: {
+                          channel: "feishu",
+                          accountId: "default",
+                          peer: { kind: "direct" as const, id: "legacy-peer" },
+                        },
+                        session: { dmScope: defaultBindingDmScope },
+                      },
+                    ]
+                  : []),
+                {
+                  type: "route",
+                  agentId: bindingAgentId ?? "main",
+                  match: {
+                    channel: "feishu",
+                    accountId: bindingAccountId ?? "default",
+                    peer: { kind: "direct", id: bindingPeerId ?? "legacy-peer" },
+                    ...(bindingTeamId ? { teamId: bindingTeamId } : {}),
+                  },
+                  ...(bindingDmScope ? { session: { dmScope: bindingDmScope } } : {}),
+                },
+              ],
+            }
+          : {}),
+        session: { dmScope },
+        tools: {
+          sessions: { visibility: "all" },
+          agentToAgent: { enabled: true },
+        },
+        agents: {
+          list: [
+            { id: "main", default: true },
+            { id: targetAgentId },
+            ...(bindingAgentId ? [{ id: bindingAgentId }] : []),
+          ],
+        },
+      };
+
+      testState.sessionStorePath = path.join(dir, "sessions.json");
+      testState.agentsConfig = config.agents;
+      testState.sessionConfig = config.session;
+      try {
+        await fs.mkdir(path.dirname(configPath), { recursive: true });
+        await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf-8");
+        await writeSessionStore({
+          entries: {
+            "agent:main:main": { sessionId: "dm-scope-main", updatedAt: Date.now() },
+            [requesterSessionKey]: { sessionId: "dm-scope-legacy", updatedAt: Date.now() },
+            [targetSessionKey]: { sessionId: "dm-scope-orion", updatedAt: Date.now() },
+          },
+        });
+
+        const spy = agentCommand as unknown as Mock<(opts: unknown) => Promise<void>>;
+        spy.mockReset();
+        spy.mockImplementation(async (opts: unknown) =>
+          emitLifecycleAssistantReply({
+            opts,
+            defaultSessionId: `dm-scope-${targetAgentId}`,
+            resolveText: (extraSystemPrompt) => {
+              if (extraSystemPrompt?.includes("Agent-to-agent reply step")) {
+                return "REPLY_SKIP";
+              }
+              if (extraSystemPrompt?.includes("Agent-to-agent announce step")) {
+                return "ANNOUNCE_SKIP";
+              }
+              return "orion received the session message";
+            },
+          }),
+        );
+
+        const tool = createOpenClawTools({
+          agentSessionKey: requesterSessionKey,
+          agentChannel: "feishu",
+          config,
+        }).find((candidate) => candidate.name === "sessions_send");
+        if (!tool) {
+          throw new Error("missing sessions_send tool");
+        }
+
+        const result = await tool.execute("call-dm-scope-routing", {
+          sessionKey: targetSessionKey,
+          message: "deliver to the monitored requester session",
+          timeoutSeconds: 10,
+        });
+        expectSessionsSendDetails(result, {
+          reply: "orion received the session message",
+          sessionKey: targetSessionKey,
+        });
+
+        const runId = (result.details as { runId?: string }).runId;
+        expect(runId).toBeTypeOf("string");
+        const targetCall = spy.mock.calls
+          .map(
+            ([opts]) =>
+              opts as {
+                runId?: string;
+                sessionKey?: string;
+                inputProvenance?: { sourceSessionKey?: string };
+              },
+          )
+          .find((opts) => opts.sessionKey === targetSessionKey && opts.runId === runId);
+        if (!targetCall) {
+          const observedRuns = spy.mock.calls.slice(-6).map(([opts]) => {
+            const call = opts as { runId?: string; sessionKey?: string };
+            return { runId: call.runId, sessionKey: call.sessionKey };
+          });
+          throw new Error(
+            `Target run ${runId} for ${targetSessionKey} was not observed: ${JSON.stringify(observedRuns)}`,
+          );
+        }
+        expect(targetCall?.inputProvenance?.sourceSessionKey).toBe(expectedReplySessionKey);
+
+        await vi.waitFor(
+          () => {
+            expect(
+              spy.mock.calls.some(([opts]) => {
+                const call = opts as {
+                  sessionKey?: string;
+                  extraSystemPrompt?: string;
+                  inputProvenance?: { sourceSessionKey?: string };
+                };
+                return (
+                  call.sessionKey === expectedReplySessionKey &&
+                  call.inputProvenance?.sourceSessionKey === targetSessionKey &&
+                  call.extraSystemPrompt?.includes("Agent-to-agent reply step")
+                );
+              }),
+            ).toBe(true);
+          },
+          { timeout: 10_000, interval: 25 },
+        );
+        if (expectedReplySessionKey !== requesterSessionKey) {
+          expect(
+            spy.mock.calls.some(([opts]) => {
+              const call = opts as {
+                sessionKey?: string;
+                extraSystemPrompt?: string;
+                inputProvenance?: { sourceSessionKey?: string };
+              };
+              return (
+                call.sessionKey === requesterSessionKey &&
+                call.inputProvenance?.sourceSessionKey === targetSessionKey &&
+                call.extraSystemPrompt?.includes("Agent-to-agent reply step")
+              );
+            }),
+          ).toBe(false);
+        }
+      } finally {
+        testState.sessionConfig = undefined;
         testState.agentsConfig = undefined;
         testState.sessionStorePath = undefined;
         await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });

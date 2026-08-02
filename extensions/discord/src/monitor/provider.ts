@@ -1,7 +1,6 @@
 // Discord provider module implements model/runtime integration.
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
-import { createConnectedChannelStatusPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
@@ -42,7 +41,7 @@ import {
 } from "./provider.startup.js";
 import { resolveDiscordRestFetch } from "./rest-fetch.js";
 import { formatDiscordStartupStatusMessage } from "./startup-status.js";
-import type { DiscordMonitorStatusSink } from "./status.js";
+import { createDiscordReadyStatusPatch, type DiscordMonitorStatusSink } from "./status.js";
 
 export type MonitorDiscordOpts = {
   token?: string;
@@ -482,7 +481,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       }),
     );
     if (lifecycleGateway?.isConnected) {
-      opts.setStatus?.(createConnectedChannelStatusPatch());
+      opts.setStatus?.(createDiscordReadyStatusPatch());
     }
 
     lifecycleStarted = true;

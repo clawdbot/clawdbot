@@ -452,18 +452,6 @@ jobs, followed by a report job that downloads both artifacts and runs
 first; inspect the report job when both lane summaries exist but the comparison
 fails.
 
-### QA Lab Matrix selection
-
-`pnpm openclaw qa matrix` runs every flow scenario that explicitly declares
-Matrix channel eligibility. There are no Matrix named profiles or runner-owned
-scenario-id lists. Repeat `--scenario <id>` for an explicit subset, or use
-`--shard <index>/<total>` to reproduce one deterministic CI partition.
-
-`QA-Lab - All Lanes` and `OpenClaw Release Checks` use the same catalog-derived
-selection and standard artifacts. CI fans the selection across five balanced
-shards; shard placement is operational only and does not define membership or
-priority.
-
 ### Reusable Live/E2E Checks
 
 `OpenClaw Live And E2E Checks (Reusable)`

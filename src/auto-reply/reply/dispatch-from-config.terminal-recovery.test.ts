@@ -7,7 +7,6 @@ import {
   mocks,
   noAbortResult,
   resetPluginTtsAndThreadMocks,
-  runtimePluginMocks,
   sessionStoreMocks,
 } from "./dispatch-from-config.shared.test-harness.js";
 import type { DispatchFromConfigParams } from "./dispatch-from-config.types.js";
@@ -52,9 +51,8 @@ describe("dispatchReplyFromConfig terminal visible admission recovery", () => {
     replyRunTesting.resetReplyRunRegistry();
     resetInboundDedupe();
     resetPluginTtsAndThreadMocks();
-    runtimePluginMocks.ensureRuntimePluginsLoaded.mockReset();
     mocks.routeReply.mockReset();
-    mocks.routeReply.mockResolvedValue({ ok: true, messageId: "mock" });
+    mocks.routeReply.mockResolvedValue({ ok: true, delivered: true, messageId: "mock" });
     mocks.tryFastAbortFromMessage.mockReset();
     mocks.tryFastAbortFromMessage.mockResolvedValue(noAbortResult);
     diagnosticMocks.requestStuckDiagnosticSessionRecovery.mockReset();

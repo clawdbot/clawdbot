@@ -7,6 +7,11 @@ import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  asOptionalRecord,
+  asPositiveSafeInteger,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 const OPENROUTER_MODELS_ENDPOINT = `${OPENROUTER_BASE_URL}/models`;
@@ -35,12 +40,8 @@ const OPENROUTER_KIMI_K2_5_COST = {
   cacheWrite: 0,
 };
 
-function normalizeBaseUrl(baseUrl: string | undefined): string {
-  return (baseUrl ?? "").trim().replace(/\/+$/, "");
-}
-
 export function normalizeOpenRouterBaseUrl(baseUrl: string | undefined): string | undefined {
-  const normalized = normalizeBaseUrl(baseUrl);
+  const normalized = baseUrl?.trim().replace(/\/+$/, "");
   if (!normalized) {
     return undefined;
   }
@@ -97,25 +98,6 @@ export function buildOpenrouterProvider(): ModelProviderConfig {
   };
 }
 
-function readRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
-function readString(record: Record<string, unknown> | undefined, key: string): string | undefined {
-  const value = record?.[key];
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function readPositiveInteger(
-  record: Record<string, unknown> | undefined,
-  key: string,
-): number | undefined {
-  const value = record?.[key];
-  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
-}
-
 function readStringArray(record: Record<string, unknown> | undefined, key: string): string[] {
   const value = record?.[key];
   return Array.isArray(value)
@@ -138,7 +120,7 @@ function readOpenRouterModalities(
   if (explicit.length > 0) {
     return explicit;
   }
-  const modality = readString(architecture, "modality");
+  const modality = normalizeOptionalString(architecture?.modality);
   if (!modality) {
     return [];
   }
@@ -147,20 +129,20 @@ function readOpenRouterModalities(
 }
 
 function buildOpenRouterLiveModel(row: unknown): ModelDefinitionConfig | undefined {
-  const record = readRecord(row);
-  const id = readString(record, "id");
-  const architecture = readRecord(record?.architecture);
+  const record = asOptionalRecord(row);
+  const id = normalizeOptionalString(record?.id);
+  const architecture = asOptionalRecord(record?.architecture);
   const outputModalities = readOpenRouterModalities(architecture, "output");
   if (!id || (outputModalities.length > 0 && !outputModalities.includes("text"))) {
     return undefined;
   }
   const inputModalities = readOpenRouterModalities(architecture, "input");
   const supportedParameters = readStringArray(record, "supported_parameters");
-  const topProvider = readRecord(record?.top_provider);
-  const pricing = readRecord(record?.pricing);
+  const topProvider = asOptionalRecord(record?.top_provider);
+  const pricing = asOptionalRecord(record?.pricing);
   return {
     id,
-    name: readString(record, "name") ?? id,
+    name: normalizeOptionalString(record?.name) ?? id,
     reasoning:
       supportedParameters.includes("reasoning") ||
       supportedParameters.includes("include_reasoning"),
@@ -172,22 +154,15 @@ function buildOpenRouterLiveModel(row: unknown): ModelDefinitionConfig | undefin
       cacheWrite: readTokenPrice(pricing, "input_cache_write"),
     },
     contextWindow:
-      readPositiveInteger(topProvider, "context_length") ??
-      readPositiveInteger(record, "context_length") ??
+      asPositiveSafeInteger(topProvider?.context_length) ??
+      asPositiveSafeInteger(record?.context_length) ??
       OPENROUTER_DEFAULT_CONTEXT_WINDOW,
     maxTokens:
-      readPositiveInteger(topProvider, "max_completion_tokens") ??
-      readPositiveInteger(record, "max_completion_tokens") ??
-      readPositiveInteger(record, "max_output_tokens") ??
+      asPositiveSafeInteger(topProvider?.max_completion_tokens) ??
+      asPositiveSafeInteger(record?.max_completion_tokens) ??
+      asPositiveSafeInteger(record?.max_output_tokens) ??
       OPENROUTER_DEFAULT_MAX_TOKENS,
   };
-}
-
-function parseOpenRouterLiveModels(rows: readonly unknown[]): ModelDefinitionConfig[] {
-  const models = rows
-    .map(buildOpenRouterLiveModel)
-    .filter((model): model is ModelDefinitionConfig => Boolean(model));
-  return [...new Map(models.map((model) => [model.id, model])).values()];
 }
 
 export async function buildOpenrouterLiveProvider(params: {
@@ -212,15 +187,18 @@ export async function buildOpenrouterLiveProvider(params: {
     ttlMs: OPENROUTER_MODELS_CACHE_TTL_MS,
     auditContext: "openrouter-model-discovery",
     projectRows: (rows, fallbackProvider) => {
-      const liveModels = parseOpenRouterLiveModels(rows);
+      const liveModels = rows.flatMap((row) => {
+        const model = buildOpenRouterLiveModel(row);
+        return model ? [model] : [];
+      });
       if (liveModels.length === 0) {
         return [];
       }
-      const models = new Map(fallbackProvider.models.map((model) => [model.id, model]));
-      for (const model of liveModels) {
-        models.set(model.id, model);
-      }
-      return [...models.values()].toSorted((a, b) => a.id.localeCompare(b.id));
+      return [
+        ...new Map(
+          [...fallbackProvider.models, ...liveModels].map((model) => [model.id, model]),
+        ).values(),
+      ].toSorted((a, b) => a.id.localeCompare(b.id));
     },
   });
 }

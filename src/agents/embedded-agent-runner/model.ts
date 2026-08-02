@@ -8,10 +8,11 @@ import { modelKey } from "../model-ref-shared.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
 import { buildSuppressedBuiltInModelError } from "../model-suppression.js";
 import {
+  PreparedModelRuntimeOwnerNotPublishedError,
   getPreparedModelRuntimeSnapshot,
   loadPreparedModelRuntimeSnapshot,
+  type PreparedModelRuntimeSnapshot,
 } from "../prepared-model-runtime.js";
-import type { PreparedConfiguredRuntimeModel } from "../prepared-model-runtime.owner.js";
 import {
   AuthStorage as AgentAuthStorageClass,
   ModelRegistry as AgentModelRegistryClass,
@@ -24,7 +25,6 @@ import {
   applyConfiguredProviderOverrides,
   resolveConfiguredProviderConfig,
 } from "./model.configured-overrides.js";
-import type { InlineModelEntry } from "./model.inline-provider.js";
 import {
   DEFAULT_PROVIDER_RUNTIME_HOOKS,
   normalizeResolvedModel,
@@ -65,8 +65,7 @@ type AsyncModelResolutionOptions = CommonModelResolutionOptions & {
   retryTransientProviderRuntimeMiss?: boolean;
   agentRuntimeId?: string;
   skipAgentDiscovery?: boolean;
-  preparedRuntimeModels?: readonly PreparedConfiguredRuntimeModel[];
-  preparedInlineProviderModels?: readonly InlineModelEntry[];
+  preparedModelRuntime?: PreparedModelRuntimeSnapshot;
 };
 
 /** Creates isolated model/auth stores for harnesses that own model discovery themselves. */
@@ -137,7 +136,7 @@ export function resolveModel(
   if ((!options?.authStorage || !options?.modelRegistry) && !preparedSnapshot) {
     // Synchronous callers must enter through a lifecycle that already published discovery.
     // Falling back to an empty registry turns a stale/pending generation into a false model miss.
-    throw new Error(
+    throw new PreparedModelRuntimeOwnerNotPublishedError(
       `prepared model runtime is not published for synchronous model resolution (${resolvedAgentDir}); use resolveModelAsync before lifecycle publication`,
     );
   }
@@ -234,6 +233,17 @@ export async function resolveModelAsync(
       ? fallbackStores.modelRegistry.fork(authStorage)
       : fallbackStores.modelRegistry);
   const runtimeHooks = resolveRuntimeHooks(options);
+  // Route-projected cfg owns transport/auth; the snapshot contributes generation facts only.
+  const preparedModelRuntime = options?.preparedModelRuntime ?? preparedSnapshot;
+  const preparedStaticCatalogModel = preparedModelRuntime?.configuredRuntimeModels?.find(
+    ({ modelId: candidateId, provider: rowProvider }) =>
+      staticModelIdMatches({
+        candidateId,
+        rowProvider,
+        provider: normalizedRef.provider,
+        modelId: normalizedRef.model,
+      }),
+  )?.model;
   if (normalizedRef.manifestAlias.ambiguous) {
     return {
       error: buildUnknownModelError({
@@ -257,8 +267,8 @@ export async function resolveModelAsync(
     manifestAlias: normalizedRef.manifestAlias,
     workspaceDir,
     runtimeHooks,
-    preparedInlineProviderModels:
-      options?.preparedInlineProviderModels ?? preparedSnapshot?.inlineProviderModels,
+    preparedInlineProviderModels: preparedModelRuntime?.inlineProviderModels,
+    preparedStaticCatalogModel,
   });
   if (explicitModel?.kind === "suppressed") {
     const suppressedRuntimeModel = resolveRuntimePreferredSuppressedModel({
@@ -307,18 +317,8 @@ export async function resolveModelAsync(
       return undefined;
     }
     staticCatalogLookup ??= (async () => {
-      const preparedModel = (
-        options.preparedRuntimeModels ?? preparedSnapshot?.configuredRuntimeModels
-      )?.find((candidate) =>
-        staticModelIdMatches({
-          candidateId: candidate.modelId,
-          rowProvider: candidate.provider,
-          provider: normalizedRef.provider,
-          modelId: normalizedRef.model,
-        }),
-      )?.model;
-      if (preparedModel) {
-        return preparedModel;
+      if (preparedStaticCatalogModel) {
+        return preparedStaticCatalogModel;
       }
       const manifestModel = resolveBundledStaticCatalogModel({
         provider: normalizedRef.provider,
@@ -355,6 +355,7 @@ export async function resolveModelAsync(
       workspaceDir,
       preferDiscoveredModelMetadata: true,
       preferDiscoveredTransport: options?.preferBundledStaticCatalogTransport,
+      staticCatalogModel: catalogModel,
     });
     return normalizeResolvedModel({
       provider: normalizedRef.provider,

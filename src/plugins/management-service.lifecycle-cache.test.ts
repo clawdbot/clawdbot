@@ -51,7 +51,7 @@ function metadataSnapshot(pluginId?: string) {
 }
 
 describe("plugin management catalog lifecycle", () => {
-  it("reuses the hosted official catalog until plugin metadata is invalidated", async () => {
+  it("serves the first plugins.list load from prewarmed metadata and official catalog caches", async () => {
     clearPluginMetadataLifecycleCaches();
     mocks.metadata
       .mockReturnValueOnce(metadataSnapshot())
@@ -81,11 +81,11 @@ describe("plugin management catalog lifecycle", () => {
       })
       .mockResolvedValueOnce({ source: "hosted", entries: [] });
 
-    const initial = await listManagedPlugins({ config: {}, env: {} });
-    const cached = await listManagedPlugins({ config: {}, env: {} });
+    const prewarmed = await listManagedPlugins({ config: {}, env: {} });
+    const firstHandlerLoad = await listManagedPlugins({ config: {}, env: {} });
 
-    expect(initial.plugins).toEqual([expect.objectContaining({ id: "diffs" })]);
-    expect(cached.plugins).toEqual(initial.plugins);
+    expect(prewarmed.plugins).toEqual([expect.objectContaining({ id: "diffs" })]);
+    expect(firstHandlerLoad.plugins).toEqual(prewarmed.plugins);
     expect(mocks.metadata).toHaveBeenCalledTimes(1);
     expect(mocks.officialCatalog).toHaveBeenCalledTimes(1);
 

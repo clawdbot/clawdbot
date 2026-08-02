@@ -11,10 +11,12 @@
     <string name="dictate" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Dikte et"</string>
     <string name="live" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Canlı"</string>
     <string name="thread" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Konu"</string>
+    <string name="open_thread" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Yazışmayı aç"</string>
     <string name="swipe_between_voice_modes" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"← Kaydır →"</string>
     <string name="hold" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Basılı tut"</string>
     <string name="tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Dokun"</string>
     <string name="double_tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Çift dokunun"</string>
+    <string name="show_new_messages" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Yeni mesajları göster"</string>
     <string name="no_live_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Konuşmayı burada görmek için Canlı\'yı başlatın."</string>
     <string name="new_messages" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Yeni"</string>
     <string name="type" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Yazın"</string>

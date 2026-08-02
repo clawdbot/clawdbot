@@ -4,24 +4,28 @@ import {
   DEFAULT_INGRESS_ADOPTION_STALL_MS,
   type ChannelIngressMonitorLifecycle,
   type ChannelIngressQueue,
+  type ChannelIngressQueueRecord,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { clampPositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import {
+  hasTelegramApprovalCallbackPrefix,
+  parseTelegramApprovalCallbackData,
+} from "./approval-callback-data.js";
 import type { TelegramBotInfo } from "./bot-info.js";
 import {
   runWithTelegramSpooledReplayUpdate,
   type TelegramMessageProcessingResult,
 } from "./bot-processing-outcome.js";
-import { getTelegramSequentialKey } from "./sequential-key.js";
-import { resolveTelegramIngressNonRetryableFailure } from "./telegram-ingress-non-retryable.js";
 import {
-  resolveTelegramUpdateId,
-  TELEGRAM_SPOOLED_UPDATE_COMPLETED_MAX_ENTRIES,
-  TELEGRAM_SPOOLED_UPDATE_COMPLETED_TTL_MS,
-  TELEGRAM_SPOOLED_UPDATE_FAILED_MAX_ENTRIES,
-  TELEGRAM_SPOOLED_UPDATE_FAILED_TTL_MS,
-  telegramQueueEventId,
-} from "./telegram-ingress-spool.js";
+  resolveTelegramForumThreadId,
+  resolveTelegramMessageForumFlagHint,
+} from "./bot/helpers.js";
+import { hasTelegramQuestionCallbackPrefix } from "./question-callback-data.js";
+import { getTelegramSequentialKey } from "./sequential-key.js";
+import { normalizeTelegramStateAccountId } from "./state-account-id.js";
+import { resolveTelegramIngressNonRetryableFailure } from "./telegram-ingress-non-retryable.js";
+import { resolveTelegramUpdateId, telegramQueueEventId } from "./telegram-ingress-spool.js";
 import {
   TelegramIngressPayloadError,
   TELEGRAM_SPOOLED_UPDATE_PAYLOAD_VERSION,
@@ -33,7 +37,6 @@ const TELEGRAM_SPOOLED_HANDLER_TIMEOUT_ENV = "OPENCLAW_TELEGRAM_SPOOLED_HANDLER_
 const TELEGRAM_SPOOLED_DRAIN_START_LIMIT = 100;
 const TELEGRAM_SPOOLED_DRAIN_SCAN_LIMIT = TELEGRAM_SPOOLED_DRAIN_START_LIMIT * 10;
 const TELEGRAM_SPOOLED_DRAIN_POLL_INTERVAL_MS = 500;
-const TELEGRAM_SPOOLED_DRAIN_PRUNE_INTERVAL_MS = 60 * 60 * 1_000;
 
 export function resolveTelegramAdoptionStallTimeoutMs(params: {
   configured?: number;
@@ -68,6 +71,149 @@ function inspectTelegramSpooledUpdate(update: unknown, botInfo?: TelegramBotInfo
     eventId: telegramQueueEventId(updateId),
     laneKey: telegramSpooledLaneKey(update, botInfo),
   };
+}
+
+function isNonemptyTelegramCallbackValue(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function isBoundedTelegramCallbackData(value: unknown): value is string {
+  return isNonemptyTelegramCallbackValue(value) && Buffer.byteLength(value, "utf8") <= 64;
+}
+
+function canReconcileTelegramLegacyLane(params: {
+  record: ChannelIngressQueueRecord<TelegramSpooledUpdatePayload>;
+  storedLaneKey: string;
+  derivedLaneKey: string;
+  accountId: string;
+  botInfo?: TelegramBotInfo;
+}): boolean {
+  if (
+    params.record.channelId !== "telegram" ||
+    params.record.accountId !== normalizeTelegramStateAccountId(params.accountId)
+  ) {
+    return false;
+  }
+  const update = params.record.payload.update;
+  if (!update || typeof update !== "object") {
+    return false;
+  }
+  type TelegramLaneMessage = {
+    chat?: { id?: unknown; is_forum?: unknown; type?: unknown };
+    business_connection_id?: unknown;
+    date?: unknown;
+    direct_messages_topic?: unknown;
+    from?: { id?: unknown; is_bot?: unknown };
+    guest_query_id?: unknown;
+    message_id?: unknown;
+    message_thread_id?: unknown;
+    is_topic_message?: unknown;
+    sender_chat?: unknown;
+  };
+  type TelegramLaneCallback = {
+    id?: unknown;
+    data?: unknown;
+    chat_instance?: unknown;
+    inline_message_id?: unknown;
+    from?: { id?: unknown; is_bot?: unknown };
+    message?: TelegramLaneMessage;
+  };
+  const candidate = update as {
+    message?: TelegramLaneMessage;
+    edited_message?: TelegramLaneMessage;
+    callback_query?: TelegramLaneCallback;
+  };
+  const callback = candidate.callback_query;
+  if (callback !== undefined) {
+    if (!callback || typeof callback !== "object") {
+      return false;
+    }
+    const senderId = callback.from?.id;
+    const callbackMessage = callback.message;
+    if (
+      candidate.message !== undefined ||
+      candidate.edited_message !== undefined ||
+      !isNonemptyTelegramCallbackValue(callback.id) ||
+      !isBoundedTelegramCallbackData(callback.data) ||
+      !isNonemptyTelegramCallbackValue(callback.chat_instance) ||
+      callback.inline_message_id !== undefined ||
+      typeof senderId !== "number" ||
+      !Number.isSafeInteger(senderId) ||
+      senderId <= 0 ||
+      callback.from?.is_bot !== false ||
+      !params.botInfo ||
+      callbackMessage?.from?.id !== params.botInfo.id ||
+      callbackMessage.from.is_bot !== true ||
+      callbackMessage.business_connection_id !== undefined ||
+      callbackMessage.guest_query_id !== undefined ||
+      callbackMessage.sender_chat !== undefined ||
+      callbackMessage.direct_messages_topic !== undefined ||
+      typeof callbackMessage.date !== "number" ||
+      !Number.isSafeInteger(callbackMessage.date) ||
+      callbackMessage.date <= 0 ||
+      typeof callbackMessage.message_id !== "number" ||
+      !Number.isSafeInteger(callbackMessage.message_id) ||
+      callbackMessage.message_id <= 0
+    ) {
+      return false;
+    }
+  }
+  const message = candidate.message ?? candidate.edited_message ?? callback?.message;
+  if (message == null) {
+    return false;
+  }
+  const chatId = message?.chat?.id;
+  const chatType = message?.chat?.type;
+  const threadId = message?.message_thread_id;
+  const callbackData = typeof callback?.data === "string" ? callback.data : undefined;
+  const typedApproval = parseTelegramApprovalCallbackData(callbackData);
+  const isPrivateChat = chatType === "private" && typeof chatId === "number" && chatId > 0;
+  const isGroupChat =
+    (chatType === "group" || chatType === "supergroup") && typeof chatId === "number" && chatId < 0;
+  const hasValidThreadId =
+    typeof threadId === "number" && Number.isSafeInteger(threadId) && threadId > 0;
+  if (
+    typeof chatId !== "number" ||
+    !Number.isSafeInteger(chatId) ||
+    (typedApproval ? !isPrivateChat && !isGroupChat : !isPrivateChat) ||
+    (!typedApproval && !hasValidThreadId) ||
+    (typedApproval && threadId !== undefined && !hasValidThreadId)
+  ) {
+    return false;
+  }
+  const baseLaneKey = `telegram:${chatId}`;
+  const legacyThreadId = isGroupChat
+    ? resolveTelegramForumThreadId({
+        isForum: resolveTelegramMessageForumFlagHint({
+          chatType,
+          isForum: typeof message.chat?.is_forum === "boolean" ? message.chat.is_forum : undefined,
+          isTopicMessage:
+            typeof message.is_topic_message === "boolean" ? message.is_topic_message : undefined,
+        }),
+        messageThreadId: hasValidThreadId ? threadId : undefined,
+      })
+    : hasValidThreadId
+      ? threadId
+      : undefined;
+  const topicLaneKey = legacyThreadId ? `${baseLaneKey}:topic:${legacyThreadId}` : undefined;
+  const canonicalLaneKey = typedApproval
+    ? `${baseLaneKey}:approval`
+    : params.botInfo?.has_topics_enabled === true
+      ? topicLaneKey
+      : baseLaneKey;
+  const previousLaneKey = canonicalLaneKey === baseLaneKey ? topicLaneKey : baseLaneKey;
+
+  // Signed releases stored typed approvals in ordinary chat/forum lanes. Admit only a
+  // valid, authenticated owner callback into its dedicated privileged lane.
+  return (
+    (typedApproval
+      ? params.storedLaneKey === baseLaneKey || params.storedLaneKey === topicLaneKey
+      : !hasTelegramApprovalCallbackPrefix(callbackData) &&
+        !hasTelegramQuestionCallbackPrefix(callbackData) &&
+        params.storedLaneKey === previousLaneKey) &&
+    params.derivedLaneKey === canonicalLaneKey &&
+    telegramSpooledLaneKey(update, params.botInfo) === canonicalLaneKey
+  );
 }
 
 export type TelegramIngressDrainLifecycle = Omit<
@@ -221,11 +367,8 @@ export function createTelegramIngressMonitor(params: CreateTelegramIngressMonito
     },
     pollIntervalMs: params.pollIntervalMs ?? TELEGRAM_SPOOLED_DRAIN_POLL_INTERVAL_MS,
     retention: {
-      pruneIntervalMs: TELEGRAM_SPOOLED_DRAIN_PRUNE_INTERVAL_MS,
-      completedTtlMs: TELEGRAM_SPOOLED_UPDATE_COMPLETED_TTL_MS,
-      completedMaxEntries: TELEGRAM_SPOOLED_UPDATE_COMPLETED_MAX_ENTRIES,
-      failedTtlMs: TELEGRAM_SPOOLED_UPDATE_FAILED_TTL_MS,
-      failedMaxEntries: TELEGRAM_SPOOLED_UPDATE_FAILED_MAX_ENTRIES,
+      completedMaxEntries: 1_000,
+      failedMaxEntries: 1_000,
     },
     drain: {
       deferredLaneOccupancy: "release",
@@ -240,6 +383,14 @@ export function createTelegramIngressMonitor(params: CreateTelegramIngressMonito
         ...(params.botInfo?.username ? { botUsername: params.botInfo.username } : {}),
       }),
       deriveLaneKey: (record) => telegramSpooledLaneKey(record.payload.update, params.botInfo),
+      reconcileStoredLaneKey: (record, storedLaneKey, derivedLaneKey) =>
+        canReconcileTelegramLegacyLane({
+          record,
+          storedLaneKey,
+          derivedLaneKey,
+          accountId: params.accountId,
+          botInfo: params.botInfo,
+        }),
       ...(params.onLog ? { onLog: params.onLog } : {}),
     },
     ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),

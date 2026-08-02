@@ -7,6 +7,7 @@ import { getRegisteredAgentHarness } from "../agents/harness/registry.js";
 import type { WorkspaceBootstrapFile } from "../agents/workspace.js";
 import { resolveConfigEnvVars } from "../config/env-substitution.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
+import { getContextEngineRegistration } from "../context-engine/registry.js";
 import {
   clearInternalHooks,
   createInternalHookEvent,
@@ -23,6 +24,7 @@ import {
   clearPluginInteractiveHandlers,
   resolvePluginInteractiveNamespaceMatch,
 } from "./interactive-registry.js";
+import { resolvePluginRegistryLoadCacheKey } from "./loader-cache.js";
 import { loadOpenClawPlugins, resolveRuntimePluginRegistry } from "./loader.js";
 import {
   EMPTY_PLUGIN_SCHEMA,
@@ -1384,9 +1386,10 @@ describe("loadOpenClawPlugins", () => {
       },
     },
     {
-      label: "fails loudly when a plugin reenters the same snapshot load during register",
+      label: "does not expose plugin config in cache keys or reentry diagnostics",
       run: () => {
         useNoBundledPlugins();
+        const pluginConfigSentinel = "hunter2-sentinel";
         const marker = "__openclaw_loader_reentry_error";
         const reenterFnMarker = "__openclaw_loader_reentry_fn";
         Reflect.deleteProperty(globalThis, marker);
@@ -1405,6 +1408,9 @@ describe("loadOpenClawPlugins", () => {
             plugins: {
               load: { paths: [pluginFile] },
               allow: ["reentrant-snapshot"],
+              entries: {
+                "reentrant-snapshot": { config: { token: pluginConfigSentinel } },
+              },
             },
           },
         } satisfies Parameters<typeof loadOpenClawPlugins>[0];
@@ -1412,6 +1418,11 @@ describe("loadOpenClawPlugins", () => {
           id: "reentrant-snapshot",
           dir: pluginDir,
           filename: "reentrant-snapshot.cjs",
+          configSchema: {
+            type: "object",
+            additionalProperties: false,
+            properties: { token: { type: "string" } },
+          },
           body: `module.exports = {
     id: "reentrant-snapshot",
     register() {
@@ -1428,6 +1439,9 @@ describe("loadOpenClawPlugins", () => {
   };`,
         });
 
+        const cacheKey = resolvePluginRegistryLoadCacheKey(nestedOptions);
+        expect(cacheKey).toMatch(/^[a-f0-9]{64}$/);
+        expect(cacheKey).not.toContain(pluginConfigSentinel);
         const registry = loadOpenClawPlugins(nestedOptions);
 
         try {
@@ -1435,10 +1449,14 @@ describe("loadOpenClawPlugins", () => {
             | { name?: unknown; message?: unknown }
             | undefined;
           expect(reentryError?.name).toBe("PluginLoadReentryError");
-          expect(String(reentryError?.message)).toContain("plugin load reentry detected");
+          expect(reentryError?.message).toBe(
+            `plugin load reentry detected for cache key: ${cacheKey}`,
+          );
+          expect(String(reentryError?.message)).not.toContain(pluginConfigSentinel);
           const record = registry.plugins.find((entry) => entry.id === "reentrant-snapshot");
           expect(record?.status).toBe("error");
-          expect(record?.error).toContain("plugin load reentry detected");
+          expect(record?.error).toContain(cacheKey);
+          expect(record?.error).not.toContain(pluginConfigSentinel);
           expect(record?.failurePhase).toBe("register");
         } finally {
           Reflect.deleteProperty(globalThis, marker);
@@ -1761,7 +1779,7 @@ describe("loadOpenClawPlugins", () => {
     expect(listRegisteredAgentHarnessIdsForTest()).toStrictEqual([]);
   });
 
-  it("restores cleared runtime registrations when an activating reload throws before activation", async () => {
+  it("keeps the active registry and prior contributions intact when replacement registration throws", async () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
       id: "reload-rollback",
@@ -1789,6 +1807,13 @@ describe("loadOpenClawPlugins", () => {
           api.registerAgentToolResultMiddleware(() => undefined, {
             runtimes: ["openclaw"],
           });
+          api.registerHook(
+            "gateway:startup",
+            (event) => {
+              event.messages.push("rollback-hook-fired");
+            },
+            { name: "reload-rollback-hook" },
+          );
           api.on("gateway_stop", async () => {});
         },
       };`,
@@ -1811,7 +1836,7 @@ describe("loadOpenClawPlugins", () => {
     };
 
     const activeRegistry = loadOpenClawPlugins(loadOptions);
-    const expectRegistrationsIntact = () => {
+    const expectRegistrationsIntact = async () => {
       expect(getActivePluginRegistry()).toBe(activeRegistry);
       expect(getRegisteredAgentHarness("codex")).toBeDefined();
       expect(getPluginCommandSpecs().map((entry) => entry.name)).toEqual(["pair"]);
@@ -1820,8 +1845,11 @@ describe("loadOpenClawPlugins", () => {
       ]);
       expect(activeRegistry.agentToolResultMiddlewares).toHaveLength(1);
       expect(activeRegistry.typedHooks.map((entry) => entry.hookName)).toEqual(["gateway_stop"]);
+      const event = createInternalHookEvent("gateway", "startup", "gateway:startup");
+      await triggerInternalHook(event);
+      expect(event.messages).toEqual(["rollback-hook-fired"]);
     };
-    expectRegistrationsIntact();
+    await expectRegistrationsIntact();
 
     const manifestRegistry = await import("./manifest-registry.js");
     const manifestSpy = vi
@@ -1832,7 +1860,7 @@ describe("loadOpenClawPlugins", () => {
 
     try {
       expect(() => loadOpenClawPlugins(loadOptions)).toThrow("corrupt plugin manifest");
-      expectRegistrationsIntact();
+      await expectRegistrationsIntact();
     } finally {
       manifestSpy.mockRestore();
     }
@@ -1858,7 +1886,96 @@ describe("loadOpenClawPlugins", () => {
         onlyPluginIds: ["reload-rollback", "reload-rollback-failure"],
       }),
     ).toThrow("plugin load failed: reload-rollback-failure: Error: register failed");
-    expectRegistrationsIntact();
+    await expectRegistrationsIntact();
+  });
+
+  it("removes gateway method handlers and descriptors when registration throws", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "failing-gateway-method",
+      filename: "failing-gateway-method.cjs",
+      body: `module.exports = {
+        id: "failing-gateway-method",
+        register(api) {
+          api.registerGatewayMethod("failing-gateway-method.ping", ({ respond }) => {
+            respond(true, { ok: true });
+          });
+          throw new Error("gateway method register failed");
+        },
+      };`,
+    });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["failing-gateway-method"],
+        },
+      },
+      onlyPluginIds: ["failing-gateway-method"],
+    });
+
+    expect(registry.plugins[0]?.status).toBe("error");
+    expect(registry.gatewayHandlers["failing-gateway-method.ping"]).toBeUndefined();
+    expect(registry.gatewayMethodDescriptors).toStrictEqual([]);
+  });
+
+  it("keeps a working context engine when same-owner re-registration throws", async () => {
+    useNoBundledPlugins();
+    const goodPlugin = writePlugin({
+      id: "context-engine-reload",
+      filename: "context-engine-good.cjs",
+      body: `module.exports = {
+        id: "context-engine-reload",
+        register(api) {
+          api.registerContextEngine("reload-engine", () => ({ marker: "good" }));
+        },
+      };`,
+    });
+    const baseOptions = {
+      cache: false,
+      workspaceDir: goodPlugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [goodPlugin.file] },
+          allow: ["context-engine-reload"],
+        },
+      },
+      onlyPluginIds: ["context-engine-reload"],
+    };
+    const activeRegistry = loadOpenClawPlugins(baseOptions);
+    const activeRegistration = getContextEngineRegistration("reload-engine");
+
+    const failingPlugin = writePlugin({
+      id: "context-engine-reload",
+      filename: "context-engine-failing.cjs",
+      body: `module.exports = {
+        id: "context-engine-reload",
+        register(api) {
+          api.registerContextEngine("reload-engine", () => ({ marker: "bad" }));
+          throw new Error("context engine reload failed");
+        },
+      };`,
+    });
+    expect(() =>
+      loadOpenClawPlugins({
+        ...baseOptions,
+        workspaceDir: failingPlugin.dir,
+        config: {
+          plugins: {
+            load: { paths: [failingPlugin.file] },
+            allow: ["context-engine-reload"],
+          },
+        },
+        throwOnLoadError: true,
+      }),
+    ).toThrow("context engine reload failed");
+
+    expect(getActivePluginRegistry()).toBe(activeRegistry);
+    expect(getContextEngineRegistration("reload-engine")).toBe(activeRegistration);
+    expect(await activeRegistration?.factory({})).toMatchObject({ marker: "good" });
   });
 
   it("rejects malformed plugin agent harness registrations", () => {
@@ -1979,6 +2096,72 @@ describe("loadOpenClawPlugins", () => {
 
     clearInternalHooks();
   });
+
+  it.each(["disabled", "removed"] as const)(
+    "clears legacy internal hooks when their plugin is %s",
+    async (nextState) => {
+      useNoBundledPlugins();
+      const plugin = writePlugin({
+        id: "internal-hook-lifecycle",
+        filename: "internal-hook-lifecycle.cjs",
+        body: `module.exports = {
+          id: "internal-hook-lifecycle",
+          register(api) {
+            api.registerHook(
+              "gateway:startup",
+              (event) => {
+                event.messages.push("legacy-hook-fired");
+              },
+              { name: "legacy-lifecycle-hook" },
+            );
+          },
+        };`,
+      });
+
+      clearInternalHooks();
+      loadOpenClawPlugins({
+        cache: false,
+        workspaceDir: plugin.dir,
+        config: {
+          plugins: {
+            load: { paths: [plugin.file] },
+            allow: ["internal-hook-lifecycle"],
+          },
+        },
+      });
+
+      const activeEvent = createInternalHookEvent("gateway", "startup", "gateway:startup");
+      await triggerInternalHook(activeEvent);
+      expect(activeEvent.messages).toEqual(["legacy-hook-fired"]);
+
+      loadOpenClawPlugins({
+        cache: false,
+        workspaceDir: plugin.dir,
+        config: {
+          plugins:
+            nextState === "disabled"
+              ? {
+                  load: { paths: [plugin.file] },
+                  allow: ["internal-hook-lifecycle"],
+                  entries: {
+                    "internal-hook-lifecycle": {
+                      enabled: false,
+                    },
+                  },
+                }
+              : {
+                  allow: [],
+                },
+        },
+      });
+
+      const retiredEvent = createInternalHookEvent("gateway", "startup", "gateway:startup");
+      await triggerInternalHook(retiredEvent);
+      expect(retiredEvent.messages).toStrictEqual([]);
+
+      clearInternalHooks();
+    },
+  );
 
   it("injects plugin config into internal hook event context", async () => {
     useNoBundledPlugins();

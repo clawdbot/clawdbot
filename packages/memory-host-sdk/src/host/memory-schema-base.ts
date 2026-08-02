@@ -1,5 +1,6 @@
 import { MEMORY_INDEX_CHUNKS_TABLE, MEMORY_INDEX_SOURCES_TABLE } from "./memory-schema-fts.js";
 import { MEMORY_INDEX_CHUNK_PROVENANCE_SCHEMA_SQL } from "./memory-schema-provenance.js";
+import { MEMORY_INDEX_CHUNK_RECALL_METADATA_SCHEMA_SQL } from "./memory-schema-recall.js";
 
 export const MEMORY_INDEX_META_TABLE = "memory_index_meta";
 export const MEMORY_EMBEDDING_CACHE_TABLE = "memory_embedding_cache";
@@ -48,10 +49,9 @@ export function buildMemoryIndexStrictSchema(params: {
       model TEXT NOT NULL,
       text TEXT NOT NULL,
       embedding TEXT NOT NULL,
-      updated_at INTEGER NOT NULL,
-      importance INTEGER CHECK (importance IS NULL OR importance BETWEEN 1 AND 10),
-      triggers TEXT
+      updated_at INTEGER NOT NULL
     ) STRICT;
+    ${MEMORY_INDEX_CHUNK_RECALL_METADATA_SCHEMA_SQL}
     ${MEMORY_INDEX_CHUNK_PROVENANCE_SCHEMA_SQL}
     CREATE TABLE IF NOT EXISTS ${MEMORY_INDEX_STATE_TABLE} (
       id INTEGER PRIMARY KEY CHECK (id = 1),

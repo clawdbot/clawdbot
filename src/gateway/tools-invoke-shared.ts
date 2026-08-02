@@ -8,6 +8,10 @@ import { runBeforeToolCallHook } from "../agents/agent-tools.before-tool-call.js
 import { resolveToolLoopDetectionConfig } from "../agents/agent-tools.js";
 import { getChannelAgentToolMeta } from "../agents/channel-tools.js";
 import { isKnownCoreToolId } from "../agents/tool-catalog.js";
+import {
+  AUTOMATIONS_TOOL_NAME,
+  isAutomationsToolName,
+} from "../agents/tools/automations-tool-name.js";
 import { ToolInputError, type AnyAgentTool } from "../agents/tools/common.js";
 import {
   normalizeConversationReadInvocationOrigin,
@@ -16,6 +20,7 @@ import {
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { resolveSessionEntryAccessTarget } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
 import { isTestDefaultMemorySlotDisabled } from "../plugins/config-state.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
@@ -117,16 +122,6 @@ function mergeActionIntoArgsIfSupported(params: {
   return hasAction ? { ...args, action } : args;
 }
 
-function getErrorMessage(err: unknown): string {
-  if (err instanceof Error) {
-    return err.message || String(err);
-  }
-  if (typeof err === "string") {
-    return err;
-  }
-  return String(err);
-}
-
 function resolveToolInputErrorStatus(err: unknown): number | null {
   if (err instanceof ToolInputError) {
     const status = (err as { status?: unknown }).status;
@@ -169,11 +164,18 @@ export async function invokeGatewayTool(params: {
   conversationReadOrigin?: ConversationReadInvocationOrigin;
   toolCallIdPrefix: string;
   approvalMode?: "request" | "report";
+  signal?: AbortSignal;
 }): Promise<ToolsInvokeOutcome> {
   const conversationReadOrigin = normalizeConversationReadInvocationOrigin(
     params.conversationReadOrigin,
   );
-  const toolName = normalizeOptionalString(params.input.name ?? params.input.tool) ?? "";
+  const requestedToolName = normalizeOptionalString(params.input.name ?? params.input.tool) ?? "";
+  // "cron" is a permanently accepted inbound alias for the scheduler tool
+  // (owner decision, RFC 0026; same contract as bash -> exec). Canonicalize
+  // before core-id checks and exact-name dispatch below.
+  const toolName = isAutomationsToolName(requestedToolName)
+    ? AUTOMATIONS_TOOL_NAME
+    : requestedToolName;
   if (!toolName) {
     return {
       ok: false,
@@ -294,6 +296,7 @@ export async function invokeGatewayTool(params: {
         workspaceDir,
         loopDetection: resolveToolLoopDetectionConfig({ cfg: params.cfg, agentId }),
       },
+      signal: params.signal,
       approvalMode: params.approvalMode,
     });
     if (hookResult.blocked) {
@@ -308,12 +311,13 @@ export async function invokeGatewayTool(params: {
         },
       };
     }
+    params.signal?.throwIfAborted();
     return {
       ok: true,
       status: 200,
       toolName,
       source: resolveToolSource(gatewayTool),
-      result: await gatewayTool.execute?.(toolCallId, hookResult.params),
+      result: await gatewayTool.execute?.(toolCallId, hookResult.params, params.signal),
     };
   } catch (err) {
     const inputStatus = resolveToolInputErrorStatus(err);
@@ -324,11 +328,13 @@ export async function invokeGatewayTool(params: {
         toolName,
         error: {
           type: "tool_error",
-          message: getErrorMessage(err) || "invalid tool arguments",
+          message: formatErrorMessage(err) || "invalid tool arguments",
         },
       };
     }
-    logWarn(`tools-invoke: tool execution failed: ${String(err)}`);
+    if (!params.signal?.aborted) {
+      logWarn(`tools-invoke: tool execution failed: ${String(err)}`);
+    }
     return {
       ok: false,
       status: 500,

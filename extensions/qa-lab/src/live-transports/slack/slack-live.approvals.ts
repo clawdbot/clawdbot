@@ -13,7 +13,7 @@ import {
   type SlackQaApprovalDecision,
   type SlackQaApprovalScenarioRun,
   type SlackQaScenarioContext,
-  type SlackQaScenarioDefinition,
+  type SlackQaScenarioMetadata,
   type SlackAuthIdentity,
   type SlackObservedMessage,
   type SlackApprovalArtifact,
@@ -291,7 +291,7 @@ export async function runSlackApprovalScenario(params: {
   context: Omit<SlackQaScenarioContext, "sentTs">;
   observedMessages: SlackObservedMessage[];
   run: SlackQaApprovalScenarioRun;
-  scenario: SlackQaScenarioDefinition;
+  scenario: SlackQaScenarioMetadata;
   sutAccountId: string;
 }) {
   const requestStartedAt = new Date();

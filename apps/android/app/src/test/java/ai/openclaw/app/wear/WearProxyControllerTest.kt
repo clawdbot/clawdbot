@@ -406,8 +406,8 @@ class WearProxyControllerTest {
           requestGateway = { _, _ -> buildJsonObject {} },
           isGatewayConnected = { true },
           gatewayStatusText = { "Connected" },
-          startRealtimeTalk = { nodeId, sessionKey, attemptId, language ->
-            startArgs = listOf(nodeId, sessionKey, attemptId, language)
+          startRealtimeTalk = { nodeId, sessionKey, attemptId, language, attemptScopedAudio ->
+            startArgs = listOf(nodeId, sessionKey, attemptId, language, attemptScopedAudio.toString())
             WearRealtimeTalkSnapshot(attemptId = attemptId, active = true)
           },
         )
@@ -420,13 +420,14 @@ class WearProxyControllerTest {
               put("sessionKey", "agent:main:thread-7")
               put("attemptId", "attempt-7")
               put("language", "DE")
+              put("attemptScopedAudio", true)
             },
           ),
           sourceNodeId = "watch-a",
         )
 
       assertTrue(response.ok)
-      assertEquals(listOf("watch-a", "agent:main:thread-7", "attempt-7", "de"), startArgs)
+      assertEquals(listOf("watch-a", "agent:main:thread-7", "attempt-7", "de", "true"), startArgs)
       assertTrue(
         checkNotNull(response.result)
           .jsonObject
@@ -446,7 +447,7 @@ class WearProxyControllerTest {
           requestGateway = { _, _ -> buildJsonObject {} },
           isGatewayConnected = { true },
           gatewayStatusText = { "Connected" },
-          startRealtimeTalk = { _, _, _, _ ->
+          startRealtimeTalk = { _, _, _, _, _ ->
             starts += 1
             WearRealtimeTalkSnapshot(active = true)
           },
@@ -457,6 +458,37 @@ class WearProxyControllerTest {
       assertFalse(response.ok)
       assertEquals("invalid_request", response.error?.code)
       assertEquals(0, starts)
+    }
+
+  @Test
+  fun legacyTalkStartDefaultsToTheFixedAudioChannel() =
+    runTest {
+      var attemptScopedAudio: Boolean? = null
+      val controller =
+        WearProxyController(
+          requestGateway = { _, _ -> buildJsonObject {} },
+          isGatewayConnected = { true },
+          gatewayStatusText = { "Connected" },
+          startRealtimeTalk = { _, _, attemptId, _, scoped ->
+            attemptScopedAudio = scoped
+            WearRealtimeTalkSnapshot(attemptId = attemptId, active = true)
+          },
+        )
+
+      val response =
+        controller.handle(
+          request(
+            WearRpcMethod.TalkStart,
+            buildJsonObject {
+              put("sessionKey", "agent:main:thread-7")
+              put("attemptId", "attempt-7")
+            },
+          ),
+          sourceNodeId = "watch-a",
+        )
+
+      assertTrue(response.ok)
+      assertEquals(false, attemptScopedAudio)
     }
 
   @Test

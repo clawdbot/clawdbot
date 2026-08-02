@@ -13,7 +13,6 @@ export type LiveTransportQaCommandOptions = {
   allowFailures?: boolean;
   failFast?: boolean;
   profile?: string;
-  shard?: string;
   scenarioIds?: string[];
   listScenarios?: boolean;
   sutAccountId?: string;
@@ -33,7 +32,6 @@ type LiveTransportQaCommanderOptions = {
   allowFailures?: boolean;
   failFast?: boolean;
   profile?: string;
-  shard?: string;
   sutAccount?: string;
   credentialSource?: string;
   credentialRole?: string;
@@ -53,7 +51,6 @@ type LiveTransportQaCliRegistrationOptions = {
   listScenariosHelp?: string;
   outputDirHelp: string;
   profileHelp?: string;
-  shardHelp?: string;
   failFastHelp?: string;
   allowFailuresHelp?: string;
   scenarioHelp: string;
@@ -86,7 +83,6 @@ function mapCommanderOptions(opts: LiveTransportQaCommanderOptions): LiveTranspo
     allowFailures: opts.allowFailures,
     failFast: opts.failFast,
     profile: opts.profile,
-    shard: opts.shard,
     scenarioIds: opts.scenario,
     listScenarios: opts.listScenarios,
     sutAccountId: opts.sutAccount,
@@ -122,9 +118,6 @@ function createSharedLiveTransportQaCliRegistration(
       }
       if (params.profileHelp) {
         command.option("--profile <profile>", params.profileHelp);
-      }
-      if (params.shardHelp) {
-        command.option("--shard <index/total>", params.shardHelp);
       }
       if (params.failFastHelp) {
         command.option("--fail-fast", params.failFastHelp, false);

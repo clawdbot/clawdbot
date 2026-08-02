@@ -32,6 +32,13 @@ import {
 import { sensitive } from "./zod-schema.sensitive.js";
 import { CommandsSchema, MessagesSchema, SessionSchema } from "./zod-schema.session.js";
 
+// OpenTelemetry instrument names start with an ASCII letter and allow only these characters.
+// The 128-character prefix cap leaves ample room within the dependency's 255-character name cap.
+const MetricNamePrefixSchema = z
+  .string()
+  .max(128)
+  .regex(/^(?:[A-Za-z][A-Za-z0-9_./-]*)?$/);
+
 export const OpenClawSchemaShape = {
   $schema: z.string().optional(),
   meta: z
@@ -83,6 +90,7 @@ export const OpenClawSchemaShape = {
           protocol: z.union([z.literal("http/protobuf"), z.literal("grpc")]).optional(),
           headers: z.record(z.string(), z.string()).optional(),
           serviceName: z.string().optional(),
+          metricNamePrefix: MetricNamePrefixSchema.optional(),
           traces: z.boolean().optional(),
           metrics: z.boolean().optional(),
           logs: z.boolean().optional(),
@@ -372,6 +380,28 @@ export const OpenClawSchemaShape = {
       gmail: HooksGmailSchema,
       internal: InternalHooksSchema,
     })
+    .superRefine((hooks, ctx) => {
+      const hasDefaultSessionKey = hooks.defaultSessionKey?.trim();
+      for (const [index, mapping] of (hooks.mappings ?? []).entries()) {
+        if (!mapping) {
+          continue;
+        }
+        if (
+          (mapping.action ?? "agent") === "agent" &&
+          mapping.sessionMode === "persistent" &&
+          !mapping.sessionKey?.trim() &&
+          !hasDefaultSessionKey &&
+          !mapping.transform
+        ) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["mappings", index, "sessionKey"],
+            message:
+              "persistent hook mappings require sessionKey, hooks.defaultSessionKey, or a transform",
+          });
+        }
+      }
+    })
     .optional(),
   channels: ChannelsSchema,
   discovery: z
@@ -425,7 +455,7 @@ export const OpenClawSchemaShape = {
         .strictObject({
           autonomous: z
             .strictObject({
-              enabled: z.boolean().optional(),
+              mode: z.union([z.literal("off"), z.literal("propose"), z.literal("auto")]).optional(),
             })
             .optional(),
           approvalPolicy: z.union([z.literal("pending"), z.literal("auto")]).optional(),

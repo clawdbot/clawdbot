@@ -29,6 +29,8 @@ type ChatWelcomeProps = {
   sessions?: SessionsListResult | null;
   sessionKey?: string;
   sessionHost?: UiSessionDefaultsHost | null;
+  modelSetupRequired?: boolean;
+  onModelSetup?: () => void;
   onDraftChange: (next: string) => void;
   onSend: () => void;
   onOpenSession?: (sessionKey: string) => void;
@@ -169,6 +171,18 @@ function renderWelcomeHero(
 
 /** The start-screen welcome block, shared by the empty chat and the new-session draft. */
 export function renderWelcomeState(props: ChatWelcomeProps) {
+  if (props.modelSetupRequired) {
+    return html`
+      <div class="agent-chat__welcome agent-chat__welcome--setup" role="alert">
+        ${renderWelcomeClawd()}
+        <h2>${t("modelSetup.required.title")}</h2>
+        <p class="agent-chat__hint">${t("modelSetup.required.body")}</p>
+        <button class="btn primary" type="button" @click=${props.onModelSetup}>
+          ${t("modelSetup.required.action")}
+        </button>
+      </div>
+    `;
+  }
   const recentSessions = selectWelcomeRecentSessions(props);
   let fileDragDepth = 0;
   const mascotFor = (event: DragEvent): WelcomeMascot | null => {

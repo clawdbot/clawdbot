@@ -21,7 +21,13 @@ export type SandboxFsStat = {
 /** Filesystem operations exposed across the sandbox boundary. */
 export type SandboxFsBridge = {
   resolvePath(params: { filePath: string; cwd?: string }): SandboxResolvedPath;
-  readFile(params: { filePath: string; cwd?: string; signal?: AbortSignal }): Promise<Buffer>;
+  /** Reads a safely opened regular file, rejecting growth beyond an optional byte limit. */
+  readFile(params: {
+    filePath: string;
+    cwd?: string;
+    signal?: AbortSignal;
+    maxBytes?: number;
+  }): Promise<Buffer>;
   /** Streams a regular file within the sandbox when the backend supports native copying. */
   copyFile?(params: {
     sourcePath: string;
@@ -38,6 +44,19 @@ export type SandboxFsBridge = {
     mkdir?: boolean;
     signal?: AbortSignal;
   }): Promise<void>;
+  /**
+   * Atomically creates a file only when no entry already exists at the path.
+   * Backends without this capability must omit it rather than emulate it with
+   * a check followed by writeFile.
+   */
+  createFileExclusive?(params: {
+    filePath: string;
+    cwd?: string;
+    data: Buffer | string;
+    encoding?: BufferEncoding;
+    mkdir?: boolean;
+    signal?: AbortSignal;
+  }): Promise<"created" | "exists">;
   mkdirp(params: { filePath: string; cwd?: string; signal?: AbortSignal }): Promise<void>;
   remove(params: {
     filePath: string;

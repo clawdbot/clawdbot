@@ -5,6 +5,10 @@ import type {
   MemoryEntryProvenance,
   MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import {
+  DREAMING_DAILY_PROVENANCE_NAMESPACE,
+  readMemoryCoreWorkspaceEntry,
+} from "../dreaming-state.js";
 
 type MemoryPathClassification = {
   curatedRoot: boolean;
@@ -50,6 +54,17 @@ export async function resolveMemoryPathClassification(params: {
   }
   const isWorkspaceMemory =
     curatedRoot || (segments[0] === "memory" && segments.at(-1)?.endsWith(".md") === true);
+  const normalizedRelativePath = relativePath.replaceAll(path.sep, "/");
+  const recorded = isWorkspaceMemory
+    ? await readMemoryCoreWorkspaceEntry<{ originClass?: unknown }>({
+        namespace: DREAMING_DAILY_PROVENANCE_NAMESPACE,
+        workspaceDir: params.workspaceDir,
+        key: normalizedRelativePath,
+      })
+    : undefined;
+  if (recorded?.originClass === "untrusted") {
+    return { curatedRoot, originClass: "untrusted" };
+  }
   // Workspace memory Markdown is owner-controlled. Flush-recorded provenance
   // still downgrades machine-written untrusted material during ingestion; the
   // index default must not fail closed the entire workspace.

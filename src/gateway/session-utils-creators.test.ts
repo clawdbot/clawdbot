@@ -9,14 +9,96 @@ const getUserProfileListItem = vi.hoisted(() =>
   vi.fn((profileId: string) => ({
     id: profileId,
     displayName: profileId === "profile-ada" ? "Ada" : "Bob",
+    hasAvatar: profileId === "profile-ada",
+    updatedAt: 42,
   })),
 );
 
 vi.mock("../state/user-profiles.js", () => ({ getUserProfileListItem }));
+vi.mock("./session-utils-row.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./session-utils-row.js")>();
+  return {
+    ...actual,
+    projectSessionActor: (
+      actor: Parameters<typeof actual.projectSessionActor>[0],
+      identities: Parameters<typeof actual.projectSessionActor>[1],
+    ) => {
+      if (actor?.id === "shared-id") {
+        return actor.type === "human"
+          ? { type: actor.type, id: actor.id, label: "Alpha" }
+          : { type: actor.type, id: actor.id, label: "Zulu", avatarUrl: "/avatar" };
+      }
+      if (actor?.id === "unicode-id") {
+        return {
+          type: actor.type,
+          id: actor.id,
+          label: actor.type === "human" ? "é" : "e\u0301",
+        };
+      }
+      return actual.projectSessionActor(actor, identities);
+    },
+  };
+});
 
 import { listSessionsFromStore, listSessionsFromStoreAsync } from "./session-utils.js";
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  getUserProfileListItem.mockClear();
+});
+
+it("keeps creator labels and avatars stable across actor order", () => {
+  const actorOrders = [
+    ["human", "agent"],
+    ["agent", "human"],
+  ] as const;
+  for (const actorOrder of actorOrders) {
+    const store = Object.fromEntries(
+      actorOrder.map((type, index) => [
+        `agent:main:${index}`,
+        {
+          createdActor: { type, id: "shared-id" },
+          sessionId: `session-${index}`,
+          updatedAt: 2 - index,
+        } satisfies SessionEntry,
+      ]),
+    );
+    const result = listSessionsFromStore({
+      cfg: {} as OpenClawConfig,
+      storePath: "/tmp/openclaw-session-creator-order",
+      store,
+      opts: { archived: "all" },
+    });
+
+    expect(result.creators).toEqual([{ id: "shared-id", label: "Alpha", avatarUrl: "/avatar" }]);
+  }
+});
+
+it("breaks locale-equivalent creator label ties deterministically", () => {
+  for (const actorOrder of [
+    ["human", "agent"],
+    ["agent", "human"],
+  ] as const) {
+    const store = Object.fromEntries(
+      actorOrder.map((type, index) => [
+        `agent:main:unicode-${index}`,
+        {
+          createdActor: { type, id: "unicode-id" },
+          sessionId: `unicode-session-${index}`,
+          updatedAt: 2 - index,
+        } satisfies SessionEntry,
+      ]),
+    );
+    const result = listSessionsFromStore({
+      cfg: {} as OpenClawConfig,
+      storePath: "/tmp/openclaw-session-creator-unicode-order",
+      store,
+      opts: { archived: "all" },
+    });
+
+    expect(result.creators).toEqual([{ id: "unicode-id", label: "e\u0301" }]);
+  }
+});
 
 it("returns the complete deterministic creator facet independently of pagination", () => {
   const store: Record<string, SessionEntry> = {
@@ -44,13 +126,18 @@ it("returns the complete deterministic creator facet independently of pagination
   expect(result.count).toBe(1);
   expect(result.totalCount).toBe(2);
   expect(result.creators).toEqual([
-    { id: "profile-ada", label: "Ada" },
+    {
+      id: "profile-ada",
+      label: "Ada",
+      avatarUrl: "/api/users/profile-ada/avatar?v=42",
+    },
     { id: "profile-bob", label: "Bob" },
   ]);
   expect(result.sessions[0]?.createdActor).toEqual({
     type: "human",
     id: "profile-ada",
     label: "Ada",
+    avatarUrl: "/api/users/profile-ada/avatar?v=42",
   });
   expect(result.sessions[0]?.archivedBy).toEqual({
     type: "human",
@@ -76,6 +163,8 @@ it("preserves legacy list output across visibility, scope, creator, and search f
     id: profileId,
     displayName:
       profileId === "profile-ada" ? "Ada" : profileId === "profile-bob" ? "Bob" : "Carol",
+    hasAvatar: false,
+    updatedAt: now,
   }));
   const cfg = {
     agents: {

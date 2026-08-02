@@ -1,0 +1,31 @@
+title: Telegram product-startup getMe live
+
+scenario:
+  id: telegram-startup-getme-live
+  surface: channels
+  category: channels.channel-setup
+  coverage:
+    primary:
+      - telegram.startup-getme
+  objective: Verify a leased Telegram bot reaches polling through the real Gateway product-startup getMe path.
+  successCriteria:
+    - The live producer launches an isolated real OpenClaw Gateway with the leased bot configured on a named Telegram account.
+    - Product startAccount logs the getMe-derived bot username before the polling monitor starts.
+    - Missing dedicated leased credentials produce blocked evidence and never pass startup coverage.
+  docsRefs:
+    - docs/channels/telegram.md
+    - docs/gateway/config-channels.md
+  codeRefs:
+    - test/e2e/qa-lab/runtime/telegram-bot-token-runtime.ts
+    - extensions/telegram/src/channel.ts
+    - extensions/telegram/src/probe.ts
+    - extensions/telegram/src/monitor.ts
+  execution:
+    kind: script
+    channel: telegram
+    path: test/e2e/qa-lab/runtime/telegram-bot-token-runtime.ts
+    summary: Launch a real isolated Gateway and require product-startup getMe before Telegram polling begins.
+    timeoutMs: 240000
+    args:
+      - --output-dir
+      - ${outputDir}

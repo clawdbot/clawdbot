@@ -62,17 +62,6 @@ scenario through qa-channel, decodes the emitted protobuf spans, and verifies
 the exported trace names and privacy contract. It does not require Opik,
 Langfuse, or external collector credentials.
 
-## Matrix live selection
-
-`pnpm openclaw qa matrix` derives its default set from flow scenarios that
-explicitly declare Matrix channel eligibility. It has no named profiles or
-runner-owned scenario-id list. Repeat `--scenario <id>` for a focused run, or
-use `--shard <index>/<total>` to reproduce one deterministic CI partition.
-
-`QA-Lab - All Lanes` and release checks fan the same catalog-derived selection
-across five balanced shards. Shards distribute work only; they do not define
-semantic membership or priority.
-
 ## QA credentials and 1Password
 
 - Use `op` only inside `tmux` for QA secret lookup in this repo.

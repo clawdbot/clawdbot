@@ -13,10 +13,15 @@ import { resolveInternalSessionEffectsTarget } from "./internal-session-effects.
 import * as announceDelivery from "./subagent-announce-delivery.js";
 import {
   recoverOrphanedSubagentSessions as recoverOrphanedSubagentSessionsWithRuntime,
+  resetOrphanRecoveryCoordinationForTest,
   scheduleOrphanRecovery as scheduleOrphanRecoveryWithRuntime,
 } from "./subagent-orphan-recovery.js";
 import * as subagentRegistrySteerRuntime from "./subagent-registry-steer-runtime.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import {
+  createSubagentRunRecord,
+  type SubagentRunRecordOverrides,
+} from "./subagent-test-fixtures.test-helpers.js";
 
 const loggerMocks = vi.hoisted(() => ({
   info: vi.fn(),
@@ -145,8 +150,10 @@ vi.mock("./subagent-registry-steer-runtime.js", () => ({
   reserveSwarmCollectorLaunch: vi.fn(() => true),
 }));
 
-function createTestRunRecord(overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord {
-  return {
+function createTestRunRecord(
+  overrides: Partial<SubagentRunRecordOverrides> = {},
+): SubagentRunRecord {
+  return createSubagentRunRecord({
     runId: "run-1",
     childSessionKey: "agent:main:subagent:test-session-1",
     requesterSessionKey: "agent:main:quietchat:direct:+1234567890",
@@ -156,7 +163,7 @@ function createTestRunRecord(overrides: Partial<SubagentRunRecord> = {}): Subage
     createdAt: Date.now() - 60_000,
     startedAt: Date.now() - 55_000,
     ...overrides,
-  };
+  });
 }
 
 function createActiveRuns(...runs: SubagentRunRecord[]) {
@@ -218,6 +225,7 @@ describe("subagent-orphan-recovery", () => {
     vi.useFakeTimers();
     vi.clearAllMocks();
     resetGatewayWorkAdmission();
+    resetOrphanRecoveryCoordinationForTest();
     dispatchAgent.mockReset();
     dispatchAgent.mockResolvedValue({ runId: "test-run-id" });
     readSessionMessages.mockReset();
@@ -229,6 +237,7 @@ describe("subagent-orphan-recovery", () => {
 
   afterEach(() => {
     resetGatewayWorkAdmission();
+    resetOrphanRecoveryCoordinationForTest();
     vi.useRealTimers();
     vi.restoreAllMocks();
   });

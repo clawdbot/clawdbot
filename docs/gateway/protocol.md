@@ -92,6 +92,12 @@ Gateway sends a pre-connect challenge:
 }
 ```
 
+Device-auth clients use the challenge `ts` as `connect.params.device.signedAt`.
+For WebSocket challenges, `ts` must be a non-negative integer. Clients that
+explicitly support Gateways from before `connect.challenge` existed may use local
+time only when no challenge arrives; a received challenge with an absent or
+malformed `ts` is invalid.
+
 Client replies with `connect`:
 
 ```json
@@ -147,7 +153,8 @@ Gateway responds with `hello-ok`:
     "policy": {
       "maxPayload": 26214400,
       "maxBufferedBytes": 52428800,
-      "tickIntervalMs": 15000
+      "tickIntervalMs": 15000,
+      "attachments": { "maxBytes": 20971520, "maxImageBytes": 6291456 }
     }
   }
 }
@@ -156,7 +163,32 @@ Gateway responds with `hello-ok`:
 `server`, `features`, `snapshot`, `policy`, and `auth` are all required by
 `HelloOkSchema` (`packages/gateway-protocol/src/schema/frames.ts`). `auth`
 reports the negotiated role/scopes even when no device token is issued (shape
-above). `pluginSurfaceUrls` is optional and maps plugin surface names (e.g.
+above). `policy.attachments` is optional (older gateways omit it) and advertises
+the decoded-size ceilings chat attachments face on `chat.send`, `sessions.send`,
+and session-creation initial turns:
+
+| Field           | Meaning                                                                                             |
+| --------------- | --------------------------------------------------------------------------------------------------- |
+| `maxBytes`      | Largest decoded size accepted for a single attachment (`agents.defaults.mediaMaxMb`, default 20 MB) |
+| `maxImageBytes` | Largest decoded size accepted for a single image: `min(maxBytes, 6 MB agent-hydration cap)`         |
+
+Validating before send:
+
+1. Check each file's decoded size against `maxImageBytes` for images and
+   `maxBytes` for everything else.
+2. Serialize the whole request and check its encoded size against
+   `policy.maxPayload`. `policy.attachments` is a per-attachment ceiling, never a
+   promise the frame fits: attachments travel as base64, so a 20 MB file is about
+   26.7 MB on the wire and exceeds the default 25 MiB frame limit on its own.
+3. Treat the server as authoritative for everything else. Accepted MIME types and
+   per-message handling are deliberately not advertised because they depend on
+   the entrypoint, the resolved model, and payload sniffing. The gateway can
+   return a typed rejection, while text-only model runs can omit additional
+   images after their offload cap and still complete the request.
+4. Re-read the values on every reconnect. They are a connection-time snapshot, so
+   a live `mediaMaxMb` edit reaches existing connections only after they reconnect.
+
+`pluginSurfaceUrls` is optional and maps plugin surface names (e.g.
 `canvas`) to scoped hosted URLs; it may expire, so nodes call
 `node.pluginSurface.refresh` with `{ "surface": "canvas" }` for a fresh entry.
 The deprecated `canvasHostUrl` / `canvasCapability` / `node.canvas.capability.refresh`
@@ -207,8 +239,9 @@ operator token:
 ```
 
 This operator handoff is bounded on purpose: enough to start the mobile
-operator loop and native setup, including `operator.talk.secrets` for Talk
-config reads, but no pairing-mutation scopes and no `operator.admin`. Broader
+operator loop and native setup, with `operator.write` satisfying Talk sessions
+and `operator.talk.secrets` covering Talk config reads, but no pairing-mutation scopes
+and no `operator.admin`. Broader
 pairing/admin access needs a separate approved pairing or token flow. Persist
 `hello-ok.auth.deviceTokens` only when bootstrap auth ran over a trusted
 transport (`wss://` or loopback/local pairing).
@@ -311,7 +344,12 @@ Operator scopes (`src/gateway/operator-scopes.ts`), the full closed set:
 - `operator.admin`
 - `operator.approvals`
 - `operator.pairing`
+- `operator.talk`
 - `operator.talk.secrets`
+
+`operator.write` continues to satisfy `operator.talk` for compatibility with
+existing clients. Voice-device setup can issue the narrower Talk grant without
+general Gateway write access.
 
 `talk.config` with `includeSecrets: true` requires `operator.talk.secrets` (or
 `operator.admin`). When secrets are included, read the active Talk provider
@@ -332,11 +370,11 @@ already hold a lower operator scope.
 method scope (`operator.pairing`), based on the pending request's declared
 `commands` (`src/infra/node-pairing-authz.ts`):
 
-| Declared commands                                                                                                             | Required scopes                       |
-| ----------------------------------------------------------------------------------------------------------------------------- | ------------------------------------- |
-| none                                                                                                                          | `operator.pairing`                    |
-| ordinary commands                                                                                                             | `operator.pairing` + `operator.write` |
-| includes `system.run`, `system.run.prepare`, `system.which`, `browser.proxy`, `fs.listDir`, or `system.execApprovals.get/set` | `operator.pairing` + `operator.admin` |
+| Declared commands                                                                                                                                        | Required scopes                       |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------- |
+| none                                                                                                                                                     | `operator.pairing`                    |
+| ordinary commands                                                                                                                                        | `operator.pairing` + `operator.write` |
+| includes `system.run`, `system.run.prepare`, `system.which`, `browser.proxy`, `browser.proxy.upload.v1`, `fs.listDir`, or `system.execApprovals.get/set` | `operator.pairing` + `operator.admin` |
 
 ### Caps/commands/permissions (node)
 
@@ -520,7 +558,7 @@ methods. Treat this as feature discovery, not a full enumeration of
   <Accordion title="Talk and TTS">
     - `talk.catalog` returns the read-only Talk provider catalog for speech, streaming transcription, and realtime voice: canonical provider ids, registry aliases, labels, configured state, an optional group-level `ready` result, exposed model/voice ids, canonical modes, transports, brain strategies, and realtime audio/capability flags, without returning provider secrets or mutating global config. Current gateways set `ready` after applying runtime provider selection; treat its absence as unverified on older gateways.
     - `talk.config` returns the effective Talk config payload; `includeSecrets` requires `operator.talk.secrets` (or `operator.admin`).
-    - `talk.session.create` creates a gateway-owned Talk session for `realtime/gateway-relay`, `transcription/gateway-relay`, or `stt-tts/managed-room`. For `stt-tts/managed-room`, `operator.write` callers that pass `sessionKey` must also pass `spawnedBy` for scoped session-key visibility; unscoped `sessionKey` creation and `brain: "direct-tools"` require `operator.admin`.
+    - `talk.session.create` (`operator.talk`) creates a gateway-owned Talk session for `realtime/gateway-relay`, `transcription/gateway-relay`, or `stt-tts/managed-room`. For `stt-tts/managed-room`, non-admin callers that pass `sessionKey` must also pass `spawnedBy` for scoped session-key visibility; unscoped `sessionKey` creation and `brain: "direct-tools"` require `operator.admin`.
     - `talk.session.join` validates a managed-room session token, emits `session.ready` or `session.replaced` as needed, and returns room/session metadata plus recent Talk events, never the plaintext token or its hash.
     - `talk.session.appendAudio` appends base64 PCM input audio to gateway-owned realtime relay and transcription sessions.
     - `talk.session.startTurn`, `talk.session.endTurn`, and `talk.session.cancelTurn` drive managed-room turn lifecycle with stale-turn rejection before state clears.
@@ -1022,10 +1060,13 @@ third-party clients.
 | Default tick interval (pre `hello-ok`)    | `30_000` ms                                           | `packages/gateway-client/src/client.ts`                                                                                   |
 | Tick-timeout close                        | code `4000` when silence exceeds `tickIntervalMs * 2` | `packages/gateway-client/src/client.ts`                                                                                   |
 | `MAX_PAYLOAD_BYTES`                       | `25 * 1024 * 1024` (25 MB)                            | `src/gateway/server-constants.ts`                                                                                         |
+| Chat attachment ceiling                   | `agents.defaults.mediaMaxMb`, default 20 MB decoded   | `src/gateway/chat-attachment-policy.ts`                                                                                   |
+| Chat attachment image ceiling             | `min(attachment ceiling, 6 MB)`                       | `src/gateway/chat-attachment-policy.ts`, `packages/media-core/src/constants.ts`                                           |
 
 The server advertises the effective `policy.tickIntervalMs`,
-`policy.maxPayload`, and `policy.maxBufferedBytes` in `hello-ok`; clients
-should honor those values rather than the pre-handshake defaults.
+`policy.maxPayload`, `policy.maxBufferedBytes`, and `policy.attachments` in
+`hello-ok`; clients should honor those values rather than the pre-handshake
+defaults or hardcoded attachment sizes.
 
 The reference client lets finite requests own their configured deadline when
 every pending request has one. An `expectFinal` request without a finite
@@ -1159,6 +1200,7 @@ Common migration failures:
 Migration target:
 
 - Always wait for `connect.challenge`.
+- Use `connect.challenge.payload.ts` as `connect.params.device.signedAt`.
 - Sign the v2 payload that includes the server nonce.
 - Send the same nonce in `connect.params.device.nonce`.
 - Preferred signature payload is `v3`

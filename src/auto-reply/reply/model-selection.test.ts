@@ -16,7 +16,6 @@ import { resolveModelCandidateChain } from "../../agents/model-fallback-candidat
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
-import { MODEL_SELECTION_LOCKED_MESSAGE } from "../../sessions/model-overrides.js";
 import { createModelSelectionState, resolveContextTokens } from "./model-selection.js";
 
 const DEFAULT_MOCK_CATALOG_ENTRIES = vi.hoisted(() => [
@@ -319,6 +318,47 @@ describe("createModelSelectionState catalog loading", () => {
 
     await expect(state.resolveDefaultThinkingLevel()).resolves.toBe("medium");
     expect(loadModelCatalogLocal).toHaveBeenCalledOnce();
+  });
+
+  it("uses the prepared gateway owner catalog without an exact-generation reload", async () => {
+    vi.mocked(loadModelCatalogLocal).mockClear();
+    catalogRuntimeMocks.loadModelCatalogSnapshot.mockClear();
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5.4": {},
+          },
+        },
+      },
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            models: [makeConfiguredModel({ reasoning: undefined })],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.4",
+      provider: "openai",
+      model: "gpt-5.4",
+      hasModelDirective: false,
+      preparedModelCatalog: {
+        entries: [{ provider: "openai", id: "gpt-5.4", name: "GPT-5.4", reasoning: true }],
+        routeVariants: [],
+        authoritative: true,
+      },
+    });
+
+    await expect(state.resolveDefaultThinkingLevel()).resolves.toBe("medium");
+    expect(loadModelCatalogLocal).not.toHaveBeenCalled();
+    expect(catalogRuntimeMocks.loadModelCatalogSnapshot).not.toHaveBeenCalled();
   });
 
   it("uses manifest metadata before hydrating the runtime thinking catalog", async () => {
@@ -1179,7 +1219,7 @@ describe("createModelSelectionState respects session model override", () => {
     expect(sessionStore[sessionKey]?.providerOverride).toBeUndefined();
   });
 
-  it("rejects automatic repair of a locked disallowed override", async () => {
+  it("preserves a locked disallowed override without resetting it", async () => {
     const cfg = {
       agents: {
         defaults: {
@@ -1199,23 +1239,20 @@ describe("createModelSelectionState respects session model override", () => {
     });
     const sessionStore = { [sessionKey]: sessionEntry };
 
-    await expect(
-      createModelSelectionState({
-        cfg,
-        agentCfg: cfg.agents?.defaults,
-        sessionEntry,
-        sessionStore,
-        sessionKey,
-        defaultProvider: "openai",
-        defaultModel: "gpt-4o",
-        provider: "openai",
-        model: "gpt-4o",
-        hasModelDirective: false,
-      }),
-    ).rejects.toMatchObject({
-      name: "ModelSelectionLockedError",
-      message: MODEL_SELECTION_LOCKED_MESSAGE,
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      defaultProvider: "openai",
+      defaultModel: "gpt-4o",
+      provider: "openai",
+      model: "gpt-4o",
+      hasModelDirective: false,
     });
+    expect(state.provider).toBe("openai");
+    expect(state.model).toBe("gpt-4o-mini");
     expect(sessionStore[sessionKey]).toMatchObject({
       providerOverride: "openai",
       modelOverride: "gpt-4o-mini",
@@ -2323,6 +2360,7 @@ describe("createModelSelectionState degraded-catalog override preservation", () 
     cfg: OpenClawConfig;
     snapshotEntries: unknown[];
     authoritative: boolean;
+    modelSelectionLocked?: true;
   }): Promise<{
     state: Awaited<ReturnType<typeof createModelSelectionState>>;
     sessionEntry: SessionEntry;
@@ -2332,7 +2370,10 @@ describe("createModelSelectionState degraded-catalog override preservation", () 
       routeVariants: params.snapshotEntries,
       authoritative: params.authoritative,
     });
-    const sessionEntry = makeOverrideEntry();
+    const sessionEntry = {
+      ...makeOverrideEntry(),
+      ...(params.modelSelectionLocked ? { modelSelectionLocked: true as const } : {}),
+    };
     const sessionStore = { [sessionKey]: sessionEntry };
     const state = await createModelSelectionState({
       cfg: params.cfg,
@@ -2364,6 +2405,20 @@ describe("createModelSelectionState degraded-catalog override preservation", () 
     // The pin is untouched and the turn falls back to primary.
     expect(sessionEntry.modelOverride).toBe("gpt-4o");
     expect(state.model).toBe("gpt-4o-mini");
+  });
+
+  it("keeps a locked pin active without a degraded-catalog fallback notice", async () => {
+    const { state, sessionEntry } = await run({
+      cfg: restrictiveCfg,
+      snapshotEntries: [],
+      authoritative: false,
+      modelSelectionLocked: true,
+    });
+    expect(state.resetModelOverride).toBe(false);
+    expect(state.resetModelOverrideReason).toBeUndefined();
+    expect(state.resetModelOverrideRef).toBeUndefined();
+    expect(sessionEntry.modelOverride).toBe("gpt-4o");
+    expect(state.model).toBe("gpt-4o");
   });
 
   it("destroys a genuinely-disallowed pin on an authoritative catalog", async () => {

@@ -8,11 +8,7 @@ import {
 } from "../../packages/gateway-protocol/src/client-info.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import {
-  pinActivePluginChannelRegistry,
-  resetPluginRuntimeStateForTest,
-  setActivePluginRegistry,
-} from "../plugins/runtime.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import {
   isForegroundRestrictedPluginNodeCommand,
   isNodeCommandAllowed,
@@ -175,34 +171,6 @@ describe("gateway/node-command-policy", () => {
         "device.info",
       ],
     });
-  });
-
-  it("keeps plugin node defaults from the pinned Gateway registry", () => {
-    const startupRegistry = installCanvasPluginDefaults();
-    pinActivePluginChannelRegistry(startupRegistry);
-    const transientRegistry = createEmptyPluginRegistry();
-    const startupPolicy = startupRegistry.nodeInvokePolicies[0];
-    if (!startupPolicy) {
-      throw new Error("expected canvas node policy");
-    }
-    transientRegistry.nodeInvokePolicies.push({
-      ...startupPolicy,
-      pluginId: "transient",
-      policy: {
-        ...startupPolicy.policy,
-        commands: ["transient.read"],
-      },
-    });
-    setActivePluginRegistry(transientRegistry);
-
-    const allowlist = resolveNodeCommandAllowlist({} as OpenClawConfig, {
-      platform: "macos",
-      deviceFamily: "Mac",
-    });
-
-    expect(allowlist.has("canvas.snapshot")).toBe(true);
-    expect(allowlist.has("canvas.present")).toBe(true);
-    expect(allowlist.has("transient.read")).toBe(false);
   });
 
   it("adds explicitly defaulted plugin node-host agent tools from the active registry", () => {
@@ -445,10 +413,11 @@ describe("gateway/node-command-policy", () => {
       connId: "conn-1",
       platform: "linux",
       deviceFamily: "Linux",
-      commands: ["browser.proxy", "system.run"],
+      commands: ["browser.proxy", "browser.proxy.upload.v1", "system.run"],
     });
 
     expect(allowlist.has("browser.proxy")).toBe(true);
+    expect(allowlist.has("browser.proxy.upload.v1")).toBe(true);
     expect(allowlist.has("system.run")).toBe(true);
   });
 

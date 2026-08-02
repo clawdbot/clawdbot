@@ -8,7 +8,10 @@ type SecretRefResolutionCode =
   | "SECRET_REF_PROVIDER_ERROR"
   | "SECRET_REF_PROVIDER_CONTRACT";
 
-type SecretProviderResolutionCode = "SECRET_PROVIDER_INVALID" | "SECRET_PROVIDER_UNAVAILABLE";
+type SecretProviderResolutionCode =
+  | "SECRET_PROVIDER_INVALID"
+  | "SECRET_PROVIDER_NOT_CONFIGURED"
+  | "SECRET_PROVIDER_UNAVAILABLE";
 
 export type SecretResolutionFailureReason =
   | "secret provider failed"

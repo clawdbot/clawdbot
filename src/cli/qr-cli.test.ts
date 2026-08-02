@@ -5,6 +5,7 @@ import { encodePairingSetupCode } from "../pairing/setup-code.js";
 import {
   FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
   PAIRING_SETUP_BOOTSTRAP_PROFILE,
+  VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
 } from "../shared/device-bootstrap-profile.js";
 import { createCliRuntimeCapture, mockRuntimeModule } from "./test-runtime-capture.js";
 
@@ -241,6 +242,37 @@ describe("registerQrCli", () => {
           ],
         },
       }),
+    );
+  });
+
+  it("uses the least-privilege bootstrap profile with --voice-node", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        bind: "custom",
+        customBindHost: "127.0.0.1",
+        auth: { mode: "token", token: "tok" },
+      },
+    });
+
+    await runQr(["--setup-code-only", "--voice-node"]);
+
+    expect(issueDeviceBootstrapToken).toHaveBeenCalledWith(
+      expect.objectContaining({ profile: VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE }),
+    );
+  });
+
+  it("rejects combining --limited with --voice-node", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        bind: "custom",
+        customBindHost: "127.0.0.1",
+        auth: { mode: "token", token: "tok" },
+      },
+    });
+
+    await expect(runQr(["--setup-code-only", "--limited", "--voice-node"])).rejects.toThrow("exit");
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Error: Use either --limited or --voice-node, not both.",
     );
   });
 

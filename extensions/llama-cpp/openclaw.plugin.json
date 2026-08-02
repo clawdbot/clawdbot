@@ -29,8 +29,9 @@
       "method": "local",
       "choiceId": "llama-cpp",
       "appGuidedDiscovery": true,
-      "choiceLabel": "Local model (llama.cpp)",
-      "choiceHint": "Downloads an approximately 5.0 GB local model; requires 16 GB RAM",
+      "appGuidedActionLabel": "Set up model",
+      "choiceLabel": "llama.cpp",
+      "choiceHint": "Run one private GGUF model directly inside this Gateway",
       "groupId": "llama-cpp",
       "groupLabel": "Local llama.cpp",
       "groupHint": "No API key required"

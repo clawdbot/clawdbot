@@ -6,6 +6,7 @@ import path from "node:path";
 import process from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import { isRecord } from "../../../lib/record-shared.mjs";
 import { resolveWindowsTaskkillPath } from "../../../lib/windows-taskkill.mjs";
 import { readBoundedResponseText } from "../bounded-response-text.mjs";
 
@@ -993,10 +994,6 @@ function hasOwnPayloadField(raw, field) {
   );
 }
 
-function isRecord(value) {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
 export function unwrapRpcPayload(raw) {
   if (raw?.ok === false) {
     throw new Error(`gateway RPC failed: ${JSON.stringify(raw.error ?? raw)}`);
@@ -1085,6 +1082,7 @@ async function smokePlugin(pluginId, pluginDir, requiresConfig, pluginIndex, plu
   });
   try {
     await waitForReady({ child, port, logPath });
+    assertPluginLoaded(logPath, pluginId);
     await assertBaseGatewayProbes({
       entrypoint,
       port,
@@ -1259,6 +1257,19 @@ export function assertGatewayLogNotTruncated(logPath) {
         GATEWAY_LOG_CAPTURE_BYTES,
       )} bytes; runtime smoke cannot validate complete post-ready output`,
     );
+  }
+}
+
+export function assertPluginLoaded(logPath, pluginId) {
+  let text;
+  try {
+    text = fs.readFileSync(logPath, "utf8");
+  } catch {
+    return;
+  }
+  const failurePrefix = `[plugins] ${pluginId} failed to load`;
+  if (text.includes(failurePrefix)) {
+    throw new Error(`${failurePrefix}: ${tailText(text)}`);
   }
 }
 

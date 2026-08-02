@@ -6,7 +6,7 @@ import type {
 } from "openclaw/plugin-sdk/provider-model-shared";
 
 export const LLAMA_CPP_PROVIDER_ID = "llama-cpp";
-export const LLAMA_CPP_PROVIDER_LABEL = "Local model (llama.cpp)";
+export const LLAMA_CPP_PROVIDER_LABEL = "llama.cpp";
 const LLAMA_CPP_LOCAL_AUTH_MARKER = "llama-cpp-local";
 const LLAMA_CPP_LOCAL_BASE_URL = "local://llama-cpp";
 

@@ -9,7 +9,7 @@ import {
   resolveInboundMentionDecision,
   resolveUnmentionedGroupInboundPolicy,
   toHistoryMediaEntries,
-  toInboundMediaFacts,
+  toInboundMediaFactsWithMetadata,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { isRecentOutboundMessageIdentity } from "openclaw/plugin-sdk/channel-outbound";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
@@ -167,14 +167,19 @@ async function resolveDiscordHistoryMediaForPendingRecord(params: {
     },
   );
   const stickerStartIndex = Math.max(0, mediaList.length - stickers.length);
-  return toInboundMediaFacts(mediaList, { messageId: params.message.id }).map((media, index) => ({
-    path: media.path,
-    url: media.url,
-    contentType: media.contentType,
-    kind: index >= stickerStartIndex ? "sticker" : (media.kind ?? "image"),
-    transcribed: media.transcribed,
-    messageId: media.messageId,
-  }));
+  return (await toInboundMediaFactsWithMetadata(mediaList, { messageId: params.message.id })).map(
+    (media, index) => ({
+      path: media.path,
+      url: media.url,
+      contentType: media.contentType,
+      kind: index >= stickerStartIndex ? "sticker" : (media.kind ?? "image"),
+      durationMs: media.durationMs,
+      width: media.width,
+      height: media.height,
+      transcribed: media.transcribed,
+      messageId: media.messageId,
+    }),
+  );
 }
 
 async function recordDiscordPendingHistoryEntry(params: {
@@ -308,6 +313,7 @@ export async function preflightDiscordMessage(
   }
   const pluralkitInfo = await resolveDiscordPreflightPluralKitInfo({
     message,
+    webhookId,
     config: pluralkitConfig,
     abortSignal: params.abortSignal,
   });

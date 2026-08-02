@@ -1,8 +1,8 @@
 // Qa Lab plugin module implements suite runtime gateway behavior.
-import fs from "node:fs/promises";
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
+import { writeGatewayRestartIntentSync } from "openclaw/plugin-sdk/qa-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { isRecord as isPlainObject } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { QaSuiteInfraError, toQaErrorObject } from "./errors.js";
@@ -267,19 +267,35 @@ async function runConfigMutation(params: {
   restartDelayMs?: number;
   restartSettleBufferMs?: number;
   replacePaths?: readonly string[];
+  skipRestartDeferral?: boolean;
 }) {
   const restartDelayMs = params.restartDelayMs ?? 1_000;
   const timeoutMs = liveTurnTimeoutMs(params.env, 180_000);
   let lastConflict: unknown = null;
   for (let attempt = 1; attempt <= 8; attempt += 1) {
     const snapshot = await readConfigSnapshot(params.env);
-    if (isConfigMutationNoopForSnapshot(params.action, snapshot.config, params.raw)) {
+    if (
+      isConfigMutationNoopForSnapshot(params.action, snapshot.config, params.raw) &&
+      params.skipRestartDeferral !== true
+    ) {
       // QA scenarios do best-effort cleanup in finally blocks. Skipping
       // client-known no-op patches keeps that cleanup from burning the
       // control-plane write budget and making later capability checks flaky.
       return { ok: true, noop: true };
     }
     try {
+      let restartTargetPid: number | undefined;
+      if (params.skipRestartDeferral === true) {
+        const systemInfo = await params.env.gateway.call("system.info", {}, { timeoutMs });
+        const targetPid =
+          typeof systemInfo === "object" && systemInfo !== null
+            ? (systemInfo as { pid?: unknown }).pid
+            : undefined;
+        if (typeof targetPid !== "number" || !Number.isSafeInteger(targetPid) || targetPid <= 0) {
+          throw new Error("qa gateway restart returned an invalid active process id");
+        }
+        restartTargetPid = targetPid;
+      }
       const result = await params.env.gateway.call(
         params.action,
         {
@@ -293,6 +309,23 @@ async function runConfigMutation(params: {
         },
         { timeoutMs },
       );
+      if (params.skipRestartDeferral === true) {
+        if (
+          !writeGatewayRestartIntentSync({
+            env: params.env.gateway.runtimeEnv,
+            targetPid: restartTargetPid,
+            reason: "config.patch",
+            intent: { force: true },
+          })
+        ) {
+          throw new Error("qa gateway could not persist a forced restart intent");
+        }
+        await params.env.gateway.call(
+          "gateway.restart.request",
+          { reason: "config.patch", skipDeferral: true },
+          { timeoutMs },
+        );
+      }
       await waitForConfigRestartSettle(
         params.env,
         restartDelayMs,
@@ -355,6 +388,7 @@ async function patchConfig(params: {
   restartDelayMs?: number;
   restartSettleBufferMs?: number;
   replacePaths?: readonly string[];
+  skipRestartDeferral?: boolean;
 }) {
   return await runConfigMutation({
     env: params.env,
@@ -366,6 +400,7 @@ async function patchConfig(params: {
     restartDelayMs: params.restartDelayMs,
     restartSettleBufferMs: params.restartSettleBufferMs,
     replacePaths: params.replacePaths,
+    skipRestartDeferral: params.skipRestartDeferral,
   });
 }
 
@@ -394,18 +429,14 @@ async function applyConfig(params: {
 }
 
 async function restartGatewayWithConfigPatch(params: {
-  env: Pick<QaSuiteRuntimeEnv, "gateway">;
+  env: QaGatewayMutationEnv;
   patch: Record<string, unknown>;
 }) {
-  const restart = params.env.gateway.restartAfterStateMutation;
-  if (!restart) {
-    throw new Error("qa gateway child cannot restart after state mutation");
-  }
-  await restart(async ({ configPath }) => {
-    const raw = await fs.readFile(configPath, "utf8");
-    const config = JSON.parse(raw || "{}") as Record<string, unknown>;
-    const nextConfig = applyQaMergePatch(config, params.patch);
-    await fs.writeFile(configPath, `${JSON.stringify(nextConfig, null, 2)}\n`, "utf8");
+  return await patchConfig({
+    env: params.env,
+    patch: params.patch,
+    replacePaths: ["gateway.controlUi.allowedOrigins"],
+    skipRestartDeferral: true,
   });
 }
 

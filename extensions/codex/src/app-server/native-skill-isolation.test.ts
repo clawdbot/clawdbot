@@ -8,6 +8,98 @@ import {
   resolveCodexNativeSkillIsolation,
 } from "./native-skill-isolation.js";
 
+it("reuses one authoritative native skill reload per physical client and workspace", async () => {
+  const tempHome = await createTempHomeEnv("openclaw-codex-native-skills-client-cache-");
+  try {
+    const home = await fs.realpath(tempHome.home);
+    const request = vi.fn(async () => ({
+      data: [{ cwd: home, errors: [], skills: [] }],
+    }));
+    const client = { request } as unknown as CodexAppServerClient;
+
+    await withEnvAsync(
+      { HOME: home, OPENCLAW_STATE_DIR: path.join(home, "scratch-state") },
+      async () => {
+        const params = { client, cwd: home };
+        const [first, second] = await Promise.all([
+          resolveCodexNativeSkillIsolation(params),
+          resolveCodexNativeSkillIsolation(params),
+        ]);
+        expect(second).toBe(first);
+        expect(request).toHaveBeenCalledTimes(1);
+
+        await resolveCodexNativeSkillIsolation({
+          client,
+          cwd: path.join(home, "another-workspace"),
+        });
+        expect(request).toHaveBeenCalledTimes(2);
+      },
+    );
+  } finally {
+    await tempHome.restore();
+  }
+});
+
+it("retries a failed native skill reload instead of caching its rejection", async () => {
+  const tempHome = await createTempHomeEnv("openclaw-codex-native-skills-cache-retry-");
+  try {
+    const home = await fs.realpath(tempHome.home);
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("skill reload failed"))
+      .mockResolvedValue({ data: [{ cwd: home, errors: [], skills: [] }] });
+    const client = { request } as unknown as CodexAppServerClient;
+
+    await withEnvAsync(
+      { HOME: home, OPENCLAW_STATE_DIR: path.join(home, "scratch-state") },
+      async () => {
+        const params = { client, cwd: home };
+        await expect(resolveCodexNativeSkillIsolation(params)).rejects.toThrow(
+          "skill reload failed",
+        );
+        await expect(resolveCodexNativeSkillIsolation(params)).resolves.toEqual({
+          disabledUserSkillPaths: [],
+        });
+        expect(request).toHaveBeenCalledTimes(2);
+      },
+    );
+  } finally {
+    await tempHome.restore();
+  }
+});
+
+it("does not share native skill reloads across independently cancellable turns", async () => {
+  const tempHome = await createTempHomeEnv("openclaw-codex-native-skills-cache-signals-");
+  try {
+    const home = await fs.realpath(tempHome.home);
+    const request = vi.fn(async () => ({
+      data: [{ cwd: home, errors: [], skills: [] }],
+    }));
+    const client = { request } as unknown as CodexAppServerClient;
+    const firstSignal = new AbortController();
+    const secondSignal = new AbortController();
+
+    await withEnvAsync(
+      { HOME: home, OPENCLAW_STATE_DIR: path.join(home, "scratch-state") },
+      async () => {
+        await Promise.all([
+          resolveCodexNativeSkillIsolation({ client, cwd: home, signal: firstSignal.signal }),
+          resolveCodexNativeSkillIsolation({ client, cwd: home, signal: secondSignal.signal }),
+        ]);
+        expect(request).toHaveBeenCalledTimes(2);
+        await resolveCodexNativeSkillIsolation({
+          client,
+          cwd: home,
+          signal: new AbortController().signal,
+        });
+        expect(request).toHaveBeenCalledTimes(2);
+      },
+    );
+  } finally {
+    await tempHome.restore();
+  }
+});
+
 it("disables native user-scope skills only for non-default state directories", async () => {
   const tempHome = await createTempHomeEnv("openclaw-codex-native-skills-");
   try {

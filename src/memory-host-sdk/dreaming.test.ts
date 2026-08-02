@@ -162,7 +162,7 @@ describe("memory dreaming host helpers", () => {
     expect(resolved.timezone).toBe("America/Los_Angeles");
     expect(resolved.phases.deep.cron).toBe("0 3 * * *");
     expect(resolved.phases.deep.limit).toBe(10);
-    expect(resolved.phases.deep.minScore).toBe(0.8);
+    expect(resolved.phases.deep.minScore).toBe(0.75);
     expect(resolved.phases.deep.recencyHalfLifeDays).toBe(14);
     expect(resolved.phases.deep.maxAgeDays).toBe(30);
   });

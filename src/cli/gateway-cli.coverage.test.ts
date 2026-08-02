@@ -15,6 +15,7 @@ type DiscoveredBeacon = Awaited<
 >[number];
 const defaultCallGateway = async (): Promise<unknown> => ({ ok: true });
 const callGateway = vi.fn<(opts: unknown) => Promise<unknown>>(defaultCallGateway);
+const formatGatewayAuthErrorJson = vi.fn();
 const formatGatewayClientRequestErrorJson = vi.fn();
 const formatGatewayTransportErrorJson = vi.fn();
 const startGatewayServer = vi.fn<
@@ -58,6 +59,7 @@ vi.mock(
       url: "ws://127.0.0.1:18789",
     }),
     callGateway: (opts: unknown) => callGateway(opts),
+    formatGatewayAuthErrorJson: (error: unknown) => formatGatewayAuthErrorJson(error),
     formatGatewayClientRequestErrorJson: (error: unknown) =>
       formatGatewayClientRequestErrorJson(error),
     formatGatewayTransportErrorJson: (error: unknown) => formatGatewayTransportErrorJson(error),
@@ -170,6 +172,8 @@ describe("gateway-cli coverage", () => {
     startGatewayServer.mockClear();
     inspectPortUsage.mockClear();
     formatPortDiagnostics.mockClear();
+    formatGatewayAuthErrorJson.mockReset();
+    formatGatewayAuthErrorJson.mockReturnValue(null);
     formatGatewayClientRequestErrorJson.mockReset();
     formatGatewayClientRequestErrorJson.mockReturnValue(null);
     formatGatewayTransportErrorJson.mockReset();
@@ -294,76 +298,24 @@ describe("gateway-cli coverage", () => {
     );
   });
 
-  it("waits for refreshing all-agent usage caches before printing totals", async () => {
-    const settleSleep = vi.fn(async (_ms: number) => {});
-    gatewayProgram = createGatewayProgram({
-      usageCostSettle: {
-        now: () => 0,
-        sleep: settleSleep,
-      },
-    });
-    callGateway
-      .mockResolvedValueOnce({
-        cacheStatus: { status: "refreshing", cachedFiles: 0, pendingFiles: 2 },
-      })
-      .mockResolvedValueOnce({
-        totals: { totalTokens: 100, totalCost: 0.1 },
-        cacheStatus: { status: "fresh", cachedFiles: 2, pendingFiles: 0 },
-      });
-
-    await runGatewayCommand(["gateway", "usage-cost", "--all-agents", "--days", "7", "--json"]);
-
-    expect(callGateway).toHaveBeenCalledTimes(2);
-    expect(settleSleep).toHaveBeenCalledOnce();
-    expect(settleSleep).toHaveBeenCalledWith(250);
-    const costCalls = callGateway.mock.calls.map(
-      ([raw]) => raw as { method?: string; timeoutMs?: number },
-    );
-    expect(costCalls.every((call) => call.method === "usage.cost")).toBe(true);
-    expect(costCalls.every((call) => call.timeoutMs === 10_000)).toBe(true);
-    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
-      expect.objectContaining({
-        totals: expect.objectContaining({ totalTokens: 100, totalCost: 0.1 }),
-        cacheStatus: expect.objectContaining({ status: "fresh" }),
-      }),
-    );
-  });
-
   it.each(["refreshing", "partial", "stale"] as const)(
-    "uses --timeout as the command-wide usage-cost settle budget for %s caches",
+    "returns the first usage-cost RPC result when the cache is %s",
     async (status) => {
-      let now = 0;
-      gatewayProgram = createGatewayProgram({
-        usageCostSettle: {
-          now: () => now,
-          sleep: async (ms) => {
-            now += ms;
-          },
-        },
-      });
-      callGateway.mockResolvedValue({
-        cacheStatus: { status, cachedFiles: 0, pendingFiles: 1 },
-      });
+      const summary = {
+        totals: { totalTokens: 100, totalCost: 0.1 },
+        cacheStatus: { status, cachedFiles: 0, pendingFiles: 2 },
+      };
+      callGateway.mockResolvedValue(summary);
 
-      await expectGatewayExit([
-        "gateway",
-        "usage-cost",
-        "--all-agents",
-        "--timeout",
-        "50",
-        "--json",
-      ]);
+      await runGatewayCommand(["gateway", "usage-cost", "--all-agents", "--days", "7", "--json"]);
 
-      // A fast host can fit a second poll inside the 50ms budget; the contract
-      // is the budget bound on every call, not the poll count.
-      expect(callGateway.mock.calls.length).toBeGreaterThanOrEqual(1);
-      const costCalls = callGateway.mock.calls.map(
-        ([raw]) => raw as { method?: string; timeoutMs?: number },
-      );
-      expect(costCalls.every((call) => call.method === "usage.cost")).toBe(true);
-      expect(costCalls.every((call) => (call.timeoutMs ?? 0) > 0)).toBe(true);
-      expect(costCalls.every((call) => (call.timeoutMs ?? 0) <= 50)).toBe(true);
-      expect(runtimeErrors.join("\n")).toContain("Timed out waiting for usage cost cache refresh");
+      expect(callGateway).toHaveBeenCalledOnce();
+      expect(firstMockArg(callGateway)).toMatchObject({
+        method: "usage.cost",
+        params: { days: 7, agentScope: "all" },
+        timeoutMs: 10_000,
+      });
+      expect(defaultRuntime.writeJson).toHaveBeenCalledWith(summary);
     },
   );
 
@@ -433,6 +385,58 @@ describe("gateway-cli coverage", () => {
     expect(formatGatewayClientRequestErrorJson).toHaveBeenCalledWith(error);
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith(payload);
     expect(runtimeErrors.join("\n")).not.toContain("unauthorized role");
+  });
+
+  it("writes JSON for gateway call auth failures in JSON mode", async () => {
+    const error = new Error("gateway health requires credentials");
+    const payload = {
+      ok: false,
+      error: {
+        type: "gateway_credentials_required",
+        message: "gateway health requires credentials",
+      },
+    };
+    callGateway.mockRejectedValueOnce(error);
+    formatGatewayAuthErrorJson.mockReturnValueOnce(payload);
+
+    await expectGatewayExit(["gateway", "call", "health", "--json"]);
+
+    expect(formatGatewayAuthErrorJson).toHaveBeenCalledWith(error);
+    expect(formatGatewayClientRequestErrorJson).not.toHaveBeenCalled();
+    expect(formatGatewayTransportErrorJson).not.toHaveBeenCalled();
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(payload);
+    expect(runtimeErrors.join("\n")).not.toContain("gateway health requires credentials");
+  });
+
+  it.each([
+    {
+      name: "probe",
+      args: ["gateway", "probe", "--json"],
+      reject: (error: Error) => gatewayStatusCommand.mockRejectedValueOnce(error),
+    },
+    {
+      name: "discovery",
+      args: ["gateway", "discover", "--json"],
+      reject: (error: Error) => discoverGatewayBeacons.mockRejectedValueOnce(error),
+    },
+  ])("writes JSON for gateway $name transport failures", async ({ args, reject }) => {
+    const error = new Error("gateway transport unavailable");
+    const payload = {
+      ok: false,
+      error: {
+        type: "gateway_transport_error",
+        kind: "closed",
+        message: "gateway transport unavailable",
+      },
+    };
+    reject(error);
+    formatGatewayTransportErrorJson.mockReturnValueOnce(payload);
+
+    await expectGatewayExit(args);
+
+    expect(formatGatewayTransportErrorJson).toHaveBeenCalledWith(error);
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(payload);
+    expect(runtimeErrors).toHaveLength(0);
   });
 
   it("prints the latest stability bundle without calling Gateway", async () => {
@@ -610,6 +614,39 @@ describe("gateway-cli coverage", () => {
     const out = runtimeLogs.join("\n");
     expect(out).toContain('"beacons"');
     expect(out).toContain("ws://");
+  });
+
+  it.each([
+    {
+      name: "uses the secure scheme advertised by a TLS gateway",
+      beacon: {
+        instanceName: "Secure gateway",
+        host: "secure.openclaw.internal",
+        port: 18789,
+        gatewayTls: true,
+      } satisfies DiscoveredBeacon,
+      wsUrl: "wss://secure.openclaw.internal:18789",
+    },
+    {
+      name: "does not construct a URL from unresolved TXT hints",
+      beacon: {
+        instanceName: "Unresolved gateway",
+        lanHost: "unresolved.openclaw.internal",
+        gatewayPort: 18789,
+      } satisfies DiscoveredBeacon,
+      wsUrl: null,
+    },
+  ])("gateway discovery JSON $name", async ({ beacon, wsUrl }) => {
+    discoverGatewayBeacons.mockResolvedValueOnce([beacon]);
+
+    await runGatewayCommand(["gateway", "discover", "--json"]);
+
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        count: 1,
+        beacons: [expect.objectContaining({ wsUrl })],
+      }),
+    );
   });
 
   it("validates gateway discover timeout", async () => {

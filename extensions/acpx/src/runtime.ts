@@ -686,6 +686,13 @@ function quoteShellArg(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
+function normalizeAgentCommand(command: string | string[]): string | undefined {
+  const normalized = Array.isArray(command)
+    ? command.map((part) => quoteShellArg(part)).join(" ")
+    : command;
+  return normalized.trim() || undefined;
+}
+
 function appendCodexAcpConfigOverrides(command: string, override: CodexAcpModelOverride): string {
   const config = {
     ...(override.model ? { model: override.model } : {}),
@@ -704,7 +711,7 @@ function createModelScopedAgentRegistry(params: {
 }): AcpAgentRegistry {
   return {
     resolve(agentName: string): string {
-      const command = params.agentRegistry.resolve(agentName);
+      const command = normalizeAgentCommand(params.agentRegistry.resolve(agentName)) ?? "";
       const override = params.scope.getStore();
       if (
         !override ||
@@ -729,8 +736,7 @@ function resolveAgentCommand(params: {
   if (!normalizedAgentName) {
     return undefined;
   }
-  const resolvedCommand = params.agentRegistry.resolve(normalizedAgentName);
-  return typeof resolvedCommand === "string" ? resolvedCommand.trim() || undefined : undefined;
+  return normalizeAgentCommand(params.agentRegistry.resolve(normalizedAgentName));
 }
 
 function shouldUseBridgeSafeDelegateForCommand(command: string | undefined): boolean {
@@ -1814,6 +1820,7 @@ export const testing = {
   classifyCodexAcpModelRequest,
   isClaudeAcpCommand,
   isCodexAcpCommand,
+  normalizeAgentCommand,
   normalizeClaudeAcpModelOverride,
 };
 

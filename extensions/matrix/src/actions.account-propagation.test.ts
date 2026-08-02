@@ -171,15 +171,21 @@ describe("matrixMessageActions account propagation", () => {
   });
 
   it("forwards mediaLocalRoots for media sends", async () => {
+    const mediaAccess = {
+      localRoots: ["/tmp/openclaw-matrix-test"],
+      readFile: async () => Buffer.from("chart"),
+      workspaceDir: "/tmp/openclaw-matrix-test",
+    };
     await matrixMessageActions.handleAction?.(
       createContext({
         action: "send",
         accountId: "ops",
-        mediaLocalRoots: ["/tmp/openclaw-matrix-test"],
+        mediaAccess,
+        mediaLocalRoots: mediaAccess.localRoots,
         params: {
           to: "room:!room:example",
           message: "hello",
-          media: "file:///tmp/photo.png",
+          media: "chart.png",
         },
       }),
     );
@@ -187,8 +193,9 @@ describe("matrixMessageActions account propagation", () => {
     const call = matrixActionCall();
     expect(call.input.action).toBe("sendMessage");
     expect(call.input.accountId).toBe("ops");
-    expect(call.input.mediaUrl).toBe("file:///tmp/photo.png");
+    expect(call.input.mediaUrl).toBe("chart.png");
     expect(call.cfg).toBeTypeOf("object");
+    expect(call.options.mediaAccess).toBe(mediaAccess);
     expect(call.options).toMatchObject({ mediaLocalRoots: ["/tmp/openclaw-matrix-test"] });
   });
 

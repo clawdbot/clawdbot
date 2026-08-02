@@ -47,6 +47,8 @@ export function createMockDraftStream() {
     discardPending: vi.fn(async () => {}),
     seal: vi.fn(async () => {}),
     stop: vi.fn(async () => {}),
+    retarget: vi.fn(async () => {}),
+    cleanupRetargeted: vi.fn(async () => {}),
     forceNewMessage: vi.fn(() => {
       messageId = undefined;
     }),
@@ -213,6 +215,7 @@ export type DispatchInboundParams = {
     onCompactionEnd?: () => Promise<void> | void;
     onPartialReply?: (payload: { text?: string }) => Promise<void> | void;
     onAssistantMessageStart?: () => Promise<void> | void;
+    onQueuedFollowupAdmitted?: () => Promise<void> | void;
     allowProgressCallbacksWhenSourceDeliverySuppressed?: boolean;
     onTypingCleanup?: () => Promise<void> | void;
   };
@@ -272,7 +275,7 @@ let threadBindingTesting: typeof import("./thread-bindings.js").testing;
 export let createThreadBindingManager: typeof import("./thread-bindings.js").createThreadBindingManager;
 let processDiscordMessage: typeof import("./message-handler.process.js").processDiscordMessage;
 export let formatDiscordReplySkip: typeof import("./message-handler.process.js").formatDiscordReplySkip;
-export let notifyDiscordInboundEventOutboundSuccess: typeof import("../inbound-event-delivery.js").notifyDiscordInboundEventOutboundSuccess;
+export let discordInboundEventDelivery: typeof import("../inbound-event-delivery.js").discordInboundEventDelivery;
 
 vi.mock("openclaw/plugin-sdk/reply-runtime", () => ({
   dispatchReplyWithBufferedBlockDispatcher: async (params: {
@@ -559,7 +562,7 @@ export function registerDiscordProcessTestLifecycle() {
       await import("./thread-bindings.js"));
     ({ processDiscordMessage, formatDiscordReplySkip } =
       await import("./message-handler.process.js"));
-    ({ notifyDiscordInboundEventOutboundSuccess } = await import("../inbound-event-delivery.js"));
+    ({ discordInboundEventDelivery } = await import("../inbound-event-delivery.js"));
   });
 
   beforeEach(() => {

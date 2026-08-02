@@ -231,6 +231,8 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "gateway.nodes.browser.node": "Pin browser routing to a specific node id or name (optional).",
   "gateway.nodes.pairing":
     "Node pairing policy settings. SSH-verified auto-approval is enabled by default; CIDR auto-approval stays disabled unless explicit trusted CIDR/IP allowlists are configured.",
+  "gateway.nodes.pairing.autoApproveLocal":
+    "Silently approve trusted local pairing and access upgrades (default: true); set false to trade convenience for explicit approval of every device.",
   "gateway.nodes.pairing.autoApproveCidrs":
     "Opt-in CIDR/IP allowlist for auto-approving first-time node-role device pairing with no requested scopes. Disabled when unset. Operator, browser, Control UI, and any role, scope, metadata, or public-key upgrade pairing still require manual approval.",
   "gateway.nodes.pairing.sshVerify":
@@ -328,6 +330,8 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Additional HTTP/gRPC metadata headers sent with OpenTelemetry export requests, often used for tenant auth or routing. Keep secrets in env-backed values and avoid unnecessary header sprawl.",
   "diagnostics.otel.serviceName":
     "Service name reported in telemetry resource attributes to identify this gateway instance in observability backends. Use stable names so dashboards and alerts remain consistent over deployments.",
+  "diagnostics.otel.metricNamePrefix":
+    'Replaces the default "openclaw." prefix on OpenClaw-owned metric names. Use an empty string to remove the prefix, or up to 128 ASCII letters, digits, underscores, dots, hyphens, and slashes starting with a letter. Include any separator you need, for example "acme."; standard gen_ai.* metric names are unchanged. Changing this value requires updating dashboards and alerts that query the old names.',
   "diagnostics.otel.traces":
     "Enable trace signal export to the configured OpenTelemetry collector endpoint. Keep enabled when latency/debug tracing is needed, and disable if you only want metrics/logs.",
   "diagnostics.otel.metrics":
@@ -444,6 +448,8 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Trusted real target roots that skill symlinks may resolve into when they sit outside their configured source root. Keep this narrow, such as a sibling repo skills directory.",
   "skills.load.watch":
     "Enable filesystem watching for skill-definition changes so updates can be applied without full process restart. Keep enabled in development workflows and disable in immutable production images.",
+  "skills.workshop.autonomous.mode":
+    'Controls background learning: "off" keeps only the suggestion nudge, "propose" creates pending proposals, and "auto" applies captured proposals through the normal scanner-gated Workshop path. Default: "auto".',
   "skills.workshop.allowSymlinkTargetWrites":
     "Allows Skill Workshop apply to write through symlinked workspace skill paths whose real target is already trusted by skills.load.allowSymlinkTargets. Keep disabled unless operators intentionally want generated proposal applies to mutate those shared skill roots.",
   approvals:
@@ -538,6 +544,8 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "tools.web.fetch.cacheTtlMinutes": "Cache TTL in minutes for web_fetch results.",
   "tools.web.fetch.maxRedirects": "Maximum redirects allowed for web_fetch (default: 3).",
   "tools.web.fetch.userAgent": "Override User-Agent header for web_fetch requests.",
+  "tools.web.fetch.headers":
+    "Extra request headers sent with direct web_fetch requests, for example gateway routing or authentication headers. Every configured value is treated as sensitive and redacted from exposed config and debug captures. Values are plain strings, support ${VAR} substitution and the global $${VAR} literal escape, and are sent to model-chosen URLs. Entries are validated when the request is built rather than at config load, so a bad name or unsendable value is dropped and logged instead of disabling the surface; Accept, Accept-Language, User-Agent, and framing headers such as Transfer-Encoding are dropped too. Use tools.web.fetch.userAgent to change the user agent. Cross-origin redirects retain only the guarded-fetch safe header allowlist, and changing the headers actually sent partitions the fetch cache.",
   "tools.web.fetch.readability":
     "Use Readability to extract main content from HTML (fallbacks to basic HTML cleanup).",
   "tools.web.fetch.useTrustedEnvProxy":

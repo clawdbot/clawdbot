@@ -22,6 +22,12 @@ const serviceMock = vi.hoisted(() => ({
   readRuntime: vi.fn(async () => ({ status: "stopped" as const })),
 }));
 
+vi.mock("../../config/paths.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../../config/paths.js")>("../../config/paths.js");
+  return { ...actual, isDefaultInstallIdentity: () => true };
+});
+
 vi.mock("../../daemon/service.js", () => ({
   resolveGatewayService: () => serviceMock,
 }));
@@ -134,6 +140,24 @@ describe("runDaemonInstall integration", () => {
     expect(runtimeLogs.join("\n")).toContain("Refusing to install or rewrite the gateway service");
   });
 
+  it.each([
+    { force: undefined, label: "normal install" },
+    { force: true, label: "forced reinstall" },
+  ])("does not bypass system ownership during $label", async ({ force }) => {
+    serviceMock.install.mockRejectedValueOnce(
+      new Error(
+        "System systemd unit openclaw-gateway.service already owns this gateway unit name. --force does not override system ownership.",
+      ),
+    );
+
+    await expect(runDaemonInstall({ json: true, force })).rejects.toThrow("__exit__:1");
+
+    expect(serviceMock.install).toHaveBeenCalledTimes(1);
+    const joined = runtimeLogs.join("\n");
+    expect(joined).toContain("System systemd unit openclaw-gateway.service");
+    expect(joined).toContain("--force does not override system ownership");
+  });
+
   it("auto-mints token when no source exists without embedding it into service env", async () => {
     await fs.writeFile(
       configPath,
@@ -150,6 +174,7 @@ describe("runDaemonInstall integration", () => {
       ),
     );
     clearConfigCache();
+    serviceMock.isLoaded.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
 
     await runDaemonInstall({ json: true });
 

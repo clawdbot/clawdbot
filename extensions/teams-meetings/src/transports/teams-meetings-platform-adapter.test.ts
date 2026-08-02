@@ -7,6 +7,9 @@ import {
   consumerLightMeetingUrl,
   status,
   control,
+  liveMediaStream,
+  pageMedia,
+  runAudioStatusScript,
   runStatusScript,
   runLeaveScript,
   type PageMedia,
@@ -97,7 +100,6 @@ describe("Microsoft Teams meeting platform adapter", () => {
         ...(ariaPressed === undefined ? {} : { pressed: ariaPressed === "true" }),
       });
       const { result } = await runStatusScript({
-        allowMicrophone: false,
         ...(kind === "camera" ? { camera: target } : { microphone: target }),
         readOnly: true,
       });
@@ -113,7 +115,6 @@ describe("Microsoft Teams meeting platform adapter", () => {
   ])("reads the live %s switch checked=%s", async (kind, checked, expectedOff) => {
     const target = control({ checked, label: kind === "camera" ? "Camera" : "Microphone" });
     const { result } = await runStatusScript({
-      allowMicrophone: false,
       ...(kind === "camera" ? { camera: target } : { microphone: target }),
       readOnly: true,
     });
@@ -134,7 +135,6 @@ describe("Microsoft Teams meeting platform adapter", () => {
     const join = control({ label: "Join now" });
 
     const { result } = await runStatusScript({
-      allowMicrophone: false,
       camera,
       join,
       microphone,
@@ -149,7 +149,6 @@ describe("Microsoft Teams meeting platform adapter", () => {
   it("allows non-adopting recovery to continue for the current page owner", async () => {
     const join = control({ label: "Join now" });
     const { result } = await runStatusScript({
-      allowMicrophone: false,
       allowSessionAdoption: false,
       camera: control({ label: "Turn camera on", pressed: false }),
       join,
@@ -171,7 +170,6 @@ describe("Microsoft Teams meeting platform adapter", () => {
       sessionId: "consumer-session",
     };
     const { result, window } = await runStatusScript({
-      allowMicrophone: false,
       allowSessionAdoption: true,
       currentUrl: CONSUMER_URL,
       priorMeeting,
@@ -262,7 +260,6 @@ describe("Microsoft Teams meeting platform adapter", () => {
   it("does not stamp meeting identity onto unrelated Teams pages", async () => {
     const leave = control({ label: "Leave" });
     const { result, window } = await runStatusScript({
-      allowMicrophone: false,
       currentUrl: "https://teams.microsoft.com/v2/",
       leave,
     });
@@ -273,7 +270,6 @@ describe("Microsoft Teams meeting platform adapter", () => {
 
   it("verifies the consumer prejoin redirect from its encoded meeting coordinates", async () => {
     const { result, window } = await runStatusScript({
-      allowMicrophone: false,
       currentUrl: consumerLightMeetingUrl("9326458712345", "abc"),
       meetingUrl: CONSUMER_URL,
     });
@@ -287,7 +283,6 @@ describe("Microsoft Teams meeting platform adapter", () => {
 
   it("rejects consumer prejoin coordinates for a different meeting", async () => {
     const { result, window } = await runStatusScript({
-      allowMicrophone: false,
       currentUrl: consumerLightMeetingUrl("1111111111111", "other"),
       meetingUrl: CONSUMER_URL,
     });
@@ -309,7 +304,6 @@ describe("Microsoft Teams meeting platform adapter", () => {
       sessionId: "session-1",
     };
     const { result, window } = await runStatusScript({
-      allowMicrophone: false,
       currentUrl: inCallUrl,
       leave,
       priorMeeting,
@@ -323,7 +317,6 @@ describe("Microsoft Teams meeting platform adapter", () => {
     const prejoin = await runStatusScript({ allowMicrophone: false });
     const leave = control({ label: "Leave" });
     const admitted = await runStatusScript({
-      allowMicrophone: false,
       currentUrl: "https://teams.microsoft.com/v2/",
       leave,
       priorMeeting: prejoin.window[MEETING_STATE_KEY] as Record<string, unknown>,
@@ -340,7 +333,6 @@ describe("Microsoft Teams meeting platform adapter", () => {
   it("retains prejoin identity for the configured in-call wait", async () => {
     const leave = control({ label: "Leave" });
     const admitted = await runStatusScript({
-      allowMicrophone: false,
       currentUrl: "https://teams.microsoft.com/v2/",
       leave,
       priorMeeting: {
@@ -364,7 +356,6 @@ describe("Microsoft Teams meeting platform adapter", () => {
     const currentLeave = control({ label: "Leave" });
     const inCallUrl = "https://teams.microsoft.com/v2/";
     const { result, window } = await runStatusScript({
-      allowMicrophone: false,
       currentUrl: inCallUrl,
       leave: currentLeave,
       priorMeeting: {
@@ -507,7 +498,7 @@ describe("Microsoft Teams meeting platform adapter", () => {
       isConnected: false,
       muted: true,
       pause: vi.fn(),
-      srcObject: { getAudioTracks: () => [{ readyState: "live" }] },
+      srcObject: liveMediaStream(),
     };
     const detachedBridge = { pause: vi.fn(), remove: vi.fn(), srcObject: {} };
     const foreignBridge = { sessionId: "session-2" };
@@ -549,8 +540,8 @@ describe("Microsoft Teams meeting platform adapter", () => {
   });
 
   it("does not unmute a replacement stream during leave cleanup", () => {
-    const bridgedStream = { getAudioTracks: () => [{ readyState: "live" }] };
-    const replacementStream = { getAudioTracks: () => [{ readyState: "live" }] };
+    const bridgedStream = liveMediaStream();
+    const replacementStream = liveMediaStream();
     const source = { muted: true, srcObject: replacementStream };
     const bridge = { pause: vi.fn(), remove: vi.fn(), srcObject: bridgedStream };
     const { result } = runLeaveScript({
@@ -629,7 +620,7 @@ describe("Microsoft Teams meeting platform adapter", () => {
   });
 
   it("retires the page-owned audio bridge from the required URL-only leave callback", () => {
-    const stream = { getAudioTracks: () => [{ readyState: "live" }] };
+    const stream = liveMediaStream();
     const source = { muted: true, srcObject: stream };
     const bridge = { pause: vi.fn(), remove: vi.fn(), srcObject: stream };
     const { result, window } = runLeaveScript({
@@ -663,7 +654,6 @@ describe("Microsoft Teams meeting platform adapter", () => {
   ])("ignores participant-controlled in-call text: %s", async (bodyText) => {
     const leave = control({ label: "Leave" });
     const { result } = await runStatusScript({
-      allowMicrophone: false,
       bodyText,
       leave,
     });
@@ -676,7 +666,6 @@ describe("Microsoft Teams meeting platform adapter", () => {
 
   it("classifies a stable device permission prompt outside the call", async () => {
     const { result } = await runStatusScript({
-      allowMicrophone: false,
       permissionPrompt: control({ label: "Device permission prompt" }),
     });
 
@@ -689,7 +678,6 @@ describe("Microsoft Teams meeting platform adapter", () => {
   it("does not report a prompt that it just dismissed while Teams removes the DOM", async () => {
     const continueWithoutDevices = control({ label: "Continue without audio or video" });
     const { result } = await runStatusScript({
-      allowMicrophone: false,
       continueWithoutDevices,
       permissionPrompt: control({ label: "Device permission prompt" }),
     });
@@ -773,7 +761,7 @@ describe("Microsoft Teams meeting platform adapter", () => {
     const microphone = control({ label: "Turn microphone off", pressed: true });
     const media = {
       sinkId: "",
-      srcObject: { getAudioTracks: () => [{ readyState: "live" }] },
+      srcObject: liveMediaStream(),
       async setSinkId(value: string) {
         media.sinkId = value;
       },
@@ -806,15 +794,9 @@ describe("Microsoft Teams meeting platform adapter", () => {
 
   it("reports the prepared session input during read-only status inspection", async () => {
     const media: PageMedia = { sinkId: "blackhole-output", async setSinkId() {} };
-    const { result } = await runStatusScript({
-      allowMicrophone: true,
-      devices: [
-        { deviceId: "blackhole-input", kind: "audioinput", label: "BlackHole 2ch" },
-        { deviceId: "blackhole-output", kind: "audiooutput", label: "BlackHole 2ch" },
-      ],
-      leave: control({ label: "Leave" }),
+    const { result } = await runAudioStatusScript({
       media: [media],
-      microphone: control({ label: "Turn microphone off", pressed: true }),
+      microphoneDevice: undefined,
       priorMeeting: {
         audioInputDeviceId: "blackhole-input",
         identity: "teams-work:19:meeting_test@thread.v2",
@@ -831,23 +813,9 @@ describe("Microsoft Teams meeting platform adapter", () => {
   });
 
   it("routes a directly playable media element before its MediaStream is attached", async () => {
-    const media: PageMedia = {
-      sinkId: "",
-      async setSinkId(value) {
-        media.sinkId = value;
-      },
-    };
-    const { result } = await runStatusScript({
-      allowMicrophone: true,
-      devices: [
-        { deviceId: "blackhole-input", kind: "audioinput", label: "BlackHole 2ch" },
-        { deviceId: "blackhole-output", kind: "audiooutput", label: "BlackHole 2ch" },
-      ],
-      leave: control({ label: "Leave" }),
+    const media = pageMedia();
+    const { result } = await runAudioStatusScript({
       media: [media],
-      microphone: control({ label: "Turn microphone off", pressed: true }),
-      microphoneDevice: control({ label: "BlackHole 2ch" }),
-      priorMeeting: { identity: "teams-work:19:meeting_test@thread.v2" },
     });
 
     expect(result.audioOutputRouted).toBe(true);
@@ -911,14 +879,12 @@ describe("Microsoft Teams meeting platform adapter", () => {
     expect(continueWithoutDevices.clicks).toBe(0);
 
     await runStatusScript({
-      allowMicrophone: false,
       continueWithoutDevices,
       microphone: control({ label: "Turn microphone on", pressed: false }),
     });
     expect(continueWithoutDevices.clicks).toBe(1);
 
     await runStatusScript({
-      allowMicrophone: false,
       autoJoin: false,
       continueWithoutDevices,
       microphone: control({ label: "Turn microphone on", pressed: false }),
@@ -930,7 +896,7 @@ describe("Microsoft Teams meeting platform adapter", () => {
     const source: PageMedia = {
       muted: false,
       sinkId: "built-in-output",
-      srcObject: { getAudioTracks: () => [{ readyState: "live" }] },
+      srcObject: liveMediaStream(),
       async setSinkId() {
         throw new DOMException("The element has no supported source.", "AbortError");
       },
@@ -950,17 +916,9 @@ describe("Microsoft Teams meeting platform adapter", () => {
         bridge.sinkId = value;
       },
     };
-    const { result, window } = await runStatusScript({
-      allowMicrophone: true,
+    const { result, window } = await runAudioStatusScript({
       bridgeMedia: bridge,
-      devices: [
-        { deviceId: "blackhole-input", kind: "audioinput", label: "BlackHole 2ch" },
-        { deviceId: "blackhole-output", kind: "audiooutput", label: "BlackHole 2ch" },
-      ],
-      leave: control({ label: "Leave" }),
       media: [source],
-      microphone: control({ label: "Turn microphone off", pressed: true }),
-      microphoneDevice: control({ label: "BlackHole 2ch" }),
       priorMeeting: {
         audioInputDeviceId: "blackhole-input",
         identity: "teams-work:19:meeting_test@thread.v2",
@@ -981,17 +939,9 @@ describe("Microsoft Teams meeting platform adapter", () => {
       bridge,
     );
 
-    const repeated = await runStatusScript({
-      allowMicrophone: true,
+    const repeated = await runAudioStatusScript({
       bridgeMedia: bridge,
-      devices: [
-        { deviceId: "blackhole-input", kind: "audioinput", label: "BlackHole 2ch" },
-        { deviceId: "blackhole-output", kind: "audiooutput", label: "BlackHole 2ch" },
-      ],
-      leave: control({ label: "Leave" }),
       media: [source, bridge],
-      microphone: control({ label: "Turn microphone off", pressed: true }),
-      microphoneDevice: control({ label: "BlackHole 2ch" }),
       priorAudioOutputs: window["__openclawTeamsAudioOutputs"] as unknown[],
       priorMeeting: window[MEETING_STATE_KEY] as Record<string, unknown>,
     });
